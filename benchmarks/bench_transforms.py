@@ -1,5 +1,5 @@
 """
-Transform performance benchmarks for torchfits.
+Transform performance benchmarks for torchsky.
 
 This module provides focused benchmarks for the transform pipeline,
 measuring performance across different image sizes and transform types.
@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from benchmarks.config import DEFAULT_OUTPUT_DIR  # noqa: E402
-from torchfits import transforms  # noqa: E402
+from torchsky import transforms  # noqa: E402
 
 
 class TransformBenchmark:

@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from astropy.table import Table
 
-import torchfits
+import torchsky
 
 
 def _make_table_file() -> str:
@@ -30,7 +30,7 @@ def test_table_docs_workflow_smoke():
     path = _make_table_file()
     try:
         # read + where + projection
-        subset = torchfits.table.read(
+        subset = torchsky.table.read(
             path,
             hdu=1,
             columns=["ID", "RA"],
@@ -43,7 +43,7 @@ def test_table_docs_workflow_smoke():
 
         # scan batches with predicate
         ids = []
-        for batch in torchfits.table.scan(
+        for batch in torchsky.table.scan(
             path,
             hdu=1,
             columns=["ID"],
@@ -55,7 +55,7 @@ def test_table_docs_workflow_smoke():
         assert ids == [2, 3]
 
         # reader + scanner flow
-        reader = torchfits.table.reader(
+        reader = torchsky.table.reader(
             path,
             hdu=1,
             columns=["ID"],
@@ -67,7 +67,7 @@ def test_table_docs_workflow_smoke():
             from_reader.extend(batch.column("ID").to_pylist())
         assert from_reader == [1, 3]
 
-        scanner = torchfits.table.scanner(
+        scanner = torchsky.table.scanner(
             path,
             hdu=1,
             columns=["ID"],

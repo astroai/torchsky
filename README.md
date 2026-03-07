@@ -1,22 +1,23 @@
-# torchfits
+# torchsky
 
-[![PyPI](https://img.shields.io/pypi/v/torchfits)](https://pypi.org/project/torchfits/)
-[![Wheels](https://github.com/sfabbro/torchfits/actions/workflows/build_wheels.yml/badge.svg)](https://github.com/sfabbro/torchfits/actions/workflows/build_wheels.yml)
-[![CI](https://github.com/sfabbro/torchfits/actions/workflows/ci.yml/badge.svg)](https://github.com/sfabbro/torchfits/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/torchsky)](https://pypi.org/project/torchsky/)
+[![Wheels](https://github.com/sfabbro/torchsky/actions/workflows/build_wheels.yml/badge.svg)](https://github.com/sfabbro/torchsky/actions/workflows/build_wheels.yml)
+[![CI](https://github.com/sfabbro/torchsky/actions/workflows/ci.yml/badge.svg)](https://github.com/sfabbro/torchsky/actions/workflows/ci.yml)
 
-Fast FITS I/O for PyTorch image and table workflows.
+Torch-native sky data, coordinates, geometry, mapmaking, and catalog workflows.
 
 ## Features
 
+- **Canonical Namespaces**: `torchsky.io`, `torchsky.coords`, and `torchsky.geom` define the primary surface.
 - **Native PyTorch Integration**: Read FITS images and tables directly into `torch.Tensor` with zero-copy efficiency, supporting CPU, CUDA, and MPS.
-- **High Performance**: Built on a multi-threaded C++ engine that outperforms `fitsio` and `astropy` by 2x-30x in typical workloads.
-- **Smart Data Handling**: Stream large catalogs with predicate pushdown (`where="MAG < 20"`) and load massive images using memory-efficient chunking.
-- **Astronomy Ready**: Full WCS support, efficient cutout reading, and Rice/HCOMPRESS handling out of the box.
+- **Coordinate-Aware Building Blocks**: New `torchsky.encoders` modules provide harmonic sky encodings, spectral encodings, and SIREN-style implicit fields.
+- **Mapmaking Bootstrap**: `torchsky map` provides the first image-plane-first, differentiable coaddition baseline.
+- **Catalog Refinement Hooks**: `torchsky.catalogs` adds tensor-native crossmatching primitives and iterable streaming adapters.
 
 ## Install
 
 ```bash
-pip install torchfits
+pip install torchsky
 ```
 
 ## Quick Examples
@@ -26,10 +27,10 @@ pip install torchfits
 Read science images directly to GPU memory without intermediate copies:
 
 ```python
-import torchfits
+import torchsky
 
 # Load directly to CUDA device (or 'mps' on Mac)
-data, header = torchfits.read(
+data, header = torchsky.read(
     "science.fits",
     hdu=0,
     device='cuda',
@@ -44,20 +45,20 @@ Filter million-row tables at the C++ level before loading into Python:
 
 ```python
 # Read only standard stars brighter than mag 20
-table = torchfits.table.read(
+table = torchsky.table.read(
     "catalog.fits",
     columns=["RA", "DEC", "MAG_G"],
     where="MAG_G < 20.0 AND CLASS_STAR > 0.9"
 )
 
 # Stream massive catalogs in batches
-for batch in torchfits.table.scan("survey.fits", batch_size=50_000):
+for batch in torchsky.table.scan("survey.fits", batch_size=50_000):
    process(batch)
 ```
 
 ## Performance Snapshot (v0.3.0 Readiness)
 
-torchfits is designed for high-throughput astronomical workflows, delivering **10x-100x speedups** over `astropy` for large arrays and tables. In the 0.3.0 exhaustive suite, it maintains a strong lead in FITS image and table I/O (1.5x-4x median speedups vs `fitsio`) while achieving parity or better in the HEALPix sphere domain (~89% win rate). While Batch WCS throughput (N > 100k) excels, small-N coordinate transforms and complex spin-harmonic operations (sphere) remain current targets for the 0.3.x optimization roadmap.
+torchsky is designed for high-throughput astronomical workflows, delivering **10x-100x speedups** over `astropy` for large arrays and tables. In the 0.3.0 exhaustive suite, it maintains a strong lead in FITS image and table I/O (1.5x-4x median speedups vs `fitsio`) while achieving parity or better in the HEALPix sphere domain (~89% win rate). While Batch WCS throughput (N > 100k) excels, small-N coordinate transforms and complex spin-harmonic operations (sphere) remain current targets for the 0.3.x optimization roadmap.
 
 Full benchmarks and known deficits: [`docs/benchmarks.md`](docs/benchmarks.md)
 

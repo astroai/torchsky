@@ -1,5 +1,5 @@
 """
-Table-specific benchmarks for torchfits TableHDU operations.
+Table-specific benchmarks for torchsky TableHDU operations.
 
 Benchmarks table reading, filtering, and pytorch-frame integration
 across different table sizes and column types.
@@ -19,7 +19,7 @@ import fitsio  # noqa: E402
 from astropy.io import fits as astropy_fits  # noqa: E402
 from astropy.table import Table  # noqa: E402
 
-import torchfits  # noqa: E402
+import torchsky  # noqa: E402
 
 # Table test configurations
 TABLE_SIZES = [1000, 10000, 100000, 1000000]
@@ -115,7 +115,7 @@ class TableBenchmarkSuite:
 
         try:
             # Test lazy operations (should be fast)
-            with torchfits.open(str(filename)) as hdul:
+            with torchsky.open(str(filename)) as hdul:
                 if len(hdul) > 1:  # Table in extension
                     table = hdul[1]
                 else:
@@ -133,7 +133,7 @@ class TableBenchmarkSuite:
                 try:
                     import pyarrow.dataset as ds
 
-                    scanner = torchfits.table.scanner(
+                    scanner = torchsky.table.scanner(
                         str(filename),
                         columns=["col_0", "col_1"],
                         filter=ds.field("col_0") > 0,
@@ -183,7 +183,7 @@ class TableBenchmarkSuite:
         print(f"\nColumn access on {nrows} row table:")
 
         try:
-            with torchfits.open(str(filename)) as hdul:
+            with torchsky.open(str(filename)) as hdul:
                 if len(hdul) > 1:
                     table = hdul[1]
 
@@ -228,7 +228,7 @@ class TableBenchmarkSuite:
             print(f"\nStreaming with batch_size={batch_size}:")
 
             try:
-                with torchfits.open(str(filename)) as hdul:
+                with torchsky.open(str(filename)) as hdul:
                     if len(hdul) > 1:
                         table = hdul[1]
 
@@ -268,19 +268,19 @@ class TableBenchmarkSuite:
         """Benchmark table reading with different libraries."""
         results = {}
 
-        # torchfits
+        # torchsky
         try:
             start_time = time.perf_counter()
-            with torchfits.open(str(filename)) as hdul:
+            with torchsky.open(str(filename)) as hdul:
                 if len(hdul) > 1:
                     table = hdul[1]
                     # Just access the data to ensure it's loaded
                     _ = table.num_rows
-            torchfits_time = time.perf_counter() - start_time
-            results["torchfits"] = torchfits_time
-            print(f"  torchfits: {torchfits_time:.4f}s")
+            torchsky_time = time.perf_counter() - start_time
+            results["torchsky"] = torchsky_time
+            print(f"  torchsky: {torchsky_time:.4f}s")
         except Exception as e:
-            print(f"  torchfits: FAILED ({e})")
+            print(f"  torchsky: FAILED ({e})")
 
         # astropy
         try:
@@ -318,17 +318,17 @@ class TableBenchmarkSuite:
         for test_name, results in self.results.items():
             print(f"\n{test_name}:")
 
-            if "torchfits" in results and "astropy" in results:
-                speedup = results["astropy"] / results["torchfits"]
-                print(f"  torchfits vs astropy: {speedup:.2f}x")
+            if "torchsky" in results and "astropy" in results:
+                speedup = results["astropy"] / results["torchsky"]
+                print(f"  torchsky vs astropy: {speedup:.2f}x")
 
-            if "torchfits" in results and "fitsio" in results:
-                speedup = results["fitsio"] / results["torchfits"]
-                print(f"  torchfits vs fitsio: {speedup:.2f}x")
+            if "torchsky" in results and "fitsio" in results:
+                speedup = results["fitsio"] / results["torchsky"]
+                print(f"  torchsky vs fitsio: {speedup:.2f}x")
 
     def run_all_benchmarks(self):
         """Run complete table benchmark suite."""
-        print("torchfits Table Benchmark Suite")
+        print("torchsky Table Benchmark Suite")
         print("=" * 40)
 
         self.bench_table_reading()

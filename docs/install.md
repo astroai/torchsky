@@ -1,20 +1,20 @@
 # Installation Guide
 
-`torchfits` can be installed via pip or built from source.
+`torchsky` can be installed via pip or built from source.
 
 ## Standard Installation (Pip)
 
-The easiest way to install `torchfits` is using `pip`:
+The easiest way to install `torchsky` is using `pip`:
 
 ```bash
-pip install torchfits
+pip install torchsky
 ```
 
 This will download and install the latest stable version from PyPI.
 
 ## Building from Source
 
-To build `torchfits` from source, you'll need a C++ compiler and CMake.
+To build `torchsky` from source, you'll need a C++ compiler and CMake.
 
 ### Prerequisites
 
@@ -28,13 +28,13 @@ To build `torchfits` from source, you'll need a C++ compiler and CMake.
 1.  **Clone the Repository:**
 
     ```bash
-    git clone https://github.com/sfabbro/torchfits.git
-    cd torchfits
+    git clone https://github.com/sfabbro/torchsky.git
+    cd torchsky
     ```
 
 2.  **Vendor Dependencies:**
 
-    `torchfits` vendors its C dependency (`cfitsio`) to simplify installation. Run the vendoring script to prepare the source tree:
+    `torchsky` vendors its C dependency (`cfitsio`) to simplify installation. Run the vendoring script to prepare the source tree:
 
     ```bash
     ./extern/vendor.sh

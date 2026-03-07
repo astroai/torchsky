@@ -23,7 +23,7 @@ import numpy as np
 import torch
 from astropy.io import fits as astropy_fits
 
-import torchfits
+import torchsky
 
 from benchmarks.bench_contract import (
     RESULT_COLUMNS,
@@ -35,13 +35,13 @@ from benchmarks.bench_legacy_all import ExhaustiveBenchmarkSuite  # noqa: E402
 
 
 SMART_METHODS = [
-    ("torchfits", "torchfits", "torchfits"),
+    ("torchsky", "torchsky", "torchsky"),
     ("astropy_torch", "astropy", "astropy_torch"),
     ("fitsio_torch", "fitsio", "fitsio_torch"),
 ]
 
 SPECIALIZED_METHODS = [
-    ("torchfits_specialized", "torchfits", "torchfits_specialized"),
+    ("torchsky_specialized", "torchsky", "torchsky_specialized"),
     ("astropy", "astropy", "astropy"),
     ("fitsio", "fitsio", "fitsio"),
 ]
@@ -319,7 +319,7 @@ def _benchmark_headers(
         case_label = f"{name} [header_read]"
 
         def _tf_header():
-            return torchfits.get_header(str(path), hdu=hdu)
+            return torchsky.get_header(str(path), hdu=hdu)
 
         def _astropy_header():
             with astropy_fits.open(path, memmap=target_memmap) as hdul:
@@ -329,7 +329,7 @@ def _benchmark_headers(
             return fitsio.read_header(str(path), ext=hdu)
 
         methods = [
-            ("torchfits", "torchfits_specialized", _tf_header),
+            ("torchsky", "torchsky_specialized", _tf_header),
             ("astropy", "astropy", _astropy_header),
             ("fitsio", "fitsio", _fitsio_header),
         ]

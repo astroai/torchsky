@@ -29,7 +29,7 @@ def fits_file(tmp_path):
 
 
 def test_filter_lt(fits_file):
-    import torchfits.cpp
+    import torchsky.cpp
 
     # MAG < 50.0. linspace(0,100,1000) means values are 0.0, 0.1, ... 99.9.
     # < 50.0 should be indices 0 to 499 (500 items).
@@ -38,7 +38,7 @@ def test_filter_lt(fits_file):
     filters = [("MAG", "<", 50.0)]
     cols = ["ID", "MAG"]
 
-    data = torchfits.cpp.read_fits_table_filtered(fits_file, 1, cols, filters)
+    data = torchsky.cpp.read_fits_table_filtered(fits_file, 1, cols, filters)
 
     assert "ID" in data
     assert "MAG" in data
@@ -53,12 +53,12 @@ def test_filter_lt(fits_file):
 
 
 def test_filter_gt(fits_file):
-    import torchfits.cpp
+    import torchsky.cpp
 
     filters = [("ID", ">", 800)]
     cols = ["ID"]
 
-    data = torchfits.cpp.read_fits_table_filtered(fits_file, 1, cols, filters)
+    data = torchsky.cpp.read_fits_table_filtered(fits_file, 1, cols, filters)
     ids = data["ID"]
 
     # 801 to 999 -> 199 items
@@ -67,18 +67,18 @@ def test_filter_gt(fits_file):
 
 
 def test_table_read_integration(fits_file):
-    import torchfits
+    import torchsky
 
-    # Test integration via torchfits.table.read(where=...)
+    # Test integration via torchsky.table.read(where=...)
     # MAG < 50.0 should use fast path
 
-    t = torchfits.table.read(fits_file, where="MAG < 50.0")
+    t = torchsky.table.read(fits_file, where="MAG < 50.0")
     assert len(t) == 500  # approx
     mags = t["MAG"].to_numpy()
     assert (mags < 50.0).all()
 
     # Test fallback for OR (should work via slow path)
-    t_slow = torchfits.table.read(fits_file, where="MAG < 10.0 OR MAG > 90.0")
+    t_slow = torchsky.table.read(fits_file, where="MAG < 10.0 OR MAG > 90.0")
     # 0..10 (approx 100) + 90..100 (approx 100) = 200
     assert len(t_slow) > 180 and len(t_slow) < 220
     mags_slow = t_slow["MAG"].to_numpy()
@@ -86,9 +86,9 @@ def test_table_read_integration(fits_file):
 
 
 def test_table_read_where_torch_backend(fits_file):
-    import torchfits
+    import torchsky
 
-    t = torchfits.table.read(
+    t = torchsky.table.read(
         fits_file, where="MAG > 10.0 AND MAG < 20.0", backend="torch"
     )
     mags = t["MAG"].to_numpy()
@@ -97,20 +97,20 @@ def test_table_read_where_torch_backend(fits_file):
 
 
 def test_filter_eq(fits_file):
-    import torchfits.cpp
+    import torchsky.cpp
 
     filters = [("ID", "==", 500)]
-    data = torchfits.cpp.read_fits_table_filtered(fits_file, 1, ["ID"], filters)
+    data = torchsky.cpp.read_fits_table_filtered(fits_file, 1, ["ID"], filters)
     assert len(data["ID"]) == 1
     assert data["ID"][0].item() == 500
 
 
 def test_filter_compound(fits_file):
-    import torchfits.cpp
+    import torchsky.cpp
 
     # ID > 100 AND ID < 200
     filters = [("ID", ">", 100), ("ID", "<", 200)]
-    data = torchfits.cpp.read_fits_table_filtered(fits_file, 1, ["ID"], filters)
+    data = torchsky.cpp.read_fits_table_filtered(fits_file, 1, ["ID"], filters)
     ids = data["ID"]
 
     assert len(ids) == 99  # 101 to 199
@@ -119,10 +119,10 @@ def test_filter_compound(fits_file):
 
 
 def test_filter_short(fits_file):
-    import torchfits.cpp
+    import torchsky.cpp
 
     # SHORT_VAL is int16. Filter on it.
     filters = [("SHORT_VAL", "==", 10)]
-    data = torchfits.cpp.read_fits_table_filtered(fits_file, 1, ["SHORT_VAL"], filters)
+    data = torchsky.cpp.read_fits_table_filtered(fits_file, 1, ["SHORT_VAL"], filters)
     assert len(data["SHORT_VAL"]) == 1
     assert data["SHORT_VAL"][0].item() == 10

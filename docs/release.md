@@ -8,7 +8,7 @@ Confirm version triplet matches:
 
 - `pyproject.toml`
 - `pixi.toml`
-- `src/torchfits/__init__.py`
+- `src/torchsky/__init__.py`
 
 Confirm changelog entry is finalized in `docs/changelog.md`.
 

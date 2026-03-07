@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 import torch
 
-from torchfits.sphere import compat
-from torchfits.sphere.spectral import (
+from torchsky.sphere import compat
+from torchsky.sphere.spectral import (
     alm2map,
     alm2cl,
     alm2map_spin,
@@ -25,7 +25,7 @@ from torchfits.sphere.spectral import (
     synalm,
     synfast,
 )
-from torchfits.wcs import healpix as hp
+from torchsky.wcs import healpix as hp
 
 try:
     import healpy as _hp  # type: ignore
@@ -35,7 +35,7 @@ except Exception:  # pragma: no cover
 
 def _has_cpp_ring_fourier() -> bool:
     try:
-        from torchfits import cpp as _cpp  # type: ignore
+        from torchsky import cpp as _cpp  # type: ignore
     except Exception:
         return False
     return hasattr(_cpp, "_healpix_ring_fourier_modes_cpu") and hasattr(
@@ -45,7 +45,7 @@ def _has_cpp_ring_fourier() -> bool:
 
 def _has_cpp_spin_concat() -> bool:
     try:
-        from torchfits import cpp as _cpp  # type: ignore
+        from torchsky import cpp as _cpp  # type: ignore
     except Exception:
         return False
     return hasattr(_cpp, "_healpix_spin_interpolate_concat_cpu") and hasattr(
@@ -55,7 +55,7 @@ def _has_cpp_spin_concat() -> bool:
 
 def _has_cpp_spin_ring_fused() -> bool:
     try:
-        from torchfits import cpp as _cpp  # type: ignore
+        from torchsky import cpp as _cpp  # type: ignore
     except Exception:
         return False
     return hasattr(_cpp, "_healpix_spin_map2alm_ring_concat_cpu") and hasattr(
@@ -394,7 +394,7 @@ def test_alm2map_scalar_cpp_direct_parity(
     monkeypatch: pytest.MonkeyPatch, nest: bool
 ) -> None:
     try:
-        from torchfits import cpp as _cpp_mod
+        from torchsky import cpp as _cpp_mod
     except Exception:
         _cpp_mod = None
     if _cpp_mod is None or not hasattr(_cpp_mod, "_healpix_scalar_alm2map_direct_cpu"):
@@ -404,9 +404,9 @@ def test_alm2map_scalar_cpp_direct_parity(
     lmax = 8
     alm = _random_alm(lmax, seed=71).to(torch.complex128)
 
-    monkeypatch.setenv("TORCHFITS_SCALAR_ALM2MAP_CPP", "0")
+    monkeypatch.setenv("TORCHSKY_SCALAR_ALM2MAP_CPP", "0")
     ref = alm2map(alm, nside=nside, lmax=lmax, nest=nest, backend="torch")
-    monkeypatch.setenv("TORCHFITS_SCALAR_ALM2MAP_CPP", "1")
+    monkeypatch.setenv("TORCHSKY_SCALAR_ALM2MAP_CPP", "1")
     got = alm2map(alm, nside=nside, lmax=lmax, nest=nest, backend="torch")
     torch.testing.assert_close(got, ref, atol=1e-10, rtol=1e-10)
 
@@ -416,11 +416,11 @@ def test_alm2map_scalar_ring_torch_parity(monkeypatch: pytest.MonkeyPatch) -> No
     lmax = 8
     alm = _random_alm(lmax, seed=73).to(torch.complex128)
 
-    monkeypatch.setenv("TORCHFITS_SCALAR_ALM2MAP_RING_TORCH", "0")
+    monkeypatch.setenv("TORCHSKY_SCALAR_ALM2MAP_RING_TORCH", "0")
     ref = alm2map(alm, nside=nside, lmax=lmax, nest=False, backend="torch")
 
-    monkeypatch.setenv("TORCHFITS_SCALAR_ALM2MAP_CPP", "0")
-    monkeypatch.setenv("TORCHFITS_SCALAR_ALM2MAP_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SCALAR_ALM2MAP_CPP", "0")
+    monkeypatch.setenv("TORCHSKY_SCALAR_ALM2MAP_RING_TORCH", "force")
     got = alm2map(alm, nside=nside, lmax=lmax, nest=False, backend="torch")
     torch.testing.assert_close(got, ref, atol=1e-10, rtol=1e-10)
 
@@ -430,8 +430,8 @@ def test_alm2map_scalar_ring_torch_autograd(monkeypatch: pytest.MonkeyPatch) -> 
     lmax = 6
     nalm = alm_size(lmax)
     alm = torch.randn((nalm,), dtype=torch.complex128, requires_grad=True)
-    monkeypatch.setenv("TORCHFITS_SCALAR_ALM2MAP_CPP", "0")
-    monkeypatch.setenv("TORCHFITS_SCALAR_ALM2MAP_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SCALAR_ALM2MAP_CPP", "0")
+    monkeypatch.setenv("TORCHSKY_SCALAR_ALM2MAP_RING_TORCH", "force")
     m = alm2map(alm, nside=nside, lmax=lmax, backend="torch")
     loss = m.square().sum()
     loss.backward()
@@ -450,8 +450,8 @@ def test_alm2map_scalar_ring_torch_float32_finite(
     alm_np = (rng.normal(size=nalm) + 1j * rng.normal(size=nalm)).astype(np.complex64)
     alm = torch.from_numpy(alm_np)
 
-    monkeypatch.setenv("TORCHFITS_SCALAR_ALM2MAP_CPP", "0")
-    monkeypatch.setenv("TORCHFITS_SCALAR_ALM2MAP_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SCALAR_ALM2MAP_CPP", "0")
+    monkeypatch.setenv("TORCHSKY_SCALAR_ALM2MAP_RING_TORCH", "force")
     m = alm2map(alm, nside=nside, lmax=lmax, nest=False, backend="torch")
     assert torch.isfinite(m).all()
 
@@ -463,10 +463,10 @@ def test_map2alm_scalar_ring_torch_parity(monkeypatch: pytest.MonkeyPatch) -> No
     rng = np.random.default_rng(92)
     m = torch.from_numpy(rng.normal(size=npix)).to(torch.float64)
 
-    monkeypatch.setenv("TORCHFITS_SCALAR_MAP2ALM_RING_TORCH", "0")
+    monkeypatch.setenv("TORCHSKY_SCALAR_MAP2ALM_RING_TORCH", "0")
     ref = map2alm(m, nside=nside, lmax=lmax, mmax=lmax, nest=False, backend="torch")
 
-    monkeypatch.setenv("TORCHFITS_SCALAR_MAP2ALM_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SCALAR_MAP2ALM_RING_TORCH", "force")
     got = map2alm(m, nside=nside, lmax=lmax, mmax=lmax, nest=False, backend="torch")
     torch.testing.assert_close(got, ref, atol=1e-9, rtol=1e-9)
 
@@ -477,7 +477,7 @@ def test_map2alm_scalar_ring_torch_autograd(monkeypatch: pytest.MonkeyPatch) -> 
     npix = hp.nside2npix(nside)
     m = torch.randn((npix,), dtype=torch.float64, requires_grad=True)
 
-    monkeypatch.setenv("TORCHFITS_SCALAR_MAP2ALM_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SCALAR_MAP2ALM_RING_TORCH", "force")
     alm = map2alm(m, nside=nside, lmax=lmax, mmax=lmax, nest=False, backend="torch")
     loss = (alm.real.square() + alm.imag.square()).sum()
     loss.backward()
@@ -495,7 +495,7 @@ def test_map2alm_scalar_ring_torch_float32_finite(
     rng = np.random.default_rng(93)
     m = torch.from_numpy(rng.normal(size=npix).astype(np.float32))
 
-    monkeypatch.setenv("TORCHFITS_SCALAR_MAP2ALM_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SCALAR_MAP2ALM_RING_TORCH", "force")
     alm = map2alm(m, nside=nside, lmax=lmax, mmax=lmax, nest=False, backend="torch")
     assert torch.isfinite(alm.real).all()
     assert torch.isfinite(alm.imag).all()
@@ -508,7 +508,7 @@ def test_alm2map_scalar_cpp_flag_keeps_autograd(
     lmax = 6
     nalm = alm_size(lmax)
     alm = torch.randn((nalm,), dtype=torch.complex128, requires_grad=True)
-    monkeypatch.setenv("TORCHFITS_SCALAR_ALM2MAP_CPP", "1")
+    monkeypatch.setenv("TORCHSKY_SCALAR_ALM2MAP_CPP", "1")
     m = alm2map(alm, nside=nside, lmax=lmax, backend="torch")
     loss = m.square().sum()
     loss.backward()
@@ -789,9 +789,9 @@ def test_map2alm_spin_ring_torch_parity(monkeypatch: pytest.MonkeyPatch) -> None
     rng = np.random.default_rng(91)
     qu = torch.from_numpy(rng.normal(size=(2, npix))).to(torch.float64)
 
-    monkeypatch.setenv("TORCHFITS_SPIN_MAP2ALM_RING_TORCH", "0")
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "0")
     a0, b0 = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax, backend="torch")
-    monkeypatch.setenv("TORCHFITS_SPIN_MAP2ALM_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "force")
     a1, b1 = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax, backend="torch")
 
     torch.testing.assert_close(a1, a0, atol=1e-10, rtol=0.0)
@@ -809,11 +809,11 @@ def test_map2alm_spin_ring_torch_parity_nested(monkeypatch: pytest.MonkeyPatch) 
         [hp.reorder(qu_ring[0], r2n=True), hp.reorder(qu_ring[1], r2n=True)], dim=0
     )
 
-    monkeypatch.setenv("TORCHFITS_SPIN_MAP2ALM_RING_TORCH", "0")
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "0")
     a0, b0 = map2alm_spin(
         qu_nest, spin=spin, nside=nside, lmax=lmax, nest=True, backend="torch"
     )
-    monkeypatch.setenv("TORCHFITS_SPIN_MAP2ALM_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "force")
     a1, b1 = map2alm_spin(
         qu_nest, spin=spin, nside=nside, lmax=lmax, nest=True, backend="torch"
     )
@@ -833,10 +833,10 @@ def test_map2alm_spin_ring_fourier_cpp_parity(monkeypatch: pytest.MonkeyPatch) -
     rng = np.random.default_rng(191)
     qu = torch.from_numpy(rng.normal(size=(2, npix))).to(torch.float64)
 
-    monkeypatch.setenv("TORCHFITS_SPIN_MAP2ALM_RING_TORCH", "force")
-    monkeypatch.setenv("TORCHFITS_RING_FOURIER_CPP", "0")
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_RING_FOURIER_CPP", "0")
     a0, b0 = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax, backend="torch")
-    monkeypatch.setenv("TORCHFITS_RING_FOURIER_CPP", "1")
+    monkeypatch.setenv("TORCHSKY_RING_FOURIER_CPP", "1")
     a1, b1 = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax, backend="torch")
     torch.testing.assert_close(a1, a0, atol=1e-10, rtol=0.0)
     torch.testing.assert_close(b1, b0, atol=1e-10, rtol=0.0)
@@ -853,10 +853,10 @@ def test_map2alm_spin_concat_cpp_parity(monkeypatch: pytest.MonkeyPatch) -> None
     rng = np.random.default_rng(211)
     qu = torch.from_numpy(rng.normal(size=(2, npix))).to(torch.float64)
 
-    monkeypatch.setenv("TORCHFITS_SPIN_MAP2ALM_RING_TORCH", "force")
-    monkeypatch.setenv("TORCHFITS_SPIN_RING_INTEGRATE_CONCAT_CPP", "0")
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_RING_INTEGRATE_CONCAT_CPP", "0")
     a0, b0 = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax, backend="torch")
-    monkeypatch.setenv("TORCHFITS_SPIN_RING_INTEGRATE_CONCAT_CPP", "1")
+    monkeypatch.setenv("TORCHSKY_SPIN_RING_INTEGRATE_CONCAT_CPP", "1")
     a1, b1 = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax, backend="torch")
     torch.testing.assert_close(a1, a0, atol=1e-10, rtol=0.0)
     torch.testing.assert_close(b1, b0, atol=1e-10, rtol=0.0)
@@ -873,18 +873,18 @@ def test_map2alm_spin_ring_fused_cpp_parity(monkeypatch: pytest.MonkeyPatch) -> 
     rng = np.random.default_rng(313)
     qu = torch.from_numpy(rng.normal(size=(2, npix))).to(torch.float64)
 
-    monkeypatch.setenv("TORCHFITS_SPIN_MAP2ALM_RING_TORCH", "force")
-    monkeypatch.setenv("TORCHFITS_RING_FOURIER_CPP", "1")
-    monkeypatch.setenv("TORCHFITS_SPIN_MAP2ALM_RING_CONCAT_CPP", "0")
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_RING_FOURIER_CPP", "1")
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_CONCAT_CPP", "0")
     a0, b0 = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax, backend="torch")
-    monkeypatch.setenv("TORCHFITS_SPIN_MAP2ALM_RING_CONCAT_CPP", "1")
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_CONCAT_CPP", "1")
     a1, b1 = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax, backend="torch")
     torch.testing.assert_close(a1, a0, atol=1e-10, rtol=0.0)
     torch.testing.assert_close(b1, b0, atol=1e-10, rtol=0.0)
 
 
 def test_map2alm_spin_ring_torch_autograd(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TORCHFITS_SPIN_MAP2ALM_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "force")
     nside = 8
     lmax = 6
     spin = 2
@@ -906,9 +906,9 @@ def test_alm2map_spin_ring_torch_parity(monkeypatch: pytest.MonkeyPatch) -> None
     spin = 2
     a_e, a_b = _random_spin_alms(lmax, spin=spin, seed=123)
 
-    monkeypatch.setenv("TORCHFITS_SPIN_ALM2MAP_RING_TORCH", "0")
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "0")
     qu0 = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax, backend="torch")
-    monkeypatch.setenv("TORCHFITS_SPIN_ALM2MAP_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "force")
     qu1 = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax, backend="torch")
     torch.testing.assert_close(qu1, qu0, atol=1e-10, rtol=0.0)
 
@@ -919,11 +919,11 @@ def test_alm2map_spin_ring_torch_parity_nested(monkeypatch: pytest.MonkeyPatch) 
     spin = 2
     a_e, a_b = _random_spin_alms(lmax, spin=spin, seed=1321)
 
-    monkeypatch.setenv("TORCHFITS_SPIN_ALM2MAP_RING_TORCH", "0")
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "0")
     qu0 = alm2map_spin(
         (a_e, a_b), nside=nside, spin=spin, lmax=lmax, nest=True, backend="torch"
     )
-    monkeypatch.setenv("TORCHFITS_SPIN_ALM2MAP_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "force")
     qu1 = alm2map_spin(
         (a_e, a_b), nside=nside, spin=spin, lmax=lmax, nest=True, backend="torch"
     )
@@ -939,10 +939,10 @@ def test_alm2map_spin_ring_fourier_cpp_parity(monkeypatch: pytest.MonkeyPatch) -
     spin = 2
     a_e, a_b = _random_spin_alms(lmax, spin=spin, seed=231)
 
-    monkeypatch.setenv("TORCHFITS_SPIN_ALM2MAP_RING_TORCH", "force")
-    monkeypatch.setenv("TORCHFITS_RING_FOURIER_CPP", "0")
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_RING_FOURIER_CPP", "0")
     qu0 = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax, backend="torch")
-    monkeypatch.setenv("TORCHFITS_RING_FOURIER_CPP", "1")
+    monkeypatch.setenv("TORCHSKY_RING_FOURIER_CPP", "1")
     qu1 = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax, backend="torch")
     torch.testing.assert_close(qu1, qu0, atol=1e-10, rtol=0.0)
 
@@ -956,10 +956,10 @@ def test_alm2map_spin_concat_cpp_parity(monkeypatch: pytest.MonkeyPatch) -> None
     spin = 2
     a_e, a_b = _random_spin_alms(lmax, spin=spin, seed=307)
 
-    monkeypatch.setenv("TORCHFITS_SPIN_ALM2MAP_RING_TORCH", "force")
-    monkeypatch.setenv("TORCHFITS_SPIN_RING_INTERP_CONCAT_CPP", "0")
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_RING_INTERP_CONCAT_CPP", "0")
     qu0 = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax, backend="torch")
-    monkeypatch.setenv("TORCHFITS_SPIN_RING_INTERP_CONCAT_CPP", "1")
+    monkeypatch.setenv("TORCHSKY_SPIN_RING_INTERP_CONCAT_CPP", "1")
     qu1 = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax, backend="torch")
     torch.testing.assert_close(qu1, qu0, atol=1e-10, rtol=0.0)
 
@@ -973,17 +973,17 @@ def test_alm2map_spin_ring_finalize_cpp_parity(monkeypatch: pytest.MonkeyPatch) 
     spin = 2
     a_e, a_b = _random_spin_alms(lmax, spin=spin, seed=353)
 
-    monkeypatch.setenv("TORCHFITS_SPIN_ALM2MAP_RING_TORCH", "force")
-    monkeypatch.setenv("TORCHFITS_RING_FOURIER_CPP", "1")
-    monkeypatch.setenv("TORCHFITS_SPIN_RING_FINALIZE_CPP", "0")
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_RING_FOURIER_CPP", "1")
+    monkeypatch.setenv("TORCHSKY_SPIN_RING_FINALIZE_CPP", "0")
     qu0 = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax, backend="torch")
-    monkeypatch.setenv("TORCHFITS_SPIN_RING_FINALIZE_CPP", "1")
+    monkeypatch.setenv("TORCHSKY_SPIN_RING_FINALIZE_CPP", "1")
     qu1 = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax, backend="torch")
     torch.testing.assert_close(qu1, qu0, atol=1e-10, rtol=0.0)
 
 
 def test_alm2map_spin_ring_torch_autograd(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TORCHFITS_SPIN_ALM2MAP_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "force")
     nside = 8
     lmax = 6
     spin = 2

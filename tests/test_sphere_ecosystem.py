@@ -1,5 +1,5 @@
 import torch
-from torchfits.sphere import (
+from torchsky.sphere import (
     LonLat,
     UnitVector3d,
     Box,
@@ -70,7 +70,7 @@ def test_moc():
     assert not moc.contains(0, 0).item()  # Center of pixel 0 is lon=45 if nside=1...
     # Let's check a point we know is in pix 0 for nside=4 nest
     # actually better to just check via contains(lon, lat) logic
-    from torchfits.wcs import healpix as hpg
+    from torchsky.wcs import healpix as hpg
 
     lon, lat = hpg.pix2ang(4, torch.tensor([0, 1]), nest=True, lonlat=True)
     assert moc.contains(lon, lat).all()

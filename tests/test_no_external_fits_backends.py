@@ -4,8 +4,8 @@ import ast
 from pathlib import Path
 
 
-def test_no_astropy_or_fitsio_imports_in_torchfits_python_package() -> None:
-    pkg_root = Path(__file__).resolve().parents[1] / "src" / "torchfits"
+def test_no_astropy_or_fitsio_imports_in_torchsky_python_package() -> None:
+    pkg_root = Path(__file__).resolve().parents[1] / "src" / "torchsky"
     forbidden = {"astropy", "fitsio", "numpy"}
     violations: list[str] = []
 

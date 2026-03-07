@@ -78,9 +78,9 @@ def _seconds_from_mpts(mpts: float | None, n_points: int) -> float | None:
 
 
 def _canonical_sphere_method(*, library: str, method: str) -> str:
-    # Keep torchfits rows consistently labeled across sphere suites.
-    if library == "torchfits" or method.startswith("torch"):
-        return "torchfits"
+    # Keep torchsky rows consistently labeled across sphere suites.
+    if library == "torchsky" or method.startswith("torch"):
+        return "torchsky"
     return method
 
 
@@ -134,7 +134,7 @@ def _run_sphere_domain_quick(
     rows: list[dict[str, Any]] = []
     case_budget = max(1, int(max_cases))
 
-    # Case 1: geometry ang2pix_ring (torchfits vs healpy).
+    # Case 1: geometry ang2pix_ring (torchsky vs healpy).
     if len({str(r.get("case_id")) for r in rows}) < case_budget:
         print("[sphere][quick] running geometry mini-case...", flush=True)
         geo_json = raw_dir / "sphere_geometry_cpu_quick.json"
@@ -152,7 +152,7 @@ def _run_sphere_domain_quick(
             "--runs",
             "3",
             "--libraries",
-            "torchfits,healpy",
+            "torchsky,healpy",
             "--json-out",
             str(geo_json),
         ]
@@ -170,8 +170,8 @@ def _run_sphere_domain_quick(
                     case_label=case_label,
                     operation="ang2pix_ring",
                     family="specialized",
-                    library="torchfits",
-                    method="torchfits",
+                    library="torchsky",
+                    method="torchsky",
                     mode="specialized",
                     status="FAILED",
                     skip_reason=reason_geo,
@@ -189,7 +189,7 @@ def _run_sphere_domain_quick(
                 for r in geo_rows
                 if str(r.get("operation", "")) == "ang2pix_ring"
             }
-            for lib in ("torchfits", "healpy"):
+            for lib in ("torchsky", "healpy"):
                 src = by_lib.get(lib)
                 if src is None:
                     rows.append(
@@ -241,7 +241,7 @@ def _run_sphere_domain_quick(
                     )
                 )
 
-    # Case 2: advanced neighbors_ring (torchfits vs healpy).
+    # Case 2: advanced neighbors_ring (torchsky vs healpy).
     if len({str(r.get("case_id")) for r in rows}) < case_budget:
         print("[sphere][quick] running advanced mini-case...", flush=True)
         adv_json = raw_dir / "healpix_advanced_quick.json"
@@ -273,8 +273,8 @@ def _run_sphere_domain_quick(
                     case_label=case_label,
                     operation="neighbors_ring",
                     family="specialized",
-                    library="torchfits",
-                    method="torchfits",
+                    library="torchsky",
+                    method="torchsky",
                     mode="specialized",
                     status="FAILED",
                     skip_reason=reason_adv,
@@ -304,8 +304,8 @@ def _run_sphere_domain_quick(
                         case_label=case_label,
                         operation="neighbors_ring",
                         family="specialized",
-                        library="torchfits",
-                        method="torchfits",
+                        library="torchsky",
+                        method="torchsky",
                         mode="specialized",
                         status="FAILED",
                         skip_reason="missing_neighbors_ring_row",
@@ -319,7 +319,7 @@ def _run_sphere_domain_quick(
                 )
             else:
                 n_points = int(src.get("n_points", 0) or 0)
-                tf_mpts = _safe_float(src.get("mpts_s_torchfits")) or _safe_float(
+                tf_mpts = _safe_float(src.get("mpts_s_torchsky")) or _safe_float(
                     src.get("torch_mpts_s")
                 )
                 hp_mpts = _safe_float(src.get("mpts_s_healpy")) or _safe_float(
@@ -345,8 +345,8 @@ def _run_sphere_domain_quick(
                         case_label=case_label,
                         operation="neighbors_ring",
                         family="specialized",
-                        library="torchfits",
-                        method="torchfits",
+                        library="torchsky",
+                        method="torchsky",
                         mode="specialized",
                         status="OK" if tf_s is not None else "FAILED",
                         skip_reason="",
@@ -386,7 +386,7 @@ def _run_sphere_domain_quick(
                     )
                 )
 
-    # Case 3: spectral map2alm_spin (torchfits vs healpy when available).
+    # Case 3: spectral map2alm_spin (torchsky vs healpy when available).
     if len({str(r.get("case_id")) for r in rows}) < case_budget:
         print("[sphere][quick] running spectral mini-case...", flush=True)
         spec_json = raw_dir / "sphere_spectral_quick.json"
@@ -416,8 +416,8 @@ def _run_sphere_domain_quick(
                     case_label=case_label,
                     operation="map2alm_spin",
                     family="specialized",
-                    library="torchfits",
-                    method="torchfits",
+                    library="torchsky",
+                    method="torchsky",
                     mode="specialized",
                     status="FAILED",
                     skip_reason=reason_spec,
@@ -457,8 +457,8 @@ def _run_sphere_domain_quick(
                         case_label=case_label,
                         operation="map2alm_spin",
                         family="specialized",
-                        library="torchfits",
-                        method="torchfits",
+                        library="torchsky",
+                        method="torchsky",
                         mode="specialized",
                         status="FAILED",
                         skip_reason="missing_torch_map2alm_spin_row",
@@ -481,10 +481,10 @@ def _run_sphere_domain_quick(
                         case_label=case_label,
                         operation="map2alm_spin",
                         family="specialized",
-                        library="torchfits",
+                        library="torchsky",
                         method=_canonical_sphere_method(
-                            library="torchfits",
-                            method=str(tf_row.get("backend", "torchfits")),
+                            library="torchsky",
+                            method=str(tf_row.get("backend", "torchsky")),
                         ),
                         mode="specialized",
                         status="OK" if tf_t is not None else "FAILED",
@@ -591,7 +591,7 @@ def run_sphere_domain(
         "--runs",
         "5",
         "--libraries",
-        "torchfits,healpy,hpgeom,astropy-healpix,healpix,mhealpy",
+        "torchsky,healpy,hpgeom,astropy-healpix,healpix,mhealpy",
         "--json-out",
         str(geo_json),
     ]
@@ -605,8 +605,8 @@ def run_sphere_domain(
                 case_label="sphere geometry cpu",
                 operation="geometry",
                 family="specialized",
-                library="torchfits",
-                method="torchfits",
+                library="torchsky",
+                method="torchsky",
                 mode="specialized",
                 status="FAILED",
                 skip_reason=reason,
@@ -705,7 +705,7 @@ def run_sphere_domain(
             "--runs",
             "3",
             "--libraries",
-            "torchfits",
+            "torchsky",
             "--json-out",
             str(geo_gpu_json),
         ]
@@ -725,8 +725,8 @@ def run_sphere_domain(
                         case_label=f"geometry {op} {gpu_dev}",
                         operation=op,
                         family="specialized",
-                        library="torchfits",
-                        method="torchfits",
+                        library="torchsky",
+                        method="torchsky",
                         mode="specialized",
                         status="OK" if time_s is not None else "FAILED",
                         skip_reason="",
@@ -747,8 +747,8 @@ def run_sphere_domain(
                     case_label=f"geometry {gpu_dev}",
                     operation="geometry_gpu",
                     family="specialized",
-                    library="torchfits",
-                    method="torchfits",
+                    library="torchsky",
+                    method="torchsky",
                     mode="specialized",
                     status="SKIPPED",
                     skip_reason=reason_gpu,
@@ -790,7 +790,7 @@ def run_sphere_domain(
             tf_mpts = _safe_float(r.get("torch_mpts_s"))
             hp_mpts = _safe_float(r.get("healpy_mpts_s"))
             if tf_mpts is None:
-                tf_mpts = _safe_float(r.get("mpts_s_torchfits"))
+                tf_mpts = _safe_float(r.get("mpts_s_torchsky"))
             if hp_mpts is None:
                 hp_mpts = _safe_float(r.get("mpts_s_healpy"))
             if tf_t is not None:
@@ -809,8 +809,8 @@ def run_sphere_domain(
                     case_label=f"advanced {op}",
                     operation=op,
                     family="specialized",
-                    library="torchfits",
-                    method="torchfits",
+                    library="torchsky",
+                    method="torchsky",
                     mode="specialized",
                     status="OK" if tf_t is not None else "FAILED",
                     skip_reason="",
@@ -852,8 +852,8 @@ def run_sphere_domain(
                 case_label="advanced ops",
                 operation="advanced_ops",
                 family="specialized",
-                library="torchfits",
-                method="torchfits",
+                library="torchsky",
+                method="torchsky",
                 mode="specialized",
                 status="FAILED",
                 skip_reason=reason_adv,
@@ -901,8 +901,8 @@ def run_sphere_domain(
                         case_label=f"sparse {op}",
                         operation=op,
                         family="specialized",
-                        library="torchfits",
-                        method="torchfits",
+                        library="torchsky",
+                        method="torchsky",
                         mode="specialized",
                         status="OK",
                         skip_reason="",
@@ -925,8 +925,8 @@ def run_sphere_domain(
                         case_label="sparse ud_grade",
                         operation="ud_grade",
                         family="specialized",
-                        library="torchfits",
-                        method="torchfits",
+                        library="torchsky",
+                        method="torchsky",
                         mode="specialized",
                         status="OK" if sparse_s is not None else "FAILED",
                         skip_reason="",
@@ -972,8 +972,8 @@ def run_sphere_domain(
                 case_label="sparse all",
                 operation="sparse",
                 family="specialized",
-                library="torchfits",
-                method="torchfits",
+                library="torchsky",
+                method="torchsky",
                 mode="specialized",
                 status="FAILED",
                 skip_reason=reason_sparse,
@@ -1007,7 +1007,7 @@ def run_sphere_domain(
     if ok_spec:
         for r in spec_rows:
             backend = str(r.get("backend", "unknown"))
-            lib = "torchfits" if backend.startswith("torch") else backend
+            lib = "torchsky" if backend.startswith("torch") else backend
             op = str(r.get("op", "unknown"))
             t = _safe_float(r.get("time_s"))
             mops = _safe_float(r.get("mops_s"))
@@ -1041,8 +1041,8 @@ def run_sphere_domain(
                 case_label="spectral all",
                 operation="spectral",
                 family="specialized",
-                library="torchfits",
-                method="torchfits",
+                library="torchsky",
+                method="torchsky",
                 mode="specialized",
                 status="FAILED",
                 skip_reason=reason_spec,
@@ -1076,7 +1076,7 @@ def run_sphere_domain(
     if ok_poly:
         for r in poly_rows:
             op = str(r.get("operation", "unknown"))
-            lib = str(r.get("library", "torchfits"))
+            lib = str(r.get("library", "torchsky"))
             n_points = int(r.get("n_points", 0) or 0)
             t = None
             thr = None
@@ -1122,8 +1122,8 @@ def run_sphere_domain(
                         "mismatches_vs_spherical_geometry": r.get(
                             "mismatches_vs_spherical_geometry"
                         ),
-                        "relative_error_vs_torchfits": r.get(
-                            "relative_error_vs_torchfits"
+                        "relative_error_vs_torchsky": r.get(
+                            "relative_error_vs_torchsky"
                         ),
                     },
                 )
@@ -1137,8 +1137,8 @@ def run_sphere_domain(
                 case_label="polygon all",
                 operation="polygon",
                 family="specialized",
-                library="torchfits",
-                method="torchfits",
+                library="torchsky",
+                method="torchsky",
                 mode="specialized",
                 status="FAILED",
                 skip_reason=reason_poly,
@@ -1207,8 +1207,8 @@ def run_sphere_domain(
                     case_label=f"core {op}",
                     operation=op,
                     family="specialized",
-                    library="torchfits",
-                    method="torchfits",
+                    library="torchsky",
+                    method="torchsky",
                     mode="specialized",
                     status="OK" if (t is not None or thr is not None) else "SKIPPED",
                     skip_reason="no_timing_field"
@@ -1231,8 +1231,8 @@ def run_sphere_domain(
                 case_label="core all",
                 operation="core",
                 family="specialized",
-                library="torchfits",
-                method="torchfits",
+                library="torchsky",
+                method="torchsky",
                 mode="specialized",
                 status="FAILED",
                 skip_reason=reason_core,

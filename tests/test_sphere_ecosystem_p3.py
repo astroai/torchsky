@@ -1,7 +1,7 @@
 import torch
 import math
 import json
-from torchfits.sphere import MOC, HealSparseMap, nest2uniq
+from torchsky.sphere import MOC, HealSparseMap, nest2uniq
 
 
 def test_moc_area():

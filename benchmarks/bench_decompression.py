@@ -6,7 +6,7 @@ import fitsio
 import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
-import torchfits  # noqa: E402
+import torchsky  # noqa: E402
 from astropy.io import fits  # noqa: E402
 
 
@@ -42,12 +42,12 @@ def bench_fitsio(filename):
     return t
 
 
-def bench_torchfits(filename):
-    print("\n--- torchfits (Native) ---")
+def bench_torchsky(filename):
+    print("\n--- torchsky (Native) ---")
 
     start = time.time()
     # Use public read API
-    data = torchfits.read(filename, 1)
+    data = torchsky.read(filename, 1)
 
     # Force sync
     if isinstance(data, torch.Tensor):
@@ -61,12 +61,12 @@ def bench_torchfits(filename):
 
 
 def bench_rice_parallel(filename, threads=4):
-    import torchfits.cpp
+    import torchsky.cpp
 
-    print(f"\n--- torchfits (Rice Parallel {threads} threads) ---")
+    print(f"\n--- torchsky (Rice Parallel {threads} threads) ---")
     start = time.time()
     # Direct C++ call
-    data = torchfits.cpp.read_rice_parallel(filename, 1, threads)
+    data = torchsky.cpp.read_rice_parallel(filename, 1, threads)
 
     # Force sync (it returns tensor so it is already in memory, but just in case)
     if isinstance(data, torch.Tensor):
@@ -90,12 +90,12 @@ def main():
     t_fitsio = bench_fitsio(filename)
 
     # Scaling test
-    print("\n--- torchfits Scaling ---")
+    print("\n--- torchsky Scaling ---")
     for threads in [1, 2, 4, 8]:
         # Legacy path via ENV (no scaling expected)
-        # os.environ["TORCHFITS_COMPRESSED_PARALLEL_MAX_THREADS"] = str(threads)
+        # os.environ["TORCHSKY_COMPRESSED_PARALLEL_MAX_THREADS"] = str(threads)
         # print(f"\nThreads: {threads} (Legacy)")
-        # t = bench_torchfits(filename)
+        # t = bench_torchsky(filename)
 
         # New Parallel Path
         t_new = bench_rice_parallel(filename, threads)
@@ -107,7 +107,7 @@ def main():
     print("\n--- Raw Table Access Test ---")
     try:
         # Try to read the underlying BINTABLE
-        t = torchfits.read(filename, 1, mode="table")
+        t = torchsky.read(filename, 1, mode="table")
         print("Success! Keys:", t.keys())
         if "COMPRESSED_DATA" in t:
             data = t["COMPRESSED_DATA"]

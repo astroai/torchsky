@@ -1,5 +1,5 @@
 """
-Tests for torchfits buffer management module.
+Tests for torchsky buffer management module.
 """
 
 import threading
@@ -10,7 +10,7 @@ import pytest
 import torch
 
 
-from torchfits.buffer import (
+from torchsky.buffer import (
     BufferManager,
     MemoryPool,
     StreamingBuffer,

@@ -1,9 +1,9 @@
 import numpy as np
 import pytest
 import torch
-import torchfits.wcs.healpix as healpix_mod
+import torchsky.wcs.healpix as healpix_mod
 
-from torchfits.wcs.healpix import (
+from torchsky.wcs.healpix import (
     ang2pix,
     ang2vec,
     ang2pix_ring,
@@ -210,7 +210,7 @@ def test_ang2pix_pix2ang_compat_wrappers() -> None:
 
 
 def test_cpp_torch_bindings_core_healpix_match_python() -> None:
-    cpp = pytest.importorskip("torchfits.cpp")
+    cpp = pytest.importorskip("torchsky.cpp")
     required = [
         "healpix_ring2nest_torch_cpu",
         "healpix_nest2ring_torch_cpu",
@@ -259,7 +259,7 @@ def test_cpp_torch_bindings_core_healpix_match_python() -> None:
 
 
 def test_cpp_torch_bindings_interp_val_match_python() -> None:
-    cpp = pytest.importorskip("torchfits.cpp")
+    cpp = pytest.importorskip("torchsky.cpp")
     required = [
         "healpix_get_interp_val_ring_torch_cpu",
         "healpix_get_interp_val_nested_torch_cpu",
@@ -378,7 +378,7 @@ def test_query_vec_helpers_match_hpgeom() -> None:
 
 
 def test_query_disc_cpp_matches_python_fallback() -> None:
-    cpp = pytest.importorskip("torchfits.cpp")
+    cpp = pytest.importorskip("torchsky.cpp")
     if not hasattr(cpp, "healpix_query_disc_torch_cpu"):
         pytest.skip("torch-native HEALPix query_disc C++ binding unavailable")
 

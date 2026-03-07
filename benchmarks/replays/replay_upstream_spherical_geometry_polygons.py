@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay upstream spherical-geometry polygon fixtures against torchfits.sphere."""
+"""Replay upstream spherical-geometry polygon fixtures against torchsky.sphere."""
 
 from __future__ import annotations
 
@@ -29,8 +29,8 @@ import torch  # noqa: E402
 from spherical_geometry import polygon as sg_polygon  # noqa: E402
 from spherical_geometry.tests.helpers import ROOT_DIR as SG_ROOT_DIR  # noqa: E402
 
-from torchfits.sphere.geom import SphericalPolygon, spherical_polygon_contains  # noqa: E402
-from torchfits.wcs.healpix import (  # noqa: E402
+from torchsky.sphere.geom import SphericalPolygon, spherical_polygon_contains  # noqa: E402
+from torchsky.wcs.healpix import (  # noqa: E402
     ang2pix as hp_ang2pix,
     get_all_neighbours as hp_get_all_neighbours,
     max_pixrad as hp_max_pixrad,
@@ -83,7 +83,7 @@ class ContainsRow:
     mismatches: int
     mismatches_nonboundary: int
     area_rel_err: float
-    torchfits_points_s: float
+    torchsky_points_s: float
     comparator_points_s: float
     ratio_vs_comparator: float
 
@@ -93,7 +93,7 @@ class PairRow:
     case: str
     expected_intersects: bool
     comparator_intersects: bool
-    torchfits_intersects: bool
+    torchsky_intersects: bool
     mismatch: int
 
 
@@ -101,9 +101,9 @@ class PairRow:
 class DifficultRow:
     case: str
     comparator_area_sr: float | None
-    torchfits_pixel_area_sr: float | None
+    torchsky_pixel_area_sr: float | None
     comparator_nonempty: bool | None
-    torchfits_nonempty: bool | None
+    torchsky_nonempty: bool | None
     mismatch_nonempty: int
     healpix_area_by_nside: dict[str, float] | None
     healpix_eval_pixels_by_nside: dict[str, int] | None
@@ -597,7 +597,7 @@ def main() -> int:
                 mismatches=mismatches,
                 mismatches_nonboundary=mismatches_nonboundary,
                 area_rel_err=area_rel_err,
-                torchfits_points_s=qlon.size / t_tf,
+                torchsky_points_s=qlon.size / t_tf,
                 comparator_points_s=qlon.size / t_sg,
                 ratio_vs_comparator=t_sg / t_tf,
             )
@@ -617,7 +617,7 @@ def main() -> int:
                 case=case["name"],
                 expected_intersects=bool(case["expected_intersects"]),
                 comparator_intersects=sg_intersects,
-                torchfits_intersects=tf_intersects,
+                torchsky_intersects=tf_intersects,
                 mismatch=mismatch,
             )
         )
@@ -690,9 +690,9 @@ def main() -> int:
             DifficultRow(
                 case=f"difficult_intersections[{i}]",
                 comparator_area_sr=sg_area,
-                torchfits_pixel_area_sr=tf_area,
+                torchsky_pixel_area_sr=tf_area,
                 comparator_nonempty=sg_nonempty,
-                torchfits_nonempty=tf_nonempty,
+                torchsky_nonempty=tf_nonempty,
                 mismatch_nonempty=mismatch_nonempty,
                 healpix_area_by_nside=area_by_nside,
                 healpix_eval_pixels_by_nside=eval_pixels_by_nside,
@@ -731,7 +731,7 @@ def main() -> int:
     for r in pair_rows:
         print(
             f"  {r.case:38s} expected={r.expected_intersects} sg={r.comparator_intersects} "
-            f"tf={r.torchfits_intersects} mismatch={r.mismatch}"
+            f"tf={r.torchsky_intersects} mismatch={r.mismatch}"
         )
     if pair_mismatch_total > args.max_pair_intersection_mismatches:
         failures.append(
@@ -754,8 +754,8 @@ def main() -> int:
                     str(difficult_area_nsides[-1])
                 )
             print(
-                f"  {r.case:38s} sg_nonempty={r.comparator_nonempty} tf_nonempty={r.torchfits_nonempty} "
-                f"sg_area={r.comparator_area_sr:.3e} tf_area={r.torchfits_pixel_area_sr if r.torchfits_pixel_area_sr is not None else float('nan'):.3e} "
+                f"  {r.case:38s} sg_nonempty={r.comparator_nonempty} tf_nonempty={r.torchsky_nonempty} "
+                f"sg_area={r.comparator_area_sr:.3e} tf_area={r.torchsky_pixel_area_sr if r.torchsky_pixel_area_sr is not None else float('nan'):.3e} "
                 f"rel_err@{difficult_area_nsides[-1]}={area_rel_last if area_rel_last is not None else float('nan'):.3e} "
                 f"conv_rel={r.healpix_convergence_rel if r.healpix_convergence_rel is not None else float('nan'):.3e} "
                 f"eval={eval_last if eval_last is not None else -1} mismatch={r.mismatch_nonempty}"

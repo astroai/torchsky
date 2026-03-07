@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import torch
 
-from torchfits.spectral import DataCube, SpectralAxis, SpectralReader, Spectrum1D
+from torchsky.spectral import DataCube, SpectralAxis, SpectralReader, Spectrum1D
 
 
 class TestSpectralAxis:
@@ -273,7 +273,7 @@ class TestSpectralReader:
             hdu.writeto(f.name, overwrite=True)
             return f.name
 
-    @pytest.mark.skip("Requires full torchfits implementation")
+    @pytest.mark.skip("Requires full torchsky implementation")
     def test_read_spectrum_1d(self):
         """Test reading 1D spectrum from FITS table."""
         filepath = self.create_test_spectrum_file()
@@ -294,7 +294,7 @@ class TestSpectralReader:
         finally:
             os.unlink(filepath)
 
-    @pytest.mark.skip("Requires full torchfits implementation")
+    @pytest.mark.skip("Requires full torchsky implementation")
     def test_read_data_cube(self):
         """Test reading 3D data cube from FITS image."""
         filepath = self.create_test_cube_file()

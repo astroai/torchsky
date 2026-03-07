@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from torchfits.wcs.temporal import TemporalWCS
+from torchsky.wcs.temporal import TemporalWCS
 
 
 def test_temporal_seconds_roundtrip() -> None:

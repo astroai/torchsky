@@ -3,7 +3,7 @@ import os
 import torch
 from astropy.io import fits
 
-import torchfits
+import torchsky
 
 
 def test_get_header():
@@ -21,14 +21,14 @@ def test_get_header():
 
     try:
         # Test get_header by index
-        h0 = torchfits.get_header(filename, 0)
+        h0 = torchsky.get_header(filename, 0)
         assert h0["HDU0"] == "Value0"
 
-        h1 = torchfits.get_header(filename, 1)
+        h1 = torchsky.get_header(filename, 1)
         assert h1["HDU1"] == "Value1"
 
         # Test get_header by name
-        h_named = torchfits.get_header(filename, "IMAGE1")
+        h_named = torchsky.get_header(filename, "IMAGE1")
         assert h_named["HDU1"] == "Value1"
 
     finally:

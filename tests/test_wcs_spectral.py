@@ -3,7 +3,7 @@ import pytest
 import torch
 from astropy.wcs import WCS as AstropyWCS
 
-import torchfits
+import torchsky
 
 
 def _wave_1d_header() -> dict[str, float | int | str]:
@@ -38,7 +38,7 @@ def _cube_header() -> dict[str, float | int | str]:
 def test_wcs_spectral_1d_matches_astropy(origin: int) -> None:
     header = _wave_1d_header()
 
-    twcs = torchfits.WCS(header)
+    twcs = torchsky.WCS(header)
     awcs = AstropyWCS(header)
 
     pixels = np.array([0.0, 1.0, 10.0, 25.0], dtype=np.float64)
@@ -59,7 +59,7 @@ def test_wcs_spectral_1d_matches_astropy(origin: int) -> None:
 def test_wcs_spatial_plus_spectral_3d_matches_astropy(origin: int) -> None:
     header = _cube_header()
 
-    twcs = torchfits.WCS(header)
+    twcs = torchsky.WCS(header)
     awcs = AstropyWCS(header)
 
     # Keep points around CRPIX for robust inversion across projections.

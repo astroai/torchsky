@@ -3,7 +3,7 @@ import torch
 from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
 
-from torchfits.wcs.core import WCS as TorchWCS
+from torchsky.wcs.core import WCS as TorchWCS
 
 
 def _sip_header() -> fits.Header:

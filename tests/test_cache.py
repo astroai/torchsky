@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 import torch
 
-import torchfits
-from torchfits.cache import CacheConfig
+import torchsky
+from torchsky.cache import CacheConfig
 
 
 class TestCaching:
@@ -34,22 +34,22 @@ class TestCaching:
 
         try:
             # Clear cache first
-            torchfits.clear_file_cache()
+            torchsky.clear_file_cache()
 
             # First read should be a cache miss
-            torchfits.read(filepath)
-            stats1 = torchfits.get_cache_performance()
+            torchsky.read(filepath)
+            stats1 = torchsky.get_cache_performance()
 
             # Second read should be a cache hit
-            torchfits.read(filepath)
-            stats2 = torchfits.get_cache_performance()
+            torchsky.read(filepath)
+            stats2 = torchsky.get_cache_performance()
 
             # Verify cache behavior
             assert stats2["total_requests"] > stats1["total_requests"]
 
         finally:
             os.unlink(filepath)
-            torchfits.clear_file_cache()
+            torchsky.clear_file_cache()
 
     def test_cache_clearing(self):
         """Test cache clearing functionality."""
@@ -57,13 +57,13 @@ class TestCaching:
 
         try:
             # Read file to populate cache
-            torchfits.read(filepath)
+            torchsky.read(filepath)
 
             # Clear cache
-            torchfits.clear_file_cache()
+            torchsky.clear_file_cache()
 
             # Verify cache is cleared
-            torchfits.get_cache_performance()
+            torchsky.get_cache_performance()
             # After clearing, stats should be reset or show no cached entries
 
         finally:
@@ -80,29 +80,29 @@ class TestCaching:
                 files.append(filepath)
 
             # Clear cache
-            torchfits.clear_file_cache()
+            torchsky.clear_file_cache()
 
             # Read all files
             for filepath in files:
-                torchfits.read(filepath)
+                torchsky.read(filepath)
 
             # Read them again (should hit cache)
             for filepath in files:
-                torchfits.read(filepath)
+                torchsky.read(filepath)
 
             # Check cache performance
-            stats = torchfits.get_cache_performance()
+            stats = torchsky.get_cache_performance()
             assert stats["total_requests"] >= len(files) * 2
 
         finally:
             for f in files:
                 if os.path.exists(f):
                     os.unlink(f)
-            torchfits.clear_file_cache()
+            torchsky.clear_file_cache()
 
     def test_cached_numpy_reads_survive_repeated_cache_clears(self):
         """Regression: cached numpy reads should remain stable across cache clears."""
-        cpp = pytest.importorskip("torchfits.cpp")
+        cpp = pytest.importorskip("torchsky.cpp")
         if not hasattr(cpp, "read_full_numpy_cached"):
             pytest.skip("read_full_numpy_cached unavailable in this build")
 
@@ -111,7 +111,7 @@ class TestCaching:
 
         try:
             for i in range(300):
-                torchfits.clear_file_cache()
+                torchsky.clear_file_cache()
                 if i % 2 == 0:
                     arr = cpp.read_full_numpy_cached(file_a, 0, True)
                     assert arr.shape == (257,)
@@ -122,11 +122,11 @@ class TestCaching:
             for path in (file_a, file_b):
                 if os.path.exists(path):
                     os.unlink(path)
-            torchfits.clear_file_cache()
+            torchsky.clear_file_cache()
 
     def test_cached_multibyte_read_matches_nocache_reference(self):
         """Regression: cached mmap raw path must match the no-cache path exactly."""
-        cpp = pytest.importorskip("torchfits.cpp")
+        cpp = pytest.importorskip("torchsky.cpp")
         if not hasattr(cpp, "read_full_cached") or not hasattr(
             cpp, "read_full_nocache"
         ):
@@ -140,14 +140,14 @@ class TestCaching:
             path = f.name
 
         try:
-            torchfits.clear_file_cache()
+            torchsky.clear_file_cache()
             cached = cpp.read_full_cached(path, 0, True).numpy()
             reference = cpp.read_full_nocache(path, 0, True).numpy()
             np.testing.assert_array_equal(cached, reference)
         finally:
             if os.path.exists(path):
                 os.unlink(path)
-            torchfits.clear_file_cache()
+            torchsky.clear_file_cache()
 
     def test_cold_nommap_heuristic_with_cache_enabled_int16(self):
         """Large int16 images should prefer non-mmap even when cache is enabled."""
@@ -159,14 +159,14 @@ class TestCaching:
             path = f.name
 
         try:
-            torchfits.clear_file_cache()
-            assert torchfits._should_use_cold_nommap(
+            torchsky.clear_file_cache()
+            assert torchsky._should_use_cold_nommap(
                 path, 0, cache_capacity=10, mmap=True
             )
         finally:
             if os.path.exists(path):
                 os.unlink(path)
-            torchfits.clear_file_cache()
+            torchsky.clear_file_cache()
 
     def test_cold_nommap_heuristic_float64_and_small_guard(self):
         """64-bit and sub-1MiB payloads should keep mmap enabled by default."""
@@ -184,34 +184,34 @@ class TestCaching:
             small_path = f_small.name
 
         try:
-            torchfits.clear_file_cache()
-            assert not torchfits._should_use_cold_nommap(
+            torchsky.clear_file_cache()
+            assert not torchsky._should_use_cold_nommap(
                 large_path, 0, cache_capacity=10, mmap=True
             )
-            assert not torchfits._should_use_cold_nommap(
+            assert not torchsky._should_use_cold_nommap(
                 small_path, 0, cache_capacity=10, mmap=True
             )
         finally:
             for path in (large_path, small_path):
                 if os.path.exists(path):
                     os.unlink(path)
-            torchfits.clear_file_cache()
+            torchsky.clear_file_cache()
 
     def test_read_mmap_auto_defaults_to_false_for_compressed(self, monkeypatch):
         """In smart policy, `mmap='auto'` should disable mmap for compressed HDUs."""
-        cpp = pytest.importorskip("torchfits.cpp")
+        cpp = pytest.importorskip("torchsky.cpp")
         if not hasattr(cpp, "read_full_cached"):
             pytest.skip("read_full_cached unavailable in this build")
 
         observed = []
 
         monkeypatch.setattr(
-            torchfits,
+            torchsky,
             "_get_image_meta",
             lambda path, hdu: (-32, 2, (64, 64), 1.0, 0.0, True),
         )
         monkeypatch.setattr(
-            torchfits,
+            torchsky,
             "_should_use_cold_nommap",
             lambda *args, **kwargs: (_ for _ in ()).throw(
                 AssertionError(
@@ -236,7 +236,7 @@ class TestCaching:
             )[1],
         )
 
-        out = torchfits.read(
+        out = torchsky.read(
             "synthetic_compressed.fits",
             hdu=1,
             mmap="auto",
@@ -250,19 +250,19 @@ class TestCaching:
 
     def test_read_mmap_true_is_explicit_override(self, monkeypatch):
         """In smart policy, `mmap=True` must stay enabled for compressed metadata."""
-        cpp = pytest.importorskip("torchfits.cpp")
+        cpp = pytest.importorskip("torchsky.cpp")
         if not hasattr(cpp, "read_full_cached"):
             pytest.skip("read_full_cached unavailable in this build")
 
         observed = []
 
         monkeypatch.setattr(
-            torchfits,
+            torchsky,
             "_get_image_meta",
             lambda path, hdu: (-32, 2, (64, 64), 1.0, 0.0, True),
         )
         monkeypatch.setattr(
-            torchfits,
+            torchsky,
             "_should_use_cold_nommap",
             lambda *args, **kwargs: (_ for _ in ()).throw(
                 AssertionError(
@@ -287,7 +287,7 @@ class TestCaching:
             )[1],
         )
 
-        out = torchfits.read(
+        out = torchsky.read(
             "synthetic_compressed.fits",
             hdu=1,
             mmap=True,
@@ -301,7 +301,7 @@ class TestCaching:
 
     def test_read_mmap_auto_default_policy_uses_direct_mmap(self, monkeypatch):
         """Default policy should skip smart auto-mmap heuristics."""
-        cpp = pytest.importorskip("torchfits.cpp")
+        cpp = pytest.importorskip("torchsky.cpp")
 
         observed = []
         monkeypatch.setattr(
@@ -322,7 +322,7 @@ class TestCaching:
                 )[1],
             )
 
-        out = torchfits.read(
+        out = torchsky.read(
             "synthetic_direct.fits",
             hdu=1,
             mmap="auto",
@@ -337,7 +337,7 @@ class TestCaching:
     def test_read_rejects_invalid_mmap_mode(self):
         """Only bool or 'auto' mmap mode should be accepted."""
         with pytest.raises(ValueError, match="mmap must be bool or 'auto'"):
-            torchfits.read("dummy.fits", mmap="sometimes")
+            torchsky.read("dummy.fits", mmap="sometimes")
 
     def test_read_hdu_auto_detects_compressed_image_extension(self):
         """`hdu='auto'` should resolve to the first payload HDU (fitsio-like behavior)."""
@@ -351,9 +351,9 @@ class TestCaching:
             path = f.name
 
         try:
-            empty_primary = torchfits.read(path, hdu=0, mmap="auto")
-            auto_tensor = torchfits.read(path, hdu="auto", mmap="auto")
-            none_tensor = torchfits.read(path, hdu=None, mmap="auto")
+            empty_primary = torchsky.read(path, hdu=0, mmap="auto")
+            auto_tensor = torchsky.read(path, hdu="auto", mmap="auto")
+            none_tensor = torchsky.read(path, hdu=None, mmap="auto")
 
             assert isinstance(empty_primary, torch.Tensor)
             assert empty_primary.numel() == 0
@@ -364,7 +364,7 @@ class TestCaching:
         finally:
             if os.path.exists(path):
                 os.unlink(path)
-            torchfits.clear_file_cache()
+            torchsky.clear_file_cache()
 
     def test_get_header_auto_matches_detected_hdu(self):
         """`get_header(..., hdu='auto')` should return the detected payload header."""
@@ -378,14 +378,14 @@ class TestCaching:
             path = f.name
 
         try:
-            header = torchfits.get_header(path, hdu="auto")
+            header = torchsky.get_header(path, hdu="auto")
             assert int(header.get("NAXIS", 0)) == 2
             assert int(header.get("NAXIS1", 0)) > 0
             assert int(header.get("NAXIS2", 0)) > 0
         finally:
             if os.path.exists(path):
                 os.unlink(path)
-            torchfits.clear_file_cache()
+            torchsky.clear_file_cache()
 
 
 class TestCacheConfig:
@@ -407,7 +407,7 @@ class TestCacheConfig:
         assert config.disk_cache_gb == 5
         assert config.prefetch_enabled is False
 
-    @patch("torchfits.cache.psutil", None)
+    @patch("torchsky.cache.psutil", None)
     def test_for_environment_no_psutil(self):
         config = CacheConfig.for_environment()
         assert config.max_files == 100
@@ -415,7 +415,7 @@ class TestCacheConfig:
         assert config.disk_cache_gb == 5
         assert config.prefetch_enabled is False
 
-    @patch("torchfits.cache.psutil")
+    @patch("torchsky.cache.psutil")
     @patch.object(CacheConfig, "_is_hpc_environment", return_value=True)
     def test_for_environment_hpc(self, mock_hpc, mock_psutil):
         mock_memory = MagicMock()
@@ -428,7 +428,7 @@ class TestCacheConfig:
         assert config.disk_cache_gb == 50
         assert config.prefetch_enabled is True
 
-    @patch("torchfits.cache.psutil")
+    @patch("torchsky.cache.psutil")
     @patch.object(CacheConfig, "_is_hpc_environment", return_value=False)
     @patch.object(CacheConfig, "_is_cloud_environment", return_value=True)
     def test_for_environment_cloud(self, mock_cloud, mock_hpc, mock_psutil):
@@ -442,7 +442,7 @@ class TestCacheConfig:
         assert config.disk_cache_gb == 20
         assert config.prefetch_enabled is True
 
-    @patch("torchfits.cache.psutil")
+    @patch("torchsky.cache.psutil")
     @patch.object(CacheConfig, "_is_hpc_environment", return_value=False)
     @patch.object(CacheConfig, "_is_cloud_environment", return_value=False)
     @patch.object(CacheConfig, "_is_gpu_environment", return_value=True)
@@ -457,7 +457,7 @@ class TestCacheConfig:
         assert config.disk_cache_gb == 30
         assert config.prefetch_enabled is True
 
-    @patch("torchfits.cache.psutil")
+    @patch("torchsky.cache.psutil")
     @patch.object(CacheConfig, "_is_hpc_environment", return_value=False)
     @patch.object(CacheConfig, "_is_cloud_environment", return_value=False)
     @patch.object(CacheConfig, "_is_gpu_environment", return_value=False)

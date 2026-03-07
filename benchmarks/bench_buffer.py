@@ -1,5 +1,5 @@
 """
-Buffer management benchmarks for torchfits.
+Buffer management benchmarks for torchsky.
 
 This module provides focused benchmarks for buffer management performance,
 including memory pools, streaming buffers, and allocation patterns.
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from benchmarks.config import DEFAULT_OUTPUT_DIR  # noqa: E402
-from torchfits import buffer  # noqa: E402
+from torchsky import buffer  # noqa: E402
 
 
 class BufferBenchmark:

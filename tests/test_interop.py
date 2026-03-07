@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from astropy.table import Table
 
-import torchfits
+import torchsky
 
 
 def test_to_pandas_decode_bytes():
@@ -23,8 +23,8 @@ def test_to_pandas_decode_bytes():
         path = f.name
 
     try:
-        data, _ = torchfits.read(path, hdu=1, return_header=True)
-        df = torchfits.to_pandas(data, decode_bytes=True)
+        data, _ = torchsky.read(path, hdu=1, return_header=True)
+        df = torchsky.to_pandas(data, decode_bytes=True)
 
         assert df.shape[0] == 2
         assert df["NAME"].tolist() == ["STAR_A", "STAR_B"]
@@ -49,8 +49,8 @@ def test_to_arrow_vla_list():
         path = f.name
 
     try:
-        data, _ = torchfits.read(path, hdu=1, return_header=True)
-        arrow = torchfits.to_arrow(data, vla_policy="list")
+        data, _ = torchsky.read(path, hdu=1, return_header=True)
+        arrow = torchsky.to_arrow(data, vla_policy="list")
 
         assert arrow.num_rows == 2
         assert "VLA" in arrow.column_names

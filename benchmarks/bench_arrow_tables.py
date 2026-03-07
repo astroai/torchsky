@@ -3,7 +3,7 @@
 Focused benchmark for Arrow-native FITS table workflows.
 
 Compares:
-- torchfits.table.read / scan
+- torchsky.table.read / scan
 - fitsio.read (raw + decoded-string variants)
 - astropy.table.Table.read
 - Arrow -> pandas / polars conversion
@@ -35,7 +35,7 @@ import pyarrow as pa  # noqa: E402
 import torch  # noqa: E402
 
 import fitsio  # noqa: E402
-import torchfits  # noqa: E402
+import torchsky  # noqa: E402
 
 
 def _build_table(path: Path, rows: int) -> None:
@@ -127,7 +127,7 @@ def main() -> None:
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    data_dir = Path(tempfile.mkdtemp(prefix="torchfits_table_arrow_"))
+    data_dir = Path(tempfile.mkdtemp(prefix="torchsky_table_arrow_"))
     file_path = data_dir / "table_arrow_bench.fits"
     _build_table(file_path, args.rows)
     print(f"Dataset: {file_path} ({args.rows} rows)")
@@ -136,8 +136,8 @@ def main() -> None:
 
     methods.append(
         (
-            "torchfits_arrow_read_raw",
-            lambda: torchfits.table.read(
+            "torchsky_arrow_read_raw",
+            lambda: torchsky.table.read(
                 str(file_path),
                 hdu=1,
                 decode_bytes=False,
@@ -149,8 +149,8 @@ def main() -> None:
     )
     methods.append(
         (
-            "torchfits_arrow_read_decoded",
-            lambda: torchfits.table.read(
+            "torchsky_arrow_read_decoded",
+            lambda: torchsky.table.read(
                 str(file_path),
                 hdu=1,
                 decode_bytes=True,
@@ -187,8 +187,8 @@ def main() -> None:
     proj_rows = np.arange(proj_start, proj_stop, dtype=np.int64)
     methods.append(
         (
-            "torchfits_arrow_read_projected",
-            lambda: torchfits.table.read(
+            "torchsky_arrow_read_projected",
+            lambda: torchsky.table.read(
                 str(file_path),
                 hdu=1,
                 columns=proj_cols,
@@ -217,9 +217,9 @@ def main() -> None:
         )
     )
 
-    def _torchfits_arrow_scan_sum():
+    def _torchsky_arrow_scan_sum():
         total = 0.0
-        for batch in torchfits.table.scan(
+        for batch in torchsky.table.scan(
             str(file_path),
             hdu=1,
             decode_bytes=False,
@@ -229,11 +229,11 @@ def main() -> None:
             total += float(np.asarray(batch.column("RA")).sum())
         return total
 
-    methods.append(("torchfits_arrow_scan_sum", _torchfits_arrow_scan_sum))
+    methods.append(("torchsky_arrow_scan_sum", _torchsky_arrow_scan_sum))
 
-    def _torchfits_arrow_scan_sum_cpp_numpy():
+    def _torchsky_arrow_scan_sum_cpp_numpy():
         total = 0.0
-        for batch in torchfits.table.scan(
+        for batch in torchsky.table.scan(
             str(file_path),
             hdu=1,
             decode_bytes=False,
@@ -245,12 +245,12 @@ def main() -> None:
         return total
 
     methods.append(
-        ("torchfits_arrow_scan_sum_cpp_numpy", _torchfits_arrow_scan_sum_cpp_numpy)
+        ("torchsky_arrow_scan_sum_cpp_numpy", _torchsky_arrow_scan_sum_cpp_numpy)
     )
 
-    def _torchfits_scan_torch_sum_cpu():
+    def _torchsky_scan_torch_sum_cpu():
         total = 0.0
-        for chunk in torchfits.table.scan_torch(
+        for chunk in torchsky.table.scan_torch(
             str(file_path),
             hdu=1,
             batch_size=args.batch_size,
@@ -259,7 +259,7 @@ def main() -> None:
             total += float(chunk["RA"].sum().item())
         return total
 
-    methods.append(("torchfits_scan_torch_sum_cpu", _torchfits_scan_torch_sum_cpu))
+    methods.append(("torchsky_scan_torch_sum_cpu", _torchsky_scan_torch_sum_cpu))
 
     results: list[dict[str, str | float | int]] = []
     arrow_tbl = None
@@ -267,7 +267,7 @@ def main() -> None:
         m, s = _time(fn, args.warmup, args.iterations)
         print(f"{name:24s}: {m:.6f}s ± {s:.6f}s")
         results.append({"method": name, "mean_s": m, "std_s": s, "rows": args.rows})
-        if name == "torchfits_arrow_read_raw":
+        if name == "torchsky_arrow_read_raw":
             arrow_tbl = fn()
 
     if arrow_tbl is not None:
@@ -275,7 +275,7 @@ def main() -> None:
             import pandas as pd  # noqa: F401
 
             m, s = _time(
-                lambda: torchfits.table.to_pandas(arrow_tbl), 1, args.iterations
+                lambda: torchsky.table.to_pandas(arrow_tbl), 1, args.iterations
             )
             print(f"{'arrow_to_pandas':24s}: {m:.6f}s ± {s:.6f}s")
             results.append(
@@ -293,7 +293,7 @@ def main() -> None:
             import polars as pl  # noqa: F401
 
             m, s = _time(
-                lambda: torchfits.table.to_polars(arrow_tbl), 1, args.iterations
+                lambda: torchsky.table.to_polars(arrow_tbl), 1, args.iterations
             )
             print(f"{'arrow_to_polars':24s}: {m:.6f}s ± {s:.6f}s")
             results.append(

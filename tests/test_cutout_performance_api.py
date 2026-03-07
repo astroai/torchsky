@@ -3,7 +3,7 @@ import tempfile
 
 import numpy as np
 
-import torchfits
+import torchsky
 
 
 def test_read_subset_basic_roundtrip():
@@ -17,8 +17,8 @@ def test_read_subset_basic_roundtrip():
 
         fits.PrimaryHDU(data).writeto(name, overwrite=True)
 
-        # 10x10 cutout at (x=5..14, y=7..16) using torchfits API coords.
-        cut = torchfits.read_subset(name, 0, 5, 7, 15, 17)
+        # 10x10 cutout at (x=5..14, y=7..16) using torchsky API coords.
+        cut = torchsky.read_subset(name, 0, 5, 7, 15, 17)
         assert cut.shape == (10, 10)
         assert np.allclose(cut.numpy(), data[7:17, 5:15])
     finally:

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import torch
 
-import torchfits
+import torchsky
 
 
 class TestCompression:
@@ -37,7 +37,7 @@ class TestCompression:
 
         try:
             # Compressed images are typically in HDU 1
-            result, header = torchfits.read(filepath, hdu=1, return_header=True)
+            result, header = torchsky.read(filepath, hdu=1, return_header=True)
 
             assert isinstance(result, torch.Tensor)
             assert result.shape == expected_data.shape
@@ -57,7 +57,7 @@ class TestCompression:
         filepath, expected_data = self.create_compressed_fits(compression="GZIP_1")
 
         try:
-            result, header = torchfits.read(filepath, hdu=1, return_header=True)
+            result, header = torchsky.read(filepath, hdu=1, return_header=True)
 
             assert isinstance(result, torch.Tensor)
             assert result.shape == expected_data.shape
@@ -77,12 +77,12 @@ class TestCompression:
 
         try:
             # Read full image
-            full_result, _ = torchfits.read(filepath, hdu=1, return_header=True)
+            full_result, _ = torchsky.read(filepath, hdu=1, return_header=True)
 
             # Read subset (should use tile-aware optimization)
             # FITS uses 1-based inclusive indexing. Python [500:1500] is 0-based 500 to 1499.
             # So FITS range is 501 to 1500.
-            subset_result, _ = torchfits.read(
+            subset_result, _ = torchsky.read(
                 filepath + "[1][501:1500,501:1500]", return_header=True
             )
 
@@ -103,7 +103,7 @@ class TestCompression:
 
         try:
             # Should automatically detect and handle compression
-            result, header = torchfits.read(filepath, hdu=1, return_header=True)
+            result, header = torchsky.read(filepath, hdu=1, return_header=True)
 
             assert isinstance(result, torch.Tensor)
             # Header should contain compression info
@@ -123,7 +123,7 @@ class TestCompression:
                     shape=(500, 500), compression=comp_type
                 )
 
-                result, header = torchfits.read(filepath, hdu=1, return_header=True)
+                result, header = torchsky.read(filepath, hdu=1, return_header=True)
 
                 assert isinstance(result, torch.Tensor)
                 assert result.shape == expected_data.shape
@@ -152,10 +152,10 @@ class TestCompressionPerformance:
 
         with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
             try:
-                torchfits.write(
+                torchsky.write(
                     f.name, torch.from_numpy(data), overwrite=True, compress="RICE_1"
                 )
-                result = torchfits.read(f.name, hdu=1, mmap=False)
+                result = torchsky.read(f.name, hdu=1, mmap=False)
                 np.testing.assert_array_equal(result.numpy(), data)
             finally:
                 os.unlink(f.name)
@@ -172,12 +172,12 @@ class TestCompressionPerformance:
             hdu.writeto(f.name, overwrite=True)
 
             try:
-                monkeypatch.setenv("TORCHFITS_COMPRESSED_PARALLEL", "0")
-                serial = torchfits.read(f.name, hdu=1, mmap=False)
+                monkeypatch.setenv("TORCHSKY_COMPRESSED_PARALLEL", "0")
+                serial = torchsky.read(f.name, hdu=1, mmap=False)
 
-                monkeypatch.setenv("TORCHFITS_COMPRESSED_PARALLEL", "1")
-                monkeypatch.setenv("TORCHFITS_COMPRESSED_PARALLEL_MIN_PIXELS", "1")
-                parallel = torchfits.read(f.name, hdu=1, mmap=False)
+                monkeypatch.setenv("TORCHSKY_COMPRESSED_PARALLEL", "1")
+                monkeypatch.setenv("TORCHSKY_COMPRESSED_PARALLEL_MIN_PIXELS", "1")
+                parallel = torchsky.read(f.name, hdu=1, mmap=False)
 
                 torch.testing.assert_close(parallel, serial, rtol=0.0, atol=0.0)
             finally:
@@ -199,13 +199,13 @@ class TestCompressionPerformance:
             hdu.writeto(f.name, overwrite=True)
 
             try:
-                monkeypatch.setenv("TORCHFITS_COMPRESSED_PARALLEL", "1")
-                monkeypatch.setenv("TORCHFITS_COMPRESSED_PARALLEL_MIN_PIXELS", "1")
-                monkeypatch.setenv("TORCHFITS_COMPRESSED_PARALLEL_HCOMPRESS", "0")
-                serial = torchfits.read(f.name, hdu=1, mmap=False)
+                monkeypatch.setenv("TORCHSKY_COMPRESSED_PARALLEL", "1")
+                monkeypatch.setenv("TORCHSKY_COMPRESSED_PARALLEL_MIN_PIXELS", "1")
+                monkeypatch.setenv("TORCHSKY_COMPRESSED_PARALLEL_HCOMPRESS", "0")
+                serial = torchsky.read(f.name, hdu=1, mmap=False)
 
-                monkeypatch.setenv("TORCHFITS_COMPRESSED_PARALLEL_HCOMPRESS", "1")
-                parallel = torchfits.read(f.name, hdu=1, mmap=False)
+                monkeypatch.setenv("TORCHSKY_COMPRESSED_PARALLEL_HCOMPRESS", "1")
+                parallel = torchsky.read(f.name, hdu=1, mmap=False)
 
                 torch.testing.assert_close(parallel, serial, rtol=0.0, atol=0.0)
             finally:
@@ -227,7 +227,7 @@ class TestCompressionPerformance:
 
             try:
                 start_time = time.time()
-                result, _ = torchfits.read(f.name, hdu=1, return_header=True)
+                result, _ = torchsky.read(f.name, hdu=1, return_header=True)
                 read_time = time.time() - start_time
 
                 assert result.shape == shape
@@ -255,7 +255,7 @@ class TestCompressionPerformance:
                 # Read small subset - should be fast due to tile optimization
                 start_time = time.time()
                 # FITS 1-based inclusive: 1001 to 1500 (length 500)
-                subset, _ = torchfits.read(
+                subset, _ = torchsky.read(
                     f.name + "[1][1001:1500,1001:1500]", return_header=True
                 )
                 subset_time = time.time() - start_time

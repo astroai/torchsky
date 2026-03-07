@@ -5,7 +5,7 @@ import pytest
 from astropy.io import fits
 from astropy.table import Table
 
-from torchfits.hdu import TableHDU
+from torchsky.hdu import TableHDU
 
 
 def create_test_file(filename):

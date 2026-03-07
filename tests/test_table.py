@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import torch
 
-import torchfits
+import torchsky
 
 
 class TestTableReading:
@@ -41,7 +41,7 @@ class TestTableReading:
         filepath, expected_data = self.create_test_table(100)
 
         try:
-            result, header = torchfits.read(
+            result, header = torchsky.read(
                 filepath, hdu=1, return_header=True
             )  # Tables are usually in HDU 1
 
@@ -58,7 +58,7 @@ class TestTableReading:
         filepath, expected_data = self.create_test_table(100)
 
         try:
-            result, header = torchfits.read(
+            result, header = torchsky.read(
                 filepath, hdu=1, columns=["RA", "DEC"], return_header=True
             )
 
@@ -75,7 +75,7 @@ class TestTableReading:
         filepath, expected_data = self.create_test_table(1000)
 
         try:
-            result, header = torchfits.read(
+            result, header = torchsky.read(
                 filepath, hdu=1, start_row=100, num_rows=50, return_header=True
             )
 
@@ -91,7 +91,7 @@ class TestTableReading:
 
         try:
             # Test with memory limit to force streaming
-            result = torchfits.read_large_table(
+            result = torchsky.read_large_table(
                 filepath, max_memory_mb=1, streaming=True
             )
 
@@ -115,7 +115,7 @@ class TestTableReading:
             path = f.name
 
         try:
-            with torchfits.open(path) as hdul:
+            with torchsky.open(path) as hdul:
                 table_hdu = hdul[1]
                 assert "NAME" in table_hdu.columns
                 assert "NAME" in table_hdu.string_columns
@@ -130,7 +130,7 @@ class TestTableReading:
 
         try:
             total = 0
-            for chunk in torchfits.stream_table(filepath, hdu=1, chunk_rows=200):
+            for chunk in torchsky.stream_table(filepath, hdu=1, chunk_rows=200):
                 assert "RA" in chunk
                 total += len(chunk["RA"])
             assert total == 1234
@@ -150,7 +150,7 @@ class TestTableReading:
             path = f.name
 
         try:
-            with torchfits.open(path) as hdul:
+            with torchsky.open(path) as hdul:
                 table_hdu = hdul[1]
                 schema = table_hdu.schema
                 assert "VLA" in schema["vla_columns"]
@@ -164,10 +164,10 @@ class TestTableReading:
         filepath, _ = self.create_test_table(200)
 
         try:
-            with torchfits.open(filepath) as hdul:
+            with torchsky.open(filepath) as hdul:
                 table_hdu = hdul[1]
                 filtered = table_hdu.filter("(RA > 180.0) & (FLAG >= 0)")
-                assert isinstance(filtered, torchfits.TableHDU)
+                assert isinstance(filtered, torchsky.TableHDU)
                 assert filtered.num_rows > 0
                 assert filtered.num_rows <= table_hdu.num_rows
         finally:
@@ -191,7 +191,7 @@ class TestTableReading:
         fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(path, overwrite=True)
 
         try:
-            table = torchfits.read(path, hdu=1)
+            table = torchsky.read(path, hdu=1)
             assert "Z" in table
             assert len(table["Z"]) == 3
         finally:
@@ -199,7 +199,7 @@ class TestTableReading:
 
     def test_tablehdu_column_manipulations(self):
         """Test add/rename/drop/append operations on TableHDU."""
-        table_hdu = torchfits.TableHDU(
+        table_hdu = torchsky.TableHDU(
             {
                 "A": torch.tensor([1, 2], dtype=torch.int32),
                 "B": torch.tensor([10.0, 20.0], dtype=torch.float32),
@@ -228,7 +228,7 @@ class TestTableReading:
 
     def test_tablehdu_append_rows_with_vla_lists(self):
         """Test appending rows for VLA-like list columns."""
-        table_hdu = torchfits.TableHDU(
+        table_hdu = torchsky.TableHDU(
             {
                 "ID": torch.tensor([1, 2], dtype=torch.int32),
                 "VLA": [torch.tensor([1, 2]), torch.tensor([3])],
@@ -251,7 +251,7 @@ class TestTableReading:
         filepath, expected_data = self.create_test_table(100)
 
         try:
-            result, header = torchfits.read(filepath, hdu=1, return_header=True)
+            result, header = torchsky.read(filepath, hdu=1, return_header=True)
 
             # Check data types are preserved appropriately
             assert result["ID"].dtype in [torch.int32, torch.int64]
@@ -274,7 +274,7 @@ class TestTableReading:
                 empty_table.write(f.name, format="fits", overwrite=True)
 
                 # Should handle empty table gracefully
-                result, header = torchfits.read(f.name, hdu=1, return_header=True)
+                result, header = torchsky.read(f.name, hdu=1, return_header=True)
                 assert isinstance(result, dict)
 
             finally:
@@ -316,7 +316,7 @@ class TestTablePerformance:
         try:
             # Test streaming read
             start_time = time.time()
-            result = torchfits.read_large_table(
+            result = torchsky.read_large_table(
                 filepath, max_memory_mb=10, streaming=True
             )
             streaming_time = time.time() - start_time
@@ -343,7 +343,7 @@ class TestTablePerformance:
             mem_before = process.memory_info().rss / 1024 / 1024  # MB
 
             # Read table
-            result = torchfits.read_large_table(filepath, max_memory_mb=50)
+            result = torchsky.read_large_table(filepath, max_memory_mb=50)
 
             mem_after = process.memory_info().rss / 1024 / 1024  # MB
             memory_increase = mem_after - mem_before

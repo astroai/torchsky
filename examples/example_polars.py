@@ -1,7 +1,7 @@
 """
 Example: Polars Integration for Efficient Data Analysis
 
-This example demonstrates how to use torchfits with Polars for
+This example demonstrates how to use torchsky with Polars for
 high-performance tabular data analysis, leveraging Apache Arrow
 for zero-copy (or near-zero-copy) data transfer.
 """
@@ -10,7 +10,7 @@ import tempfile
 import time
 import numpy as np
 import torch
-import torchfits
+import torchsky
 import polars as pl
 
 
@@ -31,7 +31,7 @@ def create_sample_catalog(n_rows=100_000):
     # Write to FITS
     filename = tempfile.mktemp(suffix=".fits")
 
-    # Using astropy to write initial file (as torchfits write support is mainly for tensors)
+    # Using astropy to write initial file (as torchsky write support is mainly for tensors)
     from astropy.table import Table
 
     t = Table(data)
@@ -42,7 +42,7 @@ def create_sample_catalog(n_rows=100_000):
 
 
 def example_polars_integration():
-    """Demonstrate reading FITS into Polars via torchfits."""
+    """Demonstrate reading FITS into Polars via torchsky."""
     filename = create_sample_catalog()
 
     print("\n" + "=" * 50)
@@ -52,15 +52,15 @@ def example_polars_integration():
     # Measure read time
     t0 = time.time()
 
-    # 1. Read using torchfits (returns dictionary of Tensors/Arrays)
+    # 1. Read using torchsky (returns dictionary of Tensors/Arrays)
     # limit_rows=None means read all
-    data = torchfits.read(filename, hdu=1)
+    data = torchsky.read(filename, hdu=1)
 
     t1 = time.time()
-    print(f"Read time (torchfits): {t1 - t0:.4f}s")
+    print(f"Read time (torchsky): {t1 - t0:.4f}s")
 
     # 2. Convert to Polars DataFrame
-    # torchfits returns torch tensors by default.
+    # torchsky returns torch tensors by default.
     # While Polars can accept tensors (via dlpack or numpy),
     # converting to numpy first is often robust.
 

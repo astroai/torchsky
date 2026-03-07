@@ -23,7 +23,7 @@ import fitsio  # noqa: E402
 from astropy.io import fits as astropy_fits  # noqa: E402
 from astropy.io.fits import CompImageHDU  # noqa: E402
 
-import torchfits  # noqa: E402
+import torchsky  # noqa: E402
 
 
 def _generate_data(shape, dtype):
@@ -264,7 +264,7 @@ def main():
         data_dir = Path(args.data_dir)
         data_dir.mkdir(parents=True, exist_ok=True)
     else:
-        data_dir = Path(tempfile.mkdtemp(prefix="torchfits_bench_fast_"))
+        data_dir = Path(tempfile.mkdtemp(prefix="torchsky_bench_fast_"))
 
     files = build_dataset(data_dir)
 
@@ -288,8 +288,8 @@ def main():
         hdu = 1 if name.startswith("compressed_") else 0
         print(f"Benchmarking {name} (hdu={hdu})")
 
-        def torchfits_read():
-            return torchfits.read(
+        def torchsky_read():
+            return torchsky.read(
                 str(path),
                 hdu=hdu,
                 return_header=False,
@@ -297,8 +297,8 @@ def main():
                 scale_on_device=True,
             )
 
-        def torchfits_read_device():
-            return torchfits.read(
+        def torchsky_read_device():
+            return torchsky.read(
                 str(path),
                 hdu=hdu,
                 return_header=False,
@@ -307,8 +307,8 @@ def main():
                 scale_on_device=True,
             )
 
-        def torchfits_cpp():
-            return torchfits.cpp.read_full(str(path), hdu, True)
+        def torchsky_cpp():
+            return torchsky.cpp.read_full(str(path), hdu, True)
 
         def fitsio_read():
             return fitsio.read(str(path), ext=hdu)
@@ -320,20 +320,20 @@ def main():
             return torch.from_numpy(fitsio.read(str(path), ext=hdu)).to(device)
 
         methods = {
-            "torchfits": torchfits_read,
+            "torchsky": torchsky_read,
             "fitsio": fitsio_read,
             "fitsio_torch": fitsio_torch,
         }
         if hdu == 0:
-            methods["torchfits_cpp"] = torchfits_cpp
+            methods["torchsky_cpp"] = torchsky_cpp
         if device != "cpu" and device_available:
-            methods["torchfits_device"] = torchfits_read_device
+            methods["torchsky_device"] = torchsky_read_device
             methods["fitsio_torch_device"] = fitsio_torch_device
 
         if name.startswith("scaled_"):
 
-            def torchfits_raw():
-                return torchfits.read(
+            def torchsky_raw():
+                return torchsky.read(
                     str(path),
                     hdu=hdu,
                     return_header=False,
@@ -341,14 +341,14 @@ def main():
                     cache_capacity=10,
                 )
 
-            methods["torchfits_raw"] = torchfits_raw
+            methods["torchsky_raw"] = torchsky_raw
 
             header = astropy_fits.getheader(str(path))
             bscale = float(header.get("BSCALE", 1.0))
             bzero = float(header.get("BZERO", 0.0))
 
-            def torchfits_raw_scale_cpu():
-                data = torchfits.read(
+            def torchsky_raw_scale_cpu():
+                data = torchsky.read(
                     str(path),
                     hdu=hdu,
                     return_header=False,
@@ -362,7 +362,7 @@ def main():
                     data.add_(bzero)
                 return data
 
-            methods["torchfits_raw_scale_cpu"] = torchfits_raw_scale_cpu
+            methods["torchsky_raw_scale_cpu"] = torchsky_raw_scale_cpu
 
         row = {"name": name, "path": str(path), "hdu": hdu}
         iter_count = args.iterations
@@ -395,14 +395,14 @@ def main():
     def safe(v):
         return v if isinstance(v, (int, float)) else math.inf
 
-    print("\nSummary (torchfits best vs comparable best):")
-    for row in sorted(results, key=lambda r: safe(r.get("torchfits_mean"))):
-        torchfits_candidates = [
-            row.get("torchfits_mean"),
-            row.get("torchfits_cpp_mean"),
+    print("\nSummary (torchsky best vs comparable best):")
+    for row in sorted(results, key=lambda r: safe(r.get("torchsky_mean"))):
+        torchsky_candidates = [
+            row.get("torchsky_mean"),
+            row.get("torchsky_cpp_mean"),
         ]
-        torchfits_best = min(
-            [v for v in torchfits_candidates if isinstance(v, (int, float))],
+        torchsky_best = min(
+            [v for v in torchsky_candidates if isinstance(v, (int, float))],
             default=None,
         )
         comparable = [
@@ -415,15 +415,15 @@ def main():
         ]
         best = min(comparable, default=None)
         ratio = (
-            (torchfits_best / best)
-            if (torchfits_best is not None and best is not None and best > 0)
+            (torchsky_best / best)
+            if (torchsky_best is not None and best is not None and best > 0)
             else None
         )
         ratio_str = f"{ratio:.2f}x" if ratio is not None else "n/a"
-        tf_str = f"{torchfits_best:.6f}s" if torchfits_best is not None else "n/a"
+        tf_str = f"{torchsky_best:.6f}s" if torchsky_best is not None else "n/a"
         best_str = f"{best:.6f}s" if best is not None else "n/a"
         print(
-            f"{row['name']:24s} torchfits_best={tf_str} best={best_str} ratio={ratio_str}"
+            f"{row['name']:24s} torchsky_best={tf_str} best={best_str} ratio={ratio_str}"
         )
 
     if args.output:
@@ -434,16 +434,16 @@ def main():
                 "name",
                 "path",
                 "hdu",
-                "torchfits_mean",
-                "torchfits_std",
-                "torchfits_cpp_mean",
-                "torchfits_cpp_std",
-                "torchfits_raw_mean",
-                "torchfits_raw_std",
-                "torchfits_raw_scale_cpu_mean",
-                "torchfits_raw_scale_cpu_std",
-                "torchfits_device_mean",
-                "torchfits_device_std",
+                "torchsky_mean",
+                "torchsky_std",
+                "torchsky_cpp_mean",
+                "torchsky_cpp_std",
+                "torchsky_raw_mean",
+                "torchsky_raw_std",
+                "torchsky_raw_scale_cpu_mean",
+                "torchsky_raw_scale_cpu_std",
+                "torchsky_device_mean",
+                "torchsky_device_std",
                 "fitsio_mean",
                 "fitsio_std",
                 "fitsio_torch_mean",
@@ -465,7 +465,7 @@ def main():
         bzero = float(header.get("BZERO", 0.0))
 
         def tf_scaled():
-            return torchfits.read(
+            return torchsky.read(
                 str(scaled_path),
                 hdu=0,
                 return_header=False,
@@ -474,7 +474,7 @@ def main():
             )
 
         def tf_raw():
-            return torchfits.read(
+            return torchsky.read(
                 str(scaled_path),
                 hdu=0,
                 return_header=False,
@@ -483,7 +483,7 @@ def main():
             )
 
         def tf_raw_scale():
-            data = torchfits.read(
+            data = torchsky.read(
                 str(scaled_path),
                 hdu=0,
                 return_header=False,
@@ -497,18 +497,18 @@ def main():
                 data.add_(bzero)
             return data
 
-        tests = [("torchfits_scaled", tf_scaled)]
-        if hasattr(torchfits, "_read_scaled_cpu_fast"):
+        tests = [("torchsky_scaled", tf_scaled)]
+        if hasattr(torchsky, "_read_scaled_cpu_fast"):
             tests.append(
                 (
-                    "torchfits_scaled_fast",
-                    lambda: torchfits._read_scaled_cpu_fast(str(scaled_path)),
+                    "torchsky_scaled_fast",
+                    lambda: torchsky._read_scaled_cpu_fast(str(scaled_path)),
                 )
             )
         tests.extend(
             [
-                ("torchfits_raw", tf_raw),
-                ("torchfits_raw_scale_cpu", tf_raw_scale),
+                ("torchsky_raw", tf_raw),
+                ("torchsky_raw_scale_cpu", tf_raw_scale),
             ]
         )
 
@@ -524,7 +524,7 @@ def main():
     if comp_path:
 
         def tf_compressed():
-            return torchfits.read(
+            return torchsky.read(
                 str(comp_path), hdu=1, return_header=False, cache_capacity=0
             )
 
@@ -532,7 +532,7 @@ def main():
             return fitsio.read(str(comp_path), ext=1)
 
         for label, fn in [
-            ("torchfits", tf_compressed),
+            ("torchsky", tf_compressed),
             ("fitsio", fitsio_compressed),
         ]:
             if args.repeats > 1:
@@ -544,7 +544,7 @@ def main():
         print("\nMicrobench: compressed_rice_1 (single-thread)")
         with _TorchThreadGuard(1):
             for label, fn in [
-                ("torchfits", tf_compressed),
+                ("torchsky", tf_compressed),
                 ("fitsio", fitsio_compressed),
             ]:
                 if args.repeats > 1:
@@ -557,14 +557,14 @@ def main():
 
         print("\nMicrobench: compressed_rice_1 (open-once, read-many)")
         try:
-            file_handle = torchfits.cpp.open_fits_file(str(comp_path), "r")
+            file_handle = torchsky.cpp.open_fits_file(str(comp_path), "r")
         except Exception as e:
             file_handle = None
-            print(f"  torchfits_open_once: FAILED ({e})")
+            print(f"  torchsky_open_once: FAILED ({e})")
         if file_handle is not None:
 
             def tf_open_once():
-                return torchfits.cpp.read_full(file_handle, 1, True)
+                return torchsky.cpp.read_full(file_handle, 1, True)
 
             if args.repeats > 1:
                 m, s = _time_method_repeat(
@@ -572,16 +572,16 @@ def main():
                 )
             else:
                 m, s = _time_method(tf_open_once, warmup_count, iter_count)
-            print(f"  torchfits_open_once: {m:.6f}s ± {s:.6f}s")
+            print(f"  torchsky_open_once: {m:.6f}s ± {s:.6f}s")
             try:
-                torchfits.cpp.close_fits_file(file_handle)
+                torchsky.cpp.close_fits_file(file_handle)
             except Exception:
                 pass
 
         print("\nMicrobench: compressed_rice_1 (cached handle)")
 
         def tf_compressed_cached():
-            return torchfits.read(
+            return torchsky.read(
                 str(comp_path), hdu=1, return_header=False, cache_capacity=1
             )
 
@@ -591,7 +591,7 @@ def main():
             )
         else:
             m, s = _time_method(tf_compressed_cached, warmup_count, iter_count)
-        print(f"  torchfits_cached     : {m:.6f}s ± {s:.6f}s")
+        print(f"  torchsky_cached     : {m:.6f}s ± {s:.6f}s")
 
     print("\nMicrobench: compressed large tiles (full image)")
     large_warmup = 1
@@ -605,14 +605,14 @@ def main():
             continue
 
         def tf_compressed_large(p=str(path)):
-            return torchfits.read(p, hdu=1, return_header=False, cache_capacity=0)
+            return torchsky.read(p, hdu=1, return_header=False, cache_capacity=0)
 
         def fitsio_compressed_large(p=str(path)):
             return fitsio.read(p, ext=1)
 
         print(f"  {name}:")
         for label, fn in [
-            ("torchfits", tf_compressed_large),
+            ("torchsky", tf_compressed_large),
             ("fitsio", fitsio_compressed_large),
         ]:
             if args.repeats > 1:
@@ -626,7 +626,7 @@ def main():
     if comp_hc_path:
 
         def tf_compressed_hc():
-            return torchfits.read(
+            return torchsky.read(
                 str(comp_hc_path), hdu=1, return_header=False, cache_capacity=0
             )
 
@@ -635,7 +635,7 @@ def main():
 
         with _TorchThreadGuard(1):
             for label, fn in [
-                ("torchfits", tf_compressed_hc),
+                ("torchsky", tf_compressed_hc),
                 ("fitsio", fitsio_compressed_hc),
             ]:
                 if args.repeats > 1:
@@ -648,14 +648,14 @@ def main():
 
         print("\nMicrobench: compressed_hcompress_1 (open-once, read-many)")
         try:
-            file_handle_hc = torchfits.cpp.open_fits_file(str(comp_hc_path), "r")
+            file_handle_hc = torchsky.cpp.open_fits_file(str(comp_hc_path), "r")
         except Exception as e:
             file_handle_hc = None
-            print(f"  torchfits_open_once: FAILED ({e})")
+            print(f"  torchsky_open_once: FAILED ({e})")
         if file_handle_hc is not None:
 
             def tf_open_once_hc():
-                return torchfits.cpp.read_full(file_handle_hc, 1, True)
+                return torchsky.cpp.read_full(file_handle_hc, 1, True)
 
             if args.repeats > 1:
                 m, s = _time_method_repeat(
@@ -663,16 +663,16 @@ def main():
                 )
             else:
                 m, s = _time_method(tf_open_once_hc, warmup_count, iter_count)
-            print(f"  torchfits_open_once: {m:.6f}s ± {s:.6f}s")
+            print(f"  torchsky_open_once: {m:.6f}s ± {s:.6f}s")
             try:
-                torchfits.cpp.close_fits_file(file_handle_hc)
+                torchsky.cpp.close_fits_file(file_handle_hc)
             except Exception:
                 pass
 
         print("\nMicrobench: compressed_hcompress_1 (cached handle)")
 
         def tf_compressed_hc_cached():
-            return torchfits.read(
+            return torchsky.read(
                 str(comp_hc_path), hdu=1, return_header=False, cache_capacity=1
             )
 
@@ -682,7 +682,7 @@ def main():
             )
         else:
             m, s = _time_method(tf_compressed_hc_cached, warmup_count, iter_count)
-        print(f"  torchfits_cached     : {m:.6f}s ± {s:.6f}s")
+        print(f"  torchsky_cached     : {m:.6f}s ± {s:.6f}s")
 
     print("\nMicrobench: timeseries batch (single HDU across many files)")
     ts_paths = []
@@ -694,21 +694,19 @@ def main():
 
         def tf_loop():
             return [
-                torchfits.read(p, hdu=0, return_header=False, cache_capacity=0)
+                torchsky.read(p, hdu=0, return_header=False, cache_capacity=0)
                 for p in ts_paths
             ]
 
         def tf_batch():
-            return torchfits.read(
-                ts_paths, hdu=0, return_header=False, cache_capacity=0
-            )
+            return torchsky.read(ts_paths, hdu=0, return_header=False, cache_capacity=0)
 
         def fitsio_loop():
             return [fitsio.read(p, ext=0) for p in ts_paths]
 
         for label, fn in [
-            ("torchfits_loop", tf_loop),
-            ("torchfits_batch", tf_batch),
+            ("torchsky_loop", tf_loop),
+            ("torchsky_batch", tf_batch),
             ("fitsio_loop", fitsio_loop),
         ]:
             if args.repeats > 1:
@@ -732,14 +730,14 @@ def main():
 
         def tf_loop_mef():
             return [
-                torchfits.read(
+                torchsky.read(
                     str(mef_path), hdu=h, return_header=False, cache_capacity=0
                 )
                 for h in hdus
             ]
 
         def tf_batch_mef():
-            return torchfits.read(
+            return torchsky.read(
                 str(mef_path), hdu=hdus, return_header=False, cache_capacity=0
             )
 
@@ -747,8 +745,8 @@ def main():
             return [fitsio.read(str(mef_path), ext=h) for h in hdus]
 
         for label, fn in [
-            ("torchfits_loop", tf_loop_mef),
-            ("torchfits_batch", tf_batch_mef),
+            ("torchsky_loop", tf_loop_mef),
+            ("torchsky_batch", tf_batch_mef),
             ("fitsio_loop", fitsio_loop_mef),
         ]:
             try:

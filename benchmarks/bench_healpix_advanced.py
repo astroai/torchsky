@@ -25,7 +25,7 @@ import healpy  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
-from torchfits.wcs.healpix import get_all_neighbours, get_interp_val, get_interp_weights  # noqa: E402
+from torchsky.wcs.healpix import get_all_neighbours, get_interp_val, get_interp_weights  # noqa: E402
 
 
 def _parse_ratio_spec(spec: str | None, allowed_ops: set[str]) -> dict[str, float]:
@@ -154,7 +154,7 @@ def main() -> int:
         "--min-ratio-vs-healpy",
         type=str,
         default="",
-        help="Comma-separated op=ratio thresholds for torchfits/healpy.",
+        help="Comma-separated op=ratio thresholds for torchsky/healpy.",
     )
     parser.add_argument(
         "--json-out", type=Path, default=DEFAULT_OUTPUT_DIR / "healpix_advanced.json"
@@ -291,9 +291,9 @@ def main() -> int:
                 "nside": nside,
                 "n_points": n,
                 "device": device.type,
-                "mpts_s_torchfits": (n / t_tf) / 1e6,
+                "mpts_s_torchsky": (n / t_tf) / 1e6,
                 "mpts_s_healpy": (n / t_hp) / 1e6,
-                "ratio_torchfits_vs_healpy": t_hp / t_tf,
+                "ratio_torchsky_vs_healpy": t_hp / t_tf,
                 "mismatches": mismatches,
                 "max_abs_err": max_abs_err,
             }
@@ -304,7 +304,7 @@ def main() -> int:
     )
     for r in rows:
         print(
-            f"{r['operation']:>22s} {r['mpts_s_torchfits']:12.2f} {r['mpts_s_healpy']:12.2f} {r['ratio_torchfits_vs_healpy']:8.3f} {int(r['mismatches']):10d} {r['max_abs_err']:12.3e}"
+            f"{r['operation']:>22s} {r['mpts_s_torchsky']:12.2f} {r['mpts_s_healpy']:12.2f} {r['ratio_torchsky_vs_healpy']:8.3f} {int(r['mismatches']):10d} {r['max_abs_err']:12.3e}"
         )
 
     _write_json(args.json_out, rows)
@@ -315,7 +315,7 @@ def main() -> int:
 
     if min_ratios:
         by_op = {
-            str(r["operation"]): float(r["ratio_torchfits_vs_healpy"]) for r in rows
+            str(r["operation"]): float(r["ratio_torchsky_vs_healpy"]) for r in rows
         }
         failed: list[tuple[str, float, float]] = []
         for op, threshold in min_ratios.items():

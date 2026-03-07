@@ -1,7 +1,7 @@
 """
 ML data loading throughput benchmark.
 
-Compares torchfits vs fitsio for high-throughput image loading while reporting
+Compares torchsky vs fitsio for high-throughput image loading while reporting
 repeat-based results and minimizing order bias.
 """
 
@@ -16,7 +16,7 @@ from typing import Callable, Dict, List, Tuple
 import fitsio
 import numpy as np
 import torch
-import torchfits
+import torchsky
 from torch.utils.data import DataLoader, Dataset
 
 
@@ -74,7 +74,7 @@ class TorchFitsDataset(Dataset):
         return len(self.filepaths)
 
     def __getitem__(self, idx: int):
-        return torchfits.read(
+        return torchsky.read(
             self.filepaths[idx],
             hdu=self.hdu,
             mmap=self.mmap,
@@ -202,12 +202,12 @@ def run_comparison(
     for name in names:
         summarize_method(name, out[name])
 
-    if "torchfits" in out and "fitsio + numpy" in out:
-        speedup = median(out["torchfits"]) / median(out["fitsio + numpy"])
-        print(f"median speedup (torchfits/fitsio + numpy): {speedup:.3f}x")
-    if "torchfits (comp)" in out and "fitsio (comp)" in out:
-        speedup = median(out["torchfits (comp)"]) / median(out["fitsio (comp)"])
-        print(f"median speedup (torchfits (comp)/fitsio (comp)): {speedup:.3f}x")
+    if "torchsky" in out and "fitsio + numpy" in out:
+        speedup = median(out["torchsky"]) / median(out["fitsio + numpy"])
+        print(f"median speedup (torchsky/fitsio + numpy): {speedup:.3f}x")
+    if "torchsky (comp)" in out and "fitsio (comp)" in out:
+        speedup = median(out["torchsky (comp)"]) / median(out["fitsio (comp)"])
+        print(f"median speedup (torchsky (comp)/fitsio (comp)): {speedup:.3f}x")
 
     return out
 
@@ -265,7 +265,7 @@ def run_benchmark() -> None:
         run_comparison(
             title="benchmark 1: uncompressed fits",
             methods={
-                "torchfits": lambda: TorchFitsDataset(
+                "torchsky": lambda: TorchFitsDataset(
                     filepaths,
                     hdu="auto",
                     mmap="auto",
@@ -295,7 +295,7 @@ def run_benchmark() -> None:
             title="benchmark 2: compressed fits (rice)",
             methods={
                 # For compressed images, keep auto HDU detection to model user-facing defaults.
-                "torchfits (comp)": lambda: TorchFitsDataset(
+                "torchsky (comp)": lambda: TorchFitsDataset(
                     filepaths_comp,
                     hdu="auto",
                     mmap="auto",

@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import pytest
 
-from torchfits.sphere.geom import (
+from torchsky.sphere.geom import (
     PixelizedRegion,
     SphericalMultiPolygon,
     SphericalPolygon,
@@ -14,7 +14,7 @@ from torchfits.sphere.geom import (
     spherical_polygons_intersect,
     spherical_polygon_signed_area,
 )
-from torchfits.wcs import healpix as hp
+from torchsky.wcs import healpix as hp
 
 try:
     from spherical_geometry.polygon import SphericalPolygon as SGP  # type: ignore

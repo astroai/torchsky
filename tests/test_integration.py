@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import torch
 
-import torchfits
+import torchsky
 
 
 class TestRealDataIntegration:
@@ -81,14 +81,14 @@ class TestRealDataIntegration:
             hdu.writeto(f.name, overwrite=True)
 
             try:
-                # Test torchfits reading
-                result, _ = torchfits.read(f.name, return_header=True)
+                # Test torchsky reading
+                result, _ = torchsky.read(f.name, return_header=True)
                 assert isinstance(result, torch.Tensor)
                 assert result.shape == shape
                 assert result.dtype == torch.float32
 
                 # Test subset reading (fixed cutout parsing)
-                subset, _ = torchfits.read(
+                subset, _ = torchsky.read(
                     f.name + "[0][1000:2000,1000:2000]", return_header=True
                 )
                 assert subset.shape == (1001, 1001)
@@ -103,7 +103,7 @@ class TestRealDataIntegration:
 
         try:
             # Test basic reading
-            with torchfits.open(filepath) as hdul:
+            with torchsky.open(filepath) as hdul:
                 table_hdu = hdul[1]  # First extension is usually the table
 
                 # Test lazy access
@@ -149,8 +149,8 @@ class TestRealDataIntegration:
             table_hdul.close()
 
             try:
-                # Test torchfits MEF handling
-                with torchfits.open(f.name) as tf_hdul:
+                # Test torchsky MEF handling
+                with torchsky.open(f.name) as tf_hdul:
                     assert len(tf_hdul) == 3
 
                     # Test image HDU
@@ -179,7 +179,7 @@ class TestRealDataIntegration:
 
             try:
                 # Test reading compressed data (compressed images are in HDU 1)
-                result, _ = torchfits.read(f.name, hdu=1, return_header=True)
+                result, _ = torchsky.read(f.name, hdu=1, return_header=True)
                 assert result.shape == shape
 
                 # Verify data integrity (within compression tolerance)
@@ -204,7 +204,7 @@ class TestRealDataIntegration:
             hdu.writeto(f.name, overwrite=True)
 
             try:
-                result, _ = torchfits.read(f.name, return_header=True)
+                result, _ = torchsky.read(f.name, return_header=True)
 
                 # Should be automatically scaled to float
                 assert result.dtype == torch.float32
@@ -245,7 +245,7 @@ class TestRealDataIntegration:
             hdu.writeto(f.name, overwrite=True)
 
             try:
-                result, _ = torchfits.read(f.name, return_header=True)
+                result, _ = torchsky.read(f.name, return_header=True)
                 assert result.shape == shape
                 assert result.ndim == 3
 
@@ -282,8 +282,8 @@ class TestPerformanceIntegration:
                 process = psutil.Process()
                 mem_before = process.memory_info().rss / 1024 / 1024  # MB
 
-                # Read with torchfits
-                result, _ = torchfits.read(f.name, return_header=True)
+                # Read with torchsky
+                result, _ = torchsky.read(f.name, return_header=True)
 
                 # Measure memory after
                 mem_after = process.memory_info().rss / 1024 / 1024  # MB
@@ -318,12 +318,12 @@ class TestPerformanceIntegration:
 
             try:
                 # Test direct GPU loading
-                result, _ = torchfits.read(f.name, device="cuda", return_header=True)
+                result, _ = torchsky.read(f.name, device="cuda", return_header=True)
                 assert result.device.type == "cuda"
                 assert result.shape == shape
 
                 # Test CPU->GPU transfer
-                cpu_result, _ = torchfits.read(f.name, return_header=True)
+                cpu_result, _ = torchsky.read(f.name, return_header=True)
                 gpu_result = cpu_result.cuda()
 
                 torch.testing.assert_close(result, gpu_result)

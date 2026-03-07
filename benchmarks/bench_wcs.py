@@ -26,7 +26,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from torchfits.wcs.core import WCS as TorchWCS  # noqa: E402
+from torchsky.wcs.core import WCS as TorchWCS  # noqa: E402
 
 
 @dataclass(frozen=True)

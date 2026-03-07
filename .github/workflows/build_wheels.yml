@@ -34,7 +34,7 @@ jobs:
         run: |
           bash ./extern/vendor.sh --cfitsio-version cfitsio-4.6.3
 
-      - name: Install torchfits
+      - name: Install torchsky
         run: |
           pip install -e . --no-build-isolation
 
@@ -55,7 +55,7 @@ jobs:
       CIBW_SKIP: pp* *-musllinux_* *-manylinux_i686 *-win32
       CIBW_ARCHS_LINUX: x86_64
       CIBW_TEST_REQUIRES: pytest
-      CIBW_TEST_COMMAND: python -c "import torchfits; print(torchfits.__version__)"
+      CIBW_TEST_COMMAND: python -c "import torchsky; print(torchsky.__version__)"
       CIBW_BEFORE_ALL_LINUX: bash ./extern/vendor.sh --cfitsio-version cfitsio-4.6.3
       CIBW_BEFORE_ALL_MACOS: bash ./extern/vendor.sh --cfitsio-version cfitsio-4.6.3
       CIBW_ENVIRONMENT_LINUX: PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu

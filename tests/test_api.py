@@ -1,5 +1,5 @@
 """
-Test the main torchfits API functions.
+Test the main torchsky API functions.
 """
 
 import os
@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import torch
 
-import torchfits
+import torchsky
 
 
 class TestMainAPI:
@@ -60,7 +60,7 @@ class TestMainAPI:
         filepath, expected_data = self.create_test_fits()
 
         try:
-            result, header = torchfits.read(filepath, return_header=True)
+            result, header = torchsky.read(filepath, return_header=True)
             assert isinstance(result, torch.Tensor)
             assert result.shape == expected_data.shape
             np.testing.assert_allclose(result.numpy(), expected_data, rtol=1e-5)
@@ -72,7 +72,7 @@ class TestMainAPI:
         filepath, expected_data = self.create_test_fits()
 
         try:
-            result, header = torchfits.read_image(
+            result, header = torchsky.read_image(
                 filepath, return_header=True, mmap=False
             )
             assert isinstance(result, torch.Tensor)
@@ -88,8 +88,8 @@ class TestMainAPI:
         filepath, _ = self.create_test_fits(shape=(128, 128), dtype=np.float64)
 
         try:
-            default = torchfits.read(filepath, hdu=0, mmap=False)
-            image = torchfits.read_image(filepath, hdu=0, mmap=False)
+            default = torchsky.read(filepath, hdu=0, mmap=False)
+            image = torchsky.read_image(filepath, hdu=0, mmap=False)
             torch.testing.assert_close(default, image)
         finally:
             os.unlink(filepath)
@@ -99,7 +99,7 @@ class TestMainAPI:
         filepath, _ = self.create_test_fits()
         try:
             with pytest.raises(ValueError, match="non-negative integer"):
-                torchfits.read_image(filepath, hdu="auto", mmap=False)  # type: ignore[arg-type]
+                torchsky.read_image(filepath, hdu="auto", mmap=False)  # type: ignore[arg-type]
         finally:
             os.unlink(filepath)
 
@@ -107,13 +107,13 @@ class TestMainAPI:
         """read_hdus should use one-handle image reads for int/name HDUs."""
         filepath, d0, d1, d2 = self.create_test_mef()
         try:
-            out = torchfits.read_hdus(filepath, [0, "SCI", 2], mmap=False)
+            out = torchsky.read_hdus(filepath, [0, "SCI", 2], mmap=False)
             assert len(out) == 3
             np.testing.assert_allclose(out[0].numpy(), d0, rtol=1e-5)
             np.testing.assert_allclose(out[1].numpy(), d1, rtol=1e-5)
             np.testing.assert_allclose(out[2].numpy(), d2, rtol=1e-5)
 
-            out2, headers = torchfits.read_hdus(
+            out2, headers = torchsky.read_hdus(
                 filepath, ["SCI", "ERR"], mmap=False, return_header=True
             )
             assert len(out2) == 2
@@ -126,11 +126,11 @@ class TestMainAPI:
         """read_image should accept explicit handle-cache control."""
         filepath, _ = self.create_test_fits(shape=(96, 96), dtype=np.float32)
         try:
-            a = torchfits.read_image(filepath, hdu=0, mmap=False, handle_cache=True)
-            b = torchfits.read_image(filepath, hdu=0, mmap=False, handle_cache=False)
+            a = torchsky.read_image(filepath, hdu=0, mmap=False, handle_cache=True)
+            b = torchsky.read_image(filepath, hdu=0, mmap=False, handle_cache=False)
             torch.testing.assert_close(a, b)
             with pytest.raises(ValueError, match="handle_cache must be bool"):
-                torchfits.read_image(filepath, hdu=0, mmap=False, handle_cache="yes")  # type: ignore[arg-type]
+                torchsky.read_image(filepath, hdu=0, mmap=False, handle_cache="yes")  # type: ignore[arg-type]
         finally:
             os.unlink(filepath)
 
@@ -140,12 +140,12 @@ class TestMainAPI:
 
         try:
             # CPU
-            result_cpu, _ = torchfits.read(filepath, device="cpu", return_header=True)
+            result_cpu, _ = torchsky.read(filepath, device="cpu", return_header=True)
             assert result_cpu.device.type == "cpu"
 
             # GPU if available
             if torch.cuda.is_available():
-                result_gpu, _ = torchfits.read(
+                result_gpu, _ = torchsky.read(
                     filepath, device="cuda", return_header=True
                 )
                 assert result_gpu.device.type == "cuda"
@@ -158,8 +158,8 @@ class TestMainAPI:
         filepath, _ = self.create_test_fits(shape=(64, 64), dtype=np.float32)
 
         try:
-            a = torchfits.read(filepath, hdu=0, mode="image", mmap=False)
-            b = torchfits.read_image(filepath, hdu=0, mmap=False)
+            a = torchsky.read(filepath, hdu=0, mode="image", mmap=False)
+            b = torchsky.read_image(filepath, hdu=0, mmap=False)
             torch.testing.assert_close(a, b)
         finally:
             os.unlink(filepath)
@@ -168,8 +168,8 @@ class TestMainAPI:
         """Image payloads should be numerically identical across read policies."""
         filepath, _ = self.create_test_fits(shape=(64, 64), dtype=np.float32)
         try:
-            fast = torchfits.read(filepath, hdu=0, policy="default", mmap=False)
-            smart = torchfits.read(filepath, hdu=0, policy="smart", mmap=False)
+            fast = torchsky.read(filepath, hdu=0, policy="default", mmap=False)
+            smart = torchsky.read(filepath, hdu=0, policy="smart", mmap=False)
             torch.testing.assert_close(fast, smart)
         finally:
             os.unlink(filepath)
@@ -179,7 +179,7 @@ class TestMainAPI:
         filepath, _ = self.create_test_fits(shape=(64, 64), dtype=np.float32)
         try:
             with pytest.raises(ValueError, match="mode='image'"):
-                torchfits.read(filepath, hdu=0, mode="image", columns=["A"])
+                torchsky.read(filepath, hdu=0, mode="image", columns=["A"])
         finally:
             os.unlink(filepath)
 
@@ -187,7 +187,7 @@ class TestMainAPI:
         """read should resolve named HDUs via EXTNAME."""
         filepath, expected_data, extname = self.create_test_fits_with_named_ext()
         try:
-            result = torchfits.read(filepath, hdu=extname, mmap=False)
+            result = torchsky.read(filepath, hdu=extname, mmap=False)
             assert isinstance(result, torch.Tensor)
             np.testing.assert_allclose(result.numpy(), expected_data, rtol=1e-5)
         finally:
@@ -197,7 +197,7 @@ class TestMainAPI:
         """Named HDU reads should work even when handle caching is disabled."""
         filepath, expected_data, extname = self.create_test_fits_with_named_ext()
         try:
-            result = torchfits.read(
+            result = torchsky.read(
                 filepath,
                 hdu=extname,
                 mmap=False,
@@ -214,7 +214,7 @@ class TestMainAPI:
             extname="SCI_EXT"
         )
         try:
-            hdr = torchfits.get_header(filepath, hdu=extname)
+            hdr = torchsky.get_header(filepath, hdu=extname)
             assert hdr.get("EXTNAME") == extname
         finally:
             os.unlink(filepath)
@@ -225,11 +225,11 @@ class TestMainAPI:
 
         try:
             # FP16
-            result_fp16, _ = torchfits.read(filepath, fp16=True, return_header=True)
+            result_fp16, _ = torchsky.read(filepath, fp16=True, return_header=True)
             assert result_fp16.dtype == torch.float16
 
             # BF16
-            result_bf16, _ = torchfits.read(filepath, bf16=True, return_header=True)
+            result_bf16, _ = torchsky.read(filepath, bf16=True, return_header=True)
             assert result_bf16.dtype == torch.bfloat16
         finally:
             os.unlink(filepath)
@@ -240,10 +240,10 @@ class TestMainAPI:
 
         with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
             try:
-                torchfits.write(f.name, data, overwrite=True)
+                torchsky.write(f.name, data, overwrite=True)
 
                 # Read back and verify
-                result, _ = torchfits.read(f.name, return_header=True)
+                result, _ = torchsky.read(f.name, return_header=True)
                 torch.testing.assert_close(result, data)
             finally:
                 os.unlink(f.name)
@@ -252,15 +252,15 @@ class TestMainAPI:
         """SubsetReader should match read_subset for repeated cutouts."""
         filepath, _ = self.create_test_fits(shape=(128, 128), dtype=np.float32)
         try:
-            with torchfits.open_subset_reader(filepath, hdu=0, device="cpu") as reader:
+            with torchsky.open_subset_reader(filepath, hdu=0, device="cpu") as reader:
                 assert reader.hdu == 0
                 assert reader.shape == (128, 128)
                 a = reader.read_subset(10, 12, 30, 40)
-                b = torchfits.read_subset(filepath, 0, 10, 12, 30, 40)
+                b = torchsky.read_subset(filepath, 0, 10, 12, 30, 40)
                 torch.testing.assert_close(a, b)
 
                 c = reader(0, 0, 16, 16)
-                d = torchfits.read_subset(filepath, 0, 0, 0, 16, 16)
+                d = torchsky.read_subset(filepath, 0, 0, 0, 16, 16)
                 torch.testing.assert_close(c, d)
         finally:
             os.unlink(filepath)
@@ -270,7 +270,7 @@ class TestMainAPI:
         filepath, expected_data = self.create_test_fits()
 
         try:
-            with torchfits.open(filepath) as hdul:
+            with torchsky.open(filepath) as hdul:
                 assert len(hdul) >= 1
                 result = hdul[0].to_tensor()
                 assert isinstance(result, torch.Tensor)
@@ -291,13 +291,13 @@ class TestMainAPI:
                 expected_shapes.append(shape)
 
             # Test batch reading
-            results = torchfits.read_batch(files)
+            results = torchsky.read_batch(files)
             assert len(results) == 3
             for i, result in enumerate(results):
                 assert result.shape == expected_shapes[i]
 
             # Test batch info
-            info = torchfits.get_batch_info(files)
+            info = torchsky.get_batch_info(files)
             assert info["num_files"] == 3
             assert info["valid_files"] == 3
 
@@ -309,23 +309,23 @@ class TestMainAPI:
     def test_cache_functions(self):
         """Test cache management functions."""
         # Test cache stats
-        stats = torchfits.get_cache_performance()
+        stats = torchsky.get_cache_performance()
         assert isinstance(stats, dict)
 
         # Test cache clearing
-        torchfits.clear_file_cache()  # Should not raise
+        torchsky.clear_file_cache()  # Should not raise
 
     def test_error_handling(self):
         """Test error handling for invalid inputs."""
         # Non-existent file
         with pytest.raises((FileNotFoundError, RuntimeError)):
-            torchfits.read("nonexistent.fits")
+            torchsky.read("nonexistent.fits")
 
         # Invalid HDU
         filepath, _ = self.create_test_fits()
         try:
             with pytest.raises((ValueError, RuntimeError)):
-                torchfits.read(filepath, hdu=999)
+                torchsky.read(filepath, hdu=999)
         finally:
             os.unlink(filepath)
 
@@ -333,7 +333,7 @@ class TestMainAPI:
         filepath, _ = self.create_test_fits()
         try:
             with pytest.raises(ValueError):
-                torchfits.read(filepath, device="invalid")
+                torchsky.read(filepath, device="invalid")
         finally:
             os.unlink(filepath)
 
@@ -341,14 +341,14 @@ class TestMainAPI:
         filepath, _ = self.create_test_fits()
         try:
             with pytest.raises(ValueError):
-                torchfits.read(filepath, mode="invalid")
+                torchsky.read(filepath, mode="invalid")
         finally:
             os.unlink(filepath)
 
         filepath, _ = self.create_test_fits()
         try:
             with pytest.raises(ValueError):
-                torchfits.read(filepath, policy="invalid")
+                torchsky.read(filepath, policy="invalid")
         finally:
             os.unlink(filepath)
 
@@ -359,10 +359,10 @@ class TestMainAPI:
         )
 
         try:
-            baseline = torchfits.cpp.read_full_raw(filepath, 0, False)
+            baseline = torchsky.cpp.read_full_raw(filepath, 0, False)
             # Run multiple times to catch crashy regressions in this code path.
             for _ in range(20):
-                result = torchfits.cpp.read_full_unmapped_raw(filepath, 0)
+                result = torchsky.cpp.read_full_unmapped_raw(filepath, 0)
                 torch.testing.assert_close(result, baseline)
             np.testing.assert_allclose(
                 baseline.numpy(), expected_data, rtol=1e-12, atol=0.0
@@ -400,7 +400,7 @@ class TestTableAPI:
 
         try:
             # Test streaming read
-            result = torchfits.read_large_table(
+            result = torchsky.read_large_table(
                 filepath, max_memory_mb=10, streaming=True
             )
             assert isinstance(result, dict)
@@ -408,7 +408,7 @@ class TestTableAPI:
             assert len(result["RA"]) == 10000
 
             # Test non-streaming read
-            result2 = torchfits.read_large_table(filepath, streaming=False)
+            result2 = torchsky.read_large_table(filepath, streaming=False)
             assert isinstance(result2, dict)
 
         finally:
@@ -419,7 +419,7 @@ class TestTableAPI:
         filepath = self.create_test_table(256)
 
         try:
-            data = torchfits.read_table(filepath, hdu=1)
+            data = torchsky.read_table(filepath, hdu=1)
             assert isinstance(data, dict)
             assert "RA" in data
             assert len(data["RA"]) == 256
@@ -430,8 +430,8 @@ class TestTableAPI:
         """read_table should accept explicit policy selection."""
         filepath = self.create_test_table(128)
         try:
-            fast = torchfits.read_table(filepath, hdu=1, policy="default")
-            smart = torchfits.read_table(filepath, hdu=1, policy="smart")
+            fast = torchsky.read_table(filepath, hdu=1, policy="default")
+            smart = torchsky.read_table(filepath, hdu=1, policy="smart")
             assert isinstance(fast, dict)
             assert isinstance(smart, dict)
             for k in fast.keys():
@@ -447,7 +447,7 @@ class TestTableAPI:
         filepath = self.create_test_table(128)
 
         try:
-            data = torchfits.read(filepath, hdu=1, mode="table")
+            data = torchsky.read(filepath, hdu=1, mode="table")
             assert isinstance(data, dict)
             assert "MAG" in data
             assert len(data["MAG"]) == 128
@@ -459,7 +459,7 @@ class TestTableAPI:
         filepath = self.create_test_table(64)
 
         try:
-            data = torchfits.read_table(filepath)
+            data = torchsky.read_table(filepath)
             assert isinstance(data, dict)
             assert "ID" in data
             assert len(data["ID"]) == 64
@@ -471,7 +471,7 @@ class TestTableAPI:
         filepath = self.create_test_table(512)
 
         try:
-            data = torchfits.read_table_rows(filepath, hdu=1, start_row=11, num_rows=25)
+            data = torchsky.read_table_rows(filepath, hdu=1, start_row=11, num_rows=25)
             assert isinstance(data, dict)
             assert "ID" in data
             assert len(data["ID"]) == 25
@@ -484,7 +484,7 @@ class TestTableAPI:
         filepath = self.create_test_table(128)
 
         try:
-            data = torchfits.read_table_rows(filepath, start_row=6, num_rows=10)
+            data = torchsky.read_table_rows(filepath, start_row=6, num_rows=10)
             assert "ID" in data
             assert len(data["ID"]) == 10
             assert int(data["ID"][0].item()) == 5
@@ -497,7 +497,7 @@ class TestTableAPI:
 
         try:
             with pytest.raises(ValueError, match="non-negative integer"):
-                torchfits.read_table(filepath, hdu="auto")  # type: ignore[arg-type]
+                torchsky.read_table(filepath, hdu="auto")  # type: ignore[arg-type]
         finally:
             os.unlink(filepath)
 
@@ -507,7 +507,7 @@ class TestTableAPI:
 
         try:
             with pytest.raises(ValueError, match="non-negative integer"):
-                torchfits.read_table_rows(  # type: ignore[arg-type]
+                torchsky.read_table_rows(  # type: ignore[arg-type]
                     filepath, hdu="auto", start_row=1, num_rows=5
                 )
         finally:
@@ -517,7 +517,7 @@ class TestTableAPI:
         """read should resolve named table HDUs via EXTNAME."""
         filepath = self.create_test_table(128, extname="CATALOG")
         try:
-            data = torchfits.read(filepath, hdu="CATALOG", mode="table")
+            data = torchsky.read(filepath, hdu="CATALOG", mode="table")
             assert isinstance(data, dict)
             assert "ID" in data
             assert len(data["ID"]) == 128

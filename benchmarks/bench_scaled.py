@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict
 import fitsio
 import numpy as np
 
-import torchfits
+import torchsky
 
 
 def _time_callable(func: Callable[[], Any], runs: int, warmup: int) -> Dict[str, float]:
@@ -59,13 +59,13 @@ def bench_scaled(args: argparse.Namespace) -> None:
     else:
         print(f"Reusing existing {filename}")
 
-    def read_torchfits():
-        return torchfits.read(filename, policy="smart", scale_on_device=True)
+    def read_torchsky():
+        return torchsky.read(filename, policy="smart", scale_on_device=True)
 
     def read_fitsio():
         return fitsio.read(filename)
 
-    tf_stats = _time_callable(read_torchfits, runs=args.runs, warmup=args.warmup)
+    tf_stats = _time_callable(read_torchsky, runs=args.runs, warmup=args.warmup)
     fi_stats = _time_callable(read_fitsio, runs=args.runs, warmup=args.warmup)
 
     print("Benchmarking scaled read...")
@@ -83,7 +83,7 @@ def bench_scaled(args: argparse.Namespace) -> None:
     )
     print(f"Speedup (median): {fi_stats['median_s'] / tf_stats['median_s']:.2f}x")
 
-    tf_data = read_torchfits()
+    tf_data = read_torchsky()
     fitsio_data = read_fitsio()
     diff = np.abs(tf_data.numpy() - fitsio_data).max()
     print(f"Max difference: {diff}")

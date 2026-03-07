@@ -19,8 +19,8 @@ pixi run lint
 
 ## Repository Layout
 
-- Python package: `src/torchfits/`
-- Native extension: `src/torchfits/cpp_src/`
+- Python package: `src/torchsky/`
+- Native extension: `src/torchsky/cpp_src/`
 - Vendored native deps: `extern/cfitsio/`
 - Tests: `tests/`
 - Benchmarks: `benchmarks/`
@@ -44,7 +44,7 @@ Pin explicit versions when needed:
 
 Optional system-library mode:
 
-- `-DTORCHFITS_USE_VENDORED_CFITSIO=OFF`
+- `-DTORCHSKY_USE_VENDORED_CFITSIO=OFF`
 
 ## Test Expectations
 
@@ -116,7 +116,7 @@ Minimum gates:
 2. Ensure `docs/changelog.md` is final and versions are synced in:
    - `pyproject.toml`
    - `pixi.toml`
-   - `src/torchfits/__init__.py`
+   - `src/torchsky/__init__.py`
 3. Ensure CI is green.
 4. Build and validate artifacts:
 

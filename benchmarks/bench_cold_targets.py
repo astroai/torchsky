@@ -13,7 +13,7 @@ import fitsio
 import numpy as np
 from astropy.io import fits as astropy_fits
 
-import torchfits
+import torchsky
 
 
 def _time(fn, warmup: int, runs: int):
@@ -57,7 +57,7 @@ def main():
     parser.add_argument("--runs", type=int, default=30)
     args = parser.parse_args()
 
-    base = Path(tempfile.mkdtemp(prefix="torchfits_cold_targets_"))
+    base = Path(tempfile.mkdtemp(prefix="torchsky_cold_targets_"))
     files = {
         "wcs_image": ("wcs_image.fits", (1024, 1024), np.float32, True),
         "medium_int8_2d": ("medium_int8_2d.fits", (1024, 1024), np.int8, False),
@@ -82,17 +82,17 @@ def main():
         print("-" * 80)
 
         methods = {
-            "torchfits_read_cold": lambda p=path: torchfits.read(
+            "torchsky_read_cold": lambda p=path: torchsky.read(
                 str(p), mmap=True, cache_capacity=0
             ),
-            "torchfits_read_cold_nommap": lambda p=path: torchfits.read(
+            "torchsky_read_cold_nommap": lambda p=path: torchsky.read(
                 str(p), mmap=False, cache_capacity=0
             ),
-            "torchfits_cpp_read_full": lambda p=path: torchfits.cpp.read_full(
+            "torchsky_cpp_read_full": lambda p=path: torchsky.cpp.read_full(
                 str(p), 0, True
             ),
-            "torchfits_cpp_read_full_nocache": lambda p=path: (
-                torchfits.cpp.read_full_nocache(str(p), 0, True)
+            "torchsky_cpp_read_full_nocache": lambda p=path: (
+                torchsky.cpp.read_full_nocache(str(p), 0, True)
             ),
             "fitsio_read": lambda p=path: fitsio.read(str(p)),
         }
@@ -119,14 +119,14 @@ def main():
     astropy_fits.HDUList(hdus).writeto(mef_path, overwrite=True)
 
     mef_methods = {
-        "torchfits_read_cold_ext1": lambda p=mef_path: torchfits.read(
+        "torchsky_read_cold_ext1": lambda p=mef_path: torchsky.read(
             str(p), hdu=1, mmap=True, cache_capacity=0
         ),
-        "torchfits_cpp_read_full_ext1": lambda p=mef_path: torchfits.cpp.read_full(
+        "torchsky_cpp_read_full_ext1": lambda p=mef_path: torchsky.cpp.read_full(
             str(p), 1, True
         ),
-        "torchfits_cpp_read_nocache_ext1": lambda p=mef_path: (
-            torchfits.cpp.read_full_nocache(str(p), 1, True)
+        "torchsky_cpp_read_nocache_ext1": lambda p=mef_path: (
+            torchsky.cpp.read_full_nocache(str(p), 1, True)
         ),
         "fitsio_read_ext1": lambda p=mef_path: fitsio.read(str(p), ext=1),
     }

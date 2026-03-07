@@ -1,6 +1,6 @@
 # Spherical Geometry & HEALPix
 
-`torchfits.sphere` is a PyTorch-native library for spherical geometry and HEALPix maps, with high-performance C++ kernels for Spherical Harmonic Transforms (SHT).
+`torchsky.sphere` is a PyTorch-native library for spherical geometry and HEALPix maps, with high-performance C++ kernels for Spherical Harmonic Transforms (SHT).
 
 ## Table of Contents
 
@@ -29,7 +29,7 @@ Convert angles to HEALPix pixel indices.
 
 ```python
 import torch
-import torchfits.sphere as sphere
+import torchsky.sphere as sphere
 
 nside = 128
 # (theta, phi) in radians
@@ -170,7 +170,7 @@ Polygon intersection predicate – returns `True` if interiors intersect or boun
 Simple spherical polygon with containment and boolean operations.
 
 ```python
-from torchfits.sphere import SphericalPolygon
+from torchsky.sphere import SphericalPolygon
 
 poly = SphericalPolygon(lon_deg=torch.tensor([10., 20., 20., 10.]),
                         lat_deg=torch.tensor([0., 0., 10., 10.]))
@@ -206,7 +206,7 @@ Spherical cap (disc) region with the same polygon-like interface.
 Collection of `SphericalPolygon` instances with union-of-polygons semantics.
 
 ```python
-from torchfits.sphere import SphericalMultiPolygon, SphericalPolygon
+from torchsky.sphere import SphericalMultiPolygon, SphericalPolygon
 
 multi = SphericalMultiPolygon(polygons=(poly1, poly2))
 area = multi.area()
@@ -219,7 +219,7 @@ pixels = multi.query_pixels(nside=64)
 Set of HEALPix pixels supporting boolean operations.
 
 ```python
-from torchfits.sphere import PixelizedRegion
+from torchsky.sphere import PixelizedRegion
 
 r1 = poly1.pixelize(nside=64)
 r2 = poly2.pixelize(nside=64)
@@ -273,7 +273,7 @@ Subtract fitted monopole + dipole from a HEALPix map.
 Sparse HEALPix map that stores values only for covered pixels.
 
 ```python
-from torchfits.sphere import SparseHealpixMap
+from torchsky.sphere import SparseHealpixMap
 
 # Create from a footprint (list of pixel indices)
 sparse = SparseHealpixMap(nside=64, nest=False,
@@ -431,23 +431,23 @@ The SHT kernels use:
 - **PyTorch `torch.fft`**: azimuthal transforms leverage PyTorch's internal `pocketfft` with automatic workspace caching.
 - **C++ backend** (default for CPU): high-throughput recurrence kernels compiled at install time. Falls back to pure-Torch when C++ extension is unavailable.
 
-For large $N_\text{side}$ or batch transforms, `torchfits.sphere` substantially outperforms pure-Python HEALPix implementations.
+For large $N_\text{side}$ or batch transforms, `torchsky.sphere` substantially outperforms pure-Python HEALPix implementations.
 
 ### Environment Knobs
 
 | Variable | Default | Description |
 |---|---|---|
-| `TORCHFITS_SCALAR_MAX_CACHE_BYTES` | `512 MiB` | Basis-matrix cache budget |
-| `TORCHFITS_SCALAR_RING_AUTO_MIN_BYTES` | `64 MiB` | Min map size to use ring path |
-| `TORCHFITS_SPIN_RING_AUTO_MIN_BYTES` | `32 MiB` | Min map size for spin ring path |
+| `TORCHSKY_SCALAR_MAX_CACHE_BYTES` | `512 MiB` | Basis-matrix cache budget |
+| `TORCHSKY_SCALAR_RING_AUTO_MIN_BYTES` | `64 MiB` | Min map size to use ring path |
+| `TORCHSKY_SPIN_RING_AUTO_MIN_BYTES` | `32 MiB` | Min map size for spin ring path |
 
 ---
 
 ## Compatibility Map
 
-Status: `parity` = upstream-compatible semantics · `extended` = torchfits-native additions · `partial` = known gaps · `planned` = not yet implemented.
+Status: `parity` = upstream-compatible semantics · `extended` = torchsky-native additions · `partial` = known gaps · `planned` = not yet implemented.
 
-Functions in `torchfits.sphere.compat` mirror the [healpy](https://healpy.readthedocs.io/) and [hpgeom](https://github.com/LSSTDESC/hpgeom) APIs and can be used as drop-in replacements.
+Functions in `torchsky.sphere.compat` mirror the [healpy](https://healpy.readthedocs.io/) and [hpgeom](https://github.com/LSSTDESC/hpgeom) APIs and can be used as drop-in replacements.
 
 | Function | Status | Notes |
 |---|---|---|
@@ -473,7 +473,7 @@ Functions in `torchfits.sphere.compat` mirror the [healpy](https://healpy.readth
 | `query_ellipse` | parity | hpgeom-style units; dispatches to hpgeom when available |
 | `pixel_ranges_to_pixels` | parity | half-open/closed range expansion |
 | `upgrade_pixel_ranges` | parity | NEST pixel-range upgrade |
-| `pixels_to_pixel_ranges` | extended | torchfits-native range compression |
+| `pixels_to_pixel_ranges` | extended | torchsky-native range compression |
 | `map2alm` | parity | scalar + polarized (`pol=True`); `iter`, `use_pixel_weights` |
 | `map2alm_lsq` | parity | returns `(alm, rel_res, n_iter)`; torch + healpy backends |
 | `alm2map` | parity | scalar + polarized; `pixwin`; torch + healpy backends |

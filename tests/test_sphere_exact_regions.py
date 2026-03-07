@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 
-from torchfits.sphere.geom import (
+from torchsky.sphere.geom import (
     NativeExactSphericalRegion,
     SphericalCap,
     SphericalPolygon,

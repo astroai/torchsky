@@ -5,7 +5,7 @@ import torch
 from astropy.io import fits
 from torch.utils.data import DataLoader, Dataset
 
-import torchfits
+import torchsky
 
 # --- Synthetic Data Generation (for demonstration purposes) ---
 
@@ -41,7 +41,7 @@ class SimpleFitsDataset(Dataset):
                 self.file_list.append(filepath)
                 # Get label from header (more robust than filename parsing)
                 try:
-                    header = torchfits.get_header(filepath, hdu=0)  # Primary HDU is 0
+                    header = torchsky.get_header(filepath, hdu=0)  # Primary HDU is 0
                     label = int(header["LABEL"])
                     self.labels.append(label)
                 except (RuntimeError, KeyError) as e:  # Catch errors
@@ -63,7 +63,7 @@ class SimpleFitsDataset(Dataset):
         label = self.labels[idx]
 
         try:
-            data, _ = torchfits.read(
+            data, _ = torchsky.read(
                 filename,
                 cache_capacity=self.cache_capacity,
                 device=self.device,
@@ -117,7 +117,7 @@ def main():
             # Iterate through a few batches
             print("Iterating through DataLoader:")
             for i, (images, labels) in enumerate(dataloader):
-                # The tensors are already in the correct device, because of torchfits.
+                # The tensors are already in the correct device, because of torchsky.
                 if images.numel() == 0:
                     continue
                 print(f"  Batch {i}:")

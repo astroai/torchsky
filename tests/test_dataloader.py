@@ -1,5 +1,5 @@
 """
-Tests for torchfits dataloader module.
+Tests for torchsky dataloader module.
 """
 
 from unittest.mock import Mock, patch
@@ -8,7 +8,7 @@ import pytest
 import torch
 from torch.utils.data import RandomSampler
 
-from torchfits.dataloader import (
+from torchsky.dataloader import (
     create_dataloader,
     create_distributed_dataloader,
     create_fits_dataloader,
@@ -17,7 +17,7 @@ from torchfits.dataloader import (
     create_table_dataloader,
     get_optimal_dataloader_config,
 )
-from torchfits.datasets import FITSDataset, IterableFITSDataset
+from torchsky.datasets import FITSDataset, IterableFITSDataset
 
 
 class TestDataLoaderCreation:
@@ -44,7 +44,7 @@ class TestDataLoaderCreation:
         """Test creating DataLoader with list of file paths."""
         file_paths = ["file1.fits", "file2.fits", "file3.fits"]
 
-        with patch("torchfits.dataloader.FITSDataset") as mock_dataset_class:
+        with patch("torchsky.dataloader.FITSDataset") as mock_dataset_class:
             mock_dataset = Mock()
             mock_dataset.__len__ = Mock(return_value=3)
             mock_dataset_class.return_value = mock_dataset
@@ -73,7 +73,7 @@ class TestDataLoaderCreation:
         """Test convenience function for FITS DataLoader."""
         file_paths = ["file1.fits", "file2.fits"]
 
-        with patch("torchfits.dataloader.FITSDataset") as mock_dataset_class:
+        with patch("torchsky.dataloader.FITSDataset") as mock_dataset_class:
             mock_dataset = Mock()
             mock_dataset.__len__ = Mock(return_value=2)
             mock_dataset_class.return_value = mock_dataset
@@ -95,7 +95,7 @@ class TestDataLoaderCreation:
 
     def test_create_streaming_dataloader(self):
         """Test streaming DataLoader creation."""
-        with patch("torchfits.dataloader.IterableFITSDataset") as mock_dataset_class:
+        with patch("torchsky.dataloader.IterableFITSDataset") as mock_dataset_class:
             mock_dataset = Mock(spec=IterableFITSDataset)
             mock_dataset_class.return_value = mock_dataset
 
@@ -110,7 +110,7 @@ class TestDataLoaderCreation:
         """Test table chunk DataLoader creation."""
         file_paths = ["file1.fits"]
 
-        with patch("torchfits.dataloader.TableChunkDataset") as mock_dataset_class:
+        with patch("torchsky.dataloader.TableChunkDataset") as mock_dataset_class:
             mock_dataset = Mock()
             mock_dataset_class.return_value = mock_dataset
 
@@ -131,7 +131,7 @@ class TestDataLoaderCreation:
             )
 
     def test_fitsdataset_forwards_read_options(self):
-        """FITSDataset should forward read-performance options to torchfits.read."""
+        """FITSDataset should forward read-performance options to torchsky.read."""
         dataset = FITSDataset(
             ["file1.fits"],
             hdu=2,
@@ -144,7 +144,7 @@ class TestDataLoaderCreation:
             raw_scale=True,
         )
 
-        with patch("torchfits.read", return_value=torch.zeros((2, 2))) as mock_read:
+        with patch("torchsky.read", return_value=torch.zeros((2, 2))) as mock_read:
             _ = dataset[0]
 
         mock_read.assert_called_once_with(
@@ -168,8 +168,8 @@ class TestDistributedDataLoader:
         file_paths = ["file1.fits", "file2.fits", "file3.fits", "file4.fits"]
 
         with (
-            patch("torchfits.dataloader.FITSDataset") as mock_dataset_class,
-            patch("torchfits.dataloader.DistributedSampler") as mock_sampler_class,
+            patch("torchsky.dataloader.FITSDataset") as mock_dataset_class,
+            patch("torchsky.dataloader.DistributedSampler") as mock_sampler_class,
         ):
             mock_dataset = Mock()
             mock_dataset.__len__ = Mock(return_value=4)
@@ -201,7 +201,7 @@ class TestMLDataLoader:
         """Test ML DataLoader with train/val/test splits."""
         file_paths = [f"file{i}.fits" for i in range(100)]
 
-        with patch("torchfits.dataloader.create_fits_dataloader") as mock_create:
+        with patch("torchsky.dataloader.create_fits_dataloader") as mock_create:
             mock_dataloader = Mock()
             mock_create.return_value = mock_dataloader
 
@@ -230,7 +230,7 @@ class TestMLDataLoader:
 
         transforms = {"train": mock_train_transform, "val": mock_val_transform}
 
-        with patch("torchfits.dataloader.create_fits_dataloader") as mock_create:
+        with patch("torchsky.dataloader.create_fits_dataloader") as mock_create:
             mock_dataloader = Mock()
             mock_create.return_value = mock_dataloader
 
@@ -297,7 +297,7 @@ class TestDataLoaderParameters:
         file_paths = ["file1.fits"]
 
         with (
-            patch("torchfits.dataloader.FITSDataset") as mock_dataset_class,
+            patch("torchsky.dataloader.FITSDataset") as mock_dataset_class,
             patch("torch.cuda.is_available", return_value=True),
         ):
             mock_dataset = Mock()
@@ -313,7 +313,7 @@ class TestDataLoaderParameters:
         file_paths = ["file1.fits"]
 
         with (
-            patch("torchfits.dataloader.FITSDataset") as mock_dataset_class,
+            patch("torchsky.dataloader.FITSDataset") as mock_dataset_class,
             patch("torch.cuda.is_available", return_value=False),
         ):
             mock_dataset = Mock()
@@ -332,7 +332,7 @@ class TestDataLoaderParameters:
         """Test prefetch_factor with multiple workers."""
         file_paths = ["file1.fits"]
 
-        with patch("torchfits.dataloader.FITSDataset") as mock_dataset_class:
+        with patch("torchsky.dataloader.FITSDataset") as mock_dataset_class:
             mock_dataset = Mock()
             mock_dataset.__len__ = Mock(return_value=1)
             mock_dataset_class.return_value = mock_dataset
@@ -345,7 +345,7 @@ class TestDataLoaderParameters:
         """Test prefetch_factor with no workers."""
         file_paths = ["file1.fits"]
 
-        with patch("torchfits.dataloader.FITSDataset") as mock_dataset_class:
+        with patch("torchsky.dataloader.FITSDataset") as mock_dataset_class:
             mock_dataset = Mock()
             mock_dataset.__len__ = Mock(return_value=1)
             mock_dataset_class.return_value = mock_dataset

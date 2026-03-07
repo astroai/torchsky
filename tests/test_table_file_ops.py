@@ -5,13 +5,13 @@ import numpy as np
 import pytest
 import torch
 
-import torchfits
+import torchsky
 
 
 def _make_basic_table_file() -> str:
     handle = tempfile.NamedTemporaryFile(suffix=".fits", delete=False)
     handle.close()
-    torchfits.write(
+    torchsky.write(
         handle.name,
         {
             "ID": np.array([1, 2, 3], dtype=np.int32),
@@ -26,7 +26,7 @@ def _make_basic_table_file() -> str:
 def test_table_append_update_rename_drop():
     path = _make_basic_table_file()
     try:
-        torchfits.table.append_rows(
+        torchsky.table.append_rows(
             path,
             {
                 "ID": np.array([4, 5], dtype=np.int32),
@@ -35,7 +35,7 @@ def test_table_append_update_rename_drop():
             },
             hdu=1,
         )
-        with torchfits.open(path) as hdul:
+        with torchsky.open(path) as hdul:
             table_hdu = hdul[1]
             ids = table_hdu["ID"]
             vals = table_hdu["VAL"]
@@ -50,7 +50,7 @@ def test_table_append_update_rename_drop():
             assert flags.squeeze(-1).tolist() == [True, False, True, False, True]
 
         with pytest.raises(ValueError):
-            torchfits.table.append_rows(
+            torchsky.table.append_rows(
                 path,
                 {
                     "ID": [6],
@@ -61,25 +61,25 @@ def test_table_append_update_rename_drop():
                 hdu=1,
             )
 
-        torchfits.table.update_rows(
+        torchsky.table.update_rows(
             path,
             {"VAL": np.array([9.9, 8.8], dtype=np.float32)},
             row_slice=slice(1, 3),
             hdu=1,
         )
-        with torchfits.open(path) as hdul:
+        with torchsky.open(path) as hdul:
             table_hdu = hdul[1]
             vals = table_hdu["VAL"].squeeze(-1).numpy()
             assert np.allclose(vals, [0.1, 9.9, 8.8, 0.4, 0.5], atol=1e-6)
 
-        torchfits.table.rename_columns(path, {"VAL": "FLUX"}, hdu=1)
-        with torchfits.open(path) as hdul:
+        torchsky.table.rename_columns(path, {"VAL": "FLUX"}, hdu=1)
+        with torchsky.open(path) as hdul:
             table_hdu = hdul[1]
             assert "VAL" not in table_hdu.columns
             assert "FLUX" in table_hdu.columns
 
-        torchfits.table.drop_columns(path, ["FLAG"], hdu=1)
-        with torchfits.open(path) as hdul:
+        torchsky.table.drop_columns(path, ["FLAG"], hdu=1)
+        with torchsky.open(path) as hdul:
             table_hdu = hdul[1]
             assert "FLAG" not in table_hdu.columns
     finally:
@@ -89,7 +89,7 @@ def test_table_append_update_rename_drop():
 def test_tablehdu_to_fits_rich_types_pending_cfitsio_impl():
     dst = tempfile.NamedTemporaryFile(suffix=".fits", delete=False)
     dst.close()
-    table_hdu = torchfits.TableHDU(
+    table_hdu = torchsky.TableHDU(
         {
             "ID": np.array([1, 2, 3], dtype=np.int32),
             "NAME": ["alpha", "beta", "gamma"],
@@ -104,7 +104,7 @@ def test_tablehdu_to_fits_rich_types_pending_cfitsio_impl():
 
     try:
         table_hdu.to_fits(dst.name, overwrite=True)
-        with torchfits.open(dst.name) as hdul:
+        with torchsky.open(dst.name) as hdul:
             table = hdul[1]
             assert table.get_string_column("NAME") == ["alpha", "beta", "gamma"]
             vals = table["Z"].squeeze(-1)
@@ -130,13 +130,13 @@ def test_table_vla_roundtrip_and_updates():
                 np.array([], dtype=np.int16),
             ],
         }
-        torchfits.write(path.name, table, overwrite=True)
+        torchsky.write(path.name, table, overwrite=True)
 
-        with torchfits.open(path.name) as hdul:
+        with torchsky.open(path.name) as hdul:
             vla = hdul[1].get_vla_column("VLA")
             assert [v.tolist() for v in vla] == [[1, 2], [3], []]
 
-        torchfits.table.append_rows(
+        torchsky.table.append_rows(
             path.name,
             {
                 "ID": np.array([4], dtype=np.int32),
@@ -144,17 +144,17 @@ def test_table_vla_roundtrip_and_updates():
             },
             hdu=1,
         )
-        with torchfits.open(path.name) as hdul:
+        with torchsky.open(path.name) as hdul:
             vla = hdul[1].get_vla_column("VLA")
             assert vla[-1].tolist() == [9, 10]
 
-        torchfits.table.update_rows(
+        torchsky.table.update_rows(
             path.name,
             {"VLA": [np.array([7], dtype=np.int16)]},
             row_slice=slice(1, 2),
             hdu=1,
         )
-        with torchfits.open(path.name) as hdul:
+        with torchsky.open(path.name) as hdul:
             vla = hdul[1].get_vla_column("VLA")
             assert vla[1].tolist() == [7]
     finally:
@@ -165,13 +165,13 @@ def test_table_write_schema_pending_cfitsio_impl():
     path = tempfile.NamedTemporaryFile(suffix=".fits", delete=False)
     path.close()
     try:
-        torchfits.table.write(
+        torchsky.table.write(
             path.name,
             data={"ID": np.array([1, 2, 3], dtype=np.int32)},
             schema={"ID": {"format": "J"}},
             overwrite=True,
         )
-        with torchfits.open(path.name) as hdul:
+        with torchsky.open(path.name) as hdul:
             table = hdul[1]
             assert table["ID"].squeeze(-1).tolist() == [1, 2, 3]
             assert str(table.header.get("TFORM1", "")).upper().startswith("J")
@@ -183,13 +183,13 @@ def test_table_write_ascii_pending_cfitsio_impl():
     path = tempfile.NamedTemporaryFile(suffix=".fits", delete=False)
     path.close()
     try:
-        torchfits.table.write(
+        torchsky.table.write(
             path.name,
             data={"A": np.array([1, 2, 3], dtype=np.int32)},
             table_type="ascii",
             overwrite=True,
         )
-        with torchfits.open(path.name) as hdul:
+        with torchsky.open(path.name) as hdul:
             table = hdul[1]
             assert table["A"].squeeze(-1).tolist() == [1, 2, 3]
             assert str(table.header.get("XTENSION", "")).upper() == "TABLE"
@@ -201,10 +201,10 @@ def test_table_reader_cache_invalidated_after_append():
     path = _make_basic_table_file()
     try:
         # Prime Arrow/cpp reader cache for this path.
-        initial = torchfits.table.read(path, hdu=1)
+        initial = torchsky.table.read(path, hdu=1)
         assert initial.num_rows == 3
 
-        torchfits.table.append_rows(
+        torchsky.table.append_rows(
             path,
             {
                 "ID": np.array([4], dtype=np.int32),
@@ -214,7 +214,7 @@ def test_table_reader_cache_invalidated_after_append():
             hdu=1,
         )
 
-        updated = torchfits.table.read(path, hdu=1)
+        updated = torchsky.table.read(path, hdu=1)
         assert updated.num_rows == 4
         assert updated.column("ID").to_pylist() == [1, 2, 3, 4]
     finally:
@@ -224,7 +224,7 @@ def test_table_reader_cache_invalidated_after_append():
 def test_table_insert_rows_mid_table_preserves_order():
     path = _make_basic_table_file()
     try:
-        torchfits.table.insert_rows(
+        torchsky.table.insert_rows(
             path,
             {
                 "ID": np.array([99, 100], dtype=np.int32),
@@ -235,7 +235,7 @@ def test_table_insert_rows_mid_table_preserves_order():
             hdu=1,
         )
 
-        with torchfits.open(path) as hdul:
+        with torchsky.open(path) as hdul:
             table_hdu = hdul[1]
             assert table_hdu["ID"].squeeze(-1).tolist() == [1, 99, 100, 2, 3]
             assert np.allclose(
@@ -257,7 +257,7 @@ def test_table_insert_rows_mid_table_preserves_order():
 def test_table_delete_rows_slice_and_single():
     path = _make_basic_table_file()
     try:
-        torchfits.table.append_rows(
+        torchsky.table.append_rows(
             path,
             {
                 "ID": np.array([4, 5], dtype=np.int32),
@@ -266,10 +266,10 @@ def test_table_delete_rows_slice_and_single():
             },
             hdu=1,
         )
-        torchfits.table.delete_rows(path, 1, hdu=1)
-        torchfits.table.delete_rows(path, slice(2, 4), hdu=1)
+        torchsky.table.delete_rows(path, 1, hdu=1)
+        torchsky.table.delete_rows(path, slice(2, 4), hdu=1)
 
-        with torchfits.open(path) as hdul:
+        with torchsky.open(path) as hdul:
             table_hdu = hdul[1]
             assert table_hdu["ID"].squeeze(-1).tolist() == [1, 3]
             assert np.allclose(
@@ -284,7 +284,7 @@ def test_append_rows_partial_payload_string_vla_defaults():
     path = tempfile.NamedTemporaryFile(suffix=".fits", delete=False)
     path.close()
     try:
-        torchfits.write(
+        torchsky.write(
             path.name,
             {
                 "ID": np.array([1, 2], dtype=np.int32),
@@ -297,13 +297,13 @@ def test_append_rows_partial_payload_string_vla_defaults():
             overwrite=True,
         )
 
-        torchfits.table.append_rows(
+        torchsky.table.append_rows(
             path.name,
             {"ID": np.array([3], dtype=np.int32)},
             hdu=1,
         )
 
-        with torchfits.open(path.name) as hdul:
+        with torchsky.open(path.name) as hdul:
             table_hdu = hdul[1]
             assert table_hdu["ID"].squeeze(-1).tolist() == [1, 2, 3]
             assert table_hdu.get_string_column("NAME") == ["alpha", "beta", ""]
@@ -317,7 +317,7 @@ def test_append_rows_partial_payload_respects_tnull():
     path = tempfile.NamedTemporaryFile(suffix=".fits", delete=False)
     path.close()
     try:
-        torchfits.table.write(
+        torchsky.table.write(
             path.name,
             data={
                 "ID": np.array([1, 2], dtype=np.int32),
@@ -330,13 +330,13 @@ def test_append_rows_partial_payload_respects_tnull():
             overwrite=True,
         )
 
-        torchfits.table.append_rows(
+        torchsky.table.append_rows(
             path.name,
             {"ID": np.array([3], dtype=np.int32)},
             hdu=1,
         )
 
-        with torchfits.open(path.name) as hdul:
+        with torchsky.open(path.name) as hdul:
             table_hdu = hdul[1]
             assert table_hdu["ID"].squeeze(-1).tolist() == [1, 2, 3]
             assert table_hdu["QUAL"].squeeze(-1).tolist() == [7, 8, -999]
@@ -348,7 +348,7 @@ def test_table_insert_delete_with_vla_and_string_columns():
     path = tempfile.NamedTemporaryFile(suffix=".fits", delete=False)
     path.close()
     try:
-        torchfits.write(
+        torchsky.write(
             path.name,
             {
                 "ID": np.array([1, 2, 3], dtype=np.int32),
@@ -362,15 +362,15 @@ def test_table_insert_delete_with_vla_and_string_columns():
             overwrite=True,
         )
 
-        torchfits.table.insert_rows(
+        torchsky.table.insert_rows(
             path.name,
             {"ID": np.array([99], dtype=np.int32)},
             row=1,
             hdu=1,
         )
-        torchfits.table.delete_rows(path.name, slice(2, 3), hdu=1)
+        torchsky.table.delete_rows(path.name, slice(2, 3), hdu=1)
 
-        with torchfits.open(path.name) as hdul:
+        with torchsky.open(path.name) as hdul:
             table_hdu = hdul[1]
             assert table_hdu["ID"].squeeze(-1).tolist() == [1, 99, 3]
             assert table_hdu.get_string_column("NAME") == ["a", "", "c"]
@@ -384,7 +384,7 @@ def test_insert_column_with_explicit_format_metadata():
     path = tempfile.NamedTemporaryFile(suffix=".fits", delete=False)
     path.close()
     try:
-        torchfits.table.write(
+        torchsky.table.write(
             path.name,
             data={
                 "ID": np.array([1, 2], dtype=np.int32),
@@ -397,7 +397,7 @@ def test_insert_column_with_explicit_format_metadata():
             overwrite=True,
         )
 
-        torchfits.table.insert_column(
+        torchsky.table.insert_column(
             path.name,
             "FLAGS",
             np.array([7, 8], dtype=np.int16),
@@ -408,7 +408,7 @@ def test_insert_column_with_explicit_format_metadata():
             tnull=-1,
         )
 
-        with torchfits.open(path.name) as hdul:
+        with torchsky.open(path.name) as hdul:
             table = hdul[1]
             assert table.columns == ["ID", "FLAGS", "QUAL"]
             assert table["FLAGS"].squeeze(-1).tolist() == [7, 8]
@@ -428,7 +428,7 @@ def test_replace_column_preserves_metadata_contract():
     path = tempfile.NamedTemporaryFile(suffix=".fits", delete=False)
     path.close()
     try:
-        torchfits.table.write(
+        torchsky.table.write(
             path.name,
             data={
                 "ID": np.array([1, 2, 3], dtype=np.int32),
@@ -441,14 +441,14 @@ def test_replace_column_preserves_metadata_contract():
             overwrite=True,
         )
 
-        torchfits.table.replace_column(
+        torchsky.table.replace_column(
             path.name,
             "QUAL",
             np.array([101, 102, 103], dtype=np.int16),
             hdu=1,
         )
 
-        with torchfits.open(path.name) as hdul:
+        with torchsky.open(path.name) as hdul:
             table = hdul[1]
             assert table["QUAL"].squeeze(-1).tolist() == [101, 102, 103]
             assert str(table.header.get("TFORM2", "")).upper().startswith("I")

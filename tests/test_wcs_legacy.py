@@ -1,8 +1,8 @@
 import numpy as np
 import torch
 
-from torchfits.wcs.core import WCS
-from torchfits.wcs.legacy import LegacyPolynomial
+from torchsky.wcs.core import WCS
+from torchsky.wcs.legacy import LegacyPolynomial
 
 
 def test_legacy_polynomial_parse_and_evaluate() -> None:

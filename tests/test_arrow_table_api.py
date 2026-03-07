@@ -7,7 +7,7 @@ import torch
 from astropy.io import fits
 from astropy.table import Table
 
-import torchfits
+import torchsky
 
 
 def _make_table_file():
@@ -89,7 +89,7 @@ def test_arrow_scan_and_read():
     path = _make_table_file()
     try:
         batches = list(
-            torchfits.table.scan(
+            torchsky.table.scan(
                 path, hdu=1, batch_size=2, decode_bytes=True, include_fits_metadata=True
             )
         )
@@ -97,7 +97,7 @@ def test_arrow_scan_and_read():
         assert batches[0].num_rows == 2
         assert batches[1].num_rows == 1
 
-        arrow_table = torchfits.table.read(
+        arrow_table = torchsky.table.read(
             path, hdu=1, batch_size=2, decode_bytes=True, include_fits_metadata=True
         )
         assert arrow_table.num_rows == 3
@@ -112,17 +112,13 @@ def test_arrow_cpp_numpy_backend_matches_default():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        import torchfits.cpp as cpp
+        import torchsky.cpp as cpp
 
         if not hasattr(cpp, "read_fits_table_rows_numpy_from_handle"):
             pytest.skip("cpp numpy backend not available")
 
-        t_default = torchfits.table.read(
-            path, hdu=1, decode_bytes=True, backend="torch"
-        )
-        t_cpp = torchfits.table.read(
-            path, hdu=1, decode_bytes=True, backend="cpp_numpy"
-        )
+        t_default = torchsky.table.read(path, hdu=1, decode_bytes=True, backend="torch")
+        t_cpp = torchsky.table.read(path, hdu=1, decode_bytes=True, backend="cpp_numpy")
 
         assert t_default.num_rows == t_cpp.num_rows
         assert sorted(t_default.schema.names) == sorted(t_cpp.schema.names)
@@ -135,7 +131,7 @@ def test_arrow_row_slice():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        arrow_table = torchfits.table.read(
+        arrow_table = torchsky.table.read(
             path, hdu=1, row_slice=slice(1, 3), decode_bytes=True
         )
         assert arrow_table.num_rows == 2
@@ -148,7 +144,7 @@ def test_arrow_rows_selection_preserves_order():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        arrow_table = torchfits.table.read(path, hdu=1, rows=[2, 0], decode_bytes=True)
+        arrow_table = torchsky.table.read(path, hdu=1, rows=[2, 0], decode_bytes=True)
         assert arrow_table.num_rows == 2
         assert arrow_table.column("ID").to_pylist() == [3, 1]
     finally:
@@ -159,7 +155,7 @@ def test_scan_torch_cpu_batches():
     path = _make_table_file()
     try:
         chunks = list(
-            torchfits.table.scan_torch(path, hdu=1, batch_size=2, device="cpu")
+            torchsky.table.scan_torch(path, hdu=1, batch_size=2, device="cpu")
         )
         assert len(chunks) == 2
         assert isinstance(chunks[0]["RA"], torch.Tensor)
@@ -180,7 +176,7 @@ def test_scan_torch_accelerator_if_available():
             pytest.skip("No accelerator available")
 
         chunk = next(
-            torchfits.table.scan_torch(path, hdu=1, batch_size=2, device=device)
+            torchsky.table.scan_torch(path, hdu=1, batch_size=2, device=device)
         )
         assert isinstance(chunk["RA"], torch.Tensor)
         assert chunk["RA"].device.type == device
@@ -191,9 +187,7 @@ def test_scan_torch_accelerator_if_available():
 def test_scan_torch_fallback_for_bit_vla_mmap():
     path = _make_bit_vla_table_file()
     try:
-        chunk = next(
-            torchfits.table.scan_torch(path, hdu=1, batch_size=2, device="cpu")
-        )
+        chunk = next(torchsky.table.scan_torch(path, hdu=1, batch_size=2, device="cpu"))
         assert isinstance(chunk["BITS"], torch.Tensor)
         assert chunk["BITS"].shape[0] == 2
     finally:
@@ -204,7 +198,7 @@ def test_scan_torch_columns_vla_mmap_true_falls_back():
     path = _make_bit_vla_table_file()
     try:
         chunk = next(
-            torchfits.table.scan_torch(
+            torchsky.table.scan_torch(
                 path, hdu=1, columns=["VLA"], batch_size=2, mmap=True, device="cpu"
             )
         )
@@ -234,7 +228,7 @@ def test_arrow_read_columns_vla_mmap_true_falls_back():
     pytest.importorskip("pyarrow")
     path = _make_bit_vla_table_file()
     try:
-        table = torchfits.table.read(path, hdu=1, columns=["VLA"], mmap=True)
+        table = torchsky.table.read(path, hdu=1, columns=["VLA"], mmap=True)
         assert table.column_names == ["VLA"]
         assert table.column("VLA").to_pylist() == [[1, 2], [3], [4, 5, 6]]
     finally:
@@ -247,8 +241,8 @@ def test_arrow_to_pandas_stream():
     path = _make_table_file()
     try:
         dfs = list(
-            torchfits.table.to_pandas(
-                torchfits.table.scan(path, hdu=1, batch_size=2, decode_bytes=True),
+            torchsky.table.to_pandas(
+                torchsky.table.scan(path, hdu=1, batch_size=2, decode_bytes=True),
                 stream=True,
             )
         )
@@ -264,7 +258,7 @@ def test_arrow_schema_minimal():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        sch = torchfits.table.schema(
+        sch = torchsky.table.schema(
             path, hdu=1, columns=["RA", "ID"], include_fits_metadata=True
         )
         assert sch.names == ["RA", "ID"]
@@ -279,11 +273,11 @@ def test_arrow_reader_and_dataset():
     pytest.importorskip("pyarrow.dataset")
     path = _make_table_file()
     try:
-        reader = torchfits.table.reader(path, hdu=1, decode_bytes=True, batch_size=2)
+        reader = torchsky.table.reader(path, hdu=1, decode_bytes=True, batch_size=2)
         batches = list(reader)
         assert len(batches) == 2
 
-        dset = torchfits.table.dataset(path, hdu=1, decode_bytes=True)
+        dset = torchsky.table.dataset(path, hdu=1, decode_bytes=True)
         tbl = dset.to_table()
         assert tbl.num_rows == 3
         assert set(tbl.column_names) == {"RA", "ID", "NAME"}
@@ -295,7 +289,7 @@ def test_arrow_scanner_filter_projection():
     ds = pytest.importorskip("pyarrow.dataset")
     path = _make_table_file()
     try:
-        scanner = torchfits.table.scanner(
+        scanner = torchsky.table.scanner(
             path,
             hdu=1,
             decode_bytes=True,
@@ -314,7 +308,7 @@ def test_arrow_read_where_projection_pushdown():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path,
             hdu=1,
             columns=["ID"],
@@ -331,7 +325,7 @@ def test_arrow_read_where_with_row_slice():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path,
             hdu=1,
             columns=["ID"],
@@ -349,7 +343,7 @@ def test_arrow_scan_where_batches():
     path = _make_table_file()
     try:
         batches = list(
-            torchfits.table.scan(
+            torchsky.table.scan(
                 path,
                 hdu=1,
                 columns=["ID"],
@@ -369,7 +363,7 @@ def test_arrow_scanner_where_projection():
     pytest.importorskip("pyarrow.dataset")
     path = _make_table_file()
     try:
-        scan = torchfits.table.scanner(
+        scan = torchsky.table.scanner(
             path,
             hdu=1,
             columns=["ID"],
@@ -386,7 +380,7 @@ def test_arrow_read_where_invalid_expression():
     path = _make_table_file()
     try:
         with pytest.raises(ValueError):
-            _ = torchfits.table.read(path, hdu=1, where="ID ~~ 2", backend="cpp_numpy")
+            _ = torchsky.table.read(path, hdu=1, where="ID ~~ 2", backend="cpp_numpy")
     finally:
         os.unlink(path)
 
@@ -395,7 +389,7 @@ def test_arrow_read_where_and_or():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path,
             hdu=1,
             columns=["ID"],
@@ -411,7 +405,7 @@ def test_arrow_read_where_parentheses_precedence():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path,
             hdu=1,
             columns=["ID"],
@@ -428,7 +422,7 @@ def test_arrow_read_where_unbalanced_parentheses():
     path = _make_table_file()
     try:
         with pytest.raises(ValueError):
-            _ = torchfits.table.read(
+            _ = torchsky.table.read(
                 path, hdu=1, where="(ID == 1 OR ID == 2", backend="cpp_numpy"
             )
     finally:
@@ -439,7 +433,7 @@ def test_arrow_read_where_not_clause():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path,
             hdu=1,
             columns=["ID"],
@@ -455,7 +449,7 @@ def test_arrow_read_where_not_precedence():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path,
             hdu=1,
             columns=["ID"],
@@ -472,7 +466,7 @@ def test_arrow_read_where_trailing_not_invalid():
     path = _make_table_file()
     try:
         with pytest.raises(ValueError):
-            _ = torchfits.table.read(
+            _ = torchsky.table.read(
                 path, hdu=1, where="ID == 1 AND NOT", backend="cpp_numpy"
             )
     finally:
@@ -483,7 +477,7 @@ def test_arrow_read_where_in_list():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path,
             hdu=1,
             columns=["ID"],
@@ -499,7 +493,7 @@ def test_arrow_read_where_not_in_list():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path,
             hdu=1,
             columns=["ID"],
@@ -515,7 +509,7 @@ def test_arrow_read_where_in_with_strings_and_or():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path,
             hdu=1,
             columns=["ID"],
@@ -532,7 +526,7 @@ def test_arrow_read_where_in_missing_parenthesis_invalid():
     path = _make_table_file()
     try:
         with pytest.raises(ValueError):
-            _ = torchfits.table.read(
+            _ = torchsky.table.read(
                 path, hdu=1, where="ID IN (1, 2", backend="cpp_numpy"
             )
     finally:
@@ -543,7 +537,7 @@ def test_arrow_read_where_between():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path,
             hdu=1,
             columns=["ID"],
@@ -559,7 +553,7 @@ def test_arrow_read_where_not_between():
     pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path,
             hdu=1,
             columns=["ID"],
@@ -575,7 +569,7 @@ def test_arrow_read_where_is_null():
     pytest.importorskip("pyarrow")
     path = _make_tnull_table_file(vector=False)
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path,
             hdu=1,
             columns=["A"],
@@ -592,7 +586,7 @@ def test_arrow_read_where_is_not_null():
     pytest.importorskip("pyarrow")
     path = _make_tnull_table_file(vector=False)
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path,
             hdu=1,
             columns=["A"],
@@ -610,7 +604,7 @@ def test_arrow_read_where_between_missing_and_invalid():
     path = _make_table_file()
     try:
         with pytest.raises(ValueError):
-            _ = torchfits.table.read(
+            _ = torchsky.table.read(
                 path, hdu=1, where="ID BETWEEN 1 3", backend="cpp_numpy"
             )
     finally:
@@ -622,13 +616,13 @@ def test_scan_where_matches_python_filter():
     path = _make_table_file()
     try:
         where = "ID >= 2 AND RA < 10.3"
-        full = torchfits.table.read(path, hdu=1, decode_bytes=True, backend="cpp_numpy")
+        full = torchsky.table.read(path, hdu=1, decode_bytes=True, backend="cpp_numpy")
         ids = full.column("ID").to_pylist()
         ras = full.column("RA").to_pylist()
         expected = [i for i, r in zip(ids, ras) if i >= 2 and r < 10.3]
 
         batches = list(
-            torchfits.table.scan(
+            torchsky.table.scan(
                 path,
                 hdu=1,
                 where=where,
@@ -650,7 +644,7 @@ def test_scan_where_with_projection():
     path = _make_table_file()
     try:
         batches = list(
-            torchfits.table.scan(
+            torchsky.table.scan(
                 path,
                 hdu=1,
                 where="ID IN (1, 3)",
@@ -675,11 +669,11 @@ def test_dataset_path_uses_reader_not_read(monkeypatch):
     path = _make_table_file()
     try:
         monkeypatch.setattr(
-            torchfits.table,
+            torchsky.table,
             "read",
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("read called")),
         )
-        dset = torchfits.table.dataset(path, hdu=1, decode_bytes=True, batch_size=2)
+        dset = torchsky.table.dataset(path, hdu=1, decode_bytes=True, batch_size=2)
         tbl = dset.to_table()
         assert tbl.num_rows == 3
     finally:
@@ -692,8 +686,8 @@ def test_arrow_write_parquet_stream():
     out = tempfile.NamedTemporaryFile(suffix=".parquet", delete=False)
     out.close()
     try:
-        r = torchfits.table.reader(path, hdu=1, decode_bytes=True, batch_size=2)
-        torchfits.table.write_parquet(out.name, r, stream=True)
+        r = torchsky.table.reader(path, hdu=1, decode_bytes=True, batch_size=2)
+        torchsky.table.write_parquet(out.name, r, stream=True)
         tbl = pq.read_table(out.name)
         assert tbl.num_rows == 3
         assert tbl.column("ID").to_pylist() == [1, 2, 3]
@@ -706,7 +700,7 @@ def test_arrow_bytes_without_decode_are_fixed_binary():
     pa = pytest.importorskip("pyarrow")
     path = _make_table_file()
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path, hdu=1, decode_bytes=False, backend="cpp_numpy"
         )
         assert table.num_rows == 3
@@ -720,7 +714,7 @@ def test_to_pandas_path_accepts_io_kwargs():
     pytest.importorskip("pandas")
     path = _make_table_file()
     try:
-        df = torchfits.table.to_pandas(
+        df = torchsky.table.to_pandas(
             path,
             row_slice=slice(1, 3),
             decode_bytes=True,
@@ -736,10 +730,10 @@ def test_tnull_scalar_to_arrow_nulls():
     pytest.importorskip("pyarrow")
     path = _make_tnull_table_file(vector=False)
     try:
-        t_with_nulls = torchfits.table.read(
+        t_with_nulls = torchsky.table.read(
             path, hdu=1, backend="cpp_numpy", apply_fits_nulls=True
         )
-        t_without_nulls = torchfits.table.read(
+        t_without_nulls = torchsky.table.read(
             path, hdu=1, backend="cpp_numpy", apply_fits_nulls=False
         )
         assert t_with_nulls.column("A").to_pylist() == [1, None, 3]
@@ -752,7 +746,7 @@ def test_tnull_vector_to_arrow_nulls():
     pytest.importorskip("pyarrow")
     path = _make_tnull_table_file(vector=True)
     try:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             path, hdu=1, backend="cpp_numpy", apply_fits_nulls=True
         )
         assert table.column("A").to_pylist() == [[1, None], [3, 4], [None, 6]]
@@ -767,7 +761,7 @@ def test_scaled_scalar_column_preserves_physical_values():
         with fits.open(path) as hdul:
             expected = hdul[1].data["A"].astype(np.float64)
 
-        table = torchfits.table.read(path, hdu=1, backend="cpp_numpy")
+        table = torchsky.table.read(path, hdu=1, backend="cpp_numpy")
         got = np.asarray(table.column("A"))
         assert got.dtype == np.float64
         assert np.allclose(got, expected)
@@ -782,7 +776,7 @@ def test_scaled_vector_column_preserves_physical_values():
         with fits.open(path) as hdul:
             expected = hdul[1].data["A"].astype(np.float64)
 
-        table = torchfits.table.read(path, hdu=1, backend="cpp_numpy")
+        table = torchsky.table.read(path, hdu=1, backend="cpp_numpy")
         got = np.asarray(table.column("A").to_pylist(), dtype=np.float64)
         assert got.shape == expected.shape
         assert np.allclose(got, expected)
@@ -796,7 +790,7 @@ def test_legacy_table_read_scaled_column_is_float_physical():
         with fits.open(path) as hdul:
             expected = hdul[1].data["A"].astype(np.float64)
 
-        result = torchfits.read(path, hdu=1)
+        result = torchsky.read(path, hdu=1)
         got = result["A"].detach().cpu().numpy()
         assert got.dtype == np.float64
         assert np.allclose(got, expected)
@@ -808,13 +802,13 @@ def test_bit_and_vla_columns_readable():
     pytest.importorskip("pyarrow")
     path = _make_bit_vla_table_file()
     try:
-        legacy = torchfits.read(path, hdu=1)
+        legacy = torchsky.read(path, hdu=1)
         assert "BITS" in legacy and "VLA" in legacy
         assert legacy["BITS"].shape == (3, 8)
         assert legacy["BITS"].dtype == torch.uint8
         assert len(legacy["VLA"]) == 3
 
-        table = torchfits.table.read(path, hdu=1, backend="cpp_numpy")
+        table = torchsky.table.read(path, hdu=1, backend="cpp_numpy")
         assert set(table.column_names) == {"BITS", "VLA"}
         assert table.column("VLA").to_pylist() == [[1, 2], [3], [4, 5, 6]]
         bits_py = table.column("BITS").to_pylist()
@@ -826,7 +820,7 @@ def test_bit_and_vla_columns_readable():
 def test_cpp_numpy_vla_returns_flat_tuple():
     path = _make_bit_vla_table_file()
     try:
-        import torchfits.cpp as cpp
+        import torchsky.cpp as cpp
 
         chunk = cpp.read_fits_table_rows_numpy(path, 1, ["VLA"], 1, -1, False)
         assert "VLA" in chunk
@@ -848,7 +842,7 @@ def test_to_polars_lazy_expression():
     pl = pytest.importorskip("polars")
     path = _make_table_file()
     try:
-        lf = torchfits.table.to_polars_lazy(path, hdu=1, decode_bytes=True)
+        lf = torchsky.table.to_polars_lazy(path, hdu=1, decode_bytes=True)
         out = lf.filter(pl.col("ID") >= 2).select(pl.col("ID")).collect()
         assert out["ID"].to_list() == [2, 3]
     finally:
@@ -860,7 +854,7 @@ def test_duckdb_query_on_fits_table():
     pytest.importorskip("duckdb")
     path = _make_table_file()
     try:
-        result = torchfits.table.duckdb_query(
+        result = torchsky.table.duckdb_query(
             path,
             "SELECT COUNT(*) AS n FROM fits_table WHERE ID >= 2",
             hdu=1,

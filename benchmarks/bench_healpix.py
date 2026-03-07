@@ -21,7 +21,7 @@ except ImportError as exc:  # pragma: no cover
     raise SystemExit("healpy is required for bench_healpix.py") from exc
 
 try:
-    from torchfits.wcs.healpix import (
+    from torchsky.wcs.healpix import (
         ang2pix_nested,
         ang2pix_ring,
         nest2ring,
@@ -30,12 +30,12 @@ try:
         ring2nest,
     )
 except Exception:
-    # Allow benchmarks in envs where torchfits package/extensions are not installed.
+    # Allow benchmarks in envs where torchsky package/extensions are not installed.
     local_mod = (
-        Path(__file__).resolve().parents[1] / "src" / "torchfits" / "wcs" / "healpix.py"
+        Path(__file__).resolve().parents[1] / "src" / "torchsky" / "wcs" / "healpix.py"
     )
     spec = importlib.util.spec_from_file_location(
-        "torchfits_wcs_healpix_local", local_mod
+        "torchsky_wcs_healpix_local", local_mod
     )
     if spec is None or spec.loader is None:
         raise SystemExit(f"Unable to load local HEALPix module from {local_mod}")

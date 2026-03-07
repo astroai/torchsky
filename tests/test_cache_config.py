@@ -1,11 +1,11 @@
 from unittest.mock import MagicMock
-from torchfits.cache import CacheConfig, get_optimal_cache_config
-import torchfits.cache
+from torchsky.cache import CacheConfig, get_optimal_cache_config
+import torchsky.cache
 
 
 def test_optimal_cache_config_no_psutil(monkeypatch):
     """Test fallback when psutil is not available."""
-    monkeypatch.setattr(torchfits.cache, "psutil", None)
+    monkeypatch.setattr(torchsky.cache, "psutil", None)
 
     # Ensure it doesn't think it's a GPU env
     # Using patch.dict or monkeypatch for torch is harder if it's not installed,
@@ -26,7 +26,7 @@ def test_optimal_cache_config_local(monkeypatch):
     mock_psutil = MagicMock()
     # 16 GB in bytes
     mock_psutil.virtual_memory().total = 16 * (1024**3)
-    monkeypatch.setattr(torchfits.cache, "psutil", mock_psutil)
+    monkeypatch.setattr(torchsky.cache, "psutil", mock_psutil)
 
     # Ensure no other env vars are present
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
@@ -48,7 +48,7 @@ def test_optimal_cache_config_hpc(monkeypatch):
     mock_psutil = MagicMock()
     # 64 GB
     mock_psutil.virtual_memory().total = 64 * (1024**3)
-    monkeypatch.setattr(torchfits.cache, "psutil", mock_psutil)
+    monkeypatch.setattr(torchsky.cache, "psutil", mock_psutil)
 
     monkeypatch.setenv("SLURM_JOB_ID", "12345")
 
@@ -67,7 +67,7 @@ def test_optimal_cache_config_cloud(monkeypatch):
     mock_psutil = MagicMock()
     # 16 GB
     mock_psutil.virtual_memory().total = 16 * (1024**3)
-    monkeypatch.setattr(torchfits.cache, "psutil", mock_psutil)
+    monkeypatch.setattr(torchsky.cache, "psutil", mock_psutil)
 
     monkeypatch.setenv("AWS_EXECUTION_ENV", "lambda")
 
@@ -86,7 +86,7 @@ def test_optimal_cache_config_gpu(monkeypatch):
     mock_psutil = MagicMock()
     # 32 GB
     mock_psutil.virtual_memory().total = 32 * (1024**3)
-    monkeypatch.setattr(torchfits.cache, "psutil", mock_psutil)
+    monkeypatch.setattr(torchsky.cache, "psutil", mock_psutil)
 
     # Mocking CacheConfig._is_gpu_environment directly
     monkeypatch.setattr(CacheConfig, "_is_gpu_environment", lambda: True)

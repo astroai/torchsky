@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Example of Spherical Harmonic Transforms using torchfits.sphere.
+"""Example of Spherical Harmonic Transforms using torchsky.sphere.
 
 This example demonstrates:
 1. Generating a random Gaussian map from a power spectrum.
@@ -9,7 +9,7 @@ This example demonstrates:
 """
 
 import torch
-import torchfits.sphere as sphere
+import torchsky.sphere as sphere
 
 
 def main():

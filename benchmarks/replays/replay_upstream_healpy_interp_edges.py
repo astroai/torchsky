@@ -21,7 +21,7 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from benchmarks.config import DEFAULT_OUTPUT_DIR  # noqa: E402
-from torchfits.wcs.healpix import get_interp_val, get_interp_weights  # noqa: E402
+from torchsky.wcs.healpix import get_interp_val, get_interp_weights  # noqa: E402
 
 
 @dataclass
@@ -32,7 +32,7 @@ class Row:
     n_points: int
     mismatches: int
     max_abs_err: float
-    torchfits_mpts_s: float
+    torchsky_mpts_s: float
     healpy_mpts_s: float
     ratio_vs_healpy: float
 
@@ -219,7 +219,7 @@ def main() -> int:
                     n_points=int(lon_perf.size),
                     mismatches=mm,
                     max_abs_err=float("nan"),
-                    torchfits_mpts_s=(lon_perf.size / t_tf) / 1e6,
+                    torchsky_mpts_s=(lon_perf.size / t_tf) / 1e6,
                     healpy_mpts_s=(lon_perf.size / t_hp) / 1e6,
                     ratio_vs_healpy=t_hp / t_tf,
                 )
@@ -260,7 +260,7 @@ def main() -> int:
                     n_points=int(lon_perf.size),
                     mismatches=0,
                     max_abs_err=max_abs,
-                    torchfits_mpts_s=(lon_perf.size / t_tf) / 1e6,
+                    torchsky_mpts_s=(lon_perf.size / t_tf) / 1e6,
                     healpy_mpts_s=(lon_perf.size / t_hp) / 1e6,
                     ratio_vs_healpy=t_hp / t_tf,
                 )
@@ -298,7 +298,7 @@ def main() -> int:
                     n_points=int(pix_perf.size),
                     mismatches=mm_p,
                     max_abs_err=float("nan"),
-                    torchfits_mpts_s=(pix_perf.size / t_tf) / 1e6,
+                    torchsky_mpts_s=(pix_perf.size / t_tf) / 1e6,
                     healpy_mpts_s=(pix_perf.size / t_hp) / 1e6,
                     ratio_vs_healpy=t_hp / t_tf,
                 )
@@ -311,7 +311,7 @@ def main() -> int:
         print(
             f"{r.operation:24s} {r.nside:5d} {str(r.nest):5s} {r.n_points:5d}"
             f" {r.mismatches:11d} {r.max_abs_err:12.3e}"
-            f" {r.torchfits_mpts_s:10.3f} {r.healpy_mpts_s:10.3f} {r.ratio_vs_healpy:7.3f}"
+            f" {r.torchsky_mpts_s:10.3f} {r.healpy_mpts_s:10.3f} {r.ratio_vs_healpy:7.3f}"
         )
 
     failures: list[str] = []

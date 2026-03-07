@@ -19,7 +19,7 @@ from statistics import median  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 import torch  # noqa: E402
-import torchfits  # noqa: E402
+import torchsky  # noqa: E402
 
 from bench_all import ExhaustiveBenchmarkSuite  # noqa: E402
 
@@ -42,10 +42,10 @@ def main() -> None:
         return
 
     def read_scaled():
-        return torchfits.read(str(path), hdu=0, mmap=True, scale_on_device=True)
+        return torchsky.read(str(path), hdu=0, mmap=True, scale_on_device=True)
 
     def read_direct():
-        data, scaled, bscale, bzero = torchfits.cpp.read_full_raw_with_scale(
+        data, scaled, bscale, bzero = torchsky.cpp.read_full_raw_with_scale(
             str(path), 0, True
         )
         if scaled:

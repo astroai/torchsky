@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Benchmark script to compare torchfits performance on CPU vs MPS.
+Benchmark script to compare torchsky performance on CPU vs MPS.
 """
 
 import gc
@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from astropy.io import fits as astropy_fits
 
-import torchfits
+import torchsky
 
 
 def bench_mps_vs_cpu():
@@ -50,7 +50,7 @@ def bench_mps_vs_cpu():
         # CPU
         gc.collect()
         start = time.perf_counter()
-        cpu_data, _ = torchfits.read(str(img_path), device="cpu", return_header=True)
+        cpu_data, _ = torchsky.read(str(img_path), device="cpu", return_header=True)
         cpu_time = time.perf_counter() - start
         print(f"  CPU Read: {cpu_time:.4f}s")
 
@@ -58,7 +58,7 @@ def bench_mps_vs_cpu():
         gc.collect()
         torch.mps.empty_cache()
         start = time.perf_counter()
-        mps_data, _ = torchfits.read(str(img_path), device="mps", return_header=True)
+        mps_data, _ = torchsky.read(str(img_path), device="mps", return_header=True)
         torch.mps.synchronize()  # Ensure operation is complete
         mps_time = time.perf_counter() - start
         print(f"  MPS Read: {mps_time:.4f}s")
@@ -73,7 +73,7 @@ def bench_mps_vs_cpu():
 
         # 3. Benchmark Simple Transform (e.g. AsinhStretch)
         print("\n3. Benchmarking Transform (AsinhStretch):")
-        from torchfits.transforms import AsinhStretch
+        from torchsky.transforms import AsinhStretch
 
         transform = AsinhStretch()
 
@@ -117,14 +117,14 @@ def bench_mps_vs_cpu():
         # CPU
         gc.collect()
         start = time.perf_counter()
-        cpu_table, _ = torchfits.read(str(table_path), device="cpu", return_header=True)
+        cpu_table, _ = torchsky.read(str(table_path), device="cpu", return_header=True)
         cpu_table_time = time.perf_counter() - start
         print(f"  CPU Table Read: {cpu_table_time:.4f}s")
 
         gc.collect()
         torch.mps.empty_cache()
         start = time.perf_counter()
-        mps_table, _ = torchfits.read(str(table_path), device="mps", return_header=True)
+        mps_table, _ = torchsky.read(str(table_path), device="mps", return_header=True)
         # Synchronize all tensors
         if isinstance(mps_table, dict):
             for v in mps_table.values():

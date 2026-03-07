@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark torchfits spherical-core primitives."""
+"""Benchmark torchsky spherical-core primitives."""
 
 from __future__ import annotations
 
@@ -23,8 +23,8 @@ from typing import Any, Callable  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
-from torchfits.sphere.core import pairwise_angular_distance, sample_multiband_healpix  # noqa: E402
-from torchfits.sphere.geom import query_ellipse  # noqa: E402
+from torchsky.sphere.core import pairwise_angular_distance, sample_multiband_healpix  # noqa: E402
+from torchsky.sphere.geom import query_ellipse  # noqa: E402
 
 try:
     import healpy
@@ -202,7 +202,7 @@ def main() -> int:
                 "n_points": args.n_points,
                 "n_bands": args.n_bands,
                 "m_samples_s": (args.n_points * args.n_bands) / t_hp / 1e6,
-                "ratio_torchfits_bilinear_vs_healpy_loop": t_hp / t_bilinear,
+                "ratio_torchsky_bilinear_vs_healpy_loop": t_hp / t_bilinear,
             }
         )
 

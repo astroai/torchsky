@@ -5,7 +5,7 @@ import torch
 from astropy.io import fits
 from astropy.table import Table
 
-import torchfits
+import torchsky
 
 
 def create_ascii_table(filename):
@@ -43,7 +43,7 @@ def test_ascii_table():
     create_ascii_table(filename)
 
     # Test standard reading
-    hdul = torchfits.HDUList.fromfile(filename)
+    hdul = torchsky.HDUList.fromfile(filename)
     table_hdu = hdul[1]
 
     data = table_hdu.data
@@ -52,7 +52,7 @@ def test_ascii_table():
     assert torch.allclose(data["b"], torch.tensor([4.5, 5.5, 6.5], dtype=torch.float64))
 
     # Strings might be bytes or converted?
-    # torchfits usually returns byte tensor for strings.
+    # torchsky usually returns byte tensor for strings.
     # 'x' -> 120.
 
     # Verify string content

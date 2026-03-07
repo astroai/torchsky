@@ -4,7 +4,7 @@ import torch
 from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
 
-from torchfits.wcs.core import WCS
+from torchsky.wcs.core import WCS
 
 
 ALLSKY = ("AIT", "MOL", "HPX")

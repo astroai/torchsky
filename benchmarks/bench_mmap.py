@@ -9,7 +9,7 @@ import fitsio
 import numpy as np
 import psutil
 
-import torchfits
+import torchsky
 
 
 def _time_callable(func: Callable[[], Any], runs: int, warmup: int) -> Dict[str, float]:
@@ -62,8 +62,8 @@ def bench_mmap(args: argparse.Namespace) -> None:
     initial_fds = get_open_fds()
     print(f"Initial open FDs: {initial_fds}")
 
-    def read_torchfits():
-        return torchfits.read(
+    def read_torchsky():
+        return torchsky.read(
             filename,
             mmap=True,
             policy="smart",
@@ -73,7 +73,7 @@ def bench_mmap(args: argparse.Namespace) -> None:
     def read_fitsio():
         return fitsio.read(filename)
 
-    tf_stats = _time_callable(read_torchfits, runs=args.runs, warmup=args.warmup)
+    tf_stats = _time_callable(read_torchsky, runs=args.runs, warmup=args.warmup)
     fi_stats = _time_callable(read_fitsio, runs=args.runs, warmup=args.warmup)
 
     print(
@@ -90,7 +90,7 @@ def bench_mmap(args: argparse.Namespace) -> None:
     )
     print(f"Speedup (median):  {fi_stats['median_s'] / tf_stats['median_s']:.2f}x")
 
-    torchfits.clear_file_cache()
+    torchsky.clear_file_cache()
     gc.collect()
     final_fds = get_open_fds()
     print(f"Final open FDs: {final_fds}")
@@ -104,7 +104,7 @@ def bench_mmap(args: argparse.Namespace) -> None:
 
     print("\nTesting Error Handling...")
     try:
-        torchfits.open("non_existent_file.fits")
+        torchsky.open("non_existent_file.fits")
     except FileNotFoundError:
         print("[diagnostic] PASS: correctly caught FileNotFoundError")
     except Exception as e:

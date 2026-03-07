@@ -1,8 +1,8 @@
 import numpy as np
 import torch
 
-from torchfits.sphere.sparse import SparseHealpixMap
-from torchfits.wcs import healpix as hp
+from torchsky.sphere.sparse import SparseHealpixMap
+from torchsky.wcs import healpix as hp
 
 
 def test_sparse_from_dense_roundtrip() -> None:

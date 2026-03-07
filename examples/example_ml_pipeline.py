@@ -2,7 +2,7 @@
 Comprehensive ML Pipeline Example for TorchFITS 0.9
 
 This example demonstrates a complete machine learning pipeline using all
-major torchfits features including data loading, transforms, caching,
+major torchsky features including data loading, transforms, caching,
 buffer management, and distributed training support.
 """
 
@@ -13,8 +13,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-# Import torchfits components
-from torchfits import buffer, cache, dataloader, transforms
+# Import torchsky components
+from torchsky import buffer, cache, dataloader, transforms
 
 
 class AstronomicalCNN(nn.Module):
@@ -115,7 +115,7 @@ class MockFITSDataset:
 
 
 def setup_environment():
-    """Set up the torchfits environment with optimal configurations."""
+    """Set up the torchsky environment with optimal configurations."""
     print("🔧 Setting up TorchFITS environment...")
 
     # Configure cache for optimal performance
@@ -314,7 +314,7 @@ def train_model(model, train_loader, val_loader, num_epochs: int = 5):
 
 
 def demonstrate_advanced_features():
-    """Demonstrate advanced torchfits features."""
+    """Demonstrate advanced torchsky features."""
     print("\n🔬 Demonstrating Advanced Features...")
 
     # 1. Transform performance comparison

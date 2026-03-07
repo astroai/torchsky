@@ -56,7 +56,7 @@ def _parse_ratio_spec(spec: str | None) -> dict[str, float]:
 
 
 def _ratios_vs_healpy(
-    rows: list[dict[str, Any]], library: str = "torchfits"
+    rows: list[dict[str, Any]], library: str = "torchsky"
 ) -> dict[str, float]:
     by_key = {
         (str(r["library"]), str(r["operation"])): float(r["mpts_s"]) for r in rows
@@ -81,7 +81,7 @@ def main() -> int:
     parser.add_argument(
         "--device", choices=["auto", "cpu", "cuda", "mps"], default="cpu"
     )
-    parser.add_argument("--libraries", type=str, default="torchfits,healpy")
+    parser.add_argument("--libraries", type=str, default="torchsky,healpy")
     parser.add_argument("--strict-missing", action="store_true")
     parser.add_argument("--allow-nonrelease-distributions", action="store_true")
     parser.add_argument("--max-index-mismatches", type=int, default=0)
@@ -94,7 +94,7 @@ def main() -> int:
             "ang2pix_ring=1.8,ang2pix_nested=1.35,pix2ang_ring=1.15,"
             "pix2ang_nested=1.0,ring2nest=1.05,nest2ring=1.35"
         ),
-        help="Comma-separated op=ratio thresholds for median(torchfits/healpy) across profiles",
+        help="Comma-separated op=ratio thresholds for median(torchsky/healpy) across profiles",
     )
     parser.add_argument(
         "--output-dir",
@@ -168,7 +168,7 @@ def main() -> int:
 
         rows = json.loads(out_json.read_text(encoding="utf-8"))
         rows_by_profile[profile] = rows
-        ratios = _ratios_vs_healpy(rows, library="torchfits")
+        ratios = _ratios_vs_healpy(rows, library="torchsky")
         ratios_by_profile[profile] = ratios
         json_paths[profile] = str(out_json)
 
@@ -197,7 +197,7 @@ def main() -> int:
     summary = {
         "profiles": profiles,
         "json_paths": json_paths,
-        "median_ratios_torchfits_vs_healpy": median_ratios,
+        "median_ratios_torchsky_vs_healpy": median_ratios,
         "min_median_ratio_thresholds": min_median_ratios,
         "failed_thresholds": [
             {"operation": op, "threshold": thr, "observed": got}

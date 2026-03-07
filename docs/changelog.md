@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to torchfits will be documented in this file.
+All notable changes to torchsky will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -11,39 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Sphere Spectral Parity**: Added comprehensive `test_synalm_parity.py` to ensure exact parity with `healpy` generation paths (`synalm`, `synfast`, etc.).
 
 ### Fixed
-- **Spectral Transforms**: Resolved minor parity bugs in `torchfits.sphere.spectral` relating to harmonic primitive precision.
+- **Spectral Transforms**: Resolved minor parity bugs in `torchsky.sphere.spectral` relating to harmonic primitive precision.
 
 ### Performance
-- Re-baselined the exhaustive benchmark suite. `torchfits` maintains its 100% win rate against `fitsio` and improves aggregate WCS leadership (80.7% win rate vs AST/Astropy).
+- Re-baselined the exhaustive benchmark suite. `torchsky` maintains its 100% win rate against `fitsio` and improves aggregate WCS leadership (80.7% win rate vs AST/Astropy).
 
 ## [0.3.0] - 2026-03-06
 
 ### Added
-- **Native PyTorch WCS (`torchfits.wcs`)**: A complete, pure-PyTorch reimplementation of astronomical coordinate transformations.
+- **Native PyTorch WCS (`torchsky.wcs`)**: A complete, pure-PyTorch reimplementation of astronomical coordinate transformations.
     - Support for core projections: `TAN`, `SIN`, `ARC`, `ZPN`, `ZEA`, `HPX`, `AIT`, `MOL`, `MER`, `CEA`, `STG`, `CYP`.
     - Support for polynomial distortions: `SIP`, `TPV`, `TNX`, `ZPX`.
     - Batch-accelerated `pixel_to_world` and `world_to_pixel` transformations.
-    - Automatic initialization from FITS headers via `torchfits.get_wcs()`.
-- **Spherical Geometry & HEALPix (`torchfits.sphere`)**:
+    - Automatic initialization from FITS headers via `torchsky.get_wcs()`.
+- **Spherical Geometry & HEALPix (`torchsky.sphere`)**:
     - Core HEALPix primitives: `ang2pix`, `pix2ang`, `nest2ring`, `ring2nest`, `neighbors`, `interp`.
     - **Spherical Polygons**: Support for non-convex region queries, area calculations, and `contains` checks on the unit sphere.
     - **Harmonic Transforms**: Initial support for `map2alm` and `alm2map` (scalar and spin transforms).
     - **Multi-Order Coverage (MOC)**: Basic support for `MOC` maps and filtering.
     - **HealSparse**: Unified API for `HealSparseMap` targets and sparse-to-dense conversions.
-- **Spectral Data Support (`torchfits.spectral`)**:
+- **Spectral Data Support (`torchsky.spectral`)**:
     - `Spectrum1D`: Specialized container for 1D spectra with flux, uncertainty (ivar/error), and mask handling.
     - `DataCube`: Support for IFU (Integral Field Unit) cubes with spectral axis and spatial wcs integration.
     - `SpectralAxis`: Unit-aware spectral coordinate management (wavelength, frequency, velocity).
 - **ML Loader Enhancements**: Improved `FITSDataset` and `create_fits_dataloader` with better payload auto-detection (`hdu="auto"`) and more robust multi-worker handling.
 
 ### Changed
-- **WCS Resolution**: `torchfits.get_wcs` now consistently resolves to the native PyTorch implementation, removing runtime dependency on external C++ libs for coordinates.
+- **WCS Resolution**: `torchsky.get_wcs` now consistently resolves to the native PyTorch implementation, removing runtime dependency on external C++ libs for coordinates.
 - **Build System**: Removed all `WCSLIB` detection and linking logic. The C++ engine is now leaner, focusing exclusively on FITS I/O (vendored `cfitsio`).
 - **Standardized Benchmark Output**: Default benchmark results now consistently target the `benchmarks_results/` directory.
 
 ### Removed
 - **External Dependency (WCSLIB)**: Completely removed the C++ `wcslib` dependency, significantly reducing binary size and making wheels fully self-contained.
-- **Legacy Components**: Removed the obsolete monolithic `wcs.py` and the redundant `torchfits.fits` namespace.
+- **Legacy Components**: Removed the obsolete monolithic `wcs.py` and the redundant `torchsky.fits` namespace.
 - **Developmental Artifacts**: Cleaned up transient test artifacts and local tool metadata.
 
 ### Performance
@@ -70,7 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-02-14
 
 ### Added
-- Arrow-native table API in `torchfits.table`: `read()`, `scan()`, `reader()`, `dataset()`, `scanner()`.
+- Arrow-native table API in `torchsky.table`: `read()`, `scan()`, `reader()`, `dataset()`, `scanner()`.
 - In-place FITS table mutation APIs: `append_rows()`, `insert_rows()`, `delete_rows()`, `update_rows()`, `insert_column()`, `replace_column()`, `rename_columns()`, `drop_columns()`.
 - `TableHDURef` file-backed mutation helpers (`*_file`) and expanded lazy-handle workflow.
 - HTML representation for `HDUList` in notebook environments.
@@ -95,7 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance Notes
 - Benchmarks were re-baselined and workflow noise was reduced (repeat control, focused suites, stable fast runs) to make before/after performance comparisons more reproducible.
-- Full 0.2.0 release benchmark (with tables) shows torchfits ahead in 87/88 `read_full` rows vs `fitsio` and 87/88 vs `fitsio_torch`; only `medium_float64_2d` remains a slight loss in this snapshot.
+- Full 0.2.0 release benchmark (with tables) shows torchsky ahead in 87/88 `read_full` rows vs `fitsio` and 87/88 vs `fitsio_torch`; only `medium_float64_2d` remains a slight loss in this snapshot.
 - ML-loader benchmark configuration was aligned for fairer comparisons (persistent workers + payload HDU detection); current CPU results are near parity with run-to-run variance (uncompressed median 0.985x vs `fitsio`, compressed median 1.008x), so performance claims should use repeated runs rather than single-shot output.
 
 ## [0.1.1] - 2025-12-05
@@ -187,9 +187,9 @@ Historical note for `0.1.0` at release time:
 - NumPy ≥ 1.20
 - cfitsio (bundled)
 
-[0.1.0]: https://github.com/sfabbro/torchfits/releases/tag/v0.1.0
-[0.1.1]: https://github.com/sfabbro/torchfits/releases/tag/v0.1.1
-[0.2.0]: https://github.com/sfabbro/torchfits/releases/tag/v0.2.0
-[0.2.1]: https://github.com/sfabbro/torchfits/releases/tag/v0.2.1
-[0.3.0]: https://github.com/sfabbro/torchfits/releases/tag/v0.3.0
-[0.3.1]: https://github.com/sfabbro/torchfits/releases/tag/v0.3.1
+[0.1.0]: https://github.com/sfabbro/torchsky/releases/tag/v0.1.0
+[0.1.1]: https://github.com/sfabbro/torchsky/releases/tag/v0.1.1
+[0.2.0]: https://github.com/sfabbro/torchsky/releases/tag/v0.2.0
+[0.2.1]: https://github.com/sfabbro/torchsky/releases/tag/v0.2.1
+[0.3.0]: https://github.com/sfabbro/torchsky/releases/tag/v0.3.0
+[0.3.1]: https://github.com/sfabbro/torchsky/releases/tag/v0.3.1

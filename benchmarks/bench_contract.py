@@ -53,8 +53,8 @@ DEFICIT_COLUMNS = [
     "case_label",
     "operation",
     "mmap_target",
-    "torchfits_method",
-    "torchfits_time_s",
+    "torchsky_method",
+    "torchsky_time_s",
     "best_library",
     "best_method",
     "best_time_s",
@@ -173,9 +173,9 @@ def compute_deficits(rows: list[dict[str, Any]], run_id: str) -> list[dict[str, 
         ].append(row)
 
     preferred_method_by_family = {
-        "smart": "torchfits",
-        "specialized": "torchfits_specialized",
-        "numpy": "torchfits_numpy",
+        "smart": "torchsky",
+        "specialized": "torchsky_specialized",
+        "numpy": "torchsky_numpy",
     }
 
     deficits: list[dict[str, Any]] = []
@@ -198,7 +198,7 @@ def compute_deficits(rows: list[dict[str, Any]], run_id: str) -> list[dict[str, 
         best_row, best_t = comparable_rows[0]
 
         tf_candidates = [
-            r for (r, _t) in comparable_rows if str(r.get("library")) == "torchfits"
+            r for (r, _t) in comparable_rows if str(r.get("library")) == "torchsky"
         ]
         if not tf_candidates:
             continue
@@ -212,7 +212,7 @@ def compute_deficits(rows: list[dict[str, Any]], run_id: str) -> list[dict[str, 
                     break
         if torch_row is None:
             for r in tf_candidates:
-                if str(r.get("method", "")).startswith("torchfits"):
+                if str(r.get("method", "")).startswith("torchsky"):
                     torch_row = r
                     break
         if torch_row is None:
@@ -239,8 +239,8 @@ def compute_deficits(rows: list[dict[str, Any]], run_id: str) -> list[dict[str, 
                 "case_label": torch_row.get("case_label"),
                 "operation": torch_row.get("operation"),
                 "mmap_target": torch_row.get("mmap_target"),
-                "torchfits_method": torch_row.get("method"),
-                "torchfits_time_s": tf_time,
+                "torchsky_method": torch_row.get("method"),
+                "torchsky_time_s": tf_time,
                 "best_library": best_row.get("library"),
                 "best_method": best_row.get("method"),
                 "best_time_s": best_t,
@@ -325,9 +325,9 @@ def write_summary(
 
     # Build astronomer-facing performance scorecard from comparable groups.
     preferred_method_by_family = {
-        "smart": "torchfits",
-        "specialized": "torchfits_specialized",
-        "numpy": "torchfits_numpy",
+        "smart": "torchsky",
+        "specialized": "torchsky_specialized",
+        "numpy": "torchsky_numpy",
     }
     grouped: dict[
         tuple[str, str, str], list[tuple[dict[str, Any], float]]
@@ -352,7 +352,7 @@ def write_summary(
     )
     for (domain, _case_id, family), grp in grouped.items():
         grp.sort(key=lambda x: x[1])
-        tf_candidates = [r for (r, _t) in grp if str(r.get("library")) == "torchfits"]
+        tf_candidates = [r for (r, _t) in grp if str(r.get("library")) == "torchsky"]
         if not tf_candidates:
             continue
 
@@ -365,7 +365,7 @@ def write_summary(
                     break
         if torch_row is None:
             for r in tf_candidates:
-                if str(r.get("method", "")).startswith("torchfits"):
+                if str(r.get("method", "")).startswith("torchsky"):
                     torch_row = r
                     break
         if torch_row is None:
@@ -387,7 +387,7 @@ def write_summary(
 
     torch_devices: set[str] = set()
     for row in rows:
-        if str(row.get("library")) != "torchfits":
+        if str(row.get("library")) != "torchsky":
             continue
         dev = str(_metadata_dict(row).get("device", "")).strip()
         if dev:
@@ -435,7 +435,7 @@ def write_summary(
         f.write("## Adoption Checks\n\n")
         f.write(f"- `large-N` threshold: `n_points >= {LARGE_N_THRESHOLD}`\n")
         f.write(
-            f"- `small-N perceived` threshold: `torchfits_time_s < {SMALL_N_PERCEIVED_LATENCY_S:.6f}s`\n"
+            f"- `small-N perceived` threshold: `torchsky_time_s < {SMALL_N_PERCEIVED_LATENCY_S:.6f}s`\n"
         )
         f.write(
             f"- `small-N max lag` threshold: `lag_ratio < {SMALL_N_MAX_LAG_RATIO:.1f}x`\n\n"
@@ -482,7 +482,7 @@ def write_summary(
             f.write("|---|---:|---:|---:|---|\n")
             for row in visible_small_deficits:
                 f.write(
-                    f"| {row.get('case_label')} | {_fmt_float(row.get('torchfits_time_s'), 6)} | {_fmt_float(row.get('lag_ratio'), 3)} | {_fmt_float(row.get('pct_behind'), 2)} | {row.get('perceived_impact')} |\n"
+                    f"| {row.get('case_label')} | {_fmt_float(row.get('torchsky_time_s'), 6)} | {_fmt_float(row.get('lag_ratio'), 3)} | {_fmt_float(row.get('pct_behind'), 2)} | {row.get('perceived_impact')} |\n"
                 )
             f.write("\n")
         else:
@@ -499,7 +499,7 @@ def write_summary(
                 )
                 f.write("|---|---|---:|---|---:|---:|---:|---|\n")
                 for row in items:
-                    tf_time = _fmt_float(row.get("torchfits_time_s"), 6)
+                    tf_time = _fmt_float(row.get("torchsky_time_s"), 6)
                     best_time = _fmt_float(row.get("best_time_s"), 6)
                     lag = _fmt_float(row.get("lag_ratio"), 3)
                     pct = _fmt_float(row.get("pct_behind"), 2)

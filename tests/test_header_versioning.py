@@ -3,9 +3,9 @@ import types
 from unittest.mock import MagicMock
 import torch
 
-# Mock setups must be done before importing torchfits
+# Mock setups must be done before importing torchsky
 # This mock setup allows running this test without compiling the C++ extension
-if "torchfits.cpp" not in sys.modules:
+if "torchsky.cpp" not in sys.modules:
     frame_mock = MagicMock()
     frame_mock.TensorFrame = object
     sys.modules["torch_frame"] = frame_mock
@@ -25,11 +25,11 @@ if "torchfits.cpp" not in sys.modules:
     wcs_instance.latpole = 0.0
     cpp_mock.WCS.return_value = wcs_instance
 
-    module = types.ModuleType("torchfits.cpp")
+    module = types.ModuleType("torchsky.cpp")
     module.WCS = cpp_mock.WCS
-    sys.modules["torchfits.cpp"] = module
+    sys.modules["torchsky.cpp"] = module
 
-from torchfits.hdu import Header, TensorHDU
+from torchsky.hdu import Header, TensorHDU
 
 
 def test_header_versioning():

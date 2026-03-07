@@ -1,6 +1,6 @@
 import torch
 
-import torchfits.transforms as T
+import torchsky.transforms as T
 
 
 def test_poisson_noise():

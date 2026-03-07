@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from astropy.io import fits
 
-import torchfits
+import torchsky
 
 
 def test_writing():
@@ -12,19 +12,19 @@ def test_writing():
 
     # Create TensorHDU
     data_tensor = torch.randn(10, 10)
-    header_tensor = torchfits.Header({"TESTKEY": "TESTVAL"})
-    hdu_tensor = torchfits.TensorHDU(data=data_tensor, header=header_tensor)
+    header_tensor = torchsky.Header({"TESTKEY": "TESTVAL"})
+    hdu_tensor = torchsky.TensorHDU(data=data_tensor, header=header_tensor)
 
     # Create TableHDU
     data_table = {
         "col1": torch.tensor([1, 2, 3], dtype=torch.int32),
         "col2": torch.tensor([1.1, 2.2, 3.3], dtype=torch.float32),
     }
-    header_table = torchfits.Header({"TBLKEY": "TBLVAL"})
-    hdu_table = torchfits.TableHDU(data_table, header=header_table)
+    header_table = torchsky.Header({"TBLKEY": "TBLVAL"})
+    hdu_table = torchsky.TableHDU(data_table, header=header_table)
 
     # Create HDUList
-    hdul = torchfits.HDUList([hdu_tensor, hdu_table])
+    hdul = torchsky.HDUList([hdu_tensor, hdu_table])
 
     def assert_written(path: str) -> None:
         with fits.open(path) as hdul_astro:
@@ -52,7 +52,7 @@ def test_writing():
         assert_written(filenames[0])
 
         # Write via top-level helper
-        torchfits.write(filenames[1], hdul, overwrite=True)
+        torchsky.write(filenames[1], hdul, overwrite=True)
         assert_written(filenames[1])
     finally:
         for path in filenames:
@@ -64,7 +64,7 @@ def test_table_write_bool_preserved():
     filename = "test_write_bool_table.fits"
     data_table = {"flag": torch.tensor([True, False, True], dtype=torch.bool)}
     try:
-        torchfits.write(filename, data_table, overwrite=True)
+        torchsky.write(filename, data_table, overwrite=True)
         with fits.open(filename) as hdul:
             values = hdul[1].data["flag"]
             assert values.tolist() == [True, False, True]
@@ -77,7 +77,7 @@ def test_write_accepts_list_table_dict():
     filename = "test_write_list_table_dict.fits"
     table = {"flag": [True, False, True]}
     try:
-        torchfits.write(filename, table, overwrite=True)
+        torchsky.write(filename, table, overwrite=True)
         with fits.open(filename) as hdul:
             values = hdul[1].data["flag"]
             assert values.tolist() == [True, False, True]
@@ -99,8 +99,8 @@ def test_table_write_rich_types_pending_cfitsio_impl():
         ],
     }
     try:
-        torchfits.write(filename, table, header={"EXTNAME": "CATALOG"}, overwrite=True)
-        with torchfits.open(filename) as hdul:
+        torchsky.write(filename, table, header={"EXTNAME": "CATALOG"}, overwrite=True)
+        with torchsky.open(filename) as hdul:
             table_hdu = hdul[1]
             assert table_hdu.header.get("EXTNAME") == "CATALOG"
             assert table_hdu.get_string_column("NAME") == ["alpha", "beta", "gamma"]
@@ -122,8 +122,8 @@ def test_table_write_complex_tensor_pending_cfitsio_impl():
         "Z": torch.tensor([1 + 2j, 3 + 4j, 5 + 6j], dtype=torch.complex64),
     }
     try:
-        torchfits.write(filename, table, overwrite=True)
-        with torchfits.open(filename) as hdul:
+        torchsky.write(filename, table, overwrite=True)
+        with torchsky.open(filename) as hdul:
             vals = hdul[1]["Z"].squeeze(-1)
             assert np.allclose(
                 vals.numpy(), np.array([1 + 2j, 3 + 4j, 5 + 6j], dtype=np.complex64)
@@ -138,8 +138,8 @@ def test_write_compressed_image_roundtrip():
     # Use an integer image to ensure lossless Rice compression.
     data = torch.arange(64 * 64, dtype=torch.int16).reshape(64, 64)
     try:
-        torchfits.write(filename, data, overwrite=True, compress=True)
-        out = torchfits.read(filename, hdu=1)
+        torchsky.write(filename, data, overwrite=True, compress=True)
+        out = torchsky.read(filename, hdu=1)
         assert torch.equal(out, data)
     finally:
         if os.path.exists(filename):
@@ -150,22 +150,20 @@ def test_write_compressed_hdulist_mixed():
     filename = "test_write_compressed_hdulist_mixed.fits"
     image = torch.arange(16 * 16, dtype=torch.int16).reshape(16, 16)
     table = {"ID": np.array([1, 2, 3], dtype=np.int32), "NAME": ["a", "b", "c"]}
-    hdul = torchfits.HDUList(
+    hdul = torchsky.HDUList(
         [
-            torchfits.TensorHDU(
-                data=image, header=torchfits.Header({"EXTNAME": "SCI"})
-            ),
-            torchfits.TableHDU(table, header=torchfits.Header({"EXTNAME": "CAT"})),
+            torchsky.TensorHDU(data=image, header=torchsky.Header({"EXTNAME": "SCI"})),
+            torchsky.TableHDU(table, header=torchsky.Header({"EXTNAME": "CAT"})),
         ]
     )
     try:
-        torchfits.write(filename, hdul, overwrite=True, compress=True)
-        with torchfits.open(filename) as opened:
+        torchsky.write(filename, hdul, overwrite=True, compress=True)
+        with torchsky.open(filename) as opened:
             assert len(opened) == 3
             assert opened[1].header.get("EXTNAME") == "SCI"
             assert opened[2].header.get("EXTNAME") == "CAT"
-        assert torch.equal(torchfits.read(filename, hdu=1), image)
-        table_out = torchfits.read(filename, hdu=2)
+        assert torch.equal(torchsky.read(filename, hdu=1), image)
+        table_out = torchsky.read(filename, hdu=2)
         assert table_out["ID"].squeeze(-1).tolist() == [1, 2, 3]
     finally:
         if os.path.exists(filename):
@@ -176,24 +174,20 @@ def test_write_compressed_hdulist_images_roundtrip():
     filename = "test_write_compressed_hdulist_images.fits"
     img0 = torch.arange(64, dtype=torch.int16).reshape(8, 8)
     img1 = torch.full((8, 8), 5, dtype=torch.int16)
-    hdul = torchfits.HDUList(
+    hdul = torchsky.HDUList(
         [
-            torchfits.TensorHDU(
-                data=img0, header=torchfits.Header({"EXTNAME": "SCI0"})
-            ),
-            torchfits.TensorHDU(
-                data=img1, header=torchfits.Header({"EXTNAME": "SCI1"})
-            ),
+            torchsky.TensorHDU(data=img0, header=torchsky.Header({"EXTNAME": "SCI0"})),
+            torchsky.TensorHDU(data=img1, header=torchsky.Header({"EXTNAME": "SCI1"})),
         ]
     )
     try:
-        torchfits.write(filename, hdul, overwrite=True, compress=True)
-        with torchfits.open(filename) as opened:
+        torchsky.write(filename, hdul, overwrite=True, compress=True)
+        with torchsky.open(filename) as opened:
             assert len(opened) == 3
             assert opened[1].header.get("EXTNAME") == "SCI0"
             assert opened[2].header.get("EXTNAME") == "SCI1"
-        assert torch.equal(torchfits.read(filename, hdu=1), img0)
-        assert torch.equal(torchfits.read(filename, hdu=2), img1)
+        assert torch.equal(torchsky.read(filename, hdu=1), img0)
+        assert torch.equal(torchsky.read(filename, hdu=2), img1)
     finally:
         if os.path.exists(filename):
             os.remove(filename)
@@ -205,9 +199,9 @@ def test_write_compressed_image_tuple_roundtrip():
     img1 = torch.full((4, 4), 2, dtype=torch.int16)
     payload = (img0, img1)
     try:
-        torchfits.write(filename, payload, overwrite=True, compress=True)
-        assert torch.equal(torchfits.read(filename, hdu=1), img0)
-        assert torch.equal(torchfits.read(filename, hdu=2), img1)
+        torchsky.write(filename, payload, overwrite=True, compress=True)
+        assert torch.equal(torchsky.read(filename, hdu=1), img0)
+        assert torch.equal(torchsky.read(filename, hdu=2), img1)
     finally:
         if os.path.exists(filename):
             os.remove(filename)

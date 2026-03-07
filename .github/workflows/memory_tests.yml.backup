@@ -30,16 +30,16 @@ jobs:
     - name: Run basic functionality tests
       run: |
         python -c "
-        import torchfits
+        import torchsky
         import torch
         print('TorchFits imported successfully')
 
         # Test basic file reading
-        data = torchfits.read('examples/basic_example.fits')
+        data = torchsky.read('examples/basic_example.fits')
         print(f'Read data shape: {data.shape}')
 
         # Test table reading
-        table_data = torchfits.read('examples/table_example.fits', hdu=1)
+        table_data = torchsky.read('examples/table_example.fits', hdu=1)
         print(f'Table has {len(table_data)} columns')
 
         print('Basic tests passed!')
@@ -73,31 +73,31 @@ jobs:
       run: |
         # Create memory test script
         cat > memory_test.py << 'EOF'
-        import torchfits
+        import torchsky
         import torch
         import os
 
         # Test basic file reading with existing example file
         print("Testing basic FITS reading...")
-        data = torchfits.read("examples/basic_example.fits")
+        data = torchsky.read("examples/basic_example.fits")
         print(f"Read data shape: {data.shape}")
 
         # Test table reading
         print("Testing table reading...")
-        table_data = torchfits.read("examples/table_example.fits", hdu=1)
+        table_data = torchsky.read("examples/table_example.fits", hdu=1)
         print(f"Table columns: {list(table_data.keys())}")
 
         # Test header reading
         print("Testing header reading...")
-        header = torchfits.get_header("examples/basic_example.fits")
+        header = torchsky.get_header("examples/basic_example.fits")
         print(f"Header keys: {len(header)} entries")
 
         # Test WCS if header has WCS info
         try:
             coords = torch.tensor([[10.0, 10.0]], dtype=torch.float64)
             if any(key.startswith('CTYPE') for key in header.keys()):
-                world_coords = torchfits.pixel_to_world(coords, header)
-                pixel_coords = torchfits.world_to_pixel(world_coords, header)
+                world_coords = torchsky.pixel_to_world(coords, header)
+                pixel_coords = torchsky.world_to_pixel(world_coords, header)
                 print("WCS transformations successful")
             else:
                 print("No WCS info in header, skipping WCS tests")
@@ -106,7 +106,7 @@ jobs:
 
         # Test cache clearing
         try:
-            torchfits._clear_cache()
+            torchsky._clear_cache()
             print("Cache cleared successfully")
         except Exception as e:
             print(f"Cache clearing failed: {e}")

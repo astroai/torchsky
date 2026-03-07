@@ -1,8 +1,8 @@
 #!/ reentry-compatible/env python3
-"""Example of basic HEALPix operations using torchfits.sphere."""
+"""Example of basic HEALPix operations using torchsky.sphere."""
 
 import torch
-import torchfits.sphere as sphere
+import torchsky.sphere as sphere
 
 
 def main():

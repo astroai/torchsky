@@ -34,7 +34,7 @@ import torch
 from astropy.io import fits as astropy_fits
 from astropy.io.fits import CompImageHDU
 
-import torchfits
+import torchsky
 
 configure = None
 plt = None
@@ -43,7 +43,7 @@ sns = None
 
 class ExhaustiveBenchmarkSuite:
     """
-    Exhaustive benchmark suite for torchfits covering all use cases.
+    Exhaustive benchmark suite for torchsky covering all use cases.
     """
 
     def __init__(
@@ -60,7 +60,7 @@ class ExhaustiveBenchmarkSuite:
         profile: str = "user",
         payload_min_ratio: float = 0.60,
     ):
-        self.temp_dir = Path(tempfile.mkdtemp(prefix="torchfits_exhaustive_"))
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="torchsky_exhaustive_"))
         self.output_dir = output_dir or DEFAULT_OUTPUT_DIR
         # Allow nested output dirs like benchmarks_results/exhaustive_YYYYmmdd_HHMMSS
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -106,7 +106,7 @@ class ExhaustiveBenchmarkSuite:
 
         self.compression_types = ["RICE_1", "GZIP_1", "GZIP_2", "HCOMPRESS_1"]
 
-    def _torchfits_mmap_mode(self):
+    def _torchsky_mmap_mode(self):
         """TorchFits mmap mode used by benchmark methods."""
         if not self.use_mmap:
             return False
@@ -116,14 +116,14 @@ class ExhaustiveBenchmarkSuite:
         # Lab profile can force explicit mmap to study low-level effects.
         return True
 
-    def _torchfits_effective_mmap_bool(self, path: Path, hdu_num: int) -> bool:
+    def _torchsky_effective_mmap_bool(self, path: Path, hdu_num: int) -> bool:
         """Resolve to a bool mmap flag for C++ methods that require bool."""
-        mode = self._torchfits_mmap_mode()
+        mode = self._torchsky_mmap_mode()
         if isinstance(mode, bool):
             return mode
         try:
             return bool(
-                torchfits._resolve_image_mmap(  # benchmark-only internal use
+                torchsky._resolve_image_mmap(  # benchmark-only internal use
                     str(path), hdu_num, mode, self.cache_capacity
                 )
             )
@@ -229,7 +229,7 @@ class ExhaustiveBenchmarkSuite:
         return files
 
     def _create_table_files(self) -> Dict[str, Path]:
-        """Create comprehensive table FITS files showing torchfits superiority."""
+        """Create comprehensive table FITS files showing torchsky superiority."""
         files = {}
 
         # Comprehensive table configurations matching bench_table_comprehensive.py
@@ -435,11 +435,11 @@ class ExhaustiveBenchmarkSuite:
         print("=" * 100)
         print(
             "Methods:\n"
-            "- smart/tensor: torchfits, astropy_torch, fitsio_torch\n"
-            "- specialized/direct: torchfits_specialized, torchfits_numpy, astropy, fitsio\n"
-            "- torchfits_hot [diag]: torchfits.read with hot torchfits cache\n"
-            "- torchfits_handle_cache [diag]: torchfits.read with data cache OFF but handle cache ON\n"
-            "- torchfits_cpp_open_once [diag]: reuse open C++ FITS handle"
+            "- smart/tensor: torchsky, astropy_torch, fitsio_torch\n"
+            "- specialized/direct: torchsky_specialized, torchsky_numpy, astropy, fitsio\n"
+            "- torchsky_hot [diag]: torchsky.read with hot torchsky cache\n"
+            "- torchsky_handle_cache [diag]: torchsky.read with data cache OFF but handle cache ON\n"
+            "- torchsky_cpp_open_once [diag]: reuse open C++ FITS handle"
         )
         print(
             "Legend (ranked table columns):\n"
@@ -457,48 +457,48 @@ class ExhaustiveBenchmarkSuite:
             "data_type",
             "dimensions",
             "compression",
-            "torchfits_mean",
-            "torchfits_std",
-            "torchfits_median",
-            "torchfits_mb_s",
-            "torchfits_memory",
-            "torchfits_peak_memory",
-            "torchfits_payload_mb",
-            "torchfits_specialized_mean",
-            "torchfits_specialized_std",
-            "torchfits_specialized_median",
-            "torchfits_specialized_mb_s",
-            "torchfits_specialized_memory",
-            "torchfits_specialized_peak_memory",
-            "torchfits_specialized_payload_mb",
-            "torchfits_numpy_mean",
-            "torchfits_numpy_std",
-            "torchfits_numpy_median",
-            "torchfits_numpy_mb_s",
-            "torchfits_numpy_memory",
-            "torchfits_numpy_peak_memory",
-            "torchfits_numpy_payload_mb",
-            "torchfits_hot_mean",
-            "torchfits_hot_std",
-            "torchfits_hot_median",
-            "torchfits_hot_mb_s",
-            "torchfits_hot_memory",
-            "torchfits_hot_peak_memory",
-            "torchfits_hot_payload_mb",
-            "torchfits_handle_cache_mean",
-            "torchfits_handle_cache_std",
-            "torchfits_handle_cache_median",
-            "torchfits_handle_cache_mb_s",
-            "torchfits_handle_cache_memory",
-            "torchfits_handle_cache_peak_memory",
-            "torchfits_handle_cache_payload_mb",
-            "torchfits_mmap_mean",
-            "torchfits_mmap_std",
-            "torchfits_mmap_median",
-            "torchfits_mmap_mb_s",
-            "torchfits_mmap_memory",
-            "torchfits_mmap_peak_memory",
-            "torchfits_mmap_payload_mb",
+            "torchsky_mean",
+            "torchsky_std",
+            "torchsky_median",
+            "torchsky_mb_s",
+            "torchsky_memory",
+            "torchsky_peak_memory",
+            "torchsky_payload_mb",
+            "torchsky_specialized_mean",
+            "torchsky_specialized_std",
+            "torchsky_specialized_median",
+            "torchsky_specialized_mb_s",
+            "torchsky_specialized_memory",
+            "torchsky_specialized_peak_memory",
+            "torchsky_specialized_payload_mb",
+            "torchsky_numpy_mean",
+            "torchsky_numpy_std",
+            "torchsky_numpy_median",
+            "torchsky_numpy_mb_s",
+            "torchsky_numpy_memory",
+            "torchsky_numpy_peak_memory",
+            "torchsky_numpy_payload_mb",
+            "torchsky_hot_mean",
+            "torchsky_hot_std",
+            "torchsky_hot_median",
+            "torchsky_hot_mb_s",
+            "torchsky_hot_memory",
+            "torchsky_hot_peak_memory",
+            "torchsky_hot_payload_mb",
+            "torchsky_handle_cache_mean",
+            "torchsky_handle_cache_std",
+            "torchsky_handle_cache_median",
+            "torchsky_handle_cache_mb_s",
+            "torchsky_handle_cache_memory",
+            "torchsky_handle_cache_peak_memory",
+            "torchsky_handle_cache_payload_mb",
+            "torchsky_mmap_mean",
+            "torchsky_mmap_std",
+            "torchsky_mmap_median",
+            "torchsky_mmap_mb_s",
+            "torchsky_mmap_memory",
+            "torchsky_mmap_peak_memory",
+            "torchsky_mmap_payload_mb",
             "astropy_mean",
             "astropy_std",
             "astropy_median",
@@ -527,24 +527,24 @@ class ExhaustiveBenchmarkSuite:
             "fitsio_torch_memory",
             "fitsio_torch_peak_memory",
             "fitsio_torch_payload_mb",
-            "torchfits_cpp_open_once_mean",
-            "torchfits_cpp_open_once_std",
-            "torchfits_cpp_open_once_median",
-            "torchfits_cpp_open_once_mb_s",
-            "torchfits_cpp_open_once_memory",
-            "torchfits_cpp_open_once_peak_memory",
-            "torchfits_cpp_open_once_payload_mb",
+            "torchsky_cpp_open_once_mean",
+            "torchsky_cpp_open_once_std",
+            "torchsky_cpp_open_once_median",
+            "torchsky_cpp_open_once_mb_s",
+            "torchsky_cpp_open_once_memory",
+            "torchsky_cpp_open_once_peak_memory",
+            "torchsky_cpp_open_once_payload_mb",
             "best_method",
-            "torchfits_rank",
+            "torchsky_rank",
             "speedup_vs_best",
             "best_method_torch",
-            "torchfits_rank_torch",
+            "torchsky_rank_torch",
             "speedup_vs_best_torch",
             "best_method_numpy",
-            "torchfits_numpy_rank",
+            "torchsky_numpy_rank",
             "speedup_vs_best_numpy",
             "best_method_specialized",
-            "torchfits_specialized_rank",
+            "torchsky_specialized_rank",
             "speedup_vs_best_specialized",
             "speedup_specialized_vs_smart",
         ]
@@ -626,28 +626,28 @@ class ExhaustiveBenchmarkSuite:
             )
             if file_type in {"compressed", "scaled"}:
                 runs = max(runs, 30)
-            tf_mmap_mode = self._torchfits_mmap_mode()
-            tf_mmap_cpp = self._torchfits_effective_mmap_bool(path, hdu_num)
+            tf_mmap_mode = self._torchsky_mmap_mode()
+            tf_mmap_cpp = self._torchsky_effective_mmap_bool(path, hdu_num)
 
             print(f"\n{name} ({size_mb:.2f} MB) - focused")
             print("-" * 80)
 
             def tf_open_close():
-                fh = torchfits.cpp.open_fits_file(str(path), "r")
+                fh = torchsky.cpp.open_fits_file(str(path), "r")
                 fh.close()
 
             def tf_header_fast():
-                fh = torchfits.cpp.open_fits_file(str(path), "r")
-                _ = torchfits.cpp.read_header_string(fh, hdu_num)
+                fh = torchsky.cpp.open_fits_file(str(path), "r")
+                _ = torchsky.cpp.read_header_string(fh, hdu_num)
                 fh.close()
 
             def tf_header_full():
-                fh = torchfits.cpp.open_fits_file(str(path), "r")
-                _ = torchfits.cpp.read_header(fh, hdu_num)
+                fh = torchsky.cpp.open_fits_file(str(path), "r")
+                _ = torchsky.cpp.read_header(fh, hdu_num)
                 fh.close()
 
             def tf_scaled():
-                return torchfits.read(
+                return torchsky.read(
                     str(path),
                     hdu=hdu_num,
                     mmap=tf_mmap_mode,
@@ -658,12 +658,12 @@ class ExhaustiveBenchmarkSuite:
                 )
 
             def tf_scaled_cpu():
-                return torchfits.cpp.read_full_scaled_cpu(
+                return torchsky.cpp.read_full_scaled_cpu(
                     str(path), hdu_num, tf_mmap_cpp
                 )
 
             def tf_raw_with_scale_direct():
-                data, scaled, bscale, bzero = torchfits.cpp.read_full_raw_with_scale(
+                data, scaled, bscale, bzero = torchsky.cpp.read_full_raw_with_scale(
                     str(path), hdu_num, tf_mmap_cpp
                 )
                 if scaled:
@@ -675,7 +675,7 @@ class ExhaustiveBenchmarkSuite:
                 return data
 
             def tf_raw():
-                return torchfits.read(
+                return torchsky.read(
                     str(path),
                     hdu=hdu_num,
                     mmap=tf_mmap_mode,
@@ -686,7 +686,7 @@ class ExhaustiveBenchmarkSuite:
                 )
 
             def tf_raw_scale_cpu():
-                data = torchfits.read(
+                data = torchsky.read(
                     str(path),
                     hdu=hdu_num,
                     mmap=tf_mmap_mode,
@@ -696,7 +696,7 @@ class ExhaustiveBenchmarkSuite:
                     handle_cache_capacity=self.handle_cache_capacity,
                 )
                 try:
-                    header = torchfits.read_header(str(path), hdu=hdu_num)
+                    header = torchsky.read_header(str(path), hdu=hdu_num)
                     bscale = float(header.get("BSCALE", 1.0))
                     bzero = float(header.get("BZERO", 0.0))
                     data = data.to(torch.float32)
@@ -709,7 +709,7 @@ class ExhaustiveBenchmarkSuite:
                 return data
 
             def tf_read_mmap_off():
-                return torchfits.read(
+                return torchsky.read(
                     str(path),
                     hdu=hdu_num,
                     mmap=False,
@@ -722,15 +722,15 @@ class ExhaustiveBenchmarkSuite:
                 return fitsio.read(str(path), ext=hdu_num)
 
             methods = {
-                "torchfits_open_close": tf_open_close,
-                "torchfits_header_fast": tf_header_fast,
-                "torchfits_header_full": tf_header_full,
-                "torchfits_scaled": tf_scaled,
-                "torchfits_scaled_cpu": tf_scaled_cpu,
-                "torchfits_raw_with_scale_direct": tf_raw_with_scale_direct,
-                "torchfits_raw": tf_raw,
-                "torchfits_raw_scale_cpu": tf_raw_scale_cpu,
-                "torchfits_mmap_off": tf_read_mmap_off,
+                "torchsky_open_close": tf_open_close,
+                "torchsky_header_fast": tf_header_fast,
+                "torchsky_header_full": tf_header_full,
+                "torchsky_scaled": tf_scaled,
+                "torchsky_scaled_cpu": tf_scaled_cpu,
+                "torchsky_raw_with_scale_direct": tf_raw_with_scale_direct,
+                "torchsky_raw": tf_raw,
+                "torchsky_raw_scale_cpu": tf_raw_scale_cpu,
+                "torchsky_mmap_off": tf_read_mmap_off,
                 "fitsio_read": fitsio_read,
             }
 
@@ -815,10 +815,10 @@ class ExhaustiveBenchmarkSuite:
             return
 
         with open(self.focused_summary_file, "w") as f:
-            f.write("# torchfits Focused Benchmark Report\n\n")
+            f.write("# torchsky Focused Benchmark Report\n\n")
             f.write(f"Generated on: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
 
-            f.write("## Overhead Breakdown (torchfits)\n\n")
+            f.write("## Overhead Breakdown (torchsky)\n\n")
             for name, g in df.groupby("filename"):
                 f.write(f"### {name}\n\n")
                 pivot = g.pivot_table(
@@ -827,11 +827,11 @@ class ExhaustiveBenchmarkSuite:
                 f.write(pivot.to_string())
                 f.write("\n\n")
 
-            f.write("## Scaling Cost (torchfits)\n\n")
+            f.write("## Scaling Cost (torchsky)\n\n")
             for name, g in df.groupby("filename"):
-                tf_scaled = g[g["method"] == "torchfits_scaled"]["time_s"]
-                tf_raw = g[g["method"] == "torchfits_raw"]["time_s"]
-                tf_raw_scale = g[g["method"] == "torchfits_raw_scale_cpu"]["time_s"]
+                tf_scaled = g[g["method"] == "torchsky_scaled"]["time_s"]
+                tf_raw = g[g["method"] == "torchsky_raw"]["time_s"]
+                tf_raw_scale = g[g["method"] == "torchsky_raw_scale_cpu"]["time_s"]
                 if not tf_scaled.empty and not tf_raw.empty:
                     f.write(
                         f"- {name}: scaled={tf_scaled.iloc[0]:.6f}s raw={tf_raw.iloc[0]:.6f}s"
@@ -841,11 +841,11 @@ class ExhaustiveBenchmarkSuite:
                     f.write("\n")
             f.write("\n")
 
-            f.write("## Header Overhead (torchfits)\n\n")
+            f.write("## Header Overhead (torchsky)\n\n")
             for name, g in df.groupby("filename"):
-                open_close = g[g["method"] == "torchfits_open_close"]["time_s"]
-                header_fast = g[g["method"] == "torchfits_header_fast"]["time_s"]
-                header_full = g[g["method"] == "torchfits_header_full"]["time_s"]
+                open_close = g[g["method"] == "torchsky_open_close"]["time_s"]
+                header_fast = g[g["method"] == "torchsky_header_fast"]["time_s"]
+                header_full = g[g["method"] == "torchsky_header_full"]["time_s"]
                 if not open_close.empty:
                     line = f"- {name}: open_close={open_close.iloc[0]:.6f}s"
                     if not header_fast.empty:
@@ -910,15 +910,15 @@ class ExhaustiveBenchmarkSuite:
         # repeats moderate so piped runs (`tee`) don't appear stalled.
         if file_type == "table" and size_mb < 0.1:
             runs = max(runs, 30)
-        tf_mmap_mode = self._torchfits_mmap_mode()
-        tf_mmap_cpp = self._torchfits_effective_mmap_bool(filepath, hdu_num)
+        tf_mmap_mode = self._torchsky_mmap_mode()
+        tf_mmap_cpp = self._torchsky_effective_mmap_bool(filepath, hdu_num)
 
         # Define benchmark methods
         methods = {}
         diagnostic_methods = {}
 
         # High-level smart path (fair against high-level astropy/fitsio wrappers).
-        methods["torchfits"] = lambda: torchfits.read(
+        methods["torchsky"] = lambda: torchsky.read(
             str(filepath),
             hdu=hdu_num,
             mmap=tf_mmap_mode,
@@ -928,9 +928,9 @@ class ExhaustiveBenchmarkSuite:
         )
 
         # Direct specialized path (fair against low-level/direct variants).
-        def _torchfits_specialized():
+        def _torchsky_specialized():
             if file_type == "table":
-                return torchfits.read_table(
+                return torchsky.read_table(
                     str(filepath),
                     hdu=hdu_num,
                     mmap=tf_mmap_mode,
@@ -938,22 +938,22 @@ class ExhaustiveBenchmarkSuite:
                     handle_cache_capacity=self.handle_cache_capacity,
                     policy="default",
                 )
-            return torchfits.read_image(
+            return torchsky.read_image(
                 str(filepath),
                 hdu=hdu_num,
                 mmap=tf_mmap_cpp,
                 handle_cache=self.handle_cache_capacity > 0,
             )
 
-        methods["torchfits_specialized"] = _torchfits_specialized
+        methods["torchsky_specialized"] = _torchsky_specialized
         # Fair comparison against numpy-returning methods (fitsio/astropy):
         # return a numpy payload (CPU) instead of a torch.Tensor.
         try:
-            import torchfits.cpp as cpp
+            import torchsky.cpp as cpp
 
             if file_type == "table":
                 if hasattr(cpp, "read_fits_table_rows_numpy"):
-                    methods["torchfits_numpy"] = lambda: cpp.read_fits_table_rows_numpy(
+                    methods["torchsky_numpy"] = lambda: cpp.read_fits_table_rows_numpy(
                         str(filepath),
                         hdu_num,
                         [],
@@ -975,29 +975,29 @@ class ExhaustiveBenchmarkSuite:
                             except Exception:
                                 pass
 
-                    methods["torchfits_numpy"] = _table_numpy_from_handle
+                    methods["torchsky_numpy"] = _table_numpy_from_handle
             else:
                 # In practice, direct numpy path is best for most dtypes, while the
                 # cached-numpy bridge can be slightly better on 64-bit payloads and
                 # some 64-bit payloads.
                 prefer_cached_numpy = data_type in {"int8", "int64", "float64"}
                 if prefer_cached_numpy and hasattr(cpp, "read_full_numpy_cached"):
-                    methods["torchfits_numpy"] = lambda: cpp.read_full_numpy_cached(
+                    methods["torchsky_numpy"] = lambda: cpp.read_full_numpy_cached(
                         str(filepath), hdu_num, tf_mmap_cpp
                     )
                 elif hasattr(cpp, "read_full_numpy"):
                     # Avoid torch->numpy conversion overhead when comparing against
                     # numpy-native libraries like fitsio/astropy.
-                    methods["torchfits_numpy"] = lambda: cpp.read_full_numpy(
+                    methods["torchsky_numpy"] = lambda: cpp.read_full_numpy(
                         str(filepath), hdu_num, tf_mmap_cpp
                     )
                 elif hasattr(cpp, "read_full_numpy_cached"):
                     # Fallback for older builds that only expose the cached variant.
-                    methods["torchfits_numpy"] = lambda: cpp.read_full_numpy_cached(
+                    methods["torchsky_numpy"] = lambda: cpp.read_full_numpy_cached(
                         str(filepath), hdu_num, tf_mmap_cpp
                     )
                 else:
-                    methods["torchfits_numpy"] = lambda: torchfits.read(
+                    methods["torchsky_numpy"] = lambda: torchsky.read(
                         str(filepath),
                         hdu=hdu_num,
                         mmap=tf_mmap_mode,
@@ -1007,7 +1007,7 @@ class ExhaustiveBenchmarkSuite:
                     ).numpy()
         except Exception:
             if file_type != "table":
-                methods["torchfits_numpy"] = lambda: torchfits.read(
+                methods["torchsky_numpy"] = lambda: torchsky.read(
                     str(filepath),
                     hdu=hdu_num,
                     mmap=tf_mmap_mode,
@@ -1015,10 +1015,10 @@ class ExhaustiveBenchmarkSuite:
                     cache_capacity=self.cache_capacity,
                     handle_cache_capacity=self.handle_cache_capacity,
                 ).numpy()
-        if file_type == "table" and "torchfits_numpy" not in methods:
+        if file_type == "table" and "torchsky_numpy" not in methods:
 
             def _table_numpy_fallback():
-                table = torchfits.read(
+                table = torchsky.read(
                     str(filepath),
                     hdu=hdu_num,
                     mmap=tf_mmap_mode,
@@ -1044,11 +1044,11 @@ class ExhaustiveBenchmarkSuite:
                         out[k] = v
                 return out
 
-            methods["torchfits_numpy"] = _table_numpy_fallback
+            methods["torchsky_numpy"] = _table_numpy_fallback
 
-        # Test torchfits mmap explicitly for tables (diagnostic only).
+        # Test torchsky mmap explicitly for tables (diagnostic only).
         if file_type == "table":
-            diagnostic_methods["torchfits_mmap"] = lambda: torchfits.read(
+            diagnostic_methods["torchsky_mmap"] = lambda: torchsky.read(
                 str(filepath),
                 hdu=hdu_num,
                 mmap=True,
@@ -1071,7 +1071,7 @@ class ExhaustiveBenchmarkSuite:
 
         # Show per-method progress by default even in non-TTY runs (e.g. piped to
         # `tee`) so long table sections don't look like a hard crash.
-        progress_enabled = os.getenv("TORCHFITS_BENCH_PROGRESS", "1") != "0"
+        progress_enabled = os.getenv("TORCHSKY_BENCH_PROGRESS", "1") != "0"
         progress_log_started = False
 
         def _progress(method: str) -> None:
@@ -1079,7 +1079,7 @@ class ExhaustiveBenchmarkSuite:
             One-line progress indicator.
             - TTY: update in-place on the same line (cleared).
             - Non-TTY (e.g. piped to tee): default OFF to avoid log spam. If enabled via
-              `TORCHFITS_BENCH_PROGRESS=1`, emit a *single* line by appending method names,
+              `TORCHSKY_BENCH_PROGRESS=1`, emit a *single* line by appending method names,
               then finish with 'done'.
             """
             nonlocal progress_log_started
@@ -1158,17 +1158,17 @@ class ExhaustiveBenchmarkSuite:
         # combinations; keep table benches stable by skipping this diagnostic.
         if file_type != "table":
             try:
-                file_handle = torchfits.cpp.open_fits_file(str(filepath), "r")
+                file_handle = torchsky.cpp.open_fits_file(str(filepath), "r")
             except Exception:
                 file_handle = None
         if file_handle is not None:
             # Reuse an already-open file handle. For image HDUs this benchmarks
             # the C++ image read without open/close overhead; for table HDUs it
             # benchmarks the handle-based table reader.
-            diagnostic_methods["torchfits_cpp_open_once"] = lambda fh=file_handle: (
-                torchfits.cpp.read_full(fh, hdu_num, tf_mmap_cpp)
+            diagnostic_methods["torchsky_cpp_open_once"] = lambda fh=file_handle: (
+                torchsky.cpp.read_full(fh, hdu_num, tf_mmap_cpp)
             )
-        diagnostic_methods["torchfits_hot"] = lambda: torchfits.read(
+        diagnostic_methods["torchsky_hot"] = lambda: torchsky.read(
             str(filepath),
             hdu=hdu_num,
             mmap=tf_mmap_mode,
@@ -1176,7 +1176,7 @@ class ExhaustiveBenchmarkSuite:
             cache_capacity=self.hot_cache_capacity,
             handle_cache_capacity=self.handle_cache_capacity,
         )
-        diagnostic_methods["torchfits_handle_cache"] = lambda: torchfits.read(
+        diagnostic_methods["torchsky_handle_cache"] = lambda: torchsky.read(
             str(filepath),
             hdu=hdu_num,
             mmap=tf_mmap_mode,
@@ -1319,7 +1319,7 @@ class ExhaustiveBenchmarkSuite:
                 valid_diag_methods[k] = v["median"] if use_median else v["mean"]
 
         smart_overall_methods = {
-            "torchfits",
+            "torchsky",
             "astropy_torch",
             "fitsio_torch",
             # Optional aliases for future external smart adapters.
@@ -1327,7 +1327,7 @@ class ExhaustiveBenchmarkSuite:
             "kapteyn_torch",
         }
         numpy_methods = {
-            "torchfits_numpy",
+            "torchsky_numpy",
             "astropy",
             "fitsio",
             # Optional aliases for future external direct adapters.
@@ -1335,7 +1335,7 @@ class ExhaustiveBenchmarkSuite:
             "kapteyn",
         }
         specialized_methods = {
-            "torchfits_specialized",
+            "torchsky_specialized",
             "astropy",
             "fitsio",
             # Optional aliases for future external direct adapters.
@@ -1353,27 +1353,27 @@ class ExhaustiveBenchmarkSuite:
                 comparison_methods.keys(), key=lambda k: comparison_methods[k]
             )
             sorted_methods = sorted(comparison_methods.items(), key=lambda x: x[1])
-            torchfits_rank = next(
-                (i + 1 for i, (k, v) in enumerate(sorted_methods) if k == "torchfits"),
+            torchsky_rank = next(
+                (i + 1 for i, (k, v) in enumerate(sorted_methods) if k == "torchsky"),
                 len(sorted_methods) + 1,
             )
 
             result["best_method"] = best_method
-            result["torchfits_rank"] = torchfits_rank
+            result["torchsky_rank"] = torchsky_rank
 
             # Calculate speedup vs best
-            if "torchfits" in comparison_methods:
+            if "torchsky" in comparison_methods:
                 best_time = comparison_methods[best_method]
-                tf_time = comparison_methods["torchfits"]
+                tf_time = comparison_methods["torchsky"]
                 speedup = (
                     best_time / tf_time
-                    if best_method != "torchfits"
+                    if best_method != "torchsky"
                     else (
                         tf_time
                         / min(
-                            v for k, v in comparison_methods.items() if k != "torchfits"
+                            v for k, v in comparison_methods.items() if k != "torchsky"
                         )
-                        if any(k != "torchfits" for k in comparison_methods)
+                        if any(k != "torchsky" for k in comparison_methods)
                         else None
                     )
                 )
@@ -1391,24 +1391,20 @@ class ExhaustiveBenchmarkSuite:
                 best_torch = min(torch_valid.keys(), key=lambda k: torch_valid[k])
                 sorted_torch = sorted(torch_valid.items(), key=lambda x: x[1])
                 tf_rank_torch = next(
-                    (
-                        i + 1
-                        for i, (k, _) in enumerate(sorted_torch)
-                        if k == "torchfits"
-                    ),
+                    (i + 1 for i, (k, _) in enumerate(sorted_torch) if k == "torchsky"),
                     len(sorted_torch) + 1,
                 )
                 result["best_method_torch"] = best_torch
-                result["torchfits_rank_torch"] = tf_rank_torch
-                if "torchfits" in torch_valid:
+                result["torchsky_rank_torch"] = tf_rank_torch
+                if "torchsky" in torch_valid:
                     result["speedup_vs_best_torch"] = (
-                        torch_valid[best_torch] / torch_valid["torchfits"]
+                        torch_valid[best_torch] / torch_valid["torchsky"]
                     )
                 else:
                     result["speedup_vs_best_torch"] = None
             else:
                 result["best_method_torch"] = "none"
-                result["torchfits_rank_torch"] = 999
+                result["torchsky_rank_torch"] = 999
                 result["speedup_vs_best_torch"] = None
 
             numpy_valid = {k: v for k, v in valid_methods.items() if k in numpy_methods}
@@ -1419,28 +1415,28 @@ class ExhaustiveBenchmarkSuite:
                     (
                         i + 1
                         for i, (k, _) in enumerate(sorted_numpy)
-                        if k == "torchfits_numpy"
+                        if k == "torchsky_numpy"
                     ),
                     len(sorted_numpy) + 1,
                 )
                 result["best_method_numpy"] = best_numpy
-                result["torchfits_numpy_rank"] = tf_np_rank
-                if "torchfits_numpy" in numpy_valid:
+                result["torchsky_numpy_rank"] = tf_np_rank
+                if "torchsky_numpy" in numpy_valid:
                     result["speedup_vs_best_numpy"] = (
-                        numpy_valid[best_numpy] / numpy_valid["torchfits_numpy"]
+                        numpy_valid[best_numpy] / numpy_valid["torchsky_numpy"]
                     )
                 else:
                     result["speedup_vs_best_numpy"] = None
             else:
                 result["best_method_numpy"] = "none"
-                result["torchfits_numpy_rank"] = 999
+                result["torchsky_numpy_rank"] = 999
                 result["speedup_vs_best_numpy"] = None
 
             # Specialized/direct family comparison (all direct/specialized methods).
             specialized_valid = {
                 k: v for k, v in valid_methods.items() if k in specialized_methods
             }
-            if specialized_valid and "torchfits_specialized" in specialized_valid:
+            if specialized_valid and "torchsky_specialized" in specialized_valid:
                 best_spec = min(
                     specialized_valid.keys(), key=lambda k: specialized_valid[k]
                 )
@@ -1449,43 +1445,43 @@ class ExhaustiveBenchmarkSuite:
                     (
                         i + 1
                         for i, (k, _) in enumerate(sorted_spec)
-                        if k == "torchfits_specialized"
+                        if k == "torchsky_specialized"
                     ),
                     len(sorted_spec) + 1,
                 )
                 result["best_method_specialized"] = best_spec
-                result["torchfits_specialized_rank"] = tf_spec_rank
+                result["torchsky_specialized_rank"] = tf_spec_rank
                 result["speedup_vs_best_specialized"] = (
                     specialized_valid[best_spec]
-                    / specialized_valid["torchfits_specialized"]
+                    / specialized_valid["torchsky_specialized"]
                 )
             else:
                 result["best_method_specialized"] = "none"
-                result["torchfits_specialized_rank"] = 999
+                result["torchsky_specialized_rank"] = 999
                 result["speedup_vs_best_specialized"] = None
 
             if (
-                "torchfits" in comparison_methods
-                and "torchfits_specialized" in valid_methods
+                "torchsky" in comparison_methods
+                and "torchsky_specialized" in valid_methods
             ):
                 result["speedup_specialized_vs_smart"] = (
-                    comparison_methods["torchfits"]
-                    / valid_methods["torchfits_specialized"]
+                    comparison_methods["torchsky"]
+                    / valid_methods["torchsky_specialized"]
                 )
             else:
                 result["speedup_specialized_vs_smart"] = None
         else:
             result["best_method"] = "none"
-            result["torchfits_rank"] = 999
+            result["torchsky_rank"] = 999
             result["speedup_vs_best"] = None
             result["best_method_torch"] = "none"
-            result["torchfits_rank_torch"] = 999
+            result["torchsky_rank_torch"] = 999
             result["speedup_vs_best_torch"] = None
             result["best_method_numpy"] = "none"
-            result["torchfits_numpy_rank"] = 999
+            result["torchsky_numpy_rank"] = 999
             result["speedup_vs_best_numpy"] = None
             result["best_method_specialized"] = "none"
-            result["torchfits_specialized_rank"] = 999
+            result["torchsky_specialized_rank"] = 999
             result["speedup_vs_best_specialized"] = None
             result["speedup_specialized_vs_smart"] = None
 
@@ -1583,20 +1579,20 @@ class ExhaustiveBenchmarkSuite:
         process = psutil.Process()
         # RSS sampling is best-effort. It can under-report brief peaks, and RSS deltas
         # may be near-zero due to allocator reuse. Treat it as a coarse signal.
-        sample_interval_s = float(os.getenv("TORCHFITS_BENCH_RSS_INTERVAL_S", "0.001"))
-        warmup_runs = max(0, int(os.getenv("TORCHFITS_BENCH_WARMUP_RUNS", "1")))
+        sample_interval_s = float(os.getenv("TORCHSKY_BENCH_RSS_INTERVAL_S", "0.001"))
+        warmup_runs = max(0, int(os.getenv("TORCHSKY_BENCH_WARMUP_RUNS", "1")))
 
-        # Clear torchfits caches once per timed method (not per run). Clearing inside
+        # Clear torchsky caches once per timed method (not per run). Clearing inside
         # the run loop makes the benchmark highly noisy and unrealistically penalizes
-        # torchfits relative to other libs that don't expose/trigger similar cache clears.
+        # torchsky relative to other libs that don't expose/trigger similar cache clears.
         try:
             if (
-                "torchfits" in method_name
+                "torchsky" in method_name
                 and "open_once" not in method_name
                 and "hot" not in method_name
                 and "handle_cache" not in method_name
             ):
-                torchfits.clear_file_cache()
+                torchsky.clear_file_cache()
         except Exception:
             pass
 
@@ -1735,10 +1731,10 @@ class ExhaustiveBenchmarkSuite:
             y2 = y1 + cutout_size[0]
 
             methods = {
-                "torchfits": lambda: torchfits.read_subset(
+                "torchsky": lambda: torchsky.read_subset(
                     str(target_file), hdu_idx, x1, y1, x2, y2
                 ),
-                "torchfits_specialized": lambda: torchfits.read_subset(
+                "torchsky_specialized": lambda: torchsky.read_subset(
                     str(target_file), hdu_idx, x1, y1, x2, y2
                 ),
                 "astropy": lambda: self._astropy_cutout(
@@ -1789,22 +1785,22 @@ class ExhaustiveBenchmarkSuite:
             if valid_methods:
                 best_method = min(valid_methods, key=valid_methods.get)
                 sorted_methods = sorted(valid_methods.items(), key=lambda kv: kv[1])
-                torchfits_rank = next(
+                torchsky_rank = next(
                     (
                         idx + 1
                         for idx, (nm, _) in enumerate(sorted_methods)
-                        if nm == "torchfits"
+                        if nm == "torchsky"
                     ),
                     len(sorted_methods) + 1,
                 )
                 row["best_method"] = best_method
-                row["torchfits_rank"] = torchfits_rank
+                row["torchsky_rank"] = torchsky_rank
 
-                tf_time = valid_methods.get("torchfits")
+                tf_time = valid_methods.get("torchsky")
                 if tf_time:
-                    if best_method == "torchfits":
+                    if best_method == "torchsky":
                         competitor_times = [
-                            v for k, v in valid_methods.items() if k != "torchfits"
+                            v for k, v in valid_methods.items() if k != "torchsky"
                         ]
                         row["speedup_vs_best"] = (
                             tf_time / min(competitor_times)
@@ -1817,7 +1813,7 @@ class ExhaustiveBenchmarkSuite:
                     row["speedup_vs_best"] = None
             else:
                 row["best_method"] = "none"
-                row["torchfits_rank"] = 999
+                row["torchsky_rank"] = 999
                 row["speedup_vs_best"] = None
 
             return row
@@ -1882,13 +1878,13 @@ class ExhaustiveBenchmarkSuite:
         ext_use_mmap = False
 
         def tf_cached_handles():
-            if hasattr(torchfits.cpp, "read_hdus_sequence_last"):
-                return torchfits.cpp.read_hdus_sequence_last(
+            if hasattr(torchsky.cpp, "read_hdus_sequence_last"):
+                return torchsky.cpp.read_hdus_sequence_last(
                     str(target), ext_seq, ext_use_mmap
                 )
             out = None
             for ext in ext_seq:
-                out = torchfits.read(
+                out = torchsky.read(
                     str(target),
                     hdu=ext,
                     mmap=ext_use_mmap,
@@ -1899,11 +1895,11 @@ class ExhaustiveBenchmarkSuite:
             return out
 
         def tf_cpp_open_once():
-            fh = torchfits.cpp.open_fits_file(str(target), "r")
+            fh = torchsky.cpp.open_fits_file(str(target), "r")
             try:
                 out = None
                 for ext in ext_seq:
-                    out = torchfits.cpp.read_full(fh, ext, ext_use_mmap)
+                    out = torchsky.cpp.read_full(fh, ext, ext_use_mmap)
                 return out
             finally:
                 try:
@@ -1930,16 +1926,16 @@ class ExhaustiveBenchmarkSuite:
             with self._astropy_open(target, False) as hdul:
                 out = None
                 for ext in ext_seq:
-                    # Force materialization to match torchfits/fitsio read semantics.
+                    # Force materialization to match torchsky/fitsio read semantics.
                     out = self._ensure_native_endian_numpy(
                         np.array(hdul[ext].data, copy=True)
                     )
                 return out
 
         methods = {
-            "torchfits": tf_cached_handles,
-            "torchfits_specialized": tf_cached_handles,
-            "torchfits_cpp_open_once": tf_cpp_open_once,
+            "torchsky": tf_cached_handles,
+            "torchsky_specialized": tf_cached_handles,
+            "torchsky_cpp_open_once": tf_cpp_open_once,
             "fitsio": fitsio_open_once,
             "astropy": astropy_open_once,
         }
@@ -1979,9 +1975,9 @@ class ExhaustiveBenchmarkSuite:
         for missing in [
             "fitsio_torch",
             "astropy_torch",
-            "torchfits_numpy",
-            "torchfits_hot",
-            "torchfits_handle_cache",
+            "torchsky_numpy",
+            "torchsky_hot",
+            "torchsky_handle_cache",
         ]:
             if f"{missing}_median" not in row:
                 row[f"{missing}_mean"] = None
@@ -1995,7 +1991,7 @@ class ExhaustiveBenchmarkSuite:
         return [row]
 
     def _bench_table_scan_arrow(self, files: Dict[str, Path]) -> List[Dict]:
-        """Benchmark Arrow out-of-core scan path (torchfits only)."""
+        """Benchmark Arrow out-of-core scan path (torchsky only)."""
         if not self.include_tables:
             return []
         target = files.get("table_survey_catalog")
@@ -2010,7 +2006,7 @@ class ExhaustiveBenchmarkSuite:
 
         def tf_scan_count():
             total = 0
-            for batch in torchfits.table.scan(
+            for batch in torchsky.table.scan(
                 str(target),
                 hdu=1,
                 batch_size=65536,
@@ -2022,7 +2018,7 @@ class ExhaustiveBenchmarkSuite:
                 total += int(batch.num_rows)
             return total
 
-        res = self._time_method(tf_scan_count, "torchfits", runs=5, use_median=True)
+        res = self._time_method(tf_scan_count, "torchsky", runs=5, use_median=True)
         size_mb = target.stat().st_size / 1024 / 1024
         row: Dict[str, Any] = {
             "filename": "table_survey_catalog",
@@ -2035,26 +2031,26 @@ class ExhaustiveBenchmarkSuite:
         }
 
         if res:
-            row["torchfits_mean"] = res["mean"]
-            row["torchfits_std"] = res["std"]
-            row["torchfits_median"] = res["median"]
-            row["torchfits_mb_s"] = size_mb / res["median"] if res["median"] else None
-            row["torchfits_memory"] = res["memory"]
-            row["torchfits_peak_memory"] = res["peak_memory"]
-            row["torchfits_payload_mb"] = res["payload_memory"]
+            row["torchsky_mean"] = res["mean"]
+            row["torchsky_std"] = res["std"]
+            row["torchsky_median"] = res["median"]
+            row["torchsky_mb_s"] = size_mb / res["median"] if res["median"] else None
+            row["torchsky_memory"] = res["memory"]
+            row["torchsky_peak_memory"] = res["peak_memory"]
+            row["torchsky_payload_mb"] = res["payload_memory"]
 
         # Fill other columns with None.
         for prefix in [
-            "torchfits_specialized",
-            "torchfits_numpy",
-            "torchfits_hot",
-            "torchfits_handle_cache",
-            "torchfits_mmap",
+            "torchsky_specialized",
+            "torchsky_numpy",
+            "torchsky_hot",
+            "torchsky_handle_cache",
+            "torchsky_mmap",
             "astropy",
             "fitsio",
             "astropy_torch",
             "fitsio_torch",
-            "torchfits_cpp_open_once",
+            "torchsky_cpp_open_once",
         ]:
             for suffix in [
                 "mean",
@@ -2066,36 +2062,36 @@ class ExhaustiveBenchmarkSuite:
                 "payload_mb",
             ]:
                 row.setdefault(f"{prefix}_{suffix}", None)
-        row.setdefault("best_method", "torchfits")
-        row.setdefault("torchfits_rank", 1)
+        row.setdefault("best_method", "torchsky")
+        row.setdefault("torchsky_rank", 1)
         row.setdefault("speedup_vs_best", None)
-        row.setdefault("best_method_torch", "torchfits")
-        row.setdefault("torchfits_rank_torch", 1)
+        row.setdefault("best_method_torch", "torchsky")
+        row.setdefault("torchsky_rank_torch", 1)
         row.setdefault("speedup_vs_best_torch", None)
         row.setdefault("best_method_numpy", "none")
-        row.setdefault("torchfits_numpy_rank", 999)
+        row.setdefault("torchsky_numpy_rank", 999)
         row.setdefault("speedup_vs_best_numpy", None)
         row.setdefault("best_method_specialized", "none")
-        row.setdefault("torchfits_specialized_rank", 999)
+        row.setdefault("torchsky_specialized_rank", 999)
         row.setdefault("speedup_vs_best_specialized", None)
         row.setdefault("speedup_specialized_vs_smart", None)
 
         if res:
-            print(f"torchfits (scan count): {res['median']:.6f}s (median)")
+            print(f"torchsky (scan count): {res['median']:.6f}s (median)")
 
         return [row]
 
     def _set_aux_result_defaults(self, row: Dict[str, Any]) -> Dict[str, Any]:
         for prefix in [
-            "torchfits_specialized",
-            "torchfits_numpy",
-            "torchfits_hot",
-            "torchfits_handle_cache",
-            "torchfits_mmap",
+            "torchsky_specialized",
+            "torchsky_numpy",
+            "torchsky_hot",
+            "torchsky_handle_cache",
+            "torchsky_mmap",
             "fitsio",
             "astropy_torch",
             "fitsio_torch",
-            "torchfits_cpp_open_once",
+            "torchsky_cpp_open_once",
         ]:
             for suffix in [
                 "mean",
@@ -2107,17 +2103,17 @@ class ExhaustiveBenchmarkSuite:
                 "payload_mb",
             ]:
                 row.setdefault(f"{prefix}_{suffix}", None)
-        row.setdefault("best_method", "torchfits")
-        row.setdefault("torchfits_rank", 1)
+        row.setdefault("best_method", "torchsky")
+        row.setdefault("torchsky_rank", 1)
         row.setdefault("speedup_vs_best", None)
         row.setdefault("best_method_torch", row.get("best_method"))
-        row.setdefault("torchfits_rank_torch", row.get("torchfits_rank"))
+        row.setdefault("torchsky_rank_torch", row.get("torchsky_rank"))
         row.setdefault("speedup_vs_best_torch", row.get("speedup_vs_best"))
         row.setdefault("best_method_numpy", "none")
-        row.setdefault("torchfits_numpy_rank", 999)
+        row.setdefault("torchsky_numpy_rank", 999)
         row.setdefault("speedup_vs_best_numpy", None)
         row.setdefault("best_method_specialized", "none")
-        row.setdefault("torchfits_specialized_rank", 999)
+        row.setdefault("torchsky_specialized_rank", 999)
         row.setdefault("speedup_vs_best_specialized", None)
         row.setdefault("speedup_specialized_vs_smart", None)
         return row
@@ -2246,8 +2242,8 @@ class ExhaustiveBenchmarkSuite:
                     else ((n_points / 1e6) / ast_s if ast_s > 0 else float("nan"))
                 )
 
-                best_method = "torchfits" if tf_s <= ast_s else "astropy"
-                speedup = ast_s / tf_s if best_method == "torchfits" else tf_s / ast_s
+                best_method = "torchsky" if tf_s <= ast_s else "astropy"
+                speedup = ast_s / tf_s if best_method == "torchsky" else tf_s / ast_s
 
                 row: Dict[str, Any] = {
                     "filename": f"WCS_{case_name}",
@@ -2257,13 +2253,13 @@ class ExhaustiveBenchmarkSuite:
                     "data_type": "float64",
                     "dimensions": "2d",
                     "compression": "uncompressed",
-                    "torchfits_mean": tf_s,
-                    "torchfits_std": 0.0,
-                    "torchfits_median": tf_s,
-                    "torchfits_mb_s": tf_mpts,
-                    "torchfits_memory": None,
-                    "torchfits_peak_memory": None,
-                    "torchfits_payload_mb": None,
+                    "torchsky_mean": tf_s,
+                    "torchsky_std": 0.0,
+                    "torchsky_median": tf_s,
+                    "torchsky_mb_s": tf_mpts,
+                    "torchsky_memory": None,
+                    "torchsky_peak_memory": None,
+                    "torchsky_payload_mb": None,
                     "astropy_mean": ast_s,
                     "astropy_std": 0.0,
                     "astropy_median": ast_s,
@@ -2272,10 +2268,10 @@ class ExhaustiveBenchmarkSuite:
                     "astropy_peak_memory": None,
                     "astropy_payload_mb": None,
                     "best_method": best_method,
-                    "torchfits_rank": 1 if best_method == "torchfits" else 2,
+                    "torchsky_rank": 1 if best_method == "torchsky" else 2,
                     "speedup_vs_best": speedup,
                     "best_method_torch": best_method,
-                    "torchfits_rank_torch": 1 if best_method == "torchfits" else 2,
+                    "torchsky_rank_torch": 1 if best_method == "torchsky" else 2,
                     "speedup_vs_best_torch": speedup,
                 }
                 results.append(self._set_aux_result_defaults(row))
@@ -2337,7 +2333,7 @@ class ExhaustiveBenchmarkSuite:
                 "--sample-profile",
                 "mixed",
                 "--libraries",
-                "torchfits,healpy,hpgeom,astropy-healpix,healpix,mhealpy",
+                "torchsky,healpy,hpgeom,astropy-healpix,healpix,mhealpy",
                 "--csv-out",
                 str(sphere_csv),
             ],
@@ -2356,7 +2352,7 @@ class ExhaustiveBenchmarkSuite:
 
         for op in sorted(by_operation):
             libs = by_operation[op]
-            tf_row = libs.get("torchfits")
+            tf_row = libs.get("torchsky")
             if tf_row is None:
                 continue
             try:
@@ -2367,7 +2363,7 @@ class ExhaustiveBenchmarkSuite:
             if not np.isfinite(tf_s) or tf_s <= 0.0:
                 continue
 
-            for lib in sorted(k for k in libs if k != "torchfits"):
+            for lib in sorted(k for k in libs if k != "torchsky"):
                 comp = libs[lib]
                 try:
                     comp_s = float(comp["ms"]) / 1000.0
@@ -2377,8 +2373,8 @@ class ExhaustiveBenchmarkSuite:
                 if not np.isfinite(comp_s) or comp_s <= 0.0:
                     continue
 
-                best_method = "torchfits" if tf_s <= comp_s else lib
-                speedup = comp_s / tf_s if best_method == "torchfits" else tf_s / comp_s
+                best_method = "torchsky" if tf_s <= comp_s else lib
+                speedup = comp_s / tf_s if best_method == "torchsky" else tf_s / comp_s
                 row: Dict[str, Any] = {
                     "filename": f"SPHERE_{op}_{lib}",
                     "operation": f"sphere_{op}",
@@ -2397,13 +2393,13 @@ class ExhaustiveBenchmarkSuite:
                     ),
                     "dimensions": "1d",
                     "compression": "uncompressed",
-                    "torchfits_mean": tf_s,
-                    "torchfits_std": 0.0,
-                    "torchfits_median": tf_s,
-                    "torchfits_mb_s": tf_mpts,
-                    "torchfits_memory": None,
-                    "torchfits_peak_memory": None,
-                    "torchfits_payload_mb": None,
+                    "torchsky_mean": tf_s,
+                    "torchsky_std": 0.0,
+                    "torchsky_median": tf_s,
+                    "torchsky_mb_s": tf_mpts,
+                    "torchsky_memory": None,
+                    "torchsky_peak_memory": None,
+                    "torchsky_payload_mb": None,
                     # Reuse astropy_* columns as generic comparator columns for non-image domains.
                     "astropy_mean": comp_s,
                     "astropy_std": 0.0,
@@ -2413,10 +2409,10 @@ class ExhaustiveBenchmarkSuite:
                     "astropy_peak_memory": None,
                     "astropy_payload_mb": None,
                     "best_method": best_method,
-                    "torchfits_rank": 1 if best_method == "torchfits" else 2,
+                    "torchsky_rank": 1 if best_method == "torchsky" else 2,
                     "speedup_vs_best": speedup,
                     "best_method_torch": best_method,
-                    "torchfits_rank_torch": 1 if best_method == "torchfits" else 2,
+                    "torchsky_rank_torch": 1 if best_method == "torchsky" else 2,
                     "speedup_vs_best_torch": speedup,
                 }
                 results.append(self._set_aux_result_defaults(row))
@@ -2679,7 +2675,7 @@ class ExhaustiveBenchmarkSuite:
         fig.suptitle("Performance Comparison by File Type", fontsize=16)
 
         # Filter valid results
-        methods = ["torchfits_mean", "astropy_mean", "fitsio_mean"]
+        methods = ["torchsky_mean", "astropy_mean", "fitsio_mean"]
 
         for i, method in enumerate(methods):
             if method in df.columns:
@@ -2704,8 +2700,8 @@ class ExhaustiveBenchmarkSuite:
     def _plot_memory_usage(self, df: pd.DataFrame):
         """Plot RSS memory growth analysis."""
         if (
-            "torchfits_memory" not in df.columns
-            or "torchfits_peak_memory" not in df.columns
+            "torchsky_memory" not in df.columns
+            or "torchsky_peak_memory" not in df.columns
         ):
             return
         fig, axes = plt.subplots(1, 2, figsize=(15, 6))
@@ -2713,18 +2709,18 @@ class ExhaustiveBenchmarkSuite:
 
         # RSS growth vs file size
         valid_df = df[
-            df["torchfits_memory"].notna() & df["torchfits_peak_memory"].notna()
+            df["torchsky_memory"].notna() & df["torchsky_peak_memory"].notna()
         ]
         if not valid_df.empty:
             axes[0].scatter(
                 valid_df["size_mb"],
-                valid_df["torchfits_memory"],
+                valid_df["torchsky_memory"],
                 alpha=0.6,
                 label="Steady RSS increase",
             )
             axes[0].scatter(
                 valid_df["size_mb"],
-                valid_df["torchfits_peak_memory"],
+                valid_df["torchsky_peak_memory"],
                 alpha=0.4,
                 label="Peak RSS increase",
             )
@@ -2736,7 +2732,7 @@ class ExhaustiveBenchmarkSuite:
         # Peak memory by data type
         if not valid_df.empty:
             sns.boxplot(
-                data=valid_df, x="data_type", y="torchfits_peak_memory", ax=axes[1]
+                data=valid_df, x="data_type", y="torchsky_peak_memory", ax=axes[1]
             )
             axes[1].set_title("Peak RSS Increase by Data Type")
             axes[1].set_ylabel("Peak RSS Increase (MB)")
@@ -2761,9 +2757,9 @@ class ExhaustiveBenchmarkSuite:
 
         for method in methods:
             if method in df.columns:
-                valid_df = df[(df["torchfits_mean"].notna()) & (df[method].notna())]
+                valid_df = df[(df["torchsky_mean"].notna()) & (df[method].notna())]
                 if not valid_df.empty:
-                    speedup = valid_df[method] / valid_df["torchfits_mean"]
+                    speedup = valid_df[method] / valid_df["torchsky_mean"]
                     speedups[method.replace("_mean", "")] = speedup
 
         if speedups:
@@ -2776,8 +2772,8 @@ class ExhaustiveBenchmarkSuite:
 
             ax.boxplot(data_for_plot, tick_labels=labels)
             ax.axhline(y=1, color="r", linestyle="--", alpha=0.5, label="No speedup")
-            ax.set_ylabel("Speedup Factor (other/torchfits)")
-            ax.set_title("torchfits Speedup vs Other Methods")
+            ax.set_ylabel("Speedup Factor (other/torchsky)")
+            ax.set_title("torchsky Speedup vs Other Methods")
             ax.legend()
             plt.setp(ax.get_xticklabels(), rotation=45)
 
@@ -2791,18 +2787,18 @@ class ExhaustiveBenchmarkSuite:
         """Plot performance by data type."""
         fig, ax = plt.subplots(1, 1, figsize=(12, 8))
 
-        valid_df = df[df["torchfits_mean"].notna()]
+        valid_df = df[df["torchsky_mean"].notna()]
         if not valid_df.empty:
             # Group by data type and dimensions
             perf_data = (
-                valid_df.groupby(["data_type", "dimensions"])["torchfits_mean"]
+                valid_df.groupby(["data_type", "dimensions"])["torchsky_mean"]
                 .mean()
                 .reset_index()
             )
 
             # Create heatmap
             pivot_data = perf_data.pivot(
-                index="data_type", columns="dimensions", values="torchfits_mean"
+                index="data_type", columns="dimensions", values="torchsky_mean"
             )
             sns.heatmap(pivot_data, annot=True, fmt=".4f", cmap="viridis", ax=ax)
             ax.set_title("Average Performance by Data Type and Dimensions")
@@ -2819,7 +2815,7 @@ class ExhaustiveBenchmarkSuite:
         """Plot performance vs file size."""
         fig, ax = plt.subplots(1, 1, figsize=(12, 8))
 
-        valid_df = df[df["torchfits_mean"].notna()]
+        valid_df = df[df["torchsky_mean"].notna()]
         if not valid_df.empty:
             # Color by file type
             file_types = valid_df["file_type"].unique()
@@ -2829,7 +2825,7 @@ class ExhaustiveBenchmarkSuite:
                 type_df = valid_df[valid_df["file_type"] == file_type]
                 ax.scatter(
                     type_df["size_mb"],
-                    type_df["torchfits_mean"],
+                    type_df["torchsky_mean"],
                     label=file_type,
                     alpha=0.7,
                     color=color,
@@ -2854,9 +2850,9 @@ class ExhaustiveBenchmarkSuite:
         fig.suptitle("Compression Analysis", fontsize=16)
 
         # Performance by compression type
-        valid_df = df[df["torchfits_mean"].notna()]
+        valid_df = df[df["torchsky_mean"].notna()]
         if not valid_df.empty:
-            sns.boxplot(data=valid_df, x="compression", y="torchfits_mean", ax=axes[0])
+            sns.boxplot(data=valid_df, x="compression", y="torchsky_mean", ax=axes[0])
             axes[0].set_title("Performance by Compression Type")
             axes[0].set_ylabel("Time (seconds)")
             plt.setp(axes[0].get_xticklabels(), rotation=45)
@@ -2881,23 +2877,23 @@ class ExhaustiveBenchmarkSuite:
 
         df = pd.DataFrame(results)
         tf_col = (
-            "torchfits_median" if "torchfits_median" in df.columns else "torchfits_mean"
+            "torchsky_median" if "torchsky_median" in df.columns else "torchsky_mean"
         )
         tf_np_col = (
-            "torchfits_numpy_median"
-            if "torchfits_numpy_median" in df.columns
-            else "torchfits_numpy_mean"
+            "torchsky_numpy_median"
+            if "torchsky_numpy_median" in df.columns
+            else "torchsky_numpy_mean"
         )
         fi_col = "fitsio_median" if "fitsio_median" in df.columns else "fitsio_mean"
         tf_hot_col = (
-            "torchfits_hot_median"
-            if "torchfits_hot_median" in df.columns
-            else "torchfits_hot_mean"
+            "torchsky_hot_median"
+            if "torchsky_hot_median" in df.columns
+            else "torchsky_hot_mean"
         )
         tf_spec_col = (
-            "torchfits_specialized_median"
-            if "torchfits_specialized_median" in df.columns
-            else "torchfits_specialized_mean"
+            "torchsky_specialized_median"
+            if "torchsky_specialized_median" in df.columns
+            else "torchsky_specialized_mean"
         )
 
         # Keep the core summary focused on full-read benchmarks.
@@ -2917,7 +2913,7 @@ class ExhaustiveBenchmarkSuite:
             return ", ".join(sorted(values)) if values else "-"
 
         with open(self.summary_file, "w") as f:
-            f.write("# torchfits Exhaustive Benchmark Report\n\n")
+            f.write("# torchsky Exhaustive Benchmark Report\n\n")
             f.write(f"Generated on: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
 
             # System information
@@ -2957,7 +2953,7 @@ class ExhaustiveBenchmarkSuite:
                 )
 
             f.write(f"- MMap enabled: {self.use_mmap}\n")
-            f.write(f"- TorchFits mmap mode: {self._torchfits_mmap_mode()}\n")
+            f.write(f"- TorchFits mmap mode: {self._torchsky_mmap_mode()}\n")
             f.write(f"- Tables included: {self.include_tables}\n")
             f.write(f"- Benchmark profile: {self.profile}\n\n")
             f.write(f"- Cache capacity (cold): {self.cache_capacity}\n")
@@ -2977,12 +2973,12 @@ class ExhaustiveBenchmarkSuite:
                     else pd.Series(["none"] * len(primary_df), index=primary_df.index)
                 )
 
-                tf_family_wins = int(best_overall.str.startswith("torchfits").sum())
-                tf_smart_wins = int((best_overall == "torchfits").sum())
-                tf_torch_wins = int((best_torch == "torchfits").sum())
-                tf_numpy_wins = int((best_numpy == "torchfits_numpy").sum())
+                tf_family_wins = int(best_overall.str.startswith("torchsky").sum())
+                tf_smart_wins = int((best_overall == "torchsky").sum())
+                tf_torch_wins = int((best_torch == "torchsky").sum())
+                tf_numpy_wins = int((best_numpy == "torchsky_numpy").sum())
                 tf_specialized_wins = int(
-                    (best_specialized == "torchfits_specialized").sum()
+                    (best_specialized == "torchsky_specialized").sum()
                 )
                 n_primary = len(primary_df)
 
@@ -2996,14 +2992,14 @@ class ExhaustiveBenchmarkSuite:
                     f"- TorchFits (numpy return) best: {tf_numpy_wins}/{n_primary} ({(tf_numpy_wins / max(n_primary, 1)):.1%})\n"
                 )
                 f.write(
-                    f"- TorchFits smart (`torchfits`) best overall: {tf_smart_wins}/{n_primary} ({(tf_smart_wins / max(n_primary, 1)):.1%})\n"
+                    f"- TorchFits smart (`torchsky`) best overall: {tf_smart_wins}/{n_primary} ({(tf_smart_wins / max(n_primary, 1)):.1%})\n"
                 )
                 f.write(
-                    f"- TorchFits specialized (`torchfits_specialized`) best specialized: {tf_specialized_wins}/{n_primary} ({(tf_specialized_wins / max(n_primary, 1)):.1%})\n"
+                    f"- TorchFits specialized (`torchsky_specialized`) best specialized: {tf_specialized_wins}/{n_primary} ({(tf_specialized_wins / max(n_primary, 1)):.1%})\n"
                 )
 
                 # Show torch-returning misses explicitly
-                misses = primary_df[best_torch != "torchfits"].copy()
+                misses = primary_df[best_torch != "torchsky"].copy()
                 if not misses.empty:
                     misses = misses.sort_values("speedup_vs_best_torch").head(10)
                     f.write(
@@ -3030,11 +3026,11 @@ class ExhaustiveBenchmarkSuite:
             if not wcs_df.empty:
                 f.write("## WCS Performance Summary\n\n")
                 f.write(
-                    "| Case | Operation | Best | torchfits (Mpts/s) | astropy (Mpts/s) | Speedup |\n"
+                    "| Case | Operation | Best | torchsky (Mpts/s) | astropy (Mpts/s) | Speedup |\n"
                 )
                 f.write("|---|---|---|---|---|---:|\n")
                 for _, r in wcs_df.iterrows():
-                    tf_mpts = r.get("torchfits_mb_s", 0)
+                    tf_mpts = r.get("torchsky_mb_s", 0)
                     ast_mpts = r.get("astropy_mb_s", 0)
                     speedup = r.get("speedup_vs_best")
                     speedup_str = (
@@ -3050,11 +3046,11 @@ class ExhaustiveBenchmarkSuite:
             if not sphere_df.empty:
                 f.write("## Sphere/HEALPix Performance Summary\n\n")
                 f.write(
-                    "| Case | Operation | Comparator | Best | torchfits (Mpts/s) | comparator (Mpts/s) | Speedup |\n"
+                    "| Case | Operation | Comparator | Best | torchsky (Mpts/s) | comparator (Mpts/s) | Speedup |\n"
                 )
                 f.write("|---|---|---|---|---|---|---:|\n")
                 for _, r in sphere_df.iterrows():
-                    tf_mpts = r.get("torchfits_mb_s", 0)
+                    tf_mpts = r.get("torchsky_mb_s", 0)
                     hp_mpts = r.get(
                         "astropy_mb_s", 0
                     )  # Generic comparator column for sphere rows.
@@ -3109,11 +3105,11 @@ class ExhaustiveBenchmarkSuite:
                     tf_spec_str = f"{tf_spec:.4f}" if _is_valid_number(tf_spec) else "-"
                     tf_hot_str = f"{tf_hot:.4f}" if _is_valid_number(tf_hot) else "-"
                     best_torch = r.get("best_method_torch", "-")
-                    rank_torch = r.get("torchfits_rank_torch", "-")
+                    rank_torch = r.get("torchsky_rank_torch", "-")
                     best_spec = r.get("best_method_specialized", "-")
-                    rank_spec = r.get("torchfits_specialized_rank", "-")
+                    rank_spec = r.get("torchsky_specialized_rank", "-")
                     best_numpy = r.get("best_method_numpy", "-")
-                    rank_numpy = r.get("torchfits_numpy_rank", "-")
+                    rank_numpy = r.get("torchsky_numpy_rank", "-")
                     fitsio_time = r.get(fi_col)
                     fitsio_over_tf = (
                         f"{fitsio_time / tf_spec:.2f}x"
@@ -3147,23 +3143,19 @@ class ExhaustiveBenchmarkSuite:
                 valid_df = primary_df[primary_df[tf_col].notna()]
 
                 if not valid_df.empty:
+                    f.write(f"- Fastest torchsky time: {valid_df[tf_col].min():.6f}s\n")
+                    f.write(f"- Slowest torchsky time: {valid_df[tf_col].max():.6f}s\n")
                     f.write(
-                        f"- Fastest torchfits time: {valid_df[tf_col].min():.6f}s\n"
+                        f"- Average torchsky time: {valid_df[tf_col].mean():.6f}s\n"
                     )
                     f.write(
-                        f"- Slowest torchfits time: {valid_df[tf_col].max():.6f}s\n"
+                        f"- Median torchsky time: {valid_df[tf_col].median():.6f}s\n"
                     )
-                    f.write(
-                        f"- Average torchfits time: {valid_df[tf_col].mean():.6f}s\n"
-                    )
-                    f.write(
-                        f"- Median torchfits time: {valid_df[tf_col].median():.6f}s\n"
-                    )
-                if "torchfits_median" in primary_df.columns:
-                    valid_med = primary_df[primary_df["torchfits_median"].notna()]
+                if "torchsky_median" in primary_df.columns:
+                    valid_med = primary_df[primary_df["torchsky_median"].notna()]
                     if not valid_med.empty:
                         f.write(
-                            f"- Median of torchfits median-times: {valid_med['torchfits_median'].median():.6f}s\n"
+                            f"- Median of torchsky median-times: {valid_med['torchsky_median'].median():.6f}s\n"
                         )
                 f.write(
                     "- Note: for files <0.1 MB, rankings and MB/s are computed using median timings to reduce noise.\n"
@@ -3182,10 +3174,10 @@ class ExhaustiveBenchmarkSuite:
                 f.write("\n\n")
 
             # Ranking analysis
-            if "torchfits_rank" in df.columns:
+            if "torchsky_rank" in df.columns:
                 f.write("## Ranking Analysis\n\n")
                 rank_series = pd.to_numeric(
-                    primary_df["torchfits_rank"], errors="coerce"
+                    primary_df["torchsky_rank"], errors="coerce"
                 )
                 rank_series = rank_series[(rank_series >= 1) & (rank_series < 999)]
                 if not rank_series.empty:
@@ -3194,13 +3186,13 @@ class ExhaustiveBenchmarkSuite:
                     rank3_plus = sum(rank_counts[rank_counts.index >= 3])
 
                     f.write(
-                        f"- Times torchfits smart ranked #1: {rank_counts.get(1, 0)} ({rank_counts.get(1, 0) / total_valid * 100:.1f}%)\n"
+                        f"- Times torchsky smart ranked #1: {rank_counts.get(1, 0)} ({rank_counts.get(1, 0) / total_valid * 100:.1f}%)\n"
                     )
                     f.write(
-                        f"- Times torchfits smart ranked #2: {rank_counts.get(2, 0)} ({rank_counts.get(2, 0) / total_valid * 100:.1f}%)\n"
+                        f"- Times torchsky smart ranked #2: {rank_counts.get(2, 0)} ({rank_counts.get(2, 0) / total_valid * 100:.1f}%)\n"
                     )
                     f.write(
-                        f"- Times torchfits smart ranked #3+: {rank3_plus} ({rank3_plus / total_valid * 100:.1f}%)\n"
+                        f"- Times torchsky smart ranked #3+: {rank3_plus} ({rank3_plus / total_valid * 100:.1f}%)\n"
                     )
                     f.write(f"- Average smart ranking: {rank_series.mean():.2f}\n")
                 else:
@@ -3210,17 +3202,17 @@ class ExhaustiveBenchmarkSuite:
             # Informational conversion overhead (not a cross-library regression table).
             if tf_col in df.columns and tf_np_col in df.columns:
                 f.write(
-                    "## Informational: Tensor Conversion Overhead vs `torchfits_numpy`\n\n"
+                    "## Informational: Tensor Conversion Overhead vs `torchsky_numpy`\n\n"
                 )
                 overhead = primary_df.copy()
-                overhead["torchfits_smart_time"] = pd.to_numeric(
+                overhead["torchsky_smart_time"] = pd.to_numeric(
                     overhead[tf_col], errors="coerce"
                 )
-                overhead["torchfits_numpy_time"] = pd.to_numeric(
+                overhead["torchsky_numpy_time"] = pd.to_numeric(
                     overhead[tf_np_col], errors="coerce"
                 )
                 overhead["smart_over_numpy"] = (
-                    overhead["torchfits_smart_time"] / overhead["torchfits_numpy_time"]
+                    overhead["torchsky_smart_time"] / overhead["torchsky_numpy_time"]
                 )
                 overhead = overhead[
                     overhead["smart_over_numpy"].notna()
@@ -3232,12 +3224,12 @@ class ExhaustiveBenchmarkSuite:
                         "smart_over_numpy", ascending=False
                     ).head(10)
                     f.write(
-                        "These rows compare `torchfits` tensor-return overhead against "
-                        "`torchfits_numpy`; use the method-family sections below for "
+                        "These rows compare `torchsky` tensor-return overhead against "
+                        "`torchsky_numpy`; use the method-family sections below for "
                         "true regression interpretation.\n\n"
                     )
                     f.write(
-                        "| File | Type | Size (MB) | Speedup vs `torchfits_numpy` |\n"
+                        "| File | Type | Size (MB) | Speedup vs `torchsky_numpy` |\n"
                     )
                     f.write("|---|---|---|---|\n")
                     for _, r in overhead.iterrows():
@@ -3257,15 +3249,15 @@ class ExhaustiveBenchmarkSuite:
             ):
                 f.write("## Top Regressions (smart/tensor methods)\n\n")
                 regressions = primary_df.copy()
-                regressions["torchfits_rank_torch"] = pd.to_numeric(
-                    regressions["torchfits_rank_torch"], errors="coerce"
+                regressions["torchsky_rank_torch"] = pd.to_numeric(
+                    regressions["torchsky_rank_torch"], errors="coerce"
                 )
                 regressions["speedup_vs_best_torch"] = pd.to_numeric(
                     regressions["speedup_vs_best_torch"], errors="coerce"
                 )
                 regressions = regressions[
                     regressions["speedup_vs_best_torch"].notna()
-                    & (regressions["torchfits_rank_torch"] > 1)
+                    & (regressions["torchsky_rank_torch"] > 1)
                 ].copy()
                 if not regressions.empty:
                     regressions = regressions.sort_values("speedup_vs_best_torch").head(
@@ -3290,15 +3282,15 @@ class ExhaustiveBenchmarkSuite:
             ):
                 f.write("## Top Regressions (numpy-returning methods)\n\n")
                 regressions = primary_df.copy()
-                regressions["torchfits_numpy_rank"] = pd.to_numeric(
-                    regressions["torchfits_numpy_rank"], errors="coerce"
+                regressions["torchsky_numpy_rank"] = pd.to_numeric(
+                    regressions["torchsky_numpy_rank"], errors="coerce"
                 )
                 regressions["speedup_vs_best_numpy"] = pd.to_numeric(
                     regressions["speedup_vs_best_numpy"], errors="coerce"
                 )
                 regressions = regressions[
                     regressions["speedup_vs_best_numpy"].notna()
-                    & (regressions["torchfits_numpy_rank"] > 1)
+                    & (regressions["torchsky_numpy_rank"] > 1)
                 ].copy()
                 if not regressions.empty:
                     regressions = regressions.sort_values("speedup_vs_best_numpy").head(
@@ -3323,15 +3315,15 @@ class ExhaustiveBenchmarkSuite:
             ):
                 f.write("## Top Regressions (specialized/direct methods)\n\n")
                 regressions = primary_df.copy()
-                regressions["torchfits_specialized_rank"] = pd.to_numeric(
-                    regressions["torchfits_specialized_rank"], errors="coerce"
+                regressions["torchsky_specialized_rank"] = pd.to_numeric(
+                    regressions["torchsky_specialized_rank"], errors="coerce"
                 )
                 regressions["speedup_vs_best_specialized"] = pd.to_numeric(
                     regressions["speedup_vs_best_specialized"], errors="coerce"
                 )
                 regressions = regressions[
                     regressions["speedup_vs_best_specialized"].notna()
-                    & (regressions["torchfits_specialized_rank"] > 1)
+                    & (regressions["torchsky_specialized_rank"] > 1)
                 ].copy()
                 if not regressions.empty:
                     regressions = regressions.sort_values(
@@ -3350,54 +3342,54 @@ class ExhaustiveBenchmarkSuite:
                     f.write("No regressions found.\n\n")
 
             # Memory analysis
-            if "torchfits_memory" in df.columns:
+            if "torchsky_memory" in df.columns:
                 f.write("## Memory Analysis\n\n")
                 mem_df = primary_df[
-                    primary_df["torchfits_memory"].notna()
-                    & primary_df["torchfits_peak_memory"].notna()
+                    primary_df["torchsky_memory"].notna()
+                    & primary_df["torchsky_peak_memory"].notna()
                 ].copy()
                 if not mem_df.empty:
-                    mem_df["torchfits_memory"] = (
-                        pd.to_numeric(mem_df["torchfits_memory"], errors="coerce")
+                    mem_df["torchsky_memory"] = (
+                        pd.to_numeric(mem_df["torchsky_memory"], errors="coerce")
                         .fillna(0)
                         .clip(lower=0)
                     )
-                    mem_df["torchfits_peak_memory"] = (
-                        pd.to_numeric(mem_df["torchfits_peak_memory"], errors="coerce")
+                    mem_df["torchsky_peak_memory"] = (
+                        pd.to_numeric(mem_df["torchsky_peak_memory"], errors="coerce")
                         .fillna(0)
                         .clip(lower=0)
                     )
                     peak_lt_steady = int(
                         (
-                            mem_df["torchfits_peak_memory"] < mem_df["torchfits_memory"]
+                            mem_df["torchsky_peak_memory"] < mem_df["torchsky_memory"]
                         ).sum()
                     )
-                    nonzero_peak_df = mem_df[mem_df["torchfits_peak_memory"] > 0]
+                    nonzero_peak_df = mem_df[mem_df["torchsky_peak_memory"] > 0]
 
                     f.write(
-                        f"- Average steady RSS increase: {mem_df['torchfits_memory'].mean():.2f} MB\n"
+                        f"- Average steady RSS increase: {mem_df['torchsky_memory'].mean():.2f} MB\n"
                     )
                     f.write(
-                        f"- Median steady RSS increase: {mem_df['torchfits_memory'].median():.2f} MB\n"
+                        f"- Median steady RSS increase: {mem_df['torchsky_memory'].median():.2f} MB\n"
                     )
                     f.write(
-                        f"- Average peak RSS increase: {mem_df['torchfits_peak_memory'].mean():.2f} MB\n"
+                        f"- Average peak RSS increase: {mem_df['torchsky_peak_memory'].mean():.2f} MB\n"
                     )
                     f.write(
-                        f"- Median peak RSS increase: {mem_df['torchfits_peak_memory'].median():.2f} MB\n"
+                        f"- Median peak RSS increase: {mem_df['torchsky_peak_memory'].median():.2f} MB\n"
                     )
                     f.write(
-                        f"- P95 peak RSS increase: {mem_df['torchfits_peak_memory'].quantile(0.95):.2f} MB\n"
+                        f"- P95 peak RSS increase: {mem_df['torchsky_peak_memory'].quantile(0.95):.2f} MB\n"
                     )
                     f.write(f"- Rows with peak < steady RSS: {peak_lt_steady}\n")
                     if not nonzero_peak_df.empty:
                         steady_over_peak = (
-                            nonzero_peak_df["torchfits_memory"]
-                            / nonzero_peak_df["torchfits_peak_memory"]
+                            nonzero_peak_df["torchsky_memory"]
+                            / nonzero_peak_df["torchsky_peak_memory"]
                         ).mean()
                         size_over_peak = (
                             nonzero_peak_df["size_mb"]
-                            / nonzero_peak_df["torchfits_peak_memory"]
+                            / nonzero_peak_df["torchsky_peak_memory"]
                         ).mean()
                         f.write(
                             f"- Mean steady/peak RSS ratio: {steady_over_peak:.2f}\n"
@@ -3408,10 +3400,10 @@ class ExhaustiveBenchmarkSuite:
 
                     # Payload size is deterministic (tensor/ndarray nbytes) and is the most
                     # reliable per-call memory signal we can compute without forking a subprocess.
-                    if "torchfits_payload_mb" in mem_df.columns:
+                    if "torchsky_payload_mb" in mem_df.columns:
                         payload = (
                             pd.to_numeric(
-                                mem_df["torchfits_payload_mb"], errors="coerce"
+                                mem_df["torchsky_payload_mb"], errors="coerce"
                             )
                             .fillna(0)
                             .clip(lower=0)
@@ -3423,7 +3415,7 @@ class ExhaustiveBenchmarkSuite:
                             f"- Median payload size (TorchFits return): {payload.median():.2f} MB\n"
                         )
                 else:
-                    f.write("- No valid torchfits RSS memory data collected.\n")
+                    f.write("- No valid torchsky RSS memory data collected.\n")
                 f.write("\n")
 
             # Top performers
@@ -3440,7 +3432,7 @@ class ExhaustiveBenchmarkSuite:
                 f.write("\n")
 
             # Issues and failures
-            failed_files = primary_df[primary_df["torchfits_mean"].isna()]
+            failed_files = primary_df[primary_df["torchsky_mean"].isna()]
             if not failed_files.empty:
                 f.write("## Failed Tests\n\n")
                 for _, row in failed_files.iterrows():
@@ -3451,9 +3443,9 @@ class ExhaustiveBenchmarkSuite:
             f.write("## Comprehensive Recommendations\n\n")
             f.write("Based on the exhaustive benchmark results:\n\n")
 
-            if "torchfits_rank" in df.columns:
+            if "torchsky_rank" in df.columns:
                 rank_series = pd.to_numeric(
-                    primary_df["torchfits_rank"], errors="coerce"
+                    primary_df["torchsky_rank"], errors="coerce"
                 )
                 rank_series = rank_series[(rank_series >= 1) & (rank_series < 999)]
                 if rank_series.empty:
@@ -3462,33 +3454,33 @@ class ExhaustiveBenchmarkSuite:
                     avg_rank = rank_series.mean()
                     if avg_rank <= 2:
                         f.write(
-                            "✅ **torchfits shows excellent performance** across primary read scenarios\n"
+                            "✅ **torchsky shows excellent performance** across primary read scenarios\n"
                         )
                     elif avg_rank <= 3:
                         f.write(
-                            "⚠️ **torchfits shows good performance** with opportunities for optimization\n"
+                            "⚠️ **torchsky shows good performance** with opportunities for optimization\n"
                         )
                     else:
                         f.write(
-                            "❌ **torchfits performance needs significant improvement**\n"
+                            "❌ **torchsky performance needs significant improvement**\n"
                         )
 
             # Specific findings
             f.write("\n### Specific Findings:\n\n")
 
             # Best file types
-            if "torchfits_rank" in df.columns and "file_type" in df.columns:
+            if "torchsky_rank" in df.columns and "file_type" in df.columns:
                 rank_by_type = primary_df.copy()
-                rank_by_type["torchfits_rank"] = pd.to_numeric(
-                    rank_by_type["torchfits_rank"], errors="coerce"
+                rank_by_type["torchsky_rank"] = pd.to_numeric(
+                    rank_by_type["torchsky_rank"], errors="coerce"
                 )
                 rank_by_type = rank_by_type[
-                    rank_by_type["torchfits_rank"].notna()
-                    & (rank_by_type["torchfits_rank"] < 999)
+                    rank_by_type["torchsky_rank"].notna()
+                    & (rank_by_type["torchsky_rank"] < 999)
                 ]
                 if not rank_by_type.empty:
                     best_types = (
-                        rank_by_type.groupby("file_type")["torchfits_rank"]
+                        rank_by_type.groupby("file_type")["torchsky_rank"]
                         .mean()
                         .sort_values()
                     )
@@ -3755,7 +3747,7 @@ class ExhaustiveBenchmarkSuite:
     ):
         """Run the complete exhaustive benchmark suite."""
         try:
-            print("Starting exhaustive torchfits benchmark suite...", flush=True)
+            print("Starting exhaustive torchsky benchmark suite...", flush=True)
             print(f"Output directory: {self.output_dir}", flush=True)
             print(
                 "Benchmark profile: "
@@ -3856,7 +3848,7 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--":
         del sys.argv[1]
 
-    parser = argparse.ArgumentParser(description="Run exhaustive torchfits benchmarks")
+    parser = argparse.ArgumentParser(description="Run exhaustive torchsky benchmarks")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -3955,19 +3947,19 @@ def main():
         "--cache-capacity",
         type=int,
         default=None,
-        help="torchfits in-memory cache entries (overrides profile default)",
+        help="torchsky in-memory cache entries (overrides profile default)",
     )
     parser.add_argument(
         "--handle-cache-capacity",
         type=int,
         default=None,
-        help="torchfits open-handle cache entries (overrides profile default)",
+        help="torchsky open-handle cache entries (overrides profile default)",
     )
     parser.add_argument(
         "--hot-cache-capacity",
         type=int,
         default=None,
-        help="torchfits cache entries for hot path benchmark (overrides profile default)",
+        help="torchsky cache entries for hot path benchmark (overrides profile default)",
     )
     parser.add_argument(
         "--payload-min-ratio",
@@ -4090,7 +4082,7 @@ def main():
         suite.cleanup = lambda: print(f"Temporary files kept in: {suite.temp_dir}")
 
     if args.focused_only:
-        print("Starting focused torchfits benchmark suite...")
+        print("Starting focused torchsky benchmark suite...")
         print(
             "Benchmark profile: "
             f"{suite.profile} (cache={suite.cache_capacity}, "

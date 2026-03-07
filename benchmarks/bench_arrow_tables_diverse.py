@@ -39,8 +39,8 @@ import pyarrow as pa  # noqa: E402
 import torch  # noqa: E402
 
 import fitsio  # noqa: E402
-import torchfits  # noqa: E402
-import torchfits.cpp as torchfits_cpp  # noqa: E402
+import torchsky  # noqa: E402
+import torchsky.cpp as torchsky_cpp  # noqa: E402
 
 try:
     import psutil
@@ -59,14 +59,14 @@ def _time(fn, warmup: int, iterations: int) -> tuple[float, float]:
     return mean(times), (stdev(times) if len(times) > 1 else 0.0)
 
 
-def _clear_torchfits_runtime_caches() -> None:
+def _clear_torchsky_runtime_caches() -> None:
     """Best-effort cache clear between cold measurements."""
     try:
-        torchfits.clear_file_cache()
+        torchsky.clear_file_cache()
     except Exception:
         pass
     try:
-        torchfits.table._close_all_cached_handles()
+        torchsky.table._close_all_cached_handles()
     except Exception:
         pass
 
@@ -171,7 +171,7 @@ def _profile_methods_cold_once(
     out: dict[str, dict[str, float]] = {}
     sample_interval_s = 0.001
     for name, fn in methods:
-        _clear_torchfits_runtime_caches()
+        _clear_torchsky_runtime_caches()
         gc.collect()
         elapsed_s, rss_delta_mb, rss_peak_delta_mb = _measure_method_once(
             fn, sample_interval_s=sample_interval_s
@@ -414,12 +414,12 @@ def _run_scenario(
     start_row = 1
     num_rows = rows
 
-    def _torchfits_cpp_numpy_chunk():
-        return torchfits_cpp.read_fits_table_rows_numpy(
+    def _torchsky_cpp_numpy_chunk():
+        return torchsky_cpp.read_fits_table_rows_numpy(
             str(file_path), 1, col_list, start_row, num_rows, False
         )
 
-    def _torchfits_numpy_chunk_to_arrow(chunk: dict[str, object]):
+    def _torchsky_numpy_chunk_to_arrow(chunk: dict[str, object]):
         pydict: dict[str, object] = {}
         for name, value in chunk.items():
             if isinstance(value, np.ndarray):
@@ -456,14 +456,14 @@ def _run_scenario(
         return pa.table(pydict)
 
     methods = [
-        ("torchfits_cpp_numpy_raw", _torchfits_cpp_numpy_chunk),
+        ("torchsky_cpp_numpy_raw", _torchsky_cpp_numpy_chunk),
         (
-            "torchfits_cpp_numpy_to_arrow",
-            lambda: _torchfits_numpy_chunk_to_arrow(_torchfits_cpp_numpy_chunk()),
+            "torchsky_cpp_numpy_to_arrow",
+            lambda: _torchsky_numpy_chunk_to_arrow(_torchsky_cpp_numpy_chunk()),
         ),
         (
-            "torchfits_read_raw",
-            lambda: torchfits.table.read(
+            "torchsky_read_raw",
+            lambda: torchsky.table.read(
                 str(file_path),
                 hdu=1,
                 decode_bytes=False,
@@ -483,10 +483,10 @@ def _run_scenario(
         ),
         ("astropy_table_read", lambda: Table.read(str(file_path), hdu=1)),
         (
-            "torchfits_scan_sum_raw",
+            "torchsky_scan_sum_raw",
             lambda: sum(
                 float(np.asarray(batch.column("RA")).sum())
-                for batch in torchfits.table.scan(
+                for batch in torchsky.table.scan(
                     str(file_path),
                     hdu=1,
                     decode_bytes=False,
@@ -497,10 +497,10 @@ def _run_scenario(
             ),
         ),
         (
-            "torchfits_scan_torch_sum_cpu",
+            "torchsky_scan_torch_sum_cpu",
             lambda: sum(
                 float(chunk["RA"].sum().item())
-                for chunk in torchfits.table.scan_torch(
+                for chunk in torchsky.table.scan_torch(
                     str(file_path),
                     hdu=1,
                     batch_size=batch_size,
@@ -513,8 +513,8 @@ def _run_scenario(
     if null_cols:
         methods.append(
             (
-                "torchfits_read_raw_with_nulls",
-                lambda: torchfits.table.read(
+                "torchsky_read_raw_with_nulls",
+                lambda: torchsky.table.read(
                     str(file_path),
                     hdu=1,
                     decode_bytes=False,
@@ -528,8 +528,8 @@ def _run_scenario(
     if scale_cols:
         methods.append(
             (
-                "torchfits_read_scaled",
-                lambda: torchfits.table.read(
+                "torchsky_read_scaled",
+                lambda: torchsky.table.read(
                     str(file_path),
                     hdu=1,
                     decode_bytes=False,
@@ -544,8 +544,8 @@ def _run_scenario(
         methods.extend(
             [
                 (
-                    "torchfits_read_decoded",
-                    lambda: torchfits.table.read(
+                    "torchsky_read_decoded",
+                    lambda: torchsky.table.read(
                         str(file_path),
                         hdu=1,
                         decode_bytes=True,
@@ -573,8 +573,8 @@ def _run_scenario(
     methods.extend(
         [
             (
-                "torchfits_read_projected",
-                lambda: torchfits.table.read(
+                "torchsky_read_projected",
+                lambda: torchsky.table.read(
                     str(file_path),
                     hdu=1,
                     columns=proj_cols,
@@ -681,7 +681,7 @@ def main() -> None:
             f"Unknown scenarios: {unknown}. Available: {sorted(SCENARIOS)}"
         )
 
-    data_dir = Path(tempfile.mkdtemp(prefix="torchfits_table_arrow_diverse_"))
+    data_dir = Path(tempfile.mkdtemp(prefix="torchsky_table_arrow_diverse_"))
     rng = np.random.default_rng(0)
     all_results: list[dict[str, str | float | int]] = []
 

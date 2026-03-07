@@ -1,6 +1,6 @@
 import torch
 
-from torchfits.wcs.core import WCS
+from torchsky.wcs.core import WCS
 
 
 def _arc_header() -> dict[str, float | str]:

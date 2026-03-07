@@ -1,11 +1,11 @@
 """
-Tests for torchfits transforms module.
+Tests for torchsky transforms module.
 """
 
 import pytest
 import torch
 
-from torchfits.transforms import (
+from torchsky.transforms import (
     AsinhStretch,
     CenterCrop,
     Compose,

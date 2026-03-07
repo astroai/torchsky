@@ -8,7 +8,7 @@ try:
 except Exception:
     stype = None
 
-from torchfits.frame import read_tensor_frame, to_tensor_frame, write_tensor_frame
+from torchsky.frame import read_tensor_frame, to_tensor_frame, write_tensor_frame
 
 
 def test_frame_integration():
@@ -37,8 +37,8 @@ def test_frame_integration():
     tf_read = read_tensor_frame(filename)
 
     # Verify content
-    # Note: FITS might change column order or names case (though torchfits tries to preserve)
-    # torchfits write uses original names.
+    # Note: FITS might change column order or names case (though torchsky tries to preserve)
+    # torchsky write uses original names.
 
     # Check numerical
     assert stype.numerical in tf_read.feat_dict

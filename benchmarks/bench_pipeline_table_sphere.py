@@ -24,9 +24,9 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from astropy.io import fits  # noqa: E402
 
-import torchfits  # noqa: E402
-import torchfits.cpp as cpp  # noqa: E402
-from torchfits.wcs import healpix as hp  # noqa: E402
+import torchsky  # noqa: E402
+import torchsky.cpp as cpp  # noqa: E402
+from torchsky.wcs import healpix as hp  # noqa: E402
 
 
 @dataclass
@@ -126,7 +126,7 @@ def _run_read_where(path: Path, where: str, backend: str, runs: int) -> Row:
 
     def _fn() -> tuple[int, int]:
         if backend == "torch":
-            table = torchfits.table.read(
+            table = torchsky.table.read(
                 str(path), hdu=1, columns=cols, where=None, backend="torch"
             )
             mag = _arrow_col_to_numpy(table, "MAG")
@@ -170,7 +170,7 @@ def _run_pipeline_where(
 
     def _fn() -> tuple[int, int]:
         if backend == "torch":
-            table = torchfits.table.read(
+            table = torchsky.table.read(
                 str(path), hdu=1, columns=cols, where=None, backend="torch"
             )
             ra_all = _arrow_col_to_numpy(table, "RA")
@@ -205,7 +205,7 @@ def _run_pipeline_no_pushdown(path: Path, nside: int, runs: int) -> Row:
     cols = ["RA", "DEC", "MAG", "BAND"]
 
     def _fn() -> tuple[int, int]:
-        table = torchfits.table.read(
+        table = torchsky.table.read(
             str(path), hdu=1, columns=cols, where=None, backend="cpp_numpy"
         )
         ra = _arrow_col_to_numpy(table, "RA")

@@ -18,12 +18,12 @@ root = Path(__file__).resolve().parent.parent
 if str(root) not in sys.path:
     sys.path.insert(0, str(root))
 
-# Also add src to sys.path for torchfits development
+# Also add src to sys.path for torchsky development
 src = root / "src"
 if str(src) not in sys.path:
     sys.path.insert(0, str(src))
 
-from torchfits.wcs.core import WCS as TorchWCS  # noqa: E402
+from torchsky.wcs.core import WCS as TorchWCS  # noqa: E402
 from benchmarks.bench_wcs import CASES, _make_header, _sample_pixels  # noqa: E402
 
 try:
@@ -163,14 +163,14 @@ def run_case(
         "sample_profile": profile,
         "n_points": int(n_points),
         "n_valid": int(np.sum(valid)),
-        "torchfits_mode": "smart",
+        "torchsky_mode": "smart",
         "astropy_mode": "smart",
         "pyast_mode": "specialized",
         "kapteyn_mode": "specialized",
         "astropy_ms": ast_dt * 1000.0,
-        "torchfits_ms": torch_dt * 1000.0,
-        "torchfits_speedup": ast_dt / torch_dt,
-        "torchfits_max_angular_error_arcsec": float(
+        "torchsky_ms": torch_dt * 1000.0,
+        "torchsky_speedup": ast_dt / torch_dt,
+        "torchsky_max_angular_error_arcsec": float(
             np.max(
                 _angular_sep_deg(
                     ra_t_np[valid], dec_t_np[valid], ra_ast[valid], dec_ast[valid]
@@ -220,25 +220,25 @@ def run_case(
 
     # Compare only like-for-like mode families.
     smart_times = {
-        "torchfits": float(result["torchfits_ms"]),
+        "torchsky": float(result["torchsky_ms"]),
         "astropy": float(result["astropy_ms"]),
     }
     best_smart = min(smart_times, key=smart_times.get)
     sorted_smart = sorted(smart_times.items(), key=lambda kv: kv[1])
     tf_rank_smart = next(
-        (i + 1 for i, (name, _) in enumerate(sorted_smart) if name == "torchfits"),
+        (i + 1 for i, (name, _) in enumerate(sorted_smart) if name == "torchsky"),
         len(sorted_smart) + 1,
     )
-    if best_smart == "torchfits":
-        other = [v for k, v in smart_times.items() if k != "torchfits"]
+    if best_smart == "torchsky":
+        other = [v for k, v in smart_times.items() if k != "torchsky"]
         speedup_vs_best_smart = (
-            float(result["torchfits_ms"]) / min(other) if other else float("nan")
+            float(result["torchsky_ms"]) / min(other) if other else float("nan")
         )
     else:
-        speedup_vs_best_smart = smart_times[best_smart] / float(result["torchfits_ms"])
+        speedup_vs_best_smart = smart_times[best_smart] / float(result["torchsky_ms"])
 
     result["best_method_smart"] = best_smart
-    result["torchfits_rank_smart"] = tf_rank_smart
+    result["torchsky_rank_smart"] = tf_rank_smart
     result["speedup_vs_best_smart"] = speedup_vs_best_smart
 
     specialized_times = {}
@@ -301,9 +301,9 @@ def main() -> int:
         "best_method_smart",
         "best_method_specialized",
         "astropy_ms",
-        "torchfits_ms",
-        "torchfits_speedup",
-        "torchfits_max_angular_error_arcsec",
+        "torchsky_ms",
+        "torchsky_speedup",
+        "torchsky_max_angular_error_arcsec",
         "pyast_ms",
         "kapteyn_ms",
     ]
@@ -314,9 +314,9 @@ def main() -> int:
             f"{r['best_method_smart']:>16s}"
             f"{r['best_method_specialized']:>16s}"
             f"{r['astropy_ms']:16.3f}"
-            f"{r['torchfits_ms']:16.3f}"
-            f"{r['torchfits_speedup']:16.2f}"
-            f"{r['torchfits_max_angular_error_arcsec']:16.4g}"
+            f"{r['torchsky_ms']:16.3f}"
+            f"{r['torchsky_speedup']:16.2f}"
+            f"{r['torchsky_max_angular_error_arcsec']:16.4g}"
             f"{r['pyast_ms']:16.3f}"
             f"{r['kapteyn_ms']:16.3f}"
         )

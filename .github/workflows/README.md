@@ -1,6 +1,6 @@
 # GitHub Workflows
 
-This directory contains the GitHub Actions CI/CD workflows for torchfits.
+This directory contains the GitHub Actions CI/CD workflows for torchsky.
 
 ## Active Workflows
 

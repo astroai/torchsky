@@ -32,11 +32,11 @@ import torch  # noqa: E402
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 try:
-    import torchfits
-    from torchfits.core import FITSCore  # noqa: F401
+    import torchsky
+    from torchsky.core import FITSCore  # noqa: F401
 except ImportError as e:
-    print(f"[diagnostic] torchfits import failed: {e}")
-    torchfits = None
+    print(f"[diagnostic] torchsky import failed: {e}")
+    torchsky = None
 
 try:
     from astropy.io import fits as astropy_fits
@@ -175,34 +175,34 @@ class CPPBackendBenchmark:
         }
 
         try:
-            if torchfits:
+            if torchsky:
                 tf_last = {"tensor_shape": None, "tensor_dtype": None}
 
-                def read_torchfits() -> torch.Tensor:
+                def read_torchsky() -> torch.Tensor:
                     # High-level comparison path.
-                    out = torchfits.read(filepath, hdu=hdu, policy="smart")
+                    out = torchsky.read(filepath, hdu=hdu, policy="smart")
                     tensor = out[0] if isinstance(out, tuple) else out
                     tf_last["tensor_shape"] = list(tensor.shape)
                     tf_last["tensor_dtype"] = str(tensor.dtype)
                     return tensor
 
-                tf_stats = self._time_callable(read_torchfits)
-                result.update({f"torchfits_{k}": v for k, v in tf_stats.items()})
-                result["torchfits_shape"] = tf_last["tensor_shape"]
-                result["torchfits_dtype"] = tf_last["tensor_dtype"]
+                tf_stats = self._time_callable(read_torchsky)
+                result.update({f"torchsky_{k}": v for k, v in tf_stats.items()})
+                result["torchsky_shape"] = tf_last["tensor_shape"]
+                result["torchsky_dtype"] = tf_last["tensor_dtype"]
 
-                def read_torchfits_specialized() -> torch.Tensor:
+                def read_torchsky_specialized() -> torch.Tensor:
                     # Direct/specialized image path.
-                    return torchfits.read_image(
+                    return torchsky.read_image(
                         filepath,
                         hdu=hdu,
                         mmap=(not compressed),
                         handle_cache=True,
                     )
 
-                tf_spec_stats = self._time_callable(read_torchfits_specialized)
+                tf_spec_stats = self._time_callable(read_torchsky_specialized)
                 result.update(
-                    {f"torchfits_specialized_{k}": v for k, v in tf_spec_stats.items()}
+                    {f"torchsky_specialized_{k}": v for k, v in tf_spec_stats.items()}
                 )
 
             if astropy_fits:
@@ -246,52 +246,52 @@ class CPPBackendBenchmark:
                     {f"fitsio_specialized_{k}": v for k, v in fi_spec_stats.items()}
                 )
 
-            if "torchfits_median_s" in result and "astropy_median_s" in result:
+            if "torchsky_median_s" in result and "astropy_median_s" in result:
                 result["vs_astropy_median"] = (
-                    result["astropy_median_s"] / result["torchfits_median_s"]
+                    result["astropy_median_s"] / result["torchsky_median_s"]
                 )
-            if "torchfits_median_s" in result and "fitsio_median_s" in result:
+            if "torchsky_median_s" in result and "fitsio_median_s" in result:
                 result["vs_fitsio_median"] = (
-                    result["fitsio_median_s"] / result["torchfits_median_s"]
+                    result["fitsio_median_s"] / result["torchsky_median_s"]
                 )
             if (
-                "torchfits_specialized_median_s" in result
+                "torchsky_specialized_median_s" in result
                 and "fitsio_median_s" in result
             ):
                 result["vs_fitsio_median_specialized"] = (
-                    result["fitsio_median_s"] / result["torchfits_specialized_median_s"]
+                    result["fitsio_median_s"] / result["torchsky_specialized_median_s"]
                 )
             if (
-                "torchfits_specialized_median_s" in result
+                "torchsky_specialized_median_s" in result
                 and "fitsio_specialized_median_s" in result
             ):
                 result["vs_fitsio_median_specialized_direct"] = (
                     result["fitsio_specialized_median_s"]
-                    / result["torchfits_specialized_median_s"]
+                    / result["torchsky_specialized_median_s"]
                 )
             if (
-                "torchfits_specialized_median_s" in result
+                "torchsky_specialized_median_s" in result
                 and "astropy_specialized_median_s" in result
             ):
                 result["vs_astropy_median_specialized_direct"] = (
                     result["astropy_specialized_median_s"]
-                    / result["torchfits_specialized_median_s"]
+                    / result["torchsky_specialized_median_s"]
                 )
 
             print(f"  File size: {result['file_size_mb']:.2f} MB")
-            if "torchfits_median_s" in result:
+            if "torchsky_median_s" in result:
                 print(
-                    "  torchfits (smart): "
-                    f"median={result['torchfits_median_s'] * 1000:.2f}ms "
-                    f"(p10={result['torchfits_p10_s'] * 1000:.2f}ms, "
-                    f"p90={result['torchfits_p90_s'] * 1000:.2f}ms, "
-                    f"spread={result['torchfits_spread_s'] * 1000:.2f}ms)"
+                    "  torchsky (smart): "
+                    f"median={result['torchsky_median_s'] * 1000:.2f}ms "
+                    f"(p10={result['torchsky_p10_s'] * 1000:.2f}ms, "
+                    f"p90={result['torchsky_p90_s'] * 1000:.2f}ms, "
+                    f"spread={result['torchsky_spread_s'] * 1000:.2f}ms)"
                 )
-            if "torchfits_specialized_median_s" in result:
+            if "torchsky_specialized_median_s" in result:
                 print(
-                    "  torchfits (specialized): "
-                    f"median={result['torchfits_specialized_median_s'] * 1000:.2f}ms "
-                    f"(spread={result['torchfits_specialized_spread_s'] * 1000:.2f}ms)"
+                    "  torchsky (specialized): "
+                    f"median={result['torchsky_specialized_median_s'] * 1000:.2f}ms "
+                    f"(spread={result['torchsky_specialized_spread_s'] * 1000:.2f}ms)"
                 )
             if "astropy_median_s" in result:
                 print(
@@ -321,27 +321,27 @@ class CPPBackendBenchmark:
             if "vs_astropy_median" in result:
                 speed = result["vs_astropy_median"]
                 print(
-                    f"  torchfits vs astropy (median): {speed:.2f}x {'faster' if speed > 1 else 'slower'}"
+                    f"  torchsky vs astropy (median): {speed:.2f}x {'faster' if speed > 1 else 'slower'}"
                 )
             if "vs_fitsio_median" in result:
                 speed = result["vs_fitsio_median"]
                 print(
-                    f"  torchfits smart vs fitsio (median):  {speed:.2f}x {'faster' if speed > 1 else 'slower'}"
+                    f"  torchsky smart vs fitsio (median):  {speed:.2f}x {'faster' if speed > 1 else 'slower'}"
                 )
             if "vs_fitsio_median_specialized" in result:
                 speed = result["vs_fitsio_median_specialized"]
                 print(
-                    f"  torchfits specialized vs fitsio smart (median):  {speed:.2f}x {'faster' if speed > 1 else 'slower'}"
+                    f"  torchsky specialized vs fitsio smart (median):  {speed:.2f}x {'faster' if speed > 1 else 'slower'}"
                 )
             if "vs_fitsio_median_specialized_direct" in result:
                 speed = result["vs_fitsio_median_specialized_direct"]
                 print(
-                    f"  torchfits specialized vs fitsio specialized (median):  {speed:.2f}x {'faster' if speed > 1 else 'slower'}"
+                    f"  torchsky specialized vs fitsio specialized (median):  {speed:.2f}x {'faster' if speed > 1 else 'slower'}"
                 )
             if "vs_astropy_median_specialized_direct" in result:
                 speed = result["vs_astropy_median_specialized_direct"]
                 print(
-                    f"  torchfits specialized vs astropy specialized (median): {speed:.2f}x {'faster' if speed > 1 else 'slower'}"
+                    f"  torchsky specialized vs astropy specialized (median): {speed:.2f}x {'faster' if speed > 1 else 'slower'}"
                 )
 
             self.results.append(result)
@@ -357,15 +357,15 @@ class CPPBackendBenchmark:
         cutout_spec = f"{filepath}[0][1000:2000,1000:2000]"
 
         try:
-            if torchfits:
+            if torchsky:
 
                 def tf_cutout() -> torch.Tensor:
-                    out = torchfits.read(cutout_spec, policy="smart")
+                    out = torchsky.read(cutout_spec, policy="smart")
                     return out[0] if isinstance(out, tuple) else out
 
                 tf_stats = self._time_callable(tf_cutout)
                 print(
-                    "  torchfits cutout: "
+                    "  torchsky cutout: "
                     f"median={tf_stats['median_s'] * 1000:.2f}ms "
                     f"(spread={tf_stats['spread_s'] * 1000:.2f}ms)"
                 )
@@ -402,7 +402,7 @@ class CPPBackendBenchmark:
         stable_issues_specialized: List[Dict[str, Any]] = []
         for result in self.results:
             ratio = result.get("vs_fitsio_median")
-            tf_rel_spread = result.get("torchfits_rel_spread")
+            tf_rel_spread = result.get("torchsky_rel_spread")
             fi_rel_spread = result.get("fitsio_rel_spread")
             if ratio is None:
                 continue
@@ -419,13 +419,13 @@ class CPPBackendBenchmark:
                         "case_label": result["case_label"],
                         "mode": "smart",
                         "vs_fitsio_median": ratio,
-                        "torchfits_rel_spread": tf_rel_spread,
+                        "torchsky_rel_spread": tf_rel_spread,
                         "fitsio_rel_spread": fi_rel_spread,
                     }
                 )
 
             ratio_spec = result.get("vs_fitsio_median_specialized_direct")
-            tf_spec_rel_spread = result.get("torchfits_specialized_rel_spread")
+            tf_spec_rel_spread = result.get("torchsky_specialized_rel_spread")
             fi_spec_rel_spread = result.get("fitsio_specialized_rel_spread")
             stable_spec = (
                 ratio_spec is not None
@@ -441,7 +441,7 @@ class CPPBackendBenchmark:
                         "case_label": result["case_label"],
                         "mode": "specialized",
                         "vs_fitsio_median": ratio_spec,
-                        "torchfits_rel_spread": tf_spec_rel_spread,
+                        "torchsky_rel_spread": tf_spec_rel_spread,
                         "fitsio_rel_spread": fi_spec_rel_spread,
                     }
                 )
@@ -453,7 +453,7 @@ class CPPBackendBenchmark:
                     "  "
                     f"{issue['case_label']}: "
                     f"vs_fitsio={issue['vs_fitsio_median']:.2f}x, "
-                    f"tf_rel_spread={issue['torchfits_rel_spread']:.2f}, "
+                    f"tf_rel_spread={issue['torchsky_rel_spread']:.2f}, "
                     f"fitsio_rel_spread={issue['fitsio_rel_spread']:.2f}"
                 )
         else:
@@ -466,7 +466,7 @@ class CPPBackendBenchmark:
                     "  "
                     f"{issue['case_label']}: "
                     f"vs_fitsio={issue['vs_fitsio_median']:.2f}x, "
-                    f"tf_rel_spread={issue['torchfits_rel_spread']:.2f}, "
+                    f"tf_rel_spread={issue['torchsky_rel_spread']:.2f}, "
                     f"fitsio_rel_spread={issue['fitsio_rel_spread']:.2f}"
                 )
         else:
@@ -580,11 +580,11 @@ class CPPBackendBenchmark:
         print("[diagnostic] C++ Backend Performance Benchmark (non-gating)")
         print("=" * 50)
 
-        if not torchfits:
-            print("[diagnostic] SKIPPED: torchfits not available")
+        if not torchsky:
+            print("[diagnostic] SKIPPED: torchsky not available")
             return {
                 "status": "SKIPPED",
-                "reason": "torchfits_not_available",
+                "reason": "torchsky_not_available",
                 "results": [],
             }
 
@@ -638,7 +638,7 @@ def _parse_args() -> argparse.Namespace:
         "--issue-ratio-threshold",
         type=float,
         default=0.97,
-        help="Flag only if fitsio/torchfits median ratio is below this threshold",
+        help="Flag only if fitsio/torchsky median ratio is below this threshold",
     )
     parser.add_argument(
         "--max-relative-spread",

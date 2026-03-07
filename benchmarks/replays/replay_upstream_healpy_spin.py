@@ -25,7 +25,7 @@ import healpy as hp  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
-from torchfits.sphere.spectral import alm2map_spin, alm_index, alm_size, map2alm_spin  # noqa: E402
+from torchsky.sphere.spectral import alm2map_spin, alm_index, alm_size, map2alm_spin  # noqa: E402
 
 
 @dataclass
@@ -48,7 +48,7 @@ class Row:
     points: int
     rel_l2_error: float
     max_abs_error: float
-    torchfits_mpts_s: float
+    torchsky_mpts_s: float
     healpy_mpts_s: float
     ratio_vs_healpy: float
 
@@ -165,7 +165,7 @@ def _map2alm_case(case: Case, n_points: int, runs: int, seed: int) -> Row:
         points=n,
         rel_l2_error=rel,
         max_abs_error=max_abs,
-        torchfits_mpts_s=(n / t_tf) / 1e6,
+        torchsky_mpts_s=(n / t_tf) / 1e6,
         healpy_mpts_s=(n / t_hp) / 1e6,
         ratio_vs_healpy=t_hp / t_tf,
     )
@@ -225,7 +225,7 @@ def _alm2map_case(case: Case, n_points: int, runs: int, seed: int) -> Row:
         points=n,
         rel_l2_error=rel,
         max_abs_error=max_abs,
-        torchfits_mpts_s=(n / t_tf) / 1e6,
+        torchsky_mpts_s=(n / t_tf) / 1e6,
         healpy_mpts_s=(n / t_hp) / 1e6,
         ratio_vs_healpy=t_hp / t_tf,
     )
@@ -245,7 +245,7 @@ def main() -> int:
         "--min-ratio-vs-healpy",
         type=str,
         default="map2alm_spin=0.20,alm2map_spin=0.15",
-        help="Comma-separated op=ratio thresholds for median(torchfits/healpy).",
+        help="Comma-separated op=ratio thresholds for median(torchsky/healpy).",
     )
     parser.add_argument(
         "--disable-gates",
@@ -260,12 +260,12 @@ def main() -> int:
     args = parser.parse_args()
 
     # Default to the validated torch ring profile for reproducible spin replay.
-    os.environ.setdefault("TORCHFITS_RING_FOURIER_CPP", "1")
-    os.environ.setdefault("TORCHFITS_SPIN_MAP2ALM_RECURRENCE_CPP", "0")
-    os.environ.setdefault("TORCHFITS_SPIN_ALM2MAP_RECURRENCE_CPP", "0")
-    os.environ.setdefault("TORCHFITS_SPIN_MAP2ALM_RING_TORCH", "auto")
-    os.environ.setdefault("TORCHFITS_SPIN_ALM2MAP_RING_TORCH", "auto")
-    os.environ.setdefault("TORCHFITS_SPIN_RING_AUTO_MIN_BYTES", str(32 * 1024 * 1024))
+    os.environ.setdefault("TORCHSKY_RING_FOURIER_CPP", "1")
+    os.environ.setdefault("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "0")
+    os.environ.setdefault("TORCHSKY_SPIN_ALM2MAP_RECURRENCE_CPP", "0")
+    os.environ.setdefault("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "auto")
+    os.environ.setdefault("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "auto")
+    os.environ.setdefault("TORCHSKY_SPIN_RING_AUTO_MIN_BYTES", str(32 * 1024 * 1024))
 
     ratio_thresholds: dict[str, float] = {}
     for part in [p.strip() for p in args.min_ratio_vs_healpy.split(",") if p.strip()]:
@@ -298,7 +298,7 @@ def main() -> int:
         print(
             f"{r.operation:13s} {r.nside:5d} {r.lmax:5d} {r.mmax:5d} {str(r.nest):5s}"
             f" {r.rel_l2_error:11.3e} {r.max_abs_error:11.3e}"
-            f" {r.torchfits_mpts_s:10.3f} {r.healpy_mpts_s:10.3f} {r.ratio_vs_healpy:7.3f}"
+            f" {r.torchsky_mpts_s:10.3f} {r.healpy_mpts_s:10.3f} {r.ratio_vs_healpy:7.3f}"
         )
         if (
             r.operation == "map2alm_spin"

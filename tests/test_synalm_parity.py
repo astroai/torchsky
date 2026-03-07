@@ -4,7 +4,7 @@ import pytest
 
 def test_synalm_parity_detailed():
     hp = pytest.importorskip("healpy")
-    from torchfits.sphere import synalm
+    from torchsky.sphere import synalm
 
     lmax = 32
     mmax = 32

@@ -3,31 +3,31 @@ import torch
 import time
 import os
 
-import torchfits
+import torchsky
 
 
 def test_hdu_file_ops_insert_replace_delete(tmp_path):
     path = tmp_path / "ops.fits"
     base = torch.arange(16, dtype=torch.float32).reshape(4, 4)
-    torchfits.write(str(path), base, overwrite=True)
+    torchsky.write(str(path), base, overwrite=True)
 
     payload1 = torch.zeros((4, 4), dtype=torch.float32)
-    torchfits.insert_hdu(str(path), payload1, index=1, header={"EXTNAME": "SCI"})
+    torchsky.insert_hdu(str(path), payload1, index=1, header={"EXTNAME": "SCI"})
 
-    with torchfits.open(str(path)) as hdul:
+    with torchsky.open(str(path)) as hdul:
         assert len(hdul) == 2
         assert hdul["SCI"].header.get("EXTNAME") == "SCI"
-    assert torch.equal(torchfits.read(str(path), hdu=1), payload1)
+    assert torch.equal(torchsky.read(str(path), hdu=1), payload1)
 
     payload2 = torch.ones((4, 4), dtype=torch.float32)
-    torchfits.replace_hdu(str(path), "SCI", payload2)
-    assert torch.equal(torchfits.read(str(path), hdu=1), payload2)
+    torchsky.replace_hdu(str(path), "SCI", payload2)
+    assert torch.equal(torchsky.read(str(path), hdu=1), payload2)
 
-    torchfits.delete_hdu(str(path), "SCI")
-    with torchfits.open(str(path)) as hdul:
+    torchsky.delete_hdu(str(path), "SCI")
+    with torchsky.open(str(path)) as hdul:
         assert len(hdul) == 1
     with pytest.raises(Exception):
-        _ = torchfits.read(str(path), hdu=1)
+        _ = torchsky.read(str(path), hdu=1)
 
 
 @pytest.mark.skipif(
@@ -40,23 +40,23 @@ def test_external_overwrite_invalidates_cached_handle(tmp_path):
     original = torch.arange(16, dtype=torch.float32).reshape(4, 4)
     updated = torch.arange(16, dtype=torch.float32).reshape(4, 4) + 100.0
 
-    torchfits.write(str(path), original, overwrite=True)
-    first = torchfits.read(str(path), hdu=0)
+    torchsky.write(str(path), original, overwrite=True)
+    first = torchsky.read(str(path), hdu=0)
     assert torch.equal(first, original)
 
     time.sleep(1.1)
     fits.PrimaryHDU(updated.numpy()).writeto(path, overwrite=True)
-    second = torchfits.read(str(path), hdu=0)
+    second = torchsky.read(str(path), hdu=0)
     deadline = time.monotonic() + 3.0
     while not torch.equal(second, updated) and time.monotonic() < deadline:
         time.sleep(0.01)
-        second = torchfits.read(str(path), hdu=0)
+        second = torchsky.read(str(path), hdu=0)
     assert torch.equal(second, updated)
 
 
 def test_tablehduref_file_mutators_roundtrip(tmp_path):
     path = tmp_path / "table_mutators.fits"
-    torchfits.write(
+    torchsky.write(
         str(path),
         {
             "ID": torch.tensor([1, 2, 3], dtype=torch.int32),
@@ -66,7 +66,7 @@ def test_tablehduref_file_mutators_roundtrip(tmp_path):
         overwrite=True,
     )
 
-    with torchfits.open(str(path)) as hdul:
+    with torchsky.open(str(path)) as hdul:
         table = hdul[1]
         table = table.append_rows_file({"ID": [4], "VAL": [0.4], "FLAG": [False]})
         table = table.insert_rows_file(
@@ -76,7 +76,7 @@ def test_tablehduref_file_mutators_roundtrip(tmp_path):
         table = table.rename_columns_file({"VAL": "FLUX"})
         table = table.drop_columns_file(["FLAG"])
 
-    with torchfits.open(str(path)) as hdul:
+    with torchsky.open(str(path)) as hdul:
         table = hdul[1]
         assert table["ID"].squeeze(-1).tolist() == [1, 99, 2, 3, 4]
         assert table["FLUX"].squeeze(-1).shape[0] == 5
@@ -86,7 +86,7 @@ def test_tablehduref_file_mutators_roundtrip(tmp_path):
 
 def test_tablehduref_mutation_refreshes_schema_and_rowcount(tmp_path):
     path = tmp_path / "table_refresh.fits"
-    torchfits.write(
+    torchsky.write(
         str(path),
         {
             "ID": torch.tensor([1, 2], dtype=torch.int32),
@@ -95,7 +95,7 @@ def test_tablehduref_mutation_refreshes_schema_and_rowcount(tmp_path):
         overwrite=True,
     )
 
-    with torchfits.open(str(path)) as hdul:
+    with torchsky.open(str(path)) as hdul:
         table = hdul[1]
         updated = table.append_rows_file({"ID": [3], "VAL": [30.0]})
         assert updated.num_rows == 3
@@ -106,7 +106,7 @@ def test_tablehduref_mutation_refreshes_schema_and_rowcount(tmp_path):
 
 def test_tablehduref_column_mutators_roundtrip(tmp_path):
     path = tmp_path / "table_column_mutators.fits"
-    torchfits.table.write(
+    torchsky.table.write(
         str(path),
         data={
             "ID": torch.tensor([1, 2], dtype=torch.int32),
@@ -119,7 +119,7 @@ def test_tablehduref_column_mutators_roundtrip(tmp_path):
         overwrite=True,
     )
 
-    with torchfits.open(str(path)) as hdul:
+    with torchsky.open(str(path)) as hdul:
         table = hdul[1]
         table = table.insert_column_file(
             "FLAGS",
@@ -132,7 +132,7 @@ def test_tablehduref_column_mutators_roundtrip(tmp_path):
         table = table.replace_column_file("QUAL", [101, 102])
         assert table.columns == ["ID", "FLAGS", "QUAL"]
 
-    with torchfits.open(str(path)) as hdul:
+    with torchsky.open(str(path)) as hdul:
         table = hdul[1]
         assert table["FLAGS"].squeeze(-1).tolist() == [7, 8]
         assert table["QUAL"].squeeze(-1).tolist() == [101, 102]
@@ -146,7 +146,7 @@ def test_hdulist_write_preserves_table_extension_metadata(tmp_path):
     src = tmp_path / "table_src.fits"
     dst = tmp_path / "table_dst.fits"
 
-    torchfits.table.write(
+    torchsky.table.write(
         str(src),
         data={
             "ID": torch.tensor([1, 2], dtype=torch.int32),
@@ -159,10 +159,10 @@ def test_hdulist_write_preserves_table_extension_metadata(tmp_path):
         overwrite=True,
     )
 
-    with torchfits.open(str(src)) as hdul:
+    with torchsky.open(str(src)) as hdul:
         hdul.write(str(dst), overwrite=True)
 
-    with torchfits.open(str(dst)) as hdul:
+    with torchsky.open(str(dst)) as hdul:
         assert len(hdul) == 2
         table = hdul[1]
         assert table.columns == ["ID", "QUAL"]
@@ -175,10 +175,10 @@ def test_hdulist_write_preserves_table_extension_metadata(tmp_path):
 def test_insert_hdu_compressed_image_only(tmp_path):
     path = tmp_path / "insert_compressed.fits"
     base = torch.arange(16, dtype=torch.int16).reshape(4, 4)
-    torchfits.write(str(path), base, overwrite=True, compress=True)
+    torchsky.write(str(path), base, overwrite=True, compress=True)
 
     inserted = torch.full((4, 4), 7, dtype=torch.int16)
-    torchfits.insert_hdu(
+    torchsky.insert_hdu(
         str(path),
         inserted,
         index=1,
@@ -186,20 +186,20 @@ def test_insert_hdu_compressed_image_only(tmp_path):
         compress=True,
     )
 
-    with torchfits.open(str(path)) as hdul:
+    with torchsky.open(str(path)) as hdul:
         assert len(hdul) == 3
         assert hdul[1].header.get("EXTNAME") == "SCI"
-    assert torch.equal(torchfits.read(str(path), hdu=1), inserted)
-    assert torch.equal(torchfits.read(str(path), hdu=2), base)
+    assert torch.equal(torchsky.read(str(path), hdu=1), inserted)
+    assert torch.equal(torchsky.read(str(path), hdu=2), base)
 
 
 def test_replace_hdu_compressed_image_only(tmp_path):
     path = tmp_path / "replace_compressed.fits"
     base = torch.arange(16, dtype=torch.int16).reshape(4, 4)
-    torchfits.write(str(path), base, overwrite=True, compress=True)
+    torchsky.write(str(path), base, overwrite=True, compress=True)
 
     replacement = torch.full((4, 4), 3, dtype=torch.int16)
-    torchfits.replace_hdu(
+    torchsky.replace_hdu(
         str(path),
         1,
         replacement,
@@ -207,24 +207,24 @@ def test_replace_hdu_compressed_image_only(tmp_path):
         compress="RICE_1",
     )
 
-    with torchfits.open(str(path)) as hdul:
+    with torchsky.open(str(path)) as hdul:
         assert len(hdul) == 2
         assert hdul[1].header.get("EXTNAME") == "SCI_REPLACED"
-    assert torch.equal(torchfits.read(str(path), hdu=1), replacement)
+    assert torch.equal(torchsky.read(str(path), hdu=1), replacement)
 
 
 def test_insert_hdu_compressed_mixed_hdus_roundtrip(tmp_path):
     path = tmp_path / "insert_compressed_mixed.fits"
     image = torch.arange(16, dtype=torch.int16).reshape(4, 4)
     table = {"ID": torch.tensor([1, 2, 3], dtype=torch.int32)}
-    torchfits.write(
+    torchsky.write(
         str(path),
-        torchfits.HDUList([torchfits.TensorHDU(image), torchfits.TableHDU(table)]),
+        torchsky.HDUList([torchsky.TensorHDU(image), torchsky.TableHDU(table)]),
         overwrite=True,
     )
 
     inserted = torch.full((4, 4), 11, dtype=torch.int16)
-    torchfits.insert_hdu(
+    torchsky.insert_hdu(
         str(path),
         inserted,
         index=1,
@@ -232,11 +232,11 @@ def test_insert_hdu_compressed_mixed_hdus_roundtrip(tmp_path):
         compress=True,
     )
 
-    with torchfits.open(str(path)) as hdul:
+    with torchsky.open(str(path)) as hdul:
         assert len(hdul) == 4
         assert hdul[2].header.get("EXTNAME") == "SCI_INSERT"
-    assert torch.equal(torchfits.read(str(path), hdu=2), inserted)
-    table_out = torchfits.read(str(path), hdu=3)
+    assert torch.equal(torchsky.read(str(path), hdu=2), inserted)
+    table_out = torchsky.read(str(path), hdu=3)
     assert table_out["ID"].squeeze(-1).tolist() == [1, 2, 3]
 
 
@@ -244,33 +244,33 @@ def test_delete_hdu_compressed_image_only(tmp_path):
     path = tmp_path / "delete_compressed.fits"
     img0 = torch.arange(16, dtype=torch.int16).reshape(4, 4)
     img1 = torch.full((4, 4), 9, dtype=torch.int16)
-    torchfits.write(
+    torchsky.write(
         str(path),
-        torchfits.HDUList([torchfits.TensorHDU(img0), torchfits.TensorHDU(img1)]),
+        torchsky.HDUList([torchsky.TensorHDU(img0), torchsky.TensorHDU(img1)]),
         overwrite=True,
         compress=True,
     )
 
-    torchfits.delete_hdu(str(path), 1, compress=True)
-    with torchfits.open(str(path)) as hdul:
+    torchsky.delete_hdu(str(path), 1, compress=True)
+    with torchsky.open(str(path)) as hdul:
         assert len(hdul) == 2
-    assert torch.equal(torchfits.read(str(path), hdu=1), img1)
+    assert torch.equal(torchsky.read(str(path), hdu=1), img1)
 
 
 def test_delete_hdu_compressed_mixed_hdus_roundtrip(tmp_path):
     path = tmp_path / "delete_compressed_mixed.fits"
     image = torch.arange(16, dtype=torch.int16).reshape(4, 4)
     table = {"ID": torch.tensor([1, 2], dtype=torch.int32)}
-    torchfits.write(
+    torchsky.write(
         str(path),
-        torchfits.HDUList([torchfits.TensorHDU(image), torchfits.TableHDU(table)]),
+        torchsky.HDUList([torchsky.TensorHDU(image), torchsky.TableHDU(table)]),
         overwrite=True,
     )
 
-    torchfits.delete_hdu(str(path), 0, compress=True)
-    with torchfits.open(str(path)) as hdul:
+    torchsky.delete_hdu(str(path), 0, compress=True)
+    with torchsky.open(str(path)) as hdul:
         assert len(hdul) == 2
-    table_out = torchfits.read(str(path), hdu=1)
+    table_out = torchsky.read(str(path), hdu=1)
     assert table_out["ID"].squeeze(-1).tolist() == [1, 2]
 
 
@@ -278,14 +278,14 @@ def test_replace_hdu_compressed_mixed_hdus_roundtrip(tmp_path):
     path = tmp_path / "replace_compressed_mixed.fits"
     image = torch.arange(16, dtype=torch.int16).reshape(4, 4)
     table = {"ID": torch.tensor([1, 2], dtype=torch.int32)}
-    torchfits.write(
+    torchsky.write(
         str(path),
-        torchfits.HDUList([torchfits.TensorHDU(image), torchfits.TableHDU(table)]),
+        torchsky.HDUList([torchsky.TensorHDU(image), torchsky.TableHDU(table)]),
         overwrite=True,
     )
 
     replacement = {"ID": torch.tensor([10, 20, 30], dtype=torch.int32)}
-    torchfits.replace_hdu(
+    torchsky.replace_hdu(
         str(path),
         1,
         replacement,
@@ -293,8 +293,8 @@ def test_replace_hdu_compressed_mixed_hdus_roundtrip(tmp_path):
         compress=True,
     )
 
-    with torchfits.open(str(path)) as hdul:
+    with torchsky.open(str(path)) as hdul:
         assert len(hdul) == 3
         assert hdul[2].header.get("EXTNAME") == "CAT_REPLACED"
-    table_out = torchfits.read(str(path), hdu=2)
+    table_out = torchsky.read(str(path), hdu=2)
     assert table_out["ID"].squeeze(-1).tolist() == [10, 20, 30]

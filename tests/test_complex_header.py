@@ -2,7 +2,7 @@ import os
 
 from astropy.io import fits
 
-import torchfits
+import torchsky
 
 
 def create_complex_header(filename):
@@ -32,8 +32,8 @@ def test_complex_header():
     create_complex_header(filename)
 
     try:
-        # Open with torchfits
-        hdul = torchfits.HDUList.fromfile(filename)
+        # Open with torchsky
+        hdul = torchsky.HDUList.fromfile(filename)
         header = hdul[0].header
 
         # Check HIERARCH

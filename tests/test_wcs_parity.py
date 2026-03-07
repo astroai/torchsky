@@ -4,7 +4,7 @@ import torch
 from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
 
-from torchfits.wcs.core import WCS as TorchWCS
+from torchsky.wcs.core import WCS as TorchWCS
 
 
 PROJECTIONS = ("TAN", "SIN", "ARC", "AIT", "MOL", "HPX", "CEA", "MER")

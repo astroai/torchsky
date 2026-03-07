@@ -5,7 +5,7 @@ import fitsio
 import numpy as np
 import torch
 
-import torchfits
+import torchsky
 
 
 def create_test_file(filename, size=(4096, 4096)):
@@ -25,7 +25,7 @@ def benchmark():
     # Warmup
     print("Warming up...")
     fitsio.read(filename)
-    torchfits.read(filename, mmap=True, return_header=False)
+    torchsky.read(filename, mmap=True, return_header=False)
 
     n_iters = 20
 
@@ -39,20 +39,20 @@ def benchmark():
     fitsio_time = (end - start) / n_iters
     print(f"fitsio (to float tensor): {fitsio_time * 1000:.2f} ms")
 
-    # Benchmark torchfits read
+    # Benchmark torchsky read
     start = time.time()
     for _ in range(n_iters):
-        _ = torchfits.read(filename, mmap=True, return_header=False)
+        _ = torchsky.read(filename, mmap=True, return_header=False)
     end = time.time()
-    torchfits_time = (end - start) / n_iters
-    print(f"torchfits (read): {torchfits_time * 1000:.2f} ms")
+    torchsky_time = (end - start) / n_iters
+    print(f"torchsky (read): {torchsky_time * 1000:.2f} ms")
 
-    speedup = fitsio_time / torchfits_time
+    speedup = fitsio_time / torchsky_time
     print(f"Speedup: {speedup:.2f}x")
 
     # Verify correctness
     ref = fitsio.read(filename)
-    res = torchfits.read(filename, mmap=True, return_header=False).numpy()
+    res = torchsky.read(filename, mmap=True, return_header=False).numpy()
 
     if np.allclose(ref.astype(np.float32), res):
         print("Verification: PASSED")
@@ -74,7 +74,7 @@ def benchmark():
 
     # fitsio read applies scaling by default
     ref_scaled = fitsio.read(filename_scaled)
-    res_scaled = torchfits.read(filename_scaled, mmap=True, return_header=False).numpy()
+    res_scaled = torchsky.read(filename_scaled, mmap=True, return_header=False).numpy()
 
     if np.allclose(ref_scaled, res_scaled):
         print("Verification (Scaled): PASSED")

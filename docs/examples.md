@@ -1,6 +1,6 @@
-# torchfits Examples
+# torchsky Examples
 
-This directory contains examples of common `torchfits` workflows.
+This directory contains examples of common `torchsky` workflows.
 
 ## Core Image/Table Scripts
 

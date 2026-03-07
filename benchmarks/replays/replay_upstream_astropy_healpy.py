@@ -13,7 +13,7 @@ import numpy as np
 import healpy as hp
 import torch
 
-from torchfits.wcs.healpix import (
+from torchsky.wcs.healpix import (
     ang2pix_nested as tf_ang2pix_nested,
     ang2pix_ring as tf_ang2pix_ring,
     nest2ring as tf_nest2ring,
@@ -44,7 +44,7 @@ class OpResult:
     mismatches: int
     max_dra_deg: float | None
     max_ddec_deg: float | None
-    torchfits_mpts_s: float
+    torchsky_mpts_s: float
     healpy_mpts_s: float
     ratio_vs_healpy: float
 
@@ -108,7 +108,7 @@ def _run_ang2pix(
         mismatches=mismatches,
         max_dra_deg=None,
         max_ddec_deg=None,
-        torchfits_mpts_s=(n / t_tf) / 1e6,
+        torchsky_mpts_s=(n / t_tf) / 1e6,
         healpy_mpts_s=(n / t_hp) / 1e6,
         ratio_vs_healpy=t_hp / t_tf,
     )
@@ -152,7 +152,7 @@ def _run_pix2ang(
         mismatches=mismatches,
         max_dra_deg=float(dra.max(initial=0.0)),
         max_ddec_deg=float(ddec.max(initial=0.0)),
-        torchfits_mpts_s=(n / t_tf) / 1e6,
+        torchsky_mpts_s=(n / t_tf) / 1e6,
         healpy_mpts_s=(n / t_hp) / 1e6,
         ratio_vs_healpy=t_hp / t_tf,
     )
@@ -190,7 +190,7 @@ def _run_index_conv(
         mismatches=mismatches,
         max_dra_deg=None,
         max_ddec_deg=None,
-        torchfits_mpts_s=(n / t_tf) / 1e6,
+        torchsky_mpts_s=(n / t_tf) / 1e6,
         healpy_mpts_s=(n / t_hp) / 1e6,
         ratio_vs_healpy=t_hp / t_tf,
     )
@@ -257,7 +257,7 @@ def main() -> int:
     failures: list[str] = []
     for r in rows:
         print(
-            f"{r.operation:16s} {r.nside:5d} {r.torchfits_mpts_s:10.2f} {r.healpy_mpts_s:10.2f}"
+            f"{r.operation:16s} {r.nside:5d} {r.torchsky_mpts_s:10.2f} {r.healpy_mpts_s:10.2f}"
             f" {r.ratio_vs_healpy:7.3f} {r.mismatches:11d}"
             f" {r.max_dra_deg if r.max_dra_deg is not None else float('nan'):11.3e}"
             f" {r.max_ddec_deg if r.max_ddec_deg is not None else float('nan'):11.3e}"

@@ -1,5 +1,5 @@
 """
-Cache performance benchmarks for torchfits.
+Cache performance benchmarks for torchsky.
 
 This module provides focused benchmarks for cache system performance,
 including environment detection, configuration optimization, and cache operations.
@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pandas as pd  # noqa: E402
 
-from torchfits import cache  # noqa: E402
+from torchsky import cache  # noqa: E402
 
 
 class CacheBenchmark:

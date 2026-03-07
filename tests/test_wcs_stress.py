@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from astropy.wcs import WCS as AstropyWCS
-import torchfits.wcs as wcs
+import torchsky.wcs as wcs
 
 
 def create_high_order_sip_header(order=10):

@@ -3,7 +3,7 @@ import math
 import numpy as np
 import torch
 
-from torchfits.sphere.core import (
+from torchsky.sphere.core import (
     fit_monopole_dipole,
     great_circle_distance,
     interpolate_wavelength_axis,
@@ -14,13 +14,13 @@ from torchfits.sphere.core import (
     slerp_lonlat,
     wrap_longitude,
 )
-from torchfits.sphere.geom import (
+from torchsky.sphere.geom import (
     convex_polygon_contains,
     query_ellipse,
     spherical_polygon_area,
     spherical_triangle_area,
 )
-from torchfits.wcs import healpix as hp
+from torchsky.wcs import healpix as hp
 
 
 def test_wrap_longitude_domains() -> None:

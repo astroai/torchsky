@@ -1,6 +1,6 @@
 import pytest
 
-from torchfits.core import FITSCore
+from torchsky.core import FITSCore
 
 
 def test_parse_cutout_spec_valid():

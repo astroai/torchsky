@@ -9,8 +9,8 @@ import fitsio
 import numpy as np
 import torch
 
-import torchfits
-import torchfits.cpp as cpp
+import torchsky
+import torchsky.cpp as cpp
 
 
 def _time_callable(func: Callable[[], Any], runs: int, warmup: int) -> Dict[str, float]:
@@ -56,10 +56,10 @@ def bench_parallel(args: argparse.Namespace) -> None:
 
     print(f"Benchmarking parallel read of {n_files} files...")
 
-    def read_serial_torchfits() -> List[torch.Tensor]:
-        return [torchfits.read(f, hdu=0, policy="smart") for f in files]
+    def read_serial_torchsky() -> List[torch.Tensor]:
+        return [torchsky.read(f, hdu=0, policy="smart") for f in files]
 
-    def read_parallel_torchfits() -> List[torch.Tensor]:
+    def read_parallel_torchsky() -> List[torch.Tensor]:
         return cpp.read_images_batch(files, 0)
 
     def read_parallel_python_threads() -> List[torch.Tensor]:
@@ -67,15 +67,15 @@ def bench_parallel(args: argparse.Namespace) -> None:
             max_workers=args.workers
         ) as executor:
             futures = [
-                executor.submit(torchfits.read, f, 0, policy="smart") for f in files
+                executor.submit(torchsky.read, f, 0, policy="smart") for f in files
             ]
             return [f.result() for f in futures]
 
     serial_stats = _time_callable(
-        read_serial_torchfits, runs=args.runs, warmup=args.warmup
+        read_serial_torchsky, runs=args.runs, warmup=args.warmup
     )
     cpp_stats = _time_callable(
-        read_parallel_torchfits, runs=args.runs, warmup=args.warmup
+        read_parallel_torchsky, runs=args.runs, warmup=args.warmup
     )
     py_stats = _time_callable(
         read_parallel_python_threads, runs=args.runs, warmup=args.warmup
@@ -103,8 +103,8 @@ def bench_parallel(args: argparse.Namespace) -> None:
     print(f"Speedup (C++ median): {speedup_cpp:.2f}x")
     print(f"Speedup (Py median):  {speedup_py:.2f}x")
 
-    res_cpp = read_parallel_torchfits()
-    res_serial = read_serial_torchfits()
+    res_cpp = read_parallel_torchsky()
+    res_serial = read_serial_torchsky()
 
     assert len(res_cpp) == len(res_serial)
     for i in range(n_files):

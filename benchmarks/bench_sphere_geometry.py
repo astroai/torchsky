@@ -17,7 +17,7 @@ import numpy as np
 import torch
 
 try:
-    from torchfits.wcs.healpix import (
+    from torchsky.wcs.healpix import (
         ang2pix_nested as tf_ang2pix_nested,
         ang2pix_ring as tf_ang2pix_ring,
         nest2ring as tf_nest2ring,
@@ -26,12 +26,12 @@ try:
         ring2nest as tf_ring2nest,
     )
 except Exception:
-    # Allow benchmarks in envs where torchfits package/extensions are not installed.
+    # Allow benchmarks in envs where torchsky package/extensions are not installed.
     local_mod = (
-        Path(__file__).resolve().parents[1] / "src" / "torchfits" / "wcs" / "healpix.py"
+        Path(__file__).resolve().parents[1] / "src" / "torchsky" / "wcs" / "healpix.py"
     )
     spec = importlib.util.spec_from_file_location(
-        "torchfits_wcs_healpix_local", local_mod
+        "torchsky_wcs_healpix_local", local_mod
     )
     if spec is None or spec.loader is None:
         raise SystemExit(f"Unable to load local HEALPix module from {local_mod}")
@@ -271,7 +271,7 @@ def _distribution_provenance(dist_name: str) -> dict[str, Any] | None:
     return meta
 
 
-def _make_torchfits_adapter(
+def _make_torchsky_adapter(
     nside: int,
     ra: np.ndarray,
     dec: np.ndarray,
@@ -331,7 +331,7 @@ def main() -> int:
     parser.add_argument(
         "--libraries",
         type=str,
-        default="torchfits,healpy,hpgeom,astropy-healpix,healpix,mhealpy",
+        default="torchsky,healpy,hpgeom,astropy-healpix,healpix,mhealpy",
         help="Comma-separated library aliases",
     )
     parser.add_argument(
@@ -353,7 +353,7 @@ def main() -> int:
         "--min-ratio-vs-healpy",
         type=str,
         default=None,
-        help="Comma-separated op=ratio thresholds for torchfits/healpy",
+        help="Comma-separated op=ratio thresholds for torchsky/healpy",
     )
     args = parser.parse_args()
 
@@ -378,10 +378,10 @@ def main() -> int:
     eps_by_lib: dict[str, float] = {}
     sync_by_lib: dict[str, torch.device | None] = {}
 
-    tf_adapter, tf_eps = _make_torchfits_adapter(nside, ra, dec, ring, nest, device)
-    adapters["torchfits"] = tf_adapter
-    eps_by_lib["torchfits"] = tf_eps
-    sync_by_lib["torchfits"] = device
+    tf_adapter, tf_eps = _make_torchsky_adapter(nside, ra, dec, ring, nest, device)
+    adapters["torchsky"] = tf_adapter
+    eps_by_lib["torchsky"] = tf_eps
+    sync_by_lib["torchsky"] = device
 
     if healpy is not None:
         adapters["healpy"] = {
@@ -490,7 +490,7 @@ def main() -> int:
     comparator_provenance: list[tuple[str, dict[str, Any]]] = []
     provenance_violations: list[str] = []
     for lib in requested:
-        if lib == "torchfits" or lib not in adapters:
+        if lib == "torchsky" or lib not in adapters:
             continue
         dist_name = COMPARATOR_DISTS.get(lib)
         if dist_name is None:
@@ -537,15 +537,15 @@ def main() -> int:
 
     # On MPS, torch inputs are float32; compare against float32-quantized lon/lat
     # to avoid attributing input quantization deltas to kernel correctness.
-    ref_outputs_torchfits_mps: dict[str, Any] | None = None
+    ref_outputs_torchsky_mps: dict[str, Any] | None = None
     if ref is not None and device.type == "mps":
         ra_mps_ref = ra.astype(np.float32).astype(np.float64)
         dec_mps_ref = dec.astype(np.float32).astype(np.float64)
-        ref_outputs_torchfits_mps = dict(ref_outputs)
-        ref_outputs_torchfits_mps["ang2pix_ring"] = ref["ang2pix_ring"](
+        ref_outputs_torchsky_mps = dict(ref_outputs)
+        ref_outputs_torchsky_mps["ang2pix_ring"] = ref["ang2pix_ring"](
             ra_mps_ref, dec_mps_ref
         )
-        ref_outputs_torchfits_mps["ang2pix_nested"] = ref["ang2pix_nested"](
+        ref_outputs_torchsky_mps["ang2pix_nested"] = ref["ang2pix_nested"](
             ra_mps_ref, dec_mps_ref
         )
 
@@ -598,7 +598,7 @@ def main() -> int:
                 "nside": nside,
                 "n_points": n,
                 "sample_profile": args.sample_profile,
-                "device": device.type if lib == "torchfits" else "cpu",
+                "device": device.type if lib == "torchsky" else "cpu",
                 "ms": elapsed * 1000.0,
                 "mpts_s": (n / elapsed) / 1e6,
                 "mismatches": float("nan"),
@@ -610,8 +610,8 @@ def main() -> int:
 
             if ref is not None and lib != "healpy":
                 ref_view = (
-                    ref_outputs_torchfits_mps
-                    if (lib == "torchfits" and ref_outputs_torchfits_mps is not None)
+                    ref_outputs_torchsky_mps
+                    if (lib == "torchsky" and ref_outputs_torchsky_mps is not None)
                     else ref_outputs
                 )
                 if op in {"ang2pix_ring", "ang2pix_nested", "ring2nest", "nest2ring"}:
@@ -717,8 +717,8 @@ def main() -> int:
                 )
             return 1
 
-    if min_ratios and "torchfits" in requested and "healpy" in adapters:
-        ratios = _ratios_vs_healpy(rows, "torchfits")
+    if min_ratios and "torchsky" in requested and "healpy" in adapters:
+        ratios = _ratios_vs_healpy(rows, "torchsky")
         bad_ratios = []
         for op, threshold in min_ratios.items():
             got = ratios.get(op)

@@ -23,7 +23,7 @@ from typing import Any, Callable  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
-from torchfits.sphere.geom import (  # noqa: E402
+from torchsky.sphere.geom import (  # noqa: E402
     SphericalPolygon,
     query_polygon_general,
     spherical_polygon_contains,
@@ -146,7 +146,7 @@ def main() -> int:
     rows.append(
         {
             "operation": "contains_nonconvex",
-            "library": "torchfits",
+            "library": "torchsky",
             "n_points": args.n_points,
             "points_s": args.n_points / t_contains,
         }
@@ -159,7 +159,7 @@ def main() -> int:
     rows.append(
         {
             "operation": "query_polygon_nonconvex",
-            "library": "torchfits",
+            "library": "torchsky",
             "nside": args.nside,
             "queries_s": 1.0 / t_pixel_query,
         }
@@ -169,7 +169,7 @@ def main() -> int:
     rows.append(
         {
             "operation": "area_nonconvex",
-            "library": "torchfits",
+            "library": "torchsky",
             "calls_s": 1.0 / t_area,
             "area_sr": float(poly.area(degrees=False)),
         }
@@ -221,7 +221,7 @@ def main() -> int:
                 "library": "spherical-geometry",
                 "n_points": args.n_points,
                 "points_s": args.n_points / t_sg_contains,
-                "ratio_torchfits_vs_spherical_geometry": t_sg_contains / t_contains,
+                "ratio_torchsky_vs_spherical_geometry": t_sg_contains / t_contains,
                 "mismatches_vs_spherical_geometry": mismatches,
                 "mismatches_vs_spherical_geometry_nonboundary": mismatches_nonboundary,
             }
@@ -231,7 +231,7 @@ def main() -> int:
                 "operation": "area_nonconvex",
                 "library": "spherical-geometry",
                 "area_sr": sg_area,
-                "relative_error_vs_torchfits": rel_area_err,
+                "relative_error_vs_torchsky": rel_area_err,
             }
         )
 

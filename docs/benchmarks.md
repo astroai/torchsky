@@ -1,4 +1,4 @@
-# torchfits Benchmarks
+# torchsky Benchmarks
 
 This page documents the benchmark methodology. The snapshot tables below reflect the **0.3.1** release; update with each release run.
 
@@ -21,14 +21,14 @@ This page documents the benchmark methodology. The snapshot tables below reflect
 | `bench_wcs.py` | WCS transform throughput checks. |
 | `bench_healpix.py` | HEALPix CPU/CUDA parity + throughput + quality gates (`ang2pix`, `pix2ang`, `ring/nest`). |
 | `bench_healpix_advanced.py` | Advanced HEALPix parity + throughput checks (`get_all_neighbours`, `get_interp_weights`, `get_interp_val`). |
-| `bench_sphere_geometry.py` | Cross-library spherical geometry benchmark (torchfits vs HEALPix ecosystem releases). |
+| `bench_sphere_geometry.py` | Cross-library spherical geometry benchmark (torchsky vs HEALPix ecosystem releases). |
 | `bench_sphere_core.py` | Sphere-core primitives benchmark (multi-band sampling, pairwise distances, ellipse query). |
 | `bench_sphere_polygons.py` | Non-convex spherical polygon benchmark (contains/query/area with optional spherical-geometry parity). |
 | `bench_sphere_spectral.py` | CPU-first spherical harmonic primitive benchmark (`map2alm`, `map2alm_lsq`, `alm2map`, `almxfl`, `alm2cl`, `anafast`, `map2alm_spin`, `alm2map_spin`) plus compatibility-generation paths (`synalm`, `synfast`, `bl2beam`, `beam2bl`) as needed. |
 | `bench_pipeline_table_sphere.py` | End-to-end benchmark: table predicate pushdown (`where`) + HEALPix spherical reduction pipeline. |
 | `replay_upstream_healpy_interp_edges.py` | Replays interpolation edge cases (lon wrap, poles, pixel-center inputs) against official healpy with parity/perf gates. |
 | `replay_upstream_healpy_spin.py` | Replays spin transform parity/throughput against official healpy releases (`map2alm_spin`, `alm2map_spin`). |
-| `replay_upstream_spherical_geometry_polygons.py` | Replays spherical-geometry upstream polygon fixtures/data (`test_intersects_*`, `difficult_intersections.txt`) against torchfits with multi-NSIDE difficult-overlap area gates. |
+| `replay_upstream_spherical_geometry_polygons.py` | Replays spherical-geometry upstream polygon fixtures/data (`test_intersects_*`, `difficult_intersections.txt`) against torchsky with multi-NSIDE difficult-overlap area gates. |
 
 ## Standard Commands
 
@@ -52,7 +52,7 @@ pixi run python benchmarks/bench_all.py --sphere-only
 # Output contract
 # benchmarks_results/<run_id>/
 #   - results.csv
-#   - torchfits_deficits.csv
+#   - torchsky_deficits.csv
 #   - summary.md
 
 # Fast optimization gate (10 diverse cases, early-stop enabled)
@@ -109,7 +109,7 @@ pixi run -e sphere-bench sphere-bench-bootstrap-core
 # Sync upstream release source artifacts and extract tests/data fixtures
 pixi run -e sphere-bench sphere-upstream-sync
 
-# Replay astropy-healpix upstream test-style HEALPix cases on torchfits vs healpy
+# Replay astropy-healpix upstream test-style HEALPix cases on torchsky vs healpy
 pixi run -e sphere-bench sphere-upstream-gate
 
 # Replay upstream test functions directly (including shape semantics + hypothesis inner tests)
@@ -144,15 +144,15 @@ pixi run -e sphere-bench sphere-bench-geometry-gate-small
 
 - Comparator libraries must come from official released distributions (pip/uv/conda), not local repo clones.
 - `bench_healpix.py` and `bench_sphere_geometry.py` now print comparator package provenance and fail by default on local/editable/VCS installs.
-- `bench_sphere_matrix.py` runs `uniform/boundary/mixed` profiles and can enforce median torchfits/healpy speed-ratio floors.
+- `bench_sphere_matrix.py` runs `uniform/boundary/mixed` profiles and can enforce median torchsky/healpy speed-ratio floors.
 - `bench_sphere_polygons.py` benchmarks non-convex polygon contains/query/area and optionally checks parity against released `spherical-geometry`.
 - `replay_upstream_spherical_geometry_polygons.py` replays polygon fixtures/data from upstream spherical-geometry test suite with correctness gates (contains + pair intersections + difficult-case nonempty parity + multi-NSIDE overlap-area/convergence checks, default ladder `128..16384`).
 - `sync_upstream_sphere_sources.py` downloads release artifacts for selected packages and extracts upstream `tests/` + `data/` trees with a pinned manifest.
-- `replay_upstream_astropy_healpy.py` replays astropy-healpix test-style HEALPix cases (same NSIDE range and boundary example-style vectors) against torchfits/healpy with correctness + ratio gates.
-- `replay_upstream_test_functions.py` executes selected upstream astropy-healpix test functions directly against torchfits adapters for closer semantic parity checks.
+- `replay_upstream_astropy_healpy.py` replays astropy-healpix test-style HEALPix cases (same NSIDE range and boundary example-style vectors) against torchsky/healpy with correctness + ratio gates.
+- `replay_upstream_test_functions.py` executes selected upstream astropy-healpix test functions directly against torchsky adapters for closer semantic parity checks.
 - `replay_upstream_healpy_interp_edges.py` replays interpolation edge cases (lon wrap, poles, edge pixels) against healpy with mismatch/error and ratio gates.
 - `replay_upstream_healpy_spin.py` replays spin transform cases (`map2alm_spin`, `alm2map_spin`) against healpy with per-case error gates and median throughput ratio thresholds.
-- Spin replay defaults to the current validated profile (`TORCHFITS_RING_FOURIER_CPP=1`, recurrence off, `TORCHFITS_SPIN_RING_AUTO_MIN_BYTES=32 MiB`) unless explicitly overridden in the environment.
+- Spin replay defaults to the current validated profile (`TORCHSKY_RING_FOURIER_CPP=1`, recurrence off, `TORCHSKY_SPIN_RING_AUTO_MIN_BYTES=32 MiB`) unless explicitly overridden in the environment.
 - Override only for local development experiments with:
   - `bench_healpix.py --allow-nonrelease-healpy`
   - `bench_sphere_geometry.py --allow-nonrelease-distributions`
@@ -172,7 +172,7 @@ Run metadata:
 
 ### Astronomer Scorecard (Win Rates)
 
-| Domain | Family | torchfits First | Win Rate | Legacy In Ranking |
+| Domain | Family | torchsky First | Win Rate | Legacy In Ranking |
 |---|---|---:|---:|---:|
 | fits | smart | 83/84 | 98.8% | 0 |
 | fits | specialized | 165/165 | 100.0% | 0 |
@@ -183,7 +183,7 @@ Run metadata:
 
 ### FITS I/O Representative Medians (vs `fitsio`)
 
-| Case | torchfits median (s) | Fitsio median (s) | Speedup vs Fitsio |
+| Case | torchsky median (s) | Fitsio median (s) | Speedup vs Fitsio |
 |------|---------------------:|------------------:|------------------:|
 | `tiny_int8_1d [read_full]` | 0.000044 | 0.000185 | 4.20x |
 | `small_float32_2d [read_full]` | 0.000075 | 0.000212 | 2.82x |
@@ -193,7 +193,7 @@ Run metadata:
 ### Known Deficits (Target for 0.4.0)
 
 - **Sphere (Spin Transforms)**: `map2alm_spin` and `alm2map_spin` show ~6x-7x lag vs `healpy`. These will be optimized with a custom RING-Fouier kernel.
-- **WCS (Small-N)**: Forward transformations for small coordinate arrays (N < 1000) show lag vs `pyast` (legacy). torchfits is optimized for batch throughput (N > 10k), where it leads by 1.1x - 1.3x.
+- **WCS (Small-N)**: Forward transformations for small coordinate arrays (N < 1000) show lag vs `pyast` (legacy). torchsky is optimized for batch throughput (N > 10k), where it leads by 1.1x - 1.3x.
 - **ZPN/AIT Projections**: Slight visible deficits in intermediate size tiers.
 
 ## ML Loader Snapshot (0.3.0)

@@ -6,7 +6,7 @@ include extern/vendor.sh
 recursive-include docs *.md *.svg
 
 # Include C++ source files
-recursive-include src/torchfits/cpp_src *.cpp *.h *.hpp
+recursive-include src/torchsky/cpp_src *.cpp *.h *.hpp
 
 # Exclude build artifacts
 global-exclude *.pyc

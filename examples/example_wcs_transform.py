@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from astropy.io import fits
 
-import torchfits
+import torchsky
 
 
 def create_test_files(data_dir: str) -> None:
@@ -54,7 +54,7 @@ def create_test_files(data_dir: str) -> None:
 
 
 def _show_roundtrip(path: str) -> None:
-    wcs = torchfits.get_wcs(path, hdu="auto")
+    wcs = torchsky.get_wcs(path, hdu="auto")
     ctypes = [wcs.wcs_params.get(f"CTYPE{i}", "") for i in range(1, wcs.naxis + 1)]
     print(f"{os.path.basename(path)}: naxis={wcs.naxis}, ctype={ctypes}")
 
@@ -90,7 +90,7 @@ def main() -> None:
         _show_roundtrip(path)
 
     if torch.cuda.is_available():
-        wcs = torchfits.get_wcs(paths[0], device="cuda")
+        wcs = torchsky.get_wcs(paths[0], device="cuda")
         pixels = torch.tensor([[49.0, 49.0]], dtype=torch.float64, device="cuda")
         world = wcs.pixel_to_world(pixels)
         print("CUDA sample world coord:", world[0].tolist())

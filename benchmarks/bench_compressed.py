@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Quick compressed-image sanity benchmark for torchfits vs fitsio.
+Quick compressed-image sanity benchmark for torchsky vs fitsio.
 
 This is intentionally small so we can iterate without running the full suite.
 """
@@ -17,7 +17,7 @@ import torch
 from astropy.io import fits
 from astropy.io.fits import CompImageHDU
 
-import torchfits
+import torchsky
 
 
 def _create_compressed(path: Path, compression_type: str, shape=(1024, 1024)) -> None:
@@ -39,7 +39,7 @@ def _time(fn, warmup: int = 12, iterations: int = 80) -> float:
 
 def _bench_one(path: Path, name: str) -> None:
     tf = _time(
-        lambda: torchfits.read(
+        lambda: torchsky.read(
             str(path),
             hdu=1,
             return_header=False,
@@ -49,14 +49,14 @@ def _bench_one(path: Path, name: str) -> None:
     )
     fi = _time(lambda: fitsio.read(str(path), ext=1))
     ratio = tf / fi if fi > 0 else float("inf")
-    print(f"{name}: torchfits={tf:.6f}s fitsio={fi:.6f}s ratio={ratio:.3f}x")
+    print(f"{name}: torchsky={tf:.6f}s fitsio={fi:.6f}s ratio={ratio:.3f}x")
 
 
 def main() -> None:
     if hasattr(torch, "set_num_threads"):
         torch.set_num_threads(1)
 
-    data_dir = Path(tempfile.mkdtemp(prefix="torchfits_compressed_debug_"))
+    data_dir = Path(tempfile.mkdtemp(prefix="torchsky_compressed_debug_"))
     rice_path = data_dir / "rice.fits"
     hcomp_path = data_dir / "hcompress.fits"
 

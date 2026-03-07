@@ -24,7 +24,7 @@ import numpy as np
 import torch
 from astropy.io import fits as astropy_fits
 
-import torchfits
+import torchsky
 
 from benchmarks.bench_contract import (
     RESULT_COLUMNS,
@@ -212,10 +212,10 @@ def _bench_case(
             "scan_count",
         ]
         method_specs = [
-            ("torchfits", "torchfits", "smart", "smart"),
+            ("torchsky", "torchsky", "smart", "smart"),
             ("astropy_torch", "astropy", "smart", "smart"),
             ("fitsio_torch", "fitsio", "smart", "smart"),
-            ("torchfits_specialized", "torchfits", "specialized", "specialized"),
+            ("torchsky_specialized", "torchsky", "specialized", "specialized"),
             ("astropy", "astropy", "specialized", "specialized"),
             ("fitsio", "fitsio", "specialized", "specialized"),
         ]
@@ -257,10 +257,10 @@ def _bench_case(
 
     operations = {
         "read_full": {
-            "torchfits": lambda: torchfits.read(
+            "torchsky": lambda: torchsky.read(
                 str(path), hdu=1, mode="table", policy="smart", mmap=target_memmap
             ),
-            "torchfits_specialized": lambda: torchfits.read_table(
+            "torchsky_specialized": lambda: torchsky.read_table(
                 str(path), hdu=1, policy="default", mmap=target_memmap
             ),
             "astropy": lambda: _astropy_read_full(path, memmap=target_memmap),
@@ -271,7 +271,7 @@ def _bench_case(
             "fitsio_torch": lambda: _table_to_torch_dict(fitsio.read(str(path), ext=1)),
         },
         "projection": {
-            "torchfits": lambda: torchfits.read(
+            "torchsky": lambda: torchsky.read(
                 str(path),
                 hdu=1,
                 mode="table",
@@ -279,7 +279,7 @@ def _bench_case(
                 mmap=target_memmap,
                 columns=proj_cols,
             ),
-            "torchfits_specialized": lambda: torchfits.read_table(
+            "torchsky_specialized": lambda: torchsky.read_table(
                 str(path),
                 hdu=1,
                 columns=proj_cols,
@@ -298,7 +298,7 @@ def _bench_case(
             ),
         },
         "row_slice": {
-            "torchfits": lambda: torchfits.read(
+            "torchsky": lambda: torchsky.read(
                 str(path),
                 hdu=1,
                 mode="table",
@@ -307,7 +307,7 @@ def _bench_case(
                 start_row=row_slice_start,
                 num_rows=row_slice_n,
             ),
-            "torchfits_specialized": lambda: torchfits.read_table_rows(
+            "torchsky_specialized": lambda: torchsky.read_table_rows(
                 str(path),
                 hdu=1,
                 start_row=row_slice_start,
@@ -329,10 +329,10 @@ def _bench_case(
             ),
         },
         "predicate_filter": {
-            "torchfits": lambda: _torchfits_filter_pushdown(
+            "torchsky": lambda: _torchsky_filter_pushdown(
                 path, col=num_col, mmap=target_memmap, has_pyarrow=has_pyarrow
             ),
-            "torchfits_specialized": lambda: _torchfits_filter_local(
+            "torchsky_specialized": lambda: _torchsky_filter_local(
                 path, col=num_col, mmap=target_memmap
             ),
             "astropy": lambda: _astropy_filter(path, col=num_col, memmap=target_memmap),
@@ -345,10 +345,10 @@ def _bench_case(
             ),
         },
         "scan_count": {
-            "torchfits": lambda: _torchfits_scan_count(
+            "torchsky": lambda: _torchsky_scan_count(
                 path, col=num_col, mmap=target_memmap, has_pyarrow=has_pyarrow
             ),
-            "torchfits_specialized": lambda: _torchfits_scan_count_local(
+            "torchsky_specialized": lambda: _torchsky_scan_count_local(
                 path, col=num_col, mmap=target_memmap
             ),
             "astropy": lambda: _astropy_scan_count(
@@ -394,9 +394,9 @@ def _bench_case(
             comparable = status == "OK"
             skip_reason = ""
 
-            library = "torchfits" if method.startswith("torchfits") else "astropy"
+            library = "torchsky" if method.startswith("torchsky") else "astropy"
             family = (
-                "smart" if method in {"torchfits", "astropy_torch"} else "specialized"
+                "smart" if method in {"torchsky", "astropy_torch"} else "specialized"
             )
             mode = "smart" if family == "smart" else "specialized"
 
@@ -482,13 +482,13 @@ def _fitsio_scan_count(path: Path, *, col: str):
     return int(len(data[col]))
 
 
-def _torchfits_filter_pushdown(path: Path, *, col: str, mmap: bool, has_pyarrow: bool):
+def _torchsky_filter_pushdown(path: Path, *, col: str, mmap: bool, has_pyarrow: bool):
     if not has_pyarrow:
         raise RuntimeError("pyarrow not available for scanner filter")
-    import torchfits.table
+    import torchsky.table
 
     # Use the high-level read API which chooses the best path (C++ pushdown or local)
-    res = torchfits.table.read(
+    res = torchsky.table.read(
         str(path),
         hdu=1,
         columns=[col],
@@ -498,8 +498,8 @@ def _torchfits_filter_pushdown(path: Path, *, col: str, mmap: bool, has_pyarrow:
     return len(res)
 
 
-def _torchfits_filter_local(path: Path, *, col: str, mmap: bool):
-    data = torchfits.read_table(str(path), hdu=1, mmap=mmap, policy="default")
+def _torchsky_filter_local(path: Path, *, col: str, mmap: bool):
+    data = torchsky.read_table(str(path), hdu=1, mmap=mmap, policy="default")
     values = data[col]
     if isinstance(values, torch.Tensor):
         return values[values > 0]
@@ -507,19 +507,19 @@ def _torchfits_filter_local(path: Path, *, col: str, mmap: bool):
     return arr[arr > 0]
 
 
-def _torchfits_scan_count(path: Path, *, col: str, mmap: bool, has_pyarrow: bool):
-    import torchfits
+def _torchsky_scan_count(path: Path, *, col: str, mmap: bool, has_pyarrow: bool):
+    import torchsky
 
     # Use hdu.num_rows if no filtering is needed, it's MUCH faster for FITS.
-    with torchfits.open(str(path)) as hdul:
+    with torchsky.open(str(path)) as hdul:
         for hdu in hdul:
             if hasattr(hdu, "num_rows"):
                 return hdu.num_rows
     return 0
 
 
-def _torchfits_scan_count_local(path: Path, *, col: str, mmap: bool):
-    data = torchfits.read_table(str(path), hdu=1, mmap=mmap, policy="default")
+def _torchsky_scan_count_local(path: Path, *, col: str, mmap: bool):
+    data = torchsky.read_table(str(path), hdu=1, mmap=mmap, policy="default")
     values = data[col]
     if isinstance(values, torch.Tensor):
         return int(values.shape[0])
@@ -703,7 +703,7 @@ def run_fitstable_domain(
     keep_temp: bool = False,
 ) -> list[dict[str, Any]]:
     _ = profile
-    temp_root = Path(tempfile.mkdtemp(prefix="torchfits_fitstable_"))
+    temp_root = Path(tempfile.mkdtemp(prefix="torchsky_fitstable_"))
     rows: list[dict[str, Any]] = []
 
     try:

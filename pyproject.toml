@@ -10,9 +10,9 @@ requires = [
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "torchfits"
-version = "0.3.1"
-description = "High-performance FITS I/O for PyTorch"
+name = "torchsky"
+version = "0.4.0.dev0"
+description = "Torch-native sky data, coordinates, geometry, and mapmaking"
 authors = [{ name = "Seb Fabbro", email = "sebfabbro@gmail.com" }]
 readme = "README.md"
 license = { text = "GPL-2.0-only" }
@@ -42,8 +42,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/sfabbro/torchfits"
-Repository = "https://github.com/sfabbro/torchfits"
+Homepage = "https://github.com/sfabbro/torchsky"
+Repository = "https://github.com/sfabbro/torchsky"
+
+[project.scripts]
+torchsky = "torchsky.cli:main"
 
 # Defines optional dependencies for different use cases.
 # For pixi environments, these are managed separately via features
@@ -81,22 +84,22 @@ examples = [
 # Configuration for the scikit-build-core build system.
 [tool.scikit-build]
 # Specifies the directory containing the top-level CMakeLists.txt file.
-cmake.source-dir = "src/torchfits/cpp_src"
+cmake.source-dir = "src/torchsky/cpp_src"
 cmake.build-type = "Release"
 cmake.args = [
-    "-DTORCHFITS_USE_VENDORED_CFITSIO=ON",
-    "-DTORCHFITS_NIOBUF=80",
-    "-DTORCHFITS_MINDIRECT=16384",
+    "-DTORCHSKY_USE_VENDORED_CFITSIO=ON",
+    "-DTORCHSKY_NIOBUF=80",
+    "-DTORCHSKY_MINDIRECT=16384",
     "-DUSE_CUDA=OFF",
     "-DCMAKE_C_FLAGS=-march=native -O3",
     "-DCMAKE_CXX_FLAGS=-march=native -O3",
 ]
 
 # Configures the install directory for the compiled extension.
-# This ensures the compiled `cpp.so` or `cpp.pyd` file is placed inside the `torchfits` package.
+# This ensures the compiled `cpp.so` or `cpp.pyd` file is placed inside the `torchsky` package.
 install.strip = false
-wheel.packages = ["src/torchfits"]
-sdist.include = ["src/torchfits/sphere/data/pixel_window_functions/*.fits"]
+wheel.packages = ["src/torchsky"]
+sdist.include = ["src/torchsky/sphere/data/pixel_window_functions/*.fits"]
 
 # This setting enables CMake's incremental build feature. When you re-run the build,
 # CMake and Ninja will automatically detect which C++ files have changed and only

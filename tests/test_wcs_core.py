@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from torchfits.wcs.core import WCS
+from torchsky.wcs.core import WCS
 
 
 def _tan_header() -> dict[str, float | str]:

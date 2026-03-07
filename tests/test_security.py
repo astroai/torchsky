@@ -1,5 +1,5 @@
 import pytest
-import torchfits
+import torchsky
 
 
 def test_security_cve_cfitsio_command_injection():
@@ -18,7 +18,7 @@ def test_security_cve_cfitsio_command_injection():
 
     for filename in dangerous_filenames:
         with pytest.raises(RuntimeError, match="Security Error"):
-            torchfits.read(filename)
+            torchsky.read(filename)
 
 
 def test_valid_filenames_allowed():
@@ -26,7 +26,7 @@ def test_valid_filenames_allowed():
     # We can't easily test success without a real file, but we can verify
     # it doesn't raise the Security Error.
     try:
-        torchfits.read("nonexistent_file.fits")
+        torchsky.read("nonexistent_file.fits")
     except RuntimeError as e:
         assert "Security Error" not in str(e)
     except FileNotFoundError:

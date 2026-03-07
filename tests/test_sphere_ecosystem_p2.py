@@ -1,6 +1,6 @@
 import torch
 import os
-from torchfits.sphere import HealSparseMap, MOC, nest2uniq
+from torchsky.sphere import HealSparseMap, MOC, nest2uniq
 
 
 def test_moc_normalization():

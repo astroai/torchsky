@@ -2,9 +2,9 @@ import numpy as np
 import torch
 import pytest
 
-from torchfits.sphere import compat
-from torchfits.sphere.geom import query_ellipse as geom_query_ellipse
-from torchfits.wcs import healpix as hp
+from torchsky.sphere import compat
+from torchsky.sphere.geom import query_ellipse as geom_query_ellipse
+from torchsky.wcs import healpix as hp
 
 
 def test_compat_ang2pix_pix2ang_roundtrip_matches_healpix() -> None:

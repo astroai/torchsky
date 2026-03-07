@@ -24,7 +24,7 @@ from pathlib import Path  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
-from torchfits.sphere.spectral import (  # noqa: E402
+from torchsky.sphere.spectral import (  # noqa: E402
     alm2map,
     alm2cl,
     alm2map_spin,
@@ -36,7 +36,7 @@ from torchfits.sphere.spectral import (  # noqa: E402
     map2alm_lsq,
     map2alm_spin,
 )
-from torchfits.wcs import healpix as hp  # noqa: E402
+from torchsky.wcs import healpix as hp  # noqa: E402
 
 
 @dataclass
@@ -98,11 +98,11 @@ def main() -> int:
     args = p.parse_args()
 
     # Keep spin spectral benches on the known-fast torch path unless explicitly overridden.
-    os.environ.setdefault("TORCHFITS_RING_FOURIER_CPP", "0")
-    os.environ.setdefault("TORCHFITS_SPIN_MAP2ALM_RECURRENCE_CPP", "1")
-    os.environ.setdefault("TORCHFITS_SPIN_ALM2MAP_RECURRENCE_CPP", "1")
-    os.environ.setdefault("TORCHFITS_SPIN_MAP2ALM_RING_TORCH", "auto")
-    os.environ.setdefault("TORCHFITS_SPIN_ALM2MAP_RING_TORCH", "auto")
+    os.environ.setdefault("TORCHSKY_RING_FOURIER_CPP", "0")
+    os.environ.setdefault("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "1")
+    os.environ.setdefault("TORCHSKY_SPIN_ALM2MAP_RECURRENCE_CPP", "1")
+    os.environ.setdefault("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "auto")
+    os.environ.setdefault("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "auto")
 
     rng = np.random.default_rng(args.seed)
     npix = hp.nside2npix(args.nside)
@@ -117,7 +117,7 @@ def main() -> int:
     backends = ["torch"]
     cpp_available = False
     try:
-        import torchfits.cpp as _cpp  # type: ignore
+        import torchsky.cpp as _cpp  # type: ignore
 
         cpp_available = hasattr(_cpp, "_healpix_scalar_alm2map_direct_cpu")
     except Exception:
@@ -137,18 +137,18 @@ def main() -> int:
         if (
             backend == "torch"
             and args.nside >= 128
-            and os.environ.get("TORCHFITS_SPIN_MAP2ALM_RING_TORCH") != "force"
+            and os.environ.get("TORCHSKY_SPIN_MAP2ALM_RING_TORCH") != "force"
         ):
             print(
                 f"Skipping {backend} for nside={args.nside} (matrix path) to avoid OOM"
             )
             continue
         backend_impl = "torch" if backend == "torch_cpp" else backend
-        prev_cpp_env = os.environ.get("TORCHFITS_SCALAR_ALM2MAP_CPP")
+        prev_cpp_env = os.environ.get("TORCHSKY_SCALAR_ALM2MAP_CPP")
         if backend == "torch_cpp":
-            os.environ["TORCHFITS_SCALAR_ALM2MAP_CPP"] = "1"
+            os.environ["TORCHSKY_SCALAR_ALM2MAP_CPP"] = "1"
         elif prev_cpp_env is not None:
-            os.environ["TORCHFITS_SCALAR_ALM2MAP_CPP"] = "0"
+            os.environ["TORCHSKY_SCALAR_ALM2MAP_CPP"] = "0"
         try:
             if False:  # Skip scalar for now to avoid OOM in matrix path
                 t = _time_many(
@@ -298,9 +298,9 @@ def main() -> int:
             )
         finally:
             if prev_cpp_env is None:
-                os.environ.pop("TORCHFITS_SCALAR_ALM2MAP_CPP", None)
+                os.environ.pop("TORCHSKY_SCALAR_ALM2MAP_CPP", None)
             else:
-                os.environ["TORCHFITS_SCALAR_ALM2MAP_CPP"] = prev_cpp_env
+                os.environ["TORCHSKY_SCALAR_ALM2MAP_CPP"] = prev_cpp_env
 
     print("op            backend  nside  lmax   mops/s   time(s)")
     for r in rows:

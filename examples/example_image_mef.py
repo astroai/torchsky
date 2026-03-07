@@ -5,7 +5,7 @@ import torch
 from astropy.io import fits
 from astropy.table import Table
 
-import torchfits
+import torchsky
 
 
 def create_test_file(filename):
@@ -30,9 +30,9 @@ def main():
     test_file = "mef_example.fits"
     create_test_file(test_file)
 
-    # Iterate through HDUs using torchfits.open()
+    # Iterate through HDUs using torchsky.open()
     try:
-        with torchfits.open(test_file) as hdul:
+        with torchsky.open(test_file) as hdul:
             print(f"Number of HDUs: {len(hdul)}")
 
             for i, hdu in enumerate(hdul):
@@ -56,12 +56,10 @@ def main():
 
         # Access by name:
         print("\n--- Accessing HDU by Name ---")
-        data, _ = torchfits.read(
-            test_file, hdu="SCI", return_header=True
-        )  # String name
+        data, _ = torchsky.read(test_file, hdu="SCI", return_header=True)  # String name
         print(f"  SCI data shape: {data.shape}")
 
-        table_data, _ = torchfits.read(
+        table_data, _ = torchsky.read(
             test_file, hdu="CATALOG", return_header=True
         )  # String name
         print(f"  CATALOG columns: {list(table_data.keys())}")
@@ -70,7 +68,7 @@ def main():
         print("\n--- Testing with different cache capacities ---")
         for capacity in [0, 10]:
             try:
-                data, _ = torchfits.read(
+                data, _ = torchsky.read(
                     test_file, hdu="SCI", cache_capacity=capacity, return_header=True
                 )
                 print(f"\nCache Capacity: {capacity}")
@@ -82,7 +80,7 @@ def main():
         if torch.cuda.is_available():
             print("\n--- Testing GPU Read ---")
             try:
-                data, _ = torchfits.read(
+                data, _ = torchsky.read(
                     test_file, hdu="SCI", device="cuda", return_header=True
                 )
                 print(f"  Data device: {data.device}")

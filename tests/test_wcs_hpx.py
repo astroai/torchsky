@@ -3,7 +3,7 @@ import torch
 from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
 
-from torchfits.wcs.core import WCS
+from torchsky.wcs.core import WCS
 
 
 def _header() -> fits.Header:
@@ -82,7 +82,7 @@ def test_hpx_inverse_matches_astropy() -> None:
 
 
 def test_hpx_cpp_project_marks_polar_out_of_facet_points_invalid() -> None:
-    import torchfits.cpp as cpp
+    import torchsky.cpp as cpp
 
     xi = torch.tensor([45.0, 56.0, 0.0], dtype=torch.float64)
     eta = torch.tensor([80.0, 80.0, 80.0], dtype=torch.float64)

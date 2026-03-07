@@ -8,7 +8,7 @@ import tempfile
 import numpy as np
 from astropy.table import Table
 
-import torchfits
+import torchsky
 
 
 def _write_catalog(path: str, offset: int = 0) -> None:
@@ -49,7 +49,7 @@ def main() -> None:
         except ImportError:
             print("pyarrow.dataset not installed; skipping scanner recipe")
         else:
-            scanner = torchfits.table.scanner(
+            scanner = torchsky.table.scanner(
                 catalog_file.name,
                 hdu=1,
                 columns=["OBJID", "RA", "DEC"],
@@ -64,7 +64,7 @@ def main() -> None:
         except ImportError:
             print("polars not installed; skipping LazyFrame recipe")
         else:
-            lf = torchfits.table.to_polars_lazy(
+            lf = torchsky.table.to_polars_lazy(
                 catalog_file.name, hdu=1, decode_bytes=True
             )
             summary = (
@@ -84,10 +84,10 @@ def main() -> None:
             print("duckdb not installed; skipping SQL recipe")
         else:
             con = duckdb.connect()
-            torchfits.table.to_duckdb(
+            torchsky.table.to_duckdb(
                 catalog_file.name, hdu=1, relation_name="catalog", connection=con
             )
-            torchfits.table.to_duckdb(
+            torchsky.table.to_duckdb(
                 labels_file.name, hdu=1, relation_name="labels", connection=con
             )
             joined = con.sql(

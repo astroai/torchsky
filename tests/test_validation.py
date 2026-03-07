@@ -3,7 +3,7 @@ import os
 import torch
 from astropy.io import fits
 
-import torchfits
+import torchsky
 
 
 def create_valid_fits(filename):
@@ -16,7 +16,7 @@ def test_validation():
     create_valid_fits(filename)
 
     try:
-        hdul = torchfits.HDUList.fromfile(filename)
+        hdul = torchsky.HDUList.fromfile(filename)
         is_valid = hdul.validate()
         assert is_valid
 

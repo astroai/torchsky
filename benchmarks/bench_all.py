@@ -211,12 +211,12 @@ def _print_deficit_summary(deficits: list[dict[str, Any]]) -> None:
 
     if large_n_deficits:
         print(
-            "large_n: case | n_points | torchfits_s | best | lag_x | pct_behind",
+            "large_n: case | n_points | torchsky_s | best | lag_x | pct_behind",
             flush=True,
         )
         for row in large_n_deficits:
             best_lbl = f"{row.get('best_library')}:{row.get('best_method')}"
-            tf_s = row.get("torchfits_time_s")
+            tf_s = row.get("torchsky_time_s")
             lag_x = row.get("lag_ratio")
             pct = row.get("pct_behind")
             print(
@@ -227,12 +227,12 @@ def _print_deficit_summary(deficits: list[dict[str, Any]]) -> None:
 
     if small_n_visible:
         print(
-            "small_n_visible: case | torchfits_s | best | lag_x | pct_behind | impact",
+            "small_n_visible: case | torchsky_s | best | lag_x | pct_behind | impact",
             flush=True,
         )
         for row in small_n_visible:
             best_lbl = f"{row.get('best_library')}:{row.get('best_method')}"
-            tf_s = row.get("torchfits_time_s")
+            tf_s = row.get("torchsky_time_s")
             lag_x = row.get("lag_ratio")
             pct = row.get("pct_behind")
             print(
@@ -242,12 +242,12 @@ def _print_deficit_summary(deficits: list[dict[str, Any]]) -> None:
             )
 
     print(
-        "domain | family | case | torchfits_s | best | lag_x | pct_behind | n_points",
+        "domain | family | case | torchsky_s | best | lag_x | pct_behind | n_points",
         flush=True,
     )
     for row in deficits:
         best_lbl = f"{row.get('best_library')}:{row.get('best_method')}"
-        tf_s = row.get("torchfits_time_s")
+        tf_s = row.get("torchsky_time_s")
         lag_x = row.get("lag_ratio")
         pct = row.get("pct_behind")
         n_points = row.get("n_points", "")
@@ -267,7 +267,7 @@ def _domain_failure_row(*, run_id: str, domain: str, error: str) -> dict[str, An
         "case_label": f"{domain} domain failure",
         "operation": "domain_failure",
         "family": "orchestrator",
-        "library": "torchfits",
+        "library": "torchsky",
         "method": "orchestrator",
         "mode": "n/a",
         "status": "FAILED",
@@ -570,7 +570,7 @@ def main() -> int:
     deficits = compute_deficits(all_rows, run_id=run_id)
 
     results_csv = run_dir / "results.csv"
-    deficits_csv = run_dir / "torchfits_deficits.csv"
+    deficits_csv = run_dir / "torchsky_deficits.csv"
     summary_md = run_dir / "summary.md"
 
     write_csv(results_csv, all_rows, RESULT_COLUMNS)

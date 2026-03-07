@@ -17,10 +17,10 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 try:
-    import torchfits
+    import torchsky
 except ImportError as e:
-    print(f"⚠️  torchfits import failed: {e}")
-    torchfits = None
+    print(f"⚠️  torchsky import failed: {e}")
+    torchsky = None
 
 try:
     from astropy.io import fits as astropy_fits
@@ -74,8 +74,8 @@ class GPUMemoryBenchmark:
 
     def bench_direct_gpu_loading(self):
         """Benchmark direct GPU loading vs CPU->GPU transfer."""
-        if not self.cuda_available or not torchfits:
-            print("⚠️  Skipping GPU loading test (CUDA or torchfits not available)")
+        if not self.cuda_available or not torchsky:
+            print("⚠️  Skipping GPU loading test (CUDA or torchsky not available)")
             return
 
         print("\\n🎯 Testing Direct GPU Loading")
@@ -101,7 +101,7 @@ class GPUMemoryBenchmark:
                     import time
 
                     start_time = time.perf_counter()
-                    gpu_tensor = torchfits.read(filepath, device="cuda")
+                    gpu_tensor = torchsky.read(filepath, device="cuda")
                     direct_time = time.perf_counter() - start_time
 
                     mem_after_direct, _ = self.get_gpu_memory_usage()
@@ -127,7 +127,7 @@ class GPUMemoryBenchmark:
                 mem_before, _ = self.get_gpu_memory_usage()
 
                 start_time = time.perf_counter()
-                cpu_tensor = torchfits.read(filepath)
+                cpu_tensor = torchsky.read(filepath)
                 gpu_tensor = cpu_tensor.cuda()
                 transfer_time = time.perf_counter() - start_time
 
@@ -156,7 +156,7 @@ class GPUMemoryBenchmark:
 
     def bench_gpu_memory_efficiency(self):
         """Test GPU memory efficiency with large files."""
-        if not self.cuda_available or not torchfits:
+        if not self.cuda_available or not torchsky:
             print("⚠️  Skipping GPU memory efficiency test")
             return
 
@@ -179,7 +179,7 @@ class GPUMemoryBenchmark:
                 mem_before, _ = self.get_gpu_memory_usage()
 
                 # Load to GPU
-                tensor = torchfits.read(
+                tensor = torchsky.read(
                     filepath, device="cuda" if self.cuda_available else "cpu"
                 )
 
@@ -218,7 +218,7 @@ class GPUMemoryBenchmark:
         print("\\n🎨 Testing GPU Transforms")
 
         try:
-            from torchfits.transforms import Compose, RandomFlip, ZScale
+            from torchsky.transforms import Compose, RandomFlip, ZScale
         except ImportError:
             print("⚠️  Transforms not available")
             return
@@ -234,7 +234,7 @@ class GPUMemoryBenchmark:
 
             # Test CPU transforms
             self.clear_gpu_memory()
-            cpu_tensor = torchfits.read(filepath)
+            cpu_tensor = torchsky.read(filepath)
 
             import time
 
@@ -274,7 +274,7 @@ class GPUMemoryBenchmark:
 
     def bench_memory_leaks(self):
         """Test for GPU memory leaks."""
-        if not self.cuda_available or not torchfits:
+        if not self.cuda_available or not torchsky:
             print("⚠️  Skipping memory leak test")
             return
 
@@ -290,7 +290,7 @@ class GPUMemoryBenchmark:
             # Perform multiple load/delete cycles
             n_cycles = 10
             for i in range(n_cycles):
-                tensor = torchfits.read(
+                tensor = torchsky.read(
                     filepath, device="cuda" if self.cuda_available else "cpu"
                 )
 
@@ -329,11 +329,9 @@ class GPUMemoryBenchmark:
             print("[diagnostic] SKIPPED: CUDA not available - skipping GPU tests")
             return {"status": "SKIPPED", "reason": "cuda_not_available"}
 
-        if not torchfits:
-            print(
-                "[diagnostic] SKIPPED: torchfits not available - cannot run benchmark"
-            )
-            return {"status": "SKIPPED", "reason": "torchfits_not_available"}
+        if not torchsky:
+            print("[diagnostic] SKIPPED: torchsky not available - cannot run benchmark")
+            return {"status": "SKIPPED", "reason": "torchsky_not_available"}
 
         # Run all GPU tests
         self.bench_direct_gpu_loading()

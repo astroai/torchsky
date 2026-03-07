@@ -5,8 +5,8 @@ import numpy as np
 import torch
 from astropy.io import fits
 
-import torchfits
-from torchfits.wcs import WCS
+import torchsky
+from torchsky.wcs import WCS
 
 
 def test_wcs_2d_creation():
@@ -42,7 +42,7 @@ def test_wcs_2d_pixel_to_world():
         "NAXIS2": 2,
     }
     wcs = WCS(header)
-    # torchfits uses Python-style 0-based pixel coordinates.
+    # torchsky uses Python-style 0-based pixel coordinates.
     pixels = torch.tensor([[0.0, 0.0]], dtype=torch.float64)
     world = wcs.pixel_to_world(pixels)
     assert torch.allclose(
@@ -88,7 +88,7 @@ def test_get_wcs_from_file_auto_hdu():
         path = f.name
 
     try:
-        wcs = torchfits.get_wcs(path, hdu="auto")
+        wcs = torchsky.get_wcs(path, hdu="auto")
         assert isinstance(wcs, WCS)
         world = wcs.pixel_to_world(torch.tensor([[0.0, 0.0]], dtype=torch.float64))
         assert torch.allclose(
@@ -117,7 +117,7 @@ def test_get_wcs_auto_hdu_skips_empty_primary():
         path = f.name
 
     try:
-        wcs = torchfits.get_wcs(path, hdu="auto")
+        wcs = torchsky.get_wcs(path, hdu="auto")
         world = wcs.pixel_to_world(torch.tensor([[0.0, 0.0]], dtype=torch.float64))
         assert torch.allclose(
             world, torch.tensor([[10.0, -5.0]], dtype=torch.float64), atol=1e-6
