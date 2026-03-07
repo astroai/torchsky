@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Sequence
 
 import torch
@@ -93,12 +94,14 @@ def coadd_image_plane(
     header_dict = dict(first_header if target_header is None else target_header)
     target_wcs = WCS(header_dict)
     target_shape = tuple(int(v) for v in first_image.shape[-2:])
+    device = first_image.device
 
-    numer = torch.zeros(target_shape, dtype=torch.float32)
-    denom = torch.zeros(target_shape, dtype=torch.float32)
+    numer = torch.zeros(target_shape, dtype=torch.float32, device=device)
+    denom = torch.zeros(target_shape, dtype=torch.float32, device=device)
 
     for obs in observations:
         image, header = read(obs.path, hdu=obs.hdu, return_header=True)
+        image = image.to(device=device)
         header_dict_obs = dict(header)
         if (
             header_dict_obs == header_dict
@@ -120,6 +123,7 @@ def coadd_image_plane(
     coadd = numer / torch.clamp(denom, min=1e-8)
     result = MapResult(data=coadd, weight=denom, header=header_dict)
     if output_path is not None:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         write(output_path, coadd, header=header_dict, overwrite=True)
     return result
 
