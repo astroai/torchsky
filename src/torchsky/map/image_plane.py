@@ -28,6 +28,15 @@ class MapResult:
     header: dict
 
 
+@dataclass
+class _PreparedImagePlaneTarget:
+    header: dict
+    wcs: WCS
+    shape: tuple[int, int]
+    ra_deg: Tensor
+    dec_deg: Tensor
+
+
 def _validate_image_plane(image: Tensor) -> Tensor:
     if image.ndim != 2:
         raise ValueError("Image-plane mapmaking currently supports 2D images only")
@@ -65,15 +74,12 @@ def _build_target_world_grid(
 def _resample_to_target(
     image: Tensor,
     source_wcs: WCS,
-    target_wcs: WCS,
-    target_shape: tuple[int, int],
+    target: _PreparedImagePlaneTarget,
 ) -> tuple[Tensor, Tensor]:
-    height, width = target_shape
+    height, width = target.shape
     image = _validate_image_plane(image).to(dtype=torch.float32)
 
-    device = image.device
-    ra, dec = _build_target_world_grid(target_wcs, height, width, device=device)
-    x_src, y_src = source_wcs.world_to_pixel(ra, dec)
+    x_src, y_src = source_wcs.world_to_pixel(target.ra_deg, target.dec_deg)
     h_src, w_src = image.shape
 
     x_norm = (2.0 * x_src / max(w_src - 1, 1)) - 1.0
@@ -120,6 +126,28 @@ def _resample_to_target(
     return sampled, valid
 
 
+def _prepare_target(
+    *,
+    header: dict,
+    target_wcs: WCS,
+    target_shape: tuple[int, int],
+    device: torch.device,
+) -> _PreparedImagePlaneTarget:
+    ra_deg, dec_deg = _build_target_world_grid(
+        target_wcs,
+        target_shape[0],
+        target_shape[1],
+        device=device,
+    )
+    return _PreparedImagePlaneTarget(
+        header=header,
+        wcs=target_wcs,
+        shape=target_shape,
+        ra_deg=ra_deg,
+        dec_deg=dec_deg,
+    )
+
+
 def coadd_image_plane(
     observations: Sequence[ImageObservation],
     *,
@@ -139,6 +167,12 @@ def coadd_image_plane(
         fallback=tuple(int(v) for v in first_image.shape[-2:]),
     )
     device = first_image.device
+    prepared_target = _prepare_target(
+        header=header_dict,
+        target_wcs=target_wcs,
+        target_shape=target_shape,
+        device=device,
+    )
 
     numer = torch.zeros(target_shape, dtype=torch.float32, device=device)
     denom = torch.zeros(target_shape, dtype=torch.float32, device=device)
@@ -166,8 +200,7 @@ def coadd_image_plane(
             sampled, valid = _resample_to_target(
                 image,
                 WCS(header_dict_obs),
-                target_wcs,
-                target_shape,
+                prepared_target,
             )
         weight = float(obs.weight)
         numer = numer + sampled * valid * weight

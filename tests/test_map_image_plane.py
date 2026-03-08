@@ -4,6 +4,7 @@ import pytest
 import torch
 
 import torchsky
+import torchsky.map.image_plane as image_plane_mod
 from torchsky.map import ImageObservation, coadd_image_plane
 
 
@@ -88,3 +89,33 @@ def test_coadd_image_plane_rejects_non_2d_images(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="2D images only"):
         coadd_image_plane([ImageObservation(str(path))])
+
+
+def test_coadd_image_plane_builds_target_grid_once_per_run(
+    tmp_path, monkeypatch
+) -> None:
+    path_a = tmp_path / "a.fits"
+    path_b = tmp_path / "b.fits"
+    header_a = _simple_header()
+    header_b = dict(header_a)
+    header_b["CRVAL1"] = header_b["CRVAL1"] + 0.02
+    data = torch.arange(64, dtype=torch.float32).reshape(8, 8)
+    torchsky.write(str(path_a), data, header=header_a, overwrite=True)
+    torchsky.write(str(path_b), data + 1.0, header=header_b, overwrite=True)
+
+    calls = 0
+    original = image_plane_mod._build_target_world_grid
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(image_plane_mod, "_build_target_world_grid", counted)
+
+    result = coadd_image_plane(
+        [ImageObservation(str(path_a)), ImageObservation(str(path_b))]
+    )
+
+    assert calls == 1
+    assert result.data.shape == (8, 8)
