@@ -35,6 +35,19 @@ def test_crossmatch_sky_handles_empty_right_catalog() -> None:
     assert result.right_index.numel() == 0
 
 
+def test_crossmatch_sky_handles_ra_wraparound() -> None:
+    result = crossmatch_sky(
+        torch.tensor([359.9998], dtype=torch.float64),
+        torch.tensor([0.0], dtype=torch.float64),
+        torch.tensor([0.0001, 12.0], dtype=torch.float64),
+        torch.tensor([0.0, 0.0], dtype=torch.float64),
+        radius_arcsec=2.0,
+    )
+    assert result.left_index.tolist() == [0]
+    assert result.right_index.tolist() == [0]
+    assert result.separation_arcsec.item() < 2.0
+
+
 def test_catalog_stream_dataset_splits_work_across_workers() -> None:
     ds = CatalogStreamDataset(range(8))
     loader = DataLoader(ds, num_workers=2, batch_size=None)

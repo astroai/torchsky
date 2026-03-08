@@ -46,6 +46,20 @@ class CrossmatchResult:
     separation_arcsec: Tensor
 
 
+def _candidate_dec_window(
+    right_dec_sorted: Tensor,
+    *,
+    dec_min_deg: Tensor,
+    dec_max_deg: Tensor,
+    radius_deg: float,
+) -> tuple[int, int]:
+    lower = max(float(dec_min_deg.item()) - radius_deg, -90.0)
+    upper = min(float(dec_max_deg.item()) + radius_deg, 90.0)
+    start = int(torch.searchsorted(right_dec_sorted, lower, right=False).item())
+    stop = int(torch.searchsorted(right_dec_sorted, upper, right=True).item())
+    return start, stop
+
+
 def crossmatch_sky(
     left_ra_deg: Tensor,
     left_dec_deg: Tensor,
@@ -82,6 +96,9 @@ def crossmatch_sky(
         return CrossmatchResult(empty_i64, empty_i64, empty_f64)
 
     radius_deg = radius_arcsec / 3600.0
+    right_order = torch.argsort(right_dec)
+    right_ra_sorted = right_ra[right_order]
+    right_dec_sorted = right_dec[right_order]
 
     left_hits: list[Tensor] = []
     right_hits: list[Tensor] = []
@@ -89,8 +106,19 @@ def crossmatch_sky(
 
     for start in range(0, int(left_ra.numel()), left_chunk_size):
         stop = min(start + left_chunk_size, int(left_ra.numel()))
-        ra_chunk = left_ra[start:stop].unsqueeze(1)
-        dec_chunk = left_dec[start:stop].unsqueeze(1)
+        left_ra_chunk = left_ra[start:stop]
+        left_dec_chunk = left_dec[start:stop]
+        cand_start, cand_stop = _candidate_dec_window(
+            right_dec_sorted,
+            dec_min_deg=left_dec_chunk.min(),
+            dec_max_deg=left_dec_chunk.max(),
+            radius_deg=radius_deg,
+        )
+        if cand_start >= cand_stop:
+            continue
+
+        ra_chunk = left_ra_chunk.unsqueeze(1)
+        dec_chunk = left_dec_chunk.unsqueeze(1)
         best_sep = torch.full(
             (stop - start,),
             torch.inf,
@@ -104,13 +132,13 @@ def crossmatch_sky(
             device=left_ra.device,
         )
 
-        for right_start in range(0, int(right_ra.numel()), right_chunk_size):
-            right_stop = min(right_start + right_chunk_size, int(right_ra.numel()))
+        for right_start in range(cand_start, cand_stop, right_chunk_size):
+            right_stop = min(right_start + right_chunk_size, cand_stop)
             sep = great_circle_distance(
                 ra_chunk,
                 dec_chunk,
-                right_ra[right_start:right_stop].unsqueeze(0),
-                right_dec[right_start:right_stop].unsqueeze(0),
+                right_ra_sorted[right_start:right_stop].unsqueeze(0),
+                right_dec_sorted[right_start:right_stop].unsqueeze(0),
                 degrees=True,
             )
             cand_sep, cand_idx = sep.min(dim=1)
@@ -119,7 +147,7 @@ def crossmatch_sky(
                 best_sep = torch.where(improved, cand_sep, best_sep)
                 best_idx = torch.where(
                     improved,
-                    cand_idx.to(torch.int64) + right_start,
+                    right_order[right_start:right_stop][cand_idx.to(torch.int64)],
                     best_idx,
                 )
 
