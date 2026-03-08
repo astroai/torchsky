@@ -86,6 +86,34 @@ def test_spherical_polygon_pixel_boolean_ops() -> None:
     assert i.area() <= r1.area() + 1e-12
 
 
+def test_pixelized_region_set_ops_preserve_sorted_unique_contract() -> None:
+    r1 = PixelizedRegion(
+        nside=32,
+        nest=False,
+        pixels=torch.tensor([7, 3, 5, 3, 1], dtype=torch.int64),
+    )
+    r2 = PixelizedRegion(
+        nside=32,
+        nest=False,
+        pixels=torch.tensor([6, 5, 4, 3, 3], dtype=torch.int64),
+    )
+
+    torch.testing.assert_close(r1.pixels, torch.tensor([1, 3, 5, 7], dtype=torch.int64))
+    torch.testing.assert_close(r2.pixels, torch.tensor([3, 4, 5, 6], dtype=torch.int64))
+    torch.testing.assert_close(
+        r1.intersection(r2).pixels,
+        torch.tensor([3, 5], dtype=torch.int64),
+    )
+    torch.testing.assert_close(
+        r1.difference(r2).pixels,
+        torch.tensor([1, 7], dtype=torch.int64),
+    )
+    torch.testing.assert_close(
+        r1.union(r2).pixels,
+        torch.tensor([1, 3, 4, 5, 6, 7], dtype=torch.int64),
+    )
+
+
 def test_spherical_polygon_class_contracts() -> None:
     lon, lat = _concave_polygon()
     poly = SphericalPolygon(lon, lat)

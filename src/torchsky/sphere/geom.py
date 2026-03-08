@@ -213,6 +213,26 @@ def _great_circle_arcs_intersect_matrix(
     return valid & ((on_a_i1 & on_b_i1) | (on_a_i2 & on_b_i2))
 
 
+def _sorted_unique_intersection(left: Tensor, right: Tensor) -> Tensor:
+    """Intersect sorted unique integer tensors with searchsorted-based membership."""
+    if left.numel() == 0 or right.numel() == 0:
+        return left[:0]
+    idx = torch.searchsorted(right, left)
+    idx_safe = idx.clamp(max=right.numel() - 1)
+    mask = (idx < right.numel()) & (right[idx_safe] == left)
+    return left[mask]
+
+
+def _sorted_unique_difference(left: Tensor, right: Tensor) -> Tensor:
+    """Compute sorted unique left-minus-right for integer tensors."""
+    if left.numel() == 0 or right.numel() == 0:
+        return left
+    idx = torch.searchsorted(right, left)
+    idx_safe = idx.clamp(max=right.numel() - 1)
+    mask = (idx < right.numel()) & (right[idx_safe] == left)
+    return left[~mask]
+
+
 def _planar_point_in_polygon(
     points_xy: Tensor,
     polygon_xy: Tensor,
@@ -738,13 +758,17 @@ class PixelizedRegion:
     def intersection(self, other: "PixelizedRegion") -> "PixelizedRegion":
         self._check_compatible(other)
         return PixelizedRegion(
-            self.nside, self.nest, self.pixels[torch.isin(self.pixels, other.pixels)]
+            self.nside,
+            self.nest,
+            _sorted_unique_intersection(self.pixels, other.pixels),
         )
 
     def difference(self, other: "PixelizedRegion") -> "PixelizedRegion":
         self._check_compatible(other)
         return PixelizedRegion(
-            self.nside, self.nest, self.pixels[~torch.isin(self.pixels, other.pixels)]
+            self.nside,
+            self.nest,
+            _sorted_unique_difference(self.pixels, other.pixels),
         )
 
     def area(self, *, degrees: bool = False) -> float:
