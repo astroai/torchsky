@@ -28,6 +28,28 @@ class MapResult:
     header: dict
 
 
+def _validate_image_plane(image: Tensor) -> Tensor:
+    if image.ndim != 2:
+        raise ValueError("Image-plane mapmaking currently supports 2D images only")
+    return image
+
+
+def _target_shape_from_header(
+    header: dict,
+    *,
+    fallback: tuple[int, int],
+) -> tuple[int, int]:
+    naxis1 = header.get("NAXIS1")
+    naxis2 = header.get("NAXIS2")
+    if naxis1 is None or naxis2 is None:
+        return fallback
+    width = int(naxis1)
+    height = int(naxis2)
+    if width <= 0 or height <= 0:
+        raise ValueError("Target header must define positive NAXIS1/NAXIS2")
+    return height, width
+
+
 def _build_target_world_grid(
     target_wcs: WCS, height: int, width: int, device: torch.device
 ) -> tuple[Tensor, Tensor]:
@@ -47,9 +69,7 @@ def _resample_to_target(
     target_shape: tuple[int, int],
 ) -> tuple[Tensor, Tensor]:
     height, width = target_shape
-    image = image.to(dtype=torch.float32)
-    if image.ndim != 2:
-        raise ValueError("Image-plane mapmaking currently supports 2D images only")
+    image = _validate_image_plane(image).to(dtype=torch.float32)
 
     device = image.device
     ra, dec = _build_target_world_grid(target_wcs, height, width, device=device)
@@ -60,9 +80,23 @@ def _resample_to_target(
     y_norm = (2.0 * y_src / max(h_src - 1, 1)) - 1.0
     grid = torch.stack([x_norm, y_norm], dim=-1).to(dtype=torch.float32)
 
+    finite_mask = torch.isfinite(image).to(dtype=torch.float32)
+    image = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0)
+
     sampled = (
         F.grid_sample(
             image.unsqueeze(0).unsqueeze(0),
+            grid.unsqueeze(0),
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        )
+        .squeeze(0)
+        .squeeze(0)
+    )
+    sampled_mask = (
+        F.grid_sample(
+            finite_mask.unsqueeze(0).unsqueeze(0),
             grid.unsqueeze(0),
             mode="bilinear",
             padding_mode="zeros",
@@ -77,6 +111,12 @@ def _resample_to_target(
         & (y_src >= 0.0)
         & (y_src <= (h_src - 1))
     ).to(dtype=sampled.dtype)
+    valid = valid * (sampled_mask > 1e-6).to(dtype=sampled.dtype)
+    sampled = torch.where(
+        sampled_mask > 1e-6,
+        sampled / torch.clamp(sampled_mask, min=1e-6),
+        torch.zeros_like(sampled),
+    )
     return sampled, valid
 
 
@@ -91,24 +131,37 @@ def coadd_image_plane(
 
     first = observations[0]
     first_image, first_header = read(first.path, hdu=first.hdu, return_header=True)
+    first_image = _validate_image_plane(first_image)
     header_dict = dict(first_header if target_header is None else target_header)
     target_wcs = WCS(header_dict)
-    target_shape = tuple(int(v) for v in first_image.shape[-2:])
+    target_shape = _target_shape_from_header(
+        header_dict,
+        fallback=tuple(int(v) for v in first_image.shape[-2:]),
+    )
     device = first_image.device
 
     numer = torch.zeros(target_shape, dtype=torch.float32, device=device)
     denom = torch.zeros(target_shape, dtype=torch.float32, device=device)
 
     for obs in observations:
+        if not torch.isfinite(torch.tensor(obs.weight, dtype=torch.float64)):
+            raise ValueError("Observation weights must be finite")
+        if obs.weight <= 0.0:
+            raise ValueError("Observation weights must be positive")
         image, header = read(obs.path, hdu=obs.hdu, return_header=True)
-        image = image.to(device=device)
+        image = _validate_image_plane(image).to(device=device)
         header_dict_obs = dict(header)
         if (
             header_dict_obs == header_dict
-            and tuple(int(v) for v in image.shape[-2:]) == target_shape
+            and tuple(int(v) for v in image.shape) == target_shape
         ):
-            sampled = image.to(dtype=torch.float32)
-            valid = torch.ones_like(sampled, dtype=torch.float32)
+            sampled = torch.nan_to_num(
+                image.to(dtype=torch.float32),
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
+            valid = torch.isfinite(image).to(dtype=torch.float32)
         else:
             sampled, valid = _resample_to_target(
                 image,

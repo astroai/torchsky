@@ -22,7 +22,7 @@ class CatalogStreamDataset(IterableDataset):
 
     def __init__(
         self,
-        partitions: Iterable[object],
+        partitions: Iterable[object] | Callable[[], Iterable[object]],
         loader: Callable[[object], object] = _identity_partition,
     ):
         self._partitions = partitions
@@ -30,9 +30,11 @@ class CatalogStreamDataset(IterableDataset):
 
     def __iter__(self) -> Iterator[object]:
         worker = get_worker_info()
-        partitions = self._partitions
+        partitions = (
+            self._partitions() if callable(self._partitions) else self._partitions
+        )
         if worker is not None:
-            partitions = islice(self._partitions, worker.id, None, worker.num_workers)
+            partitions = islice(iter(partitions), worker.id, None, worker.num_workers)
         for partition in partitions:
             yield self._loader(partition)
 
@@ -55,10 +57,17 @@ def crossmatch_sky(
     right_chunk_size: int = 65536,
 ) -> CrossmatchResult:
     """Chunked nearest-neighbour angular crossmatch suitable for refinement stages."""
-    left_ra = torch.as_tensor(left_ra_deg, dtype=torch.float64)
-    left_dec = torch.as_tensor(left_dec_deg, dtype=torch.float64)
-    right_ra = torch.as_tensor(right_ra_deg, dtype=torch.float64)
-    right_dec = torch.as_tensor(right_dec_deg, dtype=torch.float64)
+    left_ra = torch.as_tensor(left_ra_deg, dtype=torch.float64).reshape(-1)
+    device = left_ra.device
+    left_dec = torch.as_tensor(
+        left_dec_deg, dtype=torch.float64, device=device
+    ).reshape(-1)
+    right_ra = torch.as_tensor(
+        right_ra_deg, dtype=torch.float64, device=device
+    ).reshape(-1)
+    right_dec = torch.as_tensor(
+        right_dec_deg, dtype=torch.float64, device=device
+    ).reshape(-1)
     if radius_arcsec <= 0.0:
         raise ValueError("radius_arcsec must be positive")
     if left_chunk_size <= 0 or right_chunk_size <= 0:
@@ -68,8 +77,9 @@ def crossmatch_sky(
     if right_ra.shape != right_dec.shape:
         raise ValueError("right_ra_deg and right_dec_deg must have the same shape")
     if right_ra.numel() == 0 or left_ra.numel() == 0:
-        empty = torch.empty(0, dtype=torch.int64)
-        return CrossmatchResult(empty, empty, empty.to(torch.float64))
+        empty_i64 = torch.empty(0, dtype=torch.int64, device=device)
+        empty_f64 = torch.empty(0, dtype=torch.float64, device=device)
+        return CrossmatchResult(empty_i64, empty_i64, empty_f64)
 
     radius_deg = radius_arcsec / 3600.0
 
@@ -124,8 +134,9 @@ def crossmatch_sky(
             sep_hits.append(best_sep[mask] * 3600.0)
 
     if not left_hits:
-        empty = torch.empty(0, dtype=torch.int64)
-        return CrossmatchResult(empty, empty, empty.to(torch.float64))
+        empty_i64 = torch.empty(0, dtype=torch.int64, device=device)
+        empty_f64 = torch.empty(0, dtype=torch.float64, device=device)
+        return CrossmatchResult(empty_i64, empty_i64, empty_f64)
 
     return CrossmatchResult(
         left_index=torch.cat(left_hits),

@@ -40,3 +40,9 @@ def test_catalog_stream_dataset_splits_work_across_workers() -> None:
     loader = DataLoader(ds, num_workers=2, batch_size=None)
     got = sorted(int(x) for x in loader)
     assert got == list(range(8))
+
+
+def test_catalog_stream_dataset_supports_partition_factory() -> None:
+    ds = CatalogStreamDataset(lambda: iter(range(4)))
+    assert list(ds) == [0, 1, 2, 3]
+    assert list(ds) == [0, 1, 2, 3]

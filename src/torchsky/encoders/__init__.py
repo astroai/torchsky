@@ -38,6 +38,8 @@ def harmonic_sky_encoding(
                 3.0 * z.square() - 1.0,
             ]
         )
+    if not feats:
+        raise ValueError("At least one harmonic component must be enabled")
     return torch.stack(feats, dim=-1)
 
 

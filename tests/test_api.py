@@ -525,5 +525,12 @@ class TestTableAPI:
             os.unlink(filepath)
 
 
+def test_top_level_namespaces_expose_phase1_modules() -> None:
+    assert callable(torchsky.io.read)
+    assert torchsky.coords.WCS is torchsky.WCS
+    assert hasattr(torchsky.geom, "great_circle_distance")
+    assert hasattr(torchsky.map, "coadd_image_plane")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -1,4 +1,5 @@
 import torch
+import pytest
 
 from torchsky.encoders import (
     SkyCoordinateEncoder,
@@ -31,3 +32,14 @@ def test_sky_coordinate_encoder_combines_spatial_and_spectral_features() -> None
     feats = enc(ra, dec, wavelength=wavelength)
     assert feats.shape[0] == 8
     assert feats.shape[1] > 10
+
+
+def test_harmonic_sky_encoding_requires_enabled_components() -> None:
+    with pytest.raises(ValueError, match="At least one harmonic component"):
+        harmonic_sky_encoding(
+            torch.tensor([0.0]),
+            torch.tensor([0.0]),
+            include_constant=False,
+            include_degree1=False,
+            include_degree2=False,
+        )
