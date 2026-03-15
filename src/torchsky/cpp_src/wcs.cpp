@@ -198,12 +198,17 @@ tpv_distort_and_jacobian_impl(
     return std::make_tuple(xi, eta, dxi_du, dxi_dv, deta_du, deta_dv);
 }
 
-inline std::tuple<double, double, double, double, double, double> eval_tpv_jac_scalar(
-    double u, double v,
-    const torch::Tensor& idx1, const torch::Tensor& c1,
-    const torch::Tensor& idx2, const torch::Tensor& c2)
+inline std::tuple<double, double, double, double, double, double> eval_tpv_jac_scalar_raw(
+    double u,
+    double v,
+    const int64_t* idx1_p,
+    const double* c1_p,
+    int64_t n1,
+    const int64_t* idx2_p,
+    const double* c2_p,
+    int64_t n2)
 {
-    if (c1.numel() == 0 && c2.numel() == 0) return {u, v, 1.0, 0.0, 0.0, 1.0};
+    if (n1 == 0 && n2 == 0) return {u, v, 1.0, 0.0, 0.0, 1.0};
     double r = std::sqrt(u * u + v * v);
     double xp[8] = {1.0, u, u*u, u*u*u, u*u*u*u, u*u*u*u*u, u*u*u*u*u*u, u*u*u*u*u*u*u};
     double yp[8] = {1.0, v, v*v, v*v*v, v*v*v*v, v*v*v*v*v, v*v*v*v*v*v, v*v*v*v*v*v*v};
@@ -212,11 +217,9 @@ inline std::tuple<double, double, double, double, double, double> eval_tpv_jac_s
     double dr_du = (r > 0) ? u / r : 0.0;
     double dr_dv = (r > 0) ? v / r : 0.0;
 
-    auto eval_axis = [&](const torch::Tensor& idx, const torch::Tensor& c, const double* a_p, const double* b_p, double dr_da, double dr_db) {
+    auto eval_axis = [&](const int64_t* idx_p, const double* c_p, int64_t n_terms, const double* a_p, const double* b_p, double dr_da, double dr_db) {
         double out = 0, da = 0, db = 0, dr_pref = 0;
-        const int64_t* idx_p = idx.data_ptr<int64_t>();
-        const double* c_p = c.data_ptr<double>();
-        for (int k = 0; k < c.size(0); ++k) {
+        for (int64_t k = 0; k < n_terms; ++k) {
             int64_t px = idx_p[k*3], py = idx_p[k*3+1], pr = idx_p[k*3+2];
             double coeff = c_p[k];
             out += a_p[px] * b_p[py] * rp[pr] * coeff;
@@ -229,19 +232,22 @@ inline std::tuple<double, double, double, double, double, double> eval_tpv_jac_s
         return std::make_tuple(out, da, db);
     };
 
-    auto [xi, j11, j12] = eval_axis(idx1, c1, xp, yp, dr_du, dr_dv);
-    auto [eta, j22, j21] = eval_axis(idx2, c2, yp, xp, dr_dv, dr_du);
+    auto [xi, j11, j12] = eval_axis(idx1_p, c1_p, n1, xp, yp, dr_du, dr_dv);
+    auto [eta, j22, j21] = eval_axis(idx2_p, c2_p, n2, yp, xp, dr_dv, dr_du);
     return {xi, eta, j11, j12, j21, j22};
 }
 
-inline std::pair<double, double> invert_tpv_scalar(
+inline std::pair<double, double> invert_tpv_scalar_with_seed(
     double xi_target, double eta_target,
-    const torch::Tensor& idx1, const torch::Tensor& c1,
-    const torch::Tensor& idx2, const torch::Tensor& c2)
+    const TpvAffineSeedParams& p,
+    const int64_t* idx1_p,
+    const double* c1_p,
+    int64_t n1,
+    const int64_t* idx2_p,
+    const double* c2_p,
+    int64_t n2)
 {
-    if (c1.numel() == 0 && c2.numel() == 0) return {xi_target, eta_target};
-
-    auto p = tpv_extract_affine_seed_params(idx1, c1, idx2, c2);
+    if (n1 == 0 && n2 == 0) return {xi_target, eta_target};
     double u, v;
     if (p.valid) {
         double det = p.a11 * p.a22 - p.a12 * p.a21;
@@ -256,7 +262,16 @@ inline std::pair<double, double> invert_tpv_scalar(
 
     double tol2 = 1e-22;
     for (int i = 0; i < 20; ++i) {
-        auto [xi, eta, j11, j12, j21, j22] = eval_tpv_jac_scalar(u, v, idx1, c1, idx2, c2);
+        auto [xi, eta, j11, j12, j21, j22] = eval_tpv_jac_scalar_raw(
+            u,
+            v,
+            idx1_p,
+            c1_p,
+            n1,
+            idx2_p,
+            c2_p,
+            n2
+        );
         double rx = xi - xi_target, ry = eta - eta_target;
         if (rx*rx + ry*ry < tol2) break;
         double det = j11 * j22 - j12 * j21;
@@ -267,6 +282,24 @@ inline std::pair<double, double> invert_tpv_scalar(
         v += std::max(-1.0, std::min(1.0, dv));
     }
     return {u, v};
+}
+
+inline std::pair<double, double> invert_tpv_scalar(
+    double xi_target, double eta_target,
+    const torch::Tensor& idx1, const torch::Tensor& c1,
+    const torch::Tensor& idx2, const torch::Tensor& c2)
+{
+    return invert_tpv_scalar_with_seed(
+        xi_target,
+        eta_target,
+        tpv_extract_affine_seed_params(idx1, c1, idx2, c2),
+        idx1.data_ptr<int64_t>(),
+        c1.data_ptr<double>(),
+        c1.size(0),
+        idx2.data_ptr<int64_t>(),
+        c2.data_ptr<double>(),
+        c2.size(0)
+    );
 }
 
 std::pair<torch::Tensor, torch::Tensor> wcs_inverse_spherical_rotation_pole(
@@ -1710,15 +1743,55 @@ void wcs_world_to_pixel_fused_cpu(
     const torch::Tensor& tpv_idx2,
     const torch::Tensor& tpv_c2
 ) {
+    enum class FusedProjKind {
+        TAN,
+        SIN,
+        CEA,
+        AIT,
+        HPX,
+        CAR,
+        SFL,
+        MOL,
+        OTHER,
+    };
+
     const int64_t n = ra_tensor.numel();
     const double* ra_ptr = ra_tensor.data_ptr<double>();
     const double* dec_ptr = dec_tensor.data_ptr<double>();
     double* x_ptr = x_tensor.data_ptr<double>();
     double* y_ptr = y_tensor.data_ptr<double>();
 
-    bool use_center_equator_fast = (native_type == "center" && std::abs(delta0) < 1e-12 && (std::abs(std::fmod(phi_p_rad * R2D, 360.0)) < 1e-12 || std::abs(std::abs(std::fmod(phi_p_rad * R2D, 360.0)) - 180.0) < 1e-12));
+    FusedProjKind proj_kind = FusedProjKind::OTHER;
+    if (proj_code == "TAN") proj_kind = FusedProjKind::TAN;
+    else if (proj_code == "SIN") proj_kind = FusedProjKind::SIN;
+    else if (proj_code == "CEA") proj_kind = FusedProjKind::CEA;
+    else if (proj_code == "AIT") proj_kind = FusedProjKind::AIT;
+    else if (proj_code == "HPX") proj_kind = FusedProjKind::HPX;
+    else if (proj_code == "CAR") proj_kind = FusedProjKind::CAR;
+    else if (proj_code == "SFL") proj_kind = FusedProjKind::SFL;
+    else if (proj_code == "MOL") proj_kind = FusedProjKind::MOL;
 
-    for (int64_t i = 0; i < n; ++i) {
+    const bool native_is_pole = (native_type == "pole");
+    bool use_center_equator_fast = (native_type == "center" && std::abs(delta0) < 1e-12 && (std::abs(std::fmod(phi_p_rad * R2D, 360.0)) < 1e-12 || std::abs(std::abs(std::fmod(phi_p_rad * R2D, 360.0)) - 180.0) < 1e-12));
+    TpvAffineSeedParams tpv_seed;
+    const int64_t* tpv_idx1_ptr = nullptr;
+    const double* tpv_c1_ptr = nullptr;
+    int64_t tpv_n1 = 0;
+    const int64_t* tpv_idx2_ptr = nullptr;
+    const double* tpv_c2_ptr = nullptr;
+    int64_t tpv_n2 = 0;
+    if (is_tpv) {
+        tpv_seed = tpv_extract_affine_seed_params(tpv_idx1, tpv_c1, tpv_idx2, tpv_c2);
+        tpv_idx1_ptr = tpv_idx1.data_ptr<int64_t>();
+        tpv_c1_ptr = tpv_c1.data_ptr<double>();
+        tpv_n1 = tpv_c1.size(0);
+        tpv_idx2_ptr = tpv_idx2.data_ptr<int64_t>();
+        tpv_c2_ptr = tpv_c2.data_ptr<double>();
+        tpv_n2 = tpv_c2.size(0);
+    }
+
+    at::parallel_for(0, n, 4096, [&](int64_t begin, int64_t end) {
+    for (int64_t i = begin; i < end; ++i) {
         // 1. Inverse Spherical Rotation (ra, dec) -> (phi, theta)
         double ra_deg = ra_ptr[i];
         double dec_deg = dec_ptr[i];
@@ -1741,7 +1814,7 @@ void wcs_world_to_pixel_fused_cpu(
             double Y = cos_dec * sin_ra;
             double Z = sin_dec;
 
-            if (native_type == "pole") {
+            if (native_is_pole) {
                 double u_rot = X * east_x + Y * east_y;
                 double n_rot = X * north_x + Y * north_y + Z * north_z;
                 double w_rot = std::max(-1.0, std::min(1.0, X * radial_x + Y * radial_y + Z * radial_z));
@@ -1764,22 +1837,28 @@ void wcs_world_to_pixel_fused_cpu(
         if (phi_w < 0) phi_w += 360.0;
         phi_w -= 180.0;
 
-        if (proj_code == "TAN") {
+        switch (proj_kind) {
+        case FusedProjKind::TAN: {
             double theta_rad = theta * D2R;
             double r = R2D / std::tan(theta_rad);
             double phi_rad = phi * D2R;
             xi = -r * std::sin(phi_rad);
             eta = -r * std::cos(phi_rad);
-        } else if (proj_code == "SIN") {
+            break;
+        }
+        case FusedProjKind::SIN: {
             double theta_rad = theta * D2R;
             double r = std::cos(theta_rad) * R2D;
             double phi_rad = phi * D2R;
             xi = -r * std::sin(phi_rad);
             eta = -r * std::cos(phi_rad);
-        } else if (proj_code == "CEA") {
+            break;
+        }
+        case FusedProjKind::CEA:
             xi = phi_w;
             eta = (R2D / lambda_param) * std::sin(theta * D2R);
-        } else if (proj_code == "AIT") {
+            break;
+        case FusedProjKind::AIT: {
             double phi_rad = phi_w * D2R;
             double theta_rad = theta * D2R;
             double half_phi = phi_rad * 0.5;
@@ -1789,7 +1868,9 @@ void wcs_world_to_pixel_fused_cpu(
             double denom = std::sqrt(0.5 * (1.0 + cos_theta * cos_half_phi));
             xi = 2.0 * cos_theta * std::sin(half_phi) / denom * R2D;
             eta = sin_theta / denom * R2D;
-        } else if (proj_code == "HPX") {
+            break;
+        }
+        case FusedProjKind::HPX: {
             double s_theta = std::sin(theta * D2R);
             double abs_s = std::abs(s_theta);
             double eta_scale = 90.0 * (hpx_K / hpx_H);
@@ -1803,13 +1884,17 @@ void wcs_world_to_pixel_fused_cpu(
                 double xc = std::round((phi_w - 45.0) / 90.0) * 90.0 + 45.0;
                 xi = xc + sigma * (phi_w - xc);
             }
-        } else if (proj_code == "CAR") {
+            break;
+        }
+        case FusedProjKind::CAR:
             xi = phi_w;
             eta = theta;
-        } else if (proj_code == "SFL") {
+            break;
+        case FusedProjKind::SFL:
             xi = phi_w * std::cos(theta * D2R);
             eta = theta;
-        } else if (proj_code == "MOL") {
+            break;
+        case FusedProjKind::MOL: {
             double phi_rad = phi_w * D2R;
             double sin_theta = std::sin(theta * D2R);
             double gamma = 0.0;
@@ -1822,7 +1907,9 @@ void wcs_world_to_pixel_fused_cpu(
             double sqrt2 = std::sqrt(2.0);
             xi = 2.0 * sqrt2 * phi_rad * cos_gamma / WCS_PI * R2D;
             eta = sqrt2 * std::sin(gamma) * R2D;
-        } else {
+            break;
+        }
+        case FusedProjKind::OTHER:
             xi = std::nan("");
             eta = std::nan("");
         }
@@ -1831,7 +1918,17 @@ void wcs_world_to_pixel_fused_cpu(
         double v_deg = eta;
 
         if (is_tpv) {
-            auto [tpv_u, tpv_v] = invert_tpv_scalar(xi, eta, tpv_idx1, tpv_c1, tpv_idx2, tpv_c2);
+            auto [tpv_u, tpv_v] = invert_tpv_scalar_with_seed(
+                xi,
+                eta,
+                tpv_seed,
+                tpv_idx1_ptr,
+                tpv_c1_ptr,
+                tpv_n1,
+                tpv_idx2_ptr,
+                tpv_c2_ptr,
+                tpv_n2
+            );
             u_deg = tpv_u;
             v_deg = tpv_v;
         }
@@ -1840,5 +1937,6 @@ void wcs_world_to_pixel_fused_cpu(
         x_ptr[i] = cdi00 * u_deg + cdi01 * v_deg + crpix0;
         y_ptr[i] = cdi10 * u_deg + cdi11 * v_deg + crpix1;
     }
+    });
 }
 }

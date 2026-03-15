@@ -12,7 +12,7 @@ flowchart TD
     C5 --> C6["Optionally write explicit mask plane"]
     B --> D["Final reconstruction methods"]
     C6 --> D
-    D --> D1["Torchsky stack\nresample weighted numerator and denominator\nwith distorted-WCS quadrature when needed,\nthen weighted mean"]
+    D --> D1["Torchsky stack\nresample weighted numerator and denominator\nwith distorted-WCS quadrature for flux products,\nthen weighted mean"]
     D --> D2["Legacy stackers\nreproject/dfreproject/drizzle/montage/swarp/casutools"]
     D --> D3["Torchsky field model\nfit continuous field, then render to target product"]
     B --> E["Noiseless target truth product"]
@@ -25,4 +25,4 @@ flowchart TD
 
 The evaluation contract is always the final requested product, not an internal warp.
 Each method is judged after producing the same target-grid image or cube.
-For the current distorted `SIP`/`TPV` stack path, torchsky approximates target-pixel area integration with fixed 2x2 Gauss-Legendre subpixel quadrature rather than a single center sample.
+For the current distorted `SIP`/`TPV` stack path, torchsky approximates target-pixel area integration with fixed 2x2 Gauss-Legendre subpixel quadrature for `flux` products. The default `surface_brightness` product path uses a single target-center sample instead of pixel-area integration.

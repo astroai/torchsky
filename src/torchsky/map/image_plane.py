@@ -388,6 +388,48 @@ def _sample_image_plane(
     )
 
 
+def _sample_image_plane_batched(
+    image: Tensor,
+    *,
+    x_src: Tensor,
+    y_src: Tensor,
+    grid: Tensor,
+    kernel: MapResamplingKernel,
+) -> Tensor:
+    if x_src.ndim == 2:
+        return _sample_image_plane(
+            image,
+            x_src=x_src,
+            y_src=y_src,
+            grid=grid,
+            kernel=kernel,
+        )
+    if kernel in {"lanczos3", "lanczos5", "mitchell_netravali", "catmull_rom"}:
+        samples = [
+            _custom_separable_sample(
+                image,
+                x_src=x_src[idx],
+                y_src=y_src[idx],
+                kernel=kernel,
+            )
+            for idx in range(int(x_src.shape[0]))
+        ]
+        return torch.stack(samples, dim=0)
+    batch = int(grid.shape[0])
+    image_b = (
+        image.unsqueeze(0)
+        .unsqueeze(0)
+        .expand(batch, 1, image.shape[0], image.shape[1])
+    )
+    return F.grid_sample(
+        image_b,
+        grid.to(dtype=torch.float32),
+        mode=kernel,
+        padding_mode="zeros",
+        align_corners=True,
+    ).squeeze(1)
+
+
 def _requires_roundtrip_validity_check(source_wcs: WCS) -> bool:
     # SIP inverse paths still benefit from an explicit round-trip consistency gate.
     # For TPV, the gate was useful while the distorted WCS dispatch could route
@@ -396,7 +438,13 @@ def _requires_roundtrip_validity_check(source_wcs: WCS) -> bool:
     return bool(getattr(source_wcs, "sip", None) is not None)
 
 
-def _requires_target_pixel_quadrature(source_wcs: WCS) -> bool:
+def _requires_target_pixel_quadrature(
+    source_wcs: WCS,
+    *,
+    value_semantics: MapValueSemantics,
+) -> bool:
+    if value_semantics != "flux":
+        return False
     return bool(
         getattr(source_wcs, "sip", None) is not None
         or getattr(source_wcs, "_is_tpv", False)
@@ -570,14 +618,14 @@ def _resample_weighted_to_target(
         y_norm = (2.0 * y_src / max(h_src - 1, 1)) - 1.0
         grid = torch.stack([x_norm, y_norm], dim=-1).to(dtype=torch.float32)
 
-        sampled_numer = _sample_image_plane(
+        sampled_numer = _sample_image_plane_batched(
             weighted_image,
             x_src=x_src,
             y_src=y_src,
             grid=grid,
             kernel=resampling_kernel,
         )
-        sampled_weight = _sample_image_plane(
+        sampled_weight = _sample_image_plane_batched(
             weighted_weight,
             x_src=x_src,
             y_src=y_src,
@@ -586,20 +634,30 @@ def _resample_weighted_to_target(
         )
         sampled_support: Tensor | None = None
         if value_semantics == "flux":
-            sampled_support = (
-                F.grid_sample(
-                    (source_weight > 0.0)
-                    .to(dtype=torch.float32)
-                    .unsqueeze(0)
-                    .unsqueeze(0),
-                    grid.unsqueeze(0),
+            support_image = (source_weight > 0.0).to(dtype=torch.float32)
+            if x_src.ndim == 2:
+                sampled_support = (
+                    F.grid_sample(
+                        support_image.unsqueeze(0).unsqueeze(0),
+                        grid.unsqueeze(0),
+                        mode="bilinear",
+                        padding_mode="zeros",
+                        align_corners=True,
+                    )
+                    .squeeze(0)
+                    .squeeze(0)
+                )
+            else:
+                batch = int(grid.shape[0])
+                sampled_support = F.grid_sample(
+                    support_image.unsqueeze(0).unsqueeze(0).expand(
+                        batch, 1, support_image.shape[0], support_image.shape[1]
+                    ),
+                    grid,
                     mode="bilinear",
                     padding_mode="zeros",
                     align_corners=True,
-                )
-                .squeeze(0)
-                .squeeze(0)
-            )
+                ).squeeze(1)
         in_bounds = (
             (x_src >= 0.0)
             & (x_src <= (w_src - 1))
@@ -647,7 +705,10 @@ def _resample_weighted_to_target(
             flat_dec=flat_dec,
         )
 
-    if not _requires_target_pixel_quadrature(source_wcs):
+    if not _requires_target_pixel_quadrature(
+        source_wcs,
+        value_semantics=value_semantics,
+    ):
         return _sample_on_world_grid(target.ra_deg, target.dec_deg)
 
     accum_numer = torch.zeros_like(target.ra_deg, dtype=torch.float32)
@@ -663,20 +724,16 @@ def _resample_weighted_to_target(
     flat_dec = torch.cat([sub_dec.reshape(-1) for _, sub_dec in quadrature_world_grids], dim=0)
     x_src_all, y_src_all = source_wcs.world_to_pixel(flat_ra, flat_dec)
     n_pix = target.ra_deg.numel()
-    for idx in range(len(quadrature_world_grids)):
-        start = idx * n_pix
-        end = start + n_pix
-        sub_ra, sub_dec = quadrature_world_grids[idx]
-        sub_x = x_src_all[start:end].reshape_as(sub_ra)
-        sub_y = y_src_all[start:end].reshape_as(sub_dec)
-        sub_numer, sub_weight = _sample_on_source_grid(
-            sub_x,
-            sub_y,
-            flat_ra=flat_ra[start:end],
-            flat_dec=flat_dec[start:end],
-        )
-        accum_numer = accum_numer + 0.25 * sub_numer
-        accum_weight = accum_weight + 0.25 * sub_weight
+    x_src_b = x_src_all.reshape(len(quadrature_world_grids), *target.shape)
+    y_src_b = y_src_all.reshape(len(quadrature_world_grids), *target.shape)
+    sub_numer, sub_weight = _sample_on_source_grid(
+        x_src_b,
+        y_src_b,
+        flat_ra=flat_ra,
+        flat_dec=flat_dec,
+    )
+    accum_numer = sub_numer.mean(dim=0)
+    accum_weight = sub_weight.mean(dim=0)
     accum_numer = torch.where(
         accum_weight > 0.0,
         accum_numer,
@@ -718,6 +775,7 @@ def _prepare_target(
     target_shape: tuple[int, int],
     device: torch.device,
     include_pixel_area: bool = False,
+    include_quadrature: bool = False,
 ) -> _PreparedImagePlaneTarget:
     ra_deg, dec_deg = _build_target_world_grid(
         target_wcs,
@@ -736,10 +794,14 @@ def _prepare_target(
             if include_pixel_area
             else None
         ),
-        quadrature_world_grids=_quadrature_target_world_grids(
-            target_wcs,
-            target_shape,
-            device=device,
+        quadrature_world_grids=(
+            _quadrature_target_world_grids(
+                target_wcs,
+                target_shape,
+                device=device,
+            )
+            if include_quadrature
+            else None
         ),
     )
 
@@ -1195,6 +1257,7 @@ def coadd_image_plane(
                 target_shape=target_shape,
                 device=device,
                 include_pixel_area=(value_semantics == "flux"),
+                include_quadrature=(value_semantics == "flux"),
             )
         return prepared_target
 
@@ -1383,6 +1446,7 @@ def coadd_image_plane_cube(
                 target_shape=target_shape,
                 device=device,
                 include_pixel_area=(value_semantics == "flux"),
+                include_quadrature=(value_semantics == "flux"),
             )
         return prepared_target
 

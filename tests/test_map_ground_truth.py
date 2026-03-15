@@ -244,9 +244,17 @@ def test_distorted_sources_enable_target_pixel_quadrature(tmp_path: Path) -> Non
         item for item in observations if "TAN" in str(item.header.get("CTYPE1", ""))
     )
     image_plane_mod = _truth_bench.image_plane_mod
-    assert image_plane_mod._requires_target_pixel_quadrature(_truth_bench.WCS(tpv_obs.header))
+    assert image_plane_mod._requires_target_pixel_quadrature(
+        _truth_bench.WCS(tpv_obs.header),
+        value_semantics="flux",
+    )
     assert not image_plane_mod._requires_target_pixel_quadrature(
-        _truth_bench.WCS(tan_obs.header)
+        _truth_bench.WCS(tpv_obs.header),
+        value_semantics="surface_brightness",
+    )
+    assert not image_plane_mod._requires_target_pixel_quadrature(
+        _truth_bench.WCS(tan_obs.header),
+        value_semantics="flux",
     )
 
 
@@ -264,12 +272,31 @@ def test_prepare_target_caches_quadrature_world_grids(tmp_path: Path) -> None:
         target_wcs=_truth_bench.WCS(target_header),
         target_shape=(int(target_header["NAXIS2"]), int(target_header["NAXIS1"])),
         device=torch.device("cpu"),
+        include_quadrature=True,
     )
     assert target.quadrature_world_grids is not None
     assert len(target.quadrature_world_grids) == 4
     for ra, dec in target.quadrature_world_grids:
         assert tuple(ra.shape) == target.shape
         assert tuple(dec.shape) == target.shape
+
+
+def test_prepare_target_skips_quadrature_world_grids_by_default(tmp_path: Path) -> None:
+    _observations, target_header, _truth = _truth_bench.make_case(
+        tmp_path,
+        case="tan_random10_large_union_rect_weighted_masked",
+        size=256,
+        width=256,
+        height=192,
+        seed=1234,
+    )
+    target = _truth_bench.image_plane_mod._prepare_target(
+        header=target_header,
+        target_wcs=_truth_bench.WCS(target_header),
+        target_shape=(int(target_header["NAXIS2"]), int(target_header["NAXIS1"])),
+        device=torch.device("cpu"),
+    )
+    assert target.quadrature_world_grids is None
 
 
 def test_distorted_quadrature_batches_world_to_pixel_calls(tmp_path: Path) -> None:
@@ -319,7 +346,7 @@ def test_distorted_quadrature_batches_world_to_pixel_calls(tmp_path: Path) -> No
             source_wcs,
             prepared_target,
             resampling_kernel="bilinear",
-            value_semantics="surface_brightness",
+            value_semantics="flux",
         )
     finally:
         source_wcs.world_to_pixel = orig_world_to_pixel
