@@ -216,6 +216,295 @@ Coordinates use 0-based Python pixel convention. Results are in degrees.
 
 ---
 
+## Mapmaking (`torchsky.map`)
+
+```python
+from torchsky.map import ImageObservation, coadd_image_plane
+
+result = coadd_image_plane(
+    [
+        ImageObservation("img_a.fits", weight=1.0),
+        ImageObservation(
+            "img_b.fits",
+            weight_path="img_b_wht.fits",
+            mask_path="img_b_mask.fits",
+        ),
+    ],
+    footprint_order=8,
+)
+
+coadd = result.data
+weight = result.weight
+header = result.header
+overlap = result.overlap_count
+coverage = result.coverage_moc
+```
+
+```python
+import torch
+
+from torchsky.map import coadd_image_plane_cube, plan_image_plane_cube_target
+from torchsky.spectral import SpectralAxis
+
+target = plan_image_plane_cube_target(
+    observations,
+    reference_index=0,
+    spectral_axis=SpectralAxis(
+        values=torch.tensor([4800.0, 6500.0], dtype=torch.float64),
+        unit="Angstrom",
+        type="WAVE",
+    ),
+    spectral_bin_edges=torch.tensor([4700.0, 4900.0, 6600.0], dtype=torch.float64),
+)
+cube = coadd_image_plane_cube(observations, target=target, footprint_order=8)
+print(cube.spectral_axis.unit)  # Angstrom
+print(cube.data.shape)          # [n_band, y, x]
+```
+
+### `ImageObservation(...)`
+
+Fields:
+- `path`, `hdu`: image source
+- `weight`: scalar observation weight
+- `weight_path`, `weight_hdu`: optional per-pixel positive weight / inverse-variance map
+- `mask_path`, `mask_hdu`: optional per-pixel validity mask (`> 0` means valid)
+- `wavelength`: scalar spectral coordinate for exact-band grouping or cube planning
+- `spectral_min`, `spectral_max`: optional bandpass bounds for interval-aware spectral reprojection
+- `transmission_center`, `transmission_sigma`: optional Gaussian transmission-filter parameters for filter-weighted spectral reprojection
+- `band_name`: optional band label carried into planned band metadata
+
+### `MapBandpassSpec(...)`
+
+Thin product-band definition for user-facing output requests.
+
+Fields:
+- `label`: optional band label carried through product planning and rendering
+- `spectral_min`, `spectral_max`: optional output bandpass bounds
+- `transmission_center`, `transmission_sigma`: optional Gaussian bandpass parameters used by `render_field_product(...)`
+
+### `MapProductSpec(target_header, bands, value_semantics="surface_brightness", footprint_order=None)`
+
+Canonical map product contract.
+
+- `target_header`: requested final WCS / grid
+- `bands`: tuple of requested `MapBandpassSpec` outputs
+- `value_semantics`: `"surface_brightness"` or `"flux"`
+- `footprint_order`: optional MOC footprint order carried into direct stack results
+
+This is the common user-facing contract for:
+- direct stack products
+- rendered continuous-field products
+- product-level evaluation metrics
+
+### `plan_map_product(observations, *, reference_index=0, header_overrides=None, bands=None, spectral_axis=None, spectral_bin_edges=None, spectral_unit="Angstrom", spectral_type="WAVE", value_semantics="surface_brightness", footprint_order=None) -> MapProductSpec`
+
+Thin planner over the existing spatial and spatial+spectral planning helpers.
+
+- If `bands` is omitted and the observations carry spectral metadata, this uses the current cube planner and converts the result into a `MapProductSpec`.
+- If the observations are plain 2D images without spectral metadata, this produces a single-band product on the planned target grid.
+- This keeps the old planning helpers intact:
+  - `plan_image_plane_target(...)`
+  - `plan_image_plane_cube_target(...)`
+
+### `stack_map_product(observations, product, *, resampling_kernel="bilinear", method="coadd") -> MapProductResult`
+
+Product-oriented direct stack entry point.
+
+- Current supported method: `"coadd"`
+- Reuses the existing explicit stack semantics:
+  - weighted numerator/denominator reprojection
+  - no hidden photometric solving
+  - no hidden background solving
+- For single-band image products this wraps `coadd_image_plane(...)`.
+- For representable multi-band products it wraps `coadd_image_plane_cube(...)`.
+- Current direct-stack limitation:
+  - multi-band products must currently be either exact-center bands or ordered contiguous interval bands
+
+### `render_field_product(model, product, *, num_spectral_samples=9) -> MapProductResult`
+
+Renders a fitted continuous field onto the exact same requested product contract as `stack_map_product(...)`.
+
+- Every requested band is rendered on the same final WCS/grid from `product.target_header`.
+- Gaussian bandpass metadata in `MapBandpassSpec` is honored here directly.
+- This is the intended user-facing comparison point for stack vs stack++: both methods produce the same final product shape.
+
+### `evaluate_map_product(prediction, truth, *, weight=None, header=None, value_semantics=None) -> dict`
+
+Shared product-level evaluator for final image or cube products.
+
+Primary metrics:
+- `reconstruction_rmse`
+- `reconstruction_mae`
+- `reconstruction_p95_abs_err`
+- `reconstruction_max_abs_err`
+- `signal_to_residual_ratio`
+- `signal_to_residual_db`
+- `total_flux_relative_error`
+- `band_flux_relative_error_mean`
+- `band_flux_relative_error_max`
+- `blue_red_flux_ratio_absolute_error`
+- `mid_blue_flux_ratio_absolute_error`
+- `coverage_fraction`
+
+This is the standardized metric vocabulary now used by the stack truth and stack++ truth benchmarks.
+
+### `coadd_image_plane(observations, *, target_header=None, output_path=None, footprint_order=None, resampling_kernel="bilinear", value_semantics="surface_brightness") -> MapResult`
+
+Differentiable image-plane coaddition baseline.
+
+- If an observation already matches the target WCS/shape, torchsky accumulates it directly.
+- Otherwise torchsky resamples onto the target grid with either `grid_sample(..., padding_mode="zeros", align_corners=True)` for `"nearest"`, `"bilinear"`, and `"bicubic"`, or native separable high-accuracy kernels for `"lanczos3"`, `"lanczos5"`, `"mitchell_netravali"`, and `"catmull_rom"`.
+- `resampling_kernel` may be `"nearest"`, `"bilinear"`, `"bicubic"`, `"lanczos3"`, `"lanczos5"`, `"mitchell_netravali"`, or `"catmull_rom"`.
+- Kernel notes:
+  - `"catmull_rom"` is an interpolating cubic kernel.
+  - `"mitchell_netravali"` is a smoother cubic reconstruction kernel and is not exact at input samples.
+  - `"lanczos3"` / `"lanczos5"` are higher-support windowed-sinc kernels.
+- Current kernel guidance from the truth benchmark surface:
+  - general default: `"bilinear"`
+  - stronger interpolating cubic: `"catmull_rom"`
+  - smoother reconstruction: `"mitchell_netravali"`
+  - widest-support sinc option: `"lanczos5"` when accuracy matters more than throughput
+- `value_semantics` may be:
+  - `"surface_brightness"`: preserve the current surface-brightness-style weighted mean
+  - `"flux"`: apply local source/target pixel-area factors so reprojection is approximately flux-conserving
+- The resampling contract is explicit:
+  - sample a weighted numerator image `image * weight`
+  - sample the weight image separately on the same target grid
+  - sum those projected numerators and denominators over observations
+  - form the final weighted mean only at the end
+- The output is a weighted numerator/denominator coadd:
+  - `result.data`: weighted mean image
+  - `result.weight`: accumulated per-pixel weight / coverage
+  - `result.overlap_count`: number of contributing observations per target pixel
+  - `result.header`: target FITS header
+- If `footprint_order` is set, torchsky also returns:
+  - `result.coverage_moc`: union footprint MOC on the target grid
+  - `result.observation_mocs`: one MOC per observation
+
+Current scope:
+- 2D images only
+- scalar weights plus optional per-pixel weight and mask maps
+- target grid inferred from the first observation unless `target_header` is provided
+- footprint MOC diagnostics are optional and controlled by `footprint_order`
+- no automatic photometric renormalization, zeropoint solving, or background matching; inputs are assumed to already be on a common calibrated additive baseline
+
+### `ImagePlaneMapMaker(target_header=None, resampling_kernel="bilinear", value_semantics="surface_brightness")`
+
+Thin wrapper around `coadd_image_plane(...)` for repeated runs with a fixed target header.
+
+### `plan_image_plane_target(observations, *, reference_index=0, header_overrides=None) -> PlannedImagePlaneTarget`
+
+Explicit shared-grid planning helper for repeated or multi-band coadds.
+
+- Reads the selected reference observation and normalizes its FITS header to the image shape.
+- Returns:
+- `header`: ready-to-use target FITS header
+- `shape`: `(ny, nx)` target image shape
+- Use `header_overrides` to pin a common output grid while preserving the reference observation as the template.
+
+### `plan_image_plane_cube_target(observations, *, reference_index=0, header_overrides=None, spectral_axis=None, spectral_bin_edges=None, spectral_unit="Angstrom", spectral_type="WAVE") -> PlannedImagePlaneCubeTarget`
+
+Joint spatial+spectral planner for cube-style map assembly.
+
+- Reuses `plan_image_plane_target(...)` for the spatial grid.
+- Builds a validated spectral target:
+  - default: sorted unique observation wavelengths
+  - explicit: caller-provided `SpectralAxis`
+- Optional `spectral_bin_edges` enables interval-aware spectral reprojection using exact overlap fractions.
+- Emits `band_metadata` with:
+  - target band centers and bounds
+  - number of contributing observations per target band
+  - summed spectral projection weight per target band
+  - stable band names when the contributing observations agree
+- `target.to_band_table()` exposes that metadata as a column-style dict for downstream table interop.
+
+### `plan_image_plane_cube_target_from_header(observations, spectral_header, *, reference_index=0, header_overrides=None, use_header_bin_edges=True) -> PlannedImagePlaneCubeTarget`
+
+Compatibility planner for cube-style spectral WCS headers.
+
+- Reconstructs a linear `SpectralAxis` from FITS `CTYPEi/CRVALi/CDELTi/CRPIXi/CUNITi`.
+- Optionally derives spectral bin edges from the same header for interval-aware reprojection.
+- This is the intended bridge for future comparisons against cube-oriented astronomy packages without making the core map primitive wrapper-shaped.
+- The same pattern applies to image-plane comparison harnesses: external astronomy packages are benchmark and compatibility targets, not the primitive implementation.
+
+### `coadd_image_plane_cube(observations, *, target=None, target_header=None, footprint_order=None, resampling_kernel="bilinear", value_semantics="surface_brightness", spectral_axis=None, spectral_bin_edges=None, spectral_unit="Angstrom", spectral_type="WAVE", reference_index=0) -> SpectralCubeMapResult`
+
+Planned spatial+spectral cube assembly on a shared image plane.
+
+- If `target` is omitted, torchsky plans the spatial and spectral grid from the provided arguments.
+- Spatial reprojection uses the same weighted image-plane coadd path as `coadd_image_plane(...)`.
+- `resampling_kernel` uses the same kernel choices as `coadd_image_plane(...)`.
+- `value_semantics` uses the same surface-brightness vs flux interpretation as `coadd_image_plane(...)`.
+- Spectral reprojection is deterministic:
+  - exact-center assignment when no `spectral_bin_edges` are provided
+  - exact interval-overlap fractions when `spectral_bin_edges` are provided and observations carry `spectral_min` / `spectral_max`
+  - normalized Gaussian filter-bin integrals when `spectral_bin_edges` are provided and observations also carry `transmission_center` / `transmission_sigma`
+- Mathematically, when Gaussian transmission metadata is present, the spectral weights are:
+  - `w_k propto integral_{lambda_k^-}^{lambda_k^+} exp(-(lambda-mu)^2 / (2 sigma^2)) d lambda`
+  - truncated to the observation's `[spectral_min, spectral_max]` interval when those bounds are narrower than the target bins
+  - normalized so `sum_k w_k = 1`
+- Returns:
+  - `spectral_axis`
+  - `band_metadata`
+  - `data`, `weight`, `overlap_count`
+  - `coverage_mocs` when `footprint_order` is set
+  - `spatial_wcs`
+- `result.to_data_cube()` exposes the output as a `torchsky.spectral.DataCube`.
+
+### `coadd_image_plane_multiband(observations, *, target_header=None, footprint_order=None, resampling_kernel="bilinear", value_semantics="surface_brightness", spectral_unit="Angstrom", spectral_type="WAVE") -> MultiBandMapResult`
+
+Grouped multi-wavelength assembly on a shared target grid.
+
+- Every observation must define `wavelength`.
+- This is the thin exact-center compatibility wrapper over `coadd_image_plane_cube(...)`.
+- Observations are grouped by exact `wavelength` value and sorted ascending.
+- Use `plan_image_plane_target(...)` plus `target_header=...` when bands come from different pointings or per-band reference headers.
+
+Returns:
+- `spectral_axis`: `SpectralAxis` carrying sorted per-band coordinates and metadata
+- `wavelength`: convenience tensor view of `spectral_axis.to_wavelength()`
+- `data`: stacked coadds `[n_band, y, x]`
+- `weight`: stacked per-band accumulated weights `[n_band, y, x]`
+- `overlap_count`: stacked overlap counts when available
+- `coverage_mocs`: one coverage MOC per band when `footprint_order` is set
+- `band_observation_counts`: number of observations contributing to each band
+
+The older coadd APIs remain the compatibility surface.
+
+- `coadd_image_plane(...)`
+- `coadd_image_plane_cube(...)`
+- `coadd_image_plane_multiband(...)`
+
+The newer product-oriented entry points are:
+- `plan_map_product(...)`
+- `stack_map_product(...)`
+- `render_field_product(...)`
+
+### Experimental Field Models
+
+The `torchsky.map` namespace also exposes an experimental continuous-field layer for fitting a latent sky model `f(alpha, delta, lambda)` directly to overlapping observations.
+
+Main pieces:
+- `FieldObservation(...)`: in-memory observation with image tensor, FITS header, optional weight/mask, Gaussian bandpass metadata, and optional PSF blur.
+- `FieldDomain(...)`: coordinate normalization domain for continuous field models.
+- `SineImplicitField(domain, ...)`: SIREN-style sine-activated implicit neural field.
+- `WireImplicitField(domain, ...)`: WIRE-style Gabor-activated implicit neural field.
+- `GaussianBasisField(domain, ...)`: smooth Gaussian radial-basis latent field.
+- `estimate_field_domain(observations)`: derives a practical normalization domain from a set of observations.
+- `render_field_observation(model, observation, ...)`: forward-renders a continuous field through the observation WCS, Gaussian bandpass, and optional Gaussian PSF.
+- `render_field_cube(model, target_header=..., spectral_axis=...)`: evaluates the fitted field on a shared target grid and spectral axis.
+- `fit_field_model(observations, model, ...)`: weighted-MSE optimization loop over the rendered observations.
+
+Mathematically, this path is explicit:
+- latent field: `f(alpha, delta, lambda)`
+- observation model: `I_i(x, y) ~= PSF_i * integral f(alpha_i(x, y), delta_i(x, y), lambda) T_i(lambda) d lambda`
+- current bandpass model: normalized Gaussian `T_i(lambda)`
+- current fit objective: weighted per-pixel MSE over the rendered observation images
+
+This is intentionally narrower than the image-plane coadd API. It is the first fitting surface for continuous multiwavelength modeling, not yet a full latent-sky pipeline with PSF learning, calibration solving, or background modeling.
+
+---
+
 ## Table Module (`torchsky.table`)
 
 ### Standalone read/write
@@ -261,6 +550,56 @@ The `where=` parameter routes filtering to the C++ layer before data reaches Pyt
 torchsky.read("cat.fits", hdu=1, where="MAG_G < 20 AND DEC > 0")
 torchsky.read("cat.fits", hdu=1, where="FILTER IN ('g', 'r') AND REDSHIFT BETWEEN 0.1 AND 0.5")
 ```
+
+## Catalogs (`torchsky.catalogs`)
+
+### `crossmatch_sky(left_ra_deg, left_dec_deg, right_ra_deg, right_dec_deg, *, radius_arcsec, left_chunk_size=4096, right_chunk_size=65536)`
+
+Chunked nearest-neighbor sky crossmatch for tensor inputs.
+
+- Inputs are longitude / latitude in degrees.
+- Returns one nearest match per left row within `radius_arcsec`.
+- The public API stays simple; candidate pruning is handled internally.
+- Current implementation uses an internal coarse nested-HEALPix right-catalog index before exact great-circle refinement, with a benchmark-backed workload-size selector for the coarse index scale.
+- Compatibility validation covers both synthetic stress cases and real upstream catalog fixtures vendored from Astropy's VOTable test data.
+
+```python
+from torchsky.catalogs import crossmatch_sky
+
+result = crossmatch_sky(
+    left_ra_deg=left["RA"],
+    left_dec_deg=left["DEC"],
+    right_ra_deg=right["RA"],
+    right_dec_deg=right["DEC"],
+    radius_arcsec=1.5,
+)
+
+print(result.left_index.shape)
+print(result.right_index.shape)
+print(result.separation_arcsec.shape)
+```
+
+Returns `CrossmatchResult` with:
+
+- `left_index`: indices into the left catalog
+- `right_index`: nearest matched indices into the right catalog
+- `separation_arcsec`: on-sky separations in arcseconds
+
+### `CatalogStreamDataset(partitions, loader=lambda x: x)`
+
+`IterableDataset` helper for streaming partitioned catalog sources into PyTorch data pipelines.
+
+```python
+from torch.utils.data import DataLoader
+from torchsky.catalogs import CatalogStreamDataset
+
+ds = CatalogStreamDataset(partitions=range(8))
+loader = DataLoader(ds, num_workers=2, batch_size=None)
+for partition in loader:
+    ...
+```
+
+This is intended as a thin streaming adapter, not a full catalog orchestration layer.
 
 ---
 

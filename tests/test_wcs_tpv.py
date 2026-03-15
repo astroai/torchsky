@@ -60,6 +60,40 @@ def _tpv_affine_linear_header() -> fits.Header:
     return header
 
 
+def _tpv_invertible_rect_header() -> fits.Header:
+    header = fits.Header()
+    header["NAXIS"] = 2
+    header["NAXIS1"] = 1024
+    header["NAXIS2"] = 768
+    header["CTYPE1"] = "RA---TPV"
+    header["CTYPE2"] = "DEC--TPV"
+    header["CRPIX1"] = 512.0
+    header["CRPIX2"] = 384.0
+    header["CRVAL1"] = 12.0
+    header["CRVAL2"] = -3.0
+    header["CD1_1"] = -0.004465
+    header["CD1_2"] = 0.0005488
+    header["CD2_1"] = 0.0005488
+    header["CD2_2"] = 0.004465
+    header["PV1_0"] = 0.0
+    header["PV1_1"] = 1.0
+    header["PV1_2"] = -0.02
+    header["PV1_4"] = 2.0e-4 * 0.22
+    header["PV1_5"] = -3.0e-4 * 0.22
+    header["PV1_6"] = 1.5e-4 * 0.22
+    header["PV1_7"] = 2.0e-6 * 0.22
+    header["PV1_39"] = 2.0e-11 * 0.22
+    header["PV2_0"] = 0.0
+    header["PV2_1"] = 0.02
+    header["PV2_2"] = 1.0
+    header["PV2_4"] = -1.0e-4 * 0.22
+    header["PV2_5"] = 2.5e-4 * 0.22
+    header["PV2_6"] = -2.0e-4 * 0.22
+    header["PV2_7"] = -1.5e-6 * 0.22
+    header["PV2_39"] = -1.0e-11 * 0.22
+    return header
+
+
 def _sample_pixels() -> tuple[np.ndarray, np.ndarray]:
     x = np.linspace(430.0, 590.0, 9, dtype=np.float64)
     y = np.linspace(420.0, 600.0, 9, dtype=np.float64)
@@ -187,3 +221,70 @@ def test_tpv_affine_seed_exact_for_affine_only_tpv() -> None:
     # Pure affine TPV should solve in a single Newton evaluation from the affine seed.
     assert int(trace.get("iterations", trace.get("iterations_max", 0))) <= 1
     assert int(trace.get("final_active", 1)) == 0
+
+
+def test_tpv_skips_cpp_direct_tan_projection_shortcuts() -> None:
+    header = dict(_tpv_header())
+    ref = WCS(dict(header)).to("cpu")
+    twcs = WCS(header).to("cpu")
+    assert twcs.tpv is not None
+    assert not twcs._has_cpp_direct_p2w
+    assert not twcs._has_cpp_direct_w2p
+
+    def _unexpected(*args, **kwargs):
+        raise AssertionError("TPV should not use direct TAN C++ projection shortcuts")
+
+    x, y = _sample_pixels()
+    x_t = torch.from_numpy(x)
+    y_t = torch.from_numpy(y)
+    ra_ref, dec_ref = ref.pixel_to_world(x_t, y_t, origin=0)
+    x_ref, y_ref = ref.world_to_pixel(ra_ref, dec_ref, origin=0)
+
+    old_p2w = twcs._cpp_zenithal_project
+    old_w2p = twcs._cpp_zenithal_deproject
+    try:
+        twcs._cpp_zenithal_project = _unexpected
+        twcs._cpp_zenithal_deproject = _unexpected
+        ra_t, dec_t = twcs.pixel_to_world(x_t, y_t, origin=0)
+        x_rt, y_rt = twcs.world_to_pixel(ra_t, dec_t, origin=0)
+    finally:
+        twcs._cpp_zenithal_project = old_p2w
+        twcs._cpp_zenithal_deproject = old_w2p
+
+    np.testing.assert_allclose(ra_t.cpu().numpy(), ra_ref.cpu().numpy(), atol=1e-12)
+    np.testing.assert_allclose(dec_t.cpu().numpy(), dec_ref.cpu().numpy(), atol=1e-12)
+    np.testing.assert_allclose(x_rt.cpu().numpy(), x_ref.cpu().numpy(), atol=1e-12)
+    np.testing.assert_allclose(y_rt.cpu().numpy(), y_ref.cpu().numpy(), atol=1e-12)
+
+
+def test_tpv_inverse_parity_with_astropy_on_invertible_broad_field() -> None:
+    header = _tpv_invertible_rect_header()
+    awcs = AstropyWCS(header)
+    twcs = WCS(dict(header))
+
+    x = np.linspace(64.0, 960.0, 33, dtype=np.float64)
+    y = np.linspace(64.0, 704.0, 29, dtype=np.float64)
+    xx, yy = np.meshgrid(x, y, indexing="xy")
+
+    ra_ast, dec_ast = awcs.all_pix2world(xx.ravel(), yy.ravel(), 0)
+    x_t, y_t = twcs.world_to_pixel(
+        torch.from_numpy(ra_ast),
+        torch.from_numpy(dec_ast),
+        origin=0,
+    )
+
+    np.testing.assert_allclose(x_t.cpu().numpy(), xx.ravel(), atol=1e-6)
+    np.testing.assert_allclose(y_t.cpu().numpy(), yy.ravel(), atol=1e-6)
+
+
+def test_fused_wcs_enabled_by_default_for_tpv() -> None:
+    twcs = WCS(dict(_tpv_header()))
+    assert twcs._enable_fused_wcs
+    assert twcs._can_use_fused_w2p_static
+
+
+def test_fused_wcs_can_be_disabled_with_env(monkeypatch) -> None:
+    monkeypatch.setenv("TORCHSKY_WCS_FUSED", "0")
+    twcs = WCS(dict(_tpv_header()))
+    assert not twcs._enable_fused_wcs
+    assert not twcs._can_use_fused_w2p_static

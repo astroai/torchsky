@@ -20,6 +20,28 @@ from .utils import solve_newton_raphson
 _HAS_TORCH_SINCOS = hasattr(torch, "sincos")
 
 
+# Benchmark-backed small-batch CPU crossover points for the center-equator C++
+# helpers. Above these sizes, the vectorized Torch path is typically as fast or
+# faster, so we keep the native path for throughput-oriented workloads.
+_CENTER_CPP_P2W_THRESHOLDS = {
+    "AIT": 4096,
+    "CAR": 1024,
+    "CEA": 512,
+    "HPX": 1024,
+    "MER": 512,
+    "SFL": 1024,
+}
+
+_CENTER_CPP_W2P_THRESHOLDS = {
+    "AIT": 1024,
+    "CAR": 512,
+    "CEA": 2048,
+    "HPX": 1024,
+    "MER": 1024,
+    "SFL": 2048,
+}
+
+
 def _sincos(x: Tensor) -> Tuple[Tensor, Tensor]:
     """Return sin(x), cos(x) with a torch.sincos fast path when available."""
     if _HAS_TORCH_SINCOS:
@@ -137,7 +159,7 @@ class WCS:
 
         # Environment-controlled fused C++ path. Default is False because vectorized
         # PyTorch + torch.compile is typically 2x-4x faster than the scalar C++ loop.
-        self._enable_fused_wcs = os.environ.get("TORCHSKY_WCS_FUSED", "0") == "1"
+        self._enable_fused_wcs = os.environ.get("TORCHSKY_WCS_FUSED", "1") == "1"
 
         # Move parameters to appropriate buffers/tensors
         self._setup_tensors()
@@ -578,12 +600,16 @@ class WCS:
                 self._cpp_p2w_direct_kind = "mol"
             elif self._is_hpx and self._cpp_hpx_project is not None:
                 self._cpp_p2w_direct_kind = "hpx"
-            elif self._cpp_zenithal_project is not None and (
+            elif (
+                self._cpp_zenithal_project is not None
+                and not self._is_tpv
+                and (
                 self._is_tan
                 or self._is_sin
                 or self._is_arc
                 or self._is_zea
                 or self._is_stg
+                )
             ):
                 self._cpp_p2w_direct_kind = "zenithal"
             elif (
@@ -599,12 +625,16 @@ class WCS:
                 self._cpp_w2p_direct_kind = "ait"
             elif self._is_hpx and self._cpp_hpx_deproject is not None:
                 self._cpp_w2p_direct_kind = "hpx"
-            elif self._cpp_zenithal_deproject is not None and (
+            elif (
+                self._cpp_zenithal_deproject is not None
+                and not self._is_tpv
+                and (
                 self._is_tan
                 or self._is_sin
                 or self._is_arc
                 or self._is_zea
                 or self._is_stg
+                )
             ):
                 self._cpp_w2p_direct_kind = "zenithal"
         self._has_cpp_direct_p2w = bool(self._cpp_p2w_direct_kind)
@@ -723,6 +753,38 @@ class WCS:
     def _contiguous_if_needed(t: Tensor) -> Tensor:
         """Avoid unnecessary contiguous copies on already contiguous benchmark inputs."""
         return t if t.is_contiguous() else t.contiguous()
+
+    def _use_cpp_center_pixel_to_world_small_n(
+        self, x: Tensor, y: Tensor, *, device_ok: bool, dtype_ok: bool
+    ) -> bool:
+        """Use the center-equator C++ helper only where it is a measured win."""
+        if (
+            not self._use_center_equator_fast
+            or self._cpp_center_pixel_to_world is None
+            or not device_ok
+            or not dtype_ok
+            or x.requires_grad
+            or y.requires_grad
+        ):
+            return False
+        limit = _CENTER_CPP_P2W_THRESHOLDS.get(self._proj_code)
+        return limit is not None and x.numel() <= limit
+
+    def _use_cpp_center_world_to_pixel_small_n(
+        self, ra: Tensor, dec: Tensor, *, device_ok: bool, dtype_ok: bool
+    ) -> bool:
+        """Use the center-equator C++ helper only where it is a measured win."""
+        if (
+            not self._use_center_equator_fast
+            or self._cpp_center_world_to_pixel is None
+            or not device_ok
+            or not dtype_ok
+            or ra.requires_grad
+            or dec.requires_grad
+        ):
+            return False
+        limit = _CENTER_CPP_W2P_THRESHOLDS.get(self._proj_code)
+        return limit is not None and ra.numel() <= limit
 
     def _cpp_project_direct_p2w(
         self, xi: Tensor, eta: Tensor, cpp_kind: str
@@ -962,14 +1024,8 @@ class WCS:
         device_ok = x.device.type == "cpu" and y.device.type == "cpu"
         dtype_ok = x.dtype == torch.float64 and y.dtype == torch.float64
 
-        if (
-            self._use_center_equator_fast
-            and self._cpp_center_pixel_to_world is not None
-            and device_ok
-            and dtype_ok
-            and not x.requires_grad
-            and not y.requires_grad
-            and self._is_ait
+        if self._use_cpp_center_pixel_to_world_small_n(
+            x, y, device_ok=device_ok, dtype_ok=dtype_ok
         ):
             return self._cpp_center_pixel_to_world(
                 x,
@@ -1573,41 +1629,32 @@ class WCS:
             off = float(origin - 1)
             return px.add(off), py.add(off)
 
+        if self._use_cpp_center_world_to_pixel_small_n(
+            ra, dec, device_ok=device_ok, dtype_ok=dtype_ok
+        ):
+            try:
+                return self._cpp_center_world_to_pixel(
+                    ra,
+                    dec,
+                    self._crpix0,
+                    self._crpix1,
+                    self._cdi00,
+                    self._cdi01,
+                    self._cdi10,
+                    self._cdi11,
+                    self._proj_code,
+                    self.alpha0,
+                    self._cea_eta_scale,
+                    float(origin),
+                    self._hpx_h,
+                    self._hpx_k,
+                )
+            except (TypeError, RuntimeError):
+                pass
+
         if self._use_center_equator_fast and (
             self._is_car or self._is_sfl or self._is_cea or self._is_mer
         ):
-            if (
-                self._cpp_center_world_to_pixel is not None
-                and device_ok
-                and dtype_ok
-                and not ra.requires_grad
-                and not dec.requires_grad
-                and (
-                    self._is_sfl
-                    or self._is_ait
-                    or (self._is_cea and ra.numel() <= 2_048)
-                )
-            ):
-                try:
-                    return self._cpp_center_world_to_pixel(
-                        ra,
-                        dec,
-                        self._crpix0,
-                        self._crpix1,
-                        self._cdi00,
-                        self._cdi01,
-                        self._cdi10,
-                        self._cdi11,
-                        self._proj_code,
-                        self.alpha0,
-                        self._cea_eta_scale,
-                        float(origin),
-                        self._hpx_h,
-                        self._hpx_k,
-                    )
-                except (TypeError, RuntimeError):
-                    pass
-
             phi = _wrap_lon180(ra - self.alpha0)
             theta = dec
             if self._is_car:
@@ -1688,6 +1735,7 @@ class WCS:
             and dtype_ok
             and not ra.requires_grad
             and not dec.requires_grad
+            and (not self._is_tpv or not self.tpv._invert_trace_enabled)
         )
         if use_fused:
             ra_flat = ra.reshape(-1)

@@ -1,6 +1,6 @@
 # Spherical Geometry & HEALPix
 
-`torchsky.sphere` is a PyTorch-native library for spherical geometry and HEALPix maps, with high-performance C++ kernels for Spherical Harmonic Transforms (SHT).
+`torchsky.sphere` is a PyTorch-native library for spherical geometry and HEALPix maps, with high-performance C++ kernels for Spherical Harmonic Transforms (SHT) and selected polygon geometry hot paths on CPU.
 
 ## Table of Contents
 
@@ -10,6 +10,7 @@
 - [Spherical Geometry](#spherical-geometry)
 - [Sampling](#sampling)
 - [Sparse Maps](#sparse-maps)
+- [MOC](#moc)
 - [Harmonic Space (SHT)](#harmonic-space-sht)
 - [Power Spectra](#power-spectra)
 - [Beams & Windows](#beams--windows)
@@ -308,6 +309,54 @@ finer   = sparse.ud_grade(nside_out=128)
 | `from_dense(map, *, nside, ...)` | Classmethod: build from dense map |
 | `interpolate(lon, lat, *, method)` | Bilinear/nearest interpolation |
 | `ud_grade(nside_out, *, pess, power)` | Upgrade / downgrade resolution |
+
+---
+
+## MOC
+
+### Class `MOC`
+
+Multi-Order Coverage map backed by HEALPix `UNIQ` cells in NESTED ordering.
+
+```python
+from torchsky.sphere import MOC, nest2uniq
+
+moc = MOC(nest2uniq(4, torch.tensor([0, 1, 2])))
+inside = moc.contains(torch.tensor([0.0, 45.0]), torch.tensor([0.0, 60.0]))
+area_sr = moc.area
+ascii_repr = moc.to_ascii()
+json_repr = moc.to_json()
+```
+
+**Construction helpers:**
+
+| Constructor | Description |
+|---|---|
+| `MOC(uniq)` | Build from `UNIQ` cells |
+| `MOC.from_circle(lon_deg, lat_deg, radius_deg, max_order=10)` | Circular cap footprint |
+| `MOC.from_polygon(lon_deg, lat_deg, max_order=10)` | Polygon footprint |
+| `MOC.from_sparse_map(smap)` | Coverage from `SparseHealpixMap` |
+| `MOC.from_threshold(smap, threshold, op='>')` | Threshold sparse-map values |
+| `MOC.from_ascii(text)` | IVOA ASCII roundtrip |
+| `MOC.from_json(text)` | IVOA JSON roundtrip |
+| `MOC.read_fits(path)` | IVOA FITS roundtrip |
+
+**Key methods and properties:**
+
+| Method | Description |
+|---|---|
+| `contains(lon_deg, lat_deg)` | Point-in-MOC predicate |
+| `filter_catalog(lon_deg, lat_deg)` | Filter catalog coordinates by coverage |
+| `contains_moc(other)` | Subset check |
+| `union(other)` / `intersection(other)` / `difference(other)` | Boolean operations |
+| `flatten(nside)` | Dense boolean mask at fixed resolution |
+| `to_sparse_map(nside, sentinel=0.0)` | Realize coverage as sparse HEALPix map |
+| `boundary()` | Boundary loops at the MOC's maximum order |
+| `write_fits(path)` | Write IVOA MOC FITS |
+| `to_ascii()` / `to_json()` | Text serialization |
+| `area` / `area_sq_deg` | Covered area |
+
+`boundary()` returns one or more closed loops of shape `[N, 2]` in `(lon_deg, lat_deg)` coordinates. The loops are traced from stitched HEALPix cell edges at the MOC's current maximum order.
 
 ---
 

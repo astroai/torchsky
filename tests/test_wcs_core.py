@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import torch
 
 from torchsky.wcs.core import WCS
@@ -20,6 +21,35 @@ def _tan_header() -> dict[str, float | str]:
         "CD2_1": 0.0,
         "CD2_2": 0.01,
     }
+
+
+def _center_equator_header(projection: str) -> dict[str, float | str]:
+    header: dict[str, float | str] = {
+        "NAXIS": 2,
+        "NAXIS1": 4096,
+        "NAXIS2": 4096,
+        "CTYPE1": f"RA---{projection}",
+        "CTYPE2": f"DEC--{projection}",
+        "CRPIX1": 2048.0,
+        "CRPIX2": 2048.0,
+        "CRVAL1": 0.0,
+        "CRVAL2": 0.0,
+        "CUNIT1": "deg",
+        "CUNIT2": "deg",
+    }
+    if projection in {"AIT", "MOL", "HPX"}:
+        header["CD1_1"] = -1.0
+        header["CD1_2"] = 0.0
+        header["CD2_1"] = 0.0
+        header["CD2_2"] = 1.0
+    else:
+        header["CD1_1"] = -0.5
+        header["CD1_2"] = 0.0
+        header["CD2_1"] = 0.0
+        header["CD2_2"] = 0.5
+        if projection == "CEA":
+            header["PV2_1"] = 1.0
+    return header
 
 
 def test_tan_sip_projection_suffix_parsing() -> None:
@@ -168,3 +198,71 @@ def test_cpp_helpers_match_python_fallbacks_for_inverse_rotation_and_tan_interme
     assert torch.allclose(theta_cpp, theta_py, atol=1e-12, rtol=0.0)
     assert torch.allclose(xi_cpp, xi_py, atol=1e-12, rtol=0.0)
     assert torch.allclose(eta_cpp, eta_py, atol=1e-12, rtol=0.0)
+
+
+@pytest.mark.parametrize("projection", ["CAR", "SFL", "CEA", "MER", "AIT", "HPX"])
+def test_center_cpp_small_batch_matches_python_fallback(projection: str) -> None:
+    wcs = WCS(_center_equator_header(projection)).to("cpu")
+
+    x = torch.linspace(1984.0, 2111.0, 128, dtype=torch.float64)
+    y = torch.linspace(1988.0, 2107.0, 128, dtype=torch.float64)
+
+    ra_cpp, dec_cpp = wcs.pixel_to_world(x, y, origin=0)
+    x_cpp, y_cpp = wcs.world_to_pixel(ra_cpp, dec_cpp, origin=0)
+
+    old_center_p2w = wcs._cpp_center_pixel_to_world
+    old_center_w2p = wcs._cpp_center_world_to_pixel
+    old_disable_p2w = wcs._disable_cpp_pixel_to_world
+    old_disable_w2p = wcs._disable_cpp_world_to_pixel
+    old_disable_fused_p2w = wcs._disable_fused_pixel_to_world
+    old_disable_fused_w2p = wcs._disable_fused_world_to_pixel
+    try:
+        wcs._cpp_center_pixel_to_world = None
+        wcs._cpp_center_world_to_pixel = None
+        wcs._disable_cpp_pixel_to_world = True
+        wcs._disable_cpp_world_to_pixel = True
+        wcs._disable_fused_pixel_to_world = True
+        wcs._disable_fused_world_to_pixel = True
+
+        ra_py, dec_py = wcs.pixel_to_world(x, y, origin=0)
+        x_py, y_py = wcs.world_to_pixel(ra_cpp, dec_cpp, origin=0)
+    finally:
+        wcs._cpp_center_pixel_to_world = old_center_p2w
+        wcs._cpp_center_world_to_pixel = old_center_w2p
+        wcs._disable_cpp_pixel_to_world = old_disable_p2w
+        wcs._disable_cpp_world_to_pixel = old_disable_w2p
+        wcs._disable_fused_pixel_to_world = old_disable_fused_p2w
+        wcs._disable_fused_world_to_pixel = old_disable_fused_w2p
+
+    assert torch.allclose(ra_cpp, ra_py, atol=1e-9, rtol=0.0, equal_nan=True)
+    assert torch.allclose(dec_cpp, dec_py, atol=1e-9, rtol=0.0, equal_nan=True)
+    assert torch.allclose(x_cpp, x_py, atol=1e-9, rtol=0.0, equal_nan=True)
+    assert torch.allclose(y_cpp, y_py, atol=1e-9, rtol=0.0, equal_nan=True)
+
+
+def test_center_cpp_small_batch_threshold_skips_large_inputs() -> None:
+    wcs = WCS(_center_equator_header("CAR")).to("cpu")
+
+    x = torch.linspace(1024.0, 3071.0, 2048, dtype=torch.float64)
+    y = torch.linspace(1024.0, 3071.0, 2048, dtype=torch.float64)
+    ra = torch.linspace(300.0, 60.0, 2048, dtype=torch.float64)
+    dec = torch.linspace(-45.0, 45.0, 2048, dtype=torch.float64)
+
+    def _unexpected(*args, **kwargs):
+        raise AssertionError("center helper should not run above the small-N limit")
+
+    old_center_p2w = wcs._cpp_center_pixel_to_world
+    old_center_w2p = wcs._cpp_center_world_to_pixel
+    try:
+        wcs._cpp_center_pixel_to_world = _unexpected
+        wcs._cpp_center_world_to_pixel = _unexpected
+        out_ra, out_dec = wcs.pixel_to_world(x, y, origin=0)
+        out_x, out_y = wcs.world_to_pixel(ra, dec, origin=0)
+    finally:
+        wcs._cpp_center_pixel_to_world = old_center_p2w
+        wcs._cpp_center_world_to_pixel = old_center_w2p
+
+    assert torch.isfinite(out_ra).all()
+    assert torch.isfinite(out_dec).all()
+    assert torch.isfinite(out_x).all()
+    assert torch.isfinite(out_y).all()

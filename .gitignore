@@ -82,6 +82,10 @@ benchmarks/scaled.fits
 benchmarks/repro_map2alm*.py
 benchmarks/find_overflow.py
 benchmarks/baselines/
+!benchmarks/baselines/
+!benchmarks/baselines/map_*.json
+!benchmarks/baselines/map_*.md
+!benchmarks/baselines/spin_matrix_extended_baseline.json
 
 # native build artifacts
 wcslib.tar.bz2

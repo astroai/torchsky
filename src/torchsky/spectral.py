@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Spectral and data cube support for torchsky.
 
@@ -15,6 +17,95 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 
 from .wcs import WCS
+
+
+_SPECTRAL_TYPE_KEYS = ("WAVE", "FREQ", "VELO", "ENER")
+
+
+def _normalize_spectral_type(ctype: str) -> str:
+    upper = ctype.upper()
+    for key in _SPECTRAL_TYPE_KEYS:
+        if key in upper:
+            return key
+    return upper or "WAVE"
+
+
+def _spectral_axis_length_from_header(
+    header: Dict[str, Any],
+    *,
+    fits_axis: int,
+    data_shape: Optional[Tuple[int, ...]],
+) -> int:
+    header_length = header.get(f"NAXIS{fits_axis}")
+    if header_length is not None:
+        return int(header_length)
+    if data_shape is not None:
+        tensor_axis = len(data_shape) - fits_axis
+        return int(data_shape[tensor_axis])
+    raise ValueError(f"Missing NAXIS{fits_axis} for spectral axis reconstruction")
+
+
+def spectral_axis_from_header(
+    header: Dict[str, Any],
+    *,
+    data_shape: Optional[Tuple[int, ...]] = None,
+) -> Tuple[SpectralAxis, int]:
+    """Build a linear SpectralAxis from FITS WCS header metadata."""
+    naxis = int(header.get("NAXIS", len(data_shape) if data_shape is not None else 0))
+    if naxis <= 0:
+        raise ValueError("Header must define NAXIS or data_shape for spectral axis reconstruction")
+
+    spectral_fits_axis = None
+    spectral_type = "WAVE"
+    spectral_unit = "Angstrom"
+    for fits_axis in range(1, naxis + 1):
+        ctype = str(header.get(f"CTYPE{fits_axis}", ""))
+        if any(key in ctype.upper() for key in _SPECTRAL_TYPE_KEYS):
+            spectral_fits_axis = fits_axis
+            spectral_type = _normalize_spectral_type(ctype)
+            spectral_unit = str(header.get(f"CUNIT{fits_axis}", "Angstrom"))
+            break
+
+    if spectral_fits_axis is None:
+        spectral_fits_axis = naxis
+
+    axis_length = _spectral_axis_length_from_header(
+        header,
+        fits_axis=spectral_fits_axis,
+        data_shape=data_shape,
+    )
+    crval = float(header.get(f"CRVAL{spectral_fits_axis}", 0.0))
+    cdelt = float(header.get(f"CDELT{spectral_fits_axis}", 1.0))
+    crpix = float(header.get(f"CRPIX{spectral_fits_axis}", 1.0))
+    pixels = torch.arange(axis_length, dtype=torch.float64)
+    values = crval + cdelt * (pixels - (crpix - 1.0))
+    tensor_axis_index = naxis - spectral_fits_axis
+    return (
+        SpectralAxis(values=values, unit=spectral_unit, type=spectral_type),
+        tensor_axis_index,
+    )
+
+
+def spectral_bin_edges_from_header(
+    header: Dict[str, Any],
+    *,
+    data_shape: Optional[Tuple[int, ...]] = None,
+) -> Tuple[torch.Tensor, int]:
+    """Build linear spectral bin edges from FITS WCS header metadata."""
+    axis, tensor_axis_index = spectral_axis_from_header(header, data_shape=data_shape)
+    values = axis.values.to(dtype=torch.float64)
+    if values.numel() == 1:
+        return torch.tensor([values[0], values[0]], dtype=torch.float64), tensor_axis_index
+    diffs = values[1:] - values[:-1]
+    if not bool(torch.allclose(diffs, torch.full_like(diffs, diffs[0]))):
+        raise ValueError("Nonlinear spectral headers are not yet supported for bin-edge reconstruction")
+    step = diffs[0]
+    mid = 0.5 * (values[1:] + values[:-1])
+    edges = torch.empty((values.numel() + 1,), dtype=torch.float64)
+    edges[1:-1] = mid
+    edges[0] = values[0] - 0.5 * step
+    edges[-1] = values[-1] + 0.5 * step
+    return edges, tensor_axis_index
 
 
 @dataclass
@@ -381,38 +472,9 @@ class SpectralReader:
             data = image_hdu.to_tensor()
             header = dict(image_hdu.header)
 
-            # Determine spectral axis from header
-            spectral_axis_index = 0  # Default
-            spectral_type = "WAVE"
-            spectral_unit = "Angstrom"
-
-            # Look for spectral axis in WCS
-            for i in range(1, 4):  # FITS axes are 1-indexed
-                ctype = header.get(f"CTYPE{i}", "")
-                if any(
-                    stype in ctype.upper() for stype in ["WAVE", "FREQ", "VELO", "ENER"]
-                ):
-                    spectral_axis_index = 3 - i  # Convert to 0-indexed, reverse order
-                    spectral_type = ctype.upper()
-                    spectral_unit = header.get(f"CUNIT{i}", "Angstrom")
-                    break
-
-            # Create spectral axis values
-            naxis = data.shape[spectral_axis_index]
-            crval = header.get(
-                f"CRVAL{3 - spectral_axis_index}", 0.0
-            )  # Convert back to FITS indexing
-            cdelt = header.get(f"CDELT{3 - spectral_axis_index}", 1.0)
-            crpix = header.get(f"CRPIX{3 - spectral_axis_index}", 1.0)
-
-            # Generate spectral axis values
-            pixels = torch.arange(naxis, dtype=torch.float32)
-            spectral_values = crval + cdelt * (
-                pixels - (crpix - 1)
-            )  # FITS uses 1-based indexing
-
-            spectral_axis = SpectralAxis(
-                values=spectral_values, unit=spectral_unit, type=spectral_type
+            spectral_axis, spectral_axis_index = spectral_axis_from_header(
+                header,
+                data_shape=tuple(int(v) for v in data.shape),
             )
 
             # Create spatial WCS if available

@@ -309,56 +309,82 @@ class TPV:
                 float(tol),
             )
 
-        # JAX-like vectorized Newton solver
         shape = xi_t.shape
         xi_f = xi_t.reshape(-1)
         eta_f = eta_t.reshape(-1)
 
         u_curr, v_curr = self._initial_guess_affine(xi_f, eta_f)
-
-        target = torch.stack([xi_f, eta_f], dim=1)  # [N, 2]
-        x = torch.stack([u_curr, v_curr], dim=1)  # [N, 2]
-
-        jac_fn = vmap(jacrev(self._distort_scalar))
-        dist_fn = vmap(self._distort_scalar)
-
         active_counts = []
-
-        # Fixed loop for compile-friendliness
-        for _ in range(max_iter):
-            fx = dist_fn(x) - target
-
-            # Optional trace
-            if self._invert_trace_enabled:
-                res_norm = torch.norm(fx, dim=1)
-                active_counts.append(int((res_norm > tol).sum().item()))
-
-            if not x.requires_grad and torch.all(torch.norm(fx, dim=1) < tol):
-                break
-
-            J = jac_fn(x)
-            det = J[:, 0, 0] * J[:, 1, 1] - J[:, 0, 1] * J[:, 1, 0]
-            det = torch.where(det.abs() < 1e-18, torch.sign(det) * 1e-18, det)
-
-            du = (J[:, 1, 1] * fx[:, 0] - J[:, 0, 1] * fx[:, 1]) / det
-            dv = (-J[:, 1, 0] * fx[:, 0] + J[:, 0, 0] * fx[:, 1]) / det
-
-            # Clamp step to prevent divergence in extreme distortion
-            x = x - torch.stack([du.clamp(-1.0, 1.0), dv.clamp(-1.0, 1.0)], dim=1)
+        if u_curr.requires_grad or v_curr.requires_grad:
+            u = u_curr
+            v = v_curr
+            for _ in range(max_iter):
+                xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = (
+                    self._distort_and_jacobian_impl(u, v)
+                )
+                fx0 = xi - xi_f
+                fx1 = eta - eta_f
+                res_norm = torch.sqrt(fx0 * fx0 + fx1 * fx1)
+                if self._invert_trace_enabled:
+                    active_counts.append(int((res_norm > tol).sum().item()))
+                det = dxi_du * deta_dv - dxi_dv * deta_du
+                det_sign = torch.where(det < 0.0, -torch.ones_like(det), torch.ones_like(det))
+                det = torch.where(det.abs() < 1e-18, det_sign * 1e-18, det)
+                du = (deta_dv * fx0 - dxi_dv * fx1) / det
+                dv = (-deta_du * fx0 + dxi_du * fx1) / det
+                u = u - du.clamp(-1.0, 1.0)
+                v = v - dv.clamp(-1.0, 1.0)
+            u_out = u
+            v_out = v
+            final_active = active_counts[-1] if active_counts else int(xi_t.numel())
+        else:
+            u = u_curr.clone()
+            v = v_curr.clone()
+            active = torch.ones_like(u, dtype=torch.bool)
+            for _ in range(max_iter):
+                active_idx = torch.nonzero(active, as_tuple=False).squeeze(1)
+                if active_idx.numel() == 0:
+                    break
+                xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = self._distort_and_jacobian_impl(
+                    u[active_idx], v[active_idx]
+                )
+                fx0 = xi - xi_f[active_idx]
+                fx1 = eta - eta_f[active_idx]
+                res_norm = torch.sqrt(fx0 * fx0 + fx1 * fx1)
+                still_active = res_norm > tol
+                if self._invert_trace_enabled:
+                    active_counts.append(int(still_active.sum().item()))
+                det = dxi_du * deta_dv - dxi_dv * deta_du
+                det_sign = torch.where(det < 0.0, -torch.ones_like(det), torch.ones_like(det))
+                det = torch.where(det.abs() < 1e-18, det_sign * 1e-18, det)
+                du = (deta_dv * fx0 - dxi_dv * fx1) / det
+                dv = (-deta_du * fx0 + dxi_du * fx1) / det
+                u[active_idx] = u[active_idx] - du.clamp(-1.0, 1.0)
+                v[active_idx] = v[active_idx] - dv.clamp(-1.0, 1.0)
+                next_active = torch.zeros_like(active)
+                next_active[active_idx[still_active]] = True
+                active = next_active
+            u_out = u
+            v_out = v
+            final_active = int(active.sum().item())
 
         if self._invert_trace_enabled:
             n_points = xi_t.numel()
-            final_active = active_counts[-1] if active_counts else 0
             self._last_invert_trace = {
                 "n_points": n_points,
                 "converged": n_points - final_active,
                 "final_active": final_active,
                 "active_counts": active_counts,
+                "active_counts_sum": int(sum(active_counts)),
                 "iterations": len(active_counts),
-                "backend": "torch.func",
+                "iterations_max": len(active_counts),
+                "mean_point_iterations": (
+                    float(sum(active_counts)) / float(n_points) if n_points > 0 else 0.0
+                ),
+                "backend": "analytic_jacobian",
             }
 
-        return x[:, 0].reshape(shape), x[:, 1].reshape(shape)
+        return u_out.reshape(shape), v_out.reshape(shape)
 
     def _initial_guess_affine(self, xi_t, eta_t):
         if not self._has_affine_seed_inverse:

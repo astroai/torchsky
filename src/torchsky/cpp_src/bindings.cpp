@@ -31,6 +31,7 @@ using namespace nb::literals;
 #include "table.cpp"
 #include "compression.cpp"
 #include "healpix.cpp"
+#include "geom.cpp"
 #include "wcs.cpp"
 #include "hardware.cpp"
 
@@ -1653,6 +1654,52 @@ NB_MODULE(cpp, m) {
               return nb::make_tuple(tensor_to_python(out.first), tensor_to_python(out.second));
           },
           nb::arg("nside"), nb::arg("pix"));
+
+    m.def(
+        "_sphere_planar_point_in_polygon_cpu",
+        [](nb::object points_xy_obj, nb::object polygon_xy_obj, double eps) {
+            auto points_xy = as_f64_contig(points_xy_obj);
+            auto polygon_xy = as_f64_contig(polygon_xy_obj);
+            torch::Tensor out;
+            {
+                nb::gil_scoped_release release;
+                out = torchsky::sphere_planar_point_in_polygon_cpu(
+                    points_xy, polygon_xy, eps
+                );
+            }
+            return tensor_to_python(out);
+        },
+        nb::arg("points_xy"),
+        nb::arg("polygon_xy"),
+        nb::arg("eps") = 1e-15
+    );
+
+    m.def(
+        "_sphere_arc_intersections_matrix_cpu",
+        [](nb::object a0_obj,
+           nb::object a1_obj,
+           nb::object b0_obj,
+           nb::object b1_obj,
+           double tol_rad) {
+            auto a0 = as_f64_contig(a0_obj);
+            auto a1 = as_f64_contig(a1_obj);
+            auto b0 = as_f64_contig(b0_obj);
+            auto b1 = as_f64_contig(b1_obj);
+            torch::Tensor out;
+            {
+                nb::gil_scoped_release release;
+                out = torchsky::sphere_arc_intersections_matrix_cpu(
+                    a0, a1, b0, b1, tol_rad
+                );
+            }
+            return tensor_to_python(out);
+        },
+        nb::arg("a0"),
+        nb::arg("a1"),
+        nb::arg("b0"),
+        nb::arg("b1"),
+        nb::arg("tol_rad") = 1e-10
+    );
 
     m.def("wcs_zenithal_project",
           [](nb::object xi_obj, nb::object eta_obj, std::string proj_code) {

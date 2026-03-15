@@ -10,6 +10,9 @@ from pathlib import Path
 repo_root = str(Path(__file__).resolve().parent.parent.parent)
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
+src_root = str(Path(__file__).resolve().parent.parent.parent / "src")
+if src_root not in sys.path:
+    sys.path.insert(0, src_root)
 
 from benchmarks.config import DEFAULT_OUTPUT_DIR  # noqa: E402
 
@@ -109,6 +112,33 @@ class DifficultRow:
     healpix_eval_pixels_by_nside: dict[str, int] | None
     healpix_area_rel_err_by_nside: dict[str, float] | None
     healpix_convergence_rel: float | None
+
+
+@dataclass
+class ReplaySettings:
+    n_points: int = 20_000
+    runs: int = 3
+    seed: int = 123
+    intersection_nside: int = 512
+    max_difficult_pairs: int = 8
+    sg_area_nonempty_eps: float = 1e-10
+    max_contains_mismatches_nonboundary: int = 0
+    max_pair_intersection_mismatches: int = 0
+    max_difficult_nonempty_mismatches: int = 0
+    max_area_rel_error: float = 1e-10
+    difficult_area_nsides: tuple[int, ...] = (
+        128,
+        256,
+        512,
+        1024,
+        2048,
+        4096,
+        8192,
+        16384,
+    )
+    max_difficult_area_rel_error_final: float = 0.12
+    max_difficult_area_convergence_rel: float = 0.10
+    allow_nonrelease_distributions: bool = False
 
 
 def _distribution_provenance(dist_name: str) -> dict[str, Any] | None:
@@ -467,61 +497,23 @@ def _estimate_intersection_area_multires(
     )
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--n-points", type=int, default=20_000)
-    parser.add_argument("--runs", type=int, default=3)
-    parser.add_argument("--seed", type=int, default=123)
-    parser.add_argument(
-        "--intersection-nside",
-        type=int,
-        default=512,
-        help="nside for simple pair pixelized intersection parity",
-    )
-    parser.add_argument("--max-difficult-pairs", type=int, default=8)
-    parser.add_argument("--sg-area-nonempty-eps", type=float, default=1e-10)
-    parser.add_argument("--max-contains-mismatches-nonboundary", type=int, default=0)
-    parser.add_argument("--max-pair-intersection-mismatches", type=int, default=0)
-    parser.add_argument("--max-difficult-nonempty-mismatches", type=int, default=0)
-    parser.add_argument(
-        "--difficult-area-nsides",
-        type=str,
-        default="128,256,512,1024,2048,4096,8192,16384",
-    )
-    parser.add_argument(
-        "--max-difficult-area-rel-error-final", type=float, default=0.12
-    )
-    parser.add_argument(
-        "--max-difficult-area-convergence-rel", type=float, default=0.10
-    )
-    parser.add_argument("--max-area-rel-error", type=float, default=1e-10)
-    parser.add_argument("--allow-nonrelease-distributions", action="store_true")
-    parser.add_argument(
-        "--json-out",
-        type=Path,
-        default=DEFAULT_OUTPUT_DIR / "upstream_replay_spherical_geometry_polygons.json",
-    )
-    args = parser.parse_args()
-
-    try:
-        difficult_area_nsides = _parse_nsides(args.difficult_area_nsides)
-    except ValueError as exc:
-        print(f"Invalid --difficult-area-nsides: {exc}")
-        return 2
-
+def run_replay(
+    settings: ReplaySettings,
+) -> dict[str, Any]:
+    difficult_area_nsides = list(settings.difficult_area_nsides)
     provenance = _distribution_provenance("spherical_geometry")
     if provenance is None:
-        print("Comparator distribution metadata not found for spherical_geometry")
-        return 2
-    print(
-        f"Comparator spherical_geometry=={provenance['version']} "
-        f"({provenance['reason']}; source={provenance['source']})"
-    )
-    if not args.allow_nonrelease_distributions and not provenance["release_like"]:
-        print(
-            "Non-release comparator distribution detected; refusing run without --allow-nonrelease-distributions"
+        raise RuntimeError(
+            "Comparator distribution metadata not found for spherical_geometry"
         )
-        return 2
+    if (
+        not settings.allow_nonrelease_distributions
+        and not provenance["release_like"]
+    ):
+        raise RuntimeError(
+            "Non-release comparator distribution detected; refusing run without "
+            "--allow-nonrelease-distributions"
+        )
 
     contains_rows: list[ContainsRow] = []
     pair_rows: list[PairRow] = []
@@ -544,7 +536,7 @@ def main() -> int:
         tf2 = SphericalPolygon(torch.from_numpy(lon2_open), torch.from_numpy(lat2_open))
 
         qlon, qlat = _sample_points_for_polygon(
-            lon1_open, lat1_open, args.n_points, seed=args.seed + i
+            lon1_open, lat1_open, settings.n_points, seed=settings.seed + i
         )
         qlon_t = torch.from_numpy(qlon)
         qlat_t = torch.from_numpy(qlat)
@@ -553,10 +545,11 @@ def main() -> int:
             lambda: spherical_polygon_contains(
                 qlon_t, qlat_t, tf1.lon_deg, tf1.lat_deg, inclusive=False
             ),
-            runs=args.runs,
+            runs=settings.runs,
         )
         t_sg = _time_many(
-            lambda: _sg_contains_scalar(sg1, qlon, qlat), runs=max(1, args.runs // 2)
+            lambda: _sg_contains_scalar(sg1, qlon, qlat),
+            runs=max(1, settings.runs // 2),
         )
 
         tf_contains = (
@@ -605,8 +598,8 @@ def main() -> int:
 
         sg_intersects = bool(sg1.intersects_poly(sg2))
         tf_intersection = tf1.pixelize(
-            args.intersection_nside, nest=False
-        ).intersection(tf2.pixelize(args.intersection_nside, nest=False))
+            settings.intersection_nside, nest=False
+        ).intersection(tf2.pixelize(settings.intersection_nside, nest=False))
         tf_intersects = bool(tf_intersection.pixels.numel() > 0)
         mismatch = int(
             tf_intersects != sg_intersects
@@ -622,20 +615,20 @@ def main() -> int:
             )
         )
 
-        if mismatches_nonboundary > args.max_contains_mismatches_nonboundary:
+        if mismatches_nonboundary > settings.max_contains_mismatches_nonboundary:
             failures.append(
-                f"{case['name']}: non-boundary contains mismatches {mismatches_nonboundary} > {args.max_contains_mismatches_nonboundary}"
+                f"{case['name']}: non-boundary contains mismatches {mismatches_nonboundary} > {settings.max_contains_mismatches_nonboundary}"
             )
-        if area_rel_err > args.max_area_rel_error:
+        if area_rel_err > settings.max_area_rel_error:
             failures.append(
-                f"{case['name']}: area rel err {area_rel_err:.3e} > {args.max_area_rel_error:.3e}"
+                f"{case['name']}: area rel err {area_rel_err:.3e} > {settings.max_area_rel_error:.3e}"
             )
         if mismatch > 0:
             failures.append(
                 f"{case['name']}: intersection mismatch (expected={case['expected_intersects']}, sg={sg_intersects}, tf={tf_intersects})"
             )
 
-    difficult = _load_difficult_pairs(args.max_difficult_pairs)
+    difficult = _load_difficult_pairs(settings.max_difficult_pairs)
     for i, (a_points, a_inside, b_points, b_inside) in enumerate(difficult):
         sg_a = sg_polygon.SphericalPolygon(a_points, a_inside)
         sg_b = sg_polygon.SphericalPolygon(b_points, b_inside)
@@ -680,10 +673,10 @@ def main() -> int:
             torch.from_numpy(seed_lat_np),
             difficult_area_nsides,
             sg_area,
-            sg_area_eps=args.sg_area_nonempty_eps,
+            sg_area_eps=settings.sg_area_nonempty_eps,
         )
 
-        sg_nonempty = bool(sg_area > args.sg_area_nonempty_eps)
+        sg_nonempty = bool(sg_area > settings.sg_area_nonempty_eps)
         mismatch_nonempty = int(sg_nonempty != tf_nonempty)
 
         difficult_rows.append(
@@ -701,22 +694,22 @@ def main() -> int:
             )
         )
 
-        if mismatch_nonempty > args.max_difficult_nonempty_mismatches:
+        if mismatch_nonempty > settings.max_difficult_nonempty_mismatches:
             failures.append(
                 f"difficult[{i}]: nonempty mismatch sg={sg_nonempty} tf={tf_nonempty}"
             )
         if sg_nonempty:
             final_rel_err = area_rel_err_by_nside[str(difficult_area_nsides[-1])]
-            if final_rel_err > args.max_difficult_area_rel_error_final:
+            if final_rel_err > settings.max_difficult_area_rel_error_final:
                 failures.append(
-                    f"difficult[{i}]: final area rel err {final_rel_err:.3e} > {args.max_difficult_area_rel_error_final:.3e}"
+                    f"difficult[{i}]: final area rel err {final_rel_err:.3e} > {settings.max_difficult_area_rel_error_final:.3e}"
                 )
             if (
                 convergence_rel is not None
-                and convergence_rel > args.max_difficult_area_convergence_rel
+                and convergence_rel > settings.max_difficult_area_convergence_rel
             ):
                 failures.append(
-                    f"difficult[{i}]: area convergence rel {convergence_rel:.3e} > {args.max_difficult_area_convergence_rel:.3e}"
+                    f"difficult[{i}]: area convergence rel {convergence_rel:.3e} > {settings.max_difficult_area_convergence_rel:.3e}"
                 )
 
     print("Contains rows:")
@@ -733,9 +726,9 @@ def main() -> int:
             f"  {r.case:38s} expected={r.expected_intersects} sg={r.comparator_intersects} "
             f"tf={r.torchsky_intersects} mismatch={r.mismatch}"
         )
-    if pair_mismatch_total > args.max_pair_intersection_mismatches:
+    if pair_mismatch_total > settings.max_pair_intersection_mismatches:
         failures.append(
-            f"pair intersection mismatches total {pair_mismatch_total} > {args.max_pair_intersection_mismatches}"
+            f"pair intersection mismatches total {pair_mismatch_total} > {settings.max_pair_intersection_mismatches}"
         )
 
     if difficult_rows:
@@ -760,32 +753,96 @@ def main() -> int:
                 f"conv_rel={r.healpix_convergence_rel if r.healpix_convergence_rel is not None else float('nan'):.3e} "
                 f"eval={eval_last if eval_last is not None else -1} mismatch={r.mismatch_nonempty}"
             )
-        if difficult_mismatch_total > args.max_difficult_nonempty_mismatches:
+        if difficult_mismatch_total > settings.max_difficult_nonempty_mismatches:
             failures.append(
-                f"difficult nonempty mismatches total {difficult_mismatch_total} > {args.max_difficult_nonempty_mismatches}"
+                f"difficult nonempty mismatches total {difficult_mismatch_total} > {settings.max_difficult_nonempty_mismatches}"
             )
 
-    payload = {
+    return {
         "comparator_provenance": provenance,
-        "settings": {
-            "n_points": args.n_points,
-            "runs": args.runs,
-            "intersection_nside": args.intersection_nside,
-            "max_difficult_pairs": args.max_difficult_pairs,
-            "sg_area_nonempty_eps": args.sg_area_nonempty_eps,
-            "difficult_area_nsides": difficult_area_nsides,
-            "max_difficult_area_rel_error_final": args.max_difficult_area_rel_error_final,
-            "max_difficult_area_convergence_rel": args.max_difficult_area_convergence_rel,
-        },
+        "settings": asdict(settings),
         "contains_rows": [asdict(r) for r in contains_rows],
         "pair_rows": [asdict(r) for r in pair_rows],
         "difficult_rows": [asdict(r) for r in difficult_rows],
         "failures": failures,
     }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--n-points", type=int, default=20_000)
+    parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument("--seed", type=int, default=123)
+    parser.add_argument(
+        "--intersection-nside",
+        type=int,
+        default=512,
+        help="nside for simple pair pixelized intersection parity",
+    )
+    parser.add_argument("--max-difficult-pairs", type=int, default=8)
+    parser.add_argument("--sg-area-nonempty-eps", type=float, default=1e-10)
+    parser.add_argument("--max-contains-mismatches-nonboundary", type=int, default=0)
+    parser.add_argument("--max-pair-intersection-mismatches", type=int, default=0)
+    parser.add_argument("--max-difficult-nonempty-mismatches", type=int, default=0)
+    parser.add_argument(
+        "--difficult-area-nsides",
+        type=str,
+        default="128,256,512,1024,2048,4096,8192,16384",
+    )
+    parser.add_argument(
+        "--max-difficult-area-rel-error-final", type=float, default=0.12
+    )
+    parser.add_argument(
+        "--max-difficult-area-convergence-rel", type=float, default=0.10
+    )
+    parser.add_argument("--max-area-rel-error", type=float, default=1e-10)
+    parser.add_argument("--allow-nonrelease-distributions", action="store_true")
+    parser.add_argument(
+        "--json-out",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR / "upstream_replay_spherical_geometry_polygons.json",
+    )
+    args = parser.parse_args()
+
+    try:
+        difficult_area_nsides = _parse_nsides(args.difficult_area_nsides)
+    except ValueError as exc:
+        print(f"Invalid --difficult-area-nsides: {exc}")
+        return 2
+
+    settings = ReplaySettings(
+        n_points=args.n_points,
+        runs=args.runs,
+        seed=args.seed,
+        intersection_nside=args.intersection_nside,
+        max_difficult_pairs=args.max_difficult_pairs,
+        sg_area_nonempty_eps=args.sg_area_nonempty_eps,
+        max_contains_mismatches_nonboundary=args.max_contains_mismatches_nonboundary,
+        max_pair_intersection_mismatches=args.max_pair_intersection_mismatches,
+        max_difficult_nonempty_mismatches=args.max_difficult_nonempty_mismatches,
+        max_area_rel_error=args.max_area_rel_error,
+        difficult_area_nsides=tuple(difficult_area_nsides),
+        max_difficult_area_rel_error_final=args.max_difficult_area_rel_error_final,
+        max_difficult_area_convergence_rel=args.max_difficult_area_convergence_rel,
+        allow_nonrelease_distributions=args.allow_nonrelease_distributions,
+    )
+
+    try:
+        payload = run_replay(settings)
+    except RuntimeError as exc:
+        print(str(exc))
+        return 2
+
+    provenance = payload["comparator_provenance"]
+    print(
+        f"Comparator spherical_geometry=={provenance['version']} "
+        f"({provenance['reason']}; source={provenance['source']})"
+    )
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"\nJSON: {args.json_out}")
 
+    failures = payload["failures"]
     if failures:
         print("\nFailures:")
         for f in failures:

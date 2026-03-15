@@ -2,6 +2,16 @@
 
 This guide is for contributors and maintainers.
 User-facing usage lives in `../README.md`.
+Repository-specific coding-agent and engineering guidance lives in `../AGENTS.md`.
+
+## Engineering Doctrine
+
+- Favor scalable algorithms and data structures before adding native kernels.
+- Avoid heuristic behavior unless it is isolated, justified, and benchmark-backed.
+- Build torchsky-native primitives first; use existing astronomy libraries mainly as comparison targets, compatibility surfaces, and validation references.
+- Preserve differentiability and tensor-native execution in public compute paths where practical.
+- Validate substantial changes on both synthetic data and representative real or upstream-fixture data.
+- Include benchmark evidence for performance-sensitive work, especially when changing default execution paths.
 
 ## Development Setup
 

@@ -10,6 +10,7 @@ import pytest
 import torch
 
 import torchsky
+from torchsky.cli import build_parser
 
 
 class TestMainAPI:
@@ -530,6 +531,37 @@ def test_top_level_namespaces_expose_phase1_modules() -> None:
     assert torchsky.coords.WCS is torchsky.WCS
     assert hasattr(torchsky.geom, "great_circle_distance")
     assert hasattr(torchsky.map, "coadd_image_plane")
+    assert hasattr(torchsky.map, "coadd_image_plane_cube")
+    assert hasattr(torchsky.map, "coadd_image_plane_multiband")
+    assert hasattr(torchsky.map, "fit_field_model")
+    assert hasattr(torchsky.map, "render_field_cube")
+    assert hasattr(torchsky.map, "render_field_product")
+    assert hasattr(torchsky.map, "plan_map_product")
+    assert hasattr(torchsky.map, "stack_map_product")
+    assert hasattr(torchsky.map, "evaluate_map_product")
+    assert hasattr(torchsky.map, "MapBandpassSpec")
+    assert hasattr(torchsky.map, "MapProductSpec")
+    assert hasattr(torchsky.map, "plan_image_plane_cube_target")
+    assert hasattr(torchsky.map, "plan_image_plane_cube_target_from_header")
+    assert hasattr(torchsky.map, "plan_image_plane_target")
+
+
+def test_map_cli_exposes_resampling_kernel_option() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "map",
+            "out.fits",
+            "a.fits",
+            "b.fits",
+            "--kernel",
+            "mitchell_netravali",
+            "--value-semantics",
+            "flux",
+        ]
+    )
+    assert args.kernel == "mitchell_netravali"
+    assert args.value_semantics == "flux"
 
 
 if __name__ == "__main__":

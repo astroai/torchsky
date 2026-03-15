@@ -1,6 +1,7 @@
 import torch
 import math
 import json
+import pytest
 from torchsky.sphere import MOC, HealSparseMap, nest2uniq
 
 
@@ -46,8 +47,8 @@ def test_moc_serialization_json():
     data = json.loads(js)
     assert data["0"] == [0, 1, 2]
 
-    # We don't have from_json yet in the plan but let's check internal consistency
-    # (MOC constructor handles uniqs)
+    moc2 = MOC.from_json(js)
+    assert torch.equal(moc2.uniq, moc.uniq)
 
 
 def test_moc_geom_construction():
@@ -69,3 +70,38 @@ def test_sparse_from_moc():
     smap = HealSparseMap.from_moc(moc, nside=64)
     assert isinstance(smap, HealSparseMap)
     assert smap.get_covered_pixels().numel() > 0
+
+
+def test_moc_fits_roundtrip(tmp_path) -> None:
+    pytest.importorskip("fitsio", reason="fitsio required for MOC FITS roundtrip")
+    moc = MOC.from_circle(12.0, -5.0, 3.0, max_order=5)
+    path = tmp_path / "region.moc.fits"
+    moc.write_fits(str(path), overwrite=True)
+    moc2 = MOC.read_fits(str(path))
+    assert torch.equal(moc2.uniq, moc.uniq)
+
+
+def test_moc_boundary_merges_shared_edges_into_single_loop() -> None:
+    moc = MOC(nest2uniq(2, torch.tensor([0, 1], dtype=torch.int64)))
+    loops = moc.boundary()
+    assert len(loops) == 1
+    loop = loops[0]
+    assert loop.ndim == 2
+    assert loop.shape[1] == 2
+    torch.testing.assert_close(loop[0], loop[-1], atol=1e-10, rtol=0.0)
+    assert loop.shape[0] >= 5
+
+
+def test_moc_boundary_disjoint_pixels_produces_multiple_loops() -> None:
+    moc = MOC(
+        torch.cat(
+            (
+                nest2uniq(2, torch.tensor([0], dtype=torch.int64)).reshape(-1),
+                nest2uniq(2, torch.tensor([3], dtype=torch.int64)).reshape(-1),
+            )
+        )
+    )
+    loops = moc.boundary()
+    assert len(loops) == 2
+    for loop in loops:
+        torch.testing.assert_close(loop[0], loop[-1], atol=1e-10, rtol=0.0)

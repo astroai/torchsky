@@ -17,6 +17,13 @@ try:
 except ImportError:
     vmap = None
 
+try:
+    from .. import cpp as _cpp
+except Exception:  # pragma: no cover - optional extension
+    _cpp = None
+
+_PLANAR_PIP_CPP_MIN_OPS = 2_000_000
+
 from ..wcs import healpix as _healpix
 from .core import (
     great_circle_distance,
@@ -179,6 +186,22 @@ def _great_circle_arcs_intersect_matrix(
     a0,a1: [E1,3], b0,b1: [E2,3]
     returns: [E1,E2] bool
     """
+    if (
+        _cpp is not None
+        and a0.device.type == "cpu"
+        and a1.device.type == "cpu"
+        and b0.device.type == "cpu"
+        and b1.device.type == "cpu"
+        and hasattr(_cpp, "_sphere_arc_intersections_matrix_cpu")
+    ):
+        return _cpp._sphere_arc_intersections_matrix_cpu(
+            a0.contiguous(),
+            a1.contiguous(),
+            b0.contiguous(),
+            b1.contiguous(),
+            float(tol_rad),
+        )
+
     n1 = torch.cross(a0, a1, dim=-1)  # [E1,3]
     n2 = torch.cross(b0, b1, dim=-1)  # [E2,3]
     n1_norm = torch.linalg.norm(n1, dim=-1)
@@ -246,6 +269,19 @@ def _planar_point_in_polygon(
     polygon_xy: [N, 2]
     returns: [M] bool
     """
+    if (
+        _cpp is not None
+        and points_xy.device.type == "cpu"
+        and polygon_xy.device.type == "cpu"
+        and (points_xy.shape[0] * polygon_xy.shape[0]) >= _PLANAR_PIP_CPP_MIN_OPS
+        and hasattr(_cpp, "_sphere_planar_point_in_polygon_cpu")
+    ):
+        return _cpp._sphere_planar_point_in_polygon_cpu(
+            points_xy.contiguous(),
+            polygon_xy.contiguous(),
+            float(eps),
+        )
+
     x = points_xy[:, 0].unsqueeze(1)
     y = points_xy[:, 1].unsqueeze(1)
 

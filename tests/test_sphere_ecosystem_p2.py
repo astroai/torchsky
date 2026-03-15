@@ -13,6 +13,14 @@ def test_moc_normalization():
     assert moc.uniq[0].item() == 4
 
 
+def test_moc_normalization_removes_parent_child_overlap():
+    parent = nest2uniq(1, torch.tensor([0], dtype=torch.int64))
+    child = nest2uniq(2, torch.tensor([0], dtype=torch.int64))
+    moc = MOC(torch.cat((parent.reshape(-1), child.reshape(-1))))
+    assert moc.uniq.numel() == 1
+    assert moc.uniq[0].item() == int(parent.item())
+
+
 def test_moc_ops():
     # MOC A: pixels 0, 1 at nside 4 (NESTED)
     # MOC B: pixels 1, 2 at nside 4 (NESTED)
@@ -35,6 +43,13 @@ def test_moc_ops():
     diff = moc_a.difference(moc_b)
     assert diff.uniq.numel() == 1
     assert diff.uniq[0].item() == nest2uniq(4, 0)
+
+
+def test_moc_contains_mixed_order_subset():
+    parent = MOC(nest2uniq(1, torch.tensor([0], dtype=torch.int64)))
+    child = MOC(nest2uniq(2, torch.tensor([0], dtype=torch.int64)))
+    assert parent.contains_moc(child)
+    assert not child.contains_moc(parent)
 
 
 def test_sparse_udgrade():

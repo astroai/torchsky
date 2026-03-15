@@ -12,10 +12,17 @@ def _map_command(args: argparse.Namespace) -> int:
         ImageObservation(path=path, hdu=args.hdu, weight=weight)
         for path, weight in zip(args.inputs, args.weights)
     ]
-    result = ImagePlaneMapMaker().run(observations, output_path=args.output)
+    result = ImagePlaneMapMaker(
+        resampling_kernel=args.kernel,
+        value_semantics=args.value_semantics,
+    ).run(
+        observations,
+        output_path=args.output,
+    )
     print(
         f"wrote {args.output} shape={tuple(result.data.shape)} "
-        f"mean_weight={float(result.weight.mean().item()):.4f}"
+        f"mean_weight={float(result.weight.mean().item()):.4f} "
+        f"kernel={args.kernel} value_semantics={args.value_semantics}"
     )
     return 0
 
@@ -34,6 +41,26 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="*",
         type=float,
         help="Optional per-input scalar weights",
+    )
+    map_parser.add_argument(
+        "--kernel",
+        default="bilinear",
+        choices=(
+            "nearest",
+            "bilinear",
+            "bicubic",
+            "lanczos3",
+            "lanczos5",
+            "mitchell_netravali",
+            "catmull_rom",
+        ),
+        help="Image-plane resampling kernel for reprojection",
+    )
+    map_parser.add_argument(
+        "--value-semantics",
+        default="surface_brightness",
+        choices=("surface_brightness", "flux"),
+        help="Interpret input pixel values as surface brightness or flux per pixel",
     )
     map_parser.set_defaults(handler=_map_command)
 

@@ -11,7 +11,14 @@ import numpy as np
 import pytest
 import torch
 
-from torchsky.spectral import DataCube, SpectralAxis, SpectralReader, Spectrum1D
+from torchsky.spectral import (
+    DataCube,
+    SpectralAxis,
+    SpectralReader,
+    Spectrum1D,
+    spectral_axis_from_header,
+    spectral_bin_edges_from_header,
+)
 
 
 class TestSpectralAxis:
@@ -54,6 +61,33 @@ class TestSpectralAxis:
         axis = SpectralAxis(torch.tensor([1.0, 2.0]), "keV", "ENER")
         with pytest.raises(ValueError, match="Unsupported spectral conversion"):
             _ = axis.to_wavelength()
+
+    def test_linear_spectral_axis_from_header(self):
+        header = {
+            "NAXIS": 3,
+            "NAXIS1": 16,
+            "NAXIS2": 8,
+            "NAXIS3": 4,
+            "CTYPE3": "WAVE",
+            "CUNIT3": "Angstrom",
+            "CRVAL3": 5000.0,
+            "CDELT3": 2.0,
+            "CRPIX3": 1.0,
+        }
+
+        axis, tensor_axis_index = spectral_axis_from_header(header)
+        edges, edge_axis_index = spectral_bin_edges_from_header(header)
+
+        assert tensor_axis_index == 0
+        assert edge_axis_index == 0
+        torch.testing.assert_close(
+            axis.values,
+            torch.tensor([5000.0, 5002.0, 5004.0, 5006.0], dtype=torch.float64),
+        )
+        torch.testing.assert_close(
+            edges,
+            torch.tensor([4999.0, 5001.0, 5003.0, 5005.0, 5007.0], dtype=torch.float64),
+        )
 
 
 class TestSpectrum1D:

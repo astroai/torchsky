@@ -198,6 +198,77 @@ tpv_distort_and_jacobian_impl(
     return std::make_tuple(xi, eta, dxi_du, dxi_dv, deta_du, deta_dv);
 }
 
+inline std::tuple<double, double, double, double, double, double> eval_tpv_jac_scalar(
+    double u, double v,
+    const torch::Tensor& idx1, const torch::Tensor& c1,
+    const torch::Tensor& idx2, const torch::Tensor& c2)
+{
+    if (c1.numel() == 0 && c2.numel() == 0) return {u, v, 1.0, 0.0, 0.0, 1.0};
+    double r = std::sqrt(u * u + v * v);
+    double xp[8] = {1.0, u, u*u, u*u*u, u*u*u*u, u*u*u*u*u, u*u*u*u*u*u, u*u*u*u*u*u*u};
+    double yp[8] = {1.0, v, v*v, v*v*v, v*v*v*v, v*v*v*v*v, v*v*v*v*v*v, v*v*v*v*v*v*v};
+    double rp[8] = {1.0, r, r*r, r*r*r, r*r*r*r, r*r*r*r*r, r*r*r*r*r*r, r*r*r*r*r*r*r};
+
+    double dr_du = (r > 0) ? u / r : 0.0;
+    double dr_dv = (r > 0) ? v / r : 0.0;
+
+    auto eval_axis = [&](const torch::Tensor& idx, const torch::Tensor& c, const double* a_p, const double* b_p, double dr_da, double dr_db) {
+        double out = 0, da = 0, db = 0, dr_pref = 0;
+        const int64_t* idx_p = idx.data_ptr<int64_t>();
+        const double* c_p = c.data_ptr<double>();
+        for (int k = 0; k < c.size(0); ++k) {
+            int64_t px = idx_p[k*3], py = idx_p[k*3+1], pr = idx_p[k*3+2];
+            double coeff = c_p[k];
+            out += a_p[px] * b_p[py] * rp[pr] * coeff;
+            if (px > 0) da += a_p[px-1] * b_p[py] * rp[pr] * coeff * px;
+            if (py > 0) db += a_p[px] * b_p[py-1] * rp[pr] * coeff * py;
+            if (pr > 0) dr_pref += a_p[px] * b_p[py] * rp[pr-1] * coeff * pr;
+        }
+        da += dr_pref * dr_da;
+        db += dr_pref * dr_db;
+        return std::make_tuple(out, da, db);
+    };
+
+    auto [xi, j11, j12] = eval_axis(idx1, c1, xp, yp, dr_du, dr_dv);
+    auto [eta, j22, j21] = eval_axis(idx2, c2, yp, xp, dr_dv, dr_du);
+    return {xi, eta, j11, j12, j21, j22};
+}
+
+inline std::pair<double, double> invert_tpv_scalar(
+    double xi_target, double eta_target,
+    const torch::Tensor& idx1, const torch::Tensor& c1,
+    const torch::Tensor& idx2, const torch::Tensor& c2)
+{
+    if (c1.numel() == 0 && c2.numel() == 0) return {xi_target, eta_target};
+
+    auto p = tpv_extract_affine_seed_params(idx1, c1, idx2, c2);
+    double u, v;
+    if (p.valid) {
+        double det = p.a11 * p.a22 - p.a12 * p.a21;
+        double inv11 = p.a22 / det, inv12 = -p.a12 / det;
+        double inv21 = -p.a21 / det, inv22 = p.a11 / det;
+        double dx = xi_target - p.b1, dy = eta_target - p.b2;
+        u = dx * inv11 + dy * inv12;
+        v = dx * inv21 + dy * inv22;
+    } else {
+        u = xi_target; v = eta_target;
+    }
+
+    double tol2 = 1e-22;
+    for (int i = 0; i < 20; ++i) {
+        auto [xi, eta, j11, j12, j21, j22] = eval_tpv_jac_scalar(u, v, idx1, c1, idx2, c2);
+        double rx = xi - xi_target, ry = eta - eta_target;
+        if (rx*rx + ry*ry < tol2) break;
+        double det = j11 * j22 - j12 * j21;
+        if (std::abs(det) < 1e-18) det = (det >= 0) ? 1e-18 : -1e-18;
+        double du = -(j22 * rx - j12 * ry) / det;
+        double dv = -(-j21 * rx + j11 * ry) / det;
+        u += std::max(-1.0, std::min(1.0, du));
+        v += std::max(-1.0, std::min(1.0, dv));
+    }
+    return {u, v};
+}
+
 std::pair<torch::Tensor, torch::Tensor> wcs_inverse_spherical_rotation_pole(
     const torch::Tensor& ra_deg,
     const torch::Tensor& dec_deg,
@@ -1478,77 +1549,6 @@ inline std::pair<double, double> eval_tpv_scalar(
         eta += yp[idx2_p[k*3]] * xp[idx2_p[k*3+1]] * rp[idx2_p[k*3+2]] * c2_p[k];
     }
     return {xi, eta};
-}
-
-inline std::tuple<double, double, double, double, double, double> eval_tpv_jac_scalar(
-    double u, double v,
-    const torch::Tensor& idx1, const torch::Tensor& c1,
-    const torch::Tensor& idx2, const torch::Tensor& c2)
-{
-    if (c1.numel() == 0 && c2.numel() == 0) return {u, v, 1.0, 0.0, 0.0, 1.0};
-    double r = std::sqrt(u * u + v * v);
-    double xp[8] = {1.0, u, u*u, u*u*u, u*u*u*u, u*u*u*u*u, u*u*u*u*u*u, u*u*u*u*u*u*u};
-    double yp[8] = {1.0, v, v*v, v*v*v, v*v*v*v, v*v*v*v*v, v*v*v*v*v*v, v*v*v*v*v*v*v};
-    double rp[8] = {1.0, r, r*r, r*r*r, r*r*r*r, r*r*r*r*r, r*r*r*r*r*r, r*r*r*r*r*r*r};
-
-    double dr_du = (r > 0) ? u / r : 0.0;
-    double dr_dv = (r > 0) ? v / r : 0.0;
-
-    auto eval_axis = [&](const torch::Tensor& idx, const torch::Tensor& c, const double* a_p, const double* b_p, double dr_da, double dr_db) {
-        double out = 0, da = 0, db = 0, dr_pref = 0;
-        const int64_t* idx_p = idx.data_ptr<int64_t>();
-        const double* c_p = c.data_ptr<double>();
-        for (int k = 0; k < c.size(0); ++k) {
-            int64_t px = idx_p[k*3], py = idx_p[k*3+1], pr = idx_p[k*3+2];
-            double coeff = c_p[k];
-            out += a_p[px] * b_p[py] * rp[pr] * coeff;
-            if (px > 0) da += a_p[px-1] * b_p[py] * rp[pr] * coeff * px;
-            if (py > 0) db += a_p[px] * b_p[py-1] * rp[pr] * coeff * py;
-            if (pr > 0) dr_pref += a_p[px] * b_p[py] * rp[pr-1] * coeff * pr;
-        }
-        da += dr_pref * dr_da;
-        db += dr_pref * dr_db;
-        return std::make_tuple(out, da, db);
-    };
-
-    auto [xi, j11, j12] = eval_axis(idx1, c1, xp, yp, dr_du, dr_dv);
-    auto [eta, j22, j21] = eval_axis(idx2, c2, yp, xp, dr_dv, dr_du); // note: arguments swapped
-    return {xi, eta, j11, j12, j21, j22};
-}
-
-inline std::pair<double, double> invert_tpv_scalar(
-    double xi_target, double eta_target,
-    const torch::Tensor& idx1, const torch::Tensor& c1,
-    const torch::Tensor& idx2, const torch::Tensor& c2)
-{
-    if (c1.numel() == 0 && c2.numel() == 0) return {xi_target, eta_target};
-
-    auto p = tpv_extract_affine_seed_params(idx1, c1, idx2, c2);
-    double u, v;
-    if (p.valid) {
-        double det = p.a11 * p.a22 - p.a12 * p.a21;
-        double inv11 = p.a22 / det, inv12 = -p.a12 / det;
-        double inv21 = -p.a21 / det, inv22 = p.a11 / det;
-        double dx = xi_target - p.b1, dy = eta_target - p.b2;
-        u = dx * inv11 + dy * inv12;
-        v = dx * inv21 + dy * inv22;
-    } else {
-        u = xi_target; v = eta_target;
-    }
-
-    double tol2 = 1e-22;
-    for (int i = 0; i < 20; ++i) {
-        auto [xi, eta, j11, j12, j21, j22] = eval_tpv_jac_scalar(u, v, idx1, c1, idx2, c2);
-        double rx = xi - xi_target, ry = eta - eta_target;
-        if (rx*rx + ry*ry < tol2) break;
-        double det = j11 * j22 - j12 * j21;
-        if (std::abs(det) < 1e-18) det = (det >= 0) ? 1e-18 : -1e-18;
-        double du = -(j22 * rx - j12 * ry) / det;
-        double dv = -(-j21 * rx + j11 * ry) / det;
-        u += std::max(-1.0, std::min(1.0, du));
-        v += std::max(-1.0, std::min(1.0, dv));
-    }
-    return {u, v};
 }
 
 void wcs_pixel_to_world_fused_cpu(

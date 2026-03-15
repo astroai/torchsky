@@ -1,5 +1,6 @@
 """Multi-Order Coverage (MOC) support for HEALPix."""
 
+import json
 import math
 from typing import Literal
 import importlib
@@ -34,94 +35,73 @@ def uniq2nest(uniq: int | Tensor) -> tuple[Tensor, Tensor]:
     return nside, pix
 
 
+def _max_order_from_uniq(uniq: Tensor) -> int:
+    if uniq.numel() == 0:
+        return 0
+    nside, _ = uniq2nest(uniq.max())
+    return int(torch.log2(nside.to(torch.float64)).item())
+
+
+def _uniq_to_ranges(uniq: Tensor, max_order: int) -> list[tuple[int, int]]:
+    if uniq.numel() == 0:
+        return []
+
+    nsides, pix_nested = uniq2nest(uniq)
+    orders = torch.log2(nsides.to(torch.float64)).to(torch.int64)
+    shifts = 2 * (max_order - orders)
+    starts = pix_nested << shifts
+    ends = (pix_nested + 1) << shifts
+
+    sort_idx = torch.argsort(starts)
+    starts = starts[sort_idx]
+    ends = ends[sort_idx]
+
+    merged: list[tuple[int, int]] = []
+    cur_start = int(starts[0].item())
+    cur_end = int(ends[0].item())
+    for start_t, end_t in zip(starts[1:], ends[1:], strict=False):
+        start = int(start_t.item())
+        end = int(end_t.item())
+        if start <= cur_end:
+            cur_end = max(cur_end, end)
+            continue
+        merged.append((cur_start, cur_end))
+        cur_start, cur_end = start, end
+    merged.append((cur_start, cur_end))
+    return merged
+
+
+def _ranges_to_uniq(ranges: list[tuple[int, int]], max_order: int) -> Tensor:
+    uniqs: list[Tensor] = []
+    for start, end in ranges:
+        curr = int(start)
+        while curr < end:
+            k = 0
+            while (
+                curr + (4 ** (k + 1)) <= end
+                and curr % (4 ** (k + 1)) == 0
+                and k < max_order
+            ):
+                k += 1
+            order = max_order - k
+            uniqs.append(
+                nest2uniq(1 << order, curr >> (2 * k)).reshape(1).to(torch.int64)
+            )
+            curr += 4**k
+    if not uniqs:
+        return torch.empty((0,), dtype=torch.int64)
+    return torch.cat(uniqs)
+
+
 def _normalize_moc(uniq: Tensor) -> Tensor:
     """Sort and merge redundant pixels in a MOC."""
     if uniq.numel() == 0:
         return uniq
 
-    # 1. Remove duplicates and sort
-    u = torch.unique(uniq)
-
-    # 2. Hierarchical merge: if 4 children are present, replace with parent.
-    while True:
-        if u.numel() < 4:
-            break
-
-        orders = torch.div(
-            torch.log2(torch.div(u, 4, rounding_mode="floor").to(torch.float64)),
-            2.0,
-            rounding_mode="floor",
-        ).to(torch.int64)
-        unique_orders = torch.unique(orders)
-
-        merged_any = False
-        new_u = []
-
-        # We process each order. For orders that might have merges, we check.
-        # For others, we keep.
-        processed_mask = torch.zeros_like(u, dtype=torch.bool)
-
-        for o in torch.flip(unique_orders, [0]):
-            if o == 0:
-                continue
-
-            mask = (orders == o) & (~processed_mask)
-            u_o = u[mask]
-            if u_o.numel() < 4:
-                continue
-
-            pix_o = u_o - 4 * (4**o)
-
-            i = 0
-            while i <= u_o.numel() - 4:
-                p0 = int(pix_o[i].item())
-                if (
-                    p0 % 4 == 0
-                    and int(pix_o[i + 1].item()) == p0 + 1
-                    and int(pix_o[i + 2].item()) == p0 + 2
-                    and int(pix_o[i + 3].item()) == p0 + 3
-                ):
-                    parent_uniq = 4 * (4 ** (o - 1)) + (p0 // 4)
-                    new_u.append(
-                        torch.tensor([parent_uniq], device=u.device, dtype=torch.int64)
-                    )
-                    # Mark these 4 as processed
-                    # We need to find their original indices in u
-                    # But since we are rebuilding, we can just skip them in new_u later.
-                    i += 4
-                    merged_any = True
-                else:
-                    new_u.append(u_o[i : i + 1])
-                    i += 1
-            if i < u_o.numel():
-                new_u.append(u_o[i:])
-
-            processed_mask |= mask
-
-        # Add any pixels from orders we didn't process merge for
-        new_u.append(u[~processed_mask])
-
-        if not merged_any:
-            break
-
-        u = torch.unique(torch.cat(new_u))
-
-    # 3. Handle overlaps: if parent and child are both present, remove child.
-    # A simple way: convert all to max_order ranges, merge ranges, convert back.
-    # This is robust and already implemented via _from_ranges.
-    int(
-        torch.log2(
-            torch.div(
-                u.max() if u.numel() > 0 else torch.tensor(4), 4, rounding_mode="floor"
-            ).to(torch.float64)
-        ).item()
-        // 2
-    )
-    # Actually, simpler:
-    # return MOC._from_ranges(MOC(u)._to_ranges(max_o), max_o).uniq
-    # Wait, avoid recursion.
-
-    return u
+    u = torch.unique(torch.as_tensor(uniq, dtype=torch.int64))
+    max_order = _max_order_from_uniq(u)
+    ranges = _uniq_to_ranges(u, max_order)
+    return _ranges_to_uniq(ranges, max_order)
 
 
 class MOC:
@@ -287,62 +267,37 @@ class MOC:
         return MOC._from_ranges(new_ranges, max_o)
 
     def _to_ranges(self, max_order: int) -> list[tuple[int, int]]:
-        nsides, pix_nested = uniq2nest(self.uniq)
-        ranges = []
-        for ns, p in zip(nsides, pix_nested):
-            o = int(torch.log2(ns.to(torch.float64)).item())
-            shift = 2 * (max_order - o)
-            start = p << shift
-            end = (p + 1) << shift
-            ranges.append((start.item(), end.item()))
-        ranges.sort()
-        return ranges
+        return _uniq_to_ranges(self.uniq, max_order)
 
     @classmethod
     def _from_ranges(cls, ranges: list[tuple[int, int]], max_order: int) -> "MOC":
         """Convert ranges back to UNIQ pixels using greedy filling."""
-        uniqs = []
-        for start, end in ranges:
-            curr = start
-            while curr < end:
-                # Find largest k such that 4^k <= (end - curr) and curr % 4^k == 0
-                k = 0
-                while (
-                    curr + (4 ** (k + 1)) <= end
-                    and curr % (4 ** (k + 1)) == 0
-                    and k < max_order
-                ):
-                    k += 1
+        return cls(_ranges_to_uniq(ranges, max_order))
 
-                order = max_order - k
-                uniqs.append(nest2uniq(1 << order, curr >> (2 * k)))
-                curr += 4**k
-        return cls(torch.tensor(uniqs, dtype=torch.int64))
+    def _flat_pixels(self, nside: int) -> Tensor:
+        max_o = int(math.log2(nside))
+        ranges = self._to_ranges(max_o)
+        if not ranges:
+            return torch.empty((0,), dtype=torch.int64)
+        chunks = [
+            torch.arange(start, end, dtype=torch.int64, device=self.uniq.device)
+            for start, end in ranges
+        ]
+        return torch.cat(chunks)
 
     def to_sparse_map(self, nside: int, sentinel: float = 0.0) -> HealSparseMap:
         """Realize MOC as a HealSparseMap at fixed resolution."""
-        # This belongs in moc.py but returns HealSparseMap
-        max_o = int(math.log2(nside))
-        ranges = self._to_ranges(max_o)
-
-        all_pix = []
-        for s, e in ranges:
-            all_pix.append(torch.arange(s, e, dtype=torch.int64))
-
-        if not all_pix:
+        pix = self._flat_pixels(nside)
+        if pix.numel() == 0:
             return HealSparseMap.make_empty(nside // 8, nside, torch.float32, sentinel)
-
-        pix = torch.cat(all_pix)
         return HealSparseMap.from_pixels(pix, nside, nside // 8, sentinel=sentinel)
 
     def flatten(self, nside: int) -> Tensor:
         """Project MOC to a dense HEALPix mask at fixed resolution."""
-        # This is essentially a helper for SparseMap conversion.
         mask = torch.zeros(12 * nside**2, dtype=torch.bool)
-        max_o = int(math.log2(nside))
-        ranges = self._to_ranges(max_o)
-        for s, e in ranges:
-            mask[s:e] = True
+        pix = self._flat_pixels(nside)
+        if pix.numel() > 0:
+            mask[pix] = True
         return mask
 
     @classmethod
@@ -498,22 +453,74 @@ class MOC:
         Return the boundaries of the MOC as a list of vertex loops.
         Each loop is a Tensor of shape [N, 2] (lon, lat) in degrees.
         """
-        # Very simplified boundary extraction for proof of concept.
-        # Efficient boundary extraction for HEALPix/MOC is complex.
-        # For Phase 4, we provide a placeholder or a very basic version.
-        # A real implementation would trace edges of the union of pixels.
-        # Here we just return the corners of the largest pixels as a "grid boundary".
-        # TODO: Implement full edge tracing.
-        all_loops = []
-        nsides, pix_nested = uniq2nest(self.uniq)
-        for ns, p in zip(nsides, pix_nested):
-            # Get corners of this pixel
-            corners = _healpix.boundaries(
-                int(ns.item()), int(p.item()), nest=True, lonlat=True
-            )
-            # corners is (2, 4) -> lon, lat
-            all_loops.append(torch.from_numpy(corners).transpose(0, 1))
-        return all_loops
+        if self.uniq.numel() == 0:
+            return []
+
+        nside = 1 << self.max_order
+        pix = self._flat_pixels(nside)
+        if pix.numel() == 0:
+            return []
+
+        corners_xyz = _healpix.boundaries(nside, pix, step=1, nest=True).permute(0, 2, 1)
+        quant_scale = 1.0e12
+
+        def _key(v: Tensor) -> tuple[int, int, int]:
+            vals = torch.round(v.to(torch.float64).cpu() * quant_scale).to(torch.int64)
+            return int(vals[0].item()), int(vals[1].item()), int(vals[2].item())
+
+        vertex_xyz: dict[tuple[int, int, int], Tensor] = {}
+        undirected_edges: dict[
+            tuple[tuple[int, int, int], tuple[int, int, int]],
+            tuple[tuple[int, int, int], tuple[int, int, int]],
+        ] = {}
+        for poly in corners_xyz:
+            keys = [_key(poly[i]) for i in range(poly.shape[0])]
+            for key, xyz in zip(keys, poly, strict=False):
+                vertex_xyz[key] = xyz.to(torch.float64).cpu()
+            for i in range(poly.shape[0]):
+                a = keys[i]
+                b = keys[(i + 1) % poly.shape[0]]
+                edge_key = (a, b) if a <= b else (b, a)
+                if edge_key in undirected_edges:
+                    del undirected_edges[edge_key]
+                else:
+                    undirected_edges[edge_key] = (a, b)
+
+        if not undirected_edges:
+            return []
+
+        adjacency: dict[tuple[int, int, int], list[tuple[int, int, int]]] = {}
+        for a, b in undirected_edges.values():
+            adjacency.setdefault(a, []).append(b)
+            adjacency.setdefault(b, []).append(a)
+
+        loops: list[Tensor] = []
+        unused = {tuple(sorted((a, b))) for a, b in undirected_edges.values()}
+        while unused:
+            start_edge = next(iter(unused))
+            start = start_edge[0]
+            current = start_edge[1]
+            previous = start
+            path = [start, current]
+            unused.remove(start_edge)
+
+            while current != start:
+                neighbors = adjacency[current]
+                next_vertex = None
+                for candidate in neighbors:
+                    if candidate != previous and tuple(sorted((current, candidate))) in unused:
+                        next_vertex = candidate
+                        break
+                if next_vertex is None:
+                    break
+                unused.remove(tuple(sorted((current, next_vertex))))
+                previous, current = current, next_vertex
+                path.append(current)
+
+            xyz = torch.stack([vertex_xyz[key] for key in path], dim=0)
+            lon, lat = _healpix.xyz_to_lonlat(xyz[:, 0], xyz[:, 1], xyz[:, 2])
+            loops.append(torch.stack((lon, lat), dim=-1).to(torch.float64))
+        return loops
 
     def to_ascii(self) -> str:
         """Return IVOA ASCII representation of the MOC."""
@@ -560,8 +567,6 @@ class MOC:
 
     def to_json(self) -> str:
         """Return IVOA JSON representation of the MOC."""
-        import json
-
         if self.uniq.numel() == 0:
             return "{}"
 
@@ -576,6 +581,31 @@ class MOC:
             data[str(int(o.item()))] = o_pix.tolist()
 
         return json.dumps(data)
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "MOC":
+        """Create a MOC from an IVOA JSON string."""
+        if not json_str.strip():
+            return cls(torch.empty((0,), dtype=torch.int64))
+
+        data = json.loads(json_str)
+        if not data:
+            return cls(torch.empty((0,), dtype=torch.int64))
+        if not isinstance(data, dict):
+            raise ValueError("MOC JSON payload must be a dict of order -> pixels")
+
+        uniqs: list[Tensor] = []
+        for order_str, pixels in data.items():
+            order = int(order_str)
+            nside = 1 << order
+            pix_t = torch.as_tensor(pixels, dtype=torch.int64)
+            if pix_t.numel() == 0:
+                continue
+            uniqs.append(nest2uniq(nside, pix_t.reshape(-1)))
+
+        if not uniqs:
+            return cls(torch.empty((0,), dtype=torch.int64))
+        return cls(torch.cat(uniqs))
 
 
 __all__ = ["MOC", "nest2uniq", "uniq2nest"]
