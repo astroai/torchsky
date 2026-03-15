@@ -35,7 +35,12 @@ struct TpvAffineSeedParams {
     double a12 = 0.0;
     double a21 = 0.0;
     double a22 = 0.0;
+    double inv11 = 0.0;
+    double inv12 = 0.0;
+    double inv21 = 0.0;
+    double inv22 = 0.0;
     bool valid = false;
+    bool affine_only = true;
 };
 
 using TpvPowCache = std::array<torch::Tensor, 8>;
@@ -65,10 +70,15 @@ TpvAffineSeedParams tpv_extract_affine_seed_params(
         const int64_t py = idx1_acc[k][1];
         const int64_t pr = idx1_acc[k][2];
         const double coeff = c1_acc[k];
-        if (pr != 0) continue;
+        if (coeff == 0.0) continue;
+        if (pr != 0) {
+            p.affine_only = false;
+            continue;
+        }
         if (px == 0 && py == 0) p.b1 += coeff;
         else if (px == 1 && py == 0) p.a11 += coeff;
         else if (px == 0 && py == 1) p.a12 += coeff;
+        else p.affine_only = false;
     }
 
     // Axis-2 TPV convention is swapped in evaluation: idx2 (px, py) corresponds to
@@ -81,14 +91,25 @@ TpvAffineSeedParams tpv_extract_affine_seed_params(
         const int64_t py = idx2_acc[k][1];
         const int64_t pr = idx2_acc[k][2];
         const double coeff = c2_acc[k];
-        if (pr != 0) continue;
+        if (coeff == 0.0) continue;
+        if (pr != 0) {
+            p.affine_only = false;
+            continue;
+        }
         if (px == 0 && py == 0) p.b2 += coeff;
         else if (px == 0 && py == 1) p.a21 += coeff;  // u coefficient
         else if (px == 1 && py == 0) p.a22 += coeff;  // v coefficient
+        else p.affine_only = false;
     }
 
     const double det = p.a11 * p.a22 - p.a12 * p.a21;
     p.valid = std::isfinite(det) && std::abs(det) > 1e-18;
+    if (p.valid) {
+        p.inv11 = p.a22 / det;
+        p.inv12 = -p.a12 / det;
+        p.inv21 = -p.a21 / det;
+        p.inv22 = p.a11 / det;
+    }
     return p;
 }
 
@@ -250,14 +271,14 @@ inline std::pair<double, double> invert_tpv_scalar_with_seed(
     if (n1 == 0 && n2 == 0) return {xi_target, eta_target};
     double u, v;
     if (p.valid) {
-        double det = p.a11 * p.a22 - p.a12 * p.a21;
-        double inv11 = p.a22 / det, inv12 = -p.a12 / det;
-        double inv21 = -p.a21 / det, inv22 = p.a11 / det;
         double dx = xi_target - p.b1, dy = eta_target - p.b2;
-        u = dx * inv11 + dy * inv12;
-        v = dx * inv21 + dy * inv22;
+        u = dx * p.inv11 + dy * p.inv12;
+        v = dx * p.inv21 + dy * p.inv22;
     } else {
         u = xi_target; v = eta_target;
+    }
+    if (p.valid && p.affine_only) {
+        return {u, v};
     }
 
     double tol2 = 1e-22;
