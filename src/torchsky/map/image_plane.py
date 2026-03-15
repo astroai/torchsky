@@ -559,13 +559,13 @@ def _resample_weighted_to_target(
         )
         weighted_weight = source_weight
 
-    def _sample_on_world_grid(ra_deg: Tensor, dec_deg: Tensor) -> tuple[Tensor, Tensor]:
-        flat_ra = ra_deg.reshape(-1)
-        flat_dec = dec_deg.reshape(-1)
-        x_src, y_src = source_wcs.world_to_pixel(flat_ra, flat_dec)
-        x_src = x_src.reshape_as(ra_deg)
-        y_src = y_src.reshape_as(dec_deg)
-
+    def _sample_on_source_grid(
+        x_src: Tensor,
+        y_src: Tensor,
+        *,
+        flat_ra: Tensor,
+        flat_dec: Tensor,
+    ) -> tuple[Tensor, Tensor]:
         x_norm = (2.0 * x_src / max(w_src - 1, 1)) - 1.0
         y_norm = (2.0 * y_src / max(h_src - 1, 1)) - 1.0
         grid = torch.stack([x_norm, y_norm], dim=-1).to(dtype=torch.float32)
@@ -634,6 +634,19 @@ def _resample_weighted_to_target(
         )
         return sampled_numer, sampled_weight
 
+    def _sample_on_world_grid(ra_deg: Tensor, dec_deg: Tensor) -> tuple[Tensor, Tensor]:
+        flat_ra = ra_deg.reshape(-1)
+        flat_dec = dec_deg.reshape(-1)
+        x_src, y_src = source_wcs.world_to_pixel(flat_ra, flat_dec)
+        x_src = x_src.reshape_as(ra_deg)
+        y_src = y_src.reshape_as(dec_deg)
+        return _sample_on_source_grid(
+            x_src,
+            y_src,
+            flat_ra=flat_ra,
+            flat_dec=flat_dec,
+        )
+
     if not _requires_target_pixel_quadrature(source_wcs):
         return _sample_on_world_grid(target.ra_deg, target.dec_deg)
 
@@ -646,8 +659,22 @@ def _resample_weighted_to_target(
             target.shape,
             device=target.ra_deg.device,
         )
-    for sub_ra, sub_dec in quadrature_world_grids:
-        sub_numer, sub_weight = _sample_on_world_grid(sub_ra, sub_dec)
+    flat_ra = torch.cat([sub_ra.reshape(-1) for sub_ra, _ in quadrature_world_grids], dim=0)
+    flat_dec = torch.cat([sub_dec.reshape(-1) for _, sub_dec in quadrature_world_grids], dim=0)
+    x_src_all, y_src_all = source_wcs.world_to_pixel(flat_ra, flat_dec)
+    n_pix = target.ra_deg.numel()
+    for idx in range(len(quadrature_world_grids)):
+        start = idx * n_pix
+        end = start + n_pix
+        sub_ra, sub_dec = quadrature_world_grids[idx]
+        sub_x = x_src_all[start:end].reshape_as(sub_ra)
+        sub_y = y_src_all[start:end].reshape_as(sub_dec)
+        sub_numer, sub_weight = _sample_on_source_grid(
+            sub_x,
+            sub_y,
+            flat_ra=flat_ra[start:end],
+            flat_dec=flat_dec[start:end],
+        )
         accum_numer = accum_numer + 0.25 * sub_numer
         accum_weight = accum_weight + 0.25 * sub_weight
     accum_numer = torch.where(

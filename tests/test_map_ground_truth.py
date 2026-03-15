@@ -272,6 +272,61 @@ def test_prepare_target_caches_quadrature_world_grids(tmp_path: Path) -> None:
         assert tuple(dec.shape) == target.shape
 
 
+def test_distorted_quadrature_batches_world_to_pixel_calls(tmp_path: Path) -> None:
+    observations, target_header, _truth = _truth_bench.make_case(
+        tmp_path,
+        case="tan_random10_large_union_rect_weighted_masked",
+        size=256,
+        width=256,
+        height=192,
+        seed=1234,
+    )
+    tpv_obs = next(
+        item for item in observations if "TPV" in str(item.header.get("CTYPE1", ""))
+    )
+    image, _header = _truth_bench.image_plane_mod.read(
+        tpv_obs.observation.path,
+        hdu=tpv_obs.observation.hdu,
+        return_header=True,
+    )
+    image = _truth_bench.image_plane_mod._validate_image_plane(image).to(dtype=torch.float32)
+    source_wcs = _truth_bench.WCS(tpv_obs.header)
+    prepared_target = _truth_bench.image_plane_mod._prepare_target(
+        header=target_header,
+        target_wcs=_truth_bench.WCS(target_header),
+        target_shape=(int(target_header["NAXIS2"]), int(target_header["NAXIS1"])),
+        device=torch.device("cpu"),
+    )
+    source_weight = _truth_bench.image_plane_mod._load_observation_weight_map(
+        tpv_obs.observation,
+        image,
+        device=torch.device("cpu"),
+    )
+
+    call_count = 0
+    orig_world_to_pixel = source_wcs.world_to_pixel
+
+    def _counted_world_to_pixel(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return orig_world_to_pixel(*args, **kwargs)
+
+    source_wcs.world_to_pixel = _counted_world_to_pixel
+    try:
+        _truth_bench.image_plane_mod._resample_weighted_to_target(
+            image,
+            source_weight,
+            source_wcs,
+            prepared_target,
+            resampling_kernel="bilinear",
+            value_semantics="surface_brightness",
+        )
+    finally:
+        source_wcs.world_to_pixel = orig_world_to_pixel
+
+    assert call_count == 1
+
+
 def test_random10_rect_tpv_headers_are_locally_invertible(tmp_path: Path) -> None:
     observations, _target_header, _truth = _truth_bench.make_case(
         tmp_path,
