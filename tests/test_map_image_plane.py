@@ -713,6 +713,48 @@ def test_coadd_image_plane_supports_tpv_mef_low_overlap(tmp_path) -> None:
     assert len(result.observation_mocs) == 2
 
 
+def test_tpv_source_cap_radius_covers_in_bounds_points(tmp_path) -> None:
+    mef_path = _write_synthetic_tpv_mef(tmp_path, size=48)
+    image, header = torchsky.read(str(mef_path), hdu=4, return_header=True)
+    image = image.to(dtype=torch.float32)
+    source_wcs = torchsky.WCS(dict(header))
+    target_header = _simple_header()
+    target_header["NAXIS1"] = 48
+    target_header["NAXIS2"] = 48
+    target_header["CRPIX1"] = 24.0
+    target_header["CRPIX2"] = 24.0
+    target_header["CRVAL1"] = float(header["CRVAL1"])
+    target_header["CRVAL2"] = float(header["CRVAL2"])
+    prepared = image_plane_mod._prepare_target(
+        header=target_header,
+        target_wcs=torchsky.WCS(target_header),
+        target_shape=(48, 48),
+        device=image.device,
+        include_pixel_area=False,
+        include_quadrature=False,
+    )
+    flat_ra = prepared.ra_deg.reshape(-1)
+    flat_dec = prepared.dec_deg.reshape(-1)
+    x_src, y_src = source_wcs.world_to_pixel(flat_ra, flat_dec)
+    in_bounds = (
+        (x_src >= 0.0)
+        & (x_src <= (image.shape[1] - 1))
+        & (y_src >= 0.0)
+        & (y_src <= (image.shape[0] - 1))
+    )
+    source_cap = image_plane_mod._tpv_source_cap_radius_deg(
+        source_wcs,
+        tuple(int(v) for v in image.shape),
+    )
+    center_sep = image_plane_mod._angular_separation_deg(
+        float(source_wcs.alpha0),
+        float(source_wcs.delta0),
+        prepared.center_ra_deg,
+        prepared.center_dec_deg,
+    )
+    assert center_sep <= source_cap + prepared.cap_radius_deg
+
+
 def test_coadd_image_plane_multiband_stacks_sorted_wavelengths(tmp_path) -> None:
     header = _simple_header()
     path_g1 = tmp_path / "g1.fits"

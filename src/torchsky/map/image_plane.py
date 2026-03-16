@@ -154,6 +154,9 @@ class _PreparedImagePlaneTarget:
     shape: tuple[int, int]
     ra_deg: Tensor
     dec_deg: Tensor
+    center_ra_deg: float
+    center_dec_deg: float
+    cap_radius_deg: float
     pixel_area_sr: Tensor | None = None
     quadrature_world_grids: tuple[tuple[Tensor, Tensor], ...] | None = None
 
@@ -527,6 +530,106 @@ def _requires_target_pixel_quadrature(
     )
 
 
+def _tpv_affine_envelope(
+    source_wcs: WCS,
+    image_shape: tuple[int, int],
+) -> tuple[float, float, float, float]:
+    tpv = source_wcs.tpv
+    if tpv is None:
+        raise RuntimeError("TPV envelope requires a TPV WCS")
+    h_src, w_src = int(image_shape[0]), int(image_shape[1])
+    x_corners = torch.tensor([0.0, float(w_src - 1), 0.0, float(w_src - 1)], dtype=torch.float64)
+    y_corners = torch.tensor([0.0, 0.0, float(h_src - 1), float(h_src - 1)], dtype=torch.float64)
+    rel_x = x_corners + 1.0 - source_wcs._crpix0
+    rel_y = y_corners + 1.0 - source_wcs._crpix1
+    u_corners = source_wcs._cd00 * rel_x + source_wcs._cd01 * rel_y
+    v_corners = source_wcs._cd10 * rel_x + source_wcs._cd11 * rel_y
+    u_abs = float(torch.max(torch.abs(u_corners)).item())
+    v_abs = float(torch.max(torch.abs(v_corners)).item())
+    r_abs = math.sqrt(u_abs * u_abs + v_abs * v_abs)
+
+    b1 = b2 = a11 = a12 = a21 = a22 = 0.0
+    bound_xi = 0.0
+    for px, py, pr, coeff in tpv.terms1:
+        if coeff == 0.0:
+            continue
+        if pr == 0 and px == 0 and py == 0:
+            b1 += coeff
+        elif pr == 0 and px == 1 and py == 0:
+            a11 += coeff
+        elif pr == 0 and px == 0 and py == 1:
+            a12 += coeff
+        else:
+            bound_xi += abs(coeff) * (u_abs**px) * (v_abs**py) * (r_abs**pr)
+
+    bound_eta = 0.0
+    for px, py, pr, coeff in tpv.terms2:
+        if coeff == 0.0:
+            continue
+        if pr == 0 and px == 0 and py == 0:
+            b2 += coeff
+        elif pr == 0 and px == 0 and py == 1:
+            a21 += coeff
+        elif pr == 0 and px == 1 and py == 0:
+            a22 += coeff
+        else:
+            bound_eta += abs(coeff) * (v_abs**px) * (u_abs**py) * (r_abs**pr)
+
+    xi_aff = b1 + a11 * u_corners + a12 * v_corners
+    eta_aff = b2 + a21 * u_corners + a22 * v_corners
+    return (
+        float(torch.min(xi_aff).item()) - bound_xi,
+        float(torch.max(xi_aff).item()) + bound_xi,
+        float(torch.min(eta_aff).item()) - bound_eta,
+        float(torch.max(eta_aff).item()) + bound_eta,
+    )
+
+
+def _tpv_candidate_mask(
+    source_wcs: WCS,
+    xi: Tensor,
+    eta: Tensor,
+    image_shape: tuple[int, int],
+) -> Tensor:
+    xi_min, xi_max, eta_min, eta_max = _tpv_affine_envelope(source_wcs, image_shape)
+def _spherical_cap_radius_from_world_grid(
+    ra_deg: Tensor,
+    dec_deg: Tensor,
+    *,
+    center_ra_deg: float,
+    center_dec_deg: float,
+) -> float:
+    dra = _wrapped_delta_ra_deg(ra_deg, torch.tensor(center_ra_deg, dtype=ra_deg.dtype, device=ra_deg.device))
+    dec0 = torch.tensor(center_dec_deg, dtype=dec_deg.dtype, device=dec_deg.device)
+    cos_dec = torch.cos(dec_deg * (math.pi / 180.0))
+    chord = torch.sqrt((dra * cos_dec) ** 2 + (dec_deg - dec0) ** 2)
+    return float(torch.max(chord).item())
+
+
+def _tpv_source_cap_radius_deg(source_wcs: WCS, image_shape: tuple[int, int]) -> float:
+    xi_min, xi_max, eta_min, eta_max = _tpv_affine_envelope(source_wcs, image_shape)
+    r_max = math.sqrt(max(abs(xi_min), abs(xi_max)) ** 2 + max(abs(eta_min), abs(eta_max)) ** 2)
+    return math.degrees(math.atan(r_max * (math.pi / 180.0)))
+
+
+def _angular_separation_deg(
+    ra0_deg: float,
+    dec0_deg: float,
+    ra1_deg: float,
+    dec1_deg: float,
+) -> float:
+    ra0 = math.radians(ra0_deg)
+    dec0 = math.radians(dec0_deg)
+    ra1 = math.radians(ra1_deg)
+    dec1 = math.radians(dec1_deg)
+    cos_sep = (
+        math.sin(dec0) * math.sin(dec1)
+        + math.cos(dec0) * math.cos(dec1) * math.cos(ra0 - ra1)
+    )
+    cos_sep = min(1.0, max(-1.0, cos_sep))
+    return math.degrees(math.acos(cos_sep))
+
+
 def _source_pixel_diameter_arcsec(source_wcs: WCS, shape: tuple[int, int], *, device: torch.device) -> float:
     area_sr = _pixel_area_sr_map(source_wcs, shape, device=device)
     median_area_sr = float(torch.median(area_sr).item())
@@ -756,6 +859,20 @@ def _resample_weighted_to_target(
     def _sample_on_world_grid(ra_deg: Tensor, dec_deg: Tensor) -> tuple[Tensor, Tensor]:
         flat_ra = ra_deg.reshape(-1)
         flat_dec = dec_deg.reshape(-1)
+        if bool(getattr(source_wcs, "_is_tpv", False)) and getattr(source_wcs, "sip", None) is None:
+            source_cap_radius_deg = _tpv_source_cap_radius_deg(
+                source_wcs,
+                (h_src, w_src),
+            )
+            center_sep_deg = _angular_separation_deg(
+                float(source_wcs.alpha0),
+                float(source_wcs.delta0),
+                target.center_ra_deg,
+                target.center_dec_deg,
+            )
+            if center_sep_deg > source_cap_radius_deg + target.cap_radius_deg:
+                zeros = torch.zeros_like(ra_deg, dtype=torch.float32)
+                return zeros, zeros
         x_src, y_src = source_wcs.world_to_pixel(flat_ra, flat_dec)
         x_src = x_src.reshape_as(ra_deg)
         y_src = y_src.reshape_as(dec_deg)
@@ -844,12 +961,22 @@ def _prepare_target(
         target_shape[1],
         device=device,
     )
+    center_ra_deg = float(target_wcs.alpha0)
+    center_dec_deg = float(target_wcs.delta0)
     return _PreparedImagePlaneTarget(
         header=header,
         wcs=target_wcs,
         shape=target_shape,
         ra_deg=ra_deg,
         dec_deg=dec_deg,
+        center_ra_deg=center_ra_deg,
+        center_dec_deg=center_dec_deg,
+        cap_radius_deg=_spherical_cap_radius_from_world_grid(
+            ra_deg,
+            dec_deg,
+            center_ra_deg=center_ra_deg,
+            center_dec_deg=center_dec_deg,
+        ),
         pixel_area_sr=(
             _pixel_area_sr_map(target_wcs, target_shape, device=device)
             if include_pixel_area
