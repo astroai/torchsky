@@ -122,6 +122,12 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument(
+        "--torchsky-runs",
+        type=int,
+        default=3,
+        help="Median timing runs for torchsky rows; kept separate so heavy competitive cases have a stable torchsky baseline.",
+    )
+    parser.add_argument(
         "--methods",
         default=",".join(DEFAULT_METHODS),
         help="Comma-separated library[:variant] selection list",
@@ -170,7 +176,7 @@ def main() -> int:
                         width=args.width,
                         height=args.height,
                         seed=args.seed,
-                        runs=args.runs,
+                        runs=max(args.runs, args.torchsky_runs),
                         resampling_kernel=variant or "bilinear",
                     ),
                     library=library,

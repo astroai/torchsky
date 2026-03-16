@@ -1102,6 +1102,7 @@ def _project_observation_to_target(
     *,
     image: Tensor | None = None,
     header_dict_obs: dict | None = None,
+    source_wcs: WCS | None = None,
     prepared_target: _PreparedImagePlaneTarget | None,
     target_header: dict,
     target_shape: tuple[int, int],
@@ -1152,7 +1153,7 @@ def _project_observation_to_target(
         sampled_numer, sampled_weight = _resample_weighted_to_target(
             image,
             source_weight,
-            WCS(header_dict_obs),
+            source_wcs if source_wcs is not None else WCS(header_dict_obs),
             prepared_target,
             resampling_kernel=resampling_kernel,
             value_semantics=value_semantics,
@@ -1342,10 +1343,17 @@ def coadd_image_plane(
             or header_dict_obs != header_dict
             or tuple(int(v) for v in image.shape) != target_shape
         )
+        source_wcs = None
+        if need_prepared_target and not (
+            _headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
+            and tuple(int(v) for v in image.shape) == target_shape
+        ):
+            source_wcs = WCS(header_dict_obs)
         sampled_numer, sampled_weight, overlap, moc = _project_observation_to_target(
             obs,
             image=image,
             header_dict_obs=header_dict_obs,
+            source_wcs=source_wcs,
             prepared_target=ensure_prepared_target() if need_prepared_target else None,
             target_header=header_dict,
             target_shape=target_shape,
@@ -1534,10 +1542,17 @@ def coadd_image_plane_cube(
             or header_dict_obs != header_dict
             or tuple(int(v) for v in image.shape) != target_shape
         )
+        source_wcs = None
+        if need_prepared_target and not (
+            _headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
+            and tuple(int(v) for v in image.shape) == target_shape
+        ):
+            source_wcs = WCS(header_dict_obs)
         sampled_numer, sampled_weight, overlap, moc = _project_observation_to_target(
             obs,
             image=image,
             header_dict_obs=header_dict_obs,
+            source_wcs=source_wcs,
             prepared_target=ensure_prepared_target() if need_prepared_target else None,
             target_header=header_dict,
             target_shape=target_shape,
