@@ -1584,7 +1584,10 @@ class WCS:
 
         # 3. Inverse TPV / Special distortions
         if self._is_tpv:
-            xi, eta = self.tpv.invert(xi, eta)
+            if self.tpv._affine_only:
+                xi, eta = self.tpv.invert_affine_exact(xi, eta)
+            else:
+                xi, eta = self.tpv.invert(xi, eta)
 
         # 4. Inverse Linear (CD matrix)
         rel_x = self._cdi00 * xi + self._cdi01 * eta

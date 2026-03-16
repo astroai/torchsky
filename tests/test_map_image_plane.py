@@ -348,6 +348,47 @@ def test_coadd_image_plane_passes_resampling_kernel_to_grid_sample(
     assert set(calls) == {kernel}
 
 
+@pytest.mark.parametrize("kernel", ["bilinear", "catmull_rom"])
+def test_sample_image_plane_batched_channels_matches_separate_sampling(kernel: str) -> None:
+    image = torch.arange(64, dtype=torch.float32).reshape(8, 8)
+    weight = 1.0 + torch.flip(image, dims=(0,)) / 64.0
+    support = torch.ones_like(image, dtype=torch.float32)
+    support[:, :2] = 0.0
+    x_src = torch.linspace(0.25, 6.75, 8, dtype=torch.float32).repeat(8, 1)
+    y_src = torch.linspace(0.1, 6.9, 8, dtype=torch.float32).unsqueeze(1).repeat(1, 8)
+    grid = torch.stack(
+        [
+            (2.0 * x_src / 7.0) - 1.0,
+            (2.0 * y_src / 7.0) - 1.0,
+        ],
+        dim=-1,
+    )
+    stacked = torch.stack([image, weight, support], dim=0)
+
+    combined = image_plane_mod._sample_image_plane_batched_channels(
+        stacked,
+        x_src=x_src,
+        y_src=y_src,
+        grid=grid,
+        kernel=kernel,
+    )
+    separate = torch.stack(
+        [
+            image_plane_mod._sample_image_plane_batched(
+                plane,
+                x_src=x_src,
+                y_src=y_src,
+                grid=grid,
+                kernel=kernel,
+            )
+            for plane in (image, weight, support)
+        ],
+        dim=0,
+    )
+
+    torch.testing.assert_close(combined, separate, atol=1e-5, rtol=1e-5)
+
+
 @pytest.mark.parametrize(
     "kernel",
     ["lanczos3", "lanczos5", "mitchell_netravali", "catmull_rom"],

@@ -53,6 +53,7 @@ class TPV:
             self._affine_seed_inv11,
             self._has_affine_seed_inverse,
             self._affine_seed_is_identity,
+            self._affine_only,
         ) = self._build_affine_seed_params(self.terms1, self.terms2)
 
         self._invert_trace_enabled = False
@@ -122,8 +123,12 @@ class TPV:
     @staticmethod
     def _build_affine_seed_params(terms1, terms2):
         b1, b2, a11, a12, a21, a22 = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        affine_only = True
         for px, py, pr, c in terms1:
+            if c == 0.0:
+                continue
             if pr != 0:
+                affine_only = False
                 continue
             if px == 0 and py == 0:
                 b1 += c
@@ -131,8 +136,13 @@ class TPV:
                 a11 += c
             elif px == 0 and py == 1:
                 a12 += c
+            else:
+                affine_only = False
         for px, py, pr, c in terms2:
+            if c == 0.0:
+                continue
             if pr != 0:
+                affine_only = False
                 continue
             if px == 0 and py == 0:
                 b2 += c
@@ -140,9 +150,11 @@ class TPV:
                 a22 += c
             elif px == 0 and py == 1:
                 a21 += c
+            else:
+                affine_only = False
         det = a11 * a22 - a12 * a21
         if abs(det) < 1e-15:
-            return b1, b2, 1.0, 0.0, 0.0, 1.0, False, True
+            return b1, b2, 1.0, 0.0, 0.0, 1.0, False, True, affine_only
         is_id = (
             abs(b1) < 1e-15
             and abs(b2) < 1e-15
@@ -151,7 +163,17 @@ class TPV:
             and abs(a21) < 1e-15
             and abs(a22 - 1.0) < 1e-15
         )
-        return b1, b2, a22 / det, -a12 / det, -a21 / det, a11 / det, True, is_id
+        return (
+            b1,
+            b2,
+            a22 / det,
+            -a12 / det,
+            -a21 / det,
+            a11 / det,
+            True,
+            is_id,
+            affine_only,
+        )
 
     def to(self, device: torch.device) -> "TPV":
         self.idx1, self.idx2 = self.idx1.to(device), self.idx2.to(device)
@@ -392,6 +414,25 @@ class TPV:
         xi0, eta0 = xi_t - self._affine_seed_b1, eta_t - self._affine_seed_b2
         u = self._affine_seed_inv00 * xi0 + self._affine_seed_inv01 * eta0
         v = self._affine_seed_inv10 * xi0 + self._affine_seed_inv11 * eta0
+        return u, v
+
+    def invert_affine_exact(self, xi_t: Tensor, eta_t: Tensor) -> Tuple[Tensor, Tensor]:
+        if not self._affine_only:
+            raise RuntimeError("invert_affine_exact requires affine-only TPV")
+        u, v = self._initial_guess_affine(xi_t, eta_t)
+        if self._invert_trace_enabled:
+            n_points = int(xi_t.numel())
+            self._last_invert_trace = {
+                "n_points": n_points,
+                "converged": n_points,
+                "final_active": 0,
+                "active_counts": [],
+                "active_counts_sum": 0,
+                "iterations": 0,
+                "iterations_max": 0,
+                "mean_point_iterations": 0.0,
+                "backend": "affine_exact",
+            }
         return u, v
 
     def _can_use_cpp_invert(self, xi_t, eta_t):

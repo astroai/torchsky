@@ -327,9 +327,12 @@ def _custom_separable_sample(
     y_src: Tensor,
     kernel: MapResamplingKernel,
 ) -> Tensor:
+    if image.ndim not in {2, 3}:
+        raise ValueError("custom separable sampling expects a 2D image or [C, H, W] tensor")
+    work = image if image.ndim == 3 else image.unsqueeze(0)
     support = _kernel_support(kernel)
-    x_src = x_src.to(dtype=image.dtype)
-    y_src = y_src.to(dtype=image.dtype)
+    x_src = x_src.to(dtype=work.dtype)
+    y_src = y_src.to(dtype=work.dtype)
     x0 = torch.floor(x_src).to(dtype=torch.int64)
     y0 = torch.floor(y_src).to(dtype=torch.int64)
     offsets = torch.arange(
@@ -340,24 +343,31 @@ def _custom_separable_sample(
     )
     xs = x0.unsqueeze(-1) + offsets.view(1, 1, -1)
     ys = y0.unsqueeze(-1) + offsets.view(1, 1, -1)
-    dx = x_src.unsqueeze(-1) - xs.to(dtype=image.dtype)
-    dy = y_src.unsqueeze(-1) - ys.to(dtype=image.dtype)
+    dx = x_src.unsqueeze(-1) - xs.to(dtype=work.dtype)
+    dy = y_src.unsqueeze(-1) - ys.to(dtype=work.dtype)
     wx = _kernel_weight(kernel, dx)
     wy = _kernel_weight(kernel, dy)
 
-    h_src, w_src = image.shape
+    _, h_src, w_src = work.shape
     x_valid = (xs >= 0) & (xs < w_src)
     y_valid = (ys >= 0) & (ys < h_src)
     xs = xs.clamp(0, w_src - 1)
     ys = ys.clamp(0, h_src - 1)
-    sampled = image[ys.unsqueeze(-1), xs.unsqueeze(-2)]
+    sample_idx = ys.unsqueeze(-1) * w_src + xs.unsqueeze(-2)
+    sampled = work.reshape(work.shape[0], -1).index_select(1, sample_idx.reshape(-1)).reshape(
+        work.shape[0],
+        *x_src.shape,
+        sample_idx.shape[-2],
+        sample_idx.shape[-1],
+    )
     weights = (
         wy.unsqueeze(-1)
         * wx.unsqueeze(-2)
-        * y_valid.unsqueeze(-1).to(dtype=image.dtype)
-        * x_valid.unsqueeze(-2).to(dtype=image.dtype)
+        * y_valid.unsqueeze(-1).to(dtype=work.dtype)
+        * x_valid.unsqueeze(-2).to(dtype=work.dtype)
     )
-    return torch.sum(sampled * weights, dim=(-1, -2))
+    out = torch.sum(sampled * weights.unsqueeze(0), dim=(-1, -2))
+    return out if image.ndim == 3 else out.squeeze(0)
 
 
 def _sample_image_plane(
@@ -386,6 +396,32 @@ def _sample_image_plane(
         .squeeze(0)
         .squeeze(0)
     )
+
+
+def _sample_image_plane_channels(
+    image: Tensor,
+    *,
+    x_src: Tensor,
+    y_src: Tensor,
+    grid: Tensor,
+    kernel: MapResamplingKernel,
+) -> Tensor:
+    if image.ndim != 3:
+        raise ValueError("channel sampling expects [C, H, W] input")
+    if kernel in {"lanczos3", "lanczos5", "mitchell_netravali", "catmull_rom"}:
+        return _custom_separable_sample(
+            image,
+            x_src=x_src,
+            y_src=y_src,
+            kernel=kernel,
+        )
+    return F.grid_sample(
+        image.unsqueeze(0),
+        grid.unsqueeze(0),
+        mode=kernel,
+        padding_mode="zeros",
+        align_corners=True,
+    ).squeeze(0)
 
 
 def _sample_image_plane_batched(
@@ -428,6 +464,46 @@ def _sample_image_plane_batched(
         padding_mode="zeros",
         align_corners=True,
     ).squeeze(1)
+
+
+def _sample_image_plane_batched_channels(
+    image: Tensor,
+    *,
+    x_src: Tensor,
+    y_src: Tensor,
+    grid: Tensor,
+    kernel: MapResamplingKernel,
+) -> Tensor:
+    if image.ndim != 3:
+        raise ValueError("batched channel sampling expects [C, H, W] input")
+    if x_src.ndim == 2:
+        return _sample_image_plane_channels(
+            image,
+            x_src=x_src,
+            y_src=y_src,
+            grid=grid,
+            kernel=kernel,
+        )
+    if kernel in {"lanczos3", "lanczos5", "mitchell_netravali", "catmull_rom"}:
+        samples = [
+            _custom_separable_sample(
+                image,
+                x_src=x_src[idx],
+                y_src=y_src[idx],
+                kernel=kernel,
+            )
+            for idx in range(int(x_src.shape[0]))
+        ]
+        return torch.stack(samples, dim=0)
+    batch = int(grid.shape[0])
+    image_b = image.unsqueeze(0).expand(batch, *image.shape)
+    return F.grid_sample(
+        image_b,
+        grid.to(dtype=torch.float32),
+        mode=kernel,
+        padding_mode="zeros",
+        align_corners=True,
+    )
 
 
 def _requires_roundtrip_validity_check(source_wcs: WCS) -> bool:
@@ -606,6 +682,11 @@ def _resample_weighted_to_target(
             torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * source_weight
         )
         weighted_weight = source_weight
+    support_image = (
+        (source_weight > 0.0).to(dtype=torch.float32)
+        if value_semantics == "flux"
+        else None
+    )
 
     def _sample_on_source_grid(
         x_src: Tensor,
@@ -618,46 +699,26 @@ def _resample_weighted_to_target(
         y_norm = (2.0 * y_src / max(h_src - 1, 1)) - 1.0
         grid = torch.stack([x_norm, y_norm], dim=-1).to(dtype=torch.float32)
 
-        sampled_numer = _sample_image_plane_batched(
-            weighted_image,
+        stacked_planes = (
+            torch.stack([weighted_image, weighted_weight, support_image], dim=0)
+            if support_image is not None
+            else torch.stack([weighted_image, weighted_weight], dim=0)
+        )
+        sampled_planes = _sample_image_plane_batched_channels(
+            stacked_planes,
             x_src=x_src,
             y_src=y_src,
             grid=grid,
             kernel=resampling_kernel,
         )
-        sampled_weight = _sample_image_plane_batched(
-            weighted_weight,
-            x_src=x_src,
-            y_src=y_src,
-            grid=grid,
-            kernel=resampling_kernel,
-        )
-        sampled_support: Tensor | None = None
-        if value_semantics == "flux":
-            support_image = (source_weight > 0.0).to(dtype=torch.float32)
-            if x_src.ndim == 2:
-                sampled_support = (
-                    F.grid_sample(
-                        support_image.unsqueeze(0).unsqueeze(0),
-                        grid.unsqueeze(0),
-                        mode="bilinear",
-                        padding_mode="zeros",
-                        align_corners=True,
-                    )
-                    .squeeze(0)
-                    .squeeze(0)
-                )
-            else:
-                batch = int(grid.shape[0])
-                sampled_support = F.grid_sample(
-                    support_image.unsqueeze(0).unsqueeze(0).expand(
-                        batch, 1, support_image.shape[0], support_image.shape[1]
-                    ),
-                    grid,
-                    mode="bilinear",
-                    padding_mode="zeros",
-                    align_corners=True,
-                ).squeeze(1)
+        if x_src.ndim == 2:
+            sampled_numer = sampled_planes[0]
+            sampled_weight = sampled_planes[1]
+            sampled_support = sampled_planes[2] if support_image is not None else None
+        else:
+            sampled_numer = sampled_planes[:, 0]
+            sampled_weight = sampled_planes[:, 1]
+            sampled_support = sampled_planes[:, 2] if support_image is not None else None
         in_bounds = (
             (x_src >= 0.0)
             & (x_src <= (w_src - 1))

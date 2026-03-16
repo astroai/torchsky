@@ -203,6 +203,7 @@ def test_tpv_inverse_trace_records_iterations() -> None:
 def test_tpv_affine_seed_exact_for_affine_only_tpv() -> None:
     twcs = WCS(dict(_tpv_affine_linear_header()))
     assert twcs.tpv is not None
+    assert twcs.tpv._affine_only
     twcs.tpv.set_cpp_invert_max_points(0)
 
     x, y = _sample_pixels()
@@ -221,6 +222,12 @@ def test_tpv_affine_seed_exact_for_affine_only_tpv() -> None:
     # Pure affine TPV should solve in a single Newton evaluation from the affine seed.
     assert int(trace.get("iterations", trace.get("iterations_max", 0))) <= 1
     assert int(trace.get("final_active", 1)) == 0
+
+
+def test_tpv_nonlinear_header_is_not_affine_only() -> None:
+    twcs = WCS(dict(_tpv_header()))
+    assert twcs.tpv is not None
+    assert not twcs.tpv._affine_only
 
 
 def test_tpv_skips_cpp_direct_tan_projection_shortcuts() -> None:
