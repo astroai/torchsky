@@ -98,6 +98,10 @@ bench-map-ground-truth-competitive-large-union = "pixi run -e sphere-bench pytho
 bench-map-ground-truth-competitive-large-union-aggregate = "pixi run -e sphere-bench python benchmarks/aggregate_ground_truth_competitive_large_union.py --json-out benchmark_results/map_ground_truth_competitive_large_union_aggregate.json --markdown-out benchmark_results/map_ground_truth_competitive_large_union_aggregate.md"
 bench-map-ground-truth-competitive-large-union-rect-masked = "pixi run -e sphere-bench python benchmarks/run_ground_truth_competitive_large_union.py --case tan_random10_large_union_rect_weighted_masked --size 512 --width 512 --height 384 --json-out benchmark_results/map_ground_truth_competitive_large_union_rect_masked.json --markdown-out benchmark_results/map_ground_truth_competitive_large_union_rect_masked.md"
 bench-map-ground-truth-competitive-large-union-rect-masked-aggregate = "pixi run -e sphere-bench python benchmarks/aggregate_ground_truth_competitive_large_union.py --inputs benchmark_results/map_ground_truth_competitive_large_union_rect_masked.json benchmark_results/map_ground_truth_competitive_large_union_rect_masked_1024x768.json benchmark_results/map_ground_truth_competitive_large_union_rect_masked_2048x1536.json --json-out benchmark_results/map_ground_truth_competitive_large_union_rect_masked_aggregate.json --markdown-out benchmark_results/map_ground_truth_competitive_large_union_rect_masked_aggregate.md"
+bench-map-tan-sip-suite = "pixi run -e map-compat python benchmarks/bench_map_tan_sip_suite.py --profile quick --json-out benchmark_results/map_tan_sip_suite.json --markdown-out benchmark_results/map_tan_sip_suite.md"
+bench-map-tan-sip-suite-full = "pixi run -e map-compat python benchmarks/bench_map_tan_sip_suite.py --profile full --json-out benchmark_results/map_tan_sip_suite_full.json --markdown-out benchmark_results/map_tan_sip_suite_full.md"
+bench-map-projection-mosaic-suite = "pixi run -e map-compat python benchmarks/bench_map_projection_mosaic_suite.py --profile quick --json-out benchmark_results/map_projection_mosaic_suite.json --markdown-out benchmark_results/map_projection_mosaic_suite.md"
+bench-map-projection-mosaic-suite-full = "pixi run -e map-compat python benchmarks/bench_map_projection_mosaic_suite.py --profile full --json-out benchmark_results/map_projection_mosaic_suite_full.json --markdown-out benchmark_results/map_projection_mosaic_suite_full.md"
 bench-map-field-fit = "pixi run -e sphere-bench python benchmarks/bench_map_field_fit.py --json-out benchmark_results/map_field_fit.json"
 bench-wcs-tpv-inverse = "pixi run -e sphere-bench python benchmarks/bench_wcs_tpv_inverse.py --json-out benchmark_results/wcs_tpv_inverse.json --markdown-out benchmark_results/wcs_tpv_inverse.md"
 bench-map-ground-truth-gate = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_ground_truth.py --size 32 --runs 2 --cases tan_multires_noise --torchsky-kernels bilinear --json-out benchmark_results/map_ground_truth_gate.json --baseline-json benchmarks/baselines/map_ground_truth_smoke.json"
@@ -187,6 +191,7 @@ python = ">=3.13"
 [feature.test.dependencies]
 astropy = ">=5.0"
 fitsio = ">=1.2"
+pyarrow = ">=14.0"
 
 # Benchmark feature with additional dependencies
 [feature.bench.dependencies]
@@ -202,6 +207,7 @@ reproject = ">=0.14"
 [feature.sphere-bench.dependencies]
 healpy = ">=1.19.0,<2"
 hpgeom = ">=1.0"
+healsparse = ">=1.10"
 astropy-healpix = ">=1.0"
 spherical-geometry = ">=1.2"
 cython = ">=3.0"
@@ -223,6 +229,7 @@ automake = ">=1.16"
 libtool = ">=2.4"
 make = ">=4.4"
 pkg-config = ">=0.29"
+wcslib = ">=8"
 
 [feature.map-compat.pypi-dependencies]
 MontagePy = "*"

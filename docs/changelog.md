@@ -5,6 +5,36 @@ All notable changes to torchsky will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-03-18
+
+### Added
+- **py.typed**: PEP 561 type-checker marker for downstream type inference.
+- **Incorporated torchfits v0.3.2 changes**:
+  - **Secure where parser** (`_where.py`): Replaced `numexpr.evaluate`/`eval()` fallback in `TableHDU.filter` and table filtering with a secure SQL-like expression parser; `&`/`|`/`~` shimmed to `AND`/`OR`/`NOT`.
+  - **HealSparse/real-data validation tests**: `test_healsparse_upstream.py`, `test_real_data_validation.py`, `test_security_fix.py`, `test_header_parser.py`.
+  - **Benchmark replay**: `benchmarks/replays/replay_real_data_validation.py` for local and public FITS parity validation.
+  - **Additional tests**: `test_fitsio_upstream_smoke.py`, `test_logging.py` from torchfits.
+
+### Fixed
+- **Security**: `TableHDU.filter` no longer uses `eval()` or `numexpr.evaluate`; code injection attempts now raise `ValueError`.
+- **BSCALE/BZERO**: Relaxed float32 tolerance to `atol=1e-4` in scaled image validation tests.
+
+### Performance
+- **sphere/spectral.py**: O(1) `alm_size` via closed-form formula; precision fixes in harmonic primitives (`(ell-1)**2` → explicit multiplication).
+- **sphere/sparse.py**: Explicit `ratio * ratio` instead of `** 2` in `pixels_per_cov` and `_build_coverage_map` for precision consistency.
+- **header_parser.py**: Fast path for `/` separator, `card.isspace() or not card`, optimized `_parse_string_value` with `find()`.
+- **wcs/legacy.py**: TNX regex patterns cached via `@functools.lru_cache(maxsize=16)`.
+- **wcs/sip.py**: Extracted `_make_pow_cache` and `_make_pow_stack` static methods for SIP power-cache reuse.
+- **wcs/tpv.py**: `PV1_KEYS_SET`/`PV2_KEYS_SET` frozensets for O(1) header key lookup; `keys_set.intersection(header.keys())` to avoid 40 individual lookups.
+- **wcs/core.py**: `PV1_KEYS_SET`/`PV2_KEYS_SET` for efficient `has_pv` check.
+- **wcs/utils.py**: In-place RA wrap operations and `torch.hypot` for Newton-Raphson residuals.
+- **cpp_src/hardware.cpp**: macOS uses `sysctlbyname()` instead of `popen("sysctl -n ...")` for L3 cache and memory size detection.
+- **datasets.py**: Import hoisting in `_process_shard` (moved `read` and `logger` imports before loop).
+
+### Changed
+- **CI**: Added `pyarrow` to build-test dependencies for table tests.
+- **pixi.toml**: Added `pyarrow` to `feature.test`; added `healsparse` to `feature.sphere-bench` for HealSparse parity tests.
+
 ## [0.3.1] - 2026-03-07
 
 ### Added

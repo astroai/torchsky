@@ -62,7 +62,7 @@ jobs:
         python -m pip install --upgrade pip wheel setuptools
         pip install torch --index-url https://download.pytorch.org/whl/cpu
         pip install numpy astropy fitsio pytest nanobind scikit-build-core
-        pip install pytorch-frame psutil
+        pip install pytorch-frame psutil pyarrow
 
     - name: Build package
       run: |

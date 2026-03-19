@@ -1265,7 +1265,10 @@ std::pair<torch::Tensor, torch::Tensor> wcs_tpv_invert(
     int64_t max_iter,
     double tol
 ) {
-    auto [u, v] = tpv_initial_guess_affine(xi_target, eta_target, idx1, c1, idx2, c2);
+    auto shape = xi_target.sizes();
+    auto xi_flat = xi_target.contiguous().view({-1});
+    auto eta_flat = eta_target.contiguous().view({-1});
+    auto [u, v] = tpv_initial_guess_affine(xi_flat, eta_flat, idx1, c1, idx2, c2);
     torch::Tensor active_idx;
     bool has_active = false;
     const double tol2 = tol * tol;
@@ -1275,16 +1278,16 @@ std::pair<torch::Tensor, torch::Tensor> wcs_tpv_invert(
         if (!has_active) {
             u_a = u;
             v_a = v;
-            xi_t_a = xi_target;
-            eta_t_a = eta_target;
+            xi_t_a = xi_flat;
+            eta_t_a = eta_flat;
         } else {
             if (active_idx.numel() == 0) {
                 break;
             }
             u_a = u.index_select(0, active_idx);
             v_a = v.index_select(0, active_idx);
-            xi_t_a = xi_target.index_select(0, active_idx);
-            eta_t_a = eta_target.index_select(0, active_idx);
+            xi_t_a = xi_flat.index_select(0, active_idx);
+            eta_t_a = eta_flat.index_select(0, active_idx);
         }
 
         auto [xi, eta, j11, j12, j21, j22] = tpv_distort_and_jacobian_impl(
@@ -1332,7 +1335,7 @@ std::pair<torch::Tensor, torch::Tensor> wcs_tpv_invert(
         }
     }
 
-    return {u, v};
+    return {u.view(shape), v.view(shape)};
 }
 
 std::pair<torch::Tensor, torch::Tensor> wcs_tpv_distort(
@@ -1488,7 +1491,10 @@ std::tuple<torch::Tensor, torch::Tensor, int64_t, std::vector<int64_t>, int64_t>
     int64_t max_iter,
     double tol
 ) {
-    auto [u, v] = tpv_initial_guess_affine(xi_target, eta_target, idx1, c1, idx2, c2);
+    auto shape = xi_target.sizes();
+    auto xi_flat = xi_target.contiguous().view({-1});
+    auto eta_flat = eta_target.contiguous().view({-1});
+    auto [u, v] = tpv_initial_guess_affine(xi_flat, eta_flat, idx1, c1, idx2, c2);
     torch::Tensor active_idx;
     bool has_active = false;
     const double tol2 = tol * tol;
@@ -1502,8 +1508,8 @@ std::tuple<torch::Tensor, torch::Tensor, int64_t, std::vector<int64_t>, int64_t>
         if (!has_active) {
             u_a = u;
             v_a = v;
-            xi_t_a = xi_target;
-            eta_t_a = eta_target;
+            xi_t_a = xi_flat;
+            eta_t_a = eta_flat;
         } else {
             if (active_idx.numel() == 0) {
                 final_active = 0;
@@ -1511,8 +1517,8 @@ std::tuple<torch::Tensor, torch::Tensor, int64_t, std::vector<int64_t>, int64_t>
             }
             u_a = u.index_select(0, active_idx);
             v_a = v.index_select(0, active_idx);
-            xi_t_a = xi_target.index_select(0, active_idx);
-            eta_t_a = eta_target.index_select(0, active_idx);
+            xi_t_a = xi_flat.index_select(0, active_idx);
+            eta_t_a = eta_flat.index_select(0, active_idx);
         }
 
         active_counts.push_back(static_cast<int64_t>(u_a.numel()));
@@ -1575,7 +1581,7 @@ std::tuple<torch::Tensor, torch::Tensor, int64_t, std::vector<int64_t>, int64_t>
         }
     }
 
-    return std::make_tuple(u, v, iterations_used, active_counts, final_active);
+    return std::make_tuple(u.view(shape), v.view(shape), iterations_used, active_counts, final_active);
 }
 
 inline std::pair<double, double> eval_tpv_scalar(
@@ -1635,6 +1641,7 @@ void wcs_pixel_to_world_fused_cpu(
     double* ra_ptr = ra_tensor.data_ptr<double>();
     double* dec_ptr = dec_tensor.data_ptr<double>();
 
+    const bool native_is_pole = (native_type == "pole");
     bool use_center_equator_fast = (native_type == "center" && std::abs(delta0) < 1e-12 && (std::abs(std::fmod(phi_p_rad * R2D, 360.0)) < 1e-12 || std::abs(std::abs(std::fmod(phi_p_rad * R2D, 360.0)) - 180.0) < 1e-12));
 
     for (int64_t i = 0; i < n; ++i) {
@@ -1722,7 +1729,7 @@ void wcs_pixel_to_world_fused_cpu(
         if (use_center_equator_fast) {
             ra_ptr[i] = std::fmod(phi + alpha0 + 360.0, 360.0);
             dec_ptr[i] = theta;
-        } else {
+        } else if (native_is_pole) {
             double phi_rad = phi * D2R;
             double theta_rad = theta * D2R;
             double cos_theta = std::cos(theta_rad);
@@ -1736,6 +1743,27 @@ void wcs_pixel_to_world_fused_cpu(
             double y_rot = cos_theta * std::sin(phi_rad - phi_p_rad);
             double x_rot = sin_theta * std::cos(dec_p_rad) - costhe_cosphi * std::sin(dec_p_rad);
             ra_ptr[i] = std::fmod(std::atan2(y_rot, x_rot) * R2D + ra_p_rad * R2D + 360.0, 360.0);
+        } else {
+            const double phi_rad = phi * D2R;
+            const double theta_rad = theta * D2R;
+            const double cos_theta = std::cos(theta_rad);
+            const double sin_theta = std::sin(theta_rad);
+            const double sin_phi = std::sin(phi_rad);
+            const double cos_phi = std::cos(phi_rad);
+
+            const double u = cos_theta * sin_phi;
+            const double v = -cos_theta * cos_phi;
+            const double w = sin_theta;
+
+            const double X = u * east_x + v * (-radial_x) + w * north_x;
+            const double Y = u * east_y + v * (-radial_y) + w * north_y;
+            const double Z = std::max(
+                -1.0,
+                std::min(1.0, v * (-radial_z) + w * north_z)
+            );
+
+            dec_ptr[i] = std::asin(Z) * R2D;
+            ra_ptr[i] = std::fmod(std::atan2(Y, X) * R2D + 360.0, 360.0);
         }
     }
 }

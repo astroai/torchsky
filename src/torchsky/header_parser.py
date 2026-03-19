@@ -74,7 +74,7 @@ class FastHeaderParser:
         # instead of building an intermediate list of cards
         for i in range(0, len(header_string), 80):
             card = header_string[i : i + 80]
-            if not card.strip():
+            if card.isspace() or not card:
                 continue
 
             keyword, value, comment = cls._parse_card(card)
@@ -99,7 +99,7 @@ class FastHeaderParser:
             card = card.ljust(80)
 
         # Skip END cards and empty cards
-        if card.startswith("END     ") or card.strip() == "":
+        if card.startswith("END     ") or card.isspace() or not card:
             return None, None, None
 
         # Handle comment-only cards (COMMENT, HISTORY, etc.)
@@ -140,16 +140,19 @@ class FastHeaderParser:
 
         Handles quoted strings properly to avoid false positives.
         """
+        # Fast path: find first slash and if there are no quotes before it,
+        # we found our separator.
+        idx = value_comment.find("/")
+        if idx == -1 or "'" not in value_comment[:idx]:
+            return idx
+
         in_quotes = False
         i = 0
-        while i < len(value_comment):
+        n = len(value_comment)
+        while i < n:
             char = value_comment[i]
             if char == "'":
-                if (
-                    in_quotes
-                    and i + 1 < len(value_comment)
-                    and value_comment[i + 1] == "'"
-                ):
+                if in_quotes and i + 1 < n and value_comment[i + 1] == "'":
                     # Escaped quote inside string
                     i += 2
                     continue
@@ -177,27 +180,24 @@ class FastHeaderParser:
             return None
 
         value_str = value_str.strip()
+        if not value_str:
+            return None
+
+        first_char = value_str[0]
+
+        # 1. String values (quoted)
+        if first_char == "'":
+            return cls._parse_string_value(value_str)
 
         # Force string parsing for certain keywords
         if keyword in cls._STRING_KEYWORDS:
-            if value_str.startswith("'") and value_str.endswith("'"):
-                return cls._parse_string_value(value_str)
-            else:
-                return value_str
-
-        # Try different value types in order of specificity
-
-        # 1. String values (quoted)
-        if value_str.startswith("'"):
-            return cls._parse_string_value(value_str)
+            return value_str
 
         # 2. Logical values
         if value_str == "T":
             return True
         if value_str == "F":
             return False
-
-        first_char = value_str[0] if value_str else ""
 
         # 3. Fast path for numbers without regex
         if first_char in "+-0123456789.":
@@ -229,26 +229,16 @@ class FastHeaderParser:
         if not quoted_str.startswith("'"):
             return quoted_str
 
-        # Find the closing quote, handling escaped quotes
-        content_parts = []
-        i = 1  # Skip opening quote
-        while i < len(quoted_str):
-            char = quoted_str[i]
-            if char == "'":
-                if i + 1 < len(quoted_str) and quoted_str[i + 1] == "'":
-                    # Escaped quote
-                    content_parts.append("'")
-                    i += 2
-                else:
-                    # End of string
-                    break
+        end_idx = 1
+        while True:
+            end_idx = quoted_str.find("'", end_idx)
+            if end_idx == -1:
+                return quoted_str[1:].replace("''", "'")
+
+            if end_idx + 1 < len(quoted_str) and quoted_str[end_idx + 1] == "'":
+                end_idx += 2
             else:
-                content_parts.append(char)
-                i += 1
-
-        content = "".join(content_parts)
-
-        return content
+                return quoted_str[1:end_idx].replace("''", "'")
 
     @classmethod
     def parse_with_performance_tracking(cls, header_string: str) -> tuple:

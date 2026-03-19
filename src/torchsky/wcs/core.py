@@ -9,7 +9,7 @@ try:
 except Exception:  # pragma: no cover - optional fast path
     _cpp = None
 
-from .tpv import TPV, PV1_KEYS, PV2_KEYS
+from .tpv import TPV, PV1_KEYS, PV2_KEYS, PV1_KEYS_SET, PV2_KEYS_SET
 from .sip import SIP
 from .zenithal import project_zenithal, deproject_zenithal
 from .cylindrical import project_cylindrical, deproject_cylindrical
@@ -127,8 +127,8 @@ class WCS:
 
             # Check for TPV (Tangent with PV distortion)
             # SCAMP often uses CTYPE = RA---TAN with PV1_j keywords
-            has_pv = any(k in self.wcs_params for k in PV1_KEYS) or any(
-                k in self.wcs_params for k in PV2_KEYS
+            has_pv = bool(PV1_KEYS_SET.intersection(self.wcs_params)) or bool(
+                PV2_KEYS_SET.intersection(self.wcs_params)
             )
             is_tpv_ctype = (
                 self.wcs_params.get("CTYPE1", "").strip().upper().endswith("TPV")

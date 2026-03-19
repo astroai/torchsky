@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
+import sys
 
 import pytest
 import torch
@@ -13,9 +15,12 @@ from torchsky.map import (
     coadd_image_plane,
     coadd_image_plane_cube,
     coadd_image_plane_multiband,
+    evaluate_map_product,
+    plan_map_product,
     plan_image_plane_cube_target,
     plan_image_plane_cube_target_from_header,
     plan_image_plane_target,
+    stack_map_product,
 )
 from torchsky.spectral import SpectralAxis
 
@@ -217,6 +222,38 @@ def _write_synthetic_tpv_mef(tmp_path: Path, *, size: int = 64) -> Path:
     return path
 
 
+def _sky_from_header(
+    header: dict,
+    *,
+    amplitude: float = 1.0,
+    center_ra_deg: float | None = None,
+    center_dec_deg: float | None = None,
+) -> torch.Tensor:
+    wcs = torchsky.WCS(header)
+    height = int(header["NAXIS2"])
+    width = int(header["NAXIS1"])
+    y, x = torch.meshgrid(
+        torch.arange(height, dtype=torch.float64),
+        torch.arange(width, dtype=torch.float64),
+        indexing="ij",
+    )
+    ra_deg, dec_deg = wcs.pixel_to_world(x, y)
+    if center_ra_deg is None:
+        center_ra_deg = float(header["CRVAL1"])
+    if center_dec_deg is None:
+        center_dec_deg = float(header["CRVAL2"])
+    dra = ((ra_deg - center_ra_deg + 180.0) % 360.0) - 180.0
+    ddec = dec_deg - center_dec_deg
+    sky = (
+        3.0
+        + amplitude * torch.exp(-((dra / 0.035) ** 2 + (ddec / 0.028) ** 2))
+        + 0.15 * dra
+        - 0.08 * ddec
+        + 0.04 * dra * ddec
+    )
+    return sky.to(dtype=torch.float32)
+
+
 def test_coadd_image_plane_identical_wcs(tmp_path) -> None:
     path_a = tmp_path / "a.fits"
     path_b = tmp_path / "b.fits"
@@ -237,6 +274,150 @@ def test_coadd_image_plane_identical_wcs(tmp_path) -> None:
         result.overlap_count,
         torch.full((8, 8), 2, dtype=torch.int32),
     )
+
+
+def test_coadd_image_plane_mean_stacking_averages_observations_equally(tmp_path) -> None:
+    path_a = tmp_path / "mean_a.fits"
+    path_b = tmp_path / "mean_b.fits"
+    header = _simple_header()
+    data_a = torch.full((8, 8), 1.0, dtype=torch.float32)
+    data_b = torch.full((8, 8), 9.0, dtype=torch.float32)
+    torchsky.write(str(path_a), data_a, header=header, overwrite=True)
+    torchsky.write(str(path_b), data_b, header=header, overwrite=True)
+
+    weighted = coadd_image_plane(
+        [
+            ImageObservation(str(path_a), weight=1.0),
+            ImageObservation(str(path_b), weight=9.0),
+        ],
+        stacking_method="weighted_mean",
+    )
+    mean = coadd_image_plane(
+        [
+            ImageObservation(str(path_a), weight=1.0),
+            ImageObservation(str(path_b), weight=9.0),
+        ],
+        stacking_method="mean",
+    )
+
+    torch.testing.assert_close(
+        weighted.data,
+        torch.full((8, 8), 8.2, dtype=torch.float32),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    torch.testing.assert_close(
+        mean.data,
+        torch.full((8, 8), 5.0, dtype=torch.float32),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    torch.testing.assert_close(
+        mean.weight,
+        torch.full((8, 8), 2.0, dtype=torch.float32),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
+def test_coadd_image_plane_median_stacking_uses_observation_median(tmp_path) -> None:
+    path_a = tmp_path / "median_a.fits"
+    path_b = tmp_path / "median_b.fits"
+    path_c = tmp_path / "median_c.fits"
+    header = _simple_header()
+    data_a = torch.full((8, 8), 1.0, dtype=torch.float32)
+    data_b = torch.full((8, 8), 9.0, dtype=torch.float32)
+    data_c = torch.full((8, 8), 100.0, dtype=torch.float32)
+    torchsky.write(str(path_a), data_a, header=header, overwrite=True)
+    torchsky.write(str(path_b), data_b, header=header, overwrite=True)
+    torchsky.write(str(path_c), data_c, header=header, overwrite=True)
+
+    weighted = coadd_image_plane(
+        [
+            ImageObservation(str(path_a), weight=1.0),
+            ImageObservation(str(path_b), weight=1.0),
+            ImageObservation(str(path_c), weight=20.0),
+        ],
+        stacking_method="weighted_mean",
+    )
+    median = coadd_image_plane(
+        [
+            ImageObservation(str(path_a), weight=1.0),
+            ImageObservation(str(path_b), weight=1.0),
+            ImageObservation(str(path_c), weight=20.0),
+        ],
+        stacking_method="median",
+    )
+
+    assert float(weighted.data[0, 0].item()) > 80.0
+    torch.testing.assert_close(
+        median.data,
+        torch.full((8, 8), 9.0, dtype=torch.float32),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    torch.testing.assert_close(
+        median.weight,
+        torch.full((8, 8), 3.0, dtype=torch.float32),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
+def test_stack_map_product_passes_mean_stacking_to_single_band_coadd(tmp_path) -> None:
+    path_a = tmp_path / "product_mean_a.fits"
+    path_b = tmp_path / "product_mean_b.fits"
+    header = _simple_header()
+    data_a = torch.full((8, 8), 2.0, dtype=torch.float32)
+    data_b = torch.full((8, 8), 10.0, dtype=torch.float32)
+    torchsky.write(str(path_a), data_a, header=header, overwrite=True)
+    torchsky.write(str(path_b), data_b, header=header, overwrite=True)
+
+    observations = [
+        ImageObservation(str(path_a), weight=1.0),
+        ImageObservation(str(path_b), weight=5.0),
+    ]
+    product = plan_map_product(observations)
+
+    result = stack_map_product(
+        observations,
+        product,
+        stacking_method="mean",
+    )
+
+    torch.testing.assert_close(
+        result.data.squeeze(0),
+        torch.full((8, 8), 6.0, dtype=torch.float32),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    torch.testing.assert_close(
+        result.weight.squeeze(0),
+        torch.full((8, 8), 2.0, dtype=torch.float32),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
+def test_coadd_image_plane_cube_rejects_median_stacking(tmp_path) -> None:
+    path = tmp_path / "cube_median.fits"
+    header = _simple_header()
+    data = torch.ones((8, 8), dtype=torch.float32)
+    torchsky.write(str(path), data, header=header, overwrite=True)
+
+    observations = [ImageObservation(str(path), wavelength=5000.0)]
+    spectral_axis = SpectralAxis(
+        values=torch.tensor([5000.0], dtype=torch.float64),
+        unit="Angstrom",
+        type="WAVE",
+    )
+
+    with pytest.raises(ValueError, match="median"):
+        coadd_image_plane_cube(
+            observations,
+            spectral_axis=spectral_axis,
+            stacking_method="median",
+        )
 
 
 def test_coadd_image_plane_respects_target_header_shape(tmp_path) -> None:
@@ -277,6 +458,69 @@ def test_coadd_image_plane_ignores_non_finite_pixels(tmp_path) -> None:
     assert result.weight[2, 3].item() == 1.0
 
 
+def test_coadd_image_plane_applies_known_photometric_scale_and_background(tmp_path) -> None:
+    path_ref = tmp_path / "ref.fits"
+    path_raw = tmp_path / "raw.fits"
+    header = _simple_header()
+    truth = torch.full((8, 8), 2.0, dtype=torch.float32)
+    raw = torch.full((8, 8), 6.0, dtype=torch.float32)
+    torchsky.write(str(path_ref), truth, header=header, overwrite=True)
+    torchsky.write(str(path_raw), raw, header=header, overwrite=True)
+
+    result = coadd_image_plane(
+        [
+            ImageObservation(str(path_ref)),
+            ImageObservation(
+                str(path_raw),
+                photometric_scale=2.0,
+                background_offset=5.0,
+            ),
+        ]
+    )
+
+    torch.testing.assert_close(result.data, truth, atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(
+        result.weight,
+        torch.full((8, 8), 1.25, dtype=torch.float32),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
+def test_coadd_image_plane_rescales_weight_map_with_photometric_scale(tmp_path) -> None:
+    path = tmp_path / "scaled.fits"
+    weight_path = tmp_path / "scaled_wht.fits"
+    header = _simple_header()
+    raw = torch.full((8, 8), 7.0, dtype=torch.float32)
+    weight = torch.full((8, 8), 8.0, dtype=torch.float32)
+    torchsky.write(str(path), raw, header=header, overwrite=True)
+    torchsky.write(str(weight_path), weight, header=header, overwrite=True)
+
+    result = coadd_image_plane(
+        [
+            ImageObservation(
+                str(path),
+                weight_path=str(weight_path),
+                photometric_scale=2.0,
+                background_offset=5.0,
+            )
+        ]
+    )
+
+    torch.testing.assert_close(
+        result.data,
+        torch.full((8, 8), 4.0, dtype=torch.float32),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    torch.testing.assert_close(
+        result.weight,
+        torch.full((8, 8), 2.0, dtype=torch.float32),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
 def test_coadd_image_plane_rejects_non_2d_images(tmp_path) -> None:
     path = tmp_path / "cube.fits"
     header = _simple_header()
@@ -314,6 +558,42 @@ def test_coadd_image_plane_rejects_unknown_value_semantics(tmp_path) -> None:
             [ImageObservation(str(path))],
             value_semantics="counts",
         )
+
+
+def test_coadd_image_plane_rejects_unknown_stacking_method(tmp_path) -> None:
+    path = tmp_path / "stacking_unknown.fits"
+    header = _simple_header()
+    data = torch.arange(64, dtype=torch.float32).reshape(8, 8)
+    torchsky.write(str(path), data, header=header, overwrite=True)
+
+    with pytest.raises(ValueError, match="stacking_method"):
+        coadd_image_plane(
+            [ImageObservation(str(path))],
+            stacking_method="trimmed_mean",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("photometric_scale", 0.0),
+        ("photometric_scale", -1.0),
+        ("background_offset", float("nan")),
+    ],
+)
+def test_coadd_image_plane_rejects_invalid_calibration_metadata(
+    tmp_path: Path,
+    field: str,
+    value: float,
+) -> None:
+    path = tmp_path / "invalid_calibration.fits"
+    header = _simple_header()
+    data = torch.ones((8, 8), dtype=torch.float32)
+    torchsky.write(str(path), data, header=header, overwrite=True)
+
+    kwargs = {field: value}
+    with pytest.raises(ValueError, match=field):
+        coadd_image_plane([ImageObservation(str(path), **kwargs)])
 
 
 @pytest.mark.parametrize("kernel", ["nearest", "bilinear", "bicubic"])
@@ -414,6 +694,42 @@ def test_coadd_image_plane_accepts_custom_high_accuracy_kernels(
     assert torch.isfinite(result.data).all()
 
 
+def test_coadd_image_plane_clamps_negative_resampled_weights_for_high_order_kernels(
+    tmp_path: Path,
+) -> None:
+    benchmarks_dir = Path(__file__).resolve().parents[1] / "benchmarks"
+    if str(benchmarks_dir) not in sys.path:
+        sys.path.insert(0, str(benchmarks_dir))
+    import bench_map_ground_truth as truth_bench
+
+    observations, target_header, truth = truth_bench.make_case(
+        tmp_path,
+        case="tan_random10_large_union_rect_weighted_masked",
+        size=1024,
+        seed=1234,
+        width=1024,
+        height=768,
+    )
+
+    result = coadd_image_plane(
+        [item.observation for item in observations],
+        target_header=target_header,
+        resampling_kernel="bicubic",
+    )
+    metrics = evaluate_map_product(
+        result.data,
+        truth,
+        weight=result.weight,
+        header=target_header,
+        value_semantics="surface_brightness",
+    )
+
+    assert torch.isfinite(result.data).all()
+    assert torch.isfinite(result.weight).all()
+    assert bool((result.weight >= 0.0).all())
+    assert math.isfinite(float(metrics["total_flux_relative_error"]))
+
+
 def test_coadd_image_plane_flux_semantics_improves_flux_conservation(tmp_path) -> None:
     source_path = tmp_path / "flux_source.fits"
     target_header = _simple_header()
@@ -455,6 +771,63 @@ def test_coadd_image_plane_flux_semantics_improves_flux_conservation(tmp_path) -
     assert flux_flux_err < surface_flux_err
 
 
+def test_coadd_image_plane_weighted_mean_scales_surface_brightness_weights_only_for_coarser_targets(
+    tmp_path,
+) -> None:
+    image = torch.ones((8, 8), dtype=torch.float32)
+    weight = torch.ones((8, 8), dtype=torch.float32)
+
+    fine_target = _simple_header()
+    coarse_target = dict(fine_target)
+    coarse_target["CDELT1"] = -0.02
+    coarse_target["CDELT2"] = 0.02
+
+    fine_source = dict(fine_target)
+    fine_source_path = tmp_path / "fine_source.fits"
+    fine_weight_path = tmp_path / "fine_source_wht.fits"
+    torchsky.write(str(fine_source_path), image, header=fine_source, overwrite=True)
+    torchsky.write(str(fine_weight_path), weight, header=fine_source, overwrite=True)
+
+    coarse_source = dict(coarse_target)
+    coarse_source_path = tmp_path / "coarse_source.fits"
+    coarse_weight_path = tmp_path / "coarse_source_wht.fits"
+    torchsky.write(str(coarse_source_path), image, header=coarse_source, overwrite=True)
+    torchsky.write(str(coarse_weight_path), weight, header=coarse_source, overwrite=True)
+
+    finer_target_result = coadd_image_plane(
+        [ImageObservation(str(coarse_source_path), weight_path=str(coarse_weight_path))],
+        target_header=fine_target,
+        value_semantics="surface_brightness",
+        stacking_method="weighted_mean",
+    )
+    coarser_target_result = coadd_image_plane(
+        [ImageObservation(str(fine_source_path), weight_path=str(fine_weight_path))],
+        target_header=coarse_target,
+        value_semantics="surface_brightness",
+        stacking_method="weighted_mean",
+    )
+
+    fine_area = image_plane_mod._representative_pixel_area_sr(
+        torchsky.WCS(fine_target),
+        (8, 8),
+        device=torch.device("cpu"),
+    )
+    coarse_area = image_plane_mod._representative_pixel_area_sr(
+        torchsky.WCS(coarse_target),
+        (8, 8),
+        device=torch.device("cpu"),
+    )
+
+    assert float(finer_target_result.data[4, 4].item()) == pytest.approx(1.0, abs=1.0e-4)
+    assert float(finer_target_result.weight[4, 4].item()) == pytest.approx(1.0, abs=1.0e-4)
+    assert float(coarser_target_result.data[4, 4].item()) == pytest.approx(1.0, abs=1.0e-4)
+    assert float(coarser_target_result.weight[4, 4].item()) == pytest.approx(
+        coarse_area / fine_area,
+        rel=5.0e-2,
+        abs=1.0e-4,
+    )
+
+
 def test_coadd_image_plane_builds_target_grid_once_per_run(
     tmp_path, monkeypatch
 ) -> None:
@@ -483,6 +856,133 @@ def test_coadd_image_plane_builds_target_grid_once_per_run(
 
     assert calls == 1
     assert result.data.shape == (8, 8)
+
+
+def test_project_observation_large_tan_windowing_matches_full_reprojection(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "source.fits"
+    source_header = _simple_header()
+    source_header["NAXIS1"] = 64
+    source_header["NAXIS2"] = 64
+    source_header["CRPIX1"] = 32.0
+    source_header["CRPIX2"] = 32.0
+    data = torch.arange(64 * 64, dtype=torch.float32).reshape(64, 64)
+    torchsky.write(str(path), data, header=source_header, overwrite=True)
+
+    target_header = dict(source_header)
+    target_header["NAXIS1"] = 128
+    target_header["NAXIS2"] = 96
+    target_header["CRPIX1"] = 64.0
+    target_header["CRPIX2"] = 48.0
+    target_shape = (96, 128)
+    device = data.device
+    prepared_target = image_plane_mod._prepare_target(
+        header=target_header,
+        target_wcs=image_plane_mod.WCS(target_header),
+        target_shape=target_shape,
+        device=device,
+        include_pixel_area=False,
+        include_representative_pixel_area=True,
+        include_quadrature=False,
+    )
+    obs = ImageObservation(str(path))
+    image, header = torchsky.read(str(path), return_header=True)
+    image = image_plane_mod._validate_image_plane(image)
+    source_wcs = image_plane_mod.WCS(dict(header))
+
+    original_threshold = image_plane_mod._LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS
+    original_resample = image_plane_mod._resample_weighted_to_target
+    try:
+        forced_shapes: list[tuple[int, int]] = []
+
+        def wrapped_resample(*args, **kwargs):
+            target = args[3]
+            forced_shapes.append(tuple(int(v) for v in target.shape))
+            return original_resample(*args, **kwargs)
+
+        monkeypatch.setattr(image_plane_mod, "_resample_weighted_to_target", wrapped_resample)
+        monkeypatch.setattr(image_plane_mod, "_LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS", 0)
+        forced_numer, forced_weight, _, _ = image_plane_mod._project_observation_to_target(
+            obs,
+            image=image,
+            header_dict_obs=dict(header),
+            source_wcs=source_wcs,
+            prepared_target=prepared_target,
+            target_header=target_header,
+            target_shape=target_shape,
+            device=device,
+            footprint_order=None,
+            resampling_kernel="bilinear",
+            value_semantics="surface_brightness",
+        )
+        assert forced_shapes
+        assert forced_shapes[0][0] < target_shape[0] or forced_shapes[0][1] < target_shape[1]
+
+        monkeypatch.setattr(
+            image_plane_mod,
+            "_LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS",
+            10**9,
+        )
+        full_numer, full_weight, _, _ = image_plane_mod._project_observation_to_target(
+            obs,
+            image=image,
+            header_dict_obs=dict(header),
+            source_wcs=source_wcs,
+            prepared_target=prepared_target,
+            target_header=target_header,
+            target_shape=target_shape,
+            device=device,
+            footprint_order=None,
+            resampling_kernel="bilinear",
+            value_semantics="surface_brightness",
+        )
+    finally:
+        monkeypatch.setattr(
+            image_plane_mod,
+            "_LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS",
+            original_threshold,
+        )
+        monkeypatch.setattr(image_plane_mod, "_resample_weighted_to_target", original_resample)
+
+    torch.testing.assert_close(forced_numer, full_numer, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(forced_weight, full_weight, atol=0.0, rtol=0.0)
+    assert forced_weight.sum().item() > 0.0
+
+
+def test_surface_brightness_area_scaling_gate_uses_target_vs_harmonic_source_scale(
+    tmp_path: Path,
+) -> None:
+    data = torch.ones((8, 8), dtype=torch.float32)
+    path_a = tmp_path / "a.fits"
+    path_b = tmp_path / "b.fits"
+    header_a = _simple_header()
+    header_b = _simple_header()
+    header_a["CDELT1"] = -0.006
+    header_a["CDELT2"] = 0.006
+    header_b["CDELT1"] = -0.014
+    header_b["CDELT2"] = 0.014
+    torchsky.write(str(path_a), data, header=header_a, overwrite=True)
+    torchsky.write(str(path_b), data, header=header_b, overwrite=True)
+    observations = [ImageObservation(str(path_a)), ImageObservation(str(path_b))]
+
+    coarse_target = _simple_header()
+    coarse_target["CDELT1"] = -0.010
+    coarse_target["CDELT2"] = 0.010
+    fine_target = _simple_header()
+    fine_target["CDELT1"] = -0.004
+    fine_target["CDELT2"] = 0.004
+
+    assert image_plane_mod._should_apply_surface_brightness_area_scaling(
+        observations,
+        target_header=coarse_target,
+        target_shape=(8, 8),
+    )
+    assert not image_plane_mod._should_apply_surface_brightness_area_scaling(
+        observations,
+        target_header=fine_target,
+        target_shape=(8, 8),
+    )
 
 
 def test_coadd_image_plane_skips_target_grid_for_identical_wcs_without_footprints(

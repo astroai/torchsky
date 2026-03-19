@@ -717,17 +717,10 @@ class TableHDU(TensorFrame):
         if not eval_locals:
             raise ValueError("No row-aligned columns available for filtering")
 
-        mask_result = None
-        try:
-            import numexpr as ne
+        from ._where import _parse_where_expression, evaluate_where
 
-            mask_result = ne.evaluate(condition, local_dict=eval_locals)
-        except Exception:
-            mask_result = eval(
-                condition,
-                {"__builtins__": {}, "np": np},
-                eval_locals,
-            )
+        ast = _parse_where_expression(condition)
+        mask_result = evaluate_where(ast, eval_locals)
 
         mask_arr = np.asarray(mask_result)
         if mask_arr.ndim == 0:

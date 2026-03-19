@@ -10,17 +10,24 @@ from torchsky.wcs.core import WCS as TorchWCS
 PROJECTIONS = ("TAN", "SIN", "ARC", "AIT", "MOL", "HPX", "CEA", "MER")
 
 
-def _make_header(projection: str) -> fits.Header:
+def _make_header(
+    projection: str,
+    *,
+    crval1: float = 180.0,
+    crval2: float = 0.0,
+    naxis1: int = 256,
+    naxis2: int = 256,
+) -> fits.Header:
     header = fits.Header()
     header["NAXIS"] = 2
-    header["NAXIS1"] = 256
-    header["NAXIS2"] = 256
+    header["NAXIS1"] = naxis1
+    header["NAXIS2"] = naxis2
     header["CTYPE1"] = f"RA---{projection}"
     header["CTYPE2"] = f"DEC--{projection}"
-    header["CRPIX1"] = 128.0
-    header["CRPIX2"] = 128.0
-    header["CRVAL1"] = 180.0
-    header["CRVAL2"] = 0.0
+    header["CRPIX1"] = (naxis1 / 2.0) + 0.5
+    header["CRPIX2"] = (naxis2 / 2.0) + 0.5
+    header["CRVAL1"] = crval1
+    header["CRVAL2"] = crval2
     header["CUNIT1"] = "deg"
     header["CUNIT2"] = "deg"
 
@@ -116,3 +123,65 @@ def test_projection_inverse_matches_astropy(projection: str, origin: int) -> Non
 
     np.testing.assert_allclose(x_t.cpu().numpy(), x[valid], atol=1e-6)
     np.testing.assert_allclose(y_t.cpu().numpy(), y[valid], atol=1e-6)
+
+
+@pytest.mark.parametrize("projection", ["CEA", "MER"])
+@pytest.mark.parametrize("origin", [0, 1])
+def test_off_equator_cylindrical_forward_matches_astropy(
+    projection: str, origin: int
+) -> None:
+    header = _make_header(
+        projection,
+        crval1=12.0,
+        crval2=-3.0,
+        naxis1=1024,
+        naxis2=640,
+    )
+    awcs = AstropyWCS(header)
+    twcs = TorchWCS(dict(header))
+
+    x = np.array([512.5, 512.5, 600.0, 700.0], dtype=np.float64)
+    y = np.array([320.5, 400.0, 320.5, 500.0], dtype=np.float64)
+
+    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
+    ra_t, dec_t = twcs.pixel_to_world(
+        torch.from_numpy(x),
+        torch.from_numpy(y),
+        origin=origin,
+    )
+
+    ra_t_np = ra_t.cpu().numpy()
+    dec_t_np = dec_t.cpu().numpy()
+
+    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
+    valid &= np.isfinite(ra_t_np) & np.isfinite(dec_t_np)
+    assert np.any(valid), f"No finite off-equator parity points for projection={projection}"
+
+    dra = _ra_wrap_delta(ra_t_np[valid], ra_ast[valid])
+    ddec = dec_t_np[valid] - dec_ast[valid]
+
+    np.testing.assert_allclose(dra, 0.0, atol=5e-9)
+    np.testing.assert_allclose(ddec, 0.0, atol=5e-9)
+
+
+def test_off_equator_cea_fused_matches_python_fallback() -> None:
+    header = _make_header(
+        "CEA",
+        crval1=12.0,
+        crval2=-3.0,
+        naxis1=1024,
+        naxis2=640,
+    )
+    twcs = TorchWCS(dict(header))
+
+    x = torch.tensor([512.5, 512.5, 600.0, 700.0], dtype=torch.float64)
+    y = torch.tensor([320.5, 400.0, 320.5, 500.0], dtype=torch.float64)
+
+    ra_default, dec_default = twcs.pixel_to_world(x, y, origin=1)
+
+    twcs._disable_fused_pixel_to_world = True
+    twcs._disable_cpp_pixel_to_world = True
+    ra_python, dec_python = twcs.pixel_to_world(x, y, origin=1)
+
+    np.testing.assert_allclose(ra_default.cpu().numpy(), ra_python.cpu().numpy(), atol=5e-9)
+    np.testing.assert_allclose(dec_default.cpu().numpy(), dec_python.cpu().numpy(), atol=5e-9)

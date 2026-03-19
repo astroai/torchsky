@@ -7,6 +7,9 @@ import argparse
 import os
 import shutil
 import subprocess
+import tarfile
+import tempfile
+import urllib.request
 from pathlib import Path
 
 
@@ -14,6 +17,7 @@ REPOS = {
     "swarp": "https://github.com/astromatic/swarp.git",
     "montage": "https://github.com/Caltech-IPAC/Montage.git",
 }
+DEFAULT_CASUTOOLS_URL = "https://www.canfar.net/storage/vault/file/sfabbro/casutools-1.0.43.tar.gz"
 
 
 def _repo_root() -> Path:
@@ -39,21 +43,49 @@ def _run_allow_failure(cmd: list[str], *, cwd: Path, env: dict[str, str] | None 
     return int(completed.returncode)
 
 
+def _download_and_extract_tarball(url: str, *, tool: str) -> Path:
+    src_root = _src_root()
+    src_root.mkdir(parents=True, exist_ok=True)
+    target_dir = src_root / tool
+    if target_dir.exists():
+        return target_dir
+    with tempfile.TemporaryDirectory(prefix=f"torchsky_{tool}_download_") as tmp:
+        archive_path = Path(tmp) / f"{tool}.tar.gz"
+        print(f"+ download {url} -> {archive_path}")
+        with urllib.request.urlopen(url) as response, archive_path.open("wb") as out:
+            shutil.copyfileobj(response, out)
+        extract_dir = Path(tmp) / "extract"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(archive_path, "r:gz") as archive:
+            archive.extractall(extract_dir, filter="data")
+        entries = [item for item in extract_dir.iterdir() if item.name != "__MACOSX"]
+        if not entries:
+            raise RuntimeError(f"{tool} archive from {url} was empty")
+        if len(entries) == 1 and entries[0].is_dir():
+            source_dir = entries[0]
+        else:
+            source_dir = extract_dir
+        shutil.copytree(source_dir, target_dir)
+    return target_dir
+
+
 def _ensure_repo(tool: str) -> Path:
     if tool == "casutools":
         source_override = os.environ.get("CASUTOOLS_SOURCE")
-        source_dir = Path(source_override).expanduser() if source_override else Path.home() / "src" / "casutools" / "casutools-1.0.43"
-        if not source_dir.exists():
-            raise RuntimeError(
-                "casutools source is not available; set CASUTOOLS_SOURCE "
-                "or place the source tree at ~/src/casutools/casutools-1.0.43"
-            )
         src_dir = _src_root() / "casutools"
         if src_dir.exists():
             return src_dir
-        src_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source_dir, src_dir)
-        return src_dir
+        if source_override:
+            source_dir = Path(source_override).expanduser()
+            if not source_dir.exists():
+                raise RuntimeError(
+                    f"CASUTOOLS_SOURCE={source_dir} does not exist"
+                )
+            src_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source_dir, src_dir)
+            return src_dir
+        url = os.environ.get("CASUTOOLS_URL", DEFAULT_CASUTOOLS_URL)
+        return _download_and_extract_tarball(url, tool="casutools")
     src_dir = _src_root() / ("Montage" if tool == "montage" else tool)
     if src_dir.exists():
         return src_dir
@@ -130,22 +162,32 @@ def _build_casutools(src_dir: Path, prefix: Path, *, jobs: int) -> None:
     if (prefix / "bin" / "mosaic").exists():
         print(f"casutools already built at {prefix / 'bin' / 'mosaic'}")
         return
+    conda_prefix = _conda_prefix()
     shim_lib = _prefix_root() / "shims" / "casutools" / "lib"
     shim_lib.mkdir(parents=True, exist_ok=True)
-    cfitsio_dylib = Path("/opt/homebrew/lib/libcfitsio.dylib")
+    cfitsio_include = conda_prefix / "include"
+    cfitsio_lib_dir = conda_prefix / "lib"
+    cfitsio_dylib = cfitsio_lib_dir / "libcfitsio.dylib"
     if not cfitsio_dylib.exists():
-        raise RuntimeError("expected /opt/homebrew/lib/libcfitsio.dylib for local casutools build")
+        raise RuntimeError(
+            f"expected {cfitsio_dylib} in the active Pixi env for casutools build"
+        )
     for name in ("libcfitsio.a", "libcfitsio.dylib"):
         target = shim_lib / name
         if target.exists() or target.is_symlink():
             target.unlink()
         target.symlink_to(cfitsio_dylib)
 
-    wcslib_include = Path("/opt/homebrew/Cellar/wcslib/8.5/include")
-    wcslib_lib = Path("/opt/homebrew/lib")
-    cfitsio_include = Path("/opt/homebrew/include")
-    if not wcslib_include.exists() or not wcslib_lib.exists() or not cfitsio_include.exists():
-        raise RuntimeError("expected Homebrew wcslib/cfitsio headers and libraries for local casutools build")
+    wcslib_include = Path(os.environ.get("WCSLIB_INCLUDE", str(conda_prefix / "include")))
+    wcslib_lib = Path(os.environ.get("WCSLIB_LIB", str(conda_prefix / "lib")))
+    wcslib_header = wcslib_include / "wcs.h"
+    if not wcslib_header.exists():
+        raise RuntimeError(
+            "wcslib headers were not found in the active Pixi env; "
+            "install wcslib there or set WCSLIB_INCLUDE/WCSLIB_LIB"
+        )
+    if not wcslib_lib.exists() or not cfitsio_include.exists():
+        raise RuntimeError("expected wcslib/cfitsio headers and libraries for casutools build")
 
     _run(
         [

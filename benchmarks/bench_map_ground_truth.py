@@ -690,6 +690,21 @@ def _case_spec(case: str, *, size: int) -> _CaseSpec:
             weight_gradient=True,
             specs=_random_large_rect_specs(seed=2234 + size, include_warps=True),
         ),
+        "tan_random10_large_union_rect_weighted_masked_tan": _CaseSpec(
+            case="tan_random10_large_union_rect_weighted_masked_tan",
+            projection="TAN",
+            description=(
+                "Ten-image large TAN union mosaic on a rectangular target with random "
+                "rectangular input sizes, mixed resolution, rotation, explicit per-pixel "
+                "weight maps, explicit mask planes, and TAN-only inputs"
+            ),
+            base_noise_flux=0.05,
+            value_semantics="surface_brightness",
+            noise_model="flux_constant",
+            explicit_masks=True,
+            weight_gradient=True,
+            specs=_random_large_rect_specs(seed=3234 + size, include_warps=False),
+        ),
         "tan_low_overlap_exptime_transmission": _CaseSpec(
             case="tan_low_overlap_exptime_transmission",
             projection="TAN",
@@ -897,7 +912,10 @@ def make_case(
     target_width = int(width) if width is not None else int(size)
     if height is not None:
         target_height = int(height)
-    elif case == "tan_random10_large_union_rect_weighted_masked":
+    elif case in {
+        "tan_random10_large_union_rect_weighted_masked",
+        "tan_random10_large_union_rect_weighted_masked_tan",
+    }:
         target_height = max(32, int(round(float(size) * 0.75)))
     else:
         target_height = int(size)
@@ -967,6 +985,7 @@ def _truth_metrics(
     *,
     target_header: dict[str, Any],
     value_semantics: str,
+    region_masks: dict[str, torch.Tensor] | None = None,
 ) -> dict[str, float]:
     metrics = evaluate_map_product(
         data,
@@ -995,7 +1014,116 @@ def _truth_metrics(
             "total_flux_rel_err": float(metrics["total_flux_relative_error"]),
         }
     )
+    if region_masks:
+        for name, region_mask in region_masks.items():
+            region_mask = region_mask.to(device=weight.device, dtype=torch.bool)
+            region_weight = torch.where(region_mask, weight, torch.zeros_like(weight))
+            region_metrics = evaluate_map_product(
+                data,
+                truth,
+                weight=region_weight,
+                header=target_header,
+                value_semantics=value_semantics,
+            )
+            metrics.update(
+                {
+                    f"{name}_coverage_frac": float(region_metrics["coverage_fraction"]),
+                    f"{name}_rmse_vs_truth": float(region_metrics["reconstruction_rmse"]),
+                    f"{name}_mae_vs_truth": float(region_metrics["reconstruction_mae"]),
+                }
+            )
     return metrics
+
+
+def _clone_observation(
+    obs: ImageObservation,
+    *,
+    keep_weight: bool = True,
+    keep_mask: bool = True,
+) -> ImageObservation:
+    return ImageObservation(
+        path=obs.path,
+        hdu=obs.hdu,
+        weight=obs.weight,
+        photometric_scale=obs.photometric_scale,
+        background_offset=obs.background_offset,
+        wavelength=obs.wavelength,
+        spectral_min=obs.spectral_min,
+        spectral_max=obs.spectral_max,
+        transmission_center=obs.transmission_center,
+        transmission_sigma=obs.transmission_sigma,
+        band_name=obs.band_name,
+        weight_path=obs.weight_path if keep_weight else None,
+        weight_hdu=obs.weight_hdu,
+        mask_path=obs.mask_path if keep_mask else None,
+        mask_hdu=obs.mask_hdu,
+    )
+
+
+def _target_mask_region_masks(
+    observations: list[SimulatedObservation],
+    *,
+    target_header: dict[str, Any],
+) -> dict[str, torch.Tensor]:
+    if not any(item.observation.mask_path is not None for item in observations):
+        return {}
+
+    target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
+    device = torch.device("cpu")
+    prepared_target = image_plane_mod._prepare_target(
+        header=target_header,
+        target_wcs=WCS(target_header),
+        target_shape=target_shape,
+        device=device,
+        include_pixel_area=False,
+        include_quadrature=False,
+    )
+    mask_affected = torch.zeros(target_shape, dtype=torch.bool, device=device)
+    for item in observations:
+        obs_with_mask = item.observation
+        if obs_with_mask.mask_path is None:
+            continue
+        obs_without_mask = _clone_observation(obs_with_mask, keep_weight=True, keep_mask=False)
+        image, header = torchsky.read(obs_with_mask.path, hdu=obs_with_mask.hdu, return_header=True)
+        image = image_plane_mod._validate_image_plane(image).to(device=device)
+        header_dict_obs = dict(header)
+        source_wcs = None
+        if not (
+            image_plane_mod._headers_equivalent_for_direct_copy(header_dict_obs, target_header)
+            and tuple(int(v) for v in image.shape) == target_shape
+        ):
+            source_wcs = WCS(header_dict_obs)
+        _numer_masked, weight_masked, _overlap_masked, _moc_masked = image_plane_mod._project_observation_to_target(
+            obs_with_mask,
+            image=image,
+            header_dict_obs=header_dict_obs,
+            source_wcs=source_wcs,
+            prepared_target=prepared_target,
+            target_header=target_header,
+            target_shape=target_shape,
+            device=device,
+            footprint_order=None,
+            resampling_kernel="bilinear",
+            value_semantics="surface_brightness",
+        )
+        _numer_nomask, weight_nomask, _overlap_nomask, _moc_nomask = image_plane_mod._project_observation_to_target(
+            obs_without_mask,
+            image=image,
+            header_dict_obs=header_dict_obs,
+            source_wcs=source_wcs,
+            prepared_target=prepared_target,
+            target_header=target_header,
+            target_shape=target_shape,
+            device=device,
+            footprint_order=None,
+            resampling_kernel="bilinear",
+            value_semantics="surface_brightness",
+        )
+        mask_affected |= torch.abs(weight_nomask - weight_masked) > 1.0e-6
+    return {
+        "mask_affected": mask_affected,
+        "mask_clean": ~mask_affected,
+    }
 
 
 def evaluate_torchsky_case(
@@ -1019,6 +1147,7 @@ def evaluate_torchsky_case(
     )
     case_spec = _case_spec(case, size=size)
     obs_list = [item.observation for item in observations]
+    region_masks = _target_mask_region_masks(observations, target_header=target_header)
     product = plan_map_product(
         obs_list,
         header_overrides=target_header,
@@ -1080,6 +1209,7 @@ def evaluate_torchsky_case(
             truth,
             target_header=target_header,
             value_semantics=case_spec.value_semantics,
+            region_masks=region_masks,
         ),
         "mean_noise_sigma_flux": float(
             sum(item.noise_sigma_flux for item in observations) / max(len(observations), 1)
@@ -1115,6 +1245,7 @@ def evaluate_external_methods(
         height=height,
     )
     case_spec = _case_spec(case, size=size)
+    region_masks = _target_mask_region_masks(observations, target_header=target_header)
 
     methods: list[tuple[str, str | None]] = []
     methods.extend(("reproject_interp", variant) for _, variant in map_compat._REPROJECT_ORDERS)
@@ -1204,6 +1335,7 @@ def evaluate_external_methods(
                     truth,
                     target_header=target_header,
                     value_semantics=case_spec.value_semantics,
+                    region_masks=region_masks,
                 )
             )
         rows.append(row)

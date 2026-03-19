@@ -16,6 +16,8 @@ except Exception:  # pragma: no cover - optional fast path
 
 PV1_KEYS = tuple(f"PV1_{i}" for i in range(40))
 PV2_KEYS = tuple(f"PV2_{i}" for i in range(40))
+PV1_KEYS_SET = frozenset(PV1_KEYS)
+PV2_KEYS_SET = frozenset(PV2_KEYS)
 
 
 class TPV:
@@ -87,8 +89,13 @@ class TPV:
         indices = []
         coeffs = []
         keys = PV1_KEYS if axis == 1 else PV2_KEYS
+        keys_set = PV1_KEYS_SET if axis == 1 else PV2_KEYS_SET
+
+        # Intersect keys to avoid looking up 40 keys individually in large headers
+        present_keys = keys_set.intersection(header.keys())
+
         for j, key in enumerate(keys):
-            if key in header:
+            if key in present_keys:
                 val = float(header[key])
                 if val != 0 and j in self.power_map:
                     indices.append(self.power_map[j])
@@ -318,11 +325,13 @@ class TPV:
         if xi_t.numel() == 0:
             return xi_t, eta_t
 
+        shape = xi_t.shape
+
         # Use C++ path if requested and available
         if self._can_use_cpp_invert(xi_t, eta_t) and not self._invert_trace_enabled:
-            return _cpp.wcs_tpv_invert(
-                xi_t.contiguous(),
-                eta_t.contiguous(),
+            u_out, v_out = _cpp.wcs_tpv_invert(
+                xi_t.reshape(-1).contiguous(),
+                eta_t.reshape(-1).contiguous(),
                 self.idx1,
                 self.c1,
                 self.idx2,
@@ -330,8 +339,8 @@ class TPV:
                 int(max_iter),
                 float(tol),
             )
+            return u_out.reshape(shape), v_out.reshape(shape)
 
-        shape = xi_t.shape
         xi_f = xi_t.reshape(-1)
         eta_f = eta_t.reshape(-1)
 

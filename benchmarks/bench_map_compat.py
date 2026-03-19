@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -12,7 +13,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import torch
@@ -426,6 +427,11 @@ def _write_header_template(path: Path, header: dict[str, Any]) -> None:
 
 
 _GRID_EQUIVALENT_IGNORE_KEYS = {
+    "COMMENT",
+    "HISTORY",
+    "SIMPLE",
+    "BITPIX",
+    "EXTEND",
     "XTENSION",
     "EXTNAME",
     "EXTVER",
@@ -455,6 +461,30 @@ def _target_projection(header: dict[str, Any]) -> str:
     if len(ctype1) < 8:
         raise RuntimeError(f"cannot infer projection from CTYPE1={ctype1!r}")
     return ctype1[5:8]
+
+
+def _validate_dfreproject_headers(
+    source_header: dict[str, Any],
+    target_header: dict[str, Any],
+) -> None:
+    for role, header in (("source", source_header), ("target", target_header)):
+        ctype1 = str(header.get("CTYPE1", ""))
+        ctype2 = str(header.get("CTYPE2", ""))
+        if not ctype1.startswith("RA---") or not ctype2.startswith("DEC--"):
+            raise RuntimeError(
+                "dfreproject benchmark path currently supports only equatorial celestial WCS "
+                f"(got {role} {ctype1!r}, {ctype2!r})"
+            )
+        if any(str(key).startswith("PV") for key in header):
+            raise RuntimeError(
+                f"dfreproject benchmark path currently skips PV/TPV-distorted {role} grids"
+            )
+        proj = _target_projection(header)
+        if proj != "TAN":
+            raise RuntimeError(
+                "dfreproject benchmark path currently supports only TAN/SIP WCS "
+                f"(got {role} projection {proj!r})"
+            )
 
 
 def _swarp_target_spec(target_header: dict[str, Any]) -> dict[str, Any]:
@@ -507,12 +537,17 @@ def _write_swarp_config(
     weightout_path: Path,
     combine_type: str,
     resampling_type: str,
+    weight_type: str = "NONE",
+    weight_images: Sequence[str] | None = None,
+    fscalastro_type: str = "FIXED",
 ) -> None:
+    if fscalastro_type not in {"NONE", "FIXED", "VARIABLE"}:
+        raise ValueError("fscalastro_type must be one of {'NONE', 'FIXED', 'VARIABLE'}")
     spec = _swarp_target_spec(target_header)
     lines = [
         f"IMAGEOUT_NAME          {imageout_path}",
         f"WEIGHTOUT_NAME         {weightout_path}",
-        "WEIGHT_TYPE            NONE",
+        f"WEIGHT_TYPE            {weight_type}",
         "COMBINE                Y",
         f"COMBINE_TYPE           {combine_type}",
         "CELESTIAL_TYPE         EQUATORIAL",
@@ -526,12 +561,15 @@ def _write_swarp_config(
         "RESAMPLE               Y",
         f"RESAMPLING_TYPE        {resampling_type}",
         "INTERPOLATE            N",
+        f"FSCALASTRO_TYPE        {fscalastro_type}",
         "SUBTRACT_BACK          N",
         "WRITE_XML              N",
         "VERBOSE_TYPE           QUIET",
         "NTHREADS               0",
         "DELETE_TMPFILES        Y",
     ]
+    if weight_images is not None:
+        lines.append(f"WEIGHT_IMAGE           {','.join(weight_images)}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -658,6 +696,7 @@ def _dfreproject_weighted_observation(
         numer = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
         return numer.cpu().numpy(), weight.cpu().numpy()
 
+    _validate_dfreproject_headers(dict(header), target_header)
     source_header = _as_fits_header(dict(header))
     target_header_astropy = _as_fits_header(target_header)
     numer = calculate_reprojection(
@@ -1082,11 +1121,37 @@ def _coadd_with_swarp(
     *,
     target_header: dict[str, Any],
     resampling_type: str,
+    fscalastro_type: str = "NONE",
 ) -> tuple[np.ndarray, np.ndarray]:
     swarp_bin = _find_swarp_binary()
     if swarp_bin is None:
         raise RuntimeError("SWarp is unavailable")
     _swarp_target_spec(target_header)
+    target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
+
+    if observations:
+        direct_numer = torch.zeros(target_shape, dtype=torch.float32)
+        direct_weight = torch.zeros(target_shape, dtype=torch.float32)
+        all_direct_copy = True
+        for obs in observations:
+            image, header = torchsky.read(obs.path, hdu=obs.hdu, return_header=True)
+            image = image.to(dtype=torch.float32)
+            if not (
+                _headers_equivalent_for_direct_copy(dict(header), target_header)
+                and tuple(int(v) for v in image.shape) == target_shape
+            ):
+                all_direct_copy = False
+                break
+            weight = _load_weight_map(obs, image)
+            direct_numer += torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
+            direct_weight += weight
+        if all_direct_copy:
+            direct_data = torch.where(
+                direct_weight > 0.0,
+                direct_numer / torch.clamp(direct_weight, min=1e-8),
+                torch.zeros_like(direct_weight),
+            )
+            return direct_data.cpu().numpy(), direct_weight.cpu().numpy()
 
     with tempfile.TemporaryDirectory(prefix="torchsky_swarp_") as tmp:
         tmpdir = Path(tmp)
@@ -1121,6 +1186,7 @@ def _coadd_with_swarp(
             weightout_path=numer_weightout_path,
             combine_type="SUM",
             resampling_type=resampling_type,
+            fscalastro_type=fscalastro_type,
         )
         _write_swarp_config(
             denom_config_path,
@@ -1129,6 +1195,7 @@ def _coadd_with_swarp(
             weightout_path=denom_weightout_path,
             combine_type="SUM",
             resampling_type=resampling_type,
+            fscalastro_type=fscalastro_type,
         )
         numer_completed = subprocess.run(
             [str(swarp_bin), *numer_paths, "-c", str(numer_config_path)],
@@ -1159,6 +1226,96 @@ def _coadd_with_swarp(
         numer = torchsky.read(str(numer_imageout_path)).to(dtype=torch.float32)
         weight = torchsky.read(str(denom_imageout_path)).to(dtype=torch.float32)
         data = numer / torch.clamp(weight, min=1e-8)
+        if tuple(int(v) for v in data.shape) != target_shape:
+            raise RuntimeError(
+                "SWarp output shape did not match requested target grid "
+                f"(got {tuple(int(v) for v in data.shape)})"
+            )
+        data = torch.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+        weight = torch.nan_to_num(weight, nan=0.0, posinf=0.0, neginf=0.0)
+        data = torch.where(weight > 0.0, data, torch.zeros_like(data))
+        return data.cpu().numpy(), weight.cpu().numpy()
+
+
+def _coadd_with_swarp_direct_stack(
+    observations: list[ImageObservation],
+    *,
+    target_header: dict[str, Any],
+    resampling_type: str,
+    combine_type: str,
+    fscalastro_type: str = "NONE",
+) -> tuple[np.ndarray, np.ndarray]:
+    swarp_bin = _find_swarp_binary()
+    if swarp_bin is None:
+        raise RuntimeError("SWarp is unavailable")
+    _swarp_target_spec(target_header)
+    with tempfile.TemporaryDirectory(prefix="torchsky_swarp_direct_") as tmp:
+        tmpdir = Path(tmp)
+        image_paths: list[str] = []
+        weight_paths: list[str] = []
+        for idx, obs in enumerate(observations):
+            image, header = torchsky.read(obs.path, hdu=obs.hdu, return_header=True)
+            image = image.to(dtype=torch.float32)
+            support = (_load_weight_map(obs, image) > 0.0).to(dtype=torch.float32)
+            scale = float(obs.photometric_scale)
+            background = float(obs.background_offset)
+            if not math.isfinite(scale) or scale <= 0.0:
+                raise RuntimeError("SWarp direct combine benchmark path requires finite positive photometric_scale")
+            if not math.isfinite(background):
+                raise RuntimeError("SWarp direct combine benchmark path requires finite background_offset")
+            image_path = tmpdir / f"swarp_direct_{idx}.fits"
+            weight_path = tmpdir / f"swarp_direct_{idx}.weight.fits"
+            torchsky.write(
+                str(image_path),
+                scale
+                * (
+                    torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0)
+                    - background
+                ),
+                header=dict(header),
+                overwrite=True,
+            )
+            torchsky.write(
+                str(weight_path),
+                support,
+                header=dict(header),
+                overwrite=True,
+            )
+            image_paths.append(str(image_path))
+            weight_paths.append(str(weight_path))
+
+        imageout_path = tmpdir / "swarp_direct.fits"
+        weightout_path = tmpdir / "swarp_direct.weight.fits"
+        config_path = tmpdir / "swarp_direct.conf"
+        _write_swarp_config(
+            config_path,
+            target_header=target_header,
+            imageout_path=imageout_path,
+            weightout_path=weightout_path,
+            combine_type=combine_type,
+            resampling_type=resampling_type,
+            weight_type="MAP_WEIGHT",
+            weight_images=weight_paths,
+            fscalastro_type=fscalastro_type,
+        )
+        completed = subprocess.run(
+            [str(swarp_bin), *image_paths, "-c", str(config_path)],
+            cwd=tmpdir,
+            env=_external_tool_env(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"SWarp direct pass failed: "
+                f"{completed.stdout.strip()} {completed.stderr.strip()}".strip()
+            )
+        data = torchsky.read(str(imageout_path)).to(dtype=torch.float32)
+        if weightout_path.exists():
+            weight = torchsky.read(str(weightout_path)).to(dtype=torch.float32)
+        else:
+            weight = torch.isfinite(data).to(dtype=torch.float32)
         if tuple(int(v) for v in data.shape) != (int(target_header["NAXIS2"]), int(target_header["NAXIS1"])):
             raise RuntimeError(
                 "SWarp output shape did not match requested target grid "
@@ -1196,7 +1353,23 @@ def _diff_summary(
         data_mask = data_mask.to(dtype=torch.bool)
     edge_data_mask = edge & data_mask
     interior_data_mask = (~edge) & data_mask
+    if bool(data_mask.any()):
+        masked_data_diff = data_diff[data_mask]
+        data_rmse = float(torch.sqrt(torch.mean(torch.square(masked_data_diff))).item())
+        data_mae = float(torch.mean(masked_data_diff).item())
+        compare_frac = float(data_mask.to(dtype=torch.float32).mean().item())
+    else:
+        data_rmse = 0.0
+        data_mae = 0.0
+        compare_frac = 0.0
+    weight_rmse = float(torch.sqrt(torch.mean(torch.square(weight_diff))).item())
+    weight_mae = float(torch.mean(weight_diff).item())
     return {
+        f"rmse_data_diff{suffix}": data_rmse,
+        f"mae_data_diff{suffix}": data_mae,
+        f"rmse_weight_diff{suffix}": weight_rmse,
+        f"mae_weight_diff{suffix}": weight_mae,
+        f"comparison_support_frac{suffix}": compare_frac,
         f"max_abs_data_diff{suffix}": _masked_max(data_diff, data_mask),
         f"max_abs_weight_diff{suffix}": float(weight_diff.max().item()),
         f"max_abs_data_diff_edge{suffix}": _masked_max(data_diff, edge_data_mask),
@@ -1703,6 +1876,8 @@ def _montage_row(
         return _skipped_row(case, "montage", f"Montage failed: {exc}"), None, None
     data = torch.from_numpy(data_np)
     weight = torch.from_numpy(weight_np)
+    coverage = (weight > 0.0).to(dtype=torch.float32)
+    common_support = (coverage > 0.0) & (torchsky_weight > 0.0)
     return (
         {
             "case": case,
@@ -1714,22 +1889,25 @@ def _montage_row(
             "n_obs": len(observations),
             "time_ms": dt * 1000.0,
             "mpix_s": (float(data.numel()) / dt) / 1e6,
-            "coverage_frac": float((weight > 0.0).to(torch.float32).mean().item()),
-            "mean_weight": float(weight.mean().item()),
+            "coverage_frac": float(coverage.mean().item()),
+            "mean_weight": float(coverage.mean().item()),
             "backend": backend_path,
             "mode": mode,
-            "comparison_weight_mode": "absolute",
-            "comparison_data_domain": "full_grid",
+            "comparison_weight_mode": "coverage_mask",
+            "comparison_data_domain": "common_support",
+            "weight_semantics": "coverage_mask_from_projected_denom",
             **_diff_summary(
                 data,
-                weight,
+                coverage,
                 torchsky_data,
                 torchsky_weight,
                 suffix="_vs_torchsky",
+                data_mask=common_support,
+                compare_weight_as_mask=True,
             ),
         },
         data,
-        weight,
+        coverage,
     )
 
 

@@ -295,3 +295,28 @@ def test_fused_wcs_can_be_disabled_with_env(monkeypatch) -> None:
     twcs = WCS(dict(_tpv_header()))
     assert not twcs._enable_fused_wcs
     assert not twcs._can_use_fused_w2p_static
+
+
+def test_tpv_cpp_invert_handles_2d_inputs_when_fused_disabled() -> None:
+    header = dict(_tpv_header())
+    twcs_cpp = WCS(dict(header))
+    twcs_py = WCS(dict(header))
+    assert twcs_cpp.tpv is not None
+    assert twcs_py.tpv is not None
+
+    twcs_cpp._disable_fused_world_to_pixel = True
+    twcs_py._disable_fused_world_to_pixel = True
+    twcs_py.tpv._can_use_cpp_invert = lambda *args, **kwargs: False
+
+    x = torch.linspace(430.0, 590.0, 7, dtype=torch.float64)
+    y = torch.linspace(420.0, 600.0, 5, dtype=torch.float64)
+    yy, xx = torch.meshgrid(y, x, indexing="ij")
+
+    ra_t, dec_t = twcs_cpp.pixel_to_world(xx, yy, origin=0)
+    x_cpp, y_cpp = twcs_cpp.world_to_pixel(ra_t, dec_t, origin=0)
+    x_py, y_py = twcs_py.world_to_pixel(ra_t, dec_t, origin=0)
+
+    assert x_cpp.shape == xx.shape
+    assert y_cpp.shape == yy.shape
+    np.testing.assert_allclose(x_cpp.cpu().numpy(), x_py.cpu().numpy(), atol=5e-4)
+    np.testing.assert_allclose(y_cpp.cpu().numpy(), y_py.cpu().numpy(), atol=5e-4)
