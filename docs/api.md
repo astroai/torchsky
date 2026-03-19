@@ -266,6 +266,8 @@ print(cube.data.shape)          # [n_band, y, x]
 Fields:
 - `path`, `hdu`: image source
 - `weight`: scalar observation weight
+- `photometric_scale`: known multiplicative calibration factor applied before stacking; accumulated weights are scaled by `1 / photometric_scale^2`
+- `background_offset`: known additive background level subtracted before stacking
 - `weight_path`, `weight_hdu`: optional per-pixel positive weight / inverse-variance map
 - `mask_path`, `mask_hdu`: optional per-pixel validity mask (`> 0` means valid)
 - `wavelength`: scalar spectral coordinate for exact-band grouping or cube planning
@@ -306,15 +308,19 @@ Thin planner over the existing spatial and spatial+spectral planning helpers.
   - `plan_image_plane_target(...)`
   - `plan_image_plane_cube_target(...)`
 
-### `stack_map_product(observations, product, *, resampling_kernel="bilinear", method="coadd") -> MapProductResult`
+### `stack_map_product(observations, product, *, resampling_kernel="bilinear", method="coadd", stacking_method="weighted_mean") -> MapProductResult`
 
 Product-oriented direct stack entry point.
 
 - Current supported method: `"coadd"`
 - Reuses the existing explicit stack semantics:
-  - weighted numerator/denominator reprojection
+  - weighted numerator/denominator reprojection per observation
   - no hidden photometric solving
   - no hidden background solving
+- `stacking_method` may be:
+  - `"weighted_mean"`: inverse-variance-style weighted mean across observations
+  - `"mean"`: equal-weight mean across observations after reprojection, with weights and masks still defining valid support inside each observation
+  - `"median"`: single-band image-plane median across observations after reprojection, with weights and masks still defining valid support inside each observation
 - For single-band image products this wraps `coadd_image_plane(...)`.
 - For representable multi-band products it wraps `coadd_image_plane_cube(...)`.
 - Current direct-stack limitation:
@@ -348,7 +354,7 @@ Primary metrics:
 
 This is the standardized metric vocabulary now used by the stack truth and stack++ truth benchmarks.
 
-### `coadd_image_plane(observations, *, target_header=None, output_path=None, footprint_order=None, resampling_kernel="bilinear", value_semantics="surface_brightness") -> MapResult`
+### `coadd_image_plane(observations, *, target_header=None, output_path=None, footprint_order=None, resampling_kernel="bilinear", value_semantics="surface_brightness", stacking_method="weighted_mean") -> MapResult`
 
 Differentiable image-plane coaddition baseline.
 
@@ -367,14 +373,22 @@ Differentiable image-plane coaddition baseline.
 - `value_semantics` may be:
   - `"surface_brightness"`: preserve the current surface-brightness-style weighted mean
   - `"flux"`: apply local source/target pixel-area factors so reprojection is approximately flux-conserving
+- `stacking_method` may be:
+  - `"weighted_mean"`: accumulate projected weighted numerators and denominators, then divide at the end
+  - `"mean"`: convert each projected observation into an output-space image, then average observations equally wherever they have positive projected support
+  - `"median"`: convert each projected observation into an output-space image, then take the per-pixel median over observations with positive projected support
 - The resampling contract is explicit:
   - sample a weighted numerator image `image * weight`
   - sample the weight image separately on the same target grid
-  - sum those projected numerators and denominators over observations
-  - form the final weighted mean only at the end
+  - for `"weighted_mean"` with `"surface_brightness"` products, torchsky rescales inverse-variance-style weights by the representative `target_pixel_area / source_pixel_area` factor before cross-observation accumulation
+  - for `"weighted_mean"`, sum those projected numerators and denominators over observations and divide at the end
+  - for `"mean"`, derive one projected image per observation and average those equally across observations with positive support
+- If known calibration metadata is provided on an observation, torchsky first applies:
+  - `image_calibrated = photometric_scale * (image - background_offset)`
+  - `weight_calibrated = weight / photometric_scale^2`
 - The output is a weighted numerator/denominator coadd:
-  - `result.data`: weighted mean image
-  - `result.weight`: accumulated per-pixel weight / coverage
+  - `result.data`: final stacked image
+- `result.weight`: accumulated per-pixel inverse-variance weight for `"weighted_mean"` or contributing-support count for `"mean"` / `"median"`
   - `result.overlap_count`: number of contributing observations per target pixel
   - `result.header`: target FITS header
 - If `footprint_order` is set, torchsky also returns:
@@ -384,11 +398,13 @@ Differentiable image-plane coaddition baseline.
 Current scope:
 - 2D images only
 - scalar weights plus optional per-pixel weight and mask maps
+- optional known per-observation photometric scale and additive background normalization
+- `"median"` currently applies only to single-band image-plane coadds
 - target grid inferred from the first observation unless `target_header` is provided
 - footprint MOC diagnostics are optional and controlled by `footprint_order`
-- no automatic photometric renormalization, zeropoint solving, or background matching; inputs are assumed to already be on a common calibrated additive baseline
+- no automatic photometric renormalization, zeropoint solving, or background matching; callers may supply known normalization terms, but torchsky does not solve them yet
 
-### `ImagePlaneMapMaker(target_header=None, resampling_kernel="bilinear", value_semantics="surface_brightness")`
+### `ImagePlaneMapMaker(target_header=None, resampling_kernel="bilinear", value_semantics="surface_brightness", stacking_method="weighted_mean")`
 
 Thin wrapper around `coadd_image_plane(...)` for repeated runs with a fixed target header.
 
@@ -427,7 +443,7 @@ Compatibility planner for cube-style spectral WCS headers.
 - This is the intended bridge for future comparisons against cube-oriented astronomy packages without making the core map primitive wrapper-shaped.
 - The same pattern applies to image-plane comparison harnesses: external astronomy packages are benchmark and compatibility targets, not the primitive implementation.
 
-### `coadd_image_plane_cube(observations, *, target=None, target_header=None, footprint_order=None, resampling_kernel="bilinear", value_semantics="surface_brightness", spectral_axis=None, spectral_bin_edges=None, spectral_unit="Angstrom", spectral_type="WAVE", reference_index=0) -> SpectralCubeMapResult`
+### `coadd_image_plane_cube(observations, *, target=None, target_header=None, footprint_order=None, resampling_kernel="bilinear", value_semantics="surface_brightness", stacking_method="weighted_mean", spectral_axis=None, spectral_bin_edges=None, spectral_unit="Angstrom", spectral_type="WAVE", reference_index=0) -> SpectralCubeMapResult`
 
 Planned spatial+spectral cube assembly on a shared image plane.
 
@@ -435,6 +451,8 @@ Planned spatial+spectral cube assembly on a shared image plane.
 - Spatial reprojection uses the same weighted image-plane coadd path as `coadd_image_plane(...)`.
 - `resampling_kernel` uses the same kernel choices as `coadd_image_plane(...)`.
 - `value_semantics` uses the same surface-brightness vs flux interpretation as `coadd_image_plane(...)`.
+- `stacking_method` uses the same `"weighted_mean"` vs `"mean"` choices as `coadd_image_plane(...)`.
+- `"median"` is currently not supported for cube or multiband stacking.
 - Spectral reprojection is deterministic:
   - exact-center assignment when no `spectral_bin_edges` are provided
   - exact interval-overlap fractions when `spectral_bin_edges` are provided and observations carry `spectral_min` / `spectral_max`
@@ -451,12 +469,14 @@ Planned spatial+spectral cube assembly on a shared image plane.
   - `spatial_wcs`
 - `result.to_data_cube()` exposes the output as a `torchsky.spectral.DataCube`.
 
-### `coadd_image_plane_multiband(observations, *, target_header=None, footprint_order=None, resampling_kernel="bilinear", value_semantics="surface_brightness", spectral_unit="Angstrom", spectral_type="WAVE") -> MultiBandMapResult`
+### `coadd_image_plane_multiband(observations, *, target_header=None, footprint_order=None, resampling_kernel="bilinear", value_semantics="surface_brightness", stacking_method="weighted_mean", spectral_unit="Angstrom", spectral_type="WAVE") -> MultiBandMapResult`
 
 Grouped multi-wavelength assembly on a shared target grid.
 
 - Every observation must define `wavelength`.
 - This is the thin exact-center compatibility wrapper over `coadd_image_plane_cube(...)`.
+- `stacking_method` is forwarded directly to `coadd_image_plane_cube(...)`.
+- `"median"` is therefore currently unsupported here as well.
 - Observations are grouped by exact `wavelength` value and sorted ascending.
 - Use `plan_image_plane_target(...)` plus `target_header=...` when bands come from different pointings or per-band reference headers.
 
@@ -486,19 +506,30 @@ The `torchsky.map` namespace also exposes an experimental continuous-field layer
 
 Main pieces:
 - `FieldObservation(...)`: in-memory observation with image tensor, FITS header, optional weight/mask, Gaussian bandpass metadata, and optional PSF blur.
-- `FieldDomain(...)`: coordinate normalization domain for continuous field models.
+- `FieldDomain(...)`: coordinate normalization domain for continuous field models, including `coord_mode` (`local_tangent` or `sphere_xyz`).
 - `SineImplicitField(domain, ...)`: SIREN-style sine-activated implicit neural field.
 - `WireImplicitField(domain, ...)`: WIRE-style Gabor-activated implicit neural field.
 - `GaussianBasisField(domain, ...)`: smooth Gaussian radial-basis latent field.
-- `estimate_field_domain(observations)`: derives a practical normalization domain from a set of observations.
+- `FourierMLPField(domain, ...)`: multiscale Fourier-feature MLP latent field for harder heterogeneous cases.
+- `SpectralBasisField(domain, ...)`: separable spatial-spectral latent field that learns a spectrum per sky position through a low-rank spectral basis.
+- `BandpassConditionedField(domain, ...)`: transmission-conditioned latent field that predicts band-integrated images from the actual bandpass descriptor, while still supporting exact-wavelength evaluation as a degenerate delta-band case.
+- `LearnedSpectralBasisField(domain, ...)`: spatial coefficient field with a learned nonlinear spectral basis, aimed at making the strongest current exact-band family more expressive without collapsing spectral structure into a single generic MLP.
+- `SkyLambdaPlanesField(domain, ...)`: factorized `(sky, wavelength)` feature planes, in the spirit of K-Planes, aimed at modeling wavelength-dependent morphology without forcing strict spectral separability.
+- `ConditionedSpectralField(domain, ...)`: shared spatial latent field with a wavelength-conditioned decoder, aimed at broad-filter and exact-band multiwavelength fitting without strict low-rank spectral separation.
+- `HashGridConditionedField(domain, ...)`: instant-NGP-style spatial hash-grid encoder with an explicit wavelength decoder, aimed at stronger spatial capacity without forcing wavelength into the same hash lattice.
+- `HashGridSpectralField(domain, ...)`: instant-NGP-style spatial hash-grid encoder with a spectral head, for testing stronger spatial capacity without hashing wavelength directly.
+- `SkyEncoderMLPField(domain, ...)`: sky-aware multiscale encoder + MLP latent field using spherical harmonic/Fourier and spectral encodings.
+- `SkyEncoderResMLPField(domain, ...)`: stronger residual sky-encoder latent field for more demanding heterogeneous common-PSF fits.
+- `HashGridMLPField(domain, ...)`: multilevel hash-grid encoder + MLP latent field for more modern pure-INR experiments.
+- `estimate_field_domain(observations, coord_mode=...)`: derives a practical normalization domain from a set of observations.
 - `render_field_observation(model, observation, ...)`: forward-renders a continuous field through the observation WCS, Gaussian bandpass, and optional Gaussian PSF.
 - `render_field_cube(model, target_header=..., spectral_axis=...)`: evaluates the fitted field on a shared target grid and spectral axis.
-- `fit_field_model(observations, model, ...)`: weighted-MSE optimization loop over the rendered observations.
+- `fit_field_model(observations, model, ...)`: weighted optimization loop over the rendered observations, with `mse`, `charbonnier`, or `huber` residual losses, optional `per_observation`, `per_band`, or `global` weighted reduction, optional cosine learning-rate scheduling, optional gradient clipping, and optional coarse-to-fine curriculum support for the spectral-basis INR families.
 
 Mathematically, this path is explicit:
 - latent field: `f(alpha, delta, lambda)`
 - observation model: `I_i(x, y) ~= PSF_i * integral f(alpha_i(x, y), delta_i(x, y), lambda) T_i(lambda) d lambda`
-- current bandpass model: normalized Gaussian `T_i(lambda)`
+- current bandpass model: normalized Gaussian `T_i(lambda)` or exact delta-band transmission when an observation/band is specified by a single wavelength
 - current fit objective: weighted per-pixel MSE over the rendered observation images
 
 This is intentionally narrower than the image-plane coadd API. It is the first fitting surface for continuous multiwavelength modeling, not yet a full latent-sky pipeline with PSF learning, calibration solving, or background modeling.

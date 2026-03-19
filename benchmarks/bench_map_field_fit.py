@@ -26,7 +26,11 @@ from torchsky.map import (  # noqa: E402
     FieldDomain,
     FieldObservation,
     ImageObservation,
+    LearnedSpectralBasisField,
+    SkyEncoderMLPField,
+    SkyEncoderResMLPField,
     SineImplicitField,
+    SpectralBasisField,
     estimate_field_domain,
     evaluate_map_product,
     fit_field_model,
@@ -44,6 +48,8 @@ from torchsky.spectral import SpectralAxis  # noqa: E402
 
 DEFAULT_CASES = (
     "tan_sip_field_fit_multicolor",
+    "tan_field_fit_exact_transmission",
+    "tpv_field_fit_deep_multiband_exact",
     "tan_field_fit",
     "tan_field_fit_analytic",
     "tan_field_fit_low_overlap_depth",
@@ -54,6 +60,15 @@ DEFAULT_MODEL_KINDS = (
     "sine_implicit",
     "wire_implicit",
     "gaussian_basis",
+    "spectral_basis_field",
+    "bandpass_conditioned_field",
+    "learned_spectral_basis_field",
+    "sky_lambda_planes_field",
+    "conditioned_spectral_field",
+    "hashgrid_conditioned_field",
+    "hashgrid_spectral_field",
+    "sky_encoder_mlp",
+    "sky_encoder_resmlp",
     "coadd_bilinear",
     "coadd_bicubic",
 )
@@ -65,7 +80,7 @@ class ObservationSpec:
     spectral_min: float
     spectral_max: float
     transmission_center: float
-    transmission_sigma: float
+    transmission_sigma: float | None
     psf_sigma_pix: float
     noise_sigma: float
     fit_psf_sigma_pix: float | None = None
@@ -81,9 +96,135 @@ class CaseSpec:
     domain: FieldDomain
     target_header: dict[str, Any]
     spectral_axis: SpectralAxis
-    spectral_bin_edges: Tensor
+    spectral_bin_edges: Tensor | None
     observations: tuple[ObservationSpec, ...]
     family: str = "field_fit"
+
+
+def _field_fit_kwargs_for_model(model_kind: str, *, case: str | None = None) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "lr": 5.0e-3,
+        "num_spectral_samples": 9,
+        "loss_kind": "charbonnier",
+        "loss_reduction": "per_observation",
+        "lr_schedule": "cosine",
+        "grad_clip_norm": 1.0,
+        "curriculum": "none",
+    }
+    if case in {"tan_field_fit_exact_transmission", "tpv_field_fit_deep_multiband_exact"}:
+        kwargs["loss_kind"] = "mse"
+        kwargs["loss_reduction"] = "global"
+    if model_kind == "wire_implicit":
+        kwargs["lr"] = 4.0e-3
+    elif model_kind == "gaussian_basis":
+        kwargs["lr"] = 4.0e-3
+        kwargs["grad_clip_norm"] = 0.75
+    elif model_kind == "spectral_basis_field":
+        kwargs["lr"] = 4.0e-3
+        kwargs["grad_clip_norm"] = 1.0
+    elif model_kind == "bandpass_conditioned_field":
+        kwargs["lr"] = 4.0e-3
+        kwargs["grad_clip_norm"] = 1.0
+    elif model_kind == "learned_spectral_basis_field":
+        kwargs["lr"] = 4.0e-3
+        kwargs["grad_clip_norm"] = 1.0
+    elif model_kind == "sky_lambda_planes_field":
+        kwargs["lr"] = 4.0e-3
+        kwargs["grad_clip_norm"] = 1.0
+    elif model_kind == "conditioned_spectral_field":
+        kwargs["lr"] = 3.5e-3
+        kwargs["grad_clip_norm"] = 0.9
+    elif model_kind == "hashgrid_conditioned_field":
+        kwargs["lr"] = 3.5e-3
+        kwargs["grad_clip_norm"] = 0.85
+    elif model_kind == "hashgrid_spectral_field":
+        kwargs["lr"] = 3.0e-3
+        kwargs["grad_clip_norm"] = 0.8
+    elif model_kind == "sky_encoder_mlp":
+        kwargs["lr"] = 3.0e-3
+        kwargs["grad_clip_norm"] = 0.75
+        if case == "tpv_field_fit_deep_multiband_exact":
+            kwargs["loss_kind"] = "charbonnier"
+            kwargs["loss_reduction"] = "global"
+            kwargs["grad_clip_norm"] = 1.0
+    elif model_kind == "sky_encoder_resmlp":
+        kwargs["lr"] = 2.5e-3
+        kwargs["grad_clip_norm"] = 0.6
+        if case == "tpv_field_fit_deep_multiband_exact":
+            kwargs["lr"] = 3.0e-3
+            kwargs["loss_kind"] = "charbonnier"
+            kwargs["loss_reduction"] = "global"
+            kwargs["grad_clip_norm"] = 1.0
+    return kwargs
+
+
+def _field_model_kwargs_for_case(model_kind: str, *, case: str | None = None) -> dict[str, Any]:
+    if model_kind == "spectral_basis_field":
+        if case == "tan_field_fit_exact_transmission":
+            return {
+                "hidden_dim": 128,
+                "hidden_layers": 2,
+                "num_spatial_frequencies": 8,
+                "num_spectral_frequencies": 6,
+            }
+        if case == "tpv_field_fit_deep_multiband_exact":
+            return {
+                "hidden_dim": 128,
+                "hidden_layers": 2,
+                "num_spatial_frequencies": 6,
+                "num_spectral_frequencies": 4,
+            }
+    if model_kind == "learned_spectral_basis_field":
+        if case in {"tan_field_fit_exact_transmission", "tpv_field_fit_deep_multiband_exact"}:
+            return {
+                "hidden_dim": 128,
+                "hidden_layers": 2,
+                "num_spatial_frequencies": 6,
+                "basis_dim": 16,
+                "spectral_hidden_dim": 32,
+            }
+    if model_kind == "sky_encoder_mlp":
+        if case == "tan_field_fit_exact_transmission":
+            return {
+                "hidden_dim": 128,
+                "hidden_layers": 2,
+                "num_fourier_frequencies": 6,
+                "spectral_frequencies": 6,
+            }
+        if case == "tpv_field_fit_deep_multiband_exact":
+            return {
+                "hidden_dim": 192,
+                "hidden_layers": 3,
+                "num_fourier_frequencies": 10,
+                "spectral_frequencies": 6,
+            }
+    if model_kind == "sky_encoder_resmlp":
+        if case == "tpv_field_fit_deep_multiband_exact":
+            return {
+                "hidden_dim": 160,
+                "num_blocks": 4,
+                "num_fourier_frequencies": 10,
+                "spectral_frequencies": 4,
+            }
+    return {}
+
+
+def _make_field_model_for_case(
+    model_kind: str,
+    domain: FieldDomain,
+    *,
+    case: str | None = None,
+):
+    kwargs = _field_model_kwargs_for_case(model_kind, case=case)
+    if model_kind == "spectral_basis_field":
+        return SpectralBasisField(domain, **kwargs)
+    if model_kind == "learned_spectral_basis_field":
+        return LearnedSpectralBasisField(domain, **kwargs)
+    if model_kind == "sky_encoder_mlp":
+        return SkyEncoderMLPField(domain, **kwargs)
+    if model_kind == "sky_encoder_resmlp":
+        return SkyEncoderResMLPField(domain, **kwargs)
+    return make_field_model(model_kind, domain)
 
 
 def _rotated_cd(scale_deg: float, rotation_deg: float) -> tuple[float, float, float, float]:
@@ -233,6 +374,21 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
         wavelength_center=5750.0,
         wavelength_scale=1700.0,
     )
+    deep_exact_axis = SpectralAxis(
+        values=torch.tensor(
+            [6060.0, 8140.0, 11500.0, 15000.0, 20000.0],
+            dtype=torch.float64,
+        ),
+        unit="Angstrom",
+        type="WAVE",
+    )
+    deep_exact_domain = FieldDomain(
+        center_ra_deg=210.0,
+        center_dec_deg=-6.0,
+        spatial_scale_deg=0.06,
+        wavelength_center=14000.0,
+        wavelength_scale=9000.0,
+    )
     return {
         "tan_sip_field_fit_multicolor": CaseSpec(
             case="tan_sip_field_fit_multicolor",
@@ -312,6 +468,301 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_sigma=170.0,
                     psf_sigma_pix=0.62,
                     noise_sigma=0.013,
+                ),
+            ),
+        ),
+        "tan_field_fit_exact_transmission": CaseSpec(
+            case="tan_field_fit_exact_transmission",
+            projection="TAN",
+            description="Exact-transmission TAN field with same-field repeated delta-band coverage, shared PSF, and mixed scale/depth",
+            truth_model="analytic_basis",
+            domain=tan_domain,
+            target_header=_tan_header(
+                size,
+                crval1=150.0,
+                crval2=2.0,
+                scale_deg=0.8 / 3600.0,
+            ),
+            spectral_axis=SpectralAxis(
+                values=torch.tensor([4800.0, 5600.0, 6400.0], dtype=torch.float64),
+                unit="Angstrom",
+                type="WAVE",
+            ),
+            spectral_bin_edges=None,
+            observations=(
+                ObservationSpec(
+                    header=_tan_header(
+                        size,
+                        crval1=150.0,
+                        crval2=2.0,
+                        scale_deg=0.85 / 3600.0,
+                    ),
+                    spectral_min=4800.0,
+                    spectral_max=4800.0,
+                    transmission_center=4800.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.018,
+                ),
+                ObservationSpec(
+                    header=_tan_header(
+                        size,
+                        crval1=150.0009,
+                        crval2=2.0007,
+                        scale_deg=1.12 / 3600.0,
+                        rotation_deg=8.0,
+                    ),
+                    spectral_min=4800.0,
+                    spectral_max=4800.0,
+                    transmission_center=4800.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.028,
+                    gap=(slice(size // 4, size // 2), slice(size // 2, size // 2 + 4)),
+                ),
+                ObservationSpec(
+                    header=_tan_header(
+                        size,
+                        crval1=149.9993,
+                        crval2=1.9995,
+                        scale_deg=0.96 / 3600.0,
+                        rotation_deg=-6.0,
+                    ),
+                    spectral_min=5600.0,
+                    spectral_max=5600.0,
+                    transmission_center=5600.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.014,
+                ),
+                ObservationSpec(
+                    header=_tan_header(
+                        size,
+                        crval1=150.0012,
+                        crval2=2.0008,
+                        scale_deg=1.10 / 3600.0,
+                        rotation_deg=10.0,
+                    ),
+                    spectral_min=5600.0,
+                    spectral_max=5600.0,
+                    transmission_center=5600.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.022,
+                    gap=(slice(size // 5, size // 5 + 5), slice(size // 3, size - size // 4)),
+                ),
+                ObservationSpec(
+                    header=_tan_header(
+                        size,
+                        crval1=149.9991,
+                        crval2=2.0009,
+                        scale_deg=0.90 / 3600.0,
+                        rotation_deg=-9.0,
+                    ),
+                    spectral_min=6400.0,
+                    spectral_max=6400.0,
+                    transmission_center=6400.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.016,
+                ),
+                ObservationSpec(
+                    header=_tan_header(
+                        size,
+                        crval1=150.0008,
+                        crval2=1.9994,
+                        scale_deg=1.04 / 3600.0,
+                        rotation_deg=5.0,
+                    ),
+                    spectral_min=6400.0,
+                    spectral_max=6400.0,
+                    transmission_center=6400.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.026,
+                    gap=(slice(size // 3, size - size // 5), slice(size // 4, size // 4 + 4)),
+                ),
+            ),
+        ),
+        "tpv_field_fit_deep_multiband_exact": CaseSpec(
+            case="tpv_field_fit_deep_multiband_exact",
+            projection="TPV",
+            description="Deep-field TPV exact-band benchmark with repeated multiband visits, mixed scale/depth/coverage, and shared PSF",
+            truth_model="analytic_basis",
+            domain=deep_exact_domain,
+            target_header=_tpv_header(
+                size,
+                crval1=210.0,
+                crval2=-6.0,
+                scale_deg=0.75 / 3600.0,
+                rotation_deg=3.0,
+                pv_scale=1.1,
+            ),
+            spectral_axis=deep_exact_axis,
+            spectral_bin_edges=None,
+            observations=(
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=210.0000,
+                        crval2=-6.0000,
+                        scale_deg=0.72 / 3600.0,
+                        rotation_deg=-2.0,
+                        pv_scale=0.9,
+                    ),
+                    spectral_min=6060.0,
+                    spectral_max=6060.0,
+                    transmission_center=6060.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.010,
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=209.9986,
+                        crval2=-6.0011,
+                        scale_deg=1.10 / 3600.0,
+                        rotation_deg=11.0,
+                        pv_scale=1.25,
+                    ),
+                    spectral_min=6060.0,
+                    spectral_max=6060.0,
+                    transmission_center=6060.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.018,
+                    gap=(slice(size // 4, size // 2), slice(size // 3, size - size // 6)),
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=210.0018,
+                        crval2=-5.9988,
+                        scale_deg=0.78 / 3600.0,
+                        rotation_deg=4.0,
+                        pv_scale=0.95,
+                    ),
+                    spectral_min=8140.0,
+                    spectral_max=8140.0,
+                    transmission_center=8140.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.011,
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=209.9967,
+                        crval2=-6.0024,
+                        scale_deg=1.35 / 3600.0,
+                        rotation_deg=-13.0,
+                        pv_scale=1.35,
+                    ),
+                    spectral_min=8140.0,
+                    spectral_max=8140.0,
+                    transmission_center=8140.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.022,
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=210.0009,
+                        crval2=-6.0015,
+                        scale_deg=0.64 / 3600.0,
+                        rotation_deg=6.0,
+                        pv_scale=1.05,
+                    ),
+                    spectral_min=11500.0,
+                    spectral_max=11500.0,
+                    transmission_center=11500.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.008,
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=209.9991,
+                        crval2=-6.0004,
+                        scale_deg=0.94 / 3600.0,
+                        rotation_deg=-7.0,
+                        pv_scale=1.15,
+                    ),
+                    spectral_min=11500.0,
+                    spectral_max=11500.0,
+                    transmission_center=11500.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.015,
+                    gap=(slice(size // 5, size // 5 + 6), slice(size // 2, size - size // 8)),
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=210.0025,
+                        crval2=-5.9995,
+                        scale_deg=0.83 / 3600.0,
+                        rotation_deg=9.0,
+                        pv_scale=1.0,
+                    ),
+                    spectral_min=15000.0,
+                    spectral_max=15000.0,
+                    transmission_center=15000.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.010,
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=209.9978,
+                        crval2=-6.0030,
+                        scale_deg=1.42 / 3600.0,
+                        rotation_deg=-16.0,
+                        pv_scale=1.40,
+                    ),
+                    spectral_min=15000.0,
+                    spectral_max=15000.0,
+                    transmission_center=15000.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.021,
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=210.0012,
+                        crval2=-5.9982,
+                        scale_deg=0.76 / 3600.0,
+                        rotation_deg=5.0,
+                        pv_scale=1.08,
+                    ),
+                    spectral_min=20000.0,
+                    spectral_max=20000.0,
+                    transmission_center=20000.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.012,
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=209.9958,
+                        crval2=-6.0018,
+                        scale_deg=1.18 / 3600.0,
+                        rotation_deg=-10.0,
+                        pv_scale=1.30,
+                    ),
+                    spectral_min=20000.0,
+                    spectral_max=20000.0,
+                    transmission_center=20000.0,
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.019,
+                    gap=(slice(size // 3, size - size // 5), slice(size // 4, size // 4 + 7)),
                 ),
             ),
         ),
@@ -818,12 +1269,17 @@ def _pixel_scale_arcsec(header: dict[str, Any]) -> float:
 def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not rows:
         return []
-    best_rmse = min(float(row["reconstruction_rmse"]) for row in rows)
+    metric_name = (
+        "support_reconstruction_rmse"
+        if all("support_reconstruction_rmse" in row for row in rows)
+        else "reconstruction_rmse"
+    )
+    best_rmse = min(float(row[metric_name]) for row in rows)
     within = [
-        row for row in rows if float(row["reconstruction_rmse"]) <= 1.05 * best_rmse
+        row for row in rows if float(row[metric_name]) <= 1.05 * best_rmse
     ]
     default = min(within, key=lambda row: float(row["fit_time_ms"]))
-    best = min(rows, key=lambda row: float(row["reconstruction_rmse"]))
+    best = min(rows, key=lambda row: float(row[metric_name]))
     return [
         {
             "library": "torchsky",
@@ -831,8 +1287,9 @@ def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "case": default["case"],
             "profile": "default_general",
             "recommended_model": default["model_kind"],
-            "criterion": "fastest_within_5pct_reconstruction_rmse",
+            "criterion": f"fastest_within_5pct_{metric_name}",
             "reconstruction_rmse": default["reconstruction_rmse"],
+            metric_name: default[metric_name],
             "fit_time_ms": default["fit_time_ms"],
         },
         {
@@ -841,8 +1298,9 @@ def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "case": best["case"],
             "profile": "high_accuracy",
             "recommended_model": best["model_kind"],
-            "criterion": "lowest_reconstruction_rmse",
+            "criterion": f"lowest_{metric_name}",
             "reconstruction_rmse": best["reconstruction_rmse"],
+            metric_name: best[metric_name],
             "fit_time_ms": best["fit_time_ms"],
         },
     ]
@@ -870,11 +1328,17 @@ def evaluate_case(
             spectral_axis=case_spec.spectral_axis,
             spectral_bin_edges=case_spec.spectral_bin_edges,
         )
+        support_reference_product = stack_map_product(
+            image_observations,
+            product,
+            resampling_kernel="bilinear",
+        )
         domain = estimate_field_domain(observations)
         fit_times = []
         result = None
         product_pred = None
         observation_residuals = []
+        model_kwargs: dict[str, Any] = {}
         if model_kind.startswith("coadd_"):
             kernel = model_kind.split("_", 1)[1]
             coadd_times = []
@@ -896,25 +1360,33 @@ def evaluate_case(
             fit_times = coadd_times
             product_pred = result_product
         else:
+            fit_kwargs = _field_fit_kwargs_for_model(model_kind, case=case_spec.case)
+            model_kwargs = _field_model_kwargs_for_case(model_kind, case=case_spec.case)
             torch.manual_seed(int(seed) + 999)
-            warmup_model = make_field_model(model_kind, domain)
+            warmup_model = _make_field_model_for_case(
+                model_kind,
+                domain,
+                case=case_spec.case,
+            )
             fit_field_model(
                 observations,
                 warmup_model,
                 steps=steps,
-                lr=5.0e-3,
-                num_spectral_samples=9,
+                **fit_kwargs,
             )
             for run_idx in range(int(runs)):
                 torch.manual_seed(int(seed) + 1000 + run_idx)
-                model = make_field_model(model_kind, domain)
+                model = _make_field_model_for_case(
+                    model_kind,
+                    domain,
+                    case=case_spec.case,
+                )
                 start = time.perf_counter()
                 result = fit_field_model(
                     observations,
                     model,
                     steps=steps,
-                    lr=5.0e-3,
-                    num_spectral_samples=9,
+                    **fit_kwargs,
                 )
                 fit_times.append((time.perf_counter() - start) * 1000.0)
             assert result is not None
@@ -933,6 +1405,13 @@ def evaluate_case(
                 )
         assert product_pred is not None
         metrics = evaluate_map_product(product_pred, truth_cube)
+        support_metrics = evaluate_map_product(
+            product_pred.data,
+            truth_cube,
+            weight=support_reference_product.weight,
+            header=product_pred.header,
+            value_semantics=product_pred.product.value_semantics,
+        )
         cube_pred = product_pred.data
     signal_rms = float(torch.sqrt(torch.mean(torch.square(truth_cube))).item())
     residual_rms = float(metrics["reconstruction_rmse"])
@@ -954,6 +1433,7 @@ def evaluate_case(
         "description": case_spec.description,
         "truth_model": case_spec.truth_model,
         "model_kind": model_kind,
+        "model_kwargs": model_kwargs if result is not None else {},
         "fit_method": "weighted_mse_adam" if result is not None else "weighted_cube_coadd",
         "num_observations": len(observations),
         "num_bands": int(case_spec.spectral_axis.values.numel()),
@@ -964,6 +1444,41 @@ def evaluate_case(
         "final_loss": final_loss,
         "loss_improvement_ratio": loss_improvement,
         **metrics,
+        "support_reference_model_kind": "coadd_bilinear",
+        "support_reference_coverage_fraction": float(
+            support_reference_product.weight.gt(0.0)
+            .to(dtype=torch.float32)
+            .mean()
+            .item()
+        ),
+        "support_reconstruction_rmse": float(
+            support_metrics["reconstruction_rmse"]  # type: ignore[arg-type]
+        ),
+        "support_band_reconstruction_rmse": list(
+            support_metrics["band_reconstruction_rmse"]  # type: ignore[arg-type]
+        ),
+        "support_reconstruction_mae": float(
+            support_metrics["reconstruction_mae"]  # type: ignore[arg-type]
+        ),
+        "support_reconstruction_p95_abs_err": float(
+            support_metrics["reconstruction_p95_abs_err"]  # type: ignore[arg-type]
+        ),
+        "support_reconstruction_max_abs_err": float(
+            support_metrics["reconstruction_max_abs_err"]  # type: ignore[arg-type]
+        ),
+        "support_signal_to_residual_db": float(
+            support_metrics["signal_to_residual_db"]  # type: ignore[arg-type]
+        ),
+        "support_total_flux_relative_error": float(
+            support_metrics["total_flux_relative_error"]  # type: ignore[arg-type]
+        ),
+        "support_band_flux_relative_error": list(
+            support_metrics["band_flux_relative_error"]  # type: ignore[arg-type]
+        ),
+        "band_centers_angstrom": [
+            float(value)
+            for value in case_spec.spectral_axis.to_wavelength().detach().cpu().tolist()
+        ],
         "signal_rms_truth": signal_rms,
         "residual_rms": residual_rms,
         "signal_to_residual_ratio": signal_rms / max(residual_rms, 1.0e-8),

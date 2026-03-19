@@ -20,12 +20,14 @@ from .image_plane import (
     ImageObservation,
     MapResamplingKernel,
     MapResult,
+    MapStackingMethod,
     MapValueSemantics,
     PlannedImagePlaneCubeTarget,
     PlannedImagePlaneTarget,
     SpectralCubeMapResult,
     _pixel_area_sr_map,
     _validated_map_resampling_kernel,
+    _validated_map_stacking_method,
     _validated_map_value_semantics,
     coadd_image_plane,
     coadd_image_plane_cube,
@@ -325,10 +327,12 @@ def stack_map_product(
     *,
     resampling_kernel: MapResamplingKernel = "bilinear",
     method: str = "coadd",
+    stacking_method: MapStackingMethod = "weighted_mean",
 ) -> MapProductResult:
     if method != "coadd":
         raise ValueError("stack_map_product currently supports only method='coadd'")
     resampling_kernel = _validated_map_resampling_kernel(resampling_kernel)
+    stacking_method = _validated_map_stacking_method(stacking_method)
     if len(product.bands) == 1:
         band = product.bands[0]
         if band.spectral_min is None and band.spectral_max is None:
@@ -338,6 +342,7 @@ def stack_map_product(
                 footprint_order=product.footprint_order,
                 resampling_kernel=resampling_kernel,
                 value_semantics=product.value_semantics,
+                stacking_method=stacking_method,
             )
             return _wrap_map_result(result, product)
     cube_target = _product_to_cube_target(product)
@@ -347,6 +352,7 @@ def stack_map_product(
         footprint_order=product.footprint_order,
         resampling_kernel=resampling_kernel,
         value_semantics=product.value_semantics,
+        stacking_method=stacking_method,
     )
     return _wrap_cube_result(result, product)
 
@@ -430,7 +436,7 @@ def evaluate_map_product(
     weight: Tensor | None = None,
     header: dict[str, Any] | None = None,
     value_semantics: MapValueSemantics | None = None,
-) -> dict[str, float | None]:
+) -> dict[str, float | list[float] | None]:
     if isinstance(prediction, MapProductResult):
         pred_data = prediction.data
         pred_weight = prediction.weight
@@ -458,7 +464,7 @@ def evaluate_map_product(
         raise ValueError("Prediction, truth, and weight tensors must share the same shape")
     valid = pred_weight > 0.0
     if not bool(valid.any()):
-        zeros: dict[str, float | None] = {
+        zeros: dict[str, float | list[float] | None] = {
             "coverage_fraction": 0.0,
             "zero_support_fraction": 1.0,
             "mean_weight": float(pred_weight.mean().item()),
@@ -468,8 +474,10 @@ def evaluate_map_product(
             "reconstruction_max_abs_err": 0.0,
             "signal_to_residual_ratio": 0.0,
             "signal_to_residual_db": float("-inf"),
+            "band_reconstruction_rmse": [0.0 for _ in range(int(pred_data.shape[0]))],
             "band_flux_relative_error_mean": 0.0,
             "band_flux_relative_error_max": 0.0,
+            "band_flux_relative_error": [0.0 for _ in range(int(pred_data.shape[0]))],
             "total_flux_truth": 0.0,
             "total_flux_output": 0.0,
             "total_flux_absolute_error": 0.0,
@@ -518,7 +526,7 @@ def evaluate_map_product(
         torch.abs(band_flux_truth),
         min=1.0e-8,
     )
-    metrics: dict[str, float | None] = {
+    metrics: dict[str, float | list[float] | None] = {
         "coverage_fraction": float(valid.to(dtype=torch.float32).mean().item()),
         "zero_support_fraction": float((~valid).to(dtype=torch.float32).mean().item()),
         "mean_weight": float(pred_weight.mean().item()),
@@ -530,8 +538,14 @@ def evaluate_map_product(
         "reconstruction_max_abs_err": float(torch.max(abs_flat).item()),
         "signal_to_residual_ratio": snr_linear,
         "signal_to_residual_db": 20.0 * math.log10(max(snr_linear, 1.0e-12)),
+        "band_reconstruction_rmse": [
+            float(value) for value in band_rmse_tensor.detach().cpu().tolist()
+        ],
         "band_flux_relative_error_mean": float(torch.mean(band_flux_rel_err).item()),
         "band_flux_relative_error_max": float(torch.max(band_flux_rel_err).item()),
+        "band_flux_relative_error": [
+            float(value) for value in band_flux_rel_err.detach().cpu().tolist()
+        ],
         "band_reconstruction_rmse_mean": float(torch.mean(band_rmse_tensor).item()),
         "band_reconstruction_rmse_max": float(torch.max(band_rmse_tensor).item()),
         "total_flux_truth": float(band_flux_truth.sum().item()),
@@ -607,8 +621,8 @@ def _row_label(row: Mapping[str, Any]) -> str:
 def build_map_benchmark_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
     cases = sorted({str(row["case"]) for row in rows if "case" in row})
     lines = [
-        "| case | best accuracy | best SNR | best flux conservation | fastest | recommended stack | recommended field |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| case | best accuracy | best support accuracy | best SNR | best flux conservation | fastest | recommended stack | recommended field |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for case in cases:
         case_rows = [
@@ -625,6 +639,15 @@ def build_map_benchmark_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
             metric_rows,
             key=lambda row: float(row["reconstruction_rmse"]),
         ) if metric_rows else None
+        support_metric_rows = [
+            row
+            for row in metric_rows
+            if row.get("support_reconstruction_rmse") is not None
+        ]
+        best_support_accuracy = min(
+            support_metric_rows,
+            key=lambda row: float(row["support_reconstruction_rmse"]),
+        ) if support_metric_rows else None
         best_snr = max(
             metric_rows,
             key=lambda row: float(row["signal_to_residual_db"]),
@@ -673,6 +696,7 @@ def build_map_benchmark_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
                 [
                     case,
                     fmt_metric(best_accuracy, "reconstruction_rmse"),
+                    fmt_metric(best_support_accuracy, "support_reconstruction_rmse"),
                     fmt_metric(best_snr, "signal_to_residual_db"),
                     fmt_metric(best_flux, "total_flux_relative_error"),
                     fmt_time(fastest),

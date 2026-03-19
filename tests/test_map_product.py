@@ -8,12 +8,15 @@ import torch
 import torchsky
 from torchsky.map import (
     FieldDomain,
+    FieldObservation,
     GaussianBasisField,
     ImageObservation,
     MapBandpassSpec,
     check_map_benchmark_regressions,
     evaluate_map_product,
+    make_field_model,
     plan_map_product,
+    render_field_observation,
     render_field_product,
     stack_map_product,
 )
@@ -122,6 +125,84 @@ def test_render_field_product_matches_product_shape() -> None:
     assert bool(torch.all(result.weight == 1.0))
 
 
+def test_render_field_product_matches_exact_transmission_per_band_stacks(
+    tmp_path: Path,
+) -> None:
+    torch.manual_seed(2026)
+    domain = FieldDomain(
+        center_ra_deg=12.0,
+        center_dec_deg=-3.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=1000.0,
+        coord_mode="sphere_xyz",
+    )
+    model = make_field_model("sky_encoder_mlp", domain)
+    header = _simple_header()
+    wavelengths = (4800.0, 5600.0, 6400.0)
+    labels = ("blue", "green", "red")
+    observations: list[ImageObservation] = []
+    expected_planes: list[torch.Tensor] = []
+    for wavelength, label in zip(wavelengths, labels, strict=True):
+        template = FieldObservation(
+            image=torch.zeros((6, 6), dtype=torch.float32),
+            header=header,
+            wavelength=wavelength,
+            band_name=label,
+        )
+        rendered = render_field_observation(
+            model,
+            template,
+            num_spectral_samples=1,
+        ).detach()
+        expected_planes.append(rendered)
+        for replica, scalar_weight in enumerate((1.0, 2.5)):
+            path = tmp_path / f"{label}_{replica}.fits"
+            torchsky.write(str(path), rendered, header=header, overwrite=True)
+            observations.append(
+                ImageObservation(
+                    str(path),
+                    wavelength=wavelength,
+                    band_name=label,
+                    weight=scalar_weight,
+                )
+            )
+    product = plan_map_product(
+        observations,
+        spectral_axis=SpectralAxis(
+            values=torch.tensor(wavelengths, dtype=torch.float64),
+            unit="Angstrom",
+            type="WAVE",
+        ),
+    )
+    stacked = stack_map_product(
+        observations,
+        product,
+        resampling_kernel="bilinear",
+        stacking_method="weighted_mean",
+    )
+    rendered_product = render_field_product(
+        model,
+        product,
+        num_spectral_samples=1,
+    )
+
+    torch.testing.assert_close(
+        rendered_product.data,
+        torch.stack(expected_planes, dim=0),
+        rtol=0.0,
+        atol=1.0e-5,
+    )
+    torch.testing.assert_close(
+        stacked.data,
+        rendered_product.data,
+        rtol=0.0,
+        atol=1.0e-5,
+    )
+    assert tuple(band.label for band in product.bands) == labels
+    assert bool(torch.all(stacked.weight > 0.0))
+
+
 def test_evaluate_map_product_uses_product_level_metrics() -> None:
     product = torchsky.map.MapProductSpec(
         target_header=_simple_header(),
@@ -144,6 +225,9 @@ def test_evaluate_map_product_uses_product_level_metrics() -> None:
     assert float(metrics["reconstruction_rmse"]) > 0.0
     assert float(metrics["coverage_fraction"]) == pytest.approx(1.0)
     assert float(metrics["total_flux_relative_error"]) > 0.0
+    assert metrics["band_reconstruction_rmse"] == [pytest.approx(float(metrics["reconstruction_rmse"]))]
+    assert len(metrics["band_flux_relative_error"]) == 1
+    assert float(metrics["band_flux_relative_error"][0]) > 0.0
 
 
 def test_check_map_benchmark_regressions_respects_skip_time_flag() -> None:
