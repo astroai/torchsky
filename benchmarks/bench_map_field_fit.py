@@ -27,11 +27,14 @@ from torchsky.map import (  # noqa: E402
     FieldObservation,
     ImageObservation,
     LearnedSpectralBasisField,
+    SkyEncoderBandpassField,
     SkyEncoderMLPField,
     SkyEncoderResMLPField,
     SineImplicitField,
     SpectralBasisField,
+    estimate_map_inverse_variance,
     estimate_field_domain,
+    evaluate_map_uncertainty,
     evaluate_map_product,
     fit_field_model,
     make_field_model,
@@ -48,7 +51,9 @@ from torchsky.spectral import SpectralAxis  # noqa: E402
 
 DEFAULT_CASES = (
     "tan_sip_field_fit_multicolor",
+    "tan_sip_field_fit_deep_multiband_broad",
     "tan_field_fit_exact_transmission",
+    "tpv_field_fit_deep_multiband_broad",
     "tpv_field_fit_deep_multiband_exact",
     "tan_field_fit",
     "tan_field_fit_analytic",
@@ -63,7 +68,11 @@ DEFAULT_MODEL_KINDS = (
     "spectral_basis_field",
     "bandpass_conditioned_field",
     "learned_spectral_basis_field",
+    "sky_encoder_bandpass_field",
     "sky_lambda_planes_field",
+    "sky_lambda_feature_field",
+    "sky_lambda_feature_field_hetero",
+    "sky_lambda_feature_atlas_field",
     "conditioned_spectral_field",
     "hashgrid_conditioned_field",
     "hashgrid_spectral_field",
@@ -72,6 +81,13 @@ DEFAULT_MODEL_KINDS = (
     "coadd_bilinear",
     "coadd_bicubic",
 )
+
+STEP_PROFILES: dict[str, dict[str, int]] = {
+    "sparse_mosaic_frontier": {
+        "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit": 32,
+        "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap": 16,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -114,6 +130,28 @@ def _field_fit_kwargs_for_model(model_kind: str, *, case: str | None = None) -> 
     if case in {"tan_field_fit_exact_transmission", "tpv_field_fit_deep_multiband_exact"}:
         kwargs["loss_kind"] = "mse"
         kwargs["loss_reduction"] = "global"
+        if case in {
+            "tpv_field_fit_sparse_large_mosaic_exact",
+            "tpv_field_fit_sparse_large_mosaic_exact_densebands",
+        }:
+            kwargs["loss_kind"] = "mse"
+            kwargs["loss_reduction"] = "global"
+    if case == "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit":
+        kwargs["loss_kind"] = "mse"
+        kwargs["loss_reduction"] = "global"
+    if case in {"tan_sip_field_fit_deep_multiband_broad", "tpv_field_fit_deep_multiband_broad", "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap"}:
+        kwargs["loss_kind"] = "charbonnier"
+        kwargs["loss_reduction"] = "global"
+        kwargs["grad_clip_norm"] = 1.0
+        kwargs["training_spectral_sampling"] = "mixture_mc"
+        kwargs["training_spectral_sampling_grid_size"] = 65
+        kwargs["spectral_anchor_observations_per_step"] = 1
+        kwargs["spectral_anchor_num_samples"] = 17
+        kwargs["spectral_anchor_loss_weight"] = 0.1
+    if case == "tan_sip_field_fit_sparse_large_mosaic_broad":
+        kwargs["loss_kind"] = "charbonnier"
+        kwargs["loss_reduction"] = "global"
+        kwargs["grad_clip_norm"] = 1.0
     if model_kind == "wire_implicit":
         kwargs["lr"] = 4.0e-3
     elif model_kind == "gaussian_basis":
@@ -128,9 +166,79 @@ def _field_fit_kwargs_for_model(model_kind: str, *, case: str | None = None) -> 
     elif model_kind == "learned_spectral_basis_field":
         kwargs["lr"] = 4.0e-3
         kwargs["grad_clip_norm"] = 1.0
+    elif model_kind == "sky_encoder_bandpass_field":
+        kwargs["lr"] = 2.5e-3
+        kwargs["grad_clip_norm"] = 1.0
     elif model_kind == "sky_lambda_planes_field":
         kwargs["lr"] = 4.0e-3
         kwargs["grad_clip_norm"] = 1.0
+    elif model_kind == "sky_lambda_kplanes_field":
+        kwargs["lr"] = 4.0e-3
+        kwargs["grad_clip_norm"] = 1.0
+        if case == "tan_sip_field_fit_sparse_large_mosaic_broad":
+            kwargs["loss_kind"] = "mse"
+        if case in {
+            "tpv_field_fit_sparse_large_mosaic_exact",
+            "tpv_field_fit_sparse_large_mosaic_exact_densebands",
+            "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit",
+        }:
+            kwargs["lr"] = 2.5e-3
+            kwargs["loss_reduction"] = "per_band"
+    elif model_kind == "sky_lambda_feature_field":
+        kwargs["lr"] = 2.0e-3
+        kwargs["grad_clip_norm"] = 1.0
+        kwargs["lr_warmup_steps"] = 4
+        if case in {
+            "tpv_field_fit_sparse_large_mosaic_exact",
+            "tpv_field_fit_sparse_large_mosaic_exact_densebands",
+        }:
+            kwargs["loss_kind"] = "mse"
+            kwargs["loss_reduction"] = "band_global_mix"
+            kwargs["lr"] = 1.5e-3
+            kwargs["lr_warmup_steps"] = 6
+            kwargs["weight_decay"] = 1.0e-5
+        if case == "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit":
+            kwargs["loss_kind"] = "mse"
+            kwargs["loss_reduction"] = "global"
+            kwargs["lr"] = 1.5e-3
+            kwargs["lr_warmup_steps"] = 6
+            kwargs["weight_decay"] = 1.0e-5
+            kwargs["observations_per_step"] = 9
+            kwargs["observation_sampling"] = "band_balanced"
+            kwargs["training_patch_size"] = 24
+            kwargs["training_patches_per_observation"] = 1
+        if case == "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap":
+            kwargs["loss_kind"] = "charbonnier"
+            kwargs["loss_reduction"] = "band_global_mix"
+            kwargs["lr"] = 1.5e-3
+            kwargs["lr_warmup_steps"] = 6
+            kwargs["weight_decay"] = 1.0e-5
+            kwargs["observations_per_step"] = 9
+            kwargs["observation_sampling"] = "band_balanced"
+            kwargs["training_patch_size"] = 24
+            kwargs["training_patches_per_observation"] = 1
+    elif model_kind == "sky_lambda_feature_field_hetero":
+        kwargs["lr"] = 2.0e-3
+        kwargs["grad_clip_norm"] = 1.0
+        kwargs["lr_warmup_steps"] = 4
+        if case in {
+            "tpv_field_fit_sparse_large_mosaic_exact",
+            "tpv_field_fit_sparse_large_mosaic_exact_densebands",
+            "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit",
+        }:
+            kwargs["loss_kind"] = "gaussian_nll"
+            kwargs["loss_reduction"] = "per_band"
+            kwargs["lr"] = 1.5e-3
+            kwargs["lr_warmup_steps"] = 6
+            kwargs["weight_decay"] = 1.0e-5
+    elif model_kind == "sky_lambda_feature_atlas_field":
+        kwargs["lr"] = 1.5e-3
+        kwargs["grad_clip_norm"] = 1.0
+        kwargs["lr_warmup_steps"] = 6
+        kwargs["weight_decay"] = 1.0e-5
+        if case == "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit":
+            kwargs["loss_kind"] = "mse"
+            kwargs["loss_reduction"] = "global"
     elif model_kind == "conditioned_spectral_field":
         kwargs["lr"] = 3.5e-3
         kwargs["grad_clip_norm"] = 0.9
@@ -150,12 +258,26 @@ def _field_fit_kwargs_for_model(model_kind: str, *, case: str | None = None) -> 
     elif model_kind == "sky_encoder_resmlp":
         kwargs["lr"] = 2.5e-3
         kwargs["grad_clip_norm"] = 0.6
+        if case in {"tan_sip_field_fit_deep_multiband_broad", "tpv_field_fit_deep_multiband_broad"}:
+            kwargs["lr"] = 2.5e-3
+            kwargs["grad_clip_norm"] = 1.0
+            kwargs["loss_kind"] = "charbonnier"
+            kwargs["loss_reduction"] = "global"
         if case == "tpv_field_fit_deep_multiband_exact":
             kwargs["lr"] = 3.0e-3
             kwargs["loss_kind"] = "charbonnier"
             kwargs["loss_reduction"] = "global"
             kwargs["grad_clip_norm"] = 1.0
     return kwargs
+
+
+def _steps_for_case(case: str, *, base_steps: int, step_profile: str | None = None) -> int:
+    if not step_profile:
+        return int(base_steps)
+    profile = STEP_PROFILES.get(step_profile)
+    if profile is None:
+        raise ValueError(f"unknown step profile {step_profile!r}")
+    return int(profile.get(case, base_steps))
 
 
 def _field_model_kwargs_for_case(model_kind: str, *, case: str | None = None) -> dict[str, Any]:
@@ -183,6 +305,34 @@ def _field_model_kwargs_for_case(model_kind: str, *, case: str | None = None) ->
                 "basis_dim": 16,
                 "spectral_hidden_dim": 32,
             }
+    if model_kind == "sky_encoder_bandpass_field":
+        if case == "tan_sip_field_fit_deep_multiband_broad":
+            return {
+                "hidden_dim": 160,
+                "hidden_layers": 3,
+                "num_fourier_frequencies": 8,
+                "spectral_frequencies": 6,
+                "num_bandpass_frequencies": 8,
+                "bandpass_hidden_dim": 64,
+            }
+        if case == "tpv_field_fit_deep_multiband_broad":
+            return {
+                "hidden_dim": 192,
+                "hidden_layers": 3,
+                "num_fourier_frequencies": 10,
+                "spectral_frequencies": 6,
+                "num_bandpass_frequencies": 8,
+                "bandpass_hidden_dim": 64,
+            }
+        if case == "tan_sip_field_fit_sparse_large_mosaic_broad":
+            return {
+                "hidden_dim": 160,
+                "hidden_layers": 3,
+                "num_fourier_frequencies": 8,
+                "spectral_frequencies": 6,
+                "num_bandpass_frequencies": 8,
+                "bandpass_hidden_dim": 64,
+            }
     if model_kind == "sky_encoder_mlp":
         if case == "tan_field_fit_exact_transmission":
             return {
@@ -198,7 +348,230 @@ def _field_model_kwargs_for_case(model_kind: str, *, case: str | None = None) ->
                 "num_fourier_frequencies": 10,
                 "spectral_frequencies": 6,
             }
+        if case == "tpv_field_fit_sparse_large_mosaic_exact":
+            return {
+                "hidden_dim": 192,
+                "hidden_layers": 3,
+                "num_fourier_frequencies": 10,
+                "spectral_frequencies": 6,
+            }
+    if model_kind == "sky_lambda_kplanes_field":
+        if case == "tan_sip_field_fit_deep_multiband_broad":
+            return {
+                "base_resolution": 24,
+                "num_scales": 4,
+                "features_per_plane": 16,
+                "hidden_dim": 128,
+                "hidden_layers": 3,
+                "refine_hidden_dim": 64,
+            }
+        if case == "tpv_field_fit_deep_multiband_broad":
+            return {
+                "base_resolution": 32,
+                "num_scales": 4,
+                "features_per_plane": 16,
+                "hidden_dim": 128,
+                "hidden_layers": 3,
+                "refine_hidden_dim": 64,
+            }
+        if case == "tpv_field_fit_sparse_large_mosaic_exact":
+            return {
+                "base_resolution": 48,
+                "num_scales": 4,
+                "features_per_plane": 16,
+                "hidden_dim": 128,
+                "hidden_layers": 3,
+                "refine_hidden_dim": 64,
+            }
+        if case == "tan_sip_field_fit_sparse_large_mosaic_broad":
+            return {
+                "base_resolution": 24,
+                "num_scales": 4,
+                "features_per_plane": 16,
+                "hidden_dim": 128,
+                "hidden_layers": 3,
+                "refine_hidden_dim": 64,
+            }
+    if model_kind == "sky_lambda_feature_field":
+        if case == "tan_sip_field_fit_deep_multiband_broad":
+            return {
+                "base_resolution": 24,
+                "num_scales": 4,
+                "features_per_plane": 16,
+                "scale_hidden_dim": 128,
+                "scale_num_blocks": 3,
+                "decoder_hidden_dim": 128,
+                "decoder_num_blocks": 3,
+                "refine_hidden_dim": 64,
+                "bandpass_hidden_dim": 64,
+            }
+        if case == "tpv_field_fit_deep_multiband_broad":
+            return {
+                "base_resolution": 32,
+                "num_scales": 4,
+                "features_per_plane": 24,
+                "scale_hidden_dim": 160,
+                "scale_num_blocks": 4,
+                "decoder_hidden_dim": 160,
+                "decoder_num_blocks": 4,
+                "refine_hidden_dim": 64,
+                "bandpass_hidden_dim": 96,
+            }
+        if case == "tan_sip_field_fit_sparse_large_mosaic_broad":
+            return {
+                "base_resolution": 24,
+                "num_scales": 4,
+                "features_per_plane": 24,
+                "scale_hidden_dim": 128,
+                "scale_num_blocks": 3,
+                "decoder_hidden_dim": 128,
+                "decoder_num_blocks": 3,
+                "refine_hidden_dim": 64,
+                "bandpass_hidden_dim": 64,
+            }
+        if case == "tpv_field_fit_sparse_large_mosaic_exact":
+            return {
+                "base_resolution": 48,
+                "num_scales": 4,
+                "features_per_plane": 24,
+                "scale_hidden_dim": 192,
+                "scale_num_blocks": 4,
+                "decoder_hidden_dim": 192,
+                "decoder_num_blocks": 4,
+                "refine_hidden_dim": 96,
+                "bandpass_hidden_dim": 96,
+            }
+        if case == "tpv_field_fit_sparse_large_mosaic_exact_densebands":
+            return {
+                "base_resolution": 48,
+                "num_scales": 4,
+                "features_per_plane": 24,
+                "scale_hidden_dim": 192,
+                "scale_num_blocks": 4,
+                "decoder_hidden_dim": 192,
+                "decoder_num_blocks": 4,
+                "refine_hidden_dim": 96,
+                "bandpass_hidden_dim": 128,
+            }
+        if case == "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit":
+            return {
+                "base_resolution": 48,
+                "num_scales": 4,
+                "features_per_plane": 24,
+                "scale_hidden_dim": 192,
+                "scale_num_blocks": 4,
+                "decoder_hidden_dim": 192,
+                "decoder_num_blocks": 4,
+                "refine_hidden_dim": 96,
+                "bandpass_hidden_dim": 128,
+            }
+        if case == "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap":
+            return {
+                "base_resolution": 48,
+                "num_scales": 4,
+                "features_per_plane": 24,
+                "scale_hidden_dim": 192,
+                "scale_num_blocks": 4,
+                "decoder_hidden_dim": 192,
+                "decoder_num_blocks": 4,
+                "refine_hidden_dim": 96,
+                "bandpass_hidden_dim": 128,
+            }
+    if model_kind == "sky_lambda_feature_field_hetero":
+        if case in {
+            "tpv_field_fit_sparse_large_mosaic_exact",
+            "tpv_field_fit_sparse_large_mosaic_exact_densebands",
+            "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit",
+        }:
+            return {
+                "base_resolution": 48,
+                "num_scales": 4,
+                "features_per_plane": 24,
+                "scale_hidden_dim": 192,
+                "scale_num_blocks": 4,
+                "decoder_hidden_dim": 192,
+                "decoder_num_blocks": 4,
+                "refine_hidden_dim": 96,
+                "bandpass_hidden_dim": 96,
+            }
+    if model_kind == "sky_lambda_feature_atlas_field":
+        if case == "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit":
+            return {
+                "atlas_side": 2,
+                "atlas_sigma": 0.2,
+                "topk_experts": 2,
+                "base_resolution": 48,
+                "num_scales": 4,
+                "features_per_plane": 24,
+                "scale_hidden_dim": 192,
+                "scale_num_blocks": 4,
+                "decoder_hidden_dim": 192,
+                "decoder_num_blocks": 4,
+                "refine_hidden_dim": 96,
+                "bandpass_hidden_dim": 128,
+            }
+    if model_kind == "sky_lambda_atlas_field":
+        if case == "tan_sip_field_fit_deep_multiband_broad":
+            return {
+                "atlas_side": 3,
+                "atlas_sigma": 0.16,
+                "topk_experts": 2,
+                "base_resolution": 24,
+                "num_scales": 4,
+                "features_per_plane": 16,
+                "hidden_dim": 128,
+                "hidden_layers": 3,
+                "refine_hidden_dim": 64,
+            }
+        if case == "tpv_field_fit_deep_multiband_broad":
+            return {
+                "atlas_side": 3,
+                "atlas_sigma": 0.16,
+                "topk_experts": 2,
+                "base_resolution": 32,
+                "num_scales": 4,
+                "features_per_plane": 16,
+                "hidden_dim": 128,
+                "hidden_layers": 3,
+                "refine_hidden_dim": 64,
+            }
+        if case == "tpv_field_fit_sparse_large_mosaic_exact":
+            return {
+                "atlas_side": 2,
+                "atlas_sigma": 0.2,
+                "base_resolution": 48,
+                "num_scales": 4,
+                "features_per_plane": 16,
+                "hidden_dim": 128,
+                "hidden_layers": 3,
+                "refine_hidden_dim": 64,
+            }
+        if case == "tan_sip_field_fit_sparse_large_mosaic_broad":
+            return {
+                "base_resolution": 24,
+                "num_scales": 4,
+                "features_per_plane": 16,
+                "hidden_dim": 128,
+                "hidden_layers": 3,
+                "refine_hidden_dim": 64,
+            }
     if model_kind == "sky_encoder_resmlp":
+        if case == "tan_sip_field_fit_deep_multiband_broad":
+            return {
+                "hidden_dim": 224,
+                "num_blocks": 5,
+                "num_fourier_frequencies": 10,
+                "spectral_frequencies": 8,
+            }
+        if case == "tpv_field_fit_deep_multiband_broad":
+            return {
+                "hidden_dim": 224,
+                "num_blocks": 5,
+                "num_fourier_frequencies": 10,
+                "spectral_frequencies": 8,
+                "multiscale_readout": True,
+                "readout_hidden_dim": 192,
+            }
         if case == "tpv_field_fit_deep_multiband_exact":
             return {
                 "hidden_dim": 160,
@@ -220,10 +593,20 @@ def _make_field_model_for_case(
         return SpectralBasisField(domain, **kwargs)
     if model_kind == "learned_spectral_basis_field":
         return LearnedSpectralBasisField(domain, **kwargs)
+    if model_kind == "sky_encoder_bandpass_field":
+        return SkyEncoderBandpassField(domain, **kwargs)
     if model_kind == "sky_encoder_mlp":
         return SkyEncoderMLPField(domain, **kwargs)
     if model_kind == "sky_encoder_resmlp":
         return SkyEncoderResMLPField(domain, **kwargs)
+    if model_kind == "sky_lambda_kplanes_field":
+        return make_field_model(model_kind, domain, **kwargs)
+    if model_kind == "sky_lambda_feature_field":
+        return make_field_model(model_kind, domain, **kwargs)
+    if model_kind == "sky_lambda_feature_field_hetero":
+        return make_field_model(model_kind, domain, **kwargs)
+    if model_kind == "sky_lambda_feature_atlas_field":
+        return make_field_model(model_kind, domain, **kwargs)
     return make_field_model(model_kind, domain)
 
 
@@ -382,6 +765,14 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
         unit="Angstrom",
         type="WAVE",
     )
+    deep_exact_dense_axis = SpectralAxis(
+        values=torch.tensor(
+            [5200.0, 6060.0, 7200.0, 8140.0, 9800.0, 11500.0, 14000.0, 17000.0, 20000.0],
+            dtype=torch.float64,
+        ),
+        unit="Angstrom",
+        type="WAVE",
+    )
     deep_exact_domain = FieldDomain(
         center_ra_deg=210.0,
         center_dec_deg=-6.0,
@@ -389,6 +780,452 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
         wavelength_center=14000.0,
         wavelength_scale=9000.0,
     )
+    deep_broad_axis = SpectralAxis(
+        values=torch.tensor(
+            [4700.0, 6200.0, 8200.0, 11000.0, 15000.0],
+            dtype=torch.float64,
+        ),
+        unit="Angstrom",
+        type="WAVE",
+    )
+    deep_broad_dense_axis = SpectralAxis(
+        values=torch.tensor(
+            [4700.0, 5600.0, 6500.0, 7600.0, 9000.0, 11000.0, 13000.0, 15500.0, 18000.0],
+            dtype=torch.float64,
+        ),
+        unit="Angstrom",
+        type="WAVE",
+    )
+    deep_broad_edges = torch.tensor(
+        [4200.0, 5400.0, 7200.0, 9500.0, 12500.0, 18000.0],
+        dtype=torch.float64,
+    )
+    deep_broad_dense_edges = torch.tensor(
+        [4200.0, 5150.0, 6050.0, 7050.0, 8300.0, 10000.0, 12000.0, 14250.0, 16750.0, 19500.0],
+        dtype=torch.float64,
+    )
+    deep_broad_tan_sip_domain = FieldDomain(
+        center_ra_deg=34.0,
+        center_dec_deg=-12.0,
+        spatial_scale_deg=0.08,
+        wavelength_center=10500.0,
+        wavelength_scale=8000.0,
+    )
+
+    def _sparse_mosaic_offsets() -> tuple[tuple[float, float], ...]:
+        return (
+            (-0.82, -0.76),
+            (-0.46, -0.58),
+            (-0.12, -0.72),
+            (0.28, -0.64),
+            (0.67, -0.51),
+            (-0.73, -0.18),
+            (-0.34, -0.12),
+            (0.02, -0.06),
+            (0.44, -0.21),
+            (0.78, -0.08),
+            (-0.69, 0.24),
+            (-0.25, 0.18),
+            (0.16, 0.10),
+            (0.55, 0.27),
+            (0.86, 0.18),
+            (-0.78, 0.67),
+            (-0.41, 0.56),
+            (-0.04, 0.74),
+            (0.36, 0.63),
+            (0.74, 0.72),
+        )
+
+    def _repeated_sparse_mosaic_offsets(
+        count: int,
+        *,
+        jitter: float = 0.06,
+    ) -> tuple[tuple[float, float], ...]:
+        base = _sparse_mosaic_offsets()
+        repeated: list[tuple[float, float]] = []
+        for idx in range(count):
+            x, y = base[idx % len(base)]
+            cycle = idx // len(base)
+            if cycle == 0:
+                repeated.append((x, y))
+                continue
+            dx = jitter * ((idx * 3 + cycle) % 5 - 2)
+            dy = jitter * ((idx * 5 + 2 * cycle) % 5 - 2)
+            repeated.append(
+                (
+                    max(min(x + dx, 0.95), -0.95),
+                    max(min(y + dy, 0.95), -0.95),
+                )
+            )
+        return tuple(repeated)
+
+    def _make_sparse_large_tan_sip_broad_case() -> CaseSpec:
+        target_scale_deg = 0.72 / 3600.0
+        obs_size = max(24, min(64, size // 4))
+        target_header = _sip_header(
+            size,
+            crval1=34.0,
+            crval2=-12.0,
+            scale_deg=target_scale_deg,
+            distortion_scale=1.0,
+        )
+        half_span_deg = 0.5 * max(size - obs_size, 1) * target_scale_deg
+        cos_dec = math.cos(math.radians(-12.0))
+        broad_edges = deep_broad_edges.detach().cpu().tolist()
+        scale_arcsec = [0.62, 0.74, 0.88, 1.05]
+        rotations = [-12.0, -5.0, 4.0, 11.0]
+        distortion_scales = [0.86, 0.97, 1.08, 1.22]
+        noise_sigmas = [0.008, 0.011, 0.014, 0.018]
+        pointings = _sparse_mosaic_offsets()
+        observations: list[ObservationSpec] = []
+        for idx, (fx, fy) in enumerate(pointings):
+            band_idx = idx % 5
+            visit_idx = idx // 5
+            dra_deg = float(fx) * half_span_deg
+            ddec_deg = float(fy) * half_span_deg
+            crval1 = 34.0 + dra_deg / max(cos_dec, 1.0e-6)
+            crval2 = -12.0 + ddec_deg
+            gap = None
+            if idx % 4 == 1:
+                gap = (
+                    slice(obs_size // 5, obs_size // 5 + max(3, obs_size // 10)),
+                    slice(obs_size // 2, obs_size - obs_size // 6),
+                )
+            observations.append(
+                ObservationSpec(
+                    header=_sip_header(
+                        obs_size,
+                        crval1=crval1,
+                        crval2=crval2,
+                        scale_deg=scale_arcsec[visit_idx] / 3600.0,
+                        rotation_deg=rotations[(idx + band_idx) % len(rotations)],
+                        distortion_scale=distortion_scales[(idx + visit_idx) % len(distortion_scales)],
+                    ),
+                    spectral_min=float(broad_edges[band_idx]),
+                    spectral_max=float(broad_edges[band_idx + 1]),
+                    transmission_center=float(deep_broad_axis.values[band_idx].item()),
+                    transmission_sigma=[190.0, 280.0, 360.0, 520.0, 900.0][band_idx],
+                    psf_sigma_pix=0.70,
+                    noise_sigma=noise_sigmas[(band_idx + visit_idx) % len(noise_sigmas)],
+                    gap=gap,
+                )
+            )
+        mosaic_domain = FieldDomain(
+            center_ra_deg=34.0,
+            center_dec_deg=-12.0,
+            spatial_scale_deg=max(0.08, 0.5 * size * target_scale_deg),
+            wavelength_center=10500.0,
+            wavelength_scale=8000.0,
+            coord_mode="sphere_xyz",
+        )
+        return CaseSpec(
+            case="tan_sip_field_fit_sparse_large_mosaic_broad",
+            projection="TAN-SIP",
+            description="Sparse large TAN-SIP broad-band mosaic with many small visits over one larger field, mixed depth/scale/coverage, and shared PSF",
+            truth_model="analytic_basis",
+            domain=mosaic_domain,
+            target_header=target_header,
+            spectral_axis=deep_broad_axis,
+            spectral_bin_edges=deep_broad_edges,
+            observations=tuple(observations),
+        )
+
+    def _make_sparse_large_tpv_exact_case() -> CaseSpec:
+        target_scale_deg = 0.75 / 3600.0
+        obs_size = max(24, min(64, size // 4))
+        target_header = _tpv_header(
+            size,
+            crval1=210.0,
+            crval2=-6.0,
+            scale_deg=target_scale_deg,
+            rotation_deg=2.0,
+            pv_scale=1.08,
+        )
+        half_span_deg = 0.5 * max(size - obs_size, 1) * target_scale_deg
+        cos_dec = math.cos(math.radians(-6.0))
+        exact_values = deep_exact_axis.values.detach().cpu().tolist()
+        scale_arcsec = [0.66, 0.79, 0.94, 1.18]
+        rotations = [-10.0, -3.0, 6.0, 14.0]
+        pv_scales = [0.90, 1.02, 1.18, 1.32]
+        noise_sigmas = [0.007, 0.010, 0.014, 0.018]
+        pointings = _sparse_mosaic_offsets()
+        observations: list[ObservationSpec] = []
+        for idx, (fx, fy) in enumerate(pointings):
+            band_idx = idx % len(exact_values)
+            visit_idx = idx // len(exact_values)
+            dra_deg = float(fx) * half_span_deg
+            ddec_deg = float(fy) * half_span_deg
+            crval1 = 210.0 + dra_deg / max(cos_dec, 1.0e-6)
+            crval2 = -6.0 + ddec_deg
+            gap = None
+            if idx % 5 == 2:
+                gap = (
+                    slice(obs_size // 3, obs_size - obs_size // 5),
+                    slice(obs_size // 4, obs_size // 4 + max(3, obs_size // 10)),
+                )
+            observations.append(
+                ObservationSpec(
+                    header=_tpv_header(
+                        obs_size,
+                        crval1=crval1,
+                        crval2=crval2,
+                        scale_deg=scale_arcsec[visit_idx] / 3600.0,
+                        rotation_deg=rotations[(idx + band_idx) % len(rotations)],
+                        pv_scale=pv_scales[(idx + visit_idx) % len(pv_scales)],
+                    ),
+                    spectral_min=float(exact_values[band_idx]),
+                    spectral_max=float(exact_values[band_idx]),
+                    transmission_center=float(exact_values[band_idx]),
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=noise_sigmas[(band_idx + 2 * visit_idx) % len(noise_sigmas)],
+                    gap=gap,
+                )
+            )
+        mosaic_domain = FieldDomain(
+            center_ra_deg=210.0,
+            center_dec_deg=-6.0,
+            spatial_scale_deg=max(0.06, 0.5 * size * target_scale_deg),
+            wavelength_center=14000.0,
+            wavelength_scale=9000.0,
+            coord_mode="sphere_xyz",
+        )
+        return CaseSpec(
+            case="tpv_field_fit_sparse_large_mosaic_exact",
+            projection="TPV",
+            description="Sparse large TPV exact-band mosaic with many small visits over one larger field, mixed depth/scale/coverage, and shared PSF",
+            truth_model="analytic_basis",
+            domain=mosaic_domain,
+            target_header=target_header,
+            spectral_axis=deep_exact_axis,
+            spectral_bin_edges=None,
+            observations=tuple(observations),
+        )
+
+    def _make_sparse_large_tpv_exact_densebands_case() -> CaseSpec:
+        target_scale_deg = 0.75 / 3600.0
+        obs_size = max(24, min(64, size // 4))
+        target_header = _tpv_header(
+            size,
+            crval1=210.0,
+            crval2=-6.0,
+            scale_deg=target_scale_deg,
+            rotation_deg=2.0,
+            pv_scale=1.08,
+        )
+        half_span_deg = 0.5 * max(size - obs_size, 1) * target_scale_deg
+        cos_dec = math.cos(math.radians(-6.0))
+        exact_values = deep_exact_dense_axis.values.detach().cpu().tolist()
+        scale_arcsec = [0.70, 0.96]
+        rotations = [-9.0, -2.0, 5.0, 11.0]
+        pv_scales = [0.92, 1.04, 1.16, 1.28]
+        noise_sigmas = [0.0065, 0.0085, 0.011, 0.014, 0.017]
+        pointings = _sparse_mosaic_offsets()[: 2 * len(exact_values)]
+        observations: list[ObservationSpec] = []
+        for idx, (fx, fy) in enumerate(pointings):
+            band_idx = idx % len(exact_values)
+            visit_idx = idx // len(exact_values)
+            dra_deg = float(fx) * half_span_deg
+            ddec_deg = float(fy) * half_span_deg
+            crval1 = 210.0 + dra_deg / max(cos_dec, 1.0e-6)
+            crval2 = -6.0 + ddec_deg
+            gap = None
+            if idx % 6 == 3:
+                gap = (
+                    slice(obs_size // 3, obs_size - obs_size // 6),
+                    slice(obs_size // 5, obs_size // 5 + max(3, obs_size // 12)),
+                )
+            observations.append(
+                ObservationSpec(
+                    header=_tpv_header(
+                        obs_size,
+                        crval1=crval1,
+                        crval2=crval2,
+                        scale_deg=scale_arcsec[visit_idx] / 3600.0,
+                        rotation_deg=rotations[(idx + band_idx) % len(rotations)],
+                        pv_scale=pv_scales[(idx + visit_idx) % len(pv_scales)],
+                    ),
+                    spectral_min=float(exact_values[band_idx]),
+                    spectral_max=float(exact_values[band_idx]),
+                    transmission_center=float(exact_values[band_idx]),
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=noise_sigmas[(band_idx + 2 * visit_idx) % len(noise_sigmas)],
+                    gap=gap,
+                )
+            )
+        mosaic_domain = FieldDomain(
+            center_ra_deg=210.0,
+            center_dec_deg=-6.0,
+            spatial_scale_deg=max(0.06, 0.5 * size * target_scale_deg),
+            wavelength_center=12500.0,
+            wavelength_scale=9500.0,
+            coord_mode="sphere_xyz",
+        )
+        return CaseSpec(
+            case="tpv_field_fit_sparse_large_mosaic_exact_densebands",
+            projection="TPV",
+            description="Sparse large TPV exact-band mosaic with denser spectral sampling across many small visits over one larger field, mixed depth/scale/coverage, and shared PSF",
+            truth_model="analytic_basis",
+            domain=mosaic_domain,
+            target_header=target_header,
+            spectral_axis=deep_exact_dense_axis,
+            spectral_bin_edges=None,
+            observations=tuple(observations),
+        )
+
+    def _make_sparse_large_tpv_exact_3band_multivisit_case() -> CaseSpec:
+        target_scale_deg = 0.75 / 3600.0
+        obs_size = max(24, min(64, size // 4))
+        target_header = _tpv_header(
+            size,
+            crval1=210.0,
+            crval2=-6.0,
+            scale_deg=target_scale_deg,
+            rotation_deg=2.0,
+            pv_scale=1.08,
+        )
+        half_span_deg = 0.5 * max(size - obs_size, 1) * target_scale_deg
+        cos_dec = math.cos(math.radians(-6.0))
+        exact_values = [6200.0, 11500.0, 20000.0]
+        spectral_axis = SpectralAxis(
+            values=torch.tensor(exact_values, dtype=torch.float64),
+            unit="Angstrom",
+            type="WAVE",
+        )
+        scale_arcsec = [0.60, 0.72, 0.88, 1.04, 1.26]
+        rotations = [-12.0, -5.0, 2.0, 8.0, 15.0]
+        pv_scales = [0.88, 0.98, 1.08, 1.18, 1.30]
+        noise_sigmas = [0.0065, 0.0085, 0.0115, 0.0150, 0.0190]
+        pointings = _repeated_sparse_mosaic_offsets(15 * len(exact_values))
+        observations: list[ObservationSpec] = []
+        for idx, (fx, fy) in enumerate(pointings):
+            band_idx = idx % len(exact_values)
+            visit_idx = idx // len(exact_values)
+            dra_deg = float(fx) * half_span_deg
+            ddec_deg = float(fy) * half_span_deg
+            crval1 = 210.0 + dra_deg / max(cos_dec, 1.0e-6)
+            crval2 = -6.0 + ddec_deg
+            gap = None
+            if idx % 4 == 2:
+                gap = (
+                    slice(obs_size // 3, obs_size - obs_size // 5),
+                    slice(obs_size // 4, obs_size // 4 + max(3, obs_size // 10)),
+                )
+            observations.append(
+                ObservationSpec(
+                    header=_tpv_header(
+                        obs_size,
+                        crval1=crval1,
+                        crval2=crval2,
+                        scale_deg=scale_arcsec[visit_idx % len(scale_arcsec)] / 3600.0,
+                        rotation_deg=rotations[(idx + band_idx) % len(rotations)],
+                        pv_scale=pv_scales[(idx + visit_idx) % len(pv_scales)],
+                    ),
+                    spectral_min=float(exact_values[band_idx]),
+                    spectral_max=float(exact_values[band_idx]),
+                    transmission_center=float(exact_values[band_idx]),
+                    transmission_sigma=None,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=noise_sigmas[(band_idx + 2 * visit_idx) % len(noise_sigmas)],
+                    gap=gap,
+                )
+            )
+        mosaic_domain = FieldDomain(
+            center_ra_deg=210.0,
+            center_dec_deg=-6.0,
+            spatial_scale_deg=max(0.06, 0.5 * size * target_scale_deg),
+            wavelength_center=12000.0,
+            wavelength_scale=9000.0,
+            coord_mode="sphere_xyz",
+        )
+        return CaseSpec(
+            case="tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit",
+            projection="TPV",
+            description="Sparse large TPV exact-band mosaic with 3 nearly disjoint bands and 15 heterogeneous visits per band over one larger field",
+            truth_model="analytic_basis",
+            domain=mosaic_domain,
+            target_header=target_header,
+            spectral_axis=spectral_axis,
+            spectral_bin_edges=None,
+            observations=tuple(observations),
+        )
+
+    def _make_sparse_large_tpv_broad_denseoverlap_case() -> CaseSpec:
+        target_scale_deg = 0.75 / 3600.0
+        obs_size = max(24, min(64, size // 4))
+        target_header = _tpv_header(
+            size,
+            crval1=210.0,
+            crval2=-6.0,
+            scale_deg=target_scale_deg,
+            rotation_deg=2.0,
+            pv_scale=1.08,
+        )
+        half_span_deg = 0.5 * max(size - obs_size, 1) * target_scale_deg
+        cos_dec = math.cos(math.radians(-6.0))
+        centers = deep_broad_dense_axis.values.detach().cpu().tolist()
+        sigmas = [220.0, 240.0, 260.0, 300.0, 360.0, 460.0, 560.0, 720.0, 900.0]
+        scale_arcsec = [0.70, 0.96]
+        rotations = [-9.0, -2.0, 5.0, 11.0]
+        pv_scales = [0.92, 1.04, 1.16, 1.28]
+        noise_sigmas = [0.0065, 0.0085, 0.011, 0.014, 0.017]
+        pointings = _sparse_mosaic_offsets()[: 2 * len(centers)]
+        observations: list[ObservationSpec] = []
+        for idx, (fx, fy) in enumerate(pointings):
+            band_idx = idx % len(centers)
+            visit_idx = idx // len(centers)
+            dra_deg = float(fx) * half_span_deg
+            ddec_deg = float(fy) * half_span_deg
+            crval1 = 210.0 + dra_deg / max(cos_dec, 1.0e-6)
+            crval2 = -6.0 + ddec_deg
+            center = float(centers[band_idx])
+            sigma = float(sigmas[band_idx])
+            gap = None
+            if idx % 6 == 4:
+                gap = (
+                    slice(obs_size // 3, obs_size - obs_size // 6),
+                    slice(obs_size // 5, obs_size // 5 + max(3, obs_size // 12)),
+                )
+            observations.append(
+                ObservationSpec(
+                    header=_tpv_header(
+                        obs_size,
+                        crval1=crval1,
+                        crval2=crval2,
+                        scale_deg=scale_arcsec[visit_idx] / 3600.0,
+                        rotation_deg=rotations[(idx + band_idx) % len(rotations)],
+                        pv_scale=pv_scales[(idx + visit_idx) % len(pv_scales)],
+                    ),
+                    spectral_min=center - 3.0 * sigma,
+                    spectral_max=center + 3.0 * sigma,
+                    transmission_center=center,
+                    transmission_sigma=sigma,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=noise_sigmas[(band_idx + 2 * visit_idx) % len(noise_sigmas)],
+                    gap=gap,
+                )
+            )
+        mosaic_domain = FieldDomain(
+            center_ra_deg=210.0,
+            center_dec_deg=-6.0,
+            spatial_scale_deg=max(0.06, 0.5 * size * target_scale_deg),
+            wavelength_center=12500.0,
+            wavelength_scale=9500.0,
+            coord_mode="sphere_xyz",
+        )
+        return CaseSpec(
+            case="tpv_field_fit_sparse_large_mosaic_broad_denseoverlap",
+            projection="TPV",
+            description="Sparse large TPV broad-band mosaic with denser overlapping spectral coverage across many small visits over one larger field, mixed depth/scale/coverage, and shared PSF",
+            truth_model="analytic_basis",
+            domain=mosaic_domain,
+            target_header=target_header,
+            spectral_axis=deep_broad_dense_axis,
+            spectral_bin_edges=deep_broad_dense_edges,
+            observations=tuple(observations),
+        )
+
     return {
         "tan_sip_field_fit_multicolor": CaseSpec(
             case="tan_sip_field_fit_multicolor",
@@ -471,6 +1308,188 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                 ),
             ),
         ),
+        "tan_sip_field_fit_deep_multiband_broad": CaseSpec(
+            case="tan_sip_field_fit_deep_multiband_broad",
+            projection="TAN-SIP",
+            description="Same-field TAN-SIP deep broad-band benchmark with repeated visits, known transmissions, mixed scale/depth/coverage, and shared PSF",
+            truth_model="analytic_basis",
+            domain=deep_broad_tan_sip_domain,
+            target_header=_sip_header(
+                size,
+                crval1=34.0,
+                crval2=-12.0,
+                scale_deg=0.72 / 3600.0,
+                distortion_scale=1.0,
+            ),
+            spectral_axis=deep_broad_axis,
+            spectral_bin_edges=deep_broad_edges,
+            observations=(
+                ObservationSpec(
+                    header=_sip_header(
+                        size,
+                        crval1=34.0000,
+                        crval2=-12.0000,
+                        scale_deg=0.68 / 3600.0,
+                        rotation_deg=-3.0,
+                        distortion_scale=0.85,
+                    ),
+                    spectral_min=4200.0,
+                    spectral_max=5400.0,
+                    transmission_center=4700.0,
+                    transmission_sigma=190.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.010,
+                ),
+                ObservationSpec(
+                    header=_sip_header(
+                        size,
+                        crval1=34.0010,
+                        crval2=-11.9991,
+                        scale_deg=1.05 / 3600.0,
+                        rotation_deg=10.0,
+                        distortion_scale=1.18,
+                    ),
+                    spectral_min=4200.0,
+                    spectral_max=5400.0,
+                    transmission_center=4700.0,
+                    transmission_sigma=210.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.018,
+                    gap=(slice(size // 4, size // 2), slice(size // 2, size - size // 6)),
+                ),
+                ObservationSpec(
+                    header=_sip_header(
+                        size,
+                        crval1=33.9994,
+                        crval2=-12.0005,
+                        scale_deg=0.80 / 3600.0,
+                        rotation_deg=4.0,
+                        distortion_scale=0.92,
+                    ),
+                    spectral_min=5400.0,
+                    spectral_max=7200.0,
+                    transmission_center=6200.0,
+                    transmission_sigma=280.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.011,
+                ),
+                ObservationSpec(
+                    header=_sip_header(
+                        size,
+                        crval1=34.0008,
+                        crval2=-12.0010,
+                        scale_deg=1.22 / 3600.0,
+                        rotation_deg=-9.0,
+                        distortion_scale=1.25,
+                    ),
+                    spectral_min=5400.0,
+                    spectral_max=7200.0,
+                    transmission_center=6200.0,
+                    transmission_sigma=320.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.020,
+                ),
+                ObservationSpec(
+                    header=_sip_header(
+                        size,
+                        crval1=34.0003,
+                        crval2=-12.0008,
+                        scale_deg=0.62 / 3600.0,
+                        rotation_deg=7.0,
+                        distortion_scale=1.05,
+                    ),
+                    spectral_min=7200.0,
+                    spectral_max=9500.0,
+                    transmission_center=8200.0,
+                    transmission_sigma=360.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.009,
+                ),
+                ObservationSpec(
+                    header=_sip_header(
+                        size,
+                        crval1=33.9989,
+                        crval2=-11.9994,
+                        scale_deg=0.98 / 3600.0,
+                        rotation_deg=-12.0,
+                        distortion_scale=1.10,
+                    ),
+                    spectral_min=7200.0,
+                    spectral_max=9500.0,
+                    transmission_center=8200.0,
+                    transmission_sigma=390.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.016,
+                    gap=(slice(size // 5, size // 5 + 5), slice(size // 3, size - size // 4)),
+                ),
+                ObservationSpec(
+                    header=_sip_header(
+                        size,
+                        crval1=34.0011,
+                        crval2=-12.0002,
+                        scale_deg=0.74 / 3600.0,
+                        rotation_deg=5.0,
+                        distortion_scale=0.98,
+                    ),
+                    spectral_min=9500.0,
+                    spectral_max=12500.0,
+                    transmission_center=11000.0,
+                    transmission_sigma=520.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.010,
+                ),
+                ObservationSpec(
+                    header=_sip_header(
+                        size,
+                        crval1=33.9992,
+                        crval2=-12.0012,
+                        scale_deg=1.28 / 3600.0,
+                        rotation_deg=14.0,
+                        distortion_scale=1.22,
+                    ),
+                    spectral_min=9500.0,
+                    spectral_max=12500.0,
+                    transmission_center=11000.0,
+                    transmission_sigma=580.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.019,
+                ),
+                ObservationSpec(
+                    header=_sip_header(
+                        size,
+                        crval1=34.0005,
+                        crval2=-11.9998,
+                        scale_deg=0.70 / 3600.0,
+                        rotation_deg=-4.0,
+                        distortion_scale=0.90,
+                    ),
+                    spectral_min=12500.0,
+                    spectral_max=18000.0,
+                    transmission_center=15000.0,
+                    transmission_sigma=900.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.012,
+                ),
+                ObservationSpec(
+                    header=_sip_header(
+                        size,
+                        crval1=33.9990,
+                        crval2=-12.0009,
+                        scale_deg=1.34 / 3600.0,
+                        rotation_deg=-15.0,
+                        distortion_scale=1.28,
+                    ),
+                    spectral_min=12500.0,
+                    spectral_max=18000.0,
+                    transmission_center=15000.0,
+                    transmission_sigma=980.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.021,
+                    gap=(slice(size // 3, size - size // 5), slice(size // 4, size // 4 + 6)),
+                ),
+            ),
+        ),
+        "tan_sip_field_fit_sparse_large_mosaic_broad": _make_sparse_large_tan_sip_broad_case(),
         "tan_field_fit_exact_transmission": CaseSpec(
             case="tan_field_fit_exact_transmission",
             projection="TAN",
@@ -581,6 +1600,188 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     psf_sigma_pix=0.70,
                     noise_sigma=0.026,
                     gap=(slice(size // 3, size - size // 5), slice(size // 4, size // 4 + 4)),
+                ),
+            ),
+        ),
+        "tpv_field_fit_deep_multiband_broad": CaseSpec(
+            case="tpv_field_fit_deep_multiband_broad",
+            projection="TPV",
+            description="Same-field TPV deep broad-band benchmark with repeated visits, known transmissions, mixed scale/depth/coverage, and shared PSF",
+            truth_model="analytic_basis",
+            domain=deep_exact_domain,
+            target_header=_tpv_header(
+                size,
+                crval1=210.0,
+                crval2=-6.0,
+                scale_deg=0.72 / 3600.0,
+                rotation_deg=2.0,
+                pv_scale=1.08,
+            ),
+            spectral_axis=deep_broad_axis,
+            spectral_bin_edges=deep_broad_edges,
+            observations=(
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=210.0000,
+                        crval2=-6.0000,
+                        scale_deg=0.69 / 3600.0,
+                        rotation_deg=-2.0,
+                        pv_scale=0.92,
+                    ),
+                    spectral_min=4200.0,
+                    spectral_max=5400.0,
+                    transmission_center=4700.0,
+                    transmission_sigma=190.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.011,
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=209.9992,
+                        crval2=-6.0008,
+                        scale_deg=1.08 / 3600.0,
+                        rotation_deg=9.0,
+                        pv_scale=1.22,
+                    ),
+                    spectral_min=4200.0,
+                    spectral_max=5400.0,
+                    transmission_center=4700.0,
+                    transmission_sigma=220.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.019,
+                    gap=(slice(size // 4, size // 2), slice(size // 3, size - size // 6)),
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=210.0008,
+                        crval2=-5.9992,
+                        scale_deg=0.78 / 3600.0,
+                        rotation_deg=5.0,
+                        pv_scale=0.98,
+                    ),
+                    spectral_min=5400.0,
+                    spectral_max=7200.0,
+                    transmission_center=6200.0,
+                    transmission_sigma=280.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.012,
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=209.9987,
+                        crval2=-6.0011,
+                        scale_deg=1.24 / 3600.0,
+                        rotation_deg=-11.0,
+                        pv_scale=1.30,
+                    ),
+                    spectral_min=5400.0,
+                    spectral_max=7200.0,
+                    transmission_center=6200.0,
+                    transmission_sigma=320.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.021,
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=210.0004,
+                        crval2=-6.0007,
+                        scale_deg=0.63 / 3600.0,
+                        rotation_deg=6.0,
+                        pv_scale=1.04,
+                    ),
+                    spectral_min=7200.0,
+                    spectral_max=9500.0,
+                    transmission_center=8200.0,
+                    transmission_sigma=360.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.009,
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=209.9990,
+                        crval2=-5.9996,
+                        scale_deg=0.97 / 3600.0,
+                        rotation_deg=-8.0,
+                        pv_scale=1.14,
+                    ),
+                    spectral_min=7200.0,
+                    spectral_max=9500.0,
+                    transmission_center=8200.0,
+                    transmission_sigma=390.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.016,
+                    gap=(slice(size // 5, size // 5 + 5), slice(size // 2, size - size // 7)),
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=210.0011,
+                        crval2=-5.9998,
+                        scale_deg=0.75 / 3600.0,
+                        rotation_deg=4.0,
+                        pv_scale=1.00,
+                    ),
+                    spectral_min=9500.0,
+                    spectral_max=12500.0,
+                    transmission_center=11000.0,
+                    transmission_sigma=520.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.010,
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=209.9988,
+                        crval2=-6.0013,
+                        scale_deg=1.31 / 3600.0,
+                        rotation_deg=13.0,
+                        pv_scale=1.27,
+                    ),
+                    spectral_min=9500.0,
+                    spectral_max=12500.0,
+                    transmission_center=11000.0,
+                    transmission_sigma=580.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.020,
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=210.0006,
+                        crval2=-5.9991,
+                        scale_deg=0.73 / 3600.0,
+                        rotation_deg=-5.0,
+                        pv_scale=0.95,
+                    ),
+                    spectral_min=12500.0,
+                    spectral_max=18000.0,
+                    transmission_center=15000.0,
+                    transmission_sigma=900.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.012,
+                ),
+                ObservationSpec(
+                    header=_tpv_header(
+                        size,
+                        crval1=209.9985,
+                        crval2=-6.0009,
+                        scale_deg=1.36 / 3600.0,
+                        rotation_deg=-14.0,
+                        pv_scale=1.34,
+                    ),
+                    spectral_min=12500.0,
+                    spectral_max=18000.0,
+                    transmission_center=15000.0,
+                    transmission_sigma=980.0,
+                    psf_sigma_pix=0.70,
+                    noise_sigma=0.022,
+                    gap=(slice(size // 3, size - size // 5), slice(size // 4, size // 4 + 6)),
                 ),
             ),
         ),
@@ -766,6 +1967,10 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                 ),
             ),
         ),
+        "tpv_field_fit_sparse_large_mosaic_exact": _make_sparse_large_tpv_exact_case(),
+        "tpv_field_fit_sparse_large_mosaic_exact_densebands": _make_sparse_large_tpv_exact_densebands_case(),
+        "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit": _make_sparse_large_tpv_exact_3band_multivisit_case(),
+        "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap": _make_sparse_large_tpv_broad_denseoverlap_case(),
         "tan_field_fit": CaseSpec(
             case="tan_field_fit",
             projection="TAN",
@@ -1333,7 +2538,10 @@ def evaluate_case(
             product,
             resampling_kernel="bilinear",
         )
-        domain = estimate_field_domain(observations)
+        domain = estimate_field_domain(
+            observations,
+            coord_mode=case_spec.domain.coord_mode,
+        )
         fit_times = []
         result = None
         product_pred = None
@@ -1412,6 +2620,31 @@ def evaluate_case(
             header=product_pred.header,
             value_semantics=product_pred.product.value_semantics,
         )
+        has_native_uncertainty = bool(
+            torch.any(
+                torch.abs(
+                    product_pred.weight.to(dtype=torch.float32)
+                    - torch.ones_like(product_pred.weight, dtype=torch.float32)
+                )
+                > 1.0e-6
+            )
+        )
+        uncertainty_mode = (
+            "native_inverse_variance"
+            if result is None or has_native_uncertainty
+            else "support_density_proxy"
+        )
+        uncertainty_inverse_variance = estimate_map_inverse_variance(
+            product_pred,
+            mode=uncertainty_mode,
+            support_weight=support_reference_product.weight,
+        )
+        uncertainty_metrics = evaluate_map_uncertainty(
+            uncertainty_inverse_variance,
+            product_pred,
+            truth_cube,
+            support_weight=support_reference_product.weight,
+        )
         cube_pred = product_pred.data
     signal_rms = float(torch.sqrt(torch.mean(torch.square(truth_cube))).item())
     residual_rms = float(metrics["reconstruction_rmse"])
@@ -1475,6 +2708,8 @@ def evaluate_case(
         "support_band_flux_relative_error": list(
             support_metrics["band_flux_relative_error"]  # type: ignore[arg-type]
         ),
+        "uncertainty_kind": uncertainty_mode,
+        **uncertainty_metrics,
         "band_centers_angstrom": [
             float(value)
             for value in case_spec.spectral_axis.to_wavelength().detach().cpu().tolist()
@@ -1515,6 +2750,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--size", type=int, default=48)
     parser.add_argument("--steps", type=int, default=120)
+    parser.add_argument(
+        "--step-profile",
+        type=str,
+        default="",
+        choices=("", *sorted(STEP_PROFILES)),
+        help="Optional per-case step-budget profile for focused frontier runs.",
+    )
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument(
@@ -1536,13 +2778,18 @@ def main() -> None:
     models = tuple(item for item in args.models.split(",") if item)
     rows = []
     for case in cases:
+        case_steps = _steps_for_case(
+            case,
+            base_steps=args.steps,
+            step_profile=args.step_profile or None,
+        )
         case_rows = [
             evaluate_case(
                 case=case,
                 model_kind=model_kind,
                 size=args.size,
                 seed=args.seed,
-                steps=args.steps,
+                steps=case_steps,
                 runs=args.runs,
             )
             for model_kind in models

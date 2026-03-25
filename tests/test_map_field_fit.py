@@ -25,6 +25,29 @@ def _load_benchmark_module():
 _field_fit_bench = _load_benchmark_module()
 
 
+def test_field_fit_benchmark_step_profile_overrides_sparse_frontier_cases() -> None:
+    assert _field_fit_bench._steps_for_case(
+        "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit",
+        base_steps=8,
+        step_profile="sparse_mosaic_frontier",
+    ) == 32
+    assert _field_fit_bench._steps_for_case(
+        "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap",
+        base_steps=8,
+        step_profile="sparse_mosaic_frontier",
+    ) == 16
+    assert _field_fit_bench._steps_for_case(
+        "tan_field_fit",
+        base_steps=8,
+        step_profile="sparse_mosaic_frontier",
+    ) == 8
+    assert _field_fit_bench._steps_for_case(
+        "tan_field_fit",
+        base_steps=8,
+        step_profile=None,
+    ) == 8
+
+
 def test_field_fit_benchmark_improves_loss() -> None:
     row = _field_fit_bench.evaluate_case(
         case="tan_field_fit",
@@ -64,6 +87,371 @@ def test_field_fit_benchmark_supports_tan_sip_multicolor_case() -> None:
     assert fit_row["truth_model"] == "analytic_basis"
     assert fit_row["blue_red_flux_ratio_absolute_error"] >= 0.0
     assert fit_row["reconstruction_rmse"] < coadd_row["reconstruction_rmse"]
+
+
+def test_field_fit_benchmark_supports_tan_sip_deep_multiband_broad_case() -> None:
+    fit_row = _field_fit_bench.evaluate_case(
+        case="tan_sip_field_fit_deep_multiband_broad",
+        model_kind="sky_encoder_bandpass_field",
+        size=24,
+        seed=1234,
+        steps=8,
+        runs=1,
+    )
+    coadd_row = _field_fit_bench.evaluate_case(
+        case="tan_sip_field_fit_deep_multiband_broad",
+        model_kind="coadd_bilinear",
+        size=24,
+        seed=1234,
+        steps=8,
+        runs=1,
+    )
+    assert fit_row["projection"] == "TAN-SIP"
+    assert fit_row["num_bands"] == 5
+    assert fit_row["num_observations"] == 10
+    assert fit_row["min_psf_sigma_pix"] == fit_row["max_psf_sigma_pix"] == 0.7
+    assert fit_row["support_reference_model_kind"] == "coadd_bilinear"
+    assert fit_row["support_reconstruction_rmse"] <= fit_row["reconstruction_rmse"]
+    assert coadd_row["support_reconstruction_rmse"] == coadd_row["reconstruction_rmse"]
+    assert fit_row["model_kwargs"] == {
+        "hidden_dim": 160,
+        "hidden_layers": 3,
+        "num_fourier_frequencies": 8,
+        "spectral_frequencies": 6,
+        "num_bandpass_frequencies": 8,
+        "bandpass_hidden_dim": 64,
+    }
+    assert _field_fit_bench._field_fit_kwargs_for_model(
+        "sky_encoder_bandpass_field",
+        case="tan_sip_field_fit_deep_multiband_broad",
+    )["training_spectral_sampling"] == "mixture_mc"
+    assert _field_fit_bench._field_fit_kwargs_for_model(
+        "sky_encoder_bandpass_field",
+        case="tan_sip_field_fit_deep_multiband_broad",
+    )["spectral_anchor_observations_per_step"] == 1
+    assert fit_row["uncertainty_kind"] == "support_density_proxy"
+    assert fit_row["uncertainty_extrapolated_mean_sigma"] >= fit_row["uncertainty_support_mean_sigma"]
+
+
+def test_field_fit_benchmark_supports_sparse_large_mosaic_cases() -> None:
+    tan_spec = _field_fit_bench._build_case_specs(128)["tan_sip_field_fit_sparse_large_mosaic_broad"]
+    tpv_spec = _field_fit_bench._build_case_specs(128)["tpv_field_fit_sparse_large_mosaic_exact"]
+    tpv_dense_spec = _field_fit_bench._build_case_specs(128)["tpv_field_fit_sparse_large_mosaic_exact_densebands"]
+    tpv_broad_dense_spec = _field_fit_bench._build_case_specs(128)["tpv_field_fit_sparse_large_mosaic_broad_denseoverlap"]
+    tan_fit_kwargs = _field_fit_bench._field_fit_kwargs_for_model(
+        "sky_lambda_kplanes_field",
+        case="tan_sip_field_fit_sparse_large_mosaic_broad",
+    )
+    tpv_fit_kwargs = _field_fit_bench._field_fit_kwargs_for_model(
+        "sky_lambda_kplanes_field",
+        case="tpv_field_fit_sparse_large_mosaic_exact",
+    )
+    tpv_feature_fit_kwargs = _field_fit_bench._field_fit_kwargs_for_model(
+        "sky_lambda_feature_field",
+        case="tpv_field_fit_sparse_large_mosaic_exact",
+    )
+
+    assert tan_spec.target_header["NAXIS1"] == 128
+    assert tan_spec.observations[0].header["NAXIS1"] < tan_spec.target_header["NAXIS1"]
+    assert len(tan_spec.observations) == 20
+    assert tan_spec.spectral_bin_edges is not None
+    assert tan_spec.domain.coord_mode == "sphere_xyz"
+    assert tan_fit_kwargs["loss_kind"] == "mse"
+    assert _field_fit_bench._field_model_kwargs_for_case(
+        "sky_lambda_kplanes_field",
+        case="tan_sip_field_fit_sparse_large_mosaic_broad",
+    ) == {
+        "base_resolution": 24,
+        "num_scales": 4,
+        "features_per_plane": 16,
+        "hidden_dim": 128,
+        "hidden_layers": 3,
+        "refine_hidden_dim": 64,
+    }
+    assert _field_fit_bench._field_model_kwargs_for_case(
+        "sky_lambda_feature_field",
+        case="tpv_field_fit_sparse_large_mosaic_exact",
+    ) == {
+        "base_resolution": 48,
+        "num_scales": 4,
+        "features_per_plane": 24,
+        "scale_hidden_dim": 192,
+        "scale_num_blocks": 4,
+        "decoder_hidden_dim": 192,
+        "decoder_num_blocks": 4,
+        "refine_hidden_dim": 96,
+        "bandpass_hidden_dim": 96,
+    }
+
+    assert tpv_spec.target_header["NAXIS1"] == 128
+    assert tpv_spec.observations[0].header["NAXIS1"] < tpv_spec.target_header["NAXIS1"]
+    assert len(tpv_spec.observations) == 20
+    assert tpv_spec.spectral_bin_edges is None
+    assert tpv_spec.domain.coord_mode == "sphere_xyz"
+    assert tpv_fit_kwargs["curriculum"] == "none"
+    assert tpv_fit_kwargs["loss_reduction"] == "per_band"
+    assert tpv_feature_fit_kwargs["loss_kind"] == "mse"
+    assert tpv_feature_fit_kwargs["loss_reduction"] == "band_global_mix"
+    assert tpv_feature_fit_kwargs["weight_decay"] == 1.0e-5
+    assert _field_fit_bench._field_fit_kwargs_for_model(
+        "sky_lambda_feature_field_hetero",
+        case="tpv_field_fit_sparse_large_mosaic_exact",
+    )["loss_kind"] == "gaussian_nll"
+    assert _field_fit_bench._field_model_kwargs_for_case(
+        "sky_lambda_feature_field_hetero",
+        case="tpv_field_fit_sparse_large_mosaic_exact",
+    ) == {
+        "base_resolution": 48,
+        "num_scales": 4,
+        "features_per_plane": 24,
+        "scale_hidden_dim": 192,
+        "scale_num_blocks": 4,
+        "decoder_hidden_dim": 192,
+        "decoder_num_blocks": 4,
+        "refine_hidden_dim": 96,
+        "bandpass_hidden_dim": 96,
+    }
+    assert _field_fit_bench._field_model_kwargs_for_case(
+        "sky_lambda_kplanes_field",
+        case="tpv_field_fit_sparse_large_mosaic_exact",
+    ) == {
+        "base_resolution": 48,
+        "num_scales": 4,
+        "features_per_plane": 16,
+        "hidden_dim": 128,
+        "hidden_layers": 3,
+        "refine_hidden_dim": 64,
+    }
+    assert _field_fit_bench._field_model_kwargs_for_case(
+        "sky_lambda_atlas_field",
+        case="tpv_field_fit_sparse_large_mosaic_exact",
+    ) == {
+        "atlas_side": 2,
+        "atlas_sigma": 0.2,
+        "base_resolution": 48,
+        "num_scales": 4,
+        "features_per_plane": 16,
+        "hidden_dim": 128,
+        "hidden_layers": 3,
+        "refine_hidden_dim": 64,
+    }
+    assert tpv_dense_spec.target_header["NAXIS1"] == 128
+    assert len(tpv_dense_spec.observations) == 18
+    assert tpv_dense_spec.spectral_axis.values.numel() == 9
+    assert tpv_dense_spec.domain.coord_mode == "sphere_xyz"
+    assert _field_fit_bench._field_model_kwargs_for_case(
+        "sky_lambda_feature_field",
+        case="tpv_field_fit_sparse_large_mosaic_exact_densebands",
+    ) == {
+        "base_resolution": 48,
+        "num_scales": 4,
+        "features_per_plane": 24,
+        "scale_hidden_dim": 192,
+        "scale_num_blocks": 4,
+        "decoder_hidden_dim": 192,
+        "decoder_num_blocks": 4,
+        "refine_hidden_dim": 96,
+        "bandpass_hidden_dim": 128,
+    }
+    assert tpv_broad_dense_spec.target_header["NAXIS1"] == 128
+    assert len(tpv_broad_dense_spec.observations) == 18
+    assert tpv_broad_dense_spec.spectral_axis.values.numel() == 9
+    assert tpv_broad_dense_spec.spectral_bin_edges is not None
+    assert tpv_broad_dense_spec.domain.coord_mode == "sphere_xyz"
+    assert _field_fit_bench._field_fit_kwargs_for_model(
+        "sky_lambda_feature_field",
+        case="tpv_field_fit_sparse_large_mosaic_broad_denseoverlap",
+    )["training_spectral_sampling"] == "mixture_mc"
+    tpv_broad_dense_fit_kwargs = _field_fit_bench._field_fit_kwargs_for_model(
+        "sky_lambda_feature_field",
+        case="tpv_field_fit_sparse_large_mosaic_broad_denseoverlap",
+    )
+    assert tpv_broad_dense_fit_kwargs["loss_reduction"] == "band_global_mix"
+    assert tpv_broad_dense_fit_kwargs["observations_per_step"] == 9
+    assert tpv_broad_dense_fit_kwargs["observation_sampling"] == "band_balanced"
+    assert tpv_broad_dense_fit_kwargs["training_patch_size"] == 24
+    assert tpv_broad_dense_fit_kwargs["training_patches_per_observation"] == 1
+    assert _field_fit_bench._field_model_kwargs_for_case(
+        "sky_lambda_feature_field",
+        case="tpv_field_fit_sparse_large_mosaic_broad_denseoverlap",
+    ) == {
+        "base_resolution": 48,
+        "num_scales": 4,
+        "features_per_plane": 24,
+        "scale_hidden_dim": 192,
+        "scale_num_blocks": 4,
+        "decoder_hidden_dim": 192,
+        "decoder_num_blocks": 4,
+        "refine_hidden_dim": 96,
+        "bandpass_hidden_dim": 128,
+    }
+    tpv_threeband_spec = _field_fit_bench._build_case_specs(128)["tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit"]
+    assert tpv_threeband_spec.target_header["NAXIS1"] == 128
+    assert len(tpv_threeband_spec.observations) == 45
+    assert tpv_threeband_spec.spectral_axis.values.numel() == 3
+    assert tpv_threeband_spec.spectral_bin_edges is None
+    assert tpv_threeband_spec.domain.coord_mode == "sphere_xyz"
+    assert _field_fit_bench._field_fit_kwargs_for_model(
+        "sky_lambda_feature_field",
+        case="tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit",
+    )["loss_reduction"] == "global"
+    tpv_threeband_fit_kwargs = _field_fit_bench._field_fit_kwargs_for_model(
+        "sky_lambda_feature_field",
+        case="tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit",
+    )
+    assert tpv_threeband_fit_kwargs["observations_per_step"] == 9
+    assert tpv_threeband_fit_kwargs["observation_sampling"] == "band_balanced"
+    assert tpv_threeband_fit_kwargs["training_patch_size"] == 24
+    assert tpv_threeband_fit_kwargs["training_patches_per_observation"] == 1
+    assert _field_fit_bench._field_model_kwargs_for_case(
+        "sky_lambda_feature_field",
+        case="tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit",
+    ) == {
+        "base_resolution": 48,
+        "num_scales": 4,
+        "features_per_plane": 24,
+        "scale_hidden_dim": 192,
+        "scale_num_blocks": 4,
+        "decoder_hidden_dim": 192,
+        "decoder_num_blocks": 4,
+        "refine_hidden_dim": 96,
+        "bandpass_hidden_dim": 128,
+    }
+    assert _field_fit_bench._field_fit_kwargs_for_model(
+        "sky_lambda_feature_atlas_field",
+        case="tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit",
+    )["loss_reduction"] == "global"
+    assert _field_fit_bench._field_model_kwargs_for_case(
+        "sky_lambda_feature_atlas_field",
+        case="tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit",
+    ) == {
+        "atlas_side": 2,
+        "atlas_sigma": 0.2,
+        "topk_experts": 2,
+        "base_resolution": 48,
+        "num_scales": 4,
+        "features_per_plane": 24,
+        "scale_hidden_dim": 192,
+        "scale_num_blocks": 4,
+        "decoder_hidden_dim": 192,
+        "decoder_num_blocks": 4,
+        "refine_hidden_dim": 96,
+        "bandpass_hidden_dim": 128,
+    }
+
+
+def test_field_fit_benchmark_reports_uncertainty_for_coadd_and_field() -> None:
+    coadd_row = _field_fit_bench.evaluate_case(
+        case="tpv_field_fit_deep_multiband_exact",
+        model_kind="coadd_bilinear",
+        size=24,
+        seed=1234,
+        steps=8,
+        runs=1,
+    )
+    field_row = _field_fit_bench.evaluate_case(
+        case="tpv_field_fit_deep_multiband_exact",
+        model_kind="sky_encoder_mlp",
+        size=24,
+        seed=1234,
+        steps=8,
+        runs=1,
+    )
+
+    assert coadd_row["uncertainty_kind"] == "native_inverse_variance"
+    assert field_row["uncertainty_kind"] == "support_density_proxy"
+    assert coadd_row["uncertainty_top_bottom_abs_err_ratio"] >= 1.0
+    assert field_row["uncertainty_top_bottom_abs_err_ratio"] >= 1.0
+
+
+def test_field_fit_benchmark_uses_tuned_structured_broad_defaults() -> None:
+    assert _field_fit_bench._field_model_kwargs_for_case(
+        "sky_lambda_kplanes_field",
+        case="tan_sip_field_fit_deep_multiband_broad",
+    ) == {
+        "base_resolution": 24,
+        "num_scales": 4,
+        "features_per_plane": 16,
+        "hidden_dim": 128,
+        "hidden_layers": 3,
+        "refine_hidden_dim": 64,
+    }
+    assert _field_fit_bench._field_model_kwargs_for_case(
+        "sky_lambda_feature_field",
+        case="tpv_field_fit_deep_multiband_broad",
+    ) == {
+        "base_resolution": 32,
+        "num_scales": 4,
+        "features_per_plane": 24,
+        "scale_hidden_dim": 160,
+        "scale_num_blocks": 4,
+        "decoder_hidden_dim": 160,
+        "decoder_num_blocks": 4,
+        "refine_hidden_dim": 64,
+        "bandpass_hidden_dim": 96,
+    }
+    assert _field_fit_bench._field_model_kwargs_for_case(
+        "sky_lambda_atlas_field",
+        case="tpv_field_fit_deep_multiband_broad",
+    ) == {
+        "atlas_side": 3,
+        "atlas_sigma": 0.16,
+        "topk_experts": 2,
+        "base_resolution": 32,
+        "num_scales": 4,
+        "features_per_plane": 16,
+        "hidden_dim": 128,
+        "hidden_layers": 3,
+        "refine_hidden_dim": 64,
+    }
+
+
+def test_field_fit_benchmark_evaluates_sparse_large_mosaic_cases() -> None:
+    tan_row = _field_fit_bench.evaluate_case(
+        case="tan_sip_field_fit_sparse_large_mosaic_broad",
+        model_kind="coadd_bilinear",
+        size=64,
+        seed=1234,
+        steps=2,
+        runs=1,
+    )
+    tpv_row = _field_fit_bench.evaluate_case(
+        case="tpv_field_fit_sparse_large_mosaic_exact",
+        model_kind="coadd_bilinear",
+        size=64,
+        seed=1234,
+        steps=2,
+        runs=1,
+    )
+
+    assert tan_row["num_observations"] == 20
+    assert tan_row["num_bands"] == 5
+    assert tan_row["projection"] == "TAN-SIP"
+    assert tan_row["support_reference_model_kind"] == "coadd_bilinear"
+    assert tan_row["reconstruction_rmse"] > 0.0
+
+    assert tpv_row["num_observations"] == 20
+    assert tpv_row["num_bands"] == 5
+    assert tpv_row["projection"] == "TPV"
+    assert tpv_row["support_reference_model_kind"] == "coadd_bilinear"
+    assert tpv_row["reconstruction_rmse"] > 0.0
+
+
+def test_field_fit_benchmark_supports_sky_lambda_kplanes_field() -> None:
+    fit_row = _field_fit_bench.evaluate_case(
+        case="tan_field_fit_exact_transmission",
+        model_kind="sky_lambda_kplanes_field",
+        size=24,
+        seed=1234,
+        steps=4,
+        runs=1,
+    )
+
+    assert fit_row["model_kind"] == "sky_lambda_kplanes_field"
+    assert fit_row["final_loss"] < fit_row["initial_loss"]
+    assert fit_row["reconstruction_rmse"] > 0.0
+    assert fit_row["support_reference_model_kind"] == "coadd_bilinear"
+    assert fit_row["support_reconstruction_rmse"] <= fit_row["reconstruction_rmse"]
 
 
 def test_field_fit_benchmark_supports_tpv_deep_multiband_exact_case() -> None:
@@ -106,6 +494,63 @@ def test_field_fit_benchmark_supports_tpv_deep_multiband_exact_case() -> None:
         "spectral_frequencies": 6,
     }
     assert coadd_row["model_kwargs"] == {}
+
+
+def test_field_fit_benchmark_supports_tpv_deep_multiband_broad_case() -> None:
+    fit_row = _field_fit_bench.evaluate_case(
+        case="tpv_field_fit_deep_multiband_broad",
+        model_kind="sky_encoder_bandpass_field",
+        size=24,
+        seed=1234,
+        steps=8,
+        runs=1,
+    )
+    coadd_row = _field_fit_bench.evaluate_case(
+        case="tpv_field_fit_deep_multiband_broad",
+        model_kind="coadd_bilinear",
+        size=24,
+        seed=1234,
+        steps=8,
+        runs=1,
+    )
+    assert fit_row["projection"] == "TPV"
+    assert fit_row["num_bands"] == 5
+    assert fit_row["num_observations"] == 10
+    assert fit_row["min_psf_sigma_pix"] == fit_row["max_psf_sigma_pix"] == 0.7
+    assert fit_row["support_reference_model_kind"] == "coadd_bilinear"
+    assert fit_row["support_reconstruction_rmse"] > 0.0
+    assert coadd_row["support_reconstruction_rmse"] == coadd_row["reconstruction_rmse"]
+    assert fit_row["model_kwargs"] == {
+        "hidden_dim": 192,
+        "hidden_layers": 3,
+        "num_fourier_frequencies": 10,
+        "spectral_frequencies": 6,
+        "num_bandpass_frequencies": 8,
+        "bandpass_hidden_dim": 64,
+    }
+
+
+def test_field_fit_benchmark_uses_tuned_sky_encoder_resmlp_configs_for_broad_cases() -> None:
+    assert _field_fit_bench._field_model_kwargs_for_case(
+        "sky_encoder_resmlp",
+        case="tan_sip_field_fit_deep_multiband_broad",
+    ) == {
+        "hidden_dim": 224,
+        "num_blocks": 5,
+        "num_fourier_frequencies": 10,
+        "spectral_frequencies": 8,
+    }
+    assert _field_fit_bench._field_model_kwargs_for_case(
+        "sky_encoder_resmlp",
+        case="tpv_field_fit_deep_multiband_broad",
+    ) == {
+        "hidden_dim": 224,
+        "num_blocks": 5,
+        "num_fourier_frequencies": 10,
+        "spectral_frequencies": 8,
+        "multiscale_readout": True,
+        "readout_hidden_dim": 192,
+    }
 
 
 def test_tan_exact_transmission_case_populates_all_target_bands_in_coadd_baseline() -> None:
