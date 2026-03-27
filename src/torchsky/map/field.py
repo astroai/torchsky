@@ -22,7 +22,14 @@ FieldModelKind = Literal[
     "fourier_mlp",
     "spectral_basis_field",
     "learned_spectral_basis_field",
+    "sky_encoder_bandpass_field",
     "sky_lambda_planes_field",
+    "sky_lambda_kplanes_field",
+    "sky_lambda_feature_field",
+    "operator_constrained_feature_field",
+    "sky_lambda_feature_field_hetero",
+    "sky_lambda_feature_atlas_field",
+    "sky_lambda_atlas_field",
     "bandpass_conditioned_field",
     "conditioned_spectral_field",
     "hashgrid_conditioned_field",
@@ -32,10 +39,16 @@ FieldModelKind = Literal[
     "hashgrid_spectral_field",
 ]
 FieldCoordinateMode = Literal["local_tangent", "sphere_xyz"]
-FieldLossKind = Literal["mse", "charbonnier", "huber"]
+FieldLossKind = Literal["mse", "charbonnier", "huber", "gaussian_nll"]
 FieldLRSchedule = Literal["constant", "cosine"]
-FieldLossReduction = Literal["per_observation", "per_band", "global"]
-FieldCurriculum = Literal["none", "spectral_frequency_ramp"]
+FieldLossReduction = Literal["per_observation", "per_band", "global", "band_global_mix"]
+FieldCurriculum = Literal["none", "spectral_frequency_ramp", "feature_scale_ramp"]
+FieldSpectralSampling = Literal[
+    "deterministic_quadrature",
+    "bandpass_mc",
+    "mixture_mc",
+]
+FieldObservationSampling = Literal["uniform", "band_balanced"]
 
 
 @dataclass(frozen=True)
@@ -84,6 +97,229 @@ def _header_shape(header: dict, *, fallback: tuple[int, int]) -> tuple[int, int]
     if naxis1 is None or naxis2 is None:
         return fallback
     return int(naxis2), int(naxis1)
+
+
+def _copy_header_with_crop(
+    header: dict,
+    *,
+    x0: int,
+    y0: int,
+    width: int,
+    height: int,
+) -> dict:
+    cropped = dict(header)
+    cropped["NAXIS1"] = int(width)
+    cropped["NAXIS2"] = int(height)
+    if "CRPIX1" in cropped:
+        cropped["CRPIX1"] = float(cropped["CRPIX1"]) - float(x0)
+    if "CRPIX2" in cropped:
+        cropped["CRPIX2"] = float(cropped["CRPIX2"]) - float(y0)
+    return cropped
+
+
+def _observation_band_key(observation: FieldObservation) -> tuple[object, ...]:
+    return (
+        observation.band_name,
+        observation.spectral_min,
+        observation.spectral_max,
+        observation.wavelength,
+        observation.transmission_center,
+    )
+
+
+def _observation_support_mask(observation: FieldObservation) -> Tensor:
+    support = torch.ones_like(observation.image, dtype=torch.bool)
+    if observation.weight is not None:
+        support = support & (observation.weight > 0)
+    if observation.mask is not None:
+        support = support & (observation.mask > 0)
+    return support
+
+
+def _observation_weight_sum_scalar(observation: FieldObservation) -> float:
+    if observation.weight is not None:
+        weight = observation.weight.detach().to(dtype=torch.float32)
+    else:
+        weight = torch.ones_like(observation.image, dtype=torch.float32)
+    if observation.mask is not None:
+        valid = observation.mask.detach() > 0
+        weight = torch.where(valid, weight, torch.zeros_like(weight))
+    return float(weight.sum().item())
+
+
+def _sample_observation_indices(
+    observations: Sequence[FieldObservation],
+    *,
+    observations_per_step: int | None,
+    observation_sampling: FieldObservationSampling,
+    generator: torch.Generator,
+) -> list[int]:
+    total = len(observations)
+    if observations_per_step is None or observations_per_step <= 0 or observations_per_step >= total:
+        return list(range(total))
+    target = int(observations_per_step)
+    if observation_sampling == "uniform":
+        return torch.randperm(total, generator=generator)[:target].tolist()
+    if observation_sampling != "band_balanced":
+        raise ValueError(f"unsupported observation_sampling {observation_sampling!r}")
+    band_groups: dict[tuple[object, ...], list[int]] = {}
+    for idx, observation in enumerate(observations):
+        band_groups.setdefault(_observation_band_key(observation), []).append(idx)
+    ordered_groups = list(band_groups.values())
+    if not ordered_groups:
+        return list(range(total))
+    selected: list[int] = []
+    per_group = max(target // len(ordered_groups), 1)
+    remainders: list[int] = []
+    for group in ordered_groups:
+        perm = torch.randperm(len(group), generator=generator).tolist()
+        take = min(len(group), per_group)
+        selected.extend(group[i] for i in perm[:take])
+        remainders.extend(group[i] for i in perm[take:])
+    if len(selected) < target and remainders:
+        extra = torch.randperm(len(remainders), generator=generator)[: target - len(selected)].tolist()
+        selected.extend(remainders[i] for i in extra)
+    elif len(selected) > target:
+        keep = torch.randperm(len(selected), generator=generator)[:target].tolist()
+        selected = [selected[i] for i in keep]
+    return selected
+
+
+def _sample_patch_origin(
+    observation: FieldObservation,
+    *,
+    patch_size: int,
+    generator: torch.Generator,
+) -> tuple[int, int]:
+    image = observation.image
+    height, width = int(image.shape[-2]), int(image.shape[-1])
+    patch = min(int(patch_size), height, width)
+    max_y = max(height - patch, 0)
+    max_x = max(width - patch, 0)
+    support = _observation_support_mask(observation)
+    support_indices = torch.nonzero(support, as_tuple=False)
+    if support_indices.numel() > 0:
+        anchor_index = int(torch.randint(support_indices.shape[0], (1,), generator=generator).item())
+        anchor_y = int(support_indices[anchor_index, 0].item())
+        anchor_x = int(support_indices[anchor_index, 1].item())
+        y0 = min(max(anchor_y - patch // 2, 0), max_y)
+        x0 = min(max(anchor_x - patch // 2, 0), max_x)
+        return x0, y0
+    x0 = int(torch.randint(max_x + 1, (1,), generator=generator).item()) if max_x > 0 else 0
+    y0 = int(torch.randint(max_y + 1, (1,), generator=generator).item()) if max_y > 0 else 0
+    return x0, y0
+
+
+def _crop_field_observation(
+    observation: FieldObservation,
+    *,
+    x0: int,
+    y0: int,
+    width: int,
+    height: int,
+) -> FieldObservation:
+    y_slice = slice(int(y0), int(y0) + int(height))
+    x_slice = slice(int(x0), int(x0) + int(width))
+    return FieldObservation(
+        image=observation.image[y_slice, x_slice],
+        header=_copy_header_with_crop(
+            observation.header,
+            x0=int(x0),
+            y0=int(y0),
+            width=int(width),
+            height=int(height),
+        ),
+        weight=(
+            observation.weight[y_slice, x_slice]
+            if observation.weight is not None
+            else None
+        ),
+        mask=(
+            observation.mask[y_slice, x_slice]
+            if observation.mask is not None
+            else None
+        ),
+        wavelength=observation.wavelength,
+        spectral_min=observation.spectral_min,
+        spectral_max=observation.spectral_max,
+        transmission_center=observation.transmission_center,
+        transmission_sigma=observation.transmission_sigma,
+        psf_sigma_pix=observation.psf_sigma_pix,
+        band_name=observation.band_name,
+    )
+
+
+def _crop_field_observation_to_shared_sky_patch(
+    observation: FieldObservation,
+    *,
+    reference_observation: FieldObservation,
+    x0: int,
+    y0: int,
+    patch_size: int,
+) -> FieldObservation | None:
+    patch = max(int(patch_size), 1)
+    ref_width = int(reference_observation.image.shape[-1])
+    ref_height = int(reference_observation.image.shape[-2])
+    x1 = min(int(x0) + patch, ref_width)
+    y1 = min(int(y0) + patch, ref_height)
+    x0 = max(min(int(x0), x1 - 1), 0)
+    y0 = max(min(int(y0), y1 - 1), 0)
+    if observation is reference_observation:
+        return _crop_field_observation(
+            observation,
+            x0=x0,
+            y0=y0,
+            width=x1 - x0,
+            height=y1 - y0,
+        )
+    ref_x = torch.tensor(
+        [x0, x1 - 1, x0, x1 - 1, 0.5 * (x0 + x1 - 1)],
+        dtype=torch.float64,
+    )
+    ref_y = torch.tensor(
+        [y0, y0, y1 - 1, y1 - 1, 0.5 * (y0 + y1 - 1)],
+        dtype=torch.float64,
+    )
+    ref_wcs = WCS(reference_observation.header)
+    ra_deg, dec_deg = ref_wcs.pixel_to_world(ref_x, ref_y)
+    obs_wcs = WCS(observation.header)
+    px, py = obs_wcs.world_to_pixel(ra_deg, dec_deg)
+    if not (torch.isfinite(px).any() and torch.isfinite(py).any()):
+        return None
+    valid = torch.isfinite(px) & torch.isfinite(py)
+    if not torch.any(valid):
+        return None
+    px = px[valid]
+    py = py[valid]
+    height = int(observation.image.shape[-2])
+    width = int(observation.image.shape[-1])
+    crop_x0 = max(int(torch.floor(px.min()).item()), 0)
+    crop_y0 = max(int(torch.floor(py.min()).item()), 0)
+    crop_x1 = min(int(torch.ceil(px.max()).item()) + 1, width)
+    crop_y1 = min(int(torch.ceil(py.max()).item()) + 1, height)
+    if crop_x1 <= crop_x0 or crop_y1 <= crop_y0:
+        return None
+    cropped = _crop_field_observation(
+        observation,
+        x0=crop_x0,
+        y0=crop_y0,
+        width=crop_x1 - crop_x0,
+        height=crop_y1 - crop_y0,
+    )
+    if not torch.any(_observation_support_mask(cropped)):
+        return None
+    return cropped
+
+
+def _avg_pool_map(image: Tensor, *, factor: int) -> Tensor:
+    pool = max(int(factor), 1)
+    if pool <= 1 or min(int(image.shape[-2]), int(image.shape[-1])) < pool:
+        return image
+    return F.avg_pool2d(
+        image.unsqueeze(0).unsqueeze(0),
+        kernel_size=pool,
+        stride=pool,
+    ).squeeze(0).squeeze(0)
 
 
 def _coordinate_grid(
@@ -184,6 +420,173 @@ def _bandpass_quadrature(
             )
         weights = torch.exp(-0.5 * torch.square((samples - center) / sigma))
     return samples, weights / torch.clamp(weights.sum(), min=1e-8)
+
+
+def _bandpass_response(
+    observation: FieldObservation,
+    wavelengths: Tensor,
+) -> Tensor:
+    lower, upper = _bandpass_bounds(observation)
+    wavelengths = wavelengths.to(dtype=torch.float32)
+    if lower == upper:
+        atol = max(1.0e-3, 1.0e-6 * max(abs(lower), 1.0))
+        return (torch.abs(wavelengths - float(lower)) <= atol).to(dtype=wavelengths.dtype)
+    inside = (wavelengths >= float(lower)) & (wavelengths <= float(upper))
+    sigma = observation.transmission_sigma
+    if sigma is None:
+        return inside.to(dtype=wavelengths.dtype)
+    sigma = float(sigma)
+    if not math.isfinite(sigma) or sigma <= 0.0:
+        raise ValueError(
+            "FieldObservation transmission_sigma must be finite and positive"
+        )
+    center = (
+        float(observation.transmission_center)
+        if observation.transmission_center is not None
+        else 0.5 * (float(lower) + float(upper))
+    )
+    response = torch.exp(-0.5 * torch.square((wavelengths - center) / sigma))
+    return response * inside.to(dtype=response.dtype)
+
+
+def _bandpass_mc_samples(
+    observation: FieldObservation,
+    *,
+    num_spectral_samples: int,
+    device: torch.device,
+    proposal_grid_size: int | None = None,
+    generator: torch.Generator | None = None,
+) -> tuple[Tensor, Tensor]:
+    if num_spectral_samples < 1:
+        raise ValueError("num_spectral_samples must be positive")
+    lower, upper = _bandpass_bounds(observation)
+    if lower == upper or num_spectral_samples == 1:
+        sample = torch.tensor(
+            [0.5 * (lower + upper)], dtype=torch.float32, device=device
+        )
+        return sample, torch.ones_like(sample)
+    proposal_size = (
+        int(proposal_grid_size)
+        if proposal_grid_size is not None
+        else max(65, 8 * int(num_spectral_samples) + 1)
+    )
+    if proposal_size < 2:
+        proposal_size = 2
+    proposal_samples = torch.linspace(
+        lower,
+        upper,
+        steps=proposal_size,
+        dtype=torch.float32,
+        device=device,
+    )
+    center = (
+        float(observation.transmission_center)
+        if observation.transmission_center is not None
+        else 0.5 * (lower + upper)
+    )
+    sigma = observation.transmission_sigma
+    if sigma is None:
+        proposal_weights = torch.ones_like(proposal_samples)
+    else:
+        sigma = float(sigma)
+        if not math.isfinite(sigma) or sigma <= 0.0:
+            raise ValueError(
+                "FieldObservation transmission_sigma must be finite and positive"
+            )
+        proposal_weights = torch.exp(
+            -0.5 * torch.square((proposal_samples - center) / sigma)
+        )
+    proposal_weights = proposal_weights / torch.clamp(
+        proposal_weights.sum(), min=1.0e-8
+    )
+    sample_ids = torch.multinomial(
+        proposal_weights,
+        int(num_spectral_samples),
+        replacement=True,
+        generator=generator,
+    )
+    samples = proposal_samples[sample_ids]
+    samples, _ = torch.sort(samples)
+    weights = torch.full_like(samples, 1.0 / float(num_spectral_samples))
+    return samples, weights
+
+
+def _mixture_mc_samples(
+    observations: Sequence[FieldObservation],
+    *,
+    num_spectral_samples: int,
+    device: torch.device,
+    proposal_grid_size: int | None = None,
+    generator: torch.Generator | None = None,
+) -> tuple[Tensor, Tensor]:
+    if num_spectral_samples < 1:
+        raise ValueError("num_spectral_samples must be positive")
+    bounds = [_bandpass_bounds(observation) for observation in observations]
+    lower = min(bound[0] for bound in bounds)
+    upper = max(bound[1] for bound in bounds)
+    if lower == upper or num_spectral_samples == 1:
+        sample = torch.tensor(
+            [0.5 * (lower + upper)], dtype=torch.float32, device=device
+        )
+        return sample, torch.ones_like(sample)
+    proposal_size = (
+        int(proposal_grid_size)
+        if proposal_grid_size is not None
+        else max(65, 8 * int(num_spectral_samples) + 1)
+    )
+    if proposal_size < 2:
+        proposal_size = 2
+    proposal_samples = torch.linspace(
+        lower,
+        upper,
+        steps=proposal_size,
+        dtype=torch.float32,
+        device=device,
+    )
+    proposal = torch.zeros_like(proposal_samples)
+    for observation in observations:
+        response = _bandpass_response(observation, proposal_samples)
+        response_sum = torch.clamp(response.sum(), min=1.0e-8)
+        proposal = proposal + response / response_sum
+    proposal = proposal / torch.clamp(proposal.sum(), min=1.0e-8)
+    sample_ids = torch.multinomial(
+        proposal,
+        int(num_spectral_samples),
+        replacement=True,
+        generator=generator,
+    )
+    samples = proposal_samples[sample_ids]
+    samples, order = torch.sort(samples)
+    sample_probs = proposal[sample_ids][order]
+    return samples, sample_probs
+
+
+def _mixture_importance_weights(
+    observation: FieldObservation,
+    wavelengths: Tensor,
+    proposal_probs: Tensor,
+) -> Tensor:
+    response = _bandpass_response(observation, wavelengths)
+    weights = response / torch.clamp(proposal_probs.to(dtype=response.dtype), min=1.0e-8)
+    return weights / torch.clamp(weights.sum(), min=1.0e-8)
+
+
+def _smoothness_probe_grid(
+    domain: FieldDomain,
+    *,
+    grid_size: int,
+    device: torch.device,
+) -> tuple[Tensor, Tensor]:
+    if grid_size < 2:
+        raise ValueError("spatial_smoothness_grid_size must be at least 2")
+    offsets = torch.linspace(-1.0, 1.0, steps=int(grid_size), device=device, dtype=torch.float32)
+    off_y, off_x = torch.meshgrid(offsets, offsets, indexing="ij")
+    cos_dec = max(math.cos(math.radians(float(domain.center_dec_deg))), 1.0e-6)
+    dra = off_x * float(domain.spatial_scale_deg) / cos_dec
+    ddec = off_y * float(domain.spatial_scale_deg)
+    ra = torch.remainder(float(domain.center_ra_deg) + dra + 360.0, 360.0)
+    dec = torch.clamp(float(domain.center_dec_deg) + ddec, min=-90.0, max=90.0)
+    return ra, dec
 
 
 def estimate_field_domain(
@@ -325,6 +728,16 @@ class _BaseFieldModel(nn.Module):
         return (
             wavelength - float(self.domain.wavelength_center)
         ) / float(self.domain.wavelength_scale)
+
+    def forward_distribution(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> tuple[Tensor, Tensor]:
+        mean = self.forward(ra_deg, dec_deg, wavelength_angstrom)
+        logvar = torch.zeros_like(mean)
+        return mean, logvar
 
 
 class SineImplicitField(_BaseFieldModel):
@@ -888,6 +1301,146 @@ class LearnedSpectralBasisField(_BaseFieldModel):
         return F.softplus(out) + 1.0e-4
 
 
+class SkyEncoderBandpassField(_BaseFieldModel):
+    def __init__(
+        self,
+        domain: FieldDomain,
+        *,
+        hidden_dim: int = 128,
+        hidden_layers: int = 3,
+        num_fourier_frequencies: int = 8,
+        spectral_frequencies: int = 6,
+        num_bandpass_frequencies: int = 6,
+        bandpass_hidden_dim: int = 48,
+    ) -> None:
+        super().__init__(domain)
+        self.num_bandpass_frequencies = int(num_bandpass_frequencies)
+        self.encoder = SkyCoordinateEncoder(
+            num_fourier_frequencies=num_fourier_frequencies,
+            spectral_frequencies=spectral_frequencies,
+            include_degree2=True,
+        )
+        with torch.no_grad():
+            dummy = self.encoder(
+                torch.zeros(1, dtype=torch.float64),
+                torch.zeros(1, dtype=torch.float64),
+                wavelength=torch.ones(1, dtype=torch.float64),
+            )
+        encoded_dim = int(dummy.shape[-1])
+        bandpass_in_dim = 4 + 2 * max(self.num_bandpass_frequencies, 0)
+        self.bandpass_hidden = nn.Sequential(
+            nn.Linear(bandpass_in_dim, bandpass_hidden_dim),
+            nn.SiLU(),
+            nn.Linear(bandpass_hidden_dim, bandpass_hidden_dim),
+            nn.SiLU(),
+        )
+        layers: list[nn.Module] = []
+        current_dim = encoded_dim + bandpass_hidden_dim
+        for _ in range(max(int(hidden_layers), 1)):
+            layers.append(nn.Linear(current_dim, hidden_dim))
+            layers.append(nn.SiLU())
+            current_dim = hidden_dim
+        self.hidden = nn.Sequential(*layers)
+        self.output = nn.Linear(current_dim, 1)
+        self._reset_parameters()
+
+    def _reset_parameters(self) -> None:
+        for module in self.bandpass_hidden:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        for module in self.hidden:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
+        nn.init.constant_(self.output.bias, 0.0)
+
+    def _bandpass_features(self, wavelengths: Tensor, weights: Tensor) -> Tensor:
+        lam = (
+            wavelengths.to(dtype=self.hidden[0].weight.dtype) - float(self.domain.wavelength_center)
+        ) / float(self.domain.wavelength_scale)
+        weights = weights.to(dtype=self.hidden[0].weight.dtype)
+        weights = weights / torch.clamp(weights.sum(), min=1.0e-8)
+        mean = torch.sum(weights * lam)
+        centered = lam - mean
+        second = torch.sum(weights * torch.square(centered))
+        third = torch.sum(weights * centered * centered * centered)
+        fourth = torch.sum(weights * torch.square(torch.square(centered)))
+        feats = [mean, second, third, fourth]
+        if self.num_bandpass_frequencies > 0:
+            scales = torch.arange(
+                1,
+                self.num_bandpass_frequencies + 1,
+                device=lam.device,
+                dtype=lam.dtype,
+            )
+            for scale in scales:
+                phase = math.pi * scale * lam
+                feats.append(torch.sum(weights * torch.sin(phase)))
+                feats.append(torch.sum(weights * torch.cos(phase)))
+        return torch.stack(feats)
+
+    def _encoded_planes(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelengths: Tensor,
+    ) -> Tensor:
+        encoded = []
+        ra64 = ra_deg.to(dtype=torch.float64)
+        dec64 = dec_deg.to(dtype=torch.float64)
+        for wavelength in wavelengths:
+            wavelength_grid = torch.full_like(ra64, float(wavelength.item()), dtype=torch.float64)
+            encoded.append(
+                self.encoder(
+                    ra64,
+                    dec64,
+                    wavelength=wavelength_grid,
+                ).to(dtype=self.output.weight.dtype)
+            )
+        return torch.stack(encoded, dim=0)
+
+    def render_bandpass(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelengths: Tensor,
+        weights: Tensor,
+    ) -> Tensor:
+        encoded = self._encoded_planes(ra_deg, dec_deg, wavelengths)
+        norm_weights = weights.to(dtype=encoded.dtype)
+        norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
+        bandpass_latent = self.bandpass_hidden(self._bandpass_features(wavelengths, weights))
+        bandpass_latent = bandpass_latent.view(1, *([1] * (encoded.ndim - 2)), -1)
+        bandpass_latent = bandpass_latent.expand(encoded.shape[0], *encoded.shape[1:-1], -1)
+        hidden_planes = self.hidden(torch.cat([encoded, bandpass_latent], dim=-1))
+        mixed_hidden = torch.sum(
+            hidden_planes * norm_weights.view(-1, *([1] * (hidden_planes.ndim - 1))),
+            dim=0,
+        )
+        out = self.output(mixed_hidden).squeeze(-1)
+        return F.softplus(out) + 1.0e-4
+
+    def forward(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        wavelength = torch.as_tensor(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=torch.float32,
+        )
+        if wavelength.ndim == 0:
+            wavelengths = wavelength.view(1)
+        else:
+            wavelengths = wavelength.reshape(-1)
+        weights = torch.ones_like(wavelengths)
+        return self.render_bandpass(ra_deg, dec_deg, wavelengths, weights)
+
+
 class ConditionedSpectralField(_BaseFieldModel):
     def __init__(
         self,
@@ -1114,6 +1667,19 @@ class _ResidualMLPBlock(nn.Module):
         return self.act(self.norm(residual + x))
 
 
+class _ResidualStack(nn.Module):
+    def __init__(self, hidden_dim: int, num_blocks: int) -> None:
+        super().__init__()
+        self.blocks = nn.ModuleList(
+            [_ResidualMLPBlock(hidden_dim) for _ in range(max(int(num_blocks), 0))]
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        for block in self.blocks:
+            x = block(x)
+        return x
+
+
 class SkyEncoderMLPField(_BaseFieldModel):
     def __init__(
         self,
@@ -1172,7 +1738,13 @@ class SkyEncoderMLPField(_BaseFieldModel):
             ra_deg.to(dtype=torch.float64),
             dec_deg.to(dtype=torch.float64),
             wavelength=wavelength,
-        ).to(dtype=self.output.weight.dtype)
+        )
+        output_dtype = (
+            self.output[0].weight.dtype
+            if isinstance(self.output, nn.Sequential)
+            else self.output.weight.dtype
+        )
+        feats = feats.to(dtype=output_dtype)
         out = self.output(self.hidden(feats)).squeeze(-1)
         return F.softplus(out) + 1.0e-4
 
@@ -1186,8 +1758,11 @@ class SkyEncoderResMLPField(_BaseFieldModel):
         num_blocks: int = 4,
         num_fourier_frequencies: int = 8,
         spectral_frequencies: int = 6,
+        multiscale_readout: bool = False,
+        readout_hidden_dim: int | None = None,
     ) -> None:
         super().__init__(domain)
+        self.multiscale_readout = bool(multiscale_readout)
         self.encoder = SkyCoordinateEncoder(
             num_fourier_frequencies=num_fourier_frequencies,
             spectral_frequencies=spectral_frequencies,
@@ -1204,14 +1779,37 @@ class SkyEncoderResMLPField(_BaseFieldModel):
         self.blocks = nn.ModuleList(
             [_ResidualMLPBlock(hidden_dim) for _ in range(max(int(num_blocks), 1))]
         )
-        self.output = nn.Linear(hidden_dim, 1)
+        if self.multiscale_readout:
+            stacked_dim = hidden_dim * (1 + len(self.blocks))
+            readout_width = (
+                int(readout_hidden_dim)
+                if readout_hidden_dim is not None
+                else max(hidden_dim // 2, 64)
+            )
+            self.output = nn.Sequential(
+                nn.Linear(stacked_dim, readout_width),
+                nn.SiLU(),
+                nn.Linear(readout_width, 1),
+            )
+        else:
+            self.output = nn.Linear(hidden_dim, 1)
         self._reset_parameters()
 
     def _reset_parameters(self) -> None:
         nn.init.xavier_uniform_(self.input.weight)
         nn.init.zeros_(self.input.bias)
-        nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
-        nn.init.constant_(self.output.bias, 0.0)
+        if isinstance(self.output, nn.Sequential):
+            for module in self.output:
+                if isinstance(module, nn.Linear):
+                    nn.init.xavier_uniform_(module.weight)
+                    nn.init.zeros_(module.bias)
+            final = self.output[-1]
+            assert isinstance(final, nn.Linear)
+            nn.init.uniform_(final.weight, -1e-2, 1e-2)
+            nn.init.constant_(final.bias, 0.0)
+        else:
+            nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
+            nn.init.constant_(self.output.bias, 0.0)
 
     def forward(
         self,
@@ -1230,10 +1828,21 @@ class SkyEncoderResMLPField(_BaseFieldModel):
             ra_deg.to(dtype=torch.float64),
             dec_deg.to(dtype=torch.float64),
             wavelength=wavelength,
-        ).to(dtype=self.output.weight.dtype)
+        )
+        output_dtype = (
+            self.output[0].weight.dtype
+            if isinstance(self.output, nn.Sequential)
+            else self.output.weight.dtype
+        )
+        feats = feats.to(dtype=output_dtype)
         x = F.silu(self.input(feats))
+        readout_states = [x] if self.multiscale_readout else None
         for block in self.blocks:
             x = block(x)
+            if readout_states is not None:
+                readout_states.append(x)
+        if readout_states is not None:
+            x = torch.cat(readout_states, dim=-1)
         out = self.output(x).squeeze(-1)
         return F.softplus(out) + 1.0e-4
 
@@ -1590,40 +2199,1822 @@ class SkyLambdaPlanesField(_BaseFieldModel):
         return F.softplus(out) + 1.0e-4
 
 
+class SkyLambdaKPlanesField(_BaseFieldModel):
+    def __init__(
+        self,
+        domain: FieldDomain,
+        *,
+        base_resolution: int = 16,
+        num_scales: int = 3,
+        features_per_plane: int = 8,
+        hidden_dim: int = 64,
+        hidden_layers: int = 2,
+        refine_hidden_dim: int = 32,
+    ) -> None:
+        super().__init__(domain)
+        self.spatial_dim = 2 if self.coord_mode == "local_tangent" else 3
+        self.base_resolution = int(base_resolution)
+        self.num_scales = int(num_scales)
+        self.features_per_plane = int(features_per_plane)
+        plane_names = ["xy", "xl", "yl"]
+        if self.spatial_dim == 3:
+            plane_names.extend(["xz", "yz", "zl"])
+        self._plane_names = tuple(plane_names)
+        self.planes = nn.ParameterDict()
+        for scale_idx in range(self.num_scales):
+            resolution = self.base_resolution * (2**scale_idx)
+            for name in self._plane_names:
+                self.planes[f"s{scale_idx}_{name}"] = nn.Parameter(
+                    1.0e-3
+                    * torch.randn(
+                        self.features_per_plane,
+                        resolution,
+                        resolution,
+                    )
+                )
+        in_dim = (
+            len(self._plane_names) * self.num_scales * self.features_per_plane
+            + self.spatial_dim
+            + 1
+        )
+        layers: list[nn.Module] = []
+        current_dim = in_dim
+        for _ in range(max(int(hidden_layers), 1)):
+            layers.append(nn.Linear(current_dim, hidden_dim))
+            layers.append(nn.SiLU())
+            current_dim = hidden_dim
+        self.hidden = nn.Sequential(*layers)
+        self.base_output = nn.Linear(current_dim, 1)
+        self.refine = nn.Sequential(
+            nn.Linear(current_dim, refine_hidden_dim),
+            nn.SiLU(),
+            nn.Linear(refine_hidden_dim, 1),
+        )
+        self._reset_parameters()
+
+    def _reset_parameters(self) -> None:
+        for module in self.hidden:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        nn.init.uniform_(self.base_output.weight, -1e-2, 1e-2)
+        nn.init.constant_(self.base_output.bias, 0.0)
+        for module in self.refine:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+
+    def _hidden_features(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> tuple[Tensor, Tensor]:
+        spatial_raw = self._spatial_coords(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        ).to(dtype=self.base_output.weight.dtype)
+        spatial_unit = self._spatial_unit_box_coords(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        ).to(dtype=self.base_output.weight.dtype)
+        lam = self._normalized_wavelength(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=self.base_output.weight.dtype,
+            shape=ra_deg.shape,
+        )
+        lam_unit = 0.5 * (torch.tanh(lam) + 1.0)
+        x = spatial_unit[..., 0]
+        y = spatial_unit[..., 1]
+        sampled: list[Tensor] = []
+        for scale_idx in range(self.num_scales):
+            sampled.extend(
+                [
+                    _sample_feature_plane(self.planes[f"s{scale_idx}_xy"], x, y),
+                    _sample_feature_plane(self.planes[f"s{scale_idx}_xl"], x, lam_unit),
+                    _sample_feature_plane(self.planes[f"s{scale_idx}_yl"], y, lam_unit),
+                ]
+            )
+            if self.spatial_dim == 3:
+                z = spatial_unit[..., 2]
+                sampled.extend(
+                    [
+                        _sample_feature_plane(self.planes[f"s{scale_idx}_xz"], x, z),
+                        _sample_feature_plane(self.planes[f"s{scale_idx}_yz"], y, z),
+                        _sample_feature_plane(self.planes[f"s{scale_idx}_zl"], z, lam_unit),
+                    ]
+                )
+        plane_feats = torch.cat(sampled, dim=-1)
+        feats = torch.cat([spatial_raw, lam.unsqueeze(-1), plane_feats], dim=-1)
+        hidden = self.hidden(feats)
+        return hidden, lam
+
+    def _decode_hidden(
+        self,
+        hidden: Tensor,
+    ) -> Tensor:
+        out = self.base_output(hidden).squeeze(-1) + self.refine(hidden).squeeze(-1)
+        return F.softplus(out) + 1.0e-4
+
+    def render_bandpass(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelengths: Tensor,
+        weights: Tensor,
+    ) -> Tensor:
+        hidden_planes = []
+        for wavelength in wavelengths:
+            hidden, _ = self._hidden_features(ra_deg, dec_deg, wavelength)
+            hidden_planes.append(hidden)
+        stacked_hidden = torch.stack(hidden_planes, dim=0)
+        norm_weights = weights.to(dtype=stacked_hidden.dtype)
+        norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
+        mixed_hidden = torch.sum(
+            stacked_hidden * norm_weights.view(-1, *([1] * (stacked_hidden.ndim - 1))),
+            dim=0,
+        )
+        return self._decode_hidden(mixed_hidden)
+
+    def forward(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        hidden, _ = self._hidden_features(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        )
+        return self._decode_hidden(hidden)
+
+
+class SkyLambdaFeatureField(_BaseFieldModel):
+    def __init__(
+        self,
+        domain: FieldDomain,
+        *,
+        base_resolution: int = 16,
+        num_scales: int = 3,
+        features_per_plane: int = 8,
+        scale_hidden_dim: int = 64,
+        scale_num_blocks: int = 2,
+        decoder_hidden_dim: int = 64,
+        decoder_num_blocks: int = 2,
+        refine_hidden_dim: int = 32,
+        bandpass_hidden_dim: int = 32,
+        global_hidden_dim: int = 0,
+        global_num_blocks: int = 1,
+        aggregate_hidden_moments: bool = False,
+        coarse_fine_readout: bool = False,
+        predict_variance: bool = False,
+    ) -> None:
+        super().__init__(domain)
+        self.spatial_dim = 2 if self.coord_mode == "local_tangent" else 3
+        self.base_resolution = int(base_resolution)
+        self.num_scales = int(num_scales)
+        self.features_per_plane = int(features_per_plane)
+        self.scale_hidden_dim = int(scale_hidden_dim)
+        self.bandpass_hidden_dim = int(bandpass_hidden_dim)
+        self.global_hidden_dim = max(int(global_hidden_dim), 0)
+        self.aggregate_hidden_moments = bool(aggregate_hidden_moments)
+        self.coarse_fine_readout = bool(coarse_fine_readout)
+        self.predict_variance = bool(predict_variance)
+        self._curriculum_progress = 1.0
+        plane_names = ["xy", "xl", "yl"]
+        if self.spatial_dim == 3:
+            plane_names.extend(["xz", "yz", "zl"])
+        self._plane_names = tuple(plane_names)
+        self.planes = nn.ParameterDict()
+        for scale_idx in range(self.num_scales):
+            resolution = self.base_resolution * (2**scale_idx)
+            for name in self._plane_names:
+                self.planes[f"s{scale_idx}_{name}"] = nn.Parameter(
+                    1.0e-3
+                    * torch.randn(
+                        self.features_per_plane,
+                        resolution,
+                        resolution,
+                    )
+                )
+        per_scale_dim = len(self._plane_names) * self.features_per_plane + self.spatial_dim + 1
+        self.scale_mlps = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(per_scale_dim, self.scale_hidden_dim),
+                    nn.SiLU(),
+                    _ResidualStack(self.scale_hidden_dim, int(scale_num_blocks)),
+                )
+                for _ in range(self.num_scales)
+            ]
+        )
+        self.scale_gate = nn.Sequential(
+            nn.Linear(self.spatial_dim + 1, self.scale_hidden_dim),
+            nn.SiLU(),
+            nn.Linear(self.scale_hidden_dim, self.num_scales),
+        )
+        self.bandpass_context = nn.Sequential(
+            nn.Linear(4 + 8, self.bandpass_hidden_dim),
+            nn.SiLU(),
+            nn.Linear(self.bandpass_hidden_dim, self.bandpass_hidden_dim),
+            nn.SiLU(),
+        )
+        if self.global_hidden_dim > 0:
+            self.global_encoder = nn.Sequential(
+                nn.Linear(self.spatial_dim + 1, self.global_hidden_dim),
+                nn.SiLU(),
+                _ResidualStack(self.global_hidden_dim, int(global_num_blocks)),
+            )
+        else:
+            self.global_encoder = None
+        hidden_multiplier = 2 if self.aggregate_hidden_moments else 1
+        coarse_multiplier = hidden_multiplier if self.coarse_fine_readout else 0
+        self.decoder = nn.Sequential(
+            nn.Linear(
+                hidden_multiplier * self.scale_hidden_dim
+                + coarse_multiplier * self.scale_hidden_dim
+                + self.bandpass_hidden_dim
+                + hidden_multiplier * self.global_hidden_dim,
+                int(decoder_hidden_dim),
+            ),
+            nn.SiLU(),
+            _ResidualStack(int(decoder_hidden_dim), int(decoder_num_blocks)),
+        )
+        self.base_output = nn.Linear(int(decoder_hidden_dim), 1)
+        self.refine = nn.Sequential(
+            nn.Linear(int(decoder_hidden_dim), int(refine_hidden_dim)),
+            nn.SiLU(),
+            nn.Linear(int(refine_hidden_dim), 1),
+        )
+        if self.predict_variance:
+            self.logvar_output = nn.Linear(int(decoder_hidden_dim), 1)
+            self.logvar_refine = nn.Sequential(
+                nn.Linear(int(decoder_hidden_dim), int(refine_hidden_dim)),
+                nn.SiLU(),
+                nn.Linear(int(refine_hidden_dim), 1),
+            )
+        else:
+            self.logvar_output = None
+            self.logvar_refine = None
+        self._reset_parameters()
+
+    def _reset_parameters(self) -> None:
+        for mlp in self.scale_mlps:
+            for module in mlp:
+                if isinstance(module, nn.Linear):
+                    nn.init.xavier_uniform_(module.weight)
+                    nn.init.zeros_(module.bias)
+        for module in self.scale_gate:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        for module in self.bandpass_context:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        if self.global_encoder is not None:
+            for module in self.global_encoder:
+                if isinstance(module, nn.Linear):
+                    nn.init.xavier_uniform_(module.weight)
+                    nn.init.zeros_(module.bias)
+        for module in self.decoder:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        nn.init.uniform_(self.base_output.weight, -1e-2, 1e-2)
+        nn.init.constant_(self.base_output.bias, 0.0)
+        for module in self.refine:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        if self.logvar_output is not None:
+            nn.init.uniform_(self.logvar_output.weight, -1e-2, 1e-2)
+            nn.init.constant_(self.logvar_output.bias, -2.0)
+        if self.logvar_refine is not None:
+            for module in self.logvar_refine:
+                if isinstance(module, nn.Linear):
+                    nn.init.xavier_uniform_(module.weight)
+                    nn.init.zeros_(module.bias)
+
+    def set_curriculum_progress(self, progress: float) -> None:
+        self._curriculum_progress = min(max(float(progress), 0.0), 1.0)
+
+    def _curriculum_scale_weights(
+        self,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Tensor:
+        eased_progress = math.sqrt(self._curriculum_progress)
+        active_extent = 1.0 + (self.num_scales - 1) * eased_progress
+        scale_index = torch.arange(
+            self.num_scales,
+            device=device,
+            dtype=dtype,
+        )
+        return torch.clamp(active_extent - scale_index, min=0.0, max=1.0)
+
+    def _per_scale_hidden_from_components(
+        self,
+        spatial_raw: Tensor,
+        spatial_unit: Tensor,
+        lam: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        lam_unit = 0.5 * (torch.tanh(lam) + 1.0)
+        x = spatial_unit[..., 0]
+        y = spatial_unit[..., 1]
+        context = torch.cat([spatial_raw, lam.unsqueeze(-1)], dim=-1)
+        per_scale_hidden: list[Tensor] = []
+        for scale_idx, mlp in enumerate(self.scale_mlps):
+            sampled = [
+                _sample_feature_plane(self.planes[f"s{scale_idx}_xy"], x, y),
+                _sample_feature_plane(self.planes[f"s{scale_idx}_xl"], x, lam_unit),
+                _sample_feature_plane(self.planes[f"s{scale_idx}_yl"], y, lam_unit),
+            ]
+            if self.spatial_dim == 3:
+                z = spatial_unit[..., 2]
+                sampled.extend(
+                    [
+                        _sample_feature_plane(self.planes[f"s{scale_idx}_xz"], x, z),
+                        _sample_feature_plane(self.planes[f"s{scale_idx}_yz"], y, z),
+                        _sample_feature_plane(self.planes[f"s{scale_idx}_zl"], z, lam_unit),
+                    ]
+                )
+            scale_feats = torch.cat([context, torch.cat(sampled, dim=-1)], dim=-1)
+            per_scale_hidden.append(mlp(scale_feats))
+        scale_hidden = torch.stack(per_scale_hidden, dim=-2)
+        return scale_hidden, context
+
+    def _aggregate_scale_stack(
+        self,
+        scale_hidden: Tensor,
+        context: Tensor,
+    ) -> Tensor:
+        gate_logits = self.scale_gate(context)
+        scale_weights = self._curriculum_scale_weights(
+            device=gate_logits.device,
+            dtype=gate_logits.dtype,
+        )
+        gate_logits = gate_logits + torch.log(torch.clamp(scale_weights, min=1.0e-6))
+        gate = torch.softmax(gate_logits, dim=-1).unsqueeze(-1)
+        return torch.sum(scale_hidden * gate, dim=-2)
+
+    def _scale_hidden_from_components(
+        self,
+        spatial_raw: Tensor,
+        spatial_unit: Tensor,
+        lam: Tensor,
+    ) -> Tensor:
+        scale_hidden, context = self._per_scale_hidden_from_components(
+            spatial_raw,
+            spatial_unit,
+            lam,
+        )
+        return self._aggregate_scale_stack(scale_hidden, context)
+
+    def _scale_hidden(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        spatial_raw = self._spatial_coords(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        ).to(dtype=self.base_output.weight.dtype)
+        spatial_unit = self._spatial_unit_box_coords(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        ).to(dtype=self.base_output.weight.dtype)
+        lam = self._normalized_wavelength(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=self.base_output.weight.dtype,
+            shape=ra_deg.shape,
+        )
+        return self._scale_hidden_from_components(spatial_raw, spatial_unit, lam)
+
+    def _global_hidden_from_components(
+        self,
+        spatial_raw: Tensor,
+        lam: Tensor,
+    ) -> Tensor | None:
+        if self.global_encoder is None:
+            return None
+        context = torch.cat([spatial_raw, lam.unsqueeze(-1)], dim=-1)
+        return self.global_encoder(context)
+
+    def _global_hidden(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor | None:
+        spatial_raw = self._spatial_coords(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        ).to(dtype=self.base_output.weight.dtype)
+        lam = self._normalized_wavelength(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=self.base_output.weight.dtype,
+            shape=ra_deg.shape,
+        )
+        return self._global_hidden_from_components(spatial_raw, lam)
+
+    def _bandpass_features(self, wavelengths: Tensor, weights: Tensor) -> Tensor:
+        lam = (
+            wavelengths.to(dtype=self.base_output.weight.dtype)
+            - float(self.domain.wavelength_center)
+        ) / float(self.domain.wavelength_scale)
+        norm_weights = weights.to(dtype=self.base_output.weight.dtype)
+        norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
+        mean = torch.sum(norm_weights * lam)
+        centered = lam - mean
+        second = torch.sum(norm_weights * torch.square(centered))
+        third = torch.sum(norm_weights * centered * centered * centered)
+        fourth = torch.sum(norm_weights * torch.square(torch.square(centered)))
+        feats = [mean, second, third, fourth]
+        scales = torch.arange(
+            1,
+            5,
+            device=lam.device,
+            dtype=lam.dtype,
+        )
+        for scale in scales:
+            phase = math.pi * scale * lam
+            feats.append(torch.sum(norm_weights * torch.sin(phase)))
+            feats.append(torch.sum(norm_weights * torch.cos(phase)))
+        return torch.stack(feats)
+
+    def _decode_hidden(
+        self,
+        hidden: Tensor,
+        bandpass_latent: Tensor,
+        global_hidden: Tensor | None = None,
+        coarse_hidden: Tensor | None = None,
+    ) -> Tensor:
+        if bandpass_latent.ndim < hidden.ndim:
+            bandpass_latent = bandpass_latent.view(
+                *([1] * (hidden.ndim - 1)),
+                bandpass_latent.shape[-1],
+            )
+            bandpass_latent = bandpass_latent.expand(*hidden.shape[:-1], -1)
+        parts = [hidden]
+        if coarse_hidden is not None:
+            parts.append(coarse_hidden)
+        parts.append(bandpass_latent)
+        if global_hidden is not None:
+            parts.append(global_hidden)
+        decoded = self.decoder(torch.cat(parts, dim=-1))
+        out = self.base_output(decoded).squeeze(-1) + self.refine(decoded).squeeze(-1)
+        return F.softplus(out) + 1.0e-4
+
+    def _decode_distribution(
+        self,
+        hidden: Tensor,
+        bandpass_latent: Tensor,
+        global_hidden: Tensor | None = None,
+        coarse_hidden: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        if bandpass_latent.ndim < hidden.ndim:
+            bandpass_latent = bandpass_latent.view(
+                *([1] * (hidden.ndim - 1)),
+                bandpass_latent.shape[-1],
+            )
+            bandpass_latent = bandpass_latent.expand(*hidden.shape[:-1], -1)
+        parts = [hidden]
+        if coarse_hidden is not None:
+            parts.append(coarse_hidden)
+        parts.append(bandpass_latent)
+        if global_hidden is not None:
+            parts.append(global_hidden)
+        decoded = self.decoder(torch.cat(parts, dim=-1))
+        mean = self.base_output(decoded).squeeze(-1) + self.refine(decoded).squeeze(-1)
+        mean = F.softplus(mean) + 1.0e-4
+        if self.logvar_output is None or self.logvar_refine is None:
+            logvar = torch.zeros_like(mean)
+        else:
+            logvar = self.logvar_output(decoded).squeeze(-1) + self.logvar_refine(decoded).squeeze(-1)
+            logvar = torch.clamp(logvar, min=-8.0, max=6.0)
+        return mean, logvar
+
+    def _aggregate_hidden_stack(
+        self,
+        stacked_hidden: Tensor,
+        norm_weights: Tensor,
+    ) -> Tensor:
+        mean_hidden = torch.sum(
+            stacked_hidden * norm_weights.view(-1, *([1] * (stacked_hidden.ndim - 1))),
+            dim=0,
+        )
+        if not self.aggregate_hidden_moments:
+            return mean_hidden
+        centered = stacked_hidden - mean_hidden.unsqueeze(0)
+        variance = torch.sum(
+            torch.square(centered)
+            * norm_weights.view(-1, *([1] * (stacked_hidden.ndim - 1))),
+            dim=0,
+        )
+        std_hidden = torch.sqrt(torch.clamp(variance, min=1.0e-8))
+        return torch.cat([mean_hidden, std_hidden], dim=-1)
+
+    def render_bandpass(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelengths: Tensor,
+        weights: Tensor,
+    ) -> Tensor:
+        hidden_planes = []
+        coarse_hidden_planes = []
+        global_hiddens = []
+        for wavelength in wavelengths:
+            spatial_raw = self._spatial_coords(
+                ra_deg,
+                dec_deg,
+                wavelength,
+            ).to(dtype=self.base_output.weight.dtype)
+            spatial_unit = self._spatial_unit_box_coords(
+                ra_deg,
+                dec_deg,
+                wavelength,
+            ).to(dtype=self.base_output.weight.dtype)
+            lam = self._normalized_wavelength(
+                wavelength,
+                device=ra_deg.device,
+                dtype=self.base_output.weight.dtype,
+                shape=ra_deg.shape,
+            )
+            scale_hidden, context = self._per_scale_hidden_from_components(
+                spatial_raw,
+                spatial_unit,
+                lam,
+            )
+            hidden_planes.append(self._aggregate_scale_stack(scale_hidden, context))
+            if self.coarse_fine_readout:
+                coarse_hidden_planes.append(scale_hidden[..., 0, :])
+            global_hidden = self._global_hidden(ra_deg, dec_deg, wavelength)
+            if global_hidden is not None:
+                global_hiddens.append(global_hidden)
+        stacked_hidden = torch.stack(hidden_planes, dim=0)
+        norm_weights = weights.to(dtype=stacked_hidden.dtype)
+        norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
+        mixed_hidden = self._aggregate_hidden_stack(stacked_hidden, norm_weights)
+        bandpass_latent = self.bandpass_context(self._bandpass_features(wavelengths, weights))
+        mixed_coarse_hidden = None
+        if coarse_hidden_planes:
+            stacked_coarse_hidden = torch.stack(coarse_hidden_planes, dim=0)
+            mixed_coarse_hidden = self._aggregate_hidden_stack(
+                stacked_coarse_hidden,
+                norm_weights,
+            )
+        mixed_global_hidden = None
+        if global_hiddens:
+            stacked_global_hidden = torch.stack(global_hiddens, dim=0)
+            mixed_global_hidden = self._aggregate_hidden_stack(
+                stacked_global_hidden,
+                norm_weights,
+            )
+        return self._decode_hidden(
+            mixed_hidden,
+            bandpass_latent,
+            mixed_global_hidden,
+            mixed_coarse_hidden,
+        )
+
+    def render_bandpass_distribution(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelengths: Tensor,
+        weights: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        hidden_planes = []
+        coarse_hidden_planes = []
+        global_hiddens = []
+        for wavelength in wavelengths:
+            spatial_raw = self._spatial_coords(
+                ra_deg,
+                dec_deg,
+                wavelength,
+            ).to(dtype=self.base_output.weight.dtype)
+            spatial_unit = self._spatial_unit_box_coords(
+                ra_deg,
+                dec_deg,
+                wavelength,
+            ).to(dtype=self.base_output.weight.dtype)
+            lam = self._normalized_wavelength(
+                wavelength,
+                device=ra_deg.device,
+                dtype=self.base_output.weight.dtype,
+                shape=ra_deg.shape,
+            )
+            scale_hidden, context = self._per_scale_hidden_from_components(
+                spatial_raw,
+                spatial_unit,
+                lam,
+            )
+            hidden_planes.append(self._aggregate_scale_stack(scale_hidden, context))
+            if self.coarse_fine_readout:
+                coarse_hidden_planes.append(scale_hidden[..., 0, :])
+            global_hidden = self._global_hidden(ra_deg, dec_deg, wavelength)
+            if global_hidden is not None:
+                global_hiddens.append(global_hidden)
+        stacked_hidden = torch.stack(hidden_planes, dim=0)
+        norm_weights = weights.to(dtype=stacked_hidden.dtype)
+        norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
+        mixed_hidden = self._aggregate_hidden_stack(stacked_hidden, norm_weights)
+        bandpass_latent = self.bandpass_context(self._bandpass_features(wavelengths, weights))
+        mixed_coarse_hidden = None
+        if coarse_hidden_planes:
+            stacked_coarse_hidden = torch.stack(coarse_hidden_planes, dim=0)
+            mixed_coarse_hidden = self._aggregate_hidden_stack(
+                stacked_coarse_hidden,
+                norm_weights,
+            )
+        mixed_global_hidden = None
+        if global_hiddens:
+            stacked_global_hidden = torch.stack(global_hiddens, dim=0)
+            mixed_global_hidden = self._aggregate_hidden_stack(
+                stacked_global_hidden,
+                norm_weights,
+            )
+        return self._decode_distribution(
+            mixed_hidden,
+            bandpass_latent,
+            mixed_global_hidden,
+            mixed_coarse_hidden,
+        )
+
+    def forward(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        wavelength = torch.as_tensor(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=torch.float32,
+        )
+        if wavelength.ndim == 0:
+            wavelengths = wavelength.view(1)
+        else:
+            wavelengths = wavelength.reshape(-1)
+        weights = torch.ones_like(wavelengths)
+        spatial_raw = self._spatial_coords(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        ).to(dtype=self.base_output.weight.dtype)
+        spatial_unit = self._spatial_unit_box_coords(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        ).to(dtype=self.base_output.weight.dtype)
+        lam = self._normalized_wavelength(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=self.base_output.weight.dtype,
+            shape=ra_deg.shape,
+        )
+        scale_hidden, context = self._per_scale_hidden_from_components(
+            spatial_raw,
+            spatial_unit,
+            lam,
+        )
+        hidden = self._aggregate_scale_stack(scale_hidden, context)
+        coarse_hidden = scale_hidden[..., 0, :] if self.coarse_fine_readout else None
+        global_hidden = self._global_hidden(ra_deg, dec_deg, wavelength_angstrom)
+        bandpass_latent = self.bandpass_context(self._bandpass_features(wavelengths, weights))
+        return self._decode_hidden(hidden, bandpass_latent, global_hidden, coarse_hidden)
+
+    def forward_distribution(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> tuple[Tensor, Tensor]:
+        wavelength = torch.as_tensor(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=torch.float32,
+        )
+        if wavelength.ndim == 0:
+            wavelengths = wavelength.view(1)
+        else:
+            wavelengths = wavelength.reshape(-1)
+        weights = torch.ones_like(wavelengths)
+        spatial_raw = self._spatial_coords(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        ).to(dtype=self.base_output.weight.dtype)
+        spatial_unit = self._spatial_unit_box_coords(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        ).to(dtype=self.base_output.weight.dtype)
+        lam = self._normalized_wavelength(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=self.base_output.weight.dtype,
+            shape=ra_deg.shape,
+        )
+        scale_hidden, context = self._per_scale_hidden_from_components(
+            spatial_raw,
+            spatial_unit,
+            lam,
+        )
+        hidden = self._aggregate_scale_stack(scale_hidden, context)
+        coarse_hidden = scale_hidden[..., 0, :] if self.coarse_fine_readout else None
+        global_hidden = self._global_hidden(ra_deg, dec_deg, wavelength_angstrom)
+        bandpass_latent = self.bandpass_context(self._bandpass_features(wavelengths, weights))
+        return self._decode_distribution(
+            hidden,
+            bandpass_latent,
+            global_hidden,
+            coarse_hidden,
+        )
+
+
+class OperatorConstrainedFeatureField(_BaseFieldModel):
+    def __init__(
+        self,
+        domain: FieldDomain,
+        *,
+        base_resolution: int = 16,
+        num_scales: int = 4,
+        features_per_plane: int = 12,
+        scale_hidden_dim: int = 96,
+        scale_num_blocks: int = 2,
+        spectral_basis_dim: int = 8,
+        decoder_hidden_dim: int = 96,
+        decoder_num_blocks: int = 2,
+        refine_hidden_dim: int = 48,
+        bandpass_hidden_dim: int = 48,
+        spectral_context_dim: int | None = None,
+        residual_hidden_dim: int = 48,
+    ) -> None:
+        super().__init__(domain)
+        self.spatial_dim = 2 if self.coord_mode == "local_tangent" else 3
+        self.base_resolution = int(base_resolution)
+        self.num_scales = int(num_scales)
+        self.features_per_plane = int(features_per_plane)
+        self.scale_hidden_dim = int(scale_hidden_dim)
+        self.spectral_basis_dim = int(spectral_basis_dim)
+        self.bandpass_hidden_dim = int(bandpass_hidden_dim)
+        self.spectral_context_dim = (
+            int(spectral_context_dim)
+            if spectral_context_dim is not None
+            else self.scale_hidden_dim
+        )
+        self._spectral_observability_cache: dict[tuple[tuple[object, ...], ...], Tensor] = {}
+        spatial_plane_names = ["xy"] if self.spatial_dim == 2 else ["xy", "xz", "yz"]
+        self._spatial_plane_names = tuple(spatial_plane_names)
+        self.planes = nn.ParameterDict()
+        for scale_idx in range(self.num_scales):
+            resolution = self.base_resolution * (2**scale_idx)
+            for name in self._spatial_plane_names:
+                self.planes[f"s{scale_idx}_{name}"] = nn.Parameter(
+                    1.0e-3
+                    * torch.randn(
+                        self.features_per_plane,
+                        resolution,
+                        resolution,
+                    )
+                )
+        per_scale_dim = len(self._spatial_plane_names) * self.features_per_plane + self.spatial_dim
+        self.scale_mlps = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(per_scale_dim, self.scale_hidden_dim),
+                    nn.SiLU(),
+                    _ResidualStack(self.scale_hidden_dim, int(scale_num_blocks)),
+                )
+                for _ in range(self.num_scales)
+            ]
+        )
+        self.scale_gate = nn.Sequential(
+            nn.Linear(self.spatial_dim, self.scale_hidden_dim),
+            nn.SiLU(),
+            nn.Linear(self.scale_hidden_dim, self.num_scales),
+        )
+        self.coefficient_head = nn.Sequential(
+            nn.Linear(self.scale_hidden_dim, self.scale_hidden_dim),
+            nn.SiLU(),
+            nn.Linear(self.scale_hidden_dim, self.spectral_basis_dim),
+        )
+        self.spectral_context = nn.Sequential(
+            nn.Linear(2 * self.spectral_basis_dim, self.spectral_context_dim),
+            nn.SiLU(),
+            nn.Linear(self.spectral_context_dim, self.spectral_context_dim),
+            nn.SiLU(),
+        )
+        self.spectral_affine = nn.Sequential(
+            nn.Linear(self.spectral_context_dim, self.scale_hidden_dim),
+            nn.SiLU(),
+            nn.Linear(self.scale_hidden_dim, 2 * self.scale_hidden_dim),
+        )
+        self.bandpass_context = nn.Sequential(
+            nn.Linear(4 + 8, self.bandpass_hidden_dim),
+            nn.SiLU(),
+            nn.Linear(self.bandpass_hidden_dim, self.bandpass_hidden_dim),
+            nn.SiLU(),
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(
+                2 * self.scale_hidden_dim + self.spectral_context_dim + self.bandpass_hidden_dim,
+                int(decoder_hidden_dim),
+            ),
+            nn.SiLU(),
+            _ResidualStack(int(decoder_hidden_dim), int(decoder_num_blocks)),
+        )
+        self.base_output = nn.Linear(int(decoder_hidden_dim), 1)
+        self.refine = nn.Sequential(
+            nn.Linear(int(decoder_hidden_dim), int(refine_hidden_dim)),
+            nn.SiLU(),
+            nn.Linear(int(refine_hidden_dim), 1),
+        )
+        self.residual_affine = nn.Sequential(
+            nn.Linear(
+                self.bandpass_hidden_dim + self.spectral_context_dim + self.scale_hidden_dim,
+                int(residual_hidden_dim),
+            ),
+            nn.SiLU(),
+            nn.Linear(int(residual_hidden_dim), 2 * self.scale_hidden_dim),
+        )
+        self.residual_decoder = nn.Sequential(
+            nn.Linear(
+                2 * self.scale_hidden_dim + self.spectral_context_dim + self.bandpass_hidden_dim,
+                int(residual_hidden_dim),
+            ),
+            nn.SiLU(),
+            nn.Linear(int(residual_hidden_dim), 1),
+        )
+        self._register_spectral_basis()
+        self._reset_parameters()
+
+    def _register_spectral_basis(self) -> None:
+        lower = max(
+            float(self.domain.wavelength_center) - float(self.domain.wavelength_scale),
+            1.0,
+        )
+        upper = max(
+            float(self.domain.wavelength_center) + float(self.domain.wavelength_scale),
+            lower + 1.0,
+        )
+        log_center = math.log(float(self.domain.wavelength_center))
+        log_scale = max(0.5 * (math.log(upper) - math.log(lower)), 1.0e-3)
+        coarse_count = max(1, self.spectral_basis_dim // 3)
+        medium_count = max(1, self.spectral_basis_dim // 3)
+        fine_count = max(self.spectral_basis_dim - coarse_count - medium_count, 1)
+        coarse_centers = torch.linspace(-1.0, 1.0, steps=coarse_count, dtype=torch.float32)
+        medium_centers = torch.linspace(-1.0, 1.0, steps=medium_count, dtype=torch.float32)
+        fine_centers = torch.linspace(-1.0, 1.0, steps=fine_count, dtype=torch.float32)
+        centers = torch.cat([coarse_centers, medium_centers, fine_centers], dim=0)[
+            : self.spectral_basis_dim
+        ]
+        widths = torch.cat(
+            [
+                torch.full((coarse_count,), 0.95, dtype=torch.float32),
+                torch.full((medium_count,), 0.45, dtype=torch.float32),
+                torch.full((fine_count,), 0.18, dtype=torch.float32),
+            ],
+            dim=0,
+        )[: self.spectral_basis_dim]
+        self.register_buffer("spectral_basis_centers", centers, persistent=False)
+        self.register_buffer("spectral_basis_widths", widths, persistent=False)
+        self.register_buffer(
+            "spectral_log_center",
+            torch.tensor(log_center, dtype=torch.float32),
+            persistent=False,
+        )
+        self.register_buffer(
+            "spectral_log_scale",
+            torch.tensor(log_scale, dtype=torch.float32),
+            persistent=False,
+        )
+
+    def _reset_parameters(self) -> None:
+        for mlp in self.scale_mlps:
+            for module in mlp:
+                if isinstance(module, nn.Linear):
+                    nn.init.xavier_uniform_(module.weight)
+                    nn.init.zeros_(module.bias)
+        for module in self.scale_gate:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        for module in self.coefficient_head:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        for module in self.spectral_context:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        for module in self.spectral_affine:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        for module in self.bandpass_context:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        for module in self.decoder:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        for module in self.refine:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        for module in self.residual_affine:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        for module in self.residual_decoder[:-1]:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        nn.init.uniform_(self.base_output.weight, -1.0e-2, 1.0e-2)
+        nn.init.constant_(self.base_output.bias, 0.0)
+        final_refine = self.refine[-1]
+        assert isinstance(final_refine, nn.Linear)
+        nn.init.zeros_(final_refine.weight)
+        nn.init.zeros_(final_refine.bias)
+        residual_out = self.residual_decoder[-1]
+        assert isinstance(residual_out, nn.Linear)
+        nn.init.zeros_(residual_out.weight)
+        nn.init.zeros_(residual_out.bias)
+
+    def _spatial_feature_stack(
+        self,
+        spatial_raw: Tensor,
+        spatial_unit: Tensor,
+    ) -> Tensor:
+        x = spatial_unit[..., 0]
+        y = spatial_unit[..., 1]
+        per_scale_hidden: list[Tensor] = []
+        for scale_idx, mlp in enumerate(self.scale_mlps):
+            sampled = [_sample_feature_plane(self.planes[f"s{scale_idx}_xy"], x, y)]
+            if self.spatial_dim == 3:
+                z = spatial_unit[..., 2]
+                sampled.extend(
+                    [
+                        _sample_feature_plane(self.planes[f"s{scale_idx}_xz"], x, z),
+                        _sample_feature_plane(self.planes[f"s{scale_idx}_yz"], y, z),
+                    ]
+                )
+            feats = torch.cat([spatial_raw, torch.cat(sampled, dim=-1)], dim=-1)
+            per_scale_hidden.append(mlp(feats))
+        return torch.stack(per_scale_hidden, dim=-2)
+
+    def _shared_hidden_components_from_spatial(
+        self,
+        spatial_raw: Tensor,
+        spatial_unit: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        scale_hidden = self._spatial_feature_stack(spatial_raw, spatial_unit)
+        gate_logits = self.scale_gate(spatial_raw)
+        gate = torch.softmax(gate_logits, dim=-1).unsqueeze(-1)
+        shared_hidden = torch.sum(scale_hidden * gate, dim=-2)
+        if self.num_scales == 1:
+            return shared_hidden, shared_hidden, torch.zeros_like(shared_hidden)
+        scale_positions = torch.linspace(
+            0.0,
+            1.0,
+            steps=self.num_scales,
+            device=scale_hidden.device,
+            dtype=scale_hidden.dtype,
+        ).view(*([1] * (gate.ndim - 2)), self.num_scales, 1)
+        coarse_gate = gate * (1.0 - scale_positions)
+        fine_gate = gate * scale_positions
+        coarse_gate = coarse_gate / torch.clamp(coarse_gate.sum(dim=-2, keepdim=True), min=1.0e-8)
+        fine_gate = fine_gate / torch.clamp(fine_gate.sum(dim=-2, keepdim=True), min=1.0e-8)
+        coarse_hidden = torch.sum(scale_hidden * coarse_gate, dim=-2)
+        fine_hidden = torch.sum(scale_hidden * fine_gate, dim=-2)
+        return shared_hidden, coarse_hidden, fine_hidden
+
+    def _normalized_log_wavelength(
+        self,
+        wavelength_angstrom: Tensor | float,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+        shape: torch.Size,
+    ) -> Tensor:
+        wavelength = torch.as_tensor(
+            wavelength_angstrom,
+            device=device,
+            dtype=dtype,
+        )
+        if wavelength.shape != shape:
+            wavelength = torch.broadcast_to(wavelength, shape)
+        wavelength = torch.clamp(wavelength, min=1.0)
+        return (torch.log(wavelength) - self.spectral_log_center.to(device=device, dtype=dtype)) / (
+            self.spectral_log_scale.to(device=device, dtype=dtype)
+        )
+
+    def _spectral_basis(
+        self,
+        wavelength_angstrom: Tensor | float,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+        shape: torch.Size,
+    ) -> Tensor:
+        lam = self._normalized_log_wavelength(
+            wavelength_angstrom,
+            device=device,
+            dtype=dtype,
+            shape=shape,
+        )
+        centers = self.spectral_basis_centers.to(device=device, dtype=dtype)
+        widths = self.spectral_basis_widths.to(device=device, dtype=dtype)
+        diff = lam.unsqueeze(-1) - centers
+        basis = torch.exp(-0.5 * torch.square(diff / torch.clamp(widths, min=1.0e-3)))
+        return basis / torch.clamp(basis.sum(dim=-1, keepdim=True), min=1.0e-8)
+
+    def _bandpass_features(self, wavelengths: Tensor, weights: Tensor) -> Tensor:
+        lam = self._normalized_log_wavelength(
+            wavelengths.to(dtype=self.base_output.weight.dtype),
+            device=wavelengths.device,
+            dtype=self.base_output.weight.dtype,
+            shape=wavelengths.shape,
+        )
+        norm_weights = weights.to(dtype=self.base_output.weight.dtype)
+        norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
+        mean = torch.sum(norm_weights * lam)
+        centered = lam - mean
+        second = torch.sum(norm_weights * torch.square(centered))
+        third = torch.sum(norm_weights * centered * centered * centered)
+        fourth = torch.sum(norm_weights * torch.square(torch.square(centered)))
+        feats = [mean, second, third, fourth]
+        scales = torch.arange(1, 5, device=lam.device, dtype=lam.dtype)
+        for scale in scales:
+            phase = math.pi * scale * lam
+            feats.append(torch.sum(norm_weights * torch.sin(phase)))
+            feats.append(torch.sum(norm_weights * torch.cos(phase)))
+        return torch.stack(feats)
+
+    def _spectral_context_from_basis(
+        self,
+        coeffs: Tensor,
+        basis: Tensor,
+    ) -> Tensor:
+        return self.spectral_context(torch.cat([coeffs * basis, basis], dim=-1))
+
+    def _bandpass_support_scale(self, wavelengths: Tensor, weights: Tensor) -> Tensor:
+        lam = self._normalized_log_wavelength(
+            wavelengths.to(dtype=self.base_output.weight.dtype),
+            device=wavelengths.device,
+            dtype=self.base_output.weight.dtype,
+            shape=wavelengths.shape,
+        )
+        norm_weights = weights.to(dtype=lam.dtype)
+        norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
+        mean = torch.sum(norm_weights * lam)
+        variance = torch.sum(norm_weights * torch.square(lam - mean))
+        # Keep the continuous field exact for delta-like bands while allowing
+        # broader passbands to use a small support-refinement correction.
+        return 1.0 - torch.exp(-12.0 * variance)
+
+    def _decode_with_bandpass(
+        self,
+        shared_hidden: Tensor,
+        fine_hidden: Tensor,
+        spectral_context: Tensor,
+        bandpass_latent: Tensor,
+        *,
+        support_scale: Tensor | float = 0.0,
+    ) -> Tensor:
+        if spectral_context.ndim < shared_hidden.ndim:
+            spectral_context = spectral_context.view(
+                *([1] * (shared_hidden.ndim - 1)),
+                spectral_context.shape[-1],
+            )
+            spectral_context = spectral_context.expand(*shared_hidden.shape[:-1], -1)
+        if bandpass_latent.ndim < shared_hidden.ndim:
+            bandpass_latent = bandpass_latent.view(
+                *([1] * (shared_hidden.ndim - 1)),
+                bandpass_latent.shape[-1],
+            )
+            bandpass_latent = bandpass_latent.expand(*shared_hidden.shape[:-1], -1)
+        spectral_gamma_beta = self.spectral_affine(spectral_context)
+        spectral_gamma, spectral_beta = torch.chunk(spectral_gamma_beta, 2, dim=-1)
+        spectral_hidden = shared_hidden * (1.0 + spectral_gamma) + spectral_beta
+        decoded = self.decoder(
+            torch.cat([shared_hidden, spectral_hidden, spectral_context, bandpass_latent], dim=-1)
+        )
+        base = self.base_output(decoded).squeeze(-1) + self.refine(decoded).squeeze(-1)
+        detail_hidden = fine_hidden - shared_hidden
+        residual_context = torch.cat([detail_hidden, spectral_context, bandpass_latent], dim=-1)
+        gamma_beta = self.residual_affine(residual_context)
+        gamma, beta = torch.chunk(gamma_beta, 2, dim=-1)
+        mod_hidden = (spectral_hidden + detail_hidden) * (1.0 + gamma) + beta
+        residual = self.residual_decoder(
+            torch.cat([mod_hidden, detail_hidden, spectral_context, bandpass_latent], dim=-1)
+        ).squeeze(-1)
+        support_scale_tensor = torch.as_tensor(
+            support_scale,
+            device=base.device,
+            dtype=base.dtype,
+        )
+        if support_scale_tensor.ndim < base.ndim:
+            support_scale_tensor = support_scale_tensor.view(
+                *([1] * base.ndim),
+            )
+        residual = residual * support_scale_tensor
+        return F.softplus(base + residual) + 1.0e-4
+
+    def _shared_hidden_and_coeffs(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        spatial_raw = self._spatial_coords(
+            ra_deg,
+            dec_deg,
+            float(self.domain.wavelength_center),
+        ).to(dtype=self.base_output.weight.dtype)
+        spatial_unit = self._spatial_unit_box_coords(
+            ra_deg,
+            dec_deg,
+            float(self.domain.wavelength_center),
+        ).to(dtype=self.base_output.weight.dtype)
+        shared_hidden, _coarse_hidden, fine_hidden = self._shared_hidden_components_from_spatial(
+            spatial_raw,
+            spatial_unit,
+        )
+        coeffs = self.coefficient_head(shared_hidden)
+        return shared_hidden, coeffs, fine_hidden
+
+    def forward(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        wavelength = torch.as_tensor(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=torch.float32,
+        )
+        wavelengths = wavelength.reshape(-1) if wavelength.ndim > 0 else wavelength.view(1)
+        weights = torch.ones_like(wavelengths)
+        shared_hidden, coeffs, fine_hidden = self._shared_hidden_and_coeffs(ra_deg, dec_deg)
+        basis = self._spectral_basis(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=shared_hidden.dtype,
+            shape=ra_deg.shape,
+        )
+        spectral_context = self._spectral_context_from_basis(coeffs, basis)
+        bandpass_latent = self.bandpass_context(self._bandpass_features(wavelengths, weights))
+        return self._decode_with_bandpass(
+            shared_hidden,
+            fine_hidden,
+            spectral_context,
+            bandpass_latent,
+            support_scale=self._bandpass_support_scale(wavelengths, weights),
+        )
+
+    def render_bandpass(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelengths: Tensor,
+        weights: Tensor,
+    ) -> Tensor:
+        shared_hidden, coeffs, fine_hidden = self._shared_hidden_and_coeffs(ra_deg, dec_deg)
+        norm_weights = weights.to(dtype=shared_hidden.dtype)
+        norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
+        basis_stack = torch.stack(
+            [
+                self._spectral_basis(
+                    wavelength,
+                    device=ra_deg.device,
+                    dtype=shared_hidden.dtype,
+                    shape=ra_deg.shape,
+                )
+                for wavelength in wavelengths
+            ],
+            dim=0,
+        )
+        mixed_basis = torch.sum(
+            basis_stack * norm_weights.view(-1, *([1] * (basis_stack.ndim - 1))),
+            dim=0,
+        )
+        spectral_context = self._spectral_context_from_basis(coeffs, mixed_basis)
+        bandpass_latent = self.bandpass_context(self._bandpass_features(wavelengths, weights))
+        return self._decode_with_bandpass(
+            shared_hidden,
+            fine_hidden,
+            spectral_context,
+            bandpass_latent,
+            support_scale=self._bandpass_support_scale(wavelengths, weights),
+        )
+
+    def _observability_mode_weights(
+        self,
+        observations: Sequence[FieldObservation],
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+        grid_size: int = 65,
+    ) -> Tensor:
+        cache_key = tuple(
+            sorted(
+                {
+                    (
+                        observation.band_name,
+                        observation.spectral_min,
+                        observation.spectral_max,
+                        observation.transmission_center,
+                        observation.transmission_sigma,
+                    )
+                    for observation in observations
+                }
+            )
+        )
+        cached = self._spectral_observability_cache.get(cache_key)
+        if cached is not None:
+            return cached.to(device=device, dtype=dtype)
+        lower = max(
+            min(_bandpass_bounds(observation)[0] for observation in observations),
+            1.0,
+        )
+        upper = max(_bandpass_bounds(observation)[1] for observation in observations)
+        wavelengths = torch.linspace(
+            lower,
+            upper,
+            steps=max(int(grid_size), 9),
+            device=device,
+            dtype=dtype,
+        )
+        basis = self._spectral_basis(
+            wavelengths,
+            device=device,
+            dtype=dtype,
+            shape=wavelengths.shape,
+        )
+        responses = []
+        for observation in observations:
+            response = _bandpass_response(observation, wavelengths)
+            response = response / torch.clamp(response.sum(), min=1.0e-8)
+            responses.append(torch.sum(response.unsqueeze(-1) * basis, dim=0))
+        response_matrix = torch.stack(responses, dim=0)
+        visibility = torch.sqrt(torch.sum(torch.square(response_matrix), dim=0))
+        max_visibility = torch.clamp(visibility.max(), min=1.0e-8)
+        weights = torch.clamp(max_visibility / torch.clamp(visibility, min=1.0e-4) - 1.0, min=0.0)
+        weights = weights / torch.clamp(weights.mean(), min=1.0e-8)
+        self._spectral_observability_cache[cache_key] = weights.detach().cpu()
+        return weights
+
+    def spectral_observability_penalty(
+        self,
+        observations: Sequence[FieldObservation],
+        *,
+        probe_grid_size: int = 8,
+    ) -> Tensor:
+        device = self.base_output.weight.device
+        dtype = self.base_output.weight.dtype
+        probe_ra, probe_dec = _smoothness_probe_grid(
+            self.domain,
+            grid_size=max(int(probe_grid_size), 2),
+            device=device,
+        )
+        _shared_hidden, coeffs, _fine_hidden = self._shared_hidden_and_coeffs(
+            probe_ra,
+            probe_dec,
+        )
+        mode_weights = self._observability_mode_weights(
+            observations,
+            device=device,
+            dtype=dtype,
+        )
+        return torch.mean(torch.square(coeffs) * mode_weights.view(*([1] * (coeffs.ndim - 1)), -1))
+
+    def residual_head_penalty(self) -> Tensor:
+        penalty = torch.tensor(0.0, device=self.base_output.weight.device, dtype=self.base_output.weight.dtype)
+        for param in self.residual_affine.parameters():
+            penalty = penalty + torch.mean(torch.square(param))
+        residual_out = self.residual_decoder[-1]
+        assert isinstance(residual_out, nn.Linear)
+        penalty = penalty + torch.mean(torch.square(residual_out.weight))
+        penalty = penalty + torch.mean(torch.square(residual_out.bias))
+        return penalty
+
+
+class SkyLambdaAtlasField(_BaseFieldModel):
+    def __init__(
+        self,
+        domain: FieldDomain,
+        *,
+        atlas_side: int = 2,
+        atlas_sigma: float = 0.3,
+        topk_experts: int | None = None,
+        base_resolution: int = 16,
+        num_scales: int = 3,
+        features_per_plane: int = 8,
+        hidden_dim: int = 64,
+        hidden_layers: int = 2,
+        refine_hidden_dim: int = 32,
+    ) -> None:
+        super().__init__(domain)
+        self.atlas_side = int(atlas_side)
+        self.atlas_sigma = float(atlas_sigma)
+        self.topk_experts = (
+            None if topk_experts is None else max(int(topk_experts), 1)
+        )
+        centers_1d = torch.linspace(
+            0.5 / self.atlas_side,
+            1.0 - 0.5 / self.atlas_side,
+            self.atlas_side,
+            dtype=torch.float32,
+        )
+        yy, xx = torch.meshgrid(centers_1d, centers_1d, indexing="ij")
+        centers = torch.stack([xx.reshape(-1), yy.reshape(-1)], dim=-1)
+        self.register_buffer("atlas_centers", centers, persistent=False)
+        self.experts = nn.ModuleList(
+            [
+                SkyLambdaKPlanesField(
+                    domain,
+                    base_resolution=base_resolution,
+                    num_scales=num_scales,
+                    features_per_plane=features_per_plane,
+                    hidden_dim=hidden_dim,
+                    hidden_layers=hidden_layers,
+                    refine_hidden_dim=refine_hidden_dim,
+                )
+                for _ in range(self.atlas_side * self.atlas_side)
+            ]
+        )
+
+    def _atlas_local_xy(
+        self,
+        xy: Tensor,
+    ) -> Tensor:
+        local = []
+        tile_size = 1.0 / float(self.atlas_side)
+        for center in self.atlas_centers:
+            lower = center - 0.5 * tile_size
+            shifted = (xy - lower.to(device=xy.device, dtype=xy.dtype)) / tile_size
+            local.append(torch.clamp(shifted, 0.0, 1.0))
+        return torch.stack(local, dim=-2)
+
+    def _atlas_expert_forward(
+        self,
+        expert: SkyLambdaKPlanesField,
+        spatial_raw: Tensor,
+        spatial_unit: Tensor,
+        lam: Tensor,
+        lam_unit: Tensor,
+        local_xy: Tensor,
+    ) -> Tensor:
+        x = local_xy[..., 0]
+        y = local_xy[..., 1]
+        sampled: list[Tensor] = []
+        for scale_idx in range(expert.num_scales):
+            sampled.extend(
+                [
+                    _sample_feature_plane(expert.planes[f"s{scale_idx}_xy"], x, y),
+                    _sample_feature_plane(expert.planes[f"s{scale_idx}_xl"], x, lam_unit),
+                    _sample_feature_plane(expert.planes[f"s{scale_idx}_yl"], y, lam_unit),
+                ]
+            )
+            if expert.spatial_dim == 3:
+                z = spatial_unit[..., 2]
+                sampled.extend(
+                    [
+                        _sample_feature_plane(expert.planes[f"s{scale_idx}_xz"], x, z),
+                        _sample_feature_plane(expert.planes[f"s{scale_idx}_yz"], y, z),
+                        _sample_feature_plane(expert.planes[f"s{scale_idx}_zl"], z, lam_unit),
+                    ]
+                )
+        plane_feats = torch.cat(sampled, dim=-1)
+        local_xy_raw = 2.0 * local_xy - 1.0
+        if expert.spatial_dim == 3:
+            spatial_feats = torch.cat([local_xy_raw, spatial_raw[..., 2:3]], dim=-1)
+        else:
+            spatial_feats = local_xy_raw
+        feats = torch.cat([spatial_feats, lam.unsqueeze(-1), plane_feats], dim=-1)
+        hidden = expert.hidden(feats)
+        return hidden
+
+    def _atlas_weights(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        spatial_unit = self._spatial_unit_box_coords(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        )
+        xy = spatial_unit[..., :2]
+        diff = (xy.unsqueeze(-2) - self.atlas_centers.to(device=xy.device, dtype=xy.dtype))
+        logits = -0.5 * torch.sum(torch.square(diff / max(self.atlas_sigma, 1.0e-3)), dim=-1)
+        weights = torch.softmax(logits, dim=-1)
+        if self.topk_experts is not None and self.topk_experts < weights.shape[-1]:
+            topk_vals, topk_idx = torch.topk(weights, k=self.topk_experts, dim=-1)
+            sparse = torch.zeros_like(weights)
+            sparse.scatter_(-1, topk_idx, topk_vals)
+            weights = sparse / torch.clamp(sparse.sum(dim=-1, keepdim=True), min=1.0e-8)
+        return weights
+
+    def forward(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        spatial_raw = self._spatial_coords(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        spatial_unit = self._spatial_unit_box_coords(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        lam = self._normalized_wavelength(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=self.experts[0].base_output.weight.dtype,
+            shape=ra_deg.shape,
+        )
+        lam_unit = 0.5 * (torch.tanh(lam) + 1.0)
+        weights = self._atlas_weights(ra_deg, dec_deg, wavelength_angstrom)
+        local_xys = self._atlas_local_xy(spatial_unit[..., :2])
+        preds = torch.stack(
+            [
+                expert._decode_hidden(
+                    self._atlas_expert_forward(
+                        expert,
+                        spatial_raw,
+                        spatial_unit,
+                        lam,
+                        lam_unit,
+                        local_xys[..., expert_idx, :],
+                    )
+                )
+                for expert_idx, expert in enumerate(self.experts)
+            ],
+            dim=-1,
+        )
+        return torch.sum(weights * preds, dim=-1)
+
+    def render_bandpass(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelengths: Tensor,
+        weights: Tensor,
+    ) -> Tensor:
+        norm_weights = weights.to(dtype=self.experts[0].base_output.weight.dtype)
+        norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
+        spatial_raw = self._spatial_coords(
+            ra_deg,
+            dec_deg,
+            float(wavelengths[0].item()),
+        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        spatial_unit = self._spatial_unit_box_coords(
+            ra_deg,
+            dec_deg,
+            float(wavelengths[0].item()),
+        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        local_xys = self._atlas_local_xy(spatial_unit[..., :2])
+        atlas_weights = self._atlas_weights(
+            ra_deg,
+            dec_deg,
+            float(wavelengths[0].item()),
+        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        mixed_expert_hiddens: list[Tensor] = []
+        for expert_idx, expert in enumerate(self.experts):
+            per_lambda_hidden = []
+            for wavelength in wavelengths:
+                lam = expert._normalized_wavelength(
+                    wavelength,
+                    device=ra_deg.device,
+                    dtype=expert.base_output.weight.dtype,
+                    shape=ra_deg.shape,
+                )
+                lam_unit = 0.5 * (torch.tanh(lam) + 1.0)
+                per_lambda_hidden.append(
+                    self._atlas_expert_forward(
+                        expert,
+                        spatial_raw,
+                        spatial_unit,
+                        lam,
+                        lam_unit,
+                        local_xys[..., expert_idx, :],
+                    )
+                )
+            stacked_hidden = torch.stack(per_lambda_hidden, dim=0)
+            mixed_expert_hiddens.append(
+                torch.sum(
+                    stacked_hidden
+                    * norm_weights.view(-1, *([1] * (stacked_hidden.ndim - 1))),
+                    dim=0,
+                )
+            )
+        preds = torch.stack(
+            [
+                expert._decode_hidden(hidden)
+                for expert, hidden in zip(self.experts, mixed_expert_hiddens, strict=True)
+            ],
+            dim=-1,
+        )
+        return torch.sum(atlas_weights * preds, dim=-1)
+
+
+class SkyLambdaFeatureAtlasField(_BaseFieldModel):
+    def __init__(
+        self,
+        domain: FieldDomain,
+        *,
+        atlas_side: int = 2,
+        atlas_sigma: float = 0.2,
+        topk_experts: int | None = None,
+        base_resolution: int = 16,
+        num_scales: int = 3,
+        features_per_plane: int = 8,
+        scale_hidden_dim: int = 64,
+        scale_num_blocks: int = 2,
+        decoder_hidden_dim: int = 64,
+        decoder_num_blocks: int = 2,
+        refine_hidden_dim: int = 32,
+        bandpass_hidden_dim: int = 32,
+        global_hidden_dim: int = 0,
+        global_num_blocks: int = 1,
+        aggregate_hidden_moments: bool = False,
+    ) -> None:
+        super().__init__(domain)
+        self.atlas_side = int(atlas_side)
+        self.atlas_sigma = float(atlas_sigma)
+        self.topk_experts = (
+            None if topk_experts is None else max(int(topk_experts), 1)
+        )
+        centers_1d = torch.linspace(
+            0.5 / self.atlas_side,
+            1.0 - 0.5 / self.atlas_side,
+            self.atlas_side,
+            dtype=torch.float32,
+        )
+        yy, xx = torch.meshgrid(centers_1d, centers_1d, indexing="ij")
+        centers = torch.stack([xx.reshape(-1), yy.reshape(-1)], dim=-1)
+        self.register_buffer("atlas_centers", centers, persistent=False)
+        self.experts = nn.ModuleList(
+            [
+                SkyLambdaFeatureField(
+                    domain,
+                    base_resolution=base_resolution,
+                    num_scales=num_scales,
+                    features_per_plane=features_per_plane,
+                    scale_hidden_dim=scale_hidden_dim,
+                    scale_num_blocks=scale_num_blocks,
+                    decoder_hidden_dim=decoder_hidden_dim,
+                    decoder_num_blocks=decoder_num_blocks,
+                    refine_hidden_dim=refine_hidden_dim,
+                    bandpass_hidden_dim=bandpass_hidden_dim,
+                    global_hidden_dim=global_hidden_dim,
+                    global_num_blocks=global_num_blocks,
+                    aggregate_hidden_moments=aggregate_hidden_moments,
+                )
+                for _ in range(self.atlas_side * self.atlas_side)
+            ]
+        )
+
+    def _atlas_local_xy(self, xy: Tensor) -> Tensor:
+        local = []
+        tile_size = 1.0 / float(self.atlas_side)
+        for center in self.atlas_centers:
+            lower = center - 0.5 * tile_size
+            shifted = (xy - lower.to(device=xy.device, dtype=xy.dtype)) / tile_size
+            local.append(torch.clamp(shifted, 0.0, 1.0))
+        return torch.stack(local, dim=-2)
+
+    def _atlas_weights(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        spatial_unit = self._spatial_unit_box_coords(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        )
+        xy = spatial_unit[..., :2]
+        diff = (
+            xy.unsqueeze(-2)
+            - self.atlas_centers.to(device=xy.device, dtype=xy.dtype)
+        )
+        logits = -0.5 * torch.sum(
+            torch.square(diff / max(self.atlas_sigma, 1.0e-3)),
+            dim=-1,
+        )
+        weights = torch.softmax(logits, dim=-1)
+        if self.topk_experts is not None and self.topk_experts < weights.shape[-1]:
+            topk_vals, topk_idx = torch.topk(weights, k=self.topk_experts, dim=-1)
+            sparse = torch.zeros_like(weights)
+            sparse.scatter_(-1, topk_idx, topk_vals)
+            weights = sparse / torch.clamp(
+                sparse.sum(dim=-1, keepdim=True),
+                min=1.0e-8,
+            )
+        return weights
+
+    def _expert_local_components(
+        self,
+        expert: SkyLambdaFeatureField,
+        spatial_raw: Tensor,
+        spatial_unit: Tensor,
+        lam: Tensor,
+        local_xy: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        local_xy_raw = 2.0 * local_xy - 1.0
+        if expert.spatial_dim == 3:
+            local_spatial_raw = torch.cat([local_xy_raw, spatial_raw[..., 2:3]], dim=-1)
+            local_spatial_unit = torch.cat([local_xy, spatial_unit[..., 2:3]], dim=-1)
+        else:
+            local_spatial_raw = local_xy_raw
+            local_spatial_unit = local_xy
+        return local_spatial_raw, local_spatial_unit, lam
+
+    def _expert_prediction(
+        self,
+        expert: SkyLambdaFeatureField,
+        spatial_raw: Tensor,
+        spatial_unit: Tensor,
+        local_xy: Tensor,
+        wavelengths: Tensor,
+        weights: Tensor,
+    ) -> Tensor:
+        hidden_planes = []
+        global_hiddens = []
+        dtype = expert.base_output.weight.dtype
+        for wavelength in wavelengths:
+            lam = expert._normalized_wavelength(
+                wavelength,
+                device=spatial_raw.device,
+                dtype=dtype,
+                shape=spatial_raw.shape[:-1],
+            )
+            local_spatial_raw, local_spatial_unit, lam = self._expert_local_components(
+                expert,
+                spatial_raw,
+                spatial_unit,
+                lam,
+                local_xy,
+            )
+            hidden_planes.append(
+                expert._scale_hidden_from_components(
+                    local_spatial_raw,
+                    local_spatial_unit,
+                    lam,
+                )
+            )
+            global_hidden = expert._global_hidden_from_components(local_spatial_raw, lam)
+            if global_hidden is not None:
+                global_hiddens.append(global_hidden)
+        stacked_hidden = torch.stack(hidden_planes, dim=0)
+        norm_weights = weights.to(dtype=stacked_hidden.dtype)
+        norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
+        mixed_hidden = expert._aggregate_hidden_stack(stacked_hidden, norm_weights)
+        bandpass_latent = expert.bandpass_context(
+            expert._bandpass_features(wavelengths, weights)
+        )
+        mixed_global_hidden = None
+        if global_hiddens:
+            stacked_global_hidden = torch.stack(global_hiddens, dim=0)
+            mixed_global_hidden = expert._aggregate_hidden_stack(
+                stacked_global_hidden,
+                norm_weights,
+            )
+        return expert._decode_hidden(mixed_hidden, bandpass_latent, mixed_global_hidden)
+
+    def render_bandpass(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelengths: Tensor,
+        weights: Tensor,
+    ) -> Tensor:
+        reference_wavelength = float(wavelengths[0].item())
+        spatial_raw = self._spatial_coords(
+            ra_deg,
+            dec_deg,
+            reference_wavelength,
+        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        spatial_unit = self._spatial_unit_box_coords(
+            ra_deg,
+            dec_deg,
+            reference_wavelength,
+        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        local_xys = self._atlas_local_xy(spatial_unit[..., :2])
+        atlas_weights = self._atlas_weights(
+            ra_deg,
+            dec_deg,
+            reference_wavelength,
+        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        preds = torch.stack(
+            [
+                self._expert_prediction(
+                    expert,
+                    spatial_raw,
+                    spatial_unit,
+                    local_xys[..., expert_idx, :],
+                    wavelengths,
+                    weights,
+                )
+                for expert_idx, expert in enumerate(self.experts)
+            ],
+            dim=-1,
+        )
+        return torch.sum(atlas_weights * preds, dim=-1)
+
+    def forward(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        wavelength = torch.as_tensor(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=torch.float32,
+        )
+        if wavelength.ndim == 0:
+            wavelengths = wavelength.view(1)
+        else:
+            wavelengths = wavelength.reshape(-1)
+        weights = torch.ones_like(wavelengths)
+        return self.render_bandpass(ra_deg, dec_deg, wavelengths, weights)
+
+
 def make_field_model(
     kind: FieldModelKind,
     domain: FieldDomain,
+    **kwargs: object,
 ) -> nn.Module:
     if kind == "sine_implicit":
-        return SineImplicitField(domain)
+        return SineImplicitField(domain, **kwargs)
     if kind == "wire_implicit":
-        return WireImplicitField(domain)
+        return WireImplicitField(domain, **kwargs)
     if kind == "gaussian_basis":
-        return GaussianBasisField(domain)
+        return GaussianBasisField(domain, **kwargs)
     if kind == "fourier_mlp":
-        return FourierMLPField(domain)
+        return FourierMLPField(domain, **kwargs)
     if kind == "spectral_basis_field":
-        return SpectralBasisField(domain)
+        return SpectralBasisField(domain, **kwargs)
     if kind == "bandpass_conditioned_field":
-        return BandpassConditionedField(domain)
+        return BandpassConditionedField(domain, **kwargs)
     if kind == "learned_spectral_basis_field":
-        return LearnedSpectralBasisField(domain)
+        return LearnedSpectralBasisField(domain, **kwargs)
+    if kind == "sky_encoder_bandpass_field":
+        return SkyEncoderBandpassField(domain, **kwargs)
     if kind == "sky_lambda_planes_field":
-        return SkyLambdaPlanesField(domain)
+        return SkyLambdaPlanesField(domain, **kwargs)
+    if kind == "sky_lambda_kplanes_field":
+        return SkyLambdaKPlanesField(domain, **kwargs)
+    if kind == "sky_lambda_feature_field":
+        return SkyLambdaFeatureField(domain, **kwargs)
+    if kind == "operator_constrained_feature_field":
+        return OperatorConstrainedFeatureField(domain, **kwargs)
+    if kind == "sky_lambda_feature_field_hetero":
+        return SkyLambdaFeatureField(domain, predict_variance=True, **kwargs)
+    if kind == "sky_lambda_feature_atlas_field":
+        return SkyLambdaFeatureAtlasField(domain, **kwargs)
+    if kind == "sky_lambda_atlas_field":
+        return SkyLambdaAtlasField(domain, **kwargs)
     if kind == "conditioned_spectral_field":
-        return ConditionedSpectralField(domain)
+        return ConditionedSpectralField(domain, **kwargs)
     if kind == "hashgrid_conditioned_field":
-        return HashGridConditionedField(domain)
+        return HashGridConditionedField(domain, **kwargs)
     if kind == "sky_encoder_mlp":
-        return SkyEncoderMLPField(domain)
+        return SkyEncoderMLPField(domain, **kwargs)
     if kind == "sky_encoder_resmlp":
-        return SkyEncoderResMLPField(domain)
+        return SkyEncoderResMLPField(domain, **kwargs)
     if kind == "hashgrid_mlp":
-        return HashGridMLPField(domain)
+        return HashGridMLPField(domain, **kwargs)
     if kind == "hashgrid_spectral_field":
-        return HashGridSpectralField(domain)
+        return HashGridSpectralField(domain, **kwargs)
     raise ValueError(
-        "kind must be one of {'sine_implicit', 'wire_implicit', 'gaussian_basis', 'fourier_mlp', 'spectral_basis_field', 'bandpass_conditioned_field', 'learned_spectral_basis_field', 'sky_lambda_planes_field', 'conditioned_spectral_field', 'hashgrid_conditioned_field', 'sky_encoder_mlp', 'sky_encoder_resmlp', 'hashgrid_mlp', 'hashgrid_spectral_field'}"
+        "kind must be one of {'sine_implicit', 'wire_implicit', 'gaussian_basis', 'fourier_mlp', 'spectral_basis_field', 'bandpass_conditioned_field', 'learned_spectral_basis_field', 'sky_encoder_bandpass_field', 'sky_lambda_planes_field', 'sky_lambda_kplanes_field', 'sky_lambda_feature_field', 'operator_constrained_feature_field', 'sky_lambda_feature_field_hetero', 'sky_lambda_feature_atlas_field', 'sky_lambda_atlas_field', 'conditioned_spectral_field', 'hashgrid_conditioned_field', 'sky_encoder_mlp', 'sky_encoder_resmlp', 'hashgrid_mlp', 'hashgrid_spectral_field'}"
     )
 
 
@@ -1633,6 +4024,7 @@ def _field_residual_loss(
     loss_kind: FieldLossKind,
     charbonnier_eps: float,
     huber_delta: float,
+    logvar: Tensor | None = None,
 ) -> Tensor:
     if loss_kind == "mse":
         return torch.square(residual)
@@ -1650,7 +4042,110 @@ def _field_residual_loss(
             reduction="none",
             delta=float(huber_delta),
         )
+    if loss_kind == "gaussian_nll":
+        if logvar is None:
+            raise ValueError("gaussian_nll requires predictive log-variance")
+        clipped = torch.clamp(logvar, min=-8.0, max=6.0)
+        return 0.5 * (torch.exp(-clipped) * torch.square(residual) + clipped)
     raise ValueError(f"unsupported field loss kind {loss_kind!r}")
+
+
+def render_field_observation_distribution(
+    model: nn.Module,
+    observation: FieldObservation,
+    *,
+    num_spectral_samples: int = 9,
+    spectral_sampling: FieldSpectralSampling = "deterministic_quadrature",
+    spectral_sampling_grid_size: int | None = None,
+    generator: torch.Generator | None = None,
+    override_wavelengths: Tensor | None = None,
+    override_weights: Tensor | None = None,
+) -> tuple[Tensor, Tensor]:
+    image = observation.image
+    if image.ndim != 2:
+        raise ValueError("FieldObservation.image must be 2D")
+    device = image.device
+    ra_deg, dec_deg = _coordinate_grid(
+        observation.header,
+        shape=tuple(image.shape),
+        device=device,
+    )
+    if override_wavelengths is not None or override_weights is not None:
+        if override_wavelengths is None or override_weights is None:
+            raise ValueError(
+                "override_wavelengths and override_weights must be provided together"
+            )
+        wavelengths = override_wavelengths.to(device=device, dtype=torch.float32)
+        weights = override_weights.to(device=device, dtype=torch.float32)
+    elif spectral_sampling == "deterministic_quadrature":
+        wavelengths, weights = _bandpass_quadrature(
+            observation,
+            num_spectral_samples=num_spectral_samples,
+            device=device,
+        )
+    elif spectral_sampling == "bandpass_mc":
+        wavelengths, weights = _bandpass_mc_samples(
+            observation,
+            num_spectral_samples=num_spectral_samples,
+            device=device,
+            proposal_grid_size=spectral_sampling_grid_size,
+            generator=generator,
+        )
+    elif spectral_sampling == "mixture_mc":
+        raise ValueError(
+            "mixture_mc sampling must be driven from fit_field_model with shared wavelengths"
+        )
+    else:
+        raise ValueError(f"unsupported spectral_sampling {spectral_sampling!r}")
+    render_bandpass_distribution = getattr(model, "render_bandpass_distribution", None)
+    if callable(render_bandpass_distribution):
+        mean, logvar = render_bandpass_distribution(
+            ra_deg.to(dtype=torch.float32),
+            dec_deg.to(dtype=torch.float32),
+            wavelengths,
+            weights,
+        )
+    else:
+        forward_distribution = getattr(model, "forward_distribution", None)
+        if callable(forward_distribution):
+            means = []
+            variances = []
+            for wavelength in wavelengths:
+                mean, logvar = forward_distribution(
+                    ra_deg.to(dtype=torch.float32),
+                    dec_deg.to(dtype=torch.float32),
+                    wavelength,
+                )
+                means.append(mean)
+                variances.append(torch.exp(logvar))
+            stacked_mean = torch.stack(means, dim=0)
+            stacked_var = torch.stack(variances, dim=0)
+            mean = torch.sum(
+                stacked_mean * weights.view(-1, 1, 1).to(dtype=stacked_mean.dtype),
+                dim=0,
+            )
+            var = torch.sum(
+                stacked_var * torch.square(weights).view(-1, 1, 1).to(dtype=stacked_var.dtype),
+                dim=0,
+            )
+            logvar = torch.log(torch.clamp(var, min=1.0e-8))
+        else:
+            mean = render_field_observation(
+                model,
+                observation,
+                num_spectral_samples=num_spectral_samples,
+                spectral_sampling=spectral_sampling,
+                spectral_sampling_grid_size=spectral_sampling_grid_size,
+                generator=generator,
+                override_wavelengths=override_wavelengths,
+                override_weights=override_weights,
+            )
+            logvar = torch.zeros_like(mean)
+    if observation.psf_sigma_pix > 0.0:
+        mean = _gaussian_blur(mean, float(observation.psf_sigma_pix))
+        variance = _gaussian_blur(torch.exp(logvar), float(observation.psf_sigma_pix))
+        logvar = torch.log(torch.clamp(variance, min=1.0e-8))
+    return mean.to(dtype=image.dtype), logvar.to(dtype=image.dtype)
 
 
 def render_field_observation(
@@ -1658,6 +4153,11 @@ def render_field_observation(
     observation: FieldObservation,
     *,
     num_spectral_samples: int = 9,
+    spectral_sampling: FieldSpectralSampling = "deterministic_quadrature",
+    spectral_sampling_grid_size: int | None = None,
+    generator: torch.Generator | None = None,
+    override_wavelengths: Tensor | None = None,
+    override_weights: Tensor | None = None,
 ) -> Tensor:
     image = observation.image
     if image.ndim != 2:
@@ -1668,11 +4168,33 @@ def render_field_observation(
         shape=tuple(image.shape),
         device=device,
     )
-    wavelengths, weights = _bandpass_quadrature(
-        observation,
-        num_spectral_samples=num_spectral_samples,
-        device=device,
-    )
+    if override_wavelengths is not None or override_weights is not None:
+        if override_wavelengths is None or override_weights is None:
+            raise ValueError(
+                "override_wavelengths and override_weights must be provided together"
+            )
+        wavelengths = override_wavelengths.to(device=device, dtype=torch.float32)
+        weights = override_weights.to(device=device, dtype=torch.float32)
+    elif spectral_sampling == "deterministic_quadrature":
+        wavelengths, weights = _bandpass_quadrature(
+            observation,
+            num_spectral_samples=num_spectral_samples,
+            device=device,
+        )
+    elif spectral_sampling == "bandpass_mc":
+        wavelengths, weights = _bandpass_mc_samples(
+            observation,
+            num_spectral_samples=num_spectral_samples,
+            device=device,
+            proposal_grid_size=spectral_sampling_grid_size,
+            generator=generator,
+        )
+    elif spectral_sampling == "mixture_mc":
+        raise ValueError(
+            "mixture_mc sampling must be driven from fit_field_model with shared wavelengths"
+        )
+    else:
+        raise ValueError(f"unsupported spectral_sampling {spectral_sampling!r}")
     render_bandpass = getattr(model, "render_bandpass", None)
     if callable(render_bandpass):
         rendered = render_bandpass(
@@ -1731,6 +4253,8 @@ def fit_field_model(
     *,
     steps: int = 200,
     lr: float = 5.0e-3,
+    weight_decay: float = 0.0,
+    ema_decay: float = 0.0,
     num_spectral_samples: int = 9,
     loss_kind: FieldLossKind = "mse",
     charbonnier_eps: float = 1.0e-3,
@@ -1739,22 +4263,77 @@ def fit_field_model(
     lr_schedule: FieldLRSchedule = "constant",
     grad_clip_norm: float | None = None,
     curriculum: FieldCurriculum = "none",
+    training_spectral_sampling: FieldSpectralSampling = "deterministic_quadrature",
+    training_spectral_sampling_grid_size: int | None = None,
+    spectral_anchor_observations_per_step: int = 0,
+    spectral_anchor_num_samples: int | None = None,
+    spectral_anchor_loss_weight: float = 0.0,
+    lr_warmup_steps: int = 0,
+    spatial_smoothness_weight: float = 0.0,
+    spatial_smoothness_grid_size: int = 8,
+    observations_per_step: int | None = None,
+    observation_sampling: FieldObservationSampling = "uniform",
+    training_patch_size: int | None = None,
+    training_patches_per_observation: int = 1,
+    shared_sky_patch_sampling: bool = False,
+    streaming_accumulation: bool = False,
+    full_observations_per_step: int = 0,
+    context_observations_per_step: int = 0,
+    context_downsample_factor: int = 1,
+    context_loss_weight: float = 0.0,
+    spectral_observability_weight: float = 0.0,
+    spectral_observability_probe_grid_size: int = 8,
+    residual_head_penalty_weight: float = 0.0,
 ) -> FieldFitResult:
     if not observations:
         raise ValueError("fit_field_model requires at least one observation")
     if steps <= 0:
         raise ValueError("steps must be positive")
     base_lr = float(lr)
-    optimizer = torch.optim.Adam(model.parameters(), lr=base_lr)
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=base_lr,
+        weight_decay=max(float(weight_decay), 0.0),
+    )
     model.train()
     loss_history: list[float] = []
+    anchor_count = max(int(spectral_anchor_observations_per_step), 0)
+    anchor_num_samples = (
+        int(spectral_anchor_num_samples)
+        if spectral_anchor_num_samples is not None
+        else max(int(num_spectral_samples), 17)
+    )
+    anchor_loss_weight = max(float(spectral_anchor_loss_weight), 0.0)
+    warmup_steps = max(int(lr_warmup_steps), 0)
+    smoothness_weight = max(float(spatial_smoothness_weight), 0.0)
+    smoothness_grid_size = max(int(spatial_smoothness_grid_size), 2)
+    patches_per_observation = max(int(training_patches_per_observation), 1)
+    uncropped_count = max(int(full_observations_per_step), 0)
+    context_count = max(int(context_observations_per_step), 0)
+    context_pool = max(int(context_downsample_factor), 1)
+    context_weight = max(float(context_loss_weight), 0.0)
+    spectral_penalty_weight = max(float(spectral_observability_weight), 0.0)
+    spectral_penalty_grid = max(int(spectral_observability_probe_grid_size), 2)
+    residual_penalty_weight = max(float(residual_head_penalty_weight), 0.0)
+    smoothness_domain = getattr(model, "domain", None)
+    ema_rate = float(ema_decay)
+    use_ema = 0.0 < ema_rate < 1.0
+    sampling_generator = torch.Generator(device="cpu")
+    sampling_generator.manual_seed(12345)
+    ema_params: list[Tensor] | None = None
+    if use_ema:
+        ema_params = [
+            param.detach().clone()
+            for param in model.parameters()
+            if param.requires_grad
+        ]
     for step_idx in range(int(steps)):
         progress = float(step_idx + 1) / max(int(steps), 1)
         set_progress = getattr(model, "set_curriculum_progress", None)
         if callable(set_progress):
             if curriculum == "none":
                 set_progress(1.0)
-            elif curriculum == "spectral_frequency_ramp":
+            elif curriculum in {"spectral_frequency_ramp", "feature_scale_ramp"}:
                 set_progress(progress)
             else:
                 raise ValueError(f"unsupported curriculum {curriculum!r}")
@@ -1765,6 +4344,9 @@ def fit_field_model(
             step_lr = base_lr * (0.1 + 0.9 * 0.5 * (1.0 + math.cos(math.pi * frac)))
         else:
             raise ValueError(f"unsupported lr_schedule {lr_schedule!r}")
+        if warmup_steps > 0 and step_idx < warmup_steps:
+            warm_frac = float(step_idx + 1) / float(warmup_steps)
+            step_lr = step_lr * max(warm_frac, 1.0e-3)
         for group in optimizer.param_groups:
             group["lr"] = step_lr
         optimizer.zero_grad(set_to_none=True)
@@ -1773,12 +4355,157 @@ def fit_field_model(
         global_weight_sum = None
         band_weighted_loss = {}
         band_weight_sum = {}
-        for observation in observations:
-            pred = render_field_observation(
-                model,
-                observation,
+        mixture_wavelengths = None
+        mixture_probs = None
+        if training_spectral_sampling == "mixture_mc":
+            mixture_wavelengths, mixture_probs = _mixture_mc_samples(
+                observations,
                 num_spectral_samples=num_spectral_samples,
+                device=_module_device(model),
+                proposal_grid_size=training_spectral_sampling_grid_size,
             )
+        selected_indices = _sample_observation_indices(
+            observations,
+            observations_per_step=observations_per_step,
+            observation_sampling=observation_sampling,
+            generator=sampling_generator,
+        )
+        selected_observations: list[FieldObservation] = []
+        if (
+            shared_sky_patch_sampling
+            and training_patch_size is not None
+            and len(selected_indices) > uncropped_count
+        ):
+            uncropped_indices = selected_indices[:uncropped_count]
+            cropped_indices = selected_indices[uncropped_count:]
+            if uncropped_indices:
+                selected_observations.extend(observations[idx] for idx in uncropped_indices)
+            for _ in range(patches_per_observation):
+                ref_position = int(
+                    torch.randint(
+                        len(cropped_indices),
+                        (1,),
+                        generator=sampling_generator,
+                    ).item()
+                )
+                reference_observation = observations[cropped_indices[ref_position]]
+                patch = min(
+                    int(training_patch_size),
+                    int(reference_observation.image.shape[-2]),
+                    int(reference_observation.image.shape[-1]),
+                )
+                if patch <= 0:
+                    continue
+                ref_x0, ref_y0 = _sample_patch_origin(
+                    reference_observation,
+                    patch_size=patch,
+                    generator=sampling_generator,
+                )
+                for observation_index in cropped_indices:
+                    cropped = _crop_field_observation_to_shared_sky_patch(
+                        observations[observation_index],
+                        reference_observation=reference_observation,
+                        x0=ref_x0,
+                        y0=ref_y0,
+                        patch_size=patch,
+                    )
+                    if cropped is not None:
+                        selected_observations.append(cropped)
+            if not selected_observations:
+                selected_observations = [observations[idx] for idx in selected_indices]
+        else:
+            for selected_rank, observation_index in enumerate(selected_indices):
+                base_observation = observations[observation_index]
+                if training_patch_size is None or selected_rank < uncropped_count:
+                    selected_observations.append(base_observation)
+                    continue
+                patch = min(
+                    int(training_patch_size),
+                    int(base_observation.image.shape[-2]),
+                    int(base_observation.image.shape[-1]),
+                )
+                if patch <= 0 or (
+                    patch >= int(base_observation.image.shape[-2])
+                    and patch >= int(base_observation.image.shape[-1])
+                ):
+                    selected_observations.append(base_observation)
+                    continue
+                for _ in range(patches_per_observation):
+                    x0, y0 = _sample_patch_origin(
+                        base_observation,
+                        patch_size=patch,
+                        generator=sampling_generator,
+                    )
+                    selected_observations.append(
+                        _crop_field_observation(
+                            base_observation,
+                            x0=x0,
+                            y0=y0,
+                            width=patch,
+                            height=patch,
+                        )
+                    )
+        context_observations: list[FieldObservation] = []
+        if context_count > 0 and context_weight > 0.0:
+            context_indices = _sample_observation_indices(
+                observations,
+                observations_per_step=context_count,
+                observation_sampling=observation_sampling,
+                generator=sampling_generator,
+            )
+            context_observations = [observations[idx] for idx in context_indices]
+        streamed_total_loss = 0.0
+        selected_global_weight_sum = None
+        selected_band_weight_sum: dict[tuple[object, ...], float] = {}
+        if streaming_accumulation:
+            if loss_reduction in {"global", "band_global_mix"}:
+                selected_global_weight_sum = sum(
+                    _observation_weight_sum_scalar(observation)
+                    for observation in selected_observations
+                )
+            if loss_reduction in {"per_band", "band_global_mix"}:
+                for observation in selected_observations:
+                    band_key = (
+                        observation.spectral_min,
+                        observation.spectral_max,
+                        observation.wavelength,
+                        observation.band_name,
+                    )
+                    selected_band_weight_sum[band_key] = (
+                        selected_band_weight_sum.get(band_key, 0.0)
+                        + _observation_weight_sum_scalar(observation)
+                    )
+        for observation in selected_observations:
+            render_kwargs = {}
+            if training_spectral_sampling == "mixture_mc":
+                assert mixture_wavelengths is not None and mixture_probs is not None
+                render_kwargs["override_wavelengths"] = mixture_wavelengths
+                render_kwargs["override_weights"] = _mixture_importance_weights(
+                    observation,
+                    mixture_wavelengths,
+                    mixture_probs,
+                )
+                render_kwargs["spectral_sampling"] = "deterministic_quadrature"
+            else:
+                render_kwargs["spectral_sampling"] = training_spectral_sampling
+                render_kwargs["spectral_sampling_grid_size"] = (
+                    training_spectral_sampling_grid_size
+                )
+            if loss_kind == "gaussian_nll":
+                pred, pred_logvar = render_field_observation_distribution(
+                    model,
+                    observation,
+                    num_spectral_samples=num_spectral_samples,
+                    **render_kwargs,
+                )
+            else:
+                pred = render_field_observation(
+                    model,
+                    observation,
+                    num_spectral_samples=num_spectral_samples,
+                    **render_kwargs,
+                )
+                pred_logvar = None
             image = observation.image.to(device=pred.device, dtype=pred.dtype)
             residual = pred - image
             weight = (
@@ -1796,20 +4523,41 @@ def fit_field_model(
                     loss_kind=loss_kind,
                     charbonnier_eps=charbonnier_eps,
                     huber_delta=huber_delta,
+                    logvar=pred_logvar,
                 )
             )
             weight_sum = weight.sum()
-            if loss_reduction == "per_observation":
+            band_key = (
+                observation.spectral_min,
+                observation.spectral_max,
+                observation.wavelength,
+                observation.band_name,
+            )
+            if streaming_accumulation:
+                if loss_reduction == "per_observation":
+                    obs_loss = weighted_loss / torch.clamp(weight_sum, min=1.0e-8)
+                elif loss_reduction == "per_band":
+                    denom = max(selected_band_weight_sum.get(band_key, 0.0), 1.0e-8)
+                    obs_loss = weighted_loss / denom
+                elif loss_reduction == "global":
+                    denom = max(float(selected_global_weight_sum or 0.0), 1.0e-8)
+                    obs_loss = weighted_loss / denom
+                elif loss_reduction == "band_global_mix":
+                    band_denom = max(selected_band_weight_sum.get(band_key, 0.0), 1.0e-8)
+                    global_denom = max(float(selected_global_weight_sum or 0.0), 1.0e-8)
+                    obs_loss = 0.5 * (
+                        (weighted_loss / band_denom)
+                        + (weighted_loss / global_denom)
+                    )
+                else:
+                    raise ValueError(f"unsupported loss_reduction {loss_reduction!r}")
+                streamed_total_loss += float(obs_loss.detach().cpu())
+                obs_loss.backward()
+            elif loss_reduction == "per_observation":
                 denom = torch.clamp(weight_sum, min=1.0e-8)
                 obs_loss = weighted_loss / denom
                 total_loss = obs_loss if total_loss is None else total_loss + obs_loss
             elif loss_reduction == "per_band":
-                band_key = (
-                    observation.spectral_min,
-                    observation.spectral_max,
-                    observation.wavelength,
-                    observation.band_name,
-                )
                 band_weighted_loss[band_key] = (
                     weighted_loss
                     if band_key not in band_weighted_loss
@@ -1831,9 +4579,36 @@ def fit_field_model(
                     if global_weight_sum is None
                     else global_weight_sum + weight_sum
                 )
+            elif loss_reduction == "band_global_mix":
+                band_weighted_loss[band_key] = (
+                    weighted_loss
+                    if band_key not in band_weighted_loss
+                    else band_weighted_loss[band_key] + weighted_loss
+                )
+                band_weight_sum[band_key] = (
+                    weight_sum
+                    if band_key not in band_weight_sum
+                    else band_weight_sum[band_key] + weight_sum
+                )
+                global_weighted_loss = (
+                    weighted_loss
+                    if global_weighted_loss is None
+                    else global_weighted_loss + weighted_loss
+                )
+                global_weight_sum = (
+                    weight_sum
+                    if global_weight_sum is None
+                    else global_weight_sum + weight_sum
+                )
             else:
                 raise ValueError(f"unsupported loss_reduction {loss_reduction!r}")
-        if loss_reduction == "global":
+        if streaming_accumulation:
+            total_loss = torch.tensor(
+                streamed_total_loss,
+                dtype=torch.float32,
+                device=_module_device(model),
+            )
+        elif loss_reduction == "global":
             assert global_weighted_loss is not None and global_weight_sum is not None
             total_loss = global_weighted_loss / torch.clamp(global_weight_sum, min=1.0e-8)
         elif loss_reduction == "per_band":
@@ -1843,12 +4618,240 @@ def fit_field_model(
                     for band_key, weighted in band_weighted_loss.items()
                 ]
             ).sum()
+        elif loss_reduction == "band_global_mix":
+            assert global_weighted_loss is not None and global_weight_sum is not None
+            band_loss = torch.stack(
+                [
+                    weighted / torch.clamp(band_weight_sum[band_key], min=1.0e-8)
+                    for band_key, weighted in band_weighted_loss.items()
+                ]
+            ).sum()
+            global_loss = global_weighted_loss / torch.clamp(global_weight_sum, min=1.0e-8)
+            total_loss = 0.5 * (band_loss + global_loss)
+        if (
+            training_spectral_sampling == "mixture_mc"
+            and anchor_count > 0
+            and anchor_loss_weight > 0.0
+        ):
+            anchor_losses = []
+            max_anchor_count = min(anchor_count, len(selected_observations))
+            if max_anchor_count > 0:
+                anchor_perm = torch.randperm(
+                    len(selected_observations),
+                    generator=sampling_generator,
+                )[:max_anchor_count].tolist()
+                for anchor_index in anchor_perm:
+                    anchor_observation = selected_observations[anchor_index]
+                    anchor_pred = render_field_observation(
+                        model,
+                        anchor_observation,
+                        num_spectral_samples=anchor_num_samples,
+                        spectral_sampling="deterministic_quadrature",
+                    )
+                    anchor_image = anchor_observation.image.to(
+                        device=anchor_pred.device,
+                        dtype=anchor_pred.dtype,
+                    )
+                    anchor_residual = anchor_pred - anchor_image
+                    anchor_weight = (
+                        anchor_observation.weight.to(
+                            device=anchor_pred.device,
+                            dtype=anchor_pred.dtype,
+                        )
+                        if anchor_observation.weight is not None
+                        else torch.ones_like(anchor_pred)
+                    )
+                    if anchor_observation.mask is not None:
+                        anchor_valid = anchor_observation.mask.to(device=anchor_pred.device) > 0
+                        anchor_weight = torch.where(
+                            anchor_valid,
+                            anchor_weight,
+                            torch.zeros_like(anchor_weight),
+                        )
+                    anchor_weighted_loss = torch.sum(
+                        anchor_weight
+                        * _field_residual_loss(
+                            anchor_residual,
+                            loss_kind=loss_kind,
+                            charbonnier_eps=charbonnier_eps,
+                            huber_delta=huber_delta,
+                            logvar=None,
+                        )
+                    )
+                    anchor_losses.append(
+                        anchor_weighted_loss
+                        / torch.clamp(anchor_weight.sum(), min=1.0e-8)
+                    )
+            if anchor_losses:
+                anchor_loss = torch.stack(anchor_losses).mean()
+                if streaming_accumulation:
+                    scaled_anchor_loss = anchor_loss_weight * anchor_loss
+                    streamed_total_loss += float(scaled_anchor_loss.detach().cpu())
+                    scaled_anchor_loss.backward()
+                    total_loss = torch.tensor(
+                        streamed_total_loss,
+                        dtype=torch.float32,
+                        device=_module_device(model),
+                    )
+                else:
+                    total_loss = total_loss + anchor_loss_weight * anchor_loss
+        if context_observations and context_weight > 0.0:
+            scaled_context_weight = context_weight / max(len(context_observations), 1)
+            for context_observation in context_observations:
+                context_render_kwargs = {}
+                if training_spectral_sampling == "mixture_mc":
+                    assert mixture_wavelengths is not None and mixture_probs is not None
+                    context_render_kwargs["override_wavelengths"] = mixture_wavelengths
+                    context_render_kwargs["override_weights"] = _mixture_importance_weights(
+                        context_observation,
+                        mixture_wavelengths,
+                        mixture_probs,
+                    )
+                    context_render_kwargs["spectral_sampling"] = "deterministic_quadrature"
+                else:
+                    context_render_kwargs["spectral_sampling"] = training_spectral_sampling
+                    context_render_kwargs["spectral_sampling_grid_size"] = (
+                        training_spectral_sampling_grid_size
+                    )
+                context_pred = render_field_observation(
+                    model,
+                    context_observation,
+                    num_spectral_samples=num_spectral_samples,
+                    **context_render_kwargs,
+                )
+                context_image = context_observation.image.to(
+                    device=context_pred.device,
+                    dtype=context_pred.dtype,
+                )
+                context_weight_map = (
+                    context_observation.weight.to(
+                        device=context_pred.device,
+                        dtype=context_pred.dtype,
+                    )
+                    if context_observation.weight is not None
+                    else torch.ones_like(context_pred)
+                )
+                if context_observation.mask is not None:
+                    context_valid = context_observation.mask.to(device=context_pred.device) > 0
+                    context_weight_map = torch.where(
+                        context_valid,
+                        context_weight_map,
+                        torch.zeros_like(context_weight_map),
+                    )
+                pooled_pred = _avg_pool_map(context_pred, factor=context_pool)
+                pooled_image = _avg_pool_map(context_image, factor=context_pool)
+                pooled_weight = _avg_pool_map(context_weight_map, factor=context_pool)
+                context_residual = pooled_pred - pooled_image
+                context_loss = torch.sum(
+                    pooled_weight
+                    * _field_residual_loss(
+                        context_residual,
+                        loss_kind=loss_kind,
+                        charbonnier_eps=charbonnier_eps,
+                        huber_delta=huber_delta,
+                        logvar=None,
+                    )
+                ) / torch.clamp(pooled_weight.sum(), min=1.0e-8)
+                scaled_context_loss = scaled_context_weight * context_loss
+                if streaming_accumulation:
+                    streamed_total_loss += float(scaled_context_loss.detach().cpu())
+                    scaled_context_loss.backward()
+                    total_loss = torch.tensor(
+                        streamed_total_loss,
+                        dtype=torch.float32,
+                        device=_module_device(model),
+                    )
+                else:
+                    total_loss = total_loss + scaled_context_loss
+        if smoothness_weight > 0.0 and isinstance(smoothness_domain, FieldDomain):
+            probe_ra, probe_dec = _smoothness_probe_grid(
+                smoothness_domain,
+                grid_size=smoothness_grid_size,
+                device=_module_device(model),
+            )
+            probe = model(
+                probe_ra,
+                probe_dec,
+                torch.full_like(
+                    probe_ra,
+                    float(smoothness_domain.wavelength_center),
+                ),
+            )
+            diff_x = probe[:, 1:] - probe[:, :-1]
+            diff_y = probe[1:, :] - probe[:-1, :]
+            smoothness_loss = 0.5 * (
+                torch.mean(torch.square(diff_x)) + torch.mean(torch.square(diff_y))
+            )
+            if streaming_accumulation:
+                scaled_smoothness_loss = smoothness_weight * smoothness_loss
+                streamed_total_loss += float(scaled_smoothness_loss.detach().cpu())
+                scaled_smoothness_loss.backward()
+                total_loss = torch.tensor(
+                    streamed_total_loss,
+                    dtype=torch.float32,
+                    device=_module_device(model),
+                )
+            else:
+                total_loss = total_loss + smoothness_weight * smoothness_loss
+        if spectral_penalty_weight > 0.0:
+            spectral_penalty_fn = getattr(model, "spectral_observability_penalty", None)
+            if callable(spectral_penalty_fn):
+                spectral_penalty = spectral_penalty_fn(
+                    observations,
+                    probe_grid_size=spectral_penalty_grid,
+                )
+                scaled_spectral_penalty = spectral_penalty_weight * spectral_penalty
+                if streaming_accumulation:
+                    streamed_total_loss += float(scaled_spectral_penalty.detach().cpu())
+                    scaled_spectral_penalty.backward()
+                    total_loss = torch.tensor(
+                        streamed_total_loss,
+                        dtype=torch.float32,
+                        device=_module_device(model),
+                    )
+                else:
+                    total_loss = total_loss + scaled_spectral_penalty
+        if residual_penalty_weight > 0.0:
+            residual_penalty_fn = getattr(model, "residual_head_penalty", None)
+            if callable(residual_penalty_fn):
+                residual_penalty = residual_penalty_fn()
+                scaled_residual_penalty = residual_penalty_weight * residual_penalty
+                if streaming_accumulation:
+                    streamed_total_loss += float(scaled_residual_penalty.detach().cpu())
+                    scaled_residual_penalty.backward()
+                    total_loss = torch.tensor(
+                        streamed_total_loss,
+                        dtype=torch.float32,
+                        device=_module_device(model),
+                    )
+                else:
+                    total_loss = total_loss + scaled_residual_penalty
         assert total_loss is not None
         loss_history.append(float(total_loss.detach().cpu()))
-        total_loss.backward()
+        if not streaming_accumulation:
+            total_loss.backward()
         if grad_clip_norm is not None:
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip_norm))
         optimizer.step()
+        if use_ema and ema_params is not None:
+            ema_index = 0
+            with torch.no_grad():
+                for param in model.parameters():
+                    if not param.requires_grad:
+                        continue
+                    ema_params[ema_index].mul_(ema_rate).add_(
+                        param.detach(),
+                        alpha=1.0 - ema_rate,
+                    )
+                    ema_index += 1
+    if use_ema and ema_params is not None:
+        ema_index = 0
+        with torch.no_grad():
+            for param in model.parameters():
+                if not param.requires_grad:
+                    continue
+                param.copy_(ema_params[ema_index])
+                ema_index += 1
     model.eval()
     with torch.no_grad():
         final_losses = []
@@ -1857,11 +4860,19 @@ def fit_field_model(
         band_weighted_loss = {}
         band_weight_sum = {}
         for observation in observations:
-            pred = render_field_observation(
-                model,
-                observation,
-                num_spectral_samples=num_spectral_samples,
-            )
+            if loss_kind == "gaussian_nll":
+                pred, pred_logvar = render_field_observation_distribution(
+                    model,
+                    observation,
+                    num_spectral_samples=num_spectral_samples,
+                )
+            else:
+                pred = render_field_observation(
+                    model,
+                    observation,
+                    num_spectral_samples=num_spectral_samples,
+                )
+                pred_logvar = None
             image = observation.image.to(device=pred.device, dtype=pred.dtype)
             residual = pred - image
             weight = (
@@ -1879,6 +4890,7 @@ def fit_field_model(
                     loss_kind=loss_kind,
                     charbonnier_eps=charbonnier_eps,
                     huber_delta=huber_delta,
+                    logvar=pred_logvar,
                 )
             )
             weight_sum = weight.sum()
@@ -1913,6 +4925,33 @@ def fit_field_model(
                     if global_weight_sum is None
                     else global_weight_sum + weight_sum
                 )
+            elif loss_reduction == "band_global_mix":
+                band_key = (
+                    observation.spectral_min,
+                    observation.spectral_max,
+                    observation.wavelength,
+                    observation.band_name,
+                )
+                band_weighted_loss[band_key] = (
+                    weighted_loss
+                    if band_key not in band_weighted_loss
+                    else band_weighted_loss[band_key] + weighted_loss
+                )
+                band_weight_sum[band_key] = (
+                    weight_sum
+                    if band_key not in band_weight_sum
+                    else band_weight_sum[band_key] + weight_sum
+                )
+                global_weighted_loss = (
+                    weighted_loss
+                    if global_weighted_loss is None
+                    else global_weighted_loss + weighted_loss
+                )
+                global_weight_sum = (
+                    weight_sum
+                    if global_weight_sum is None
+                    else global_weight_sum + weight_sum
+                )
             else:
                 raise ValueError(f"unsupported loss_reduction {loss_reduction!r}")
         if loss_reduction == "global":
@@ -1925,6 +4964,14 @@ def fit_field_model(
                 float(weighted / torch.clamp(band_weight_sum[band_key], min=1.0e-8))
                 for band_key, weighted in band_weighted_loss.items()
             ]
+        elif loss_reduction == "band_global_mix":
+            assert global_weighted_loss is not None and global_weight_sum is not None
+            band_losses = [
+                float(weighted / torch.clamp(band_weight_sum[band_key], min=1.0e-8))
+                for band_key, weighted in band_weighted_loss.items()
+            ]
+            global_loss = float(global_weighted_loss / torch.clamp(global_weight_sum, min=1.0e-8))
+            final_losses = [0.5 * (sum(band_losses) + global_loss)]
     return FieldFitResult(
         model=model,
         loss_history=tuple(loss_history),

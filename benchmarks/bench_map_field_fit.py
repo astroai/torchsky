@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from torch import Tensor
+import torch.nn.functional as F
+from torch import Tensor, nn
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -27,6 +28,7 @@ from torchsky.map import (  # noqa: E402
     FieldObservation,
     ImageObservation,
     LearnedSpectralBasisField,
+    MapProductResult,
     SkyEncoderBandpassField,
     SkyEncoderMLPField,
     SkyEncoderResMLPField,
@@ -34,6 +36,7 @@ from torchsky.map import (  # noqa: E402
     SpectralBasisField,
     estimate_map_inverse_variance,
     estimate_field_domain,
+    evaluate_map_frontier_regions,
     evaluate_map_uncertainty,
     evaluate_map_product,
     fit_field_model,
@@ -41,11 +44,13 @@ from torchsky.map import (  # noqa: E402
     check_map_benchmark_regressions,
     render_field_cube,
     render_field_observation,
+    render_field_observation_distribution,
     render_field_product,
     plan_map_product,
     stack_map_product,
     write_map_benchmark_artifacts,
 )
+from torchsky.map.field import _BaseFieldModel  # noqa: E402
 from torchsky.spectral import SpectralAxis  # noqa: E402
 
 
@@ -87,6 +92,10 @@ STEP_PROFILES: dict[str, dict[str, int]] = {
         "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit": 32,
         "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap": 16,
     },
+    "sparse_mosaic_large_frontier": {
+        "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit": 32,
+        "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap": 12,
+    },
 }
 
 
@@ -117,7 +126,274 @@ class CaseSpec:
     family: str = "field_fit"
 
 
-def _field_fit_kwargs_for_model(model_kind: str, *, case: str | None = None) -> dict[str, Any]:
+def _sample_feature_volume(volume: Tensor, coords_unit: Tensor) -> Tensor:
+    flat = coords_unit.reshape(-1, 3).to(dtype=volume.dtype, device=volume.device)
+    grid = torch.stack(
+        [
+            2.0 * flat[:, 0] - 1.0,
+            2.0 * flat[:, 1] - 1.0,
+            2.0 * flat[:, 2] - 1.0,
+        ],
+        dim=-1,
+    ).view(1, -1, 1, 1, 3)
+    sampled = F.grid_sample(
+        volume.unsqueeze(0),
+        grid,
+        mode="bilinear",
+        padding_mode="border",
+        align_corners=True,
+    )
+    return sampled.squeeze(0).squeeze(0).reshape(*coords_unit.shape[:-1])
+
+
+class ExplicitSpectralGridField(_BaseFieldModel):
+    """Benchmark-local multiframe pixel-grid baseline."""
+
+    def __init__(
+        self,
+        domain: FieldDomain,
+        *,
+        spatial_resolution: int = 48,
+        spectral_resolution: int = 8,
+    ) -> None:
+        super().__init__(domain)
+        self.spatial_resolution = int(spatial_resolution)
+        self.spectral_resolution = int(spectral_resolution)
+        self.grid = nn.Parameter(
+            1.0e-3
+            * torch.randn(
+                1,
+                self.spectral_resolution,
+                self.spatial_resolution,
+                self.spatial_resolution,
+            )
+        )
+
+    def _grid_world_coords(self) -> tuple[Tensor, Tensor, Tensor]:
+        device = self.grid.device
+        dtype = self.grid.dtype
+        xs = torch.linspace(-1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype)
+        ys = torch.linspace(-1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype)
+        ls = torch.linspace(-1.0, 1.0, steps=self.spectral_resolution, device=device, dtype=dtype)
+        yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+        wavelengths = (
+            float(self.domain.wavelength_center)
+            + ls * float(self.domain.wavelength_scale)
+        )
+        cos_dec = math.cos(math.radians(float(self.domain.center_dec_deg)))
+        dra = xx * float(self.domain.spatial_scale_deg) / max(cos_dec, 1.0e-6)
+        dec = yy * float(self.domain.spatial_scale_deg) + float(self.domain.center_dec_deg)
+        ra = dra + float(self.domain.center_ra_deg)
+        return ra, dec, wavelengths
+
+    def initialize_from_product(self, product: MapProductResult) -> None:
+        if self.coord_mode != "local_tangent":
+            raise ValueError("ExplicitSpectralGridField initialization requires local_tangent")
+        target_wcs = torchsky.WCS(product.header)
+        ra_grid, dec_grid, wavelengths = self._grid_world_coords()
+        px, py = target_wcs.world_to_pixel(ra_grid, dec_grid)
+        target_width = max(int(product.header["NAXIS1"]) - 1, 1)
+        target_height = max(int(product.header["NAXIS2"]) - 1, 1)
+        x_norm = 2.0 * (px / target_width) - 1.0
+        y_norm = 2.0 * (py / target_height) - 1.0
+        sample_grid = torch.stack([x_norm, y_norm], dim=-1).unsqueeze(0).to(dtype=self.grid.dtype)
+        band_centers = []
+        for band in product.product.bands:
+            if band.transmission_center is not None:
+                band_centers.append(float(band.transmission_center))
+            elif band.spectral_min is not None and band.spectral_max is not None:
+                band_centers.append(0.5 * (float(band.spectral_min) + float(band.spectral_max)))
+            else:
+                raise ValueError("MapProductSpec band requires center or bounds for initialization")
+        centers = torch.tensor(band_centers, device=self.grid.device, dtype=self.grid.dtype)
+        data = product.data.to(device=self.grid.device, dtype=self.grid.dtype)
+        sampled_planes = []
+        for plane in data:
+            sampled = F.grid_sample(
+                plane.unsqueeze(0).unsqueeze(0),
+                sample_grid,
+                mode="bilinear",
+                padding_mode="border",
+                align_corners=True,
+            ).squeeze(0).squeeze(0)
+            sampled_planes.append(sampled)
+        sampled_cube = torch.stack(sampled_planes, dim=0)
+        interp_planes = []
+        for wavelength in wavelengths:
+            if wavelength <= centers[0]:
+                interp_planes.append(sampled_cube[0])
+                continue
+            if wavelength >= centers[-1]:
+                interp_planes.append(sampled_cube[-1])
+                continue
+            upper_idx = int(torch.searchsorted(centers, wavelength).item())
+            lower_idx = max(upper_idx - 1, 0)
+            lam0 = centers[lower_idx]
+            lam1 = centers[upper_idx]
+            alpha = (wavelength - lam0) / torch.clamp(lam1 - lam0, min=1.0e-6)
+            interp_planes.append((1.0 - alpha) * sampled_cube[lower_idx] + alpha * sampled_cube[upper_idx])
+        init_cube = torch.stack(interp_planes, dim=0).unsqueeze(0)
+        with torch.no_grad():
+            self.grid.copy_(torch.log(torch.clamp(torch.expm1(torch.clamp(init_cube, min=1.0e-4)), min=1.0e-6)))
+
+    def _coords_unit(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        if self.coord_mode != "local_tangent":
+            raise ValueError("ExplicitSpectralGridField requires local_tangent coordinates")
+        return self._unit_box_coords(ra_deg, dec_deg, wavelength_angstrom).to(dtype=self.grid.dtype)
+
+    def forward(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        coords_unit = self._coords_unit(ra_deg, dec_deg, wavelength_angstrom)
+        sampled = _sample_feature_volume(self.grid, coords_unit)
+        return F.softplus(sampled) + 1.0e-4
+
+    def render_bandpass(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelengths: Tensor,
+        weights: Tensor,
+    ) -> Tensor:
+        norm_weights = weights.to(dtype=self.grid.dtype)
+        norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
+        rendered = [
+            self.forward(
+                ra_deg,
+                dec_deg,
+                torch.as_tensor(float(wavelength.item()), device=ra_deg.device, dtype=self.grid.dtype),
+            )
+            for wavelength in wavelengths
+        ]
+        return torch.sum(
+            torch.stack(rendered, dim=0)
+            * norm_weights.view(-1, *([1] * ra_deg.ndim)),
+            dim=0,
+        )
+    family: str = "field_fit"
+
+
+def _copy_header_with_crop(
+    header: dict[str, Any],
+    *,
+    x0: int,
+    y0: int,
+    width: int,
+    height: int,
+) -> dict[str, Any]:
+    cropped = dict(header)
+    cropped["NAXIS1"] = int(width)
+    cropped["NAXIS2"] = int(height)
+    if "CRPIX1" in cropped:
+        cropped["CRPIX1"] = float(cropped["CRPIX1"]) - float(x0)
+    if "CRPIX2" in cropped:
+        cropped["CRPIX2"] = float(cropped["CRPIX2"]) - float(y0)
+    return cropped
+
+
+def _render_field_product_chunked(
+    model: torch.nn.Module,
+    product,
+    *,
+    num_spectral_samples: int = 9,
+    spatial_chunk_size: int | None = None,
+):
+    if spatial_chunk_size is None:
+        return render_field_product(
+            model,
+            product,
+            num_spectral_samples=num_spectral_samples,
+        )
+    chunk = max(int(spatial_chunk_size), 1)
+    height = int(product.target_header["NAXIS2"])
+    width = int(product.target_header["NAXIS1"])
+    shape = (height, width)
+    device = next(model.parameters()).device
+    planes: list[Tensor] = []
+    ivar_planes: list[Tensor] = []
+    for band in product.bands:
+        center = (
+            float(band.transmission_center)
+            if band.transmission_center is not None
+            else (float(band.spectral_min) + float(band.spectral_max)) / 2.0
+        )
+        lower = float(band.spectral_min) if band.spectral_min is not None else center
+        upper = float(band.spectral_max) if band.spectral_max is not None else center
+        plane = torch.empty(shape, dtype=torch.float32, device=device)
+        ivar = torch.empty(shape, dtype=torch.float32, device=device)
+        for y0 in range(0, height, chunk):
+            for x0 in range(0, width, chunk):
+                tile_h = min(chunk, height - y0)
+                tile_w = min(chunk, width - x0)
+                field_observation = FieldObservation(
+                    image=torch.zeros((tile_h, tile_w), dtype=torch.float32, device=device),
+                    header=_copy_header_with_crop(
+                        dict(product.target_header),
+                        x0=x0,
+                        y0=y0,
+                        width=tile_w,
+                        height=tile_h,
+                    ),
+                    wavelength=center,
+                    spectral_min=lower if lower != upper else None,
+                    spectral_max=upper if lower != upper else None,
+                    transmission_center=band.transmission_center,
+                    transmission_sigma=band.transmission_sigma,
+                    band_name=band.label,
+                )
+                if (
+                    callable(getattr(model, "render_bandpass_distribution", None))
+                    or callable(getattr(model, "forward_distribution", None))
+                ):
+                    rendered, logvar = render_field_observation_distribution(
+                        model,
+                        field_observation,
+                        num_spectral_samples=num_spectral_samples,
+                    )
+                    ivar[y0 : y0 + tile_h, x0 : x0 + tile_w] = torch.exp(-logvar).to(dtype=torch.float32)
+                else:
+                    rendered = render_field_observation(
+                        model,
+                        field_observation,
+                        num_spectral_samples=num_spectral_samples,
+                    )
+                    ivar[y0 : y0 + tile_h, x0 : x0 + tile_w] = 1.0
+                plane[y0 : y0 + tile_h, x0 : x0 + tile_w] = rendered.to(dtype=torch.float32)
+        planes.append(plane)
+        ivar_planes.append(ivar)
+    return MapProductResult(
+        product=product,
+        data=torch.stack(planes, dim=0),
+        weight=torch.stack(ivar_planes, dim=0),
+        header=dict(product.target_header),
+        overlap_count=torch.ones((len(planes), height, width), dtype=torch.int32, device=device),
+        coverage_mocs=None,
+    )
+
+
+def _uses_low_memory_sparse_profile(*, case: str | None, size: int | None) -> bool:
+    return bool(
+        case == "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap"
+        and size is not None
+        and int(size) >= 128
+    )
+
+
+def _field_fit_kwargs_for_model(
+    model_kind: str,
+    *,
+    case: str | None = None,
+    size: int | None = None,
+    benchmark_steps: int | None = None,
+) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "lr": 5.0e-3,
         "num_spectral_samples": 9,
@@ -217,6 +493,82 @@ def _field_fit_kwargs_for_model(model_kind: str, *, case: str | None = None) -> 
             kwargs["observation_sampling"] = "band_balanced"
             kwargs["training_patch_size"] = 24
             kwargs["training_patches_per_observation"] = 1
+            if _uses_low_memory_sparse_profile(case=case, size=size):
+                kwargs["loss_kind"] = "mse"
+                kwargs["loss_reduction"] = "global"
+                kwargs["training_spectral_sampling"] = "deterministic_quadrature"
+                kwargs["num_spectral_samples"] = 3
+                kwargs["spectral_anchor_observations_per_step"] = 0
+                kwargs["spectral_anchor_loss_weight"] = 0.0
+                kwargs["observations_per_step"] = 1
+                kwargs["training_patch_size"] = 12
+                kwargs["lr"] = 3.0e-4 if (benchmark_steps is not None and int(benchmark_steps) >= 12) else 1.0e-3
+                kwargs["lr_warmup_steps"] = 2
+    elif model_kind == "operator_constrained_feature_field":
+        kwargs["lr"] = 1.5e-3
+        kwargs["grad_clip_norm"] = 1.0
+        kwargs["loss_kind"] = "mse"
+        kwargs["loss_reduction"] = "global"
+        kwargs["lr_warmup_steps"] = 6
+        kwargs["observations_per_step"] = 9
+        kwargs["observation_sampling"] = "band_balanced"
+        kwargs["training_patch_size"] = 24
+        kwargs["training_patches_per_observation"] = 1
+        kwargs["context_observations_per_step"] = 1
+        kwargs["context_downsample_factor"] = 4
+        kwargs["context_loss_weight"] = 0.1
+        kwargs["spectral_observability_weight"] = 1.0e-3
+        kwargs["spectral_observability_probe_grid_size"] = 8
+        kwargs["residual_head_penalty_weight"] = 1.0e-5
+        if case in {
+            "tpv_field_fit_sparse_large_mosaic_exact",
+            "tpv_field_fit_sparse_large_mosaic_exact_densebands",
+            "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit",
+        }:
+            kwargs["lr"] = 1.0e-3
+            kwargs["loss_reduction"] = "band_global_mix"
+            kwargs["context_downsample_factor"] = 2
+            kwargs["spectral_observability_weight"] = 5.0e-4
+            kwargs["residual_head_penalty_weight"] = 3.0e-6
+        if case == "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit":
+            kwargs["context_observations_per_step"] = 0
+            kwargs["context_loss_weight"] = 0.0
+        if case == "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap":
+            kwargs["loss_reduction"] = "band_global_mix"
+            kwargs["spectral_observability_weight"] = 5.0e-4
+            kwargs["residual_head_penalty_weight"] = 3.0e-6
+            kwargs["num_spectral_samples"] = 7
+            if _uses_low_memory_sparse_profile(case=case, size=size):
+                kwargs["training_spectral_sampling"] = "deterministic_quadrature"
+                kwargs["num_spectral_samples"] = 3
+                kwargs["observations_per_step"] = 1
+                kwargs["training_patch_size"] = 12
+                kwargs["lr"] = 3.0e-4 if (benchmark_steps is not None and int(benchmark_steps) >= 12) else 8.0e-4
+                kwargs["lr_warmup_steps"] = 2
+                kwargs["context_observations_per_step"] = 1
+                kwargs["context_downsample_factor"] = 4
+                kwargs["context_loss_weight"] = 0.05
+    elif model_kind == "explicit_spectral_grid_field":
+        kwargs["lr"] = 2.5e-2
+        kwargs["loss_kind"] = "mse"
+        kwargs["loss_reduction"] = "global"
+        kwargs["grad_clip_norm"] = 1.0
+        kwargs["lr_schedule"] = "cosine"
+        kwargs["lr_warmup_steps"] = 2
+        if case in {
+            "tpv_field_fit_sparse_large_mosaic_exact",
+            "tpv_field_fit_sparse_large_mosaic_exact_densebands",
+            "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit",
+            "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap",
+        }:
+            kwargs["observations_per_step"] = 9
+            kwargs["observation_sampling"] = "band_balanced"
+            kwargs["training_patch_size"] = 24
+            kwargs["training_patches_per_observation"] = 1
+            if _uses_low_memory_sparse_profile(case=case, size=size):
+                kwargs["observations_per_step"] = 1
+                kwargs["training_patch_size"] = 12
+                kwargs["lr"] = 1.0e-2
     elif model_kind == "sky_lambda_feature_field_hetero":
         kwargs["lr"] = 2.0e-3
         kwargs["grad_clip_norm"] = 1.0
@@ -280,7 +632,19 @@ def _steps_for_case(case: str, *, base_steps: int, step_profile: str | None = No
     return int(profile.get(case, base_steps))
 
 
-def _field_model_kwargs_for_case(model_kind: str, *, case: str | None = None) -> dict[str, Any]:
+def _warmup_steps_for_case(case: str, *, benchmark_steps: int) -> int:
+    steps = max(int(benchmark_steps), 1)
+    if "sparse_large_mosaic" in case:
+        return min(2, steps)
+    return min(4, steps)
+
+
+def _field_model_kwargs_for_case(
+    model_kind: str,
+    *,
+    case: str | None = None,
+    size: int | None = None,
+) -> dict[str, Any]:
     if model_kind == "spectral_basis_field":
         if case == "tan_field_fit_exact_transmission":
             return {
@@ -466,6 +830,18 @@ def _field_model_kwargs_for_case(model_kind: str, *, case: str | None = None) ->
                 "bandpass_hidden_dim": 128,
             }
         if case == "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap":
+            if _uses_low_memory_sparse_profile(case=case, size=size):
+                return {
+                    "base_resolution": 24,
+                    "num_scales": 3,
+                    "features_per_plane": 12,
+                    "scale_hidden_dim": 96,
+                    "scale_num_blocks": 2,
+                    "decoder_hidden_dim": 96,
+                    "decoder_num_blocks": 2,
+                    "refine_hidden_dim": 48,
+                    "bandpass_hidden_dim": 64,
+                }
             return {
                 "base_resolution": 48,
                 "num_scales": 4,
@@ -476,6 +852,100 @@ def _field_model_kwargs_for_case(model_kind: str, *, case: str | None = None) ->
                 "decoder_num_blocks": 4,
                 "refine_hidden_dim": 96,
                 "bandpass_hidden_dim": 128,
+            }
+    if model_kind == "operator_constrained_feature_field":
+        if case == "tpv_field_fit_sparse_large_mosaic_exact":
+            return {
+                "base_resolution": 48,
+                "num_scales": 4,
+                "features_per_plane": 16,
+                "scale_hidden_dim": 128,
+                "scale_num_blocks": 3,
+                "spectral_basis_dim": 10,
+                "decoder_hidden_dim": 128,
+                "decoder_num_blocks": 3,
+                "refine_hidden_dim": 64,
+                "bandpass_hidden_dim": 64,
+                "residual_hidden_dim": 64,
+            }
+        if case == "tpv_field_fit_sparse_large_mosaic_exact_densebands":
+            return {
+                "base_resolution": 48,
+                "num_scales": 4,
+                "features_per_plane": 16,
+                "scale_hidden_dim": 128,
+                "scale_num_blocks": 3,
+                "spectral_basis_dim": 12,
+                "decoder_hidden_dim": 128,
+                "decoder_num_blocks": 3,
+                "refine_hidden_dim": 64,
+                "bandpass_hidden_dim": 80,
+                "residual_hidden_dim": 64,
+            }
+        if case == "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit":
+            return {
+                "base_resolution": 48,
+                "num_scales": 4,
+                "features_per_plane": 16,
+                "scale_hidden_dim": 160,
+                "scale_num_blocks": 3,
+                "spectral_basis_dim": 4,
+                "decoder_hidden_dim": 160,
+                "decoder_num_blocks": 3,
+                "refine_hidden_dim": 80,
+                "bandpass_hidden_dim": 64,
+                "spectral_context_dim": 96,
+                "residual_hidden_dim": 64,
+            }
+        if case == "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap":
+            if _uses_low_memory_sparse_profile(case=case, size=size):
+                return {
+                    "base_resolution": 24,
+                    "num_scales": 3,
+                    "features_per_plane": 12,
+                    "scale_hidden_dim": 96,
+                    "scale_num_blocks": 2,
+                    "spectral_basis_dim": 6,
+                    "decoder_hidden_dim": 96,
+                    "decoder_num_blocks": 2,
+                    "refine_hidden_dim": 48,
+                    "bandpass_hidden_dim": 64,
+                    "spectral_context_dim": 64,
+                    "residual_hidden_dim": 48,
+                }
+            return {
+                "base_resolution": 48,
+                "num_scales": 4,
+                "features_per_plane": 16,
+                "scale_hidden_dim": 160,
+                "scale_num_blocks": 3,
+                "spectral_basis_dim": 8,
+                "decoder_hidden_dim": 160,
+                "decoder_num_blocks": 3,
+                "refine_hidden_dim": 80,
+                "bandpass_hidden_dim": 80,
+                "spectral_context_dim": 128,
+                "residual_hidden_dim": 64,
+            }
+    if model_kind == "explicit_spectral_grid_field":
+        if case in {
+            "tpv_field_fit_sparse_large_mosaic_exact",
+            "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit",
+        }:
+            return {
+                "spatial_resolution": max(int(size or 48), 32),
+                "spectral_resolution": 8,
+            }
+        if case == "tpv_field_fit_sparse_large_mosaic_exact_densebands":
+            return {
+                "spatial_resolution": max(int(size or 48), 32),
+                "spectral_resolution": 12,
+            }
+        if case == "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap":
+            spatial_resolution = 32 if _uses_low_memory_sparse_profile(case=case, size=size) else max(int(size or 48), 32)
+            return {
+                "spatial_resolution": spatial_resolution,
+                "spectral_resolution": 12,
             }
     if model_kind == "sky_lambda_feature_field_hetero":
         if case in {
@@ -587,8 +1057,22 @@ def _make_field_model_for_case(
     domain: FieldDomain,
     *,
     case: str | None = None,
+    size: int | None = None,
 ):
-    kwargs = _field_model_kwargs_for_case(model_kind, case=case)
+    kwargs = _field_model_kwargs_for_case(model_kind, case=case, size=size)
+    if model_kind == "explicit_spectral_grid_field":
+        if domain.coord_mode == "local_tangent":
+            local_domain = domain
+        else:
+            local_domain = FieldDomain(
+                center_ra_deg=domain.center_ra_deg,
+                center_dec_deg=domain.center_dec_deg,
+                spatial_scale_deg=domain.spatial_scale_deg,
+                wavelength_center=domain.wavelength_center,
+                wavelength_scale=domain.wavelength_scale,
+                coord_mode="local_tangent",
+            )
+        return ExplicitSpectralGridField(local_domain, **kwargs)
     if model_kind == "spectral_basis_field":
         return SpectralBasisField(domain, **kwargs)
     if model_kind == "learned_spectral_basis_field":
@@ -602,6 +1086,8 @@ def _make_field_model_for_case(
     if model_kind == "sky_lambda_kplanes_field":
         return make_field_model(model_kind, domain, **kwargs)
     if model_kind == "sky_lambda_feature_field":
+        return make_field_model(model_kind, domain, **kwargs)
+    if model_kind == "operator_constrained_feature_field":
         return make_field_model(model_kind, domain, **kwargs)
     if model_kind == "sky_lambda_feature_field_hetero":
         return make_field_model(model_kind, domain, **kwargs)
@@ -2533,6 +3019,7 @@ def evaluate_case(
             spectral_axis=case_spec.spectral_axis,
             spectral_bin_edges=case_spec.spectral_bin_edges,
         )
+        render_chunk_size = 64 if max(product.shape) >= 128 else None
         support_reference_product = stack_map_product(
             image_observations,
             product,
@@ -2568,27 +3055,46 @@ def evaluate_case(
             fit_times = coadd_times
             product_pred = result_product
         else:
-            fit_kwargs = _field_fit_kwargs_for_model(model_kind, case=case_spec.case)
-            model_kwargs = _field_model_kwargs_for_case(model_kind, case=case_spec.case)
-            torch.manual_seed(int(seed) + 999)
-            warmup_model = _make_field_model_for_case(
+            fit_kwargs = _field_fit_kwargs_for_model(
                 model_kind,
-                domain,
                 case=case_spec.case,
+                size=size,
+                benchmark_steps=steps,
             )
-            fit_field_model(
-                observations,
-                warmup_model,
-                steps=steps,
-                **fit_kwargs,
+            model_kwargs = _field_model_kwargs_for_case(
+                model_kind,
+                case=case_spec.case,
+                size=size,
             )
+            warmup_steps = _warmup_steps_for_case(case_spec.case, benchmark_steps=steps)
+            if warmup_steps > 0:
+                torch.manual_seed(int(seed) + 999)
+                warmup_model = _make_field_model_for_case(
+                    model_kind,
+                    domain,
+                    case=case_spec.case,
+                    size=size,
+                )
+                if model_kind == "explicit_spectral_grid_field":
+                    assert isinstance(warmup_model, ExplicitSpectralGridField)
+                    warmup_model.initialize_from_product(support_reference_product)
+                fit_field_model(
+                    observations,
+                    warmup_model,
+                    steps=warmup_steps,
+                    **fit_kwargs,
+                )
             for run_idx in range(int(runs)):
                 torch.manual_seed(int(seed) + 1000 + run_idx)
                 model = _make_field_model_for_case(
                     model_kind,
                     domain,
                     case=case_spec.case,
+                    size=size,
                 )
+                if model_kind == "explicit_spectral_grid_field":
+                    assert isinstance(model, ExplicitSpectralGridField)
+                    model.initialize_from_product(support_reference_product)
                 start = time.perf_counter()
                 result = fit_field_model(
                     observations,
@@ -2598,9 +3104,10 @@ def evaluate_case(
                 )
                 fit_times.append((time.perf_counter() - start) * 1000.0)
             assert result is not None
-            product_pred = render_field_product(
+            product_pred = _render_field_product_chunked(
                 result.model,
                 product,
+                spatial_chunk_size=render_chunk_size,
             )
             for observation in observations:
                 pred = render_field_observation(
@@ -2617,6 +3124,13 @@ def evaluate_case(
             product_pred.data,
             truth_cube,
             weight=support_reference_product.weight,
+            header=product_pred.header,
+            value_semantics=product_pred.product.value_semantics,
+        )
+        uniform_metrics = evaluate_map_product(
+            product_pred.data,
+            truth_cube,
+            weight=torch.ones_like(product_pred.data, dtype=torch.float32),
             header=product_pred.header,
             value_semantics=product_pred.product.value_semantics,
         )
@@ -2644,6 +3158,12 @@ def evaluate_case(
             product_pred,
             truth_cube,
             support_weight=support_reference_product.weight,
+        )
+        frontier_region_metrics = evaluate_map_frontier_regions(
+            product_pred,
+            truth_cube,
+            support_weight=support_reference_product.weight,
+            overlap_count=support_reference_product.overlap_count,
         )
         cube_pred = product_pred.data
     signal_rms = float(torch.sqrt(torch.mean(torch.square(truth_cube))).item())
@@ -2684,6 +3204,18 @@ def evaluate_case(
             .mean()
             .item()
         ),
+        "uniform_reconstruction_rmse": float(
+            uniform_metrics["reconstruction_rmse"]  # type: ignore[arg-type]
+        ),
+        "uniform_reconstruction_mae": float(
+            uniform_metrics["reconstruction_mae"]  # type: ignore[arg-type]
+        ),
+        "uniform_signal_to_residual_db": float(
+            uniform_metrics["signal_to_residual_db"]  # type: ignore[arg-type]
+        ),
+        "uniform_total_flux_relative_error": float(
+            uniform_metrics["total_flux_relative_error"]  # type: ignore[arg-type]
+        ),
         "support_reconstruction_rmse": float(
             support_metrics["reconstruction_rmse"]  # type: ignore[arg-type]
         ),
@@ -2710,6 +3242,7 @@ def evaluate_case(
         ),
         "uncertainty_kind": uncertainty_mode,
         **uncertainty_metrics,
+        **frontier_region_metrics,
         "band_centers_angstrom": [
             float(value)
             for value in case_spec.spectral_axis.to_wavelength().detach().cpu().tolist()
