@@ -22,8 +22,6 @@ try:
 except Exception:  # pragma: no cover - optional extension
     _cpp = None
 
-_PLANAR_PIP_CPP_MIN_OPS = 2_000_000
-
 from ..wcs import healpix as _healpix
 from .core import (
     great_circle_distance,
@@ -31,6 +29,8 @@ from .core import (
     unit_xyz_to_lonlat,
     wrap_longitude,
 )
+
+_PLANAR_PIP_CPP_MIN_OPS = 2_000_000
 
 
 @dataclass(frozen=True)

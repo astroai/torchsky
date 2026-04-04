@@ -194,7 +194,7 @@ def test_tpv_roundtrip_validity_mask_bypasses_filtering_for_tpv(tmp_path: Path) 
     x_src, y_src = source_wcs.world_to_pixel(flat_ra, flat_dec)
     x_src = x_src.reshape_as(ra)
     y_src = y_src.reshape_as(dec)
-    in_bounds = (
+    (
         (x_src >= 0.0)
         & (x_src <= (int(tpv_obs.header["NAXIS1"]) - 1))
         & (y_src >= 0.0)

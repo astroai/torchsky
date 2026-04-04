@@ -11,8 +11,8 @@ BENCHMARKS = ROOT / "benchmarks"
 if str(BENCHMARKS) not in sys.path:
     sys.path.insert(0, str(BENCHMARKS))
 
-from bench_map_compat import _as_fits_header
-from bench_map_smacs0723_stackers import _build_method_specs, _compute_region_metrics
+from bench_map_compat import _as_fits_header  # noqa: E402
+from bench_map_smacs0723_stackers import _build_method_specs, _compute_region_metrics  # noqa: E402
 
 
 def test_build_method_specs_includes_linearized_legacy_targets() -> None:

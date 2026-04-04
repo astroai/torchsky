@@ -1322,7 +1322,7 @@ def test_tpv_source_cap_radius_covers_in_bounds_points(tmp_path) -> None:
     flat_ra = prepared.ra_deg.reshape(-1)
     flat_dec = prepared.dec_deg.reshape(-1)
     x_src, y_src = source_wcs.world_to_pixel(flat_ra, flat_dec)
-    in_bounds = (
+    (
         (x_src >= 0.0)
         & (x_src <= (image.shape[1] - 1))
         & (y_src >= 0.0)

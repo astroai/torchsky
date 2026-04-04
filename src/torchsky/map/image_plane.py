@@ -907,7 +907,6 @@ def _resample_weighted_to_target(
     source_weight = _validate_image_plane(source_weight).to(dtype=torch.float32)
 
     h_src, w_src = image.shape
-    target_pixel_area_sr = target.pixel_area_sr
     target_representative_area_sr = target.representative_pixel_area_sr
 
     # Reproject weighted signal and weight separately, then form the weighted mean
@@ -1058,7 +1057,7 @@ def _resample_weighted_to_target(
     flat_ra = torch.cat([sub_ra.reshape(-1) for sub_ra, _ in quadrature_world_grids], dim=0)
     flat_dec = torch.cat([sub_dec.reshape(-1) for _, sub_dec in quadrature_world_grids], dim=0)
     x_src_all, y_src_all = source_wcs.world_to_pixel(flat_ra, flat_dec)
-    n_pix = target.ra_deg.numel()
+    target.ra_deg.numel()
     x_src_b = x_src_all.reshape(len(quadrature_world_grids), *target.shape)
     y_src_b = y_src_all.reshape(len(quadrature_world_grids), *target.shape)
     sub_numer, sub_weight = _sample_on_source_grid(

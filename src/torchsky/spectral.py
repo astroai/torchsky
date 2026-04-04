@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Spectral and data cube support for torchsky.
 
@@ -10,6 +8,8 @@ Note:
 This module is an experimental helper layer built on top of torchsky FITS I/O.
 It is not part of the core FITS read/write parity surface.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple

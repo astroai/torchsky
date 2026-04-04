@@ -29,7 +29,7 @@ from bench_map_smacs0723_field_fit import (  # noqa: E402
     _robust_intensity_scale,
     _scaled_field_observation,
 )
-from bench_map_field_fit import _field_fit_kwargs_for_model, _field_model_kwargs_for_case  # noqa: E402
+from bench_map_field_fit import _field_model_kwargs_for_case  # noqa: E402
 from bench_map_smacs0723_real import (  # noqa: E402
     _approx_overlap_grid,
     _best_overlap_cutout,
@@ -51,7 +51,6 @@ from torchsky.map import (  # noqa: E402
     ImageObservation,
     coadd_image_plane,
     estimate_field_domain,
-    fit_field_model,
     make_field_model,
     render_field_observation,
 )
@@ -110,7 +109,7 @@ def main() -> int:
 
     for band in bands:
         reference_path = _reference_path_for_band(band)
-        spec = _band_spec(band)
+        _band_spec(band)
         try:
             exposure_paths = _discover_exposure_paths(
                 DATA / "jwst_smacs0723",
