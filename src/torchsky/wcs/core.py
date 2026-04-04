@@ -1302,7 +1302,11 @@ class WCS:
         X = xi * self._d2r
         Y = eta * self._d2r
 
-        r2 = (X * 0.25) ** 2 + (Y * 0.5) ** 2
+        # Bolt performance optimization: Explicit multiplication (x*x) is faster than
+        # exponentiation (x**2) on PyTorch tensors due to avoiding pow overhead.
+        xq = X * 0.25
+        yh = Y * 0.5
+        r2 = xq * xq + yh * yh
         valid = r2 <= 1.0
         z = torch.sqrt(torch.clamp(1.0 - r2, min=0.0))
 
