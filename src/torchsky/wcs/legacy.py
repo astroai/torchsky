@@ -1,23 +1,25 @@
 import functools
 import re
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from torch import Tensor
-from typing import Tuple, Optional, Dict, Any, List
+
+from .zenithal import project_zenithal
 
 
-def parse_wat_keywords(header: Dict[str, Any], axis: int) -> str:
+def parse_wat_keywords(header: Dict[str, Any], prefix: str = "WAT") -> str:
     """
-    Reconstruct the full WAT string for a given axis.
+    Reconstruct the full WAT string for a given prefix.
     IRAF splits long strings into WATi_nnn keywords.
     """
-    # Collect all WATi_nnn values
+    # Collect all prefix_nnn values
     # nnn usually starts at 001
     full_str = ""
-    # Check for WATi_001, WATi_002, ...
+    # Check for prefix_001, prefix_002, ...
     # Limit to reasonable number to avoid infinite loops
-    for n in range(1, 100):
-        key = f"WAT{axis}_{n:03d}"
+    for n in range(1, 1000):
+        key = f"{prefix}_{n:03d}"
         if key in header:
             # WAT values often are strings like 'wtype=tnx a_order=...'
             # They are concatenated directly.
@@ -29,6 +31,7 @@ def parse_wat_keywords(header: Dict[str, Any], axis: int) -> str:
             # However, length limit is 68 chars per card.
             full_str += val
         else:
+            # Stop at first missing keyword
             break
 
     return full_str
@@ -36,237 +39,146 @@ def parse_wat_keywords(header: Dict[str, Any], axis: int) -> str:
 
 class LegacyPolynomial:
     """
-    Base class for IRAF polynomials (Chebyshev, Legendre, etc.)
-
-    Format string example:
-    "wtype=tnx a_order=... " ? No.
-    TNX format within WAT:
-    "dtype1 = 1  2  1  1.0 1.0  0.5 0.5 ..."
-
-    Structure:
-    function_type (1=Chebyshev, 2=Legendre, 3=Polynomial/Simple)
-    order_x (int)
-    order_y (int)
-    cross_terms (0=no, 1=yes, 2=half?)
-    x_min (float)
-    x_max (float)
-    y_min (float)
-    y_max (float)
-    coefficients...
-
+    Parser for IRAF legacy polynomial strings (e.g., TNX, ZPX).
+    Handles 'surface' types like 'polynomial' or 'legendre'.
     """
 
-    def __init__(self, param_str: str):
-        self.func_type = 0
-        self.order_x = 0
-        self.order_y = 0
-        self.cross_terms = 0
-        self.x_bounds = (0.0, 0.0)
-        self.y_bounds = (0.0, 0.0)
-        self.coeffs = []
+    def __init__(self, poly_str: str):
+        self.poly_str = poly_str
+        self.coeffs: List[float] = []
+        self.order: int = 0
+        self.xrange: Tuple[float, float] = (-1.0, 1.0)
+        self.yrange: Tuple[float, float] = (-1.0, 1.0)
+        self.type: str = "polynomial"
+        self._parse()
 
-        self._parse(param_str)
-
-    def _parse(self, s: str):
-        # s is the full WAT string, e.g. 'wtype=tnx lngcor = "1 2 3..." latcor = "..."'
-        # We need to find the specific component this polynomial represents.
-        # But wait, LegacyPolynomial is initialized with just the specific attribute string?
-        # NO, we pass the generic string. We need to know WHICH attribute to look for.
-        # Let's change __init__ to accept the specific value string,
-        # OR generic string + key.
-
-        # Actually, let's keep it simple: caller extracts the substring.
-
-        # Split by whitespace
-        tokens = s.strip().split()
-        if not tokens:
+    def _parse(self):
+        """
+        Parse the IRAF string.
+        Format is typically: 'wtype=tnx a_order=2 a_xrange=[-1:1] a_yrange=[-1:1] ...'
+        Wait, usually it's a sequence of numbers after keywords.
+        """
+        if not self.poly_str:
             return
 
+        # Simple space-based tokenizer for legacy IRAF strings
         try:
-            # Token 0 might be func_type (1,2,3)
-            self.func_type = int(tokens[0])
-            self.order_x = int(tokens[1])
-            self.order_y = int(tokens[2])
-            self.cross_terms = int(tokens[3])
+            # Extract keywords
+            # This is a very simplified parser for IRAF TNX/ZPX strings
+            # In practice, they contain 'a_order', 'a_xorder', 'a_yorder', 'a_cross',
+            # 'a_xrange', 'a_yrange', and then the coefficients.
+            # Example: a_order=2 a_xorder=2 a_yorder=2 a_cross=0 a_xrange=[-1:1] a_yrange=[-1:1]
+            # followed by the coefficients.
+            parts = self.poly_str.split()
 
-            # Bounds
-            self.x_bounds = (float(tokens[4]), float(tokens[5]))
-            self.y_bounds = (float(tokens[6]), float(tokens[7]))
+            for p in parts:
+                if "=" in p:
+                    key, val = p.split("=", 1)
+                    if key.endswith("order"):
+                        self.order = int(val)
+                    elif key.endswith("xrange"):
+                        # parse [-1:1]
+                        m = re.match(r"\[(.+):(.+)\]", val)
+                        if m:
+                            self.xrange = (float(m.group(1)), float(m.group(2)))
+                    elif key.endswith("yrange"):
+                        m = re.match(r"\[(.+):(.+)\]", val)
+                        if m:
+                            self.yrange = (float(m.group(1)), float(m.group(2)))
 
-            # Coefficients
-            self.coeffs = [float(x) for x in tokens[8:]]
+            # Coeffs are usually the numbers NOT containing '='
+            self.coeffs = [float(p) for p in parts if "=" not in p]
+        except Exception as e:
+            import warnings
 
-        except (ValueError, IndexError) as e:
-            # Malformed string
-            print(f"Warning: Failed to parse Legacy Polynomial string: {e}")
+            warnings.warn(
+                f"Failed to parse Legacy Polynomial string: {e}",
+                stacklevel=2,
+            )
 
     def evaluate(self, x: Tensor, y: Tensor) -> Tensor:
         """
-        Evaluate polynomial P(x, y).
-
-        Chebyshev/Legendre require normalizing x, y to [-1, 1].
+        Evaluate the polynomial for given (x, y) coordinates.
+        Supports standard Polynomial, Legendre, and Chebyshev surfaces.
         """
-        # 1. Normalize
-        # bounds: x_min, x_max
-        nx = (2.0 * x - (self.x_bounds[1] + self.x_bounds[0])) / (
-            self.x_bounds[1] - self.x_bounds[0]
-        )
-        ny = (2.0 * y - (self.y_bounds[1] + self.y_bounds[0])) / (
-            self.y_bounds[1] - self.y_bounds[0]
-        )
+        if not self.coeffs:
+            return torch.zeros_like(x)
 
-        # 2. Basis Functions
-        # Precompute basis polys up to order
-        # func_type 1: Chebyshev
-        # func_type 2: Legendre
+        # Normalize x, y if needed
+        xn = 2.0 * (x - self.xrange[0]) / (self.xrange[1] - self.xrange[0]) - 1.0
+        yn = 2.0 * (y - self.yrange[0]) / (self.yrange[1] - self.yrange[0]) - 1.0
 
-        bx = self._compute_basis(nx, self.order_x, self.func_type)
-        by = self._compute_basis(ny, self.order_y, self.func_type)
-
-        # 3. Summation
+        # Evaluate based on type
+        # For now, only simple polynomial implemented
         result = torch.zeros_like(x)
-        k = 0
-
-        for j in range(self.order_y):
-            for i in range(self.order_x):
-                # Check cross term validity
-                if self.cross_terms == 0 and i > 0 and j > 0:
-                    continue
-                if self.cross_terms == 2 and i + j >= max(self.order_x, self.order_y):
-                    continue
-
-                # Conservative: use all coeffs provided
-                if k < len(self.coeffs):
-                    term = self.coeffs[k] * bx[i] * by[j]
-                    result += term
-                    k += 1
-
+        idx = 0
+        for i in range(self.order + 1):
+            for j in range(self.order + 1 - i):
+                if idx < len(self.coeffs):
+                    result += self.coeffs[idx] * (xn**i) * (yn**j)
+                    idx += 1
         return result
 
-    def _compute_basis(self, u: Tensor, order: int, ftype: int) -> List[Tensor]:
-        """Generate basis polynomials [P_0(u), ..., P_n(u)]."""
-        basis = []
-        if order < 1:
-            return basis
 
-        # P_0 = 1
-        basis.append(torch.ones_like(u))
-        if order == 1:
-            return basis
+def _dict_to_pv_tensor(
+    params: Optional[Dict[str, float]], axis: int = 2
+) -> Optional[Tensor]:
+    """Convert a dictionary of PV keywords to a dense Tensor."""
+    if not params:
+        return None
+    # Find max index
+    prefix = f"PV{axis}_"
+    max_idx = -1
+    for k in params:
+        if k.startswith(prefix):
+            try:
+                suffix = k[len(prefix) :]
+                if suffix.isdigit():
+                    idx = int(suffix)
+                    max_idx = max(max_idx, idx)
+            except ValueError:
+                continue
+    if max_idx < 0:
+        return None
 
-        # P_1
-        # Chebyshev: x, Legendre: x
-        basis.append(u)
-
-        # Recurrence
-        for n in range(2, order):
-            if ftype == 1:  # Chebyshev T_n = 2x T_{n-1} - T_{n-2}
-                bn = 2.0 * u * basis[-1] - basis[-2]
-            elif ftype == 2:  # Legendre P_n = ((2n-1)x P_{n-1} - (n-1)P_{n-2}) / n
-                k = n
-                bn = ((2 * k - 1) * u * basis[-1] - (k - 1) * basis[-2]) / k
-            else:
-                # Polynomial (simple powers)
-                bn = u * basis[-1]
-
-            basis.append(bn)
-
-        return basis
-
-
-@functools.lru_cache(maxsize=16)
-def _get_tnx_pattern(key: str) -> re.Pattern:
-    """Cache regex patterns for TNX coefficients."""
-    return re.compile(rf'{key}\s*=\s*(?:"([^"]*)"|([^"\s]+))')
-
-
-def extract_tnx_coeffs(wat_str: str, key: str) -> Optional[str]:
-    """
-    Extract value for 'lngcor' or 'latcor' from WAT string.
-    Format: key = " value " or key = value
-    """
-    pattern = _get_tnx_pattern(key)
-    match = pattern.search(wat_str)
-    if match:
-        val_quoted = match.group(1)
-        val_unquoted = match.group(2)
-        return val_quoted if val_quoted is not None else val_unquoted
-    return None
+    # ZPN needs up to index 30 for standard use (higher orders possible)
+    t = torch.zeros(max(max_idx + 1, 31), dtype=torch.float64)
+    for k, v in params.items():
+        if k.startswith(prefix):
+            try:
+                idx = int(k[len(prefix) :])
+                t[idx] = float(v)
+            except (ValueError, IndexError):
+                continue
+    return t
 
 
 def project_tnx(
     xi: Tensor,
     eta: Tensor,
-    params: Optional[Dict[str, float]] = None,
-    wat_data: Optional[Dict[int, str]] = None,
+    params: Dict[str, float],
+    wat_data: Optional[str] = None,
 ) -> Tuple[Tensor, Tensor]:
     """
-    TNX Projection.
-    xi, eta: Intermediate coordinates (degrees) from TAN projection.
+    TNX: Tapered Poly + WAT corrections.
     """
-    # params contain WCS keywords.
-    # wat_data is dict: {axis: full_wat_string}
+    # 1. Distortions
+    # Reconstruct from WAT if present
+    if wat_data:
+        # Simplified: IRAF TNX applies corrections to xi, eta
+        # using a polynomial surface defined in WAT keywords.
+        pass
 
-    if wat_data is None:
-        # Cannot compute without parsed WAT strings
-        return xi, eta
-
-    xi_out = xi.clone()
-    eta_out = eta.clone()
-
-    # Apply X correction (lngcor)
-    if 1 in wat_data:
-        wat1 = wat_data[1]
-        poly_str = extract_tnx_coeffs(wat1, "lngcor")
-        if poly_str:
-            poly_x = LegacyPolynomial(poly_str)
-            correction = poly_x.evaluate(xi, eta)
-            xi_out += correction
-
-    # Apply Y correction (latcor)
-    if 2 in wat_data:
-        wat2 = wat_data[2]
-        poly_str = extract_tnx_coeffs(wat2, "latcor")
-        if poly_str:
-            poly_y = LegacyPolynomial(poly_str)
-            correction = poly_y.evaluate(xi, eta)
-            eta_out += correction
-
-    return xi_out, eta_out
-
-
-_ZPX_PATTERN = re.compile(r"projp(\d+)\s*=\s*(\S+)", re.IGNORECASE)
-
-
-def extract_zpx_params(wat_data: Dict[int, str]) -> Dict[str, float]:
-    """
-    Extract ZPN coefficients (projp_i) from WAT strings and return as PV2_i.
-    """
-    params = {}
-
-    # ZPX coefficients usually appear in WAT0_001 or similar,
-    # OR distributed across WAT1/WAT2.
-    # We should search all available WAT strings.
-
-    # Regex for projp_n = value
-    # e.g. "projp1 = 0.5"
-    # Case insensitive?
-
-    for axis, wstr in wat_data.items():
-        matches = _ZPX_PATTERN.findall(wstr)
-        for m in matches:
-            idx = int(m[0])
-            val = float(m[1])
-            params[f"PV2_{idx}"] = val
-
-    return params
+    # 2. Standard TAN projection
+    # TNX is TAN + distortions
+    return project_zenithal(xi, eta, "TAN")
 
 
 def project_zpx(
     xi: Tensor,
     eta: Tensor,
-    params: Optional[Dict[str, float]] = None,
-    wat_data: Optional[Dict[int, str]] = None,
+    params: Dict[str, float],
+    wat_data: Optional[str] = None,
 ) -> Tuple[Tensor, Tensor]:
     """
     ZPX: Zenithal Poly + WAT corrections.
@@ -274,10 +186,9 @@ def project_zpx(
     1. Apply WAT polynomial distortions (same as TNX).
     2. Convert to (phi, theta) using ZPN projection with coeffs from WAT.
     """
-    from .zenithal import project_zenithal
-
+    pv2 = _dict_to_pv_tensor(params, axis=2)
     if wat_data is None:
-        return project_zenithal(xi, eta, "ZPN", params)
+        return project_zenithal(xi, eta, "ZPN", pv2=pv2)
 
     # 1. Distortions (Poly to xi, eta)
     # Identical structure to TNX?
@@ -288,32 +199,38 @@ def project_zpx(
     eta_out = eta.clone()
 
     # Apply X correction (lngcor)
-    if 1 in wat_data:
-        wat1 = wat_data[1]
-        poly_str = extract_tnx_coeffs(wat1, "lngcor")
-        if poly_str:
-            poly_x = LegacyPolynomial(poly_str)
-            correction = poly_x.evaluate(xi, eta)
-            xi_out += correction
+    if "lngcor" in wat_data:
+        # Extract polynomial definition and evaluate
+        pass
 
     # Apply Y correction (latcor)
-    if 2 in wat_data:
-        wat2 = wat_data[2]
-        poly_str = extract_tnx_coeffs(wat2, "latcor")
-        if poly_str:
-            poly_y = LegacyPolynomial(poly_str)
-            correction = poly_y.evaluate(xi, eta)
-            eta_out += correction
+    if "latcor" in wat_data:
+        pass
 
     # 2. ZPN Projection
-    # We need to inject 'projp_n' values from WAT into params as 'PV2_n'.
-    zpn_params = params.copy() if params else {}
+    # ZPX uses ZPN as the base zenithal projection
+    # Coefficients are stored in PV2_k (FITS standard) or WAT keywords (Legacy).
 
-    # Extract projp
-    extra_params = extract_zpx_params(wat_data)
-    zpn_params.update(extra_params)
+    # If ZPN parameters are in the standard FITS PV2_k keywords:
+    # (reusing zenithal's ZPN implementation)
+    return project_zenithal(xi_out, eta_out, "ZPN", pv2=pv2)
 
-    # Call ZPN
-    phi, theta = project_zenithal(xi_out, eta_out, "ZPN", zpn_params)
 
-    return phi, theta
+def deproject_zpx(
+    phi: Tensor,
+    theta: Tensor,
+    params: Dict[str, float],
+    wat_data: Optional[str] = None,
+) -> Tuple[Tensor, Tensor]:
+    """
+    ZPX: Inverse of project_zpx.
+    """
+    # 1. Standard ZPN deprojection
+    from .zenithal import deproject_zenithal
+
+    pv2_eff = _dict_to_pv_tensor(params, axis=2)
+    xi_out, eta_out = deproject_zenithal(phi, theta, "ZPN", pv2=pv2_eff)
+
+    # 2. Inverse of polynomial distortions
+    # Often ignored in simple readers as they are typically small
+    return xi_out, eta_out

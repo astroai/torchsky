@@ -219,8 +219,8 @@ class WCS:
                 break
 
         if has_wat:
-            self.wat_data[1] = parse_wat_keywords(header, 1)
-            self.wat_data[2] = parse_wat_keywords(header, 2)
+            self.wat_data[1] = parse_wat_keywords(header, "WAT1")
+            self.wat_data[2] = parse_wat_keywords(header, "WAT2")
 
     def _setup_tensors(self):
         """Convert scalar params to PyTorch tensors for computation."""

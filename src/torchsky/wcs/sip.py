@@ -324,7 +324,8 @@ class SIP:
             p = pq[:, 0]
             q = pq[:, 1]
             basis = u_stack.index_select(0, p) * v_stack.index_select(0, q)
-            return torch.matmul(c.to(u.dtype), basis)
+            coeffs = c.to(u.dtype).reshape((-1,) + (1,) * u.ndim)
+            return torch.sum(coeffs * basis, dim=0)
 
         f_uv = eval_poly(self._a_pq, self._a_c)
         g_uv = eval_poly(self._b_pq, self._b_c)
@@ -445,7 +446,8 @@ class SIP:
             p = pq[:, 0]
             q = pq[:, 1]
             basis = u_stack.index_select(0, p) * v_stack.index_select(0, q)
-            return torch.matmul(c.to(u.dtype), basis)
+            coeffs = c.to(u.dtype).reshape((-1,) + (1,) * u.ndim)
+            return torch.sum(coeffs * basis, dim=0)
 
         delta_u = eval_poly(self._ap_pq, self._ap_c)
         delta_v = eval_poly(self._bp_pq, self._bp_c)

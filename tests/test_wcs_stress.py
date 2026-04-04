@@ -63,6 +63,24 @@ def test_sip_high_order_precision():
     print(f"SIP Order {order} Inverse Transform Passed!")
 
 
+def test_sip_dense_polynomial_handles_image_grid_shapes():
+    header = create_high_order_sip_header(order=8)
+    awcs = AstropyWCS(header)
+    twcs = wcs.WCS(header)
+
+    xs = torch.linspace(0, 2048, 32, dtype=torch.float64)
+    ys = torch.linspace(0, 2048, 24, dtype=torch.float64)
+    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+
+    expected_ra, expected_dec = awcs.all_pix2world(xx.numpy(), yy.numpy(), 0)
+    actual = twcs.pixel_to_world(xx, yy, origin=0)
+    actual_ra = actual[0].numpy()
+    actual_dec = actual[1].numpy()
+
+    np.testing.assert_allclose(actual_ra, expected_ra, atol=1e-10)
+    np.testing.assert_allclose(actual_dec, expected_dec, atol=1e-10)
+
+
 def create_zpn_header():
     header = {
         "NAXIS": 2,

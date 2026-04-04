@@ -354,6 +354,30 @@ Primary metrics:
 
 This is the standardized metric vocabulary now used by the stack truth and stack++ truth benchmarks.
 
+### `evaluate_map_frontier_regions(prediction, truth, *, support_weight, overlap_count=None, fringe_kernel_size=9) -> dict`
+
+Cheap region-split diagnostics for sparse large-mosaic products.
+
+Primary metrics:
+- `support_single_overlap_reconstruction_rmse`
+- `support_multi_overlap_reconstruction_rmse`
+- `fringe_extrapolated_reconstruction_rmse`
+- `far_extrapolated_reconstruction_rmse`
+- `support_single_overlap_fraction`
+- `support_multi_overlap_fraction`
+- `fringe_extrapolated_fraction`
+- `far_extrapolated_fraction`
+
+This is intended for diagnosing whether a field fit is mainly failing on weakly supported observed pixels, just outside the observed support fringe, or only in truly far extrapolated regions.
+
+Field-fit benchmark rows now also expose a uniform-grid comparison surface:
+- `uniform_reconstruction_rmse`
+- `uniform_reconstruction_mae`
+- `uniform_signal_to_residual_db`
+- `uniform_total_flux_relative_error`
+
+These are computed with an all-ones comparison weight on the full target grid, so masked coadds and globally defined fields can be compared on exactly the same spatial support.
+
 ### `coadd_image_plane(observations, *, target_header=None, output_path=None, footprint_order=None, resampling_kernel="bilinear", value_semantics="surface_brightness", stacking_method="weighted_mean") -> MapResult`
 
 Differentiable image-plane coaddition baseline.
@@ -514,23 +538,31 @@ Main pieces:
 - `SpectralBasisField(domain, ...)`: separable spatial-spectral latent field that learns a spectrum per sky position through a low-rank spectral basis.
 - `BandpassConditionedField(domain, ...)`: transmission-conditioned latent field that predicts band-integrated images from the actual bandpass descriptor, while still supporting exact-wavelength evaluation as a degenerate delta-band case.
 - `LearnedSpectralBasisField(domain, ...)`: spatial coefficient field with a learned nonlinear spectral basis, aimed at making the strongest current exact-band family more expressive without collapsing spectral structure into a single generic MLP.
+- `SkyEncoderBandpassField(domain, ...)`: sky-encoder latent field that aggregates transmission-weighted multiscale sky features over the sampled bandpass before decoding, aimed at harder broad-band deep-field fitting where exact-wavelength baselines are no longer the right target.
 - `SkyLambdaPlanesField(domain, ...)`: factorized `(sky, wavelength)` feature planes, in the spirit of K-Planes, aimed at modeling wavelength-dependent morphology without forcing strict spectral separability.
+- `SkyLambdaKPlanesField(domain, ...)`: multiscale factorized `(sky, wavelength)` feature planes with a tiny decoder and residual refinement head, aimed at the next generation of larger mosaic and deep-field transmitted-field fitting.
+- `SkyLambdaFeatureField(domain, ...)`: experimental multiscale `sky-lambda` feature field with per-scale hidden encoders, learned scale fusion, and an optional coarse global branch for harder sparse-mosaic extrapolation, aimed at a more explicit `inr_c`-style feature-field architecture than the raw K-planes concatenation path.
+- `OperatorConstrainedFeatureField(domain, ...)`: operator-aware multiscale spatial feature field with a low-dimensional continuous spectral scaffold, explicit observability-aware spectral regularization hooks, and a small bandpass-conditioned residual head aimed at improving supported-pixel fidelity on sparse mosaics without giving back full-grid coherence.
+- `make_field_model("sky_lambda_feature_field_hetero", domain, ...)`: convenience alias for a `SkyLambdaFeatureField` with an enabled predictive log-variance head, intended for experimental heteroscedastic likelihood fitting.
+- `make_field_model("sky_lambda_feature_atlas_field", domain, ...)`: atlas of locally blended `SkyLambdaFeatureField` experts for experimental sparse-mosaic locality tests.
+- `SkyLambdaAtlasField(domain, ...)`: a small atlas of locally blended `SkyLambdaKPlanesField` experts for larger sparse mosaics where one global field may not allocate capacity locally enough, now with optional sparse top-k routing to keep locality sharper on harder broad-band rows.
 - `ConditionedSpectralField(domain, ...)`: shared spatial latent field with a wavelength-conditioned decoder, aimed at broad-filter and exact-band multiwavelength fitting without strict low-rank spectral separation.
 - `HashGridConditionedField(domain, ...)`: instant-NGP-style spatial hash-grid encoder with an explicit wavelength decoder, aimed at stronger spatial capacity without forcing wavelength into the same hash lattice.
 - `HashGridSpectralField(domain, ...)`: instant-NGP-style spatial hash-grid encoder with a spectral head, for testing stronger spatial capacity without hashing wavelength directly.
 - `SkyEncoderMLPField(domain, ...)`: sky-aware multiscale encoder + MLP latent field using spherical harmonic/Fourier and spectral encodings.
-- `SkyEncoderResMLPField(domain, ...)`: stronger residual sky-encoder latent field for more demanding heterogeneous common-PSF fits.
+- `SkyEncoderResMLPField(domain, ...)`: stronger residual sky-encoder latent field for more demanding heterogeneous common-PSF fits, now with an optional multiscale readout path for harder broad-band deep-field rows.
 - `HashGridMLPField(domain, ...)`: multilevel hash-grid encoder + MLP latent field for more modern pure-INR experiments.
 - `estimate_field_domain(observations, coord_mode=...)`: derives a practical normalization domain from a set of observations.
 - `render_field_observation(model, observation, ...)`: forward-renders a continuous field through the observation WCS, Gaussian bandpass, and optional Gaussian PSF.
+- `render_field_observation_distribution(model, observation, ...)`: like `render_field_observation(...)`, but returns `(mean, logvar)` when the model supports predictive variance.
 - `render_field_cube(model, target_header=..., spectral_axis=...)`: evaluates the fitted field on a shared target grid and spectral axis.
-- `fit_field_model(observations, model, ...)`: weighted optimization loop over the rendered observations, with `mse`, `charbonnier`, or `huber` residual losses, optional `per_observation`, `per_band`, or `global` weighted reduction, optional cosine learning-rate scheduling, optional gradient clipping, and optional coarse-to-fine curriculum support for the spectral-basis INR families.
+- `fit_field_model(observations, model, ...)`: weighted optimization loop over the rendered observations, with `mse`, `charbonnier`, `huber`, or `gaussian_nll` residual losses, optional `per_observation`, `per_band`, `global`, or mixed `band_global_mix` weighted reduction, optional cosine learning-rate scheduling, optional short learning-rate warmup (`lr_warmup_steps`), optional Adam weight decay (`weight_decay`), optional exponential moving-average evaluation weights (`ema_decay`), optional gradient clipping, optional coarse-to-fine curriculum support for spectral-basis frequency ramps and structured feature-field scale ramps (`curriculum="spectral_frequency_ramp"` or `"feature_scale_ramp"`), optional training-time spectral sampling (`training_spectral_sampling="bandpass_mc"` or `"mixture_mc"`), optional light deterministic full-band anchor supervision on a few observations per step, optional observation minibatching (`observations_per_step`, including `observation_sampling="band_balanced"`), optional local patch-based observation crops (`training_patch_size`, `training_patches_per_observation`), optional experimental coherent shared-sky patch sampling across those cropped observations (`shared_sky_patch_sampling=True`), optional uncropped context observations inside that minibatch (`full_observations_per_step`), optional low-resolution full-frame context loss (`context_observations_per_step`, `context_downsample_factor`, `context_loss_weight`), optional low-memory sequential backward accumulation across those sampled observations (`streaming_accumulation=True`), optional operator-aware spectral regularization (`spectral_observability_weight`, `spectral_observability_probe_grid_size`), optional residual-head shrinkage (`residual_head_penalty_weight`), and optional spatial smoothness regularization on a small probe grid, while keeping deterministic quadrature for evaluation.
 
 Mathematically, this path is explicit:
 - latent field: `f(alpha, delta, lambda)`
 - observation model: `I_i(x, y) ~= PSF_i * integral f(alpha_i(x, y), delta_i(x, y), lambda) T_i(lambda) d lambda`
 - current bandpass model: normalized Gaussian `T_i(lambda)` or exact delta-band transmission when an observation/band is specified by a single wavelength
-- current fit objective: weighted per-pixel MSE over the rendered observation images
+- current fit objective: weighted per-pixel residual loss over the rendered observation images (`mse`, `charbonnier`, or `huber`, depending on the fitting setup)
 
 This is intentionally narrower than the image-plane coadd API. It is the first fitting surface for continuous multiwavelength modeling, not yet a full latent-sky pipeline with PSF learning, calibration solving, or background modeling.
 

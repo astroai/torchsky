@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 from astropy.io import fits
@@ -421,6 +422,40 @@ def test_diff_summary_reports_common_support_metrics_for_coverage_masks() -> Non
     assert summary["mae_weight_diff_vs_ref"] == pytest.approx(0.25)
     assert summary["max_abs_data_diff_vs_ref"] == pytest.approx(2.0)
     assert summary["max_abs_weight_diff_vs_ref"] == pytest.approx(1.0)
+
+
+def test_align_array_to_target_falls_back_to_torchsky_when_reproject_missing(monkeypatch) -> None:
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 4,
+        "NAXIS2": 4,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 2.5,
+        "CRPIX2": 2.5,
+        "CRVAL1": 10.0,
+        "CRVAL2": -2.0,
+        "CD1_1": -1.0e-4,
+        "CD1_2": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": 1.0e-4,
+    }
+    target_header = dict(header)
+    target_header["CRPIX1"] = 3.0
+    target_header["CRPIX2"] = 3.0
+
+    array = np.arange(16, dtype=np.float32).reshape(4, 4)
+    monkeypatch.setattr(bench_map_compat, "reproject_interp", None)
+
+    aligned = bench_map_compat._align_array_to_target(
+        array,
+        header=header,
+        target_header=target_header,
+        order="bilinear",
+    )
+
+    assert aligned.shape == (4, 4)
+    assert np.isfinite(aligned).all()
 
 
 def test_tan_rect_weighted_masked_tan_case_stays_pure_tan(tmp_path: Path) -> None:

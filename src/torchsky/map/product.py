@@ -6,15 +6,20 @@ from dataclasses import dataclass
 import json
 import math
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 import torch
 from torch import Tensor, nn
+import torch.nn.functional as F
 
 from .. import WCS
 from ..sphere.moc import MOC
 from ..spectral import SpectralAxis
-from .field import FieldObservation, render_field_observation
+from .field import (
+    FieldObservation,
+    render_field_observation,
+    render_field_observation_distribution,
+)
 from .image_plane import (
     BandMetadataTable,
     ImageObservation,
@@ -73,6 +78,9 @@ class MapProductResult:
     @property
     def n_bands(self) -> int:
         return int(self.data.shape[0])
+
+
+MapUncertaintyMode = Literal["native_inverse_variance", "support_density_proxy"]
 
 
 def _coerce_band(value: MapBandpassSpec) -> MapBandpassSpec:
@@ -379,6 +387,7 @@ def render_field_product(
         int(product.target_header["NAXIS1"]),
     )
     planes: list[Tensor] = []
+    ivar_planes: list[Tensor] = []
     for band in product.bands:
         center = (
             float(band.transmission_center)
@@ -395,26 +404,39 @@ def render_field_product(
             if band.spectral_max is not None
             else center
         )
-        rendered = render_field_observation(
-            model,
-            FieldObservation(
-                image=torch.zeros(shape, dtype=torch.float32, device=device),
-                header=dict(product.target_header),
-                wavelength=center if lower == upper else center,
-                spectral_min=lower if lower != upper else None,
-                spectral_max=upper if lower != upper else None,
-                transmission_center=band.transmission_center,
-                transmission_sigma=band.transmission_sigma,
-                band_name=band.label,
-            ),
-            num_spectral_samples=num_spectral_samples,
+        field_observation = FieldObservation(
+            image=torch.zeros(shape, dtype=torch.float32, device=device),
+            header=dict(product.target_header),
+            wavelength=center if lower == upper else center,
+            spectral_min=lower if lower != upper else None,
+            spectral_max=upper if lower != upper else None,
+            transmission_center=band.transmission_center,
+            transmission_sigma=band.transmission_sigma,
+            band_name=band.label,
         )
+        if (
+            callable(getattr(model, "render_bandpass_distribution", None))
+            or callable(getattr(model, "forward_distribution", None))
+        ):
+            rendered, logvar = render_field_observation_distribution(
+                model,
+                field_observation,
+                num_spectral_samples=num_spectral_samples,
+            )
+            ivar_planes.append(torch.exp(-logvar).to(dtype=torch.float32))
+        else:
+            rendered = render_field_observation(
+                model,
+                field_observation,
+                num_spectral_samples=num_spectral_samples,
+            )
+            ivar_planes.append(torch.ones_like(rendered, dtype=torch.float32))
         planes.append(rendered.to(dtype=torch.float32))
     data = torch.stack(planes, dim=0)
     return MapProductResult(
         product=product,
         data=data,
-        weight=torch.ones_like(data),
+        weight=torch.stack(ivar_planes, dim=0),
         header=dict(product.target_header),
         overlap_count=torch.ones_like(data, dtype=torch.int32),
         coverage_mocs=None,
@@ -591,6 +613,217 @@ def evaluate_map_product(
         metrics["mid_blue_flux_ratio_absolute_error"] = abs(
             mid_blue_output - mid_blue_truth
         )
+    return metrics
+
+
+def evaluate_map_frontier_regions(
+    prediction: MapProductResult | Tensor,
+    truth: MapProductResult | Tensor,
+    *,
+    support_weight: Tensor,
+    overlap_count: Tensor | None = None,
+    fringe_kernel_size: int = 9,
+) -> dict[str, float]:
+    if fringe_kernel_size <= 0 or fringe_kernel_size % 2 == 0:
+        raise ValueError("fringe_kernel_size must be a positive odd integer")
+    pred_data = prediction.data if isinstance(prediction, MapProductResult) else prediction
+    truth_data = truth.data if isinstance(truth, MapProductResult) else truth
+    pred_cube = _as_cube(pred_data).to(dtype=torch.float32)
+    truth_cube = _as_cube(truth_data).to(dtype=torch.float32, device=pred_cube.device)
+    support_cube = _as_cube(support_weight).to(dtype=torch.float32, device=pred_cube.device)
+    if pred_cube.shape != truth_cube.shape or pred_cube.shape != support_cube.shape:
+        raise ValueError("prediction, truth, and support_weight must share the same shape")
+    residual = pred_cube - truth_cube
+    sq_residual = torch.square(residual)
+    support_mask = support_cube > 0.0
+    local_support = _mean_pool_cube(
+        support_mask.to(dtype=torch.float32),
+        kernel_size=fringe_kernel_size,
+    )
+    fringe_mask = (~support_mask) & (local_support > 0.0)
+    far_mask = (~support_mask) & (local_support <= 0.0)
+    metrics: dict[str, float] = {
+        "support_single_overlap_reconstruction_rmse": 0.0,
+        "support_multi_overlap_reconstruction_rmse": 0.0,
+        "fringe_extrapolated_reconstruction_rmse": 0.0,
+        "far_extrapolated_reconstruction_rmse": 0.0,
+        "support_single_overlap_fraction": 0.0,
+        "support_multi_overlap_fraction": 0.0,
+        "fringe_extrapolated_fraction": float(fringe_mask.to(dtype=torch.float32).mean().item()),
+        "far_extrapolated_fraction": float(far_mask.to(dtype=torch.float32).mean().item()),
+    }
+    if overlap_count is not None:
+        overlap_cube = _as_cube(overlap_count).to(dtype=torch.float32, device=pred_cube.device)
+        if overlap_cube.shape != pred_cube.shape:
+            raise ValueError("overlap_count must match prediction shape")
+        single_mask = support_mask & (overlap_cube <= 1.0)
+        multi_mask = support_mask & (overlap_cube >= 2.0)
+        metrics["support_single_overlap_fraction"] = float(
+            single_mask.to(dtype=torch.float32).mean().item()
+        )
+        metrics["support_multi_overlap_fraction"] = float(
+            multi_mask.to(dtype=torch.float32).mean().item()
+        )
+        if bool(single_mask.any()):
+            metrics["support_single_overlap_reconstruction_rmse"] = float(
+                torch.sqrt(torch.mean(sq_residual[single_mask])).item()
+            )
+        if bool(multi_mask.any()):
+            metrics["support_multi_overlap_reconstruction_rmse"] = float(
+                torch.sqrt(torch.mean(sq_residual[multi_mask])).item()
+            )
+    if bool(fringe_mask.any()):
+        metrics["fringe_extrapolated_reconstruction_rmse"] = float(
+            torch.sqrt(torch.mean(sq_residual[fringe_mask])).item()
+        )
+    if bool(far_mask.any()):
+        metrics["far_extrapolated_reconstruction_rmse"] = float(
+            torch.sqrt(torch.mean(sq_residual[far_mask])).item()
+        )
+    return metrics
+
+
+def _mean_pool_cube(cube: Tensor, *, kernel_size: int) -> Tensor:
+    if kernel_size <= 1:
+        return cube
+    if kernel_size % 2 == 0:
+        raise ValueError("kernel_size must be odd")
+    pooled = F.avg_pool2d(
+        cube.unsqueeze(0),
+        kernel_size=kernel_size,
+        stride=1,
+        padding=kernel_size // 2,
+    )
+    return pooled.squeeze(0)
+
+
+def estimate_map_inverse_variance(
+    result: MapProductResult | Tensor,
+    *,
+    mode: MapUncertaintyMode = "native_inverse_variance",
+    support_weight: Tensor | None = None,
+    kernel_size: int = 9,
+    min_inverse_variance: float = 1.0e-6,
+) -> Tensor:
+    if min_inverse_variance <= 0.0:
+        raise ValueError("min_inverse_variance must be positive")
+    if isinstance(result, MapProductResult):
+        weight = _as_cube(result.weight).to(dtype=torch.float32)
+    else:
+        weight = _as_cube(result).to(dtype=torch.float32)
+    if mode == "native_inverse_variance":
+        return torch.clamp(weight, min=float(min_inverse_variance))
+    if mode != "support_density_proxy":
+        raise ValueError(f"unsupported uncertainty mode {mode!r}")
+    reference = _as_cube(support_weight if support_weight is not None else weight).to(
+        dtype=torch.float32,
+        device=weight.device,
+    )
+    if reference.shape != weight.shape:
+        raise ValueError("support_weight must match the product weight shape")
+    support_mask = reference > 0.0
+    local_support = _mean_pool_cube(
+        support_mask.to(dtype=torch.float32),
+        kernel_size=kernel_size,
+    )
+    positive = support_mask.to(dtype=torch.bool)
+    if bool(positive.any()):
+        ref_max = torch.max(reference[positive])
+    else:
+        ref_max = torch.tensor(1.0, dtype=reference.dtype, device=reference.device)
+    normalized_reference = reference / torch.clamp(ref_max, min=1.0e-8)
+    local_reference = _mean_pool_cube(
+        normalized_reference,
+        kernel_size=kernel_size,
+    )
+    inverse_variance = local_support * (0.25 + 0.75 * local_reference)
+    return torch.clamp(inverse_variance, min=float(min_inverse_variance))
+
+
+def evaluate_map_uncertainty(
+    inverse_variance: Tensor,
+    prediction: MapProductResult | Tensor,
+    truth: MapProductResult | Tensor,
+    *,
+    support_weight: Tensor | None = None,
+) -> dict[str, float]:
+    pred_data = prediction.data if isinstance(prediction, MapProductResult) else prediction
+    truth_data = truth.data if isinstance(truth, MapProductResult) else truth
+    pred_cube = _as_cube(pred_data).to(dtype=torch.float32)
+    truth_cube = _as_cube(truth_data).to(dtype=torch.float32, device=pred_cube.device)
+    ivar_cube = _as_cube(inverse_variance).to(dtype=torch.float32, device=pred_cube.device)
+    if pred_cube.shape != truth_cube.shape or pred_cube.shape != ivar_cube.shape:
+        raise ValueError("inverse_variance, prediction, and truth must share the same shape")
+    sigma_cube = torch.rsqrt(torch.clamp(ivar_cube, min=1.0e-12))
+    abs_err_cube = torch.abs(pred_cube - truth_cube)
+    flat_sigma = sigma_cube.reshape(-1)
+    flat_abs_err = abs_err_cube.reshape(-1)
+    valid = torch.isfinite(flat_sigma) & torch.isfinite(flat_abs_err)
+    if not bool(valid.any()):
+        return {
+            "uncertainty_mean_sigma": 0.0,
+            "uncertainty_mean_inverse_variance": 0.0,
+            "uncertainty_error_corr": 0.0,
+            "uncertainty_top_quartile_abs_err": 0.0,
+            "uncertainty_bottom_quartile_abs_err": 0.0,
+            "uncertainty_top_bottom_abs_err_ratio": 0.0,
+            "uncertainty_support_mean_sigma": 0.0,
+            "uncertainty_extrapolated_mean_sigma": 0.0,
+            "uncertainty_support_mean_abs_err": 0.0,
+            "uncertainty_extrapolated_mean_abs_err": 0.0,
+        }
+    sigma = flat_sigma[valid]
+    abs_err = flat_abs_err[valid]
+    sigma_centered = sigma - torch.mean(sigma)
+    abs_centered = abs_err - torch.mean(abs_err)
+    denom = torch.sqrt(
+        torch.sum(torch.square(sigma_centered)) * torch.sum(torch.square(abs_centered))
+    )
+    corr = (
+        float(torch.sum(sigma_centered * abs_centered).item() / max(float(denom.item()), 1.0e-12))
+        if sigma.numel() > 1
+        else 0.0
+    )
+    q25 = torch.quantile(sigma, 0.25)
+    q75 = torch.quantile(sigma, 0.75)
+    top_mask = sigma >= q75
+    bottom_mask = sigma <= q25
+    top_abs_err = float(torch.mean(abs_err[top_mask]).item()) if bool(top_mask.any()) else 0.0
+    bottom_abs_err = (
+        float(torch.mean(abs_err[bottom_mask]).item()) if bool(bottom_mask.any()) else 0.0
+    )
+    metrics: dict[str, float] = {
+        "uncertainty_mean_sigma": float(torch.mean(sigma).item()),
+        "uncertainty_mean_inverse_variance": float(torch.mean(ivar_cube.reshape(-1)[valid]).item()),
+        "uncertainty_error_corr": corr,
+        "uncertainty_top_quartile_abs_err": top_abs_err,
+        "uncertainty_bottom_quartile_abs_err": bottom_abs_err,
+        "uncertainty_top_bottom_abs_err_ratio": top_abs_err / max(bottom_abs_err, 1.0e-12),
+        "uncertainty_support_mean_sigma": 0.0,
+        "uncertainty_extrapolated_mean_sigma": 0.0,
+        "uncertainty_support_mean_abs_err": 0.0,
+        "uncertainty_extrapolated_mean_abs_err": 0.0,
+    }
+    if support_weight is not None:
+        support_cube = _as_cube(support_weight).to(dtype=torch.float32, device=pred_cube.device)
+        if support_cube.shape != pred_cube.shape:
+            raise ValueError("support_weight must match prediction shape")
+        support_mask = support_cube > 0.0
+        extrap_mask = ~support_mask
+        if bool(support_mask.any()):
+            metrics["uncertainty_support_mean_sigma"] = float(
+                torch.mean(sigma_cube[support_mask]).item()
+            )
+            metrics["uncertainty_support_mean_abs_err"] = float(
+                torch.mean(abs_err_cube[support_mask]).item()
+            )
+        if bool(extrap_mask.any()):
+            metrics["uncertainty_extrapolated_mean_sigma"] = float(
+                torch.mean(sigma_cube[extrap_mask]).item()
+            )
+            metrics["uncertainty_extrapolated_mean_abs_err"] = float(
+                torch.mean(abs_err_cube[extrap_mask]).item()
+            )
     return metrics
 
 

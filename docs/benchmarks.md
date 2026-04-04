@@ -19,6 +19,15 @@ This page documents the benchmark methodology. The snapshot tables below reflect
 | `bench_table.py` | FITS table-path read/scan/column access checks. |
 | `bench_arrow_tables.py` | Arrow conversion benchmark for table workloads. |
 | `bench_map_image_plane.py` | Image-plane mapmaking benchmark covering synthetic identical/shifted WCS coadds, a synthetic low-overlap TPV MEF case, a grouped synthetic multi-band compatibility cube, a header-derived planned spectral-cube row on a shared target grid, plus both single-HDU and generated MEF real Astropy SIP FITS cases in identical-WCS and shifted-WCS variants, including overlap and footprint diagnostics. |
+| `bench_updec_webb_real.py` | Real-data smoke benchmark on public UPdec-Webb JWST SMACS J0723 products. It compares the published iteration-0 Drizzle product against the iteration-10 UPDC product on the same WCS grid, reports product-format details plus same-grid delta and sharpness ratios, and can auto-download selected public bands from NADC. |
+| `bench_map_smacs0723_real.py` | Real-exposure JWST SMACS J0723 smoke benchmark. It coadds local public NIRCam exposures onto a cropped target grid derived from the published F277W Drizzle product, preferring local `*_crf.fits` inputs when present and falling back to `*_cal.fits`, then reports support-domain agreement against that real reference patch. The current real JWST path also accepts `drizzle_point` / `drizzle_square` plus explicit `--drizzle-pixfrac` so the in-tree map code can be compared against the published drizzle contract directly. |
+| `bench_map_smacs0723_reproduce.py` | Real-data reproduction sweep against the published SMACS J0723 F277W Drizzle patch. It runs several `torchsky.map` resampling/value-semantics variants on the same local calibrated exposures, prefers local `*_crf.fits` inputs when present, and can optionally add true external `drizzle` rows on the same crop to separate accumulation-contract bugs from benchmark mismatches. For the public JWST CRF inputs, the drizzle rows are treated as `surface_brightness` products rather than flux-per-pixel products. |
+| `bench_map_smacs0723_ladder.py` | Real-data exposure-ladder benchmark against the published SMACS J0723 F277W Drizzle patch. It runs one chosen `torchsky.map` configuration on prefixes of a matched real-exposure set, preferring local `*_crf.fits` when present, so overlap, coverage, and support error can be tracked as more real visits are added. |
+| `bench_map_smacs0723_field_fit.py` | Real-data single-band field-fit smoke on JWST SMACS J0723 exposures. It compares `coadd_bilinear` against selected INR field models on a crop of the public drizzle target, now using band-aware field observations with finite bandpass bounds plus weighted-RMS normalization instead of a delta-wavelength proxy, and it also supports an `exact_wavelength` observation mode as a 2D no-integration control. |
+| `bench_map_smacs0723_field_fit_joint.py` | Real-data joint multiband field-fit benchmark on JWST SMACS J0723 products. It fits one latent field across several public bands simultaneously, then renders each band back onto its own published reference crop so per-band coadds can be compared against a shared multiband INR. |
+| `bench_map_smacs0723_field_fit_band_sweep.py` | Real-data per-band field-fit sweep on JWST SMACS J0723 module-B products. It iterates across multiple public UPdec-Webb reference bands, auto-discovers matching local public exposures by filter and module, and reports per-band `coadd_bilinear` vs INR field-fit results on a common crop. It supports both finite-bandpass fitting and an `exact_wavelength` 2D control mode. |
+| `bench_map_smacs0723_stackers.py` | Real-data stacker comparison benchmark against the published SMACS J0723 Drizzle patch. It runs legacy stackers (`drizzle`, `reproject`, `dfreproject`, `Montage`, `SWarp`) plus matching `torchsky` kernels and selected INR rows on the same paper-faithful crop, with backend-appropriate target projections and band-aware INR rendering. |
+| `bench_map_smacs0723_stackers_band_sweep.py` | Real-data multiband non-INR stacker sweep on public SMACS J0723 products. It iterates over multiple public UPdec-Webb reference bands, auto-discovers matching local public JWST exposures by filter and module, then runs the full legacy/`torchsky` stacker matrix sequentially per band without INR rows so the baseline stack pipeline can be validated before multiband field fitting. |
 | `bench_map_compat.py` | Mapmaking compatibility benchmark comparing torchsky image-plane coadds against an explicit external-tool matrix. `reproject_interp`, `dfreproject`, low-level `drizzle`, source-built `Montage`, source-built `SWarp`, and local-source `casutools imstack` are wired where their target/grid semantics are comparable; `drizzlepac` and unsupported or backend-failing target/grid combinations appear as explicit `SKIPPED` rows with concrete reasons. |
 | `bench_map_ground_truth.py` | Synthetic mapmaking correctness benchmark against known sky truth. It evaluates final requested map products on a shared `MapProductSpec`, emits machine-readable JSON plus a concise Markdown summary table, and can optionally enforce representative baseline JSON gates. |
 | `diagnose_map_large_union_reprojection.py` | Focused diagnostic runner for the large-union truth cases. It emits per-observation reprojection rows for `torchsky` and `dfreproject`, pairwise diffs before stacking, and final stack rows on the same target grid so TPV or large-rectangle gaps can be localized to specific inputs instead of inferred from the final coadd alone. |
@@ -174,6 +183,62 @@ pixi run -e sphere-bench python benchmarks/bench_map_field_fit.py --size 48 --st
 # - `tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit` runs at 32 steps
 # - `tpv_field_fit_sparse_large_mosaic_broad_denseoverlap` runs at 16 steps
 pixi run -e sphere-bench python benchmarks/bench_map_field_fit.py --size 32 --steps 8 --step-profile sparse_mosaic_frontier --runs 1 --cases tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit,tpv_field_fit_sparse_large_mosaic_broad_denseoverlap --models coadd_bilinear,sky_lambda_feature_field,sky_encoder_resmlp
+
+# Public UPdec-Webb real-data smoke on one or more bands. This currently
+# benchmarks the published product pairs directly (Drizzle iter0 vs UPDC iter10)
+# rather than the raw JWST exposure-level forward model.
+pixi run -e test python scripts/download_updec_webb.py --bands F277W --iterations 0,10
+pixi run -e test python benchmarks/bench_updec_webb_real.py --bands F277W
+
+# Sequentially download the public multiband references plus a manageable
+# module-B public JWST exposure subset for each band into data/.
+pixi run -e test python scripts/download_smacs0723_multiband_public.py --bands F090W,F150W,F200W,F277W,F356W,F444W --module b --updec-iterations 0
+
+# First real exposure-level JWST SMACS J0723 smoke, using local public F277W
+# calibrated exposures plus the published F277W iter0 drizzle product as the
+# target/reference grid. Native SIP headers now run by default; `--linearize-sip`
+# remains available as a fallback/debug option.
+pixi run -e test python scripts/download_jwst_smacs0723_mast.py --band F277W --max-exposures 6
+pixi run -e test python benchmarks/bench_map_smacs0723_real.py --crop-size 768
+
+# Reproduction sweep against the published F277W drizzle patch with several
+# torchsky map variants on the same real exposures. Native SIP now runs by
+# default; `--linearize-sip` remains available as a fallback/debug option.
+# If local `*_crf.fits` files are present they are preferred over `*_cal.fits`.
+pixi run -e test python benchmarks/bench_map_smacs0723_reproduce.py --crop-size 512
+
+# Same sweep, but also add true external drizzle rows on the matched CRF set.
+PYTHONPATH=src:benchmarks pixi run -e map-compat python benchmarks/bench_map_smacs0723_reproduce.py --crop-size 512 --include-drizzle --drizzle-kernels point,square
+
+# Direct in-tree drizzle-style reproduction on the same matched CRF set.
+PYTHONPATH=src:benchmarks pixi run -e map-compat python benchmarks/bench_map_smacs0723_real.py --crop-size 512 --resampling-kernel drizzle_square --value-semantics surface_brightness --stacking-method weighted_mean --drizzle-pixfrac 1.0
+
+# Real-data stacker comparison on the paper-faithful 9-visit F277Wb crop.
+PYTHONPATH=src:benchmarks pixi run -e map-compat python benchmarks/bench_map_smacs0723_stackers.py --band F277W --module b --input-product cal --filename-contains nrcblong --crop-size 512 --crop-mode center
+
+# Real-data multiband non-INR stacker sweep across all public UPdec-Webb bands,
+# reusing the same legacy and torchsky stackers sequentially per band.
+PYTHONPATH=src:benchmarks pixi run -e map-compat python benchmarks/bench_map_smacs0723_stackers_band_sweep.py --bands F090W,F150W,F200W,F277W,F356W,F444W --module b --input-product cal --crop-size 512 --crop-mode best_overlap
+
+# Exposure ladder on the same real SMACS J0723 F277W target, using the current
+# best quick reproduction setting (`bilinear + flux + weighted_mean`) and an
+# overlap-aware crop so we can see how agreement changes as more real visits
+# are added.
+pixi run -e test python benchmarks/bench_map_smacs0723_ladder.py --tiers 2,4,6 --crop-size 512 --crop-mode best_overlap --resampling-kernel bilinear --value-semantics flux --stacking-method weighted_mean
+
+# Real-data INR smoke on the same F277W target. This currently treats the
+# public F277W exposures as an exact single-band field-fit problem and compares
+# them against the matching coadd support region on the published drizzle grid.
+pixi run -e test python benchmarks/bench_map_smacs0723_field_fit.py --crop-size 128 --crop-mode best_overlap --steps 4 --models coadd_bilinear,spectral_basis_field,sky_encoder_resmlp,sky_lambda_feature_field,operator_constrained_feature_field
+
+# Real-data per-band INR sweep across multiple published UPdec-Webb bands,
+# using local module-B public JWST exposures when present.
+pixi run -e test python benchmarks/bench_map_smacs0723_field_fit_band_sweep.py --bands F090W,F150W,F200W,F277W,F356W,F444W --module b --crop-size 32 --steps 2
+
+# Real-data joint multiband INR smoke on the currently complete public bands.
+# This fits one field across several filters simultaneously, then scores each
+# rendered band against its own published iter0 reference crop.
+PYTHONPATH=src:benchmarks pixi run -e map-compat python benchmarks/bench_map_smacs0723_field_fit_joint.py --bands F090W,F277W,F356W,F444W --crop-size 32 --crop-strategy best_overlap --steps 4 --models coadd_bilinear,spectral_basis_field,sky_encoder_resmlp,sky_lambda_feature_field,operator_constrained_feature_field
 
 # Focused large sparse-mosaic frontier profile
 # - keeps the exact 3-band multivisit row at 32 steps

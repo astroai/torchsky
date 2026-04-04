@@ -1,3 +1,4 @@
+from functools import lru_cache
 import re
 from typing import Any, Optional, List, Tuple
 
@@ -116,6 +117,7 @@ def _normalize_where_syntax(where: str) -> str:
     return result
 
 
+@lru_cache(maxsize=1024)
 def _parse_where_expression(where: str):
     if not isinstance(where, str) or not where.strip():
         raise ValueError("where must be a non-empty string expression")

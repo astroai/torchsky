@@ -1,0 +1,48 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+BENCHMARKS = ROOT / "benchmarks"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+if str(BENCHMARKS) not in sys.path:
+    sys.path.insert(0, str(BENCHMARKS))
+
+from download_updec_webb import UPDEC_WEBB_FILES, resolve_specs  # noqa: E402
+from bench_updec_webb_real import _markdown  # noqa: E402
+
+
+def test_updec_webb_public_manifest_contains_expected_sparse_smoke_band() -> None:
+    spec = UPDEC_WEBB_FILES[("F277W", 0)]
+    assert spec.filename == "F277Wb_UPDC-v2_iter0_i2d.fits.fz"
+    assert spec.download_id == 47980
+    assert spec.url.endswith("47980")
+
+
+def test_resolve_specs_supports_public_iter0_iter10_pair() -> None:
+    specs = resolve_specs(["F277W"], [0, 10])
+    assert [spec.iteration for spec in specs] == [0, 10]
+    assert specs[1].filename == "F277Wb_UPDC-v2_iter10_i2d.fits.fz"
+
+
+def test_updec_webb_markdown_renders_expected_columns() -> None:
+    text = _markdown(
+        [
+            {
+                "band": "F277W",
+                "iter0_hdus": 10,
+                "iter10_hdus": 2,
+                "common_rmse": 0.1,
+                "crop_rmse": 0.2,
+                "crop_gradient_mean_ratio": 1.5,
+                "crop_laplacian_std_ratio": 2.5,
+                "common_flux_ratio": 1.01,
+            }
+        ]
+    )
+    assert "| band | iter0 hdus | iter10 hdus |" in text
+    assert "| F277W | 10 | 2 | 0.100000 | 0.200000 | 1.5000 | 2.5000 | 1.0100 |" in text

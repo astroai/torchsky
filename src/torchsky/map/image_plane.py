@@ -29,6 +29,8 @@ MapResamplingKernel = Literal[
     "lanczos5",
     "mitchell_netravali",
     "catmull_rom",
+    "drizzle_point",
+    "drizzle_square",
 ]
 MapValueSemantics = Literal["surface_brightness", "flux"]
 MapStackingMethod = Literal["weighted_mean", "mean", "median"]
@@ -177,6 +179,18 @@ class _ProjectedImagePlaneObservation:
 _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS = 1_500_000
 _LARGE_TAN_WINDOWING_EDGE_SAMPLES = 9
 _LARGE_TAN_WINDOWING_MARGIN_PIXELS = 2
+_DRIZZLE_FORWARD_CHUNK_PIXELS = 262_144
+
+
+def _try_external_drizzle_helpers():
+    try:
+        from astropy.io import fits as astropy_fits  # type: ignore
+        from astropy.wcs import WCS as AstropyWCS  # type: ignore
+        from drizzle.resample import Drizzle as DrizzleResampler  # type: ignore
+        from drizzle.utils import calc_pixmap, estimate_pixel_scale_ratio  # type: ignore
+    except Exception:
+        return None
+    return astropy_fits, AstropyWCS, DrizzleResampler, calc_pixmap, estimate_pixel_scale_ratio
 
 
 def _validate_image_plane(image: Tensor) -> Tensor:
@@ -612,6 +626,10 @@ def _sample_image_plane_batched_channels(
         padding_mode="zeros",
         align_corners=True,
     )
+
+
+def _is_drizzle_kernel(kernel: MapResamplingKernel) -> bool:
+    return kernel in {"drizzle_point", "drizzle_square"}
 
 
 def _requires_roundtrip_validity_check(source_wcs: WCS) -> bool:
@@ -1070,6 +1088,8 @@ def _validated_map_resampling_kernel(
         "lanczos5",
         "mitchell_netravali",
         "catmull_rom",
+        "drizzle_point",
+        "drizzle_square",
     )
     if resampling_kernel not in allowed:
         raise ValueError(f"resampling_kernel must be one of {allowed}")
@@ -1083,6 +1103,13 @@ def _validated_map_value_semantics(
     if value_semantics not in allowed:
         raise ValueError(f"value_semantics must be one of {allowed}")
     return value_semantics
+
+
+def _validated_drizzle_pixfrac(drizzle_pixfrac: float) -> float:
+    pixfrac = float(drizzle_pixfrac)
+    if not math.isfinite(pixfrac) or pixfrac <= 0.0:
+        raise ValueError("drizzle_pixfrac must be a finite positive float")
+    return pixfrac
 
 
 def _validated_map_stacking_method(
@@ -1136,6 +1163,190 @@ def _masked_median_stack(
     median = 0.5 * (lower + upper)
     median = torch.where(count > 0, median, torch.zeros_like(median))
     return median, count.to(dtype=torch.float32)
+
+
+def _forward_project_weighted_to_target(
+    image: Tensor,
+    source_weight: Tensor,
+    source_wcs: WCS,
+    target: _PreparedImagePlaneTarget,
+    *,
+    resampling_kernel: MapResamplingKernel,
+    value_semantics: MapValueSemantics,
+    drizzle_pixfrac: float,
+) -> tuple[Tensor, Tensor]:
+    if not _is_drizzle_kernel(resampling_kernel):
+        raise ValueError(f"forward projection only supports drizzle kernels, got {resampling_kernel!r}")
+
+    image = _validate_image_plane(image).to(dtype=torch.float32)
+    source_weight = _validate_image_plane(source_weight).to(dtype=torch.float32)
+    h_src, w_src = image.shape
+
+    if value_semantics == "flux":
+        source_area_sr = _pixel_area_sr_map(
+            source_wcs,
+            tuple(int(v) for v in image.shape),
+            device=image.device,
+        )
+        weighted_image = image * source_weight * source_area_sr
+        weighted_weight = source_weight * torch.square(source_area_sr)
+    elif target.representative_pixel_area_sr is not None:
+        source_area_sr = _representative_pixel_area_sr(
+            source_wcs,
+            tuple(int(v) for v in image.shape),
+            device=image.device,
+        )
+        info_density = source_weight / max(source_area_sr, 1e-20)
+        weighted_image = image * info_density
+        weighted_weight = info_density
+    else:
+        weighted_image = image * source_weight
+        weighted_weight = source_weight
+
+    valid = torch.isfinite(weighted_weight) & (weighted_weight > 0.0)
+    if not bool(valid.any()):
+        zeros = torch.zeros(target.shape, dtype=torch.float32, device=image.device)
+        return zeros, zeros
+
+    ys, xs = torch.nonzero(valid, as_tuple=True)
+    flat_values_numer = weighted_image[ys, xs].to(dtype=torch.float32)
+    flat_values_weight = weighted_weight[ys, xs].to(dtype=torch.float32)
+    flat_numer = torch.zeros(target.shape[0] * target.shape[1], dtype=torch.float32, device=image.device)
+    flat_weight = torch.zeros_like(flat_numer)
+    width = int(target.shape[1])
+    height = int(target.shape[0])
+
+    for start in range(0, int(xs.numel()), _DRIZZLE_FORWARD_CHUNK_PIXELS):
+        end = min(start + _DRIZZLE_FORWARD_CHUNK_PIXELS, int(xs.numel()))
+        x_chunk = xs[start:end].to(dtype=torch.float64)
+        y_chunk = ys[start:end].to(dtype=torch.float64)
+        numer_chunk = flat_values_numer[start:end]
+        weight_chunk = flat_values_weight[start:end]
+
+        ra_deg, dec_deg = source_wcs.pixel_to_world(x_chunk, y_chunk)
+        x_tgt, y_tgt = target.wcs.world_to_pixel(ra_deg, dec_deg)
+        x_tgt = x_tgt.to(dtype=torch.float32)
+        y_tgt = y_tgt.to(dtype=torch.float32)
+        finite = torch.isfinite(x_tgt) & torch.isfinite(y_tgt)
+        if not bool(finite.any()):
+            continue
+
+        x_tgt = x_tgt[finite]
+        y_tgt = y_tgt[finite]
+        numer_chunk = numer_chunk[finite]
+        weight_chunk = weight_chunk[finite]
+
+        if resampling_kernel == "drizzle_point":
+            ix = torch.round(x_tgt).to(dtype=torch.int64)
+            iy = torch.round(y_tgt).to(dtype=torch.int64)
+            inside = (ix >= 0) & (ix < width) & (iy >= 0) & (iy < height)
+            if not bool(inside.any()):
+                continue
+            idx = iy[inside] * width + ix[inside]
+            flat_numer.scatter_add_(0, idx, numer_chunk[inside])
+            flat_weight.scatter_add_(0, idx, weight_chunk[inside])
+            continue
+
+        footprint = max(float(drizzle_pixfrac), 1e-6)
+        x_tgt = x_tgt - 0.5 * (footprint - 1.0)
+        y_tgt = y_tgt - 0.5 * (footprint - 1.0)
+        x0 = torch.floor(x_tgt).to(dtype=torch.int64)
+        y0 = torch.floor(y_tgt).to(dtype=torch.int64)
+        dx = torch.clamp((x_tgt - x0.to(dtype=torch.float32)) / footprint, 0.0, 1.0)
+        dy = torch.clamp((y_tgt - y0.to(dtype=torch.float32)) / footprint, 0.0, 1.0)
+        for off_y, wy in ((0, 1.0 - dy), (1, dy)):
+            iy = y0 + off_y
+            if not bool(((iy >= 0) & (iy < height)).any()):
+                continue
+            for off_x, wx in ((0, 1.0 - dx), (1, dx)):
+                ix = x0 + off_x
+                frac = wx * wy
+                inside = (ix >= 0) & (ix < width) & (iy >= 0) & (iy < height) & (frac > 0.0)
+                if not bool(inside.any()):
+                    continue
+                idx = iy[inside] * width + ix[inside]
+                flat_numer.scatter_add_(0, idx, numer_chunk[inside] * frac[inside])
+                flat_weight.scatter_add_(0, idx, weight_chunk[inside] * frac[inside])
+
+    numer = flat_numer.reshape(target.shape)
+    weight = flat_weight.reshape(target.shape)
+    numer = torch.where(weight > 0.0, numer, torch.zeros_like(numer))
+    weight = torch.where(weight > 0.0, weight, torch.zeros_like(weight))
+    return numer, weight
+
+
+def _as_astropy_fits_header_for_drizzle(header: dict):
+    helpers = _try_external_drizzle_helpers()
+    if helpers is None:  # pragma: no cover - exercised only when drizzle is installed
+        raise RuntimeError("external drizzle helpers are unavailable")
+    astropy_fits = helpers[0]
+    out = astropy_fits.Header()
+    for key, value in header.items():
+        if str(key).endswith("_COMMENT"):
+            continue
+        if key in {"", "COMMENT", "HISTORY"}:
+            continue
+        out[key] = value
+    return out
+
+
+def _maybe_external_drizzle_resample_weighted_to_target(
+    image: Tensor,
+    source_weight: Tensor,
+    *,
+    header_dict_obs: dict,
+    target_header: dict,
+    target_shape: tuple[int, int],
+    resampling_kernel: MapResamplingKernel,
+    value_semantics: MapValueSemantics,
+    drizzle_pixfrac: float,
+) -> tuple[Tensor, Tensor] | None:
+    if not _is_drizzle_kernel(resampling_kernel):
+        return None
+    if value_semantics != "surface_brightness":
+        return None
+    helpers = _try_external_drizzle_helpers()
+    if helpers is None:
+        return None
+    astropy_fits, AstropyWCS, DrizzleResampler, calc_pixmap, estimate_pixel_scale_ratio = helpers
+    kernel = "point" if resampling_kernel == "drizzle_point" else "square"
+    target_header_astropy = _as_astropy_fits_header_for_drizzle(target_header)
+    source_header_astropy = _as_astropy_fits_header_for_drizzle(header_dict_obs)
+    target_wcs = AstropyWCS(target_header_astropy)
+    target_wcs.array_shape = target_shape
+    source_shape = tuple(int(v) for v in image.shape)
+    source_wcs = AstropyWCS(source_header_astropy)
+    source_wcs.array_shape = source_shape
+    pixmap = calc_pixmap(source_wcs, target_wcs, shape=source_shape)
+    pscale_ratio = estimate_pixel_scale_ratio(
+        source_wcs,
+        target_wcs,
+        refpix_from=source_wcs.wcs.crpix,
+        refpix_to=target_wcs.wcs.crpix,
+    )
+    drizzle = DrizzleResampler(
+        kernel=kernel,
+        fillval=0.0,
+        out_shape=target_shape,
+        disable_ctx=True,
+    )
+    drizzle.add_image(
+        torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0).cpu().numpy().astype("float32"),
+        exptime=1.0,
+        pixmap=pixmap,
+        weight_map=torch.nan_to_num(source_weight, nan=0.0, posinf=0.0, neginf=0.0)
+        .cpu()
+        .numpy()
+        .astype("float32"),
+        iscale=1.0,
+        pixel_scale_ratio=pscale_ratio,
+        pixfrac=float(drizzle_pixfrac),
+        in_units="cps",
+    )
+    out_img = torch.as_tensor(drizzle.out_img, dtype=torch.float32, device=image.device)
+    out_wht = torch.as_tensor(drizzle.out_wht, dtype=torch.float32, device=image.device)
+    out_img = torch.where(out_wht > 0.0, out_img, torch.zeros_like(out_img))
+    return out_img * out_wht, out_wht
 
 
 def _prepare_target(
@@ -1554,6 +1765,7 @@ def _project_observation_to_target_chunk(
     footprint_order: int | None,
     resampling_kernel: MapResamplingKernel,
     value_semantics: MapValueSemantics,
+    drizzle_pixfrac: float,
 ) -> _ProjectedImagePlaneObservation:
     if not torch.isfinite(torch.tensor(obs.weight, dtype=torch.float64)):
         raise ValueError("Observation weights must be finite")
@@ -1600,6 +1812,29 @@ def _project_observation_to_target_chunk(
         if prepared_target_view is None:
             sampled_numer = torch.zeros((0, 0), dtype=torch.float32, device=device)
             sampled_weight = torch.zeros((0, 0), dtype=torch.float32, device=device)
+        elif _is_drizzle_kernel(resampling_kernel):
+            exact = _maybe_external_drizzle_resample_weighted_to_target(
+                image,
+                source_weight,
+                header_dict_obs=header_dict_obs,
+                target_header=prepared_target_view.header,
+                target_shape=prepared_target_view.shape,
+                resampling_kernel=resampling_kernel,
+                value_semantics=value_semantics,
+                drizzle_pixfrac=drizzle_pixfrac,
+            )
+            if exact is not None:
+                sampled_numer, sampled_weight = exact
+            else:
+                sampled_numer, sampled_weight = _forward_project_weighted_to_target(
+                    image,
+                    source_weight,
+                    source_wcs,
+                    prepared_target_view,
+                    resampling_kernel=resampling_kernel,
+                    value_semantics=value_semantics,
+                    drizzle_pixfrac=drizzle_pixfrac,
+                )
         else:
             sampled_numer, sampled_weight = _resample_weighted_to_target(
                 image,
@@ -1642,6 +1877,7 @@ def _project_observation_to_target(
     footprint_order: int | None,
     resampling_kernel: MapResamplingKernel,
     value_semantics: MapValueSemantics,
+    drizzle_pixfrac: float = 1.0,
 ) -> tuple[Tensor, Tensor, Tensor, MOC | None]:
     projected = _project_observation_to_target_chunk(
         obs,
@@ -1655,6 +1891,7 @@ def _project_observation_to_target(
         footprint_order=footprint_order,
         resampling_kernel=resampling_kernel,
         value_semantics=value_semantics,
+        drizzle_pixfrac=drizzle_pixfrac,
     )
     if projected.target_window is None:
         return projected.numer, projected.weight, projected.overlap, projected.moc
@@ -1786,6 +2023,7 @@ def coadd_image_plane(
     resampling_kernel: MapResamplingKernel = "bilinear",
     value_semantics: MapValueSemantics = "surface_brightness",
     stacking_method: MapStackingMethod = "weighted_mean",
+    drizzle_pixfrac: float = 1.0,
 ) -> MapResult:
     if not observations:
         raise ValueError("At least one observation is required")
@@ -1794,19 +2032,31 @@ def coadd_image_plane(
     resampling_kernel = _validated_map_resampling_kernel(resampling_kernel)
     value_semantics = _validated_map_value_semantics(value_semantics)
     stacking_method = _validated_map_stacking_method(stacking_method)
+    drizzle_pixfrac = _validated_drizzle_pixfrac(drizzle_pixfrac)
 
     first = observations[0]
     first_image, first_header = read(first.path, hdu=first.hdu, return_header=True)
     first_image = _validate_image_plane(first_image)
-    header_dict = _normalized_header_for_shape(
-        dict(first_header),
-        tuple(int(v) for v in first_image.shape[-2:]),
-        overrides=target_header,
-    )
-    target_shape = _target_shape_from_header(
-        header_dict,
-        fallback=tuple(int(v) for v in first_image.shape[-2:]),
-    )
+    if target_header is not None and "CRVAL1" in target_header:
+        target_shape = _target_shape_from_header(
+            target_header,
+            fallback=tuple(int(v) for v in first_image.shape[-2:]),
+        )
+        header_dict = _normalized_header_for_shape(
+            dict(target_header),
+            target_shape,
+            overrides=None,
+        )
+    else:
+        header_dict = _normalized_header_for_shape(
+            dict(first_header),
+            tuple(int(v) for v in first_image.shape[-2:]),
+            overrides=target_header,
+        )
+        target_shape = _target_shape_from_header(
+            header_dict,
+            fallback=tuple(int(v) for v in first_image.shape[-2:]),
+        )
     device = first_image.device
     apply_surface_brightness_area_scaling = (
         value_semantics == "surface_brightness"
@@ -1875,6 +2125,7 @@ def coadd_image_plane(
                 footprint_order=footprint_order,
                 resampling_kernel=resampling_kernel,
                 value_semantics=value_semantics,
+                drizzle_pixfrac=drizzle_pixfrac,
             )
             contrib_numer, contrib_weight = _stack_inputs_from_projected_observation(
                 sampled_numer,
@@ -1904,6 +2155,7 @@ def coadd_image_plane(
                 footprint_order=footprint_order,
                 resampling_kernel=resampling_kernel,
                 value_semantics=value_semantics,
+                drizzle_pixfrac=drizzle_pixfrac,
             )
             if projected.target_window is None:
                 contrib_numer, contrib_weight = _stack_inputs_from_projected_observation(
@@ -1993,11 +2245,13 @@ class ImagePlaneMapMaker:
         resampling_kernel: MapResamplingKernel = "bilinear",
         value_semantics: MapValueSemantics = "surface_brightness",
         stacking_method: MapStackingMethod = "weighted_mean",
+        drizzle_pixfrac: float = 1.0,
     ) -> None:
         self.target_header = target_header
         self.resampling_kernel = _validated_map_resampling_kernel(resampling_kernel)
         self.value_semantics = _validated_map_value_semantics(value_semantics)
         self.stacking_method = _validated_map_stacking_method(stacking_method)
+        self.drizzle_pixfrac = _validated_drizzle_pixfrac(drizzle_pixfrac)
 
     def run(
         self,
@@ -2012,6 +2266,7 @@ class ImagePlaneMapMaker:
             resampling_kernel=self.resampling_kernel,
             value_semantics=self.value_semantics,
             stacking_method=self.stacking_method,
+            drizzle_pixfrac=self.drizzle_pixfrac,
         )
 
 
@@ -2024,6 +2279,7 @@ def coadd_image_plane_cube(
     resampling_kernel: MapResamplingKernel = "bilinear",
     value_semantics: MapValueSemantics = "surface_brightness",
     stacking_method: MapStackingMethod = "weighted_mean",
+    drizzle_pixfrac: float = 1.0,
     spectral_axis: SpectralAxis | None = None,
     spectral_bin_edges: Tensor | None = None,
     spectral_unit: str = "Angstrom",
@@ -2045,6 +2301,7 @@ def coadd_image_plane_cube(
     resampling_kernel = _validated_map_resampling_kernel(resampling_kernel)
     value_semantics = _validated_map_value_semantics(value_semantics)
     stacking_method = _validated_map_stacking_method(stacking_method)
+    drizzle_pixfrac = _validated_drizzle_pixfrac(drizzle_pixfrac)
     if stacking_method == "median":
         raise ValueError("coadd_image_plane_cube currently supports median only for single-band image-plane coadds")
 
@@ -2162,6 +2419,7 @@ def coadd_image_plane_cube(
             footprint_order=footprint_order,
             resampling_kernel=resampling_kernel,
             value_semantics=value_semantics,
+            drizzle_pixfrac=drizzle_pixfrac,
         )
         coeffs = projection[obs_idx].to(device=device, dtype=torch.float32).view(n_band, 1, 1)
         if projected.target_window is None:

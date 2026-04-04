@@ -407,12 +407,26 @@ def _time_many(fn: Callable[[], Any], runs: int) -> float:
     return float(samples[len(samples) // 2])
 
 
+def _sanitize_fits_header_value(value: Any) -> Any:
+    if isinstance(value, str):
+        cleaned = value.replace("\r", " ").replace("\n", " ")
+        cleaned = "".join(ch if 32 <= ord(ch) <= 126 else " " for ch in cleaned)
+        cleaned = " ".join(cleaned.split())
+        return cleaned if cleaned else None
+    return value
+
+
 def _as_fits_header(header: dict[str, Any]) -> fits.Header:
     out = fits.Header()
     for key, value in header.items():
         if key.endswith("_COMMENT"):
             continue
-        out[key] = value
+        if key in {"", "COMMENT", "HISTORY"}:
+            continue
+        cleaned = _sanitize_fits_header_value(value)
+        if cleaned is None:
+            continue
+        out[key] = cleaned
     return out
 
 
@@ -1020,15 +1034,33 @@ def _align_array_to_target(
     target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
     if _headers_equivalent_for_direct_copy(header, target_header) and tuple(int(v) for v in array.shape) == target_shape:
         return np.asarray(array, dtype=np.float32)
-    if reproject_interp is None:
-        raise RuntimeError("reproject is required to align backend output onto the target grid")
-    aligned, _ = reproject_interp(
-        (np.asarray(array, dtype=np.float32), _as_fits_header(header)),
-        _as_fits_header(target_header),
-        shape_out=target_shape,
-        return_footprint=True,
-        order=order,
-    )
+    if reproject_interp is not None:
+        aligned, _ = reproject_interp(
+            (np.asarray(array, dtype=np.float32), _as_fits_header(header)),
+            _as_fits_header(target_header),
+            shape_out=target_shape,
+            return_footprint=True,
+            order=order,
+        )
+        return np.nan_to_num(np.asarray(aligned, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Fall back to torchsky's own image-plane mapper so projection-changing
+    # legacy backends remain benchmarkable in lean environments.
+    kernel = str(order).lower()
+    if kernel == "nearest-neighbor":
+        kernel = "nearest"
+    with tempfile.TemporaryDirectory(prefix="torchsky_align_fallback_") as tmp:
+        tmpdir = Path(tmp)
+        image_path = tmpdir / "input.fits"
+        _write_single_extension_mef(image_path, np.asarray(array, dtype=np.float32), _as_fits_header(header))
+        result = coadd_image_plane(
+            [ImageObservation(str(image_path), hdu=1)],
+            target_header=dict(target_header),
+            resampling_kernel=kernel,
+            value_semantics="surface_brightness",
+            stacking_method="weighted_mean",
+        )
+        aligned = result.data.cpu().numpy()
     return np.nan_to_num(np.asarray(aligned, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
 
 

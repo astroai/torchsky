@@ -671,7 +671,7 @@ def test_sample_image_plane_batched_channels_matches_separate_sampling(kernel: s
 
 @pytest.mark.parametrize(
     "kernel",
-    ["lanczos3", "lanczos5", "mitchell_netravali", "catmull_rom"],
+    ["lanczos3", "lanczos5", "mitchell_netravali", "catmull_rom", "drizzle_point", "drizzle_square"],
 )
 def test_coadd_image_plane_accepts_custom_high_accuracy_kernels(
     tmp_path, kernel: str
@@ -692,6 +692,92 @@ def test_coadd_image_plane_accepts_custom_high_accuracy_kernels(
 
     assert result.data.shape == (8, 8)
     assert torch.isfinite(result.data).all()
+
+
+@pytest.mark.parametrize("kernel", ["drizzle_point", "drizzle_square"])
+def test_coadd_image_plane_drizzle_kernels_bypass_grid_sample(
+    tmp_path: Path,
+    monkeypatch,
+    kernel: str,
+) -> None:
+    path_a = tmp_path / f"drizzle_a_{kernel}.fits"
+    path_b = tmp_path / f"drizzle_b_{kernel}.fits"
+    header_a = _simple_header()
+    header_b = dict(header_a)
+    header_b["CRVAL1"] = float(header_b["CRVAL1"]) + 0.02
+    data = torch.arange(64, dtype=torch.float32).reshape(8, 8)
+    torchsky.write(str(path_a), data, header=header_a, overwrite=True)
+    torchsky.write(str(path_b), data + 1.0, header=header_b, overwrite=True)
+
+    calls: list[str] = []
+    original = image_plane_mod.F.grid_sample
+
+    def recorded(*args, **kwargs):
+        calls.append(kwargs["mode"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(image_plane_mod.F, "grid_sample", recorded)
+
+    result = coadd_image_plane(
+        [ImageObservation(str(path_a)), ImageObservation(str(path_b))],
+        resampling_kernel=kernel,
+    )
+
+    assert result.data.shape == (8, 8)
+    assert not calls
+
+
+def test_coadd_image_plane_drizzle_kernel_uses_exact_external_path_when_available(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    path_a = tmp_path / "drizzle_exact_a.fits"
+    path_b = tmp_path / "drizzle_exact_b.fits"
+    header_a = _simple_header()
+    header_b = dict(header_a)
+    header_b["CRVAL1"] = float(header_b["CRVAL1"]) + 0.02
+    data = torch.arange(64, dtype=torch.float32).reshape(8, 8)
+    torchsky.write(str(path_a), data, header=header_a, overwrite=True)
+    torchsky.write(str(path_b), data + 1.0, header=header_b, overwrite=True)
+
+    calls: list[str] = []
+
+    def fake_exact(*args, **kwargs):
+        calls.append(f"{kwargs['resampling_kernel']}:{kwargs['drizzle_pixfrac']:.3f}")
+        shape = kwargs["target_shape"]
+        weight = torch.ones(shape, dtype=torch.float32)
+        return torch.full(shape, 5.0, dtype=torch.float32), weight
+
+    monkeypatch.setattr(
+        image_plane_mod,
+        "_maybe_external_drizzle_resample_weighted_to_target",
+        fake_exact,
+    )
+
+    result = coadd_image_plane(
+        [ImageObservation(str(path_a)), ImageObservation(str(path_b))],
+        resampling_kernel="drizzle_square",
+        value_semantics="surface_brightness",
+        drizzle_pixfrac=0.8,
+    )
+
+    assert calls == ["drizzle_square:0.800"]
+    assert result.data.shape == (8, 8)
+    assert torch.isfinite(result.data).all()
+
+
+def test_coadd_image_plane_rejects_non_positive_drizzle_pixfrac(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "pixfrac_invalid.fits"
+    torchsky.write(str(path), torch.ones((4, 4), dtype=torch.float32), header=_simple_header(), overwrite=True)
+
+    with pytest.raises(ValueError, match="drizzle_pixfrac"):
+        coadd_image_plane(
+            [ImageObservation(str(path))],
+            resampling_kernel="drizzle_square",
+            drizzle_pixfrac=0.0,
+        )
 
 
 def test_coadd_image_plane_clamps_negative_resampled_weights_for_high_order_kernels(
