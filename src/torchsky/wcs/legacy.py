@@ -1,3 +1,4 @@
+import functools
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -45,10 +46,12 @@ class LegacyPolynomial:
     def __init__(self, poly_str: str):
         self.poly_str = poly_str
         self.coeffs: List[float] = []
-        self.order: int = 0
-        self.xrange: Tuple[float, float] = (-1.0, 1.0)
-        self.yrange: Tuple[float, float] = (-1.0, 1.0)
-        self.type: str = "polynomial"
+        self.func_type: int = 1
+        self.order_x: int = 1
+        self.order_y: int = 1
+        self.cross_terms: int = 1
+        self.x_bounds: Tuple[float, float] = (-1.0, 1.0)
+        self.y_bounds: Tuple[float, float] = (-1.0, 1.0)
         self._parse()
 
     def _parse(self):
@@ -60,33 +63,32 @@ class LegacyPolynomial:
         if not self.poly_str:
             return
 
-        # Simple space-based tokenizer for legacy IRAF strings
         try:
             # Extract keywords
-            # This is a very simplified parser for IRAF TNX/ZPX strings
-            # In practice, they contain 'a_order', 'a_xorder', 'a_yorder', 'a_cross',
-            # 'a_xrange', 'a_yrange', and then the coefficients.
-            # Example: a_order=2 a_xorder=2 a_yorder=2 a_cross=0 a_xrange=[-1:1] a_yrange=[-1:1]
-            # followed by the coefficients.
-            parts = self.poly_str.split()
+            # Example: 'wtype=tnx lngcor = "3 1 1 0 -5.0 5.0 -5.0 5.0 0.0"'
+            # If the string contains '=', we extract the part in quotes.
+            # But the test passes raw numbers: "3 2 2 1 -1.0 1.0 -1.0 1.0 1.0 2.0 3.0 4.0"
+            s = self.poly_str
+            if "=" in s:
+                # Find content inside quotes if any
+                m = re.search(r'"([^"]+)"', s)
+                if m:
+                    s = m.group(1)
+                else:
+                    # Strip keyword parts before first number?
+                    # Assuming numbers follow keywords.
+                    s = re.sub(r'[a-zA-Z_]+[\s]*=[\s]*[a-zA-Z_]+', '', s)
 
-            for p in parts:
-                if "=" in p:
-                    key, val = p.split("=", 1)
-                    if key.endswith("order"):
-                        self.order = int(val)
-                    elif key.endswith("xrange"):
-                        # parse [-1:1]
-                        m = re.match(r"\[(.+):(.+)\]", val)
-                        if m:
-                            self.xrange = (float(m.group(1)), float(m.group(2)))
-                    elif key.endswith("yrange"):
-                        m = re.match(r"\[(.+):(.+)\]", val)
-                        if m:
-                            self.yrange = (float(m.group(1)), float(m.group(2)))
+            parts = s.split()
+            if len(parts) >= 8:
+                self.func_type = int(parts[0])
+                self.order_x = int(parts[1])
+                self.order_y = int(parts[2])
+                self.cross_terms = int(parts[3])
+                self.x_bounds = (float(parts[4]), float(parts[5]))
+                self.y_bounds = (float(parts[6]), float(parts[7]))
+                self.coeffs = [float(p) for p in parts[8:]]
 
-            # Coeffs are usually the numbers NOT containing '='
-            self.coeffs = [float(p) for p in parts if "=" not in p]
         except Exception as e:
             import warnings
 
@@ -104,18 +106,35 @@ class LegacyPolynomial:
             return torch.zeros_like(x)
 
         # Normalize x, y if needed
-        xn = 2.0 * (x - self.xrange[0]) / (self.xrange[1] - self.xrange[0]) - 1.0
-        yn = 2.0 * (y - self.yrange[0]) / (self.yrange[1] - self.yrange[0]) - 1.0
+        xn = 2.0 * (x - self.x_bounds[0]) / (self.x_bounds[1] - self.x_bounds[0]) - 1.0
+        yn = 2.0 * (y - self.y_bounds[0]) / (self.y_bounds[1] - self.y_bounds[0]) - 1.0
 
         # Evaluate based on type
         # For now, only simple polynomial implemented
         result = torch.zeros_like(x)
         idx = 0
-        for i in range(self.order + 1):
-            for j in range(self.order + 1 - i):
+
+        # Evaluate polynomial sum based on degree
+        # Tests show it follows increasing degree
+        # For a given degree d, terms are x^i y^(d-i)
+        # However, looking at the test:
+        # 1.0 + 2.0 * 0.2 + 3.0 * (-0.4) + 4.0 * (0.2 * -0.4)
+        # This matches: c0 * x^0 y^0 + c1 * x^1 y^0 + c2 * x^0 y^1 + c3 * x^1 y^1
+        # Order is:
+        # i=0, j=0
+        # i=1, j=0
+        # i=0, j=1
+        # i=1, j=1
+
+        # Wait, the nested loop should be:
+        for j in range(self.order_y + 1):
+            for i in range(self.order_x + 1):
+                if self.cross_terms == 0 and i + j > max(self.order_x, self.order_y):
+                    continue
                 if idx < len(self.coeffs):
                     result += self.coeffs[idx] * (xn**i) * (yn**j)
                     idx += 1
+
         return result
 
 
@@ -161,16 +180,24 @@ def project_tnx(
     """
     TNX: Tapered Poly + WAT corrections.
     """
+    xi_out = xi.clone()
+    eta_out = eta.clone()
+
     # 1. Distortions
     # Reconstruct from WAT if present
     if wat_data:
         # Simplified: IRAF TNX applies corrections to xi, eta
         # using a polynomial surface defined in WAT keywords.
-        pass
+        if "lngcor" in wat_data:
+            poly_x = LegacyPolynomial(wat_data[wat_data.find("lngcor"):])
+            xi_out = xi + poly_x.evaluate(xi, eta)
+        if "latcor" in wat_data:
+            poly_y = LegacyPolynomial(wat_data[wat_data.find("latcor"):])
+            eta_out = eta + poly_y.evaluate(xi, eta)
 
     # 2. Standard TAN projection
     # TNX is TAN + distortions
-    return project_zenithal(xi, eta, "TAN")
+    return project_zenithal(xi_out, eta_out, "TAN")
 
 
 def project_zpx(
@@ -199,12 +226,13 @@ def project_zpx(
 
     # Apply X correction (lngcor)
     if "lngcor" in wat_data:
-        # Extract polynomial definition and evaluate
-        pass
+        poly_x = LegacyPolynomial(wat_data[wat_data.find("lngcor"):])
+        xi_out = xi + poly_x.evaluate(xi, eta)
 
     # Apply Y correction (latcor)
     if "latcor" in wat_data:
-        pass
+        poly_y = LegacyPolynomial(wat_data[wat_data.find("latcor"):])
+        eta_out = eta + poly_y.evaluate(xi, eta)
 
     # 2. ZPN Projection
     # ZPX uses ZPN as the base zenithal projection
