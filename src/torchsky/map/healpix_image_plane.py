@@ -1,8 +1,8 @@
-"""Sample HEALPix ring/nest maps onto tangent-plane FITS grids (torchsky HEALPix only).
+"""Sample HEALPix ring/nest maps onto 2D FITS/WCS image grids (torchsky HEALPix only).
 
-This path uses :func:`torchsky.wcs.healpix.get_interp_val` and does **not** require
-``reproject``. It is intended for small cubes and regression checks against
-``reproject_from_healpix`` when that package is installed.
+Uses :func:`torchsky.wcs.healpix.get_interp_val` (no ``reproject``). The target grid
+can be any valid 2D WCS (TAN, CAR, SIN, ZEA, …); pixel centers are converted with
+:class:`torchsky.WCS` then interpolated on the sphere.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from .. import WCS
 from ..wcs import healpix as hp
 
 
-def sample_healpix_map_on_tan_header(
+def sample_healpix_map_on_image_header(
     healpix_map: Tensor,
     *,
     nside: int,
@@ -24,7 +24,11 @@ def sample_healpix_map_on_tan_header(
     target_header: dict,
     device: torch.device | None = None,
 ) -> Tensor:
-    """Bilinearly sample a HEALPix map onto the pixel grid of a TAN (or any) WCS header.
+    """Bilinearly sample a HEALPix map onto the pixel grid of ``target_header``.
+
+    ``CTYPE1``/``CTYPE2`` may be any projection supported by :class:`torchsky.WCS`
+    (e.g. ``RA---TAN``, ``RA---CAR``). Sampling is spherical bilinear interpolation
+    via :func:`torchsky.wcs.healpix.get_interp_val`.
 
     Args:
         healpix_map: Length ``12 * nside**2`` tensor (one map).
@@ -35,8 +39,15 @@ def sample_healpix_map_on_tan_header(
 
     Returns:
         ``[NAXIS2, NAXIS1]`` tensor matching the target image shape.
+
+    Note:
+        Map values are detached before :func:`torchsky.wcs.healpix.get_interp_val`
+        because the native interpolation kernels do not accept tensors that require
+        grad through DLPack. Use :func:`render_field_cube` for direct autograd through
+        pixel centers, or a future pure-torch interpolator if spherical resampling must
+        remain differentiable end-to-end.
     """
-    m = torch.as_tensor(healpix_map)
+    m = torch.as_tensor(healpix_map).detach()
     if m.ndim != 1:
         raise ValueError("healpix_map must be a 1D tensor of length 12*nside**2")
     npix = hp.nside2npix(int(nside))
@@ -63,6 +74,9 @@ def sample_healpix_map_on_tan_header(
         lonlat=True,
     )
     return flat.reshape(h, w).to(dtype=m.dtype)
+
+
+sample_healpix_map_on_tan_header = sample_healpix_map_on_image_header
 
 
 def healpix_nside_from_map_len(npix: int) -> int:

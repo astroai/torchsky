@@ -11,6 +11,7 @@ from torchsky.map import (
     SkyEncoderMLPField,
     evaluate_field_coordinates_vmapped,
     render_field_cube,
+    render_field_cube_via_healpix,
     render_field_healpix,
     render_field_observation,
 )
@@ -72,6 +73,85 @@ def test_render_field_cube_spatial_tile_matches_full() -> None:
     )
     assert full.shape == tiled.shape
     assert torch.allclose(full, tiled, rtol=0.0, atol=1.0e-5)
+
+
+def test_render_field_cube_via_healpix_tan_shape_and_finite() -> None:
+    torch.manual_seed(11)
+    domain = FieldDomain(
+        center_ra_deg=100.0,
+        center_dec_deg=5.0,
+        spatial_scale_deg=0.5,
+        wavelength_center=5500.0,
+        wavelength_scale=200.0,
+        coord_mode="sphere_xyz",
+    )
+    model = SkyEncoderMLPField(
+        domain,
+        hidden_dim=14,
+        hidden_layers=2,
+        scale_fourier_to_domain=False,
+    )
+    header = _tan_header(14, crval1=100.0, crval2=5.0, scale_deg=0.03)
+    axis = SpectralAxis(
+        values=torch.tensor([5400.0, 5600.0], dtype=torch.float64),
+        unit="Angstrom",
+        type="WAVE",
+    )
+    cube = render_field_cube_via_healpix(
+        model,
+        target_header=header,
+        spectral_axis=axis,
+        nside=8,
+        nest=False,
+        healpix_spatial_chunk_pixels=256,
+    )
+    assert cube.shape == (2, 14, 14)
+    assert torch.isfinite(cube).all()
+
+
+def test_render_field_cube_via_healpix_car_projection() -> None:
+    torch.manual_seed(12)
+    domain = FieldDomain(
+        center_ra_deg=180.0,
+        center_dec_deg=0.0,
+        spatial_scale_deg=2.0,
+        wavelength_center=4000.0,
+        wavelength_scale=400.0,
+        coord_mode="sphere_xyz",
+    )
+    model = SkyEncoderMLPField(
+        domain,
+        hidden_dim=12,
+        hidden_layers=2,
+        scale_fourier_to_domain=False,
+    )
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 10,
+        "NAXIS2": 8,
+        "CTYPE1": "RA---CAR",
+        "CTYPE2": "DEC--CAR",
+        "CRPIX1": 5.0,
+        "CRPIX2": 4.0,
+        "CRVAL1": 180.0,
+        "CRVAL2": 0.0,
+        "CDELT1": -0.15,
+        "CDELT2": 0.15,
+    }
+    axis = SpectralAxis(
+        values=torch.tensor([4000.0], dtype=torch.float64),
+        unit="Angstrom",
+        type="WAVE",
+    )
+    cube = render_field_cube_via_healpix(
+        model,
+        target_header=header,
+        spectral_axis=axis,
+        nside=4,
+        nest=True,
+    )
+    assert cube.shape == (1, 8, 10)
+    assert torch.isfinite(cube).all()
 
 
 def test_render_field_healpix_shape_and_finite() -> None:

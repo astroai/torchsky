@@ -17,6 +17,8 @@ from ...encoders import SkyCoordinateEncoder, sky_encoder_fourier_min_frequency
 from ...spectral import SpectralAxis
 from ...wcs import healpix as _healpix_wcs
 
+from ..healpix_image_plane import sample_healpix_map_on_image_header
+
 from .types import (
     FieldCoordinateMode,
     FieldCurriculum,
@@ -5367,6 +5369,73 @@ def render_field_healpix(
             func_vmap_chunk=func_vmap_chunk,
         )
         out[:, i0:i1] = sub
+    return out
+
+
+def render_field_cube_via_healpix(
+    model: nn.Module,
+    *,
+    target_header: dict,
+    spectral_axis: SpectralAxis,
+    nside: int,
+    nest: bool = False,
+    shape: tuple[int, int] | None = None,
+    spectral_chunk: int = 1,
+    healpix_spatial_chunk_pixels: int | None = None,
+    use_func_vmap: bool = False,
+    func_vmap_chunk: int = 65536,
+    device: torch.device | None = None,
+) -> Tensor:
+    """Render ``(nλ, H, W)`` by evaluating on HEALPix, then sampling onto the WCS grid.
+
+    The target projection is whatever ``target_header`` encodes (TAN, CAR, SIN, …).
+    Spherical bilinear interpolation uses :func:`sample_healpix_map_on_image_header`.
+
+    Unlike :func:`render_field_cube`, this path does **not** evaluate the field exactly
+    at image pixel centers; it uses HEALPix cell centers (plus interpolation), which
+    is useful for spherical pipelines and for reusing one healpix cube under several
+    target headers.
+
+    Grid size ``(H, W)`` follows the same ``shape`` / ``NAXIS`` rules as
+    :func:`render_field_cube` via :func:`_header_shape`.
+
+    Spherical resampling detaches from autograd (see
+    :func:`sample_healpix_map_on_image_header`); use :func:`render_field_cube` when
+    you need gradients through pixel-center evaluation.
+    """
+    dev = device if device is not None else _module_device(model)
+    hp_cube = render_field_healpix(
+        model,
+        nside=nside,
+        spectral_axis=spectral_axis,
+        nest=nest,
+        spectral_chunk=spectral_chunk,
+        spatial_chunk_pixels=healpix_spatial_chunk_pixels,
+        use_func_vmap=use_func_vmap,
+        func_vmap_chunk=func_vmap_chunk,
+        device=dev,
+    )
+    fallback_hw = (
+        (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
+        if shape is None
+        else (int(shape[0]), int(shape[1]))
+    )
+    h, w = _header_shape(target_header, fallback=fallback_hw)
+    hdr = dict(target_header)
+    hdr["NAXIS1"] = int(w)
+    hdr["NAXIS2"] = int(h)
+    nw = int(hp_cube.shape[0])
+    if nw == 0:
+        return torch.empty((0, h, w), device=dev, dtype=torch.float32)
+    out = torch.empty((nw, h, w), device=dev, dtype=hp_cube.dtype)
+    for i in range(nw):
+        out[i] = sample_healpix_map_on_image_header(
+            hp_cube[i],
+            nside=int(nside),
+            nest=nest,
+            target_header=hdr,
+            device=dev,
+        )
     return out
 
 

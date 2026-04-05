@@ -2,7 +2,11 @@
 
 from .fft_affine_ldu import resample_fft_ldu_affine_2d
 from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_fft2d
-from .healpix_image_plane import healpix_nside_from_map_len, sample_healpix_map_on_tan_header
+from .healpix_image_plane import (
+    healpix_nside_from_map_len,
+    sample_healpix_map_on_image_header,
+    sample_healpix_map_on_tan_header,
+)
 from .periodic_affine import resample_linear_affine_periodic_bilinear_2d
 from .field import (
     BandpassConditionedField,
@@ -36,6 +40,7 @@ from .field import (
     make_field_model,
     evaluate_field_coordinates_vmapped,
     render_field_cube,
+    render_field_cube_via_healpix,
     render_field_healpix,
     render_field_observation,
     render_field_observation_distribution,
@@ -146,6 +151,7 @@ __all__ = [
     "plan_image_plane_target",
     "evaluate_field_coordinates_vmapped",
     "render_field_cube",
+    "render_field_cube_via_healpix",
     "render_field_healpix",
     "render_field_observation",
     "render_field_observation_distribution",
@@ -155,6 +161,7 @@ __all__ = [
     "resample_fft_ldu_affine_2d",
     "resample_linear_affine_periodic_bilinear_2d",
     "resample_translation_fft2d",
+    "sample_healpix_map_on_image_header",
     "sample_healpix_map_on_tan_header",
     "stack_map_product",
     "write_map_benchmark_artifacts",
