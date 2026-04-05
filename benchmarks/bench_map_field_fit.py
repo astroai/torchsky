@@ -47,7 +47,10 @@ from torchsky.map import (  # noqa: E402
     render_field_observation_distribution,
     render_field_product,
     plan_map_product,
+    spectral_data_budget,
     stack_map_product,
+    suggest_num_spectral_samples,
+    suggest_spectral_model_capacity,
     write_map_benchmark_artifacts,
 )
 from torchsky.map.field import _BaseFieldModel  # noqa: E402
@@ -2897,6 +2900,7 @@ def _simulate_observations(
     *,
     seed: int,
     tmpdir: Path,
+    num_spectral_samples: int = 9,
 ) -> tuple[list[FieldObservation], list[ImageObservation], Tensor]:
     truth_model = _make_truth_model(case_spec, seed=seed)
     truth_cube = render_field_cube(
@@ -2927,7 +2931,7 @@ def _simulate_observations(
         clean = render_field_observation(
             truth_model,
             field_observation,
-            num_spectral_samples=9,
+            num_spectral_samples=int(num_spectral_samples),
         ).detach()
         noise = spec.noise_sigma * torch.randn(
             clean.shape,
@@ -3032,6 +3036,26 @@ def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _placeholder_field_observations_for_spectral_budget(
+    case_spec: CaseSpec,
+) -> list[FieldObservation]:
+    """Minimal :class:`FieldObservation` rows for :func:`spectral_data_budget`."""
+    rows: list[FieldObservation] = []
+    for spec in case_spec.observations:
+        rows.append(
+            FieldObservation(
+                image=torch.zeros(1, 1, dtype=torch.float32),
+                header=spec.header,
+                spectral_min=spec.spectral_min,
+                spectral_max=spec.spectral_max,
+                transmission_center=spec.transmission_center,
+                transmission_sigma=spec.transmission_sigma,
+                band_name=f"{int(spec.transmission_center)}A",
+            )
+        )
+    return rows
+
+
 def evaluate_case(
     *,
     case: str,
@@ -3040,13 +3064,50 @@ def evaluate_case(
     seed: int,
     steps: int,
     runs: int,
+    use_spectral_budget: bool = False,
 ) -> dict[str, Any]:
     case_spec = _build_case_specs(size)[case]
+    spectral_budget_extras: dict[str, Any] = {}
+    simulate_num_spectral = 9
+    if use_spectral_budget:
+        budget = spectral_data_budget(
+            _placeholder_field_observations_for_spectral_budget(case_spec)
+        )
+        n_suggest = suggest_num_spectral_samples(budget)
+        hints = suggest_spectral_model_capacity(budget)
+        simulate_num_spectral = n_suggest
+        spectral_budget_extras = {
+            "use_spectral_budget": True,
+            "suggested_num_spectral_samples": n_suggest,
+            "spectral_wavelength_span_angstrom": budget.wavelength_span,
+            "spectral_min_variation_scale_angstrom": budget.min_variation_scale,
+            "spectral_n_distinct_band_specs": budget.n_distinct_band_specs,
+            "spectral_budget_observations": [
+                {
+                    "lower": s.lower,
+                    "upper": s.upper,
+                    "span": s.span,
+                    "transmission_sigma": s.transmission_sigma,
+                    "variation_scale": s.variation_scale,
+                    "band_name": s.band_name,
+                }
+                for s in budget.observations
+            ],
+            "spectral_capacity_hints": {
+                "spectroscopicity": hints.spectroscopicity,
+                "profile": hints.profile,
+                "spectral_frequencies": hints.spectral_frequencies,
+                "num_spectral_frequencies_basis": hints.num_spectral_frequencies_basis,
+                "recommended_model_kinds": list(hints.recommended_model_kinds),
+                "rationale": hints.rationale,
+            },
+        }
     with tempfile.TemporaryDirectory(prefix="torchsky-field-fit-") as tmpdir_str:
         observations, image_observations, truth_cube = _simulate_observations(
             case_spec,
             seed=seed,
             tmpdir=Path(tmpdir_str),
+            num_spectral_samples=simulate_num_spectral,
         )
         product = plan_map_product(
             image_observations,
@@ -3096,6 +3157,11 @@ def evaluate_case(
                 size=size,
                 benchmark_steps=steps,
             )
+            if use_spectral_budget:
+                fit_kwargs["num_spectral_samples"] = spectral_budget_extras[
+                    "suggested_num_spectral_samples"
+                ]
+            num_spectral_render = int(fit_kwargs["num_spectral_samples"])
             model_kwargs = _field_model_kwargs_for_case(
                 model_kind,
                 case=case_spec.case,
@@ -3143,12 +3209,13 @@ def evaluate_case(
                 result.model,
                 product,
                 spatial_chunk_size=render_chunk_size,
+                num_spectral_samples=num_spectral_render,
             )
             for observation in observations:
                 pred = render_field_observation(
                     result.model,
                     observation,
-                    num_spectral_samples=9,
+                    num_spectral_samples=num_spectral_render,
                 )
                 observation_residuals.append(
                     torch.sqrt(torch.mean(torch.square(pred - observation.image)))
@@ -3311,6 +3378,7 @@ def evaluate_case(
         "max_bandwidth_angstrom": float(
             max(spec.spectral_max - spec.spectral_min for spec in case_spec.observations)
         ),
+        **spectral_budget_extras,
     }
 
 
@@ -3340,6 +3408,14 @@ def main() -> None:
     parser.add_argument("--json-out", type=str, default="")
     parser.add_argument("--markdown-out", type=str, default="")
     parser.add_argument("--baseline-json", type=str, default="")
+    parser.add_argument(
+        "--use-spectral-budget",
+        action="store_true",
+        help=(
+            "Derive num_spectral_samples from observation bandpasses; use the same "
+            "quadrature for simulation, fit, cube render, and per-observation residuals."
+        ),
+    )
     args = parser.parse_args()
 
     cases = tuple(item for item in args.cases.split(",") if item)
@@ -3359,6 +3435,7 @@ def main() -> None:
                 seed=args.seed,
                 steps=case_steps,
                 runs=args.runs,
+                use_spectral_budget=args.use_spectral_budget,
             )
             for model_kind in models
         ]

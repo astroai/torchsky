@@ -9,6 +9,8 @@ Submodules
     PyTorch modules, :func:`make_field_model`, :func:`fit_field_model`, rendering.
 ``registry``
     :data:`FIELD_MODEL_KINDS` tuple derived from :class:`FieldModelKind`.
+``observation_builders``
+    :class:`FieldObservation` factories for binned spectra, IFU cubes, and energy channels.
 """
 
 from __future__ import annotations
@@ -54,7 +56,19 @@ from .core import (
     _BaseFieldModel,
     _noise_pretrain_field_model,
 )
+from .observation_builders import (
+    field_observations_from_bin_centers,
+    field_observations_from_bin_edges,
+    field_observations_from_ifu_cube,
+    ifu_cube_spectral_to_leading,
+    make_tangent_plane_header,
+)
 from .registry import FIELD_MODEL_KINDS
+from .spectral_budget import (
+    spectral_data_budget,
+    suggest_num_spectral_samples,
+    suggest_spectral_model_capacity,
+)
 from .types import (
     FieldCoordinateMode,
     FieldCurriculum,
@@ -67,11 +81,20 @@ from .types import (
     FieldNoisePretrainKind,
     FieldObservation,
     FieldObservationSampling,
+    FieldSpectralQuantity,
     FieldSpectralSampling,
+    ObservationSpectralSummary,
+    SpectralCapacityProfile,
+    SpectralDataBudget,
+    SpectralModelCapacityHints,
 )
 
 __all__ = [
     "FIELD_MODEL_KINDS",
+    "ObservationSpectralSummary",
+    "SpectralCapacityProfile",
+    "SpectralDataBudget",
+    "SpectralModelCapacityHints",
     "BandpassConditionedField",
     "ConditionedSpectralField",
     "FieldCoordinateMode",
@@ -85,7 +108,13 @@ __all__ = [
     "FieldNoisePretrainKind",
     "FieldObservation",
     "FieldObservationSampling",
+    "FieldSpectralQuantity",
     "FieldSpectralSampling",
+    "field_observations_from_bin_centers",
+    "field_observations_from_bin_edges",
+    "field_observations_from_ifu_cube",
+    "ifu_cube_spectral_to_leading",
+    "make_tangent_plane_header",
     "FourierMLPField",
     "GaussianBasisField",
     "HashGridConditionedField",
@@ -121,6 +150,9 @@ __all__ = [
     "load_strainer_trunk_checkpoint",
     "pretrain_strainer_trunk_synthetic",
     "save_strainer_trunk_checkpoint",
+    "spectral_data_budget",
+    "suggest_num_spectral_samples",
+    "suggest_spectral_model_capacity",
     "_BaseFieldModel",
     "_noise_pretrain_field_model",
 ]

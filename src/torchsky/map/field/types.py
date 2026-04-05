@@ -11,6 +11,13 @@ from typing import Literal
 import torch.nn as nn
 from torch import Tensor
 
+SpectralCapacityProfile = Literal[
+    "photometric_wide",
+    "multiband",
+    "narrowband_sweep",
+    "spectroscopic",
+]
+
 FieldModelKind = Literal[
     "sine_implicit",
     "wire_implicit",
@@ -39,9 +46,7 @@ FieldModelKind = Literal[
 FieldCoordinateMode = Literal["local_tangent", "sphere_xyz"]
 FieldLossKind = Literal["mse", "charbonnier", "huber", "gaussian_nll"]
 FieldLRSchedule = Literal["constant", "cosine"]
-FieldLossReduction = Literal[
-    "per_observation", "per_band", "global", "band_global_mix"
-]
+FieldLossReduction = Literal["per_observation", "per_band", "global", "band_global_mix"]
 FieldCurriculum = Literal["none", "spectral_frequency_ramp", "feature_scale_ramp"]
 FieldSpectralSampling = Literal[
     "deterministic_quadrature",
@@ -50,6 +55,8 @@ FieldSpectralSampling = Literal[
 ]
 FieldObservationSampling = Literal["uniform", "band_balanced"]
 FieldNoisePretrainKind = Literal["none", "uniform", "gaussian", "spectrum"]
+# wavelength | energy | frequency — meaning of spectral_min / spectral_max numeric values
+FieldSpectralQuantity = Literal["wavelength", "energy", "frequency"]
 
 
 @dataclass(frozen=True)
@@ -69,8 +76,57 @@ class FieldDomain:
     coord_mode: FieldCoordinateMode = "local_tangent"
 
 
+@dataclass(frozen=True)
+class ObservationSpectralSummary:
+    """Per-observation spectral-axis support for :func:`spectral_data_budget`."""
+
+    lower: float
+    upper: float
+    span: float
+    transmission_sigma: float | None
+    """Gaussian width in the same units as the spectral axis, if defined and valid."""
+    variation_scale: float
+    """Scale used for quadrature spacing (``min(sigma, span)`` or delta fallback)."""
+    band_name: str | None
+
+
+@dataclass(frozen=True)
+class SpectralDataBudget:
+    """Aggregated spectral complexity from a list of :class:`FieldObservation`."""
+
+    observations: tuple[ObservationSpectralSummary, ...]
+    wavelength_min: float
+    wavelength_max: float
+    wavelength_span: float
+    min_variation_scale: float
+    max_variation_scale: float
+    n_distinct_band_specs: int
+
+
+@dataclass(frozen=True)
+class SpectralModelCapacityHints:
+    """Suggested encoder / model capacity from a :class:`SpectralDataBudget`."""
+
+    spectroscopicity: float
+    """``wavelength_span / min_variation_scale`` (large ⇒ finer λ structure)."""
+    profile: SpectralCapacityProfile
+    spectral_frequencies: int
+    """Suggested ``spectral_frequencies`` for :class:`SkyCoordinateEncoder` / sky MLP fields."""
+    num_spectral_frequencies_basis: int
+    """Suggested ``num_spatial_frequencies``-style order for spectral-basis families."""
+    recommended_model_kinds: tuple[str, ...]
+    rationale: str
+
+
 @dataclass
 class FieldObservation:
+    """One band-limited 2D map plus spectral metadata for field fitting.
+
+    Use :mod:`torchsky.map.field.observation_builders` to turn binned 1D spectra,
+    IFU channel cubes, or X-ray-style center/width summaries into observation lists.
+    Set ``spectral_quantity`` when the axis is energy (e.g. keV) rather than wavelength.
+    """
+
     image: Tensor
     header: dict
     weight: Tensor | None = None
@@ -82,6 +138,7 @@ class FieldObservation:
     transmission_sigma: float | None = None
     psf_sigma_pix: float = 0.0
     band_name: str | None = None
+    spectral_quantity: FieldSpectralQuantity | None = None
 
 
 @dataclass

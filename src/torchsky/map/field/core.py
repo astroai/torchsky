@@ -199,6 +199,7 @@ def _crop_field_observation(
         transmission_sigma=observation.transmission_sigma,
         psf_sigma_pix=observation.psf_sigma_pix,
         band_name=observation.band_name,
+        spectral_quantity=observation.spectral_quantity,
     )
 
 
