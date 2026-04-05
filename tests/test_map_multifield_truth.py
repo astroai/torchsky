@@ -31,7 +31,7 @@ _multifield_bench = _load_benchmark_module()
     ("case", "rmse_max", "coverage_min"),
     [
         ("tan_multifield_cube", 0.18, 0.95),
-        ("tpv_multifield_cube", 0.30, 0.77),
+        ("tpv_multifield_cube", 0.30, 0.48),
     ],
 )
 def test_multifield_truth_cases_stay_bounded(

@@ -3,6 +3,8 @@ environments:
   bench:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
+    indexes:
+    - https://pypi.org/simple
     options:
       pypi-prerelease-mode: if-necessary-or-explicit
     packages:
@@ -348,6 +350,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.1-h8359307_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
+      - pypi: https://files.pythonhosted.org/packages/12/f0/24a3352a9ea58eac7ad12250fca475277a3a658a1cca35212564a4ef07e8/dfreproject-1.3.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/b1/18/6834684da5bc4ad7f0e8565237a006fca7cc66ed778ddc7ffb2b5eff50ff/drizzle-2.2.0-cp314-cp314-macosx_11_0_arm64.whl
   bench-all:
     channels:
     - url: https://conda.anaconda.org/conda-forge/

@@ -21,6 +21,91 @@ import bench_map_projection_mosaic_suite as projection_mosaic_suite  # noqa: E40
 import bench_map_tan_sip_suite as tan_sip_suite  # noqa: E402
 import run_ground_truth_competitive_large_union as competitive_runner  # noqa: E402
 
+from torchsky.map import ImageObservation, plan_image_plane_target  # noqa: E402
+
+
+def test_plan_image_plane_target_matches_montage_style_template(tmp_path) -> None:
+    """Montage ``mProject`` templates should round-trip to the same WCS grid we plan."""
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 32,
+        "NAXIS2": 24,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 16.0,
+        "CRPIX2": 12.0,
+        "CRVAL1": 11.0,
+        "CRVAL2": -4.0,
+        "CD1_1": -0.01,
+        "CD1_2": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": 0.01,
+    }
+    path_in = tmp_path / "in.fits"
+    torchsky.write(
+        str(path_in),
+        torch.ones((24, 32), dtype=torch.float32),
+        header=header,
+        overwrite=True,
+    )
+    tpl_path = tmp_path / "target.hdr"
+    bench_map_compat._write_header_template(tpl_path, header)
+    tpl_hdr = fits.Header.fromtextfile(str(tpl_path))
+
+    planned = plan_image_plane_target(
+        [ImageObservation(str(path_in))],
+        header_overrides=dict(tpl_hdr),
+    )
+    w_plan = torchsky.WCS(planned.header)
+    w_tpl = torchsky.WCS(dict(tpl_hdr))
+    for px, py in ((1.0, 1.0), (16.0, 12.0), (32.0, 24.0)):
+        tpx = torch.tensor(px, dtype=torch.float64)
+        tpy = torch.tensor(py, dtype=torch.float64)
+        ra_p, dec_p = w_plan.pixel_to_world(tpx, tpy)
+        ra_t, dec_t = w_tpl.pixel_to_world(tpx, tpy)
+        torch.testing.assert_close(ra_p, ra_t, atol=1e-6, rtol=1e-9)
+        torch.testing.assert_close(dec_p, dec_t, atol=1e-6, rtol=1e-9)
+
+
+def test_plan_image_plane_target_matches_montage_template_cdelta_only(tmp_path) -> None:
+    """Montage-style headers often use ``CDELT*`` without an explicit ``CD`` matrix."""
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 28,
+        "NAXIS2": 20,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 14.0,
+        "CRPIX2": 10.0,
+        "CRVAL1": 45.0,
+        "CRVAL2": -22.0,
+        "CDELT1": -0.008,
+        "CDELT2": 0.008,
+    }
+    path_in = tmp_path / "in_cdelta.fits"
+    torchsky.write(
+        str(path_in),
+        torch.ones((20, 28), dtype=torch.float32),
+        header=header,
+        overwrite=True,
+    )
+    tpl_path = tmp_path / "target_cdelta.hdr"
+    bench_map_compat._write_header_template(tpl_path, header)
+    tpl_hdr = fits.Header.fromtextfile(str(tpl_path))
+    planned = plan_image_plane_target(
+        [ImageObservation(str(path_in))],
+        header_overrides=dict(tpl_hdr),
+    )
+    w_plan = torchsky.WCS(planned.header)
+    w_tpl = torchsky.WCS(dict(tpl_hdr))
+    for px, py in ((1.0, 1.0), (14.0, 10.0), (28.0, 20.0)):
+        tpx = torch.tensor(px, dtype=torch.float64)
+        tpy = torch.tensor(py, dtype=torch.float64)
+        ra_p, dec_p = w_plan.pixel_to_world(tpx, tpy)
+        ra_t, dec_t = w_tpl.pixel_to_world(tpx, tpy)
+        torch.testing.assert_close(ra_p, ra_t, atol=1e-6, rtol=1e-9)
+        torch.testing.assert_close(dec_p, dec_t, atol=1e-6, rtol=1e-9)
+
 
 def test_montage_header_template_includes_core_fits_cards(tmp_path):
     header = fits.Header()
@@ -715,3 +800,25 @@ def test_write_swarp_config_rejects_unknown_fscalastro_type(tmp_path: Path) -> N
             resampling_type="BILINEAR",
             fscalastro_type="AUTO",
         )
+
+
+def test_check_time_regressions_flags_slow_rows() -> None:
+    template = {
+        "case": "case_a",
+        "library": "torchsky",
+        "method": "torchsky",
+        "variant": "bilinear",
+        "status": "OK",
+    }
+    err = bench_map_compat._check_time_regressions(
+        [{**template, "time_ms": 50.0}],
+        [{**template, "max_time_ms": 10.0}],
+        tolerance=0.0,
+    )
+    assert err
+    ok = bench_map_compat._check_time_regressions(
+        [{**template, "time_ms": 5.0}],
+        [{**template, "max_time_ms": 10.0}],
+        tolerance=0.0,
+    )
+    assert not ok

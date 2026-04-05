@@ -10,7 +10,8 @@
 ### 1.1 Image-plane mapmaking (`map/image_plane.py`)
 
 - **Inverse mapping (target ← source):** World positions on the output grid are mapped into source pixel space; resampling uses `torch.nn.functional.grid_sample` for most kernels, with optional **windowed** evaluation for large TAN fields.
-- **Resampling kernels (public):** `nearest`, `bilinear`, `bicubic`, `lanczos3`, `lanczos5`, `mitchell_netravali`, `catmull_rom`, `drizzle_point`, `drizzle_square`.
+- **Resampling kernels (public):** `nearest`, `bilinear`, `bicubic`, `lanczos3`, `lanczos5`, `mitchell_netravali`, `catmull_rom`, `fft_shift`, `fft_diagonal_affine`, `fft_linear_affine`, `periodic_linear_affine`, `drizzle_point`, `drizzle_square`.
+- **HEALPix on TAN grids (helper):** `sample_healpix_map_on_tan_header` samples a HEALPix map onto a target header using `torchsky.wcs.healpix.get_interp_val` (no `reproject` dependency).
 - **Drizzle path:** **Default** coaddition uses the native torch **forward-drizzle** accumulator (CUDA/MPS/differentiable). The external Python **`drizzle`** package is **opt-in** for regression against DrizzlePac-style behavior: set `TORCHSKY_USE_EXTERNAL_DRIZZLE=1` (see `map/image_plane.py`).
 - **Value semantics:** `surface_brightness` vs `flux` (with pixel solid-angle scaling where required).
 - **Stacking:** `weighted_mean`, `mean`, `median` (median not supported everywhere, e.g. spectral cube path documents limits).
@@ -93,13 +94,14 @@ The current design is **image-plane, FITS-WCS-first**, similar to **SWarp / Mont
 | Multifield / cube truth | `tests/test_map_multifield_truth.py` |
 | Real JWST SMACS J0723 (conditional on data) | `tests/test_map_smacs0723_*.py` |
 | Compat bench wiring | `tests/test_map_compat_bench.py` (Montage header template, suite parsers, etc.) |
+| `reproject` / `dfreproject` interp parity (small TAN) | `tests/test_map_reproject_fft_parity.py`, `tests/test_map_dfreproject_parity.py` (need **`torchsky[bench]`**) |
 | UPdec-Webb | `benchmarks/bench_updec_webb_real.py` (bench; optional CI) |
 
 **Gaps in tests:**
 
-- **No default CI fixture** for “radio mm” **FITS mosaic** (e.g. small ALMA TP or SKA pathfinder cutout) with **PB header** semantics.
-- **DFT / spherical FFT reproject:** no parity test vs `reproject`’s FFT-based paths (only interp-style comparisons in compat bench).
-- **End-to-end “same as SWarp”** with **identical** weight maps and **subpixel** shifts (some synthetic truth exists; expand **real** small MEF).
+- **Radio/mm FITS:** synthetic **Stokes cube** + **RESTFRQ** / **SPECSYS** header round-trip is covered in **`tests/test_map_radio_smoke.py`**; a vendored real ALMA/SKA cutout fixture is still optional.
+- **DFT / adaptive reproject:** `dfreproject.calculate_reprojection` bilinear parity is in **`tests/test_map_dfreproject_parity.py`**; **`reproject_adaptive`** finiteness smoke is in **`tests/test_map_reproject_fft_parity.py`**. Distinct spherical **FFT** backends in `reproject` (if any) may still need a dedicated gate when the public API is stable.
+- **End-to-end SWarp:** optional **`tests/test_map_swarp_optional_parity.py`** compares SWarp **BILINEAR** to torchsky on a tiny shifted pair when the **`SWarp`** binary is installed.
 - **`ImageObservation.hdu`** defaults to **`None`** (aligned with auto-payload reads). Optional **`primary_beam_path`** scales per-pixel weights by a primary-beam map (see `map/image_plane.py`).
 
 ---

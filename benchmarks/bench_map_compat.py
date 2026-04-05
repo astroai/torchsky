@@ -233,6 +233,37 @@ def _check_compat_regressions(
                     f"{key}: {metric} regressed {float(current_value):.6g} > {allowed:.6g}"
                 )
     return errors
+
+
+def _check_time_regressions(
+    rows: list[dict[str, Any]],
+    time_baseline_rows: list[dict[str, Any]],
+    *,
+    tolerance: float = 0.35,
+) -> list[str]:
+    """Optional wall-time gate: baseline rows may include ``max_time_ms`` per compat key."""
+    baseline_by_key = {_compat_row_key(row): row for row in time_baseline_rows}
+    errors: list[str] = []
+    for row in rows:
+        key = _compat_row_key(row)
+        baseline = baseline_by_key.get(key)
+        if baseline is None:
+            continue
+        base_t = baseline.get("max_time_ms")
+        cur_t = row.get("time_ms")
+        if base_t is None or cur_t is None:
+            continue
+        if str(row.get("status", "OK")) != "OK":
+            continue
+        allowed = float(base_t) * (1.0 + float(tolerance)) + 1.0e-9
+        if float(cur_t) > allowed:
+            errors.append(
+                f"{key}: time_ms regressed {float(cur_t):.6g} ms > {allowed:.6g} ms "
+                f"(baseline {float(base_t):.6g} ms, tolerance {float(tolerance):.2f})"
+            )
+    return errors
+
+
 _TORCHSKY_KERNELS = (
     "nearest",
     "bilinear",
@@ -241,6 +272,10 @@ _TORCHSKY_KERNELS = (
     "lanczos5",
     "mitchell_netravali",
     "catmull_rom",
+    "fft_shift",
+    "fft_diagonal_affine",
+    "periodic_linear_affine",
+    "fft_linear_affine",
 )
 _REPROJECT_ORDERS = (
     ("nearest-neighbor", "nearest"),
@@ -1148,6 +1183,9 @@ def _coadd_with_casutools(
         return data_np, coverage_np, str(imstack_bin)
 
 
+# SWarp ``FSCALASTRO_TYPE`` defaults to ``NONE`` here so comparator rows do not mix in
+# astrometric flux rescaling; see ``docs/mapping_parity.md`` (Phase 1) and
+# ``docs/benchmarks.md``.
 def _coadd_with_swarp(
     observations: list[ImageObservation],
     *,
@@ -1463,6 +1501,64 @@ def _pairwise_backend_row(
     }
 
 
+def _prepare_synthetic_diagonal_scale_case(
+    tmpdir: Path,
+    *,
+    size: int,
+) -> tuple[list[ImageObservation], dict[str, Any]]:
+    """Source/target share shape; target WCS scales the CD matrix (diagonal affine pixels)."""
+    src = _simple_header(size)
+    tgt = dict(src)
+    f = 1.06
+    tgt["CD1_1"] = float(src["CD1_1"]) * f
+    tgt["CD1_2"] = float(src["CD1_2"]) * f
+    tgt["CD2_1"] = float(src["CD2_1"]) * f
+    tgt["CD2_2"] = float(src["CD2_2"]) * f
+    yy, xx = torch.meshgrid(
+        torch.linspace(-1.0, 1.0, size, dtype=torch.float32),
+        torch.linspace(-1.0, 1.0, size, dtype=torch.float32),
+        indexing="ij",
+    )
+    image = torch.exp(
+        -((xx - 0.1) ** 2 + (yy + 0.05) ** 2) / 0.25
+    ).to(dtype=torch.float32)
+    image_path = tmpdir / "synthetic_diagonal_scale.fits"
+    torchsky.write(str(image_path), image, header=src, overwrite=True)
+    return [ImageObservation(str(image_path))], tgt
+
+
+def _prepare_synthetic_montage_sin_grid_case(
+    tmpdir: Path,
+    *,
+    size: int,
+) -> list[ImageObservation]:
+    """Equal-area SIN projection grid (Montage / mProject-class template surface)."""
+    header: dict[str, Any] = {
+        "NAXIS": 2,
+        "NAXIS1": size,
+        "NAXIS2": size,
+        "CTYPE1": "RA---SIN",
+        "CTYPE2": "DEC--SIN",
+        "CRPIX1": float(size // 2),
+        "CRPIX2": float(size // 2),
+        "CRVAL1": 40.0,
+        "CRVAL2": 5.0,
+        "CDELT1": -0.015,
+        "CDELT2": 0.015,
+    }
+    yy, xx = torch.meshgrid(
+        torch.linspace(-1.0, 1.0, size, dtype=torch.float32),
+        torch.linspace(-1.0, 1.0, size, dtype=torch.float32),
+        indexing="ij",
+    )
+    image = torch.exp(
+        -((xx - 0.25) ** 2 + (yy - 0.1) ** 2) / 0.2
+    ).to(dtype=torch.float32)
+    image_path = tmpdir / "synthetic_montage_sin_grid.fits"
+    torchsky.write(str(image_path), image, header=header, overwrite=True)
+    return [ImageObservation(str(image_path))]
+
+
 def _prepare_synthetic_shifted_case(
     tmpdir: Path,
     *,
@@ -1652,19 +1748,35 @@ def _torchsky_row(
     runs: int,
     resampling_kernel: str,
 ) -> tuple[dict[str, Any], torch.Tensor, torch.Tensor]:
-    dt = _time_many(
-        lambda: coadd_image_plane(
+    def _run():
+        return coadd_image_plane(
             observations,
             target_header=target_header,
             resampling_kernel=resampling_kernel,
-        ),
-        runs,
-    )
-    result = coadd_image_plane(
-        observations,
-        target_header=target_header,
-        resampling_kernel=resampling_kernel,
-    )
+        )
+
+    if resampling_kernel in {
+        "fft_shift",
+        "fft_diagonal_affine",
+        "periodic_linear_affine",
+        "fft_linear_affine",
+    }:
+        try:
+            dt = _time_many(_run, runs)
+            result = _run()
+        except ValueError as exc:
+            return (
+                _skipped_row(
+                    case,
+                    "torchsky",
+                    f"{resampling_kernel} unavailable: {exc}",
+                ),
+                None,
+                None,
+            )
+    else:
+        dt = _time_many(_run, runs)
+        result = _run()
     row = {
         "case": case,
         "library": "torchsky",
@@ -2213,7 +2325,7 @@ def main() -> int:
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument(
         "--cases",
-        default="upstream_drizzle_crpix_translation,synthetic_shifted_wcs,synthetic_tpv_mef_low_overlap,real_astropy_sip_fixture,real_astropy_sip_shifted_wcs,real_astropy_sip_mef,real_astropy_sip_mef_shifted_wcs",
+        default="upstream_drizzle_crpix_translation,synthetic_shifted_wcs,synthetic_diagonal_scale_wcs,synthetic_montage_sin_grid,synthetic_tpv_mef_low_overlap,real_astropy_sip_fixture,real_astropy_sip_shifted_wcs,real_astropy_sip_mef,real_astropy_sip_mef_shifted_wcs",
         help="Comma-separated case list",
     )
     parser.add_argument(
@@ -2239,6 +2351,18 @@ def main() -> int:
     parser.add_argument("--json-out", type=Path, default=None)
     parser.add_argument("--markdown-out", type=Path, default=None)
     parser.add_argument("--baseline-json", type=Path, default=None)
+    parser.add_argument(
+        "--time-baseline-json",
+        type=Path,
+        default=None,
+        help="Optional JSON rows with max_time_ms per compat row key (see benchmarks/baselines/)",
+    )
+    parser.add_argument(
+        "--time-regression-tolerance",
+        type=float,
+        default=0.35,
+        help="Allowed fractional slowdown vs time baseline (default: 0.35)",
+    )
     args = parser.parse_args()
 
     rows: list[dict[str, Any]] = []
@@ -2248,25 +2372,51 @@ def main() -> int:
         reproject_kernels = [part.strip() for part in args.reproject_kernels.split(",") if part.strip()]
         drizzle_kernels = [part.strip() for part in args.drizzle_kernels.split(",") if part.strip()]
         swarp_kernels = [part.strip() for part in args.swarp_kernels.split(",") if part.strip()]
-        all_cases = [
+        diag_obs, diag_hdr = _prepare_synthetic_diagonal_scale_case(tmpdir, size=args.size)
+        all_cases: list[tuple[str, list[ImageObservation], dict[str, Any] | None]] = [
             (
                 "upstream_drizzle_crpix_translation",
                 _prepare_upstream_drizzle_translation_case(tmpdir, size=args.size),
+                None,
             ),
-            ("synthetic_shifted_wcs", _prepare_synthetic_shifted_case(tmpdir, size=args.size, n_obs=args.n_obs)),
-            ("synthetic_tpv_mef_low_overlap", _prepare_synthetic_tpv_mef_case(tmpdir, size=args.size)),
-            ("real_astropy_sip_fixture", _prepare_real_case(tmpdir)),
-            ("real_astropy_sip_shifted_wcs", _prepare_real_shifted_sip_case(tmpdir)),
-            ("real_astropy_sip_mef", _prepare_real_sip_mef_case(tmpdir, shifted=False)),
-            ("real_astropy_sip_mef_shifted_wcs", _prepare_real_sip_mef_case(tmpdir, shifted=True)),
+            (
+                "synthetic_shifted_wcs",
+                _prepare_synthetic_shifted_case(tmpdir, size=args.size, n_obs=args.n_obs),
+                None,
+            ),
+            ("synthetic_diagonal_scale_wcs", diag_obs, diag_hdr),
+            (
+                "synthetic_montage_sin_grid",
+                _prepare_synthetic_montage_sin_grid_case(tmpdir, size=args.size),
+                None,
+            ),
+            (
+                "synthetic_tpv_mef_low_overlap",
+                _prepare_synthetic_tpv_mef_case(tmpdir, size=args.size),
+                None,
+            ),
+            ("real_astropy_sip_fixture", _prepare_real_case(tmpdir), None),
+            ("real_astropy_sip_shifted_wcs", _prepare_real_shifted_sip_case(tmpdir), None),
+            ("real_astropy_sip_mef", _prepare_real_sip_mef_case(tmpdir, shifted=False), None),
+            (
+                "real_astropy_sip_mef_shifted_wcs",
+                _prepare_real_sip_mef_case(tmpdir, shifted=True),
+                None,
+            ),
         ]
         case_filter = {
             part.strip() for part in args.cases.split(",") if part.strip()
         }
         cases = [item for item in all_cases if item[0] in case_filter]
 
-        for case_name, observations in cases:
-            target = plan_image_plane_target(observations, reference_index=0)
+        for case_name, observations, header_overrides in cases:
+            if header_overrides is not None:
+                target = plan_image_plane_target(
+                    observations,
+                    header_overrides=header_overrides,
+                )
+            else:
+                target = plan_image_plane_target(observations, reference_index=0)
             torchsky_outputs: list[tuple[dict[str, Any], torch.Tensor, torch.Tensor]] = []
             for kernel in torchsky_kernels:
                 row, data, weight = _torchsky_row(
@@ -2345,6 +2495,15 @@ def main() -> int:
         errors = _check_compat_regressions(rows, baseline_rows)
         if errors:
             raise SystemExit("\n".join(errors))
+    if args.time_baseline_json is not None:
+        time_rows = json.loads(args.time_baseline_json.read_text(encoding="utf-8"))
+        terr = _check_time_regressions(
+            rows,
+            time_rows,
+            tolerance=float(args.time_regression_tolerance),
+        )
+        if terr:
+            raise SystemExit("\n".join(terr))
     return 0
 
 

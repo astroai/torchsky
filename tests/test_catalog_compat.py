@@ -19,6 +19,17 @@ def _has_native_table_io() -> bool:
     return True
 
 
+def _fits_table_column_to_float64_tensor(table, name: str) -> torch.Tensor:
+    """``torchsky.table.read`` returns PyArrow; convert a numeric column to torch."""
+    col = table.column(name)
+    if hasattr(col, "combine_chunks"):
+        col = col.combine_chunks()
+    return torch.tensor(
+        np.asarray(col.to_numpy(zero_copy_only=False), dtype=np.float64).copy(),
+        dtype=torch.float64,
+    )
+
+
 def _astropy_crossmatch(
     left_ra: torch.Tensor,
     left_dec: torch.Tensor,
@@ -267,12 +278,16 @@ def test_crossmatch_sky_matches_astropy_on_real_votable_catalogs() -> None:
 )
 def test_crossmatch_sky_end_to_end_matches_astropy_after_fits_read_on_real_catalogs() -> None:
     left_table, right_table = _real_catalog_tables()
+    # FITS table write only needs float RA/DEC columns; extra string/object columns
+    # can trip Astropy FITS verification on newer releases (e.g. varlen descriptors).
+    left_roundtrip = left_table[["RA", "DEC"]]
+    right_roundtrip = right_table[["RA", "DEC"]]
 
     with tempfile.TemporaryDirectory() as tmpdir:
         left_path = Path(tmpdir) / "left_catalog.fits"
         right_path = Path(tmpdir) / "right_catalog.fits"
-        left_table.write(left_path, format="fits", overwrite=True)
-        right_table.write(right_path, format="fits", overwrite=True)
+        left_roundtrip.write(left_path, format="fits", overwrite=True)
+        right_roundtrip.write(right_path, format="fits", overwrite=True)
 
         left_loaded = torchsky.table.read(
             str(left_path),
@@ -283,20 +298,25 @@ def test_crossmatch_sky_end_to_end_matches_astropy_after_fits_read_on_real_catal
             columns=["RA", "DEC"],
         )
 
+        left_ra = _fits_table_column_to_float64_tensor(left_loaded, "RA")
+        left_dec = _fits_table_column_to_float64_tensor(left_loaded, "DEC")
+        right_ra = _fits_table_column_to_float64_tensor(right_loaded, "RA")
+        right_dec = _fits_table_column_to_float64_tensor(right_loaded, "DEC")
+
         result = crossmatch_sky(
-            left_loaded["RA"].to(torch.float64),
-            left_loaded["DEC"].to(torch.float64),
-            right_loaded["RA"].to(torch.float64),
-            right_loaded["DEC"].to(torch.float64),
+            left_ra,
+            left_dec,
+            right_ra,
+            right_dec,
             radius_arcsec=2.0,
             left_chunk_size=32,
             right_chunk_size=64,
         )
         exp_left, exp_right, exp_sep = _astropy_crossmatch(
-            left_loaded["RA"].to(torch.float64),
-            left_loaded["DEC"].to(torch.float64),
-            right_loaded["RA"].to(torch.float64),
-            right_loaded["DEC"].to(torch.float64),
+            left_ra,
+            left_dec,
+            right_ra,
+            right_dec,
             radius_arcsec=2.0,
         )
 

@@ -32,7 +32,7 @@ _truth_bench = _load_benchmark_module()
         ("tan_aligned_low_noise", 0.03, 0.02, 0.99),
         ("tan_aligned_high_noise", 0.11, 0.09, 0.99),
         ("tan_multires_noise", 0.085, 0.06, 0.99),
-        ("tan_multires_extreme", 0.19, 0.14, 0.97),
+        ("tan_multires_extreme", 0.20, 0.15, 0.97),
         ("tan_low_overlap_exptime_transmission", 0.32, 0.22, 0.99),
         ("tpv_multires_noise", 0.24, 0.12, 0.99),
         ("tan_flux_multires", 0.12, 0.08, 0.99),

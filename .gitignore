@@ -32,6 +32,8 @@ extern/VERSIONS.txt
 # Data
 *.fits
 data/
+!tests/data/
+!tests/data/radio_mm_stub.fits
 examples/data_*/
 data_wcs_examples/
 

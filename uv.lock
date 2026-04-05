@@ -839,6 +839,24 @@ wheels = [
 ]
 
 [[package]]
+name = "dfreproject"
+version = "1.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "astropy", version = "6.1.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "astropy", version = "7.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/50/82/eba110d76ae0739a7a818131d9ce62977268314bcf73b1aa75bb5c767c62/dfreproject-1.3.1.tar.gz", hash = "sha256:61f49355f3c890cebd11e5f9b0e25702ea72e2ea0f809b3ad314db22c34585f0", size = 48441, upload-time = "2025-12-02T18:44:23.055Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/12/f0/24a3352a9ea58eac7ad12250fca475277a3a658a1cca35212564a4ef07e8/dfreproject-1.3.1-py3-none-any.whl", hash = "sha256:6e51576a6149d1495ab812e323d0bdfe96a16c9ae0a766b4fb1941b216ba1424", size = 32476, upload-time = "2025-12-02T18:44:21.991Z" },
+]
+
+[[package]]
 name = "donfig"
 version = "0.8.1.post1"
 source = { registry = "https://pypi.org/simple" }
@@ -848,6 +866,48 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/25/71/80cc718ff6d7abfbabacb1f57aaa42e9c1552bfdd01e64ddd704e4a03638/donfig-0.8.1.post1.tar.gz", hash = "sha256:3bef3413a4c1c601b585e8d297256d0c1470ea012afa6e8461dc28bfb7c23f52", size = 19506, upload-time = "2024-05-23T14:14:31.513Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0c/d5/c5db1ea3394c6e1732fb3286b3bd878b59507a8f77d32a2cebda7d7b7cd4/donfig-0.8.1.post1-py3-none-any.whl", hash = "sha256:2a3175ce74a06109ff9307d90a230f81215cbac9a751f4d1c6194644b8204f9d", size = 21592, upload-time = "2024-05-23T14:13:55.283Z" },
+]
+
+[[package]]
+name = "drizzle"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e2/35/d91c15bb4fa7823181c43305af047343058f527c75bc14f67f92a288e521/drizzle-2.2.0.tar.gz", hash = "sha256:5201419cfdcadc4989298ef65e967186967cc717a6d1bdf75f67d279b3e24ee0", size = 135026, upload-time = "2026-01-06T23:34:07.667Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fb/18/8c90fa6eb12948c2dd0697a2023e3d1d714911ce4e7576c5cd93c3f7e354/drizzle-2.2.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:ab7051113bc02c15ffb8c77a1e452d1330987150a515e6067aba36e09cf4addc", size = 108507, upload-time = "2026-01-06T23:33:32.117Z" },
+    { url = "https://files.pythonhosted.org/packages/20/89/8b6c72a7c712f2626735784069af80e1507232c6b1d5fab969ed178ba867/drizzle-2.2.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:5d29156de2ade51fa31e32ecdfe339c3d0c512a59479df65d4be3273a739a3e2", size = 102489, upload-time = "2026-01-06T23:33:33.47Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/ea/2e9178d3992878e26aa7e65cff82966ff63403f08709a8dd908170a2bbe2/drizzle-2.2.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:bcc1ff841ef1fe3f307d7e9255dcbc4405a63b9a91ed7b6adab70492c45e48b4", size = 362290, upload-time = "2026-01-06T23:33:34.864Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/7b/ed488c27f558ab0392a7e5aee0a2e9d3c33bc090bb03394346a76f68907a/drizzle-2.2.0-cp310-cp310-win32.whl", hash = "sha256:40d8cbd90e48aac857cf7430311674ac294ef5e56b5d9df78e9ad2ff4b52fb98", size = 91242, upload-time = "2026-01-06T23:33:35.896Z" },
+    { url = "https://files.pythonhosted.org/packages/88/f6/5c0d820bf29a7418730201d9c45c5637a9c70d0a5b4de24bacd5afc10aeb/drizzle-2.2.0-cp310-cp310-win_amd64.whl", hash = "sha256:b9f8ba3682569bb5cc0b4790fc93d55019a9d6af4487b6f80f91a636a5961e7d", size = 102152, upload-time = "2026-01-06T23:33:37.16Z" },
+    { url = "https://files.pythonhosted.org/packages/27/bf/be37740a183cc89145f93c0d063c4791fd89ebb58af5268810014a2d4d86/drizzle-2.2.0-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:cae7aac3a8d99cb77b66cd50269f237b2436e1b893e15d1d6ea636a47be4ac01", size = 108505, upload-time = "2026-01-06T23:33:38.184Z" },
+    { url = "https://files.pythonhosted.org/packages/37/b0/f55bf6424001ca00f2c79ab75fb37eb09fc1a746ea8181feeb1a8efe70b2/drizzle-2.2.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:bfb7aa2dd38f48c13e6250d280e02a41fa01c98dbeba3dae0e00d52b683c1f4a", size = 102491, upload-time = "2026-01-06T23:33:39.498Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/7c/79e5cd0e6168df1337ab70951f7b2f34d7e996e62dc05c34ae1428c8d4e3/drizzle-2.2.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9ade15efa6b612e859114038f03818dd25bf3c5b63d7f5aad66cd1973b62c9d0", size = 362540, upload-time = "2026-01-06T23:33:41.075Z" },
+    { url = "https://files.pythonhosted.org/packages/80/93/b20b33419bd65a0ec51159bb6c1f76d2826d1489ca14968ff34a2f0c532f/drizzle-2.2.0-cp311-cp311-win32.whl", hash = "sha256:2cfd6c4d6d8bc7d80591591880c0f21c06839492513c3257e4977d0d2c38f19f", size = 91243, upload-time = "2026-01-06T23:33:42.25Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/8a/317bd283a1217f707a1d092a280e13b7679712b3cd56b91ff0e506110369/drizzle-2.2.0-cp311-cp311-win_amd64.whl", hash = "sha256:8fa4d123d05aa5b23318fda89c5dc6490a67c1e73470e810860bd8ac0fed59e5", size = 102152, upload-time = "2026-01-06T23:33:43.299Z" },
+    { url = "https://files.pythonhosted.org/packages/9a/31/6bb9a3504c427f5e9e0c14e3f073c2835c168abe709ad183d41f6202728e/drizzle-2.2.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:0899ce40104244666832cdf9c41f902045c9249ac971a26324aa6a899cd85aef", size = 109346, upload-time = "2026-01-06T23:33:44.304Z" },
+    { url = "https://files.pythonhosted.org/packages/fa/83/c0d4761161a3c308a451af7ee00c719a501aefabd5ac4e55088739029e75/drizzle-2.2.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:3d5793ffc5980d16d39f0703bb5c2ebe90934f560b92ecceb86b25f770689878", size = 102496, upload-time = "2026-01-06T23:33:45.582Z" },
+    { url = "https://files.pythonhosted.org/packages/50/8e/41b5a677fd750cb5c0694772839e5bc06d5eb6486a99bc6f924bc310b6f3/drizzle-2.2.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1d55ca2b8afbe822a5ed9dfdc23e5a291313918c98efe80c01016103a6152c3f", size = 363685, upload-time = "2026-01-06T23:33:47.101Z" },
+    { url = "https://files.pythonhosted.org/packages/50/90/5669e6f22a4a6b0f210d661c90847de8221e20b208c9234cc6e5a829a688/drizzle-2.2.0-cp312-cp312-win32.whl", hash = "sha256:43dfd2c6a6613d690e7675404305b75fd62cb1b546e2d6f1465a103569f88fb8", size = 91349, upload-time = "2026-01-06T23:33:48.54Z" },
+    { url = "https://files.pythonhosted.org/packages/71/85/057e92e65e91edc49ab4604c555a6de47c069a4fcd04f0510adf962db25b/drizzle-2.2.0-cp312-cp312-win_amd64.whl", hash = "sha256:7b54972b2bd6106dcc0a1804ec4d2ab32a19f8dcf7f87bdd4b0501b20f28b1a0", size = 102259, upload-time = "2026-01-06T23:33:49.565Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/09/a59e920bb813c6f80318177b366cbe25f0919c898178f10aef5cd6d2eab4/drizzle-2.2.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:4077baf379acae2d9306696ec213b74f55e9e0e43f026c19a6f13d035a38d205", size = 109423, upload-time = "2026-01-06T23:33:50.552Z" },
+    { url = "https://files.pythonhosted.org/packages/31/85/8b6441a658fb5f82b0ba8c14354a7d362000a5565b4a6abe7c9551e90641/drizzle-2.2.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:2615009e30fbc3e81b979f62d684154e14da5b20b98a9ef8252521e45ee6b680", size = 102499, upload-time = "2026-01-06T23:33:51.829Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/ad/cd779c69253e07cde4888bddc259eafaeff63d56bdeec9dc94a58896e2a3/drizzle-2.2.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e478c2cd39e8eeb72a148df00cf9b1e0e61d7b868eb5d1603013f09aac6563f7", size = 363912, upload-time = "2026-01-06T23:33:53.087Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/58/9c92cd8ae6d4a62976bf47cb49bd0c2a31510aa090e46b29f41fd5148059/drizzle-2.2.0-cp313-cp313-win32.whl", hash = "sha256:af8c2657931b2c6b0334d42d4032cb4ec4d041cd7d69c5362bf8a9a3a96cfb56", size = 91348, upload-time = "2026-01-06T23:33:54.319Z" },
+    { url = "https://files.pythonhosted.org/packages/04/cf/2577713e0a44c3441c2fa96ef9b8e33a03d2f6de6611f2008723c0564390/drizzle-2.2.0-cp313-cp313-win_amd64.whl", hash = "sha256:e63e94acb92362375e4307c7a4cf72871f5663d1230e63e13375eb0998007569", size = 102257, upload-time = "2026-01-06T23:33:55.233Z" },
+    { url = "https://files.pythonhosted.org/packages/72/80/9341fa4d7aea71202d8d691383f7507e229c9ee44236078789d8486e4fcb/drizzle-2.2.0-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:1ad5c78223e5672078548f173528ffa8a1b04472144c15c6ab250c14af890569", size = 109506, upload-time = "2026-01-06T23:33:56.217Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/18/6834684da5bc4ad7f0e8565237a006fca7cc66ed778ddc7ffb2b5eff50ff/drizzle-2.2.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:027e235fae0d176b0b881f1599e76be42a56a99074536e4e8d6e59144a815a66", size = 102501, upload-time = "2026-01-06T23:33:57.179Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/13/059d88577ee4aa820df98f3afff9e9197aab991119944059cd4a7486f1aa/drizzle-2.2.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1e945e9721065418f532c8a85db6d58fe374228e4c66f8aabaeb12c71d08bdc7", size = 364228, upload-time = "2026-01-06T23:33:58.561Z" },
+    { url = "https://files.pythonhosted.org/packages/97/86/4c04661bf31c607ed3b4ebd7e63d14a12983f44e7498ba77404bec91c9ef/drizzle-2.2.0-cp314-cp314-win32.whl", hash = "sha256:7fb80ccf572401a342167ff1d8201818f7a3b9937d741d9c96828a6ce86504f9", size = 93039, upload-time = "2026-01-06T23:33:59.678Z" },
+    { url = "https://files.pythonhosted.org/packages/42/9a/eb22ee9c1f191056dbe9ea1afa21b6b792dc730d4374a1a99fce20a5884f/drizzle-2.2.0-cp314-cp314-win_amd64.whl", hash = "sha256:1b749ff7b4ccea4a6d578939c4de038c9cf6e332ad34c517f65c09f30c0679c9", size = 104296, upload-time = "2026-01-06T23:34:00.544Z" },
+    { url = "https://files.pythonhosted.org/packages/88/57/a7eff6080caf24732a9e15220e75585f76c7e29c9e9b8a18bf35d00f3ece/drizzle-2.2.0-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:1875e3b933af52448f8f877e4e79d8bcb75ba8906a85e5e39777ee51c75fe896", size = 109777, upload-time = "2026-01-06T23:34:01.902Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/0f/d038631379263a53d02324586d96402a27a84cb6893a10c8b11125375e1f/drizzle-2.2.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:a9ee4fb947f8c4ce164d0b7dbfdc8630f473de13b70791d42d2fa0d22948450b", size = 102931, upload-time = "2026-01-06T23:34:02.932Z" },
+    { url = "https://files.pythonhosted.org/packages/76/50/e9f5e7f322475711dbb64d429403715a49207d030d6533c25972da56d592/drizzle-2.2.0-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:db04bc3ba5605edb7ead39cd917f50041dbd9d27b0b7f8497256dc574ede6443", size = 369769, upload-time = "2026-01-06T23:34:04.254Z" },
+    { url = "https://files.pythonhosted.org/packages/df/d9/019a95a912787e817cebab09e12f495d22afef88d074bbee621fcc95fe12/drizzle-2.2.0-cp314-cp314t-win32.whl", hash = "sha256:cde691fdf1eb82912bd65639e06a0fdf33ed05003dbeac45a3faf98be7bd211a", size = 93710, upload-time = "2026-01-06T23:34:05.397Z" },
+    { url = "https://files.pythonhosted.org/packages/19/bd/287cc592050ad2452ca02f0457d2b3d7d31c434c5e4da837be4a6b5cc66c/drizzle-2.2.0-cp314-cp314t-win_amd64.whl", hash = "sha256:8318ae7bf254c5cc4b622e5ce9e08b4fe833a8e62d4f26c533fb3bd915a9ef8a", size = 105005, upload-time = "2026-01-06T23:34:06.436Z" },
 ]
 
 [[package]]
@@ -3291,6 +3351,8 @@ dependencies = [
 bench = [
     { name = "astropy", version = "6.1.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "astropy", version = "7.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "dfreproject" },
+    { name = "drizzle" },
     { name = "fitsio" },
     { name = "matplotlib" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -3328,6 +3390,8 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "astropy", marker = "extra == 'bench'", specifier = ">=5.0" },
+    { name = "dfreproject", marker = "extra == 'bench'", specifier = ">=1.3.0" },
+    { name = "drizzle", marker = "extra == 'bench'", specifier = ">=2.2.0" },
     { name = "fitsio", marker = "extra == 'bench'", specifier = ">=1.1" },
     { name = "ipykernel", marker = "extra == 'dev'" },
     { name = "matplotlib", marker = "extra == 'bench'", specifier = ">=3.0" },

@@ -1,0 +1,18 @@
+[
+  {
+    "case": "synthetic_shifted_wcs",
+    "library": "torchsky",
+    "method": "torchsky",
+    "variant": "bilinear",
+    "status": "OK"
+  },
+  {
+    "case": "synthetic_shifted_wcs",
+    "library": "reproject_interp",
+    "method": "reproject_interp",
+    "variant": "bilinear",
+    "status": "OK",
+    "max_abs_data_diff_vs_torchsky": 0.62,
+    "max_abs_weight_diff_vs_torchsky": 3.0
+  }
+]

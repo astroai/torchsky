@@ -22,6 +22,10 @@ from ..spectral import (
 )
 from ..wcs import healpix as _healpix
 
+from .fft_affine_ldu import resample_fft_ldu_affine_2d
+from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_fft2d
+from .periodic_affine import resample_linear_affine_periodic_bilinear_2d
+
 MapResamplingKernel = Literal[
     "nearest",
     "bilinear",
@@ -30,6 +34,10 @@ MapResamplingKernel = Literal[
     "lanczos5",
     "mitchell_netravali",
     "catmull_rom",
+    "fft_shift",
+    "fft_diagonal_affine",
+    "periodic_linear_affine",
+    "fft_linear_affine",
     "drizzle_point",
     "drizzle_square",
 ]
@@ -933,6 +941,206 @@ def _load_observation_weight_map(
     return weight_map * float(obs.weight)
 
 
+def _infer_fft_translation_shift_yx(
+    source_wcs: WCS,
+    target_wcs: WCS,
+    shape_hw: tuple[int, int],
+) -> tuple[float, float]:
+    """Infer ``(shift_y, shift_x)`` for :func:`resample_translation_fft2d` from WCS pair.
+
+    Requires target pixel centers to map to source pixels under a **pure translation**
+    (checked at five reference positions). Raises ``ValueError`` if not.
+
+    Convention matches :func:`torchsky.map.fft_resample.resample_translation_fft2d`
+    (see ``tests/test_map_fft_resample.test_fft_shift_matches_integer_roll``).
+    """
+    if getattr(source_wcs, "sip", None) is not None or bool(
+        getattr(source_wcs, "_is_tpv", False)
+    ):
+        raise ValueError(
+            "fft_shift requires a linear astrometric frame (no SIP or TPV on the source WCS)"
+        )
+    h, w = int(shape_hw[0]), int(shape_hw[1])
+    dev = torch.device("cpu")
+    jx = torch.tensor(
+        [0.0, float(w - 1), float(w - 1) * 0.5, 0.0, float(w - 1)],
+        device=dev,
+        dtype=torch.float64,
+    )
+    iy = torch.tensor(
+        [0.0, 0.0, float(h - 1) * 0.5, float(h - 1), float(h - 1)],
+        device=dev,
+        dtype=torch.float64,
+    )
+    ra, dec = target_wcs.pixel_to_world(jx, iy)
+    xs, ys = source_wcs.world_to_pixel(ra, dec)
+    dx = xs - jx
+    dy = ys - iy
+    mx = float(dx.mean().item())
+    my = float(dy.mean().item())
+    if not torch.allclose(dx, torch.full_like(dx, mx), rtol=1e-4, atol=1e-6):
+        raise ValueError(
+            "fft_shift requires a constant pixel translation between target and source WCS "
+            "(column offset not uniform on probe points)"
+        )
+    if not torch.allclose(dy, torch.full_like(dy, my), rtol=1e-4, atol=1e-6):
+        raise ValueError(
+            "fft_shift requires a constant pixel translation between target and source WCS "
+            "(row offset not uniform on probe points)"
+        )
+    # Align with ``resample_translation_fft2d`` / integer roll convention (see fft tests).
+    return (-my, -mx)
+
+
+def _infer_diagonal_scale_shift_pixel_map(
+    source_wcs: WCS,
+    target_wcs: WCS,
+    shape_hw: tuple[int, int],
+) -> tuple[float, float, float, float]:
+    """Infer ``(scale_x, shift_x, scale_y, shift_y)`` for diagonal affine source pixels.
+
+    Target pixel ``(iy, jx)`` (row, column) maps to source column ``scale_x * jx + shift_x``
+    and source row ``scale_y * iy + shift_y`` when the mapping is separable (no
+    significant cross-terms). Fits a 5×5 probe grid; raises ``ValueError`` if not.
+    """
+    if getattr(source_wcs, "sip", None) is not None or bool(
+        getattr(source_wcs, "_is_tpv", False)
+    ):
+        raise ValueError(
+            "fft_diagonal_affine requires a linear astrometric frame (no SIP or TPV on source)"
+        )
+    h, w = int(shape_hw[0]), int(shape_hw[1])
+    dev = torch.device("cpu")
+    j_line = torch.linspace(0.0, float(w - 1), 5, device=dev, dtype=torch.float64)
+    i_line = torch.linspace(0.0, float(h - 1), 5, device=dev, dtype=torch.float64)
+    ii, jj = torch.meshgrid(i_line, j_line, indexing="ij")
+    iy = ii.reshape(-1)
+    jx = jj.reshape(-1)
+    ra, dec = target_wcs.pixel_to_world(jx, iy)
+    xs, ys = source_wcs.world_to_pixel(ra, dec)
+    ones = torch.ones_like(jx)
+    ax = torch.stack([jx, iy, ones], dim=1)
+    sol_x = torch.linalg.lstsq(ax, xs.unsqueeze(-1), rcond=None).solution.squeeze(-1)
+    sol_y = torch.linalg.lstsq(
+        torch.stack([iy, jx, ones], dim=1), ys.unsqueeze(-1), rcond=None
+    ).solution.squeeze(-1)
+    sx = float(sol_x[0].item())
+    cx = float(sol_x[1].item())
+    bx = float(sol_x[2].item())
+    sy = float(sol_y[0].item())
+    dy = float(sol_y[1].item())
+    by = float(sol_y[2].item())
+    tol_c = max(1e-3, 1e-4 * max(abs(sx), abs(sy), 1.0))
+    if abs(cx) > tol_c or abs(dy) > tol_c:
+        raise ValueError(
+            "fft_diagonal_affine requires a separable diagonal pixel map (cross-terms too large)"
+        )
+    xs_fit = sx * jx + cx * iy + bx
+    ys_fit = sy * iy + dy * jx + by
+    max_x = float(torch.max(torch.abs(xs_fit - xs)).item())
+    max_y = float(torch.max(torch.abs(ys_fit - ys)).item())
+    if max_x > 5e-3 or max_y > 5e-3:
+        raise ValueError("fft_diagonal_affine WCS probes do not match a diagonal affine map")
+    if not all(math.isfinite(v) for v in (sx, sy, bx, by)):
+        raise ValueError("fft_diagonal_affine inferred non-finite parameters")
+    if abs(sx) < 1e-8 or abs(sy) < 1e-8:
+        raise ValueError("fft_diagonal_affine inferred degenerate scales")
+    return sx, bx, sy, by
+
+
+def _infer_linear_affine_pixel_map(
+    source_wcs: WCS,
+    target_wcs: WCS,
+    shape_hw: tuple[int, int],
+) -> tuple[float, float, float, float, float, float]:
+    """Infer full 2×2 affine map from target pixel ``(iy, jx)`` to source ``(ys, xs)``.
+
+    Uses the same 5×5 probe grid as :func:`_infer_diagonal_scale_shift_pixel_map`.
+    Returns ``(a00, a01, a10, a11, bx, by)`` with::
+
+        sx = a00 * jx + a01 * iy + bx
+        sy = a10 * jx + a11 * iy + by
+    """
+    if getattr(source_wcs, "sip", None) is not None or bool(
+        getattr(source_wcs, "_is_tpv", False)
+    ):
+        raise ValueError(
+            "periodic_linear_affine requires a linear astrometric frame (no SIP or TPV on source)"
+        )
+    h, w = int(shape_hw[0]), int(shape_hw[1])
+    dev = torch.device("cpu")
+    j_line = torch.linspace(0.0, float(w - 1), 5, device=dev, dtype=torch.float64)
+    i_line = torch.linspace(0.0, float(h - 1), 5, device=dev, dtype=torch.float64)
+    ii, jj = torch.meshgrid(i_line, j_line, indexing="ij")
+    iy = ii.reshape(-1)
+    jx = jj.reshape(-1)
+    ra, dec = target_wcs.pixel_to_world(jx, iy)
+    xs, ys = source_wcs.world_to_pixel(ra, dec)
+    ones = torch.ones_like(jx)
+    a_mat = torch.stack([jx, iy, ones], dim=1)
+    sol_x = torch.linalg.lstsq(a_mat, xs.unsqueeze(-1), rcond=None).solution.squeeze(-1)
+    sol_y = torch.linalg.lstsq(a_mat, ys.unsqueeze(-1), rcond=None).solution.squeeze(-1)
+    a00 = float(sol_x[0].item())
+    a01 = float(sol_x[1].item())
+    bx = float(sol_x[2].item())
+    a10 = float(sol_y[0].item())
+    a11 = float(sol_y[1].item())
+    by = float(sol_y[2].item())
+    det = a00 * a11 - a01 * a10
+    if not math.isfinite(det) or abs(det) < 1e-12:
+        raise ValueError("periodic_linear_affine inferred a degenerate linear map")
+    xs_fit = a00 * jx + a01 * iy + bx
+    ys_fit = a10 * jx + a11 * iy + by
+    max_x = float(torch.max(torch.abs(xs_fit - xs)).item())
+    max_y = float(torch.max(torch.abs(ys_fit - ys)).item())
+    if max_x > 5e-3 or max_y > 5e-3:
+        raise ValueError(
+            "periodic_linear_affine WCS probes do not match a linear affine pixel map"
+        )
+    return a00, a01, a10, a11, bx, by
+
+
+def _finalize_periodic_resampled_weighted(
+    sampled_numer: Tensor,
+    sampled_weight: Tensor,
+    sampled_support: Tensor | None,
+    *,
+    value_semantics: MapValueSemantics,
+    target_representative_area_sr: float | None,
+) -> tuple[Tensor, Tensor]:
+    if sampled_support is not None:
+        in_bounds = sampled_support > 0.25
+    else:
+        in_bounds = torch.ones_like(sampled_numer, dtype=torch.bool)
+    sampled_numer = torch.where(
+        in_bounds,
+        sampled_numer,
+        torch.zeros_like(sampled_numer),
+    )
+    sampled_weight = torch.where(
+        in_bounds,
+        sampled_weight,
+        torch.zeros_like(sampled_weight),
+    )
+    sampled_weight = torch.where(
+        sampled_weight > 0.0,
+        sampled_weight,
+        torch.zeros_like(sampled_weight),
+    )
+    sampled_numer = torch.where(
+        sampled_weight > 0.0,
+        sampled_numer,
+        torch.zeros_like(sampled_numer),
+    )
+    if (
+        value_semantics == "surface_brightness"
+        and target_representative_area_sr is not None
+    ):
+        sampled_numer = sampled_numer * float(target_representative_area_sr)
+        sampled_weight = sampled_weight * float(target_representative_area_sr)
+    return sampled_numer, sampled_weight
+
+
 def _apply_observation_calibration(
     obs: ImageObservation,
     image: Tensor,
@@ -994,6 +1202,196 @@ def _resample_weighted_to_target(
         if value_semantics == "flux"
         else None
     )
+
+    if resampling_kernel == "fft_shift":
+        if _requires_target_pixel_quadrature(
+            source_wcs,
+            value_semantics=value_semantics,
+        ):
+            raise ValueError(
+                "fft_shift is incompatible with flux quadrature on distorted WCS; "
+                "use bilinear or another kernel"
+            )
+        if (h_src, w_src) != (target.shape[0], target.shape[1]):
+            raise ValueError(
+                "fft_shift requires matching source and target array shapes "
+                f"(got source {(h_src, w_src)} vs target {tuple(int(v) for v in target.shape)})"
+            )
+        try:
+            sy, sx = _infer_fft_translation_shift_yx(
+                source_wcs,
+                target.wcs,
+                (h_src, w_src),
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "fft_shift could not infer a pure pixel translation between "
+                "source and target WCS"
+            ) from exc
+        shift_kw = {"shift_y_pix": float(sy), "shift_x_pix": float(sx)}
+        sampled_numer = resample_translation_fft2d(weighted_image, **shift_kw)
+        sampled_weight = resample_translation_fft2d(weighted_weight, **shift_kw)
+        sampled_support = (
+            resample_translation_fft2d(support_image, **shift_kw)
+            if support_image is not None
+            else None
+        )
+        return _finalize_periodic_resampled_weighted(
+            sampled_numer,
+            sampled_weight,
+            sampled_support,
+            value_semantics=value_semantics,
+            target_representative_area_sr=target_representative_area_sr,
+        )
+
+    if resampling_kernel == "fft_diagonal_affine":
+        if _requires_target_pixel_quadrature(
+            source_wcs,
+            value_semantics=value_semantics,
+        ):
+            raise ValueError(
+                "fft_diagonal_affine is incompatible with flux quadrature on distorted WCS; "
+                "use bilinear or another kernel"
+            )
+        if (h_src, w_src) != (target.shape[0], target.shape[1]):
+            raise ValueError(
+                "fft_diagonal_affine requires matching source and target array shapes "
+                f"(got source {(h_src, w_src)} vs target {tuple(int(v) for v in target.shape)})"
+            )
+        try:
+            d_sx, d_bx, d_sy, d_by = _infer_diagonal_scale_shift_pixel_map(
+                source_wcs,
+                target.wcs,
+                (h_src, w_src),
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "fft_diagonal_affine could not infer a separable diagonal affine pixel map "
+                "between source and target WCS"
+            ) from exc
+        aff_kw = {
+            "scale_x_pix": float(d_sx),
+            "shift_x_pix": float(d_bx),
+            "scale_y_pix": float(d_sy),
+            "shift_y_pix": float(d_by),
+        }
+        sampled_numer = resample_diagonal_affine_fft2d(weighted_image, **aff_kw)
+        sampled_weight = resample_diagonal_affine_fft2d(weighted_weight, **aff_kw)
+        sampled_support = (
+            resample_diagonal_affine_fft2d(support_image, **aff_kw)
+            if support_image is not None
+            else None
+        )
+        return _finalize_periodic_resampled_weighted(
+            sampled_numer,
+            sampled_weight,
+            sampled_support,
+            value_semantics=value_semantics,
+            target_representative_area_sr=target_representative_area_sr,
+        )
+
+    if resampling_kernel == "periodic_linear_affine":
+        if _requires_target_pixel_quadrature(
+            source_wcs,
+            value_semantics=value_semantics,
+        ):
+            raise ValueError(
+                "periodic_linear_affine is incompatible with flux quadrature on distorted WCS; "
+                "use bilinear or another kernel"
+            )
+        if (h_src, w_src) != (target.shape[0], target.shape[1]):
+            raise ValueError(
+                "periodic_linear_affine requires matching source and target array shapes "
+                f"(got source {(h_src, w_src)} vs target {tuple(int(v) for v in target.shape)})"
+            )
+        try:
+            la = _infer_linear_affine_pixel_map(
+                source_wcs,
+                target.wcs,
+                (h_src, w_src),
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "periodic_linear_affine could not infer a linear affine pixel map "
+                "between source and target WCS"
+            ) from exc
+        a00, a01, a10, a11, pbx, pby = la
+        aff_kw = {
+            "a00": a00,
+            "a01": a01,
+            "a10": a10,
+            "a11": a11,
+            "bx": pbx,
+            "by": pby,
+        }
+        sampled_numer = resample_linear_affine_periodic_bilinear_2d(weighted_image, **aff_kw)
+        sampled_weight = resample_linear_affine_periodic_bilinear_2d(weighted_weight, **aff_kw)
+        sampled_support = (
+            resample_linear_affine_periodic_bilinear_2d(support_image, **aff_kw)
+            if support_image is not None
+            else None
+        )
+        return _finalize_periodic_resampled_weighted(
+            sampled_numer,
+            sampled_weight,
+            sampled_support,
+            value_semantics=value_semantics,
+            target_representative_area_sr=target_representative_area_sr,
+        )
+
+    if resampling_kernel == "fft_linear_affine":
+        if _requires_target_pixel_quadrature(
+            source_wcs,
+            value_semantics=value_semantics,
+        ):
+            raise ValueError(
+                "fft_linear_affine is incompatible with flux quadrature on distorted WCS; "
+                "use bilinear or another kernel"
+            )
+        if (h_src, w_src) != (target.shape[0], target.shape[1]):
+            raise ValueError(
+                "fft_linear_affine requires matching source and target array shapes "
+                f"(got source {(h_src, w_src)} vs target {tuple(int(v) for v in target.shape)})"
+            )
+        try:
+            la = _infer_linear_affine_pixel_map(
+                source_wcs,
+                target.wcs,
+                (h_src, w_src),
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "fft_linear_affine could not infer a linear affine pixel map "
+                "between source and target WCS"
+            ) from exc
+        a00, a01, a10, a11, pbx, pby = la
+        aff_kw = {
+            "a00": a00,
+            "a01": a01,
+            "a10": a10,
+            "a11": a11,
+            "bx": pbx,
+            "by": pby,
+        }
+        try:
+            sampled_numer = resample_fft_ldu_affine_2d(weighted_image, **aff_kw)
+            sampled_weight = resample_fft_ldu_affine_2d(weighted_weight, **aff_kw)
+            sampled_support = (
+                resample_fft_ldu_affine_2d(support_image, **aff_kw)
+                if support_image is not None
+                else None
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "fft_linear_affine failed (try periodic_linear_affine for arbitrary affines)"
+            ) from exc
+        return _finalize_periodic_resampled_weighted(
+            sampled_numer,
+            sampled_weight,
+            sampled_support,
+            value_semantics=value_semantics,
+            target_representative_area_sr=target_representative_area_sr,
+        )
 
     def _sample_on_source_grid(
         x_src: Tensor,
@@ -1154,6 +1552,10 @@ def _validated_map_resampling_kernel(
         "lanczos5",
         "mitchell_netravali",
         "catmull_rom",
+        "fft_shift",
+        "fft_diagonal_affine",
+        "periodic_linear_affine",
+        "fft_linear_affine",
         "drizzle_point",
         "drizzle_square",
     )
@@ -1377,8 +1779,6 @@ def _maybe_external_drizzle_resample_weighted_to_target(
 ) -> tuple[Tensor, Tensor] | None:
     if not _is_drizzle_kernel(resampling_kernel):
         return None
-    if value_semantics != "surface_brightness":
-        return None
     helpers = _try_external_drizzle_helpers()
     if helpers is None:
         return None
@@ -1404,6 +1804,9 @@ def _maybe_external_drizzle_resample_weighted_to_target(
         refpix_from=source_wcs.wcs.crpix,
         refpix_to=target_wcs.wcs.crpix,
     )
+    # Match ``benchmarks/bench_map_smacs0723_reproduce.py`` / compat drizzle rows:
+    # surface-brightness products use unit iscale; flux-style stacking uses pscale^2.
+    iscale = 1.0 if value_semantics == "surface_brightness" else float(pscale_ratio) ** 2
     drizzle = DrizzleResampler(
         kernel=kernel,
         fillval=0.0,
@@ -1421,7 +1824,7 @@ def _maybe_external_drizzle_resample_weighted_to_target(
         .cpu()
         .numpy()
         .astype("float32"),
-        iscale=1.0,
+        iscale=iscale,
         pixel_scale_ratio=pscale_ratio,
         pixfrac=float(drizzle_pixfrac),
         in_units="cps",

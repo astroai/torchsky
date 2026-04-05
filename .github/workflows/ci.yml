@@ -70,6 +70,56 @@ jobs:
       run: |
         pytest tests/ -v --tb=short
 
+  map-mosaic-bench:
+    name: Map mosaic (bench extras + compat gate)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install system dependencies (Ubuntu)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+
+    - name: Install torchsky with bench optional dependencies
+      run: |
+        python -m pip install --upgrade pip wheel setuptools
+        pip install torch --index-url https://download.pytorch.org/whl/cpu
+        pip install nanobind scikit-build-core
+        pip install -e ".[bench]" --no-build-isolation
+
+    - name: Run full pytest (includes reproject + drizzle smoke)
+      run: |
+        pytest tests/ -q --tb=short
+
+    - name: Map compat gate vs baseline (synthetic_shifted_wcs)
+      run: |
+        PYTHONPATH=src:benchmarks python benchmarks/bench_map_compat.py \
+          --size 32 --n-obs 2 --runs 1 \
+          --cases synthetic_shifted_wcs \
+          --torchsky-kernels bilinear \
+          --reproject-kernels bilinear \
+          --drizzle-kernels point \
+          --swarp-kernels bilinear \
+          --json-out benchmark_results/map_compat_ci.json \
+          --baseline-json benchmarks/baselines/map_compat_ci_gate.json
+
+    - name: Bench smoke — fft_shift on CRPIX translation case
+      run: |
+        PYTHONPATH=src:benchmarks python benchmarks/bench_map_compat.py \
+          --size 32 --n-obs 2 --runs 1 \
+          --cases upstream_drizzle_crpix_translation \
+          --torchsky-kernels fft_shift \
+          --reproject-kernels bilinear \
+          --drizzle-kernels point \
+          --swarp-kernels bilinear \
+          --json-out benchmark_results/map_compat_fft_shift_smoke.json
+
   memory-safety:
     name: Memory Leak Detection
     runs-on: ubuntu-latest

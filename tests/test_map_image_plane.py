@@ -785,6 +785,377 @@ def test_coadd_image_plane_drizzle_kernel_uses_exact_external_path_when_availabl
     assert torch.isfinite(result.data).all()
 
 
+def test_coadd_fft_shift_matches_bilinear_for_pure_crpix_offset_interior(
+    tmp_path: Path,
+) -> None:
+    """fft_shift uses periodic FFT; interior should track bilinear for CRPIX-only offset."""
+    ny, nx = 48, 48
+    base = {
+        "NAXIS": 2,
+        "NAXIS1": nx,
+        "NAXIS2": ny,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": nx / 2.0,
+        "CRPIX2": ny / 2.0,
+        "CRVAL1": 180.0,
+        "CRVAL2": 0.0,
+        "CDELT1": -0.02,
+        "CDELT2": 0.02,
+    }
+    ha = dict(base)
+    ht = dict(base)
+    ht["CRPIX1"] = float(ht["CRPIX1"]) + 0.31
+    ht["CRPIX2"] = float(ht["CRPIX2"]) - 0.19
+    yy, xx = torch.meshgrid(
+        torch.arange(ny, dtype=torch.float32),
+        torch.arange(nx, dtype=torch.float32),
+        indexing="ij",
+    )
+    blob = torch.exp(
+        -((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 8.0**2)
+    )
+    path = tmp_path / "crpix.fits"
+    torchsky.write(str(path), blob, header=ha, overwrite=True)
+    obs = [ImageObservation(str(path))]
+    r_fft = coadd_image_plane(obs, target_header=ht, resampling_kernel="fft_shift")
+    r_bi = coadd_image_plane(obs, target_header=ht, resampling_kernel="bilinear")
+    inner_y = slice(10, ny - 10)
+    inner_x = slice(10, nx - 10)
+    mask = (
+        (r_fft.weight[inner_y, inner_x] > 0.0)
+        & (r_bi.weight[inner_y, inner_x] > 0.0)
+    )
+    assert int(mask.sum().item()) > 50
+    torch.testing.assert_close(
+        r_fft.data[inner_y, inner_x][mask],
+        r_bi.data[inner_y, inner_x][mask],
+        atol=0.06,
+        rtol=0.06,
+    )
+
+
+def test_coadd_fft_diagonal_affine_tracks_bilinear_scaled_cdelta_interior(
+    tmp_path: Path,
+) -> None:
+    """Diagonal affine FFT path: uniform CDELT scale should track bilinear in the interior."""
+    ny, nx = 56, 56
+    base = {
+        "NAXIS": 2,
+        "NAXIS1": nx,
+        "NAXIS2": ny,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": nx / 2.0,
+        "CRPIX2": ny / 2.0,
+        "CRVAL1": 100.0,
+        "CRVAL2": 8.0,
+        "CDELT1": -0.018,
+        "CDELT2": 0.018,
+    }
+    ha = dict(base)
+    ht = dict(base)
+    f = 1.05
+    ht["CDELT1"] = float(ht["CDELT1"]) * f
+    ht["CDELT2"] = float(ht["CDELT2"]) * f
+    yy, xx = torch.meshgrid(
+        torch.arange(ny, dtype=torch.float32),
+        torch.arange(nx, dtype=torch.float32),
+        indexing="ij",
+    )
+    blob = torch.exp(
+        -((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 9.0**2)
+    )
+    path = tmp_path / "diag_cdelta.fits"
+    torchsky.write(str(path), blob, header=ha, overwrite=True)
+    obs = [ImageObservation(str(path))]
+    r_fft = coadd_image_plane(obs, target_header=ht, resampling_kernel="fft_diagonal_affine")
+    r_bi = coadd_image_plane(obs, target_header=ht, resampling_kernel="bilinear")
+    inner_y = slice(12, ny - 12)
+    inner_x = slice(12, nx - 12)
+    mask = (
+        (r_fft.weight[inner_y, inner_x] > 0.0)
+        & (r_bi.weight[inner_y, inner_x] > 0.0)
+    )
+    assert int(mask.sum().item()) > 80
+    torch.testing.assert_close(
+        r_fft.data[inner_y, inner_x][mask],
+        r_bi.data[inner_y, inner_x][mask],
+        atol=0.08,
+        rtol=0.08,
+    )
+
+
+def test_coadd_periodic_linear_affine_matches_bilinear_skewed_cd_interior(
+    tmp_path: Path,
+) -> None:
+    """Full linear pixel map (rotated CD) on a torus bilinear path vs ``grid_sample``."""
+    ny, nx = 40, 40
+    base = {
+        "NAXIS": 2,
+        "NAXIS1": nx,
+        "NAXIS2": ny,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": nx / 2.0,
+        "CRPIX2": ny / 2.0,
+        "CRVAL1": 50.0,
+        "CRVAL2": 1.0,
+        "CDELT1": -0.02,
+        "CDELT2": 0.02,
+    }
+    ha = dict(base)
+    th_rad = math.radians(12.0)
+    sc = 0.02
+    ht = {
+        "NAXIS": 2,
+        "NAXIS1": nx,
+        "NAXIS2": ny,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": nx / 2.0,
+        "CRPIX2": ny / 2.0,
+        "CRVAL1": base["CRVAL1"],
+        "CRVAL2": base["CRVAL2"],
+        "CD1_1": -sc * math.cos(th_rad),
+        "CD1_2": sc * math.sin(th_rad),
+        "CD2_1": sc * math.sin(th_rad),
+        "CD2_2": sc * math.cos(th_rad),
+    }
+    yy, xx = torch.meshgrid(
+        torch.arange(ny, dtype=torch.float32),
+        torch.arange(nx, dtype=torch.float32),
+        indexing="ij",
+    )
+    blob = torch.exp(
+        -((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 6.0**2)
+    )
+    path = tmp_path / "skew_pla.fits"
+    torchsky.write(str(path), blob, header=ha, overwrite=True)
+    obs = [ImageObservation(str(path))]
+    r_p = coadd_image_plane(
+        obs,
+        target_header=ht,
+        resampling_kernel="periodic_linear_affine",
+    )
+    r_b = coadd_image_plane(obs, target_header=ht, resampling_kernel="bilinear")
+    inner_y = slice(8, ny - 8)
+    inner_x = slice(8, nx - 8)
+    mask = (r_p.weight[inner_y, inner_x] > 0.0) & (
+        r_b.weight[inner_y, inner_x] > 0.0
+    )
+    torch.testing.assert_close(
+        r_p.data[inner_y, inner_x][mask],
+        r_b.data[inner_y, inner_x][mask],
+        atol=1e-4,
+        rtol=1e-4,
+    )
+
+
+def test_coadd_fft_linear_affine_matches_periodic_linear_affine_scaled_cdelta_interior(
+    tmp_path: Path,
+) -> None:
+    """LDU FFT path reduces to periodic bilinear + translation when CD is diagonal-scaled."""
+    ny, nx = 56, 56
+    base = {
+        "NAXIS": 2,
+        "NAXIS1": nx,
+        "NAXIS2": ny,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": nx / 2.0,
+        "CRPIX2": ny / 2.0,
+        "CRVAL1": 100.0,
+        "CRVAL2": 8.0,
+        "CDELT1": -0.018,
+        "CDELT2": 0.018,
+    }
+    ha = dict(base)
+    ht = dict(base)
+    f = 1.05
+    ht["CDELT1"] = float(ht["CDELT1"]) * f
+    ht["CDELT2"] = float(ht["CDELT2"]) * f
+    yy, xx = torch.meshgrid(
+        torch.arange(ny, dtype=torch.float32),
+        torch.arange(nx, dtype=torch.float32),
+        indexing="ij",
+    )
+    blob = torch.exp(
+        -((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 9.0**2)
+    )
+    path = tmp_path / "diag_ldu.fits"
+    torchsky.write(str(path), blob, header=ha, overwrite=True)
+    obs = [ImageObservation(str(path))]
+    r_pla = coadd_image_plane(
+        obs, target_header=ht, resampling_kernel="periodic_linear_affine"
+    )
+    r_fl = coadd_image_plane(
+        obs, target_header=ht, resampling_kernel="fft_linear_affine"
+    )
+    inner_y = slice(12, ny - 12)
+    inner_x = slice(12, nx - 12)
+    mask = (r_pla.weight[inner_y, inner_x] > 0.0) & (
+        r_fl.weight[inner_y, inner_x] > 0.0
+    )
+    assert int(mask.sum().item()) > 80
+    torch.testing.assert_close(
+        r_fl.data[inner_y, inner_x][mask],
+        r_pla.data[inner_y, inner_x][mask],
+        atol=0.004,
+        rtol=0.02,
+    )
+
+
+def test_coadd_fft_diagonal_affine_rejects_skewed_cd_matrix(tmp_path: Path) -> None:
+    """Off-diagonal CD terms induce iy/jx cross-terms; diagonal FFT path must reject."""
+    ny, nx = 24, 24
+    base = {
+        "NAXIS": 2,
+        "NAXIS1": nx,
+        "NAXIS2": ny,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": nx / 2.0,
+        "CRPIX2": ny / 2.0,
+        "CRVAL1": 50.0,
+        "CRVAL2": 1.0,
+        "CDELT1": -0.02,
+        "CDELT2": 0.02,
+    }
+    ha = dict(base)
+    th = math.radians(17.0)
+    sc = 0.02
+    ht = {
+        "NAXIS": 2,
+        "NAXIS1": nx,
+        "NAXIS2": ny,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": nx / 2.0,
+        "CRPIX2": ny / 2.0,
+        "CRVAL1": base["CRVAL1"],
+        "CRVAL2": base["CRVAL2"],
+        "CD1_1": -sc * math.cos(th),
+        "CD1_2": sc * math.sin(th),
+        "CD2_1": sc * math.sin(th),
+        "CD2_2": sc * math.cos(th),
+    }
+    path = tmp_path / "skew.fits"
+    torchsky.write(str(path), torch.ones((ny, nx), dtype=torch.float32), header=ha)
+    with pytest.raises(ValueError, match="fft_diagonal_affine"):
+        coadd_image_plane(
+            [ImageObservation(str(path))],
+            target_header=ht,
+            resampling_kernel="fft_diagonal_affine",
+        )
+
+
+def test_coadd_fft_shift_rejects_crval_only_offset(
+    tmp_path: Path,
+) -> None:
+    ny, nx = 16, 16
+    ha = _simple_header()
+    ha["NAXIS1"] = nx
+    ha["NAXIS2"] = ny
+    ha["CRPIX1"] = nx / 2.0
+    ha["CRPIX2"] = ny / 2.0
+    ht = dict(ha)
+    ht["CRVAL1"] = float(ht["CRVAL1"]) + 0.05
+    path = tmp_path / "a.fits"
+    torchsky.write(str(path), torch.ones((ny, nx), dtype=torch.float32), header=ha)
+    with pytest.raises(ValueError, match="fft_shift"):
+        coadd_image_plane(
+            [ImageObservation(str(path))],
+            target_header=ht,
+            resampling_kernel="fft_shift",
+        )
+
+
+def test_coadd_bilinear_subpixel_crval_shift_preserves_finite_support(
+    tmp_path: Path,
+) -> None:
+    """SWarp/reproject-class subpixel sky shifts should stay finite on a smooth blob."""
+    ny, nx = 40, 40
+    base = {
+        "NAXIS": 2,
+        "NAXIS1": nx,
+        "NAXIS2": ny,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": nx / 2.0,
+        "CRPIX2": ny / 2.0,
+        "CRVAL1": 200.0,
+        "CRVAL2": 10.0,
+        "CDELT1": -0.015,
+        "CDELT2": 0.015,
+    }
+    ha = dict(base)
+    hb = dict(base)
+    hb["CRVAL1"] = float(hb["CRVAL1"]) + 0.4 * float(hb["CDELT1"])
+    hb["CRVAL2"] = float(hb["CRVAL2"]) + 0.3 * float(hb["CDELT2"])
+    yy, xx = torch.meshgrid(
+        torch.arange(ny, dtype=torch.float32),
+        torch.arange(nx, dtype=torch.float32),
+        indexing="ij",
+    )
+    blob = torch.exp(
+        -((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 6.0**2)
+    )
+    pa = tmp_path / "sub_a.fits"
+    pb = tmp_path / "sub_b.fits"
+    torchsky.write(str(pa), blob, header=ha, overwrite=True)
+    torchsky.write(str(pb), blob * 0.95 + 0.02, header=hb, overwrite=True)
+    result = coadd_image_plane(
+        [ImageObservation(str(pa)), ImageObservation(str(pb))],
+        resampling_kernel="bilinear",
+        stacking_method="weighted_mean",
+        value_semantics="surface_brightness",
+    )
+    assert torch.isfinite(result.data).all()
+    assert torch.isfinite(result.weight).all()
+    assert float(result.weight.max().item()) > 0.0
+
+
+def test_coadd_bilinear_partial_overlap_at_frame_edge_is_finite(
+    tmp_path: Path,
+) -> None:
+    """SWarp-class stacks often have partial footprint support at tile edges."""
+    ny, nx = 32, 32
+    base = {
+        "NAXIS": 2,
+        "NAXIS1": nx,
+        "NAXIS2": ny,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": nx / 2.0,
+        "CRPIX2": ny / 2.0,
+        "CRVAL1": 180.0,
+        "CRVAL2": 0.0,
+        "CDELT1": -0.02,
+        "CDELT2": 0.02,
+    }
+    path_a = tmp_path / "edge_a.fits"
+    path_b = tmp_path / "edge_b.fits"
+    ha = dict(base)
+    hb = dict(base)
+    hb["CRVAL1"] = float(hb["CRVAL1"]) + 0.45 * float(hb["CDELT1"])
+    data = torch.ones((ny, nx), dtype=torch.float32)
+    torchsky.write(str(path_a), data, header=ha, overwrite=True)
+    torchsky.write(str(path_b), data * 1.2, header=hb, overwrite=True)
+
+    result = coadd_image_plane(
+        [ImageObservation(str(path_a)), ImageObservation(str(path_b))],
+        resampling_kernel="bilinear",
+        stacking_method="weighted_mean",
+        value_semantics="surface_brightness",
+    )
+    assert torch.isfinite(result.data).all()
+    assert torch.isfinite(result.weight).all()
+    assert result.overlap_count is not None
+    assert int((result.overlap_count > 0).sum().item()) > 0
+    assert int((result.overlap_count > 1).sum().item()) > 0
+
+
 def test_coadd_image_plane_rejects_non_positive_drizzle_pixfrac(
     tmp_path: Path,
 ) -> None:

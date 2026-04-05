@@ -1,5 +1,9 @@
 """Mapmaking entry points."""
 
+from .fft_affine_ldu import resample_fft_ldu_affine_2d
+from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_fft2d
+from .healpix_image_plane import healpix_nside_from_map_len, sample_healpix_map_on_tan_header
+from .periodic_affine import resample_linear_affine_periodic_bilinear_2d
 from .field import (
     BandpassConditionedField,
     ConditionedSpectralField,
@@ -130,6 +134,12 @@ __all__ = [
     "render_field_observation",
     "render_field_observation_distribution",
     "render_field_product",
+    "healpix_nside_from_map_len",
+    "resample_diagonal_affine_fft2d",
+    "resample_fft_ldu_affine_2d",
+    "resample_linear_affine_periodic_bilinear_2d",
+    "resample_translation_fft2d",
+    "sample_healpix_map_on_tan_header",
     "stack_map_product",
     "write_map_benchmark_artifacts",
 ]

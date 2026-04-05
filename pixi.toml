@@ -207,6 +207,10 @@ psutil = ">=5.9"
 pytest-benchmark = ">=4.0"
 reproject = ">=0.14"
 
+[feature.bench.pypi-dependencies]
+drizzle = "==2.2.0"
+dfreproject = "==1.3.1"
+
 [feature.sphere-bench.dependencies]
 healpy = ">=1.19.0,<2"
 hpgeom = ">=1.0"
@@ -218,8 +222,6 @@ pybind11 = ">=2.12"
 hypothesis = ">=6.0"
 
 [feature.sphere-bench.pypi-dependencies]
-drizzle = "==2.2.0"
-dfreproject = "==1.3.1"
 
 [feature.map-compat.dependencies]
 python = "3.13.*"
@@ -236,6 +238,7 @@ wcslib = ">=8"
 
 [feature.map-compat.pypi-dependencies]
 MontagePy = "*"
+drizzle = "==2.2.0"
 
 [feature.bench-legacy.dependencies]
 python = "3.10.*"

@@ -2,6 +2,12 @@
 
 This page documents the benchmark methodology. The snapshot tables below reflect the **0.3.1** release; update with each release run.
 
+## CI: map compat gate
+
+On each push/PR, workflow **Map mosaic (bench extras + compat gate)** (see `.github/workflows/ci.yml`) installs **`torchsky[bench]`**, runs the full **`pytest tests/`** suite (including **`reproject`** bilinear/bicubic parity, optional **`dfreproject`** bilinear parity, and optional **`drizzle`** external-path smoke tests), then runs **`benchmarks/bench_map_compat.py`** on **`synthetic_shifted_wcs`** with **`benchmarks/baselines/map_compat_ci_gate.json`** enforcing status and comparator diff ceilings for the bilinear `reproject_interp` row. A follow-up bench step runs **`torchsky:fft_shift`** on **`upstream_drizzle_crpix_translation`** (no baseline; smoke only). A weekly **`workflow_dispatch` / schedule** copy is in **`.github/workflows/map_compat_weekly.yml`**.
+
+**Optional map-compat wall-time regression:** after recording representative `time_ms` rows on a pinned runner, pass **`--time-baseline-json`** (format in **`benchmarks/baselines/map_compat_time_gate_example.json`**) and **`--time-regression-tolerance`** (default `0.35`) to fail if OK rows slow down beyond the baseline. This is intentionally **off** in default CI because wall times vary by hardware.
+
 ## Main Scripts
 
 | Script | Description |

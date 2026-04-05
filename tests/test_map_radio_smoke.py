@@ -39,6 +39,27 @@ def _radio_tp_header_dict(*, size: int = 24, crval2: float = -10.0) -> dict:
     }
 
 
+def test_radio_stokes_cube_header_write_read_roundtrip(tmp_path: Path) -> None:
+    """Small I-only cube with RESTFRQ / SPECSYS (mm-style metadata) round-trips via FITS."""
+    size = 12
+    h = _radio_tp_header_dict(size=size)
+    h["NAXIS"] = 3
+    h["NAXIS3"] = 1
+    h["CTYPE3"] = "STOKES"
+    h["CRPIX3"] = 1.0
+    h["CRVAL3"] = 1.0
+    h["CDELT3"] = 1.0
+    h["RESTFRQ"] = 1.420405752e9
+    h["SPECSYS"] = "LSRK"
+    cube = torch.ones(1, size, size, dtype=torch.float32)
+    path = tmp_path / "stokes_i.fits"
+    torchsky.write(str(path), cube, header=h, overwrite=True)
+    back, hdr = torchsky.read(str(path), return_header=True)
+    assert tuple(int(back.shape[i]) for i in range(back.ndim)) == (1, size, size)
+    assert int(hdr.get("NAXIS", 0)) == 3
+    assert float(hdr["RESTFRQ"]) == pytest.approx(1.420405752e9)
+
+
 def test_coadd_synthetic_radio_pair_smoke(tmp_path: Path) -> None:
     size = 24
     yy, xx = np.mgrid[0:size, 0:size]
