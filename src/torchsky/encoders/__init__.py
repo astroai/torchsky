@@ -12,6 +12,21 @@ from ..coords import spherical_fourier_features
 from ..wcs.healpix import lonlat_to_xyz
 
 
+def sky_encoder_fourier_min_frequency(*, patch_extent_deg: float) -> float:
+    """Minimum ``min_frequency`` for :func:`~torchsky.wcs.healpix.spherical_fourier_features`.
+
+    Maps approximately one oscillation across an angular patch whose typical extent is
+    ``patch_extent_deg`` (degrees). Use ``FieldDomain.spatial_scale_deg`` from
+    :func:`torchsky.map.field.estimate_field_domain` so multi-scale Fourier bands align
+    with the fitted footprint rather than defaulting to whole-sphere periods.
+
+    For a ~360° domain this returns ~1.0 (global modes). For arcminute fields it increases
+    so mid-level ``base**k`` bands resolve structure inside the patch.
+    """
+    theta = math.radians(max(float(patch_extent_deg), 1.0e-9))
+    return (2.0 * math.pi) / max(theta, 1.0e-12)
+
+
 def harmonic_sky_encoding(
     ra_deg: Tensor,
     dec_deg: Tensor,
@@ -117,11 +132,15 @@ class SkyCoordinateEncoder(nn.Module):
         num_fourier_frequencies: int = 4,
         spectral_frequencies: int = 4,
         include_degree2: bool = True,
+        min_frequency: float = 1.0,
     ) -> None:
         super().__init__()
         self.num_fourier_frequencies = num_fourier_frequencies
         self.spectral_frequencies = spectral_frequencies
         self.include_degree2 = include_degree2
+        if float(min_frequency) <= 0.0:
+            raise ValueError("min_frequency must be positive")
+        self.min_frequency = float(min_frequency)
 
     def forward(
         self,
@@ -140,6 +159,7 @@ class SkyCoordinateEncoder(nn.Module):
             ra_deg,
             dec_deg,
             num_frequencies=self.num_fourier_frequencies,
+            min_frequency=self.min_frequency,
             include_xyz=True,
             include_lonlat=True,
         )
@@ -161,4 +181,5 @@ __all__ = [
     "SirenImplicitField",
     "harmonic_sky_encoding",
     "log_spectral_encoding",
+    "sky_encoder_fourier_min_frequency",
 ]

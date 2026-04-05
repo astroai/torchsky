@@ -533,7 +533,7 @@ def test_field_fit_benchmark_reports_uncertainty_for_coadd_and_field() -> None:
         model_kind="sky_encoder_mlp",
         size=24,
         seed=1234,
-        steps=8,
+        steps=16,  # short fits need enough steps for support-density proxy ordering vs chance
         runs=1,
     )
 

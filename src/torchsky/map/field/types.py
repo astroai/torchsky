@@ -54,6 +54,13 @@ FieldNoisePretrainKind = Literal["none", "uniform", "gaussian", "spectrum"]
 
 @dataclass(frozen=True)
 class FieldDomain:
+    """Sky + wavelength normalization box for continuous field models.
+
+    ``spatial_scale_deg`` is a footprint scale in degrees (from WCS pixel scale × extent).
+    Sky-encoder fields use it when ``scale_fourier_to_domain=True`` to choose spherical
+    Fourier ``min_frequency`` so bands resolve structure inside the patch.
+    """
+
     center_ra_deg: float
     center_dec_deg: float
     spatial_scale_deg: float

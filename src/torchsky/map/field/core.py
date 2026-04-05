@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from ... import WCS
-from ...encoders import SkyCoordinateEncoder
+from ...encoders import SkyCoordinateEncoder, sky_encoder_fourier_min_frequency
 from ...spectral import SpectralAxis
 
 from .types import (
@@ -1449,21 +1449,17 @@ class SkyEncoderBandpassField(_BaseFieldModel):
         spectral_frequencies: int = 6,
         num_bandpass_frequencies: int = 6,
         bandpass_hidden_dim: int = 48,
+        scale_fourier_to_domain: bool = True,
     ) -> None:
         super().__init__(domain)
         self.num_bandpass_frequencies = int(num_bandpass_frequencies)
-        self.encoder = SkyCoordinateEncoder(
+        self.encoder = _make_sky_coordinate_encoder(
+            domain,
             num_fourier_frequencies=num_fourier_frequencies,
             spectral_frequencies=spectral_frequencies,
-            include_degree2=True,
+            scale_fourier_to_domain=scale_fourier_to_domain,
         )
-        with torch.no_grad():
-            dummy = self.encoder(
-                torch.zeros(1, dtype=torch.float64),
-                torch.zeros(1, dtype=torch.float64),
-                wavelength=torch.ones(1, dtype=torch.float64),
-            )
-        encoded_dim = int(dummy.shape[-1])
+        encoded_dim = _sky_encoder_output_dim(self.encoder)
         bandpass_in_dim = 4 + 2 * max(self.num_bandpass_frequencies, 0)
         self.bandpass_hidden = nn.Sequential(
             nn.Linear(bandpass_in_dim, bandpass_hidden_dim),
@@ -1484,14 +1480,10 @@ class SkyEncoderBandpassField(_BaseFieldModel):
     def _reset_parameters(self) -> None:
         for module in self.bandpass_hidden:
             if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
+                nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
                 nn.init.zeros_(module.bias)
-        for module in self.hidden:
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-                nn.init.zeros_(module.bias)
-        nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
-        nn.init.constant_(self.output.bias, -3.0)
+        _reset_silu_mlp_linears(self.hidden)
+        _reset_logflux_readout_linear(self.output)
 
     def _bandpass_features(self, wavelengths: Tensor, weights: Tensor) -> Tensor:
         lam = (
@@ -1827,6 +1819,59 @@ class _ResidualStack(nn.Module):
         return x
 
 
+def _make_sky_coordinate_encoder(
+    domain: FieldDomain,
+    *,
+    num_fourier_frequencies: int,
+    spectral_frequencies: int,
+    include_degree2: bool = True,
+    scale_fourier_to_domain: bool = True,
+) -> SkyCoordinateEncoder:
+    min_freq = 1.0
+    if scale_fourier_to_domain:
+        min_freq = sky_encoder_fourier_min_frequency(
+            patch_extent_deg=float(domain.spatial_scale_deg),
+        )
+    return SkyCoordinateEncoder(
+        num_fourier_frequencies=num_fourier_frequencies,
+        spectral_frequencies=spectral_frequencies,
+        include_degree2=include_degree2,
+        min_frequency=min_freq,
+    )
+
+
+def _sky_encoder_output_dim(encoder: SkyCoordinateEncoder) -> int:
+    with torch.no_grad():
+        tensor = encoder(
+            torch.zeros(1, dtype=torch.float64),
+            torch.zeros(1, dtype=torch.float64),
+            wavelength=torch.ones(1, dtype=torch.float64),
+        )
+    return int(tensor.shape[-1])
+
+
+def _silu_mlp_sequential(in_dim: int, hidden_dim: int, hidden_layers: int) -> nn.Sequential:
+    layers: list[nn.Module] = []
+    current_dim = in_dim
+    for _ in range(max(int(hidden_layers), 1)):
+        layers.append(nn.Linear(current_dim, hidden_dim))
+        layers.append(nn.SiLU())
+        current_dim = hidden_dim
+    return nn.Sequential(*layers)
+
+
+def _reset_silu_mlp_linears(sequence: nn.Sequential) -> None:
+    for module in sequence:
+        if isinstance(module, nn.Linear):
+            nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
+            nn.init.zeros_(module.bias)
+
+
+def _reset_logflux_readout_linear(linear: nn.Linear) -> None:
+    nn.init.uniform_(linear.weight, -1e-2, 1e-2)
+    nn.init.constant_(linear.bias, -3.0)
+
+
 class SkyEncoderMLPField(_BaseFieldModel):
     def __init__(
         self,
@@ -1834,39 +1879,25 @@ class SkyEncoderMLPField(_BaseFieldModel):
         *,
         hidden_dim: int = 96,
         hidden_layers: int = 3,
-        num_fourier_frequencies: int = 6,
-        spectral_frequencies: int = 4,
+        num_fourier_frequencies: int = 8,
+        spectral_frequencies: int = 5,
+        scale_fourier_to_domain: bool = True,
     ) -> None:
         super().__init__(domain)
-        self.encoder = SkyCoordinateEncoder(
+        self.encoder = _make_sky_coordinate_encoder(
+            domain,
             num_fourier_frequencies=num_fourier_frequencies,
             spectral_frequencies=spectral_frequencies,
-            include_degree2=True,
+            scale_fourier_to_domain=scale_fourier_to_domain,
         )
-        with torch.no_grad():
-            dummy = self.encoder(
-                torch.zeros(1, dtype=torch.float64),
-                torch.zeros(1, dtype=torch.float64),
-                wavelength=torch.ones(1, dtype=torch.float64),
-            )
-        in_dim = int(dummy.shape[-1])
-        layers: list[nn.Module] = []
-        current_dim = in_dim
-        for _ in range(max(int(hidden_layers), 1)):
-            layers.append(nn.Linear(current_dim, hidden_dim))
-            layers.append(nn.SiLU())
-            current_dim = hidden_dim
-        self.hidden = nn.Sequential(*layers)
-        self.output = nn.Linear(current_dim, 1)
+        in_dim = _sky_encoder_output_dim(self.encoder)
+        self.hidden = _silu_mlp_sequential(in_dim, hidden_dim, hidden_layers)
+        self.output = nn.Linear(hidden_dim, 1)
         self._reset_parameters()
 
     def _reset_parameters(self) -> None:
-        for module in self.hidden:
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-                nn.init.zeros_(module.bias)
-        nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
-        nn.init.constant_(self.output.bias, -3.0)
+        _reset_silu_mlp_linears(self.hidden)
+        _reset_logflux_readout_linear(self.output)
 
     def forward(
         self,
@@ -1886,11 +1917,7 @@ class SkyEncoderMLPField(_BaseFieldModel):
             dec_deg.to(dtype=torch.float64),
             wavelength=wavelength,
         )
-        output_dtype = (
-            self.output[0].weight.dtype
-            if isinstance(self.output, nn.Sequential)
-            else self.output.weight.dtype
-        )
+        output_dtype = self.output.weight.dtype
         feats = feats.to(dtype=output_dtype)
         out = self.output(self.hidden(feats)).squeeze(-1)
         return F.softplus(out) + 1.0e-4
@@ -1909,30 +1936,20 @@ class StrainerSkyEncoderMLPField(_BaseFieldModel):
         *,
         hidden_dim: int = 96,
         hidden_layers: int = 3,
-        num_fourier_frequencies: int = 6,
-        spectral_frequencies: int = 4,
+        num_fourier_frequencies: int = 8,
+        spectral_frequencies: int = 5,
+        scale_fourier_to_domain: bool = True,
     ) -> None:
         super().__init__(domain)
-        self.encoder = SkyCoordinateEncoder(
+        self.encoder = _make_sky_coordinate_encoder(
+            domain,
             num_fourier_frequencies=num_fourier_frequencies,
             spectral_frequencies=spectral_frequencies,
-            include_degree2=True,
+            scale_fourier_to_domain=scale_fourier_to_domain,
         )
-        with torch.no_grad():
-            dummy = self.encoder(
-                torch.zeros(1, dtype=torch.float64),
-                torch.zeros(1, dtype=torch.float64),
-                wavelength=torch.ones(1, dtype=torch.float64),
-            )
-        in_dim = int(dummy.shape[-1])
-        layers: list[nn.Module] = []
-        current_dim = in_dim
-        for _ in range(max(int(hidden_layers), 1)):
-            layers.append(nn.Linear(current_dim, hidden_dim))
-            layers.append(nn.SiLU())
-            current_dim = hidden_dim
-        self.body = nn.Sequential(*layers)
-        self.decoder_head = nn.Linear(current_dim, 1)
+        in_dim = _sky_encoder_output_dim(self.encoder)
+        self.body = _silu_mlp_sequential(in_dim, hidden_dim, hidden_layers)
+        self.decoder_head = nn.Linear(hidden_dim, 1)
         self._reset_parameters()
 
     @property
@@ -1940,12 +1957,8 @@ class StrainerSkyEncoderMLPField(_BaseFieldModel):
         return self.decoder_head
 
     def _reset_parameters(self) -> None:
-        for module in self.body:
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-                nn.init.zeros_(module.bias)
-        nn.init.uniform_(self.decoder_head.weight, -1e-2, 1e-2)
-        nn.init.constant_(self.decoder_head.bias, -3.0)
+        _reset_silu_mlp_linears(self.body)
+        _reset_logflux_readout_linear(self.decoder_head)
 
     def reset_decoder_head(self, *, bias_init: float = -3.0) -> None:
         nn.init.uniform_(self.decoder_head.weight, -1e-2, 1e-2)
@@ -2136,21 +2149,17 @@ class SkyEncoderResMLPField(_BaseFieldModel):
         spectral_frequencies: int = 6,
         multiscale_readout: bool = False,
         readout_hidden_dim: int | None = None,
+        scale_fourier_to_domain: bool = True,
     ) -> None:
         super().__init__(domain)
         self.multiscale_readout = bool(multiscale_readout)
-        self.encoder = SkyCoordinateEncoder(
+        self.encoder = _make_sky_coordinate_encoder(
+            domain,
             num_fourier_frequencies=num_fourier_frequencies,
             spectral_frequencies=spectral_frequencies,
-            include_degree2=True,
+            scale_fourier_to_domain=scale_fourier_to_domain,
         )
-        with torch.no_grad():
-            dummy = self.encoder(
-                torch.zeros(1, dtype=torch.float64),
-                torch.zeros(1, dtype=torch.float64),
-                wavelength=torch.ones(1, dtype=torch.float64),
-            )
-        in_dim = int(dummy.shape[-1])
+        in_dim = _sky_encoder_output_dim(self.encoder)
         self.input = nn.Linear(in_dim, hidden_dim)
         self.blocks = nn.ModuleList(
             [_ResidualMLPBlock(hidden_dim) for _ in range(max(int(num_blocks), 1))]
@@ -2172,12 +2181,12 @@ class SkyEncoderResMLPField(_BaseFieldModel):
         self._reset_parameters()
 
     def _reset_parameters(self) -> None:
-        nn.init.xavier_uniform_(self.input.weight)
+        nn.init.kaiming_uniform_(self.input.weight, nonlinearity="relu")
         nn.init.zeros_(self.input.bias)
         if isinstance(self.output, nn.Sequential):
             for module in self.output:
                 if isinstance(module, nn.Linear):
-                    nn.init.xavier_uniform_(module.weight)
+                    nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
                     nn.init.zeros_(module.bias)
             final = self.output[-1]
             assert isinstance(final, nn.Linear)

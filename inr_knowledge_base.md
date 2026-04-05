@@ -292,6 +292,21 @@ The shared `_HashGridEncoder` used by `HashGridMLPField`, `HashGridResMLPField`,
 
 Optional `hash_level_gain` supplies learnable per-level scalars on encoder outputs (useful when mixing many resolutions). Set `hash_dense_coarse=False` to recover the older “always hashed” behavior for reproducibility with legacy checkpoints.
 
+## Sky-coordinate MLP fields: API cleanup, defaults, and scalability
+
+**Implementation (current):**
+
+- Shared helpers in `torchsky.map.field.core`: `_make_sky_coordinate_encoder`, `_silu_mlp_sequential`, `_reset_silu_mlp_linears`, `_reset_logflux_readout_linear` unify `SkyEncoderMLPField` and `StrainerSkyEncoderMLPField` (same trunk layout; Strainer keeps `decoder_head` + checkpoint hooks).
+- `SkyCoordinateEncoder` takes `min_frequency` (passed to `spherical_fourier_features`). When `scale_fourier_to_domain=True` (default on `SkyEncoderMLPField`, `StrainerSkyEncoderMLPField`, `SkyEncoderResMLPField`, `SkyEncoderBandpassField`), `min_frequency` is set from `FieldDomain.spatial_scale_deg` via `torchsky.encoders.sky_encoder_fourier_min_frequency` so the lowest Fourier band has ~one period across the fitted footprint. Set `scale_fourier_to_domain=False` to match older checkpoints or A/B tests.
+- Hidden SiLU stacks use Kaiming init for linear layers; readout stays small uniform weights and bias `-3` before `softplus` for positive flux-ish outputs.
+
+**What blocks “full sky, arcsec resolution” in one forward INR:**
+
+- **Query cost:** A dense map is one forward pass per pixel (times spectral samples). Full-sky × arcsec is billions of queries; you must **chunk** rendering (`render_field_cube` / batched planes), stream tiles, or switch to structured grids (hash grid, feature planes, HEALPix-native fields) with bounded table sizes per tile.
+- **Capacity vs memory:** Pure MLP has fixed parameters (good) but limited high-frequency detail unless width/depth or encodings grow; hash grids scale memory with `num_levels`, `features_per_level`, and `2**log2_hashmap_size` per level—**tiling** or **multi-field mosaics** are the practical route for all-sky.
+- **Encoding geometry:** Lon/lat Fourier features are periodic in angle; for **planet-scale patches** `spatial_scale_deg ≈ 360` yields `min_frequency ≈ 1` (global modes). Sub-degree surveys get larger `min_frequency` automatically. The Cartesian `sin(f * x)` terms on unit-sphere `x,y,z` are high-frequency local mixers; most angular periodicity is in the lon/lat block.
+- **Numerics:** Encoders run sky angles in **float64** on purpose; keep that path for wide RA/Dec ranges.
+
 ## What these papers suggest for `torchsky`
 
 The current strongest directions are:

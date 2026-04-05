@@ -5,6 +5,7 @@ from torchsky.encoders import (
     SkyCoordinateEncoder,
     harmonic_sky_encoding,
     log_spectral_encoding,
+    sky_encoder_fourier_min_frequency,
 )
 
 
@@ -32,6 +33,25 @@ def test_sky_coordinate_encoder_combines_spatial_and_spectral_features() -> None
     feats = enc(ra, dec, wavelength=wavelength)
     assert feats.shape[0] == 8
     assert feats.shape[1] > 10
+
+
+def test_sky_encoder_fourier_min_frequency_scales_with_patch() -> None:
+    small = sky_encoder_fourier_min_frequency(patch_extent_deg=1.0)
+    large = sky_encoder_fourier_min_frequency(patch_extent_deg=10.0)
+    assert small > large > 0.0
+
+
+def test_sky_coordinate_encoder_min_frequency_changes_fourier_features() -> None:
+    ra = torch.tensor([10.0, 20.0], dtype=torch.float64)
+    dec = torch.tensor([0.0, 1.0], dtype=torch.float64)
+    a = SkyCoordinateEncoder(
+        num_fourier_frequencies=2, spectral_frequencies=0, min_frequency=1.0
+    )(ra, dec)
+    b = SkyCoordinateEncoder(
+        num_fourier_frequencies=2, spectral_frequencies=0, min_frequency=5.0
+    )(ra, dec)
+    assert a.shape == b.shape
+    assert not torch.allclose(a, b)
 
 
 def test_harmonic_sky_encoding_requires_enabled_components() -> None:
