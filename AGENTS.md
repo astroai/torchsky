@@ -64,6 +64,7 @@ Geometric primitives, mapmaking, and cross-wavelength field representations are 
   - `astropy-healpix`
   - `spherical-geometry`
   - `astropy` / `fitsio`
+- See `docs/compatibility.md` for how these map onto torchsky modules (e.g. HEALPix/healpy-shaped APIs under `torchsky.sphere.compat`).
 - Compatibility work should target behavior users depend on, test fixtures, and operational workflows.
 - The compatibility layer should sit on top of torchsky-native primitives where possible, not define the primitive architecture.
 - Avoid exposing low-level internal kernels as public API unless repeated use or composability clearly justifies them.

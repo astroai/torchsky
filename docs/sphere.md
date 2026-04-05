@@ -494,9 +494,11 @@ For large $N_\text{side}$ or batch transforms, `torchsky.sphere` substantially o
 
 ## Compatibility Map
 
+See also **[Ecosystem compatibility](compatibility.md)** for how healpy/hpgeom fit into torchsky’s wider goal of replacing or interoperating with **Astropy, fitsio, spherical_geometry**, and other common packages—not HEALPix alone.
+
 Status: `parity` = upstream-compatible semantics · `extended` = torchsky-native additions · `partial` = known gaps · `planned` = not yet implemented.
 
-Functions in `torchsky.sphere.compat` mirror the [healpy](https://healpy.readthedocs.io/) and [hpgeom](https://github.com/LSSTDESC/hpgeom) APIs and can be used as drop-in replacements.
+Functions in `torchsky.sphere.compat` (and the `torchsky.sphere.healpy` alias) mirror the [healpy](https://healpy.readthedocs.io/) and [hpgeom](https://github.com/LSSTDESC/hpgeom) APIs and can be used as drop-in replacements at the tensor boundary.
 
 | Function | Status | Notes |
 |---|---|---|

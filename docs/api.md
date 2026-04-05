@@ -2,6 +2,8 @@
 
 ## Quick Paths
 
+For migrating from **healpy**, **Astropy**, **fitsio**, and related stacks, see **[Ecosystem compatibility](compatibility.md)**.
+
 | Goal | Entry point |
 |---|---|
 | Read image/table | `torchsky.read(path, hdu=..., return_header=True)` |

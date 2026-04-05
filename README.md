@@ -65,6 +65,7 @@ Full benchmarks and known deficits: [`docs/benchmarks.md`](docs/benchmarks.md)
 ## Documentation
 
 - User/API reference: [`docs/api.md`](docs/api.md)
+- Ecosystem compatibility (healpy, Astropy, fitsio, …): [`docs/compatibility.md`](docs/compatibility.md)
 - End-to-end examples: [`docs/examples.md`](docs/examples.md)
 - Installation notes: [`docs/install.md`](docs/install.md)
 - Changelog: [`docs/changelog.md`](docs/changelog.md)
