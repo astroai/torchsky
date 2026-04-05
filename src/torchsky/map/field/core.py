@@ -536,10 +536,22 @@ def _mixture_mc_samples(
         device=device,
     )
     proposal = torch.zeros_like(proposal_samples)
+
+    # Opt: group observations by unique bandpass configuration to prevent
+    # recomputing identical bandpass responses for many observations in the same band
+    band_counts: dict[tuple[object, ...], int] = {}
+    band_reps: dict[tuple[object, ...], FieldObservation] = {}
     for observation in observations:
-        response = _bandpass_response(observation, proposal_samples)
+        key = _observation_band_key(observation)
+        band_counts[key] = band_counts.get(key, 0) + 1
+        if key not in band_reps:
+            band_reps[key] = observation
+
+    for key, count in band_counts.items():
+        response = _bandpass_response(band_reps[key], proposal_samples)
         response_sum = torch.clamp(response.sum(), min=1.0e-8)
-        proposal = proposal + response / response_sum
+        proposal = proposal + (response / response_sum) * count
+
     proposal = proposal / torch.clamp(proposal.sum(), min=1.0e-8)
     sample_ids = torch.multinomial(
         proposal,
