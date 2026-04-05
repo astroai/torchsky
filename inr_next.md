@@ -281,11 +281,26 @@ The paper is mainly about convergence and fitting capacity. For `torchsky`, the 
 - add offline synthetic pretraining script
 - support decoder-head reset and fine-tune schedules
 
+#### Phase 1 execution plan (implemented in tree)
+
+1. **Model:** `StrainerSkyEncoderMLPField` / `make_field_model("strainer_sky_encoder_mlp", …)` — same capacity as `SkyEncoderMLPField`, with explicit `encoder` + `body` (MLP) + `decoder_head`, `reset_decoder_head()`, `trunk_state_dict()` / `load_trunk_state_dict()`, and an `output` property alias for the decoder head (noise-pretrain hook compatibility).
+2. **Fit API:** `fit_field_model(..., freeze_field_encoder=…, freeze_field_body=…)` — freezes `encoder.*` / `body.*` parameters and builds Adam over **trainable** parameters only.
+3. **Checkpoints:** `save_strainer_trunk_checkpoint` / `load_strainer_trunk_checkpoint` in `torchsky.map.field` for trunk-only `.pt` payloads.
+4. **Offline pretrain:** `pretrain_strainer_trunk_synthetic(...)` plus `scripts/pretrain_strainer_trunk.py` — synthetic coordinate batches and `_synthetic_noise_target` loss; save trunk after optional full-model pretraining.
+5. **Tests:** decoder reset, trunk round-trip, frozen-encoder fit, synthetic pretrain smoke.
+
 ### Phase 2
 
 - pretrain on uniform, gaussian, and spectral noise families
 - benchmark early fit quality on existing synthetic map cases
 - compare frozen-vs-unfrozen trunk strategies
+
+#### Phase 2 execution plan (implemented in tree)
+
+1. **Multi-noise pretrain:** `pretrain_strainer_trunk_synthetic(..., noise_kinds=(...))` round-robin per step; CLI `scripts/pretrain_strainer_trunk.py --noise-kinds gaussian,uniform,spectrum`.
+2. **Early-fit metrics:** `FieldFitResult.training_loss_after_step(step)` (1-based index into `loss_history`).
+3. **Checkpoint format guard:** `STRAINER_TRUNK_CHECKPOINT_FORMAT` and `load_strainer_trunk_checkpoint(..., require_known_format=True)` reject unknown `format` keys.
+4. **Benchmark:** `benchmarks/bench_strainer_phase2.py` — baseline vs pretrain+`reset_decoder_head()` vs pretrain+reset+frozen trunk on the same synthetic observation.
 
 ### Phase 3
 

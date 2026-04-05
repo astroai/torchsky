@@ -81,6 +81,7 @@ DEFAULT_MODEL_KINDS = (
     "conditioned_spectral_field",
     "hashgrid_conditioned_field",
     "hashgrid_spectral_field",
+    "hashgrid_resmlp",
     "sky_encoder_mlp",
     "sky_encoder_resmlp",
     "coadd_bilinear",
@@ -600,6 +601,17 @@ def _field_fit_kwargs_for_model(
     elif model_kind == "hashgrid_spectral_field":
         kwargs["lr"] = 3.0e-3
         kwargs["grad_clip_norm"] = 0.8
+    elif model_kind == "hashgrid_resmlp":
+        kwargs["lr"] = 2.5e-3
+        kwargs["grad_clip_norm"] = 0.65
+        if case in {"tan_sip_field_fit_deep_multiband_broad", "tpv_field_fit_deep_multiband_broad"}:
+            kwargs["lr"] = 2.5e-3
+            kwargs["grad_clip_norm"] = 1.0
+            kwargs["loss_kind"] = "charbonnier"
+            kwargs["loss_reduction"] = "global"
+    elif model_kind == "strainer_sky_encoder_mlp":
+        kwargs["lr"] = 3.0e-3
+        kwargs["grad_clip_norm"] = 0.75
     elif model_kind == "sky_encoder_mlp":
         kwargs["lr"] = 3.0e-3
         kwargs["grad_clip_norm"] = 0.75
@@ -1048,6 +1060,29 @@ def _field_model_kwargs_for_case(
                 "num_blocks": 4,
                 "num_fourier_frequencies": 10,
                 "spectral_frequencies": 4,
+            }
+    if model_kind == "hashgrid_resmlp":
+        if case == "tan_sip_field_fit_deep_multiband_broad":
+            return {
+                "hidden_dim": 128,
+                "num_res_blocks": 4,
+                "num_levels": 8,
+                "features_per_level": 4,
+                "finest_resolution": 256,
+                "log2_hashmap_size": tuple(range(11, 19)),
+                "hash_interpolation": "smoothstep",
+                "hash_level_gain": True,
+            }
+        if case == "tpv_field_fit_deep_multiband_broad":
+            return {
+                "hidden_dim": 144,
+                "num_res_blocks": 4,
+                "num_levels": 8,
+                "features_per_level": 4,
+                "finest_resolution": 256,
+                "log2_hashmap_size": tuple(range(11, 19)),
+                "hash_interpolation": "smoothstep",
+                "hash_level_gain": True,
             }
     return {}
 

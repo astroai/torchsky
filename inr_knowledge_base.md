@@ -280,6 +280,18 @@ This is the implementation-focused follow-up search for the current bottlenecks:
   - Implementation implication: add a benchmark/diff diagnostic pass for supported vs unsupported regions when evaluating the new unified family.
   - Link: https://arxiv.org/abs/2306.13272
 
+## `torchsky.map.field` hash-grid encoder (implementation alignment)
+
+The shared `_HashGridEncoder` used by `HashGridMLPField`, `HashGridResMLPField`, `HashGridSpectralField`, and `HashGridConditionedField` is shaped by the INR notes in this repo and the decision memo:
+
+- **Explicit multiscale trunk** (`inr_decision_memo.md`, `inr_c.md`, Zip-NeRF / WIRE mentions in this file): logarithmically spaced resolutions with per-level feature vectors.
+- **Collision mitigation on coarse scales** (`inr_b.md`): when `resolution ** coord_dim <= hash_max_dense_cells` (default 4096), the level uses a **dense** voxel table instead of hashing, so large-scale structure is not corrupted by hash collisions.
+- **Finer levels, larger tables** (`inr_b.md`): `log2_hashmap_size` may be an `int` (shared) or a **per-level** sequence so capacity grows with resolution.
+- **Smoother query footprint** (Zip-NeRF-style motivation in this file): optional `hash_interpolation="smoothstep"` replaces linear trilinear weights with smoothstep for slightly low-pass interpolation.
+- **Decoupled refinement** (`inr_c.md` “Refine Now, Query Fast”, `inr_decision_memo.md`): `HashGridResMLPField` (`hashgrid_resmlp`) stacks the same encoder with a **residual MLP** decoder instead of a plain feedforward head.
+
+Optional `hash_level_gain` supplies learnable per-level scalars on encoder outputs (useful when mixing many resolutions). Set `hash_dense_coarse=False` to recover the older “always hashed” behavior for reproducibility with legacy checkpoints.
+
 ## What these papers suggest for `torchsky`
 
 The current strongest directions are:

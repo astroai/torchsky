@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 
+import pytest
 import torch
 
 from torchsky.map import (
@@ -17,6 +18,7 @@ from torchsky.map import (
 )
 from torchsky.spectral import SpectralAxis
 from torchsky.map.field import _noise_pretrain_field_model
+from torchsky.map.field.core import _HashGridEncoder, _bandpass_quadrature
 
 
 def _tan_header(
@@ -2120,6 +2122,73 @@ def test_hashgrid_conditioned_field_supports_exact_wavelength_fit() -> None:
     assert min(fit.loss_history) < fit.initial_loss
 
 
+def test_hashgrid_encoder_rejects_mismatched_log2_sequence() -> None:
+    with pytest.raises(ValueError, match="log2_hashmap_size"):
+        _HashGridEncoder(2, num_levels=4, log2_hashmap_size=(10, 11, 12))
+
+
+def test_hashgrid_encoder_coarse_dense_fine_hash() -> None:
+    enc = _HashGridEncoder(
+        2,
+        num_levels=5,
+        base_resolution=8,
+        finest_resolution=256,
+        max_dense_cells=1024,
+        dense_coarse=True,
+    )
+    assert any(enc._is_dense)
+    assert not all(enc._is_dense)
+
+
+def test_hashgrid_resmlp_field_supports_charbonnier_fit() -> None:
+    torch.manual_seed(9759)
+    truth_domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=900.0,
+        coord_mode="sphere_xyz",
+    )
+    truth_model = make_field_model("hashgrid_resmlp", truth_domain)
+    header = _tan_header(16, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0)
+    template = FieldObservation(
+        image=torch.zeros((16, 16), dtype=torch.float32),
+        header=header,
+        spectral_min=5000.0,
+        spectral_max=6200.0,
+        transmission_center=5600.0,
+        transmission_sigma=180.0,
+        psf_sigma_pix=0.4,
+    )
+    image = render_field_observation(truth_model, template, num_spectral_samples=5).detach()
+    observations = [
+        FieldObservation(
+            image=image,
+            header=header,
+            weight=torch.ones_like(image),
+            spectral_min=template.spectral_min,
+            spectral_max=template.spectral_max,
+            transmission_center=template.transmission_center,
+            transmission_sigma=template.transmission_sigma,
+            psf_sigma_pix=template.psf_sigma_pix,
+        )
+    ]
+    fit_domain = estimate_field_domain(observations, coord_mode="sphere_xyz")
+    torch.manual_seed(9760)
+    model = make_field_model("hashgrid_resmlp", fit_domain)
+    fit = fit_field_model(
+        observations,
+        model,
+        steps=12,
+        lr=4.0e-3,
+        num_spectral_samples=5,
+        loss_kind="charbonnier",
+    )
+
+    assert min(fit.loss_history) < fit.initial_loss
+
+
 def test_sky_encoder_resmlp_field_supports_charbonnier_fit() -> None:
     torch.manual_seed(24601)
     truth_domain = FieldDomain(
@@ -2222,3 +2291,97 @@ def test_fit_field_model_supports_exact_wavelength_observations_with_cosine_sche
     assert fit_domain.coord_mode == "sphere_xyz"
     assert all(math.isfinite(loss) for loss in fit.loss_history)
     assert fit.final_loss < 5.0e-3
+
+
+def test_bandpass_quadrature_trapezoid_closer_than_uniform_for_quadratic() -> None:
+    obs = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=_tan_header(4, crval1=0.0, crval2=0.0, scale_deg=1.0 / 3600.0),
+        spectral_min=0.0,
+        spectral_max=1.0,
+    )
+    device = torch.device("cpu")
+    samples, weights = _bandpass_quadrature(
+        obs, num_spectral_samples=6, device=device
+    )
+    lam2 = torch.square(samples)
+    trap_est = float(torch.sum(weights * lam2).item())
+    uniform_est = float(torch.mean(lam2).item())
+    truth = 1.0 / 3.0
+    assert abs(trap_est - truth) < abs(uniform_est - truth)
+
+
+def test_estimate_field_domain_uses_pc_cdelt_when_cd_absent() -> None:
+    scale = 0.5 / 3600.0
+    header_pc = {
+        "NAXIS1": 100,
+        "NAXIS2": 100,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 50.0,
+        "CRPIX2": 50.0,
+        "CRVAL1": 10.0,
+        "CRVAL2": -5.0,
+        "CDELT1": -scale,
+        "CDELT2": scale,
+        "PC1_1": 1.0,
+        "PC1_2": 0.0,
+        "PC2_1": 0.0,
+        "PC2_2": 1.0,
+    }
+    header_cd = {
+        **header_pc,
+        "CD1_1": -scale,
+        "CD1_2": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": scale,
+    }
+    del header_cd["CDELT1"]
+    del header_cd["CDELT2"]
+    del header_cd["PC1_1"]
+    del header_cd["PC1_2"]
+    del header_cd["PC2_1"]
+    del header_cd["PC2_2"]
+    obs_pc = FieldObservation(
+        image=torch.zeros((100, 100), dtype=torch.float32),
+        header=header_pc,
+        wavelength=5000.0,
+    )
+    obs_cd = FieldObservation(
+        image=torch.zeros((100, 100), dtype=torch.float32),
+        header=header_cd,
+        wavelength=5000.0,
+    )
+    d_pc = estimate_field_domain([obs_pc])
+    d_cd = estimate_field_domain([obs_cd])
+    assert math.isclose(
+        d_pc.spatial_scale_deg,
+        d_cd.spatial_scale_deg,
+        rel_tol=0.0,
+        abs_tol=1.0e-12,
+    )
+
+
+def test_render_field_cube_spectral_chunk_matches_per_plane_loop() -> None:
+    torch.manual_seed(0)
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=900.0,
+    )
+    model = SineImplicitField(domain, hidden_dim=16, hidden_layers=2)
+    header = _tan_header(12, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0)
+    axis = SpectralAxis(
+        values=torch.tensor([4800.0, 5200.0, 6000.0], dtype=torch.float64),
+        unit="Angstrom",
+        type="WAVE",
+    )
+    c1 = render_field_cube(
+        model, target_header=header, spectral_axis=axis, spectral_chunk=1
+    )
+    c_all = render_field_cube(
+        model, target_header=header, spectral_axis=axis, spectral_chunk=0
+    )
+    assert torch.allclose(c1, c_all, rtol=0.0, atol=1.0e-5)

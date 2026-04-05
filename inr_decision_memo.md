@@ -147,3 +147,5 @@ This should replace another round of:
 5. Add a tiny bandpass-conditioned residual path with zero initialization.
 6. Optimize sparse benchmark cases with patch-based band-balanced training and low-memory settings.
 7. Evaluate against stronger iterative baselines, not only simple bilinear coadd.
+
+**Status (code):** The multiscale spatial trunk for hash-grid fields is implemented in `torchsky.map.field` as `_HashGridEncoder` (dense coarse voxels + per-level hash sizes + optional smoothstep) with `HashGridResMLPField` for the residual refinement head; see `inr_knowledge_base.md` for the paper-to-knob mapping.

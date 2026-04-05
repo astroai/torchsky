@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import math
-from typing import Sequence
+from typing import Literal, Sequence
 
 import torch
 import torch.nn as nn
@@ -389,13 +389,19 @@ def _bandpass_quadrature(
             [0.5 * (lower + upper)], dtype=torch.float32, device=device
         )
         return samples, torch.ones_like(samples)
+    n = int(num_spectral_samples)
     samples = torch.linspace(
         lower,
         upper,
-        steps=int(num_spectral_samples),
+        steps=n,
         dtype=torch.float32,
         device=device,
     )
+    span = float(upper - lower)
+    h = span / float(n - 1)
+    trap = torch.full((n,), h, dtype=torch.float32, device=device)
+    trap[0] = h * 0.5
+    trap[-1] = h * 0.5
     center = (
         float(observation.transmission_center)
         if observation.transmission_center is not None
@@ -403,14 +409,15 @@ def _bandpass_quadrature(
     )
     sigma = observation.transmission_sigma
     if sigma is None:
-        weights = torch.ones_like(samples)
+        response = torch.ones_like(samples)
     else:
         sigma = float(sigma)
         if not math.isfinite(sigma) or sigma <= 0.0:
             raise ValueError(
                 "FieldObservation transmission_sigma must be finite and positive"
             )
-        weights = torch.exp(-0.5 * torch.square((samples - center) / sigma))
+        response = torch.exp(-0.5 * torch.square((samples - center) / sigma))
+    weights = response * trap
     return samples, weights / torch.clamp(weights.sum(), min=1e-8)
 
 
@@ -581,6 +588,33 @@ def _smoothness_probe_grid(
     return ra, dec
 
 
+def _header_spatial_scale_terms_deg(header: dict) -> list[float]:
+    scale_terms: list[float] = []
+    for key in ("CD1_1", "CD1_2", "CD2_1", "CD2_2"):
+        value = header.get(key)
+        if value is not None:
+            scale_terms.append(abs(float(value)))
+    if scale_terms:
+        return scale_terms
+    d1 = header.get("CDELT1")
+    d2 = header.get("CDELT2")
+    if d1 is None or d2 is None:
+        return scale_terms
+    cdelt1 = abs(float(d1))
+    cdelt2 = abs(float(d2))
+    pc11 = float(header.get("PC1_1", 1.0))
+    pc12 = float(header.get("PC1_2", 0.0))
+    pc21 = float(header.get("PC2_1", 0.0))
+    pc22 = float(header.get("PC2_2", 1.0))
+    scale_terms.extend(
+        [
+            abs(pc11 * cdelt1) + abs(pc12 * cdelt2),
+            abs(pc21 * cdelt1) + abs(pc22 * cdelt2),
+        ]
+    )
+    return scale_terms
+
+
 def estimate_field_domain(
     observations: Sequence[FieldObservation],
     *,
@@ -597,11 +631,7 @@ def estimate_field_domain(
         lower, upper = _bandpass_bounds(observation)
         wavelength_lowers.append(lower)
         wavelength_uppers.append(upper)
-        scale_terms = []
-        for key in ("CD1_1", "CD1_2", "CD2_1", "CD2_2"):
-            value = observation.header.get(key)
-            if value is not None:
-                scale_terms.append(abs(float(value)))
+        scale_terms = _header_spatial_scale_terms_deg(observation.header)
         spatial_scale = max(scale_terms) if scale_terms else 1.0 / 3600.0
         nx = int(observation.header.get("NAXIS1", observation.image.shape[-1]))
         ny = int(observation.header.get("NAXIS2", observation.image.shape[-2]))
@@ -621,6 +651,13 @@ def estimate_field_domain(
 
 
 class _BaseFieldModel(nn.Module):
+    """Latent sky field; subclasses implement ``forward(ra, dec, λ)``.
+
+    Physics layers (extinction, beams, etc.) can be composed by wrapping this
+    module or by subclassing and applying deterministic transforms inside
+    ``forward`` while keeping the public signature.
+    """
+
     def __init__(self, domain: FieldDomain) -> None:
         super().__init__()
         self.domain = domain
@@ -1670,6 +1707,11 @@ class HashGridConditionedField(_BaseFieldModel):
         base_resolution: int = 8,
         finest_resolution: int = 128,
         num_spectral_frequencies: int = 8,
+        log2_hashmap_size: int | Sequence[int] = 12,
+        hash_interpolation: Literal["linear", "smoothstep"] = "linear",
+        hash_dense_coarse: bool = True,
+        hash_max_dense_cells: int = 4096,
+        hash_level_gain: bool = False,
     ) -> None:
         super().__init__(domain)
         self.spatial_dim = 2 if self.coord_mode == "local_tangent" else 3
@@ -1680,6 +1722,11 @@ class HashGridConditionedField(_BaseFieldModel):
             features_per_level=features_per_level,
             base_resolution=base_resolution,
             finest_resolution=finest_resolution,
+            log2_hashmap_size=log2_hashmap_size,
+            interpolation=hash_interpolation,
+            dense_coarse=hash_dense_coarse,
+            max_dense_cells=hash_max_dense_cells,
+            learnable_level_gain=hash_level_gain,
         )
         spectral_dim = 3 + 2 * max(self.num_spectral_frequencies, 0)
         in_dim = self.spatial_dim + num_levels * features_per_level + spectral_dim
@@ -1849,6 +1896,235 @@ class SkyEncoderMLPField(_BaseFieldModel):
         return F.softplus(out) + 1.0e-4
 
 
+class StrainerSkyEncoderMLPField(_BaseFieldModel):
+    """Sky encoder with explicit trunk (`encoder` + `body`) and `decoder_head` for transfer learning.
+
+    Matches ``SkyEncoderMLPField`` capacity; adds ``reset_decoder_head``, trunk state-dict helpers,
+    and an ``output`` property alias pointing at ``decoder_head`` for noise-pretrain compatibility.
+    """
+
+    def __init__(
+        self,
+        domain: FieldDomain,
+        *,
+        hidden_dim: int = 96,
+        hidden_layers: int = 3,
+        num_fourier_frequencies: int = 6,
+        spectral_frequencies: int = 4,
+    ) -> None:
+        super().__init__(domain)
+        self.encoder = SkyCoordinateEncoder(
+            num_fourier_frequencies=num_fourier_frequencies,
+            spectral_frequencies=spectral_frequencies,
+            include_degree2=True,
+        )
+        with torch.no_grad():
+            dummy = self.encoder(
+                torch.zeros(1, dtype=torch.float64),
+                torch.zeros(1, dtype=torch.float64),
+                wavelength=torch.ones(1, dtype=torch.float64),
+            )
+        in_dim = int(dummy.shape[-1])
+        layers: list[nn.Module] = []
+        current_dim = in_dim
+        for _ in range(max(int(hidden_layers), 1)):
+            layers.append(nn.Linear(current_dim, hidden_dim))
+            layers.append(nn.SiLU())
+            current_dim = hidden_dim
+        self.body = nn.Sequential(*layers)
+        self.decoder_head = nn.Linear(current_dim, 1)
+        self._reset_parameters()
+
+    @property
+    def output(self) -> nn.Linear:
+        return self.decoder_head
+
+    def _reset_parameters(self) -> None:
+        for module in self.body:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+        nn.init.uniform_(self.decoder_head.weight, -1e-2, 1e-2)
+        nn.init.constant_(self.decoder_head.bias, -3.0)
+
+    def reset_decoder_head(self, *, bias_init: float = -3.0) -> None:
+        nn.init.uniform_(self.decoder_head.weight, -1e-2, 1e-2)
+        nn.init.constant_(self.decoder_head.bias, float(bias_init))
+
+    def trunk_state_dict(self) -> dict[str, Tensor]:
+        state = self.state_dict()
+        return {
+            key: value
+            for key, value in state.items()
+            if key.startswith("encoder.") or key.startswith("body.")
+        }
+
+    def load_trunk_state_dict(
+        self,
+        state_dict: dict[str, Tensor],
+        *,
+        strict: bool = True,
+    ):
+        incompatible = self.load_state_dict(state_dict, strict=False)
+        if strict:
+            for key in state_dict:
+                if key in incompatible.missing_keys:
+                    raise RuntimeError(f"failed to load trunk tensor for key {key!r}")
+        return incompatible
+
+    def forward(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        wavelength = torch.as_tensor(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=torch.float64,
+        )
+        if wavelength.shape != ra_deg.shape:
+            wavelength = torch.broadcast_to(wavelength, ra_deg.shape)
+        feats = self.encoder(
+            ra_deg.to(dtype=torch.float64),
+            dec_deg.to(dtype=torch.float64),
+            wavelength=wavelength,
+        )
+        output_dtype = self.decoder_head.weight.dtype
+        feats = feats.to(dtype=output_dtype)
+        out = self.decoder_head(self.body(feats)).squeeze(-1)
+        return F.softplus(out) + 1.0e-4
+
+
+def save_strainer_trunk_checkpoint(
+    model: nn.Module,
+    path: str,
+    *,
+    meta: dict[str, object] | None = None,
+) -> None:
+    trunk_fn = getattr(model, "trunk_state_dict", None)
+    if not callable(trunk_fn):
+        raise TypeError(
+            "model must implement trunk_state_dict() (e.g. StrainerSkyEncoderMLPField)"
+        )
+    payload: dict[str, object] = {
+        "format": _STRAINER_TRUNK_FORMAT,
+        "trunk": {k: v.detach().cpu() for k, v in trunk_fn().items()},
+        "meta": dict(meta) if meta else {},
+    }
+    torch.save(payload, path)
+
+
+_STRAINER_TRUNK_FORMAT = "torchsky.strainer_trunk.v1"
+STRAINER_TRUNK_CHECKPOINT_FORMAT = _STRAINER_TRUNK_FORMAT
+
+
+def load_strainer_trunk_checkpoint(
+    model: nn.Module,
+    path: str,
+    *,
+    map_location: torch.device | str | None = None,
+    strict: bool = True,
+    require_known_format: bool = True,
+) -> nn.Module:
+    load_fn = getattr(model, "load_trunk_state_dict", None)
+    if not callable(load_fn):
+        raise TypeError(
+            "model must implement load_trunk_state_dict() (e.g. StrainerSkyEncoderMLPField)"
+        )
+    payload = torch.load(path, map_location=map_location, weights_only=False)
+    if not isinstance(payload, dict) or "trunk" not in payload:
+        raise ValueError("checkpoint must be a dict with a 'trunk' key")
+    fmt = payload.get("format")
+    if require_known_format and fmt is not None and fmt != _STRAINER_TRUNK_FORMAT:
+        raise ValueError(
+            f"unexpected strainer trunk format {fmt!r}; expected {_STRAINER_TRUNK_FORMAT!r}"
+        )
+    trunk = payload["trunk"]
+    if not isinstance(trunk, dict):
+        raise ValueError("checkpoint['trunk'] must be a state dict")
+    load_fn(trunk, strict=strict)
+    return model
+
+
+def pretrain_strainer_trunk_synthetic(
+    model: nn.Module,
+    *,
+    steps: int,
+    lr: float,
+    noise_kind: FieldNoisePretrainKind = "gaussian",
+    noise_kinds: Sequence[FieldNoisePretrainKind] | None = None,
+    batch_size: int = 4096,
+    num_terms: int = 48,
+    max_frequency: float = 8.0,
+    seed: int = 42,
+) -> None:
+    if not isinstance(model, _BaseFieldModel):
+        raise TypeError("model must be a torchsky map field _BaseFieldModel subclass")
+    steps = max(int(steps), 0)
+    if steps == 0:
+        return
+    if noise_kinds is not None:
+        kinds = tuple(k for k in noise_kinds if k != "none")
+        if not kinds:
+            raise ValueError("noise_kinds must include at least one kind other than 'none'")
+    else:
+        if noise_kind == "none":
+            raise ValueError("noise_kind must not be 'none' for synthetic trunk pretraining")
+        kinds = (noise_kind,)
+    domain = model.domain
+    device = _module_device(model)
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    if not trainable:
+        raise ValueError("pretrain_strainer_trunk_synthetic: no trainable parameters")
+    optimizer = torch.optim.Adam(trainable, lr=float(lr))
+    model.train()
+    training_gen = torch.Generator(device="cpu")
+    training_gen.manual_seed(int(seed))
+    noise_gen = torch.Generator(device="cpu")
+    noise_gen.manual_seed(int(seed) + 17)
+    batch = max(int(batch_size), 1)
+    num_kinds = len(kinds)
+    for step_idx in range(steps):
+        step_noise = kinds[step_idx % num_kinds]
+        optimizer.zero_grad(set_to_none=True)
+        dra = (
+            torch.rand(batch, generator=training_gen, dtype=torch.float64, device=device)
+            - 0.5
+        ) * (2.0 * float(domain.spatial_scale_deg))
+        ddec = (
+            torch.rand(batch, generator=training_gen, dtype=torch.float64, device=device)
+            - 0.5
+        ) * (2.0 * float(domain.spatial_scale_deg))
+        ra_deg = torch.remainder(float(domain.center_ra_deg) + dra, 360.0)
+        dec_deg = torch.clamp(
+            float(domain.center_dec_deg) + ddec,
+            min=-90.0,
+            max=90.0,
+        )
+        lam_offset = (
+            torch.rand(batch, generator=training_gen, dtype=torch.float64, device=device)
+            - 0.5
+        ) * (2.0 * float(domain.wavelength_scale))
+        wavelength = torch.as_tensor(float(domain.wavelength_center), device=device) + lam_offset
+        coords_unit = model._unit_box_coords(ra_deg, dec_deg, wavelength)
+        target = _synthetic_noise_target(
+            coords_unit,
+            noise_kind=step_noise,
+            num_terms=num_terms,
+            max_frequency=max_frequency,
+            generator=noise_gen,
+        ).to(device=device, dtype=torch.float32)
+        pred = model(
+            ra_deg.to(dtype=torch.float32),
+            dec_deg.to(dtype=torch.float32),
+            wavelength.to(dtype=torch.float32),
+        )
+        loss = torch.mean(torch.square(pred - target))
+        loss.backward()
+        optimizer.step()
+
+
 class SkyEncoderResMLPField(_BaseFieldModel):
     def __init__(
         self,
@@ -1947,7 +2223,28 @@ class SkyEncoderResMLPField(_BaseFieldModel):
         return F.softplus(out) + 1.0e-4
 
 
+def _hash_grid_smoothstep(t: Tensor) -> Tensor:
+    t = torch.clamp(t, 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _hash_grid_ravel_voxels(corner: Tensor, resolution: int, coord_dim: int) -> Tensor:
+    idx = corner[..., -1]
+    mult = resolution
+    for axis in range(coord_dim - 2, -1, -1):
+        idx = idx + corner[..., axis] * mult
+        mult *= resolution
+    return idx
+
+
 class _HashGridEncoder(nn.Module):
+    """Multiresolution spatial encoding: dense voxels when small, else hashed (Instant-NGP-style).
+
+    Aligns with repo INR notes: multiscale explicit features, reduced hash collisions on coarse
+    scales (dense lattice), optional larger tables on fine levels, smoothstep for smoother
+    reconstruction (Zip-NeRF-style footprint heuristic).
+    """
+
     _PRIMES = (
         1,
         2654435761,
@@ -1961,23 +2258,42 @@ class _HashGridEncoder(nn.Module):
         *,
         num_levels: int = 6,
         features_per_level: int = 4,
-        log2_hashmap_size: int = 12,
+        log2_hashmap_size: int | Sequence[int] = 12,
         base_resolution: int = 8,
         finest_resolution: int = 128,
+        interpolation: Literal["linear", "smoothstep"] = "linear",
+        dense_coarse: bool = True,
+        max_dense_cells: int = 4096,
+        learnable_level_gain: bool = False,
     ) -> None:
         super().__init__()
         self.coord_dim = int(coord_dim)
         self.num_levels = int(num_levels)
         self.features_per_level = int(features_per_level)
-        self.hashmap_size = 1 << int(log2_hashmap_size)
         self.base_resolution = int(base_resolution)
         self.finest_resolution = int(finest_resolution)
+        self.interpolation = interpolation
+        self.dense_coarse = bool(dense_coarse)
+        self.max_dense_cells = int(max_dense_cells)
+        if interpolation not in {"linear", "smoothstep"}:
+            raise ValueError(
+                f"interpolation must be 'linear' or 'smoothstep', got {interpolation!r}"
+            )
         if self.num_levels <= 0:
             raise ValueError("num_levels must be positive")
         if self.features_per_level <= 0:
             raise ValueError("features_per_level must be positive")
         if self.coord_dim <= 0 or self.coord_dim > len(self._PRIMES):
             raise ValueError("unsupported hash-grid coordinate dimension")
+        if isinstance(log2_hashmap_size, int):
+            log2_seq = (int(log2_hashmap_size),) * self.num_levels
+        else:
+            log2_seq = tuple(int(x) for x in log2_hashmap_size)
+            if len(log2_seq) != self.num_levels:
+                raise ValueError(
+                    "len(log2_hashmap_size) must equal num_levels when a sequence is passed"
+                )
+        self._log2_hashmap_per_level = log2_seq
         if self.num_levels == 1:
             resolutions = [self.base_resolution]
         else:
@@ -1990,32 +2306,55 @@ class _HashGridEncoder(nn.Module):
                 for level in range(self.num_levels)
             ]
         self.resolutions = tuple(resolutions)
+        self._is_dense: tuple[bool, ...] = tuple(
+            self.dense_coarse
+            and (int(res) ** self.coord_dim) <= self.max_dense_cells
+            for res in self.resolutions
+        )
+        self._table_sizes: tuple[int, ...] = tuple(
+            int(res) ** self.coord_dim if dense else (1 << log2_seq[level])
+            for level, (res, dense) in enumerate(
+                zip(self.resolutions, self._is_dense, strict=True)
+            )
+        )
         self.tables = nn.ParameterList(
             [
                 nn.Parameter(
                     1.0e-4
-                    * torch.randn(self.hashmap_size, self.features_per_level)
+                    * torch.randn(int(self._table_sizes[level]), self.features_per_level)
                 )
-                for _ in self.resolutions
+                for level in range(self.num_levels)
             ]
         )
+        self.level_gain: nn.Parameter | None
+        if learnable_level_gain:
+            self.level_gain = nn.Parameter(torch.ones(self.num_levels))
+        else:
+            self.register_parameter("level_gain", None)
 
-    def _hash(self, corner: Tensor) -> Tensor:
+    def _hash(self, corner: Tensor, table_size: int) -> Tensor:
         hashed = corner[..., 0].to(dtype=torch.int64)
         for dim in range(1, self.coord_dim):
             hashed = torch.bitwise_xor(
                 hashed,
                 corner[..., dim].to(dtype=torch.int64) * int(self._PRIMES[dim]),
             )
-        return torch.remainder(hashed, self.hashmap_size).to(dtype=torch.long)
+        return torch.remainder(hashed, int(table_size)).to(dtype=torch.long)
 
     def forward(self, coords_unit: Tensor) -> Tensor:
         flat = coords_unit.reshape(-1, self.coord_dim)
         outputs: list[Tensor] = []
-        for resolution, table in zip(self.resolutions, self.tables, strict=True):
+        for level_idx, resolution in enumerate(self.resolutions):
+            table = self.tables[level_idx]
+            table_size = int(self._table_sizes[level_idx])
+            is_dense = self._is_dense[level_idx]
             pos = flat * float(resolution - 1)
             base = torch.floor(pos).to(dtype=torch.int64)
             frac = pos - base.to(dtype=pos.dtype)
+            if self.interpolation == "smoothstep":
+                frac_w = _hash_grid_smoothstep(frac)
+            else:
+                frac_w = frac
             level_feat = torch.zeros(
                 flat.shape[0],
                 self.features_per_level,
@@ -2031,14 +2370,26 @@ class _HashGridEncoder(nn.Module):
                 corner = base.clone()
                 for dim in range(self.coord_dim):
                     use_upper = bool((mask >> dim) & 1)
-                    frac_dim = frac[:, dim].to(dtype=table.dtype)
+                    frac_dim = frac_w[:, dim].to(dtype=table.dtype)
                     if use_upper:
                         corner[:, dim] = corner[:, dim] + 1
                         weight = weight * frac_dim
                     else:
                         weight = weight * (1.0 - frac_dim)
                 corner = torch.clamp(corner, min=0, max=resolution - 1)
-                level_feat = level_feat + weight.unsqueeze(-1) * table[self._hash(corner)]
+                if is_dense:
+                    idx = _hash_grid_ravel_voxels(
+                        corner, int(resolution), self.coord_dim
+                    ).to(dtype=torch.long)
+                    sample = table[idx]
+                else:
+                    sample = table[self._hash(corner, table_size)]
+                level_feat = level_feat + weight.unsqueeze(-1) * sample
+            if self.level_gain is not None:
+                g = self.level_gain[level_idx].to(
+                    device=level_feat.device, dtype=level_feat.dtype
+                )
+                level_feat = level_feat * g
             outputs.append(level_feat)
         encoded = torch.cat(outputs, dim=-1)
         return encoded.reshape(*coords_unit.shape[:-1], -1)
@@ -2071,6 +2422,11 @@ class HashGridMLPField(_BaseFieldModel):
         features_per_level: int = 4,
         base_resolution: int = 8,
         finest_resolution: int = 128,
+        log2_hashmap_size: int | Sequence[int] = 12,
+        hash_interpolation: Literal["linear", "smoothstep"] = "linear",
+        hash_dense_coarse: bool = True,
+        hash_max_dense_cells: int = 4096,
+        hash_level_gain: bool = False,
     ) -> None:
         super().__init__(domain)
         self.encoder = _HashGridEncoder(
@@ -2079,6 +2435,11 @@ class HashGridMLPField(_BaseFieldModel):
             features_per_level=features_per_level,
             base_resolution=base_resolution,
             finest_resolution=finest_resolution,
+            log2_hashmap_size=log2_hashmap_size,
+            interpolation=hash_interpolation,
+            dense_coarse=hash_dense_coarse,
+            max_dense_cells=hash_max_dense_cells,
+            learnable_level_gain=hash_level_gain,
         )
         in_dim = self.coord_dim + num_levels * features_per_level
         layers: list[nn.Module] = []
@@ -2113,6 +2474,72 @@ class HashGridMLPField(_BaseFieldModel):
         return F.softplus(out) + 1.0e-4
 
 
+class HashGridResMLPField(_BaseFieldModel):
+    """Hash-grid spatial encoder + residual MLP decoder (explicit features + refinement)."""
+
+    def __init__(
+        self,
+        domain: FieldDomain,
+        *,
+        hidden_dim: int = 96,
+        num_res_blocks: int = 3,
+        num_levels: int = 6,
+        features_per_level: int = 4,
+        base_resolution: int = 8,
+        finest_resolution: int = 128,
+        log2_hashmap_size: int | Sequence[int] = 12,
+        hash_interpolation: Literal["linear", "smoothstep"] = "linear",
+        hash_dense_coarse: bool = True,
+        hash_max_dense_cells: int = 4096,
+        hash_level_gain: bool = False,
+    ) -> None:
+        super().__init__(domain)
+        self.encoder = _HashGridEncoder(
+            self.coord_dim,
+            num_levels=num_levels,
+            features_per_level=features_per_level,
+            base_resolution=base_resolution,
+            finest_resolution=finest_resolution,
+            log2_hashmap_size=log2_hashmap_size,
+            interpolation=hash_interpolation,
+            dense_coarse=hash_dense_coarse,
+            max_dense_cells=hash_max_dense_cells,
+            learnable_level_gain=hash_level_gain,
+        )
+        in_dim = self.coord_dim + num_levels * features_per_level
+        self.input = nn.Linear(in_dim, hidden_dim)
+        self.blocks = nn.ModuleList(
+            [
+                _ResidualMLPBlock(hidden_dim)
+                for _ in range(max(int(num_res_blocks), 1))
+            ]
+        )
+        self.output = nn.Linear(hidden_dim, 1)
+        self._reset_parameters()
+
+    def _reset_parameters(self) -> None:
+        nn.init.xavier_uniform_(self.input.weight)
+        nn.init.zeros_(self.input.bias)
+        nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
+        nn.init.constant_(self.output.bias, -3.0)
+
+    def forward(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        coords_unit = self._unit_box_coords(ra_deg, dec_deg, wavelength_angstrom)
+        grid_feats = self.encoder(coords_unit.to(dtype=self.output.weight.dtype))
+        raw = coords_unit.to(dtype=self.output.weight.dtype)
+        feats = torch.cat([raw, grid_feats], dim=-1)
+        x = F.silu(self.input(feats))
+        for block in self.blocks:
+            x = block(x)
+        out = self.output(x).squeeze(-1)
+        return F.softplus(out) + 1.0e-4
+
+
 class HashGridSpectralField(_BaseFieldModel):
     def __init__(
         self,
@@ -2125,6 +2552,11 @@ class HashGridSpectralField(_BaseFieldModel):
         base_resolution: int = 8,
         finest_resolution: int = 128,
         num_spectral_frequencies: int = 4,
+        log2_hashmap_size: int | Sequence[int] = 12,
+        hash_interpolation: Literal["linear", "smoothstep"] = "linear",
+        hash_dense_coarse: bool = True,
+        hash_max_dense_cells: int = 4096,
+        hash_level_gain: bool = False,
     ) -> None:
         super().__init__(domain)
         self.spatial_dim = 2 if self.coord_mode == "local_tangent" else 3
@@ -2136,6 +2568,11 @@ class HashGridSpectralField(_BaseFieldModel):
             features_per_level=features_per_level,
             base_resolution=base_resolution,
             finest_resolution=finest_resolution,
+            log2_hashmap_size=log2_hashmap_size,
+            interpolation=hash_interpolation,
+            dense_coarse=hash_dense_coarse,
+            max_dense_cells=hash_max_dense_cells,
+            learnable_level_gain=hash_level_gain,
         )
         in_dim = self.spatial_dim + num_levels * features_per_level
         layers: list[nn.Module] = []
@@ -4077,7 +4514,9 @@ def _field_noise_pretrain_head_modules(model: nn.Module) -> tuple[nn.Module, ...
             SkyEncoderBandpassField,
             SkyEncoderMLPField,
             SkyEncoderResMLPField,
+            StrainerSkyEncoderMLPField,
             HashGridMLPField,
+            HashGridResMLPField,
             HashGridConditionedField,
         ),
     ):
@@ -4257,15 +4696,17 @@ def make_field_model(
         return HashGridConditionedField(domain, **kwargs)
     if kind == "sky_encoder_mlp":
         return SkyEncoderMLPField(domain, **kwargs)
+    if kind == "strainer_sky_encoder_mlp":
+        return StrainerSkyEncoderMLPField(domain, **kwargs)
     if kind == "sky_encoder_resmlp":
         return SkyEncoderResMLPField(domain, **kwargs)
     if kind == "hashgrid_mlp":
         return HashGridMLPField(domain, **kwargs)
     if kind == "hashgrid_spectral_field":
         return HashGridSpectralField(domain, **kwargs)
-    raise ValueError(
-        "kind must be one of {'sine_implicit', 'wire_implicit', 'gaussian_basis', 'fourier_mlp', 'spectral_basis_field', 'bandpass_conditioned_field', 'learned_spectral_basis_field', 'sky_encoder_bandpass_field', 'sky_lambda_planes_field', 'sky_lambda_kplanes_field', 'sky_lambda_feature_field', 'operator_constrained_feature_field', 'sky_lambda_feature_field_hetero', 'sky_lambda_feature_atlas_field', 'sky_lambda_atlas_field', 'conditioned_spectral_field', 'hashgrid_conditioned_field', 'sky_encoder_mlp', 'sky_encoder_resmlp', 'hashgrid_mlp', 'hashgrid_spectral_field'}"
-    )
+    if kind == "hashgrid_resmlp":
+        return HashGridResMLPField(domain, **kwargs)
+    raise ValueError(f"unknown field model kind {kind!r}")
 
 
 def _field_residual_loss(
@@ -4635,7 +5076,15 @@ def render_field_cube(
     target_header: dict,
     spectral_axis: SpectralAxis,
     shape: tuple[int, int] | None = None,
+    spectral_chunk: int = 1,
 ) -> Tensor:
+    """Render a (nλ, H, W) cube on the target WCS grid.
+
+    ``spectral_chunk`` controls how many wavelength planes are evaluated per
+    ``model`` forward. The default ``1`` matches the legacy one-λ loop (lowest
+    peak memory). Set to ``0`` or any value ``>= nλ`` to fuse all wavelengths
+    into a single batched forward (usually faster on GPU for moderate grids).
+    """
     fallback = (
         (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
         if shape is None
@@ -4644,11 +5093,38 @@ def render_field_cube(
     device = _module_device(model)
     ra_deg, dec_deg = _coordinate_grid(target_header, shape=fallback, device=device)
     wavelengths = spectral_axis.to_wavelength().to(device=device, dtype=torch.float32)
-    planes = [
-        model(ra_deg.to(dtype=torch.float32), dec_deg.to(dtype=torch.float32), lam)
-        for lam in wavelengths
-    ]
-    return torch.stack(planes, dim=0)
+    if wavelengths.ndim != 1:
+        raise ValueError("spectral_axis must yield a 1D wavelength tensor")
+    nw = int(wavelengths.shape[0])
+    if nw == 0:
+        return torch.empty((0, *tuple(ra_deg.shape)), device=device, dtype=torch.float32)
+    ra_f = ra_deg.to(dtype=torch.float32)
+    dec_f = dec_deg.to(dtype=torch.float32)
+    hw_shape = tuple(ra_f.shape)
+    chunk = int(spectral_chunk)
+    if chunk <= 0 or chunk >= nw:
+        chunk = nw
+    planes_out: list[Tensor] = []
+    for start in range(0, nw, chunk):
+        end = min(start + chunk, nw)
+        lam_chunk = wavelengths[start:end]
+        c = int(lam_chunk.shape[0])
+        if c == 1:
+            plane = model(ra_f, dec_f, lam_chunk[0])
+            planes_out.append(plane.unsqueeze(0))
+            continue
+        nflat = c * int(ra_f.numel())
+        ra_flat = ra_f.unsqueeze(0).expand(c, -1, -1).reshape(nflat)
+        dec_flat = dec_f.unsqueeze(0).expand(c, -1, -1).reshape(nflat)
+        lam_flat = lam_chunk.view(c, 1, 1).expand(c, *hw_shape).reshape(nflat)
+        out_flat = model(ra_flat, dec_flat, lam_flat)
+        if out_flat.ndim != 1 or out_flat.shape[0] != nflat:
+            raise ValueError(
+                "render_field_cube expects one scalar output per (ra, dec, λ) sample; "
+                f"got shape {tuple(out_flat.shape)} for batch size {nflat}"
+            )
+        planes_out.append(out_flat.view(c, *hw_shape))
+    return torch.cat(planes_out, dim=0)
 
 
 def fit_field_model(
@@ -4696,6 +5172,8 @@ def fit_field_model(
     noise_pretrain_pixel_samples_per_observation: int = 1024,
     noise_pretrain_num_terms: int = 48,
     noise_pretrain_max_frequency: float = 8.0,
+    freeze_field_encoder: bool = False,
+    freeze_field_body: bool = False,
 ) -> FieldFitResult:
     if not observations:
         raise ValueError("fit_field_model requires at least one observation")
@@ -4722,9 +5200,20 @@ def fit_field_model(
             num_terms=noise_pretrain_num_terms,
             max_frequency=noise_pretrain_max_frequency,
         )
+    if freeze_field_encoder or freeze_field_body:
+        for name, param in model.named_parameters():
+            if freeze_field_encoder and name.startswith("encoder."):
+                param.requires_grad = False
+            if freeze_field_body and name.startswith("body."):
+                param.requires_grad = False
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    if not trainable_params:
+        raise ValueError(
+            "fit_field_model: no trainable parameters (check freeze_field_encoder / freeze_field_body)"
+        )
     base_lr = float(lr)
     optimizer = torch.optim.Adam(
-        model.parameters(),
+        trainable_params,
         lr=base_lr,
         weight_decay=max(float(weight_decay), 0.0),
     )

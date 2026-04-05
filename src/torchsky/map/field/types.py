@@ -30,8 +30,10 @@ FieldModelKind = Literal[
     "conditioned_spectral_field",
     "hashgrid_conditioned_field",
     "sky_encoder_mlp",
+    "strainer_sky_encoder_mlp",
     "sky_encoder_resmlp",
     "hashgrid_mlp",
+    "hashgrid_resmlp",
     "hashgrid_spectral_field",
 ]
 FieldCoordinateMode = Literal["local_tangent", "sphere_xyz"]
@@ -84,3 +86,13 @@ class FieldFitResult:
     @property
     def initial_loss(self) -> float:
         return self.loss_history[0]
+
+    def training_loss_after_step(self, step: int) -> float:
+        """Training loss after optimizer step ``step`` (1-based, matches ``loss_history`` index + 1)."""
+        if step < 1:
+            raise ValueError("step must be >= 1")
+        if step > len(self.loss_history):
+            raise IndexError(
+                f"step {step} out of range for loss_history length {len(self.loss_history)}"
+            )
+        return self.loss_history[step - 1]

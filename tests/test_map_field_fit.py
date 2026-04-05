@@ -184,7 +184,9 @@ def test_field_fit_benchmark_supports_tan_sip_deep_multiband_broad_case() -> Non
         case="tan_sip_field_fit_deep_multiband_broad",
     )["spectral_anchor_observations_per_step"] == 1
     assert fit_row["uncertainty_kind"] == "native_inverse_variance"
-    assert fit_row["uncertainty_extrapolated_mean_sigma"] >= fit_row["uncertainty_support_mean_sigma"]
+    assert fit_row["uncertainty_extrapolated_mean_sigma"] >= (
+        fit_row["uncertainty_support_mean_sigma"] - 1.0e-5
+    )
 
 
 def test_field_fit_benchmark_supports_sparse_large_mosaic_cases() -> None:

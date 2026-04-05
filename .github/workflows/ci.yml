@@ -120,6 +120,17 @@ jobs:
           --swarp-kernels bilinear \
           --json-out benchmark_results/map_compat_fft_shift_smoke.json
 
+    - name: Bench smoke — Strainer phase2 synthetic harness
+      run: |
+        PYTHONPATH=src:benchmarks python benchmarks/bench_strainer_phase2.py \
+          --fit-steps 12 --synthetic-pretrain-steps 24 \
+          --early-steps 1,4,8,12
+
+    - name: Bench smoke — SMACS Strainer transfer (ok or skipped without data)
+      run: |
+        PYTHONPATH=src:benchmarks python benchmarks/bench_map_smacs0723_strainer_transfer.py \
+          --steps 4 --synthetic-pretrain-steps 8
+
   memory-safety:
     name: Memory Leak Detection
     runs-on: ubuntu-latest
