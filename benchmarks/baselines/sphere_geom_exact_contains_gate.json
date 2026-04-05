@@ -1,0 +1,33 @@
+[
+  {
+    "operation": "exact_contains_parity_numpy_bulk",
+    "library": "torchsky",
+    "status": "OK",
+    "max_mismatches": 0,
+    "note": "Hard gate: ExactSphericalRegion.contains must match spherical_geometry bulk mask"
+  },
+  {
+    "operation": "exact_region_contains",
+    "library": "torchsky",
+    "status": "OK",
+    "min_median_points_s": 8000,
+    "skip_points_s_regression": false,
+    "note": "Median ~9.3e3 pts/s @ 200k pts (darwin, uv run --with spherical-geometry, 2026-04); floor uses default --points-s-tolerance 0.35"
+  },
+  {
+    "operation": "exact_region_contains_numpy_bulk_reference",
+    "library": "spherical_geometry",
+    "status": "OK",
+    "min_median_points_s": 8000,
+    "skip_points_s_regression": false,
+    "note": "Reference bulk path; same run as exact_region_contains row"
+  },
+  {
+    "operation": "spherical_polygon_contains_nonconvex",
+    "library": "torchsky",
+    "status": "OK",
+    "min_median_points_s": 20000000,
+    "skip_points_s_regression": false,
+    "note": "Median ~2.37e7 pts/s @ 200k in that run; loose vs exact wrap so floor is conservative for CI variance"
+  }
+]

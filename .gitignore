@@ -86,6 +86,7 @@ benchmarks/baselines/
 !benchmarks/baselines/map_*.json
 !benchmarks/baselines/map_*.md
 !benchmarks/baselines/spin_matrix_extended_baseline.json
+!benchmarks/baselines/sphere_geom_exact_contains_gate.json
 
 # native build artifacts
 wcslib.tar.bz2
