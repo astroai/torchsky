@@ -1,6 +1,7 @@
-"""Torch-native spherical geometry and compatibility APIs."""
+"""Torch-native spherical geometry and healpy-style compatibility APIs."""
 
 from . import compat
+from . import healpy
 from .core import (
     fit_monopole_dipole,
     great_circle_distance,
@@ -97,6 +98,7 @@ __all__ = [
     "Vector3d",
     "WideBitMask",
     "compat",
+    "healpy",
     "convex_polygon_contains",
     "fit_monopole_dipole",
     "great_circle_distance",

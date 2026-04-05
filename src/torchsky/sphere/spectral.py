@@ -3076,7 +3076,8 @@ def _load_pixwin_table(nside: int) -> tuple[Tensor, Tensor]:
         raise ValueError(
             f"pixel window data not available for nside={ns}: missing {_PIXWIN_DATA_DIR / f'pixel_window_n{ns:04d}.fits'} "
             f"and no embedded table (embedded nsides: {supported}). "
-            "Add the HEALPix pixel-window FITS for this nside; use healpy only in tests for parity, not as a runtime source."
+            "Add the HEALPix pixel-window FITS for this nside (or use an embedded-table nside). "
+            "The healpy package is for parity in tests and optional backend=\"healpy\" paths, not for loading pixel windows here."
         )
 
     data = None

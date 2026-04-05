@@ -1,4 +1,32 @@
-"""Compatibility-focused spherical API surface."""
+"""
+**Healpy compatibility layer** — healpy’s NumPy-oriented HEALPix API, implemented
+with :class:`torch.Tensor` inputs/outputs and torchsky-native kernels.
+
+**Scope**
+
+* **Pixel / geometry** — indexing, neighbors, disc/box/polygon queries, reordering,
+  and related helpers are delegated to :mod:`torchsky.wcs.healpix` (re-exported here
+  under familiar healpy names).
+* **Harmonic / map** — ``map2alm``, ``alm2map``, ``synfast``, ``pixwin``, spin
+  transforms, smoothing, etc. delegate to :mod:`torchsky.sphere.spectral`, which
+  defaults to the torch backend and can optionally call healpy with
+  ``backend="healpy"`` for parity checks.
+* **Strict queries** — some routines optionally match `hpgeom` when
+  ``strict_mode(True)`` (see :func:`set_strict_mode`).
+
+**Relationship to** :mod:`torchsky.sphere`
+
+Top-level :mod:`torchsky.sphere` exposes the same spectral helpers as the *native*
+API. This module is the *compatibility* surface: names and signatures aligned with
+healpy for migration and tests. Prefer ``import torchsky.sphere.healpy as hp`` or
+``import torchsky.sphere.compat as hp`` when porting healpy code.
+
+**Completeness**
+
+The goal is to cover healpy’s public HEALPix/spherical-harmonic surface over time.
+Missing routines should be added here (thin wrappers) rather than scattered across
+the package. Compare against healpy in tests when that package is installed.
+"""
 
 from contextlib import contextmanager
 import math
@@ -740,6 +768,7 @@ def alm2map_spin(
 
 
 # Re-export common APIs with familiar naming.
+UNSEEN = _healpix.UNSEEN
 ang2vec = _healpix.ang2vec
 boundaries = _healpix.boundaries
 get_interp_val = _healpix.get_interp_val
@@ -771,6 +800,7 @@ vec2pix = _healpix.vec2pix
 
 
 __all__ = [
+    "UNSEEN",
     "ang2pix",
     "ang2vec",
     "boundaries",
