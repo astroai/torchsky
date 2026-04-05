@@ -1,7 +1,8 @@
-"""Embedded HEALPix pixel-window rows (temperature + polarization), bit-identical to healpy tables.
+"""Embedded HEALPix pixel-window rows (temperature + polarization), matching standard tables.
 
-Used when packaged ``pixel_window_n*.fits`` files are absent (e.g. ``*.fits`` not in a dev
-checkout) so CPU tests do not require healpy. For other ``nside``, load FITS or healpy.
+Used when packaged ``pixel_window_n*.fits`` files are absent (e.g. ``*.fits`` gitignored in a
+dev checkout) so tests can run without vendored FITS. Healpy is for parity checks in tests only;
+library code does not import healpy to load windows.
 """
 
 from __future__ import annotations

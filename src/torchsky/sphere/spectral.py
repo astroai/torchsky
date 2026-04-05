@@ -3060,26 +3060,6 @@ def gaussian_beam(fwhm_rad: float, lmax: int, *, pol: bool = False) -> Tensor:
     return torch.stack([base, base * fac_p, base * fac_p, base * fac_tp], dim=1)
 
 
-def _load_pixwin_via_healpy(ns: int) -> tuple[Tensor, Tensor]:
-    """Load temperature + polarization windows from healpy (same upstream tables)."""
-    try:
-        import healpy as hp  # noqa: PLC0415
-        import numpy as np  # noqa: PLC0415
-    except ImportError as exc:
-        raise ValueError(
-            f"pixel window FITS not found for nside={ns} under {_PIXWIN_DATA_DIR}; "
-            "install healpy or add packaged pixel_window_n*.fits files"
-        ) from exc
-    try:
-        pw_t, pw_p = hp.pixwin(ns, pol=True)
-    except TypeError:
-        pw_t = hp.pixwin(ns, pol=False)
-        pw_p = pw_t
-    pw_t_t = torch.as_tensor(np.asarray(pw_t, dtype=np.float64), dtype=torch.float64).reshape(-1)
-    pw_p_t = torch.as_tensor(np.asarray(pw_p, dtype=np.float64), dtype=torch.float64).reshape(-1)
-    return pw_t_t, pw_p_t
-
-
 def _load_pixwin_table(nside: int) -> tuple[Tensor, Tensor]:
     ns = int(nside)
     cached = _PIXWIN_TABLE_CACHE.get(ns)
@@ -3092,9 +3072,12 @@ def _load_pixwin_table(nside: int) -> tuple[Tensor, Tensor]:
             out = (ref[0].clone(), ref[1].clone())
             _PIXWIN_TABLE_CACHE[ns] = out
             return out
-        out = _load_pixwin_via_healpy(ns)
-        _PIXWIN_TABLE_CACHE[ns] = out
-        return out
+        supported = ", ".join(str(k) for k in sorted(_REFERENCE_PIXWIN_TABLES))
+        raise ValueError(
+            f"pixel window data not available for nside={ns}: missing {_PIXWIN_DATA_DIR / f'pixel_window_n{ns:04d}.fits'} "
+            f"and no embedded table (embedded nsides: {supported}). "
+            "Add the HEALPix pixel-window FITS for this nside; use healpy only in tests for parity, not as a runtime source."
+        )
 
     data = None
     if _cpp is not None and hasattr(_cpp, "read_fits_table"):
@@ -3138,9 +3121,11 @@ def pixwin(
     """
     Return HEALPix pixel window function(s).
 
-    Resolution order: FITS under ``sphere/data/pixel_window_functions/`` (when
-    present), then embedded healpy-identical tables for select ``nside``, then
-    healpy at runtime if installed.
+    Data come from packaged FITS under ``sphere/data/pixel_window_functions/`` when
+    present, otherwise from a small set of embedded reference rows (same numeric
+    values as the standard HEALPix/healpy tables) for offline tests and dev
+    checkouts where ``*.fits`` are not in the tree. Other ``nside`` values require
+    the corresponding FITS file.
     """
     ns = int(nside)
     if not bool(_healpix.isnsideok(ns)):
