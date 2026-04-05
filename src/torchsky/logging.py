@@ -9,6 +9,14 @@ import sys
 from functools import wraps
 from typing import Optional
 
+# Re-export stdlib levels so `torchsky.logging.DEBUG` works if the submodule
+# shadows the standard `logging` module on the parent package.
+DEBUG = logging.DEBUG
+INFO = logging.INFO
+WARNING = logging.WARNING
+ERROR = logging.ERROR
+CRITICAL = logging.CRITICAL
+
 # Configure torchsky logger
 logger = logging.getLogger("torchsky")
 logger.setLevel(logging.INFO)

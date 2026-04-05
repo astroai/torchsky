@@ -1589,7 +1589,7 @@ class WCS:
                 xi, eta = self.tpv.invert_affine_exact(xi, eta)
             else:
                 xi, eta = self.tpv.invert(xi, eta)
-        if self._is_tnx:
+        if self._is_tnx or self._is_zpx:
             xi, eta = invert_tnx_plane(xi, eta, self.wat_data)
 
         # 4. Inverse Linear (CD matrix)

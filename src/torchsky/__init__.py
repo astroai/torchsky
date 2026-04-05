@@ -6,7 +6,7 @@ optimized for PyTorch tensors and pytorch-frame TensorFrames.
 """
 
 import importlib
-import logging
+import logging as _stdlib_logging
 from typing import Any, Dict, List, Optional, Union, Iterator, Tuple, Sequence
 from collections import OrderedDict
 
@@ -56,7 +56,7 @@ from .transforms import (
 )
 from .wcs import WCS
 
-_log = logging.getLogger(__name__)
+_log = _stdlib_logging.getLogger(__name__)
 
 # Recoverable errors when probing C++/FITS image fast paths (avoid bare ``except Exception``).
 _READ_EXC_TYPES = (
@@ -1094,7 +1094,7 @@ def read(
             return data
         except _READ_EXC_TYPES as exc:
             # Not an image HDU or reader mismatch; skip generic image fast path and fall through.
-            if _DEBUG_SCALE or _log.isEnabledFor(logging.DEBUG):
+            if _DEBUG_SCALE or _log.isEnabledFor(_stdlib_logging.DEBUG):
                 _log.debug(
                     "read: CPU image fast-path fallback for %r hdu=%s: %s",
                     path,
@@ -1217,7 +1217,7 @@ def read(
         except _READ_EXC_TYPES as exc:
             if force_image:
                 raise
-            if _log.isEnabledFor(logging.DEBUG):
+            if _log.isEnabledFor(_stdlib_logging.DEBUG):
                 _log.debug(
                     "read: generic image fast-path fallback for %r hdu=%s: %s",
                     path,

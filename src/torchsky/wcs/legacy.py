@@ -199,11 +199,11 @@ def invert_tnx_plane(
     *,
     n_iter: int = 6,
 ) -> Tuple[Tensor, Tensor]:
-    """Undo :func:`project_tnx` given distorted intermediate ``(xi', eta')``.
+    """Undo WAT ``lngcor`` / ``latcor`` offsets (TNX, ZPX, same IRAF surface format).
 
-    IRAF evaluates the correction surface at the **uncorrected** plane coordinates,
-    so inversion uses a short fixed-point iteration (exact when corrections are
-    constant).
+    IRAF evaluates the correction at the **uncorrected** intermediate coordinates,
+    so inversion uses fixed-point iteration (one step is exact for constant-only
+    surfaces).
     """
     xi = xi_corrected
     eta = eta_corrected
@@ -268,59 +268,25 @@ def project_zpx(
     xi: Tensor,
     eta: Tensor,
     params: Dict[str, float],
-    wat_data: Optional[str] = None,
+    wat_data: Optional[Dict[int, str]] = None,
 ) -> Tuple[Tensor, Tensor]:
     """
-    ZPX: Zenithal Poly + WAT corrections.
-
-    1. Apply WAT polynomial distortions (same as TNX).
-    2. Convert to (phi, theta) using ZPN projection with coeffs from WAT.
+    ZPX: WAT ``lngcor`` / ``latcor`` in the intermediate plane, then ZPN zenithal.
     """
     pv2 = _dict_to_pv_tensor(params, axis=2)
-    if wat_data is None:
-        return project_zenithal(xi, eta, "ZPN", pv2=pv2)
-
-    # 1. Distortions (Poly to xi, eta)
-    # Identical structure to TNX?
-    # IRAF ZPX: "The forward transformation... first applies the polynomial corrections... then the standard projection."
-    # Yes.
-
-    xi_out = xi.clone()
-    eta_out = eta.clone()
-
-    # Apply X correction (lngcor)
-    if "lngcor" in wat_data:
-        # Extract polynomial definition and evaluate
-        pass
-
-    # Apply Y correction (latcor)
-    if "latcor" in wat_data:
-        pass
-
-    # 2. ZPN Projection
-    # ZPX uses ZPN as the base zenithal projection
-    # Coefficients are stored in PV2_k (FITS standard) or WAT keywords (Legacy).
-
-    # If ZPN parameters are in the standard FITS PV2_k keywords:
-    # (reusing zenithal's ZPN implementation)
-    return project_zenithal(xi_out, eta_out, "ZPN", pv2=pv2)
+    dxi, deta = _tnx_delta_plane(xi, eta, wat_data)
+    return project_zenithal(xi + dxi, eta + deta, "ZPN", pv2=pv2)
 
 
 def deproject_zpx(
     phi: Tensor,
     theta: Tensor,
     params: Dict[str, float],
-    wat_data: Optional[str] = None,
+    wat_data: Optional[Dict[int, str]] = None,
 ) -> Tuple[Tensor, Tensor]:
-    """
-    ZPX: Inverse of project_zpx.
-    """
-    # 1. Standard ZPN deprojection
+    """Inverse of :func:`project_zpx` (ZPN deproject, then undo WAT plane offsets)."""
     from .zenithal import deproject_zenithal
 
     pv2_eff = _dict_to_pv_tensor(params, axis=2)
-    xi_out, eta_out = deproject_zenithal(phi, theta, "ZPN", pv2=pv2_eff)
-
-    # 2. Inverse of polynomial distortions
-    # Often ignored in simple readers as they are typically small
-    return xi_out, eta_out
+    xi_c, eta_c = deproject_zenithal(phi, theta, "ZPN", pv2=pv2_eff)
+    return invert_tnx_plane(xi_c, eta_c, wat_data)

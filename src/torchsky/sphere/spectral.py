@@ -15,6 +15,7 @@ except Exception:  # pragma: no cover - optional extension
     _cpp = None
 
 from ..wcs import healpix as _healpix
+from ._pixwin_embedded import REFERENCE_PIXWIN_TABLES as _REFERENCE_PIXWIN_TABLES
 
 _ANGLE_CACHE: dict[tuple[int, bool], tuple[Tensor, Tensor, Tensor, float]] = {}
 _YLM_CACHE: dict[
@@ -3059,6 +3060,26 @@ def gaussian_beam(fwhm_rad: float, lmax: int, *, pol: bool = False) -> Tensor:
     return torch.stack([base, base * fac_p, base * fac_p, base * fac_tp], dim=1)
 
 
+def _load_pixwin_via_healpy(ns: int) -> tuple[Tensor, Tensor]:
+    """Load temperature + polarization windows from healpy (same upstream tables)."""
+    try:
+        import healpy as hp  # noqa: PLC0415
+        import numpy as np  # noqa: PLC0415
+    except ImportError as exc:
+        raise ValueError(
+            f"pixel window FITS not found for nside={ns} under {_PIXWIN_DATA_DIR}; "
+            "install healpy or add packaged pixel_window_n*.fits files"
+        ) from exc
+    try:
+        pw_t, pw_p = hp.pixwin(ns, pol=True)
+    except TypeError:
+        pw_t = hp.pixwin(ns, pol=False)
+        pw_p = pw_t
+    pw_t_t = torch.as_tensor(np.asarray(pw_t, dtype=np.float64), dtype=torch.float64).reshape(-1)
+    pw_p_t = torch.as_tensor(np.asarray(pw_p, dtype=np.float64), dtype=torch.float64).reshape(-1)
+    return pw_t_t, pw_p_t
+
+
 def _load_pixwin_table(nside: int) -> tuple[Tensor, Tensor]:
     ns = int(nside)
     cached = _PIXWIN_TABLE_CACHE.get(ns)
@@ -3066,7 +3087,14 @@ def _load_pixwin_table(nside: int) -> tuple[Tensor, Tensor]:
         return cached
     path = _PIXWIN_DATA_DIR / f"pixel_window_n{ns:04d}.fits"
     if not path.is_file():
-        raise ValueError(f"pixel window table not available for nside={ns}: {path}")
+        ref = _REFERENCE_PIXWIN_TABLES.get(ns)
+        if ref is not None:
+            out = (ref[0].clone(), ref[1].clone())
+            _PIXWIN_TABLE_CACHE[ns] = out
+            return out
+        out = _load_pixwin_via_healpy(ns)
+        _PIXWIN_TABLE_CACHE[ns] = out
+        return out
 
     data = None
     if _cpp is not None and hasattr(_cpp, "read_fits_table"):
@@ -3110,7 +3138,9 @@ def pixwin(
     """
     Return HEALPix pixel window function(s).
 
-    Data are loaded from packaged HEALPix pixel-window FITS tables.
+    Resolution order: FITS under ``sphere/data/pixel_window_functions/`` (when
+    present), then embedded healpy-identical tables for select ``nside``, then
+    healpy at runtime if installed.
     """
     ns = int(nside)
     if not bool(_healpix.isnsideok(ns)):
@@ -3119,8 +3149,13 @@ def pixwin(
     if ll < 0:
         raise ValueError("lmax must be non-negative")
     pw_t_all, pw_p_all = _load_pixwin_table(ns)
-    if ll >= int(pw_t_all.numel()):
-        ll = int(pw_t_all.numel()) - 1
+    max_l = int(pw_t_all.numel()) - 1
+    if ll > max_l:
+        if lmax is not None:
+            raise ValueError(
+                f"lmax={lmax} exceeds tabulated multipoles (0..{max_l}) for nside={ns}"
+            )
+        ll = max_l
     if bool(pol):
         return pw_t_all[: ll + 1].clone(), pw_p_all[: ll + 1].clone()
     return pw_t_all[: ll + 1].clone()
