@@ -11,6 +11,8 @@ Submodules
     :data:`FIELD_MODEL_KINDS` tuple derived from :class:`FieldModelKind`.
 ``observation_builders``
     :class:`FieldObservation` factories for binned spectra, IFU cubes, and energy channels.
+``implicit_forward``
+    Forward-model shell (context ``c``, kinematics ``ζ``, modular survey losses); see ``implicit_forward.md``.
 """
 
 from __future__ import annotations
@@ -56,6 +58,14 @@ from .core import (
     _BaseFieldModel,
     _noise_pretrain_field_model,
 )
+from .implicit_forward import (
+    KinematicState,
+    SurveyDataTerm,
+    multi_survey_charbonnier_loss,
+    observation_charbonnier_loss,
+    predict_observation_mean,
+    scale_observation_for_rest_frame_scene,
+)
 from .observation_builders import (
     field_observations_from_bin_centers,
     field_observations_from_bin_edges,
@@ -73,6 +83,7 @@ from .types import (
     FieldCoordinateMode,
     FieldCurriculum,
     FieldDomain,
+    ForwardContext,
     FieldFitResult,
     FieldLossKind,
     FieldLossReduction,
@@ -91,6 +102,9 @@ from .types import (
 
 __all__ = [
     "FIELD_MODEL_KINDS",
+    "ForwardContext",
+    "KinematicState",
+    "SurveyDataTerm",
     "ObservationSpectralSummary",
     "SpectralCapacityProfile",
     "SpectralDataBudget",
@@ -150,6 +164,10 @@ __all__ = [
     "load_strainer_trunk_checkpoint",
     "pretrain_strainer_trunk_synthetic",
     "save_strainer_trunk_checkpoint",
+    "multi_survey_charbonnier_loss",
+    "observation_charbonnier_loss",
+    "predict_observation_mean",
+    "scale_observation_for_rest_frame_scene",
     "spectral_data_budget",
     "suggest_num_spectral_samples",
     "suggest_spectral_model_capacity",

@@ -282,6 +282,45 @@ def test_coadd_image_plane_identical_wcs(tmp_path) -> None:
     )
 
 
+def test_coadd_image_plane_spatial_tile_single_canvas_matches_non_tiled(tmp_path) -> None:
+    """One tile covering the full output matches non-tiled coadd (same code path)."""
+    path_a = tmp_path / "tile_a.fits"
+    path_b = tmp_path / "tile_b.fits"
+    header = _simple_header()
+    data_a = torch.arange(64, dtype=torch.float32).reshape(8, 8)
+    data_b = data_a + 2.0
+    torchsky.write(str(path_a), data_a, header=header, overwrite=True)
+    torchsky.write(str(path_b), data_b, header=header, overwrite=True)
+    obs = [ImageObservation(str(path_a)), ImageObservation(str(path_b))]
+    full = coadd_image_plane(obs)
+    tiled = coadd_image_plane(obs, spatial_tile_hw=(8, 8))
+    torch.testing.assert_close(tiled.data, full.data, atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(tiled.weight, full.weight, atol=1e-4, rtol=1e-4)
+    assert full.overlap_count is not None and tiled.overlap_count is not None
+    torch.testing.assert_close(tiled.overlap_count, full.overlap_count)
+
+
+def test_cli_map_coadd_writes_output(tmp_path, monkeypatch) -> None:
+    from torchsky.cli import main
+
+    path_a = tmp_path / "cli_a.fits"
+    path_b = tmp_path / "cli_b.fits"
+    header = _simple_header()
+    data_a = torch.arange(64, dtype=torch.float32).reshape(8, 8)
+    data_b = data_a + 2.0
+    torchsky.write(str(path_a), data_a, header=header, overwrite=True)
+    torchsky.write(str(path_b), data_b, header=header, overwrite=True)
+    out = tmp_path / "coadd_cli.fits"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["torchsky", "map", str(out), str(path_a), str(path_b), "--no-auto-tile"],
+    )
+    assert main() == 0
+    got, _ = torchsky.read(str(out), return_header=True)
+    torch.testing.assert_close(got, (data_a + data_b) / 2.0, atol=1e-4, rtol=1e-4)
+
+
 def test_coadd_image_plane_mean_stacking_averages_observations_equally(
     tmp_path,
 ) -> None:

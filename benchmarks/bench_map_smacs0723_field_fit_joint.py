@@ -29,6 +29,7 @@ if str(BENCH) not in sys.path:
 
 from bench_map_field_fit import _field_fit_kwargs_for_model, _field_model_kwargs_for_case  # noqa: E402
 from bench_map_smacs0723_field_fit import (  # noqa: E402
+    _PerExposureScalarBias,
     _crop_field_inputs_to_target,
     _field_target_observation,
     _robust_intensity_scale,
@@ -49,6 +50,7 @@ from bench_map_smacs0723_real import (  # noqa: E402
 import torchsky  # noqa: E402
 from torchsky.map import (  # noqa: E402
     FieldObservation,
+    ForwardContext,
     ImageObservation,
     coadd_image_plane,
     estimate_field_domain,
@@ -357,6 +359,14 @@ def main() -> int:
     parser.add_argument("--json-out", type=Path, default=DEFAULT_JSON_OUT)
     parser.add_argument("--markdown-out", type=Path, default=DEFAULT_MARKDOWN_OUT)
     parser.add_argument("--export-dir", type=Path, default=DEFAULT_EXPORT_DIR)
+    parser.add_argument(
+        "--forward-context",
+        action="store_true",
+        help=(
+            "Per-exposure ForwardContext for fit_field_model; wraps INR with "
+            "_PerExposureScalarBias (see bench_map_smacs0723_field_fit.py)."
+        ),
+    )
     args = parser.parse_args()
 
     bands = _parse_csv(args.bands)
@@ -366,6 +376,7 @@ def main() -> int:
     band_entries: list[dict[str, Any]] = []
     all_raw_field_inputs: list[tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]] = []
     all_field_observations: list[FieldObservation] = []
+    all_forward_contexts: list[ForwardContext] = []
 
     with tempfile.TemporaryDirectory(prefix="torchsky_smacs_joint_") as tmp:
         tmpdir = Path(tmp)
@@ -392,6 +403,7 @@ def main() -> int:
                                 "status": "MISSING",
                                 "message": message,
                                 "n_exposures": len(exposure_paths),
+                                "forward_context": bool(args.forward_context),
                             }
                         )
                     continue
@@ -450,7 +462,9 @@ def main() -> int:
                     (science, weight, valid.astype(np.float32, copy=False), dict(_sci_header(exposure_path)))
                 )
             field_observations: list[FieldObservation] = []
-            for image, weight, mask, header in raw_field_inputs:
+            for exposure_path, (image, weight, mask, header) in zip(
+                exposure_paths, raw_field_inputs, strict=True
+            ):
                 cropped = _crop_field_inputs_to_target(
                     image=image,
                     weight=weight,
@@ -461,6 +475,7 @@ def main() -> int:
                 if cropped is None:
                     continue
                 crop_image, crop_weight, crop_mask, crop_header = cropped
+                obs_index = len(all_field_observations) + len(field_observations)
                 field_observations.append(
                     FieldObservation(
                         image=torch.from_numpy(crop_image),
@@ -468,6 +483,16 @@ def main() -> int:
                         weight=torch.from_numpy(crop_weight),
                         mask=torch.from_numpy(crop_mask),
                         **_field_observation_kwargs_for_band(band),
+                    )
+                )
+                all_forward_contexts.append(
+                    ForwardContext(
+                        survey=str(band),
+                        exposure_id=f"{band}_{exposure_path.stem}",
+                        extra={
+                            "exposure_index": obs_index,
+                            "source_path": str(exposure_path),
+                        },
                     )
                 )
             if not field_observations:
@@ -480,6 +505,7 @@ def main() -> int:
                                 "status": "MISSING",
                                 "message": "no overlapping field observations",
                                 "n_exposures": len(exposure_paths),
+                                "forward_context": bool(args.forward_context),
                             }
                         )
                     continue
@@ -513,6 +539,20 @@ def main() -> int:
             all_field_observations.extend(field_observations)
 
         if not band_entries:
+            if args.skip_missing:
+                payload = {
+                    "rows": rows,
+                    "summary": [],
+                    "status": "skipped",
+                    "reason": "no bands available (missing reference or exposures)",
+                }
+                text = json.dumps(payload, indent=2)
+                args.json_out.parent.mkdir(parents=True, exist_ok=True)
+                args.json_out.write_text(text, encoding="utf-8")
+                args.markdown_out.parent.mkdir(parents=True, exist_ok=True)
+                args.markdown_out.write_text(_format_markdown(rows), encoding="utf-8")
+                print(text)
+                return 0
             raise RuntimeError("no bands available for joint fit")
 
         intensity_scale = _robust_intensity_scale(all_raw_field_inputs)
@@ -539,6 +579,12 @@ def main() -> int:
             )
 
         domain = estimate_field_domain(normalized_observations, coord_mode="sphere_xyz")
+        forward_ctx_tuple: tuple[ForwardContext | None, ...] | None = None
+        if args.forward_context:
+            if len(all_forward_contexts) != len(normalized_observations):
+                raise RuntimeError("internal: joint forward context list length mismatch")
+            forward_ctx_tuple = tuple(all_forward_contexts)
+
         fitted_models: dict[str, tuple[Any, float, dict[str, Any]]] = {}
         for model_kind in model_kinds:
             if model_kind == "coadd_bilinear":
@@ -554,7 +600,12 @@ def main() -> int:
                 steps=int(args.steps),
                 num_observations=len(normalized_observations),
             )
+            if forward_ctx_tuple is not None:
+                fit_kwargs = dict(fit_kwargs)
+                fit_kwargs["observation_forward_contexts"] = forward_ctx_tuple
             model = make_field_model(model_kind, domain, **model_kwargs)
+            if args.forward_context:
+                model = _PerExposureScalarBias(model, len(normalized_observations))
             t0 = time.perf_counter()
             result = fit_field_model(
                 normalized_observations,
@@ -576,6 +627,7 @@ def main() -> int:
                     "band": band,
                     "model": model_kind,
                     "n_exposures": int(entry["n_exposures"]),
+                    "forward_context": bool(args.forward_context),
                     "status": "OK",
                 }
                 try:
@@ -587,11 +639,17 @@ def main() -> int:
                         render_num_spectral_samples = int(
                             fit_kwargs.get("num_spectral_samples", 1)
                         )
+                        render_ctx = (
+                            ForwardContext(survey=str(band))
+                            if args.forward_context
+                            else None
+                        )
                         pred = (
                             render_field_observation(
                                 result_model,
                                 target_observation,
                                 num_spectral_samples=render_num_spectral_samples,
+                                forward_context=render_ctx,
                             )
                             .detach()
                             .cpu()

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import functools
+import inspect
 import math
 from collections.abc import Iterator
 from typing import Literal, Sequence
@@ -32,7 +34,91 @@ from .types import (
     FieldObservation,
     FieldObservationSampling,
     FieldSpectralSampling,
+    ForwardContext,
 )
+
+
+@functools.lru_cache(maxsize=512)
+def _type_method_accepts_kwarg(cls: type, method_name: str, kw: str) -> bool:
+    fn = getattr(cls, method_name, None)
+    if fn is None:
+        return False
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return False
+    if kw in sig.parameters:
+        return True
+    return any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    )
+
+
+def _call_scalar_field_forward(
+    model: nn.Module,
+    ra: Tensor,
+    dec: Tensor,
+    wavelength: Tensor | float,
+    *,
+    forward_context: ForwardContext | None,
+) -> Tensor:
+    if forward_context is None:
+        return model(ra, dec, wavelength)
+    if _type_method_accepts_kwarg(type(model), "forward", "forward_context"):
+        return model(ra, dec, wavelength, forward_context=forward_context)
+    return model(ra, dec, wavelength)
+
+
+def _call_render_bandpass(
+    model: nn.Module,
+    ra: Tensor,
+    dec: Tensor,
+    wavelengths: Tensor,
+    weights: Tensor,
+    *,
+    forward_context: ForwardContext | None,
+) -> Tensor:
+    rb = model.render_bandpass
+    if forward_context is None:
+        return rb(ra, dec, wavelengths, weights)
+    if _type_method_accepts_kwarg(type(model), "render_bandpass", "forward_context"):
+        return rb(ra, dec, wavelengths, weights, forward_context=forward_context)
+    return rb(ra, dec, wavelengths, weights)
+
+
+def _call_render_bandpass_distribution(
+    model: nn.Module,
+    ra: Tensor,
+    dec: Tensor,
+    wavelengths: Tensor,
+    weights: Tensor,
+    *,
+    forward_context: ForwardContext | None,
+) -> tuple[Tensor, Tensor]:
+    rb = model.render_bandpass_distribution
+    if forward_context is None:
+        return rb(ra, dec, wavelengths, weights)
+    if _type_method_accepts_kwarg(
+        type(model), "render_bandpass_distribution", "forward_context"
+    ):
+        return rb(ra, dec, wavelengths, weights, forward_context=forward_context)
+    return rb(ra, dec, wavelengths, weights)
+
+
+def _call_forward_distribution(
+    model: nn.Module,
+    ra: Tensor,
+    dec: Tensor,
+    wavelength: Tensor | float,
+    *,
+    forward_context: ForwardContext | None,
+) -> tuple[Tensor, Tensor]:
+    fd = model.forward_distribution
+    if forward_context is None:
+        return fd(ra, dec, wavelength)
+    if _type_method_accepts_kwarg(type(model), "forward_distribution", "forward_context"):
+        return fd(ra, dec, wavelength, forward_context=forward_context)
+    return fd(ra, dec, wavelength)
 
 
 def _wrapped_delta_ra_deg(ra_a_deg: Tensor, ra_b_deg: float) -> Tensor:
@@ -4765,6 +4851,7 @@ def render_field_observation_distribution(
     generator: torch.Generator | None = None,
     override_wavelengths: Tensor | None = None,
     override_weights: Tensor | None = None,
+    forward_context: ForwardContext | None = None,
 ) -> tuple[Tensor, Tensor]:
     image = observation.image
     if image.ndim != 2:
@@ -4804,11 +4891,13 @@ def render_field_observation_distribution(
         raise ValueError(f"unsupported spectral_sampling {spectral_sampling!r}")
     render_bandpass_distribution = getattr(model, "render_bandpass_distribution", None)
     if callable(render_bandpass_distribution):
-        mean, logvar = render_bandpass_distribution(
+        mean, logvar = _call_render_bandpass_distribution(
+            model,
             ra_deg.to(dtype=torch.float32),
             dec_deg.to(dtype=torch.float32),
             wavelengths,
             weights,
+            forward_context=forward_context,
         )
     else:
         forward_distribution = getattr(model, "forward_distribution", None)
@@ -4816,10 +4905,12 @@ def render_field_observation_distribution(
             means = []
             variances = []
             for wavelength in wavelengths:
-                mean, logvar = forward_distribution(
+                mean, logvar = _call_forward_distribution(
+                    model,
                     ra_deg.to(dtype=torch.float32),
                     dec_deg.to(dtype=torch.float32),
                     wavelength,
+                    forward_context=forward_context,
                 )
                 means.append(mean)
                 variances.append(torch.exp(logvar))
@@ -4844,6 +4935,7 @@ def render_field_observation_distribution(
                 generator=generator,
                 override_wavelengths=override_wavelengths,
                 override_weights=override_weights,
+                forward_context=forward_context,
             )
             logvar = torch.zeros_like(mean)
     if observation.psf_sigma_pix > 0.0:
@@ -4865,6 +4957,7 @@ def render_field_samples_distribution(
     generator: torch.Generator | None = None,
     override_wavelengths: Tensor | None = None,
     override_weights: Tensor | None = None,
+    forward_context: ForwardContext | None = None,
 ) -> tuple[Tensor, Tensor]:
     if observation.psf_sigma_pix > 0.0:
         raise ValueError("pixel-sampled field rendering does not support PSF blurring")
@@ -4897,32 +4990,36 @@ def render_field_samples_distribution(
         raise ValueError(f"unsupported spectral_sampling {spectral_sampling!r}")
     render_bandpass_distribution = getattr(model, "render_bandpass_distribution", None)
     if callable(render_bandpass_distribution):
-        return render_bandpass_distribution(
+        return _call_render_bandpass_distribution(
+            model,
             ra_deg.to(dtype=torch.float32),
             dec_deg.to(dtype=torch.float32),
             wavelengths,
             weights,
+            forward_context=forward_context,
         )
     forward_distribution = getattr(model, "forward_distribution", None)
     if callable(forward_distribution):
         means = []
         variances = []
         for wavelength in wavelengths:
-            mean, logvar = forward_distribution(
+            mean, logvar = _call_forward_distribution(
+                model,
                 ra_deg.to(dtype=torch.float32),
                 dec_deg.to(dtype=torch.float32),
                 wavelength,
+                forward_context=forward_context,
             )
             means.append(mean)
             variances.append(torch.exp(logvar))
         stacked_mean = torch.stack(means, dim=0)
         stacked_var = torch.stack(variances, dim=0)
         mean = torch.sum(
-            stacked_mean * weights.view(-1, 1).to(dtype=stacked_mean.dtype),
+            stacked_mean * weights.view(-1, 1, 1).to(dtype=stacked_mean.dtype),
             dim=0,
         )
         var = torch.sum(
-            stacked_var * torch.square(weights).view(-1, 1).to(dtype=stacked_var.dtype),
+            stacked_var * torch.square(weights).view(-1, 1, 1).to(dtype=stacked_var.dtype),
             dim=0,
         )
         return mean, torch.log(torch.clamp(var, min=1.0e-8))
@@ -4937,8 +5034,10 @@ def render_field_samples_distribution(
         generator=generator,
         override_wavelengths=override_wavelengths,
         override_weights=override_weights,
+        forward_context=forward_context,
     )
     return mean, torch.zeros_like(mean)
+
 
 
 def render_field_observation(
@@ -4954,6 +5053,7 @@ def render_field_observation(
     spatial_tile_hw: tuple[int, int] | None = None,
     use_func_vmap: bool = False,
     func_vmap_chunk: int = 65536,
+    forward_context: ForwardContext | None = None,
 ) -> Tensor:
     image = observation.image
     if image.ndim != 2:
@@ -4996,17 +5096,24 @@ def render_field_observation(
             "render_field_observation(..., spatial_tile_hw=...) cannot be used with "
             "psf_sigma_pix > 0 because the PSF couples pixels across tiles"
         )
+    if forward_context is not None and use_func_vmap:
+        raise ValueError(
+            "render_field_observation(..., use_func_vmap=True) does not support "
+            "forward_context=... (torch.func vmap path is context-free)"
+        )
     render_bandpass = getattr(model, "render_bandpass", None)
     if callable(render_bandpass):
         if spatial_tile_hw is not None or use_func_vmap:
             raise ValueError(
                 "spatial_tile_hw and use_func_vmap are not supported when model.render_bandpass is defined"
             )
-        rendered = render_bandpass(
+        rendered = _call_render_bandpass(
+            model,
             ra_deg.to(dtype=torch.float32),
             dec_deg.to(dtype=torch.float32),
             wavelengths,
             weights,
+            forward_context=forward_context,
         )
         if observation.psf_sigma_pix > 0.0:
             rendered = _gaussian_blur(rendered, float(observation.psf_sigma_pix))
@@ -5034,7 +5141,13 @@ def render_field_observation(
                     chunk=func_vmap_chunk,
                 )
             else:
-                plane = model(ra_p, dec_p, wavelength)
+                plane = _call_scalar_field_forward(
+                    model,
+                    ra_p,
+                    dec_p,
+                    wavelength,
+                    forward_context=forward_context,
+                )
             patch += plane * weights[i].to(dtype=plane.dtype)
         rendered[y0:y1, x0:x1] = patch
     if observation.psf_sigma_pix > 0.0:
@@ -5054,6 +5167,7 @@ def render_field_samples(
     generator: torch.Generator | None = None,
     override_wavelengths: Tensor | None = None,
     override_weights: Tensor | None = None,
+    forward_context: ForwardContext | None = None,
 ) -> Tensor:
     if observation.psf_sigma_pix > 0.0:
         raise ValueError("pixel-sampled field rendering does not support PSF blurring")
@@ -5086,19 +5200,23 @@ def render_field_samples(
         raise ValueError(f"unsupported spectral_sampling {spectral_sampling!r}")
     render_bandpass = getattr(model, "render_bandpass", None)
     if callable(render_bandpass):
-        return render_bandpass(
+        return _call_render_bandpass(
+            model,
             ra_deg.to(dtype=torch.float32),
             dec_deg.to(dtype=torch.float32),
             wavelengths,
             weights,
+            forward_context=forward_context,
         )
     spectral_samples = []
     for wavelength in wavelengths:
         spectral_samples.append(
-            model(
+            _call_scalar_field_forward(
+                model,
                 ra_deg.to(dtype=torch.float32),
                 dec_deg.to(dtype=torch.float32),
                 wavelength,
+                forward_context=forward_context,
             )
         )
     stacked = torch.stack(spectral_samples, dim=0)
@@ -5487,9 +5605,20 @@ def fit_field_model(
     noise_pretrain_max_frequency: float = 8.0,
     freeze_field_encoder: bool = False,
     freeze_field_body: bool = False,
+    observation_forward_contexts: Sequence[ForwardContext | None] | None = None,
 ) -> FieldFitResult:
     if not observations:
         raise ValueError("fit_field_model requires at least one observation")
+    if observation_forward_contexts is not None:
+        if len(observation_forward_contexts) != len(observations):
+            raise ValueError(
+                "observation_forward_contexts must have the same length as observations"
+            )
+        obs_forward_ctx: tuple[ForwardContext | None, ...] = tuple(
+            observation_forward_contexts
+        )
+    else:
+        obs_forward_ctx = tuple(None for _ in observations)
     if steps <= 0:
         raise ValueError("steps must be positive")
     pretrain_steps = max(int(noise_pretrain_steps), 0)
@@ -5610,9 +5739,11 @@ def fit_field_model(
             observation_sampling=observation_sampling,
             generator=sampling_generator,
         )
-        selected_observations: list[FieldObservation] = []
+        selected_pairs: list[tuple[FieldObservation, ForwardContext | None]] = []
         if pixel_sample_count > 0:
-            selected_observations = [observations[idx] for idx in selected_indices]
+            selected_pairs = [
+                (observations[idx], obs_forward_ctx[idx]) for idx in selected_indices
+            ]
         elif (
             shared_sky_patch_sampling
             and training_patch_size is not None
@@ -5621,7 +5752,9 @@ def fit_field_model(
             uncropped_indices = selected_indices[:uncropped_count]
             cropped_indices = selected_indices[uncropped_count:]
             if uncropped_indices:
-                selected_observations.extend(observations[idx] for idx in uncropped_indices)
+                selected_pairs.extend(
+                    (observations[i], obs_forward_ctx[i]) for i in uncropped_indices
+                )
             for _ in range(patches_per_observation):
                 ref_position = int(
                     torch.randint(
@@ -5652,14 +5785,20 @@ def fit_field_model(
                         patch_size=patch,
                     )
                     if cropped is not None:
-                        selected_observations.append(cropped)
-            if not selected_observations:
-                selected_observations = [observations[idx] for idx in selected_indices]
+                        selected_pairs.append(
+                            (cropped, obs_forward_ctx[observation_index])
+                        )
+            if not selected_pairs:
+                selected_pairs = [
+                    (observations[idx], obs_forward_ctx[idx])
+                    for idx in selected_indices
+                ]
         else:
             for selected_rank, observation_index in enumerate(selected_indices):
                 base_observation = observations[observation_index]
+                base_ctx = obs_forward_ctx[observation_index]
                 if training_patch_size is None or selected_rank < uncropped_count:
-                    selected_observations.append(base_observation)
+                    selected_pairs.append((base_observation, base_ctx))
                     continue
                 patch = min(
                     int(training_patch_size),
@@ -5670,7 +5809,7 @@ def fit_field_model(
                     patch >= int(base_observation.image.shape[-2])
                     and patch >= int(base_observation.image.shape[-1])
                 ):
-                    selected_observations.append(base_observation)
+                    selected_pairs.append((base_observation, base_ctx))
                     continue
                 for _ in range(patches_per_observation):
                     x0, y0 = _sample_patch_origin(
@@ -5678,16 +5817,20 @@ def fit_field_model(
                         patch_size=patch,
                         generator=sampling_generator,
                     )
-                    selected_observations.append(
-                        _crop_field_observation(
-                            base_observation,
-                            x0=x0,
-                            y0=y0,
-                            width=patch,
-                            height=patch,
+                    selected_pairs.append(
+                        (
+                            _crop_field_observation(
+                                base_observation,
+                                x0=x0,
+                                y0=y0,
+                                width=patch,
+                                height=patch,
+                            ),
+                            base_ctx,
                         )
                     )
-        context_observations: list[FieldObservation] = []
+        selected_observations = [o for o, _ in selected_pairs]
+        context_pairs: list[tuple[FieldObservation, ForwardContext | None]] = []
         if context_count > 0 and context_weight > 0.0:
             context_indices = _sample_observation_indices(
                 observations,
@@ -5695,7 +5838,10 @@ def fit_field_model(
                 observation_sampling=observation_sampling,
                 generator=sampling_generator,
             )
-            context_observations = [observations[idx] for idx in context_indices]
+            context_pairs = [
+                (observations[idx], obs_forward_ctx[idx]) for idx in context_indices
+            ]
+
         streamed_total_loss = 0.0
         selected_global_weight_sum = None
         selected_band_weight_sum: dict[tuple[object, ...], float] = {}
@@ -5717,7 +5863,7 @@ def fit_field_model(
                         selected_band_weight_sum.get(band_key, 0.0)
                         + _observation_weight_sum_scalar(observation)
                     )
-        for observation in selected_observations:
+        for observation, forward_context in selected_pairs:
             render_kwargs = {}
             if training_spectral_sampling == "mixture_mc":
                 assert mixture_wavelengths is not None and mixture_probs is not None
@@ -5733,6 +5879,7 @@ def fit_field_model(
                 render_kwargs["spectral_sampling_grid_size"] = (
                     training_spectral_sampling_grid_size
                 )
+            render_kwargs["forward_context"] = forward_context
             if pixel_sample_count > 0 and observation.psf_sigma_pix <= 0.0:
                 sampled = _sample_observation_pixels(
                     observation,
@@ -5938,12 +6085,13 @@ def fit_field_model(
                     generator=sampling_generator,
                 )[:max_anchor_count].tolist()
                 for anchor_index in anchor_perm:
-                    anchor_observation = selected_observations[anchor_index]
+                    anchor_observation, anchor_fctx = selected_pairs[anchor_index]
                     anchor_pred = render_field_observation(
                         model,
                         anchor_observation,
                         num_spectral_samples=anchor_num_samples,
                         spectral_sampling="deterministic_quadrature",
+                        forward_context=anchor_fctx,
                     )
                     anchor_image = anchor_observation.image.to(
                         device=anchor_pred.device,
@@ -5993,9 +6141,9 @@ def fit_field_model(
                     )
                 else:
                     total_loss = total_loss + anchor_loss_weight * anchor_loss
-        if context_observations and context_weight > 0.0:
-            scaled_context_weight = context_weight / max(len(context_observations), 1)
-            for context_observation in context_observations:
+        if context_pairs and context_weight > 0.0:
+            scaled_context_weight = context_weight / max(len(context_pairs), 1)
+            for context_observation, ctx_f in context_pairs:
                 context_render_kwargs = {}
                 if training_spectral_sampling == "mixture_mc":
                     assert mixture_wavelengths is not None and mixture_probs is not None
@@ -6011,6 +6159,7 @@ def fit_field_model(
                     context_render_kwargs["spectral_sampling_grid_size"] = (
                         training_spectral_sampling_grid_size
                     )
+                context_render_kwargs["forward_context"] = ctx_f
                 context_pred = render_field_observation(
                     model,
                     context_observation,
@@ -6165,18 +6314,21 @@ def fit_field_model(
         global_weight_sum = None
         band_weighted_loss = {}
         band_weight_sum = {}
-        for observation in observations:
+        for obs_idx, observation in enumerate(observations):
+            fctx = obs_forward_ctx[obs_idx]
             if loss_kind == "gaussian_nll":
                 pred, pred_logvar = render_field_observation_distribution(
                     model,
                     observation,
                     num_spectral_samples=num_spectral_samples,
+                    forward_context=fctx,
                 )
             else:
                 pred = render_field_observation(
                     model,
                     observation,
                     num_spectral_samples=num_spectral_samples,
+                    forward_context=fctx,
                 )
                 pred_logvar = None
             image = observation.image.to(device=pred.device, dtype=pred.dtype)

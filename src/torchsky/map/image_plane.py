@@ -2425,6 +2425,33 @@ def _project_observation_to_target(
     return sampled_numer, sampled_weight, overlap, projected.moc
 
 
+def _subtarget_header_for_window(
+    full_header: dict,
+    *,
+    full_shape: tuple[int, int],
+    y0: int,
+    y1: int,
+    x0: int,
+    x1: int,
+) -> tuple[dict, tuple[int, int]]:
+    """Build WCS header for a pixel window ``[y0,y1) × [x0,x1)`` in the full grid."""
+    h = int(y1) - int(y0)
+    w = int(x1) - int(x0)
+    if h <= 0 or w <= 0:
+        raise ValueError("subtarget window must have positive width and height")
+    fh, fw = int(full_shape[0]), int(full_shape[1])
+    if y0 < 0 or x0 < 0 or y1 > fh or x1 > fw:
+        raise ValueError("subtarget window exceeds full image bounds")
+    out = dict(full_header)
+    out["NAXIS1"] = w
+    out["NAXIS2"] = h
+    if "CRPIX1" in out:
+        out["CRPIX1"] = float(out["CRPIX1"]) - float(x0)
+    if "CRPIX2" in out:
+        out["CRPIX2"] = float(out["CRPIX2"]) - float(y0)
+    return out, (h, w)
+
+
 def plan_image_plane_target(
     observations: Sequence[ImageObservation],
     *,
@@ -2531,6 +2558,83 @@ def plan_image_plane_cube_target_from_header(
     )
 
 
+def _coadd_image_plane_spatial_tiles(
+    observations: Sequence[ImageObservation],
+    *,
+    header_dict: dict,
+    target_shape: tuple[int, int],
+    tile_height: int,
+    tile_width: int,
+    output_path: Optional[str],
+    resampling_kernel: MapResamplingKernel,
+    value_semantics: MapValueSemantics,
+    stacking_method: MapStackingMethod,
+    drizzle_pixfrac: float,
+) -> MapResult:
+    """Accumulate a large map in non-overlapping spatial tiles to cap per-tile memory."""
+    if not observations:
+        raise ValueError("At least one observation is required")
+    H, W = int(target_shape[0]), int(target_shape[1])
+    th = max(int(tile_height), 1)
+    tw = max(int(tile_width), 1)
+    first = observations[0]
+    first_image, first_header = read(first.path, hdu=first.hdu, return_header=True)
+    first_image = _validate_image_plane(first_image)
+    device = first_image.device
+    mosaic_surface_brightness_area_scaling: bool | None = None
+    if value_semantics == "surface_brightness" and stacking_method == "weighted_mean":
+        mosaic_surface_brightness_area_scaling = (
+            _should_apply_surface_brightness_area_scaling(
+                observations,
+                target_header=header_dict,
+                target_shape=target_shape,
+                first_header=dict(first_header),
+            )
+        )
+    full_data = torch.zeros((H, W), dtype=torch.float32, device=device)
+    full_weight = torch.zeros((H, W), dtype=torch.float32, device=device)
+    full_overlap = torch.zeros((H, W), dtype=torch.int32, device=device)
+    for y0 in range(0, H, th):
+        for x0 in range(0, W, tw):
+            y1, x1 = min(y0 + th, H), min(x0 + tw, W)
+            sub_header, _ = _subtarget_header_for_window(
+                header_dict,
+                full_shape=(H, W),
+                y0=y0,
+                y1=y1,
+                x0=x0,
+                x1=x1,
+            )
+            sub = coadd_image_plane(
+                observations,
+                target_header=sub_header,
+                output_path=None,
+                footprint_order=None,
+                resampling_kernel=resampling_kernel,
+                value_semantics=value_semantics,
+                stacking_method=stacking_method,
+                drizzle_pixfrac=drizzle_pixfrac,
+                spatial_tile_hw=None,
+                surface_brightness_area_scaling=mosaic_surface_brightness_area_scaling,
+            )
+            full_data[y0:y1, x0:x1] = sub.data.to(device=device)
+            full_weight[y0:y1, x0:x1] = sub.weight.to(device=device)
+            if sub.overlap_count is not None:
+                full_overlap[y0:y1, x0:x1] = sub.overlap_count.to(device=device)
+    result = MapResult(
+        data=full_data,
+        weight=full_weight,
+        header=header_dict,
+        overlap_count=full_overlap,
+        coverage_moc=None,
+        observation_mocs=None,
+    )
+    if output_path is not None:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        write(output_path, full_data, header=header_dict, overwrite=True)
+    return result
+
+
 def coadd_image_plane(
     observations: Sequence[ImageObservation],
     *,
@@ -2541,6 +2645,8 @@ def coadd_image_plane(
     value_semantics: MapValueSemantics = "surface_brightness",
     stacking_method: MapStackingMethod = "weighted_mean",
     drizzle_pixfrac: float = 1.0,
+    spatial_tile_hw: tuple[int, int] | None = None,
+    surface_brightness_area_scaling: bool | None = None,
 ) -> MapResult:
     if not observations:
         raise ValueError("At least one observation is required")
@@ -2575,16 +2681,39 @@ def coadd_image_plane(
             fallback=tuple(int(v) for v in first_image.shape[-2:]),
         )
     device = first_image.device
-    apply_surface_brightness_area_scaling = (
-        value_semantics == "surface_brightness"
-        and stacking_method == "weighted_mean"
-        and _should_apply_surface_brightness_area_scaling(
+    if spatial_tile_hw is not None:
+        if footprint_order is not None:
+            raise ValueError(
+                "spatial_tile_hw is incompatible with footprint_order=... "
+                "(MOC accumulation is not defined per tile); omit one of them"
+            )
+        return _coadd_image_plane_spatial_tiles(
             observations,
-            target_header=header_dict,
+            header_dict=header_dict,
             target_shape=target_shape,
-            first_header=dict(first_header),
+            tile_height=int(spatial_tile_hw[0]),
+            tile_width=int(spatial_tile_hw[1]),
+            output_path=output_path,
+            resampling_kernel=resampling_kernel,
+            value_semantics=value_semantics,
+            stacking_method=stacking_method,
+            drizzle_pixfrac=drizzle_pixfrac,
         )
-    )
+    if not (
+        value_semantics == "surface_brightness" and stacking_method == "weighted_mean"
+    ):
+        apply_surface_brightness_area_scaling = False
+    elif surface_brightness_area_scaling is not None:
+        apply_surface_brightness_area_scaling = surface_brightness_area_scaling
+    else:
+        apply_surface_brightness_area_scaling = (
+            _should_apply_surface_brightness_area_scaling(
+                observations,
+                target_header=header_dict,
+                target_shape=target_shape,
+                first_header=dict(first_header),
+            )
+        )
     prepared_target: _PreparedImagePlaneTarget | None = None
 
     def ensure_prepared_target() -> _PreparedImagePlaneTarget:
@@ -2782,12 +2911,18 @@ class ImagePlaneMapMaker:
         value_semantics: MapValueSemantics = "surface_brightness",
         stacking_method: MapStackingMethod = "weighted_mean",
         drizzle_pixfrac: float = 1.0,
+        spatial_tile_hw: tuple[int, int] | None = None,
     ) -> None:
         self.target_header = target_header
         self.resampling_kernel = _validated_map_resampling_kernel(resampling_kernel)
         self.value_semantics = _validated_map_value_semantics(value_semantics)
         self.stacking_method = _validated_map_stacking_method(stacking_method)
         self.drizzle_pixfrac = _validated_drizzle_pixfrac(drizzle_pixfrac)
+        self.spatial_tile_hw = (
+            None
+            if spatial_tile_hw is None
+            else (int(spatial_tile_hw[0]), int(spatial_tile_hw[1]))
+        )
 
     def run(
         self,
@@ -2803,6 +2938,7 @@ class ImagePlaneMapMaker:
             value_semantics=self.value_semantics,
             stacking_method=self.stacking_method,
             drizzle_pixfrac=self.drizzle_pixfrac,
+            spatial_tile_hw=self.spatial_tile_hw,
         )
 
 

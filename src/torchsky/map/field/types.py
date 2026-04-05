@@ -5,8 +5,8 @@ Implementation of ``nn.Module`` subclasses and training live in :mod:`torchsky.m
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 import torch.nn as nn
 from torch import Tensor
@@ -57,6 +57,21 @@ FieldObservationSampling = Literal["uniform", "band_balanced"]
 FieldNoisePretrainKind = Literal["none", "uniform", "gaussian", "spectrum"]
 # wavelength | energy | frequency — meaning of spectral_min / spectral_max numeric values
 FieldSpectralQuantity = Literal["wavelength", "energy", "frequency"]
+
+
+@dataclass(frozen=True)
+class ForwardContext:
+    """Exposure / instrument context ``c`` (see ``implicit_forward.md`` §2–3).
+
+    Rendering passes this to ``nn.Module.forward`` or ``render_bandpass`` **only when**
+    the model declares a ``forward_context`` keyword parameter. Otherwise it is ignored
+    so existing field models stay valid without changes.
+    """
+
+    survey: str | None = None
+    exposure_id: str | None = None
+    time_mjd: float | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

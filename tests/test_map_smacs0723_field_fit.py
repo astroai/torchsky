@@ -13,13 +13,14 @@ if str(BENCHMARKS) not in sys.path:
     sys.path.insert(0, str(BENCHMARKS))
 
 from bench_map_smacs0723_field_fit import (  # noqa: E402
+    _PerExposureScalarBias,
     _real_fit_kwargs,
     _robust_intensity_scale,
     _scaled_field_observation,
     _summarize_row_markdown,
 )
 from bench_map_smacs0723_real import _field_observation_kwargs_for_band  # noqa: E402
-from torchsky.map import FieldObservation  # noqa: E402
+from torchsky.map import FieldObservation, ForwardContext  # noqa: E402
 
 
 def test_summarize_row_markdown_lists_models() -> None:
@@ -104,3 +105,25 @@ def test_real_fit_kwargs_use_pixel_sampling_for_exact_wavelength_debug_mode() ->
     assert kwargs["pixel_samples_per_observation"] == 512
     assert kwargs["training_patch_size"] is None
     assert kwargs["observations_per_step"] == 1
+
+
+def test_per_exposure_scalar_bias_uses_forward_context_index() -> None:
+    class _OnesField(torch.nn.Module):
+        def forward(
+            self,
+            ra_deg: torch.Tensor,
+            dec_deg: torch.Tensor,
+            wavelength: torch.Tensor | float,
+        ) -> torch.Tensor:
+            return torch.ones_like(ra_deg, dtype=torch.float32)
+
+    m = _PerExposureScalarBias(_OnesField(), 2)
+    m.bias.data = torch.tensor([0.0, 2.5])
+    ra = torch.zeros((2, 2), dtype=torch.float32)
+    dec = torch.zeros((2, 2), dtype=torch.float32)
+    wl = 5000.0
+    assert torch.allclose(m(ra, dec, wl), torch.ones((2, 2)))
+    assert torch.allclose(
+        m(ra, dec, wl, ForwardContext(extra={"exposure_index": 1})),
+        torch.ones((2, 2)) + 2.5,
+    )

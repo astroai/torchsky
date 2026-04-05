@@ -43,6 +43,7 @@ from bench_map_smacs0723_real import (  # noqa: E402
 import torchsky  # noqa: E402
 from torchsky.map import (  # noqa: E402
     FieldObservation,
+    ForwardContext,
     ImageObservation,
     coadd_image_plane,
     estimate_field_domain,
@@ -53,6 +54,34 @@ from torchsky.map import (  # noqa: E402
 
 
 REAL_CASE = "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit"
+
+
+class _PerExposureScalarBias(torch.nn.Module):
+    """SMACS try-out: learnable scalar offset per exposure index (via ``ForwardContext``).
+
+    Default field INR modules ignore ``forward_context``; wrapping with this makes
+    ``--forward-context`` change the optimization problem without editing core models.
+    """
+
+    def __init__(self, inner: torch.nn.Module, num_exposures: int) -> None:
+        super().__init__()
+        self.inner = inner
+        self.bias = torch.nn.Parameter(torch.zeros(int(num_exposures)))
+
+    def forward(
+        self,
+        ra_deg: torch.Tensor,
+        dec_deg: torch.Tensor,
+        wavelength: torch.Tensor | float,
+        forward_context: ForwardContext | None = None,
+    ) -> torch.Tensor:
+        y = self.inner(ra_deg, dec_deg, wavelength)
+        if forward_context is None:
+            return y
+        idx = forward_context.extra.get("exposure_index")
+        if idx is None:
+            return y
+        return y + self.bias[int(idx)]
 
 
 def _time_many(fn, runs: int) -> float:
@@ -77,14 +106,18 @@ def _fit_with_timing(
     steps: int,
     runs: int,
     fit_kwargs: dict[str, Any],
+    observation_forward_contexts: tuple[ForwardContext | None, ...] | None = None,
 ) -> tuple[Any, float]:
+    fk = dict(fit_kwargs)
+    if observation_forward_contexts is not None:
+        fk["observation_forward_contexts"] = observation_forward_contexts
     if runs <= 1:
         t0 = time.perf_counter()
         result = fit_field_model(
             observations,
             model,
             steps=steps,
-            **fit_kwargs,
+            **fk,
         )
         return result, float((time.perf_counter() - t0) * 1000.0)
     fit_time_ms = (
@@ -93,7 +126,7 @@ def _fit_with_timing(
                 observations,
                 model,
                 steps=steps,
-                **fit_kwargs,
+                **fk,
             ),
             runs,
         )
@@ -103,7 +136,7 @@ def _fit_with_timing(
         observations,
         model,
         steps=steps,
-        **fit_kwargs,
+        **fk,
     )
     return result, fit_time_ms
 
@@ -334,6 +367,15 @@ def main() -> int:
     )
     parser.add_argument("--json-out", type=Path, default=DEFAULT_JSON_OUT)
     parser.add_argument("--markdown-out", type=Path, default=DEFAULT_MARKDOWN_OUT)
+    parser.add_argument(
+        "--forward-context",
+        action="store_true",
+        help=(
+            "Pass per-exposure ForwardContext into fit_field_model (exposure stem, band, index). "
+            "Wraps INR models with a learnable per-exposure scalar bias so contexts affect training; "
+            "coadd_bilinear unchanged."
+        ),
+    )
     args = parser.parse_args()
 
     model_kinds = [part.strip() for part in args.models.split(",") if part.strip()]
@@ -405,7 +447,10 @@ def main() -> int:
         field_target_header = _linearize_sip_header(target_header) if args.linearize_target_sip else dict(target_header)
 
         field_observations: list[FieldObservation] = []
-        for image, weight, mask, header in raw_field_inputs:
+        smacs_forward_contexts: list[ForwardContext] = []
+        for exposure_path, (image, weight, mask, header) in zip(
+            exposure_paths, raw_field_inputs, strict=True
+        ):
             cropped = _crop_field_inputs_to_target(
                 image=image,
                 weight=weight,
@@ -416,6 +461,7 @@ def main() -> int:
             if cropped is None:
                 continue
             crop_image, crop_weight, crop_mask, crop_header = cropped
+            obs_index = len(field_observations)
             field_observations.append(
                 FieldObservation(
                     image=torch.from_numpy(crop_image),
@@ -426,6 +472,16 @@ def main() -> int:
                         args.band_name,
                         observation_mode=args.observation_mode,
                     ),
+                )
+            )
+            smacs_forward_contexts.append(
+                ForwardContext(
+                    survey=str(args.band_name),
+                    exposure_id=exposure_path.stem,
+                    extra={
+                        "exposure_index": obs_index,
+                        "source_path": str(exposure_path),
+                    },
                 )
             )
 
@@ -456,6 +512,12 @@ def main() -> int:
                 )
             )
 
+        forward_ctx_tuple: tuple[ForwardContext | None, ...] | None = None
+        if args.forward_context:
+            if len(smacs_forward_contexts) != len(normalized_field_observations):
+                raise RuntimeError("internal: forward context list length mismatch")
+            forward_ctx_tuple = tuple(smacs_forward_contexts)
+
         rows: list[dict[str, Any]] = []
         for model_kind in model_kinds:
             if model_kind == "coadd_bilinear":
@@ -475,21 +537,32 @@ def main() -> int:
                     num_observations=len(normalized_field_observations),
                 )
                 model = make_field_model(model_kind, domain, **model_kwargs)
+                if args.forward_context:
+                    model = _PerExposureScalarBias(
+                        model, len(normalized_field_observations)
+                    )
                 result, fit_time_ms = _fit_with_timing(
                     normalized_field_observations,
                     model,
                     steps=int(args.steps),
                     runs=int(args.runs),
                     fit_kwargs=fit_kwargs,
+                    observation_forward_contexts=forward_ctx_tuple,
                 )
                 render_num_spectral_samples = int(
                     fit_kwargs.get("num_spectral_samples", 1)
+                )
+                render_ctx = (
+                    ForwardContext(survey=str(args.band_name))
+                    if args.forward_context
+                    else None
                 )
                 pred = (
                     render_field_observation(
                         result.model,
                         target_observation,
                         num_spectral_samples=render_num_spectral_samples,
+                        forward_context=render_ctx,
                     )
                     .detach()
                     .cpu()
@@ -506,6 +579,7 @@ def main() -> int:
                 {
                     "model": model_kind,
                     "n_exposures": len(exposure_paths),
+                    "forward_context": bool(args.forward_context),
                     "crop_size": args.crop_size,
                     "crop_mode": args.crop_mode,
                     "crop_x0": int(x0),
