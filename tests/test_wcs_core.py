@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 
-from torchsky.wcs.core import WCS
+from torchsky.wcs.core import WCS, _wrap_lon180, _wrap_lon360
 
 
 def _tan_header() -> dict[str, float | str]:
@@ -266,3 +266,19 @@ def test_center_cpp_small_batch_threshold_skips_large_inputs() -> None:
     assert torch.isfinite(out_dec).all()
     assert torch.isfinite(out_x).all()
     assert torch.isfinite(out_y).all()
+
+
+def test_wrap_lon_grad_vs_nograd_close_on_boundaries() -> None:
+    """Fast path (no grad) vs remainder path (grad) should agree within float noise."""
+    t = torch.tensor(
+        [-1.0, 0.0, 359.5, 360.0, 720.25, -180.5, 179.5],
+        dtype=torch.float64,
+    )
+    t360_grad = t.clone().requires_grad_(True)
+    t180_grad = t.clone().requires_grad_(True)
+    out360_g = _wrap_lon360(t360_grad)
+    out180_g = _wrap_lon180(t180_grad)
+    out360_ng = _wrap_lon360(t.detach())
+    out180_ng = _wrap_lon180(t.detach())
+    assert torch.allclose(out360_g.detach(), out360_ng, atol=1e-12, rtol=0.0)
+    assert torch.allclose(out180_g.detach(), out180_ng, atol=1e-12, rtol=0.0)

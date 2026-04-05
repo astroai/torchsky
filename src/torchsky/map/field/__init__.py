@@ -1,0 +1,108 @@
+"""Continuous-field (INR) map fitting — modular package.
+
+Submodules
+----------
+
+``types``
+    Shared Literals and dataclasses (:class:`FieldDomain`, :class:`FieldObservation`, …).
+``core``
+    PyTorch modules, :func:`make_field_model`, :func:`fit_field_model`, rendering.
+``registry``
+    :data:`FIELD_MODEL_KINDS` tuple derived from :class:`FieldModelKind`.
+"""
+
+from __future__ import annotations
+
+from .core import (
+    BandpassConditionedField,
+    ConditionedSpectralField,
+    FourierMLPField,
+    GaussianBasisField,
+    HashGridConditionedField,
+    HashGridMLPField,
+    HashGridSpectralField,
+    LearnedSpectralBasisField,
+    OperatorConstrainedFeatureField,
+    SineImplicitField,
+    SkyEncoderBandpassField,
+    SkyEncoderMLPField,
+    SkyEncoderResMLPField,
+    SkyLambdaAtlasField,
+    SkyLambdaFeatureAtlasField,
+    SkyLambdaFeatureField,
+    SkyLambdaKPlanesField,
+    SkyLambdaPlanesField,
+    SpectralBasisField,
+    WireImplicitField,
+    estimate_field_domain,
+    fit_field_model,
+    make_field_model,
+    render_field_cube,
+    render_field_observation,
+    render_field_observation_distribution,
+    render_field_samples,
+    render_field_samples_distribution,
+    _BaseFieldModel,
+    _noise_pretrain_field_model,
+)
+from .registry import FIELD_MODEL_KINDS
+from .types import (
+    FieldCoordinateMode,
+    FieldCurriculum,
+    FieldDomain,
+    FieldFitResult,
+    FieldLossKind,
+    FieldLossReduction,
+    FieldLRSchedule,
+    FieldModelKind,
+    FieldNoisePretrainKind,
+    FieldObservation,
+    FieldObservationSampling,
+    FieldSpectralSampling,
+)
+
+__all__ = [
+    "FIELD_MODEL_KINDS",
+    "BandpassConditionedField",
+    "ConditionedSpectralField",
+    "FieldCoordinateMode",
+    "FieldCurriculum",
+    "FieldDomain",
+    "FieldFitResult",
+    "FieldLossKind",
+    "FieldLossReduction",
+    "FieldLRSchedule",
+    "FieldModelKind",
+    "FieldNoisePretrainKind",
+    "FieldObservation",
+    "FieldObservationSampling",
+    "FieldSpectralSampling",
+    "FourierMLPField",
+    "GaussianBasisField",
+    "HashGridConditionedField",
+    "HashGridMLPField",
+    "HashGridSpectralField",
+    "LearnedSpectralBasisField",
+    "OperatorConstrainedFeatureField",
+    "SineImplicitField",
+    "SkyEncoderBandpassField",
+    "SkyEncoderMLPField",
+    "SkyEncoderResMLPField",
+    "SkyLambdaAtlasField",
+    "SkyLambdaFeatureAtlasField",
+    "SkyLambdaFeatureField",
+    "SkyLambdaKPlanesField",
+    "SkyLambdaPlanesField",
+    "SpectralBasisField",
+    "WireImplicitField",
+    "estimate_field_domain",
+    "fit_field_model",
+    "make_field_model",
+    "render_field_cube",
+    "render_field_observation",
+    "render_field_observation_distribution",
+    "render_field_samples",
+    "render_field_samples_distribution",
+    "_BaseFieldModel",
+    "_noise_pretrain_field_model",
+]

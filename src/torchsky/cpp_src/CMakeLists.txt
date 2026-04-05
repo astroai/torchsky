@@ -99,11 +99,11 @@ execute_process(
 )
 find_package(nanobind CONFIG REQUIRED)
 
-message(STATUS "DEBUG: Python_EXECUTABLE: ${Python_EXECUTABLE}")
-message(STATUS "DEBUG: Python_VERSION: ${Python_VERSION}")
-message(STATUS "DEBUG: NANOBIND_PYTHON_EXECUTABLE: ${NANOBIND_PYTHON_EXECUTABLE}")
-message(STATUS "DEBUG: nanobind_DIR: ${nanobind_DIR}")
-message(STATUS "DEBUG: nanobind_ROOT: ${nanobind_ROOT}")
+message(DEBUG "torchsky: Python_EXECUTABLE=${Python_EXECUTABLE}")
+message(DEBUG "torchsky: Python_VERSION=${Python_VERSION}")
+message(DEBUG "torchsky: NANOBIND_PYTHON_EXECUTABLE=${NANOBIND_PYTHON_EXECUTABLE}")
+message(DEBUG "torchsky: nanobind_DIR=${nanobind_DIR}")
+message(DEBUG "torchsky: nanobind_ROOT=${nanobind_ROOT}")
 
 # Find PyTorch
 execute_process(
@@ -329,7 +329,7 @@ execute_process(
     OUTPUT_VARIABLE TORCH_ROOT
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
-message(STATUS "DEBUG: TORCH_ROOT: ${TORCH_ROOT}")
+message(DEBUG "torchsky: TORCH_ROOT=${TORCH_ROOT}")
 
 # Avoid stale cached paths when switching environments/interpreters.
 unset(TORCH_PYTHON_LIBRARY CACHE)

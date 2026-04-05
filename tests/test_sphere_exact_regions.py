@@ -6,6 +6,8 @@ from torchsky.sphere.geom import (
     NativeExactSphericalRegion,
     SphericalCap,
     SphericalPolygon,
+    _numpy_sg_contains_lonlat_bulk,
+    _region_to_sg,
     to_exact_region,
 )
 
@@ -55,6 +57,23 @@ def test_exact_boolean_ops_area_ordering() -> None:
     np.testing.assert_allclose(
         d.area() + i.area(), p1.to_exact().area(), rtol=0.0, atol=5e-8
     )
+
+
+@pytest.mark.skipif(SGP is None, reason="spherical-geometry not available")
+def test_exact_region_bulk_contains_matches_numpy_sg_bulk() -> None:
+    lon = torch.tensor([-10.0, 10.0, 10.0, -10.0], dtype=torch.float64)
+    lat = torch.tensor([-5.0, -5.0, 5.0, 5.0], dtype=torch.float64)
+    poly = SphericalPolygon(lon, lat)
+    reg = to_exact_region(poly)
+    sg = _region_to_sg(poly, cap_steps=256)
+    probe_lon = torch.linspace(-2.0, 2.0, 32, dtype=torch.float64)
+    probe_lat = torch.linspace(-2.0, 2.0, 32, dtype=torch.float64)
+    lg, lt = torch.meshgrid(probe_lon, probe_lat, indexing="ij")
+    got = reg.contains(lg, lt).numpy().reshape(-1)
+    ref = _numpy_sg_contains_lonlat_bulk(
+        sg, lg.numpy().reshape(-1), lt.numpy().reshape(-1)
+    )
+    np.testing.assert_array_equal(got, ref)
 
 
 @pytest.mark.skipif(SGP is None, reason="spherical-geometry not available")

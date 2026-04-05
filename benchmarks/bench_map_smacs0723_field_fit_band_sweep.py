@@ -29,7 +29,7 @@ from bench_map_smacs0723_field_fit import (  # noqa: E402
     _robust_intensity_scale,
     _scaled_field_observation,
 )
-from bench_map_field_fit import _field_fit_kwargs_for_model, _field_model_kwargs_for_case  # noqa: E402
+from bench_map_field_fit import _field_model_kwargs_for_case  # noqa: E402
 from bench_map_smacs0723_real import (  # noqa: E402
     _approx_overlap_grid,
     _best_overlap_cutout,
@@ -42,7 +42,6 @@ from bench_map_smacs0723_real import (  # noqa: E402
     _read_ext,
     _reference_path_for_band,
     _sci_header,
-    _band_spec,
 )
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
@@ -51,7 +50,6 @@ from torchsky.map import (  # noqa: E402
     ImageObservation,
     coadd_image_plane,
     estimate_field_domain,
-    fit_field_model,
     make_field_model,
     render_field_observation,
 )
@@ -86,7 +84,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bands", default="F090W,F150W,F200W,F277W,F356W,F444W")
     parser.add_argument("--module", default="b")
-    parser.add_argument("--input-product", choices=("auto", "crf", "cal"), default="cal")
+    parser.add_argument(
+        "--input-product", choices=("auto", "crf", "cal"), default="cal"
+    )
     parser.add_argument(
         "--observation-mode",
         choices=("bandpass", "exact_wavelength"),
@@ -94,7 +94,9 @@ def main() -> int:
         help="Treat each exposure as a finite bandpass observation or as an exact-wavelength 2D control.",
     )
     parser.add_argument("--crop-size", type=int, default=32)
-    parser.add_argument("--crop-strategy", choices=("center", "best_overlap"), default="best_overlap")
+    parser.add_argument(
+        "--crop-strategy", choices=("center", "best_overlap"), default="best_overlap"
+    )
     parser.add_argument("--steps", type=int, default=2)
     parser.add_argument(
         "--models",
@@ -110,7 +112,6 @@ def main() -> int:
 
     for band in bands:
         reference_path = _reference_path_for_band(band)
-        spec = _band_spec(band)
         try:
             exposure_paths = _discover_exposure_paths(
                 DATA / "jwst_smacs0723",
@@ -121,7 +122,9 @@ def main() -> int:
             if not exposure_paths:
                 raise FileNotFoundError("no local exposures for requested band/module")
             if not reference_path.exists():
-                raise FileNotFoundError(f"missing reference product {reference_path.name}")
+                raise FileNotFoundError(
+                    f"missing reference product {reference_path.name}"
+                )
             ref_data = _read_ext(reference_path, "SCI")
             ref_header = _sci_header(reference_path)
             overlap_headers = [_sci_header(path) for path in exposure_paths]
@@ -139,20 +142,33 @@ def main() -> int:
                     overlap_count,
                     coarse_size,
                 )
-                x0 = min(int(coarse_x0 * coarse_step), max(0, ref_data.shape[1] - int(args.crop_size)))
-                y0 = min(int(coarse_y0 * coarse_step), max(0, ref_data.shape[0] - int(args.crop_size)))
-                ref_crop = ref_data[y0 : y0 + int(args.crop_size), x0 : x0 + int(args.crop_size)]
+                x0 = min(
+                    int(coarse_x0 * coarse_step),
+                    max(0, ref_data.shape[1] - int(args.crop_size)),
+                )
+                y0 = min(
+                    int(coarse_y0 * coarse_step),
+                    max(0, ref_data.shape[0] - int(args.crop_size)),
+                )
+                ref_crop = ref_data[
+                    y0 : y0 + int(args.crop_size), x0 : x0 + int(args.crop_size)
+                ]
             else:
                 ref_crop, x0, y0 = _center_cutout(ref_data, int(args.crop_size))
             target_header = _cutout_header(ref_header, x0, y0, int(args.crop_size))
 
             import tempfile
+
             tmp_root = DATA / "_tmp"
             tmp_root.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(prefix=f"torchsky_smacs_{band.lower()}_", dir=str(tmp_root)) as tmp:
+            with tempfile.TemporaryDirectory(
+                prefix=f"torchsky_smacs_{band.lower()}_", dir=str(tmp_root)
+            ) as tmp:
                 tmpdir = Path(tmp)
                 image_observations: list[ImageObservation] = []
-                raw_field_inputs: list[tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]] = []
+                raw_field_inputs: list[
+                    tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]
+                ] = []
                 for exposure_path in exposure_paths:
                     science_path, weight_path, mask_path = _prepare_aux_files(
                         exposure_path,
@@ -176,7 +192,12 @@ def main() -> int:
                     weight = np.zeros_like(err, dtype=np.float32)
                     weight[valid] = 1.0 / np.square(err[valid])
                     raw_field_inputs.append(
-                        (science, weight, valid.astype(np.float32), dict(_sci_header(exposure_path)))
+                        (
+                            science,
+                            weight,
+                            valid.astype(np.float32),
+                            dict(_sci_header(exposure_path)),
+                        )
                     )
 
                 field_observations: list[FieldObservation] = []
@@ -223,7 +244,9 @@ def main() -> int:
                     band_name=band,
                     observation_mode=args.observation_mode,
                 )
-                domain = estimate_field_domain(field_observations, coord_mode="sphere_xyz")
+                domain = estimate_field_domain(
+                    field_observations, coord_mode="sphere_xyz"
+                )
                 intensity_scale = _robust_intensity_scale(raw_field_inputs)
                 normalized_field_observations: list[FieldObservation] = []
                 for observation in field_observations:
@@ -282,8 +305,12 @@ def main() -> int:
                             ) * intensity_scale
                         support_metric_mask = _metric_mask(pred, ref_crop, support_mask)
                         uniform_metric_mask = np.isfinite(pred) & np.isfinite(ref_crop)
-                        support_diff = pred[support_metric_mask] - ref_crop[support_metric_mask]
-                        uniform_diff = pred[uniform_metric_mask] - ref_crop[uniform_metric_mask]
+                        support_diff = (
+                            pred[support_metric_mask] - ref_crop[support_metric_mask]
+                        )
+                        uniform_diff = (
+                            pred[uniform_metric_mask] - ref_crop[uniform_metric_mask]
+                        )
 
                         # Robust affine fit to ignore background offsets
                         ref_pts = ref_crop[support_metric_mask].astype(np.float64)
@@ -292,18 +319,28 @@ def main() -> int:
                         coeffs, *_ = np.linalg.lstsq(design, pred_pts, rcond=None)
                         affine_slope = float(coeffs[0])
                         affine_intercept = float(coeffs[1])
-                        aligned_pred = (pred_pts - affine_intercept) / max(affine_slope, 1e-6) if affine_slope > 0.5 else pred_pts
+                        aligned_pred = (
+                            (pred_pts - affine_intercept) / max(affine_slope, 1e-6)
+                            if affine_slope > 0.5
+                            else pred_pts
+                        )
                         aligned_diff = aligned_pred - ref_pts
 
                         row.update(
                             {
-                                "support_rmse": float(np.sqrt(np.mean(support_diff * support_diff)))
+                                "support_rmse": float(
+                                    np.sqrt(np.mean(support_diff * support_diff))
+                                )
                                 if support_diff.size
                                 else float("nan"),
-                                "uniform_rmse": float(np.sqrt(np.mean(uniform_diff * uniform_diff)))
+                                "uniform_rmse": float(
+                                    np.sqrt(np.mean(uniform_diff * uniform_diff))
+                                )
                                 if uniform_diff.size
                                 else float("nan"),
-                                "aligned_rmse": float(np.sqrt(np.mean(aligned_diff * aligned_diff)))
+                                "aligned_rmse": float(
+                                    np.sqrt(np.mean(aligned_diff * aligned_diff))
+                                )
                                 if aligned_diff.size
                                 else float("nan"),
                                 "affine_slope": affine_slope,

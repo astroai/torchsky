@@ -1,7 +1,4 @@
-from __future__ import annotations
-
-"""
-Spectral and data cube support for torchsky.
+"""Spectral and data cube support for torchsky.
 
 Implements 1D spectra with inverse variance/mask arrays and 3D data cubes
 for IFU instruments and radio astronomy.
@@ -10,6 +7,8 @@ Note:
 This module is an experimental helper layer built on top of torchsky FITS I/O.
 It is not part of the core FITS read/write parity surface.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
@@ -53,7 +52,9 @@ def spectral_axis_from_header(
     """Build a linear SpectralAxis from FITS WCS header metadata."""
     naxis = int(header.get("NAXIS", len(data_shape) if data_shape is not None else 0))
     if naxis <= 0:
-        raise ValueError("Header must define NAXIS or data_shape for spectral axis reconstruction")
+        raise ValueError(
+            "Header must define NAXIS or data_shape for spectral axis reconstruction"
+        )
 
     spectral_fits_axis = None
     spectral_type = "WAVE"
@@ -95,10 +96,14 @@ def spectral_bin_edges_from_header(
     axis, tensor_axis_index = spectral_axis_from_header(header, data_shape=data_shape)
     values = axis.values.to(dtype=torch.float64)
     if values.numel() == 1:
-        return torch.tensor([values[0], values[0]], dtype=torch.float64), tensor_axis_index
+        return torch.tensor(
+            [values[0], values[0]], dtype=torch.float64
+        ), tensor_axis_index
     diffs = values[1:] - values[:-1]
     if not bool(torch.allclose(diffs, torch.full_like(diffs, diffs[0]))):
-        raise ValueError("Nonlinear spectral headers are not yet supported for bin-edge reconstruction")
+        raise ValueError(
+            "Nonlinear spectral headers are not yet supported for bin-edge reconstruction"
+        )
     step = diffs[0]
     mid = 0.5 * (values[1:] + values[:-1])
     edges = torch.empty((values.numel() + 1,), dtype=torch.float64)

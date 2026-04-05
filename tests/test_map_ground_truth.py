@@ -12,9 +12,7 @@ pytest.importorskip("torchsky.cpp")
 
 def _load_benchmark_module():
     path = (
-        Path(__file__).resolve().parents[1]
-        / "benchmarks"
-        / "bench_map_ground_truth.py"
+        Path(__file__).resolve().parents[1] / "benchmarks" / "bench_map_ground_truth.py"
     )
     spec = importlib.util.spec_from_file_location("bench_map_ground_truth", path)
     if spec is None or spec.loader is None:
@@ -148,7 +146,9 @@ def test_map_ground_truth_random10_large_union_metadata(tmp_path: Path) -> None:
     assert row["max_input_height"] <= 4000
 
 
-def test_map_ground_truth_random10_rect_weighted_masked_metadata(tmp_path: Path) -> None:
+def test_map_ground_truth_random10_rect_weighted_masked_metadata(
+    tmp_path: Path,
+) -> None:
     row = _truth_bench.evaluate_torchsky_case(
         tmp_path,
         case="tan_random10_large_union_rect_weighted_masked",
@@ -194,12 +194,6 @@ def test_tpv_roundtrip_validity_mask_bypasses_filtering_for_tpv(tmp_path: Path) 
     x_src, y_src = source_wcs.world_to_pixel(flat_ra, flat_dec)
     x_src = x_src.reshape_as(ra)
     y_src = y_src.reshape_as(dec)
-    in_bounds = (
-        (x_src >= 0.0)
-        & (x_src <= (int(tpv_obs.header["NAXIS1"]) - 1))
-        & (y_src >= 0.0)
-        & (y_src <= (int(tpv_obs.header["NAXIS2"]) - 1))
-    )
     valid = image_plane_mod._roundtrip_validity_mask(
         source_wcs,
         x_src=x_src,
@@ -225,7 +219,9 @@ def test_tpv_roundtrip_validity_gate_not_enabled_by_default(tmp_path: Path) -> N
         item for item in observations if "TPV" in str(item.header.get("CTYPE1", ""))
     )
     source_wcs = _truth_bench.WCS(tpv_obs.header)
-    assert not _truth_bench.image_plane_mod._requires_roundtrip_validity_check(source_wcs)
+    assert not _truth_bench.image_plane_mod._requires_roundtrip_validity_check(
+        source_wcs
+    )
 
 
 def test_distorted_sources_enable_target_pixel_quadrature(tmp_path: Path) -> None:
@@ -316,7 +312,9 @@ def test_distorted_quadrature_batches_world_to_pixel_calls(tmp_path: Path) -> No
         hdu=tpv_obs.observation.hdu,
         return_header=True,
     )
-    image = _truth_bench.image_plane_mod._validate_image_plane(image).to(dtype=torch.float32)
+    image = _truth_bench.image_plane_mod._validate_image_plane(image).to(
+        dtype=torch.float32
+    )
     source_wcs = _truth_bench.WCS(tpv_obs.header)
     prepared_target = _truth_bench.image_plane_mod._prepare_target(
         header=target_header,

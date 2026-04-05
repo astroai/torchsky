@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from collections import OrderedDict
 import atexit
 import itertools
@@ -59,6 +59,9 @@ _reader_cache_lock = threading.Lock()
 _reader_cache: "OrderedDict[tuple[str, int], Any]" = OrderedDict()
 _VLA_DTYPE_MAP: dict[str, Any] = {}
 _COMPLEX_DTYPE_MAP: dict[str, Any] = {}
+# FITS binary-table TFORM codes for complex columns (membership checks use this so a
+# corrupted ``_COMPLEX_DTYPE_MAP`` cannot turn ``x in map`` into a brittle set-only path).
+_COMPLEX_TFORM_CODES: frozenset[str] = frozenset({"C", "M"})
 
 
 def _close_cpp_handle(handle: Any) -> None:
@@ -202,6 +205,45 @@ def _parse_tform(tform: str) -> tuple[bool, str, int]:
     return False, "", 1
 
 
+def _fits_header_table_has_vla(header: Mapping[str, Any]) -> bool:
+    """True if any column uses FITS P/Q (variable-length array) heap storage."""
+    try:
+        tfields = int(header.get("TFIELDS", 0))
+    except (TypeError, ValueError):
+        return False
+    for i in range(1, tfields + 1):
+        raw = header.get(f"TFORM{i}")
+        if raw is None:
+            continue
+        is_vla, _, _ = _parse_tform(str(raw))
+        if is_vla:
+            return True
+    return False
+
+
+def _fits_header_column_is_vla(header: Mapping[str, Any], col_name: str) -> bool:
+    try:
+        tfields = int(header.get("TFIELDS", 0))
+    except (TypeError, ValueError):
+        return False
+    want = str(col_name)
+    for i in range(1, tfields + 1):
+        ttype = header.get(f"TTYPE{i}")
+        if ttype is None or str(ttype) != want:
+            continue
+        return _parse_tform(str(header.get(f"TFORM{i}", "")))[0]
+    return False
+
+
+def _fits_header_selected_includes_vla(
+    header: Mapping[str, Any], columns: Optional[list[str]]
+) -> bool:
+    """True when the read projection would include at least one VLA column."""
+    if columns is None:
+        return _fits_header_table_has_vla(header)
+    return any(_fits_header_column_is_vla(header, c) for c in columns)
+
+
 def _column_tnull_map(header_map: dict[str, Any]) -> dict[str, Any]:
     name_by_idx: dict[int, str] = {}
     tnull_by_idx: dict[int, Any] = {}
@@ -258,7 +300,7 @@ def _default_table_column_values(
     if code == "A":
         return [""] * num_rows
 
-    if code in _COMPLEX_DTYPE_MAP:
+    if code in _COMPLEX_TFORM_CODES:
         dtype = _COMPLEX_DTYPE_MAP[code]
         shape = (num_rows,) if repeat == 1 else (num_rows, repeat)
         return np.zeros(shape, dtype=dtype)
@@ -312,7 +354,6 @@ def _normalize_mutation_rows(
     string_widths: dict[str, int] = {}
     vla_codes: dict[str, str] = {}
     complex_codes: dict[str, str] = {}
-    _COMPLEX_DTYPE_MAP = {"C": "complex64", "M": "complex128"}
     for col_name in columns:
         tform = tform_map.get(col_name, "")
         if not tform:
@@ -320,7 +361,7 @@ def _normalize_mutation_rows(
         is_vla, code, repeat = _parse_tform(tform)
         if is_vla:
             vla_codes[col_name] = code
-        elif code in _COMPLEX_DTYPE_MAP:
+        elif code in _COMPLEX_TFORM_CODES:
             complex_codes[col_name] = code
         elif code == "A":
             string_widths[col_name] = repeat
@@ -792,6 +833,8 @@ def _tensor_to_arrow_array(
     encoding: str,
     strip: bool,
     null_sentinel: Any = None,
+    *,
+    fits_tform: str | None = None,
 ):
     t = tensor.detach()
     if t.device.type != "cpu":
@@ -800,7 +843,13 @@ def _tensor_to_arrow_array(
         t = t.contiguous()
 
     return _numpy_to_arrow_array(
-        pa, t.numpy(), decode_bytes, encoding, strip, null_sentinel=null_sentinel
+        pa,
+        t.numpy(),
+        decode_bytes,
+        encoding,
+        strip,
+        null_sentinel=null_sentinel,
+        fits_tform=fits_tform,
     )
 
 
@@ -855,6 +904,8 @@ def _numpy_to_arrow_array(
     encoding: str,
     strip: bool,
     null_sentinel: Any = None,
+    *,
+    fits_tform: str | None = None,
 ):
     import numpy as np
 
@@ -869,7 +920,7 @@ def _numpy_to_arrow_array(
         return _pa_array(pa, arr)
     if arr.ndim == 2:
         if arr.dtype == np.uint8:
-            if decode_bytes:
+            if decode_bytes and not _fits_tform_is_bit(fits_tform):
                 return _decode_uint8_matrix_to_arrow(pa, arr, encoding, strip)
             return _uint8_matrix_to_fixed_binary(pa, arr)
         flat = arr.reshape(-1)
@@ -925,10 +976,20 @@ def _chunk_to_record_batch(
     preferred_order: Optional[list[str]] = None,
     null_meta: Optional[dict[str, dict[str, str]]] = None,
     apply_fits_nulls: bool = False,
+    column_tforms: Optional[dict[str, str]] = None,
 ):
     import numpy as np
 
     pa = _require_pyarrow()
+
+    def _tform_for(name: str) -> str | None:
+        if column_tforms:
+            tf = column_tforms.get(name)
+            if tf:
+                return tf
+        if field_meta and name in field_meta:
+            return field_meta[name].get("fits_tform")
+        return None
 
     # Fast path when schema metadata is not requested.
     if not field_meta and not table_meta:
@@ -962,6 +1023,7 @@ def _chunk_to_record_batch(
                     encoding,
                     strip,
                     null_sentinel=null_sentinel,
+                    fits_tform=_tform_for(name),
                 )
             elif isinstance(value, np.ndarray):
                 pydict[name] = _numpy_to_arrow_array(
@@ -971,6 +1033,7 @@ def _chunk_to_record_batch(
                     encoding,
                     strip,
                     null_sentinel=null_sentinel,
+                    fits_tform=_tform_for(name),
                 )
             elif isinstance(value, list):
                 converted = []
@@ -1012,11 +1075,23 @@ def _chunk_to_record_batch(
         )
         if isinstance(value, torch.Tensor):
             arr = _tensor_to_arrow_array(
-                pa, value, decode_bytes, encoding, strip, null_sentinel=null_sentinel
+                pa,
+                value,
+                decode_bytes,
+                encoding,
+                strip,
+                null_sentinel=null_sentinel,
+                fits_tform=_tform_for(name),
             )
         elif isinstance(value, np.ndarray):
             arr = _numpy_to_arrow_array(
-                pa, value, decode_bytes, encoding, strip, null_sentinel=null_sentinel
+                pa,
+                value,
+                decode_bytes,
+                encoding,
+                strip,
+                null_sentinel=null_sentinel,
+                fits_tform=_tform_for(name),
             )
         elif isinstance(value, list):
             converted = []
@@ -1099,6 +1174,29 @@ def _column_tform_code_and_repeat(tform: Any) -> tuple[str, int] | None:
     repeat_text, code = m.groups()
     repeat = int(repeat_text) if repeat_text else 1
     return code.upper(), repeat
+
+
+def _fits_tform_is_bit(tform: Any) -> bool:
+    parsed = _column_tform_code_and_repeat(tform)
+    return parsed is not None and parsed[0] == "X"
+
+
+def _column_tforms_for_decode(
+    path: str,
+    hdu: int,
+    selected_columns: Optional[set[str]],
+) -> dict[str, str]:
+    """Map column name -> FITS TFORM for uint8-matrix decode (BIT vs character)."""
+    out: dict[str, str] = {}
+    try:
+        fm, _ = _build_fits_metadata(path, hdu, selected_columns)
+        for col, meta in fm.items():
+            tf = meta.get("fits_tform")
+            if tf:
+                out[col] = tf
+    except Exception:
+        pass
+    return out
 
 
 def _can_use_mmap_row_path_for_full_read(
@@ -1268,7 +1366,7 @@ def scan(
     where: Optional[str] = None,
     batch_size: int = 65536,
     mmap: bool = True,
-    decode_bytes: bool = False,
+    decode_bytes: bool = True,
     encoding: str = "ascii",
     strip: bool = True,
     include_fits_metadata: bool = False,
@@ -1279,6 +1377,7 @@ def scan(
     Stream a FITS table as Arrow record batches.
 
     This is out-of-core friendly: each yielded batch is independently materialized.
+    FITS character columns are decoded to Python strings by default (`decode_bytes=True`).
     """
     if batch_size <= 0:
         raise ValueError("batch_size must be > 0")
@@ -1310,6 +1409,9 @@ def scan(
     if num_rows == 0:
         return
     selected = set(columns) if columns else None
+    col_tforms = (
+        _column_tforms_for_decode(path, hdu, selected) if decode_bytes else None
+    )
     field_meta: dict[str, dict[str, str]] = {}
     table_meta: dict[str, str] = {}
     need_field_meta = include_fits_metadata or apply_fits_nulls
@@ -1352,6 +1454,7 @@ def scan(
             preferred_order=preferred_order,
             null_meta=field_meta,
             apply_fits_nulls=apply_fits_nulls,
+            column_tforms=col_tforms,
         )
 
 
@@ -1364,14 +1467,17 @@ def read(
     where: Optional[str] = None,
     batch_size: int = 65536,
     mmap: bool = True,
-    decode_bytes: bool = False,
+    decode_bytes: bool = True,
     encoding: str = "ascii",
     strip: bool = True,
     include_fits_metadata: bool = False,
     apply_fits_nulls: bool = True,
     backend: str = "auto",
 ):
-    """Read a FITS table into an Arrow Table."""
+    """Read a FITS table into an Arrow Table.
+
+    FITS character columns are decoded to Python strings by default (`decode_bytes=True`).
+    """
     if backend not in {"auto", "torch", "cpp_numpy"}:
         raise ValueError("backend must be one of: auto, torch, cpp_numpy")
     pa = _require_pyarrow()
@@ -1410,35 +1516,40 @@ def read(
         # into Arrow and then filtering is often faster than the pushdown scanner
         # (which has higher per-batch overhead and IPC costs).
 
-        # Check table size if possible
         import torchsky
 
-        is_vla_table = False
+        header_ok = False
+        hdr: Mapping[str, Any] = {}
+        n_rows = 0
         try:
             hdr = torchsky.get_header(path, hdu)
             n_rows = int(hdr.get("NAXIS2", 0))
-
-            # Detect if this is a VLA table (look for 'P' or 'Q' in TFORM keywords)
-            tfields = int(hdr.get("TFIELDS", 0))
-            for i in range(1, tfields + 1):
-                tform = str(hdr.get(f"TFORM{i}", "")).strip().upper()
-                if "P" in tform or "Q" in tform:
-                    is_vla_table = True
-                    break
+            header_ok = True
         except Exception:
-            n_rows = 1000001  # assume large if unsure
+            # Without NAXIS2 / TFIELDS we cannot safely choose mmap pushdown (see below).
+            n_rows = 0
 
-        # Hybrid strategy: for small-to-medium tables, reading the full projected table
-        # into Arrow and then filtering is often faster than the pushdown scanner
-        # (which has higher per-batch overhead and IPC costs).
-        # Default threshold is 100,000 rows, but much lower for VLA tables.
+        is_vla_table = _fits_header_table_has_vla(hdr) if header_ok else False
+        vla_in_projection = (
+            _fits_header_selected_includes_vla(hdr, columns) if header_ok else True
+        )
+        # read_fits_table_filtered mmap gather skips P/Q columns silently; never use it when
+        # the caller expects VLA data. Without header metadata, skip pushdown as well.
+        cpp_pushdown_safe = header_ok and not vla_in_projection
+
+        # Default threshold is 100,000 rows, but lower for VLA tables (heap I/O dominates).
         default_threshold = 1000 if is_vla_table else 100000
         threshold = int(
             os.environ.get("TORCHSKY_TABLE_SCANNER_THRESHOLD", str(default_threshold))
         )
 
-        # If it's a small table, or backend is forced to torch, avoid pushdown scanner
-        if n_rows <= threshold or backend == "torch":
+        use_arrow_where_first = (
+            n_rows <= threshold
+            or backend == "torch"
+            or not cpp_pushdown_safe
+        )
+
+        if use_arrow_where_first:
             base = read(
                 path,
                 hdu=hdu,
@@ -1488,6 +1599,11 @@ def read(
                     )
 
                     # Convert to Arrow Table
+                    pushdown_tforms = (
+                        _column_tforms_for_decode(path, hdu, set(target_cols))
+                        if decode_bytes
+                        else None
+                    )
                     arrays = []
                     names_out = []
                     for name in target_cols:
@@ -1501,7 +1617,14 @@ def read(
                                 if not val.is_contiguous():
                                     val = val.contiguous()
                                 arr = _numpy_to_arrow_array(
-                                    pa, val.numpy(), decode_bytes, encoding, strip
+                                    pa,
+                                    val.numpy(),
+                                    decode_bytes,
+                                    encoding,
+                                    strip,
+                                    fits_tform=pushdown_tforms.get(name)
+                                    if pushdown_tforms
+                                    else None,
                                 )
                                 arrays.append(arr)
                                 names_out.append(name)
@@ -1562,7 +1685,7 @@ def schema(
     hdu: int = 1,
     columns: Optional[list[str]] = None,
     where: Optional[str] = None,
-    decode_bytes: bool = False,
+    decode_bytes: bool = True,
     encoding: str = "ascii",
     strip: bool = True,
     include_fits_metadata: bool = False,
@@ -1646,6 +1769,9 @@ def _read_cpp_numpy_table(
         num_rows = -1
 
     selected = set(columns) if columns else None
+    col_tforms = (
+        _column_tforms_for_decode(path, hdu, selected) if decode_bytes else None
+    )
     field_meta: dict[str, dict[str, str]] = {}
     table_meta: dict[str, str] = {}
     need_field_meta = include_fits_metadata or apply_fits_nulls
@@ -1835,6 +1961,7 @@ def _read_cpp_numpy_table(
                     encoding,
                     strip,
                     null_sentinel=null_sentinel,
+                    fits_tform=col_tforms.get(name) if col_tforms else None,
                 )
             elif isinstance(value, torch.Tensor):
                 t = value.detach()
@@ -1849,6 +1976,7 @@ def _read_cpp_numpy_table(
                     encoding,
                     strip,
                     null_sentinel=null_sentinel,
+                    fits_tform=col_tforms.get(name) if col_tforms else None,
                 )
             elif isinstance(value, list):
                 converted = []
@@ -1883,6 +2011,7 @@ def _read_cpp_numpy_table(
         preferred_order=preferred_order,
         null_meta=field_meta,
         apply_fits_nulls=apply_fits_nulls,
+        column_tforms=col_tforms,
     )
     return pa.Table.from_batches([batch])
 
@@ -1962,7 +2091,7 @@ def reader(
     where: Optional[str] = None,
     batch_size: int = 65536,
     mmap: bool = True,
-    decode_bytes: bool = False,
+    decode_bytes: bool = True,
     encoding: str = "ascii",
     strip: bool = True,
     include_fits_metadata: bool = True,
@@ -1973,6 +2102,7 @@ def reader(
     Return a PyArrow RecordBatchReader for streaming interoperability.
 
     This plugs directly into Arrow ecosystem tools without materializing the table.
+    FITS character columns are decoded to Python strings by default (`decode_bytes=True`).
     """
     pa = _require_pyarrow()
     if backend not in {"auto", "torch", "cpp_numpy"}:
@@ -2633,7 +2763,7 @@ def _normalize_column_values_for_format(
     if code == "A":
         return _coerce_table_string_values(name, values, expected_rows=expected_rows)
 
-    if code in _COMPLEX_DTYPE_MAP:
+    if code in _COMPLEX_TFORM_CODES:
         arr = _coerce_table_complex_values(
             name, values, code, expected_rows=expected_rows, allow_2d=True
         )
@@ -3137,7 +3267,7 @@ def _coerce_table_complex_values(
             "M": np.complex128,
         }
     base = code.upper()
-    if base not in _COMPLEX_DTYPE_MAP:
+    if base not in _COMPLEX_TFORM_CODES:
         raise TypeError(f"Column '{name}' complex code '{base}' is not supported")
     dtype = _COMPLEX_DTYPE_MAP[base]
 
@@ -3353,14 +3483,16 @@ def update_rows(
     complex_codes: dict[str, str] = {}
     global _COMPLEX_DTYPE_MAP
     if not _COMPLEX_DTYPE_MAP:
-        _COMPLEX_DTYPE_MAP = {"C", "M"}
+        import numpy as np
+
+        _COMPLEX_DTYPE_MAP = {"C": np.complex64, "M": np.complex128}
     for name, tform in tform_map.items():
         if not tform:
             continue
         is_vla, code, repeat = _parse_tform(tform)
         if is_vla:
             vla_codes[name] = code
-        elif code in _COMPLEX_DTYPE_MAP:
+        elif code in _COMPLEX_TFORM_CODES:
             complex_codes[name] = code
         elif code == "A":
             string_widths[name] = repeat

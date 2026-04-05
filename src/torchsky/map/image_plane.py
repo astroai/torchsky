@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import os
 from pathlib import Path
 from typing import Literal, Optional, Sequence
 
@@ -35,11 +36,23 @@ MapResamplingKernel = Literal[
 MapValueSemantics = Literal["surface_brightness", "flux"]
 MapStackingMethod = Literal["weighted_mean", "mean", "median"]
 
+# Header probe for area scaling: recoverable failures when reading metadata only.
+_HEADER_PROBE_EXC: tuple[type[BaseException], ...] = (
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    ImportError,
+    ModuleNotFoundError,
+)
+
 
 @dataclass
 class ImageObservation:
     path: str
-    hdu: int | str | None = 0
+    hdu: int | str | None = None
     weight: float = 1.0
     photometric_scale: float = 1.0
     background_offset: float = 0.0
@@ -53,6 +66,8 @@ class ImageObservation:
     weight_hdu: int | str | None = 0
     mask_path: str | None = None
     mask_hdu: int | str | None = 0
+    primary_beam_path: str | None = None
+    primary_beam_hdu: int | str | None = None
 
 
 @dataclass
@@ -183,14 +198,27 @@ _DRIZZLE_FORWARD_CHUNK_PIXELS = 262_144
 
 
 def _try_external_drizzle_helpers():
+    """Legacy comparator path only; set ``TORCHSKY_USE_EXTERNAL_DRIZZLE=1`` to enable."""
+    if os.environ.get("TORCHSKY_USE_EXTERNAL_DRIZZLE", "").lower() not in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return None
     try:
         from astropy.io import fits as astropy_fits  # type: ignore
         from astropy.wcs import WCS as AstropyWCS  # type: ignore
         from drizzle.resample import Drizzle as DrizzleResampler  # type: ignore
         from drizzle.utils import calc_pixmap, estimate_pixel_scale_ratio  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError, AttributeError, OSError):
         return None
-    return astropy_fits, AstropyWCS, DrizzleResampler, calc_pixmap, estimate_pixel_scale_ratio
+    return (
+        astropy_fits,
+        AstropyWCS,
+        DrizzleResampler,
+        calc_pixmap,
+        estimate_pixel_scale_ratio,
+    )
 
 
 def _validate_image_plane(image: Tensor) -> Tensor:
@@ -335,8 +363,10 @@ def _observation_header_for_area_scaling(
 
         hdu = obs.hdu
         if isinstance(hdu, int) or hdu is None:
-            return dict(Header(_cpp.read_header_dict(obs.path, 0 if hdu is None else hdu)))
-    except Exception:
+            return dict(
+                Header(_cpp.read_header_dict(obs.path, 0 if hdu is None else hdu))
+            )
+    except _HEADER_PROBE_EXC:
         pass
     _, header = read(obs.path, hdu=obs.hdu, return_header=True)
     return dict(header)
@@ -365,7 +395,9 @@ def _should_apply_surface_brightness_area_scaling(
         if not _is_plain_tan_header(header_dict_obs):
             return True
         source_wcs = WCS(header_dict_obs)
-        if getattr(source_wcs, "sip", None) is not None or bool(getattr(source_wcs, "_is_tpv", False)):
+        if getattr(source_wcs, "sip", None) is not None or bool(
+            getattr(source_wcs, "_is_tpv", False)
+        ):
             return True
         source_shape = (
             int(header_dict_obs.get("NAXIS2", 0)),
@@ -450,7 +482,9 @@ def _custom_separable_sample(
     kernel: MapResamplingKernel,
 ) -> Tensor:
     if image.ndim not in {2, 3}:
-        raise ValueError("custom separable sampling expects a 2D image or [C, H, W] tensor")
+        raise ValueError(
+            "custom separable sampling expects a 2D image or [C, H, W] tensor"
+        )
     work = image if image.ndim == 3 else image.unsqueeze(0)
     support = _kernel_support(kernel)
     x_src = x_src.to(dtype=work.dtype)
@@ -476,11 +510,15 @@ def _custom_separable_sample(
     xs = xs.clamp(0, w_src - 1)
     ys = ys.clamp(0, h_src - 1)
     sample_idx = ys.unsqueeze(-1) * w_src + xs.unsqueeze(-2)
-    sampled = work.reshape(work.shape[0], -1).index_select(1, sample_idx.reshape(-1)).reshape(
-        work.shape[0],
-        *x_src.shape,
-        sample_idx.shape[-2],
-        sample_idx.shape[-1],
+    sampled = (
+        work.reshape(work.shape[0], -1)
+        .index_select(1, sample_idx.reshape(-1))
+        .reshape(
+            work.shape[0],
+            *x_src.shape,
+            sample_idx.shape[-2],
+            sample_idx.shape[-1],
+        )
     )
     weights = (
         wy.unsqueeze(-1)
@@ -575,9 +613,7 @@ def _sample_image_plane_batched(
         return torch.stack(samples, dim=0)
     batch = int(grid.shape[0])
     image_b = (
-        image.unsqueeze(0)
-        .unsqueeze(0)
-        .expand(batch, 1, image.shape[0], image.shape[1])
+        image.unsqueeze(0).unsqueeze(0).expand(batch, 1, image.shape[0], image.shape[1])
     )
     return F.grid_sample(
         image_b,
@@ -661,8 +697,12 @@ def _tpv_affine_envelope(
     if tpv is None:
         raise RuntimeError("TPV envelope requires a TPV WCS")
     h_src, w_src = int(image_shape[0]), int(image_shape[1])
-    x_corners = torch.tensor([0.0, float(w_src - 1), 0.0, float(w_src - 1)], dtype=torch.float64)
-    y_corners = torch.tensor([0.0, 0.0, float(h_src - 1), float(h_src - 1)], dtype=torch.float64)
+    x_corners = torch.tensor(
+        [0.0, float(w_src - 1), 0.0, float(w_src - 1)], dtype=torch.float64
+    )
+    y_corners = torch.tensor(
+        [0.0, 0.0, float(h_src - 1), float(h_src - 1)], dtype=torch.float64
+    )
     rel_x = x_corners + 1.0 - source_wcs._crpix0
     rel_y = y_corners + 1.0 - source_wcs._crpix1
     u_corners = source_wcs._cd00 * rel_x + source_wcs._cd01 * rel_y
@@ -715,6 +755,8 @@ def _tpv_candidate_mask(
     image_shape: tuple[int, int],
 ) -> Tensor:
     xi_min, xi_max, eta_min, eta_max = _tpv_affine_envelope(source_wcs, image_shape)
+
+
 def _spherical_cap_radius_from_world_grid(
     ra_deg: Tensor,
     dec_deg: Tensor,
@@ -722,7 +764,9 @@ def _spherical_cap_radius_from_world_grid(
     center_ra_deg: float,
     center_dec_deg: float,
 ) -> float:
-    dra = _wrapped_delta_ra_deg(ra_deg, torch.tensor(center_ra_deg, dtype=ra_deg.dtype, device=ra_deg.device))
+    dra = _wrapped_delta_ra_deg(
+        ra_deg, torch.tensor(center_ra_deg, dtype=ra_deg.dtype, device=ra_deg.device)
+    )
     dec0 = torch.tensor(center_dec_deg, dtype=dec_deg.dtype, device=dec_deg.device)
     cos_dec = torch.cos(dec_deg * (math.pi / 180.0))
     chord = torch.sqrt((dra * cos_dec) ** 2 + (dec_deg - dec0) ** 2)
@@ -731,7 +775,9 @@ def _spherical_cap_radius_from_world_grid(
 
 def _tpv_source_cap_radius_deg(source_wcs: WCS, image_shape: tuple[int, int]) -> float:
     xi_min, xi_max, eta_min, eta_max = _tpv_affine_envelope(source_wcs, image_shape)
-    r_max = math.sqrt(max(abs(xi_min), abs(xi_max)) ** 2 + max(abs(eta_min), abs(eta_max)) ** 2)
+    r_max = math.sqrt(
+        max(abs(xi_min), abs(xi_max)) ** 2 + max(abs(eta_min), abs(eta_max)) ** 2
+    )
     return math.degrees(math.atan(r_max * (math.pi / 180.0)))
 
 
@@ -745,15 +791,16 @@ def _angular_separation_deg(
     dec0 = math.radians(dec0_deg)
     ra1 = math.radians(ra1_deg)
     dec1 = math.radians(dec1_deg)
-    cos_sep = (
-        math.sin(dec0) * math.sin(dec1)
-        + math.cos(dec0) * math.cos(dec1) * math.cos(ra0 - ra1)
-    )
+    cos_sep = math.sin(dec0) * math.sin(dec1) + math.cos(dec0) * math.cos(
+        dec1
+    ) * math.cos(ra0 - ra1)
     cos_sep = min(1.0, max(-1.0, cos_sep))
     return math.degrees(math.acos(cos_sep))
 
 
-def _source_pixel_diameter_arcsec(source_wcs: WCS, shape: tuple[int, int], *, device: torch.device) -> float:
+def _source_pixel_diameter_arcsec(
+    source_wcs: WCS, shape: tuple[int, int], *, device: torch.device
+) -> float:
     area_sr = _pixel_area_sr_map(source_wcs, shape, device=device)
     median_area_sr = float(torch.median(area_sr).item())
     if not math.isfinite(median_area_sr) or median_area_sr <= 0.0:
@@ -872,6 +919,17 @@ def _load_observation_weight_map(
         )
         weight_map = weight_map * mask
 
+    if obs.primary_beam_path is not None:
+        pb = read(obs.primary_beam_path, hdu=obs.primary_beam_hdu)
+        pb = _validate_image_plane(pb)
+        if tuple(int(v) for v in pb.shape) != tuple(int(v) for v in image.shape):
+            raise ValueError(
+                "primary_beam map shape must match the observation image shape"
+            )
+        pb = pb.to(device=device, dtype=torch.float32)
+        pb = torch.where(torch.isfinite(pb) & (pb > 0.0), pb, torch.zeros_like(pb))
+        weight_map = weight_map * pb
+
     return weight_map * float(obs.weight)
 
 
@@ -907,7 +965,6 @@ def _resample_weighted_to_target(
     source_weight = _validate_image_plane(source_weight).to(dtype=torch.float32)
 
     h_src, w_src = image.shape
-    target_pixel_area_sr = target.pixel_area_sr
     target_representative_area_sr = target.representative_pixel_area_sr
 
     # Reproject weighted signal and weight separately, then form the weighted mean
@@ -918,9 +975,7 @@ def _resample_weighted_to_target(
             tuple(int(v) for v in image.shape),
             device=image.device,
         )
-        weighted_image = (
-            image * source_weight * source_area_sr
-        )
+        weighted_image = image * source_weight * source_area_sr
         weighted_weight = source_weight * torch.square(source_area_sr)
     elif target_representative_area_sr is not None:
         source_area_sr = _representative_pixel_area_sr(
@@ -970,7 +1025,9 @@ def _resample_weighted_to_target(
         else:
             sampled_numer = sampled_planes[:, 0]
             sampled_weight = sampled_planes[:, 1]
-            sampled_support = sampled_planes[:, 2] if support_image is not None else None
+            sampled_support = (
+                sampled_planes[:, 2] if support_image is not None else None
+            )
         in_bounds = (
             (x_src >= 0.0)
             & (x_src <= (w_src - 1))
@@ -1008,7 +1065,10 @@ def _resample_weighted_to_target(
             sampled_numer,
             torch.zeros_like(sampled_numer),
         )
-        if value_semantics == "surface_brightness" and target_representative_area_sr is not None:
+        if (
+            value_semantics == "surface_brightness"
+            and target_representative_area_sr is not None
+        ):
             sampled_numer = sampled_numer * float(target_representative_area_sr)
             sampled_weight = sampled_weight * float(target_representative_area_sr)
         return sampled_numer, sampled_weight
@@ -1016,7 +1076,10 @@ def _resample_weighted_to_target(
     def _sample_on_world_grid(ra_deg: Tensor, dec_deg: Tensor) -> tuple[Tensor, Tensor]:
         flat_ra = ra_deg.reshape(-1)
         flat_dec = dec_deg.reshape(-1)
-        if bool(getattr(source_wcs, "_is_tpv", False)) and getattr(source_wcs, "sip", None) is None:
+        if (
+            bool(getattr(source_wcs, "_is_tpv", False))
+            and getattr(source_wcs, "sip", None) is None
+        ):
             source_cap_radius_deg = _tpv_source_cap_radius_deg(
                 source_wcs,
                 (h_src, w_src),
@@ -1055,10 +1118,13 @@ def _resample_weighted_to_target(
             target.shape,
             device=target.ra_deg.device,
         )
-    flat_ra = torch.cat([sub_ra.reshape(-1) for sub_ra, _ in quadrature_world_grids], dim=0)
-    flat_dec = torch.cat([sub_dec.reshape(-1) for _, sub_dec in quadrature_world_grids], dim=0)
+    flat_ra = torch.cat(
+        [sub_ra.reshape(-1) for sub_ra, _ in quadrature_world_grids], dim=0
+    )
+    flat_dec = torch.cat(
+        [sub_dec.reshape(-1) for _, sub_dec in quadrature_world_grids], dim=0
+    )
     x_src_all, y_src_all = source_wcs.world_to_pixel(flat_ra, flat_dec)
-    n_pix = target.ra_deg.numel()
     x_src_b = x_src_all.reshape(len(quadrature_world_grids), *target.shape)
     y_src_b = y_src_all.reshape(len(quadrature_world_grids), *target.shape)
     sub_numer, sub_weight = _sample_on_source_grid(
@@ -1151,7 +1217,9 @@ def _masked_median_stack(
     if not projected_images:
         raise ValueError("median stacking requires at least one projected image")
     values = torch.stack(tuple(projected_images), dim=0)
-    support = torch.stack(tuple(mask.to(dtype=torch.bool) for mask in support_masks), dim=0)
+    support = torch.stack(
+        tuple(mask.to(dtype=torch.bool) for mask in support_masks), dim=0
+    )
     fill = torch.full_like(values, float("inf"))
     ordered = torch.sort(torch.where(support, values, fill), dim=0).values
     count = support.sum(dim=0, dtype=torch.int64)
@@ -1176,7 +1244,9 @@ def _forward_project_weighted_to_target(
     drizzle_pixfrac: float,
 ) -> tuple[Tensor, Tensor]:
     if not _is_drizzle_kernel(resampling_kernel):
-        raise ValueError(f"forward projection only supports drizzle kernels, got {resampling_kernel!r}")
+        raise ValueError(
+            f"forward projection only supports drizzle kernels, got {resampling_kernel!r}"
+        )
 
     image = _validate_image_plane(image).to(dtype=torch.float32)
     source_weight = _validate_image_plane(source_weight).to(dtype=torch.float32)
@@ -1211,7 +1281,9 @@ def _forward_project_weighted_to_target(
     ys, xs = torch.nonzero(valid, as_tuple=True)
     flat_values_numer = weighted_image[ys, xs].to(dtype=torch.float32)
     flat_values_weight = weighted_weight[ys, xs].to(dtype=torch.float32)
-    flat_numer = torch.zeros(target.shape[0] * target.shape[1], dtype=torch.float32, device=image.device)
+    flat_numer = torch.zeros(
+        target.shape[0] * target.shape[1], dtype=torch.float32, device=image.device
+    )
     flat_weight = torch.zeros_like(flat_numer)
     width = int(target.shape[1])
     height = int(target.shape[0])
@@ -1261,7 +1333,9 @@ def _forward_project_weighted_to_target(
             for off_x, wx in ((0, 1.0 - dx), (1, dx)):
                 ix = x0 + off_x
                 frac = wx * wy
-                inside = (ix >= 0) & (ix < width) & (iy >= 0) & (iy < height) & (frac > 0.0)
+                inside = (
+                    (ix >= 0) & (ix < width) & (iy >= 0) & (iy < height) & (frac > 0.0)
+                )
                 if not bool(inside.any()):
                     continue
                 idx = iy[inside] * width + ix[inside]
@@ -1308,7 +1382,13 @@ def _maybe_external_drizzle_resample_weighted_to_target(
     helpers = _try_external_drizzle_helpers()
     if helpers is None:
         return None
-    astropy_fits, AstropyWCS, DrizzleResampler, calc_pixmap, estimate_pixel_scale_ratio = helpers
+    (
+        astropy_fits,
+        AstropyWCS,
+        DrizzleResampler,
+        calc_pixmap,
+        estimate_pixel_scale_ratio,
+    ) = helpers
     kernel = "point" if resampling_kernel == "drizzle_point" else "square"
     target_header_astropy = _as_astropy_fits_header_for_drizzle(target_header)
     source_header_astropy = _as_astropy_fits_header_for_drizzle(header_dict_obs)
@@ -1331,7 +1411,10 @@ def _maybe_external_drizzle_resample_weighted_to_target(
         disable_ctx=True,
     )
     drizzle.add_image(
-        torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0).cpu().numpy().astype("float32"),
+        torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0)
+        .cpu()
+        .numpy()
+        .astype("float32"),
         exptime=1.0,
         pixmap=pixmap,
         weight_map=torch.nan_to_num(source_weight, nan=0.0, posinf=0.0, neginf=0.0)
@@ -1404,7 +1487,9 @@ def _prepare_target(
 
 
 def _is_plain_tan_header(header: dict) -> bool:
-    return str(header.get("CTYPE1", "")).endswith("TAN") and str(header.get("CTYPE2", "")).endswith("TAN")
+    return str(header.get("CTYPE1", "")).endswith("TAN") and str(
+        header.get("CTYPE2", "")
+    ).endswith("TAN")
 
 
 def _source_bbox_on_target(
@@ -1473,7 +1558,9 @@ def _slice_prepared_target(
             (ra[y0:y1, x0:x1], dec[y0:y1, x0:x1])
             for ra, dec in target.quadrature_world_grids
         )
-    pixel_area = None if target.pixel_area_sr is None else target.pixel_area_sr[y0:y1, x0:x1]
+    pixel_area = (
+        None if target.pixel_area_sr is None else target.pixel_area_sr[y0:y1, x0:x1]
+    )
     return _PreparedImagePlaneTarget(
         header=target.header,
         wcs=target.wcs,
@@ -1500,11 +1587,18 @@ def _window_large_tan_target(
 ) -> tuple[_PreparedImagePlaneTarget | None, tuple[int, int, int, int] | None]:
     if value_semantics != "surface_brightness":
         return target, None
-    if int(target.shape[0]) * int(target.shape[1]) < _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS:
+    if (
+        int(target.shape[0]) * int(target.shape[1])
+        < _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS
+    ):
         return target, None
-    if not _is_plain_tan_header(source_header) or not _is_plain_tan_header(target_header):
+    if not _is_plain_tan_header(source_header) or not _is_plain_tan_header(
+        target_header
+    ):
         return target, None
-    if getattr(source_wcs, "sip", None) is not None or bool(getattr(source_wcs, "_is_tpv", False)):
+    if getattr(source_wcs, "sip", None) is not None or bool(
+        getattr(source_wcs, "_is_tpv", False)
+    ):
         return target, None
     bbox = _source_bbox_on_target(
         source_wcs,
@@ -1517,7 +1611,12 @@ def _window_large_tan_target(
     if bbox is None:
         return None, (0, 0, 0, 0)
     y0, y1, x0, x1 = bbox
-    if y0 == 0 and y1 == int(target.shape[0]) and x0 == 0 and x1 == int(target.shape[1]):
+    if (
+        y0 == 0
+        and y1 == int(target.shape[0])
+        and x0 == 0
+        and x1 == int(target.shape[1])
+    ):
         return target, None
     return _slice_prepared_target(target, y0=y0, y1=y1, x0=x0, x1=x1), bbox
 
@@ -1582,14 +1681,16 @@ def _observation_spectral_columns(
             )
         band_lower = center if obs.spectral_min is None else float(obs.spectral_min)
         band_upper = center if obs.spectral_max is None else float(obs.spectral_max)
-        if not torch.isfinite(torch.tensor(band_lower, dtype=torch.float64)) or not torch.isfinite(
-            torch.tensor(band_upper, dtype=torch.float64)
-        ):
+        if not torch.isfinite(
+            torch.tensor(band_lower, dtype=torch.float64)
+        ) or not torch.isfinite(torch.tensor(band_upper, dtype=torch.float64)):
             raise ValueError("Observation spectral bounds must be finite")
         if band_upper < band_lower:
             raise ValueError("Observation spectral_max must be >= spectral_min")
         filt_center = (
-            center if obs.transmission_center is None else float(obs.transmission_center)
+            center
+            if obs.transmission_center is None
+            else float(obs.transmission_center)
         )
         if not torch.isfinite(torch.tensor(filt_center, dtype=torch.float64)):
             raise ValueError("Observation transmission_center must be finite")
@@ -1599,7 +1700,10 @@ def _observation_spectral_columns(
             else float(obs.transmission_sigma)
         )
         if obs.transmission_sigma is not None:
-            if not torch.isfinite(torch.tensor(filt_sigma, dtype=torch.float64)) or filt_sigma <= 0.0:
+            if (
+                not torch.isfinite(torch.tensor(filt_sigma, dtype=torch.float64))
+                or filt_sigma <= 0.0
+            ):
                 raise ValueError(
                     "Observation transmission_sigma must be finite and > 0"
                 )
@@ -1722,7 +1826,8 @@ def _band_names_from_projection(
         band_names = {
             observation_names[obs_idx]
             for obs_idx in range(int(projection.shape[0]))
-            if projection[obs_idx, band_idx] > 0.0 and observation_names[obs_idx] is not None
+            if projection[obs_idx, band_idx] > 0.0
+            and observation_names[obs_idx] is not None
         }
         names.append(next(iter(band_names)) if len(band_names) == 1 else None)
     return tuple(names)
@@ -1781,10 +1886,15 @@ def _project_observation_to_target_chunk(
     image, source_weight = _apply_observation_calibration(obs, image, source_weight)
     prepared_target_view = prepared_target
     target_window = None
-    if _headers_equivalent_for_direct_copy(header_dict_obs, target_header) and tuple(int(v) for v in image.shape) == target_shape:
+    if (
+        _headers_equivalent_for_direct_copy(header_dict_obs, target_header)
+        and tuple(int(v) for v in image.shape) == target_shape
+    ):
         if value_semantics == "flux":
             if prepared_target is None or prepared_target.pixel_area_sr is None:
-                raise RuntimeError("prepared_target with pixel area is required for flux semantics")
+                raise RuntimeError(
+                    "prepared_target with pixel area is required for flux semantics"
+                )
             sampled_weight = source_weight.to(dtype=torch.float32) * torch.square(
                 prepared_target.pixel_area_sr
             )
@@ -1813,6 +1923,8 @@ def _project_observation_to_target_chunk(
             sampled_numer = torch.zeros((0, 0), dtype=torch.float32, device=device)
             sampled_weight = torch.zeros((0, 0), dtype=torch.float32, device=device)
         elif _is_drizzle_kernel(resampling_kernel):
+            # Native torch forward-drizzle (CUDA/MPS/differentiable). External ``drizzle``
+            # package is opt-in via ``TORCHSKY_USE_EXTERNAL_DRIZZLE=1`` for regression only.
             exact = _maybe_external_drizzle_resample_weighted_to_target(
                 image,
                 source_weight,
@@ -1896,8 +2008,12 @@ def _project_observation_to_target(
     if projected.target_window is None:
         return projected.numer, projected.weight, projected.overlap, projected.moc
     y0, y1, x0, x1 = projected.target_window
-    sampled_numer = torch.zeros(target_shape, dtype=projected.numer.dtype, device=device)
-    sampled_weight = torch.zeros(target_shape, dtype=projected.weight.dtype, device=device)
+    sampled_numer = torch.zeros(
+        target_shape, dtype=projected.numer.dtype, device=device
+    )
+    sampled_weight = torch.zeros(
+        target_shape, dtype=projected.weight.dtype, device=device
+    )
     overlap = torch.zeros(target_shape, dtype=projected.overlap.dtype, device=device)
     if y1 > y0 and x1 > x0:
         sampled_numer[y0:y1, x0:x1] = projected.numer
@@ -1951,9 +2067,7 @@ def plan_image_plane_cube_target(
         observation_filter_center,
         observation_filter_sigma,
         observation_names,
-    ) = (
-        _observation_spectral_columns(observations)
-    )
+    ) = _observation_spectral_columns(observations)
     if spectral_axis is None:
         if spectral_bin_edges is not None:
             raise ValueError(
@@ -2101,8 +2215,7 @@ def coadd_image_plane(
             header_dict_obs = dict(header)
         need_prepared_target = (
             value_semantics == "flux"
-            or
-            footprint_order is not None
+            or footprint_order is not None
             or header_dict_obs != header_dict
             or tuple(int(v) for v in image.shape) != target_shape
         )
@@ -2113,19 +2226,23 @@ def coadd_image_plane(
         ):
             source_wcs = WCS(header_dict_obs)
         if stacking_method == "median":
-            sampled_numer, sampled_weight, overlap, moc = _project_observation_to_target(
-                obs,
-                image=image,
-                header_dict_obs=header_dict_obs,
-                source_wcs=source_wcs,
-                prepared_target=ensure_prepared_target() if need_prepared_target else None,
-                target_header=header_dict,
-                target_shape=target_shape,
-                device=device,
-                footprint_order=footprint_order,
-                resampling_kernel=resampling_kernel,
-                value_semantics=value_semantics,
-                drizzle_pixfrac=drizzle_pixfrac,
+            sampled_numer, sampled_weight, overlap, moc = (
+                _project_observation_to_target(
+                    obs,
+                    image=image,
+                    header_dict_obs=header_dict_obs,
+                    source_wcs=source_wcs,
+                    prepared_target=ensure_prepared_target()
+                    if need_prepared_target
+                    else None,
+                    target_header=header_dict,
+                    target_shape=target_shape,
+                    device=device,
+                    footprint_order=footprint_order,
+                    resampling_kernel=resampling_kernel,
+                    value_semantics=value_semantics,
+                    drizzle_pixfrac=drizzle_pixfrac,
+                )
             )
             contrib_numer, contrib_weight = _stack_inputs_from_projected_observation(
                 sampled_numer,
@@ -2133,7 +2250,9 @@ def coadd_image_plane(
                 stacking_method="mean",
                 value_semantics=value_semantics,
                 pixel_area_sr=(
-                    ensure_prepared_target().pixel_area_sr if value_semantics == "flux" else None
+                    ensure_prepared_target().pixel_area_sr
+                    if value_semantics == "flux"
+                    else None
                 ),
             )
             assert median_images is not None and median_support is not None
@@ -2148,7 +2267,9 @@ def coadd_image_plane(
                 image=image,
                 header_dict_obs=header_dict_obs,
                 source_wcs=source_wcs,
-                prepared_target=ensure_prepared_target() if need_prepared_target else None,
+                prepared_target=ensure_prepared_target()
+                if need_prepared_target
+                else None,
                 target_header=header_dict,
                 target_shape=target_shape,
                 device=device,
@@ -2158,14 +2279,18 @@ def coadd_image_plane(
                 drizzle_pixfrac=drizzle_pixfrac,
             )
             if projected.target_window is None:
-                contrib_numer, contrib_weight = _stack_inputs_from_projected_observation(
-                    projected.numer,
-                    projected.weight,
-                    stacking_method=stacking_method,
-                    value_semantics=value_semantics,
-                    pixel_area_sr=(
-                        ensure_prepared_target().pixel_area_sr if value_semantics == "flux" else None
-                    ),
+                contrib_numer, contrib_weight = (
+                    _stack_inputs_from_projected_observation(
+                        projected.numer,
+                        projected.weight,
+                        stacking_method=stacking_method,
+                        value_semantics=value_semantics,
+                        pixel_area_sr=(
+                            ensure_prepared_target().pixel_area_sr
+                            if value_semantics == "flux"
+                            else None
+                        ),
+                    )
                 )
                 numer = numer + contrib_numer
                 denom = denom + contrib_weight
@@ -2177,18 +2302,24 @@ def coadd_image_plane(
                     if value_semantics == "flux":
                         prepared = ensure_prepared_target()
                         if prepared.pixel_area_sr is None:
-                            raise RuntimeError("target pixel area is required for flux semantics")
+                            raise RuntimeError(
+                                "target pixel area is required for flux semantics"
+                            )
                         pixel_area_sr = prepared.pixel_area_sr[y0:y1, x0:x1]
-                    contrib_numer, contrib_weight = _stack_inputs_from_projected_observation(
-                        projected.numer,
-                        projected.weight,
-                        stacking_method=stacking_method,
-                        value_semantics=value_semantics,
-                        pixel_area_sr=pixel_area_sr,
+                    contrib_numer, contrib_weight = (
+                        _stack_inputs_from_projected_observation(
+                            projected.numer,
+                            projected.weight,
+                            stacking_method=stacking_method,
+                            value_semantics=value_semantics,
+                            pixel_area_sr=pixel_area_sr,
+                        )
                     )
                     numer[y0:y1, x0:x1] = numer[y0:y1, x0:x1] + contrib_numer
                     denom[y0:y1, x0:x1] = denom[y0:y1, x0:x1] + contrib_weight
-                    overlap_count[y0:y1, x0:x1] = overlap_count[y0:y1, x0:x1] + projected.overlap
+                    overlap_count[y0:y1, x0:x1] = (
+                        overlap_count[y0:y1, x0:x1] + projected.overlap
+                    )
             if observation_mocs is not None and projected.moc is not None:
                 observation_mocs.append(projected.moc)
 
@@ -2227,7 +2358,9 @@ def coadd_image_plane(
         header=header_dict,
         overlap_count=overlap_count,
         coverage_moc=coverage_moc,
-        observation_mocs=tuple(observation_mocs) if observation_mocs is not None else None,
+        observation_mocs=tuple(observation_mocs)
+        if observation_mocs is not None
+        else None,
     )
     if output_path is not None:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -2303,7 +2436,9 @@ def coadd_image_plane_cube(
     stacking_method = _validated_map_stacking_method(stacking_method)
     drizzle_pixfrac = _validated_drizzle_pixfrac(drizzle_pixfrac)
     if stacking_method == "median":
-        raise ValueError("coadd_image_plane_cube currently supports median only for single-band image-plane coadds")
+        raise ValueError(
+            "coadd_image_plane_cube currently supports median only for single-band image-plane coadds"
+        )
 
     if target is None:
         target = plan_image_plane_cube_target(
@@ -2323,9 +2458,7 @@ def coadd_image_plane_cube(
         observation_filter_center,
         observation_filter_sigma,
         observation_names,
-    ) = (
-        _observation_spectral_columns(observations)
-    )
+    ) = _observation_spectral_columns(observations)
     projection = _build_spectral_projection(
         observation_center,
         observation_lower,
@@ -2381,10 +2514,14 @@ def coadd_image_plane_cube(
     n_band = int(target.spectral_axis.values.numel())
     numer = torch.zeros((n_band, *target_shape), dtype=torch.float32, device=device)
     denom = torch.zeros((n_band, *target_shape), dtype=torch.float32, device=device)
-    overlap_count = torch.zeros((n_band, *target_shape), dtype=torch.int32, device=device)
+    overlap_count = torch.zeros(
+        (n_band, *target_shape), dtype=torch.int32, device=device
+    )
     coverage_mocs: list[MOC | None] | None = None
     if footprint_order is not None:
-        coverage_mocs = [MOC(torch.empty((0,), dtype=torch.int64)) for _ in range(n_band)]
+        coverage_mocs = [
+            MOC(torch.empty((0,), dtype=torch.int64)) for _ in range(n_band)
+        ]
 
     for obs_idx, obs in enumerate(observations):
         if obs_idx == 0:
@@ -2396,8 +2533,7 @@ def coadd_image_plane_cube(
             header_dict_obs = dict(header)
         need_prepared_target = (
             value_semantics == "flux"
-            or
-            footprint_order is not None
+            or footprint_order is not None
             or header_dict_obs != header_dict
             or tuple(int(v) for v in image.shape) != target_shape
         )
@@ -2421,7 +2557,11 @@ def coadd_image_plane_cube(
             value_semantics=value_semantics,
             drizzle_pixfrac=drizzle_pixfrac,
         )
-        coeffs = projection[obs_idx].to(device=device, dtype=torch.float32).view(n_band, 1, 1)
+        coeffs = (
+            projection[obs_idx]
+            .to(device=device, dtype=torch.float32)
+            .view(n_band, 1, 1)
+        )
         if projected.target_window is None:
             contrib_numer, contrib_weight = _stack_inputs_from_projected_observation(
                 projected.numer,
@@ -2429,12 +2569,16 @@ def coadd_image_plane_cube(
                 stacking_method=stacking_method,
                 value_semantics=value_semantics,
                 pixel_area_sr=(
-                    ensure_prepared_target().pixel_area_sr if value_semantics == "flux" else None
+                    ensure_prepared_target().pixel_area_sr
+                    if value_semantics == "flux"
+                    else None
                 ),
             )
             numer = numer + coeffs * contrib_numer.unsqueeze(0)
             denom = denom + coeffs * contrib_weight.unsqueeze(0)
-            overlap_count = overlap_count + (coeffs > 0.0).to(torch.int32) * projected.overlap.unsqueeze(0)
+            overlap_count = overlap_count + (coeffs > 0.0).to(
+                torch.int32
+            ) * projected.overlap.unsqueeze(0)
         else:
             y0, y1, x0, x1 = projected.target_window
             if y1 > y0 and x1 > x0:
@@ -2442,23 +2586,32 @@ def coadd_image_plane_cube(
                 if value_semantics == "flux":
                     prepared = ensure_prepared_target()
                     if prepared.pixel_area_sr is None:
-                        raise RuntimeError("target pixel area is required for flux semantics")
+                        raise RuntimeError(
+                            "target pixel area is required for flux semantics"
+                        )
                     pixel_area_sr = prepared.pixel_area_sr[y0:y1, x0:x1]
-                contrib_numer, contrib_weight = _stack_inputs_from_projected_observation(
-                    projected.numer,
-                    projected.weight,
-                    stacking_method=stacking_method,
-                    value_semantics=value_semantics,
-                    pixel_area_sr=pixel_area_sr,
+                contrib_numer, contrib_weight = (
+                    _stack_inputs_from_projected_observation(
+                        projected.numer,
+                        projected.weight,
+                        stacking_method=stacking_method,
+                        value_semantics=value_semantics,
+                        pixel_area_sr=pixel_area_sr,
+                    )
                 )
-                numer[:, y0:y1, x0:x1] = numer[:, y0:y1, x0:x1] + coeffs * contrib_numer.unsqueeze(0)
-                denom[:, y0:y1, x0:x1] = denom[:, y0:y1, x0:x1] + coeffs * contrib_weight.unsqueeze(0)
-                overlap_count[:, y0:y1, x0:x1] = (
-                    overlap_count[:, y0:y1, x0:x1]
-                    + (coeffs > 0.0).to(torch.int32) * projected.overlap.unsqueeze(0)
-                )
+                numer[:, y0:y1, x0:x1] = numer[
+                    :, y0:y1, x0:x1
+                ] + coeffs * contrib_numer.unsqueeze(0)
+                denom[:, y0:y1, x0:x1] = denom[
+                    :, y0:y1, x0:x1
+                ] + coeffs * contrib_weight.unsqueeze(0)
+                overlap_count[:, y0:y1, x0:x1] = overlap_count[:, y0:y1, x0:x1] + (
+                    coeffs > 0.0
+                ).to(torch.int32) * projected.overlap.unsqueeze(0)
         if coverage_mocs is not None and projected.moc is not None:
-            band_indices = torch.nonzero(projection[obs_idx] > 0.0, as_tuple=False).flatten()
+            band_indices = torch.nonzero(
+                projection[obs_idx] > 0.0, as_tuple=False
+            ).flatten()
             for band_idx in band_indices.tolist():
                 current = coverage_mocs[band_idx]
                 coverage_mocs[band_idx] = (

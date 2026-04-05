@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Literal, TYPE_CHECKING
 
@@ -22,14 +23,18 @@ try:
 except Exception:  # pragma: no cover - optional extension
     _cpp = None
 
-_PLANAR_PIP_CPP_MIN_OPS = 2_000_000
-
 from ..wcs import healpix as _healpix
 from .core import (
     great_circle_distance,
     lonlat_to_unit_xyz,
     unit_xyz_to_lonlat,
     wrap_longitude,
+)
+
+_PLANAR_PIP_CPP_MIN_OPS = 2_000_000
+# Caps peak memory for M×K pairwise dot products (winding fallback, convex half-spaces).
+_GEOM_PAIRWISE_CHUNK: int = max(
+    1024, int(os.environ.get("TORCHSKY_GEOM_PAIRWISE_CHUNK", "8192"))
 )
 
 
@@ -108,13 +113,65 @@ def _signed_area_triangle(a: Tensor, b: Tensor, c: Tensor) -> Tensor:
     return 2.0 * torch.atan2(det, den.clamp(min=1e-15))
 
 
-def _points_on_edges(points: Tensor, vertices: Tensor, atol_rad: float) -> Tensor:
+def _points_on_any_polygon_edge(
+    points: Tensor, vertices: Tensor, atol_rad: float
+) -> Tensor:
+    """(M,) mask: each query point lies on some polygon edge (great-circle arc), within atol."""
     v0 = vertices
     v1 = torch.roll(vertices, shifts=-1, dims=0)
-    d_p_v0 = torch.acos(torch.clamp(torch.einsum("mj,nj->mn", points, v0), -1.0, 1.0))
-    d_p_v1 = torch.acos(torch.clamp(torch.einsum("mj,nj->mn", points, v1), -1.0, 1.0))
-    d_v0_v1 = torch.acos(torch.clamp((v0 * v1).sum(dim=-1), -1.0, 1.0)).unsqueeze(0)
-    return torch.abs((d_p_v0 + d_p_v1) - d_v0_v1) <= atol_rad
+    d_v0_v1 = torch.acos(torch.clamp((v0 * v1).sum(dim=-1), -1.0, 1.0))
+    m = int(points.shape[0])
+    out = torch.zeros(m, dtype=torch.bool, device=points.device)
+    for j in range(int(vertices.shape[0])):
+        d0 = torch.acos(
+            torch.clamp((points * v0[j]).sum(dim=-1), -1.0, 1.0)
+        )
+        d1 = torch.acos(
+            torch.clamp((points * v1[j]).sum(dim=-1), -1.0, 1.0)
+        )
+        out |= torch.abs((d0 + d1) - d_v0_v1[j]) <= atol_rad
+    return out
+
+
+def _points_near_any_vertex(
+    points: Tensor, vertices: Tensor, *, eps: float = 1e-14
+) -> Tensor:
+    """(M,) mask: point projects to a vertex within `eps` in tangent distance (original inclusive rule)."""
+    m = int(points.shape[0])
+    out = torch.zeros(m, dtype=torch.bool, device=points.device)
+    chunk = _GEOM_PAIRWISE_CHUNK
+    for m0 in range(0, m, chunk):
+        m1 = min(m0 + chunk, m)
+        pc = points[m0:m1]
+        pv = pc @ vertices.T
+        proj = vertices.unsqueeze(0) - pc.unsqueeze(1) * pv.unsqueeze(-1)
+        proj_norm = torch.linalg.norm(proj, dim=-1)
+        out[m0:m1] = (proj_norm < eps).any(dim=-1)
+    return out
+
+
+def _winding_fallback_chunked(
+    points: Tensor, vertices: Tensor, *, chunk: int | None = None
+) -> Tensor:
+    """Tangent-plane winding magnitude per point; same math as the former dense einsum path."""
+    if chunk is None:
+        chunk = _GEOM_PAIRWISE_CHUNK
+    m = int(points.shape[0])
+    device, dtype = points.device, points.dtype
+    winding = torch.empty(m, dtype=dtype, device=device)
+    for m0 in range(0, m, chunk):
+        m1 = min(m0 + chunk, m)
+        pc = points[m0:m1]
+        pv = pc @ vertices.T
+        proj = vertices.unsqueeze(0) - pc.unsqueeze(1) * pv.unsqueeze(-1)
+        proj_norm = torch.linalg.norm(proj, dim=-1, keepdim=True)
+        proj = proj / proj_norm.clamp_min(1e-14)
+        proj_next = torch.roll(proj, shifts=-1, dims=1)
+        cross = torch.cross(proj, proj_next, dim=-1)
+        num = (pc.unsqueeze(1) * cross).sum(dim=-1)
+        den = torch.clamp((proj * proj_next).sum(dim=-1), -1.0, 1.0)
+        winding[m0:m1] = torch.atan2(num, den).sum(dim=-1)
+    return winding
 
 
 def _arc_contains_point(a: Tensor, b: Tensor, p: Tensor, tol_rad: float) -> Tensor:
@@ -605,25 +662,14 @@ def spherical_polygon_contains(
             inside[valid] = inside_valid
     else:
         # Fallback path for polygons not entirely in one hemisphere.
-        pv = torch.einsum("mj,nj->mn", points, vertices)
-        proj = vertices.unsqueeze(0) - points.unsqueeze(1) * pv.unsqueeze(-1)
-        proj_norm = torch.linalg.norm(proj, dim=-1)
-        proj = proj / proj_norm.clamp_min(1e-14).unsqueeze(-1)
-        proj_next = torch.roll(proj, shifts=-1, dims=1)
-        cross = torch.cross(proj, proj_next, dim=-1)
-        num = (points.unsqueeze(1) * cross).sum(dim=-1)
-        den = torch.clamp((proj * proj_next).sum(dim=-1), -1.0, 1.0)
-        winding = torch.atan2(num, den).sum(dim=-1)
+        winding = _winding_fallback_chunked(points, vertices)
         inside = torch.abs(winding) > math.pi
 
     if inclusive:
         atol_rad = math.radians(atol_deg)
-        pv = torch.einsum("mj,nj->mn", points, vertices)
-        proj = vertices.unsqueeze(0) - points.unsqueeze(1) * pv.unsqueeze(-1)
-        proj_norm = torch.linalg.norm(proj, dim=-1)
-        near_vertex = proj_norm < 1e-14
-        on_edge = _points_on_edges(points, vertices, atol_rad).any(dim=-1)
-        inside = inside | near_vertex.any(dim=-1) | on_edge
+        on_edge = _points_on_any_polygon_edge(points, vertices, atol_rad)
+        near_v = _points_near_any_vertex(points, vertices, eps=1e-14)
+        inside = inside | near_v | on_edge
 
     if inside_lon_deg is not None and inside_lat_deg is not None:
         ref = spherical_polygon_contains(
@@ -665,8 +711,15 @@ def convex_polygon_contains(
     normals = normals * orient.unsqueeze(-1)
 
     points = lonlat_to_unit_xyz(lon_deg, lat_deg)
-    dots = torch.einsum("...j,kj->...k", points, normals)
-    return torch.all(dots >= -atol, dim=-1)
+    shape = points.shape[:-1]
+    pts = points.reshape(-1, 3)
+    chunk = _GEOM_PAIRWISE_CHUNK
+    bits: list[Tensor] = []
+    for m0 in range(0, pts.shape[0], chunk):
+        m1 = min(m0 + chunk, pts.shape[0])
+        d = pts[m0:m1] @ normals.T
+        bits.append(torch.all(d >= -atol, dim=-1))
+    return torch.cat(bits, dim=0).reshape(shape)
 
 
 def query_polygon_general(
@@ -1345,6 +1398,59 @@ def _strip_closed_np(
     return lon, lat
 
 
+def _numpy_sg_contains_lonlat_bulk(
+    sg_poly: object, lon_deg: "np.ndarray", lat_deg: "np.ndarray"
+) -> "np.ndarray":
+    """Bulk ``(lon, lat)`` containment using ``spherical_geometry`` vector APIs when available.
+
+    Falls back to per-point calls only when array APIs are missing or return an
+    unexpected shape (matches the probe logic in ``benchmarks/bench_sphere_polygons``).
+    """
+    import numpy as np
+
+    lon_deg = np.asarray(lon_deg, dtype=np.float64).reshape(-1)
+    lat_deg = np.asarray(lat_deg, dtype=np.float64).reshape(-1)
+    if lon_deg.shape != lat_deg.shape:
+        raise ValueError("lon_deg and lat_deg must have the same shape")
+    if hasattr(sg_poly, "contains_lonlat"):
+        try:
+            raw = sg_poly.contains_lonlat(lon_deg, lat_deg, degrees=True)
+            out = np.asarray(raw, dtype=bool)
+            if out.shape == lon_deg.shape:
+                return out
+        except (TypeError, ValueError, AttributeError):
+            pass
+    if hasattr(sg_poly, "contains_radec"):
+        try:
+            raw = sg_poly.contains_radec(lon_deg, lat_deg, degrees=True)
+            out = np.asarray(raw, dtype=bool)
+            if out.shape == lon_deg.shape:
+                return out
+        except (TypeError, ValueError, AttributeError):
+            pass
+    if hasattr(sg_poly, "contains_lonlat"):
+        return np.asarray(
+            [
+                bool(
+                    sg_poly.contains_lonlat(float(lo), float(la), degrees=True)
+                )
+                for lo, la in zip(lon_deg, lat_deg, strict=False)
+            ],
+            dtype=bool,
+        )
+    if hasattr(sg_poly, "contains_radec"):
+        return np.asarray(
+            [
+                bool(
+                    sg_poly.contains_radec(float(lo), float(la), degrees=True)
+                )
+                for lo, la in zip(lon_deg, lat_deg, strict=False)
+            ],
+            dtype=bool,
+        )
+    raise TypeError("spherical_geometry polygon lacks contains_lonlat/contains_radec")
+
+
 def _region_to_sg(region: RegionOperand, *, cap_steps: int = 256):
     if isinstance(region, NativeExactSphericalRegion):
         return _region_to_sg(region._region, cap_steps=cap_steps)
@@ -1577,22 +1683,14 @@ class ExactSphericalRegion:
         return bool(self._sg_poly.intersects_poly(other_sg))
 
     def contains(self, lon_deg: Tensor | float, lat_deg: Tensor | float) -> Tensor:
-        import numpy as np
-
         lon_t = torch.as_tensor(lon_deg, dtype=torch.float64)
         lat_t = torch.as_tensor(lat_deg, dtype=torch.float64)
         lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
         shape = lon_t.shape
         lon_f = lon_t.reshape(-1).detach().cpu().numpy()
         lat_f = lat_t.reshape(-1).detach().cpu().numpy()
-        out = np.asarray(
-            [
-                bool(self._sg_poly.contains_lonlat(float(lo), float(la), degrees=True))
-                for lo, la in zip(lon_f, lat_f, strict=False)
-            ],
-            dtype=bool,
-        )
-        return torch.from_numpy(out).reshape(shape)
+        out = _numpy_sg_contains_lonlat_bulk(self._sg_poly, lon_f, lat_f)
+        return torch.from_numpy(out.reshape(shape))
 
     def query_pixels(self, nside: int, *, nest: bool = False) -> Tensor:
         # Candidate pixels from per-component polygon queries, then exact center filtering.

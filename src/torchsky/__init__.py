@@ -6,6 +6,7 @@ optimized for PyTorch tensors and pytorch-frame TensorFrames.
 """
 
 import importlib
+import logging
 from typing import Any, Dict, List, Optional, Union, Iterator, Tuple, Sequence
 from collections import OrderedDict
 
@@ -54,6 +55,18 @@ from .transforms import (
     create_validation_transform,
 )
 from .wcs import WCS
+
+_log = logging.getLogger(__name__)
+
+# Recoverable errors when probing C++/FITS image fast paths (avoid bare ``except Exception``).
+_READ_EXC_TYPES = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    MemoryError,
+)
 
 # Suppress noisy torch.jit.script deprecation warnings on Python 3.14+
 # This is a temporary measure until the codebase is migrated to torch.compile
@@ -777,7 +790,7 @@ def read_table(
     start_row: int = 1,
     num_rows: int = -1,
     device: str = "cpu",
-    mmap: Union[bool, str] = True,
+    mmap: Union[bool, str] = "auto",
     cache_capacity: int = 10,
     handle_cache_capacity: int = 16,
     fast_header: bool = True,
@@ -787,6 +800,8 @@ def read_table(
     """Read a table HDU as a dictionary of tensors/lists.
 
     This is a convenience wrapper around `read()` with table-centric arguments.
+    Uses the same ``mmap='auto'`` default as :func:`read` (explicit ``True``/``False``
+    still overrides).
     """
     if not isinstance(hdu, int) or hdu < 0:
         raise ValueError("hdu must be a non-negative integer")
@@ -821,7 +836,7 @@ def read_table_rows(
     num_rows: int = 1000,
     columns: Optional[List[str]] = None,
     device: str = "cpu",
-    mmap: Union[bool, str] = True,
+    mmap: Union[bool, str] = "auto",
     cache_capacity: int = 10,
     handle_cache_capacity: int = 16,
     fast_header: bool = True,
@@ -854,7 +869,7 @@ def read_table_rows(
 
 def read(
     path: Union[str, List[str], Tuple[str, ...]],
-    hdu: Union[int, str, List[int], Tuple[int, ...], None] = 0,
+    hdu: Union[int, str, List[int], Tuple[int, ...], None] = None,
     device: str = "cpu",
     mmap: Union[bool, str] = "auto",
     fp16: bool = False,
@@ -875,7 +890,7 @@ def read(
 
     Args:
         path: File path or cutout specification
-        hdu: HDU index, name, or `"auto"` (first HDU with payload)
+        hdu: HDU index, name, `None`, or `"auto"` (default: first HDU with payload)
         mode: Read intent: `'auto'` (default), `'image'`, or `'table'`
         policy: Dispatch mode compatibility flag: `'default'` or `'smart'`.
         device: Target device ('cpu', 'cuda')
@@ -910,8 +925,16 @@ def read(
         raise ValueError("Path must be a non-empty string")
 
     if isinstance(path, (list, tuple)):
-        if not isinstance(hdu, int):
+        hdu_batch = hdu
+        if hdu_batch is None or (
+            isinstance(hdu_batch, str) and hdu_batch.strip().lower() == "auto"
+        ):
+            if not path:
+                raise ValueError("Batch read requires a non-empty path list")
+            hdu_batch = _autodetect_hdu(path[0], handle_cache_capacity)
+        if not isinstance(hdu_batch, int):
             raise ValueError("Batch read requires a single integer HDU")
+        hdu = hdu_batch
         # C++ batch API does not expose mmap mode controls. Use it only when
         # mmap=True is explicitly requested; otherwise fall back to per-file reads.
         if mmap is True:
@@ -1069,12 +1092,19 @@ def read(
             except Exception:
                 pass
             return data
-        except Exception:
-            # Not an image HDU; skip generic image fast path and fall through.
+        except _READ_EXC_TYPES as exc:
+            # Not an image HDU or reader mismatch; skip generic image fast path and fall through.
+            if _DEBUG_SCALE or _log.isEnabledFor(logging.DEBUG):
+                _log.debug(
+                    "read: CPU image fast-path fallback for %r hdu=%s: %s",
+                    path,
+                    hdu,
+                    exc,
+                    exc_info=True,
+                )
             if force_image:
                 raise
             skip_generic_image_fast_path = True
-            pass
 
     if (
         not return_header
@@ -1096,7 +1126,7 @@ def read(
                     # Use a cached handle to fetch metadata without re-opening the file.
                     try:
                         handle, _ = _get_cached_handle(path, handle_cache_capacity)
-                    except Exception:
+                    except _READ_EXC_TYPES:
                         handle = None
 
                 if handle is not None:
@@ -1184,10 +1214,17 @@ def read(
             return data
         except ValueError:
             raise
-        except Exception:
+        except _READ_EXC_TYPES as exc:
             if force_image:
                 raise
-            pass
+            if _log.isEnabledFor(logging.DEBUG):
+                _log.debug(
+                    "read: generic image fast-path fallback for %r hdu=%s: %s",
+                    path,
+                    hdu,
+                    exc,
+                    exc_info=True,
+                )
 
     # Cache tracking
     _cache_stats["total_requests"] += 1
@@ -2207,7 +2244,11 @@ def delete_hdu(
 
 
 def read_batch(
-    file_paths: List[str], hdu: int = 0, device: str = "cpu"
+    file_paths: List[str],
+    hdu: int = 0,
+    device: str = "cpu",
+    *,
+    strict: bool = False,
 ) -> List[Tensor]:
     """Read multiple FITS files in batch.
 
@@ -2215,9 +2256,10 @@ def read_batch(
         file_paths: List of file paths to read
         hdu: HDU index to read from each file
         device: Target device for tensors
+        strict: If True, raise on the first read failure instead of skipping files.
 
     Returns:
-        List of tensors from each file
+        List of tensors from each file (only successfully read when strict=False).
     """
     if not file_paths:
         return []
@@ -2233,16 +2275,20 @@ def read_batch(
             if device != "cpu":
                 tensors = [t.to(device) for t in tensors]
             return tensors
-    except Exception:
-        pass
+    except _READ_EXC_TYPES as exc:
+        if strict:
+            raise
+        _log.debug("read_batch: C++ batch path failed, falling back per file: %s", exc)
 
     results = []
     for path in file_paths:
         try:
             tensor = read(path, hdu=hdu, device=device, return_header=False)
             results.append(tensor)
-        except Exception:
-            # Skip failed files
+        except _READ_EXC_TYPES as exc:
+            if strict:
+                raise
+            _log.debug("read_batch: skipped %r: %s", path, exc, exc_info=True)
             continue
     return results
 
@@ -2543,11 +2589,13 @@ def stream_table(
     columns: Optional[List[str]] = None,
     start_row: int = 1,
     num_rows: int = -1,
-    chunk_rows: int = 10000,
+    chunk_rows: int = 65536,
     mmap: bool = False,
     max_chunks: Optional[int] = None,
 ):
     """Yield table data in row chunks.
+
+    Default ``chunk_rows`` matches :func:`torchsky.table.read` ``batch_size`` (65536).
 
     Falls back to a single full-table read if row streaming is unavailable.
     """
@@ -2651,12 +2699,13 @@ def open(path: str, mode: str = "r") -> HDUList:
         raise RuntimeError(f"Failed to open FITS file '{path}': {e}") from e
 
 
-def get_header(path: str, hdu: Union[int, str, None] = 0) -> Header:
+def get_header(path: str, hdu: Union[int, str, None] = None) -> Header:
     """Get the header of a FITS file.
 
     Args:
         path: Path to the FITS file.
-        hdu: HDU index, name, or `"auto"`/`None` (default: 0).
+        hdu: HDU index, name, or `None`/`"auto"` for the first payload HDU
+            (same convention as :func:`read` and :func:`get_wcs`).
 
     Returns:
         Header object.

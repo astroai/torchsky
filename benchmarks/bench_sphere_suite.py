@@ -1151,6 +1151,102 @@ def run_sphere_domain(
             )
         )
 
+    # 5b) Exact-region bulk contains vs ``spherical_geometry`` vector path (+ tensor contains).
+    print("[sphere] running exact-region contains suite...", flush=True)
+    exact_json = raw_dir / "sphere_geom_exact_contains.json"
+    exact_cmd = [
+        sys.executable,
+        str(Path(__file__).with_name("bench_sphere_geom_exact_contains.py")),
+        "--n-points",
+        "200000",
+        "--runs",
+        "5",
+        "--json-out",
+        str(exact_json),
+    ]
+    ok_exact, exact_rows, reason_exact = _run_json_command(
+        "sphere_geom_exact_contains", exact_cmd, exact_json
+    )
+    if ok_exact:
+        for r in exact_rows:
+            op = str(r.get("operation", "unknown"))
+            lib = str(r.get("library", "unknown"))
+            st = str(r.get("status", "OK"))
+            skip = str(r.get("skip_reason", ""))
+            n_points = int(r.get("n_points", 0) or 0)
+            t = None
+            thr = None
+            unit = "points/s"
+            if st == "OK" and _safe_float(r.get("points_s")):
+                p = float(r["points_s"])
+                thr = p
+                if n_points > 0 and p > 0:
+                    t = n_points / p
+            if st == "SKIP":
+                row_status = "SKIPPED"
+            elif st == "FAILED":
+                row_status = "FAILED"
+            else:
+                row_status = "OK" if t is not None or op == "exact_contains_parity_numpy_bulk" else "SKIPPED"
+
+            rows.append(
+                _row(
+                    run_id=run_id,
+                    suite="sphere_geom_exact_contains",
+                    case_id=f"geom_exact::{lib}::{op}",
+                    case_label=f"geom exact {lib} {op}",
+                    operation=op,
+                    family="geometry",
+                    library=lib,
+                    method=lib,
+                    mode="specialized",
+                    status=row_status,
+                    skip_reason=skip
+                    if st == "SKIP"
+                    else (
+                        "parity_failed"
+                        if op == "exact_contains_parity_numpy_bulk" and st != "OK"
+                        else ""
+                    ),
+                    comparable=st == "OK",
+                    time_s=t,
+                    throughput=thr,
+                    unit=unit,
+                    n_points=n_points if n_points else "",
+                    metadata={
+                        "mismatches": r.get("mismatches"),
+                        "ratio_reference_vs_torchsky_wrap": r.get(
+                            "ratio_reference_vs_torchsky_wrap"
+                        ),
+                        "ratio_tensor_contains_vs_exact_region": r.get(
+                            "ratio_tensor_contains_vs_exact_region"
+                        ),
+                    },
+                )
+            )
+    else:
+        rows.append(
+            _row(
+                run_id=run_id,
+                suite="sphere_geom_exact_contains",
+                case_id="geom_exact::all",
+                case_label="geom exact contains all",
+                operation="exact_contains",
+                family="geometry",
+                library="torchsky",
+                method="torchsky",
+                mode="specialized",
+                status="FAILED",
+                skip_reason=reason_exact,
+                comparable=False,
+                time_s=None,
+                throughput=None,
+                unit="points/s",
+                n_points=200000,
+                metadata={},
+            )
+        )
+
     # 6) Sphere core operations.
     print("[sphere] running sphere core suite...", flush=True)
     core_json = raw_dir / "sphere_core.json"

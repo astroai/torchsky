@@ -29,6 +29,7 @@ import torch  # noqa: E402
 import torchsky.sphere.geom as geom  # noqa: E402
 from torchsky.sphere.geom import (  # noqa: E402
     SphericalPolygon,
+    _numpy_sg_contains_lonlat_bulk,
     query_polygon_general,
     spherical_polygon_contains,
     spherical_polygons_intersect,
@@ -110,35 +111,10 @@ def _sg_polygon_from_lonlat(lon: np.ndarray, lat: np.ndarray):
 def _sg_contains(poly: Any, lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
     if poly is None:
         raise RuntimeError("spherical_geometry comparator unavailable")
-    if hasattr(poly, "contains_lonlat"):
-        try:
-            out = np.asarray(poly.contains_lonlat(lon, lat, degrees=True), dtype=bool)
-            if out.shape == lon.shape:
-                return out
-        except Exception:
-            pass
-        return np.asarray(
-            [
-                bool(poly.contains_lonlat(float(lo), float(la), degrees=True))
-                for lo, la in zip(lon, lat, strict=False)
-            ],
-            dtype=bool,
-        )
-    if hasattr(poly, "contains_radec"):
-        try:
-            out = np.asarray(poly.contains_radec(lon, lat, degrees=True), dtype=bool)
-            if out.shape == lon.shape:
-                return out
-        except Exception:
-            pass
-        return np.asarray(
-            [
-                bool(poly.contains_radec(float(lo), float(la), degrees=True))
-                for lo, la in zip(lon, lat, strict=False)
-            ],
-            dtype=bool,
-        )
-    raise RuntimeError("unsupported spherical_geometry API for contains")
+    try:
+        return _numpy_sg_contains_lonlat_bulk(poly, lon, lat)
+    except TypeError as exc:
+        raise RuntimeError("unsupported spherical_geometry API for contains") from exc
 
 
 def _xy_to_lonlat(xyz: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

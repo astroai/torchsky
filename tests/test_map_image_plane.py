@@ -47,7 +47,11 @@ def _astropy_sip_fixture() -> Path:
     import astropy
 
     return (
-        Path(astropy.__file__).resolve().parent / "nddata" / "tests" / "data" / "sip-wcs.fits"
+        Path(astropy.__file__).resolve().parent
+        / "nddata"
+        / "tests"
+        / "data"
+        / "sip-wcs.fits"
     )
 
 
@@ -110,7 +114,9 @@ def _write_real_sip_mef(tmp_path: Path, *, shifted: bool) -> Path:
     return path
 
 
-def _rotated_cd(scale_deg: float, rotation_deg: float) -> tuple[float, float, float, float]:
+def _rotated_cd(
+    scale_deg: float, rotation_deg: float
+) -> tuple[float, float, float, float]:
     theta = torch.deg2rad(torch.tensor(float(rotation_deg), dtype=torch.float64)).item()
     cos_t = float(torch.cos(torch.tensor(theta)).item())
     sin_t = float(torch.sin(torch.tensor(theta)).item())
@@ -276,7 +282,9 @@ def test_coadd_image_plane_identical_wcs(tmp_path) -> None:
     )
 
 
-def test_coadd_image_plane_mean_stacking_averages_observations_equally(tmp_path) -> None:
+def test_coadd_image_plane_mean_stacking_averages_observations_equally(
+    tmp_path,
+) -> None:
     path_a = tmp_path / "mean_a.fits"
     path_b = tmp_path / "mean_b.fits"
     header = _simple_header()
@@ -458,7 +466,9 @@ def test_coadd_image_plane_ignores_non_finite_pixels(tmp_path) -> None:
     assert result.weight[2, 3].item() == 1.0
 
 
-def test_coadd_image_plane_applies_known_photometric_scale_and_background(tmp_path) -> None:
+def test_coadd_image_plane_applies_known_photometric_scale_and_background(
+    tmp_path,
+) -> None:
     path_ref = tmp_path / "ref.fits"
     path_raw = tmp_path / "raw.fits"
     header = _simple_header()
@@ -629,7 +639,9 @@ def test_coadd_image_plane_passes_resampling_kernel_to_grid_sample(
 
 
 @pytest.mark.parametrize("kernel", ["bilinear", "catmull_rom"])
-def test_sample_image_plane_batched_channels_matches_separate_sampling(kernel: str) -> None:
+def test_sample_image_plane_batched_channels_matches_separate_sampling(
+    kernel: str,
+) -> None:
     image = torch.arange(64, dtype=torch.float32).reshape(8, 8)
     weight = 1.0 + torch.flip(image, dims=(0,)) / 64.0
     support = torch.ones_like(image, dtype=torch.float32)
@@ -671,7 +683,14 @@ def test_sample_image_plane_batched_channels_matches_separate_sampling(kernel: s
 
 @pytest.mark.parametrize(
     "kernel",
-    ["lanczos3", "lanczos5", "mitchell_netravali", "catmull_rom", "drizzle_point", "drizzle_square"],
+    [
+        "lanczos3",
+        "lanczos5",
+        "mitchell_netravali",
+        "catmull_rom",
+        "drizzle_point",
+        "drizzle_square",
+    ],
 )
 def test_coadd_image_plane_accepts_custom_high_accuracy_kernels(
     tmp_path, kernel: str
@@ -770,7 +789,12 @@ def test_coadd_image_plane_rejects_non_positive_drizzle_pixfrac(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "pixfrac_invalid.fits"
-    torchsky.write(str(path), torch.ones((4, 4), dtype=torch.float32), header=_simple_header(), overwrite=True)
+    torchsky.write(
+        str(path),
+        torch.ones((4, 4), dtype=torch.float32),
+        header=_simple_header(),
+        overwrite=True,
+    )
 
     with pytest.raises(ValueError, match="drizzle_pixfrac"):
         coadd_image_plane(
@@ -852,7 +876,9 @@ def test_coadd_image_plane_flux_semantics_improves_flux_conservation(tmp_path) -
         value_semantics="flux",
     )
 
-    surface_flux_err = torch.abs(surface_result.data - expected_target_flux).mean().item()
+    surface_flux_err = (
+        torch.abs(surface_result.data - expected_target_flux).mean().item()
+    )
     flux_flux_err = torch.abs(flux_result.data - expected_target_flux).mean().item()
     assert flux_flux_err < surface_flux_err
 
@@ -878,10 +904,16 @@ def test_coadd_image_plane_weighted_mean_scales_surface_brightness_weights_only_
     coarse_source_path = tmp_path / "coarse_source.fits"
     coarse_weight_path = tmp_path / "coarse_source_wht.fits"
     torchsky.write(str(coarse_source_path), image, header=coarse_source, overwrite=True)
-    torchsky.write(str(coarse_weight_path), weight, header=coarse_source, overwrite=True)
+    torchsky.write(
+        str(coarse_weight_path), weight, header=coarse_source, overwrite=True
+    )
 
     finer_target_result = coadd_image_plane(
-        [ImageObservation(str(coarse_source_path), weight_path=str(coarse_weight_path))],
+        [
+            ImageObservation(
+                str(coarse_source_path), weight_path=str(coarse_weight_path)
+            )
+        ],
         target_header=fine_target,
         value_semantics="surface_brightness",
         stacking_method="weighted_mean",
@@ -904,9 +936,15 @@ def test_coadd_image_plane_weighted_mean_scales_surface_brightness_weights_only_
         device=torch.device("cpu"),
     )
 
-    assert float(finer_target_result.data[4, 4].item()) == pytest.approx(1.0, abs=1.0e-4)
-    assert float(finer_target_result.weight[4, 4].item()) == pytest.approx(1.0, abs=1.0e-4)
-    assert float(coarser_target_result.data[4, 4].item()) == pytest.approx(1.0, abs=1.0e-4)
+    assert float(finer_target_result.data[4, 4].item()) == pytest.approx(
+        1.0, abs=1.0e-4
+    )
+    assert float(finer_target_result.weight[4, 4].item()) == pytest.approx(
+        1.0, abs=1.0e-4
+    )
+    assert float(coarser_target_result.data[4, 4].item()) == pytest.approx(
+        1.0, abs=1.0e-4
+    )
     assert float(coarser_target_result.weight[4, 4].item()) == pytest.approx(
         coarse_area / fine_area,
         rel=5.0e-2,
@@ -987,23 +1025,32 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
             forced_shapes.append(tuple(int(v) for v in target.shape))
             return original_resample(*args, **kwargs)
 
-        monkeypatch.setattr(image_plane_mod, "_resample_weighted_to_target", wrapped_resample)
-        monkeypatch.setattr(image_plane_mod, "_LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS", 0)
-        forced_numer, forced_weight, _, _ = image_plane_mod._project_observation_to_target(
-            obs,
-            image=image,
-            header_dict_obs=dict(header),
-            source_wcs=source_wcs,
-            prepared_target=prepared_target,
-            target_header=target_header,
-            target_shape=target_shape,
-            device=device,
-            footprint_order=None,
-            resampling_kernel="bilinear",
-            value_semantics="surface_brightness",
+        monkeypatch.setattr(
+            image_plane_mod, "_resample_weighted_to_target", wrapped_resample
+        )
+        monkeypatch.setattr(
+            image_plane_mod, "_LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS", 0
+        )
+        forced_numer, forced_weight, _, _ = (
+            image_plane_mod._project_observation_to_target(
+                obs,
+                image=image,
+                header_dict_obs=dict(header),
+                source_wcs=source_wcs,
+                prepared_target=prepared_target,
+                target_header=target_header,
+                target_shape=target_shape,
+                device=device,
+                footprint_order=None,
+                resampling_kernel="bilinear",
+                value_semantics="surface_brightness",
+            )
         )
         assert forced_shapes
-        assert forced_shapes[0][0] < target_shape[0] or forced_shapes[0][1] < target_shape[1]
+        assert (
+            forced_shapes[0][0] < target_shape[0]
+            or forced_shapes[0][1] < target_shape[1]
+        )
 
         monkeypatch.setattr(
             image_plane_mod,
@@ -1029,7 +1076,9 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
             "_LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS",
             original_threshold,
         )
-        monkeypatch.setattr(image_plane_mod, "_resample_weighted_to_target", original_resample)
+        monkeypatch.setattr(
+            image_plane_mod, "_resample_weighted_to_target", original_resample
+        )
 
     torch.testing.assert_close(forced_numer, full_numer, atol=0.0, rtol=0.0)
     torch.testing.assert_close(forced_weight, full_weight, atol=0.0, rtol=0.0)
@@ -1241,8 +1290,22 @@ def test_coadd_image_plane_supports_mef_science_extensions(tmp_path) -> None:
 
     result = coadd_image_plane(
         [
-            ImageObservation(str(mef_path), hdu=1, weight_path=str(mef_path), weight_hdu=2, mask_path=str(mef_path), mask_hdu=3),
-            ImageObservation(str(mef_path), hdu=4, weight_path=str(mef_path), weight_hdu=5, mask_path=str(mef_path), mask_hdu=6),
+            ImageObservation(
+                str(mef_path),
+                hdu=1,
+                weight_path=str(mef_path),
+                weight_hdu=2,
+                mask_path=str(mef_path),
+                mask_hdu=3,
+            ),
+            ImageObservation(
+                str(mef_path),
+                hdu=4,
+                weight_path=str(mef_path),
+                weight_hdu=5,
+                mask_path=str(mef_path),
+                mask_hdu=6,
+            ),
         ],
         footprint_order=6,
     )
@@ -1266,8 +1329,22 @@ def test_coadd_image_plane_supports_shifted_mef_science_extensions(tmp_path) -> 
 
     result = coadd_image_plane(
         [
-            ImageObservation(str(mef_path), hdu=1, weight_path=str(mef_path), weight_hdu=2, mask_path=str(mef_path), mask_hdu=3),
-            ImageObservation(str(mef_path), hdu=4, weight_path=str(mef_path), weight_hdu=5, mask_path=str(mef_path), mask_hdu=6),
+            ImageObservation(
+                str(mef_path),
+                hdu=1,
+                weight_path=str(mef_path),
+                weight_hdu=2,
+                mask_path=str(mef_path),
+                mask_hdu=3,
+            ),
+            ImageObservation(
+                str(mef_path),
+                hdu=4,
+                weight_path=str(mef_path),
+                weight_hdu=5,
+                mask_path=str(mef_path),
+                mask_hdu=6,
+            ),
         ],
         footprint_order=6,
     )
@@ -1284,8 +1361,22 @@ def test_coadd_image_plane_supports_tpv_mef_low_overlap(tmp_path) -> None:
 
     result = coadd_image_plane(
         [
-            ImageObservation(str(mef_path), hdu=1, weight_path=str(mef_path), weight_hdu=2, mask_path=str(mef_path), mask_hdu=3),
-            ImageObservation(str(mef_path), hdu=4, weight_path=str(mef_path), weight_hdu=5, mask_path=str(mef_path), mask_hdu=6),
+            ImageObservation(
+                str(mef_path),
+                hdu=1,
+                weight_path=str(mef_path),
+                weight_hdu=2,
+                mask_path=str(mef_path),
+                mask_hdu=3,
+            ),
+            ImageObservation(
+                str(mef_path),
+                hdu=4,
+                weight_path=str(mef_path),
+                weight_hdu=5,
+                mask_path=str(mef_path),
+                mask_hdu=6,
+            ),
         ],
         footprint_order=6,
     )
@@ -1318,15 +1409,6 @@ def test_tpv_source_cap_radius_covers_in_bounds_points(tmp_path) -> None:
         device=image.device,
         include_pixel_area=False,
         include_quadrature=False,
-    )
-    flat_ra = prepared.ra_deg.reshape(-1)
-    flat_dec = prepared.dec_deg.reshape(-1)
-    x_src, y_src = source_wcs.world_to_pixel(flat_ra, flat_dec)
-    in_bounds = (
-        (x_src >= 0.0)
-        & (x_src <= (image.shape[1] - 1))
-        & (y_src >= 0.0)
-        & (y_src <= (image.shape[0] - 1))
     )
     source_cap = image_plane_mod._tpv_source_cap_radius_deg(
         source_wcs,
@@ -1395,7 +1477,9 @@ def test_coadd_image_plane_multiband_stacks_sorted_wavelengths(tmp_path) -> None
     )
     assert result.coverage_mocs is not None
     assert len(result.coverage_mocs) == 2
-    assert all(moc is not None and moc.area_sq_deg > 0.0 for moc in result.coverage_mocs)
+    assert all(
+        moc is not None and moc.area_sq_deg > 0.0 for moc in result.coverage_mocs
+    )
     assert result.band_observation_counts is not None
     torch.testing.assert_close(
         result.band_observation_counts,
@@ -1443,10 +1527,14 @@ def test_coadd_image_plane_multiband_real_astropy_fixture(tmp_path) -> None:
         result.wavelength,
         torch.tensor([4800.0, 6500.0], dtype=torch.float64),
     )
-    torch.testing.assert_close(result.data[0, :, :50], image[:, :50], atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(
+        result.data[0, :, :50], image[:, :50], atol=1e-4, rtol=1e-4
+    )
     torch.testing.assert_close(result.data[0, :, 50:], torch.zeros_like(image[:, 50:]))
     torch.testing.assert_close(result.data[1, :, :50], torch.zeros_like(image[:, :50]))
-    torch.testing.assert_close(result.data[1, :, 50:], image[:, 50:], atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(
+        result.data[1, :, 50:], image[:, 50:], atol=1e-4, rtol=1e-4
+    )
     assert result.overlap_count is not None
     torch.testing.assert_close(
         result.overlap_count[0, :, :50],
@@ -1465,8 +1553,12 @@ def test_coadd_image_plane_multiband_real_astropy_fixture(tmp_path) -> None:
         torch.ones_like(result.overlap_count[1, :, 50:]),
     )
     torch.testing.assert_close(result.weight[0, :, :50], torch.ones_like(image[:, :50]))
-    torch.testing.assert_close(result.weight[0, :, 50:], torch.zeros_like(image[:, 50:]))
-    torch.testing.assert_close(result.weight[1, :, :50], torch.zeros_like(image[:, :50]))
+    torch.testing.assert_close(
+        result.weight[0, :, 50:], torch.zeros_like(image[:, 50:])
+    )
+    torch.testing.assert_close(
+        result.weight[1, :, :50], torch.zeros_like(image[:, :50])
+    )
     torch.testing.assert_close(result.weight[1, :, 50:], torch.ones_like(image[:, 50:]))
     assert result.coverage_mocs is not None
     assert len(result.coverage_mocs) == 2
@@ -1621,7 +1713,9 @@ def test_coadd_image_plane_cube_reprojects_spectral_intervals(tmp_path) -> None:
         footprint_order=6,
     )
 
-    expected_weights = torch.tensor([0.25, 0.50, 0.25], dtype=torch.float32).view(3, 1, 1)
+    expected_weights = torch.tensor([0.25, 0.50, 0.25], dtype=torch.float32).view(
+        3, 1, 1
+    )
     torch.testing.assert_close(
         result.weight,
         expected_weights.expand_as(result.weight),
@@ -1647,7 +1741,9 @@ def test_coadd_image_plane_cube_reprojects_spectral_intervals(tmp_path) -> None:
     )
 
 
-def test_coadd_image_plane_cube_reprojects_gaussian_transmission_filters(tmp_path) -> None:
+def test_coadd_image_plane_cube_reprojects_gaussian_transmission_filters(
+    tmp_path,
+) -> None:
     header = _simple_header()
     path = tmp_path / "band_filter.fits"
     image = torch.full((8, 8), 5.0, dtype=torch.float32)
@@ -1798,10 +1894,14 @@ def test_coadd_image_plane_cube_real_astropy_fixture_to_data_cube(tmp_path) -> N
     )
 
     assert tuple(result.data.shape) == (2, 50, 100)
-    torch.testing.assert_close(result.data[0, :, :50], image[:, :50], atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(
+        result.data[0, :, :50], image[:, :50], atol=1e-4, rtol=1e-4
+    )
     torch.testing.assert_close(result.data[0, :, 50:], torch.zeros_like(image[:, 50:]))
     torch.testing.assert_close(result.data[1, :, :50], torch.zeros_like(image[:, :50]))
-    torch.testing.assert_close(result.data[1, :, 50:], image[:, 50:], atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(
+        result.data[1, :, 50:], image[:, 50:], atol=1e-4, rtol=1e-4
+    )
     cube = result.to_data_cube()
     assert cube.spatial_wcs is not None
     torch.testing.assert_close(cube.spectral_axis.values, result.spectral_axis.values)

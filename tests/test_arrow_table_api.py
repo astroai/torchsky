@@ -10,6 +10,65 @@ from astropy.table import Table
 import torchsky
 
 
+def test_fits_header_vla_detection_helpers():
+    import torchsky.table as tbl
+
+    hdr_scalar = {
+        "TFIELDS": 2,
+        "TTYPE1": "ID",
+        "TFORM1": "1J",
+        "TTYPE2": "MAG",
+        "TFORM2": "1E",
+    }
+    assert not tbl._fits_header_table_has_vla(hdr_scalar)
+    assert not tbl._fits_header_selected_includes_vla(hdr_scalar, None)
+    assert not tbl._fits_header_selected_includes_vla(hdr_scalar, ["ID"])
+
+    hdr_vla = {
+        "TFIELDS": 2,
+        "TTYPE1": "ID",
+        "TFORM1": "1J",
+        "TTYPE2": "var",
+        "TFORM2": "PI(3)",
+    }
+    assert tbl._fits_header_table_has_vla(hdr_vla)
+    assert tbl._fits_header_selected_includes_vla(hdr_vla, None)
+    assert not tbl._fits_header_selected_includes_vla(hdr_vla, ["ID"])
+    assert tbl._fits_header_selected_includes_vla(hdr_vla, ["var"])
+    assert tbl._fits_header_column_is_vla(hdr_vla, "var")
+    assert not tbl._fits_header_column_is_vla(hdr_vla, "ID")
+
+
+def test_read_where_with_vla_uses_arrow_path_so_vla_columns_survive(
+    monkeypatch,
+):
+    """C++ mmap pushdown skips P/Q columns; full read + Arrow filter must be used."""
+    pytest.importorskip("pyarrow")
+    monkeypatch.setenv("TORCHSKY_TABLE_SCANNER_THRESHOLD", "0")
+
+    handle = tempfile.NamedTemporaryFile(suffix=".fits", delete=False)
+    handle.close()
+    path = handle.name
+    try:
+        table = {
+            "ID": np.array([1, 2, 3], dtype=np.int32),
+            "VLA": [
+                np.array([10], dtype=np.int32),
+                np.array([20, 21], dtype=np.int32),
+                np.array([], dtype=np.int32),
+            ],
+        }
+        torchsky.write(path, table, overwrite=True)
+        out = torchsky.table.read(path, hdu=1, where="ID >= 2", backend="cpp_numpy")
+        assert "VLA" in out.column_names
+        assert out.num_rows == 2
+        rows = out["VLA"].to_pylist()
+        assert np.asarray(rows[0]).tolist() == [20, 21]
+        assert np.asarray(rows[1]).tolist() == []
+    finally:
+        os.unlink(path)
+
+
 def _make_table_file():
     table = Table(
         {

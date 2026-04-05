@@ -20,7 +20,13 @@ def harmonic_sky_encoding(
     include_degree1: bool = True,
     include_degree2: bool = True,
 ) -> Tensor:
-    """Low-order real spherical-harmonic-style basis on the unit sphere."""
+    """Low-order **real polynomial basis** on the unit sphere (not normalized SH).
+
+    Uses `(x,y,z) = lonlat_to_xyz(ra_deg, dec_deg)` on the unit sphere, then optional
+    terms: constant; linear `x,y,z`; quadratic `xy, yz, zx, x²−y², 3z²−1`. The degree-2
+    pieces match (unnormalized) real spherical harmonic combinations in Cartesian form,
+    but this is a **feature basis for implicit models**, not a complete orthonormal Y_lm stack.
+    """
     x, y, z = lonlat_to_xyz(ra_deg, dec_deg)
     feats: list[Tensor] = []
 

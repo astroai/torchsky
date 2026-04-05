@@ -40,7 +40,9 @@ from torchsky.wcs.healpix import (
     pix2vec,
     spherical_fourier_features,
     query_circle_vec,
+    query_disc,
     query_polygon_vec,
+    query_strip,
     ring2nest,
     upgrade_pixel_ranges,
     ud_grade,
@@ -408,6 +410,56 @@ def test_query_disc_cpp_matches_python_fallback() -> None:
 
     torch.testing.assert_close(torch.sort(got_ring).values, torch.sort(exp_ring).values)
     torch.testing.assert_close(torch.sort(got_nest).values, torch.sort(exp_nest).values)
+
+
+def test_query_disc_cuda_vec_matches_cpu() -> None:
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    cpp = pytest.importorskip("torchsky.cpp")
+    if not hasattr(cpp, "healpix_query_disc_torch_cpu"):
+        pytest.skip("torch-native HEALPix query_disc C++ binding unavailable")
+
+    nside = 32
+    vec = torch.tensor([0.1, -0.2, 0.97], dtype=torch.float64)
+    vec = vec / vec.norm()
+    radius = 0.08
+    on_cpu = query_disc(nside, vec, radius, nest=False)
+    on_gpu = query_disc(nside, vec.cuda(), radius, nest=False)
+    torch.testing.assert_close(
+        torch.sort(on_cpu).values, torch.sort(on_gpu.cpu()).values
+    )
+
+
+def test_query_disc_mps_vec_matches_cpu() -> None:
+    if not torch.backends.mps.is_available():
+        pytest.skip("MPS not available")
+    cpp = pytest.importorskip("torchsky.cpp")
+    if not hasattr(cpp, "healpix_query_disc_torch_cpu"):
+        pytest.skip("torch-native HEALPix query_disc C++ binding unavailable")
+
+    nside = 32
+    vec = torch.tensor([0.1, -0.2, 0.97], dtype=torch.float32)
+    vec = vec / vec.norm()
+    radius = 0.08
+    on_cpu = query_disc(nside, vec.cpu().double(), radius, nest=False)
+    on_mps = query_disc(nside, vec.to("mps"), radius, nest=False)
+    torch.testing.assert_close(
+        torch.sort(on_cpu).values, torch.sort(on_mps.cpu()).values
+    )
+
+
+def test_query_strip_ring_prune_matches_bruteforce() -> None:
+    nside = 4
+    t1, t2 = 0.4, 1.2
+    got = query_strip(nside, t1, t2, nest=False)
+    npix = nside2npix(nside)
+    pix = torch.arange(npix, dtype=torch.int64)
+    lon, lat = pix2ang(nside, pix, nest=False, lonlat=True)
+    theta = torch.deg2rad(90.0 - lat)
+    lo = min(t1, t2)
+    hi = max(t1, t2)
+    exp = pix[(theta >= lo) & (theta <= hi)]
+    torch.testing.assert_close(torch.sort(got).values, torch.sort(exp).values)
 
 
 def test_pixel_ranges_helpers_match_hpgeom() -> None:

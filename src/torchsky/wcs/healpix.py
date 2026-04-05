@@ -1334,6 +1334,49 @@ def _get_ring_info2(nside: int, ring: Tensor) -> tuple[Tensor, Tensor, Tensor, T
     return startpix, ringpix, theta, shifted
 
 
+def _ring_pixels_colatitude_band(
+    nside: int,
+    theta_lo: float,
+    theta_hi: float,
+    *,
+    nest: bool,
+) -> Tensor:
+    """RING indices for pixels whose ring colatitude lies in ``[theta_lo, theta_hi]``.
+
+    Colatitude is radians from the north pole (0 at pole, ``pi`` at south pole), matching
+    ``theta = deg2rad(90 - lat)`` from ``pix2ang(..., lonlat=True)``.
+
+    Cost is **O(nside)** ring metadata plus **O(output)** index materialization.
+    """
+    _validate_nside(nside)
+    lo = min(theta_lo, theta_hi)
+    hi = max(theta_lo, theta_hi)
+    if hi < 0.0 or lo > math.pi:
+        return torch.empty((0,), dtype=torch.int64)
+    lo = max(0.0, lo)
+    hi = min(math.pi, hi)
+
+    if 4 * nside <= 1:
+        return torch.empty((0,), dtype=torch.int64)
+
+    rings = torch.arange(1, 4 * nside, dtype=torch.int64)
+    startpix, ringpix, theta, _shifted = _get_ring_info2(nside, rings)
+    mask = (theta >= lo) & (theta <= hi)
+    idx = torch.nonzero(mask, as_tuple=False).flatten()
+    if idx.numel() == 0:
+        return torch.empty((0,), dtype=torch.int64)
+
+    parts: list[Tensor] = []
+    for j in idx:
+        sp = int(startpix[j].item())
+        rp = int(ringpix[j].item())
+        parts.append(torch.arange(sp, sp + rp, dtype=torch.int64))
+    ring_out = torch.cat(parts, dim=0)
+    if nest:
+        return ring2nest(nside, ring_out)
+    return ring_out
+
+
 def max_pixel_radius(nside: int, degrees: bool = False) -> float:
     """
     Return a conservative maximum center-to-corner radius for pixels at `nside`.
@@ -1408,25 +1451,32 @@ def query_disc(
 
     `vec` is a 3-vector (x, y, z); `radius` is in radians.
     If `inclusive=True`, use a conservative radius expansion by max pixel radius.
+
+    Performance: when the C++ extension is available, queries use **ring pruning**
+    (``O(nside + output)``), not a full-sky scan. The direction vector may live on any
+    device; it is copied to CPU only for the scalar C++ entry point. Without C++, this
+    falls back to chunked **O(npix)** tests.
     """
     _validate_nside(nside)
     if radius <= 0.0:
         return torch.empty((0,), dtype=torch.int64)
 
-    v = torch.as_tensor(vec, dtype=torch.float64).reshape(-1)
-    if v.numel() != 3:
+    v_any = torch.as_tensor(vec).reshape(-1)
+    if v_any.numel() != 3:
         raise ValueError("vec must be length-3 Cartesian vector")
-    vx, vy, vz = _normalize_xyz(v[0], v[1], v[2])
+    out_device = v_any.device
+    # MPS has no float64; move to CPU first, then promote to fp64 for parity with healpy/C++.
+    v64 = v_any.detach().to(device="cpu").to(dtype=torch.float64).reshape(-1)
+    vx, vy, vz = _normalize_xyz(v64[0], v64[1], v64[2])
     radius_eff = radius + (max_pixel_radius(nside, degrees=False) if inclusive else 0.0)
     cos_lim = math.cos(radius_eff)
 
-    if (
-        _cpp is not None
-        and hasattr(_cpp, "healpix_query_disc_torch_cpu")
-        and v.device.type == "cpu"
-    ):
-        vec_t = torch.stack([vx, vy, vz]).to(torch.float64).contiguous()
-        return _cpp.healpix_query_disc_torch_cpu(nside, vec_t, float(cos_lim), nest)
+    if _cpp is not None and hasattr(_cpp, "healpix_query_disc_torch_cpu"):
+        vec_cpu = torch.stack([vx, vy, vz]).contiguous()
+        out = _cpp.healpix_query_disc_torch_cpu(nside, vec_cpu, float(cos_lim), nest)
+        if out_device.type != "cpu":
+            return out.to(device=out_device)
+        return out
 
     npix = nside2npix(nside)
     selected: list[Tensor] = []
@@ -1498,10 +1548,12 @@ def query_strip(
     *,
     nest: bool = False,
     inclusive: bool = False,
-    chunk_size: int = 1_000_000,
+    chunk_size: int = 1_000_000,  # noqa: ARG001 - API compatibility; strip is ring-pruned
 ) -> Tensor:
     """
     Return pixels with center colatitude in [theta1, theta2] (radians).
+
+    Uses **ring pruning** (``O(nside + output)``), not a full ``O(npix)`` map scan.
     """
     _validate_nside(nside)
     lo = min(theta1, theta2)
@@ -1513,18 +1565,7 @@ def query_strip(
     lo = max(0.0, lo)
     hi = min(math.pi, hi)
 
-    npix = nside2npix(nside)
-    selected: list[Tensor] = []
-    for start, end in _pixel_range_chunks(npix, chunk_size=chunk_size):
-        pix = torch.arange(start, end, dtype=torch.int64)
-        lon, lat = pix2ang(nside, pix, nest=nest, lonlat=True)
-        theta = torch.deg2rad(90.0 - lat)
-        keep = (theta >= lo) & (theta <= hi)
-        if torch.any(keep):
-            selected.append(pix[keep])
-    if not selected:
-        return torch.empty((0,), dtype=torch.int64)
-    return torch.cat(selected, dim=0)
+    return _ring_pixels_colatitude_band(nside, lo, hi, nest=nest)
 
 
 def query_polygon(
@@ -1537,11 +1578,20 @@ def query_polygon(
     chunk_size: int = 1_000_000,
 ) -> Tensor:
     """
-    Return pixels with centers inside a (convex) spherical polygon.
+    Return pixels with centers inside a spherical polygon.
+
+    **The polygon must be convex** (vertices in order along the boundary).
+    Concave regions are not supported; decompose into convex pieces or use a different API.
 
     `vertices` accepts:
     - Cartesian shape (N,3) or (3,N), if `lonlat=False`
     - Lon/lat degrees shape (N,2) or (2,N), if `lonlat=True`
+
+    When the Euclidean vertex centroid lies inside the oriented polygon, a spherical
+    cap about that centroid (radius = max vertex angle + optional inclusive padding)
+    is queried via `query_disc`, then pixels are filtered with the exact half-space
+    tests — **O(nside + cap_area)** instead of **O(npix)** in typical cases. If the
+    centroid fails the inside test, this falls back to a full-sky chunked scan.
     """
     _validate_nside(nside)
     v = torch.as_tensor(vertices, dtype=torch.float64)
@@ -1607,15 +1657,49 @@ def query_polygon(
 
     tol = math.sin(max_pixel_radius(nside, degrees=False)) if inclusive else 0.0
     npix = nside2npix(nside)
-    selected: list[Tensor] = []
-    for start, end in _pixel_range_chunks(npix, chunk_size=chunk_size):
-        pix = torch.arange(start, end, dtype=torch.int64)
+
+    def _filter_pixel_chunk(pix: Tensor) -> Tensor:
+        if pix.numel() == 0:
+            return pix
         x, y, z = pix2vec(nside, pix, nest=nest)
         p = torch.stack([x, y, z], dim=-1)
         side = p @ edge_normals.transpose(0, 1)
         keep = torch.all(side >= -tol, dim=1)
-        if torch.any(keep):
-            selected.append(pix[keep])
+        return pix[keep]
+
+    d_cent = (centroid.unsqueeze(0) * edge_normals).sum(dim=1)
+    centroid_inside = bool(torch.all(d_cent >= -1.0e-11).item())
+
+    if centroid_inside:
+        cos_dots = torch.clamp(vv @ centroid, -1.0, 1.0)
+        r_cap = float(torch.acos(cos_dots).max().item())
+        if inclusive:
+            r_cap += max_pixel_radius(nside, degrees=False)
+        cand = query_disc(
+            nside,
+            centroid,
+            r_cap,
+            inclusive=False,
+            nest=nest,
+            chunk_size=chunk_size,
+        )
+        parts: list[Tensor] = []
+        n_c = int(cand.numel())
+        for start in range(0, n_c, chunk_size):
+            sl = cand[start : start + chunk_size]
+            kept = _filter_pixel_chunk(sl)
+            if kept.numel() > 0:
+                parts.append(kept)
+        if not parts:
+            return torch.empty((0,), dtype=torch.int64)
+        return torch.cat(parts, dim=0)
+
+    selected: list[Tensor] = []
+    for start, end in _pixel_range_chunks(npix, chunk_size=chunk_size):
+        pix = torch.arange(start, end, dtype=torch.int64)
+        kept = _filter_pixel_chunk(pix)
+        if kept.numel() > 0:
+            selected.append(kept)
     if not selected:
         return torch.empty((0,), dtype=torch.int64)
     return torch.cat(selected, dim=0)
@@ -1765,6 +1849,10 @@ def query_box(
     """
     Return pixels whose centers lie in lon/lat box (degrees).
     Handles longitude wrap-around.
+
+    Uses a **latitude (colatitude) ring preselect** via `query_strip`, then applies
+    the longitude filter only on that band — typically far cheaper than scanning all
+    ``npix`` pixels when the declination range is narrow.
     """
     _validate_nside(nside)
     lon_min = float(lon_min)
@@ -1785,10 +1873,23 @@ def query_box(
     lon_max = lon_max % 360.0
     wraps = lon_min > lon_max
 
-    npix = nside2npix(nside)
-    selected: list[Tensor] = []
-    for start, end in _pixel_range_chunks(npix, chunk_size=chunk_size):
-        pix = torch.arange(start, end, dtype=torch.int64)
+    theta1 = math.radians(90.0 - lat_hi)
+    theta2 = math.radians(90.0 - lat_lo)
+    cand = query_strip(
+        nside,
+        theta1,
+        theta2,
+        nest=nest,
+        inclusive=False,
+        chunk_size=chunk_size,
+    )
+    if cand.numel() == 0:
+        return cand
+
+    parts: list[Tensor] = []
+    n_c = int(cand.numel())
+    for start in range(0, n_c, chunk_size):
+        pix = cand[start : start + chunk_size]
         lon, lat = pix2ang(nside, pix, nest=nest, lonlat=True)
         lat_keep = (lat >= lat_lo) & (lat <= lat_hi)
         if wraps:
@@ -1797,10 +1898,10 @@ def query_box(
             lon_keep = (lon >= lon_min) & (lon <= lon_max)
         keep = lat_keep & lon_keep
         if torch.any(keep):
-            selected.append(pix[keep])
-    if not selected:
+            parts.append(pix[keep])
+    if not parts:
         return torch.empty((0,), dtype=torch.int64)
-    return torch.cat(selected, dim=0)
+    return torch.cat(parts, dim=0)
 
 
 def reorder(m: Tensor, *, r2n: bool = False, n2r: bool = False) -> Tensor:

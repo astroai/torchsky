@@ -294,8 +294,8 @@ class MOC:
 
     def flatten(self, nside: int) -> Tensor:
         """Project MOC to a dense HEALPix mask at fixed resolution."""
-        mask = torch.zeros(12 * nside**2, dtype=torch.bool)
         pix = self._flat_pixels(nside)
+        mask = torch.zeros(12 * nside**2, dtype=torch.bool, device=pix.device)
         if pix.numel() > 0:
             mask[pix] = True
         return mask
@@ -461,7 +461,9 @@ class MOC:
         if pix.numel() == 0:
             return []
 
-        corners_xyz = _healpix.boundaries(nside, pix, step=1, nest=True).permute(0, 2, 1)
+        corners_xyz = _healpix.boundaries(nside, pix, step=1, nest=True).permute(
+            0, 2, 1
+        )
         quant_scale = 1.0e12
 
         def _key(v: Tensor) -> tuple[int, int, int]:
@@ -508,7 +510,10 @@ class MOC:
                 neighbors = adjacency[current]
                 next_vertex = None
                 for candidate in neighbors:
-                    if candidate != previous and tuple(sorted((current, candidate))) in unused:
+                    if (
+                        candidate != previous
+                        and tuple(sorted((current, candidate))) in unused
+                    ):
                         next_vertex = candidate
                         break
                 if next_vertex is None:
