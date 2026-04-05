@@ -14,7 +14,7 @@ from .sip import SIP
 from .zenithal import project_zenithal, deproject_zenithal
 from .cylindrical import project_cylindrical, deproject_cylindrical
 from .allsky import project_allsky, deproject_allsky
-from .legacy import project_tnx, project_zpx
+from .legacy import invert_tnx_plane, project_tnx, project_zpx
 from .utils import solve_newton_raphson
 
 _HAS_TORCH_SINCOS = hasattr(torch, "sincos")
@@ -926,7 +926,6 @@ class WCS:
             xi, eta = self.tpv.distort(xi, eta)
         elif self._is_tnx:
             xi, eta = project_tnx(xi, eta, self.wcs_params, self.wat_data)
-            xi, eta = project_zenithal(xi, eta, "TAN")
         elif self._is_zpx:
             xi, eta = project_zpx(xi, eta, self.wcs_params, self.wat_data)
 
@@ -934,6 +933,7 @@ class WCS:
         if (
             self._is_tan
             or self._is_tpv
+            or self._is_tnx
             or self._is_sin
             or self._is_arc
             or self._is_zea
@@ -941,7 +941,7 @@ class WCS:
         ):
             r = torch.hypot(xi, eta)
             phi = torch.atan2(-xi, -eta) * self._r2d
-            if self._is_tan or self._is_tpv:
+            if self._is_tan or self._is_tpv or self._is_tnx:
                 theta = torch.atan2(torch.ones_like(r), r * self._d2r) * self._r2d
             elif self._is_sin:
                 theta = torch.acos(torch.clamp(r * self._d2r, -1.0, 1.0)) * self._r2d
@@ -1512,6 +1512,7 @@ class WCS:
         if (
             self._is_tan
             or self._is_tpv
+            or self._is_tnx
             or self._is_sin
             or self._is_arc
             or self._is_zea
@@ -1519,7 +1520,7 @@ class WCS:
         ):
             phi_rad = phi * self._d2r
             sin_phi, cos_phi = _sincos(phi_rad)
-            if self._is_tan or self._is_tpv:
+            if self._is_tan or self._is_tpv or self._is_tnx:
                 tan_theta = torch.tan(theta * self._d2r)
                 r = self._r2d / (tan_theta + 1e-15)
             elif self._is_sin:
@@ -1588,6 +1589,8 @@ class WCS:
                 xi, eta = self.tpv.invert_affine_exact(xi, eta)
             else:
                 xi, eta = self.tpv.invert(xi, eta)
+        if self._is_tnx:
+            xi, eta = invert_tnx_plane(xi, eta, self.wat_data)
 
         # 4. Inverse Linear (CD matrix)
         rel_x = self._cdi00 * xi + self._cdi01 * eta

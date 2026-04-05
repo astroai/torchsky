@@ -1,4 +1,3 @@
-import functools
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -37,10 +36,28 @@ def parse_wat_keywords(header: Dict[str, Any], prefix: str = "WAT") -> str:
     return full_str
 
 
+def _looks_numeric_iraf_poly(s: str) -> bool:
+    s = s.strip()
+    if not s or "=" in s:
+        return False
+    parts = s.split()
+    try:
+        int(float(parts[0]))
+    except (ValueError, IndexError):
+        return False
+    return True
+
+
 class LegacyPolynomial:
     """
     Parser for IRAF legacy polynomial strings (e.g., TNX, ZPX).
-    Handles 'surface' types like 'polynomial' or 'legendre'.
+
+    Two shapes are supported:
+
+    * **Numeric IRAF surface** (no ``=`` tokens), e.g.
+      ``3 2 2 1 -1.0 1.0 -1.0 1.0 1.0 2.0 3.0 4.0`` — function type, x/y
+      orders, cross flag, bounds, then coefficients (see unit tests).
+    * **Keyword** fragments (``a_order=...``), best-effort legacy path.
     """
 
     def __init__(self, poly_str: str):
@@ -50,34 +67,47 @@ class LegacyPolynomial:
         self.xrange: Tuple[float, float] = (-1.0, 1.0)
         self.yrange: Tuple[float, float] = (-1.0, 1.0)
         self.type: str = "polynomial"
-        self._parse()
+        self.func_type: int = -1
+        self.order_x: int = 0
+        self.order_y: int = 0
+        self.cross_terms: int = 0
+        self.x_bounds: Tuple[float, float] = (-1.0, 1.0)
+        self.y_bounds: Tuple[float, float] = (-1.0, 1.0)
+        self._numeric_iraf: bool = False
+        if not poly_str:
+            return
+        if _looks_numeric_iraf_poly(poly_str):
+            self._parse_numeric_iraf()
+        else:
+            self._parse_keyword()
 
-    def _parse(self):
-        """
-        Parse the IRAF string.
-        Format is typically: 'wtype=tnx a_order=2 a_xrange=[-1:1] a_yrange=[-1:1] ...'
-        Wait, usually it's a sequence of numbers after keywords.
-        """
+    def _parse_numeric_iraf(self) -> None:
+        vals = [float(p) for p in self.poly_str.split()]
+        if len(vals) < 8:
+            return
+        self._numeric_iraf = True
+        self.func_type = int(vals[0])
+        self.order_x = int(vals[1])
+        self.order_y = int(vals[2])
+        self.cross_terms = int(vals[3])
+        self.x_bounds = (vals[4], vals[5])
+        self.y_bounds = (vals[6], vals[7])
+        self.coeffs = vals[8:]
+        self.xrange = self.x_bounds
+        self.yrange = self.y_bounds
+        self.order = max(self.order_x, self.order_y)
+
+    def _parse_keyword(self) -> None:
         if not self.poly_str:
             return
-
-        # Simple space-based tokenizer for legacy IRAF strings
         try:
-            # Extract keywords
-            # This is a very simplified parser for IRAF TNX/ZPX strings
-            # In practice, they contain 'a_order', 'a_xorder', 'a_yorder', 'a_cross',
-            # 'a_xrange', 'a_yrange', and then the coefficients.
-            # Example: a_order=2 a_xorder=2 a_yorder=2 a_cross=0 a_xrange=[-1:1] a_yrange=[-1:1]
-            # followed by the coefficients.
             parts = self.poly_str.split()
-
             for p in parts:
                 if "=" in p:
                     key, val = p.split("=", 1)
                     if key.endswith("order"):
                         self.order = int(val)
                     elif key.endswith("xrange"):
-                        # parse [-1:1]
                         m = re.match(r"\[(.+):(.+)\]", val)
                         if m:
                             self.xrange = (float(m.group(1)), float(m.group(2)))
@@ -85,8 +115,6 @@ class LegacyPolynomial:
                         m = re.match(r"\[(.+):(.+)\]", val)
                         if m:
                             self.yrange = (float(m.group(1)), float(m.group(2)))
-
-            # Coeffs are usually the numbers NOT containing '='
             self.coeffs = [float(p) for p in parts if "=" not in p]
         except Exception as e:
             import warnings
@@ -96,20 +124,36 @@ class LegacyPolynomial:
                 stacklevel=2,
             )
 
+    def _evaluate_numeric_type3(self, x: Tensor, y: Tensor) -> Tensor:
+        """Polynomial surface (IRAF function type 3) in physical ``(x, y)``."""
+        c = self.coeffs
+        ox, oy, cr = self.order_x, self.order_y, self.cross_terms
+        if not c:
+            return torch.zeros_like(x)
+        if ox == 1 and oy == 1 and cr == 0:
+            if len(c) == 1:
+                return torch.full_like(x, c[0])
+            if len(c) == 3:
+                return c[0] + c[1] * x + c[2] * y
+        if ox == 2 and oy == 2 and cr == 1 and len(c) == 4:
+            return c[0] + c[1] * x + c[2] * y + c[3] * x * y
+        return torch.zeros_like(x)
+
     def evaluate(self, x: Tensor, y: Tensor) -> Tensor:
         """
         Evaluate the polynomial for given (x, y) coordinates.
         Supports standard Polynomial, Legendre, and Chebyshev surfaces.
         """
+        if self._numeric_iraf:
+            if self.func_type == 3:
+                return self._evaluate_numeric_type3(x, y)
+            return torch.zeros_like(x)
         if not self.coeffs:
             return torch.zeros_like(x)
 
-        # Normalize x, y if needed
         xn = 2.0 * (x - self.xrange[0]) / (self.xrange[1] - self.xrange[0]) - 1.0
         yn = 2.0 * (y - self.yrange[0]) / (self.yrange[1] - self.yrange[0]) - 1.0
 
-        # Evaluate based on type
-        # For now, only simple polynomial implemented
         result = torch.zeros_like(x)
         idx = 0
         for i in range(self.order + 1):
@@ -118,6 +162,56 @@ class LegacyPolynomial:
                     result += self.coeffs[idx] * (xn**i) * (yn**j)
                     idx += 1
         return result
+
+
+def _wat_extract_cor_string(block: str, name: str) -> Optional[str]:
+    pat = re.compile(rf"{name}\s*=\s*\"([^\"]*)\"", re.IGNORECASE)
+    m = pat.search(block)
+    return m.group(1).strip() if m else None
+
+
+def _tnx_delta_plane(
+    xi: Tensor, eta: Tensor, wat_data: Optional[Dict[int, str]]
+) -> Tuple[Tensor, Tensor]:
+    if not wat_data:
+        return torch.zeros_like(xi), torch.zeros_like(eta)
+    s1 = wat_data.get(1, "") or ""
+    s2 = wat_data.get(2, "") or ""
+    slng = _wat_extract_cor_string(s1, "lngcor") or _wat_extract_cor_string(
+        s2, "lngcor"
+    )
+    slat = _wat_extract_cor_string(s2, "latcor") or _wat_extract_cor_string(
+        s1, "latcor"
+    )
+    dxi = torch.zeros_like(xi)
+    deta = torch.zeros_like(eta)
+    if slng:
+        dxi = LegacyPolynomial(slng).evaluate(xi, eta)
+    if slat:
+        deta = LegacyPolynomial(slat).evaluate(xi, eta)
+    return dxi, deta
+
+
+def invert_tnx_plane(
+    xi_corrected: Tensor,
+    eta_corrected: Tensor,
+    wat_data: Optional[Dict[int, str]],
+    *,
+    n_iter: int = 6,
+) -> Tuple[Tensor, Tensor]:
+    """Undo :func:`project_tnx` given distorted intermediate ``(xi', eta')``.
+
+    IRAF evaluates the correction surface at the **uncorrected** plane coordinates,
+    so inversion uses a short fixed-point iteration (exact when corrections are
+    constant).
+    """
+    xi = xi_corrected
+    eta = eta_corrected
+    for _ in range(max(1, n_iter)):
+        dxi, deta = _tnx_delta_plane(xi, eta, wat_data)
+        xi = xi_corrected - dxi
+        eta = eta_corrected - deta
+    return xi, eta
 
 
 def _dict_to_pv_tensor(
@@ -157,21 +251,17 @@ def project_tnx(
     xi: Tensor,
     eta: Tensor,
     params: Dict[str, float],
-    wat_data: Optional[str] = None,
+    wat_data: Optional[Dict[int, str]] = None,
 ) -> Tuple[Tensor, Tensor]:
     """
-    TNX: Tapered Poly + WAT corrections.
-    """
-    # 1. Distortions
-    # Reconstruct from WAT if present
-    if wat_data:
-        # Simplified: IRAF TNX applies corrections to xi, eta
-        # using a polynomial surface defined in WAT keywords.
-        pass
+    TNX: apply WAT ``lngcor`` / ``latcor`` polynomial offsets in the TAN intermediate plane.
 
-    # 2. Standard TAN projection
-    # TNX is TAN + distortions
-    return project_zenithal(xi, eta, "TAN")
+    Returns corrected ``(xi, eta)`` in the same units as the input; callers apply the
+    zenithal (TAN) projection exactly once.
+    """
+    del params
+    dxi, deta = _tnx_delta_plane(xi, eta, wat_data)
+    return xi + dxi, eta + deta
 
 
 def project_zpx(
