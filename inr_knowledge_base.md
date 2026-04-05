@@ -307,6 +307,13 @@ Optional `hash_level_gain` supplies learnable per-level scalars on encoder outpu
 - **Encoding geometry:** Lon/lat Fourier features are periodic in angle; for **planet-scale patches** `spatial_scale_deg ≈ 360` yields `min_frequency ≈ 1` (global modes). Sub-degree surveys get larger `min_frequency` automatically. The Cartesian `sin(f * x)` terms on unit-sphere `x,y,z` are high-frequency local mixers; most angular periodicity is in the lon/lat block.
 - **Numerics:** Encoders run sky angles in **float64** on purpose; keep that path for wide RA/Dec ranges.
 
+**Large-map execution paths (tiling + HEALPix + ``torch.func``):**
+
+- ``render_field_cube(..., spatial_tile_hw=(th, tw))`` evaluates the WCS grid in spatial windows to cap peak activation memory.
+- ``render_field_healpix`` emits ``(nλ, npix)`` in native RING/NEST order using ``wcs.healpix.pix2ang``, with ``spatial_chunk_pixels`` to chunk along the pixel axis.
+- ``evaluate_field_coordinates_vmapped`` applies ``torch.func.functional_call`` + ``vmap`` for JAX-style per-point batching; default modules already vectorize, so this is mainly for ``func`` transforms and debugging. ``use_func_vmap=True`` on cube/healpix observation rendering enables the same path in sub-batches of ``func_vmap_chunk`` pixels.
+- ``render_field_observation(..., spatial_tile_hw=...)`` matches the untiled image when ``psf_sigma_pix==0``; tiling is rejected with PSF blur because the kernel couples pixels across tile edges.
+
 ## What these papers suggest for `torchsky`
 
 The current strongest directions are:

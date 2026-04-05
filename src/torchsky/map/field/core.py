@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import math
+from collections.abc import Iterator
 from typing import Literal, Sequence
 
 import torch
@@ -14,6 +15,7 @@ from torch import Tensor
 from ... import WCS
 from ...encoders import SkyCoordinateEncoder, sky_encoder_fourier_min_frequency
 from ...spectral import SpectralAxis
+from ...wcs import healpix as _healpix_wcs
 
 from .types import (
     FieldCoordinateMode,
@@ -4946,6 +4948,9 @@ def render_field_observation(
     generator: torch.Generator | None = None,
     override_wavelengths: Tensor | None = None,
     override_weights: Tensor | None = None,
+    spatial_tile_hw: tuple[int, int] | None = None,
+    use_func_vmap: bool = False,
+    func_vmap_chunk: int = 65536,
 ) -> Tensor:
     image = observation.image
     if image.ndim != 2:
@@ -4983,8 +4988,17 @@ def render_field_observation(
         )
     else:
         raise ValueError(f"unsupported spectral_sampling {spectral_sampling!r}")
+    if spatial_tile_hw is not None and float(observation.psf_sigma_pix) > 0.0:
+        raise ValueError(
+            "render_field_observation(..., spatial_tile_hw=...) cannot be used with "
+            "psf_sigma_pix > 0 because the PSF couples pixels across tiles"
+        )
     render_bandpass = getattr(model, "render_bandpass", None)
     if callable(render_bandpass):
+        if spatial_tile_hw is not None or use_func_vmap:
+            raise ValueError(
+                "spatial_tile_hw and use_func_vmap are not supported when model.render_bandpass is defined"
+            )
         rendered = render_bandpass(
             ra_deg.to(dtype=torch.float32),
             dec_deg.to(dtype=torch.float32),
@@ -4994,20 +5008,32 @@ def render_field_observation(
         if observation.psf_sigma_pix > 0.0:
             rendered = _gaussian_blur(rendered, float(observation.psf_sigma_pix))
         return rendered.to(dtype=image.dtype)
-    spectral_planes = []
-    for wavelength in wavelengths:
-        spectral_planes.append(
-            model(
-                ra_deg.to(dtype=torch.float32),
-                dec_deg.to(dtype=torch.float32),
-                wavelength,
-            )
-        )
-    stacked = torch.stack(spectral_planes, dim=0)
-    rendered = torch.sum(
-        stacked * weights.view(-1, 1, 1).to(dtype=stacked.dtype),
-        dim=0,
-    )
+    H, W = int(image.shape[-2]), int(image.shape[-1])
+    ra32 = ra_deg.to(dtype=torch.float32)
+    dec32 = dec_deg.to(dtype=torch.float32)
+    if spatial_tile_hw is None:
+        tiles = [(0, H, 0, W)]
+    else:
+        th, tw = int(spatial_tile_hw[0]), int(spatial_tile_hw[1])
+        tiles = list(_iter_spatial_tiles(H, W, th, tw))
+    rendered = torch.zeros((H, W), device=device, dtype=torch.float32)
+    for y0, y1, x0, x1 in tiles:
+        patch = torch.zeros((y1 - y0, x1 - x0), device=device, dtype=torch.float32)
+        ra_p = ra32[y0:y1, x0:x1]
+        dec_p = dec32[y0:y1, x0:x1]
+        for i, wavelength in enumerate(wavelengths):
+            if use_func_vmap:
+                plane = _evaluate_field_plane_func_vmap(
+                    model,
+                    ra_p,
+                    dec_p,
+                    wavelength=wavelength,
+                    chunk=func_vmap_chunk,
+                )
+            else:
+                plane = model(ra_p, dec_p, wavelength)
+            patch += plane * weights[i].to(dtype=plane.dtype)
+        rendered[y0:y1, x0:x1] = patch
     if observation.psf_sigma_pix > 0.0:
         rendered = _gaussian_blur(rendered, float(observation.psf_sigma_pix))
     return rendered.to(dtype=image.dtype)
@@ -5079,6 +5105,159 @@ def render_field_samples(
     )
 
 
+def _iter_spatial_tiles(
+    height: int, width: int, tile_h: int, tile_w: int
+) -> Iterator[tuple[int, int, int, int]]:
+    th = max(int(tile_h), 1)
+    tw = max(int(tile_w), 1)
+    for y0 in range(0, height, th):
+        for x0 in range(0, width, tw):
+            y1 = min(y0 + th, height)
+            x1 = min(x0 + tw, width)
+            yield y0, y1, x0, x1
+
+
+def evaluate_field_coordinates_vmapped(
+    model: nn.Module,
+    ra_deg: Tensor,
+    dec_deg: Tensor,
+    wavelength_angstrom: Tensor,
+) -> Tensor:
+    """Evaluate the field with ``torch.func.vmap`` over flattened coordinates.
+
+    This uses ``functional_call`` so the forward is expressed as a pure function
+    of parameters/buffers plus per-sample inputs—useful for ``func`` transforms
+    (JAX-style batching semantics). Standard field ``nn.Module`` instances already
+    support batched ``(ra, dec, λ)`` tensors; prefer a single vectorized forward unless you
+    need this composition.
+    """
+    try:
+        from torch.func import functional_call, vmap
+    except ImportError as e:
+        raise RuntimeError(
+            "evaluate_field_coordinates_vmapped requires PyTorch 2.x torch.func"
+        ) from e
+    ra = torch.as_tensor(ra_deg).reshape(-1).to(dtype=torch.float32)
+    dec = torch.as_tensor(dec_deg).reshape(-1).to(dtype=torch.float32)
+    wl = torch.as_tensor(wavelength_angstrom)
+    if wl.ndim == 0:
+        wl = wl.expand(ra.shape[0]).to(dtype=torch.float32, device=ra.device)
+    else:
+        wl = wl.reshape(-1).to(dtype=torch.float32, device=ra.device)
+        if wl.shape[0] != ra.shape[0]:
+            raise ValueError(
+                "wavelength_angstrom must be scalar or match flattened ra/dec length"
+            )
+    state = {**dict(model.named_parameters()), **dict(model.named_buffers())}
+
+    def one_point(
+        ra_s: Tensor,
+        dec_s: Tensor,
+        wl_s: Tensor,
+    ) -> Tensor:
+        out = functional_call(
+            model,
+            state,
+            (ra_s.unsqueeze(0), dec_s.unsqueeze(0), wl_s.unsqueeze(0)),
+        )
+        return out.reshape(())
+
+    return vmap(one_point)(ra, dec, wl)
+
+
+def _evaluate_field_plane_func_vmap(
+    model: nn.Module,
+    ra_grid: Tensor,
+    dec_grid: Tensor,
+    *,
+    wavelength: Tensor | float,
+    chunk: int,
+) -> Tensor:
+    """One wavelength slice; ``ra_grid``/``dec_grid`` share shape (outputs that shape)."""
+    shape = tuple(ra_grid.shape)
+    ra_f = ra_grid.to(dtype=torch.float32).reshape(-1)
+    dec_f = dec_grid.to(dtype=torch.float32).reshape(-1)
+    n = int(ra_f.shape[0])
+    dev = ra_f.device
+    wl0 = torch.as_tensor(wavelength, dtype=torch.float32, device=dev)
+    cc = max(int(chunk), 1)
+    parts: list[Tensor] = []
+    for i in range(0, n, cc):
+        sl = slice(i, min(i + cc, n))
+        m = sl.stop - sl.start
+        wlb = wl0.expand(m) if wl0.ndim == 0 else wl0[sl]
+        parts.append(
+            evaluate_field_coordinates_vmapped(model, ra_f[sl], dec_f[sl], wlb)
+        )
+    return torch.cat(parts, dim=0).view(shape)
+
+
+def _field_hypercube_spectral_stack(
+    model: nn.Module,
+    ra_grid: Tensor,
+    dec_grid: Tensor,
+    wavelengths: Tensor,
+    *,
+    spectral_chunk: int,
+    use_func_vmap: bool,
+    func_vmap_chunk: int,
+) -> Tensor:
+    """Stack wavelength planes for one spatial patch (``ra_grid`` shape = ``dec_grid`` shape)."""
+    nw = int(wavelengths.shape[0])
+    hw_shape = tuple(ra_grid.shape)
+    ra_f = ra_grid.to(dtype=torch.float32)
+    dec_f = dec_grid.to(dtype=torch.float32)
+    chunk = int(spectral_chunk)
+    if chunk <= 0 or chunk >= nw:
+        chunk = nw
+    planes_out: list[Tensor] = []
+    for start in range(0, nw, chunk):
+        end = min(start + chunk, nw)
+        lam_chunk = wavelengths[start:end]
+        c = int(lam_chunk.shape[0])
+        if use_func_vmap:
+            if c == 1:
+                planes_out.append(
+                    _evaluate_field_plane_func_vmap(
+                        model,
+                        ra_f,
+                        dec_f,
+                        wavelength=lam_chunk[0],
+                        chunk=func_vmap_chunk,
+                    ).unsqueeze(0)
+                )
+            else:
+                for j in range(c):
+                    planes_out.append(
+                        _evaluate_field_plane_func_vmap(
+                            model,
+                            ra_f,
+                            dec_f,
+                            wavelength=lam_chunk[j],
+                            chunk=func_vmap_chunk,
+                        ).unsqueeze(0)
+                    )
+            continue
+        if c == 1:
+            plane = model(ra_f, dec_f, lam_chunk[0])
+            planes_out.append(plane.unsqueeze(0))
+            continue
+        nflat = c * int(ra_f.numel())
+        ra_flat = ra_f.unsqueeze(0).expand(c, *ra_f.shape).reshape(nflat)
+        dec_flat = dec_f.unsqueeze(0).expand(c, *dec_f.shape).reshape(nflat)
+        lam_flat = lam_chunk.view(c, *([1] * len(hw_shape))).expand(c, *hw_shape).reshape(
+            nflat
+        )
+        out_flat = model(ra_flat, dec_flat, lam_flat)
+        if out_flat.ndim != 1 or out_flat.shape[0] != nflat:
+            raise ValueError(
+                "field render expects one scalar output per (ra, dec, λ) sample; "
+                f"got shape {tuple(out_flat.shape)} for batch size {nflat}"
+            )
+        planes_out.append(out_flat.view(c, *hw_shape))
+    return torch.cat(planes_out, dim=0)
+
+
 def render_field_cube(
     model: nn.Module,
     *,
@@ -5086,6 +5265,9 @@ def render_field_cube(
     spectral_axis: SpectralAxis,
     shape: tuple[int, int] | None = None,
     spectral_chunk: int = 1,
+    spatial_tile_hw: tuple[int, int] | None = None,
+    use_func_vmap: bool = False,
+    func_vmap_chunk: int = 65536,
 ) -> Tensor:
     """Render a (nλ, H, W) cube on the target WCS grid.
 
@@ -5093,6 +5275,14 @@ def render_field_cube(
     ``model`` forward. The default ``1`` matches the legacy one-λ loop (lowest
     peak memory). Set to ``0`` or any value ``>= nλ`` to fuse all wavelengths
     into a single batched forward (usually faster on GPU for moderate grids).
+
+    ``spatial_tile_hw`` optionally processes the map in ``(tile_h, tile_w)`` spatial
+    windows to cap peak activation memory on large TAN grids.
+
+    ``use_func_vmap=True`` routes each wavelength slice through
+    :func:`evaluate_field_coordinates_vmapped` in sub-batches of ``func_vmap_chunk``
+    pixels (``torch.func`` / JAX-style vectorization). Default field models are
+    already batch-vectorized; this path is for ``func`` composition and debugging.
     """
     fallback = (
         (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
@@ -5109,31 +5299,75 @@ def render_field_cube(
         return torch.empty((0, *tuple(ra_deg.shape)), device=device, dtype=torch.float32)
     ra_f = ra_deg.to(dtype=torch.float32)
     dec_f = dec_deg.to(dtype=torch.float32)
-    hw_shape = tuple(ra_f.shape)
-    chunk = int(spectral_chunk)
-    if chunk <= 0 or chunk >= nw:
-        chunk = nw
-    planes_out: list[Tensor] = []
-    for start in range(0, nw, chunk):
-        end = min(start + chunk, nw)
-        lam_chunk = wavelengths[start:end]
-        c = int(lam_chunk.shape[0])
-        if c == 1:
-            plane = model(ra_f, dec_f, lam_chunk[0])
-            planes_out.append(plane.unsqueeze(0))
-            continue
-        nflat = c * int(ra_f.numel())
-        ra_flat = ra_f.unsqueeze(0).expand(c, -1, -1).reshape(nflat)
-        dec_flat = dec_f.unsqueeze(0).expand(c, -1, -1).reshape(nflat)
-        lam_flat = lam_chunk.view(c, 1, 1).expand(c, *hw_shape).reshape(nflat)
-        out_flat = model(ra_flat, dec_flat, lam_flat)
-        if out_flat.ndim != 1 or out_flat.shape[0] != nflat:
-            raise ValueError(
-                "render_field_cube expects one scalar output per (ra, dec, λ) sample; "
-                f"got shape {tuple(out_flat.shape)} for batch size {nflat}"
-            )
-        planes_out.append(out_flat.view(c, *hw_shape))
-    return torch.cat(planes_out, dim=0)
+    H, W = int(ra_f.shape[0]), int(ra_f.shape[1])
+    tiles: list[tuple[int, int, int, int]]
+    if spatial_tile_hw is None:
+        tiles = [(0, H, 0, W)]
+    else:
+        th, tw = int(spatial_tile_hw[0]), int(spatial_tile_hw[1])
+        tiles = list(_iter_spatial_tiles(H, W, th, tw))
+    out = torch.empty((nw, H, W), device=device, dtype=torch.float32)
+    for y0, y1, x0, x1 in tiles:
+        sub = _field_hypercube_spectral_stack(
+            model,
+            ra_f[y0:y1, x0:x1],
+            dec_f[y0:y1, x0:x1],
+            wavelengths,
+            spectral_chunk=spectral_chunk,
+            use_func_vmap=use_func_vmap,
+            func_vmap_chunk=func_vmap_chunk,
+        )
+        out[:, y0:y1, x0:x1] = sub
+    return out
+
+
+def render_field_healpix(
+    model: nn.Module,
+    *,
+    nside: int,
+    spectral_axis: SpectralAxis,
+    nest: bool = False,
+    spectral_chunk: int = 1,
+    spatial_chunk_pixels: int | None = None,
+    use_func_vmap: bool = False,
+    func_vmap_chunk: int = 65536,
+    device: torch.device | None = None,
+) -> Tensor:
+    """Render ``(nλ, npix)`` on the native HEALPix pixel ordering (RING or NEST).
+
+    Pixels are visited in increasing ``ipix`` order via :func:`torchsky.wcs.healpix.pix2ang`.
+    Use ``spatial_chunk_pixels`` to limit the number of sky samples per ``model`` call
+    (memory). Combine with ``spectral_chunk`` and optional ``use_func_vmap`` like
+    :func:`render_field_cube`.
+    """
+    nside_i = int(nside)
+    npix = _healpix_wcs.nside2npix(nside_i)
+    dev = device if device is not None else _module_device(model)
+    wavelengths = spectral_axis.to_wavelength().to(device=dev, dtype=torch.float32)
+    nw = int(wavelengths.shape[0])
+    if nw == 0:
+        return torch.empty((0, npix), device=dev, dtype=torch.float32)
+    chunk_sp = spatial_chunk_pixels or min(1_048_576, max(npix, 1))
+    chunk_sp = max(int(chunk_sp), 1)
+    ipix_full = torch.arange(npix, device=dev, dtype=torch.int64)
+    out = torch.empty((nw, npix), device=dev, dtype=torch.float32)
+    for i0 in range(0, npix, chunk_sp):
+        i1 = min(i0 + chunk_sp, npix)
+        ipix = ipix_full[i0:i1]
+        ra, dec = _healpix_wcs.pix2ang(nside_i, ipix, nest=nest, lonlat=True)
+        ra = ra.to(device=dev, dtype=torch.float32)
+        dec = dec.to(device=dev, dtype=torch.float32)
+        sub = _field_hypercube_spectral_stack(
+            model,
+            ra,
+            dec,
+            wavelengths,
+            spectral_chunk=spectral_chunk,
+            use_func_vmap=use_func_vmap,
+            func_vmap_chunk=func_vmap_chunk,
+        )
+        out[:, i0:i1] = sub
+    return out
 
 
 def fit_field_model(
