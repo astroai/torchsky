@@ -5,7 +5,7 @@ platforms = ["osx-arm64"]
 
 [package]
 name = "torchsky"
-version = "0.4.0"
+version = "0.4.0.dev0"
 description = "Torch-native sky data, coordinates, geometry, and mapmaking"
 authors = ["Seb Fabbro <sebfabbro@gmail.com>"]
 
@@ -176,6 +176,8 @@ sphere-bench-healpix-advanced-gate = "pixi run -e sphere-bench python benchmarks
 sphere-bench-healpix-advanced-gate-small = "pixi run -e sphere-bench python benchmarks/bench_healpix_advanced.py --device cpu --nside 1024 --n-points 20000 --runs 9 --min-ratio-vs-healpy neighbors_ring=0.85,neighbors_nested=0.4,interp_weights_ring=1.1,interp_weights_nested=1.1,interp_val_ring=0.85,interp_val_nested=1.0 --json-out benchmark_results/healpix_advanced_small.json"
 sphere-bench-core = "pixi run -e sphere-bench python benchmarks/bench_sphere_core.py --device auto --nside 256 --n-points 100000 --n-bands 8 --runs 5 --json-out benchmark_results/sphere_core.json"
 sphere-bench-polygons = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_sphere_polygons.py --nside 512 --n-points 200000 --runs 5 --json-out benchmark_results/sphere_polygons.json"
+sphere-bench-geom-exact-contains = "pixi run -e sphere-bench python benchmarks/bench_sphere_geom_exact_contains.py --n-points 200000 --runs 5 --json-out benchmark_results/sphere_geom_exact_contains.json"
+sphere-bench-geom-exact-contains-gate = "pixi run -e sphere-bench python benchmarks/bench_sphere_geom_exact_contains.py --n-points 200000 --runs 5 --json-out benchmark_results/sphere_geom_exact_contains.json --baseline-json benchmarks/baselines/sphere_geom_exact_contains_gate.json"
 sphere-bench-catalog-crossmatch = "pixi run -e sphere-bench python benchmarks/bench_catalog_crossmatch.py --n-left 20000 --n-right-band 250000 --n-right-background 50000 --radius-arcsec 2.0 --runs 5 --json-out benchmark_results/catalog_crossmatch.json"
 sphere-bench-catalog-compat = "pixi run -e sphere-bench python benchmarks/bench_catalog_compat.py --n-left 10000 --n-right-noise 80000 --radius-arcsec 2.0 --runs 5 --json-out benchmark_results/catalog_compat.json"
 sphere-bench-spectral = "pixi run -e sphere-bench python benchmarks/bench_sphere_spectral.py --nside 32 --lmax 32 --runs 7 --json-out benchmark_results/sphere_spectral.json"
@@ -192,6 +194,7 @@ python = ">=3.13"
 astropy = ">=5.0"
 fitsio = ">=1.2"
 pyarrow = ">=14.0"
+requests = ">=2.28"
 
 # Benchmark feature with additional dependencies
 [feature.bench.dependencies]

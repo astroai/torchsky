@@ -69,11 +69,14 @@ bench = [
     "seaborn>=0.11.0",
     "pytest-benchmark>=3.0",
     "psutil>=5.0",
+    "reproject>=0.14",
 ]
 test = [
     "pytest>=6.0",
     "pytest-cov>=2.0",
     "pytest-benchmark>=3.0",
+    "scipy>=1.9.0",
+    "requests>=2.28.0",
 ]
 examples = [
     "torchvision>=0.15.0",  # For MNIST example
@@ -91,8 +94,10 @@ cmake.args = [
     "-DTORCHSKY_NIOBUF=80",
     "-DTORCHSKY_MINDIRECT=16384",
     "-DUSE_CUDA=OFF",
-    "-DCMAKE_C_FLAGS=-march=native -O3",
-    "-DCMAKE_CXX_FLAGS=-march=native -O3",
+    # Portable defaults; cpp_src/CMakeLists.txt adds -O3 in Release. Avoid -march=native
+    # here so wheels and CI builds are reproducible across machines.
+    "-DCMAKE_C_FLAGS=-O3",
+    "-DCMAKE_CXX_FLAGS=-O3",
 ]
 
 # Configures the install directory for the compiled extension.
@@ -117,3 +122,5 @@ markers = [
 
 [tool.ruff.lint.per-file-ignores]
 "benchmarks/**/*.py" = ["E402"]
+"tests/test_map_smacs0723_stackers.py" = ["E402"]
+"tests/test_map_smacs0723_stackers_band_sweep.py" = ["E402"]
