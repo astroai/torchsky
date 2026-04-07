@@ -35,6 +35,9 @@ def main() -> int:
     parser.add_argument("--jwst-output-dir", type=Path, default=DEFAULT_JWST_DIR)
     parser.add_argument("--updec-output-dir", type=Path, default=DEFAULT_UPDEC_DIR)
     parser.add_argument("--updec-iterations", default="0")
+    parser.add_argument("--updec-attempts", type=int, default=4)
+    parser.add_argument("--updec-timeout-s", type=float, default=240.0)
+    parser.add_argument("--updec-backoff-s", type=float, default=1.0)
     parser.add_argument("--short-band-max-exposures", type=int, default=FULL_PUBLIC_MAX_EXPOSURES)
     parser.add_argument("--long-band-max-exposures", type=int, default=FULL_PUBLIC_MAX_EXPOSURES)
     parser.add_argument("--overwrite", action="store_true")
@@ -64,7 +67,16 @@ def main() -> int:
         return 0
 
     for spec in updec_specs:
-        print(download_updec_spec(spec, args.updec_output_dir, overwrite=args.overwrite))
+        print(
+            download_updec_spec(
+                spec,
+                args.updec_output_dir,
+                overwrite=args.overwrite,
+                attempts=int(args.updec_attempts),
+                timeout_s=float(args.updec_timeout_s),
+                backoff_s=float(args.updec_backoff_s),
+            )
+        )
 
     for band in bands:
         max_exposures = (

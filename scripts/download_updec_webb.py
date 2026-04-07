@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import socket
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.request import urlretrieve
+from urllib.error import HTTPError, URLError
+from urllib.request import urlopen
 
 
 BASE_URL = "https://nadc.china-vo.org/res/file_upload/download?id={download_id}"
@@ -56,7 +59,49 @@ def resolve_specs(bands: list[str], iterations: list[int]) -> list[UpdecWebbFile
     return specs
 
 
-def download_spec(spec: UpdecWebbFile, output_dir: Path, *, overwrite: bool) -> Path:
+def _download_with_retries(
+    url: str,
+    dest: Path,
+    *,
+    attempts: int,
+    timeout_s: float,
+    backoff_s: float,
+) -> None:
+    last_error: BaseException | None = None
+    for attempt in range(1, max(1, int(attempts)) + 1):
+        try:
+            with urlopen(url, timeout=float(timeout_s)) as response:
+                with dest.open("wb") as fh:
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+            return
+        except HTTPError:
+            dest.unlink(missing_ok=True)
+            raise
+        except (URLError, OSError, ConnectionResetError, TimeoutError, socket.timeout) as exc:
+            dest.unlink(missing_ok=True)
+            last_error = exc
+            if attempt >= max(1, int(attempts)):
+                break
+            time.sleep(float(backoff_s) * float(2 ** (attempt - 1)))
+    assert last_error is not None
+    raise RuntimeError(
+        f"failed to download {url} after {max(1, int(attempts))} attempts"
+    ) from last_error
+
+
+def download_spec(
+    spec: UpdecWebbFile,
+    output_dir: Path,
+    *,
+    overwrite: bool,
+    attempts: int = 4,
+    timeout_s: float = 240.0,
+    backoff_s: float = 1.0,
+) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     dest = output_dir / spec.filename
     if dest.exists() and not overwrite:
@@ -64,7 +109,13 @@ def download_spec(spec: UpdecWebbFile, output_dir: Path, *, overwrite: bool) -> 
     part = dest.with_suffix(dest.suffix + ".part")
     if part.exists():
         part.unlink()
-    urlretrieve(spec.url, part)
+    _download_with_retries(
+        spec.url,
+        part,
+        attempts=attempts,
+        timeout_s=timeout_s,
+        backoff_s=backoff_s,
+    )
     part.replace(dest)
     return dest
 
@@ -79,6 +130,9 @@ def main() -> int:
     )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--attempts", type=int, default=4)
+    parser.add_argument("--timeout-s", type=float, default=240.0)
+    parser.add_argument("--backoff-s", type=float, default=1.0)
     parser.add_argument("--list", action="store_true", help="List known public files and exit")
     args = parser.parse_args()
 
@@ -91,7 +145,14 @@ def main() -> int:
     iterations = [int(value) for value in parse_csv(args.iterations)]
     specs = resolve_specs(bands, iterations)
     for spec in specs:
-        dest = download_spec(spec, args.output_dir, overwrite=args.overwrite)
+        dest = download_spec(
+            spec,
+            args.output_dir,
+            overwrite=args.overwrite,
+            attempts=int(args.attempts),
+            timeout_s=float(args.timeout_s),
+            backoff_s=float(args.backoff_s),
+        )
         print(dest)
     return 0
 
