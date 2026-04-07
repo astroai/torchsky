@@ -1302,7 +1302,10 @@ class WCS:
         X = xi * self._d2r
         Y = eta * self._d2r
 
-        r2 = (X * 0.25) ** 2 + (Y * 0.5) ** 2
+        # PERF: Explicit multiplication is faster than ** 2 for tensors.
+        x2 = X * 0.25
+        y2 = Y * 0.5
+        r2 = x2 * x2 + y2 * y2
         valid = r2 <= 1.0
         z = torch.sqrt(torch.clamp(1.0 - r2, min=0.0))
 
