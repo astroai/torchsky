@@ -9,7 +9,9 @@ coadds to the full published stacks, and optionally fits one full-grid INR per b
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -63,6 +65,25 @@ from torchsky.map import (  # noqa: E402
 
 def _parse_csv(value: str) -> list[str]:
     return [part.strip().upper() for part in str(value).split(",") if part.strip()]
+
+
+def _has_local_cpp() -> bool:
+    try:
+        importlib.import_module("torchsky")
+        importlib.import_module("torchsky.cpp")
+    except Exception:
+        return False
+    return True
+
+
+def _ensure_local_cpp() -> None:
+    if _has_local_cpp():
+        return
+    cmd = [sys.executable, "-m", "pip", "install", "-e", ".", "--no-build-isolation"]
+    print("Installing local torchsky editable build into the active env")
+    subprocess.check_call(cmd, cwd=ROOT)
+    if not _has_local_cpp():
+        raise RuntimeError("torchsky.cpp still unavailable after editable install")
 
 
 def _band_filename_contains(band: str, module: str) -> str | None:
@@ -400,6 +421,7 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     try:
+        _ensure_local_cpp()
         bands = _parse_csv(args.bands)
         root = args.root
         jwst_dir = root / "jwst_smacs0723"
