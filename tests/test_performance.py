@@ -7,8 +7,9 @@ import tempfile
 import time
 
 import numpy as np
-import psutil
 import pytest
+pytest.importorskip("psutil")
+import psutil
 import torch
 
 import torchsky
