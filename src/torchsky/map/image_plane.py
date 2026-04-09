@@ -777,7 +777,10 @@ def _spherical_cap_radius_from_world_grid(
     )
     dec0 = torch.tensor(center_dec_deg, dtype=dec_deg.dtype, device=dec_deg.device)
     cos_dec = torch.cos(dec_deg * (math.pi / 180.0))
-    chord = torch.sqrt((dra * cos_dec) ** 2 + (dec_deg - dec0) ** 2)
+    # Performance: avoid **2 on tensors
+    dra_cos_dec = dra * cos_dec
+    dec_diff = dec_deg - dec0
+    chord = torch.sqrt((dra_cos_dec * dra_cos_dec) + (dec_diff * dec_diff))
     return float(torch.max(chord).item())
 
 

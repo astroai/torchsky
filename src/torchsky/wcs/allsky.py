@@ -44,7 +44,10 @@ def project_allsky(
         y = eta * D2R
         X = x
         Y = y
-        r2 = (X * 0.25) ** 2 + (Y * 0.5) ** 2
+        # Performance: avoid **2 on tensors
+        x_scaled = X * 0.25
+        y_scaled = Y * 0.5
+        r2 = (x_scaled * x_scaled) + (y_scaled * y_scaled)
         mask = r2 <= 1.0
         z = torch.sqrt(torch.clamp(1.0 - r2, min=0.0))
         phi_rad = 2.0 * torch.atan2(0.5 * z * X, 2.0 * z * z - 1.0)
