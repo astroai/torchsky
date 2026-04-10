@@ -1116,18 +1116,27 @@ public:
                             remaining -= static_cast<size_t>(got);
                         }
                         if (!ok) {
+                            const long page_size = sysconf(_SC_PAGE_SIZE);
+                            const off_t page_offset = static_cast<off_t>(data_offset) & ~(page_size - 1);
+                            const size_t diff = static_cast<size_t>(static_cast<off_t>(data_offset) - page_offset);
+                            const size_t map_len = nbytes + diff;
+
                             void* map_ptr = mmap(
                                 nullptr,
-                                static_cast<size_t>(raw_file_size_),
+                                map_len,
                                 PROT_READ,
                                 MAP_SHARED,
                                 raw_fd_,
-                                0
+                                page_offset
                             );
                             if (map_ptr != MAP_FAILED) {
-                                const uint8_t* src = static_cast<const uint8_t*>(map_ptr) + data_offset;
-                                std::memcpy(tensor.data_ptr(), src, nbytes);
-                                munmap(map_ptr, static_cast<size_t>(raw_file_size_));
+                                const size_t available_bytes = (static_cast<size_t>(data_offset) + nbytes <= static_cast<size_t>(raw_file_size_)) ?
+                                    nbytes : (static_cast<size_t>(raw_file_size_) > static_cast<size_t>(data_offset) ? static_cast<size_t>(raw_file_size_) - static_cast<size_t>(data_offset) : 0);
+                                if (available_bytes > 0) {
+                                    const uint8_t* src = static_cast<const uint8_t*>(map_ptr) + diff;
+                                    std::memcpy(tensor.data_ptr(), src, available_bytes);
+                                }
+                                munmap(map_ptr, map_len);
                                 ok = true;
                             }
                         }
@@ -1189,18 +1198,27 @@ public:
                                 remaining -= static_cast<size_t>(got);
                             }
                             if (!ok) {
+                                const long page_size = sysconf(_SC_PAGE_SIZE);
+                                const off_t page_offset = static_cast<off_t>(data_offset) & ~(page_size - 1);
+                                const size_t diff = static_cast<size_t>(static_cast<off_t>(data_offset) - page_offset);
+                                const size_t map_len = nbytes + diff;
+
                                 void* map_ptr = mmap(
                                     nullptr,
-                                    static_cast<size_t>(raw_file_size_),
+                                    map_len,
                                     PROT_READ,
                                     MAP_SHARED,
                                     raw_fd_,
-                                    0
+                                    page_offset
                                 );
                                 if (map_ptr != MAP_FAILED) {
-                                    const uint8_t* src = static_cast<const uint8_t*>(map_ptr) + data_offset;
-                                    std::memcpy(tensor.data_ptr(), src, nbytes);
-                                    munmap(map_ptr, static_cast<size_t>(raw_file_size_));
+                                    const size_t available_bytes = (static_cast<size_t>(data_offset) + nbytes <= static_cast<size_t>(raw_file_size_)) ?
+                                        nbytes : (static_cast<size_t>(raw_file_size_) > static_cast<size_t>(data_offset) ? static_cast<size_t>(raw_file_size_) - static_cast<size_t>(data_offset) : 0);
+                                    if (available_bytes > 0) {
+                                        const uint8_t* src = static_cast<const uint8_t*>(map_ptr) + diff;
+                                        std::memcpy(tensor.data_ptr(), src, available_bytes);
+                                    }
+                                    munmap(map_ptr, map_len);
                                     ok = true;
                                 }
                             }
@@ -1376,18 +1394,27 @@ public:
                                 return tensor;
                             }
 
+                            const long page_size = sysconf(_SC_PAGE_SIZE);
+                            const off_t page_offset = static_cast<off_t>(data_offset) & ~(page_size - 1);
+                            const size_t diff = static_cast<size_t>(static_cast<off_t>(data_offset) - page_offset);
+                            const size_t map_len = nbytes + diff;
+
                             void* map_ptr = mmap(
                                 nullptr,
-                                static_cast<size_t>(raw_file_size_),
+                                map_len,
                                 PROT_READ,
                                 MAP_SHARED,
                                 raw_fd_,
-                                0
+                                page_offset
                             );
                             if (map_ptr != MAP_FAILED) {
-                                const uint8_t* src = static_cast<const uint8_t*>(map_ptr) + data_offset;
-                                std::memcpy(tensor.data_ptr(), src, nbytes);
-                                munmap(map_ptr, static_cast<size_t>(raw_file_size_));
+                                const size_t available_bytes = (static_cast<size_t>(data_offset) + nbytes <= static_cast<size_t>(raw_file_size_)) ?
+                                    nbytes : (static_cast<size_t>(raw_file_size_) > static_cast<size_t>(data_offset) ? static_cast<size_t>(raw_file_size_) - static_cast<size_t>(data_offset) : 0);
+                                if (available_bytes > 0) {
+                                    const uint8_t* src = static_cast<const uint8_t*>(map_ptr) + diff;
+                                    std::memcpy(tensor.data_ptr(), src, available_bytes);
+                                }
+                                munmap(map_ptr, map_len);
                                 return tensor;
                             }
                         }

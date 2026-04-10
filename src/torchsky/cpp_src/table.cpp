@@ -868,18 +868,20 @@ public:
                     if (repeat == 1) {
                         at::parallel_for(0, num_rows, 2048, [&](long start, long end) {
                             for (long i = start; i < end; i++) {
-                                const int32_t* in = (const int32_t*)(col_ptr + i * row_width_bytes_);
-                                int32_t val = bswap_32(*in);
+                                int32_t raw_val;
+                                memcpy(&raw_val, col_ptr + i * row_width_bytes_, sizeof(int32_t));
+                                int32_t val = bswap_32(raw_val);
                                 memcpy(&out[i], &val, sizeof(float));
                             }
                         });
                     } else {
                         at::parallel_for(0, num_rows, 2048, [&](long start, long end) {
                             for (long i = start; i < end; i++) {
-                                const int32_t* in = (const int32_t*)(col_ptr + i * row_width_bytes_);
                                 float* row_out = out + i * repeat;
                                 for (long j = 0; j < repeat; j++) {
-                                    int32_t val = bswap_32(in[j]);
+                                    int32_t raw_val;
+                                    memcpy(&raw_val, col_ptr + i * row_width_bytes_ + j * sizeof(int32_t), sizeof(int32_t));
+                                    int32_t val = bswap_32(raw_val);
                                     memcpy(&row_out[j], &val, sizeof(float));
                                 }
                             }
@@ -890,18 +892,20 @@ public:
                     if (repeat == 1) {
                         at::parallel_for(0, num_rows, 2048, [&](long start, long end) {
                             for (long i = start; i < end; i++) {
-                                const int64_t* in = (const int64_t*)(col_ptr + i * row_width_bytes_);
-                                int64_t val = bswap_64(*in);
+                                int64_t raw_val;
+                                memcpy(&raw_val, col_ptr + i * row_width_bytes_, sizeof(int64_t));
+                                int64_t val = bswap_64(raw_val);
                                 memcpy(&out[i], &val, sizeof(double));
                             }
                         });
                     } else {
                         at::parallel_for(0, num_rows, 2048, [&](long start, long end) {
                             for (long i = start; i < end; i++) {
-                                const int64_t* in = (const int64_t*)(col_ptr + i * row_width_bytes_);
                                 double* row_out = out + i * repeat;
                                 for (long j = 0; j < repeat; j++) {
-                                    int64_t val = bswap_64(in[j]);
+                                    int64_t raw_val;
+                                    memcpy(&raw_val, col_ptr + i * row_width_bytes_ + j * sizeof(int64_t), sizeof(int64_t));
+                                    int64_t val = bswap_64(raw_val);
                                     memcpy(&row_out[j], &val, sizeof(double));
                                 }
                             }
@@ -912,17 +916,19 @@ public:
                     if (repeat == 1) {
                         at::parallel_for(0, num_rows, 2048, [&](long start, long end) {
                             for (long i = start; i < end; i++) {
-                                const int32_t* in = (const int32_t*)(col_ptr + i * row_width_bytes_);
-                                out[i] = bswap_32(*in);
+                                int32_t raw_val;
+                                memcpy(&raw_val, col_ptr + i * row_width_bytes_, sizeof(int32_t));
+                                out[i] = bswap_32(raw_val);
                             }
                         });
                     } else {
                         at::parallel_for(0, num_rows, 2048, [&](long start, long end) {
                             for (long i = start; i < end; i++) {
-                                const int32_t* in = (const int32_t*)(col_ptr + i * row_width_bytes_);
                                 int32_t* row_out = out + i * repeat;
                                 for (long j = 0; j < repeat; j++) {
-                                    row_out[j] = bswap_32(in[j]);
+                                    int32_t raw_val;
+                                    memcpy(&raw_val, col_ptr + i * row_width_bytes_ + j * sizeof(int32_t), sizeof(int32_t));
+                                    row_out[j] = bswap_32(raw_val);
                                 }
                             }
                         });
@@ -932,17 +938,19 @@ public:
                     if (repeat == 1) {
                         at::parallel_for(0, num_rows, 2048, [&](long start, long end) {
                             for (long i = start; i < end; i++) {
-                                const int16_t* in = (const int16_t*)(col_ptr + i * row_width_bytes_);
-                                out[i] = bswap_16(*in);
+                                int16_t raw_val;
+                                memcpy(&raw_val, col_ptr + i * row_width_bytes_, sizeof(int16_t));
+                                out[i] = bswap_16(raw_val);
                             }
                         });
                     } else {
                         at::parallel_for(0, num_rows, 2048, [&](long start, long end) {
                             for (long i = start; i < end; i++) {
-                                const int16_t* in = (const int16_t*)(col_ptr + i * row_width_bytes_);
                                 int16_t* row_out = out + i * repeat;
                                 for (long j = 0; j < repeat; j++) {
-                                    row_out[j] = bswap_16(in[j]);
+                                    int16_t raw_val;
+                                    memcpy(&raw_val, col_ptr + i * row_width_bytes_ + j * sizeof(int16_t), sizeof(int16_t));
+                                    row_out[j] = bswap_16(raw_val);
                                 }
                             }
                         });
@@ -952,17 +960,19 @@ public:
                     if (repeat == 1) {
                         at::parallel_for(0, num_rows, 2048, [&](long start, long end) {
                             for (long i = start; i < end; i++) {
-                                const int64_t* in = (const int64_t*)(col_ptr + i * row_width_bytes_);
-                                out[i] = bswap_64(*in);
+                                int64_t raw_val;
+                                memcpy(&raw_val, col_ptr + i * row_width_bytes_, sizeof(int64_t));
+                                out[i] = bswap_64(raw_val);
                             }
                         });
                     } else {
                         at::parallel_for(0, num_rows, 2048, [&](long start, long end) {
                             for (long i = start; i < end; i++) {
-                                const int64_t* in = (const int64_t*)(col_ptr + i * row_width_bytes_);
                                 int64_t* row_out = out + i * repeat;
                                 for (long j = 0; j < repeat; j++) {
-                                    row_out[j] = bswap_64(in[j]);
+                                    int64_t raw_val;
+                                    memcpy(&raw_val, col_ptr + i * row_width_bytes_ + j * sizeof(int64_t), sizeof(int64_t));
+                                    row_out[j] = bswap_64(raw_val);
                                 }
                             }
                         });
