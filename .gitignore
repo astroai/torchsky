@@ -98,3 +98,4 @@ wcslib_src/
 
 # mpl config cache
 mpl-cache-*/
+.venv/
