@@ -57,3 +57,24 @@ def test_frame_integration():
     # Cleanup
     if os.path.exists(filename):
         os.remove(filename)
+
+
+def test_schema_override():
+    if stype is None:
+        pytest.skip("torch_frame not installed")
+
+    num_rows = 10
+    data = {
+        "col_int": torch.randint(0, 5, (num_rows,), dtype=torch.int32),
+    }
+
+    # By default, int32 is treated as numerical
+    tf_default = to_tensor_frame(data)
+    assert stype.numerical in tf_default.feat_dict
+    assert stype.categorical not in tf_default.feat_dict
+
+    # Override int32 to be categorical
+    schema = {"col_int": stype.categorical}
+    tf_override = to_tensor_frame(data, schema=schema)
+    assert stype.categorical in tf_override.feat_dict
+    assert stype.numerical not in tf_override.feat_dict

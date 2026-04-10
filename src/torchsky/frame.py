@@ -12,12 +12,15 @@ except ImportError:
     TensorFrame = Any  # type placeholder
 
 
-def to_tensor_frame(data: Dict[str, torch.Tensor]) -> TensorFrame:
+def to_tensor_frame(
+    data: Dict[str, torch.Tensor], schema: Optional[Dict[str, Any]] = None
+) -> TensorFrame:
     """
     Convert a dictionary of PyTorch tensors (from torchsky.read_columns) to a TorchFrame TensorFrame.
 
     Args:
         data: Dictionary mapping column names to tensors.
+        schema: Optional dictionary mapping column names to stype.
 
     Returns:
         A torch_frame.TensorFrame object.
@@ -33,6 +36,9 @@ def to_tensor_frame(data: Dict[str, torch.Tensor]) -> TensorFrame:
 
     if not data:
         raise ValueError("Input data is empty")
+
+    if schema is None:
+        schema = {}
 
     # Group columns by stype
     num_cols = []
@@ -51,15 +57,20 @@ def to_tensor_frame(data: Dict[str, torch.Tensor]) -> TensorFrame:
                 f"Column {name} has {tensor.shape[0]} rows, expected {num_rows}"
             )
 
-        # Determine stype based on dtype
-        if tensor.dtype in [
-            torch.float32,
-            torch.float64,
-            torch.int32,
-            torch.int16,
-            torch.uint8,
-        ]:
-            # Treat integers as numerical for now, unless user specifies otherwise (TODO: allow schema override)
+        target_stype = schema.get(name)
+
+        # Determine stype based on schema or dtype
+        if target_stype == stype.numerical or (
+            target_stype is None
+            and tensor.dtype
+            in [
+                torch.float32,
+                torch.float64,
+                torch.int32,
+                torch.int16,
+                torch.uint8,
+            ]
+        ):
             # Ensure 2D shape (rows, 1)
             if tensor.dim() == 1:
                 tensor = tensor.unsqueeze(1)
@@ -74,20 +85,22 @@ def to_tensor_frame(data: Dict[str, torch.Tensor]) -> TensorFrame:
             )  # torch-frame expects float for numerical
             num_col_names.append(name)
 
-        elif tensor.dtype in [torch.int64, torch.bool]:
+        elif target_stype == stype.categorical or (
+            target_stype is None and tensor.dtype in [torch.int64, torch.bool]
+        ):
             # Treat int64 and bool as categorical
             # Note: torchsky currently returns int64 for strings (hashed)
             if tensor.dim() == 1:
                 tensor = tensor.unsqueeze(1)
 
-            if tensor.dtype == torch.bool:
+            if tensor.dtype != torch.int64:
                 tensor = tensor.to(torch.int64)
 
             cat_cols.append(tensor)
             cat_col_names.append(name)
         else:
             warnings.warn(
-                f"Skipping column {name} with unsupported dtype {tensor.dtype}"
+                f"Skipping column {name} with unsupported dtype {tensor.dtype} or stype {target_stype}"
             )
 
     # Construct feat_dict
@@ -109,7 +122,10 @@ def to_tensor_frame(data: Dict[str, torch.Tensor]) -> TensorFrame:
 
 
 def read_tensor_frame(
-    path: str, hdu: int = 1, columns: Optional[List[str]] = None
+    path: str,
+    hdu: int = 1,
+    columns: Optional[List[str]] = None,
+    schema: Optional[Dict[str, Any]] = None,
 ) -> TensorFrame:
     """
     Read a FITS table directly into a TensorFrame.
@@ -118,6 +134,7 @@ def read_tensor_frame(
         path: Path to FITS file.
         hdu: HDU index (default: 1 for first table extension).
         columns: Optional list of column names to read.
+        schema: Optional dictionary mapping column names to stype.
 
     Returns:
         A torch_frame.TensorFrame object.
@@ -125,7 +142,7 @@ def read_tensor_frame(
     import torchsky
 
     data = torchsky.read(path, hdu=hdu, columns=columns, return_header=False)
-    return to_tensor_frame(data)
+    return to_tensor_frame(data, schema=schema)
 
 
 def write_tensor_frame(path: str, tf: TensorFrame, overwrite: bool = False):
