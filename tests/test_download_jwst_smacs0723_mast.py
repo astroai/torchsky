@@ -8,6 +8,7 @@ pytest.importorskip("requests")
 
 pytest.importorskip("requests")
 
+pytest.importorskip("requests")
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
