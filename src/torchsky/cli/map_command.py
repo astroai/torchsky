@@ -144,6 +144,11 @@ def _run_coadd(args: argparse.Namespace) -> int:
         ImageObservation(path=p, hdu=args.hdu, weight=float(w))
         for p, w in zip(inputs, args.weights)
     ]
+    pr = int(args.plan_reference)
+    if pr < 0 or pr >= len(observations):
+        raise SystemExit(
+            f"--plan-reference {pr} out of range for {len(observations)} input(s) (0-based)"
+        )
     target_header = None
     if args.reference is not None:
         _, rh = read(
@@ -158,7 +163,7 @@ def _run_coadd(args: argparse.Namespace) -> int:
     if target_header is None:
         plan = plan_image_plane_target(
             observations,
-            reference_index=int(args.plan_reference),
+            reference_index=pr,
             device=args.device,
         )
         planned_shape = plan.shape
@@ -262,9 +267,14 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         inputs, hdu=args.hdu, band=band, read_device=read_dev
     )
     image_obs = [ImageObservation(path=p, hdu=args.hdu) for p in inputs]
+    pr = int(args.plan_reference)
+    if pr < 0 or pr >= len(image_obs):
+        raise SystemExit(
+            f"--plan-reference {pr} out of range for {len(image_obs)} input(s) (0-based)"
+        )
     plan = plan_image_plane_target(
         image_obs,
-        reference_index=int(args.plan_reference),
+        reference_index=pr,
         device=args.device,
     )
     h, w = int(plan.shape[0]), int(plan.shape[1])
@@ -368,6 +378,10 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
             "lanczos5",
             "mitchell_netravali",
             "catmull_rom",
+            "fft_shift",
+            "fft_diagonal_affine",
+            "periodic_linear_affine",
+            "fft_linear_affine",
             "drizzle_point",
             "drizzle_square",
         ),

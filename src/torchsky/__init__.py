@@ -1656,6 +1656,13 @@ def open_subset_reader(path: str, hdu: int = 0, device: str = "cpu") -> SubsetRe
     return SubsetReader(path=path, hdu=hdu, device=device)
 
 
+def _host_tensor_for_fits_write(tensor: Tensor) -> Tensor:
+    """Move image tensors to CPU for CFITSIO-backed writes (GPU tensors are not supported)."""
+    if tensor.device.type != "cpu":
+        return tensor.detach().cpu()
+    return tensor
+
+
 def write(
     path: str,
     data,
@@ -1671,6 +1678,9 @@ def write(
         header: Optional FITS header dictionary
         overwrite: Whether to overwrite existing files
         compress: Whether to use tile compression (Rice algorithm)
+
+    Image tensors on non-CPU devices are detached and copied to CPU before
+    the CFITSIO writer runs (in-memory input tensors are not modified).
     """
     import os
 
@@ -1692,7 +1702,12 @@ def write(
         if compress:
             compressed_hdus: List[Any] = []
             if isinstance(data, Tensor):
-                compressed_hdus = [TensorHDU(data=data, header=Header(header or {}))]
+                compressed_hdus = [
+                    TensorHDU(
+                        data=_host_tensor_for_fits_write(data),
+                        header=Header(header or {}),
+                    )
+                ]
             elif isinstance(data, HDUList):
                 compressed_hdus = list(getattr(data, "_hdus", []))
             elif isinstance(data, dict):
@@ -1741,7 +1756,7 @@ def write(
 
         if isinstance(data, Tensor):
             # Single image HDU
-            hdu_dict = {"data": data}
+            hdu_dict = {"data": _host_tensor_for_fits_write(data)}
             if header:
                 hdu_dict["header"] = header
             hdus_to_write.append(hdu_dict)
@@ -1753,12 +1768,18 @@ def write(
                     # Already a dict (e.g. from previous read)
                     # Ensure 'data' is present
                     if "data" in item:
-                        hdus_to_write.append(item)
+                        payload = item["data"]
+                        if isinstance(payload, Tensor):
+                            merged = dict(item)
+                            merged["data"] = _host_tensor_for_fits_write(payload)
+                            hdus_to_write.append(merged)
+                        else:
+                            hdus_to_write.append(item)
                 elif isinstance(item, Tensor):
-                    hdus_to_write.append({"data": item})
+                    hdus_to_write.append({"data": _host_tensor_for_fits_write(item)})
                 # Handle objects with .data attribute (like TensorHDU)
                 elif hasattr(item, "data") and isinstance(item.data, Tensor):
-                    hdu_dict = {"data": item.data}
+                    hdu_dict = {"data": _host_tensor_for_fits_write(item.data)}
                     if hasattr(item, "header"):
                         hdu_dict["header"] = item.header
                     hdus_to_write.append(hdu_dict)
@@ -1947,7 +1968,7 @@ def _coerce_compressed_hdu_item(item: Any) -> Any:
     if isinstance(item, TableHDURef):
         return item.materialize(device="cpu")
     if isinstance(item, Tensor):
-        return TensorHDU(data=item, header=Header())
+        return TensorHDU(data=_host_tensor_for_fits_write(item), header=Header())
     if isinstance(item, dict):
         if "data" in item:
             img = item["data"]
@@ -1955,7 +1976,10 @@ def _coerce_compressed_hdu_item(item: Any) -> Any:
                 raise NotImplementedError(
                     "Compressed FITS writing supports tensor image payloads for dict HDUs."
                 )
-            return TensorHDU(data=img, header=Header(item.get("header", {})))
+            return TensorHDU(
+                data=_host_tensor_for_fits_write(img),
+                header=Header(item.get("header", {})),
+            )
         return TableHDU(item, header=Header())
     raise NotImplementedError(
         f"Unsupported HDU payload for compressed write: {type(item)}"

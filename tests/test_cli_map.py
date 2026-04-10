@@ -68,3 +68,27 @@ def test_safe_name():
     assert _safe_name("F277W") == "F277W"
     assert _safe_name("F277W/CLEAR") == "F277W_CLEAR"
     assert _safe_name("") == "band"
+
+
+def test_run_coadd_plan_reference_out_of_range():
+    from torchsky.cli.map_command import _run_coadd
+
+    args = argparse.Namespace(
+        inputs=["a.fits", "b.fits"],
+        weights=[1.0, 1.0],
+        hdu=0,
+        reference=None,
+        reference_hdu=0,
+        plan_reference=5,
+        auto_tile=False,
+        tile_pixels=None,
+        tile_above_megapixels=32.0,
+        kernel="bilinear",
+        stack="weighted_mean",
+        drizzle_pixfrac=1.0,
+        value_semantics="surface_brightness",
+        output="out.fits",
+        device=None,
+    )
+    with pytest.raises(SystemExit, match="--plan-reference 5 out of range"):
+        _run_coadd(args)

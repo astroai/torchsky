@@ -1,6 +1,7 @@
 import os
 
 import numpy as np
+import pytest
 import torch
 from astropy.io import fits
 
@@ -205,3 +206,13 @@ def test_write_compressed_image_tuple_roundtrip():
     finally:
         if os.path.exists(filename):
             os.remove(filename)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_write_single_image_cuda_tensor_roundtrip(tmp_path) -> None:
+    path = tmp_path / "from_cuda.fits"
+    x = torch.ones(4, 5, device="cuda", dtype=torch.float32) * 2.25
+    torchsky.write(str(path), x, overwrite=True)
+    y = torchsky.read(str(path), hdu=0)
+    assert y.device.type == "cpu"
+    assert torch.allclose(y, torch.full((4, 5), 2.25))
