@@ -13,3 +13,7 @@
 ## 2024-05-24 - Faster Squaring
 **Learning:** We confirmed that `centered_sq = centered * centered` is faster than `torch.square(centered)`.
 **Action:** Always use element-wise multiplication `x * x` instead of `torch.square(x)` or `x ** 2` for better performance.
+
+## 2025-05-15 - Cache FITS filename extension check
+**Learning:** Checking for CFITSIO extended syntax (presence of '[') in filenames using `std::string::find` is an O(N) operation that was being performed repeatedly across multiple I/O methods. Since the filename is immutable for the lifetime of the `FITSFile` object, this search is redundant.
+**Action:** Cache the result of the extension check in a boolean member variable (`has_extension_`) during object construction and use the cached value in all subsequent I/O related methods.

@@ -750,8 +750,8 @@ public:
         // For regular filenames (no CFITSIO extended syntax), always use primary-HDU based
         // indexing and avoid extra CFITSIO calls in the constructor. Cached handles may
         // be left on a non-primary HDU; we handle that lazily in ensure_hdu().
-        const bool has_extension = filename_.find('[') != std::string::npos;
-        if (!has_extension) {
+        has_extension_ = filename_.find('[') != std::string::npos;
+        if (!has_extension_) {
             start_hdu_ = 1;
             current_hdu_ = -1;  // force first ensure_hdu() to move
         } else {
@@ -1083,7 +1083,7 @@ public:
         const bool signed_byte_scaled =
             scaled && bitpix == BYTE_IMG && scale_info.bscale == 1.0 && scale_info.bzero == -128.0;
         if (want_mmap && !compressed && bitpix == BYTE_IMG && (!scaled || signed_byte_scaled) &&
-            filename_.find('[') == std::string::npos) {
+            !has_extension_) {
             // Extended filename syntax can refer to virtual files/HDUs; fall back to CFITSIO.
             LONGLONG headstart = 0, data_offset = 0, dataend = 0;
             status = 0;
@@ -1146,7 +1146,7 @@ public:
 
         // Fast uncompressed raw path for multi-byte native dtypes:
         // read raw bytes directly and byteswap in-place (FITS is big-endian).
-        if (want_mmap && !compressed && !scaled && filename_.find('[') == std::string::npos) {
+        if (want_mmap && !compressed && !scaled && !has_extension_) {
             size_t elem_size = 0;
             switch (bitpix) {
                 case SHORT_IMG: elem_size = sizeof(uint16_t); break;
@@ -1341,7 +1341,7 @@ public:
 
         // Fast uncompressed image raw path: mmap + direct decode.
         if (want_mmap && !compressed && bitpix == BYTE_IMG) {
-            if (filename_.find('[') == std::string::npos) {
+            if (!has_extension_) {
                 LONGLONG headstart = 0, data_offset = 0, dataend = 0;
                 status = 0;
                 fits_get_hduaddrll(fptr_, &headstart, &data_offset, &dataend, &status);
@@ -2080,7 +2080,7 @@ public:
 
 private:
     bool ensure_raw_fd(size_t required_end) {
-        if (filename_.find('[') != std::string::npos) {
+        if (has_extension_) {
             return false;
         }
         if (!raw_fd_ready_) {
@@ -2111,6 +2111,7 @@ private:
     }
 
     std::string filename_;
+    bool has_extension_ = false;
     int mode_;
     fitsfile* fptr_ = nullptr;
     bool cached_ = false;
