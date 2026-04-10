@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import sys
+import pytest
 from pathlib import Path
+
+pytest.importorskip("requests")
 
 
 ROOT = Path(__file__).resolve().parents[1]
