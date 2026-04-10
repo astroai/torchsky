@@ -57,3 +57,36 @@ def test_frame_integration():
     # Cleanup
     if os.path.exists(filename):
         os.remove(filename)
+
+
+def test_frame_schema_override():
+    if stype is None:
+        pytest.skip("torch_frame not installed")
+
+    num_rows = 10
+    # Normally int32 would be treated as numerical
+    data = {
+        "col_int_as_num": torch.randint(0, 5, (num_rows,), dtype=torch.int32),
+        "col_int_as_cat": torch.randint(0, 5, (num_rows,), dtype=torch.int32),
+        "col_float_as_cat": torch.randn(num_rows, dtype=torch.float32)
+    }
+
+    col_to_stype = {
+        "col_int_as_cat": stype.categorical,
+        "col_float_as_cat": stype.categorical,
+    }
+
+    tf = to_tensor_frame(data, col_to_stype=col_to_stype)
+
+    # Check that col_int_as_num is numerical
+    assert stype.numerical in tf.feat_dict
+    assert "col_int_as_num" in tf.col_names_dict[stype.numerical]
+
+    # Check that overriden columns are categorical
+    assert stype.categorical in tf.feat_dict
+    assert "col_int_as_cat" in tf.col_names_dict[stype.categorical]
+    assert "col_float_as_cat" in tf.col_names_dict[stype.categorical]
+
+    # They should be cast correctly
+    assert tf.feat_dict[stype.numerical].dtype == torch.float32
+    assert tf.feat_dict[stype.categorical].dtype == torch.int64
