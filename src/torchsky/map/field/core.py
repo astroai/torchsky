@@ -1045,12 +1045,17 @@ class FourierMLPField(_BaseFieldModel):
             device=coords.device,
             dtype=coords.dtype,
         )
-        feats = [coords]
-        for scale in scales:
-            phase = math.pi * scale * coords
-            feats.append(torch.sin(phase))
-            feats.append(torch.cos(phase))
-        return torch.cat(feats, dim=-1)
+        # Vectorized phase computation: (..., num_frequencies, coords_dim)
+        phase = math.pi * coords.unsqueeze(-2) * scales.unsqueeze(-1)
+
+        sin_feats = torch.sin(phase)
+        cos_feats = torch.cos(phase)
+
+        # Interleave sin and cos features by stacking on a new dimension
+        # and then flattening the last 3 dimensions (num_frequencies, 2, coords_dim)
+        vect_feats = torch.stack([sin_feats, cos_feats], dim=-2).view(coords.shape[:-1] + (-1,))
+
+        return torch.cat([coords, vect_feats], dim=-1)
 
     def forward(
         self,
