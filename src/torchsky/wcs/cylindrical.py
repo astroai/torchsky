@@ -7,12 +7,6 @@ R2D = 57.29577951308232
 
 
 def _wrap_lon180_checked(angle: Tensor) -> Tensor:
-    if angle.requires_grad:
-        return torch.remainder(angle + 180.0, 360.0) - 180.0
-    mn = torch.amin(angle)
-    mx = torch.amax(angle)
-    if bool((mn >= -180.0) and (mx < 180.0)):
-        return angle
     return torch.remainder(angle + 180.0, 360.0) - 180.0
 
 

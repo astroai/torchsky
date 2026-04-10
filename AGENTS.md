@@ -164,3 +164,10 @@ Before finishing a non-trivial change, check:
 - Update user-facing docs if public behavior changes.
 - Update benchmark docs when benchmark surfaces or benchmark policy change.
 - Keep repository guidance in this file aligned with actual practice.
+
+## Agent PR hygiene and lint gates
+
+- Do **not** open PRs that only remove one unused import, reformat a single file, or repeat the same micro-opt across many PRs. Batch mechanical cleanup into **one** commit/PR, or fold it into substantive work.
+- Performance-related PRs must satisfy **Performance Policy** above (bottleneck, scaling story, benchmark evidence).
+- **Before every push**, run `pixi run lint` (and tests as appropriate for your change). Automated agents must not push if `ruff check` fails.
+- Optional: `pre-commit install` to mirror `.pre-commit-config.yaml` locally.
