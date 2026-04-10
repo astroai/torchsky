@@ -17,17 +17,13 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 BENCH = ROOT / "benchmarks"
-DATA = ROOT / "data"
-DEFAULT_REFERENCE_PATH = DATA / "updec_webb" / "F277Wb_UPDC-v2_iter0_i2d.fits.fz"
-DEFAULT_EXPOSURE_GLOB = str(DATA / "jwst_smacs0723" / "*_crf.fits")
-DEFAULT_JSON_OUT = DATA / "benchmark_results" / "smacs0723_ladder.json"
-DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_ladder.md"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 
 from bench_map_smacs0723_real import (  # noqa: E402
+    DATA,
     _best_overlap_cutout_from_observations,
     _center_cutout,
     _cutout_header,
@@ -37,6 +33,11 @@ from bench_map_smacs0723_real import (  # noqa: E402
     _read_ext,
     _sci_header,
 )
+
+DEFAULT_REFERENCE_PATH = DATA / "updec_webb" / "F277Wb_UPDC-v2_iter0_i2d.fits.fz"
+DEFAULT_EXPOSURE_GLOB = str(DATA / "jwst_smacs0723" / "*_crf.fits")
+DEFAULT_JSON_OUT = DATA / "benchmark_results" / "smacs0723_ladder.json"
+DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_ladder.md"
 
 from torchsky.map import ImageObservation, coadd_image_plane  # noqa: E402
 

@@ -5,6 +5,8 @@ This is the quick path to rerun the full non-INR coadd/stacker baseline once all
 The commands below assume:
 - repo root: `/Users/seb/src/torchsky`
 - public data under `/Users/seb/src/torchsky/data`
+
+**Scratch / shared filesystem:** set `TORCHSKY_DATA` to a directory with the same layout as `data/` (`jwst_smacs0723/`, `updec_webb/`, optional `benchmark_results/`). All `bench_map_smacs0723_*.py` scripts read this root from the environment when set.
 - module-`b` public JWST inputs
 - published UPdec `iter0` products as the reference artifacts
 

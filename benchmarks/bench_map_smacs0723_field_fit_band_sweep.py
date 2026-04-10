@@ -12,9 +12,6 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 BENCH = ROOT / "benchmarks"
-DATA = ROOT / "data"
-DEFAULT_JSON_OUT = DATA / "benchmark_results" / "smacs0723_field_fit_band_sweep.json"
-DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_field_fit_band_sweep.md"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 if str(BENCH) not in sys.path:
@@ -31,6 +28,7 @@ from bench_map_smacs0723_field_fit import (  # noqa: E402
 )
 from bench_map_field_fit import _field_model_kwargs_for_case  # noqa: E402
 from bench_map_smacs0723_real import (  # noqa: E402
+    DATA,
     _approx_overlap_grid,
     _best_overlap_cutout,
     _field_observation_kwargs_for_band,
@@ -43,6 +41,9 @@ from bench_map_smacs0723_real import (  # noqa: E402
     _reference_path_for_band,
     _sci_header,
 )
+
+DEFAULT_JSON_OUT = DATA / "benchmark_results" / "smacs0723_field_fit_band_sweep.json"
+DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_field_fit_band_sweep.md"
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from torchsky.map import (  # noqa: E402

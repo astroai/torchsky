@@ -24,11 +24,6 @@ except Exception:  # pragma: no cover - optional comparator in test envs
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 BENCH = ROOT / "benchmarks"
-DATA = ROOT / "data"
-DEFAULT_REFERENCE_PATH = DATA / "updec_webb" / "F277Wb_UPDC-v2_iter0_i2d.fits.fz"
-DEFAULT_EXPOSURE_DIR = DATA / "jwst_smacs0723"
-DEFAULT_JSON_OUT = DATA / "benchmark_results" / "smacs0723_stackers.json"
-DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_stackers.md"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 if str(BENCH) not in sys.path:
@@ -53,6 +48,7 @@ from bench_map_smacs0723_field_fit import (  # noqa: E402
 )
 from bench_map_smacs0723_reproduce import _coadd_with_drizzle as _coadd_with_real_drizzle  # noqa: E402
 from bench_map_smacs0723_real import (  # noqa: E402
+    DATA,
     _best_overlap_cutout_from_observations,
     _band_spec,
     _field_observation_kwargs_for_band,
@@ -66,6 +62,12 @@ from bench_map_smacs0723_real import (  # noqa: E402
     _reference_path_for_band,
     _sci_header,
 )
+
+DEFAULT_REFERENCE_PATH = DATA / "updec_webb" / "F277Wb_UPDC-v2_iter0_i2d.fits.fz"
+DEFAULT_EXPOSURE_DIR = DATA / "jwst_smacs0723"
+DEFAULT_JSON_OUT = DATA / "benchmark_results" / "smacs0723_stackers.json"
+DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_stackers.md"
+
 from torchsky.map import (  # noqa: E402
     FieldObservation,
     ImageObservation,

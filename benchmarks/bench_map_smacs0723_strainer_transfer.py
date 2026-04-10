@@ -26,9 +26,6 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 BENCH = ROOT / "benchmarks"
-DATA = ROOT / "data"
-DEFAULT_REFERENCE_PATH = DATA / "updec_webb" / "F277Wb_UPDC-v2_iter0_i2d.fits.fz"
-DEFAULT_EXPOSURE_DIR = DATA / "jwst_smacs0723"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 if str(BENCH) not in sys.path:
@@ -44,6 +41,7 @@ from bench_map_smacs0723_field_fit import (  # noqa: E402
     _scaled_field_observation,
 )
 from bench_map_smacs0723_real import (  # noqa: E402
+    DATA,
     _best_overlap_cutout_from_observations,
     _center_cutout,
     _cutout_header,
@@ -55,6 +53,10 @@ from bench_map_smacs0723_real import (  # noqa: E402
     _read_ext,
     _sci_header,
 )
+
+DEFAULT_REFERENCE_PATH = DATA / "updec_webb" / "F277Wb_UPDC-v2_iter0_i2d.fits.fz"
+DEFAULT_EXPOSURE_DIR = DATA / "jwst_smacs0723"
+
 from torchsky.map import (  # noqa: E402
     FieldObservation,
     ImageObservation,

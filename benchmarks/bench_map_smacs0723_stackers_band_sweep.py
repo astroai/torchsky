@@ -12,15 +12,20 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 BENCH = ROOT / "benchmarks"
-DATA = ROOT / "data"
-DEFAULT_JSON_OUT = DATA / "benchmark_results" / "smacs0723_stackers_band_sweep.json"
-DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_stackers_band_sweep.md"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 
-from bench_map_smacs0723_real import _band_spec, _discover_exposure_paths, _reference_path_for_band  # noqa: E402
+from bench_map_smacs0723_real import (  # noqa: E402
+    DATA,
+    _band_spec,
+    _discover_exposure_paths,
+    _reference_path_for_band,
+)
+
+DEFAULT_JSON_OUT = DATA / "benchmark_results" / "smacs0723_stackers_band_sweep.json"
+DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_stackers_band_sweep.md"
 from bench_map_smacs0723_stackers import _build_method_specs, run_stacker_benchmark  # noqa: E402
 
 

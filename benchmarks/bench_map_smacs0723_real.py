@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 import time
@@ -18,7 +19,24 @@ from astropy.io import fits
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
-DATA = ROOT / "data"
+
+
+def _smacs_data_root() -> Path:
+    """Root directory for JWST/UPdec inputs and benchmark outputs.
+
+    Set ``TORCHSKY_DATA`` to use scratch or shared storage; expected layout::
+
+        $TORCHSKY_DATA/jwst_smacs0723/
+        $TORCHSKY_DATA/updec_webb/
+        $TORCHSKY_DATA/benchmark_results/   (created as needed)
+    """
+    raw = os.environ.get("TORCHSKY_DATA", "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return (ROOT / "data").resolve()
+
+
+DATA = _smacs_data_root()
 DEFAULT_REFERENCE_PATH = DATA / "updec_webb" / "F277Wb_UPDC-v2_iter0_i2d.fits.fz"
 DEFAULT_EXPOSURE_DIR = DATA / "jwst_smacs0723"
 DEFAULT_JSON_OUT = DATA / "benchmark_results" / "smacs0723_real_smoke.json"
