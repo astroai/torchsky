@@ -1365,9 +1365,11 @@ class BandpassConditionedField(_BaseFieldModel):
         weights = weights / torch.clamp(weights.sum(), min=1.0e-8)
         mean = torch.sum(weights * lam)
         centered = lam - mean
-        second = torch.sum(weights * torch.square(centered))
-        third = torch.sum(weights * centered * centered * centered)
-        fourth = torch.sum(weights * torch.square(torch.square(centered)))
+        # Element-wise multiplication is faster than torch.square or **2
+        centered_sq = centered * centered
+        second = torch.sum(weights * centered_sq)
+        third = torch.sum(weights * centered_sq * centered)
+        fourth = torch.sum(weights * centered_sq * centered_sq)
         feats = [mean, second, third, fourth]
         if self.num_bandpass_frequencies > 0:
             scales = torch.arange(
@@ -1376,10 +1378,11 @@ class BandpassConditionedField(_BaseFieldModel):
                 device=lam.device,
                 dtype=lam.dtype,
             )
-            for scale in scales:
-                phase = math.pi * scale * lam
-                feats.append(torch.sum(weights * torch.sin(phase)))
-                feats.append(torch.sum(weights * torch.cos(phase)))
+            phase = math.pi * scales.view(-1, *([1] * lam.ndim)) * lam
+            sin_sum = torch.sum(weights * torch.sin(phase), dim=tuple(range(1, 1 + lam.ndim)))
+            cos_sum = torch.sum(weights * torch.cos(phase), dim=tuple(range(1, 1 + lam.ndim)))
+            freq_feats = torch.stack([sin_sum, cos_sum], dim=1).flatten()
+            return torch.cat([torch.stack(feats), freq_feats])
         return torch.stack(feats)
 
     def _spatial_latent(
@@ -1589,9 +1592,11 @@ class SkyEncoderBandpassField(_BaseFieldModel):
         weights = weights / torch.clamp(weights.sum(), min=1.0e-8)
         mean = torch.sum(weights * lam)
         centered = lam - mean
-        second = torch.sum(weights * torch.square(centered))
-        third = torch.sum(weights * centered * centered * centered)
-        fourth = torch.sum(weights * torch.square(torch.square(centered)))
+        # Element-wise multiplication is faster than torch.square or **2
+        centered_sq = centered * centered
+        second = torch.sum(weights * centered_sq)
+        third = torch.sum(weights * centered_sq * centered)
+        fourth = torch.sum(weights * centered_sq * centered_sq)
         feats = [mean, second, third, fourth]
         if self.num_bandpass_frequencies > 0:
             scales = torch.arange(
@@ -1600,10 +1605,11 @@ class SkyEncoderBandpassField(_BaseFieldModel):
                 device=lam.device,
                 dtype=lam.dtype,
             )
-            for scale in scales:
-                phase = math.pi * scale * lam
-                feats.append(torch.sum(weights * torch.sin(phase)))
-                feats.append(torch.sum(weights * torch.cos(phase)))
+            phase = math.pi * scales.view(-1, *([1] * lam.ndim)) * lam
+            sin_sum = torch.sum(weights * torch.sin(phase), dim=tuple(range(1, 1 + lam.ndim)))
+            cos_sum = torch.sum(weights * torch.cos(phase), dim=tuple(range(1, 1 + lam.ndim)))
+            freq_feats = torch.stack([sin_sum, cos_sum], dim=1).flatten()
+            return torch.cat([torch.stack(feats), freq_feats])
         return torch.stack(feats)
 
     def _encoded_planes(
@@ -3280,9 +3286,11 @@ class SkyLambdaFeatureField(_BaseFieldModel):
         norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
         mean = torch.sum(norm_weights * lam)
         centered = lam - mean
-        second = torch.sum(norm_weights * torch.square(centered))
-        third = torch.sum(norm_weights * centered * centered * centered)
-        fourth = torch.sum(norm_weights * torch.square(torch.square(centered)))
+        # Element-wise multiplication is faster than torch.square or **2
+        centered_sq = centered * centered
+        second = torch.sum(norm_weights * centered_sq)
+        third = torch.sum(norm_weights * centered_sq * centered)
+        fourth = torch.sum(norm_weights * centered_sq * centered_sq)
         feats = [mean, second, third, fourth]
         scales = torch.arange(
             1,
@@ -3290,11 +3298,11 @@ class SkyLambdaFeatureField(_BaseFieldModel):
             device=lam.device,
             dtype=lam.dtype,
         )
-        for scale in scales:
-            phase = math.pi * scale * lam
-            feats.append(torch.sum(norm_weights * torch.sin(phase)))
-            feats.append(torch.sum(norm_weights * torch.cos(phase)))
-        return torch.stack(feats)
+        phase = math.pi * scales.view(-1, *([1] * lam.ndim)) * lam
+        sin_sum = torch.sum(norm_weights * torch.sin(phase), dim=tuple(range(1, 1 + lam.ndim)))
+        cos_sum = torch.sum(norm_weights * torch.cos(phase), dim=tuple(range(1, 1 + lam.ndim)))
+        freq_feats = torch.stack([sin_sum, cos_sum], dim=1).flatten()
+        return torch.cat([torch.stack(feats), freq_feats])
 
     def _decode_hidden(
         self,
@@ -3898,16 +3906,18 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
         norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
         mean = torch.sum(norm_weights * lam)
         centered = lam - mean
-        second = torch.sum(norm_weights * torch.square(centered))
-        third = torch.sum(norm_weights * centered * centered * centered)
-        fourth = torch.sum(norm_weights * torch.square(torch.square(centered)))
+        # Element-wise multiplication is faster than torch.square or **2
+        centered_sq = centered * centered
+        second = torch.sum(norm_weights * centered_sq)
+        third = torch.sum(norm_weights * centered_sq * centered)
+        fourth = torch.sum(norm_weights * centered_sq * centered_sq)
         feats = [mean, second, third, fourth]
         scales = torch.arange(1, 5, device=lam.device, dtype=lam.dtype)
-        for scale in scales:
-            phase = math.pi * scale * lam
-            feats.append(torch.sum(norm_weights * torch.sin(phase)))
-            feats.append(torch.sum(norm_weights * torch.cos(phase)))
-        return torch.stack(feats)
+        phase = math.pi * scales.view(-1, *([1] * lam.ndim)) * lam
+        sin_sum = torch.sum(norm_weights * torch.sin(phase), dim=tuple(range(1, 1 + lam.ndim)))
+        cos_sum = torch.sum(norm_weights * torch.cos(phase), dim=tuple(range(1, 1 + lam.ndim)))
+        freq_feats = torch.stack([sin_sum, cos_sum], dim=1).flatten()
+        return torch.cat([torch.stack(feats), freq_feats])
 
     def _spectral_context_from_basis(
         self,
