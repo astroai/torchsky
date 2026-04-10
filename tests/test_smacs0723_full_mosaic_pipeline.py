@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("requests")
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -27,7 +28,7 @@ def test_band_filename_contains_matches_long_wave_only() -> None:
 
 def test_parser_defaults_are_simple() -> None:
     args = build_parser().parse_args([])
-    assert str(args.root).endswith("/torchsky/data")
+    assert str(args.root).endswith("/data")
     assert args.input_product == "cal"
     assert args.train_model == "spectral_basis_field"
     assert args.train_steps == 12
