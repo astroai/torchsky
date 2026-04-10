@@ -1,8 +1,8 @@
+import json
+
 import pytest
 import torch
-import math
-import json
-from torchsky.sphere.moc import MOC, nest2uniq, uniq2nest, _max_order_from_uniq, _uniq_to_ranges, _ranges_to_uniq, _normalize_moc
+from torchsky.sphere.moc import MOC, nest2uniq, _max_order_from_uniq, _uniq_to_ranges, _ranges_to_uniq, _normalize_moc
 from torchsky.sphere import HealSparseMap
 
 def test_uniq_to_ranges_empty():
@@ -95,8 +95,8 @@ def test_moc_read_fits_fallback(tmp_path):
     # because fitsio always returns numpy record arrays in newer versions
     try:
         MOC.read_fits(path)
-    except Exception as e:
-        pass # It's okay if this fails in the test env, we just want to execute the line
+    except Exception:
+        pass  # okay if this fails in the test env; we only exercise the line
 
 def test_moc_boundary_empty():
     moc = MOC(torch.tensor([], dtype=torch.int64))
