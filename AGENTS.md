@@ -169,5 +169,13 @@ Before finishing a non-trivial change, check:
 
 - Do **not** open PRs that only remove one unused import, reformat a single file, or repeat the same micro-opt across many PRs. Batch mechanical cleanup into **one** commit/PR, or fold it into substantive work.
 - Performance-related PRs must satisfy **Performance Policy** above (bottleneck, scaling story, benchmark evidence).
-- **Before every push**, run `pixi run lint` (and tests as appropriate for your change). Automated agents must not push if `ruff check` fails.
-- Optional: `pre-commit install` to mirror `.pre-commit-config.yaml` locally.
+
+### Mandatory pre-push gate (save GitHub Actions minutes)
+
+Treat CI as a **last** verifier, not the place to discover syntax, stale imports, or formatting drift. **Do not `git push`** until everything below passes locally (automated agents: **blocking** — fix and re-run before any push).
+
+1. **Fast static gate:** `pixi run preflight-push` — `ruff check .` (same scope as CI) plus `compileall` on `src/torchsky` and `tests`. Catches **F401** / **F821** / **E** issues and **SyntaxError** without spending Actions minutes. (Tree-wide `ruff format --check` is not a CI gate yet; use `pixi run lint` when you want to apply Ruff format locally.)
+2. **Tests:** `pixi run test` (or a **narrow** `pytest` path if the change is tightly scoped — but run enough to cover touched modules).
+3. **Day-to-day lint that applies fixes:** `pixi run lint` still runs `ruff format` (writes files); use that during development, not as a substitute for the pre-push check above.
+
+Optional: `pre-commit install` to mirror `.pre-commit-config.yaml` locally.
