@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+pytest.importorskip('requests')
 
 
 ROOT = Path(__file__).resolve().parents[1]
