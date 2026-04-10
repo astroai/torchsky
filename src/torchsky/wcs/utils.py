@@ -87,7 +87,8 @@ def solve_newton_raphson(
             return d_ra, d_dec
 
         r_ra, r_dec = get_residuals_active(curr_ra, curr_dec)
-        dist2 = r_ra**2 + r_dec**2
+        # Bolt optimization: element-wise multiplication is faster than **2 for tensors
+        dist2 = r_ra * r_ra + r_dec * r_dec
         keep_active = dist2 >= tol2
         if not torch.any(keep_active):
             break
