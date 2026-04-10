@@ -65,16 +65,24 @@ def test_schema_override():
 
     num_rows = 10
     data = {
-        "col_int": torch.randint(0, 5, (num_rows,), dtype=torch.int32),
+        "col_int_as_num": torch.randint(0, 5, (num_rows,), dtype=torch.int32),
+        "col_int_as_cat": torch.randint(0, 5, (num_rows,), dtype=torch.int32),
+        "col_float_as_cat": torch.randn(num_rows, dtype=torch.float32),
     }
 
-    # By default, int32 is treated as numerical
-    tf_default = to_tensor_frame(data)
-    assert stype.numerical in tf_default.feat_dict
-    assert stype.categorical not in tf_default.feat_dict
+    schema = {
+        "col_int_as_cat": stype.categorical,
+        "col_float_as_cat": stype.categorical,
+    }
 
-    # Override int32 to be categorical
-    schema = {"col_int": stype.categorical}
-    tf_override = to_tensor_frame(data, schema=schema)
-    assert stype.categorical in tf_override.feat_dict
-    assert stype.numerical not in tf_override.feat_dict
+    tf = to_tensor_frame(data, schema=schema)
+
+    assert stype.numerical in tf.feat_dict
+    assert "col_int_as_num" in tf.col_names_dict[stype.numerical]
+
+    assert stype.categorical in tf.feat_dict
+    assert "col_int_as_cat" in tf.col_names_dict[stype.categorical]
+    assert "col_float_as_cat" in tf.col_names_dict[stype.categorical]
+
+    assert tf.feat_dict[stype.numerical].dtype == torch.float32
+    assert tf.feat_dict[stype.categorical].dtype == torch.int64
