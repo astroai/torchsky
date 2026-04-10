@@ -1874,19 +1874,19 @@ def _read_cpp_numpy_table(
 
         order = np.argsort(rows_arr, kind="stable")
         sorted_rows = rows_arr[order]
-        ranges: list[tuple[int, int]] = []
-        start0 = int(sorted_rows[0])
-        length = 1
-        for i in range(1, len(sorted_rows)):
-            cur = int(sorted_rows[i])
-            prev = int(sorted_rows[i - 1])
-            if cur == prev + 1:
-                length += 1
-                continue
-            ranges.append((start0, length))
-            start0 = cur
-            length = 1
-        ranges.append((start0, length))
+
+        if len(sorted_rows) == 0:
+            ranges: list[tuple[int, int]] = []
+        else:
+            diffs = np.diff(sorted_rows)
+            breaks = np.nonzero(diffs != 1)[0]
+            start_indices = np.insert(breaks + 1, 0, 0)
+            end_indices = np.append(breaks, len(sorted_rows) - 1)
+
+            start0s = sorted_rows[start_indices]
+            lengths = end_indices - start_indices + 1
+
+            ranges = list(zip(start0s.tolist(), lengths.tolist()))
 
         try:
             reader = _acquire_cpp_reader(path, hdu, cpp)
