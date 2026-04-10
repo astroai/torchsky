@@ -13,6 +13,7 @@ from typing import Sequence
 import torch
 
 from .. import read, write
+from ..device import default_compute_device, module_compute_device
 from ..map import (
     FieldObservation,
     ImageObservation,
@@ -80,16 +81,24 @@ def _spectral_field_kwargs(band: str) -> dict:
     }
 
 
+def _map_read_device_str(args: argparse.Namespace) -> str:
+    dev = getattr(args, "device", None)
+    if dev is not None:
+        return str(torch.device(dev))
+    return str(default_compute_device())
+
+
 def _paths_to_field_observations(
     paths: Sequence[str],
     *,
     hdu: int,
     band: str,
+    read_device: str,
 ) -> list[FieldObservation]:
     skw = _spectral_field_kwargs(band)
     out: list[FieldObservation] = []
     for p in paths:
-        img, hdr = read(p, hdu=hdu, return_header=True)
+        img, hdr = read(p, hdu=hdu, return_header=True, device=read_device)
         if img.ndim != 2:
             raise ValueError(f"{p}: expected 2D image")
         out.append(
@@ -130,19 +139,27 @@ def _run_coadd(args: argparse.Namespace) -> int:
     if not inputs:
         print("torchsky map: no input files matched", file=sys.stderr)
         return 2
+    read_dev = _map_read_device_str(args)
     observations = [
         ImageObservation(path=p, hdu=args.hdu, weight=float(w))
         for p, w in zip(inputs, args.weights)
     ]
     target_header = None
     if args.reference is not None:
-        _, rh = read(str(args.reference), hdu=args.reference_hdu, return_header=True)
+        _, rh = read(
+            str(args.reference),
+            hdu=args.reference_hdu,
+            return_header=True,
+            device=read_dev,
+        )
         target_header = dict(rh)
 
     planned_shape: tuple[int, int] | None = None
     if target_header is None:
         plan = plan_image_plane_target(
-            observations, reference_index=int(args.plan_reference)
+            observations,
+            reference_index=int(args.plan_reference),
+            device=args.device,
         )
         planned_shape = plan.shape
     else:
@@ -171,6 +188,7 @@ def _run_coadd(args: argparse.Namespace) -> int:
         stacking_method=args.stack,
         drizzle_pixfrac=float(args.drizzle_pixfrac),
         spatial_tile_hw=tile_hw,
+        device=args.device,
     )
     result = maker.run(observations, output_path=str(args.output))
     print(
@@ -188,10 +206,11 @@ def _run_inr(args: argparse.Namespace) -> int:
     if not inputs:
         print("torchsky map: no input files matched", file=sys.stderr)
         return 2
+    read_dev = _map_read_device_str(args)
     if args.per_filter:
         groups: dict[str, list[str]] = defaultdict(list)
         for p in inputs:
-            _, hdr = read(p, hdu=args.hdu, return_header=True)
+            _, hdr = read(p, hdu=args.hdu, return_header=True, device=read_dev)
             fk = _header_filter_keyword(dict(hdr)) or "UNKNOWN"
             groups[fk].append(p)
         rc = 0
@@ -227,8 +246,9 @@ def _safe_name(s: str) -> str:
 
 def _run_inr_single(args: argparse.Namespace) -> int:
     inputs = _expand_inputs(args.inputs)
+    read_dev = _map_read_device_str(args)
     if args.inr_band is None:
-        _, h0 = read(inputs[0], hdu=args.hdu, return_header=True)
+        _, h0 = read(inputs[0], hdu=args.hdu, return_header=True, device=read_dev)
         fk = _header_filter_keyword(dict(h0))
         if fk is None or fk not in _INR_BAND_TABLE:
             raise SystemExit(
@@ -238,10 +258,14 @@ def _run_inr_single(args: argparse.Namespace) -> int:
     else:
         band = str(args.inr_band).upper()
 
-    fields = _paths_to_field_observations(inputs, hdu=args.hdu, band=band)
+    fields = _paths_to_field_observations(
+        inputs, hdu=args.hdu, band=band, read_device=read_dev
+    )
     image_obs = [ImageObservation(path=p, hdu=args.hdu) for p in inputs]
     plan = plan_image_plane_target(
-        image_obs, reference_index=int(args.plan_reference)
+        image_obs,
+        reference_index=int(args.plan_reference),
+        device=args.device,
     )
     h, w = int(plan.shape[0]), int(plan.shape[1])
     max_px = int(args.inr_max_pixels)
@@ -262,12 +286,14 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         training_patch_size=None if patch <= 0 else patch,
         training_patches_per_observation=int(args.inr_patches_per_obs),
         observations_per_step=min(len(fields), int(args.inr_obs_per_step)),
+        device=args.device,
     )
     skw = _spectral_field_kwargs(band)
+    dev = module_compute_device(model)
     target_obs = FieldObservation(
-        image=torch.zeros((h, w), dtype=torch.float32),
+        image=torch.zeros((h, w), dtype=torch.float32, device=dev),
         header=dict(plan.header),
-        weight=torch.ones((h, w), dtype=torch.float32),
+        weight=torch.ones((h, w), dtype=torch.float32, device=dev),
         **skw,
     )
     model.eval()
@@ -410,6 +436,15 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         "--per-filter",
         action="store_true",
         help="Group inputs by FITS FILTER/FILTNAM; one output per band (inr)",
+    )
+    p.add_argument(
+        "--device",
+        default=None,
+        metavar="DEVICE",
+        help=(
+            "Tensor device for FITS I/O and map math (e.g. cuda, cuda:1, cpu). "
+            "Default: CUDA when available else CPU; also settable via TORCHSKY_DEVICE."
+        ),
     )
     p.set_defaults(handler=_dispatch_map)
 

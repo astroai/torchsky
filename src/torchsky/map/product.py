@@ -13,6 +13,7 @@ from torch import Tensor, nn
 import torch.nn.functional as F
 
 from .. import WCS
+from ..device import module_compute_device
 from ..sphere.moc import MOC
 from ..spectral import SpectralAxis
 from .field import (
@@ -159,6 +160,7 @@ def plan_map_product(
     spectral_type: str = "WAVE",
     value_semantics: MapValueSemantics = "surface_brightness",
     footprint_order: int | None = None,
+    device: torch.device | str | None = None,
 ) -> MapProductSpec:
     if footprint_order is not None and int(footprint_order) < 0:
         raise ValueError("footprint_order must be non-negative")
@@ -170,6 +172,7 @@ def plan_map_product(
             observations,
             reference_index=reference_index,
             header_overrides=header_overrides,
+            device=device,
         )
         validated_bands = tuple(_coerce_band(band) for band in bands)
         if not validated_bands:
@@ -189,6 +192,7 @@ def plan_map_product(
             spectral_bin_edges=spectral_bin_edges,
             spectral_unit=spectral_unit,
             spectral_type=spectral_type,
+            device=device,
         )
         return MapProductSpec(
             target_header=target.header,
@@ -200,6 +204,7 @@ def plan_map_product(
         observations,
         reference_index=reference_index,
         header_overrides=header_overrides,
+        device=device,
     )
     reference = observations[reference_index]
     return MapProductSpec(
@@ -336,6 +341,7 @@ def stack_map_product(
     resampling_kernel: MapResamplingKernel = "bilinear",
     method: str = "coadd",
     stacking_method: MapStackingMethod = "weighted_mean",
+    device: torch.device | str | None = None,
 ) -> MapProductResult:
     if method != "coadd":
         raise ValueError("stack_map_product currently supports only method='coadd'")
@@ -351,6 +357,7 @@ def stack_map_product(
                 resampling_kernel=resampling_kernel,
                 value_semantics=product.value_semantics,
                 stacking_method=stacking_method,
+                device=device,
             )
             return _wrap_map_result(result, product)
     cube_target = _product_to_cube_target(product)
@@ -361,18 +368,9 @@ def stack_map_product(
         resampling_kernel=resampling_kernel,
         value_semantics=product.value_semantics,
         stacking_method=stacking_method,
+        device=device,
     )
     return _wrap_cube_result(result, product)
-
-
-def _module_device(model: nn.Module) -> torch.device:
-    parameter = next(model.parameters(), None)
-    if parameter is not None:
-        return parameter.device
-    buffer = next(model.buffers(), None)
-    if buffer is not None:
-        return buffer.device
-    return torch.device("cpu")
 
 
 def render_field_product(
@@ -381,7 +379,7 @@ def render_field_product(
     *,
     num_spectral_samples: int = 9,
 ) -> MapProductResult:
-    device = _module_device(model)
+    device = module_compute_device(model)
     shape = (
         int(product.target_header["NAXIS2"]),
         int(product.target_header["NAXIS1"]),

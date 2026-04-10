@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from .. import WCS, read, write
+from ..device import default_compute_device
 from ..sphere.moc import MOC, nest2uniq
 from ..spectral import (
     DataCube,
@@ -45,6 +46,12 @@ MapValueSemantics = Literal["surface_brightness", "flux"]
 MapStackingMethod = Literal["weighted_mean", "mean", "median"]
 
 # Header probe for area scaling: recoverable failures when reading metadata only.
+def _resolve_map_device(device: torch.device | str | None) -> torch.device:
+    if device is not None:
+        return torch.device(device)
+    return default_compute_device()
+
+
 _HEADER_PROBE_EXC: tuple[type[BaseException], ...] = (
     OSError,
     RuntimeError,
@@ -900,7 +907,7 @@ def _load_observation_weight_map(
     weight_map = torch.isfinite(image).to(dtype=torch.float32, device=device)
 
     if obs.weight_path is not None:
-        source_weight = read(obs.weight_path, hdu=obs.weight_hdu)
+        source_weight = read(obs.weight_path, hdu=obs.weight_hdu, device=str(device))
         source_weight = _validate_image_plane(source_weight)
         if tuple(int(v) for v in source_weight.shape) != tuple(
             int(v) for v in image.shape
@@ -915,7 +922,7 @@ def _load_observation_weight_map(
         weight_map = weight_map * source_weight
 
     if obs.mask_path is not None:
-        mask = read(obs.mask_path, hdu=obs.mask_hdu)
+        mask = read(obs.mask_path, hdu=obs.mask_hdu, device=str(device))
         mask = _validate_image_plane(mask)
         if tuple(int(v) for v in mask.shape) != tuple(int(v) for v in image.shape):
             raise ValueError("Mask shape must match the observation image shape")
@@ -928,7 +935,7 @@ def _load_observation_weight_map(
         weight_map = weight_map * mask
 
     if obs.primary_beam_path is not None:
-        pb = read(obs.primary_beam_path, hdu=obs.primary_beam_hdu)
+        pb = read(obs.primary_beam_path, hdu=obs.primary_beam_hdu, device=str(device))
         pb = _validate_image_plane(pb)
         if tuple(int(v) for v in pb.shape) != tuple(int(v) for v in image.shape):
             raise ValueError(
@@ -2281,7 +2288,9 @@ def _project_observation_to_target_chunk(
         raise ValueError("Observation weights must be positive")
 
     if image is None or header_dict_obs is None:
-        image, header = read(obs.path, hdu=obs.hdu, return_header=True)
+        image, header = read(
+            obs.path, hdu=obs.hdu, return_header=True, device=str(device)
+        )
         image = _validate_image_plane(image)
         header_dict_obs = dict(header)
     image = image.to(device=device)
@@ -2457,6 +2466,7 @@ def plan_image_plane_target(
     *,
     reference_index: int = 0,
     header_overrides: Optional[dict] = None,
+    device: torch.device | str | None = None,
 ) -> PlannedImagePlaneTarget:
     if not observations:
         raise ValueError("At least one observation is required")
@@ -2464,7 +2474,8 @@ def plan_image_plane_target(
         raise IndexError("reference_index is out of range")
 
     ref = observations[reference_index]
-    image, header = read(ref.path, hdu=ref.hdu, return_header=True)
+    read_dev = str(_resolve_map_device(device))
+    image, header = read(ref.path, hdu=ref.hdu, return_header=True, device=read_dev)
     image = _validate_image_plane(image)
     shape = tuple(int(v) for v in image.shape)
     normalized_header = _normalized_header_for_shape(
@@ -2484,11 +2495,13 @@ def plan_image_plane_cube_target(
     spectral_bin_edges: Tensor | None = None,
     spectral_unit: str = "Angstrom",
     spectral_type: str = "WAVE",
+    device: torch.device | str | None = None,
 ) -> PlannedImagePlaneCubeTarget:
     spatial_target = plan_image_plane_target(
         observations,
         reference_index=reference_index,
         header_overrides=header_overrides,
+        device=device,
     )
     (
         observation_center,
@@ -2544,6 +2557,7 @@ def plan_image_plane_cube_target_from_header(
     reference_index: int = 0,
     header_overrides: Optional[dict] = None,
     use_header_bin_edges: bool = True,
+    device: torch.device | str | None = None,
 ) -> PlannedImagePlaneCubeTarget:
     spectral_axis, _ = spectral_axis_from_header(spectral_header)
     spectral_bin_edges = None
@@ -2555,6 +2569,7 @@ def plan_image_plane_cube_target_from_header(
         header_overrides=header_overrides,
         spectral_axis=spectral_axis,
         spectral_bin_edges=spectral_bin_edges,
+        device=device,
     )
 
 
@@ -2570,6 +2585,7 @@ def _coadd_image_plane_spatial_tiles(
     value_semantics: MapValueSemantics,
     stacking_method: MapStackingMethod,
     drizzle_pixfrac: float,
+    map_device: torch.device,
 ) -> MapResult:
     """Accumulate a large map in non-overlapping spatial tiles to cap per-tile memory."""
     if not observations:
@@ -2578,9 +2594,12 @@ def _coadd_image_plane_spatial_tiles(
     th = max(int(tile_height), 1)
     tw = max(int(tile_width), 1)
     first = observations[0]
-    first_image, first_header = read(first.path, hdu=first.hdu, return_header=True)
+    read_dev = str(map_device)
+    first_image, first_header = read(
+        first.path, hdu=first.hdu, return_header=True, device=read_dev
+    )
     first_image = _validate_image_plane(first_image)
-    device = first_image.device
+    device = map_device
     mosaic_surface_brightness_area_scaling: bool | None = None
     if value_semantics == "surface_brightness" and stacking_method == "weighted_mean":
         mosaic_surface_brightness_area_scaling = (
@@ -2616,6 +2635,7 @@ def _coadd_image_plane_spatial_tiles(
                 drizzle_pixfrac=drizzle_pixfrac,
                 spatial_tile_hw=None,
                 surface_brightness_area_scaling=mosaic_surface_brightness_area_scaling,
+                device=map_device,
             )
             full_data[y0:y1, x0:x1] = sub.data.to(device=device)
             full_weight[y0:y1, x0:x1] = sub.weight.to(device=device)
@@ -2647,6 +2667,7 @@ def coadd_image_plane(
     drizzle_pixfrac: float = 1.0,
     spatial_tile_hw: tuple[int, int] | None = None,
     surface_brightness_area_scaling: bool | None = None,
+    device: torch.device | str | None = None,
 ) -> MapResult:
     if not observations:
         raise ValueError("At least one observation is required")
@@ -2657,8 +2678,12 @@ def coadd_image_plane(
     stacking_method = _validated_map_stacking_method(stacking_method)
     drizzle_pixfrac = _validated_drizzle_pixfrac(drizzle_pixfrac)
 
+    map_device = _resolve_map_device(device)
+    read_dev = str(map_device)
     first = observations[0]
-    first_image, first_header = read(first.path, hdu=first.hdu, return_header=True)
+    first_image, first_header = read(
+        first.path, hdu=first.hdu, return_header=True, device=read_dev
+    )
     first_image = _validate_image_plane(first_image)
     if target_header is not None and "CRVAL1" in target_header:
         target_shape = _target_shape_from_header(
@@ -2680,7 +2705,7 @@ def coadd_image_plane(
             header_dict,
             fallback=tuple(int(v) for v in first_image.shape[-2:]),
         )
-    device = first_image.device
+    device = map_device
     if spatial_tile_hw is not None:
         if footprint_order is not None:
             raise ValueError(
@@ -2698,6 +2723,7 @@ def coadd_image_plane(
             value_semantics=value_semantics,
             stacking_method=stacking_method,
             drizzle_pixfrac=drizzle_pixfrac,
+            map_device=map_device,
         )
     if not (
         value_semantics == "surface_brightness" and stacking_method == "weighted_mean"
@@ -2742,7 +2768,9 @@ def coadd_image_plane(
             image = first_image
             header_dict_obs = dict(first_header)
         else:
-            image, header = read(obs.path, hdu=obs.hdu, return_header=True)
+            image, header = read(
+                obs.path, hdu=obs.hdu, return_header=True, device=read_dev
+            )
             image = _validate_image_plane(image)
             header_dict_obs = dict(header)
         need_prepared_target = (
@@ -2912,6 +2940,7 @@ class ImagePlaneMapMaker:
         stacking_method: MapStackingMethod = "weighted_mean",
         drizzle_pixfrac: float = 1.0,
         spatial_tile_hw: tuple[int, int] | None = None,
+        device: torch.device | str | None = None,
     ) -> None:
         self.target_header = target_header
         self.resampling_kernel = _validated_map_resampling_kernel(resampling_kernel)
@@ -2923,13 +2952,16 @@ class ImagePlaneMapMaker:
             if spatial_tile_hw is None
             else (int(spatial_tile_hw[0]), int(spatial_tile_hw[1]))
         )
+        self.device = device
 
     def run(
         self,
         observations: Sequence[ImageObservation],
         *,
         output_path: Optional[str] = None,
+        device: torch.device | str | None = None,
     ) -> MapResult:
+        eff_device = device if device is not None else self.device
         return coadd_image_plane(
             observations,
             target_header=self.target_header,
@@ -2939,6 +2971,7 @@ class ImagePlaneMapMaker:
             stacking_method=self.stacking_method,
             drizzle_pixfrac=self.drizzle_pixfrac,
             spatial_tile_hw=self.spatial_tile_hw,
+            device=eff_device,
         )
 
 
@@ -2957,6 +2990,7 @@ def coadd_image_plane_cube(
     spectral_unit: str = "Angstrom",
     spectral_type: str = "WAVE",
     reference_index: int = 0,
+    device: torch.device | str | None = None,
 ) -> SpectralCubeMapResult:
     if not observations:
         raise ValueError("At least one observation is required")
@@ -2970,6 +3004,8 @@ def coadd_image_plane_cube(
             "target is mutually exclusive with target_header, spectral_axis, "
             "spectral_bin_edges, and reference_index"
         )
+    map_device = _resolve_map_device(device)
+    read_dev = str(map_device)
     resampling_kernel = _validated_map_resampling_kernel(resampling_kernel)
     value_semantics = _validated_map_value_semantics(value_semantics)
     stacking_method = _validated_map_stacking_method(stacking_method)
@@ -2988,6 +3024,7 @@ def coadd_image_plane_cube(
             spectral_bin_edges=spectral_bin_edges,
             spectral_unit=spectral_unit,
             spectral_type=spectral_type,
+            device=map_device,
         )
 
     (
@@ -3018,9 +3055,10 @@ def coadd_image_plane_cube(
         observations[0].path,
         hdu=observations[0].hdu,
         return_header=True,
+        device=read_dev,
     )
     first_image = _validate_image_plane(first_image)
-    device = first_image.device
+    device = map_device
     header_dict = dict(target.header)
     target_shape = target.shape
     target_wcs = WCS(header_dict)
@@ -3067,7 +3105,9 @@ def coadd_image_plane_cube(
             image = first_image
             header_dict_obs = dict(first_header)
         else:
-            image, header = read(obs.path, hdu=obs.hdu, return_header=True)
+            image, header = read(
+                obs.path, hdu=obs.hdu, return_header=True, device=read_dev
+            )
             image = _validate_image_plane(image)
             header_dict_obs = dict(header)
         need_prepared_target = (
@@ -3189,6 +3229,7 @@ def coadd_image_plane_multiband(
     stacking_method: MapStackingMethod = "weighted_mean",
     spectral_unit: str = "Angstrom",
     spectral_type: str = "WAVE",
+    device: torch.device | str | None = None,
 ) -> MultiBandMapResult:
     cube = coadd_image_plane_cube(
         observations,
@@ -3201,6 +3242,7 @@ def coadd_image_plane_multiband(
         spectral_bin_edges=None,
         spectral_unit=spectral_unit,
         spectral_type=spectral_type,
+        device=device,
     )
     return MultiBandMapResult(
         spectral_axis=cube.spectral_axis,
