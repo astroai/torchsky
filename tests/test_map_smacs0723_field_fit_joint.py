@@ -1,4 +1,6 @@
 from __future__ import annotations
+import pytest
+pytest.importorskip('PIL')
 
 import sys
 import tempfile

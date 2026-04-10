@@ -1,6 +1,6 @@
 import pytest
 import torch
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from torchsky.datasets import FITSDataset, IterableFITSDataset, TableChunkDataset
 
