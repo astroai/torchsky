@@ -140,6 +140,12 @@ class FieldObservation:
     Use :mod:`torchsky.map.field.observation_builders` to turn binned 1D spectra,
     IFU channel cubes, or X-ray-style center/width summaries into observation lists.
     Set ``spectral_quantity`` when the axis is energy (e.g. keV) rather than wavelength.
+
+    Optional ``transmission_wavelength`` / ``transmission_throughput`` give a tabulated
+    throughput curve (same units as the spectral axis, dimensionless throughput).
+    When both are set, bandpass quadrature integrates against this curve (trapezoid
+    rule on the quadrature grid, with linear interpolation of throughput) instead of
+    the uniform-in-band or Gaussian fallbacks from ``transmission_sigma``.
     """
 
     image: Tensor
@@ -151,9 +157,27 @@ class FieldObservation:
     spectral_max: float | None = None
     transmission_center: float | None = None
     transmission_sigma: float | None = None
+    transmission_wavelength: Tensor | None = None
+    transmission_throughput: Tensor | None = None
     psf_sigma_pix: float = 0.0
     band_name: str | None = None
     spectral_quantity: FieldSpectralQuantity | None = None
+
+    def __post_init__(self) -> None:
+        wl = self.transmission_wavelength
+        tt = self.transmission_throughput
+        if (wl is None) ^ (tt is None):
+            raise ValueError(
+                "transmission_wavelength and transmission_throughput must both be set or both None"
+            )
+        if wl is None:
+            return
+        if wl.ndim != 1 or tt.ndim != 1:
+            raise ValueError("transmission_wavelength and transmission_throughput must be 1D")
+        if wl.shape != tt.shape:
+            raise ValueError("transmission_wavelength and transmission_throughput shapes must match")
+        if wl.numel() < 2:
+            raise ValueError("tabulated transmission requires at least two samples")
 
 
 @dataclass

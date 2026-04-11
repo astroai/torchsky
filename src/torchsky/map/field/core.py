@@ -284,6 +284,8 @@ def _crop_field_observation(
         spectral_max=observation.spectral_max,
         transmission_center=observation.transmission_center,
         transmission_sigma=observation.transmission_sigma,
+        transmission_wavelength=observation.transmission_wavelength,
+        transmission_throughput=observation.transmission_throughput,
         psf_sigma_pix=observation.psf_sigma_pix,
         band_name=observation.band_name,
         spectral_quantity=observation.spectral_quantity,
@@ -457,6 +459,85 @@ def _bandpass_bounds(observation: FieldObservation) -> tuple[float, float]:
     return lower, upper
 
 
+def _has_tabulated_transmission(observation: FieldObservation) -> bool:
+    return (
+        observation.transmission_wavelength is not None
+        and observation.transmission_throughput is not None
+    )
+
+
+def _sorted_tabulated_transmission(
+    observation: FieldObservation,
+    *,
+    device: torch.device,
+) -> tuple[Tensor, Tensor]:
+    """Move the tabulated curve to ``device`` as float32, sorted by wavelength (GPU-friendly).
+
+    Always applies :func:`torch.sort` so we never call Python ``bool`` on tensor reductions
+    (which would force a device sync). Sorting a few hundred to a few thousand nodes is cheap
+    relative to field rendering.
+    """
+    wl = observation.transmission_wavelength
+    tt = observation.transmission_throughput
+    assert wl is not None and tt is not None
+    wl_d = wl.to(device=device, dtype=torch.float32).reshape(-1)
+    tt_d = tt.to(device=device, dtype=torch.float32).reshape(-1)
+    wl_s, perm = torch.sort(wl_d)
+    tt_s = torch.clamp(tt_d[perm], min=0.0)
+    return wl_s, tt_s
+
+
+def _linear_interp_transmission(
+    wl_tab: Tensor,
+    tt_tab: Tensor,
+    wl_query: Tensor,
+) -> Tensor:
+    """Linear interpolation of throughput; zero outside ``[wl_tab[0], wl_tab[-1]]``.
+
+    ``wl_tab`` must be sorted ascending on the same device as ``wl_query`` (see
+    :func:`_sorted_tabulated_transmission`). Stays on the query tensor's device for CUDA/MPS.
+    """
+    xq = wl_query.to(dtype=torch.float32)
+    x = wl_tab
+    y = tt_tab
+    if x.dtype != torch.float32:
+        x = x.to(dtype=torch.float32)
+    if y.dtype != torch.float32:
+        y = y.to(dtype=torch.float32)
+    lo = x[0]
+    hi = x[-1]
+    clamped = torch.clamp(xq, lo, hi)
+    idx = torch.searchsorted(x, clamped, right=False) - 1
+    idx = torch.clamp(idx, 0, x.numel() - 2)
+    x0 = x[idx]
+    x1 = x[idx + 1]
+    denom = x1 - x0
+    t = torch.where(
+        denom > 0.0,
+        (clamped - x0) / denom,
+        torch.zeros_like(clamped),
+    )
+    y0 = y[idx]
+    y1 = y[idx + 1]
+    out = torch.lerp(y0, y1, t)
+    outside = (xq < lo) | (xq > hi)
+    return torch.where(outside, torch.zeros_like(out), out)
+
+
+def _tabulated_response_or_uniform(
+    response: Tensor,
+    *,
+    mass: Tensor,
+    mass_eps: float = 1e-30,
+) -> Tensor:
+    """If ``mass`` is non-positive, return ones like ``response`` (fully tensor, no host sync)."""
+    return torch.where(
+        mass > mass_eps,
+        response,
+        torch.ones_like(response),
+    )
+
+
 def _bandpass_quadrature(
     observation: FieldObservation,
     *,
@@ -484,21 +565,27 @@ def _bandpass_quadrature(
     trap = torch.full((n,), h, dtype=torch.float32, device=device)
     trap[0] = h * 0.5
     trap[-1] = h * 0.5
-    center = (
-        float(observation.transmission_center)
-        if observation.transmission_center is not None
-        else 0.5 * (lower + upper)
-    )
-    sigma = observation.transmission_sigma
-    if sigma is None:
-        response = torch.ones_like(samples)
+    if _has_tabulated_transmission(observation):
+        wl_tab, tt_tab = _sorted_tabulated_transmission(observation, device=device)
+        response = _linear_interp_transmission(wl_tab, tt_tab, samples)
+        mass = (response * trap).sum()
+        response = _tabulated_response_or_uniform(response, mass=mass)
     else:
-        sigma = float(sigma)
-        if not math.isfinite(sigma) or sigma <= 0.0:
-            raise ValueError(
-                "FieldObservation transmission_sigma must be finite and positive"
-            )
-        response = torch.exp(-0.5 * torch.square((samples - center) / sigma))
+        center = (
+            float(observation.transmission_center)
+            if observation.transmission_center is not None
+            else 0.5 * (lower + upper)
+        )
+        sigma = observation.transmission_sigma
+        if sigma is None:
+            response = torch.ones_like(samples)
+        else:
+            sigma = float(sigma)
+            if not math.isfinite(sigma) or sigma <= 0.0:
+                raise ValueError(
+                    "FieldObservation transmission_sigma must be finite and positive"
+                )
+            response = torch.exp(-0.5 * torch.square((samples - center) / sigma))
     weights = response * trap
     return samples, weights / torch.clamp(weights.sum(), min=1e-8)
 
@@ -513,6 +600,12 @@ def _bandpass_response(
         atol = max(1.0e-3, 1.0e-6 * max(abs(lower), 1.0))
         return (torch.abs(wavelengths - float(lower)) <= atol).to(dtype=wavelengths.dtype)
     inside = (wavelengths >= float(lower)) & (wavelengths <= float(upper))
+    if _has_tabulated_transmission(observation):
+        wl_tab, tt_tab = _sorted_tabulated_transmission(
+            observation, device=wavelengths.device
+        )
+        response = _linear_interp_transmission(wl_tab, tt_tab, wavelengths)
+        return response * inside.to(dtype=response.dtype)
     sigma = observation.transmission_sigma
     if sigma is None:
         return inside.to(dtype=wavelengths.dtype)
@@ -560,23 +653,32 @@ def _bandpass_mc_samples(
         dtype=torch.float32,
         device=device,
     )
-    center = (
-        float(observation.transmission_center)
-        if observation.transmission_center is not None
-        else 0.5 * (lower + upper)
-    )
-    sigma = observation.transmission_sigma
-    if sigma is None:
-        proposal_weights = torch.ones_like(proposal_samples)
-    else:
-        sigma = float(sigma)
-        if not math.isfinite(sigma) or sigma <= 0.0:
-            raise ValueError(
-                "FieldObservation transmission_sigma must be finite and positive"
-            )
-        proposal_weights = torch.exp(
-            -0.5 * torch.square((proposal_samples - center) / sigma)
+    if _has_tabulated_transmission(observation):
+        wl_tab, tt_tab = _sorted_tabulated_transmission(observation, device=device)
+        proposal_weights = _linear_interp_transmission(
+            wl_tab, tt_tab, proposal_samples
         )
+        proposal_weights = _tabulated_response_or_uniform(
+            proposal_weights, mass=proposal_weights.sum()
+        )
+    else:
+        center = (
+            float(observation.transmission_center)
+            if observation.transmission_center is not None
+            else 0.5 * (lower + upper)
+        )
+        sigma = observation.transmission_sigma
+        if sigma is None:
+            proposal_weights = torch.ones_like(proposal_samples)
+        else:
+            sigma = float(sigma)
+            if not math.isfinite(sigma) or sigma <= 0.0:
+                raise ValueError(
+                    "FieldObservation transmission_sigma must be finite and positive"
+                )
+            proposal_weights = torch.exp(
+                -0.5 * torch.square((proposal_samples - center) / sigma)
+            )
     proposal_weights = proposal_weights / torch.clamp(
         proposal_weights.sum(), min=1.0e-8
     )

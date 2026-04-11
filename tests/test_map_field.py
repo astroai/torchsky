@@ -2311,6 +2311,61 @@ def test_bandpass_quadrature_trapezoid_closer_than_uniform_for_quadratic() -> No
     assert abs(trap_est - truth) < abs(uniform_est - truth)
 
 
+def test_field_observation_rejects_partial_transmission_table() -> None:
+    with pytest.raises(ValueError, match="both be set"):
+        FieldObservation(
+            image=torch.zeros((2, 2), dtype=torch.float32),
+            header=_tan_header(2, crval1=0.0, crval2=0.0, scale_deg=1.0 / 3600.0),
+            spectral_min=1.0,
+            spectral_max=2.0,
+            transmission_wavelength=torch.tensor([1.0, 2.0], dtype=torch.float32),
+            transmission_throughput=None,
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_tabulated_bandpass_quadrature_runs_on_cuda() -> None:
+    device = torch.device("cuda")
+    wl_tab = torch.tensor([0.0, 0.5, 1.0], dtype=torch.float32, device="cpu")
+    tt_tab = torch.tensor([0.0, 1.0, 0.0], dtype=torch.float32, device="cpu")
+    obs = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=_tan_header(4, crval1=0.0, crval2=0.0, scale_deg=1.0 / 3600.0),
+        spectral_min=0.0,
+        spectral_max=1.0,
+        transmission_wavelength=wl_tab,
+        transmission_throughput=tt_tab,
+    )
+    samples, weights = _bandpass_quadrature(
+        obs, num_spectral_samples=128, device=device
+    )
+    assert samples.device == device
+    assert weights.device == device
+    assert torch.isfinite(samples).all() and torch.isfinite(weights).all()
+
+
+def test_bandpass_quadrature_tabulated_triangle_weighted_mean() -> None:
+    """Tabulated T(λ) peak 1 at 0.5, 0 at endpoints ⇒ ∫λT dλ / ∫T dλ = 0.5."""
+    wl_tab = torch.tensor([0.0, 0.5, 1.0], dtype=torch.float32)
+    tt_tab = torch.tensor([0.0, 1.0, 0.0], dtype=torch.float32)
+    obs = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=_tan_header(4, crval1=0.0, crval2=0.0, scale_deg=1.0 / 3600.0),
+        spectral_min=0.0,
+        spectral_max=1.0,
+        transmission_center=0.5,
+        transmission_sigma=100.0,
+        transmission_wavelength=wl_tab,
+        transmission_throughput=tt_tab,
+    )
+    device = torch.device("cpu")
+    samples, weights = _bandpass_quadrature(
+        obs, num_spectral_samples=2001, device=device
+    )
+    est = float(torch.sum(weights * samples).item())
+    assert abs(est - 0.5) < 2.0e-3
+
+
 def test_estimate_field_domain_uses_pc_cdelt_when_cd_absent() -> None:
     scale = 0.5 / 3600.0
     header_pc = {

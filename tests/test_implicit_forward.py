@@ -62,6 +62,26 @@ def test_scale_observation_divides_spectral_metadata_by_one_plus_z() -> None:
     assert scaled.wavelength == pytest.approx(2400.0)
 
 
+def test_scale_observation_scales_tabulated_wavelength_axis() -> None:
+    header = _tan_header(8, crval1=10.0, crval2=20.0, scale_deg=1.0 / 3600.0)
+    wl = torch.tensor([4000.0, 5000.0], dtype=torch.float32)
+    tt = torch.tensor([0.5, 1.0], dtype=torch.float32)
+    obs = FieldObservation(
+        image=torch.zeros((8, 8)),
+        header=header,
+        spectral_min=4000.0,
+        spectral_max=5000.0,
+        transmission_wavelength=wl,
+        transmission_throughput=tt,
+    )
+    scaled = scale_observation_for_rest_frame_scene(obs, one_plus_z=2.0)
+    assert scaled.transmission_wavelength is not None
+    assert torch.allclose(
+        scaled.transmission_wavelength, torch.tensor([2000.0, 2500.0])
+    )
+    assert torch.allclose(scaled.transmission_throughput, tt)
+
+
 def test_predict_observation_mean_matches_render_without_rest_frame() -> None:
     torch.manual_seed(0)
     domain = FieldDomain(

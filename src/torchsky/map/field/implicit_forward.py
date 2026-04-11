@@ -91,6 +91,9 @@ def scale_observation_for_rest_frame_scene(
     inv = 1.0 / float(one_plus_z)
     tc = observation.transmission_center
     ts = observation.transmission_sigma
+    twl = observation.transmission_wavelength
+    ttt = observation.transmission_throughput
+    twl_rest = None if twl is None else (twl * inv)
     return FieldObservation(
         image=observation.image,
         header=dict(observation.header),
@@ -107,6 +110,8 @@ def scale_observation_for_rest_frame_scene(
         ),
         transmission_center=None if tc is None else float(tc) * inv,
         transmission_sigma=None if ts is None else float(ts) * inv,
+        transmission_wavelength=twl_rest,
+        transmission_throughput=ttt,
         psf_sigma_pix=float(observation.psf_sigma_pix),
         band_name=observation.band_name,
         spectral_quantity=observation.spectral_quantity,
