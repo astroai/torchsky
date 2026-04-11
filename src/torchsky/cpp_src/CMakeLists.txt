@@ -112,6 +112,66 @@ execute_process(
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 list(APPEND CMAKE_PREFIX_PATH ${TORCH_CMAKE_PREFIX_PATH})
+
+# CUDA-enabled PyTorch only: cuda.cmake expects CUDA::nvrtc before extension targets link. Conda
+# toolkits and CMake 4.x often omit that imported target; CPU-only PyTorch skips this path.
+set(TORCHSKY_PYTORCH_CUDA_VERSION "")
+execute_process(
+    COMMAND ${Python_EXECUTABLE} -c "import torch; print(torch.version.cuda or '')"
+    OUTPUT_VARIABLE TORCHSKY_PYTORCH_CUDA_VERSION
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+# PyTorch's cuda.cmake (pulled in by find_package(Torch)) calls get_target_property on CUDA::nvrtc
+# before extension code runs. INTERFACE_LINK_LIBRARIES is read by PyTorch for nvrtc shorthash.
+if(TORCHSKY_PYTORCH_CUDA_VERSION AND NOT TARGET CUDA::nvrtc)
+    find_package(CUDAToolkit QUIET COMPONENTS nvrtc cudart)
+endif()
+if(TORCHSKY_PYTORCH_CUDA_VERSION AND NOT TARGET CUDA::nvrtc)
+    set(_TORCHSKY_CUDA_LIB_HINTS "")
+    foreach(_root IN ITEMS "${CUDAToolkit_ROOT}" "${CUDAToolkit_LIBRARY_ROOT}" "$ENV{CUDA_HOME}" "$ENV{CUDA_PATH}")
+        if(_root)
+            if(_root MATCHES "/include/?$")
+                get_filename_component(_root "${_root}" DIRECTORY)
+            endif()
+            list(APPEND _TORCHSKY_CUDA_LIB_HINTS "${_root}/lib" "${_root}/lib64")
+            list(APPEND _TORCHSKY_CUDA_LIB_HINTS "${_root}/targets/x86_64-linux/lib")
+            list(APPEND _TORCHSKY_CUDA_LIB_HINTS "${_root}/targets/sbsa/lib")
+        endif()
+    endforeach()
+    list(APPEND _TORCHSKY_CUDA_LIB_HINTS
+        "$ENV{CONDA_PREFIX}/targets/x86_64-linux/lib"
+        "$ENV{PREFIX}/targets/x86_64-linux/lib"
+        "$ENV{CONDA_PREFIX}/lib"
+        "$ENV{PREFIX}/lib"
+    )
+    list(REMOVE_DUPLICATES _TORCHSKY_CUDA_LIB_HINTS)
+    set(TORCHSKY_NVRTC_LIBRARY "")
+    foreach(_hint IN LISTS _TORCHSKY_CUDA_LIB_HINTS)
+        if(NOT EXISTS "${_hint}")
+            continue()
+        endif()
+        file(GLOB _TORCHSKY_NVRTC_GLOB "${_hint}/libnvrtc.so.*")
+        if(_TORCHSKY_NVRTC_GLOB)
+            list(GET _TORCHSKY_NVRTC_GLOB 0 TORCHSKY_NVRTC_LIBRARY)
+            break()
+        endif()
+    endforeach()
+    if(NOT TORCHSKY_NVRTC_LIBRARY)
+        find_library(TORCHSKY_NVRTC_LIBRARY NAMES nvrtc HINTS ${_TORCHSKY_CUDA_LIB_HINTS})
+    endif()
+    if(NOT TORCHSKY_NVRTC_LIBRARY)
+        message(FATAL_ERROR
+            "CUDA-enabled PyTorch needs libnvrtc (CUDA::nvrtc). "
+            "Install the CUDA toolkit nvrtc library or set CUDA_HOME to the toolkit root.")
+    endif()
+    add_library(CUDA::nvrtc SHARED IMPORTED GLOBAL)
+    set_target_properties(CUDA::nvrtc PROPERTIES
+        IMPORTED_LOCATION "${TORCHSKY_NVRTC_LIBRARY}"
+        INTERFACE_LINK_LIBRARIES "${TORCHSKY_NVRTC_LIBRARY}"
+    )
+endif()
+
 find_package(Torch REQUIRED)
 
 # Some distributions ship a Torch CMake target with include paths that may be missing.
