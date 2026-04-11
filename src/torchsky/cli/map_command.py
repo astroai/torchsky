@@ -24,6 +24,7 @@ from ..map import (
     plan_image_plane_target,
     render_field_observation,
 )
+from ..filter_profiles import field_observation_spectral_kwargs, resolve_inr_bandpass
 
 # Minimal bandpass hints for INR when FITS headers lack spectral metadata (Angstrom).
 _INR_BAND_TABLE: dict[str, tuple[float, float, float, float]] = {
@@ -63,22 +64,38 @@ def _header_filter_keyword(header: dict) -> str | None:
     return None
 
 
-def _spectral_field_kwargs(band: str) -> dict:
-    u = band.upper()
-    if u not in _INR_BAND_TABLE:
-        raise ValueError(
-            f"Unknown filter/band {band!r} for INR; extend _INR_BAND_TABLE or pass "
-            "a known JWST-style name (e.g. F277W)."
+def _inr_spectral_field_kwargs(args: argparse.Namespace, band: str) -> dict:
+    """Spectral keyword args for :class:`FieldObservation` (INR only)."""
+    try:
+        raw = resolve_inr_bandpass(
+            source=str(args.inr_spectral_source),
+            band_name=str(band).strip().upper(),
+            builtin_table=_INR_BAND_TABLE,
+            svo_facility=str(args.svo_facility),
+            svo_instrument=str(args.svo_instrument),
+            svo_filter_id=args.svo_filter_id,
+            svo_prefer=str(args.svo_prefer),
+            transmission_path=args.inr_transmission,
+            transmission_dir=args.inr_transmission_dir,
+            transmission_unit=str(args.inr_transmission_unit),
+            gaussian_lambda_eff=args.inr_gaussian_lambda_eff,
+            gaussian_lambda_min=args.inr_gaussian_lambda_min,
+            gaussian_lambda_max=args.inr_gaussian_lambda_max,
+            gaussian_sigma=args.inr_gaussian_sigma,
         )
-    smin, smax, tc, ts = _INR_BAND_TABLE[u]
-    return {
-        "spectral_min": smin,
-        "spectral_max": smax,
-        "transmission_center": tc,
-        "transmission_sigma": ts,
-        "wavelength": tc,
-        "band_name": u,
-    }
+    except ImportError as exc:
+        raise SystemExit(str(exc)) from exc
+    except ValueError as exc:
+        raise SystemExit(f"torchsky map inr: {exc}") from exc
+    fid = raw.get("svo_filter_id")
+    if str(args.inr_spectral_source) == "svo" and fid and not getattr(
+        args, "inr_quiet_svo", False
+    ):
+        print(
+            f"torchsky map inr: SVO bandpass {str(band).upper()} -> {fid}",
+            file=sys.stderr,
+        )
+    return field_observation_spectral_kwargs(raw)
 
 
 def _map_read_device_str(args: argparse.Namespace) -> str:
@@ -92,10 +109,10 @@ def _paths_to_field_observations(
     paths: Sequence[str],
     *,
     hdu: int,
-    band: str,
+    spectral_kw: dict,
     read_device: str,
 ) -> list[FieldObservation]:
-    skw = _spectral_field_kwargs(band)
+    skw = spectral_kw
     out: list[FieldObservation] = []
     for p in paths:
         img, hdr = read(p, hdu=hdu, return_header=True, device=read_device)
@@ -221,7 +238,6 @@ def _run_inr(args: argparse.Namespace) -> int:
         rc = 0
         out_path = Path(args.output)
         for fk, gpaths in sorted(groups.items()):
-            band = fk if fk in _INR_BAND_TABLE else args.inr_band
             if fk == "UNKNOWN" and args.inr_band is None:
                 print(
                     f"torchsky map inr: skip UNKNOWN filter group ({len(gpaths)} files); "
@@ -229,6 +245,7 @@ def _run_inr(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
                 continue
+            band = str(args.inr_band).upper() if fk == "UNKNOWN" else str(fk).upper()
             sub_out = (
                 out_path / f"{_safe_name(fk)}.fits"
                 if out_path.suffix == "" or out_path.is_dir()
@@ -255,16 +272,22 @@ def _run_inr_single(args: argparse.Namespace) -> int:
     if args.inr_band is None:
         _, h0 = read(inputs[0], hdu=args.hdu, return_header=True, device=read_dev)
         fk = _header_filter_keyword(dict(h0))
-        if fk is None or fk not in _INR_BAND_TABLE:
+        if fk is None:
             raise SystemExit(
-                "INR requires --inr-band (e.g. F277W) or FITS FILTER/FILTNAM in table"
+                "INR requires --inr-band (e.g. F277W) or FITS FILTER/FILTNAM in header"
             )
-        band = fk
+        band = str(fk).upper()
+        if str(args.inr_spectral_source) == "builtin" and band not in _INR_BAND_TABLE:
+            raise SystemExit(
+                f"Band {band!r} not in builtin INR table; use --inr-spectral-source=svo, "
+                "file, or gaussian, or pass --inr-band with a known name"
+            )
     else:
         band = str(args.inr_band).upper()
 
+    skw = _inr_spectral_field_kwargs(args, band)
     fields = _paths_to_field_observations(
-        inputs, hdu=args.hdu, band=band, read_device=read_dev
+        inputs, hdu=args.hdu, spectral_kw=skw, read_device=read_dev
     )
     image_obs = [ImageObservation(path=p, hdu=args.hdu) for p in inputs]
     pr = int(args.plan_reference)
@@ -298,7 +321,6 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         observations_per_step=min(len(fields), int(args.inr_obs_per_step)),
         device=args.device,
     )
-    skw = _spectral_field_kwargs(band)
     dev = module_compute_device(model)
     target_obs = FieldObservation(
         image=torch.zeros((h, w), dtype=torch.float32, device=dev),
@@ -423,6 +445,96 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Field model kind for make_field_model (inr)",
     )
     p.add_argument("--inr-band", default=None, help="Filter name for bandpass, e.g. F277W (inr)")
+    p.add_argument(
+        "--inr-spectral-source",
+        choices=("svo", "builtin", "file", "gaussian"),
+        default="svo",
+        help=(
+            "How to set FieldObservation spectral metadata for INR: "
+            "svo=astroquery SVO FPS (default; needs pip install astroquery), "
+            "builtin=small JWST table in torchsky, "
+            "file=two-column wavelength transmission table, "
+            "gaussian=effective wavelength + min/max (Gaussian sigma from width or --inr-gaussian-sigma)"
+        ),
+    )
+    p.add_argument(
+        "--svo-facility",
+        default="JWST",
+        help="SVO get_filter_list facility (inr --inr-spectral-source=svo)",
+    )
+    p.add_argument(
+        "--svo-instrument",
+        default="NIRCAM",
+        help="SVO get_filter_list instrument (inr --inr-spectral-source=svo)",
+    )
+    p.add_argument(
+        "--svo-filter-id",
+        default=None,
+        metavar="ID",
+        help=(
+            "Exact SVO filterID (e.g. JWST/NIRCam.F277W); if set, transmission is "
+            "downloaded for this ID (--inr-band still labels band_name)"
+        ),
+    )
+    p.add_argument(
+        "--svo-prefer",
+        choices=("classic", "2025", "any"),
+        default="classic",
+        help="When multiple SVO rows match a band token, prefer classic vs NIRCam2025 (inr)",
+    )
+    p.add_argument(
+        "--inr-transmission",
+        type=Path,
+        default=None,
+        help="Two-column wavelength, transmission file (inr --inr-spectral-source=file)",
+    )
+    p.add_argument(
+        "--inr-transmission-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory with {BAND}.txt|dat|csv per filter (inr --per-filter + file source)"
+        ),
+    )
+    p.add_argument(
+        "--inr-transmission-unit",
+        choices=("angstrom", "nm"),
+        default="angstrom",
+        help="Wavelength unit in --inr-transmission file columns (inr)",
+    )
+    p.add_argument(
+        "--inr-gaussian-lambda-eff",
+        type=float,
+        default=None,
+        metavar="ANGSTROM",
+        help="Effective wavelength (Å) for gaussian spectral source (inr)",
+    )
+    p.add_argument(
+        "--inr-gaussian-lambda-min",
+        type=float,
+        default=None,
+        metavar="ANGSTROM",
+        help="Bandpass lower edge (Å) for gaussian spectral source (inr)",
+    )
+    p.add_argument(
+        "--inr-gaussian-lambda-max",
+        type=float,
+        default=None,
+        metavar="ANGSTROM",
+        help="Bandpass upper edge (Å) for gaussian spectral source (inr)",
+    )
+    p.add_argument(
+        "--inr-gaussian-sigma",
+        type=float,
+        default=None,
+        metavar="ANGSTROM",
+        help="Gaussian transmission sigma (Å); default from lambda_max-lambda_min FWHM (inr)",
+    )
+    p.add_argument(
+        "--inr-quiet-svo",
+        action="store_true",
+        help="Do not log resolved SVO filterID to stderr (inr)",
+    )
     p.add_argument("--inr-steps", type=int, default=80)
     p.add_argument("--inr-lr", type=float, default=5.0e-3)
     p.add_argument(

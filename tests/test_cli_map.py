@@ -15,6 +15,7 @@ def test_map_parser_defaults():
     assert args.weights is None
     assert args.stack == "weighted_mean"
     assert args.kernel == "bilinear"
+    assert args.inr_spectral_source == "svo"
 
 @mock.patch("torchsky.cli.map_command._expand_inputs")
 def test_dispatch_map_weights_mismatch(mock_expand):
