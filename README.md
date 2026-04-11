@@ -16,9 +16,13 @@ Torch-native sky data, coordinates, geometry, mapmaking, and catalog workflows.
 
 ## Install
 
+From PyPI:
+
 ```bash
 pip install torchsky
 ```
+
+Building from source (editable install, CUDA/conda notes, vendoring): see [`docs/install.md`](docs/install.md).
 
 ## Quick Examples
 

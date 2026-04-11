@@ -20,8 +20,27 @@ To build `torchsky` from source, you'll need a C++ compiler and CMake.
 
 - Python 3.10+ (matches `requires-python` in `pyproject.toml`)
 - C++17 compatible compiler (GCC, Clang, MSVC)
-- CMake 3.21+
+- CMake 3.15+ (as in the top-level `CMakeLists.txt`; use a recent release when building against current PyTorch/CUDA)
 - Ninja (recommended)
+- **Python build backend** (see below): `scikit-build-core`, `nanobind`, plus runtime deps `torch` and `numpy` (versions in `pyproject.toml`)
+
+#### Build-backend packages (pip without pixi)
+
+The package uses **scikit-build-core** as the build backend. With default `pip install -e .`, pip creates an isolated build environment and installs those requirements automatically.
+
+If you install **without** build isolation (`--no-build-isolation`), you must have the backend and build-time deps available in the **same** environment as the interpreter:
+
+```bash
+python -m pip install "scikit-build-core>=0.11.6" "nanobind>=2.10.2" "torch>=2.0.0" "numpy>=1.20.0"
+```
+
+Exact pins match `[build-system].requires` in `pyproject.toml`.
+
+Optional extras (from `pyproject.toml`):
+
+- **`map`**: `astropy` and `astroquery` for ``torchsky map --method inr`` with the default
+  ``--inr-spectral-source=svo`` (SVO filter profiles). Install with
+  `pip install 'torchsky[map]'` when using PyPI wheels, or install those packages in your env.
 
 ### Steps
 
@@ -45,17 +64,42 @@ To build `torchsky` from source, you'll need a C++ compiler and CMake.
 
 3.  **Install:**
 
-    You can then install the package using `pip` in editable mode for development:
+    Editable install (typical development):
 
     ```bash
     pip install -e .
     ```
 
-    Or build a release version:
+    Non-editable:
 
     ```bash
     pip install .
     ```
+
+#### Pip only (no Pixi / no conda env manager)
+
+The commands above are enough when pip can supply an isolated build env. If you already have **PyTorch from conda** (or another layout where system headers and `site-packages/torch` can disagree), prefer:
+
+```bash
+python -m pip install --no-build-isolation -e .
+```
+
+after installing `scikit-build-core` and `nanobind` into that environment (see **Build-backend packages**). Default isolation can pull a second Torch into `/tmp/...` and the C++ build may see **two different Torch include trees**, which fails with conflicting declarations.
+
+If your conda base is **not writable**, use a virtual environment, `pip install --user`, or install with a conda tool you control; otherwise installation may fail when copying artifacts into `site-packages`.
+
+#### CUDA-enabled PyTorch
+
+If `torch.version.cuda` is set, CMake must find a **CUDA toolkit** compatible with your PyTorch build (headers, `nvcc`, NVRTC). On conda, `nvcc` is often present while **`CUDA_HOME` is unset**, which breaks `find_package(Torch)`. Point CMake at your toolkit root before building, for example:
+
+```bash
+export CUDA_HOME="${CONDA_PREFIX}"   # conda base or active env prefix
+# optional, helps some layouts:
+export CUDAToolkit_ROOT="${CUDA_HOME}"
+python -m pip install --no-build-isolation -e .
+```
+
+Adjust `CUDA_HOME` if your toolkit lives elsewhere (e.g. `/usr/local/cuda`). CPU-only PyTorch wheels do not need this.
 
 ### Troubleshooting
 
@@ -64,3 +108,15 @@ To build `torchsky` from source, you'll need a C++ compiler and CMake.
 
 - **Compiler Errors?**
   Verify your C++ compiler supports C++17. On macOS, ensure Xcode Command Line Tools are installed (`xcode-select --install`).
+
+- **`BackendUnavailable: Cannot import 'scikit_build_core.build'`** with `--no-build-isolation`?
+  Install `scikit-build-core` (and `nanobind`) into the active environment, then retry.
+
+- **Torch header conflicts** (`torch/types.h` redeclarations, two include roots)?
+  Use `--no-build-isolation` so the build uses a single Torch install (common with conda PyTorch).
+
+- **CMake / PyTorch: CUDA or `CUDA::nvrtc` errors** with a GPU build of PyTorch?
+  Set `CUDA_HOME` (and optionally `CUDAToolkit_ROOT`) to a full toolkit layout; ensure NVRTC is installed (conda: `cuda-nvrtc` / toolkit metapackage as appropriate for your channel).
+
+- **Permission denied** installing into conda `site-packages`?
+  Use a venv, `pip install --user`, or install with a writable prefix.
