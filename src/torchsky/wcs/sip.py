@@ -247,10 +247,10 @@ class SIP:
         def eval_poly_scalar(pq, c):
             if c.numel() == 0:
                 return torch.tensor(0.0, device=uv.device, dtype=uv.dtype)
-            p = pq[:, 0]
-            q = pq[:, 1]
+            p = pq[:, 0].to(device=uv.device)
+            q = pq[:, 1].to(device=uv.device)
             basis = up[p] * vp[q]
-            return torch.dot(c.to(uv.dtype), basis)
+            return torch.dot(c.to(device=uv.device, dtype=uv.dtype), basis)
 
         f_uv = eval_poly_scalar(self._a_pq, self._a_c)
         g_uv = eval_poly_scalar(self._b_pq, self._b_c)
@@ -321,10 +321,11 @@ class SIP:
         def eval_poly(pq, c):
             if c.numel() == 0:
                 return torch.zeros_like(u)
-            p = pq[:, 0]
-            q = pq[:, 1]
+            dev = u_stack.device
+            p = pq[:, 0].to(device=dev)
+            q = pq[:, 1].to(device=dev)
             basis = u_stack.index_select(0, p) * v_stack.index_select(0, q)
-            coeffs = c.to(u.dtype).reshape((-1,) + (1,) * u.ndim)
+            coeffs = c.to(device=dev, dtype=u.dtype).reshape((-1,) + (1,) * u.ndim)
             return torch.sum(coeffs * basis, dim=0)
 
         f_uv = eval_poly(self._a_pq, self._a_c)
@@ -443,10 +444,11 @@ class SIP:
         def eval_poly(pq, c):
             if c.numel() == 0:
                 return torch.zeros_like(u)
-            p = pq[:, 0]
-            q = pq[:, 1]
+            dev = u_stack.device
+            p = pq[:, 0].to(device=dev)
+            q = pq[:, 1].to(device=dev)
             basis = u_stack.index_select(0, p) * v_stack.index_select(0, q)
-            coeffs = c.to(u.dtype).reshape((-1,) + (1,) * u.ndim)
+            coeffs = c.to(device=dev, dtype=u.dtype).reshape((-1,) + (1,) * u.ndim)
             return torch.sum(coeffs * basis, dim=0)
 
         delta_u = eval_poly(self._ap_pq, self._ap_c)

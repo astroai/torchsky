@@ -1826,6 +1826,8 @@ class WCS:
         self._cos_dec_p = self._cos_dec_p.to(self.device)
         if self.tpv is not None:
             self.tpv.to(self.device)
+        if self.sip is not None:
+            self.sip.to(self.device)
         return self
 
     def pixel_to_world(self, *args, **kwargs) -> Union[Tensor, Tuple[Tensor, ...]]:
