@@ -1941,9 +1941,11 @@ class HDUList:
 
             row = [idx, name, hdu_type, cards, dims, fmt]
             html.append("<tr>")
+            import html as pyhtml
             for val, s in zip(row, styles):
+                escaped_val = pyhtml.escape(str(val))
                 html.append(
-                    f"<td style='{s} padding: 4px; border-bottom: 1px solid #eee;'>{val}</td>"
+                    f"<td style='{s} padding: 4px; border-bottom: 1px solid #eee;'>{escaped_val}</td>"
                 )
             html.append("</tr>")
 
