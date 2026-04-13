@@ -84,10 +84,12 @@ def log_spectral_encoding(
     scales = base ** torch.arange(
         num_frequencies, dtype=coord.dtype, device=coord.device
     )
-    feats = [coord]
-    for scale in scales:
-        feats.extend([torch.sin(scale * coord), torch.cos(scale * coord)])
-    return torch.stack(feats, dim=-1)
+    # Vectorize the scale multiplication and sin/cos application using broadcasting
+    scaled = coord.unsqueeze(-1) * scales
+    fourier_feats = torch.stack(
+        [torch.sin(scaled), torch.cos(scaled)], dim=-1
+    ).flatten(start_dim=-2)
+    return torch.cat([coord.unsqueeze(-1), fourier_feats], dim=-1)
 
 
 class SineLayer(nn.Module):
