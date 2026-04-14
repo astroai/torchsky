@@ -1,0 +1,4 @@
+## 2025-02-20 - Insecure Deserialization via torch.load
+**Vulnerability:** Found `torch.load` being used with `weights_only=False` in `load_strainer_trunk_checkpoint` (`src/torchsky/map/field/core.py`). This allows arbitrary code execution if a user loads a maliciously crafted checkpoint, due to the underlying use of Python's `pickle`.
+**Learning:** Legacy PyTorch defaults (pre-2.4) or explicit overrides can introduce critical Remote Code Execution (RCE) vectors via untrusted models. The codebase specifically intended to only load model weights but inadvertently permitted arbitrary object instantiation.
+**Prevention:** Always enforce `weights_only=True` when using `torch.load` unless absolutely necessary and only when loading from strictly trusted sources. Avoid using `pickle` for untrusted data serialization entirely.
