@@ -1,6 +1,9 @@
 import pytest
 import numpy as np
 import torch
+import os
+import tempfile
+import pickle
 from torchsky.hdu import TableHDU
 
 
@@ -63,9 +66,6 @@ def test_evaluate_where_direct():
     mask = evaluate_where(ast, data_nulls)
     np.testing.assert_array_equal(mask, [True, False, True])
 
-import os
-import tempfile
-import pickle
 
 class MockModel:
     def load_trunk_state_dict(self, state_dict, strict=True):
