@@ -2240,7 +2240,8 @@ def load_strainer_trunk_checkpoint(
         raise TypeError(
             "model must implement load_trunk_state_dict() (e.g. StrainerSkyEncoderMLPField)"
         )
-    payload = torch.load(path, map_location=map_location, weights_only=False)
+    # 🛡️ Sentinel: Enforce secure deserialization
+    payload = torch.load(path, map_location=map_location, weights_only=True)
     if not isinstance(payload, dict) or "trunk" not in payload:
         raise ValueError("checkpoint must be a dict with a 'trunk' key")
     fmt = payload.get("format")
