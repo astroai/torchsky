@@ -20,6 +20,7 @@ _GAUSS_FWHM_SIGMA = 2.0 * math.sqrt(2.0 * math.log(2.0))
 
 def field_observation_spectral_kwargs(spec: dict[str, Any]) -> dict[str, Any]:
     """Map a resolved bandpass dict to :class:`FieldObservation` keyword args."""
+    import numpy as np
     out: dict[str, Any] = {
         "wavelength": float(spec["wavelength"]),
         "spectral_min": float(spec["spectral_min"]),
