@@ -149,6 +149,9 @@ def main() -> int:
             os.environ["TORCHSKY_SCALAR_ALM2MAP_CPP"] = "1"
         elif prev_cpp_env is not None:
             os.environ["TORCHSKY_SCALAR_ALM2MAP_CPP"] = "0"
+        hp = None
+        if backend == "healpy":
+            import healpy as hp  # type: ignore
         try:
             if False:  # Skip scalar for now to avoid OOM in matrix path
                 t = _time_many(
@@ -259,16 +262,25 @@ def main() -> int:
                     )
                 )
 
-            t = _time_many(
-                lambda: map2alm_spin(
-                    qu_vals,
-                    spin=args.spin,
-                    nside=args.nside,
-                    lmax=args.lmax,
-                    backend=backend_impl,
-                ),
-                runs=args.runs,
-            )
+            if backend == "healpy":
+                qu_np = qu_vals.detach().cpu().numpy()
+
+                def _hp_map2alm_spin() -> None:
+                    hp.map2alm_spin(  # type: ignore[union-attr]
+                        qu_np, spin=args.spin, lmax=args.lmax
+                    )
+
+                t = _time_many(_hp_map2alm_spin, runs=args.runs)
+            else:
+                t = _time_many(
+                    lambda: map2alm_spin(
+                        qu_vals,
+                        spin=args.spin,
+                        nside=args.nside,
+                        lmax=args.lmax,
+                    ),
+                    runs=args.runs,
+                )
             r = Row(
                 "map2alm_spin", backend, args.nside, args.lmax, npix, t, npix / t / 1e6
             )
@@ -278,16 +290,29 @@ def main() -> int:
                 flush=True,
             )
 
-            t = _time_many(
-                lambda: alm2map_spin(
-                    (spin_alm_e, spin_alm_b),
-                    nside=args.nside,
-                    spin=args.spin,
-                    lmax=args.lmax,
-                    backend=backend_impl,
-                ),
-                runs=args.runs,
-            )
+            if backend == "healpy":
+                ae_np = spin_alm_e.detach().cpu().numpy()
+                ab_np = spin_alm_b.detach().cpu().numpy()
+
+                def _hp_alm2map_spin() -> None:
+                    hp.alm2map_spin(  # type: ignore[union-attr]
+                        [ae_np, ab_np],
+                        nside=args.nside,
+                        spin=args.spin,
+                        lmax=args.lmax,
+                    )
+
+                t = _time_many(_hp_alm2map_spin, runs=args.runs)
+            else:
+                t = _time_many(
+                    lambda: alm2map_spin(
+                        (spin_alm_e, spin_alm_b),
+                        nside=args.nside,
+                        spin=args.spin,
+                        lmax=args.lmax,
+                    ),
+                    runs=args.runs,
+                )
             r = Row(
                 "alm2map_spin", backend, args.nside, args.lmax, npix, t, npix / t / 1e6
             )

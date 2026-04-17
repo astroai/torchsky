@@ -84,7 +84,7 @@ def test_compat_query_circle_vec_strict_mode_matches_hpgeom() -> None:
 
 def test_compat_query_ellipse_calls_geometry_implementation() -> None:
     out_compat = compat.query_ellipse(
-        32, 10.0, -20.0, 6.0, 2.5, pa_deg=35.0, nest=False, backend="torch"
+        32, 10.0, -20.0, 6.0, 2.5, pa_deg=35.0, nest=False
     )
     out_geom = geom_query_ellipse(32, 10.0, -20.0, 6.0, 2.5, pa_deg=35.0, nest=False)
     torch.testing.assert_close(out_compat, out_geom)
@@ -191,8 +191,7 @@ def test_compat_query_ellipse_return_ranges_and_theta_phi_units() -> None:
         fact=4,
         lonlat=False,
         degrees=False,
-        backend="torch",
-    )
+            )
     exp_tf = torch.as_tensor(
         hpg.query_ellipse(
             nside,
@@ -360,7 +359,7 @@ def test_compat_sphtfunc_aliases() -> None:
     nside = 8
     npix = hp.nside2npix(nside)
     m = torch.linspace(-1.0, 1.0, steps=npix, dtype=torch.float64)
-    sm = compat.smoothing(m, fwhm=np.deg2rad(30.0 / 60.0), lmax=lmax, backend="torch")
+    sm = compat.smoothing(m, fwhm=np.deg2rad(30.0 / 60.0), lmax=lmax)
     assert sm.shape == m.shape
 
 

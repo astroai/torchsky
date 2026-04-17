@@ -97,6 +97,51 @@ def test_projection_forward_matches_astropy(projection: str, origin: int) -> Non
 
 @pytest.mark.parametrize("projection", PROJECTIONS)
 @pytest.mark.parametrize("origin", [0, 1])
+def test_projection_forward_stack_tensor_matches_astropy(
+    projection: str, origin: int
+) -> None:
+    """Stacked (N, 2) pixel tensor path must match Astropy (same as two-arg semantics)."""
+    header = _make_header(projection)
+    awcs = AstropyWCS(header)
+    twcs = TorchWCS(dict(header))
+
+    x, y = _sample_pixels(header)
+    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
+    pixels = torch.stack([torch.from_numpy(x), torch.from_numpy(y)], dim=-1)
+    world = twcs.pixel_to_world(pixels, origin=origin)
+    ra_t_np = world[..., 0].cpu().numpy().reshape(-1)
+    dec_t_np = world[..., 1].cpu().numpy().reshape(-1)
+
+    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
+    valid &= np.isfinite(ra_t_np) & np.isfinite(dec_t_np)
+    assert np.any(valid), f"No finite parity points for projection={projection}"
+
+    dra = _ra_wrap_delta(ra_t_np[valid], ra_ast[valid])
+    ddec = dec_t_np[valid] - dec_ast[valid]
+
+    np.testing.assert_allclose(dra, 0.0, atol=5e-9)
+    np.testing.assert_allclose(ddec, 0.0, atol=5e-9)
+
+
+@pytest.mark.parametrize("projection", PROJECTIONS)
+@pytest.mark.parametrize("origin", [0, 1])
+def test_projection_forward_stack_matches_separate_args(
+    projection: str, origin: int
+) -> None:
+    """(N, 2) tensor path agrees with ``pixel_to_world(x, y)`` (dispatch sanity)."""
+    header = _make_header(projection)
+    twcs = TorchWCS(dict(header))
+    x, y = _sample_pixels(header)
+    xt = torch.from_numpy(x)
+    yt = torch.from_numpy(y)
+    ra_a, dec_a = twcs.pixel_to_world(xt, yt, origin=origin)
+    world = twcs.pixel_to_world(torch.stack([xt, yt], dim=-1), origin=origin)
+    torch.testing.assert_close(world[..., 0], ra_a, atol=1e-9, rtol=1e-12)
+    torch.testing.assert_close(world[..., 1], dec_a, atol=1e-9, rtol=1e-12)
+
+
+@pytest.mark.parametrize("projection", PROJECTIONS)
+@pytest.mark.parametrize("origin", [0, 1])
 def test_projection_inverse_matches_astropy(projection: str, origin: int) -> None:
     header = _make_header(projection)
     awcs = AstropyWCS(header)
@@ -123,6 +168,102 @@ def test_projection_inverse_matches_astropy(projection: str, origin: int) -> Non
 
     np.testing.assert_allclose(x_t.cpu().numpy(), x[valid], atol=1e-6)
     np.testing.assert_allclose(y_t.cpu().numpy(), y[valid], atol=1e-6)
+
+
+@pytest.mark.parametrize("projection", PROJECTIONS)
+@pytest.mark.parametrize("origin", [0, 1])
+def test_projection_inverse_stack_tensor_matches_astropy(
+    projection: str, origin: int
+) -> None:
+    """Stacked (N, 2) world tensor inverse must match Astropy ``all_world2pix``."""
+    header = _make_header(projection)
+    awcs = AstropyWCS(header)
+    twcs = TorchWCS(dict(header))
+
+    x, y = _sample_pixels(header)
+    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
+
+    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
+    assert np.any(valid), f"No finite inverse points for projection={projection}"
+
+    ra_valid = ra_ast[valid]
+    dec_valid = dec_ast[valid]
+
+    x_ast, y_ast = awcs.all_world2pix(ra_valid, dec_valid, origin)
+    world = torch.stack(
+        [torch.from_numpy(ra_valid), torch.from_numpy(dec_valid)], dim=-1
+    )
+    pix_t = twcs.world_to_pixel(world, origin=origin)
+    x_t = pix_t[..., 0].cpu().numpy().reshape(-1)
+    y_t = pix_t[..., 1].cpu().numpy().reshape(-1)
+
+    np.testing.assert_allclose(x_t, x_ast, atol=1e-6)
+    np.testing.assert_allclose(y_t, y_ast, atol=1e-6)
+
+
+@pytest.mark.parametrize("projection", PROJECTIONS)
+@pytest.mark.parametrize("origin", [0, 1])
+def test_projection_forward_stack_compiled_matches_astropy(
+    projection: str, origin: int
+) -> None:
+    """After ``compile()``, stacked forward path still matches Astropy (legacy gate)."""
+    header = _make_header(projection)
+    awcs = AstropyWCS(header)
+    twcs = TorchWCS(dict(header))
+    try:
+        twcs.compile(mode="reduce-overhead")
+    except Exception:
+        pytest.skip("torch.compile not available")
+
+    x, y = _sample_pixels(header)
+    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
+    pixels = torch.stack([torch.from_numpy(x), torch.from_numpy(y)], dim=-1)
+    world = twcs.pixel_to_world(pixels, origin=origin)
+    ra_t_np = world[..., 0].cpu().numpy().reshape(-1)
+    dec_t_np = world[..., 1].cpu().numpy().reshape(-1)
+
+    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
+    valid &= np.isfinite(ra_t_np) & np.isfinite(dec_t_np)
+    assert np.any(valid), f"No finite parity points for projection={projection}"
+
+    dra = _ra_wrap_delta(ra_t_np[valid], ra_ast[valid])
+    ddec = dec_t_np[valid] - dec_ast[valid]
+
+    np.testing.assert_allclose(dra, 0.0, atol=5e-9)
+    np.testing.assert_allclose(ddec, 0.0, atol=5e-9)
+
+
+@pytest.mark.parametrize("projection", PROJECTIONS)
+@pytest.mark.parametrize("origin", [0, 1])
+def test_projection_inverse_stack_compiled_matches_astropy(
+    projection: str, origin: int
+) -> None:
+    """After ``compile()``, stacked inverse still matches Astropy (legacy gate)."""
+    header = _make_header(projection)
+    awcs = AstropyWCS(header)
+    twcs = TorchWCS(dict(header))
+    try:
+        twcs.compile(mode="reduce-overhead")
+    except Exception:
+        pytest.skip("torch.compile not available")
+
+    x, y = _sample_pixels(header)
+    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
+    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
+    assert np.any(valid), f"No finite inverse points for projection={projection}"
+    ra_v = ra_ast[valid]
+    dec_v = dec_ast[valid]
+
+    x_ast, y_ast = awcs.all_world2pix(ra_v, dec_v, origin)
+    world = torch.stack(
+        [torch.from_numpy(ra_v), torch.from_numpy(dec_v)], dim=-1
+    )
+    pix = twcs.world_to_pixel(world, origin=origin)
+    x_t = pix[..., 0].cpu().numpy().reshape(-1)
+    y_t = pix[..., 1].cpu().numpy().reshape(-1)
+
+    np.testing.assert_allclose(x_t, x_ast, atol=1e-6)
+    np.testing.assert_allclose(y_t, y_ast, atol=1e-6)
 
 
 @pytest.mark.parametrize("projection", ["CEA", "MER"])

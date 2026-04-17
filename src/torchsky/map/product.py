@@ -13,14 +13,8 @@ from torch import Tensor, nn
 import torch.nn.functional as F
 
 from .. import WCS
-from ..device import module_compute_device
 from ..sphere.moc import MOC
 from ..spectral import SpectralAxis
-from .field import (
-    FieldObservation,
-    render_field_observation,
-    render_field_observation_distribution,
-)
 from .image_plane import (
     BandMetadataTable,
     ImageObservation,
@@ -40,6 +34,9 @@ from .image_plane import (
     plan_image_plane_cube_target,
     plan_image_plane_target,
 )
+from .scenes import ContinuousFieldModel, SceneRepresentation, as_scene_representation
+from .solvers import SolverHooks
+from .target import TargetRenderSpec
 
 
 @dataclass(frozen=True)
@@ -66,6 +63,34 @@ class MapProductSpec:
     def n_bands(self) -> int:
         return len(self.bands)
 
+    def target_render_spec(
+        self,
+        *,
+        band_index: int = 0,
+        psf_spec: object | None = None,
+    ) -> TargetRenderSpec:
+        return TargetRenderSpec.from_map_product(
+            self,
+            band_index=band_index,
+            psf_spec=psf_spec,
+        )
+
+    def target_render_specs(
+        self,
+        *,
+        psf_specs: Sequence[object | None] | None = None,
+    ) -> tuple[TargetRenderSpec, ...]:
+        if psf_specs is None:
+            per_band_psf: Sequence[object | None] = (None,) * len(self.bands)
+        else:
+            per_band_psf = tuple(psf_specs)
+            if len(per_band_psf) != len(self.bands):
+                raise ValueError("psf_specs must match MapProductSpec bands")
+        return tuple(
+            self.target_render_spec(band_index=band_index, psf_spec=per_band_psf[band_index])
+            for band_index in range(len(self.bands))
+        )
+
 
 @dataclass
 class MapProductResult:
@@ -79,6 +104,24 @@ class MapProductResult:
     @property
     def n_bands(self) -> int:
         return int(self.data.shape[0])
+
+    def target_render_spec(
+        self,
+        *,
+        band_index: int = 0,
+        psf_spec: object | None = None,
+    ) -> TargetRenderSpec:
+        return self.product.target_render_spec(
+            band_index=band_index,
+            psf_spec=psf_spec,
+        )
+
+    def target_render_specs(
+        self,
+        *,
+        psf_specs: Sequence[object | None] | None = None,
+    ) -> tuple[TargetRenderSpec, ...]:
+        return self.product.target_render_specs(psf_specs=psf_specs)
 
 
 MapUncertaintyMode = Literal["native_inverse_variance", "support_density_proxy"]
@@ -373,63 +416,90 @@ def stack_map_product(
     return _wrap_cube_result(result, product)
 
 
-def render_field_product(
-    model: nn.Module,
+def _coerce_product_plane(
+    rendered: Tensor,
+    *,
+    band_index: int,
+    n_bands: int,
+    shape: tuple[int, int],
+) -> Tensor:
+    if rendered.ndim == 2:
+        if tuple(int(v) for v in rendered.shape) != shape:
+            raise ValueError("scene render plane shape must match MapProductSpec target shape")
+        return rendered
+    if rendered.ndim == 3:
+        if int(rendered.shape[0]) != n_bands:
+            raise ValueError("scene render cube must match MapProductSpec band count")
+        plane = rendered[band_index]
+        if tuple(int(v) for v in plane.shape) != shape:
+            raise ValueError("scene render cube plane shape must match MapProductSpec target shape")
+        return plane
+    raise ValueError("scene render result must be 2D or 3D")
+
+
+def render_scene_product(
+    scene: SceneRepresentation | nn.Module | Tensor,
     product: MapProductSpec,
     *,
+    solver_hooks: SolverHooks | None = None,
     num_spectral_samples: int = 9,
 ) -> MapProductResult:
-    device = module_compute_device(model)
+    scene_representation = as_scene_representation(scene)
     shape = (
         int(product.target_header["NAXIS2"]),
         int(product.target_header["NAXIS1"]),
     )
     planes: list[Tensor] = []
     ivar_planes: list[Tensor] = []
-    for band in product.bands:
-        center = (
-            float(band.transmission_center)
-            if band.transmission_center is not None
-            else _band_center(band)
-        )
-        lower = (
-            float(band.spectral_min)
-            if band.spectral_min is not None
-            else center
-        )
-        upper = (
-            float(band.spectral_max)
-            if band.spectral_max is not None
-            else center
-        )
-        field_observation = FieldObservation(
-            image=torch.zeros(shape, dtype=torch.float32, device=device),
-            header=dict(product.target_header),
-            wavelength=center if lower == upper else center,
-            spectral_min=lower if lower != upper else None,
-            spectral_max=upper if lower != upper else None,
-            transmission_center=band.transmission_center,
-            transmission_sigma=band.transmission_sigma,
-            band_name=band.label,
-        )
-        if (
-            callable(getattr(model, "render_bandpass_distribution", None))
-            or callable(getattr(model, "forward_distribution", None))
-        ):
-            rendered, logvar = render_field_observation_distribution(
-                model,
-                field_observation,
+    target_specs = product.target_render_specs()
+    for band_index, target_spec in enumerate(target_specs):
+        if solver_hooks is not None:
+            rendered = solver_hooks.render_scene(scene_representation, target_spec)
+            plane = _coerce_product_plane(
+                rendered,
+                band_index=band_index,
+                n_bands=product.n_bands,
+                shape=shape,
+            ).to(dtype=torch.float32)
+            if solver_hooks.apply_noise is None:
+                ivar = torch.ones_like(plane, dtype=torch.float32)
+            else:
+                weighted = solver_hooks.apply_noise_model(plane)
+                ivar = torch.where(
+                    weighted > 0.0,
+                    weighted.to(dtype=torch.float32),
+                    torch.ones_like(plane, dtype=torch.float32),
+                )
+        elif isinstance(scene_representation, ContinuousFieldModel):
+            rendered, logvar = scene_representation.render_distribution_to_target(
+                target_spec,
                 num_spectral_samples=num_spectral_samples,
             )
-            ivar_planes.append(torch.exp(-logvar).to(dtype=torch.float32))
+            plane = _coerce_product_plane(
+                rendered,
+                band_index=band_index,
+                n_bands=product.n_bands,
+                shape=shape,
+            ).to(dtype=torch.float32)
+            ivar = torch.exp(
+                -_coerce_product_plane(
+                    logvar,
+                    band_index=band_index,
+                    n_bands=product.n_bands,
+                    shape=shape,
+                )
+            ).to(dtype=torch.float32)
         else:
-            rendered = render_field_observation(
-                model,
-                field_observation,
-                num_spectral_samples=num_spectral_samples,
-            )
-            ivar_planes.append(torch.ones_like(rendered, dtype=torch.float32))
-        planes.append(rendered.to(dtype=torch.float32))
+            rendered = scene_representation.render_to_target(target_spec)
+            plane = _coerce_product_plane(
+                rendered,
+                band_index=band_index,
+                n_bands=product.n_bands,
+                shape=shape,
+            ).to(dtype=torch.float32)
+            ivar = torch.ones_like(plane, dtype=torch.float32)
+        planes.append(plane)
+        ivar_planes.append(ivar)
     data = torch.stack(planes, dim=0)
     return MapProductResult(
         product=product,
@@ -438,6 +508,19 @@ def render_field_product(
         header=dict(product.target_header),
         overlap_count=torch.ones_like(data, dtype=torch.int32),
         coverage_mocs=None,
+    )
+
+
+def render_field_product(
+    model: nn.Module,
+    product: MapProductSpec,
+    *,
+    num_spectral_samples: int = 9,
+) -> MapProductResult:
+    return render_scene_product(
+        model,
+        product,
+        num_spectral_samples=num_spectral_samples,
     )
 
 

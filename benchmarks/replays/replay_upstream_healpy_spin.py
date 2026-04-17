@@ -125,7 +125,6 @@ def _map2alm_case(case: Case, n_points: int, runs: int, seed: int) -> Row:
             lmax=case.lmax,
             mmax=mm,
             nest=case.nest,
-            backend="torch",
         )
 
     def hp_fn():
@@ -186,7 +185,6 @@ def _alm2map_case(case: Case, n_points: int, runs: int, seed: int) -> Row:
             lmax=case.lmax,
             mmax=mm,
             nest=case.nest,
-            backend="torch",
         )
 
     def hp_fn():

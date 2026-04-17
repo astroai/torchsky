@@ -55,6 +55,49 @@ def test_ifu_spectral_axis_last() -> None:
     assert obs[0].spectral_quantity == "energy"
 
 
+def test_bin_edges_carries_shared_and_per_bin_background_maps() -> None:
+    edges = torch.tensor([5000.0, 5100.0, 5200.0])
+    cube = torch.zeros((2, 3, 2), dtype=torch.float32)
+    hdr = make_tangent_plane_header(3, 2)
+    sky = torch.ones((3, 2), dtype=torch.float32)
+    detector = torch.stack(
+        [
+            torch.full((3, 2), 2.0, dtype=torch.float32),
+            torch.full((3, 2), 3.0, dtype=torch.float32),
+        ]
+    )
+
+    obs = field_observations_from_bin_edges(
+        edges,
+        cube,
+        spatial_header=hdr,
+        sky_background=sky,
+        detector_background=detector,
+    )
+
+    torch.testing.assert_close(obs[0].sky_background, sky)
+    torch.testing.assert_close(obs[0].detector_background, detector[0])
+    torch.testing.assert_close(obs[1].detector_background, detector[1])
+
+
+def test_bin_edges_rejects_background_shape_mismatch() -> None:
+    edges = torch.tensor([5000.0, 5100.0, 5200.0])
+    cube = torch.zeros((2, 3, 2), dtype=torch.float32)
+    hdr = make_tangent_plane_header(3, 2)
+
+    try:
+        field_observations_from_bin_edges(
+            edges,
+            cube,
+            spatial_header=hdr,
+            instrument_background=torch.zeros((2, 2), dtype=torch.float32),
+        )
+    except ValueError as exc:
+        assert "instrument_background spatial shape" in str(exc)
+    else:
+        raise AssertionError("expected background shape mismatch to raise")
+
+
 def test_bin_centers_non_contiguous_intervals() -> None:
     centers = torch.tensor([1.0, 10.0])
     widths = torch.tensor([0.2, 0.2])

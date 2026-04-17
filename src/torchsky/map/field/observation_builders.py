@@ -94,6 +94,33 @@ def _per_bin_sigma(
     return out
 
 
+def _per_bin_background(
+    value: Tensor | None,
+    *,
+    name: str,
+    nbin: int,
+    height: int,
+    width: int,
+    device: torch.device,
+) -> Tensor | None:
+    if value is None:
+        return None
+    tensor = torch.as_tensor(value, dtype=torch.float32, device=device)
+    if tensor.ndim == 2:
+        if tuple(int(v) for v in tensor.shape) != (height, width):
+            raise ValueError(
+                f"{name} spatial shape {tuple(tensor.shape)} != {(height, width)}"
+            )
+        return tensor
+    if tensor.ndim == 3:
+        if tuple(int(v) for v in tensor.shape) != (nbin, height, width):
+            raise ValueError(
+                f"{name} shape {tuple(tensor.shape)} != {(nbin, height, width)}"
+            )
+        return tensor
+    raise ValueError(f"{name} must be (H, W) or (n_bin, H, W)")
+
+
 def _field_observations_from_per_bin_bounds(
     spectral_min: Tensor,
     spectral_max: Tensor,
@@ -106,6 +133,9 @@ def _field_observations_from_per_bin_bounds(
     band_name_prefix: str,
     transmission_sigma: Tensor | Sequence[float | None] | float | None,
     psf_sigma_pix: float,
+    sky_background: Tensor | None,
+    instrument_background: Tensor | None,
+    detector_background: Tensor | None,
 ) -> list[FieldObservation]:
     lo = torch.as_tensor(spectral_min, dtype=torch.float64).reshape(-1)
     hi = torch.as_tensor(spectral_max, dtype=torch.float64).reshape(-1)
@@ -184,6 +214,30 @@ def _field_observations_from_per_bin_bounds(
                 )
         else:
             raise ValueError("mask must be (H, W) or (n_bin, H, W)")
+    sky_tensor = _per_bin_background(
+        sky_background,
+        name="sky_background",
+        nbin=nbin,
+        height=h,
+        width=w,
+        device=device,
+    )
+    inst_tensor = _per_bin_background(
+        instrument_background,
+        name="instrument_background",
+        nbin=nbin,
+        height=h,
+        width=w,
+        device=device,
+    )
+    det_tensor = _per_bin_background(
+        detector_background,
+        name="detector_background",
+        nbin=nbin,
+        height=h,
+        width=w,
+        device=device,
+    )
 
     observations: list[FieldObservation] = []
     for i in range(nbin):
@@ -195,10 +249,19 @@ def _field_observations_from_per_bin_bounds(
             img = vals[i]
         wi: Tensor | None = None
         ma: Tensor | None = None
+        sky_i: Tensor | None = None
+        inst_i: Tensor | None = None
+        det_i: Tensor | None = None
         if w_tensor is not None:
             wi = w_tensor[i] if w_tensor.ndim == 3 else w_tensor
         if m_tensor is not None:
             ma = m_tensor[i] if m_tensor.ndim == 3 else m_tensor
+        if sky_tensor is not None:
+            sky_i = sky_tensor[i] if sky_tensor.ndim == 3 else sky_tensor
+        if inst_tensor is not None:
+            inst_i = inst_tensor[i] if inst_tensor.ndim == 3 else inst_tensor
+        if det_tensor is not None:
+            det_i = det_tensor[i] if det_tensor.ndim == 3 else det_tensor
         observations.append(
             FieldObservation(
                 image=img,
@@ -210,6 +273,9 @@ def _field_observations_from_per_bin_bounds(
                 transmission_center=0.5 * (slo + shi),
                 transmission_sigma=sigmas[i],
                 psf_sigma_pix=float(psf_sigma_pix),
+                sky_background=sky_i,
+                instrument_background=inst_i,
+                detector_background=det_i,
                 band_name=f"{band_name_prefix}_{i:06d}",
                 spectral_quantity=spectral_quantity,
             )
@@ -228,6 +294,9 @@ def field_observations_from_bin_edges(
     band_name_prefix: str = "bin",
     transmission_sigma: Tensor | Sequence[float | None] | float | None = None,
     psf_sigma_pix: float = 0.0,
+    sky_background: Tensor | None = None,
+    instrument_background: Tensor | None = None,
+    detector_background: Tensor | None = None,
 ) -> list[FieldObservation]:
     """One :class:`FieldObservation` per bin from native ``bin_edges`` and binned values.
 
@@ -272,6 +341,9 @@ def field_observations_from_bin_edges(
         band_name_prefix=band_name_prefix,
         transmission_sigma=transmission_sigma,
         psf_sigma_pix=psf_sigma_pix,
+        sky_background=sky_background,
+        instrument_background=instrument_background,
+        detector_background=detector_background,
     )
 
 
@@ -287,6 +359,9 @@ def field_observations_from_bin_centers(
     band_name_prefix: str = "bin",
     transmission_sigma: Tensor | Sequence[float | None] | float | None = None,
     psf_sigma_pix: float = 0.0,
+    sky_background: Tensor | None = None,
+    instrument_background: Tensor | None = None,
+    detector_background: Tensor | None = None,
 ) -> list[FieldObservation]:
     """Top-hat bins ``[center - width/2, center + width/2]`` (e.g. PHA summaries).
 
@@ -325,6 +400,9 @@ def field_observations_from_bin_centers(
         band_name_prefix=band_name_prefix,
         transmission_sigma=transmission_sigma,
         psf_sigma_pix=psf_sigma_pix,
+        sky_background=sky_background,
+        instrument_background=instrument_background,
+        detector_background=detector_background,
     )
 
 
@@ -340,6 +418,9 @@ def field_observations_from_ifu_cube(
     band_name_prefix: str = "ifu",
     transmission_sigma: Tensor | Sequence[float | None] | float | None = None,
     psf_sigma_pix: float = 0.0,
+    sky_background: Tensor | None = None,
+    instrument_background: Tensor | None = None,
+    detector_background: Tensor | None = None,
 ) -> list[FieldObservation]:
     """IFU / image-spectral cube: ``(..., L, ...)`` with spectral axis at ``spectral_axis``.
 
@@ -362,4 +443,7 @@ def field_observations_from_ifu_cube(
         band_name_prefix=band_name_prefix,
         transmission_sigma=transmission_sigma,
         psf_sigma_pix=psf_sigma_pix,
+        sky_background=sky_background,
+        instrument_background=instrument_background,
+        detector_background=detector_background,
     )

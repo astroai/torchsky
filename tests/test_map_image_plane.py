@@ -729,6 +729,8 @@ def test_sample_image_plane_batched_channels_matches_separate_sampling(
         "catmull_rom",
         "drizzle_point",
         "drizzle_square",
+        "splat_point",
+        "splat_box",
     ],
 )
 def test_coadd_image_plane_accepts_custom_high_accuracy_kernels(
@@ -752,8 +754,11 @@ def test_coadd_image_plane_accepts_custom_high_accuracy_kernels(
     assert torch.isfinite(result.data).all()
 
 
-@pytest.mark.parametrize("kernel", ["drizzle_point", "drizzle_square"])
-def test_coadd_image_plane_drizzle_kernels_bypass_grid_sample(
+@pytest.mark.parametrize(
+    "kernel",
+    ["drizzle_point", "drizzle_square", "conservative_polygon", "splat_point", "splat_box"],
+)
+def test_coadd_image_plane_forward_geometry_kernels_bypass_grid_sample(
     tmp_path: Path,
     monkeypatch,
     kernel: str,
@@ -785,43 +790,57 @@ def test_coadd_image_plane_drizzle_kernels_bypass_grid_sample(
     assert not calls
 
 
-def test_coadd_image_plane_drizzle_kernel_uses_exact_external_path_when_available(
+def test_coadd_image_plane_conservative_polygon_preserves_shifted_support_and_finite_output(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    path_a = tmp_path / "drizzle_exact_a.fits"
-    path_b = tmp_path / "drizzle_exact_b.fits"
-    header_a = _simple_header()
-    header_b = dict(header_a)
-    header_b["CRVAL1"] = float(header_b["CRVAL1"]) + 0.02
+    path = tmp_path / "conservative_polygon_identity.fits"
+    header = _simple_header()
+    target_header = dict(header)
+    target_header["CRVAL1"] = float(target_header["CRVAL1"]) + 0.01
     data = torch.arange(64, dtype=torch.float32).reshape(8, 8)
-    torchsky.write(str(path_a), data, header=header_a, overwrite=True)
-    torchsky.write(str(path_b), data + 1.0, header=header_b, overwrite=True)
-
-    calls: list[str] = []
-
-    def fake_exact(*args, **kwargs):
-        calls.append(f"{kwargs['resampling_kernel']}:{kwargs['drizzle_pixfrac']:.3f}")
-        shape = kwargs["target_shape"]
-        weight = torch.ones(shape, dtype=torch.float32)
-        return torch.full(shape, 5.0, dtype=torch.float32), weight
-
-    monkeypatch.setattr(
-        image_plane_mod,
-        "_maybe_external_drizzle_resample_weighted_to_target",
-        fake_exact,
-    )
+    torchsky.write(str(path), data, header=header, overwrite=True)
 
     result = coadd_image_plane(
-        [ImageObservation(str(path_a)), ImageObservation(str(path_b))],
-        resampling_kernel="drizzle_square",
+        [ImageObservation(str(path))],
+        target_header=target_header,
+        resampling_kernel="conservative_polygon",
         value_semantics="surface_brightness",
-        drizzle_pixfrac=0.8,
     )
 
-    assert calls == ["drizzle_square:0.800"]
-    assert result.data.shape == (8, 8)
+    assert torch.isfinite(result.weight).all()
     assert torch.isfinite(result.data).all()
+    support = result.weight > 0.0
+    assert bool(support.any())
+
+
+def test_coadd_image_plane_exact_drizzle_square_preserves_flux_under_shift(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "drizzle_identity.fits"
+    header = _simple_header()
+    target_header = dict(header)
+    target_header["CRVAL1"] = float(target_header["CRVAL1"]) + 0.01
+    data = torch.ones((8, 8), dtype=torch.float32)
+    torchsky.write(str(path), data, header=header, overwrite=True)
+
+    result = coadd_image_plane(
+        [ImageObservation(str(path))],
+        target_header=target_header,
+        resampling_kernel="drizzle_square",
+        value_semantics="surface_brightness",
+        drizzle_pixfrac=1.0,
+    )
+
+    assert torch.isfinite(result.weight).all()
+    assert torch.isfinite(result.data).all()
+    support = result.weight > 0.0
+    assert bool(support.any())
+    torch.testing.assert_close(
+        result.data[support],
+        torch.ones_like(result.data[support]),
+        atol=1e-2,
+        rtol=1e-2,
+    )
 
 
 def test_coadd_fft_shift_matches_bilinear_for_pure_crpix_offset_interior(
@@ -1042,6 +1061,212 @@ def test_coadd_fft_linear_affine_matches_periodic_linear_affine_scaled_cdelta_in
         r_pla.data[inner_y, inner_x][mask],
         atol=0.004,
         rtol=0.02,
+    )
+
+
+def test_coadd_spectral_linear_affine_tracks_bilinear_skewed_cd_interior(
+    tmp_path: Path,
+) -> None:
+    """Global spectral affine remapper should track bilinear on linear rotated grids."""
+    ny, nx = 40, 40
+    base = {
+        "NAXIS": 2,
+        "NAXIS1": nx,
+        "NAXIS2": ny,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": nx / 2.0,
+        "CRPIX2": ny / 2.0,
+        "CRVAL1": 50.0,
+        "CRVAL2": 1.0,
+        "CDELT1": -0.02,
+        "CDELT2": 0.02,
+    }
+    ha = dict(base)
+    th_rad = math.radians(12.0)
+    sc = 0.02
+    ht = {
+        "NAXIS": 2,
+        "NAXIS1": nx,
+        "NAXIS2": ny,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": nx / 2.0,
+        "CRPIX2": ny / 2.0,
+        "CRVAL1": base["CRVAL1"],
+        "CRVAL2": base["CRVAL2"],
+        "CD1_1": -sc * math.cos(th_rad),
+        "CD1_2": sc * math.sin(th_rad),
+        "CD2_1": sc * math.sin(th_rad),
+        "CD2_2": sc * math.cos(th_rad),
+    }
+    yy, xx = torch.meshgrid(
+        torch.arange(ny, dtype=torch.float32),
+        torch.arange(nx, dtype=torch.float32),
+        indexing="ij",
+    )
+    blob = torch.exp(
+        -((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 6.0**2)
+    )
+    path = tmp_path / "skew_spectral.fits"
+    torchsky.write(str(path), blob, header=ha, overwrite=True)
+    obs = [ImageObservation(str(path))]
+    r_spec = coadd_image_plane(
+        obs,
+        target_header=ht,
+        resampling_kernel="spectral_linear_affine",
+    )
+    r_bi = coadd_image_plane(obs, target_header=ht, resampling_kernel="bilinear")
+    inner_y = slice(8, ny - 8)
+    inner_x = slice(8, nx - 8)
+    mask = (r_spec.weight[inner_y, inner_x] > 0.0) & (
+        r_bi.weight[inner_y, inner_x] > 0.0
+    )
+    assert int(mask.sum().item()) > 100
+    torch.testing.assert_close(
+        r_spec.data[inner_y, inner_x][mask],
+        r_bi.data[inner_y, inner_x][mask],
+        atol=0.05,
+        rtol=0.05,
+    )
+
+
+def test_coadd_spectral_linear_affine_zero_boundary_does_not_wrap_corner_source(
+    tmp_path: Path,
+) -> None:
+    ny, nx = 32, 32
+    base = {
+        "NAXIS": 2,
+        "NAXIS1": nx,
+        "NAXIS2": ny,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": nx / 2.0,
+        "CRPIX2": ny / 2.0,
+        "CRVAL1": 180.0,
+        "CRVAL2": 0.0,
+        "CDELT1": -0.02,
+        "CDELT2": 0.02,
+    }
+    ha = dict(base)
+    ht = dict(base)
+    ht["CRPIX1"] = float(ht["CRPIX1"]) + 2.0
+    image = torch.zeros((ny, nx), dtype=torch.float32)
+    image[2, 2] = 1.0
+    path = tmp_path / "spectral_edge.fits"
+    torchsky.write(str(path), image, header=ha, overwrite=True)
+    obs = [ImageObservation(str(path))]
+    r_spec = coadd_image_plane(
+        obs,
+        target_header=ht,
+        resampling_kernel="spectral_linear_affine",
+    )
+    r_bi = coadd_image_plane(obs, target_header=ht, resampling_kernel="bilinear")
+    assert float(r_spec.data[:, -1].abs().max()) < 1e-5
+    torch.testing.assert_close(r_spec.data, r_bi.data, atol=0.03, rtol=0.03)
+
+
+def test_coadd_spectral_nonuniform_tracks_bilinear_on_subpixel_crval_shift(
+    tmp_path: Path,
+) -> None:
+    size = 36
+    ha = {
+        "NAXIS": 2,
+        "NAXIS1": size,
+        "NAXIS2": size,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": size / 2.0,
+        "CRPIX2": size / 2.0,
+        "CRVAL1": 180.0,
+        "CRVAL2": 2.0,
+        "CDELT1": -0.015,
+        "CDELT2": 0.015,
+    }
+    ht = dict(ha)
+    ht["CRVAL1"] = float(ht["CRVAL1"]) + 0.25 * abs(float(ht["CDELT1"]))
+    ht["CRVAL2"] = float(ht["CRVAL2"]) - 0.2 * abs(float(ht["CDELT2"]))
+    yy, xx = torch.meshgrid(
+        torch.arange(size, dtype=torch.float32),
+        torch.arange(size, dtype=torch.float32),
+        indexing="ij",
+    )
+    image = (
+        torch.exp(-((xx - 18.0) ** 2 + (yy - 16.0) ** 2) / (2.0 * 4.5**2))
+        + 0.15 * torch.sin(0.4 * xx)
+        + 0.1 * torch.cos(0.35 * yy)
+    ).to(dtype=torch.float32)
+    path = tmp_path / "tpv_shift_spectral.fits"
+    torchsky.write(str(path), image, header=ha, overwrite=True)
+    obs = [ImageObservation(str(path))]
+    r_spec = coadd_image_plane(
+        obs,
+        target_header=ht,
+        resampling_kernel="spectral_nonuniform",
+    )
+    r_bi = coadd_image_plane(obs, target_header=ht, resampling_kernel="bilinear")
+    inner = (slice(8, size - 8), slice(8, size - 8))
+    mask = (r_spec.weight[inner] > 0.0) & (r_bi.weight[inner] > 0.0)
+    assert int(mask.sum().item()) > 100
+    torch.testing.assert_close(
+        r_spec.data[inner][mask],
+        r_bi.data[inner][mask],
+        atol=0.05,
+        rtol=0.05,
+    )
+
+
+def test_coadd_spectral_nonuniform_fast_tracks_direct_nonuniform_on_subpixel_shift(
+    tmp_path: Path,
+) -> None:
+    size = 36
+    ha = {
+        "NAXIS": 2,
+        "NAXIS1": size,
+        "NAXIS2": size,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": size / 2.0,
+        "CRPIX2": size / 2.0,
+        "CRVAL1": 180.0,
+        "CRVAL2": 2.0,
+        "CDELT1": -0.015,
+        "CDELT2": 0.015,
+    }
+    ht = dict(ha)
+    ht["CRVAL1"] = float(ht["CRVAL1"]) + 0.25 * abs(float(ht["CDELT1"]))
+    ht["CRVAL2"] = float(ht["CRVAL2"]) - 0.2 * abs(float(ht["CDELT2"]))
+    yy, xx = torch.meshgrid(
+        torch.arange(size, dtype=torch.float32),
+        torch.arange(size, dtype=torch.float32),
+        indexing="ij",
+    )
+    image = (
+        torch.exp(-((xx - 18.0) ** 2 + (yy - 16.0) ** 2) / (2.0 * 4.5**2))
+        + 0.15 * torch.sin(0.4 * xx)
+        + 0.1 * torch.cos(0.35 * yy)
+    ).to(dtype=torch.float32)
+    path = tmp_path / "tan_fast_spectral.fits"
+    torchsky.write(str(path), image, header=ha, overwrite=True)
+    obs = [ImageObservation(str(path))]
+    r_fast = coadd_image_plane(
+        obs,
+        target_header=ht,
+        resampling_kernel="spectral_nonuniform_fast",
+    )
+    r_direct = coadd_image_plane(
+        obs,
+        target_header=ht,
+        resampling_kernel="spectral_nonuniform",
+    )
+    inner = (slice(8, size - 8), slice(8, size - 8))
+    mask = (r_fast.weight[inner] > 0.0) & (r_direct.weight[inner] > 0.0)
+    assert int(mask.sum().item()) > 100
+    torch.testing.assert_close(
+        r_fast.data[inner][mask],
+        r_direct.data[inner][mask],
+        atol=0.04,
+        rtol=0.04,
     )
 
 

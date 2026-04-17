@@ -1644,7 +1644,10 @@ void wcs_pixel_to_world_fused_cpu(
     const bool native_is_pole = (native_type == "pole");
     bool use_center_equator_fast = (native_type == "center" && std::abs(delta0) < 1e-12 && (std::abs(std::fmod(phi_p_rad * R2D, 360.0)) < 1e-12 || std::abs(std::abs(std::fmod(phi_p_rad * R2D, 360.0)) - 180.0) < 1e-12));
 
-    for (int64_t i = 0; i < n; ++i) {
+    // CPU-only path: use libtorch intra-op parallel (not OpenMP pragmas) so behavior
+    // stays consistent with other torchsky CPU kernels and does not assume GPU.
+    at::parallel_for(0, n, 4096, [&](int64_t begin, int64_t end) {
+    for (int64_t i = begin; i < end; ++i) {
         // 1. CD Matrix application
         double dx = x_ptr[i] - crpix0;
         double dy = y_ptr[i] - crpix1;
@@ -1672,6 +1675,11 @@ void wcs_pixel_to_world_fused_cpu(
             double r_rad = std::min(r * D2R, 1.0);
             phi = std::atan2(-xi_deg, -eta_deg) * R2D;
             theta = std::acos(r_rad) * R2D;
+        } else if (proj_code == "ARC") {
+            // Zenithal equidistant: R = hypot(xi, eta) in degrees; theta = 90 - R.
+            double r = std::sqrt(xi_deg * xi_deg + eta_deg * eta_deg);
+            phi = std::atan2(-xi_deg, -eta_deg) * R2D;
+            theta = 90.0 - r;
         } else if (proj_code == "CEA") {
             phi = xi_deg;
             double val = std::max(-1.0, std::min(1.0, lambda_param * eta_deg * D2R));
@@ -1766,6 +1774,7 @@ void wcs_pixel_to_world_fused_cpu(
             ra_ptr[i] = std::fmod(std::atan2(Y, X) * R2D + 360.0, 360.0);
         }
     }
+    });
 }
 
 void wcs_world_to_pixel_fused_cpu(
@@ -1795,6 +1804,7 @@ void wcs_world_to_pixel_fused_cpu(
     enum class FusedProjKind {
         TAN,
         SIN,
+        ARC,
         CEA,
         AIT,
         HPX,
@@ -1813,6 +1823,7 @@ void wcs_world_to_pixel_fused_cpu(
     FusedProjKind proj_kind = FusedProjKind::OTHER;
     if (proj_code == "TAN") proj_kind = FusedProjKind::TAN;
     else if (proj_code == "SIN") proj_kind = FusedProjKind::SIN;
+    else if (proj_code == "ARC") proj_kind = FusedProjKind::ARC;
     else if (proj_code == "CEA") proj_kind = FusedProjKind::CEA;
     else if (proj_code == "AIT") proj_kind = FusedProjKind::AIT;
     else if (proj_code == "HPX") proj_kind = FusedProjKind::HPX;
@@ -1898,6 +1909,13 @@ void wcs_world_to_pixel_fused_cpu(
         case FusedProjKind::SIN: {
             double theta_rad = theta * D2R;
             double r = std::cos(theta_rad) * R2D;
+            double phi_rad = phi * D2R;
+            xi = -r * std::sin(phi_rad);
+            eta = -r * std::cos(phi_rad);
+            break;
+        }
+        case FusedProjKind::ARC: {
+            double r = 90.0 - theta;
             double phi_rad = phi * D2R;
             xi = -r * std::sin(phi_rad);
             eta = -r * std::cos(phi_rad);

@@ -122,6 +122,17 @@ bootstrap-map-compat-swarp = "pixi run -e map-compat python scripts/bootstrap_ma
 bootstrap-map-compat-montage = "pixi run -e map-compat python scripts/bootstrap_map_compat_tools.py --tool montage"
 bootstrap-map-compat-casutools = "pixi run -e map-compat python scripts/bootstrap_map_compat_tools.py --tool casutools"
 bench-wcs-legacy = "pixi run -e bench-legacy python benchmarks/bench_all.py --profile user --wcs-only --legacy-wcs"
+# Phase 0 WCS + sphere smoke baselines (see benchmarks/PHASE0_WCS_SPHERE.md); run after `pip install -e .` in bench-all.
+wcs-sphere-phase0 = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --wcs-only --quick --run-id phase0_wcs --output-dir benchmarks_results && pixi run -e bench-all python benchmarks/bench_all.py --profile user --sphere-only --quick --run-id phase0_sphere --output-dir benchmarks_results"
+# Plan §4: Phase 0 quick benches + full WCS/sphere pytest + spin replay (gates off for local acceptance; CI can tighten).
+wcs-sphere-acceptance = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --wcs-only --quick --run-id acceptance_wcs --output-dir benchmarks_results && pixi run -e bench-all python benchmarks/bench_all.py --profile user --sphere-only --quick --run-id acceptance_sphere --output-dir benchmarks_results && pixi run -e bench-all pytest tests/test_wcs_*.py tests/test_sphere_*.py -q --tb=line && pixi run -e bench-all python benchmarks/replays/replay_upstream_healpy_spin.py --runs 2 --disable-gates --json-out benchmarks_results/acceptance_spin_replay.json"
+# Comparator version matrix for open-source tools (see docs/benchmark_comparators.md); run per Pixi env you use for benches.
+bench-comparator-versions = "pixi run -e bench-all python scripts/print_benchmark_comparator_versions.py --json-out benchmarks_results/VERSIONS_comparators_bench-all.json"
+bench-comparator-versions-sphere = "pixi run -e sphere-bench python scripts/print_benchmark_comparator_versions.py --json-out benchmarks_results/VERSIONS_comparators_sphere-bench.json"
+bench-comparator-versions-legacy = "pixi run -e bench-legacy python scripts/print_benchmark_comparator_versions.py --json-out benchmarks_results/VERSIONS_comparators_bench-legacy.json"
+bench-comparator-versions-all = "pixi run bench-comparator-versions && pixi run bench-comparator-versions-sphere && pixi run bench-comparator-versions-legacy"
+# WCS suite with every in-process + legacy-bridge comparator (needs bench-legacy env + kapteyn/pyast).
+bench-wcs-ecosystem = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --wcs-only --legacy-wcs --run-id wcs_ecosystem --output-dir benchmarks_results"
 
 # Comprehensive benchmarks (renamed from exhaustive)
 bench-all = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --scope all"
@@ -259,7 +270,9 @@ cython = "<3.0"
 pytorch = ">=2.0"
 
 [feature.bench-legacy.pypi-dependencies]
-# Empty to allow manual installation of starlink-pyast and kapteyn
+# Kapteyn is not pinned here: its sdist build often fails under isolated solves
+# (requires NumPy at build time). After `pixi install -e bench-legacy`, install when needed:
+#   pixi run -e bench-legacy python -m pip install kapteyn
 
 # Environment definitions
 [environments]

@@ -1,6 +1,6 @@
 import torch
 from torch import Tensor
-from typing import Optional, Union, Tuple, Dict, Any
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 import math
 import os
 
@@ -141,6 +141,13 @@ class WCS:
         self._compiled_transform_fn = None
         self._compiled_pixel_to_world_2d_fn = None
         self._compiled_world_to_pixel_2d_fn = None
+        # Origin -> compiled ``pixels_flat -> world_flat`` for 2D spatial (FITS origin 0/1).
+        self._compiled_stack_pixel_to_world: dict[float, Callable[[Tensor], Tensor]] | None = (
+            None
+        )
+        self._compiled_stack_world_to_pixel: dict[float, Callable[[Tensor], Tensor]] | None = (
+            None
+        )
 
     def _parse_header(self, header: Dict[str, Any]):
         """Parse standard FITS WCS keywords."""
@@ -623,7 +630,18 @@ class WCS:
             and not self._is_zpx
             and (
                 self._proj_code
-                in ("TAN", "SIN", "CEA", "AIT", "HPX", "CAR", "SFL", "MOL", "TPV")
+                in (
+                    "TAN",
+                    "SIN",
+                    "ARC",
+                    "CEA",
+                    "AIT",
+                    "HPX",
+                    "CAR",
+                    "SFL",
+                    "MOL",
+                    "TPV",
+                )
                 or (self._is_tpv and self._proj_code == "TAN")
             )
         )
@@ -637,7 +655,18 @@ class WCS:
             and (not self._is_tpv or not self.tpv._invert_trace_enabled)
             and (
                 self._proj_code
-                in ("TAN", "SIN", "CEA", "AIT", "HPX", "CAR", "SFL", "MOL", "TPV")
+                in (
+                    "TAN",
+                    "SIN",
+                    "ARC",
+                    "CEA",
+                    "AIT",
+                    "HPX",
+                    "CAR",
+                    "SFL",
+                    "MOL",
+                    "TPV",
+                )
                 or (self._is_tpv and self._proj_code == "TAN")
             )
         )
@@ -1089,8 +1118,8 @@ class WCS:
                     )
                 return self._spherical_rotation_optimized(phi, theta, self._native_type)
 
-        # Environment-controlled fused C++ path. Default is False because vectorized
-        # PyTorch + torch.compile is typically 2x-4x faster than the scalar C++ loop.
+        # Fused C++ pixel->world when semantics allow (TORCHSKY_WCS_FUSED). Runs after
+        # cpp_direct so vectorized projection paths stay primary when available.
         use_fused = (
             self._can_use_fused_p2w_static
             and not self._disable_fused_pixel_to_world
@@ -1404,8 +1433,6 @@ class WCS:
             sin_2g = torch.sin(2.0 * gamma)
             cos_2g = torch.cos(2.0 * gamma)
             res = 2.0 * gamma + sin_2g - target
-            if torch.all(torch.abs(res) < 1e-12):
-                break
             gamma = gamma - res / (2.0 + 2.0 * cos_2g + 1e-12)
         xi = 2.0 * self._sqrt2 * phi_rad * torch.cos(gamma) / math.pi * self._r2d
         eta = self._sqrt2 * torch.sin(gamma) * self._r2d
@@ -1429,7 +1456,12 @@ class WCS:
         return xi, eta
 
     def _world_to_pixel_2d_core(
-        self, ra: Tensor, dec: Tensor, origin: float
+        self,
+        ra: Tensor,
+        dec: Tensor,
+        origin: float,
+        *,
+        allow_cpp_inverse_sphere: bool = True,
     ) -> Tuple[Tensor, Tensor]:
         """
         Unified 2D spatial world-to-pixel core.
@@ -1481,7 +1513,9 @@ class WCS:
         if self._use_center_equator_fast:
             phi, theta = _wrap_lon180(ra - self.alpha0), dec
         else:
-            phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
+            phi, theta = self._inverse_spherical_rotation(
+                ra, dec, self._native_type, allow_cpp_inverse_sphere=allow_cpp_inverse_sphere
+            )
 
         # 2. Inverse Projection (Native -> Intermediate)
         if (
@@ -1579,6 +1613,21 @@ class WCS:
         px = rel_x + self._crpix0 - (1.0 - origin)
         py = rel_y + self._crpix1 - (1.0 - origin)
         return px, py
+
+    def _stacked_world_to_pixel_flat(
+        self,
+        world_flat: Tensor,
+        origin: float,
+        *,
+        allow_cpp_inverse_sphere: bool = True,
+    ) -> Tensor:
+        """Fused ``world -> (px, py)`` for stacked 2D spatial + ``torch.compile``."""
+        ra = world_flat[:, 0]
+        dec = world_flat[:, 1]
+        px, py = self._world_to_pixel_2d_core(
+            ra, dec, origin, allow_cpp_inverse_sphere=allow_cpp_inverse_sphere
+        )
+        return torch.stack((px, py), dim=-1)
 
     def _world_to_pixel_2d_fast(
         self, ra: Tensor, dec: Tensor, iterative: bool = True, origin: int = 0
@@ -1793,7 +1842,21 @@ class WCS:
 
     def compile(self, **kwargs):
         """
-        Compile the WCS transform for maximum performance.
+        Wrap the pure-Python 2D spatial cores in ``torch.compile``.
+
+        After ``compile()``, use a **stacked pixel tensor** ``pixel_to_world(pixels)``
+        with ``pixels.shape == (..., 2)`` for 2D spatial WCS. That path prefers a
+        dedicated compiled graph that fuses ``pixels + (1-origin) - CRPIX`` with the
+        transform and uses **pure Torch** pole rotation (no C++ sphere op inside the
+        graph) so ``torch.compile`` can optimize end-to-end. The inverse
+        ``world_to_pixel(world)`` with ``world.shape == (..., 2)`` uses an analogous
+        fused graph with **pure Torch** inverse pole rotation for ``origin`` in
+        ``{0, 1}``. Other ``origin`` values and ``naxis > 2`` still use
+        ``_compiled_transform_fn`` / the general inverse path on intermediate coords.
+
+        The two-argument ``pixel_to_world(x, y)`` shortcut may still use native C++
+        fast paths. Run ``benchmarks/bench_wcs_small_n_paths.py`` for timings vs Astropy.
+
         Args:
             **kwargs: Arguments passed to torch.compile (e.g., mode, options).
         """
@@ -1811,6 +1874,43 @@ class WCS:
         self._compiled_world_to_pixel_2d_fn = torch.compile(
             lambda ra, dec, origin: world_core(ra, dec, origin), **compile_kwargs
         )
+
+        self._compiled_stack_pixel_to_world = {}
+        if self.naxis == 2 and self._is_spatial:
+
+            def _make_stack_fn(o: float) -> Callable[[Tensor], Tensor]:
+                def _fn(pixels_flat: Tensor) -> Tensor:
+                    return self._stacked_pixels_to_world_flat(
+                        pixels_flat, o, allow_cpp_sphere=False
+                    )
+
+                return _fn
+
+            for _origin_key in (0.0, 1.0):
+                self._compiled_stack_pixel_to_world[_origin_key] = torch.compile(
+                    _make_stack_fn(_origin_key), **compile_kwargs
+                )
+        else:
+            self._compiled_stack_pixel_to_world = None
+
+        self._compiled_stack_world_to_pixel = {}
+        if self.naxis == 2 and self._is_spatial:
+
+            def _make_w2p_stack_fn(o: float) -> Callable[[Tensor], Tensor]:
+                def _fn(world_flat: Tensor) -> Tensor:
+                    return self._stacked_world_to_pixel_flat(
+                        world_flat, o, allow_cpp_inverse_sphere=False
+                    )
+
+                return _fn
+
+            for _ow in (0.0, 1.0):
+                self._compiled_stack_world_to_pixel[_ow] = torch.compile(
+                    _make_w2p_stack_fn(_ow), **compile_kwargs
+                )
+        else:
+            self._compiled_stack_world_to_pixel = None
+
         return self
 
     def to(self, device: Union[str, torch.device]):
@@ -1834,7 +1934,7 @@ class WCS:
         """
         Convert pixel coordinates to world coordinates.
         Args:
-           origin: FITS origin (default 0). Set to 1 for FITS 1-based indexing.
+            origin: FITS origin (default 0). Set to 1 for FITS 1-based indexing.
         """
         origin = float(kwargs.get("origin", 0))
         if len(args) == 2 and self.naxis == 2:
@@ -1867,16 +1967,23 @@ class WCS:
             pixels = pixels.to(device=self.device, dtype=torch.float64)
 
         original_shape = pixels.shape
-        pixels_flat = pixels.view(-1, self.naxis)
+        pixels_flat = self._contiguous_if_needed(pixels).reshape(-1, self.naxis)
 
-        # If origin=0, rel = pix + 1 - crpix
-        # If origin=1, rel = pix - crpix
-        rel_flat = pixels_flat + (1 - origin) - self.crpix
+        stack_compiled = self._compiled_stack_pixel_to_world
+        if (
+            stack_compiled is not None
+            and self.naxis == 2
+            and self._is_spatial
+            and origin in stack_compiled
+        ):
+            # Fused ``pixels -> rel -> world`` + Torch-only pole rotation (see ``compile``).
+            world_flat = stack_compiled[origin](pixels_flat)
+        else:
+            # If origin=0, rel = pix + 1 - crpix; if origin=1, rel = pix - crpix
+            rel_flat = pixels_flat + (1 - origin) - self.crpix
+            transform_fn = self._compiled_transform_fn or self._transform_optimized
+            world_flat = transform_fn(rel_flat)
 
-        transform_fn = self._compiled_transform_fn or self._transform_optimized
-        world_flat = transform_fn(rel_flat)
-
-        # Reshape back
         world = world_flat.view(original_shape)
 
         # If input was separate args, return separate results if requested or standard
@@ -1884,11 +1991,16 @@ class WCS:
             return tuple(world[..., i] for i in range(self.naxis))
         return world
 
-    def _transform_optimized(self, rel: Tensor) -> Tensor:
+    def _transform_optimized(
+        self, rel: Tensor, *, allow_cpp_sphere: bool = True
+    ) -> Tensor:
         """
         The hot path for coordinate transformation.
         Input: (N, NAXIS) relative pixels (pix - crpix [internal])
         Output: (N, NAXIS) world
+
+        When ``allow_cpp_sphere`` is False, pole spherical rotation stays in Torch so
+        ``torch.compile`` can fuse the full forward graph (stacked pixel API).
         """
         # 1. Linear Transform (CD @ rel) for first 2 axes
         rel_x = rel[:, 0]
@@ -1923,7 +2035,9 @@ class WCS:
             phi, theta = self._project_native_coords(xi, eta)
 
             # Spherical Rotation (result is in degrees)
-            ra, dec = self._spherical_rotation_optimized(phi, theta, self._native_type)
+            ra, dec = self._spherical_rotation_optimized(
+                phi, theta, self._native_type, allow_cpp_sphere=allow_cpp_sphere
+            )
             results = [ra, dec]
 
         # Handle NAXIS > 2 (e.g. Spectral axis 3)
@@ -1935,8 +2049,24 @@ class WCS:
 
         return torch.stack(results[: self.naxis], dim=-1)
 
+    def _stacked_pixels_to_world_flat(
+        self,
+        pixels_flat: Tensor,
+        origin: float,
+        *,
+        allow_cpp_sphere: bool = True,
+    ) -> Tensor:
+        """Fused ``pixels (internal) -> rel -> world`` for ``torch.compile`` (2D spatial)."""
+        rel = pixels_flat + (1.0 - origin) - self.crpix
+        return self._transform_optimized(rel, allow_cpp_sphere=allow_cpp_sphere)
+
     def _spherical_rotation_optimized(
-        self, phi: Tensor, theta: Tensor, native_type: str = "pole"
+        self,
+        phi: Tensor,
+        theta: Tensor,
+        native_type: str = "pole",
+        *,
+        allow_cpp_sphere: bool = True,
     ) -> Tuple[Tensor, Tensor]:
         """
         Optimized rotation using vector rotation matrix.
@@ -1948,7 +2078,8 @@ class WCS:
             return self._spherical_rotation(phi, theta, native_type)
 
         if (
-            self._cpp_spherical_rotation_pole is not None
+            allow_cpp_sphere
+            and self._cpp_spherical_rotation_pole is not None
             and phi.device.type == "cpu"
             and theta.device.type == "cpu"
             and phi.dtype == torch.float64
@@ -2106,7 +2237,12 @@ class WCS:
         return alpha, delta
 
     def _inverse_spherical_rotation(
-        self, ra: Tensor, dec: Tensor, native_type: str = "pole"
+        self,
+        ra: Tensor,
+        dec: Tensor,
+        native_type: str = "pole",
+        *,
+        allow_cpp_inverse_sphere: bool = True,
     ) -> Tuple[Tensor, Tensor]:
         """
         Inverse spherical rotation: celestial (ra, dec) -> native (phi, theta).
@@ -2118,7 +2254,8 @@ class WCS:
             return self._spherical_rotation(ra, dec, native_type)
 
         if (
-            self._cpp_inverse_spherical_rotation_pole is not None
+            allow_cpp_inverse_sphere
+            and self._cpp_inverse_spherical_rotation_pole is not None
             and ra.device.type == "cpu"
             and dec.device.type == "cpu"
             and ra.dtype == torch.float64
@@ -2392,6 +2529,12 @@ class WCS:
 
             # Fast path for 2D spatial with (N, 2) tensor input
             if self.naxis == 2 and self._is_spatial:
+                stack_inv = self._compiled_stack_world_to_pixel
+                if stack_inv is not None and origin in stack_inv:
+                    world_c = self._contiguous_if_needed(world)
+                    wf = world_c.reshape(-1, 2)
+                    pix_flat = stack_inv[origin](wf)
+                    return pix_flat.view(world.shape)
                 px, py = self._world_to_pixel_2d_fast(
                     world[:, 0], world[:, 1], iterative=iterative, origin=origin
                 )

@@ -21,6 +21,20 @@ from ...spectral import SpectralAxis
 from ...wcs import healpix as _healpix_wcs
 
 from ..healpix_image_plane import sample_healpix_map_on_image_header
+from ..operators.bundle import field_observation_operator_bundle
+from ..operators.background import (
+    apply_background_components,
+    observation_background_components,
+)
+from ..operators.psf import apply_psf_spec, gaussian_blur as _shared_gaussian_blur
+from ..operators.spectral import (
+    bandpass_bounds as _shared_bandpass_bounds,
+    bandpass_mc_samples as _shared_bandpass_mc_samples,
+    bandpass_quadrature as _shared_bandpass_quadrature,
+    bandpass_response as _shared_bandpass_response,
+    mixture_importance_weights as _shared_mixture_importance_weights,
+    mixture_mc_samples as _shared_mixture_mc_samples,
+)
 
 from .types import (
     FieldCoordinateMode,
@@ -287,6 +301,8 @@ def _crop_field_observation(
         transmission_wavelength=observation.transmission_wavelength,
         transmission_throughput=observation.transmission_throughput,
         psf_sigma_pix=observation.psf_sigma_pix,
+        psf_spec=observation.psf_spec,
+        background_offset=observation.background_offset,
         band_name=observation.band_name,
         spectral_quantity=observation.spectral_quantity,
     )
@@ -432,31 +448,11 @@ def _gaussian_kernel1d(sigma_pix: float, *, device: torch.device) -> Tensor:
 
 
 def _gaussian_blur(image: Tensor, sigma_pix: float) -> Tensor:
-    if sigma_pix <= 0.0:
-        return image
-    kernel = _gaussian_kernel1d(sigma_pix, device=image.device)
-    kernel_x = kernel.view(1, 1, 1, -1)
-    kernel_y = kernel.view(1, 1, -1, 1)
-    out = image.unsqueeze(0).unsqueeze(0)
-    out = F.conv2d(out, kernel_x, padding=(0, kernel.numel() // 2))
-    out = F.conv2d(out, kernel_y, padding=(kernel.numel() // 2, 0))
-    return out.squeeze(0).squeeze(0)
+    return _shared_gaussian_blur(image, sigma_pix)
 
 
 def _bandpass_bounds(observation: FieldObservation) -> tuple[float, float]:
-    if observation.spectral_min is not None and observation.spectral_max is not None:
-        lower = float(observation.spectral_min)
-        upper = float(observation.spectral_max)
-    elif observation.wavelength is not None:
-        lower = float(observation.wavelength)
-        upper = float(observation.wavelength)
-    else:
-        raise ValueError(
-            "FieldObservation must define wavelength or spectral_min/spectral_max"
-        )
-    if not math.isfinite(lower) or not math.isfinite(upper) or upper < lower:
-        raise ValueError("FieldObservation spectral bounds must be finite and ordered")
-    return lower, upper
+    return _shared_bandpass_bounds(observation)
 
 
 def _has_tabulated_transmission(observation: FieldObservation) -> bool:
@@ -544,83 +540,18 @@ def _bandpass_quadrature(
     num_spectral_samples: int,
     device: torch.device,
 ) -> tuple[Tensor, Tensor]:
-    if num_spectral_samples < 1:
-        raise ValueError("num_spectral_samples must be positive")
-    lower, upper = _bandpass_bounds(observation)
-    if lower == upper or num_spectral_samples == 1:
-        samples = torch.tensor(
-            [0.5 * (lower + upper)], dtype=torch.float32, device=device
-        )
-        return samples, torch.ones_like(samples)
-    n = int(num_spectral_samples)
-    samples = torch.linspace(
-        lower,
-        upper,
-        steps=n,
-        dtype=torch.float32,
+    return _shared_bandpass_quadrature(
+        observation,
+        num_spectral_samples=num_spectral_samples,
         device=device,
     )
-    span = float(upper - lower)
-    h = span / float(n - 1)
-    trap = torch.full((n,), h, dtype=torch.float32, device=device)
-    trap[0] = h * 0.5
-    trap[-1] = h * 0.5
-    if _has_tabulated_transmission(observation):
-        wl_tab, tt_tab = _sorted_tabulated_transmission(observation, device=device)
-        response = _linear_interp_transmission(wl_tab, tt_tab, samples)
-        mass = (response * trap).sum()
-        response = _tabulated_response_or_uniform(response, mass=mass)
-    else:
-        center = (
-            float(observation.transmission_center)
-            if observation.transmission_center is not None
-            else 0.5 * (lower + upper)
-        )
-        sigma = observation.transmission_sigma
-        if sigma is None:
-            response = torch.ones_like(samples)
-        else:
-            sigma = float(sigma)
-            if not math.isfinite(sigma) or sigma <= 0.0:
-                raise ValueError(
-                    "FieldObservation transmission_sigma must be finite and positive"
-                )
-            response = torch.exp(-0.5 * torch.square((samples - center) / sigma))
-    weights = response * trap
-    return samples, weights / torch.clamp(weights.sum(), min=1e-8)
 
 
 def _bandpass_response(
     observation: FieldObservation,
     wavelengths: Tensor,
 ) -> Tensor:
-    lower, upper = _bandpass_bounds(observation)
-    wavelengths = wavelengths.to(dtype=torch.float32)
-    if lower == upper:
-        atol = max(1.0e-3, 1.0e-6 * max(abs(lower), 1.0))
-        return (torch.abs(wavelengths - float(lower)) <= atol).to(dtype=wavelengths.dtype)
-    inside = (wavelengths >= float(lower)) & (wavelengths <= float(upper))
-    if _has_tabulated_transmission(observation):
-        wl_tab, tt_tab = _sorted_tabulated_transmission(
-            observation, device=wavelengths.device
-        )
-        response = _linear_interp_transmission(wl_tab, tt_tab, wavelengths)
-        return response * inside.to(dtype=response.dtype)
-    sigma = observation.transmission_sigma
-    if sigma is None:
-        return inside.to(dtype=wavelengths.dtype)
-    sigma = float(sigma)
-    if not math.isfinite(sigma) or sigma <= 0.0:
-        raise ValueError(
-            "FieldObservation transmission_sigma must be finite and positive"
-        )
-    center = (
-        float(observation.transmission_center)
-        if observation.transmission_center is not None
-        else 0.5 * (float(lower) + float(upper))
-    )
-    response = torch.exp(-0.5 * torch.square((wavelengths - center) / sigma))
-    return response * inside.to(dtype=response.dtype)
+    return _shared_bandpass_response(observation, wavelengths)
 
 
 def _bandpass_mc_samples(
@@ -631,67 +562,13 @@ def _bandpass_mc_samples(
     proposal_grid_size: int | None = None,
     generator: torch.Generator | None = None,
 ) -> tuple[Tensor, Tensor]:
-    if num_spectral_samples < 1:
-        raise ValueError("num_spectral_samples must be positive")
-    lower, upper = _bandpass_bounds(observation)
-    if lower == upper or num_spectral_samples == 1:
-        sample = torch.tensor(
-            [0.5 * (lower + upper)], dtype=torch.float32, device=device
-        )
-        return sample, torch.ones_like(sample)
-    proposal_size = (
-        int(proposal_grid_size)
-        if proposal_grid_size is not None
-        else max(65, 8 * int(num_spectral_samples) + 1)
-    )
-    if proposal_size < 2:
-        proposal_size = 2
-    proposal_samples = torch.linspace(
-        lower,
-        upper,
-        steps=proposal_size,
-        dtype=torch.float32,
+    return _shared_bandpass_mc_samples(
+        observation,
+        num_spectral_samples=num_spectral_samples,
         device=device,
-    )
-    if _has_tabulated_transmission(observation):
-        wl_tab, tt_tab = _sorted_tabulated_transmission(observation, device=device)
-        proposal_weights = _linear_interp_transmission(
-            wl_tab, tt_tab, proposal_samples
-        )
-        proposal_weights = _tabulated_response_or_uniform(
-            proposal_weights, mass=proposal_weights.sum()
-        )
-    else:
-        center = (
-            float(observation.transmission_center)
-            if observation.transmission_center is not None
-            else 0.5 * (lower + upper)
-        )
-        sigma = observation.transmission_sigma
-        if sigma is None:
-            proposal_weights = torch.ones_like(proposal_samples)
-        else:
-            sigma = float(sigma)
-            if not math.isfinite(sigma) or sigma <= 0.0:
-                raise ValueError(
-                    "FieldObservation transmission_sigma must be finite and positive"
-                )
-            proposal_weights = torch.exp(
-                -0.5 * torch.square((proposal_samples - center) / sigma)
-            )
-    proposal_weights = proposal_weights / torch.clamp(
-        proposal_weights.sum(), min=1.0e-8
-    )
-    sample_ids = torch.multinomial(
-        proposal_weights,
-        int(num_spectral_samples),
-        replacement=True,
+        proposal_grid_size=proposal_grid_size,
         generator=generator,
     )
-    samples = proposal_samples[sample_ids]
-    samples, _ = torch.sort(samples)
-    weights = torch.full_like(samples, 1.0 / float(num_spectral_samples))
-    return samples, weights
 
 
 def _mixture_mc_samples(
@@ -702,46 +579,13 @@ def _mixture_mc_samples(
     proposal_grid_size: int | None = None,
     generator: torch.Generator | None = None,
 ) -> tuple[Tensor, Tensor]:
-    if num_spectral_samples < 1:
-        raise ValueError("num_spectral_samples must be positive")
-    bounds = [_bandpass_bounds(observation) for observation in observations]
-    lower = min(bound[0] for bound in bounds)
-    upper = max(bound[1] for bound in bounds)
-    if lower == upper or num_spectral_samples == 1:
-        sample = torch.tensor(
-            [0.5 * (lower + upper)], dtype=torch.float32, device=device
-        )
-        return sample, torch.ones_like(sample)
-    proposal_size = (
-        int(proposal_grid_size)
-        if proposal_grid_size is not None
-        else max(65, 8 * int(num_spectral_samples) + 1)
-    )
-    if proposal_size < 2:
-        proposal_size = 2
-    proposal_samples = torch.linspace(
-        lower,
-        upper,
-        steps=proposal_size,
-        dtype=torch.float32,
+    return _shared_mixture_mc_samples(
+        observations,
+        num_spectral_samples=num_spectral_samples,
         device=device,
-    )
-    proposal = torch.zeros_like(proposal_samples)
-    for observation in observations:
-        response = _bandpass_response(observation, proposal_samples)
-        response_sum = torch.clamp(response.sum(), min=1.0e-8)
-        proposal = proposal + response / response_sum
-    proposal = proposal / torch.clamp(proposal.sum(), min=1.0e-8)
-    sample_ids = torch.multinomial(
-        proposal,
-        int(num_spectral_samples),
-        replacement=True,
+        proposal_grid_size=proposal_grid_size,
         generator=generator,
     )
-    samples = proposal_samples[sample_ids]
-    samples, order = torch.sort(samples)
-    sample_probs = proposal[sample_ids][order]
-    return samples, sample_probs
 
 
 def _mixture_importance_weights(
@@ -749,9 +593,7 @@ def _mixture_importance_weights(
     wavelengths: Tensor,
     proposal_probs: Tensor,
 ) -> Tensor:
-    response = _bandpass_response(observation, wavelengths)
-    weights = response / torch.clamp(proposal_probs.to(dtype=response.dtype), min=1.0e-8)
-    return weights / torch.clamp(weights.sum(), min=1.0e-8)
+    return _shared_mixture_importance_weights(observation, wavelengths, proposal_probs)
 
 
 def _smoothness_probe_grid(
@@ -5046,10 +4888,21 @@ def render_field_observation_distribution(
                 forward_context=forward_context,
             )
             logvar = torch.zeros_like(mean)
-    if observation.psf_sigma_pix > 0.0:
-        mean = _gaussian_blur(mean, float(observation.psf_sigma_pix))
-        variance = _gaussian_blur(torch.exp(logvar), float(observation.psf_sigma_pix))
+    operator_bundle = field_observation_operator_bundle(observation)
+    if operator_bundle.psf is not None:
+        mean = apply_psf_spec(mean, observation.psf_spec)
+        variance = apply_psf_spec(torch.exp(logvar), observation.psf_spec)
         logvar = torch.log(torch.clamp(variance, min=1.0e-8))
+    if operator_bundle.background is not None:
+        mean = apply_background_components(
+            mean,
+            **observation_background_components(
+                observation,
+                shape=tuple(mean.shape),
+                device=mean.device,
+                dtype=mean.dtype,
+            ),
+        )
     return mean.to(dtype=image.dtype), logvar.to(dtype=image.dtype)
 
 
@@ -5067,8 +4920,11 @@ def render_field_samples_distribution(
     override_weights: Tensor | None = None,
     forward_context: ForwardContext | None = None,
 ) -> tuple[Tensor, Tensor]:
-    if observation.psf_sigma_pix > 0.0:
+    operator_bundle = field_observation_operator_bundle(observation)
+    if operator_bundle.psf is not None:
         raise ValueError("pixel-sampled field rendering does not support PSF blurring")
+    if operator_bundle.background is not None:
+        raise ValueError("pixel-sampled field rendering does not support background terms")
     if override_wavelengths is not None or override_weights is not None:
         if override_wavelengths is None or override_weights is None:
             raise ValueError(
@@ -5172,6 +5028,7 @@ def render_field_observation(
         shape=tuple(image.shape),
         device=device,
     )
+    operator_bundle = field_observation_operator_bundle(observation)
     if override_wavelengths is not None or override_weights is not None:
         if override_wavelengths is None or override_weights is None:
             raise ValueError(
@@ -5199,10 +5056,10 @@ def render_field_observation(
         )
     else:
         raise ValueError(f"unsupported spectral_sampling {spectral_sampling!r}")
-    if spatial_tile_hw is not None and float(observation.psf_sigma_pix) > 0.0:
+    if spatial_tile_hw is not None and operator_bundle.psf is not None:
         raise ValueError(
             "render_field_observation(..., spatial_tile_hw=...) cannot be used with "
-            "psf_sigma_pix > 0 because the PSF couples pixels across tiles"
+            "a non-trivial PSF because the PSF couples pixels across tiles"
         )
     if forward_context is not None and use_func_vmap:
         raise ValueError(
@@ -5223,8 +5080,18 @@ def render_field_observation(
             weights,
             forward_context=forward_context,
         )
-        if observation.psf_sigma_pix > 0.0:
-            rendered = _gaussian_blur(rendered, float(observation.psf_sigma_pix))
+        if operator_bundle.psf is not None:
+            rendered = apply_psf_spec(rendered, observation.psf_spec)
+        if operator_bundle.background is not None:
+            rendered = apply_background_components(
+                rendered,
+                **observation_background_components(
+                    observation,
+                    shape=tuple(rendered.shape),
+                    device=rendered.device,
+                    dtype=rendered.dtype,
+                ),
+            )
         return rendered.to(dtype=image.dtype)
     H, W = int(image.shape[-2]), int(image.shape[-1])
     ra32 = ra_deg.to(dtype=torch.float32)
@@ -5258,8 +5125,18 @@ def render_field_observation(
                 )
             patch += plane * weights[i].to(dtype=plane.dtype)
         rendered[y0:y1, x0:x1] = patch
-    if observation.psf_sigma_pix > 0.0:
-        rendered = _gaussian_blur(rendered, float(observation.psf_sigma_pix))
+    if operator_bundle.psf is not None:
+        rendered = apply_psf_spec(rendered, observation.psf_spec)
+    if operator_bundle.background is not None:
+        rendered = apply_background_components(
+            rendered,
+            **observation_background_components(
+                observation,
+                shape=tuple(rendered.shape),
+                device=rendered.device,
+                dtype=rendered.dtype,
+            ),
+        )
     return rendered.to(dtype=image.dtype)
 
 
@@ -5277,8 +5154,11 @@ def render_field_samples(
     override_weights: Tensor | None = None,
     forward_context: ForwardContext | None = None,
 ) -> Tensor:
-    if observation.psf_sigma_pix > 0.0:
+    operator_bundle = field_observation_operator_bundle(observation)
+    if operator_bundle.psf is not None:
         raise ValueError("pixel-sampled field rendering does not support PSF blurring")
+    if operator_bundle.background is not None:
+        raise ValueError("pixel-sampled field rendering does not support background terms")
     if override_wavelengths is not None or override_weights is not None:
         if override_wavelengths is None or override_weights is None:
             raise ValueError(
@@ -5991,7 +5871,13 @@ def fit_field_model(
                     training_spectral_sampling_grid_size
                 )
             render_kwargs["forward_context"] = forward_context
-            if pixel_sample_count > 0 and observation.psf_sigma_pix <= 0.0:
+            if (
+                pixel_sample_count > 0
+                and (
+                    observation.psf_spec is None
+                    or observation.psf_spec.mode == "none"
+                )
+            ):
                 sampled = _sample_observation_pixels(
                     observation,
                     num_samples=pixel_sample_count,

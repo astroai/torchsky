@@ -132,6 +132,87 @@ def test_montage_header_template_includes_core_fits_cards(tmp_path):
     assert "NAXIS   =                    2" in text
 
 
+def test_build_compat_markdown_includes_geometry_family_columns() -> None:
+    markdown = bench_map_compat._build_compat_markdown(
+        [
+            {
+                "case": "demo",
+                "library": "torchsky",
+                "variant": "bilinear",
+                "geometry_family": "interpolation",
+                "status": "OK",
+                "time_ms": 1.0,
+                "max_abs_data_diff_vs_torchsky": None,
+            },
+            {
+                "case": "demo",
+                "library": "reproject_interp",
+                "variant": "bilinear",
+                "geometry_family": "interpolation",
+                "status": "OK",
+                "time_ms": 2.0,
+                "max_abs_data_diff_vs_torchsky": 0.01,
+            },
+            {
+                "case": "demo",
+                "library": "pairwise",
+                "pair": "torchsky/reproject_interp",
+                "status": "OK",
+                "time_ms": 0.0,
+                "max_abs_data_diff": 0.02,
+            },
+            {
+                "case": "demo",
+                "library": "conservative_parity",
+                "status": "OK",
+                "geometry_family": "conservative_overlap",
+                "max_abs_data_diff": 0.003,
+                "max_abs_weight_diff": 0.0,
+            },
+        ]
+    )
+    assert "| case | fastest backend | fastest geometry | closest external to torchsky | closest geometry | conservative parity |" in markdown
+    assert "| demo | torchsky:bilinear (1.000 ms) | interpolation | reproject_interp:bilinear (0.01) | interpolation | data 0.003, support 0 |" in markdown
+
+
+def test_compat_default_torchsky_kernels_include_conservative_overlap() -> None:
+    assert "conservative_polygon" in bench_map_compat._TORCHSKY_KERNELS
+    assert (
+        bench_map_compat._geometry_family_for_torchsky_kernel("conservative_polygon")
+        == "conservative_overlap"
+    )
+
+
+def test_conservative_overlap_parity_row_compares_support_masks() -> None:
+    conservative = {
+        "time_ms": 2.0,
+    }
+    reproject_exact = {
+        "time_ms": 4.0,
+        "variant": "exact",
+    }
+    data = torch.tensor([[1.0, 2.0], [0.0, 3.0]], dtype=torch.float32)
+    reference = torch.tensor([[1.0, 2.1], [0.0, 3.0]], dtype=torch.float32)
+    weight = torch.tensor([[1.0, 0.5], [0.0, 0.2]], dtype=torch.float32)
+    reference_weight = torch.tensor([[2.0, 1.0], [0.0, 0.8]], dtype=torch.float32)
+
+    row = bench_map_compat._conservative_overlap_parity_row(
+        "demo",
+        conservative,
+        data,
+        weight,
+        reproject_exact,
+        reference,
+        reference_weight,
+    )
+
+    assert row["library"] == "conservative_parity"
+    assert row["geometry_family"] == "conservative_overlap"
+    assert row["comparison_weight_mode"] == "support_mask"
+    assert row["max_abs_weight_diff"] == 0.0
+    assert row["max_abs_data_diff"] > 0.0
+
+
 def test_competitive_runner_uses_rectangular_extent_for_case_size() -> None:
     assert competitive_runner._effective_case_size(512, None, None) == 512
     assert competitive_runner._effective_case_size(512, 1024, 768) == 1024

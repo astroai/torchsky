@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Benchmark advanced HEALPix primitives (neighbors and interpolation) vs healpy."""
+"""Benchmark advanced HEALPix primitives (neighbors and interpolation) vs healpy.
+
+Timed sections measure torchsky **tensor** work only (device sync included); NumPy
+materialization for parity checks happens **outside** the timed loop so torchsky
+is not charged healpy-equivalent export costs in the wall clock.
+"""
 
 from __future__ import annotations
 
@@ -26,6 +31,19 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
 from torchsky.wcs.healpix import get_all_neighbours, get_interp_val, get_interp_weights  # noqa: E402
+
+
+def _to_numpy(x: Any) -> np.ndarray:
+    """Materialize torch tensors on CPU for parity checks (not for timed hot loops)."""
+    if isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy()
+    return np.asarray(x)
+
+
+def _to_numpy_pair(
+    a: tuple[Any, Any] | list[Any],
+) -> tuple[np.ndarray, np.ndarray]:
+    return (_to_numpy(a[0]), _to_numpy(a[1]))
 
 
 def _parse_ratio_spec(spec: str | None, allowed_ops: set[str]) -> dict[str, float]:
@@ -202,72 +220,68 @@ def main() -> int:
     ] = [
         (
             "neighbors_ring",
-            lambda: get_all_neighbours(nside, pix_ring_t, nest=False).cpu().numpy(),
+            lambda: get_all_neighbours(nside, pix_ring_t, nest=False),
             lambda: healpy.get_all_neighbours(nside, pix_ring, nest=False),
-            lambda a, b: (int(np.sum(np.asarray(a) != np.asarray(b))), float("nan")),
+            lambda a, b: (
+                int(np.sum(_to_numpy(a) != np.asarray(b))),
+                float("nan"),
+            ),
         ),
         (
             "neighbors_nested",
-            lambda: get_all_neighbours(nside, pix_nest_t, nest=True).cpu().numpy(),
+            lambda: get_all_neighbours(nside, pix_nest_t, nest=True),
             lambda: healpy.get_all_neighbours(nside, pix_nest, nest=True),
-            lambda a, b: (int(np.sum(np.asarray(a) != np.asarray(b))), float("nan")),
+            lambda a, b: (
+                int(np.sum(_to_numpy(a) != np.asarray(b))),
+                float("nan"),
+            ),
         ),
         (
             "interp_weights_ring",
-            lambda: tuple(
-                x.cpu().numpy()
-                for x in get_interp_weights(
-                    nside, lon_t, lat_t, nest=False, lonlat=True
-                )
-            ),
+            lambda: get_interp_weights(nside, lon_t, lat_t, nest=False, lonlat=True),
             lambda: healpy.get_interp_weights(nside, lon, lat, nest=False, lonlat=True),
-            lambda a, b: (_interp_mismatch_count(a[0], a[1], b[0], b[1]), float("nan")),
+            lambda a, b: (
+                _interp_mismatch_count(*_to_numpy_pair(a), b[0], b[1]),
+                float("nan"),
+            ),
         ),
         (
             "interp_weights_nested",
-            lambda: tuple(
-                x.cpu().numpy()
-                for x in get_interp_weights(nside, lon_t, lat_t, nest=True, lonlat=True)
-            ),
+            lambda: get_interp_weights(nside, lon_t, lat_t, nest=True, lonlat=True),
             lambda: healpy.get_interp_weights(nside, lon, lat, nest=True, lonlat=True),
-            lambda a, b: (_interp_mismatch_count(a[0], a[1], b[0], b[1]), float("nan")),
+            lambda a, b: (
+                _interp_mismatch_count(*_to_numpy_pair(a), b[0], b[1]),
+                float("nan"),
+            ),
         ),
         (
             "interp_val_ring",
-            lambda: (
-                get_interp_val(m_ring_t, lon_t, lat_t, nest=False, lonlat=True)
-                .cpu()
-                .numpy()
-            ),
+            lambda: get_interp_val(m_ring_t, lon_t, lat_t, nest=False, lonlat=True),
             lambda: healpy.get_interp_val(m_ring, lon, lat, nest=False, lonlat=True),
             lambda a, b: (
                 int(
                     np.sum(
                         ~np.isclose(
-                            np.asarray(a), np.asarray(b), atol=1e-10, rtol=1e-10
+                            _to_numpy(a), np.asarray(b), atol=1e-10, rtol=1e-10
                         )
                     )
                 ),
-                float(np.max(np.abs(np.asarray(a) - np.asarray(b)))),
+                float(np.max(np.abs(_to_numpy(a) - np.asarray(b)))),
             ),
         ),
         (
             "interp_val_nested",
-            lambda: (
-                get_interp_val(m_nest_t, lon_t, lat_t, nest=True, lonlat=True)
-                .cpu()
-                .numpy()
-            ),
+            lambda: get_interp_val(m_nest_t, lon_t, lat_t, nest=True, lonlat=True),
             lambda: healpy.get_interp_val(m_nest, lon, lat, nest=True, lonlat=True),
             lambda a, b: (
                 int(
                     np.sum(
                         ~np.isclose(
-                            np.asarray(a), np.asarray(b), atol=1e-10, rtol=1e-10
+                            _to_numpy(a), np.asarray(b), atol=1e-10, rtol=1e-10
                         )
                     )
                 ),
-                float(np.max(np.abs(np.asarray(a) - np.asarray(b)))),
+                float(np.max(np.abs(_to_numpy(a) - np.asarray(b)))),
             ),
         ),
     ]

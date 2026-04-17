@@ -214,6 +214,8 @@ x_out, y_out = wcs.world_to_pixel(ra, dec)
 
 Key methods: `.pixel_to_world(*args, origin=0)`, `.world_to_pixel(*args, iterative=True, origin=0)`, `.to(device)`, `.compile(**kwargs)`.
 
+After `.compile()`, use a single **stacked** tensor so the transform goes through the compiled Torch graph: for 2D spatial WCS and FITS `origin` **0 or 1**, `pixel_to_world(pixels)` with `pixels.shape == (..., 2)` fuses `pixels + (1-origin) - CRPIX` with the projection and uses **Torch-only** forward pole rotation (so `torch.compile` can optimize end-to-end). Symmetrically, `world_to_pixel(world)` with `world.shape == (..., 2)` uses a fused inverse graph with **Torch-only** inverse pole rotation. The two-argument `pixel_to_world(x, y)` and `world_to_pixel(ra, dec)` forms may still use native C++ fast paths. Run `benchmarks/bench_wcs_small_n_paths.py` on your machine; Astropy may still win at tiny `N`, but the fused compiled paths are the ones to tune. Parity vs Astropy is enforced in `tests/test_wcs_parity.py`.
+
 Coordinates use 0-based Python pixel convention. Results are in degrees.
 
 ---
@@ -386,7 +388,7 @@ Differentiable image-plane coaddition baseline.
 
 - If an observation already matches the target WCS/shape, torchsky accumulates it directly.
 - Otherwise torchsky resamples onto the target grid with either `grid_sample(..., padding_mode="zeros", align_corners=True)` for `"nearest"`, `"bilinear"`, and `"bicubic"`, or native separable high-accuracy kernels for `"lanczos3"`, `"lanczos5"`, `"mitchell_netravali"`, and `"catmull_rom"`.
-- `resampling_kernel` may be `"nearest"`, `"bilinear"`, `"bicubic"`, `"lanczos3"`, `"lanczos5"`, `"mitchell_netravali"`, or `"catmull_rom"`.
+- `resampling_kernel` may be `"nearest"`, `"bilinear"`, `"bicubic"`, `"lanczos3"`, `"lanczos5"`, `"mitchell_netravali"`, `"catmull_rom"`, `"fft_shift"`, `"fft_diagonal_affine"`, `"periodic_linear_affine"`, `"fft_linear_affine"`, `"drizzle_point"`, `"drizzle_square"`, `"conservative_polygon"`, `"splat_point"`, or `"splat_box"`.
 - Kernel notes:
   - `"catmull_rom"` is an interpolating cubic kernel.
   - `"mitchell_netravali"` is a smoother cubic reconstruction kernel and is not exact at input samples.
@@ -819,6 +821,8 @@ torchsky.configure_buffers()
 ---
 
 ## Spherical Geometry & HEALPix
+
+**Canonical imports:** use **`torchsky.coords`** for WCS-class transforms and HEALPix indexing helpers (`ang2pix`, `pix2ang`, `query_disc`, …) when building coordinate-centric pipelines. The same symbols are also available on **`torchsky.geom`** and **`torchsky.sphere`** for geometry- and healpy-shaped workflows; pick one style per subsystem and stay consistent to avoid duplicate imports of the same underlying `torchsky.wcs.healpix` implementation.
 
 See [sphere.md](sphere.md) for the complete `torchsky.sphere` reference.
 

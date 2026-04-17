@@ -48,6 +48,11 @@ except Exception:  # pragma: no cover - optional comparator
     reproject_interp = None
 
 try:  # noqa: E402
+    from reproject import reproject_exact  # type: ignore
+except Exception:  # pragma: no cover - optional comparator
+    reproject_exact = None
+
+try:  # noqa: E402
     from dfreproject import calculate_reprojection  # type: ignore
 except Exception:  # pragma: no cover - optional comparator
     calculate_reprojection = None
@@ -79,6 +84,7 @@ else:
 
 _COMPARATORS = (
     "reproject_interp",
+    "reproject_exact",
     "dfreproject",
     "drizzle",
     "drizzlepac",
@@ -103,20 +109,26 @@ def _compat_row_key(row: dict[str, Any]) -> str:
 def _build_compat_markdown(rows: list[dict[str, Any]]) -> str:
     cases = sorted({str(row["case"]) for row in rows if "case" in row})
     lines = [
-        "| case | fastest backend | closest external to torchsky | largest pairwise disagreement |",
-        "| --- | --- | --- | --- |",
+        "| case | fastest backend | fastest geometry | closest external to torchsky | closest geometry | conservative parity | largest pairwise disagreement |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for case in cases:
         case_rows = [row for row in rows if str(row.get("case")) == case]
         ok_rows = [
             row
             for row in case_rows
-            if row.get("status") == "OK" and row.get("library") != "pairwise"
+            if row.get("status") == "OK"
+            and row.get("library") not in {"pairwise", "conservative_parity"}
         ]
         pairwise_rows = [
             row
             for row in case_rows
             if row.get("status") == "OK" and row.get("library") == "pairwise"
+        ]
+        conservative_rows = [
+            row
+            for row in case_rows
+            if row.get("status") == "OK" and row.get("library") == "conservative_parity"
         ]
         fastest = min(ok_rows, key=lambda row: float(row["time_ms"])) if ok_rows else None
         external_rows = [
@@ -141,6 +153,7 @@ def _build_compat_markdown(rows: list[dict[str, Any]]) -> str:
             if pairwise_rows
             else None
         )
+        conservative_parity = conservative_rows[0] if conservative_rows else None
 
         def _fmt_backend(row: dict[str, Any] | None) -> str:
             if row is None:
@@ -165,13 +178,29 @@ def _build_compat_markdown(rows: list[dict[str, Any]]) -> str:
                 return "n/a"
             return f"{row['pair']} ({float(row['max_abs_data_diff']):.4g})"
 
+        def _fmt_conservative(row: dict[str, Any] | None) -> str:
+            if row is None:
+                return "n/a"
+            return (
+                f"data {float(row['max_abs_data_diff']):.4g}, "
+                f"support {float(row['max_abs_weight_diff']):.4g}"
+            )
+
+        def _fmt_geometry(row: dict[str, Any] | None) -> str:
+            if row is None:
+                return "n/a"
+            return str(row.get("geometry_family", "unknown"))
+
         lines.append(
             "| "
             + " | ".join(
                 [
                     case,
                     _fmt_backend(fastest),
+                    _fmt_geometry(fastest),
                     _fmt_closest(closest),
+                    _fmt_geometry(closest),
+                    _fmt_conservative(conservative_parity),
                     _fmt_pairwise(largest_pairwise),
                 ]
             )
@@ -272,6 +301,7 @@ _TORCHSKY_KERNELS = (
     "lanczos5",
     "mitchell_netravali",
     "catmull_rom",
+    "conservative_polygon",
     "fft_shift",
     "fft_diagonal_affine",
     "periodic_linear_affine",
@@ -289,6 +319,49 @@ _DFREPROJECT_ORDERS = (
 )
 _DRIZZLE_KERNELS = ("point", "square")
 _SWARP_RESAMPLING_TYPES = ("NEAREST", "BILINEAR", "LANCZOS3")
+
+
+def _geometry_family_for_torchsky_kernel(kernel: str) -> str:
+    if kernel in {
+        "nearest",
+        "bilinear",
+        "bicubic",
+        "lanczos3",
+        "lanczos5",
+        "mitchell_netravali",
+        "catmull_rom",
+    }:
+        return "interpolation"
+    if kernel in {"drizzle_point", "drizzle_square"}:
+        return "exact_drizzle"
+    if kernel == "conservative_polygon":
+        return "conservative_overlap"
+    if kernel in {"splat_point", "splat_box"}:
+        return "forward_splat"
+    if kernel in {
+        "fft_shift",
+        "fft_diagonal_affine",
+        "periodic_linear_affine",
+        "fft_linear_affine",
+    }:
+        return "restricted_affine_fft"
+    return "unknown"
+
+
+def geometry_family_for_library_variant(library: str, variant: str | None) -> str:
+    if library == "torchsky":
+        return _geometry_family_for_torchsky_kernel(str(variant))
+    if library == "drizzle":
+        return "exact_drizzle"
+    if library in {"reproject_interp", "dfreproject"}:
+        return "interpolation"
+    if library in {"reproject_exact", "montage"}:
+        return "conservative_overlap"
+    if library == "reproject_adaptive":
+        return "adaptive_resample"
+    if library == "swarp":
+        return "legacy_stacker"
+    return "unknown"
 
 
 def _external_tool_prefix(tool: str) -> Path:
@@ -727,6 +800,49 @@ def _reproject_weighted_observation(
     return numer.astype(np.float32, copy=False), denom.astype(np.float32, copy=False)
 
 
+def _reproject_exact_weighted_observation(
+    obs: ImageObservation,
+    *,
+    target_header: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray]:
+    if reproject_exact is None:  # pragma: no cover - checked by caller
+        raise RuntimeError("reproject_exact is unavailable")
+
+    image, header = torchsky.read(obs.path, hdu=obs.hdu, return_header=True)
+    image = image.to(dtype=torch.float32)
+    weight = _load_weight_map(obs, image)
+    target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
+
+    if _headers_equivalent_for_direct_copy(dict(header), target_header) and tuple(int(v) for v in image.shape) == target_shape:
+        numer = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
+        return numer.cpu().numpy(), weight.cpu().numpy()
+
+    source_header = _as_fits_header(dict(header))
+    target_header_astropy = _as_fits_header(target_header)
+    numer, _ = reproject_exact(
+        (
+            (torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight)
+            .cpu()
+            .numpy()
+            .astype("float32"),
+            source_header,
+        ),
+        target_header_astropy,
+        shape_out=target_shape,
+        return_footprint=True,
+    )
+    denom, _ = reproject_exact(
+        (weight.cpu().numpy().astype("float32"), source_header),
+        target_header_astropy,
+        shape_out=target_shape,
+        return_footprint=True,
+    )
+    numer = np.nan_to_num(numer, nan=0.0, posinf=0.0, neginf=0.0)
+    denom = np.nan_to_num(denom, nan=0.0, posinf=0.0, neginf=0.0)
+    numer = np.where(denom > 0.0, numer, 0.0)
+    return numer.astype(np.float32, copy=False), denom.astype(np.float32, copy=False)
+
+
 def _dfreproject_weighted_observation(
     obs: ImageObservation,
     *,
@@ -800,6 +916,26 @@ def _coadd_with_reproject(
         denom += obs_denom
     data = numer / np.clip(denom, 1e-8, None)
     return data, denom
+
+
+def _coadd_with_reproject_exact(
+    observations: list[ImageObservation],
+    *,
+    target_header: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray]:
+    target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
+    numer = np.zeros(target_shape, dtype=np.float32)
+    denom = np.zeros(target_shape, dtype=np.float32)
+    for obs in observations:
+        obs_numer, obs_denom = _reproject_exact_weighted_observation(
+            obs,
+            target_header=target_header,
+        )
+        numer += obs_numer
+        denom += obs_denom
+    data = numer / np.clip(denom, 1e-8, None)
+    data = np.where(denom > 0.0, data, 0.0)
+    return data.astype(np.float32, copy=False), denom.astype(np.float32, copy=False)
 
 
 def _coadd_with_dfreproject(
@@ -1501,6 +1637,43 @@ def _pairwise_backend_row(
     }
 
 
+def _conservative_overlap_parity_row(
+    case: str,
+    conservative_row: dict[str, Any],
+    conservative_data: torch.Tensor,
+    conservative_weight: torch.Tensor,
+    reproject_exact_row: dict[str, Any],
+    reproject_exact_data: torch.Tensor,
+    reproject_exact_weight: torch.Tensor,
+) -> dict[str, Any]:
+    return {
+        "case": case,
+        "library": "conservative_parity",
+        "status": "OK",
+        "comparison_type": "native_conservative_vs_reproject_exact",
+        "geometry_family": "conservative_overlap",
+        "left_library": "torchsky",
+        "left_variant": "conservative_polygon",
+        "right_library": "reproject_exact",
+        "right_variant": str(reproject_exact_row.get("variant", "exact")),
+        "pair": "torchsky:conservative_polygon_vs_reproject_exact:exact",
+        "left_time_ms": float(conservative_row["time_ms"]),
+        "right_time_ms": float(reproject_exact_row["time_ms"]),
+        "speed_ratio_torchsky_conservative_vs_reproject_exact": float(conservative_row["time_ms"])
+        / max(float(reproject_exact_row["time_ms"]), 1e-12),
+        "comparison_weight_mode": "support_mask",
+        "comparison_data_domain": "full_grid",
+        **_diff_summary(
+            conservative_data,
+            conservative_weight,
+            reproject_exact_data,
+            reproject_exact_weight,
+            suffix="",
+            compare_weight_as_mask=True,
+        ),
+    }
+
+
 def _prepare_synthetic_diagonal_scale_case(
     tmpdir: Path,
     *,
@@ -1782,6 +1955,7 @@ def _torchsky_row(
         "library": "torchsky",
         "method": "torchsky",
         "variant": resampling_kernel,
+        "geometry_family": _geometry_family_for_torchsky_kernel(resampling_kernel),
         "status": "OK",
         "shape": list(result.data.shape),
         "n_obs": len(observations),
@@ -1843,6 +2017,7 @@ def _reproject_row(
             "library": "reproject_interp",
             "method": "reproject_interp",
             "variant": variant,
+            "geometry_family": geometry_family_for_library_variant("reproject_interp", variant),
             "status": "OK",
             "shape": list(data.shape),
             "n_obs": len(observations),
@@ -1851,6 +2026,72 @@ def _reproject_row(
             "coverage_frac": float((weight > 0.0).to(torch.float32).mean().item()),
             "mean_weight": float(weight.mean().item()),
             "interpolation_kernel": order,
+            "comparison_weight_mode": "absolute",
+            "comparison_data_domain": "full_grid",
+            **_diff_summary(
+                data,
+                weight,
+                torchsky_data,
+                torchsky_weight,
+                suffix="_vs_torchsky",
+            ),
+        },
+        data,
+        weight,
+    )
+
+
+def _reproject_exact_row(
+    case: str,
+    observations: list[ImageObservation],
+    *,
+    target_header: dict[str, Any],
+    runs: int,
+    torchsky_data: torch.Tensor,
+    torchsky_weight: torch.Tensor,
+) -> tuple[dict[str, Any], torch.Tensor | None, torch.Tensor | None]:
+    if reproject_exact is None:
+        return (
+            {
+                "case": case,
+                "library": "reproject_exact",
+                "status": "SKIPPED",
+                "reason": "optional dependency reproject_exact is unavailable",
+            },
+            None,
+            None,
+        )
+
+    try:
+        dt = _time_many(
+            lambda: _coadd_with_reproject_exact(
+                observations,
+                target_header=target_header,
+            ),
+            runs,
+        )
+        data_np, weight_np = _coadd_with_reproject_exact(
+            observations,
+            target_header=target_header,
+        )
+    except Exception as exc:
+        return _skipped_row(case, "reproject_exact", f"reproject_exact failed: {exc}"), None, None
+    data = torch.from_numpy(data_np)
+    weight = torch.from_numpy(weight_np)
+    return (
+        {
+            "case": case,
+            "library": "reproject_exact",
+            "method": "reproject_exact",
+            "variant": "exact",
+            "geometry_family": geometry_family_for_library_variant("reproject_exact", None),
+            "status": "OK",
+            "shape": list(data.shape),
+            "n_obs": len(observations),
+            "time_ms": dt * 1000.0,
+            "mpix_s": (float(data.numel()) / dt) / 1e6,
+            "coverage_frac": float((weight > 0.0).to(torch.float32).mean().item()),
+            "mean_weight": float(weight.mean().item()),
             "comparison_weight_mode": "absolute",
             "comparison_data_domain": "full_grid",
             **_diff_summary(
@@ -1904,6 +2145,7 @@ def _dfreproject_row(
             "library": "dfreproject",
             "method": "dfreproject",
             "variant": variant,
+            "geometry_family": geometry_family_for_library_variant("dfreproject", variant),
             "status": "OK",
             "shape": list(data.shape),
             "n_obs": len(observations),
@@ -1964,6 +2206,7 @@ def _drizzle_row(
             "library": "drizzle",
             "method": "drizzle",
             "variant": kernel,
+            "geometry_family": geometry_family_for_library_variant("drizzle", kernel),
             "status": "OK",
             "shape": list(data.shape),
             "n_obs": len(observations),
@@ -2028,6 +2271,7 @@ def _montage_row(
             "library": "montage",
             "method": "montage",
             "variant": mode,
+            "geometry_family": geometry_family_for_library_variant("montage", mode),
             "status": "OK",
             "shape": list(data.shape),
             "n_obs": len(observations),
@@ -2097,6 +2341,9 @@ def _swarp_row(
             "library": "swarp",
             "method": "swarp",
             "variant": resampling_type.lower(),
+            "geometry_family": geometry_family_for_library_variant(
+                "swarp", resampling_type.lower()
+            ),
             "status": "OK",
             "shape": list(data.shape),
             "n_obs": len(observations),
@@ -2223,6 +2470,18 @@ def _comparator_row(
         )
         if row.get("status") == "OK":
             row["speed_ratio_torchsky_vs_reproject"] = row["time_ms"] / torchsky_row["time_ms"]
+        return row, data, weight
+    if library == "reproject_exact":
+        row, data, weight = _reproject_exact_row(
+            case,
+            observations,
+            target_header=target_header,
+            runs=runs,
+            torchsky_data=torchsky_data,
+            torchsky_weight=torchsky_weight,
+        )
+        if row.get("status") == "OK":
+            row["speed_ratio_torchsky_vs_reproject_exact"] = row["time_ms"] / torchsky_row["time_ms"]
         return row, data, weight
     if library == "dfreproject":
         order = next((order for order, name in _DFREPROJECT_ORDERS if name == variant), None)
@@ -2437,6 +2696,7 @@ def main() -> int:
 
             comparator_variants: dict[str, list[str | None]] = {
                 "reproject_interp": reproject_kernels,
+                "reproject_exact": [None],
                 "dfreproject": reproject_kernels,
                 "drizzle": drizzle_kernels,
                 "drizzlepac": [None],
@@ -2476,6 +2736,36 @@ def main() -> int:
                             right_weight,
                         )
                     )
+            conservative_output = next(
+                (
+                    item
+                    for item in ok_outputs
+                    if item[0].get("library") == "torchsky"
+                    and item[0].get("variant") == "conservative_polygon"
+                ),
+                None,
+            )
+            reproject_exact_output = next(
+                (
+                    item
+                    for item in ok_outputs
+                    if item[0].get("library") == "reproject_exact"
+                    and item[0].get("status") == "OK"
+                ),
+                None,
+            )
+            if conservative_output is not None and reproject_exact_output is not None:
+                rows.append(
+                    _conservative_overlap_parity_row(
+                        case_name,
+                        conservative_output[0],
+                        conservative_output[1],
+                        conservative_output[2],
+                        reproject_exact_output[0],
+                        reproject_exact_output[1],
+                        reproject_exact_output[2],
+                    )
+                )
 
     markdown_path = args.markdown_out
     if markdown_path is None and args.json_out is not None:

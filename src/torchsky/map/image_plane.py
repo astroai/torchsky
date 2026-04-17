@@ -25,7 +25,21 @@ from ..wcs import healpix as _healpix
 
 from .fft_affine_ldu import resample_fft_ldu_affine_2d
 from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_fft2d
+from .operators.background import SkyBackgroundOp
+from .operators.bundle import ObservationOperatorBundle
+from .operators.execution import (
+    prepare_image_observation_data,
+    project_image_observation_geometry,
+)
+from .operators.geometry import InterpolationGeometryOp
+from .operators.mask_weight import load_image_observation_weight_map
+from .operators.noise import ExplicitNoiseOp
+from .operators.radiometry import apply_image_observation_calibration
+from .operators.spectral import ExplicitSpectralResponseOp
 from .periodic_affine import resample_linear_affine_periodic_bilinear_2d
+from .spectral_affine import resample_linear_affine_spectral_2d
+from .spectral_nufft import resample_nonuniform_spectral_fast_2d
+from .spectral_nonuniform import resample_nonuniform_spectral_2d
 
 MapResamplingKernel = Literal[
     "nearest",
@@ -39,8 +53,14 @@ MapResamplingKernel = Literal[
     "fft_diagonal_affine",
     "periodic_linear_affine",
     "fft_linear_affine",
+    "spectral_linear_affine",
+    "spectral_nonuniform",
+    "spectral_nonuniform_fast",
     "drizzle_point",
     "drizzle_square",
+    "conservative_polygon",
+    "splat_point",
+    "splat_box",
 ]
 MapValueSemantics = Literal["surface_brightness", "flux"]
 MapStackingMethod = Literal["weighted_mean", "mean", "median"]
@@ -210,6 +230,15 @@ _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS = 1_500_000
 _LARGE_TAN_WINDOWING_EDGE_SAMPLES = 9
 _LARGE_TAN_WINDOWING_MARGIN_PIXELS = 2
 _DRIZZLE_FORWARD_CHUNK_PIXELS = 262_144
+
+_DEFAULT_MAP_OPERATOR_BUNDLE = ObservationOperatorBundle(
+    geometry=InterpolationGeometryOp(),
+    spectral_response=ExplicitSpectralResponseOp(),
+    radiometry=None,
+    background=SkyBackgroundOp(),
+    mask_weight=None,
+    noise=ExplicitNoiseOp(),
+)
 
 
 def _try_external_drizzle_helpers():
@@ -683,6 +712,14 @@ def _is_drizzle_kernel(kernel: MapResamplingKernel) -> bool:
     return kernel in {"drizzle_point", "drizzle_square"}
 
 
+def _is_conservative_kernel(kernel: MapResamplingKernel) -> bool:
+    return kernel == "conservative_polygon"
+
+
+def _is_splat_kernel(kernel: MapResamplingKernel) -> bool:
+    return kernel in {"splat_point", "splat_box"}
+
+
 def _requires_roundtrip_validity_check(source_wcs: WCS) -> bool:
     # SIP inverse paths still benefit from an explicit round-trip consistency gate.
     # For TPV, the gate was useful while the distorted WCS dispatch could route
@@ -904,48 +941,7 @@ def _load_observation_weight_map(
     *,
     device: torch.device,
 ) -> Tensor:
-    weight_map = torch.isfinite(image).to(dtype=torch.float32, device=device)
-
-    if obs.weight_path is not None:
-        source_weight = read(obs.weight_path, hdu=obs.weight_hdu, device=str(device))
-        source_weight = _validate_image_plane(source_weight)
-        if tuple(int(v) for v in source_weight.shape) != tuple(
-            int(v) for v in image.shape
-        ):
-            raise ValueError("Weight map shape must match the observation image shape")
-        source_weight = source_weight.to(device=device, dtype=torch.float32)
-        source_weight = torch.where(
-            torch.isfinite(source_weight) & (source_weight > 0.0),
-            source_weight,
-            torch.zeros_like(source_weight),
-        )
-        weight_map = weight_map * source_weight
-
-    if obs.mask_path is not None:
-        mask = read(obs.mask_path, hdu=obs.mask_hdu, device=str(device))
-        mask = _validate_image_plane(mask)
-        if tuple(int(v) for v in mask.shape) != tuple(int(v) for v in image.shape):
-            raise ValueError("Mask shape must match the observation image shape")
-        mask = mask.to(device=device, dtype=torch.float32)
-        mask = torch.where(
-            torch.isfinite(mask) & (mask > 0.0),
-            torch.ones_like(mask),
-            torch.zeros_like(mask),
-        )
-        weight_map = weight_map * mask
-
-    if obs.primary_beam_path is not None:
-        pb = read(obs.primary_beam_path, hdu=obs.primary_beam_hdu, device=str(device))
-        pb = _validate_image_plane(pb)
-        if tuple(int(v) for v in pb.shape) != tuple(int(v) for v in image.shape):
-            raise ValueError(
-                "primary_beam map shape must match the observation image shape"
-            )
-        pb = pb.to(device=device, dtype=torch.float32)
-        pb = torch.where(torch.isfinite(pb) & (pb > 0.0), pb, torch.zeros_like(pb))
-        weight_map = weight_map * pb
-
-    return weight_map * float(obs.weight)
+    return load_image_observation_weight_map(obs, image, device=device)
 
 
 def _infer_fft_translation_shift_yx(
@@ -1153,18 +1149,12 @@ def _apply_observation_calibration(
     image: Tensor,
     source_weight: Tensor,
 ) -> tuple[Tensor, Tensor]:
-    scale = float(obs.photometric_scale)
-    background = float(obs.background_offset)
-    if not math.isfinite(scale) or scale <= 0.0:
-        raise ValueError("Observation photometric_scale must be finite and positive")
-    if not math.isfinite(background):
-        raise ValueError("Observation background_offset must be finite")
-    calibrated_image = scale * (
-        torch.nan_to_num(image.to(dtype=torch.float32), nan=0.0, posinf=0.0, neginf=0.0)
-        - background
+    return apply_image_observation_calibration(
+        photometric_scale=obs.photometric_scale,
+        background_offset=obs.background_offset,
+        image=image,
+        source_weight=source_weight,
     )
-    calibrated_weight = source_weight.to(dtype=torch.float32) / (scale * scale)
-    return calibrated_image, calibrated_weight
 
 
 def _resample_weighted_to_target(
@@ -1400,6 +1390,56 @@ def _resample_weighted_to_target(
             target_representative_area_sr=target_representative_area_sr,
         )
 
+    if resampling_kernel == "spectral_linear_affine":
+        if _requires_target_pixel_quadrature(
+            source_wcs,
+            value_semantics=value_semantics,
+        ):
+            raise ValueError(
+                "spectral_linear_affine is incompatible with flux quadrature on distorted WCS; "
+                "use bilinear or another kernel"
+            )
+        if (h_src, w_src) != (target.shape[0], target.shape[1]):
+            raise ValueError(
+                "spectral_linear_affine requires matching source and target array shapes "
+                f"(got source {(h_src, w_src)} vs target {tuple(int(v) for v in target.shape)})"
+            )
+        try:
+            la = _infer_linear_affine_pixel_map(
+                source_wcs,
+                target.wcs,
+                (h_src, w_src),
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "spectral_linear_affine could not infer a linear affine pixel map "
+                "between source and target WCS"
+            ) from exc
+        a00, a01, a10, a11, pbx, pby = la
+        aff_kw = {
+            "a00": a00,
+            "a01": a01,
+            "a10": a10,
+            "a11": a11,
+            "bx": pbx,
+            "by": pby,
+            "boundary_mode": "zero",
+        }
+        sampled_numer = resample_linear_affine_spectral_2d(weighted_image, **aff_kw)
+        sampled_weight = resample_linear_affine_spectral_2d(weighted_weight, **aff_kw)
+        sampled_support = (
+            resample_linear_affine_spectral_2d(support_image, **aff_kw)
+            if support_image is not None
+            else None
+        )
+        return _finalize_periodic_resampled_weighted(
+            sampled_numer,
+            sampled_weight,
+            sampled_support,
+            value_semantics=value_semantics,
+            target_representative_area_sr=target_representative_area_sr,
+        )
+
     def _sample_on_source_grid(
         x_src: Tensor,
         y_src: Tensor,
@@ -1407,32 +1447,79 @@ def _resample_weighted_to_target(
         flat_ra: Tensor,
         flat_dec: Tensor,
     ) -> tuple[Tensor, Tensor]:
-        x_norm = (2.0 * x_src / max(w_src - 1, 1)) - 1.0
-        y_norm = (2.0 * y_src / max(h_src - 1, 1)) - 1.0
-        grid = torch.stack([x_norm, y_norm], dim=-1).to(dtype=torch.float32)
-
-        stacked_planes = (
-            torch.stack([weighted_image, weighted_weight, support_image], dim=0)
-            if support_image is not None
-            else torch.stack([weighted_image, weighted_weight], dim=0)
-        )
-        sampled_planes = _sample_image_plane_batched_channels(
-            stacked_planes,
-            x_src=x_src,
-            y_src=y_src,
-            grid=grid,
-            kernel=resampling_kernel,
-        )
-        if x_src.ndim == 2:
-            sampled_numer = sampled_planes[0]
-            sampled_weight = sampled_planes[1]
-            sampled_support = sampled_planes[2] if support_image is not None else None
-        else:
-            sampled_numer = sampled_planes[:, 0]
-            sampled_weight = sampled_planes[:, 1]
-            sampled_support = (
-                sampled_planes[:, 2] if support_image is not None else None
+        if resampling_kernel == "spectral_nonuniform":
+            sampled_numer = resample_nonuniform_spectral_2d(
+                weighted_image,
+                x_src,
+                y_src,
+                boundary_mode="zero",
             )
+            sampled_weight = resample_nonuniform_spectral_2d(
+                weighted_weight,
+                x_src,
+                y_src,
+                boundary_mode="zero",
+            )
+            sampled_support = (
+                resample_nonuniform_spectral_2d(
+                    support_image,
+                    x_src,
+                    y_src,
+                    boundary_mode="zero",
+                )
+                if support_image is not None
+                else None
+            )
+        elif resampling_kernel == "spectral_nonuniform_fast":
+            sampled_numer = resample_nonuniform_spectral_fast_2d(
+                weighted_image,
+                x_src,
+                y_src,
+                boundary_mode="zero",
+            )
+            sampled_weight = resample_nonuniform_spectral_fast_2d(
+                weighted_weight,
+                x_src,
+                y_src,
+                boundary_mode="zero",
+            )
+            sampled_support = (
+                resample_nonuniform_spectral_fast_2d(
+                    support_image,
+                    x_src,
+                    y_src,
+                    boundary_mode="zero",
+                )
+                if support_image is not None
+                else None
+            )
+        else:
+            x_norm = (2.0 * x_src / max(w_src - 1, 1)) - 1.0
+            y_norm = (2.0 * y_src / max(h_src - 1, 1)) - 1.0
+            grid = torch.stack([x_norm, y_norm], dim=-1).to(dtype=torch.float32)
+
+            stacked_planes = (
+                torch.stack([weighted_image, weighted_weight, support_image], dim=0)
+                if support_image is not None
+                else torch.stack([weighted_image, weighted_weight], dim=0)
+            )
+            sampled_planes = _sample_image_plane_batched_channels(
+                stacked_planes,
+                x_src=x_src,
+                y_src=y_src,
+                grid=grid,
+                kernel=resampling_kernel,
+            )
+            if x_src.ndim == 2:
+                sampled_numer = sampled_planes[0]
+                sampled_weight = sampled_planes[1]
+                sampled_support = sampled_planes[2] if support_image is not None else None
+            else:
+                sampled_numer = sampled_planes[:, 0]
+                sampled_weight = sampled_planes[:, 1]
+                sampled_support = (
+                    sampled_planes[:, 2] if support_image is not None else None
+                )
         in_bounds = (
             (x_src >= 0.0)
             & (x_src <= (w_src - 1))
@@ -1563,8 +1650,14 @@ def _validated_map_resampling_kernel(
         "fft_diagonal_affine",
         "periodic_linear_affine",
         "fft_linear_affine",
+        "spectral_linear_affine",
+        "spectral_nonuniform",
+        "spectral_nonuniform_fast",
         "drizzle_point",
         "drizzle_square",
+        "conservative_polygon",
+        "splat_point",
+        "splat_box",
     )
     if resampling_kernel not in allowed:
         raise ValueError(f"resampling_kernel must be one of {allowed}")
@@ -1652,9 +1745,9 @@ def _forward_project_weighted_to_target(
     value_semantics: MapValueSemantics,
     drizzle_pixfrac: float,
 ) -> tuple[Tensor, Tensor]:
-    if not _is_drizzle_kernel(resampling_kernel):
+    if not _is_splat_kernel(resampling_kernel):
         raise ValueError(
-            f"forward projection only supports drizzle kernels, got {resampling_kernel!r}"
+            f"forward projection only supports splat kernels, got {resampling_kernel!r}"
         )
 
     image = _validate_image_plane(image).to(dtype=torch.float32)
@@ -1717,7 +1810,7 @@ def _forward_project_weighted_to_target(
         numer_chunk = numer_chunk[finite]
         weight_chunk = weight_chunk[finite]
 
-        if resampling_kernel == "drizzle_point":
+        if resampling_kernel == "splat_point":
             ix = torch.round(x_tgt).to(dtype=torch.int64)
             iy = torch.round(y_tgt).to(dtype=torch.int64)
             inside = (ix >= 0) & (ix < width) & (iy >= 0) & (iy < height)
@@ -2294,8 +2387,17 @@ def _project_observation_to_target_chunk(
         image = _validate_image_plane(image)
         header_dict_obs = dict(header)
     image = image.to(device=device)
-    source_weight = _load_observation_weight_map(obs, image, device=device)
-    image, source_weight = _apply_observation_calibration(obs, image, source_weight)
+    prepared_observation = prepare_image_observation_data(
+        obs,
+        image,
+        device=device,
+        resampling_kernel=resampling_kernel,
+        load_weight_map_fn=_load_observation_weight_map,
+        apply_calibration_fn=_apply_observation_calibration,
+    )
+    image = prepared_observation.image
+    source_weight = prepared_observation.source_weight
+    operator_bundle = prepared_observation.operator_bundle
     prepared_target_view = prepared_target
     target_window = None
     if (
@@ -2334,40 +2436,21 @@ def _project_observation_to_target_chunk(
         if prepared_target_view is None:
             sampled_numer = torch.zeros((0, 0), dtype=torch.float32, device=device)
             sampled_weight = torch.zeros((0, 0), dtype=torch.float32, device=device)
-        elif _is_drizzle_kernel(resampling_kernel):
-            # Native torch forward-drizzle (CUDA/MPS/differentiable). External ``drizzle``
-            # package is opt-in via ``TORCHSKY_USE_EXTERNAL_DRIZZLE=1`` for regression only.
-            exact = _maybe_external_drizzle_resample_weighted_to_target(
-                image,
-                source_weight,
-                header_dict_obs=header_dict_obs,
-                target_header=prepared_target_view.header,
-                target_shape=prepared_target_view.shape,
-                resampling_kernel=resampling_kernel,
-                value_semantics=value_semantics,
-                drizzle_pixfrac=drizzle_pixfrac,
-            )
-            if exact is not None:
-                sampled_numer, sampled_weight = exact
-            else:
-                sampled_numer, sampled_weight = _forward_project_weighted_to_target(
-                    image,
-                    source_weight,
-                    source_wcs,
-                    prepared_target_view,
-                    resampling_kernel=resampling_kernel,
-                    value_semantics=value_semantics,
-                    drizzle_pixfrac=drizzle_pixfrac,
-                )
-        else:
-            sampled_numer, sampled_weight = _resample_weighted_to_target(
-                image,
-                source_weight,
-                source_wcs,
-                prepared_target_view,
-                resampling_kernel=resampling_kernel,
-                value_semantics=value_semantics,
-            )
+        sampled_numer, sampled_weight = project_image_observation_geometry(
+            image,
+            source_weight,
+            source_wcs,
+            prepared_target_view,
+            geometry=operator_bundle.geometry,
+            resampling_kernel=resampling_kernel,
+            value_semantics=value_semantics,
+            drizzle_pixfrac=drizzle_pixfrac,
+            pixel_area_sr_map_fn=_pixel_area_sr_map,
+            representative_pixel_area_fn=_representative_pixel_area_sr,
+            chunk_pixels=_DRIZZLE_FORWARD_CHUNK_PIXELS,
+            resample_weighted_to_target_fn=_resample_weighted_to_target,
+            forward_project_weighted_to_target_fn=_forward_project_weighted_to_target,
+        )
     overlap = (sampled_weight > 0.0).to(torch.int32)
     moc = None
     if footprint_order is not None:

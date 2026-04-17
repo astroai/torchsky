@@ -61,6 +61,10 @@ def test_map_ground_truth_cases_stay_bounded(
     assert row["coverage_frac"] >= coverage_min
     assert row["rmse_vs_truth"] <= rmse_max
     assert row["mae_vs_truth"] <= mae_max
+    assert row["weighted_residual_rms"] >= 0.0
+    assert row["background_residual_rms"] >= 0.0
+    assert row["background_leakage_fraction"] >= 0.0
+    assert row["detrended_residual_rms"] >= 0.0
 
 
 @pytest.mark.parametrize(
@@ -131,6 +135,127 @@ def test_map_ground_truth_emits_kernel_recommendations(tmp_path: Path) -> None:
     assert any(row["profile"] == "smooth_reconstruction" for row in recs)
 
 
+def test_map_ground_truth_conservative_polygon_reports_conservative_geometry(
+    tmp_path: Path,
+) -> None:
+    row = _truth_bench.evaluate_torchsky_case(
+        tmp_path,
+        case="tan_aligned_low_noise",
+        size=64,
+        seed=1234,
+        runs=1,
+        resampling_kernel="conservative_polygon",
+    )
+
+    assert row["library"] == "torchsky"
+    assert row["variant"] == "conservative_polygon"
+    assert row["geometry_family"] == "conservative_overlap"
+    assert row["coverage_frac"] > 0.95
+    assert row["rmse_vs_truth"] >= 0.0
+
+
+@pytest.mark.parametrize("operator_mode", ["explicit", "learned_shell"])
+def test_map_ground_truth_scene_render_rows_share_product_metrics(
+    tmp_path: Path,
+    operator_mode: str,
+) -> None:
+    row = _truth_bench.evaluate_torchsky_scene_case(
+        tmp_path,
+        case="tan_aligned_low_noise",
+        size=64,
+        seed=1234,
+        runs=1,
+        operator_mode=operator_mode,
+    )
+
+    assert row["library"] == "torchsky_scene"
+    assert row["method"] == "scene_render"
+    assert row["variant"] == operator_mode
+    assert row["geometry_family"] == "scene_target_render"
+    assert row["operator_mode"] == operator_mode
+    assert row["coverage_frac"] == pytest.approx(1.0)
+    assert row["rmse_vs_truth"] == pytest.approx(0.0)
+    assert row["background_leakage_fraction"] >= 0.0
+
+
+def test_map_ground_truth_field_fit_row_is_finite_and_optimized(tmp_path: Path) -> None:
+    row = _truth_bench.evaluate_torchsky_field_case(
+        tmp_path,
+        case="tan_aligned_low_noise",
+        size=24,
+        seed=1234,
+        runs=1,
+        field_model_kind="wire_implicit",
+        fit_steps=4,
+        max_observations=2,
+    )
+
+    assert row["library"] == "torchsky_field"
+    assert row["method"] == "field_fit"
+    assert row["variant"] == "wire_implicit"
+    assert row["geometry_family"] == "latent_scene_field"
+    assert row["fit_observations"] == 2
+    assert row["field_final_loss"] <= row["field_initial_loss"]
+    assert row["coverage_frac"] > 0.95
+    assert row["rmse_vs_truth"] >= 0.0
+
+
+@pytest.mark.parametrize(
+    ("spherical_mode", "geometry_family"),
+    [
+        ("healpix_bridge", "spherical_spectral_healpix_bridge"),
+        ("harmonic_direct", "spherical_harmonic_direct"),
+    ],
+)
+def test_map_ground_truth_spherical_rows_are_finite(
+    tmp_path: Path,
+    spherical_mode: str,
+    geometry_family: str,
+) -> None:
+    row = _truth_bench.evaluate_torchsky_spherical_case(
+        tmp_path,
+        case="tan_aligned_low_noise",
+        size=32,
+        seed=1234,
+        runs=1,
+        spherical_mode=spherical_mode,
+    )
+
+    assert row["library"] == "torchsky_spherical"
+    assert row["method"] == "spherical_reproject"
+    assert row["variant"] == spherical_mode
+    assert row["geometry_family"] == geometry_family
+    assert row["operator_bundle_geometry"] == "spherical_spectral_geometry"
+    assert row["healpix_nside"] >= 1
+    assert row["coverage_frac"] > 0.95
+    assert row["rmse_vs_truth"] >= 0.0
+
+
+def test_map_ground_truth_joint_teb_inverse_row_is_finite_and_improves_fit(
+    tmp_path: Path,
+) -> None:
+    row = _truth_bench.evaluate_torchsky_joint_teb_case(
+        tmp_path,
+        case="tan_aligned_low_noise",
+        size=32,
+        seed=1234,
+        runs=1,
+        lmax=3,
+    )
+
+    assert row["library"] == "torchsky_spherical"
+    assert row["method"] == "spherical_inverse"
+    assert row["variant"] == "joint_teb_cl_prior"
+    assert row["geometry_family"] == "spherical_harmonic_joint_teb"
+    assert row["operator_bundle_geometry"] == "spherical_spectral_geometry"
+    assert row["temp_observations"] == 2
+    assert row["pol_observations"] == 2
+    assert row["residual_norm_final"] < row["residual_norm_initial"]
+    assert row["temp_rmse_mean"] >= 0.0
+    assert row["pol_rmse_mean"] >= 0.0
+    assert row["teb_cross_spectrum_prior_norm"] >= 0.0
+
+
 def test_map_ground_truth_random10_large_union_metadata(tmp_path: Path) -> None:
     row = _truth_bench.evaluate_torchsky_case(
         tmp_path,
@@ -166,6 +291,8 @@ def test_map_ground_truth_random10_rect_weighted_masked_metadata(
     assert row["n_mask_maps"] == 10
     assert row["n_warped_inputs"] > 0
     assert row["mean_explicit_mask_fraction_input"] > 0.0
+    assert row["background_residual_rms"] >= 0.0
+    assert row["background_leakage_fraction"] >= 0.0
 
 
 def test_tpv_roundtrip_validity_mask_bypasses_filtering_for_tpv(tmp_path: Path) -> None:

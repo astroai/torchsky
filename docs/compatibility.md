@@ -8,7 +8,7 @@ This is **not** a goal of matching every internal detail of upstream packages. T
 
 | Area | Typical references | torchsky entry / notes |
 |------|-------------------|-------------------------|
-| HEALPix pixel + harmonic API | **healpy**, **hpgeom** (strict queries), **astropy-healpix** | `torchsky.sphere.compat`, `torchsky.sphere.healpy` (alias), `torchsky.wcs.healpix`; optional `backend="healpy"` in spectral paths for regression |
+| HEALPix pixel + harmonic API | **healpy**, **hpgeom** (strict queries), **astropy-healpix** | `torchsky.sphere.compat`, `torchsky.sphere.healpy` (alias), `torchsky.wcs.healpix`; spectral transforms are torch-native—compare to healpy in tests/benchmarks only |
 | WCS / projections | **Astropy** `astropy.wcs`, FITS WCS | `torchsky.wcs.WCS`, C++/fused paths; parity tests vs Astropy where scoped |
 | FITS I/O & tables | **fitsio**, **Astropy** `io.fits` / tables | `torchsky.read` / `write`, table module, Arrow/Polars interop |
 | Spherical geometry / polygons | **spherical_geometry**, **astropy-healpix** (where applicable) | `torchsky.sphere.geom`, exact regions, benchmarks vs upstream fixtures |
@@ -23,7 +23,7 @@ This is **not** a goal of matching every internal detail of upstream packages. T
 
 ## Optional dependencies
 
-Many parity and benchmark paths import **healpy**, **Astropy**, **hpgeom**, or others **only when installed**. They are used to **validate** torchsky behavior, not as the default implementation of core tensor APIs (unless an explicit `backend="healpy"`-style switch documents that path).
+Many parity and benchmark paths import **healpy**, **Astropy**, **hpgeom**, or others **only when installed**. They are used to **validate** torchsky behavior, not as the default implementation of core tensor APIs.
 
 ## Adding new compatibility
 

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -25,16 +26,42 @@ if str(BENCHMARKS) not in sys.path:
 
 import torchsky  # noqa: E402
 from torchsky import WCS  # noqa: E402
+from torchsky.wcs import healpix as hp  # noqa: E402
 from torchsky.map import (  # noqa: E402
     check_map_benchmark_regressions,
+    FieldObservation,
     ImageObservation,
+    MapBandpassSpec,
+    MapProductSpec,
+    estimate_field_domain,
     evaluate_map_product,
+    fit_field_model,
+    make_field_model,
     plan_map_product,
     stack_map_product,
     write_map_benchmark_artifacts,
 )
 import torchsky.map.image_plane as image_plane_mod  # noqa: E402
+from torchsky.map.product import render_scene_product  # noqa: E402
+from torchsky.map.target import TargetRenderSpec  # noqa: E402
+from torchsky.map.operators import (  # noqa: E402
+    ObservationOperatorBundle,
+    make_minimal_learned_operator_scaffold,
+    spherical_spectral_operator_bundle,
+    swap_bundle_operator_families,
+)
+from torchsky.map.scenes import DiscreteTargetImage, HealpixMapScene  # noqa: E402
+from torchsky.map.solvers import (  # noqa: E402
+    build_solver_hooks,
+    build_spherical_harmonic_solver_hooks,
+    build_spherical_spin_harmonic_solver_hooks,
+    build_state_subspace_operator,
+    build_teb_cls_prior_operator,
+    compose_bound_operators,
+    make_diagonal_preconditioner,
+)
 import bench_map_compat as map_compat  # noqa: E402
+from torchsky.map.operators.background import fit_background_plane  # noqa: E402
 
 try:  # noqa: E402
     import torchsky.cpp  # noqa: F401
@@ -65,6 +92,7 @@ DEFAULT_TORCHSKY_KERNELS = (
     "lanczos5",
     "mitchell_netravali",
     "catmull_rom",
+    "conservative_polygon",
 )
 _INTERPOLATORY_KERNELS = {
     "nearest",
@@ -186,6 +214,88 @@ def _tpv_header(
     header["PV2_7"] = -1.5e-6 * pv_scale
     header["PV2_39"] = -1.0e-11 * pv_scale
     return header
+
+
+def _shift_header_center(
+    header: dict[str, Any],
+    *,
+    dra_deg: float = 0.0,
+    ddec_deg: float = 0.0,
+) -> dict[str, Any]:
+    shifted = dict(header)
+    shifted["CRVAL1"] = float(header["CRVAL1"]) + float(dra_deg)
+    shifted["CRVAL2"] = float(header["CRVAL2"]) + float(ddec_deg)
+    return shifted
+
+
+def _benchmark_healpix_nside_for_target(
+    target_header: dict[str, Any],
+    *,
+    oversample: float = 2.0,
+) -> int:
+    target_pixels = int(target_header["NAXIS1"]) * int(target_header["NAXIS2"])
+    required = max(int(math.ceil(float(oversample) * target_pixels)), 12)
+    nside = 1
+    while 12 * nside * nside < required:
+        nside *= 2
+    return nside
+
+
+def _sample_image_on_lonlat_grid(
+    image: torch.Tensor,
+    *,
+    source_header: dict[str, Any],
+    lon_deg: torch.Tensor,
+    lat_deg: torch.Tensor,
+) -> torch.Tensor:
+    src = image.to(dtype=torch.float32)
+    h_src, w_src = int(src.shape[0]), int(src.shape[1])
+    source_wcs = WCS(dict(source_header))
+    x_src, y_src = source_wcs.world_to_pixel(
+        lon_deg.reshape(-1).to(torch.float64),
+        lat_deg.reshape(-1).to(torch.float64),
+    )
+    x_src = x_src.reshape_as(lon_deg).to(torch.float32)
+    y_src = y_src.reshape_as(lat_deg).to(torch.float32)
+    x_norm = (2.0 * x_src / max(w_src - 1, 1)) - 1.0
+    y_norm = (2.0 * y_src / max(h_src - 1, 1)) - 1.0
+    grid = torch.stack([x_norm.reshape(-1), y_norm.reshape(-1)], dim=-1).view(
+        1,
+        x_norm.numel(),
+        1,
+        2,
+    )
+    sampled = F.grid_sample(
+        src.view(1, 1, h_src, w_src),
+        grid,
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=True,
+    ).reshape_as(lon_deg)
+    in_bounds = (
+        (x_src >= 0.0)
+        & (x_src <= float(w_src - 1))
+        & (y_src >= 0.0)
+        & (y_src <= float(h_src - 1))
+    )
+    return torch.where(in_bounds, sampled, torch.zeros_like(sampled))
+
+
+def _truth_image_to_healpix_map(
+    truth: torch.Tensor,
+    *,
+    target_header: dict[str, Any],
+    nside: int,
+) -> torch.Tensor:
+    npix = hp.nside2npix(int(nside))
+    ipix = torch.arange(npix, dtype=torch.int64)
+    lon, lat = hp.pix2ang(int(nside), ipix, nest=False, lonlat=True)
+    return _sample_image_on_lonlat_grid(
+        truth,
+        source_header=target_header,
+        lon_deg=lon,
+        lat_deg=lat,
+    ).reshape(-1)
 
 
 def _tan_rect_header(
@@ -995,14 +1105,41 @@ def _truth_metrics(
         value_semantics=value_semantics,
     )
     mask = weight > 0.0
+    residual = data - truth
     signal = truth[mask]
     signal_rms = (
         float(torch.sqrt(torch.mean(signal**2)).item()) if bool(mask.any()) else 0.0
     )
+    if bool(mask.any()):
+        residual_supported = residual[mask]
+        weight_supported = weight[mask].to(dtype=torch.float32)
+        weight_sum = torch.clamp(weight_supported.sum(), min=1.0e-8)
+        weighted_rmse = float(
+            torch.sqrt(
+                torch.sum(weight_supported * torch.square(residual_supported.to(dtype=torch.float32)))
+                / weight_sum
+            ).item()
+        )
+        background_fit = fit_background_plane(residual, mask)
+        background_rms = background_fit.model_rms
+        detrended_rms = background_fit.detrended_rms
+        residual_bias = background_fit.residual_bias
+        background_leakage_fraction = background_fit.leakage_fraction
+    else:
+        weighted_rmse = 0.0
+        background_rms = 0.0
+        detrended_rms = 0.0
+        residual_bias = 0.0
+        background_leakage_fraction = 0.0
     metrics.update(
         {
             "signal_rms_truth": signal_rms,
             "residual_rms": float(metrics["reconstruction_rmse"]),
+            "weighted_residual_rms": weighted_rmse,
+            "background_residual_rms": background_rms,
+            "detrended_residual_rms": detrended_rms,
+            "background_leakage_fraction": background_leakage_fraction,
+            "residual_bias": residual_bias,
             "output_snr": float(metrics["signal_to_residual_ratio"]),
             "output_snr_db": float(metrics["signal_to_residual_db"]),
             "coverage_frac": float(metrics["coverage_fraction"]),
@@ -1166,11 +1303,488 @@ def evaluate_torchsky_case(
         product,
         resampling_kernel=resampling_kernel,
     )
+    return _build_product_benchmark_row(
+        case=case,
+        library="torchsky",
+        method="coadd",
+        variant=resampling_kernel,
+        geometry_family=map_compat._geometry_family_for_torchsky_kernel(resampling_kernel),
+        case_spec=case_spec,
+        observations=observations,
+        target_header=target_header,
+        truth=truth,
+        region_masks=region_masks,
+        result=result,
+        size=size,
+        time_ms=dt * 1000.0,
+        extra={
+            "interpolation_kernel": resampling_kernel,
+            "resampling_method": "resample_weighted_numerator_and_denominator",
+            "stacking_method": "weighted_mean",
+            "goal": "reconstruct_union_field_on_target_grid",
+        },
+    )
+
+
+def evaluate_torchsky_scene_case(
+    tmpdir: Path,
+    *,
+    case: str,
+    size: int,
+    seed: int,
+    runs: int,
+    operator_mode: str = "explicit",
+    width: int | None = None,
+    height: int | None = None,
+) -> dict[str, Any]:
+    observations, target_header, truth = make_case(
+        tmpdir,
+        case=case,
+        size=size,
+        seed=seed,
+        width=width,
+        height=height,
+    )
+    case_spec = _case_spec(case, size=size)
+    obs_list = [item.observation for item in observations]
+    region_masks = _target_mask_region_masks(observations, target_header=target_header)
+    product = plan_map_product(
+        obs_list,
+        header_overrides=target_header,
+        value_semantics=case_spec.value_semantics,
+    )
+    scene = DiscreteTargetImage(truth)
+    solver_hooks = None
+    if operator_mode == "learned_shell":
+        learned = make_minimal_learned_operator_scaffold()
+        solver_hooks = build_solver_hooks(
+            swap_bundle_operator_families(
+                ObservationOperatorBundle(),
+                learned,
+            )
+        )
+    elif operator_mode != "explicit":
+        raise ValueError("operator_mode must be 'explicit' or 'learned_shell'")
+    dt = _time_many(
+        lambda: render_scene_product(
+            scene,
+            product,
+            solver_hooks=solver_hooks,
+        ),
+        runs,
+    )
+    result = render_scene_product(
+        scene,
+        product,
+        solver_hooks=solver_hooks,
+    )
+    return _build_product_benchmark_row(
+        case=case,
+        library="torchsky_scene",
+        method="scene_render",
+        variant=operator_mode,
+        geometry_family="scene_target_render",
+        case_spec=case_spec,
+        observations=observations,
+        target_header=target_header,
+        truth=truth,
+        region_masks=region_masks,
+        result=result,
+        size=size,
+        time_ms=dt * 1000.0,
+        extra={
+            "operator_mode": operator_mode,
+            "goal": "render_latent_scene_on_target_grid",
+        },
+    )
+
+
+def evaluate_torchsky_field_case(
+    tmpdir: Path,
+    *,
+    case: str,
+    size: int,
+    seed: int,
+    runs: int,
+    field_model_kind: str = "wire_implicit",
+    fit_steps: int = 12,
+    fit_lr: float = 1.0e-2,
+    max_observations: int = 3,
+    wavelength_angstrom: float = 5500.0,
+    width: int | None = None,
+    height: int | None = None,
+) -> dict[str, Any]:
+    observations, target_header, truth = make_case(
+        tmpdir,
+        case=case,
+        size=size,
+        seed=seed,
+        width=width,
+        height=height,
+    )
+    case_spec = _case_spec(case, size=size)
+    region_masks = _target_mask_region_masks(observations, target_header=target_header)
+    field_observations = _field_observations_from_simulated_inputs(
+        observations,
+        wavelength_angstrom=wavelength_angstrom,
+        max_observations=max_observations,
+    )
+    product = MapProductSpec(
+        target_header=target_header,
+        bands=(MapBandpassSpec(label="mono", transmission_center=wavelength_angstrom),),
+        value_semantics=case_spec.value_semantics,
+    )
+
+    def _fit_and_render():
+        torch.manual_seed(int(seed))
+        fit_domain = estimate_field_domain(field_observations)
+        model = make_field_model(field_model_kind, fit_domain)
+        fit = fit_field_model(
+            field_observations,
+            model,
+            steps=int(fit_steps),
+            lr=float(fit_lr),
+            num_spectral_samples=1,
+            loss_kind="mse",
+            loss_reduction="global",
+        )
+        rendered = render_scene_product(
+            fit.model,
+            product,
+            num_spectral_samples=1,
+        )
+        return fit, rendered
+
+    dt = _time_many(_fit_and_render, runs)
+    fit, result = _fit_and_render()
+    return _build_product_benchmark_row(
+        case=case,
+        library="torchsky_field",
+        method="field_fit",
+        variant=field_model_kind,
+        geometry_family="latent_scene_field",
+        case_spec=case_spec,
+        observations=observations,
+        target_header=target_header,
+        truth=truth,
+        region_masks=region_masks,
+        result=result,
+        size=size,
+        time_ms=dt * 1000.0,
+        extra={
+            "field_model_kind": field_model_kind,
+            "fit_steps": int(fit_steps),
+            "fit_lr": float(fit_lr),
+            "fit_observations": len(field_observations),
+            "goal": "infer_latent_scene_then_render_target_grid",
+            "field_initial_loss": float(fit.initial_loss),
+            "field_final_loss": float(fit.final_loss),
+        },
+    )
+
+
+def evaluate_torchsky_spherical_case(
+    tmpdir: Path,
+    *,
+    case: str,
+    size: int,
+    seed: int,
+    runs: int,
+    spherical_mode: str = "harmonic_direct",
+    healpix_oversample: float = 2.0,
+    width: int | None = None,
+    height: int | None = None,
+) -> dict[str, Any]:
+    observations, target_header, truth = make_case(
+        tmpdir,
+        case=case,
+        size=size,
+        seed=seed,
+        width=width,
+        height=height,
+    )
+    case_spec = _case_spec(case, size=size)
+    region_masks = _target_mask_region_masks(observations, target_header=target_header)
+    nside = _benchmark_healpix_nside_for_target(
+        target_header,
+        oversample=healpix_oversample,
+    )
+    hp_map = _truth_image_to_healpix_map(
+        truth,
+        target_header=target_header,
+        nside=nside,
+    )
+    bundle = spherical_spectral_operator_bundle(mode=spherical_mode)
+    if spherical_mode not in {"harmonic_direct", "healpix_bridge"}:
+        raise ValueError("spherical_mode must be 'harmonic_direct' or 'healpix_bridge'")
+    geometry_family = (
+        "spherical_harmonic_direct"
+        if spherical_mode == "harmonic_direct"
+        else "spherical_spectral_healpix_bridge"
+    )
+    product = MapProductSpec(
+        target_header=target_header,
+        bands=(MapBandpassSpec(label="mono"),),
+        value_semantics=case_spec.value_semantics,
+    )
+    scene = HealpixMapScene(
+        hp_map,
+        nside=nside,
+        nest=False,
+        lmax=min(3 * int(nside) - 1, 32),
+    )
+    solver_hooks = build_solver_hooks(bundle)
+
+    def render_fn():
+        return render_scene_product(
+            scene,
+            product,
+            solver_hooks=solver_hooks,
+        )
+
+    dt = _time_many(render_fn, runs)
+    result = render_fn()
+    return _build_product_benchmark_row(
+        case=case,
+        library="torchsky_spherical",
+        method="spherical_reproject",
+        variant=spherical_mode,
+        geometry_family=geometry_family,
+        case_spec=case_spec,
+        observations=observations,
+        target_header=target_header,
+        truth=truth,
+        region_masks=region_masks,
+        result=result,
+        size=size,
+        time_ms=dt * 1000.0,
+        extra={
+            "healpix_nside": int(nside),
+            "operator_bundle_geometry": bundle.geometry.name if bundle.geometry is not None else None,
+            "spherical_mode": spherical_mode,
+            "goal": "reconstruct_union_field_on_target_grid_via_spherical_spectral_path",
+        },
+    )
+
+
+def evaluate_torchsky_joint_teb_case(
+    tmpdir: Path,
+    *,
+    case: str,
+    size: int,
+    seed: int,
+    runs: int,
+    lmax: int = 3,
+    width: int | None = None,
+    height: int | None = None,
+) -> dict[str, Any]:
+    observations, target_header, _truth = make_case(
+        tmpdir,
+        case=case,
+        size=size,
+        seed=seed,
+        width=width,
+        height=height,
+    )
+    case_spec = _case_spec(case, size=size)
+    torch.manual_seed(seed)
+    nalm = (int(lmax) + 1) * (int(lmax) + 2) // 2
+
+    teb_truth = torch.zeros((3, nalm), dtype=torch.complex64)
+    teb_truth[0, 0] = complex(math.sqrt(4.0 * math.pi) * 0.35, 0.0)
+    teb_truth[0, 1] = complex(0.08, 0.0)
+    teb_truth[0, 2] = complex(-0.04, 0.02)
+    if nalm > 5:
+        teb_truth[1, 2] = complex(0.06, 0.02)
+        teb_truth[1, 5] = complex(-0.03, 0.01)
+    if nalm > 7:
+        teb_truth[2, 4] = complex(0.04, -0.01)
+        teb_truth[2, 7] = complex(-0.02, 0.01)
+
+    temp_hooks = build_spherical_harmonic_solver_hooks(lmax=lmax)
+    pol_hooks = build_spherical_spin_harmonic_solver_hooks(spin=2, lmax=lmax)
+    temp_targets = (
+        TargetRenderSpec.from_header(
+            _shift_header_center(target_header, dra_deg=0.0, ddec_deg=0.0),
+            band_label="temp",
+        ),
+        TargetRenderSpec.from_header(
+            _shift_header_center(target_header, dra_deg=1.5, ddec_deg=-0.6),
+            band_label="temp",
+        ),
+    )
+    pol_targets = (
+        TargetRenderSpec.from_header(
+            _shift_header_center(target_header, dra_deg=0.0, ddec_deg=0.0),
+            band_label="pol",
+        ),
+        TargetRenderSpec.from_header(
+            _shift_header_center(target_header, dra_deg=-1.0, ddec_deg=0.8),
+            band_label="pol",
+        ),
+    )
+    temp_block = build_state_subspace_operator(
+        teb_truth,
+        temp_hooks.bind_targets(temp_targets),
+        selector=0,
+    )
+    pol_block = build_state_subspace_operator(
+        teb_truth,
+        pol_hooks.bind_targets(pol_targets),
+        selector=[1, 2],
+    )
+    prior_block = build_teb_cls_prior_operator(
+        teb_truth,
+        lmax=lmax,
+        cls_tt=torch.tensor([10.0, 2.0, 0.8, 0.3], dtype=torch.float64)[: lmax + 1],
+        cls_ee=torch.tensor([5.0, 1.2, 0.5, 0.2], dtype=torch.float64)[: lmax + 1],
+        cls_bb=torch.tensor([5.0, 1.2, 0.5, 0.2], dtype=torch.float64)[: lmax + 1],
+        cls_te=torch.tensor([0.0, 0.4, 0.15, 0.05], dtype=torch.float64)[: lmax + 1],
+        apply_noise=lambda tensor: tensor * 0.08,
+    )
+    operator_set = compose_bound_operators(temp_block, pol_block, prior_block)
+
+    clean_temp = temp_block.apply(teb_truth)
+    clean_pol = pol_block.apply(teb_truth)
+    observed_temp = tuple(cutout + 0.01 * torch.randn_like(cutout) for cutout in clean_temp)
+    observed_pol = tuple(maps + 0.005 * torch.randn_like(maps) for maps in clean_pol)
+    data = (*observed_temp, *observed_pol, torch.zeros_like(teb_truth))
+    zero_solution = torch.zeros_like(teb_truth)
+    initial_outputs = operator_set.apply(zero_solution)
+    initial_residual_norm = math.sqrt(
+        sum(
+            float(torch.sum(torch.abs(pred - obs) ** 2).item())
+            for pred, obs in zip(initial_outputs, data, strict=True)
+        )
+    )
+
+    def solve_fn():
+        diagonal = operator_set.estimate_normal_operator_diagonal(
+            data,
+            initial_probe=torch.zeros_like(teb_truth),
+            max_entries=64,
+            damping=1.0e-4,
+        )
+        return operator_set.solve_normal_equation_cg(
+            data,
+            initial_solution=torch.zeros_like(teb_truth),
+            iterations=10,
+            damping=1.0e-4,
+            preconditioner=make_diagonal_preconditioner(diagonal),
+        )
+
+    dt = _time_many(solve_fn, runs)
+    fit = solve_fn()
+    reconstructed_temp = temp_block.apply(fit.solution)
+    reconstructed_pol = pol_block.apply(fit.solution)
+    temp_rmses = [
+        math.sqrt(float(torch.mean(torch.square(pred - obs)).item()))
+        for pred, obs in zip(reconstructed_temp, observed_temp, strict=True)
+    ]
+    pol_rmses = [
+        math.sqrt(float(torch.mean(torch.square(pred - obs)).item()))
+        for pred, obs in zip(reconstructed_pol, observed_pol, strict=True)
+    ]
+    prior_norm = float(torch.linalg.vector_norm(prior_block.apply(fit.solution)).item())
+    final_residual_norm = (
+        float(fit.residual_norm_history[-1])
+        if fit.residual_norm_history
+        else initial_residual_norm
+    )
     return {
         "case": case,
-        "library": "torchsky",
-        "method": "coadd",
-        "variant": resampling_kernel,
+        "library": "torchsky_spherical",
+        "method": "spherical_inverse",
+        "variant": "joint_teb_cl_prior",
+        "geometry_family": "spherical_harmonic_joint_teb",
+        "projection": case_spec.projection,
+        "description": case_spec.description,
+        "value_semantics": case_spec.value_semantics,
+        "noise_model": case_spec.noise_model,
+        "size": size,
+        "n_obs": len(observations),
+        "target_width": int(target_header["NAXIS1"]),
+        "target_height": int(target_header["NAXIS2"]),
+        "time_ms": dt * 1000.0,
+        "temp_observations": len(observed_temp),
+        "pol_observations": len(observed_pol),
+        "lmax": int(lmax),
+        "nalm": int(nalm),
+        "operator_bundle_geometry": temp_hooks.operators.geometry.name,
+        "temp_rmse_mean": float(sum(temp_rmses) / max(len(temp_rmses), 1)),
+        "temp_rmse_max": float(max(temp_rmses)),
+        "pol_rmse_mean": float(sum(pol_rmses) / max(len(pol_rmses), 1)),
+        "pol_rmse_max": float(max(pol_rmses)),
+        "residual_norm_initial": float(initial_residual_norm),
+        "residual_norm_final": float(final_residual_norm),
+        "teb_cross_spectrum_prior_norm": prior_norm,
+        "goal": "fit_shared_spherical_teb_state_from_temperature_and_polarized_cutouts",
+    }
+
+
+def _field_observations_from_simulated_inputs(
+    observations: list[SimulatedObservation],
+    *,
+    wavelength_angstrom: float,
+    max_observations: int,
+) -> list[FieldObservation]:
+    selected = observations[: max(int(max_observations), 1)]
+    field_observations: list[FieldObservation] = []
+    for item in selected:
+        image = torchsky.read(
+            item.observation.path,
+            hdu=item.observation.hdu,
+            device="cpu",
+        ).to(dtype=torch.float32)
+        weight = None
+        if item.observation.weight_path is not None:
+            weight = torchsky.read(
+                item.observation.weight_path,
+                device="cpu",
+            ).to(dtype=torch.float32)
+        mask = None
+        if item.observation.mask_path is not None:
+            mask = torchsky.read(
+                item.observation.mask_path,
+                device="cpu",
+            ).to(dtype=torch.float32)
+        field_observations.append(
+            FieldObservation(
+                image=image,
+                header=dict(item.header),
+                weight=weight,
+                mask=mask,
+                wavelength=float(wavelength_angstrom),
+                transmission_center=float(wavelength_angstrom),
+                band_name="mono",
+            )
+        )
+    return field_observations
+
+
+def _build_product_benchmark_row(
+    *,
+    case: str,
+    library: str,
+    method: str,
+    variant: str,
+    geometry_family: str,
+    case_spec: _CaseSpec,
+    observations: list[SimulatedObservation],
+    target_header: dict[str, Any],
+    truth: torch.Tensor,
+    region_masks: dict[str, torch.Tensor],
+    result,
+    size: int,
+    time_ms: float,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "case": case,
+        "library": library,
+        "method": method,
+        "variant": variant,
+        "geometry_family": geometry_family,
         "projection": case_spec.projection,
         "description": case_spec.description,
         "value_semantics": case_spec.value_semantics,
@@ -1183,9 +1797,6 @@ def evaluate_torchsky_case(
         "max_input_width": max(int(item.header["NAXIS1"]) for item in observations),
         "min_input_height": min(int(item.header["NAXIS2"]) for item in observations),
         "max_input_height": max(int(item.header["NAXIS2"]) for item in observations),
-        "interpolation_kernel": resampling_kernel,
-        "resampling_method": "resample_weighted_numerator_and_denominator",
-        "stacking_method": "weighted_mean",
         "goal": "reconstruct_union_field_on_target_grid",
         "product_geometry": (
             "rectangular"
@@ -1201,8 +1812,8 @@ def evaluate_torchsky_case(
         "mean_explicit_mask_fraction_input": float(
             sum(item.explicit_mask_fraction for item in observations) / max(len(observations), 1)
         ),
-        "time_ms": dt * 1000.0,
-        "mpix_s": (float(result.data.numel()) / dt) / 1e6,
+        "time_ms": time_ms,
+        "mpix_s": (float(result.data.numel()) / max(time_ms / 1000.0, 1e-12)) / 1e6,
         **_truth_metrics(
             result.data.squeeze(0),
             result.weight.squeeze(0),
@@ -1223,6 +1834,7 @@ def evaluate_torchsky_case(
         "mean_psf_sigma_pix": float(
             sum(item.psf_sigma_pix for item in observations) / max(len(observations), 1)
         ),
+        **({} if extra is None else extra),
     }
 
 
@@ -1445,6 +2057,11 @@ def main() -> int:
         action="store_true",
         help="Also score available external mapmaking backends against the synthetic truth",
     )
+    parser.add_argument(
+        "--include-spherical-inverse",
+        action="store_true",
+        help="Also score the native joint spherical T/E/B inverse benchmark row",
+    )
     parser.add_argument("--size", type=int, default=128)
     parser.add_argument("--width", type=int, default=None)
     parser.add_argument("--height", type=int, default=None)
@@ -1483,6 +2100,18 @@ def main() -> int:
                         height=args.height,
                         seed=args.seed,
                         runs=max(2, args.runs),
+                    )
+                )
+            if args.include_spherical_inverse:
+                rows.append(
+                    evaluate_torchsky_joint_teb_case(
+                        tmpdir,
+                        case=case,
+                        size=args.size,
+                        width=args.width,
+                        height=args.height,
+                        seed=args.seed,
+                        runs=args.runs,
                     )
                 )
     rows.extend(_kernel_recommendation_rows(rows))

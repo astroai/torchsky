@@ -13,9 +13,8 @@ This module implements healpy’s NumPy-oriented HEALPix API with
   and related helpers are delegated to :mod:`torchsky.wcs.healpix` (re-exported here
   under familiar healpy names).
 * **Harmonic / map** — ``map2alm``, ``alm2map``, ``synfast``, ``pixwin``, spin
-  transforms, smoothing, etc. delegate to :mod:`torchsky.sphere.spectral`, which
-  defaults to the torch backend and can optionally call healpy with
-  ``backend="healpy"`` for parity checks.
+  transforms, smoothing, etc. delegate to :mod:`torchsky.sphere.spectral` (torch +
+  torchsky C++ only).
 * **Strict queries** — some routines optionally match `hpgeom` when
   ``strict_mode(True)`` (see :func:`set_strict_mode`).
 
@@ -465,7 +464,6 @@ def map2alm(
     lmax: int | None = None,
     mmax: int | None = None,
     nest: bool = False,
-    backend: Literal["torch", "healpy"] = "torch",
     iter: int = 0,
     pol: bool = False,
     use_pixel_weights: bool = False,
@@ -476,7 +474,6 @@ def map2alm(
         lmax=lmax,
         mmax=mmax,
         nest=nest,
-        backend=backend,
         iter=iter,
         pol=pol,
         use_pixel_weights=use_pixel_weights,
@@ -493,7 +490,6 @@ def map2alm_lsq(
     *,
     nside: int | None = None,
     nest: bool = False,
-    backend: Literal["torch", "healpy"] = "torch",
     use_pixel_weights: bool = False,
 ) -> tuple[Tensor, float, int]:
     return _map2alm_lsq(
@@ -505,7 +501,6 @@ def map2alm_lsq(
         tol=tol,
         maxiter=maxiter,
         nest=nest,
-        backend=backend,
         use_pixel_weights=use_pixel_weights,
     )
 
@@ -540,7 +535,6 @@ def alm2map(
     lmax: int | None = None,
     mmax: int | None = None,
     nest: bool = False,
-    backend: Literal["torch", "healpy"] = "torch",
     pol: bool = False,
     pixwin: bool = False,
 ) -> Tensor:
@@ -550,7 +544,6 @@ def alm2map(
         lmax=lmax,
         mmax=mmax,
         nest=nest,
-        backend=backend,
         pol=pol,
         pixwin=pixwin,
     )
@@ -564,7 +557,6 @@ def anafast(
     lmax: int | None = None,
     mmax: int | None = None,
     nest: bool = False,
-    backend: Literal["torch", "healpy"] = "torch",
     nspec: int | None = None,
     iter: int = 0,
     alm: bool = False,
@@ -580,7 +572,6 @@ def anafast(
         lmax=lmax,
         mmax=mmax,
         nest=nest,
-        backend=backend,
         nspec=nspec,
         iter=iter,
         alm=alm,
@@ -687,7 +678,6 @@ def smoothmap(
     use_weights: bool = False,
     use_pixel_weights: bool = False,
     verbose: bool = True,
-    backend: Literal["torch", "healpy"] = "torch",
 ) -> Tensor:
     return _smoothmap(
         map_values,
@@ -704,7 +694,6 @@ def smoothmap(
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
         verbose=verbose,
-        backend=backend,
     )
 
 
@@ -721,7 +710,6 @@ def smoothing(
     use_pixel_weights: bool = False,
     verbose: bool = True,
     nest: bool = False,
-    backend: Literal["torch", "healpy"] = "torch",
 ) -> Tensor:
     map_t = torch.as_tensor(map_in)
     pol_eff = bool(pol) and (map_t.ndim == 2 and map_t.shape[0] == 3)
@@ -739,7 +727,6 @@ def smoothing(
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
         verbose=verbose,
-        backend=backend,
     )
 
 
@@ -751,11 +738,8 @@ def map2alm_spin(
     lmax: int | None = None,
     mmax: int | None = None,
     nest: bool = False,
-    backend: Literal["torch", "healpy"] = "torch",
 ) -> tuple[Tensor, Tensor]:
-    return _map2alm_spin(
-        maps, spin, nside=nside, lmax=lmax, mmax=mmax, nest=nest, backend=backend
-    )
+    return _map2alm_spin(maps, spin, nside=nside, lmax=lmax, mmax=mmax, nest=nest)
 
 
 def alm2map_spin(
@@ -766,11 +750,8 @@ def alm2map_spin(
     lmax: int | None = None,
     mmax: int | None = None,
     nest: bool = False,
-    backend: Literal["torch", "healpy"] = "torch",
 ) -> Tensor:
-    return _alm2map_spin(
-        alms, nside, spin, lmax=lmax, mmax=mmax, nest=nest, backend=backend
-    )
+    return _alm2map_spin(alms, nside, spin, lmax=lmax, mmax=mmax, nest=nest)
 
 
 # Re-export common APIs with familiar naming.

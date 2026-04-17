@@ -208,14 +208,10 @@ def _great_circle_arcs_intersect_many(
     n2 = torch.cross(b0, b1, dim=-1)
     n2_norm = torch.linalg.norm(n2, dim=-1)
     valid = n2_norm > 1e-15
-    if not bool(valid.any()):
-        return torch.zeros(b0.shape[0], dtype=torch.bool, device=b0.device)
 
     p = torch.cross(n1.unsqueeze(0).expand_as(n2), n2, dim=-1)
     p_norm = torch.linalg.norm(p, dim=-1)
     valid = valid & (p_norm > 1e-15)
-    if not bool(valid.any()):
-        return torch.zeros(b0.shape[0], dtype=torch.bool, device=b0.device)
 
     i1 = p / p_norm.clamp_min(1e-15).unsqueeze(-1)
     i2 = -i1
@@ -264,18 +260,10 @@ def _great_circle_arcs_intersect_matrix(
     n1_norm = torch.linalg.norm(n1, dim=-1)
     n2_norm = torch.linalg.norm(n2, dim=-1)
     valid = (n1_norm > 1e-15).unsqueeze(1) & (n2_norm > 1e-15).unsqueeze(0)
-    if not bool(valid.any()):
-        return torch.zeros(
-            (a0.shape[0], b0.shape[0]), dtype=torch.bool, device=a0.device
-        )
 
     p = torch.cross(n1[:, None, :], n2[None, :, :], dim=-1)  # [E1,E2,3]
     p_norm = torch.linalg.norm(p, dim=-1)
     valid = valid & (p_norm > 1e-15)
-    if not bool(valid.any()):
-        return torch.zeros(
-            (a0.shape[0], b0.shape[0]), dtype=torch.bool, device=a0.device
-        )
 
     i1 = p / p_norm.clamp_min(1e-15).unsqueeze(-1)
     i2 = -i1

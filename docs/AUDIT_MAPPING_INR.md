@@ -10,7 +10,7 @@
 ### 1.1 Image-plane mapmaking (`map/image_plane.py`)
 
 - **Inverse mapping (target ← source):** World positions on the output grid are mapped into source pixel space; resampling uses `torch.nn.functional.grid_sample` for most kernels, with optional **windowed** evaluation for large TAN fields.
-- **Resampling kernels (public):** `nearest`, `bilinear`, `bicubic`, `lanczos3`, `lanczos5`, `mitchell_netravali`, `catmull_rom`, `fft_shift`, `fft_diagonal_affine`, `fft_linear_affine`, `periodic_linear_affine`, `drizzle_point`, `drizzle_square`.
+- **Resampling kernels (public):** `nearest`, `bilinear`, `bicubic`, `lanczos3`, `lanczos5`, `mitchell_netravali`, `catmull_rom`, `fft_shift`, `fft_diagonal_affine`, `fft_linear_affine`, `periodic_linear_affine`, `drizzle_point`, `drizzle_square`, `conservative_polygon`, `splat_point`, `splat_box`.
 - **HEALPix on TAN grids (helper):** `sample_healpix_map_on_tan_header` samples a HEALPix map onto a target header using `torchsky.wcs.healpix.get_interp_val` (no `reproject` dependency).
 - **Drizzle path:** **Default** coaddition uses the native torch **forward-drizzle** accumulator (CUDA/MPS/differentiable). The external Python **`drizzle`** package is **opt-in** for regression against DrizzlePac-style behavior: set `TORCHSKY_USE_EXTERNAL_DRIZZLE=1` (see `map/image_plane.py`).
 - **Value semantics:** `surface_brightness` vs `flux` (with pixel solid-angle scaling where required).

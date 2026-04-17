@@ -2,6 +2,8 @@
 
 This page documents the benchmark methodology. The snapshot tables below reflect the **0.3.1** release; update with each release run.
 
+**Open-source comparator matrix (multi-env installs, legacy WCS, HEALPix ecosystem, map stackers):** see **[Benchmark comparators](benchmark_comparators.md)**. Record installed versions with `pixi run bench-comparator-versions-all` (writes under `benchmarks_results/`).
+
 ## CI: map compat gate
 
 On each push/PR, workflow **Map mosaic (bench extras + compat gate)** (see `.github/workflows/ci.yml`) installs **`torchsky[bench]`**, runs the full **`pytest tests/`** suite (including **`reproject`** bilinear/bicubic parity, optional **`dfreproject`** bilinear parity, and optional **`drizzle`** external-path smoke tests), then runs **`benchmarks/bench_map_compat.py`** on **`synthetic_shifted_wcs`** with **`benchmarks/baselines/map_compat_ci_gate.json`** enforcing status and comparator diff ceilings for the bilinear `reproject_interp` row. A follow-up bench step runs **`torchsky:fft_shift`** on **`upstream_drizzle_crpix_translation`** (no baseline; smoke only). A weekly **`workflow_dispatch` / schedule** copy is in **`.github/workflows/map_compat_weekly.yml`**.
@@ -45,9 +47,10 @@ On each push/PR, workflow **Map mosaic (bench extras + compat gate)** (see `.git
 | `bench_strainer_phase2.py` | Small JSON harness for Strainer-style field models: baseline vs trunk pretrain + head reset vs pretrain with frozen trunk, reporting initial / early-step / final training losses on a synthetic TAN observation (see `inr_next.md` Phase 2). Requested `--early-steps` above `--fit-steps` are omitted (see JSON `early_steps_skipped`) rather than emitted as NaNs. |
 | `bench_map_smacs0723_strainer_transfer.py` | Optional real-data Strainer transfer smoke on SMACS J0723 (same crop stack as `bench_map_smacs0723_field_fit.py`): random init vs multi-noise pretrain + `reset_decoder_head()`, with training losses and support RMSE vs the drizzle reference. Exits 0 with `status: skipped` when `data/` inputs are absent. |
 | `bench_wcs.py` | WCS transform throughput checks, including small-batch center-projection `default vs python-only` fields on CPU. |
+| `bench_wcs_small_n_paths.py` | Small-`N` dispatch matrix: Astropy `all_pix2world` / `all_world2pix` vs torchsky two-arg vs stacked `(N,2)` vs stacked after `compile()` for **forward** (fused pixels→rel→world + Torch pole rotation) and **inverse** (fused world→pixels + Torch inverse pole rotation), FITS `origin` 0/1; median ms plus max |ΔRA|,|ΔDec| and max |Δx|,|Δy| vs Astropy on the stacked paths. |
 | `bench_wcs_tpv_inverse.py` | Dedicated large-`N` TPV inverse benchmark comparing torchsky fused TPV `world_to_pixel`, torchsky tensor-core TPV inverse, and Astropy on affine-only and non-linear TPV headers. |
 | `bench_healpix.py` | HEALPix CPU/CUDA parity + throughput + quality gates (`ang2pix`, `pix2ang`, `ring/nest`). |
-| `bench_healpix_advanced.py` | Advanced HEALPix parity + throughput checks (`get_all_neighbours`, `get_interp_weights`, `get_interp_val`). |
+| `bench_healpix_advanced.py` | Advanced HEALPix parity + throughput checks (`get_all_neighbours`, `get_interp_weights`, `get_interp_val`). Timed loops measure torchsky tensor work only; NumPy export for diffs is outside timing so torchsky is not charged extra copy cost vs healpy. |
 | `bench_sphere_geometry.py` | Cross-library spherical geometry benchmark (torchsky vs HEALPix ecosystem releases). |
 | `bench_sphere_core.py` | Sphere-core primitives benchmark (multi-band sampling, pairwise distances, ellipse query). |
 | `bench_sphere_polygons.py` | Non-convex spherical polygon benchmark (contains/intersects/query/area with optional spherical-geometry parity). |
@@ -409,6 +412,9 @@ pixi run python benchmarks/bench_wcs.py --cases TAN,SIN,ARC,AIT,MOL,HPX,CEA,MER,
 # WCS small-N center-projection check (bench_wcs emits center_cpp_* fields when active)
 pixi run python benchmarks/bench_wcs.py --cases AIT,HPX,CEA,MER,CAR,SFL --sample-profile mixed --n-points 512 --runs 9
 
+# WCS small-N: Astropy vs torchsky forward + inverse (two-arg vs stacked vs stacked+compile)
+pixi run python benchmarks/bench_wcs_small_n_paths.py --cases TAN,SIN,ARC --n-points 256 --runs 11
+
 # Dedicated TPV inverse primitive benchmark
 pixi run bench-wcs-tpv-inverse
 
@@ -525,10 +531,30 @@ pixi run -e sphere-bench sphere-bench-geometry-gate-small
 - `replay_upstream_test_functions.py` executes selected upstream astropy-healpix test functions directly against torchsky adapters for closer semantic parity checks.
 - `replay_upstream_healpy_interp_edges.py` replays interpolation edge cases (lon wrap, poles, edge pixels) against healpy with mismatch/error and ratio gates.
 - `replay_upstream_healpy_spin.py` replays spin transform cases (`map2alm_spin`, `alm2map_spin`) against healpy with per-case error gates and median throughput ratio thresholds.
-- Spin replay defaults to the current validated profile (`TORCHSKY_RING_FOURIER_CPP=1`, recurrence off, `TORCHSKY_SPIN_RING_AUTO_MIN_BYTES=32 MiB`) unless explicitly overridden in the environment.
+- Spin replay applies a validated profile via `setdefault` in `replay_upstream_healpy_spin.py` when unset: `TORCHSKY_RING_FOURIER_CPP=1`, spin recurrence CPP off, `TORCHSKY_SPIN_RING_AUTO_MIN_BYTES=32 MiB`, and related `TORCHSKY_SPIN_*_RING_TORCH=auto` flags. The `torchsky.sphere.spectral` module defaults differ (for example `TORCHSKY_SPIN_RING_AUTO_MIN_BYTES` defaults to `0` until the replay or benchmarks set it); see **Default `TORCHSKY_*` knobs (WCS / sphere)** below.
 - Override only for local development experiments with:
   - `bench_healpix.py --allow-nonrelease-healpy`
   - `bench_sphere_geometry.py --allow-nonrelease-distributions`
+
+## Default `TORCHSKY_*` knobs (WCS / sphere)
+
+These are the **code defaults** when the environment variable is unset (see `torchsky/wcs/core.py` and `torchsky/sphere/spectral.py`). Benchmark and replay drivers may call `os.environ.setdefault(...)` to pin a stricter profile.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `TORCHSKY_WCS_FUSED` | `1` | CPU fused `pixel_to_world` / `world_to_pixel` for supported projections (TAN, SIN, ARC, CEA, AIT, HPX, CAR, SFL, MOL, TPV when enabled). Set `0` to force the non-fused tensor path. |
+| `TORCHSKY_RING_FOURIER_CPP` | `1` | RING Fourier analysis/synthesis helpers in spectral transforms. |
+| `TORCHSKY_RING_FOURIER_MODES_CPP` | `1` | C++ path for Fourier mode assembly within `mmax` caps. |
+| `TORCHSKY_RING_FOURIER_SYNTH_CPP` | `1` | C++ path for Fourier synthesis within `mmax` caps. |
+| `TORCHSKY_SPIN_MAP2ALM_RING_CONCAT_CPP` | `1` | Spin `map2alm` ring concat integration. |
+| `TORCHSKY_SPIN_RING_FINALIZE_CPP` | `1` | Spin ring finalize stage. |
+| `TORCHSKY_SPIN_RING_INTERP_CONCAT_CPP` | `1` | Spin `alm2map` interpolate concat. |
+| `TORCHSKY_SPIN_RING_INTEGRATE_CONCAT_CPP` | `1` | Spin `map2alm` integrate concat. |
+| `TORCHSKY_SCALAR_MAP2ALM_RECURRENCE_CPP` | `1` | Scalar `map2alm` recurrence backend. |
+| `TORCHSKY_SCALAR_ALM2MAP_RECURRENCE_CPP` | `1` | Scalar `alm2map` recurrence backend. |
+| `TORCHSKY_SPIN_RING_AUTO_MIN_BYTES` | `0` | Minimum map size (bytes) before auto-selecting some ring fast paths; replays often set `32 MiB`. |
+
+Phase 0 benchmark procedure for WCS + sphere: [`benchmarks/PHASE0_WCS_SPHERE.md`](../benchmarks/PHASE0_WCS_SPHERE.md). Pixi: `pixi run wcs-sphere-phase0` (benches only) or `pixi run wcs-sphere-acceptance` (benches + full WCS/sphere pytest + spin replay report).
 
 ## Optimization History
 
@@ -566,7 +592,7 @@ Run metadata:
 ### Known Deficits (Target for 0.4.0)
 
 - **Sphere (Spin Transforms)**: `map2alm_spin` and `alm2map_spin` show ~6x-7x lag vs `healpy`. These will be optimized with a custom RING-Fouier kernel.
-- **WCS (Small-N)**: Some forward small-N rows still lag vs `pyast` (legacy), especially away from the center-equator projections. `bench_wcs.py` now tracks the CPU center-helper crossover explicitly through `center_cpp_*` fields for `AIT/CAR/CEA/HPX/MER/SFL`.
+- **WCS (Small-N)**: Some forward small-N rows still lag vs `pyast` (legacy), especially away from the center-equator projections. `bench_wcs.py` now tracks the CPU center-helper crossover explicitly through `center_cpp_*` fields for `AIT/CAR/CEA/HPX/MER/SFL`. The CPU fused path (`TORCHSKY_WCS_FUSED=1`) includes **ARC** alongside TAN/SIN and the other supported codes; re-profile after native extension rebuilds. For torchsky-vs-Astropy timing on **two-arg vs stacked `(N,2)` vs `compile()`** for both **pixel→world and world→pixel**, use `bench_wcs_small_n_paths.py`; pytest gates stacked and compiled-stacked parity (forward and inverse) in `tests/test_wcs_parity.py`.
 - **ZPN/AIT Projections**: Slight visible deficits in intermediate size tiers.
 
 ## ML Loader Snapshot (0.3.0)

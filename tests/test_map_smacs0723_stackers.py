@@ -12,7 +12,7 @@ if str(BENCHMARKS) not in sys.path:
     sys.path.insert(0, str(BENCHMARKS))
 
 from bench_map_compat import _as_fits_header
-from bench_map_smacs0723_stackers import _build_method_specs, _compute_region_metrics
+from bench_map_smacs0723_stackers import _build_method_specs, _compute_region_metrics, _format_markdown
 
 
 def test_build_method_specs_includes_linearized_legacy_targets() -> None:
@@ -23,9 +23,16 @@ def test_build_method_specs_includes_linearized_legacy_targets() -> None:
     assert by_name["montage_tan"]["target_mode"] == "published_swarp_tan"
     assert by_name["torchsky_drizzle_square"]["target_mode"] == "published_native"
     assert by_name["torchsky_drizzle_point"]["target_mode"] == "published_native"
+    assert by_name["torchsky_conservative_polygon"]["target_mode"] == "published_native"
+    assert by_name["torchsky_splat_box"]["target_mode"] == "published_native"
     assert by_name["reproject_exact"]["family"] == "reproject"
     assert by_name["reproject_adaptive"]["family"] == "reproject"
     assert by_name["inr_operator_constrained_feature_field"]["family"] == "inr"
+    assert by_name["torchsky_splat_box"]["geometry_family"] == "forward_splat"
+    assert by_name["torchsky_drizzle_square"]["geometry_family"] == "exact_drizzle"
+    assert by_name["torchsky_conservative_polygon"]["geometry_family"] == "conservative_overlap"
+    assert by_name["reproject_exact"]["geometry_family"] == "conservative_overlap"
+    assert by_name["inr_operator_constrained_feature_field"]["geometry_family"] == "latent_scene"
 
 
 def test_compute_region_metrics_reports_affine_and_local_terms() -> None:
@@ -41,6 +48,29 @@ def test_compute_region_metrics_reports_affine_and_local_terms() -> None:
     assert "center_support_rmse" in metrics
     assert "edge_support_rmse" in metrics
     assert "support_rmse_after_affine_fit" in metrics
+
+
+def test_format_markdown_includes_geometry_family_column() -> None:
+    markdown = _format_markdown(
+        [
+            {
+                "variant": "torchsky:splat_box:surface_brightness:pixfrac=1.000",
+                "family": "torchsky",
+                "geometry_family": "forward_splat",
+                "status": "OK",
+                "target_mode_used": "published_native",
+                "support_rmse": 0.1,
+                "uniform_rmse": 0.2,
+                "support_flux_ratio": 1.0,
+                "center_support_rmse": 0.05,
+                "edge_support_rmse": 0.15,
+                "support_rmse_after_affine_fit": 0.09,
+                "time_ms": 12.3,
+            }
+        ]
+    )
+    assert "| variant | family | geometry | status | target |" in markdown
+    assert "| torchsky:splat_box:surface_brightness:pixfrac=1.000 | torchsky | forward_splat | OK | published_native |" in markdown
 
 
 def test_as_fits_header_sanitizes_multiline_non_ascii_strings() -> None:

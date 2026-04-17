@@ -17,8 +17,8 @@ def test_map2alm_alm2map_pipeline_finite_torch_backend() -> None:
     lmax = 3 * nside - 1
     torch.manual_seed(0)
     m = torch.randn(hp.nside2npix(nside), dtype=torch.float64)
-    alm = map2alm(m, nside=nside, lmax=lmax, iter=0, backend="torch")
-    m2 = alm2map(alm, nside=nside, lmax=lmax, backend="torch")
+    alm = map2alm(m, nside=nside, lmax=lmax, iter=0)
+    m2 = alm2map(alm, nside=nside, lmax=lmax)
     assert torch.isfinite(alm).all()
     assert torch.isfinite(m2).all()
     assert m2.shape == m.shape

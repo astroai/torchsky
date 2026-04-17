@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+import math
 import torch.nn as nn
 from torch import Tensor
 
@@ -69,9 +70,49 @@ class ForwardContext:
     """
 
     survey: str | None = None
+    instrument: str | None = None
+    detector: str | None = None
     exposure_id: str | None = None
     time_mjd: float | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+
+
+FieldPSFMode = Literal["none", "gaussian_sigma_pix", "kernel2d"]
+
+
+@dataclass
+class PSFSpec:
+    """Public PSF description for field observations and target products."""
+
+    mode: FieldPSFMode = "none"
+    sigma_pix: float = 0.0
+    kernel2d: Tensor | None = None
+
+    @classmethod
+    def gaussian(cls, sigma_pix: float) -> "PSFSpec":
+        return cls(mode="gaussian_sigma_pix", sigma_pix=float(sigma_pix))
+
+    @classmethod
+    def kernel(cls, kernel2d: Tensor) -> "PSFSpec":
+        return cls(mode="kernel2d", kernel2d=kernel2d)
+
+    def __post_init__(self) -> None:
+        if self.mode == "none":
+            return
+        if self.mode == "gaussian_sigma_pix":
+            sigma = float(self.sigma_pix)
+            if not math.isfinite(sigma) or sigma <= 0.0:
+                raise ValueError("PSFSpec gaussian_sigma_pix requires finite sigma_pix > 0")
+            return
+        if self.mode == "kernel2d":
+            if self.kernel2d is None:
+                raise ValueError("PSFSpec kernel2d mode requires kernel2d")
+            if self.kernel2d.ndim != 2:
+                raise ValueError("PSFSpec kernel2d must be 2D")
+            if self.kernel2d.numel() == 0:
+                raise ValueError("PSFSpec kernel2d must be non-empty")
+            return
+        raise ValueError(f"unsupported PSFSpec mode {self.mode!r}")
 
 
 @dataclass(frozen=True)
@@ -160,10 +201,43 @@ class FieldObservation:
     transmission_wavelength: Tensor | None = None
     transmission_throughput: Tensor | None = None
     psf_sigma_pix: float = 0.0
+    psf_spec: PSFSpec | None = None
+    sky_background: Tensor | None = None
+    instrument_background: Tensor | None = None
+    detector_background: Tensor | None = None
+    background_offset: float = 0.0
     band_name: str | None = None
     spectral_quantity: FieldSpectralQuantity | None = None
 
     def __post_init__(self) -> None:
+        if self.psf_spec is None:
+            if float(self.psf_sigma_pix) > 0.0:
+                self.psf_spec = PSFSpec.gaussian(float(self.psf_sigma_pix))
+            else:
+                self.psf_spec = PSFSpec()
+        elif self.psf_spec.mode == "gaussian_sigma_pix" and float(self.psf_sigma_pix) > 0.0:
+            sigma = float(self.psf_sigma_pix)
+            if not math.isclose(float(self.psf_spec.sigma_pix), sigma, rel_tol=1e-6, abs_tol=1e-6):
+                raise ValueError("FieldObservation psf_sigma_pix must agree with psf_spec")
+        if not math.isfinite(float(self.background_offset)):
+            raise ValueError("FieldObservation background_offset must be finite")
+        for name in (
+            "sky_background",
+            "instrument_background",
+            "detector_background",
+        ):
+            component = getattr(self, name)
+            if component is None:
+                continue
+            if component.ndim != 2:
+                raise ValueError(f"FieldObservation {name} must be 2D")
+            if tuple(int(v) for v in component.shape) != tuple(
+                int(v) for v in self.image.shape
+            ):
+                raise ValueError(
+                    f"FieldObservation {name} shape must match image shape"
+                )
+
         wl = self.transmission_wavelength
         tt = self.transmission_throughput
         if (wl is None) ^ (tt is None):

@@ -206,7 +206,8 @@ class SIP:
             p = p.to(out_like.device)
             q = q.to(out_like.device)
         vals = u_stack.index_select(0, p) * v_stack.index_select(0, q)
-        return (vals * c[:, None]).sum(dim=0)
+        coeffs = c.reshape((-1,) + (1,) * out_like.ndim)
+        return torch.sum(coeffs * vals, dim=0)
 
     @staticmethod
     def _make_pow_cache(base: Tensor, order: int) -> "list[Tensor]":
@@ -244,16 +245,22 @@ class SIP:
         vp = torch.pow(v, torch.arange(max_order + 1, device=uv.device, dtype=uv.dtype))
 
         # Evaluation
-        def eval_poly_scalar(pq, c):
+        def eval_poly_scalar(pack):
+            c = pack["c"]
             if c.numel() == 0:
                 return torch.tensor(0.0, device=uv.device, dtype=uv.dtype)
-            p = pq[:, 0].to(device=uv.device)
-            q = pq[:, 1].to(device=uv.device)
+            p = pack["p"]
+            q = pack["q"]
+            if p.device != uv.device:
+                p = p.to(device=uv.device)
+                q = q.to(device=uv.device)
+            if c.device != uv.device or c.dtype != uv.dtype:
+                c = c.to(device=uv.device, dtype=uv.dtype)
             basis = up[p] * vp[q]
-            return torch.dot(c.to(device=uv.device, dtype=uv.dtype), basis)
+            return torch.dot(c, basis)
 
-        f_uv = eval_poly_scalar(self._a_pq, self._a_c)
-        g_uv = eval_poly_scalar(self._b_pq, self._b_c)
+        f_uv = eval_poly_scalar(self._a_pack)
+        g_uv = eval_poly_scalar(self._b_pack)
 
         return uv + torch.stack([f_uv, g_uv])
 
@@ -318,18 +325,8 @@ class SIP:
         u_stack = torch.stack(u_p, dim=0)
         v_stack = torch.stack(v_p, dim=0)
 
-        def eval_poly(pq, c):
-            if c.numel() == 0:
-                return torch.zeros_like(u)
-            dev = u_stack.device
-            p = pq[:, 0].to(device=dev)
-            q = pq[:, 1].to(device=dev)
-            basis = u_stack.index_select(0, p) * v_stack.index_select(0, q)
-            coeffs = c.to(device=dev, dtype=u.dtype).reshape((-1,) + (1,) * u.ndim)
-            return torch.sum(coeffs * basis, dim=0)
-
-        f_uv = eval_poly(self._a_pq, self._a_c)
-        g_uv = eval_poly(self._b_pq, self._b_c)
+        f_uv = self._sum_terms_from_pack(self._a_pack, u_stack, v_stack, u)
+        g_uv = self._sum_terms_from_pack(self._b_pack, u_stack, v_stack, v)
         return u + f_uv, v + g_uv
 
     def _distort_smallvec(self, u: Tensor, v: Tensor) -> "tuple[Tensor, Tensor]":
@@ -441,18 +438,8 @@ class SIP:
         u_stack = torch.stack(u_p, dim=0)
         v_stack = torch.stack(v_p, dim=0)
 
-        def eval_poly(pq, c):
-            if c.numel() == 0:
-                return torch.zeros_like(u)
-            dev = u_stack.device
-            p = pq[:, 0].to(device=dev)
-            q = pq[:, 1].to(device=dev)
-            basis = u_stack.index_select(0, p) * v_stack.index_select(0, q)
-            coeffs = c.to(device=dev, dtype=u.dtype).reshape((-1,) + (1,) * u.ndim)
-            return torch.sum(coeffs * basis, dim=0)
-
-        delta_u = eval_poly(self._ap_pq, self._ap_c)
-        delta_v = eval_poly(self._bp_pq, self._bp_c)
+        delta_u = self._sum_terms_from_pack(self._ap_pack, u_stack, v_stack, u)
+        delta_v = self._sum_terms_from_pack(self._bp_pack, u_stack, v_stack, v)
 
         return u + delta_u, v + delta_v
 

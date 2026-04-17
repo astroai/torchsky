@@ -50,6 +50,10 @@ def test_multifield_truth_cases_stay_bounded(
     )
     assert row["cube_rmse_vs_truth"] <= rmse_max
     assert row["coverage_frac_mean"] >= coverage_min
+    assert row["weighted_residual_rms_mean"] >= 0.0
+    assert row["background_residual_rms_mean"] >= 0.0
+    assert row["background_leakage_fraction_mean"] >= 0.0
+    assert row["detrended_residual_rms_mean"] >= 0.0
 
 
 def test_multifield_truth_emits_recommendations(tmp_path: Path) -> None:
@@ -70,6 +74,23 @@ def test_multifield_truth_emits_recommendations(tmp_path: Path) -> None:
     assert any(row["profile"] == "smooth_reconstruction" for row in recs)
 
 
+def test_multifield_truth_conservative_polygon_reports_conservative_geometry(
+    tmp_path: Path,
+) -> None:
+    row = _multifield_bench.evaluate_torchsky_case(
+        tmp_path,
+        case="tan_multifield_cube",
+        size=64,
+        seed=1234,
+        runs=1,
+        resampling_kernel="conservative_polygon",
+    )
+    assert row["library"] == "torchsky"
+    assert row["variant"] == "conservative_polygon"
+    assert row["geometry_family"] == "conservative_overlap"
+    assert row["coverage_frac_mean"] >= 0.9
+
+
 def test_multifield_truth_supports_rectangular_variable_input_sizes(
     tmp_path: Path,
 ) -> None:
@@ -87,6 +108,85 @@ def test_multifield_truth_supports_rectangular_variable_input_sizes(
     assert row["min_input_width"] < row["max_input_width"]
     assert row["min_input_height"] < row["max_input_height"]
     assert row["cube_rmse_vs_truth"] <= 0.30
+    assert row["background_residual_rms_max"] >= 0.0
+    assert row["background_leakage_fraction_max"] >= 0.0
+
+
+def test_multifield_truth_field_fit_row_is_finite_and_optimized(
+    tmp_path: Path,
+) -> None:
+    row = _multifield_bench.evaluate_torchsky_field_case(
+        tmp_path,
+        case="tan_multifield_cube",
+        size=24,
+        seed=1234,
+        runs=1,
+        field_model_kind="wire_implicit",
+        fit_steps=4,
+        max_observations=3,
+    )
+
+    assert row["library"] == "torchsky_field"
+    assert row["method"] == "field_fit"
+    assert row["variant"] == "wire_implicit"
+    assert row["geometry_family"] == "latent_scene_field"
+    assert row["fit_observations"] == 3
+    assert row["field_final_loss"] <= row["field_initial_loss"]
+    assert row["coverage_frac_mean"] > 0.7
+    assert row["cube_rmse_vs_truth"] >= 0.0
+
+
+@pytest.mark.parametrize(
+    ("spherical_mode", "geometry_family"),
+    [
+        ("healpix_bridge", "spherical_spectral_healpix_bridge"),
+        ("harmonic_direct", "spherical_harmonic_direct"),
+    ],
+)
+def test_multifield_truth_spherical_rows_are_finite(
+    tmp_path: Path,
+    spherical_mode: str,
+    geometry_family: str,
+) -> None:
+    row = _multifield_bench.evaluate_torchsky_spherical_case(
+        tmp_path,
+        case="tan_multifield_cube",
+        size=24,
+        seed=1234,
+        runs=1,
+        spherical_mode=spherical_mode,
+    )
+    assert row["library"] == "torchsky_spherical"
+    assert row["method"] == "spherical_reproject"
+    assert row["variant"] == spherical_mode
+    assert row["geometry_family"] == geometry_family
+    assert row["operator_bundle_geometry"] == "spherical_spectral_geometry"
+    assert row["healpix_nside"] >= 1
+    assert row["coverage_frac_mean"] > 0.5
+    assert row["cube_rmse_vs_truth"] >= 0.0
+
+
+def test_multifield_truth_joint_spherical_inverse_row_is_finite_and_improves_fit(
+    tmp_path: Path,
+) -> None:
+    row = _multifield_bench.evaluate_torchsky_multiband_spherical_inverse_case(
+        tmp_path,
+        case="tan_multifield_cube",
+        size=24,
+        seed=1234,
+        runs=1,
+    )
+
+    assert row["library"] == "torchsky_spherical"
+    assert row["method"] == "spherical_inverse"
+    assert row["variant"] == "multiband_kronecker_prior"
+    assert row["geometry_family"] == "spherical_harmonic_multiband_joint"
+    assert row["operator_bundle_geometry"] == "spherical_spectral_geometry"
+    assert row["joint_lmax"] >= 1
+    assert row["residual_norm_final"] < row["residual_norm_initial"]
+    assert row["spectral_harmonic_prior_norm"] >= 0.0
+    assert row["coverage_frac_mean"] > 0.95
+    assert row["cube_rmse_vs_truth"] >= 0.0
 
 
 def test_multifield_random10_case_has_large_mixed_resolutions() -> None:

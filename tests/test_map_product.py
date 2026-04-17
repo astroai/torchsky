@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import torchsky
+import torchsky.map.product as map_product_mod
 from torchsky.map import (
     FieldDomain,
     FieldObservation,
@@ -23,6 +24,10 @@ from torchsky.map import (
     render_field_product,
     stack_map_product,
 )
+from torchsky.map.scenes import ContinuousFieldModel, DiscreteTargetImage
+from torchsky.map.scenes import HealpixMapScene
+from torchsky.map.operators import spherical_spectral_operator_bundle
+from torchsky.map.solvers import build_solver_hooks
 from torchsky.spectral import SpectralAxis
 
 pytest.importorskip("torchsky.cpp")
@@ -129,6 +134,54 @@ def test_render_field_product_matches_product_shape() -> None:
     assert bool(torch.all(result.weight > 0.0))
 
 
+def test_map_product_result_exposes_target_render_specs() -> None:
+    product = torchsky.map.MapProductSpec(
+        target_header=_simple_header(),
+        bands=(
+            MapBandpassSpec(label="g", transmission_center=5000.0),
+            MapBandpassSpec(label="r", transmission_center=6500.0),
+        ),
+        value_semantics="flux",
+    )
+    result = torchsky.map.MapProductResult(
+        product=product,
+        data=torch.zeros((2, 6, 6), dtype=torch.float32),
+        weight=torch.ones((2, 6, 6), dtype=torch.float32),
+        header=_simple_header(),
+    )
+
+    specs = result.target_render_specs(psf_specs=("psf-g", "psf-r"))
+
+    assert tuple(spec.band_label for spec in specs) == ("g", "r")
+    assert tuple(spec.psf_spec for spec in specs) == ("psf-g", "psf-r")
+    assert all(spec.value_semantics == "flux" for spec in specs)
+
+
+def test_internal_scene_product_render_supports_discrete_multiband_cube() -> None:
+    product = torchsky.map.MapProductSpec(
+        target_header=_simple_header(),
+        bands=(
+            MapBandpassSpec(label="g", transmission_center=5000.0),
+            MapBandpassSpec(label="r", transmission_center=6500.0),
+        ),
+    )
+    scene = DiscreteTargetImage(
+        torch.stack(
+            [
+                torch.full((6, 6), 2.0, dtype=torch.float32),
+                torch.full((6, 6), 5.0, dtype=torch.float32),
+            ],
+            dim=0,
+        )
+    )
+
+    result = map_product_mod.render_scene_product(scene, product)
+
+    torch.testing.assert_close(result.data[0], torch.full((6, 6), 2.0))
+    torch.testing.assert_close(result.data[1], torch.full((6, 6), 5.0))
+    assert bool(torch.all(result.weight == 1.0))
+
+
 def test_render_field_product_matches_exact_transmission_per_band_stacks(
     tmp_path: Path,
 ) -> None:
@@ -205,6 +258,87 @@ def test_render_field_product_matches_exact_transmission_per_band_stacks(
     )
     assert tuple(band.label for band in product.bands) == labels
     assert bool(torch.all(stacked.weight > 0.0))
+
+
+def test_render_field_product_uses_shared_scene_product_renderer() -> None:
+    product = torchsky.map.MapProductSpec(
+        target_header=_simple_header(),
+        bands=(
+            MapBandpassSpec(label="g", spectral_min=4700.0, spectral_max=5200.0),
+            MapBandpassSpec(label="r", spectral_min=6100.0, spectral_max=6800.0),
+        ),
+    )
+    model = GaussianBasisField(
+        FieldDomain(
+            center_ra_deg=12.0,
+            center_dec_deg=-3.0,
+            spatial_scale_deg=0.05,
+            wavelength_center=5750.0,
+            wavelength_scale=1200.0,
+        )
+    )
+
+    direct = render_field_product(model, product, num_spectral_samples=3)
+    shared = map_product_mod.render_scene_product(
+        ContinuousFieldModel(model),
+        product,
+        num_spectral_samples=3,
+    )
+
+    torch.testing.assert_close(direct.data, shared.data)
+    torch.testing.assert_close(direct.weight, shared.weight)
+
+
+def test_render_scene_product_accepts_plain_module_scene() -> None:
+    product = torchsky.map.MapProductSpec(
+        target_header=_simple_header(),
+        bands=(MapBandpassSpec(label="g", transmission_center=5000.0),),
+    )
+    model = GaussianBasisField(
+        FieldDomain(
+            center_ra_deg=12.0,
+            center_dec_deg=-3.0,
+            spatial_scale_deg=0.05,
+            wavelength_center=5000.0,
+            wavelength_scale=500.0,
+        )
+    )
+
+    result = map_product_mod.render_scene_product(
+        model,
+        product,
+        num_spectral_samples=1,
+    )
+
+    assert result.data.shape == (1, 6, 6)
+    assert result.weight.shape == (1, 6, 6)
+
+
+def test_render_scene_product_renders_healpix_scene_through_solver_hooks() -> None:
+    product = torchsky.map.MapProductSpec(
+        target_header=_simple_header(),
+        bands=(MapBandpassSpec(label="mono", transmission_center=5000.0),),
+    )
+    scene = HealpixMapScene(
+        torch.ones(12 * 4 * 4, dtype=torch.float32),
+        nside=4,
+    )
+
+    result = map_product_mod.render_scene_product(
+        scene,
+        product,
+        solver_hooks=build_solver_hooks(
+            spherical_spectral_operator_bundle(mode="harmonic_direct")
+        ),
+    )
+
+    torch.testing.assert_close(
+        result.data[0],
+        torch.ones((6, 6), dtype=torch.float32),
+        atol=5.0e-2,
+        rtol=0.0,
+    )
+    assert bool(torch.all(result.weight > 0.0))
 
 
 def test_evaluate_map_product_uses_product_level_metrics() -> None:

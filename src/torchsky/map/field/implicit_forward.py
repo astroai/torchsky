@@ -113,6 +113,8 @@ def scale_observation_for_rest_frame_scene(
         transmission_wavelength=twl_rest,
         transmission_throughput=ttt,
         psf_sigma_pix=float(observation.psf_sigma_pix),
+        psf_spec=observation.psf_spec,
+        background_offset=float(observation.background_offset),
         band_name=observation.band_name,
         spectral_quantity=observation.spectral_quantity,
     )

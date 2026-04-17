@@ -135,7 +135,6 @@ def project_zenithal(
 
                     r_rad_target = r * D2R
                     w = r_rad_target.clone()
-                    target_eps = 1e-12
 
                     # Newton-Raphson (Horner's method)
                     rev_c = torch.flip(coeffs, dims=(0,))
@@ -148,8 +147,6 @@ def project_zenithal(
                             val.mul_(w).add_(c)
 
                         diff = val.sub_(r_rad_target)
-                        if diff.abs().max() < target_eps:
-                            break
 
                         mask_nz = der.abs() > 1e-15
                         der.masked_fill_(~mask_nz, 1.0)

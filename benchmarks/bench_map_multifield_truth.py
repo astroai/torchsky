@@ -14,22 +14,49 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+BENCHMARKS = ROOT / "benchmarks"
+if str(BENCHMARKS) not in sys.path:
+    sys.path.insert(0, str(BENCHMARKS))
 
 import torchsky  # noqa: E402
+import bench_map_compat as map_compat  # noqa: E402
 from torchsky import WCS  # noqa: E402
+from torchsky.wcs import healpix as hp  # noqa: E402
 from torchsky.map import (  # noqa: E402
+    FieldObservation,
     ImageObservation,
+    MapBandpassSpec,
+    MapProductSpec,
     check_map_benchmark_regressions,
+    estimate_field_domain,
     evaluate_map_product,
+    fit_field_model,
+    make_field_model,
     plan_map_product,
     stack_map_product,
     write_map_benchmark_artifacts,
 )
+from torchsky.map.product import render_scene_product  # noqa: E402
+from torchsky.map.operators.background import fit_background_plane  # noqa: E402
+from torchsky.map.operators import spherical_spectral_operator_bundle  # noqa: E402
+from torchsky.map.scenes import HealpixMapScene  # noqa: E402
+from torchsky.map.solvers import (  # noqa: E402
+    build_solver_hooks,
+    build_spherical_harmonic_solver_hooks,
+    build_state_kronecker_operator,
+    build_state_subspace_operator,
+    compose_bound_operators,
+    harmonic_cl_diagonal,
+    make_diagonal_preconditioner,
+)
+from torchsky.map.target import TargetRenderSpec  # noqa: E402
+from torchsky.sphere.spectral import map2alm  # noqa: E402
 from torchsky.spectral import SpectralAxis  # noqa: E402
 
 try:  # noqa: E402
@@ -54,6 +81,7 @@ DEFAULT_TORCHSKY_KERNELS = (
     "bicubic",
     "catmull_rom",
     "lanczos3",
+    "conservative_polygon",
 )
 _INTERPOLATORY_KERNELS = {
     "nearest",
@@ -179,6 +207,92 @@ def _tpv_header(
     header["PV2_7"] = -1.5e-6 * pv_scale
     header["PV2_39"] = -1.0e-11 * pv_scale
     return header
+
+
+def _benchmark_healpix_nside_for_target(
+    target_header: dict[str, Any],
+    *,
+    oversample: float = 2.0,
+) -> int:
+    target_pixels = int(target_header["NAXIS1"]) * int(target_header["NAXIS2"])
+    required = max(int(math.ceil(float(oversample) * target_pixels)), 12)
+    nside = 1
+    while 12 * nside * nside < required:
+        nside *= 2
+    return nside
+
+
+def _shift_header_center(
+    header: dict[str, Any],
+    *,
+    dra_deg: float = 0.0,
+    ddec_deg: float = 0.0,
+) -> dict[str, Any]:
+    shifted = dict(header)
+    shifted["CRVAL1"] = float(header["CRVAL1"]) + float(dra_deg)
+    shifted["CRVAL2"] = float(header["CRVAL2"]) + float(ddec_deg)
+    return shifted
+
+
+def _sample_image_on_lonlat_grid(
+    image: torch.Tensor,
+    *,
+    source_header: dict[str, Any],
+    lon_deg: torch.Tensor,
+    lat_deg: torch.Tensor,
+) -> torch.Tensor:
+    src = image.to(dtype=torch.float32)
+    h_src, w_src = int(src.shape[0]), int(src.shape[1])
+    source_wcs = WCS(dict(source_header))
+    x_src, y_src = source_wcs.world_to_pixel(
+        lon_deg.reshape(-1).to(torch.float64),
+        lat_deg.reshape(-1).to(torch.float64),
+    )
+    x_src = x_src.reshape_as(lon_deg).to(torch.float32)
+    y_src = y_src.reshape_as(lat_deg).to(torch.float32)
+    x_norm = (2.0 * x_src / max(w_src - 1, 1)) - 1.0
+    y_norm = (2.0 * y_src / max(h_src - 1, 1)) - 1.0
+    grid = torch.stack([x_norm.reshape(-1), y_norm.reshape(-1)], dim=-1).view(
+        1,
+        x_norm.numel(),
+        1,
+        2,
+    )
+    sampled = F.grid_sample(
+        src.view(1, 1, h_src, w_src),
+        grid,
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=True,
+    ).reshape_as(lon_deg)
+    in_bounds = (
+        (x_src >= 0.0)
+        & (x_src <= float(w_src - 1))
+        & (y_src >= 0.0)
+        & (y_src <= float(h_src - 1))
+    )
+    return torch.where(in_bounds, sampled, torch.zeros_like(sampled))
+
+
+def _truth_cube_to_healpix_maps(
+    truth: torch.Tensor,
+    *,
+    target_header: dict[str, Any],
+    nside: int,
+) -> torch.Tensor:
+    npix = hp.nside2npix(int(nside))
+    ipix = torch.arange(npix, dtype=torch.int64)
+    lon, lat = hp.pix2ang(int(nside), ipix, nest=False, lonlat=True)
+    maps = [
+        _sample_image_on_lonlat_grid(
+            truth[idx],
+            source_header=target_header,
+            lon_deg=lon,
+            lat_deg=lat,
+        ).reshape(-1)
+        for idx in range(int(truth.shape[0]))
+    ]
+    return torch.stack(maps, dim=0)
 
 
 def _gaussian_kernel1d(sigma_pix: float, *, device: torch.device) -> torch.Tensor:
@@ -1025,10 +1139,45 @@ def _cube_truth_metrics(
         value_semantics="surface_brightness",
     )
     coverage = (weight > 0.0).to(torch.float32).mean(dim=(-1, -2))
+    residual = data - truth
+    support = weight > 0.0
+    weighted_rms_values: list[float] = []
+    background_rms_values: list[float] = []
+    detrended_rms_values: list[float] = []
+    background_leakage_values: list[float] = []
+    for band_idx in range(int(data.shape[0])):
+        mask = support[band_idx]
+        if not bool(mask.any()):
+            weighted_rms_values.append(0.0)
+            background_rms_values.append(0.0)
+            detrended_rms_values.append(0.0)
+            background_leakage_values.append(0.0)
+            continue
+        residual_supported = residual[band_idx][mask].to(dtype=torch.float32)
+        weight_supported = weight[band_idx][mask].to(dtype=torch.float32)
+        weight_sum = torch.clamp(weight_supported.sum(), min=1.0e-8)
+        weighted_rms_values.append(
+            float(
+                torch.sqrt(
+                    torch.sum(weight_supported * torch.square(residual_supported)) / weight_sum
+                ).item()
+            )
+        )
+        background_fit = fit_background_plane(residual[band_idx], mask)
+        background_rms_values.append(background_fit.model_rms)
+        detrended_rms_values.append(background_fit.detrended_rms)
+        background_leakage_values.append(background_fit.leakage_fraction)
     metrics.update(
         {
             "cube_rmse_vs_truth": float(metrics["reconstruction_rmse"]),
             "cube_mae_vs_truth": float(metrics["reconstruction_mae"]),
+            "weighted_residual_rms_mean": float(sum(weighted_rms_values) / max(len(weighted_rms_values), 1)),
+            "weighted_residual_rms_max": float(max(weighted_rms_values, default=0.0)),
+            "background_residual_rms_mean": float(sum(background_rms_values) / max(len(background_rms_values), 1)),
+            "background_residual_rms_max": float(max(background_rms_values, default=0.0)),
+            "background_leakage_fraction_mean": float(sum(background_leakage_values) / max(len(background_leakage_values), 1)),
+            "background_leakage_fraction_max": float(max(background_leakage_values, default=0.0)),
+            "detrended_residual_rms_mean": float(sum(detrended_rms_values) / max(len(detrended_rms_values), 1)),
             "per_band_rmse_mean": float(metrics["band_reconstruction_rmse_mean"]),
             "per_band_rmse_max": float(metrics["band_reconstruction_rmse_max"]),
             "coverage_frac_mean": float(coverage.mean().item()),
@@ -1085,6 +1234,9 @@ def evaluate_torchsky_case(
         "library": "torchsky",
         "method": "coadd",
         "variant": resampling_kernel,
+        "geometry_family": map_compat._geometry_family_for_torchsky_kernel(
+            resampling_kernel
+        ),
         "projection": case_spec.projection,
         "description": case_spec.description,
         "field_model": case_spec.field_model,
@@ -1115,6 +1267,489 @@ def evaluate_torchsky_case(
             target_header=target_header,
         ),
     }
+
+
+def evaluate_torchsky_field_case(
+    tmpdir: Path,
+    *,
+    case: str,
+    size: int | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    seed: int,
+    runs: int,
+    field_model_kind: str = "wire_implicit",
+    fit_steps: int = 10,
+    fit_lr: float = 1.0e-2,
+    max_observations: int = 4,
+) -> dict[str, Any]:
+    observations, target_header, spectral_axis, spectral_edges, truth = make_case(
+        tmpdir,
+        case=case,
+        size=size,
+        width=width,
+        height=height,
+        seed=seed,
+    )
+    case_spec = _case_spec(case, size=size, width=width, height=height, seed=seed)
+    field_observations = _field_observations_from_simulated_inputs(
+        observations,
+        max_observations=max_observations,
+    )
+    product = MapProductSpec(
+        target_header=target_header,
+        bands=tuple(
+            MapBandpassSpec(
+                label=f"band_{idx}",
+                spectral_min=float(spectral_edges[idx].item()),
+                spectral_max=float(spectral_edges[idx + 1].item()),
+                transmission_center=float(spectral_axis.values[idx].item()),
+            )
+            for idx in range(int(spectral_axis.values.numel()))
+        ),
+        value_semantics="surface_brightness",
+    )
+
+    def _fit_and_render():
+        torch.manual_seed(int(seed))
+        fit_domain = estimate_field_domain(field_observations)
+        model = make_field_model(field_model_kind, fit_domain)
+        fit = fit_field_model(
+            field_observations,
+            model,
+            steps=int(fit_steps),
+            lr=float(fit_lr),
+            num_spectral_samples=5,
+            loss_kind="mse",
+            loss_reduction="global",
+        )
+        rendered = render_scene_product(
+            fit.model,
+            product,
+            num_spectral_samples=5,
+        )
+        return fit, rendered
+
+    dt = _time_many(_fit_and_render, runs)
+    fit, result = _fit_and_render()
+    return {
+        "case": case,
+        "library": "torchsky_field",
+        "method": "field_fit",
+        "variant": field_model_kind,
+        "geometry_family": "latent_scene_field",
+        "projection": case_spec.projection,
+        "description": case_spec.description,
+        "field_model": case_spec.field_model,
+        "field_model_kind": field_model_kind,
+        "bandpass_model": "normalized_gaussian_filter",
+        "n_obs": len(observations),
+        "fit_observations": len(field_observations),
+        "n_band": int(spectral_axis.values.numel()),
+        "target_width": int(target_header["NAXIS1"]),
+        "target_height": int(target_header["NAXIS2"]),
+        "min_input_width": min(int(obs.header["NAXIS1"]) for obs in observations),
+        "max_input_width": max(int(obs.header["NAXIS1"]) for obs in observations),
+        "min_input_height": min(int(obs.header["NAXIS2"]) for obs in observations),
+        "max_input_height": max(int(obs.header["NAXIS2"]) for obs in observations),
+        "time_ms": dt * 1000.0,
+        "mpix_s": float(result.data.numel()) / dt / 1e6,
+        "fit_steps": int(fit_steps),
+        "fit_lr": float(fit_lr),
+        "field_initial_loss": float(fit.initial_loss),
+        "field_final_loss": float(fit.final_loss),
+        "mean_exposure_time": float(
+            sum(item.exposure_time for item in observations) / max(len(observations), 1)
+        ),
+        "mean_transmission": float(
+            sum(item.transmission for item in observations) / max(len(observations), 1)
+        ),
+        "mean_psf_sigma_pix": float(
+            sum(item.psf_sigma_pix for item in observations) / max(len(observations), 1)
+        ),
+        **_cube_truth_metrics(
+            result.data,
+            result.weight,
+            truth,
+            target_header=target_header,
+        ),
+    }
+
+
+def evaluate_torchsky_spherical_case(
+    tmpdir: Path,
+    *,
+    case: str,
+    size: int | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    seed: int,
+    runs: int,
+    spherical_mode: str = "harmonic_direct",
+    healpix_oversample: float = 2.0,
+) -> dict[str, Any]:
+    observations, target_header, spectral_axis, spectral_edges, truth = make_case(
+        tmpdir,
+        case=case,
+        size=size,
+        width=width,
+        height=height,
+        seed=seed,
+    )
+    case_spec = _case_spec(case, size=size, width=width, height=height, seed=seed)
+    nside = _benchmark_healpix_nside_for_target(
+        target_header,
+        oversample=healpix_oversample,
+    )
+    hp_maps = _truth_cube_to_healpix_maps(
+        truth,
+        target_header=target_header,
+        nside=nside,
+    )
+    bundle = spherical_spectral_operator_bundle(mode=spherical_mode)
+    lmax = min(3 * int(nside) - 1, 32)
+    if spherical_mode not in {"harmonic_direct", "healpix_bridge"}:
+        raise ValueError("spherical_mode must be 'harmonic_direct' or 'healpix_bridge'")
+    geometry_family = (
+        "spherical_harmonic_direct"
+        if spherical_mode == "harmonic_direct"
+        else "spherical_spectral_healpix_bridge"
+    )
+    product = MapProductSpec(
+        target_header=target_header,
+        bands=tuple(
+            MapBandpassSpec(
+                label=f"band_{idx}",
+                spectral_min=float(spectral_edges[idx].item()),
+                spectral_max=float(spectral_edges[idx + 1].item()),
+                transmission_center=float(spectral_axis.values[idx].item()),
+            )
+            for idx in range(int(spectral_axis.values.numel()))
+        ),
+        value_semantics="surface_brightness",
+    )
+    scene = HealpixMapScene(
+        hp_maps,
+        nside=nside,
+        nest=False,
+        band_labels=tuple(f"band_{idx}" for idx in range(int(hp_maps.shape[0]))),
+        lmax=lmax,
+    )
+    solver_hooks = build_solver_hooks(bundle)
+
+    def render_fn():
+        return render_scene_product(
+            scene,
+            product,
+            solver_hooks=solver_hooks,
+        )
+
+    dt = _time_many(render_fn, runs)
+    result = render_fn()
+    return {
+        "case": case,
+        "library": "torchsky_spherical",
+        "method": "spherical_reproject",
+        "variant": spherical_mode,
+        "geometry_family": geometry_family,
+        "projection": case_spec.projection,
+        "description": case_spec.description,
+        "field_model": case_spec.field_model,
+        "bandpass_model": "normalized_gaussian_filter",
+        "n_obs": len(observations),
+        "n_band": int(spectral_axis.values.numel()),
+        "target_width": int(target_header["NAXIS1"]),
+        "target_height": int(target_header["NAXIS2"]),
+        "min_input_width": min(int(obs.header["NAXIS1"]) for obs in observations),
+        "max_input_width": max(int(obs.header["NAXIS1"]) for obs in observations),
+        "min_input_height": min(int(obs.header["NAXIS2"]) for obs in observations),
+        "max_input_height": max(int(obs.header["NAXIS2"]) for obs in observations),
+        "time_ms": dt * 1000.0,
+        "mpix_s": float(result.data.numel()) / dt / 1e6,
+        "mean_exposure_time": float(
+            sum(item.exposure_time for item in observations) / max(len(observations), 1)
+        ),
+        "mean_transmission": float(
+            sum(item.transmission for item in observations) / max(len(observations), 1)
+        ),
+        "mean_psf_sigma_pix": float(
+            sum(item.psf_sigma_pix for item in observations) / max(len(observations), 1)
+        ),
+        "healpix_nside": int(nside),
+        "operator_bundle_geometry": bundle.geometry.name if bundle.geometry is not None else None,
+        "spherical_mode": spherical_mode,
+        **_cube_truth_metrics(
+            result.data,
+            result.weight,
+            truth,
+            target_header=target_header,
+        ),
+    }
+
+
+def evaluate_torchsky_multiband_spherical_inverse_case(
+    tmpdir: Path,
+    *,
+    case: str,
+    size: int | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    seed: int,
+    runs: int,
+    healpix_oversample: float = 2.0,
+    lmax: int | None = None,
+) -> dict[str, Any]:
+    observations, target_header, spectral_axis, spectral_edges, truth = make_case(
+        tmpdir,
+        case=case,
+        size=size,
+        width=width,
+        height=height,
+        seed=seed,
+    )
+    case_spec = _case_spec(case, size=size, width=width, height=height, seed=seed)
+    nside = _benchmark_healpix_nside_for_target(
+        target_header,
+        oversample=healpix_oversample,
+    )
+    joint_lmax = min(3 * int(nside) - 1, 8) if lmax is None else int(lmax)
+    hp_maps = _truth_cube_to_healpix_maps(
+        truth,
+        target_header=target_header,
+        nside=nside,
+    )
+    joint_truth = torch.stack(
+        [
+            map2alm(
+                hp_maps[idx],
+                nside=int(nside),
+                lmax=joint_lmax,
+                pol=False,
+            ).to(torch.complex64)
+            for idx in range(int(hp_maps.shape[0]))
+        ],
+        dim=0,
+    )
+    nband = int(joint_truth.shape[0])
+    band_values = spectral_axis.values.to(dtype=torch.float64)
+    if nband > 1:
+        band_span = torch.clamp(band_values.max() - band_values.min(), min=1.0)
+        band_coord = (band_values - band_values.mean()) / band_span
+        delta = band_coord[:, None] - band_coord[None, :]
+        spectral_cov = torch.exp(-0.5 * torch.square(delta))
+        spectral_cov = spectral_cov + 1.0e-3 * torch.eye(
+            nband,
+            dtype=spectral_cov.dtype,
+            device=spectral_cov.device,
+        )
+    else:
+        spectral_cov = torch.ones((1, 1), dtype=torch.float64)
+    spectral_precision = torch.linalg.inv(spectral_cov)
+    spectral_factor = torch.linalg.cholesky(spectral_precision).to(dtype=joint_truth.dtype)
+    ell = torch.arange(joint_lmax + 1, dtype=torch.float64)
+    cls = 5.0 / torch.square(ell + 1.0) + 0.1
+    harmonic_diag = harmonic_cl_diagonal(
+        lmax=joint_lmax,
+        cls=cls,
+        dtype=joint_truth.real.dtype,
+        device=joint_truth.device,
+    )
+    harmonic_factor = torch.diag(harmonic_diag.to(dtype=joint_truth.dtype))
+
+    hooks = build_spherical_harmonic_solver_hooks(lmax=joint_lmax)
+    band_blocks = []
+    render_blocks = []
+    for band_idx in range(nband):
+        targets = []
+        band_center = float(band_values[band_idx].item())
+        for obs_idx, item in enumerate(observations):
+            nearest = int(torch.argmin(torch.abs(band_values - float(item.wavelength))).item())
+            if nearest != band_idx:
+                continue
+            offset_scale = 0.2 * float(obs_idx)
+            targets.append(
+                TargetRenderSpec.from_header(
+                    _shift_header_center(
+                        item.header,
+                        dra_deg=0.1 * offset_scale,
+                        ddec_deg=-0.05 * offset_scale,
+                    ),
+                    band_label=f"band_{band_idx}",
+                    spectral_min=float(spectral_edges[band_idx].item()),
+                    spectral_max=float(spectral_edges[band_idx + 1].item()),
+                    transmission_center=band_center,
+                )
+            )
+        if not targets:
+            targets.append(
+                TargetRenderSpec.from_header(
+                    target_header,
+                    band_label=f"band_{band_idx}",
+                    spectral_min=float(spectral_edges[band_idx].item()),
+                    spectral_max=float(spectral_edges[band_idx + 1].item()),
+                    transmission_center=band_center,
+                )
+            )
+        band_blocks.append(
+            build_state_subspace_operator(
+                joint_truth,
+                hooks.bind_targets(tuple(targets)),
+                selector=band_idx,
+            )
+        )
+        render_blocks.append(
+            build_state_subspace_operator(
+                joint_truth,
+                hooks.bind_target(
+                    TargetRenderSpec.from_header(
+                        target_header,
+                        band_label=f"band_{band_idx}",
+                        spectral_min=float(spectral_edges[band_idx].item()),
+                        spectral_max=float(spectral_edges[band_idx + 1].item()),
+                        transmission_center=band_center,
+                    )
+                ),
+                selector=band_idx,
+            )
+        )
+
+    prior_block = build_state_kronecker_operator(
+        joint_truth,
+        spectral_factor,
+        harmonic_factor,
+        apply_noise=lambda tensor: tensor * 0.08,
+    )
+    operator_set = compose_bound_operators(*band_blocks, prior_block)
+    torch.manual_seed(seed)
+    observed_blocks = []
+    for block in band_blocks:
+        for cutout in block.apply(joint_truth):
+            sigma = max(float(cutout.to(torch.float32).std().item()) * 0.05, 1.0e-3)
+            observed_blocks.append(cutout + sigma * torch.randn_like(cutout))
+    data = (*observed_blocks, torch.zeros_like(joint_truth))
+    initial_outputs = operator_set.apply(torch.zeros_like(joint_truth))
+    initial_residual_norm = math.sqrt(
+        sum(
+            float(torch.sum(torch.abs(pred - obs) ** 2).item())
+            for pred, obs in zip(initial_outputs, data, strict=True)
+        )
+    )
+
+    def solve_fn():
+        diagonal = operator_set.estimate_normal_operator_diagonal(
+            data,
+            initial_probe=torch.zeros_like(joint_truth),
+            max_entries=max(int(joint_truth.numel()), 128),
+            damping=1.0e-4,
+        )
+        return operator_set.solve_normal_equation_cg(
+            data,
+            initial_solution=torch.zeros_like(joint_truth),
+            iterations=12,
+            damping=1.0e-4,
+            preconditioner=make_diagonal_preconditioner(diagonal),
+        )
+
+    dt = _time_many(solve_fn, runs)
+    fit = solve_fn()
+    reconstructed_cube = torch.stack(
+        [render_block.apply(fit.solution) for render_block in render_blocks],
+        dim=0,
+    ).to(dtype=torch.float32)
+    weight = torch.ones_like(reconstructed_cube)
+    final_residual_norm = (
+        float(fit.residual_norm_history[-1])
+        if fit.residual_norm_history
+        else initial_residual_norm
+    )
+    prior_norm = float(torch.linalg.vector_norm(prior_block.apply(fit.solution)).item())
+    return {
+        "case": case,
+        "library": "torchsky_spherical",
+        "method": "spherical_inverse",
+        "variant": "multiband_kronecker_prior",
+        "geometry_family": "spherical_harmonic_multiband_joint",
+        "projection": case_spec.projection,
+        "description": case_spec.description,
+        "field_model": case_spec.field_model,
+        "bandpass_model": "normalized_gaussian_filter",
+        "n_obs": len(observations),
+        "n_band": int(spectral_axis.values.numel()),
+        "target_width": int(target_header["NAXIS1"]),
+        "target_height": int(target_header["NAXIS2"]),
+        "min_input_width": min(int(obs.header["NAXIS1"]) for obs in observations),
+        "max_input_width": max(int(obs.header["NAXIS1"]) for obs in observations),
+        "min_input_height": min(int(obs.header["NAXIS2"]) for obs in observations),
+        "max_input_height": max(int(obs.header["NAXIS2"]) for obs in observations),
+        "time_ms": dt * 1000.0,
+        "mpix_s": float(reconstructed_cube.numel()) / dt / 1e6,
+        "mean_exposure_time": float(
+            sum(item.exposure_time for item in observations) / max(len(observations), 1)
+        ),
+        "mean_transmission": float(
+            sum(item.transmission for item in observations) / max(len(observations), 1)
+        ),
+        "mean_psf_sigma_pix": float(
+            sum(item.psf_sigma_pix for item in observations) / max(len(observations), 1)
+        ),
+        "healpix_nside": int(nside),
+        "operator_bundle_geometry": hooks.operators.geometry.name,
+        "joint_lmax": int(joint_lmax),
+        "residual_norm_initial": float(initial_residual_norm),
+        "residual_norm_final": float(final_residual_norm),
+        "spectral_harmonic_prior_norm": prior_norm,
+        **_cube_truth_metrics(
+            reconstructed_cube,
+            weight,
+            truth,
+            target_header=target_header,
+        ),
+    }
+
+
+def _field_observations_from_simulated_inputs(
+    observations: list[SimulatedObservation],
+    *,
+    max_observations: int,
+) -> list[FieldObservation]:
+    selected = observations[: max(int(max_observations), 1)]
+    field_observations: list[FieldObservation] = []
+    for item in selected:
+        image = torchsky.read(
+            item.observation.path,
+            hdu=item.observation.hdu,
+            device="cpu",
+        ).to(dtype=torch.float32)
+        weight = None
+        if item.observation.weight_path is not None:
+            weight = torchsky.read(
+                item.observation.weight_path,
+                device="cpu",
+            ).to(dtype=torch.float32)
+        mask = None
+        if item.observation.mask_path is not None:
+            mask = torchsky.read(
+                item.observation.mask_path,
+                device="cpu",
+            ).to(dtype=torch.float32)
+        field_observations.append(
+            FieldObservation(
+                image=image,
+                header=dict(item.header),
+                weight=weight,
+                mask=mask,
+                wavelength=float(item.observation.wavelength)
+                if item.observation.wavelength is not None
+                else float(item.wavelength),
+                spectral_min=item.observation.spectral_min,
+                spectral_max=item.observation.spectral_max,
+                transmission_center=item.observation.transmission_center,
+                transmission_sigma=item.observation.transmission_sigma,
+                psf_sigma_pix=float(item.psf_sigma_pix),
+                band_name=item.observation.band_name,
+            )
+        )
+    return field_observations
 
 
 def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1203,6 +1838,11 @@ def main() -> int:
         default=",".join(DEFAULT_TORCHSKY_KERNELS),
         help="Comma-separated torchsky resampling kernels",
     )
+    parser.add_argument(
+        "--include-spherical-inverse",
+        action="store_true",
+        help="Also score the native multiband spherical inverse benchmark row",
+    )
     parser.add_argument("--json-out", type=Path, default=None)
     parser.add_argument("--markdown-out", type=Path, default=None)
     parser.add_argument(
@@ -1230,6 +1870,18 @@ def main() -> int:
                         seed=args.seed,
                         runs=args.runs,
                         resampling_kernel=kernel,
+                    )
+                )
+            if args.include_spherical_inverse:
+                rows.append(
+                    evaluate_torchsky_multiband_spherical_inverse_case(
+                        tmpdir,
+                        case=case,
+                        size=None if args.width is not None or args.height is not None else args.size,
+                        width=args.width,
+                        height=args.height,
+                        seed=args.seed,
+                        runs=args.runs,
                     )
                 )
     rows.extend(_recommendation_rows(rows))

@@ -1,0 +1,57 @@
+name: WCS and sphere weekly bench
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * 3"
+
+jobs:
+  wcs-sphere-bench-weekly:
+    name: WCS + sphere quick bench (scheduled)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install torchsky with bench optional dependencies
+        run: |
+          python -m pip install --upgrade pip wheel setuptools
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install nanobind scikit-build-core
+          pip install -e ".[bench]" --no-build-isolation
+          # Sphere quick bench invokes healpy/HEALPix ecosystem comparators (not in [bench] alone).
+          pip install "healpy>=1.16" hpgeom "astropy-healpix>=1.0" healsparse "spherical-geometry>=1.2"
+
+      - name: Record open-source comparator versions
+        run: |
+          python scripts/print_benchmark_comparator_versions.py \
+            --json-out benchmarks_results/VERSIONS_comparators_weekly.json
+
+      - name: Run WCS and sphere pytest subsets
+        run: |
+          pytest tests/test_wcs_*.py tests/test_sphere_*.py -q --tb=short
+
+      - name: Quick WCS bench (parity + rankings contract)
+        run: |
+          python benchmarks/bench_all.py --profile user --wcs-only --quick \
+            --run-id weekly_wcs_${{ github.run_id }} --output-dir benchmarks_results
+
+      - name: Quick sphere bench
+        run: |
+          python benchmarks/bench_all.py --profile user --sphere-only --quick \
+            --run-id weekly_sphere_${{ github.run_id }} --output-dir benchmarks_results
+
+      - name: Upload bench artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wcs-sphere-weekly-${{ github.run_id }}
+          path: benchmarks_results/

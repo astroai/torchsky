@@ -362,7 +362,7 @@ json_repr = moc.to_json()
 
 ## Harmonic Space (SHT)
 
-### `map2alm(map_values, lmax=None, mmax=None, *, nside=None, nest=False, iter=0, pol=False, use_pixel_weights=False, backend='torch')`
+### `map2alm(map_values, lmax=None, mmax=None, *, nside=None, nest=False, iter=0, pol=False, use_pixel_weights=False)`
 
 Analyze a HEALPix map into spherical harmonic coefficients (alms).
 
@@ -377,7 +377,7 @@ alm = sphere.map2alm(m, lmax=lmax)
 alm_TEB = sphere.map2alm(m_TQU, lmax=lmax, pol=True)
 ```
 
-### `alm2map(alm_values, nside, *, lmax=None, mmax=None, nest=False, pol=False, pixwin=False, backend='torch')`
+### `alm2map(alm_values, nside, *, lmax=None, mmax=None, nest=False, pol=False, pixwin=False)`
 
 Synthesize HEALPix map(s) from alm coefficients.
 
@@ -389,15 +389,15 @@ m_reconstructed = sphere.alm2map(alm, nside=nside)
 m_TQU = sphere.alm2map(alm_TEB, nside=nside, pol=True)
 ```
 
-### `map2alm_lsq(map_values, lmax, mmax=None, *, nside=None, pol=True, tol=1e-10, maxiter=20, nest=False, backend='torch')`
+### `map2alm_lsq(map_values, lmax, mmax=None, *, nside=None, pol=True, tol=1e-10, maxiter=20, nest=False)`
 
 Iterative least-squares map analysis. Returns `(alm, rel_res, n_iter)`.
 
-### `map2alm_spin(maps, spin, *, nside=None, lmax=None, mmax=None, nest=False, backend='torch')`
+### `map2alm_spin(maps, spin, *, nside=None, lmax=None, mmax=None, nest=False, iter=0)`
 
 Spin-weighted map → alm transform. Input `maps` shape must be `(2, npix)`.
 
-### `alm2map_spin(alm_plus, alm_minus, nside, spin, *, lmax=None, mmax=None, nest=False, backend='torch')`
+### `alm2map_spin(alm_plus, alm_minus, nside, spin, *, lmax=None, mmax=None, nest=False)`
 
 Synthesize two spin-component maps from `(alm_plus, alm_minus)` coefficient pairs.
 
@@ -419,7 +419,7 @@ alm_filtered = sphere.almxfl(alm, beam_bl)
 
 ## Power Spectra
 
-### `anafast(map1, map2=None, *, nside=None, lmax=None, mmax=None, pol=True, iter=0, alm=False, use_pixel_weights=False, gal_cut=0.0, backend='torch')`
+### `anafast(map1, map2=None, *, nside=None, lmax=None, mmax=None, nest=False, nspec=None, iter=0, alm=False, pol=True, use_weights=False, use_pixel_weights=False, gal_cut=0.0)`
 
 Compute auto/cross angular power spectrum $C_\ell$ from scalar or polarized maps.
 
@@ -445,7 +445,7 @@ cl = torch.ones(3 * nside)
 m = sphere.synfast(cl, nside=nside)
 ```
 
-### `smoothmap(map_values, *, nside=None, lmax=None, fwhm_rad=None, sigma=None, beam_window=None, pol=False, iter=0, backend='torch')`
+### `smoothmap(map_values, *, nside=None, lmax=None, mmax=None, nest=False, fwhm_rad=None, sigma=None, beam=None, beam_window=None, pol=False, iter=0, use_weights=False, use_pixel_weights=False, verbose=True)`
 
 Smooth a HEALPix map in harmonic space with a Gaussian beam.
 
@@ -526,19 +526,19 @@ Functions in `torchsky.sphere.compat` (and the `torchsky.sphere.healpy` alias) m
 | `upgrade_pixel_ranges` | parity | NEST pixel-range upgrade |
 | `pixels_to_pixel_ranges` | extended | torchsky-native range compression |
 | `map2alm` | parity | scalar + polarized (`pol=True`); `iter`, `use_pixel_weights` |
-| `map2alm_lsq` | parity | returns `(alm, rel_res, n_iter)`; torch + healpy backends |
-| `alm2map` | parity | scalar + polarized; `pixwin`; torch + healpy backends |
+| `map2alm_lsq` | parity | returns `(alm, rel_res, n_iter)`; torch-native |
+| `alm2map` | parity | scalar + polarized; `pixwin`; torch-native |
 | `almxfl` | parity | short `fl` tails zero-filled (healpy semantics) |
 | `alm2cl` | parity | auto/cross; healpy-compatible stacked ordering |
-| `anafast` | parity | scalar + polarized; `nspec`, `alm=True`; torch + healpy backends |
+| `anafast` | parity | scalar + polarized; `nspec`, `alm=True`; torch-native |
 | `synalm` | parity | scalar/multi-field; `new` ordering |
 | `synfast` | parity | scalar/polarized; optional `alm` return |
 | `gaussian_beam` / `gauss_beam` | parity | scalar + polarized |
 | `pixwin` | parity | packaged pixel-window FITS tables (no healpy runtime dep) |
 | `bl2beam` / `beam2bl` | parity | beam profile ↔ harmonic window |
 | `smoothalm` | parity | scalar + polarized |
-| `smoothmap` / `smoothing` | parity | scalar + polarized; torch + healpy backends |
-| `map2alm_spin` / `alm2map_spin` | parity | integer `spin≥0`; torch + healpy backends |
+| `smoothmap` / `smoothing` | parity | scalar + polarized; torch-native |
+| `map2alm_spin` / `alm2map_spin` | parity | integer `spin≥0`; torch-native (compare to healpy in tests/benchmarks) |
 | `fit_monopole` / `remove_monopole` | parity | `bad`/`gal_cut` masking semantics |
 | `fit_dipole` / `remove_dipole` | parity | `bad`/`gal_cut` masking semantics |
 | `spherical_polygon_contains` | extended | inside-point disambiguation |

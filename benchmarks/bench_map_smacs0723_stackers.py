@@ -36,8 +36,10 @@ from bench_map_compat import (  # noqa: E402
     _coadd_with_montage,
     _coadd_with_reproject,
     _coadd_with_swarp,
+    _geometry_family_for_torchsky_kernel,
     _headers_equivalent_for_direct_copy,
     _load_weight_map,
+    geometry_family_for_library_variant,
 )
 from bench_map_field_fit import _field_fit_kwargs_for_model, _field_model_kwargs_for_case  # noqa: E402
 from bench_map_smacs0723_field_fit import (  # noqa: E402
@@ -94,6 +96,7 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "torchsky_bilinear",
             "family": "torchsky",
+            "geometry_family": _geometry_family_for_torchsky_kernel("bilinear"),
             "variant": "torchsky:bilinear:surface_brightness",
             "target_mode": "published_native",
             "kind": "coadd",
@@ -104,6 +107,7 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "torchsky_lanczos3",
             "family": "torchsky",
+            "geometry_family": _geometry_family_for_torchsky_kernel("lanczos3"),
             "variant": "torchsky:lanczos3:surface_brightness",
             "target_mode": "published_native",
             "kind": "coadd",
@@ -112,8 +116,21 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
             "stacking_method": "weighted_mean",
         },
         {
+            "name": "torchsky_splat_box",
+            "family": "torchsky",
+            "geometry_family": _geometry_family_for_torchsky_kernel("splat_box"),
+            "variant": "torchsky:splat_box:surface_brightness:pixfrac=1.000",
+            "target_mode": "published_native",
+            "kind": "coadd",
+            "kernel": "splat_box",
+            "value_semantics": "surface_brightness",
+            "stacking_method": "weighted_mean",
+            "drizzle_pixfrac": 1.0,
+        },
+        {
             "name": "torchsky_drizzle_square",
             "family": "torchsky",
+            "geometry_family": _geometry_family_for_torchsky_kernel("drizzle_square"),
             "variant": "torchsky:drizzle_square:surface_brightness:pixfrac=1.000",
             "target_mode": "published_native",
             "kind": "coadd",
@@ -125,6 +142,7 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "torchsky_drizzle_point",
             "family": "torchsky",
+            "geometry_family": _geometry_family_for_torchsky_kernel("drizzle_point"),
             "variant": "torchsky:drizzle_point:surface_brightness:pixfrac=1.000",
             "target_mode": "published_native",
             "kind": "coadd",
@@ -134,8 +152,20 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
             "drizzle_pixfrac": 1.0,
         },
         {
+            "name": "torchsky_conservative_polygon",
+            "family": "torchsky",
+            "geometry_family": _geometry_family_for_torchsky_kernel("conservative_polygon"),
+            "variant": "torchsky:conservative_polygon:surface_brightness",
+            "target_mode": "published_native",
+            "kind": "coadd",
+            "kernel": "conservative_polygon",
+            "value_semantics": "surface_brightness",
+            "stacking_method": "weighted_mean",
+        },
+        {
             "name": "drizzle_square",
             "family": "drizzle",
+            "geometry_family": geometry_family_for_library_variant("drizzle", "square"),
             "variant": "drizzle:square:pixfrac=1.000",
             "target_mode": "published_native",
             "kind": "legacy",
@@ -145,6 +175,7 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "drizzle_point",
             "family": "drizzle",
+            "geometry_family": geometry_family_for_library_variant("drizzle", "point"),
             "variant": "drizzle:point:pixfrac=1.000",
             "target_mode": "published_native",
             "kind": "legacy",
@@ -154,6 +185,10 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "reproject_bilinear",
             "family": "reproject",
+            "geometry_family": geometry_family_for_library_variant(
+                "reproject_interp",
+                "bilinear",
+            ),
             "variant": "reproject_interp:bilinear",
             "target_mode": "published_native",
             "kind": "legacy",
@@ -163,6 +198,10 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "reproject_bicubic",
             "family": "reproject",
+            "geometry_family": geometry_family_for_library_variant(
+                "reproject_interp",
+                "bicubic",
+            ),
             "variant": "reproject_interp:bicubic",
             "target_mode": "published_native",
             "kind": "legacy",
@@ -172,6 +211,7 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "reproject_exact",
             "family": "reproject",
+            "geometry_family": geometry_family_for_library_variant("reproject_exact", None),
             "variant": "reproject_exact",
             "target_mode": "published_native",
             "kind": "legacy",
@@ -180,6 +220,10 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "reproject_adaptive",
             "family": "reproject",
+            "geometry_family": geometry_family_for_library_variant(
+                "reproject_adaptive",
+                "gaussian",
+            ),
             "variant": "reproject_adaptive:gaussian",
             "target_mode": "published_native",
             "kind": "legacy",
@@ -188,6 +232,7 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "dfreproject_bilinear",
             "family": "dfreproject",
+            "geometry_family": geometry_family_for_library_variant("dfreproject", "bilinear"),
             "variant": "dfreproject:bilinear",
             "target_mode": "published_native",
             "kind": "legacy",
@@ -197,6 +242,10 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "montage",
             "family": "montage",
+            "geometry_family": geometry_family_for_library_variant(
+                "montage",
+                "mProject_or_mProjectPP",
+            ),
             "variant": "montage:mProject_or_mProjectPP",
             "target_mode": "published_linearized",
             "kind": "legacy",
@@ -205,6 +254,10 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "montage_tan",
             "family": "montage",
+            "geometry_family": geometry_family_for_library_variant(
+                "montage",
+                "mProject_or_mProjectPP:north_up_tan",
+            ),
             "variant": "montage:mProject_or_mProjectPP:north_up_tan",
             "target_mode": "published_swarp_tan",
             "kind": "legacy",
@@ -213,6 +266,7 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "swarp_bilinear",
             "family": "swarp",
+            "geometry_family": geometry_family_for_library_variant("swarp", "BILINEAR"),
             "variant": "swarp:BILINEAR",
             "target_mode": "published_swarp_tan",
             "kind": "legacy",
@@ -222,6 +276,7 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "swarp_lanczos3",
             "family": "swarp",
+            "geometry_family": geometry_family_for_library_variant("swarp", "LANCZOS3"),
             "variant": "swarp:LANCZOS3",
             "target_mode": "published_swarp_tan",
             "kind": "legacy",
@@ -235,6 +290,7 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
                 {
                     "name": "inr_spectral_basis_field",
                     "family": "inr",
+                    "geometry_family": "latent_scene",
                     "variant": "inr:spectral_basis_field",
                     "target_mode": "published_linearized",
                     "kind": "inr",
@@ -243,6 +299,7 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
                 {
                     "name": "inr_sky_encoder_resmlp",
                     "family": "inr",
+                    "geometry_family": "latent_scene",
                     "variant": "inr:sky_encoder_resmlp",
                     "target_mode": "published_linearized",
                     "kind": "inr",
@@ -251,6 +308,7 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
                 {
                     "name": "inr_sky_lambda_feature_field",
                     "family": "inr",
+                    "geometry_family": "latent_scene",
                     "variant": "inr:sky_lambda_feature_field",
                     "target_mode": "published_linearized",
                     "kind": "inr",
@@ -259,6 +317,7 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
                 {
                     "name": "inr_operator_constrained_feature_field",
                     "family": "inr",
+                    "geometry_family": "latent_scene",
                     "variant": "inr:operator_constrained_feature_field",
                     "target_mode": "published_linearized",
                     "kind": "inr",
@@ -422,18 +481,18 @@ def _format_markdown(rows: list[dict[str, Any]]) -> str:
     lines = [
         "# SMACS J0723 Stacker Comparison",
         "",
-        "| variant | family | status | target | support rmse | uniform rmse | flux ratio | center rmse | edge rmse | affine-corrected rmse | time ms |",
-        "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| variant | family | geometry | status | target | support rmse | uniform rmse | flux ratio | center rmse | edge rmse | affine-corrected rmse | time ms |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in rows:
         if row["status"] != "OK":
             lines.append(
-                f"| {row['variant']} | {row['family']} | {row['status']} | {row.get('target_mode_used','')} | "
+                f"| {row['variant']} | {row['family']} | {row.get('geometry_family','')} | {row['status']} | {row.get('target_mode_used','')} | "
                 f"nan | nan | nan | nan | nan | nan | {row.get('time_ms', float('nan')):.2f} |"
             )
             continue
         lines.append(
-            f"| {row['variant']} | {row['family']} | {row['status']} | {row.get('target_mode_used','')} | "
+            f"| {row['variant']} | {row['family']} | {row.get('geometry_family','')} | {row['status']} | {row.get('target_mode_used','')} | "
             f"{row['support_rmse']:.6f} | {row['uniform_rmse']:.6f} | {row['support_flux_ratio']:.4f} | "
             f"{row['center_support_rmse']:.6f} | {row['edge_support_rmse']:.6f} | "
             f"{row.get('support_rmse_after_affine_fit', float('nan')):.6f} | {row['time_ms']:.2f} |"
@@ -774,6 +833,7 @@ def run_stacker_benchmark(
                 "name": spec["name"],
                 "variant": spec["variant"],
                 "family": spec["family"],
+                "geometry_family": spec["geometry_family"],
                 "status": "OK",
                 "target_mode_used": target_mode_used,
                 "crop_size": crop_size,

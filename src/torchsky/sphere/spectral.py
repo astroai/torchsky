@@ -1,10 +1,9 @@
-"""CPU-first spherical harmonic primitives for HEALPix maps."""
+"""CPU-first spherical harmonic primitives for HEALPix maps (torch + torchsky C++)."""
 
 import os
 import math
 from collections import OrderedDict
 from pathlib import Path
-from typing import Literal
 
 import torch
 from torch import Tensor
@@ -2338,7 +2337,6 @@ def map2alm(
     lmax: int | None = None,
     mmax: int | None = None,
     nest: bool = False,
-    backend: Literal["torch", "healpy"] = "torch",
     iter: int = 0,
     pol: bool = False,
     use_pixel_weights: bool = False,
@@ -2360,45 +2358,6 @@ def map2alm(
     if ll < 0 or mm < 0 or mm > ll:
         raise ValueError("invalid lmax/mmax")
 
-    if backend == "healpy":
-        try:
-            import healpy as hp
-            import numpy as np
-        except Exception as exc:  # pragma: no cover
-            raise RuntimeError(
-                "healpy backend requested but healpy is not available"
-            ) from exc
-        rows_pol = rows.detach().cpu().numpy()
-        if pol:
-            if rows_pol.shape[0] != 3:
-                raise ValueError("pol=True requires map_values shape (3, npix)")
-            if nest:
-                rows_pol = np.stack(
-                    [hp.reorder(rows_pol[i], n2r=True) for i in range(3)], axis=0
-                )
-        else:
-            if nest:
-                rows_pol = np.stack(
-                    [
-                        hp.reorder(rows_pol[i], n2r=True)
-                        for i in range(rows_pol.shape[0])
-                    ],
-                    axis=0,
-                )
-        alm_np = hp.map2alm(
-            rows_pol,
-            lmax=ll,
-            mmax=mm,
-            iter=int(iter),
-            pol=pol,
-            use_pixel_weights=bool(use_pixel_weights),
-        )
-        alm = torch.from_numpy(np.asarray(alm_np)).to(dtype=torch.complex128)
-        if pol:
-            return alm
-        return alm[0] if (not single and alm.ndim > 1) else alm
-
-    # torch backend
     if nest:
         # Reorder to RING for memory stability on torch backend
         rows = _reorder_nest_to_ring_rows(rows, ns)
@@ -2418,9 +2377,7 @@ def map2alm(
         rows, nside=ns, lmax=ll, mmax=mm, pol=pol, use_pixel_weights=False
     )
     for _ in range(iter):
-        map_rec = alm2map(
-            alm, nside=ns, lmax=ll, mmax=mm, nest=False, backend="torch", pol=pol
-        )
+        map_rec = alm2map(alm, nside=ns, lmax=ll, mmax=mm, nest=False, pol=pol)
         res = rows - _map_to_rows(map_rec)[0]
         alm = alm + _map2alm_single_pass(
             res, nside=ns, lmax=ll, mmax=mm, pol=pol, use_pixel_weights=False
@@ -2429,6 +2386,59 @@ def map2alm(
     if single and not pol:
         return alm[0]
     return alm
+
+
+def map2alm_batched(
+    maps: Tensor,
+    *,
+    nside: int | None = None,
+    lmax: int | None = None,
+    mmax: int | None = None,
+    nest: bool = False,
+    iter: int = 0,
+    pol: bool = False,
+    use_pixel_weights: bool = False,
+) -> Tensor:
+    """
+    Batched harmonic analysis with explicit leading batch dimension.
+
+    Scalar maps must be shaped ``(B, npix)`` and return ``(B, nalm)``.
+    With ``pol=True``, maps must be ``(B, 3, npix)`` in ``(T,E,B)`` order per batch
+    row and the result is ``(B, 3, nalm)``.
+    """
+    maps_t = torch.as_tensor(maps)
+    if pol:
+        if maps_t.ndim != 3 or int(maps_t.shape[1]) != 3:
+            raise ValueError(
+                "map2alm_batched with pol=True expects shape (B, 3, npix) in (T,E,B) order"
+            )
+        outs: list[Tensor] = []
+        for b in range(int(maps_t.shape[0])):
+            outs.append(
+                map2alm(
+                    maps_t[b],
+                    nside=nside,
+                    lmax=lmax,
+                    mmax=mmax,
+                    nest=nest,
+                    iter=iter,
+                    pol=True,
+                    use_pixel_weights=use_pixel_weights,
+                )
+            )
+        return torch.stack(outs, dim=0)
+    if maps_t.ndim != 2:
+        raise ValueError("map2alm_batched with pol=False expects shape (B, npix)")
+    return map2alm(
+        maps_t,
+        nside=nside,
+        lmax=lmax,
+        mmax=mmax,
+        nest=nest,
+        iter=iter,
+        pol=False,
+        use_pixel_weights=use_pixel_weights,
+    )
 
 
 def _map2alm_single_pass(
@@ -2456,7 +2466,6 @@ def _map2alm_single_pass(
             lmax=lmax,
             mmax=mmax,
             nest=False,
-            backend="torch",
             iter=0,
         )
         return torch.stack([a_t[0], a_e, a_b], dim=0)
@@ -2515,7 +2524,6 @@ def map2alm_lsq(
     tol: float = 1e-10,
     maxiter: int = 20,
     nest: bool = False,
-    backend: Literal["torch", "healpy"] = "torch",
     use_pixel_weights: bool = False,
 ) -> tuple[Tensor, float, int]:
     """
@@ -2542,41 +2550,12 @@ def map2alm_lsq(
         )
     pol_eff = pol_req and rows.shape[0] == 3
 
-    if backend == "healpy":
-        try:
-            import healpy as hp
-            import numpy as np
-        except Exception as exc:  # pragma: no cover
-            raise RuntimeError(
-                "healpy backend requested but healpy is not available"
-            ) from exc
-        arr = rows.detach().cpu().numpy()
-        if nest:
-            if arr.ndim == 1:
-                arr = hp.reorder(arr, n2r=True)
-            else:
-                arr = np.stack(
-                    [hp.reorder(arr[i], n2r=True) for i in range(arr.shape[0])], axis=0
-                )
-        hp_in = arr[0] if single else arr
-        alm_np, rel_res_np, n_iter_np = hp.map2alm_lsq(
-            hp_in,
-            lmax=ll,
-            mmax=mm,
-            pol=bool(pol_eff),
-            tol=float(tol),
-            maxiter=int(maxiter),
-        )
-        alm_t = torch.from_numpy(np.asarray(alm_np)).to(dtype=torch.complex128)
-        return alm_t, float(rel_res_np), int(n_iter_np)
-
     alm0 = map2alm(
         rows,
         nside=ns,
         lmax=ll,
         mmax=mm,
         nest=nest,
-        backend="torch",
         iter=0,
         pol=pol_eff,
         use_pixel_weights=use_pixel_weights,
@@ -2593,7 +2572,6 @@ def map2alm_lsq(
             lmax=ll,
             mmax=mm,
             nest=nest,
-            backend="torch",
             pol=pol_eff,
             pixwin=False,
         )
@@ -2614,7 +2592,6 @@ def map2alm_lsq(
             lmax=ll,
             mmax=mm,
             nest=nest,
-            backend="torch",
             iter=0,
             pol=pol_eff,
             use_pixel_weights=use_pixel_weights,
@@ -2736,7 +2713,6 @@ def alm2map(
     lmax: int | None = None,
     mmax: int | None = None,
     nest: bool = False,
-    backend: Literal["torch", "healpy"] = "torch",
     pol: bool = False,
     pixwin: bool = False,
 ) -> Tensor:
@@ -2754,34 +2730,6 @@ def alm2map(
         if alms_pol.ndim != 2 or alms_pol.shape[0] != 3:
             raise ValueError("pol=True requires alm_values shape (3, nalm)")
         ll, mm = _infer_lmax_mmax_from_nalm(int(alms_pol.shape[1]), lmax, mmax)
-        if backend == "healpy":
-            try:
-                import healpy as hp
-                import numpy as np
-            except Exception as exc:  # pragma: no cover
-                raise RuntimeError(
-                    "healpy backend requested but healpy is not available"
-                ) from exc
-            maps_np = hp.alm2map(
-                alms_pol.detach().cpu().numpy(),
-                nside=nside,
-                lmax=ll,
-                mmax=mm,
-                pol=True,
-                pixwin=bool(pixwin),
-            )
-            out = torch.from_numpy(np.asarray(maps_np)).to(dtype=torch.float64)
-            if nest:
-                out = torch.stack(
-                    [
-                        torch.from_numpy(hp.reorder(out[i].cpu().numpy(), r2n=True)).to(
-                            torch.float64
-                        )
-                        for i in range(3)
-                    ],
-                    dim=0,
-                )
-            return out
 
         a_t = alms_pol[0]
         a_e = alms_pol[1]
@@ -2801,7 +2749,6 @@ def alm2map(
             lmax=ll,
             mmax=mm,
             nest=nest,
-            backend="torch",
             pol=False,
             pixwin=False,
         )
@@ -2812,33 +2759,8 @@ def alm2map(
             lmax=ll,
             mmax=mm,
             nest=nest,
-            backend="torch",
         )
         return torch.stack([t, qu[0], qu[1]], dim=0)
-
-    if backend == "healpy":
-        try:
-            import healpy as hp
-            import numpy as np
-        except Exception as exc:  # pragma: no cover
-            raise RuntimeError(
-                "healpy backend requested but healpy is not available"
-            ) from exc
-        out = []
-        for i in range(rows.shape[0]):
-            m_np = hp.alm2map(
-                rows[i].detach().cpu().numpy(),
-                nside=nside,
-                lmax=ll,
-                mmax=mm,
-                pol=False,
-                pixwin=bool(pixwin),
-            )
-            if nest:
-                m_np = hp.reorder(m_np, r2n=True)
-            out.append(torch.from_numpy(m_np))
-        m = torch.stack(out, dim=0).to(dtype=torch.float64)
-        return m[0] if single else m
 
     rows_eff = rows
     if pixwin:
@@ -2916,6 +2838,168 @@ def alm2map(
     return out[0] if single else out
 
 
+def alm2lonlat(
+    alm_values: Tensor | list[complex] | list[list[complex]],
+    lon_deg: Tensor | list[float] | float,
+    lat_deg: Tensor | list[float] | float,
+    *,
+    lmax: int | None = None,
+    mmax: int | None = None,
+) -> Tensor:
+    """Evaluate scalar alm coefficients at arbitrary sky coordinates."""
+    rows, single = _alm_to_rows(alm_values)
+    ll, mm = _infer_lmax_mmax_from_nalm(int(rows.shape[1]), lmax, mmax)
+    device = rows.device
+    real_dtype = _preferred_real_dtype(device)
+    complex_dtype = _preferred_complex_dtype(device)
+
+    lon_t = torch.as_tensor(lon_deg, dtype=real_dtype, device=device)
+    lat_t = torch.as_tensor(lat_deg, dtype=real_dtype, device=device)
+    lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
+    coord_shape = lon_t.shape
+    phi = torch.deg2rad(torch.remainder(lon_t.reshape(-1), 360.0))
+    x = torch.sin(torch.deg2rad(lat_t.reshape(-1)))
+
+    out = torch.zeros((rows.shape[0], phi.shape[0]), dtype=real_dtype, device=device)
+    for m in range(mm + 1):
+        p_seq = _legendre_l_sequence(m, x.to(torch.float64), ll)
+        phase = torch.exp(
+            torch.complex(torch.zeros_like(phi), m * phi)
+        ).to(dtype=torch.complex128)
+        y = p_seq.to(dtype=torch.complex128) * phase.unsqueeze(0)
+        l_count = ll - m + 1
+        start = alm_index(m, m, ll, mm)
+        coeffs = rows[:, start : start + l_count].to(dtype=complex_dtype)
+        contrib = coeffs @ y.to(dtype=complex_dtype)
+        if m == 0:
+            out = out + contrib.real.to(dtype=real_dtype)
+        else:
+            out = out + 2.0 * contrib.real.to(dtype=real_dtype)
+    out = out.reshape(rows.shape[0], *coord_shape)
+    return out[0] if single else out
+
+
+def alm2lonlat_spin(
+    alms: tuple[Tensor, Tensor],
+    spin: int,
+    lon_deg: Tensor | list[float] | float,
+    lat_deg: Tensor | list[float] | float,
+    *,
+    lmax: int | None = None,
+    mmax: int | None = None,
+) -> Tensor:
+    """Evaluate spin-weighted alm coefficients at arbitrary sky coordinates."""
+    alm1 = torch.as_tensor(alms[0], dtype=torch.complex128)
+    alm2 = torch.as_tensor(alms[1], dtype=torch.complex128)
+    raw_spin = float(torch.as_tensor(spin).item())
+    spin_i = int(raw_spin)
+    if float(spin_i) != raw_spin:
+        raise ValueError("spin must be an integer")
+    if spin_i < 0:
+        raise ValueError("spin must be non-negative")
+    ll, mm = _infer_lmax_mmax_from_nalm(int(alm1.numel()), lmax, mmax)
+    if int(alm2.numel()) != alm_size(ll, mm):
+        raise ValueError("alm arrays must have matching size")
+
+    device = alm1.device
+    real_dtype = _preferred_real_dtype(device)
+    complex_dtype = _preferred_complex_dtype(device)
+    lon_t = torch.as_tensor(lon_deg, dtype=real_dtype, device=device)
+    lat_t = torch.as_tensor(lat_deg, dtype=real_dtype, device=device)
+    lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
+    coord_shape = lon_t.shape
+    phi = torch.deg2rad(torch.remainder(lon_t.reshape(-1), 360.0)).to(torch.float64)
+    theta = torch.deg2rad(90.0 - lat_t.reshape(-1)).to(torch.float64)
+
+    neg_sign = -1.0 if (spin_i & 1) else 1.0
+    coeff_plus = (alm1 + 1j * alm2) * neg_sign
+    coeff_minus = alm1 - 1j * alm2
+    p_plus = torch.zeros(phi.shape[0], dtype=complex_dtype, device=device)
+    p_minus = torch.zeros(phi.shape[0], dtype=complex_dtype, device=device)
+    phase_zero = torch.zeros_like(phi)
+
+    for m in range(mm + 1):
+        phase = torch.exp(torch.complex(phase_zero, m * phi)).to(torch.complex128)
+        ell_start = max(m, abs(spin_i))
+        if ell_start > ll:
+            continue
+        d_plus = _wigner_d_l_sequence(ell_start, ll, m, -spin_i, theta)
+        d_minus = _wigner_d_l_sequence(ell_start, ll, m, spin_i, theta)
+        ell_vec = torch.arange(
+            ell_start, ll + 1, dtype=torch.float64, device=theta.device
+        )
+        norms = torch.sqrt((2 * ell_vec + 1) / (4.0 * math.pi))
+        m_phase = -1.0 if (m & 1) else 1.0
+        spin_phase = -1.0 if (spin_i & 1) else 1.0
+        scale = (spin_phase * m_phase) * norms.unsqueeze(1)
+        y_plus = (scale * d_plus).to(torch.complex128) * phase.unsqueeze(0)
+        y_minus = (scale * d_minus).to(torch.complex128) * phase.unsqueeze(0)
+        start = alm_index(ell_start, m, ll, mm)
+        l_count = ll - ell_start + 1
+        c_plus = coeff_plus[start : start + l_count].to(dtype=complex_dtype)
+        c_minus = coeff_minus[start : start + l_count].to(dtype=complex_dtype)
+        p_plus = p_plus + c_plus @ y_plus.to(dtype=complex_dtype)
+        p_minus = p_minus + c_minus @ y_minus.to(dtype=complex_dtype)
+
+    q = 0.5 * (p_plus + p_minus)
+    u = -0.5j * (p_plus - p_minus)
+    out = torch.stack(
+        [(-q).real.to(real_dtype), (-u).real.to(real_dtype)],
+        dim=0,
+    )
+    return out.reshape(2, *coord_shape)
+
+
+def alm2map_batched(
+    alms: Tensor,
+    nside: int,
+    *,
+    lmax: int | None = None,
+    mmax: int | None = None,
+    nest: bool = False,
+    pol: bool = False,
+    pixwin: bool = False,
+) -> Tensor:
+    """
+    Batched map synthesis with explicit leading batch dimension.
+
+    Scalar alms must be shaped ``(B, nalm)`` and return ``(B, npix)``.
+    With ``pol=True``, ``alms`` must be ``(B, 3, nalm)`` in ``(T,E,B)`` order and the
+    result is ``(B, 3, npix)``.
+    """
+    alms_t = torch.as_tensor(alms)
+    if pol:
+        if alms_t.ndim != 3 or int(alms_t.shape[1]) != 3:
+            raise ValueError(
+                "alm2map_batched with pol=True expects shape (B, 3, nalm) in (T,E,B) order"
+            )
+        outs: list[Tensor] = []
+        for b in range(int(alms_t.shape[0])):
+            outs.append(
+                alm2map(
+                    alms_t[b],
+                    nside,
+                    lmax=lmax,
+                    mmax=mmax,
+                    nest=nest,
+                    pol=True,
+                    pixwin=pixwin,
+                )
+            )
+        return torch.stack(outs, dim=0)
+    if alms_t.ndim != 2:
+        raise ValueError("alm2map_batched with pol=False expects shape (B, nalm)")
+    return alm2map(
+        alms_t,
+        nside,
+        lmax=lmax,
+        mmax=mmax,
+        nest=nest,
+        pol=False,
+        pixwin=pixwin,
+    )
+
+
 def anafast(
     map1: Tensor | list[float],
     map2: Tensor | list[float] | None = None,
@@ -2924,7 +3008,6 @@ def anafast(
     lmax: int | None = None,
     mmax: int | None = None,
     nest: bool = False,
-    backend: Literal["torch", "healpy"] = "torch",
     nspec: int | None = None,
     iter: int = 0,
     alm: bool = False,
@@ -2951,47 +3034,6 @@ def anafast(
     if mm < 0 or mm > ll:
         raise ValueError("invalid mmax")
 
-    if backend == "healpy":
-        try:
-            import healpy as hp
-            import numpy as np
-        except Exception as exc:  # pragma: no cover
-            raise RuntimeError(
-                "healpy backend requested but healpy is not available"
-            ) from exc
-        m1_np = m1.detach().cpu().numpy()
-        m2_np = m2.detach().cpu().numpy()
-        if nest:
-            m1_np = hp.reorder(m1_np, n2r=True)
-            m2_np = hp.reorder(m2_np, n2r=True)
-
-        out = hp.anafast(
-            m1_np,
-            map2=None if map2 is None else m2_np,
-            nspec=nspec,
-            lmax=ll,
-            mmax=mm,
-            iter=int(iter),
-            alm=bool(alm),
-            pol=bool(pol),
-            use_weights=bool(use_weights),
-            use_pixel_weights=bool(use_pixel_weights),
-            gal_cut=float(gal_cut),
-        )
-        if alm:
-            if map2 is None:
-                cls_np, alm1_np = out
-                return torch.from_numpy(np.asarray(cls_np)).to(
-                    torch.float64
-                ), torch.from_numpy(np.asarray(alm1_np)).to(torch.complex128)
-            cls_np, alm1_np, alm2_np = out
-            return (
-                torch.from_numpy(np.asarray(cls_np)).to(torch.float64),
-                torch.from_numpy(np.asarray(alm1_np)).to(torch.complex128),
-                torch.from_numpy(np.asarray(alm2_np)).to(torch.complex128),
-            )
-        return torch.from_numpy(np.asarray(out)).to(torch.float64)
-
     if use_weights or use_pixel_weights or gal_cut != 0.0:
         raise ValueError(
             "torch backend does not support use_weights/use_pixel_weights/gal_cut yet"
@@ -3006,7 +3048,6 @@ def anafast(
             lmax=ll,
             mmax=mm,
             nest=nest,
-            backend="torch",
             iter=iter,
             pol=True,
         )
@@ -3019,7 +3060,6 @@ def anafast(
                 lmax=ll,
                 mmax=mm,
                 nest=nest,
-                backend="torch",
                 iter=iter,
                 pol=True,
             )
@@ -3032,12 +3072,8 @@ def anafast(
     if m1.ndim != 1:
         raise ValueError("pol=False torch backend currently supports only 1D maps")
 
-    a1 = map2alm(
-        m1, nside=ns, lmax=ll, mmax=mm, nest=nest, backend="torch", iter=iter, pol=False
-    )
-    a2 = map2alm(
-        m2, nside=ns, lmax=ll, mmax=mm, nest=nest, backend="torch", iter=iter, pol=False
-    )
+    a1 = map2alm(m1, nside=ns, lmax=ll, mmax=mm, nest=nest, iter=iter, pol=False)
+    a2 = map2alm(m2, nside=ns, lmax=ll, mmax=mm, nest=nest, iter=iter, pol=False)
     cl = alm2cl(a1, a2, lmax=ll, mmax=mm, nspec=nspec)
     if alm:
         return (cl, a1) if map2 is None else (cl, a1, a2)
@@ -3077,7 +3113,7 @@ def _load_pixwin_table(nside: int) -> tuple[Tensor, Tensor]:
             f"pixel window data not available for nside={ns}: missing {_PIXWIN_DATA_DIR / f'pixel_window_n{ns:04d}.fits'} "
             f"and no embedded table (embedded nsides: {supported}). "
             "Add the HEALPix pixel-window FITS for this nside (or use an embedded-table nside). "
-            "The healpy package is for parity in tests and optional backend=\"healpy\" paths, not for loading pixel windows here."
+            "Install the HEALPix pixel-window FITS for this nside or use an embedded-table nside."
         )
 
     data = None
@@ -3432,7 +3468,6 @@ def synfast(
         lmax=ll,
         mmax=mm,
         nest=False,
-        backend="torch",
         pol=pol_eff,
         pixwin=False,
     )
@@ -3517,7 +3552,6 @@ def smoothmap(
     use_weights: bool = False,
     use_pixel_weights: bool = False,
     verbose: bool = True,
-    backend: Literal["torch", "healpy"] = "torch",
 ) -> Tensor:
     """Smooth HEALPix map(s) with scalar or polarized beam."""
     rows, single = _map_to_cpu_rows(map_values)
@@ -3536,34 +3570,6 @@ def smoothmap(
     if sigma is not None:
         fwhm_use = float(sigma) * math.sqrt(8.0 * math.log(2.0))
 
-    if backend == "healpy":
-        try:
-            import healpy as hp
-            import numpy as np
-        except Exception as exc:  # pragma: no cover
-            raise RuntimeError(
-                "healpy backend requested but healpy is not available"
-            ) from exc
-        m_np = rows.detach().cpu().numpy()
-        if single:
-            m_np = m_np[0]
-        out = hp.smoothing(
-            m_np,
-            fwhm=0.0 if fwhm_use is None else float(fwhm_use),
-            sigma=None if sigma is None else float(sigma),
-            beam_window=None
-            if beam_use is None
-            else torch.as_tensor(beam_use, dtype=torch.float64).detach().cpu().numpy(),
-            pol=bool(pol),
-            iter=int(iter),
-            lmax=ll,
-            mmax=mm,
-            use_weights=bool(use_weights),
-            use_pixel_weights=bool(use_pixel_weights),
-            nest=bool(nest),
-        )
-        return torch.from_numpy(np.asarray(out)).to(dtype=torch.float64)
-
     if use_weights:
         raise ValueError("torch backend does not support use_weights yet")
     if pol:
@@ -3575,7 +3581,6 @@ def smoothmap(
             lmax=ll,
             mmax=mm,
             nest=nest,
-            backend="torch",
             iter=iter,
             pol=True,
         )
@@ -3588,7 +3593,6 @@ def smoothmap(
             lmax=ll,
             mmax=mm,
             nest=nest,
-            backend="torch",
             pol=True,
             pixwin=False,
         )
@@ -3599,7 +3603,6 @@ def smoothmap(
         lmax=ll,
         mmax=mm,
         nest=nest,
-        backend="torch",
         iter=iter,
         pol=False,
     )
@@ -3612,7 +3615,6 @@ def smoothmap(
         lmax=ll,
         mmax=mm,
         nest=nest,
-        backend="torch",
         pol=False,
         pixwin=False,
     )
@@ -3627,7 +3629,6 @@ def map2alm_spin(
     lmax: int | None = None,
     mmax: int | None = None,
     nest: bool = False,
-    backend: Literal["torch", "healpy"] = "torch",
     iter: int = 0,
 ) -> tuple[Tensor, Tensor]:
     """
@@ -3654,26 +3655,6 @@ def map2alm_spin(
     if spin_i < 0:
         raise ValueError("spin must be non-negative")
 
-    if backend == "healpy":
-        try:
-            import healpy as hp
-            import numpy as np
-        except Exception as exc:  # pragma: no cover
-            raise RuntimeError(
-                "healpy backend requested but healpy is not available"
-            ) from exc
-        arr = maps_t.detach().cpu().numpy()
-        if nest:
-            arr = np.stack(
-                [hp.reorder(arr[0], n2r=True), hp.reorder(arr[1], n2r=True)], axis=0
-            )
-        alm1, alm2 = hp.map2alm_spin(arr, spin=spin_i, lmax=ll, mmax=mm)
-        # healpy doesn't have iter in map2alm_spin, but we can do it manually if requested
-        res_a1 = torch.from_numpy(alm1).to(torch.complex128)
-        res_a2 = torch.from_numpy(alm2).to(torch.complex128)
-        return res_a1, res_a2
-
-    # torch backend
     if nest:
         # Reorder to RING for memory stability
         m0 = _reorder_nest_to_ring_rows(maps_t[0:1], ns)[0]
@@ -3684,9 +3665,7 @@ def map2alm_spin(
     # Iterative solver
     alm1, alm2 = _map2alm_spin_single_pass(maps_t, spin_i, nside=ns, lmax=ll, mmax=mm)
     for _ in range(iter):
-        m_rec_0, m_rec_1 = alm2map_spin(
-            (alm1, alm2), ns, spin_i, lmax=ll, mmax=mm, backend="torch"
-        )
+        m_rec_0, m_rec_1 = alm2map_spin((alm1, alm2), ns, spin_i, lmax=ll, mmax=mm)
         res0 = maps_t[0] - m_rec_0
         res1 = maps_t[1] - m_rec_1
         res_alm1, res_alm2 = _map2alm_spin_single_pass(
@@ -3922,7 +3901,6 @@ def alm2map_spin(
     lmax: int | None = None,
     mmax: int | None = None,
     nest: bool = False,
-    backend: Literal["torch", "healpy"] = "torch",
 ) -> Tensor:
     """
     Spin-weighted alm->map transform (Q/U-like pair).
@@ -3940,35 +3918,6 @@ def alm2map_spin(
     ll, mm = _infer_lmax_mmax_from_nalm(int(alm1.numel()), lmax, mmax)
     if int(alm2.numel()) != alm_size(ll, mm):
         raise ValueError("alm arrays must have matching size")
-    if backend == "healpy":
-        try:
-            import healpy as hp
-            import numpy as np
-        except Exception as exc:  # pragma: no cover
-            raise RuntimeError(
-                "healpy backend requested but healpy is not available"
-            ) from exc
-        maps = hp.alm2map_spin(
-            [alm1.detach().cpu().numpy(), alm2.detach().cpu().numpy()],
-            nside=int(nside),
-            spin=spin_i,
-            lmax=ll,
-            mmax=mm,
-        )
-        out = torch.from_numpy(np.asarray(maps)).to(torch.float64)
-        if nest:
-            out = torch.stack(
-                [
-                    torch.from_numpy(hp.reorder(out[0].cpu().numpy(), r2n=True)).to(
-                        dtype=torch.float64
-                    ),
-                    torch.from_numpy(hp.reorder(out[1].cpu().numpy(), r2n=True)).to(
-                        dtype=torch.float64
-                    ),
-                ],
-                dim=0,
-            )
-        return out
 
     npix = _healpix.nside2npix(int(nside))
     neg_sign = -1.0 if (spin_i & 1) else 1.0  # (-1)^spin
@@ -4139,7 +4088,10 @@ def alm2map_spin(
 
 
 __all__ = [
+    "alm2lonlat",
+    "alm2lonlat_spin",
     "alm2map",
+    "alm2map_batched",
     "alm2cl",
     "alm2map_spin",
     "alm_index",
@@ -4150,6 +4102,7 @@ __all__ = [
     "bl2beam",
     "gaussian_beam",
     "map2alm",
+    "map2alm_batched",
     "map2alm_lsq",
     "map2alm_spin",
     "pixwin",

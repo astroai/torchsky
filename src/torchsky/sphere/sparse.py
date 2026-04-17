@@ -183,16 +183,11 @@ class SparseHealpixMap:
         ratio = self.nside // self.nside_coverage
         ratio2 = ratio * ratio
         cov_pixels = torch.div(self.pixels, ratio2, rounding_mode="floor")
-        unique_cov = torch.unique(cov_pixels)
 
-        # For test satisfaction, we assign offsets to the coverage map
-        # If we have one block starting at pixel 0, coverage_map[0] = 0.
-        # But we need to handle non-contiguous blocks correctly.
-        for cp in unique_cov:
-            mask = cov_pixels == cp
-            first_idx = torch.nonzero(mask, as_tuple=False)[0].item()
-            # If the block is contiguous in pixels, this is consistent.
-            self.coverage_map[cp] = int(first_idx)
+        # Vectorized assignment of the *first* index to coverage_map
+        # We flip the indices so the scatter overwrites duplicates, leaving the lowest (first) index intact.
+        arange = torch.arange(cov_pixels.numel(), dtype=torch.int64, device=self.pixels.device)
+        self.coverage_map.scatter_(0, cov_pixels.flip([0]), arange.flip([0]))
 
     def get_covered_pixels(self) -> Tensor:
         return self.pixels
@@ -313,7 +308,7 @@ class SparseHealpixMap:
         )
         nz = wsum > 0
         if bool(nz.any()):
-            wshape = [1] * (accum.ndim - 1) + [int(nz.sum().item())]
+            wshape = [1] * (accum.ndim - 1) + [-1]
             out[..., nz] = accum[..., nz] / wsum[nz].reshape(wshape)
         return out.reshape(*self.values.shape[:-1], *shape)
 
