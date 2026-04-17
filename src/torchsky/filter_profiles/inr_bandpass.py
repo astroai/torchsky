@@ -11,7 +11,6 @@ import re
 from pathlib import Path
 from typing import Any, Literal
 
-import numpy as np
 import torch
 
 InrSpectralSource = Literal["svo", "builtin", "file", "gaussian"]
@@ -46,10 +45,11 @@ def field_observation_spectral_kwargs(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def _prepare_curve_for_field(
-    wavelength: np.ndarray,
-    transmission: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
+    wavelength: Any,
+    transmission: Any,
+) -> tuple[Any, Any]:
     """Sort, clip, merge duplicate wavelengths (mean throughput) for tabulated bandpass."""
+    import numpy as np
     w = np.asarray(wavelength, dtype=np.float64).reshape(-1)
     t = np.clip(np.asarray(transmission, dtype=np.float64).reshape(-1), 0.0, None)
     if w.shape != t.shape:
@@ -111,6 +111,7 @@ def bandpass_from_transmission_file(
     Lines starting with ``#`` and blank lines are ignored. First two columns are parsed as
     floats (comma or whitespace separated).
     """
+    import numpy as np
     p = Path(path)
     if not p.is_file():
         raise FileNotFoundError(f"transmission file not found: {p}")
@@ -139,11 +140,12 @@ def bandpass_from_transmission_file(
 
 
 def _summarize_transmission_curve(
-    wavelength: np.ndarray,
-    transmission: np.ndarray,
+    wavelength: Any,
+    transmission: Any,
     *,
     band_name: str,
 ) -> dict[str, Any]:
+    import numpy as np
     t = np.asarray(transmission, dtype=np.float64)
     w = np.asarray(wavelength, dtype=np.float64)
     if w.shape != t.shape:
@@ -224,6 +226,7 @@ def bandpass_from_svo(
     filter_id: str | None,
     prefer: Literal["classic", "2025", "any"],
 ) -> dict[str, Any]:
+    import numpy as np
     try:
         from astroquery.svo_fps import SvoFps  # type: ignore[import-not-found]
     except Exception as exc:  # pragma: no cover - optional dependency
