@@ -38,7 +38,10 @@ def project_allsky(
         y = eta * D2R
         X = x
         Y = y
-        r2 = (X * 0.25) ** 2 + (Y * 0.5) ** 2
+        X25 = X * 0.25
+        Y50 = Y * 0.5
+        # Element-wise multiplication is faster than torch.square or **2
+        r2 = X25 * X25 + Y50 * Y50
         mask = r2 <= 1.0
         z = torch.sqrt(torch.clamp(1.0 - r2, min=0.0))
         phi_rad = 2.0 * torch.atan2(0.5 * z * X, 2.0 * z * z - 1.0)
