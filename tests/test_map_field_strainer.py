@@ -78,7 +78,7 @@ def test_strainer_trunk_checkpoint_roundtrip() -> None:
         path = tmp.name
     try:
         save_strainer_trunk_checkpoint(m1, path, meta={"test": True})
-        payload = torch.load(path, weights_only=False)
+        payload = torch.load(path, weights_only=True)
         assert payload["format"] == STRAINER_TRUNK_CHECKPOINT_FORMAT
         assert payload["meta"]["test"] is True
         load_strainer_trunk_checkpoint(m2, path, strict=True)
