@@ -1,0 +1,1243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>torchsky viz</title>
+
+  <!--
+    PRODUCTION BUILD: replace links below with Vite-built bundle.
+    Run: cd frontend && npm install && npm run build
+
+    CDN version (works with internet access, for quick start / development):
+  -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js" charset="utf-8"></script>
+
+  <style>
+    /* --------------------------------------------------------
+       DESIGN TOKENS — OKLCH dark astronomy theme
+    -------------------------------------------------------- */
+    :root {
+      --bg-void:       oklch(7%  0.012 260);
+      --bg-surface:    oklch(11% 0.014 260);
+      --bg-raised:     oklch(15% 0.016 260);
+      --bg-hover:      oklch(19% 0.018 260);
+      --bg-border:     oklch(24% 0.020 260);
+      --bg-input:      oklch(9%  0.013 260);
+
+      --text-primary:   oklch(93% 0.010 260);
+      --text-secondary: oklch(65% 0.012 260);
+      --text-dim:       oklch(42% 0.010 260);
+      --text-accent:    oklch(72% 0.18  250);
+
+      --accent:        oklch(68% 0.20  250);
+      --accent-hover:  oklch(74% 0.22  250);
+      --accent-amber:  oklch(78% 0.16   75);
+      --accent-green:  oklch(70% 0.16  155);
+      --accent-red:    oklch(62% 0.22   25);
+
+      --font-ui:   'Inter', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+
+      --sp1: 4px;  --sp2: 8px;  --sp3: 12px;
+      --sp4: 16px; --sp5: 20px; --sp6: 24px; --sp8: 32px;
+
+      --r-sm: 4px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px;
+
+      --shadow-panel: 0 2px 12px oklch(0% 0 0 / 0.5);
+      --shadow-float: 0 8px 40px oklch(0% 0 0 / 0.7);
+      --shadow-glow:  0 0 20px oklch(68% 0.20 250 / 0.25);
+
+      --ease:      cubic-bezier(0.16, 1, 0.3, 1);
+      --ease-fast: 120ms;
+      --ease-med:  220ms;
+      --ease-slow: 400ms;
+
+      --sidebar-w: 260px;
+      --info-w:    300px;
+      --header-h:  48px;
+      --footer-h:  28px;
+    }
+
+    /* --------------------------------------------------------
+       RESET + BASE
+    -------------------------------------------------------- */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: var(--bg-void);
+      color: var(--text-primary);
+      font-family: var(--font-ui);
+      font-size: 13px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* --------------------------------------------------------
+       LAYOUT — fixed 3-column with header + footer
+    -------------------------------------------------------- */
+    #app {
+      display: grid;
+      grid-template-rows: var(--header-h) 1fr var(--footer-h);
+      grid-template-columns: var(--sidebar-w) 1fr var(--info-w);
+      width: 100vw; height: 100vh;
+    }
+
+    /* Header spans full width */
+    #header {
+      grid-column: 1 / -1;
+      grid-row: 1;
+      display: flex;
+      align-items: center;
+      padding: 0 var(--sp4);
+      gap: var(--sp4);
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--bg-border);
+      box-shadow: var(--shadow-panel);
+      position: relative;
+      z-index: 100;
+    }
+
+    /* Footer spans full width */
+    #footer {
+      grid-column: 1 / -1;
+      grid-row: 3;
+      display: flex;
+      align-items: center;
+      padding: 0 var(--sp4);
+      gap: var(--sp6);
+      background: var(--bg-surface);
+      border-top: 1px solid var(--bg-border);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    #sidebar {
+      grid-column: 1;
+      grid-row: 2;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-surface);
+      border-right: 1px solid var(--bg-border);
+      overflow: hidden;
+    }
+
+    #main-panel {
+      grid-column: 2;
+      grid-row: 2;
+      position: relative;
+      overflow: hidden;
+      background: var(--bg-void);
+    }
+
+    #info-panel {
+      grid-column: 3;
+      grid-row: 2;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-surface);
+      border-left: 1px solid var(--bg-border);
+      overflow: hidden;
+    }
+
+    /* --------------------------------------------------------
+       HEADER
+    -------------------------------------------------------- */
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: var(--sp2);
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: var(--text-primary);
+      white-space: nowrap;
+    }
+
+    .logo-star {
+      width: 22px; height: 22px;
+      background: radial-gradient(circle at 40% 40%, oklch(85% 0.25 250), oklch(50% 0.20 250));
+      border-radius: 50%;
+      box-shadow: 0 0 12px oklch(68% 0.20 250 / 0.6);
+      flex-shrink: 0;
+    }
+
+    .tab-group {
+      display: flex;
+      gap: 2px;
+      margin-left: var(--sp4);
+    }
+
+    .tab {
+      padding: var(--sp1) var(--sp3);
+      border-radius: var(--r-md);
+      cursor: pointer;
+      color: var(--text-secondary);
+      font-size: 12.5px;
+      font-weight: 500;
+      transition: all var(--ease-fast) var(--ease);
+      border: none;
+      background: transparent;
+      user-select: none;
+    }
+    .tab:hover { background: var(--bg-hover); color: var(--text-primary); }
+    .tab.active {
+      background: var(--accent);
+      color: oklch(98% 0.01 260);
+      box-shadow: var(--shadow-glow);
+    }
+
+    .header-spacer { flex: 1; }
+
+    .header-badge {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-dim);
+      background: var(--bg-raised);
+      border: 1px solid var(--bg-border);
+      border-radius: var(--r-sm);
+      padding: 2px var(--sp2);
+    }
+
+    /* --------------------------------------------------------
+       SIDEBAR — file tree + controls
+    -------------------------------------------------------- */
+    .sidebar-section {
+      display: flex;
+      flex-direction: column;
+      padding: var(--sp3);
+      gap: var(--sp2);
+    }
+
+    .section-title {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      padding: var(--sp2) 0 var(--sp1);
+    }
+
+    #file-tree {
+      flex: 1;
+      overflow-y: auto;
+      padding: var(--sp2);
+    }
+
+    .tree-item {
+      display: flex;
+      align-items: center;
+      gap: var(--sp2);
+      padding: 5px var(--sp2);
+      border-radius: var(--r-sm);
+      cursor: pointer;
+      color: var(--text-secondary);
+      font-size: 12px;
+      transition: all var(--ease-fast) var(--ease);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .tree-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+    .tree-item.active { background: oklch(68% 0.20 250 / 0.15); color: var(--text-accent); }
+    .tree-item .icon { font-size: 11px; opacity: 0.7; flex-shrink: 0; }
+    .tree-item .name { overflow: hidden; text-overflow: ellipsis; }
+    .tree-item .size { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
+    .tree-dir { font-weight: 500; color: var(--text-secondary); }
+
+    /* Stretch controls */
+    .pill-group {
+      display: flex;
+      gap: 2px;
+      flex-wrap: wrap;
+    }
+    .pill {
+      padding: 3px var(--sp2);
+      border-radius: var(--r-sm);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--bg-border);
+      background: var(--bg-raised);
+      color: var(--text-secondary);
+      transition: all var(--ease-fast) var(--ease);
+    }
+    .pill:hover { border-color: var(--accent); color: var(--accent); }
+    .pill.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: oklch(98% 0.01 260);
+    }
+
+    /* Cmap swatches */
+    .cmap-group {
+      display: flex;
+      gap: var(--sp2);
+      flex-wrap: wrap;
+    }
+    .cmap-swatch {
+      width: 36px; height: 18px;
+      border-radius: 3px;
+      cursor: pointer;
+      border: 2px solid transparent;
+      transition: border-color var(--ease-fast) var(--ease);
+    }
+    .cmap-swatch.active { border-color: var(--accent); }
+    .cmap-swatch:hover { border-color: var(--text-secondary); }
+
+    /* Range slider */
+    .slider-row {
+      display: flex;
+      align-items: center;
+      gap: var(--sp2);
+    }
+    .slider-label { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); min-width: 40px; }
+    .slider-value { font-family: var(--font-mono); font-size: 10px; color: var(--accent); text-align: right; min-width: 60px; }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      flex: 1;
+      height: 3px;
+      border-radius: 2px;
+      background: var(--bg-border);
+      outline: none;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+      box-shadow: 0 0 6px var(--accent);
+    }
+
+    /* Toggle switch */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .toggle-label { font-size: 12px; color: var(--text-secondary); }
+    .toggle {
+      width: 32px; height: 18px;
+      border-radius: 9px;
+      background: var(--bg-border);
+      position: relative;
+      cursor: pointer;
+      transition: background var(--ease-fast) var(--ease);
+      border: none;
+      flex-shrink: 0;
+    }
+    .toggle.on { background: var(--accent); }
+    .toggle::after {
+      content: '';
+      position: absolute;
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: white;
+      top: 3px; left: 3px;
+      transition: transform var(--ease-fast) var(--ease);
+    }
+    .toggle.on::after { transform: translateX(14px); }
+
+    /* Select */
+    select {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--bg-border);
+      border-radius: var(--r-sm);
+      color: var(--text-primary);
+      font-family: var(--font-ui);
+      font-size: 12px;
+      padding: 5px var(--sp2);
+      cursor: pointer;
+      outline: none;
+      transition: border-color var(--ease-fast) var(--ease);
+    }
+    select:focus { border-color: var(--accent); }
+    select option { background: var(--bg-surface); }
+
+    /* Divider */
+    .divider {
+      height: 1px;
+      background: var(--bg-border);
+      margin: var(--sp2) 0;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--bg-border); border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+    /* --------------------------------------------------------
+       ALADIN PANELS
+    -------------------------------------------------------- */
+    .aladin-panel {
+      width: 100%; height: 100%;
+      position: absolute;
+      inset: 0;
+      display: none;
+    }
+    .aladin-panel.visible { display: block; }
+
+    /* Hide Aladin's default UI elements we don't want */
+    .aladin-reticle { display: none !important; }
+
+    /* --------------------------------------------------------
+       INFO PANEL — histogram + stats
+    -------------------------------------------------------- */
+    .info-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: var(--sp3);
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp3);
+    }
+
+    .info-card {
+      background: var(--bg-raised);
+      border-radius: var(--r-md);
+      padding: var(--sp3);
+      border: 1px solid var(--bg-border);
+    }
+
+    .info-card-title {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: var(--sp2);
+    }
+
+    #histogram-canvas {
+      width: 100%;
+      height: 80px;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--sp1) var(--sp3);
+    }
+    .stat-row { display: contents; }
+    .stat-key { font-size: 11px; color: var(--text-secondary); }
+    .stat-val { font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); text-align: right; }
+
+    .dr-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px var(--sp2);
+      border-radius: var(--r-sm);
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .dr-badge.warning { background: oklch(78% 0.16 75 / 0.2); color: var(--accent-amber); border: 1px solid oklch(78% 0.16 75 / 0.4); }
+    .dr-badge.ok { background: oklch(70% 0.16 155 / 0.2); color: var(--accent-green); border: 1px solid oklch(70% 0.16 155 / 0.3); }
+
+    .warns-row { display: flex; gap: var(--sp2); flex-wrap: wrap; margin-top: var(--sp2); }
+
+    /* --------------------------------------------------------
+       FOOTER
+    -------------------------------------------------------- */
+    .footer-item {
+      display: flex;
+      align-items: center;
+      gap: var(--sp1);
+      color: var(--text-dim);
+    }
+    .footer-item .label { color: var(--text-dim); }
+    .footer-item .value { color: var(--text-secondary); }
+    #coord-ra, #coord-dec { color: var(--accent); }
+
+    /* --------------------------------------------------------
+       VALIDATION PANEL — 2×2 grid
+    -------------------------------------------------------- */
+    #validate-panel {
+      display: none;
+      flex-direction: column;
+      height: 100%;
+      overflow: hidden;
+    }
+    #validate-panel.visible { display: flex; }
+
+    .validate-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      flex: 1;
+      gap: 1px;
+      background: var(--bg-border);
+    }
+
+    .val-cell {
+      position: relative;
+      background: var(--bg-void);
+      overflow: hidden;
+    }
+    .val-cell-label {
+      position: absolute;
+      top: var(--sp2); left: var(--sp2);
+      background: oklch(0% 0 0 / 0.7);
+      color: var(--text-primary);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding: 2px var(--sp2);
+      border-radius: var(--r-sm);
+      z-index: 10;
+    }
+    .val-cell img {
+      width: 100%; height: 100%;
+      object-fit: contain;
+      image-rendering: pixelated;
+    }
+
+    .validate-footer {
+      padding: var(--sp3);
+      border-top: 1px solid var(--bg-border);
+      background: var(--bg-surface);
+    }
+
+    /* --------------------------------------------------------
+       LOADING SPINNER
+    -------------------------------------------------------- */
+    .spinner {
+      width: 20px; height: 20px;
+      border: 2px solid var(--bg-border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* --------------------------------------------------------
+       ANIMATIONS
+    -------------------------------------------------------- */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in { animation: fadeIn var(--ease-med) var(--ease); }
+
+    /* --------------------------------------------------------
+       UTILITY
+    -------------------------------------------------------- */
+    .hidden { display: none !important; }
+    .flex { display: flex; }
+    .flex-col { flex-direction: column; }
+    .gap-2 { gap: var(--sp2); }
+    .text-mono { font-family: var(--font-mono); }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ── HEADER ── -->
+  <header id="header">
+    <div class="logo">
+      <div class="logo-star"></div>
+      torchsky viz
+    </div>
+    <div class="tab-group">
+      <button class="tab active" data-panel="fits">FITS Browser</button>
+      <button class="tab" data-panel="sky">Sky View</button>
+      <button class="tab" data-panel="validate">Validation</button>
+    </div>
+    <div class="header-spacer"></div>
+    <div class="header-badge" id="cache-badge">cache: 0 MB</div>
+  </header>
+
+  <!-- ── SIDEBAR ── -->
+  <aside id="sidebar">
+    <!-- File tree -->
+    <div class="section-title" style="padding: var(--sp3) var(--sp3) 0;">Files</div>
+    <div id="file-tree"></div>
+
+    <!-- Controls (shown for FITS/sky tabs) -->
+    <div id="fits-controls" style="overflow-y:auto; flex-shrink:0; border-top:1px solid var(--bg-border);">
+      <div class="sidebar-section">
+        <div class="section-title">HDU</div>
+        <select id="hdu-select"><option value="0">0 — PRIMARY</option></select>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-title">Stretch</div>
+        <div class="pill-group" id="stretch-group">
+          <button class="pill active" data-v="zscale">ZScale</button>
+          <button class="pill" data-v="linear">Linear</button>
+          <button class="pill" data-v="log">Log</button>
+          <button class="pill" data-v="sqrt">√</button>
+          <button class="pill" data-v="asinh">Asinh</button>
+          <button class="pill" data-v="histeq">HistEq</button>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-title">Colormap</div>
+        <div class="cmap-group" id="cmap-group">
+          <div class="cmap-swatch active" data-v="gray" title="Gray"
+            style="background:linear-gradient(to right,#000,#fff)"></div>
+          <div class="cmap-swatch" data-v="viridis" title="Viridis"
+            style="background:linear-gradient(to right,#440154,#31688e,#35b779,#fde725)"></div>
+          <div class="cmap-swatch" data-v="hot" title="Hot"
+            style="background:linear-gradient(to right,#000,#f00,#ff0,#fff)"></div>
+          <div class="cmap-swatch" data-v="thermal" title="Thermal"
+            style="background:linear-gradient(to right,#00f,#0f0,#f80,#f00)"></div>
+          <div class="cmap-swatch" data-v="rdbu_r" title="RdBu (reversed) — for residuals"
+            style="background:linear-gradient(to right,#670520,#f7f7f7,#053061)"></div>
+          <div class="cmap-swatch" data-v="seismic" title="Seismic"
+            style="background:linear-gradient(to right,#00004c,#0066ff,#fff,#ff1a1a,#4c0000)"></div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-title">Display Range</div>
+        <div class="slider-row">
+          <span class="slider-label">vmin</span>
+          <input type="range" id="vmin-slider" min="0" max="100" value="2" step="0.5" />
+          <span class="slider-value" id="vmin-val">—</span>
+        </div>
+        <div class="slider-row">
+          <span class="slider-label">vmax</span>
+          <input type="range" id="vmax-slider" min="0" max="100" value="98" step="0.5" />
+          <span class="slider-value" id="vmax-val">—</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="toggle-row">
+          <span class="toggle-label">WCS Grid</span>
+          <button class="toggle on" id="grid-toggle" title="Toggle coordinate grid"></button>
+        </div>
+        <div class="toggle-row" style="margin-top:var(--sp2)">
+          <span class="toggle-label">Symmetric scale</span>
+          <button class="toggle" id="sym-toggle" title="Force vmin = −vmax (for residuals)"></button>
+        </div>
+      </div>
+
+      <!-- Catalog load -->
+      <div class="sidebar-section">
+        <div class="section-title">Catalog Overlay</div>
+        <select id="catalog-select" style="margin-bottom:var(--sp2)">
+          <option value="">— select FITS catalog —</option>
+        </select>
+        <div style="display:flex;gap:var(--sp2)">
+          <input type="text" id="ra-col-input" placeholder="RA col" value="RA"
+            style="flex:1;background:var(--bg-input);border:1px solid var(--bg-border);
+                   border-radius:var(--r-sm);color:var(--text-primary);font-family:var(--font-mono);
+                   font-size:11px;padding:4px var(--sp2);outline:none;" />
+          <input type="text" id="dec-col-input" placeholder="Dec col" value="DEC"
+            style="flex:1;background:var(--bg-input);border:1px solid var(--bg-border);
+                   border-radius:var(--r-sm);color:var(--text-primary);font-family:var(--font-mono);
+                   font-size:11px;padding:4px var(--sp2);outline:none;" />
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── MAIN PANEL ── -->
+  <main id="main-panel">
+    <!-- FITS / Sky Aladin container -->
+    <div id="aladin-fits" class="aladin-panel visible"></div>
+    <div id="aladin-sky"  class="aladin-panel"></div>
+
+    <!-- Validation 2×2 panel -->
+    <div id="validate-panel">
+      <div class="validate-grid">
+        <div class="val-cell" id="val-truth">
+          <div class="val-cell-label">Truth</div>
+          <img id="val-truth-img" src="" alt="" />
+        </div>
+        <div class="val-cell" id="val-model">
+          <div class="val-cell-label">Model</div>
+          <img id="val-model-img" src="" alt="" />
+        </div>
+        <div class="val-cell" id="val-residual">
+          <div class="val-cell-label">Residual</div>
+          <img id="val-residual-img" src="" alt="" />
+        </div>
+        <div class="val-cell" id="val-pull">
+          <div class="val-cell-label">Pull (σ)</div>
+          <img id="val-pull-img" src="" alt="" />
+        </div>
+      </div>
+      <div class="validate-footer" id="val-hist-container">
+        <div class="section-title">Pull Distribution</div>
+        <div id="val-histogram" style="height:90px;"></div>
+      </div>
+    </div>
+
+    <!-- Empty state -->
+    <div id="empty-state" style="position:absolute;inset:0;display:flex;flex-direction:column;
+         align-items:center;justify-content:center;gap:var(--sp3);color:var(--text-dim);">
+      <div style="font-size:48px;opacity:0.3;">✦</div>
+      <div style="font-size:14px;font-weight:500;">Open a FITS file to begin</div>
+      <div style="font-size:12px;">Navigate the file tree →</div>
+    </div>
+  </main>
+
+  <!-- ── INFO PANEL ── -->
+  <aside id="info-panel">
+    <div class="info-scroll">
+
+      <!-- Histogram -->
+      <div class="info-card">
+        <div class="info-card-title">Image Histogram</div>
+        <canvas id="histogram-canvas"></canvas>
+      </div>
+
+      <!-- DR warnings -->
+      <div class="info-card" id="dr-card" style="display:none">
+        <div class="info-card-title">Dynamic Range</div>
+        <div class="stat-grid" id="dr-stats"></div>
+        <div class="warns-row" id="dr-warns"></div>
+      </div>
+
+      <!-- Image stats -->
+      <div class="info-card" id="stats-card" style="display:none">
+        <div class="info-card-title">Statistics</div>
+        <div class="stat-grid" id="img-stats"></div>
+      </div>
+
+      <!-- FITS header -->
+      <div class="info-card" id="header-card" style="display:none">
+        <div class="info-card-title">WCS Info</div>
+        <div id="wcs-info" class="stat-grid"></div>
+      </div>
+
+      <!-- Validation stats (hidden by default) -->
+      <div class="info-card" id="val-stats-card" style="display:none">
+        <div class="info-card-title">Validation</div>
+        <div class="stat-grid" id="val-chi2-stats"></div>
+      </div>
+
+    </div>
+  </aside>
+
+  <!-- ── FOOTER ── -->
+  <footer id="footer">
+    <div class="footer-item">
+      <span class="label">RA</span>
+      <span class="value text-mono" id="coord-ra">—</span>
+    </div>
+    <div class="footer-item">
+      <span class="label">Dec</span>
+      <span class="value text-mono" id="coord-dec">—</span>
+    </div>
+    <div class="footer-item">
+      <span class="label">Pixel</span>
+      <span class="value text-mono" id="coord-pix">—</span>
+    </div>
+    <div class="footer-item">
+      <span class="label">Value</span>
+      <span class="value text-mono" id="coord-val">—</span>
+    </div>
+    <div style="margin-left:auto" class="footer-item">
+      <span class="value" id="footer-status">Ready</span>
+    </div>
+  </footer>
+
+</div>
+
+<script type="module">
+// ============================================================
+// torchsky viz — SPA JavaScript
+// ============================================================
+
+const API = '';  // relative, works behind any proxy
+
+// ─── State ───────────────────────────────────────────────────
+const state = {
+  activePanel: 'fits',   // 'fits' | 'sky' | 'validate'
+  currentFile: null,     // { path, hdu, surveyId, shape, vmin, vmax, wcs }
+  stretch:  'zscale',
+  cmap:     'gray',
+  gridOn:   true,
+  symScale: false,
+  aladinFits: null,
+  aladinSky:  null,
+  histData: null,
+  raw:      null,        // raw image data for slider range
+};
+
+// ─── Utilities ───────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const fmt = n => (typeof n === 'number') ? (Math.abs(n) < 1e-3 || Math.abs(n) > 1e6
+  ? n.toExponential(3) : n.toPrecision(5)) : String(n);
+const fmtSize = b => b > 1e9 ? `${(b/1e9).toFixed(1)} GB`
+  : b > 1e6 ? `${(b/1e6).toFixed(1)} MB` : `${(b/1e3).toFixed(0)} KB`;
+
+async function api(path, opts = {}) {
+  const r = await fetch(`${API}/api${path}`, opts);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({detail: r.statusText}));
+    throw new Error(err.detail || r.statusText);
+  }
+  return r.json();
+}
+
+function status(msg) { $('footer-status').textContent = msg; }
+
+// ─── Aladin setup ────────────────────────────────────────────
+function initAladinFits() {
+  if (state.aladinFits) return;
+  A.init.then(() => {
+    state.aladinFits = A.aladin('#aladin-fits', {
+      survey:  '',
+      fov:     1,
+      target:  '0 +0',
+      showReticle: false,
+      showZoomControl: false,
+      showFullscreenControl: false,
+      showLayersControl: false,
+      showGotoControl: false,
+      showContextMenu: false,
+      showFrame: true,
+      cooFrame: 'ICRS',
+      backgroundColor: 'rgb(18,18,28)',
+    });
+    // Live coordinate display
+    state.aladinFits.on('mouseMove', (ra, dec) => {
+      if (ra != null) {
+        $('coord-ra').textContent  = fmtRA(ra);
+        $('coord-dec').textContent = fmtDec(dec);
+      }
+    });
+  });
+}
+
+function initAladinSky() {
+  if (state.aladinSky) return;
+  A.init.then(() => {
+    state.aladinSky = A.aladin('#aladin-sky', {
+      survey: 'P/DSS2/color',
+      fov: 180,
+      projection: 'AITOFF',
+      showReticle: false,
+      showZoomControl: true,
+      showFrame: true,
+      backgroundColor: 'rgb(7,7,14)',
+    });
+  });
+}
+
+function fmtRA(deg) {
+  const h = deg / 15, hh = Math.floor(h), mm = Math.floor((h - hh) * 60);
+  const ss = ((h - hh) * 60 - mm) * 60;
+  return `${String(hh).padStart(2,'0')}h ${String(mm).padStart(2,'0')}m ${ss.toFixed(2)}s`;
+}
+function fmtDec(deg) {
+  const sign = deg < 0 ? '−' : '+', d = Math.abs(deg);
+  const dd = Math.floor(d), mm = Math.floor((d - dd) * 60);
+  const ss = ((d - dd) * 60 - mm) * 60;
+  return `${sign}${String(dd).padStart(2,'0')}° ${String(mm).padStart(2,'0')}′ ${ss.toFixed(1)}″`;
+}
+
+// ─── File tree ───────────────────────────────────────────────
+async function loadFileTree(basePath = '') {
+  const { items } = await api(`/fits/tree?path=${encodeURIComponent(basePath)}`);
+  const container = $('file-tree');
+  container.innerHTML = '';
+  if (basePath) {
+    const back = document.createElement('div');
+    back.className = 'tree-item tree-dir';
+    back.innerHTML = '<span class="icon">←</span><span class="name">..</span>';
+    back.onclick = () => loadFileTree(basePath.split('/').slice(0,-1).join('/'));
+    container.appendChild(back);
+  }
+  items.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'tree-item' + (item.type === 'dir' ? ' tree-dir' : '');
+    el.innerHTML = `
+      <span class="icon">${item.type === 'dir' ? '📁' : '🔭'}</span>
+      <span class="name">${item.name}</span>
+      ${item.size ? `<span class="size">${fmtSize(item.size)}</span>` : ''}
+    `;
+    el.onclick = () => item.type === 'dir' ? loadFileTree(item.path) : openFile(item.path);
+    container.appendChild(el);
+  });
+}
+
+// ─── Open FITS file ──────────────────────────────────────────
+async function openFile(path, hdu = 0) {
+  // Highlight tree item
+  document.querySelectorAll('.tree-item').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tree-item').forEach(el => {
+    if (el.querySelector('.name')?.textContent === path.split('/').pop())
+      el.classList.add('active');
+  });
+
+  status('Loading…');
+  $('empty-state').style.display = 'none';
+
+  try {
+    // 1. Get file info + HDU list
+    const info = await api(`/fits/info?path=${encodeURIComponent(path)}&hdu=${hdu}`);
+    populateHDUSelect(info.hdu_list, hdu);
+    updateWCSInfo(info.wcs);
+
+    // 2. Register HiPS survey
+    const reg = await api(`/fits/histogram?path=${encodeURIComponent(path)}&hdu=${hdu}`);
+    state.histData = reg;
+    drawHistogram(reg);
+    updateDRCard(reg.dr);
+    updateStatsCard(reg);
+
+    // 3. Register HiPS
+    const survey = await api(
+      `/hips/register?path=${encodeURIComponent(path)}&hdu=${hdu}&stretch=${state.stretch}&cmap=${state.cmap}`
+    );
+    state.currentFile = { path, hdu, surveyId: survey.id, shape: survey.shape,
+                          vmin: survey.vmin, vmax: survey.vmax, wcs: info.wcs };
+    updateSliders(survey.vmin, survey.vmax, reg);
+
+    // 4. Load into Aladin
+    initAladinFits();
+    await A.init;
+    const hipsUrl = `${window.location.origin}/api/hips/${survey.id}`;
+    const layer = A.createImageSurvey(
+      survey.id,
+      path.split('/').pop(),
+      hipsUrl,
+      'equatorial',
+      survey.max_order,
+      { imgFormat: 'png', maxOrder: survey.max_order }
+    );
+    state.aladinFits.setImageSurvey(layer);
+    if (info.wcs?.crval1 != null) {
+      state.aladinFits.gotoRaDec(info.wcs.crval1, info.wcs.crval2);
+    }
+    state.aladinFits.showGrid(state.gridOn);
+
+    status('Ready');
+  } catch (e) {
+    status(`Error: ${e.message}`);
+    console.error(e);
+  }
+}
+
+// ─── Histogram canvas ────────────────────────────────────────
+function drawHistogram(data) {
+  const canvas = $('histogram-canvas');
+  if (!canvas || !data.bins || !data.counts) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth || 260;
+  const H = 80;
+  canvas.width = W * devicePixelRatio;
+  canvas.height = H * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+
+  const maxCount = Math.max(...data.counts, 1);
+  const n = data.bins.length;
+  const bw = W / n;
+
+  // Background
+  ctx.fillStyle = '#0b0b16';
+  ctx.fillRect(0, 0, W, H);
+
+  // ZScale range indicator
+  if (data.vmin_zscale != null && data.bins.length) {
+    const xmin_f = data.bins[0], xmax_f = data.bins[n-1];
+    const range = xmax_f - xmin_f || 1;
+    const zx1 = ((data.vmin_zscale - xmin_f) / range) * W;
+    const zx2 = ((data.vmax_zscale - xmin_f) / range) * W;
+    ctx.fillStyle = 'oklch(68% 0.20 250 / 0.12)';
+    ctx.fillRect(zx1, 0, zx2 - zx1, H);
+  }
+
+  // Histogram bars
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, 'oklch(68% 0.20 250 / 0.9)');
+  grad.addColorStop(1, 'oklch(68% 0.20 250 / 0.3)');
+  ctx.fillStyle = grad;
+  data.counts.forEach((c, i) => {
+    const barH = (c / maxCount) * (H - 4);
+    ctx.fillRect(i * bw, H - barH, Math.max(1, bw - 0.5), barH);
+  });
+}
+
+// ─── Info cards ──────────────────────────────────────────────
+function updateDRCard(dr) {
+  if (!dr) return;
+  $('dr-card').style.display = '';
+  $('dr-stats').innerHTML = `
+    <span class="stat-key">DR ratio</span><span class="stat-val">${fmt(dr.dr_ratio)}×</span>
+    <span class="stat-key">Neg. frac.</span><span class="stat-val">${(dr.neg_fraction*100).toFixed(2)}%</span>
+    <span class="stat-key">CR frac.</span><span class="stat-val">${(dr.cr_fraction*100).toFixed(4)}%</span>
+    <span class="stat-key">Rec. stretch</span><span class="stat-val">${dr.recommended_stretch}</span>
+  `;
+  const warns = $('dr-warns');
+  warns.innerHTML = '';
+  (dr.warnings || []).forEach(w => {
+    const b = document.createElement('span');
+    b.className = 'dr-badge warning';
+    b.textContent = w;
+    warns.appendChild(b);
+  });
+}
+
+function updateStatsCard(data) {
+  if (!data.dr?.stats) return;
+  const s = data.dr.stats;
+  $('stats-card').style.display = '';
+  $('img-stats').innerHTML = `
+    <span class="stat-key">Min</span><span class="stat-val">${fmt(s.min)}</span>
+    <span class="stat-key">Max</span><span class="stat-val">${fmt(s.max)}</span>
+    <span class="stat-key">Median</span><span class="stat-val">${fmt(s.median)}</span>
+    <span class="stat-key">Std</span><span class="stat-val">${fmt(s.std)}</span>
+    <span class="stat-key">p1</span><span class="stat-val">${fmt(s.p1)}</span>
+    <span class="stat-key">p99</span><span class="stat-val">${fmt(s.p99)}</span>
+  `;
+}
+
+function updateWCSInfo(wcs) {
+  if (!wcs) return;
+  $('header-card').style.display = '';
+  $('wcs-info').innerHTML = `
+    <span class="stat-key">CTYPE1</span><span class="stat-val text-mono">${wcs.ctype1 || '—'}</span>
+    <span class="stat-key">CTYPE2</span><span class="stat-val text-mono">${wcs.ctype2 || '—'}</span>
+    <span class="stat-key">CRVAL1</span><span class="stat-val text-mono">${fmt(wcs.crval1)}</span>
+    <span class="stat-key">CRVAL2</span><span class="stat-val text-mono">${fmt(wcs.crval2)}</span>
+    <span class="stat-key">Projection</span><span class="stat-val">${wcs.proj_code || '—'}</span>
+  `;
+}
+
+// ─── HDU selector ────────────────────────────────────────────
+function populateHDUSelect(hduList, activeHdu) {
+  const sel = $('hdu-select');
+  sel.innerHTML = '';
+  hduList.forEach(h => {
+    const opt = document.createElement('option');
+    opt.value = h.index;
+    opt.textContent = `${h.index} — ${h.name} (${h.type})`;
+    if (h.index === activeHdu) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+// ─── Slider sync ─────────────────────────────────────────────
+function updateSliders(vmin, vmax, histData) {
+  $('vmin-val').textContent = fmt(vmin);
+  $('vmax-val').textContent = fmt(vmax);
+  // Position sliders at zscale limits
+  if (histData?.bins?.length) {
+    const xmin = histData.bins[0], xmax = histData.bins[histData.bins.length-1];
+    const range = xmax - xmin || 1;
+    $('vmin-slider').value = ((vmin - xmin) / range * 100).toFixed(1);
+    $('vmax-slider').value = ((vmax - xmin) / range * 100).toFixed(1);
+  }
+}
+
+// ─── Controls event wiring ───────────────────────────────────
+// Tab switching
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const panel = tab.dataset.panel;
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    state.activePanel = panel;
+
+    // Show/hide panels
+    $('aladin-fits').classList.toggle('visible', panel === 'fits');
+    $('aladin-sky').classList.toggle('visible', panel === 'sky');
+    $('validate-panel').classList.toggle('visible', panel === 'validate');
+    $('fits-controls').style.display = panel === 'validate' ? 'none' : '';
+
+    if (panel === 'sky') initAladinSky();
+  });
+});
+
+// Stretch pills
+document.querySelectorAll('#stretch-group .pill').forEach(pill => {
+  pill.addEventListener('click', () => {
+    document.querySelectorAll('#stretch-group .pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    state.stretch = pill.dataset.v;
+    if (state.currentFile) rerenderSurvey();
+  });
+});
+
+// Cmap swatches
+document.querySelectorAll('#cmap-group .cmap-swatch').forEach(sw => {
+  sw.addEventListener('click', () => {
+    document.querySelectorAll('#cmap-group .cmap-swatch').forEach(s => s.classList.remove('active'));
+    sw.classList.add('active');
+    state.cmap = sw.dataset.v;
+    if (state.currentFile) rerenderSurvey();
+  });
+});
+
+// Grid toggle
+$('grid-toggle').addEventListener('click', () => {
+  state.gridOn = !state.gridOn;
+  $('grid-toggle').classList.toggle('on', state.gridOn);
+  if (state.aladinFits) state.aladinFits.showGrid(state.gridOn);
+  if (state.aladinSky)  state.aladinSky.showGrid(state.gridOn);
+});
+
+// Symmetric toggle
+$('sym-toggle').addEventListener('click', () => {
+  state.symScale = !state.symScale;
+  $('sym-toggle').classList.toggle('on', state.symScale);
+});
+
+// HDU select
+$('hdu-select').addEventListener('change', e => {
+  if (state.currentFile) openFile(state.currentFile.path, parseInt(e.target.value));
+});
+
+// vmin/vmax sliders → update display (live re-register happens on mouse up)
+function sliderToValue(pct, histData) {
+  if (!histData?.bins?.length) return pct;
+  const xmin = histData.bins[0], xmax = histData.bins[histData.bins.length-1];
+  return xmin + (pct / 100) * (xmax - xmin);
+}
+
+$('vmin-slider').addEventListener('input', e => {
+  const v = sliderToValue(parseFloat(e.target.value), state.histData);
+  $('vmin-val').textContent = fmt(v);
+});
+$('vmax-slider').addEventListener('input', e => {
+  const v = sliderToValue(parseFloat(e.target.value), state.histData);
+  $('vmax-val').textContent = fmt(v);
+});
+$('vmin-slider').addEventListener('change', rerenderSurvey);
+$('vmax-slider').addEventListener('change', rerenderSurvey);
+
+async function rerenderSurvey() {
+  if (!state.currentFile) return;
+  const hd = state.histData;
+  const vmin = hd ? sliderToValue(parseFloat($('vmin-slider').value), hd) : state.currentFile.vmin;
+  const vmax = hd ? sliderToValue(parseFloat($('vmax-slider').value), hd) : state.currentFile.vmax;
+  const { path, hdu } = state.currentFile;
+  try {
+    const survey = await api(
+      `/hips/register?path=${encodeURIComponent(path)}&hdu=${hdu}&stretch=${state.stretch}&cmap=${state.cmap}&vmin=${vmin}&vmax=${vmax}`
+    );
+    await A.init;
+    const hipsUrl = `${window.location.origin}/api/hips/${survey.id}`;
+    const layer = A.createImageSurvey(survey.id, path.split('/').pop(), hipsUrl,
+      'equatorial', survey.max_order, { imgFormat: 'png' });
+    state.aladinFits.setImageSurvey(layer);
+  } catch(e) { status(`Error: ${e.message}`); }
+}
+
+// ─── Validation panel ────────────────────────────────────────
+// (Simplified wiring — full implementation would add file pickers)
+async function loadValidationPair(truthPath, modelPath, sigmaPath = null) {
+  status('Running validation…');
+  try {
+    const body = { truth_path: truthPath, model_path: modelPath, sigma_path: sigmaPath,
+                   truth_hdu: 0, model_hdu: 0, sigma_hdu: 0 };
+    const reg = await api('/validate/register', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const pid = reg.id;
+
+    const pngs = await api(`/validate/${pid}/panel_pngs`);
+    $('val-truth-img').src    = pngs.truth;
+    $('val-model-img').src    = pngs.model;
+    $('val-residual-img').src = pngs.residual;
+    $('val-pull-img').src     = pngs.pull;
+
+    const hist = await api(`/validate/${pid}/pull_histogram`);
+    drawPullHistogram(hist);
+
+    status('Validation complete');
+  } catch(e) { status(`Validation error: ${e.message}`); }
+}
+
+function drawPullHistogram(data) {
+  // Simple Canvas2D pull histogram — minimal Observable Plot substitute
+  const container = $('val-histogram');
+  container.innerHTML = '';
+  const canvas = document.createElement('canvas');
+  canvas.style.width = '100%'; canvas.style.height = '90px';
+  container.appendChild(canvas);
+
+  const W = container.offsetWidth || 500;
+  const H = 90;
+  canvas.width = W * devicePixelRatio;
+  canvas.height = H * devicePixelRatio;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+
+  ctx.fillStyle = '#0b0b16';
+  ctx.fillRect(0, 0, W, H);
+
+  if (!data.bins?.length) return;
+
+  // zero line
+  const cx = W / 2;
+  ctx.strokeStyle = 'oklch(65% 0.012 260 / 0.5)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke();
+
+  const maxCount = Math.max(...data.counts, 1);
+  const n = data.bins.length;
+  const bw = W / n;
+
+  // histogram
+  data.counts.forEach((c, i) => {
+    const t = i / n;
+    const hue = t < 0.5 ? 250 : 25;
+    const l = t < 0.5 ? 65 : 62;
+    ctx.fillStyle = `oklch(${l}% 0.20 ${hue} / 0.7)`;
+    const barH = (c / maxCount) * (H - 4);
+    ctx.fillRect(i * bw, H - barH, Math.max(1, bw - 0.5), barH);
+  });
+
+  // Gaussian overlay
+  if (data.gaussian_counts) {
+    const gmax = Math.max(...data.gaussian_counts, 1);
+    ctx.strokeStyle = 'oklch(80% 0.05 260)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    data.gaussian_counts.forEach((g, i) => {
+      const x = (i + 0.5) * bw;
+      const y = H - (g / maxCount) * (H - 4);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+
+  // Label
+  if (data.fit) {
+    ctx.fillStyle = 'oklch(65% 0.012 260)';
+    ctx.font = `10px ${getComputedStyle(document.body).getPropertyValue('--font-mono').trim() || 'monospace'}`;
+    ctx.fillText(`μ=${data.fit.mu}  σ=${data.fit.sigma}  outliers=${(data.stats?.outlier_fraction_3sigma*100).toFixed(2)}%`, 8, 14);
+  }
+}
+
+// ─── Cache badge ─────────────────────────────────────────────
+setInterval(async () => {
+  try {
+    const h = await api('/health');
+    $('cache-badge').textContent = `cache: ${h.cache_mb.toFixed(1)} MB`;
+  } catch {}
+}, 10_000);
+
+// ─── Boot ────────────────────────────────────────────────────
+(async () => {
+  await loadFileTree();
+  initAladinFits();
+})();
+
+// Expose for debugging
+window._torchskyViz = { state, loadValidationPair, openFile };
+</script>
+</body>
+</html>
