@@ -254,6 +254,109 @@ class FieldObservation:
             raise ValueError("tabulated transmission requires at least two samples")
 
 
+@dataclass(frozen=True)
+class FieldComponentAnchorTerm:
+    """Explicit calibration / standards anchor for selected field decomposition roles."""
+
+    observation: FieldObservation
+    target_image: Tensor | None = None
+    target_values: Tensor | None = None
+    reference_model: nn.Module | None = None
+    roles: str | tuple[str, ...] = "shared"
+    sample_ra_deg: Tensor | None = None
+    sample_dec_deg: Tensor | None = None
+    sample_x_pix: Tensor | None = None
+    sample_y_pix: Tensor | None = None
+    sample_weight: Tensor | None = None
+    override_wavelengths: Tensor | None = None
+    override_bandpass_weights: Tensor | None = None
+    forward_context: ForwardContext | None = None
+    loss_weight: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.loss_weight < 0.0:
+            raise ValueError("loss_weight must be non-negative")
+        provided_target_count = int(self.target_image is not None) + int(
+            self.target_values is not None
+        ) + int(self.reference_model is not None)
+        if provided_target_count != 1:
+            raise ValueError(
+                "exactly one of target_image, target_values, or reference_model must be provided"
+            )
+        world_sample_mode = self.sample_ra_deg is not None or self.sample_dec_deg is not None
+        pixel_sample_mode = self.sample_x_pix is not None or self.sample_y_pix is not None
+        if world_sample_mode and pixel_sample_mode:
+            raise ValueError(
+                "sample_ra_deg/sample_dec_deg and sample_x_pix/sample_y_pix are mutually exclusive"
+            )
+        sample_mode = world_sample_mode or pixel_sample_mode
+        sample_shape = None
+        if world_sample_mode:
+            if self.sample_ra_deg is None or self.sample_dec_deg is None:
+                raise ValueError(
+                    "sample_ra_deg and sample_dec_deg must be provided together"
+                )
+            if tuple(int(v) for v in self.sample_ra_deg.shape) != tuple(
+                int(v) for v in self.sample_dec_deg.shape
+            ):
+                raise ValueError("sample_ra_deg and sample_dec_deg must match in shape")
+            sample_shape = tuple(int(v) for v in self.sample_ra_deg.shape)
+        if pixel_sample_mode:
+            if self.sample_x_pix is None or self.sample_y_pix is None:
+                raise ValueError(
+                    "sample_x_pix and sample_y_pix must be provided together"
+                )
+            if tuple(int(v) for v in self.sample_x_pix.shape) != tuple(
+                int(v) for v in self.sample_y_pix.shape
+            ):
+                raise ValueError("sample_x_pix and sample_y_pix must match in shape")
+            sample_shape = tuple(int(v) for v in self.sample_x_pix.shape)
+        if sample_mode:
+            if self.target_image is not None:
+                raise ValueError("target_image is only valid for full-image anchors")
+            if self.target_values is not None and tuple(
+                int(v) for v in self.target_values.shape
+            ) != sample_shape:
+                raise ValueError("target_values shape must match sample coordinates")
+            if self.sample_weight is not None and tuple(
+                int(v) for v in self.sample_weight.shape
+            ) != sample_shape:
+                raise ValueError("sample_weight shape must match sample coordinates")
+        else:
+            if self.target_values is not None:
+                raise ValueError(
+                    "target_values requires sample_ra_deg/sample_dec_deg or sample_x_pix/sample_y_pix"
+                )
+            if self.sample_weight is not None:
+                raise ValueError(
+                    "sample_weight requires sample_ra_deg/sample_dec_deg or sample_x_pix/sample_y_pix"
+                )
+        if self.target_image is not None:
+            if self.target_image.ndim != 2:
+                raise ValueError("target_image must be 2D")
+            if tuple(int(v) for v in self.target_image.shape) != tuple(
+                int(v) for v in self.observation.image.shape
+            ):
+                raise ValueError("target_image shape must match observation.image")
+        if (self.override_wavelengths is None) != (
+            self.override_bandpass_weights is None
+        ):
+            raise ValueError(
+                "override_wavelengths and override_bandpass_weights must be provided together"
+            )
+        if self.override_wavelengths is not None:
+            if self.override_wavelengths.ndim != 1 or self.override_bandpass_weights is None:
+                raise ValueError("override_wavelengths must be 1D")
+            if self.override_bandpass_weights.ndim != 1:
+                raise ValueError("override_bandpass_weights must be 1D")
+            if tuple(int(v) for v in self.override_wavelengths.shape) != tuple(
+                int(v) for v in self.override_bandpass_weights.shape
+            ):
+                raise ValueError(
+                    "override_wavelengths and override_bandpass_weights must match in shape"
+                )
+
+
 @dataclass
 class FieldFitResult:
     model: nn.Module

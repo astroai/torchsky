@@ -12,6 +12,7 @@ from torchsky.map import (
 from torchsky.map.operators import InterpolationGeometryOp, ObservationOperatorBundle, spherical_spectral_operator_bundle
 from torchsky.map.scenes import DiscreteTargetImage, HealpixMapScene
 from torchsky.map.solvers import (
+    ComponentDecompositionDiagnostics,
     HarmonicComponentDecomposition,
     SurveyInstrumentComponentMixer,
     build_harmonic_cl_prior_operator,
@@ -673,6 +674,150 @@ def test_harmonic_component_decomposition_exposes_state_and_regularization() -> 
     assert state.shape == (3, 6)
     assert state.dtype.is_complex
     assert float(reg.item()) >= 0.0
+
+
+def test_harmonic_component_decomposition_fix_component_scale_gauge_preserves_predictions() -> None:
+    model = HarmonicComponentDecomposition(
+        lmax=2,
+        component_roles=("shared", "survey", "instrument", "interaction"),
+        surveys=("A",),
+        instruments=("cam1",),
+        init_scale=0.0,
+    )
+    with torch.no_grad():
+        model.coeff_real.copy_(
+            torch.tensor(
+                [
+                    [3.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.0, 4.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 5.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 6.0, 0.0, 0.0],
+                ],
+                dtype=torch.float32,
+            )
+        )
+        model.coeff_imag.zero_()
+        model.mixer.shared_weights[:] = torch.tensor([2.0, 0.0, 0.0, 0.0])
+        model.mixer.survey_weights[1] = torch.tensor([0.0, 3.0, 0.0, 0.0])
+        model.mixer.instrument_weights[1] = torch.tensor([0.0, 0.0, 4.0, 0.0])
+        model.mixer.interaction_weights[1, 1] = torch.tensor([0.0, 0.0, 0.0, 5.0])
+
+    hooks = build_spherical_harmonic_solver_hooks(lmax=2)
+    targets = (
+        TargetRenderSpec.from_header(_simple_header(), band_label="mono"),
+        TargetRenderSpec.from_header(_offset_header(0.8, -0.4), band_label="mono"),
+    )
+    operator = model.conditioned_operator(
+        hooks.bind_targets(targets),
+        survey="A",
+        instrument="cam1",
+    )
+    state_before = model.state().detach()
+    prediction_before = operator.apply(state_before)
+
+    norms_after = model.fix_component_scale_gauge_()
+
+    operator_after = model.conditioned_operator(
+        hooks.bind_targets(targets),
+        survey="A",
+        instrument="cam1",
+    )
+    prediction_after = operator_after.apply(model.state())
+
+    torch.testing.assert_close(prediction_after, prediction_before)
+    torch.testing.assert_close(norms_after, torch.ones_like(norms_after))
+
+
+def test_harmonic_component_decomposition_fix_component_scale_gauge_skips_zero_components() -> None:
+    model = HarmonicComponentDecomposition(
+        lmax=2,
+        component_roles=("shared", "survey"),
+        surveys=("A",),
+        init_scale=0.0,
+    )
+    with torch.no_grad():
+        model.coeff_real[0, 0] = 2.0
+        model.coeff_imag.zero_()
+        model.mixer.shared_weights[:] = torch.tensor([3.0, 0.0])
+        model.mixer.survey_weights[1] = torch.tensor([0.0, 4.0])
+    norms_after = model.fix_component_scale_gauge_()
+
+    torch.testing.assert_close(norms_after[0], torch.tensor(1.0))
+    torch.testing.assert_close(norms_after[1], torch.tensor(0.0))
+    torch.testing.assert_close(model.mixer.shared_weights[0], torch.tensor(6.0))
+    torch.testing.assert_close(model.mixer.survey_weights[1, 1], torch.tensor(4.0))
+
+
+def test_harmonic_component_decomposition_component_state_aggregates_roles() -> None:
+    model = HarmonicComponentDecomposition(
+        lmax=2,
+        component_roles=("shared", "survey", "instrument"),
+        surveys=("A",),
+        instruments=("cam1",),
+        init_scale=0.0,
+    )
+    state = torch.tensor(
+        [
+            [1.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j],
+            [0.0 + 0.0j, 2.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j],
+            [0.0 + 0.0j, 0.0 + 0.0j, 3.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j],
+        ],
+        dtype=torch.complex64,
+    )
+
+    shared = model.component_state("shared", state=state)
+    private = model.component_state(("survey", "instrument"), state=state)
+    private_components = model.component_state(
+        ("survey", "instrument"),
+        state=state,
+        aggregate=False,
+    )
+
+    torch.testing.assert_close(shared, state[0])
+    torch.testing.assert_close(private, state[1] + state[2])
+    torch.testing.assert_close(private_components, state[1:])
+
+
+def test_harmonic_component_decomposition_decomposition_diagnostics_measure_exact_leakage() -> None:
+    model = HarmonicComponentDecomposition(
+        lmax=2,
+        component_roles=("shared", "survey", "instrument"),
+        surveys=("A",),
+        instruments=("cam1",),
+        init_scale=0.0,
+    )
+    truth = torch.tensor(
+        [
+            [4.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j],
+            [0.0 + 0.0j, 2.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j],
+            [0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j],
+        ],
+        dtype=torch.complex64,
+    )
+    estimate = truth.clone()
+    estimate[0] = estimate[0] + 0.5 * truth[1]
+    estimate[1] = estimate[1] + 0.25 * truth[0]
+
+    diagnostics = model.decomposition_diagnostics(
+        truth,
+        state=estimate,
+        calibration_anchor=truth[0],
+        calibration_selector=[0],
+    )
+
+    assert isinstance(diagnostics, ComponentDecompositionDiagnostics)
+    torch.testing.assert_close(
+        torch.tensor(diagnostics.shared_to_private_leakage),
+        torch.tensor(0.5),
+    )
+    torch.testing.assert_close(
+        torch.tensor(diagnostics.private_to_shared_leakage),
+        torch.tensor(0.25),
+    )
+    torch.testing.assert_close(
+        torch.tensor(diagnostics.calibration_transfer_stability),
+        torch.tensor(0.0),
+    )
 
 
 def test_state_low_rank_operator_satisfies_adjoint_relation() -> None:

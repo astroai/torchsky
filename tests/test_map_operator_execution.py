@@ -8,8 +8,12 @@ from torchsky.map.operators import (
     ExactDrizzleGeometryOp,
     ForwardSplatGeometryOp,
     InterpolationGeometryOp,
+    accumulate_projected_observation,
+    finalize_projected_stack,
+    masked_median_stack,
     prepare_image_observation_data,
     project_image_observation_geometry,
+    stack_inputs_from_projected_observation,
 )
 from torchsky.map.operators import execution as execution_mod
 
@@ -159,3 +163,122 @@ def test_project_image_observation_geometry_dispatches_by_operator_family(
     assert calls == ["drizzle_square", "conservative"]
     assert splat_calls == ["splat"]
     assert resample_calls == ["interp"]
+
+
+def test_stack_inputs_from_projected_observation_applies_flux_area_for_mean_stack() -> None:
+    numer = torch.tensor([[4.0, 0.0], [6.0, 0.0]], dtype=torch.float32)
+    weight = torch.tensor([[2.0, 0.0], [3.0, 0.0]], dtype=torch.float32)
+    pixel_area_sr = torch.full((2, 2), 10.0, dtype=torch.float32)
+
+    contrib_value, contrib_weight = stack_inputs_from_projected_observation(
+        numer,
+        weight,
+        stacking_method="mean",
+        value_semantics="flux",
+        pixel_area_sr=pixel_area_sr,
+    )
+
+    torch.testing.assert_close(
+        contrib_value,
+        torch.tensor([[20.0, 0.0], [20.0, 0.0]], dtype=torch.float32),
+    )
+    torch.testing.assert_close(
+        contrib_weight,
+        torch.tensor([[1.0, 0.0], [1.0, 0.0]], dtype=torch.float32),
+    )
+
+
+def test_masked_median_stack_ignores_unsupported_values() -> None:
+    median, support = masked_median_stack(
+        [
+            torch.tensor([[1.0, 100.0]], dtype=torch.float32),
+            torch.tensor([[3.0, -5.0]], dtype=torch.float32),
+            torch.tensor([[5.0, 7.0]], dtype=torch.float32),
+        ],
+        [
+            torch.tensor([[1.0, 0.0]], dtype=torch.float32),
+            torch.tensor([[1.0, 1.0]], dtype=torch.float32),
+            torch.tensor([[1.0, 0.0]], dtype=torch.float32),
+        ],
+    )
+
+    torch.testing.assert_close(median, torch.tensor([[3.0, -5.0]], dtype=torch.float32))
+    torch.testing.assert_close(support, torch.tensor([[3.0, 1.0]], dtype=torch.float32))
+
+
+def test_accumulate_projected_observation_handles_windowed_cube_coefficients() -> None:
+    numer = torch.zeros((2, 4, 5), dtype=torch.float32)
+    denom = torch.zeros((2, 4, 5), dtype=torch.float32)
+    overlap = torch.zeros((2, 4, 5), dtype=torch.int32)
+    coeffs = torch.tensor([[[1.0]], [[0.25]]], dtype=torch.float32)
+
+    accumulate_projected_observation(
+        numer,
+        denom,
+        overlap,
+        projected_numer=torch.tensor([[2.0, 4.0], [6.0, 8.0]], dtype=torch.float32),
+        projected_weight=torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32),
+        projected_overlap=torch.ones((2, 2), dtype=torch.int32),
+        stacking_method="weighted_mean",
+        value_semantics="surface_brightness",
+        target_window=(1, 3, 2, 4),
+        coeffs=coeffs,
+    )
+
+    expected_numer = torch.zeros((2, 4, 5), dtype=torch.float32)
+    expected_numer[0, 1:3, 2:4] = torch.tensor([[2.0, 4.0], [6.0, 8.0]])
+    expected_numer[1, 1:3, 2:4] = torch.tensor([[0.5, 1.0], [1.5, 2.0]])
+    expected_denom = torch.zeros((2, 4, 5), dtype=torch.float32)
+    expected_denom[0, 1:3, 2:4] = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    expected_denom[1, 1:3, 2:4] = torch.tensor([[0.25, 0.5], [0.75, 1.0]])
+    expected_overlap = torch.zeros((2, 4, 5), dtype=torch.int32)
+    expected_overlap[:, 1:3, 2:4] = 1
+
+    torch.testing.assert_close(numer, expected_numer)
+    torch.testing.assert_close(denom, expected_denom)
+    torch.testing.assert_close(overlap, expected_overlap)
+
+
+def test_finalize_projected_stack_handles_flux_weighted_mean_cube() -> None:
+    cube, weight = finalize_projected_stack(
+        torch.tensor(
+            [
+                [[2.0, 4.0], [0.0, 8.0]],
+                [[1.0, 0.0], [3.0, 6.0]],
+            ],
+            dtype=torch.float32,
+        ),
+        torch.tensor(
+            [
+                [[1.0, 2.0], [0.0, 4.0]],
+                [[2.0, 0.0], [3.0, 6.0]],
+            ],
+            dtype=torch.float32,
+        ),
+        stacking_method="weighted_mean",
+        value_semantics="flux",
+        pixel_area_sr=torch.tensor([[[10.0, 20.0], [30.0, 40.0]]], dtype=torch.float32),
+    )
+
+    torch.testing.assert_close(
+        cube,
+        torch.tensor(
+            [
+                [[20.0, 40.0], [0.0, 80.0]],
+                [[5.0, 0.0], [30.0, 40.0]],
+            ],
+            dtype=torch.float32,
+        ),
+    )
+    torch.testing.assert_close(
+        weight,
+        torch.tensor(
+            [
+                [[0.01, 0.005], [0.0, 0.0025]],
+                [[0.02, 0.0], [1.0 / 300.0, 0.00375]],
+            ],
+            dtype=torch.float32,
+        ),
+        atol=1e-7,
+        rtol=0.0,
+    )

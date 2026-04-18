@@ -47,9 +47,13 @@ from .geometry import (
 )
 from .geometry_conservative import conservative_polygon_project
 from .execution import (
+    accumulate_projected_observation,
+    finalize_projected_stack,
+    masked_median_stack,
     PreparedImageObservationData,
     prepare_image_observation_data,
     project_image_observation_geometry,
+    stack_inputs_from_projected_observation,
 )
 from .learned import (
     DEFAULT_LEARNED_OPERATOR_CONDITIONING,
@@ -129,6 +133,7 @@ __all__ = [
     "apply_image_observation_calibration",
     "apply_kernel2d",
     "apply_psf_spec",
+    "accumulate_projected_observation",
     "bandpass_bounds",
     "bandpass_mc_samples",
     "bandpass_quadrature",
@@ -143,6 +148,8 @@ __all__ = [
     "geometry_op_for_kernel",
     "image_observation_operator_bundle",
     "image_observations_operator_bundle",
+    "finalize_projected_stack",
+    "masked_median_stack",
     "prepare_image_observation_data",
     "project_image_observation_geometry",
     "spherical_spectral_operator_bundle",
@@ -155,6 +162,7 @@ __all__ = [
     "observation_background_components",
     "polynomial_background",
     "sanitize_inverse_variance",
+    "stack_inputs_from_projected_observation",
     "swap_bundle_operator_families",
     "validate_learned_operator_families",
 ]

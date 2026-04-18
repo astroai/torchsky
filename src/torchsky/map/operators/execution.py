@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Sequence
 
 import torch
 from torch import Tensor
@@ -29,6 +29,149 @@ class PreparedImageObservationData:
     image: Tensor
     source_weight: Tensor
     operator_bundle: ObservationOperatorBundle
+
+
+def stack_inputs_from_projected_observation(
+    projected_numer: Tensor,
+    projected_weight: Tensor,
+    *,
+    stacking_method: str,
+    value_semantics: str,
+    pixel_area_sr: Tensor | None = None,
+) -> tuple[Tensor, Tensor]:
+    """Convert projected numerator/weight tensors into stack inputs."""
+    if stacking_method == "weighted_mean":
+        return projected_numer, projected_weight
+    projected_image = torch.where(
+        projected_weight > 0.0,
+        projected_numer / projected_weight,
+        torch.zeros_like(projected_numer),
+    )
+    if value_semantics == "flux":
+        if pixel_area_sr is None:
+            raise RuntimeError("target pixel area is required for flux semantics")
+        projected_image = pixel_area_sr * projected_image
+    support = (projected_weight > 0.0).to(dtype=torch.float32)
+    return projected_image, support
+
+
+def masked_median_stack(
+    projected_images: Sequence[Tensor],
+    support_masks: Sequence[Tensor],
+) -> tuple[Tensor, Tensor]:
+    """Take a per-pixel median over only supported projected observations."""
+    if not projected_images:
+        raise ValueError("median stacking requires at least one projected image")
+    values = torch.stack(tuple(projected_images), dim=0)
+    support = torch.stack(
+        tuple(mask.to(dtype=torch.bool) for mask in support_masks), dim=0
+    )
+    fill = torch.full_like(values, float("inf"))
+    ordered = torch.sort(torch.where(support, values, fill), dim=0).values
+    count = support.sum(dim=0, dtype=torch.int64)
+    safe_count = torch.clamp(count, min=1)
+    lower_idx = ((safe_count - 1) // 2).unsqueeze(0)
+    upper_idx = (safe_count // 2).unsqueeze(0)
+    lower = torch.gather(ordered, 0, lower_idx).squeeze(0)
+    upper = torch.gather(ordered, 0, upper_idx).squeeze(0)
+    median = 0.5 * (lower + upper)
+    median = torch.where(count > 0, median, torch.zeros_like(median))
+    return median, count.to(dtype=torch.float32)
+
+
+def accumulate_projected_observation(
+    numer: Tensor,
+    denom: Tensor,
+    overlap_count: Tensor,
+    *,
+    projected_numer: Tensor,
+    projected_weight: Tensor,
+    projected_overlap: Tensor,
+    stacking_method: str,
+    value_semantics: str,
+    pixel_area_sr: Tensor | None = None,
+    target_window: tuple[int, int, int, int] | None = None,
+    coeffs: Tensor | None = None,
+) -> None:
+    """Accumulate a projected observation into image-plane or cube stack tensors."""
+    contrib_numer, contrib_weight = stack_inputs_from_projected_observation(
+        projected_numer,
+        projected_weight,
+        stacking_method=stacking_method,
+        value_semantics=value_semantics,
+        pixel_area_sr=pixel_area_sr,
+    )
+    if coeffs is None:
+        overlap_contrib = projected_overlap
+        if target_window is None:
+            numer.add_(contrib_numer)
+            denom.add_(contrib_weight)
+            overlap_count.add_(overlap_contrib)
+            return
+        y0, y1, x0, x1 = target_window
+        if y1 <= y0 or x1 <= x0:
+            return
+        numer[y0:y1, x0:x1].add_(contrib_numer)
+        denom[y0:y1, x0:x1].add_(contrib_weight)
+        overlap_count[y0:y1, x0:x1].add_(overlap_contrib)
+        return
+    coeffs_t = torch.as_tensor(
+        coeffs,
+        dtype=contrib_numer.dtype,
+        device=contrib_numer.device,
+    )
+    overlap_coeffs = (coeffs_t > 0.0).to(dtype=projected_overlap.dtype)
+    numer_contrib = coeffs_t * contrib_numer.unsqueeze(0)
+    denom_contrib = coeffs_t * contrib_weight.unsqueeze(0)
+    overlap_contrib = overlap_coeffs * projected_overlap.unsqueeze(0)
+    if target_window is None:
+        numer.add_(numer_contrib)
+        denom.add_(denom_contrib)
+        overlap_count.add_(overlap_contrib)
+        return
+    y0, y1, x0, x1 = target_window
+    if y1 <= y0 or x1 <= x0:
+        return
+    numer[:, y0:y1, x0:x1].add_(numer_contrib)
+    denom[:, y0:y1, x0:x1].add_(denom_contrib)
+    overlap_count[:, y0:y1, x0:x1].add_(overlap_contrib)
+
+
+def finalize_projected_stack(
+    numer: Tensor,
+    denom: Tensor,
+    *,
+    stacking_method: str,
+    value_semantics: str,
+    pixel_area_sr: Tensor | None = None,
+    median_images: Sequence[Tensor] | None = None,
+    median_support: Sequence[Tensor] | None = None,
+) -> tuple[Tensor, Tensor]:
+    """Finalize accumulated stack tensors into map values and output weights."""
+    if stacking_method == "median":
+        if median_images is None or median_support is None:
+            raise RuntimeError("median stacking requires projected image/support buffers")
+        return masked_median_stack(median_images, median_support)
+    if stacking_method == "weighted_mean" and value_semantics == "flux":
+        if pixel_area_sr is None:
+            raise RuntimeError("target pixel area is required for flux semantics")
+        coadd = torch.where(
+            denom > 0.0,
+            pixel_area_sr * numer / denom,
+            torch.zeros_like(numer),
+        )
+        out_weight = torch.where(
+            denom > 0.0,
+            denom / torch.clamp(torch.square(pixel_area_sr), min=1e-16),
+            torch.zeros_like(denom),
+        )
+        return coadd, out_weight
+    coadd = torch.where(
+        denom > 0.0,
+        numer / denom,
+        torch.zeros_like(numer),
+    )
+    return coadd, denom
 
 
 def prepare_image_observation_data(

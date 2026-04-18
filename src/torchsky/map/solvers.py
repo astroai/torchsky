@@ -904,6 +904,47 @@ class SurveyInstrumentComponentMixer(nn.Module):
             + self.interaction_mask * self.interaction_weights[sidx, iidx]
         )
 
+    def scale_component_columns_(
+        self,
+        scales: Tensor | Sequence[float],
+    ) -> None:
+        """Rescale role-matched mixer columns in-place for exact gauge preservation."""
+        scales_t = torch.as_tensor(
+            scales,
+            dtype=self.shared_weights.dtype,
+            device=self.shared_weights.device,
+        ).reshape(-1)
+        if int(scales_t.numel()) != len(self.component_roles):
+            raise ValueError("scales length must match the number of components")
+        if not torch.all(torch.isfinite(scales_t)):
+            raise ValueError("scales must be finite")
+        if torch.any(scales_t == 0.0):
+            raise ValueError("scales must be non-zero")
+        with torch.no_grad():
+            for idx, role in enumerate(self.component_roles):
+                scale = scales_t[idx]
+                if role == "shared":
+                    self.shared_weights[idx].mul_(scale)
+                elif role == "survey":
+                    self.survey_weights[:, idx].mul_(scale)
+                elif role == "instrument":
+                    self.instrument_weights[:, idx].mul_(scale)
+                elif role == "interaction":
+                    self.interaction_weights[:, :, idx].mul_(scale)
+                else:  # pragma: no cover - guarded by __init__
+                    raise ValueError(f"unsupported component role {role!r}")
+
+
+@dataclass(frozen=True)
+class ComponentDecompositionDiagnostics:
+    """Diagnostics for explicit shared/private latent decompositions."""
+
+    shared_to_private_leakage: float
+    private_to_shared_leakage: float
+    shared_relative_error: float
+    private_relative_error: float
+    calibration_transfer_stability: float | None = None
+
 
 class HarmonicComponentDecomposition(nn.Module):
     """Learnable harmonic component state with explicit shared/private roles."""
@@ -968,6 +1009,169 @@ class HarmonicComponentDecomposition(nn.Module):
         return getattr(self.mixer, f"{role}_mask").to(
             device=self.coeff_real.device,
             dtype=self.coeff_real.dtype,
+        )
+
+    def component_state(
+        self,
+        roles: str | Sequence[str],
+        *,
+        state: Tensor | None = None,
+        aggregate: bool = True,
+    ) -> Tensor:
+        state_t = self.state() if state is None else torch.as_tensor(state)
+        if state_t.ndim < 2 or int(state_t.shape[0]) != len(self.component_roles):
+            raise ValueError(
+                "state must have a leading component axis matching component_roles"
+            )
+        role_names = (roles,) if isinstance(roles, str) else tuple(str(role) for role in roles)
+        unknown = tuple(
+            role for role in role_names if role not in SurveyInstrumentComponentMixer._VALID_ROLES
+        )
+        if unknown:
+            raise ValueError(f"unsupported component roles: {unknown!r}")
+        selected = [
+            idx for idx, role in enumerate(self.component_roles) if role in set(role_names)
+        ]
+        if not selected:
+            empty = state_t[:0]
+            if aggregate:
+                return torch.zeros_like(state_t[0])
+            return empty
+        subset = state_t.index_select(
+            0,
+            torch.tensor(selected, dtype=torch.int64, device=state_t.device),
+        )
+        if aggregate:
+            return subset.sum(dim=0)
+        return subset
+
+    def component_norms(self) -> Tensor:
+        state = self.state()
+        return torch.linalg.vector_norm(state, dim=1).to(dtype=self.coeff_real.dtype)
+
+    def fix_component_scale_gauge_(
+        self,
+        *,
+        target_norm: float = 1.0,
+        min_norm: float = 1.0e-12,
+    ) -> Tensor:
+        """Canonicalize multiplicative component gauge without changing predictions.
+
+        Each component column is rescaled to ``target_norm`` in harmonic state space,
+        and the matching mixer weights are scaled by the inverse factor so every
+        conditioned operator remains exactly unchanged.
+        """
+        if target_norm <= 0.0:
+            raise ValueError("target_norm must be positive")
+        if min_norm <= 0.0:
+            raise ValueError("min_norm must be positive")
+        norms = self.component_norms()
+        scale = torch.where(
+            norms > float(min_norm),
+            norms / float(target_norm),
+            torch.ones_like(norms),
+        )
+        with torch.no_grad():
+            self.coeff_real.div_(scale[:, None])
+            self.coeff_imag.div_(scale[:, None])
+        self.mixer.scale_component_columns_(scale)
+        return self.component_norms()
+
+    def decomposition_diagnostics(
+        self,
+        truth_state: Tensor,
+        *,
+        state: Tensor | None = None,
+        calibration_anchor: Tensor | None = None,
+        calibration_selector: int | slice | Sequence[int] | Tensor | None = None,
+    ) -> ComponentDecompositionDiagnostics:
+        estimate = self.state() if state is None else torch.as_tensor(state)
+        truth = torch.as_tensor(truth_state)
+        if tuple(int(v) for v in estimate.shape) != tuple(int(v) for v in truth.shape):
+            raise ValueError("state and truth_state must have matching shape")
+        if estimate.ndim < 2 or int(estimate.shape[0]) != len(self.component_roles):
+            raise ValueError(
+                "state and truth_state must have a leading component axis matching component_roles"
+            )
+        shared_truth = self.component_state("shared", state=truth, aggregate=True)
+        private_truth = self.component_state(
+            ("survey", "instrument", "interaction"),
+            state=truth,
+            aggregate=True,
+        )
+        private_truth_basis = self.component_state(
+            ("survey", "instrument", "interaction"),
+            state=truth,
+            aggregate=False,
+        )
+        shared_estimate = self.component_state("shared", state=estimate, aggregate=True)
+        private_estimate = self.component_state(
+            ("survey", "instrument", "interaction"),
+            state=estimate,
+            aggregate=True,
+        )
+
+        def _relative_norm(error: Tensor, reference: Tensor) -> float:
+            error_norm = torch.linalg.vector_norm(torch.as_tensor(error).reshape(-1))
+            ref_norm = torch.linalg.vector_norm(torch.as_tensor(reference).reshape(-1))
+            if float(ref_norm.item()) == 0.0:
+                return 0.0 if float(error_norm.item()) == 0.0 else float(error_norm.item())
+            return float((error_norm / ref_norm).item())
+
+        def _subspace_leakage(error: Tensor, basis: Tensor, reference: Tensor) -> float:
+            basis_t = torch.as_tensor(basis)
+            if int(basis_t.numel()) == 0:
+                return 0.0
+            basis_rows = basis_t.reshape(int(basis_t.shape[0]), -1)
+            nonzero = torch.any(basis_rows != 0, dim=1)
+            basis_rows = basis_rows[nonzero]
+            if int(basis_rows.shape[0]) == 0:
+                return 0.0
+            vector = torch.as_tensor(error).reshape(-1)
+            dtype = torch.promote_types(vector.dtype, basis_rows.dtype)
+            matrix = basis_rows.to(dtype=dtype, device=vector.device).transpose(0, 1)
+            rhs = vector.to(dtype=dtype, device=vector.device)
+            coeffs = torch.linalg.lstsq(matrix, rhs).solution
+            projected = matrix @ coeffs
+            proj_norm = torch.linalg.vector_norm(projected)
+            ref_norm = torch.linalg.vector_norm(torch.as_tensor(reference).reshape(-1))
+            if float(ref_norm.item()) == 0.0:
+                return 0.0 if float(proj_norm.item()) == 0.0 else float(proj_norm.item())
+            return float((proj_norm / ref_norm).item())
+
+        shared_error = shared_estimate - shared_truth
+        private_error = private_estimate - private_truth
+        calibration_transfer_stability = None
+        if calibration_anchor is not None:
+            anchor = torch.as_tensor(calibration_anchor)
+            if tuple(int(v) for v in anchor.shape) != tuple(int(v) for v in shared_truth.shape):
+                raise ValueError(
+                    "calibration_anchor must match the aggregated shared-state shape"
+                )
+            shared_for_anchor = shared_estimate
+            anchor_ref = anchor
+            if calibration_selector is not None:
+                selector_idx, _ = _canonical_subspace_indices(shared_truth, calibration_selector)
+                shared_for_anchor = shared_for_anchor.index_select(0, selector_idx)
+                anchor_ref = anchor_ref.index_select(0, selector_idx.to(device=anchor_ref.device))
+            calibration_transfer_stability = _relative_norm(
+                shared_for_anchor - anchor_ref,
+                anchor_ref,
+            )
+        return ComponentDecompositionDiagnostics(
+            shared_to_private_leakage=_subspace_leakage(
+                shared_error,
+                private_truth_basis,
+                private_truth,
+            ),
+            private_to_shared_leakage=_subspace_leakage(
+                private_error,
+                shared_truth.unsqueeze(0),
+                shared_truth,
+            ),
+            shared_relative_error=_relative_norm(shared_error, shared_truth),
+            private_relative_error=_relative_norm(private_error, private_truth),
+            calibration_transfer_stability=calibration_transfer_stability,
         )
 
     def regularization_loss(

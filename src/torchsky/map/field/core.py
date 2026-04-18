@@ -35,8 +35,10 @@ from ..operators.spectral import (
     mixture_importance_weights as _shared_mixture_importance_weights,
     mixture_mc_samples as _shared_mixture_mc_samples,
 )
+from ..solvers import ComponentDecompositionDiagnostics, SurveyInstrumentComponentMixer
 
 from .types import (
+    FieldComponentAnchorTerm,
     FieldCoordinateMode,
     FieldCurriculum,
     FieldDomain,
@@ -793,6 +795,769 @@ class _BaseFieldModel(nn.Module):
         mean = self.forward(ra_deg, dec_deg, wavelength_angstrom)
         logvar = torch.zeros_like(mean)
         return mean, logvar
+
+
+def _observation_without_background(observation: FieldObservation) -> FieldObservation:
+    stripped = copy.deepcopy(observation)
+    stripped.sky_background = None
+    stripped.instrument_background = None
+    stripped.detector_background = None
+    stripped.background_offset = 0.0
+    return stripped
+
+
+def _render_field_component_anchor_target(
+    term: FieldComponentAnchorTerm,
+    *,
+    num_spectral_samples: int,
+    spectral_sampling: FieldSpectralSampling,
+    spectral_sampling_grid_size: int | None,
+    generator: torch.Generator | None,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> Tensor:
+    if term.target_image is not None:
+        return term.target_image.to(device=device, dtype=dtype)
+    if term.target_values is not None:
+        return term.target_values.to(device=device, dtype=dtype)
+    assert term.reference_model is not None
+    base_observation = _observation_without_background(term.observation)
+    if isinstance(term.reference_model, FieldComponentDecomposition):
+        if term.sample_ra_deg is not None:
+            return term.reference_model.render_component_samples(
+                base_observation,
+                ra_deg=term.sample_ra_deg.to(device=device, dtype=torch.float32),
+                dec_deg=term.sample_dec_deg.to(device=device, dtype=torch.float32),
+                roles=term.roles,
+                num_spectral_samples=num_spectral_samples,
+                spectral_sampling=spectral_sampling,
+                spectral_sampling_grid_size=spectral_sampling_grid_size,
+                generator=generator,
+                override_wavelengths=term.override_wavelengths,
+                override_weights=term.override_bandpass_weights,
+                forward_context=term.forward_context,
+            ).to(device=device, dtype=dtype)
+        return term.reference_model.render_component_observation(
+            base_observation,
+            roles=term.roles,
+            num_spectral_samples=num_spectral_samples,
+            spectral_sampling=spectral_sampling,
+            spectral_sampling_grid_size=spectral_sampling_grid_size,
+            generator=generator,
+            override_wavelengths=term.override_wavelengths,
+            override_weights=term.override_bandpass_weights,
+            forward_context=term.forward_context,
+        ).to(device=device, dtype=dtype)
+    if term.sample_ra_deg is not None:
+        return render_field_samples(
+            term.reference_model,
+            base_observation,
+            ra_deg=term.sample_ra_deg.to(device=device, dtype=torch.float32),
+            dec_deg=term.sample_dec_deg.to(device=device, dtype=torch.float32),
+            num_spectral_samples=num_spectral_samples,
+            spectral_sampling=spectral_sampling,
+            spectral_sampling_grid_size=spectral_sampling_grid_size,
+            generator=generator,
+            override_wavelengths=term.override_wavelengths,
+            override_weights=term.override_bandpass_weights,
+            forward_context=term.forward_context,
+        ).to(device=device, dtype=dtype)
+    return render_field_observation(
+        term.reference_model,
+        base_observation,
+        num_spectral_samples=num_spectral_samples,
+        spectral_sampling=spectral_sampling,
+        spectral_sampling_grid_size=spectral_sampling_grid_size,
+        generator=generator,
+        override_wavelengths=term.override_wavelengths,
+        override_weights=term.override_bandpass_weights,
+        forward_context=term.forward_context,
+    ).to(device=device, dtype=dtype)
+
+
+def _resolve_anchor_sample_world_coordinates(
+    term: FieldComponentAnchorTerm,
+    *,
+    device: torch.device,
+) -> tuple[Tensor, Tensor]:
+    if term.sample_ra_deg is not None and term.sample_dec_deg is not None:
+        return (
+            term.sample_ra_deg.to(device=device, dtype=torch.float32),
+            term.sample_dec_deg.to(device=device, dtype=torch.float32),
+        )
+    if term.sample_x_pix is None or term.sample_y_pix is None:
+        raise ValueError("anchor term does not define sample coordinates")
+    x_pix = term.sample_x_pix.to(device=device, dtype=torch.float64)
+    y_pix = term.sample_y_pix.to(device=device, dtype=torch.float64)
+    ra_deg, dec_deg = WCS(term.observation.header).pixel_to_world(x_pix, y_pix)
+    return ra_deg.to(dtype=torch.float32), dec_deg.to(dtype=torch.float32)
+
+
+def field_component_anchor_loss(
+    model: nn.Module,
+    component_anchor_terms: Sequence[FieldComponentAnchorTerm],
+    *,
+    num_spectral_samples: int = 9,
+    spectral_sampling: FieldSpectralSampling = "deterministic_quadrature",
+    spectral_sampling_grid_size: int | None = None,
+    generator: torch.Generator | None = None,
+    loss_kind: FieldLossKind = "mse",
+    charbonnier_eps: float = 1.0e-3,
+    huber_delta: float = 5.0e-2,
+) -> Tensor:
+    """Weighted anchor loss for selected field decomposition roles."""
+    if loss_kind == "gaussian_nll":
+        raise ValueError("field component anchors do not support gaussian_nll")
+    total = None
+    for term in component_anchor_terms:
+        if term.loss_weight == 0.0:
+            continue
+        base_observation = _observation_without_background(term.observation)
+        if (
+            term.sample_ra_deg is not None
+            or term.sample_dec_deg is not None
+            or term.sample_x_pix is not None
+            or term.sample_y_pix is not None
+        ):
+            ra_anchor, dec_anchor = _resolve_anchor_sample_world_coordinates(
+                term,
+                device=module_compute_device(model),
+            )
+            if isinstance(model, FieldComponentDecomposition):
+                prediction = model.render_component_samples(
+                    base_observation,
+                    ra_deg=ra_anchor,
+                    dec_deg=dec_anchor,
+                    roles=term.roles,
+                    num_spectral_samples=num_spectral_samples,
+                    spectral_sampling=spectral_sampling,
+                    spectral_sampling_grid_size=spectral_sampling_grid_size,
+                    generator=generator,
+                    override_wavelengths=term.override_wavelengths,
+                    override_weights=term.override_bandpass_weights,
+                    forward_context=term.forward_context,
+                )
+            else:
+                if term.roles != SurveyInstrumentComponentMixer._VALID_ROLES:
+                    raise ValueError(
+                        "component anchor role selection requires FieldComponentDecomposition"
+                    )
+                prediction = render_field_samples(
+                    model,
+                    base_observation,
+                    ra_deg=ra_anchor,
+                    dec_deg=dec_anchor,
+                    num_spectral_samples=num_spectral_samples,
+                    spectral_sampling=spectral_sampling,
+                    spectral_sampling_grid_size=spectral_sampling_grid_size,
+                    generator=generator,
+                    override_wavelengths=term.override_wavelengths,
+                    override_weights=term.override_bandpass_weights,
+                    forward_context=term.forward_context,
+                )
+        elif isinstance(model, FieldComponentDecomposition):
+            prediction = model.render_component_observation(
+                base_observation,
+                roles=term.roles,
+                num_spectral_samples=num_spectral_samples,
+                spectral_sampling=spectral_sampling,
+                spectral_sampling_grid_size=spectral_sampling_grid_size,
+                generator=generator,
+                override_wavelengths=term.override_wavelengths,
+                override_weights=term.override_bandpass_weights,
+                forward_context=term.forward_context,
+            )
+        else:
+            if term.roles != SurveyInstrumentComponentMixer._VALID_ROLES:
+                raise ValueError(
+                    "component anchor role selection requires FieldComponentDecomposition"
+                )
+            prediction = render_field_observation(
+                model,
+                base_observation,
+                num_spectral_samples=num_spectral_samples,
+                spectral_sampling=spectral_sampling,
+                spectral_sampling_grid_size=spectral_sampling_grid_size,
+                generator=generator,
+                override_wavelengths=term.override_wavelengths,
+                override_weights=term.override_bandpass_weights,
+                forward_context=term.forward_context,
+            )
+        target = _render_field_component_anchor_target(
+            term,
+            num_spectral_samples=num_spectral_samples,
+            spectral_sampling=spectral_sampling,
+            spectral_sampling_grid_size=spectral_sampling_grid_size,
+            generator=generator,
+            device=prediction.device,
+            dtype=prediction.dtype,
+        )
+        if (
+            term.sample_ra_deg is not None
+            or term.sample_dec_deg is not None
+            or term.sample_x_pix is not None
+            or term.sample_y_pix is not None
+        ):
+            residual = prediction - target
+            weight = (
+                term.sample_weight.to(device=prediction.device, dtype=prediction.dtype)
+                if term.sample_weight is not None
+                else torch.ones_like(prediction)
+            )
+        else:
+            valid = _observation_support_mask(term.observation).to(device=prediction.device)
+            target = torch.where(valid, target, torch.zeros_like(target))
+            residual = torch.where(valid, prediction - target, torch.zeros_like(prediction))
+            weight = (
+                term.observation.weight.to(device=prediction.device, dtype=prediction.dtype)
+                if term.observation.weight is not None
+                else torch.ones_like(prediction)
+            )
+            weight = torch.where(valid, weight, torch.zeros_like(weight))
+        weighted_loss = torch.sum(
+            weight
+            * _field_residual_loss(
+                residual,
+                loss_kind=loss_kind,
+                charbonnier_eps=charbonnier_eps,
+                huber_delta=huber_delta,
+                logvar=None,
+            )
+        )
+        term_loss = float(term.loss_weight) * (
+            weighted_loss / torch.clamp(weight.sum(), min=1.0e-8)
+        )
+        total = term_loss if total is None else total + term_loss
+    if total is None:
+        return torch.zeros(
+            (),
+            device=module_compute_device(model),
+            dtype=torch.float32,
+        )
+    return total
+
+
+def _infer_context_axis_labels(
+    observation_forward_contexts: Sequence[ForwardContext | None] | None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if observation_forward_contexts is None:
+        return (), ()
+    surveys: list[str] = []
+    instruments: list[str] = []
+    for context in observation_forward_contexts:
+        if context is None:
+            continue
+        if context.survey is not None and context.survey not in surveys:
+            surveys.append(context.survey)
+        if context.instrument is not None and context.instrument not in instruments:
+            instruments.append(context.instrument)
+    return tuple(surveys), tuple(instruments)
+
+
+class FieldComponentDecomposition(_BaseFieldModel):
+    """Explicit shared/private decomposition over multiple field models."""
+
+    def __init__(
+        self,
+        component_models: Sequence[nn.Module],
+        *,
+        component_roles: Sequence[str],
+        surveys: Sequence[str] = (),
+        instruments: Sequence[str] = (),
+        dtype: torch.dtype = torch.float32,
+        device: torch.device | None = None,
+    ) -> None:
+        models = tuple(component_models)
+        roles = tuple(str(role) for role in component_roles)
+        if not models:
+            raise ValueError("component_models must be non-empty")
+        if len(models) != len(roles):
+            raise ValueError("component_roles length must match component_models")
+        domain = getattr(models[0], "domain", None)
+        if not isinstance(domain, FieldDomain):
+            raise ValueError("component_models[0] must expose a FieldDomain via .domain")
+        for idx, model in enumerate(models[1:], start=1):
+            if getattr(model, "domain", None) != domain:
+                raise ValueError(
+                    f"component_models[{idx}] domain must match component_models[0].domain"
+                )
+        super().__init__(domain)
+        self.component_roles = roles
+        self.component_models = nn.ModuleList(models)
+        self.component_gains = nn.Parameter(
+            torch.ones(len(self.component_roles), dtype=dtype, device=device)
+        )
+        self.mixer = SurveyInstrumentComponentMixer(
+            component_roles=self.component_roles,
+            surveys=surveys,
+            instruments=instruments,
+            dtype=dtype,
+            device=device,
+        )
+
+    def _role_indices(self, roles: str | Sequence[str]) -> tuple[int, ...]:
+        role_names = (roles,) if isinstance(roles, str) else tuple(str(role) for role in roles)
+        valid_roles = set(SurveyInstrumentComponentMixer._VALID_ROLES)
+        unknown = tuple(role for role in role_names if role not in valid_roles)
+        if unknown:
+            raise ValueError(f"unsupported component roles: {unknown!r}")
+        role_set = set(role_names)
+        return tuple(
+            idx for idx, role in enumerate(self.component_roles) if role in role_set
+        )
+
+    def _context_labels(
+        self,
+        forward_context: ForwardContext | None,
+    ) -> tuple[str | None, str | None]:
+        if forward_context is None:
+            return None, None
+        return forward_context.survey, forward_context.instrument
+
+    def component_gain_magnitudes(self) -> Tensor:
+        return torch.abs(self.component_gains.detach())
+
+    def fix_component_scale_gauge_(
+        self,
+        *,
+        target_gain: float = 1.0,
+        min_gain: float = 1.0e-12,
+    ) -> Tensor:
+        """Canonicalize explicit component gains without changing rendered predictions."""
+        if target_gain <= 0.0:
+            raise ValueError("target_gain must be positive")
+        if min_gain <= 0.0:
+            raise ValueError("min_gain must be positive")
+        gains = self.component_gains.detach()
+        safe = torch.abs(gains) > float(min_gain)
+        scale = torch.where(
+            safe,
+            gains / float(target_gain),
+            torch.ones_like(gains),
+        )
+        with torch.no_grad():
+            self.component_gains.div_(scale)
+        nonzero_scale = scale[safe]
+        if int(nonzero_scale.numel()) > 0:
+            full_scale = torch.where(safe, scale, torch.ones_like(scale))
+            self.mixer.scale_component_columns_(full_scale)
+        return self.component_gains.detach().clone()
+
+    def component_prediction(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+        *,
+        roles: str | Sequence[str],
+        forward_context: ForwardContext | None = None,
+        aggregate: bool = True,
+    ) -> Tensor:
+        selected = self._role_indices(roles)
+        if not selected:
+            if aggregate:
+                return torch.zeros_like(ra_deg)
+            return torch.zeros(
+                (0, *ra_deg.shape),
+                dtype=ra_deg.dtype,
+                device=ra_deg.device,
+            )
+        survey, instrument = self._context_labels(forward_context)
+        weights = self.mixer(survey=survey, instrument=instrument)
+        outputs = []
+        for idx in selected:
+            plane = _call_scalar_field_forward(
+                self.component_models[idx],
+                ra_deg,
+                dec_deg,
+                wavelength_angstrom,
+                forward_context=forward_context,
+            )
+            gain = self.component_gains[idx].to(dtype=plane.dtype, device=plane.device)
+            outputs.append(
+                weights[idx].to(dtype=plane.dtype, device=plane.device) * gain * plane
+            )
+        stacked = torch.stack(outputs, dim=0)
+        if aggregate:
+            return stacked.sum(dim=0)
+        return stacked
+
+    def forward(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+        *,
+        forward_context: ForwardContext | None = None,
+    ) -> Tensor:
+        return self.component_prediction(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+            roles=SurveyInstrumentComponentMixer._VALID_ROLES,
+            forward_context=forward_context,
+            aggregate=True,
+        )
+
+    def render_component_observation(
+        self,
+        observation: FieldObservation,
+        *,
+        roles: str | Sequence[str],
+        num_spectral_samples: int = 9,
+        spectral_sampling: FieldSpectralSampling = "deterministic_quadrature",
+        spectral_sampling_grid_size: int | None = None,
+        generator: torch.Generator | None = None,
+        override_wavelengths: Tensor | None = None,
+        override_weights: Tensor | None = None,
+        forward_context: ForwardContext | None = None,
+        aggregate: bool = True,
+    ) -> Tensor:
+        base_observation = _observation_without_background(observation)
+        image = base_observation.image
+        if image.ndim != 2:
+            raise ValueError("FieldObservation.image must be 2D")
+        device = module_compute_device(self)
+        ra_deg, dec_deg = _coordinate_grid(
+            base_observation.header,
+            shape=tuple(image.shape),
+            device=device,
+        )
+        if override_wavelengths is not None or override_weights is not None:
+            if override_wavelengths is None or override_weights is None:
+                raise ValueError(
+                    "override_wavelengths and override_weights must be provided together"
+                )
+            wavelengths = override_wavelengths.to(device=device, dtype=torch.float32)
+            weights = override_weights.to(device=device, dtype=torch.float32)
+        elif spectral_sampling == "deterministic_quadrature":
+            wavelengths, weights = _bandpass_quadrature(
+                base_observation,
+                num_spectral_samples=num_spectral_samples,
+                device=device,
+            )
+        elif spectral_sampling == "bandpass_mc":
+            wavelengths, weights = _bandpass_mc_samples(
+                base_observation,
+                num_spectral_samples=num_spectral_samples,
+                device=device,
+                proposal_grid_size=spectral_sampling_grid_size,
+                generator=generator,
+            )
+        else:
+            raise ValueError(f"unsupported spectral_sampling {spectral_sampling!r}")
+        selected = self._role_indices(roles)
+        if not selected:
+            shape = (0, *image.shape) if not aggregate else tuple(image.shape)
+            return torch.zeros(shape, dtype=image.dtype, device=device)
+        rendered_shape = tuple(image.shape) if aggregate else (len(selected), *image.shape)
+        rendered = torch.zeros(rendered_shape, device=device, dtype=torch.float32)
+        ra32 = ra_deg.to(dtype=torch.float32)
+        dec32 = dec_deg.to(dtype=torch.float32)
+        for i, wavelength in enumerate(wavelengths):
+            plane = self.component_prediction(
+                ra32,
+                dec32,
+                wavelength,
+                roles=roles,
+                forward_context=forward_context,
+                aggregate=aggregate,
+            )
+            weight = weights[i].to(dtype=plane.dtype, device=plane.device)
+            if aggregate:
+                rendered = rendered + plane * weight
+            else:
+                rendered = rendered + plane * weight.view(1, 1, 1)
+        if base_observation.psf_spec is not None and base_observation.psf_spec.mode != "none":
+            if aggregate:
+                rendered = apply_psf_spec(rendered, base_observation.psf_spec)
+            else:
+                rendered = torch.stack(
+                    [
+                        apply_psf_spec(rendered[idx], base_observation.psf_spec)
+                        for idx in range(int(rendered.shape[0]))
+                    ],
+                    dim=0,
+                )
+        return rendered.to(dtype=image.dtype)
+
+    def render_component_samples(
+        self,
+        observation: FieldObservation,
+        *,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        roles: str | Sequence[str],
+        num_spectral_samples: int = 9,
+        spectral_sampling: FieldSpectralSampling = "deterministic_quadrature",
+        spectral_sampling_grid_size: int | None = None,
+        generator: torch.Generator | None = None,
+        override_wavelengths: Tensor | None = None,
+        override_weights: Tensor | None = None,
+        forward_context: ForwardContext | None = None,
+        aggregate: bool = True,
+    ) -> Tensor:
+        base_observation = _observation_without_background(observation)
+        operator_bundle = field_observation_operator_bundle(base_observation)
+        if operator_bundle.psf is not None:
+            raise ValueError("component sample rendering does not support PSF blurring")
+        if override_wavelengths is not None or override_weights is not None:
+            if override_wavelengths is None or override_weights is None:
+                raise ValueError(
+                    "override_wavelengths and override_weights must be provided together"
+                )
+            wavelengths = override_wavelengths.to(device=ra_deg.device, dtype=torch.float32)
+            weights = override_weights.to(device=ra_deg.device, dtype=torch.float32)
+        elif spectral_sampling == "deterministic_quadrature":
+            wavelengths, weights = _bandpass_quadrature(
+                base_observation,
+                num_spectral_samples=num_spectral_samples,
+                device=ra_deg.device,
+            )
+        elif spectral_sampling == "bandpass_mc":
+            wavelengths, weights = _bandpass_mc_samples(
+                base_observation,
+                num_spectral_samples=num_spectral_samples,
+                device=ra_deg.device,
+                proposal_grid_size=spectral_sampling_grid_size,
+                generator=generator,
+            )
+        else:
+            raise ValueError(f"unsupported spectral_sampling {spectral_sampling!r}")
+        selected = self._role_indices(roles)
+        if not selected:
+            shape = (0, *ra_deg.shape) if not aggregate else tuple(ra_deg.shape)
+            return torch.zeros(shape, dtype=ra_deg.dtype, device=ra_deg.device)
+        rendered_shape = tuple(ra_deg.shape) if aggregate else (len(selected), *ra_deg.shape)
+        rendered = torch.zeros(rendered_shape, device=ra_deg.device, dtype=torch.float32)
+        ra32 = ra_deg.to(dtype=torch.float32)
+        dec32 = dec_deg.to(dtype=torch.float32)
+        for i, wavelength in enumerate(wavelengths):
+            sample = self.component_prediction(
+                ra32,
+                dec32,
+                wavelength,
+                roles=roles,
+                forward_context=forward_context,
+                aggregate=aggregate,
+            )
+            weight = weights[i].to(dtype=sample.dtype, device=sample.device)
+            if aggregate:
+                rendered = rendered + sample * weight
+            else:
+                rendered = rendered + sample * weight.view(1, *([1] * (sample.ndim - 1)))
+        return rendered
+
+    def decomposition_diagnostics(
+        self,
+        observations: Sequence[FieldObservation],
+        truth_model: "FieldComponentDecomposition",
+        *,
+        observation_forward_contexts: Sequence[ForwardContext | None] | None = None,
+        num_spectral_samples: int = 9,
+        spectral_sampling: FieldSpectralSampling = "deterministic_quadrature",
+        spectral_sampling_grid_size: int | None = None,
+        generator: torch.Generator | None = None,
+        calibration_anchor_model: nn.Module | None = None,
+        calibration_anchor_roles: str | Sequence[str] = "shared",
+    ) -> ComponentDecompositionDiagnostics:
+        if not observations:
+            raise ValueError("observations must be non-empty")
+        if observation_forward_contexts is not None:
+            if len(observation_forward_contexts) != len(observations):
+                raise ValueError(
+                    "observation_forward_contexts must match observations length"
+                )
+            contexts = tuple(observation_forward_contexts)
+        else:
+            contexts = tuple(None for _ in observations)
+        private_basis_count = len(
+            truth_model._role_indices(("survey", "instrument", "interaction"))
+        )
+        private_basis_chunks: list[list[Tensor]] = (
+            [[] for _ in range(private_basis_count)] if private_basis_count > 0 else []
+        )
+        shared_est_chunks: list[Tensor] = []
+        private_est_chunks: list[Tensor] = []
+        shared_truth_chunks: list[Tensor] = []
+        private_truth_chunks: list[Tensor] = []
+        calibration_anchor_chunks: list[Tensor] = []
+
+        def _relative_norm(error: Tensor, reference: Tensor) -> float:
+            error_norm = torch.linalg.vector_norm(torch.as_tensor(error).reshape(-1))
+            ref_norm = torch.linalg.vector_norm(torch.as_tensor(reference).reshape(-1))
+            if float(ref_norm.item()) == 0.0:
+                return 0.0 if float(error_norm.item()) == 0.0 else float(error_norm.item())
+            return float((error_norm / ref_norm).item())
+
+        def _subspace_leakage(error: Tensor, basis: Tensor, reference: Tensor) -> float:
+            basis_t = torch.as_tensor(basis)
+            if int(basis_t.numel()) == 0:
+                return 0.0
+            basis_rows = basis_t.reshape(int(basis_t.shape[0]), -1)
+            nonzero = torch.any(basis_rows != 0, dim=1)
+            basis_rows = basis_rows[nonzero]
+            if int(basis_rows.shape[0]) == 0:
+                return 0.0
+            vector = torch.as_tensor(error).reshape(-1)
+            dtype = torch.promote_types(vector.dtype, basis_rows.dtype)
+            matrix = basis_rows.to(dtype=dtype, device=vector.device).transpose(0, 1)
+            rhs = vector.to(dtype=dtype, device=vector.device)
+            coeffs = torch.linalg.lstsq(matrix, rhs).solution
+            projected = matrix @ coeffs
+            proj_norm = torch.linalg.vector_norm(projected)
+            ref_norm = torch.linalg.vector_norm(torch.as_tensor(reference).reshape(-1))
+            if float(ref_norm.item()) == 0.0:
+                return 0.0 if float(proj_norm.item()) == 0.0 else float(proj_norm.item())
+            return float((proj_norm / ref_norm).item())
+
+        for observation, forward_context in zip(observations, contexts, strict=True):
+            render_kwargs = dict(
+                num_spectral_samples=num_spectral_samples,
+                spectral_sampling=spectral_sampling,
+                spectral_sampling_grid_size=spectral_sampling_grid_size,
+                generator=generator,
+                forward_context=forward_context,
+            )
+            shared_est = self.render_component_observation(
+                observation,
+                roles="shared",
+                **render_kwargs,
+            )
+            private_est = self.render_component_observation(
+                observation,
+                roles=("survey", "instrument", "interaction"),
+                **render_kwargs,
+            )
+            shared_truth = truth_model.render_component_observation(
+                observation,
+                roles="shared",
+                **render_kwargs,
+            )
+            private_truth = truth_model.render_component_observation(
+                observation,
+                roles=("survey", "instrument", "interaction"),
+                **render_kwargs,
+            )
+            private_truth_basis = truth_model.render_component_observation(
+                observation,
+                roles=("survey", "instrument", "interaction"),
+                aggregate=False,
+                **render_kwargs,
+            )
+            shared_est_chunks.append(shared_est.reshape(-1))
+            private_est_chunks.append(private_est.reshape(-1))
+            shared_truth_chunks.append(shared_truth.reshape(-1))
+            private_truth_chunks.append(private_truth.reshape(-1))
+            for basis_idx in range(int(private_truth_basis.shape[0])):
+                private_basis_chunks[basis_idx].append(
+                    private_truth_basis[basis_idx].reshape(-1)
+                )
+            if calibration_anchor_model is not None:
+                base_observation = _observation_without_background(observation)
+                if isinstance(calibration_anchor_model, FieldComponentDecomposition):
+                    anchor = calibration_anchor_model.render_component_observation(
+                        base_observation,
+                        roles=calibration_anchor_roles,
+                        **render_kwargs,
+                    )
+                else:
+                    anchor = render_field_observation(
+                        calibration_anchor_model,
+                        base_observation,
+                        **render_kwargs,
+                    )
+                calibration_anchor_chunks.append(anchor.reshape(-1))
+
+        shared_est_vec = torch.cat(shared_est_chunks, dim=0)
+        private_est_vec = torch.cat(private_est_chunks, dim=0)
+        shared_truth_vec = torch.cat(shared_truth_chunks, dim=0)
+        private_truth_vec = torch.cat(private_truth_chunks, dim=0)
+        if private_basis_chunks:
+            private_truth_basis_vec = torch.stack(
+                [torch.cat(chunks, dim=0) for chunks in private_basis_chunks],
+                dim=0,
+            )
+        else:
+            private_truth_basis_vec = torch.zeros(
+                (0, int(shared_truth_vec.numel())),
+                dtype=shared_truth_vec.dtype,
+                device=shared_truth_vec.device,
+            )
+        calibration_transfer_stability = None
+        if calibration_anchor_chunks:
+            calibration_anchor_vec = torch.cat(calibration_anchor_chunks, dim=0)
+            calibration_transfer_stability = _relative_norm(
+                shared_est_vec - calibration_anchor_vec,
+                calibration_anchor_vec,
+            )
+        return ComponentDecompositionDiagnostics(
+            shared_to_private_leakage=_subspace_leakage(
+                shared_est_vec - shared_truth_vec,
+                private_truth_basis_vec,
+                private_truth_vec,
+            ),
+            private_to_shared_leakage=_subspace_leakage(
+                private_est_vec - private_truth_vec,
+                shared_truth_vec.unsqueeze(0),
+                shared_truth_vec,
+            ),
+            shared_relative_error=_relative_norm(
+                shared_est_vec - shared_truth_vec,
+                shared_truth_vec,
+            ),
+            private_relative_error=_relative_norm(
+                private_est_vec - private_truth_vec,
+                private_truth_vec,
+            ),
+            calibration_transfer_stability=calibration_transfer_stability,
+        )
+
+
+def make_field_component_decomposition(
+    *,
+    component_roles: Sequence[str],
+    domain: FieldDomain | None = None,
+    component_models: Sequence[nn.Module] | None = None,
+    component_model_kind: FieldModelKind = "sine_implicit",
+    component_model_kwargs: dict[str, object] | None = None,
+    surveys: Sequence[str] | None = None,
+    instruments: Sequence[str] | None = None,
+    observation_forward_contexts: Sequence[ForwardContext | None] | None = None,
+    dtype: torch.dtype = torch.float32,
+    device: torch.device | None = None,
+) -> FieldComponentDecomposition:
+    """Build an explicit field decomposition model from component specs or modules."""
+    roles = tuple(str(role) for role in component_roles)
+    if not roles:
+        raise ValueError("component_roles must be non-empty")
+    if component_models is not None:
+        models = tuple(component_models)
+        if len(models) != len(roles):
+            raise ValueError("component_models length must match component_roles")
+    else:
+        if domain is None:
+            raise ValueError("domain is required when component_models are not provided")
+        model_kwargs = dict(component_model_kwargs or {})
+        models = tuple(
+            make_field_model(component_model_kind, domain, **model_kwargs)
+            for _ in roles
+        )
+    inferred_surveys, inferred_instruments = _infer_context_axis_labels(
+        observation_forward_contexts
+    )
+    return FieldComponentDecomposition(
+        models,
+        component_roles=roles,
+        surveys=tuple(str(name) for name in surveys)
+        if surveys is not None
+        else inferred_surveys,
+        instruments=tuple(str(name) for name in instruments)
+        if instruments is not None
+        else inferred_instruments,
+        dtype=dtype,
+        device=device,
+    )
 
 
 class SineImplicitField(_BaseFieldModel):
@@ -5546,6 +6311,55 @@ def render_field_cube_via_healpix(
     return out
 
 
+def fit_field_component_decomposition(
+    observations: Sequence[FieldObservation],
+    *,
+    component_roles: Sequence[str],
+    model: FieldComponentDecomposition | None = None,
+    domain: FieldDomain | None = None,
+    component_models: Sequence[nn.Module] | None = None,
+    component_model_kind: FieldModelKind = "sine_implicit",
+    component_model_kwargs: dict[str, object] | None = None,
+    surveys: Sequence[str] | None = None,
+    instruments: Sequence[str] | None = None,
+    observation_forward_contexts: Sequence[ForwardContext | None] | None = None,
+    dtype: torch.dtype = torch.float32,
+    device: torch.device | str | None = None,
+    **fit_kwargs: object,
+) -> FieldFitResult:
+    """Construct and fit a field decomposition model on context-labeled observations."""
+    if model is not None:
+        if component_models is not None:
+            raise ValueError("component_models cannot be provided when model is provided")
+        if domain is not None:
+            raise ValueError("domain cannot be provided when model is provided")
+        if component_model_kwargs is not None:
+            raise ValueError(
+                "component_model_kwargs cannot be provided when model is provided"
+            )
+    else:
+        build_domain = domain if domain is not None else estimate_field_domain(observations)
+        model = make_field_component_decomposition(
+            component_roles=component_roles,
+            domain=build_domain,
+            component_models=component_models,
+            component_model_kind=component_model_kind,
+            component_model_kwargs=component_model_kwargs,
+            surveys=surveys,
+            instruments=instruments,
+            observation_forward_contexts=observation_forward_contexts,
+            dtype=dtype,
+            device=torch.device(device) if isinstance(device, str) else device,
+        )
+    return fit_field_model(
+        observations,
+        model,
+        device=device,
+        observation_forward_contexts=observation_forward_contexts,
+        **fit_kwargs,
+    )
+
+
 def fit_field_model(
     observations: Sequence[FieldObservation],
     model: nn.Module,
@@ -5567,6 +6381,9 @@ def fit_field_model(
     spectral_anchor_observations_per_step: int = 0,
     spectral_anchor_num_samples: int | None = None,
     spectral_anchor_loss_weight: float = 0.0,
+    component_anchor_terms: Sequence[FieldComponentAnchorTerm] | None = None,
+    component_anchor_num_spectral_samples: int | None = None,
+    component_anchor_loss_kind: FieldLossKind | None = None,
     lr_warmup_steps: int = 0,
     spatial_smoothness_weight: float = 0.0,
     spatial_smoothness_grid_size: int = 8,
@@ -5659,6 +6476,14 @@ def fit_field_model(
         else max(int(num_spectral_samples), 17)
     )
     anchor_loss_weight = max(float(spectral_anchor_loss_weight), 0.0)
+    component_anchor_num = (
+        int(component_anchor_num_spectral_samples)
+        if component_anchor_num_spectral_samples is not None
+        else int(num_spectral_samples)
+    )
+    component_anchor_kind = (
+        loss_kind if component_anchor_loss_kind is None else component_anchor_loss_kind
+    )
     warmup_steps = max(int(lr_warmup_steps), 0)
     smoothness_weight = max(float(spatial_smoothness_weight), 0.0)
     smoothness_grid_size = max(int(spatial_smoothness_grid_size), 2)
@@ -6138,6 +6963,26 @@ def fit_field_model(
                     )
                 else:
                     total_loss = total_loss + anchor_loss_weight * anchor_loss
+        if component_anchor_terms:
+            anchor_component_loss = field_component_anchor_loss(
+                model,
+                component_anchor_terms,
+                num_spectral_samples=component_anchor_num,
+                spectral_sampling="deterministic_quadrature",
+                loss_kind=component_anchor_kind,
+                charbonnier_eps=charbonnier_eps,
+                huber_delta=huber_delta,
+            )
+            if streaming_accumulation:
+                streamed_total_loss += float(anchor_component_loss.detach().cpu())
+                anchor_component_loss.backward()
+                total_loss = torch.tensor(
+                    streamed_total_loss,
+                    dtype=torch.float32,
+                    device=module_compute_device(model),
+                )
+            else:
+                total_loss = total_loss + anchor_component_loss
         if context_pairs and context_weight > 0.0:
             scaled_context_weight = context_weight / max(len(context_pairs), 1)
             for context_observation, ctx_f in context_pairs:

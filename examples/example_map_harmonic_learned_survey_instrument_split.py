@@ -163,7 +163,14 @@ def main() -> None:
         optimizer.step()
         loss_history.append(float(loss.item()))
 
+    fit_model.fix_component_scale_gauge_()
     fitted_state = fit_model.state().detach()
+    diagnostics = fit_model.decomposition_diagnostics(
+        truth_model.state().detach(),
+        state=fitted_state,
+        calibration_anchor=shared_truth,
+        calibration_selector=[0, 1],
+    )
     shared_error_learned = float(torch.linalg.vector_norm(fitted_state[0] - shared_truth).item())
 
     shared_only_real = torch.nn.Parameter(0.01 * torch.randn_like(shared_truth.real))
@@ -189,6 +196,10 @@ def main() -> None:
     print(f"loss history (last 5): {[round(v, 5) for v in loss_history[-5:]]}")
     print(f"shared-component error with learned split model: {shared_error_learned:.6f}")
     print(f"shared-component error with naive shared-only fit: {shared_error_naive:.6f}")
+    print(f"component norms after gauge fix: {[round(float(v), 4) for v in fit_model.component_norms().tolist()]}")
+    print(f"shared-to-private leakage: {diagnostics.shared_to_private_leakage:.6f}")
+    print(f"private-to-shared leakage: {diagnostics.private_to_shared_leakage:.6f}")
+    print(f"calibration transfer stability: {diagnostics.calibration_transfer_stability:.6f}")
     print(f"learned weights for survey A / cam1: {[round(float(v), 4) for v in fit_model.mixer(survey='A', instrument='cam1').detach().tolist()]}")
     print(f"learned weights for survey B / cam2: {[round(float(v), 4) for v in fit_model.mixer(survey='B', instrument='cam2').detach().tolist()]}")
     print("useful when survey/instrument residual structure should be decomposed from a shared astrophysical field without hard-coding the exact nuisance pattern")

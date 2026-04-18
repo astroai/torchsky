@@ -49,6 +49,7 @@ This directory contains examples of common `torchsky` workflows.
 | `example_map_harmonic_mixed_constraints.py` | Native mixed-constraint image↔alm solve combining image cutouts with coefficient-space anchors or priors. |
 | `example_map_harmonic_survey_split.py` | Native shared-versus-survey-private harmonic decomposition showing how a split latent model can keep survey-specific structure from leaking into the shared astrophysical sky. |
 | `example_map_harmonic_learned_survey_instrument_split.py` | Jointly optimizes latent harmonic components and a learned mechanistic survey/instrument mixer to separate shared sky from nuisance structure. |
+| `example_map_field_survey_split.py` | Native train-time field decomposition on context-labeled observations using `make_field_component_decomposition(...)` and `fit_field_component_decomposition(...)`. |
 | `example_map_teb_joint_cl_prior.py` | Native joint temperature-plus-polarization harmonic solve with a shared `T/E/B` cross-spectrum prior. |
 | `example_map_spin_harmonic_inverse.py` | Native image↔(E,B) inverse solve for smooth polarized Q/U cutouts. |
 | `example_map_spin_harmonic_multi_cutout_inverse.py` | Native joint image↔(E,B) inverse solve across multiple Q/U cutouts that share one smooth spherical polarization model. |

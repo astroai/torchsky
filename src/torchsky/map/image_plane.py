@@ -28,8 +28,12 @@ from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_f
 from .operators.background import SkyBackgroundOp
 from .operators.bundle import ObservationOperatorBundle
 from .operators.execution import (
+    accumulate_projected_observation,
+    finalize_projected_stack,
+    masked_median_stack,
     prepare_image_observation_data,
     project_image_observation_geometry,
+    stack_inputs_from_projected_observation,
 )
 from .operators.geometry import InterpolationGeometryOp
 from .operators.mask_weight import load_image_observation_weight_map
@@ -1689,52 +1693,6 @@ def _validated_map_stacking_method(
     return stacking_method
 
 
-def _stack_inputs_from_projected_observation(
-    projected_numer: Tensor,
-    projected_weight: Tensor,
-    *,
-    stacking_method: MapStackingMethod,
-    value_semantics: MapValueSemantics,
-    pixel_area_sr: Tensor | None = None,
-) -> tuple[Tensor, Tensor]:
-    if stacking_method == "weighted_mean":
-        return projected_numer, projected_weight
-    projected_image = torch.where(
-        projected_weight > 0.0,
-        projected_numer / projected_weight,
-        torch.zeros_like(projected_numer),
-    )
-    if value_semantics == "flux":
-        if pixel_area_sr is None:
-            raise RuntimeError("target pixel area is required for flux semantics")
-        projected_image = pixel_area_sr * projected_image
-    support = (projected_weight > 0.0).to(dtype=torch.float32)
-    return projected_image, support
-
-
-def _masked_median_stack(
-    projected_images: Sequence[Tensor],
-    support_masks: Sequence[Tensor],
-) -> tuple[Tensor, Tensor]:
-    if not projected_images:
-        raise ValueError("median stacking requires at least one projected image")
-    values = torch.stack(tuple(projected_images), dim=0)
-    support = torch.stack(
-        tuple(mask.to(dtype=torch.bool) for mask in support_masks), dim=0
-    )
-    fill = torch.full_like(values, float("inf"))
-    ordered = torch.sort(torch.where(support, values, fill), dim=0).values
-    count = support.sum(dim=0, dtype=torch.int64)
-    safe_count = torch.clamp(count, min=1)
-    lower_idx = ((safe_count - 1) // 2).unsqueeze(0)
-    upper_idx = (safe_count // 2).unsqueeze(0)
-    lower = torch.gather(ordered, 0, lower_idx).squeeze(0)
-    upper = torch.gather(ordered, 0, upper_idx).squeeze(0)
-    median = 0.5 * (lower + upper)
-    median = torch.where(count > 0, median, torch.zeros_like(median))
-    return median, count.to(dtype=torch.float32)
-
-
 def _forward_project_weighted_to_target(
     image: Tensor,
     source_weight: Tensor,
@@ -2887,7 +2845,7 @@ def coadd_image_plane(
                     drizzle_pixfrac=drizzle_pixfrac,
                 )
             )
-            contrib_numer, contrib_weight = _stack_inputs_from_projected_observation(
+            contrib_numer, contrib_weight = stack_inputs_from_projected_observation(
                 sampled_numer,
                 sampled_weight,
                 stacking_method="mean",
@@ -2921,73 +2879,46 @@ def coadd_image_plane(
                 value_semantics=value_semantics,
                 drizzle_pixfrac=drizzle_pixfrac,
             )
-            if projected.target_window is None:
-                contrib_numer, contrib_weight = (
-                    _stack_inputs_from_projected_observation(
-                        projected.numer,
-                        projected.weight,
-                        stacking_method=stacking_method,
-                        value_semantics=value_semantics,
-                        pixel_area_sr=(
-                            ensure_prepared_target().pixel_area_sr
-                            if value_semantics == "flux"
-                            else None
-                        ),
-                    )
-                )
-                numer = numer + contrib_numer
-                denom = denom + contrib_weight
-                overlap_count = overlap_count + projected.overlap
-            else:
-                y0, y1, x0, x1 = projected.target_window
-                if y1 > y0 and x1 > x0:
-                    pixel_area_sr = None
-                    if value_semantics == "flux":
-                        prepared = ensure_prepared_target()
-                        if prepared.pixel_area_sr is None:
-                            raise RuntimeError(
-                                "target pixel area is required for flux semantics"
-                            )
-                        pixel_area_sr = prepared.pixel_area_sr[y0:y1, x0:x1]
-                    contrib_numer, contrib_weight = (
-                        _stack_inputs_from_projected_observation(
-                            projected.numer,
-                            projected.weight,
-                            stacking_method=stacking_method,
-                            value_semantics=value_semantics,
-                            pixel_area_sr=pixel_area_sr,
-                        )
-                    )
-                    numer[y0:y1, x0:x1] = numer[y0:y1, x0:x1] + contrib_numer
-                    denom[y0:y1, x0:x1] = denom[y0:y1, x0:x1] + contrib_weight
-                    overlap_count[y0:y1, x0:x1] = (
-                        overlap_count[y0:y1, x0:x1] + projected.overlap
-                    )
+            pixel_area_sr = None
+            if value_semantics == "flux":
+                prepared = ensure_prepared_target()
+                if prepared.pixel_area_sr is None:
+                    raise RuntimeError("target pixel area is required for flux semantics")
+                pixel_area_sr = prepared.pixel_area_sr
+                if projected.target_window is not None:
+                    y0, y1, x0, x1 = projected.target_window
+                    pixel_area_sr = pixel_area_sr[y0:y1, x0:x1]
+            accumulate_projected_observation(
+                numer,
+                denom,
+                overlap_count,
+                projected_numer=projected.numer,
+                projected_weight=projected.weight,
+                projected_overlap=projected.overlap,
+                stacking_method=stacking_method,
+                value_semantics=value_semantics,
+                pixel_area_sr=pixel_area_sr,
+                target_window=projected.target_window,
+            )
             if observation_mocs is not None and projected.moc is not None:
                 observation_mocs.append(projected.moc)
 
     if stacking_method == "median":
         assert median_images is not None and median_support is not None
-        coadd, denom = _masked_median_stack(median_images, median_support)
-    elif stacking_method == "weighted_mean" and value_semantics == "flux":
-        prepared = ensure_prepared_target()
-        if prepared.pixel_area_sr is None:
-            raise RuntimeError("target pixel area is required for flux semantics")
-        coadd = torch.where(
-            denom > 0.0,
-            prepared.pixel_area_sr * numer / denom,
-            torch.zeros_like(numer),
-        )
-        denom = torch.where(
-            denom > 0.0,
-            denom / torch.clamp(torch.square(prepared.pixel_area_sr), min=1e-16),
-            torch.zeros_like(denom),
-        )
+        coadd, denom = masked_median_stack(median_images, median_support)
     else:
-        coadd = torch.where(
-            denom > 0.0,
-            numer / denom,
-            torch.zeros_like(numer),
+        pixel_area_sr = None
+        if value_semantics == "flux":
+            prepared = ensure_prepared_target()
+            if prepared.pixel_area_sr is None:
+                raise RuntimeError("target pixel area is required for flux semantics")
+            pixel_area_sr = prepared.pixel_area_sr
+        coadd, denom = finalize_projected_stack(
+            numer,
+            denom,
+            stacking_method=stacking_method,
+            value_semantics=value_semantics,
+            pixel_area_sr=pixel_area_sr,
         )
     coverage_moc = None
     if observation_mocs is not None:
@@ -3224,52 +3155,28 @@ def coadd_image_plane_cube(
             .to(device=device, dtype=torch.float32)
             .view(n_band, 1, 1)
         )
-        if projected.target_window is None:
-            contrib_numer, contrib_weight = _stack_inputs_from_projected_observation(
-                projected.numer,
-                projected.weight,
-                stacking_method=stacking_method,
-                value_semantics=value_semantics,
-                pixel_area_sr=(
-                    ensure_prepared_target().pixel_area_sr
-                    if value_semantics == "flux"
-                    else None
-                ),
-            )
-            numer = numer + coeffs * contrib_numer.unsqueeze(0)
-            denom = denom + coeffs * contrib_weight.unsqueeze(0)
-            overlap_count = overlap_count + (coeffs > 0.0).to(
-                torch.int32
-            ) * projected.overlap.unsqueeze(0)
-        else:
-            y0, y1, x0, x1 = projected.target_window
-            if y1 > y0 and x1 > x0:
-                pixel_area_sr = None
-                if value_semantics == "flux":
-                    prepared = ensure_prepared_target()
-                    if prepared.pixel_area_sr is None:
-                        raise RuntimeError(
-                            "target pixel area is required for flux semantics"
-                        )
-                    pixel_area_sr = prepared.pixel_area_sr[y0:y1, x0:x1]
-                contrib_numer, contrib_weight = (
-                    _stack_inputs_from_projected_observation(
-                        projected.numer,
-                        projected.weight,
-                        stacking_method=stacking_method,
-                        value_semantics=value_semantics,
-                        pixel_area_sr=pixel_area_sr,
-                    )
-                )
-                numer[:, y0:y1, x0:x1] = numer[
-                    :, y0:y1, x0:x1
-                ] + coeffs * contrib_numer.unsqueeze(0)
-                denom[:, y0:y1, x0:x1] = denom[
-                    :, y0:y1, x0:x1
-                ] + coeffs * contrib_weight.unsqueeze(0)
-                overlap_count[:, y0:y1, x0:x1] = overlap_count[:, y0:y1, x0:x1] + (
-                    coeffs > 0.0
-                ).to(torch.int32) * projected.overlap.unsqueeze(0)
+        pixel_area_sr = None
+        if value_semantics == "flux":
+            prepared = ensure_prepared_target()
+            if prepared.pixel_area_sr is None:
+                raise RuntimeError("target pixel area is required for flux semantics")
+            pixel_area_sr = prepared.pixel_area_sr
+            if projected.target_window is not None:
+                y0, y1, x0, x1 = projected.target_window
+                pixel_area_sr = pixel_area_sr[y0:y1, x0:x1]
+        accumulate_projected_observation(
+            numer,
+            denom,
+            overlap_count,
+            projected_numer=projected.numer,
+            projected_weight=projected.weight,
+            projected_overlap=projected.overlap,
+            stacking_method=stacking_method,
+            value_semantics=value_semantics,
+            pixel_area_sr=pixel_area_sr,
+            target_window=projected.target_window,
+            coeffs=coeffs,
+        )
         if coverage_mocs is not None and projected.moc is not None:
             band_indices = torch.nonzero(
                 projection[obs_idx] > 0.0, as_tuple=False
@@ -3280,16 +3187,19 @@ def coadd_image_plane_cube(
                     projected.moc if current is None else current.union(projected.moc)
                 )
 
-    denom_floor = torch.finfo(denom.dtype).tiny
-    if stacking_method == "weighted_mean" and value_semantics == "flux":
+    pixel_area_sr = None
+    if value_semantics == "flux":
         prepared = ensure_prepared_target()
         if prepared.pixel_area_sr is None:
             raise RuntimeError("target pixel area is required for flux semantics")
         pixel_area_sr = prepared.pixel_area_sr.unsqueeze(0)
-        cube = pixel_area_sr * numer / torch.clamp(denom, min=denom_floor)
-        denom = denom / torch.clamp(torch.square(pixel_area_sr), min=1e-16)
-    else:
-        cube = numer / torch.clamp(denom, min=denom_floor)
+    cube, denom = finalize_projected_stack(
+        numer,
+        denom,
+        stacking_method=stacking_method,
+        value_semantics=value_semantics,
+        pixel_area_sr=pixel_area_sr,
+    )
     return SpectralCubeMapResult(
         spectral_axis=target.spectral_axis,
         band_metadata=band_metadata,
