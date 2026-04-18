@@ -36,7 +36,9 @@ jobs:
     - name: Pyright (scoped allowlist in pyrightconfig.json)
       env:
         PYTHONPATH: ${{ github.workspace }}/src
-      run: pyright
+      run: |
+        pip list
+        pyright --verbose
 
   build-test:
     name: Build & Test
