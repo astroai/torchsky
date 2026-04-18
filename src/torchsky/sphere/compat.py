@@ -1,11 +1,12 @@
 """
 **HEALPix / healpy compatibility layer** (one slice of torchsky’s broader ecosystem
-compatibility story). torchsky also targets parity or migration paths vs **Astropy**,
-**fitsio**, **hpgeom**, **spherical_geometry**, and other common packages at their
-respective API layers; see ``docs/compatibility.md``.
+compatibility story). torchsky also documents migration paths vs **Astropy**,
+**spherical_geometry**, and other common packages at their respective API layers; see
+``docs/compatibility.md``.
 
 This module implements healpy’s NumPy-oriented HEALPix API with
-:class:`torch.Tensor` inputs/outputs and torchsky-native kernels.
+:class:`torch.Tensor` inputs/outputs and **torchsky-native** kernels (no optional
+``hpgeom`` / Python ``fitsio`` dispatch).
 
 **Scope**
 
@@ -15,8 +16,8 @@ This module implements healpy’s NumPy-oriented HEALPix API with
 * **Harmonic / map** — ``map2alm``, ``alm2map``, ``synfast``, ``pixwin``, spin
   transforms, smoothing, etc. delegate to :mod:`torchsky.sphere.spectral` (torch +
   torchsky C++ only).
-* **Strict queries** — some routines optionally match `hpgeom` when
-  ``strict_mode(True)`` (see :func:`set_strict_mode`).
+* **Strict mode** — :func:`set_strict_mode` is retained for API compatibility; geometry
+  queries always use the same torch-native implementation as the default path.
 
 **Relationship to** :mod:`torchsky.sphere`
 
@@ -30,7 +31,8 @@ mirrors (WCS, FITS tables, polygon semantics, etc.) live in their own subpackage
 
 The goal is to cover healpy’s public HEALPix/spherical-harmonic surface over time.
 Missing routines should be added here (thin wrappers) rather than scattered across
-the package. Compare against healpy in tests when that package is installed.
+the package. Parity tests may compare against optional **healpy** where installed;
+geometry kernels remain torchsky-native.
 """
 
 from contextlib import contextmanager
@@ -124,16 +126,6 @@ def get_all_neighbours(
     return _healpix.get_all_neighbours(nside, theta, phi=phi, nest=nest, lonlat=lonlat)
 
 
-def _require_hpgeom_for_strict(func_name: str):
-    try:
-        import hpgeom as hpg
-    except Exception as exc:  # pragma: no cover - optional dependency
-        raise ImportError(
-            f"strict compat.{func_name} requires optional dependency 'hpgeom'"
-        ) from exc
-    return hpg
-
-
 def query_circle(
     nside: int,
     lon: Tensor | float,
@@ -147,20 +139,7 @@ def query_circle(
     fact: int = 4,
     strict: bool | None = None,
 ) -> Tensor:
-    if _resolve_strict(strict):
-        hpg = _require_hpgeom_for_strict("query_circle")
-        out = hpg.query_circle(
-            nside,
-            float(torch.as_tensor(lon).item()),
-            float(torch.as_tensor(lat).item()),
-            float(radius),
-            inclusive=bool(inclusive),
-            fact=int(fact),
-            nest=bool(nest),
-            lonlat=True,
-            degrees=bool(degrees),
-        )
-        return torch.as_tensor(out, dtype=torch.int64)
+    del strict  # torch-native path only; flag kept for healpy-shaped API compatibility
     return _healpix.query_circle(
         nside,
         lon,
@@ -184,17 +163,7 @@ def query_circle_vec(
     chunk_size: int = 1_000_000,
     strict: bool | None = None,
 ) -> Tensor:
-    if _resolve_strict(strict):
-        hpg = _require_hpgeom_for_strict("query_circle_vec")
-        out = hpg.query_circle_vec(
-            nside,
-            torch.as_tensor(vec, dtype=torch.float64).detach().cpu().numpy(),
-            float(radius),
-            inclusive=bool(inclusive),
-            fact=int(fact),
-            nest=bool(nest),
-        )
-        return torch.as_tensor(out, dtype=torch.int64)
+    del strict
     return _healpix.query_circle_vec(
         nside,
         vec,
@@ -219,32 +188,20 @@ def query_ellipse(
     inclusive: bool = False,
     fact: int = 4,
     strict: bool | None = None,
-    backend: Literal["auto", "torch", "hpgeom"] = "auto",
+    backend: Literal["auto", "torch"] = "auto",
     lonlat: bool = True,
     degrees: bool = True,
     return_pixel_ranges: bool = False,
 ) -> Tensor:
-    if backend not in {"auto", "torch", "hpgeom"}:
-        raise ValueError("backend must be one of {'auto', 'torch', 'hpgeom'}")
+    del strict  # geometry is always torch-native; flag kept for API symmetry
+    if backend not in {"auto", "torch"}:
+        raise ValueError("backend must be 'auto' or 'torch' (torchsky-native only)")
+    _ = backend  # 'auto' and 'torch' are equivalent; parameter kept for API compatibility
     fact_i = int(fact)
     if fact_i < 1:
         raise ValueError("fact must be >= 1")
     if return_pixel_ranges and not nest:
         raise ValueError("return_pixel_ranges is only supported with nest=True")
-
-    strict_eff = _resolve_strict(strict)
-    use_hpgeom = False
-    hpg = None
-    if strict_eff or backend == "hpgeom":
-        hpg = _require_hpgeom_for_strict("query_ellipse")
-        use_hpgeom = True
-    elif backend == "auto":
-        try:
-            import hpgeom as hpg
-
-            use_hpgeom = True
-        except Exception:
-            use_hpgeom = False
 
     if pa_deg is not None and alpha is not None:
         raise ValueError("set only one of alpha/pa_deg")
@@ -257,26 +214,6 @@ def query_ellipse(
     else:
         alpha_units = float(alpha)
         pa_deg_eff = alpha_units if (lonlat and degrees) else math.degrees(alpha_units)
-
-    if use_hpgeom:
-        assert hpg is not None
-        out = hpg.query_ellipse(
-            nside,
-            float(torch.as_tensor(a).item()),
-            float(torch.as_tensor(b).item()),
-            float(semi_major),
-            float(semi_minor),
-            float(alpha_units),
-            inclusive=bool(inclusive),
-            fact=fact_i,
-            nest=bool(nest),
-            lonlat=bool(lonlat),
-            degrees=bool(degrees),
-            return_pixel_ranges=bool(return_pixel_ranges),
-        )
-        if return_pixel_ranges:
-            return torch.as_tensor(out, dtype=torch.int64).reshape(-1, 2)
-        return torch.as_tensor(out, dtype=torch.int64).reshape(-1)
 
     if lonlat:
         if degrees:

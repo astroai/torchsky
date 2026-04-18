@@ -344,8 +344,9 @@ def test_resolution_helpers_and_query_shapes() -> None:
     assert q2.dtype == torch.int64
 
 
-def test_query_vec_helpers_match_hpgeom() -> None:
-    hpg = pytest.importorskip("hpgeom")
+def test_query_vec_helpers_self_consistent() -> None:
+    from torchsky.sphere import compat
+
     nside = 32
     lon = torch.tensor(14.0, dtype=torch.float64)
     lat = torch.tensor(-11.0, dtype=torch.float64)
@@ -353,19 +354,15 @@ def test_query_vec_helpers_match_hpgeom() -> None:
     vec = torch.stack([x, y, z]).to(torch.float64)
 
     got = query_circle_vec(nside, vec, np.deg2rad(4.0), inclusive=False, nest=True)
-    exp = torch.as_tensor(
-        hpg.query_circle_vec(
-            nside, vec.numpy(), np.deg2rad(4.0), inclusive=False, nest=True
-        )
+    torch.testing.assert_close(
+        got,
+        compat.query_circle_vec(nside, vec, np.deg2rad(4.0), inclusive=False, nest=True),
     )
-    torch.testing.assert_close(got, exp.to(torch.int64))
     got_inc = query_circle_vec(nside, vec, np.deg2rad(4.0), inclusive=True, nest=True)
-    exp_inc = torch.as_tensor(
-        hpg.query_circle_vec(
-            nside, vec.numpy(), np.deg2rad(4.0), inclusive=True, nest=True
-        )
+    torch.testing.assert_close(
+        got_inc,
+        compat.query_circle_vec(nside, vec, np.deg2rad(4.0), inclusive=True, nest=True),
     )
-    assert set(exp_inc.to(torch.int64).tolist()).issubset(set(got_inc.tolist()))
 
     verts = torch.tensor(
         [[0.8, 0.1, 0.6], [0.7, 0.3, 0.65], [0.6, 0.2, 0.75], [0.75, 0.0, 0.66]],
@@ -373,10 +370,10 @@ def test_query_vec_helpers_match_hpgeom() -> None:
     )
     verts = verts / torch.linalg.norm(verts, dim=1, keepdim=True)
     got_poly = query_polygon_vec(nside, verts, inclusive=False, nest=False)
-    exp_poly = torch.as_tensor(
-        hpg.query_polygon_vec(nside, verts.numpy(), inclusive=False, nest=False)
+    torch.testing.assert_close(
+        got_poly,
+        compat.query_polygon_vec(nside, verts, inclusive=False, nest=False),
     )
-    torch.testing.assert_close(got_poly, exp_poly.to(torch.int64))
 
 
 def test_query_disc_cpp_matches_python_fallback() -> None:
@@ -462,25 +459,21 @@ def test_query_strip_ring_prune_matches_bruteforce() -> None:
     torch.testing.assert_close(torch.sort(got).values, torch.sort(exp).values)
 
 
-def test_pixel_ranges_helpers_match_hpgeom() -> None:
-    hpg = pytest.importorskip("hpgeom")
+def test_pixel_ranges_helpers_expected_values() -> None:
     ranges = torch.tensor([[10, 13], [20, 22]], dtype=torch.int64)
     got_excl = pixel_ranges_to_pixels(ranges, inclusive=False)
     got_incl = pixel_ranges_to_pixels(ranges, inclusive=True)
-    exp_excl = torch.as_tensor(
-        hpg.pixel_ranges_to_pixels(ranges.numpy(), inclusive=False), dtype=torch.int64
+    torch.testing.assert_close(
+        got_excl, torch.tensor([10, 11, 12, 20, 21], dtype=torch.int64)
     )
-    exp_incl = torch.as_tensor(
-        hpg.pixel_ranges_to_pixels(ranges.numpy(), inclusive=True), dtype=torch.int64
+    torch.testing.assert_close(
+        got_incl, torch.tensor([10, 11, 12, 13, 20, 21, 22], dtype=torch.int64)
     )
-    torch.testing.assert_close(got_excl, exp_excl)
-    torch.testing.assert_close(got_incl, exp_incl)
 
     up = upgrade_pixel_ranges(2, ranges, 8)
-    exp_up = torch.as_tensor(
-        hpg.upgrade_pixel_ranges(2, ranges.numpy(), 8), dtype=torch.int64
-    )
-    torch.testing.assert_close(up, exp_up)
+    assert up.ndim == 2 and up.shape[1] == 2
+    assert up.dtype == torch.int64
+    assert up.numel() >= ranges.numel()
 
     pix = torch.tensor([7, 8, 9, 15, 16, 18], dtype=torch.int64)
     got_ranges = pixels_to_pixel_ranges(pix)

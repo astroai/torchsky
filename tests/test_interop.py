@@ -33,6 +33,31 @@ def test_to_pandas_decode_bytes():
         os.unlink(path)
 
 
+def test_to_polars_decode_bytes():
+    pytest.importorskip("polars")
+
+    table = Table(
+        {
+            "RA": np.array([10.1, 10.2], dtype=np.float64),
+            "NAME": np.array(["STAR_A", "STAR_B"], dtype="U8"),
+        }
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
+        table.write(f.name, format="fits", overwrite=True)
+        path = f.name
+
+    try:
+        data, _ = torchsky.read(path, hdu=1, return_header=True)
+        df = torchsky.to_polars(data, decode_bytes=True)
+
+        assert df.height == 2
+        assert df["NAME"].to_list() == ["STAR_A", "STAR_B"]
+        assert np.allclose(df["RA"].to_numpy(), [10.1, 10.2])
+    finally:
+        os.unlink(path)
+
+
 def test_to_arrow_vla_list():
     pytest.importorskip("pyarrow")
 

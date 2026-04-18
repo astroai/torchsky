@@ -1,7 +1,6 @@
 import torch
 import math
 import json
-import pytest
 from torchsky.sphere import MOC, HealSparseMap, nest2uniq
 
 
@@ -73,7 +72,6 @@ def test_sparse_from_moc():
 
 
 def test_moc_fits_roundtrip(tmp_path) -> None:
-    pytest.importorskip("fitsio", reason="fitsio required for MOC FITS roundtrip")
     moc = MOC.from_circle(12.0, -5.0, 3.0, max_order=5)
     path = tmp_path / "region.moc.fits"
     moc.write_fits(str(path), overwrite=True)

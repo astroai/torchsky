@@ -79,24 +79,21 @@ def test_moc_from_threshold_empty():
     assert moc.uniq.numel() == 0
 
 def test_moc_read_fits_fallback(tmp_path):
-    pytest.importorskip("fitsio")
-    import fitsio
-    import numpy as np
+    """Non-standard UNIQ column name: first int64 column is used."""
+    import torch
+    import torchsky
 
     path = str(tmp_path / "test.fits")
-    data = np.zeros(3, dtype=[("OLD_UNIQ", "i8")])
-    data["OLD_UNIQ"] = [4, 16, 17]
-
-    with fitsio.FITS(path, "rw", clobber=True) as fits:
-        fits.write(data, extname="MOC")
-
-    # Mocking a DataFrame-like structure that `.read()` returns in some older fitsio versions
-    # We will test the failure path inside the source file rather than via exact fitsio interaction
-    # because fitsio always returns numpy record arrays in newer versions
-    try:
-        MOC.read_fits(path)
-    except Exception:
-        pass  # okay if this fails in the test env; we only exercise the line
+    torchsky.write(
+        path,
+        {"OLD_UNIQ": torch.tensor([4, 16, 17], dtype=torch.int64)},
+        header={"EXTNAME": "MOC"},
+        overwrite=True,
+    )
+    m = MOC.read_fits(path)
+    # Values normalize/merge into a valid MOC (exact UNIQ count may shrink).
+    assert m.uniq.numel() >= 1
+    assert m.uniq.dtype == torch.int64
 
 def test_moc_boundary_empty():
     moc = MOC(torch.tensor([], dtype=torch.int64))

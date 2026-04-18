@@ -15,9 +15,8 @@ import pytest
 import torch
 
 healsparse = pytest.importorskip("healsparse")
-hpg = pytest.importorskip("hpgeom")
 
-from torchsky.sphere import HealSparseMap, MOC  # noqa: E402
+from torchsky.sphere import HealSparseMap, MOC, compat  # noqa: E402
 
 _HAS_MAKE_EMPTY = hasattr(HealSparseMap, "make_empty")
 _HAS_VALID_PIXELS = any(
@@ -202,7 +201,9 @@ def test_healsparse_geom_circle_coverage_matches_upstream_sparse_mask() -> None:
     lon = 100.0
     lat = 0.0
     radius = 0.2 / 60.0
-    pixels = hpg.query_circle(nside_map, lon, lat, radius, nest=True, lonlat=True)
+    pixels = compat.query_circle(
+        nside_map, lon, lat, radius, nest=True, degrees=True
+    ).cpu().numpy()
 
     hs_map = healsparse.HealSparseMap.make_empty(nside_coverage, nside_map, np.int32)
     hs_map.update_values_pix(pixels, np.ones(pixels.size, dtype=np.int32))
