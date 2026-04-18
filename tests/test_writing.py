@@ -28,22 +28,33 @@ def test_writing():
     hdul = torchsky.HDUList([hdu_tensor, hdu_table])
 
     def assert_written(path: str) -> None:
+        from astropy.io.fits.header import Header as AstroHeader
+        from astropy.io.fits.hdu.table import BinTableHDU
+        from astropy.io.fits import PrimaryHDU, ImageHDU
+
         with fits.open(path) as hdul_astro:
             # Verify TensorHDU (Primary)
             # Handle endianness for PyTorch
-            data_numpy = hdul_astro[0].data
+            hdu0 = hdul_astro[0]
+            assert isinstance(hdu0, (PrimaryHDU, ImageHDU))
+            data_numpy = hdu0.data
+            assert data_numpy is not None
             if data_numpy.dtype.byteorder == ">":
                 data_numpy = data_numpy.astype(data_numpy.dtype.newbyteorder("<"))
             data_read = torch.tensor(data_numpy)
             assert torch.allclose(data_read, data_tensor)
-            assert hdul_astro[0].header["TESTKEY"] == "TESTVAL"
+            header0 = hdu0.header
+            assert isinstance(header0, AstroHeader)
+            assert header0["TESTKEY"] == "TESTVAL"
 
             # Verify TableHDU (Extension 1)
-            # Note: Astropy might read as BinTableHDU
-            data_read_table = hdul_astro[1].data
-            assert np.allclose(data_read_table["col1"], data_table["col1"].numpy())
-            assert np.allclose(data_read_table["col2"], data_table["col2"].numpy())
-            assert hdul_astro[1].header["TBLKEY"] == "TBLVAL"
+            hdu1 = hdul_astro[1]
+            assert isinstance(hdu1, BinTableHDU)
+            data_read_table = hdu1.data
+            assert isinstance(data_read_table, np.ndarray)
+            assert np.allclose(np.asarray(data_read_table["col1"]), data_table["col1"].numpy())
+            assert np.allclose(np.asarray(data_read_table["col2"]), data_table["col2"].numpy())
+            assert hdu1.header["TBLKEY"] == "TBLVAL"
 
     filenames = [filename, "test_write_hdulist.fits"]
 
@@ -67,7 +78,12 @@ def test_table_write_bool_preserved():
     try:
         torchsky.write(filename, data_table, overwrite=True)
         with fits.open(filename) as hdul:
-            values = hdul[1].data["flag"]
+            hdu1 = hdul[1]
+            from astropy.io.fits.hdu.table import BinTableHDU
+            assert isinstance(hdu1, BinTableHDU)
+            assert hdu1.data is not None
+            values = hdu1.data["flag"]
+            assert isinstance(values, np.ndarray)
             assert values.tolist() == [True, False, True]
     finally:
         if os.path.exists(filename):
@@ -80,7 +96,12 @@ def test_write_accepts_list_table_dict():
     try:
         torchsky.write(filename, table, overwrite=True)
         with fits.open(filename) as hdul:
-            values = hdul[1].data["flag"]
+            hdu1 = hdul[1]
+            from astropy.io.fits.hdu.table import BinTableHDU
+            assert isinstance(hdu1, BinTableHDU)
+            assert hdu1.data is not None
+            values = hdu1.data["flag"]
+            assert isinstance(values, np.ndarray)
             assert values.tolist() == [True, False, True]
     finally:
         if os.path.exists(filename):
@@ -100,12 +121,14 @@ def test_table_write_rich_types_pending_cfitsio_impl():
         ],
     }
     try:
-        torchsky.write(filename, table, header={"EXTNAME": "CATALOG"}, overwrite=True)
+        torchsky.write(filename, table, header=torchsky.Header({"EXTNAME": "CATALOG"}), overwrite=True)
         with torchsky.open(filename) as hdul:
             table_hdu = hdul[1]
+            assert isinstance(table_hdu, torchsky.TableHDU)
             assert table_hdu.header.get("EXTNAME") == "CATALOG"
             assert table_hdu.get_string_column("NAME") == ["alpha", "beta", "gamma"]
             vals = table_hdu["Z"].squeeze(-1)
+            assert isinstance(vals, torch.Tensor)
             assert np.allclose(
                 vals.numpy(), np.array([1 + 2j, 3 + 4j, 5 + 6j], dtype=np.complex64)
             )
@@ -143,6 +166,7 @@ def test_write_compressed_image_roundtrip():
     try:
         torchsky.write(filename, data, overwrite=True, compress=True)
         out = torchsky.read(filename, hdu=1)
+        assert isinstance(out, torch.Tensor)
         assert torch.equal(out, data)
     finally:
         if os.path.exists(filename):
@@ -165,8 +189,13 @@ def test_write_compressed_hdulist_mixed():
             assert len(opened) == 3
             assert opened[1].header.get("EXTNAME") == "SCI"
             assert opened[2].header.get("EXTNAME") == "CAT"
-        assert torch.equal(torchsky.read(filename, hdu=1), image)
+        out0 = torchsky.read(filename, hdu=1)
+        out1 = torchsky.read(filename, hdu=2)
+        assert isinstance(out0, torch.Tensor)
+        assert isinstance(out1, torch.Tensor)
+        assert torch.equal(out0, image)
         table_out = torchsky.read(filename, hdu=2)
+        assert isinstance(table_out, dict)
         assert table_out["ID"].squeeze(-1).tolist() == [1, 2, 3]
     finally:
         if os.path.exists(filename):
@@ -189,8 +218,12 @@ def test_write_compressed_hdulist_images_roundtrip():
             assert len(opened) == 3
             assert opened[1].header.get("EXTNAME") == "SCI0"
             assert opened[2].header.get("EXTNAME") == "SCI1"
-        assert torch.equal(torchsky.read(filename, hdu=1), img0)
-        assert torch.equal(torchsky.read(filename, hdu=2), img1)
+        out0 = torchsky.read(filename, hdu=1)
+        out1 = torchsky.read(filename, hdu=2)
+        assert isinstance(out0, torch.Tensor)
+        assert isinstance(out1, torch.Tensor)
+        assert torch.equal(out0, img0)
+        assert torch.equal(out1, img1)
     finally:
         if os.path.exists(filename):
             os.remove(filename)
@@ -203,8 +236,12 @@ def test_write_compressed_image_tuple_roundtrip():
     payload = (img0, img1)
     try:
         torchsky.write(filename, payload, overwrite=True, compress=True)
-        assert torch.equal(torchsky.read(filename, hdu=1), img0)
-        assert torch.equal(torchsky.read(filename, hdu=2), img1)
+        out0 = torchsky.read(filename, hdu=1)
+        out1 = torchsky.read(filename, hdu=2)
+        assert isinstance(out0, torch.Tensor)
+        assert isinstance(out1, torch.Tensor)
+        assert torch.equal(out0, img0)
+        assert torch.equal(out1, img1)
     finally:
         if os.path.exists(filename):
             os.remove(filename)

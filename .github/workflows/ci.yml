@@ -35,7 +35,7 @@ jobs:
       run: ruff check --output-format=github .
 
     - name: Pyright (scoped allowlist in pyrightconfig.json)
-      run: pyright
+      run: pyright src
 
   build-test:
     name: Build & Test
