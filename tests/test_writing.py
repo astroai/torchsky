@@ -124,7 +124,7 @@ def test_table_write_rich_types_pending_cfitsio_impl():
         torchsky.write(filename, table, header=torchsky.Header({"EXTNAME": "CATALOG"}), overwrite=True)
         with torchsky.open(filename) as hdul:
             table_hdu = hdul[1]
-            assert isinstance(table_hdu, torchsky.TableHDU)
+            assert isinstance(table_hdu, (torchsky.TableHDU, torchsky.TableHDURef))
             assert table_hdu.header.get("EXTNAME") == "CATALOG"
             assert table_hdu.get_string_column("NAME") == ["alpha", "beta", "gamma"]
             vals = table_hdu["Z"].squeeze(-1)
@@ -149,7 +149,7 @@ def test_table_write_complex_tensor_pending_cfitsio_impl():
         torchsky.write(filename, table, overwrite=True)
         with torchsky.open(filename) as hdul:
             table_hdu = hdul[1]
-            assert isinstance(table_hdu, torchsky.TableHDU)
+            assert isinstance(table_hdu, (torchsky.TableHDU, torchsky.TableHDURef))
             vals = table_hdu["Z"].squeeze(-1)
             assert np.allclose(
                 vals.numpy(), np.array([1 + 2j, 3 + 4j, 5 + 6j], dtype=np.complex64)
@@ -189,11 +189,11 @@ def test_write_compressed_hdulist_mixed():
             assert len(opened) == 3
             assert opened[1].header.get("EXTNAME") == "SCI"
             assert opened[2].header.get("EXTNAME") == "CAT"
-        out0 = torchsky.read(filename, hdu=1)
-        out1 = torchsky.read(filename, hdu=2)
-        assert isinstance(out0, torch.Tensor)
-        assert isinstance(out1, torch.Tensor)
-        assert torch.equal(out0, image)
+            out0 = torchsky.read(filename, hdu=1)
+            out1 = torchsky.read(filename, hdu=2)
+            assert isinstance(out0, torch.Tensor)
+            assert isinstance(out1, dict)
+            assert torch.equal(out0, image)
         table_out = torchsky.read(filename, hdu=2)
         assert isinstance(table_out, dict)
         assert table_out["ID"].squeeze(-1).tolist() == [1, 2, 3]
