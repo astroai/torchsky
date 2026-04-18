@@ -28,7 +28,7 @@ from .dataloader import (
 from .datasets import FITSDataset, IterableFITSDataset, TableChunkDataset
 from .frame import read_tensor_frame, to_tensor_frame, write_tensor_frame
 from .hdu import HDUList, Header, TableHDU, TableHDURef, TensorHDU
-from .interop import to_arrow, to_pandas
+from .interop import to_arrow, to_pandas, to_polars
 from . import table
 from . import sphere
 from .header_parser import fast_parse_header
@@ -231,6 +231,7 @@ __all__ = [
     "read_tensor_frame",
     "write_tensor_frame",
     "to_pandas",
+    "to_polars",
     "to_arrow",
     "table",
     # Split-ready namespaces
