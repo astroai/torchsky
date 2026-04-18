@@ -18,7 +18,7 @@ To build `torchsky` from source, you'll need a C++ compiler and CMake.
 
 ### Prerequisites
 
-- Python 3.10+ (matches `requires-python` in `pyproject.toml`)
+- Python **3.12+** and **below 3.15** (matches `requires-python` in `pyproject.toml`)
 - C++17 compatible compiler (GCC, Clang, MSVC)
 - CMake 3.15+ (as in the top-level `CMakeLists.txt`; use a recent release when building against current PyTorch/CUDA)
 - Ninja (recommended)

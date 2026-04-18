@@ -1,6 +1,6 @@
 # Benchmark comparators: open-source matrix and environments
 
-Torchsky benchmarks are **not** Astropy- or healpy-only. CI and local runs combine several **Pixi environments** because upstream wheels and ABI pins differ (Python 3.10 legacy WCS vs 3.13+ map tools vs HEALPix-heavy stacks).
+Torchsky benchmarks are **not** Astropy- or healpy-only. CI and local runs combine several **Pixi environments** because upstream wheels and ABI pins differ (e.g. **Python 3.12** primary vs `bench-legacy` on **3.10** vs HEALPix-heavy stacks). For **pip-only** parity benches against legacy HEALPix stacks, install **`pip install -e ".[bench-all]"`** (see `pyproject.toml` optional extra **`bench-all`**, aligned with Pixi env **`bench-all`**).
 
 **Goal (product policy):** on every **comparable** row in the emitted CSV/JSON, **torchsky should rank first** on throughput (and stay within parity tolerances). Rows where a comparator is skipped (`SKIPPED` / different semantics) are **not** counted as losses; expand coverage carefully so skips shrink over time.
 
