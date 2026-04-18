@@ -15,7 +15,7 @@ def install_pre_push_hook():
     hook_content = """#!/bin/bash
 # Pre-push hook to run local CI gate
 echo "🚀 Running local CI gate before push..."
-pixi run ci-local || {
+/Users/fabbros/.pixi/bin/pixi run ci-local || {
     echo "❌ Local CI failed. Push aborted. Fix errors or use --no-verify if you are absolutely sure."
     exit 1
 }
