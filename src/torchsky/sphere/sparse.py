@@ -476,39 +476,75 @@ class SparseHealpixMap:
         )
 
     def write_fits(self, filename: str, overwrite: bool = False) -> None:
-        import numpy as np
+        """Write sparse map as a FITS BINTABLE via :func:`torchsky.write` (CFITSIO, no Python fitsio)."""
+        import torchsky
 
-        fitsio = __import__("fitsio")
         header = {
             "NSIDE": self.nside,
             "ORDERING": "NEST" if self.nest else "RING",
             "SENTINEL": self.fill_value,
+            "EXTNAME": "SPARSE",
         }
         if self.nside_coverage:
             header["NSIDE_COV"] = self.nside_coverage
-        data = np.zeros(self.pixels.numel(), dtype=[("PIXEL", "i8"), ("VALUE", "f4")])
-        data["PIXEL"] = self.pixels.cpu().numpy()
-        data["VALUE"] = self.values.cpu().numpy()
-        with fitsio.FITS(filename, "rw", clobber=overwrite) as fits:
-            fits.write(data, header=header, extname="SPARSE")
+        pix = self.pixels.detach().cpu().reshape(-1).to(torch.int64)
+        val = self.values.detach().cpu().reshape(-1).to(torch.float32)
+        torchsky.write(
+            filename,
+            {"PIXEL": pix, "VALUE": val},
+            header=header,
+            overwrite=overwrite,
+        )
 
     @classmethod
     def read_fits(cls, filename: str) -> "SparseHealpixMap":
-        import numpy as np
+        """Read FITS written by :meth:`write_fits` using :func:`torchsky.read_table`."""
+        import torchsky
 
-        fitsio = __import__("fitsio")
-        with fitsio.FITS(filename) as fits:
-            header = fits["SPARSE"].read_header()
-            data = fits["SPARSE"].read()
-            nside = header.get("NSIDE")
-            nest = header.get("ORDERING") == "NEST"
-            fv = header.get("SENTINEL", float(_healpix.UNSEEN))
-            ns_cov = header.get("NSIDE_COV")
-            pixels = torch.from_numpy(data["PIXEL"].astype(np.int64))
-            values = torch.from_numpy(data["VALUE"].astype(np.float32))
-            return cls.from_pixels(
-                pixels, values, nside, nest=nest, nside_coverage=ns_cov, sentinel=fv
-            )
+        hdu = _resolve_sparse_table_hdu_index(filename)
+        hdr = torchsky.get_header(filename, hdu=hdu)
+        table = torchsky.read_table(filename, hdu=hdu)
+        nside = int(hdr.get("NSIDE", 0))
+        nest = str(hdr.get("ORDERING", "NEST")).strip() == "NEST"
+        fv_raw = hdr.get("SENTINEL", float(_healpix.UNSEEN))
+        fv = float(fv_raw) if fv_raw is not None else float(_healpix.UNSEEN)
+        ns_cov = hdr.get("NSIDE_COV")
+        ns_cov_i = int(ns_cov) if ns_cov is not None else None
+
+        pix_key = next((k for k in ("PIXEL", "pixel") if k in table), None)
+        val_key = next((k for k in ("VALUE", "value") if k in table), None)
+        if pix_key is None or val_key is None:
+            keys = list(table.keys()) if hasattr(table, "keys") else []
+            raise ValueError(f"SPARSE table missing PIXEL/VALUE columns; have {keys!r}")
+        pixels = torch.as_tensor(table[pix_key], dtype=torch.int64).reshape(-1)
+        values = torch.as_tensor(table[val_key], dtype=torch.float32).reshape(-1)
+        return cls.from_pixels(
+            pixels, values, nside, nest=nest, nside_coverage=ns_cov_i, sentinel=fv
+        )
+
+
+def _resolve_sparse_table_hdu_index(path: str) -> int:
+    """Return 0-based HDU index of the HealSparse ``SPARSE`` binary table extension."""
+    import torchsky.cpp as cpp
+
+    if hasattr(cpp, "resolve_hdu_name_cached"):
+        try:
+            return int(cpp.resolve_hdu_name_cached(path, "SPARSE"))
+        except Exception:
+            pass
+    i = 0
+    while i < 512:
+        try:
+            h_list = cpp.read_header_dict(path, i)
+        except Exception:
+            break
+        if not h_list:
+            break
+        ext = h_list.get("EXTNAME")
+        if ext == "SPARSE" or (isinstance(ext, str) and ext.strip() == "SPARSE"):
+            return i
+        i += 1
+    raise ValueError(f"No FITS extension with EXTNAME 'SPARSE' in {path!r}")
 
 
 HealSparseMap = SparseHealpixMap

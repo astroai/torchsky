@@ -3,7 +3,6 @@
 import json
 import math
 from typing import Literal
-import importlib
 
 import torch
 from torch import Tensor
@@ -102,6 +101,45 @@ def _normalize_moc(uniq: Tensor) -> Tensor:
     max_order = _max_order_from_uniq(u)
     ranges = _uniq_to_ranges(u, max_order)
     return _ranges_to_uniq(ranges, max_order)
+
+
+def _resolve_moc_table_hdu_index(path: str) -> int:
+    """Return 0-based HDU index of the IVOA MOC binary table extension."""
+    import torchsky.cpp as cpp
+
+    if hasattr(cpp, "resolve_hdu_name_cached"):
+        try:
+            return int(cpp.resolve_hdu_name_cached(path, "MOC"))
+        except Exception:
+            pass
+    i = 0
+    while i < 512:
+        try:
+            h_list = cpp.read_header_dict(path, i)
+        except Exception:
+            break
+        if not h_list:
+            break
+        ext = h_list.get("EXTNAME")
+        if ext == "MOC" or (isinstance(ext, str) and ext.strip() == "MOC"):
+            return i
+        i += 1
+    raise ValueError(f"No FITS extension with EXTNAME 'MOC' in {path!r}")
+
+
+def _uniq_column_from_table_dict(table: dict) -> Tensor:
+    """Pick UNIQ column or the first 1D integer column (legacy MOC files)."""
+    for key in ("UNIQ", "uniq"):
+        if key in table:
+            return torch.as_tensor(table[key], dtype=torch.int64).reshape(-1)
+    for _name in sorted(table.keys()):
+        val = table[_name]
+        t = torch.as_tensor(val)
+        if t.dtype in (torch.int32, torch.int64):
+            return t.reshape(-1).to(torch.int64)
+    raise ValueError(
+        "MOC FITS table has no UNIQ column and no integer column suitable as UNIQ"
+    )
 
 
 class MOC:
@@ -403,49 +441,31 @@ class MOC:
         return cls(uniqs)
 
     def write_fits(self, filename: str, overwrite: bool = False) -> None:
-        """Write the MOC to a FITS file following the IVOA MOC standard."""
-        fitsio = importlib.import_module("fitsio")
-        # IVOA MOC FITS encodes UNIQ as a single column table extension
-        # with TFORM = '1K' (int64) or '1J' (int32 if order < 15)
-        # and EXTNAME = 'MOC'
+        """Write the MOC to a FITS file following the IVOA MOC standard.
 
-        header = [
-            {"name": "PIXTYPE", "value": "HEALPIX"},
-            {"name": "ORDERING", "value": "NUNIQ"},
-            {"name": "COORDSYS", "value": "C"},  # Celestial / ICRS
-            {"name": "MOCORDER", "value": self.max_order},
-            {"name": "MOCTOOL", "value": "torchsky"},
-        ]
+        Uses :func:`torchsky.write` (CFITSIO-backed) — no Python ``fitsio`` dependency.
+        """
+        import torchsky
 
-        import numpy as np
-
-        data = np.zeros(len(self.uniq), dtype=[("UNIQ", "i8")])
-        data["UNIQ"] = self.uniq.cpu().numpy()
-
-        with fitsio.FITS(filename, "rw", clobber=overwrite) as fits:
-            fits.write(data, header=header, extname="MOC")
+        header = {
+            "PIXTYPE": "HEALPIX",
+            "ORDERING": "NUNIQ",
+            "COORDSYS": "C",
+            "MOCORDER": self.max_order,
+            "MOCTOOL": "torchsky",
+            "EXTNAME": "MOC",
+        }
+        u = self.uniq.detach().cpu().reshape(-1).to(torch.int64)
+        torchsky.write(filename, {"UNIQ": u}, header=header, overwrite=overwrite)
 
     @classmethod
     def read_fits(cls, filename: str) -> "MOC":
-        """Read a MOC from an IVOA FITS file."""
-        fitsio = importlib.import_module("fitsio")
+        """Read a MOC from an IVOA FITS file via :func:`torchsky.read_table`."""
+        import torchsky
 
-        with fitsio.FITS(filename) as fits:
-            data = fits["MOC"].read()
-            if "UNIQ" in data.dtype.names:
-                # Convert to native byte order if necessary (FITS is big-endian)
-                arr = data["UNIQ"]
-                if arr.dtype.byteorder not in ("=", "|"):
-                    arr = arr.astype(arr.dtype.newbyteorder("="))
-                uniqs = torch.from_numpy(arr)
-            else:
-                # Older versions might just use the first column
-                arr = data.iloc[:, 0]
-                if hasattr(arr, "values"):
-                    arr = arr.values
-                if arr.dtype.byteorder not in ("=", "|"):
-                    arr = arr.astype(arr.dtype.newbyteorder("="))
-                uniqs = torch.from_numpy(arr)
+        hdu = _resolve_moc_table_hdu_index(filename)
+        table = torchsky.read_table(filename, hdu=hdu)
+        uniqs = _uniq_column_from_table_dict(table)
         return cls(uniqs)
 
     def boundary(self) -> list[Tensor]:
