@@ -11,7 +11,6 @@ import re
 from pathlib import Path
 from typing import Any, Literal
 
-import numpy as np
 import torch
 
 InrSpectralSource = Literal["svo", "builtin", "file", "gaussian"]
@@ -37,34 +36,34 @@ def field_observation_spectral_kwargs(spec: dict[str, Any]) -> dict[str, Any]:
                 "transmission_wavelength and transmission_throughput must both be present in spec"
             )
         out["transmission_wavelength"] = torch.as_tensor(
-            np.asarray(tw), dtype=torch.float32
+            torch.as_tensor(tw), dtype=torch.float32
         )
         out["transmission_throughput"] = torch.as_tensor(
-            np.asarray(tt), dtype=torch.float32
+            torch.as_tensor(tt), dtype=torch.float32
         )
     return out
 
 
 def _prepare_curve_for_field(
-    wavelength: np.ndarray,
-    transmission: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
+    wavelength: torch.Tensor,
+    transmission: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Sort, clip, merge duplicate wavelengths (mean throughput) for tabulated bandpass."""
-    w = np.asarray(wavelength, dtype=np.float64).reshape(-1)
-    t = np.clip(np.asarray(transmission, dtype=np.float64).reshape(-1), 0.0, None)
+    w = torch.as_tensor(wavelength, dtype=torch.float64).reshape(-1)
+    t = torch.clip(torch.as_tensor(transmission, dtype=torch.float64).reshape(-1), 0.0, None)
     if w.shape != t.shape:
         raise ValueError("wavelength and transmission must have the same shape")
     if w.size < 2:
         raise ValueError("tabulated transmission requires at least two samples")
-    order = np.argsort(w)
+    order = torch.argsort(w)
     w, t = w[order], t[order]
-    uw, inv = np.unique(w, return_inverse=True)
+    uw, inv = torch.unique(w, return_inverse=True)
     if uw.size < 2:
         raise ValueError("tabulated transmission requires at least two distinct wavelengths")
-    ts = np.bincount(inv, weights=t, minlength=uw.size)
-    cnt = np.bincount(inv, minlength=uw.size)
-    ta = ts / np.maximum(cnt, 1)
-    return uw.astype(np.float32), ta.astype(np.float32)
+    ts = torch.bincount(inv, weights=t, minlength=uw.size)
+    cnt = torch.bincount(inv, minlength=uw.size)
+    ta = ts / torch.maximum(cnt, 1)
+    return uw.astype(torch.float32), ta.astype(torch.float32)
 
 
 def bandpass_gaussian(
@@ -131,44 +130,44 @@ def bandpass_from_transmission_file(
             continue
     if len(rows) < 3:
         raise ValueError(f"{p}: need at least 3 wavelength/transmission samples")
-    wl = np.array([a for a, _ in rows], dtype=np.float64)
-    tr = np.clip(np.array([b for _, b in rows], dtype=np.float64), 0.0, None)
+    wl = torch.tensor([a for a, _ in rows], dtype=torch.float64)
+    tr = torch.clip(torch.tensor([b for _, b in rows], dtype=torch.float64), 0.0, None)
     if str(wavelength_unit).lower() == "nm":
         wl = wl * 10.0
     return _summarize_transmission_curve(wl, tr, band_name=str(band_name).upper())
 
 
 def _summarize_transmission_curve(
-    wavelength: np.ndarray,
-    transmission: np.ndarray,
+    wavelength: torch.Tensor,
+    transmission: torch.Tensor,
     *,
     band_name: str,
 ) -> dict[str, Any]:
-    t = np.asarray(transmission, dtype=np.float64)
-    w = np.asarray(wavelength, dtype=np.float64)
+    t = torch.as_tensor(transmission, dtype=torch.float64)
+    w = torch.as_tensor(wavelength, dtype=torch.float64)
     if w.shape != t.shape:
         raise ValueError("wavelength and transmission must have the same shape")
-    peak = float(np.max(t))
+    peak = float(torch.max(t))
     if not math.isfinite(peak) or peak <= 0.0:
         raise ValueError("transmission must have a positive peak")
     mask = t > peak * 1.0e-3
-    if not np.any(mask):
+    if not torch.any(mask):
         mask = t > 0.0
     w_eff = w[mask]
     t_eff = t[mask]
-    order = np.argsort(w_eff)
+    order = torch.argsort(w_eff)
     w_eff = w_eff[order]
     t_eff = t_eff[order]
-    num = float(np.sum(w_eff * t_eff))
-    den = float(np.sum(t_eff))
-    lam_eff = num / den if den > 0.0 else float(np.mean(w_eff))
+    num = float(torch.sum(w_eff * t_eff))
+    den = float(torch.sum(t_eff))
+    lam_eff = num / den if den > 0.0 else float(torch.mean(w_eff))
     lam_min = float(w_eff.min())
     lam_max = float(w_eff.max())
     half = 0.5 * peak
     above = t_eff >= half
     fwhm: float | None = None
-    if np.any(above):
-        idx = np.where(above)[0]
+    if torch.any(above):
+        idx = torch.where(above)[0]
         fwhm = float(w_eff[idx.max()] - w_eff[idx.min()])
     sigma = (fwhm / _GAUSS_FWHM_SIGMA) if fwhm and fwhm > 0.0 else (lam_max - lam_min) / _GAUSS_FWHM_SIGMA
     if not math.isfinite(sigma) or sigma <= 0.0:
@@ -236,8 +235,8 @@ def bandpass_from_svo(
     if filter_id:
         fid = str(filter_id).strip()
         data = SvoFps.get_transmission_data(fid)
-        wl = np.asarray(data["Wavelength"], dtype=np.float64)
-        tr = np.asarray(data["Transmission"], dtype=np.float64)
+        wl = torch.as_tensor(data["Wavelength"], dtype=torch.float64)
+        tr = torch.as_tensor(data["Transmission"], dtype=torch.float64)
         spec = _summarize_transmission_curve(wl, tr, band_name=bn)
         spec["svo_filter_id"] = fid
         return spec
@@ -246,8 +245,8 @@ def bandpass_from_svo(
     row = _pick_svo_row(fl, band_token=band_name, prefer=prefer)
     fid_out = str(row["filterID"])
     data = SvoFps.get_transmission_data(fid_out)
-    wl = np.asarray(data["Wavelength"], dtype=np.float64)
-    tr = np.asarray(data["Transmission"], dtype=np.float64)
+    wl = torch.as_tensor(data["Wavelength"], dtype=torch.float64)
+    tr = torch.as_tensor(data["Transmission"], dtype=torch.float64)
     spec = _summarize_transmission_curve(wl, tr, band_name=bn)
     spec["svo_filter_id"] = fid_out
     return spec
