@@ -26,7 +26,7 @@ jobs:
     - name: Install code quality tools
       run: |
         python -m pip install --upgrade pip
-        pip install ruff pyright pandas pyarrow polars
+        pip install ruff pyright pandas pyarrow polars psutil
 
     # Tree-wide `ruff format --check` is not enabled yet (many files predate ruff format).
     - name: Lint with ruff
@@ -62,7 +62,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip wheel setuptools
         pip install torch --index-url https://download.pytorch.org/whl/cpu
-        pip install nanobind scikit-build-core
+        pip install nanobind scikit-build-core psutil
         pip install -e ".[test]" --no-build-isolation
 
     - name: Run full test suite

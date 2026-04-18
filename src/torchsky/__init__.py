@@ -7,7 +7,7 @@ optimized for PyTorch tensors and pytorch-frame TensorFrames.
 
 import importlib
 import logging as _stdlib_logging
-from typing import Any, Dict, List, Optional, Union, Iterator, Tuple, Sequence
+from typing import Any, Dict, List, Optional, Union, Iterator, Tuple, Sequence, overload, Literal
 from collections import OrderedDict
 
 import numpy as np
@@ -868,6 +868,94 @@ def read_table_rows(
     )
 
 
+@overload
+def read(
+    path: str,
+    hdu: Union[int, str, None] = None,
+    device: str = "cpu",
+    mmap: Union[bool, str] = "auto",
+    fp16: bool = False,
+    bf16: bool = False,
+    raw_scale: bool = False,
+    scale_on_device: bool = True,
+    columns: Optional[List[str]] = None,
+    start_row: int = 1,
+    num_rows: int = -1,
+    cache_capacity: int = 10,
+    handle_cache_capacity: int = 16,
+    fast_header: bool = True,
+    return_header: Literal[False] = False,
+    mode: str = "auto",
+    policy: str = "default",
+) -> Union[Tensor, Dict[str, Any]]: ...
+
+
+@overload
+def read(
+    path: str,
+    hdu: Union[int, str, None] = None,
+    device: str = "cpu",
+    mmap: Union[bool, str] = "auto",
+    fp16: bool = False,
+    bf16: bool = False,
+    raw_scale: bool = False,
+    scale_on_device: bool = True,
+    columns: Optional[List[str]] = None,
+    start_row: int = 1,
+    num_rows: int = -1,
+    cache_capacity: int = 10,
+    handle_cache_capacity: int = 16,
+    fast_header: bool = True,
+    return_header: Literal[True] = ...,
+    mode: str = "auto",
+    policy: str = "default",
+) -> Tuple[Union[Tensor, Dict[str, Any]], Header]: ...
+
+
+@overload
+def read(
+    path: Union[List[str], Tuple[str, ...]],
+    hdu: Union[int, str, None] = None,
+    device: str = "cpu",
+    mmap: Union[bool, str] = "auto",
+    fp16: bool = False,
+    bf16: bool = False,
+    raw_scale: bool = False,
+    scale_on_device: bool = True,
+    columns: Optional[List[str]] = None,
+    start_row: int = 1,
+    num_rows: int = -1,
+    cache_capacity: int = 10,
+    handle_cache_capacity: int = 16,
+    fast_header: bool = True,
+    return_header: Literal[False] = False,
+    mode: str = "auto",
+    policy: str = "default",
+) -> List[Union[Tensor, Dict[str, Any]]]: ...
+
+
+@overload
+def read(
+    path: Union[List[str], Tuple[str, ...]],
+    hdu: Union[int, str, None] = None,
+    device: str = "cpu",
+    mmap: Union[bool, str] = "auto",
+    fp16: bool = False,
+    bf16: bool = False,
+    raw_scale: bool = False,
+    scale_on_device: bool = True,
+    columns: Optional[List[str]] = None,
+    start_row: int = 1,
+    num_rows: int = -1,
+    cache_capacity: int = 10,
+    handle_cache_capacity: int = 16,
+    fast_header: bool = True,
+    return_header: Literal[True] = ...,
+    mode: str = "auto",
+    policy: str = "default",
+) -> List[Tuple[Union[Tensor, Dict[str, Any]], Header]]: ...
+
+
 def read(
     path: Union[str, List[str], Tuple[str, ...]],
     hdu: Union[int, str, List[int], Tuple[int, ...], None] = None,
@@ -886,7 +974,7 @@ def read(
     return_header: bool = False,
     mode: str = "auto",
     policy: str = "default",
-):
+) -> Any:
     """Read FITS data with optimizations.
 
     Args:

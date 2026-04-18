@@ -64,15 +64,19 @@ for batch in torchsky.table.scan("survey.fits", batch_size=50_000):
 
 torchsky is designed for high-throughput astronomical workflows, delivering **10x-100x speedups** over `astropy` for large arrays and tables. In the 0.3.0 exhaustive suite, it maintains a strong lead in FITS image and table I/O (1.5x-4x median speedups vs `fitsio`) while achieving parity or better in the HEALPix sphere domain (~89% win rate). While Batch WCS throughput (N > 100k) excels, small-N coordinate transforms and complex spin-harmonic operations (sphere) remain current targets for the 0.3.x optimization roadmap.
 
-Full benchmarks and known deficits: [`docs/benchmarks.md`](docs/benchmarks.md)
+- **Current Benchmarks**: [`docs/benchmarks.md`](docs/benchmarks.md)
+- **Historical Metrics & Gates**: [`docs/BENCHMARK_HISTORY.md`](docs/BENCHMARK_HISTORY.md)
 
 ## Documentation
 
-- User/API reference: [`docs/api.md`](docs/api.md)
-- Ecosystem compatibility (healpy, Astropy, fitsio, …): [`docs/compatibility.md`](docs/compatibility.md)
-- End-to-end examples: [`docs/examples.md`](docs/examples.md)
-- Installation notes: [`docs/install.md`](docs/install.md)
-- Changelog: [`docs/changelog.md`](docs/changelog.md)
+- **User/API Reference**: [`docs/api.md`](docs/api.md)
+- **Agent Operating Guide**: [`docs/AGENTS.md`](docs/AGENTS.md)
+- **Research & Knowledge Base**: [`docs/RESEARCH_KNOWLEDGE_BASE.md`](docs/RESEARCH_KNOWLEDGE_BASE.md)
+- **Vision & Roadmap**: [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- **Compatibility (healpy, Astropy, ...)**: [`docs/compatibility.md`](docs/compatibility.md)
+- **Install & Dev Environment**: [`docs/install.md`](docs/install.md)
+- **Migration & History**: [`docs/HISTORY.md`](docs/HISTORY.md)
+- **Changelog**: [`docs/changelog.md`](docs/changelog.md)
 
 ## License
 

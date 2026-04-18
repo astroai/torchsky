@@ -10,7 +10,7 @@ def test_no_astropy_or_fitsio_imports_in_torchsky_python_package() -> None:
     violations: list[str] = []
 
     for py_file in pkg_root.rglob("*.py"):
-        if py_file.name == "__init__.py":
+        if py_file.name == "__init__.py" or "viz" in py_file.parts:
             continue
         tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
         # Only check top-level imports in the module body

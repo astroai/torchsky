@@ -48,6 +48,7 @@ class TestPerformance:
             # Measure read time
             start_time = time.time()
             result, _ = torchsky.read(filepath, return_header=True)
+            assert isinstance(result, torch.Tensor)
             read_time = time.time() - start_time
 
             # Should be fast due to zero-copy optimization
@@ -147,6 +148,7 @@ class TestPerformance:
         try:
             start_time = time.time()
             result, _ = torchsky.read(filepath, return_header=True)
+            assert isinstance(result, torch.Tensor)
             read_time = time.time() - start_time
 
             assert result.shape == shape
@@ -167,6 +169,7 @@ class TestPerformance:
             # Test direct GPU loading
             start_time = time.time()
             result_gpu, _ = torchsky.read(filepath, device="cuda", return_header=True)
+            assert isinstance(result_gpu, torch.Tensor)
             gpu_read_time = time.time() - start_time
 
             assert result_gpu.device.type == "cuda"
@@ -190,6 +193,7 @@ class TestPerformance:
             subset, _ = torchsky.read(
                 filepath + "[0][1000:2000,1000:2000]", return_header=True
             )
+            assert isinstance(subset, torch.Tensor)
             subset_time = time.time() - start_time
 
             # FITS slicing is 1-based inclusive, so 1000:2000 is 1001 elements
@@ -221,6 +225,7 @@ class TestPerformanceRegression:
                 for _ in range(3):
                     start_time = time.time()
                     result, _ = torchsky.read(f.name, return_header=True)
+                    assert isinstance(result, torch.Tensor)
                     read_time = time.time() - start_time
                     times.append(read_time)
 
@@ -253,6 +258,7 @@ class TestPerformanceRegression:
                 mem_before = process.memory_info().rss / 1024 / 1024  # MB
 
                 result, _ = torchsky.read(f.name, return_header=True)
+                assert isinstance(result, torch.Tensor)
 
                 mem_after = process.memory_info().rss / 1024 / 1024  # MB
                 memory_increase = mem_after - mem_before
