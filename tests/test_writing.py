@@ -125,7 +125,9 @@ def test_table_write_complex_tensor_pending_cfitsio_impl():
     try:
         torchsky.write(filename, table, overwrite=True)
         with torchsky.open(filename) as hdul:
-            vals = hdul[1]["Z"].squeeze(-1)
+            table_hdu = hdul[1]
+            assert isinstance(table_hdu, torchsky.TableHDU)
+            vals = table_hdu["Z"].squeeze(-1)
             assert np.allclose(
                 vals.numpy(), np.array([1 + 2j, 3 + 4j, 5 + 6j], dtype=np.complex64)
             )
@@ -214,5 +216,6 @@ def test_write_single_image_cuda_tensor_roundtrip(tmp_path) -> None:
     x = torch.ones(4, 5, device="cuda", dtype=torch.float32) * 2.25
     torchsky.write(str(path), x, overwrite=True)
     y = torchsky.read(str(path), hdu=0)
+    assert isinstance(y, torch.Tensor)
     assert y.device.type == "cpu"
     assert torch.allclose(y, torch.full((4, 5), 2.25))

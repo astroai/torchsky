@@ -73,6 +73,7 @@ torchsky is designed for high-throughput astronomical workflows, delivering **10
 - **Agent Operating Guide**: [`docs/AGENTS.md`](docs/AGENTS.md)
 - **Research & Knowledge Base**: [`docs/RESEARCH_KNOWLEDGE_BASE.md`](docs/RESEARCH_KNOWLEDGE_BASE.md)
 - **Vision & Roadmap**: [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- **World-Model Whitepaper Plan**: [`docs/WORLD_MODEL_WHITEPAPER_PLAN.md`](docs/WORLD_MODEL_WHITEPAPER_PLAN.md)
 - **Compatibility (healpy, Astropy, ...)**: [`docs/compatibility.md`](docs/compatibility.md)
 - **Install & Dev Environment**: [`docs/install.md`](docs/install.md)
 - **Migration & History**: [`docs/HISTORY.md`](docs/HISTORY.md)
