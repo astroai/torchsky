@@ -6,8 +6,6 @@ Environment:
   automatic default for APIs that use :func:`default_compute_device`.
 """
 
-from __future__ import annotations
-
 import os
 
 import torch
