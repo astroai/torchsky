@@ -12,3 +12,12 @@ repos:
       - id: ruff
         args: [--fix]
         types_or: [python, pyi]
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright
+        entry: /Users/fabbros/.pixi/bin/pixi run -e test pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true

@@ -1936,11 +1936,11 @@ class SpectralBasisField(_BaseFieldModel):
         )
         spectral_basis = self._spectral_basis(lam).to(dtype=self.coeff_head.weight.dtype)
         out = bias + torch.sum(coeff * spectral_basis, dim=-1)
-        
+
         # Apply per-band amplitude control
         lam_flat = lam.view(-1, 1).to(dtype=self.coeff_head.weight.dtype)
         log_amp = self.spectral_amp_head(lam_flat).view(*out.shape)
-        
+
         return torch.exp(log_amp) * F.softplus(out) + 1.0e-4
 
     def render_bandpass(
@@ -6933,9 +6933,9 @@ def fit_field_model(
                         anchor_weight = torch.where(anchor_valid, anchor_weight, torch.zeros_like(anchor_weight))
                     else:
                         anchor_valid = torch.ones_like(anchor_image, dtype=torch.bool)
-                    
+
                     anchor_residual = torch.where(anchor_valid, anchor_pred - anchor_image, torch.zeros_like(anchor_pred))
-                    
+
                     anchor_weighted_loss = torch.sum(
                         anchor_weight
                         * _field_residual_loss(
@@ -7030,15 +7030,15 @@ def fit_field_model(
                     )
                 else:
                     context_valid = torch.ones_like(context_image, dtype=torch.bool)
-                    
+
                 pooled_pred = _avg_pool_map(context_pred, factor=context_pool)
                 pooled_image = _avg_pool_map(context_image, factor=context_pool)
                 pooled_weight = _avg_pool_map(context_weight_map, factor=context_pool)
-                
+
                 # Use pooled validity approximation: if weight is > 0, it is somewhat valid
                 pooled_valid = pooled_weight > 0.0
                 context_residual = torch.where(pooled_valid, pooled_pred - pooled_image, torch.zeros_like(pooled_pred))
-                
+
                 context_loss = torch.sum(
                     pooled_weight
                     * _field_residual_loss(

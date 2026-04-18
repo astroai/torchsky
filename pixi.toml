@@ -75,7 +75,7 @@ ci-local = "pixi run preflight-push && pixi run typecheck && pixi run test"
 ci-local-heavy = "pixi run -e bench-all -- python -c \"import healpy, hpgeom, healsparse; import astropy_healpix; import spherical_geometry\""
 typecheck = "pixi run -e test pyright"
 verify = "pixi run -e default -- python scripts/verify_setup.py"
-setup-hooks = "pre-commit install"
+setup-hooks = "python scripts/install_hooks.py"
 pre-commit = "pre-commit run --all-files"
 release-manual = "twine upload release_0.2.1/*"
 

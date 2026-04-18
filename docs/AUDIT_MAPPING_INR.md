@@ -1,6 +1,6 @@
 # Deep audit: mapping, mosaicking, and INR (torchsky vs SWarp, Drizzle, Montage, reproject, radio/mm)
 
-**Scope:** `torchsky.map` (image-plane coaddition, spectral cubes, products), `torchsky.map.field` (continuous / INR-style fields), related benchmarks and tests.  
+**Scope:** `torchsky.map` (image-plane coaddition, spectral cubes, products), `torchsky.map.field` (continuous / INR-style fields), related benchmarks and tests.
 **Goal:** Clarity on **parity** with common optical/IR mosaicking stacks and **gaps** for mm/radio workflows, plus a concrete plan for **tests, real-data coverage, and benchmarks**.
 
 ---
