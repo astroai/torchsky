@@ -19,13 +19,13 @@ nanobind = ">=2.10.2"
 scikit-build-core = ">=0.11.6"
 cmake = ">=3.21"
 ninja = ">=1.10"
-python = ">=3.13"
+python = ">=3.12,<3.15"
 pytorch = ">=2.0"
 cfitsio = ">=4"
 
 # Host dependencies - libraries that will be linked into the package
 [package.host-dependencies]
-python = ">=3.13"
+python = ">=3.12,<3.15"
 pytorch = ">=2.0"
 cfitsio = ">=4"
 nanobind = ">=2.10.2"
@@ -37,7 +37,9 @@ pytorch = ">=2.0"
 psutil = ">=5.0"  # For system resource monitoring
 cfitsio = ">=4"
 
-# Workspace dependencies - development environment
+# Workspace dependencies — default (lean) dev shell: build tools + pytest driver only.
+# Ecosystem / legacy astronomy packages live in feature `test`, `bench`, `sphere-bench`, etc.
+# (see AGENTS.md). Run the suite with `pixi run test`, which executes pytest in `-e test`.
 [dependencies]
 # torchsky = { path = "." }  # Don't add self-dependency - causes circular dependency
 pytest = ">=8.0"
@@ -45,11 +47,6 @@ pytest-cov = ">=5.0"
 ruff = ">=0.15.5,<0.16"
 mypy = ">=1.9"
 pip = ">=24.0"
-astropy = ">=5.0"
-fitsio = ">=1.2"
-matplotlib = ">=3.8"
-seaborn = ">=0.13"
-pandas = ">=2.2"
 psutil = ">=5.9"
 scikit-build-core = ">=0.11.6"
 cmake = ">=3.21"
@@ -62,17 +59,22 @@ pre-commit = ">=3.5.0"
 cfitsio = ">=4.4"
 tabulate = ">=0.9.0"
 twine = ">=5.0"
-astroquery = ">=0.4.6"
 
 [tasks]
 # Development tasks
 dev = "pip install -e . --no-build-isolation"
 build = "pixi build"
-test = "KMP_DUPLICATE_LIB_OK=TRUE pytest tests/"
+# Full tests need the `test` env (astropy/fitsio/pyarrow/polars/…); see AGENTS.md.
+test = "KMP_DUPLICATE_LIB_OK=TRUE pixi run -e test -- pytest -n auto"
 lint = "ruff check . && ruff format ."
 # Fast local gate before git push (matches CI code-quality: ruff check only; no file mutations)
-preflight-push = "ruff check . && python -m compileall -q src/torchsky tests"
-verify = "pixi exec python verify_setup.py"
+preflight-push = "ruff check . && pixi run -e default -- python -m compileall -q src/torchsky tests"
+# Mirrors GitHub CI shape: preflight + pyright + full pytest (use before push).
+ci-local = "pixi run preflight-push && pixi run typecheck && pixi run test"
+# Comparator import smoke (optional; `bench-all` Pixi env). Set TORCHSKY_CI_LOCAL_BENCH=1 to include in custom wrappers.
+ci-local-heavy = "pixi run -e bench-all -- python -c \"import healpy, hpgeom, healsparse; import astropy_healpix; import spherical_geometry\""
+typecheck = "pixi run -e test pyright"
+verify = "pixi run -e default -- python scripts/verify_setup.py"
 setup-hooks = "pre-commit install"
 pre-commit = "pre-commit run --all-files"
 release-manual = "twine upload release_0.2.1/*"
@@ -150,14 +152,14 @@ bench-focused = "pixi run -e bench python benchmarks/bench_transforms.py && pixi
 bench-pytest = "pytest benchmarks/ --benchmark-only"
 
 # Development tools
-notebook = "pixi run -e default jupyter lab"
+notebook = "pixi run -e default -- jupyter lab"
 
 # Test phases for development workflow
-test-phase1 = "pixi run -e default python -c 'import sys; sys.path.insert(0, \"src\"); import torchsky; print(\"Phase 1 COMPLETE: All core features implemented\")'"
-test-comprehensive = "pixi run -e default python examples/example_ml_pipeline.py"
-test-transforms = "pixi run -e default pytest tests/test_transforms.py -v"
-test-dataloader = "pixi run -e default pytest tests/test_dataloader.py -v"
-test-buffer = "pixi run -e default pytest tests/test_buffer.py -v"
+test-phase1 = "pixi run -e default -- python -c 'import sys; sys.path.insert(0, \"src\"); import torchsky; print(\"Phase 1 COMPLETE: All core features implemented\")'"
+test-comprehensive = "pixi run -e default -- python examples/example_ml_pipeline.py"
+test-transforms = "pixi run -e default -- pytest tests/test_transforms.py -v"
+test-dataloader = "pixi run -e default -- pytest tests/test_dataloader.py -v"
+test-buffer = "pixi run -e default -- pytest tests/test_buffer.py -v"
 sphere-bench-bootstrap = "pixi run -e sphere-bench python scripts/bootstrap_sphere_bench.py --installer pip"
 sphere-bench-bootstrap-core = "pixi run -e sphere-bench python scripts/bootstrap_sphere_bench.py --installer pip --include astropy-healpix,hpgeom,healpix,mhealpy"
 sphere-bench-bootstrap-harmonics = "pixi run -e sphere-bench python scripts/bootstrap_sphere_bench.py --installer pip --with-harmonics"
@@ -201,14 +203,21 @@ sphere-bench-pipeline = "pixi run -e sphere-bench python benchmarks/bench_pipeli
 sphere-bench-pipeline-gate = "pixi run -e sphere-bench python benchmarks/bench_pipeline_table_sphere.py --n-rows 1000000 --runs 3 --nside 256 --min-read-ratio-filtered-vs-torch 0.2 --min-pipeline-ratio-filtered-vs-no-pushdown 0.7 --min-pipeline-ratio-torch-vs-no-pushdown 0.7 --json-out benchmark_results/pipeline_table_sphere.json"
 
 [feature.prod.dependencies]
-python = ">=3.13"
+python = ">=3.12,<3.15"
 
 # Test feature with comparison libraries
 [feature.test.dependencies]
 astropy = ">=5.0"
 fitsio = ">=1.2"
+pandas = ">=2.2"
+polars = ">=1.0"
 pyarrow = ">=14.0"
+pyright = ">=1.1.350"
+pytest-xdist = ">=3.0"
 requests = ">=2.28"
+
+[feature.test.pypi-dependencies]
+pytorch-frame = ">=0.2.0"
 
 # Benchmark feature with additional dependencies
 [feature.bench.dependencies]
@@ -219,6 +228,7 @@ seaborn = ">=0.13"
 pandas = ">=2.2"
 psutil = ">=5.9"
 pytest-benchmark = ">=4.0"
+pytest-xdist = ">=3.0"
 reproject = ">=0.14"
 
 [feature.bench.pypi-dependencies]
@@ -238,7 +248,7 @@ hypothesis = ">=6.0"
 [feature.sphere-bench.pypi-dependencies]
 
 [feature.map-compat.dependencies]
-python = "3.13.*"
+python = "3.12.*"
 cmake = ">=3.21"
 ninja = ">=1.10"
 scikit-build-core = ">=0.11.6"

@@ -9,15 +9,15 @@ This directory contains the GitHub Actions CI/CD workflows for torchsky.
 **Purpose:** Complete build, test, quality assurance, and deployment pipeline
 
 **Jobs:**
-1. **Code Quality** - Code formatting and linting (Python 3.12)
-   - black (formatting)
-   - ruff (linting)
+1. **Code Quality** - Lint and scoped typecheck (Python 3.12)
+   - **ruff** (lint)
+   - **pyright** (allowlisted modules; `pyrightconfig.json`)
 
-2. **Build & Test** - Multi-version builds and tests
+2. **Build & Test** - Editable install and full pytest
    - **OS:** Ubuntu
-   - **Python:** 3.11, 3.12
-   - **System deps:** cfitsio, wcslib
-   - **Tests:** Full pytest suite
+   - **Python:** 3.12
+   - **System deps:** build-essential (C++ extension)
+   - **Tests:** `pytest -n auto` with **`[test]`** extras (`pip install -e ".[test]"`)
 
 3. **Memory Safety** - Memory leak detection (placeholder for valgrind)
 
@@ -28,16 +28,15 @@ This directory contains the GitHub Actions CI/CD workflows for torchsky.
 6. **Publish** - Automated PyPI publishing on GitHub releases
 
 **Key Features:**
-- C++ extension compilation with cfitsio/wcslib
-- Cross-Python version testing
-- Code quality enforcement
-- Automated PyPI releases
+- C++ extension compilation (vendored CFITSIO / scikit-build)
+- Code quality + scoped Pyright + parallel pytest
+- Automated PyPI releases (if configured)
 
 ## CI Configuration
 
-- **Python Versions:** 3.11, 3.12
-- **Code Quality Tools:** black, ruff
-- **Build Dependencies:** cfitsio, wcslib (installed via apt)
+- **Python version:** 3.12 (see `requires-python` in `pyproject.toml`)
+- **Code quality:** ruff, pyright
+- **Local parity:** `pixi run ci-local` before push (see `AGENTS.md`)
 - **PyPI Publishing:** Requires `PYPI_API_TOKEN` repository secret
 
 ## Setup for PyPI Publishing

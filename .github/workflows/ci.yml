@@ -26,11 +26,14 @@ jobs:
     - name: Install code quality tools
       run: |
         python -m pip install --upgrade pip
-        pip install ruff
+        pip install ruff pyright pandas pyarrow polars
 
     # Tree-wide `ruff format --check` is not enabled yet (many files predate ruff format).
     - name: Lint with ruff
       run: ruff check --output-format=github .
+
+    - name: Pyright (scoped allowlist in pyrightconfig.json)
+      run: pyright
 
   build-test:
     name: Build & Test
@@ -59,16 +62,12 @@ jobs:
       run: |
         python -m pip install --upgrade pip wheel setuptools
         pip install torch --index-url https://download.pytorch.org/whl/cpu
-        pip install numpy astropy fitsio pytest nanobind scikit-build-core
-        pip install pytorch-frame psutil pyarrow scipy requests
-
-    - name: Build package
-      run: |
-        pip install -e . --no-build-isolation
+        pip install nanobind scikit-build-core
+        pip install -e ".[test]" --no-build-isolation
 
     - name: Run full test suite
       run: |
-        pytest tests/ -v --tb=short
+        pytest -n auto -v --tb=short
 
   map-mosaic-bench:
     name: Map mosaic (bench extras + compat gate)
@@ -95,7 +94,7 @@ jobs:
 
     - name: Run full pytest (includes reproject + drizzle smoke)
       run: |
-        pytest tests/ -q --tb=short
+        pytest -n auto -q --tb=short
 
     - name: Map compat gate vs baseline (synthetic_shifted_wcs)
       run: |
