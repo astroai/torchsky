@@ -195,12 +195,22 @@ class TestConvenienceFunctions:
 
     def test_create_inference_transform(self):
         """Test inference transform creation."""
-        transform = create_inference_transform(normalize=True)
+        # Test with normalization
+        transform_norm = create_inference_transform(normalize=True)
+        assert len(transform_norm.transforms) == 1
+        assert isinstance(transform_norm.transforms[0], ZScale)
 
         data = torch.randn(100, 100)
-        result = transform(data)
+        result_norm = transform_norm(data)
+        assert result_norm.shape == data.shape
 
-        assert result.shape == data.shape
+        # Test without normalization
+        transform_no_norm = create_inference_transform(normalize=False)
+        assert len(transform_no_norm.transforms) == 0
+
+        result_no_norm = transform_no_norm(data)
+        assert result_no_norm.shape == data.shape
+        assert torch.all(result_no_norm == data)
 
 
 class TestEdgeCases:
