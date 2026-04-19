@@ -1,0 +1,4 @@
+## 2024-05-24 - CFITSIO Command Injection via Extended Filename Syntax
+**Vulnerability:** CFITSIO allows command execution by appending or prepending a pipe (`|`) to a file name (e.g., `| echo 'hello'`). Raw calls to `fits_open_file` without input validation expose the codebase to command injection.
+**Learning:** While the `FITSFile` wrapper class had a security check, many parts of the codebase bypassed this wrapper and called `fits_open_file` directly with unsanitized paths, leaving the vulnerability open across several modules.
+**Prevention:** Always validate and sanitize user-provided file paths before passing them to low-level C APIs like `fits_open_file`. We extracted the security check into a shared `security.h` inline function and systematically applied it before all direct C API calls.

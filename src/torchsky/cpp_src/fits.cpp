@@ -30,6 +30,7 @@
 #include <fitsio2.h> // Internal CFITSIO routines (fits_rdecomp)
 
 #include "hardware.h"
+#include "security.h"
 
 namespace {
 using fits_is_compressed_with_nulls_fn = int (*)(fitsfile*);
@@ -716,16 +717,7 @@ class FITSFile {
 public:
     FITSFile(const char* filename, int mode) : filename_(filename), mode_(mode) {
         // Security check: Prevent command injection via cfitsio pipe syntax
-        if (!filename_.empty()) {
-            size_t first = filename_.find_first_not_of(" \t");
-            size_t last = filename_.find_last_not_of(" \t");
-
-            if (first != std::string::npos) {
-                if (filename_[first] == '|' || filename_[last] == '|') {
-                     throw std::runtime_error("Security Error: Filenames starting or ending with '|' are not allowed to prevent command execution.");
-                }
-            }
-        }
+        torchsky::check_fits_filename_security(filename_);
 
         int status = 0;
         if (mode == 0) {
@@ -2977,7 +2969,8 @@ torch::Tensor read_full_unmapped(const std::string& path, int hdu_num) {
     fitsfile* fptr = nullptr;
     int status = 0;
     try {
-        fits_open_file(&fptr, path.c_str(), READONLY, &status);
+        torchsky::check_fits_filename_security(path);
+    fits_open_file(&fptr, path.c_str(), READONLY, &status);
         if (status != 0) {
             throw std::runtime_error("Could not open FITS file: " + path);
         }
@@ -3091,6 +3084,7 @@ torch::Tensor read_full_nocache(const std::string& path, int hdu_num, bool use_m
     fitsfile* fptr = nullptr;
     int status = 0;
     std::shared_ptr<SharedReadMeta> shared_meta = get_shared_meta_for_path(path);
+    torchsky::check_fits_filename_security(path);
     fits_open_file(&fptr, path.c_str(), READONLY, &status);
     if (status != 0 || !fptr) {
         throw std::runtime_error("Could not open FITS file: " + path);
