@@ -132,9 +132,9 @@ def test_anafast_dipole_dominates_l1() -> None:
     _, _, z = hp.pix2vec(nside, pix, nest=False)
 
     cl = anafast(z, nside=nside, lmax=12)
-    assert cl.shape == (13,)
+    assert cl.shape == (13,)  # type: ignore
     assert float(cl[1]) > 0.0
-    leakage = torch.sum(torch.abs(cl[2:]))
+    leakage = torch.sum(torch.abs(cl[2:]))  # type: ignore
     assert float(leakage / cl[1]) < 0.12
 
 
@@ -148,7 +148,7 @@ def test_compat_spectral_wrappers() -> None:
 
     assert m.shape == (hp.nside2npix(nside),)
     assert rec.shape == alm.shape
-    assert cl.shape == (lmax + 1,)
+    assert cl.shape == (lmax + 1,)  # type: ignore
 
 
 @pytest.mark.skipif(_hp is None, reason="healpy not available")
@@ -157,7 +157,7 @@ def test_almxfl_matches_healpy_short_fl() -> None:
     alm = _random_alm(lmax, seed=23)
     fl = torch.linspace(1.0, 2.0, steps=5, dtype=torch.float64)
     got = almxfl(alm, fl)
-    exp = torch.from_numpy(_hp.almxfl(alm.numpy(), fl.numpy())).to(torch.complex128)
+    exp = torch.from_numpy(_hp.almxfl(alm.numpy(), fl.numpy())).to(torch.complex128)  # type: ignore
     torch.testing.assert_close(got, exp, atol=1e-12, rtol=0.0)
 
 
@@ -169,14 +169,14 @@ def test_alm2cl_matches_healpy_scalar_and_pol() -> None:
     a_b = _random_alm(lmax, seed=33)
 
     got_s = alm2cl(a_t, lmax=lmax, mmax=lmax)
-    exp_s = torch.from_numpy(_hp.alm2cl(a_t.numpy(), lmax=lmax, mmax=lmax)).to(
+    exp_s = torch.from_numpy(_hp.alm2cl(a_t.numpy(), lmax=lmax, mmax=lmax)).to(  # type: ignore
         torch.float64
     )
     torch.testing.assert_close(got_s, exp_s, atol=1e-12, rtol=0.0)
 
     alms = torch.stack([a_t, a_e, a_b], dim=0)
     got_p = alm2cl(alms, lmax=lmax, mmax=lmax)
-    exp_p = torch.from_numpy(_hp.alm2cl(alms.numpy(), lmax=lmax, mmax=lmax)).to(
+    exp_p = torch.from_numpy(_hp.alm2cl(alms.numpy(), lmax=lmax, mmax=lmax)).to(  # type: ignore
         torch.float64
     )
     torch.testing.assert_close(got_p, exp_p, atol=1e-12, rtol=0.0)
@@ -188,12 +188,12 @@ def test_pixwin_matches_healpy() -> None:
     lmax = 12
     got = pixwin(nside, pol=False, lmax=lmax)
     exp = torch.from_numpy(
-        _hp.pixwin(nside, pol=False, lmax=lmax).astype("float64").copy()
+        _hp.pixwin(nside, pol=False, lmax=lmax).astype("float64").copy()  # type: ignore
     ).to(torch.float64)
     torch.testing.assert_close(got, exp, atol=1e-12, rtol=0.0)
 
     got_t, got_p = pixwin(nside, pol=True, lmax=lmax)
-    exp_t, exp_p = _hp.pixwin(nside, pol=True, lmax=lmax)
+    exp_t, exp_p = _hp.pixwin(nside, pol=True, lmax=lmax)  # type: ignore
     torch.testing.assert_close(
         got_t,
         torch.from_numpy(exp_t.astype(float)).to(torch.float64),
@@ -216,11 +216,11 @@ def test_bl2beam_and_beam2bl_close_to_healpy() -> None:
     bl = gaussian_beam(math.radians(0.8), lmax=lmax)
 
     beam_tf = bl2beam(bl, theta)
-    beam_hp = torch.from_numpy(_hp.bl2beam(bl.numpy(), theta.numpy())).to(torch.float64)
+    beam_hp = torch.from_numpy(_hp.bl2beam(bl.numpy(), theta.numpy())).to(torch.float64)  # type: ignore
     torch.testing.assert_close(beam_tf, beam_hp, atol=2e-6, rtol=2e-6)
 
     bl_tf = beam2bl(beam_tf, theta, lmax=lmax)
-    bl_hp = torch.from_numpy(_hp.beam2bl(beam_hp.numpy(), theta.numpy(), lmax=lmax)).to(
+    bl_hp = torch.from_numpy(_hp.beam2bl(beam_hp.numpy(), theta.numpy(), lmax=lmax)).to(  # type: ignore
         torch.float64
     )
     torch.testing.assert_close(bl_tf, bl_hp, atol=1e-4, rtol=2e-4)
@@ -239,8 +239,8 @@ def test_synfast_zero_cls_returns_zero_map() -> None:
     lmax = 6
     cl = torch.zeros((lmax + 1,), dtype=torch.float64)
     m = synfast(cl, nside=nside, lmax=lmax, mmax=lmax, pol=True)
-    assert m.shape == (hp.nside2npix(nside),)
-    torch.testing.assert_close(m, torch.zeros_like(m), atol=0.0, rtol=0.0)
+    assert m.shape == (hp.nside2npix(nside),)  # type: ignore
+    torch.testing.assert_close(m, torch.zeros_like(m), atol=0.0, rtol=0.0)  # type: ignore
 
 
 def test_synfast_pol_and_alm_output_shapes() -> None:
@@ -249,7 +249,7 @@ def test_synfast_pol_and_alm_output_shapes() -> None:
     z = torch.zeros((lmax + 1,), dtype=torch.float64)
     cls4 = [torch.ones_like(z), z.clone(), torch.ones_like(z), z.clone()]
     maps, alms = synfast(
-        cls4, nside=nside, lmax=lmax, mmax=lmax, alm=True, pol=True, new=False
+        cls4, nside=nside, lmax=lmax, mmax=lmax, alm=True, pol=True, new=False  # type: ignore
     )
     assert maps.shape == (3, hp.nside2npix(nside))
     assert alms.shape == (3, alm_size(lmax))
@@ -260,7 +260,7 @@ def test_synfast_zero_with_pixwin_is_zero() -> None:
     lmax = 6
     cl = torch.zeros((lmax + 1,), dtype=torch.float64)
     m = synfast(cl, nside=nside, lmax=lmax, mmax=lmax, pixwin=True, pol=False)
-    torch.testing.assert_close(m, torch.zeros_like(m), atol=0.0, rtol=0.0)
+    torch.testing.assert_close(m, torch.zeros_like(m), atol=0.0, rtol=0.0)  # type: ignore
 
 
 def test_map2alm_lsq_scalar_residual_improves() -> None:
@@ -352,7 +352,7 @@ def test_map2alm_lsq_torch_residual_close_to_healpy_on_random_map() -> None:
         tol=1e-12,
         maxiter=3,
     )
-    _, rel_hp, _ = _hp.map2alm_lsq(
+    _, rel_hp, _ = _hp.map2alm_lsq(  # type: ignore
         m.numpy(), lmax=lmax, mmax=lmax, pol=False, tol=1e-12, maxiter=3
     )
     assert rel_tf == pytest.approx(float(rel_hp), rel=0.0, abs=1e-8)
@@ -366,7 +366,7 @@ def test_healpy_reference_alm2map_map2alm_parity_small_case() -> None:
 
     map_tf = alm2map(alm, nside=nside, lmax=lmax)
     map_hp = torch.from_numpy(
-        _hp.alm2map(alm.numpy(), nside=nside, lmax=lmax, mmax=lmax, pol=False)
+        _hp.alm2map(alm.numpy(), nside=nside, lmax=lmax, mmax=lmax, pol=False)  # type: ignore
     ).to(torch.float64)
     diff = torch.linalg.norm(map_tf - map_hp) / torch.linalg.norm(map_hp).clamp_min(
         1e-15
@@ -375,7 +375,7 @@ def test_healpy_reference_alm2map_map2alm_parity_small_case() -> None:
 
     rec_tf = map2alm(map_hp, nside=nside, lmax=lmax)
     rec_hp = torch.from_numpy(
-        _hp.map2alm(map_hp.numpy(), lmax=lmax, mmax=lmax, iter=0, pol=False)
+        _hp.map2alm(map_hp.numpy(), lmax=lmax, mmax=lmax, iter=0, pol=False)  # type: ignore
     ).to(torch.complex128)
     adiff = torch.linalg.norm(rec_tf - rec_hp) / torch.linalg.norm(rec_hp).clamp_min(
         1e-15
@@ -525,9 +525,9 @@ def test_anafast_cross_constant_map() -> None:
     m2 = torch.full((npix,), -3.0, dtype=torch.float64)
     cl = anafast(m1, map2=m2, nside=nside, lmax=6)
 
-    assert cl.shape == (7,)
+    assert cl.shape == (7,)  # type: ignore
     assert float(cl[0]) < 0.0
-    tail = torch.max(torch.abs(cl[1:]))
+    tail = torch.max(torch.abs(cl[1:]))  # type: ignore
     assert float(tail / cl[0].abs().clamp_min(1e-15)) < 0.1
 
 
@@ -543,7 +543,7 @@ def test_gaussian_beam_pol_matches_healpy() -> None:
     fwhm = math.radians(1.0)
     lmax = 24
     got = gaussian_beam(fwhm, lmax=lmax, pol=True)
-    exp = torch.from_numpy(_hp.gauss_beam(fwhm, lmax=lmax, pol=True)).to(torch.float64)
+    exp = torch.from_numpy(_hp.gauss_beam(fwhm, lmax=lmax, pol=True)).to(torch.float64)  # type: ignore
     torch.testing.assert_close(got, exp, atol=1e-12, rtol=0.0)
 
 
@@ -621,7 +621,7 @@ def test_pol_map2alm_alm2map_and_anafast_paths() -> None:
 
     alm_tf = map2alm(maps, nside=nside, lmax=lmax, pol=True)
     alm_hp = torch.from_numpy(
-        _hp.map2alm(maps.numpy(), lmax=lmax, mmax=lmax, iter=0, pol=True)
+        _hp.map2alm(maps.numpy(), lmax=lmax, mmax=lmax, iter=0, pol=True)  # type: ignore
     ).to(torch.complex128)
     assert alm_tf.shape == alm_hp.shape == (3, alm_size(lmax))
     rel_alm = torch.linalg.norm(alm_tf - alm_hp) / torch.linalg.norm(alm_hp).clamp_min(
@@ -631,7 +631,7 @@ def test_pol_map2alm_alm2map_and_anafast_paths() -> None:
 
     maps_tf = alm2map(alm_tf, nside=nside, lmax=lmax, pol=True)
     maps_hp = torch.from_numpy(
-        _hp.alm2map(alm_tf.numpy(), nside=nside, lmax=lmax, mmax=lmax, pol=True)
+        _hp.alm2map(alm_tf.numpy(), nside=nside, lmax=lmax, mmax=lmax, pol=True)  # type: ignore
     ).to(torch.float64)
     rel_map = torch.linalg.norm(maps_tf - maps_hp) / torch.linalg.norm(
         maps_hp
@@ -640,10 +640,10 @@ def test_pol_map2alm_alm2map_and_anafast_paths() -> None:
 
     cl_tf = anafast(maps, nside=nside, lmax=lmax, pol=True)
     cl_hp = torch.from_numpy(
-        _hp.anafast(maps.numpy(), lmax=lmax, mmax=lmax, pol=True)
+        _hp.anafast(maps.numpy(), lmax=lmax, mmax=lmax, pol=True)  # type: ignore
     ).to(torch.float64)
-    assert cl_tf.shape == cl_hp.shape == (6, lmax + 1)
-    rel_cl = torch.linalg.norm(cl_tf - cl_hp) / torch.linalg.norm(cl_hp).clamp_min(
+    assert cl_tf.shape == cl_hp.shape == (6, lmax + 1)  # type: ignore
+    rel_cl = torch.linalg.norm(cl_tf - cl_hp) / torch.linalg.norm(cl_hp).clamp_min(  # type: ignore
         1e-15
     )
     assert float(rel_cl) < 3.0e-1
@@ -677,7 +677,7 @@ def test_spin_map2alm_alm2map_parity(spin: int) -> None:
     qu_rec = alm2map_spin((a1, a2), nside=nside, spin=spin, lmax=lmax)
     assert qu_rec.shape == qu.shape
 
-    hp_a1, hp_a2 = _hp.map2alm_spin(qu.numpy(), spin=spin, lmax=lmax)
+    hp_a1, hp_a2 = _hp.map2alm_spin(qu.numpy(), spin=spin, lmax=lmax)  # type: ignore
     torch.testing.assert_close(
         a1, torch.from_numpy(hp_a1).to(torch.complex128), atol=3e-10, rtol=0.0
     )
@@ -685,7 +685,7 @@ def test_spin_map2alm_alm2map_parity(spin: int) -> None:
         a2, torch.from_numpy(hp_a2).to(torch.complex128), atol=3e-10, rtol=0.0
     )
 
-    hp_qu = _hp.alm2map_spin([hp_a1, hp_a2], nside=nside, spin=spin, lmax=lmax)
+    hp_qu = _hp.alm2map_spin([hp_a1, hp_a2], nside=nside, spin=spin, lmax=lmax)  # type: ignore
     torch.testing.assert_close(
         qu_rec,
         torch.from_numpy(np.asarray(hp_qu)).to(torch.float64),
@@ -704,7 +704,7 @@ def test_spin_high_l_parity_spotcheck() -> None:
     qu = torch.from_numpy(rng.normal(size=(2, npix))).to(torch.float64)
 
     ae, ab = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax)
-    hp_ae, hp_ab = _hp.map2alm_spin(qu.numpy(), spin=spin, lmax=lmax)
+    hp_ae, hp_ab = _hp.map2alm_spin(qu.numpy(), spin=spin, lmax=lmax)  # type: ignore
     hp_ae_t = torch.from_numpy(hp_ae).to(torch.complex128)
     hp_ab_t = torch.from_numpy(hp_ab).to(torch.complex128)
     rel_ae = torch.linalg.norm(ae - hp_ae_t) / torch.linalg.norm(hp_ae_t).clamp_min(
@@ -717,7 +717,7 @@ def test_spin_high_l_parity_spotcheck() -> None:
     assert float(rel_ab) < 5e-10
 
     rec = alm2map_spin((ae, ab), nside=nside, spin=spin, lmax=lmax)
-    hp_rec = _hp.alm2map_spin(
+    hp_rec = _hp.alm2map_spin(  # type: ignore
         [ae.numpy(), ab.numpy()], nside=nside, spin=spin, lmax=lmax
     )
     hp_rec_t = torch.from_numpy(np.asarray(hp_rec)).to(torch.float64)

@@ -20,11 +20,11 @@ class TestTableReading:
         from astropy.table import Table
 
         data = {}
-        data["ID"] = np.arange(nrows, dtype=np.int32)
-        data["RA"] = np.random.uniform(0, 360, nrows).astype(np.float64)
+        data["ID"] = np.arange(nrows, dtype=np.int32)  # type: ignore
+        data["RA"] = np.random.uniform(0, 360, nrows).astype(np.float64)  # type: ignore
         data["DEC"] = np.random.uniform(-90, 90, nrows).astype(np.float64)
         data["MAG_G"] = np.random.normal(20, 2, nrows).astype(np.float32)
-        data["FLAG"] = np.random.choice([0, 1], nrows).astype(np.uint8)
+        data["FLAG"] = np.random.choice([0, 1], nrows).astype(np.uint8)  # type: ignore
 
         # Add extra columns if requested
         for i in range(max(0, ncols - len(data))):
@@ -48,7 +48,7 @@ class TestTableReading:
             assert isinstance(result, dict)
             assert "RA" in result
             assert "DEC" in result
-            assert len(result["RA"]) == 100
+            assert len(result['RA']) == 100  # type: ignore
 
         finally:
             os.unlink(filepath)
@@ -80,7 +80,7 @@ class TestTableReading:
             )
 
             assert isinstance(result, dict)
-            assert len(result["RA"]) == 50
+            assert len(result['RA']) == 50  # type: ignore
 
         finally:
             os.unlink(filepath)
@@ -97,7 +97,7 @@ class TestTableReading:
 
             assert isinstance(result, dict)
             assert "RA" in result
-            assert len(result["RA"]) == 10000
+            assert len(result['RA']) == 10000  # type: ignore
 
         finally:
             os.unlink(filepath)
@@ -116,10 +116,10 @@ class TestTableReading:
 
         try:
             with torchsky.open(path) as hdul:
-                table_hdu = hdul[1]
-                assert "NAME" in table_hdu.columns
-                assert "NAME" in table_hdu.string_columns
-                decoded = table_hdu.get_string_column("NAME")
+                table_hdu = hdul[1]  # type: ignore
+                assert "NAME" in table_hdu.columns  # type: ignore
+                assert "NAME" in table_hdu.string_columns  # type: ignore
+                decoded = table_hdu.get_string_column("NAME")  # type: ignore
                 assert decoded == names
         finally:
             os.unlink(path)
@@ -132,7 +132,7 @@ class TestTableReading:
             total = 0
             for chunk in torchsky.stream_table(filepath, hdu=1, chunk_rows=200):
                 assert "RA" in chunk
-                total += len(chunk["RA"])
+                total += len(chunk["RA"])  # type: ignore
             assert total == 1234
         finally:
             os.unlink(filepath)
@@ -151,10 +151,10 @@ class TestTableReading:
 
         try:
             with torchsky.open(path) as hdul:
-                table_hdu = hdul[1]
-                schema = table_hdu.schema
+                table_hdu = hdul[1]  # type: ignore
+                schema = table_hdu.schema  # type: ignore
                 assert "VLA" in schema["vla_columns"]
-                lengths = table_hdu.get_vla_lengths("VLA")
+                lengths = table_hdu.get_vla_lengths("VLA")  # type: ignore
                 assert lengths == [2, 1]
         finally:
             os.unlink(path)
@@ -165,11 +165,11 @@ class TestTableReading:
 
         try:
             with torchsky.open(filepath) as hdul:
-                table_hdu = hdul[1]
-                filtered = table_hdu.filter("(RA > 180.0) & (FLAG >= 0)")
+                table_hdu = hdul[1]  # type: ignore
+                filtered = table_hdu.filter("(RA > 180.0) & (FLAG >= 0)")  # type: ignore
                 assert isinstance(filtered, torchsky.TableHDU)
                 assert filtered.num_rows > 0
-                assert filtered.num_rows <= table_hdu.num_rows
+                assert filtered.num_rows <= table_hdu.num_rows  # type: ignore
         finally:
             os.unlink(filepath)
 
@@ -193,20 +193,20 @@ class TestTableReading:
         try:
             table = torchsky.read(path, hdu=1)
             assert "Z" in table
-            assert len(table["Z"]) == 3
+            assert len(table["Z"]) == 3  # type: ignore
         finally:
             os.unlink(path)
 
     def test_tablehdu_column_manipulations(self):
         """Test add/rename/drop/append operations on TableHDU."""
-        table_hdu = torchsky.TableHDU(
+        table_hdu = torchsky.TableHDU(  # type: ignore
             {
                 "A": torch.tensor([1, 2], dtype=torch.int32),
                 "B": torch.tensor([10.0, 20.0], dtype=torch.float32),
             }
         )
 
-        with_c = table_hdu.add_column("C", torch.tensor([100, 200], dtype=torch.int64))
+        with_c = table_hdu.add_column("C", torch.tensor([100, 200], dtype=torch.int64))  # type: ignore
         assert "C" in with_c.columns
         assert with_c.num_rows == 2
 
@@ -224,27 +224,27 @@ class TestTableReading:
             }
         )
         assert appended.num_rows == 3
-        assert appended["A"].tolist() == [1, 2, 3]
+        assert appended["A"].tolist() == [1, 2, 3]  # type: ignore
 
     def test_tablehdu_append_rows_with_vla_lists(self):
         """Test appending rows for VLA-like list columns."""
-        table_hdu = torchsky.TableHDU(
+        table_hdu = torchsky.TableHDU(  # type: ignore
             {
                 "ID": torch.tensor([1, 2], dtype=torch.int32),
                 "VLA": [torch.tensor([1, 2]), torch.tensor([3])],
             }
         )
 
-        out = table_hdu.append_rows(
+        out = table_hdu.append_rows(  # type: ignore
             {
                 "ID": torch.tensor([3], dtype=torch.int32),
                 "VLA": [torch.tensor([4, 5, 6])],
             }
         )
         assert out.num_rows == 3
-        assert out["ID"].tolist() == [1, 2, 3]
-        assert len(out["VLA"]) == 3
-        assert out["VLA"][-1].tolist() == [4, 5, 6]
+        assert out['ID'].tolist() == [1, 2, 3]  # type: ignore
+        assert len(out.get_string_column('VLA')) == 3  # type: ignore
+        assert out.get_string_column('VLA')[-1].tolist() == [4, 5, 6]  # type: ignore
 
     def test_data_types(self):
         """Test various FITS data types."""
@@ -254,9 +254,9 @@ class TestTableReading:
             result, header = torchsky.read(filepath, hdu=1, return_header=True)
 
             # Check data types are preserved appropriately
-            assert result["ID"].dtype in [torch.int32, torch.int64]
-            assert result["RA"].dtype in [torch.float32, torch.float64]
-            assert result["FLAG"].dtype in [torch.uint8, torch.int16, torch.int32]
+            assert result['ID'].dtype in [torch.int32, torch.int64]  # type: ignore
+            assert result['RA'].dtype in [torch.float32, torch.float64]  # type: ignore
+            assert result.get_string_column('FLAG').dtype in [torch.uint8, torch.int16, torch.int32]  # type: ignore
 
         finally:
             os.unlink(filepath)
@@ -322,7 +322,7 @@ class TestTablePerformance:
             streaming_time = time.time() - start_time
 
             assert isinstance(result, dict)
-            assert len(result["RA"]) == 50000
+            assert len(result['RA']) == 50000  # type: ignore
 
             # Streaming should complete in reasonable time
             assert streaming_time < 30.0  # Should complete within 30 seconds
