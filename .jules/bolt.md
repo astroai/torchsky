@@ -17,3 +17,7 @@
 ## 2025-05-15 - Cache FITS filename extension check
 **Learning:** Checking for CFITSIO extended syntax (presence of '[') in filenames using `std::string::find` is an O(N) operation that was being performed repeatedly across multiple I/O methods. Since the filename is immutable for the lifetime of the `FITSFile` object, this search is redundant.
 **Action:** Cache the result of the extension check in a boolean member variable (`has_extension_`) during object construction and use the cached value in all subsequent I/O related methods.
+
+## 2024-05-18 - FITS Header Dict Lookup Optimization
+**Learning:** `torchsky.hdu.Header` inherits directly from Python's built-in `dict`. Consequently, individual lookups (`header.get()`) are O(1) and extremely fast. When extracting specific known key patterns (like `TFORM{i}`, `TUNIT{i}`), attempting to iterate over all `header.items()` manually to parse out integer prefixes actually introduces significant parsing overhead and ends up being much slower (nearly 2x slower) than simply performing the targeted `get()` operations with unrolled loops.
+**Action:** When extracting specifically indexed properties from FITS headers in `torchsky`, unroll inner loops and use direct string concatenation (`prefix + str(index)`) coupled with direct `.get()` lookups. Avoid iterating over `header.items()` to "find" indices, and avoid using strict `type(x) is str` checks (which break type inference and polymorphism) in favor of the standard `isinstance(x, str)` when testing header values.
