@@ -1,0 +1,11 @@
+{
+  "include": [
+    "src/torchsky/table.py"
+  ],
+  "reportMissingImports": false,
+  "reportMissingModuleSource": false,
+  "reportAttributeAccessIssue": false,
+  "reportArgumentType": false,
+  "reportIndexIssue": false,
+  "reportCallIssue": false
+}

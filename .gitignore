@@ -100,3 +100,5 @@ wcslib_src/
 mpl-cache-*/
 venv/
 .venv/
+
+!pyrightconfig.json
