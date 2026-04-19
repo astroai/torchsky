@@ -7,6 +7,7 @@ import tempfile
 
 import numpy as np
 import pytest
+from unittest import mock
 import torch
 
 import torchsky
@@ -280,6 +281,14 @@ class TestTableReading:
             finally:
                 os.unlink(f.name)
 
+
+    @mock.patch("torchsky.get_header")
+    def test_can_use_mmap_row_path_for_full_read_exception(self, mock_get_header):
+        """Test that _can_use_mmap_row_path_for_full_read handles exceptions gracefully."""
+        from torchsky.table import _can_use_mmap_row_path_for_full_read
+        mock_get_header.side_effect = Exception("Mocked error reading header")
+        result = _can_use_mmap_row_path_for_full_read("dummy.fits", 1, None)
+        assert result is False
 
 class TestTablePerformance:
     """Test table reading performance optimizations."""
