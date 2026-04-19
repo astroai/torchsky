@@ -247,3 +247,37 @@ def test_catalog_stream_dataset_supports_partition_factory() -> None:
     ds = CatalogStreamDataset(lambda: iter(range(4)))
     assert list(ds) == [0, 1, 2, 3]
     assert list(ds) == [0, 1, 2, 3]
+
+
+def test_candidate_dec_window_clamps_at_poles() -> None:
+    right_dec_sorted = torch.tensor(
+        [-90.0, -85.0, -80.0, 0.0, 80.0, 85.0, 90.0], dtype=torch.float64
+    )
+
+    # Test South Pole clamping
+    start, stop = catalogs_core._candidate_dec_window(
+        right_dec_sorted,
+        dec_min_deg=torch.tensor(-88.0, dtype=torch.float64),
+        dec_max_deg=torch.tensor(-88.0, dtype=torch.float64),
+        radius_deg=5.0,
+    )
+    # Expected lower = max(-88.0 - 5.0, -90.0) = -90.0
+    # Expected upper = min(-88.0 + 5.0, 90.0) = -83.0
+    # searchsorted(-90.0, right=False) -> 0
+    # searchsorted(-83.0, right=True) -> 2 (-80.0 is the next one)
+    assert start == 0
+    assert stop == 2
+
+    # Test North Pole clamping
+    start, stop = catalogs_core._candidate_dec_window(
+        right_dec_sorted,
+        dec_min_deg=torch.tensor(88.0, dtype=torch.float64),
+        dec_max_deg=torch.tensor(88.0, dtype=torch.float64),
+        radius_deg=5.0,
+    )
+    # Expected lower = max(88.0 - 5.0, -90.0) = 83.0
+    # Expected upper = min(88.0 + 5.0, 90.0) = 90.0
+    # searchsorted(83.0, right=False) -> 5
+    # searchsorted(90.0, right=True) -> 7
+    assert start == 5
+    assert stop == 7
