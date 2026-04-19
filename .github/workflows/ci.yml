@@ -28,6 +28,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install uv
         uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
+        uv pip install --system scikit-build-core nanobind numpy
         uv pip install --system -e ".[dev,test]" --no-build-isolation
 
     # Tree-wide `ruff format --check` is not enabled yet (many files predate ruff format).

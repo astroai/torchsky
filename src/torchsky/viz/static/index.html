@@ -367,7 +367,8 @@
       cursor: pointer;
       transition: border-color var(--ease-fast) var(--ease);
     }
-    select:focus { border-color: var(--accent); outline: none; }
+    select:focus { border-color: var(--accent); }
+    select:focus:not(:focus-visible) { outline: none; }
     select option { background: var(--bg-surface); }
 
     /* Divider */
