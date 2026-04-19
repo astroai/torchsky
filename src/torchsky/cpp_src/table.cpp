@@ -38,6 +38,20 @@ namespace torchsky {
 
 namespace {
 
+// Security check: Prevent command injection via cfitsio pipe syntax
+void validate_fits_filename(const std::string& filename) {
+    if (!filename.empty()) {
+        size_t first = filename.find_first_not_of(" \t");
+        size_t last = filename.find_last_not_of(" \t");
+
+        if (first != std::string::npos) {
+            if (filename[first] == '|' || filename[last] == '|') {
+                throw std::runtime_error("Security Error: Filenames starting or ending with '|' are not allowed to prevent command execution.");
+            }
+        }
+    }
+}
+
 bool table_buffered_read_enabled() {
     // Keep buffered row-path enabled by default; allow fast local bisects.
     static const bool enabled = []() {
@@ -145,6 +159,7 @@ struct ColumnInfo {
 class TableReader {
 public:
     TableReader(const std::string& filename, int hdu_num = 1) : filename_(filename), hdu_num_(hdu_num) {
+        validate_fits_filename(filename);
         int status = 0;
         fits_open_file(&fptr_, filename.c_str(), READONLY, &status);
         if (status != 0) {
@@ -2058,6 +2073,7 @@ int read_table_columns(void* reader_handle, const char** column_names, int num_c
 
 
 void write_fits_table(const char* filename, nb::dict tensor_dict, nb::dict header, bool overwrite, nb::object schema_obj, const std::string& table_type) {
+    torchsky::validate_fits_filename(filename ? filename : "");
     fitsfile* fptr;
     int status = 0;
 
@@ -2123,6 +2139,7 @@ long infer_num_rows_from_payload(nb::dict tensor_dict) {
 void update_rows(const char* filename, int hdu_num, nb::dict tensor_dict, long start_row, long num_rows);
 
 void append_rows(const char* filename, int hdu_num, nb::dict tensor_dict) {
+    torchsky::validate_fits_filename(filename ? filename : "");
     fitsfile* fptr;
     int status = 0;
 
@@ -2337,6 +2354,7 @@ void append_rows(const char* filename, int hdu_num, nb::dict tensor_dict) {
 }
 
 void insert_rows(const char* filename, int hdu_num, nb::dict tensor_dict, long start_row) {
+    torchsky::validate_fits_filename(filename ? filename : "");
     long num_rows = infer_num_rows_from_payload(tensor_dict);
     if (num_rows <= 0) {
         return;
@@ -2384,6 +2402,7 @@ void insert_rows(const char* filename, int hdu_num, nb::dict tensor_dict, long s
 }
 
 void delete_rows(const char* filename, int hdu_num, long start_row, long num_rows) {
+    torchsky::validate_fits_filename(filename ? filename : "");
     if (num_rows <= 0) {
         return;
     }
@@ -2430,6 +2449,7 @@ void delete_rows(const char* filename, int hdu_num, long start_row, long num_row
 }
 
 void update_rows(const char* filename, int hdu_num, nb::dict tensor_dict, long start_row, long num_rows) {
+    torchsky::validate_fits_filename(filename ? filename : "");
     if (num_rows <= 0) {
         return;
     }
@@ -2639,11 +2659,13 @@ void update_rows(const char* filename, int hdu_num, nb::dict tensor_dict, long s
 }
 
 void update_rows_mmap(const char* filename, int hdu_num, nb::dict tensor_dict, long start_row, long num_rows) {
+    torchsky::validate_fits_filename(filename ? filename : "");
     torchsky::TableReader reader(filename, hdu_num);
     reader.update_rows_mmap(tensor_dict, start_row, num_rows);
 }
 
 void rename_columns(const char* filename, int hdu_num, nb::dict mapping) {
+    torchsky::validate_fits_filename(filename ? filename : "");
     fitsfile* fptr;
     int status = 0;
 
@@ -2702,6 +2724,7 @@ void rename_columns(const char* filename, int hdu_num, nb::dict mapping) {
 }
 
 void drop_columns(const char* filename, int hdu_num, nb::list columns) {
+    torchsky::validate_fits_filename(filename ? filename : "");
     fitsfile* fptr;
     int status = 0;
 
