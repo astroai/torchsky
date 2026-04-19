@@ -1151,17 +1151,40 @@ def _build_fits_metadata(
         tf_count = 0
 
     for i in range(1, tf_count + 1):
-        name = header.get(f"TTYPE{i}")
+        si = str(i)
+        name = header.get("TTYPE" + si)
         if not isinstance(name, str) or not name:
             continue
         if selected_columns is not None and name not in selected_columns:
             continue
 
+        # Optimize by unrolling the loop and avoiding inner string operations
         entry: dict[str, str] = {}
-        for key_name in ("TFORM", "TUNIT", "TDIM", "TNULL", "TSCAL", "TZERO"):
-            value = header.get(f"{key_name}{i}")
-            if value is not None:
-                entry[f"fits_{key_name.lower()}"] = str(value)
+
+        v = header.get("TFORM" + si)
+        if v is not None:
+            entry["fits_tform"] = str(v)
+
+        v = header.get("TUNIT" + si)
+        if v is not None:
+            entry["fits_tunit"] = str(v)
+
+        v = header.get("TDIM" + si)
+        if v is not None:
+            entry["fits_tdim"] = str(v)
+
+        v = header.get("TNULL" + si)
+        if v is not None:
+            entry["fits_tnull"] = str(v)
+
+        v = header.get("TSCAL" + si)
+        if v is not None:
+            entry["fits_tscal"] = str(v)
+
+        v = header.get("TZERO" + si)
+        if v is not None:
+            entry["fits_tzero"] = str(v)
+
         if entry:
             field_meta[name] = entry
 
