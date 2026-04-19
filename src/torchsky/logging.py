@@ -31,20 +31,6 @@ if not logger.handlers:
     logger.addHandler(handler)
 
 
-def log_errors(func):
-    """Decorator to log exceptions before re-raising."""
-
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"Error in {func.__name__}: {str(e)}")
-            raise
-
-    return wrapper
-
-
 def log_performance(func):
     """Decorator to log performance metrics."""
 
