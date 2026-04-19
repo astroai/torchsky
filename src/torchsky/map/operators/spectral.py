@@ -131,7 +131,7 @@ def bandpass_quadrature(
                 raise ValueError(
                     "FieldObservation transmission_sigma must be finite and positive"
                 )
-            response = torch.exp(-0.5 * torch.square((samples - center) / sigma))
+            response = torch.exp(-0.5 * (((samples - center) / sigma) * ((samples - center) / sigma)))
     weights = response * trap
     return samples, weights / torch.clamp(weights.sum(), min=1e-8)
 
@@ -162,7 +162,7 @@ def bandpass_response(observation: FieldObservation, wavelengths: Tensor) -> Ten
         if observation.transmission_center is not None
         else 0.5 * (float(lower) + float(upper))
     )
-    response = torch.exp(-0.5 * torch.square((wavelengths - center) / sigma))
+    response = torch.exp(-0.5 * (((wavelengths - center) / sigma) * ((wavelengths - center) / sigma)))
     return response * inside.to(dtype=response.dtype)
 
 
@@ -212,7 +212,7 @@ def bandpass_mc_samples(
                     "FieldObservation transmission_sigma must be finite and positive"
                 )
             proposal_weights = torch.exp(
-                -0.5 * torch.square((proposal_samples - center) / sigma)
+                -0.5 * (((proposal_samples - center) / sigma) * ((proposal_samples - center) / sigma))
             )
     proposal_weights = proposal_weights / torch.clamp(proposal_weights.sum(), min=1.0e-8)
     sample_ids = torch.multinomial(

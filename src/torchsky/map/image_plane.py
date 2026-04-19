@@ -2367,9 +2367,7 @@ def _project_observation_to_target_chunk(
                 raise RuntimeError(
                     "prepared_target with pixel area is required for flux semantics"
                 )
-            sampled_weight = source_weight.to(dtype=torch.float32) * torch.square(
-                prepared_target.pixel_area_sr
-            )
+            sampled_weight = source_weight.to(dtype=torch.float32) * (prepared_target.pixel_area_sr * prepared_target.pixel_area_sr)
             sampled_numer = (
                 image.to(dtype=torch.float32)
                 * source_weight.to(dtype=torch.float32)
