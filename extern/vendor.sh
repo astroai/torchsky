@@ -51,12 +51,17 @@ latest_tag() {
   local repo="$1"
   local tag
 
-  tag="$(curl -fsSL "https://api.github.com/repos/${repo}/releases/latest" \
+  local curl_opts=(-fsSL)
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    curl_opts+=("-H" "Authorization: Bearer ${GITHUB_TOKEN}")
+  fi
+
+  tag="$(curl "${curl_opts[@]}" "https://api.github.com/repos/${repo}/releases/latest" \
     | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
     | head -n1)"
 
   if [[ -z "${tag}" ]]; then
-    tag="$(curl -fsSL "https://api.github.com/repos/${repo}/tags" \
+    tag="$(curl "${curl_opts[@]}" "https://api.github.com/repos/${repo}/tags" \
       | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
       | head -n1)"
   fi
@@ -76,11 +81,16 @@ fetch_and_extract() {
   local dest="$3"
   local archive="${TMP_DIR}/$(basename "${dest}")-${tag}.tar.gz"
 
+  local curl_opts=(-fL)
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    curl_opts+=("-H" "Authorization: Bearer ${GITHUB_TOKEN}")
+  fi
+
   rm -rf "${dest}"
   mkdir -p "${TMP_DIR}"
 
   echo "Downloading ${repo}@${tag}"
-  curl -fL "https://github.com/${repo}/archive/refs/tags/${tag}.tar.gz" -o "${archive}"
+  curl "${curl_opts[@]}" "https://github.com/${repo}/archive/refs/tags/${tag}.tar.gz" -o "${archive}"
 
   local extract_dir="${TMP_DIR}/extract-$(basename "${dest}")-${tag}"
   rm -rf "${extract_dir}"
