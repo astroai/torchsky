@@ -247,3 +247,17 @@ def test_catalog_stream_dataset_supports_partition_factory() -> None:
     ds = CatalogStreamDataset(lambda: iter(range(4)))
     assert list(ds) == [0, 1, 2, 3]
     assert list(ds) == [0, 1, 2, 3]
+
+def test_choose_default_coarse_nside_large_radius() -> None:
+    empty = torch.empty(0, dtype=torch.float64)
+    # Testing with negative radius
+    res_neg = catalogs_core._choose_default_coarse_nside(
+        empty, empty, empty, empty, radius_arcsec=-1.0
+    )
+    assert res_neg == 2048
+
+    # Testing with extremely large radius
+    res_large = catalogs_core._choose_default_coarse_nside(
+        empty, empty, empty, empty, radius_arcsec=180.0 * 3600.0 + 1.0
+    )
+    assert res_large == 1

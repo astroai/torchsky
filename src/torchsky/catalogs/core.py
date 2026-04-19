@@ -150,7 +150,11 @@ def _choose_default_coarse_nside(
     *,
     radius_arcsec: float,
 ) -> int:
-    del left_ra, left_dec, radius_arcsec
+    del left_ra, left_dec
+    if radius_arcsec <= 0:
+        return 2048
+    if radius_arcsec >= 180.0 * 3600.0:
+        return 1
     right_points = int(right_ra.numel())
     # Benchmark-backed selector tuned for the current CPU nested-HEALPix
     # coarse-index path. Smaller catalogs prefer lower group overhead,
