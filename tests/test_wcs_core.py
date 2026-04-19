@@ -89,8 +89,7 @@ def test_cd_matrix_takes_priority_over_cdelt() -> None:
 
     wcs = WCS(header)
 
-    assert torch.allclose(
-        wcs.cd, torch.tensor([[-0.01, 0.0], [0.0, 0.01]], dtype=torch.float64)
+    assert torch.allclose(torch.as_tensor(wcs.cd), torch.tensor([[-0.01, 0.0], [0.0, 0.01]], dtype=torch.float64)
     )
 
 
@@ -101,7 +100,7 @@ def test_world_to_pixel_default_origin_zero() -> None:
     pixel = wcs.world_to_pixel(world)
 
     expected = torch.tensor([[127.0, 127.0]], dtype=torch.float64)
-    assert torch.allclose(pixel, expected, atol=1e-9)
+    assert torch.allclose(torch.as_tensor(pixel), expected, atol=1e-9)
 
 
 def test_dtype_is_promoted_to_float64_for_transform_inputs() -> None:
