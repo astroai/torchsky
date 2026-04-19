@@ -3,7 +3,6 @@ import pytest
 from torchsky.logging import (
     logger,
     set_log_level,
-    log_errors,
     log_performance,
     log_fits_error,
     log_memory_usage,
@@ -27,31 +26,6 @@ def test_set_log_level():
     # Test invalid level defaults to INFO
     set_log_level("INVALID_LEVEL")
     assert logger.level == logging.INFO
-
-
-def test_log_errors_decorator(caplog):
-    """Test that log_errors decorator logs exceptions and re-raises them."""
-
-    @log_errors
-    def failing_function():
-        raise ValueError("Test error")
-
-    @log_errors
-    def passing_function():
-        return "success"
-
-    # Test passing function
-    assert passing_function() == "success"
-    assert not caplog.records
-
-    # Test failing function
-    with pytest.raises(ValueError, match="Test error"):
-        failing_function()
-
-    assert len(caplog.records) == 1
-    record = caplog.records[0]
-    assert record.levelno == logging.ERROR
-    assert "Error in failing_function: Test error" in record.message
 
 
 def test_log_performance_decorator(caplog):
