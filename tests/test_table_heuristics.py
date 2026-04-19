@@ -1,5 +1,4 @@
 import unittest.mock
-import pytest
 from torchsky.table import (
     _can_use_mmap_row_path_for_full_read,
     _can_use_torch_table_path_for_full_read,
