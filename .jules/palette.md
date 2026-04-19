@@ -1,0 +1,3 @@
+## 2024-04-19 - Accessible Toggles and Focus Rings
+**Learning:** Custom toggle buttons built with `div` or `button` elements need `role="switch"` and `aria-pressed` state tracking to be properly understood by screen readers as toggles. Additionally, adding inline styles like `outline:none` to inputs or other focusable elements completely removes keyboard focus rings, even if a global `:focus-visible` ring is defined, severely degrading keyboard accessibility.
+**Action:** Always ensure custom toggles have `role="switch"` and dynamic `aria-pressed` attributes. Avoid `outline:none` on focusable elements; if default focus styles must be removed, ensure a robust `:focus-visible` fallback is in place and not overridden by inline styles.

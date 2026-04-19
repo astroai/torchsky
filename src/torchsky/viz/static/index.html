@@ -79,6 +79,13 @@
       -webkit-font-smoothing: antialiased;
     }
 
+    /* Accessibility - global focus ring */
+    :focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: 2px;
+    }
+
     /* --------------------------------------------------------
        LAYOUT — fixed 3-column with header + footer
     -------------------------------------------------------- */
@@ -358,10 +365,9 @@
       font-size: 12px;
       padding: 5px var(--sp2);
       cursor: pointer;
-      outline: none;
       transition: border-color var(--ease-fast) var(--ease);
     }
-    select:focus { border-color: var(--accent); }
+    select:focus { border-color: var(--accent); outline: none; }
     select option { background: var(--bg-surface); }
 
     /* Divider */
@@ -619,11 +625,11 @@
       <div class="sidebar-section">
         <div class="toggle-row">
           <span class="toggle-label">WCS Grid</span>
-          <button class="toggle on" id="grid-toggle" title="Toggle coordinate grid"></button>
+          <button class="toggle on" id="grid-toggle" role="switch" aria-label="Toggle coordinate grid" aria-pressed="true" title="Toggle coordinate grid"></button>
         </div>
         <div class="toggle-row" style="margin-top:var(--sp2)">
           <span class="toggle-label">Symmetric scale</span>
-          <button class="toggle" id="sym-toggle" title="Force vmin = −vmax (for residuals)"></button>
+          <button class="toggle" id="sym-toggle" role="switch" aria-label="Force symmetric scale (vmin = -vmax)" aria-pressed="false" title="Force vmin = −vmax (for residuals)"></button>
         </div>
       </div>
 
@@ -637,11 +643,11 @@
           <input type="text" id="ra-col-input" placeholder="RA col" value="RA"
             style="flex:1;background:var(--bg-input);border:1px solid var(--bg-border);
                    border-radius:var(--r-sm);color:var(--text-primary);font-family:var(--font-mono);
-                   font-size:11px;padding:4px var(--sp2);outline:none;" />
+                   font-size:11px;padding:4px var(--sp2);" />
           <input type="text" id="dec-col-input" placeholder="Dec col" value="DEC"
             style="flex:1;background:var(--bg-input);border:1px solid var(--bg-border);
                    border-radius:var(--r-sm);color:var(--text-primary);font-family:var(--font-mono);
-                   font-size:11px;padding:4px var(--sp2);outline:none;" />
+                   font-size:11px;padding:4px var(--sp2);" />
         </div>
       </div>
     </div>
@@ -1083,6 +1089,7 @@ document.querySelectorAll('#cmap-group .cmap-swatch').forEach(sw => {
 $('grid-toggle').addEventListener('click', () => {
   state.gridOn = !state.gridOn;
   $('grid-toggle').classList.toggle('on', state.gridOn);
+  $('grid-toggle').setAttribute('aria-pressed', state.gridOn.toString());
   if (state.aladinFits) state.aladinFits.showGrid(state.gridOn);
   if (state.aladinSky)  state.aladinSky.showGrid(state.gridOn);
 });
@@ -1091,6 +1098,7 @@ $('grid-toggle').addEventListener('click', () => {
 $('sym-toggle').addEventListener('click', () => {
   state.symScale = !state.symScale;
   $('sym-toggle').classList.toggle('on', state.symScale);
+  $('sym-toggle').setAttribute('aria-pressed', state.symScale.toString());
 });
 
 // HDU select
