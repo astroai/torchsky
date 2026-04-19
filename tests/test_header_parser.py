@@ -1,6 +1,44 @@
 # Mock out torchsky.cpp since we only care about header_parser.py testing right now
 
-from torchsky.header_parser import benchmark_header_parsing
+from torchsky.header_parser import FastHeaderParser
+from typing import Dict
+
+
+def benchmark_header_parsing(
+    header_string: str, num_iterations: int = 100
+) -> Dict[str, float]:
+    """
+    Benchmark header parsing performance.
+
+    Args:
+        header_string: Header string to parse
+        num_iterations: Number of parsing iterations
+
+    Returns:
+        Performance metrics dictionary
+    """
+    import time
+
+    # Warmup
+    FastHeaderParser.parse_header_string(header_string)
+
+    # Benchmark
+    start_time = time.perf_counter()
+    for _ in range(num_iterations):
+        FastHeaderParser.parse_header_string(header_string)
+    end_time = time.perf_counter()
+
+    total_time = end_time - start_time
+    avg_time_ms = (total_time / num_iterations) * 1000
+    throughput_headers_per_sec = num_iterations / total_time
+
+    return {
+        "avg_parse_time_ms": avg_time_ms,
+        "throughput_headers_per_sec": throughput_headers_per_sec,
+        "total_time_s": total_time,
+        "header_size_bytes": len(header_string),
+        "num_iterations": num_iterations,
+    }
 
 
 def test_benchmark_header_parsing():
