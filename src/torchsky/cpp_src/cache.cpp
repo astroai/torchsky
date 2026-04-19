@@ -7,6 +7,7 @@
 #include <chrono>
 #include <fitsio.h>
 #include <sys/stat.h>
+#include <stdexcept>
 #ifdef __linux__
 #include <sys/statfs.h>
 #endif
@@ -157,6 +158,18 @@ public:
             it->second.lru_iter = lru_list_.begin();
             it->second.refcount += 1;
             return it->second.fptr;
+            }
+        }
+
+        // Security check: Prevent command injection via cfitsio pipe syntax
+        if (!filepath.empty()) {
+            size_t first = filepath.find_first_not_of(" \t");
+            size_t last = filepath.find_last_not_of(" \t");
+
+            if (first != std::string::npos) {
+                if (filepath[first] == '|' || filepath[last] == '|') {
+                    throw std::runtime_error("Security Error: Filenames starting or ending with '|' are not allowed to prevent command execution.");
+                }
             }
         }
 
