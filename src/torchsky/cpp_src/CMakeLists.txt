@@ -161,9 +161,15 @@ if(TORCHSKY_PYTORCH_CUDA_VERSION AND NOT TARGET CUDA::nvrtc)
         find_library(TORCHSKY_NVRTC_LIBRARY NAMES nvrtc HINTS ${_TORCHSKY_CUDA_LIB_HINTS})
     endif()
     if(NOT TORCHSKY_NVRTC_LIBRARY)
-        message(FATAL_ERROR
-            "CUDA-enabled PyTorch needs libnvrtc (CUDA::nvrtc). "
-            "Install the CUDA toolkit nvrtc library or set CUDA_HOME to the toolkit root.")
+        if(USE_CUDA)
+            message(FATAL_ERROR
+                "CUDA-enabled PyTorch needs libnvrtc (CUDA::nvrtc). "
+                "Install the CUDA toolkit nvrtc library or set CUDA_HOME to the toolkit root.")
+        else()
+            message(WARNING "nvrtc not found, but USE_CUDA is OFF.")
+            # Mock the target so find_package(Torch) doesn't complain
+            set(TORCHSKY_NVRTC_LIBRARY "")
+        endif()
     endif()
     add_library(CUDA::nvrtc SHARED IMPORTED GLOBAL)
     set_target_properties(CUDA::nvrtc PROPERTIES
@@ -172,7 +178,17 @@ if(TORCHSKY_PYTORCH_CUDA_VERSION AND NOT TARGET CUDA::nvrtc)
     )
 endif()
 
+
+if(NOT USE_CUDA)
+    set(CUDA_FOUND TRUE CACHE BOOL "Dummy" FORCE)
+    set(CUDA_TOOLKIT_ROOT_DIR "/usr/local/cuda" CACHE PATH "Dummy" FORCE)
+    set(CUDA_NVCC_EXECUTABLE "/usr/local/cuda/bin/nvcc" CACHE FILEPATH "Dummy" FORCE)
+    set(CUDA_INCLUDE_DIRS "/usr/local/cuda/include" CACHE PATH "Dummy" FORCE)
+    set(CUDA_CUDART_LIBRARY "/usr/local/cuda/lib64/libcudart.so" CACHE FILEPATH "Dummy" FORCE)
+endif()
+
 find_package(Torch REQUIRED)
+
 
 # Some distributions ship a Torch CMake target with include paths that may be missing.
 # Filter out any non-existent include dirs to avoid CMake configure errors.
