@@ -9,6 +9,7 @@ from torchsky import WCS
 from torchsky.map import (
     ComponentDecompositionDiagnostics,
     FieldComponentAnchorTerm,
+    FieldCentroidAnchorTerm,
     FieldDomain,
     FieldComponentDecomposition,
     FieldObservation,
@@ -16,6 +17,7 @@ from torchsky.map import (
     SineImplicitField,
     estimate_field_domain,
     field_component_anchor_loss,
+    field_component_centroid_anchor_loss,
     fit_field_component_decomposition,
     fit_field_model,
     make_field_component_decomposition,
@@ -115,6 +117,47 @@ class _CoordinateField(_BaseFieldModel):
             100.0 * (ra_deg - float(self.domain.center_ra_deg))
             + 200.0 * (dec_deg - float(self.domain.center_dec_deg))
         ).to(dtype=ra_deg.dtype)
+
+
+class _GaussianSpotField(_BaseFieldModel):
+    def __init__(
+        self,
+        domain: FieldDomain,
+        *,
+        amplitude: float,
+        center_ra_deg: float,
+        center_dec_deg: float,
+        sigma_deg: float,
+    ) -> None:
+        super().__init__(domain)
+        sign = 1.0 if amplitude >= 0.0 else -1.0
+        magnitude = max(abs(float(amplitude)), 1.0e-6)
+        self.log_amplitude = torch.nn.Parameter(
+            torch.tensor(math.log(magnitude), dtype=torch.float32)
+        )
+        self.amplitude_sign = float(sign)
+        self.center_ra_deg = torch.nn.Parameter(
+            torch.tensor(float(center_ra_deg), dtype=torch.float32)
+        )
+        self.center_dec_deg = torch.nn.Parameter(
+            torch.tensor(float(center_dec_deg), dtype=torch.float32)
+        )
+        self.sigma_deg = float(sigma_deg)
+
+    def forward(
+        self,
+        ra_deg: torch.Tensor,
+        dec_deg: torch.Tensor,
+        wavelength_angstrom: torch.Tensor | float,
+        *,
+        forward_context: ForwardContext | None = None,
+    ) -> torch.Tensor:
+        del wavelength_angstrom, forward_context
+        sigma = torch.tensor(self.sigma_deg, device=ra_deg.device, dtype=ra_deg.dtype)
+        dx = (ra_deg - self.center_ra_deg.to(device=ra_deg.device, dtype=ra_deg.dtype)) / sigma
+        dy = (dec_deg - self.center_dec_deg.to(device=dec_deg.device, dtype=dec_deg.dtype)) / sigma
+        amplitude = self.log_amplitude.to(device=ra_deg.device, dtype=ra_deg.dtype).exp()
+        return self.amplitude_sign * amplitude * torch.exp(-0.5 * (dx.square() + dy.square()))
 
 
 def test_render_field_observation_changes_with_bandpass() -> None:
@@ -422,6 +465,69 @@ def test_field_component_anchor_loss_supports_astrometric_pixel_targets() -> Non
     )
 
     torch.testing.assert_close(loss, torch.zeros((), dtype=torch.float32), atol=1.0e-6, rtol=0.0)
+
+
+def test_field_component_centroid_anchor_loss_matches_world_target() -> None:
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=1000.0,
+    )
+    observation = FieldObservation(
+        image=torch.zeros((9, 9), dtype=torch.float32),
+        header=_tan_header(9, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
+        spectral_min=5600.0,
+        spectral_max=5600.0,
+        transmission_center=5600.0,
+        transmission_sigma=None,
+    )
+    target_x = torch.tensor(6.0, dtype=torch.float64)
+    target_y = torch.tensor(3.0, dtype=torch.float64)
+    target_ra, target_dec = WCS(observation.header).pixel_to_world(target_x, target_y)
+    model = FieldComponentDecomposition(
+        [
+            _GaussianSpotField(
+                domain,
+                amplitude=3.0,
+                center_ra_deg=float(target_ra),
+                center_dec_deg=float(target_dec),
+                sigma_deg=0.7 / 3600.0,
+            )
+        ],
+        component_roles=("shared",),
+    )
+    with torch.no_grad():
+        model.mixer.shared_weights[:] = torch.tensor([1.0])
+    matched_term = FieldCentroidAnchorTerm(
+        observation=observation,
+        target_ra_deg=float(target_ra),
+        target_dec_deg=float(target_dec),
+        roles="shared",
+        window_sigma_pix=1.5,
+    )
+    shifted_term = FieldCentroidAnchorTerm(
+        observation=observation,
+        target_x_pix=2.5,
+        target_y_pix=6.0,
+        roles="shared",
+        window_sigma_pix=1.5,
+    )
+
+    matched_loss = field_component_centroid_anchor_loss(
+        model,
+        [matched_term],
+        num_spectral_samples=1,
+    )
+    shifted_loss = field_component_centroid_anchor_loss(
+        model,
+        [shifted_term],
+        num_spectral_samples=1,
+    )
+
+    assert float(matched_loss.item()) < 1.0e-2
+    assert float(shifted_loss.item()) > float(matched_loss.item()) + 1.0
 
 
 def test_field_component_decomposition_diagnostics_measure_exact_leakage() -> None:
@@ -823,6 +929,101 @@ def test_sample_anchor_terms_improve_shared_spectral_calibration_stability() -> 
         anchored_diag.calibration_transfer_stability
         < plain_diag.calibration_transfer_stability
     )
+
+
+def test_component_centroid_anchor_terms_improve_shared_geometry() -> None:
+    torch.manual_seed(0)
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=1000.0,
+    )
+    template = FieldObservation(
+        image=torch.zeros((9, 9), dtype=torch.float32),
+        header=_tan_header(9, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
+        spectral_min=5600.0,
+        spectral_max=5600.0,
+        transmission_center=5600.0,
+        transmission_sigma=None,
+        weight=torch.full((9, 9), 1.0e-12, dtype=torch.float32),
+    )
+    truth_x = torch.tensor(6.0, dtype=torch.float64)
+    truth_y = torch.tensor(3.0, dtype=torch.float64)
+    truth_ra, truth_dec = WCS(template.header).pixel_to_world(truth_x, truth_y)
+    off_ra, off_dec = WCS(template.header).pixel_to_world(
+        torch.tensor(1.5, dtype=torch.float64),
+        torch.tensor(6.5, dtype=torch.float64),
+    )
+    contexts = [ForwardContext(survey="A")]
+    centroid_term = FieldCentroidAnchorTerm(
+        observation=template,
+        target_ra_deg=float(truth_ra),
+        target_dec_deg=float(truth_dec),
+        roles="shared",
+        forward_context=contexts[0],
+        loss_weight=20.0,
+        window_sigma_pix=1.5,
+    )
+
+    def _make_init_model() -> FieldComponentDecomposition:
+        model = FieldComponentDecomposition(
+            [
+                _GaussianSpotField(
+                    domain,
+                    amplitude=1.5,
+                    center_ra_deg=float(off_ra),
+                    center_dec_deg=float(off_dec),
+                    sigma_deg=0.8 / 3600.0,
+                )
+            ],
+            component_roles=("shared",),
+        )
+        with torch.no_grad():
+            model.mixer.shared_weights[:] = torch.tensor([1.0])
+        model.component_models[0].log_amplitude.requires_grad_(False)
+        return model
+
+    plain = fit_field_component_decomposition(
+        [template],
+        component_roles=("shared",),
+        model=_make_init_model(),
+        observation_forward_contexts=contexts,
+        steps=50,
+        lr=5.0e-5,
+        num_spectral_samples=1,
+    )
+    anchored = fit_field_component_decomposition(
+        [template],
+        component_roles=("shared",),
+        model=_make_init_model(),
+        observation_forward_contexts=contexts,
+        component_centroid_anchor_terms=[centroid_term],
+        steps=50,
+        lr=5.0e-5,
+        num_spectral_samples=1,
+    )
+    plain_x, plain_y = WCS(template.header).world_to_pixel(
+        plain.model.component_models[0].center_ra_deg.detach().to(dtype=torch.float64),
+        plain.model.component_models[0].center_dec_deg.detach().to(dtype=torch.float64),
+    )
+    anchored_x, anchored_y = WCS(template.header).world_to_pixel(
+        anchored.model.component_models[0].center_ra_deg.detach().to(dtype=torch.float64),
+        anchored.model.component_models[0].center_dec_deg.detach().to(dtype=torch.float64),
+    )
+    target_xf = float(truth_x.item())
+    target_yf = float(truth_y.item())
+    plain_distance = math.hypot(
+        float(plain_x.item()) - target_xf,
+        float(plain_y.item()) - target_yf,
+    )
+    anchored_distance = math.hypot(
+        float(anchored_x.item()) - target_xf,
+        float(anchored_y.item()) - target_yf,
+    )
+
+    assert anchored_distance < plain_distance * 0.3
 
 
 def test_fit_field_model_reduces_loss_and_renders_cube() -> None:

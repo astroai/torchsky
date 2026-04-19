@@ -357,6 +357,45 @@ class FieldComponentAnchorTerm:
                 )
 
 
+@dataclass(frozen=True)
+class FieldCentroidAnchorTerm:
+    """Astrometric anchor on the rendered centroid of selected decomposition roles."""
+
+    observation: FieldObservation
+    roles: str | tuple[str, ...] = "shared"
+    target_x_pix: float | None = None
+    target_y_pix: float | None = None
+    target_ra_deg: float | None = None
+    target_dec_deg: float | None = None
+    forward_context: ForwardContext | None = None
+    loss_weight: float = 1.0
+    window_sigma_pix: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.loss_weight < 0.0:
+            raise ValueError("loss_weight must be non-negative")
+        pixel_pair = self.target_x_pix is not None or self.target_y_pix is not None
+        world_pair = self.target_ra_deg is not None or self.target_dec_deg is not None
+        if pixel_pair and world_pair:
+            raise ValueError(
+                "pixel and world centroid targets are mutually exclusive"
+            )
+        if not pixel_pair and not world_pair:
+            raise ValueError(
+                "one of (target_x_pix, target_y_pix) or (target_ra_deg, target_dec_deg) must be provided"
+            )
+        if pixel_pair and (
+            self.target_x_pix is None or self.target_y_pix is None
+        ):
+            raise ValueError("target_x_pix and target_y_pix must be provided together")
+        if world_pair and (
+            self.target_ra_deg is None or self.target_dec_deg is None
+        ):
+            raise ValueError("target_ra_deg and target_dec_deg must be provided together")
+        if not math.isfinite(float(self.window_sigma_pix)) or float(self.window_sigma_pix) <= 0.0:
+            raise ValueError("window_sigma_pix must be finite and positive")
+
+
 @dataclass
 class FieldFitResult:
     model: nn.Module

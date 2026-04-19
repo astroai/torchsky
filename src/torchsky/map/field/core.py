@@ -39,6 +39,7 @@ from ..solvers import ComponentDecompositionDiagnostics, SurveyInstrumentCompone
 
 from .types import (
     FieldComponentAnchorTerm,
+    FieldCentroidAnchorTerm,
     FieldCoordinateMode,
     FieldCurriculum,
     FieldDomain,
@@ -893,6 +894,40 @@ def _resolve_anchor_sample_world_coordinates(
     return ra_deg.to(dtype=torch.float32), dec_deg.to(dtype=torch.float32)
 
 
+def _resolve_centroid_target_pixel_coordinates(
+    term: FieldCentroidAnchorTerm,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[Tensor, Tensor]:
+    if term.target_x_pix is not None and term.target_y_pix is not None:
+        return (
+            torch.tensor(float(term.target_x_pix), device=device, dtype=dtype),
+            torch.tensor(float(term.target_y_pix), device=device, dtype=dtype),
+        )
+    assert term.target_ra_deg is not None and term.target_dec_deg is not None
+    x_pix, y_pix = WCS(term.observation.header).world_to_pixel(
+        torch.tensor(float(term.target_ra_deg), dtype=torch.float64),
+        torch.tensor(float(term.target_dec_deg), dtype=torch.float64),
+    )
+    return (
+        x_pix.to(device=device, dtype=dtype),
+        y_pix.to(device=device, dtype=dtype),
+    )
+
+
+def _pixel_coordinate_grids(
+    shape: tuple[int, int],
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[Tensor, Tensor]:
+    y = torch.arange(shape[0], device=device, dtype=dtype)
+    x = torch.arange(shape[1], device=device, dtype=dtype)
+    y_grid, x_grid = torch.meshgrid(y, x, indexing="ij")
+    return x_grid, y_grid
+
+
 def field_component_anchor_loss(
     model: nn.Module,
     component_anchor_terms: Sequence[FieldComponentAnchorTerm],
@@ -1026,6 +1061,81 @@ def field_component_anchor_loss(
         )
         term_loss = float(term.loss_weight) * (
             weighted_loss / torch.clamp(weight.sum(), min=1.0e-8)
+        )
+        total = term_loss if total is None else total + term_loss
+    if total is None:
+        return torch.zeros(
+            (),
+            device=module_compute_device(model),
+            dtype=torch.float32,
+        )
+    return total
+
+
+def field_component_centroid_anchor_loss(
+    model: nn.Module,
+    centroid_anchor_terms: Sequence[FieldCentroidAnchorTerm],
+    *,
+    num_spectral_samples: int = 9,
+    spectral_sampling: FieldSpectralSampling = "deterministic_quadrature",
+    spectral_sampling_grid_size: int | None = None,
+    generator: torch.Generator | None = None,
+) -> Tensor:
+    """Weighted centroid loss for geometry-aware role anchors."""
+    total = None
+    for term in centroid_anchor_terms:
+        if term.loss_weight == 0.0:
+            continue
+        base_observation = _observation_without_background(term.observation)
+        if isinstance(model, FieldComponentDecomposition):
+            prediction = model.render_component_observation(
+                base_observation,
+                roles=term.roles,
+                num_spectral_samples=num_spectral_samples,
+                spectral_sampling=spectral_sampling,
+                spectral_sampling_grid_size=spectral_sampling_grid_size,
+                generator=generator,
+                forward_context=term.forward_context,
+            )
+        else:
+            if term.roles != SurveyInstrumentComponentMixer._VALID_ROLES:
+                raise ValueError(
+                    "centroid anchor role selection requires FieldComponentDecomposition"
+                )
+            prediction = render_field_observation(
+                model,
+                base_observation,
+                num_spectral_samples=num_spectral_samples,
+                spectral_sampling=spectral_sampling,
+                spectral_sampling_grid_size=spectral_sampling_grid_size,
+                generator=generator,
+                forward_context=term.forward_context,
+            )
+        target_x, target_y = _resolve_centroid_target_pixel_coordinates(
+            term,
+            device=prediction.device,
+            dtype=prediction.dtype,
+        )
+        x_grid, y_grid = _pixel_coordinate_grids(
+            tuple(int(v) for v in prediction.shape),
+            device=prediction.device,
+            dtype=prediction.dtype,
+        )
+        sigma_pix = torch.tensor(
+            float(term.window_sigma_pix),
+            device=prediction.device,
+            dtype=prediction.dtype,
+        )
+        valid = _observation_support_mask(term.observation).to(device=prediction.device)
+        prediction_scale = torch.clamp(prediction.detach().abs().amax(), min=1.0)
+        logits = 16.0 * (prediction / prediction_scale)
+        logits = torch.where(valid, logits, torch.full_like(logits, -1.0e9))
+        energy = torch.softmax(logits.reshape(-1), dim=0).reshape_as(prediction)
+        centroid_x = (energy * x_grid).sum()
+        centroid_y = (energy * y_grid).sum()
+        term_loss = float(term.loss_weight) * (
+            ((centroid_x - target_x) / sigma_pix).square()
+            + ((centroid_y - target_y) / sigma_pix).square()
         )
         total = term_loss if total is None else total + term_loss
     if total is None:
@@ -6384,6 +6494,7 @@ def fit_field_model(
     component_anchor_terms: Sequence[FieldComponentAnchorTerm] | None = None,
     component_anchor_num_spectral_samples: int | None = None,
     component_anchor_loss_kind: FieldLossKind | None = None,
+    component_centroid_anchor_terms: Sequence[FieldCentroidAnchorTerm] | None = None,
     lr_warmup_steps: int = 0,
     spatial_smoothness_weight: float = 0.0,
     spatial_smoothness_grid_size: int = 8,
@@ -6983,6 +7094,23 @@ def fit_field_model(
                 )
             else:
                 total_loss = total_loss + anchor_component_loss
+        if component_centroid_anchor_terms:
+            centroid_anchor_loss = field_component_centroid_anchor_loss(
+                model,
+                component_centroid_anchor_terms,
+                num_spectral_samples=component_anchor_num,
+                spectral_sampling="deterministic_quadrature",
+            )
+            if streaming_accumulation:
+                streamed_total_loss += float(centroid_anchor_loss.detach().cpu())
+                centroid_anchor_loss.backward()
+                total_loss = torch.tensor(
+                    streamed_total_loss,
+                    dtype=torch.float32,
+                    device=module_compute_device(model),
+                )
+            else:
+                total_loss = total_loss + centroid_anchor_loss
         if context_pairs and context_weight > 0.0:
             scaled_context_weight = context_weight / max(len(context_pairs), 1)
             for context_observation, ctx_f in context_pairs:

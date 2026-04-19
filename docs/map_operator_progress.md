@@ -223,7 +223,7 @@ Still incomplete:
 
 Missing:
 - stronger gauge controls for learned decomposition beyond the first exact component-scale gauge canonicalization now wired into both `HarmonicComponentDecomposition` and `FieldComponentDecomposition`
-- richer anchor surfaces for standards / astrometry / calibration transfer beyond the first solve-time field anchor observation family (`FieldComponentAnchorTerm`), which now supports rendered image anchors, direct coordinate/spectral sample anchors, and pixel-frame astrometric sample anchors via observation WCS
+- richer anchor surfaces for standards / astrometry / calibration transfer beyond the first solve-time field anchor observation family, which now includes both `FieldComponentAnchorTerm` for rendered image / direct sample / WCS-resolved pixel anchors and `FieldCentroidAnchorTerm` for geometry-aware role centroid constraints
 - robust leakage diagnostics across real survey combinations beyond the first harmonic diagnostics now available for shared-to-private leakage, private-to-shared leakage, and calibration-anchor stability
 
 The current learned split examples already show why this matters: without gauge fixing, shared amplitude and nuisance weights can trade off.
