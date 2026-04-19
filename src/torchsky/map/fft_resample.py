@@ -11,8 +11,6 @@ linearly interpolates on a periodic 1D grid; treat edge bands as approximate
 unless the field is embedded in padding.
 """
 
-from __future__ import annotations
-
 import math
 
 import torch
