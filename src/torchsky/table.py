@@ -7,6 +7,7 @@ from collections import OrderedDict
 import atexit
 import itertools
 import os
+import logging
 import re
 import threading
 from typing import Any, Optional, TYPE_CHECKING
@@ -20,6 +21,8 @@ from ._where import (
     _parse_where_expression,
     _where_columns_from_ast,
 )
+
+logger = logging.getLogger(__name__)
 
 _TABLE_IO_KEYS = {
     "hdu",
@@ -67,8 +70,8 @@ _COMPLEX_TFORM_CODES: frozenset[str] = frozenset({"C", "M"})
 def _close_cpp_handle(handle: Any) -> None:
     try:
         handle.close()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Failed to close C++ handle: %s", e)
 
 
 def _acquire_cpp_handle(path: str, cpp) -> Any:
