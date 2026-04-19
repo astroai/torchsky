@@ -17,3 +17,6 @@
 ## 2025-05-15 - Cache FITS filename extension check
 **Learning:** Checking for CFITSIO extended syntax (presence of '[') in filenames using `std::string::find` is an O(N) operation that was being performed repeatedly across multiple I/O methods. Since the filename is immutable for the lifetime of the `FITSFile` object, this search is redundant.
 **Action:** Cache the result of the extension check in a boolean member variable (`has_extension_`) during object construction and use the cached value in all subsequent I/O related methods.
+## 2024-05-19 - FITS Header Search Optimization
+**Learning:** `_fits_header_selected_includes_vla` was performing O(N*M) lookups by repeatedly parsing all `TFIELDS` for every requested column. It also utilized an expensive Regex pattern parsing repeatedly in `_parse_tform` even for non-VLA columns.
+**Action:** Hash the searched columns into a Set (O(1) lookups), iterate through the FITS header's `TFIELDS` exactly once, and apply a fast-path string check (`P` or `Q` in `TFORM`) to avoid regex overhead.
