@@ -50,13 +50,18 @@ require_cmd tar
 latest_tag() {
   local repo="$1"
   local tag
+  local curl_opts=("-fsSL")
 
-  tag="$(curl -fsSL "https://api.github.com/repos/${repo}/releases/latest" \
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    curl_opts+=("-H" "Authorization: token ${GITHUB_TOKEN}")
+  fi
+
+  tag="$(curl "${curl_opts[@]}" "https://api.github.com/repos/${repo}/releases/latest" \
     | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
     | head -n1)"
 
   if [[ -z "${tag}" ]]; then
-    tag="$(curl -fsSL "https://api.github.com/repos/${repo}/tags" \
+    tag="$(curl "${curl_opts[@]}" "https://api.github.com/repos/${repo}/tags" \
       | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
       | head -n1)"
   fi

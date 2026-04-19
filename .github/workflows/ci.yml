@@ -24,11 +24,12 @@ jobs:
         python-version: '3.12'
 
     - name: Install code quality tools
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         python -m pip install --upgrade pip
         pip install torch --index-url https://download.pytorch.org/whl/cpu
-        pip install nanobind scikit-build-core psutil
-        pip install -e ".[dev]" --no-build-isolation
+        pip install nanobind scikit-build-core psutil\n        pip install -e ".[dev]" --no-build-isolation
 
     # Tree-wide `ruff format --check` is not enabled yet (many files predate ruff format).
     - name: Lint with ruff
@@ -65,6 +66,8 @@ jobs:
         sudo apt-get install -y build-essential
 
     - name: Install Python dependencies
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         python -m pip install --upgrade pip wheel setuptools
         pip install torch --index-url https://download.pytorch.org/whl/cpu
@@ -92,6 +95,8 @@ jobs:
         sudo apt-get install -y build-essential
 
     - name: Install torchsky with bench optional dependencies
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         python -m pip install --upgrade pip wheel setuptools
         pip install torch --index-url https://download.pytorch.org/whl/cpu
@@ -155,6 +160,8 @@ jobs:
         sudo apt-get install -y valgrind build-essential
 
     - name: Install Python dependencies
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         python -m pip install --upgrade pip wheel setuptools
         pip install torch --index-url https://download.pytorch.org/whl/cpu
@@ -185,6 +192,8 @@ jobs:
         sudo apt-get install -y build-essential
 
     - name: Install Python dependencies
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         python -m pip install --upgrade pip wheel setuptools
         pip install torch --index-url https://download.pytorch.org/whl/cpu
