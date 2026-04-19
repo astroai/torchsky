@@ -498,13 +498,6 @@ def main():
             return data
 
         tests = [("torchsky_scaled", tf_scaled)]
-        if hasattr(torchsky, "_read_scaled_cpu_fast"):
-            tests.append(
-                (
-                    "torchsky_scaled_fast",
-                    lambda: torchsky._read_scaled_cpu_fast(str(scaled_path)),
-                )
-            )
         tests.extend(
             [
                 ("torchsky_raw", tf_raw),

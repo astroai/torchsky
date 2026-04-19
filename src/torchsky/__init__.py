@@ -683,23 +683,6 @@ def _resolve_image_mmap(
     raise ValueError("mmap must be bool or 'auto'")
 
 
-def _read_scaled_cpu_fast(path: str, hdu: int = 0, mmap: bool = True) -> Tensor:
-    """Internal helper for the CPU scaled fast path."""
-    import torchsky.cpp as cpp
-
-    if not hasattr(cpp, "read_full_raw_with_scale"):
-        raise RuntimeError("Scaled fast path unavailable in this build")
-
-    data, scaled, bscale, bzero = cpp.read_full_raw_with_scale(path, hdu, mmap)
-    if scaled:
-        data = data.to(dtype=torch.float32)
-        if bscale != 1.0:
-            data.mul_(bscale)
-        if bzero != 0.0:
-            data.add_(bzero)
-    return data
-
-
 def _apply_cpu_scale(data: Tensor, scaled: bool, bscale: float, bzero: float) -> Tensor:
     """Apply FITS BSCALE/BZERO with a fast integer path for signed-byte images."""
     if not scaled:
