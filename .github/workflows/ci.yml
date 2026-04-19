@@ -27,7 +27,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install torch --index-url https://download.pytorch.org/whl/cpu
-        pip install ruff pyright pandas pyarrow polars psutil numpy astropy fitsio
+        pip install ruff pyright pandas pyarrow polars psutil numpy astropy fitsio pytest
 
     # Tree-wide `ruff format --check` is not enabled yet (many files predate ruff format).
     - name: Lint with ruff
