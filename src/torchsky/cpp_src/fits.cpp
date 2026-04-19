@@ -716,16 +716,7 @@ class FITSFile {
 public:
     FITSFile(const char* filename, int mode) : filename_(filename), mode_(mode) {
         // Security check: Prevent command injection via cfitsio pipe syntax
-        if (!filename_.empty()) {
-            size_t first = filename_.find_first_not_of(" \t");
-            size_t last = filename_.find_last_not_of(" \t");
-
-            if (first != std::string::npos) {
-                if (filename_[first] == '|' || filename_[last] == '|') {
-                     throw std::runtime_error("Security Error: Filenames starting or ending with '|' are not allowed to prevent command execution.");
-                }
-            }
-        }
+        check_fits_filename(filename_);
 
         int status = 0;
         if (mode == 0) {
@@ -2974,6 +2965,7 @@ torch::Tensor read_hdus_sequence_last(const std::string& path, const std::vector
 }
 
 torch::Tensor read_full_unmapped(const std::string& path, int hdu_num) {
+    check_fits_filename(path);
     fitsfile* fptr = nullptr;
     int status = 0;
     try {
@@ -3088,6 +3080,7 @@ torch::Tensor read_full_unmapped_raw(const std::string& path, int hdu_num) {
 torch::Tensor read_full_nocache(const std::string& path, int hdu_num, bool use_mmap) {
     // True "no-cache" read path: open -> read -> close every call.
     // Unlike the cached paths, this avoids global cache locks and refcounting.
+    check_fits_filename(path);
     fitsfile* fptr = nullptr;
     int status = 0;
     std::shared_ptr<SharedReadMeta> shared_meta = get_shared_meta_for_path(path);

@@ -168,6 +168,7 @@ inline uint32_t bswap32(uint32_t x) { return __builtin_bswap32(x); }
 inline uint64_t bswap64(uint64_t x) { return __builtin_bswap64(x); }
 
 torch::Tensor read_rice_parallel(const std::string& path, int hdu, int num_threads) {
+    check_fits_filename(path);
     int status = 0;
     fitsfile* fptr = nullptr;
     fits_open_file(&fptr, path.c_str(), READONLY, &status);

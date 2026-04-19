@@ -145,6 +145,7 @@ struct ColumnInfo {
 class TableReader {
 public:
     TableReader(const std::string& filename, int hdu_num = 1) : filename_(filename), hdu_num_(hdu_num) {
+        check_fits_filename(filename);
         int status = 0;
         fits_open_file(&fptr_, filename.c_str(), READONLY, &status);
         if (status != 0) {
@@ -2123,6 +2124,7 @@ long infer_num_rows_from_payload(nb::dict tensor_dict) {
 void update_rows(const char* filename, int hdu_num, nb::dict tensor_dict, long start_row, long num_rows);
 
 void append_rows(const char* filename, int hdu_num, nb::dict tensor_dict) {
+    check_fits_filename(std::string(filename));
     fitsfile* fptr;
     int status = 0;
 
@@ -2342,6 +2344,7 @@ void insert_rows(const char* filename, int hdu_num, nb::dict tensor_dict, long s
         return;
     }
 
+    check_fits_filename(std::string(filename));
     fitsfile* fptr = nullptr;
     int status = 0;
 
@@ -2388,6 +2391,7 @@ void delete_rows(const char* filename, int hdu_num, long start_row, long num_row
         return;
     }
 
+    check_fits_filename(std::string(filename));
     fitsfile* fptr = nullptr;
     int status = 0;
 
@@ -2434,6 +2438,7 @@ void update_rows(const char* filename, int hdu_num, nb::dict tensor_dict, long s
         return;
     }
 
+    check_fits_filename(std::string(filename));
     fitsfile* fptr;
     int status = 0;
 
@@ -2644,6 +2649,7 @@ void update_rows_mmap(const char* filename, int hdu_num, nb::dict tensor_dict, l
 }
 
 void rename_columns(const char* filename, int hdu_num, nb::dict mapping) {
+    check_fits_filename(std::string(filename));
     fitsfile* fptr;
     int status = 0;
 
@@ -2702,6 +2708,7 @@ void rename_columns(const char* filename, int hdu_num, nb::dict mapping) {
 }
 
 void drop_columns(const char* filename, int hdu_num, nb::list columns) {
+    check_fits_filename(std::string(filename));
     fitsfile* fptr;
     int status = 0;
 

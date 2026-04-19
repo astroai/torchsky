@@ -782,6 +782,7 @@ NB_MODULE(cpp, m) {
           nb::arg("algorithm") = std::string("RICE_1"));
 
     m.def("write_hdu_checksums", [](const std::string& path, int hdu_num) {
+        check_fits_filename(path);
         fitsfile* fptr = nullptr;
         int status = 0;
         fits_open_file(&fptr, path.c_str(), 1 /* READWRITE */, &status);
@@ -798,6 +799,7 @@ NB_MODULE(cpp, m) {
     }, nb::arg("path"), nb::arg("hdu_num") = 0);
 
     m.def("verify_hdu_checksums", [](const std::string& path, int hdu_num) {
+        check_fits_filename(path);
         fitsfile* fptr = nullptr;
         int status = 0;
         fits_open_file(&fptr, path.c_str(), 0 /* READONLY */, &status);

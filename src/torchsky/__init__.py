@@ -1005,6 +1005,18 @@ def read(
         FileNotFoundError: File not found
         RuntimeError: FITS reading errors
     """
+
+    if isinstance(path, str):
+        p_stripped = path.strip()
+        if p_stripped and (p_stripped[0] == '|' or p_stripped[-1] == '|'):
+            raise RuntimeError("Security Error: Filenames starting or ending with '|' are not allowed to prevent command execution.")
+    elif isinstance(path, (list, tuple)):
+        for p in path:
+            if isinstance(p, str):
+                p_stripped = p.strip()
+                if p_stripped and (p_stripped[0] == '|' or p_stripped[-1] == '|'):
+                    raise RuntimeError("Security Error: Filenames starting or ending with '|' are not allowed to prevent command execution.")
+
     # Use C++ backend for high-performance I/O
     import torchsky.cpp as cpp
 
