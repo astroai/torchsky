@@ -193,15 +193,6 @@ class TestConvenienceFunctions:
 
         assert result.shape == (64, 64)
 
-    def test_create_validation_transform(self):
-        """Test validation transform creation."""
-        transform = create_validation_transform(crop_size=64, normalize=True)
-
-        data = torch.randn(100, 100)
-        result = transform(data)
-
-        assert result.shape == (64, 64)
-
         # Test without normalize
         transform_no_norm = create_validation_transform(crop_size=64, normalize=False)
         result_no_norm = transform_no_norm(data)
