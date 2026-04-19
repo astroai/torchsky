@@ -700,27 +700,6 @@ def _read_scaled_cpu_fast(path: str, hdu: int = 0, mmap: bool = True) -> Tensor:
     return data
 
 
-def _apply_cpu_scale(data: Tensor, scaled: bool, bscale: float, bzero: float) -> Tensor:
-    """Apply FITS BSCALE/BZERO with a fast integer path for signed-byte images."""
-    if not scaled:
-        return data
-
-    # Common case for signed BYTE_IMG encoded as uint8 with BZERO=-128.
-    if data.dtype == torch.uint8 and bscale == 1.0 and bzero == -128.0:
-        # Physical values are (raw + bzero) = (raw - 128). This is equivalent to
-        # flipping the sign bit and then reinterpreting as int8.
-        # Avoid the int16 intermediate; it is noticeably slower on tiny images.
-        data.bitwise_xor_(0x80)
-        return data.to(dtype=torch.int8)
-
-    data = data.to(dtype=torch.float32)
-    if bscale != 1.0:
-        data.mul_(bscale)
-    if bzero != 0.0:
-        data.add_(bzero)
-    return data
-
-
 def read_image(
     path: str,
     hdu: int = 0,
