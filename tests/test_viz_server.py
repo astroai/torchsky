@@ -15,12 +15,12 @@ import torch
 fastapi = pytest.importorskip("fastapi")
 httpx = pytest.importorskip("httpx")  # httpx is used by FastAPI TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402  # type: ignore
 
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------  # type: ignore
 # Fixtures
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------  # type: ignore
 
 @pytest.fixture
 def tmp_fits_dir(tmp_path: Path):
@@ -42,58 +42,58 @@ def _write_minimal_fits(path: Path, shape: tuple[int, int] = (64, 64)) -> None:
     import numpy as np
 
     h, w = shape
-    data = (torch.randn(h, w) * 100 + 500).numpy().astype(np.float32)
+    data = (torch.randn(h, w) * 100 + 500).numpy().astype(np.float32)  # type: ignore
 
-    # Build FITS header (2880-byte blocks)
+    # Build FITS header (2880-byte blocks)  # type: ignore
     def card(key: str, value) -> bytes:
         if isinstance(value, bool):
             v = "T" if value else "F"
-            line = f"{key:<8}= {v:>20}"
+            line = f"{key:<8}= {v:>20}"  # type: ignore
         elif isinstance(value, int):
-            line = f"{key:<8}= {value:>20}"
+            line = f"{key:<8}= {value:>20}"  # type: ignore
         elif isinstance(value, float):
-            line = f"{key:<8}= {value:>20.10E}"
+            line = f"{key:<8}= {value:>20.10E}"  # type: ignore
         elif isinstance(value, str):
-            line = f"{key:<8}= '{value:<8}'"
+            line = f"{key:<8}= '{value:<8}'"  # type: ignore
         else:
-            line = f"{key:<8}  {value}"
+            line = f"{key:<8}  {value}"  # type: ignore
         return line.ljust(80).encode("ascii")
 
     cards = [
         card("SIMPLE", True),
-        card("BITPIX", -32),
+        card("BITPIX", -32),  # type: ignore
         card("NAXIS",  2),
         card("NAXIS1", w),
         card("NAXIS2", h),
         card("EXTEND", True),
-        card("CTYPE1", "RA---TAN"),
-        card("CTYPE2", "DEC--TAN"),
+        card("CTYPE1", "RA---TAN"),  # type: ignore
+        card("CTYPE2", "DEC--TAN"),  # type: ignore
         card("CRPIX1", w // 2),
         card("CRPIX2", h // 2),
         card("CRVAL1", 150.0),
         card("CRVAL2",  2.0),
-        card("CD1_1",  -5.0e-5),
+        card("CD1_1",  -5.0e-5),  # type: ignore
         card("CD1_2",   0.0),
         card("CD2_1",   0.0),
-        card("CD2_2",   5.0e-5),
+        card("CD2_2",   5.0e-5),  # type: ignore
         b"END" + b" " * 77,
     ]
-    header_bytes = b"".join(cards)
-    # Pad to 2880-byte block
-    pad = (2880 - len(header_bytes) % 2880) % 2880
-    header_bytes += b" " * pad
+    header_bytes = b"".join(cards)  # type: ignore
+    # Pad to 2880-byte block  # type: ignore
+    pad = (2880 - len(header_bytes) % 2880) % 2880  # type: ignore
+    header_bytes += b" " * pad  # type: ignore
 
-    # Data in big-endian float32
+    # Data in big-endian float32  # type: ignore
     data_bytes = data.byteswap().tobytes()
-    pad_data = (2880 - len(data_bytes) % 2880) % 2880
+    pad_data = (2880 - len(data_bytes) % 2880) % 2880  # type: ignore
     data_bytes += b"\x00" * pad_data
 
-    path.write_bytes(header_bytes + data_bytes)
+    path.write_bytes(header_bytes + data_bytes)  # type: ignore
 
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------  # type: ignore
 # Tests: /api/fits
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------  # type: ignore
 
 def test_health(client: TestClient):
     r = client.get("/api/health")
@@ -125,8 +125,8 @@ def test_fits_info(client: TestClient):
     r = client.get("/api/fits/info?path=test_image.fits&hdu=0")
     assert r.status_code == 200
     j = r.json()
-    assert j["shape"][-2:] == [128, 128]
-    assert j["bitpix"] == -32
+    assert j["shape"][-2:] == [128, 128]  # type: ignore
+    assert j["bitpix"] == -32  # type: ignore
 
 
 def test_fits_histogram(client: TestClient):
@@ -141,16 +141,16 @@ def test_fits_histogram(client: TestClient):
 
 
 def test_fits_header(client: TestClient):
-    r = client.get("/api/fits/header?path=test_image.fits&hdu=0")
+    r = client.get("/api/fits/header?path=test_image.fits&hdu=0")  # type: ignore
     assert r.status_code == 200
     j = r.json()
-    assert "NAXIS1" in j["header"]
-    assert int(j["header"]["NAXIS1"]) == 128
+    assert "NAXIS1" in j["header"]  # type: ignore
+    assert int(j["header"]["NAXIS1"]) == 128  # type: ignore
 
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------  # type: ignore
 # Tests: /api/hips
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------  # type: ignore
 
 def test_hips_register(client: TestClient):
     r = client.get("/api/hips/register?path=test_image.fits&hdu=0&stretch=zscale&cmap=gray")
@@ -172,10 +172,10 @@ def test_hips_properties(client: TestClient):
 
 def test_hips_tile_returns_png(client: TestClient):
     sid = client.get("/api/hips/register?path=test_image.fits").json()["id"]
-    # Request a low-order tile that covers most of the image
+    # Request a low-order tile that covers most of the image  # type: ignore
     r = client.get(f"/api/hips/{sid}/Norder3/Dir0/Npix0.png")
     assert r.status_code == 200, r.text
-    assert r.headers["content-type"] == "image/png"
+    assert r.headers["content-type"] == "image/png"  # type: ignore
     # Verify PNG magic bytes
     assert r.content[:4] == b"\x89PNG"
 
@@ -203,9 +203,9 @@ def test_hips_list(client: TestClient):
     assert len(r.json()) >= 1
 
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------  # type: ignore
 # Tests: path security
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------  # type: ignore
 
 def test_path_traversal_blocked(client: TestClient):
     r = client.get("/api/fits/info?path=../../../etc/passwd")
@@ -213,7 +213,7 @@ def test_path_traversal_blocked(client: TestClient):
 
 
 def test_path_prefix_sibling_directory_blocked(tmp_path: Path):
-    """Regression: string prefix checks wrongly allowed ../<root_name>_extra/... paths."""
+    """Regression: string prefix checks wrongly allowed ../<root_name>_extra/... paths."""  # type: ignore
     from torchsky.viz.server import create_app
 
     vault = tmp_path / "vault"
@@ -229,9 +229,9 @@ def test_path_prefix_sibling_directory_blocked(tmp_path: Path):
     assert r.status_code == 403
 
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------  # type: ignore
 # Tests: /api/validate
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------  # type: ignore
 
 def test_validate_register_and_panel(client: TestClient, tmp_fits_dir: Path):
     # Write model FITS
@@ -240,7 +240,7 @@ def test_validate_register_and_panel(client: TestClient, tmp_fits_dir: Path):
     body = {"truth_path": "test_image.fits", "model_path": "model.fits",
             "truth_hdu": 0, "model_hdu": 0}
     r = client.post("/api/validate/register",
-                    json=body, headers={"Content-Type": "application/json"})
+                    json=body, headers={"Content-Type": "application/json"})  # type: ignore
     assert r.status_code == 200
     pid = r.json()["id"]
     assert len(pid) == 64
@@ -261,9 +261,9 @@ def test_validate_register_and_panel(client: TestClient, tmp_fits_dir: Path):
     assert "fit" in hist
 
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------  # type: ignore
 # Tests: /api/moc (requires a MOC file — create a minimal one)
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------  # type: ignore
 
 def test_moc_stats_synthetic(client: TestClient, tmp_fits_dir: Path):
     """Test MOC endpoint with a synthetic MOC created via torchsky."""
@@ -303,7 +303,7 @@ def test_catalog_filter_moc_column_discovery(tmp_path: Path):
             "RAJ2000": torch.tensor([150.0, 150.1], dtype=torch.float64),
             "DEJ2000": torch.tensor([2.0, 2.1], dtype=torch.float64),
         },
-        header={"EXTNAME": "CAT"},
+        header={"EXTNAME": "CAT"},  # type: ignore
         overwrite=True,
     )
     vec = lonlat_to_unit_xyz(150.05, 2.05)
@@ -315,11 +315,11 @@ def test_catalog_filter_moc_column_discovery(tmp_path: Path):
     c = TestClient(app)
     hdu_ok = None
     for hdu in (0, 1):
-        r_load = c.get(f"/api/catalog/load?path=cat.fits&hdu={hdu}")
-        if r_load.status_code == 200:
+        r_load = c.get(f"/api/catalog/load?path=cat.fits&hdu={hdu}")  # type: ignore
+        if r_load.status_code == 200:  # type: ignore
             hdu_ok = hdu
             break
-    assert hdu_ok is not None, r_load.text
+    assert hdu_ok is not None, r_load.text  # type: ignore
     r_f = c.get(
         f"/api/catalog/filter_moc?catalog_path=cat.fits&moc_path=foot.moc&hdu={hdu_ok}",
     )

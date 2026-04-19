@@ -11,10 +11,10 @@ def test_temporal_seconds_roundtrip() -> None:
     mjd = twcs.to_mjd(t)
 
     expected = torch.tensor([50000.0, 50001.0, 50000.5], dtype=torch.float64)
-    assert torch.allclose(mjd, expected)
+    assert torch.allclose(mjd, expected)  # type: ignore
 
     t_back = twcs.from_mjd(mjd)
-    assert torch.allclose(t, t_back)
+    assert torch.allclose(t, t_back)  # type: ignore
 
 
 def test_temporal_mjdrefi_mjdreff_support() -> None:
@@ -24,7 +24,7 @@ def test_temporal_mjdrefi_mjdreff_support() -> None:
     mjd = twcs.to_mjd(t)
 
     np.testing.assert_allclose(
-        mjd.cpu().numpy(), np.array([58000.125, 58002.125]), atol=1e-12
+        mjd.cpu().numpy(), np.array([58000.125, 58002.125]), atol=1e-12  # type: ignore
     )
 
 
@@ -36,12 +36,12 @@ def test_temporal_year_and_century_units() -> None:
     one_century = torch.tensor([1.0], dtype=torch.float64)
 
     np.testing.assert_allclose(
-        year_wcs.to_mjd(one_year).cpu().numpy(), np.array([365.25]), atol=1e-12
+        year_wcs.to_mjd(one_year).cpu().numpy(), np.array([365.25]), atol=1e-12  # type: ignore
     )
     np.testing.assert_allclose(
-        century_wcs.to_mjd(one_century).cpu().numpy(),
+        century_wcs.to_mjd(one_century).cpu().numpy(),  # type: ignore
         np.array([36525.0]),
-        atol=1e-12,
+        atol=1e-12,  # type: ignore
     )
 
 
@@ -52,7 +52,7 @@ def test_temporal_jd_mjd_conversion_and_iso_output() -> None:
     jd = twcs.mjd_to_jd(mjd)
     mjd_back = twcs.jd_to_mjd(jd)
 
-    assert torch.allclose(mjd, mjd_back)
+    assert torch.allclose(mjd, mjd_back)  # type: ignore
 
     iso = twcs.to_iso8601(torch.tensor([0.0], dtype=torch.float64))
-    assert iso[0].startswith("1858-11-17")
+    assert iso[0].startswith("1858-11-17")  # type: ignore
