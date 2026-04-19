@@ -100,3 +100,4 @@ wcslib_src/
 mpl-cache-*/
 venv/
 .venv/
+.coverage

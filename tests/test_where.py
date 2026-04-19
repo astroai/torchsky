@@ -313,3 +313,57 @@ def test_evaluate_where():
 
     with pytest.raises(ValueError, match="NULL comparisons only support == and !="):
         evaluate_where(_parse_where_expression("E > NULL"), data)
+
+def test_evaluate_where_edge_cases():
+    data = {"A": np.array([1, 2, 3])}
+
+    # Missing column for 'in'
+    ast = ("in", "MISSING", [1, 2], False)
+    with pytest.raises(ValueError, match="Unknown column: MISSING"):
+        evaluate_where(ast, data)
+
+    # Missing column for 'between'
+    ast = ("between", "MISSING", 1, 2, False)
+    with pytest.raises(ValueError, match="Unknown column: MISSING"):
+        evaluate_where(ast, data)
+
+    # Missing column for 'isnull'
+    ast = ("isnull", "MISSING", False)
+    with pytest.raises(ValueError, match="Unknown column: MISSING"):
+        evaluate_where(ast, data)
+
+    # Invalid AST node
+    ast = ("invalid_node_type", "A")
+    with pytest.raises(ValueError, match="Invalid AST node: invalid_node_type"):
+        evaluate_where(ast, data)
+
+    # Unsupported operator in cmp
+    ast = ("cmp", "A", "???", 5)
+    with pytest.raises(ValueError, match="Unsupported operator: \\?\\?\\?"):
+        evaluate_where(ast, data)
+
+    # Empty data map with valid AST
+    ast = ("cmp", "A", "==", 5)
+    with pytest.raises(ValueError, match="Unknown column: A"):
+        evaluate_where(ast, {})
+
+
+def test_evaluate_where_more_comparisons():
+    data = {"A": np.array([1, 2, 3])}
+
+    # >= comparison
+    ast = ("cmp", "A", ">=", 2)
+    mask = evaluate_where(ast, data)
+    np.testing.assert_array_equal(mask, [False, True, True])
+
+    # < comparison
+    ast = ("cmp", "A", "<", 2)
+    mask = evaluate_where(ast, data)
+    np.testing.assert_array_equal(mask, [True, False, False])
+
+
+def test_where_columns_from_ast_invalid():
+    # Invalid AST for _where_columns_from_ast
+    ast = ("invalid", "A")
+    with pytest.raises(ValueError, match="Invalid where AST"):
+        _where_columns_from_ast(ast)
