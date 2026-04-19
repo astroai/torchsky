@@ -15,6 +15,8 @@ def test_ranges_to_uniq_empty():
 
 def test_max_order_from_uniq_empty():
     assert _max_order_from_uniq(torch.tensor([], dtype=torch.int64)) == 0
+    assert _max_order_from_uniq(torch.tensor([])) == 0
+    assert _max_order_from_uniq(torch.empty((0,))) == 0
 
 def test_normalize_moc_empty():
     uniq = torch.tensor([], dtype=torch.int64)
