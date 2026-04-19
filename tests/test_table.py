@@ -48,7 +48,7 @@ class TestTableReading:
             assert isinstance(result, dict)
             assert "RA" in result
             assert "DEC" in result
-            assert len(result.get_string_column('RA')) == 100  # type: ignore
+            assert len(result['RA']) == 100  # type: ignore
 
         finally:
             os.unlink(filepath)
@@ -80,7 +80,7 @@ class TestTableReading:
             )
 
             assert isinstance(result, dict)
-            assert len(result.get_string_column('RA')) == 50  # type: ignore
+            assert len(result['RA']) == 50  # type: ignore
 
         finally:
             os.unlink(filepath)
@@ -97,7 +97,7 @@ class TestTableReading:
 
             assert isinstance(result, dict)
             assert "RA" in result
-            assert len(result.get_string_column('RA')) == 10000  # type: ignore
+            assert len(result['RA']) == 10000  # type: ignore
 
         finally:
             os.unlink(filepath)
@@ -242,7 +242,7 @@ class TestTableReading:
             }
         )
         assert out.num_rows == 3
-        assert out.get_string_column('ID').tolist() == [1, 2, 3]  # type: ignore
+        assert out['ID'].tolist() == [1, 2, 3]  # type: ignore
         assert len(out.get_string_column('VLA')) == 3  # type: ignore
         assert out.get_string_column('VLA')[-1].tolist() == [4, 5, 6]  # type: ignore
 
@@ -254,8 +254,8 @@ class TestTableReading:
             result, header = torchsky.read(filepath, hdu=1, return_header=True)
 
             # Check data types are preserved appropriately
-            assert result.get_string_column('ID').dtype in [torch.int32, torch.int64]  # type: ignore
-            assert result.get_string_column('RA').dtype in [torch.float32, torch.float64]  # type: ignore
+            assert result['ID'].dtype in [torch.int32, torch.int64]  # type: ignore
+            assert result['RA'].dtype in [torch.float32, torch.float64]  # type: ignore
             assert result.get_string_column('FLAG').dtype in [torch.uint8, torch.int16, torch.int32]  # type: ignore
 
         finally:
@@ -322,7 +322,7 @@ class TestTablePerformance:
             streaming_time = time.time() - start_time
 
             assert isinstance(result, dict)
-            assert len(result.get_string_column('RA')) == 50000  # type: ignore
+            assert len(result['RA']) == 50000  # type: ignore
 
             # Streaming should complete in reasonable time
             assert streaming_time < 30.0  # Should complete within 30 seconds
