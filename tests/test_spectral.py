@@ -9,6 +9,7 @@ import tempfile
 
 import numpy as np
 import pytest
+import unittest.mock
 import torch
 
 from torchsky.spectral import (
@@ -327,6 +328,36 @@ class TestSpectralReader:
 
         finally:
             os.unlink(filepath)
+
+
+    @unittest.mock.patch("torchsky.spectral.WCS")
+    @unittest.mock.patch("torchsky.spectral.spectral_axis_from_header")
+    @unittest.mock.patch("torchsky.open")
+    def test_read_data_cube_wcs_error(self, mock_open, mock_spectral_axis, mock_wcs_class):
+        """Test read_data_cube handles WCS creation failure gracefully."""
+        mock_hdul = unittest.mock.MagicMock()
+        mock_open.return_value.__enter__.return_value = mock_hdul
+
+        mock_hdu = unittest.mock.MagicMock()
+        mock_hdul.__getitem__.return_value = mock_hdu
+
+        # Setup dummy data and header
+        mock_hdu.to_tensor.return_value = torch.ones((10, 10, 10))
+        mock_hdu.header = {"TEST": 1}
+
+        # Setup dummy spectral axis to pass post-init checks
+        mock_axis = unittest.mock.MagicMock()
+        mock_axis.values = torch.ones(10)
+        mock_spectral_axis.return_value = (mock_axis, 0)
+
+        # Make WCS.from_header raise an exception
+        mock_wcs_class.from_header.side_effect = Exception("WCS Error")
+
+        # Should not raise exception
+        cube = SpectralReader.read_data_cube("fake_path.fits")
+
+        assert isinstance(cube, DataCube)
+        assert cube.spatial_wcs is None
 
     @pytest.mark.skip("Requires full torchsky implementation")
     def test_read_data_cube(self):
