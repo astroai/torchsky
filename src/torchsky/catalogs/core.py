@@ -265,10 +265,12 @@ def _crossmatch_sky_declination_pruned(
     right_hits: list[Tensor] = []
     sep_hits: list[Tensor] = []
 
-    for start in range(0, int(left_ra.numel()), left_chunk_size):
-        stop = min(start + left_chunk_size, int(left_ra.numel()))
-        left_ra_chunk = left_ra[start:stop]
-        left_dec_chunk = left_dec[start:stop]
+    for start, left_ra_chunk, left_dec_chunk in zip(
+        range(0, int(left_ra.numel()), left_chunk_size),
+        left_ra.split(left_chunk_size),
+        left_dec.split(left_chunk_size),
+        strict=False,
+    ):
         cand_start, cand_stop = _candidate_dec_window(
             right_dec_sorted,
             dec_min_deg=left_dec_chunk.min(),
@@ -280,14 +282,15 @@ def _crossmatch_sky_declination_pruned(
 
         ra_chunk = left_ra_chunk.unsqueeze(1)
         dec_chunk = left_dec_chunk.unsqueeze(1)
+        chunk_len = left_ra_chunk.shape[0]
         best_sep = torch.full(
-            (stop - start,),
+            (chunk_len,),
             torch.inf,
             dtype=torch.float64,
             device=device,
         )
         best_idx = torch.full(
-            (stop - start,),
+            (chunk_len,),
             -1,
             dtype=torch.int64,
             device=device,
@@ -296,29 +299,40 @@ def _crossmatch_sky_declination_pruned(
         stats.candidate_groups += 1
         stats.candidate_rows_considered += candidate_count
 
-        for right_start in range(cand_start, cand_stop, right_chunk_size):
-            right_stop = min(right_start + right_chunk_size, cand_stop)
-            chunk_size = right_stop - right_start
+        cand_right_ra = right_ra_sorted[cand_start:cand_stop]
+        cand_right_dec = right_dec_sorted[cand_start:cand_stop]
+        cand_right_order = right_order[cand_start:cand_stop]
+        if cand_right_ra.numel() == 0:
+            continue
+
+        for right_ra_chunk, right_dec_chunk, right_order_chunk in zip(
+            cand_right_ra.split(right_chunk_size),
+            cand_right_dec.split(right_chunk_size),
+            cand_right_order.split(right_chunk_size),
+            strict=False,
+        ):
+            right_chunk_len = right_ra_chunk.shape[0]
             sep = great_circle_distance(
                 ra_chunk,
                 dec_chunk,
-                right_ra_sorted[right_start:right_stop].unsqueeze(0),
-                right_dec_sorted[right_start:right_stop].unsqueeze(0),
+                right_ra_chunk.unsqueeze(0),
+                right_dec_chunk.unsqueeze(0),
                 degrees=True,
             )
-            stats.pairs_evaluated += (stop - start) * chunk_size
+            stats.pairs_evaluated += chunk_len * right_chunk_len
             cand_sep, cand_idx = sep.min(dim=1)
             improved = cand_sep < best_sep
             if bool(improved.any()):
                 best_sep = torch.where(improved, cand_sep, best_sep)
                 best_idx = torch.where(
                     improved,
-                    right_order[right_start:right_stop][cand_idx.to(torch.int64)],
+                    right_order_chunk[cand_idx.to(torch.int64)],
                     best_idx,
                 )
 
         mask = best_sep <= radius_deg
         if bool(mask.any()):
+            stop = start + chunk_len
             left_hits.append(
                 torch.arange(start, stop, dtype=torch.int64, device=device)[mask]
             )
@@ -373,11 +387,14 @@ def _crossmatch_sky_coarse_indexed(
     right_hits: list[Tensor] = []
     sep_hits: list[Tensor] = []
 
-    for start in range(0, int(left_ra.numel()), left_chunk_size):
-        stop = min(start + left_chunk_size, int(left_ra.numel()))
-        left_ra_chunk = left_ra[start:stop]
-        left_dec_chunk = left_dec[start:stop]
-        left_abs_index = torch.arange(start, stop, dtype=torch.int64, device=device)
+    for start, left_ra_chunk, left_dec_chunk in zip(
+        range(0, int(left_ra.numel()), left_chunk_size),
+        left_ra.split(left_chunk_size),
+        left_dec.split(left_chunk_size),
+        strict=False,
+    ):
+        stop = start + left_ra_chunk.shape[0]
+        left_abs_chunk = torch.arange(start, stop, dtype=torch.int64, device=device)
         left_coarse_pixel = _healpix.ang2pix(
             coarse_nside,
             left_ra_chunk,
@@ -407,7 +424,7 @@ def _crossmatch_sky_coarse_indexed(
             rel_sorted = left_order[offset : offset + count]
             group_ra = left_ra_chunk[rel_sorted]
             group_dec = left_dec_chunk[rel_sorted]
-            group_abs = left_abs_index[rel_sorted]
+            group_abs = left_abs_chunk[rel_sorted]
 
             candidate_pixels = candidate_cache.get(coarse_pixel)
             if candidate_pixels is None:
@@ -440,13 +457,8 @@ def _crossmatch_sky_coarse_indexed(
             group_ra_col = group_ra.unsqueeze(1)
             group_dec_col = group_dec.unsqueeze(1)
 
-            for right_start in range(
-                0, int(candidate_right_idx.numel()), right_chunk_size
-            ):
-                right_stop = min(
-                    right_start + right_chunk_size, int(candidate_right_idx.numel())
-                )
-                right_ids = candidate_right_idx[right_start:right_stop]
+            for right_ids in candidate_right_idx.split(right_chunk_size):
+                right_chunk_len = right_ids.shape[0]
                 sep = great_circle_distance(
                     group_ra_col,
                     group_dec_col,
@@ -454,7 +466,7 @@ def _crossmatch_sky_coarse_indexed(
                     right_dec[right_ids].unsqueeze(0),
                     degrees=True,
                 )
-                stats.pairs_evaluated += count * int(right_ids.numel())
+                stats.pairs_evaluated += count * right_chunk_len
                 cand_sep, cand_idx = sep.min(dim=1)
                 improved = cand_sep < best_sep
                 if bool(improved.any()):
