@@ -1838,7 +1838,7 @@ class FourierMLPField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         for module in self.hidden:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
@@ -1916,7 +1916,7 @@ class SpectralBasisField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         for module in self.hidden:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
                 nn.init.zeros_(module.bias)
         nn.init.xavier_uniform_(self.coeff_head.weight, gain=0.01)
@@ -1924,7 +1924,7 @@ class SpectralBasisField(_BaseFieldModel):
         nn.init.uniform_(self.bias_head.weight, -1e-4, 1e-4)
         nn.init.constant_(self.bias_head.bias, -3.0)
         for module in self.spectral_amp_head:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.uniform_(module.weight, -1e-3, 1e-3)
                 nn.init.zeros_(module.bias)
 
@@ -2141,11 +2141,11 @@ class BandpassConditionedField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         for module in self.spatial_hidden:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         for module in self.bandpass_hidden:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
@@ -2274,7 +2274,7 @@ class LearnedSpectralBasisField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         for module in self.hidden:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         nn.init.xavier_uniform_(self.coeff_head.weight)
@@ -2282,7 +2282,7 @@ class LearnedSpectralBasisField(_BaseFieldModel):
         nn.init.uniform_(self.bias_head.weight, -1e-2, 1e-2)
         nn.init.constant_(self.bias_head.bias, 0.0)
         for module in self.spectral_basis:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
 
@@ -2388,7 +2388,7 @@ class SkyEncoderBandpassField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         for module in self.bandpass_hidden:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
                 nn.init.zeros_(module.bias)
         _reset_silu_mlp_linears(self.hidden)
@@ -2524,7 +2524,7 @@ class ConditionedSpectralField(_BaseFieldModel):
             nn.init.xavier_uniform_(layer.weight)
             nn.init.zeros_(layer.bias)
         for module in self.spectral_mlp:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
@@ -2646,7 +2646,7 @@ class HashGridConditionedField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         for module in self.hidden:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
@@ -2774,7 +2774,7 @@ def _silu_mlp_sequential(in_dim: int, hidden_dim: int, hidden_layers: int) -> nn
 
 def _reset_silu_mlp_linears(sequence: nn.Sequential) -> None:
     for module in sequence:
-        if isinstance(module, nn.Linear):
+        if type(module) is nn.Linear:
             nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
             nn.init.zeros_(module.bias)
 
@@ -3097,7 +3097,7 @@ class SkyEncoderResMLPField(_BaseFieldModel):
         nn.init.zeros_(self.input.bias)
         if isinstance(self.output, nn.Sequential):
             for module in self.output:
-                if isinstance(module, nn.Linear):
+                if type(module) is nn.Linear:
                     nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
                     nn.init.zeros_(module.bias)
             final = self.output[-1]
@@ -3375,7 +3375,7 @@ class HashGridMLPField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         for module in self.hidden:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
@@ -3509,7 +3509,7 @@ class HashGridSpectralField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         for module in self.hidden:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         nn.init.xavier_uniform_(self.coeff_head.weight)
@@ -3606,7 +3606,7 @@ class SkyLambdaPlanesField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         for module in self.hidden:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
@@ -3712,13 +3712,13 @@ class SkyLambdaKPlanesField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         for module in self.hidden:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         nn.init.uniform_(self.base_output.weight, -1e-2, 1e-2)
         nn.init.constant_(self.base_output.bias, -3.0)
         for module in self.refine:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
 
@@ -3923,30 +3923,30 @@ class SkyLambdaFeatureField(_BaseFieldModel):
     def _reset_parameters(self) -> None:
         for mlp in self.scale_mlps:
             for module in mlp:
-                if isinstance(module, nn.Linear):
+                if type(module) is nn.Linear:
                     nn.init.xavier_uniform_(module.weight)
                     nn.init.zeros_(module.bias)
         for module in self.scale_gate:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         for module in self.bandpass_context:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         if self.global_encoder is not None:
             for module in self.global_encoder:
-                if isinstance(module, nn.Linear):
+                if type(module) is nn.Linear:
                     nn.init.xavier_uniform_(module.weight)
                     nn.init.zeros_(module.bias)
         for module in self.decoder:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         nn.init.uniform_(self.base_output.weight, -1e-2, 1e-2)
         nn.init.constant_(self.base_output.bias, -3.0)
         for module in self.refine:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         if self.logvar_output is not None:
@@ -3954,7 +3954,7 @@ class SkyLambdaFeatureField(_BaseFieldModel):
             nn.init.constant_(self.logvar_output.bias, -2.0)
         if self.logvar_refine is not None:
             for module in self.logvar_refine:
-                if isinstance(module, nn.Linear):
+                if type(module) is nn.Linear:
                     nn.init.xavier_uniform_(module.weight)
                     nn.init.zeros_(module.bias)
 
@@ -4567,43 +4567,43 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
     def _reset_parameters(self) -> None:
         for mlp in self.scale_mlps:
             for module in mlp:
-                if isinstance(module, nn.Linear):
+                if type(module) is nn.Linear:
                     nn.init.xavier_uniform_(module.weight)
                     nn.init.zeros_(module.bias)
         for module in self.scale_gate:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         for module in self.coefficient_head:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         for module in self.spectral_context:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         for module in self.spectral_affine:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         for module in self.bandpass_context:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         for module in self.decoder:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         for module in self.refine:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         for module in self.residual_affine:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         for module in self.residual_decoder[:-1]:
-            if isinstance(module, nn.Linear):
+            if type(module) is nn.Linear:
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         nn.init.uniform_(self.base_output.weight, -1.0e-2, 1.0e-2)
