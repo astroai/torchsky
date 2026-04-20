@@ -23,6 +23,21 @@ def test_module_compute_device_from_parameter() -> None:
     assert module_compute_device(m) == m.weight.device
 
 
+def test_module_compute_device_from_buffer() -> None:
+    class BufferModule(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.register_buffer("buf", torch.zeros(1))
+
+    m = BufferModule()
+    assert module_compute_device(m) == m.buf.device
+
+
+def test_module_compute_device_fallback() -> None:
+    m = nn.Module()
+    assert module_compute_device(m) == default_compute_device()
+
+
 def test_resolve_fit_device_explicit() -> None:
     m = nn.Linear(1, 1)
     assert str(resolve_fit_device(m, "cpu")) == "cpu"
