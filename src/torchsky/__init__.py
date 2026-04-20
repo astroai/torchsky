@@ -7,7 +7,18 @@ optimized for PyTorch tensors and pytorch-frame TensorFrames.
 
 import importlib
 import logging as _stdlib_logging
-from typing import Any, Dict, List, Optional, Union, Iterator, Tuple, Sequence, overload, Literal
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Union,
+    Iterator,
+    Tuple,
+    Sequence,
+    overload,
+    Literal,
+)
 from collections import OrderedDict
 
 import numpy as np
@@ -1971,49 +1982,54 @@ def _can_use_cpp_table_writer(table_dict: Dict[str, Any]) -> bool:
     return True
 
 
+def _normalize_vla_item(item: Any) -> np.ndarray:
+    """Normalize a single VLA item."""
+    if isinstance(item, torch.Tensor):
+        t = item.detach()
+        if t.device.type != "cpu":
+            t = t.cpu()
+        if t.dim() == 0:
+            t = t.reshape(1)
+        return np.ascontiguousarray(t.numpy())
+    elif isinstance(item, np.ndarray):
+        return np.ascontiguousarray(item)
+    elif item is None:
+        return np.asarray([], dtype=np.float32)
+    else:
+        return np.asarray(item)
+
+
+def _normalize_list_sequence(items: list[Any]) -> Any:
+    """Normalize a list or tuple sequence."""
+    if items and all(
+        isinstance(item, (str, bytes, np.str_, np.bytes_)) or item is None
+        for item in items
+    ):
+        return items
+    if any(isinstance(item, (list, tuple, np.ndarray, torch.Tensor)) for item in items):
+        return [_normalize_vla_item(item) for item in items]
+    return np.asarray(items)
+
+
+def _normalize_ndarray_column(value: np.ndarray) -> Any:
+    """Normalize an ndarray column."""
+    if value.dtype == np.object_:
+        return list(value)
+    if value.dtype.kind in {"U", "S"}:
+        return value.astype(str).tolist()
+    return value
+
+
 def _normalize_cpp_table_data(table_dict: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize table data for the C++ writer (strings/VLA/object arrays)."""
     out: Dict[str, Any] = {}
     for name, value in table_dict.items():
         if isinstance(value, (list, tuple)):
-            items = list(value)
-            if items and all(
-                isinstance(item, (str, bytes, np.str_, np.bytes_)) or item is None
-                for item in items
-            ):
-                out[name] = items
-                continue
-            if any(
-                isinstance(item, (list, tuple, np.ndarray, torch.Tensor))
-                for item in items
-            ):
-                norm_items = []
-                for item in items:
-                    if isinstance(item, torch.Tensor):
-                        t = item.detach()
-                        if t.device.type != "cpu":
-                            t = t.cpu()
-                        if t.dim() == 0:
-                            t = t.reshape(1)
-                        norm_items.append(np.ascontiguousarray(t.numpy()))
-                    elif isinstance(item, np.ndarray):
-                        norm_items.append(np.ascontiguousarray(item))
-                    elif item is None:
-                        norm_items.append(np.asarray([], dtype=np.float32))
-                    else:
-                        norm_items.append(np.asarray(item))
-                out[name] = norm_items
-                continue
-            out[name] = np.asarray(items)
-            continue
-        if isinstance(value, np.ndarray):
-            if value.dtype == np.object_:
-                out[name] = list(value)
-                continue
-            if value.dtype.kind in {"U", "S"}:
-                out[name] = value.astype(str).tolist()
-                continue
-        out[name] = value
+            out[name] = _normalize_list_sequence(list(value))
+        elif isinstance(value, np.ndarray):
+            out[name] = _normalize_ndarray_column(value)
+        else:
+            out[name] = value
     return out
 
 
