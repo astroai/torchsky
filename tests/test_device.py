@@ -8,7 +8,6 @@ import torch.nn as nn
 
 from torchsky.device import (
     default_compute_device,
-    module_compute_device,
     resolve_fit_device,
 )
 
@@ -17,10 +16,6 @@ def test_default_compute_device_env_override(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("TORCHSKY_DEVICE", "cpu")
     assert str(default_compute_device()) == "cpu"
 
-
-def test_module_compute_device_from_parameter() -> None:
-    m = nn.Linear(2, 3)
-    assert module_compute_device(m) == m.weight.device
 
 
 def test_resolve_fit_device_explicit() -> None:

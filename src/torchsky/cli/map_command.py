@@ -13,7 +13,7 @@ from typing import Sequence
 import torch
 
 from .. import read, write
-from ..device import default_compute_device, module_compute_device
+from ..device import default_compute_device
 from ..map import (
     FieldObservation,
     ImageObservation,
@@ -321,7 +321,7 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         observations_per_step=min(len(fields), int(args.inr_obs_per_step)),
         device=args.device,
     )
-    dev = module_compute_device(model)
+    dev = next(model.parameters()).device
     target_obs = FieldObservation(
         image=torch.zeros((h, w), dtype=torch.float32, device=dev),
         header=dict(plan.header),
