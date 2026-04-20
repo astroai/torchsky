@@ -307,7 +307,7 @@ def _bench_case(
                 start_row=row_slice_start,
                 num_rows=row_slice_n,
             ),
-            "torchsky_specialized": lambda: torchsky.read_table_rows(
+            "torchsky_specialized": lambda: torchsky.read_table(
                 str(path),
                 hdu=1,
                 start_row=row_slice_start,

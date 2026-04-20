@@ -467,12 +467,12 @@ class TestTableAPI:
         finally:
             os.unlink(filepath)
 
-    def test_read_table_rows_wrapper(self):
-        """read_table_rows should return the requested row slice."""
+    def test_read_table_with_rows(self):
+        """read_table should return the requested row slice."""
         filepath = self.create_test_table(512)
 
         try:
-            data = torchsky.read_table_rows(filepath, hdu=1, start_row=11, num_rows=25)
+            data = torchsky.read_table(filepath, hdu=1, start_row=11, num_rows=25)
             assert isinstance(data, dict)
             assert "ID" in data
             assert len(data["ID"]) == 25
@@ -480,12 +480,12 @@ class TestTableAPI:
         finally:
             os.unlink(filepath)
 
-    def test_read_table_rows_default_hdu(self):
-        """read_table_rows default HDU should read first table extension (index 1)."""
+    def test_read_table_default_hdu_with_rows(self):
+        """read_table default HDU should read first table extension (index 1)."""
         filepath = self.create_test_table(128)
 
         try:
-            data = torchsky.read_table_rows(filepath, start_row=6, num_rows=10)
+            data = torchsky.read_table(filepath, start_row=6, num_rows=10)
             assert "ID" in data
             assert len(data["ID"]) == 10
             assert int(data["ID"][0].item()) == 5
@@ -499,18 +499,6 @@ class TestTableAPI:
         try:
             with pytest.raises(ValueError, match="non-negative integer"):
                 torchsky.read_table(filepath, hdu="auto")  # type: ignore[arg-type]
-        finally:
-            os.unlink(filepath)
-
-    def test_read_table_rows_rejects_auto_hdu(self):
-        """Specialized table row API should require explicit HDU index."""
-        filepath = self.create_test_table(128)
-
-        try:
-            with pytest.raises(ValueError, match="non-negative integer"):
-                torchsky.read_table_rows(  # type: ignore[arg-type]
-                    filepath, hdu="auto", start_row=1, num_rows=5
-                )
         finally:
             os.unlink(filepath)
 
