@@ -326,16 +326,13 @@ class FastHeaderParser:
         if "''" not in quoted_str:
             return quoted_str[1:end_idx]
 
-        end_idx = 1
-        while True:
-            end_idx = quoted_str.find("'", end_idx)
-            if end_idx == -1:
-                return quoted_str[1:].replace("''", "'")
-
-            if end_idx + 1 < len(quoted_str) and quoted_str[end_idx + 1] == "'":
-                end_idx += 2
-            else:
-                return quoted_str[1:end_idx].replace("''", "'")
+        # We search for the first unescaped quote AFTER the opening quote.
+        # We use [1:] to protect the opening quote at index 0 from being replaced.
+        end_idx = quoted_str[1:].replace("''", "  ").find("'")
+        if end_idx == -1:
+            return quoted_str[1:].replace("''", "'")
+        # Add 1 back to end_idx because we searched in quoted_str[1:]
+        return quoted_str[1:end_idx + 1].replace("''", "'")
 
     @classmethod
     def parse_with_performance_tracking(cls, header_string: str) -> tuple:
