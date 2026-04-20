@@ -101,3 +101,4 @@ mpl-cache-*/
 venv/
 .venv/
 .venv/
+node_modules/

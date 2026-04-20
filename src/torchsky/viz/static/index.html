@@ -316,6 +316,10 @@
       background: var(--bg-border);
       outline: none;
     }
+    input[type="range"]:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     input[type="range"]::-webkit-slider-thumb {
       -webkit-appearance: none;
       width: 12px; height: 12px;
@@ -575,7 +579,7 @@
     <!-- Controls (shown for FITS/sky tabs) -->
     <div id="fits-controls" style="overflow-y:auto; flex-shrink:0; border-top:1px solid var(--bg-border);">
       <div class="sidebar-section">
-        <div class="section-title">HDU</div>
+        <label class="section-title" for="hdu-select" style="display:block;">HDU</label>
         <select id="hdu-select"><option value="0">0 — PRIMARY</option></select>
       </div>
 
@@ -612,12 +616,12 @@
       <div class="sidebar-section">
         <div class="section-title">Display Range</div>
         <div class="slider-row">
-          <span class="slider-label">vmin</span>
+          <label class="slider-label" for="vmin-slider">vmin</label>
           <input type="range" id="vmin-slider" min="0" max="100" value="2" step="0.5" />
           <span class="slider-value" id="vmin-val">—</span>
         </div>
         <div class="slider-row">
-          <span class="slider-label">vmax</span>
+          <label class="slider-label" for="vmax-slider">vmax</label>
           <input type="range" id="vmax-slider" min="0" max="100" value="98" step="0.5" />
           <span class="slider-value" id="vmax-val">—</span>
         </div>
@@ -636,16 +640,16 @@
 
       <!-- Catalog load -->
       <div class="sidebar-section">
-        <div class="section-title">Catalog Overlay</div>
+        <label class="section-title" for="catalog-select" style="display:block;">Catalog Overlay</label>
         <select id="catalog-select" style="margin-bottom:var(--sp2)">
           <option value="">— select FITS catalog —</option>
         </select>
         <div style="display:flex;gap:var(--sp2)">
-          <input type="text" id="ra-col-input" placeholder="RA col" value="RA"
+          <input type="text" id="ra-col-input" placeholder="RA col" value="RA" aria-label="RA Column"
             style="flex:1;background:var(--bg-input);border:1px solid var(--bg-border);
                    border-radius:var(--r-sm);color:var(--text-primary);font-family:var(--font-mono);
                    font-size:11px;padding:4px var(--sp2);" />
-          <input type="text" id="dec-col-input" placeholder="Dec col" value="DEC"
+          <input type="text" id="dec-col-input" placeholder="Dec col" value="DEC" aria-label="Dec Column"
             style="flex:1;background:var(--bg-input);border:1px solid var(--bg-border);
                    border-radius:var(--r-sm);color:var(--text-primary);font-family:var(--font-mono);
                    font-size:11px;padding:4px var(--sp2);" />
