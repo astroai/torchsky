@@ -18,8 +18,8 @@ if TYPE_CHECKING:
     import numpy as np
 
 from ._where import (
-    _parse_where_expression,
-    _where_columns_from_ast,
+    parse_where_expression,
+    where_columns_from_ast,
 )
 
 logger = logging.getLogger(__name__)
@@ -596,7 +596,7 @@ def _compile_where_to_simple_predicates(
     of simple binary comparisons.
     """
     try:
-        ast = _parse_where_expression(where)
+        ast = parse_where_expression(where)
     except Exception:
         return None
 
@@ -632,7 +632,7 @@ def _where_mask_for_table(table, where: str, parsed_ast=None) -> "np.ndarray":
     pa = _require_pyarrow()
     import pyarrow.compute as pc
 
-    ast = parsed_ast if parsed_ast is not None else _parse_where_expression(where)
+    ast = parsed_ast if parsed_ast is not None else parse_where_expression(where)
 
     def _get_predicate_column(column_name: str):
         if column_name not in table.column_names:
@@ -759,8 +759,8 @@ def _resolve_rows_from_where_cpp(
     mmap: bool,
     apply_fits_nulls: bool,
 ) -> Optional[list[int]]:
-    where_ast = _parse_where_expression(where)
-    where_columns = _where_columns_from_ast(where_ast)
+    where_ast = parse_where_expression(where)
+    where_columns = where_columns_from_ast(where_ast)
     predicate_table = _read_cpp_numpy_table(
         path=path,
         hdu=hdu,
