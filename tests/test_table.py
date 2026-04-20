@@ -244,8 +244,8 @@ class TestTableReading:
         )
         assert out.num_rows == 3
         assert out['ID'].tolist() == [1, 2, 3]  # type: ignore
-        assert len(out.get_string_column('VLA')) == 3  # type: ignore
-        assert out.get_string_column('VLA')[-1].tolist() == [4, 5, 6]  # type: ignore
+        assert len(out.get_vla_column('VLA')) == 3  # type: ignore
+        assert out.get_vla_column('VLA')[-1].tolist() == [4, 5, 6]  # type: ignore
 
     def test_data_types(self):
         """Test various FITS data types."""
@@ -257,7 +257,7 @@ class TestTableReading:
             # Check data types are preserved appropriately
             assert result['ID'].dtype in [torch.int32, torch.int64]  # type: ignore
             assert result['RA'].dtype in [torch.float32, torch.float64]  # type: ignore
-            assert result.get_string_column('FLAG').dtype in [torch.uint8, torch.int16, torch.int32]  # type: ignore
+            assert result['FLAG'].dtype in [torch.uint8, torch.int16, torch.int32]  # type: ignore
 
         finally:
             os.unlink(filepath)
