@@ -167,7 +167,6 @@ __all__ = [
     "read",
     "read_image",
     "read_table",
-    "read_table_rows",
     "write",
     "insert_hdu",
     "replace_hdu",
@@ -832,44 +831,6 @@ def read_table(
             f"HDU {hdu!r} is an image HDU. Use read_image(...) or read(...)."
         )
     return out
-
-
-def read_table_rows(
-    path: str,
-    hdu: int = 1,
-    start_row: int = 1,
-    num_rows: int = 1000,
-    columns: Optional[List[str]] = None,
-    device: str = "cpu",
-    mmap: Union[bool, str] = "auto",
-    cache_capacity: int = 10,
-    handle_cache_capacity: int = 16,
-    fast_header: bool = True,
-    return_header: bool = False,
-    policy: str = "default",
-):
-    """Read a row slice from a table HDU.
-
-    `start_row` is 1-based (FITS convention). `num_rows` must be > 0.
-    """
-    if not isinstance(hdu, int) or hdu < 0:
-        raise ValueError("hdu must be a non-negative integer")
-    if num_rows <= 0:
-        raise ValueError("num_rows must be > 0 for read_table_rows")
-    return read_table(
-        path=path,
-        hdu=hdu,
-        columns=columns,
-        start_row=start_row,
-        num_rows=num_rows,
-        device=device,
-        mmap=mmap,
-        cache_capacity=cache_capacity,
-        handle_cache_capacity=handle_cache_capacity,
-        fast_header=fast_header,
-        return_header=return_header,
-        policy=policy,
-    )
 
 
 @overload
