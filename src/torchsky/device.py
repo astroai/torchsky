@@ -26,16 +26,6 @@ def default_compute_device() -> torch.device:
     return torch.device("cpu")
 
 
-def module_compute_device(module: nn.Module) -> torch.device:
-    """Device of the first parameter or buffer, else :func:`default_compute_device`."""
-    parameter = next(module.parameters(), None)
-    if parameter is not None:
-        return parameter.device
-    buffer = next(module.buffers(), None)
-    if buffer is not None:
-        return buffer.device
-    return default_compute_device()
-
 
 def resolve_fit_device(
     model: nn.Module,
