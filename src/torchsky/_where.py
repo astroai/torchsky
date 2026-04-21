@@ -118,7 +118,7 @@ def _normalize_where_syntax(where: str) -> str:
 
 
 @lru_cache(maxsize=1024)
-def _parse_where_expression(where: str):
+def parse_where_expression(where: str):
     if not isinstance(where, str) or not where.strip():
         raise ValueError("where must be a non-empty string expression")
     where = _normalize_where_syntax(where)
@@ -297,7 +297,7 @@ def _parse_where_expression(where: str):
     return ast
 
 
-def _where_columns_from_ast(ast) -> List[str]:
+def where_columns_from_ast(ast) -> List[str]:
     out: List[str] = []
     seen: set[str] = set()
 

@@ -738,9 +738,9 @@ class TableHDU(TensorFrame):
         if not eval_locals:
             raise ValueError("No row-aligned columns available for filtering")
 
-        from ._where import _parse_where_expression, evaluate_where
+        from ._where import parse_where_expression, evaluate_where
 
-        ast = _parse_where_expression(condition)
+        ast = parse_where_expression(condition)
         mask_result = evaluate_where(ast, eval_locals)
 
         mask_arr = np.asarray(mask_result)

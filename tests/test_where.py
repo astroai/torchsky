@@ -4,8 +4,8 @@ from torchsky._where import (
     _parse_where_literal,
     _tokenize_where_expression,
     _normalize_where_syntax,
-    _parse_where_expression,
-    _where_columns_from_ast,
+    parse_where_expression,
+    where_columns_from_ast,
     evaluate_where,
 )
 
@@ -131,22 +131,22 @@ def test_normalize_where_syntax():
 
 def test_parse_where_expression():
     # Simple comparisons
-    assert _parse_where_expression("A > 5") == ("cmp", "A", ">", 5)
-    assert _parse_where_expression("B == 'hello'") == ("cmp", "B", "==", "hello")
+    assert parse_where_expression("A > 5") == ("cmp", "A", ">", 5)
+    assert parse_where_expression("B == 'hello'") == ("cmp", "B", "==", "hello")
 
     # Logical AND / OR
-    ast = _parse_where_expression("A > 5 AND B < 10")
+    ast = parse_where_expression("A > 5 AND B < 10")
     assert ast == ("and", ("cmp", "A", ">", 5), ("cmp", "B", "<", 10))
 
-    ast = _parse_where_expression("A > 5 OR B < 10")
+    ast = parse_where_expression("A > 5 OR B < 10")
     assert ast == ("or", ("cmp", "A", ">", 5), ("cmp", "B", "<", 10))
 
     # NOT
-    ast = _parse_where_expression("NOT A > 5")
+    ast = parse_where_expression("NOT A > 5")
     assert ast == ("not", ("cmp", "A", ">", 5))
 
     # Precedence AND over OR
-    ast = _parse_where_expression("A > 1 OR B > 2 AND C > 3")
+    ast = parse_where_expression("A > 1 OR B > 2 AND C > 3")
     assert ast == (
         "or",
         ("cmp", "A", ">", 1),
@@ -154,7 +154,7 @@ def test_parse_where_expression():
     )
 
     # Parentheses override precedence
-    ast = _parse_where_expression("(A > 1 OR B > 2) AND C > 3")
+    ast = parse_where_expression("(A > 1 OR B > 2) AND C > 3")
     assert ast == (
         "and",
         ("or", ("cmp", "A", ">", 1), ("cmp", "B", ">", 2)),
@@ -162,8 +162,8 @@ def test_parse_where_expression():
     )
 
     # IN / NOT IN
-    assert _parse_where_expression("X IN (1, 2, 3)") == ("in", "X", [1, 2, 3], False)
-    assert _parse_where_expression("Y NOT IN ('a', 'b')") == (
+    assert parse_where_expression("X IN (1, 2, 3)") == ("in", "X", [1, 2, 3], False)
+    assert parse_where_expression("Y NOT IN ('a', 'b')") == (
         "in",
         "Y",
         ["a", "b"],
@@ -171,14 +171,14 @@ def test_parse_where_expression():
     )
 
     # BETWEEN / NOT BETWEEN
-    assert _parse_where_expression("Z BETWEEN 1 AND 10") == (
+    assert parse_where_expression("Z BETWEEN 1 AND 10") == (
         "between",
         "Z",
         1,
         10,
         False,
     )
-    assert _parse_where_expression("W NOT BETWEEN 0.5 AND 1.5") == (
+    assert parse_where_expression("W NOT BETWEEN 0.5 AND 1.5") == (
         "between",
         "W",
         0.5,
@@ -187,41 +187,41 @@ def test_parse_where_expression():
     )
 
     # IS NULL / IS NOT NULL
-    assert _parse_where_expression("COL IS NULL") == ("isnull", "COL", False)
-    assert _parse_where_expression("COL IS NOT NULL") == ("isnull", "COL", True)
-    assert _parse_where_expression("COL NOT NULL") == ("isnull", "COL", True)
+    assert parse_where_expression("COL IS NULL") == ("isnull", "COL", False)
+    assert parse_where_expression("COL IS NOT NULL") == ("isnull", "COL", True)
+    assert parse_where_expression("COL NOT NULL") == ("isnull", "COL", True)
 
     # Errors
     with pytest.raises(ValueError, match="where must be a non-empty string"):
-        _parse_where_expression("")
+        parse_where_expression("")
     with pytest.raises(ValueError, match="where expects a column identifier"):
-        _parse_where_expression("5 > A")  # Left side must be a column name
+        parse_where_expression("5 > A")  # Left side must be a column name
     with pytest.raises(
         ValueError, match="(Unbalanced parentheses|Unexpected end of where expression)"
     ):
-        _parse_where_expression("(A > 5")
+        parse_where_expression("(A > 5")
     with pytest.raises(
         ValueError, match="(Unbalanced parentheses|Unexpected trailing tokens)"
     ):
-        _parse_where_expression("(A > 5))")
+        parse_where_expression("(A > 5))")
     with pytest.raises(ValueError, match="Unexpected trailing tokens"):
-        _parse_where_expression("A > 5 B < 10")
+        parse_where_expression("A > 5 B < 10")
 
 
 def test_where_columns_from_ast():
     # Simple
-    ast = _parse_where_expression("A > 5")
-    assert _where_columns_from_ast(ast) == ["A"]
+    ast = parse_where_expression("A > 5")
+    assert where_columns_from_ast(ast) == ["A"]
 
     # Multiple columns, unique extraction
-    ast = _parse_where_expression("A > 5 AND B < 10 OR A == 2")
-    cols = _where_columns_from_ast(ast)
+    ast = parse_where_expression("A > 5 AND B < 10 OR A == 2")
+    cols = where_columns_from_ast(ast)
     assert set(cols) == {"A", "B"}
     assert len(cols) == 2
 
     # Various types of nodes
-    ast = _parse_where_expression("X IN (1, 2) OR Y BETWEEN 1 AND 2 OR Z IS NULL")
-    cols = _where_columns_from_ast(ast)
+    ast = parse_where_expression("X IN (1, 2) OR Y BETWEEN 1 AND 2 OR Z IS NULL")
+    cols = where_columns_from_ast(ast)
     assert set(cols) == {"X", "Y", "Z"}
 
 
@@ -235,81 +235,81 @@ def test_evaluate_where():
     }
 
     # Comparison
-    ast = _parse_where_expression("A > 2")
+    ast = parse_where_expression("A > 2")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [False, False, True, True, True])
 
-    ast = _parse_where_expression("A <= 3")
+    ast = parse_where_expression("A <= 3")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [True, True, True, False, False])
 
-    ast = _parse_where_expression("C == 'baz'")
+    ast = parse_where_expression("C == 'baz'")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [False, False, True, False, False])
 
-    ast = _parse_where_expression("C != 'baz'")
+    ast = parse_where_expression("C != 'baz'")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [True, True, False, True, True])
 
     # AND / OR
-    ast = _parse_where_expression("A > 1 AND B < 50")
+    ast = parse_where_expression("A > 1 AND B < 50")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [False, True, True, True, False])
 
-    ast = _parse_where_expression("A == 1 OR A == 5")
+    ast = parse_where_expression("A == 1 OR A == 5")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [True, False, False, False, True])
 
     # NOT
-    ast = _parse_where_expression("NOT A > 2")
+    ast = parse_where_expression("NOT A > 2")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [True, True, False, False, False])
 
     # IN
-    ast = _parse_where_expression("A IN (2, 4)")
+    ast = parse_where_expression("A IN (2, 4)")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [False, True, False, True, False])
 
-    ast = _parse_where_expression("A NOT IN (2, 4)")
+    ast = parse_where_expression("A NOT IN (2, 4)")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [True, False, True, False, True])
 
     # BETWEEN
-    ast = _parse_where_expression("A BETWEEN 2 AND 4")
+    ast = parse_where_expression("A BETWEEN 2 AND 4")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [False, True, True, True, False])
 
-    ast = _parse_where_expression("A NOT BETWEEN 2 AND 4")
+    ast = parse_where_expression("A NOT BETWEEN 2 AND 4")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [True, False, False, False, True])
 
     # IS NULL
     # D is float with NaN
-    ast = _parse_where_expression("D IS NULL")
+    ast = parse_where_expression("D IS NULL")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [False, True, False, False, True])
 
-    ast = _parse_where_expression("D IS NOT NULL")
+    ast = parse_where_expression("D IS NOT NULL")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [True, False, True, True, False])
 
     # E is object with None
-    ast = _parse_where_expression("E IS NULL")
+    ast = parse_where_expression("E IS NULL")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [True, False, True, False, False])
 
     # Missing column
     with pytest.raises(ValueError, match="Unknown column: MISSING"):
-        evaluate_where(_parse_where_expression("MISSING > 0"), data)
+        evaluate_where(parse_where_expression("MISSING > 0"), data)
 
     # == NULL and != NULL (Special cases in evaluator)
-    ast = _parse_where_expression("E == NULL")
+    ast = parse_where_expression("E == NULL")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [True, False, True, False, False])
 
-    ast = _parse_where_expression("E != NULL")
+    ast = parse_where_expression("E != NULL")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [False, True, False, True, True])
 
     with pytest.raises(ValueError, match="NULL comparisons only support == and !="):
-        evaluate_where(_parse_where_expression("E > NULL"), data)
+        evaluate_where(parse_where_expression("E > NULL"), data)
