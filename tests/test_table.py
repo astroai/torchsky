@@ -282,6 +282,17 @@ class TestTableReading:
                 os.unlink(f.name)
 
 
+    def test_close_cpp_handle_exception(self):
+        """Test _close_cpp_handle suppresses exceptions during handle closure."""
+        from torchsky.table import _close_cpp_handle
+
+        handle = mock.MagicMock()
+        handle.close.side_effect = Exception("Mocked close error")
+
+        # Should not raise
+        _close_cpp_handle(handle)
+        handle.close.assert_called_once()
+
     @mock.patch("torchsky.get_header")
     def test_can_use_mmap_row_path_for_full_read_exception(self, mock_get_header):
         """Test that _can_use_mmap_row_path_for_full_read handles exceptions gracefully."""
