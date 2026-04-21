@@ -1,4 +1,4 @@
-## 2025-02-27 - [PyTorch Insecure Deserialization via torch.load]
-**Vulnerability:** Found `torch.load` calls setting `weights_only=False` explicitly, which allows for arbitrary code execution via insecure deserialization during checkpoint loading.
-**Learning:** PyTorch models and state dictionaries can contain arbitrary serialized Python objects. By default, legacy PyTorch permits `weights_only=False`. The codebase had explicit `weights_only=False` preventing the safe loading of just tensor weights.
-**Prevention:** Always enforce `weights_only=True` when using `torch.load` to prevent arbitrary code execution, especially when loading models from potentially untrusted sources or temporary paths.
+## 2025-02-18 - XSS via innerHTML in Viz Frontend
+**Vulnerability:** Unescaped variables (e.g. `item.name`, `wcs.ctype1`) were passed directly into `innerHTML` strings in `src/torchsky/viz/static/index.html`.
+**Learning:** Even internal visualization tools reading standard file formats (like FITS) are vulnerable to XSS if an attacker provides a crafted file with malicious metadata.
+**Prevention:** Always use a utility function to escape HTML special characters before interpolating any dynamic strings into `innerHTML`.
