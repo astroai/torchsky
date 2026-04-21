@@ -488,19 +488,40 @@ class TableHDU(TensorFrame):
         name_by_idx: Dict[int, str] = {}
         tform_by_idx: Dict[int, str] = {}
         tdim_by_idx: Dict[int, str] = {}
-        for key, value in self.header.items():
-            if isinstance(key, str) and key.startswith("TTYPE"):
-                idx = int(key[5:]) if key[5:].isdigit() else None
-                if idx is not None:
-                    name_by_idx[idx] = str(value)
-            if isinstance(key, str) and key.startswith("TFORM"):
-                idx = int(key[5:]) if key[5:].isdigit() else None
-                if idx is not None:
-                    tform_by_idx[idx] = str(value)
-            if isinstance(key, str) and key.startswith("TDIM"):
-                idx = int(key[4:]) if key[4:].isdigit() else None
-                if idx is not None:
-                    tdim_by_idx[idx] = str(value)
+
+        # Performance optimization:
+        # Avoid O(N) iteration over all header cards (which can be large due to HISTORY/COMMENT)
+        # by using TFIELDS for O(1) direct dictionary lookups.
+        try:
+            tfields = int(self.header.get("TFIELDS", 0))
+        except (TypeError, ValueError):
+            tfields = 0
+
+        if tfields > 0:
+            for i in range(1, tfields + 1):
+                name = self.header.get(f"TTYPE{i}")
+                if name is not None:
+                    name_by_idx[i] = str(name)
+                tform = self.header.get(f"TFORM{i}")
+                if tform is not None:
+                    tform_by_idx[i] = str(tform)
+                tdim = self.header.get(f"TDIM{i}")
+                if tdim is not None:
+                    tdim_by_idx[i] = str(tdim)
+        else:
+            for key, value in self.header.items():
+                if isinstance(key, str) and key.startswith("TTYPE"):
+                    idx = int(key[5:]) if key[5:].isdigit() else None
+                    if idx is not None:
+                        name_by_idx[idx] = str(value)
+                if isinstance(key, str) and key.startswith("TFORM"):
+                    idx = int(key[5:]) if key[5:].isdigit() else None
+                    if idx is not None:
+                        tform_by_idx[idx] = str(value)
+                if isinstance(key, str) and key.startswith("TDIM"):
+                    idx = int(key[4:]) if key[4:].isdigit() else None
+                    if idx is not None:
+                        tdim_by_idx[idx] = str(value)
 
         def _parse_tform(tform: str) -> Dict[str, Any]:
             # Examples: "E", "20A", "1PB", "1PJ"
@@ -1221,19 +1242,40 @@ class TableHDURef:
         name_by_idx: Dict[int, str] = {}
         tform_by_idx: Dict[int, str] = {}
         tdim_by_idx: Dict[int, str] = {}
-        for key, value in self.header.items():
-            if isinstance(key, str) and key.startswith("TTYPE"):
-                idx = int(key[5:]) if key[5:].isdigit() else None
-                if idx is not None:
-                    name_by_idx[idx] = str(value)
-            if isinstance(key, str) and key.startswith("TFORM"):
-                idx = int(key[5:]) if key[5:].isdigit() else None
-                if idx is not None:
-                    tform_by_idx[idx] = str(value)
-            if isinstance(key, str) and key.startswith("TDIM"):
-                idx = int(key[4:]) if key[4:].isdigit() else None
-                if idx is not None:
-                    tdim_by_idx[idx] = str(value)
+
+        # Performance optimization:
+        # Avoid O(N) iteration over all header cards (which can be large due to HISTORY/COMMENT)
+        # by using TFIELDS for O(1) direct dictionary lookups.
+        try:
+            tfields = int(self.header.get("TFIELDS", 0))
+        except (TypeError, ValueError):
+            tfields = 0
+
+        if tfields > 0:
+            for i in range(1, tfields + 1):
+                name = self.header.get(f"TTYPE{i}")
+                if name is not None:
+                    name_by_idx[i] = str(name)
+                tform = self.header.get(f"TFORM{i}")
+                if tform is not None:
+                    tform_by_idx[i] = str(tform)
+                tdim = self.header.get(f"TDIM{i}")
+                if tdim is not None:
+                    tdim_by_idx[i] = str(tdim)
+        else:
+            for key, value in self.header.items():
+                if isinstance(key, str) and key.startswith("TTYPE"):
+                    idx = int(key[5:]) if key[5:].isdigit() else None
+                    if idx is not None:
+                        name_by_idx[idx] = str(value)
+                if isinstance(key, str) and key.startswith("TFORM"):
+                    idx = int(key[5:]) if key[5:].isdigit() else None
+                    if idx is not None:
+                        tform_by_idx[idx] = str(value)
+                if isinstance(key, str) and key.startswith("TDIM"):
+                    idx = int(key[4:]) if key[4:].isdigit() else None
+                    if idx is not None:
+                        tdim_by_idx[idx] = str(value)
 
         def _parse_tform(tform: str) -> Dict[str, Any]:
             # Examples: "E", "20A", "1PB", "1PJ"
