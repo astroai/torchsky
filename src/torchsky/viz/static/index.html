@@ -316,6 +316,10 @@
       background: var(--bg-border);
       outline: none;
     }
+    input[type="range"]:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     input[type="range"]::-webkit-slider-thumb {
       -webkit-appearance: none;
       width: 12px; height: 12px;
@@ -691,7 +695,7 @@
          align-items:center;justify-content:center;gap:var(--sp3);color:var(--text-dim);">
       <div style="font-size:48px;opacity:0.3;">✦</div>
       <div style="font-size:14px;font-weight:500;">Open a FITS file to begin</div>
-      <div style="font-size:12px;">Navigate the file tree →</div>
+      <div style="font-size:12px;">← Navigate the file tree</div>
     </div>
   </main>
 
