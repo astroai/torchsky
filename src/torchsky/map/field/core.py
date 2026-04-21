@@ -15,7 +15,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from ... import WCS
-from ...device import resolve_fit_device
+from ...device import default_compute_device, resolve_fit_device
 from ...encoders import SkyCoordinateEncoder, sky_encoder_fourier_min_frequency
 from ...spectral import SpectralAxis
 from ...wcs import healpix as _healpix_wcs
@@ -956,7 +956,7 @@ def field_component_anchor_loss(
         ):
             ra_anchor, dec_anchor = _resolve_anchor_sample_world_coordinates(
                 term,
-                device=next(model.parameters()).device,
+                device=next((p.device for p in model.parameters()), default_compute_device()),
             )
             if isinstance(model, FieldComponentDecomposition):
                 prediction = model.render_component_samples(
@@ -1066,7 +1066,7 @@ def field_component_anchor_loss(
     if total is None:
         return torch.zeros(
             (),
-            device=next(model.parameters()).device,
+            device=next((p.device for p in model.parameters()), default_compute_device()),
             dtype=torch.float32,
         )
     return total
@@ -1141,7 +1141,7 @@ def field_component_centroid_anchor_loss(
     if total is None:
         return torch.zeros(
             (),
-            device=next(model.parameters()).device,
+            device=next((p.device for p in model.parameters()), default_compute_device()),
             dtype=torch.float32,
         )
     return total
@@ -1327,7 +1327,7 @@ class FieldComponentDecomposition(_BaseFieldModel):
         image = base_observation.image
         if image.ndim != 2:
             raise ValueError("FieldObservation.image must be 2D")
-        device = next(self.parameters()).device
+        device = next((p.device for p in self.parameters()), default_compute_device())
         ra_deg, dec_deg = _coordinate_grid(
             base_observation.header,
             shape=tuple(image.shape),
@@ -2998,7 +2998,7 @@ def pretrain_strainer_trunk_synthetic(
             raise ValueError("noise_kind must not be 'none' for synthetic trunk pretraining")
         kinds = (noise_kind,)
     domain = model.domain
-    device = next(model.parameters()).device
+    device = next((p.device for p in model.parameters()), default_compute_device())
     trainable = [p for p in model.parameters() if p.requires_grad]
     if not trainable:
         raise ValueError("pretrain_strainer_trunk_synthetic: no trainable parameters")
@@ -5541,7 +5541,7 @@ def _noise_pretrain_field_model(
                 observation,
                 num_samples=max(int(pixel_samples_per_observation), 1),
                 generator=sampling_generator,
-                device=next(model.parameters()).device,
+                device=next((p.device for p in model.parameters()), default_compute_device()),
             )
             if sampled is None:
                 continue
@@ -5681,7 +5681,7 @@ def render_field_observation_distribution(
     image = observation.image
     if image.ndim != 2:
         raise ValueError("FieldObservation.image must be 2D")
-    device = next(model.parameters()).device
+    device = next((p.device for p in model.parameters()), default_compute_device())
     ra_deg, dec_deg = _coordinate_grid(
         observation.header,
         shape=tuple(image.shape),
@@ -5897,7 +5897,7 @@ def render_field_observation(
     image = observation.image
     if image.ndim != 2:
         raise ValueError("FieldObservation.image must be 2D")
-    device = next(model.parameters()).device
+    device = next((p.device for p in model.parameters()), default_compute_device())
     ra_deg, dec_deg = _coordinate_grid(
         observation.header,
         shape=tuple(image.shape),
@@ -6273,7 +6273,7 @@ def render_field_cube(
         if shape is None
         else shape
     )
-    device = next(model.parameters()).device
+    device = next((p.device for p in model.parameters()), default_compute_device())
     ra_deg, dec_deg = _coordinate_grid(target_header, shape=fallback, device=device)
     wavelengths = spectral_axis.to_wavelength().to(device=device, dtype=torch.float32)
     if wavelengths.ndim != 1:
@@ -6326,7 +6326,7 @@ def render_field_healpix(
     """
     nside_i = int(nside)
     npix = _healpix_wcs.nside2npix(nside_i)
-    dev = device if device is not None else next(model.parameters()).device
+    dev = device if device is not None else next((p.device for p in model.parameters()), default_compute_device())
     wavelengths = spectral_axis.to_wavelength().to(device=dev, dtype=torch.float32)
     nw = int(wavelengths.shape[0])
     if nw == 0:
@@ -6385,7 +6385,7 @@ def render_field_cube_via_healpix(
     :func:`sample_healpix_map_on_image_header`); use :func:`render_field_cube` when
     you need gradients through pixel-center evaluation.
     """
-    dev = device if device is not None else next(model.parameters()).device
+    dev = device if device is not None else next((p.device for p in model.parameters()), default_compute_device())
     hp_cube = render_field_healpix(
         model,
         nside=nside,
@@ -6657,7 +6657,7 @@ def fit_field_model(
             mixture_wavelengths, mixture_probs = _mixture_mc_samples(
                 observations,
                 num_spectral_samples=num_spectral_samples,
-                device=next(model.parameters()).device,
+                device=next((p.device for p in model.parameters()), default_compute_device()),
                 proposal_grid_size=training_spectral_sampling_grid_size,
             )
         selected_indices = _sample_observation_indices(
@@ -6818,7 +6818,7 @@ def fit_field_model(
                     observation,
                     num_samples=pixel_sample_count,
                     generator=sampling_generator,
-                    device=next(model.parameters()).device,
+                    device=next((p.device for p in model.parameters()), default_compute_device()),
                 )
                 if sampled is None:
                     continue
@@ -6983,7 +6983,7 @@ def fit_field_model(
             total_loss = torch.tensor(
                 streamed_total_loss,
                 dtype=torch.float32,
-                device=next(model.parameters()).device,
+                device=next((p.device for p in model.parameters()), default_compute_device()),
             )
         elif loss_reduction == "global":
             assert global_weighted_loss is not None and global_weight_sum is not None
@@ -7070,7 +7070,7 @@ def fit_field_model(
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
-                        device=next(model.parameters()).device,
+                        device=next((p.device for p in model.parameters()), default_compute_device()),
                     )
                 else:
                     total_loss = total_loss + anchor_loss_weight * anchor_loss
@@ -7090,7 +7090,7 @@ def fit_field_model(
                 total_loss = torch.tensor(
                     streamed_total_loss,
                     dtype=torch.float32,
-                    device=next(model.parameters()).device,
+                    device=next((p.device for p in model.parameters()), default_compute_device()),
                 )
             else:
                 total_loss = total_loss + anchor_component_loss
@@ -7107,7 +7107,7 @@ def fit_field_model(
                 total_loss = torch.tensor(
                     streamed_total_loss,
                     dtype=torch.float32,
-                    device=next(model.parameters()).device,
+                    device=next((p.device for p in model.parameters()), default_compute_device()),
                 )
             else:
                 total_loss = total_loss + centroid_anchor_loss
@@ -7184,7 +7184,7 @@ def fit_field_model(
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
-                        device=next(model.parameters()).device,
+                        device=next((p.device for p in model.parameters()), default_compute_device()),
                     )
                 else:
                     total_loss = total_loss + scaled_context_loss
@@ -7192,7 +7192,7 @@ def fit_field_model(
             probe_ra, probe_dec = _smoothness_probe_grid(
                 smoothness_domain,
                 grid_size=smoothness_grid_size,
-                device=next(model.parameters()).device,
+                device=next((p.device for p in model.parameters()), default_compute_device()),
             )
             probe = model(
                 probe_ra,
@@ -7214,7 +7214,7 @@ def fit_field_model(
                 total_loss = torch.tensor(
                     streamed_total_loss,
                     dtype=torch.float32,
-                    device=next(model.parameters()).device,
+                    device=next((p.device for p in model.parameters()), default_compute_device()),
                 )
             else:
                 total_loss = total_loss + smoothness_weight * smoothness_loss
@@ -7232,7 +7232,7 @@ def fit_field_model(
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
-                        device=next(model.parameters()).device,
+                        device=next((p.device for p in model.parameters()), default_compute_device()),
                     )
                 else:
                     total_loss = total_loss + scaled_spectral_penalty
@@ -7247,7 +7247,7 @@ def fit_field_model(
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
-                        device=next(model.parameters()).device,
+                        device=next((p.device for p in model.parameters()), default_compute_device()),
                     )
                 else:
                     total_loss = total_loss + scaled_residual_penalty

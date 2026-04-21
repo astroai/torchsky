@@ -27,7 +27,6 @@ def default_compute_device() -> torch.device:
 
 
 
-
 def resolve_fit_device(
     model: nn.Module,
     device: torch.device | str | None,

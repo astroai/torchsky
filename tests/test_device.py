@@ -17,7 +17,6 @@ def test_default_compute_device_env_override(monkeypatch: pytest.MonkeyPatch) ->
     assert str(default_compute_device()) == "cpu"
 
 
-
 def test_resolve_fit_device_explicit() -> None:
     m = nn.Linear(1, 1)
     assert str(resolve_fit_device(m, "cpu")) == "cpu"

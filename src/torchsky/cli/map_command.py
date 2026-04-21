@@ -321,7 +321,7 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         observations_per_step=min(len(fields), int(args.inr_obs_per_step)),
         device=args.device,
     )
-    dev = next(model.parameters()).device
+    dev = next((p.device for p in model.parameters()), default_compute_device())
     target_obs = FieldObservation(
         image=torch.zeros((h, w), dtype=torch.float32, device=dev),
         header=dict(plan.header),
