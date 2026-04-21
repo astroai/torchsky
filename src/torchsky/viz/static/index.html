@@ -765,6 +765,14 @@
 
 const API = '';  // relative, works behind any proxy
 
+const htmlEscape = (str) => String(str).replace(/[&<>'"]/g, tag => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    "'": '&#39;',
+    '"': '&quot;'
+}[tag]));
+
 // ─── State ───────────────────────────────────────────────────
 const state = {
   activePanel: 'fits',   // 'fits' | 'sky' | 'validate'
@@ -869,7 +877,7 @@ async function loadFileTree(basePath = '') {
     el.className = 'tree-item' + (item.type === 'dir' ? ' tree-dir' : '');
     el.innerHTML = `
       <span class="icon">${item.type === 'dir' ? '📁' : '🔭'}</span>
-      <span class="name">${item.name}</span>
+      <span class="name">${htmlEscape(item.name)}</span>
       ${item.size ? `<span class="size">${fmtSize(item.size)}</span>` : ''}
     `;
     el.onclick = () => item.type === 'dir' ? loadFileTree(item.path) : openFile(item.path);
@@ -1013,11 +1021,11 @@ function updateWCSInfo(wcs) {
   if (!wcs) return;
   $('header-card').style.display = '';
   $('wcs-info').innerHTML = `
-    <span class="stat-key">CTYPE1</span><span class="stat-val text-mono">${wcs.ctype1 || '—'}</span>
-    <span class="stat-key">CTYPE2</span><span class="stat-val text-mono">${wcs.ctype2 || '—'}</span>
+    <span class="stat-key">CTYPE1</span><span class="stat-val text-mono">${htmlEscape(wcs.ctype1 || '—')}</span>
+    <span class="stat-key">CTYPE2</span><span class="stat-val text-mono">${htmlEscape(wcs.ctype2 || '—')}</span>
     <span class="stat-key">CRVAL1</span><span class="stat-val text-mono">${fmt(wcs.crval1)}</span>
     <span class="stat-key">CRVAL2</span><span class="stat-val text-mono">${fmt(wcs.crval2)}</span>
-    <span class="stat-key">Projection</span><span class="stat-val">${wcs.proj_code || '—'}</span>
+    <span class="stat-key">Projection</span><span class="stat-val">${htmlEscape(wcs.proj_code || '—')}</span>
   `;
 }
 
