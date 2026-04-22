@@ -68,7 +68,9 @@ def test_fit_background_plane_recovers_structured_residual() -> None:
     summary = fit_background_plane(residual, mask)
 
     torch.testing.assert_close(summary.model, residual, atol=1e-5, rtol=1e-5)
-    torch.testing.assert_close(summary.coeffs, torch.tensor([0.5, -0.25, 1.5]), atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(
+        summary.coeffs, torch.tensor([0.5, -0.25, 1.5]), atol=1e-5, rtol=1e-5
+    )
     assert summary.detrended_rms < 1e-5
     assert summary.leakage_fraction > 0.99
 

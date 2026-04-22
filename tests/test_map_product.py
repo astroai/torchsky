@@ -363,12 +363,16 @@ def test_evaluate_map_product_uses_product_level_metrics() -> None:
     assert float(metrics["reconstruction_rmse"]) > 0.0
     assert float(metrics["coverage_fraction"]) == pytest.approx(1.0)
     assert float(metrics["total_flux_relative_error"]) > 0.0
-    assert metrics["band_reconstruction_rmse"] == [pytest.approx(float(metrics["reconstruction_rmse"]))]
+    assert metrics["band_reconstruction_rmse"] == [
+        pytest.approx(float(metrics["reconstruction_rmse"]))
+    ]
     assert len(metrics["band_flux_relative_error"]) == 1
     assert float(metrics["band_flux_relative_error"][0]) > 0.0
 
 
-def test_estimate_map_inverse_variance_support_proxy_flags_extrapolated_regions() -> None:
+def test_estimate_map_inverse_variance_support_proxy_flags_extrapolated_regions() -> (
+    None
+):
     support_weight = torch.zeros((1, 7, 7), dtype=torch.float32)
     support_weight[:, 2:5, 2:5] = 4.0
     ivar = estimate_map_inverse_variance(
@@ -402,8 +406,14 @@ def test_evaluate_map_uncertainty_tracks_residual_ordering() -> None:
     )
 
     assert metrics["uncertainty_error_corr"] > 0.0
-    assert metrics["uncertainty_top_quartile_abs_err"] > metrics["uncertainty_bottom_quartile_abs_err"]
-    assert metrics["uncertainty_extrapolated_mean_sigma"] > metrics["uncertainty_support_mean_sigma"]
+    assert (
+        metrics["uncertainty_top_quartile_abs_err"]
+        > metrics["uncertainty_bottom_quartile_abs_err"]
+    )
+    assert (
+        metrics["uncertainty_extrapolated_mean_sigma"]
+        > metrics["uncertainty_support_mean_sigma"]
+    )
 
 
 def test_evaluate_map_frontier_regions_tracks_fringe_and_overlap() -> None:

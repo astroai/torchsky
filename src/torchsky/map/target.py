@@ -53,4 +53,3 @@ class TargetRenderSpec:
             transmission_sigma=band.transmission_sigma,
             psf_spec=psf_spec,
         )
-

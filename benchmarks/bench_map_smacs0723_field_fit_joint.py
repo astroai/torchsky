@@ -23,7 +23,10 @@ if str(SRC) not in sys.path:
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 
-from bench_map_field_fit import _field_fit_kwargs_for_model, _field_model_kwargs_for_case  # noqa: E402
+from bench_map_field_fit import (
+    _field_fit_kwargs_for_model,
+    _field_model_kwargs_for_case,
+)  # noqa: E402
 from bench_map_smacs0723_field_fit import (  # noqa: E402
     _PerExposureScalarBias,
     _crop_field_inputs_to_target,
@@ -135,11 +138,19 @@ def _write_export_products(
         header=dict(header),
         overwrite=True,
     )
-    Image.fromarray(_preview_uint8(reference), mode="L").save(model_dir / "reference.png")
-    Image.fromarray(_preview_uint8(prediction), mode="L").save(model_dir / "prediction.png")
+    Image.fromarray(_preview_uint8(reference), mode="L").save(
+        model_dir / "reference.png"
+    )
+    Image.fromarray(_preview_uint8(prediction), mode="L").save(
+        model_dir / "prediction.png"
+    )
     Image.fromarray(_preview_uint8(residual), mode="L").save(model_dir / "residual.png")
-    Image.fromarray(support_mask.astype(np.uint8) * 255, mode="L").save(model_dir / "support_mask.png")
-    Image.fromarray(source_mask.astype(np.uint8) * 255, mode="L").save(model_dir / "source_mask.png")
+    Image.fromarray(support_mask.astype(np.uint8) * 255, mode="L").save(
+        model_dir / "support_mask.png"
+    )
+    Image.fromarray(source_mask.astype(np.uint8) * 255, mode="L").save(
+        model_dir / "source_mask.png"
+    )
 
 
 def _source_metric_mask(
@@ -240,7 +251,9 @@ def _joint_real_fit_kwargs(
     kwargs["observations_per_step"] = min(max(num_observations, 1), 12)
     kwargs["observation_sampling"] = "band_balanced"
     kwargs["training_patch_size"] = None
-    kwargs["pixel_samples_per_observation"] = max(256, min(int(crop_size) * int(crop_size), 1024))
+    kwargs["pixel_samples_per_observation"] = max(
+        256, min(int(crop_size) * int(crop_size), 1024)
+    )
     kwargs["loss_kind"] = "mse"
     kwargs["loss_reduction"] = "global"
     kwargs["grad_clip_norm"] = 1.0
@@ -252,16 +265,24 @@ def _joint_real_fit_kwargs(
     )
     kwargs["full_observations_per_step"] = 0
     if model_kind in {"spectral_basis_field", "sky_encoder_resmlp", "sky_encoder_mlp"}:
-        kwargs["num_spectral_samples"] = min(int(kwargs.get("num_spectral_samples", 9)), 5)
+        kwargs["num_spectral_samples"] = min(
+            int(kwargs.get("num_spectral_samples", 9)), 5
+        )
     if model_kind == "sky_lambda_feature_field":
-        kwargs["num_spectral_samples"] = min(int(kwargs.get("num_spectral_samples", 9)), 5)
+        kwargs["num_spectral_samples"] = min(
+            int(kwargs.get("num_spectral_samples", 9)), 5
+        )
         kwargs["spectral_anchor_observations_per_step"] = min(
             int(kwargs.get("spectral_anchor_observations_per_step", 0)),
             1,
         )
     if model_kind == "operator_constrained_feature_field":
-        kwargs["num_spectral_samples"] = min(int(kwargs.get("num_spectral_samples", 7)), 5)
-        kwargs["context_loss_weight"] = min(float(kwargs.get("context_loss_weight", 0.0)), 0.05)
+        kwargs["num_spectral_samples"] = min(
+            int(kwargs.get("num_spectral_samples", 7)), 5
+        )
+        kwargs["context_loss_weight"] = min(
+            float(kwargs.get("context_loss_weight", 0.0)), 0.05
+        )
     if model_kind == "spectral_basis_field":
         kwargs["lr"] = min(float(kwargs.get("lr", 1.0e-3)), 5.0e-4)
     return kwargs
@@ -278,14 +299,24 @@ def _summarize_by_model(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 "model": model,
                 "bands": len(model_rows),
-                "mean_support_rmse": float(np.mean([float(r["support_rmse"]) for r in model_rows])),
-                "mean_source_rmse": float(np.mean([float(r["source_rmse"]) for r in model_rows])),
+                "mean_support_rmse": float(
+                    np.mean([float(r["support_rmse"]) for r in model_rows])
+                ),
+                "mean_source_rmse": float(
+                    np.mean([float(r["source_rmse"]) for r in model_rows])
+                ),
                 "mean_source_contrast_rmse": float(
                     np.mean([float(r["source_contrast_rmse"]) for r in model_rows])
                 ),
-                "mean_uniform_rmse": float(np.mean([float(r["uniform_rmse"]) for r in model_rows])),
-                "mean_aligned_rmse": float(np.mean([float(r["aligned_rmse"]) for r in model_rows])),
-                "mean_affine_slope": float(np.mean([float(r["affine_slope"]) for r in model_rows])),
+                "mean_uniform_rmse": float(
+                    np.mean([float(r["uniform_rmse"]) for r in model_rows])
+                ),
+                "mean_aligned_rmse": float(
+                    np.mean([float(r["aligned_rmse"]) for r in model_rows])
+                ),
+                "mean_affine_slope": float(
+                    np.mean([float(r["affine_slope"]) for r in model_rows])
+                ),
                 "mean_source_contrast_slope": float(
                     np.mean([float(r["source_contrast_slope"]) for r in model_rows])
                 ),
@@ -295,7 +326,9 @@ def _summarize_by_model(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "mean_source_flux_ratio": float(
                     np.mean([float(r["source_flux_ratio"]) for r in model_rows])
                 ),
-                "total_fit_time_ms": float(np.max([float(r["fit_time_ms"]) for r in model_rows])),
+                "total_fit_time_ms": float(
+                    np.max([float(r["fit_time_ms"]) for r in model_rows])
+                ),
             }
         )
     summary.sort(key=lambda row: row["mean_source_contrast_rmse"])
@@ -349,9 +382,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bands", default="F090W,F277W,F356W,F444W")
     parser.add_argument("--module", default="b")
-    parser.add_argument("--input-product", choices=("auto", "crf", "cal"), default="cal")
+    parser.add_argument(
+        "--input-product", choices=("auto", "crf", "cal"), default="cal"
+    )
     parser.add_argument("--crop-size", type=int, default=32)
-    parser.add_argument("--crop-strategy", choices=("center", "best_overlap"), default="best_overlap")
+    parser.add_argument(
+        "--crop-strategy", choices=("center", "best_overlap"), default="best_overlap"
+    )
     parser.add_argument("--steps", type=int, default=4)
     parser.add_argument(
         "--models",
@@ -376,7 +413,9 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
 
     band_entries: list[dict[str, Any]] = []
-    all_raw_field_inputs: list[tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]] = []
+    all_raw_field_inputs: list[
+        tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]
+    ] = []
     all_field_observations: list[FieldObservation] = []
     all_forward_contexts: list[ForwardContext] = []
 
@@ -389,7 +428,9 @@ def main() -> int:
                 input_product=args.input_product,
                 band=band,
                 module=args.module,
-                filename_contains="nrcblong" if band in {"F277W", "F356W", "F444W"} else None,
+                filename_contains="nrcblong"
+                if band in {"F277W", "F356W", "F444W"}
+                else None,
             )
             if not reference_path.exists() or not exposure_paths:
                 message = (
@@ -428,16 +469,28 @@ def main() -> int:
                     overlap_count,
                     coarse_size,
                 )
-                x0 = min(int(coarse_x0 * coarse_step), max(0, ref_data.shape[1] - int(args.crop_size)))
-                y0 = min(int(coarse_y0 * coarse_step), max(0, ref_data.shape[0] - int(args.crop_size)))
-                ref_crop = ref_data[y0 : y0 + int(args.crop_size), x0 : x0 + int(args.crop_size)]
+                x0 = min(
+                    int(coarse_x0 * coarse_step),
+                    max(0, ref_data.shape[1] - int(args.crop_size)),
+                )
+                y0 = min(
+                    int(coarse_y0 * coarse_step),
+                    max(0, ref_data.shape[0] - int(args.crop_size)),
+                )
+                ref_crop = ref_data[
+                    y0 : y0 + int(args.crop_size), x0 : x0 + int(args.crop_size)
+                ]
             else:
                 ref_crop, x0, y0 = _center_cutout(ref_data, int(args.crop_size))
             target_header = _cutout_header(ref_header, x0, y0, int(args.crop_size))
-            target_observation = _field_target_observation(target_header, band_name=band)
+            target_observation = _field_target_observation(
+                target_header, band_name=band
+            )
 
             image_observations: list[ImageObservation] = []
-            raw_field_inputs: list[tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]] = []
+            raw_field_inputs: list[
+                tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]
+            ] = []
             for exposure_path in exposure_paths:
                 science_path, weight_path, mask_path = _prepare_aux_files(
                     exposure_path,
@@ -461,7 +514,12 @@ def main() -> int:
                 weight = np.zeros_like(err, dtype=np.float32)
                 weight[valid] = 1.0 / np.square(err[valid])
                 raw_field_inputs.append(
-                    (science, weight, valid.astype(np.float32, copy=False), dict(_sci_header(exposure_path)))
+                    (
+                        science,
+                        weight,
+                        valid.astype(np.float32, copy=False),
+                        dict(_sci_header(exposure_path)),
+                    )
                 )
             field_observations: list[FieldObservation] = []
             for exposure_path, (image, weight, mask, header) in zip(
@@ -521,7 +579,9 @@ def main() -> int:
                 stacking_method="weighted_mean",
             )
             coadd_weight = coadd_reference.weight.cpu().numpy()
-            coadd_data = coadd_reference.data.cpu().numpy().astype(np.float32, copy=False)
+            coadd_data = (
+                coadd_reference.data.cpu().numpy().astype(np.float32, copy=False)
+            )
             support_mask = coadd_weight > 0
             if not np.any(support_mask):
                 support_mask = np.isfinite(ref_crop) & np.isfinite(coadd_data)
@@ -569,7 +629,9 @@ def main() -> int:
                         if observation.weight is not None
                         else None
                     ),
-                    mask=observation.mask.clone() if observation.mask is not None else None,
+                    mask=observation.mask.clone()
+                    if observation.mask is not None
+                    else None,
                     wavelength=observation.wavelength,
                     spectral_min=observation.spectral_min,
                     spectral_max=observation.spectral_max,
@@ -584,7 +646,9 @@ def main() -> int:
         forward_ctx_tuple: tuple[ForwardContext | None, ...] | None = None
         if args.forward_context:
             if len(all_forward_contexts) != len(normalized_observations):
-                raise RuntimeError("internal: joint forward context list length mismatch")
+                raise RuntimeError(
+                    "internal: joint forward context list length mismatch"
+                )
             forward_ctx_tuple = tuple(all_forward_contexts)
 
         fitted_models: dict[str, tuple[Any, float, dict[str, Any]]] = {}
@@ -637,7 +701,9 @@ def main() -> int:
                         pred = entry["coadd_pred"]
                         fit_time_ms = 0.0
                     else:
-                        result_model, fit_time_ms, fit_kwargs = fitted_models[model_kind]
+                        result_model, fit_time_ms, fit_kwargs = fitted_models[
+                            model_kind
+                        ]
                         render_num_spectral_samples = int(
                             fit_kwargs.get("num_spectral_samples", 1)
                         )
@@ -661,9 +727,15 @@ def main() -> int:
                     support_metric_mask = _metric_mask(pred, ref_crop, support_mask)
                     uniform_metric_mask = np.isfinite(pred) & np.isfinite(ref_crop)
                     if not np.any(uniform_metric_mask):
-                        raise RuntimeError("render produced no finite comparison pixels")
-                    support_diff = pred[support_metric_mask] - ref_crop[support_metric_mask]
-                    uniform_diff = pred[uniform_metric_mask] - ref_crop[uniform_metric_mask]
+                        raise RuntimeError(
+                            "render produced no finite comparison pixels"
+                        )
+                    support_diff = (
+                        pred[support_metric_mask] - ref_crop[support_metric_mask]
+                    )
+                    uniform_diff = (
+                        pred[uniform_metric_mask] - ref_crop[uniform_metric_mask]
+                    )
                     source_stats = _background_subtracted_source_stats(
                         pred,
                         ref_crop,
@@ -671,28 +743,44 @@ def main() -> int:
                     )
 
                     # Robust affine fit to ignore background offsets
-                    source_metric_mask = _source_metric_mask(pred, ref_crop, support_mask)
+                    source_metric_mask = _source_metric_mask(
+                        pred, ref_crop, support_mask
+                    )
                     ref_pts = ref_crop[source_metric_mask].astype(np.float64)
                     pred_pts = pred[source_metric_mask].astype(np.float64)
                     design = np.stack([ref_pts, np.ones_like(ref_pts)], axis=1)
                     coeffs, *_ = np.linalg.lstsq(design, pred_pts, rcond=None)
                     affine_slope = float(coeffs[0])
                     affine_intercept = float(coeffs[1])
-                    aligned_pred = (pred_pts - affine_intercept) / max(affine_slope, 1e-6) if affine_slope > 0.5 else pred_pts
+                    aligned_pred = (
+                        (pred_pts - affine_intercept) / max(affine_slope, 1e-6)
+                        if affine_slope > 0.5
+                        else pred_pts
+                    )
                     aligned_diff = aligned_pred - ref_pts
 
                     row.update(
                         {
                             "source_rmse": source_stats["source_rmse"],
-                            "source_contrast_rmse": source_stats["source_contrast_rmse"],
-                            "source_contrast_slope": source_stats["source_contrast_slope"],
-                            "support_rmse": float(np.sqrt(np.mean(support_diff * support_diff)))
+                            "source_contrast_rmse": source_stats[
+                                "source_contrast_rmse"
+                            ],
+                            "source_contrast_slope": source_stats[
+                                "source_contrast_slope"
+                            ],
+                            "support_rmse": float(
+                                np.sqrt(np.mean(support_diff * support_diff))
+                            )
                             if support_diff.size
                             else float("nan"),
-                            "uniform_rmse": float(np.sqrt(np.mean(uniform_diff * uniform_diff)))
+                            "uniform_rmse": float(
+                                np.sqrt(np.mean(uniform_diff * uniform_diff))
+                            )
                             if uniform_diff.size
                             else float("nan"),
-                            "aligned_rmse": float(np.sqrt(np.mean(aligned_diff * aligned_diff)))
+                            "aligned_rmse": float(
+                                np.sqrt(np.mean(aligned_diff * aligned_diff))
+                            )
                             if aligned_diff.size
                             else float("nan"),
                             "affine_slope": affine_slope,
@@ -724,7 +812,13 @@ def main() -> int:
 
     ok_rows = [row for row in rows if row["status"] == "OK"]
     fail_rows = [row for row in rows if row["status"] != "OK"]
-    ok_rows.sort(key=lambda row: (str(row["model"]), float(row["support_rmse"]), str(row["band"])))
+    ok_rows.sort(
+        key=lambda row: (
+            str(row["model"]),
+            float(row["support_rmse"]),
+            str(row["band"]),
+        )
+    )
     fail_rows.sort(key=lambda row: (str(row["model"]), str(row["band"])))
     payload = {"rows": ok_rows + fail_rows, "summary": _summarize_by_model(ok_rows)}
     args.json_out.parent.mkdir(parents=True, exist_ok=True)

@@ -38,7 +38,9 @@ def _effective_case_size(size: int, width: int | None, height: int | None) -> in
     return int(max(size, width or 0, height or 0))
 
 
-def _normalize_row(row: dict[str, object], *, library: str | None = None) -> dict[str, object]:
+def _normalize_row(
+    row: dict[str, object], *, library: str | None = None
+) -> dict[str, object]:
     method = str(row.get("method", library or "unknown"))
     if method == "coadd":
         method = "torchsky"
@@ -147,7 +149,9 @@ def main() -> int:
 
     methods = [item.strip() for item in args.methods.split(",") if item.strip()]
     out_rows: list[dict[str, object]] = []
-    with tempfile.TemporaryDirectory(prefix="torchsky_ground_truth_competitive_") as tmp:
+    with tempfile.TemporaryDirectory(
+        prefix="torchsky_ground_truth_competitive_"
+    ) as tmp:
         tmpdir = Path(tmp)
         observations, target_header, truth = truth_bench.make_case(
             tmpdir,
@@ -188,13 +192,19 @@ def main() -> int:
                     obs_list,
                     target_header=target_header,
                     runs=max(2, args.runs),
-                    torchsky_row={"library": "torchsky", "variant": "bilinear", "time_ms": 1.0},
+                    torchsky_row={
+                        "library": "torchsky",
+                        "variant": "bilinear",
+                        "time_ms": 1.0,
+                    },
                     torchsky_data=baseline_data,
                     torchsky_weight=baseline_weight,
                     variant=variant,
                 )
                 for key in list(row):
-                    if key.endswith("_vs_torchsky") or key.startswith("speed_ratio_torchsky_vs_"):
+                    if key.endswith("_vs_torchsky") or key.startswith(
+                        "speed_ratio_torchsky_vs_"
+                    ):
                         row.pop(key)
                 row.update(
                     {
@@ -208,22 +218,37 @@ def main() -> int:
                         "n_obs": len(observations),
                         "target_width": int(target_header["NAXIS1"]),
                         "target_height": int(target_header["NAXIS2"]),
-                        "min_input_width": min(int(item.header["NAXIS1"]) for item in observations),
-                        "max_input_width": max(int(item.header["NAXIS1"]) for item in observations),
-                        "min_input_height": min(int(item.header["NAXIS2"]) for item in observations),
-                        "max_input_height": max(int(item.header["NAXIS2"]) for item in observations),
+                        "min_input_width": min(
+                            int(item.header["NAXIS1"]) for item in observations
+                        ),
+                        "max_input_width": max(
+                            int(item.header["NAXIS1"]) for item in observations
+                        ),
+                        "min_input_height": min(
+                            int(item.header["NAXIS2"]) for item in observations
+                        ),
+                        "max_input_height": max(
+                            int(item.header["NAXIS2"]) for item in observations
+                        ),
                         "goal": "reconstruct_union_field_on_target_grid",
                         "product_geometry": (
                             "rectangular"
-                            if int(target_header["NAXIS1"]) != int(target_header["NAXIS2"])
+                            if int(target_header["NAXIS1"])
+                            != int(target_header["NAXIS2"])
                             else "square"
                         ),
-                        "n_warped_inputs": truth_bench._count_warped_inputs(observations),
+                        "n_warped_inputs": truth_bench._count_warped_inputs(
+                            observations
+                        ),
                         "n_weight_maps": sum(
-                            1 for item in observations if item.observation.weight_path is not None
+                            1
+                            for item in observations
+                            if item.observation.weight_path is not None
                         ),
                         "n_mask_maps": sum(
-                            1 for item in observations if item.observation.mask_path is not None
+                            1
+                            for item in observations
+                            if item.observation.mask_path is not None
                         ),
                         "mean_zero_weight_fraction_input": float(
                             sum(item.zero_weight_fraction for item in observations)
@@ -235,7 +260,11 @@ def main() -> int:
                         ),
                     }
                 )
-                if row.get("status") == "OK" and data is not None and weight is not None:
+                if (
+                    row.get("status") == "OK"
+                    and data is not None
+                    and weight is not None
+                ):
                     row.update(
                         truth_bench._truth_metrics(
                             data.to(dtype=torch.float32),
@@ -247,7 +276,9 @@ def main() -> int:
                     )
                 row = _normalize_row(row, library=library)
             out_rows.append(row)
-            _write_outputs(out_rows, json_out=args.json_out, markdown_out=args.markdown_out)
+            _write_outputs(
+                out_rows, json_out=args.json_out, markdown_out=args.markdown_out
+            )
 
     _write_outputs(out_rows, json_out=args.json_out, markdown_out=args.markdown_out)
     print(args.json_out)

@@ -978,7 +978,9 @@ def field_component_anchor_loss(
         ):
             ra_anchor, dec_anchor = _resolve_anchor_sample_world_coordinates(
                 term,
-                device=next((p.device for p in model.parameters()), default_compute_device()),
+                device=next(
+                    (p.device for p in model.parameters()), default_compute_device()
+                ),
             )
             if isinstance(model, FieldComponentDecomposition):
                 prediction = model.render_component_samples(
@@ -1094,7 +1096,9 @@ def field_component_anchor_loss(
     if total is None:
         return torch.zeros(
             (),
-            device=next((p.device for p in model.parameters()), default_compute_device()),
+            device=next(
+                (p.device for p in model.parameters()), default_compute_device()
+            ),
             dtype=torch.float32,
         )
     return total
@@ -1169,7 +1173,9 @@ def field_component_centroid_anchor_loss(
     if total is None:
         return torch.zeros(
             (),
-            device=next((p.device for p in model.parameters()), default_compute_device()),
+            device=next(
+                (p.device for p in model.parameters()), default_compute_device()
+            ),
             dtype=torch.float32,
         )
     return total
@@ -5723,7 +5729,9 @@ def _noise_pretrain_field_model(
                 observation,
                 num_samples=max(int(pixel_samples_per_observation), 1),
                 generator=sampling_generator,
-                device=next((p.device for p in model.parameters()), default_compute_device()),
+                device=next(
+                    (p.device for p in model.parameters()), default_compute_device()
+                ),
             )
             if sampled is None:
                 continue
@@ -6519,7 +6527,11 @@ def render_field_healpix(
     """
     nside_i = int(nside)
     npix = _healpix_wcs.nside2npix(nside_i)
-    dev = device if device is not None else next((p.device for p in model.parameters()), default_compute_device())
+    dev = (
+        device
+        if device is not None
+        else next((p.device for p in model.parameters()), default_compute_device())
+    )
     wavelengths = spectral_axis.to_wavelength().to(device=dev, dtype=torch.float32)
     nw = int(wavelengths.shape[0])
     if nw == 0:
@@ -6578,7 +6590,11 @@ def render_field_cube_via_healpix(
     :func:`sample_healpix_map_on_image_header`); use :func:`render_field_cube` when
     you need gradients through pixel-center evaluation.
     """
-    dev = device if device is not None else next((p.device for p in model.parameters()), default_compute_device())
+    dev = (
+        device
+        if device is not None
+        else next((p.device for p in model.parameters()), default_compute_device())
+    )
     hp_cube = render_field_healpix(
         model,
         nside=nside,
@@ -6852,7 +6868,9 @@ def fit_field_model(
             mixture_wavelengths, mixture_probs = _mixture_mc_samples(
                 observations,
                 num_spectral_samples=num_spectral_samples,
-                device=next((p.device for p in model.parameters()), default_compute_device()),
+                device=next(
+                    (p.device for p in model.parameters()), default_compute_device()
+                ),
                 proposal_grid_size=training_spectral_sampling_grid_size,
             )
         selected_indices = _sample_observation_indices(
@@ -7008,7 +7026,9 @@ def fit_field_model(
                     observation,
                     num_samples=pixel_sample_count,
                     generator=sampling_generator,
-                    device=next((p.device for p in model.parameters()), default_compute_device()),
+                    device=next(
+                        (p.device for p in model.parameters()), default_compute_device()
+                    ),
                 )
                 if sampled is None:
                     continue
@@ -7173,7 +7193,9 @@ def fit_field_model(
             total_loss = torch.tensor(
                 streamed_total_loss,
                 dtype=torch.float32,
-                device=next((p.device for p in model.parameters()), default_compute_device()),
+                device=next(
+                    (p.device for p in model.parameters()), default_compute_device()
+                ),
             )
         elif loss_reduction == "global":
             assert global_weighted_loss is not None and global_weight_sum is not None
@@ -7274,7 +7296,10 @@ def fit_field_model(
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
-                        device=next((p.device for p in model.parameters()), default_compute_device()),
+                        device=next(
+                            (p.device for p in model.parameters()),
+                            default_compute_device(),
+                        ),
                     )
                 else:
                     total_loss = total_loss + anchor_loss_weight * anchor_loss
@@ -7294,7 +7319,9 @@ def fit_field_model(
                 total_loss = torch.tensor(
                     streamed_total_loss,
                     dtype=torch.float32,
-                    device=next((p.device for p in model.parameters()), default_compute_device()),
+                    device=next(
+                        (p.device for p in model.parameters()), default_compute_device()
+                    ),
                 )
             else:
                 total_loss = total_loss + anchor_component_loss
@@ -7311,7 +7338,9 @@ def fit_field_model(
                 total_loss = torch.tensor(
                     streamed_total_loss,
                     dtype=torch.float32,
-                    device=next((p.device for p in model.parameters()), default_compute_device()),
+                    device=next(
+                        (p.device for p in model.parameters()), default_compute_device()
+                    ),
                 )
             else:
                 total_loss = total_loss + centroid_anchor_loss
@@ -7402,7 +7431,10 @@ def fit_field_model(
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
-                        device=next((p.device for p in model.parameters()), default_compute_device()),
+                        device=next(
+                            (p.device for p in model.parameters()),
+                            default_compute_device(),
+                        ),
                     )
                 else:
                     total_loss = total_loss + scaled_context_loss
@@ -7410,7 +7442,9 @@ def fit_field_model(
             probe_ra, probe_dec = _smoothness_probe_grid(
                 smoothness_domain,
                 grid_size=smoothness_grid_size,
-                device=next((p.device for p in model.parameters()), default_compute_device()),
+                device=next(
+                    (p.device for p in model.parameters()), default_compute_device()
+                ),
             )
             probe = model(
                 probe_ra,
@@ -7432,7 +7466,9 @@ def fit_field_model(
                 total_loss = torch.tensor(
                     streamed_total_loss,
                     dtype=torch.float32,
-                    device=next((p.device for p in model.parameters()), default_compute_device()),
+                    device=next(
+                        (p.device for p in model.parameters()), default_compute_device()
+                    ),
                 )
             else:
                 total_loss = total_loss + smoothness_weight * smoothness_loss
@@ -7450,7 +7486,10 @@ def fit_field_model(
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
-                        device=next((p.device for p in model.parameters()), default_compute_device()),
+                        device=next(
+                            (p.device for p in model.parameters()),
+                            default_compute_device(),
+                        ),
                     )
                 else:
                     total_loss = total_loss + scaled_spectral_penalty
@@ -7465,7 +7504,10 @@ def fit_field_model(
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
-                        device=next((p.device for p in model.parameters()), default_compute_device()),
+                        device=next(
+                            (p.device for p in model.parameters()),
+                            default_compute_device(),
+                        ),
                     )
                 else:
                     total_loss = total_loss + scaled_residual_penalty

@@ -101,7 +101,10 @@ def _external_reference(
         return_footprint=True,
     )
     denom, _ = reproject_exact(
-        (source_weight.cpu().numpy().astype("float32"), _as_fits_header(header_dict_obs)),
+        (
+            source_weight.cpu().numpy().astype("float32"),
+            _as_fits_header(header_dict_obs),
+        ),
         _as_fits_header(target_header),
         shape_out=target_shape,
         return_footprint=True,
@@ -182,7 +185,9 @@ def test_conservative_polygon_parity_respects_weight_and_mask_maps(
         value_semantics="surface_brightness",
         stacking_method="weighted_mean",
     )
-    source_weight = torch.where(mask > 0.0, weight_map, torch.zeros_like(weight_map)) * 2.0
+    source_weight = (
+        torch.where(mask > 0.0, weight_map, torch.zeros_like(weight_map)) * 2.0
+    )
     reference_weight, reference_data = _external_reference(
         image,
         source_weight,

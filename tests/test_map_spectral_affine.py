@@ -52,7 +52,9 @@ def test_spectral_linear_affine_zero_boundary_does_not_wrap_edges() -> None:
     assert float(out_periodic[:, -1].abs().max()) > 0.5
 
 
-def test_spectral_linear_affine_periodic_shift_tracks_fft_translation_for_blob() -> None:
+def test_spectral_linear_affine_periodic_shift_tracks_fft_translation_for_blob() -> (
+    None
+):
     size = 48
     yy, xx = torch.meshgrid(
         torch.arange(size, dtype=torch.float32),

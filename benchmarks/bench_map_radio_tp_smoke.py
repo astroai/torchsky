@@ -35,9 +35,7 @@ import bench_map_compat as map_compat  # noqa: E402
 try:  # noqa: E402
     import torchsky.cpp  # noqa: F401
 except Exception as exc:  # pragma: no cover
-    raise RuntimeError(
-        "bench_map_radio_tp_smoke.py requires torchsky.cpp"
-    ) from exc
+    raise RuntimeError("bench_map_radio_tp_smoke.py requires torchsky.cpp") from exc
 
 
 def _radio_header(*, size: int, crval2: float) -> dict[str, Any]:
@@ -63,9 +61,7 @@ def _radio_header(*, size: int, crval2: float) -> dict[str, Any]:
 def _write_pair(tmp: Path) -> tuple[list[ImageObservation], dict[str, Any]]:
     size = 28
     yy, xx = np.mgrid[0:size, 0:size]
-    g = np.exp(
-        -((xx - size / 2) ** 2 + (yy - size / 2) ** 2) / 10.0
-    ).astype(np.float32)
+    g = np.exp(-((xx - size / 2) ** 2 + (yy - size / 2) ** 2) / 10.0).astype(np.float32)
     h1 = _radio_header(size=size, crval2=-5.0)
     h2 = _radio_header(size=size, crval2=-5.008)
     p1 = tmp / "a.fits"

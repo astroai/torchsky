@@ -18,9 +18,9 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     size = 16
     yy, xx = np.mgrid[0:size, 0:size]
-    data = np.exp(
-        -((xx - size / 2) ** 2 + (yy - size / 2) ** 2) / 6.0
-    ).astype(np.float32)
+    data = np.exp(-((xx - size / 2) ** 2 + (yy - size / 2) ** 2) / 6.0).astype(
+        np.float32
+    )
     hdr = {
         "NAXIS": 2,
         "NAXIS1": size,

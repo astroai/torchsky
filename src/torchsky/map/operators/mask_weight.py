@@ -32,9 +32,15 @@ def load_image_observation_weight_map(
     weight_map = torch.isfinite(image).to(dtype=torch.float32, device=device)
 
     if getattr(obs, "weight_path", None) is not None:
-        source_weight = read(getattr(obs, "weight_path"), hdu=getattr(obs, "weight_hdu"), device=str(device))
+        source_weight = read(
+            getattr(obs, "weight_path"),
+            hdu=getattr(obs, "weight_hdu"),
+            device=str(device),
+        )
         source_weight = _validate_image_plane_2d(source_weight)
-        if tuple(int(v) for v in source_weight.shape) != tuple(int(v) for v in image.shape):
+        if tuple(int(v) for v in source_weight.shape) != tuple(
+            int(v) for v in image.shape
+        ):
             raise ValueError("Weight map shape must match the observation image shape")
         source_weight = source_weight.to(device=device, dtype=torch.float32)
         source_weight = torch.where(
@@ -45,7 +51,9 @@ def load_image_observation_weight_map(
         weight_map = weight_map * source_weight
 
     if getattr(obs, "mask_path", None) is not None:
-        mask = read(getattr(obs, "mask_path"), hdu=getattr(obs, "mask_hdu"), device=str(device))
+        mask = read(
+            getattr(obs, "mask_path"), hdu=getattr(obs, "mask_hdu"), device=str(device)
+        )
         mask = _validate_image_plane_2d(mask)
         if tuple(int(v) for v in mask.shape) != tuple(int(v) for v in image.shape):
             raise ValueError("Mask shape must match the observation image shape")
@@ -65,10 +73,11 @@ def load_image_observation_weight_map(
         )
         pb = _validate_image_plane_2d(pb)
         if tuple(int(v) for v in pb.shape) != tuple(int(v) for v in image.shape):
-            raise ValueError("primary_beam map shape must match the observation image shape")
+            raise ValueError(
+                "primary_beam map shape must match the observation image shape"
+            )
         pb = pb.to(device=device, dtype=torch.float32)
         pb = torch.where(torch.isfinite(pb) & (pb > 0.0), pb, torch.zeros_like(pb))
         weight_map = weight_map * pb
 
     return weight_map * float(getattr(obs, "weight", 1.0))
-

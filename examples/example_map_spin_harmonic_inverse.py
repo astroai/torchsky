@@ -77,10 +77,16 @@ def main() -> None:
 
     print("Native spin harmonic inverse example")
     print(f"spin=2 lmax={lmax} nalm={nalm} target={tuple(observed_maps.shape[-2:])}")
-    print(f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}")
-    print(f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}")
+    print(
+        f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}"
+    )
+    print(
+        f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}"
+    )
     print(f"final Q/U image RMSE: {final_rmse:.6f}")
-    print("note: a single cutout constrains the rendered polarization field more strongly than every E/B coefficient")
+    print(
+        "note: a single cutout constrains the rendered polarization field more strongly than every E/B coefficient"
+    )
 
 
 if __name__ == "__main__":

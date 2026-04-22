@@ -52,7 +52,9 @@ def test_prepare_image_observation_data_uses_weight_and_calibration_callbacks() 
     assert prepared.operator_bundle.radiometry is not None
 
 
-def test_prepare_image_observation_data_sanitizes_nan_when_no_calibration_needed() -> None:
+def test_prepare_image_observation_data_sanitizes_nan_when_no_calibration_needed() -> (
+    None
+):
     image = torch.tensor([[1.0, float("nan")]], dtype=torch.float32)
     prepared = prepare_image_observation_data(
         ImageObservation("mock.fits"),
@@ -86,7 +88,9 @@ def test_project_image_observation_geometry_dispatches_by_operator_family(
 
     monkeypatch.setattr(execution_mod, "exact_square_drizzle_project", _fake_square)
     monkeypatch.setattr(execution_mod, "exact_point_drizzle_project", _fake_point)
-    monkeypatch.setattr(execution_mod, "conservative_polygon_project", _fake_conservative)
+    monkeypatch.setattr(
+        execution_mod, "conservative_polygon_project", _fake_conservative
+    )
 
     resample_calls: list[str] = []
     splat_calls: list[str] = []
@@ -165,7 +169,9 @@ def test_project_image_observation_geometry_dispatches_by_operator_family(
     assert resample_calls == ["interp"]
 
 
-def test_stack_inputs_from_projected_observation_applies_flux_area_for_mean_stack() -> None:
+def test_stack_inputs_from_projected_observation_applies_flux_area_for_mean_stack() -> (
+    None
+):
     numer = torch.tensor([[4.0, 0.0], [6.0, 0.0]], dtype=torch.float32)
     weight = torch.tensor([[2.0, 0.0], [3.0, 0.0]], dtype=torch.float32)
     pixel_area_sr = torch.full((2, 2), 10.0, dtype=torch.float32)

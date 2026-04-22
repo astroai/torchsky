@@ -67,9 +67,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bands", default="F090W,F150W,F200W,F277W,F356W,F444W")
     parser.add_argument("--module", default="b")
-    parser.add_argument("--input-product", choices=("auto", "crf", "cal"), default="cal")
+    parser.add_argument(
+        "--input-product", choices=("auto", "crf", "cal"), default="cal"
+    )
     parser.add_argument("--crop-size", type=int, default=512)
-    parser.add_argument("--crop-mode", choices=("center", "best_overlap"), default="best_overlap")
+    parser.add_argument(
+        "--crop-mode", choices=("center", "best_overlap"), default="best_overlap"
+    )
     parser.add_argument("--overlap-step", type=int, default=8)
     parser.add_argument("--linearize-sip", action="store_true")
     parser.add_argument(
@@ -95,7 +99,9 @@ def main() -> int:
         requested = {part.strip() for part in args.methods.split(",") if part.strip()}
         specs = [spec for spec in specs if spec["name"] in requested]
         if not specs:
-            raise ValueError("none of the requested methods matched the available non-INR specs")
+            raise ValueError(
+                "none of the requested methods matched the available non-INR specs"
+            )
 
     rows: list[dict[str, Any]] = []
     for band in bands:
@@ -148,7 +154,9 @@ def main() -> int:
     ok_rows = [row for row in rows if row["status"] == "OK"]
     rest_rows = [row for row in rows if row["status"] != "OK"]
     ok_rows.sort(key=lambda row: (str(row.get("band", "")), float(row["support_rmse"])))
-    rest_rows.sort(key=lambda row: (str(row.get("band", "")), str(row.get("variant", ""))))
+    rest_rows.sort(
+        key=lambda row: (str(row.get("band", "")), str(row.get("variant", "")))
+    )
     rows = ok_rows + rest_rows
     payload = {"rows": rows}
     if args.json_out is not None:

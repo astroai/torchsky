@@ -108,10 +108,12 @@ def _evaluate_field_model(
 ) -> dict[str, Any]:
     spec = field_bench._build_case_specs(size)[case]
     with tempfile.TemporaryDirectory(prefix="torchsky-field-fit-sweep-") as tmpdir_str:
-        observations, image_observations, truth_cube = field_bench._simulate_observations(
-            spec,
-            seed=seed,
-            tmpdir=Path(tmpdir_str),
+        observations, image_observations, truth_cube = (
+            field_bench._simulate_observations(
+                spec,
+                seed=seed,
+                tmpdir=Path(tmpdir_str),
+            )
         )
         product = plan_map_product(
             image_observations,

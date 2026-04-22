@@ -150,7 +150,9 @@ def finalize_projected_stack(
     """Finalize accumulated stack tensors into map values and output weights."""
     if stacking_method == "median":
         if median_images is None or median_support is None:
-            raise RuntimeError("median stacking requires projected image/support buffers")
+            raise RuntimeError(
+                "median stacking requires projected image/support buffers"
+            )
         return masked_median_stack(median_images, median_support)
     if stacking_method == "weighted_mean" and value_semantics == "flux":
         if pixel_area_sr is None:

@@ -67,8 +67,12 @@ def main() -> None:
     anchor[7] += complex(-0.01, 0.01)
 
     targets = (
-        TargetRenderSpec.from_header(_tan_header(crval1=210.0, crval2=54.0), band_label="bg"),
-        TargetRenderSpec.from_header(_tan_header(crval1=214.0, crval2=52.5), band_label="bg"),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=210.0, crval2=54.0), band_label="bg"
+        ),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=214.0, crval2=52.5), band_label="bg"
+        ),
     )
     hooks = build_spherical_harmonic_solver_hooks(lmax=lmax)
     image_block = hooks.bind_targets(targets)
@@ -104,8 +108,7 @@ def main() -> None:
 
     clean_cutouts = image_block.apply(truth)
     observed_cutouts = tuple(
-        cutout + 0.01 * torch.randn_like(cutout)
-        for cutout in clean_cutouts
+        cutout + 0.01 * torch.randn_like(cutout) for cutout in clean_cutouts
     )
     data = (*observed_cutouts, anchor, torch.zeros_like(truth), torch.zeros_like(truth))
 
@@ -130,19 +133,29 @@ def main() -> None:
     ]
     anchor_distance = float(torch.linalg.vector_norm(fit.solution - anchor).item())
     truth_distance = float(torch.linalg.vector_norm(fit.solution - truth).item())
-    smoothness_norm = float(torch.linalg.vector_norm(smoothness_block.apply(fit.solution)).item())
-    dense_prior_norm = float(torch.linalg.vector_norm(dense_prior_block.apply(fit.solution)).item())
+    smoothness_norm = float(
+        torch.linalg.vector_norm(smoothness_block.apply(fit.solution)).item()
+    )
+    dense_prior_norm = float(
+        torch.linalg.vector_norm(dense_prior_block.apply(fit.solution)).item()
+    )
 
     print("Native mixed-constraint harmonic inverse example")
     print(f"lmax={lmax} nalm={nalm} image_observations={len(targets)}")
-    print(f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}")
-    print(f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}")
+    print(
+        f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}"
+    )
+    print(
+        f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}"
+    )
     print(f"per-cutout image RMSE: {[round(v, 6) for v in cutout_rmses]}")
     print(f"distance to coefficient anchor: {anchor_distance:.6f}")
     print(f"distance to truth coefficients: {truth_distance:.6f}")
     print(f"harmonic smoothness penalty norm: {smoothness_norm:.6f}")
     print(f"dense covariance prior norm: {dense_prior_norm:.6f}")
-    print("useful when image cutouts should stay close to an external low-order spherical model")
+    print(
+        "useful when image cutouts should stay close to an external low-order spherical model"
+    )
 
 
 if __name__ == "__main__":

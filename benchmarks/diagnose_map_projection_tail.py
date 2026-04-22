@@ -145,10 +145,12 @@ def _prepare_case(
             )
         )
         return observations, target_header, truth, case_meta
-    observations, target_header, truth, case_meta, _region_masks = projection_suite._prepare_projection_truth_case(
-        tmpdir,
-        projection_case=case_spec,
-        seed=seed,
+    observations, target_header, truth, case_meta, _region_masks = (
+        projection_suite._prepare_projection_truth_case(
+            tmpdir,
+            projection_case=case_spec,
+            seed=seed,
+        )
     )
     return observations, target_header, truth, case_meta
 
@@ -213,7 +215,9 @@ def _format_markdown(summary: dict[str, Any]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", required=True, help="PROJ:CASE@SIZE or PROJ:CASE@WIDTHxHEIGHT")
+    parser.add_argument(
+        "--case", required=True, help="PROJ:CASE@SIZE or PROJ:CASE@WIDTHxHEIGHT"
+    )
     parser.add_argument(
         "--psf-mode",
         choices=("heterogeneous", "equalized"),
@@ -289,7 +293,12 @@ def main() -> int:
             "methods": method_metrics,
             "comparison": {
                 "right_better_fraction": (
-                    float(((right_resid.abs() + 1e-8) < left_resid.abs())[support].to(dtype=torch.float32).mean().item())
+                    float(
+                        ((right_resid.abs() + 1e-8) < left_resid.abs())[support]
+                        .to(dtype=torch.float32)
+                        .mean()
+                        .item()
+                    )
                     if bool(support.any())
                     else 0.0
                 ),

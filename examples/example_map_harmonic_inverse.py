@@ -15,7 +15,11 @@ import math
 
 import torch
 
-from torchsky.map import MapBandpassSpec, MapProductSpec, build_spherical_harmonic_solver_hooks
+from torchsky.map import (
+    MapBandpassSpec,
+    MapProductSpec,
+    build_spherical_harmonic_solver_hooks,
+)
 
 
 def _tan_header() -> dict[str, float | int | str]:
@@ -70,10 +74,16 @@ def main() -> None:
 
     print("Native harmonic inverse example")
     print(f"lmax={lmax} nalm={nalm} target={tuple(observed_cutout.shape)}")
-    print(f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}")
-    print(f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}")
+    print(
+        f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}"
+    )
+    print(
+        f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}"
+    )
     print(f"final image RMSE: {final_rmse:.6f}")
-    print("note: one cutout constrains the rendered image well, not every alm coefficient uniquely")
+    print(
+        "note: one cutout constrains the rendered image well, not every alm coefficient uniquely"
+    )
 
 
 if __name__ == "__main__":

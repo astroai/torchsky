@@ -23,4 +23,3 @@ class LearnedNoiseOp(NoiseOp):
 
 def sanitize_inverse_variance(weight: Tensor) -> Tensor:
     return weight.where(weight > 0.0, weight.new_zeros(()).expand_as(weight))
-

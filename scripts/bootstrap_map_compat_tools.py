@@ -17,7 +17,9 @@ REPOS = {
     "swarp": "https://github.com/astromatic/swarp.git",
     "montage": "https://github.com/Caltech-IPAC/Montage.git",
 }
-DEFAULT_CASUTOOLS_URL = "https://www.canfar.net/storage/vault/file/sfabbro/casutools-1.0.43.tar.gz"
+DEFAULT_CASUTOOLS_URL = (
+    "https://www.canfar.net/storage/vault/file/sfabbro/casutools-1.0.43.tar.gz"
+)
 
 
 def _repo_root() -> Path:
@@ -37,7 +39,9 @@ def _run(cmd: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> Non
     subprocess.check_call(cmd, cwd=cwd, env=env)
 
 
-def _run_allow_failure(cmd: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> int:
+def _run_allow_failure(
+    cmd: list[str], *, cwd: Path, env: dict[str, str] | None = None
+) -> int:
     print("+", " ".join(cmd))
     completed = subprocess.run(cmd, cwd=cwd, env=env, check=False)
     return int(completed.returncode)
@@ -78,9 +82,7 @@ def _ensure_repo(tool: str) -> Path:
         if source_override:
             source_dir = Path(source_override).expanduser()
             if not source_dir.exists():
-                raise RuntimeError(
-                    f"CASUTOOLS_SOURCE={source_dir} does not exist"
-                )
+                raise RuntimeError(f"CASUTOOLS_SOURCE={source_dir} does not exist")
             src_dir.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(source_dir, src_dir)
             return src_dir
@@ -149,7 +151,9 @@ def _build_montage(src_dir: Path, prefix: Path, *, jobs: int) -> None:
     make_rc = _run_allow_failure(["make", f"-j{jobs}"], cwd=src_dir, env=env)
     mproject = built_bin / "mProject"
     if not mproject.exists():
-        raise RuntimeError(f"Montage build failed before mProject was produced (make rc={make_rc})")
+        raise RuntimeError(
+            f"Montage build failed before mProject was produced (make rc={make_rc})"
+        )
     target_bin = prefix / "bin"
     target_bin.mkdir(parents=True, exist_ok=True)
     for name in ("mProject", "mProjectPP", "mGetHdr", "mMakeHdr"):
@@ -178,7 +182,9 @@ def _build_casutools(src_dir: Path, prefix: Path, *, jobs: int) -> None:
             target.unlink()
         target.symlink_to(cfitsio_dylib)
 
-    wcslib_include = Path(os.environ.get("WCSLIB_INCLUDE", str(conda_prefix / "include")))
+    wcslib_include = Path(
+        os.environ.get("WCSLIB_INCLUDE", str(conda_prefix / "include"))
+    )
     wcslib_lib = Path(os.environ.get("WCSLIB_LIB", str(conda_prefix / "lib")))
     wcslib_header = wcslib_include / "wcs.h"
     if not wcslib_header.exists():
@@ -187,7 +193,9 @@ def _build_casutools(src_dir: Path, prefix: Path, *, jobs: int) -> None:
             "install wcslib there or set WCSLIB_INCLUDE/WCSLIB_LIB"
         )
     if not wcslib_lib.exists() or not cfitsio_include.exists():
-        raise RuntimeError("expected wcslib/cfitsio headers and libraries for casutools build")
+        raise RuntimeError(
+            "expected wcslib/cfitsio headers and libraries for casutools build"
+        )
 
     _run(
         [

@@ -63,7 +63,9 @@ def sorted_tabulated_transmission(
     return wl_s, tt_s
 
 
-def linear_interp_transmission(wl_tab: Tensor, tt_tab: Tensor, wl_query: Tensor) -> Tensor:
+def linear_interp_transmission(
+    wl_tab: Tensor, tt_tab: Tensor, wl_query: Tensor
+) -> Tensor:
     xq = wl_query.to(dtype=torch.float32)
     x = wl_tab.to(dtype=torch.float32)
     y = tt_tab.to(dtype=torch.float32)
@@ -102,7 +104,9 @@ def bandpass_quadrature(
         raise ValueError("num_spectral_samples must be positive")
     lower, upper = bandpass_bounds(observation)
     if lower == upper or num_spectral_samples == 1:
-        samples = torch.tensor([0.5 * (lower + upper)], dtype=torch.float32, device=device)
+        samples = torch.tensor(
+            [0.5 * (lower + upper)], dtype=torch.float32, device=device
+        )
         return samples, torch.ones_like(samples)
     n = int(num_spectral_samples)
     samples = torch.linspace(lower, upper, steps=n, dtype=torch.float32, device=device)
@@ -131,7 +135,9 @@ def bandpass_quadrature(
                 raise ValueError(
                     "FieldObservation transmission_sigma must be finite and positive"
                 )
-            response = torch.exp(-0.5 * (((samples - center) / sigma) * ((samples - center) / sigma)))
+            response = torch.exp(
+                -0.5 * (((samples - center) / sigma) * ((samples - center) / sigma))
+            )
     weights = response * trap
     return samples, weights / torch.clamp(weights.sum(), min=1e-8)
 
@@ -141,7 +147,9 @@ def bandpass_response(observation: FieldObservation, wavelengths: Tensor) -> Ten
     wavelengths = wavelengths.to(dtype=torch.float32)
     if lower == upper:
         atol = max(1.0e-3, 1.0e-6 * max(abs(lower), 1.0))
-        return (torch.abs(wavelengths - float(lower)) <= atol).to(dtype=wavelengths.dtype)
+        return (torch.abs(wavelengths - float(lower)) <= atol).to(
+            dtype=wavelengths.dtype
+        )
     inside = (wavelengths >= float(lower)) & (wavelengths <= float(upper))
     if has_tabulated_transmission(observation):
         wl_tab, tt_tab = sorted_tabulated_transmission(
@@ -162,7 +170,9 @@ def bandpass_response(observation: FieldObservation, wavelengths: Tensor) -> Ten
         if observation.transmission_center is not None
         else 0.5 * (float(lower) + float(upper))
     )
-    response = torch.exp(-0.5 * (((wavelengths - center) / sigma) * ((wavelengths - center) / sigma)))
+    response = torch.exp(
+        -0.5 * (((wavelengths - center) / sigma) * ((wavelengths - center) / sigma))
+    )
     return response * inside.to(dtype=response.dtype)
 
 
@@ -178,7 +188,9 @@ def bandpass_mc_samples(
         raise ValueError("num_spectral_samples must be positive")
     lower, upper = bandpass_bounds(observation)
     if lower == upper or num_spectral_samples == 1:
-        sample = torch.tensor([0.5 * (lower + upper)], dtype=torch.float32, device=device)
+        sample = torch.tensor(
+            [0.5 * (lower + upper)], dtype=torch.float32, device=device
+        )
         return sample, torch.ones_like(sample)
     proposal_size = (
         int(proposal_grid_size)
@@ -212,9 +224,15 @@ def bandpass_mc_samples(
                     "FieldObservation transmission_sigma must be finite and positive"
                 )
             proposal_weights = torch.exp(
-                -0.5 * (((proposal_samples - center) / sigma) * ((proposal_samples - center) / sigma))
+                -0.5
+                * (
+                    ((proposal_samples - center) / sigma)
+                    * ((proposal_samples - center) / sigma)
+                )
             )
-    proposal_weights = proposal_weights / torch.clamp(proposal_weights.sum(), min=1.0e-8)
+    proposal_weights = proposal_weights / torch.clamp(
+        proposal_weights.sum(), min=1.0e-8
+    )
     sample_ids = torch.multinomial(
         proposal_weights,
         int(num_spectral_samples),
@@ -241,7 +259,9 @@ def mixture_mc_samples(
     lower = min(bound[0] for bound in bounds)
     upper = max(bound[1] for bound in bounds)
     if lower == upper or num_spectral_samples == 1:
-        sample = torch.tensor([0.5 * (lower + upper)], dtype=torch.float32, device=device)
+        sample = torch.tensor(
+            [0.5 * (lower + upper)], dtype=torch.float32, device=device
+        )
         return sample, torch.ones_like(sample)
     proposal_size = (
         int(proposal_grid_size)
@@ -277,6 +297,7 @@ def mixture_importance_weights(
     proposal_probs: Tensor,
 ) -> Tensor:
     response = bandpass_response(observation, wavelengths)
-    weights = response / torch.clamp(proposal_probs.to(dtype=response.dtype), min=1.0e-8)
+    weights = response / torch.clamp(
+        proposal_probs.to(dtype=response.dtype), min=1.0e-8
+    )
     return weights / torch.clamp(weights.sum(), min=1.0e-8)
-

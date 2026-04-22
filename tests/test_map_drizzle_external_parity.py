@@ -210,7 +210,9 @@ def test_external_drizzle_parity_respects_weight_and_mask_maps(
         drizzle_pixfrac=0.9,
         stacking_method="weighted_mean",
     )
-    source_weight = torch.where(mask > 0.0, weight_map, torch.zeros_like(weight_map)) * 2.0
+    source_weight = (
+        torch.where(mask > 0.0, weight_map, torch.zeros_like(weight_map)) * 2.0
+    )
     _, reference_weight, reference_data = _external_reference(
         image,
         source_weight,

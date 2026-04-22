@@ -71,6 +71,7 @@ VARIANTS: tuple[tuple[str, str, str], ...] = (
     ("lanczos3", "flux", "weighted_mean"),
 )
 
+
 def _variant_specs(
     *,
     include_drizzle: bool,
@@ -157,7 +158,9 @@ def _as_fits_header(header: dict[str, Any]) -> "fits.Header":
 def _load_weight_map(obs: ImageObservation, image: torch.Tensor) -> torch.Tensor:
     weight = torch.isfinite(image).to(dtype=torch.float32)
     if obs.weight_path is not None:
-        source = torchsky.read(obs.weight_path, hdu=obs.weight_hdu).to(dtype=torch.float32)
+        source = torchsky.read(obs.weight_path, hdu=obs.weight_hdu).to(
+            dtype=torch.float32
+        )
         source = torch.where(
             torch.isfinite(source) & (source > 0.0),
             source,
@@ -298,7 +301,9 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.exposures.strip():
-        exposure_paths = [Path(part.strip()) for part in args.exposures.split(",") if part.strip()]
+        exposure_paths = [
+            Path(part.strip()) for part in args.exposures.split(",") if part.strip()
+        ]
     else:
         exposure_paths = _discover_exposure_paths(
             DEFAULT_EXPOSURE_DIR,
@@ -370,7 +375,9 @@ def main() -> int:
                         target_header=dict(target_header),
                         kernel=str(spec["kernel"]),
                         pixfrac=float(spec["pixfrac"]),
-                        value_semantics=str(spec.get("value_semantics", "surface_brightness")),
+                        value_semantics=str(
+                            spec.get("value_semantics", "surface_brightness")
+                        ),
                     ),
                     args.runs,
                 )
@@ -379,7 +386,9 @@ def main() -> int:
                     target_header=dict(target_header),
                     kernel=str(spec["kernel"]),
                     pixfrac=float(spec["pixfrac"]),
-                    value_semantics=str(spec.get("value_semantics", "surface_brightness")),
+                    value_semantics=str(
+                        spec.get("value_semantics", "surface_brightness")
+                    ),
                 )
                 support = weight > 0.0
                 max_overlap = 0
@@ -391,7 +400,9 @@ def main() -> int:
                         resampling_kernel=str(spec["kernel"]),
                         value_semantics=str(spec["value_semantics"]),
                         stacking_method=str(spec["stacking_method"]),
-                        drizzle_pixfrac=float(spec.get("drizzle_pixfrac", drizzle_pixfrac)),
+                        drizzle_pixfrac=float(
+                            spec.get("drizzle_pixfrac", drizzle_pixfrac)
+                        ),
                     ),
                     args.runs,
                 )
@@ -406,17 +417,25 @@ def main() -> int:
                 pred = result.data.cpu().numpy().astype(np.float32)
                 support = result.weight.cpu().numpy() > 0
                 max_overlap = (
-                    int(result.overlap_count.max().item()) if result.overlap_count is not None else 0
+                    int(result.overlap_count.max().item())
+                    if result.overlap_count is not None
+                    else 0
                 )
             metric_mask = _metric_mask(pred, ref_crop, support)
             diff = pred[metric_mask] - ref_crop[metric_mask]
             rows.append(
                 {
                     "variant": str(spec["variant"]),
-                    "support_rmse": float(np.sqrt(np.mean(diff * diff))) if diff.size else float("nan"),
-                    "support_mae": float(np.mean(np.abs(diff))) if diff.size else float("nan"),
+                    "support_rmse": float(np.sqrt(np.mean(diff * diff)))
+                    if diff.size
+                    else float("nan"),
+                    "support_mae": float(np.mean(np.abs(diff)))
+                    if diff.size
+                    else float("nan"),
                     "support_flux_ratio": (
-                        float(np.sum(pred[metric_mask]) / np.sum(ref_crop[metric_mask])) if diff.size else float("nan")
+                        float(np.sum(pred[metric_mask]) / np.sum(ref_crop[metric_mask]))
+                        if diff.size
+                        else float("nan")
                     ),
                     "coverage_frac": float(metric_mask.mean()),
                     "max_overlap": max_overlap,

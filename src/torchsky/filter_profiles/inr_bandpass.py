@@ -35,12 +35,8 @@ def field_observation_spectral_kwargs(spec: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(
                 "transmission_wavelength and transmission_throughput must both be present in spec"
             )
-        out["transmission_wavelength"] = torch.as_tensor(
-            tw, dtype=torch.float32
-        )
-        out["transmission_throughput"] = torch.as_tensor(
-            tt, dtype=torch.float32
-        )
+        out["transmission_wavelength"] = torch.as_tensor(tw, dtype=torch.float32)
+        out["transmission_throughput"] = torch.as_tensor(tt, dtype=torch.float32)
     return out
 
 
@@ -50,7 +46,9 @@ def _prepare_curve_for_field(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Sort, clip, merge duplicate wavelengths (mean throughput) for tabulated bandpass."""
     w = torch.as_tensor(wavelength, dtype=torch.float64).reshape(-1)
-    t = torch.clamp(torch.as_tensor(transmission, dtype=torch.float64).reshape(-1), min=0.0)
+    t = torch.clamp(
+        torch.as_tensor(transmission, dtype=torch.float64).reshape(-1), min=0.0
+    )
     if w.shape != t.shape:
         raise ValueError("wavelength and transmission must have the same shape")
     if w.numel() < 2:
@@ -59,7 +57,9 @@ def _prepare_curve_for_field(
     w, t = w[order], t[order]
     uw, inv = torch.unique(w, return_inverse=True)
     if uw.numel() < 2:
-        raise ValueError("tabulated transmission requires at least two distinct wavelengths")
+        raise ValueError(
+            "tabulated transmission requires at least two distinct wavelengths"
+        )
     ts = torch.bincount(inv, weights=t, minlength=uw.numel())
     cnt = torch.bincount(inv, minlength=uw.numel())
     ta = ts / torch.clamp(cnt, min=1)
@@ -78,7 +78,9 @@ def bandpass_gaussian(
     lo = float(lambda_min)
     hi = float(lambda_max)
     if not math.isfinite(lo) or not math.isfinite(hi) or hi <= lo:
-        raise ValueError("lambda_min/lambda_max must be finite with lambda_max > lambda_min")
+        raise ValueError(
+            "lambda_min/lambda_max must be finite with lambda_max > lambda_min"
+        )
     leff = float(lambda_eff)
     if not math.isfinite(leff):
         raise ValueError("lambda_eff must be finite")
@@ -169,7 +171,11 @@ def _summarize_transmission_curve(
     if torch.any(above):
         idx = torch.where(above)[0]
         fwhm = float(w_eff[idx.max()] - w_eff[idx.min()])
-    sigma = (fwhm / _GAUSS_FWHM_SIGMA) if fwhm and fwhm > 0.0 else (lam_max - lam_min) / _GAUSS_FWHM_SIGMA
+    sigma = (
+        (fwhm / _GAUSS_FWHM_SIGMA)
+        if fwhm and fwhm > 0.0
+        else (lam_max - lam_min) / _GAUSS_FWHM_SIGMA
+    )
     if not math.isfinite(sigma) or sigma <= 0.0:
         sigma = max((lam_max - lam_min) / _GAUSS_FWHM_SIGMA, 1.0)
     pivot = lam_eff
@@ -235,8 +241,18 @@ def bandpass_from_svo(
     if filter_id:
         fid = str(filter_id).strip()
         data = SvoFps.get_transmission_data(fid)
-        wl = torch.as_tensor(data["Wavelength"].value if hasattr(data["Wavelength"], "value") else data["Wavelength"], dtype=torch.float64)
-        tr = torch.as_tensor(data["Transmission"].value if hasattr(data["Transmission"], "value") else data["Transmission"], dtype=torch.float64)
+        wl = torch.as_tensor(
+            data["Wavelength"].value
+            if hasattr(data["Wavelength"], "value")
+            else data["Wavelength"],
+            dtype=torch.float64,
+        )
+        tr = torch.as_tensor(
+            data["Transmission"].value
+            if hasattr(data["Transmission"], "value")
+            else data["Transmission"],
+            dtype=torch.float64,
+        )
         spec = _summarize_transmission_curve(wl, tr, band_name=bn)
         spec["svo_filter_id"] = fid
         return spec
@@ -245,8 +261,18 @@ def bandpass_from_svo(
     row = _pick_svo_row(fl, band_token=band_name, prefer=prefer)
     fid_out = str(row["filterID"])
     data = SvoFps.get_transmission_data(fid_out)
-    wl = torch.as_tensor(data["Wavelength"].value if hasattr(data["Wavelength"], "value") else data["Wavelength"], dtype=torch.float64)
-    tr = torch.as_tensor(data["Transmission"].value if hasattr(data["Transmission"], "value") else data["Transmission"], dtype=torch.float64)
+    wl = torch.as_tensor(
+        data["Wavelength"].value
+        if hasattr(data["Wavelength"], "value")
+        else data["Wavelength"],
+        dtype=torch.float64,
+    )
+    tr = torch.as_tensor(
+        data["Transmission"].value
+        if hasattr(data["Transmission"], "value")
+        else data["Transmission"],
+        dtype=torch.float64,
+    )
     spec = _summarize_transmission_curve(wl, tr, band_name=bn)
     spec["svo_filter_id"] = fid_out
     return spec

@@ -34,7 +34,9 @@ def test_parser_defaults_are_simple() -> None:
     assert args.train_steps == 12
 
 
-def test_ensure_local_cpp_installs_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_local_cpp_installs_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     state = {"installed": False, "calls": 0}
 
     def _fake_import_module(name: str):
@@ -51,8 +53,12 @@ def test_ensure_local_cpp_installs_when_missing(monkeypatch: pytest.MonkeyPatch)
         state["calls"] += 1
         state["installed"] = True
 
-    monkeypatch.setattr("smacs0723_full_mosaic_pipeline.importlib.import_module", _fake_import_module)
-    monkeypatch.setattr("smacs0723_full_mosaic_pipeline.subprocess.check_call", _fake_check_call)
+    monkeypatch.setattr(
+        "smacs0723_full_mosaic_pipeline.importlib.import_module", _fake_import_module
+    )
+    monkeypatch.setattr(
+        "smacs0723_full_mosaic_pipeline.subprocess.check_call", _fake_check_call
+    )
 
     _ensure_local_cpp()
 

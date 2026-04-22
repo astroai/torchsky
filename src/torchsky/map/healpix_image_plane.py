@@ -52,7 +52,9 @@ def sample_healpix_map_on_image_header(
         raise ValueError("healpix_map must be a 1D tensor of length 12*nside**2")
     npix = hp.nside2npix(int(nside))
     if int(m.numel()) != npix:
-        raise ValueError(f"healpix_map length {m.numel()} does not match nside={nside} (npix={npix})")
+        raise ValueError(
+            f"healpix_map length {m.numel()} does not match nside={nside} (npix={npix})"
+        )
     dev = device if device is not None else m.device
     h = int(target_header["NAXIS2"])
     w = int(target_header["NAXIS1"])
@@ -113,7 +115,9 @@ def accumulate_image_on_healpix_map_adjoint(
         indexing="ij",
     )
     ra, dec = wcs.pixel_to_world(x, y)
-    valid = torch.isfinite(ra) & torch.isfinite(dec) & torch.isfinite(img.to(device=dev))
+    valid = (
+        torch.isfinite(ra) & torch.isfinite(dec) & torch.isfinite(img.to(device=dev))
+    )
     if not bool(valid.any()):
         return torch.zeros(npix, dtype=img.dtype, device=dev)
     pix, weight = hp.get_interp_weights(
@@ -125,7 +129,9 @@ def accumulate_image_on_healpix_map_adjoint(
     )
     valid_flat = valid.reshape(-1)
     pix_flat = pix.reshape(4, -1)[:, valid_flat]
-    weight_flat = weight.reshape(4, -1)[:, valid_flat].to(dtype=torch.float64, device=dev)
+    weight_flat = weight.reshape(4, -1)[:, valid_flat].to(
+        dtype=torch.float64, device=dev
+    )
     values_flat = img.reshape(-1)[valid_flat].to(dtype=torch.float64, device=dev)
     out = torch.zeros(npix, dtype=torch.float64, device=dev)
     out.scatter_add_(

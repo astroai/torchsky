@@ -60,4 +60,3 @@ class MaskWeightOp(ObservationOperator):
 @dataclass
 class NoiseOp(ObservationOperator):
     pass
-

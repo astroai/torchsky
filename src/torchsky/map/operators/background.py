@@ -163,7 +163,9 @@ def observation_background_components(
             device=device,
             dtype=dtype,
         )
-        detector = offset_background if detector is None else detector + offset_background
+        detector = (
+            offset_background if detector is None else detector + offset_background
+        )
     return {"sky": sky, "instrument": instrument, "detector": detector}
 
 
@@ -212,5 +214,7 @@ def fit_background_plane(residual: Tensor, mask: Tensor) -> BackgroundFitSummary
         model_rms=float(model_rms.item()),
         detrended_rms=float(detrended_rms.item()),
         residual_bias=float(torch.mean(supported_residual).item()),
-        leakage_fraction=float((model_rms / torch.clamp(residual_rms, min=1.0e-8)).item()),
+        leakage_fraction=float(
+            (model_rms / torch.clamp(residual_rms, min=1.0e-8)).item()
+        ),
     )

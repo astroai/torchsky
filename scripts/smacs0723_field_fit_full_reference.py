@@ -76,7 +76,9 @@ def main() -> int:
     parser.add_argument("--band", default="F277W")
     parser.add_argument("--reference-path", type=Path, default=None)
     parser.add_argument("--exposure-dir", type=Path, default=DATA / "jwst_smacs0723")
-    parser.add_argument("--input-product", choices=("auto", "crf", "cal"), default="auto")
+    parser.add_argument(
+        "--input-product", choices=("auto", "crf", "cal"), default="auto"
+    )
     parser.add_argument("--filename-contains", default="")
     parser.add_argument(
         "--max-side",
@@ -142,7 +144,9 @@ def main() -> int:
     ) as tmp:
         tmpdir = Path(tmp)
         image_observations: list[ImageObservation] = []
-        raw_field_inputs: list[tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]] = []
+        raw_field_inputs: list[
+            tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]
+        ] = []
         for exposure_path in exposure_paths:
             science_path, weight_path, mask_path = _prepare_aux_files(
                 exposure_path,
@@ -235,9 +239,7 @@ def main() -> int:
         normalized: list[FieldObservation] = []
         for observation in field_observations:
             normalized.append(
-                _scaled_field_observation(
-                    observation, intensity_scale=intensity_scale
-                )
+                _scaled_field_observation(observation, intensity_scale=intensity_scale)
             )
 
         forward_ctx_tuple: tuple[ForwardContext | None, ...] | None = None

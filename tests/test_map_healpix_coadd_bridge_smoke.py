@@ -16,7 +16,9 @@ import torchsky  # noqa: E402
 from torchsky.map import ImageObservation, coadd_image_plane, plan_image_plane_target  # noqa: E402
 
 
-def test_torchsky_coadd_after_healpix_roundtrip_matches_baseline(tmp_path: Path) -> None:
+def test_torchsky_coadd_after_healpix_roundtrip_matches_baseline(
+    tmp_path: Path,
+) -> None:
     from reproject import reproject_from_healpix, reproject_to_healpix
 
     size = 96
@@ -46,7 +48,9 @@ def test_torchsky_coadd_after_healpix_roundtrip_matches_baseline(tmp_path: Path)
     arr, fp = reproject_from_healpix((hp_map, "icrs"), fits.Header(hdr), nested=False)
     assert float(fp.max()) > 0.5
     path = tmp_path / "from_hp.fits"
-    torchsky.write(str(path), torch.from_numpy(arr.astype(np.float32)), header=hdr, overwrite=True)
+    torchsky.write(
+        str(path), torch.from_numpy(arr.astype(np.float32)), header=hdr, overwrite=True
+    )
     obs = [ImageObservation(str(path))]
     plan = plan_image_plane_target(obs)
     res = coadd_image_plane(
@@ -55,7 +59,5 @@ def test_torchsky_coadd_after_healpix_roundtrip_matches_baseline(tmp_path: Path)
         resampling_kernel="bilinear",
     )
     mask = fp > 0.5
-    delta = np.abs(
-        res.data.detach().cpu().numpy()[mask] - arr.astype(np.float64)[mask]
-    )
+    delta = np.abs(res.data.detach().cpu().numpy()[mask] - arr.astype(np.float64)[mask])
     assert float(np.nanmax(delta)) < 0.02

@@ -282,7 +282,9 @@ def test_coadd_image_plane_identical_wcs(tmp_path) -> None:
     )
 
 
-def test_coadd_image_plane_spatial_tile_single_canvas_matches_non_tiled(tmp_path) -> None:
+def test_coadd_image_plane_spatial_tile_single_canvas_matches_non_tiled(
+    tmp_path,
+) -> None:
     """One tile covering the full output matches non-tiled coadd (same code path)."""
     path_a = tmp_path / "tile_a.fits"
     path_b = tmp_path / "tile_b.fits"
@@ -756,7 +758,13 @@ def test_coadd_image_plane_accepts_custom_high_accuracy_kernels(
 
 @pytest.mark.parametrize(
     "kernel",
-    ["drizzle_point", "drizzle_square", "conservative_polygon", "splat_point", "splat_box"],
+    [
+        "drizzle_point",
+        "drizzle_square",
+        "conservative_polygon",
+        "splat_point",
+        "splat_box",
+    ],
 )
 def test_coadd_image_plane_forward_geometry_kernels_bypass_grid_sample(
     tmp_path: Path,
@@ -870,9 +878,7 @@ def test_coadd_fft_shift_matches_bilinear_for_pure_crpix_offset_interior(
         torch.arange(nx, dtype=torch.float32),
         indexing="ij",
     )
-    blob = torch.exp(
-        -((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 8.0**2)
-    )
+    blob = torch.exp(-((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 8.0**2))
     path = tmp_path / "crpix.fits"
     torchsky.write(str(path), blob, header=ha, overwrite=True)
     obs = [ImageObservation(str(path))]
@@ -880,9 +886,8 @@ def test_coadd_fft_shift_matches_bilinear_for_pure_crpix_offset_interior(
     r_bi = coadd_image_plane(obs, target_header=ht, resampling_kernel="bilinear")
     inner_y = slice(10, ny - 10)
     inner_x = slice(10, nx - 10)
-    mask = (
-        (r_fft.weight[inner_y, inner_x] > 0.0)
-        & (r_bi.weight[inner_y, inner_x] > 0.0)
+    mask = (r_fft.weight[inner_y, inner_x] > 0.0) & (
+        r_bi.weight[inner_y, inner_x] > 0.0
     )
     assert int(mask.sum().item()) > 50
     torch.testing.assert_close(
@@ -921,19 +926,18 @@ def test_coadd_fft_diagonal_affine_tracks_bilinear_scaled_cdelta_interior(
         torch.arange(nx, dtype=torch.float32),
         indexing="ij",
     )
-    blob = torch.exp(
-        -((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 9.0**2)
-    )
+    blob = torch.exp(-((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 9.0**2))
     path = tmp_path / "diag_cdelta.fits"
     torchsky.write(str(path), blob, header=ha, overwrite=True)
     obs = [ImageObservation(str(path))]
-    r_fft = coadd_image_plane(obs, target_header=ht, resampling_kernel="fft_diagonal_affine")
+    r_fft = coadd_image_plane(
+        obs, target_header=ht, resampling_kernel="fft_diagonal_affine"
+    )
     r_bi = coadd_image_plane(obs, target_header=ht, resampling_kernel="bilinear")
     inner_y = slice(12, ny - 12)
     inner_x = slice(12, nx - 12)
-    mask = (
-        (r_fft.weight[inner_y, inner_x] > 0.0)
-        & (r_bi.weight[inner_y, inner_x] > 0.0)
+    mask = (r_fft.weight[inner_y, inner_x] > 0.0) & (
+        r_bi.weight[inner_y, inner_x] > 0.0
     )
     assert int(mask.sum().item()) > 80
     torch.testing.assert_close(
@@ -985,9 +989,7 @@ def test_coadd_periodic_linear_affine_matches_bilinear_skewed_cd_interior(
         torch.arange(nx, dtype=torch.float32),
         indexing="ij",
     )
-    blob = torch.exp(
-        -((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 6.0**2)
-    )
+    blob = torch.exp(-((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 6.0**2))
     path = tmp_path / "skew_pla.fits"
     torchsky.write(str(path), blob, header=ha, overwrite=True)
     obs = [ImageObservation(str(path))]
@@ -999,9 +1001,7 @@ def test_coadd_periodic_linear_affine_matches_bilinear_skewed_cd_interior(
     r_b = coadd_image_plane(obs, target_header=ht, resampling_kernel="bilinear")
     inner_y = slice(8, ny - 8)
     inner_x = slice(8, nx - 8)
-    mask = (r_p.weight[inner_y, inner_x] > 0.0) & (
-        r_b.weight[inner_y, inner_x] > 0.0
-    )
+    mask = (r_p.weight[inner_y, inner_x] > 0.0) & (r_b.weight[inner_y, inner_x] > 0.0)
     torch.testing.assert_close(
         r_p.data[inner_y, inner_x][mask],
         r_b.data[inner_y, inner_x][mask],
@@ -1038,9 +1038,7 @@ def test_coadd_fft_linear_affine_matches_periodic_linear_affine_scaled_cdelta_in
         torch.arange(nx, dtype=torch.float32),
         indexing="ij",
     )
-    blob = torch.exp(
-        -((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 9.0**2)
-    )
+    blob = torch.exp(-((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 9.0**2))
     path = tmp_path / "diag_ldu.fits"
     torchsky.write(str(path), blob, header=ha, overwrite=True)
     obs = [ImageObservation(str(path))]
@@ -1105,9 +1103,7 @@ def test_coadd_spectral_linear_affine_tracks_bilinear_skewed_cd_interior(
         torch.arange(nx, dtype=torch.float32),
         indexing="ij",
     )
-    blob = torch.exp(
-        -((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 6.0**2)
-    )
+    blob = torch.exp(-((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 6.0**2))
     path = tmp_path / "skew_spectral.fits"
     torchsky.write(str(path), blob, header=ha, overwrite=True)
     obs = [ImageObservation(str(path))]
@@ -1362,9 +1358,7 @@ def test_coadd_bilinear_subpixel_crval_shift_preserves_finite_support(
         torch.arange(nx, dtype=torch.float32),
         indexing="ij",
     )
-    blob = torch.exp(
-        -((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 6.0**2)
-    )
+    blob = torch.exp(-((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 6.0**2))
     pa = tmp_path / "sub_a.fits"
     pb = tmp_path / "sub_b.fits"
     torchsky.write(str(pa), blob, header=ha, overwrite=True)

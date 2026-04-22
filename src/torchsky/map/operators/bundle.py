@@ -115,10 +115,14 @@ def _merge_operator_slot(values: Iterable[object | None]) -> object | None:
     return selected
 
 
-def merge_operator_bundles(*bundles: ObservationOperatorBundle) -> ObservationOperatorBundle:
+def merge_operator_bundles(
+    *bundles: ObservationOperatorBundle,
+) -> ObservationOperatorBundle:
     return ObservationOperatorBundle(
         geometry=_merge_operator_slot(bundle.geometry for bundle in bundles),
-        spectral_response=_merge_operator_slot(bundle.spectral_response for bundle in bundles),
+        spectral_response=_merge_operator_slot(
+            bundle.spectral_response for bundle in bundles
+        ),
         psf=_merge_operator_slot(bundle.psf for bundle in bundles),
         radiometry=_merge_operator_slot(bundle.radiometry for bundle in bundles),
         background=_merge_operator_slot(bundle.background for bundle in bundles),
@@ -142,7 +146,9 @@ def image_observation_operator_bundle(
             "transmission_sigma",
         )
     )
-    has_background = float(getattr(observation, "background_offset", 0.0)) != 0.0 or any(
+    has_background = float(
+        getattr(observation, "background_offset", 0.0)
+    ) != 0.0 or any(
         getattr(observation, name, None) is not None
         for name in ("sky_background", "instrument_background", "detector_background")
     )
@@ -176,7 +182,9 @@ def image_observations_operator_bundle(
         for observation in observations
     ]
     if not bundles:
-        return ObservationOperatorBundle(geometry=geometry_op_for_kernel(resampling_kernel))
+        return ObservationOperatorBundle(
+            geometry=geometry_op_for_kernel(resampling_kernel)
+        )
     return merge_operator_bundles(*bundles)
 
 
@@ -199,11 +207,15 @@ def field_observation_operator_bundle(
             "transmission_throughput",
         )
     )
-    has_background = float(getattr(observation, "background_offset", 0.0)) != 0.0 or any(
+    has_background = float(
+        getattr(observation, "background_offset", 0.0)
+    ) != 0.0 or any(
         getattr(observation, name, None) is not None
         for name in ("sky_background", "instrument_background", "detector_background")
     )
-    has_mask_weight = any(getattr(observation, name, None) is not None for name in ("mask",))
+    has_mask_weight = any(
+        getattr(observation, name, None) is not None for name in ("mask",)
+    )
     has_noise = has_mask_weight or getattr(observation, "weight", None) is not None
     return ObservationOperatorBundle(
         geometry=geometry,

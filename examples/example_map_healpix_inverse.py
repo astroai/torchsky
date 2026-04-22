@@ -20,7 +20,11 @@ import math
 
 import torch
 
-from torchsky.map import MapBandpassSpec, MapProductSpec, build_spherical_healpix_solver_hooks
+from torchsky.map import (
+    MapBandpassSpec,
+    MapProductSpec,
+    build_spherical_healpix_solver_hooks,
+)
 from torchsky.wcs import healpix as hp
 
 
@@ -48,8 +52,10 @@ def _synthetic_foreground_map(nside: int) -> torch.Tensor:
     lat_rad = torch.deg2rad(lat_deg.to(torch.float32))
 
     diffuse = 0.25 + 0.15 * torch.cos(2.0 * lat_rad) + 0.10 * torch.sin(lon_rad)
-    blob_a = torch.exp(-((lon_deg - 150.0) / 7.0) ** 2 - ((lat_deg - 2.0) / 4.5) ** 2)
-    blob_b = 0.7 * torch.exp(-((lon_deg - 144.0) / 5.0) ** 2 - ((lat_deg + 1.5) / 3.5) ** 2)
+    blob_a = torch.exp(-(((lon_deg - 150.0) / 7.0) ** 2) - ((lat_deg - 2.0) / 4.5) ** 2)
+    blob_b = 0.7 * torch.exp(
+        -(((lon_deg - 144.0) / 5.0) ** 2) - ((lat_deg + 1.5) / 3.5) ** 2
+    )
     return diffuse + blob_a.to(torch.float32) + blob_b.to(torch.float32)
 
 
@@ -90,8 +96,12 @@ def main() -> None:
     print("Native spherical inverse example")
     print(f"nside={nside} npix={truth.numel()} target={tuple(observed_cutout.shape)}")
     print(f"supported HEALPix pixels from this cutout: {supported_pixels}")
-    print(f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}")
-    print(f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}")
+    print(
+        f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}"
+    )
+    print(
+        f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}"
+    )
     print(f"initial image RMSE vs zero map: {initial_rmse:.5f}")
     print(f"final image RMSE after HEALPix solve: {final_rmse:.5f}")
 

@@ -53,9 +53,15 @@ def main() -> None:
     truth = torch.stack([alm_e, alm_b], dim=0)
 
     targets = (
-        TargetRenderSpec.from_header(_tan_header(crval1=120.0, crval2=35.0), band_label="pol"),
-        TargetRenderSpec.from_header(_tan_header(crval1=121.5, crval2=34.0), band_label="pol"),
-        TargetRenderSpec.from_header(_tan_header(crval1=118.2, crval2=36.1), band_label="pol"),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=120.0, crval2=35.0), band_label="pol"
+        ),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=121.5, crval2=34.0), band_label="pol"
+        ),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=118.2, crval2=36.1), band_label="pol"
+        ),
     )
     hooks = build_spherical_spin_harmonic_solver_hooks(
         spin=2,
@@ -64,10 +70,7 @@ def main() -> None:
     operator_set = hooks.bind_targets(targets)
 
     clean_maps = operator_set.apply(truth)
-    observed_maps = tuple(
-        maps + 0.005 * torch.randn_like(maps)
-        for maps in clean_maps
-    )
+    observed_maps = tuple(maps + 0.005 * torch.randn_like(maps) for maps in clean_maps)
 
     fit = operator_set.solve_normal_equation_cg(
         observed_maps,
@@ -83,10 +86,16 @@ def main() -> None:
 
     print("Native multi-cutout spin harmonic inverse example")
     print(f"spin=2 lmax={lmax} nalm={nalm} observations={len(targets)}")
-    print(f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}")
-    print(f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}")
+    print(
+        f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}"
+    )
+    print(
+        f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}"
+    )
     print(f"per-cutout Q/U RMSE: {[round(v, 6) for v in rmses]}")
-    print("useful when several polarized cutouts should share one smooth spherical E/B model")
+    print(
+        "useful when several polarized cutouts should share one smooth spherical E/B model"
+    )
 
 
 if __name__ == "__main__":

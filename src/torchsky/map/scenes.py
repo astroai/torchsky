@@ -44,7 +44,9 @@ class SceneRepresentation(ABC):
         raise NotImplementedError
 
 
-def as_scene_representation(scene: SceneRepresentation | nn.Module | Tensor) -> SceneRepresentation:
+def as_scene_representation(
+    scene: SceneRepresentation | nn.Module | Tensor,
+) -> SceneRepresentation:
     if isinstance(scene, SceneRepresentation):
         return scene
     if isinstance(scene, nn.Module):
@@ -63,8 +65,12 @@ class DiscreteTargetImage(SceneRepresentation):
     value_semantics: str = "surface_brightness"
 
     def render_to_target(self, target: TargetRenderSpec, **kwargs) -> Tensor:
-        if tuple(int(v) for v in self.data.shape[-2:]) != tuple(int(v) for v in target.shape):
-            raise ValueError("DiscreteTargetImage shape must match TargetRenderSpec shape")
+        if tuple(int(v) for v in self.data.shape[-2:]) != tuple(
+            int(v) for v in target.shape
+        ):
+            raise ValueError(
+                "DiscreteTargetImage shape must match TargetRenderSpec shape"
+            )
         return self.data
 
 
@@ -84,12 +90,18 @@ class HealpixMapScene(SceneRepresentation):
     def __post_init__(self) -> None:
         data = torch.as_tensor(self.data)
         if data.ndim not in {1, 2}:
-            raise ValueError("HealpixMapScene data must be a 1D map or 2D band-first map stack")
+            raise ValueError(
+                "HealpixMapScene data must be a 1D map or 2D band-first map stack"
+            )
         if self.band_labels is not None:
             if data.ndim != 2:
-                raise ValueError("band_labels require 2D band-first HealpixMapScene data")
+                raise ValueError(
+                    "band_labels require 2D band-first HealpixMapScene data"
+                )
             if len(self.band_labels) != int(data.shape[0]):
-                raise ValueError("band_labels length must match HealpixMapScene band count")
+                raise ValueError(
+                    "band_labels length must match HealpixMapScene band count"
+                )
 
     def _resolved_nside(self) -> int:
         from ..wcs import healpix as hp
@@ -186,14 +198,22 @@ class HarmonicAlmScene(SceneRepresentation):
     def __post_init__(self) -> None:
         data = torch.as_tensor(self.data)
         if data.ndim not in {1, 2}:
-            raise ValueError("HarmonicAlmScene data must be a 1D alm vector or 2D band-first stack")
+            raise ValueError(
+                "HarmonicAlmScene data must be a 1D alm vector or 2D band-first stack"
+            )
         if self.band_labels is not None:
             if data.ndim != 2:
-                raise ValueError("band_labels require 2D band-first HarmonicAlmScene data")
+                raise ValueError(
+                    "band_labels require 2D band-first HarmonicAlmScene data"
+                )
             if len(self.band_labels) != int(data.shape[0]):
-                raise ValueError("band_labels length must match HarmonicAlmScene band count")
+                raise ValueError(
+                    "band_labels length must match HarmonicAlmScene band count"
+                )
 
-    def _project_single_alm(self, alm_values: Tensor, target: TargetRenderSpec) -> Tensor:
+    def _project_single_alm(
+        self, alm_values: Tensor, target: TargetRenderSpec
+    ) -> Tensor:
         from .healpix_spectral import sample_alm_on_image_header_spectral
 
         return sample_alm_on_image_header_spectral(
@@ -211,7 +231,10 @@ class HarmonicAlmScene(SceneRepresentation):
             band_index = self.band_labels.index(target.band_label)
             return self._project_single_alm(data[band_index], target)
         return torch.stack(
-            [self._project_single_alm(data[idx], target) for idx in range(int(data.shape[0]))],
+            [
+                self._project_single_alm(data[idx], target)
+                for idx in range(int(data.shape[0]))
+            ],
             dim=0,
         )
 
@@ -228,9 +251,13 @@ class SpinHarmonicAlmScene(SceneRepresentation):
         alm_e = torch.as_tensor(self.alm_e)
         alm_b = torch.as_tensor(self.alm_b)
         if alm_e.ndim != 1 or alm_b.ndim != 1:
-            raise ValueError("SpinHarmonicAlmScene alm_e and alm_b must be 1D coefficient vectors")
+            raise ValueError(
+                "SpinHarmonicAlmScene alm_e and alm_b must be 1D coefficient vectors"
+            )
         if int(alm_e.numel()) != int(alm_b.numel()):
-            raise ValueError("SpinHarmonicAlmScene alm_e and alm_b must have matching size")
+            raise ValueError(
+                "SpinHarmonicAlmScene alm_e and alm_b must have matching size"
+            )
 
     def render_to_target(self, target: TargetRenderSpec, **kwargs) -> Tensor:
         from .healpix_spectral import sample_spin_alm_on_image_header_spectral
@@ -276,9 +303,9 @@ class ContinuousFieldModel(SceneRepresentation):
             )
         from .field.core import render_field_observation_distribution
 
-        if callable(getattr(self.model, "render_bandpass_distribution", None)) or callable(
-            getattr(self.model, "forward_distribution", None)
-        ):
+        if callable(
+            getattr(self.model, "render_bandpass_distribution", None)
+        ) or callable(getattr(self.model, "forward_distribution", None)):
             return render_field_observation_distribution(
                 self.model,
                 observation,

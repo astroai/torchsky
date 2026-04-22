@@ -73,12 +73,20 @@ def main() -> None:
 
     hooks = build_spherical_harmonic_solver_hooks(lmax=lmax)
     survey_a_targets = (
-        TargetRenderSpec.from_header(_tan_header(crval1=210.0, crval2=54.0), band_label="survey_a"),
-        TargetRenderSpec.from_header(_tan_header(crval1=213.0, crval2=52.8), band_label="survey_a"),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=210.0, crval2=54.0), band_label="survey_a"
+        ),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=213.0, crval2=52.8), band_label="survey_a"
+        ),
     )
     survey_b_targets = (
-        TargetRenderSpec.from_header(_tan_header(crval1=208.0, crval2=55.2), band_label="survey_b"),
-        TargetRenderSpec.from_header(_tan_header(crval1=205.8, crval2=53.7), band_label="survey_b"),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=208.0, crval2=55.2), band_label="survey_b"
+        ),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=205.8, crval2=53.7), band_label="survey_b"
+        ),
     )
 
     survey_a_block = build_state_component_mixture_operator(
@@ -124,7 +132,12 @@ def main() -> None:
     clean_b = survey_b_block.apply(joint_truth)
     observed_a = tuple(cutout + 0.006 * torch.randn_like(cutout) for cutout in clean_a)
     observed_b = tuple(cutout + 0.006 * torch.randn_like(cutout) for cutout in clean_b)
-    split_data = (*observed_a, *observed_b, torch.zeros_like(survey_a_truth), torch.zeros_like(survey_b_truth))
+    split_data = (
+        *observed_a,
+        *observed_b,
+        torch.zeros_like(survey_a_truth),
+        torch.zeros_like(survey_b_truth),
+    )
     split_diagonal = split_operator_set.estimate_normal_operator_diagonal(
         split_data,
         initial_probe=torch.zeros_like(joint_truth),
@@ -155,21 +168,35 @@ def main() -> None:
         preconditioner=make_diagonal_preconditioner(shared_only_diagonal),
     )
 
-    shared_error_split = float(torch.linalg.vector_norm(split_fit.solution[0] - shared_truth).item())
-    shared_error_only = float(torch.linalg.vector_norm(shared_only_fit.solution - shared_truth).item())
+    shared_error_split = float(
+        torch.linalg.vector_norm(split_fit.solution[0] - shared_truth).item()
+    )
+    shared_error_only = float(
+        torch.linalg.vector_norm(shared_only_fit.solution - shared_truth).item()
+    )
     private_norms = [
         float(torch.linalg.vector_norm(split_fit.solution[idx]).item())
         for idx in (1, 2)
     ]
 
     print("Native shared-vs-survey-private harmonic decomposition example")
-    print(f"lmax={lmax} nalm={nalm} survey_a_obs={len(observed_a)} survey_b_obs={len(observed_b)}")
-    print(f"split residual norm history (first 5): {[round(v, 5) for v in split_fit.residual_norm_history[:5]]}")
-    print(f"split residual norm history (last 5): {[round(v, 5) for v in split_fit.residual_norm_history[-5:]]}")
+    print(
+        f"lmax={lmax} nalm={nalm} survey_a_obs={len(observed_a)} survey_b_obs={len(observed_b)}"
+    )
+    print(
+        f"split residual norm history (first 5): {[round(v, 5) for v in split_fit.residual_norm_history[:5]]}"
+    )
+    print(
+        f"split residual norm history (last 5): {[round(v, 5) for v in split_fit.residual_norm_history[-5:]]}"
+    )
     print(f"shared-component error with split model: {shared_error_split:.6f}")
-    print(f"shared-component error with naive shared-only model: {shared_error_only:.6f}")
+    print(
+        f"shared-component error with naive shared-only model: {shared_error_only:.6f}"
+    )
     print(f"survey-private component norms: {[round(v, 6) for v in private_norms]}")
-    print("useful when surveys like SPHEREx, WISE, or GALEX share sky structure but carry survey-specific residual fields")
+    print(
+        "useful when surveys like SPHEREx, WISE, or GALEX share sky structure but carry survey-specific residual fields"
+    )
 
 
 if __name__ == "__main__":

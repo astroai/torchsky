@@ -9,7 +9,11 @@ from torchsky.map import (
     build_spherical_healpix_solver_hooks,
     build_spherical_spin_harmonic_solver_hooks,
 )
-from torchsky.map.operators import InterpolationGeometryOp, ObservationOperatorBundle, spherical_spectral_operator_bundle
+from torchsky.map.operators import (
+    InterpolationGeometryOp,
+    ObservationOperatorBundle,
+    spherical_spectral_operator_bundle,
+)
 from torchsky.map.scenes import DiscreteTargetImage, HealpixMapScene
 from torchsky.map.solvers import (
     ComponentDecompositionDiagnostics,
@@ -55,7 +59,9 @@ def _simple_header() -> dict[str, float | int | str]:
     }
 
 
-def _offset_header(ra_offset_deg: float, dec_offset_deg: float) -> dict[str, float | int | str]:
+def _offset_header(
+    ra_offset_deg: float, dec_offset_deg: float
+) -> dict[str, float | int | str]:
     header = dict(_simple_header())
     header["CRVAL1"] = float(header["CRVAL1"]) + float(ra_offset_deg)
     header["CRVAL2"] = float(header["CRVAL2"]) + float(dec_offset_deg)
@@ -162,7 +168,9 @@ def test_bound_operator_normal_equation_probe_accepts_module_scene() -> None:
 
     probe = operator.normal_equation_probe(_OnesField(), data)
 
-    torch.testing.assert_close(probe.prediction, torch.ones((3, 4), dtype=torch.float32))
+    torch.testing.assert_close(
+        probe.prediction, torch.ones((3, 4), dtype=torch.float32)
+    )
     torch.testing.assert_close(probe.weighted_prediction, torch.full((3, 4), 2.0))
     torch.testing.assert_close(probe.weighted_data, torch.full((3, 4), 10.0))
 
@@ -181,7 +189,9 @@ def test_bound_operator_weighted_least_squares_solver_recovers_identity_scene() 
     assert len(result.residual_norm_history) == 1
 
 
-def test_bound_operator_weighted_least_squares_solver_handles_scaled_forward_model() -> None:
+def test_bound_operator_weighted_least_squares_solver_handles_scaled_forward_model() -> (
+    None
+):
     hooks = build_solver_hooks(
         ObservationOperatorBundle(geometry=InterpolationGeometryOp()),
         apply_operator=lambda scene, target: scene.render_to_target(target) * 2.0,
@@ -313,7 +323,10 @@ def test_spherical_harmonic_solver_hooks_satisfy_adjoint_relation() -> None:
     image = torch.randn((3, 4), dtype=torch.float32)
 
     lhs = torch.sum(operator.apply(coeffs) * image).to(torch.float64)
-    rhs = torch.sum(torch.conj(coeffs.to(torch.complex128)) * operator.adjoint(image).to(torch.complex128)).real
+    rhs = torch.sum(
+        torch.conj(coeffs.to(torch.complex128))
+        * operator.adjoint(image).to(torch.complex128)
+    ).real
 
     torch.testing.assert_close(lhs, rhs, atol=1.0e-4, rtol=1.0e-4)
 
@@ -336,7 +349,9 @@ def test_spherical_harmonic_weighted_least_squares_reduces_image_residual() -> N
         step_size=1.0e-2,
     )
     final_prediction = operator.apply(result.solution)
-    final_rmse = math.sqrt(float(torch.mean(torch.square(final_prediction - data)).item()))
+    final_rmse = math.sqrt(
+        float(torch.mean(torch.square(final_prediction - data)).item())
+    )
 
     assert len(result.residual_norm_history) == 12
     assert result.residual_norm_history[-1] < result.residual_norm_history[0]
@@ -388,7 +403,9 @@ def test_spherical_spin_harmonic_weighted_least_squares_reduces_map_residual() -
     assert final_rmse < 0.2
 
 
-def test_spherical_harmonic_multi_observation_solver_reduces_combined_residual() -> None:
+def test_spherical_harmonic_multi_observation_solver_reduces_combined_residual() -> (
+    None
+):
     hooks = build_spherical_harmonic_solver_hooks(lmax=2)
     targets = (
         TargetRenderSpec.from_header(_offset_header(0.0, 0.0), band_label="mono"),
@@ -434,7 +451,9 @@ def test_spherical_harmonic_multi_observation_cg_reduces_combined_residual() -> 
     assert result.residual_norm_history[-1] < result.residual_norm_history[0]
 
 
-def test_spherical_harmonic_multi_observation_pcg_with_exact_diagonal_reduces_combined_residual() -> None:
+def test_spherical_harmonic_multi_observation_pcg_with_exact_diagonal_reduces_combined_residual() -> (
+    None
+):
     hooks = build_spherical_harmonic_solver_hooks(lmax=2)
     targets = (
         TargetRenderSpec.from_header(_offset_header(0.0, 0.0), band_label="mono"),
@@ -463,7 +482,9 @@ def test_spherical_harmonic_multi_observation_pcg_with_exact_diagonal_reduces_co
     assert result.residual_norm_history[-1] < result.residual_norm_history[0]
 
 
-def test_spherical_spin_harmonic_multi_observation_cg_reduces_combined_residual() -> None:
+def test_spherical_spin_harmonic_multi_observation_cg_reduces_combined_residual() -> (
+    None
+):
     hooks = build_spherical_spin_harmonic_solver_hooks(
         spin=2,
         lmax=3,
@@ -562,7 +583,9 @@ def test_state_matrix_operator_satisfies_adjoint_relation() -> None:
 
 def test_state_subspace_operator_embeds_adjoint_into_joint_state() -> None:
     hooks = build_spherical_harmonic_solver_hooks(lmax=2)
-    base = hooks.bind_target(TargetRenderSpec.from_header(_simple_header(), band_label="mono"))
+    base = hooks.bind_target(
+        TargetRenderSpec.from_header(_simple_header(), band_label="mono")
+    )
     joint_state = torch.zeros((3, 6), dtype=torch.complex64)
     subspace = build_state_subspace_operator(joint_state, base, selector=0)
     coeffs = torch.randn((3, 6), dtype=torch.complex64)
@@ -579,7 +602,9 @@ def test_state_subspace_operator_embeds_adjoint_into_joint_state() -> None:
 
 def test_state_component_mixture_operator_satisfies_adjoint_relation() -> None:
     hooks = build_spherical_harmonic_solver_hooks(lmax=2)
-    base = hooks.bind_target(TargetRenderSpec.from_header(_simple_header(), band_label="mono"))
+    base = hooks.bind_target(
+        TargetRenderSpec.from_header(_simple_header(), band_label="mono")
+    )
     joint_state = torch.zeros((3, 6), dtype=torch.complex64)
     mixture = build_state_component_mixture_operator(
         joint_state,
@@ -618,7 +643,9 @@ def test_survey_instrument_component_mixer_respects_component_roles() -> None:
 
 def test_conditioned_component_mixture_operator_satisfies_adjoint_relation() -> None:
     hooks = build_spherical_harmonic_solver_hooks(lmax=2)
-    base = hooks.bind_target(TargetRenderSpec.from_header(_simple_header(), band_label="mono"))
+    base = hooks.bind_target(
+        TargetRenderSpec.from_header(_simple_header(), band_label="mono")
+    )
     joint_state = torch.zeros((4, 6), dtype=torch.complex64)
     mixer = SurveyInstrumentComponentMixer(
         component_roles=("shared", "survey", "instrument", "interaction"),
@@ -676,7 +703,9 @@ def test_harmonic_component_decomposition_exposes_state_and_regularization() -> 
     assert float(reg.item()) >= 0.0
 
 
-def test_harmonic_component_decomposition_fix_component_scale_gauge_preserves_predictions() -> None:
+def test_harmonic_component_decomposition_fix_component_scale_gauge_preserves_predictions() -> (
+    None
+):
     model = HarmonicComponentDecomposition(
         lmax=2,
         component_roles=("shared", "survey", "instrument", "interaction"),
@@ -728,7 +757,9 @@ def test_harmonic_component_decomposition_fix_component_scale_gauge_preserves_pr
     torch.testing.assert_close(norms_after, torch.ones_like(norms_after))
 
 
-def test_harmonic_component_decomposition_fix_component_scale_gauge_skips_zero_components() -> None:
+def test_harmonic_component_decomposition_fix_component_scale_gauge_skips_zero_components() -> (
+    None
+):
     model = HarmonicComponentDecomposition(
         lmax=2,
         component_roles=("shared", "survey"),
@@ -778,7 +809,9 @@ def test_harmonic_component_decomposition_component_state_aggregates_roles() -> 
     torch.testing.assert_close(private_components, state[1:])
 
 
-def test_harmonic_component_decomposition_decomposition_diagnostics_measure_exact_leakage() -> None:
+def test_harmonic_component_decomposition_decomposition_diagnostics_measure_exact_leakage() -> (
+    None
+):
     model = HarmonicComponentDecomposition(
         lmax=2,
         component_roles=("shared", "survey", "instrument"),
@@ -842,7 +875,9 @@ def test_state_kronecker_operator_satisfies_adjoint_relation() -> None:
         dtype=torch.complex64,
     )
     left = torch.tensor([[1.0 + 0.0j, 0.2 - 0.1j]], dtype=torch.complex64)
-    right = torch.tensor([[2.0 + 0.0j, 0.0 + 0.0j], [0.1 + 0.3j, 1.0 + 0.0j]], dtype=torch.complex64)
+    right = torch.tensor(
+        [[2.0 + 0.0j, 0.0 + 0.0j], [0.1 + 0.3j, 1.0 + 0.0j]], dtype=torch.complex64
+    )
     operator = build_state_kronecker_operator(state, left, right)
     image = torch.tensor([[0.3 - 0.1j, -0.2 + 0.4j]], dtype=torch.complex64)
 
@@ -877,7 +912,7 @@ def test_harmonic_cl_diagonal_tracks_cls_and_beam_transfer() -> None:
     )
     expected = torch.tensor(
         [
-            1.0 / (4.0 ** 0.5),
+            1.0 / (4.0**0.5),
             1.0 / ((1.0 * 0.5 * 0.5) ** 0.5),
             1.0 / ((0.25 * 0.25 * 0.25) ** 0.5),
             1.0 / ((1.0 * 0.5 * 0.5) ** 0.5),
@@ -1012,7 +1047,9 @@ def test_harmonic_dense_prior_operator_reduces_correlated_mode_penalty() -> None
         damping=1.0e-4,
         preconditioner=make_diagonal_preconditioner(diagonal),
     )
-    prior_norm_with_prior = torch.linalg.vector_norm(prior_block.apply(result.solution)).item()
+    prior_norm_with_prior = torch.linalg.vector_norm(
+        prior_block.apply(result.solution)
+    ).item()
     prior_norm_image_only = torch.linalg.vector_norm(
         prior_block.apply(image_only_result.solution)
     ).item()
@@ -1059,7 +1096,9 @@ def test_harmonic_cl_prior_operator_reduces_power_spectrum_penalty() -> None:
         preconditioner=make_diagonal_preconditioner(diagonal),
     )
 
-    prior_norm_with_prior = torch.linalg.vector_norm(prior_block.apply(result.solution)).item()
+    prior_norm_with_prior = torch.linalg.vector_norm(
+        prior_block.apply(result.solution)
+    ).item()
     prior_norm_image_only = torch.linalg.vector_norm(
         prior_block.apply(image_only_result.solution)
     ).item()
@@ -1067,7 +1106,9 @@ def test_harmonic_cl_prior_operator_reduces_power_spectrum_penalty() -> None:
     assert prior_norm_with_prior < prior_norm_image_only
 
 
-def test_teb_cl_prior_joint_temperature_polarization_reduce_cross_spectrum_penalty() -> None:
+def test_teb_cl_prior_joint_temperature_polarization_reduce_cross_spectrum_penalty() -> (
+    None
+):
     temp_hooks = build_spherical_harmonic_solver_hooks(lmax=2)
     pol_hooks = build_spherical_spin_harmonic_solver_hooks(spin=2, lmax=2)
     joint_truth = torch.randn((3, 6), dtype=torch.complex64) * 0.05
@@ -1075,8 +1116,12 @@ def test_teb_cl_prior_joint_temperature_polarization_reduce_cross_spectrum_penal
         joint_truth,
         temp_hooks.bind_targets(
             (
-                TargetRenderSpec.from_header(_offset_header(0.0, 0.0), band_label="temp"),
-                TargetRenderSpec.from_header(_offset_header(1.0, 0.2), band_label="temp"),
+                TargetRenderSpec.from_header(
+                    _offset_header(0.0, 0.0), band_label="temp"
+                ),
+                TargetRenderSpec.from_header(
+                    _offset_header(1.0, 0.2), band_label="temp"
+                ),
             )
         ),
         selector=0,
@@ -1085,8 +1130,12 @@ def test_teb_cl_prior_joint_temperature_polarization_reduce_cross_spectrum_penal
         joint_truth,
         pol_hooks.bind_targets(
             (
-                TargetRenderSpec.from_header(_offset_header(0.0, 0.0), band_label="pol"),
-                TargetRenderSpec.from_header(_offset_header(-0.8, 0.5), band_label="pol"),
+                TargetRenderSpec.from_header(
+                    _offset_header(0.0, 0.0), band_label="pol"
+                ),
+                TargetRenderSpec.from_header(
+                    _offset_header(-0.8, 0.5), band_label="pol"
+                ),
             )
         ),
         selector=[1, 2],
@@ -1127,8 +1176,12 @@ def test_teb_cl_prior_joint_temperature_polarization_reduce_cross_spectrum_penal
         preconditioner=make_diagonal_preconditioner(diagonal),
     )
 
-    prior_norm_with_prior = torch.linalg.vector_norm(prior_block.apply(result.solution)).item()
-    prior_norm_image_only = torch.linalg.vector_norm(prior_block.apply(image_only_result.solution)).item()
+    prior_norm_with_prior = torch.linalg.vector_norm(
+        prior_block.apply(result.solution)
+    ).item()
+    prior_norm_image_only = torch.linalg.vector_norm(
+        prior_block.apply(image_only_result.solution)
+    ).item()
 
     assert prior_norm_with_prior < prior_norm_image_only
 
@@ -1199,7 +1252,12 @@ def test_harmonic_survey_split_reduces_shared_component_leakage() -> None:
     clean_b = survey_b_block.apply(split_truth)
     observed_a = tuple(cutout + 0.006 * torch.randn_like(cutout) for cutout in clean_a)
     observed_b = tuple(cutout + 0.006 * torch.randn_like(cutout) for cutout in clean_b)
-    split_data = (*observed_a, *observed_b, torch.zeros_like(split_truth[1]), torch.zeros_like(split_truth[2]))
+    split_data = (
+        *observed_a,
+        *observed_b,
+        torch.zeros_like(split_truth[1]),
+        torch.zeros_like(split_truth[2]),
+    )
     split_diagonal = split_set.estimate_normal_operator_diagonal(
         split_data,
         initial_probe=torch.zeros_like(split_truth),
@@ -1230,8 +1288,12 @@ def test_harmonic_survey_split_reduces_shared_component_leakage() -> None:
         preconditioner=make_diagonal_preconditioner(shared_only_diagonal),
     )
 
-    shared_error_split = torch.linalg.vector_norm(split_result.solution[0] - shared_truth).item()
-    shared_error_only = torch.linalg.vector_norm(shared_only_result.solution - shared_truth).item()
+    shared_error_split = torch.linalg.vector_norm(
+        split_result.solution[0] - shared_truth
+    ).item()
+    shared_error_only = torch.linalg.vector_norm(
+        shared_only_result.solution - shared_truth
+    ).item()
     private_norm = torch.linalg.vector_norm(split_result.solution[1:]).item()
 
     assert shared_error_split < shared_error_only
@@ -1277,8 +1339,12 @@ def test_healpix_low_rank_template_prior_reduces_template_amplitude() -> None:
         damping=1.0e-4,
     )
 
-    prior_norm_with_prior = torch.linalg.vector_norm(low_rank_block.apply(result.solution)).item()
-    prior_norm_image_only = torch.linalg.vector_norm(low_rank_block.apply(image_only_result.solution)).item()
+    prior_norm_with_prior = torch.linalg.vector_norm(
+        low_rank_block.apply(result.solution)
+    ).item()
+    prior_norm_image_only = torch.linalg.vector_norm(
+        low_rank_block.apply(image_only_result.solution)
+    ).item()
 
     assert prior_norm_with_prior < prior_norm_image_only
 
@@ -1323,7 +1389,9 @@ def test_spin_harmonic_prior_operator_stabilizes_mixed_block_solve() -> None:
         damping=1.0e-4,
         preconditioner=make_diagonal_preconditioner(diagonal),
     )
-    prior_norm_with_prior = torch.linalg.vector_norm(prior_block.apply(result.solution)).item()
+    prior_norm_with_prior = torch.linalg.vector_norm(
+        prior_block.apply(result.solution)
+    ).item()
     prior_norm_image_only = torch.linalg.vector_norm(
         prior_block.apply(image_only_result.solution)
     ).item()
@@ -1377,7 +1445,9 @@ def test_spin_harmonic_kronecker_prior_reduces_separable_penalty() -> None:
         preconditioner=make_diagonal_preconditioner(diagonal),
     )
 
-    prior_norm_with_prior = torch.linalg.vector_norm(prior_block.apply(result.solution)).item()
+    prior_norm_with_prior = torch.linalg.vector_norm(
+        prior_block.apply(result.solution)
+    ).item()
     prior_norm_image_only = torch.linalg.vector_norm(
         prior_block.apply(image_only_result.solution)
     ).item()

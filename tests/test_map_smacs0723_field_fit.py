@@ -49,7 +49,9 @@ def test_field_observation_kwargs_for_band_define_non_degenerate_bandpass() -> N
 
 
 def test_field_observation_kwargs_for_band_can_disable_bandpass() -> None:
-    kwargs = _field_observation_kwargs_for_band("F277W", observation_mode="exact_wavelength")
+    kwargs = _field_observation_kwargs_for_band(
+        "F277W", observation_mode="exact_wavelength"
+    )
     assert kwargs["band_name"] == "F277W"
     assert kwargs["wavelength"] == 27700.0
     assert kwargs["spectral_min"] is None

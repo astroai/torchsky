@@ -27,7 +27,9 @@ from torchsky.map import ImageObservation, MapResult, coadd_image_plane  # noqa:
 
 
 def _is_tpv(header: dict[str, object]) -> bool:
-    return "TPV" in str(header.get("CTYPE1", "")) or "TPV" in str(header.get("CTYPE2", ""))
+    return "TPV" in str(header.get("CTYPE1", "")) or "TPV" in str(
+        header.get("CTYPE2", "")
+    )
 
 
 def _strip_observation(
@@ -75,7 +77,9 @@ def _torchsky_grouped(
         data=_squeeze2(result.data.to(dtype=torch.float32)),
         weight=_squeeze2(result.weight.to(dtype=torch.float32)),
         header=result.header,
-        overlap_count=_squeeze2(result.overlap_count) if result.overlap_count is not None else None,
+        overlap_count=_squeeze2(result.overlap_count)
+        if result.overlap_count is not None
+        else None,
         coverage_moc=result.coverage_moc,
         observation_mocs=result.observation_mocs,
     )
@@ -98,7 +102,9 @@ def _torchsky_per_observation_sum(
         denom_sum = denom_sum + weight
     if numer_sum is None or denom_sum is None:
         raise RuntimeError("at least one observation is required")
-    data = torch.where(denom_sum > 0.0, numer_sum / denom_sum, torch.zeros_like(numer_sum))
+    data = torch.where(
+        denom_sum > 0.0, numer_sum / denom_sum, torch.zeros_like(numer_sum)
+    )
     data = torch.where(denom_sum > 0.0, data, torch.zeros_like(data))
     return data, denom_sum
 
@@ -112,7 +118,9 @@ def _swarp_grouped(
         target_header=target_header,
         resampling_type="BILINEAR",
     )
-    return torch.from_numpy(data_np).to(dtype=torch.float32), torch.from_numpy(weight_np).to(dtype=torch.float32)
+    return torch.from_numpy(data_np).to(dtype=torch.float32), torch.from_numpy(
+        weight_np
+    ).to(dtype=torch.float32)
 
 
 def _swarp_per_observation_sum(
@@ -130,7 +138,9 @@ def _swarp_per_observation_sum(
         denom_sum = denom_sum + weight
     if numer_sum is None or denom_sum is None:
         raise RuntimeError("at least one observation is required")
-    data = torch.where(denom_sum > 0.0, numer_sum / denom_sum, torch.zeros_like(numer_sum))
+    data = torch.where(
+        denom_sum > 0.0, numer_sum / denom_sum, torch.zeros_like(numer_sum)
+    )
     data = torch.where(denom_sum > 0.0, data, torch.zeros_like(data))
     return data, denom_sum
 
@@ -182,8 +192,12 @@ def _residual_stats(
     numer_right = right_data * right_weight
     return {
         "abs_data_diff": _masked_scalar_stats(torch.abs(left_data - right_data), mask),
-        "abs_weight_diff": _masked_scalar_stats(torch.abs(left_weight - right_weight), mask),
-        "abs_numer_diff": _masked_scalar_stats(torch.abs(numer_left - numer_right), mask),
+        "abs_weight_diff": _masked_scalar_stats(
+            torch.abs(left_weight - right_weight), mask
+        ),
+        "abs_numer_diff": _masked_scalar_stats(
+            torch.abs(numer_left - numer_right), mask
+        ),
     }
 
 
@@ -192,7 +206,9 @@ def _overlap_histogram(overlap_count: torch.Tensor) -> dict[str, float]:
     total = max(int(overlap_count.numel()), 1)
     max_overlap = int(overlap_count.max().item()) if overlap_count.numel() > 0 else 0
     for level in range(max_overlap + 1):
-        frac = float((overlap_count == level).to(torch.float32).sum().item()) / float(total)
+        frac = float((overlap_count == level).to(torch.float32).sum().item()) / float(
+            total
+        )
         out[str(level)] = frac
     return out
 
@@ -270,7 +286,9 @@ def _obs_metadata(item: truth_bench.SimulatedObservation) -> dict[str, float | i
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="tan_random10_large_union_rect_weighted_masked")
+    parser.add_argument(
+        "--case", default="tan_random10_large_union_rect_weighted_masked"
+    )
     parser.add_argument("--size", type=int, default=2048)
     parser.add_argument("--width", type=int, default=2048)
     parser.add_argument("--height", type=int, default=1536)
@@ -295,18 +313,33 @@ def main() -> int:
         )
         tan_items = [item for item in observations if not _is_tpv(item.header)]
         if args.scenario == "full":
-            obs_list = [_strip_observation(item.observation, keep_weight=True, keep_mask=True) for item in tan_items]
+            obs_list = [
+                _strip_observation(item.observation, keep_weight=True, keep_mask=True)
+                for item in tan_items
+            ]
         elif args.scenario == "no_mask":
-            obs_list = [_strip_observation(item.observation, keep_weight=True, keep_mask=False) for item in tan_items]
+            obs_list = [
+                _strip_observation(item.observation, keep_weight=True, keep_mask=False)
+                for item in tan_items
+            ]
         else:
-            obs_list = [_strip_observation(item.observation, keep_weight=False, keep_mask=False) for item in tan_items]
+            obs_list = [
+                _strip_observation(item.observation, keep_weight=False, keep_mask=False)
+                for item in tan_items
+            ]
 
         torchsky_grouped = _torchsky_grouped(obs_list, target_header)
         torchsky_grouped_data = torchsky_grouped.data
         torchsky_grouped_weight = torchsky_grouped.weight
-        torchsky_sum_data, torchsky_sum_weight = _torchsky_per_observation_sum(obs_list, target_header)
-        swarp_grouped_data, swarp_grouped_weight = _swarp_grouped(obs_list, target_header)
-        swarp_sum_data, swarp_sum_weight = _swarp_per_observation_sum(obs_list, target_header)
+        torchsky_sum_data, torchsky_sum_weight = _torchsky_per_observation_sum(
+            obs_list, target_header
+        )
+        swarp_grouped_data, swarp_grouped_weight = _swarp_grouped(
+            obs_list, target_header
+        )
+        swarp_sum_data, swarp_sum_weight = _swarp_per_observation_sum(
+            obs_list, target_header
+        )
         if torchsky_grouped.overlap_count is None:
             raise RuntimeError("torchsky grouped diagnostic requires overlap_count")
         overlap_count = torchsky_grouped.overlap_count.to(dtype=torch.int32)
@@ -401,7 +434,9 @@ def main() -> int:
                     target_header=target_header,
                     value_semantics="surface_brightness",
                 ),
-                "torchsky_vs_swarp": _pairwise_stats(ts_data, ts_weight, sw_data, sw_weight),
+                "torchsky_vs_swarp": _pairwise_stats(
+                    ts_data, ts_weight, sw_data, sw_weight
+                ),
             }
             result["per_observation"].append(entry)
 

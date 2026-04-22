@@ -258,11 +258,15 @@ def sample_healpix_spin_map_on_image_header_harmonic(
         mmax=ll,
         device=device,
     )
-    return out.to(dtype=maps_t.dtype, device=(device if device is not None else maps_t.device))
+    return out.to(
+        dtype=maps_t.dtype, device=(device if device is not None else maps_t.device)
+    )
 
 
 sample_spin_alm_on_tan_header_spectral = sample_spin_alm_on_image_header_spectral
-sample_healpix_spin_map_on_tan_header_harmonic = sample_healpix_spin_map_on_image_header_harmonic
+sample_healpix_spin_map_on_tan_header_harmonic = (
+    sample_healpix_spin_map_on_image_header_harmonic
+)
 
 
 def accumulate_image_on_alm_adjoint(
@@ -300,11 +304,15 @@ def accumulate_image_on_alm_adjoint(
     img_flat = img.reshape(-1).to(dtype=torch.float64, device=dev)
     lon_flat = lon.reshape(-1).to(dtype=torch.float64)
     lat_flat = lat.reshape(-1).to(dtype=torch.float64)
-    valid = torch.isfinite(lon_flat) & torch.isfinite(lat_flat) & torch.isfinite(img_flat)
+    valid = (
+        torch.isfinite(lon_flat) & torch.isfinite(lat_flat) & torch.isfinite(img_flat)
+    )
     nalm = alm_size(ll, mm)
     out = torch.zeros(nalm, dtype=torch.complex128, device=dev)
     if not bool(valid.any()):
-        return out.to(dtype=torch.complex64 if img.dtype == torch.float32 else torch.complex128)
+        return out.to(
+            dtype=torch.complex64 if img.dtype == torch.float32 else torch.complex128
+        )
 
     phi = torch.deg2rad(torch.remainder(lon_flat[valid], 360.0))
     x_sin = torch.sin(torch.deg2rad(lat_flat[valid]))
@@ -321,7 +329,9 @@ def accumulate_image_on_alm_adjoint(
         l_count = ll - m + 1
         out[offset : offset + l_count] = coeffs[:l_count]
         offset += l_count
-    return out.to(dtype=torch.complex64 if img.dtype == torch.float32 else torch.complex128)
+    return out.to(
+        dtype=torch.complex64 if img.dtype == torch.float32 else torch.complex128
+    )
 
 
 def accumulate_image_on_spin_alm_adjoint(
@@ -371,7 +381,9 @@ def accumulate_image_on_spin_alm_adjoint(
     out_e = torch.zeros(nalm, dtype=torch.complex128, device=dev)
     out_b = torch.zeros(nalm, dtype=torch.complex128, device=dev)
     if not bool(valid.any()):
-        out_dtype = torch.complex64 if maps_t.dtype == torch.float32 else torch.complex128
+        out_dtype = (
+            torch.complex64 if maps_t.dtype == torch.float32 else torch.complex128
+        )
         return out_e.to(dtype=out_dtype), out_b.to(dtype=out_dtype)
 
     phi = torch.deg2rad(torch.remainder(lon_flat[valid], 360.0)).to(torch.float64)

@@ -56,8 +56,10 @@ def _synthetic_foreground_map(nside: int) -> torch.Tensor:
     lat_rad = torch.deg2rad(lat_deg.to(torch.float32))
 
     diffuse = 0.18 + 0.10 * torch.cos(2.0 * lat_rad) + 0.07 * torch.sin(lon_rad)
-    blob_a = torch.exp(-((lon_deg - 150.0) / 7.0) ** 2 - ((lat_deg - 2.0) / 4.5) ** 2)
-    blob_b = 0.5 * torch.exp(-((lon_deg - 145.5) / 5.5) ** 2 - ((lat_deg + 1.0) / 3.2) ** 2)
+    blob_a = torch.exp(-(((lon_deg - 150.0) / 7.0) ** 2) - ((lat_deg - 2.0) / 4.5) ** 2)
+    blob_b = 0.5 * torch.exp(
+        -(((lon_deg - 145.5) / 5.5) ** 2) - ((lat_deg + 1.0) / 3.2) ** 2
+    )
     return diffuse + blob_a.to(torch.float32) + blob_b.to(torch.float32)
 
 
@@ -68,8 +70,12 @@ def main() -> None:
     anchor = truth + 0.04 * torch.randn_like(truth)
 
     targets = (
-        TargetRenderSpec.from_header(_tan_header(crval1=150.0, crval2=2.0), band_label="fg"),
-        TargetRenderSpec.from_header(_tan_header(crval1=146.5, crval2=0.8), band_label="fg"),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=150.0, crval2=2.0), band_label="fg"
+        ),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=146.5, crval2=0.8), band_label="fg"
+        ),
     )
     hooks = build_spherical_healpix_solver_hooks(
         nside=nside,
@@ -100,8 +106,7 @@ def main() -> None:
 
     clean_cutouts = image_block.apply(truth)
     observed_cutouts = tuple(
-        cutout + 0.03 * torch.randn_like(cutout)
-        for cutout in clean_cutouts
+        cutout + 0.03 * torch.randn_like(cutout) for cutout in clean_cutouts
     )
     data = (*observed_cutouts, anchor, torch.zeros(4, dtype=torch.float32))
 
@@ -118,17 +123,25 @@ def main() -> None:
     ]
     anchor_distance = float(torch.linalg.vector_norm(fit.solution - anchor).item())
     truth_distance = float(torch.linalg.vector_norm(fit.solution - truth).item())
-    template_norm = float(torch.linalg.vector_norm(low_rank_block.apply(fit.solution)).item())
+    template_norm = float(
+        torch.linalg.vector_norm(low_rank_block.apply(fit.solution)).item()
+    )
 
     print("Native mixed-constraint HEALPix inverse example")
     print(f"nside={nside} npix={truth.numel()} image_observations={len(targets)}")
-    print(f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}")
-    print(f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}")
+    print(
+        f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}"
+    )
+    print(
+        f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}"
+    )
     print(f"per-cutout image RMSE: {[round(v, 6) for v in cutout_rmses]}")
     print(f"distance to HEALPix anchor: {anchor_distance:.6f}")
     print(f"distance to truth map: {truth_distance:.6f}")
     print(f"large-scale template penalty norm: {template_norm:.6f}")
-    print("useful when local cutouts should refine a coarse all-sky background without discarding it")
+    print(
+        "useful when local cutouts should refine a coarse all-sky background without discarding it"
+    )
 
 
 if __name__ == "__main__":

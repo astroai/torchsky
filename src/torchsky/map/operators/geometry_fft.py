@@ -5,4 +5,3 @@ from __future__ import annotations
 from .geometry import RestrictedAffineFFTGeometryOp
 
 __all__ = ["RestrictedAffineFFTGeometryOp"]
-

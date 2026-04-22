@@ -15,6 +15,7 @@ import numpy as np
 import torch
 from astropy.wcs import WCS
 import torchsky  # noqa: E402
+
 try:  # noqa: E402
     from reproject import reproject_adaptive, reproject_exact  # type: ignore
 except Exception:  # pragma: no cover - optional comparator in test envs
@@ -41,14 +42,19 @@ from bench_map_compat import (  # noqa: E402
     _load_weight_map,
     geometry_family_for_library_variant,
 )
-from bench_map_field_fit import _field_fit_kwargs_for_model, _field_model_kwargs_for_case  # noqa: E402
+from bench_map_field_fit import (
+    _field_fit_kwargs_for_model,
+    _field_model_kwargs_for_case,
+)  # noqa: E402
 from bench_map_smacs0723_field_fit import (  # noqa: E402
     REAL_CASE,
     _crop_field_inputs_to_target,
     _field_target_observation,
     _robust_intensity_scale,
 )
-from bench_map_smacs0723_reproduce import _coadd_with_drizzle as _coadd_with_real_drizzle  # noqa: E402
+from bench_map_smacs0723_reproduce import (
+    _coadd_with_drizzle as _coadd_with_real_drizzle,
+)  # noqa: E402
 from bench_map_smacs0723_real import (  # noqa: E402
     DATA,
     _best_overlap_cutout_from_observations,
@@ -154,7 +160,9 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "torchsky_conservative_polygon",
             "family": "torchsky",
-            "geometry_family": _geometry_family_for_torchsky_kernel("conservative_polygon"),
+            "geometry_family": _geometry_family_for_torchsky_kernel(
+                "conservative_polygon"
+            ),
             "variant": "torchsky:conservative_polygon:surface_brightness",
             "target_mode": "published_native",
             "kind": "coadd",
@@ -211,7 +219,9 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "reproject_exact",
             "family": "reproject",
-            "geometry_family": geometry_family_for_library_variant("reproject_exact", None),
+            "geometry_family": geometry_family_for_library_variant(
+                "reproject_exact", None
+            ),
             "variant": "reproject_exact",
             "target_mode": "published_native",
             "kind": "legacy",
@@ -232,7 +242,9 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
         {
             "name": "dfreproject_bilinear",
             "family": "dfreproject",
-            "geometry_family": geometry_family_for_library_variant("dfreproject", "bilinear"),
+            "geometry_family": geometry_family_for_library_variant(
+                "dfreproject", "bilinear"
+            ),
             "variant": "dfreproject:bilinear",
             "target_mode": "published_native",
             "kind": "legacy",
@@ -353,7 +365,9 @@ def _north_up_tan_header(header: dict[str, Any]) -> dict[str, Any]:
     scale = 0.5 * (abs(scale_x) + abs(scale_y))
     width = int(out["NAXIS1"])
     height = int(out["NAXIS2"])
-    center_pix = np.array([[0.5 * float(width - 1), 0.5 * float(height - 1)]], dtype=np.float64)
+    center_pix = np.array(
+        [[0.5 * float(width - 1), 0.5 * float(height - 1)]], dtype=np.float64
+    )
     center_world = wcs.all_pix2world(center_pix, 0)[0]
     out["CTYPE1"] = "RA---TAN"
     out["CTYPE2"] = "DEC--TAN"
@@ -378,7 +392,9 @@ def _support_mask_from_weight(weight: np.ndarray) -> np.ndarray:
     return np.isfinite(weight) & (weight > 0.0)
 
 
-def _radial_bin_masks(shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _radial_bin_masks(
+    shape: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     height, width = shape
     yy, xx = np.mgrid[0:height, 0:width]
     cx = 0.5 * float(width - 1)
@@ -391,7 +407,9 @@ def _radial_bin_masks(shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray, n
     return rr <= 0.33, (rr > 0.33) & (rr <= 0.66), rr > 0.66
 
 
-def _safe_stat_mask(values: np.ndarray, mask: np.ndarray, fn: Callable[[np.ndarray], float]) -> float:
+def _safe_stat_mask(
+    values: np.ndarray, mask: np.ndarray, fn: Callable[[np.ndarray], float]
+) -> float:
     if not np.any(mask):
         return float("nan")
     return float(fn(values[mask]))
@@ -413,20 +431,36 @@ def _compute_region_metrics(
     uniform_diff = pred[uniform_mask] - reference[uniform_mask]
 
     metrics: dict[str, float] = {
-        "support_rmse": float(np.sqrt(np.mean(np.square(support_diff)))) if support_diff.size else float("nan"),
-        "support_mae": float(np.mean(np.abs(support_diff))) if support_diff.size else float("nan"),
-        "support_mean_residual": float(np.mean(support_diff)) if support_diff.size else float("nan"),
-        "support_median_residual": float(np.median(support_diff)) if support_diff.size else float("nan"),
+        "support_rmse": float(np.sqrt(np.mean(np.square(support_diff))))
+        if support_diff.size
+        else float("nan"),
+        "support_mae": float(np.mean(np.abs(support_diff)))
+        if support_diff.size
+        else float("nan"),
+        "support_mean_residual": float(np.mean(support_diff))
+        if support_diff.size
+        else float("nan"),
+        "support_median_residual": float(np.median(support_diff))
+        if support_diff.size
+        else float("nan"),
         "support_flux_ratio": (
             float(np.sum(support_prediction) / np.sum(support_reference))
             if support_diff.size and float(np.sum(support_reference)) != 0.0
             else float("nan")
         ),
         "support_frac": float(metric_mask.mean()),
-        "uniform_rmse": float(np.sqrt(np.mean(np.square(uniform_diff)))) if uniform_diff.size else float("nan"),
-        "uniform_mae": float(np.mean(np.abs(uniform_diff))) if uniform_diff.size else float("nan"),
-        "uniform_mean_residual": float(np.mean(uniform_diff)) if uniform_diff.size else float("nan"),
-        "uniform_median_residual": float(np.median(uniform_diff)) if uniform_diff.size else float("nan"),
+        "uniform_rmse": float(np.sqrt(np.mean(np.square(uniform_diff))))
+        if uniform_diff.size
+        else float("nan"),
+        "uniform_mae": float(np.mean(np.abs(uniform_diff)))
+        if uniform_diff.size
+        else float("nan"),
+        "uniform_mean_residual": float(np.mean(uniform_diff))
+        if uniform_diff.size
+        else float("nan"),
+        "uniform_median_residual": float(np.median(uniform_diff))
+        if uniform_diff.size
+        else float("nan"),
         "uniform_frac": float(uniform_mask.mean()),
     }
 
@@ -487,12 +521,12 @@ def _format_markdown(rows: list[dict[str, Any]]) -> str:
     for row in rows:
         if row["status"] != "OK":
             lines.append(
-                f"| {row['variant']} | {row['family']} | {row.get('geometry_family','')} | {row['status']} | {row.get('target_mode_used','')} | "
+                f"| {row['variant']} | {row['family']} | {row.get('geometry_family', '')} | {row['status']} | {row.get('target_mode_used', '')} | "
                 f"nan | nan | nan | nan | nan | nan | {row.get('time_ms', float('nan')):.2f} |"
             )
             continue
         lines.append(
-            f"| {row['variant']} | {row['family']} | {row.get('geometry_family','')} | {row['status']} | {row.get('target_mode_used','')} | "
+            f"| {row['variant']} | {row['family']} | {row.get('geometry_family', '')} | {row['status']} | {row.get('target_mode_used', '')} | "
             f"{row['support_rmse']:.6f} | {row['uniform_rmse']:.6f} | {row['support_flux_ratio']:.4f} | "
             f"{row['center_support_rmse']:.6f} | {row['edge_support_rmse']:.6f} | "
             f"{row.get('support_rmse_after_affine_fit', float('nan')):.6f} | {row['time_ms']:.2f} |"
@@ -515,7 +549,9 @@ def _run_coadd_method(
     )
     extra = {
         "max_overlap": (
-            int(result.overlap_count.max().item()) if result.overlap_count is not None else 0
+            int(result.overlap_count.max().item())
+            if result.overlap_count is not None
+            else 0
         ),
     }
     return (
@@ -597,14 +633,21 @@ def _coadd_with_reproject_exact(
         image, header = torchsky.read(obs.path, hdu=obs.hdu, return_header=True)
         image = image.to(dtype=torch.float32)
         weight = _load_weight_map(obs, image)
-        if _headers_equivalent_for_direct_copy(dict(header), target_header) and tuple(int(v) for v in image.shape) == target_shape:
-            obs_numer = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
+        if (
+            _headers_equivalent_for_direct_copy(dict(header), target_header)
+            and tuple(int(v) for v in image.shape) == target_shape
+        ):
+            obs_numer = (
+                torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
+            )
             numer += obs_numer.cpu().numpy()
             denom += weight.cpu().numpy()
             continue
         obs_numer, _ = reproject_exact(
             (
-                (torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight).cpu().numpy(),
+                (torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight)
+                .cpu()
+                .numpy(),
                 _as_fits_header(dict(header)),
             ),
             target_header_astropy,
@@ -617,8 +660,12 @@ def _coadd_with_reproject_exact(
             shape_out=target_shape,
             return_footprint=True,
         )
-        numer += np.nan_to_num(np.asarray(obs_numer, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
-        denom += np.nan_to_num(np.asarray(obs_denom, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+        numer += np.nan_to_num(
+            np.asarray(obs_numer, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0
+        )
+        denom += np.nan_to_num(
+            np.asarray(obs_denom, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0
+        )
     data = numer / np.clip(denom, 1e-8, None)
     data = np.where(denom > 0.0, data, 0.0)
     return data.astype(np.float32, copy=False), denom.astype(np.float32, copy=False)
@@ -639,14 +686,21 @@ def _coadd_with_reproject_adaptive(
         image, header = torchsky.read(obs.path, hdu=obs.hdu, return_header=True)
         image = image.to(dtype=torch.float32)
         weight = _load_weight_map(obs, image)
-        if _headers_equivalent_for_direct_copy(dict(header), target_header) and tuple(int(v) for v in image.shape) == target_shape:
-            obs_numer = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
+        if (
+            _headers_equivalent_for_direct_copy(dict(header), target_header)
+            and tuple(int(v) for v in image.shape) == target_shape
+        ):
+            obs_numer = (
+                torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
+            )
             numer += obs_numer.cpu().numpy()
             denom += weight.cpu().numpy()
             continue
         obs_numer, _ = reproject_adaptive(
             (
-                (torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight).cpu().numpy(),
+                (torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight)
+                .cpu()
+                .numpy(),
                 _as_fits_header(dict(header)),
             ),
             target_header_astropy,
@@ -663,8 +717,12 @@ def _coadd_with_reproject_adaptive(
             conserve_flux=False,
             kernel="gaussian",
         )
-        numer += np.nan_to_num(np.asarray(obs_numer, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
-        denom += np.nan_to_num(np.asarray(obs_denom, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+        numer += np.nan_to_num(
+            np.asarray(obs_numer, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0
+        )
+        denom += np.nan_to_num(
+            np.asarray(obs_denom, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0
+        )
     data = numer / np.clip(denom, 1e-8, None)
     data = np.where(denom > 0.0, data, 0.0)
     return data.astype(np.float32, copy=False), denom.astype(np.float32, copy=False)
@@ -722,7 +780,9 @@ def _run_inr_method(
             )
         )
     model_kind = str(spec["model_kind"])
-    model_kwargs = _field_model_kwargs_for_case(model_kind, case=REAL_CASE, size=crop_size)
+    model_kwargs = _field_model_kwargs_for_case(
+        model_kind, case=REAL_CASE, size=crop_size
+    )
     fit_kwargs = _field_fit_kwargs_for_model(
         model_kind,
         case=REAL_CASE,
@@ -772,7 +832,9 @@ def run_stacker_benchmark(
     with tempfile.TemporaryDirectory(prefix="torchsky_smacs0723_stackers_") as tmp:
         tmpdir = Path(tmp)
         observations: list[ImageObservation] = []
-        raw_field_inputs: list[tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]] = []
+        raw_field_inputs: list[
+            tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]
+        ] = []
         for exposure_path in exposure_paths:
             science_path, weight_path, mask_path = _prepare_aux_files(
                 exposure_path,
@@ -882,9 +944,13 @@ def run_stacker_benchmark(
                     )
                 support_mask = _support_mask_from_weight(weight)
                 if not np.any(support_mask):
-                    raise RuntimeError("stacker produced no finite supported pixels on the target grid")
+                    raise RuntimeError(
+                        "stacker produced no finite supported pixels on the target grid"
+                    )
                 if not np.all(np.isfinite(pred[support_mask])):
-                    raise RuntimeError("predicted stack contains non-finite supported pixels")
+                    raise RuntimeError(
+                        "predicted stack contains non-finite supported pixels"
+                    )
                 row.update(_compute_region_metrics(pred, ref_crop, support_mask))
                 row.update(extra)
                 row["time_ms"] = elapsed * 1000.0
@@ -906,7 +972,9 @@ def main() -> int:
     parser.add_argument("--module", default="b")
     parser.add_argument("--exposures", default="")
     parser.add_argument("--crop-size", type=int, default=512)
-    parser.add_argument("--crop-mode", choices=("center", "best_overlap"), default="center")
+    parser.add_argument(
+        "--crop-mode", choices=("center", "best_overlap"), default="center"
+    )
     parser.add_argument("--overlap-step", type=int, default=8)
     parser.add_argument(
         "--input-product",
@@ -930,7 +998,9 @@ def main() -> int:
     _band_spec(band)
     reference_path = args.reference_path or _reference_path_for_band(band)
     if args.exposures.strip():
-        exposure_paths = [Path(part.strip()) for part in args.exposures.split(",") if part.strip()]
+        exposure_paths = [
+            Path(part.strip()) for part in args.exposures.split(",") if part.strip()
+        ]
     else:
         exposure_paths = _discover_exposure_paths(
             DEFAULT_EXPOSURE_DIR,
@@ -947,7 +1017,9 @@ def main() -> int:
         requested = {part.strip() for part in args.methods.split(",") if part.strip()}
         specs = [spec for spec in specs if spec["name"] in requested]
         if not specs:
-            raise ValueError("none of the requested methods matched the available specs")
+            raise ValueError(
+                "none of the requested methods matched the available specs"
+            )
 
     rows = run_stacker_benchmark(
         band=band,

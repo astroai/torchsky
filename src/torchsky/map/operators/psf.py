@@ -72,4 +72,3 @@ def apply_psf_spec(image: Tensor, psf_spec: object | None) -> Tensor:
             raise ValueError("kernel2d PSF mode requires kernel2d")
         return apply_kernel2d(image, kernel)
     raise ValueError(f"unsupported PSF mode {mode!r}")
-

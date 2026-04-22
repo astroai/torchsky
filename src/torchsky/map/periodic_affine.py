@@ -74,4 +74,6 @@ def resample_linear_affine_periodic_bilinear_2d(
     v01 = im[y0, x1]
     v10 = im[y1, x0]
     v11 = im[y1, x1]
-    return (1.0 - wy) * ((1.0 - wx) * v00 + wx * v01) + wy * ((1.0 - wx) * v10 + wx * v11)
+    return (1.0 - wy) * ((1.0 - wx) * v00 + wx * v01) + wy * (
+        (1.0 - wx) * v10 + wx * v11
+    )

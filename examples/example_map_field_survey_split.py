@@ -194,8 +194,8 @@ def main() -> None:
     )
     print(
         "learned context weights:",
-        [round(float(v), 4) for v in result.model.mixer(survey='A').detach().tolist()],
-        [round(float(v), 4) for v in result.model.mixer(survey='B').detach().tolist()],
+        [round(float(v), 4) for v in result.model.mixer(survey="A").detach().tolist()],
+        [round(float(v), 4) for v in result.model.mixer(survey="B").detach().tolist()],
     )
 
 

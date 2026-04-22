@@ -53,17 +53,22 @@ def main() -> None:
     truth[7] = complex(-0.02, 0.01)
 
     targets = (
-        TargetRenderSpec.from_header(_tan_header(crval1=210.0, crval2=54.0), band_label="bg"),
-        TargetRenderSpec.from_header(_tan_header(crval1=214.0, crval2=52.5), band_label="bg"),
-        TargetRenderSpec.from_header(_tan_header(crval1=205.5, crval2=55.5), band_label="bg"),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=210.0, crval2=54.0), band_label="bg"
+        ),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=214.0, crval2=52.5), band_label="bg"
+        ),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=205.5, crval2=55.5), band_label="bg"
+        ),
     )
     hooks = build_spherical_harmonic_solver_hooks(lmax=lmax)
     operator_set = hooks.bind_targets(targets)
 
     clean_cutouts = operator_set.apply(truth)
     observed_cutouts = tuple(
-        cutout + 0.01 * torch.randn_like(cutout)
-        for cutout in clean_cutouts
+        cutout + 0.01 * torch.randn_like(cutout) for cutout in clean_cutouts
     )
 
     diagonal = operator_set.estimate_normal_operator_diagonal(
@@ -87,11 +92,17 @@ def main() -> None:
 
     print("Native multi-cutout harmonic inverse example")
     print(f"lmax={lmax} nalm={nalm} observations={len(targets)}")
-    print(f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}")
-    print(f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}")
+    print(
+        f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}"
+    )
+    print(
+        f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}"
+    )
     print(f"per-cutout image RMSE: {[round(v, 6) for v in rmses]}")
     print("uses exact-diagonal PCG on the shared normal equations")
-    print("useful when several pointings must share one smooth latent spherical component")
+    print(
+        "useful when several pointings must share one smooth latent spherical component"
+    )
 
 
 if __name__ == "__main__":

@@ -26,7 +26,9 @@ from torchsky.map import ImageObservation, coadd_image_plane  # noqa: E402
 
 
 def _is_tpv(header: dict[str, object]) -> bool:
-    return "TPV" in str(header.get("CTYPE1", "")) or "TPV" in str(header.get("CTYPE2", ""))
+    return "TPV" in str(header.get("CTYPE1", "")) or "TPV" in str(
+        header.get("CTYPE2", "")
+    )
 
 
 def _strip_observation(
@@ -88,8 +90,13 @@ def _make_boundary_gate_wrapper(margin: float):
                 value_semantics=value_semantics,
             )
         image = image_plane_mod._validate_image_plane(image).to(dtype=torch.float32)
-        source_weight = image_plane_mod._validate_image_plane(source_weight).to(dtype=torch.float32)
-        if bool(getattr(source_wcs, "_is_tpv", False)) or getattr(source_wcs, "sip", None) is not None:
+        source_weight = image_plane_mod._validate_image_plane(source_weight).to(
+            dtype=torch.float32
+        )
+        if (
+            bool(getattr(source_wcs, "_is_tpv", False))
+            or getattr(source_wcs, "sip", None) is not None
+        ):
             return original(
                 image,
                 source_weight,
@@ -126,10 +133,18 @@ def _make_boundary_gate_wrapper(margin: float):
             & (y_src >= float(margin))
             & (y_src <= float(h_src - 1) - float(margin))
         )
-        sampled_numer = torch.where(in_bounds, sampled_numer, torch.zeros_like(sampled_numer))
-        sampled_weight = torch.where(in_bounds, sampled_weight, torch.zeros_like(sampled_weight))
-        sampled_weight = torch.where(sampled_weight > 0.0, sampled_weight, torch.zeros_like(sampled_weight))
-        sampled_numer = torch.where(sampled_weight > 0.0, sampled_numer, torch.zeros_like(sampled_numer))
+        sampled_numer = torch.where(
+            in_bounds, sampled_numer, torch.zeros_like(sampled_numer)
+        )
+        sampled_weight = torch.where(
+            in_bounds, sampled_weight, torch.zeros_like(sampled_weight)
+        )
+        sampled_weight = torch.where(
+            sampled_weight > 0.0, sampled_weight, torch.zeros_like(sampled_weight)
+        )
+        sampled_numer = torch.where(
+            sampled_weight > 0.0, sampled_numer, torch.zeros_like(sampled_numer)
+        )
         return sampled_numer, sampled_weight
 
     return wrapped
@@ -157,8 +172,13 @@ def _make_coverage_gate_wrapper(min_coverage: float):
                 value_semantics=value_semantics,
             )
         image = image_plane_mod._validate_image_plane(image).to(dtype=torch.float32)
-        source_weight = image_plane_mod._validate_image_plane(source_weight).to(dtype=torch.float32)
-        if bool(getattr(source_wcs, "_is_tpv", False)) or getattr(source_wcs, "sip", None) is not None:
+        source_weight = image_plane_mod._validate_image_plane(source_weight).to(
+            dtype=torch.float32
+        )
+        if (
+            bool(getattr(source_wcs, "_is_tpv", False))
+            or getattr(source_wcs, "sip", None) is not None
+        ):
             return original(
                 image,
                 source_weight,
@@ -192,10 +212,18 @@ def _make_coverage_gate_wrapper(min_coverage: float):
         sampled_weight = sampled[1]
         sampled_support = sampled[2]
         coverage_ok = sampled_support >= float(min_coverage)
-        sampled_numer = torch.where(coverage_ok, sampled_numer, torch.zeros_like(sampled_numer))
-        sampled_weight = torch.where(coverage_ok, sampled_weight, torch.zeros_like(sampled_weight))
-        sampled_weight = torch.where(sampled_weight > 0.0, sampled_weight, torch.zeros_like(sampled_weight))
-        sampled_numer = torch.where(sampled_weight > 0.0, sampled_numer, torch.zeros_like(sampled_numer))
+        sampled_numer = torch.where(
+            coverage_ok, sampled_numer, torch.zeros_like(sampled_numer)
+        )
+        sampled_weight = torch.where(
+            coverage_ok, sampled_weight, torch.zeros_like(sampled_weight)
+        )
+        sampled_weight = torch.where(
+            sampled_weight > 0.0, sampled_weight, torch.zeros_like(sampled_weight)
+        )
+        sampled_numer = torch.where(
+            sampled_weight > 0.0, sampled_numer, torch.zeros_like(sampled_numer)
+        )
         return sampled_numer, sampled_weight
 
     return wrapped
@@ -230,7 +258,9 @@ def _format_markdown(rows: list[dict[str, object]]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="tan_random10_large_union_rect_weighted_masked")
+    parser.add_argument(
+        "--case", default="tan_random10_large_union_rect_weighted_masked"
+    )
     parser.add_argument("--size", type=int, default=2048)
     parser.add_argument("--width", type=int, default=2048)
     parser.add_argument("--height", type=int, default=1536)
@@ -276,11 +306,20 @@ def main() -> int:
         )
         tan_items = [item for item in observations if not _is_tpv(item.header)]
         if args.scenario == "full":
-            obs_list = [_strip_observation(item.observation, keep_weight=True, keep_mask=True) for item in tan_items]
+            obs_list = [
+                _strip_observation(item.observation, keep_weight=True, keep_mask=True)
+                for item in tan_items
+            ]
         elif args.scenario == "no_mask":
-            obs_list = [_strip_observation(item.observation, keep_weight=True, keep_mask=False) for item in tan_items]
+            obs_list = [
+                _strip_observation(item.observation, keep_weight=True, keep_mask=False)
+                for item in tan_items
+            ]
         else:
-            obs_list = [_strip_observation(item.observation, keep_weight=False, keep_mask=False) for item in tan_items]
+            obs_list = [
+                _strip_observation(item.observation, keep_weight=False, keep_mask=False)
+                for item in tan_items
+            ]
 
         swarp_data_np, swarp_weight_np = compat_bench._coadd_with_swarp(
             obs_list,
@@ -293,9 +332,13 @@ def main() -> int:
         rows: list[dict[str, object]] = []
         for value in values:
             if args.policy == "margin":
-                image_plane_mod._resample_weighted_to_target = _make_boundary_gate_wrapper(value)
+                image_plane_mod._resample_weighted_to_target = (
+                    _make_boundary_gate_wrapper(value)
+                )
             else:
-                image_plane_mod._resample_weighted_to_target = _make_coverage_gate_wrapper(value)
+                image_plane_mod._resample_weighted_to_target = (
+                    _make_coverage_gate_wrapper(value)
+                )
             try:
                 result = coadd_image_plane(
                     obs_list,
@@ -314,7 +357,11 @@ def main() -> int:
             )
             pair = compat_bench._pairwise_backend_row(
                 f"{args.case}_{args.width}x{args.height}",
-                {"library": "torchsky", "variant": f"{args.policy}:{value}", "time_ms": 1.0},
+                {
+                    "library": "torchsky",
+                    "variant": f"{args.policy}:{value}",
+                    "time_ms": 1.0,
+                },
                 result.data.to(dtype=torch.float32),
                 result.weight.to(dtype=torch.float32),
                 {"library": "swarp", "variant": "bilinear", "time_ms": 1.0},

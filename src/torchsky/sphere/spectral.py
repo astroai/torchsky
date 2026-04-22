@@ -25,16 +25,14 @@ _ALM_M_CACHE: dict[tuple[int, int], Tensor] = {}
 _SPIN_YLM_CACHE: dict[
     tuple[int, bool, int, int, int], tuple[tuple[Tensor, ...], tuple[Tensor, ...]]
 ] = {}
-_SPIN_MAP2ALM_MAT_CACHE: (
-    "OrderedDict[tuple[int, bool, int, int, int], tuple[Tensor, Tensor]]"
-) = OrderedDict()
+_SPIN_MAP2ALM_MAT_CACHE: "OrderedDict[tuple[int, bool, int, int, int], tuple[Tensor, Tensor]]" = OrderedDict()
 _SPIN_ALM2MAP_MAT_CACHE: "OrderedDict[tuple[int, bool, int, int, int], tuple[Tensor, Tensor, Tensor, Tensor]]" = OrderedDict()
-_SCALAR_MAP2ALM_MAT_CACHE: (
-    "OrderedDict[tuple[int, bool, int, int], Tensor]"
-) = OrderedDict()
-_SCALAR_ALM2MAP_MAT_CACHE: (
-    "OrderedDict[tuple[int, bool, int, int], Tensor]"
-) = OrderedDict()
+_SCALAR_MAP2ALM_MAT_CACHE: "OrderedDict[tuple[int, bool, int, int], Tensor]" = (
+    OrderedDict()
+)
+_SCALAR_ALM2MAP_MAT_CACHE: "OrderedDict[tuple[int, bool, int, int], Tensor]" = (
+    OrderedDict()
+)
 _RING_LAYOUT_CACHE: dict[int, tuple[Tensor, Tensor, Tensor, Tensor]] = {}
 _RING_SCALAR_BASIS_CACHE: dict[tuple[int, int, int], tuple[Tensor, ...]] = {}
 _RING_PHI0_PHASE_CACHE: dict[tuple[int, int, int], Tensor] = {}
@@ -2863,9 +2861,9 @@ def alm2lonlat(
     out = torch.zeros((rows.shape[0], phi.shape[0]), dtype=real_dtype, device=device)
     for m in range(mm + 1):
         p_seq = _legendre_l_sequence(m, x.to(torch.float64), ll)
-        phase = torch.exp(
-            torch.complex(torch.zeros_like(phi), m * phi)
-        ).to(dtype=torch.complex128)
+        phase = torch.exp(torch.complex(torch.zeros_like(phi), m * phi)).to(
+            dtype=torch.complex128
+        )
         y = p_seq.to(dtype=torch.complex128) * phase.unsqueeze(0)
         l_count = ll - m + 1
         start = alm_index(m, m, ll, mm)

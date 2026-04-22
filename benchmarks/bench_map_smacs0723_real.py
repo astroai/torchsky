@@ -107,7 +107,9 @@ def _field_observation_kwargs_for_band(
     spec = _band_spec(band)
     mode = str(observation_mode).lower()
     if mode not in {"bandpass", "exact_wavelength"}:
-        raise ValueError("observation_mode must be one of {'bandpass', 'exact_wavelength'}")
+        raise ValueError(
+            "observation_mode must be one of {'bandpass', 'exact_wavelength'}"
+        )
     if mode == "exact_wavelength":
         return {
             "wavelength": float(spec["wavelength_angstrom"]),
@@ -192,7 +194,9 @@ def _discover_exposure_paths(
     if band is not None:
         band_upper = str(band).upper()
         paths = [path for path in paths if _exposure_filter_band(path) == band_upper]
-    detector_tokens = _module_detector_tokens(band or "F277W", module) if module is not None else ()
+    detector_tokens = (
+        _module_detector_tokens(band or "F277W", module) if module is not None else ()
+    )
     if detector_tokens:
         paths = [
             path
@@ -245,10 +249,7 @@ def _window_sum(integral: np.ndarray, x0: int, y0: int, size: int) -> float:
     x1 = x0 + size
     y1 = y0 + size
     return float(
-        integral[y1, x1]
-        - integral[y0, x1]
-        - integral[y1, x0]
-        + integral[y0, x0]
+        integral[y1, x1] - integral[y0, x1] - integral[y1, x0] + integral[y0, x0]
     )
 
 
@@ -260,7 +261,9 @@ def _best_overlap_cutout(
     h, w = reference.shape
     if size >= h or size >= w:
         return reference.copy(), 0, 0
-    overlap_score = np.where(np.isfinite(reference), np.maximum(overlap_count, 0), 0.0).astype(np.float32)
+    overlap_score = np.where(
+        np.isfinite(reference), np.maximum(overlap_count, 0), 0.0
+    ).astype(np.float32)
     integral = _integral_image(overlap_score)
     best_score = -1.0
     best_x0 = 0
@@ -371,10 +374,14 @@ def _best_overlap_cutout_from_headers(
     size: int,
     coarse_step: int = 8,
 ) -> tuple[np.ndarray, int, int]:
-    overlap_coarse = _approx_overlap_grid(headers, target_header, coarse_step=coarse_step)
+    overlap_coarse = _approx_overlap_grid(
+        headers, target_header, coarse_step=coarse_step
+    )
     ref_coarse = reference[::coarse_step, ::coarse_step]
     coarse_size = max(1, int(math.ceil(size / coarse_step)))
-    _, coarse_x0, coarse_y0 = _best_overlap_cutout(ref_coarse, overlap_coarse, coarse_size)
+    _, coarse_x0, coarse_y0 = _best_overlap_cutout(
+        ref_coarse, overlap_coarse, coarse_size
+    )
     x0 = min(max(coarse_x0 * coarse_step, 0), max(reference.shape[1] - size, 0))
     y0 = min(max(coarse_y0 * coarse_step, 0), max(reference.shape[0] - size, 0))
     return reference[y0 : y0 + size, x0 : x0 + size], x0, y0
@@ -403,13 +410,17 @@ def _best_overlap_cutout_from_observations(
     overlap_grid = overlap_probe.overlap_count.cpu().numpy().astype(np.float32)
     ref_coarse = reference[::coarse_step, ::coarse_step]
     coarse_size = max(1, int(math.ceil(size / coarse_step)))
-    _, coarse_x0, coarse_y0 = _best_overlap_cutout(ref_coarse, overlap_grid, coarse_size)
+    _, coarse_x0, coarse_y0 = _best_overlap_cutout(
+        ref_coarse, overlap_grid, coarse_size
+    )
     x0 = min(max(coarse_x0 * coarse_step, 0), max(reference.shape[1] - size, 0))
     y0 = min(max(coarse_y0 * coarse_step, 0), max(reference.shape[0] - size, 0))
     return reference[y0 : y0 + size, x0 : x0 + size], x0, y0
 
 
-def _metric_mask(pred: np.ndarray, reference: np.ndarray, support: np.ndarray) -> np.ndarray:
+def _metric_mask(
+    pred: np.ndarray, reference: np.ndarray, support: np.ndarray
+) -> np.ndarray:
     return support & np.isfinite(pred) & np.isfinite(reference)
 
 
@@ -434,15 +445,21 @@ def _prepare_aux_files(
     science_path = tmpdir / f"{stem}_sci.fits"
     weight_path = tmpdir / f"{stem}_wht.fits"
     mask_path = tmpdir / f"{stem}_mask.fits"
-    fits.PrimaryHDU(data=np.asarray(science, dtype=np.float32), header=header.copy()).writeto(
+    fits.PrimaryHDU(
+        data=np.asarray(science, dtype=np.float32), header=header.copy()
+    ).writeto(
         science_path,
         overwrite=True,
     )
-    fits.PrimaryHDU(data=np.asarray(weight, dtype=np.float32), header=header.copy()).writeto(
+    fits.PrimaryHDU(
+        data=np.asarray(weight, dtype=np.float32), header=header.copy()
+    ).writeto(
         weight_path,
         overwrite=True,
     )
-    fits.PrimaryHDU(data=np.asarray(mask, dtype=np.float32), header=header.copy()).writeto(
+    fits.PrimaryHDU(
+        data=np.asarray(mask, dtype=np.float32), header=header.copy()
+    ).writeto(
         mask_path,
         overwrite=True,
     )
@@ -533,7 +550,9 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.exposures.strip():
-        exposure_paths = [Path(part.strip()) for part in args.exposures.split(",") if part.strip()]
+        exposure_paths = [
+            Path(part.strip()) for part in args.exposures.split(",") if part.strip()
+        ]
     else:
         exposure_paths = _discover_exposure_paths(
             DEFAULT_EXPOSURE_DIR,
@@ -608,13 +627,19 @@ def main() -> int:
         row = {
             "n_exposures": len(exposure_paths),
             "crop_size": args.crop_size,
-            "support_rmse": float(np.sqrt(np.mean(diff * diff))) if diff.size else float("nan"),
+            "support_rmse": float(np.sqrt(np.mean(diff * diff)))
+            if diff.size
+            else float("nan"),
             "support_mae": float(np.mean(np.abs(diff))) if diff.size else float("nan"),
             "support_flux_ratio": (
-                float(np.sum(pred[metric_mask]) / np.sum(ref_crop[metric_mask])) if diff.size else float("nan")
+                float(np.sum(pred[metric_mask]) / np.sum(ref_crop[metric_mask]))
+                if diff.size
+                else float("nan")
             ),
             "coverage_frac": float(metric_mask.mean()),
-            "max_overlap": int(result.overlap_count.max().item()) if result.overlap_count is not None else 0,
+            "max_overlap": int(result.overlap_count.max().item())
+            if result.overlap_count is not None
+            else 0,
             "time_ms": dt * 1000.0,
             "reference_path": str(args.reference_path),
             "exposure_paths": [str(path) for path in exposure_paths],

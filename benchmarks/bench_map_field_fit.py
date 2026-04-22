@@ -176,23 +176,32 @@ class ExplicitSpectralGridField(_BaseFieldModel):
     def _grid_world_coords(self) -> tuple[Tensor, Tensor, Tensor]:
         device = self.grid.device
         dtype = self.grid.dtype
-        xs = torch.linspace(-1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype)
-        ys = torch.linspace(-1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype)
-        ls = torch.linspace(-1.0, 1.0, steps=self.spectral_resolution, device=device, dtype=dtype)
+        xs = torch.linspace(
+            -1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype
+        )
+        ys = torch.linspace(
+            -1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype
+        )
+        ls = torch.linspace(
+            -1.0, 1.0, steps=self.spectral_resolution, device=device, dtype=dtype
+        )
         yy, xx = torch.meshgrid(ys, xs, indexing="ij")
-        wavelengths = (
-            float(self.domain.wavelength_center)
-            + ls * float(self.domain.wavelength_scale)
+        wavelengths = float(self.domain.wavelength_center) + ls * float(
+            self.domain.wavelength_scale
         )
         cos_dec = math.cos(math.radians(float(self.domain.center_dec_deg)))
         dra = xx * float(self.domain.spatial_scale_deg) / max(cos_dec, 1.0e-6)
-        dec = yy * float(self.domain.spatial_scale_deg) + float(self.domain.center_dec_deg)
+        dec = yy * float(self.domain.spatial_scale_deg) + float(
+            self.domain.center_dec_deg
+        )
         ra = dra + float(self.domain.center_ra_deg)
         return ra, dec, wavelengths
 
     def initialize_from_product(self, product: MapProductResult) -> None:
         if self.coord_mode != "local_tangent":
-            raise ValueError("ExplicitSpectralGridField initialization requires local_tangent")
+            raise ValueError(
+                "ExplicitSpectralGridField initialization requires local_tangent"
+            )
         target_wcs = torchsky.WCS(product.header)
         ra_grid, dec_grid, wavelengths = self._grid_world_coords()
         px, py = target_wcs.world_to_pixel(ra_grid, dec_grid)
@@ -200,26 +209,38 @@ class ExplicitSpectralGridField(_BaseFieldModel):
         target_height = max(int(product.header["NAXIS2"]) - 1, 1)
         x_norm = 2.0 * (px / target_width) - 1.0
         y_norm = 2.0 * (py / target_height) - 1.0
-        sample_grid = torch.stack([x_norm, y_norm], dim=-1).unsqueeze(0).to(dtype=self.grid.dtype)
+        sample_grid = (
+            torch.stack([x_norm, y_norm], dim=-1).unsqueeze(0).to(dtype=self.grid.dtype)
+        )
         band_centers = []
         for band in product.product.bands:
             if band.transmission_center is not None:
                 band_centers.append(float(band.transmission_center))
             elif band.spectral_min is not None and band.spectral_max is not None:
-                band_centers.append(0.5 * (float(band.spectral_min) + float(band.spectral_max)))
+                band_centers.append(
+                    0.5 * (float(band.spectral_min) + float(band.spectral_max))
+                )
             else:
-                raise ValueError("MapProductSpec band requires center or bounds for initialization")
-        centers = torch.tensor(band_centers, device=self.grid.device, dtype=self.grid.dtype)
+                raise ValueError(
+                    "MapProductSpec band requires center or bounds for initialization"
+                )
+        centers = torch.tensor(
+            band_centers, device=self.grid.device, dtype=self.grid.dtype
+        )
         data = product.data.to(device=self.grid.device, dtype=self.grid.dtype)
         sampled_planes = []
         for plane in data:
-            sampled = F.grid_sample(
-                plane.unsqueeze(0).unsqueeze(0),
-                sample_grid,
-                mode="bilinear",
-                padding_mode="border",
-                align_corners=True,
-            ).squeeze(0).squeeze(0)
+            sampled = (
+                F.grid_sample(
+                    plane.unsqueeze(0).unsqueeze(0),
+                    sample_grid,
+                    mode="bilinear",
+                    padding_mode="border",
+                    align_corners=True,
+                )
+                .squeeze(0)
+                .squeeze(0)
+            )
             sampled_planes.append(sampled)
         sampled_cube = torch.stack(sampled_planes, dim=0)
         interp_planes = []
@@ -235,10 +256,19 @@ class ExplicitSpectralGridField(_BaseFieldModel):
             lam0 = centers[lower_idx]
             lam1 = centers[upper_idx]
             alpha = (wavelength - lam0) / torch.clamp(lam1 - lam0, min=1.0e-6)
-            interp_planes.append((1.0 - alpha) * sampled_cube[lower_idx] + alpha * sampled_cube[upper_idx])
+            interp_planes.append(
+                (1.0 - alpha) * sampled_cube[lower_idx]
+                + alpha * sampled_cube[upper_idx]
+            )
         init_cube = torch.stack(interp_planes, dim=0).unsqueeze(0)
         with torch.no_grad():
-            self.grid.copy_(torch.log(torch.clamp(torch.expm1(torch.clamp(init_cube, min=1.0e-4)), min=1.0e-6)))
+            self.grid.copy_(
+                torch.log(
+                    torch.clamp(
+                        torch.expm1(torch.clamp(init_cube, min=1.0e-4)), min=1.0e-6
+                    )
+                )
+            )
 
     def _coords_unit(
         self,
@@ -247,8 +277,12 @@ class ExplicitSpectralGridField(_BaseFieldModel):
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
         if self.coord_mode != "local_tangent":
-            raise ValueError("ExplicitSpectralGridField requires local_tangent coordinates")
-        return self._unit_box_coords(ra_deg, dec_deg, wavelength_angstrom).to(dtype=self.grid.dtype)
+            raise ValueError(
+                "ExplicitSpectralGridField requires local_tangent coordinates"
+            )
+        return self._unit_box_coords(ra_deg, dec_deg, wavelength_angstrom).to(
+            dtype=self.grid.dtype
+        )
 
     def forward(
         self,
@@ -273,15 +307,19 @@ class ExplicitSpectralGridField(_BaseFieldModel):
             self.forward(
                 ra_deg,
                 dec_deg,
-                torch.as_tensor(float(wavelength.item()), device=ra_deg.device, dtype=self.grid.dtype),
+                torch.as_tensor(
+                    float(wavelength.item()),
+                    device=ra_deg.device,
+                    dtype=self.grid.dtype,
+                ),
             )
             for wavelength in wavelengths
         ]
         return torch.sum(
-            torch.stack(rendered, dim=0)
-            * norm_weights.view(-1, *([1] * ra_deg.ndim)),
+            torch.stack(rendered, dim=0) * norm_weights.view(-1, *([1] * ra_deg.ndim)),
             dim=0,
         )
+
     family: str = "field_fit"
 
 
@@ -338,7 +376,9 @@ def _render_field_product_chunked(
                 tile_h = min(chunk, height - y0)
                 tile_w = min(chunk, width - x0)
                 field_observation = FieldObservation(
-                    image=torch.zeros((tile_h, tile_w), dtype=torch.float32, device=device),
+                    image=torch.zeros(
+                        (tile_h, tile_w), dtype=torch.float32, device=device
+                    ),
                     header=_copy_header_with_crop(
                         dict(product.target_header),
                         x0=x0,
@@ -353,16 +393,17 @@ def _render_field_product_chunked(
                     transmission_sigma=band.transmission_sigma,
                     band_name=band.label,
                 )
-                if (
-                    callable(getattr(model, "render_bandpass_distribution", None))
-                    or callable(getattr(model, "forward_distribution", None))
-                ):
+                if callable(
+                    getattr(model, "render_bandpass_distribution", None)
+                ) or callable(getattr(model, "forward_distribution", None)):
                     rendered, logvar = render_field_observation_distribution(
                         model,
                         field_observation,
                         num_spectral_samples=num_spectral_samples,
                     )
-                    ivar[y0 : y0 + tile_h, x0 : x0 + tile_w] = torch.exp(-logvar).to(dtype=torch.float32)
+                    ivar[y0 : y0 + tile_h, x0 : x0 + tile_w] = torch.exp(-logvar).to(
+                        dtype=torch.float32
+                    )
                 else:
                     rendered = render_field_observation(
                         model,
@@ -370,7 +411,9 @@ def _render_field_product_chunked(
                         num_spectral_samples=num_spectral_samples,
                     )
                     ivar[y0 : y0 + tile_h, x0 : x0 + tile_w] = 1.0
-                plane[y0 : y0 + tile_h, x0 : x0 + tile_w] = rendered.to(dtype=torch.float32)
+                plane[y0 : y0 + tile_h, x0 : x0 + tile_w] = rendered.to(
+                    dtype=torch.float32
+                )
         planes.append(plane)
         ivar_planes.append(ivar)
     return MapProductResult(
@@ -378,7 +421,9 @@ def _render_field_product_chunked(
         data=torch.stack(planes, dim=0),
         weight=torch.stack(ivar_planes, dim=0),
         header=dict(product.target_header),
-        overlap_count=torch.ones((len(planes), height, width), dtype=torch.int32, device=device),
+        overlap_count=torch.ones(
+            (len(planes), height, width), dtype=torch.int32, device=device
+        ),
         coverage_mocs=None,
     )
 
@@ -407,7 +452,10 @@ def _field_fit_kwargs_for_model(
         "grad_clip_norm": 1.0,
         "curriculum": "none",
     }
-    if case in {"tan_field_fit_exact_transmission", "tpv_field_fit_deep_multiband_exact"}:
+    if case in {
+        "tan_field_fit_exact_transmission",
+        "tpv_field_fit_deep_multiband_exact",
+    }:
         kwargs["loss_kind"] = "mse"
         kwargs["loss_reduction"] = "global"
         if case in {
@@ -419,7 +467,11 @@ def _field_fit_kwargs_for_model(
     if case == "tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit":
         kwargs["loss_kind"] = "mse"
         kwargs["loss_reduction"] = "global"
-    if case in {"tan_sip_field_fit_deep_multiband_broad", "tpv_field_fit_deep_multiband_broad", "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap"}:
+    if case in {
+        "tan_sip_field_fit_deep_multiband_broad",
+        "tpv_field_fit_deep_multiband_broad",
+        "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap",
+    }:
         kwargs["loss_kind"] = "charbonnier"
         kwargs["loss_reduction"] = "global"
         kwargs["grad_clip_norm"] = 1.0
@@ -506,7 +558,11 @@ def _field_fit_kwargs_for_model(
                 kwargs["spectral_anchor_loss_weight"] = 0.0
                 kwargs["observations_per_step"] = 1
                 kwargs["training_patch_size"] = 12
-                kwargs["lr"] = 3.0e-4 if (benchmark_steps is not None and int(benchmark_steps) >= 12) else 1.0e-3
+                kwargs["lr"] = (
+                    3.0e-4
+                    if (benchmark_steps is not None and int(benchmark_steps) >= 12)
+                    else 1.0e-3
+                )
                 kwargs["lr_warmup_steps"] = 2
     elif model_kind == "operator_constrained_feature_field":
         kwargs["lr"] = 1.5e-3
@@ -547,7 +603,11 @@ def _field_fit_kwargs_for_model(
                 kwargs["num_spectral_samples"] = 3
                 kwargs["observations_per_step"] = 1
                 kwargs["training_patch_size"] = 12
-                kwargs["lr"] = 3.0e-4 if (benchmark_steps is not None and int(benchmark_steps) >= 12) else 8.0e-4
+                kwargs["lr"] = (
+                    3.0e-4
+                    if (benchmark_steps is not None and int(benchmark_steps) >= 12)
+                    else 8.0e-4
+                )
                 kwargs["lr_warmup_steps"] = 2
                 kwargs["context_observations_per_step"] = 1
                 kwargs["context_downsample_factor"] = 4
@@ -607,7 +667,10 @@ def _field_fit_kwargs_for_model(
     elif model_kind == "hashgrid_resmlp":
         kwargs["lr"] = 2.5e-3
         kwargs["grad_clip_norm"] = 0.65
-        if case in {"tan_sip_field_fit_deep_multiband_broad", "tpv_field_fit_deep_multiband_broad"}:
+        if case in {
+            "tan_sip_field_fit_deep_multiband_broad",
+            "tpv_field_fit_deep_multiband_broad",
+        }:
             kwargs["lr"] = 2.5e-3
             kwargs["grad_clip_norm"] = 1.0
             kwargs["loss_kind"] = "charbonnier"
@@ -625,7 +688,10 @@ def _field_fit_kwargs_for_model(
     elif model_kind == "sky_encoder_resmlp":
         kwargs["lr"] = 2.5e-3
         kwargs["grad_clip_norm"] = 0.6
-        if case in {"tan_sip_field_fit_deep_multiband_broad", "tpv_field_fit_deep_multiband_broad"}:
+        if case in {
+            "tan_sip_field_fit_deep_multiband_broad",
+            "tpv_field_fit_deep_multiband_broad",
+        }:
             kwargs["lr"] = 2.5e-3
             kwargs["grad_clip_norm"] = 1.0
             kwargs["loss_kind"] = "charbonnier"
@@ -638,7 +704,9 @@ def _field_fit_kwargs_for_model(
     return kwargs
 
 
-def _steps_for_case(case: str, *, base_steps: int, step_profile: str | None = None) -> int:
+def _steps_for_case(
+    case: str, *, base_steps: int, step_profile: str | None = None
+) -> int:
     if not step_profile:
         return int(base_steps)
     profile = STEP_PROFILES.get(step_profile)
@@ -676,7 +744,10 @@ def _field_model_kwargs_for_case(
                 "num_spectral_frequencies": 4,
             }
     if model_kind == "learned_spectral_basis_field":
-        if case in {"tan_field_fit_exact_transmission", "tpv_field_fit_deep_multiband_exact"}:
+        if case in {
+            "tan_field_fit_exact_transmission",
+            "tpv_field_fit_deep_multiband_exact",
+        }:
             return {
                 "hidden_dim": 128,
                 "hidden_layers": 2,
@@ -957,7 +1028,11 @@ def _field_model_kwargs_for_case(
                 "spectral_resolution": 12,
             }
         if case == "tpv_field_fit_sparse_large_mosaic_broad_denseoverlap":
-            spatial_resolution = 32 if _uses_low_memory_sparse_profile(case=case, size=size) else max(int(size or 48), 32)
+            spatial_resolution = (
+                32
+                if _uses_low_memory_sparse_profile(case=case, size=size)
+                else max(int(size or 48), 32)
+            )
             return {
                 "spatial_resolution": spatial_resolution,
                 "spectral_resolution": 12,
@@ -1134,7 +1209,9 @@ def _make_field_model_for_case(
     return make_field_model(model_kind, domain)
 
 
-def _rotated_cd(scale_deg: float, rotation_deg: float) -> tuple[float, float, float, float]:
+def _rotated_cd(
+    scale_deg: float, rotation_deg: float
+) -> tuple[float, float, float, float]:
     theta = math.radians(float(rotation_deg))
     cos_t = math.cos(theta)
     sin_t = math.sin(theta)
@@ -1291,7 +1368,17 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
     )
     deep_exact_dense_axis = SpectralAxis(
         values=torch.tensor(
-            [5200.0, 6060.0, 7200.0, 8140.0, 9800.0, 11500.0, 14000.0, 17000.0, 20000.0],
+            [
+                5200.0,
+                6060.0,
+                7200.0,
+                8140.0,
+                9800.0,
+                11500.0,
+                14000.0,
+                17000.0,
+                20000.0,
+            ],
             dtype=torch.float64,
         ),
         unit="Angstrom",
@@ -1314,7 +1401,17 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
     )
     deep_broad_dense_axis = SpectralAxis(
         values=torch.tensor(
-            [4700.0, 5600.0, 6500.0, 7600.0, 9000.0, 11000.0, 13000.0, 15500.0, 18000.0],
+            [
+                4700.0,
+                5600.0,
+                6500.0,
+                7600.0,
+                9000.0,
+                11000.0,
+                13000.0,
+                15500.0,
+                18000.0,
+            ],
             dtype=torch.float64,
         ),
         unit="Angstrom",
@@ -1325,7 +1422,18 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
         dtype=torch.float64,
     )
     deep_broad_dense_edges = torch.tensor(
-        [4200.0, 5150.0, 6050.0, 7050.0, 8300.0, 10000.0, 12000.0, 14250.0, 16750.0, 19500.0],
+        [
+            4200.0,
+            5150.0,
+            6050.0,
+            7050.0,
+            8300.0,
+            10000.0,
+            12000.0,
+            14250.0,
+            16750.0,
+            19500.0,
+        ],
         dtype=torch.float64,
     )
     deep_broad_tan_sip_domain = FieldDomain(
@@ -1423,14 +1531,18 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                         crval2=crval2,
                         scale_deg=scale_arcsec[visit_idx] / 3600.0,
                         rotation_deg=rotations[(idx + band_idx) % len(rotations)],
-                        distortion_scale=distortion_scales[(idx + visit_idx) % len(distortion_scales)],
+                        distortion_scale=distortion_scales[
+                            (idx + visit_idx) % len(distortion_scales)
+                        ],
                     ),
                     spectral_min=float(broad_edges[band_idx]),
                     spectral_max=float(broad_edges[band_idx + 1]),
                     transmission_center=float(deep_broad_axis.values[band_idx].item()),
                     transmission_sigma=[190.0, 280.0, 360.0, 520.0, 900.0][band_idx],
                     psf_sigma_pix=0.70,
-                    noise_sigma=noise_sigmas[(band_idx + visit_idx) % len(noise_sigmas)],
+                    noise_sigma=noise_sigmas[
+                        (band_idx + visit_idx) % len(noise_sigmas)
+                    ],
                     gap=gap,
                 )
             )
@@ -1502,7 +1614,9 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_center=float(exact_values[band_idx]),
                     transmission_sigma=None,
                     psf_sigma_pix=0.70,
-                    noise_sigma=noise_sigmas[(band_idx + 2 * visit_idx) % len(noise_sigmas)],
+                    noise_sigma=noise_sigmas[
+                        (band_idx + 2 * visit_idx) % len(noise_sigmas)
+                    ],
                     gap=gap,
                 )
             )
@@ -1574,7 +1688,9 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_center=float(exact_values[band_idx]),
                     transmission_sigma=None,
                     psf_sigma_pix=0.70,
-                    noise_sigma=noise_sigmas[(band_idx + 2 * visit_idx) % len(noise_sigmas)],
+                    noise_sigma=noise_sigmas[
+                        (band_idx + 2 * visit_idx) % len(noise_sigmas)
+                    ],
                     gap=gap,
                 )
             )
@@ -1651,7 +1767,9 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_center=float(exact_values[band_idx]),
                     transmission_sigma=None,
                     psf_sigma_pix=0.70,
-                    noise_sigma=noise_sigmas[(band_idx + 2 * visit_idx) % len(noise_sigmas)],
+                    noise_sigma=noise_sigmas[
+                        (band_idx + 2 * visit_idx) % len(noise_sigmas)
+                    ],
                     gap=gap,
                 )
             )
@@ -1726,7 +1844,9 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_center=center,
                     transmission_sigma=sigma,
                     psf_sigma_pix=0.70,
-                    noise_sigma=noise_sigmas[(band_idx + 2 * visit_idx) % len(noise_sigmas)],
+                    noise_sigma=noise_sigmas[
+                        (band_idx + 2 * visit_idx) % len(noise_sigmas)
+                    ],
                     gap=gap,
                 )
             )
@@ -1879,7 +1999,10 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_sigma=210.0,
                     psf_sigma_pix=0.70,
                     noise_sigma=0.018,
-                    gap=(slice(size // 4, size // 2), slice(size // 2, size - size // 6)),
+                    gap=(
+                        slice(size // 4, size // 2),
+                        slice(size // 2, size - size // 6),
+                    ),
                 ),
                 ObservationSpec(
                     header=_sip_header(
@@ -1944,7 +2067,10 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_sigma=390.0,
                     psf_sigma_pix=0.70,
                     noise_sigma=0.016,
-                    gap=(slice(size // 5, size // 5 + 5), slice(size // 3, size - size // 4)),
+                    gap=(
+                        slice(size // 5, size // 5 + 5),
+                        slice(size // 3, size - size // 4),
+                    ),
                 ),
                 ObservationSpec(
                     header=_sip_header(
@@ -2009,7 +2135,10 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_sigma=980.0,
                     psf_sigma_pix=0.70,
                     noise_sigma=0.021,
-                    gap=(slice(size // 3, size - size // 5), slice(size // 4, size // 4 + 6)),
+                    gap=(
+                        slice(size // 3, size - size // 5),
+                        slice(size // 4, size // 4 + 6),
+                    ),
                 ),
             ),
         ),
@@ -2092,7 +2221,10 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_sigma=None,
                     psf_sigma_pix=0.70,
                     noise_sigma=0.022,
-                    gap=(slice(size // 5, size // 5 + 5), slice(size // 3, size - size // 4)),
+                    gap=(
+                        slice(size // 5, size // 5 + 5),
+                        slice(size // 3, size - size // 4),
+                    ),
                 ),
                 ObservationSpec(
                     header=_tan_header(
@@ -2123,7 +2255,10 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_sigma=None,
                     psf_sigma_pix=0.70,
                     noise_sigma=0.026,
-                    gap=(slice(size // 3, size - size // 5), slice(size // 4, size // 4 + 4)),
+                    gap=(
+                        slice(size // 3, size - size // 5),
+                        slice(size // 4, size // 4 + 4),
+                    ),
                 ),
             ),
         ),
@@ -2175,7 +2310,10 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_sigma=220.0,
                     psf_sigma_pix=0.70,
                     noise_sigma=0.019,
-                    gap=(slice(size // 4, size // 2), slice(size // 3, size - size // 6)),
+                    gap=(
+                        slice(size // 4, size // 2),
+                        slice(size // 3, size - size // 6),
+                    ),
                 ),
                 ObservationSpec(
                     header=_tpv_header(
@@ -2240,7 +2378,10 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_sigma=390.0,
                     psf_sigma_pix=0.70,
                     noise_sigma=0.016,
-                    gap=(slice(size // 5, size // 5 + 5), slice(size // 2, size - size // 7)),
+                    gap=(
+                        slice(size // 5, size // 5 + 5),
+                        slice(size // 2, size - size // 7),
+                    ),
                 ),
                 ObservationSpec(
                     header=_tpv_header(
@@ -2305,7 +2446,10 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_sigma=980.0,
                     psf_sigma_pix=0.70,
                     noise_sigma=0.022,
-                    gap=(slice(size // 3, size - size // 5), slice(size // 4, size // 4 + 6)),
+                    gap=(
+                        slice(size // 3, size - size // 5),
+                        slice(size // 4, size // 4 + 6),
+                    ),
                 ),
             ),
         ),
@@ -2357,7 +2501,10 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_sigma=None,
                     psf_sigma_pix=0.70,
                     noise_sigma=0.018,
-                    gap=(slice(size // 4, size // 2), slice(size // 3, size - size // 6)),
+                    gap=(
+                        slice(size // 4, size // 2),
+                        slice(size // 3, size - size // 6),
+                    ),
                 ),
                 ObservationSpec(
                     header=_tpv_header(
@@ -2422,7 +2569,10 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_sigma=None,
                     psf_sigma_pix=0.70,
                     noise_sigma=0.015,
-                    gap=(slice(size // 5, size // 5 + 6), slice(size // 2, size - size // 8)),
+                    gap=(
+                        slice(size // 5, size // 5 + 6),
+                        slice(size // 2, size - size // 8),
+                    ),
                 ),
                 ObservationSpec(
                     header=_tpv_header(
@@ -2487,7 +2637,10 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_sigma=None,
                     psf_sigma_pix=0.70,
                     noise_sigma=0.019,
-                    gap=(slice(size // 3, size - size // 5), slice(size // 4, size // 4 + 7)),
+                    gap=(
+                        slice(size // 3, size - size // 5),
+                        slice(size // 4, size // 4 + 7),
+                    ),
                 ),
             ),
         ),
@@ -2697,7 +2850,9 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                 scale_deg=1.0 / 3600.0,
             ),
             spectral_axis=SpectralAxis(
-                values=torch.tensor([4700.0, 5550.0, 6400.0, 7150.0], dtype=torch.float64),
+                values=torch.tensor(
+                    [4700.0, 5550.0, 6400.0, 7150.0], dtype=torch.float64
+                ),
                 unit="Angstrom",
                 type="WAVE",
             ),
@@ -2735,7 +2890,10 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_sigma=120.0,
                     psf_sigma_pix=1.35,
                     noise_sigma=0.030,
-                    gap=(slice(size // 4, size // 4 + 7), slice(size // 3, size - size // 5)),
+                    gap=(
+                        slice(size // 4, size // 4 + 7),
+                        slice(size // 3, size - size // 5),
+                    ),
                 ),
                 ObservationSpec(
                     header=_tan_header(
@@ -2816,7 +2974,10 @@ def _build_case_specs(size: int) -> dict[str, CaseSpec]:
                     transmission_sigma=160.0,
                     psf_sigma_pix=0.95,
                     noise_sigma=0.023,
-                    gap=(slice(size // 3, size // 3 + 7), slice(size // 2, size - size // 5)),
+                    gap=(
+                        slice(size // 3, size // 3 + 7),
+                        slice(size // 2, size - size // 5),
+                    ),
                 ),
                 ObservationSpec(
                     header=_tpv_header(
@@ -2870,8 +3031,10 @@ class _AnalyticField(torch.nn.Module):
         g2 = (0.8 - 0.18 * lam) * torch.exp(
             -((dra - 0.014) ** 2 + (ddec + 0.008) ** 2) / 0.00011
         )
-        ridge = 0.18 * torch.sin(130.0 * dra + 0.5 * lam) * torch.cos(
-            110.0 * ddec - 0.25 * lam
+        ridge = (
+            0.18
+            * torch.sin(130.0 * dra + 0.5 * lam)
+            * torch.cos(110.0 * ddec - 0.25 * lam)
         )
         diffuse = 0.22 + 1.8 * dra + 1.1 * ddec + 0.12 * lam + 0.08 * lam * dra
         line = (0.12 + 0.05 * torch.cos(3.0 * lam)) * torch.exp(
@@ -3005,9 +3168,7 @@ def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         else "reconstruction_rmse"
     )
     best_rmse = min(float(row[metric_name]) for row in rows)
-    within = [
-        row for row in rows if float(row[metric_name]) <= 1.05 * best_rmse
-    ]
+    within = [row for row in rows if float(row[metric_name]) <= 1.05 * best_rmse]
     default = min(within, key=lambda row: float(row["fit_time_ms"]))
     best = min(rows, key=lambda row: float(row[metric_name]))
     return [
@@ -3289,7 +3450,9 @@ def evaluate_case(
         "truth_model": case_spec.truth_model,
         "model_kind": model_kind,
         "model_kwargs": model_kwargs if result is not None else {},
-        "fit_method": "weighted_mse_adam" if result is not None else "weighted_cube_coadd",
+        "fit_method": "weighted_mse_adam"
+        if result is not None
+        else "weighted_cube_coadd",
         "num_observations": len(observations),
         "num_bands": int(case_spec.spectral_axis.values.numel()),
         "steps": int(steps),
@@ -3352,7 +3515,8 @@ def evaluate_case(
         "signal_rms_truth": signal_rms,
         "residual_rms": residual_rms,
         "signal_to_residual_ratio": signal_rms / max(residual_rms, 1.0e-8),
-        "signal_to_residual_db": 20.0 * math.log10(signal_rms / max(residual_rms, 1.0e-8)),
+        "signal_to_residual_db": 20.0
+        * math.log10(signal_rms / max(residual_rms, 1.0e-8)),
         "observation_rmse": (
             float(torch.stack(observation_residuals).mean().item())
             if observation_residuals
@@ -3362,10 +3526,18 @@ def evaluate_case(
             sum(spec.noise_sigma for spec in case_spec.observations)
             / len(case_spec.observations)
         ),
-        "min_noise_sigma": float(min(spec.noise_sigma for spec in case_spec.observations)),
-        "max_noise_sigma": float(max(spec.noise_sigma for spec in case_spec.observations)),
-        "min_psf_sigma_pix": float(min(spec.psf_sigma_pix for spec in case_spec.observations)),
-        "max_psf_sigma_pix": float(max(spec.psf_sigma_pix for spec in case_spec.observations)),
+        "min_noise_sigma": float(
+            min(spec.noise_sigma for spec in case_spec.observations)
+        ),
+        "max_noise_sigma": float(
+            max(spec.noise_sigma for spec in case_spec.observations)
+        ),
+        "min_psf_sigma_pix": float(
+            min(spec.psf_sigma_pix for spec in case_spec.observations)
+        ),
+        "max_psf_sigma_pix": float(
+            max(spec.psf_sigma_pix for spec in case_spec.observations)
+        ),
         "min_resolution_arcsec_pix": float(
             min(_pixel_scale_arcsec(spec.header) for spec in case_spec.observations)
         ),
@@ -3373,10 +3545,14 @@ def evaluate_case(
             max(_pixel_scale_arcsec(spec.header) for spec in case_spec.observations)
         ),
         "min_bandwidth_angstrom": float(
-            min(spec.spectral_max - spec.spectral_min for spec in case_spec.observations)
+            min(
+                spec.spectral_max - spec.spectral_min for spec in case_spec.observations
+            )
         ),
         "max_bandwidth_angstrom": float(
-            max(spec.spectral_max - spec.spectral_min for spec in case_spec.observations)
+            max(
+                spec.spectral_max - spec.spectral_min for spec in case_spec.observations
+            )
         ),
         **spectral_budget_extras,
     }

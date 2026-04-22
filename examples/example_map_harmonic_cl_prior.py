@@ -54,8 +54,12 @@ def main() -> None:
     truth[4] = complex(0.03, -0.01)
 
     targets = (
-        TargetRenderSpec.from_header(_tan_header(crval1=210.0, crval2=54.0), band_label="bg"),
-        TargetRenderSpec.from_header(_tan_header(crval1=214.0, crval2=52.0), band_label="bg"),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=210.0, crval2=54.0), band_label="bg"
+        ),
+        TargetRenderSpec.from_header(
+            _tan_header(crval1=214.0, crval2=52.0), band_label="bg"
+        ),
     )
     hooks = build_spherical_harmonic_solver_hooks(lmax=lmax)
     image_block = hooks.bind_targets(targets)
@@ -73,8 +77,7 @@ def main() -> None:
 
     clean_cutouts = image_block.apply(truth)
     observed_cutouts = tuple(
-        cutout + 0.01 * torch.randn_like(cutout)
-        for cutout in clean_cutouts
+        cutout + 0.01 * torch.randn_like(cutout) for cutout in clean_cutouts
     )
     data = (*observed_cutouts, torch.zeros_like(truth))
 
@@ -101,11 +104,17 @@ def main() -> None:
 
     print("Native harmonic C_ell-prior inverse example")
     print(f"lmax={lmax} nalm={nalm} image_observations={len(targets)}")
-    print(f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}")
-    print(f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}")
+    print(
+        f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}"
+    )
+    print(
+        f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}"
+    )
     print(f"per-cutout image RMSE: {[round(v, 6) for v in rmses]}")
     print(f"C_ell prior norm: {cl_penalty:.6f}")
-    print("useful when diffuse sky structure is better specified by an angular power spectrum than by hand-tuned penalties")
+    print(
+        "useful when diffuse sky structure is better specified by an angular power spectrum than by hand-tuned penalties"
+    )
 
 
 if __name__ == "__main__":

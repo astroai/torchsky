@@ -86,7 +86,9 @@ def test_torchsky_bilinear_matches_reproject_interp_on_shifted_grid() -> None:
     assert float(delta.max()) < 0.01
 
 
-def test_torchsky_bicubic_reasonably_close_to_reproject_interp_on_shifted_grid() -> None:
+def test_torchsky_bicubic_reasonably_close_to_reproject_interp_on_shifted_grid() -> (
+    None
+):
     from reproject import reproject_interp
 
     size = 32

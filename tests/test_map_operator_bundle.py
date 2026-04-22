@@ -64,14 +64,24 @@ def test_minimal_learned_operator_scaffold_declares_shared_conditioning() -> Non
 def test_geometry_op_for_kernel_covers_interpolation_drizzle_splat_and_fft() -> None:
     assert geometry_op_for_kernel("bilinear").name == "interpolation_geometry"
     assert geometry_op_for_kernel("drizzle_square").name == "exact_drizzle_geometry"
-    assert geometry_op_for_kernel("conservative_polygon").name == "conservative_polygon_geometry"
+    assert (
+        geometry_op_for_kernel("conservative_polygon").name
+        == "conservative_polygon_geometry"
+    )
     assert geometry_op_for_kernel("splat_box").name == "forward_splat_geometry"
     assert geometry_op_for_kernel("fft_shift").name == "restricted_affine_fft_geometry"
-    assert geometry_op_for_kernel("spectral_nonuniform").name == "spectral_global_geometry"
-    assert geometry_op_for_kernel("spectral_nonuniform_fast").name == "spectral_global_geometry"
+    assert (
+        geometry_op_for_kernel("spectral_nonuniform").name == "spectral_global_geometry"
+    )
+    assert (
+        geometry_op_for_kernel("spectral_nonuniform_fast").name
+        == "spectral_global_geometry"
+    )
 
 
-def test_image_observation_operator_bundle_normalizes_metadata_into_operator_slots() -> None:
+def test_image_observation_operator_bundle_normalizes_metadata_into_operator_slots() -> (
+    None
+):
     observation = ImageObservation(
         "mock.fits",
         weight=2.0,
@@ -102,7 +112,9 @@ def test_spherical_spectral_operator_bundle_declares_spherical_geometry_mode() -
     assert getattr(bundle.geometry, "mode", None) == "healpix_bridge"
 
 
-def test_field_observation_operator_bundle_normalizes_psf_background_and_noise() -> None:
+def test_field_observation_operator_bundle_normalizes_psf_background_and_noise() -> (
+    None
+):
     observation = FieldObservation(
         image=torch.zeros((4, 4), dtype=torch.float32),
         header={
@@ -190,7 +202,9 @@ def test_swap_bundle_operator_families_replaces_selected_slots_only() -> None:
     assert swapped.noise is learned.noise
 
 
-def test_conservative_polygon_op_and_helper_use_full_footprint_contract(monkeypatch) -> None:
+def test_conservative_polygon_op_and_helper_use_full_footprint_contract(
+    monkeypatch,
+) -> None:
     calls: dict[str, object] = {}
 
     def _fake_conservative(*args, **kwargs):

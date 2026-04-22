@@ -90,8 +90,11 @@ def _bilinear_sample_grid(
     else:
         sx_eff = sx
         sy_eff = sy
-        valid = (sx_eff >= 0.0) & (sx_eff <= float(w - 1)) & (sy_eff >= 0.0) & (
-            sy_eff <= float(h - 1)
+        valid = (
+            (sx_eff >= 0.0)
+            & (sx_eff <= float(w - 1))
+            & (sy_eff >= 0.0)
+            & (sy_eff <= float(h - 1))
         )
     x0 = torch.floor(sx_eff).to(torch.long)
     y0 = torch.floor(sy_eff).to(torch.long)

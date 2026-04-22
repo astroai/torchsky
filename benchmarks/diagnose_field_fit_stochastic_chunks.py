@@ -19,14 +19,21 @@ if str(SRC) not in sys.path:
 
 import bench_map_field_fit as field_bench  # noqa: E402
 from torchsky import WCS  # noqa: E402
-from torchsky.map import MapProductResult, evaluate_map_product, plan_map_product, stack_map_product  # noqa: E402
+from torchsky.map import (
+    MapProductResult,
+    evaluate_map_product,
+    plan_map_product,
+    stack_map_product,
+)  # noqa: E402
 
 
 def _hann2d(height: int, width: int, *, device: torch.device) -> torch.Tensor:
     def _axis_window(length: int) -> torch.Tensor:
         if length <= 1:
             return torch.ones((length,), dtype=torch.float32, device=device)
-        return torch.hann_window(length, periodic=False, dtype=torch.float32, device=device)
+        return torch.hann_window(
+            length, periodic=False, dtype=torch.float32, device=device
+        )
 
     wy = _axis_window(height)
     wx = _axis_window(width)
@@ -61,15 +68,29 @@ def _sample_chunk_origins(
     origins: list[tuple[int, int]] = []
     seen: set[tuple[int, int]] = set()
     for pass_idx in range(passes):
-        base_x = 0 if pass_idx == 0 else int(torch.randint(stride, (1,), generator=gen).item())
-        base_y = 0 if pass_idx == 0 else int(torch.randint(stride, (1,), generator=gen).item())
+        base_x = (
+            0
+            if pass_idx == 0
+            else int(torch.randint(stride, (1,), generator=gen).item())
+        )
+        base_y = (
+            0
+            if pass_idx == 0
+            else int(torch.randint(stride, (1,), generator=gen).item())
+        )
         xs = _positions(width, offset=base_x)
         ys = _positions(height, offset=base_y)
         for y0 in ys:
             for x0 in xs:
                 if jitter > 0 and pass_idx > 0:
-                    dx = int(torch.randint(2 * jitter + 1, (1,), generator=gen).item()) - jitter
-                    dy = int(torch.randint(2 * jitter + 1, (1,), generator=gen).item()) - jitter
+                    dx = (
+                        int(torch.randint(2 * jitter + 1, (1,), generator=gen).item())
+                        - jitter
+                    )
+                    dy = (
+                        int(torch.randint(2 * jitter + 1, (1,), generator=gen).item())
+                        - jitter
+                    )
                     x = min(max(x0 + dx, 0), max(width - chunk, 0))
                     y = min(max(y0 + dy, 0), max(height - chunk, 0))
                 else:
@@ -81,7 +102,9 @@ def _sample_chunk_origins(
     return origins
 
 
-def _header_overlap_score(source_header: dict[str, Any], target_header: dict[str, Any]) -> bool:
+def _header_overlap_score(
+    source_header: dict[str, Any], target_header: dict[str, Any]
+) -> bool:
     source_wcs = WCS(source_header)
     target_wcs = WCS(target_header)
     source_h = int(source_header.get("NAXIS2", 0))
@@ -100,7 +123,9 @@ def _header_overlap_score(source_header: dict[str, Any], target_header: dict[str
         ],
         dtype=torch.float64,
     )
-    ra_deg, dec_deg = target_wcs.pixel_to_world(sample_points[:, 0], sample_points[:, 1])
+    ra_deg, dec_deg = target_wcs.pixel_to_world(
+        sample_points[:, 0], sample_points[:, 1]
+    )
     x_pix, y_pix = source_wcs.world_to_pixel(ra_deg, dec_deg)
     inside = (
         (x_pix >= 0.0)
@@ -128,10 +153,12 @@ def _assemble_stochastic_chunk_product(
 ) -> dict[str, Any]:
     case_spec = field_bench._build_case_specs(size)[case]
     with tempfile.TemporaryDirectory(prefix="torchsky-field-fit-chunks-") as tmpdir_str:
-        observations, image_observations, truth_cube = field_bench._simulate_observations(
-            case_spec,
-            seed=seed,
-            tmpdir=Path(tmpdir_str),
+        observations, image_observations, truth_cube = (
+            field_bench._simulate_observations(
+                case_spec,
+                seed=seed,
+                tmpdir=Path(tmpdir_str),
+            )
         )
         product = plan_map_product(
             image_observations,
@@ -157,8 +184,12 @@ def _assemble_stochastic_chunk_product(
         )
         if max_chunks is not None and max_chunks > 0:
             origins = origins[: int(max_chunks)]
-        assembled_data = torch.zeros_like(support_reference_product.data, dtype=torch.float32)
-        assembled_weight = torch.zeros_like(support_reference_product.weight, dtype=torch.float32)
+        assembled_data = torch.zeros_like(
+            support_reference_product.data, dtype=torch.float32
+        )
+        assembled_weight = torch.zeros_like(
+            support_reference_product.weight, dtype=torch.float32
+        )
         fit_times: list[float] = []
         used_chunks = 0
         for chunk_index, (x0, y0) in enumerate(origins):
@@ -179,7 +210,9 @@ def _assemble_stochastic_chunk_product(
             if not selected_indices:
                 continue
             local_observations = [observations[idx] for idx in selected_indices]
-            local_image_observations = [image_observations[idx] for idx in selected_indices]
+            local_image_observations = [
+                image_observations[idx] for idx in selected_indices
+            ]
             local_product = plan_map_product(
                 local_image_observations,
                 header_overrides=chunk_header,
@@ -193,14 +226,18 @@ def _assemble_stochastic_chunk_product(
             fit_kwargs = field_bench._field_fit_kwargs_for_model(
                 model_kind,
                 case=case_spec.case,
-                size=int(local_size_hint) if local_size_hint is not None else chunk_size,
+                size=int(local_size_hint)
+                if local_size_hint is not None
+                else chunk_size,
                 benchmark_steps=steps,
             )
             model = field_bench._make_field_model_for_case(
                 model_kind,
                 local_domain,
                 case=case_spec.case,
-                size=int(local_size_hint) if local_size_hint is not None else chunk_size,
+                size=int(local_size_hint)
+                if local_size_hint is not None
+                else chunk_size,
             )
             start = field_bench.time.perf_counter()
             result = field_bench.fit_field_model(
@@ -223,7 +260,9 @@ def _assemble_stochastic_chunk_product(
             )
             support_mask = local_support.weight.gt(0.0).to(dtype=torch.float32)
             blend_weight = taper.unsqueeze(0) * (0.25 + 0.75 * support_mask)
-            assembled_data[:, y0 : y0 + tile_h, x0 : x0 + tile_w] += local_pred.data.to(dtype=torch.float32) * blend_weight
+            assembled_data[:, y0 : y0 + tile_h, x0 : x0 + tile_w] += (
+                local_pred.data.to(dtype=torch.float32) * blend_weight
+            )
             assembled_weight[:, y0 : y0 + tile_h, x0 : x0 + tile_w] += blend_weight
             used_chunks += 1
         normalized = assembled_data / torch.clamp(assembled_weight, min=1.0e-6)
@@ -283,7 +322,9 @@ def _markdown(rows: list[dict[str, Any]]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="tpv_field_fit_sparse_large_mosaic_broad_denseoverlap")
+    parser.add_argument(
+        "--case", default="tpv_field_fit_sparse_large_mosaic_broad_denseoverlap"
+    )
     parser.add_argument("--size", type=int, default=128)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--steps", type=int, default=12, help="Local chunk fit steps.")

@@ -43,7 +43,9 @@ def test_bandpass_from_transmission_file(tmp_path: Path) -> None:
     spec = bandpass_from_transmission_file(p, band_name="X1")
     assert spec["band_name"] == "X1"
     assert "transmission_wavelength" in spec
-    assert spec["transmission_wavelength"].shape == spec["transmission_throughput"].shape
+    assert (
+        spec["transmission_wavelength"].shape == spec["transmission_throughput"].shape
+    )
     fo = field_observation_spectral_kwargs(spec)
     assert fo["spectral_max"] > fo["spectral_min"]
     assert isinstance(fo["transmission_wavelength"], torch.Tensor)

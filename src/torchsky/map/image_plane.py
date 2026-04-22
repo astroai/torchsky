@@ -69,6 +69,7 @@ MapResamplingKernel = Literal[
 MapValueSemantics = Literal["surface_brightness", "flux"]
 MapStackingMethod = Literal["weighted_mean", "mean", "median"]
 
+
 # Header probe for area scaling: recoverable failures when reading metadata only.
 def _resolve_map_device(device: torch.device | str | None) -> torch.device:
     if device is not None:
@@ -1047,7 +1048,9 @@ def _infer_diagonal_scale_shift_pixel_map(
     max_x = float(torch.max(torch.abs(xs_fit - xs)).item())
     max_y = float(torch.max(torch.abs(ys_fit - ys)).item())
     if max_x > 5e-3 or max_y > 5e-3:
-        raise ValueError("fft_diagonal_affine WCS probes do not match a diagonal affine map")
+        raise ValueError(
+            "fft_diagonal_affine WCS probes do not match a diagonal affine map"
+        )
     if not all(math.isfinite(v) for v in (sx, sy, bx, by)):
         raise ValueError("fft_diagonal_affine inferred non-finite parameters")
     if abs(sx) < 1e-8 or abs(sy) < 1e-8:
@@ -1325,8 +1328,12 @@ def _resample_weighted_to_target(
             "bx": pbx,
             "by": pby,
         }
-        sampled_numer = resample_linear_affine_periodic_bilinear_2d(weighted_image, **aff_kw)
-        sampled_weight = resample_linear_affine_periodic_bilinear_2d(weighted_weight, **aff_kw)
+        sampled_numer = resample_linear_affine_periodic_bilinear_2d(
+            weighted_image, **aff_kw
+        )
+        sampled_weight = resample_linear_affine_periodic_bilinear_2d(
+            weighted_weight, **aff_kw
+        )
         sampled_support = (
             resample_linear_affine_periodic_bilinear_2d(support_image, **aff_kw)
             if support_image is not None
@@ -1517,7 +1524,9 @@ def _resample_weighted_to_target(
             if x_src.ndim == 2:
                 sampled_numer = sampled_planes[0]
                 sampled_weight = sampled_planes[1]
-                sampled_support = sampled_planes[2] if support_image is not None else None
+                sampled_support = (
+                    sampled_planes[2] if support_image is not None else None
+                )
             else:
                 sampled_numer = sampled_planes[:, 0]
                 sampled_weight = sampled_planes[:, 1]
@@ -1864,7 +1873,9 @@ def _maybe_external_drizzle_resample_weighted_to_target(
     )
     # Match ``benchmarks/bench_map_smacs0723_reproduce.py`` / compat drizzle rows:
     # surface-brightness products use unit iscale; flux-style stacking uses pscale^2.
-    iscale = 1.0 if value_semantics == "surface_brightness" else float(pscale_ratio) ** 2
+    iscale = (
+        1.0 if value_semantics == "surface_brightness" else float(pscale_ratio) ** 2
+    )
     drizzle = DrizzleResampler(
         kernel=kernel,
         fillval=0.0,
@@ -2367,7 +2378,9 @@ def _project_observation_to_target_chunk(
                 raise RuntimeError(
                     "prepared_target with pixel area is required for flux semantics"
                 )
-            sampled_weight = source_weight.to(dtype=torch.float32) * (prepared_target.pixel_area_sr * prepared_target.pixel_area_sr)
+            sampled_weight = source_weight.to(dtype=torch.float32) * (
+                prepared_target.pixel_area_sr * prepared_target.pixel_area_sr
+            )
             sampled_numer = (
                 image.to(dtype=torch.float32)
                 * source_weight.to(dtype=torch.float32)
@@ -2881,7 +2894,9 @@ def coadd_image_plane(
             if value_semantics == "flux":
                 prepared = ensure_prepared_target()
                 if prepared.pixel_area_sr is None:
-                    raise RuntimeError("target pixel area is required for flux semantics")
+                    raise RuntimeError(
+                        "target pixel area is required for flux semantics"
+                    )
                 pixel_area_sr = prepared.pixel_area_sr
                 if projected.target_window is not None:
                     y0, y1, x0, x1 = projected.target_window

@@ -99,7 +99,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", type=Path, default=ROOT / "data")
     parser.add_argument("--bands", default=",".join(ALL_BANDS))
     parser.add_argument("--module", default="b")
-    parser.add_argument("--input-product", choices=("auto", "crf", "cal"), default="cal")
+    parser.add_argument(
+        "--input-product", choices=("auto", "crf", "cal"), default="cal"
+    )
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--skip-coadd", action="store_true")
     parser.add_argument("--skip-train", action="store_true")
@@ -183,7 +185,9 @@ def _coadd_full_band(
 
     tmp_root = jwst_dir.parent / "_tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=f"torchsky_full_coadd_{band}_", dir=str(tmp_root)) as tmp:
+    with tempfile.TemporaryDirectory(
+        prefix=f"torchsky_full_coadd_{band}_", dir=str(tmp_root)
+    ) as tmp:
         tmpdir = Path(tmp)
         observations: list[ImageObservation] = []
         for exposure_path in exposure_paths:
@@ -232,13 +236,19 @@ def _coadd_full_band(
         "value_semantics": "surface_brightness",
         "stacking_method": "weighted_mean",
         "drizzle_pixfrac": 1.0,
-        "support_rmse": float(np.sqrt(np.mean(diff * diff))) if diff.size else float("nan"),
+        "support_rmse": float(np.sqrt(np.mean(diff * diff)))
+        if diff.size
+        else float("nan"),
         "support_mae": float(np.mean(np.abs(diff))) if diff.size else float("nan"),
         "support_flux_ratio": (
-            float(np.sum(pred[mask]) / np.sum(reference[mask])) if diff.size else float("nan")
+            float(np.sum(pred[mask]) / np.sum(reference[mask]))
+            if diff.size
+            else float("nan")
         ),
         "coverage_frac": float(mask.mean()),
-        "max_overlap": int(result.overlap_count.max().item()) if result.overlap_count is not None else 0,
+        "max_overlap": int(result.overlap_count.max().item())
+        if result.overlap_count is not None
+        else 0,
     }
     metric_path = metric_dir / f"{band}_coadd_compare.json"
     metric_path.write_text(json.dumps(row, indent=2), encoding="utf-8")
@@ -278,10 +288,14 @@ def _fit_full_band(
 
     tmp_root = jwst_dir.parent / "_tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=f"torchsky_full_fit_{band}_", dir=str(tmp_root)) as tmp:
+    with tempfile.TemporaryDirectory(
+        prefix=f"torchsky_full_fit_{band}_", dir=str(tmp_root)
+    ) as tmp:
         tmpdir = Path(tmp)
         image_observations: list[ImageObservation] = []
-        raw_field_inputs: list[tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]] = []
+        raw_field_inputs: list[
+            tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]
+        ] = []
         for exposure_path in exposure_paths:
             science_path, weight_path, mask_path = _prepare_aux_files(
                 exposure_path,
@@ -321,7 +335,9 @@ def _fit_full_band(
                     header=header,
                     weight=torch.from_numpy(weight),
                     mask=torch.from_numpy(mask),
-                    **_field_observation_kwargs_for_band(band, observation_mode="bandpass"),
+                    **_field_observation_kwargs_for_band(
+                        band, observation_mode="bandpass"
+                    ),
                 )
             )
 
@@ -374,7 +390,9 @@ def _fit_full_band(
                 num_spectral_samples=render_n,
                 spatial_tile_hw=(512, 512),
             )
-        pred = pred_tensor.detach().cpu().numpy().astype(np.float32) * float(intensity_scale)
+        pred = pred_tensor.detach().cpu().numpy().astype(np.float32) * float(
+            intensity_scale
+        )
 
     fit_dir.mkdir(parents=True, exist_ok=True)
     metric_dir.mkdir(parents=True, exist_ok=True)
@@ -397,19 +415,30 @@ def _fit_full_band(
         "steps": int(steps),
         "fit_time_ms": float(fit_time_ms),
         "support_rmse": (
-            float(np.sqrt(np.mean(support_diff * support_diff))) if support_diff.size else float("nan")
+            float(np.sqrt(np.mean(support_diff * support_diff)))
+            if support_diff.size
+            else float("nan")
         ),
-        "support_mae": float(np.mean(np.abs(support_diff))) if support_diff.size else float("nan"),
+        "support_mae": float(np.mean(np.abs(support_diff)))
+        if support_diff.size
+        else float("nan"),
         "support_flux_ratio": (
-            float(np.sum(pred[support_metric_mask]) / np.sum(reference[support_metric_mask]))
+            float(
+                np.sum(pred[support_metric_mask])
+                / np.sum(reference[support_metric_mask])
+            )
             if support_diff.size
             else float("nan")
         ),
         "support_frac": float(support_metric_mask.mean()),
         "uniform_rmse": (
-            float(np.sqrt(np.mean(uniform_diff * uniform_diff))) if uniform_diff.size else float("nan")
+            float(np.sqrt(np.mean(uniform_diff * uniform_diff)))
+            if uniform_diff.size
+            else float("nan")
         ),
-        "uniform_mae": float(np.mean(np.abs(uniform_diff))) if uniform_diff.size else float("nan"),
+        "uniform_mae": float(np.mean(np.abs(uniform_diff)))
+        if uniform_diff.size
+        else float("nan"),
     }
     metric_path = metric_dir / f"{band}_{model_kind}_fit_compare.json"
     metric_path.write_text(json.dumps(row, indent=2), encoding="utf-8")

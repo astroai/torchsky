@@ -53,7 +53,9 @@ def _time_many(fn, runs: int) -> float:
     return float(samples[len(samples) // 2])
 
 
-def _target_setup(target_header: dict[str, Any], device: torch.device) -> tuple[tuple[int, int], image_plane_mod._PreparedImagePlaneTarget]:
+def _target_setup(
+    target_header: dict[str, Any], device: torch.device
+) -> tuple[tuple[int, int], image_plane_mod._PreparedImagePlaneTarget]:
     target_shape = image_plane_mod._target_shape_from_header(
         target_header,
         fallback=(int(target_header["NAXIS2"]), int(target_header["NAXIS1"])),
@@ -78,12 +80,16 @@ def _torchsky_weighted_observation(
     kernel: str,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     observation = obs.observation
-    image, header = torchsky.read(observation.path, hdu=observation.hdu, return_header=True)
+    image, header = torchsky.read(
+        observation.path, hdu=observation.hdu, return_header=True
+    )
     image = image_plane_mod._validate_image_plane(image)
     header_dict_obs = dict(header)
     source_wcs = None
     if not (
-        image_plane_mod._headers_equivalent_for_direct_copy(header_dict_obs, target_header)
+        image_plane_mod._headers_equivalent_for_direct_copy(
+            header_dict_obs, target_header
+        )
         and tuple(int(v) for v in image.shape) == target_shape
     ):
         source_wcs = WCS(header_dict_obs)
@@ -137,7 +143,9 @@ def _row_for_observation(
     time_ms: float,
 ) -> dict[str, Any]:
     data = _coadd_from_terms(numer, weight)
-    metrics = _observation_truth_metrics(data, weight, truth, target_header=target_header)
+    metrics = _observation_truth_metrics(
+        data, weight, truth, target_header=target_header
+    )
     return {
         "case": case,
         "row_type": "observation",
@@ -148,7 +156,9 @@ def _row_for_observation(
         "header_projection": str(obs.header.get("CTYPE1", "")),
         "input_width": int(obs.header["NAXIS1"]),
         "input_height": int(obs.header["NAXIS2"]),
-        "coverage_fraction": float((weight > 0.0).to(dtype=torch.float32).mean().item()),
+        "coverage_fraction": float(
+            (weight > 0.0).to(dtype=torch.float32).mean().item()
+        ),
         "mean_weight": float(weight.mean().item()),
         "min_weight": float(weight.min().item()),
         "max_weight": float(weight.max().item()),
@@ -209,7 +219,9 @@ def _stack_rows(
         lambda: stack_map_product(obs_list, product, resampling_kernel=torchsky_kernel),
         runs,
     )
-    torchsky_result = stack_map_product(obs_list, product, resampling_kernel=torchsky_kernel)
+    torchsky_result = stack_map_product(
+        obs_list, product, resampling_kernel=torchsky_kernel
+    )
     torchsky_metrics = evaluate_map_product(
         torchsky_result.data,
         truth,
@@ -360,7 +372,9 @@ def _build_markdown(rows: list[dict[str, Any]]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="tan_random10_large_union_rect_weighted_masked")
+    parser.add_argument(
+        "--case", default="tan_random10_large_union_rect_weighted_masked"
+    )
     parser.add_argument("--size", type=int, default=1024)
     parser.add_argument("--width", type=int, default=1024)
     parser.add_argument("--height", type=int, default=768)
@@ -396,7 +410,9 @@ def main() -> int:
             hdu=observations[0].observation.hdu,
             return_header=True,
         )
-        target_shape, prepared_target = _target_setup(target_header, device=first_image.device)
+        target_shape, prepared_target = _target_setup(
+            target_header, device=first_image.device
+        )
 
         for obs_index, obs in enumerate(observations):
             torchsky_dt = _time_many(

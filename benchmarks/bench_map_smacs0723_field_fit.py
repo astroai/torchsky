@@ -22,7 +22,10 @@ if str(SRC) not in sys.path:
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 
-from bench_map_field_fit import _field_fit_kwargs_for_model, _field_model_kwargs_for_case  # noqa: E402
+from bench_map_field_fit import (
+    _field_fit_kwargs_for_model,
+    _field_model_kwargs_for_case,
+)  # noqa: E402
 from bench_map_smacs0723_real import (  # noqa: E402
     DATA,
     _best_overlap_cutout_from_observations,
@@ -148,11 +151,15 @@ def _field_target_observation(
     band_name: str,
     observation_mode: str = "bandpass",
 ) -> FieldObservation:
-    image = torch.zeros((int(header["NAXIS2"]), int(header["NAXIS1"])), dtype=torch.float32)
+    image = torch.zeros(
+        (int(header["NAXIS2"]), int(header["NAXIS1"])), dtype=torch.float32
+    )
     return FieldObservation(
         image=image,
         header=dict(header),
-        **_field_observation_kwargs_for_band(band_name, observation_mode=observation_mode),
+        **_field_observation_kwargs_for_band(
+            band_name, observation_mode=observation_mode
+        ),
     )
 
 
@@ -324,7 +331,9 @@ def main() -> int:
     parser.add_argument("--reference-path", type=Path, default=DEFAULT_REFERENCE_PATH)
     parser.add_argument("--exposures", default="")
     parser.add_argument("--crop-size", type=int, default=256)
-    parser.add_argument("--crop-mode", choices=("center", "best_overlap"), default="best_overlap")
+    parser.add_argument(
+        "--crop-mode", choices=("center", "best_overlap"), default="best_overlap"
+    )
     parser.add_argument(
         "--overlap-step",
         type=int,
@@ -381,7 +390,9 @@ def main() -> int:
 
     model_kinds = [part.strip() for part in args.models.split(",") if part.strip()]
     if args.exposures.strip():
-        exposure_paths = [Path(part.strip()) for part in args.exposures.split(",") if part.strip()]
+        exposure_paths = [
+            Path(part.strip()) for part in args.exposures.split(",") if part.strip()
+        ]
     else:
         exposure_paths = _discover_exposure_paths(
             DEFAULT_EXPOSURE_DIR,
@@ -397,10 +408,14 @@ def main() -> int:
     ref_header = _sci_header(args.reference_path)
     tmp_root = DATA / "_tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="torchsky_smacs0723_field_fit_", dir=str(tmp_root)) as tmp:
+    with tempfile.TemporaryDirectory(
+        prefix="torchsky_smacs0723_field_fit_", dir=str(tmp_root)
+    ) as tmp:
         tmpdir = Path(tmp)
         image_observations: list[ImageObservation] = []
-        raw_field_inputs: list[tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]] = []
+        raw_field_inputs: list[
+            tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]
+        ] = []
         for exposure_path in exposure_paths:
             science_path, weight_path, mask_path = _prepare_aux_files(
                 exposure_path,
@@ -445,7 +460,11 @@ def main() -> int:
         else:
             ref_crop, x0, y0 = _center_cutout(ref_data, args.crop_size)
         target_header = _cutout_header(ref_header, x0, y0, args.crop_size)
-        field_target_header = _linearize_sip_header(target_header) if args.linearize_target_sip else dict(target_header)
+        field_target_header = (
+            _linearize_sip_header(target_header)
+            if args.linearize_target_sip
+            else dict(target_header)
+        )
 
         field_observations: list[FieldObservation] = []
         smacs_forward_contexts: list[ForwardContext] = []
@@ -500,7 +519,9 @@ def main() -> int:
             observation_mode=args.observation_mode,
         )
         if not field_observations:
-            raise RuntimeError("No field observations overlap the requested target crop")
+            raise RuntimeError(
+                "No field observations overlap the requested target crop"
+            )
         domain = estimate_field_domain(field_observations, coord_mode="sphere_xyz")
         intensity_scale = _robust_intensity_scale(raw_field_inputs)
 
@@ -592,7 +613,10 @@ def main() -> int:
                     if uniform_diff.size
                     else float("nan"),
                     "support_flux_ratio": (
-                        float(np.sum(pred[support_metric_mask]) / np.sum(ref_crop[support_metric_mask]))
+                        float(
+                            np.sum(pred[support_metric_mask])
+                            / np.sum(ref_crop[support_metric_mask])
+                        )
                         if support_diff.size
                         else float("nan")
                     ),

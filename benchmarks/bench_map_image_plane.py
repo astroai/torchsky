@@ -56,7 +56,9 @@ def _simple_header(size: int) -> dict[str, Any]:
     }
 
 
-def _rotated_cd(scale_deg: float, rotation_deg: float) -> tuple[float, float, float, float]:
+def _rotated_cd(
+    scale_deg: float, rotation_deg: float
+) -> tuple[float, float, float, float]:
     theta = torch.deg2rad(torch.tensor(float(rotation_deg), dtype=torch.float64)).item()
     cos_t = float(torch.cos(torch.tensor(theta)).item())
     sin_t = float(torch.sin(torch.tensor(theta)).item())
@@ -250,7 +252,9 @@ def _prepare_synthetic_case(
     tmpdir: Path, *, size: int, n_obs: int, shifted: bool
 ) -> tuple[list[ImageObservation], tuple[int, int]]:
     header = _simple_header(size)
-    base = torch.linspace(0.0, 1.0, size * size, dtype=torch.float32).reshape(size, size)
+    base = torch.linspace(0.0, 1.0, size * size, dtype=torch.float32).reshape(
+        size, size
+    )
     observations: list[ImageObservation] = []
     for i in range(n_obs):
         image_path = tmpdir / f"synthetic_{i}.fits"
@@ -324,8 +328,22 @@ def _prepare_real_sip_mef_case(
     image = torchsky.read(str(_astropy_sip_fixture())).to(dtype=torch.float32)
     return (
         [
-            ImageObservation(str(mef_path), hdu=1, weight_path=str(mef_path), weight_hdu=2, mask_path=str(mef_path), mask_hdu=3),
-            ImageObservation(str(mef_path), hdu=4, weight_path=str(mef_path), weight_hdu=5, mask_path=str(mef_path), mask_hdu=6),
+            ImageObservation(
+                str(mef_path),
+                hdu=1,
+                weight_path=str(mef_path),
+                weight_hdu=2,
+                mask_path=str(mef_path),
+                mask_hdu=3,
+            ),
+            ImageObservation(
+                str(mef_path),
+                hdu=4,
+                weight_path=str(mef_path),
+                weight_hdu=5,
+                mask_path=str(mef_path),
+                mask_hdu=6,
+            ),
         ],
         tuple(int(v) for v in image.shape),
     )
@@ -339,8 +357,22 @@ def _prepare_synthetic_tpv_mef_case(
     mef_path = _write_synthetic_tpv_mef(tmpdir, size=size)
     return (
         [
-            ImageObservation(str(mef_path), hdu=1, weight_path=str(mef_path), weight_hdu=2, mask_path=str(mef_path), mask_hdu=3),
-            ImageObservation(str(mef_path), hdu=4, weight_path=str(mef_path), weight_hdu=5, mask_path=str(mef_path), mask_hdu=6),
+            ImageObservation(
+                str(mef_path),
+                hdu=1,
+                weight_path=str(mef_path),
+                weight_hdu=2,
+                mask_path=str(mef_path),
+                mask_hdu=3,
+            ),
+            ImageObservation(
+                str(mef_path),
+                hdu=4,
+                weight_path=str(mef_path),
+                weight_hdu=5,
+                mask_path=str(mef_path),
+                mask_hdu=6,
+            ),
         ],
         (size, size),
     )
@@ -373,7 +405,9 @@ def _bench_case(
         if result.overlap_count is not None
         else 0,
         "coverage_area_sq_deg": (
-            float(result.coverage_moc.area_sq_deg) if result.coverage_moc is not None else 0.0
+            float(result.coverage_moc.area_sq_deg)
+            if result.coverage_moc is not None
+            else 0.0
         ),
     }
 
@@ -474,7 +508,9 @@ def _bench_cube_case(
         "n_bands": int(result.data.shape[0]),
         "spectral_unit": result.spectral_axis.unit,
         "spectral_type": result.spectral_axis.type,
-        "spectral_weight_sum": float(result.band_metadata.spectral_weight_sum.sum().item()),
+        "spectral_weight_sum": float(
+            result.band_metadata.spectral_weight_sum.sum().item()
+        ),
     }
 
 
@@ -547,7 +583,9 @@ def main() -> int:
                 footprint_order=args.footprint_order,
             )
         )
-        shifted_mef_obs, shifted_mef_shape = _prepare_real_sip_mef_case(tmpdir, shifted=True)
+        shifted_mef_obs, shifted_mef_shape = _prepare_real_sip_mef_case(
+            tmpdir, shifted=True
+        )
         rows.append(
             _bench_case(
                 "real_astropy_sip_mef_shifted_wcs",
@@ -558,7 +596,9 @@ def main() -> int:
             )
         )
 
-        tpv_mef_obs, tpv_mef_shape = _prepare_synthetic_tpv_mef_case(tmpdir, size=args.size)
+        tpv_mef_obs, tpv_mef_shape = _prepare_synthetic_tpv_mef_case(
+            tmpdir, size=args.size
+        )
         rows.append(
             _bench_case(
                 "synthetic_tpv_mef_low_overlap",

@@ -171,8 +171,14 @@ def test_build_compat_markdown_includes_geometry_family_columns() -> None:
             },
         ]
     )
-    assert "| case | fastest backend | fastest geometry | closest external to torchsky | closest geometry | conservative parity |" in markdown
-    assert "| demo | torchsky:bilinear (1.000 ms) | interpolation | reproject_interp:bilinear (0.01) | interpolation | data 0.003, support 0 |" in markdown
+    assert (
+        "| case | fastest backend | fastest geometry | closest external to torchsky | closest geometry | conservative parity |"
+        in markdown
+    )
+    assert (
+        "| demo | torchsky:bilinear (1.000 ms) | interpolation | reproject_interp:bilinear (0.01) | interpolation | data 0.003, support 0 |"
+        in markdown
+    )
 
 
 def test_compat_default_torchsky_kernels_include_conservative_overlap() -> None:
@@ -230,7 +236,9 @@ def test_tan_sip_suite_parses_diversity_case_specs() -> None:
     assert tan_sip_suite._parse_diversity_case_specs(
         "tan_multires_noise@256,tan_random10_large_union_rect_weighted_masked_tan@512x384"
     ) == [
-        tan_sip_suite._DiversityCase(case="tan_multires_noise", size=256, width=None, height=None),
+        tan_sip_suite._DiversityCase(
+            case="tan_multires_noise", size=256, width=None, height=None
+        ),
         tan_sip_suite._DiversityCase(
             case="tan_random10_large_union_rect_weighted_masked_tan",
             size=512,
@@ -241,7 +249,9 @@ def test_tan_sip_suite_parses_diversity_case_specs() -> None:
 
 
 def test_tan_sip_suite_parses_method_specs() -> None:
-    assert tan_sip_suite._parse_method_specs("torchsky:bilinear,montage,swarp:bilinear") == [
+    assert tan_sip_suite._parse_method_specs(
+        "torchsky:bilinear,montage,swarp:bilinear"
+    ) == [
         ("torchsky", "bilinear"),
         ("montage", None),
         ("swarp", "bilinear"),
@@ -253,10 +263,15 @@ def test_tan_sip_suite_quick_profile_defaults_are_routine_sized() -> None:
 
     assert profile.tan_extents == ((512, 384), (1024, 768))
     assert profile.diversity_cases[0] == "tan_aligned_low_noise@256"
-    assert profile.diversity_cases[-1] == "tan_random10_large_union_rect_weighted_masked_tan@512x384"
+    assert (
+        profile.diversity_cases[-1]
+        == "tan_random10_large_union_rect_weighted_masked_tan@512x384"
+    )
     assert "torchsky:lanczos3" in profile.diversity_methods
     assert "swarp:lanczos3" in profile.diversity_methods
-    assert profile.method_sweep_case == "tan_random10_large_union_rect_weighted_masked_tan"
+    assert (
+        profile.method_sweep_case == "tan_random10_large_union_rect_weighted_masked_tan"
+    )
     assert profile.method_sweep_size == 512
     assert profile.runs == 1
     assert profile.torchsky_runs == 2
@@ -268,8 +283,13 @@ def test_tan_sip_suite_full_profile_defaults_include_graduation_extent() -> None
     profile = tan_sip_suite._resolve_profile("full")
 
     assert profile.tan_extents[-1] == (2048, 1536)
-    assert profile.diversity_cases[-1] == "tan_random10_large_union_rect_weighted_masked_tan@1024x768"
-    assert profile.method_sweep_case == "tan_random10_large_union_rect_weighted_masked_tan"
+    assert (
+        profile.diversity_cases[-1]
+        == "tan_random10_large_union_rect_weighted_masked_tan@1024x768"
+    )
+    assert (
+        profile.method_sweep_case == "tan_random10_large_union_rect_weighted_masked_tan"
+    )
     assert profile.method_sweep_size == 1024
     assert profile.torchsky_runs == 3
     assert "drizzle:square" in profile.sip_methods
@@ -318,7 +338,9 @@ def test_projection_mosaic_suite_parses_stack_vs_inr_cases() -> None:
 
 
 def test_projection_mosaic_suite_parses_inr_model_specs() -> None:
-    assert projection_mosaic_suite._parse_inr_model_spec("sine_implicit@sphere_xyz") == (
+    assert projection_mosaic_suite._parse_inr_model_spec(
+        "sine_implicit@sphere_xyz"
+    ) == (
         "sine_implicit",
         "sphere_xyz",
     )
@@ -326,11 +348,15 @@ def test_projection_mosaic_suite_parses_inr_model_specs() -> None:
         "fourier_mlp",
         "sphere_xyz",
     )
-    assert projection_mosaic_suite._parse_inr_model_spec("sky_encoder_mlp@sphere_xyz") == (
+    assert projection_mosaic_suite._parse_inr_model_spec(
+        "sky_encoder_mlp@sphere_xyz"
+    ) == (
         "sky_encoder_mlp",
         "sphere_xyz",
     )
-    assert projection_mosaic_suite._parse_inr_model_spec("sky_encoder_resmlp@sphere_xyz") == (
+    assert projection_mosaic_suite._parse_inr_model_spec(
+        "sky_encoder_resmlp@sphere_xyz"
+    ) == (
         "sky_encoder_resmlp",
         "sphere_xyz",
     )
@@ -388,7 +414,10 @@ def test_projection_mosaic_suite_full_profile_expands_to_all_families() -> None:
     profile = projection_mosaic_suite._resolve_profile("full")
 
     assert len(profile.truth_cases) == 40
-    assert profile.truth_cases[-1] == "MOL:tan_random10_large_union_rect_weighted_masked_tan@1536x768"
+    assert (
+        profile.truth_cases[-1]
+        == "MOL:tan_random10_large_union_rect_weighted_masked_tan@1536x768"
+    )
     assert profile.equal_psf_cases == (
         "SIN:tan_aligned_low_noise@768",
         "ARC:tan_aligned_low_noise@768",
@@ -465,7 +494,9 @@ def test_projection_mosaic_suite_support_region_masks_split_positive_weights() -
 
 
 def test_projection_mosaic_suite_parse_name_list_requires_values() -> None:
-    assert projection_mosaic_suite._parse_name_list("bilinear, lanczos3", label="kernel") == [
+    assert projection_mosaic_suite._parse_name_list(
+        "bilinear, lanczos3", label="kernel"
+    ) == [
         "bilinear",
         "lanczos3",
     ]
@@ -511,12 +542,22 @@ def test_projection_mosaic_suite_annotates_stack_vs_inr_against_best_direct() ->
     by_model = {row["model_kind"]: row for row in annotated}
 
     assert by_model["coadd_bilinear"]["best_direct_model_kind"] == "coadd_lanczos3"
-    assert by_model["coadd_bilinear"]["best_direct_reconstruction_rmse"] == pytest.approx(0.15)
-    assert by_model["coadd_bilinear"]["rmse_delta_vs_best_direct"] == pytest.approx(0.05)
-    assert by_model["coadd_bilinear"]["fit_time_ratio_vs_best_direct"] == pytest.approx(10.0 / 15.0)
+    assert by_model["coadd_bilinear"][
+        "best_direct_reconstruction_rmse"
+    ] == pytest.approx(0.15)
+    assert by_model["coadd_bilinear"]["rmse_delta_vs_best_direct"] == pytest.approx(
+        0.05
+    )
+    assert by_model["coadd_bilinear"]["fit_time_ratio_vs_best_direct"] == pytest.approx(
+        10.0 / 15.0
+    )
     assert by_model["sine_implicit"]["best_inr_model_kind"] == "sine_implicit"
-    assert by_model["sine_implicit"]["best_inr_reconstruction_rmse"] == pytest.approx(0.12)
-    assert by_model["sine_implicit"]["rmse_delta_vs_best_direct"] == pytest.approx(-0.03)
+    assert by_model["sine_implicit"]["best_inr_reconstruction_rmse"] == pytest.approx(
+        0.12
+    )
+    assert by_model["sine_implicit"]["rmse_delta_vs_best_direct"] == pytest.approx(
+        -0.03
+    )
     assert by_model["sine_implicit"]["rmse_delta_vs_best_inr"] == pytest.approx(0.0)
 
 
@@ -590,7 +631,9 @@ def test_diff_summary_reports_common_support_metrics_for_coverage_masks() -> Non
     assert summary["max_abs_weight_diff_vs_ref"] == pytest.approx(1.0)
 
 
-def test_align_array_to_target_falls_back_to_torchsky_when_reproject_missing(monkeypatch) -> None:
+def test_align_array_to_target_falls_back_to_torchsky_when_reproject_missing(
+    monkeypatch,
+) -> None:
     header = {
         "NAXIS": 2,
         "NAXIS1": 4,
@@ -698,7 +741,9 @@ def test_dfreproject_validation_allows_plain_tan_headers() -> None:
     bench_map_compat._validate_dfreproject_headers(source, target)
 
 
-def test_known_large_union_boundary_hotspot_reproduces_against_swarp(tmp_path: Path) -> None:
+def test_known_large_union_boundary_hotspot_reproduces_against_swarp(
+    tmp_path: Path,
+) -> None:
     if bench_map_compat._find_swarp_binary() is None:
         pytest.skip("SWarp CLI is unavailable")
 
@@ -711,9 +756,7 @@ def test_known_large_union_boundary_hotspot_reproduces_against_swarp(tmp_path: P
         seed=1234,
     )
     tan_items = [
-        item
-        for item in observations
-        if "TPV" not in str(item.header.get("CTYPE1", ""))
+        item for item in observations if "TPV" not in str(item.header.get("CTYPE1", ""))
     ]
 
     hotspot_x = 480
@@ -797,7 +840,9 @@ def test_swarp_weighted_coadd_uses_direct_sum_on_aligned_inputs(tmp_path: Path) 
     direct_numer = None
     direct_weight = None
     for obs in obs_list:
-        image = bench_map_ground_truth.torchsky.read(obs.path, hdu=obs.hdu).to(dtype=torch.float32)
+        image = bench_map_ground_truth.torchsky.read(obs.path, hdu=obs.hdu).to(
+            dtype=torch.float32
+        )
         weight = bench_map_compat._load_weight_map(obs, image)
         if direct_numer is None:
             direct_numer = image * weight

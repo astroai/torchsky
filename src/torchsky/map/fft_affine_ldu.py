@@ -42,7 +42,9 @@ def _per_col_vertical_shift_fft(image: Tensor, shift_y_per_col: Tensor) -> Tenso
     return torch.fft.ifft(x * ph, n=h, dim=0).real.to(dtype)
 
 
-def _invert_2x2(a00: float, a01: float, a10: float, a11: float) -> tuple[float, float, float, float]:
+def _invert_2x2(
+    a00: float, a01: float, a10: float, a11: float
+) -> tuple[float, float, float, float]:
     det = a00 * a11 - a01 * a10
     if abs(det) < 1e-18:
         raise ValueError("singular 2×2 map")

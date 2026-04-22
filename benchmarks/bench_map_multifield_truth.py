@@ -131,7 +131,9 @@ class CaseSpec:
     observations: tuple[ObservationSpec, ...]
 
 
-def _rotated_cd(scale_deg: float, rotation_deg: float) -> tuple[float, float, float, float]:
+def _rotated_cd(
+    scale_deg: float, rotation_deg: float
+) -> tuple[float, float, float, float]:
     theta = math.radians(float(rotation_deg))
     cos_t = math.cos(theta)
     sin_t = math.sin(theta)
@@ -359,9 +361,7 @@ def _make_field_model(field_model: str, *, seed: int):
             w3=0.15 * torch.randn((1, 32), generator=gen, dtype=torch.float32),
             b3=0.05 * torch.randn((1,), generator=gen, dtype=torch.float32),
         )
-    raise ValueError(
-        "field_model must be one of {'analytic_basis', 'implicit_siren'}"
-    )
+    raise ValueError("field_model must be one of {'analytic_basis', 'implicit_siren'}")
 
 
 def _transmission_weights(
@@ -395,7 +395,9 @@ def _latent_field(
     center_dec_deg: float,
 ) -> torch.Tensor:
     lam = (float(wavelength_angstrom) - 6000.0) / 1400.0
-    dra = (ra_deg - float(center_ra_deg)) * math.cos(math.radians(float(center_dec_deg)))
+    dra = (ra_deg - float(center_ra_deg)) * math.cos(
+        math.radians(float(center_dec_deg))
+    )
     ddec = dec_deg - float(center_dec_deg)
     g1 = (1.1 + 0.40 * lam) * torch.exp(
         -((dra + 0.08) ** 2 + (ddec - 0.03) ** 2) / 0.0016
@@ -403,26 +405,29 @@ def _latent_field(
     g2 = (0.7 - 0.25 * lam) * torch.exp(
         -((dra - 0.05) ** 2 + (ddec + 0.06) ** 2) / 0.0009
     )
-    ridge = 0.18 * torch.sin(40.0 * dra + 0.35 * lam) * torch.cos(
-        36.0 * ddec - 0.2 * lam
+    ridge = (
+        0.18 * torch.sin(40.0 * dra + 0.35 * lam) * torch.cos(36.0 * ddec - 0.2 * lam)
     )
     diffuse = (
-        0.25
-        + 0.6 * (dra + 0.15)
-        + 0.25 * (ddec - 0.02)
-        + 0.12 * lam
-        + 0.08 * lam * dra
+        0.25 + 0.6 * (dra + 0.15) + 0.25 * (ddec - 0.02) + 0.12 * lam + 0.08 * lam * dra
     )
-    line = (0.15 + 0.10 * torch.cos(torch.tensor(lam, dtype=torch.float32))) * torch.exp(
-        -(ddec + 0.10 * torch.sin(torch.tensor(lam, dtype=torch.float32))) ** 2 / 0.0030
+    line = (
+        0.15 + 0.10 * torch.cos(torch.tensor(lam, dtype=torch.float32))
+    ) * torch.exp(
+        -((ddec + 0.10 * torch.sin(torch.tensor(lam, dtype=torch.float32))) ** 2)
+        / 0.0030
     )
     return (diffuse + g1 + g2 + ridge + line).to(dtype=torch.float32)
 
 
-def _band_samples(spectral_min: float, spectral_max: float, *, n: int = 5) -> torch.Tensor:
+def _band_samples(
+    spectral_min: float, spectral_max: float, *, n: int = 5
+) -> torch.Tensor:
     if math.isclose(spectral_min, spectral_max):
         return torch.tensor([spectral_min], dtype=torch.float32)
-    return torch.linspace(float(spectral_min), float(spectral_max), n, dtype=torch.float32)
+    return torch.linspace(
+        float(spectral_min), float(spectral_max), n, dtype=torch.float32
+    )
 
 
 def _resolve_dims(
@@ -490,12 +495,18 @@ def _random_large_rect_observations(
         base_offset_ra, base_offset_dec = center_offsets[idx]
         crval1 = 12.0 + float(base_offset_ra) + jitter_ra
         crval2 = -3.0 + float(base_offset_dec) + jitter_dec
-        exposure_time = float(torch.empty(1).uniform_(45.0, 260.0, generator=gen).item())
+        exposure_time = float(
+            torch.empty(1).uniform_(45.0, 260.0, generator=gen).item()
+        )
         transmission = float(torch.empty(1).uniform_(0.68, 1.08, generator=gen).item())
         psf_sigma_pix = float(torch.empty(1).uniform_(0.45, 1.55, generator=gen).item())
-        band_name, spectral_min, spectral_max, transmission_center, transmission_sigma = (
-            band_defs[idx % len(band_defs)]
-        )
+        (
+            band_name,
+            spectral_min,
+            spectral_max,
+            transmission_center,
+            transmission_sigma,
+        ) = band_defs[idx % len(band_defs)]
         if idx % 3 == 0:
             header = _tpv_header(
                 width,
@@ -504,7 +515,9 @@ def _random_large_rect_observations(
                 crval2=crval2,
                 scale_deg=scale_deg,
                 rotation_deg=rotation_deg,
-                pv_scale=float(torch.empty(1).uniform_(0.8, 1.45, generator=gen).item()),
+                pv_scale=float(
+                    torch.empty(1).uniform_(0.8, 1.45, generator=gen).item()
+                ),
             )
         else:
             header = _tan_header(
@@ -519,7 +532,10 @@ def _random_large_rect_observations(
         if idx % 4 == 1:
             gap = (
                 slice(max(1, height // 5), max(2, min(height, height // 2))),
-                slice(max(1, width // 3), max(2, min(width, width // 3 + max(8, width // 40)))),
+                slice(
+                    max(1, width // 3),
+                    max(2, min(width, width // 3 + max(8, width // 40))),
+                ),
             )
         specs.append(
             ObservationSpec(
@@ -603,7 +619,9 @@ def _simulate_observation(
     noise_sigma = float(base_noise_sb) / math.sqrt(max(scale, 1e-8))
     gen = torch.Generator(device=signal.device)
     gen.manual_seed(int(seed))
-    noisy = signal + noise_sigma * torch.randn(signal.shape, generator=gen, dtype=torch.float32)
+    noisy = signal + noise_sigma * torch.randn(
+        signal.shape, generator=gen, dtype=torch.float32
+    )
     weight = torch.full_like(noisy, 1.0 / max(noise_sigma**2, 1e-8))
     if spec.gap is not None:
         noisy[spec.gap] = 0.0
@@ -667,7 +685,13 @@ def _case_spec(
             target_edges=target_edges,
             observations=(
                 ObservationSpec(
-                    _tan_header(target_width, target_height, crval1=12.000, crval2=-3.000, scale_deg=0.0045),
+                    _tan_header(
+                        target_width,
+                        target_height,
+                        crval1=12.000,
+                        crval2=-3.000,
+                        scale_deg=0.0045,
+                    ),
                     80.0,
                     0.92,
                     0.55,
@@ -678,7 +702,14 @@ def _case_spec(
                     170.0,
                 ),
                 ObservationSpec(
-                    _tan_header(target_width, target_height, crval1=12.018, crval2=-3.010, scale_deg=0.0052, rotation_deg=6.0),
+                    _tan_header(
+                        target_width,
+                        target_height,
+                        crval1=12.018,
+                        crval2=-3.010,
+                        scale_deg=0.0052,
+                        rotation_deg=6.0,
+                    ),
                     120.0,
                     0.88,
                     0.85,
@@ -696,7 +727,14 @@ def _case_spec(
                     ),
                 ),
                 ObservationSpec(
-                    _tan_header(target_width, target_height, crval1=11.986, crval2=-2.984, scale_deg=0.0038, rotation_deg=-8.0),
+                    _tan_header(
+                        target_width,
+                        target_height,
+                        crval1=11.986,
+                        crval2=-2.984,
+                        scale_deg=0.0038,
+                        rotation_deg=-8.0,
+                    ),
                     160.0,
                     0.83,
                     1.10,
@@ -707,7 +745,14 @@ def _case_spec(
                     260.0,
                 ),
                 ObservationSpec(
-                    _tan_header(target_width, target_height, crval1=12.004, crval2=-2.996, scale_deg=0.0041, rotation_deg=2.0),
+                    _tan_header(
+                        target_width,
+                        target_height,
+                        crval1=12.004,
+                        crval2=-2.996,
+                        scale_deg=0.0041,
+                        rotation_deg=2.0,
+                    ),
                     90.0,
                     0.95,
                     0.65,
@@ -730,7 +775,13 @@ def _case_spec(
             target_edges=target_edges,
             observations=(
                 ObservationSpec(
-                    _tan_header(target_width, target_height, crval1=12.000, crval2=-3.000, scale_deg=0.0045),
+                    _tan_header(
+                        target_width,
+                        target_height,
+                        crval1=12.000,
+                        crval2=-3.000,
+                        scale_deg=0.0045,
+                    ),
                     80.0,
                     0.92,
                     0.55,
@@ -741,7 +792,14 @@ def _case_spec(
                     170.0,
                 ),
                 ObservationSpec(
-                    _tan_header(target_width, target_height, crval1=12.018, crval2=-3.010, scale_deg=0.0052, rotation_deg=6.0),
+                    _tan_header(
+                        target_width,
+                        target_height,
+                        crval1=12.018,
+                        crval2=-3.010,
+                        scale_deg=0.0052,
+                        rotation_deg=6.0,
+                    ),
                     120.0,
                     0.88,
                     0.85,
@@ -759,7 +817,14 @@ def _case_spec(
                     ),
                 ),
                 ObservationSpec(
-                    _tan_header(target_width, target_height, crval1=11.986, crval2=-2.984, scale_deg=0.0038, rotation_deg=-8.0),
+                    _tan_header(
+                        target_width,
+                        target_height,
+                        crval1=11.986,
+                        crval2=-2.984,
+                        scale_deg=0.0038,
+                        rotation_deg=-8.0,
+                    ),
                     160.0,
                     0.83,
                     1.10,
@@ -770,7 +835,14 @@ def _case_spec(
                     260.0,
                 ),
                 ObservationSpec(
-                    _tan_header(target_width, target_height, crval1=12.004, crval2=-2.996, scale_deg=0.0041, rotation_deg=2.0),
+                    _tan_header(
+                        target_width,
+                        target_height,
+                        crval1=12.004,
+                        crval2=-2.996,
+                        scale_deg=0.0041,
+                        rotation_deg=2.0,
+                    ),
                     90.0,
                     0.95,
                     0.65,
@@ -793,7 +865,13 @@ def _case_spec(
             target_edges=target_edges,
             observations=(
                 ObservationSpec(
-                    _tan_header(target_width, target_height, crval1=12.000, crval2=-3.000, scale_deg=0.0043),
+                    _tan_header(
+                        target_width,
+                        target_height,
+                        crval1=12.000,
+                        crval2=-3.000,
+                        scale_deg=0.0043,
+                    ),
                     70.0,
                     0.90,
                     0.6,
@@ -884,7 +962,12 @@ def _case_spec(
             observations=(
                 ObservationSpec(
                     _tan_header(
-                        *_scaled_dims(target_width, target_height, width_scale=0.70, height_scale=1.35),
+                        *_scaled_dims(
+                            target_width,
+                            target_height,
+                            width_scale=0.70,
+                            height_scale=1.35,
+                        ),
                         crval1=12.000,
                         crval2=-3.000,
                         scale_deg=0.0044,
@@ -900,7 +983,12 @@ def _case_spec(
                 ),
                 ObservationSpec(
                     _tan_header(
-                        *_scaled_dims(target_width, target_height, width_scale=1.85, height_scale=0.72),
+                        *_scaled_dims(
+                            target_width,
+                            target_height,
+                            width_scale=1.85,
+                            height_scale=0.72,
+                        ),
                         crval1=12.055,
                         crval2=-3.018,
                         scale_deg=0.0061,
@@ -921,7 +1009,12 @@ def _case_spec(
                 ),
                 ObservationSpec(
                     _tan_header(
-                        *_scaled_dims(target_width, target_height, width_scale=1.25, height_scale=1.60),
+                        *_scaled_dims(
+                            target_width,
+                            target_height,
+                            width_scale=1.25,
+                            height_scale=1.60,
+                        ),
                         crval1=11.945,
                         crval2=-2.962,
                         scale_deg=0.0035,
@@ -938,7 +1031,12 @@ def _case_spec(
                 ),
                 ObservationSpec(
                     _tan_header(
-                        *_scaled_dims(target_width, target_height, width_scale=0.92, height_scale=0.58),
+                        *_scaled_dims(
+                            target_width,
+                            target_height,
+                            width_scale=0.92,
+                            height_scale=0.58,
+                        ),
                         crval1=12.022,
                         crval2=-2.990,
                         scale_deg=0.0050,
@@ -970,7 +1068,12 @@ def _case_spec(
             observations=(
                 ObservationSpec(
                     _tan_header(
-                        *_scaled_dims(target_width, target_height, width_scale=0.82, height_scale=1.10),
+                        *_scaled_dims(
+                            target_width,
+                            target_height,
+                            width_scale=0.82,
+                            height_scale=1.10,
+                        ),
                         crval1=12.000,
                         crval2=-3.000,
                         scale_deg=0.0042,
@@ -986,7 +1089,12 @@ def _case_spec(
                 ),
                 ObservationSpec(
                     _tpv_header(
-                        *_scaled_dims(target_width, target_height, width_scale=1.45, height_scale=0.68),
+                        *_scaled_dims(
+                            target_width,
+                            target_height,
+                            width_scale=1.45,
+                            height_scale=0.68,
+                        ),
                         crval1=12.048,
                         crval2=-3.026,
                         scale_deg=0.0058,
@@ -1008,7 +1116,12 @@ def _case_spec(
                 ),
                 ObservationSpec(
                     _tpv_header(
-                        *_scaled_dims(target_width, target_height, width_scale=1.10, height_scale=1.72),
+                        *_scaled_dims(
+                            target_width,
+                            target_height,
+                            width_scale=1.10,
+                            height_scale=1.72,
+                        ),
                         crval1=11.952,
                         crval2=-2.956,
                         scale_deg=0.0036,
@@ -1026,7 +1139,12 @@ def _case_spec(
                 ),
                 ObservationSpec(
                     _tpv_header(
-                        *_scaled_dims(target_width, target_height, width_scale=0.96, height_scale=0.54),
+                        *_scaled_dims(
+                            target_width,
+                            target_height,
+                            width_scale=0.96,
+                            height_scale=0.54,
+                        ),
                         crval1=12.026,
                         crval2=-2.985,
                         scale_deg=0.0049,
@@ -1079,7 +1197,9 @@ def make_case(
     width: int | None = None,
     height: int | None = None,
     seed: int,
-) -> tuple[list[SimulatedObservation], dict[str, Any], SpectralAxis, torch.Tensor, torch.Tensor]:
+) -> tuple[
+    list[SimulatedObservation], dict[str, Any], SpectralAxis, torch.Tensor, torch.Tensor
+]:
     case_spec = _case_spec(case, size=size, width=width, height=height, seed=seed)
     field_model = _make_field_model(case_spec.field_model, seed=seed)
     observations = [
@@ -1100,7 +1220,9 @@ def make_case(
     )
     spectral_edges = torch.tensor(case_spec.target_edges, dtype=torch.float32)
     truth_planes = []
-    for lo, hi in zip(case_spec.target_edges[:-1], case_spec.target_edges[1:], strict=False):
+    for lo, hi in zip(
+        case_spec.target_edges[:-1], case_spec.target_edges[1:], strict=False
+    ):
         truth_planes.append(
             _integrated_field_image(
                 case_spec.target_header,
@@ -1159,7 +1281,8 @@ def _cube_truth_metrics(
         weighted_rms_values.append(
             float(
                 torch.sqrt(
-                    torch.sum(weight_supported * torch.square(residual_supported)) / weight_sum
+                    torch.sum(weight_supported * torch.square(residual_supported))
+                    / weight_sum
                 ).item()
             )
         )
@@ -1171,13 +1294,25 @@ def _cube_truth_metrics(
         {
             "cube_rmse_vs_truth": float(metrics["reconstruction_rmse"]),
             "cube_mae_vs_truth": float(metrics["reconstruction_mae"]),
-            "weighted_residual_rms_mean": float(sum(weighted_rms_values) / max(len(weighted_rms_values), 1)),
+            "weighted_residual_rms_mean": float(
+                sum(weighted_rms_values) / max(len(weighted_rms_values), 1)
+            ),
             "weighted_residual_rms_max": float(max(weighted_rms_values, default=0.0)),
-            "background_residual_rms_mean": float(sum(background_rms_values) / max(len(background_rms_values), 1)),
-            "background_residual_rms_max": float(max(background_rms_values, default=0.0)),
-            "background_leakage_fraction_mean": float(sum(background_leakage_values) / max(len(background_leakage_values), 1)),
-            "background_leakage_fraction_max": float(max(background_leakage_values, default=0.0)),
-            "detrended_residual_rms_mean": float(sum(detrended_rms_values) / max(len(detrended_rms_values), 1)),
+            "background_residual_rms_mean": float(
+                sum(background_rms_values) / max(len(background_rms_values), 1)
+            ),
+            "background_residual_rms_max": float(
+                max(background_rms_values, default=0.0)
+            ),
+            "background_leakage_fraction_mean": float(
+                sum(background_leakage_values) / max(len(background_leakage_values), 1)
+            ),
+            "background_leakage_fraction_max": float(
+                max(background_leakage_values, default=0.0)
+            ),
+            "detrended_residual_rms_mean": float(
+                sum(detrended_rms_values) / max(len(detrended_rms_values), 1)
+            ),
             "per_band_rmse_mean": float(metrics["band_reconstruction_rmse_mean"]),
             "per_band_rmse_max": float(metrics["band_reconstruction_rmse_max"]),
             "coverage_frac_mean": float(coverage.mean().item()),
@@ -1476,7 +1611,9 @@ def evaluate_torchsky_spherical_case(
             sum(item.psf_sigma_pix for item in observations) / max(len(observations), 1)
         ),
         "healpix_nside": int(nside),
-        "operator_bundle_geometry": bundle.geometry.name if bundle.geometry is not None else None,
+        "operator_bundle_geometry": bundle.geometry.name
+        if bundle.geometry is not None
+        else None,
         "spherical_mode": spherical_mode,
         **_cube_truth_metrics(
             result.data,
@@ -1545,7 +1682,9 @@ def evaluate_torchsky_multiband_spherical_inverse_case(
     else:
         spectral_cov = torch.ones((1, 1), dtype=torch.float64)
     spectral_precision = torch.linalg.inv(spectral_cov)
-    spectral_factor = torch.linalg.cholesky(spectral_precision).to(dtype=joint_truth.dtype)
+    spectral_factor = torch.linalg.cholesky(spectral_precision).to(
+        dtype=joint_truth.dtype
+    )
     ell = torch.arange(joint_lmax + 1, dtype=torch.float64)
     cls = 5.0 / torch.square(ell + 1.0) + 0.1
     harmonic_diag = harmonic_cl_diagonal(
@@ -1563,7 +1702,9 @@ def evaluate_torchsky_multiband_spherical_inverse_case(
         targets = []
         band_center = float(band_values[band_idx].item())
         for obs_idx, item in enumerate(observations):
-            nearest = int(torch.argmin(torch.abs(band_values - float(item.wavelength))).item())
+            nearest = int(
+                torch.argmin(torch.abs(band_values - float(item.wavelength))).item()
+            )
             if nearest != band_idx:
                 continue
             offset_scale = 0.2 * float(obs_idx)
@@ -1800,7 +1941,9 @@ def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "status": "INFO",
                 }
             )
-        smooth = [row for row in case_rows if row["variant"] in _SMOOTH_RECONSTRUCTION_KERNELS]
+        smooth = [
+            row for row in case_rows if row["variant"] in _SMOOTH_RECONSTRUCTION_KERNELS
+        ]
         if smooth:
             best_smooth = min(
                 smooth,
@@ -1813,9 +1956,13 @@ def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "method": "torchsky_recommendation",
                     "profile": "smooth_reconstruction",
                     "recommended_variant": best_smooth["variant"],
-                    "recommended_reconstruction_rmse": best_smooth["reconstruction_rmse"],
+                    "recommended_reconstruction_rmse": best_smooth[
+                        "reconstruction_rmse"
+                    ],
                     "recommended_time_ms": best_smooth["time_ms"],
-                    "recommended_signal_to_residual_db": best_smooth["signal_to_residual_db"],
+                    "recommended_signal_to_residual_db": best_smooth[
+                        "signal_to_residual_db"
+                    ],
                     "projection": best_smooth["projection"],
                     "field_model": best_smooth["field_model"],
                     "note": "Best smooth reconstruction kernel on this case",
@@ -1856,7 +2003,9 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="torchsky_multifield_truth_") as tmp:
         tmpdir = Path(tmp)
-        kernels = [part.strip() for part in args.torchsky_kernels.split(",") if part.strip()]
+        kernels = [
+            part.strip() for part in args.torchsky_kernels.split(",") if part.strip()
+        ]
         cases = [part.strip() for part in args.cases.split(",") if part.strip()]
         for case in cases:
             for kernel in kernels:
@@ -1864,7 +2013,9 @@ def main() -> int:
                     evaluate_torchsky_case(
                         tmpdir,
                         case=case,
-                        size=None if args.width is not None or args.height is not None else args.size,
+                        size=None
+                        if args.width is not None or args.height is not None
+                        else args.size,
                         width=args.width,
                         height=args.height,
                         seed=args.seed,
@@ -1877,7 +2028,9 @@ def main() -> int:
                     evaluate_torchsky_multiband_spherical_inverse_case(
                         tmpdir,
                         case=case,
-                        size=None if args.width is not None or args.height is not None else args.size,
+                        size=None
+                        if args.width is not None or args.height is not None
+                        else args.size,
                         width=args.width,
                         height=args.height,
                         seed=args.seed,

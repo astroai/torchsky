@@ -49,10 +49,7 @@ def resample_translation_fft2d(
     phase = torch.exp(
         -2j
         * math.pi
-        * (
-            ky.view(-1, 1) * float(shift_y_pix)
-            + kx.view(1, -1) * float(shift_x_pix)
-        )
+        * (ky.view(-1, 1) * float(shift_y_pix) + kx.view(1, -1) * float(shift_x_pix))
     ).to(comp)
     spectrum = torch.fft.fft2(img_c)
     shifted = torch.fft.ifft2(spectrum * phase)

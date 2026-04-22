@@ -165,7 +165,9 @@ def _observation_summaries(
                 "spectral_max": observation.spectral_max,
                 "rmse": _masked_rmse(residual, support),
                 "mae": _masked_mae(residual, support),
-                "mean_weight": float(weight[support].mean().item()) if bool(support.any()) else 0.0,
+                "mean_weight": float(weight[support].mean().item())
+                if bool(support.any())
+                else 0.0,
             }
         )
     return out
@@ -213,7 +215,9 @@ def _format_markdown(summary: dict[str, Any]) -> str:
     )
     for row in summary["observations"]:
         band = row["band_name"] if row["band_name"] is not None else "-"
-        wave = row["wavelength"] if row["wavelength"] is not None else row["spectral_min"]
+        wave = (
+            row["wavelength"] if row["wavelength"] is not None else row["spectral_min"]
+        )
         lines.append(
             f"| {row['observation_index']} | {band} | {float(wave):.1f} | {row['rmse']:.6f} | {row['mae']:.6f} | {row['mean_weight']:.6f} |"
         )
@@ -224,7 +228,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--case",
-        choices=("tan_field_fit_exact_transmission", "tpv_field_fit_deep_multiband_exact"),
+        choices=(
+            "tan_field_fit_exact_transmission",
+            "tpv_field_fit_deep_multiband_exact",
+        ),
         required=True,
     )
     parser.add_argument(
@@ -240,16 +247,24 @@ def main() -> int:
     parser.add_argument("--spatial-frequencies", type=int, default=None)
     parser.add_argument("--spectral-frequencies", type=int, default=None)
     parser.add_argument("--num-fourier-frequencies", type=int, default=None)
-    parser.add_argument("--json-out", type=Path, default=Path("/tmp/torchsky_field_fit_residuals.json"))
-    parser.add_argument("--markdown-out", type=Path, default=Path("/tmp/torchsky_field_fit_residuals.md"))
+    parser.add_argument(
+        "--json-out", type=Path, default=Path("/tmp/torchsky_field_fit_residuals.json")
+    )
+    parser.add_argument(
+        "--markdown-out",
+        type=Path,
+        default=Path("/tmp/torchsky_field_fit_residuals.md"),
+    )
     args = parser.parse_args()
 
     spec = field_bench._build_case_specs(args.size)[args.case]
     with tempfile.TemporaryDirectory(prefix="torchsky-field-fit-resid-") as tmpdir_str:
-        observations, image_observations, truth_cube = field_bench._simulate_observations(
-            spec,
-            seed=args.seed,
-            tmpdir=Path(tmpdir_str),
+        observations, image_observations, truth_cube = (
+            field_bench._simulate_observations(
+                spec,
+                seed=args.seed,
+                tmpdir=Path(tmpdir_str),
+            )
         )
         product = plan_map_product(
             image_observations,
@@ -263,7 +278,9 @@ def main() -> int:
             resampling_kernel="bilinear",
         )
         domain = estimate_field_domain(observations)
-        model_kwargs = field_bench._field_model_kwargs_for_case(args.model_kind, case=args.case)
+        model_kwargs = field_bench._field_model_kwargs_for_case(
+            args.model_kind, case=args.case
+        )
         if args.hidden_dim is not None:
             model_kwargs["hidden_dim"] = int(args.hidden_dim)
         if args.hidden_layers is not None:
@@ -274,7 +291,9 @@ def main() -> int:
             if args.model_kind == "sky_encoder_mlp":
                 model_kwargs["spectral_frequencies"] = int(args.spectral_frequencies)
             else:
-                model_kwargs["num_spectral_frequencies"] = int(args.spectral_frequencies)
+                model_kwargs["num_spectral_frequencies"] = int(
+                    args.spectral_frequencies
+                )
         if args.num_fourier_frequencies is not None:
             model_kwargs["num_fourier_frequencies"] = int(args.num_fourier_frequencies)
         default_model_kwargs = field_bench._field_model_kwargs_for_case(
@@ -291,7 +310,9 @@ def main() -> int:
             model = SpectralBasisField(domain, **model_kwargs)
         else:
             model = SkyEncoderMLPField(domain, **model_kwargs)
-        fit_kwargs = field_bench._field_fit_kwargs_for_model(args.model_kind, case=args.case)
+        fit_kwargs = field_bench._field_fit_kwargs_for_model(
+            args.model_kind, case=args.case
+        )
         torch.manual_seed(int(args.seed) + 999)
         warmup_model = field_bench._make_field_model_for_case(
             args.model_kind,
@@ -333,9 +354,13 @@ def main() -> int:
                 "steps": int(args.steps),
                 "model_kwargs": model_kwargs,
             },
-            "coadd_metrics": field_bench.evaluate_map_product(coadd_product, truth_cube),
+            "coadd_metrics": field_bench.evaluate_map_product(
+                coadd_product, truth_cube
+            ),
             "coadd_support_metrics": coadd_support_metrics,
-            "field_metrics": field_bench.evaluate_map_product(field_product, truth_cube),
+            "field_metrics": field_bench.evaluate_map_product(
+                field_product, truth_cube
+            ),
             "field_support_metrics": field_support_metrics,
             "bands": _band_summaries(
                 truth_cube=truth_cube.to(dtype=torch.float32),

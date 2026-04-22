@@ -70,7 +70,11 @@ from torchsky.map import (  # noqa: E402
 
 
 def _skip_payload(reason: str) -> dict[str, Any]:
-    return {"suite": "smacs0723_strainer_transfer", "status": "skipped", "reason": reason}
+    return {
+        "suite": "smacs0723_strainer_transfer",
+        "status": "skipped",
+        "reason": reason,
+    }
 
 
 def _fit_ms(fn: Any) -> tuple[Any, float]:
@@ -84,7 +88,9 @@ def main() -> int:
     parser.add_argument("--reference-path", type=Path, default=DEFAULT_REFERENCE_PATH)
     parser.add_argument("--exposures", default="")
     parser.add_argument("--crop-size", type=int, default=128)
-    parser.add_argument("--crop-mode", choices=("center", "best_overlap"), default="best_overlap")
+    parser.add_argument(
+        "--crop-mode", choices=("center", "best_overlap"), default="best_overlap"
+    )
     parser.add_argument("--overlap-step", type=int, default=8)
     parser.add_argument(
         "--input-product",
@@ -125,7 +131,9 @@ def main() -> int:
         return 0
 
     if args.exposures.strip():
-        exposure_paths = [Path(p.strip()) for p in args.exposures.split(",") if p.strip()]
+        exposure_paths = [
+            Path(p.strip()) for p in args.exposures.split(",") if p.strip()
+        ]
     else:
         exposure_paths = _discover_exposure_paths(
             DEFAULT_EXPOSURE_DIR,
@@ -152,7 +160,9 @@ def main() -> int:
     ) as tmp:
         tmpdir = Path(tmp)
         image_observations: list[ImageObservation] = []
-        raw_field_inputs: list[tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]] = []
+        raw_field_inputs: list[
+            tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]
+        ] = []
         for exposure_path in exposure_paths:
             science_path, weight_path, mask_path = _prepare_aux_files(
                 exposure_path,
@@ -176,7 +186,12 @@ def main() -> int:
             weight = np.zeros_like(err, dtype=np.float32)
             weight[valid] = 1.0 / np.square(err[valid])
             raw_field_inputs.append(
-                (science, weight, valid.astype(np.float32), dict(_sci_header(exposure_path)))
+                (
+                    science,
+                    weight,
+                    valid.astype(np.float32),
+                    dict(_sci_header(exposure_path)),
+                )
             )
 
         if args.crop_mode == "best_overlap":
@@ -194,7 +209,9 @@ def main() -> int:
             ref_crop, x0, y0 = _center_cutout(ref_data, args.crop_size)
         target_header = _cutout_header(ref_header, x0, y0, args.crop_size)
         field_target_header = (
-            _linearize_sip_header(target_header) if args.linearize_target_sip else dict(target_header)
+            _linearize_sip_header(target_header)
+            if args.linearize_target_sip
+            else dict(target_header)
         )
 
         field_observations: list[FieldObservation] = []

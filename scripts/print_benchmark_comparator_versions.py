@@ -20,11 +20,21 @@ def _try_version(dist_name: str, import_name: str | None = None) -> dict[str, An
     try:
         m = importlib.import_module(mod_name)
     except Exception as exc:
-        return {"name": dist_name, "import": mod_name, "status": "missing", "error": str(exc)}
+        return {
+            "name": dist_name,
+            "import": mod_name,
+            "status": "missing",
+            "error": str(exc),
+        }
     ver = getattr(m, "__version__", None)
     if ver is None and hasattr(m, "version"):
         ver = getattr(m.version, "version", None)
-    return {"name": dist_name, "import": mod_name, "status": "ok", "version": str(ver) if ver is not None else "unknown"}
+    return {
+        "name": dist_name,
+        "import": mod_name,
+        "status": "ok",
+        "version": str(ver) if ver is not None else "unknown",
+    }
 
 
 def main() -> int:
@@ -69,7 +79,9 @@ def main() -> int:
         "python": sys.version.split()[0],
         "executable": sys.executable,
         "git_sha": sha,
-        "TORCHSKY_env": {k: os.environ[k] for k in sorted(os.environ) if k.startswith("TORCHSKY_")},
+        "TORCHSKY_env": {
+            k: os.environ[k] for k in sorted(os.environ) if k.startswith("TORCHSKY_")
+        },
         "comparators": pkgs,
     }
 

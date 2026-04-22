@@ -94,7 +94,9 @@ def main() -> int:
         help="Optional case-insensitive filename substring filter applied to auto-discovered exposures",
     )
     parser.add_argument("--crop-size", type=int, default=512)
-    parser.add_argument("--crop-mode", choices=("center", "best_overlap"), default="best_overlap")
+    parser.add_argument(
+        "--crop-mode", choices=("center", "best_overlap"), default="best_overlap"
+    )
     parser.add_argument(
         "--overlap-step",
         type=int,
@@ -192,13 +194,21 @@ def main() -> int:
             rows.append(
                 {
                     "n_exposures": len(subset),
-                    "support_rmse": float(np.sqrt(np.mean(diff * diff))) if diff.size else float("nan"),
-                    "support_mae": float(np.mean(np.abs(diff))) if diff.size else float("nan"),
+                    "support_rmse": float(np.sqrt(np.mean(diff * diff)))
+                    if diff.size
+                    else float("nan"),
+                    "support_mae": float(np.mean(np.abs(diff)))
+                    if diff.size
+                    else float("nan"),
                     "support_flux_ratio": (
-                        float(np.sum(pred[metric_mask]) / np.sum(ref_crop[metric_mask])) if diff.size else float("nan")
+                        float(np.sum(pred[metric_mask]) / np.sum(ref_crop[metric_mask]))
+                        if diff.size
+                        else float("nan")
                     ),
                     "coverage_frac": float(metric_mask.mean()),
-                    "max_overlap": int(result.overlap_count.max().item()) if result.overlap_count is not None else 0,
+                    "max_overlap": int(result.overlap_count.max().item())
+                    if result.overlap_count is not None
+                    else 0,
                     "time_ms": dt * 1000.0,
                     "crop_mode": args.crop_mode,
                     "crop_x0": int(x0),

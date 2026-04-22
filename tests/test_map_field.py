@@ -28,7 +28,11 @@ from torchsky.map import (
 )
 from torchsky.spectral import SpectralAxis
 from torchsky.map.field import _noise_pretrain_field_model
-from torchsky.map.field.core import _BaseFieldModel, _HashGridEncoder, _bandpass_quadrature
+from torchsky.map.field.core import (
+    _BaseFieldModel,
+    _HashGridEncoder,
+    _bandpass_quadrature,
+)
 
 
 def _tan_header(
@@ -75,7 +79,9 @@ class _ConstantField(_BaseFieldModel):
 class _AffineSpectralField(_BaseFieldModel):
     def __init__(self, domain: FieldDomain, offset: float, slope: float) -> None:
         super().__init__(domain)
-        self.offset = torch.nn.Parameter(torch.tensor(float(offset), dtype=torch.float32))
+        self.offset = torch.nn.Parameter(
+            torch.tensor(float(offset), dtype=torch.float32)
+        )
         self.slope = torch.nn.Parameter(torch.tensor(float(slope), dtype=torch.float32))
 
     def forward(
@@ -154,10 +160,20 @@ class _GaussianSpotField(_BaseFieldModel):
     ) -> torch.Tensor:
         del wavelength_angstrom, forward_context
         sigma = torch.tensor(self.sigma_deg, device=ra_deg.device, dtype=ra_deg.dtype)
-        dx = (ra_deg - self.center_ra_deg.to(device=ra_deg.device, dtype=ra_deg.dtype)) / sigma
-        dy = (dec_deg - self.center_dec_deg.to(device=dec_deg.device, dtype=dec_deg.dtype)) / sigma
-        amplitude = self.log_amplitude.to(device=ra_deg.device, dtype=ra_deg.dtype).exp()
-        return self.amplitude_sign * amplitude * torch.exp(-0.5 * (dx.square() + dy.square()))
+        dx = (
+            ra_deg - self.center_ra_deg.to(device=ra_deg.device, dtype=ra_deg.dtype)
+        ) / sigma
+        dy = (
+            dec_deg - self.center_dec_deg.to(device=dec_deg.device, dtype=dec_deg.dtype)
+        ) / sigma
+        amplitude = self.log_amplitude.to(
+            device=ra_deg.device, dtype=ra_deg.dtype
+        ).exp()
+        return (
+            self.amplitude_sign
+            * amplitude
+            * torch.exp(-0.5 * (dx.square() + dy.square()))
+        )
 
 
 def test_render_field_observation_changes_with_bandpass() -> None:
@@ -446,10 +462,9 @@ def test_field_component_anchor_loss_supports_astrometric_pixel_targets() -> Non
         x_pix.to(dtype=torch.float64),
         y_pix.to(dtype=torch.float64),
     )
-    target = (
-        100.0 * (ra_deg.to(dtype=torch.float32) - float(domain.center_ra_deg))
-        + 200.0 * (dec_deg.to(dtype=torch.float32) - float(domain.center_dec_deg))
-    )
+    target = 100.0 * (
+        ra_deg.to(dtype=torch.float32) - float(domain.center_ra_deg)
+    ) + 200.0 * (dec_deg.to(dtype=torch.float32) - float(domain.center_dec_deg))
     sample_term = FieldComponentAnchorTerm(
         observation=observation,
         target_values=target,
@@ -464,7 +479,9 @@ def test_field_component_anchor_loss_supports_astrometric_pixel_targets() -> Non
         num_spectral_samples=1,
     )
 
-    torch.testing.assert_close(loss, torch.zeros((), dtype=torch.float32), atol=1.0e-6, rtol=0.0)
+    torch.testing.assert_close(
+        loss, torch.zeros((), dtype=torch.float32), atol=1.0e-6, rtol=0.0
+    )
 
 
 def test_field_component_centroid_anchor_loss_matches_world_target() -> None:
@@ -1009,8 +1026,12 @@ def test_component_centroid_anchor_terms_improve_shared_geometry() -> None:
         plain.model.component_models[0].center_dec_deg.detach().to(dtype=torch.float64),
     )
     anchored_x, anchored_y = WCS(template.header).world_to_pixel(
-        anchored.model.component_models[0].center_ra_deg.detach().to(dtype=torch.float64),
-        anchored.model.component_models[0].center_dec_deg.detach().to(dtype=torch.float64),
+        anchored.model.component_models[0]
+        .center_ra_deg.detach()
+        .to(dtype=torch.float64),
+        anchored.model.component_models[0]
+        .center_dec_deg.detach()
+        .to(dtype=torch.float64),
     )
     target_xf = float(truth_x.item())
     target_yf = float(truth_y.item())
@@ -1056,8 +1077,12 @@ def test_fit_field_model_reduces_loss_and_renders_cube() -> None:
         transmission_sigma=110.0,
         psf_sigma_pix=0.6,
     )
-    obs_a = render_field_observation(truth_model, template_a, num_spectral_samples=7).detach()
-    obs_b = render_field_observation(truth_model, template_b, num_spectral_samples=7).detach()
+    obs_a = render_field_observation(
+        truth_model, template_a, num_spectral_samples=7
+    ).detach()
+    obs_b = render_field_observation(
+        truth_model, template_b, num_spectral_samples=7
+    ).detach()
     observations = [
         FieldObservation(
             image=obs_a,
@@ -1146,7 +1171,9 @@ def test_fit_field_model_supports_per_band_reduction() -> None:
     ]
     observations = []
     for idx, template in enumerate(templates):
-        image = render_field_observation(truth_model, template, num_spectral_samples=1).detach()
+        image = render_field_observation(
+            truth_model, template, num_spectral_samples=1
+        ).detach()
         weight = torch.full_like(image, 10.0 if idx < 2 else 1.0)
         observations.append(
             FieldObservation(
@@ -1193,7 +1220,9 @@ def test_fit_field_model_ignores_nonfinite_masked_pixels() -> None:
         transmission_sigma=None,
         band_name="b0",
     )
-    image = render_field_observation(truth_model, template, num_spectral_samples=1).detach()
+    image = render_field_observation(
+        truth_model, template, num_spectral_samples=1
+    ).detach()
     image_with_nan = image.clone()
     image_with_nan[0, 0] = float("nan")
     weight = torch.ones_like(image)
@@ -1252,7 +1281,9 @@ def test_fit_field_model_supports_band_balanced_patch_training() -> None:
             transmission_sigma=None,
             band_name=f"b{idx // 2}",
         )
-        image = render_field_observation(truth_model, template, num_spectral_samples=1).detach()
+        image = render_field_observation(
+            truth_model, template, num_spectral_samples=1
+        ).detach()
         observations.append(
             FieldObservation(
                 image=image,
@@ -1468,7 +1499,9 @@ def test_fit_field_model_supports_streaming_band_balanced_patch_training() -> No
             transmission_sigma=None,
             band_name=f"b{idx // 2}",
         )
-        image = render_field_observation(truth_model, template, num_spectral_samples=1).detach()
+        image = render_field_observation(
+            truth_model, template, num_spectral_samples=1
+        ).detach()
         observations.append(
             FieldObservation(
                 image=image,
@@ -1690,7 +1723,9 @@ def test_fit_field_model_supports_downsampled_context_training() -> None:
             transmission_sigma=None,
             band_name=f"b{int(wavelength)}",
         )
-        image = render_field_observation(truth_model, template, num_spectral_samples=1).detach()
+        image = render_field_observation(
+            truth_model, template, num_spectral_samples=1
+        ).detach()
         observations.append(
             FieldObservation(
                 image=image,
@@ -1741,7 +1776,9 @@ def test_fit_field_model_supports_spatial_smoothness_regularization() -> None:
         transmission_center=4840.0,
         transmission_sigma=100.0,
     )
-    image = render_field_observation(truth_model, template, num_spectral_samples=5).detach()
+    image = render_field_observation(
+        truth_model, template, num_spectral_samples=5
+    ).detach()
     observations = [
         FieldObservation(
             image=image,
@@ -1927,7 +1964,9 @@ def test_fit_field_model_supports_sphere_xyz_coordinates() -> None:
         transmission_sigma=180.0,
         psf_sigma_pix=0.5,
     )
-    image = render_field_observation(truth_model, template, num_spectral_samples=5).detach()
+    image = render_field_observation(
+        truth_model, template, num_spectral_samples=5
+    ).detach()
     observations = [
         FieldObservation(
             image=image,
@@ -1985,7 +2024,9 @@ def test_fourier_mlp_field_supports_charbonnier_fit() -> None:
         transmission_sigma=180.0,
         psf_sigma_pix=0.45,
     )
-    image = render_field_observation(truth_model, template, num_spectral_samples=5).detach()
+    image = render_field_observation(
+        truth_model, template, num_spectral_samples=5
+    ).detach()
     observations = [
         FieldObservation(
             image=image,
@@ -2314,7 +2355,9 @@ def test_sky_lambda_atlas_field_supports_exact_wavelength_fit() -> None:
     assert min(fit.loss_history) < fit.initial_loss
 
 
-def test_sky_lambda_structured_fields_bandpass_single_wavelength_matches_forward() -> None:
+def test_sky_lambda_structured_fields_bandpass_single_wavelength_matches_forward() -> (
+    None
+):
     domain = FieldDomain(
         center_ra_deg=150.0,
         center_dec_deg=2.0,
@@ -2457,7 +2500,9 @@ def test_operator_constrained_feature_field_supports_exact_wavelength_fit() -> N
     assert min(fit.loss_history) < fit.initial_loss
 
 
-def test_operator_constrained_feature_field_observability_weights_track_overlap() -> None:
+def test_operator_constrained_feature_field_observability_weights_track_overlap() -> (
+    None
+):
     domain = FieldDomain(
         center_ra_deg=150.0,
         center_dec_deg=2.0,
@@ -2545,7 +2590,9 @@ def test_fit_field_model_supports_operator_constrained_penalties() -> None:
             transmission_sigma=None,
             band_name=f"b{int(wavelength)}",
         )
-        image = render_field_observation(truth_model, template, num_spectral_samples=1).detach()
+        image = render_field_observation(
+            truth_model, template, num_spectral_samples=1
+        ).detach()
         observations.append(
             FieldObservation(
                 image=image,
@@ -2841,7 +2888,9 @@ def test_sky_encoder_bandpass_field_supports_broad_band_fit() -> None:
         transmission_sigma=280.0,
         psf_sigma_pix=0.45,
     )
-    image = render_field_observation(truth_model, template, num_spectral_samples=7).detach()
+    image = render_field_observation(
+        truth_model, template, num_spectral_samples=7
+    ).detach()
     observations = [
         FieldObservation(
             image=image,
@@ -2893,7 +2942,9 @@ def test_sky_encoder_mlp_field_supports_charbonnier_fit() -> None:
         transmission_sigma=180.0,
         psf_sigma_pix=0.45,
     )
-    image = render_field_observation(truth_model, template, num_spectral_samples=5).detach()
+    image = render_field_observation(
+        truth_model, template, num_spectral_samples=5
+    ).detach()
     observations = [
         FieldObservation(
             image=image,
@@ -2941,7 +2992,9 @@ def test_hashgrid_mlp_field_supports_charbonnier_fit() -> None:
         transmission_sigma=180.0,
         psf_sigma_pix=0.4,
     )
-    image = render_field_observation(truth_model, template, num_spectral_samples=5).detach()
+    image = render_field_observation(
+        truth_model, template, num_spectral_samples=5
+    ).detach()
     observations = [
         FieldObservation(
             image=image,
@@ -3108,7 +3161,9 @@ def test_hashgrid_resmlp_field_supports_charbonnier_fit() -> None:
         transmission_sigma=180.0,
         psf_sigma_pix=0.4,
     )
-    image = render_field_observation(truth_model, template, num_spectral_samples=5).detach()
+    image = render_field_observation(
+        truth_model, template, num_spectral_samples=5
+    ).detach()
     observations = [
         FieldObservation(
             image=image,
@@ -3157,7 +3212,9 @@ def test_sky_encoder_resmlp_field_supports_charbonnier_fit() -> None:
         transmission_sigma=180.0,
         psf_sigma_pix=0.45,
     )
-    image = render_field_observation(truth_model, template, num_spectral_samples=5).detach()
+    image = render_field_observation(
+        truth_model, template, num_spectral_samples=5
+    ).detach()
     observations = [
         FieldObservation(
             image=image,
@@ -3187,7 +3244,9 @@ def test_sky_encoder_resmlp_field_supports_charbonnier_fit() -> None:
     assert min(fit.loss_history) < fit.initial_loss
 
 
-def test_fit_field_model_supports_exact_wavelength_observations_with_cosine_schedule() -> None:
+def test_fit_field_model_supports_exact_wavelength_observations_with_cosine_schedule() -> (
+    None
+):
     torch.manual_seed(8642)
     truth_domain = FieldDomain(
         center_ra_deg=150.0,
@@ -3248,9 +3307,7 @@ def test_bandpass_quadrature_trapezoid_closer_than_uniform_for_quadratic() -> No
         spectral_max=1.0,
     )
     device = torch.device("cpu")
-    samples, weights = _bandpass_quadrature(
-        obs, num_spectral_samples=6, device=device
-    )
+    samples, weights = _bandpass_quadrature(obs, num_spectral_samples=6, device=device)
     lam2 = torch.square(samples)
     trap_est = float(torch.sum(weights * lam2).item())
     uniform_est = float(torch.mean(lam2).item())

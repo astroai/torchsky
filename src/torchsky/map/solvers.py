@@ -115,7 +115,9 @@ def _scene_state_tensor(scene: SceneRepresentation) -> Tensor:
             [torch.as_tensor(scene.alm_e), torch.as_tensor(scene.alm_b)],
             dim=0,
         )
-    raise TypeError("state-space identity operator requires a tensor-backed scene representation")
+    raise TypeError(
+        "state-space identity operator requires a tensor-backed scene representation"
+    )
 
 
 def _flatten_state(tensor: Tensor) -> Tensor:
@@ -172,7 +174,10 @@ def _apply_preconditioner(
         return vector
     if callable(preconditioner):
         return torch.as_tensor(preconditioner(vector))
-    return torch.as_tensor(preconditioner).to(dtype=vector.dtype, device=vector.device) * vector
+    return (
+        torch.as_tensor(preconditioner).to(dtype=vector.dtype, device=vector.device)
+        * vector
+    )
 
 
 @dataclass
@@ -307,11 +312,15 @@ class BoundObservationOperator:
             solution = torch.zeros_like(prototype)
         else:
             solution = torch.as_tensor(initial_solution).clone()
-        step = float(step_size) if step_size is not None else self.recommended_step_size(
-            data_t,
-            initial_probe=solution,
-            iterations=scale_iterations,
-            safety=step_safety,
+        step = (
+            float(step_size)
+            if step_size is not None
+            else self.recommended_step_size(
+                data_t,
+                initial_probe=solution,
+                iterations=scale_iterations,
+                safety=step_safety,
+            )
         )
         if step <= 0.0:
             raise ValueError("step_size must be positive")
@@ -361,7 +370,9 @@ class BoundObservationOperator:
         rz_old = _inner_product(residual, preconditioned_residual).real
         history: list[float] = []
         for _ in range(int(iterations)):
-            image_residual = data_t.to(dtype=self.apply(solution).dtype) - self.apply(solution)
+            image_residual = data_t.to(dtype=self.apply(solution).dtype) - self.apply(
+                solution
+            )
             history.append(float(torch.linalg.vector_norm(image_residual).item()))
             ap = _normal_action(direction)
             denom = _inner_product(direction, ap).real
@@ -370,14 +381,16 @@ class BoundObservationOperator:
             alpha = rz_old / denom
             solution = solution + alpha.to(dtype=solution.dtype) * direction
             residual = residual - alpha.to(dtype=residual.dtype) * ap
-            preconditioned_residual = _apply_preconditioner(preconditioner, residual).to(
-                dtype=residual.dtype
-            )
+            preconditioned_residual = _apply_preconditioner(
+                preconditioner, residual
+            ).to(dtype=residual.dtype)
             rz_new = _inner_product(residual, preconditioned_residual).real
             if float(torch.sqrt(torch.clamp_min(rz_new, 0.0)).item()) == 0.0:
                 break
             beta = rz_new / rz_old
-            direction = preconditioned_residual + beta.to(dtype=direction.dtype) * direction
+            direction = (
+                preconditioned_residual + beta.to(dtype=direction.dtype) * direction
+            )
             rz_old = rz_new
         return LinearSolveResult(
             solution=solution,
@@ -393,7 +406,9 @@ class BoundObservationOperatorSet:
 
     def __post_init__(self) -> None:
         if len(self.operators) == 0:
-            raise ValueError("BoundObservationOperatorSet requires at least one operator")
+            raise ValueError(
+                "BoundObservationOperatorSet requires at least one operator"
+            )
 
     def apply(
         self,
@@ -428,7 +443,9 @@ class BoundObservationOperatorSet:
             raise ValueError("data count must match operator count")
         predictions = self.apply(scene)
         weighted_predictions = self.apply_noise_model(predictions)
-        weighted_data = self.apply_noise_model(tuple(torch.as_tensor(item) for item in data))
+        weighted_data = self.apply_noise_model(
+            tuple(torch.as_tensor(item) for item in data)
+        )
         return MultiObservationNormalEquationProbe(
             predictions=predictions,
             weighted_predictions=weighted_predictions,
@@ -450,7 +467,9 @@ class BoundObservationOperatorSet:
             raise ValueError("data count must match operator count")
         probe = initial_probe
         if probe is None:
-            weighted_data = self.apply_noise_model(tuple(torch.as_tensor(item) for item in data))
+            weighted_data = self.apply_noise_model(
+                tuple(torch.as_tensor(item) for item in data)
+            )
             probe = self.adjoint(weighted_data)
         state = _normalized_probe(torch.as_tensor(probe))
         estimate = 0.0
@@ -491,7 +510,9 @@ class BoundObservationOperatorSet:
         prototype = torch.as_tensor(
             initial_probe
             if initial_probe is not None
-            else self.adjoint(self.apply_noise_model(tuple(torch.as_tensor(item) for item in data)))
+            else self.adjoint(
+                self.apply_noise_model(tuple(torch.as_tensor(item) for item in data))
+            )
         )
         if int(prototype.numel()) > int(max_entries):
             raise ValueError(
@@ -531,11 +552,15 @@ class BoundObservationOperatorSet:
             solution = torch.zeros_like(prototype)
         else:
             solution = torch.as_tensor(initial_solution).clone()
-        step = float(step_size) if step_size is not None else self.recommended_step_size(
-            data_t,
-            initial_probe=solution,
-            iterations=scale_iterations,
-            safety=step_safety,
+        step = (
+            float(step_size)
+            if step_size is not None
+            else self.recommended_step_size(
+                data_t,
+                initial_probe=solution,
+                iterations=scale_iterations,
+                safety=step_safety,
+            )
         )
         if step <= 0.0:
             raise ValueError("step_size must be positive")
@@ -547,10 +572,7 @@ class BoundObservationOperatorSet:
             )
             residual_norm = torch.sqrt(
                 torch.stack(
-                    [
-                        torch.sum(torch.abs(residual).square())
-                        for residual in residuals
-                    ]
+                    [torch.sum(torch.abs(residual).square()) for residual in residuals]
                 ).sum()
             )
             history.append(float(residual_norm.item()))
@@ -604,7 +626,9 @@ class BoundObservationOperatorSet:
                 for datum, prediction in zip(data_t, predictions, strict=True)
             )
             residual_norm = torch.sqrt(
-                torch.stack([torch.sum(torch.abs(resid).square()) for resid in residuals]).sum()
+                torch.stack(
+                    [torch.sum(torch.abs(resid).square()) for resid in residuals]
+                ).sum()
             )
             history.append(float(residual_norm.item()))
             ap = _normal_action(direction)
@@ -614,14 +638,16 @@ class BoundObservationOperatorSet:
             alpha = rz_old / denom
             solution = solution + alpha.to(dtype=solution.dtype) * direction
             residual = residual - alpha.to(dtype=residual.dtype) * ap
-            preconditioned_residual = _apply_preconditioner(preconditioner, residual).to(
-                dtype=residual.dtype
-            )
+            preconditioned_residual = _apply_preconditioner(
+                preconditioner, residual
+            ).to(dtype=residual.dtype)
             rz_new = _inner_product(residual, preconditioned_residual).real
             if float(torch.sqrt(torch.clamp_min(rz_new, 0.0)).item()) == 0.0:
                 break
             beta = rz_new / rz_old
-            direction = preconditioned_residual + beta.to(dtype=direction.dtype) * direction
+            direction = (
+                preconditioned_residual + beta.to(dtype=direction.dtype) * direction
+            )
             rz_old = rz_new
         return LinearSolveResult(
             solution=solution,
@@ -639,7 +665,9 @@ def compose_bound_operators(
         elif isinstance(part, BoundObservationOperatorSet):
             operators.extend(part.operators)
         else:
-            raise TypeError("compose_bound_operators accepts bound operators or bound-operator sets")
+            raise TypeError(
+                "compose_bound_operators accepts bound operators or bound-operator sets"
+            )
     return BoundObservationOperatorSet(tuple(operators))
 
 
@@ -658,17 +686,23 @@ def build_state_identity_operator(
         shape=(1, int(state.numel())),
     )
 
-    def _apply_operator(scene: SceneRepresentation, target_spec: TargetRenderSpec) -> Tensor:
+    def _apply_operator(
+        scene: SceneRepresentation, target_spec: TargetRenderSpec
+    ) -> Tensor:
         del target_spec
         tensor = _scene_state_tensor(scene)
         if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
-            raise ValueError("state-space identity operator received a scene with incompatible shape")
+            raise ValueError(
+                "state-space identity operator received a scene with incompatible shape"
+            )
         return tensor
 
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
         if tuple(int(v) for v in mapped.shape) != tuple(int(v) for v in state.shape):
-            raise ValueError("state-space identity adjoint received data with incompatible shape")
+            raise ValueError(
+                "state-space identity adjoint received data with incompatible shape"
+            )
         return mapped
 
     return BoundObservationOperator(
@@ -691,7 +725,9 @@ def build_state_subspace_operator(
     def _extract(scene: SceneRepresentation | nn.Module | Tensor) -> Tensor:
         tensor = _scene_state_tensor(as_scene_representation(scene))
         if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
-            raise ValueError("subspace operator received a scene with incompatible shape")
+            raise ValueError(
+                "subspace operator received a scene with incompatible shape"
+            )
         subset = tensor.index_select(0, indices.to(device=tensor.device))
         if squeeze:
             return subset[0]
@@ -711,11 +747,17 @@ def build_state_subspace_operator(
         expected = (int(indices.numel()), *tuple(int(v) for v in state.shape[1:]))
         if tuple(int(v) for v in adj.shape) != expected:
             raise ValueError("subspace adjoint returned an incompatible tensor")
-        out.index_copy_(0, indices.to(device=out.device), adj.to(dtype=state.dtype, device=out.device))
+        out.index_copy_(
+            0,
+            indices.to(device=out.device),
+            adj.to(dtype=state.dtype, device=out.device),
+        )
         return out
 
     def _wrap_bound(operator: BoundObservationOperator) -> BoundObservationOperator:
-        def _apply_operator(scene: SceneRepresentation, target_spec: TargetRenderSpec) -> Tensor:
+        def _apply_operator(
+            scene: SceneRepresentation, target_spec: TargetRenderSpec
+        ) -> Tensor:
             del target_spec
             return operator.apply(_extract(scene))
 
@@ -733,8 +775,12 @@ def build_state_subspace_operator(
     if isinstance(base_operator, BoundObservationOperator):
         return _wrap_bound(base_operator)
     if isinstance(base_operator, BoundObservationOperatorSet):
-        return BoundObservationOperatorSet(tuple(_wrap_bound(op) for op in base_operator.operators))
-    raise TypeError("base_operator must be a BoundObservationOperator or BoundObservationOperatorSet")
+        return BoundObservationOperatorSet(
+            tuple(_wrap_bound(op) for op in base_operator.operators)
+        )
+    raise TypeError(
+        "base_operator must be a BoundObservationOperator or BoundObservationOperatorSet"
+    )
 
 
 def build_state_component_mixture_operator(
@@ -746,7 +792,9 @@ def build_state_component_mixture_operator(
 ) -> BoundObservationOperator | BoundObservationOperatorSet:
     state = torch.as_tensor(reference_state)
     if state.ndim < 2:
-        raise ValueError("component mixture operator requires a reference_state with a leading component axis")
+        raise ValueError(
+            "component mixture operator requires a reference_state with a leading component axis"
+        )
     component_idx = torch.as_tensor(components, dtype=torch.int64).reshape(-1)
     if int(component_idx.numel()) == 0:
         raise ValueError("components must select at least one latent component")
@@ -771,7 +819,9 @@ def build_state_component_mixture_operator(
     def _mix(scene: SceneRepresentation | nn.Module | Tensor) -> Tensor:
         tensor = _scene_state_tensor(as_scene_representation(scene))
         if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
-            raise ValueError("component mixture operator received a scene with incompatible shape")
+            raise ValueError(
+                "component mixture operator received a scene with incompatible shape"
+            )
         subset = tensor.index_select(0, component_idx.to(device=tensor.device))
         coeffs = weights_t.to(dtype=subset.dtype, device=subset.device).view(
             int(component_idx.numel()),
@@ -783,7 +833,9 @@ def build_state_component_mixture_operator(
         adj = torch.as_tensor(adjoint_tensor)
         expected = tuple(int(v) for v in state.shape[1:])
         if tuple(int(v) for v in adj.shape) != expected:
-            raise ValueError("component mixture adjoint returned an incompatible tensor")
+            raise ValueError(
+                "component mixture adjoint returned an incompatible tensor"
+            )
         out = torch.zeros_like(state)
         coeffs = torch.conj(weights_t.to(dtype=adj.dtype, device=adj.device))
         for idx, weight in zip(component_idx.tolist(), coeffs, strict=True):
@@ -791,7 +843,9 @@ def build_state_component_mixture_operator(
         return out
 
     def _wrap_bound(operator: BoundObservationOperator) -> BoundObservationOperator:
-        def _apply_operator(scene: SceneRepresentation, target_spec: TargetRenderSpec) -> Tensor:
+        def _apply_operator(
+            scene: SceneRepresentation, target_spec: TargetRenderSpec
+        ) -> Tensor:
             del target_spec
             return operator.apply(_mix(scene))
 
@@ -809,8 +863,12 @@ def build_state_component_mixture_operator(
     if isinstance(base_operator, BoundObservationOperator):
         return _wrap_bound(base_operator)
     if isinstance(base_operator, BoundObservationOperatorSet):
-        return BoundObservationOperatorSet(tuple(_wrap_bound(op) for op in base_operator.operators))
-    raise TypeError("base_operator must be a BoundObservationOperator or BoundObservationOperatorSet")
+        return BoundObservationOperatorSet(
+            tuple(_wrap_bound(op) for op in base_operator.operators)
+        )
+    raise TypeError(
+        "base_operator must be a BoundObservationOperator or BoundObservationOperatorSet"
+    )
 
 
 class SurveyInstrumentComponentMixer(nn.Module):
@@ -846,7 +904,9 @@ class SurveyInstrumentComponentMixer(nn.Module):
         self.surveys = tuple(str(name) for name in surveys)
         self.instruments = tuple(str(name) for name in instruments)
         ncomp = len(roles)
-        self.shared_weights = nn.Parameter(torch.zeros(ncomp, dtype=dtype, device=device))
+        self.shared_weights = nn.Parameter(
+            torch.zeros(ncomp, dtype=dtype, device=device)
+        )
         self.survey_weights = nn.Parameter(
             torch.zeros(len(self.surveys) + 1, ncomp, dtype=dtype, device=device)
         )
@@ -969,10 +1029,12 @@ class HarmonicComponentDecomposition(nn.Module):
         self.component_roles = tuple(str(role) for role in component_roles)
         ncomp = len(self.component_roles)
         self.coeff_real = nn.Parameter(
-            float(init_scale) * torch.randn(ncomp, self.nalm, dtype=dtype, device=device)
+            float(init_scale)
+            * torch.randn(ncomp, self.nalm, dtype=dtype, device=device)
         )
         self.coeff_imag = nn.Parameter(
-            float(init_scale) * torch.randn(ncomp, self.nalm, dtype=dtype, device=device)
+            float(init_scale)
+            * torch.randn(ncomp, self.nalm, dtype=dtype, device=device)
         )
         self.mixer = SurveyInstrumentComponentMixer(
             component_roles=self.component_roles,
@@ -1023,14 +1085,20 @@ class HarmonicComponentDecomposition(nn.Module):
             raise ValueError(
                 "state must have a leading component axis matching component_roles"
             )
-        role_names = (roles,) if isinstance(roles, str) else tuple(str(role) for role in roles)
+        role_names = (
+            (roles,) if isinstance(roles, str) else tuple(str(role) for role in roles)
+        )
         unknown = tuple(
-            role for role in role_names if role not in SurveyInstrumentComponentMixer._VALID_ROLES
+            role
+            for role in role_names
+            if role not in SurveyInstrumentComponentMixer._VALID_ROLES
         )
         if unknown:
             raise ValueError(f"unsupported component roles: {unknown!r}")
         selected = [
-            idx for idx, role in enumerate(self.component_roles) if role in set(role_names)
+            idx
+            for idx, role in enumerate(self.component_roles)
+            if role in set(role_names)
         ]
         if not selected:
             empty = state_t[:0]
@@ -1115,7 +1183,9 @@ class HarmonicComponentDecomposition(nn.Module):
             error_norm = torch.linalg.vector_norm(torch.as_tensor(error).reshape(-1))
             ref_norm = torch.linalg.vector_norm(torch.as_tensor(reference).reshape(-1))
             if float(ref_norm.item()) == 0.0:
-                return 0.0 if float(error_norm.item()) == 0.0 else float(error_norm.item())
+                return (
+                    0.0 if float(error_norm.item()) == 0.0 else float(error_norm.item())
+                )
             return float((error_norm / ref_norm).item())
 
         def _subspace_leakage(error: Tensor, basis: Tensor, reference: Tensor) -> float:
@@ -1136,7 +1206,9 @@ class HarmonicComponentDecomposition(nn.Module):
             proj_norm = torch.linalg.vector_norm(projected)
             ref_norm = torch.linalg.vector_norm(torch.as_tensor(reference).reshape(-1))
             if float(ref_norm.item()) == 0.0:
-                return 0.0 if float(proj_norm.item()) == 0.0 else float(proj_norm.item())
+                return (
+                    0.0 if float(proj_norm.item()) == 0.0 else float(proj_norm.item())
+                )
             return float((proj_norm / ref_norm).item())
 
         shared_error = shared_estimate - shared_truth
@@ -1144,16 +1216,22 @@ class HarmonicComponentDecomposition(nn.Module):
         calibration_transfer_stability = None
         if calibration_anchor is not None:
             anchor = torch.as_tensor(calibration_anchor)
-            if tuple(int(v) for v in anchor.shape) != tuple(int(v) for v in shared_truth.shape):
+            if tuple(int(v) for v in anchor.shape) != tuple(
+                int(v) for v in shared_truth.shape
+            ):
                 raise ValueError(
                     "calibration_anchor must match the aggregated shared-state shape"
                 )
             shared_for_anchor = shared_estimate
             anchor_ref = anchor
             if calibration_selector is not None:
-                selector_idx, _ = _canonical_subspace_indices(shared_truth, calibration_selector)
+                selector_idx, _ = _canonical_subspace_indices(
+                    shared_truth, calibration_selector
+                )
                 shared_for_anchor = shared_for_anchor.index_select(0, selector_idx)
-                anchor_ref = anchor_ref.index_select(0, selector_idx.to(device=anchor_ref.device))
+                anchor_ref = anchor_ref.index_select(
+                    0, selector_idx.to(device=anchor_ref.device)
+                )
             calibration_transfer_stability = _relative_norm(
                 shared_for_anchor - anchor_ref,
                 anchor_ref,
@@ -1182,8 +1260,14 @@ class HarmonicComponentDecomposition(nn.Module):
         mixer_weight: float = 1.0,
     ) -> Tensor:
         state = self.state()
-        loss = torch.zeros((), dtype=self.coeff_real.dtype, device=self.coeff_real.device)
-        private_mask = (self.component_mask("survey") + self.component_mask("instrument") + self.component_mask("interaction")).clamp(max=1.0)
+        loss = torch.zeros(
+            (), dtype=self.coeff_real.dtype, device=self.coeff_real.device
+        )
+        private_mask = (
+            self.component_mask("survey")
+            + self.component_mask("instrument")
+            + self.component_mask("interaction")
+        ).clamp(max=1.0)
         if private_harmonic_diagonal is not None:
             diag = torch.as_tensor(
                 private_harmonic_diagonal,
@@ -1212,10 +1296,14 @@ def build_conditioned_component_mixture_operator(
 ) -> BoundObservationOperator | BoundObservationOperatorSet:
     state = torch.as_tensor(reference_state)
     if state.ndim < 2:
-        raise ValueError("conditioned component mixture requires a reference_state with a leading component axis")
+        raise ValueError(
+            "conditioned component mixture requires a reference_state with a leading component axis"
+        )
     ncomp = int(state.shape[0])
     if len(mixer.component_roles) != ncomp:
-        raise ValueError("mixer component_roles length must match reference_state leading dimension")
+        raise ValueError(
+            "mixer component_roles length must match reference_state leading dimension"
+        )
 
     def _weights_for(dtype: torch.dtype, device: torch.device) -> Tensor:
         weights = mixer(survey=survey, instrument=instrument)
@@ -1224,7 +1312,9 @@ def build_conditioned_component_mixture_operator(
     def _mix(scene: SceneRepresentation | nn.Module | Tensor) -> Tensor:
         tensor = _scene_state_tensor(as_scene_representation(scene))
         if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
-            raise ValueError("conditioned component mixture received a scene with incompatible shape")
+            raise ValueError(
+                "conditioned component mixture received a scene with incompatible shape"
+            )
         coeffs = _weights_for(tensor.dtype, tensor.device).view(
             ncomp,
             *([1] * (tensor.ndim - 1)),
@@ -1235,7 +1325,9 @@ def build_conditioned_component_mixture_operator(
         adj = torch.as_tensor(adjoint_tensor)
         expected = tuple(int(v) for v in state.shape[1:])
         if tuple(int(v) for v in adj.shape) != expected:
-            raise ValueError("conditioned component mixture adjoint returned an incompatible tensor")
+            raise ValueError(
+                "conditioned component mixture adjoint returned an incompatible tensor"
+            )
         coeffs = torch.conj(_weights_for(adj.dtype, adj.device)).view(
             ncomp,
             *([1] * adj.ndim),
@@ -1243,7 +1335,9 @@ def build_conditioned_component_mixture_operator(
         return (coeffs * adj.unsqueeze(0)).to(dtype=state.dtype, device=state.device)
 
     def _wrap_bound(operator: BoundObservationOperator) -> BoundObservationOperator:
-        def _apply_operator(scene: SceneRepresentation, target_spec: TargetRenderSpec) -> Tensor:
+        def _apply_operator(
+            scene: SceneRepresentation, target_spec: TargetRenderSpec
+        ) -> Tensor:
             del target_spec
             return operator.apply(_mix(scene))
 
@@ -1261,8 +1355,12 @@ def build_conditioned_component_mixture_operator(
     if isinstance(base_operator, BoundObservationOperator):
         return _wrap_bound(base_operator)
     if isinstance(base_operator, BoundObservationOperatorSet):
-        return BoundObservationOperatorSet(tuple(_wrap_bound(op) for op in base_operator.operators))
-    raise TypeError("base_operator must be a BoundObservationOperator or BoundObservationOperatorSet")
+        return BoundObservationOperatorSet(
+            tuple(_wrap_bound(op) for op in base_operator.operators)
+        )
+    raise TypeError(
+        "base_operator must be a BoundObservationOperator or BoundObservationOperatorSet"
+    )
 
 
 def build_state_diagonal_operator(
@@ -1284,17 +1382,23 @@ def build_state_diagonal_operator(
         shape=(1, int(state.numel())),
     )
 
-    def _apply_operator(scene: SceneRepresentation, target_spec: TargetRenderSpec) -> Tensor:
+    def _apply_operator(
+        scene: SceneRepresentation, target_spec: TargetRenderSpec
+    ) -> Tensor:
         del target_spec
         tensor = _scene_state_tensor(scene)
         if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
-            raise ValueError("state-space diagonal operator received a scene with incompatible shape")
+            raise ValueError(
+                "state-space diagonal operator received a scene with incompatible shape"
+            )
         return diag.to(dtype=tensor.dtype, device=tensor.device) * tensor
 
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
         if tuple(int(v) for v in mapped.shape) != tuple(int(v) for v in state.shape):
-            raise ValueError("state-space diagonal adjoint received data with incompatible shape")
+            raise ValueError(
+                "state-space diagonal adjoint received data with incompatible shape"
+            )
         return torch.conj(diag).to(dtype=mapped.dtype, device=mapped.device) * mapped
 
     return BoundObservationOperator(
@@ -1315,7 +1419,11 @@ def build_state_matrix_operator(
     state = torch.as_tensor(reference_state)
     matrix_t = torch.as_tensor(matrix)
     nstate = int(state.numel())
-    if matrix_t.ndim != 2 or int(matrix_t.shape[0]) != nstate or int(matrix_t.shape[1]) != nstate:
+    if (
+        matrix_t.ndim != 2
+        or int(matrix_t.shape[0]) != nstate
+        or int(matrix_t.shape[1]) != nstate
+    ):
         raise ValueError("matrix operator requires a square (nstate, nstate) matrix")
     target = TargetRenderSpec(
         header={
@@ -1326,19 +1434,27 @@ def build_state_matrix_operator(
         shape=(1, nstate),
     )
 
-    def _apply_operator(scene: SceneRepresentation, target_spec: TargetRenderSpec) -> Tensor:
+    def _apply_operator(
+        scene: SceneRepresentation, target_spec: TargetRenderSpec
+    ) -> Tensor:
         del target_spec
         tensor = _scene_state_tensor(scene)
         if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
-            raise ValueError("state-space matrix operator received a scene with incompatible shape")
+            raise ValueError(
+                "state-space matrix operator received a scene with incompatible shape"
+            )
         flat = _flatten_state(tensor).to(dtype=matrix_t.dtype, device=matrix_t.device)
         mapped = matrix_t @ flat
-        return _reshape_state(mapped.to(dtype=tensor.dtype, device=tensor.device), state)
+        return _reshape_state(
+            mapped.to(dtype=tensor.dtype, device=tensor.device), state
+        )
 
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
         if tuple(int(v) for v in mapped.shape) != tuple(int(v) for v in state.shape):
-            raise ValueError("state-space matrix adjoint received data with incompatible shape")
+            raise ValueError(
+                "state-space matrix adjoint received data with incompatible shape"
+            )
         flat = _flatten_state(mapped).to(dtype=matrix_t.dtype, device=matrix_t.device)
         adj = torch.conj(matrix_t.transpose(-2, -1)) @ flat
         return _reshape_state(adj.to(dtype=mapped.dtype, device=mapped.device), state)
@@ -1380,11 +1496,15 @@ def build_state_low_rank_operator(
         shape=(1, rank),
     )
 
-    def _apply_operator(scene: SceneRepresentation, target_spec: TargetRenderSpec) -> Tensor:
+    def _apply_operator(
+        scene: SceneRepresentation, target_spec: TargetRenderSpec
+    ) -> Tensor:
         del target_spec
         tensor = _scene_state_tensor(scene)
         if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
-            raise ValueError("state-space low-rank operator received a scene with incompatible shape")
+            raise ValueError(
+                "state-space low-rank operator received a scene with incompatible shape"
+            )
         flat = _flatten_state(tensor).to(dtype=basis_t.dtype, device=basis_t.device)
         coeffs = torch.conj(basis_t).transpose(-2, -1) @ flat
         return (weights_t * coeffs).to(dtype=tensor.dtype, device=tensor.device)
@@ -1392,7 +1512,9 @@ def build_state_low_rank_operator(
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
         if mapped.ndim != 1 or int(mapped.shape[0]) != rank:
-            raise ValueError("state-space low-rank adjoint received data with incompatible shape")
+            raise ValueError(
+                "state-space low-rank adjoint received data with incompatible shape"
+            )
         coeffs = mapped.to(dtype=basis_t.dtype, device=basis_t.device)
         flat = basis_t @ (torch.conj(weights_t) * coeffs)
         return _reshape_state(flat.to(dtype=state.dtype, device=state.device), state)
@@ -1433,18 +1555,25 @@ def build_state_kronecker_operator(
         shape=(out_rows, out_cols),
     )
 
-    def _apply_operator(scene: SceneRepresentation, target_spec: TargetRenderSpec) -> Tensor:
+    def _apply_operator(
+        scene: SceneRepresentation, target_spec: TargetRenderSpec
+    ) -> Tensor:
         del target_spec
         tensor = _scene_state_tensor(scene)
         if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
-            raise ValueError("Kronecker state operator received a scene with incompatible shape")
+            raise ValueError(
+                "Kronecker state operator received a scene with incompatible shape"
+            )
         tensor_t = tensor.to(dtype=left_t.dtype, device=left_t.device)
         mapped = left_t @ tensor_t @ torch.conj(right_t).transpose(-2, -1)
         return mapped.to(dtype=tensor.dtype, device=tensor.device)
 
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
-        if mapped.ndim != 2 or tuple(int(v) for v in mapped.shape) != (out_rows, out_cols):
+        if mapped.ndim != 2 or tuple(int(v) for v in mapped.shape) != (
+            out_rows,
+            out_cols,
+        ):
             raise ValueError("Kronecker adjoint received data with incompatible shape")
         mapped_t = mapped.to(dtype=left_t.dtype, device=left_t.device)
         adj = torch.conj(left_t).transpose(-2, -1) @ mapped_t @ right_t
@@ -1524,7 +1653,9 @@ def build_harmonic_degree_prior_operator(
         ).to(dtype=state.real.dtype if state.is_complex() else state.dtype)
         diagonal = torch.stack([base, base], dim=0)
     else:
-        raise ValueError("reference_state for harmonic prior must be shape (nalm,) or (2, nalm)")
+        raise ValueError(
+            "reference_state for harmonic prior must be shape (nalm,) or (2, nalm)"
+        )
     return build_state_diagonal_operator(
         state,
         diagonal,
@@ -1586,7 +1717,9 @@ def harmonic_cl_diagonal(
     if beam_transfer is not None:
         beam_t = torch.as_tensor(beam_transfer, dtype=torch.float64, device=device)
         if beam_t.ndim != 1 or int(beam_t.numel()) < ll + 1:
-            raise ValueError("beam_transfer must be a 1D spectrum with length >= lmax+1")
+            raise ValueError(
+                "beam_transfer must be a 1D spectrum with length >= lmax+1"
+            )
         variance_l = variance_l * torch.square(beam_t[: ll + 1])
     variance_l = torch.clamp(variance_l, min=float(min_variance))
     ell = _alm_ell_array(ll, mm).to(device=variance_l.device)
@@ -1635,7 +1768,9 @@ def build_harmonic_dense_prior_operator(
             factor,
             apply_noise=apply_noise,
         )
-    raise ValueError("reference_state for dense harmonic prior must be shape (nalm,) or (2, nalm)")
+    raise ValueError(
+        "reference_state for dense harmonic prior must be shape (nalm,) or (2, nalm)"
+    )
 
 
 def build_harmonic_cl_prior_operator(
@@ -1654,7 +1789,9 @@ def build_harmonic_cl_prior_operator(
             lmax=lmax,
             mmax=mmax,
             cls=torch.as_tensor(cls),
-            beam_transfer=None if beam_transfer is None else torch.as_tensor(beam_transfer),
+            beam_transfer=None
+            if beam_transfer is None
+            else torch.as_tensor(beam_transfer),
             min_variance=min_variance,
             dtype=state.real.dtype if state.is_complex() else state.dtype,
             device=state.device,
@@ -1667,7 +1804,9 @@ def build_harmonic_cl_prior_operator(
     if state.ndim == 2 and int(state.shape[0]) == 2:
         if isinstance(cls, (tuple, list)):
             if len(cls) != 2:
-                raise ValueError("spin harmonic cls must be a single spectrum or a length-2 sequence")
+                raise ValueError(
+                    "spin harmonic cls must be a single spectrum or a length-2 sequence"
+                )
             cls_e, cls_b = cls
         else:
             cls_e = cls_b = cls
@@ -1705,7 +1844,9 @@ def build_harmonic_cl_prior_operator(
             diagonal,
             apply_noise=apply_noise,
         )
-    raise ValueError("reference_state for harmonic Cl prior must be shape (nalm,) or (2, nalm)")
+    raise ValueError(
+        "reference_state for harmonic Cl prior must be shape (nalm,) or (2, nalm)"
+    )
 
 
 def build_spin_harmonic_kronecker_prior_operator(
@@ -1717,7 +1858,9 @@ def build_spin_harmonic_kronecker_prior_operator(
 ) -> BoundObservationOperator:
     state = torch.as_tensor(reference_state)
     if state.ndim != 2 or int(state.shape[0]) != 2:
-        raise ValueError("spin-harmonic Kronecker prior requires reference_state shape (2, nalm)")
+        raise ValueError(
+            "spin-harmonic Kronecker prior requires reference_state shape (2, nalm)"
+        )
     harmonic_t = torch.as_tensor(harmonic_factor)
     if harmonic_t.ndim == 1:
         harmonic_t = torch.diag(harmonic_t)
@@ -1726,7 +1869,9 @@ def build_spin_harmonic_kronecker_prior_operator(
     if eb_coupling is None:
         eb_t = torch.eye(2, dtype=harmonic_t.dtype, device=harmonic_t.device)
     else:
-        eb_t = torch.as_tensor(eb_coupling, dtype=harmonic_t.dtype, device=harmonic_t.device)
+        eb_t = torch.as_tensor(
+            eb_coupling, dtype=harmonic_t.dtype, device=harmonic_t.device
+        )
         if eb_t.ndim != 2 or tuple(int(v) for v in eb_t.shape) != (2, 2):
             raise ValueError("eb_coupling must have shape (2, 2)")
     return build_state_kronecker_operator(
@@ -1766,27 +1911,61 @@ def teb_cls_precision_factors(
     for name, arr in (("cls_tt", cl_tt), ("cls_ee", cl_ee), ("cls_bb", cl_bb)):
         if arr.ndim != 1 or int(arr.numel()) < ll + 1:
             raise ValueError(f"{name} must be a 1D spectrum with length >= lmax+1")
-    cl_te = torch.zeros(ll + 1, dtype=torch.float64, device=device) if cls_te is None else torch.as_tensor(cls_te, dtype=torch.float64, device=device)
-    cl_tb = torch.zeros(ll + 1, dtype=torch.float64, device=device) if cls_tb is None else torch.as_tensor(cls_tb, dtype=torch.float64, device=device)
-    cl_eb = torch.zeros(ll + 1, dtype=torch.float64, device=device) if cls_eb is None else torch.as_tensor(cls_eb, dtype=torch.float64, device=device)
+    cl_te = (
+        torch.zeros(ll + 1, dtype=torch.float64, device=device)
+        if cls_te is None
+        else torch.as_tensor(cls_te, dtype=torch.float64, device=device)
+    )
+    cl_tb = (
+        torch.zeros(ll + 1, dtype=torch.float64, device=device)
+        if cls_tb is None
+        else torch.as_tensor(cls_tb, dtype=torch.float64, device=device)
+    )
+    cl_eb = (
+        torch.zeros(ll + 1, dtype=torch.float64, device=device)
+        if cls_eb is None
+        else torch.as_tensor(cls_eb, dtype=torch.float64, device=device)
+    )
     for name, arr in (("cls_te", cl_te), ("cls_tb", cl_tb), ("cls_eb", cl_eb)):
         if arr.ndim != 1 or int(arr.numel()) < ll + 1:
             raise ValueError(f"{name} must be a 1D spectrum with length >= lmax+1")
-    bt = torch.ones(ll + 1, dtype=torch.float64, device=device) if beam_transfer_t is None else torch.as_tensor(beam_transfer_t, dtype=torch.float64, device=device)
-    bp = torch.ones(ll + 1, dtype=torch.float64, device=device) if beam_transfer_pol is None else torch.as_tensor(beam_transfer_pol, dtype=torch.float64, device=device)
+    bt = (
+        torch.ones(ll + 1, dtype=torch.float64, device=device)
+        if beam_transfer_t is None
+        else torch.as_tensor(beam_transfer_t, dtype=torch.float64, device=device)
+    )
+    bp = (
+        torch.ones(ll + 1, dtype=torch.float64, device=device)
+        if beam_transfer_pol is None
+        else torch.as_tensor(beam_transfer_pol, dtype=torch.float64, device=device)
+    )
     if bt.ndim != 1 or int(bt.numel()) < ll + 1:
         raise ValueError("beam_transfer_t must be a 1D spectrum with length >= lmax+1")
     if bp.ndim != 1 or int(bp.numel()) < ll + 1:
-        raise ValueError("beam_transfer_pol must be a 1D spectrum with length >= lmax+1")
+        raise ValueError(
+            "beam_transfer_pol must be a 1D spectrum with length >= lmax+1"
+        )
 
     factors_l: list[Tensor] = []
     eye3 = torch.eye(3, dtype=torch.float64, device=device)
     for ell in range(ll + 1):
         cov = torch.tensor(
             [
-                [cl_tt[ell] * bt[ell] * bt[ell], cl_te[ell] * bt[ell] * bp[ell], cl_tb[ell] * bt[ell] * bp[ell]],
-                [cl_te[ell] * bt[ell] * bp[ell], cl_ee[ell] * bp[ell] * bp[ell], cl_eb[ell] * bp[ell] * bp[ell]],
-                [cl_tb[ell] * bt[ell] * bp[ell], cl_eb[ell] * bp[ell] * bp[ell], cl_bb[ell] * bp[ell] * bp[ell]],
+                [
+                    cl_tt[ell] * bt[ell] * bt[ell],
+                    cl_te[ell] * bt[ell] * bp[ell],
+                    cl_tb[ell] * bt[ell] * bp[ell],
+                ],
+                [
+                    cl_te[ell] * bt[ell] * bp[ell],
+                    cl_ee[ell] * bp[ell] * bp[ell],
+                    cl_eb[ell] * bp[ell] * bp[ell],
+                ],
+                [
+                    cl_tb[ell] * bt[ell] * bp[ell],
+                    cl_eb[ell] * bp[ell] * bp[ell],
+                    cl_bb[ell] * bp[ell] * bp[ell],
+                ],
             ],
             dtype=torch.float64,
             device=device,
@@ -1844,7 +2023,9 @@ def build_teb_cls_prior_operator(
         shape=(3, int(state.shape[1])),
     )
 
-    def _apply_operator(scene: SceneRepresentation, target_spec: TargetRenderSpec) -> Tensor:
+    def _apply_operator(
+        scene: SceneRepresentation, target_spec: TargetRenderSpec
+    ) -> Tensor:
         del target_spec
         tensor = _scene_state_tensor(scene)
         if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
@@ -1856,7 +2037,9 @@ def build_teb_cls_prior_operator(
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
         if tuple(int(v) for v in mapped.shape) != tuple(int(v) for v in state.shape):
-            raise ValueError("TEB Cl prior adjoint received data with incompatible shape")
+            raise ValueError(
+                "TEB Cl prior adjoint received data with incompatible shape"
+            )
         mapped_t = mapped.to(dtype=factors.dtype, device=factors.device)
         adj = torch.einsum("nji,in->jn", torch.conj(factors), mapped_t)
         return adj.to(dtype=state.dtype, device=state.device)
@@ -1880,7 +2063,9 @@ class SolverHooks:
     apply_noise: ApplyNoiseFn | None = None
     bind_target_fn: BindTargetFn | None = None
 
-    def render_scene(self, scene: SceneRepresentation, target: TargetRenderSpec) -> Tensor:
+    def render_scene(
+        self, scene: SceneRepresentation, target: TargetRenderSpec
+    ) -> Tensor:
         return self.bind_target(target).apply(scene)
 
     def apply_noise_model(self, tensor: Tensor) -> Tensor:
@@ -2007,7 +2192,9 @@ def build_spherical_healpix_solver_hooks(
                 "spherical HEALPix solver hooks require a HealpixMapScene or tensor coefficients"
             )
 
-        def _apply_operator(scene: SceneRepresentation, target_spec: TargetRenderSpec) -> Tensor:
+        def _apply_operator(
+            scene: SceneRepresentation, target_spec: TargetRenderSpec
+        ) -> Tensor:
             healpix_scene = _coerce_healpix_scene(scene)
             return healpix_scene.render_to_target(
                 target_spec,
@@ -2015,6 +2202,7 @@ def build_spherical_healpix_solver_hooks(
             )
 
         if mode == "pixel_bilinear":
+
             def _apply_adjoint(tensor: Tensor) -> Tensor:
                 image = torch.as_tensor(tensor)
                 if image.ndim == 2:
@@ -2039,6 +2227,7 @@ def build_spherical_healpix_solver_hooks(
                     )
                 raise ValueError("adjoint image must be 2D or band-first 3D")
         else:
+
             def _apply_adjoint(tensor: Tensor) -> Tensor:
                 raise NotImplementedError(
                     "exact spherical adjoint is currently implemented for mode='pixel_bilinear' only"
@@ -2092,7 +2281,9 @@ def build_spherical_harmonic_solver_hooks(
                 "spherical harmonic solver hooks require a HarmonicAlmScene or tensor alm coefficients"
             )
 
-        def _apply_operator(scene: SceneRepresentation, target_spec: TargetRenderSpec) -> Tensor:
+        def _apply_operator(
+            scene: SceneRepresentation, target_spec: TargetRenderSpec
+        ) -> Tensor:
             alm_scene = _coerce_alm_scene(scene)
             return alm_scene.render_to_target(
                 target_spec,
@@ -2190,7 +2381,9 @@ def build_spherical_spin_harmonic_solver_hooks(
                 "spin harmonic solver hooks require a SpinHarmonicAlmScene or a (2, nalm) tensor"
             )
 
-        def _apply_operator(scene: SceneRepresentation, target_spec: TargetRenderSpec) -> Tensor:
+        def _apply_operator(
+            scene: SceneRepresentation, target_spec: TargetRenderSpec
+        ) -> Tensor:
             spin_scene = _coerce_spin_scene(scene)
             return spin_scene.render_to_target(
                 target_spec,

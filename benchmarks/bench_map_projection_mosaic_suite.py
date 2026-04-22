@@ -441,14 +441,18 @@ def _format_table(rows: list[dict[str, object]], *, headers: list[str]) -> str:
         "| " + " | ".join(["---"] * len(headers)) + " |",
     ]
     for row in rows:
-        lines.append("| " + " | ".join(_format_value(row.get(key)) for key in headers) + " |")
+        lines.append(
+            "| " + " | ".join(_format_value(row.get(key)) for key in headers) + " |"
+        )
     return "\n".join(lines) + "\n"
 
 
 def _format_markdown(rows: list[dict[str, object]], *, profile: str) -> str:
     truth_rows = [row for row in rows if row.get("suite") == "projection_truth"]
     equal_psf_rows = [row for row in rows if row.get("suite") == "projection_equal_psf"]
-    method_rows = [row for row in rows if row.get("suite") == "projection_stack_methods"]
+    method_rows = [
+        row for row in rows if row.get("suite") == "projection_stack_methods"
+    ]
     montage_rows = [row for row in rows if row.get("suite") == "montage_compat"]
     inr_rows = [row for row in rows if row.get("suite") == "stack_vs_inr"]
 
@@ -621,7 +625,14 @@ def _extent_label(width: int | None, height: int | None, size: int) -> str:
     return str(size)
 
 
-def _case_label(projection: str, source_case: str, *, size: int, width: int | None, height: int | None) -> str:
+def _case_label(
+    projection: str,
+    source_case: str,
+    *,
+    size: int,
+    width: int | None,
+    height: int | None,
+) -> str:
     return f"{projection}:{source_case}@{_extent_label(width, height, size)}"
 
 
@@ -643,7 +654,10 @@ def _support_region_masks(weight: torch.Tensor) -> dict[str, torch.Tensor]:
 
 
 def _projection_scale_deg(projection: str, source_case: str) -> float:
-    if source_case in {"tan_random10_large_union", "tan_random10_large_union_rect_weighted_masked_tan"}:
+    if source_case in {
+        "tan_random10_large_union",
+        "tan_random10_large_union_rect_weighted_masked_tan",
+    }:
         if projection in _ALLSKY_PROJECTIONS:
             return 0.05
         if projection in _CYLINDRICAL_PROJECTIONS:
@@ -728,8 +742,12 @@ def _common_projection_metadata(
             if int(target_header["NAXIS1"]) != int(target_header["NAXIS2"])
             else "square"
         ),
-        "n_weight_maps": sum(1 for item in observations if item.observation.weight_path is not None),
-        "n_mask_maps": sum(1 for item in observations if item.observation.mask_path is not None),
+        "n_weight_maps": sum(
+            1 for item in observations if item.observation.weight_path is not None
+        ),
+        "n_mask_maps": sum(
+            1 for item in observations if item.observation.mask_path is not None
+        ),
     }
 
 
@@ -753,22 +771,36 @@ def _prepare_projection_truth_case(
         width=projection_case.width,
         height=projection_case.height,
     )
-    case_spec = truth_bench._case_spec(projection_case.source_case, size=projection_case.size)
-    target_width = int(projection_case.width) if projection_case.width is not None else int(projection_case.size)
-    target_height = int(projection_case.height) if projection_case.height is not None else int(projection_case.size)
+    case_spec = truth_bench._case_spec(
+        projection_case.source_case, size=projection_case.size
+    )
+    target_width = (
+        int(projection_case.width)
+        if projection_case.width is not None
+        else int(projection_case.size)
+    )
+    target_height = (
+        int(projection_case.height)
+        if projection_case.height is not None
+        else int(projection_case.size)
+    )
     target_header = _projection_target_header(
         projection_case.projection,
         width=target_width,
         height=target_height,
         crval1=float(default_target_header["CRVAL1"]),
         crval2=float(default_target_header["CRVAL2"]),
-        scale_deg=_projection_scale_deg(projection_case.projection, projection_case.source_case),
+        scale_deg=_projection_scale_deg(
+            projection_case.projection, projection_case.source_case
+        ),
     )
     truth = truth_bench.build_truth_image(
         target_header,
         value_semantics=case_spec.value_semantics,
     )
-    region_masks = truth_bench._target_mask_region_masks(observations, target_header=target_header)
+    region_masks = truth_bench._target_mask_region_masks(
+        observations, target_header=target_header
+    )
     return observations, target_header, truth, case_spec, region_masks
 
 
@@ -783,10 +815,12 @@ def _run_projection_truth_suite(
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for case_item in cases:
-        observations, target_header, truth, case_spec, region_masks = _prepare_projection_truth_case(
-            tmpdir,
-            projection_case=case_item,
-            seed=seed,
+        observations, target_header, truth, case_spec, region_masks = (
+            _prepare_projection_truth_case(
+                tmpdir,
+                projection_case=case_item,
+                seed=seed,
+            )
         )
         obs_list = [item.observation for item in observations]
         case_label = _case_label(
@@ -879,11 +913,17 @@ def _prepare_equal_psf_control_case(
     float,
 ]:
     tmpdir.mkdir(parents=True, exist_ok=True)
-    case_spec = truth_bench._case_spec(projection_case.source_case, size=projection_case.size)
+    case_spec = truth_bench._case_spec(
+        projection_case.source_case, size=projection_case.size
+    )
     psf_values = [float(psf_sigma) for _, _, _, psf_sigma, _ in case_spec.specs]
-    control_psf_sigma_pix = float(torch.median(torch.tensor(psf_values, dtype=torch.float32)).item())
+    control_psf_sigma_pix = float(
+        torch.median(torch.tensor(psf_values, dtype=torch.float32)).item()
+    )
     observations: list[truth_bench.SimulatedObservation] = []
-    for idx, (header, exptime, transmission, _psf_sigma, gap) in enumerate(case_spec.specs):
+    for idx, (header, exptime, transmission, _psf_sigma, gap) in enumerate(
+        case_spec.specs
+    ):
         observations.append(
             truth_bench._simulate_observation(
                 tmpdir,
@@ -902,15 +942,25 @@ def _prepare_equal_psf_control_case(
                 weight_gradient=case_spec.weight_gradient,
             )
         )
-    target_width = int(projection_case.width) if projection_case.width is not None else int(projection_case.size)
-    target_height = int(projection_case.height) if projection_case.height is not None else int(projection_case.size)
+    target_width = (
+        int(projection_case.width)
+        if projection_case.width is not None
+        else int(projection_case.size)
+    )
+    target_height = (
+        int(projection_case.height)
+        if projection_case.height is not None
+        else int(projection_case.size)
+    )
     target_header = _projection_target_header(
         projection_case.projection,
         width=target_width,
         height=target_height,
         crval1=12.0,
         crval2=-3.0,
-        scale_deg=_projection_scale_deg(projection_case.projection, projection_case.source_case),
+        scale_deg=_projection_scale_deg(
+            projection_case.projection, projection_case.source_case
+        ),
     )
     truth = truth_bench.build_truth_image(
         target_header,
@@ -929,10 +979,13 @@ def _run_projection_equal_psf_suite(
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for case_item in cases:
-        observations, target_header, truth, case_spec, control_psf_sigma_pix = _prepare_equal_psf_control_case(
-            tmpdir / f"equal_psf_{case_item.projection.lower()}_{case_item.source_case}_{_extent_label(case_item.width, case_item.height, case_item.size)}",
-            projection_case=case_item,
-            seed=seed,
+        observations, target_header, truth, case_spec, control_psf_sigma_pix = (
+            _prepare_equal_psf_control_case(
+                tmpdir
+                / f"equal_psf_{case_item.projection.lower()}_{case_item.source_case}_{_extent_label(case_item.width, case_item.height, case_item.size)}",
+                projection_case=case_item,
+                seed=seed,
+            )
         )
         obs_list = [item.observation for item in observations]
         product = plan_map_product(
@@ -998,10 +1051,12 @@ def _run_projection_stack_method_suite(
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for case_item in cases:
-        observations, target_header, truth, case_spec, region_masks = _prepare_projection_truth_case(
-            tmpdir,
-            projection_case=case_item,
-            seed=seed,
+        observations, target_header, truth, case_spec, region_masks = (
+            _prepare_projection_truth_case(
+                tmpdir,
+                projection_case=case_item,
+                seed=seed,
+            )
         )
         obs_list = [item.observation for item in observations]
         case_label = _case_label(
@@ -1094,10 +1149,12 @@ def _run_montage_compat_suite(
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for case_item in cases:
-        observations, target_header, truth, case_spec, region_masks = _prepare_projection_truth_case(
-            tmpdir,
-            projection_case=case_item,
-            seed=seed,
+        observations, target_header, truth, case_spec, region_masks = (
+            _prepare_projection_truth_case(
+                tmpdir,
+                projection_case=case_item,
+                seed=seed,
+            )
         )
         obs_list = [item.observation for item in observations]
         case_label = _case_label(
@@ -1113,7 +1170,9 @@ def _run_montage_compat_suite(
             case_spec=case_spec,
             target_header=target_header,
         )
-        torchsky_outputs: dict[str, tuple[dict[str, Any], torch.Tensor, torch.Tensor]] = {}
+        torchsky_outputs: dict[
+            str, tuple[dict[str, Any], torch.Tensor, torch.Tensor]
+        ] = {}
         for library, variant in methods:
             if library == "torchsky":
                 kernel = variant or "bilinear"
@@ -1232,13 +1291,19 @@ def _evaluate_stack_vs_inr_case(
 ) -> dict[str, object]:
     model_kind, coord_mode = _parse_inr_model_spec(model_kind_spec)
     case_spec = field_fit_bench._build_case_specs(case_item.size)[case_item.field_case]
-    observations, image_observations, _default_truth_cube = field_fit_bench._simulate_observations(
-        case_spec,
-        seed=seed,
-        tmpdir=tmpdir,
+    observations, image_observations, _default_truth_cube = (
+        field_fit_bench._simulate_observations(
+            case_spec,
+            seed=seed,
+            tmpdir=tmpdir,
+        )
     )
-    target_width = int(case_item.width) if case_item.width is not None else int(case_item.size)
-    target_height = int(case_item.height) if case_item.height is not None else int(case_item.size)
+    target_width = (
+        int(case_item.width) if case_item.width is not None else int(case_item.size)
+    )
+    target_height = (
+        int(case_item.height) if case_item.height is not None else int(case_item.size)
+    )
     target_header = _projection_target_header(
         case_item.projection,
         width=target_width,
@@ -1292,9 +1357,7 @@ def _evaluate_stack_vs_inr_case(
             zip(observations_in, image_observations_in, strict=True)
         ):
             sigma_now = float(observation.psf_sigma_pix)
-            sigma_extra = math.sqrt(
-                max(common_psf_sigma_pix**2 - sigma_now**2, 0.0)
-            )
+            sigma_extra = math.sqrt(max(common_psf_sigma_pix**2 - sigma_now**2, 0.0))
             image = observation.image.to(dtype=torch.float32)
             if sigma_extra > 0.0:
                 image = _gaussian_blur_plane(image, sigma_extra)
@@ -1417,7 +1480,9 @@ def _evaluate_stack_vs_inr_case(
         "common_psf_sigma_pix": float(common_psf_sigma_pix),
         "observation_psf_mode": "implicit_shared",
         "evaluation_psf_mode": "common_shared",
-        "fit_schedule": "pure_observation_fit" if result_type == "field_fit" else "direct_stack",
+        "fit_schedule": "pure_observation_fit"
+        if result_type == "field_fit"
+        else "direct_stack",
         "fit_loss_kind": (
             fit_kwargs["loss_kind"] if result_type == "field_fit" else "n/a"
         ),
@@ -1471,9 +1536,13 @@ def _run_stack_vs_inr_suite(
                     "projection": case_item.projection,
                     "field_case": case_item.field_case,
                     "library": "torchsky",
-                    "type": "field_fit" if not model_kind.startswith("coadd_") else "direct_stack",
+                    "type": "field_fit"
+                    if not model_kind.startswith("coadd_")
+                    else "direct_stack",
                     "model_kind": parsed_model_kind,
-                    "field_coord_mode": parsed_coord_mode if parsed_coord_mode is not None else "n/a",
+                    "field_coord_mode": parsed_coord_mode
+                    if parsed_coord_mode is not None
+                    else "n/a",
                     "status": "SKIPPED",
                     "reason": f"stack-vs-INR evaluation failed: {exc}",
                 }
@@ -1481,7 +1550,9 @@ def _run_stack_vs_inr_suite(
     return rows
 
 
-def _annotate_stack_vs_inr_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+def _annotate_stack_vs_inr_rows(
+    rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
     grouped: dict[tuple[str, str], list[dict[str, object]]] = {}
     for row in rows:
         if row.get("suite") != "stack_vs_inr":
@@ -1544,7 +1615,8 @@ def _annotate_stack_vs_inr_rows(rows: list[dict[str, object]]) -> list[dict[str,
                 row_time_ms = float(row.get("fit_time_ms", float("inf")))
                 row["fit_time_ratio_vs_best_direct"] = (
                     row_time_ms / max(best_direct_time_ms, 1e-12)
-                    if best_direct_time_ms is not None and math.isfinite(best_direct_time_ms)
+                    if best_direct_time_ms is not None
+                    and math.isfinite(best_direct_time_ms)
                     else None
                 )
             else:
@@ -1666,7 +1738,9 @@ def main() -> int:
         else list(profile.method_sweep_kernels)
     )
     method_sweep_methods = (
-        _parse_name_list(args.method_sweep_methods, label="method-sweep stacking method")
+        _parse_name_list(
+            args.method_sweep_methods, label="method-sweep stacking method"
+        )
         if args.method_sweep_methods is not None
         else list(profile.method_sweep_methods)
     )
@@ -1687,8 +1761,12 @@ def main() -> int:
     if not stack_vs_inr_models:
         raise ValueError("at least one stack-vs-INR model is required")
     runs = profile.runs if args.runs is None else int(args.runs)
-    torchsky_runs = profile.torchsky_runs if args.torchsky_runs is None else int(args.torchsky_runs)
-    field_steps = profile.field_steps if args.field_steps is None else int(args.field_steps)
+    torchsky_runs = (
+        profile.torchsky_runs if args.torchsky_runs is None else int(args.torchsky_runs)
+    )
+    field_steps = (
+        profile.field_steps if args.field_steps is None else int(args.field_steps)
+    )
     field_runs = profile.field_runs if args.field_runs is None else int(args.field_runs)
 
     rows: list[dict[str, object]] = []

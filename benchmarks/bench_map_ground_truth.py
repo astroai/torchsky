@@ -137,11 +137,14 @@ def _count_warped_inputs(observations: list[SimulatedObservation]) -> int:
     return sum(
         1
         for item in observations
-        if "TPV" in str(item.header.get("CTYPE1", "")) or "TPV" in str(item.header.get("CTYPE2", ""))
+        if "TPV" in str(item.header.get("CTYPE1", ""))
+        or "TPV" in str(item.header.get("CTYPE2", ""))
     )
 
 
-def _rotated_cd(scale_deg: float, rotation_deg: float) -> tuple[float, float, float, float]:
+def _rotated_cd(
+    scale_deg: float, rotation_deg: float
+) -> tuple[float, float, float, float]:
     theta = math.radians(float(rotation_deg))
     cos_t = math.cos(theta)
     sin_t = math.sin(theta)
@@ -391,15 +394,27 @@ def _random_large_rect_specs(
         (-0.9, -3.9),
         (10.2, 4.6),
     )
-    specs: list[tuple[dict[str, Any], float, float, float, tuple[slice, slice] | None]] = []
+    specs: list[
+        tuple[dict[str, Any], float, float, float, tuple[slice, slice] | None]
+    ] = []
     for idx, (offset_ra, offset_dec) in enumerate(center_offsets):
         width = int(torch.randint(500, 4001, (1,), generator=gen).item())
         height = int(torch.randint(500, 4001, (1,), generator=gen).item())
         scale_deg = float(torch.empty(1).uniform_(0.0030, 0.0068, generator=gen).item())
         rotation_deg = float(torch.empty(1).uniform_(-24.0, 24.0, generator=gen).item())
-        crval1 = 12.0 + float(offset_ra) + float(torch.empty(1).uniform_(-0.35, 0.35, generator=gen).item())
-        crval2 = -3.0 + float(offset_dec) + float(torch.empty(1).uniform_(-0.25, 0.25, generator=gen).item())
-        exposure_time = float(torch.empty(1).uniform_(45.0, 260.0, generator=gen).item())
+        crval1 = (
+            12.0
+            + float(offset_ra)
+            + float(torch.empty(1).uniform_(-0.35, 0.35, generator=gen).item())
+        )
+        crval2 = (
+            -3.0
+            + float(offset_dec)
+            + float(torch.empty(1).uniform_(-0.25, 0.25, generator=gen).item())
+        )
+        exposure_time = float(
+            torch.empty(1).uniform_(45.0, 260.0, generator=gen).item()
+        )
         transmission = float(torch.empty(1).uniform_(0.68, 1.08, generator=gen).item())
         psf_sigma_pix = float(torch.empty(1).uniform_(0.45, 1.55, generator=gen).item())
         if include_warps and idx % 2 == 1:
@@ -426,7 +441,10 @@ def _random_large_rect_specs(
         if idx % 4 == 1:
             gap = (
                 slice(max(1, height // 5), max(2, min(height, height // 2))),
-                slice(max(1, width // 3), max(2, min(width, width // 3 + max(8, width // 40)))),
+                slice(
+                    max(1, width // 3),
+                    max(2, min(width, width // 3 + max(8, width // 40))),
+                ),
             )
         specs.append(
             (
@@ -460,8 +478,16 @@ def _gaussian_blur(image: torch.Tensor, sigma_pix: float) -> torch.Tensor:
     return out.squeeze(0).squeeze(0)
 
 
-def _analytic_sky(ra_deg: torch.Tensor, dec_deg: torch.Tensor, *, center_ra_deg: float, center_dec_deg: float) -> torch.Tensor:
-    dra = (ra_deg - float(center_ra_deg)) * math.cos(math.radians(float(center_dec_deg)))
+def _analytic_sky(
+    ra_deg: torch.Tensor,
+    dec_deg: torch.Tensor,
+    *,
+    center_ra_deg: float,
+    center_dec_deg: float,
+) -> torch.Tensor:
+    dra = (ra_deg - float(center_ra_deg)) * math.cos(
+        math.radians(float(center_dec_deg))
+    )
     ddec = dec_deg - float(center_dec_deg)
     g1 = 1.4 * torch.exp(-((dra + 0.09) ** 2 + (ddec - 0.04) ** 2) / 0.0018)
     g2 = 0.9 * torch.exp(-((dra - 0.06) ** 2 + (ddec + 0.05) ** 2) / 0.0010)
@@ -557,9 +583,7 @@ def _simulate_observation(
         if value_semantics != "flux":
             raise ValueError("flux_area_scaled noise_model requires flux semantics")
         if flux_area_norm_sr is None:
-            raise ValueError(
-                "flux_area_norm_sr is required for flux_area_scaled noise"
-            )
+            raise ValueError("flux_area_norm_sr is required for flux_area_scaled noise")
         area_sr = image_plane_mod._pixel_area_sr_map(
             wcs,
             (height, width),
@@ -751,21 +775,39 @@ def _case_spec(case: str, *, size: int) -> _CaseSpec:
             noise_model="flux_constant",
             specs=(
                 (
-                    _tan_header(size, crval1=12.000, crval2=-3.000, scale_deg=0.0030, rotation_deg=0.0),
+                    _tan_header(
+                        size,
+                        crval1=12.000,
+                        crval2=-3.000,
+                        scale_deg=0.0030,
+                        rotation_deg=0.0,
+                    ),
                     55.0,
                     0.90,
                     0.45,
                     None,
                 ),
                 (
-                    _tan_header(size, crval1=12.028, crval2=-3.024, scale_deg=0.0068, rotation_deg=18.0),
+                    _tan_header(
+                        size,
+                        crval1=12.028,
+                        crval2=-3.024,
+                        scale_deg=0.0068,
+                        rotation_deg=18.0,
+                    ),
                     110.0,
                     0.82,
                     1.15,
                     (slice(None), slice(size // 2, size // 2 + max(2, size // 14))),
                 ),
                 (
-                    _tan_header(size, crval1=11.968, crval2=-2.972, scale_deg=0.0026, rotation_deg=-21.0),
+                    _tan_header(
+                        size,
+                        crval1=11.968,
+                        crval2=-2.972,
+                        scale_deg=0.0026,
+                        rotation_deg=-21.0,
+                    ),
                     180.0,
                     0.74,
                     1.55,
@@ -933,7 +975,13 @@ def _case_spec(case: str, *, size: int) -> _CaseSpec:
             noise_model="flux_area_scaled",
             specs=(
                 (
-                    _tan_header(size, crval1=12.0, crval2=-3.0, scale_deg=0.0042, rotation_deg=0.0),
+                    _tan_header(
+                        size,
+                        crval1=12.0,
+                        crval2=-3.0,
+                        scale_deg=0.0042,
+                        rotation_deg=0.0,
+                    ),
                     80.0,
                     0.90,
                     0.6,
@@ -978,21 +1026,39 @@ def _case_spec(case: str, *, size: int) -> _CaseSpec:
             noise_model="flux_area_scaled",
             specs=(
                 (
-                    _tan_header(size, crval1=12.0, crval2=-3.0, scale_deg=0.0036, rotation_deg=0.0),
+                    _tan_header(
+                        size,
+                        crval1=12.0,
+                        crval2=-3.0,
+                        scale_deg=0.0036,
+                        rotation_deg=0.0,
+                    ),
                     70.0,
                     0.87,
                     0.6,
                     None,
                 ),
                 (
-                    _tpv_header(size, crval1=12.016, crval2=-3.024, scale_deg=0.0059, rotation_deg=15.0),
+                    _tpv_header(
+                        size,
+                        crval1=12.016,
+                        crval2=-3.024,
+                        scale_deg=0.0059,
+                        rotation_deg=15.0,
+                    ),
                     105.0,
                     0.89,
                     1.0,
                     None,
                 ),
                 (
-                    _tpv_header(size, crval1=11.982, crval2=-2.972, scale_deg=0.0029, rotation_deg=-17.0),
+                    _tpv_header(
+                        size,
+                        crval1=11.982,
+                        crval2=-2.972,
+                        scale_deg=0.0029,
+                        rotation_deg=-17.0,
+                    ),
                     150.0,
                     0.72,
                     1.4,
@@ -1116,7 +1182,10 @@ def _truth_metrics(
         weight_sum = torch.clamp(weight_supported.sum(), min=1.0e-8)
         weighted_rmse = float(
             torch.sqrt(
-                torch.sum(weight_supported * torch.square(residual_supported.to(dtype=torch.float32)))
+                torch.sum(
+                    weight_supported
+                    * torch.square(residual_supported.to(dtype=torch.float32))
+                )
                 / weight_sum
             ).item()
         )
@@ -1165,7 +1234,9 @@ def _truth_metrics(
             metrics.update(
                 {
                     f"{name}_coverage_frac": float(region_metrics["coverage_fraction"]),
-                    f"{name}_rmse_vs_truth": float(region_metrics["reconstruction_rmse"]),
+                    f"{name}_rmse_vs_truth": float(
+                        region_metrics["reconstruction_rmse"]
+                    ),
                     f"{name}_mae_vs_truth": float(region_metrics["reconstruction_mae"]),
                 }
             )
@@ -1220,41 +1291,51 @@ def _target_mask_region_masks(
         obs_with_mask = item.observation
         if obs_with_mask.mask_path is None:
             continue
-        obs_without_mask = _clone_observation(obs_with_mask, keep_weight=True, keep_mask=False)
-        image, header = torchsky.read(obs_with_mask.path, hdu=obs_with_mask.hdu, return_header=True)
+        obs_without_mask = _clone_observation(
+            obs_with_mask, keep_weight=True, keep_mask=False
+        )
+        image, header = torchsky.read(
+            obs_with_mask.path, hdu=obs_with_mask.hdu, return_header=True
+        )
         image = image_plane_mod._validate_image_plane(image).to(device=device)
         header_dict_obs = dict(header)
         source_wcs = None
         if not (
-            image_plane_mod._headers_equivalent_for_direct_copy(header_dict_obs, target_header)
+            image_plane_mod._headers_equivalent_for_direct_copy(
+                header_dict_obs, target_header
+            )
             and tuple(int(v) for v in image.shape) == target_shape
         ):
             source_wcs = WCS(header_dict_obs)
-        _numer_masked, weight_masked, _overlap_masked, _moc_masked = image_plane_mod._project_observation_to_target(
-            obs_with_mask,
-            image=image,
-            header_dict_obs=header_dict_obs,
-            source_wcs=source_wcs,
-            prepared_target=prepared_target,
-            target_header=target_header,
-            target_shape=target_shape,
-            device=device,
-            footprint_order=None,
-            resampling_kernel="bilinear",
-            value_semantics="surface_brightness",
+        _numer_masked, weight_masked, _overlap_masked, _moc_masked = (
+            image_plane_mod._project_observation_to_target(
+                obs_with_mask,
+                image=image,
+                header_dict_obs=header_dict_obs,
+                source_wcs=source_wcs,
+                prepared_target=prepared_target,
+                target_header=target_header,
+                target_shape=target_shape,
+                device=device,
+                footprint_order=None,
+                resampling_kernel="bilinear",
+                value_semantics="surface_brightness",
+            )
         )
-        _numer_nomask, weight_nomask, _overlap_nomask, _moc_nomask = image_plane_mod._project_observation_to_target(
-            obs_without_mask,
-            image=image,
-            header_dict_obs=header_dict_obs,
-            source_wcs=source_wcs,
-            prepared_target=prepared_target,
-            target_header=target_header,
-            target_shape=target_shape,
-            device=device,
-            footprint_order=None,
-            resampling_kernel="bilinear",
-            value_semantics="surface_brightness",
+        _numer_nomask, weight_nomask, _overlap_nomask, _moc_nomask = (
+            image_plane_mod._project_observation_to_target(
+                obs_without_mask,
+                image=image,
+                header_dict_obs=header_dict_obs,
+                source_wcs=source_wcs,
+                prepared_target=prepared_target,
+                target_header=target_header,
+                target_shape=target_shape,
+                device=device,
+                footprint_order=None,
+                resampling_kernel="bilinear",
+                value_semantics="surface_brightness",
+            )
         )
         mask_affected |= torch.abs(weight_nomask - weight_masked) > 1.0e-6
     return {
@@ -1308,7 +1389,9 @@ def evaluate_torchsky_case(
         library="torchsky",
         method="coadd",
         variant=resampling_kernel,
-        geometry_family=map_compat._geometry_family_for_torchsky_kernel(resampling_kernel),
+        geometry_family=map_compat._geometry_family_for_torchsky_kernel(
+            resampling_kernel
+        ),
         case_spec=case_spec,
         observations=observations,
         target_header=target_header,
@@ -1560,7 +1643,9 @@ def evaluate_torchsky_spherical_case(
         time_ms=dt * 1000.0,
         extra={
             "healpix_nside": int(nside),
-            "operator_bundle_geometry": bundle.geometry.name if bundle.geometry is not None else None,
+            "operator_bundle_geometry": bundle.geometry.name
+            if bundle.geometry is not None
+            else None,
             "spherical_mode": spherical_mode,
             "goal": "reconstruct_union_field_on_target_grid_via_spherical_spectral_path",
         },
@@ -1646,7 +1731,9 @@ def evaluate_torchsky_joint_teb_case(
 
     clean_temp = temp_block.apply(teb_truth)
     clean_pol = pol_block.apply(teb_truth)
-    observed_temp = tuple(cutout + 0.01 * torch.randn_like(cutout) for cutout in clean_temp)
+    observed_temp = tuple(
+        cutout + 0.01 * torch.randn_like(cutout) for cutout in clean_temp
+    )
     observed_pol = tuple(maps + 0.005 * torch.randn_like(maps) for maps in clean_pol)
     data = (*observed_temp, *observed_pol, torch.zeros_like(teb_truth))
     zero_solution = torch.zeros_like(teb_truth)
@@ -1804,13 +1891,19 @@ def _build_product_benchmark_row(
             else "square"
         ),
         "n_warped_inputs": _count_warped_inputs(observations),
-        "n_weight_maps": sum(1 for item in observations if item.observation.weight_path is not None),
-        "n_mask_maps": sum(1 for item in observations if item.observation.mask_path is not None),
+        "n_weight_maps": sum(
+            1 for item in observations if item.observation.weight_path is not None
+        ),
+        "n_mask_maps": sum(
+            1 for item in observations if item.observation.mask_path is not None
+        ),
         "mean_zero_weight_fraction_input": float(
-            sum(item.zero_weight_fraction for item in observations) / max(len(observations), 1)
+            sum(item.zero_weight_fraction for item in observations)
+            / max(len(observations), 1)
         ),
         "mean_explicit_mask_fraction_input": float(
-            sum(item.explicit_mask_fraction for item in observations) / max(len(observations), 1)
+            sum(item.explicit_mask_fraction for item in observations)
+            / max(len(observations), 1)
         ),
         "time_ms": time_ms,
         "mpix_s": (float(result.data.numel()) / max(time_ms / 1000.0, 1e-12)) / 1e6,
@@ -1823,7 +1916,8 @@ def _build_product_benchmark_row(
             region_masks=region_masks,
         ),
         "mean_noise_sigma_flux": float(
-            sum(item.noise_sigma_flux for item in observations) / max(len(observations), 1)
+            sum(item.noise_sigma_flux for item in observations)
+            / max(len(observations), 1)
         ),
         "mean_exposure_time": float(
             sum(item.exposure_time for item in observations) / max(len(observations), 1)
@@ -1860,11 +1954,17 @@ def evaluate_external_methods(
     region_masks = _target_mask_region_masks(observations, target_header=target_header)
 
     methods: list[tuple[str, str | None]] = []
-    methods.extend(("reproject_interp", variant) for _, variant in map_compat._REPROJECT_ORDERS)
-    methods.extend(("dfreproject", variant) for _, variant in map_compat._DFREPROJECT_ORDERS)
+    methods.extend(
+        ("reproject_interp", variant) for _, variant in map_compat._REPROJECT_ORDERS
+    )
+    methods.extend(
+        ("dfreproject", variant) for _, variant in map_compat._DFREPROJECT_ORDERS
+    )
     methods.extend(("drizzle", variant) for variant in map_compat._DRIZZLE_KERNELS)
     methods.append(("montage", None))
-    methods.extend(("swarp", variant.lower()) for variant in map_compat._SWARP_RESAMPLING_TYPES)
+    methods.extend(
+        ("swarp", variant.lower()) for variant in map_compat._SWARP_RESAMPLING_TYPES
+    )
     methods.append(("casutools", None))
 
     baseline_row = {
@@ -1888,7 +1988,9 @@ def evaluate_external_methods(
             variant=variant,
         )
         for key in list(row):
-            if key.endswith("_vs_torchsky") or key.startswith("speed_ratio_torchsky_vs_"):
+            if key.endswith("_vs_torchsky") or key.startswith(
+                "speed_ratio_torchsky_vs_"
+            ):
                 row.pop(key)
         row.update(
             {
@@ -1902,21 +2004,33 @@ def evaluate_external_methods(
                 "n_obs": len(observations),
                 "target_width": int(target_header["NAXIS1"]),
                 "target_height": int(target_header["NAXIS2"]),
-                "min_input_width": min(int(item.header["NAXIS1"]) for item in observations),
-                "max_input_width": max(int(item.header["NAXIS1"]) for item in observations),
-                "min_input_height": min(int(item.header["NAXIS2"]) for item in observations),
-                "max_input_height": max(int(item.header["NAXIS2"]) for item in observations),
+                "min_input_width": min(
+                    int(item.header["NAXIS1"]) for item in observations
+                ),
+                "max_input_width": max(
+                    int(item.header["NAXIS1"]) for item in observations
+                ),
+                "min_input_height": min(
+                    int(item.header["NAXIS2"]) for item in observations
+                ),
+                "max_input_height": max(
+                    int(item.header["NAXIS2"]) for item in observations
+                ),
                 "mean_noise_sigma_flux": float(
-                    sum(item.noise_sigma_flux for item in observations) / max(len(observations), 1)
+                    sum(item.noise_sigma_flux for item in observations)
+                    / max(len(observations), 1)
                 ),
                 "mean_exposure_time": float(
-                    sum(item.exposure_time for item in observations) / max(len(observations), 1)
+                    sum(item.exposure_time for item in observations)
+                    / max(len(observations), 1)
                 ),
                 "mean_transmission": float(
-                    sum(item.transmission for item in observations) / max(len(observations), 1)
+                    sum(item.transmission for item in observations)
+                    / max(len(observations), 1)
                 ),
                 "mean_psf_sigma_pix": float(
-                    sum(item.psf_sigma_pix for item in observations) / max(len(observations), 1)
+                    sum(item.psf_sigma_pix for item in observations)
+                    / max(len(observations), 1)
                 ),
                 "goal": "reconstruct_union_field_on_target_grid",
                 "product_geometry": (
@@ -1926,16 +2040,20 @@ def evaluate_external_methods(
                 ),
                 "n_warped_inputs": _count_warped_inputs(observations),
                 "n_weight_maps": sum(
-                    1 for item in observations if item.observation.weight_path is not None
+                    1
+                    for item in observations
+                    if item.observation.weight_path is not None
                 ),
                 "n_mask_maps": sum(
                     1 for item in observations if item.observation.mask_path is not None
                 ),
                 "mean_zero_weight_fraction_input": float(
-                    sum(item.zero_weight_fraction for item in observations) / max(len(observations), 1)
+                    sum(item.zero_weight_fraction for item in observations)
+                    / max(len(observations), 1)
                 ),
                 "mean_explicit_mask_fraction_input": float(
-                    sum(item.explicit_mask_fraction for item in observations) / max(len(observations), 1)
+                    sum(item.explicit_mask_fraction for item in observations)
+                    / max(len(observations), 1)
                 ),
             }
         )
@@ -1997,9 +2115,7 @@ def _kernel_recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, An
                 "profile": profile,
                 "recommended_variant": str(basis["variant"]),
                 "recommended_time_ms": float(basis["time_ms"]),
-                "recommended_reconstruction_rmse": float(
-                    basis["reconstruction_rmse"]
-                ),
+                "recommended_reconstruction_rmse": float(basis["reconstruction_rmse"]),
                 "recommended_signal_to_residual_db": float(
                     basis["signal_to_residual_db"]
                 ),
@@ -2075,7 +2191,9 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="torchsky_map_truth_") as tmp:
         tmpdir = Path(tmp)
-        kernels = [part.strip() for part in args.torchsky_kernels.split(",") if part.strip()]
+        kernels = [
+            part.strip() for part in args.torchsky_kernels.split(",") if part.strip()
+        ]
         for case in [part.strip() for part in args.cases.split(",") if part.strip()]:
             for kernel in kernels:
                 rows.append(

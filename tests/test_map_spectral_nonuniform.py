@@ -9,7 +9,9 @@ from astropy.io import fits
 from torchsky.map.spectral_nonuniform import resample_nonuniform_spectral_2d
 
 
-def _rotated_cd(scale_deg: float, rotation_deg: float) -> tuple[float, float, float, float]:
+def _rotated_cd(
+    scale_deg: float, rotation_deg: float
+) -> tuple[float, float, float, float]:
     theta = torch.deg2rad(torch.tensor(float(rotation_deg), dtype=torch.float64)).item()
     cos_t = float(torch.cos(torch.tensor(theta)).item())
     sin_t = float(torch.sin(torch.tensor(theta)).item())
@@ -117,11 +119,12 @@ def test_nonuniform_spectral_tpv_identity_coordinate_grid_reconstructs_image() -
         torch.arange(size, dtype=torch.float32),
         indexing="ij",
     )
-    image = (
-        0.8 * torch.exp(-((xx - 9.0) ** 2 + (yy - 13.5) ** 2) / (2.0 * 3.0**2))
-        + 0.4 * torch.exp(-((xx - 18.0) ** 2 + (yy - 17.0) ** 2) / (2.0 * 2.0**2))
+    image = 0.8 * torch.exp(
+        -((xx - 9.0) ** 2 + (yy - 13.5) ** 2) / (2.0 * 3.0**2)
+    ) + 0.4 * torch.exp(-((xx - 18.0) ** 2 + (yy - 17.0) ** 2) / (2.0 * 2.0**2))
+    ra, dec = wcs.pixel_to_world(
+        xx.reshape(-1).to(torch.float64), yy.reshape(-1).to(torch.float64)
     )
-    ra, dec = wcs.pixel_to_world(xx.reshape(-1).to(torch.float64), yy.reshape(-1).to(torch.float64))
     x_src, y_src = wcs.world_to_pixel(ra, dec)
     out = resample_nonuniform_spectral_2d(
         image,

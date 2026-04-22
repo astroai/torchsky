@@ -25,7 +25,9 @@ import bench_map_compat as bench_map_compat  # noqa: E402
     bench_map_compat._find_swarp_binary() is None,
     reason="SWarp binary not installed or not on PATH",
 )
-def test_swarp_bilinear_stack_near_torchsky_on_tiny_shifted_pair(tmp_path: Path) -> None:
+def test_swarp_bilinear_stack_near_torchsky_on_tiny_shifted_pair(
+    tmp_path: Path,
+) -> None:
     ny, nx = 24, 24
     base = {
         "NAXIS": 2,
@@ -48,9 +50,7 @@ def test_swarp_bilinear_stack_near_torchsky_on_tiny_shifted_pair(tmp_path: Path)
         torch.arange(nx, dtype=torch.float32),
         indexing="ij",
     )
-    blob = torch.exp(
-        -((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 4.0**2)
-    )
+    blob = torch.exp(-((xx - nx / 2.0) ** 2 + (yy - ny / 2.0) ** 2) / (2.0 * 4.0**2))
     pa = tmp_path / "a.fits"
     pb = tmp_path / "b.fits"
     torchsky.write(str(pa), blob, header=ha, overwrite=True)

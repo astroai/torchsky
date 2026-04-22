@@ -329,11 +329,12 @@ class TestSpectralReader:
         finally:
             os.unlink(filepath)
 
-
     @unittest.mock.patch("torchsky.spectral.WCS")
     @unittest.mock.patch("torchsky.spectral.spectral_axis_from_header")
     @unittest.mock.patch("torchsky.open")
-    def test_read_data_cube_wcs_error(self, mock_open, mock_spectral_axis, mock_wcs_class):
+    def test_read_data_cube_wcs_error(
+        self, mock_open, mock_spectral_axis, mock_wcs_class
+    ):
         """Test read_data_cube handles WCS creation failure gracefully."""
         mock_hdul = unittest.mock.MagicMock()
         mock_open.return_value.__enter__.return_value = mock_hdul

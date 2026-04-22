@@ -130,7 +130,9 @@ def _build_compat_markdown(rows: list[dict[str, Any]]) -> str:
             for row in case_rows
             if row.get("status") == "OK" and row.get("library") == "conservative_parity"
         ]
-        fastest = min(ok_rows, key=lambda row: float(row["time_ms"])) if ok_rows else None
+        fastest = (
+            min(ok_rows, key=lambda row: float(row["time_ms"])) if ok_rows else None
+        )
         external_rows = [
             row
             for row in ok_rows
@@ -372,7 +374,9 @@ def _find_swarp_binary() -> Path | None:
     candidate = _external_tool_prefix("swarp") / "bin" / "swarp"
     if candidate.exists():
         return candidate
-    source_candidate = ROOT / ".benchmarks" / "external-tools" / "src" / "swarp" / "src" / "swarp"
+    source_candidate = (
+        ROOT / ".benchmarks" / "external-tools" / "src" / "swarp" / "src" / "swarp"
+    )
     if source_candidate.exists():
         return source_candidate
     path = shutil.which("swarp")
@@ -383,7 +387,9 @@ def _find_montage_binary(name: str) -> Path | None:
     candidate = _external_tool_prefix("montage") / "bin" / name
     if candidate.exists():
         return candidate
-    source_candidate = ROOT / ".benchmarks" / "external-tools" / "src" / "Montage" / "bin" / name
+    source_candidate = (
+        ROOT / ".benchmarks" / "external-tools" / "src" / "Montage" / "bin" / name
+    )
     if source_candidate.exists():
         return source_candidate
     return None
@@ -393,7 +399,16 @@ def _find_casutools_binary(name: str) -> Path | None:
     candidate = _external_tool_prefix("casutools") / "bin" / name
     if candidate.exists():
         return candidate
-    source_candidate = ROOT / ".benchmarks" / "external-tools" / "src" / "casutools" / "src" / "mosaic" / name
+    source_candidate = (
+        ROOT
+        / ".benchmarks"
+        / "external-tools"
+        / "src"
+        / "casutools"
+        / "src"
+        / "mosaic"
+        / name
+    )
     if source_candidate.exists():
         return source_candidate
     path = shutil.which(name)
@@ -409,7 +424,9 @@ def _external_tool_env() -> dict[str, str]:
     map_compat_lib = ROOT / ".pixi" / "envs" / "map-compat" / "lib"
     if map_compat_lib.exists():
         lib_dirs.append(str(map_compat_lib))
-    casutools_shim_lib = ROOT / ".benchmarks" / "external-tools" / "shims" / "casutools" / "lib"
+    casutools_shim_lib = (
+        ROOT / ".benchmarks" / "external-tools" / "shims" / "casutools" / "lib"
+    )
     if casutools_shim_lib.exists():
         lib_dirs.append(str(casutools_shim_lib))
     for key in ("DYLD_LIBRARY_PATH", "LD_LIBRARY_PATH"):
@@ -441,7 +458,9 @@ def _simple_header(size: int) -> dict[str, Any]:
     }
 
 
-def _rotated_cd(scale_deg: float, rotation_deg: float) -> tuple[float, float, float, float]:
+def _rotated_cd(
+    scale_deg: float, rotation_deg: float
+) -> tuple[float, float, float, float]:
     theta = np.deg2rad(float(rotation_deg))
     cos_t = float(np.cos(theta))
     sin_t = float(np.sin(theta))
@@ -564,7 +583,9 @@ _GRID_EQUIVALENT_IGNORE_KEYS = {
 }
 
 
-def _headers_equivalent_for_direct_copy(source: dict[str, Any], target: dict[str, Any]) -> bool:
+def _headers_equivalent_for_direct_copy(
+    source: dict[str, Any], target: dict[str, Any]
+) -> bool:
     def normalize(header: dict[str, Any]) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for key, value in header.items():
@@ -615,14 +636,18 @@ def _swarp_target_spec(target_header: dict[str, Any]) -> dict[str, Any]:
     ctype1 = str(target_header.get("CTYPE1", ""))
     ctype2 = str(target_header.get("CTYPE2", ""))
     if wcs.sip is not None or "SIP" in ctype1 or "SIP" in ctype2:
-        raise RuntimeError("SWarp output-grid benchmark path does not support SIP target distortions")
+        raise RuntimeError(
+            "SWarp output-grid benchmark path does not support SIP target distortions"
+        )
     if not ctype1.startswith("RA---") or not ctype2.startswith("DEC--"):
         raise RuntimeError(
             "SWarp benchmark path currently supports only equatorial celestial targets "
             f"(got {ctype1!r}, {ctype2!r})"
         )
     if any(key.startswith("PV") for key in target_header):
-        raise RuntimeError("SWarp benchmark path currently skips PV-distorted target grids")
+        raise RuntimeError(
+            "SWarp benchmark path currently skips PV-distorted target grids"
+        )
     matrix = np.asarray(wcs.pixel_scale_matrix, dtype=np.float64)
     if matrix.shape != (2, 2):
         raise RuntimeError(f"unexpected pixel scale matrix shape {matrix.shape!r}")
@@ -637,10 +662,14 @@ def _swarp_target_spec(target_header: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("invalid target pixel scale")
     rel_diff = abs(scale_x - scale_y) / max(scale_x, scale_y)
     if rel_diff > 1e-8:
-        raise RuntimeError("SWarp benchmark path currently requires square output pixels")
+        raise RuntimeError(
+            "SWarp benchmark path currently requires square output pixels"
+        )
     width = int(target_header["NAXIS1"])
     height = int(target_header["NAXIS2"])
-    swarp_crpix = np.array([[(width + 1.0) / 2.0, (height + 1.0) / 2.0]], dtype=np.float64)
+    swarp_crpix = np.array(
+        [[(width + 1.0) / 2.0, (height + 1.0) / 2.0]], dtype=np.float64
+    )
     center_world = wcs.all_pix2world(swarp_crpix, 1)[0]
     return {
         "projection": _target_projection(target_header),
@@ -704,11 +733,17 @@ def _write_mef(
     mask_data: list[np.ndarray] | None = None,
 ) -> None:
     hdus: list[fits.hdu.base.ExtensionHDU | fits.PrimaryHDU] = [fits.PrimaryHDU()]
-    for idx, (data, header) in enumerate(zip(science_data, science_headers, strict=True), start=1):
+    for idx, (data, header) in enumerate(
+        zip(science_data, science_headers, strict=True), start=1
+    ):
         sci_header = header.copy()
         sci_header["EXTNAME"] = "SCI"
         sci_header["EXTVER"] = idx
-        hdus.append(fits.ImageHDU(data=np.asarray(data, dtype=np.float32), header=sci_header, name="SCI"))
+        hdus.append(
+            fits.ImageHDU(
+                data=np.asarray(data, dtype=np.float32), header=sci_header, name="SCI"
+            )
+        )
         if weight_data is not None:
             err_header = header.copy()
             err_header["EXTNAME"] = "ERR"
@@ -737,7 +772,9 @@ def _write_mef(
 def _load_weight_map(obs: ImageObservation, image: torch.Tensor) -> torch.Tensor:
     weight = torch.isfinite(image).to(dtype=torch.float32)
     if obs.weight_path is not None:
-        source = torchsky.read(obs.weight_path, hdu=obs.weight_hdu).to(dtype=torch.float32)
+        source = torchsky.read(obs.weight_path, hdu=obs.weight_hdu).to(
+            dtype=torch.float32
+        )
         source = torch.where(
             torch.isfinite(source) & (source > 0.0),
             source,
@@ -769,7 +806,10 @@ def _reproject_weighted_observation(
     weight = _load_weight_map(obs, image)
     target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
 
-    if _headers_equivalent_for_direct_copy(dict(header), target_header) and tuple(int(v) for v in image.shape) == target_shape:
+    if (
+        _headers_equivalent_for_direct_copy(dict(header), target_header)
+        and tuple(int(v) for v in image.shape) == target_shape
+    ):
         numer = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
         return numer.cpu().numpy(), weight.cpu().numpy()
 
@@ -813,7 +853,10 @@ def _reproject_exact_weighted_observation(
     weight = _load_weight_map(obs, image)
     target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
 
-    if _headers_equivalent_for_direct_copy(dict(header), target_header) and tuple(int(v) for v in image.shape) == target_shape:
+    if (
+        _headers_equivalent_for_direct_copy(dict(header), target_header)
+        and tuple(int(v) for v in image.shape) == target_shape
+    ):
         numer = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
         return numer.cpu().numpy(), weight.cpu().numpy()
 
@@ -857,7 +900,10 @@ def _dfreproject_weighted_observation(
     weight = _load_weight_map(obs, image)
     target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
 
-    if _headers_equivalent_for_direct_copy(dict(header), target_header) and tuple(int(v) for v in image.shape) == target_shape:
+    if (
+        _headers_equivalent_for_direct_copy(dict(header), target_header)
+        and tuple(int(v) for v in image.shape) == target_shape
+    ):
         numer = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
         return numer.cpu().numpy(), weight.cpu().numpy()
 
@@ -965,7 +1011,11 @@ def _coadd_with_drizzle(
     target_header: dict[str, Any],
     kernel: str,
 ) -> tuple[np.ndarray, np.ndarray]:
-    if DrizzleResampler is None or calc_pixmap is None or estimate_pixel_scale_ratio is None:
+    if (
+        DrizzleResampler is None
+        or calc_pixmap is None
+        or estimate_pixel_scale_ratio is None
+    ):
         raise RuntimeError("drizzle is unavailable")
 
     target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
@@ -1048,7 +1098,9 @@ def _supports_montage_fast_project(
         return False
     if any("SIP" in str(target_header.get(key, "")) for key in ("CTYPE1", "CTYPE2")):
         return False
-    if any(key.startswith("PV") for key in source_header) or any(key.startswith("PV") for key in target_header):
+    if any(key.startswith("PV") for key in source_header) or any(
+        key.startswith("PV") for key in target_header
+    ):
         return False
     return (
         str(source_header.get("CTYPE1", "")).startswith("RA---")
@@ -1111,15 +1163,22 @@ def _coadd_with_montage(
             image = image.to(dtype=torch.float32)
             weight = _load_weight_map(obs, image)
             montage_bin = default_bin
-            if fast_bin is not None and _supports_montage_fast_project(dict(header), target_header):
+            if fast_bin is not None and _supports_montage_fast_project(
+                dict(header), target_header
+            ):
                 montage_bin = fast_bin
                 mode = "mProjectPP"
                 backend_path = str(fast_bin)
             else:
                 mode = "mProject"
                 backend_path = str(default_bin)
-            if _headers_equivalent_for_direct_copy(dict(header), target_header) and tuple(int(v) for v in image.shape) == target_shape:
-                obs_numer = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
+            if (
+                _headers_equivalent_for_direct_copy(dict(header), target_header)
+                and tuple(int(v) for v in image.shape) == target_shape
+            ):
+                obs_numer = (
+                    torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
+                )
                 numer += obs_numer.cpu().numpy()
                 denom += weight.cpu().numpy()
                 continue
@@ -1135,8 +1194,12 @@ def _coadd_with_montage(
                 overwrite=True,
             )
             torchsky.write(str(denom_in), weight, header=dict(header), overwrite=True)
-            numer_ok = _project_with_montage(montage_bin, numer_in, numer_out, template_path)
-            denom_ok = _project_with_montage(montage_bin, denom_in, denom_out, template_path)
+            numer_ok = _project_with_montage(
+                montage_bin, numer_in, numer_out, template_path
+            )
+            denom_ok = _project_with_montage(
+                montage_bin, denom_in, denom_out, template_path
+            )
             if not numer_ok or not denom_ok:
                 continue
             numer_proj, numer_header = torchsky.read(str(numer_out), return_header=True)
@@ -1160,10 +1223,17 @@ def _coadd_with_montage(
     denom = np.nan_to_num(denom, nan=0.0, posinf=0.0, neginf=0.0)
     data = numer / np.clip(denom, 1e-8, None)
     data = np.where(denom > 0.0, data, 0.0)
-    return data.astype(np.float32, copy=False), denom.astype(np.float32, copy=False), mode, backend_path
+    return (
+        data.astype(np.float32, copy=False),
+        denom.astype(np.float32, copy=False),
+        mode,
+        backend_path,
+    )
 
 
-def _write_single_extension_mef(path: Path, data: np.ndarray, header: fits.Header) -> None:
+def _write_single_extension_mef(
+    path: Path, data: np.ndarray, header: fits.Header
+) -> None:
     ext_header = header.copy()
     ext_header["EXTNAME"] = "SCI"
     ext_header["EXTVER"] = 1
@@ -1192,7 +1262,9 @@ def _validate_casutools_header(header: dict[str, Any]) -> None:
         )
     proj = _target_projection(header)
     if proj not in {"TAN", "ZPN"}:
-        raise RuntimeError(f"casutools imstack currently supports only TAN/ZPN inputs (got {proj!r})")
+        raise RuntimeError(
+            f"casutools imstack currently supports only TAN/ZPN inputs (got {proj!r})"
+        )
 
 
 def _align_array_to_target(
@@ -1203,7 +1275,10 @@ def _align_array_to_target(
     order: str = "bilinear",
 ) -> np.ndarray:
     target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
-    if _headers_equivalent_for_direct_copy(header, target_header) and tuple(int(v) for v in array.shape) == target_shape:
+    if (
+        _headers_equivalent_for_direct_copy(header, target_header)
+        and tuple(int(v) for v in array.shape) == target_shape
+    ):
         return np.asarray(array, dtype=np.float32)
     if reproject_interp is not None:
         aligned, _ = reproject_interp(
@@ -1213,7 +1288,9 @@ def _align_array_to_target(
             return_footprint=True,
             order=order,
         )
-        return np.nan_to_num(np.asarray(aligned, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+        return np.nan_to_num(
+            np.asarray(aligned, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0
+        )
 
     # Fall back to torchsky's own image-plane mapper so projection-changing
     # legacy backends remain benchmarkable in lean environments.
@@ -1223,7 +1300,9 @@ def _align_array_to_target(
     with tempfile.TemporaryDirectory(prefix="torchsky_align_fallback_") as tmp:
         tmpdir = Path(tmp)
         image_path = tmpdir / "input.fits"
-        _write_single_extension_mef(image_path, np.asarray(array, dtype=np.float32), _as_fits_header(header))
+        _write_single_extension_mef(
+            image_path, np.asarray(array, dtype=np.float32), _as_fits_header(header)
+        )
         result = coadd_image_plane(
             [ImageObservation(str(image_path), hdu=1)],
             target_header=dict(target_header),
@@ -1232,7 +1311,9 @@ def _align_array_to_target(
             stacking_method="weighted_mean",
         )
         aligned = result.data.cpu().numpy()
-    return np.nan_to_num(np.asarray(aligned, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    return np.nan_to_num(
+        np.asarray(aligned, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0
+    )
 
 
 def _coadd_with_casutools(
@@ -1254,7 +1335,9 @@ def _coadd_with_casutools(
         max_weight = max(max_weight, float(weight.max().item()))
         loaded.append((image, dict(header), weight))
     if max_weight <= 0.0:
-        raise RuntimeError("casutools comparator requires at least one positive-weight pixel")
+        raise RuntimeError(
+            "casutools comparator requires at least one positive-weight pixel"
+        )
 
     with tempfile.TemporaryDirectory(prefix="torchsky_casutools_") as tmp:
         tmpdir = Path(tmp)
@@ -1265,13 +1348,22 @@ def _coadd_with_casutools(
         for idx, (image, header, weight) in enumerate(loaded):
             image_path = tmpdir / f"casu_image_{idx}.fits"
             conf_path = tmpdir / f"casu_conf_{idx}.fits"
-            conf = torch.round((1000.0 * weight / max_weight).clamp(min=0.0, max=1000.0)).to(dtype=torch.int16)
+            conf = torch.round(
+                (1000.0 * weight / max_weight).clamp(min=0.0, max=1000.0)
+            ).to(dtype=torch.int16)
             _write_single_extension_mef(
                 image_path,
-                torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0).cpu().numpy().astype(np.float32, copy=False),
+                torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0)
+                .cpu()
+                .numpy()
+                .astype(np.float32, copy=False),
                 _as_fits_header(header),
             )
-            _write_single_extension_mef(conf_path, conf.cpu().numpy().astype(np.int16, copy=False), _as_fits_header(header))
+            _write_single_extension_mef(
+                conf_path,
+                conf.cpu().numpy().astype(np.int16, copy=False),
+                _as_fits_header(header),
+            )
             image_paths.append(str(image_path))
             conf_paths.append(str(conf_path))
         image_list_path.write_text("\n".join(image_paths) + "\n", encoding="utf-8")
@@ -1298,7 +1390,9 @@ def _coadd_with_casutools(
             check=False,
         )
         if completed.returncode != 0:
-            raise RuntimeError(f"casutools imstack failed: {completed.stdout.strip()} {completed.stderr.strip()}".strip())
+            raise RuntimeError(
+                f"casutools imstack failed: {completed.stdout.strip()} {completed.stderr.strip()}".strip()
+            )
 
         data, out_header = torchsky.read(str(out_path), hdu=1, return_header=True)
         conf, conf_header = torchsky.read(str(conf_out_path), hdu=1, return_header=True)
@@ -1309,7 +1403,10 @@ def _coadd_with_casutools(
             order="bilinear",
         )
         coverage_np = _align_array_to_target(
-            (conf.to(dtype=torch.float32) > 0.0).cpu().numpy().astype(np.float32, copy=False),
+            (conf.to(dtype=torch.float32) > 0.0)
+            .cpu()
+            .numpy()
+            .astype(np.float32, copy=False),
             header=dict(conf_header),
             target_header=target_header,
             order="nearest-neighbor",
@@ -1349,7 +1446,9 @@ def _coadd_with_swarp(
                 all_direct_copy = False
                 break
             weight = _load_weight_map(obs, image)
-            direct_numer += torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
+            direct_numer += (
+                torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
+            )
             direct_weight += weight
         if all_direct_copy:
             direct_data = torch.where(
@@ -1466,9 +1565,13 @@ def _coadd_with_swarp_direct_stack(
             scale = float(obs.photometric_scale)
             background = float(obs.background_offset)
             if not math.isfinite(scale) or scale <= 0.0:
-                raise RuntimeError("SWarp direct combine benchmark path requires finite positive photometric_scale")
+                raise RuntimeError(
+                    "SWarp direct combine benchmark path requires finite positive photometric_scale"
+                )
             if not math.isfinite(background):
-                raise RuntimeError("SWarp direct combine benchmark path requires finite background_offset")
+                raise RuntimeError(
+                    "SWarp direct combine benchmark path requires finite background_offset"
+                )
             image_path = tmpdir / f"swarp_direct_{idx}.fits"
             weight_path = tmpdir / f"swarp_direct_{idx}.weight.fits"
             torchsky.write(
@@ -1522,7 +1625,10 @@ def _coadd_with_swarp_direct_stack(
             weight = torchsky.read(str(weightout_path)).to(dtype=torch.float32)
         else:
             weight = torch.isfinite(data).to(dtype=torch.float32)
-        if tuple(int(v) for v in data.shape) != (int(target_header["NAXIS2"]), int(target_header["NAXIS1"])):
+        if tuple(int(v) for v in data.shape) != (
+            int(target_header["NAXIS2"]),
+            int(target_header["NAXIS1"]),
+        ):
             raise RuntimeError(
                 "SWarp output shape did not match requested target grid "
                 f"(got {tuple(int(v) for v in data.shape)})"
@@ -1580,7 +1686,9 @@ def _diff_summary(
         f"max_abs_weight_diff{suffix}": float(weight_diff.max().item()),
         f"max_abs_data_diff_edge{suffix}": _masked_max(data_diff, edge_data_mask),
         f"max_abs_weight_diff_edge{suffix}": float(weight_diff[edge].max().item()),
-        f"max_abs_data_diff_interior{suffix}": _masked_max(data_diff, interior_data_mask),
+        f"max_abs_data_diff_interior{suffix}": _masked_max(
+            data_diff, interior_data_mask
+        ),
         f"max_abs_weight_diff_interior{suffix}": float(weight_diff[~edge].max().item())
         if bool((~edge).any())
         else 0.0,
@@ -1622,9 +1730,14 @@ def _pairwise_backend_row(
         "pair": f"{left}:{left_variant}_vs_{right}:{right_variant}",
         "left_time_ms": float(left_row["time_ms"]),
         "right_time_ms": float(right_row["time_ms"]),
-        "speed_ratio_left_vs_right": float(left_row["time_ms"]) / max(float(right_row["time_ms"]), 1e-12),
-        "comparison_weight_mode": "coverage_mask" if compare_weight_as_mask else "absolute",
-        "comparison_data_domain": "common_support" if data_mask is not None else "full_grid",
+        "speed_ratio_left_vs_right": float(left_row["time_ms"])
+        / max(float(right_row["time_ms"]), 1e-12),
+        "comparison_weight_mode": "coverage_mask"
+        if compare_weight_as_mask
+        else "absolute",
+        "comparison_data_domain": "common_support"
+        if data_mask is not None
+        else "full_grid",
         **_diff_summary(
             left_data,
             left_weight,
@@ -1659,7 +1772,9 @@ def _conservative_overlap_parity_row(
         "pair": "torchsky:conservative_polygon_vs_reproject_exact:exact",
         "left_time_ms": float(conservative_row["time_ms"]),
         "right_time_ms": float(reproject_exact_row["time_ms"]),
-        "speed_ratio_torchsky_conservative_vs_reproject_exact": float(conservative_row["time_ms"])
+        "speed_ratio_torchsky_conservative_vs_reproject_exact": float(
+            conservative_row["time_ms"]
+        )
         / max(float(reproject_exact_row["time_ms"]), 1e-12),
         "comparison_weight_mode": "support_mask",
         "comparison_data_domain": "full_grid",
@@ -1692,9 +1807,9 @@ def _prepare_synthetic_diagonal_scale_case(
         torch.linspace(-1.0, 1.0, size, dtype=torch.float32),
         indexing="ij",
     )
-    image = torch.exp(
-        -((xx - 0.1) ** 2 + (yy + 0.05) ** 2) / 0.25
-    ).to(dtype=torch.float32)
+    image = torch.exp(-((xx - 0.1) ** 2 + (yy + 0.05) ** 2) / 0.25).to(
+        dtype=torch.float32
+    )
     image_path = tmpdir / "synthetic_diagonal_scale.fits"
     torchsky.write(str(image_path), image, header=src, overwrite=True)
     return [ImageObservation(str(image_path))], tgt
@@ -1724,9 +1839,9 @@ def _prepare_synthetic_montage_sin_grid_case(
         torch.linspace(-1.0, 1.0, size, dtype=torch.float32),
         indexing="ij",
     )
-    image = torch.exp(
-        -((xx - 0.25) ** 2 + (yy - 0.1) ** 2) / 0.2
-    ).to(dtype=torch.float32)
+    image = torch.exp(-((xx - 0.25) ** 2 + (yy - 0.1) ** 2) / 0.2).to(
+        dtype=torch.float32
+    )
     image_path = tmpdir / "synthetic_montage_sin_grid.fits"
     torchsky.write(str(image_path), image, header=header, overwrite=True)
     return [ImageObservation(str(image_path))]
@@ -1739,7 +1854,9 @@ def _prepare_synthetic_shifted_case(
     n_obs: int,
 ) -> list[ImageObservation]:
     header = _simple_header(size)
-    base = torch.linspace(0.0, 1.0, size * size, dtype=torch.float32).reshape(size, size)
+    base = torch.linspace(0.0, 1.0, size * size, dtype=torch.float32).reshape(
+        size, size
+    )
     observations: list[ImageObservation] = []
     for idx in range(n_obs):
         image_path = tmpdir / f"shifted_{idx}.fits"
@@ -1752,11 +1869,15 @@ def _prepare_synthetic_shifted_case(
         weight[:, : size // 4] = 2.0 + float(idx)
         torchsky.write(str(image_path), image, header=obs_header, overwrite=True)
         torchsky.write(str(weight_path), weight, header=obs_header, overwrite=True)
-        observations.append(ImageObservation(str(image_path), weight_path=str(weight_path)))
+        observations.append(
+            ImageObservation(str(image_path), weight_path=str(weight_path))
+        )
     return observations
 
 
-def _prepare_upstream_drizzle_translation_case(tmpdir: Path, *, size: int) -> list[ImageObservation]:
+def _prepare_upstream_drizzle_translation_case(
+    tmpdir: Path, *, size: int
+) -> list[ImageObservation]:
     header = _simple_header(size)
     translated_header = dict(header)
     translated_header["CRPIX1"] = float(translated_header["CRPIX1"]) - 2.0
@@ -1771,7 +1892,9 @@ def _prepare_upstream_drizzle_translation_case(tmpdir: Path, *, size: int) -> li
     translated_path = tmpdir / "drizzle_translation_shifted.fits"
     weight_path = tmpdir / "drizzle_translation_wht.fits"
     torchsky.write(str(base_path), image, header=header, overwrite=True)
-    torchsky.write(str(translated_path), image, header=translated_header, overwrite=True)
+    torchsky.write(
+        str(translated_path), image, header=translated_header, overwrite=True
+    )
     torchsky.write(str(weight_path), weight, header=header, overwrite=True)
     return [
         ImageObservation(str(base_path), weight_path=str(weight_path)),
@@ -1831,7 +1954,9 @@ def _prepare_real_sip_mef_case(
     mask_1[:, (2 * data_np.shape[1]) // 3 :] = 0.0
     mask_2[:, : data_np.shape[1] // 3] = 0.0
 
-    mef_path = tmpdir / ("real_sip_shifted_mef.fits" if shifted else "real_sip_mef.fits")
+    mef_path = tmpdir / (
+        "real_sip_shifted_mef.fits" if shifted else "real_sip_mef.fits"
+    )
     _write_mef(
         mef_path,
         [data_np, data_np],
@@ -1859,7 +1984,9 @@ def _prepare_real_sip_mef_case(
     ]
 
 
-def _prepare_synthetic_tpv_mef_case(tmpdir: Path, *, size: int) -> list[ImageObservation]:
+def _prepare_synthetic_tpv_mef_case(
+    tmpdir: Path, *, size: int
+) -> list[ImageObservation]:
     base_header = _as_fits_header(_simple_header(size))
     yy, xx = torch.meshgrid(
         torch.linspace(-1.0, 1.0, size, dtype=torch.float32),
@@ -1908,8 +2035,22 @@ def _prepare_synthetic_tpv_mef_case(tmpdir: Path, *, size: int) -> list[ImageObs
         mask_data=[mask1.cpu().numpy(), mask2.cpu().numpy()],
     )
     return [
-        ImageObservation(str(mef_path), hdu=1, weight_path=str(mef_path), weight_hdu=2, mask_path=str(mef_path), mask_hdu=3),
-        ImageObservation(str(mef_path), hdu=4, weight_path=str(mef_path), weight_hdu=5, mask_path=str(mef_path), mask_hdu=6),
+        ImageObservation(
+            str(mef_path),
+            hdu=1,
+            weight_path=str(mef_path),
+            weight_hdu=2,
+            mask_path=str(mef_path),
+            mask_hdu=3,
+        ),
+        ImageObservation(
+            str(mef_path),
+            hdu=4,
+            weight_path=str(mef_path),
+            weight_hdu=5,
+            mask_path=str(mef_path),
+            mask_hdu=6,
+        ),
     ]
 
 
@@ -2008,7 +2149,11 @@ def _reproject_row(
             order=order,
         )
     except Exception as exc:
-        return _skipped_row(case, "reproject_interp", f"reproject failed: {exc}"), None, None
+        return (
+            _skipped_row(case, "reproject_interp", f"reproject failed: {exc}"),
+            None,
+            None,
+        )
     data = torch.from_numpy(data_np)
     weight = torch.from_numpy(weight_np)
     return (
@@ -2017,7 +2162,9 @@ def _reproject_row(
             "library": "reproject_interp",
             "method": "reproject_interp",
             "variant": variant,
-            "geometry_family": geometry_family_for_library_variant("reproject_interp", variant),
+            "geometry_family": geometry_family_for_library_variant(
+                "reproject_interp", variant
+            ),
             "status": "OK",
             "shape": list(data.shape),
             "n_obs": len(observations),
@@ -2075,7 +2222,11 @@ def _reproject_exact_row(
             target_header=target_header,
         )
     except Exception as exc:
-        return _skipped_row(case, "reproject_exact", f"reproject_exact failed: {exc}"), None, None
+        return (
+            _skipped_row(case, "reproject_exact", f"reproject_exact failed: {exc}"),
+            None,
+            None,
+        )
     data = torch.from_numpy(data_np)
     weight = torch.from_numpy(weight_np)
     return (
@@ -2084,7 +2235,9 @@ def _reproject_exact_row(
             "library": "reproject_exact",
             "method": "reproject_exact",
             "variant": "exact",
-            "geometry_family": geometry_family_for_library_variant("reproject_exact", None),
+            "geometry_family": geometry_family_for_library_variant(
+                "reproject_exact", None
+            ),
             "status": "OK",
             "shape": list(data.shape),
             "n_obs": len(observations),
@@ -2119,7 +2272,13 @@ def _dfreproject_row(
     variant: str,
 ) -> tuple[dict[str, Any], torch.Tensor | None, torch.Tensor | None]:
     if calculate_reprojection is None:
-        return _skipped_row(case, "dfreproject", "optional dependency dfreproject is unavailable"), None, None
+        return (
+            _skipped_row(
+                case, "dfreproject", "optional dependency dfreproject is unavailable"
+            ),
+            None,
+            None,
+        )
 
     try:
         dt = _time_many(
@@ -2136,7 +2295,11 @@ def _dfreproject_row(
             order=order,
         )
     except Exception as exc:
-        return _skipped_row(case, "dfreproject", f"dfreproject failed: {exc}"), None, None
+        return (
+            _skipped_row(case, "dfreproject", f"dfreproject failed: {exc}"),
+            None,
+            None,
+        )
     data = torch.from_numpy(data_np)
     weight = torch.from_numpy(weight_np)
     return (
@@ -2145,7 +2308,9 @@ def _dfreproject_row(
             "library": "dfreproject",
             "method": "dfreproject",
             "variant": variant,
-            "geometry_family": geometry_family_for_library_variant("dfreproject", variant),
+            "geometry_family": geometry_family_for_library_variant(
+                "dfreproject", variant
+            ),
             "status": "OK",
             "shape": list(data.shape),
             "n_obs": len(observations),
@@ -2179,8 +2344,16 @@ def _drizzle_row(
     torchsky_weight: torch.Tensor,
     kernel: str,
 ) -> tuple[dict[str, Any], torch.Tensor | None, torch.Tensor | None]:
-    if DrizzleResampler is None or calc_pixmap is None or estimate_pixel_scale_ratio is None:
-        return _skipped_row(case, "drizzle", "optional dependency drizzle is unavailable"), None, None
+    if (
+        DrizzleResampler is None
+        or calc_pixmap is None
+        or estimate_pixel_scale_ratio is None
+    ):
+        return (
+            _skipped_row(case, "drizzle", "optional dependency drizzle is unavailable"),
+            None,
+            None,
+        )
 
     try:
         dt = _time_many(
@@ -2251,14 +2424,20 @@ def _montage_row(
                 None,
                 None,
             )
-        return _skipped_row(case, "montage", "Montage backend is unavailable"), None, None
+        return (
+            _skipped_row(case, "montage", "Montage backend is unavailable"),
+            None,
+            None,
+        )
 
     try:
         dt = _time_many(
             lambda: _coadd_with_montage(observations, target_header=target_header),
             runs,
         )
-        data_np, weight_np, mode, backend_path = _coadd_with_montage(observations, target_header=target_header)
+        data_np, weight_np, mode, backend_path = _coadd_with_montage(
+            observations, target_header=target_header
+        )
     except Exception as exc:
         return _skipped_row(case, "montage", f"Montage failed: {exc}"), None, None
     data = torch.from_numpy(data_np)
@@ -2381,16 +2560,26 @@ def _casutools_row(
 ) -> tuple[dict[str, Any], torch.Tensor | None, torch.Tensor | None]:
     imstack_bin = _find_casutools_binary("imstack")
     if imstack_bin is None:
-        return _skipped_row(case, "casutools", "casutools imstack is unavailable"), None, None
+        return (
+            _skipped_row(case, "casutools", "casutools imstack is unavailable"),
+            None,
+            None,
+        )
 
     try:
         dt = _time_many(
             lambda: _coadd_with_casutools(observations, target_header=target_header),
             runs,
         )
-        data_np, coverage_np, backend_path = _coadd_with_casutools(observations, target_header=target_header)
+        data_np, coverage_np, backend_path = _coadd_with_casutools(
+            observations, target_header=target_header
+        )
     except Exception as exc:
-        return _skipped_row(case, "casutools", f"casutools imstack failed: {exc}"), None, None
+        return (
+            _skipped_row(case, "casutools", f"casutools imstack failed: {exc}"),
+            None,
+            None,
+        )
     data = torch.from_numpy(data_np)
     coverage = torch.from_numpy(coverage_np)
     common_support = (coverage > 0.0) & (torchsky_weight > 0.0)
@@ -2449,12 +2638,20 @@ def _comparator_row(
     variant: str | None = None,
 ) -> tuple[dict[str, Any], torch.Tensor | None, torch.Tensor | None]:
     if library == "reproject_interp":
-        order = next((order for order, name in _REPROJECT_ORDERS if name == variant), None)
+        order = next(
+            (order for order, name in _REPROJECT_ORDERS if name == variant), None
+        )
         if order is None:
-            return _skipped_row(case, library, f"unknown variant {variant!r}"), None, None
+            return (
+                _skipped_row(case, library, f"unknown variant {variant!r}"),
+                None,
+                None,
+            )
         if reproject_interp is None:
             return (
-                _skipped_row(case, library, "optional dependency reproject is unavailable"),
+                _skipped_row(
+                    case, library, "optional dependency reproject is unavailable"
+                ),
                 None,
                 None,
             )
@@ -2469,7 +2666,9 @@ def _comparator_row(
             variant=str(variant),
         )
         if row.get("status") == "OK":
-            row["speed_ratio_torchsky_vs_reproject"] = row["time_ms"] / torchsky_row["time_ms"]
+            row["speed_ratio_torchsky_vs_reproject"] = (
+                row["time_ms"] / torchsky_row["time_ms"]
+            )
         return row, data, weight
     if library == "reproject_exact":
         row, data, weight = _reproject_exact_row(
@@ -2481,12 +2680,20 @@ def _comparator_row(
             torchsky_weight=torchsky_weight,
         )
         if row.get("status") == "OK":
-            row["speed_ratio_torchsky_vs_reproject_exact"] = row["time_ms"] / torchsky_row["time_ms"]
+            row["speed_ratio_torchsky_vs_reproject_exact"] = (
+                row["time_ms"] / torchsky_row["time_ms"]
+            )
         return row, data, weight
     if library == "dfreproject":
-        order = next((order for order, name in _DFREPROJECT_ORDERS if name == variant), None)
+        order = next(
+            (order for order, name in _DFREPROJECT_ORDERS if name == variant), None
+        )
         if order is None:
-            return _skipped_row(case, library, f"unknown variant {variant!r}"), None, None
+            return (
+                _skipped_row(case, library, f"unknown variant {variant!r}"),
+                None,
+                None,
+            )
         row, data, weight = _dfreproject_row(
             case,
             observations,
@@ -2498,11 +2705,17 @@ def _comparator_row(
             variant=str(variant),
         )
         if row.get("status") == "OK":
-            row["speed_ratio_torchsky_vs_dfreproject"] = row["time_ms"] / torchsky_row["time_ms"]
+            row["speed_ratio_torchsky_vs_dfreproject"] = (
+                row["time_ms"] / torchsky_row["time_ms"]
+            )
         return row, data, weight
     if library == "drizzle":
         if variant not in _DRIZZLE_KERNELS:
-            return _skipped_row(case, library, f"unknown variant {variant!r}"), None, None
+            return (
+                _skipped_row(case, library, f"unknown variant {variant!r}"),
+                None,
+                None,
+            )
         row, data, weight = _drizzle_row(
             case,
             observations,
@@ -2513,7 +2726,9 @@ def _comparator_row(
             kernel=str(variant),
         )
         if row.get("status") == "OK":
-            row["speed_ratio_torchsky_vs_drizzle"] = row["time_ms"] / torchsky_row["time_ms"]
+            row["speed_ratio_torchsky_vs_drizzle"] = (
+                row["time_ms"] / torchsky_row["time_ms"]
+            )
         return row, data, weight
     if library == "drizzlepac":
         if drizzlepac is None:
@@ -2545,7 +2760,9 @@ def _comparator_row(
             torchsky_weight=torchsky_weight,
         )
         if row.get("status") == "OK":
-            row["speed_ratio_torchsky_vs_montage"] = row["time_ms"] / torchsky_row["time_ms"]
+            row["speed_ratio_torchsky_vs_montage"] = (
+                row["time_ms"] / torchsky_row["time_ms"]
+            )
         return row, data, weight
     if library == "swarp":
         if variant is None:
@@ -2560,7 +2777,9 @@ def _comparator_row(
             resampling_type=str(variant).upper(),
         )
         if row.get("status") == "OK":
-            row["speed_ratio_torchsky_vs_swarp"] = row["time_ms"] / torchsky_row["time_ms"]
+            row["speed_ratio_torchsky_vs_swarp"] = (
+                row["time_ms"] / torchsky_row["time_ms"]
+            )
         return row, data, weight
     if library == "casutools":
         row, data, weight = _casutools_row(
@@ -2572,7 +2791,9 @@ def _comparator_row(
             torchsky_weight=torchsky_weight,
         )
         if row.get("status") == "OK":
-            row["speed_ratio_torchsky_vs_casutools"] = row["time_ms"] / torchsky_row["time_ms"]
+            row["speed_ratio_torchsky_vs_casutools"] = (
+                row["time_ms"] / torchsky_row["time_ms"]
+            )
         return row, data, weight
     return _skipped_row(case, library, "unknown comparator"), None, None
 
@@ -2627,11 +2848,21 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="torchsky_map_compat_") as tmp:
         tmpdir = Path(tmp)
-        torchsky_kernels = [part.strip() for part in args.torchsky_kernels.split(",") if part.strip()]
-        reproject_kernels = [part.strip() for part in args.reproject_kernels.split(",") if part.strip()]
-        drizzle_kernels = [part.strip() for part in args.drizzle_kernels.split(",") if part.strip()]
-        swarp_kernels = [part.strip() for part in args.swarp_kernels.split(",") if part.strip()]
-        diag_obs, diag_hdr = _prepare_synthetic_diagonal_scale_case(tmpdir, size=args.size)
+        torchsky_kernels = [
+            part.strip() for part in args.torchsky_kernels.split(",") if part.strip()
+        ]
+        reproject_kernels = [
+            part.strip() for part in args.reproject_kernels.split(",") if part.strip()
+        ]
+        drizzle_kernels = [
+            part.strip() for part in args.drizzle_kernels.split(",") if part.strip()
+        ]
+        swarp_kernels = [
+            part.strip() for part in args.swarp_kernels.split(",") if part.strip()
+        ]
+        diag_obs, diag_hdr = _prepare_synthetic_diagonal_scale_case(
+            tmpdir, size=args.size
+        )
         all_cases: list[tuple[str, list[ImageObservation], dict[str, Any] | None]] = [
             (
                 "upstream_drizzle_crpix_translation",
@@ -2640,7 +2871,9 @@ def main() -> int:
             ),
             (
                 "synthetic_shifted_wcs",
-                _prepare_synthetic_shifted_case(tmpdir, size=args.size, n_obs=args.n_obs),
+                _prepare_synthetic_shifted_case(
+                    tmpdir, size=args.size, n_obs=args.n_obs
+                ),
                 None,
             ),
             ("synthetic_diagonal_scale_wcs", diag_obs, diag_hdr),
@@ -2655,17 +2888,23 @@ def main() -> int:
                 None,
             ),
             ("real_astropy_sip_fixture", _prepare_real_case(tmpdir), None),
-            ("real_astropy_sip_shifted_wcs", _prepare_real_shifted_sip_case(tmpdir), None),
-            ("real_astropy_sip_mef", _prepare_real_sip_mef_case(tmpdir, shifted=False), None),
+            (
+                "real_astropy_sip_shifted_wcs",
+                _prepare_real_shifted_sip_case(tmpdir),
+                None,
+            ),
+            (
+                "real_astropy_sip_mef",
+                _prepare_real_sip_mef_case(tmpdir, shifted=False),
+                None,
+            ),
             (
                 "real_astropy_sip_mef_shifted_wcs",
                 _prepare_real_sip_mef_case(tmpdir, shifted=True),
                 None,
             ),
         ]
-        case_filter = {
-            part.strip() for part in args.cases.split(",") if part.strip()
-        }
+        case_filter = {part.strip() for part in args.cases.split(",") if part.strip()}
         cases = [item for item in all_cases if item[0] in case_filter]
 
         for case_name, observations, header_overrides in cases:
@@ -2676,7 +2915,9 @@ def main() -> int:
                 )
             else:
                 target = plan_image_plane_target(observations, reference_index=0)
-            torchsky_outputs: list[tuple[dict[str, Any], torch.Tensor, torch.Tensor]] = []
+            torchsky_outputs: list[
+                tuple[dict[str, Any], torch.Tensor, torch.Tensor]
+            ] = []
             for kernel in torchsky_kernels:
                 row, data, weight = _torchsky_row(
                     case_name,
@@ -2689,10 +2930,16 @@ def main() -> int:
                 torchsky_outputs.append((row, data, weight))
 
             baseline_row, baseline_data, baseline_weight = next(
-                (item for item in torchsky_outputs if item[0].get("variant") == "bilinear"),
+                (
+                    item
+                    for item in torchsky_outputs
+                    if item[0].get("variant") == "bilinear"
+                ),
                 torchsky_outputs[0],
             )
-            ok_outputs: list[tuple[dict[str, Any], torch.Tensor, torch.Tensor]] = list(torchsky_outputs)
+            ok_outputs: list[tuple[dict[str, Any], torch.Tensor, torch.Tensor]] = list(
+                torchsky_outputs
+            )
 
             comparator_variants: dict[str, list[str | None]] = {
                 "reproject_interp": reproject_kernels,
@@ -2720,7 +2967,11 @@ def main() -> int:
                     if variant is not None and "variant" not in row:
                         row["variant"] = variant
                     rows.append(row)
-                    if row.get("status") == "OK" and data is not None and weight is not None:
+                    if (
+                        row.get("status") == "OK"
+                        and data is not None
+                        and weight is not None
+                    ):
                         ok_outputs.append((row, data, weight))
 
             for idx, (left_row, left_data, left_weight) in enumerate(ok_outputs):

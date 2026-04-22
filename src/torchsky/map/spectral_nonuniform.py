@@ -80,12 +80,12 @@ def resample_nonuniform_spectral_2d(
         stop = min(start + int(chunk_size), int(flat_x.numel()))
         chunk_x = flat_x[start:stop]
         chunk_y = flat_y[start:stop]
-        phase_x = torch.exp(
-            2j * math.pi * chunk_x[:, None] * freq_x[None, :]
-        ).to(dtype=complex_dtype)
-        phase_y = torch.exp(
-            2j * math.pi * chunk_y[:, None] * freq_y[None, :]
-        ).to(dtype=complex_dtype)
+        phase_x = torch.exp(2j * math.pi * chunk_x[:, None] * freq_x[None, :]).to(
+            dtype=complex_dtype
+        )
+        phase_y = torch.exp(2j * math.pi * chunk_y[:, None] * freq_y[None, :]).to(
+            dtype=complex_dtype
+        )
         temp = phase_x @ spectrum.transpose(0, 1)
         values = (temp * phase_y).sum(dim=-1) / normalizer
         out[start:stop] = values.real.to(dtype=work_real.dtype)

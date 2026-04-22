@@ -102,7 +102,9 @@ class PSFSpec:
         if self.mode == "gaussian_sigma_pix":
             sigma = float(self.sigma_pix)
             if not math.isfinite(sigma) or sigma <= 0.0:
-                raise ValueError("PSFSpec gaussian_sigma_pix requires finite sigma_pix > 0")
+                raise ValueError(
+                    "PSFSpec gaussian_sigma_pix requires finite sigma_pix > 0"
+                )
             return
         if self.mode == "kernel2d":
             if self.kernel2d is None:
@@ -215,10 +217,17 @@ class FieldObservation:
                 self.psf_spec = PSFSpec.gaussian(float(self.psf_sigma_pix))
             else:
                 self.psf_spec = PSFSpec()
-        elif self.psf_spec.mode == "gaussian_sigma_pix" and float(self.psf_sigma_pix) > 0.0:
+        elif (
+            self.psf_spec.mode == "gaussian_sigma_pix"
+            and float(self.psf_sigma_pix) > 0.0
+        ):
             sigma = float(self.psf_sigma_pix)
-            if not math.isclose(float(self.psf_spec.sigma_pix), sigma, rel_tol=1e-6, abs_tol=1e-6):
-                raise ValueError("FieldObservation psf_sigma_pix must agree with psf_spec")
+            if not math.isclose(
+                float(self.psf_spec.sigma_pix), sigma, rel_tol=1e-6, abs_tol=1e-6
+            ):
+                raise ValueError(
+                    "FieldObservation psf_sigma_pix must agree with psf_spec"
+                )
         if not math.isfinite(float(self.background_offset)):
             raise ValueError("FieldObservation background_offset must be finite")
         for name in (
@@ -247,9 +256,13 @@ class FieldObservation:
         if wl is None:
             return
         if wl.ndim != 1 or tt.ndim != 1:
-            raise ValueError("transmission_wavelength and transmission_throughput must be 1D")
+            raise ValueError(
+                "transmission_wavelength and transmission_throughput must be 1D"
+            )
         if wl.shape != tt.shape:
-            raise ValueError("transmission_wavelength and transmission_throughput shapes must match")
+            raise ValueError(
+                "transmission_wavelength and transmission_throughput shapes must match"
+            )
         if wl.numel() < 2:
             raise ValueError("tabulated transmission requires at least two samples")
 
@@ -276,15 +289,21 @@ class FieldComponentAnchorTerm:
     def __post_init__(self) -> None:
         if self.loss_weight < 0.0:
             raise ValueError("loss_weight must be non-negative")
-        provided_target_count = int(self.target_image is not None) + int(
-            self.target_values is not None
-        ) + int(self.reference_model is not None)
+        provided_target_count = (
+            int(self.target_image is not None)
+            + int(self.target_values is not None)
+            + int(self.reference_model is not None)
+        )
         if provided_target_count != 1:
             raise ValueError(
                 "exactly one of target_image, target_values, or reference_model must be provided"
             )
-        world_sample_mode = self.sample_ra_deg is not None or self.sample_dec_deg is not None
-        pixel_sample_mode = self.sample_x_pix is not None or self.sample_y_pix is not None
+        world_sample_mode = (
+            self.sample_ra_deg is not None or self.sample_dec_deg is not None
+        )
+        pixel_sample_mode = (
+            self.sample_x_pix is not None or self.sample_y_pix is not None
+        )
         if world_sample_mode and pixel_sample_mode:
             raise ValueError(
                 "sample_ra_deg/sample_dec_deg and sample_x_pix/sample_y_pix are mutually exclusive"
@@ -314,13 +333,15 @@ class FieldComponentAnchorTerm:
         if sample_mode:
             if self.target_image is not None:
                 raise ValueError("target_image is only valid for full-image anchors")
-            if self.target_values is not None and tuple(
-                int(v) for v in self.target_values.shape
-            ) != sample_shape:
+            if (
+                self.target_values is not None
+                and tuple(int(v) for v in self.target_values.shape) != sample_shape
+            ):
                 raise ValueError("target_values shape must match sample coordinates")
-            if self.sample_weight is not None and tuple(
-                int(v) for v in self.sample_weight.shape
-            ) != sample_shape:
+            if (
+                self.sample_weight is not None
+                and tuple(int(v) for v in self.sample_weight.shape) != sample_shape
+            ):
                 raise ValueError("sample_weight shape must match sample coordinates")
         else:
             if self.target_values is not None:
@@ -345,7 +366,10 @@ class FieldComponentAnchorTerm:
                 "override_wavelengths and override_bandpass_weights must be provided together"
             )
         if self.override_wavelengths is not None:
-            if self.override_wavelengths.ndim != 1 or self.override_bandpass_weights is None:
+            if (
+                self.override_wavelengths.ndim != 1
+                or self.override_bandpass_weights is None
+            ):
                 raise ValueError("override_wavelengths must be 1D")
             if self.override_bandpass_weights.ndim != 1:
                 raise ValueError("override_bandpass_weights must be 1D")
@@ -377,22 +401,21 @@ class FieldCentroidAnchorTerm:
         pixel_pair = self.target_x_pix is not None or self.target_y_pix is not None
         world_pair = self.target_ra_deg is not None or self.target_dec_deg is not None
         if pixel_pair and world_pair:
-            raise ValueError(
-                "pixel and world centroid targets are mutually exclusive"
-            )
+            raise ValueError("pixel and world centroid targets are mutually exclusive")
         if not pixel_pair and not world_pair:
             raise ValueError(
                 "one of (target_x_pix, target_y_pix) or (target_ra_deg, target_dec_deg) must be provided"
             )
-        if pixel_pair and (
-            self.target_x_pix is None or self.target_y_pix is None
-        ):
+        if pixel_pair and (self.target_x_pix is None or self.target_y_pix is None):
             raise ValueError("target_x_pix and target_y_pix must be provided together")
-        if world_pair and (
-            self.target_ra_deg is None or self.target_dec_deg is None
+        if world_pair and (self.target_ra_deg is None or self.target_dec_deg is None):
+            raise ValueError(
+                "target_ra_deg and target_dec_deg must be provided together"
+            )
+        if (
+            not math.isfinite(float(self.window_sigma_pix))
+            or float(self.window_sigma_pix) <= 0.0
         ):
-            raise ValueError("target_ra_deg and target_dec_deg must be provided together")
-        if not math.isfinite(float(self.window_sigma_pix)) or float(self.window_sigma_pix) <= 0.0:
             raise ValueError("window_sigma_pix must be finite and positive")
 
 

@@ -22,7 +22,11 @@ def test_variant_specs_prefers_torchsky_only_by_default() -> None:
     assert rows
     assert all(row["backend"] == "torchsky" for row in rows)
     assert any(row["variant"] == "bilinear:flux:weighted_mean" for row in rows)
-    assert any(row["variant"] == "drizzle_square:surface_brightness:weighted_mean:pixfrac=1.000" for row in rows)
+    assert any(
+        row["variant"]
+        == "drizzle_square:surface_brightness:weighted_mean:pixfrac=1.000"
+        for row in rows
+    )
 
 
 def test_variant_specs_can_add_drizzle_rows() -> None:

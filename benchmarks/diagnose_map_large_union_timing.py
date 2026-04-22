@@ -42,7 +42,9 @@ def _timed_call(target: object, attr: str, sink: list[float]):
 
 
 def _is_tpv(header: dict[str, object]) -> bool:
-    return "TPV" in str(header.get("CTYPE1", "")) or "TPV" in str(header.get("CTYPE2", ""))
+    return "TPV" in str(header.get("CTYPE1", "")) or "TPV" in str(
+        header.get("CTYPE2", "")
+    )
 
 
 def _strip_observation(
@@ -81,8 +83,12 @@ def _source_bbox_on_target(
 ) -> tuple[int, int, int, int] | None:
     h_src, w_src = int(source_shape[0]), int(source_shape[1])
     edge_samples = max(int(edge_samples), 2)
-    xs = image_plane_mod.torch.linspace(0.0, float(w_src - 1), steps=edge_samples, dtype=image_plane_mod.torch.float64)
-    ys = image_plane_mod.torch.linspace(0.0, float(h_src - 1), steps=edge_samples, dtype=image_plane_mod.torch.float64)
+    xs = image_plane_mod.torch.linspace(
+        0.0, float(w_src - 1), steps=edge_samples, dtype=image_plane_mod.torch.float64
+    )
+    ys = image_plane_mod.torch.linspace(
+        0.0, float(h_src - 1), steps=edge_samples, dtype=image_plane_mod.torch.float64
+    )
     top_x = xs
     top_y = image_plane_mod.torch.zeros_like(xs)
     bottom_x = xs
@@ -95,7 +101,9 @@ def _source_bbox_on_target(
     y_src = image_plane_mod.torch.cat([top_y, bottom_y, left_y, right_y], dim=0)
     ra, dec = source_wcs.pixel_to_world(x_src, y_src)
     x_tgt, y_tgt = target_wcs.world_to_pixel(ra, dec)
-    finite = image_plane_mod.torch.isfinite(x_tgt) & image_plane_mod.torch.isfinite(y_tgt)
+    finite = image_plane_mod.torch.isfinite(x_tgt) & image_plane_mod.torch.isfinite(
+        y_tgt
+    )
     if not bool(finite.any()):
         return None
     x_good = x_tgt[finite]
@@ -125,7 +133,9 @@ def _slice_prepared_target(
             (ra[y0:y1, x0:x1], dec[y0:y1, x0:x1])
             for ra, dec in target.quadrature_world_grids
         )
-    pixel_area = None if target.pixel_area_sr is None else target.pixel_area_sr[y0:y1, x0:x1]
+    pixel_area = (
+        None if target.pixel_area_sr is None else target.pixel_area_sr[y0:y1, x0:x1]
+    )
     return image_plane_mod._PreparedImagePlaneTarget(
         header=target.header,
         wcs=target.wcs,
@@ -142,7 +152,9 @@ def _slice_prepared_target(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="tan_random10_large_union_rect_weighted_masked")
+    parser.add_argument(
+        "--case", default="tan_random10_large_union_rect_weighted_masked"
+    )
     parser.add_argument("--size", type=int, default=2048)
     parser.add_argument("--width", type=int, default=2048)
     parser.add_argument("--height", type=int, default=1536)
@@ -174,11 +186,20 @@ def main() -> int:
         )
         tan_items = [item for item in observations if not _is_tpv(item.header)]
         if args.scenario == "full":
-            obs_list = [_strip_observation(item.observation, keep_weight=True, keep_mask=True) for item in tan_items]
+            obs_list = [
+                _strip_observation(item.observation, keep_weight=True, keep_mask=True)
+                for item in tan_items
+            ]
         elif args.scenario == "no_mask":
-            obs_list = [_strip_observation(item.observation, keep_weight=True, keep_mask=False) for item in tan_items]
+            obs_list = [
+                _strip_observation(item.observation, keep_weight=True, keep_mask=False)
+                for item in tan_items
+            ]
         else:
-            obs_list = [_strip_observation(item.observation, keep_weight=False, keep_mask=False) for item in tan_items]
+            obs_list = [
+                _strip_observation(item.observation, keep_weight=False, keep_mask=False)
+                for item in tan_items
+            ]
 
         stage_totals_ms = {
             "first_image_read": 0.0,
@@ -198,7 +219,9 @@ def main() -> int:
         t_total0 = time.perf_counter()
         t0 = time.perf_counter()
         first = obs_list[0]
-        first_image, first_header = image_plane_mod.read(first.path, hdu=first.hdu, return_header=True)
+        first_image, first_header = image_plane_mod.read(
+            first.path, hdu=first.hdu, return_header=True
+        )
         stage_totals_ms["first_image_read"] = (time.perf_counter() - t0) * 1000.0
         first_image = image_plane_mod._validate_image_plane(first_image)
         header_dict = image_plane_mod._normalized_header_for_shape(
@@ -225,12 +248,20 @@ def main() -> int:
                     include_pixel_area=False,
                     include_quadrature=False,
                 )
-                stage_totals_ms["target_prepare"] += (time.perf_counter() - prep0) * 1000.0
+                stage_totals_ms["target_prepare"] += (
+                    time.perf_counter() - prep0
+                ) * 1000.0
             return prepared_target
 
-        numer = image_plane_mod.torch.zeros(target_shape, dtype=image_plane_mod.torch.float32, device=device)
-        denom = image_plane_mod.torch.zeros(target_shape, dtype=image_plane_mod.torch.float32, device=device)
-        overlap_count = image_plane_mod.torch.zeros(target_shape, dtype=image_plane_mod.torch.int32, device=device)
+        numer = image_plane_mod.torch.zeros(
+            target_shape, dtype=image_plane_mod.torch.float32, device=device
+        )
+        denom = image_plane_mod.torch.zeros(
+            target_shape, dtype=image_plane_mod.torch.float32, device=device
+        )
+        overlap_count = image_plane_mod.torch.zeros(
+            target_shape, dtype=image_plane_mod.torch.int32, device=device
+        )
 
         for obs_idx, obs in enumerate(obs_list):
             if obs_idx == 0:
@@ -239,21 +270,30 @@ def main() -> int:
                 image_read_ms = 0.0
             else:
                 read0 = time.perf_counter()
-                image, header = image_plane_mod.read(obs.path, hdu=obs.hdu, return_header=True)
+                image, header = image_plane_mod.read(
+                    obs.path, hdu=obs.hdu, return_header=True
+                )
                 image_read_ms = (time.perf_counter() - read0) * 1000.0
                 stage_totals_ms["image_read"] += image_read_ms
                 image = image_plane_mod._validate_image_plane(image)
                 header_dict_obs = dict(header)
             image = image.to(device=device)
 
-            direct_copy = image_plane_mod._headers_equivalent_for_direct_copy(header_dict_obs, header_dict) and tuple(
-                int(v) for v in image.shape
-            ) == target_shape
+            direct_copy = (
+                image_plane_mod._headers_equivalent_for_direct_copy(
+                    header_dict_obs, header_dict
+                )
+                and tuple(int(v) for v in image.shape) == target_shape
+            )
             need_prepared_target = (
-                True
-                if obs.weight_path is not None or obs.mask_path is not None
-                else False
-            ) or header_dict_obs != header_dict or tuple(int(v) for v in image.shape) != target_shape
+                (
+                    True
+                    if obs.weight_path is not None or obs.mask_path is not None
+                    else False
+                )
+                or header_dict_obs != header_dict
+                or tuple(int(v) for v in image.shape) != target_shape
+            )
 
             source_wcs = None
             wcs_init_ms = 0.0
@@ -264,12 +304,16 @@ def main() -> int:
                 stage_totals_ms["wcs_init"] += wcs_init_ms
 
             load0 = time.perf_counter()
-            source_weight = image_plane_mod._load_observation_weight_map(obs, image, device=device)
+            source_weight = image_plane_mod._load_observation_weight_map(
+                obs, image, device=device
+            )
             load_ms = (time.perf_counter() - load0) * 1000.0
             stage_totals_ms["weight_load"] += load_ms
 
             cal0 = time.perf_counter()
-            image_cal, source_weight = image_plane_mod._apply_observation_calibration(obs, image, source_weight)
+            image_cal, source_weight = image_plane_mod._apply_observation_calibration(
+                obs, image, source_weight
+            )
             cal_ms = (time.perf_counter() - cal0) * 1000.0
             stage_totals_ms["calibration"] += cal_ms
 
@@ -281,7 +325,9 @@ def main() -> int:
             window_shape = list(target_shape)
             if direct_copy:
                 sampled_weight = source_weight.to(dtype=image_plane_mod.torch.float32)
-                sampled_numer = image_cal.to(dtype=image_plane_mod.torch.float32) * sampled_weight
+                sampled_numer = (
+                    image_cal.to(dtype=image_plane_mod.torch.float32) * sampled_weight
+                )
             else:
                 target = ensure_prepared_target()
                 target_view = target
@@ -311,7 +357,8 @@ def main() -> int:
                             x1=x1,
                         )
                         window_fraction = float(
-                            ((y1 - y0) * (x1 - x0)) / float(target_shape[0] * target_shape[1])
+                            ((y1 - y0) * (x1 - x0))
+                            / float(target_shape[0] * target_shape[1])
                         )
                         window_shape = [int(y1 - y0), int(x1 - x0)]
                 world_to_pixel_calls: list[float] = []
@@ -323,13 +370,15 @@ def main() -> int:
                         "_sample_image_plane_batched_channels",
                         sampling_calls,
                     ):
-                        sampled_numer, sampled_weight = image_plane_mod._resample_weighted_to_target(
-                            image_cal,
-                            source_weight,
-                            source_wcs,
-                            target_view,
-                            resampling_kernel="bilinear",
-                            value_semantics="surface_brightness",
+                        sampled_numer, sampled_weight = (
+                            image_plane_mod._resample_weighted_to_target(
+                                image_cal,
+                                source_weight,
+                                source_wcs,
+                                target_view,
+                                resampling_kernel="bilinear",
+                                value_semantics="surface_brightness",
+                            )
                         )
                 resample_ms = (time.perf_counter() - resample0) * 1000.0
                 world_to_pixel_ms = float(sum(world_to_pixel_calls))
@@ -337,8 +386,12 @@ def main() -> int:
                 stage_totals_ms["resample_total"] += resample_ms
                 stage_totals_ms["world_to_pixel"] += world_to_pixel_ms
                 stage_totals_ms["sampling"] += sampling_ms
-                full_sampled_numer = image_plane_mod.torch.zeros(target_shape, dtype=sampled_numer.dtype, device=device)
-                full_sampled_weight = image_plane_mod.torch.zeros(target_shape, dtype=sampled_weight.dtype, device=device)
+                full_sampled_numer = image_plane_mod.torch.zeros(
+                    target_shape, dtype=sampled_numer.dtype, device=device
+                )
+                full_sampled_weight = image_plane_mod.torch.zeros(
+                    target_shape, dtype=sampled_weight.dtype, device=device
+                )
                 full_sampled_numer[y0:y1, x0:x1] = sampled_numer
                 full_sampled_weight[y0:y1, x0:x1] = sampled_weight
                 sampled_numer = full_sampled_numer
@@ -352,7 +405,12 @@ def main() -> int:
             accumulation_ms = (time.perf_counter() - acc0) * 1000.0
             stage_totals_ms["accumulation"] += accumulation_ms
 
-            coverage_fraction = float((sampled_weight > 0.0).to(dtype=image_plane_mod.torch.float32).mean().item())
+            coverage_fraction = float(
+                (sampled_weight > 0.0)
+                .to(dtype=image_plane_mod.torch.float32)
+                .mean()
+                .item()
+            )
             rows.append(
                 {
                     "path": obs.path,
@@ -369,10 +427,13 @@ def main() -> int:
                     "resample_total_ms": resample_ms,
                     "world_to_pixel_ms": world_to_pixel_ms,
                     "sampling_ms": sampling_ms,
-                    "resample_other_ms": max(resample_ms - world_to_pixel_ms - sampling_ms, 0.0),
+                    "resample_other_ms": max(
+                        resample_ms - world_to_pixel_ms - sampling_ms, 0.0
+                    ),
                     "accumulation_ms": accumulation_ms,
                     "used_reprojection": source_wcs is not None,
-                    "same_target_shape": tuple(int(v) for v in image.shape) == tuple(int(v) for v in target_shape),
+                    "same_target_shape": tuple(int(v) for v in image.shape)
+                    == tuple(int(v) for v in target_shape),
                     "coverage_fraction": coverage_fraction,
                     "window_fraction": window_fraction,
                     "window_shape": window_shape,
@@ -386,7 +447,10 @@ def main() -> int:
         )
         total_ms = (time.perf_counter() - t_total0) * 1000.0
 
-    rows.sort(key=lambda row: float(row["resample_total_ms"] + row["image_read_ms"]), reverse=True)
+    rows.sort(
+        key=lambda row: float(row["resample_total_ms"] + row["image_read_ms"]),
+        reverse=True,
+    )
     summary = {
         "case": args.case,
         "scenario": args.scenario,
@@ -398,7 +462,9 @@ def main() -> int:
         "total_time_ms": total_ms,
         "stage_totals_ms": stage_totals_ms,
         "output_mean_weight": float(denom.mean().item()),
-        "output_overlap_fraction": float((denom > 0.0).to(dtype=image_plane_mod.torch.float32).mean().item()),
+        "output_overlap_fraction": float(
+            (denom > 0.0).to(dtype=image_plane_mod.torch.float32).mean().item()
+        ),
         "output_mean_data": float(coadd.mean().item()),
         "per_observation": rows,
     }

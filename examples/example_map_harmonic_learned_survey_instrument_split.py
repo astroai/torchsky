@@ -19,7 +19,10 @@ import math
 
 import torch
 
-from torchsky.map import build_spherical_harmonic_solver_hooks, HarmonicComponentDecomposition
+from torchsky.map import (
+    build_spherical_harmonic_solver_hooks,
+    HarmonicComponentDecomposition,
+)
 from torchsky.map.solvers import harmonic_degree_diagonal
 from torchsky.map.target import TargetRenderSpec
 
@@ -42,6 +45,7 @@ def _tan_header(
         "CDELT1": -0.14,
         "CDELT2": 0.14,
     }
+
 
 def main() -> None:
     torch.manual_seed(71)
@@ -92,22 +96,44 @@ def main() -> None:
         truth_model.mixer.shared_weights[:] = torch.tensor([1.0, 0.0, 0.0, 0.0, 0.0])
         truth_model.mixer.survey_weights[1] = torch.tensor([0.0, 1.0, 0.0, 0.0, 0.0])
         truth_model.mixer.survey_weights[2] = torch.tensor([0.0, 0.0, 1.0, 0.0, 0.0])
-        truth_model.mixer.instrument_weights[1] = torch.tensor([0.0, 0.0, 0.0, 1.0, 0.0])
-        truth_model.mixer.instrument_weights[2] = torch.tensor([0.0, 0.0, 0.0, 0.0, 1.0])
+        truth_model.mixer.instrument_weights[1] = torch.tensor(
+            [0.0, 0.0, 0.0, 1.0, 0.0]
+        )
+        truth_model.mixer.instrument_weights[2] = torch.tensor(
+            [0.0, 0.0, 0.0, 0.0, 1.0]
+        )
 
     hooks = build_spherical_harmonic_solver_hooks(lmax=lmax)
     contexts = (
-        ("A", "cam1", (
-            TargetRenderSpec.from_header(_tan_header(crval1=210.0, crval2=54.0), band_label="survey_a"),
-            TargetRenderSpec.from_header(_tan_header(crval1=213.0, crval2=52.8), band_label="survey_a"),
-        )),
-        ("B", "cam2", (
-            TargetRenderSpec.from_header(_tan_header(crval1=208.0, crval2=55.2), band_label="survey_b"),
-            TargetRenderSpec.from_header(_tan_header(crval1=205.8, crval2=53.7), band_label="survey_b"),
-        )),
+        (
+            "A",
+            "cam1",
+            (
+                TargetRenderSpec.from_header(
+                    _tan_header(crval1=210.0, crval2=54.0), band_label="survey_a"
+                ),
+                TargetRenderSpec.from_header(
+                    _tan_header(crval1=213.0, crval2=52.8), band_label="survey_a"
+                ),
+            ),
+        ),
+        (
+            "B",
+            "cam2",
+            (
+                TargetRenderSpec.from_header(
+                    _tan_header(crval1=208.0, crval2=55.2), band_label="survey_b"
+                ),
+                TargetRenderSpec.from_header(
+                    _tan_header(crval1=205.8, crval2=53.7), band_label="survey_b"
+                ),
+            ),
+        ),
     )
 
-    observed_blocks: list[tuple[str, str, tuple[TargetRenderSpec, ...], tuple[torch.Tensor, ...]]] = []
+    observed_blocks: list[
+        tuple[str, str, tuple[TargetRenderSpec, ...], tuple[torch.Tensor, ...]]
+    ] = []
     for survey, instrument, targets in contexts:
         operator = truth_model.conditioned_operator(
             hooks.bind_targets(targets),
@@ -115,7 +141,9 @@ def main() -> None:
             instrument=instrument,
         )
         clean = operator.apply(truth_model.state())
-        observed = tuple((cutout + 0.006 * torch.randn_like(cutout)).detach() for cutout in clean)
+        observed = tuple(
+            (cutout + 0.006 * torch.randn_like(cutout)).detach() for cutout in clean
+        )
         observed_blocks.append((survey, instrument, targets, observed))
 
     fit_model = HarmonicComponentDecomposition(
@@ -171,7 +199,9 @@ def main() -> None:
         calibration_anchor=shared_truth,
         calibration_selector=[0, 1],
     )
-    shared_error_learned = float(torch.linalg.vector_norm(fitted_state[0] - shared_truth).item())
+    shared_error_learned = float(
+        torch.linalg.vector_norm(fitted_state[0] - shared_truth).item()
+    )
 
     shared_only_real = torch.nn.Parameter(0.01 * torch.randn_like(shared_truth.real))
     shared_only_imag = torch.nn.Parameter(0.01 * torch.randn_like(shared_truth.imag))
@@ -180,29 +210,53 @@ def main() -> None:
         shared_optimizer.zero_grad()
         shared_state = torch.complex(shared_only_real, shared_only_imag)
         loss = torch.zeros((), dtype=torch.float32)
-        shared_block = hooks.bind_targets(tuple(target for _, _, targets, _ in observed_blocks for target in targets))
-        shared_observed = tuple(obs for _, _, _, observed in observed_blocks for obs in observed)
+        shared_block = hooks.bind_targets(
+            tuple(target for _, _, targets, _ in observed_blocks for target in targets)
+        )
+        shared_observed = tuple(
+            obs for _, _, _, observed in observed_blocks for obs in observed
+        )
         shared_predictions = shared_block.apply(shared_state)
         for pred, obs in zip(shared_predictions, shared_observed, strict=True):
             loss = loss + torch.mean(torch.square(pred - obs))
         loss.backward()
         shared_optimizer.step()
-    shared_only_state = torch.complex(shared_only_real.detach(), shared_only_imag.detach())
-    shared_error_naive = float(torch.linalg.vector_norm(shared_only_state - shared_truth).item())
+    shared_only_state = torch.complex(
+        shared_only_real.detach(), shared_only_imag.detach()
+    )
+    shared_error_naive = float(
+        torch.linalg.vector_norm(shared_only_state - shared_truth).item()
+    )
 
     print("Learned survey/instrument split harmonic decomposition example")
-    print(f"lmax={lmax} nalm={nalm} components={len(roles)} contexts={len(observed_blocks)}")
+    print(
+        f"lmax={lmax} nalm={nalm} components={len(roles)} contexts={len(observed_blocks)}"
+    )
     print(f"loss history (first 5): {[round(v, 5) for v in loss_history[:5]]}")
     print(f"loss history (last 5): {[round(v, 5) for v in loss_history[-5:]]}")
-    print(f"shared-component error with learned split model: {shared_error_learned:.6f}")
-    print(f"shared-component error with naive shared-only fit: {shared_error_naive:.6f}")
-    print(f"component norms after gauge fix: {[round(float(v), 4) for v in fit_model.component_norms().tolist()]}")
+    print(
+        f"shared-component error with learned split model: {shared_error_learned:.6f}"
+    )
+    print(
+        f"shared-component error with naive shared-only fit: {shared_error_naive:.6f}"
+    )
+    print(
+        f"component norms after gauge fix: {[round(float(v), 4) for v in fit_model.component_norms().tolist()]}"
+    )
     print(f"shared-to-private leakage: {diagnostics.shared_to_private_leakage:.6f}")
     print(f"private-to-shared leakage: {diagnostics.private_to_shared_leakage:.6f}")
-    print(f"calibration transfer stability: {diagnostics.calibration_transfer_stability:.6f}")
-    print(f"learned weights for survey A / cam1: {[round(float(v), 4) for v in fit_model.mixer(survey='A', instrument='cam1').detach().tolist()]}")
-    print(f"learned weights for survey B / cam2: {[round(float(v), 4) for v in fit_model.mixer(survey='B', instrument='cam2').detach().tolist()]}")
-    print("useful when survey/instrument residual structure should be decomposed from a shared astrophysical field without hard-coding the exact nuisance pattern")
+    print(
+        f"calibration transfer stability: {diagnostics.calibration_transfer_stability:.6f}"
+    )
+    print(
+        f"learned weights for survey A / cam1: {[round(float(v), 4) for v in fit_model.mixer(survey='A', instrument='cam1').detach().tolist()]}"
+    )
+    print(
+        f"learned weights for survey B / cam2: {[round(float(v), 4) for v in fit_model.mixer(survey='B', instrument='cam2').detach().tolist()]}"
+    )
+    print(
+        "useful when survey/instrument residual structure should be decomposed from a shared astrophysical field without hard-coding the exact nuisance pattern"
+    )
 
 
 if __name__ == "__main__":

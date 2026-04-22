@@ -78,13 +78,23 @@ def _table(headers: list[str], rows: list[list[object]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _best_row(rows: list[dict[str, object]], metric: str, *, lower_is_better: bool) -> dict[str, object] | None:
-    ok_rows = [row for row in rows if row.get("status") == "OK" and isinstance(row.get(metric), (int, float))]
+def _best_row(
+    rows: list[dict[str, object]], metric: str, *, lower_is_better: bool
+) -> dict[str, object] | None:
+    ok_rows = [
+        row
+        for row in rows
+        if row.get("status") == "OK" and isinstance(row.get(metric), (int, float))
+    ]
     if not ok_rows:
         return None
-    return min(ok_rows, key=lambda row: float(row[metric])) if lower_is_better else max(
-        ok_rows,
-        key=lambda row: float(row[metric]),
+    return (
+        min(ok_rows, key=lambda row: float(row[metric]))
+        if lower_is_better
+        else max(
+            ok_rows,
+            key=lambda row: float(row[metric]),
+        )
     )
 
 
@@ -96,19 +106,27 @@ def main() -> int:
         type=Path,
         default=[
             Path("benchmark_results/map_ground_truth_competitive_large_union.json"),
-            Path("benchmark_results/map_ground_truth_competitive_large_union_1024.json"),
-            Path("benchmark_results/map_ground_truth_competitive_large_union_2048.json"),
+            Path(
+                "benchmark_results/map_ground_truth_competitive_large_union_1024.json"
+            ),
+            Path(
+                "benchmark_results/map_ground_truth_competitive_large_union_2048.json"
+            ),
         ],
     )
     parser.add_argument(
         "--json-out",
         type=Path,
-        default=Path("benchmark_results/map_ground_truth_competitive_large_union_aggregate.json"),
+        default=Path(
+            "benchmark_results/map_ground_truth_competitive_large_union_aggregate.json"
+        ),
     )
     parser.add_argument(
         "--markdown-out",
         type=Path,
-        default=Path("benchmark_results/map_ground_truth_competitive_large_union_aggregate.md"),
+        default=Path(
+            "benchmark_results/map_ground_truth_competitive_large_union_aggregate.md"
+        ),
     )
     args = parser.parse_args()
 
@@ -147,7 +165,8 @@ def main() -> int:
         best_flux = _best_row(rows, "total_flux_relative_error", lower_is_better=True)
         summaries[size] = {
             "fastest": fastest and f"{fastest['method']}:{fastest['variant']}",
-            "best_accuracy": best_rmse and f"{best_rmse['method']}:{best_rmse['variant']}",
+            "best_accuracy": best_rmse
+            and f"{best_rmse['method']}:{best_rmse['variant']}",
             "best_snr": best_snr and f"{best_snr['method']}:{best_snr['variant']}",
             "best_flux": best_flux and f"{best_flux['method']}:{best_flux['variant']}",
         }

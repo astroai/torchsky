@@ -66,8 +66,12 @@ def main() -> None:
         teb_truth,
         temp_hooks.bind_targets(
             (
-                TargetRenderSpec.from_header(_tan_header(crval1=210.0, crval2=54.0), band_label="temp"),
-                TargetRenderSpec.from_header(_tan_header(crval1=214.0, crval2=52.0), band_label="temp"),
+                TargetRenderSpec.from_header(
+                    _tan_header(crval1=210.0, crval2=54.0), band_label="temp"
+                ),
+                TargetRenderSpec.from_header(
+                    _tan_header(crval1=214.0, crval2=52.0), band_label="temp"
+                ),
             )
         ),
         selector=0,
@@ -76,8 +80,12 @@ def main() -> None:
         teb_truth,
         pol_hooks.bind_targets(
             (
-                TargetRenderSpec.from_header(_tan_header(crval1=210.0, crval2=54.0), band_label="pol"),
-                TargetRenderSpec.from_header(_tan_header(crval1=208.5, crval2=55.0), band_label="pol"),
+                TargetRenderSpec.from_header(
+                    _tan_header(crval1=210.0, crval2=54.0), band_label="pol"
+                ),
+                TargetRenderSpec.from_header(
+                    _tan_header(crval1=208.5, crval2=55.0), band_label="pol"
+                ),
             )
         ),
         selector=[1, 2],
@@ -95,7 +103,9 @@ def main() -> None:
 
     clean_temp = temp_block.apply(teb_truth)
     clean_pol = pol_block.apply(teb_truth)
-    observed_temp = tuple(cutout + 0.01 * torch.randn_like(cutout) for cutout in clean_temp)
+    observed_temp = tuple(
+        cutout + 0.01 * torch.randn_like(cutout) for cutout in clean_temp
+    )
     observed_pol = tuple(maps + 0.005 * torch.randn_like(maps) for maps in clean_pol)
     data = (*observed_temp, *observed_pol, torch.zeros_like(teb_truth))
 
@@ -126,13 +136,21 @@ def main() -> None:
     prior_norm = float(torch.linalg.vector_norm(teb_prior.apply(fit.solution)).item())
 
     print("Native joint T/E/B C_ell-prior inverse example")
-    print(f"lmax={lmax} nalm={nalm} temp_obs={len(observed_temp)} pol_obs={len(observed_pol)}")
-    print(f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}")
-    print(f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}")
+    print(
+        f"lmax={lmax} nalm={nalm} temp_obs={len(observed_temp)} pol_obs={len(observed_pol)}"
+    )
+    print(
+        f"residual norm history (first 5): {[round(v, 5) for v in fit.residual_norm_history[:5]]}"
+    )
+    print(
+        f"residual norm history (last 5): {[round(v, 5) for v in fit.residual_norm_history[-5:]]}"
+    )
     print(f"temperature cutout RMSE: {[round(v, 6) for v in temp_rmses]}")
     print(f"polarization cutout RMSE: {[round(v, 6) for v in pol_rmses]}")
     print(f"T/E/B cross-spectrum prior norm: {prior_norm:.6f}")
-    print("useful when one latent spherical T/E/B model should explain both scalar and polarized sky cutouts")
+    print(
+        "useful when one latent spherical T/E/B model should explain both scalar and polarized sky cutouts"
+    )
 
 
 if __name__ == "__main__":

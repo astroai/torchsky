@@ -65,7 +65,10 @@ def _simplify_polygon(points: list[tuple[float, float]]) -> list[tuple[float, fl
         dy1 = y_next - y_curr
         cross = dx0 * dy1 - dy0 * dx1
         norm = math.hypot(x_next - x_prev, y_next - y_prev)
-        if abs(cross) > 1.0e3 * float.fromhex("0x0.0000000000001p-1022") and norm > _DRIZZLE_VERTEX_ATOL:
+        if (
+            abs(cross) > 1.0e3 * float.fromhex("0x0.0000000000001p-1022")
+            and norm > _DRIZZLE_VERTEX_ATOL
+        ):
             simplified.append((x_curr, y_curr))
     return simplified if simplified else points
 
@@ -108,7 +111,9 @@ def _interpolate_point_from_pixmap(
     return (xout, yout)
 
 
-def _build_center_pixmap(source_wcs, target_wcs, shape: tuple[int, int], device) -> Tensor:
+def _build_center_pixmap(
+    source_wcs, target_wcs, shape: tuple[int, int], device
+) -> Tensor:
     ys, xs = torch.meshgrid(
         torch.arange(shape[0], dtype=torch.float64, device=device),
         torch.arange(shape[1], dtype=torch.float64, device=device),
@@ -116,7 +121,11 @@ def _build_center_pixmap(source_wcs, target_wcs, shape: tuple[int, int], device)
     )
     ra_deg, dec_deg = source_wcs.pixel_to_world(xs.reshape(-1), ys.reshape(-1))
     x_tgt, y_tgt = target_wcs.world_to_pixel(ra_deg, dec_deg)
-    return torch.stack((x_tgt, y_tgt), dim=-1).reshape(shape[0], shape[1], 2).to(dtype=torch.float64)
+    return (
+        torch.stack((x_tgt, y_tgt), dim=-1)
+        .reshape(shape[0], shape[1], 2)
+        .to(dtype=torch.float64)
+    )
 
 
 def _clip_polygon_to_rect(
@@ -179,7 +188,9 @@ def _invert_pixmap(
         d22 = _eval_inversion(pixmap, x2, y2, xout, yout)
         if None in (d11, d12, d21, d22):
             return None
-        assert d11 is not None and d12 is not None and d21 is not None and d22 is not None
+        assert (
+            d11 is not None and d12 is not None and d21 is not None and d22 is not None
+        )
         if d11 < d12 and d11 < d21 and d11 < d22:
             xmax_f = x2
             ymax_f = y2
@@ -199,7 +210,9 @@ def _invert_pixmap(
     return (0.5 * (xmin_f + xmax_f), 0.5 * (ymin_f + ymax_f))
 
 
-def _init_edge(v1: tuple[float, float], v2: tuple[float, float], position: int) -> _Edge:
+def _init_edge(
+    v1: tuple[float, float], v2: tuple[float, float], position: int
+) -> _Edge:
     m = (v2[0] - v1[0]) / (v2[1] - v1[1])
     b = (v1[0] * v2[1] - v1[1] * v2[0]) / (v2[1] - v1[1])
     c = b - math.copysign(0.5 + 0.5 * abs(m), float(position))
@@ -223,7 +236,9 @@ def _init_scanner(
     i1 = (min_left - 1) % npts
     i2 = (min_left + 1) % npts
     min_right = i1 if points[i1][1] < points[i2][1] else i2
-    if points[min_right][1] <= min_y * (1.0 + math.copysign(_DRIZZLE_VERTEX_ATOL, min_y)):
+    if points[min_right][1] <= min_y * (
+        1.0 + math.copysign(_DRIZZLE_VERTEX_ATOL, min_y)
+    ):
         if points[min_left][0] > points[min_right][0]:
             min_left, min_right = min_right, min_left
     else:
@@ -234,7 +249,9 @@ def _init_scanner(
     i1 = (max_right - 1) % npts
     i2 = (max_right + 1) % npts
     max_left = i1 if points[i1][1] > points[i2][1] else i2
-    if points[max_left][1] >= max_y * (1.0 - math.copysign(_DRIZZLE_VERTEX_ATOL, max_y)):
+    if points[max_left][1] >= max_y * (
+        1.0 - math.copysign(_DRIZZLE_VERTEX_ATOL, max_y)
+    ):
         if points[max_left][0] > points[max_right][0]:
             max_left, max_right = max_right, max_left
     else:
@@ -274,7 +291,9 @@ def _get_scanline_limits(scanner: _Scanner, y: int) -> tuple[int, int] | None:
         return None
     if pyt <= scanner.min_y or pyb >= scanner.max_y + 1.0:
         return None
-    if scanner.left_index >= len(scanner.left_edges) or scanner.right_index >= len(scanner.right_edges):
+    if scanner.left_index >= len(scanner.left_edges) or scanner.right_index >= len(
+        scanner.right_edges
+    ):
         return None
 
     while pyb > scanner.left_edges[scanner.left_index].v2[1]:
@@ -328,7 +347,9 @@ def _get_scanline_limits(scanner: _Scanner, y: int) -> tuple[int, int] | None:
     return (x1, x2)
 
 
-def _scanner_row_bounds(pixmap: Tensor, *, source_shape: tuple[int, int], target_shape: tuple[int, int]) -> tuple[Tensor, Tensor]:
+def _scanner_row_bounds(
+    pixmap: Tensor, *, source_shape: tuple[int, int], target_shape: tuple[int, int]
+) -> tuple[Tensor, Tensor]:
     src_h, src_w = source_shape
     tgt_h, tgt_w = target_shape
     input_poly = [
@@ -366,7 +387,9 @@ def _scanner_row_bounds(pixmap: Tensor, *, source_shape: tuple[int, int], target
             invalid = torch.full((src_h,), -1, dtype=torch.int64, device=pixmap.device)
             return invalid, invalid
         input_overlap.append(vin)
-    scanner = _init_scanner(input_overlap, xmin=0, xmax=src_w - 1, ymin=0, ymax=src_h - 1)
+    scanner = _init_scanner(
+        input_overlap, xmin=0, xmax=src_w - 1, ymin=0, ymax=src_h - 1
+    )
     if scanner is None:
         invalid = torch.full((src_h,), -1, dtype=torch.int64, device=pixmap.device)
         return invalid, invalid
@@ -426,7 +449,9 @@ def _clip_polygon_half_plane(
         value = point[axis]
         return value >= boundary if keep_greater else value <= boundary
 
-    def intersect(p0: tuple[float, float], p1: tuple[float, float]) -> tuple[float, float]:
+    def intersect(
+        p0: tuple[float, float], p1: tuple[float, float]
+    ) -> tuple[float, float]:
         x0, y0 = p0
         x1, y1 = p1
         v0 = x0 if axis == 0 else y0
@@ -544,7 +569,9 @@ def exact_square_drizzle_project(
     ys, xs = torch.nonzero(valid, as_tuple=True)
     flat_values_numer = weighted_image[ys, xs].to(dtype=torch.float32)
     flat_values_weight = weighted_weight[ys, xs].to(dtype=torch.float32)
-    flat_numer = torch.zeros(target.shape[0] * target.shape[1], dtype=torch.float32, device=image.device)
+    flat_numer = torch.zeros(
+        target.shape[0] * target.shape[1], dtype=torch.float32, device=image.device
+    )
     flat_weight = torch.zeros_like(flat_numer)
     width = int(target.shape[1])
     height = int(target.shape[0])
@@ -606,8 +633,12 @@ def exact_square_drizzle_project(
         numer_chunk = numer_chunk[center_inside]
         weight_chunk = weight_chunk[center_inside]
 
-        sx = torch.stack((x_chunk - half, x_chunk + half, x_chunk + half, x_chunk - half), dim=1)
-        sy = torch.stack((y_chunk - half, y_chunk - half, y_chunk + half, y_chunk + half), dim=1)
+        sx = torch.stack(
+            (x_chunk - half, x_chunk + half, x_chunk + half, x_chunk - half), dim=1
+        )
+        sy = torch.stack(
+            (y_chunk - half, y_chunk - half, y_chunk + half, y_chunk + half), dim=1
+        )
         ra_deg, dec_deg = source_wcs.pixel_to_world(sx.reshape(-1), sy.reshape(-1))
         x_tgt, y_tgt = target.wcs.world_to_pixel(ra_deg, dec_deg)
         x_tgt = x_tgt.reshape(-1, 4).to(dtype=torch.float64)
@@ -628,9 +659,13 @@ def exact_square_drizzle_project(
             if not math.isfinite(area) or area <= 0.0:
                 continue
             min_x = max(int(math.ceil(min(point[0] for point in quad) - 0.5)), 0)
-            max_x = min(int(math.floor(max(point[0] for point in quad) + 0.5)), width - 1)
+            max_x = min(
+                int(math.floor(max(point[0] for point in quad) + 0.5)), width - 1
+            )
             min_y = max(int(math.ceil(min(point[1] for point in quad) - 0.5)), 0)
-            max_y = min(int(math.floor(max(point[1] for point in quad) + 0.5)), height - 1)
+            max_y = min(
+                int(math.floor(max(point[1] for point in quad) + 0.5)), height - 1
+            )
             idxs: list[int] = []
             coeffs: list[float] = []
             for iy in range(min_y, max_y + 1):
@@ -644,7 +679,9 @@ def exact_square_drizzle_project(
             if not idxs:
                 continue
             idx_tensor = torch.tensor(idxs, dtype=torch.int64, device=image.device)
-            coeff_tensor = torch.tensor(coeffs, dtype=torch.float32, device=image.device)
+            coeff_tensor = torch.tensor(
+                coeffs, dtype=torch.float32, device=image.device
+            )
             flat_numer.scatter_add_(0, idx_tensor, numer_chunk[idx] * coeff_tensor)
             flat_weight.scatter_add_(0, idx_tensor, weight_chunk[idx] * coeff_tensor)
 
@@ -711,7 +748,9 @@ def exact_point_drizzle_project(
     ys, xs = torch.nonzero(valid, as_tuple=True)
     flat_values_numer = weighted_image[ys, xs].to(dtype=torch.float32)
     flat_values_weight = weighted_weight[ys, xs].to(dtype=torch.float32)
-    flat_numer = torch.zeros(target.shape[0] * target.shape[1], dtype=torch.float32, device=image.device)
+    flat_numer = torch.zeros(
+        target.shape[0] * target.shape[1], dtype=torch.float32, device=image.device
+    )
     flat_weight = torch.zeros_like(flat_numer)
     width = int(target.shape[1])
     height = int(target.shape[0])

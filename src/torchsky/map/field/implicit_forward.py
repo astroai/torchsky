@@ -100,13 +100,19 @@ def scale_observation_for_rest_frame_scene(
         weight=observation.weight,
         mask=observation.mask,
         wavelength=(
-            None if observation.wavelength is None else float(observation.wavelength) * inv
+            None
+            if observation.wavelength is None
+            else float(observation.wavelength) * inv
         ),
         spectral_min=(
-            None if observation.spectral_min is None else float(observation.spectral_min) * inv
+            None
+            if observation.spectral_min is None
+            else float(observation.spectral_min) * inv
         ),
         spectral_max=(
-            None if observation.spectral_max is None else float(observation.spectral_max) * inv
+            None
+            if observation.spectral_max is None
+            else float(observation.spectral_max) * inv
         ),
         transmission_center=None if tc is None else float(tc) * inv,
         transmission_sigma=None if ts is None else float(ts) * inv,
@@ -140,11 +146,7 @@ def predict_observation_mean(
     """
     obs = observation
     if rest_frame_scene:
-        opz = (
-            kinematics.effective_one_plus_z()
-            if kinematics is not None
-            else 1.0
-        )
+        opz = kinematics.effective_one_plus_z() if kinematics is not None else 1.0
         if opz != 1.0:
             obs = scale_observation_for_rest_frame_scene(observation, one_plus_z=opz)
     return render_field_observation(
@@ -216,5 +218,7 @@ def multi_survey_charbonnier_loss(
             weighted = float(term.loss_weight) * li
             total = weighted if total is None else total + weighted
     if total is None:
-        raise ValueError("multi_survey_charbonnier_loss requires at least one observation")
+        raise ValueError(
+            "multi_survey_charbonnier_loss requires at least one observation"
+        )
     return total

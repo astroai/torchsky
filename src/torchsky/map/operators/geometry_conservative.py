@@ -112,9 +112,13 @@ def _exact_conservative_polygon_project(
             if not math.isfinite(area) or area <= 0.0:
                 continue
             min_x = max(int(math.ceil(min(point[0] for point in quad) - 0.5)), 0)
-            max_x = min(int(math.floor(max(point[0] for point in quad) + 0.5)), width - 1)
+            max_x = min(
+                int(math.floor(max(point[0] for point in quad) + 0.5)), width - 1
+            )
             min_y = max(int(math.ceil(min(point[1] for point in quad) - 0.5)), 0)
-            max_y = min(int(math.floor(max(point[1] for point in quad) + 0.5)), height - 1)
+            max_y = min(
+                int(math.floor(max(point[1] for point in quad) + 0.5)), height - 1
+            )
             if min_x > max_x or min_y > max_y:
                 continue
             idxs: list[int] = []
@@ -130,7 +134,9 @@ def _exact_conservative_polygon_project(
             if not idxs:
                 continue
             idx_tensor = torch.tensor(idxs, dtype=torch.int64, device=image.device)
-            coeff_tensor = torch.tensor(coeffs, dtype=torch.float32, device=image.device)
+            coeff_tensor = torch.tensor(
+                coeffs, dtype=torch.float32, device=image.device
+            )
             flat_numer.scatter_add_(0, idx_tensor, numer_chunk[idx] * coeff_tensor)
             flat_weight.scatter_add_(0, idx_tensor, weight_chunk[idx] * coeff_tensor)
 

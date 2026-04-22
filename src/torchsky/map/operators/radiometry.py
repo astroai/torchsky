@@ -36,4 +36,3 @@ def apply_image_observation_calibration(
     )
     calibrated_weight = source_weight.to(dtype=torch.float32) / (scale * scale)
     return calibrated_image, calibrated_weight
-

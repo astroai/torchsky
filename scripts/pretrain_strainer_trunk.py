@@ -52,7 +52,9 @@ def main() -> int:
     parser.add_argument("--spatial-scale-deg", type=float, default=0.05)
     parser.add_argument("--wavelength-center", type=float, default=5600.0)
     parser.add_argument("--wavelength-scale", type=float, default=900.0)
-    parser.add_argument("--coord-mode", choices=("local_tangent", "sphere_xyz"), default="sphere_xyz")
+    parser.add_argument(
+        "--coord-mode", choices=("local_tangent", "sphere_xyz"), default="sphere_xyz"
+    )
     args = parser.parse_args()
 
     domain = FieldDomain(
