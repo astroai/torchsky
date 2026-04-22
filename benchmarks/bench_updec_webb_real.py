@@ -93,7 +93,16 @@ def _compare_pair(
     read_ms0, read_shape0 = _time_torchsky_read(iter0_path, hdu=1)
     read_ms1, read_shape1 = _time_torchsky_read(iter10_path, hdu=1)
 
-    wcs_keys = ["CTYPE1", "CTYPE2", "CRVAL1", "CRVAL2", "CRPIX1", "CRPIX2", "CDELT1", "CDELT2"]
+    wcs_keys = [
+        "CTYPE1",
+        "CTYPE2",
+        "CRVAL1",
+        "CRVAL2",
+        "CRPIX1",
+        "CRPIX2",
+        "CDELT1",
+        "CDELT2",
+    ]
     same_wcs = all(hdr0.get(key) == hdr1.get(key) for key in wcs_keys)
 
     return {
@@ -112,8 +121,12 @@ def _compare_pair(
         "crop_rmse": float(np.sqrt(np.mean(crop_diff * crop_diff))),
         "crop_mae": float(np.mean(np.abs(crop_diff))),
         "crop_flux_ratio": float(np.sum(crop1[crop_mask]) / np.sum(crop0[crop_mask])),
-        "crop_gradient_mean_ratio": float(_gradient_mean(crop1) / _gradient_mean(crop0)),
-        "crop_laplacian_std_ratio": float(_laplacian_std(crop1) / _laplacian_std(crop0)),
+        "crop_gradient_mean_ratio": float(
+            _gradient_mean(crop1) / _gradient_mean(crop0)
+        ),
+        "crop_laplacian_std_ratio": float(
+            _laplacian_std(crop1) / _laplacian_std(crop0)
+        ),
         "torchsky_iter0_read_ms": read_ms0,
         "torchsky_iter10_read_ms": read_ms1,
         "torchsky_iter0_shape": list(read_shape0),
@@ -142,7 +155,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bands", default="F277W", help="Comma-separated band list")
     parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR)
-    parser.add_argument("--download", action="store_true", help="Download missing files into input-dir")
+    parser.add_argument(
+        "--download", action="store_true", help="Download missing files into input-dir"
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--crop-size", type=int, default=768)
     parser.add_argument("--json-out", type=Path, default=DEFAULT_JSON_OUT)
@@ -157,8 +172,12 @@ def main() -> int:
         iter0_path = args.input_dir / iter0_spec.filename
         iter10_path = args.input_dir / iter10_spec.filename
         if args.download:
-            iter0_path = download_spec(iter0_spec, args.input_dir, overwrite=args.overwrite)
-            iter10_path = download_spec(iter10_spec, args.input_dir, overwrite=args.overwrite)
+            iter0_path = download_spec(
+                iter0_spec, args.input_dir, overwrite=args.overwrite
+            )
+            iter10_path = download_spec(
+                iter10_spec, args.input_dir, overwrite=args.overwrite
+            )
         if not iter0_path.exists() or not iter10_path.exists():
             raise FileNotFoundError(
                 f"Missing files for {band}: {iter0_path} and {iter10_path}. "

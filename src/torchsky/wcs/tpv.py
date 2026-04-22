@@ -359,7 +359,9 @@ class TPV:
                 if self._invert_trace_enabled:
                     active_counts.append(int((res_norm > tol).sum().item()))
                 det = dxi_du * deta_dv - dxi_dv * deta_du
-                det_sign = torch.where(det < 0.0, -torch.ones_like(det), torch.ones_like(det))
+                det_sign = torch.where(
+                    det < 0.0, -torch.ones_like(det), torch.ones_like(det)
+                )
                 det = torch.where(det.abs() < 1e-18, det_sign * 1e-18, det)
                 du = (deta_dv * fx0 - dxi_dv * fx1) / det
                 dv = (-deta_du * fx0 + dxi_du * fx1) / det
@@ -376,8 +378,8 @@ class TPV:
                 active_idx = torch.nonzero(active, as_tuple=False).squeeze(1)
                 if active_idx.numel() == 0:
                     break
-                xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = self._distort_and_jacobian_impl(
-                    u[active_idx], v[active_idx]
+                xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = (
+                    self._distort_and_jacobian_impl(u[active_idx], v[active_idx])
                 )
                 fx0 = xi - xi_f[active_idx]
                 fx1 = eta - eta_f[active_idx]
@@ -386,7 +388,9 @@ class TPV:
                 if self._invert_trace_enabled:
                     active_counts.append(int(still_active.sum().item()))
                 det = dxi_du * deta_dv - dxi_dv * deta_du
-                det_sign = torch.where(det < 0.0, -torch.ones_like(det), torch.ones_like(det))
+                det_sign = torch.where(
+                    det < 0.0, -torch.ones_like(det), torch.ones_like(det)
+                )
                 det = torch.where(det.abs() < 1e-18, det_sign * 1e-18, det)
                 du = (deta_dv * fx0 - dxi_dv * fx1) / det
                 dv = (-deta_du * fx0 + dxi_du * fx1) / det

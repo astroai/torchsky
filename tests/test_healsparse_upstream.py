@@ -57,9 +57,7 @@ def _make_sparse_pair(dtype=np.float64):
 def test_healsparse_quickstart_make_empty_update_and_valid_pixels_match() -> None:
     hs_map, tf_map, pixels, _values = _make_sparse_pair()
 
-    np.testing.assert_array_equal(
-        tf_map.pixels.cpu().numpy(), hs_map.valid_pixels
-    )
+    np.testing.assert_array_equal(tf_map.pixels.cpu().numpy(), hs_map.valid_pixels)
     # coverage_mask semantics differ (nside vs nside_coverage); see test_healsparse_coverage_mask_matches_upstream
 
     query = np.array([0, 1, 2, 10, 34, 8192], dtype=np.int64)
@@ -201,9 +199,11 @@ def test_healsparse_geom_circle_coverage_matches_upstream_sparse_mask() -> None:
     lon = 100.0
     lat = 0.0
     radius = 0.2 / 60.0
-    pixels = compat.query_circle(
-        nside_map, lon, lat, radius, nest=True, degrees=True
-    ).cpu().numpy()
+    pixels = (
+        compat.query_circle(nside_map, lon, lat, radius, nest=True, degrees=True)
+        .cpu()
+        .numpy()
+    )
 
     hs_map = healsparse.HealSparseMap.make_empty(nside_coverage, nside_map, np.int32)
     hs_map.update_values_pix(pixels, np.ones(pixels.size, dtype=np.int32))

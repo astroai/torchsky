@@ -6,6 +6,7 @@ from torchsky.datasets import FITSDataset, IterableFITSDataset, TableChunkDatase
 
 # Tests will be implemented here
 
+
 class TestFITSDataset:
     def test_initialization(self):
         file_paths = ["file1.fits", "file2.fits"]
@@ -167,7 +168,7 @@ class TestIterableFITSDataset:
         items = []
         for i, item in enumerate(dataset):
             items.append(item)
-            if i >= 0: # Get just 1 item since the first failed
+            if i >= 0:  # Get just 1 item since the first failed
                 break
 
         assert len(items) == 1
@@ -184,7 +185,7 @@ class TestTableChunkDataset:
             columns=columns,
             chunk_rows=5000,
             max_chunks=10,
-            include_header=True
+            include_header=True,
         )
         assert dataset.file_paths == file_paths
         assert dataset.hdu == 2
@@ -196,7 +197,10 @@ class TestTableChunkDataset:
     @patch("torchsky.table.scan_torch")
     def test_iteration_no_header(self, mock_scan):
         mock_chunk = {"col1": torch.tensor([1, 2]), "col2": torch.tensor([3, 4])}
-        mock_scan.return_value = [mock_chunk, mock_chunk] # Simulate yielding 2 chunks per file
+        mock_scan.return_value = [
+            mock_chunk,
+            mock_chunk,
+        ]  # Simulate yielding 2 chunks per file
 
         dataset = TableChunkDataset(["file1.fits"], include_header=False)
         items = list(dataset)
@@ -246,6 +250,7 @@ class TestTableChunkDataset:
     @patch("torchsky.table.scan_torch")
     def test_max_chunks(self, mock_scan):
         mock_chunk = torch.tensor([1, 2, 3])
+
         # Infinite generator for mock_scan
         def infinite_chunks(*args, **kwargs):
             while True:

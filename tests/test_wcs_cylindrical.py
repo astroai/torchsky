@@ -108,11 +108,17 @@ def test_cylindrical_not_implemented() -> None:
     with pytest.raises(NotImplementedError, match="CYP inversion not yet implemented"):
         project_cylindrical(phi, theta, "CYP")
 
-    with pytest.raises(NotImplementedError, match="Cylindrical code UNK not implemented"):
+    with pytest.raises(
+        NotImplementedError, match="Cylindrical code UNK not implemented"
+    ):
         project_cylindrical(phi, theta, "UNK")
 
-    with pytest.raises(NotImplementedError, match="CYP forward projection not yet implemented"):
+    with pytest.raises(
+        NotImplementedError, match="CYP forward projection not yet implemented"
+    ):
         deproject_cylindrical(phi, theta, "CYP")
 
-    with pytest.raises(NotImplementedError, match="Cylindrical forward projection UNK not implemented"):
+    with pytest.raises(
+        NotImplementedError, match="Cylindrical forward projection UNK not implemented"
+    ):
         deproject_cylindrical(phi, theta, "UNK")

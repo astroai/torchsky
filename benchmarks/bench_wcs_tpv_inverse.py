@@ -94,13 +94,19 @@ CASES: dict[str, CaseSpec] = {
 }
 
 
-def _sample_pixels(header: fits.Header, n_points: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+def _sample_pixels(
+    header: fits.Header, n_points: int, rng: np.random.Generator
+) -> tuple[np.ndarray, np.ndarray]:
     width = int(header["NAXIS1"])
     height = int(header["NAXIS2"])
     margin_x = min(64.0, max(width / 16.0, 8.0))
     margin_y = min(64.0, max(height / 16.0, 8.0))
-    x = rng.uniform(margin_x, max(margin_x + 1.0, width - 1.0 - margin_x), size=n_points)
-    y = rng.uniform(margin_y, max(margin_y + 1.0, height - 1.0 - margin_y), size=n_points)
+    x = rng.uniform(
+        margin_x, max(margin_x + 1.0, width - 1.0 - margin_x), size=n_points
+    )
+    y = rng.uniform(
+        margin_y, max(margin_y + 1.0, height - 1.0 - margin_y), size=n_points
+    )
     return x.astype(np.float64), y.astype(np.float64)
 
 
@@ -114,7 +120,9 @@ def _time_many(fn, runs: int) -> tuple[float, Any]:
     return float(min(samples)), result
 
 
-def _error_summary(x_true: np.ndarray, y_true: np.ndarray, x_pred: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+def _error_summary(
+    x_true: np.ndarray, y_true: np.ndarray, x_pred: np.ndarray, y_pred: np.ndarray
+) -> dict[str, float]:
     dx = x_pred - x_true
     dy = y_pred - y_true
     err = np.sqrt(dx * dx + dy * dy)
@@ -161,7 +169,9 @@ def _bench_torchsky_method(
         trace = twcs.tpv.get_last_invert_trace() or {}
         twcs.tpv.set_invert_trace(False)
         row["mean_point_iterations"] = float(trace.get("mean_point_iterations", 0.0))
-        row["iterations_max"] = int(trace.get("iterations_max", trace.get("iterations", 0)))
+        row["iterations_max"] = int(
+            trace.get("iterations_max", trace.get("iterations", 0))
+        )
     else:
         row["mean_point_iterations"] = None
         row["iterations_max"] = None

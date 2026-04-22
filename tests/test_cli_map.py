@@ -5,6 +5,7 @@ import pytest
 from torchsky.cli import build_parser
 from torchsky.cli.map_command import _dispatch_map
 
+
 def test_map_parser_defaults():
     parser = build_parser()
     args = parser.parse_args(["map", "out.fits", "in1.fits", "in2.fits"])
@@ -17,16 +18,18 @@ def test_map_parser_defaults():
     assert args.kernel == "bilinear"
     assert args.inr_spectral_source == "svo"
 
+
 @mock.patch("torchsky.cli.map_command._expand_inputs")
 def test_dispatch_map_weights_mismatch(mock_expand):
     mock_expand.return_value = ["in1.fits", "in2.fits"]
     args = argparse.Namespace(
         inputs=["in*.fits"],
         weights=[1.0],  # only 1 weight for 2 inputs
-        method="coadd"
+        method="coadd",
     )
     with pytest.raises(SystemExit, match="--weights count must match expanded"):
         _dispatch_map(args)
+
 
 @mock.patch("torchsky.cli.map_command._expand_inputs")
 @mock.patch("torchsky.cli.map_command._run_coadd")
@@ -34,11 +37,7 @@ def test_dispatch_map_coadd(mock_run_coadd, mock_expand):
     mock_expand.return_value = ["in1.fits", "in2.fits"]
     mock_run_coadd.return_value = 0
 
-    args = argparse.Namespace(
-        inputs=["in*.fits"],
-        weights=None,
-        method="coadd"
-    )
+    args = argparse.Namespace(inputs=["in*.fits"], weights=None, method="coadd")
 
     rc = _dispatch_map(args)
     assert rc == 0
@@ -46,17 +45,14 @@ def test_dispatch_map_coadd(mock_run_coadd, mock_expand):
     assert args.weights == [1.0, 1.0]
     mock_run_coadd.assert_called_once_with(args)
 
+
 @mock.patch("torchsky.cli.map_command._expand_inputs")
 @mock.patch("torchsky.cli.map_command._run_inr")
 def test_dispatch_map_inr(mock_run_inr, mock_expand):
     mock_expand.return_value = ["in1.fits"]
     mock_run_inr.return_value = 0
 
-    args = argparse.Namespace(
-        inputs=["in1.fits"],
-        weights=None,
-        method="inr"
-    )
+    args = argparse.Namespace(inputs=["in1.fits"], weights=None, method="inr")
 
     rc = _dispatch_map(args)
     assert rc == 0
@@ -64,8 +60,10 @@ def test_dispatch_map_inr(mock_run_inr, mock_expand):
     assert args.weights == [1.0]
     mock_run_inr.assert_called_once_with(args)
 
+
 def test_safe_name():
     from torchsky.cli.map_command import _safe_name
+
     assert _safe_name("F277W") == "F277W"
     assert _safe_name("F277W/CLEAR") == "F277W_CLEAR"
     assert _safe_name("") == "band"

@@ -177,7 +177,9 @@ def _load_real_catalog(
     return table, ra, dec
 
 
-def _make_real_catalogs() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+def _make_real_catalogs() -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:
     _, left_ra, left_dec = _load_real_catalog(
         "irsa-nph-m31.xml",
         ra_col="ra",

@@ -261,9 +261,7 @@ def main() -> int:
             lambda a, b: (
                 int(
                     np.sum(
-                        ~np.isclose(
-                            _to_numpy(a), np.asarray(b), atol=1e-10, rtol=1e-10
-                        )
+                        ~np.isclose(_to_numpy(a), np.asarray(b), atol=1e-10, rtol=1e-10)
                     )
                 ),
                 float(np.max(np.abs(_to_numpy(a) - np.asarray(b)))),
@@ -276,9 +274,7 @@ def main() -> int:
             lambda a, b: (
                 int(
                     np.sum(
-                        ~np.isclose(
-                            _to_numpy(a), np.asarray(b), atol=1e-10, rtol=1e-10
-                        )
+                        ~np.isclose(_to_numpy(a), np.asarray(b), atol=1e-10, rtol=1e-10)
                     )
                 ),
                 float(np.max(np.abs(_to_numpy(a) - np.asarray(b)))),

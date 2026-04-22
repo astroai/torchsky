@@ -249,7 +249,13 @@ def test_synfast_pol_and_alm_output_shapes() -> None:
     z = torch.zeros((lmax + 1,), dtype=torch.float64)
     cls4 = [torch.ones_like(z), z.clone(), torch.ones_like(z), z.clone()]
     maps, alms = synfast(
-        cls4, nside=nside, lmax=lmax, mmax=lmax, alm=True, pol=True, new=False  # type: ignore
+        cls4,
+        nside=nside,
+        lmax=lmax,
+        mmax=lmax,
+        alm=True,
+        pol=True,
+        new=False,  # type: ignore
     )
     assert maps.shape == (3, hp.nside2npix(nside))
     assert alms.shape == (3, alm_size(lmax))
@@ -304,9 +310,7 @@ def test_map2alm_lsq_maxiter_zero_matches_single_pass() -> None:
         tol=1e-30,
         maxiter=0,
     )
-    rec = alm2map(
-        alm_lsq, nside=nside, lmax=lmax, mmax=lmax, pol=False
-    )
+    rec = alm2map(alm_lsq, nside=nside, lmax=lmax, mmax=lmax, pol=False)
     rel_ref = float(torch.linalg.norm(m - rec) / torch.linalg.norm(m).clamp_min(1e-15))
     torch.testing.assert_close(alm_lsq, alm_ref, atol=1e-12, rtol=0.0)
     assert rel_res == pytest.approx(rel_ref, abs=1e-12)
@@ -604,9 +608,7 @@ def test_smoothmap_variance_decreases() -> None:
     npix = hp.nside2npix(nside)
     rng = np.random.default_rng(11)
     m = torch.from_numpy(rng.normal(size=npix)).to(torch.float64)
-    sm = smoothmap(
-        m, nside=nside, lmax=24, fwhm_rad=math.radians(30.0 / 60.0)
-    )
+    sm = smoothmap(m, nside=nside, lmax=24, fwhm_rad=math.radians(30.0 / 60.0))
     assert sm.shape == m.shape
     assert float(torch.var(sm)) < float(torch.var(m))
 
@@ -776,9 +778,7 @@ def test_spin_autograd_fallback_paths(spin: int) -> None:
     nalm = alm_size(lmax)
     ae_in = torch.randn((nalm,), dtype=torch.complex128, requires_grad=True)
     ab_in = torch.randn((nalm,), dtype=torch.complex128, requires_grad=True)
-    qu_rec = alm2map_spin(
-        (ae_in, ab_in), nside=nside, spin=spin, lmax=lmax
-    )
+    qu_rec = alm2map_spin((ae_in, ab_in), nside=nside, spin=spin, lmax=lmax)
     loss_alm2 = qu_rec.square().sum()
     loss_alm2.backward()
     assert ae_in.grad is not None and ab_in.grad is not None
@@ -816,13 +816,9 @@ def test_map2alm_spin_ring_torch_parity_nested(monkeypatch: pytest.MonkeyPatch) 
     )
 
     monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "0")
-    a0, b0 = map2alm_spin(
-        qu_nest, spin=spin, nside=nside, lmax=lmax, nest=True
-    )
+    a0, b0 = map2alm_spin(qu_nest, spin=spin, nside=nside, lmax=lmax, nest=True)
     monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "force")
-    a1, b1 = map2alm_spin(
-        qu_nest, spin=spin, nside=nside, lmax=lmax, nest=True
-    )
+    a1, b1 = map2alm_spin(qu_nest, spin=spin, nside=nside, lmax=lmax, nest=True)
 
     torch.testing.assert_close(a1, a0, atol=1e-10, rtol=0.0)
     torch.testing.assert_close(b1, b0, atol=1e-10, rtol=0.0)
@@ -926,13 +922,9 @@ def test_alm2map_spin_ring_torch_parity_nested(monkeypatch: pytest.MonkeyPatch) 
     a_e, a_b = _random_spin_alms(lmax, spin=spin, seed=1321)
 
     monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "0")
-    qu0 = alm2map_spin(
-        (a_e, a_b), nside=nside, spin=spin, lmax=lmax, nest=True
-    )
+    qu0 = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax, nest=True)
     monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "force")
-    qu1 = alm2map_spin(
-        (a_e, a_b), nside=nside, spin=spin, lmax=lmax, nest=True
-    )
+    qu1 = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax, nest=True)
     torch.testing.assert_close(qu1, qu0, atol=1e-10, rtol=0.0)
 
 
@@ -996,9 +988,7 @@ def test_alm2map_spin_ring_torch_autograd(monkeypatch: pytest.MonkeyPatch) -> No
     nalm = alm_size(lmax)
     ae_in = torch.randn((nalm,), dtype=torch.complex128, requires_grad=True)
     ab_in = torch.randn((nalm,), dtype=torch.complex128, requires_grad=True)
-    qu_rec = alm2map_spin(
-        (ae_in, ab_in), nside=nside, spin=spin, lmax=lmax
-    )
+    qu_rec = alm2map_spin((ae_in, ab_in), nside=nside, spin=spin, lmax=lmax)
     loss = qu_rec.square().sum()
     loss.backward()
     assert ae_in.grad is not None and ab_in.grad is not None
@@ -1028,10 +1018,7 @@ def test_map2alm_batched_pol_matches_rowwise() -> None:
     maps = torch.randn(bsz, 3, npix, dtype=torch.float64)
     out_b = map2alm_batched(maps, nside=nside, lmax=lmax, pol=True)
     ref = torch.stack(
-        [
-            map2alm(maps[i], nside=nside, lmax=lmax, pol=True)
-            for i in range(bsz)
-        ],
+        [map2alm(maps[i], nside=nside, lmax=lmax, pol=True) for i in range(bsz)],
         dim=0,
     )
     torch.testing.assert_close(out_b, ref, atol=0.0, rtol=0.0)
@@ -1044,9 +1031,7 @@ def test_alm2map_batched_scalar_matches_rowwise() -> None:
     bsz = 4
     alms = torch.randn(bsz, nalm, dtype=torch.complex128)
     out_b = alm2map_batched(alms, nside, lmax=lmax)
-    ref = torch.stack(
-        [alm2map(alms[i], nside, lmax=lmax) for i in range(bsz)], dim=0
-    )
+    ref = torch.stack([alm2map(alms[i], nside, lmax=lmax) for i in range(bsz)], dim=0)
     torch.testing.assert_close(out_b, ref, atol=0.0, rtol=0.0)
 
 

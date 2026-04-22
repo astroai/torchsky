@@ -109,7 +109,8 @@ def test_tablehdu_to_fits_rich_types_pending_cfitsio_impl():
             assert table.get_string_column("NAME") == ["alpha", "beta", "gamma"]  # type: ignore
             vals = table["Z"].squeeze(-1)  # type: ignore
             assert np.allclose(
-                vals.numpy(), np.array([1 + 2j, 3 + 4j, 5 + 6j], dtype=np.complex64)  # type: ignore
+                vals.numpy(),
+                np.array([1 + 2j, 3 + 4j, 5 + 6j], dtype=np.complex64),  # type: ignore
             )
             vla = table.get_vla_column("VLA")  # type: ignore
             assert [v.tolist() for v in vla] == [[1, 2], [3], [4, 5, 6]]  # type: ignore
@@ -273,7 +274,9 @@ def test_table_delete_rows_slice_and_single():
             table_hdu = hdul[1]  # type: ignore
             assert table_hdu["ID"].squeeze(-1).tolist() == [1, 3]  # type: ignore
             assert np.allclose(
-                table_hdu["VAL"].squeeze(-1).numpy(), [0.1, 0.3], atol=1e-6  # type: ignore
+                table_hdu["VAL"].squeeze(-1).numpy(),
+                [0.1, 0.3],
+                atol=1e-6,  # type: ignore
             )
             assert table_hdu["FLAG"].squeeze(-1).tolist() == [True, True]  # type: ignore
     finally:

@@ -248,12 +248,11 @@ def test_catalog_stream_dataset_supports_partition_factory() -> None:
     assert list(ds) == [0, 1, 2, 3]
     assert list(ds) == [0, 1, 2, 3]
 
+
 def test_finalize_crossmatch_empty_lists() -> None:
     device = torch.device("cpu")
     stats = catalogs_core._CrossmatchStats(left_points=0, right_points=0)
-    result = catalogs_core._finalize_crossmatch(
-        [], [], [], device=device, stats=stats
-    )
+    result = catalogs_core._finalize_crossmatch([], [], [], device=device, stats=stats)
     assert result.left_index.numel() == 0
     assert result.right_index.numel() == 0
     assert result.separation_arcsec.numel() == 0
@@ -287,6 +286,6 @@ def test_finalize_crossmatch_combines_and_sorts_lists() -> None:
     # Separations should be sorted corresponding to left indices: 0.0, 0.1, 0.2, 0.3
     torch.testing.assert_close(
         result.separation_arcsec,
-        torch.tensor([0.0, 0.1, 0.2, 0.3], dtype=torch.float64)
+        torch.tensor([0.0, 0.1, 0.2, 0.3], dtype=torch.float64),
     )
     assert stats.matched_rows == 4

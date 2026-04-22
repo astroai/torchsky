@@ -88,8 +88,10 @@ def _inr_spectral_field_kwargs(args: argparse.Namespace, band: str) -> dict:
     except ValueError as exc:
         raise SystemExit(f"torchsky map inr: {exc}") from exc
     fid = raw.get("svo_filter_id")
-    if str(args.inr_spectral_source) == "svo" and fid and not getattr(
-        args, "inr_quiet_svo", False
+    if (
+        str(args.inr_spectral_source) == "svo"
+        and fid
+        and not getattr(args, "inr_quiet_svo", False)
     ):
         print(
             f"torchsky map inr: SVO bandpass {str(band).upper()} -> {fid}",
@@ -249,7 +251,8 @@ def _run_inr(args: argparse.Namespace) -> int:
             sub_out = (
                 out_path / f"{_safe_name(fk)}.fits"
                 if out_path.suffix == "" or out_path.is_dir()
-                else out_path.parent / f"{out_path.stem}_{_safe_name(fk)}{out_path.suffix}"
+                else out_path.parent
+                / f"{out_path.stem}_{_safe_name(fk)}{out_path.suffix}"
             )
             sub_out.parent.mkdir(parents=True, exist_ok=True)
             ns = argparse.Namespace(**vars(args))
@@ -444,7 +447,9 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         default="sine_implicit",
         help="Field model kind for make_field_model (inr)",
     )
-    p.add_argument("--inr-band", default=None, help="Filter name for bandpass, e.g. F277W (inr)")
+    p.add_argument(
+        "--inr-band", default=None, help="Filter name for bandpass, e.g. F277W (inr)"
+    )
     p.add_argument(
         "--inr-spectral-source",
         choices=("svo", "builtin", "file", "gaussian"),

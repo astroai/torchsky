@@ -31,9 +31,11 @@ def _lazy_import() -> None:
     global _healpix, _WCS
     if _healpix is None:
         from torchsky.wcs import healpix as _hp
+
         _healpix = _hp
     if _WCS is None:
         from torchsky.wcs import WCS as _W
+
         _WCS = _W
 
 
@@ -71,7 +73,9 @@ def compute_hips_order(wcs, image_shape: tuple[int, int]) -> int:
     return max_order
 
 
-def _tile_lon_lat(order: int, pix: int, tile_size: int = TILE_SIZE) -> tuple[Tensor, Tensor]:
+def _tile_lon_lat(
+    order: int, pix: int, tile_size: int = TILE_SIZE
+) -> tuple[Tensor, Tensor]:
     """
     Compute (lon, lat) coordinates for each pixel of a HiPS tile.
 
@@ -83,7 +87,7 @@ def _tile_lon_lat(order: int, pix: int, tile_size: int = TILE_SIZE) -> tuple[Ten
     nside_tile = 1 << order
     # HiPS tiles use nested sub-pixels; tile_size must be a power of 2
     # (adds int(log2(tile_size)) extra HEALPix orders — e.g. 9 for 512)
-    nside_sub = nside_tile * tile_size      # 2^(order+log2(tile_size))
+    nside_sub = nside_tile * tile_size  # 2^(order+log2(tile_size))
 
     # Sub-pixel indices in NESTED order within this tile
     start = pix * (tile_size * tile_size)
@@ -98,9 +102,11 @@ def _tile_lon_lat(order: int, pix: int, tile_size: int = TILE_SIZE) -> tuple[Ten
 
 
 def _world_to_sample_grid(
-    lon: Tensor, lat: Tensor,
+    lon: Tensor,
+    lat: Tensor,
     wcs,
-    image_h: int, image_w: int,
+    image_h: int,
+    image_w: int,
 ) -> tuple[Tensor, Tensor]:
     """
     Project (lon, lat) → normalized grid sample coordinates [-1, 1].
@@ -117,9 +123,12 @@ def _world_to_sample_grid(
 
     # Validity: pixels that fall inside the image
     valid = (
-        torch.isfinite(grid_x) & torch.isfinite(grid_y)
-        & (grid_x >= -1.0) & (grid_x <= 1.0)
-        & (grid_y >= -1.0) & (grid_y <= 1.0)
+        torch.isfinite(grid_x)
+        & torch.isfinite(grid_y)
+        & (grid_x >= -1.0)
+        & (grid_x <= 1.0)
+        & (grid_y >= -1.0)
+        & (grid_y <= 1.0)
     )
     # Clamp to avoid grid_sample complaints
     grid_x = grid_x.clamp(-1.0, 1.0)
@@ -194,7 +203,9 @@ def render_hips_tile(
 
     # Extract pixel values using bilinear interpolation
     src = image.float().unsqueeze(0).unsqueeze(0)  # 1×1×H×W
-    sampled = F.grid_sample(src, grid, mode="bilinear", align_corners=True, padding_mode="zeros")
+    sampled = F.grid_sample(
+        src, grid, mode="bilinear", align_corners=True, padding_mode="zeros"
+    )
     # sampled: 1×1×(tile^2)×1
     sampled = sampled.squeeze().reshape(tile_size, tile_size)
 

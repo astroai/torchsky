@@ -38,8 +38,12 @@ def main() -> int:
     parser.add_argument("--updec-attempts", type=int, default=4)
     parser.add_argument("--updec-timeout-s", type=float, default=240.0)
     parser.add_argument("--updec-backoff-s", type=float, default=1.0)
-    parser.add_argument("--short-band-max-exposures", type=int, default=FULL_PUBLIC_MAX_EXPOSURES)
-    parser.add_argument("--long-band-max-exposures", type=int, default=FULL_PUBLIC_MAX_EXPOSURES)
+    parser.add_argument(
+        "--short-band-max-exposures", type=int, default=FULL_PUBLIC_MAX_EXPOSURES
+    )
+    parser.add_argument(
+        "--long-band-max-exposures", type=int, default=FULL_PUBLIC_MAX_EXPOSURES
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--list", action="store_true")
     args = parser.parse_args()
@@ -93,7 +97,11 @@ def main() -> int:
             module=args.module,
         )
         for product in products:
-            print(download_jwst_product(product, args.jwst_output_dir, overwrite=args.overwrite))
+            print(
+                download_jwst_product(
+                    product, args.jwst_output_dir, overwrite=args.overwrite
+                )
+            )
     return 0
 
 

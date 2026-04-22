@@ -67,7 +67,9 @@ def serve(
         cache_mb=cache_mb,
         max_registered_surveys=max_registered_surveys,
         max_validation_pairs=max_validation_pairs,
-        max_image_pixels=max_image_pixels if max_image_pixels is not None else _DEFAULT_MAX_IMAGE_PIXELS,
+        max_image_pixels=max_image_pixels
+        if max_image_pixels is not None
+        else _DEFAULT_MAX_IMAGE_PIXELS,
         expose_root_in_health=expose_root_in_health,
         cors_allow_origins=cors_allow_origins,
         cors_allow_credentials=cors_allow_credentials,
@@ -111,6 +113,7 @@ def show_url(port: int = 8822, host: str = "127.0.0.1") -> str:
     try:
         # JupyterHub server-proxy detection
         import os
+
         hub_base = os.environ.get("JUPYTERHUB_SERVICE_PREFIX")
         if hub_base:
             base = f"{hub_base.rstrip('/')}/proxy/{port}"

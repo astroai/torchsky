@@ -50,7 +50,9 @@ class MastProduct:
 
 
 def _invoke(request: dict[str, Any]) -> dict[str, Any]:
-    response = requests.post(MAST_INVOKE, data={"request": json.dumps(request)}, timeout=120)
+    response = requests.post(
+        MAST_INVOKE, data={"request": json.dumps(request)}, timeout=120
+    )
     response.raise_for_status()
     payload = response.json()
     if payload.get("status") != "COMPLETE":
@@ -120,7 +122,9 @@ def select_products(
     proposal_id: str = DEFAULT_PROPOSAL_ID,
     target_name: str = DEFAULT_TARGET,
 ) -> list[MastProduct]:
-    observations = query_nircam_observations(proposal_id=proposal_id, target_name=target_name)
+    observations = query_nircam_observations(
+        proposal_id=proposal_id, target_name=target_name
+    )
     match = next(obs for obs in observations if obs.get("filters") == band)
     products = query_products(int(match["obsid"]))
     subgroup_upper = subgroup.upper()
@@ -138,11 +142,17 @@ def select_products(
             not require_detector_split
             or (
                 detector_tokens
-                and any(token in product.product_filename.lower() for token in detector_tokens)
+                and any(
+                    token in product.product_filename.lower()
+                    for token in detector_tokens
+                )
             )
             or (
                 not detector_tokens
-                and ("nrcalong" in product.product_filename or "nrcblong" in product.product_filename)
+                and (
+                    "nrcalong" in product.product_filename
+                    or "nrcblong" in product.product_filename
+                )
             )
         )
         and (
@@ -154,7 +164,9 @@ def select_products(
     return chosen[:max_exposures]
 
 
-def download_product(product: MastProduct, output_dir: Path, *, overwrite: bool) -> Path:
+def download_product(
+    product: MastProduct, output_dir: Path, *, overwrite: bool
+) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     dest = output_dir / product.product_filename
     if dest.exists() and not overwrite and dest.stat().st_size == product.size:
@@ -186,7 +198,9 @@ def main() -> int:
         default="b",
         help="Detector module family to download: a, b, or any",
     )
-    parser.add_argument("--subgroup", default="CAL", help="Product subgroup, e.g. CAL or RATE")
+    parser.add_argument(
+        "--subgroup", default="CAL", help="Product subgroup, e.g. CAL or RATE"
+    )
     parser.add_argument("--max-exposures", type=int, default=2)
     parser.add_argument(
         "--allow-mosaic-products",

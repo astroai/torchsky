@@ -65,13 +65,18 @@ def _parity_max_arcsec(
 ) -> dict[str, float]:
     ra_a, dec_a = awcs.all_pix2world(x, y, origin)
     pixels = torch.stack(
-        [torch.from_numpy(np.ascontiguousarray(x)), torch.from_numpy(np.ascontiguousarray(y))],
+        [
+            torch.from_numpy(np.ascontiguousarray(x)),
+            torch.from_numpy(np.ascontiguousarray(y)),
+        ],
         dim=-1,
     )
     world = twcs.pixel_to_world(pixels, origin=float(origin))
     ra_t = world[..., 0].detach().cpu().numpy().reshape(-1)
     dec_t = world[..., 1].detach().cpu().numpy().reshape(-1)
-    valid = np.isfinite(ra_a) & np.isfinite(dec_a) & np.isfinite(ra_t) & np.isfinite(dec_t)
+    valid = (
+        np.isfinite(ra_a) & np.isfinite(dec_a) & np.isfinite(ra_t) & np.isfinite(dec_t)
+    )
     if not np.any(valid):
         return {"max_dra_deg": float("nan"), "max_ddec_deg": float("nan")}
     dra = ((ra_t[valid] - ra_a[valid] + 180.0) % 360.0) - 180.0
@@ -101,12 +106,7 @@ def _parity_inverse_max_pix(
     pix = twcs.world_to_pixel(world, origin=float(origin))
     x_t = pix[..., 0].detach().cpu().numpy().reshape(-1)
     y_t = pix[..., 1].detach().cpu().numpy().reshape(-1)
-    valid = (
-        np.isfinite(x_a)
-        & np.isfinite(y_a)
-        & np.isfinite(x_t)
-        & np.isfinite(y_t)
-    )
+    valid = np.isfinite(x_a) & np.isfinite(y_a) & np.isfinite(x_t) & np.isfinite(y_t)
     if not np.any(valid):
         return {"max_dx_pix": float("nan"), "max_dy_pix": float("nan")}
     return {
@@ -148,12 +148,16 @@ def main() -> int:
         ra_t = torch.from_numpy(np.ascontiguousarray(ra_ref))
         dec_t = torch.from_numpy(np.ascontiguousarray(dec_ref))
         world = torch.stack([ra_t, dec_t], dim=-1)
-        parity_inv = _parity_inverse_max_pix(awcs, twcs, ra_ref, dec_ref, origin=args.origin)
+        parity_inv = _parity_inverse_max_pix(
+            awcs, twcs, ra_ref, dec_ref, origin=args.origin
+        )
 
         ms_ast = _median_ms(
             lambda: awcs.all_pix2world(x, y, args.origin), runs=args.runs
         )
-        ms_xy = _median_ms(lambda: twcs.pixel_to_world(xt, yt, origin=args.origin), runs=args.runs)
+        ms_xy = _median_ms(
+            lambda: twcs.pixel_to_world(xt, yt, origin=args.origin), runs=args.runs
+        )
         ms_stack = _median_ms(
             lambda: twcs.pixel_to_world(pixels, origin=args.origin), runs=args.runs
         )
@@ -198,7 +202,9 @@ def main() -> int:
             "median_ms_torchsky_pixel_to_world_stack": ms_stack,
             "median_ms_torchsky_pixel_to_world_stack_compiled": ms_stack_c,
             "torchsky_xy_vs_astropy": ms_ast / ms_xy if ms_xy > 0 else float("nan"),
-            "torchsky_stack_vs_astropy": ms_ast / ms_stack if ms_stack > 0 else float("nan"),
+            "torchsky_stack_vs_astropy": ms_ast / ms_stack
+            if ms_stack > 0
+            else float("nan"),
             "torchsky_stack_compiled_vs_astropy": ms_ast / ms_stack_c
             if ms_stack_c > 0 and np.isfinite(ms_stack_c)
             else float("nan"),
@@ -206,7 +212,9 @@ def main() -> int:
             "median_ms_torchsky_world_to_pixel_xy": ms_w2p_xy,
             "median_ms_torchsky_world_to_pixel_stack": ms_w2p_stack,
             "median_ms_torchsky_world_to_pixel_stack_compiled": ms_w2p_stack_c,
-            "torchsky_w2p_xy_vs_astropy": ms_ast_w2p / ms_w2p_xy if ms_w2p_xy > 0 else float("nan"),
+            "torchsky_w2p_xy_vs_astropy": ms_ast_w2p / ms_w2p_xy
+            if ms_w2p_xy > 0
+            else float("nan"),
             "torchsky_w2p_stack_vs_astropy": ms_ast_w2p / ms_w2p_stack
             if ms_w2p_stack > 0
             else float("nan"),
@@ -237,7 +245,9 @@ def main() -> int:
 
     if args.json_out is not None:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
-        args.json_out.write_text(json.dumps({"rows": rows}, indent=2) + "\n", encoding="utf-8")
+        args.json_out.write_text(
+            json.dumps({"rows": rows}, indent=2) + "\n", encoding="utf-8"
+        )
         print(f"Wrote {args.json_out}")
 
     return 0

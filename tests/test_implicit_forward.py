@@ -333,7 +333,9 @@ def test_fit_field_model_threads_observation_forward_contexts() -> None:
         wavelength_center=5600.0,
         wavelength_scale=900.0,
     )
-    model = _SurveyScaleWrapper(SineImplicitField(domain, hidden_dim=20, hidden_layers=2))
+    model = _SurveyScaleWrapper(
+        SineImplicitField(domain, hidden_dim=20, hidden_layers=2)
+    )
     header = _tan_header(12, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0)
     target = torch.ones((12, 12), dtype=torch.float32)
     obs_a = FieldObservation(

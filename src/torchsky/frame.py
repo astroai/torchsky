@@ -176,7 +176,7 @@ def write_tensor_frame(path: str, tf: TensorFrame, overwrite: bool = False):
             data[name] = tensor[:, i]
 
     # Handle other standard 2D tensor stypes safely
-    timestamp_stype = getattr(stype, 'timestamp', None)
+    timestamp_stype = getattr(stype, "timestamp", None)
     if timestamp_stype and timestamp_stype in tf.feat_dict:
         tensor = tf.feat_dict[timestamp_stype]
         names = tf.col_names_dict[timestamp_stype]
@@ -185,11 +185,11 @@ def write_tensor_frame(path: str, tf: TensorFrame, overwrite: bool = False):
 
     # Handle MultiEmbeddingTensor stypes
     emb_stypes = []
-    if hasattr(stype, 'embedding'):
+    if hasattr(stype, "embedding"):
         emb_stypes.append(stype.embedding)
-    if hasattr(stype, 'text_embedded'):
+    if hasattr(stype, "text_embedded"):
         emb_stypes.append(stype.text_embedded)
-    if hasattr(stype, 'image_embedded'):
+    if hasattr(stype, "image_embedded"):
         emb_stypes.append(stype.image_embedded)
 
     for st in emb_stypes:
@@ -201,11 +201,11 @@ def write_tensor_frame(path: str, tf: TensorFrame, overwrite: bool = False):
 
     # Handle MultiNestedTensor stypes (VLA)
     nested_stypes = []
-    if hasattr(stype, 'multicategorical'):
+    if hasattr(stype, "multicategorical"):
         nested_stypes.append(stype.multicategorical)
-    if hasattr(stype, 'sequence_numerical'):
+    if hasattr(stype, "sequence_numerical"):
         nested_stypes.append(stype.sequence_numerical)
-    if hasattr(stype, 'text_tokenized'):
+    if hasattr(stype, "text_tokenized"):
         nested_stypes.append(stype.text_tokenized)
 
     for st in nested_stypes:
@@ -217,7 +217,9 @@ def write_tensor_frame(path: str, tf: TensorFrame, overwrite: bool = False):
                 values = col.values
                 offset = col.offset
                 # Convert to list of tensors
-                list_of_tensors = [values[offset[j]:offset[j+1]] for j in range(len(offset)-1)]
+                list_of_tensors = [
+                    values[offset[j] : offset[j + 1]] for j in range(len(offset) - 1)
+                ]
                 data[name] = list_of_tensors
 
     torchsky.write(path, data, overwrite=overwrite)

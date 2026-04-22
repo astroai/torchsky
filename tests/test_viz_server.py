@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient  # noqa: E402  # type: ignore
 # Fixtures
 # ---------------------------------------------------------------------------  # type: ignore
 
+
 @pytest.fixture
 def tmp_fits_dir(tmp_path: Path):
     """Create a temp dir with a minimal valid FITS file."""
@@ -33,6 +34,7 @@ def tmp_fits_dir(tmp_path: Path):
 @pytest.fixture
 def client(tmp_fits_dir: Path):
     from torchsky.viz.server import create_app
+
     app = create_app(root_dir=str(tmp_fits_dir), cache_mb=32)
     return TestClient(app)
 
@@ -62,7 +64,7 @@ def _write_minimal_fits(path: Path, shape: tuple[int, int] = (64, 64)) -> None:
     cards = [
         card("SIMPLE", True),
         card("BITPIX", -32),  # type: ignore
-        card("NAXIS",  2),
+        card("NAXIS", 2),
         card("NAXIS1", w),
         card("NAXIS2", h),
         card("EXTEND", True),
@@ -71,11 +73,11 @@ def _write_minimal_fits(path: Path, shape: tuple[int, int] = (64, 64)) -> None:
         card("CRPIX1", w // 2),
         card("CRPIX2", h // 2),
         card("CRVAL1", 150.0),
-        card("CRVAL2",  2.0),
-        card("CD1_1",  -5.0e-5),  # type: ignore
-        card("CD1_2",   0.0),
-        card("CD2_1",   0.0),
-        card("CD2_2",   5.0e-5),  # type: ignore
+        card("CRVAL2", 2.0),
+        card("CD1_1", -5.0e-5),  # type: ignore
+        card("CD1_2", 0.0),
+        card("CD2_1", 0.0),
+        card("CD2_2", 5.0e-5),  # type: ignore
         b"END" + b" " * 77,
     ]
     header_bytes = b"".join(cards)  # type: ignore
@@ -94,6 +96,7 @@ def _write_minimal_fits(path: Path, shape: tuple[int, int] = (64, 64)) -> None:
 # ---------------------------------------------------------------------------  # type: ignore
 # Tests: /api/fits
 # ---------------------------------------------------------------------------  # type: ignore
+
 
 def test_health(client: TestClient):
     r = client.get("/api/health")
@@ -152,8 +155,11 @@ def test_fits_header(client: TestClient):
 # Tests: /api/hips
 # ---------------------------------------------------------------------------  # type: ignore
 
+
 def test_hips_register(client: TestClient):
-    r = client.get("/api/hips/register?path=test_image.fits&hdu=0&stretch=zscale&cmap=gray")
+    r = client.get(
+        "/api/hips/register?path=test_image.fits&hdu=0&stretch=zscale&cmap=gray"
+    )
     assert r.status_code == 200
     j = r.json()
     assert "id" in j
@@ -207,6 +213,7 @@ def test_hips_list(client: TestClient):
 # Tests: path security
 # ---------------------------------------------------------------------------  # type: ignore
 
+
 def test_path_traversal_blocked(client: TestClient):
     r = client.get("/api/fits/info?path=../../../etc/passwd")
     assert r.status_code == 403
@@ -233,14 +240,22 @@ def test_path_prefix_sibling_directory_blocked(tmp_path: Path):
 # Tests: /api/validate
 # ---------------------------------------------------------------------------  # type: ignore
 
+
 def test_validate_register_and_panel(client: TestClient, tmp_fits_dir: Path):
     # Write model FITS
     _write_minimal_fits(tmp_fits_dir / "model.fits", shape=(128, 128))
 
-    body = {"truth_path": "test_image.fits", "model_path": "model.fits",
-            "truth_hdu": 0, "model_hdu": 0}
-    r = client.post("/api/validate/register",
-                    json=body, headers={"Content-Type": "application/json"})  # type: ignore
+    body = {
+        "truth_path": "test_image.fits",
+        "model_path": "model.fits",
+        "truth_hdu": 0,
+        "model_hdu": 0,
+    }
+    r = client.post(
+        "/api/validate/register",
+        json=body,
+        headers={"Content-Type": "application/json"},
+    )  # type: ignore
     assert r.status_code == 200
     pid = r.json()["id"]
     assert len(pid) == 64
@@ -265,6 +280,7 @@ def test_validate_register_and_panel(client: TestClient, tmp_fits_dir: Path):
 # Tests: /api/moc (requires a MOC file — create a minimal one)
 # ---------------------------------------------------------------------------  # type: ignore
 
+
 def test_moc_stats_synthetic(client: TestClient, tmp_fits_dir: Path):
     """Test MOC endpoint with a synthetic MOC created via torchsky."""
     from torchsky.sphere.moc import MOC
@@ -273,7 +289,7 @@ def test_moc_stats_synthetic(client: TestClient, tmp_fits_dir: Path):
     import math
 
     vec = lonlat_to_unit_xyz(150.0, 2.0)
-    pix = query_disc(8, vec, math.radians(5.0), nest=True)   # nside=8, 5° radius
+    pix = query_disc(8, vec, math.radians(5.0), nest=True)  # nside=8, 5° radius
     uniq = (4 * 8 * 8 + pix).to(torch.int64)
     moc = MOC(uniq)
     moc_path = tmp_fits_dir / "test.moc"

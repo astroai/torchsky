@@ -1570,9 +1570,7 @@ def read(
         )
 
         use_arrow_where_first = (
-            n_rows <= threshold
-            or backend == "torch"
-            or not cpp_pushdown_safe
+            n_rows <= threshold or backend == "torch" or not cpp_pushdown_safe
         )
 
         if use_arrow_where_first:

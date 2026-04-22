@@ -20,53 +20,79 @@ def _register_viz_parser(subparsers: argparse.Action) -> None:
         ),
     )
     p.add_argument(
-        "--root", default=".", metavar="DIR",
+        "--root",
+        default=".",
+        metavar="DIR",
         help="Directory to browse (default: current directory).",
     )
     p.add_argument(
-        "--port", type=int, default=8822, metavar="PORT",
+        "--port",
+        type=int,
+        default=8822,
+        metavar="PORT",
         help="HTTP port to listen on (default: 8822).",
     )
     p.add_argument(
-        "--host", default="127.0.0.1", metavar="HOST",
+        "--host",
+        default="127.0.0.1",
+        metavar="HOST",
         help="Bind address (default: 127.0.0.1). Use 0.0.0.0 for remote access.",
     )
     p.add_argument(
-        "--no-browser", action="store_true",
+        "--no-browser",
+        action="store_true",
         help="Do not open a browser window automatically.",
     )
     p.add_argument(
-        "--cache-mb", type=int, default=512, metavar="MB",
+        "--cache-mb",
+        type=int,
+        default=512,
+        metavar="MB",
         help="PNG tile LRU cache size in MiB (default: 512).",
     )
     p.add_argument(
-        "--log-level", default="warning",
+        "--log-level",
+        default="warning",
         choices=["critical", "error", "warning", "info", "debug"],
         help="uvicorn log level (default: warning).",
     )
     p.add_argument(
-        "--max-registered-surveys", type=int, default=64, metavar="N",
+        "--max-registered-surveys",
+        type=int,
+        default=64,
+        metavar="N",
         help="Max HiPS surveys kept in memory; oldest dropped when exceeded (default: 64).",
     )
     p.add_argument(
-        "--max-validation-pairs", type=int, default=32, metavar="N",
+        "--max-validation-pairs",
+        type=int,
+        default=32,
+        metavar="N",
         help="Max validation registrations; oldest dropped when exceeded (default: 32).",
     )
     p.add_argument(
-        "--max-image-pixels", type=int, default=None, metavar="N",
+        "--max-image-pixels",
+        type=int,
+        default=None,
+        metavar="N",
         help="Reject HiPS/validation images with H*W above this (default: 512*1024*1024).",
     )
     p.add_argument(
-        "--expose-health-root", action="store_true",
+        "--expose-health-root",
+        action="store_true",
         help="Include absolute --root path in /api/health JSON (off by default).",
     )
     p.add_argument(
-        "--cors-origin", action="append", default=None, dest="cors_origins",
+        "--cors-origin",
+        action="append",
+        default=None,
+        dest="cors_origins",
         metavar="URL",
         help="Allowed CORS origin (repeatable). Default: all origins, no credentials.",
     )
     p.add_argument(
-        "--cors-credentials", action="store_true",
+        "--cors-credentials",
+        action="store_true",
         help="Allow credentialed CORS (only with explicit --cors-origin list).",
     )
     p.set_defaults(handler=_viz_handler)
@@ -77,6 +103,7 @@ def _viz_handler(args: argparse.Namespace) -> int:
         from torchsky.viz import serve
     except ImportError:
         import sys
+
         print(
             "torchsky[viz] extra not installed.\n"
             "Install with: pip install 'torchsky[viz]'",

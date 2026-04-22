@@ -4,6 +4,7 @@ import stat
 import subprocess
 from pathlib import Path
 
+
 def install_pre_push_hook():
     repo_root = Path(__file__).parent.parent
     hook_path = repo_root / ".git" / "hooks" / "pre-push"
@@ -35,6 +36,7 @@ exit 0
     os.chmod(hook_path, st.st_mode | stat.S_IEXEC)
 
     print(f"✅ Installed pre-push hook at {hook_path}")
+
 
 if __name__ == "__main__":
     install_pre_push_hook()

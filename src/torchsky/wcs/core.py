@@ -142,12 +142,12 @@ class WCS:
         self._compiled_pixel_to_world_2d_fn = None
         self._compiled_world_to_pixel_2d_fn = None
         # Origin -> compiled ``pixels_flat -> world_flat`` for 2D spatial (FITS origin 0/1).
-        self._compiled_stack_pixel_to_world: dict[float, Callable[[Tensor], Tensor]] | None = (
-            None
-        )
-        self._compiled_stack_world_to_pixel: dict[float, Callable[[Tensor], Tensor]] | None = (
-            None
-        )
+        self._compiled_stack_pixel_to_world: (
+            dict[float, Callable[[Tensor], Tensor]] | None
+        ) = None
+        self._compiled_stack_world_to_pixel: (
+            dict[float, Callable[[Tensor], Tensor]] | None
+        ) = None
 
     def _parse_header(self, header: Dict[str, Any]):
         """Parse standard FITS WCS keywords."""
@@ -586,11 +586,11 @@ class WCS:
                 self._cpp_zenithal_project is not None
                 and not self._is_tpv
                 and (
-                self._is_tan
-                or self._is_sin
-                or self._is_arc
-                or self._is_zea
-                or self._is_stg
+                    self._is_tan
+                    or self._is_sin
+                    or self._is_arc
+                    or self._is_zea
+                    or self._is_stg
                 )
             ):
                 self._cpp_p2w_direct_kind = "zenithal"
@@ -611,11 +611,11 @@ class WCS:
                 self._cpp_zenithal_deproject is not None
                 and not self._is_tpv
                 and (
-                self._is_tan
-                or self._is_sin
-                or self._is_arc
-                or self._is_zea
-                or self._is_stg
+                    self._is_tan
+                    or self._is_sin
+                    or self._is_arc
+                    or self._is_zea
+                    or self._is_stg
                 )
             ):
                 self._cpp_w2p_direct_kind = "zenithal"
@@ -1514,7 +1514,10 @@ class WCS:
             phi, theta = _wrap_lon180(ra - self.alpha0), dec
         else:
             phi, theta = self._inverse_spherical_rotation(
-                ra, dec, self._native_type, allow_cpp_inverse_sphere=allow_cpp_inverse_sphere
+                ra,
+                dec,
+                self._native_type,
+                allow_cpp_inverse_sphere=allow_cpp_inverse_sphere,
             )
 
         # 2. Inverse Projection (Native -> Intermediate)

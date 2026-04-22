@@ -62,7 +62,9 @@ def test_rebandlimit_healpix_map_via_sht_smoothing_reduces_peak() -> None:
     assert torch.isfinite(out).all()
 
 
-def test_sample_healpix_map_on_image_header_spectral_matches_native_bridge_without_filter() -> None:
+def test_sample_healpix_map_on_image_header_spectral_matches_native_bridge_without_filter() -> (
+    None
+):
     nside = 8
     npix = 12 * nside * nside
     size = 24
@@ -157,7 +159,9 @@ def test_alm2lonlat_spin_matches_alm2map_spin_at_healpix_pixel_centers() -> None
     torch.testing.assert_close(direct, qu, atol=8e-3, rtol=3e-2)
 
 
-def test_sample_spin_alm_on_image_header_spectral_matches_spin_harmonic_bridge() -> None:
+def test_sample_spin_alm_on_image_header_spectral_matches_spin_harmonic_bridge() -> (
+    None
+):
     nside = 8
     lmax = 6
     size = 24

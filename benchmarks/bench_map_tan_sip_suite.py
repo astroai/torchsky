@@ -164,7 +164,9 @@ def _parse_diversity_case_specs(text: str) -> list[_DiversityCase]:
         if not spec:
             continue
         if "@" not in spec:
-            raise ValueError(f"diversity case must be CASE@SIZE or CASE@WIDTHxHEIGHT, got {item!r}")
+            raise ValueError(
+                f"diversity case must be CASE@SIZE or CASE@WIDTHxHEIGHT, got {item!r}"
+            )
         case_name, size_spec = spec.split("@", 1)
         case_name = case_name.strip()
         size_spec = size_spec.strip().lower()
@@ -176,7 +178,11 @@ def _parse_diversity_case_specs(text: str) -> list[_DiversityCase]:
             height = int(height_text)
             if width <= 0 or height <= 0:
                 raise ValueError(f"diversity extent must be positive, got {item!r}")
-            cases.append(_DiversityCase(case=case_name, size=max(width, height), width=width, height=height))
+            cases.append(
+                _DiversityCase(
+                    case=case_name, size=max(width, height), width=width, height=height
+                )
+            )
         else:
             size = int(size_spec)
             if size <= 0:
@@ -205,13 +211,17 @@ def _format_table(
         "| " + " | ".join(["---"] * len(headers)) + " |",
     ]
     for row in rows:
-        lines.append("| " + " | ".join(_format_value(row.get(key)) for key in headers) + " |")
+        lines.append(
+            "| " + " | ".join(_format_value(row.get(key)) for key in headers) + " |"
+        )
     return "\n".join(lines) + "\n"
 
 
 def _format_markdown(rows: list[dict[str, object]], *, profile: str) -> str:
     tan_rows = [row for row in rows if row.get("suite") == "tan_truth"]
-    tan_diversity_rows = [row for row in rows if row.get("suite") == "tan_stack_diversity"]
+    tan_diversity_rows = [
+        row for row in rows if row.get("suite") == "tan_stack_diversity"
+    ]
     tan_method_rows = [row for row in rows if row.get("suite") == "tan_stack_methods"]
     sip_rows = [row for row in rows if row.get("suite") == "sip_real"]
 
@@ -374,8 +384,12 @@ def _truth_case_common_metadata(
             else "square"
         ),
         "n_warped_inputs": truth_bench._count_warped_inputs(observations),
-        "n_weight_maps": sum(1 for item in observations if item.observation.weight_path is not None),
-        "n_mask_maps": sum(1 for item in observations if item.observation.mask_path is not None),
+        "n_weight_maps": sum(
+            1 for item in observations if item.observation.weight_path is not None
+        ),
+        "n_mask_maps": sum(
+            1 for item in observations if item.observation.mask_path is not None
+        ),
     }
 
 
@@ -402,7 +416,9 @@ def _run_tan_truth_suite(
             height=height,
         )
         case_spec = truth_bench._case_spec(case, size=effective_size)
-        region_masks = truth_bench._target_mask_region_masks(observations, target_header=target_header)
+        region_masks = truth_bench._target_mask_region_masks(
+            observations, target_header=target_header
+        )
         obs_list = [item.observation for item in observations]
         baseline_data = truth
         baseline_weight = torch.ones_like(truth, dtype=torch.float32)
@@ -425,13 +441,19 @@ def _run_tan_truth_suite(
                     obs_list,
                     target_header=target_header,
                     runs=max(2, runs),
-                    torchsky_row={"library": "torchsky", "variant": "bilinear", "time_ms": 1.0},
+                    torchsky_row={
+                        "library": "torchsky",
+                        "variant": "bilinear",
+                        "time_ms": 1.0,
+                    },
                     torchsky_data=baseline_data,
                     torchsky_weight=baseline_weight,
                     variant=variant,
                 )
                 for key in list(row):
-                    if key.endswith("_vs_torchsky") or key.startswith("speed_ratio_torchsky_vs_"):
+                    if key.endswith("_vs_torchsky") or key.startswith(
+                        "speed_ratio_torchsky_vs_"
+                    ):
                         row.pop(key)
                 row.update(
                     {
@@ -445,7 +467,11 @@ def _run_tan_truth_suite(
                         ),
                     }
                 )
-                if row.get("status") == "OK" and data is not None and weight is not None:
+                if (
+                    row.get("status") == "OK"
+                    and data is not None
+                    and weight is not None
+                ):
                     row.update(
                         truth_bench._truth_metrics(
                             data.to(dtype=torch.float32),
@@ -460,7 +486,9 @@ def _run_tan_truth_suite(
     return rows
 
 
-def _sip_case_observations(tmpdir: Path, case: str, *, size: int, n_obs: int) -> list[ImageObservation]:
+def _sip_case_observations(
+    tmpdir: Path, case: str, *, size: int, n_obs: int
+) -> list[ImageObservation]:
     if case == "real_astropy_sip_fixture":
         return compat_bench._prepare_real_case(tmpdir)
     if case == "real_astropy_sip_shifted_wcs":
@@ -540,14 +568,18 @@ def _run_tan_stack_diversity_suite(
             width=case_spec_item.width,
             height=case_spec_item.height,
         )
-        case_spec = truth_bench._case_spec(case_spec_item.case, size=case_spec_item.size)
+        case_spec = truth_bench._case_spec(
+            case_spec_item.case, size=case_spec_item.size
+        )
         region_masks = truth_bench._target_mask_region_masks(
             observations,
             target_header=target_header,
         )
         obs_list = [item.observation for item in observations]
         if case_spec_item.width is not None and case_spec_item.height is not None:
-            case_label = f"{case_spec_item.case}@{case_spec_item.width}x{case_spec_item.height}"
+            case_label = (
+                f"{case_spec_item.case}@{case_spec_item.width}x{case_spec_item.height}"
+            )
         else:
             case_label = f"{case_spec_item.case}@{case_spec_item.size}"
         common = _truth_case_common_metadata(
@@ -585,13 +617,19 @@ def _run_tan_stack_diversity_suite(
                     obs_list,
                     target_header=target_header,
                     runs=max(2, runs),
-                    torchsky_row={"library": "torchsky", "variant": "bilinear", "time_ms": 1.0},
+                    torchsky_row={
+                        "library": "torchsky",
+                        "variant": "bilinear",
+                        "time_ms": 1.0,
+                    },
                     torchsky_data=baseline_data,
                     torchsky_weight=baseline_weight,
                     variant=variant,
                 )
                 for key in list(row):
-                    if key.endswith("_vs_torchsky") or key.startswith("speed_ratio_torchsky_vs_"):
+                    if key.endswith("_vs_torchsky") or key.startswith(
+                        "speed_ratio_torchsky_vs_"
+                    ):
                         row.pop(key)
                 row.update(
                     {
@@ -601,7 +639,11 @@ def _run_tan_stack_diversity_suite(
                         **common,
                     }
                 )
-                if row.get("status") == "OK" and data is not None and weight is not None:
+                if (
+                    row.get("status") == "OK"
+                    and data is not None
+                    and weight is not None
+                ):
                     row.update(
                         truth_bench._truth_metrics(
                             data.to(dtype=torch.float32),
@@ -638,7 +680,9 @@ def _run_tan_stack_method_suite(
         seed=seed,
     )
     case_spec = truth_bench._case_spec(case, size=size)
-    region_masks = truth_bench._target_mask_region_masks(observations, target_header=target_header)
+    region_masks = truth_bench._target_mask_region_masks(
+        observations, target_header=target_header
+    )
     obs_list = [item.observation for item in observations]
     case_label = f"{case}@{size}"
     rows: list[dict[str, object]] = []
@@ -691,7 +735,9 @@ def _run_tan_stack_method_suite(
                     region_masks=region_masks,
                 )
             )
-            rows.append(_base_truth_row(row, suite="tan_stack_methods", case_label=case_label))
+            rows.append(
+                _base_truth_row(row, suite="tan_stack_methods", case_label=case_label)
+            )
 
         for stacking_method, combine_type in (
             ("weighted_mean", "SUM(num/denom)"),
@@ -779,7 +825,9 @@ def _run_tan_stack_method_suite(
                     "target_height": int(target_header["NAXIS2"]),
                     "reason": f"SWarp stack-method sweep failed: {exc}",
                 }
-            rows.append(_base_truth_row(row, suite="tan_stack_methods", case_label=case_label))
+            rows.append(
+                _base_truth_row(row, suite="tan_stack_methods", case_label=case_label)
+            )
     return rows
 
 
@@ -870,8 +918,16 @@ def main() -> int:
         sip_methods = _parse_method_specs(args.methods)
         diversity_methods = _parse_method_specs(args.methods)
     else:
-        tan_methods = _parse_method_specs(args.tan_methods) if args.tan_methods else _parse_method_specs(",".join(profile.tan_methods))
-        sip_methods = _parse_method_specs(args.sip_methods) if args.sip_methods else _parse_method_specs(",".join(profile.sip_methods))
+        tan_methods = (
+            _parse_method_specs(args.tan_methods)
+            if args.tan_methods
+            else _parse_method_specs(",".join(profile.tan_methods))
+        )
+        sip_methods = (
+            _parse_method_specs(args.sip_methods)
+            if args.sip_methods
+            else _parse_method_specs(",".join(profile.sip_methods))
+        )
         diversity_methods = (
             _parse_method_specs(args.diversity_methods)
             if args.diversity_methods
@@ -884,9 +940,19 @@ def main() -> int:
         else _parse_diversity_case_specs(",".join(profile.diversity_cases))
     )
     runs = profile.runs if args.runs is None else int(args.runs)
-    torchsky_runs = profile.torchsky_runs if args.torchsky_runs is None else int(args.torchsky_runs)
-    method_sweep_case = profile.method_sweep_case if args.method_sweep_case is None else str(args.method_sweep_case)
-    method_sweep_size = profile.method_sweep_size if args.method_sweep_size is None else int(args.method_sweep_size)
+    torchsky_runs = (
+        profile.torchsky_runs if args.torchsky_runs is None else int(args.torchsky_runs)
+    )
+    method_sweep_case = (
+        profile.method_sweep_case
+        if args.method_sweep_case is None
+        else str(args.method_sweep_case)
+    )
+    method_sweep_size = (
+        profile.method_sweep_size
+        if args.method_sweep_size is None
+        else int(args.method_sweep_size)
+    )
 
     rows: list[dict[str, object]] = []
     with tempfile.TemporaryDirectory(prefix="torchsky_map_tan_sip_suite_") as tmp:

@@ -100,7 +100,8 @@ def check_sphere_geom_exact_contains_baseline(
     """Return human-readable regression errors; empty list means pass."""
     errors: list[str] = []
     if not any(
-        r.get("operation") == "exact_contains_parity_numpy_bulk" and r.get("status") == "OK"
+        r.get("operation") == "exact_contains_parity_numpy_bulk"
+        and r.get("status") == "OK"
         for r in current_rows
     ):
         return errors
@@ -112,7 +113,9 @@ def check_sphere_geom_exact_contains_baseline(
         key = f"{op}|{lib}"
         row = cur.get(key)
         if row is None:
-            errors.append(f"baseline expects row {key!r} but it is missing from current output")
+            errors.append(
+                f"baseline expects row {key!r} but it is missing from current output"
+            )
             continue
         if str(row.get("status", "")) != str(base.get("status", "OK")):
             errors.append(

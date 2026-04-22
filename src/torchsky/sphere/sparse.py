@@ -186,7 +186,9 @@ class SparseHealpixMap:
 
         # Vectorized assignment of the *first* index to coverage_map
         # We flip the indices so the scatter overwrites duplicates, leaving the lowest (first) index intact.
-        arange = torch.arange(cov_pixels.numel(), dtype=torch.int64, device=self.pixels.device)
+        arange = torch.arange(
+            cov_pixels.numel(), dtype=torch.int64, device=self.pixels.device
+        )
         self.coverage_map.scatter_(0, cov_pixels.flip([0]), arange.flip([0]))
 
     def get_covered_pixels(self) -> Tensor:

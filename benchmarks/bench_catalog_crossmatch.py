@@ -118,7 +118,11 @@ def _assert_same_matches(
 
 def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     decl = next(
-        (row for row in rows if row.get("operation") == "crossmatch_declination_pruned"),
+        (
+            row
+            for row in rows
+            if row.get("operation") == "crossmatch_declination_pruned"
+        ),
         None,
     )
     coarse = next(

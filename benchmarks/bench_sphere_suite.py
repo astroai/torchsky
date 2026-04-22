@@ -1187,7 +1187,11 @@ def run_sphere_domain(
             elif st == "FAILED":
                 row_status = "FAILED"
             else:
-                row_status = "OK" if t is not None or op == "exact_contains_parity_numpy_bulk" else "SKIPPED"
+                row_status = (
+                    "OK"
+                    if t is not None or op == "exact_contains_parity_numpy_bulk"
+                    else "SKIPPED"
+                )
 
             rows.append(
                 _row(

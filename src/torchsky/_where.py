@@ -322,6 +322,7 @@ def where_columns_from_ast(ast) -> List[str]:
 
 def _evaluate_cmp(ast: Tuple, data_map: dict) -> Any:
     import numpy as np
+
     _, col, op, literal = ast
     if col not in data_map:
         raise ValueError(f"Unknown column: {col}")
@@ -348,8 +349,10 @@ def _evaluate_cmp(ast: Tuple, data_map: dict) -> Any:
         return val <= literal
     raise ValueError(f"Unsupported operator: {op}")
 
+
 def _evaluate_in(ast: Tuple, data_map: dict) -> Any:
     import numpy as np
+
     _, col, literals, negate = ast
     if col not in data_map:
         raise ValueError(f"Unknown column: {col}")
@@ -357,6 +360,7 @@ def _evaluate_in(ast: Tuple, data_map: dict) -> Any:
     # NumPy's isin handles lists of literals
     mask = np.isin(val, literals)
     return ~mask if negate else mask
+
 
 def _evaluate_between(ast: Tuple, data_map: dict) -> Any:
     _, col, low, high, negate = ast
@@ -366,8 +370,10 @@ def _evaluate_between(ast: Tuple, data_map: dict) -> Any:
     mask = (val >= low) & (val <= high)
     return ~mask if negate else mask
 
+
 def _evaluate_isnull(ast: Tuple, data_map: dict) -> Any:
     import numpy as np
+
     _, col, negate = ast
     if col not in data_map:
         raise ValueError(f"Unknown column: {col}")
@@ -379,6 +385,7 @@ def _evaluate_isnull(ast: Tuple, data_map: dict) -> Any:
         # For object arrays or other types, check for None
         mask = np.array([v is None for v in val])
     return ~mask if negate else mask
+
 
 def evaluate_where(ast: Tuple, data_map: dict) -> Any:
     """Evaluate a where expression AST against a data map of NumPy arrays."""

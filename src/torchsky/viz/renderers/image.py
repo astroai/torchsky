@@ -19,6 +19,7 @@ from torch import Tensor
 # Colormap LUTs — embedded 256×3 uint8 numpy arrays.
 # ---------------------------------------------------------------------------
 
+
 def _make_lut(*keypoints: tuple[float, tuple[int, int, int]]) -> np.ndarray:
     """Linearly interpolate between (position, RGB) keypoints → 256×3 uint8."""
     lut = np.zeros((256, 3), dtype=np.float32)
@@ -46,46 +47,46 @@ _COLORMAPS: dict[str, np.ndarray] = {
         (1.0, (255, 255, 255)),
     ),
     "viridis": _make_lut(
-        (0.000, (68,   1,  84)),
-        (0.125, (72,  40, 120)),
-        (0.250, (62,  83, 140)),
+        (0.000, (68, 1, 84)),
+        (0.125, (72, 40, 120)),
+        (0.250, (62, 83, 140)),
         (0.375, (49, 120, 150)),
         (0.500, (38, 153, 137)),
         (0.625, (53, 183, 121)),
-        (0.750, (110, 206,  88)),
-        (0.875, (181, 222,  43)),
-        (1.000, (253, 231,  37)),
+        (0.750, (110, 206, 88)),
+        (0.875, (181, 222, 43)),
+        (1.000, (253, 231, 37)),
     ),
     "hot": _make_lut(
-        (0.000, (  0,   0,   0)),
-        (0.330, (255,   0,   0)),
-        (0.660, (255, 255,   0)),
+        (0.000, (0, 0, 0)),
+        (0.330, (255, 0, 0)),
+        (0.660, (255, 255, 0)),
         (1.000, (255, 255, 255)),
     ),
     "thermal": _make_lut(
-        (0.000, (  0,   0, 128)),
-        (0.250, (  0, 128, 255)),
-        (0.500, (  0, 255,   0)),
-        (0.750, (255, 165,   0)),
-        (1.000, (255,   0,   0)),
+        (0.000, (0, 0, 128)),
+        (0.250, (0, 128, 255)),
+        (0.500, (0, 255, 0)),
+        (0.750, (255, 165, 0)),
+        (1.000, (255, 0, 0)),
     ),
     "rdbu_r": _make_lut(
-        (0.000, (103,   0,  31)),
-        (0.200, (214,  96,  77)),
+        (0.000, (103, 0, 31)),
+        (0.200, (214, 96, 77)),
         (0.350, (244, 165, 130)),
         (0.500, (247, 247, 247)),
         (0.650, (146, 197, 222)),
-        (0.800, ( 67, 147, 195)),
-        (1.000, (  5,  48,  97)),
+        (0.800, (67, 147, 195)),
+        (1.000, (5, 48, 97)),
     ),
     "seismic": _make_lut(
-        (0.000, (  0,   0,  76)),
-        (0.250, (  0, 102, 255)),
+        (0.000, (0, 0, 76)),
+        (0.250, (0, 102, 255)),
         (0.450, (138, 190, 255)),
         (0.500, (255, 255, 255)),
         (0.550, (255, 138, 138)),
-        (0.750, (255,  26,  26)),
-        (1.000, ( 76,   0,   0)),
+        (0.750, (255, 26, 26)),
+        (1.000, (76, 0, 0)),
     ),
 }
 
@@ -103,6 +104,7 @@ def get_lut(name: str) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # ZScale — full IRAF iterative algorithm
 # ---------------------------------------------------------------------------
+
 
 def zscale_limits(
     arr: Tensor,
@@ -187,13 +189,17 @@ def zscale_limits(
     return float(z1), float(z2)
 
 
-def percentile_limits(arr: Tensor, lo: float = 2.0, hi: float = 98.0) -> tuple[float, float]:
+def percentile_limits(
+    arr: Tensor, lo: float = 2.0, hi: float = 98.0
+) -> tuple[float, float]:
     """Robust display limits via percentile clipping."""
     valid = arr.flatten()
     valid = valid[torch.isfinite(valid)]
     if valid.numel() == 0:
         return 0.0, 1.0
-    qs = torch.quantile(valid.float(), torch.tensor([lo / 100, hi / 100], device=valid.device))
+    qs = torch.quantile(
+        valid.float(), torch.tensor([lo / 100, hi / 100], device=valid.device)
+    )
     return float(qs[0].item()), float(qs[1].item())
 
 
@@ -227,7 +233,10 @@ def apply_stretch(
     # Clip + normalize
     normed = (arr.clamp(vmin, vmax) - vmin) / span
 
-    if stretch in ("linear", "zscale"):   # zscale = linear after external limit computation
+    if stretch in (
+        "linear",
+        "zscale",
+    ):  # zscale = linear after external limit computation
         return normed
 
     if stretch == "log":
@@ -269,6 +278,7 @@ def _histeq_stretch(normed: Tensor) -> Tensor:
 # ---------------------------------------------------------------------------
 # PNG encoding
 # ---------------------------------------------------------------------------
+
 
 def to_png(
     arr: Tensor,
@@ -347,6 +357,7 @@ def to_png_symmetric(
 # ---------------------------------------------------------------------------
 # Dynamic range analysis
 # ---------------------------------------------------------------------------
+
 
 def detect_dynamic_range(arr: Tensor) -> dict:
     """

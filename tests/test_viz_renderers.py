@@ -17,9 +17,11 @@ import torch
 # image.py
 # ---------------------------------------------------------------------------
 
+
 class TestZScale:
     def test_basic(self):
         from torchsky.viz.renderers.image import zscale_limits
+
         t = torch.linspace(0, 1000, 10_000)
         z1, z2 = zscale_limits(t)
         assert z1 < z2
@@ -28,6 +30,7 @@ class TestZScale:
 
     def test_uniform_image(self):
         from torchsky.viz.renderers.image import zscale_limits
+
         t = torch.full((100, 100), 42.0)
         z1, z2 = zscale_limits(t.flatten())
         # Should not crash; z1 <= z2
@@ -35,6 +38,7 @@ class TestZScale:
 
     def test_nan_robust(self):
         from torchsky.viz.renderers.image import zscale_limits
+
         t = torch.linspace(0, 1000, 1000)
         t[::10] = float("nan")
         z1, z2 = zscale_limits(t)
@@ -43,15 +47,19 @@ class TestZScale:
     def test_high_dr(self):
         """ZScale should stay within signal on a high-DR image."""
         from torchsky.viz.renderers.image import zscale_limits
+
         t = torch.cat([torch.linspace(1, 10, 900), torch.tensor([1e6])])  # one spike
         z1, z2 = zscale_limits(t)
         assert z2 < 1e5  # spike should not dominate
 
 
 class TestApplyStretch:
-    @pytest.mark.parametrize("stretch", ["linear", "log", "sqrt", "asinh", "power", "histeq"])
+    @pytest.mark.parametrize(
+        "stretch", ["linear", "log", "sqrt", "asinh", "power", "histeq"]
+    )
     def test_output_range(self, stretch):
         from torchsky.viz.renderers.image import apply_stretch
+
         t = torch.linspace(0, 1000, 500)
         out = apply_stretch(t, 0.0, 1000.0, stretch)
         assert out.shape == t.shape
@@ -60,6 +68,7 @@ class TestApplyStretch:
 
     def test_log_monotone(self):
         from torchsky.viz.renderers.image import apply_stretch
+
         t = torch.linspace(0, 1000, 200)
         out = apply_stretch(t, 0.0, 1000.0, "log")
         diffs = out[1:] - out[:-1]
@@ -67,6 +76,7 @@ class TestApplyStretch:
 
     def test_nan_passthrough(self):
         from torchsky.viz.renderers.image import apply_stretch
+
         t = torch.tensor([0.0, float("nan"), 1000.0])
         out = apply_stretch(t, 0.0, 1000.0, "linear")
         assert float(out[0].item()) == pytest.approx(0.0)
@@ -76,6 +86,7 @@ class TestApplyStretch:
 class TestColormaps:
     def test_all_cmaps_have_256_entries(self):
         from torchsky.viz.renderers.image import COLORMAP_NAMES, get_lut
+
         for name in COLORMAP_NAMES:
             lut = get_lut(name)
             assert lut.shape == (256, 3), f"{name}: shape {lut.shape}"
@@ -83,17 +94,20 @@ class TestColormaps:
 
     def test_unknown_cmap_raises(self):
         from torchsky.viz.renderers.image import get_lut
+
         with pytest.raises(ValueError):
             get_lut("nonexistent_cmap")
 
     def test_gray_monotone(self):
         from torchsky.viz.renderers.image import get_lut
+
         lut = get_lut("gray")
         assert (lut[1:, 0] >= lut[:-1, 0]).all()
 
     def test_rdbu_r_midpoint(self):
         """RdBu_r should be near-white at index 128."""
         from torchsky.viz.renderers.image import get_lut
+
         lut = get_lut("rdbu_r")
         mid = lut[128]
         assert int(mid.min()) > 200  # all channels bright at center
@@ -102,6 +116,7 @@ class TestColormaps:
 class TestPngEncode:
     def test_returns_valid_png(self):
         from torchsky.viz.renderers.image import to_png
+
         t = torch.rand(64, 64)
         png = to_png(t, cmap="gray")
         assert isinstance(png, bytes)
@@ -109,6 +124,7 @@ class TestPngEncode:
 
     def test_with_alpha_mask(self):
         from torchsky.viz.renderers.image import to_png
+
         t = torch.rand(32, 32)
         mask = torch.ones(32, 32, dtype=torch.bool)
         mask[:16, :16] = False
@@ -117,6 +133,7 @@ class TestPngEncode:
 
     def test_symmetric_png(self):
         from torchsky.viz.renderers.image import to_png_symmetric
+
         t = torch.linspace(-5, 5, 100).reshape(10, 10)
         png = to_png_symmetric(t, vmax=5.0, cmap="rdbu_r")
         assert png[:4] == b"\x89PNG"
@@ -125,17 +142,21 @@ class TestPngEncode:
 class TestDynamicRange:
     def test_high_dr(self):
         from torchsky.viz.renderers.image import detect_dynamic_range
+
         # True high-DR: positive values spanning >3 decades (p1=1, p99=10000+)
-        t = torch.cat([
-            torch.linspace(1, 10, 500),       # 1-10 (low end)
-            torch.linspace(100, 50000, 500),   # 100-50000 (high end)
-        ])
+        t = torch.cat(
+            [
+                torch.linspace(1, 10, 500),  # 1-10 (low end)
+                torch.linspace(100, 50000, 500),  # 100-50000 (high end)
+            ]
+        )
         dr = detect_dynamic_range(t.reshape(1, -1))
         assert dr["dr_ratio"] > 1000
         assert "high_dynamic_range" in dr["warnings"]
 
     def test_negatives(self):
         from torchsky.viz.renderers.image import detect_dynamic_range
+
         t = torch.linspace(-100, 100, 1000)
         dr = detect_dynamic_range(t.reshape(1, -1))
         assert dr["neg_fraction"] > 0.4
@@ -143,6 +164,7 @@ class TestDynamicRange:
 
     def test_clean_image(self):
         from torchsky.viz.renderers.image import detect_dynamic_range
+
         t = torch.linspace(0, 100, 1000)
         dr = detect_dynamic_range(t.reshape(1, -1))
         assert dr["recommended_stretch"] == "linear"
@@ -152,28 +174,38 @@ class TestDynamicRange:
 # hips_tile.py
 # ---------------------------------------------------------------------------
 
+
 class TestHipsTile:
     def _make_wcs(self, h=256, w=256):
         """Create a minimal torchsky.WCS for a square image."""
         from torchsky.wcs import WCS
+
         header = {
-            "NAXIS1": w, "NAXIS2": h,
-            "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
-            "CRPIX1": w // 2, "CRPIX2": h // 2,
-            "CRVAL1": 150.0, "CRVAL2": 2.0,
-            "CD1_1": -5e-5, "CD1_2": 0.0,
-            "CD2_1": 0.0, "CD2_2": 5e-5,
+            "NAXIS1": w,
+            "NAXIS2": h,
+            "CTYPE1": "RA---TAN",
+            "CTYPE2": "DEC--TAN",
+            "CRPIX1": w // 2,
+            "CRPIX2": h // 2,
+            "CRVAL1": 150.0,
+            "CRVAL2": 2.0,
+            "CD1_1": -5e-5,
+            "CD1_2": 0.0,
+            "CD2_1": 0.0,
+            "CD2_2": 5e-5,
         }
         return WCS(header)
 
     def test_render_preview(self):
         from torchsky.viz.renderers.hips_tile import render_preview
+
         image = torch.rand(128, 128) * 1000
         png = render_preview(image, max_pixels=64, stretch="linear", cmap="gray")
         assert png[:4] == b"\x89PNG"
 
     def test_compute_hips_order(self):
         from torchsky.viz.renderers.hips_tile import compute_hips_order
+
         wcs = self._make_wcs(256, 256)
         order = compute_hips_order(wcs, (256, 256))
         assert 1 <= order <= 13
@@ -183,10 +215,12 @@ class TestHipsTile:
 # moc_geojson.py
 # ---------------------------------------------------------------------------
 
+
 class TestMocGeoJson:
     def test_empty_moc(self):
         from torchsky.viz.renderers.moc_geojson import moc_to_geojson
         from torchsky.sphere.moc import MOC
+
         moc = MOC(torch.empty(0, dtype=torch.int64))
         geojson = moc_to_geojson(moc)
         assert geojson["type"] == "FeatureCollection"
@@ -216,6 +250,7 @@ class TestMocGeoJson:
 # validation.py
 # ---------------------------------------------------------------------------
 
+
 class TestValidationRenderers:
     def _make_pair(self, size=64):
         truth = torch.rand(size, size) * 1000
@@ -225,6 +260,7 @@ class TestValidationRenderers:
 
     def test_residual_panel_pngs(self):
         from torchsky.viz.renderers.validation import residual_panel_pngs
+
         truth, model, sigma = self._make_pair()
         pngs = residual_panel_pngs(truth, model, sigma)
         assert set(pngs.keys()) == {"truth", "model", "residual", "pull"}
@@ -234,6 +270,7 @@ class TestValidationRenderers:
 
     def test_pull_histogram(self):
         from torchsky.viz.renderers.validation import pull_histogram
+
         truth, model, sigma = self._make_pair()
         hist = pull_histogram(truth, model, sigma)
         assert "bins" in hist and "counts" in hist
@@ -243,12 +280,14 @@ class TestValidationRenderers:
 
     def test_chi2_map(self):
         from torchsky.viz.renderers.validation import chi2_map_png
+
         truth, model, sigma = self._make_pair()
         png = chi2_map_png(truth, model, sigma)
         assert png[:4] == b"\x89PNG"
 
     def test_chi2_stats(self):
         from torchsky.viz.renderers.validation import chi2_stats
+
         truth, model, sigma = self._make_pair()
         stats = chi2_stats(truth, model, sigma)
         assert "mean_chi2" in stats
@@ -260,9 +299,11 @@ class TestValidationRenderers:
 # LRU cache
 # ---------------------------------------------------------------------------
 
+
 class TestLRUCache:
     def test_basic(self):
         from torchsky.viz.cache import LRUTileCache
+
         cache = LRUTileCache(max_mb=1)
         cache.put("a", b"hello")
         assert cache.get("a") == b"hello"
@@ -270,6 +311,7 @@ class TestLRUCache:
 
     def test_eviction(self):
         from torchsky.viz.cache import LRUTileCache
+
         cache = LRUTileCache(max_mb=1)  # 1 MB max
         # Put 600 KB of data twice → should evict first entry
         cache.put("a", b"x" * 600_000)
@@ -279,6 +321,7 @@ class TestLRUCache:
 
     def test_stats(self):
         from torchsky.viz.cache import LRUTileCache
+
         cache = LRUTileCache(max_mb=10)
         cache.put("k", b"v" * 1000)
         cache.get("k")

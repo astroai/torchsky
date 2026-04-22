@@ -38,7 +38,9 @@ class _FakeResponse:
         yield from self._chunks
 
 
-def test_download_product_renames_complete_part_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_download_product_renames_complete_part_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     product = MastProduct(
         parent_obsid=1,
         product_filename="test_cal.fits",
@@ -60,7 +62,9 @@ def test_download_product_renames_complete_part_file(tmp_path: Path, monkeypatch
     assert not dest.with_suffix(".fits.part").exists()
 
 
-def test_download_product_rejects_truncated_download(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_download_product_rejects_truncated_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     product = MastProduct(
         parent_obsid=1,
         product_filename="test_cal.fits",
@@ -81,7 +85,9 @@ def test_download_product_rejects_truncated_download(tmp_path: Path, monkeypatch
     assert not (tmp_path / "test_cal.fits").exists()
 
 
-def test_select_products_can_filter_by_filename(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_products_can_filter_by_filename(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         "download_jwst_smacs0723_mast.query_nircam_observations",
         lambda **kwargs: [{"obsid": 1, "filters": "F277W"}],
@@ -89,8 +95,12 @@ def test_select_products_can_filter_by_filename(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(
         "download_jwst_smacs0723_mast.query_products",
         lambda obsid: [
-            MastProduct(1, "a_nrcalong_cal.fits", "mast:a", "SCIENCE", "CAL", 1, "F277W"),
-            MastProduct(1, "a_nrcblong_cal.fits", "mast:b", "SCIENCE", "CAL", 1, "F277W"),
+            MastProduct(
+                1, "a_nrcalong_cal.fits", "mast:a", "SCIENCE", "CAL", 1, "F277W"
+            ),
+            MastProduct(
+                1, "a_nrcblong_cal.fits", "mast:b", "SCIENCE", "CAL", 1, "F277W"
+            ),
         ],
     )
 
@@ -104,7 +114,9 @@ def test_select_products_can_filter_by_filename(monkeypatch: pytest.MonkeyPatch)
     assert [product.product_filename for product in chosen] == ["a_nrcblong_cal.fits"]
 
 
-def test_select_products_matches_prefixed_subgroup(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_products_matches_prefixed_subgroup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         "download_jwst_smacs0723_mast.query_nircam_observations",
         lambda **kwargs: [{"obsid": 1, "filters": "F277W"}],
@@ -112,8 +124,18 @@ def test_select_products_matches_prefixed_subgroup(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(
         "download_jwst_smacs0723_mast.query_products",
         lambda obsid: [
-            MastProduct(1, "a_nrcblong_o001_crf.fits", "mast:a", "SCIENCE", "ANNNN_CRF", 1, "F277W"),
-            MastProduct(1, "a_nrcblong_cal.fits", "mast:b", "SCIENCE", "CAL", 1, "F277W"),
+            MastProduct(
+                1,
+                "a_nrcblong_o001_crf.fits",
+                "mast:a",
+                "SCIENCE",
+                "ANNNN_CRF",
+                1,
+                "F277W",
+            ),
+            MastProduct(
+                1, "a_nrcblong_cal.fits", "mast:b", "SCIENCE", "CAL", 1, "F277W"
+            ),
         ],
     )
 
@@ -124,7 +146,9 @@ def test_select_products_matches_prefixed_subgroup(monkeypatch: pytest.MonkeyPat
         filename_contains="nrcblong",
     )
 
-    assert [product.product_filename for product in chosen] == ["a_nrcblong_o001_crf.fits"]
+    assert [product.product_filename for product in chosen] == [
+        "a_nrcblong_o001_crf.fits"
+    ]
 
 
 def test_detector_module_tokens_support_short_and_long_bands() -> None:

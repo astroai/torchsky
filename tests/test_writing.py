@@ -52,8 +52,12 @@ def test_writing():
             assert isinstance(hdu1, BinTableHDU)
             data_read_table = hdu1.data
             assert isinstance(data_read_table, np.ndarray)
-            assert np.allclose(np.asarray(data_read_table["col1"]), data_table["col1"].numpy())
-            assert np.allclose(np.asarray(data_read_table["col2"]), data_table["col2"].numpy())
+            assert np.allclose(
+                np.asarray(data_read_table["col1"]), data_table["col1"].numpy()
+            )
+            assert np.allclose(
+                np.asarray(data_read_table["col2"]), data_table["col2"].numpy()
+            )
             assert hdu1.header["TBLKEY"] == "TBLVAL"
 
     filenames = [filename, "test_write_hdulist.fits"]
@@ -80,6 +84,7 @@ def test_table_write_bool_preserved():
         with fits.open(filename) as hdul:
             hdu1 = hdul[1]
             from astropy.io.fits.hdu.table import BinTableHDU
+
             assert isinstance(hdu1, BinTableHDU)
             assert hdu1.data is not None
             values = hdu1.data["flag"]
@@ -98,6 +103,7 @@ def test_write_accepts_list_table_dict():
         with fits.open(filename) as hdul:
             hdu1 = hdul[1]
             from astropy.io.fits.hdu.table import BinTableHDU
+
             assert isinstance(hdu1, BinTableHDU)
             assert hdu1.data is not None
             values = hdu1.data["flag"]
@@ -121,7 +127,12 @@ def test_table_write_rich_types_pending_cfitsio_impl():
         ],
     }
     try:
-        torchsky.write(filename, table, header=torchsky.Header({"EXTNAME": "CATALOG"}), overwrite=True)
+        torchsky.write(
+            filename,
+            table,
+            header=torchsky.Header({"EXTNAME": "CATALOG"}),
+            overwrite=True,
+        )
         with torchsky.open(filename) as hdul:
             table_hdu = hdul[1]
             assert isinstance(table_hdu, (torchsky.TableHDU, torchsky.TableHDURef))

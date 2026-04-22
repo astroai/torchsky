@@ -31,9 +31,7 @@ def test_fitsio_readme_subset_and_where_workflows_match_torchsky() -> None:
 
         rows = [1, 4]
         cols = ["INDEX", "X", "Y"]
-        tf_subset = torchsky.table.read(
-            path.as_posix(), hdu=1, rows=rows, columns=cols
-        )
+        tf_subset = torchsky.table.read(path.as_posix(), hdu=1, rows=rows, columns=cols)
         fits_subset = fitsio.read(path.as_posix(), ext=1, rows=rows, columns=cols)
         for name in cols:
             np.testing.assert_allclose(

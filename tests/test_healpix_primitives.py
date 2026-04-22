@@ -356,7 +356,9 @@ def test_query_vec_helpers_self_consistent() -> None:
     got = query_circle_vec(nside, vec, np.deg2rad(4.0), inclusive=False, nest=True)
     torch.testing.assert_close(
         got,
-        compat.query_circle_vec(nside, vec, np.deg2rad(4.0), inclusive=False, nest=True),
+        compat.query_circle_vec(
+            nside, vec, np.deg2rad(4.0), inclusive=False, nest=True
+        ),
     )
     got_inc = query_circle_vec(nside, vec, np.deg2rad(4.0), inclusive=True, nest=True)
     torch.testing.assert_close(

@@ -49,7 +49,7 @@ class TestTableReading:
             assert isinstance(result, dict)
             assert "RA" in result
             assert "DEC" in result
-            assert len(result['RA']) == 100  # type: ignore
+            assert len(result["RA"]) == 100  # type: ignore
 
         finally:
             os.unlink(filepath)
@@ -81,7 +81,7 @@ class TestTableReading:
             )
 
             assert isinstance(result, dict)
-            assert len(result['RA']) == 50  # type: ignore
+            assert len(result["RA"]) == 50  # type: ignore
 
         finally:
             os.unlink(filepath)
@@ -98,7 +98,7 @@ class TestTableReading:
 
             assert isinstance(result, dict)
             assert "RA" in result
-            assert len(result['RA']) == 10000  # type: ignore
+            assert len(result["RA"]) == 10000  # type: ignore
 
         finally:
             os.unlink(filepath)
@@ -243,9 +243,9 @@ class TestTableReading:
             }
         )
         assert out.num_rows == 3
-        assert out['ID'].tolist() == [1, 2, 3]  # type: ignore
-        assert len(out.get_vla_column('VLA')) == 3  # type: ignore
-        assert out.get_vla_column('VLA')[-1].tolist() == [4, 5, 6]  # type: ignore
+        assert out["ID"].tolist() == [1, 2, 3]  # type: ignore
+        assert len(out.get_vla_column("VLA")) == 3  # type: ignore
+        assert out.get_vla_column("VLA")[-1].tolist() == [4, 5, 6]  # type: ignore
 
     def test_data_types(self):
         """Test various FITS data types."""
@@ -255,9 +255,9 @@ class TestTableReading:
             result, header = torchsky.read(filepath, hdu=1, return_header=True)
 
             # Check data types are preserved appropriately
-            assert result['ID'].dtype in [torch.int32, torch.int64]  # type: ignore
-            assert result['RA'].dtype in [torch.float32, torch.float64]  # type: ignore
-            assert result['FLAG'].dtype in [torch.uint8, torch.int16, torch.int32]  # type: ignore
+            assert result["ID"].dtype in [torch.int32, torch.int64]  # type: ignore
+            assert result["RA"].dtype in [torch.float32, torch.float64]  # type: ignore
+            assert result["FLAG"].dtype in [torch.uint8, torch.int16, torch.int32]  # type: ignore
 
         finally:
             os.unlink(filepath)
@@ -281,7 +281,6 @@ class TestTableReading:
             finally:
                 os.unlink(f.name)
 
-
     def test_close_cpp_handle_exception(self):
         """Test _close_cpp_handle suppresses exceptions during handle closure."""
         from torchsky.table import _close_cpp_handle
@@ -297,9 +296,11 @@ class TestTableReading:
     def test_can_use_mmap_row_path_for_full_read_exception(self, mock_get_header):
         """Test that _can_use_mmap_row_path_for_full_read handles exceptions gracefully."""
         from torchsky.table import _can_use_mmap_row_path_for_full_read
+
         mock_get_header.side_effect = Exception("Mocked error reading header")
         result = _can_use_mmap_row_path_for_full_read("dummy.fits", 1, None)
         assert result is False
+
 
 class TestTablePerformance:
     """Test table reading performance optimizations."""
@@ -342,7 +343,7 @@ class TestTablePerformance:
             streaming_time = time.time() - start_time
 
             assert isinstance(result, dict)
-            assert len(result['RA']) == 50000  # type: ignore
+            assert len(result["RA"]) == 50000  # type: ignore
 
             # Streaming should complete in reasonable time
             assert streaming_time < 30.0  # Should complete within 30 seconds
@@ -379,8 +380,6 @@ class TestTablePerformance:
         finally:
             os.unlink(filepath)
 
-
-
     def test_is_compatible_arrow_table_edge_cases(self):
         import torchsky.table as tbl
         from unittest import mock
@@ -390,15 +389,21 @@ class TestTablePerformance:
 
         # Test Exception in get_header
         with mock.patch("torchsky.get_header", side_effect=Exception("mocked error")):
-            assert tbl._can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
+            assert (
+                tbl._can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
+            )
 
         # Test TFIELDS = 0
         with mock.patch("torchsky.get_header", return_value={"TFIELDS": 0}):
-            assert tbl._can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
+            assert (
+                tbl._can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
+            )
 
         # Test missing TTYPE keys
         with mock.patch("torchsky.get_header", return_value={"TFIELDS": 2}):
-            assert tbl._can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
+            assert (
+                tbl._can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
+            )
 
     @mock.patch.dict("torchsky.table._reader_cache", {}, clear=True)
     @mock.patch.dict("torchsky.table._handle_cache", {}, clear=True)
@@ -426,6 +431,8 @@ class TestTablePerformance:
         mock_close_cpp_handle.assert_any_call(dummy_handle2)
         assert mock_close_cpp_handle.call_count == 2
 
+
 if __name__ == "__main__":
     import pytest
+
     pytest.main([__file__, "-v"])

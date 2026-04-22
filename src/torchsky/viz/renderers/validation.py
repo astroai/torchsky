@@ -117,8 +117,10 @@ def pull_histogram(
     bin_width = 12.0 / n_bins
     n_total = flat.numel()
     gaussian_counts = [
-        n_total * bin_width / (std * math.sqrt(2 * math.pi)) *
-        math.exp(-0.5 * ((float(c.item()) - mu) / max(std, 1e-6)) ** 2)
+        n_total
+        * bin_width
+        / (std * math.sqrt(2 * math.pi))
+        * math.exp(-0.5 * ((float(c.item()) - mu) / max(std, 1e-6)) ** 2)
         for c in centers
     ]
 
@@ -133,7 +135,7 @@ def pull_histogram(
         "stats": {
             "outlier_fraction_3sigma": round(outlier_frac, 4),
             "n_pixels": int(flat.numel()),
-            "rms_pull": round(float((flat ** 2).mean().sqrt().item()), 4),
+            "rms_pull": round(float((flat**2).mean().sqrt().item()), 4),
         },
     }
 
@@ -154,7 +156,9 @@ def chi2_map_png(
     chi2 = (residual / sigma_f) ** 2
 
     # Log-stretch chi2 to reveal structure across dynamic range
-    vmax = float(torch.quantile(chi2.flatten()[torch.isfinite(chi2.flatten())], 0.99).item())
+    vmax = float(
+        torch.quantile(chi2.flatten()[torch.isfinite(chi2.flatten())], 0.99).item()
+    )
     vmax = max(vmax, 1.0)
     stretched = apply_stretch(chi2, 0.0, vmax, "log")
     return to_png(stretched, cmap="viridis")

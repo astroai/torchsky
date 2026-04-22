@@ -86,9 +86,9 @@ def log_spectral_encoding(
     )
     # Vectorize the scale multiplication and sin/cos application using broadcasting
     scaled = coord.unsqueeze(-1) * scales
-    fourier_feats = torch.stack(
-        [torch.sin(scaled), torch.cos(scaled)], dim=-1
-    ).flatten(start_dim=-2)
+    fourier_feats = torch.stack([torch.sin(scaled), torch.cos(scaled)], dim=-1).flatten(
+        start_dim=-2
+    )
     return torch.cat([coord.unsqueeze(-1), fourier_feats], dim=-1)
 
 

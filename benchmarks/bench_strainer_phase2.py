@@ -54,7 +54,9 @@ def _tan_header(
     }
 
 
-def _build_observation(*, truth_seed: int, size: int = 14) -> tuple[FieldObservation, FieldDomain]:
+def _build_observation(
+    *, truth_seed: int, size: int = 14
+) -> tuple[FieldObservation, FieldDomain]:
     """Build a fixed synthetic observation. Use a dedicated ``truth_seed`` so fit models can use other seeds."""
     torch.manual_seed(truth_seed)
     truth_domain = FieldDomain(
@@ -169,7 +171,9 @@ def main() -> int:
         help="Comma-separated 1-based step indices to report; values above --fit-steps are omitted (listed in early_steps_skipped)",
     )
     args = parser.parse_args()
-    early_requested = tuple(int(x.strip()) for x in args.early_steps.split(",") if x.strip())
+    early_requested = tuple(
+        int(x.strip()) for x in args.early_steps.split(",") if x.strip()
+    )
     early, early_skipped, early_fallback = _resolve_early_steps(
         early_requested, fit_steps=args.fit_steps
     )

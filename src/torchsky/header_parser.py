@@ -332,7 +332,7 @@ class FastHeaderParser:
         if end_idx == -1:
             return quoted_str[1:].replace("''", "'")
         # Add 1 back to end_idx because we searched in quoted_str[1:]
-        return quoted_str[1:end_idx + 1].replace("''", "'")
+        return quoted_str[1 : end_idx + 1].replace("''", "'")
 
     @classmethod
     def parse_with_performance_tracking(cls, header_string: str) -> tuple:
@@ -373,5 +373,3 @@ def fast_parse_header(header_string: str) -> Dict[str, Any]:
         Dictionary of header keywords and values
     """
     return FastHeaderParser.parse_header_string(header_string)
-
-

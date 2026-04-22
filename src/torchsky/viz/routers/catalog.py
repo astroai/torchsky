@@ -56,6 +56,7 @@ def _catalog_load_sync(
     ra_key, dec_key = _resolve_ra_dec_keys(data, ra_col, dec_col)
 
     import torch
+
     ra_t = torch.as_tensor(data[ra_key])
     dec_t = torch.as_tensor(data[dec_key])
 
@@ -69,14 +70,16 @@ def _catalog_load_sync(
     ra_t = ra_t[valid]
     dec_t = dec_t[valid]
 
-    return JSONResponse({
-        "ra": ra_t.tolist(),
-        "dec": dec_t.tolist(),
-        "n_total": n,
-        "n_returned": int(ra_t.numel()),
-        "ra_col": ra_key,
-        "dec_col": dec_key,
-    })
+    return JSONResponse(
+        {
+            "ra": ra_t.tolist(),
+            "dec": dec_t.tolist(),
+            "n_total": n,
+            "n_returned": int(ra_t.numel()),
+            "ra_col": ra_key,
+            "dec_col": dec_key,
+        }
+    )
 
 
 @router.get("/load")
@@ -96,7 +99,13 @@ async def catalog_load(
     from .._blocking import run_in_thread
 
     return await run_in_thread(
-        _catalog_load_sync, request, path, ra_col, dec_col, hdu, max_rows,
+        _catalog_load_sync,
+        request,
+        path,
+        ra_col,
+        dec_col,
+        hdu,
+        max_rows,
     )
 
 
@@ -126,16 +135,19 @@ def _catalog_filter_moc_sync(
     ra_key, dec_key = _resolve_ra_dec_keys(data, ra_col, dec_col)
 
     import torch
+
     ra_t = torch.as_tensor(data[ra_key], dtype=torch.float64)
     dec_t = torch.as_tensor(data[dec_key], dtype=torch.float64)
     ra_filt, dec_filt = moc.filter_catalog(ra_t, dec_t)
 
-    return JSONResponse({
-        "ra": ra_filt.tolist(),
-        "dec": dec_filt.tolist(),
-        "n_total": int(ra_t.numel()),
-        "n_in_moc": int(ra_filt.numel()),
-    })
+    return JSONResponse(
+        {
+            "ra": ra_filt.tolist(),
+            "dec": dec_filt.tolist(),
+            "n_total": int(ra_t.numel()),
+            "n_in_moc": int(ra_filt.numel()),
+        }
+    )
 
 
 @router.get("/filter_moc")
@@ -152,5 +164,10 @@ async def catalog_filter_moc(
 
     return await run_in_thread(
         _catalog_filter_moc_sync,
-        request, catalog_path, moc_path, ra_col, dec_col, hdu,
+        request,
+        catalog_path,
+        moc_path,
+        ra_col,
+        dec_col,
+        hdu,
     )

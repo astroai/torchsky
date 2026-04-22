@@ -90,7 +90,8 @@ def test_cd_matrix_takes_priority_over_cdelt() -> None:
     wcs = WCS(header)  # type: ignore
 
     assert torch.allclose(  # type: ignore
-        wcs.cd, torch.tensor([[-0.01, 0.0], [0.0, 0.01]], dtype=torch.float64)  # type: ignore
+        wcs.cd,
+        torch.tensor([[-0.01, 0.0], [0.0, 0.01]], dtype=torch.float64),  # type: ignore
     )
 
 

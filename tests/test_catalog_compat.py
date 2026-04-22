@@ -276,7 +276,9 @@ def test_crossmatch_sky_matches_astropy_on_real_votable_catalogs() -> None:
     not _has_native_table_io(),
     reason="torchsky native FITS table extension unavailable",
 )
-def test_crossmatch_sky_end_to_end_matches_astropy_after_fits_read_on_real_catalogs() -> None:
+def test_crossmatch_sky_end_to_end_matches_astropy_after_fits_read_on_real_catalogs() -> (
+    None
+):
     left_table, right_table = _real_catalog_tables()
     # FITS table write only needs float RA/DEC columns; extra string/object columns
     # can trip Astropy FITS verification on newer releases (e.g. varlen descriptors).

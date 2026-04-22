@@ -175,7 +175,9 @@ def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for row in rows:
         op = row.get("operation")
         if op == "contains_nonconvex_medium_default_vs_forced":
-            best_variant = "cpp" if row["cpp_points_s"] > row["python_points_s"] else "python"
+            best_variant = (
+                "cpp" if row["cpp_points_s"] > row["python_points_s"] else "python"
+            )
             out.append(
                 {
                     "operation": "contains_nonconvex_recommendation",
@@ -204,7 +206,9 @@ def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 }
             )
         elif op == "intersects_nonconvex_cpp_vs_python":
-            best_variant = "cpp" if row["cpp_calls_s"] >= row["python_calls_s"] else "python"
+            best_variant = (
+                "cpp" if row["cpp_calls_s"] >= row["python_calls_s"] else "python"
+            )
             out.append(
                 {
                     "operation": "intersects_nonconvex_recommendation",
@@ -217,7 +221,9 @@ def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 }
             )
         elif op == "intersects_upstream_difficult_cpp_vs_python":
-            best_variant = "cpp" if row["cpp_calls_s"] >= row["python_calls_s"] else "python"
+            best_variant = (
+                "cpp" if row["cpp_calls_s"] >= row["python_calls_s"] else "python"
+            )
             out.append(
                 {
                     "operation": "intersects_upstream_difficult_recommendation",
@@ -343,8 +349,10 @@ def main() -> int:
                 "default_points_s": medium_points / t_contains_medium_default,
                 "cpp_points_s": medium_points / t_contains_medium_cpp,
                 "python_points_s": medium_points / t_contains_medium_py,
-                "default_vs_cpp_ratio": t_contains_medium_cpp / t_contains_medium_default,
-                "default_vs_python_ratio": t_contains_medium_py / t_contains_medium_default,
+                "default_vs_cpp_ratio": t_contains_medium_cpp
+                / t_contains_medium_default,
+                "default_vs_python_ratio": t_contains_medium_py
+                / t_contains_medium_default,
             }
         )
         t_contains_large_default = _time_many(

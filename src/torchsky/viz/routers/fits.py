@@ -21,7 +21,9 @@ def _resolve_path(root: Path, rel_path: str) -> Path:
 
 def _is_fits(name: str) -> bool:
     n = name.lower()
-    return any(n.endswith(ext) for ext in (".fits", ".fit", ".fz", ".fits.gz", ".fit.gz"))
+    return any(
+        n.endswith(ext) for ext in (".fits", ".fit", ".fz", ".fits.gz", ".fit.gz")
+    )
 
 
 def _file_tree_sync(request: Request, path: str) -> JSONResponse:
@@ -34,20 +36,37 @@ def _file_tree_sync(request: Request, path: str) -> JSONResponse:
 
     items = []
     if base.is_file():
-        items = [{"name": base.name, "path": str(base.relative_to(root)), "type": "file", "size": base.stat().st_size}]
+        items = [
+            {
+                "name": base.name,
+                "path": str(base.relative_to(root)),
+                "type": "file",
+                "size": base.stat().st_size,
+            }
+        ]
     else:
         for entry in sorted(base.iterdir()):
             if entry.is_dir() and not entry.name.startswith("."):
-                items.append({"name": entry.name, "path": str(entry.relative_to(root)), "type": "dir"})
+                items.append(
+                    {
+                        "name": entry.name,
+                        "path": str(entry.relative_to(root)),
+                        "type": "dir",
+                    }
+                )
             elif entry.is_file() and _is_fits(entry.name):
-                items.append({
-                    "name": entry.name,
-                    "path": str(entry.relative_to(root)),
-                    "type": "file",
-                    "size": entry.stat().st_size,
-                })
+                items.append(
+                    {
+                        "name": entry.name,
+                        "path": str(entry.relative_to(root)),
+                        "type": "file",
+                        "size": entry.stat().st_size,
+                    }
+                )
 
-    return JSONResponse({"items": items, "base": str(base.relative_to(root)) if base != root else ""})
+    return JSONResponse(
+        {"items": items, "base": str(base.relative_to(root)) if base != root else ""}
+    )
 
 
 @router.get("/tree")
@@ -104,15 +123,17 @@ def _fits_info_sync(request: Request, path: str, hdu: int) -> JSONResponse:
     except Exception:
         pass
 
-    return JSONResponse({
-        "path": path,
-        "hdu": hdu,
-        "shape": shape,
-        "bitpix": bitpix,
-        "wcs": wcs_info,
-        "hdu_list": hdu_list,
-        "n_hdus": len(hdu_list),
-    })
+    return JSONResponse(
+        {
+            "path": path,
+            "hdu": hdu,
+            "shape": shape,
+            "bitpix": bitpix,
+            "wcs": wcs_info,
+            "hdu_list": hdu_list,
+            "n_hdus": len(hdu_list),
+        }
+    )
 
 
 @router.get("/info")
@@ -123,7 +144,10 @@ async def fits_info(request: Request, path: str, hdu: int = 0) -> JSONResponse:
 
 
 def _fits_histogram_sync(
-    request: Request, path: str, hdu: int, nbins: int,
+    request: Request,
+    path: str,
+    hdu: int,
+    nbins: int,
 ) -> JSONResponse:
     """Return image histogram, ZScale limits, and dynamic range report."""
     import torchsky
@@ -136,7 +160,7 @@ def _fits_histogram_sync(
         tensor = torchsky.read_image(abs_path, hdu=hdu)
         flat = tensor.float().flatten()
         if flat.numel() > 1_000_000:
-            flat = flat[::flat.numel() // 1_000_000]
+            flat = flat[:: flat.numel() // 1_000_000]
         result = compute_histogram(flat.reshape(1, -1), n_bins=nbins)
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e)) from e

@@ -30,17 +30,29 @@ class UpdecWebbFile:
 
 UPDEC_WEBB_FILES: dict[tuple[str, int], UpdecWebbFile] = {
     ("F090W", 0): UpdecWebbFile("F090W", 0, "F090Wb_UPDC-v2_iter0_i2d.fits.fz", 47945),
-    ("F090W", 10): UpdecWebbFile("F090W", 10, "F090Wb_UPDC-v2_iter10_i2d.fits.fz", 47947),
+    ("F090W", 10): UpdecWebbFile(
+        "F090W", 10, "F090Wb_UPDC-v2_iter10_i2d.fits.fz", 47947
+    ),
     ("F150W", 0): UpdecWebbFile("F150W", 0, "F150Wb_UPDC-v2_iter0_i2d.fits.fz", 47958),
-    ("F150W", 10): UpdecWebbFile("F150W", 10, "F150Wb_UPDC-v2_iter10_i2d.fits.fz", 47959),
+    ("F150W", 10): UpdecWebbFile(
+        "F150W", 10, "F150Wb_UPDC-v2_iter10_i2d.fits.fz", 47959
+    ),
     ("F200W", 0): UpdecWebbFile("F200W", 0, "F200Wb_UPDC-v2_iter0_i2d.fits.fz", 47969),
-    ("F200W", 10): UpdecWebbFile("F200W", 10, "F200Wb_UPDC-v2_iter10_i2d.fits.fz", 47970),
+    ("F200W", 10): UpdecWebbFile(
+        "F200W", 10, "F200Wb_UPDC-v2_iter10_i2d.fits.fz", 47970
+    ),
     ("F277W", 0): UpdecWebbFile("F277W", 0, "F277Wb_UPDC-v2_iter0_i2d.fits.fz", 47980),
-    ("F277W", 10): UpdecWebbFile("F277W", 10, "F277Wb_UPDC-v2_iter10_i2d.fits.fz", 47981),
+    ("F277W", 10): UpdecWebbFile(
+        "F277W", 10, "F277Wb_UPDC-v2_iter10_i2d.fits.fz", 47981
+    ),
     ("F356W", 0): UpdecWebbFile("F356W", 0, "F356Wb_UPDC-v2_iter0_i2d.fits.fz", 47991),
-    ("F356W", 10): UpdecWebbFile("F356W", 10, "F356Wb_UPDC-v2_iter10_i2d.fits.fz", 47992),
+    ("F356W", 10): UpdecWebbFile(
+        "F356W", 10, "F356Wb_UPDC-v2_iter10_i2d.fits.fz", 47992
+    ),
     ("F444W", 0): UpdecWebbFile("F444W", 0, "F444Wb_UPDC-v2_iter0_i2d.fits.fz", 48002),
-    ("F444W", 10): UpdecWebbFile("F444W", 10, "F444Wb_UPDC-v2_iter10_i2d.fits.fz", 48003),
+    ("F444W", 10): UpdecWebbFile(
+        "F444W", 10, "F444Wb_UPDC-v2_iter10_i2d.fits.fz", 48003
+    ),
 }
 
 
@@ -81,7 +93,13 @@ def _download_with_retries(
         except HTTPError:
             dest.unlink(missing_ok=True)
             raise
-        except (URLError, OSError, ConnectionResetError, TimeoutError, socket.timeout) as exc:
+        except (
+            URLError,
+            OSError,
+            ConnectionResetError,
+            TimeoutError,
+            socket.timeout,
+        ) as exc:
             dest.unlink(missing_ok=True)
             last_error = exc
             if attempt >= max(1, int(attempts)):
@@ -133,7 +151,9 @@ def main() -> int:
     parser.add_argument("--attempts", type=int, default=4)
     parser.add_argument("--timeout-s", type=float, default=240.0)
     parser.add_argument("--backoff-s", type=float, default=1.0)
-    parser.add_argument("--list", action="store_true", help="List known public files and exit")
+    parser.add_argument(
+        "--list", action="store_true", help="List known public files and exit"
+    )
     args = parser.parse_args()
 
     if args.list:

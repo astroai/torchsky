@@ -99,6 +99,8 @@ def create_app(
         return out
 
     if _STATIC_DIR.exists():
-        app.mount("/", StaticFiles(directory=str(_STATIC_DIR), html=True), name="static")
+        app.mount(
+            "/", StaticFiles(directory=str(_STATIC_DIR), html=True), name="static"
+        )
 
     return app

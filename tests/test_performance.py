@@ -9,7 +9,8 @@ import time
 import numpy as np
 import psutil
 import pytest
-pytest.importorskip('psutil')
+
+pytest.importorskip("psutil")
 import torch
 
 import torchsky

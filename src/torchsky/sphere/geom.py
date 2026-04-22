@@ -123,12 +123,8 @@ def _points_on_any_polygon_edge(
     m = int(points.shape[0])
     out = torch.zeros(m, dtype=torch.bool, device=points.device)
     for j in range(int(vertices.shape[0])):
-        d0 = torch.acos(
-            torch.clamp((points * v0[j]).sum(dim=-1), -1.0, 1.0)
-        )
-        d1 = torch.acos(
-            torch.clamp((points * v1[j]).sum(dim=-1), -1.0, 1.0)
-        )
+        d0 = torch.acos(torch.clamp((points * v0[j]).sum(dim=-1), -1.0, 1.0))
+        d1 = torch.acos(torch.clamp((points * v1[j]).sum(dim=-1), -1.0, 1.0))
         out |= torch.abs((d0 + d1) - d_v0_v1[j]) <= atol_rad
     return out
 
@@ -1419,9 +1415,7 @@ def _numpy_sg_contains_lonlat_bulk(
     if hasattr(sg_poly, "contains_lonlat"):
         return np.asarray(
             [
-                bool(
-                    sg_poly.contains_lonlat(float(lo), float(la), degrees=True)
-                )
+                bool(sg_poly.contains_lonlat(float(lo), float(la), degrees=True))
                 for lo, la in zip(lon_deg, lat_deg, strict=False)
             ],
             dtype=bool,
@@ -1429,9 +1423,7 @@ def _numpy_sg_contains_lonlat_bulk(
     if hasattr(sg_poly, "contains_radec"):
         return np.asarray(
             [
-                bool(
-                    sg_poly.contains_radec(float(lo), float(la), degrees=True)
-                )
+                bool(sg_poly.contains_radec(float(lo), float(la), degrees=True))
                 for lo, la in zip(lon_deg, lat_deg, strict=False)
             ],
             dtype=bool,

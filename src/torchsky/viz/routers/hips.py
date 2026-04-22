@@ -16,7 +16,12 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, PlainTextResponse
 
-from ..renderers.hips_tile import render_hips_tile, render_preview, compute_hips_order, TILE_SIZE
+from ..renderers.hips_tile import (
+    render_hips_tile,
+    render_preview,
+    compute_hips_order,
+    TILE_SIZE,
+)
 from ..renderers.image import zscale_limits
 from ._safe_path import resolve_under_root
 
@@ -48,7 +53,9 @@ def _get_surveys(request: Request) -> dict[str, SurveyInfo]:
     return request.app.state.surveys
 
 
-def _evict_surveys_fifo(request: Request, surveys: dict[str, SurveyInfo], sid: str) -> None:
+def _evict_surveys_fifo(
+    request: Request, surveys: dict[str, SurveyInfo], sid: str
+) -> None:
     """When over cap, drop oldest registrations (FIFO by insertion order)."""
     cap = int(getattr(request.app.state, "max_registered_surveys", 64))
     if sid in surveys:
@@ -82,13 +89,15 @@ def _register_survey_sync(
 
     if sid in surveys:
         s = surveys[sid]
-        return JSONResponse({
-            "id": sid,
-            "max_order": s.max_order,
-            "shape": list(s.image_shape),
-            "vmin": s.vmin,
-            "vmax": s.vmax,
-        })
+        return JSONResponse(
+            {
+                "id": sid,
+                "max_order": s.max_order,
+                "shape": list(s.image_shape),
+                "vmin": s.vmin,
+                "vmax": s.vmax,
+            }
+        )
 
     try:
         tensor, header = torchsky.read_image(abs_path, hdu=hdu, return_header=True)
@@ -133,13 +142,15 @@ def _register_survey_sync(
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
-    return JSONResponse({
-        "id": sid,
-        "max_order": max_order,
-        "shape": [h, w],
-        "vmin": vmin,
-        "vmax": vmax,
-    })
+    return JSONResponse(
+        {
+            "id": sid,
+            "max_order": max_order,
+            "shape": [h, w],
+            "vmin": vmin,
+            "vmax": vmax,
+        }
+    )
 
 
 @router.get("/register")
@@ -155,25 +166,34 @@ async def register_survey(
     from .._blocking import run_in_thread
 
     return await run_in_thread(
-        _register_survey_sync, request, path, hdu, stretch, cmap, vmin, vmax,
+        _register_survey_sync,
+        request,
+        path,
+        hdu,
+        stretch,
+        cmap,
+        vmin,
+        vmax,
     )
 
 
 @router.get("/list")
 async def list_surveys(request: Request) -> JSONResponse:
     surveys = _get_surveys(request)
-    return JSONResponse([
-        {
-            "id": sid,
-            "path": s.path,
-            "hdu": s.hdu,
-            "stretch": s.stretch,
-            "cmap": s.cmap,
-            "shape": list(s.image_shape),
-            "max_order": s.max_order,
-        }
-        for sid, s in surveys.items()
-    ])
+    return JSONResponse(
+        [
+            {
+                "id": sid,
+                "path": s.path,
+                "hdu": s.hdu,
+                "stretch": s.stretch,
+                "cmap": s.cmap,
+                "shape": list(s.image_shape),
+                "max_order": s.max_order,
+            }
+            for sid, s in surveys.items()
+        ]
+    )
 
 
 @router.get("/{sid}/properties")
@@ -209,18 +229,25 @@ _TILE_RE = re.compile(r"^Norder(\d+)/Dir(\d+)/Npix(\d+)\.png$")
 
 def _hips_preview_png_sync(s: SurveyInfo) -> bytes:
     return render_preview(
-        s.image, max_pixels=1024,
-        stretch=s.stretch, cmap=s.cmap,
-        vmin=s.vmin, vmax=s.vmax,
+        s.image,
+        max_pixels=1024,
+        stretch=s.stretch,
+        cmap=s.cmap,
+        vmin=s.vmin,
+        vmax=s.vmax,
     )
 
 
 def _hips_tile_png_sync(s: SurveyInfo, order: int, pix: int) -> bytes | None:
     return render_hips_tile(
-        s.image, s.wcs,
-        order=order, pix=pix,
-        stretch=s.stretch, cmap=s.cmap,
-        vmin=s.vmin, vmax=s.vmax,
+        s.image,
+        s.wcs,
+        order=order,
+        pix=pix,
+        stretch=s.stretch,
+        cmap=s.cmap,
+        vmin=s.vmin,
+        vmax=s.vmax,
     )
 
 
@@ -245,12 +272,15 @@ async def hips_tile(sid: str, tile_path: str, request: Request) -> Response:
             try:
                 png = await run_in_thread(_hips_preview_png_sync, s)
                 return Response(
-                    content=png, media_type="image/png",
+                    content=png,
+                    media_type="image/png",
                     headers={"Cache-Control": "public, max-age=300"},
                 )
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e)) from e
-        raise HTTPException(status_code=400, detail=f"Unrecognized tile URL: {tile_path}")
+        raise HTTPException(
+            status_code=400, detail=f"Unrecognized tile URL: {tile_path}"
+        )
 
     order = int(m.group(1))
     dir_url = int(m.group(2))
@@ -269,7 +299,8 @@ async def hips_tile(sid: str, tile_path: str, request: Request) -> Response:
     cached = cache.get(cache_key)
     if cached is not None:
         return Response(
-            content=cached, media_type="image/png",
+            content=cached,
+            media_type="image/png",
             headers={"Cache-Control": "public, max-age=3600", "X-Cache": "HIT"},
         )
 
@@ -281,17 +312,21 @@ async def hips_tile(sid: str, tile_path: str, request: Request) -> Response:
     if png is None:
         from ..renderers.image import to_png
         import torch
+
         blank = to_png(
-            torch.zeros(1, 1), cmap="gray",
+            torch.zeros(1, 1),
+            cmap="gray",
             alpha_mask=torch.zeros(1, 1, dtype=torch.bool),
         )
         return Response(
-            content=blank, media_type="image/png",
+            content=blank,
+            media_type="image/png",
             headers={"Cache-Control": "public, max-age=86400"},
         )
 
     cache.put(cache_key, png)
     return Response(
-        content=png, media_type="image/png",
+        content=png,
+        media_type="image/png",
         headers={"Cache-Control": "public, max-age=3600", "X-Cache": "MISS"},
     )

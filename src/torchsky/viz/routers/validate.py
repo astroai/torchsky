@@ -36,7 +36,7 @@ class ValidationPair(BaseModel):
 
 @dataclass
 class ValidationReg:
-    truth: object   # Tensor
+    truth: object  # Tensor
     model: object
     sigma: Optional[object]
     pair: ValidationPair
@@ -48,7 +48,9 @@ def _pairs(request: Request) -> dict[str, ValidationReg]:
     return request.app.state.val_pairs
 
 
-def _evict_validation_fifo(request: Request, pairs: dict[str, ValidationReg], pid: str) -> None:
+def _evict_validation_fifo(
+    request: Request, pairs: dict[str, ValidationReg], pid: str
+) -> None:
     cap = int(getattr(request.app.state, "max_validation_pairs", 32))
     if pid in pairs:
         return
@@ -59,6 +61,7 @@ def _evict_validation_fifo(request: Request, pairs: dict[str, ValidationReg], pi
 
 def _tensor_pixel_count(t: object) -> int:
     import torch
+
     ten = torch.as_tensor(t)
     if ten.dim() < 2:
         return int(ten.numel())
@@ -79,7 +82,9 @@ def _register_pair_sync(request: Request, pair: ValidationPair) -> JSONResponse:
     try:
         truth = load(pair.truth_path, pair.truth_hdu).float()
         model = load(pair.model_path, pair.model_hdu).float()
-        sigma = load(pair.sigma_path, pair.sigma_hdu).float() if pair.sigma_path else None
+        sigma = (
+            load(pair.sigma_path, pair.sigma_hdu).float() if pair.sigma_path else None
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -117,7 +122,10 @@ def _png_data_url(png_bytes: bytes) -> str:
 
 
 def _panel_pngs_sync(
-    pid: str, request: Request, stretch: str, pull_range: float,
+    pid: str,
+    request: Request,
+    stretch: str,
+    pull_range: float,
 ) -> JSONResponse:
     pairs = _pairs(request)
     if pid not in pairs:
@@ -125,7 +133,9 @@ def _panel_pngs_sync(
     r = pairs[pid]
     try:
         pngs = residual_panel_pngs(
-            r.truth, r.model, r.sigma,
+            r.truth,
+            r.model,
+            r.sigma,
             stretch=stretch,
             pull_sigma_range=pull_range,
         )
@@ -136,7 +146,8 @@ def _panel_pngs_sync(
 
 @router.get("/{pid}/panel_pngs")
 async def panel_pngs(
-    pid: str, request: Request,
+    pid: str,
+    request: Request,
     stretch: str = "zscale",
     pull_range: float = 5.0,
 ) -> JSONResponse:
@@ -215,11 +226,13 @@ def _dr_report_sync(pid: str, request: Request) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Pair not registered")
     r = pairs[pid]
     residual = r.model - r.truth
-    return JSONResponse({
-        "truth": detect_dynamic_range(r.truth),
-        "model": detect_dynamic_range(r.model),
-        "residual": detect_dynamic_range(residual),
-    })
+    return JSONResponse(
+        {
+            "truth": detect_dynamic_range(r.truth),
+            "model": detect_dynamic_range(r.model),
+            "residual": detect_dynamic_range(residual),
+        }
+    )
 
 
 @router.get("/{pid}/dr_report")

@@ -53,7 +53,8 @@ def _make_header(
 
 
 def _sample_pixels(
-    header: fits.Header, n_side: int = 7  # type: ignore
+    header: fits.Header,
+    n_side: int = 7,  # type: ignore
 ) -> tuple[np.ndarray, np.ndarray]:  # type: ignore
     x = np.linspace(96.0, header["NAXIS1"] - 96.0, n_side, dtype=np.float64)  # type: ignore
     y = np.linspace(96.0, header["NAXIS2"] - 96.0, n_side, dtype=np.float64)  # type: ignore
@@ -191,7 +192,8 @@ def test_projection_inverse_stack_tensor_matches_astropy(
 
     x_ast, y_ast = awcs.all_world2pix(ra_valid, dec_valid, origin)
     world = torch.stack(
-        [torch.from_numpy(ra_valid), torch.from_numpy(dec_valid)], dim=-1  # type: ignore
+        [torch.from_numpy(ra_valid), torch.from_numpy(dec_valid)],
+        dim=-1,  # type: ignore
     )
     pix_t = twcs.world_to_pixel(world, origin=origin)
     x_t = pix_t[..., 0].cpu().numpy().reshape(-1)  # type: ignore
@@ -256,7 +258,8 @@ def test_projection_inverse_stack_compiled_matches_astropy(
 
     x_ast, y_ast = awcs.all_world2pix(ra_v, dec_v, origin)
     world = torch.stack(
-        [torch.from_numpy(ra_v), torch.from_numpy(dec_v)], dim=-1  # type: ignore
+        [torch.from_numpy(ra_v), torch.from_numpy(dec_v)],
+        dim=-1,  # type: ignore
     )
     pix = twcs.world_to_pixel(world, origin=origin)
     x_t = pix[..., 0].cpu().numpy().reshape(-1)  # type: ignore
@@ -296,7 +299,9 @@ def test_off_equator_cylindrical_forward_matches_astropy(
 
     valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
     valid &= np.isfinite(ra_t_np) & np.isfinite(dec_t_np)
-    assert np.any(valid), f"No finite off-equator parity points for projection={projection}"  # type: ignore
+    assert np.any(valid), (
+        f"No finite off-equator parity points for projection={projection}"
+    )  # type: ignore
 
     dra = _ra_wrap_delta(ra_t_np[valid], ra_ast[valid])
     ddec = dec_t_np[valid] - dec_ast[valid]  # type: ignore
@@ -324,5 +329,9 @@ def test_off_equator_cea_fused_matches_python_fallback() -> None:
     twcs._disable_cpp_pixel_to_world = True
     ra_python, dec_python = twcs.pixel_to_world(x, y, origin=1)
 
-    np.testing.assert_allclose(ra_default.cpu().numpy(), ra_python.cpu().numpy(), atol=5e-9)
-    np.testing.assert_allclose(dec_default.cpu().numpy(), dec_python.cpu().numpy(), atol=5e-9)
+    np.testing.assert_allclose(
+        ra_default.cpu().numpy(), ra_python.cpu().numpy(), atol=5e-9
+    )
+    np.testing.assert_allclose(
+        dec_default.cpu().numpy(), dec_python.cpu().numpy(), atol=5e-9
+    )

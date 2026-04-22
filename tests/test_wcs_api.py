@@ -46,7 +46,9 @@ def test_wcs_2d_pixel_to_world():
     pixels = torch.tensor([[0.0, 0.0]], dtype=torch.float64)
     world = wcs.pixel_to_world(pixels)
     assert torch.allclose(  # type: ignore
-        world, torch.tensor([[180.0, 0.0]], dtype=torch.float64), atol=1e-6  # type: ignore
+        world,
+        torch.tensor([[180.0, 0.0]], dtype=torch.float64),
+        atol=1e-6,  # type: ignore
     )
 
 
@@ -68,7 +70,9 @@ def test_wcs_2d_world_to_pixel():
     world = torch.tensor([[180.0, 0.0]], dtype=torch.float32)
     pixels = wcs.world_to_pixel(world)
     assert torch.allclose(  # type: ignore
-        pixels, torch.tensor([[0.0, 0.0]], dtype=torch.float64), atol=1e-6  # type: ignore
+        pixels,
+        torch.tensor([[0.0, 0.0]], dtype=torch.float64),
+        atol=1e-6,  # type: ignore
     )
 
 
@@ -92,7 +96,9 @@ def test_get_wcs_from_file_auto_hdu():
         assert isinstance(wcs, WCS)
         world = wcs.pixel_to_world(torch.tensor([[0.0, 0.0]], dtype=torch.float64))
         assert torch.allclose(  # type: ignore
-            world, torch.tensor([[180.0, 0.0]], dtype=torch.float64), atol=1e-6  # type: ignore
+            world,
+            torch.tensor([[180.0, 0.0]], dtype=torch.float64),
+            atol=1e-6,  # type: ignore
         )
     finally:
         if os.path.exists(path):
@@ -120,7 +126,9 @@ def test_get_wcs_auto_hdu_skips_empty_primary():
         wcs = torchsky.get_wcs(path, hdu="auto")
         world = wcs.pixel_to_world(torch.tensor([[0.0, 0.0]], dtype=torch.float64))
         assert torch.allclose(  # type: ignore
-            world, torch.tensor([[10.0, -5.0]], dtype=torch.float64), atol=1e-6  # type: ignore
+            world,
+            torch.tensor([[10.0, -5.0]], dtype=torch.float64),
+            atol=1e-6,  # type: ignore
         )
     finally:
         if os.path.exists(path):

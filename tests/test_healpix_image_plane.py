@@ -7,6 +7,7 @@ from torchsky.map.healpix_image_plane import (
     sample_healpix_map_on_tan_header,
 )
 
+
 def test_healpix_nside_from_map_len():
     # Valid nside
     assert healpix_nside_from_map_len(12) == 1
@@ -69,7 +70,9 @@ def test_sample_healpix_map_on_image_header():
         assert result_cuda.dtype == torch.float64
 
     # Invalid ndim
-    with pytest.raises(ValueError, match="healpix_map must be a 1D tensor of length 12\\*nside\\*\\*2"):
+    with pytest.raises(
+        ValueError, match="healpix_map must be a 1D tensor of length 12\\*nside\\*\\*2"
+    ):
         sample_healpix_map_on_image_header(
             torch.ones((12, nside**2)), nside=nside, nest=False, target_header=header
         )
@@ -83,10 +86,13 @@ def test_sample_healpix_map_on_image_header():
     # Invalid target_header NAXIS
     bad_header = header.copy()
     bad_header["NAXIS1"] = 0
-    with pytest.raises(ValueError, match="target header must have positive NAXIS1/NAXIS2"):
+    with pytest.raises(
+        ValueError, match="target header must have positive NAXIS1/NAXIS2"
+    ):
         sample_healpix_map_on_image_header(
             healpix_map, nside=nside, nest=False, target_header=bad_header
         )
+
 
 def test_sample_healpix_map_on_tan_header_alias():
     nside = 2
