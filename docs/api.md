@@ -9,7 +9,6 @@ For migrating from **healpy**, **Astropy**, **fitsio**, and related stacks, see 
 | Read image/table | `torchsky.read(path, hdu=..., return_header=True)` |
 | Read image only | `torchsky.read_image(path, hdu=0, mmap=True)` |
 | Read table only | `torchsky.read_table(path, hdu=1, columns=[...])` |
-| Row slice | `torchsky.read_table_rows(path, hdu=1, start_row=1, num_rows=N)` |
 | Cutout from image | `torchsky.read_subset(path, hdu, x1, y1, x2, y2)` |
 | Multi-HDU images | `torchsky.read_hdus(path, hdus=[0,1,2])` |
 | Repeated cutouts | `torchsky.open_subset_reader(path, hdu)` |
@@ -52,12 +51,6 @@ Explicit low-level image reader — bypasses policy dispatch.
 ### `read_table(path, hdu=1, *, columns=None, start_row=1, num_rows=-1, device='cpu', mmap=True, return_header=False)`
 
 Table-focused convenience wrapper around `read()`.
-
----
-
-### `read_table_rows(path, hdu=1, *, start_row=1, num_rows=1000, columns=None, device='cpu', mmap=True)`
-
-Read a row slice. `start_row` is 1-based (FITS convention).
 
 ---
 

@@ -282,6 +282,17 @@ class TestTableReading:
                 os.unlink(f.name)
 
 
+    def test_close_cpp_handle_exception(self):
+        """Test _close_cpp_handle suppresses exceptions during handle closure."""
+        from torchsky.table import _close_cpp_handle
+
+        handle = mock.MagicMock()
+        handle.close.side_effect = Exception("Mocked close error")
+
+        # Should not raise
+        _close_cpp_handle(handle)
+        handle.close.assert_called_once()
+
     @mock.patch("torchsky.get_header")
     def test_can_use_mmap_row_path_for_full_read_exception(self, mock_get_header):
         """Test that _can_use_mmap_row_path_for_full_read handles exceptions gracefully."""
@@ -388,6 +399,32 @@ class TestTablePerformance:
         # Test missing TTYPE keys
         with mock.patch("torchsky.get_header", return_value={"TFIELDS": 2}):
             assert tbl._can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
+
+    @mock.patch.dict("torchsky.table._reader_cache", {}, clear=True)
+    @mock.patch.dict("torchsky.table._handle_cache", {}, clear=True)
+    @mock.patch("torchsky.table._close_cpp_handle")
+    def test_close_all_cached_handles(self, mock_close_cpp_handle):
+        """Test that _close_all_cached_handles clears caches and closes handles."""
+        # Setup dummy state
+        dummy_reader = mock.MagicMock()
+        dummy_handle1 = mock.MagicMock()
+        dummy_handle2 = mock.MagicMock()
+
+        torchsky.table._reader_cache[("dummy_path", 1)] = dummy_reader
+        torchsky.table._handle_cache["dummy_path"] = dummy_handle1
+        torchsky.table._handle_cache["dummy_path2"] = dummy_handle2
+
+        # Call the function
+        torchsky.table._close_all_cached_handles()
+
+        # Verify state is cleared
+        assert len(torchsky.table._reader_cache) == 0
+        assert len(torchsky.table._handle_cache) == 0
+
+        # Verify handles were closed
+        mock_close_cpp_handle.assert_any_call(dummy_handle1)
+        mock_close_cpp_handle.assert_any_call(dummy_handle2)
+        assert mock_close_cpp_handle.call_count == 2
 
 if __name__ == "__main__":
     import pytest

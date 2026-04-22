@@ -41,12 +41,6 @@ def read_table(*args: Any, **kwargs: Any):
     return _read_table(*args, **kwargs)
 
 
-def read_table_rows(*args: Any, **kwargs: Any):
-    from .. import read_table_rows as _read_table_rows
-
-    return _read_table_rows(*args, **kwargs)
-
-
 def read_hdus(*args: Any, **kwargs: Any):
     from .. import read_hdus as _read_hdus
 
@@ -118,7 +112,6 @@ __all__ = [
     "read_large_table",
     "read_subset",
     "read_table",
-    "read_table_rows",
     "read_tensor_frame",
     "stream_table",
     "table",
