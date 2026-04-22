@@ -2,6 +2,6 @@
 **Learning:** Custom toggle buttons built with `div` or `button` elements need `role="switch"` and `aria-pressed` state tracking to be properly understood by screen readers as toggles. Additionally, adding inline styles like `outline:none` to inputs or other focusable elements completely removes keyboard focus rings, even if a global `:focus-visible` ring is defined, severely degrading keyboard accessibility.
 **Action:** Always ensure custom toggles have `role="switch"` and dynamic `aria-pressed` attributes. Avoid `outline:none` on focusable elements; if default focus styles must be removed, ensure a robust `:focus-visible` fallback is in place and not overridden by inline styles.
 
-## 2024-05-24 - Range input focus visibility
-**Learning:** Type-specific resets like `input[type="range"] { outline: none; }` have higher CSS specificity than global `:focus-visible` pseudo-classes, rendering range inputs invisible to keyboard navigation focus rings.
-**Action:** Always explicitly re-declare `:focus-visible` fallbacks on custom input elements that use `outline: none` to preserve keyboard accessibility.
+## 2025-04-20 - Restoring Accessibility Focus Rings Overridden by Specific CSS
+**Learning:** Type-specific input resets (e.g., `input[type="range"] { outline: none; }`) inherently possess higher CSS specificity than global pseudo-class selectors like `:focus-visible`. This causes interactive elements like range sliders to lose their accessibility focus rings entirely when navigating via keyboard, making the UI inaccessible to screen reader and keyboard users.
+**Action:** Always explicitly re-declare `:focus-visible` styles on elements that have their outlines removed or modified via highly specific selectors (e.g., `input[type="range"]:focus-visible { outline: 2px solid var(--accent); }`) to ensure keyboard focus remains visible.

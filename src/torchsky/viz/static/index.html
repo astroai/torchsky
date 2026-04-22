@@ -593,7 +593,7 @@
     <!-- Controls (shown for FITS/sky tabs) -->
     <div id="fits-controls" style="overflow-y:auto; flex-shrink:0; border-top:1px solid var(--bg-border);">
       <div class="sidebar-section">
-        <div class="section-title">HDU</div>
+        <label class="section-title" for="hdu-select" style="display:block;">HDU</label>
         <select id="hdu-select"><option value="0">0 — PRIMARY</option></select>
       </div>
 
@@ -630,12 +630,12 @@
       <div class="sidebar-section">
         <div class="section-title">Display Range</div>
         <div class="slider-row">
-          <span class="slider-label">vmin</span>
+          <label class="slider-label" for="vmin-slider">vmin</label>
           <input type="range" id="vmin-slider" min="0" max="100" value="2" step="0.5" />
           <span class="slider-value" id="vmin-val">—</span>
         </div>
         <div class="slider-row">
-          <span class="slider-label">vmax</span>
+          <label class="slider-label" for="vmax-slider">vmax</label>
           <input type="range" id="vmax-slider" min="0" max="100" value="98" step="0.5" />
           <span class="slider-value" id="vmax-val">—</span>
         </div>
@@ -654,7 +654,7 @@
 
       <!-- Catalog load -->
       <div class="sidebar-section">
-        <div class="section-title">Catalog Overlay</div>
+        <label class="section-title" for="catalog-select" style="display:block;">Catalog Overlay</label>
         <select id="catalog-select" style="margin-bottom:var(--sp2)">
           <option value="">— select FITS catalog —</option>
         </select>
