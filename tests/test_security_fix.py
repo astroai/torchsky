@@ -39,26 +39,26 @@ def test_tablehdu_filter_security():
 
 
 def test_evaluate_where_direct():
-    from torchsky._where import _parse_where_expression, evaluate_where
+    from torchsky._where import parse_where_expression, evaluate_where
 
     data = {"a": np.array([1, 2, 3, 4, 5])}
 
     # Test complex logical expression
-    ast = _parse_where_expression("(a > 1 AND a < 5) OR a == 1")
+    ast = parse_where_expression("(a > 1 AND a < 5) OR a == 1")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [True, True, True, True, False])
 
     # Test NOT
-    ast = _parse_where_expression("NOT a == 3")
+    ast = parse_where_expression("NOT a == 3")
     mask = evaluate_where(ast, data)
     np.testing.assert_array_equal(mask, [True, True, False, True, True])
 
     # Test IS NULL
     data_nulls = {"b": np.array([1.0, np.nan, 3.0])}
-    ast = _parse_where_expression("b IS NULL")
+    ast = parse_where_expression("b IS NULL")
     mask = evaluate_where(ast, data_nulls)
     np.testing.assert_array_equal(mask, [False, True, False])
 
-    ast = _parse_where_expression("b IS NOT NULL")
+    ast = parse_where_expression("b IS NOT NULL")
     mask = evaluate_where(ast, data_nulls)
     np.testing.assert_array_equal(mask, [True, False, True])
