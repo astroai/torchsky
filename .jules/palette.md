@@ -1,7 +1,5 @@
-## 2024-04-19 - Accessible Toggles and Focus Rings
-**Learning:** Custom toggle buttons built with `div` or `button` elements need `role="switch"` and `aria-pressed` state tracking to be properly understood by screen readers as toggles. Additionally, adding inline styles like `outline:none` to inputs or other focusable elements completely removes keyboard focus rings, even if a global `:focus-visible` ring is defined, severely degrading keyboard accessibility.
-**Action:** Always ensure custom toggles have `role="switch"` and dynamic `aria-pressed` attributes. Avoid `outline:none` on focusable elements; if default focus styles must be removed, ensure a robust `:focus-visible` fallback is in place and not overridden by inline styles.
+## 2025-04-24 - Custom Element Focus Rings Match Global Border Radii
 
-## 2025-04-20 - Restoring Accessibility Focus Rings Overridden by Specific CSS
-**Learning:** Type-specific input resets (e.g., `input[type="range"] { outline: none; }`) inherently possess higher CSS specificity than global pseudo-class selectors like `:focus-visible`. This causes interactive elements like range sliders to lose their accessibility focus rings entirely when navigating via keyboard, making the UI inaccessible to screen reader and keyboard users.
-**Action:** Always explicitly re-declare `:focus-visible` styles on elements that have their outlines removed or modified via highly specific selectors (e.g., `input[type="range"]:focus-visible { outline: 2px solid var(--accent); }`) to ensure keyboard focus remains visible.
+**Learning:** When a global `:focus-visible` pseudo-class defines a specific `border-radius`, custom interactive elements (like tabs, pills, and toggles) that declare their own `border-radius` must explicitly declare their own `:focus-visible` styles with a matching `border-radius`. Failing to do so causes the global focus ring to inherit the custom element's shape but clip or mismatch the global outline definition, leading to a broken or inconsistent visual focus state for keyboard navigators.
+
+**Action:** Always explicitly define `:focus-visible` on custom interactive components (especially those modifying `border-radius` or using `border: none`/`outline: none`) to ensure the focus outline explicitly matches the shape of the custom component and provides an accessible, clear focus indicator.
