@@ -21,6 +21,7 @@ extern std::mutex hw_mutex;
 
 // Function declarations
 HardwareInfo detect_hardware();
+void validate_fits_filename(const std::string& filename);
 size_t calculate_optimal_chunk_size(size_t data_size, const HardwareInfo& hw, const std::string& filepath = "");
 size_t detect_storage_speed(const std::string& filepath);
 

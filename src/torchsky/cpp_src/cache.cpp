@@ -7,6 +7,7 @@
 #include <chrono>
 #include <fitsio.h>
 #include <sys/stat.h>
+#include "hardware.h"
 #include <stdexcept>
 #ifdef __linux__
 #include <sys/statfs.h>
@@ -174,6 +175,7 @@ public:
         }
 
         // Open new file
+        torchsky::validate_fits_filename(filepath);
         fitsfile* fptr = nullptr;
         int status = 0;
         fits_open_file(&fptr, filepath.c_str(), READONLY, &status);
