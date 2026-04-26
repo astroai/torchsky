@@ -24,3 +24,7 @@
 ## 2024-05-14 - Optimize FITS Header Parsing
 **Learning:** FITS header dictionaries inherit from Python's standard `dict` but can contain massive amounts of metadata cards (e.g. `COMMENT` and `HISTORY` keys). Iterating over all `header.items()` to extract predefined fields like column types causes an unexpected O(N) performance bottleneck during instantiation, scaling poorly on densely documented astronomical files.
 **Action:** Always favor targeted dictionary lookups (`header.get(KEY)`) over exhaustive iteration. Specifically for tables, extract `TFIELDS` first and query only the valid column headers in an O(TFIELDS) lookup loop rather than scanning the entire FITS header mapping.
+
+## 2025-04-10 - Optimize FITS Header Parsing
+**Learning:** FITS header dictionaries inherit from Python's standard `dict` but can contain massive amounts of metadata cards (e.g. `COMMENT` and `HISTORY` keys). Iterating over all `header.items()` to extract predefined fields like column types causes an unexpected O(N) performance bottleneck during instantiation, scaling poorly on densely documented astronomical files.
+**Action:** Always favor targeted dictionary lookups (`header.get(KEY)`) over exhaustive iteration. Specifically for tables, extract `TFIELDS` first and query only the valid column headers in an O(TFIELDS) lookup loop rather than scanning the entire FITS header mapping.

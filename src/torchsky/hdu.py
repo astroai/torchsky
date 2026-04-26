@@ -455,20 +455,39 @@ class TableHDU(TensorFrame):
         """Infer string columns from TTYPE/TFORM header cards."""
         if not header:
             return set()
-        name_by_idx = {}
+
         string_cols = set()
-        for key, value in header.items():
-            if isinstance(key, str) and key.startswith("TTYPE"):
-                idx = key[5:]
-                name_by_idx[str(idx)] = value
-        for key, value in header.items():
-            if isinstance(key, str) and key.startswith("TFORM"):
-                idx = key[5:]
-                tform = str(value)
-                if "A" in tform:
-                    col_name = name_by_idx.get(str(idx))
-                    if col_name:
-                        string_cols.add(col_name)
+
+        # Fast path: Extract TFIELDS and use O(1) dictionary lookups for column
+        # properties rather than iterating over potentially thousands of header cards.
+        try:
+            tfields = int(header.get("TFIELDS", 0))
+        except (TypeError, ValueError):
+            tfields = 0
+
+        if tfields > 0:
+            for i in range(1, tfields + 1):
+                tform = header.get(f"TFORM{i}")
+                if tform is not None and "A" in str(tform).upper():
+                    ttype = header.get(f"TTYPE{i}")
+                    if ttype is not None:
+                        string_cols.add(str(ttype))
+        else:
+            name_by_idx = {}
+            for key, value in header.items():
+                if isinstance(key, str) and key.upper().startswith("TTYPE"):
+                    idx = key[5:]
+                    if idx.isdigit():
+                        name_by_idx[idx] = str(value)
+            for key, value in header.items():
+                if isinstance(key, str) and key.upper().startswith("TFORM"):
+                    idx = key[5:]
+                    tform = str(value)
+                    if idx.isdigit() and "A" in tform.upper():
+                        col_name = name_by_idx.get(idx)
+                        if col_name:
+                            string_cols.add(col_name)
+
         return string_cols
 
     @property
@@ -1216,19 +1235,38 @@ class TableHDURef:
     def string_columns(self) -> List[str]:
         # Mirror TableHDU behavior: infer from header TFORMn with 'A' code.
         cols = []
-        name_by_idx: Dict[str, str] = {}
-        for k, v in self.header.items():
-            if isinstance(k, str) and k.upper().startswith("TTYPE"):
-                name_by_idx[k[5:]] = str(v)
-        for k, v in self.header.items():
-            if not isinstance(k, str) or not k.upper().startswith("TFORM"):
-                continue
-            idx = k[5:]
-            tform = str(v).strip().upper()
-            if "A" in tform:
-                name = name_by_idx.get(idx)
-                if name:
-                    cols.append(name)
+
+        # Fast path: Extract TFIELDS and use O(1) dictionary lookups for column
+        # properties rather than iterating over potentially thousands of header cards.
+        try:
+            tfields = int(self.header.get("TFIELDS", 0))
+        except (TypeError, ValueError):
+            tfields = 0
+
+        if tfields > 0:
+            for i in range(1, tfields + 1):
+                tform = self.header.get(f"TFORM{i}")
+                if tform is not None and "A" in str(tform).upper():
+                    ttype = self.header.get(f"TTYPE{i}")
+                    if ttype is not None:
+                        cols.append(str(ttype))
+        else:
+            name_by_idx: Dict[str, str] = {}
+            for k, v in self.header.items():
+                if isinstance(k, str) and k.upper().startswith("TTYPE"):
+                    idx = k[5:]
+                    if idx.isdigit():
+                        name_by_idx[idx] = str(v)
+            for k, v in self.header.items():
+                if not isinstance(k, str) or not k.upper().startswith("TFORM"):
+                    continue
+                idx = k[5:]
+                tform = str(v).strip().upper()
+                if idx.isdigit() and "A" in tform:
+                    name = name_by_idx.get(idx)
+                    if name:
+                        cols.append(name)
+
         if self._columns is not None:
             cols = [c for c in cols if c in set(self._columns)]
         return sorted(set(cols))

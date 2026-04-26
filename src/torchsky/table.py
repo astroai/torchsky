@@ -248,23 +248,41 @@ def _fits_header_selected_includes_vla(
 
 
 def _column_tnull_map(header_map: dict[str, Any]) -> dict[str, Any]:
-    name_by_idx: dict[int, str] = {}
-    tnull_by_idx: dict[int, Any] = {}
-    for key, value in header_map.items():
-        key_u = str(key).upper()
-        if key_u.startswith("TTYPE"):
-            suffix = key_u[5:]
-            if suffix.isdigit():
-                name_by_idx[int(suffix)] = str(value)
-        elif key_u.startswith("TNULL"):
-            suffix = key_u[5:]
-            if suffix.isdigit():
-                tnull_by_idx[int(suffix)] = value
-
     out: dict[str, Any] = {}
-    for idx, name in name_by_idx.items():
-        if idx in tnull_by_idx:
-            out[name] = tnull_by_idx[idx]
+
+    # Fast path: Extract TFIELDS and use O(1) dictionary lookups for column
+    # properties rather than iterating over potentially thousands of header cards.
+    try:
+        tfields = int(header_map.get("TFIELDS", 0))
+    except (TypeError, ValueError):
+        tfields = 0
+
+    if tfields > 0:
+        for i in range(1, tfields + 1):
+            tnull = header_map.get(f"TNULL{i}")
+            if tnull is not None:
+                ttype = header_map.get(f"TTYPE{i}")
+                if ttype is not None:
+                    out[str(ttype)] = tnull
+    else:
+        # Fallback if TFIELDS is missing/invalid
+        name_by_idx: dict[int, str] = {}
+        tnull_by_idx: dict[int, Any] = {}
+        for key, value in header_map.items():
+            key_u = str(key).upper()
+            if key_u.startswith("TTYPE"):
+                suffix = key_u[5:]
+                if suffix.isdigit():
+                    name_by_idx[int(suffix)] = str(value)
+            elif key_u.startswith("TNULL"):
+                suffix = key_u[5:]
+                if suffix.isdigit():
+                    tnull_by_idx[int(suffix)] = value
+
+        for idx, name in name_by_idx.items():
+            if idx in tnull_by_idx:
+                out[name] = tnull_by_idx[idx]
+
     return out
 
 
