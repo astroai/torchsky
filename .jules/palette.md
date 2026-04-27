@@ -5,3 +5,7 @@
 ## 2025-04-20 - Restoring Accessibility Focus Rings Overridden by Specific CSS
 **Learning:** Type-specific input resets (e.g., `input[type="range"] { outline: none; }`) inherently possess higher CSS specificity than global pseudo-class selectors like `:focus-visible`. This causes interactive elements like range sliders to lose their accessibility focus rings entirely when navigating via keyboard, making the UI inaccessible to screen reader and keyboard users.
 **Action:** Always explicitly re-declare `:focus-visible` styles on elements that have their outlines removed or modified via highly specific selectors (e.g., `input[type="range"]:focus-visible { outline: 2px solid var(--accent); }`) to ensure keyboard focus remains visible.
+
+## 2025-04-20 - ARIA Tabbed Navigation
+**Learning:** Native button-based tab groups in vanilla HTML lack intrinsic semantics for screen readers to understand them as an interconnected tablist. Users relying on assistive technology won't know how many tabs exist or which panel they correspond to.
+**Action:** When building or updating tabbed navigation in vanilla HTML, always implement the standard ARIA tab pattern: assign `role="tablist"` to the container, `role="tab"` to the buttons along with dynamic `aria-selected` tracking, and `role="tabpanel"` to the respective panels. Cross-reference them explicitly using `aria-controls` on the tabs and `aria-labelledby` on the panels.
