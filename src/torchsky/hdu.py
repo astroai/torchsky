@@ -455,8 +455,23 @@ class TableHDU(TensorFrame):
         """Infer string columns from TTYPE/TFORM header cards."""
         if not header:
             return set()
-        name_by_idx = {}
         string_cols = set()
+
+        try:
+            tfields = int(header.get("TFIELDS", 0))
+        except (TypeError, ValueError):
+            tfields = 0
+
+        if tfields > 0:
+            for i in range(1, tfields + 1):
+                tform = header.get(f"TFORM{i}")
+                if tform is not None and "A" in str(tform).strip().upper():
+                    name = header.get(f"TTYPE{i}")
+                    if name is not None:
+                        string_cols.add(str(name))
+            return string_cols
+
+        name_by_idx = {}
         for key, value in header.items():
             if isinstance(key, str) and key.startswith("TTYPE"):
                 idx = key[5:]
@@ -1216,6 +1231,23 @@ class TableHDURef:
     def string_columns(self) -> List[str]:
         # Mirror TableHDU behavior: infer from header TFORMn with 'A' code.
         cols = []
+
+        try:
+            tfields = int(self.header.get("TFIELDS", 0))
+        except (TypeError, ValueError):
+            tfields = 0
+
+        if tfields > 0:
+            for i in range(1, tfields + 1):
+                tform = self.header.get(f"TFORM{i}")
+                if tform is not None and "A" in str(tform).strip().upper():
+                    name = self.header.get(f"TTYPE{i}")
+                    if name is not None:
+                        cols.append(str(name))
+            if self._columns is not None:
+                cols = [c for c in cols if c in set(self._columns)]
+            return sorted(set(cols))
+
         name_by_idx: Dict[str, str] = {}
         for k, v in self.header.items():
             if isinstance(k, str) and k.upper().startswith("TTYPE"):
