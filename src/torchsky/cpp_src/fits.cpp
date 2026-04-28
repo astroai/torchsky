@@ -30,6 +30,7 @@
 #include <fitsio2.h> // Internal CFITSIO routines (fits_rdecomp)
 
 #include "hardware.h"
+#include "security.h"
 
 namespace {
 using fits_is_compressed_with_nulls_fn = int (*)(fitsfile*);
@@ -2986,7 +2987,8 @@ torch::Tensor read_full_unmapped(const std::string& path, int hdu_num) {
     int status = 0;
     validate_fits_filename(path);
     try {
-        fits_open_file(&fptr, path.c_str(), READONLY, &status);
+        torchsky::check_fits_filename_security(path);
+    fits_open_file(&fptr, path.c_str(), READONLY, &status);
         if (status != 0) {
             throw std::runtime_error("Could not open FITS file: " + path);
         }

@@ -1,3 +1,4 @@
+#include "security.h"
 
 #include "compression.h"
 #include <fitsio.h>
@@ -172,6 +173,7 @@ torch::Tensor read_rice_parallel(const std::string& path, int hdu, int num_threa
     torchsky::validate_fits_filename(path);
     int status = 0;
     fitsfile* fptr = nullptr;
+    torchsky::check_fits_filename_security(path);
     fits_open_file(&fptr, path.c_str(), READONLY, &status);
     check_status(status, "open_file");
 

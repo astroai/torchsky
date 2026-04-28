@@ -26,6 +26,7 @@
 
 #include <fitsio.h>
 #include "hardware.h"
+#include "security.h"
 #include "torch_compat.h"
 
 #ifdef HAS_OPENMP
@@ -161,6 +162,7 @@ public:
     TableReader(const std::string& filename, int hdu_num = 1) : filename_(filename), hdu_num_(hdu_num) {
         validate_fits_filename(filename);
         int status = 0;
+        torchsky::check_fits_filename_security(filename);
         fits_open_file(&fptr_, filename.c_str(), READONLY, &status);
         if (status != 0) {
             throw std::runtime_error("Failed to open FITS file");
@@ -2145,6 +2147,7 @@ void append_rows(const char* filename, int hdu_num, nb::dict tensor_dict) {
 
     // Use explicit cfitsio mode value to avoid macro collisions with Python headers.
     constexpr int kFitsReadWrite = 1;
+    torchsky::check_fits_filename_security(filename);
     fits_open_file(&fptr, filename, kFitsReadWrite, &status);
     if (status != 0) {
         char err_msg[FLEN_STATUS];
@@ -2364,6 +2367,7 @@ void insert_rows(const char* filename, int hdu_num, nb::dict tensor_dict, long s
     int status = 0;
 
     constexpr int kFitsReadWrite = 1;
+    torchsky::check_fits_filename_security(filename);
     fits_open_file(&fptr, filename, kFitsReadWrite, &status);
     if (status != 0) {
         char err_msg[FLEN_STATUS];
@@ -2411,6 +2415,7 @@ void delete_rows(const char* filename, int hdu_num, long start_row, long num_row
     int status = 0;
 
     constexpr int kFitsReadWrite = 1;
+    torchsky::check_fits_filename_security(filename);
     fits_open_file(&fptr, filename, kFitsReadWrite, &status);
     if (status != 0) {
         char err_msg[FLEN_STATUS];
@@ -2458,6 +2463,7 @@ void update_rows(const char* filename, int hdu_num, nb::dict tensor_dict, long s
     int status = 0;
 
     constexpr int kFitsReadWrite = 1;
+    torchsky::check_fits_filename_security(filename);
     fits_open_file(&fptr, filename, kFitsReadWrite, &status);
     if (status != 0) {
         char err_msg[FLEN_STATUS];
@@ -2670,6 +2676,7 @@ void rename_columns(const char* filename, int hdu_num, nb::dict mapping) {
     int status = 0;
 
     constexpr int kFitsReadWrite = 1;
+    torchsky::check_fits_filename_security(filename);
     fits_open_file(&fptr, filename, kFitsReadWrite, &status);
     if (status != 0) {
         char err_msg[FLEN_STATUS];
@@ -2729,6 +2736,7 @@ void drop_columns(const char* filename, int hdu_num, nb::list columns) {
     int status = 0;
 
     constexpr int kFitsReadWrite = 1;
+    torchsky::check_fits_filename_security(filename);
     fits_open_file(&fptr, filename, kFitsReadWrite, &status);
     if (status != 0) {
         char err_msg[FLEN_STATUS];
