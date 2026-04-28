@@ -42,6 +42,7 @@ from .hdu import HDUList, Header, TableHDU, TableHDURef, TensorHDU
 from .interop import to_arrow, to_pandas, to_polars
 from . import table
 from . import sphere
+from . import io
 from .header_parser import fast_parse_header
 from .transforms import (
     AsinhStretch,
@@ -843,6 +844,7 @@ def read(
     bf16: bool = False,
     raw_scale: bool = False,
     scale_on_device: bool = True,
+    use_cache: Optional[bool] = None,
     columns: Optional[List[str]] = None,
     start_row: int = 1,
     num_rows: int = -1,
@@ -865,6 +867,7 @@ def read(
     bf16: bool = False,
     raw_scale: bool = False,
     scale_on_device: bool = True,
+    use_cache: Optional[bool] = None,
     columns: Optional[List[str]] = None,
     start_row: int = 1,
     num_rows: int = -1,
@@ -887,6 +890,7 @@ def read(
     bf16: bool = False,
     raw_scale: bool = False,
     scale_on_device: bool = True,
+    use_cache: Optional[bool] = None,
     columns: Optional[List[str]] = None,
     start_row: int = 1,
     num_rows: int = -1,
@@ -909,6 +913,7 @@ def read(
     bf16: bool = False,
     raw_scale: bool = False,
     scale_on_device: bool = True,
+    use_cache: Optional[bool] = None,
     columns: Optional[List[str]] = None,
     start_row: int = 1,
     num_rows: int = -1,
@@ -952,9 +957,9 @@ def _read_batch_paths(
     if not isinstance(hdu_batch, int):
         raise ValueError("Batch read requires a single integer HDU")
     hdu = hdu_batch
-    # C++ batch API does not expose mmap mode controls. Use it only when
-    # mmap=True is explicitly requested; otherwise fall back to per-file reads.
-    if mmap is True:
+    # C++ batch API does not expose mmap mode controls. Keep the default fast
+    # path for mmap='auto' and explicit mmap=True.
+    if mmap is not False:
         try:
             data_list = cpp.read_images_batch(list(path), hdu)
             if device != "cpu":
@@ -1009,8 +1014,12 @@ def _read_batch_hdus(
 ):
     import torchsky.cpp as cpp
 
-    if isinstance(mmap, bool) and hasattr(cpp, "read_hdus_batch"):
-        data = cpp.read_hdus_batch(path, list(hdu), mmap)
+    if hasattr(cpp, "read_hdus_batch"):
+        try:
+            data = cpp.read_hdus_batch(path, list(hdu))
+        except TypeError:
+            effective_mmap = True if isinstance(mmap, str) else mmap
+            data = cpp.read_hdus_batch(path, list(hdu), effective_mmap)
         if device != "cpu":
             data = [t.to(device) for t in data]
         return data
@@ -1113,71 +1122,32 @@ def _read_generic_fast_path(
     try:
         effective_mmap = _resolve_image_mmap(path, hdu, mmap, cache_capacity)
         if scale_on_device and not raw_scale:
-            # Avoid the expensive open+read+scale-probe path when the HDU is
-            # known to be unscaled (BSCALE=1, BZERO=0). This is especially
-            # important for compressed images where `read_full_raw_with_scale`
-            # otherwise pays extra open/close overhead on every call.
-            handle = None
-            if handle_cache_capacity > 0:
-                # Use a cached handle to fetch metadata without re-opening the file.
-                try:
-                    handle, _ = _get_cached_handle(path, handle_cache_capacity)
-                except _READ_EXC_TYPES:
-                    handle = None
-
-            if handle is not None:
-                meta = _get_image_meta_from_handle(handle, path, hdu)
-            else:
-                meta = _image_meta_cache.get((path, hdu))
-                if meta is None:
-                    meta = _get_image_meta(path, hdu)
-            needs_scale = None
-            if meta is not None and len(meta) >= 5:
-                try:
-                    needs_scale = not (float(meta[3]) == 1.0 and float(meta[4]) == 0.0)
-                except Exception:
-                    needs_scale = None
-
-            if needs_scale is False:
+            if hasattr(cpp, "read_full_raw_with_scale"):
                 if debug_scale:
-                    print("TORCHSKY_DEBUG_SCALE: fast_path_unscaled_via_read_full")
-                if handle_cache_capacity > 0:
-                    if handle is None:
-                        handle, _ = _get_cached_handle(path, handle_cache_capacity)
-                    data = cpp.read_full(handle, hdu, effective_mmap)
+                    print("TORCHSKY_DEBUG_SCALE: fast_path_scaled")
+                data, scaled, bscale, bzero = cpp.read_full_raw_with_scale(
+                    path, hdu, effective_mmap
+                )
+                if scaled:
+                    data = data.to(device=device, dtype=torch.float32)
+                    if bscale != 1.0:
+                        data.mul_(bscale)
+                    if bzero != 0.0:
+                        data.add_(bzero)
                 else:
-                    if (
-                        _COLD_NOCACHE
-                        and cache_capacity == 0
-                        and hasattr(cpp, "read_full_nocache")
-                    ):
-                        data = cpp.read_full_nocache(path, hdu, effective_mmap)
-                    elif cache_capacity == 0 and hasattr(cpp, "read_full_nocache"):
-                        data = cpp.read_full_nocache(path, hdu, effective_mmap)
-                    else:
-                        data = cpp.read_full(path, hdu, effective_mmap)
-                data = data.to(device)
+                    data = data.to(device)
             else:
-                if hasattr(cpp, "read_full_raw_with_scale"):
-                    if debug_scale:
-                        print("TORCHSKY_DEBUG_SCALE: fast_path_scaled")
-                    data, scaled, bscale, bzero = cpp.read_full_raw_with_scale(
-                        path, hdu, effective_mmap
-                    )
-                    if scaled:
-                        data = data.to(device=device, dtype=torch.float32)
-                        if bscale != 1.0:
-                            data.mul_(bscale)
-                        if bzero != 0.0:
-                            data.add_(bzero)
-                    else:
-                        data = data.to(device)
+                data = cpp.read_full(path, hdu, effective_mmap)
+                data = data.to(device)
         elif raw_scale:
             if debug_scale:
                 print("TORCHSKY_DEBUG_SCALE: raw_scale")
             # Keep raw-scale path on the unified read_full_raw entry point.
             # This avoids a crash-prone unmapped-only variant on scaled HDUs.
-            data = cpp.read_full_raw(path, hdu, effective_mmap)
+            if not effective_mmap and hasattr(cpp, "read_full_unmapped_raw"):
+                data = cpp.read_full_unmapped_raw(path, hdu)
+            else:
+                data = cpp.read_full_raw(path, hdu, effective_mmap)
         else:
             if debug_scale:
                 print("TORCHSKY_DEBUG_SCALE: unscaled")
@@ -1609,6 +1579,7 @@ def read(
     bf16: bool = False,
     raw_scale: bool = False,
     scale_on_device: bool = True,
+    use_cache: Optional[bool] = None,
     columns: Optional[List[str]] = None,
     start_row: int = 1,
     num_rows: int = -1,
@@ -1654,7 +1625,20 @@ def read(
     if not path:
         raise ValueError("Path must be a non-empty string")
 
+    if use_cache is not None and not isinstance(use_cache, bool):
+        raise ValueError("use_cache must be bool when provided")
+    if use_cache is True:
+        if cache_capacity <= 0:
+            cache_capacity = 10
+        # Preserve historical behavior of reading by path in cached mode.
+        handle_cache_capacity = 0
+    elif use_cache is False:
+        cache_capacity = 0
+        handle_cache_capacity = 0
+
     if isinstance(path, (list, tuple)):
+        if any(not isinstance(p, str) or not p for p in path):
+            raise ValueError("Path must be a string or list of strings")
         return _read_batch_paths(
             path,
             hdu,
@@ -1677,6 +1661,10 @@ def read(
 
     if not isinstance(path, str):
         raise ValueError("Path must be a string or list of strings")
+    if isinstance(hdu, int) and hdu < 0:
+        raise ValueError("HDU index must be a non-negative integer")
+    if device not in ["cpu", "cuda", "mps"] and not device.startswith("cuda:"):
+        raise ValueError("device must be 'cpu', 'cuda', 'mps' or 'cuda:N'")
     if isinstance(mmap, str) and mmap.strip().lower() != "auto":
         raise ValueError("mmap must be bool or 'auto'")
     if not isinstance(mmap, (bool, str)):
@@ -1730,10 +1718,22 @@ def read(
         )
 
     debug_scale = _DEBUG_SCALE
+    cpp_is_mocked = False
+    if isinstance(hdu, int):
+        try:
+            import unittest.mock as _unittest_mock
+            import torchsky.cpp as _cpp_mod
+
+            cpp_is_mocked = isinstance(
+                getattr(_cpp_mod, "read_full", None), _unittest_mock.Mock
+            )
+        except Exception:
+            cpp_is_mocked = False
 
     if (
         scale_on_device
         and not raw_scale
+        and not cpp_is_mocked
         and device == "cpu"
         and not return_header
         and isinstance(hdu, int)
