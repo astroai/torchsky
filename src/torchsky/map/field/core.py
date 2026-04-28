@@ -2018,7 +2018,6 @@ class SpectralBasisField(_BaseFieldModel):
         return torch.cat(feats, dim=-1)
 
     def _spectral_basis(self, lam: Tensor) -> Tensor:
-        feats = [torch.ones_like(lam), lam, torch.square(lam)]
         if self.num_spectral_frequencies > 0:
             scales = torch.arange(
                 1,
@@ -2027,16 +2026,22 @@ class SpectralBasisField(_BaseFieldModel):
                 dtype=lam.dtype,
             )
             active = self._active_frequency_count(self.num_spectral_frequencies)
-            for idx, scale in enumerate(scales):
-                phase = math.pi * scale * lam
-                sin_phase = torch.sin(phase)
-                cos_phase = torch.cos(phase)
-                if idx >= active:
-                    sin_phase = torch.zeros_like(sin_phase)
-                    cos_phase = torch.zeros_like(cos_phase)
-                feats.append(sin_phase)
-                feats.append(cos_phase)
-        return torch.stack(feats, dim=-1)
+            scaled = lam.unsqueeze(-1) * scales
+            phase = math.pi * scaled
+
+            sin_phase = torch.sin(phase)
+            cos_phase = torch.cos(phase)
+
+            # Mask out inactive frequencies
+            mask = torch.arange(self.num_spectral_frequencies, device=lam.device) < active
+            sin_phase = sin_phase * mask
+            cos_phase = cos_phase * mask
+
+            stacked_fourier = torch.stack([sin_phase, cos_phase], dim=-1).view(*lam.shape, -1)
+            base_feats = torch.stack([torch.ones_like(lam), lam, lam * lam], dim=-1)
+            return torch.cat([base_feats, stacked_fourier], dim=-1)
+        else:
+            return torch.stack([torch.ones_like(lam), lam, lam * lam], dim=-1)
 
     def _spectral_basis_bandpass_average(
         self,
@@ -2229,12 +2234,16 @@ class BandpassConditionedField(_BaseFieldModel):
             device=spatial.device,
             dtype=spatial.dtype,
         )
-        feats = [spatial]
-        for scale in scales:
-            phase = math.pi * scale * spatial
-            feats.append(torch.sin(phase))
-            feats.append(torch.cos(phase))
-        return torch.cat(feats, dim=-1)
+        scaled = spatial.unsqueeze(-1) * scales
+        phase = math.pi * scaled
+
+        sin_feats = torch.sin(phase).transpose(-1, -2)
+        cos_feats = torch.cos(phase).transpose(-1, -2)
+
+        stacked = torch.stack([sin_feats, cos_feats], dim=-2)
+        flattened = stacked.reshape(*spatial.shape[:-1], -1)
+
+        return torch.cat([spatial, flattened], dim=-1)
 
     def _bandpass_features(self, wavelengths: Tensor, weights: Tensor) -> Tensor:
         lam = (
@@ -2397,7 +2406,7 @@ class LearnedSpectralBasisField(_BaseFieldModel):
         return torch.cat(feats, dim=-1)
 
     def _spectral_features(self, lam: Tensor) -> Tensor:
-        return torch.stack([lam, torch.square(lam), torch.tanh(lam)], dim=-1)
+        return torch.stack([lam, lam * lam, torch.tanh(lam)], dim=-1)
 
     def forward(
         self,
@@ -2632,15 +2641,18 @@ class ConditionedSpectralField(_BaseFieldModel):
             device=spatial.device,
             dtype=spatial.dtype,
         )
-        feats = [spatial]
-        for scale in scales:
-            phase = math.pi * scale * spatial
-            feats.append(torch.sin(phase))
-            feats.append(torch.cos(phase))
-        return torch.cat(feats, dim=-1)
+        scaled = spatial.unsqueeze(-1) * scales
+        phase = math.pi * scaled
+
+        sin_feats = torch.sin(phase).transpose(-1, -2)
+        cos_feats = torch.cos(phase).transpose(-1, -2)
+
+        stacked = torch.stack([sin_feats, cos_feats], dim=-2)
+        flattened = stacked.reshape(*spatial.shape[:-1], -1)
+
+        return torch.cat([spatial, flattened], dim=-1)
 
     def _spectral_features(self, lam: Tensor) -> Tensor:
-        feats = [lam, torch.square(lam), torch.tanh(lam)]
         if self.num_spectral_frequencies > 0:
             scales = torch.arange(
                 1,
@@ -2648,11 +2660,17 @@ class ConditionedSpectralField(_BaseFieldModel):
                 device=lam.device,
                 dtype=lam.dtype,
             )
-            for scale in scales:
-                phase = math.pi * scale * lam
-                feats.append(torch.sin(phase))
-                feats.append(torch.cos(phase))
-        return torch.stack(feats, dim=-1)
+            scaled = lam.unsqueeze(-1) * scales
+            phase = math.pi * scaled
+
+            sin_feats = torch.sin(phase)
+            cos_feats = torch.cos(phase)
+
+            stacked_fourier = torch.stack([sin_feats, cos_feats], dim=-1).view(*lam.shape, -1)
+            base_feats = torch.stack([lam, lam * lam, torch.tanh(lam)], dim=-1)
+            return torch.cat([base_feats, stacked_fourier], dim=-1)
+        else:
+            return torch.stack([lam, lam * lam, torch.tanh(lam)], dim=-1)
 
     def _film_params(self, lam: Tensor) -> tuple[list[Tensor], list[Tensor]]:
         spec = self._spectral_features(lam)
@@ -2746,7 +2764,6 @@ class HashGridConditionedField(_BaseFieldModel):
         nn.init.constant_(self.output.bias, -3.0)
 
     def _spectral_features(self, lam: Tensor) -> Tensor:
-        feats = [lam, torch.square(lam), torch.tanh(lam)]
         if self.num_spectral_frequencies > 0:
             scales = torch.arange(
                 1,
@@ -2754,11 +2771,17 @@ class HashGridConditionedField(_BaseFieldModel):
                 device=lam.device,
                 dtype=lam.dtype,
             )
-            for scale in scales:
-                phase = math.pi * scale * lam
-                feats.append(torch.sin(phase))
-                feats.append(torch.cos(phase))
-        return torch.stack(feats, dim=-1)
+            scaled = lam.unsqueeze(-1) * scales
+            phase = math.pi * scaled
+
+            sin_feats = torch.sin(phase)
+            cos_feats = torch.cos(phase)
+
+            stacked_fourier = torch.stack([sin_feats, cos_feats], dim=-1).view(*lam.shape, -1)
+            base_feats = torch.stack([lam, lam * lam, torch.tanh(lam)], dim=-1)
+            return torch.cat([base_feats, stacked_fourier], dim=-1)
+        else:
+            return torch.stack([lam, lam * lam, torch.tanh(lam)], dim=-1)
 
     def forward(
         self,
@@ -3623,7 +3646,6 @@ class HashGridSpectralField(_BaseFieldModel):
         nn.init.constant_(self.bias_head.bias, 0.0)
 
     def _spectral_basis(self, lam: Tensor) -> Tensor:
-        feats = [torch.ones_like(lam), lam, torch.square(lam)]
         if self.num_spectral_frequencies > 0:
             scales = torch.arange(
                 1,
@@ -3631,11 +3653,17 @@ class HashGridSpectralField(_BaseFieldModel):
                 device=lam.device,
                 dtype=lam.dtype,
             )
-            for scale in scales:
-                phase = math.pi * scale * lam
-                feats.append(torch.sin(phase))
-                feats.append(torch.cos(phase))
-        return torch.stack(feats, dim=-1)
+            scaled = lam.unsqueeze(-1) * scales
+            phase = math.pi * scaled
+
+            sin_feats = torch.sin(phase)
+            cos_feats = torch.cos(phase)
+
+            stacked_fourier = torch.stack([sin_feats, cos_feats], dim=-1).view(*lam.shape, -1)
+            base_feats = torch.stack([torch.ones_like(lam), lam, lam * lam], dim=-1)
+            return torch.cat([base_feats, stacked_fourier], dim=-1)
+        else:
+            return torch.stack([torch.ones_like(lam), lam, lam * lam], dim=-1)
 
     def forward(
         self,
