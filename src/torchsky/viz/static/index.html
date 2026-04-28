@@ -588,10 +588,10 @@
       <div class="logo-star"></div>
       torchsky viz
     </div>
-    <div class="tab-group">
-      <button class="tab active" data-panel="fits">FITS Browser</button>
-      <button class="tab" data-panel="sky">Sky View</button>
-      <button class="tab" data-panel="validate">Validation</button>
+    <div class="tab-group" role="tablist">
+      <button class="tab active" id="tab-fits" data-panel="fits" role="tab" aria-selected="true" aria-controls="aladin-fits">FITS Browser</button>
+      <button class="tab" id="tab-sky" data-panel="sky" role="tab" aria-selected="false" aria-controls="aladin-sky">Sky View</button>
+      <button class="tab" id="tab-validate" data-panel="validate" role="tab" aria-selected="false" aria-controls="validate-panel">Validation</button>
     </div>
     <div class="header-spacer"></div>
     <div class="header-badge" id="cache-badge">cache: 0 MB</div>
@@ -688,11 +688,11 @@
   <!-- ── MAIN PANEL ── -->
   <main id="main-panel">
     <!-- FITS / Sky Aladin container -->
-    <div id="aladin-fits" class="aladin-panel visible"></div>
-    <div id="aladin-sky"  class="aladin-panel"></div>
+    <div id="aladin-fits" class="aladin-panel visible" role="tabpanel" aria-labelledby="tab-fits"></div>
+    <div id="aladin-sky"  class="aladin-panel" role="tabpanel" aria-labelledby="tab-sky"></div>
 
     <!-- Validation 2×2 panel -->
-    <div id="validate-panel">
+    <div id="validate-panel" role="tabpanel" aria-labelledby="tab-validate">
       <div class="validate-grid">
         <div class="val-cell" id="val-truth">
           <div class="val-cell-label">Truth</div>
@@ -1093,8 +1093,12 @@ function updateSliders(vmin, vmax, histData) {
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
     const panel = tab.dataset.panel;
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => {
+      t.classList.remove('active');
+      t.setAttribute('aria-selected', 'false');
+    });
     tab.classList.add('active');
+    tab.setAttribute('aria-selected', 'true');
     state.activePanel = panel;
 
     // Show/hide panels
