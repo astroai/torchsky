@@ -17,7 +17,7 @@ def parse_wat_keywords(header: Dict[str, Any], prefix: str = "WAT") -> str:
     full_str = ""
     # Check for prefix_001, prefix_002, ...
     # Limit to reasonable number to avoid infinite loops
-    for n in range(1, 1000):
+    for n in range(1, 100):
         key = f"{prefix}_{n:03d}"
         if key in header:
             # WAT values often are strings like 'wtype=tnx a_order=...'
@@ -50,73 +50,37 @@ def _looks_numeric_iraf_poly(s: str) -> bool:
 
 class LegacyPolynomial:
     """
-    Parser for IRAF legacy polynomial strings (e.g., TNX, ZPX).
-
-    Two shapes are supported:
-
-    * **Numeric IRAF surface** (no ``=`` tokens), e.g.
-      ``3 2 2 1 -1.0 1.0 -1.0 1.0 1.0 2.0 3.0 4.0`` — function type, x/y
-      orders, cross flag, bounds, then coefficients (see unit tests).
-    * **Keyword** fragments (``a_order=...``), best-effort legacy path.
+    Base class for IRAF polynomials (Chebyshev, Legendre, etc.)
     """
 
-    def __init__(self, poly_str: str):
-        self.poly_str = poly_str
+    def __init__(self, param_str: str):
+        self.func_type = 0
+        self.order_x = 0
+        self.order_y = 0
+        self.cross_terms = 0
+        self.x_bounds = (0.0, 0.0)
+        self.y_bounds = (0.0, 0.0)
         self.coeffs: List[float] = []
-        self.order: int = 0
-        self.xrange: Tuple[float, float] = (-1.0, 1.0)
-        self.yrange: Tuple[float, float] = (-1.0, 1.0)
-        self.type: str = "polynomial"
-        self.func_type: int = -1
-        self.order_x: int = 0
-        self.order_y: int = 0
-        self.cross_terms: int = 0
-        self.x_bounds: Tuple[float, float] = (-1.0, 1.0)
-        self.y_bounds: Tuple[float, float] = (-1.0, 1.0)
-        self._numeric_iraf: bool = False
-        if not poly_str:
-            return
-        if _looks_numeric_iraf_poly(poly_str):
-            self._parse_numeric_iraf()
-        else:
-            self._parse_keyword()
 
-    def _parse_numeric_iraf(self) -> None:
-        vals = [float(p) for p in self.poly_str.split()]
-        if len(vals) < 8:
-            return
-        self._numeric_iraf = True
-        self.func_type = int(vals[0])
-        self.order_x = int(vals[1])
-        self.order_y = int(vals[2])
-        self.cross_terms = int(vals[3])
-        self.x_bounds = (vals[4], vals[5])
-        self.y_bounds = (vals[6], vals[7])
-        self.coeffs = vals[8:]
-        self.xrange = self.x_bounds
-        self.yrange = self.y_bounds
-        self.order = max(self.order_x, self.order_y)
+        self._parse(param_str)
 
-    def _parse_keyword(self) -> None:
-        if not self.poly_str:
+    def _parse(self, s: str):
+        tokens = s.strip().split()
+        if not tokens:
             return
+
         try:
-            parts = self.poly_str.split()
-            for p in parts:
-                if "=" in p:
-                    key, val = p.split("=", 1)
-                    if key.endswith("order"):
-                        self.order = int(val)
-                    elif key.endswith("xrange"):
-                        m = re.match(r"\[(.+):(.+)\]", val)
-                        if m:
-                            self.xrange = (float(m.group(1)), float(m.group(2)))
-                    elif key.endswith("yrange"):
-                        m = re.match(r"\[(.+):(.+)\]", val)
-                        if m:
-                            self.yrange = (float(m.group(1)), float(m.group(2)))
-            self.coeffs = [float(p) for p in parts if "=" not in p]
-        except Exception as e:
+            self.func_type = int(tokens[0])
+            self.order_x = int(tokens[1])
+            self.order_y = int(tokens[2])
+            self.cross_terms = int(tokens[3])
+
+            self.x_bounds = (float(tokens[4]), float(tokens[5]))
+            self.y_bounds = (float(tokens[6]), float(tokens[7]))
+
+            self.coeffs = [float(x) for x in tokens[8:]]
+
+        except (ValueError, IndexError) as e:
             import warnings
 
             warnings.warn(
@@ -124,61 +88,92 @@ class LegacyPolynomial:
                 stacklevel=2,
             )
 
-    def _evaluate_numeric_type3(self, x: Tensor, y: Tensor) -> Tensor:
-        """Polynomial surface (IRAF function type 3) in physical ``(x, y)``."""
-        c = self.coeffs
-        ox, oy, cr = self.order_x, self.order_y, self.cross_terms
-        if not c:
-            return torch.zeros_like(x)
-        if ox == 1 and oy == 1 and cr == 0:
-            if len(c) == 1:
-                return torch.full_like(x, c[0])
-            if len(c) == 3:
-                return c[0] + c[1] * x + c[2] * y
-        if ox == 2 and oy == 2 and cr == 1 and len(c) == 4:
-            return c[0] + c[1] * x + c[2] * y + c[3] * x * y
-        return torch.zeros_like(x)
-
     def evaluate(self, x: Tensor, y: Tensor) -> Tensor:
         """
-        Evaluate the polynomial for given (x, y) coordinates.
-        Supports standard Polynomial, Legendre, and Chebyshev surfaces.
+        Evaluate polynomial P(x, y).
         """
-        if self._numeric_iraf:
-            if self.func_type == 3:
-                return self._evaluate_numeric_type3(x, y)
-            return torch.zeros_like(x)
-        if not self.coeffs:
-            return torch.zeros_like(x)
+        nx = (2.0 * x - (self.x_bounds[1] + self.x_bounds[0])) / (
+            self.x_bounds[1] - self.x_bounds[0]
+        )
+        ny = (2.0 * y - (self.y_bounds[1] + self.y_bounds[0])) / (
+            self.y_bounds[1] - self.y_bounds[0]
+        )
 
-        xn = 2.0 * (x - self.xrange[0]) / (self.xrange[1] - self.xrange[0]) - 1.0
-        yn = 2.0 * (y - self.yrange[0]) / (self.yrange[1] - self.yrange[0]) - 1.0
+        bx = self._compute_basis(nx, self.order_x, self.func_type)
+        by = self._compute_basis(ny, self.order_y, self.func_type)
 
         result = torch.zeros_like(x)
-        idx = 0
+        k = 0
 
-        # Evaluate polynomial sum based on degree
-        # Tests show it follows increasing degree
-        # For a given degree d, terms are x^i y^(d-i)
-        # However, looking at the test:
-        # 1.0 + 2.0 * 0.2 + 3.0 * (-0.4) + 4.0 * (0.2 * -0.4)
-        # This matches: c0 * x^0 y^0 + c1 * x^1 y^0 + c2 * x^0 y^1 + c3 * x^1 y^1
-        # Order is:
-        # i=0, j=0
-        # i=1, j=0
-        # i=0, j=1
-        # i=1, j=1
-
-        # Wait, the nested loop should be:
-        for j in range(self.order_y + 1):
-            for i in range(self.order_x + 1):
-                if self.cross_terms == 0 and i + j > max(self.order_x, self.order_y):
+        for j in range(self.order_y):
+            for i in range(self.order_x):
+                if self.cross_terms == 0 and i > 0 and j > 0:
                     continue
-                if idx < len(self.coeffs):
-                    result += self.coeffs[idx] * (xn**i) * (yn**j)
-                    idx += 1
+                if self.cross_terms == 2 and i + j >= max(self.order_x, self.order_y):
+                    continue
+
+                if k < len(self.coeffs):
+                    term = self.coeffs[k] * bx[i] * by[j]
+                    result += term
+                    k += 1
 
         return result
+
+    def _compute_basis(self, u: Tensor, order: int, ftype: int) -> List[Tensor]:
+        """Generate basis polynomials [P_0(u), ..., P_n(u)]."""
+        basis: List[Tensor] = []
+        if order < 1:
+            return basis
+
+        basis.append(torch.ones_like(u))
+        if order == 1:
+            return basis
+
+        basis.append(u)
+
+        for n in range(2, order):
+            if ftype == 1:  # Chebyshev
+                bn = 2.0 * u * basis[-1] - basis[-2]
+            elif ftype == 2:  # Legendre
+                k = n
+                bn = ((2 * k - 1) * u * basis[-1] - (k - 1) * basis[-2]) / k
+            else:
+                bn = u * basis[-1]
+            basis.append(bn)
+
+        return basis
+
+
+
+_ZPX_PATTERN = re.compile(r"projp(\d+)\s*=\s*(\S+)", re.IGNORECASE)
+
+
+def extract_zpx_params(wat_data: Dict[int, str]) -> Dict[str, float]:
+    """
+    Extract ZPN coefficients (projp_i) from WAT strings and return as PV2_i.
+    """
+    params = {}
+    for axis, wstr in wat_data.items():
+        matches = _ZPX_PATTERN.findall(wstr)
+        for m in matches:
+            idx = int(m[0])
+            val = float(m[1])
+            params[f"PV2_{idx}"] = val
+    return params
+
+
+def extract_tnx_coeffs(wat_str: str, key: str) -> Optional[str]:
+    """
+    Extract value for 'lngcor' or 'latcor' from WAT string.
+    Format: key = " value " or key = value
+    """
+    pat = re.compile(rf'{key}\s*=\s*(?:"([^"]*)"|([^"\s]+))', re.IGNORECASE)
+    match = pat.search(wat_str)
+    if match:
+        val_quoted = match.group(1)
+        val_unquoted = match.group(2)
+        return val_quoted if val_quoted is not None else val_unquoted
+    return None
 
 
 def _wat_extract_cor_string(block: str, name: str) -> Optional[str]:

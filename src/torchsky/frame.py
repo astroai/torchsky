@@ -197,7 +197,12 @@ def write_tensor_frame(path: str, tf: TensorFrame, overwrite: bool = False):
             tensor = tf.feat_dict[st]
             names = tf.col_names_dict[st]
             for i, name in enumerate(names):
-                data[name] = tensor[:, i].values
+                col = tensor[:, i]
+                # Avoid builtin Tensor.values() method; we want MultiEmbeddingTensor.values property.
+                if hasattr(col, "values") and not callable(col.values):
+                    data[name] = col.values
+                else:
+                    data[name] = col
 
     # Handle MultiNestedTensor stypes (VLA)
     nested_stypes = []

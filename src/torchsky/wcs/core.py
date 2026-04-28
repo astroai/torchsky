@@ -198,6 +198,35 @@ class WCS:
             self.wat_data[1] = parse_wat_keywords(header, prefix="WAT1")
             self.wat_data[2] = parse_wat_keywords(header, prefix="WAT2")
 
+    def _parse_sip(self, header: Dict[str, Any]) -> None:
+        """Parse SIP distortion keywords."""
+        if "A_ORDER" in header or "B_ORDER" in header:
+            self.sip = SIP(header)
+
+    def _parse_tpv(self) -> None:
+        """Determine if TPV distortion is present."""
+        has_pv = any(k in self.wcs_params for k in PV1_KEYS_SET) or any(
+            k in self.wcs_params for k in PV2_KEYS_SET
+        )
+        is_tpv_ctype = self.wcs_params.get("CTYPE1", "").strip().upper().endswith("TPV")
+
+        if is_tpv_ctype or (
+            self.wcs_params.get("CTYPE1", "").strip().upper().endswith("TAN") and has_pv
+        ):
+            self.tpv = TPV(self.wcs_params)
+
+    def _parse_header(self, header: Dict[str, Any]):
+        """Parse standard FITS WCS keywords."""
+        self.wcs_params["NAXIS"] = header.get("NAXIS", 2)
+
+        self._parse_core(header)
+        self._parse_cd_pc(header)
+        self._parse_pole(header)
+        self._parse_pv(header)
+        self._parse_wat(header)
+        self._parse_sip(header)
+        self._parse_tpv()
+
     def _setup_tensors(self):
         """Convert scalar params to PyTorch tensors for computation."""
         self.crpix = torch.tensor(
