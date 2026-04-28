@@ -248,6 +248,25 @@ def _fits_header_selected_includes_vla(
 
 
 def _column_tnull_map(header_map: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+
+    # ⚡ Bolt: Fast-path O(1) indexed lookups using TFIELDS to avoid O(N) iteration
+    # over thousands of header cards in large FITS tables.
+    try:
+        tfields = int(header_map.get("TFIELDS", 0))
+    except (ValueError, TypeError):
+        tfields = 0
+
+    if tfields > 0:
+        for i in range(1, tfields + 1):
+            tnull = header_map.get(f"TNULL{i}")
+            if tnull is not None:
+                name = header_map.get(f"TTYPE{i}")
+                if name is not None:
+                    out[str(name)] = tnull
+        return out
+
+    # Fallback to O(N) iteration if TFIELDS is missing or invalid
     name_by_idx: dict[int, str] = {}
     tnull_by_idx: dict[int, Any] = {}
     for key, value in header_map.items():
@@ -261,7 +280,6 @@ def _column_tnull_map(header_map: dict[str, Any]) -> dict[str, Any]:
             if suffix.isdigit():
                 tnull_by_idx[int(suffix)] = value
 
-    out: dict[str, Any] = {}
     for idx, name in name_by_idx.items():
         if idx in tnull_by_idx:
             out[name] = tnull_by_idx[idx]
@@ -2610,6 +2628,23 @@ def _header_cards_to_mapping(header_cards: Any) -> dict[str, Any]:
 
 
 def _column_tform_map(header_map: dict[str, Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+
+    # ⚡ Bolt: Fast-path O(1) indexed lookups using TFIELDS to avoid O(N) iteration
+    try:
+        tfields = int(header_map.get("TFIELDS", 0))
+    except (ValueError, TypeError):
+        tfields = 0
+
+    if tfields > 0:
+        for i in range(1, tfields + 1):
+            name = header_map.get(f"TTYPE{i}")
+            if name is not None:
+                tform = header_map.get(f"TFORM{i}")
+                out[str(name)] = str(tform) if tform is not None else ""
+        return out
+
+    # Fallback to O(N) iteration
     name_by_idx: dict[int, str] = {}
     tform_by_idx: dict[int, str] = {}
     for key, value in header_map.items():
@@ -2623,7 +2658,6 @@ def _column_tform_map(header_map: dict[str, Any]) -> dict[str, str]:
             if suffix.isdigit():
                 tform_by_idx[int(suffix)] = str(value)
 
-    out: dict[str, str] = {}
     for idx, name in name_by_idx.items():
         out[name] = tform_by_idx.get(idx, "")
     return out
@@ -2631,6 +2665,21 @@ def _column_tform_map(header_map: dict[str, Any]) -> dict[str, str]:
 
 def _column_name_index_map(header_map: dict[str, Any]) -> dict[int, str]:
     out: dict[int, str] = {}
+
+    # ⚡ Bolt: Fast-path O(1) indexed lookups using TFIELDS to avoid O(N) iteration
+    try:
+        tfields = int(header_map.get("TFIELDS", 0))
+    except (ValueError, TypeError):
+        tfields = 0
+
+    if tfields > 0:
+        for i in range(1, tfields + 1):
+            val = header_map.get(f"TTYPE{i}")
+            if val is not None:
+                out[i] = str(val)
+        return out
+
+    # Fallback to O(N) iteration
     for key, value in header_map.items():
         key_u = str(key).upper()
         if not key_u.startswith("TTYPE"):
