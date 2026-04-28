@@ -32,9 +32,8 @@ Geometric primitives, mapmaking, and cross-wavelength field representations are 
 
 Do **not** guess `python3` or bare `python` on PATH for project work.
 
-1. **Pixi (preferred):** `pixi run <task>`, `pixi run -e test -- pytest …`, `pixi run -e default -- python -m …`. The repo’s Python and deps come from the Pixi environment.
-2. **uv (optional, no Pixi):** `uv sync --group dev` then `uv run --python 3.12 --group dev ruff check .` (or `uv run --python 3.12 pytest`) from the repo root.
-3. **Last resort:** explicit `python3.12 -m …` only if neither Pixi nor uv is available—avoid for automated agents.
+1. **Pixi (required):** `pixi run <task>`, `pixi run -e test -- pytest …`, `pixi run -e default -- python -m …`. The repo’s Python and deps come from the Pixi environment.
+2. **Last resort:** explicit `python3.12 -m …` only if Pixi is unavailable—avoid for automated agents.
 
 ### Pixi workspaces
 
