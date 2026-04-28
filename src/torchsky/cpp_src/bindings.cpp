@@ -2650,37 +2650,6 @@ void bind_wcs(nb::module_& m) {
 
 }
 
-void bind_other(nb::module_& m) {
-    nb::class_<torchfits::SubsetReader>(m, "SubsetReader")
-        .def(nb::init<const std::string&, int>(), nb::arg("filename"), nb::arg("hdu_num") = 0)
-        .def("read", [](torchfits::SubsetReader& self, long x1, long y1, long x2, long y2) {
-            torch::Tensor tensor;
-            {
-                nb::gil_scoped_release release;
-                tensor = self.read(x1, y1, x2, y2);
-            }
-            return tensor_to_python(tensor);
-        }, nb::arg("x1"), nb::arg("y1"), nb::arg("x2"), nb::arg("y2"))
-        .def("close", &torchfits::SubsetReader::close)
-        .def_prop_ro("width", &torchfits::SubsetReader::width)
-        .def_prop_ro("height", &torchfits::SubsetReader::height)
-        .def_prop_ro("hdu", &torchfits::SubsetReader::hdu);
-
-    nb::class_<torchfits::HDUInfo>(m, "HDUInfo")
-        .def_prop_rw("index", [](torchfits::HDUInfo& t) { return t.index; }, [](torchfits::HDUInfo& t, int v) { t.index = v; })
-        .def_prop_rw("type", [](torchfits::HDUInfo& t) { return t.type; }, [](torchfits::HDUInfo& t, std::string v) { t.type = v; })
-        .def_prop_ro("header", [](torchfits::HDUInfo& t) {
-            nb::dict d;
-            for (const auto& kv : t.header) {
-                d[std::get<0>(kv).c_str()] = std::get<1>(kv);
-            }
-            return d;
-        });
-}
-
 NB_MODULE(cpp, m) {
     bind_wcs(m);
-    bind_healpix(m);
-    bind_fits(m);
-    bind_other(m);
 }
