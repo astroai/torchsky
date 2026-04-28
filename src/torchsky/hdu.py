@@ -30,7 +30,6 @@ except ImportError:
 
 # Import torch first
 _ = torch.empty(1)  # Force torch C++ symbols to load
-# import torchsky.cpp as cpp  <-- Removed to avoid circular import
 
 
 class Header(dict):
