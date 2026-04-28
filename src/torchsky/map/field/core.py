@@ -1865,7 +1865,9 @@ class GaussianBasisField(_BaseFieldModel):
         )
         diff = coords.unsqueeze(-2) - self.centers
         scales = F.softplus(self.log_scales) + 1.0e-3
-        radial2 = torch.sum(torch.square(diff / scales), dim=-1)
+        # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
+        scaled_diff = diff / scales
+        radial2 = torch.sum(scaled_diff * scaled_diff, dim=-1)
         basis = torch.exp(-0.5 * radial2)
         out = torch.sum(basis * self.amplitudes, dim=-1) + self.bias
         return F.softplus(out) + 1.0e-4
@@ -3175,7 +3177,9 @@ def pretrain_strainer_trunk_synthetic(
             dec_deg.to(dtype=torch.float32),
             wavelength.to(dtype=torch.float32),
         )
-        loss = torch.mean(torch.square(pred - target))
+        # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
+        diff_pt = pred - target
+        loss = torch.mean(diff_pt * diff_pt)
         loss.backward()
         optimizer.step()
 
@@ -4323,8 +4327,9 @@ class SkyLambdaFeatureField(_BaseFieldModel):
         if not self.aggregate_hidden_moments:
             return mean_hidden
         centered = stacked_hidden - mean_hidden.unsqueeze(0)
+        # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
         variance = torch.sum(
-            torch.square(centered)
+            (centered * centered)
             * norm_weights.view(-1, *([1] * (stacked_hidden.ndim - 1))),
             dim=0,
         )
@@ -4876,7 +4881,9 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
         centers = self.spectral_basis_centers.to(device=device, dtype=dtype)
         widths = self.spectral_basis_widths.to(device=device, dtype=dtype)
         diff = lam.unsqueeze(-1) - centers
-        basis = torch.exp(-0.5 * torch.square(diff / torch.clamp(widths, min=1.0e-3)))
+        # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
+        scaled_diff = diff / torch.clamp(widths, min=1.0e-3)
+        basis = torch.exp(-0.5 * (scaled_diff * scaled_diff))
         return basis / torch.clamp(basis.sum(dim=-1, keepdim=True), min=1.0e-8)
 
     def _bandpass_features(self, wavelengths: Tensor, weights: Tensor) -> Tensor:
@@ -4924,7 +4931,9 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
         norm_weights = weights.to(dtype=lam.dtype)
         norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
         mean = torch.sum(norm_weights * lam)
-        variance = torch.sum(norm_weights * torch.square(lam - mean))
+        # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
+        lam_diff = lam - mean
+        variance = torch.sum(norm_weights * (lam_diff * lam_diff))
         # Keep the continuous field exact for delta-like bands while allowing
         # broader passbands to use a small support-refinement correction.
         return 1.0 - torch.exp(-12.0 * variance)
@@ -5133,7 +5142,8 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
             response = response / torch.clamp(response.sum(), min=1.0e-8)
             responses.append(torch.sum(response.unsqueeze(-1) * basis, dim=0))
         response_matrix = torch.stack(responses, dim=0)
-        visibility = torch.sqrt(torch.sum(torch.square(response_matrix), dim=0))
+        # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
+        visibility = torch.sqrt(torch.sum(response_matrix * response_matrix, dim=0))
         max_visibility = torch.clamp(visibility.max(), min=1.0e-8)
         weights = torch.clamp(
             max_visibility / torch.clamp(visibility, min=1.0e-4) - 1.0, min=0.0
@@ -5175,11 +5185,11 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
             dtype=self.base_output.weight.dtype,
         )
         for param in self.residual_affine.parameters():
-            penalty = penalty + torch.mean(torch.square(param))
+            penalty = penalty + torch.mean(param * param)
         residual_out = self.residual_decoder[-1]
         assert isinstance(residual_out, nn.Linear)
-        penalty = penalty + torch.mean(torch.square(residual_out.weight))
-        penalty = penalty + torch.mean(torch.square(residual_out.bias))
+        penalty = penalty + torch.mean(residual_out.weight * residual_out.weight)
+        penalty = penalty + torch.mean(residual_out.bias * residual_out.bias)
         return penalty
 
 
@@ -5789,7 +5799,9 @@ def _noise_pretrain_field_model(
                 sample_wavelength,
             )
             weight = sample_weight.to(device=pred.device, dtype=pred.dtype)
-            loss = torch.sum(weight * torch.square(pred - target.to(dtype=pred.dtype)))
+            # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
+            diff_pt = pred - target.to(dtype=pred.dtype)
+            loss = torch.sum(weight * (diff_pt * diff_pt))
             loss = loss / torch.clamp(weight.sum(), min=1.0e-8)
             total_loss = loss if total_loss is None else total_loss + loss
         if total_loss is None:
@@ -5862,15 +5874,16 @@ def _field_residual_loss(
     huber_delta: float,
     logvar: Tensor | None = None,
 ) -> Tensor:
+    # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
     if loss_kind == "mse":
-        return torch.square(residual)
+        return residual * residual
     if loss_kind == "charbonnier":
         eps = torch.as_tensor(
             float(charbonnier_eps),
             device=residual.device,
             dtype=residual.dtype,
         )
-        return torch.sqrt(torch.square(residual) + torch.square(eps))
+        return torch.sqrt((residual * residual) + (eps * eps))
     if loss_kind == "huber":
         return F.huber_loss(
             residual,
@@ -5882,7 +5895,7 @@ def _field_residual_loss(
         if logvar is None:
             raise ValueError("gaussian_nll requires predictive log-variance")
         clipped = torch.clamp(logvar, min=-8.0, max=6.0)
-        return 0.5 * (torch.exp(-clipped) * torch.square(residual) + clipped)
+        return 0.5 * (torch.exp(-clipped) * (residual * residual) + clipped)
     raise ValueError(f"unsupported field loss kind {loss_kind!r}")
 
 
@@ -5965,6 +5978,7 @@ def render_field_observation_distribution(
                 stacked_mean * weights.view(-1, 1, 1).to(dtype=stacked_mean.dtype),
                 dim=0,
             )
+            # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
             var = torch.sum(
                 stacked_var
                 * torch.square(weights).view(-1, 1, 1).to(dtype=stacked_var.dtype),
@@ -6080,6 +6094,7 @@ def render_field_samples_distribution(
             stacked_mean * weights.view(-1, 1, 1).to(dtype=stacked_mean.dtype),
             dim=0,
         )
+        # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
         var = torch.sum(
             stacked_var
             * torch.square(weights).view(-1, 1, 1).to(dtype=stacked_var.dtype),
@@ -7484,8 +7499,9 @@ def fit_field_model(
             )
             diff_x = probe[:, 1:] - probe[:, :-1]
             diff_y = probe[1:, :] - probe[:-1, :]
+            # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
             smoothness_loss = 0.5 * (
-                torch.mean(torch.square(diff_x)) + torch.mean(torch.square(diff_y))
+                torch.mean(diff_x * diff_x) + torch.mean(diff_y * diff_y)
             )
             if streaming_accumulation:
                 scaled_smoothness_loss = smoothness_weight * smoothness_loss
