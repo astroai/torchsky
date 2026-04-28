@@ -406,6 +406,22 @@ bool has_compressed_nulls(fitsfile* fptr) {
 
 namespace nb = nanobind;
 
+
+
+// Security helper to prevent command injection via cfitsio pipe syntax
+inline void validate_fits_filename(const std::string& filename_) {
+    if (!filename_.empty()) {
+        size_t first = filename_.find_first_not_of(" \t");
+        size_t last = filename_.find_last_not_of(" \t");
+
+        if (first != std::string::npos) {
+            if (filename_[first] == '|' || filename_[last] == '|') {
+                 throw std::runtime_error("Security Error: Filenames starting or ending with '|' are not allowed to prevent command execution.");
+            }
+        }
+    }
+}
+
 namespace torchsky {
 
 void write_table_hdu(fitsfile* fptr, nb::dict tensor_dict, nb::dict header, nb::object schema_obj, bool is_ascii);
@@ -716,16 +732,7 @@ class FITSFile {
 public:
     FITSFile(const char* filename, int mode) : filename_(filename), mode_(mode) {
         // Security check: Prevent command injection via cfitsio pipe syntax
-        if (!filename_.empty()) {
-            size_t first = filename_.find_first_not_of(" \t");
-            size_t last = filename_.find_last_not_of(" \t");
-
-            if (first != std::string::npos) {
-                if (filename_[first] == '|' || filename_[last] == '|') {
-                     throw std::runtime_error("Security Error: Filenames starting or ending with '|' are not allowed to prevent command execution.");
-                }
-            }
-        }
+        validate_fits_filename(filename_);
 
         int status = 0;
         if (mode == 0) {
@@ -2977,6 +2984,7 @@ torch::Tensor read_full_unmapped(const std::string& path, int hdu_num) {
     torchsky::validate_fits_filename(path);
     fitsfile* fptr = nullptr;
     int status = 0;
+    validate_fits_filename(path);
     try {
         fits_open_file(&fptr, path.c_str(), READONLY, &status);
         if (status != 0) {
@@ -3093,6 +3101,7 @@ torch::Tensor read_full_nocache(const std::string& path, int hdu_num, bool use_m
     fitsfile* fptr = nullptr;
     int status = 0;
     std::shared_ptr<SharedReadMeta> shared_meta = get_shared_meta_for_path(path);
+    validate_fits_filename(path);
     fits_open_file(&fptr, path.c_str(), READONLY, &status);
     if (status != 0 || !fptr) {
         throw std::runtime_error("Could not open FITS file: " + path);
