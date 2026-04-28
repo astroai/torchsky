@@ -1,6 +1,9 @@
 import pytest
 import numpy as np
 import torch
+import os
+import tempfile
+import pickle
 from torchsky.hdu import TableHDU
 
 
@@ -62,3 +65,40 @@ def test_evaluate_where_direct():
     ast = parse_where_expression("b IS NOT NULL")
     mask = evaluate_where(ast, data_nulls)
     np.testing.assert_array_equal(mask, [True, False, True])
+
+
+class MockModel:
+    def load_trunk_state_dict(self, state_dict, strict=True):
+        pass
+
+def test_load_strainer_trunk_checkpoint_security():
+    """Test that load_strainer_trunk_checkpoint rejects unsafe payloads."""
+    from torchsky.map.field.core import load_strainer_trunk_checkpoint
+
+    # A class that represents a malicious payload which attempts to execute code when pickled
+    class MaliciousPayload:
+        def __reduce__(self):
+            return (os.system, ('echo PWNED > pwned.txt',))
+
+    payload = {
+        "format": "torchsky.strainer_trunk.v1",
+        "trunk": MaliciousPayload()
+    }
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pt") as tmp:
+        tmp_path = tmp.name
+
+    try:
+        torch.save(payload, tmp_path)
+
+        model = MockModel()
+        # Loading should fail due to weights_only=True preventing instantiation of MaliciousPayload
+        with pytest.raises(pickle.UnpicklingError):
+            load_strainer_trunk_checkpoint(model, tmp_path, require_known_format=False)
+
+        assert not os.path.exists("pwned.txt"), "Arbitrary code execution occurred!"
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        if os.path.exists("pwned.txt"):
+            os.remove("pwned.txt")
