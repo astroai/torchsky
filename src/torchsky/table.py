@@ -254,35 +254,34 @@ def _column_tnull_map(header_map: dict[str, Any]) -> dict[str, Any]:
     # over thousands of header cards in large FITS tables.
     try:
         tfields = int(header_map.get("TFIELDS", 0))
-    except (ValueError, TypeError):
+    except (TypeError, ValueError):
         tfields = 0
 
     if tfields > 0:
         for i in range(1, tfields + 1):
             tnull = header_map.get(f"TNULL{i}")
             if tnull is not None:
-                name = header_map.get(f"TTYPE{i}")
-                if name is not None:
-                    out[str(name)] = tnull
-        return out
+                ttype = header_map.get(f"TTYPE{i}")
+                if ttype is not None:
+                    out[str(ttype)] = tnull
+    else:
+        # Fallback if TFIELDS is missing/invalid
+        name_by_idx: dict[int, str] = {}
+        tnull_by_idx: dict[int, Any] = {}
+        for key, value in header_map.items():
+            key_u = str(key).upper()
+            if key_u.startswith("TTYPE"):
+                suffix = key_u[5:]
+                if suffix.isdigit():
+                    name_by_idx[int(suffix)] = str(value)
+            elif key_u.startswith("TNULL"):
+                suffix = key_u[5:]
+                if suffix.isdigit():
+                    tnull_by_idx[int(suffix)] = value
 
-    # Fallback to O(N) iteration if TFIELDS is missing or invalid
-    name_by_idx: dict[int, str] = {}
-    tnull_by_idx: dict[int, Any] = {}
-    for key, value in header_map.items():
-        key_u = str(key).upper()
-        if key_u.startswith("TTYPE"):
-            suffix = key_u[5:]
-            if suffix.isdigit():
-                name_by_idx[int(suffix)] = str(value)
-        elif key_u.startswith("TNULL"):
-            suffix = key_u[5:]
-            if suffix.isdigit():
-                tnull_by_idx[int(suffix)] = value
-
-    for idx, name in name_by_idx.items():
-        if idx in tnull_by_idx:
-            out[name] = tnull_by_idx[idx]
+        for idx, name in name_by_idx.items():
+            if idx in tnull_by_idx:
+                out[name] = tnull_by_idx[idx]
     return out
 
 
