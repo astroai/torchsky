@@ -208,7 +208,9 @@ class MOC:
             return 0.0
         nsides, _ = uniq2nest(self.uniq)
         # Area of a pixel at nside is 4pi / (12 * nside^2)
-        pix_areas = (4.0 * math.pi) / (12.0 * nsides.to(torch.float64) ** 2)
+        # Performance: avoid **2 on tensors
+        nsides_f64 = nsides.to(torch.float64)
+        pix_areas = (4.0 * math.pi) / (12.0 * (nsides_f64 * nsides_f64))
         return float(pix_areas.sum().item())
 
     @property
