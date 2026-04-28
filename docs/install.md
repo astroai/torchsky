@@ -1,4 +1,4 @@
-# Installation Guide
+# Installation
 
 `torchsky` can be installed via pip or built from source.
 
@@ -10,9 +10,9 @@ The easiest way to install `torchsky` is using `pip`:
 pip install torchsky
 ```
 
-This will download and install the latest stable version from PyPI.
+Pre-built wheels are available for Linux (x86_64, aarch64) and macOS (x86_64, arm64). The wheels bundle [CFITSIO](https://heasarc.gsfc.nasa.gov/fitsio/) — no system library needed.
 
-## Building from Source
+Requires Python 3.10+ and [PyTorch](https://pytorch.org/) 2.0+.
 
 To build `torchsky` from source, you'll need a C++ compiler and CMake.
 
@@ -42,39 +42,45 @@ Optional extras (from `pyproject.toml`):
   ``--inr-spectral-source=svo`` (SVO filter profiles). Install with
   `pip install 'torchsky[map]'` when using PyPI wheels, or install those packages in your env.
 
-### Steps
+On macOS, install Xcode Command Line Tools if not present:
 
-1.  **Clone the Repository:**
+```bash
+xcode-select --install
+```
 
     ```bash
     git clone https://github.com/sfabbro/torchsky.git
     cd torchsky
     ```
 
-2.  **Vendor Dependencies:**
+```bash
+git clone https://github.com/sfabbro/torchfits.git
+cd torchfits
+./extern/vendor.sh      # download vendored CFITSIO sources
+pip install -e .        # editable install
+```
 
     `torchsky` vendors its C dependency (`cfitsio`) to simplify installation. Run the vendoring script to prepare the source tree:
 
-    ```bash
-    ./extern/vendor.sh
-    ```
+```bash
+pip install .
+```
 
-    This script downloads the required version of `cfitsio` and places it in the `extern/` directory.
-    It resolves latest tags by default; pin version with `--cfitsio-version` for reproducible builds.
+The build uses [scikit-build-core](https://scikit-build-core.readthedocs.io/) and [nanobind](https://nanobind.readthedocs.io/) for the C++ extension.
 
-3.  **Install:**
+### Vendored CFITSIO
 
     Editable install (typical development):
 
-    ```bash
-    pip install -e .
-    ```
+```bash
+./extern/vendor.sh --cfitsio-version cfitsio-4.6.2
+```
 
     Non-editable:
 
-    ```bash
-    pip install .
-    ```
+```bash
+pip install -e . --config-settings=cmake.args="-DTORCHFITS_USE_VENDORED_CFITSIO=OFF"
+```
 
 #### Pip only (no Pixi / no conda env manager)
 
@@ -103,8 +109,7 @@ Adjust `CUDA_HOME` if your toolkit lives elsewhere (e.g. `/usr/local/cuda`). CPU
 
 ### Troubleshooting
 
-- **Missing `cfitsio`?**
-  Ensure you ran `./extern/vendor.sh` before installing. The build system expects these sources to be present in `extern/`.
+torchfits reads FITS data on the CPU and places the resulting tensor on the requested device. No GPU-specific build steps are required — just install PyTorch with CUDA or MPS support:
 
 - **Compiler Errors?**
   Verify your C++ compiler supports C++17. On macOS, ensure Xcode Command Line Tools are installed (`xcode-select --install`).

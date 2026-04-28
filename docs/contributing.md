@@ -16,18 +16,13 @@ Repository-specific coding-agent and engineering guidance lives in `../AGENTS.md
 ## Development Setup
 
 ```bash
+git clone https://github.com/sfabbro/torchfits.git
+cd torchfits
 pixi install
-pixi run dev
-```
-
-Common commands:
-
-```bash
 pixi run test
-pixi run lint
 ```
 
-## Repository Layout
+The project uses [pixi](https://pixi.sh/) for environment management, [ruff](https://github.com/astral-sh/ruff) for linting, and [pytest](https://docs.pytest.org/) for testing.
 
 - Python package: `src/torchsky/`
 - Native extension: `src/torchsky/cpp_src/`
@@ -36,23 +31,33 @@ pixi run lint
 - Benchmarks: `benchmarks/`
 - Docs: `docs/`
 
-## Native Build Model
+```
+src/torchfits/          Python package
+src/torchfits/cpp_src/  C++ native extension (nanobind + CFITSIO)
+src/torchfits/wcs/      Pure-PyTorch WCS implementation
+src/torchfits/sphere/   HEALPix, spherical geometry, SHT
+extern/cfitsio/         Vendored CFITSIO sources
+tests/                  Unit and integration tests
+benchmarks/             Benchmark scripts and replay gates
+docs/                   Documentation
+examples/               Runnable example scripts
+```
 
-Default builds use vendored native libraries.
-Populate/update vendored sources with:
+## Native extension
+
+The C++ extension is built by [scikit-build-core](https://scikit-build-core.readthedocs.io/) with [nanobind](https://nanobind.readthedocs.io/) bindings. Populate vendored sources with:
 
 ```bash
 ./extern/vendor.sh
 ```
 
-By default, this resolves the latest published dependency tags.
-Pin explicit versions when needed:
+Rebuild after C++ changes:
 
 ```bash
-./extern/vendor.sh --cfitsio-version cfitsio-4.6.2
+pip install -e . --no-build-isolation
 ```
 
-Optional system-library mode:
+## Testing
 
 - `-DTORCHSKY_USE_VENDORED_CFITSIO=OFF`
 
@@ -61,47 +66,30 @@ Optional system-library mode:
 Minimum pre-PR checks:
 
 ```bash
-pixi run pytest tests/test_api.py -q
-pixi run pytest tests/test_table.py -q
+pixi run pytest tests/test_api.py tests/test_table.py -q
 ```
 
-Recommended for broader changes:
+Full suite:
 
 ```bash
-pixi run pytest tests/ -q
+pixi run test
+```
+
+Upstream parity gates (require comparison libraries):
+
+```bash
+pixi run wcs-upstream-gate
+pixi run fits-upstream-gate
+pixi run healsparse-upstream-gate
+pixi run sphere-upstream-gate
 ```
 
 ## Benchmarks
 
-Benchmark tasks currently defined in `pixi.toml`:
-
-- `pixi run bench`
-- `pixi run bench-fast`
-- `pixi run bench-fast-stable`
-- `pixi run bench-core`
-- `pixi run bench-table`
-- `pixi run bench-table-arrow`
-- `pixi run bench-table-arrow-diverse`
-- `pixi run bench-all`
-- `pixi run bench-all-keep`
-- `pixi run bench-all-runner`
-- `pixi run bench-all-force`
-- `pixi run bench-transforms`
-- `pixi run bench-buffer`
-- `pixi run bench-cache`
-- `pixi run bench-focused`
-- `pixi run bench-pytest`
-
-Additional benchmark script:
-
-- `pixi run python benchmarks/bench_ml_loader.py --device cpu`
-
-Suggested regression workflow:
+Quick regression check:
 
 ```bash
-pixi run bench-fast-stable
-# make change
-pixi run bench-fast-stable
+pixi run python benchmarks/bench_sentinel.py --initial-repeats 3 --full-repeats 9
 ```
 
 For investigation, narrow scope with `bench-core`, `bench-table`, `bench-cache`.
@@ -131,16 +119,26 @@ Minimum gates:
 4. Build and validate artifacts:
 
 ```bash
-pixi run python -m pip wheel . --no-deps --no-build-isolation -w dist
-pixi run twine check dist/*
+pixi run bench-all
 ```
 
-5. Smoke-test install wheel/sdist in a fresh virtualenv.
-6. Tag `vX.Y.Z` and publish.
+Include benchmark evidence in PRs that touch performance-sensitive paths.
 
-## PR Hygiene
+## Documentation policy
 
-- Keep PRs scoped.
+- `README.md`: user-facing overview only.
+- `docs/api.md`: public API reference. Update if a PR changes a public API.
+- `docs/changelog.md`: release notes, [Keep a Changelog](https://keepachangelog.com/) format.
+- `docs/benchmarks.md`: benchmark methodology and results.
+- `docs/sphere.md`: sphere/HEALPix API reference.
+
+## PR guidelines
+
+- Keep PRs focused on a single concern.
 - Include tests for behavior changes.
-- Include benchmark evidence for performance-sensitive changes.
-- Do not commit local scratch/benchmark artifacts.
+- Run `pixi run lint` and fix issues before submitting.
+- Do not commit local scratch files, benchmark artifacts, or `.env` files.
+
+## Release process
+
+See [release.md](release.md) for the maintainer checklist.

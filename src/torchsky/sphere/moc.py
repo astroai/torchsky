@@ -216,7 +216,7 @@ class MOC:
     @property
     def area_sq_deg(self) -> float:
         """Total area covered by the MOC in square degrees."""
-        return self.area * (180.0 / math.pi) ** 2
+        return self.area * ((180.0 / math.pi) * (180.0 / math.pi))
 
     def contains_moc(self, other: "MOC") -> bool:
         """Return True if this MOC contains all of other MOC (subset check)."""

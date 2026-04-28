@@ -49,6 +49,7 @@ def to_tensor_frame(
 
     num_rows = -1
 
+
     for name, tensor in data.items():
         if num_rows == -1:
             num_rows = tensor.shape[0]
@@ -161,19 +162,18 @@ def write_tensor_frame(path: str, tf: TensorFrame, overwrite: bool = False):
 
     data = {}
 
-    # Extract numerical columns
-    if stype.numerical in tf.feat_dict:
-        tensor = tf.feat_dict[stype.numerical]
-        names = tf.col_names_dict[stype.numerical]
-        for i, name in enumerate(names):
-            data[name] = tensor[:, i]
+    # Process all available stypes dynamically
+    for stype_enum, tensor in tf.feat_dict.items():
+        names = tf.col_names_dict[stype_enum]
 
-    # Extract categorical columns
-    if stype.categorical in tf.feat_dict:
-        tensor = tf.feat_dict[stype.categorical]
-        names = tf.col_names_dict[stype.categorical]
-        for i, name in enumerate(names):
-            data[name] = tensor[:, i]
+        # 1D/2D continuous types
+        if stype_enum in [
+            stype.numerical,
+            stype.categorical,
+            getattr(stype, "timestamp", None),
+        ]:
+            for i, name in enumerate(names):
+                data[name] = tensor[:, i]
 
     # Handle other standard 2D tensor stypes safely
     timestamp_stype = getattr(stype, "timestamp", None)

@@ -231,6 +231,28 @@ class SIP:
             pows.append(curr)
         return torch.stack(pows, dim=0)
 
+    @staticmethod
+    def _make_pow_cache(base: Tensor, order: int) -> "list[Tensor]":
+        pows = [torch.ones_like(base)]
+        if order >= 1:
+            pows.append(base)
+        curr = base
+        for _ in range(2, order + 1):
+            curr = curr * base
+            pows.append(curr)
+        return pows
+
+    @staticmethod
+    def _make_pow_stack(base: Tensor, order: int) -> Tensor:
+        pows = [torch.ones_like(base)]
+        if order >= 1:
+            pows.append(base)
+        curr = base
+        for _ in range(2, order + 1):
+            curr = curr * base
+            pows.append(curr)
+        return torch.stack(pows, dim=0)
+
     def _distort_scalar(self, uv: Tensor) -> Tensor:
         """
         Distort a single (u, v) point. uv shape [2].

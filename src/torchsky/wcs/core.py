@@ -149,12 +149,8 @@ class WCS:
             dict[float, Callable[[Tensor], Tensor]] | None
         ) = None
 
-    def _parse_header(self, header: Dict[str, Any]):
-        """Parse standard FITS WCS keywords."""
-        # Standard defaults
-        self.wcs_params["NAXIS"] = header.get("NAXIS", 2)
-
-        # CTYPEs
+    def _parse_core(self, header: Dict[str, Any]) -> None:
+        """Parse core WCS keywords (CTYPE, CRPIX, CRVAL, CDELT, CUNIT)."""
         for i in range(1, self.naxis + 1):
             self.wcs_params[f"CTYPE{i}"] = str(header.get(f"CTYPE{i}", ""))
             self.wcs_params[f"CRPIX{i}"] = float(header.get(f"CRPIX{i}", 0.0))
@@ -163,7 +159,8 @@ class WCS:
             if f"CUNIT{i}" in header:
                 self.wcs_params[f"CUNIT{i}"] = str(header.get(f"CUNIT{i}", ""))
 
-        # Capture CD/PC matrix keywords
+    def _parse_cd_pc(self, header: Dict[str, Any]) -> None:
+        """Parse CD and PC matrix keywords."""
         for i in range(1, self.naxis + 1):
             for j in range(1, self.naxis + 1):
                 cd_key = f"CD{i}_{j}"
@@ -173,12 +170,15 @@ class WCS:
                 if pc_key in header:
                     self.wcs_params[pc_key] = float(header[pc_key])
 
-        # Pole defaults can be projection dependent, but preserve explicit header values
+    def _parse_pole(self, header: Dict[str, Any]) -> None:
+        """Parse LONPOLE and LATPOLE keywords."""
         if "LONPOLE" in header:
             self.wcs_params["LONPOLE"] = float(header["LONPOLE"])
         if "LATPOLE" in header:
             self.wcs_params["LATPOLE"] = float(header["LATPOLE"])
 
+    def _parse_pv(self, header: Dict[str, Any]) -> None:
+        """Parse PV distortion keywords."""
         # Capture PV keywords (PVi_j)
         # SCAMP/PV distortions can have many terms (0..39 typically)
         for key in PV1_KEYS:
@@ -188,18 +188,10 @@ class WCS:
             if key in header:
                 self.wcs_params[key] = float(header[key])
 
-        # Capture WAT keywords for TNX/ZPX
-        # Reconstruct them here to avoid doing it every call
+    def _parse_wat(self, header: Dict[str, Any]) -> None:
+        """Parse WAT keywords for TNX/ZPX projections."""
         self.wat_data = {}
-        from .legacy import parse_wat_keywords  # Helper
-
-        # Check for WAT1_*, WAT2_*
-        has_wat = False
-        for k in header.keys():
-            if k.startswith("WAT"):
-                has_wat = True
-                break
-
+        has_wat = any(k.startswith("WAT") for k in header.keys())
         if has_wat:
             self.wat_data[1] = parse_wat_keywords(header, "WAT1")
             self.wat_data[2] = parse_wat_keywords(header, "WAT2")
@@ -2795,14 +2787,6 @@ class WCS:
         # c = sqrt((1 + cos(theta)*cos(phi/2)) / 2)
         # xi = 2 * cos(theta) * sin(phi/2) / c * (180/pi)
         # eta = sin(theta) / c * (180/pi)
-
-        # Inverse AIT from xi, eta:
-        # Given x, y in AIT coordinates:
-        # z2 = (1 - (x/4)^2 - (y/2)^2)
-        # if z2 < 0: invalid
-        # c = sqrt(z2)
-        # theta = asin(y * c)
-        # phi = 2 * atan2(x * c / 2, 2*z2 - 1)
 
         # For inverse from (phi, theta) to (xi, eta):
         phi_rad = phi * self._d2r

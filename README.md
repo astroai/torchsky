@@ -26,9 +26,19 @@ Building from source (editable install, CUDA/conda notes, vendoring): see [`docs
 
 ## Quick Examples
 
-### GPU-Accelerated Image Loading
+From source:
 
-Read science images directly to GPU memory without intermediate copies:
+```bash
+git clone https://github.com/sfabbro/torchfits.git
+cd torchfits
+pip install -e .
+```
+
+Requires Python 3.10+, a C++17 compiler, CMake 3.21+, and PyTorch 2.0+.
+
+## Quick Start
+
+### Read an image to GPU
 
 ```python
 import torchsky
@@ -43,16 +53,14 @@ data, header = torchsky.read(
 print(data.shape, data.dtype)  # torch.Size([4096, 4096]), torch.float32
 ```
 
-### Efficient Catalog Filtering and Streaming
-
-Filter million-row tables at the C++ level before loading into Python:
+### Filter and stream a catalog
 
 ```python
 # Read only standard stars brighter than mag 20
 table = torchsky.table.read(
     "catalog.fits",
     columns=["RA", "DEC", "MAG_G"],
-    where="MAG_G < 20.0 AND CLASS_STAR > 0.9"
+    where="MAG_G < 20.0 AND CLASS_STAR > 0.9",
 )
 
 # Stream massive catalogs in batches
@@ -60,7 +68,7 @@ for batch in torchsky.table.scan("survey.fits", batch_size=50_000):
    process(batch)
 ```
 
-## Performance Snapshot (v0.3.0 Readiness)
+### WCS coordinate transforms
 
 torchsky is designed for high-throughput astronomical workflows, delivering **10x-100x speedups** over `astropy` for large arrays and tables. In the 0.3.0 exhaustive suite, it maintains a strong lead in FITS image and table I/O (1.5x-4x median speedups vs `fitsio`) while achieving parity or better in the HEALPix sphere domain (~89% win rate). While Batch WCS throughput (N > 100k) excels, small-N coordinate transforms and complex spin-harmonic operations (sphere) remain current targets for the 0.3.x optimization roadmap.
 
@@ -81,4 +89,4 @@ torchsky is designed for high-throughput astronomical workflows, delivering **10
 
 ## License
 
-GPL-2.0
+[GPL-2.0](LICENSE)
