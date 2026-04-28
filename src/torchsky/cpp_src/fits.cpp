@@ -2974,6 +2974,7 @@ torch::Tensor read_hdus_sequence_last(const std::string& path, const std::vector
 }
 
 torch::Tensor read_full_unmapped(const std::string& path, int hdu_num) {
+    torchsky::validate_fits_filename(path);
     fitsfile* fptr = nullptr;
     int status = 0;
     try {
@@ -3088,6 +3089,7 @@ torch::Tensor read_full_unmapped_raw(const std::string& path, int hdu_num) {
 torch::Tensor read_full_nocache(const std::string& path, int hdu_num, bool use_mmap) {
     // True "no-cache" read path: open -> read -> close every call.
     // Unlike the cached paths, this avoids global cache locks and refcounting.
+    torchsky::validate_fits_filename(path);
     fitsfile* fptr = nullptr;
     int status = 0;
     std::shared_ptr<SharedReadMeta> shared_meta = get_shared_meta_for_path(path);
