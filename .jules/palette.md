@@ -8,6 +8,10 @@
 **Learning:** Type-specific input resets (e.g., `input[type="range"] { outline: none; }`) inherently possess higher CSS specificity than global pseudo-class selectors like `:focus-visible`. This causes interactive elements like range sliders to lose their accessibility focus rings entirely when navigating via keyboard, making the UI inaccessible to screen reader and keyboard users.
 **Action:** Always explicitly re-declare `:focus-visible` styles on elements that have their outlines removed or modified via highly specific selectors (e.g., `input[type="range"]:focus-visible { outline: 2px solid var(--accent); }`) to ensure keyboard focus remains visible.
 
+## 2025-04-26 - CSS Specificity in Focus Rings
+**Learning:** Global `:focus-visible` styles can break custom `border-radius` designs on structural UI components (like pills or tabs) due to CSS specificity overriding. Relying on the global reset is better handled without explicitly overriding `border-radius`.
+**Action:** Let buttons and inputs inherit their structural `border-radius` implicitly by only specifying properties like `outline` and `outline-offset` in global `:focus-visible` selectors. Only override local `:focus-visible` on elements that completely unset global outlines (like `input[type="range"] { outline: none; }`).
+
 ## 2025-04-20 - ARIA Tabbed Navigation
 **Learning:** Native button-based tab groups in vanilla HTML lack intrinsic semantics for screen readers to understand them as an interconnected tablist. Users relying on assistive technology won't know how many tabs exist or which panel they correspond to.
 **Action:** When building or updating tabbed navigation in vanilla HTML, always implement the standard ARIA tab pattern: assign `role="tablist"` to the container, `role="tab"` to the buttons along with dynamic `aria-selected` tracking, and `role="tabpanel"` to the respective panels. Cross-reference them explicitly using `aria-controls` on the tabs and `aria-labelledby` on the panels.
