@@ -8,7 +8,6 @@ This module is an experimental helper layer built on top of torchsky FITS I/O.
 It is not part of the core FITS read/write parity surface.
 """
 
-from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
@@ -48,7 +47,7 @@ def spectral_axis_from_header(
     header: Dict[str, Any],
     *,
     data_shape: Optional[Tuple[int, ...]] = None,
-) -> Tuple[SpectralAxis, int]:
+) -> Tuple["SpectralAxis", int]:
     """Build a linear SpectralAxis from FITS WCS header metadata."""
     naxis = int(header.get("NAXIS", len(data_shape) if data_shape is not None else 0))
     if naxis <= 0:
@@ -317,7 +316,7 @@ class DataCube:
         shape.pop(self.spectral_axis_index)
         return tuple(shape)
 
-    def extract_spectrum(self, y: int, x: int) -> Spectrum1D:
+    def extract_spectrum(self, y: int, x: int) -> "Spectrum1D":
         """Extract 1D spectrum at spatial position (y, x)."""
         if self.spectral_axis_index == 0:
             flux = self.data[:, y, x]
@@ -429,7 +428,7 @@ class SpectralReader:
         wave_col: str = "WAVELENGTH",
         ivar_col: Optional[str] = "IVAR",
         mask_col: Optional[str] = "MASK",
-    ) -> Spectrum1D:
+    ) -> "Spectrum1D":
         """Read 1D spectrum from FITS table."""
         import torchsky
 
@@ -468,7 +467,7 @@ class SpectralReader:
             )
 
     @staticmethod
-    def read_data_cube(filepath: str, hdu: int = 0) -> DataCube:
+    def read_data_cube(filepath: str, hdu: int = 0) -> "DataCube":
         """Read 3D data cube from FITS image."""
         import torchsky
 
