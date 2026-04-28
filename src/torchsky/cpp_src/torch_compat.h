@@ -21,6 +21,20 @@ inline bool THPVariable_Check(PyObject* obj) {
 // Extern declaration for THPVariable_Wrap (exported by libtorch_python)
 extern PyObject* THPVariable_Wrap(const at::TensorBase& var);
 
+inline void check_fits_filename(const std::string& filename_) {
+    if (!filename_.empty()) {
+        size_t first = filename_.find_first_not_of(" \t");
+        size_t last = filename_.find_last_not_of(" \t");
+
+        if (first != std::string::npos) {
+            if (filename_[first] == '|' || filename_[last] == '|') {
+                throw std::runtime_error("Security Error: Filenames starting or ending with '|' are not allowed to prevent command execution.");
+            }
+        }
+    }
+}
+
+
 // Helper function to convert torch::Tensor to Python object - FAST PATH
 inline nb::object tensor_to_python(const torch::Tensor& tensor) {
     PyObject* tensor_obj = THPVariable_Wrap(tensor);

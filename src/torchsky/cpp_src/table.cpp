@@ -2363,6 +2363,7 @@ void insert_rows(const char* filename, int hdu_num, nb::dict tensor_dict, long s
         return;
     }
 
+    check_fits_filename(std::string(filename));
     fitsfile* fptr = nullptr;
     int status = 0;
 
@@ -2411,6 +2412,7 @@ void delete_rows(const char* filename, int hdu_num, long start_row, long num_row
         return;
     }
 
+    check_fits_filename(std::string(filename));
     fitsfile* fptr = nullptr;
     int status = 0;
 
@@ -2459,6 +2461,7 @@ void update_rows(const char* filename, int hdu_num, nb::dict tensor_dict, long s
         return;
     }
 
+    check_fits_filename(std::string(filename));
     fitsfile* fptr;
     int status = 0;
 
