@@ -93,7 +93,7 @@ def test_to_arrow_vla_invalid_policy():
         "VLA": [torch.tensor([1, 2]), torch.tensor([3])],
     }
     with pytest.raises(ValueError, match="vla_policy must be 'list' or 'drop'"):
-        torchfits.to_arrow(data, vla_policy="invalid_policy")
+        torchsky.to_arrow(data, vla_policy="invalid_policy")
 
 
 def test_to_pandas_missing_pandas():
@@ -101,4 +101,4 @@ def test_to_pandas_missing_pandas():
         with pytest.raises(
             ImportError, match="Pandas is required for to_pandas conversion."
         ):
-            torchfits.to_pandas({"a": torch.tensor([1, 2, 3])})
+            torchsky.to_pandas({"a": torch.tensor([1, 2, 3])})

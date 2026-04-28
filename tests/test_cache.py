@@ -53,7 +53,7 @@ class TestCaching:
 
     def test_get_cache_stats(self):
         """Test get_cache_stats returns expected dictionary structure."""
-        from torchfits.cache import get_cache_stats, clear_cache
+        from torchsky.cache import get_cache_stats, clear_cache
 
         # Clear cache to start with a known state
         clear_cache()
@@ -435,7 +435,7 @@ class TestCacheManager:
     """Test CacheManager functionality."""
 
     def test_get_cache_manager_singleton(self):
-        from torchfits.cache import get_cache_manager
+        from torchsky.cache import get_cache_manager
 
         manager1 = get_cache_manager()
         manager2 = get_cache_manager()
@@ -563,18 +563,18 @@ class TestCacheConfig:
 class TestCacheOptimization:
     """Test CacheOptimization functionality."""
 
-    @patch("torchfits.cache.CacheManager.configure_cpp_cache")
+    @patch("torchsky.cache.CacheManager.configure_cpp_cache")
     def test_optimize_for_dataset_small(self, mock_configure_cpp_cache):
         # Create a test configuration
         config = CacheConfig(disk_cache_gb=10)
-        manager = torchfits.cache.CacheManager(config)
+        manager = torchsky.cache.CacheManager(config)
 
         # Mock get_cache_manager to return our specific manager
-        with patch("torchfits.cache.get_cache_manager", return_value=manager):
+        with patch("torchsky.cache.get_cache_manager", return_value=manager):
             # Test a small dataset that fits easily in cache
             # 100 files, 10 MB each = ~1 GB total (< 10 GB limit)
             file_paths = ["file_{}.fits".format(i) for i in range(100)]
-            torchfits.cache.optimize_for_dataset(file_paths, avg_file_size_mb=10.0)
+            torchsky.cache.optimize_for_dataset(file_paths, avg_file_size_mb=10.0)
 
             # Verification
             # Should enable aggressive caching for the entire dataset
@@ -582,18 +582,18 @@ class TestCacheOptimization:
             assert manager.config.prefetch_enabled is True
             mock_configure_cpp_cache.assert_called_once()
 
-    @patch("torchfits.cache.CacheManager.configure_cpp_cache")
+    @patch("torchsky.cache.CacheManager.configure_cpp_cache")
     def test_optimize_for_dataset_large(self, mock_configure_cpp_cache):
         # Create a test configuration
         config = CacheConfig(disk_cache_gb=10)
-        manager = torchfits.cache.CacheManager(config)
+        manager = torchsky.cache.CacheManager(config)
 
         # Mock get_cache_manager to return our specific manager
-        with patch("torchfits.cache.get_cache_manager", return_value=manager):
+        with patch("torchsky.cache.get_cache_manager", return_value=manager):
             # Test a large dataset that exceeds cache limit
             # 200 files, 100 MB each = ~19.5 GB total (> 10 GB limit)
             file_paths = ["file_{}.fits".format(i) for i in range(200)]
-            torchfits.cache.optimize_for_dataset(file_paths, avg_file_size_mb=100.0)
+            torchsky.cache.optimize_for_dataset(file_paths, avg_file_size_mb=100.0)
 
             # Verification
             # Should restrict max files to optimal_files
@@ -604,19 +604,19 @@ class TestCacheOptimization:
             # (assuming default was False, or at least it doesn't change it)
             mock_configure_cpp_cache.assert_called_once()
 
-    @patch("torchfits.cache.CacheManager.configure_cpp_cache")
+    @patch("torchsky.cache.CacheManager.configure_cpp_cache")
     def test_optimize_for_dataset_huge_many_files(self, mock_configure_cpp_cache):
         # Create a test configuration
         config = CacheConfig(disk_cache_gb=100)
-        manager = torchfits.cache.CacheManager(config)
+        manager = torchsky.cache.CacheManager(config)
 
         # Mock get_cache_manager to return our specific manager
-        with patch("torchfits.cache.get_cache_manager", return_value=manager):
+        with patch("torchsky.cache.get_cache_manager", return_value=manager):
             # Test a very large number of files that exceeds cache limit
             # optimal_files = int(100 * 1024 / 10) = 10240
             # max_files is capped at 1000
             file_paths = ["file_{}.fits".format(i) for i in range(20000)]
-            torchfits.cache.optimize_for_dataset(file_paths, avg_file_size_mb=10.0)
+            torchsky.cache.optimize_for_dataset(file_paths, avg_file_size_mb=10.0)
 
             # Verification
             assert manager.config.max_files == 1000
@@ -625,11 +625,11 @@ class TestCacheOptimization:
 
 def test_configure_for_environment():
     """Test configure_for_environment configures the cpp cache via the manager."""
-    with patch("torchfits.cache.get_cache_manager") as mock_get_cache_manager:
+    with patch("torchsky.cache.get_cache_manager") as mock_get_cache_manager:
         mock_manager = MagicMock()
         mock_get_cache_manager.return_value = mock_manager
 
-        torchfits.cache.configure_for_environment()
+        torchsky.cache.configure_for_environment()
 
         mock_get_cache_manager.assert_called_once()
         mock_manager.configure_cpp_cache.assert_called_once()
@@ -639,7 +639,7 @@ class TestCacheManagerFunctions:
     """Test cache manager module-level functions."""
 
     def test_clear_cache(self):
-        from torchfits.cache import get_cache_manager, clear_cache, get_cache_stats
+        from torchsky.cache import get_cache_manager, clear_cache, get_cache_stats
 
         # Set some state
         manager = get_cache_manager()

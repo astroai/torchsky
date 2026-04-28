@@ -936,7 +936,7 @@ def test_to_duckdb():
 
     data = pa.table({"ID": [1, 2, 3], "RA": [10.1, 10.2, 10.3]})
 
-    rel = torchfits.table.to_duckdb(data)
+    rel = torchsky.table.to_duckdb(data)
     res = rel.filter("ID >= 2").aggregate("COUNT(*) AS n")
 
     if hasattr(res, "arrow"):
@@ -959,7 +959,7 @@ def test_to_duckdb_custom_table_name():
     data = pa.table({"ID": [1, 2, 3], "RA": [10.1, 10.2, 10.3]})
 
     con = duckdb.connect()
-    torchfits.table.to_duckdb(data, "my_custom_table", con)
+    torchsky.table.to_duckdb(data, "my_custom_table", con)
     res = con.sql("SELECT COUNT(*) AS n FROM my_custom_table WHERE ID >= 2")
 
     if hasattr(res, "arrow"):
@@ -983,4 +983,4 @@ def test_to_duckdb_missing_dependency(monkeypatch):
     with pytest.raises(
         ImportError, match="duckdb is required for to_duckdb conversion"
     ):
-        torchfits.table.to_duckdb({"ID": [1, 2, 3]})
+        torchsky.table.to_duckdb({"ID": [1, 2, 3]})

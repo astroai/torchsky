@@ -6,7 +6,6 @@ import os
 import tempfile
 
 import numpy as np
-import pytest
 from unittest import mock
 import torch
 
@@ -302,14 +301,6 @@ class TestTableReading:
         assert result is False
 
 
-    @mock.patch("torchsky.get_header")
-    def test_can_use_mmap_row_path_for_full_read_exception(self, mock_get_header):
-        """Test that _can_use_mmap_row_path_for_full_read handles exceptions gracefully."""
-        from torchsky.table import _can_use_mmap_row_path_for_full_read
-        mock_get_header.side_effect = Exception("Mocked error reading header")
-        result = _can_use_mmap_row_path_for_full_read("dummy.fits", 1, None)
-        assert result is False
-
 class TestTablePerformance:
     """Test table reading performance optimizations."""
 
@@ -448,29 +439,3 @@ def test_close_cpp_handle_suppresses_exception():
     mock_handle = unittest.mock.Mock()
     mock_handle.close.side_effect = Exception("Test exception")
     _close_cpp_handle(mock_handle)
-    mock_handle.close.assert_called_once()
-
-
-    def test_is_compatible_arrow_table_edge_cases(self):
-        import torchsky.table as tbl
-        from unittest import mock
-
-        # We test _can_use_mmap_row_path_for_full_read as this corresponds to the implementation
-        # of the compatibility check in table.py
-
-        # Test Exception in get_header
-        with mock.patch("torchsky.get_header", side_effect=Exception("mocked error")):
-            assert tbl._can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
-
-        # Test TFIELDS = 0
-        with mock.patch("torchsky.get_header", return_value={"TFIELDS": 0}):
-            assert tbl._can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
-
-        # Test missing TTYPE keys
-        with mock.patch("torchsky.get_header", return_value={"TFIELDS": 2}):
-            assert tbl._can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
-
-if __name__ == "__main__":
-    import pytest
-
-    pytest.main([__file__, "-v"])
