@@ -27,13 +27,13 @@ def _exact_conservative_polygon_project(
     if value_semantics == "flux":
         source_area_sr = pixel_area_sr_map_fn(
             source_wcs,
-            tuple(int(v) for v in image.shape),
+            tuple(image.shape),
             device=image.device,
         )
         source_representative_area_sr = float(
             representative_pixel_area_fn(
                 source_wcs,
-                tuple(int(v) for v in image.shape),
+                tuple(image.shape),
                 device=image.device,
             )
         )
@@ -43,7 +43,7 @@ def _exact_conservative_polygon_project(
             else float(
                 representative_pixel_area_fn(
                     target.wcs,
-                    tuple(int(v) for v in target.shape),
+                    tuple(target.shape),
                     device=image.device,
                 )
             )

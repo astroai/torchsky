@@ -1184,7 +1184,7 @@ def _resample_weighted_to_target(
     if value_semantics == "flux":
         source_area_sr = _pixel_area_sr_map(
             source_wcs,
-            tuple(int(v) for v in image.shape),
+            tuple(image.shape),
             device=image.device,
         )
         weighted_image = image * source_weight * source_area_sr
@@ -1192,7 +1192,7 @@ def _resample_weighted_to_target(
     elif target_representative_area_sr is not None:
         source_area_sr = _representative_pixel_area_sr(
             source_wcs,
-            tuple(int(v) for v in image.shape),
+            tuple(image.shape),
             device=image.device,
         )
         info_density = source_weight / max(source_area_sr, 1e-20)
@@ -1219,7 +1219,7 @@ def _resample_weighted_to_target(
         if (h_src, w_src) != (target.shape[0], target.shape[1]):
             raise ValueError(
                 "fft_shift requires matching source and target array shapes "
-                f"(got source {(h_src, w_src)} vs target {tuple(int(v) for v in target.shape)})"
+                f"(got source {(h_src, w_src)} vs target {tuple(target.shape)})"
             )
         try:
             sy, sx = _infer_fft_translation_shift_yx(
@@ -1260,7 +1260,7 @@ def _resample_weighted_to_target(
         if (h_src, w_src) != (target.shape[0], target.shape[1]):
             raise ValueError(
                 "fft_diagonal_affine requires matching source and target array shapes "
-                f"(got source {(h_src, w_src)} vs target {tuple(int(v) for v in target.shape)})"
+                f"(got source {(h_src, w_src)} vs target {tuple(target.shape)})"
             )
         try:
             d_sx, d_bx, d_sy, d_by = _infer_diagonal_scale_shift_pixel_map(
@@ -1306,7 +1306,7 @@ def _resample_weighted_to_target(
         if (h_src, w_src) != (target.shape[0], target.shape[1]):
             raise ValueError(
                 "periodic_linear_affine requires matching source and target array shapes "
-                f"(got source {(h_src, w_src)} vs target {tuple(int(v) for v in target.shape)})"
+                f"(got source {(h_src, w_src)} vs target {tuple(target.shape)})"
             )
         try:
             la = _infer_linear_affine_pixel_map(
@@ -1359,7 +1359,7 @@ def _resample_weighted_to_target(
         if (h_src, w_src) != (target.shape[0], target.shape[1]):
             raise ValueError(
                 "fft_linear_affine requires matching source and target array shapes "
-                f"(got source {(h_src, w_src)} vs target {tuple(int(v) for v in target.shape)})"
+                f"(got source {(h_src, w_src)} vs target {tuple(target.shape)})"
             )
         try:
             la = _infer_linear_affine_pixel_map(
@@ -1413,7 +1413,7 @@ def _resample_weighted_to_target(
         if (h_src, w_src) != (target.shape[0], target.shape[1]):
             raise ValueError(
                 "spectral_linear_affine requires matching source and target array shapes "
-                f"(got source {(h_src, w_src)} vs target {tuple(int(v) for v in target.shape)})"
+                f"(got source {(h_src, w_src)} vs target {tuple(target.shape)})"
             )
         try:
             la = _infer_linear_affine_pixel_map(
@@ -1724,7 +1724,7 @@ def _forward_project_weighted_to_target(
     if value_semantics == "flux":
         source_area_sr = _pixel_area_sr_map(
             source_wcs,
-            tuple(int(v) for v in image.shape),
+            tuple(image.shape),
             device=image.device,
         )
         weighted_image = image * source_weight * source_area_sr
@@ -1732,7 +1732,7 @@ def _forward_project_weighted_to_target(
     elif target.representative_pixel_area_sr is not None:
         source_area_sr = _representative_pixel_area_sr(
             source_wcs,
-            tuple(int(v) for v in image.shape),
+            tuple(image.shape),
             device=image.device,
         )
         info_density = source_weight / max(source_area_sr, 1e-20)
@@ -1861,7 +1861,7 @@ def _maybe_external_drizzle_resample_weighted_to_target(
     source_header_astropy = _as_astropy_fits_header_for_drizzle(header_dict_obs)
     target_wcs = AstropyWCS(target_header_astropy)
     target_wcs.array_shape = target_shape
-    source_shape = tuple(int(v) for v in image.shape)
+    source_shape = tuple(image.shape)
     source_wcs = AstropyWCS(source_header_astropy)
     source_wcs.array_shape = source_shape
     pixmap = calc_pixmap(source_wcs, target_wcs, shape=source_shape)
@@ -2371,7 +2371,7 @@ def _project_observation_to_target_chunk(
     target_window = None
     if (
         _headers_equivalent_for_direct_copy(header_dict_obs, target_header)
-        and tuple(int(v) for v in image.shape) == target_shape
+        and tuple(image.shape) == target_shape
     ):
         if value_semantics == "flux":
             if prepared_target is None or prepared_target.pixel_area_sr is None:
@@ -2397,7 +2397,7 @@ def _project_observation_to_target_chunk(
         prepared_target_view, target_window = _window_large_tan_target(
             source_wcs=source_wcs,
             source_header=header_dict_obs,
-            source_shape=tuple(int(v) for v in image.shape),
+            source_shape=tuple(image.shape),
             target=prepared_target,
             target_header=target_header,
             value_semantics=value_semantics,
@@ -2529,7 +2529,7 @@ def plan_image_plane_target(
     read_dev = str(_resolve_map_device(device))
     image, header = read(ref.path, hdu=ref.hdu, return_header=True, device=read_dev)
     image = _validate_image_plane(image)
-    shape = tuple(int(v) for v in image.shape)
+    shape = tuple(image.shape)
     normalized_header = _normalized_header_for_shape(
         dict(header),
         shape,
@@ -2740,7 +2740,7 @@ def coadd_image_plane(
     if target_header is not None and "CRVAL1" in target_header:
         target_shape = _target_shape_from_header(
             target_header,
-            fallback=tuple(int(v) for v in first_image.shape[-2:]),
+            fallback=tuple(first_image.shape[-2:]),
         )
         header_dict = _normalized_header_for_shape(
             dict(target_header),
@@ -2750,12 +2750,12 @@ def coadd_image_plane(
     else:
         header_dict = _normalized_header_for_shape(
             dict(first_header),
-            tuple(int(v) for v in first_image.shape[-2:]),
+            tuple(first_image.shape[-2:]),
             overrides=target_header,
         )
         target_shape = _target_shape_from_header(
             header_dict,
-            fallback=tuple(int(v) for v in first_image.shape[-2:]),
+            fallback=tuple(first_image.shape[-2:]),
         )
     device = map_device
     if spatial_tile_hw is not None:
@@ -2829,12 +2829,12 @@ def coadd_image_plane(
             value_semantics == "flux"
             or footprint_order is not None
             or header_dict_obs != header_dict
-            or tuple(int(v) for v in image.shape) != target_shape
+            or tuple(image.shape) != target_shape
         )
         source_wcs = None
         if need_prepared_target and not (
             _headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
-            and tuple(int(v) for v in image.shape) == target_shape
+            and tuple(image.shape) == target_shape
         ):
             source_wcs = WCS(header_dict_obs)
         if stacking_method == "median":
@@ -3141,12 +3141,12 @@ def coadd_image_plane_cube(
             value_semantics == "flux"
             or footprint_order is not None
             or header_dict_obs != header_dict
-            or tuple(int(v) for v in image.shape) != target_shape
+            or tuple(image.shape) != target_shape
         )
         source_wcs = None
         if need_prepared_target and not (
             _headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
-            and tuple(int(v) for v in image.shape) == target_shape
+            and tuple(image.shape) == target_shape
         ):
             source_wcs = WCS(header_dict_obs)
         projected = _project_observation_to_target_chunk(

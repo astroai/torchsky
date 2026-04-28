@@ -864,7 +864,7 @@ class RegionAreaEstimate:
 
 
 def _parse_nside_ladder(nsides: tuple[int, ...] | list[int]) -> tuple[int, ...]:
-    ladder = tuple(int(v) for v in nsides)
+    ladder = tuple(nsides)
     if len(ladder) == 0:
         raise ValueError("nsides ladder must contain at least one nside")
     for i, n in enumerate(ladder):
@@ -1760,12 +1760,12 @@ def to_exact_region(
             "backend must be one of {'auto', 'spherical-geometry', 'native'}"
         )
     if backend == "native":
-        return NativeExactSphericalRegion(region, tuple(int(x) for x in nsides))
+        return NativeExactSphericalRegion(region, tuple(nsides))
     if backend == "spherical-geometry":
         return ExactSphericalRegion(_region_to_sg(region, cap_steps=cap_steps))
     if _spherical_geometry_available():
         return ExactSphericalRegion(_region_to_sg(region, cap_steps=cap_steps))
-    return NativeExactSphericalRegion(region, tuple(int(x) for x in nsides))
+    return NativeExactSphericalRegion(region, tuple(nsides))
 
 
 def query_ellipse(

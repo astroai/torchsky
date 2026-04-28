@@ -107,13 +107,13 @@ def _per_bin_background(
         return None
     tensor = torch.as_tensor(value, dtype=torch.float32, device=device)
     if tensor.ndim == 2:
-        if tuple(int(v) for v in tensor.shape) != (height, width):
+        if tuple(tensor.shape) != (height, width):
             raise ValueError(
                 f"{name} spatial shape {tuple(tensor.shape)} != {(height, width)}"
             )
         return tensor
     if tensor.ndim == 3:
-        if tuple(int(v) for v in tensor.shape) != (nbin, height, width):
+        if tuple(tensor.shape) != (nbin, height, width):
             raise ValueError(
                 f"{name} shape {tuple(tensor.shape)} != {(nbin, height, width)}"
             )

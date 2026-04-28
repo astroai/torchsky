@@ -104,7 +104,7 @@ def accumulate_image_on_healpix_map_adjoint(
         raise ValueError("image must be a 2D tensor with shape [NAXIS2, NAXIS1]")
     h = int(source_header["NAXIS2"])
     w = int(source_header["NAXIS1"])
-    if tuple(int(v) for v in img.shape) != (h, w):
+    if tuple(img.shape) != (h, w):
         raise ValueError("image shape must match source_header NAXIS2/NAXIS1")
     dev = device if device is not None else img.device
     npix = hp.nside2npix(int(nside))

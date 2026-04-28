@@ -240,8 +240,7 @@ class FieldObservation:
                 continue
             if component.ndim != 2:
                 raise ValueError(f"FieldObservation {name} must be 2D")
-            if tuple(int(v) for v in component.shape) != tuple(
-                int(v) for v in self.image.shape
+            if tuple(component.shape) != tuple(self.image.shape
             ):
                 raise ValueError(
                     f"FieldObservation {name} shape must match image shape"
@@ -315,32 +314,30 @@ class FieldComponentAnchorTerm:
                 raise ValueError(
                     "sample_ra_deg and sample_dec_deg must be provided together"
                 )
-            if tuple(int(v) for v in self.sample_ra_deg.shape) != tuple(
-                int(v) for v in self.sample_dec_deg.shape
+            if tuple(self.sample_ra_deg.shape) != tuple(self.sample_dec_deg.shape
             ):
                 raise ValueError("sample_ra_deg and sample_dec_deg must match in shape")
-            sample_shape = tuple(int(v) for v in self.sample_ra_deg.shape)
+            sample_shape = tuple(self.sample_ra_deg.shape)
         if pixel_sample_mode:
             if self.sample_x_pix is None or self.sample_y_pix is None:
                 raise ValueError(
                     "sample_x_pix and sample_y_pix must be provided together"
                 )
-            if tuple(int(v) for v in self.sample_x_pix.shape) != tuple(
-                int(v) for v in self.sample_y_pix.shape
+            if tuple(self.sample_x_pix.shape) != tuple(self.sample_y_pix.shape
             ):
                 raise ValueError("sample_x_pix and sample_y_pix must match in shape")
-            sample_shape = tuple(int(v) for v in self.sample_x_pix.shape)
+            sample_shape = tuple(self.sample_x_pix.shape)
         if sample_mode:
             if self.target_image is not None:
                 raise ValueError("target_image is only valid for full-image anchors")
             if (
                 self.target_values is not None
-                and tuple(int(v) for v in self.target_values.shape) != sample_shape
+                and tuple(self.target_values.shape) != sample_shape
             ):
                 raise ValueError("target_values shape must match sample coordinates")
             if (
                 self.sample_weight is not None
-                and tuple(int(v) for v in self.sample_weight.shape) != sample_shape
+                and tuple(self.sample_weight.shape) != sample_shape
             ):
                 raise ValueError("sample_weight shape must match sample coordinates")
         else:
@@ -355,8 +352,7 @@ class FieldComponentAnchorTerm:
         if self.target_image is not None:
             if self.target_image.ndim != 2:
                 raise ValueError("target_image must be 2D")
-            if tuple(int(v) for v in self.target_image.shape) != tuple(
-                int(v) for v in self.observation.image.shape
+            if tuple(self.target_image.shape) != tuple(self.observation.image.shape
             ):
                 raise ValueError("target_image shape must match observation.image")
         if (self.override_wavelengths is None) != (
@@ -373,8 +369,7 @@ class FieldComponentAnchorTerm:
                 raise ValueError("override_wavelengths must be 1D")
             if self.override_bandpass_weights.ndim != 1:
                 raise ValueError("override_bandpass_weights must be 1D")
-            if tuple(int(v) for v in self.override_wavelengths.shape) != tuple(
-                int(v) for v in self.override_bandpass_weights.shape
+            if tuple(self.override_wavelengths.shape) != tuple(self.override_bandpass_weights.shape
             ):
                 raise ValueError(
                     "override_wavelengths and override_bandpass_weights must match in shape"

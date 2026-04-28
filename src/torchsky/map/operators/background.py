@@ -121,7 +121,7 @@ def _coerce_background_component(
     if component is None:
         return None
     tensor = component.to(device=device, dtype=dtype)
-    if tuple(int(v) for v in tensor.shape) != shape:
+    if tuple(tensor.shape) != shape:
         raise ValueError(f"{name} background shape must match rendered image shape")
     return tensor
 

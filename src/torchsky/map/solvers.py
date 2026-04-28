@@ -691,7 +691,7 @@ def build_state_identity_operator(
     ) -> Tensor:
         del target_spec
         tensor = _scene_state_tensor(scene)
-        if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
+        if tuple(tensor.shape) != tuple(state.shape):
             raise ValueError(
                 "state-space identity operator received a scene with incompatible shape"
             )
@@ -699,7 +699,7 @@ def build_state_identity_operator(
 
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
-        if tuple(int(v) for v in mapped.shape) != tuple(int(v) for v in state.shape):
+        if tuple(mapped.shape) != tuple(state.shape):
             raise ValueError(
                 "state-space identity adjoint received data with incompatible shape"
             )
@@ -724,7 +724,7 @@ def build_state_subspace_operator(
 
     def _extract(scene: SceneRepresentation | nn.Module | Tensor) -> Tensor:
         tensor = _scene_state_tensor(as_scene_representation(scene))
-        if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
+        if tuple(tensor.shape) != tuple(state.shape):
             raise ValueError(
                 "subspace operator received a scene with incompatible shape"
             )
@@ -737,15 +737,14 @@ def build_state_subspace_operator(
         out = torch.zeros_like(state)
         if squeeze:
             adj = torch.as_tensor(adjoint_tensor)
-            if adj.ndim != state.ndim - 1 or tuple(int(v) for v in adj.shape) != tuple(
-                int(v) for v in state.shape[1:]
+            if adj.ndim != state.ndim - 1 or tuple(adj.shape) != tuple(state.shape[1:]
             ):
                 raise ValueError("subspace adjoint returned an incompatible tensor")
             out[indices[0]] = adj.to(dtype=state.dtype, device=state.device)
             return out
         adj = torch.as_tensor(adjoint_tensor)
-        expected = (int(indices.numel()), *tuple(int(v) for v in state.shape[1:]))
-        if tuple(int(v) for v in adj.shape) != expected:
+        expected = (int(indices.numel()), *tuple(state.shape[1:]))
+        if tuple(adj.shape) != expected:
             raise ValueError("subspace adjoint returned an incompatible tensor")
         out.index_copy_(
             0,
@@ -818,7 +817,7 @@ def build_state_component_mixture_operator(
 
     def _mix(scene: SceneRepresentation | nn.Module | Tensor) -> Tensor:
         tensor = _scene_state_tensor(as_scene_representation(scene))
-        if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
+        if tuple(tensor.shape) != tuple(state.shape):
             raise ValueError(
                 "component mixture operator received a scene with incompatible shape"
             )
@@ -831,8 +830,8 @@ def build_state_component_mixture_operator(
 
     def _embed(adjoint_tensor: Tensor) -> Tensor:
         adj = torch.as_tensor(adjoint_tensor)
-        expected = tuple(int(v) for v in state.shape[1:])
-        if tuple(int(v) for v in adj.shape) != expected:
+        expected = tuple(state.shape[1:])
+        if tuple(adj.shape) != expected:
             raise ValueError(
                 "component mixture adjoint returned an incompatible tensor"
             )
@@ -1155,7 +1154,7 @@ class HarmonicComponentDecomposition(nn.Module):
     ) -> ComponentDecompositionDiagnostics:
         estimate = self.state() if state is None else torch.as_tensor(state)
         truth = torch.as_tensor(truth_state)
-        if tuple(int(v) for v in estimate.shape) != tuple(int(v) for v in truth.shape):
+        if tuple(estimate.shape) != tuple(truth.shape):
             raise ValueError("state and truth_state must have matching shape")
         if estimate.ndim < 2 or int(estimate.shape[0]) != len(self.component_roles):
             raise ValueError(
@@ -1216,8 +1215,7 @@ class HarmonicComponentDecomposition(nn.Module):
         calibration_transfer_stability = None
         if calibration_anchor is not None:
             anchor = torch.as_tensor(calibration_anchor)
-            if tuple(int(v) for v in anchor.shape) != tuple(
-                int(v) for v in shared_truth.shape
+            if tuple(anchor.shape) != tuple(shared_truth.shape
             ):
                 raise ValueError(
                     "calibration_anchor must match the aggregated shared-state shape"
@@ -1311,7 +1309,7 @@ def build_conditioned_component_mixture_operator(
 
     def _mix(scene: SceneRepresentation | nn.Module | Tensor) -> Tensor:
         tensor = _scene_state_tensor(as_scene_representation(scene))
-        if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
+        if tuple(tensor.shape) != tuple(state.shape):
             raise ValueError(
                 "conditioned component mixture received a scene with incompatible shape"
             )
@@ -1323,8 +1321,8 @@ def build_conditioned_component_mixture_operator(
 
     def _embed(adjoint_tensor: Tensor) -> Tensor:
         adj = torch.as_tensor(adjoint_tensor)
-        expected = tuple(int(v) for v in state.shape[1:])
-        if tuple(int(v) for v in adj.shape) != expected:
+        expected = tuple(state.shape[1:])
+        if tuple(adj.shape) != expected:
             raise ValueError(
                 "conditioned component mixture adjoint returned an incompatible tensor"
             )
@@ -1371,7 +1369,7 @@ def build_state_diagonal_operator(
 ) -> BoundObservationOperator:
     state = torch.as_tensor(reference_state)
     diag = torch.as_tensor(diagonal)
-    if tuple(int(v) for v in diag.shape) != tuple(int(v) for v in state.shape):
+    if tuple(diag.shape) != tuple(state.shape):
         raise ValueError("diagonal shape must match reference_state shape")
     target = TargetRenderSpec(
         header={
@@ -1387,7 +1385,7 @@ def build_state_diagonal_operator(
     ) -> Tensor:
         del target_spec
         tensor = _scene_state_tensor(scene)
-        if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
+        if tuple(tensor.shape) != tuple(state.shape):
             raise ValueError(
                 "state-space diagonal operator received a scene with incompatible shape"
             )
@@ -1395,7 +1393,7 @@ def build_state_diagonal_operator(
 
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
-        if tuple(int(v) for v in mapped.shape) != tuple(int(v) for v in state.shape):
+        if tuple(mapped.shape) != tuple(state.shape):
             raise ValueError(
                 "state-space diagonal adjoint received data with incompatible shape"
             )
@@ -1439,7 +1437,7 @@ def build_state_matrix_operator(
     ) -> Tensor:
         del target_spec
         tensor = _scene_state_tensor(scene)
-        if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
+        if tuple(tensor.shape) != tuple(state.shape):
             raise ValueError(
                 "state-space matrix operator received a scene with incompatible shape"
             )
@@ -1451,7 +1449,7 @@ def build_state_matrix_operator(
 
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
-        if tuple(int(v) for v in mapped.shape) != tuple(int(v) for v in state.shape):
+        if tuple(mapped.shape) != tuple(state.shape):
             raise ValueError(
                 "state-space matrix adjoint received data with incompatible shape"
             )
@@ -1501,7 +1499,7 @@ def build_state_low_rank_operator(
     ) -> Tensor:
         del target_spec
         tensor = _scene_state_tensor(scene)
-        if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
+        if tuple(tensor.shape) != tuple(state.shape):
             raise ValueError(
                 "state-space low-rank operator received a scene with incompatible shape"
             )
@@ -1560,7 +1558,7 @@ def build_state_kronecker_operator(
     ) -> Tensor:
         del target_spec
         tensor = _scene_state_tensor(scene)
-        if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
+        if tuple(tensor.shape) != tuple(state.shape):
             raise ValueError(
                 "Kronecker state operator received a scene with incompatible shape"
             )
@@ -1570,7 +1568,7 @@ def build_state_kronecker_operator(
 
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
-        if mapped.ndim != 2 or tuple(int(v) for v in mapped.shape) != (
+        if mapped.ndim != 2 or tuple(mapped.shape) != (
             out_rows,
             out_cols,
         ):
@@ -1872,7 +1870,7 @@ def build_spin_harmonic_kronecker_prior_operator(
         eb_t = torch.as_tensor(
             eb_coupling, dtype=harmonic_t.dtype, device=harmonic_t.device
         )
-        if eb_t.ndim != 2 or tuple(int(v) for v in eb_t.shape) != (2, 2):
+        if eb_t.ndim != 2 or tuple(eb_t.shape) != (2, 2):
             raise ValueError("eb_coupling must have shape (2, 2)")
     return build_state_kronecker_operator(
         state,
@@ -2028,7 +2026,7 @@ def build_teb_cls_prior_operator(
     ) -> Tensor:
         del target_spec
         tensor = _scene_state_tensor(scene)
-        if tuple(int(v) for v in tensor.shape) != tuple(int(v) for v in state.shape):
+        if tuple(tensor.shape) != tuple(state.shape):
             raise ValueError("TEB Cl prior received a scene with incompatible shape")
         tensor_t = tensor.to(dtype=factors.dtype, device=factors.device)
         mapped = torch.einsum("nij,jn->in", factors, tensor_t)
@@ -2036,7 +2034,7 @@ def build_teb_cls_prior_operator(
 
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
-        if tuple(int(v) for v in mapped.shape) != tuple(int(v) for v in state.shape):
+        if tuple(mapped.shape) != tuple(state.shape):
             raise ValueError(
                 "TEB Cl prior adjoint received data with incompatible shape"
             )

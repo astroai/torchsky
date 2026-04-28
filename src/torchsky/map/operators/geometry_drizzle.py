@@ -529,13 +529,13 @@ def exact_square_drizzle_project(
     if value_semantics == "flux":
         source_area_sr = pixel_area_sr_map_fn(
             source_wcs,
-            tuple(int(v) for v in image.shape),
+            tuple(image.shape),
             device=image.device,
         )
         source_representative_area_sr = float(
             representative_pixel_area_fn(
                 source_wcs,
-                tuple(int(v) for v in image.shape),
+                tuple(image.shape),
                 device=image.device,
             )
         )
@@ -545,7 +545,7 @@ def exact_square_drizzle_project(
             else float(
                 representative_pixel_area_fn(
                     target.wcs,
-                    tuple(int(v) for v in target.shape),
+                    tuple(target.shape),
                     device=image.device,
                 )
             )
@@ -579,13 +579,13 @@ def exact_square_drizzle_project(
     pixmap = _build_center_pixmap(
         source_wcs,
         target.wcs,
-        tuple(int(v) for v in image.shape),
+        tuple(image.shape),
         image.device,
     )
     row_min, row_max = _scanner_row_bounds(
         pixmap,
-        source_shape=tuple(int(v) for v in image.shape),
-        target_shape=tuple(int(v) for v in target.shape),
+        source_shape=tuple(image.shape),
+        target_shape=tuple(target.shape),
     )
 
     for start in range(0, int(xs.numel()), int(chunk_pixels)):
@@ -708,13 +708,13 @@ def exact_point_drizzle_project(
     if value_semantics == "flux":
         source_area_sr = pixel_area_sr_map_fn(
             source_wcs,
-            tuple(int(v) for v in image.shape),
+            tuple(image.shape),
             device=image.device,
         )
         source_representative_area_sr = float(
             representative_pixel_area_fn(
                 source_wcs,
-                tuple(int(v) for v in image.shape),
+                tuple(image.shape),
                 device=image.device,
             )
         )
@@ -724,7 +724,7 @@ def exact_point_drizzle_project(
             else float(
                 representative_pixel_area_fn(
                     target.wcs,
-                    tuple(int(v) for v in target.shape),
+                    tuple(target.shape),
                     device=image.device,
                 )
             )
@@ -757,13 +757,13 @@ def exact_point_drizzle_project(
     pixmap = _build_center_pixmap(
         source_wcs,
         target.wcs,
-        tuple(int(v) for v in image.shape),
+        tuple(image.shape),
         image.device,
     )
     row_min, row_max = _scanner_row_bounds(
         pixmap,
-        source_shape=tuple(int(v) for v in image.shape),
-        target_shape=tuple(int(v) for v in target.shape),
+        source_shape=tuple(image.shape),
+        target_shape=tuple(target.shape),
     )
 
     for start in range(0, int(xs.numel()), int(chunk_pixels)):

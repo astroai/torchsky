@@ -116,7 +116,7 @@ def resample_lastdim_periodic_affine_fft(
     w = (float_idx - idx0.to(torch.float64)).clamp(0.0, 1.0)
     idx0m = torch.remainder(idx0, nu).to(torch.long)
     idx1m = torch.remainder(idx0m + 1, nu).to(torch.long)
-    lead = tuple(int(d) for d in x.shape[:-1])
+    lead = tuple(x.shape[:-1])
     idx0e = _expand_index_along_last_dim(idx0m, lead)
     idx1e = _expand_index_along_last_dim(idx1m, lead)
     v0 = torch.gather(x_up, -1, idx0e)
