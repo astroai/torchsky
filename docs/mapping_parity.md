@@ -49,7 +49,7 @@ Field models live under `torchsky.map.field` (package: `map/field/`, with `core`
 
 ## Developers (editable installs)
 
-Scikit-build editable installs record a static module→path map in `_torchsky_editable.py`. After **moving or renaming** Python modules (for example splitting `map/field.py` into a `map/field/` package), run **`uv pip install -e .`** (or your equivalent) so imports resolve to the new layout.
+Scikit-build editable installs record a static module→path map in `_torchsky_editable.py`. After **moving or renaming** Python modules (for example splitting `map/field.py` into a `map/field/` package), rerun an editable install with Pixi (`pixi run -e default -- python -m pip install -e . --no-build-isolation`) so imports resolve to the new layout.
 
 **Optional comparators:** `reproject`, **`dfreproject`**, the Python **`drizzle`** package, and other legacy stack clients are pulled in by **`torchsky[bench]`** for benchmarks and external comparisons, not by **`torchsky[test]`**. Modules are skipped when the dependency is absent: `test_map_reproject_fft_parity` (`reproject`), `test_map_dfreproject_parity` (`dfreproject`), `test_map_drizzle_external_parity` (`drizzle`).
 

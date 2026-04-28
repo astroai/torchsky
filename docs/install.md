@@ -48,19 +48,17 @@ On macOS, install Xcode Command Line Tools if not present:
 xcode-select --install
 ```
 
-    ```bash
-    git clone https://github.com/sfabbro/torchsky.git
-    cd torchsky
-    ```
+Clone the repository and prepare vendored sources:
 
 ```bash
-git clone https://github.com/sfabbro/torchfits.git
-cd torchfits
+git clone https://github.com/sfabbro/torchsky.git
+cd torchsky
 ./extern/vendor.sh      # download vendored CFITSIO sources
 pip install -e .        # editable install
 ```
 
-    `torchsky` vendors its C dependency (`cfitsio`) to simplify installation. Run the vendoring script to prepare the source tree:
+`torchsky` vendors its C dependency (`cfitsio`) to simplify installation.
+For a non-editable install, run:
 
 ```bash
 pip install .
@@ -70,16 +68,17 @@ The build uses [scikit-build-core](https://scikit-build-core.readthedocs.io/) an
 
 ### Vendored CFITSIO
 
-    Editable install (typical development):
+Editable install (typical development):
 
 ```bash
 ./extern/vendor.sh --cfitsio-version cfitsio-4.6.2
+pip install -e . --no-build-isolation
 ```
 
-    Non-editable:
+System CFITSIO (disable vendored build):
 
 ```bash
-pip install -e . --config-settings=cmake.args="-DTORCHFITS_USE_VENDORED_CFITSIO=OFF"
+pip install . --config-settings=cmake.args="-DTORCHSKY_USE_VENDORED_CFITSIO=OFF"
 ```
 
 #### Pip only (no Pixi / no conda env manager)
@@ -109,7 +108,7 @@ Adjust `CUDA_HOME` if your toolkit lives elsewhere (e.g. `/usr/local/cuda`). CPU
 
 ### Troubleshooting
 
-torchfits reads FITS data on the CPU and places the resulting tensor on the requested device. No GPU-specific build steps are required — just install PyTorch with CUDA or MPS support:
+torchsky reads FITS data on the CPU and places the resulting tensor on the requested device. No GPU-specific build steps are required — just install PyTorch with CUDA or MPS support:
 
 - **Compiler Errors?**
   Verify your C++ compiler supports C++17. On macOS, ensure Xcode Command Line Tools are installed (`xcode-select --install`).

@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **py.typed**: PEP 561 type-checker marker for downstream type inference.
-- **Incorporated torchfits v0.3.2 changes**:
+- **Incorporated legacy `torchfits` v0.3.2 changes into `torchsky`**:
   - **Secure where parser** (`_where.py`): Replaced `numexpr.evaluate`/`eval()` fallback in `TableHDU.filter` and table filtering with a secure SQL-like expression parser; `&`/`|`/`~` shimmed to `AND`/`OR`/`NOT`.
   - **HealSparse/real-data validation tests**: `test_healsparse_upstream.py`, `test_real_data_validation.py`, `test_security_fix.py`, `test_header_parser.py`.
   - **Benchmark replay**: `benchmarks/replays/replay_real_data_validation.py` for local and public FITS parity validation.
-  - **Additional tests**: `test_fitsio_upstream_smoke.py`, `test_logging.py` from torchfits.
+  - **Additional tests**: `test_fitsio_upstream_smoke.py`, `test_logging.py` from the legacy `torchfits` codebase.
 
 ### Fixed
 - **Security**: `TableHDU.filter` no longer uses `eval()` or `numexpr.evaluate`; code injection attempts now raise `ValueError`.

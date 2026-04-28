@@ -1,6 +1,6 @@
 # torchsky Benchmarks
 
-torchfits is benchmarked for both **correctness** and **throughput** against upstream libraries across four domains. This page documents the methodology, how to reproduce the results, and the latest release snapshot.
+torchsky is benchmarked for both **correctness** and **throughput** against upstream libraries across four domains. This page documents the methodology, how to reproduce the results, and the latest release snapshot.
 
 **Open-source comparator matrix (multi-env installs, legacy WCS, HEALPix ecosystem, map stackers):** see **[Benchmark comparators](benchmark_comparators.md)**. Record installed versions with `pixi run bench-comparator-versions-all` (writes under `benchmarks_results/`).
 
@@ -69,7 +69,7 @@ On each push/PR, workflow **Map mosaic (bench extras + compat gate)** (see `.git
 
 Each case measures **median wall-clock time** over multiple repetitions (typically 3-9 runs). Cases are grouped into two families:
 
-- **smart** &mdash; the idiomatic, high-level API a user would call (e.g. `torchfits.read()` vs `astropy.io.fits.getdata()` + `torch.from_numpy()`). Primary adoption view.
+- **smart** &mdash; the idiomatic, high-level API a user would call (e.g. `torchsky.read()` vs `astropy.io.fits.getdata()` + `torch.from_numpy()`). Primary adoption view.
 - **specialized** &mdash; lower-level or library-specific call paths with explicit mmap control. Used for controlled I/O comparisons.
 
 Fairness controls:
@@ -100,7 +100,7 @@ Every benchmark run produces three artifacts in `benchmarks_results/<run_id>/`:
 | File | Contents |
 |---|---|
 | `results.csv` | One row per (case, library, family) with median time, throughput, rank, lag ratio |
-| `torchfits_deficits.csv` | Only cases where torchfits is not first in its family |
+| `torchsky_deficits.csv` | Only cases where torchsky is not first in its family |
 | `summary.md` | Scorecard with win rates, adoption checks, and deficit table |
 
 ---
@@ -584,7 +584,7 @@ Run ID: `20260318_083620`. Run date: 2026-03-18. Profile: `user`. Platform: macO
 
 ### Scorecard
 
-| Domain | Family | Cases | torchfits First | Win Rate |
+| Domain | Family | Cases | torchsky First | Win Rate |
 |---|---|---:|---:|---:|
 | fits | smart | 84 | 84 | 100.0% |
 | fits | specialized | 165 | 165 | 100.0% |
@@ -595,7 +595,7 @@ Run ID: `20260318_083620`. Run date: 2026-03-18. Profile: `user`. Platform: macO
 
 **Large-N leadership** (N &ge; 100K): 100% across all domains. Zero large-N deficits.
 
-Note: fitsio is present in the suite but excluded from FITS and table rankings due to mmap fairness enforcement (its mmap mode is not independently controllable). The comparable pairs are torchfits vs astropy.
+Note: fitsio is present in the suite but excluded from FITS and table rankings due to mmap fairness enforcement (its mmap mode is not independently controllable). The comparable pairs are torchsky vs astropy.
 
 ---
 
@@ -603,9 +603,9 @@ Note: fitsio is present in the suite but excluded from FITS and table rankings d
 
 Compared against **astropy** (smart family). Coverage: 7 dtypes (int8 &ndash; float64), 1D/2D/3D, 4 size tiers, Rice/HCOMPRESS/GZIP compressed, BSCALE/BZERO scaled, MEF, cutouts, header-only reads.
 
-**Representative `read_full` results (smart family, torchfits vs astropy):**
+**Representative `read_full` results (smart family, torchsky vs astropy):**
 
-| Case | torchfits | astropy | Ratio (astropy / tf) |
+| Case | torchsky | astropy | Ratio (astropy / tf) |
 |---|---:|---:|---:|
 | tiny_int16_1d | 73 &mu;s | 6.5 ms | 89x |
 | tiny_int32_1d | 31 &mu;s | 2.6 ms | 87x |
@@ -629,9 +629,9 @@ Win rate: **100%** across all 84 smart-family and 165 specialized-family compara
 
 Compared against **astropy** (smart family). Coverage: narrow/wide/mixed/varlen schemas, 1K &ndash; 1M rows, column projection, row slicing, predicate filter, streaming scan.
 
-**Representative results (smart family, torchfits vs astropy):**
+**Representative results (smart family, torchsky vs astropy):**
 
-| Case | torchfits | astropy | Ratio |
+| Case | torchsky | astropy | Ratio |
 |---|---:|---:|---:|
 | narrow_1000 [read_full] | 58 &mu;s | 1.6 ms | 27x |
 | narrow_1000000 [read_full] | 131 &mu;s | 22.1 ms | 168x |
@@ -651,7 +651,7 @@ Win rate: **100%** across all 70 smart-family and 70 specialized-family comparab
 
 Compared against **astropy.wcs** (smart family). PyAST and Kapteyn are available as legacy comparators when bridge data is present but were not included in this run. Coverage: 15 projections &times; forward/inverse &times; N = {1K, 10K, 100K, 1M, 10M}.
 
-**Results at N = 10M (smart family, torchfits vs astropy.wcs):**
+**Results at N = 10M (smart family, torchsky vs astropy.wcs):**
 
 | Projection | Forward | Inverse | Forward ratio | Inverse ratio |
 |---|---:|---:|---:|---:|
@@ -697,7 +697,7 @@ Compared against **healpy**, **hpgeom**, **astropy-healpix**, **healsparse**, an
 
 **HEALPix geometry (CPU):**
 
-| Operation | torchfits | healpy | Ratio (healpy / tf) |
+| Operation | torchsky | healpy | Ratio (healpy / tf) |
 |---|---:|---:|---:|
 | ang2pix ring | 2.6 ms | 5.6 ms | 2.1x |
 | ang2pix nested | 3.9 ms | 5.8 ms | 1.5x |
@@ -708,7 +708,7 @@ Compared against **healpy**, **hpgeom**, **astropy-healpix**, **healsparse**, an
 
 **Advanced HEALPix:**
 
-| Operation | torchfits | healpy | Ratio |
+| Operation | torchsky | healpy | Ratio |
 |---|---:|---:|---:|
 | neighbors nested | 1.6 ms | 4.1 ms | 2.6x |
 | neighbors ring | 6.7 ms | 9.4 ms | 1.4x |
@@ -719,19 +719,19 @@ Compared against **healpy**, **hpgeom**, **astropy-healpix**, **healsparse**, an
 
 **Spherical polygons:**
 
-| Operation | torchfits | spherical-geometry | Ratio |
+| Operation | torchsky | spherical-geometry | Ratio |
 |---|---:|---:|---:|
 | contains (non-convex, N points) | 9.2 ms | 28.2 s | 3072x |
 
 **Sparse maps:**
 
-| Operation | torchfits | dense CPU baseline | Ratio |
+| Operation | torchsky | dense CPU baseline | Ratio |
 |---|---:|---:|---:|
 | ud_grade | 24.8 ms | 60.5 ms | 2.4x |
 
 **Spherical harmonics:**
 
-| Operation | torchfits | healpy | Ratio (healpy / tf) |
+| Operation | torchsky | healpy | Ratio (healpy / tf) |
 |---|---:|---:|---:|
 | map2alm_spin | 1.1 ms | 170 &mu;s | 0.2x |
 | alm2map_spin | 926 &mu;s | 111 &mu;s | 0.1x |
@@ -787,7 +787,7 @@ Win rate: **88.9%** (16/18). Large-N: **100%** (13/13). Two deficits listed belo
 
 ## Sphere Benchmark Policy
 
-- Comparator libraries must come from official released distributions (pip/uv/conda), not local repo clones.
+- Comparator libraries must come from official released distributions (pip/conda), not local repo clones.
 - `bench_healpix.py` and `bench_sphere_geometry.py` now print comparator package provenance and fail by default on local/editable/VCS installs.
 - `bench_sphere_matrix.py` runs `uniform/boundary/mixed` profiles and can enforce median torchsky/healpy speed-ratio floors.
 - `bench_sphere_polygons.py` benchmarks non-convex polygon contains/intersects/query/area, includes medium-size `contains` threshold rows plus upstream difficult-overlap intersection rows, optionally checks parity against released `spherical-geometry`, and now emits `torchsky_recommendation` rows describing the preferred contains/intersection backend on the measured workload.

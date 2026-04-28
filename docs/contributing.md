@@ -16,8 +16,8 @@ Repository-specific coding-agent and engineering guidance lives in `../AGENTS.md
 ## Development Setup
 
 ```bash
-git clone https://github.com/sfabbro/torchfits.git
-cd torchfits
+git clone https://github.com/sfabbro/torchsky.git
+cd torchsky
 pixi install
 pixi run test
 ```
@@ -32,10 +32,10 @@ The project uses [pixi](https://pixi.sh/) for environment management, [ruff](htt
 - Docs: `docs/`
 
 ```
-src/torchfits/          Python package
-src/torchfits/cpp_src/  C++ native extension (nanobind + CFITSIO)
-src/torchfits/wcs/      Pure-PyTorch WCS implementation
-src/torchfits/sphere/   HEALPix, spherical geometry, SHT
+src/torchsky/          Python package
+src/torchsky/cpp_src/  C++ native extension (nanobind + CFITSIO)
+src/torchsky/wcs/      Pure-PyTorch WCS implementation
+src/torchsky/sphere/   HEALPix, spherical geometry, SHT
 extern/cfitsio/         Vendored CFITSIO sources
 tests/                  Unit and integration tests
 benchmarks/             Benchmark scripts and replay gates

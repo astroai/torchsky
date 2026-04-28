@@ -395,7 +395,7 @@ Functions in `torchsky.sphere.compat` (and the `torchsky.sphere.healpy` alias) m
 | `NativeExactSphericalRegion` | extended | dependency-free exact-backend scaffold |
 | `SparseHealpixMap` | parity | coverage-aware sparse map; dense-equivalent `ud_grade` |
 
-Strict mode (`torchfits.sphere.compat.set_strict_mode(True)`) delegates certain operations to [hpgeom](https://github.com/LSSTDESC/hpgeom) for bit-exact results where needed.
+Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) delegates certain operations to [hpgeom](https://github.com/LSSTDESC/hpgeom) for bit-exact results where needed.
 
 ---
 
@@ -405,7 +405,7 @@ Strict mode (`torchfits.sphere.compat.set_strict_mode(True)`) delegates certain 
 |---|---|
 | `map2alm` | `use_pixel_weights` and `gal_cut` are not yet supported by the torch backend. Falls back to healpy when requested. |
 | `map2alm_spin` / `alm2map_spin` | Functional but slower than healpy's C implementation (~6-8x). Optimization target for 0.4.x. |
-| CYP projection | Forward and inverse not yet implemented in `torchfits.wcs`. |
+| CYP projection | Forward and inverse not yet implemented in `torchsky.wcs`. |
 | Pixel windows | Packaged tables cover standard HEALPix NSIDE range. Higher NSIDE may require external data. |
 | GPU | HEALPix geometry primitives and SHT run on CUDA and MPS. Polygon operations are CPU-only. |
 | Complex columns | Not supported in mmap table reads or in-place updates. |

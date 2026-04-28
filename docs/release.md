@@ -83,11 +83,11 @@ Publishing triggers `.github/workflows/build_wheels.yml`, which:
 
 1. Runs tests.
 2. Builds wheels on Linux and macOS plus sdist.
-3. Uploads to [PyPI](https://pypi.org/project/torchfits/) via trusted publishing.
+3. Uploads to [PyPI](https://pypi.org/project/torchsky/) via trusted publishing.
 
 ## 9. Post-release verification
 
-- [ ] `pip install torchfits==X.Y.Z` works in a fresh environment.
-- [ ] `import torchfits; print(torchfits.__version__)` shows correct version.
-- [ ] `torchfits.read(...)` runs without import errors.
+- [ ] `pip install torchsky==X.Y.Z` works in a fresh environment.
+- [ ] `import torchsky; print(torchsky.__version__)` shows correct version.
+- [ ] `torchsky.read(...)` runs without import errors.
 - [ ] Changelog and release notes links resolve.
