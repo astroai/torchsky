@@ -10,6 +10,12 @@ import math
 import re
 from pathlib import Path
 from typing import Any, Literal
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import numpy
+else:
+    import numpy
 
 import torch
 
