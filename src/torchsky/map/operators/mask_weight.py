@@ -38,8 +38,7 @@ def load_image_observation_weight_map(
             device=str(device),
         )
         source_weight = _validate_image_plane_2d(source_weight)
-        if tuple(int(v) for v in source_weight.shape) != tuple(
-            int(v) for v in image.shape
+        if tuple(source_weight.shape) != tuple(image.shape
         ):
             raise ValueError("Weight map shape must match the observation image shape")
         source_weight = source_weight.to(device=device, dtype=torch.float32)
@@ -55,7 +54,7 @@ def load_image_observation_weight_map(
             getattr(obs, "mask_path"), hdu=getattr(obs, "mask_hdu"), device=str(device)
         )
         mask = _validate_image_plane_2d(mask)
-        if tuple(int(v) for v in mask.shape) != tuple(int(v) for v in image.shape):
+        if tuple(mask.shape) != tuple(image.shape):
             raise ValueError("Mask shape must match the observation image shape")
         mask = mask.to(device=device, dtype=torch.float32)
         mask = torch.where(
@@ -72,7 +71,7 @@ def load_image_observation_weight_map(
             device=str(device),
         )
         pb = _validate_image_plane_2d(pb)
-        if tuple(int(v) for v in pb.shape) != tuple(int(v) for v in image.shape):
+        if tuple(pb.shape) != tuple(image.shape):
             raise ValueError(
                 "primary_beam map shape must match the observation image shape"
             )

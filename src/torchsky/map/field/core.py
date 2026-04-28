@@ -1149,7 +1149,7 @@ def field_component_centroid_anchor_loss(
             dtype=prediction.dtype,
         )
         x_grid, y_grid = _pixel_coordinate_grids(
-            tuple(int(v) for v in prediction.shape),
+            tuple(prediction.shape),
             device=prediction.device,
             dtype=prediction.dtype,
         )
@@ -3316,7 +3316,7 @@ class _HashGridEncoder(nn.Module):
         if isinstance(log2_hashmap_size, int):
             log2_seq = (int(log2_hashmap_size),) * self.num_levels
         else:
-            log2_seq = tuple(int(x) for x in log2_hashmap_size)
+            log2_seq = tuple(log2_hashmap_size)
             if len(log2_seq) != self.num_levels:
                 raise ValueError(
                     "len(log2_hashmap_size) must equal num_levels when a sequence is passed"

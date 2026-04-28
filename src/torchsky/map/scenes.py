@@ -65,8 +65,7 @@ class DiscreteTargetImage(SceneRepresentation):
     value_semantics: str = "surface_brightness"
 
     def render_to_target(self, target: TargetRenderSpec, **kwargs) -> Tensor:
-        if tuple(int(v) for v in self.data.shape[-2:]) != tuple(
-            int(v) for v in target.shape
+        if tuple(self.data.shape[-2:]) != tuple(target.shape
         ):
             raise ValueError(
                 "DiscreteTargetImage shape must match TargetRenderSpec shape"

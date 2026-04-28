@@ -479,7 +479,7 @@ class SpectralReader:
 
             spectral_axis, spectral_axis_index = spectral_axis_from_header(
                 header,
-                data_shape=tuple(int(v) for v in data.shape),
+                data_shape=tuple(data.shape),
             )
 
             # Create spatial WCS if available

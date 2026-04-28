@@ -461,7 +461,7 @@ def _coerce_product_plane(
     shape: tuple[int, int],
 ) -> Tensor:
     if rendered.ndim == 2:
-        if tuple(int(v) for v in rendered.shape) != shape:
+        if tuple(rendered.shape) != shape:
             raise ValueError(
                 "scene render plane shape must match MapProductSpec target shape"
             )
@@ -470,7 +470,7 @@ def _coerce_product_plane(
         if int(rendered.shape[0]) != n_bands:
             raise ValueError("scene render cube must match MapProductSpec band count")
         plane = rendered[band_index]
-        if tuple(int(v) for v in plane.shape) != shape:
+        if tuple(plane.shape) != shape:
             raise ValueError(
                 "scene render cube plane shape must match MapProductSpec target shape"
             )

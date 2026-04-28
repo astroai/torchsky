@@ -287,7 +287,7 @@ def accumulate_image_on_alm_adjoint(
         raise ValueError("image must be a 2D tensor with shape [NAXIS2, NAXIS1]")
     h = int(source_header["NAXIS2"])
     w = int(source_header["NAXIS1"])
-    if tuple(int(v) for v in img.shape) != (h, w):
+    if tuple(img.shape) != (h, w):
         raise ValueError("image shape must match source_header NAXIS2/NAXIS1")
     ll = int(lmax)
     mm = int(ll if mmax is None else mmax)
@@ -349,7 +349,7 @@ def accumulate_image_on_spin_alm_adjoint(
         raise ValueError("maps must have shape (2, NAXIS2, NAXIS1)")
     h = int(source_header["NAXIS2"])
     w = int(source_header["NAXIS1"])
-    if tuple(int(v) for v in maps_t.shape[-2:]) != (h, w):
+    if tuple(maps_t.shape[-2:]) != (h, w):
         raise ValueError("maps shape must match source_header NAXIS2/NAXIS1")
     raw_spin = float(torch.as_tensor(spin).item())
     spin_i = int(raw_spin)
