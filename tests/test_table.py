@@ -442,6 +442,26 @@ def test_close_cpp_handle_suppresses_exception():
     _close_cpp_handle(mock_handle)
     mock_handle.close.assert_called_once()
 
+
+    def test_is_compatible_arrow_table_edge_cases(self):
+        import torchsky.table as tbl
+        from unittest import mock
+
+        # We test _can_use_mmap_row_path_for_full_read as this corresponds to the implementation
+        # of the compatibility check in table.py
+
+        # Test Exception in get_header
+        with mock.patch("torchsky.get_header", side_effect=Exception("mocked error")):
+            assert tbl._can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
+
+        # Test TFIELDS = 0
+        with mock.patch("torchsky.get_header", return_value={"TFIELDS": 0}):
+            assert tbl._can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
+
+        # Test missing TTYPE keys
+        with mock.patch("torchsky.get_header", return_value={"TFIELDS": 2}):
+            assert tbl._can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
+
 if __name__ == "__main__":
     import pytest
 
