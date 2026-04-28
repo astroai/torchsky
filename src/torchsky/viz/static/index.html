@@ -194,6 +194,11 @@
       background: transparent;
       user-select: none;
     }
+    .tab:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+      border-radius: var(--r-md);
+    }
     .tab:hover { background: var(--bg-hover); color: var(--text-primary); }
     .tab.active {
       background: var(--accent);
@@ -285,6 +290,10 @@
       color: var(--text-secondary);
       transition: all var(--ease-fast) var(--ease);
     }
+    .pill:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     .pill:hover { border-color: var(--accent); color: var(--accent); }
     .pill.active {
       background: var(--accent);
@@ -359,6 +368,10 @@
       transition: background var(--ease-fast) var(--ease);
       border: none;
       flex-shrink: 0;
+    }
+    .toggle:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
     }
     .toggle.on { background: var(--accent); }
     .toggle::after {
