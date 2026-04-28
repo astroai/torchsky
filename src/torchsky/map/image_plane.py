@@ -374,7 +374,9 @@ def _pixel_area_sr_map(
     ddec_dx = dec_dx - dec_c
     ddec_dy = dec_dy - dec_c
     det_deg2 = torch.abs(dra_dx * ddec_dy - dra_dy * ddec_dx)
-    area_sr = torch.clamp(det_deg2 * ((torch.pi / 180.0) ** 2), min=1e-16)
+    # Optimization: precalculate square for performance
+    d2r = torch.pi / 180.0
+    area_sr = torch.clamp(det_deg2 * (d2r * d2r), min=1e-16)
     return area_sr.to(dtype=torch.float32)
 
 
@@ -396,7 +398,9 @@ def _representative_pixel_area_sr(
     ddec_dx = dec_dx - dec_c
     ddec_dy = dec_dy - dec_c
     det_deg2 = torch.abs(dra_dx * ddec_dy - dra_dy * ddec_dx)
-    area_sr = torch.clamp(det_deg2 * ((torch.pi / 180.0) ** 2), min=1e-16)
+    # Optimization: precalculate square for performance
+    d2r = torch.pi / 180.0
+    area_sr = torch.clamp(det_deg2 * (d2r * d2r), min=1e-16)
     return float(area_sr.mean().item())
 
 
@@ -826,7 +830,10 @@ def _spherical_cap_radius_from_world_grid(
     )
     dec0 = torch.tensor(center_dec_deg, dtype=dec_deg.dtype, device=dec_deg.device)
     cos_dec = torch.cos(dec_deg * (math.pi / 180.0))
-    chord = torch.sqrt((dra * cos_dec) ** 2 + (dec_deg - dec0) ** 2)
+    # Optimization: use * instead of **2 for performance
+    dra_cos = dra * cos_dec
+    ddec = dec_deg - dec0
+    chord = torch.sqrt(dra_cos * dra_cos + ddec * ddec)
     return float(torch.max(chord).item())
 
 

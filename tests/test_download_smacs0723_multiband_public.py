@@ -5,6 +5,9 @@ pytest.importorskip('requests')
 
 import sys
 from pathlib import Path
+import pytest
+
+pytest.importorskip("requests")
 
 import pytest
 
