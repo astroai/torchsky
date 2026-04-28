@@ -1011,7 +1011,7 @@ function updateDRCard(dr) {
     <span class="stat-key">DR ratio</span><span class="stat-val">${fmt(dr.dr_ratio)}×</span>
     <span class="stat-key">Neg. frac.</span><span class="stat-val">${(dr.neg_fraction*100).toFixed(2)}%</span>
     <span class="stat-key">CR frac.</span><span class="stat-val">${(dr.cr_fraction*100).toFixed(4)}%</span>
-    <span class="stat-key">Rec. stretch</span><span class="stat-val">${dr.recommended_stretch}</span>
+    <span class="stat-key">Rec. stretch</span><span class="stat-val">${htmlEscape(dr.recommended_stretch)}</span>
   `;
   const warns = $('dr-warns');
   warns.innerHTML = '';

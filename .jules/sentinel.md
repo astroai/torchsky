@@ -1,4 +1,4 @@
-## 2025-02-18 - XSS via innerHTML in Viz Frontend
-**Vulnerability:** Unescaped variables (e.g. `item.name`, `wcs.ctype1`) were passed directly into `innerHTML` strings in `src/torchsky/viz/static/index.html`.
-**Learning:** Even internal visualization tools reading standard file formats (like FITS) are vulnerable to XSS if an attacker provides a crafted file with malicious metadata.
-**Prevention:** Always use a utility function to escape HTML special characters before interpolating any dynamic strings into `innerHTML`.
+## 2025-04-24 - Unescaped User Input in DOM (XSS)
+**Vulnerability:** The vanilla JavaScript frontend in `src/torchsky/viz/static/index.html` was directly interpolating `dr.recommended_stretch` (which comes from external FITS headers or API responses) into the DOM using `innerHTML` without sanitization.
+**Learning:** `innerHTML` is inherently dangerous when combined with string interpolation of external data. The codebase had an existing `htmlEscape` function, but it was inconsistently applied.
+**Prevention:** Always wrap external or untrusted string data with `htmlEscape()` before injecting it into `innerHTML`, or prefer using safer alternatives like `textContent`.
