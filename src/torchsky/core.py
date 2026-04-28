@@ -8,7 +8,7 @@ and checksum verification as specified in Phase 1.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 import re
 import torch
@@ -102,8 +102,8 @@ class CompressionHandler:
 
     @staticmethod
     def detect_compression(
-        header: Dict[str, Any],
-    ) -> Tuple[CompressionType, Dict[str, Any]]:
+        header: dict[str, Any],
+    ) -> tuple[CompressionType, dict[str, Any]]:
         """Detect compression type and parameters from header - optimized."""
         zcmptype = header.get("ZCMPTYPE", "").strip()
 
@@ -123,7 +123,7 @@ class CompressionHandler:
         return comp_type, params
 
     @staticmethod
-    def is_compressed(header: Dict[str, Any]) -> bool:
+    def is_compressed(header: dict[str, Any]) -> bool:
         """Check if HDU is compressed - fast path."""
         return "ZCMPTYPE" in header and bool(header.get("ZCMPTYPE", "").strip())
 
@@ -142,7 +142,7 @@ class ChecksumVerifier:
 
     @staticmethod
     def verify_checksum(
-        header: Dict[str, Any], data: Optional[np.ndarray] = None
+        header: dict[str, Any], data: np.ndarray | None = None
     ) -> bool:
         """Placeholder until CFITSIO-native CHECKSUM/DATASUM validation is wired in."""
         return True
@@ -191,7 +191,7 @@ class FITSCore:
         return file_path, hdu_index, tuple(slices)
 
     @staticmethod
-    def get_data_info(header: Dict[str, Any]) -> Dict[str, Any]:
+    def get_data_info(header: dict[str, Any]) -> dict[str, Any]:
         """Extract data information from FITS header."""
         naxis = header.get("NAXIS", 0)
         if naxis == 0:
@@ -229,7 +229,7 @@ class FITSCore:
 
     @staticmethod
     def process_data(
-        data: np.ndarray, header: Dict[str, Any], verify_checksum: bool = False
+        data: np.ndarray, header: dict[str, Any], verify_checksum: bool = False
     ) -> torch.Tensor:
         """Process raw FITS data into PyTorch tensor - optimized fast path."""
         # Handle byte order issues (fast path - check first)
