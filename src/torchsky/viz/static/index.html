@@ -83,7 +83,6 @@
     :focus-visible {
       outline: 2px solid var(--accent);
       outline-offset: 2px;
-      border-radius: 2px;
     }
 
     /* --------------------------------------------------------
@@ -588,10 +587,11 @@
       <div class="logo-star"></div>
       torchsky viz
     </div>
-    <div class="tab-group" role="tablist">
+    <div class="tab-group" role="tablist" aria-label="Main Navigation">
       <button class="tab active" id="tab-fits" data-panel="fits" role="tab" aria-selected="true" aria-controls="aladin-fits">FITS Browser</button>
       <button class="tab" id="tab-sky" data-panel="sky" role="tab" aria-selected="false" aria-controls="aladin-sky">Sky View</button>
       <button class="tab" id="tab-validate" data-panel="validate" role="tab" aria-selected="false" aria-controls="validate-panel">Validation</button>
+    </div>
     </div>
     <div class="header-spacer"></div>
     <div class="header-badge" id="cache-badge">cache: 0 MB</div>
