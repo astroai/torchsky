@@ -7,6 +7,8 @@ import astropy.units as u
 from pathlib import Path
 import tempfile
 
+pytest.importorskip("scipy")
+
 import torchsky
 from torchsky.catalogs import crossmatch_sky
 

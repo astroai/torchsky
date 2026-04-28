@@ -7,11 +7,13 @@ import tempfile
 import time
 
 import numpy as np
-import psutil
 import pytest
 
 pytest.importorskip("psutil")
 import torch
+
+pytest.importorskip("psutil")
+import psutil  # noqa: E402
 
 import torchsky
 

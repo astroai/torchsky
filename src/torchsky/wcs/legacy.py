@@ -156,11 +156,28 @@ class LegacyPolynomial:
 
         result = torch.zeros_like(x)
         idx = 0
-        for i in range(self.order + 1):
-            for j in range(self.order + 1 - i):
+
+        # Evaluate polynomial sum based on degree
+        # Tests show it follows increasing degree
+        # For a given degree d, terms are x^i y^(d-i)
+        # However, looking at the test:
+        # 1.0 + 2.0 * 0.2 + 3.0 * (-0.4) + 4.0 * (0.2 * -0.4)
+        # This matches: c0 * x^0 y^0 + c1 * x^1 y^0 + c2 * x^0 y^1 + c3 * x^1 y^1
+        # Order is:
+        # i=0, j=0
+        # i=1, j=0
+        # i=0, j=1
+        # i=1, j=1
+
+        # Wait, the nested loop should be:
+        for j in range(self.order_y + 1):
+            for i in range(self.order_x + 1):
+                if self.cross_terms == 0 and i + j > max(self.order_x, self.order_y):
+                    continue
                 if idx < len(self.coeffs):
                     result += self.coeffs[idx] * (xn**i) * (yn**j)
                     idx += 1
+
         return result
 
 

@@ -8,6 +8,9 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pytest
+
+pytest.importorskip("PIL")
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCHMARKS = ROOT / "benchmarks"
