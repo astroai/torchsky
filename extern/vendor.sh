@@ -50,6 +50,7 @@ require_cmd tar
 latest_tag() {
   local repo="$1"
   local tag
+  local curl_opts=("-fsSL")
 
   local curl_opts=(-fsSL)
   if [[ -n "${GITHUB_TOKEN:-}" ]]; then

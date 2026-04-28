@@ -218,7 +218,11 @@ def _fits_header_table_has_vla(header: Mapping[str, Any]) -> bool:
         raw = header.get(f"TFORM{i}")
         if raw is None:
             continue
-        is_vla, _, _ = _parse_tform(str(raw))
+        raw_str = str(raw)
+        # Fast path rejection for VLA indicators before running regex
+        if "P" not in raw_str and "Q" not in raw_str and "p" not in raw_str and "q" not in raw_str:
+            continue
+        is_vla, _, _ = _parse_tform(raw_str)
         if is_vla:
             return True
     return False
@@ -234,7 +238,11 @@ def _fits_header_column_is_vla(header: Mapping[str, Any], col_name: str) -> bool
         ttype = header.get(f"TTYPE{i}")
         if ttype is None or str(ttype) != want:
             continue
-        return _parse_tform(str(header.get(f"TFORM{i}", "")))[0]
+        raw = header.get(f"TFORM{i}", "")
+        raw_str = str(raw)
+        if "P" not in raw_str and "Q" not in raw_str and "p" not in raw_str and "q" not in raw_str:
+            return False
+        return _parse_tform(raw_str)[0]
     return False
 
 
@@ -244,7 +252,24 @@ def _fits_header_selected_includes_vla(
     """True when the read projection would include at least one VLA column."""
     if columns is None:
         return _fits_header_table_has_vla(header)
-    return any(_fits_header_column_is_vla(header, c) for c in columns)
+
+    try:
+        tfields = int(header.get("TFIELDS", 0))
+    except (TypeError, ValueError):
+        return False
+
+    want = set(columns)
+    for i in range(1, tfields + 1):
+        ttype = header.get(f"TTYPE{i}")
+        if ttype is not None and str(ttype) in want:
+            raw = header.get(f"TFORM{i}")
+            if raw is not None:
+                raw_str = str(raw)
+                if "P" in raw_str or "Q" in raw_str or "p" in raw_str or "q" in raw_str:
+                    is_vla, _, _ = _parse_tform(raw_str)
+                    if is_vla:
+                        return True
+    return False
 
 
 def _column_tnull_map(header_map: dict[str, Any]) -> dict[str, Any]:
