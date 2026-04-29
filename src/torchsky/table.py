@@ -3020,15 +3020,30 @@ def _resolve_table_hdu_index_and_columns(
             raise ValueError(f"HDU {target_idx} is not a table (type={hdu_type})")
 
         header_map = _header_cards_to_mapping(cpp.read_header(handle, target_idx))
-        col_map: dict[int, str] = {}
-        for key, value in header_map.items():
-            key_u = str(key).upper()
-            if not key_u.startswith("TTYPE"):
-                continue
-            suffix = key_u[5:]
-            if suffix.isdigit():
-                col_map[int(suffix)] = str(value)
-        columns = [col_map[idx] for idx in sorted(col_map)]
+
+        # ⚡ Bolt: Fast-path O(1) indexed lookups using TFIELDS to avoid O(N) iteration
+        try:
+            tfields = int(header_map.get("TFIELDS", 0))
+        except (ValueError, TypeError):
+            tfields = 0
+
+        if tfields > 0:
+            columns = []
+            for i in range(1, tfields + 1):
+                val = header_map.get(f"TTYPE{i}")
+                if val is not None:
+                    columns.append(str(val))
+        else:
+            col_map: dict[int, str] = {}
+            for key, value in header_map.items():
+                key_u = str(key).upper()
+                if not key_u.startswith("TTYPE"):
+                    continue
+                suffix = key_u[5:]
+                if suffix.isdigit():
+                    col_map[int(suffix)] = str(value)
+            columns = [col_map[idx] for idx in sorted(col_map)]
+
         tform_map = _column_tform_map(header_map)
         return target_idx, header_map, columns, tform_map
     finally:
