@@ -95,7 +95,9 @@ class WCS:
 
         if header is not None:
             self.naxis = int(header.get("NAXIS", 2))
-            self._parse_header(header)
+            # Just store the header directly, _parse_header doesn't exist anymore
+            for k, v in header.items():
+                self.wcs_params[str(k).upper()] = v
             # Check for SIP
             if "A_ORDER" in header or "B_ORDER" in header:
                 self.sip = SIP(header)
