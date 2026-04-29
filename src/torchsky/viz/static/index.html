@@ -615,12 +615,12 @@
       <div class="sidebar-section">
         <div class="section-title">Stretch</div>
         <div class="pill-group" id="stretch-group">
-          <button class="pill active" data-v="zscale">ZScale</button>
-          <button class="pill" data-v="linear">Linear</button>
-          <button class="pill" data-v="log">Log</button>
-          <button class="pill" data-v="sqrt">√</button>
-          <button class="pill" data-v="asinh">Asinh</button>
-          <button class="pill" data-v="histeq">HistEq</button>
+          <button class="pill active" data-v="zscale" aria-pressed="true">ZScale</button>
+          <button class="pill" data-v="linear" aria-pressed="false">Linear</button>
+          <button class="pill" data-v="log" aria-pressed="false">Log</button>
+          <button class="pill" data-v="sqrt" aria-pressed="false" aria-label="Square root">√</button>
+          <button class="pill" data-v="asinh" aria-pressed="false">Asinh</button>
+          <button class="pill" data-v="histeq" aria-pressed="false">HistEq</button>
         </div>
       </div>
 
@@ -628,17 +628,17 @@
         <div class="section-title">Colormap</div>
         <div class="cmap-group" id="cmap-group">
           <button type="button" class="cmap-swatch active" data-v="gray" title="Gray"
-            style="background:linear-gradient(to right,#000,#fff)" aria-label="Colormap: Gray"></button>
+            style="background:linear-gradient(to right,#000,#fff)" aria-label="Colormap: Gray" aria-pressed="true"></button>
           <button type="button" class="cmap-swatch" data-v="viridis" title="Viridis"
-            style="background:linear-gradient(to right,#440154,#31688e,#35b779,#fde725)" aria-label="Colormap: Viridis"></button>
+            style="background:linear-gradient(to right,#440154,#31688e,#35b779,#fde725)" aria-label="Colormap: Viridis" aria-pressed="false"></button>
           <button type="button" class="cmap-swatch" data-v="hot" title="Hot"
-            style="background:linear-gradient(to right,#000,#f00,#ff0,#fff)" aria-label="Colormap: Hot"></button>
+            style="background:linear-gradient(to right,#000,#f00,#ff0,#fff)" aria-label="Colormap: Hot" aria-pressed="false"></button>
           <button type="button" class="cmap-swatch" data-v="thermal" title="Thermal"
-            style="background:linear-gradient(to right,#00f,#0f0,#f80,#f00)" aria-label="Colormap: Thermal"></button>
+            style="background:linear-gradient(to right,#00f,#0f0,#f80,#f00)" aria-label="Colormap: Thermal" aria-pressed="false"></button>
           <button type="button" class="cmap-swatch" data-v="rdbu_r" title="RdBu (reversed) — for residuals"
-            style="background:linear-gradient(to right,#670520,#f7f7f7,#053061)" aria-label="Colormap: RdBu (reversed)"></button>
+            style="background:linear-gradient(to right,#670520,#f7f7f7,#053061)" aria-label="Colormap: RdBu (reversed)" aria-pressed="false"></button>
           <button type="button" class="cmap-swatch" data-v="seismic" title="Seismic"
-            style="background:linear-gradient(to right,#00004c,#0066ff,#fff,#ff1a1a,#4c0000)" aria-label="Colormap: Seismic"></button>
+            style="background:linear-gradient(to right,#00004c,#0066ff,#fff,#ff1a1a,#4c0000)" aria-label="Colormap: Seismic" aria-pressed="false"></button>
         </div>
       </div>
 
@@ -836,7 +836,20 @@ async function api(path, opts = {}) {
   return r.json();
 }
 
-function status(msg) { $('footer-status').textContent = msg; }
+function status(msg) {
+  const el = $('footer-status');
+  if (msg.includes('Loading') || msg.includes('Updating') || msg.includes('Running')) {
+    el.innerHTML = '';
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner';
+    // Use scale to size it down to fit inline without custom inline CSS properties
+    spinner.style.transform = 'scale(0.6)';
+    el.appendChild(spinner);
+    el.appendChild(document.createTextNode(msg));
+  } else {
+    el.textContent = msg;
+  }
+}
 
 // ─── Aladin setup ────────────────────────────────────────────
 function initAladinFits() {
@@ -1116,8 +1129,12 @@ document.querySelectorAll('.tab').forEach(tab => {
 // Stretch pills
 document.querySelectorAll('#stretch-group .pill').forEach(pill => {
   pill.addEventListener('click', () => {
-    document.querySelectorAll('#stretch-group .pill').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('#stretch-group .pill').forEach(p => {
+      p.classList.remove('active');
+      p.setAttribute('aria-pressed', 'false');
+    });
     pill.classList.add('active');
+    pill.setAttribute('aria-pressed', 'true');
     state.stretch = pill.dataset.v;
     if (state.currentFile) rerenderSurvey();
   });
@@ -1126,8 +1143,12 @@ document.querySelectorAll('#stretch-group .pill').forEach(pill => {
 // Cmap swatches
 document.querySelectorAll('#cmap-group .cmap-swatch').forEach(sw => {
   sw.addEventListener('click', () => {
-    document.querySelectorAll('#cmap-group .cmap-swatch').forEach(s => s.classList.remove('active'));
+    document.querySelectorAll('#cmap-group .cmap-swatch').forEach(s => {
+      s.classList.remove('active');
+      s.setAttribute('aria-pressed', 'false');
+    });
     sw.classList.add('active');
+    sw.setAttribute('aria-pressed', 'true');
     state.cmap = sw.dataset.v;
     if (state.currentFile) rerenderSurvey();
   });
@@ -1178,6 +1199,7 @@ async function rerenderSurvey() {
   const vmin = hd ? sliderToValue(parseFloat($('vmin-slider').value), hd) : state.currentFile.vmin;
   const vmax = hd ? sliderToValue(parseFloat($('vmax-slider').value), hd) : state.currentFile.vmax;
   const { path, hdu } = state.currentFile;
+  status('Updating…');
   try {
     const survey = await api(
       `/hips/register?path=${encodeURIComponent(path)}&hdu=${hdu}&stretch=${state.stretch}&cmap=${state.cmap}&vmin=${vmin}&vmax=${vmax}`
@@ -1187,6 +1209,7 @@ async function rerenderSurvey() {
     const layer = A.createImageSurvey(survey.id, path.split('/').pop(), hipsUrl,
       'equatorial', survey.max_order, { imgFormat: 'png' });
     state.aladinFits.setImageSurvey(layer);
+    status('Ready');
   } catch(e) { status(`Error: ${e.message}`); }
 }
 
