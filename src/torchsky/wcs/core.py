@@ -98,6 +98,8 @@ class WCS:
             # Just store the header directly, converting properly like the kwargs block does
             for k, v in header.items():
                 k_upper = str(k).upper()
+                if k_upper.endswith("_COMMENT"):
+                    continue
                 if k_upper.startswith("CRVAL"):
                     self.wcs_params[k_upper] = float(v)
                 elif k_upper.startswith("CRPIX"):
