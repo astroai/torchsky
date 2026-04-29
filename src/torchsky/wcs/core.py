@@ -95,9 +95,19 @@ class WCS:
 
         if header is not None:
             self.naxis = int(header.get("NAXIS", 2))
-            # Just store the header directly, _parse_header doesn't exist anymore
+            # Just store the header directly, converting properly like the kwargs block does
             for k, v in header.items():
-                self.wcs_params[str(k).upper()] = v
+                k_upper = str(k).upper()
+                if k_upper.startswith("CRVAL"):
+                    self.wcs_params[k_upper] = float(v)
+                elif k_upper.startswith("CRPIX"):
+                    self.wcs_params[k_upper] = float(v)
+                elif k_upper.startswith("CD"):
+                    self.wcs_params[k_upper] = float(v)
+                elif k_upper.startswith("CTYPE"):
+                    self.wcs_params[k_upper] = str(v)
+                else:
+                    self.wcs_params[k_upper] = v
             # Check for SIP
             if "A_ORDER" in header or "B_ORDER" in header:
                 self.sip = SIP(header)
