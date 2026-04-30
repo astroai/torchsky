@@ -444,6 +444,50 @@ class TestCacheManager:
 
         # Test that configure_cpp_cache was called (optional, maybe check if cpp cache is configured correctly, but simple singleton check is required)
 
+    def test_configure_cpp_cache_success(self):
+        import sys
+        from unittest.mock import MagicMock, patch
+        from torchsky.cache import CacheManager, CacheConfig
+
+        manager = CacheManager(CacheConfig(max_files=10, max_memory_mb=100))
+
+        # Import cpp or use our mock if running in isolated NO_CPP mode
+        try:
+            import torchsky.cpp as cpp
+        except ImportError:
+            # We are in an environment without torchsky.cpp
+            # Mock it just for this test
+            mock_cpp = MagicMock()
+            with patch.dict("sys.modules", {"torchsky.cpp": mock_cpp}):
+                manager.configure_cpp_cache()
+                mock_cpp.configure_cache.assert_called_once_with(10, 100)
+            return
+
+        # If we successfully imported torchsky.cpp, patch its configure_cache method
+        with patch.object(cpp, "configure_cache") as mock_configure:
+            manager.configure_cpp_cache()
+            mock_configure.assert_called_once_with(10, 100)
+
+    def test_configure_cpp_cache_import_error(self):
+        from unittest.mock import patch
+        from torchsky.cache import CacheManager, CacheConfig
+
+        manager = CacheManager(CacheConfig(max_files=10, max_memory_mb=100))
+        with patch.dict("sys.modules", {"torchsky.cpp": None}):
+            # Should not raise
+            manager.configure_cpp_cache()
+
+    def test_configure_cpp_cache_attribute_error(self):
+        from unittest.mock import MagicMock, patch
+        from torchsky.cache import CacheManager, CacheConfig
+
+        manager = CacheManager(CacheConfig(max_files=10, max_memory_mb=100))
+        mock_cpp = MagicMock(spec=[]) # No configure_cache attribute
+        with patch.dict("sys.modules", {"torchsky.cpp": mock_cpp}):
+            # Should not raise
+            manager.configure_cpp_cache()
+
+
 
 class TestCacheConfig:
     """Test CacheConfig functionality."""
