@@ -3020,14 +3020,12 @@ def _resolve_table_hdu_index_and_columns(
             raise ValueError(f"HDU {target_idx} is not a table (type={hdu_type})")
 
         header_map = _header_cards_to_mapping(cpp.read_header(handle, target_idx))
-        col_map: dict[int, str] = {}
-        for key, value in header_map.items():
-            key_u = str(key).upper()
-            if not key_u.startswith("TTYPE"):
-                continue
-            suffix = key_u[5:]
-            if suffix.isdigit():
-                col_map[int(suffix)] = str(value)
+
+        # ⚡ Bolt: Fast-path O(1) indexed lookups using _column_name_index_map.
+        # Impact: Reduces O(N) header iteration to O(TFIELDS) dictionary lookups,
+        # providing measurable speedup when loading FITS tables with thousands of
+        # COMMENT/HISTORY cards.
+        col_map = _column_name_index_map(header_map)
         columns = [col_map[idx] for idx in sorted(col_map)]
         tform_map = _column_tform_map(header_map)
         return target_idx, header_map, columns, tform_map
