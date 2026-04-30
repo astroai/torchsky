@@ -444,6 +444,35 @@ class TestCacheManager:
 
         # Test that configure_cpp_cache was called (optional, maybe check if cpp cache is configured correctly, but simple singleton check is required)
 
+    @patch("torchsky.cache.CacheManager.configure_cpp_cache")
+    def test_optimize_for_dataset_small(self, mock_configure_cpp_cache):
+        from torchsky.cache import CacheManager, CacheConfig
+        config = CacheConfig(disk_cache_gb=10)
+        manager = CacheManager(config)
+
+        # Test small dataset (100 files, 10MB each = ~0.98GB < 10GB)
+        file_paths = ["f1", "f2"] * 50  # 100 items
+        manager.optimize_for_dataset(file_paths, avg_file_size_mb=10.0)
+
+        assert manager.config.max_files == 100
+        assert manager.config.prefetch_enabled is True
+        mock_configure_cpp_cache.assert_called_once()
+
+    @patch("torchsky.cache.CacheManager.configure_cpp_cache")
+    def test_optimize_for_dataset_large(self, mock_configure_cpp_cache):
+        from torchsky.cache import CacheManager, CacheConfig
+        config = CacheConfig(disk_cache_gb=10)
+        manager = CacheManager(config)
+
+        # Test large dataset (2000 files, 10MB each = ~19.5GB > 10GB)
+        file_paths = ["f"] * 2000
+        manager.optimize_for_dataset(file_paths, avg_file_size_mb=10.0)
+
+        # optimal_files = int(10 * 1024 / 10.0) = 1024
+        # min(1024, 1000) = 1000
+        assert manager.config.max_files == 1000
+        mock_configure_cpp_cache.assert_called_once()
+
 
 class TestCacheConfig:
     """Test CacheConfig functionality."""
