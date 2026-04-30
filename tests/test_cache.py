@@ -623,20 +623,21 @@ class TestCacheOptimization:
             mock_configure_cpp_cache.assert_called_once()
 
 
-def test_configure_for_environment():
-    """Test configure_for_environment configures the cpp cache via the manager."""
-    with patch("torchsky.cache.get_cache_manager") as mock_get_cache_manager:
-        mock_manager = MagicMock()
-        mock_get_cache_manager.return_value = mock_manager
-
-        torchsky.cache.configure_for_environment()
-
-        mock_get_cache_manager.assert_called_once()
-        mock_manager.configure_cpp_cache.assert_called_once()
-
-
 class TestCacheManagerFunctions:
     """Test cache manager module-level functions."""
+
+    def test_configure_for_environment(self):
+        """Test configure_for_environment configures the cpp cache via the manager."""
+        from torchsky.cache import configure_for_environment
+
+        with patch("torchsky.cache.get_cache_manager") as mock_get_cache_manager:
+            mock_manager = MagicMock()
+            mock_get_cache_manager.return_value = mock_manager
+
+            configure_for_environment()
+
+            mock_get_cache_manager.assert_called_once()
+            mock_manager.configure_cpp_cache.assert_called_once()
 
     def test_clear_cache(self):
         from torchsky.cache import get_cache_manager, clear_cache, get_cache_stats
