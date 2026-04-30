@@ -230,7 +230,7 @@ def test_synalm_zero_cls_returns_zero() -> None:
     lmax = 8
     cl = torch.zeros((lmax + 1,), dtype=torch.float64)
     alm = synalm(cl, lmax=lmax, mmax=lmax)
-    assert getattr(alm, 'shape', None) == (alm_size(lmax),)
+    assert getattr(alm, "shape", None) == (alm_size(lmax),)
     torch.testing.assert_close(alm, torch.zeros_like(alm), atol=0.0, rtol=0.0)
 
 
@@ -257,8 +257,8 @@ def test_synfast_pol_and_alm_output_shapes() -> None:
         pol=True,
         new=False,  # type: ignore
     )
-    assert getattr(maps, 'shape', None) == (3, hp.nside2npix(nside))
-    assert getattr(alms, 'shape', None) == (3, alm_size(lmax))
+    assert getattr(maps, "shape", None) == (3, hp.nside2npix(nside))
+    assert getattr(alms, "shape", None) == (3, alm_size(lmax))
 
 
 def test_synfast_zero_with_pixwin_is_zero() -> None:
@@ -289,7 +289,7 @@ def test_map2alm_lsq_scalar_residual_improves() -> None:
         tol=1e-14,
         maxiter=6,
     )
-    assert getattr(alm_lsq, 'shape', None) == alm0.shape
+    assert getattr(alm_lsq, "shape", None) == alm0.shape
     assert rel_res <= rel0 + 1e-12
     assert 0 <= n_iter <= 6
 
@@ -332,7 +332,7 @@ def test_map2alm_lsq_pol_shapes() -> None:
         tol=1e-10,
         maxiter=4,
     )
-    assert getattr(alm, 'shape', None) == (3, alm_size(lmax))
+    assert getattr(alm, "shape", None) == (3, alm_size(lmax))
     assert isinstance(rel_res, float)
     assert math.isfinite(rel_res)
     assert 0 <= n_iter <= 4
@@ -392,7 +392,7 @@ def test_alm2map_infer_lmax() -> None:
     nside = 8
     alm = _random_alm(lmax, seed=9)
     m = alm2map(alm, nside=nside)
-    assert getattr(m, 'shape', None) == (hp.nside2npix(nside),)
+    assert getattr(m, "shape", None) == (hp.nside2npix(nside),)
 
 
 @pytest.mark.parametrize("nest", [False, True])
@@ -537,7 +537,7 @@ def test_anafast_cross_constant_map() -> None:
 
 def test_gaussian_beam_monotonic() -> None:
     b = gaussian_beam(math.radians(30.0 / 60.0), lmax=32)
-    assert getattr(b, 'shape', None) == (33,)
+    assert getattr(b, "shape", None) == (33,)
     assert float(b[0]) == pytest.approx(1.0)
     assert torch.all(b[1:] <= b[:-1])
 
@@ -580,7 +580,7 @@ def test_smoothalm_pol_component_beams() -> None:
         dim=1,
     )
     sm = smoothalm(alms, lmax=lmax, beam=beam, pol=True)
-    assert getattr(sm, 'shape', None) == alms.shape
+    assert getattr(sm, "shape", None) == alms.shape
     idx = alm_index(lmax, min(lmax, 3), lmax)
     ell = lmax
     torch.testing.assert_close(
@@ -625,19 +625,23 @@ def test_pol_map2alm_alm2map_and_anafast_paths() -> None:
     alm_hp = torch.from_numpy(
         _hp.map2alm(maps.numpy(), lmax=lmax, mmax=lmax, iter=0, pol=True)  # type: ignore
     ).to(torch.complex128)
-    assert getattr(alm_tf, 'shape', None) == getattr(alm_hp, 'shape', None) == (3, alm_size(lmax))
-    rel_alm = torch.linalg.norm(torch.as_tensor(alm_tf) - torch.as_tensor(alm_hp)) / torch.linalg.norm(alm_hp).clamp_min(
-        1e-15
+    assert (
+        getattr(alm_tf, "shape", None)
+        == getattr(alm_hp, "shape", None)
+        == (3, alm_size(lmax))
     )
+    rel_alm = torch.linalg.norm(
+        torch.as_tensor(alm_tf) - torch.as_tensor(alm_hp)
+    ) / torch.linalg.norm(alm_hp).clamp_min(1e-15)
     assert float(rel_alm) < 2.5e-1
 
     maps_tf = alm2map(alm_tf, nside=nside, lmax=lmax, pol=True)
     maps_hp = torch.from_numpy(
         _hp.alm2map(alm_tf.numpy(), nside=nside, lmax=lmax, mmax=lmax, pol=True)  # type: ignore
     ).to(torch.float64)
-    rel_map = torch.linalg.norm(torch.as_tensor(maps_tf) - torch.as_tensor(maps_hp)) / torch.linalg.norm(
-        maps_hp
-    ).clamp_min(1e-15)
+    rel_map = torch.linalg.norm(
+        torch.as_tensor(maps_tf) - torch.as_tensor(maps_hp)
+    ) / torch.linalg.norm(maps_hp).clamp_min(1e-15)
     assert float(rel_map) < 2.5e-1
 
     cl_tf = anafast(maps, nside=nside, lmax=lmax, pol=True)
@@ -663,7 +667,7 @@ def test_smoothmap_pol_torch_shapes() -> None:
         sigma=math.radians(20.0 / 60.0),
         pol=True,
     )
-    assert getattr(sm, 'shape', None) == getattr(maps, 'shape', None)
+    assert getattr(sm, "shape", None) == getattr(maps, "shape", None)
 
 
 @pytest.mark.parametrize("spin", [1, 2, 3])
@@ -677,7 +681,7 @@ def test_spin_map2alm_alm2map_parity(spin: int) -> None:
 
     a1, a2 = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax)
     qu_rec = alm2map_spin((a1, a2), nside=nside, spin=spin, lmax=lmax)
-    assert getattr(qu_rec, 'shape', None) == getattr(qu, 'shape', None)
+    assert getattr(qu_rec, "shape", None) == getattr(qu, "shape", None)
 
     hp_a1, hp_a2 = _hp.map2alm_spin(qu.numpy(), spin=spin, lmax=lmax)  # type: ignore
     torch.testing.assert_close(
@@ -709,12 +713,12 @@ def test_spin_high_l_parity_spotcheck() -> None:
     hp_ae, hp_ab = _hp.map2alm_spin(qu.numpy(), spin=spin, lmax=lmax)  # type: ignore
     hp_ae_t = torch.from_numpy(hp_ae).to(torch.complex128)
     hp_ab_t = torch.from_numpy(hp_ab).to(torch.complex128)
-    rel_ae = torch.linalg.norm(torch.as_tensor(ae) - hp_ae_t) / torch.linalg.norm(hp_ae_t).clamp_min(
-        1e-15
-    )
-    rel_ab = torch.linalg.norm(torch.as_tensor(ab) - hp_ab_t) / torch.linalg.norm(hp_ab_t).clamp_min(
-        1e-15
-    )
+    rel_ae = torch.linalg.norm(torch.as_tensor(ae) - hp_ae_t) / torch.linalg.norm(
+        hp_ae_t
+    ).clamp_min(1e-15)
+    rel_ab = torch.linalg.norm(torch.as_tensor(ab) - hp_ab_t) / torch.linalg.norm(
+        hp_ab_t
+    ).clamp_min(1e-15)
     assert float(rel_ae) < 5e-10
     assert float(rel_ab) < 5e-10
 
@@ -750,13 +754,13 @@ def test_compat_spin_and_smoothing() -> None:
     rng = np.random.default_rng(13)
     m = torch.from_numpy(rng.normal(size=npix)).to(torch.float64)
     sm = compat.smoothmap(m, nside=nside, lmax=12, fwhm_rad=math.radians(20.0 / 60.0))
-    assert getattr(sm, 'shape', None) == getattr(m, 'shape', None)
+    assert getattr(sm, "shape", None) == getattr(m, "shape", None)
     assert torch.isfinite(sm).all()
 
     qu = torch.from_numpy(rng.normal(size=(2, npix))).to(torch.float64)
     a1, a2 = compat.map2alm_spin(qu, spin=2, nside=nside, lmax=8)
     rec = compat.alm2map_spin((a1, a2), nside=nside, spin=2, lmax=8)
-    assert getattr(rec, 'shape', None) == qu.shape
+    assert getattr(rec, "shape", None) == qu.shape
 
 
 @pytest.mark.parametrize("spin", [1, 2])

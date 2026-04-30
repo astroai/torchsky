@@ -635,7 +635,7 @@ def _coadd_with_reproject_exact(
         weight = _load_weight_map(obs, image)
         if (
             _headers_equivalent_for_direct_copy(dict(header), target_header)
-            and tuple(int(v) for v in image.shape) == target_shape
+            and tuple(image.shape) == target_shape
         ):
             obs_numer = (
                 torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
@@ -688,7 +688,7 @@ def _coadd_with_reproject_adaptive(
         weight = _load_weight_map(obs, image)
         if (
             _headers_equivalent_for_direct_copy(dict(header), target_header)
-            and tuple(int(v) for v in image.shape) == target_shape
+            and tuple(image.shape) == target_shape
         ):
             obs_numer = (
                 torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight

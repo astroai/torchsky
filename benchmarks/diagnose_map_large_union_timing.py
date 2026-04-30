@@ -226,12 +226,12 @@ def main() -> int:
         first_image = image_plane_mod._validate_image_plane(first_image)
         header_dict = image_plane_mod._normalized_header_for_shape(
             dict(first_header),
-            tuple(int(v) for v in first_image.shape[-2:]),
+            tuple(first_image.shape[-2:]),
             overrides=target_header,
         )
         target_shape = image_plane_mod._target_shape_from_header(
             header_dict,
-            fallback=tuple(int(v) for v in first_image.shape[-2:]),
+            fallback=tuple(first_image.shape[-2:]),
         )
         device = first_image.device
         prepared_target: image_plane_mod._PreparedImagePlaneTarget | None = None
@@ -283,7 +283,7 @@ def main() -> int:
                 image_plane_mod._headers_equivalent_for_direct_copy(
                     header_dict_obs, header_dict
                 )
-                and tuple(int(v) for v in image.shape) == target_shape
+                and tuple(image.shape) == target_shape
             )
             need_prepared_target = (
                 (
@@ -292,7 +292,7 @@ def main() -> int:
                     else False
                 )
                 or header_dict_obs != header_dict
-                or tuple(int(v) for v in image.shape) != target_shape
+                or tuple(image.shape) != target_shape
             )
 
             source_wcs = None
@@ -339,7 +339,7 @@ def main() -> int:
                     bbox0 = time.perf_counter()
                     bbox = _source_bbox_on_target(
                         source_wcs,
-                        tuple(int(v) for v in image.shape),
+                        tuple(image.shape),
                         target.wcs,
                         target_shape,
                         margin=args.bbox_margin,
@@ -432,8 +432,7 @@ def main() -> int:
                     ),
                     "accumulation_ms": accumulation_ms,
                     "used_reprojection": source_wcs is not None,
-                    "same_target_shape": tuple(int(v) for v in image.shape)
-                    == tuple(int(v) for v in target_shape),
+                    "same_target_shape": tuple(image.shape) == tuple(target_shape),
                     "coverage_fraction": coverage_fraction,
                     "window_fraction": window_fraction,
                     "window_shape": window_shape,

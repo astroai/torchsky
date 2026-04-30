@@ -431,11 +431,11 @@ class TestTablePerformance:
         assert mock_close_cpp_handle.call_count == 2
 
 
-
 def test_close_cpp_handle_suppresses_exception():
     """Test that _close_cpp_handle catches and suppresses exceptions."""
     import unittest.mock
     from torchsky.table import _close_cpp_handle
+
     mock_handle = unittest.mock.Mock()
     mock_handle.close.side_effect = Exception("Test exception")
     _close_cpp_handle(mock_handle)

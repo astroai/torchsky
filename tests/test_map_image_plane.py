@@ -1651,7 +1651,7 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
 
         def wrapped_resample(*args, **kwargs):
             target = args[3]
-            forced_shapes.append(tuple(int(v) for v in target.shape))
+            forced_shapes.append(tuple(target.shape))
             return original_resample(*args, **kwargs)
 
         monkeypatch.setattr(
@@ -2041,7 +2041,7 @@ def test_tpv_source_cap_radius_covers_in_bounds_points(tmp_path) -> None:
     )
     source_cap = image_plane_mod._tpv_source_cap_radius_deg(
         source_wcs,
-        tuple(int(v) for v in image.shape),
+        tuple(image.shape),
     )
     center_sep = image_plane_mod._angular_separation_deg(
         float(source_wcs.alpha0),
@@ -2554,7 +2554,7 @@ def test_coadd_image_plane_real_shifted_astropy_sip_fixture(tmp_path) -> None:
         ]
     )
 
-    assert tuple(result.data.shape) == tuple(int(v) for v in image.shape)
+    assert tuple(result.data.shape) == tuple(image.shape)
     assert torch.isfinite(result.data).all()
     assert torch.isfinite(result.weight).all()
     assert result.weight.max().item() > 0.0

@@ -9,7 +9,6 @@ import torch
 from torchsky.map import plan_map_product, stack_map_product
 
 
-
 def _load_benchmark_module():
     path = Path(__file__).resolve().parents[1] / "benchmarks" / "bench_map_field_fit.py"
     spec = importlib.util.spec_from_file_location("bench_map_field_fit", path)

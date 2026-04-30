@@ -55,7 +55,7 @@ def test_radio_stokes_cube_header_write_read_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "stokes_i.fits"
     torchsky.write(str(path), cube, header=h, overwrite=True)
     back, hdr = torchsky.read(str(path), return_header=True)
-    assert tuple(int(back.shape[i]) for i in range(back.ndim)) == (1, size, size)
+    assert tuple(back.shape) == (1, size, size)
     assert int(hdr.get("NAXIS", 0)) == 3
     assert float(hdr["RESTFRQ"]) == pytest.approx(1.420405752e9)
 
