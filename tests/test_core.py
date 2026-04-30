@@ -1,6 +1,53 @@
 import pytest
 
-from torchsky.core import FITSCore
+from torchsky.core import FITSCore, CompressionHandler, CompressionType
+
+
+def test_detect_compression_none():
+    header = {}
+    comp_type, params = CompressionHandler.detect_compression(header)
+    assert comp_type == CompressionType.NONE
+    assert params == {}
+
+
+def test_detect_compression_empty():
+    header = {"ZCMPTYPE": "   "}
+    comp_type, params = CompressionHandler.detect_compression(header)
+    assert comp_type == CompressionType.NONE
+    assert params == {}
+
+
+def test_detect_compression_valid():
+    header = {
+        "ZCMPTYPE": "RICE_1",
+        "ZTILE1": 100,
+        "ZTILE2": 200,
+    }
+    comp_type, params = CompressionHandler.detect_compression(header)
+    assert comp_type == CompressionType.RICE
+    assert params == {"tile_dims": (100, 200)}
+
+
+def test_detect_compression_unknown():
+    header = {
+        "ZCMPTYPE": "UNKNOWN_COMPRESSION",
+        "ZTILE1": 50,
+        "ZTILE2": 50,
+    }
+    comp_type, params = CompressionHandler.detect_compression(header)
+    assert comp_type == CompressionType.NONE
+    assert params == {"tile_dims": (50, 50)}
+
+
+def test_detect_compression_whitespace():
+    header = {
+        "ZCMPTYPE": "  GZIP_1  ",
+        "ZTILE1": 256,
+        "ZTILE2": 256,
+    }
+    comp_type, params = CompressionHandler.detect_compression(header)
+    assert comp_type == CompressionType.GZIP
+    assert params == {"tile_dims": (256, 256)}
 
 
 def test_parse_cutout_spec_valid():
