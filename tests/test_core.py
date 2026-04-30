@@ -1,6 +1,7 @@
+import numpy as np
 import pytest
 
-from torchsky.core import FITSCore
+from torchsky.core import FITSCore, FITSDataTypeHandler
 
 
 def test_parse_cutout_spec_valid():
@@ -48,3 +49,27 @@ def test_parse_cutout_spec_invalid():
         FITSCore.parse_cutout_spec("myimage.fits[]")
     with pytest.raises(ValueError):
         FITSCore.parse_cutout_spec("myimage.fits[1][,10]")
+
+
+def test_to_numpy_dtype_supported():
+    assert FITSDataTypeHandler.to_numpy_dtype(8) == np.uint8
+    assert FITSDataTypeHandler.to_numpy_dtype(16) == np.int16
+    assert FITSDataTypeHandler.to_numpy_dtype(32) == np.int32
+    assert FITSDataTypeHandler.to_numpy_dtype(64) == np.int64
+    assert FITSDataTypeHandler.to_numpy_dtype(-32) == np.float32
+    assert FITSDataTypeHandler.to_numpy_dtype(-64) == np.float64
+
+def test_to_numpy_dtype_unsupported():
+    with pytest.raises(ValueError, match="Unsupported BITPIX: 42"):
+        FITSDataTypeHandler.to_numpy_dtype(42)
+
+def test_to_numpy_dtype_initialization():
+    # Test that the cache is created when called
+    original_cache = FITSDataTypeHandler._BITPIX_TO_NUMPY
+    try:
+        FITSDataTypeHandler._BITPIX_TO_NUMPY = None
+        dtype = FITSDataTypeHandler.to_numpy_dtype(8)
+        assert dtype == np.uint8
+        assert FITSDataTypeHandler._BITPIX_TO_NUMPY is not None
+    finally:
+        FITSDataTypeHandler._BITPIX_TO_NUMPY = original_cache
