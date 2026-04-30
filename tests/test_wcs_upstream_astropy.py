@@ -8,7 +8,7 @@ fits = pytest.importorskip("astropy.io.fits")
 AstropyWCS = pytest.importorskip("astropy.wcs").WCS
 get_pkg_data_contents = pytest.importorskip("astropy.utils.data").get_pkg_data_contents
 
-from torchfits.wcs.core import WCS as TorchWCS  # noqa: E402
+from torchsky.wcs.core import WCS as TorchWCS  # noqa: E402
 
 
 FIXTURE_CASES: dict[str, np.ndarray] = {
@@ -37,10 +37,10 @@ def _ra_wrap_delta_deg(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 @pytest.mark.parametrize("fixture_name", sorted(FIXTURE_CASES))
-def test_astropy_fixture_pixel_to_world_matches_torchfits(fixture_name: str) -> None:
+def test_astropy_fixture_pixel_to_world_matches_torchsky(fixture_name: str) -> None:
     if fixture_name in _NAN_BOUNDARY_XFAILS:
         pytest.xfail(
-            reason=f"{fixture_name}: torchfits does not propagate NaN for out-of-domain pixels"
+            reason=f"{fixture_name}: torchsky does not propagate NaN for out-of-domain pixels"
         )
     awcs, torch_header = _load_wcs_pair(fixture_name)
     twcs = TorchWCS(torch_header)
@@ -71,10 +71,10 @@ def test_astropy_fixture_pixel_to_world_matches_torchfits(fixture_name: str) -> 
 
 
 @pytest.mark.parametrize("fixture_name", sorted(FIXTURE_CASES))
-def test_astropy_fixture_world_to_pixel_matches_torchfits(fixture_name: str) -> None:
+def test_astropy_fixture_world_to_pixel_matches_torchsky(fixture_name: str) -> None:
     if fixture_name in _NAN_BOUNDARY_XFAILS:
         pytest.xfail(
-            reason=f"{fixture_name}: torchfits does not propagate NaN for out-of-domain pixels"
+            reason=f"{fixture_name}: torchsky does not propagate NaN for out-of-domain pixels"
         )
     awcs, torch_header = _load_wcs_pair(fixture_name)
     twcs = TorchWCS(torch_header)
