@@ -1023,9 +1023,9 @@ function updateDRCard(dr) {
   if (!dr) return;
   $('dr-card').style.display = '';
   $('dr-stats').innerHTML = `
-    <span class="stat-key">DR ratio</span><span class="stat-val">${fmt(dr.dr_ratio)}×</span>
-    <span class="stat-key">Neg. frac.</span><span class="stat-val">${(dr.neg_fraction*100).toFixed(2)}%</span>
-    <span class="stat-key">CR frac.</span><span class="stat-val">${(dr.cr_fraction*100).toFixed(4)}%</span>
+    <span class="stat-key">DR ratio</span><span class="stat-val">${htmlEscape(fmt(dr.dr_ratio))}×</span>
+    <span class="stat-key">Neg. frac.</span><span class="stat-val">${htmlEscape((Number(dr.neg_fraction)*100).toFixed(2))}%</span>
+    <span class="stat-key">CR frac.</span><span class="stat-val">${htmlEscape((Number(dr.cr_fraction)*100).toFixed(4))}%</span>
     <span class="stat-key">Rec. stretch</span><span class="stat-val">${htmlEscape(dr.recommended_stretch)}</span>
   `;
   const warns = $('dr-warns');
@@ -1043,12 +1043,12 @@ function updateStatsCard(data) {
   const s = data.dr.stats;
   $('stats-card').style.display = '';
   $('img-stats').innerHTML = `
-    <span class="stat-key">Min</span><span class="stat-val">${fmt(s.min)}</span>
-    <span class="stat-key">Max</span><span class="stat-val">${fmt(s.max)}</span>
-    <span class="stat-key">Median</span><span class="stat-val">${fmt(s.median)}</span>
-    <span class="stat-key">Std</span><span class="stat-val">${fmt(s.std)}</span>
-    <span class="stat-key">p1</span><span class="stat-val">${fmt(s.p1)}</span>
-    <span class="stat-key">p99</span><span class="stat-val">${fmt(s.p99)}</span>
+    <span class="stat-key">Min</span><span class="stat-val">${htmlEscape(fmt(s.min))}</span>
+    <span class="stat-key">Max</span><span class="stat-val">${htmlEscape(fmt(s.max))}</span>
+    <span class="stat-key">Median</span><span class="stat-val">${htmlEscape(fmt(s.median))}</span>
+    <span class="stat-key">Std</span><span class="stat-val">${htmlEscape(fmt(s.std))}</span>
+    <span class="stat-key">p1</span><span class="stat-val">${htmlEscape(fmt(s.p1))}</span>
+    <span class="stat-key">p99</span><span class="stat-val">${htmlEscape(fmt(s.p99))}</span>
   `;
 }
 
@@ -1058,8 +1058,8 @@ function updateWCSInfo(wcs) {
   $('wcs-info').innerHTML = `
     <span class="stat-key">CTYPE1</span><span class="stat-val text-mono">${htmlEscape(wcs.ctype1 || '—')}</span>
     <span class="stat-key">CTYPE2</span><span class="stat-val text-mono">${htmlEscape(wcs.ctype2 || '—')}</span>
-    <span class="stat-key">CRVAL1</span><span class="stat-val text-mono">${fmt(wcs.crval1)}</span>
-    <span class="stat-key">CRVAL2</span><span class="stat-val text-mono">${fmt(wcs.crval2)}</span>
+    <span class="stat-key">CRVAL1</span><span class="stat-val text-mono">${htmlEscape(fmt(wcs.crval1))}</span>
+    <span class="stat-key">CRVAL2</span><span class="stat-val text-mono">${htmlEscape(fmt(wcs.crval2))}</span>
     <span class="stat-key">Projection</span><span class="stat-val">${htmlEscape(wcs.proj_code || '—')}</span>
   `;
 }
