@@ -23,3 +23,6 @@
 ## 2025-04-20 - Preserving Structural Shape in Specific Element Focus Rings
 **Learning:** When defining specific `:focus-visible` styles for individual UI components (like `.cmap-swatch` or `input[type="range"]`) to override global focus rings, any structural properties like `border-radius` that were applied to the element must also be included in its specific `:focus-visible` declaration. Otherwise, the element may lose its rounded corners during keyboard navigation.
 **Action:** When adding `:focus-visible` to specific classes (e.g., `.cmap-swatch:focus-visible`), copy the base element's `border-radius` into the focus rule to prevent visual mismatches or flattened corners.
+## 2024-05-18 - ARIA attributes for custom UI toggle buttons
+**Learning:** When using custom UI components like pill groups or swatches that act as radio buttons or switches instead of standard `<input type="radio">` or checkboxes, screen readers don't know when they're active unless explicit ARIA attributes are used.
+**Action:** Always add `aria-pressed="true"` (or `aria-selected` if appropriate) to active buttons in such custom groups and make sure JS click handlers explicitly toggle this attribute when the active state changes. Also use `aria-hidden="true"` on purely decorative elements like background stars to clean up the screen reader experience.
