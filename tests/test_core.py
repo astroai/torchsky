@@ -1,6 +1,8 @@
 import pytest
 
-from torchsky.core import FITSCore
+import numpy as np
+
+from torchsky.core import ChecksumVerifier, FITSCore
 
 
 def test_parse_cutout_spec_valid():
@@ -48,3 +50,21 @@ def test_parse_cutout_spec_invalid():
         FITSCore.parse_cutout_spec("myimage.fits[]")
     with pytest.raises(ValueError):
         FITSCore.parse_cutout_spec("myimage.fits[1][,10]")
+
+
+def test_verify_datasum():
+    """Test the verify_datasum stub."""
+    data = np.zeros((10, 10))
+    # It's currently a placeholder returning True
+    assert ChecksumVerifier.verify_datasum(data, "12345") is True
+    assert ChecksumVerifier.verify_datasum(data, "") is True
+
+
+def test_verify_checksum():
+    """Test the verify_checksum stub."""
+    header = {"CHECKSUM": "xxx", "DATASUM": "123"}
+    # It's currently a placeholder returning True
+    assert ChecksumVerifier.verify_checksum(header) is True
+
+    data = np.zeros((10, 10))
+    assert ChecksumVerifier.verify_checksum(header, data) is True
