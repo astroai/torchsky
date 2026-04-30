@@ -2,12 +2,12 @@ import pytest
 import torch
 from unittest import mock
 
-from torchfits import io
+from torchsky import io
 
 
 @pytest.fixture
 def mock_cpp():
-    with mock.patch("torchfits.io.cpp") as m_cpp:
+    with mock.patch("torchsky.cpp") as m_cpp:
         # Set default return values for the mock methods
         m_cpp.read_full.return_value = torch.zeros((10, 10))
         m_cpp.read_full_raw.return_value = torch.zeros((10, 10))
@@ -35,18 +35,18 @@ def mock_cpp():
 @pytest.fixture
 def mock_flags():
     with (
-        mock.patch("torchfits.io._HAS_READ_HDUS_BATCH", True),
-        mock.patch("torchfits.io._HAS_READ_FULL_RAW_WITH_SCALE", True),
-        mock.patch("torchfits.io._HAS_READ_FULL_RAW", True),
-        mock.patch("torchfits.io._HAS_READ_FULL_UNMAPPED_RAW", True),
-        mock.patch("torchfits.io._HAS_READ_FULL_UNMAPPED", True),
-        mock.patch("torchfits.io._HAS_READ_FULL_NOCACHE", True),
+        mock.patch("torchsky.io._HAS_READ_HDUS_BATCH", True),
+        mock.patch("torchsky.io._HAS_READ_FULL_RAW_WITH_SCALE", True),
+        mock.patch("torchsky.io._HAS_READ_FULL_RAW", True),
+        mock.patch("torchsky.io._HAS_READ_FULL_UNMAPPED_RAW", True),
+        mock.patch("torchsky.io._HAS_READ_FULL_UNMAPPED", True),
+        mock.patch("torchsky.io._HAS_READ_FULL_NOCACHE", True),
     ):
         yield
 
 
 class TestIORead:
-    """Test the low-level torchfits.io.read function directly with mocked cpp."""
+    """Test the low-level torchsky.io.read function directly with mocked cpp."""
 
     def test_read_empty_path(self):
         """Test read with empty path raises ValueError."""

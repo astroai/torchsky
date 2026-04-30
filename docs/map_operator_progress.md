@@ -32,12 +32,12 @@ Short version:
 ### 1. Shared internal operator substrate
 
 Implemented under:
-- [src/torchsky/map/operators/__init__.py](/Users/fabbros/src/torchsky/src/torchsky/map/operators/__init__.py)
-- [src/torchsky/map/operators/base.py](/Users/fabbros/src/torchsky/src/torchsky/map/operators/base.py)
-- [src/torchsky/map/operators/bundle.py](/Users/fabbros/src/torchsky/src/torchsky/map/operators/bundle.py)
-- [src/torchsky/map/scenes.py](/Users/fabbros/src/torchsky/src/torchsky/map/scenes.py)
-- [src/torchsky/map/target.py](/Users/fabbros/src/torchsky/src/torchsky/map/target.py)
-- [src/torchsky/map/solvers.py](/Users/fabbros/src/torchsky/src/torchsky/map/solvers.py)
+- [src/torchsky/map/operators/__init__.py](../src/torchsky/map/operators/__init__.py)
+- [src/torchsky/map/operators/base.py](../src/torchsky/map/operators/base.py)
+- [src/torchsky/map/operators/bundle.py](../src/torchsky/map/operators/bundle.py)
+- [src/torchsky/map/scenes.py](../src/torchsky/map/scenes.py)
+- [src/torchsky/map/target.py](../src/torchsky/map/target.py)
+- [src/torchsky/map/solvers.py](../src/torchsky/map/solvers.py)
 
 Implemented concepts:
 - `ObservationOperatorBundle`
@@ -52,9 +52,9 @@ This is no longer just a design note. The internal bundle / scene / target contr
 ### 2. Background is first-class
 
 Implemented under:
-- [src/torchsky/map/operators/background.py](/Users/fabbros/src/torchsky/src/torchsky/map/operators/background.py)
-- [src/torchsky/map/field/types.py](/Users/fabbros/src/torchsky/src/torchsky/map/field/types.py)
-- [src/torchsky/map/field/observation_builders.py](/Users/fabbros/src/torchsky/src/torchsky/map/field/observation_builders.py)
+- [src/torchsky/map/operators/background.py](../src/torchsky/map/operators/background.py)
+- [src/torchsky/map/field/types.py](../src/torchsky/map/field/types.py)
+- [src/torchsky/map/field/observation_builders.py](../src/torchsky/map/field/observation_builders.py)
 
 Implemented capabilities:
 - explicit sky / instrument / detector background surfaces
@@ -65,11 +65,11 @@ Implemented capabilities:
 ### 3. Native geometry families
 
 Implemented under:
-- [src/torchsky/map/operators/geometry_drizzle.py](/Users/fabbros/src/torchsky/src/torchsky/map/operators/geometry_drizzle.py)
-- [src/torchsky/map/operators/geometry_conservative.py](/Users/fabbros/src/torchsky/src/torchsky/map/operators/geometry_conservative.py)
-- [src/torchsky/map/operators/geometry_fft.py](/Users/fabbros/src/torchsky/src/torchsky/map/operators/geometry_fft.py)
-- [src/torchsky/map/operators/geometry_interp.py](/Users/fabbros/src/torchsky/src/torchsky/map/operators/geometry_interp.py)
-- [src/torchsky/map/image_plane.py](/Users/fabbros/src/torchsky/src/torchsky/map/image_plane.py)
+- [src/torchsky/map/operators/geometry_drizzle.py](../src/torchsky/map/operators/geometry_drizzle.py)
+- [src/torchsky/map/operators/geometry_conservative.py](../src/torchsky/map/operators/geometry_conservative.py)
+- [src/torchsky/map/operators/geometry_fft.py](../src/torchsky/map/operators/geometry_fft.py)
+- [src/torchsky/map/operators/geometry_interp.py](../src/torchsky/map/operators/geometry_interp.py)
+- [src/torchsky/map/image_plane.py](../src/torchsky/map/image_plane.py)
 
 Implemented capabilities:
 - exact native drizzle
@@ -81,9 +81,9 @@ Implemented capabilities:
 ### 4. Native spectral remappers
 
 Implemented under:
-- [src/torchsky/map/spectral_affine.py](/Users/fabbros/src/torchsky/src/torchsky/map/spectral_affine.py)
-- [src/torchsky/map/spectral_nonuniform.py](/Users/fabbros/src/torchsky/src/torchsky/map/spectral_nonuniform.py)
-- [src/torchsky/map/spectral_nufft.py](/Users/fabbros/src/torchsky/src/torchsky/map/spectral_nufft.py)
+- [src/torchsky/map/spectral_affine.py](../src/torchsky/map/spectral_affine.py)
+- [src/torchsky/map/spectral_nonuniform.py](../src/torchsky/map/spectral_nonuniform.py)
+- [src/torchsky/map/spectral_nufft.py](../src/torchsky/map/spectral_nufft.py)
 
 Implemented capabilities:
 - `spectral_linear_affine`
@@ -95,9 +95,9 @@ This closes a meaningful part of the old FFT / DFT reprojection gap, but not the
 ### 5. Native spherical spectral family
 
 Implemented under:
-- [src/torchsky/map/healpix_spectral.py](/Users/fabbros/src/torchsky/src/torchsky/map/healpix_spectral.py)
-- [src/torchsky/sphere/spectral.py](/Users/fabbros/src/torchsky/src/torchsky/sphere/spectral.py)
-- [src/torchsky/map/healpix_image_plane.py](/Users/fabbros/src/torchsky/src/torchsky/map/healpix_image_plane.py)
+- [src/torchsky/map/healpix_spectral.py](../src/torchsky/map/healpix_spectral.py)
+- [src/torchsky/sphere/spectral.py](../src/torchsky/sphere/spectral.py)
+- [src/torchsky/map/healpix_image_plane.py](../src/torchsky/map/healpix_image_plane.py)
 
 Implemented capabilities:
 - harmonic HEALPix rebandlimit / filtering
@@ -110,8 +110,8 @@ Implemented capabilities:
 ### 6. Spherical inverse solvers
 
 Implemented under:
-- [src/torchsky/map/solvers.py](/Users/fabbros/src/torchsky/src/torchsky/map/solvers.py)
-- examples under [examples/](/Users/fabbros/src/torchsky/examples)
+- [src/torchsky/map/solvers.py](../src/torchsky/map/solvers.py)
+- examples under [examples/](../examples)
 
 Implemented capabilities:
 - HEALPix inverse solves
@@ -133,14 +133,14 @@ Implemented capabilities:
 - `C_ell` priors
 - joint `T/E/B` cross-spectrum priors
 
-This is implemented in [src/torchsky/map/solvers.py](/Users/fabbros/src/torchsky/src/torchsky/map/solvers.py) and covered heavily in [tests/test_map_solvers.py](/Users/fabbros/src/torchsky/tests/test_map_solvers.py).
+This is implemented in [src/torchsky/map/solvers.py](../src/torchsky/map/solvers.py) and covered heavily in [tests/test_map_solvers.py](../tests/test_map_solvers.py).
 
 ### 8. Product / benchmark integration
 
 Implemented under:
-- [src/torchsky/map/product.py](/Users/fabbros/src/torchsky/src/torchsky/map/product.py)
-- [benchmarks/bench_map_ground_truth.py](/Users/fabbros/src/torchsky/benchmarks/bench_map_ground_truth.py)
-- [benchmarks/bench_map_multifield_truth.py](/Users/fabbros/src/torchsky/benchmarks/bench_map_multifield_truth.py)
+- [src/torchsky/map/product.py](../src/torchsky/map/product.py)
+- [benchmarks/bench_map_ground_truth.py](../benchmarks/bench_map_ground_truth.py)
+- [benchmarks/bench_map_multifield_truth.py](../benchmarks/bench_map_multifield_truth.py)
 
 Implemented benchmark rows now include:
 - image-plane coadd baselines
@@ -152,7 +152,7 @@ Implemented benchmark rows now include:
 ### 9. Shared-vs-private decomposition
 
 Implemented under:
-- [src/torchsky/map/solvers.py](/Users/fabbros/src/torchsky/src/torchsky/map/solvers.py)
+- [src/torchsky/map/solvers.py](../src/torchsky/map/solvers.py)
 
 Implemented capabilities:
 - `build_state_component_mixture_operator(...)`
@@ -169,8 +169,8 @@ instead of only fitting one shared field.
 ### 10. Learned decomposition on top of the explicit split
 
 Implemented under:
-- [src/torchsky/map/solvers.py](/Users/fabbros/src/torchsky/src/torchsky/map/solvers.py)
-- [examples/example_map_harmonic_learned_survey_instrument_split.py](/Users/fabbros/src/torchsky/examples/example_map_harmonic_learned_survey_instrument_split.py)
+- [src/torchsky/map/solvers.py](../src/torchsky/map/solvers.py)
+- [examples/example_map_harmonic_learned_survey_instrument_split.py](../examples/example_map_harmonic_learned_survey_instrument_split.py)
 
 Implemented capabilities:
 - `SurveyInstrumentComponentMixer`
@@ -187,10 +187,10 @@ This is the first version of "mechanistic splitting with learned parameterizatio
 Partly done:
 - product layer and many field paths use the shared substrate
 - spherical solver / render paths use the shared substrate
-- image-plane coadds now share observation preparation, geometry dispatch, stack accumulation, and stack finalization helpers under [src/torchsky/map/operators/execution.py](/Users/fabbros/src/torchsky/src/torchsky/map/operators/execution.py)
+- image-plane coadds now share observation preparation, geometry dispatch, stack accumulation, and stack finalization helpers under [src/torchsky/map/operators/execution.py](../src/torchsky/map/operators/execution.py)
 
 Still incomplete:
-- `coadd_image_plane(...)` and `coadd_image_plane_cube(...)` still retain target planning, windowing, coverage/MOC assembly, and I/O policy in [src/torchsky/map/image_plane.py](/Users/fabbros/src/torchsky/src/torchsky/map/image_plane.py)
+- `coadd_image_plane(...)` and `coadd_image_plane_cube(...)` still retain target planning, windowing, coverage/MOC assembly, and I/O policy in [src/torchsky/map/image_plane.py](../src/torchsky/map/image_plane.py)
 - operator classes are not yet a fully uniform execution layer everywhere
 
 ### 2. Learned operators as real scientific models
@@ -297,11 +297,11 @@ The highest-value next steps are:
 ## Related Files
 
 Useful entry points:
-- [src/torchsky/map/solvers.py](/Users/fabbros/src/torchsky/src/torchsky/map/solvers.py)
-- [src/torchsky/map/scenes.py](/Users/fabbros/src/torchsky/src/torchsky/map/scenes.py)
-- [src/torchsky/map/operators/](/Users/fabbros/src/torchsky/src/torchsky/map/operators)
-- [benchmarks/bench_map_ground_truth.py](/Users/fabbros/src/torchsky/benchmarks/bench_map_ground_truth.py)
-- [benchmarks/bench_map_multifield_truth.py](/Users/fabbros/src/torchsky/benchmarks/bench_map_multifield_truth.py)
-- [tests/test_map_solvers.py](/Users/fabbros/src/torchsky/tests/test_map_solvers.py)
-- [docs/mapping_parity.md](/Users/fabbros/src/torchsky/docs/mapping_parity.md)
-- [docs/examples.md](/Users/fabbros/src/torchsky/docs/examples.md)
+- [src/torchsky/map/solvers.py](../src/torchsky/map/solvers.py)
+- [src/torchsky/map/scenes.py](../src/torchsky/map/scenes.py)
+- [src/torchsky/map/operators/](../src/torchsky/map/operators)
+- [benchmarks/bench_map_ground_truth.py](../benchmarks/bench_map_ground_truth.py)
+- [benchmarks/bench_map_multifield_truth.py](../benchmarks/bench_map_multifield_truth.py)
+- [tests/test_map_solvers.py](../tests/test_map_solvers.py)
+- [docs/mapping_parity.md](mapping_parity.md)
+- [docs/examples.md](examples.md)

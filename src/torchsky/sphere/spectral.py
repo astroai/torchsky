@@ -466,11 +466,14 @@ def _ylm_basis(
     _, phi, x, _ = _angles_for_nside(nside, nest)
     y_blocks: list[Tensor] = []
     y_conj_blocks: list[Tensor] = []
+    # ⚡ Bolt: Vectorized phase multipliers for all m
+    m_range = torch.arange(mmax + 1, device=phi.device, dtype=phi.dtype)
+    # [mmax+1, npix]
+    all_phases = torch.exp(torch.complex(torch.zeros(1, device=phi.device, dtype=phi.dtype), m_range.unsqueeze(1) * phi.unsqueeze(0)))
+
     for m in range(mmax + 1):
         p_seq = _legendre_l_sequence(m, x, lmax)
-        phase = torch.exp(
-            torch.complex(torch.zeros_like(phi), m * phi)
-        )  # exp(+i m phi)
+        phase = all_phases[m]
         y = p_seq.to(dtype=torch.complex128) * phase.unsqueeze(0)
         y_blocks.append(y)
         y_conj_blocks.append(torch.conj(y))
@@ -620,16 +623,22 @@ def _spin_ylm_basis(
     theta, phi, _, _ = _angles_for_nside(nside, nest)
     y_blocks: list[Tensor] = []
     y_conj_blocks: list[Tensor] = []
-    phase_multipliers = [
-        torch.exp(torch.complex(torch.zeros_like(phi), m * phi))
-        for m in range(mmax + 1)
-    ]
+    # ⚡ Bolt: Vectorized phase multipliers for all m
+    m_range = torch.arange(mmax + 1, device=phi.device, dtype=phi.dtype)
+    # [mmax+1, npix]
+    all_phases = torch.exp(torch.complex(torch.zeros(1, device=phi.device, dtype=phi.dtype), m_range.unsqueeze(1) * phi.unsqueeze(0)))
     spin_phase = -1.0 if (spin & 1) else 1.0  # (-1)^spin
 
+    # ⚡ Bolt: Pre-calculate all possible ell norms for the given lmax and spin
+    abs_spin = abs(spin)
+    ell_all = torch.arange(abs_spin, lmax + 1, dtype=torch.float64, device=theta.device)
+    all_ell_norms = torch.sqrt((2 * ell_all + 1) / (4.0 * math.pi))
+
     for m in range(mmax + 1):
-        phase = phase_multipliers[m]
+        phase = all_phases[m]
         m_phase = -1.0 if (m & 1) else 1.0  # Condon-Shortley convention
 
+        # ⚡ Bolt: Use pre-calculated norms instead of re-calculating for every m
         ell_start = max(m, abs(spin))
         if ell_start > lmax:
             y_blocks.append(
@@ -647,11 +656,9 @@ def _spin_ylm_basis(
         # Get d-matrix sequence for all required l
         d_seq = _wigner_d_l_sequence(ell_start, lmax, m, -spin, theta)
 
-        # Calculate normalization factors
-        ell_vec = torch.arange(
-            ell_start, lmax + 1, dtype=torch.float64, device=theta.device
-        )
-        norms = torch.sqrt((2 * ell_vec + 1) / (4.0 * math.pi))
+        # ⚡ Bolt: Fast slice from pre-calculated norms
+        # ell_start - abs_spin is the offset into our pre-calculated norms tensor
+        norms = all_ell_norms[ell_start - abs_spin :]
 
         # Broadcast and multiply: (spin_phase * m_phase) * norm * d * phase
         combined_scale = (spin_phase * m_phase) * norms.unsqueeze(1)

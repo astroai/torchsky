@@ -1,9 +1,9 @@
 # Upstream Parity Matrix
 
-This matrix tracks the upstream correctness surfaces that `torchfits` now treats as validation contracts. It mirrors the plan categories:
+This matrix tracks the upstream correctness surfaces that `torchsky` treats as validation contracts. It mirrors the plan categories:
 
 - `exact-replay`: same upstream-style cases or fixture classes
-- `adapter-replay`: same semantic contract through a torchfits adapter surface
+- `adapter-replay`: same semantic contract through a `torchsky` adapter surface
 - `example-smoke`: canonical upstream docs/README workflow
 - `benchmark-hook`: replay or benchmark lane exists for the same workflow family
 
@@ -48,6 +48,6 @@ This matrix tracks the upstream correctness surfaces that `torchfits` now treats
 ## Notes
 
 - The authoritative source inventory lives in `benchmarks/replays/upstream_sources.json`.
-- `healsparse` remains adapter-based rather than exact API replay because `torchfits` intentionally exposes sparse-map functionality through its own spherical namespace.
+- `healsparse` remains adapter-based rather than exact API replay because `torchsky` intentionally exposes sparse-map functionality through its own spherical namespace.
 - `fitsio` parity is workflow-oriented: the contract is image/table/header/compression behavior, not a verbatim `fitsio.FITS` object model.
 - The real-data lane is intentionally complementary to the upstream fixture replays: it validates installed package artifacts and a cached public FITS sample without replacing the stricter upstream parity gates.

@@ -236,24 +236,19 @@ class Spectrum1D:
             align_corners=True,
         ).squeeze()
 
-        # Alternative: manual interpolation if needed
-        if len(flux_interp) != len(new_wavelength):
-            # Fallback to manual interpolation
-            flux_interp = torch.zeros_like(new_wavelength)
-            for i, wave in enumerate(new_wavelength):
-                # Find closest wavelengths
-                diffs = torch.abs(current_wave - wave)
-                idx = torch.argmin(diffs)
-                flux_interp[i] = self.flux[idx]
+        # ⚡ Bolt: Vectorized resampling using searchsorted for O(M log N)
+        # Find indices of new_wavelength in current_wave
+        indices = torch.searchsorted(current_wave, new_wavelength).clamp(0, len(current_wave) - 1)
 
-        ivar_interp = None
-        if self.ivar is not None:
-            # Manual interpolation for ivar
-            ivar_interp = torch.zeros_like(new_wavelength)
-            for i, wave in enumerate(new_wavelength):
-                diffs = torch.abs(current_wave - wave)
-                idx = torch.argmin(diffs)
-                ivar_interp[i] = self.ivar[idx]
+        # Closest neighbor search (equivalent to the old loop but vectorized)
+        # We check if indices or indices-1 is closer
+        indices_prev = (indices - 1).clamp(0, len(current_wave) - 1)
+        dist_curr = torch.abs(current_wave[indices] - new_wavelength)
+        dist_prev = torch.abs(current_wave[indices_prev] - new_wavelength)
+        best_indices = torch.where(dist_curr < dist_prev, indices, indices_prev)
+
+        flux_interp = self.flux[best_indices]
+        ivar_interp = self.ivar[best_indices] if self.ivar is not None else None
 
         new_spectral_axis = SpectralAxis(
             values=new_wavelength,

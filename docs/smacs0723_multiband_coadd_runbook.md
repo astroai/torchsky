@@ -3,8 +3,8 @@
 This is the quick path to rerun the full non-INR coadd/stacker baseline once all public downloads have finished.
 
 The commands below assume:
-- repo root: `/Users/seb/src/torchsky`
-- public data under `/Users/seb/src/torchsky/data`
+- repo root: `.`
+- public data under `data`
 
 **Scratch / shared filesystem:** set `TORCHSKY_DATA` to a directory with the same layout as `data/` (`jwst_smacs0723/`, `updec_webb/`, optional `benchmark_results/`). All `bench_map_smacs0723_*.py` scripts read this root from the environment when set.
 - module-`b` public JWST inputs
@@ -23,13 +23,12 @@ For the current public module-`b` set, the expected counts are:
 Run:
 
 ```bash
-cd /Users/seb/src/torchsky
-source ~/.zshrc
+cd "$(git rev-parse --show-toplevel)"
 pixi run -e test python - <<'PY'
 from pathlib import Path
 from benchmarks.bench_map_smacs0723_real import _discover_exposure_paths
 
-base = Path("/Users/seb/src/torchsky/data/jwst_smacs0723")
+base = Path("data/jwst_smacs0723")
 expected = {
     "F090W": 36,
     "F150W": 36,
@@ -61,27 +60,25 @@ If any row says `MISSING`, finish the downloads first.
 Full multiband public downloader:
 
 ```bash
-cd /Users/seb/src/torchsky
-source ~/.zshrc
+cd "$(git rev-parse --show-toplevel)"
 pixi run -e test python scripts/download_smacs0723_multiband_public.py \
   --bands F090W,F150W,F200W,F277W,F356W,F444W \
   --module b \
   --updec-iterations 0 \
-  --jwst-output-dir /Users/seb/src/torchsky/data/jwst_smacs0723 \
-  --updec-output-dir /Users/seb/src/torchsky/data/updec_webb
+  --jwst-output-dir data/jwst_smacs0723 \
+  --updec-output-dir data/updec_webb
 ```
 
 If only one band is incomplete, a targeted fill command is often faster:
 
 ```bash
-cd /Users/seb/src/torchsky
-source ~/.zshrc
+cd "$(git rev-parse --show-toplevel)"
 pixi run -e test python scripts/download_jwst_smacs0723_mast.py \
   --band F150W \
   --module b \
   --subgroup CAL \
   --max-exposures 100 \
-  --output-dir /Users/seb/src/torchsky/data/jwst_smacs0723
+  --output-dir data/jwst_smacs0723
 ```
 
 Swap `F150W` for any missing band.
@@ -91,8 +88,7 @@ Swap `F150W` for any missing band.
 This runs the legacy stackers plus the `torchsky` non-INR stackers band by band:
 
 ```bash
-cd /Users/seb/src/torchsky
-source ~/.zshrc
+cd "$(git rev-parse --show-toplevel)"
 PYTHONPATH=src:benchmarks pixi run -e map-compat python benchmarks/bench_map_smacs0723_stackers_band_sweep.py \
   --bands F090W,F150W,F200W,F277W,F356W,F444W \
   --module b \
@@ -100,8 +96,8 @@ PYTHONPATH=src:benchmarks pixi run -e map-compat python benchmarks/bench_map_sma
   --crop-size 256 \
   --crop-mode best_overlap \
   --skip-missing \
-  --json-out /Users/seb/src/torchsky/data/benchmark_results/smacs0723_stackers_band_sweep_full_public_256.json \
-  --markdown-out /Users/seb/src/torchsky/data/benchmark_results/smacs0723_stackers_band_sweep_full_public_256.md
+  --json-out data/benchmark_results/smacs0723_stackers_band_sweep_full_public_256.json \
+  --markdown-out data/benchmark_results/smacs0723_stackers_band_sweep_full_public_256.md
 ```
 
 Notes:
@@ -112,8 +108,7 @@ Notes:
 ## 4. Optional Higher-Resolution Pass
 
 ```bash
-cd /Users/seb/src/torchsky
-source ~/.zshrc
+cd "$(git rev-parse --show-toplevel)"
 PYTHONPATH=src:benchmarks pixi run -e map-compat python benchmarks/bench_map_smacs0723_stackers_band_sweep.py \
   --bands F090W,F150W,F200W,F277W,F356W,F444W \
   --module b \
@@ -121,19 +116,19 @@ PYTHONPATH=src:benchmarks pixi run -e map-compat python benchmarks/bench_map_sma
   --crop-size 512 \
   --crop-mode best_overlap \
   --skip-missing \
-  --json-out /Users/seb/src/torchsky/data/benchmark_results/smacs0723_stackers_band_sweep_full_public_512.json \
-  --markdown-out /Users/seb/src/torchsky/data/benchmark_results/smacs0723_stackers_band_sweep_full_public_512.md
+  --json-out data/benchmark_results/smacs0723_stackers_band_sweep_full_public_512.json \
+  --markdown-out data/benchmark_results/smacs0723_stackers_band_sweep_full_public_512.md
 ```
 
 ## 5. Expected Output Files
 
 Main outputs:
-- `/Users/seb/src/torchsky/data/benchmark_results/smacs0723_stackers_band_sweep_full_public_256.json`
-- `/Users/seb/src/torchsky/data/benchmark_results/smacs0723_stackers_band_sweep_full_public_256.md`
+- `data/benchmark_results/smacs0723_stackers_band_sweep_full_public_256.json`
+- `data/benchmark_results/smacs0723_stackers_band_sweep_full_public_256.md`
 
 Optional higher-resolution outputs:
-- `/Users/seb/src/torchsky/data/benchmark_results/smacs0723_stackers_band_sweep_full_public_512.json`
-- `/Users/seb/src/torchsky/data/benchmark_results/smacs0723_stackers_band_sweep_full_public_512.md`
+- `data/benchmark_results/smacs0723_stackers_band_sweep_full_public_512.json`
+- `data/benchmark_results/smacs0723_stackers_band_sweep_full_public_512.md`
 
 ## 6. What This Covers
 

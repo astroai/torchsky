@@ -2484,16 +2484,14 @@ def duckdb_query(
         connection=con,
         **kwargs,
     )
-    # Prevent SQL injection by enforcing a single, read-only statement
+    # Prevent SQL injection by strictly enforcing exactly one SELECT or EXPLAIN statement
     statements = duckdb.extract_statements(query)
     if len(statements) != 1:
-        raise ValueError("query must contain only a single SQL statement")
+        raise ValueError("query must contain exactly one SQL statement")
 
     stmt_type = statements[0].type
-    if stmt_type not in (duckdb.StatementType.SELECT, duckdb.StatementType.EXPLAIN):
-        raise ValueError(
-            f"Only SELECT and EXPLAIN queries are allowed, got: {stmt_type.name}"
-        )
+    if stmt_type not in {duckdb.StatementType.SELECT, duckdb.StatementType.EXPLAIN}:
+        raise ValueError(f"query must be a SELECT or EXPLAIN statement, got {stmt_type}")
 
     result = con.sql(query)
     if return_arrow:
@@ -2783,7 +2781,7 @@ def _sanitize_table_header_for_rewrite(header_map: dict[str, Any]) -> dict[str, 
         key_u = key_s.upper()
         if key_u in skip_exact:
             continue
-        if any(key_u.startswith(prefix) for prefix in skip_prefixes):
+        if key_u.startswith(skip_prefixes):
             continue
         out[key_s] = value
     return out
@@ -3035,15 +3033,29 @@ def _resolve_table_hdu_index_and_columns(
             raise ValueError(f"HDU {target_idx} is not a table (type={hdu_type})")
 
         header_map = _header_cards_to_mapping(cpp.read_header(handle, target_idx))
-        col_map: dict[int, str] = {}
-        for key, value in header_map.items():
-            key_u = str(key).upper()
-            if not key_u.startswith("TTYPE"):
-                continue
-            suffix = key_u[5:]
-            if suffix.isdigit():
-                col_map[int(suffix)] = str(value)
-        columns = [col_map[idx] for idx in sorted(col_map)]
+        # ⚡ Bolt: Fast-path O(1) indexed lookups using TFIELDS
+        try:
+            tfields = int(header_map.get("TFIELDS", 0))
+        except (ValueError, TypeError):
+            tfields = 0
+
+        if tfields > 0:
+            columns = []
+            for i in range(1, tfields + 1):
+                name = header_map.get(f"TTYPE{i}")
+                if name is not None:
+                    columns.append(str(name))
+        else:
+            # Fallback for missing TFIELDS
+            col_map: dict[int, str] = {}
+            for key, value in header_map.items():
+                key_u = str(key).upper()
+                if not key_u.startswith("TTYPE"):
+                    continue
+                suffix = key_u[5:]
+                if suffix.isdigit():
+                    col_map[int(suffix)] = str(value)
+            columns = [col_map[idx] for idx in sorted(col_map)]
         tform_map = _column_tform_map(header_map)
         return target_idx, header_map, columns, tform_map
     finally:

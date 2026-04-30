@@ -30,7 +30,7 @@ This directory contains examples of common `torchsky` workflows.
 
 | Script | What it demonstrates |
 |---|---|
-| [`example_healpix.py`](../examples/example_healpix.py) | `ang2pix`, `pix2ang`, disc queries, and map sampling with `torchfits.sphere` |
+| [`example_healpix.py`](../examples/example_healpix.py) | `ang2pix`, `pix2ang`, disc queries, and map sampling with `torchsky.sphere` |
 | [`example_spectral_sht.py`](../examples/example_spectral_sht.py) | Spherical harmonic transforms: power spectra, `synfast`, `map2alm`, smoothing |
 
 ## ML Integration
@@ -78,5 +78,5 @@ python examples/example_image.py
 Some examples require optional dependencies (e.g. Polars, DuckDB, Astropy). Install them with:
 
 ```bash
-pip install torchfits[examples]
+pip install torchsky[examples]
 ```

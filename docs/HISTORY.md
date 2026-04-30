@@ -1,6 +1,6 @@
 # Torchsky Planning and Migration History
 
-This document captures the planning, design decisions, and implementation history that were discussed in the `torchfits` thread before work moved fully into `torchsky`.
+This document captures the planning, design decisions, and implementation history from the legacy `torchfits` thread before work moved fully into `torchsky`.
 
 It is intended as a durable handoff/history note inside the `torchsky` repository.
 
