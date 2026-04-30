@@ -831,6 +831,9 @@ These are the **code defaults** when the environment variable is unset (see `tor
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `TORCHSKY_WCS_FUSED` | `1` | CPU fused `pixel_to_world` / `world_to_pixel` for supported projections (TAN, SIN, ARC, CEA, AIT, HPX, CAR, SFL, MOL, TPV when enabled). Set `0` to force the non-fused tensor path. |
+| `TORCHSKY_PERF_GATE_WCS_N` | `200000` | Number of points used by the CI-friendly WCS TAN forward/inverse perf smoke gates in `tests/test_perf_gate.py`. |
+| `TORCHSKY_PERF_GATE_WCS_P2W_S` | `2.0` | Maximum median seconds allowed by the WCS TAN bulk `pixel_to_world` perf smoke gate. |
+| `TORCHSKY_PERF_GATE_WCS_W2P_S` | `2.0` | Maximum median seconds allowed by the WCS TAN bulk `world_to_pixel` perf smoke gate. |
 | `TORCHSKY_RING_FOURIER_CPP` | `1` | RING Fourier analysis/synthesis helpers in spectral transforms. |
 | `TORCHSKY_RING_FOURIER_MODES_CPP` | `1` | C++ path for Fourier mode assembly within `mmax` caps. |
 | `TORCHSKY_RING_FOURIER_SYNTH_CPP` | `1` | C++ path for Fourier synthesis within `mmax` caps. |

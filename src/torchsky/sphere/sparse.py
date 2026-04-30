@@ -682,6 +682,72 @@ HealSparseMap = SparseHealpixMap
 SparseMap = SparseHealpixMap
 
 
+def _validate_sparse_operands(
+    maps: list[SparseHealpixMap] | tuple[SparseHealpixMap, ...],
+) -> tuple[int, bool]:
+    if not maps:
+        raise ValueError("at least one sparse map is required")
+    nside = int(maps[0].nside)
+    nest = bool(maps[0].nest)
+    for smap in maps:
+        if int(smap.nside) != nside or bool(smap.nest) != nest:
+            raise ValueError("all sparse maps must have matching nside and ordering")
+    return nside, nest
+
+
+def sum_union(maps: list[SparseHealpixMap] | tuple[SparseHealpixMap, ...]) -> SparseHealpixMap:
+    """Sum sparse maps over the union of valid pixels.
+
+    Missing pixels contribute zero, matching the common healsparse ``sum_union``
+    workflow while preserving sparse coverage on the output.
+    """
+    nside, nest = _validate_sparse_operands(maps)
+    device = maps[0].pixels.device
+    all_pixels = torch.unique(torch.cat([m.pixels.to(device) for m in maps]))
+    out_dtype = torch.result_type(*[m.values for m in maps])
+    values = torch.zeros((all_pixels.numel(),), dtype=out_dtype, device=device)
+    for smap in maps:
+        vals = smap.get_values(all_pixels).to(dtype=out_dtype, device=device)
+        valid = vals != torch.as_tensor(
+            smap.fill_value, dtype=vals.dtype, device=vals.device
+        )
+        values = values + torch.where(valid, vals, torch.zeros_like(vals))
+    return SparseHealpixMap.from_pixels(
+        all_pixels,
+        values,
+        nside_sparse=nside,
+        nest=nest,
+        nside_coverage=maps[0].nside_coverage,
+        sentinel=maps[0].fill_value,
+    )
+
+
+def sum_intersection(
+    maps: list[SparseHealpixMap] | tuple[SparseHealpixMap, ...],
+) -> SparseHealpixMap:
+    """Sum sparse maps only where every input has a valid pixel."""
+    nside, nest = _validate_sparse_operands(maps)
+    device = maps[0].pixels.device
+    common = maps[0].pixels.to(device)
+    for smap in maps[1:]:
+        common = common[
+            torch.isin(common, smap.pixels.to(device), assume_unique=False)
+        ]
+    common = torch.unique(common)
+    out_dtype = torch.result_type(*[m.values for m in maps])
+    values = torch.zeros((common.numel(),), dtype=out_dtype, device=device)
+    for smap in maps:
+        values = values + smap.get_values(common).to(dtype=out_dtype, device=device)
+    return SparseHealpixMap.from_pixels(
+        common,
+        values,
+        nside_sparse=nside,
+        nest=nest,
+        nside_coverage=maps[0].nside_coverage,
+        sentinel=maps[0].fill_value,
+    )
+
+
 class WideBitMask:
     def __init__(self, n_bits: int, device: torch.device | None = None):
         self.n_bits = n_bits
@@ -731,4 +797,6 @@ __all__ = [
     "SparseMap",
     "SkyMaskPipe",
     "WideBitMask",
+    "sum_intersection",
+    "sum_union",
 ]

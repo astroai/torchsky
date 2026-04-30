@@ -15,7 +15,7 @@ from ..dataloader import (
 )
 from ..datasets import FITSDataset, IterableFITSDataset, TableChunkDataset
 from ..frame import read_tensor_frame, to_tensor_frame, write_tensor_frame
-from ..hdu import HDUList, Header, TableHDU, TableHDURef, TensorHDU
+from ..hdu import Card, HDUList, Header, TableHDU, TableHDURef, TensorHDU
 from ..interop import to_arrow, to_pandas, to_polars
 
 
@@ -95,6 +95,7 @@ __all__ = [
     "FITSDataset",
     "HDUList",
     "Header",
+    "Card",
     "IterableFITSDataset",
     "TableChunkDataset",
     "TableHDU",

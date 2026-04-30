@@ -60,35 +60,34 @@ def project_zenithal(
         # So yes, theta = rad2deg(atan2(1, r_rad)) is correct for TAN.
 
     elif projection_code == "SIN":
-        # Orthographic
-        # R = 180/pi * cos(theta) ??
-        # Standard: R = sin(90 - theta) = cos(theta)
-        # (normalized to unit sphere).
-        # scaled by 180/pi?
-        # R_true = R_deg * pi/180
-        # R_true = cos(theta)
-        # theta = acos(R_true)
-
-        # Check boundary: R_true must be <= 1.
-        # SIN projection is defined only for sphere hemisphere?
-        # Or usually R scales such that R=1 corresponds to... ?
-        # Greisen 2002: SIN is Orthographic.
-        # "Oblique orthographic".
-        # Standard coords (x, y) = (cos theta sin phi, cos theta cos phi).
-        # R = cos(theta).
-        # So theta = acos(R).
-        # Check: at theta=90 (pole), R=0. Correct.
-        # At theta=0 (equator), R=1. Correct.
-        # Note scale: R here is dimensionless (ratio of radius).
-        # But xi, eta are degrees.
-        # So R_dim = R_deg / (180/pi).
-
-        r_dim = r * D2R
-        # SIN is defined only for r <= 1 radian (90 degrees equivalent in dimensionless units)
-        # R = cos(theta) = sin(90-theta)
-        mask_out = r_dim > 1.0
-        theta = torch.acos(torch.clamp(r_dim, -1.0, 1.0)) * R2D
-        theta = theta.masked_fill(mask_out, float("nan"))
+        x = xi * D2R
+        y = eta * D2R
+        a = pv2[1] if pv2 is not None and pv2.numel() > 1 else 0.0
+        b = pv2[2] if pv2 is not None and pv2.numel() > 2 else 0.0
+        if pv2 is not None and bool((torch.as_tensor(a).abs() > 1e-15) | (torch.as_tensor(b).abs() > 1e-15)):
+            # Slant orthographic SIN (WCS Paper II): solve for z = sin(theta)
+            # from the sphere constraint after subtracting the slant terms.
+            x0 = x - a
+            y0 = y - b
+            aa = 1.0 + a * a + b * b
+            bb = a * x0 + b * y0
+            cc = x0 * x0 + y0 * y0 - 1.0
+            disc = bb * bb - aa * cc
+            valid = disc >= 0.0
+            sqrt_disc = torch.sqrt(torch.clamp(disc, min=0.0))
+            z = (-bb + sqrt_disc) / aa
+            valid = valid & (z >= -1.0) & (z <= 1.0)
+            x_comp = x0 + a * z
+            y_comp = y0 + b * z
+            phi = torch.atan2(-x_comp, -y_comp) * R2D
+            theta = torch.asin(torch.clamp(z, -1.0, 1.0)) * R2D
+            theta = theta.masked_fill(~valid, float("nan"))
+            phi = phi.masked_fill(~valid, float("nan"))
+        else:
+            r_dim = r * D2R
+            mask_out = r_dim > 1.0
+            theta = torch.acos(torch.clamp(r_dim, -1.0, 1.0)) * R2D
+            theta = theta.masked_fill(mask_out, float("nan"))
 
     elif projection_code == "ZEA":
         # Zenithal Equal Area
@@ -118,9 +117,9 @@ def project_zenithal(
         if pv2 is None:
             w = r * D2R
         else:
-            # PV2_3 is C0, PV2_4 is C1, ...
-            # Extract coefficients from PV2 tensor [3:31]
-            p_coeffs = pv2[3:31]
+            # ZPN stores the radial polynomial as PV2_m coefficients:
+            # r(rad) = sum_m PV2_m * w(rad)**m, where w is colatitude.
+            p_coeffs = pv2[:31]
             mask_valid = p_coeffs != 0.0
             if not mask_valid.any():
                 w = r * D2R
@@ -135,24 +134,38 @@ def project_zenithal(
                     coeffs = p_coeffs[: max_m + 1]
 
                     r_rad_target = r * D2R
-                    w = r_rad_target.clone()
+                    if max_m == 1 and coeffs[1].abs() > 1e-15:
+                        w = (r_rad_target - coeffs[0]) / coeffs[1]
+                    else:
+                        w = r_rad_target.clone()
 
-                    # Newton-Raphson (Horner's method)
-                    rev_c = torch.flip(coeffs, dims=(0,))
-                    c0 = rev_c[0]
-                    for _ in range(12):
-                        val = torch.full_like(w, c0)
-                        der = torch.zeros_like(w)
-                        for c in rev_c[1:]:
-                            der.mul_(w).add_(val)
-                            val.mul_(w).add_(c)
+                        # Newton-Raphson (Horner's method)
+                        rev_c = torch.flip(coeffs, dims=(0,))
+                        c0 = rev_c[0]
+                        for _ in range(12):
+                            val = torch.full_like(w, c0)
+                            der = torch.zeros_like(w)
+                            for c in rev_c[1:]:
+                                der.mul_(w).add_(val)
+                                val.mul_(w).add_(c)
 
-                        diff = val.sub_(r_rad_target)
+                            diff = val.sub_(r_rad_target)
 
-                        mask_nz = der.abs() > 1e-15
-                        der.masked_fill_(~mask_nz, 1.0)
-                        diff.masked_fill_(~mask_nz, 0.0)
-                        w.sub_(diff.div_(der))
+                            mask_nz = der.abs() > 1e-15
+                            der.masked_fill_(~mask_nz, 1.0)
+                            diff.masked_fill_(~mask_nz, 0.0)
+                            w.sub_(diff.div_(der))
+
+                    val = torch.zeros_like(w)
+                    for c in torch.flip(coeffs, dims=(0,)):
+                        val.mul_(w).add_(c)
+                    valid = (
+                        torch.isfinite(w)
+                        & (w >= 0.0)
+                        & (w <= torch.pi)
+                        & ((val - r_rad_target).abs() <= 1e-10)
+                    )
+                    w = w.masked_fill(~valid, float("nan"))
 
         # 57.29577951308232 = 180.0 / math.pi
         theta = 90.0 - w * R2D
@@ -189,8 +202,16 @@ def deproject_zenithal(
         r = (1.0 / (tan_theta + 1e-12)) * R2D
 
     elif projection_code == "SIN":
-        # R = 180/pi * cos(theta)
-        r = torch.cos(theta * D2R) * R2D
+        theta_rad = theta * D2R
+        phi_rad = phi * D2R
+        sin_phi, cos_phi = _sincos(phi_rad)
+        cos_theta = torch.cos(theta_rad)
+        z = torch.sin(theta_rad)
+        a = pv2[1] if pv2 is not None and pv2.numel() > 1 else 0.0
+        b = pv2[2] if pv2 is not None and pv2.numel() > 2 else 0.0
+        xi = (-cos_theta * sin_phi + a * (1.0 - z)) * R2D
+        eta = (-cos_theta * cos_phi + b * (1.0 - z)) * R2D
+        return xi, eta
 
     elif projection_code == "ARC":
         r = 90.0 - theta
@@ -203,8 +224,7 @@ def deproject_zenithal(
 
     elif projection_code == "ZPN":
         if pv2 is not None:
-            # PV2_3 is C0, PV2_4 is C1, ...
-            p_coeffs = pv2[3:31]
+            p_coeffs = pv2[:31]
             mask_valid = p_coeffs.abs() > 1e-15
             if not mask_valid.any():
                 r = 90.0 - theta
@@ -214,15 +234,14 @@ def deproject_zenithal(
                 max_m = valid_indices[-1].item()
                 coeffs = p_coeffs[: max_m + 1]
 
-                # Horner's method for P(w)
-                # w is colatitude in degrees
-                w = 90.0 - theta
+                # Horner's method for P(w), where w and the result are radians.
+                w = (90.0 - theta) * D2R
                 rev_c = torch.flip(coeffs, dims=(0,))
                 c0 = rev_c[0]
                 val = torch.full_like(w, c0)
                 for c in rev_c[1:]:
                     val.mul_(w).add_(c)
-                r = val
+                r = val * R2D
         else:
             r = 90.0 - theta
 

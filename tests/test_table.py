@@ -226,6 +226,19 @@ class TestTableReading:
         assert appended.num_rows == 3
         assert appended["A"].tolist() == [1, 2, 3]  # type: ignore
 
+    def test_tablehdu_accepts_numpy_numeric_columns(self):
+        """TableHDU should accept NumPy numeric columns without TensorFrame shape drift."""
+        table_hdu = torchsky.TableHDU(  # type: ignore
+            {
+                "A": np.array([1, 2, 3], dtype=np.int32),
+                "B": np.array([1.5, 2.5, 3.5], dtype=np.float32),
+            }
+        )
+
+        assert table_hdu.num_rows == 3
+        assert table_hdu.columns == ["A", "B"]
+        assert table_hdu["A"].tolist() == [1, 2, 3]  # type: ignore
+
     def test_tablehdu_append_rows_with_vla_lists(self):
         """Test appending rows for VLA-like list columns."""
         table_hdu = torchsky.TableHDU(  # type: ignore

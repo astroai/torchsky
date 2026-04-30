@@ -70,7 +70,6 @@ def test_healsparse_quickstart_make_empty_update_and_valid_pixels_match() -> Non
 
 
 @_SKIP_MAKE_EMPTY
-@pytest.mark.skip(reason="HealSparseMap.read with header/partial not yet implemented")
 def test_healsparse_write_read_partial_and_header_roundtrip() -> None:
     hs_map, tf_map, pixels, values = _make_sparse_pair()
     tf_map.metadata = {"TESTING": 1.0}
@@ -139,8 +138,7 @@ def test_healsparse_sum_union_and_intersection_match_upstream() -> None:
     extra_pixels = np.array([3, 35, 36, 9000], dtype=np.int64)
     extra_values = np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float64)
     hs_b.update_values_pix(extra_pixels, extra_values)
-    # tf_b.update_values_pix not implemented - skip
-    pytest.skip("HealSparseMap.update_values_pix not yet implemented")
+    tf_b.update_values_pix(torch.from_numpy(extra_pixels), torch.from_numpy(extra_values))
 
     hs_union = healsparse.sum_union([hs_a, hs_b])
     hs_intersection = healsparse.sum_intersection([hs_a, hs_b])

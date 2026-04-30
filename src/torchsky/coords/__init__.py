@@ -2,6 +2,13 @@
 
 from ..wcs import WCS
 from ..wcs import healpix
+from ..wcs.alignment import (
+    AffineFitResult,
+    SkyAffineFitResult,
+    TangentPlaneFrame,
+    fit_affine_2d,
+    fit_sky_affine,
+)
 from ..wcs.healpix import (
     ang2pix,
     angular_distance_deg,
@@ -26,11 +33,31 @@ from ..wcs.healpix import (
     vec2pix,
     xyz_to_lonlat,
 )
-from ..wcs.spectral import transform_spectral
+from ..wcs.frames import convert_celestial, galactic_to_icrs, icrs_to_galactic, precess_fk5
+from ..wcs.spectral import (
+    air_wavelength_to_vacuum,
+    convert_spectral,
+    frequency_to_spectral,
+    spectral_to_frequency,
+    transform_spectral,
+    vacuum_wavelength_to_air,
+)
+from ..wcs.tabular import (
+    TabularAxis,
+    TabularBoundsMode,
+    TabularLookupWCS,
+    tabular_axes_from_fits,
+)
 from ..wcs.temporal import TemporalWCS
 
 __all__ = [
     "TemporalWCS",
+    "AffineFitResult",
+    "SkyAffineFitResult",
+    "TangentPlaneFrame",
+    "TabularAxis",
+    "TabularBoundsMode",
+    "TabularLookupWCS",
     "WCS",
     "ang2pix",
     "angular_distance_deg",
@@ -52,8 +79,20 @@ __all__ = [
     "query_polygon",
     "query_polygon_vec",
     "ring2nest",
+    "air_wavelength_to_vacuum",
+    "convert_spectral",
+    "convert_celestial",
+    "frequency_to_spectral",
+    "fit_affine_2d",
+    "fit_sky_affine",
+    "galactic_to_icrs",
+    "icrs_to_galactic",
+    "spectral_to_frequency",
+    "tabular_axes_from_fits",
+    "precess_fk5",
     "spherical_fourier_features",
     "transform_spectral",
+    "vacuum_wavelength_to_air",
     "vec2pix",
     "xyz_to_lonlat",
 ]

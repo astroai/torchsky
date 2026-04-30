@@ -459,3 +459,115 @@ def test_replace_column_preserves_metadata_contract():
             assert int(table.header.get("TNULL2")) == -999  # type: ignore
     finally:
         os.unlink(path.name)
+
+
+def test_table_update_forced_mmap_rejects_vla_and_strings():
+    path = tempfile.NamedTemporaryFile(suffix=".fits", delete=False)
+    path.close()
+    try:
+        torchsky.write(
+            path.name,
+            {
+                "ID": np.array([1, 2], dtype=np.int32),  # type: ignore
+                "NAME": ["a", "b"],
+                "VLA": [
+                    np.array([1], dtype=np.int16),  # type: ignore
+                    np.array([2, 3], dtype=np.int16),  # type: ignore
+                ],
+            },
+            overwrite=True,
+        )
+
+        with pytest.raises(ValueError, match="mmap table updates"):
+            torchsky.table.update_rows(
+                path.name,
+                {"VLA": [np.array([7], dtype=np.int16)]},  # type: ignore
+                row_slice=slice(0, 1),
+                hdu=1,
+                mmap=True,
+            )
+
+        torchsky.table.update_rows(
+            path.name,
+            {"VLA": [np.array([7], dtype=np.int16)]},  # type: ignore
+            row_slice=slice(0, 1),
+            hdu=1,
+            mmap="auto",
+        )
+        with torchsky.open(path.name) as hdul:  # type: ignore
+            assert hdul[1].get_vla_column("VLA")[0].tolist() == [7]  # type: ignore
+    finally:
+        os.unlink(path.name)
+
+
+def test_table_rename_and_drop_validate_column_names_before_mutating():
+    path = _make_basic_table_file()
+    try:
+        with pytest.raises(ValueError, match="collide"):
+            torchsky.table.rename_columns(path, {"ID": "VAL"}, hdu=1)
+
+        with pytest.raises(KeyError, match="MISSING"):
+            torchsky.table.rename_columns(path, {"MISSING": "X"}, hdu=1)
+
+        with pytest.raises(ValueError, match="duplicate"):
+            torchsky.table.drop_columns(path, ["FLAG", "FLAG"], hdu=1)
+
+        with pytest.raises(KeyError, match="MISSING"):
+            torchsky.table.drop_columns(path, ["MISSING"], hdu=1)
+
+        with torchsky.open(path) as hdul:  # type: ignore
+            table = hdul[1]  # type: ignore
+            assert table.columns == ["ID", "VAL", "FLAG"]  # type: ignore
+    finally:
+        os.unlink(path)
+
+
+def test_compress_true_writes_table_hdu_without_tensorframe_placeholder():
+    path = tempfile.NamedTemporaryFile(suffix=".fits", delete=False)
+    path.close()
+    try:
+        torchsky.write(
+            path.name,
+            {
+                "ID": np.array([1, 2, 3], dtype=np.int32),  # type: ignore
+                "NAME": ["a", "b", "c"],
+            },
+            header={"EXTNAME": "CAT"},
+            overwrite=True,
+            compress=True,
+        )
+
+        header = torchsky.get_header(path.name, 1)
+        assert str(header.get("XTENSION", "")).upper() == "BINTABLE"
+        assert header.get("EXTNAME") == "CAT"
+        table = torchsky.table.read(path.name, hdu=1)
+        assert table.column("ID").to_pylist() == [1, 2, 3]
+        assert table.column("NAME").to_pylist() == ["a", "b", "c"]
+    finally:
+        os.unlink(path.name)
+
+
+def test_compressed_mixed_image_and_table_roundtrip():
+    path = tempfile.NamedTemporaryFile(suffix=".fits", delete=False)
+    path.close()
+    try:
+        image = torch.arange(4, dtype=torch.float32).reshape(2, 2)
+        torchsky.write(
+            path.name,
+            [
+                {"data": image, "header": {"EXTNAME": "SCI"}},
+                {
+                    "ID": np.array([10, 20], dtype=np.int32),  # type: ignore
+                    "FLUX": np.array([1.5, 2.5], dtype=np.float32),  # type: ignore
+                },
+            ],
+            overwrite=True,
+            compress=True,
+        )
+
+        np.testing.assert_allclose(torchsky.read(path.name, hdu=1).numpy(), image.numpy())
+        table = torchsky.table.read(path.name, hdu=2)
+        assert table.column("ID").to_pylist() == [10, 20]
+        np.testing.assert_allclose(table.column("FLUX").to_pylist(), [1.5, 2.5])
+    finally:
+        os.unlink(path.name)

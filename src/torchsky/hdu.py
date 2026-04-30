@@ -8,6 +8,7 @@ This module implements the main data structures for FITS HDUs:
 - Header: FITS header management
 """
 
+from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import torch
@@ -15,10 +16,12 @@ from torch import Tensor
 
 try:
     from torch_frame import TensorFrame
+    from torch_frame import stype as _torch_frame_stype
 
     HAS_TORCH_FRAME = True
 except ImportError:
     HAS_TORCH_FRAME = False
+    _torch_frame_stype = None
 
     class TensorFrame:  # type: ignore[no-redef]
         """Minimal fallback when torch_frame is unavailable."""
@@ -32,89 +35,238 @@ except ImportError:
 _ = torch.empty(1)  # Force torch C++ symbols to load
 
 
+@dataclass(frozen=True)
+class Card:
+    """One FITS header card.
+
+    The object is intentionally lightweight and tuple-compatible enough for
+    existing internal code that expects ``(key, value, comment)`` records.
+    """
+
+    key: str
+    value: Any = None
+    comment: str = ""
+
+    @property
+    def keyword(self) -> str:
+        return self.key
+
+    def __iter__(self):
+        yield self.key
+        yield self.value
+        yield self.comment
+
+    def __len__(self) -> int:
+        return 3
+
+    def __getitem__(self, index: int) -> Any:
+        return (self.key, self.value, self.comment)[index]
+
+
 class Header(dict):
     """FITS header as dict."""
 
     def __init__(self, cards=None):
         super().__init__()
         self._version = 0
-        self._cards = []  # List of (key, value, comment)
+        self._cards: list[Card] = []
         if cards:
-            if isinstance(cards, dict):
-                # Legacy support or if passed a dict
+            if isinstance(cards, Header):
+                for card in cards.cards:
+                    self._append_card(card, update_mapping=True, bump=False)
+            elif isinstance(cards, dict):
                 for k, v in cards.items():
-                    self[k] = v
-                    self._cards.append((k, v, ""))
-            elif isinstance(cards, list):
-                # List of tuples (key, value, comment)
+                    if (
+                        not isinstance(v, (str, bytes))
+                        and isinstance(v, tuple)
+                        and len(v) == 2
+                    ):
+                        value, comment = v
+                    else:
+                        value = v
+                        comment = ""
+                    self._set_card(str(k), value, str(comment), bump=False)
+            elif isinstance(cards, (list, tuple)):
                 for card in cards:
-                    if len(card) == 3:
-                        k, v, c = card
-                    elif len(card) == 2:
-                        k, v = card
-                        c = ""
-                    else:
+                    try:
+                        parsed = self._coerce_card(card)
+                    except (TypeError, ValueError):
                         continue
-
-                    self._cards.append((k, v, c))
-
-                    # Handle special keys
-                    if k == "HISTORY" or k == "COMMENT":
-                        # For dict access, we might want to append?
-                        # Standard dict behavior overwrites.
-                        # We keep dict behavior for compatibility, but _cards has everything.
-                        # Maybe store as list in dict? No, that breaks expectation of string value.
-                        # Just store the last one in dict, or join them?
-                        # Astropy stores them in a special way.
-                        # For now, we just let dict overwrite, so last one wins.
-                        # But we provide methods to access all.
-                        pass
-                    else:
-                        self[k] = v
+                    self._append_card(parsed, update_mapping=True, bump=False)
 
     def __setitem__(self, key, value):
-        super().__setitem__(key, value)
+        if (
+            not isinstance(value, (str, bytes))
+            and isinstance(value, tuple)
+            and len(value) == 2
+        ):
+            card_value, comment = value
+        else:
+            card_value = value
+            comment = ""
+        self._set_card(str(key), card_value, str(comment), bump=False)
         self._version += 1
 
     def __delitem__(self, key):
+        key_s = str(key)
         super().__delitem__(key)
+        self._cards = [card for card in self._cards if card.key != key_s]
         self._version += 1
 
     def update(self, *args, **kwargs):
-        super().update(*args, **kwargs)
-        self._version += 1
+        other = dict(*args, **kwargs)
+        for key, value in other.items():
+            if (
+                not isinstance(value, (str, bytes))
+                and isinstance(value, tuple)
+                and len(value) == 2
+            ):
+                card_value, comment = value
+            else:
+                card_value = value
+                comment = ""
+            self._set_card(str(key), card_value, str(comment), bump=False)
+        if other:
+            self._version += 1
 
     def clear(self):
         super().clear()
+        self._cards.clear()
         self._version += 1
 
     def pop(self, *args):
+        if not args:
+            raise TypeError("pop expected at least 1 argument")
+        key = str(args[0])
         res = super().pop(*args)
+        self._cards = [card for card in self._cards if card.key != key]
         self._version += 1
         return res
 
     def popitem(self):
         res = super().popitem()
+        key = str(res[0])
+        self._cards = [card for card in self._cards if card.key != key]
         self._version += 1
         return res
 
     def setdefault(self, key, default=None):
-        res = super().setdefault(key, default)
+        key_s = str(key)
+        if key_s in self:
+            res = self[key_s]
+        else:
+            self._set_card(key_s, default, "", bump=False)
+            res = default
         self._version += 1
         return res
 
     def add_history(self, value):
-        self._cards.append(("HISTORY", value, ""))
-        # Update dict?
+        self._append_card(Card("HISTORY", str(value), ""), update_mapping=True)
 
     def add_comment(self, value):
-        self._cards.append(("COMMENT", value, ""))
+        self._append_card(Card("COMMENT", str(value), ""), update_mapping=True)
 
     def get_history(self):
         return [c[1] for c in self._cards if c[0] == "HISTORY"]
 
     def get_comment(self):
         return [c[1] for c in self._cards if c[0] == "COMMENT"]
+
+    @property
+    def cards(self) -> tuple[Card, ...]:
+        return tuple(self._cards)
+
+    def append(self, card: Card | tuple[str, Any] | tuple[str, Any, str]) -> None:
+        self._append_card(self._coerce_card(card), update_mapping=True)
+
+    def insert(
+        self, index: int, card: Card | tuple[str, Any] | tuple[str, Any, str]
+    ) -> None:
+        parsed = self._coerce_card(card)
+        self._cards.insert(int(index), parsed)
+        self._set_mapping_for_card(parsed)
+        self._version += 1
+
+    def remove(
+        self,
+        key: str,
+        *,
+        ignore_missing: bool = False,
+        remove_all: bool = False,
+    ) -> None:
+        key_s = str(key)
+        matches = [idx for idx, card in enumerate(self._cards) if card.key == key_s]
+        if not matches:
+            if ignore_missing:
+                return
+            raise KeyError(key)
+        remove_indices = set(matches if remove_all else [matches[0]])
+        self._cards = [
+            card for idx, card in enumerate(self._cards) if idx not in remove_indices
+        ]
+        self._rebuild_mapping_for_key(key_s)
+        self._version += 1
+
+    def card(self, key: str) -> Card:
+        key_s = str(key)
+        for card in self._cards:
+            if card.key == key_s:
+                return card
+        raise KeyError(key)
+
+    def comments(self, key: str) -> list[str]:
+        key_s = str(key)
+        return [card.comment for card in self._cards if card.key == key_s]
+
+    @staticmethod
+    def _coerce_card(card: Card | tuple[str, Any] | tuple[str, Any, str]) -> Card:
+        if isinstance(card, Card):
+            return card
+        if not isinstance(card, (list, tuple)):
+            raise TypeError("card must be a Card or tuple")
+        if len(card) == 3:
+            key, value, comment = card
+        elif len(card) == 2:
+            key, value = card
+            comment = ""
+        else:
+            raise ValueError("card tuples must have 2 or 3 items")
+        return Card(str(key), value, str(comment))
+
+    def _append_card(
+        self, card: Card, *, update_mapping: bool, bump: bool = True
+    ) -> None:
+        self._cards.append(card)
+        if update_mapping:
+            self._set_mapping_for_card(card)
+        if bump:
+            self._version += 1
+
+    def _set_card(self, key: str, value: Any, comment: str, *, bump: bool) -> None:
+        card = Card(key, value, comment)
+        if key in {"HISTORY", "COMMENT"}:
+            self._append_card(card, update_mapping=True, bump=bump)
+            return
+
+        for idx, existing in enumerate(self._cards):
+            if existing.key == key:
+                self._cards[idx] = card
+                break
+        else:
+            self._cards.append(card)
+        super().__setitem__(key, value)
+        if bump:
+            self._version += 1
+
+    def _set_mapping_for_card(self, card: Card) -> None:
+        super().__setitem__(card.key, card.value)
+
+    def _rebuild_mapping_for_key(self, key: str) -> None:
+        remaining = [card for card in self._cards if card.key == key]
+        if remaining:
+            super().__setitem__(key, remaining[-1].value)
+        elif key in self:
+            super().__delitem__(key)
 
 
 class DataView:
@@ -448,7 +600,41 @@ class TableHDU(TensorFrame):
             col_names_dict = {"dummy": ["0"]}
 
         self.header = header or Header()
-        super().__init__(feat_dict, col_names_dict)
+        if HAS_TORCH_FRAME:
+            tf_feat_dict, tf_col_names_dict = self._tensorframe_validation_payload(
+                feat_dict
+            )
+            super().__init__(tf_feat_dict, tf_col_names_dict)
+            # Keep the historical column-keyed dictionaries used by TableHDU's
+            # lightweight table methods. TensorFrame validation has already run
+            # against a canonical stype-keyed payload.
+            self.feat_dict = feat_dict
+            self.col_names_dict = col_names_dict
+        else:
+            super().__init__(feat_dict, col_names_dict)
+
+    @staticmethod
+    def _tensorframe_validation_payload(
+        feat_dict: Dict[str, Tensor],
+    ) -> tuple[Dict[Any, Tensor], Dict[Any, List[str]]]:
+        num_rows = 1
+        num_cols = 0
+        names: List[str] = []
+        for name, tensor_data in feat_dict.items():
+            if not isinstance(tensor_data, torch.Tensor) or tensor_data.dim() < 2:
+                continue
+            num_rows = int(tensor_data.shape[0])
+            width = int(tensor_data.shape[1])
+            num_cols += width
+            if width == 1:
+                names.append(str(name))
+            else:
+                names.extend(f"{name}_{idx}" for idx in range(width))
+        if num_cols <= 0:
+            num_cols = 1
+            names = ["dummy"]
+        st = _torch_frame_stype.numerical if _torch_frame_stype is not None else "numerical"
+        return {st: torch.zeros((num_rows, num_cols), dtype=torch.float32)}, {st: names}
 
     def _get_string_columns(self, header: Optional[Header]) -> set:
         """Infer string columns from TTYPE/TFORM header cards."""
@@ -647,9 +833,13 @@ class TableHDU(TensorFrame):
     def num_rows(self) -> int:
         """Get number of rows in the table."""
         if hasattr(self, "_raw_data") and self._raw_data:
+            import numpy as np
+
             for value in self._raw_data.values():
                 if isinstance(value, torch.Tensor):
                     return value.shape[0] if value.dim() > 0 else 1
+                if isinstance(value, np.ndarray):
+                    return int(value.shape[0]) if value.ndim > 0 else 1
                 if isinstance(value, (list, tuple)):
                     return len(value)
             return 0
@@ -1771,13 +1961,14 @@ class HDUList:
             hdul._file_handle = handle
 
             for info in hdu_infos:
-                # Read header
-                header = Header(info.header)
-                if not hasattr(header, "_cards"):
-                    header._cards = []
-                for k, v in info.header.items():
-                    if k in ("HISTORY", "COMMENT"):
-                        header._cards.append((k, v, ""))
+                # Read the full ordered header here because HDUInfo.header is a
+                # dict-shaped convenience view and therefore collapses repeated
+                # HISTORY/COMMENT cards.
+                try:
+                    header_cards = cpp.read_header(handle, info.index)
+                except Exception:
+                    header_cards = info.header
+                header = Header(header_cards)
 
                 # Determine HDU type
                 hdu_type = info.type

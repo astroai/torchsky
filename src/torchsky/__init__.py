@@ -29,7 +29,7 @@ from torch import Tensor
 
 from .buffer import clear_buffers, configure_buffers, get_buffer_stats
 from .cache import clear_cache, configure_for_environment, get_cache_stats
-from .core import CompressionType, FITSCore
+from .core import ChecksumVerifier, CompressionType, FITSCore
 from .dataloader import (
     create_dataloader,
     create_fits_dataloader,
@@ -38,11 +38,18 @@ from .dataloader import (
 )
 from .datasets import FITSDataset, IterableFITSDataset, TableChunkDataset
 from .frame import read_tensor_frame, to_tensor_frame, write_tensor_frame
-from .hdu import HDUList, Header, TableHDU, TableHDURef, TensorHDU
+from .hdu import Card, HDUList, Header, TableHDU, TableHDURef, TensorHDU
 from .interop import to_arrow, to_pandas, to_polars
 from . import table
 from . import sphere
 from . import io
+from .surfaces import (
+    APISurface,
+    API_SURFACES,
+    SurfaceTier,
+    api_surfaces_by_tier,
+    get_api_surface,
+)
 from .header_parser import fast_parse_header
 from .transforms import (
     AsinhStretch,
@@ -193,6 +200,11 @@ __all__ = [
     "open_subset_reader",
     "SubsetReader",
     "io",
+    "APISurface",
+    "API_SURFACES",
+    "SurfaceTier",
+    "api_surfaces_by_tier",
+    "get_api_surface",
     # Batch operations
     "read_batch",
     "get_batch_info",
@@ -206,8 +218,10 @@ __all__ = [
     "TableHDU",
     "TableHDURef",
     "Header",
+    "Card",
     # WCS functionality
     "WCS",
+    "ChecksumVerifier",
     # Dataset classes
     "FITSDataset",
     "IterableFITSDataset",
@@ -1954,6 +1968,28 @@ def _host_tensor_for_fits_write(tensor: Tensor) -> Tensor:
     return tensor
 
 
+def _write_header_cards_if_supported(
+    path: str,
+    hdu: int,
+    header: Optional[Dict[str, Any]],
+) -> None:
+    if not header:
+        return
+    header_obj = header if isinstance(header, Header) else Header(header)
+    if not header_obj.cards:
+        return
+    try:
+        import torchsky.cpp as cpp
+
+        writer = getattr(cpp, "write_hdu_header_cards", None)
+        if writer is None:
+            return
+        writer(path, int(hdu), list(header_obj.cards))
+        _invalidate_path_caches(path)
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return
+
+
 def write(
     path: str,
     data,
@@ -2006,7 +2042,9 @@ def write(
                     item_hdu = _coerce_compressed_hdu_item(data)
                     compressed_hdus.append(item_hdu)
                 else:
-                    compressed_hdus.append(TableHDU(data, header=Header(header or {})))
+                    compressed_hdus.append(
+                        _TableHDUWriteProxy(data, Header(header or {}))
+                    )
             elif isinstance(data, (list, tuple)):
                 for item in data:
                     compressed_hdus.append(_coerce_compressed_hdu_item(item))
@@ -2027,6 +2065,10 @@ def write(
             _write_hdus_with_optional_compression(
                 path, compressed_hdus, compress=compress
             )
+            for out_hdu, item_hdu in enumerate(compressed_hdus, start=1):
+                _write_header_cards_if_supported(
+                    path, out_hdu, getattr(item_hdu, "header", None)
+                )
             return
 
         if isinstance(data, HDUList):
@@ -2037,7 +2079,9 @@ def write(
         if isinstance(data, dict) and "data" not in data:
             if _can_use_cpp_table_writer(data):
                 data = _normalize_cpp_table_data(data)
-                cpp.write_fits_table(path, data, header if header else {}, overwrite)
+                header_obj = Header(header) if header else Header()
+                cpp.write_fits_table(path, data, header_obj, overwrite)
+                _write_header_cards_if_supported(path, 1, header_obj)
                 return
             raise ValueError(
                 "Dictionary table writes currently require CFITSIO-native column types "
@@ -2079,6 +2123,9 @@ def write(
 
         # Call C++ writer
         cpp.write_fits_file(path, hdus_to_write, overwrite)
+        for idx, item in enumerate(hdus_to_write):
+            item_header = item.get("header") if isinstance(item, dict) else None
+            _write_header_cards_if_supported(path, idx, item_header)
 
     except Exception as e:
         # Clean up partial file on error
@@ -2276,10 +2323,18 @@ def _coerce_compressed_hdu_item(item: Any) -> Any:
                 data=_host_tensor_for_fits_write(img),
                 header=Header(item.get("header", {})),
             )
-        return TableHDU(item, header=Header())
+        return _TableHDUWriteProxy(item, Header())
     raise NotImplementedError(
         f"Unsupported HDU payload for compressed write: {type(item)}"
     )
+
+
+class _TableHDUWriteProxy:
+    """Small table-HDU proxy for writer paths that should not build TensorFrame."""
+
+    def __init__(self, raw_data: Dict[str, Any], header: Header):
+        self._raw_data = _normalize_cpp_table_data(dict(raw_data))
+        self.header = header
 
 
 def _detach_hdus_for_rewrite(path: str) -> List[Any]:
@@ -2415,6 +2470,14 @@ def _write_hdus_with_optional_compression(
             hdu = hdu.materialize(device="cpu")
 
         if isinstance(hdu, TableHDU):
+            raw_data = dict(getattr(hdu, "_raw_data", {}))
+            raw_data = _normalize_cpp_table_data(raw_data)
+            payload.append(
+                _TableWriteProxy(raw_data, _sanitize_table_header_for_write(hdu.header))
+            )
+            continue
+
+        if hasattr(hdu, "_raw_data") and hasattr(hdu, "header"):
             raw_data = dict(getattr(hdu, "_raw_data", {}))
             raw_data = _normalize_cpp_table_data(raw_data)
             payload.append(
@@ -2721,9 +2784,7 @@ def clear_file_cache(
 
 def write_checksums(path: str, hdu: int = 0) -> None:
     """Compute and write DATASUM/CHECKSUM keywords for an HDU (CFITSIO)."""
-    import torchsky.cpp as cpp
-
-    cpp.write_hdu_checksums(path, int(hdu))
+    ChecksumVerifier.write_hdu_checksums(path, hdu)
 
 
 def verify_checksums(path: str, hdu: int = 0) -> Dict[str, Any]:
@@ -2734,14 +2795,7 @@ def verify_checksums(path: str, hdu: int = 0) -> Dict[str, Any]:
     - 0: keyword not present / undefined
     - -1: verification not correct
     """
-    import torchsky.cpp as cpp
-
-    datastatus, hdustatus = cpp.verify_hdu_checksums(path, int(hdu))
-    return {
-        "datastatus": int(datastatus),
-        "hdustatus": int(hdustatus),
-        "ok": int(datastatus) == 1 and int(hdustatus) == 1,
-    }
+    return dict(ChecksumVerifier.verify_hdu_checksums(path, hdu))
 
 
 def read_large_table(

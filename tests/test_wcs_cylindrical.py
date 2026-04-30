@@ -8,7 +8,7 @@ from torchsky.wcs.core import WCS
 from torchsky.wcs.cylindrical import project_cylindrical, deproject_cylindrical
 
 
-CYLINDRICAL = ("CEA", "CAR", "MER")
+CYLINDRICAL = ("CEA", "CAR", "MER", "CYP")
 
 
 def _header(proj: str) -> fits.Header:
@@ -28,6 +28,9 @@ def _header(proj: str) -> fits.Header:
     header["CTYPE2"] = f"DEC--{proj}"
     if proj == "CEA":
         header["PV2_1"] = 1.0
+    if proj == "CYP":
+        header["PV2_1"] = 2.0
+        header["PV2_2"] = 1.0
     return header
 
 
@@ -105,18 +108,10 @@ def test_cylindrical_not_implemented() -> None:
     phi = torch.tensor([0.0])
     theta = torch.tensor([0.0])
 
-    with pytest.raises(NotImplementedError, match="CYP inversion not yet implemented"):
-        project_cylindrical(phi, theta, "CYP")
-
     with pytest.raises(
         NotImplementedError, match="Cylindrical code UNK not implemented"
     ):
         project_cylindrical(phi, theta, "UNK")
-
-    with pytest.raises(
-        NotImplementedError, match="CYP forward projection not yet implemented"
-    ):
-        deproject_cylindrical(phi, theta, "CYP")
 
     with pytest.raises(
         NotImplementedError, match="Cylindrical forward projection UNK not implemented"
