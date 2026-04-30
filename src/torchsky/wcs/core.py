@@ -149,6 +149,20 @@ class WCS:
             dict[float, Callable[[Tensor], Tensor]] | None
         ) = None
 
+    def _parse_header(self, header: Dict[str, Any]) -> None:
+        self._parse_header(header)
+        self._parse_cd_pc(header)
+        self._parse_pole(header)
+        self._parse_pv(header)
+        self._parse_wat(header)
+
+    def _parse_header(self, header: Dict[str, Any]) -> None:
+        self._parse_header(header)
+        self._parse_cd_pc(header)
+        self._parse_pole(header)
+        self._parse_pv(header)
+        self._parse_wat(header)
+
     def _parse_core(self, header: Dict[str, Any]) -> None:
         """Parse core WCS keywords (CTYPE, CRPIX, CRVAL, CDELT, CUNIT)."""
         for i in range(1, self.naxis + 1):

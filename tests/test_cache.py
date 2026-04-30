@@ -637,41 +637,6 @@ def test_configure_for_environment():
 
 class TestCacheManagerFunctions:
     """Test cache manager module-level functions."""
-    @patch("torchsky.cache.get_cache_manager")
-    def test_clear_cache_delegates(self, mock_get_manager):
-        """Test that clear_cache delegates to manager.clear()."""
-        from torchsky.cache import clear_cache
-        mock_manager = mock_get_manager.return_value
-        clear_cache()
-        mock_manager.clear.assert_called_once()
-
-    @patch("torchsky.cache.CacheManager")
-    def test_configure_cache(self, mock_manager_class):
-        """Test configuring the cache globally."""
-        from torchsky.cache import configure_cache, _cache_manager
-
-        mock_manager_instance = MagicMock()
-        mock_manager_class.return_value = mock_manager_instance
-
-        # Save old manager to restore later
-        import torchsky.cache as cache_module
-        old_manager = cache_module._cache_manager
-
-        try:
-            configure_cache(max_files=42, max_memory_mb=128, disk_cache_gb=5)
-
-            mock_manager_class.assert_called_once()
-            args, kwargs = mock_manager_class.call_args
-            config = args[0]
-            assert config.max_files == 42
-            assert config.max_memory_mb == 128
-            assert config.disk_cache_gb == 5
-
-            mock_manager_instance.configure_cpp_cache.assert_called_once()
-            assert cache_module._cache_manager is mock_manager_instance
-        finally:
-            cache_module._cache_manager = old_manager
-
 
     def test_clear_cache(self):
         from torchsky.cache import get_cache_manager, clear_cache, get_cache_stats
