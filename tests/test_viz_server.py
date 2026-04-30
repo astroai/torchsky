@@ -117,6 +117,36 @@ def test_health_exposes_root_when_configured(tmp_fits_dir: Path):
     assert "root" in r.json()
 
 
+def test_create_app_defaults_to_no_cors_origins(tmp_fits_dir: Path):
+    from fastapi.middleware.cors import CORSMiddleware
+    from torchsky.viz.server import create_app
+
+    app = create_app(root_dir=str(tmp_fits_dir))
+    cors = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
+
+    assert cors.options["allow_origins"] == []
+    assert cors.options["allow_credentials"] is False
+
+
+def test_static_viz_html_escapes_metadata_and_tracks_aria_state():
+    html = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "torchsky"
+        / "viz"
+        / "static"
+        / "index.html"
+    ).read_text()
+
+    assert "htmlEscape(fmt(dr.dr_ratio))" in html
+    assert "htmlEscape(fmt(s.min))" in html
+    assert "htmlEscape(fmt(wcs.crval1))" in html
+    assert 'id="stretch-group" role="group"' in html
+    assert 'id="cmap-group" role="group"' in html
+    assert "setAttribute('aria-pressed', 'false')" in html
+    assert "setAttribute('aria-pressed', 'true')" in html
+
+
 def test_file_tree(client: TestClient):
     r = client.get("/api/fits/tree")
     assert r.status_code == 200

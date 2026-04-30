@@ -50,7 +50,7 @@ def serve(
         max_validation_pairs: Cap validation pairs (FIFO eviction).
         max_image_pixels: Max H*W per image for HiPS/validation (default 512M).
         expose_root_in_health: Put absolute root path in ``/api/health`` JSON.
-        cors_allow_origins: Explicit CORS origins; ``None`` allows all hosts.
+        cors_allow_origins: Explicit CORS origins; ``None`` allows no CORS origins.
         cors_allow_credentials: Enable credentialed CORS (disallowed with ``*`` origins).
     """
     try:

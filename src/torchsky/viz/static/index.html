@@ -614,31 +614,31 @@
 
       <div class="sidebar-section">
         <div class="section-title">Stretch</div>
-        <div class="pill-group" id="stretch-group">
-          <button class="pill active" data-v="zscale">ZScale</button>
-          <button class="pill" data-v="linear">Linear</button>
-          <button class="pill" data-v="log">Log</button>
-          <button class="pill" data-v="sqrt">√</button>
-          <button class="pill" data-v="asinh">Asinh</button>
-          <button class="pill" data-v="histeq">HistEq</button>
+        <div class="pill-group" id="stretch-group" role="group" aria-label="Image stretch">
+          <button type="button" class="pill active" data-v="zscale" aria-pressed="true">ZScale</button>
+          <button type="button" class="pill" data-v="linear" aria-pressed="false">Linear</button>
+          <button type="button" class="pill" data-v="log" aria-pressed="false">Log</button>
+          <button type="button" class="pill" data-v="sqrt" aria-pressed="false">√</button>
+          <button type="button" class="pill" data-v="asinh" aria-pressed="false">Asinh</button>
+          <button type="button" class="pill" data-v="histeq" aria-pressed="false">HistEq</button>
         </div>
       </div>
 
       <div class="sidebar-section">
         <div class="section-title">Colormap</div>
-        <div class="cmap-group" id="cmap-group">
+        <div class="cmap-group" id="cmap-group" role="group" aria-label="Colormap">
           <button type="button" class="cmap-swatch active" data-v="gray" title="Gray"
-            style="background:linear-gradient(to right,#000,#fff)" aria-label="Colormap: Gray"></button>
+            style="background:linear-gradient(to right,#000,#fff)" aria-label="Colormap: Gray" aria-pressed="true"></button>
           <button type="button" class="cmap-swatch" data-v="viridis" title="Viridis"
-            style="background:linear-gradient(to right,#440154,#31688e,#35b779,#fde725)" aria-label="Colormap: Viridis"></button>
+            style="background:linear-gradient(to right,#440154,#31688e,#35b779,#fde725)" aria-label="Colormap: Viridis" aria-pressed="false"></button>
           <button type="button" class="cmap-swatch" data-v="hot" title="Hot"
-            style="background:linear-gradient(to right,#000,#f00,#ff0,#fff)" aria-label="Colormap: Hot"></button>
+            style="background:linear-gradient(to right,#000,#f00,#ff0,#fff)" aria-label="Colormap: Hot" aria-pressed="false"></button>
           <button type="button" class="cmap-swatch" data-v="thermal" title="Thermal"
-            style="background:linear-gradient(to right,#00f,#0f0,#f80,#f00)" aria-label="Colormap: Thermal"></button>
+            style="background:linear-gradient(to right,#00f,#0f0,#f80,#f00)" aria-label="Colormap: Thermal" aria-pressed="false"></button>
           <button type="button" class="cmap-swatch" data-v="rdbu_r" title="RdBu (reversed) — for residuals"
-            style="background:linear-gradient(to right,#670520,#f7f7f7,#053061)" aria-label="Colormap: RdBu (reversed)"></button>
+            style="background:linear-gradient(to right,#670520,#f7f7f7,#053061)" aria-label="Colormap: RdBu (reversed)" aria-pressed="false"></button>
           <button type="button" class="cmap-swatch" data-v="seismic" title="Seismic"
-            style="background:linear-gradient(to right,#00004c,#0066ff,#fff,#ff1a1a,#4c0000)" aria-label="Colormap: Seismic"></button>
+            style="background:linear-gradient(to right,#00004c,#0066ff,#fff,#ff1a1a,#4c0000)" aria-label="Colormap: Seismic" aria-pressed="false"></button>
         </div>
       </div>
 
@@ -1023,9 +1023,9 @@ function updateDRCard(dr) {
   if (!dr) return;
   $('dr-card').style.display = '';
   $('dr-stats').innerHTML = `
-    <span class="stat-key">DR ratio</span><span class="stat-val">${fmt(dr.dr_ratio)}×</span>
-    <span class="stat-key">Neg. frac.</span><span class="stat-val">${(dr.neg_fraction*100).toFixed(2)}%</span>
-    <span class="stat-key">CR frac.</span><span class="stat-val">${(dr.cr_fraction*100).toFixed(4)}%</span>
+    <span class="stat-key">DR ratio</span><span class="stat-val">${htmlEscape(fmt(dr.dr_ratio))}×</span>
+    <span class="stat-key">Neg. frac.</span><span class="stat-val">${htmlEscape((Number(dr.neg_fraction)*100).toFixed(2))}%</span>
+    <span class="stat-key">CR frac.</span><span class="stat-val">${htmlEscape((Number(dr.cr_fraction)*100).toFixed(4))}%</span>
     <span class="stat-key">Rec. stretch</span><span class="stat-val">${htmlEscape(dr.recommended_stretch)}</span>
   `;
   const warns = $('dr-warns');
@@ -1043,12 +1043,12 @@ function updateStatsCard(data) {
   const s = data.dr.stats;
   $('stats-card').style.display = '';
   $('img-stats').innerHTML = `
-    <span class="stat-key">Min</span><span class="stat-val">${fmt(s.min)}</span>
-    <span class="stat-key">Max</span><span class="stat-val">${fmt(s.max)}</span>
-    <span class="stat-key">Median</span><span class="stat-val">${fmt(s.median)}</span>
-    <span class="stat-key">Std</span><span class="stat-val">${fmt(s.std)}</span>
-    <span class="stat-key">p1</span><span class="stat-val">${fmt(s.p1)}</span>
-    <span class="stat-key">p99</span><span class="stat-val">${fmt(s.p99)}</span>
+    <span class="stat-key">Min</span><span class="stat-val">${htmlEscape(fmt(s.min))}</span>
+    <span class="stat-key">Max</span><span class="stat-val">${htmlEscape(fmt(s.max))}</span>
+    <span class="stat-key">Median</span><span class="stat-val">${htmlEscape(fmt(s.median))}</span>
+    <span class="stat-key">Std</span><span class="stat-val">${htmlEscape(fmt(s.std))}</span>
+    <span class="stat-key">p1</span><span class="stat-val">${htmlEscape(fmt(s.p1))}</span>
+    <span class="stat-key">p99</span><span class="stat-val">${htmlEscape(fmt(s.p99))}</span>
   `;
 }
 
@@ -1058,8 +1058,8 @@ function updateWCSInfo(wcs) {
   $('wcs-info').innerHTML = `
     <span class="stat-key">CTYPE1</span><span class="stat-val text-mono">${htmlEscape(wcs.ctype1 || '—')}</span>
     <span class="stat-key">CTYPE2</span><span class="stat-val text-mono">${htmlEscape(wcs.ctype2 || '—')}</span>
-    <span class="stat-key">CRVAL1</span><span class="stat-val text-mono">${fmt(wcs.crval1)}</span>
-    <span class="stat-key">CRVAL2</span><span class="stat-val text-mono">${fmt(wcs.crval2)}</span>
+    <span class="stat-key">CRVAL1</span><span class="stat-val text-mono">${htmlEscape(fmt(wcs.crval1))}</span>
+    <span class="stat-key">CRVAL2</span><span class="stat-val text-mono">${htmlEscape(fmt(wcs.crval2))}</span>
     <span class="stat-key">Projection</span><span class="stat-val">${htmlEscape(wcs.proj_code || '—')}</span>
   `;
 }
@@ -1116,8 +1116,12 @@ document.querySelectorAll('.tab').forEach(tab => {
 // Stretch pills
 document.querySelectorAll('#stretch-group .pill').forEach(pill => {
   pill.addEventListener('click', () => {
-    document.querySelectorAll('#stretch-group .pill').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('#stretch-group .pill').forEach(p => {
+      p.classList.remove('active');
+      p.setAttribute('aria-pressed', 'false');
+    });
     pill.classList.add('active');
+    pill.setAttribute('aria-pressed', 'true');
     state.stretch = pill.dataset.v;
     if (state.currentFile) rerenderSurvey();
   });
@@ -1126,8 +1130,12 @@ document.querySelectorAll('#stretch-group .pill').forEach(pill => {
 // Cmap swatches
 document.querySelectorAll('#cmap-group .cmap-swatch').forEach(sw => {
   sw.addEventListener('click', () => {
-    document.querySelectorAll('#cmap-group .cmap-swatch').forEach(s => s.classList.remove('active'));
+    document.querySelectorAll('#cmap-group .cmap-swatch').forEach(s => {
+      s.classList.remove('active');
+      s.setAttribute('aria-pressed', 'false');
+    });
     sw.classList.add('active');
+    sw.setAttribute('aria-pressed', 'true');
     state.cmap = sw.dataset.v;
     if (state.currentFile) rerenderSurvey();
   });
