@@ -48,3 +48,45 @@ def test_parse_cutout_spec_invalid():
         FITSCore.parse_cutout_spec("myimage.fits[]")
     with pytest.raises(ValueError):
         FITSCore.parse_cutout_spec("myimage.fits[1][,10]")
+
+import torch
+from torchsky.core import FITSDataTypeHandler
+
+def test_apply_scaling_no_scaling():
+    data = torch.tensor([1, 2, 3])
+    result = FITSDataTypeHandler.apply_scaling(data)
+    # Should return the same tensor object
+    assert result is data
+
+def test_apply_scaling_bscale_only():
+    data = torch.tensor([1, 2, 3], dtype=torch.int32)
+    result = FITSDataTypeHandler.apply_scaling(data, bscale=2.0)
+
+    # Original shouldn't be modified
+    assert torch.equal(data, torch.tensor([1, 2, 3], dtype=torch.int32))
+
+    # Result should be scaled and float32
+    assert result.dtype == torch.float32
+    assert torch.allclose(result, torch.tensor([2.0, 4.0, 6.0]))
+
+def test_apply_scaling_bzero_only():
+    data = torch.tensor([1, 2, 3], dtype=torch.int32)
+    result = FITSDataTypeHandler.apply_scaling(data, bzero=5.0)
+
+    # Original shouldn't be modified
+    assert torch.equal(data, torch.tensor([1, 2, 3], dtype=torch.int32))
+
+    # Result should be offset and float32
+    assert result.dtype == torch.float32
+    assert torch.allclose(result, torch.tensor([6.0, 7.0, 8.0]))
+
+def test_apply_scaling_both():
+    data = torch.tensor([1, 2, 3], dtype=torch.int32)
+    result = FITSDataTypeHandler.apply_scaling(data, bscale=2.0, bzero=5.0)
+
+    # Original shouldn't be modified
+    assert torch.equal(data, torch.tensor([1, 2, 3], dtype=torch.int32))
+
+    # Result should be scaled + offset and float32
+    assert result.dtype == torch.float32
+    assert torch.allclose(result, torch.tensor([7.0, 9.0, 11.0]))
