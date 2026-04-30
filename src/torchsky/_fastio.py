@@ -5,6 +5,7 @@ from typing import Union
 import torch
 
 import torchsky.cpp as cpp
+from torchsky import _batch_to_device
 
 _HAS_READ_HDUS_BATCH = hasattr(cpp, "read_hdus_batch")
 _HAS_READ_FULL_RAW_WITH_SCALE = hasattr(cpp, "read_full_raw_with_scale")
@@ -40,9 +41,9 @@ def read(
             raise ValueError("Batch read requires a single integer HDU")
         data_list = cpp.read_images_batch(list(path), hdu)
         if not is_cpu or target_dtype is not None:
-            data_list = [
-                t.to(device=target_device, dtype=target_dtype) for t in data_list
-            ]
+            data_list = _batch_to_device(
+                data_list, device=target_device, dtype=target_dtype
+            )
         return data_list
 
     if not isinstance(path, str):
@@ -61,7 +62,7 @@ def read(
     if isinstance(hdu, (list, tuple)) and _HAS_READ_HDUS_BATCH:
         data = cpp.read_hdus_batch(path, list(hdu))
         if not is_cpu or target_dtype is not None:
-            data = [t.to(device=target_device, dtype=target_dtype) for t in data]
+            data = _batch_to_device(data, device=target_device, dtype=target_dtype)
         return data
 
     if scale_on_device and not raw_scale and _HAS_READ_FULL_RAW_WITH_SCALE:
