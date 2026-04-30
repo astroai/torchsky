@@ -64,3 +64,49 @@ def test_gate_healpix_interp_weights_bulk() -> None:
 
     max_s = float(os.environ.get("TORCHSKY_PERF_GATE_INTERP_WEIGHTS_S", "3.0"))
     assert _median_seconds(run) < max_s
+
+
+def _tan_wcs() -> torchsky.WCS:
+    return torchsky.WCS(
+        {
+            "NAXIS": 2,
+            "CTYPE1": "RA---TAN",
+            "CTYPE2": "DEC--TAN",
+            "CRPIX1": 2048.0,
+            "CRPIX2": 2048.0,
+            "CRVAL1": 180.0,
+            "CRVAL2": 0.5,
+            "CDELT1": -0.0002777778,
+            "CDELT2": 0.0002777778,
+        }
+    )
+
+
+def test_gate_wcs_tan_pixel_to_world_bulk() -> None:
+    """Common TAN vector transforms should stay cheap for map/catalog workflows."""
+    wcs = _tan_wcs()
+    n = int(os.environ.get("TORCHSKY_PERF_GATE_WCS_N", "200000"))
+    x = torch.linspace(1500.0, 2500.0, steps=n, dtype=torch.float64)
+    y = torch.linspace(1500.0, 2500.0, steps=n, dtype=torch.float64)
+    pixels = torch.stack([x, y], dim=-1)
+
+    def run() -> None:
+        wcs.pixel_to_world(pixels)
+
+    max_s = float(os.environ.get("TORCHSKY_PERF_GATE_WCS_P2W_S", "2.0"))
+    assert _median_seconds(run) < max_s
+
+
+def test_gate_wcs_tan_world_to_pixel_bulk() -> None:
+    """Common TAN inverse transforms should stay cheap for reprojection workflows."""
+    wcs = _tan_wcs()
+    n = int(os.environ.get("TORCHSKY_PERF_GATE_WCS_N", "200000"))
+    x = torch.linspace(1500.0, 2500.0, steps=n, dtype=torch.float64)
+    y = torch.linspace(1500.0, 2500.0, steps=n, dtype=torch.float64)
+    world = wcs.pixel_to_world(torch.stack([x, y], dim=-1))
+
+    def run() -> None:
+        wcs.world_to_pixel(world)
+
+    max_s = float(os.environ.get("TORCHSKY_PERF_GATE_WCS_W2P_S", "2.0"))
+    assert _median_seconds(run) < max_s

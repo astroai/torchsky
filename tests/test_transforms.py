@@ -189,11 +189,15 @@ class TestConvenienceFunctions:
             "power": PowerStretch,
             "zscale": ZScale,
         }
+        data = torch.abs(torch.randn(50, 50)) + 1
         for stretch, cls in stretch_types.items():
             transform = create_display_transform(stretch=stretch)
             assert isinstance(transform, Compose)
             assert len(transform.transforms) == 1
             assert isinstance(transform.transforms[0], cls)
+            result = transform(data)
+            assert result.shape == data.shape
+            assert torch.isfinite(result).all()
 
         # Test passing kwargs
         transform = create_display_transform(stretch="asinh", a=0.5, Q=10.0)

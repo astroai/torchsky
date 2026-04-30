@@ -236,9 +236,9 @@ class Spectrum1D:
             align_corners=True,
         ).squeeze()
 
-        # ⚡ Bolt: Vectorized resampling using searchsorted for O(M log N)
-        # Find indices of new_wavelength in current_wave
-        indices = torch.searchsorted(current_wave, new_wavelength).clamp(0, len(current_wave) - 1)
+        indices = torch.searchsorted(current_wave, new_wavelength).clamp(
+            0, len(current_wave) - 1
+        )
 
         # Closest neighbor search (equivalent to the old loop but vectorized)
         # We check if indices or indices-1 is closer

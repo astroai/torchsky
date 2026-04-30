@@ -207,6 +207,16 @@ class TestDataCube:
             assert cube.spectral_axis_index == axis_idx
             assert cube.n_spectral == shape[axis_idx]
 
+    def test_spatial_shape(self):
+        """Test spatial shape with each supported spectral axis position."""
+        cube0 = self.create_test_cube((100, 64, 32), spectral_axis_index=0)
+        cube1 = self.create_test_cube((64, 100, 32), spectral_axis_index=1)
+        cube2 = self.create_test_cube((64, 32, 100), spectral_axis_index=2)
+
+        assert cube0.spatial_shape == (64, 32)
+        assert cube1.spatial_shape == (64, 32)
+        assert cube2.spatial_shape == (64, 32)
+
     def test_spectrum_extraction(self):
         """Test extracting 1D spectra from cube."""
         cube = self.create_test_cube()
