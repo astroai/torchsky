@@ -23,7 +23,7 @@ def transfer_batch(data_list, device):
     try:
         stacked = MockTensor.stack(data_list).to(device)
         return stacked.unbind(0)
-    except:
+    except Exception:
         return [t.to(device) for t in data_list]
 
 def run_benchmark():

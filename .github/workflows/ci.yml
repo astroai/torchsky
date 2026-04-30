@@ -23,6 +23,9 @@ jobs:
       - name: Install pre-commit
         run: pip install "pre-commit>=4,<5"
       - name: Run pre-commit (all files)
+        env:
+          # Pyright runs in code-quality via Pixi; this job has no pixi on PATH.
+          SKIP: pyright
         run: pre-commit run --all-files --show-diff-on-failure --color always
 
   code-quality:
