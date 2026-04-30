@@ -2,9 +2,9 @@ name: Comprehensive CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
   release:
     types: [published]
 
@@ -12,135 +12,123 @@ env:
   FORCE_COLOR: 1
 
 jobs:
+  pre-commit:
+    name: Pre-commit (fail fast)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pre-commit
+        run: pip install "pre-commit>=4,<5"
+      - name: Run pre-commit (all files)
+        run: pre-commit run --all-files --show-diff-on-failure --color always
+
   code-quality:
     name: Code Quality
     runs-on: ubuntu-latest
+    needs: pre-commit
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
+      - uses: prefix-dev/setup-pixi@v0.8.0
+        with:
+          pixi-version: latest
 
-    - name: Install code quality tools
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        python -m pip install --upgrade pip
-        pip install torch --index-url https://download.pytorch.org/whl/cpu
-        pip install scikit-build-core nanobind numpy
-        pip install -e ".[dev,test]" --no-build-isolation
+      - name: Install Pixi env (test — pyright + built package)
+        run: pixi install --frozen -e test
 
-    # Tree-wide `ruff format --check` is not enabled yet (many files predate ruff format).
-    - name: Lint with ruff
-      run: ruff check --output-format=github .
-
-    - name: Pyright (scoped allowlist in pyrightconfig.json)
-      env:
-        PYTHONPATH: ${{ github.workspace }}/src
-      run: |
-        pip list
-        pyright --verbose
+      # Ruff is enforced in the pre-commit job; this job focuses on typecheck.
+      - name: Pyright (scoped allowlist in pyrightconfig.json)
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: pixi run -e test -- pyright --verbose
 
   build-test:
     name: Build & Test
+    needs: pre-commit
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ['3.12']
+        python-version: ["3.12"]
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
+      - name: Install system dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
 
-    - name: Install system dependencies (Ubuntu)
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential
+      - uses: prefix-dev/setup-pixi@v0.8.0
+        with:
+          pixi-version: latest
 
-    - name: Install Python dependencies
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        python -m pip install --upgrade pip wheel setuptools
-        pip install torch --index-url https://download.pytorch.org/whl/cpu
-        pip install nanobind scikit-build-core psutil
-        pip install -e ".[test]" --no-build-isolation
+      - name: Install test environment
+        run: pixi install --frozen -e test
 
-    - name: Run full test suite
-      run: |
-        pytest -n auto -v --tb=short
+      - name: Run full test suite
+        run: pixi run -e test -- pytest -n auto -v --tb=short
 
   map-mosaic-bench:
     name: Map mosaic (bench extras + compat gate)
     runs-on: ubuntu-latest
+    needs: pre-commit
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
+      - name: Install system dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
 
-    - name: Install system dependencies (Ubuntu)
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential
+      - uses: prefix-dev/setup-pixi@v0.8.0
+        with:
+          pixi-version: latest
 
-    - name: Install torchsky with bench optional dependencies
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        python -m pip install --upgrade pip wheel setuptools
-        pip install torch --index-url https://download.pytorch.org/whl/cpu
-        pip install nanobind scikit-build-core
-        pip install -e ".[bench]" --no-build-isolation
+      - name: Install sphere-bench environment
+        run: pixi install --frozen -e sphere-bench
 
-    - name: Run full pytest (includes reproject + drizzle smoke)
-      run: |
-        pytest -n auto -q --tb=short
+      - name: Run full pytest (includes reproject + drizzle smoke)
+        run: pixi run -e sphere-bench -- pytest -n auto -q --tb=short
 
-    - name: Map compat gate vs baseline (synthetic_shifted_wcs)
-      run: |
-        PYTHONPATH=src:benchmarks python benchmarks/bench_map_compat.py \
-          --size 32 --n-obs 2 --runs 1 \
-          --cases synthetic_shifted_wcs \
-          --torchsky-kernels bilinear \
-          --reproject-kernels bilinear \
-          --drizzle-kernels point \
-          --swarp-kernels bilinear \
-          --json-out benchmark_results/map_compat_ci.json \
-          --baseline-json benchmarks/baselines/map_compat_ci_gate.json
+      - name: Map compat gate vs baseline (synthetic_shifted_wcs)
+        run: |
+          pixi run -e sphere-bench -- env PYTHONPATH=src:benchmarks python benchmarks/bench_map_compat.py \
+            --size 32 --n-obs 2 --runs 1 \
+            --cases synthetic_shifted_wcs \
+            --torchsky-kernels bilinear \
+            --reproject-kernels bilinear \
+            --drizzle-kernels point \
+            --swarp-kernels bilinear \
+            --json-out benchmark_results/map_compat_ci.json \
+            --baseline-json benchmarks/baselines/map_compat_ci_gate.json
 
-    - name: Bench smoke — fft_shift on CRPIX translation case
-      run: |
-        PYTHONPATH=src:benchmarks python benchmarks/bench_map_compat.py \
-          --size 32 --n-obs 2 --runs 1 \
-          --cases upstream_drizzle_crpix_translation \
-          --torchsky-kernels fft_shift \
-          --reproject-kernels bilinear \
-          --drizzle-kernels point \
-          --swarp-kernels bilinear \
-          --json-out benchmark_results/map_compat_fft_shift_smoke.json
+      - name: Bench smoke — fft_shift on CRPIX translation case
+        run: |
+          pixi run -e sphere-bench -- env PYTHONPATH=src:benchmarks python benchmarks/bench_map_compat.py \
+            --size 32 --n-obs 2 --runs 1 \
+            --cases upstream_drizzle_crpix_translation \
+            --torchsky-kernels fft_shift \
+            --reproject-kernels bilinear \
+            --drizzle-kernels point \
+            --swarp-kernels bilinear \
+            --json-out benchmark_results/map_compat_fft_shift_smoke.json
 
-    - name: Bench smoke — Strainer phase2 synthetic harness
-      run: |
-        PYTHONPATH=src:benchmarks python benchmarks/bench_strainer_phase2.py \
-          --fit-steps 12 --synthetic-pretrain-steps 24 \
-          --early-steps 1,4,8,12
+      - name: Bench smoke — Strainer phase2 synthetic harness
+        run: |
+          pixi run -e sphere-bench -- env PYTHONPATH=src:benchmarks python benchmarks/bench_strainer_phase2.py \
+            --fit-steps 12 --synthetic-pretrain-steps 24 \
+            --early-steps 1,4,8,12
 
-    - name: Bench smoke — SMACS Strainer transfer (ok or skipped without data)
-      run: |
-        PYTHONPATH=src:benchmarks python benchmarks/bench_map_smacs0723_strainer_transfer.py \
-          --steps 4 --synthetic-pretrain-steps 8
+      - name: Bench smoke — SMACS Strainer transfer (ok or skipped without data)
+        run: |
+          pixi run -e sphere-bench -- env PYTHONPATH=src:benchmarks python benchmarks/bench_map_smacs0723_strainer_transfer.py \
+            --steps 4 --synthetic-pretrain-steps 8
 
   memory-safety:
     name: Memory Leak Detection
@@ -148,31 +136,24 @@ jobs:
     needs: build-test
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y valgrind build-essential
 
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y valgrind build-essential
+      - uses: prefix-dev/setup-pixi@v0.8.0
+        with:
+          pixi-version: latest
 
-    - name: Install Python dependencies
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        python -m pip install --upgrade pip wheel setuptools
-        pip install torch --index-url https://download.pytorch.org/whl/cpu
-        pip install numpy astropy fitsio pytest nanobind scikit-build-core psutil pyarrow
-        pip install -e . --no-build-isolation
+      - name: Install default environment
+        run: pixi install --frozen -e default
 
-    - name: Run memory leak tests
-      run: |
-        echo "Memory leak testing would run here with valgrind"
-        echo "Skipping for initial release"
+      - name: Run memory leak tests
+        run: |
+          echo "Memory leak testing would run here with valgrind"
+          echo "Skipping for initial release"
 
   performance-benchmark:
     name: Performance Benchmarks
@@ -180,63 +161,54 @@ jobs:
     needs: build-test
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
 
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential
+      - uses: prefix-dev/setup-pixi@v0.8.0
+        with:
+          pixi-version: latest
 
-    - name: Install Python dependencies
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        python -m pip install --upgrade pip wheel setuptools
-        pip install torch --index-url https://download.pytorch.org/whl/cpu
-        pip install numpy astropy fitsio pytest nanobind scikit-build-core psutil pyarrow
-        pip install -e . --no-build-isolation
+      - name: Install test environment
+        run: pixi install --frozen -e test
 
-    - name: Run performance benchmarks
-      run: |
-        python benchmarks/bench_cpp_backend.py
+      - name: Run performance benchmarks
+        run: pixi run -e test -- python benchmarks/bench_cpp_backend.py
 
-    - name: Generate performance report
-      run: |
-        python -c "
-        import json
-        import os
-        if os.path.exists('benchmark_results/cpp_backend_results.json'):
-            with open('benchmark_results/cpp_backend_results.json') as f:
-                 data = json.load(f)
-            print('Benchmark successfully ran.')
-        else:
-            print('Benchmark results not found.')
-        "
+      - name: Generate performance report
+        run: |
+          pixi run -e test -- python -c "
+          import json
+          import os
+          if os.path.exists('benchmark_results/cpp_backend_results.json'):
+              with open('benchmark_results/cpp_backend_results.json') as f:
+                   data = json.load(f)
+              print('Benchmark successfully ran.')
+          else:
+              print('Benchmark results not found.')
+          "
 
   documentation:
     name: Documentation Build
     runs-on: ubuntu-latest
+    needs: pre-commit
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install sphinx sphinx-rtd-theme
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install sphinx sphinx-rtd-theme
 
-    - name: Build documentation
-      run: |
-        # Add when docs/ directory exists
-        echo "Documentation build would go here"
-        echo "README.md exists: $(ls -la README.md)"
+      - name: Build documentation
+        run: |
+          echo "Documentation build would go here"
+          echo "README.md exists: $(ls -la README.md)"

@@ -12,42 +12,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install system dependencies (Ubuntu)
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential
 
-      - name: Install torchsky with bench optional dependencies
-        run: |
-          python -m pip install --upgrade pip wheel setuptools
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install nanobind scikit-build-core
-          pip install -e ".[bench]" --no-build-isolation
-          # Sphere quick bench invokes healpy/HEALPix ecosystem comparators (not in [bench] alone).
-          pip install "healpy>=1.16" hpgeom "astropy-healpix>=1.0" healsparse "spherical-geometry>=1.2"
+      - uses: prefix-dev/setup-pixi@v0.8.0
+        with:
+          pixi-version: latest
+
+      - name: Install bench-all environment
+        run: pixi install --frozen -e bench-all
 
       - name: Record open-source comparator versions
         run: |
-          python scripts/print_benchmark_comparator_versions.py \
+          pixi run -e bench-all -- python scripts/print_benchmark_comparator_versions.py \
             --json-out benchmarks_results/VERSIONS_comparators_weekly.json
 
       - name: Run WCS and sphere pytest subsets
         run: |
-          pytest tests/test_wcs_*.py tests/test_sphere_*.py -q --tb=short
+          pixi run -e bench-all -- pytest tests/test_wcs_*.py tests/test_sphere_*.py -q --tb=short
 
       - name: Quick WCS bench (parity + rankings contract)
         run: |
-          python benchmarks/bench_all.py --profile user --wcs-only --quick \
+          pixi run -e bench-all -- python benchmarks/bench_all.py --profile user --wcs-only --quick \
             --run-id weekly_wcs_${{ github.run_id }} --output-dir benchmarks_results
 
       - name: Quick sphere bench
         run: |
-          python benchmarks/bench_all.py --profile user --sphere-only --quick \
+          pixi run -e bench-all -- python benchmarks/bench_all.py --profile user --sphere-only --quick \
             --run-id weekly_sphere_${{ github.run_id }} --output-dir benchmarks_results
 
       - name: Upload bench artifacts
