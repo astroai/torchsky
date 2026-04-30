@@ -6,7 +6,7 @@ This file gives repository-specific operating guidance for coding agents and mai
 
 `torchsky` is building a torch-native astronomy stack for:
 
-- very high performance on large workloads
+- very high performance data processing on large workloads
 - multi-wavelength and multi-modal sky data
 - scalability to many very large datasets
 - continuous, field-like modelling / prediction / generation where that is technically coherent
@@ -61,9 +61,9 @@ Use **astropy**, **Python fitsio**, **healpy**, **hpgeom**, **healsparse**, **as
 
 They **must not** become required imports for core **`src/torchsky`** behavior on the default install path. C++ may link **CFITSIO** directly; that is not the same as depending on the **Python** `fitsio` package in library code.
 
-### pip-from-source / CI (non-Pixi)
+### pip-from-source / wheels (non-Pixi)
 
-`docs/install.md` and `.github/workflows/ci.yml` describe **pip + cmake** builds. CI installs **`torch`** (CPU wheel) then **`pip install -e ".[test]"`** so the dependency set matches **`[project.optional-dependencies].test`**, mirroring the Pixi **`test`** environment—not the minimal wheel runtime.
+`docs/install.md` may describe **pip + cmake** builds for wheel installs and packagers. **Contributor CI and day-to-day workflows use Pixi** (`.github/workflows/ci.yml`, weeklies, `pixi run ci-local`). Do not treat raw **`pip install -e ".[test]"`** as the default path for agents when Pixi is available.
 
 ## Core Principles
 

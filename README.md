@@ -24,6 +24,8 @@ pip install torchsky
 
 Building from source (editable install, CUDA/conda notes, vendoring): see [`docs/install.md`](docs/install.md).
 
+**Contributors:** use [Pixi](https://pixi.sh/) — `pixi install`, `pixi run test`, and `pixi run ci-local` match the repo’s CI gates (see `AGENTS.md`).
+
 ## Quick Examples
 
 From source:
