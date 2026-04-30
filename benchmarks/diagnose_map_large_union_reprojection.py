@@ -90,7 +90,7 @@ def _torchsky_weighted_observation(
         image_plane_mod._headers_equivalent_for_direct_copy(
             header_dict_obs, target_header
         )
-        and tuple(int(v) for v in image.shape) == target_shape
+        and tuple(image.shape) == target_shape
     ):
         source_wcs = WCS(header_dict_obs)
     numer, weight, _, _ = image_plane_mod._project_observation_to_target(

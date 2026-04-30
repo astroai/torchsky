@@ -215,7 +215,7 @@ def _coadd_with_drizzle(
         image, header = torchsky.read(obs.path, hdu=obs.hdu, return_header=True)
         image = image.to(dtype=torch.float32)
         weight = _load_weight_map(obs, image)
-        source_shape = tuple(int(v) for v in image.shape)
+        source_shape = tuple(image.shape)
         source_wcs = WCS(_as_fits_header(dict(header)))
         source_wcs.array_shape = source_shape
         pixmap = calc_pixmap(source_wcs, target_wcs, shape=source_shape)
