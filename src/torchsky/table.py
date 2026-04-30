@@ -2474,13 +2474,17 @@ def duckdb_query(
         connection=con,
         **kwargs,
     )
-    # Prevent basic SQL injection by enforcing a single statement via execute instead of sql
-    try:
-        result = con.sql(query)
-    except duckdb.ParserException as e:
-        if "Parser Error: Multiple SQL statements" in str(e):
-            raise ValueError("query must contain only a single SQL statement") from e
-        raise
+    # Prevent SQL injection by strictly enforcing exactly one SELECT or EXPLAIN statement
+    statements = duckdb.extract_statements(query)
+    if len(statements) != 1:
+        raise ValueError("query must contain exactly one SQL statement")
+
+    stmt_type = statements[0].type
+    if stmt_type not in {duckdb.StatementType.SELECT, duckdb.StatementType.EXPLAIN}:
+        raise ValueError(f"query must be a SELECT or EXPLAIN statement, got {stmt_type}")
+
+    result = con.sql(query)
+
     if return_arrow:
         return result.arrow()
     return result
