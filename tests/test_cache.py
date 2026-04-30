@@ -435,14 +435,33 @@ class TestCacheManager:
     """Test CacheManager functionality."""
 
     def test_get_cache_manager_singleton(self):
+        import torchsky.cache
         from torchsky.cache import get_cache_manager
 
-        manager1 = get_cache_manager()
-        manager2 = get_cache_manager()
+        # Save original and reset
+        original_manager = torchsky.cache._cache_manager
+        torchsky.cache._cache_manager = None
 
-        assert manager1 is manager2
+        try:
+            with patch.object(torchsky.cache.CacheManager, 'configure_cpp_cache') as mock_configure:
+                manager1 = get_cache_manager()
 
-        # Test that configure_cpp_cache was called (optional, maybe check if cpp cache is configured correctly, but simple singleton check is required)
+                # Should be created and configured
+                assert manager1 is not None
+                mock_configure.assert_called_once()
+
+                # Reset mock to test singleton behavior
+                mock_configure.reset_mock()
+
+                manager2 = get_cache_manager()
+
+                # Should return the exact same instance
+                assert manager1 is manager2
+                # Should NOT call configure_cpp_cache again
+                mock_configure.assert_not_called()
+        finally:
+            # Restore original
+            torchsky.cache._cache_manager = original_manager
 
 
 class TestCacheConfig:
