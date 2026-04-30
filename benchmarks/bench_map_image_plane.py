@@ -296,7 +296,7 @@ def _prepare_real_case(tmpdir: Path) -> tuple[list[ImageObservation], tuple[int,
             ImageObservation(str(_astropy_sip_fixture()), mask_path=str(mask_a)),
             ImageObservation(str(_astropy_sip_fixture()), mask_path=str(mask_b)),
         ],
-        tuple(int(v) for v in image.shape),
+        tuple(image.shape),
     )
 
 
@@ -315,7 +315,7 @@ def _prepare_real_shifted_sip_case(
             ImageObservation(str(_astropy_sip_fixture())),
             ImageObservation(str(shifted_path)),
         ],
-        tuple(int(v) for v in image.shape),
+        tuple(image.shape),
     )
 
 
@@ -345,7 +345,7 @@ def _prepare_real_sip_mef_case(
                 mask_hdu=6,
             ),
         ],
-        tuple(int(v) for v in image.shape),
+        tuple(image.shape),
     )
 
 

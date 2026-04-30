@@ -1304,7 +1304,7 @@ def _target_mask_region_masks(
             image_plane_mod._headers_equivalent_for_direct_copy(
                 header_dict_obs, target_header
             )
-            and tuple(int(v) for v in image.shape) == target_shape
+            and tuple(image.shape) == target_shape
         ):
             source_wcs = WCS(header_dict_obs)
         _numer_masked, weight_masked, _overlap_masked, _moc_masked = (

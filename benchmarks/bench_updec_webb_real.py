@@ -63,7 +63,7 @@ def _time_torchsky_read(path: Path, *, hdu: int) -> tuple[float, tuple[int, ...]
     t0 = time.perf_counter()
     image = torchsky.read(str(path), hdu=hdu)
     dt = (time.perf_counter() - t0) * 1000.0
-    return dt, tuple(int(v) for v in image.shape)
+    return dt, tuple(image.shape)
 
 
 def _open_sci(path: Path) -> tuple[np.ndarray, fits.Header, int]:

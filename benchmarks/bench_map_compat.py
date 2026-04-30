@@ -808,7 +808,7 @@ def _reproject_weighted_observation(
 
     if (
         _headers_equivalent_for_direct_copy(dict(header), target_header)
-        and tuple(int(v) for v in image.shape) == target_shape
+        and tuple(image.shape) == target_shape
     ):
         numer = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
         return numer.cpu().numpy(), weight.cpu().numpy()
@@ -855,7 +855,7 @@ def _reproject_exact_weighted_observation(
 
     if (
         _headers_equivalent_for_direct_copy(dict(header), target_header)
-        and tuple(int(v) for v in image.shape) == target_shape
+        and tuple(image.shape) == target_shape
     ):
         numer = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
         return numer.cpu().numpy(), weight.cpu().numpy()
@@ -902,7 +902,7 @@ def _dfreproject_weighted_observation(
 
     if (
         _headers_equivalent_for_direct_copy(dict(header), target_header)
-        and tuple(int(v) for v in image.shape) == target_shape
+        and tuple(image.shape) == target_shape
     ):
         numer = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
         return numer.cpu().numpy(), weight.cpu().numpy()
@@ -1031,7 +1031,7 @@ def _coadd_with_drizzle(
         image, header = torchsky.read(obs.path, hdu=obs.hdu, return_header=True)
         image = image.to(dtype=torch.float32)
         weight = _load_weight_map(obs, image)
-        source_shape = tuple(int(v) for v in image.shape)
+        source_shape = tuple(image.shape)
         source_wcs = WCS(_as_fits_header(dict(header)))
         source_wcs.array_shape = source_shape
         pixmap = calc_pixmap(source_wcs, target_wcs, shape=source_shape)
@@ -1117,7 +1117,7 @@ def _embed_on_target_grid(
     target_header: dict[str, Any],
     target_shape: tuple[int, int],
 ) -> np.ndarray:
-    if tuple(int(v) for v in array.shape) == target_shape:
+    if tuple(array.shape) == target_shape:
         return array.to(dtype=torch.float32).cpu().numpy()
     out = np.zeros(target_shape, dtype=np.float32)
     x0 = int(round(float(target_header["CRPIX1"]) - float(header["CRPIX1"])))
@@ -1127,7 +1127,7 @@ def _embed_on_target_grid(
     if x0 < 0 or y0 < 0 or x1 > target_shape[1] or y1 > target_shape[0]:
         raise RuntimeError(
             "Montage output footprint could not be embedded on the target grid "
-            f"(shape={tuple(int(v) for v in array.shape)}, target={target_shape})"
+            f"(shape={tuple(array.shape)}, target={target_shape})"
         )
     out[y0:y1, x0:x1] = array.to(dtype=torch.float32).cpu().numpy()
     return out
@@ -1174,7 +1174,7 @@ def _coadd_with_montage(
                 backend_path = str(default_bin)
             if (
                 _headers_equivalent_for_direct_copy(dict(header), target_header)
-                and tuple(int(v) for v in image.shape) == target_shape
+                and tuple(image.shape) == target_shape
             ):
                 obs_numer = (
                     torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
@@ -1277,7 +1277,7 @@ def _align_array_to_target(
     target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
     if (
         _headers_equivalent_for_direct_copy(header, target_header)
-        and tuple(int(v) for v in array.shape) == target_shape
+        and tuple(array.shape) == target_shape
     ):
         return np.asarray(array, dtype=np.float32)
     if reproject_interp is not None:
@@ -1441,7 +1441,7 @@ def _coadd_with_swarp(
             image = image.to(dtype=torch.float32)
             if not (
                 _headers_equivalent_for_direct_copy(dict(header), target_header)
-                and tuple(int(v) for v in image.shape) == target_shape
+                and tuple(image.shape) == target_shape
             ):
                 all_direct_copy = False
                 break
@@ -1531,10 +1531,10 @@ def _coadd_with_swarp(
         numer = torchsky.read(str(numer_imageout_path)).to(dtype=torch.float32)
         weight = torchsky.read(str(denom_imageout_path)).to(dtype=torch.float32)
         data = numer / torch.clamp(weight, min=1e-8)
-        if tuple(int(v) for v in data.shape) != target_shape:
+        if tuple(data.shape) != target_shape:
             raise RuntimeError(
                 "SWarp output shape did not match requested target grid "
-                f"(got {tuple(int(v) for v in data.shape)})"
+                f"(got {tuple(data.shape)})"
             )
         data = torch.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
         weight = torch.nan_to_num(weight, nan=0.0, posinf=0.0, neginf=0.0)
@@ -1625,13 +1625,13 @@ def _coadd_with_swarp_direct_stack(
             weight = torchsky.read(str(weightout_path)).to(dtype=torch.float32)
         else:
             weight = torch.isfinite(data).to(dtype=torch.float32)
-        if tuple(int(v) for v in data.shape) != (
+        if tuple(data.shape) != (
             int(target_header["NAXIS2"]),
             int(target_header["NAXIS1"]),
         ):
             raise RuntimeError(
                 "SWarp output shape did not match requested target grid "
-                f"(got {tuple(int(v) for v in data.shape)})"
+                f"(got {tuple(data.shape)})"
             )
         data = torch.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
         weight = torch.nan_to_num(weight, nan=0.0, posinf=0.0, neginf=0.0)
