@@ -1021,7 +1021,20 @@ def _read_batch_hdus(
             effective_mmap = True if isinstance(mmap, str) else mmap
             data = cpp.read_hdus_batch(path, list(hdu), effective_mmap)
         if device != "cpu":
-            data = [t.to(device) for t in data]
+            if len(data) > 0:
+                first_shape = data[0].shape
+                first_dtype = data[0].dtype
+                same_shape_and_dtype = True
+                for t in data:
+                    if t.shape != first_shape or t.dtype != first_dtype:
+                        same_shape_and_dtype = False
+                        break
+
+                if same_shape_and_dtype:
+                    import torch
+                    data = list(torch.stack(data).to(device, non_blocking=True).unbind(0))
+                else:
+                    data = [t.to(device, non_blocking=True) for t in data]
         return data
     return [
         read(
@@ -1876,7 +1889,20 @@ def read_hdus(
 
     data = cpp.read_hdus_batch(path, resolved_hdus, mmap)
     if device != "cpu":
-        data = [t.to(device) for t in data]
+        if len(data) > 0:
+            first_shape = data[0].shape
+            first_dtype = data[0].dtype
+            same_shape_and_dtype = True
+            for t in data:
+                if t.shape != first_shape or t.dtype != first_dtype:
+                    same_shape_and_dtype = False
+                    break
+
+            if same_shape_and_dtype:
+                import torch
+                data = list(torch.stack(data).to(device, non_blocking=True).unbind(0))
+            else:
+                data = [t.to(device, non_blocking=True) for t in data]
 
     if not return_header:
         return data

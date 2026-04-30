@@ -61,7 +61,19 @@ def read(
     if isinstance(hdu, (list, tuple)) and _HAS_READ_HDUS_BATCH:
         data = cpp.read_hdus_batch(path, list(hdu))
         if not is_cpu or target_dtype is not None:
-            data = [t.to(device=target_device, dtype=target_dtype) for t in data]
+            if len(data) > 0:
+                first_shape = data[0].shape
+                first_dtype = data[0].dtype
+                same_shape_and_dtype = True
+                for t in data:
+                    if t.shape != first_shape or t.dtype != first_dtype:
+                        same_shape_and_dtype = False
+                        break
+
+                if same_shape_and_dtype:
+                    data = list(torch.stack(data).to(device=target_device, dtype=target_dtype, non_blocking=True).unbind(0))
+                else:
+                    data = [t.to(device=target_device, dtype=target_dtype, non_blocking=True) for t in data]
         return data
 
     if scale_on_device and not raw_scale and _HAS_READ_FULL_RAW_WITH_SCALE:
