@@ -1,6 +1,6 @@
 import pytest
 import torch
-from torchfits.hdu import TableHDU
+from torchsky.hdu import TableHDU
 
 
 def test_tablehdu_filter_no_eval_vulnerability():
