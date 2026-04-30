@@ -220,7 +220,12 @@ def _fits_header_table_has_vla(header: Mapping[str, Any]) -> bool:
             continue
         raw_str = str(raw)
         # Fast path rejection for VLA indicators before running regex
-        if "P" not in raw_str and "Q" not in raw_str and "p" not in raw_str and "q" not in raw_str:
+        if (
+            "P" not in raw_str
+            and "Q" not in raw_str
+            and "p" not in raw_str
+            and "q" not in raw_str
+        ):
             continue
         is_vla, _, _ = _parse_tform(raw_str)
         if is_vla:
@@ -240,7 +245,12 @@ def _fits_header_column_is_vla(header: Mapping[str, Any], col_name: str) -> bool
             continue
         raw = header.get(f"TFORM{i}", "")
         raw_str = str(raw)
-        if "P" not in raw_str and "Q" not in raw_str and "p" not in raw_str and "q" not in raw_str:
+        if (
+            "P" not in raw_str
+            and "Q" not in raw_str
+            and "p" not in raw_str
+            and "q" not in raw_str
+        ):
             return False
         return _parse_tform(raw_str)[0]
     return False
@@ -2484,7 +2494,6 @@ def duckdb_query(
         raise ValueError(f"query must be a SELECT or EXPLAIN statement, got {stmt_type}")
 
     result = con.sql(query)
-
     if return_arrow:
         return result.arrow()
     return result
