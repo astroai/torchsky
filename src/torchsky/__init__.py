@@ -98,6 +98,19 @@ _auto_mmap_cache = OrderedDict()
 _auto_hdu_cache = OrderedDict()
 
 
+def _batch_to_device(
+    tensors: list[torch.Tensor], device: str | torch.device
+) -> list[torch.Tensor]:
+    if not tensors:
+        return []
+    if len(tensors) == 1:
+        return [tensors[0].to(device)]
+    try:
+        return list(torch.stack(tensors).to(device).unbind(0))
+    except Exception:
+        return [t.to(device) for t in tensors]
+
+
 def _invalidate_path_caches(path: str) -> None:
     """Invalidate Python-side caches/handles for a path that is being modified."""
     global \
@@ -963,7 +976,7 @@ def _read_batch_paths(
         try:
             data_list = cpp.read_images_batch(list(path), hdu)
             if device != "cpu":
-                data_list = [t.to(device) for t in data_list]
+                data_list = _batch_to_device(data_list, device)
             return data_list
         except Exception:
             pass
@@ -1021,7 +1034,7 @@ def _read_batch_hdus(
             effective_mmap = True if isinstance(mmap, str) else mmap
             data = cpp.read_hdus_batch(path, list(hdu), effective_mmap)
         if device != "cpu":
-            data = [t.to(device) for t in data]
+            data = _batch_to_device(data, device)
         return data
     return [
         read(
@@ -1876,7 +1889,7 @@ def read_hdus(
 
     data = cpp.read_hdus_batch(path, resolved_hdus, mmap)
     if device != "cpu":
-        data = [t.to(device) for t in data]
+        data = _batch_to_device(data, device)
 
     if not return_header:
         return data
@@ -2580,7 +2593,7 @@ def read_batch(
 
             tensors = cpp.read_images_batch(list(file_paths), hdu)
             if device != "cpu":
-                tensors = [t.to(device) for t in tensors]
+                tensors = _batch_to_device(tensors, device)
             return tensors
     except _READ_EXC_TYPES as exc:
         if strict:
