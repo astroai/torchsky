@@ -33,3 +33,6 @@
 ## 2024-05-18 - Optimize Table String Column Inference
 **Learning:** `torchsky.hdu.Header` inherits directly from `dict`. Iterating through all `header.items()` to find `TFORM` and `TTYPE` keys is slow, especially for headers with many cards. Instead, parsing `TFIELDS` first and executing O(1) dictionary lookups (`header.get(f"TFORM{i}")`) reduces iteration overhead significantly.
 **Action:** Always favor targeted dictionary lookups (`header.get()`) using known key patterns (e.g., indexed from `1` to `TFIELDS`) instead of iterating through `header.items()` when processing FITS headers.
+## 2024-05-19 - Batching memory transfers to reduce overhead
+**Learning:** Moving a list of tensors from CPU to a device (like GPU) one by one incurs substantial kernel launch and Python loop overhead. For many small/medium tensors, this overhead can dominate execution time.
+**Action:** When a sequence of tensors needs transferring, use `list(torch.stack(tensors).to(device).unbind())`. This batches the transfer into a single kernel launch. Since `torch.stack()` requires tensors of identical shapes and throws a `RuntimeError` otherwise, wrap the operation in a `try...except RuntimeError:` block and fallback to `[t.to(device) for t in tensors]` if the sizes differ.

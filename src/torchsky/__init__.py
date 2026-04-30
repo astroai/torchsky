@@ -2579,8 +2579,11 @@ def read_batch(
             import torchsky.cpp as cpp
 
             tensors = cpp.read_images_batch(list(file_paths), hdu)
-            if device != "cpu":
-                tensors = [t.to(device) for t in tensors]
+            if device != "cpu" and tensors:
+                try:
+                    tensors = list(torch.stack(tensors).to(device).unbind())
+                except RuntimeError:
+                    tensors = [t.to(device) for t in tensors]
             return tensors
     except _READ_EXC_TYPES as exc:
         if strict:
