@@ -197,7 +197,10 @@ def write_tensor_frame(path: str, tf: TensorFrame, overwrite: bool = False):
             tensor = tf.feat_dict[st]
             names = tf.col_names_dict[st]
             for i, name in enumerate(names):
-                data[name] = tensor[:, i].values
+                if hasattr(tensor, "values") and not callable(tensor.values):
+                    data[name] = tensor[:, i].values
+                else:
+                    data[name] = tensor[:, i]
 
     # Handle MultiNestedTensor stypes (VLA)
     nested_stypes = []
