@@ -638,6 +638,30 @@ def test_configure_for_environment():
 class TestCacheManagerFunctions:
     """Test cache manager module-level functions."""
 
+    def test_get_cache_stats(self):
+        from torchsky.cache import get_cache_manager, get_cache_stats, clear_cache
+
+        # Set some state
+        manager = get_cache_manager()
+        manager._stats["hits"] = 10
+        manager._stats["misses"] = 5
+        manager._stats["evictions"] = 2
+        manager._stats["bytes_read"] = 1024
+
+        try:
+            stats = get_cache_stats()
+
+            assert stats["hits"] == 10
+            assert stats["misses"] == 5
+            assert stats["evictions"] == 2
+            assert stats["bytes_read"] == 1024
+            assert "cpp_cache_size" in stats
+            assert "config" in stats
+            assert "hit_rate" in stats
+            assert stats["hit_rate"] == 10 / 15
+        finally:
+            clear_cache()
+
     def test_clear_cache(self):
         from torchsky.cache import get_cache_manager, clear_cache, get_cache_stats
 
