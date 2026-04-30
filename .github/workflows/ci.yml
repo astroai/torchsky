@@ -96,6 +96,9 @@ jobs:
       - name: Install sphere-bench environment
         run: pixi install --frozen -e sphere-bench
 
+      - name: Build editable torchsky (C++ extension)
+        run: pixi run -e sphere-bench -- pip install -e . --no-build-isolation
+
       - name: Run full pytest (includes reproject + drizzle smoke)
         run: pixi run -e sphere-bench -- pytest -n auto -q --tb=short
 
