@@ -435,14 +435,50 @@ class TestCacheManager:
     """Test CacheManager functionality."""
 
     def test_get_cache_manager_singleton(self):
+        import torchsky.cache
         from torchsky.cache import get_cache_manager
 
-        manager1 = get_cache_manager()
-        manager2 = get_cache_manager()
+        original_manager = torchsky.cache._cache_manager
+        torchsky.cache._cache_manager = None
 
-        assert manager1 is manager2
+        try:
+            with patch.object(
+                torchsky.cache.CacheManager, "configure_cpp_cache"
+            ) as mock_configure:
+                manager1 = get_cache_manager()
+                assert manager1 is not None
+                mock_configure.assert_called_once()
 
-        # Test that configure_cpp_cache was called (optional, maybe check if cpp cache is configured correctly, but simple singleton check is required)
+                mock_configure.reset_mock()
+                manager2 = get_cache_manager()
+
+                assert manager1 is manager2
+                mock_configure.assert_not_called()
+        finally:
+            torchsky.cache._cache_manager = original_manager
+
+    def test_configure_cpp_cache_success(self):
+        import torchsky.cache
+
+        manager = torchsky.cache.CacheManager(
+            torchsky.cache.CacheConfig(max_files=10, max_memory_mb=100)
+        )
+
+        with patch("torchsky.cpp.configure_cache") as mock_configure:
+            manager.configure_cpp_cache()
+
+        mock_configure.assert_called_once_with(10, 100)
+
+    def test_configure_cpp_cache_missing_cpp_function(self):
+        import torchsky.cache
+
+        manager = torchsky.cache.CacheManager(
+            torchsky.cache.CacheConfig(max_files=10, max_memory_mb=100)
+        )
+        mock_cpp = MagicMock(spec=[])
+
+        with patch.dict("sys.modules", {"torchsky.cpp": mock_cpp}):
+            manager.configure_cpp_cache()
 
 
 class TestCacheConfig:
@@ -638,26 +674,95 @@ def test_configure_for_environment():
 class TestCacheManagerFunctions:
     """Test cache manager module-level functions."""
 
+    def test_configure_for_environment(self):
+        from torchsky.cache import configure_for_environment
+
+        with patch("torchsky.cache.get_cache_manager") as mock_get_cache_manager:
+            mock_manager = MagicMock()
+            mock_get_cache_manager.return_value = mock_manager
+
+            configure_for_environment()
+
+            mock_get_cache_manager.assert_called_once()
+            mock_manager.configure_cpp_cache.assert_called_once()
+
+    def test_get_cache_stats(self):
+        import torchsky.cache
+        from torchsky.cache import get_cache_manager, get_cache_stats
+
+        original_manager = torchsky.cache._cache_manager
+        torchsky.cache._cache_manager = None
+
+        try:
+            manager = get_cache_manager()
+            manager._stats["hits"] = 10
+            manager._stats["misses"] = 5
+            manager._stats["evictions"] = 2
+            manager._stats["bytes_read"] = 1024
+
+            stats = get_cache_stats()
+
+            assert stats["hits"] == 10
+            assert stats["misses"] == 5
+            assert stats["evictions"] == 2
+            assert stats["bytes_read"] == 1024
+            assert "cpp_cache_size" in stats
+            assert "config" in stats
+            assert "hit_rate" in stats
+            assert stats["hit_rate"] == 10 / 15
+        finally:
+            torchsky.cache._cache_manager = original_manager
+
+    @patch("torchsky.cache.CacheManager")
+    def test_configure_cache(self, mock_manager_cls):
+        import torchsky.cache
+        from torchsky.cache import configure_cache
+
+        original_manager = torchsky.cache._cache_manager
+        mock_manager = MagicMock()
+        mock_manager_cls.return_value = mock_manager
+
+        try:
+            configure_cache(max_files=42, max_memory_mb=1337, disk_cache_gb=7)
+
+            assert torchsky.cache._cache_manager is mock_manager
+            mock_manager_cls.assert_called_once()
+            config_arg = mock_manager_cls.call_args[0][0]
+            assert config_arg.max_files == 42
+            assert config_arg.max_memory_mb == 1337
+            assert config_arg.disk_cache_gb == 7
+            mock_manager.configure_cpp_cache.assert_called_once()
+        finally:
+            torchsky.cache._cache_manager = original_manager
+
     def test_clear_cache(self):
         from torchsky.cache import get_cache_manager, clear_cache, get_cache_stats
 
-        # Set some state
-        manager = get_cache_manager()
-        manager._stats["hits"] = 10
-        manager._stats["misses"] = 5
+        import torchsky.cache
 
-        # Verify state is set
-        stats_before = get_cache_stats()
-        assert stats_before["hits"] == 10
-        assert stats_before["misses"] == 5
+        original_manager = torchsky.cache._cache_manager
+        torchsky.cache._cache_manager = None
 
-        # Clear cache
-        clear_cache()
+        try:
+            # Set some state
+            manager = get_cache_manager()
+            manager._stats["hits"] = 10
+            manager._stats["misses"] = 5
 
-        # Verify state is reset
-        stats_after = get_cache_stats()
-        assert stats_after["hits"] == 0
-        assert stats_after["misses"] == 0
+            # Verify state is set
+            stats_before = get_cache_stats()
+            assert stats_before["hits"] == 10
+            assert stats_before["misses"] == 5
+
+            # Clear cache
+            clear_cache()
+
+            # Verify state is reset
+            stats_after = get_cache_stats()
+            assert stats_after["hits"] == 0
+            assert stats_after["misses"] == 0
+        finally:
+            torchsky.cache._cache_manager = original_manager
 
 
 if __name__ == "__main__":

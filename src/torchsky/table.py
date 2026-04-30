@@ -285,8 +285,6 @@ def _fits_header_selected_includes_vla(
 def _column_tnull_map(header_map: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
 
-    # ⚡ Bolt: Fast-path O(1) indexed lookups using TFIELDS to avoid O(N) iteration
-    # over thousands of header cards in large FITS tables.
     try:
         tfields = int(header_map.get("TFIELDS", 0))
     except (TypeError, ValueError):
@@ -300,7 +298,6 @@ def _column_tnull_map(header_map: dict[str, Any]) -> dict[str, Any]:
                 if ttype is not None:
                     out[str(ttype)] = tnull
     else:
-        # Fallback if TFIELDS is missing/invalid
         name_by_idx: dict[int, str] = {}
         tnull_by_idx: dict[int, Any] = {}
         for key, value in header_map.items():
@@ -2646,6 +2643,8 @@ def write(
             schema if schema else None,
             table_kind,
         )
+        if hdr:
+            torchsky._write_header_cards_if_supported(path, 1, hdr)
         torchsky._invalidate_path_caches(path)
         return
 
@@ -2658,6 +2657,9 @@ def _header_cards_to_mapping(header_cards: Any) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if isinstance(header_cards, (list, tuple)):
         for card in header_cards:
+            if hasattr(card, "key") and hasattr(card, "value"):
+                out[str(card.key)] = card.value
+                continue
             if not isinstance(card, (list, tuple)) or len(card) < 2:
                 continue
             out[str(card[0])] = card[1]
@@ -2667,30 +2669,11 @@ def _header_cards_to_mapping(header_cards: Any) -> dict[str, Any]:
 def _column_tform_map(header_map: dict[str, Any]) -> dict[str, str]:
     out: dict[str, str] = {}
 
-    # ⚡ Bolt: Fast-path O(1) indexed lookups using TFIELDS to avoid O(N) iteration
-    try:
-        tfields = int(header_map.get("TFIELDS", 0))
-    except (ValueError, TypeError):
-        tfields = 0
-
-    if tfields > 0:
-        for i in range(1, tfields + 1):
-            name = header_map.get(f"TTYPE{i}")
-            if name is not None:
-                tform = header_map.get(f"TFORM{i}")
-                out[str(name)] = str(tform) if tform is not None else ""
-        return out
-
-    # Fallback to O(N) iteration
-    name_by_idx: dict[int, str] = {}
+    name_by_idx = _column_name_index_map(header_map)
     tform_by_idx: dict[int, str] = {}
     for key, value in header_map.items():
         key_u = str(key).upper()
-        if key_u.startswith("TTYPE"):
-            suffix = key_u[5:]
-            if suffix.isdigit():
-                name_by_idx[int(suffix)] = str(value)
-        elif key_u.startswith("TFORM"):
+        if key_u.startswith("TFORM"):
             suffix = key_u[5:]
             if suffix.isdigit():
                 tform_by_idx[int(suffix)] = str(value)
@@ -2703,7 +2686,6 @@ def _column_tform_map(header_map: dict[str, Any]) -> dict[str, str]:
 def _column_name_index_map(header_map: dict[str, Any]) -> dict[int, str]:
     out: dict[int, str] = {}
 
-    # ⚡ Bolt: Fast-path O(1) indexed lookups using TFIELDS to avoid O(N) iteration
     try:
         tfields = int(header_map.get("TFIELDS", 0))
     except (ValueError, TypeError):
@@ -2716,7 +2698,6 @@ def _column_name_index_map(header_map: dict[str, Any]) -> dict[int, str]:
                 out[i] = str(val)
         return out
 
-    # Fallback to O(N) iteration
     for key, value in header_map.items():
         key_u = str(key).upper()
         if not key_u.startswith("TTYPE"):
@@ -3033,29 +3014,8 @@ def _resolve_table_hdu_index_and_columns(
             raise ValueError(f"HDU {target_idx} is not a table (type={hdu_type})")
 
         header_map = _header_cards_to_mapping(cpp.read_header(handle, target_idx))
-        # ⚡ Bolt: Fast-path O(1) indexed lookups using TFIELDS
-        try:
-            tfields = int(header_map.get("TFIELDS", 0))
-        except (ValueError, TypeError):
-            tfields = 0
-
-        if tfields > 0:
-            columns = []
-            for i in range(1, tfields + 1):
-                name = header_map.get(f"TTYPE{i}")
-                if name is not None:
-                    columns.append(str(name))
-        else:
-            # Fallback for missing TFIELDS
-            col_map: dict[int, str] = {}
-            for key, value in header_map.items():
-                key_u = str(key).upper()
-                if not key_u.startswith("TTYPE"):
-                    continue
-                suffix = key_u[5:]
-                if suffix.isdigit():
-                    col_map[int(suffix)] = str(value)
-            columns = [col_map[idx] for idx in sorted(col_map)]
+        col_map = _column_name_index_map(header_map)
+        columns = [col_map[idx] for idx in sorted(col_map)]
         tform_map = _column_tform_map(header_map)
         return target_idx, header_map, columns, tform_map
     finally:
@@ -3605,9 +3565,13 @@ def update_rows(
     if row_slice is None:
         raise ValueError("row_slice is required for update_rows")
 
-    target_hdu, _header, _columns, tform_map = _resolve_table_hdu_index_and_columns(
+    target_hdu, _header, columns, tform_map = _resolve_table_hdu_index_and_columns(
         path, hdu
     )
+    unknown = sorted({str(name) for name in rows} - set(columns))
+    if unknown:
+        raise ValueError(f"Unknown columns for table mutation: extra={unknown}")
+
     string_widths: dict[str, int] = {}
     vla_codes: dict[str, str] = {}
     complex_codes: dict[str, str] = {}
@@ -3684,6 +3648,17 @@ def update_rows(
     torchsky._invalidate_path_caches(path)
 
     use_mmap = mmap in (True, "auto", "mmap")
+    forced_mmap = mmap in (True, "mmap")
+    unsupported_mmap = sorted(
+        name
+        for name in normalized
+        if name in vla_codes or name in string_widths or name in complex_codes
+    )
+    if forced_mmap and unsupported_mmap:
+        raise ValueError(
+            "mmap table updates only support fixed-width numeric/logical columns; "
+            f"unsupported columns={unsupported_mmap}"
+        )
     if use_mmap:
         has_string = any(isinstance(v, (list, tuple)) for v in normalized.values())
         if not has_string:
@@ -3727,9 +3702,19 @@ def rename_columns(
     if len(set(normalized.values())) != len(normalized.values()):
         raise ValueError("rename_columns mapping has duplicate target names")
 
-    target_hdu, _header, _columns, _tform_map = _resolve_table_hdu_index_and_columns(
+    target_hdu, _header, columns, _tform_map = _resolve_table_hdu_index_and_columns(
         path, hdu
     )
+    existing = set(columns)
+    missing = sorted(set(normalized) - existing)
+    if missing:
+        raise KeyError(f"Column(s) not found for rename_columns: {missing}")
+    conflicts = sorted(set(normalized.values()) & (existing - set(normalized)))
+    if conflicts:
+        raise ValueError(
+            "rename_columns target names collide with existing columns not being renamed: "
+            f"{conflicts}"
+        )
 
     import torchsky
     import torchsky.cpp as cpp
@@ -3755,10 +3740,15 @@ def drop_columns(
     normalized = [str(name) for name in columns]
     if any(not name for name in normalized):
         raise ValueError("column names must be non-empty strings")
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("drop_columns received duplicate column names")
 
-    target_hdu, _header, _columns, _tform_map = _resolve_table_hdu_index_and_columns(
+    target_hdu, _header, existing_columns, _tform_map = _resolve_table_hdu_index_and_columns(
         path, hdu
     )
+    missing = sorted(set(normalized) - set(existing_columns))
+    if missing:
+        raise KeyError(f"Column(s) not found for drop_columns: {missing}")
 
     import torchsky
     import torchsky.cpp as cpp

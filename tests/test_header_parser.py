@@ -1,7 +1,9 @@
 # Mock out torchsky.cpp since we only care about header_parser.py testing right now
 
-from torchsky.header_parser import FastHeaderParser
 from typing import Dict
+from unittest import mock
+
+from torchsky.header_parser import FastHeaderParser, fast_parse_header
 
 
 def benchmark_header_parsing(
@@ -80,3 +82,89 @@ def test_benchmark_header_parsing():
     assert metrics["avg_parse_time_ms"] >= 0
     assert metrics["throughput_headers_per_sec"] >= 0
     assert metrics["total_time_s"] >= 0
+
+
+def test_parse_with_performance_tracking():
+    header_cards = [
+        "SIMPLE  =                    T / file does conform to FITS standard             ",
+        "BITPIX  =                    8 / number of bits per data pixel                  ",
+        "NAXIS   =                    0 / number of data axes                            ",
+        "EXTEND  =                    T / FITS dataset may contain extensions            ",
+        "END                                                                             ",
+    ]
+    header_string = "".join(card.ljust(80) for card in header_cards)
+
+    header, metrics = FastHeaderParser.parse_with_performance_tracking(header_string)
+
+    assert header["SIMPLE"] is True
+    assert header["BITPIX"] == 8
+    assert metrics["header_size_bytes"] == len(header_string)
+    assert metrics["num_keywords"] == len(header)
+    assert metrics["parse_time_ms"] >= 0
+    assert metrics["throughput_kb_per_ms"] >= 0
+
+
+def test_parse_with_performance_tracking_handles_zero_elapsed_time():
+    header_string = "END".ljust(80)
+
+    with mock.patch("time.perf_counter", return_value=123.456):
+        _, metrics = FastHeaderParser.parse_with_performance_tracking(header_string)
+
+    assert metrics["parse_time_ms"] == 0.0
+    assert metrics["throughput_kb_per_ms"] == 0
+
+
+class TestFastParseHeader:
+    """Coverage for the public fast_parse_header wrapper."""
+
+    def test_happy_path(self):
+        header_cards = [
+            "SIMPLE  =                    T / file does conform to FITS standard             ",
+            "BITPIX  =                    8 / number of bits per data pixel                  ",
+            "NAXIS   =                    0 / number of data axes                            ",
+            "OBJECT  = 'M31     '           / target object                                  ",
+            "EXPTIME =                100.5 / exposure time in seconds                       ",
+            "OBSERVER= 'John Doe'           / observer name                                  ",
+            "END                                                                             ",
+        ]
+        parsed = fast_parse_header("".join(card.ljust(80) for card in header_cards))
+
+        assert parsed["SIMPLE"] is True
+        assert parsed["BITPIX"] == 8
+        assert parsed["NAXIS"] == 0
+        assert parsed["OBJECT"] == "M31     "
+        assert parsed["EXPTIME"] == 100.5
+        assert parsed["OBSERVER"] == "John Doe"
+
+    def test_empty_string(self):
+        assert fast_parse_header("") == {}
+
+    def test_no_end_card(self):
+        header_cards = [
+            "SIMPLE  =                    T / file does conform to FITS standard             ",
+            "BITPIX  =                    8 / number of bits per data pixel                  ",
+        ]
+        parsed = fast_parse_header("".join(card.ljust(80) for card in header_cards))
+
+        assert parsed["SIMPLE"] is True
+        assert parsed["BITPIX"] == 8
+
+    def test_complex_value(self):
+        header_cards = [
+            "COMPLEX = (1.0, -2.5)          / complex number                                 ",
+            "END                                                                             ",
+        ]
+        parsed = fast_parse_header("".join(card.ljust(80) for card in header_cards))
+
+        assert parsed["COMPLEX"] == complex(1.0, -2.5)
+
+    def test_comment_and_history_cards(self):
+        header_cards = [
+            "COMMENT This is just a comment                                                  ",
+            "HISTORY This is a history record                                                ",
+            "END                                                                             ",
+        ]
+        parsed = fast_parse_header("".join(card.ljust(80) for card in header_cards))
+
+        assert parsed["COMMENT"] == "This is just a comment"
+        assert parsed["HISTORY"] == "This is a history record"

@@ -10,6 +10,25 @@ from unittest import mock
 import torch
 
 import torchsky
+from torchsky.table import _column_name_index_map
+
+
+def test_column_name_index_map_uses_tfields_order():
+    header = {
+        "TFIELDS": 3,
+        "TTYPE1": "ID",
+        "TTYPE2": "RA",
+        "TTYPE3": "DEC",
+        "COMMENT": "not a column",
+    }
+
+    assert _column_name_index_map(header) == {1: "ID", 2: "RA", 3: "DEC"}
+
+
+def test_column_name_index_map_falls_back_without_tfields():
+    header = {"TTYPE2": "RA", "TTYPE1": "ID", "HISTORY": "ignored"}
+
+    assert _column_name_index_map(header) == {2: "RA", 1: "ID"}
 
 
 class TestTableReading:
@@ -225,6 +244,19 @@ class TestTableReading:
         )
         assert appended.num_rows == 3
         assert appended["A"].tolist() == [1, 2, 3]  # type: ignore
+
+    def test_tablehdu_accepts_numpy_numeric_columns(self):
+        """TableHDU should accept NumPy numeric columns without TensorFrame shape drift."""
+        table_hdu = torchsky.TableHDU(  # type: ignore
+            {
+                "A": np.array([1, 2, 3], dtype=np.int32),
+                "B": np.array([1.5, 2.5, 3.5], dtype=np.float32),
+            }
+        )
+
+        assert table_hdu.num_rows == 3
+        assert table_hdu.columns == ["A", "B"]
+        assert table_hdu["A"].tolist() == [1, 2, 3]  # type: ignore
 
     def test_tablehdu_append_rows_with_vla_lists(self):
         """Test appending rows for VLA-like list columns."""

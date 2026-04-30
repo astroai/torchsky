@@ -820,6 +820,103 @@ void bind_wcs(nb::module_& m) {
         return nb::make_tuple(datastatus, hdustatus);
     }, nb::arg("path"), nb::arg("hdu_num") = 0);
 
+    m.def("write_hdu_header_cards", [](const std::string& path, int hdu_num, nb::list cards) {
+        torchsky::validate_fits_filename(path);
+        fitsfile* fptr = nullptr;
+        int status = 0;
+        torchsky::check_fits_filename_security(path);
+        fits_open_file(&fptr, path.c_str(), 1 /* READWRITE */, &status);
+        if (status != 0 || !fptr) {
+            throw std::runtime_error("Could not open FITS file for header-card writing");
+        }
+        move_to_hdu_0based(fptr, hdu_num);
+
+        auto skip_structural = [](const std::string& key_upper) {
+            return key_upper == "END" ||
+                   key_upper == "SIMPLE" ||
+                   key_upper == "XTENSION" ||
+                   key_upper == "BITPIX" ||
+                   key_upper == "NAXIS" ||
+                   key_upper == "EXTEND" ||
+                   key_upper == "PCOUNT" ||
+                   key_upper == "GCOUNT" ||
+                   key_upper == "TFIELDS" ||
+                   key_upper == "THEAP" ||
+                   key_upper == "DATASUM" ||
+                   key_upper == "CHECKSUM" ||
+                   key_upper.rfind("NAXIS", 0) == 0;
+        };
+
+        for (nb::handle card_h : cards) {
+            nb::object card = nb::borrow<nb::object>(card_h);
+            std::string key;
+            nb::object value = nb::none();
+            std::string comment;
+
+            if (nb::hasattr(card, "key")) {
+                key = nb::cast<std::string>(card.attr("key"));
+                value = nb::borrow<nb::object>(card.attr("value"));
+                if (nb::hasattr(card, "comment")) {
+                    comment = nb::cast<std::string>(card.attr("comment"));
+                }
+            } else {
+                nb::tuple tup = nb::cast<nb::tuple>(card);
+                if (tup.size() < 2) {
+                    continue;
+                }
+                key = nb::cast<std::string>(tup[0]);
+                value = nb::borrow<nb::object>(tup[1]);
+                if (tup.size() >= 3) {
+                    comment = nb::cast<std::string>(tup[2]);
+                }
+            }
+
+            key = torchsky::sanitize_fits_key(key);
+            std::string key_upper = key;
+            std::transform(key_upper.begin(), key_upper.end(), key_upper.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+            if (skip_structural(key_upper)) {
+                continue;
+            }
+
+            int key_status = 0;
+            std::string sanitized_comment = torchsky::sanitize_fits_string(comment);
+            char* comment_ptr = sanitized_comment.empty() ? nullptr : sanitized_comment.data();
+
+            if (key_upper == "HISTORY") {
+                std::string text = value.is_none() ? comment : nb::cast<std::string>(value);
+                text = torchsky::sanitize_fits_string(text);
+                fits_write_history(fptr, text.c_str(), &key_status);
+            } else if (key_upper == "COMMENT") {
+                std::string text = value.is_none() ? comment : nb::cast<std::string>(value);
+                text = torchsky::sanitize_fits_string(text);
+                fits_write_comment(fptr, text.c_str(), &key_status);
+            } else if (nb::isinstance<nb::str>(value)) {
+                std::string val = torchsky::sanitize_fits_string(nb::cast<std::string>(value));
+                fits_update_key(fptr, TSTRING, key.c_str(), (void*)val.c_str(), comment_ptr, &key_status);
+            } else if (nb::isinstance<bool>(value)) {
+                int val = nb::cast<bool>(value) ? 1 : 0;
+                fits_update_key(fptr, TLOGICAL, key.c_str(), &val, comment_ptr, &key_status);
+            } else if (nb::isinstance<int>(value)) {
+                long long val = nb::cast<long long>(value);
+                fits_update_key(fptr, TLONGLONG, key.c_str(), &val, comment_ptr, &key_status);
+            } else if (nb::isinstance<float>(value) || nb::isinstance<double>(value)) {
+                double val = nb::cast<double>(value);
+                fits_update_key(fptr, TDOUBLE, key.c_str(), &val, comment_ptr, &key_status);
+            }
+            if (key_status != 0) {
+                status = key_status;
+                break;
+            }
+        }
+
+        int close_status = 0;
+        fits_close_file(fptr, &close_status);
+        if (status != 0 || close_status != 0) {
+            throw std::runtime_error("Failed to write FITS header cards");
+        }
+    }, nb::arg("path"), nb::arg("hdu_num"), nb::arg("cards"));
+
     m.def("write_fits_table", [](const std::string& filename, nb::dict tensor_dict, nb::dict header, bool overwrite,
                                  nb::object schema, const std::string& table_type) {
         torchsky::invalidate_cached(filename);

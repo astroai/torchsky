@@ -438,8 +438,10 @@ std::pair<torch::Tensor, torch::Tensor> wcs_zenithal_project(
     if (proj_code == "TAN") {
         theta = torch::atan2(torch::ones_like(r_rad), r_rad) * R2D;
     } else if (proj_code == "SIN") {
+        auto invalid = r_rad > 1.0;
         auto r_dim = r_rad.clamp(-1.0, 1.0);
         theta = r_dim.acos() * R2D;
+        theta = torch::where(invalid, torch::full_like(theta, std::numeric_limits<double>::quiet_NaN()), theta);
     } else if (proj_code == "ARC") {
         theta = 90.0 - r;
     } else if (proj_code == "ZEA") {
@@ -518,8 +520,17 @@ std::pair<torch::Tensor, torch::Tensor> wcs_zpn_project(
                 }
             }
 
+            bool valid = std::isfinite(w) && w >= 0.0 && w <= WCS_PI;
+            if (valid && max_m >= 0) {
+                double val = coeff_ptr[max_m];
+                for (int64_t j = max_m - 1; j >= 0; --j) {
+                    val = val * w + coeff_ptr[j];
+                }
+                valid = std::abs(val - r_rad_target) <= 1e-10;
+            }
+
             phi_ptr[i] = phi;
-            theta_ptr[i] = 90.0 - w * R2D;
+            theta_ptr[i] = valid ? (90.0 - w * R2D) : std::numeric_limits<double>::quiet_NaN();
         }
 
         return {phi_flat.view(xi_deg.sizes()), theta_flat.view(eta_deg.sizes())};
@@ -549,6 +560,10 @@ std::pair<torch::Tensor, torch::Tensor> wcs_zpn_project(
             c1
         );
         auto w = (r_rad_target - c0) / c1_safe;
+        auto valid = torch::isfinite(w) & (w >= 0.0) & (w <= WCS_PI);
+        auto val = c0 + c1 * w;
+        valid = valid & ((val - r_rad_target).abs() <= 1e-10);
+        w = torch::where(valid, w, torch::full_like(w, std::numeric_limits<double>::quiet_NaN()));
         auto theta = 90.0 - w * R2D;
         return {phi, theta};
     }
@@ -567,6 +582,12 @@ std::pair<torch::Tensor, torch::Tensor> wcs_zpn_project(
         auto der_safe = torch::where(der.abs() < 1e-15, torch::ones_like(der), der);
         w = w - diff / der_safe;
     }
+    auto val = torch::full_like(w, coeff_used[max_idx].item<double>());
+    for (int64_t j = max_idx - 1; j >= 0; --j) {
+        val = val * w + coeff_used[j];
+    }
+    auto valid = torch::isfinite(w) & (w >= 0.0) & (w <= WCS_PI) & ((val - r_rad_target).abs() <= 1e-10);
+    w = torch::where(valid, w, torch::full_like(w, std::numeric_limits<double>::quiet_NaN()));
     auto theta = 90.0 - w * R2D;
     return {phi, theta};
 }

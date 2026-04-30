@@ -40,7 +40,7 @@ def test_complex_header():
         # Note: Astropy might normalize HIERARCH keys.
         # 'HIERARCH LONG KEYWORD' might become 'LONG KEYWORD' or similar depending on access.
         # But in the file it is HIERARCH.
-        # TorchFits read_header uses fits_read_keyn which returns the key as stored.
+        # TorchSky read_header uses fits_read_keyn which returns the key as stored.
 
         # Check if HIERARCH key exists
         # We might need to iterate to find it if exact name match is tricky
