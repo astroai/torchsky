@@ -659,6 +659,29 @@ class TestCacheManagerFunctions:
         assert stats_after["hits"] == 0
         assert stats_after["misses"] == 0
 
+    @patch("torchsky.cache.CacheManager")
+    def test_configure_cache(self, mock_manager_cls):
+        from torchsky.cache import configure_cache
+        import torchsky.cache
+
+        mock_manager_instance = MagicMock()
+        mock_manager_cls.return_value = mock_manager_instance
+
+        configure_cache(max_files=42, max_memory_mb=1337, disk_cache_gb=7)
+
+        # Verify the new manager is set to global _cache_manager
+        assert torchsky.cache._cache_manager is mock_manager_instance
+
+        # Verify CacheManager was instantiated with a CacheConfig
+        mock_manager_cls.assert_called_once()
+        config_arg = mock_manager_cls.call_args[0][0]
+        assert config_arg.max_files == 42
+        assert config_arg.max_memory_mb == 1337
+        assert config_arg.disk_cache_gb == 7
+
+        # Verify configure_cpp_cache was called
+        mock_manager_instance.configure_cpp_cache.assert_called_once()
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
