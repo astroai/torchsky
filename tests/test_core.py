@@ -1,4 +1,6 @@
+import numpy as np
 import pytest
+import torch
 
 from torchsky.core import FITSCore
 
@@ -48,3 +50,56 @@ def test_parse_cutout_spec_invalid():
         FITSCore.parse_cutout_spec("myimage.fits[]")
     with pytest.raises(ValueError):
         FITSCore.parse_cutout_spec("myimage.fits[1][,10]")
+
+
+def test_process_data_base_case():
+    data = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    header = {}
+    tensor = FITSCore.process_data(data, header)
+    assert isinstance(tensor, torch.Tensor)
+    assert tensor.dtype == torch.float32
+    assert torch.allclose(tensor, torch.tensor([1.0, 2.0, 3.0]))
+
+def test_process_data_byteorder():
+    # Big-endian float32
+    data = np.array([1.0, 2.0, 3.0], dtype=">f4")
+    header = {}
+    tensor = FITSCore.process_data(data, header)
+    assert isinstance(tensor, torch.Tensor)
+    assert tensor.dtype == torch.float32
+    assert torch.allclose(tensor, torch.tensor([1.0, 2.0, 3.0]))
+
+def test_process_data_scaling_float64():
+    data = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    header = {"BSCALE": 2.0, "BZERO": 1.0}
+    tensor = FITSCore.process_data(data, header)
+    assert isinstance(tensor, torch.Tensor)
+    assert tensor.dtype == torch.float64
+    assert torch.allclose(tensor, torch.tensor([3.0, 5.0, 7.0], dtype=torch.float64))
+
+def test_process_data_scaling_float32():
+    data = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    header = {"BSCALE": 2.0, "BZERO": 1.0}
+    tensor = FITSCore.process_data(data, header)
+    assert isinstance(tensor, torch.Tensor)
+    assert tensor.dtype == torch.float32
+    assert torch.allclose(tensor, torch.tensor([3.0, 5.0, 7.0]))
+
+def test_process_data_scaling_int():
+    data = np.array([1, 2, 3], dtype=np.int32)
+    header = {"BSCALE": 2.0, "BZERO": 1.0}
+    tensor = FITSCore.process_data(data, header)
+    assert isinstance(tensor, torch.Tensor)
+    # Should convert to float32
+    assert tensor.dtype == torch.float32
+    assert torch.allclose(tensor, torch.tensor([3.0, 5.0, 7.0]))
+
+def test_process_data_partial_scaling():
+    data = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    header_bscale = {"BSCALE": 2.0}
+    tensor1 = FITSCore.process_data(data, header_bscale)
+    assert torch.allclose(tensor1, torch.tensor([2.0, 4.0, 6.0]))
+
+    header_bzero = {"BZERO": 1.0}
+    tensor2 = FITSCore.process_data(data, header_bzero)
+    assert torch.allclose(tensor2, torch.tensor([2.0, 3.0, 4.0]))
