@@ -9,12 +9,12 @@ import torch
 from astropy.io import fits
 from astropy.table import Table
 
-import torchfits
+import torchsky
 
 
 def _declared_version() -> str:
     try:
-        return metadata.version("torchfits")
+        return metadata.version("torchsky")
     except metadata.PackageNotFoundError:
         pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
         import tomllib
@@ -25,7 +25,7 @@ def _declared_version() -> str:
 
 
 def test_runtime_version_matches_declared_version() -> None:
-    assert torchfits.__version__ == _declared_version()
+    assert torchsky.__version__ == _declared_version()
 
 
 def test_release_smoke_image_read_write_roundtrip() -> None:
@@ -36,15 +36,15 @@ def test_release_smoke_image_read_write_roundtrip() -> None:
         path = fh.name
 
     try:
-        torchfits.write(path, image, header=header, overwrite=True)
-        out, hdr = torchfits.read(path, return_header=True)
+        torchsky.write(path, image, header=header, overwrite=True)
+        out, hdr = torchsky.read(path, return_header=True)
 
         assert isinstance(out, torch.Tensor)
         assert out.shape == (4, 4)
         assert torch.allclose(out.cpu(), image)
         assert str(hdr["OBJECT"]).strip() == "SMOKE"
 
-        with torchfits.open(path) as hdul:
+        with torchsky.open(path) as hdul:
             reopened = hdul[0].to_tensor()
             assert torch.allclose(reopened.cpu(), image)
     finally:
@@ -64,7 +64,7 @@ def test_release_smoke_table_read() -> None:
 
     try:
         table.write(path, format="fits", overwrite=True)
-        data = torchfits.read_table(path, hdu=1, columns=["RA", "ID"])
+        data = torchsky.read_table(path, hdu=1, columns=["RA", "ID"])
 
         assert set(data.keys()) == {"RA", "ID"}
         assert torch.allclose(
@@ -94,7 +94,7 @@ def test_release_smoke_wcs_header_build() -> None:
 
     try:
         hdu.writeto(path, overwrite=True)
-        wcs = torchfits.get_wcs(path, hdu=0)
+        wcs = torchsky.get_wcs(path, hdu=0)
         world = wcs.pixel_to_world(torch.tensor([3.0]), torch.tensor([3.0]))
         assert len(world) == 2
         assert torch.isfinite(world[0]).all()
