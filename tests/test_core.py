@@ -1,6 +1,7 @@
 import pytest
+import torch
 
-from torchsky.core import FITSCore
+from torchsky.core import FITSCore, FITSDataTypeHandler
 
 
 def test_parse_cutout_spec_valid():
@@ -48,3 +49,17 @@ def test_parse_cutout_spec_invalid():
         FITSCore.parse_cutout_spec("myimage.fits[]")
     with pytest.raises(ValueError):
         FITSCore.parse_cutout_spec("myimage.fits[1][,10]")
+
+def test_to_torch_dtype_valid():
+    assert FITSDataTypeHandler.to_torch_dtype(8) == torch.uint8
+    assert FITSDataTypeHandler.to_torch_dtype(16) == torch.int16
+    assert FITSDataTypeHandler.to_torch_dtype(32) == torch.int32
+    assert FITSDataTypeHandler.to_torch_dtype(64) == torch.int64
+    assert FITSDataTypeHandler.to_torch_dtype(-32) == torch.float32
+    assert FITSDataTypeHandler.to_torch_dtype(-64) == torch.float64
+
+def test_to_torch_dtype_invalid():
+    with pytest.raises(ValueError, match="Unsupported BITPIX: 10"):
+        FITSDataTypeHandler.to_torch_dtype(10)
+    with pytest.raises(ValueError, match="Unsupported BITPIX: -16"):
+        FITSDataTypeHandler.to_torch_dtype(-16)
