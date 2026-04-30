@@ -31,8 +31,8 @@ Building from source (editable install, CUDA/conda notes, vendoring): see [`docs
 From source:
 
 ```bash
-git clone https://github.com/sfabbro/torchfits.git
-cd torchfits
+git clone https://github.com/sfabbro/torchsky.git
+cd torchsky
 pip install -e .
 ```
 

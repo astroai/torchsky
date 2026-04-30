@@ -2,6 +2,8 @@
 
 This document outlines the vision, design thesis, and implementation roadmap for `torchsky`, focusing on end-to-end differentiable forward models and survey-scale inference using Neural Fields (INR).
 
+For implementation status, test-gate results, and current replacement gaps, see [Code-Grounded Roadmap Status](roadmap_status.md). That file is the primary place to update after roadmap implementation slices.
+
 ---
 
 ## 1. Vision: Implicit Forward Modeling
