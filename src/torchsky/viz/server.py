@@ -44,7 +44,7 @@ def create_app(
         max_validation_pairs: Evict oldest validation pairs when exceeded.
         max_image_pixels: Reject HiPS/validation image HDUs larger than this (H*W).
         expose_root_in_health: If True, include absolute ``root`` in ``/api/health``.
-        cors_allow_origins: Allowed CORS origins; ``None`` means ``["*"]``.
+        cors_allow_origins: Allowed CORS origins; ``None`` means ``[]``.
         cors_allow_credentials: Browser credentialed requests; forced off if origins is ``*``.
     """
     import torchsky
@@ -61,7 +61,7 @@ def create_app(
         redoc_url="/api/redoc",
     )
 
-    allow_origins = list(cors_allow_origins) if cors_allow_origins else ["*"]
+    allow_origins = list(cors_allow_origins) if cors_allow_origins else []
     allow_cred = bool(cors_allow_credentials)
     if "*" in allow_origins:
         allow_cred = False
