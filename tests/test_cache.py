@@ -445,7 +445,6 @@ class TestCacheManager:
         # Test that configure_cpp_cache was called (optional, maybe check if cpp cache is configured correctly, but simple singleton check is required)
 
     def test_configure_cpp_cache_success(self):
-        import sys
         from unittest.mock import MagicMock, patch
         from torchsky.cache import CacheManager, CacheConfig
 

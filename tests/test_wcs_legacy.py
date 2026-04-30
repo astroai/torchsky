@@ -104,20 +104,20 @@ def test_tnx_constant_polynomial_applies_expected_shift_near_center() -> None:
 
 
 def test_parse_wat_keywords_empty():
-    from torchfits.wcs.legacy import parse_wat_keywords
+    from torchsky.wcs.legacy import parse_wat_keywords
 
     assert parse_wat_keywords({}, prefix="WAT1") == ""
 
 
 def test_parse_wat_keywords_no_match():
-    from torchfits.wcs.legacy import parse_wat_keywords
+    from torchsky.wcs.legacy import parse_wat_keywords
 
     header = {"WAT2_001": "something"}
     assert parse_wat_keywords(header, prefix="WAT1") == ""
 
 
 def test_parse_wat_keywords_normal():
-    from torchfits.wcs.legacy import parse_wat_keywords
+    from torchsky.wcs.legacy import parse_wat_keywords
 
     header = {
         "WAT1_001": "wtype=tnx ",
@@ -128,7 +128,7 @@ def test_parse_wat_keywords_normal():
 
 
 def test_parse_wat_keywords_gap():
-    from torchfits.wcs.legacy import parse_wat_keywords
+    from torchsky.wcs.legacy import parse_wat_keywords
 
     header = {
         "WAT1_001": "part1",
@@ -139,7 +139,7 @@ def test_parse_wat_keywords_gap():
 
 
 def test_parse_wat_keywords_non_string():
-    from torchfits.wcs.legacy import parse_wat_keywords
+    from torchsky.wcs.legacy import parse_wat_keywords
 
     header = {
         "WAT1_001": 123,
@@ -149,7 +149,7 @@ def test_parse_wat_keywords_non_string():
 
 
 def test_parse_wat_keywords_max_limit():
-    from torchfits.wcs.legacy import parse_wat_keywords
+    from torchsky.wcs.legacy import parse_wat_keywords
 
     header = {f"WAT1_{n:03d}": "a" for n in range(1, 105)}
     # It stops at 99 because range is (1, 100)
@@ -157,7 +157,7 @@ def test_parse_wat_keywords_max_limit():
 
 
 def test_parse_wat_keywords_default_prefix():
-    from torchfits.wcs.legacy import parse_wat_keywords
+    from torchsky.wcs.legacy import parse_wat_keywords
 
     header = {
         "WAT_001": "default1",
@@ -167,7 +167,7 @@ def test_parse_wat_keywords_default_prefix():
 
 
 def test_legacy_polynomial_chebyshev_legendre() -> None:
-    from torchfits.wcs.legacy import LegacyPolynomial
+    from torchsky.wcs.legacy import LegacyPolynomial
 
     # Test Chebyshev (func_type=1), order=3
     # P_0 = 1
@@ -214,7 +214,7 @@ def test_legacy_polynomial_chebyshev_legendre() -> None:
 
 
 def test_extract_tnx_coeffs() -> None:
-    from torchfits.wcs.legacy import extract_tnx_coeffs
+    from torchsky.wcs.legacy import extract_tnx_coeffs
 
     wat = 'wtype=tnx lngcor="1 2 3" latcor=4'
     assert extract_tnx_coeffs(wat, "lngcor") == "1 2 3"
@@ -223,7 +223,7 @@ def test_extract_tnx_coeffs() -> None:
 
 
 def test_extract_zpx_params() -> None:
-    from torchfits.wcs.legacy import extract_zpx_params
+    from torchsky.wcs.legacy import extract_zpx_params
 
     wat_data = {
         0: "projp1 = 0.5 projp3= 1.5",
@@ -235,7 +235,7 @@ def test_extract_zpx_params() -> None:
 
 
 def test_project_tnx() -> None:
-    from torchfits.wcs.legacy import project_tnx
+    from torchsky.wcs.legacy import project_tnx
 
     # Test None wat_data returns original
     xi = torch.tensor([1.0], dtype=torch.float64)
@@ -258,8 +258,8 @@ def test_project_tnx() -> None:
 
 
 def test_project_zpx() -> None:
-    from torchfits.wcs.legacy import project_zpx
-    from torchfits.wcs.zenithal import project_zenithal
+    from torchsky.wcs.legacy import project_zpx
+    from torchsky.wcs.zenithal import project_zenithal
 
     xi = torch.tensor([0.0], dtype=torch.float64)
     eta = torch.tensor([0.0], dtype=torch.float64)
