@@ -1,6 +1,6 @@
 import pytest
 
-from torchsky.core import FITSCore
+from torchsky.core import CompressionHandler, FITSCore
 
 
 def test_parse_cutout_spec_valid():
@@ -48,3 +48,16 @@ def test_parse_cutout_spec_invalid():
         FITSCore.parse_cutout_spec("myimage.fits[]")
     with pytest.raises(ValueError):
         FITSCore.parse_cutout_spec("myimage.fits[1][,10]")
+
+class TestCompressionHandler:
+    def test_is_compressed_missing_zcmptype(self):
+        assert CompressionHandler.is_compressed({"SIMPLE": True}) is False
+
+    def test_is_compressed_empty_zcmptype(self):
+        assert CompressionHandler.is_compressed({"ZCMPTYPE": ""}) is False
+
+    def test_is_compressed_whitespace_zcmptype(self):
+        assert CompressionHandler.is_compressed({"ZCMPTYPE": "   "}) is False
+
+    def test_is_compressed_valid(self):
+        assert CompressionHandler.is_compressed({"ZCMPTYPE": "GZIP_1"}) is True
