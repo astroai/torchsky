@@ -220,7 +220,12 @@ def _fits_header_table_has_vla(header: Mapping[str, Any]) -> bool:
             continue
         raw_str = str(raw)
         # Fast path rejection for VLA indicators before running regex
-        if "P" not in raw_str and "Q" not in raw_str and "p" not in raw_str and "q" not in raw_str:
+        if (
+            "P" not in raw_str
+            and "Q" not in raw_str
+            and "p" not in raw_str
+            and "q" not in raw_str
+        ):
             continue
         is_vla, _, _ = _parse_tform(raw_str)
         if is_vla:
@@ -240,7 +245,12 @@ def _fits_header_column_is_vla(header: Mapping[str, Any], col_name: str) -> bool
             continue
         raw = header.get(f"TFORM{i}", "")
         raw_str = str(raw)
-        if "P" not in raw_str and "Q" not in raw_str and "p" not in raw_str and "q" not in raw_str:
+        if (
+            "P" not in raw_str
+            and "Q" not in raw_str
+            and "p" not in raw_str
+            and "q" not in raw_str
+        ):
             return False
         return _parse_tform(raw_str)[0]
     return False
@@ -2474,13 +2484,18 @@ def duckdb_query(
         connection=con,
         **kwargs,
     )
-    # Prevent basic SQL injection by enforcing a single statement via execute instead of sql
-    try:
-        result = con.sql(query)
-    except duckdb.ParserException as e:
-        if "Parser Error: Multiple SQL statements" in str(e):
-            raise ValueError("query must contain only a single SQL statement") from e
-        raise
+    # Prevent SQL injection by enforcing a single, read-only statement
+    statements = duckdb.extract_statements(query)
+    if len(statements) != 1:
+        raise ValueError("query must contain only a single SQL statement")
+
+    stmt_type = statements[0].type
+    if stmt_type not in (duckdb.StatementType.SELECT, duckdb.StatementType.EXPLAIN):
+        raise ValueError(
+            f"Only SELECT and EXPLAIN queries are allowed, got: {stmt_type.name}"
+        )
+
+    result = con.sql(query)
     if return_arrow:
         return result.arrow()
     return result
