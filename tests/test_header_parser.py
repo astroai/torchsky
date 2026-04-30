@@ -1,6 +1,6 @@
 # Mock out torchsky.cpp since we only care about header_parser.py testing right now
 
-from torchsky.header_parser import FastHeaderParser
+from torchsky.header_parser import FastHeaderParser, fast_parse_header
 from typing import Dict
 
 
@@ -80,3 +80,76 @@ def test_benchmark_header_parsing():
     assert metrics["avg_parse_time_ms"] >= 0
     assert metrics["throughput_headers_per_sec"] >= 0
     assert metrics["total_time_s"] >= 0
+
+class TestFastParseHeader:
+    """Test suite for the fast_parse_header public function."""
+
+    def test_fast_parse_header_happy_path(self):
+        """Test parsing a valid header string."""
+        header_cards = [
+            "SIMPLE  =                    T / file does conform to FITS standard             ",
+            "BITPIX  =                    8 / number of bits per data pixel                  ",
+            "NAXIS   =                    0 / number of data axes                            ",
+            "OBJECT  = 'M31     '           / target object                                  ",
+            "EXPTIME =                100.5 / exposure time in seconds                       ",
+            "OBSERVER= 'John Doe'           / observer name                                  ",
+            "END                                                                             ",
+        ]
+        header_string = "".join([card.ljust(80) for card in header_cards])
+
+        parsed = fast_parse_header(header_string)
+
+        assert parsed["SIMPLE"] is True
+        assert parsed["BITPIX"] == 8
+        assert parsed["NAXIS"] == 0
+        assert parsed["OBJECT"] == "M31     "
+        assert parsed["EXPTIME"] == 100.5
+        assert parsed["OBSERVER"] == "John Doe"
+
+    def test_fast_parse_header_empty_string(self):
+        """Test parsing an empty string."""
+        parsed = fast_parse_header("")
+        assert parsed == {}
+
+    def test_fast_parse_header_no_end_card(self):
+        """Test parsing a header without an END card."""
+        header_cards = [
+            "SIMPLE  =                    T / file does conform to FITS standard             ",
+            "BITPIX  =                    8 / number of bits per data pixel                  ",
+        ]
+        header_string = "".join([card.ljust(80) for card in header_cards])
+
+        parsed = fast_parse_header(header_string)
+
+        assert parsed["SIMPLE"] is True
+        assert parsed["BITPIX"] == 8
+
+    def test_fast_parse_header_complex_numbers(self):
+        """Test parsing complex numbers in header."""
+        header_cards = [
+            "COMPLEX = (1.0, -2.5)          / complex number                                 ",
+            "END                                                                             ",
+        ]
+        header_string = "".join([card.ljust(80) for card in header_cards])
+
+        parsed = fast_parse_header(header_string)
+        assert parsed["COMPLEX"] == complex(1.0, -2.5)
+
+    def test_fast_parse_header_edge_cases(self):
+        """Test edge cases in header parsing."""
+        header_cards = [
+            "        = 'Empty keyword'      / no keyword name                                ",
+            "NOVALUE =                      / no value                                       ",
+            "COMMENT This is just a comment                                                  ",
+            "HISTORY This is a history record                                                ",
+            "END                                                                             ",
+        ]
+        header_string = "".join([card.ljust(80) for card in header_cards])
+
+        parsed = fast_parse_header(header_string)
+
+        assert "COMMENT" in parsed
+        assert parsed["COMMENT"] == "This is just a comment"
+        assert "HISTORY" in parsed
+        assert parsed["HISTORY"] == "This is a history record"
+        # No keyword or NOVALUE cases shouldn't fail, behavior depends on underlying parser
