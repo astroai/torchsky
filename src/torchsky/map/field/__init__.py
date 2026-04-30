@@ -78,7 +78,11 @@ from .observation_builders import (
     ifu_cube_spectral_to_leading,
     make_tangent_plane_header,
 )
-from .registry import FIELD_MODEL_KINDS
+from .registry import (
+    FIELD_MODEL_KINDS,
+    RECOMMENDED_FIELD_MODEL_KINDS,
+    is_recommended_field_model,
+)
 from .spectral_budget import (
     spectral_data_budget,
     suggest_num_spectral_samples,
@@ -110,6 +114,7 @@ from .types import (
 
 __all__ = [
     "FIELD_MODEL_KINDS",
+    "RECOMMENDED_FIELD_MODEL_KINDS",
     "ForwardContext",
     "KinematicState",
     "SurveyDataTerm",
@@ -139,6 +144,7 @@ __all__ = [
     "field_observations_from_bin_centers",
     "field_observations_from_bin_edges",
     "field_observations_from_ifu_cube",
+    "is_recommended_field_model",
     "ifu_cube_spectral_to_leading",
     "make_tangent_plane_header",
     "FourierMLPField",

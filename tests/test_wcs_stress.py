@@ -41,7 +41,7 @@ def test_sip_high_order_precision():
     # Astropy WCS
     awcs = AstropyWCS(header)  # type: ignore
 
-    # TorchFits WCS
+    # TorchSky WCS
     twcs = wcs.WCS(header)  # type: ignore
 
     # Test on a large grid

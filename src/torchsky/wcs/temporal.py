@@ -1,18 +1,178 @@
 from __future__ import annotations
 
 import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from torch import Tensor
+import torch
+from torch import Tensor
+
+SECONDS_PER_DAY = 86400.0
+TT_MINUS_TAI_SECONDS = 32.184
+TAI_MINUS_GPS_SECONDS = 19.0
+
+# Effective MJD dates at 00:00:00 UTC and TAI-UTC offsets in seconds.
+# IERS Bulletin C 71 / NIST still give TAI-UTC = 37 s from 2017-01-01
+# through at least the 2026-06-30 no-leap announcement.
+_LEAP_EFFECTIVE_MJD = torch.tensor(
+    [
+        41317.0,
+        41499.0,
+        41683.0,
+        42048.0,
+        42413.0,
+        42778.0,
+        43144.0,
+        43509.0,
+        43874.0,
+        44239.0,
+        44786.0,
+        45151.0,
+        45516.0,
+        46247.0,
+        47161.0,
+        47892.0,
+        48257.0,
+        48804.0,
+        49169.0,
+        49534.0,
+        50083.0,
+        50630.0,
+        51179.0,
+        53736.0,
+        54832.0,
+        56109.0,
+        57204.0,
+        57754.0,
+    ],
+    dtype=torch.float64,
+)
+_TAI_MINUS_UTC = torch.tensor(
+    [
+        10.0,
+        11.0,
+        12.0,
+        13.0,
+        14.0,
+        15.0,
+        16.0,
+        17.0,
+        18.0,
+        19.0,
+        20.0,
+        21.0,
+        22.0,
+        23.0,
+        24.0,
+        25.0,
+        26.0,
+        27.0,
+        28.0,
+        29.0,
+        30.0,
+        31.0,
+        32.0,
+        33.0,
+        34.0,
+        35.0,
+        36.0,
+        37.0,
+    ],
+    dtype=torch.float64,
+)
+
+_TIMEUNIT_TO_DAYS = {
+    "d": 1.0,
+    "day": 1.0,
+    "days": 1.0,
+    "s": 1.0 / SECONDS_PER_DAY,
+    "sec": 1.0 / SECONDS_PER_DAY,
+    "second": 1.0 / SECONDS_PER_DAY,
+    "seconds": 1.0 / SECONDS_PER_DAY,
+    "min": 60.0 / SECONDS_PER_DAY,
+    "minute": 60.0 / SECONDS_PER_DAY,
+    "minutes": 60.0 / SECONDS_PER_DAY,
+    "h": 3600.0 / SECONDS_PER_DAY,
+    "hr": 3600.0 / SECONDS_PER_DAY,
+    "hour": 3600.0 / SECONDS_PER_DAY,
+    "hours": 3600.0 / SECONDS_PER_DAY,
+    "ms": 1.0e-3 / SECONDS_PER_DAY,
+    "us": 1.0e-6 / SECONDS_PER_DAY,
+    "µs": 1.0e-6 / SECONDS_PER_DAY,
+    "ns": 1.0e-9 / SECONDS_PER_DAY,
+    "a": 365.25,
+    "yr": 365.25,
+    "year": 365.25,
+    "years": 365.25,
+    "cy": 36525.0,
+    "century": 36525.0,
+    "centuries": 36525.0,
+}
+
+
+def _as_float_tensor(value: Any) -> Tensor:
+    if isinstance(value, Tensor):
+        return value.to(dtype=torch.float64)
+    return torch.as_tensor(value, dtype=torch.float64)
+
+
+def tai_minus_utc_seconds(mjd_utc: Any) -> Tensor:
+    """Return TAI-UTC in seconds for UTC MJD values covered by leap table."""
+    mjd = _as_float_tensor(mjd_utc)
+    table = _LEAP_EFFECTIVE_MJD.to(device=mjd.device)
+    offsets = _TAI_MINUS_UTC.to(device=mjd.device)
+    idx = torch.bucketize(mjd.reshape(-1), table, right=True) - 1
+    idx = torch.clamp(idx, min=0, max=offsets.numel() - 1)
+    return offsets[idx].reshape(mjd.shape)
+
+
+def convert_time_scale(mjd: Any, from_scale: str, to_scale: str) -> Tensor:
+    """Convert MJD values between UTC, TAI, TT, and GPS time scales."""
+    src = from_scale.strip().upper()
+    dst = to_scale.strip().upper()
+    value = _as_float_tensor(mjd)
+    if src == dst:
+        return value
+
+    if src == "UTC":
+        tai = value + tai_minus_utc_seconds(value) / SECONDS_PER_DAY
+    elif src == "TAI":
+        tai = value
+    elif src == "TT":
+        tai = value - TT_MINUS_TAI_SECONDS / SECONDS_PER_DAY
+    elif src == "GPS":
+        tai = value + TAI_MINUS_GPS_SECONDS / SECONDS_PER_DAY
+    else:
+        raise ValueError(f"unsupported input time scale {from_scale!r}")
+
+    if dst == "TAI":
+        return tai
+    if dst == "TT":
+        return tai + TT_MINUS_TAI_SECONDS / SECONDS_PER_DAY
+    if dst == "GPS":
+        return tai - TAI_MINUS_GPS_SECONDS / SECONDS_PER_DAY
+    if dst == "UTC":
+        utc = tai - tai_minus_utc_seconds(tai) / SECONDS_PER_DAY
+        for _ in range(3):
+            utc = tai - tai_minus_utc_seconds(utc) / SECONDS_PER_DAY
+        return utc
+    raise ValueError(f"unsupported output time scale {to_scale!r}")
+
+
+def temporal_unit_to_days(unit: str | None) -> float:
+    """Return days per temporal unit for common FITS/VO time units."""
+    key = "d" if unit is None or str(unit).strip() == "" else str(unit).strip().lower()
+    try:
+        return _TIMEUNIT_TO_DAYS[key]
+    except KeyError as exc:
+        raise ValueError(f"unsupported temporal unit {unit!r}") from exc
 
 
 class TemporalWCS:
     """
     FITS Temporal WCS implementation (Paper IV).
 
-    Supports vectorized transformations between different time representations
-    and coordinate systems.
+    Supports vectorized transformations between relative time and MJD plus
+    leap-second-aware UTC/TAI/TT/GPS scale conversion.
 
     Main keywords:
     - MJDREF: Reference MJD
@@ -30,23 +190,49 @@ class TemporalWCS:
         self.timesys = header.get("TIMESYS", "UTC").upper()
         self.timeunit = header.get("TIMEUNIT", "d").lower()
         self.trefpos = header.get("TREFPOS", "TOPOCENTER").upper()
+        self.trefdir = header.get("TREFDIR", None)
+        self.plephem = header.get("PLEPHEM", None)
+        self.timeoffs = float(header.get("TIMEOFFS", 0.0))
+
+        self.obsgeo_xyz_m: tuple[float, float, float] | None = None
+        if all(k in header for k in ("OBSGEO-X", "OBSGEO-Y", "OBSGEO-Z")):
+            self.obsgeo_xyz_m = (
+                float(header["OBSGEO-X"]),
+                float(header["OBSGEO-Y"]),
+                float(header["OBSGEO-Z"]),
+            )
+
+        self.obsgeo_lon_lat_height: tuple[float, float, float] | None = None
+        if all(k in header for k in ("OBSGEO-L", "OBSGEO-B", "OBSGEO-H")):
+            self.obsgeo_lon_lat_height = (
+                float(header["OBSGEO-L"]),
+                float(header["OBSGEO-B"]),
+                float(header["OBSGEO-H"]),
+            )
 
         # Scaling factor to days
-        self.to_days = 1.0
-        if self.timeunit == "s":
-            self.to_days = 1.0 / 86400.0
-        elif self.timeunit == "a":  # Year (365.25 days)
-            self.to_days = 365.25
-        elif self.timeunit == "cy":  # Century
-            self.to_days = 36525.0
+        self.to_days = temporal_unit_to_days(self.timeunit)
 
     def to_mjd(self, time_val: Tensor) -> Tensor:
-        """Convert relative time to absolute MJD."""
+        """Convert relative time to absolute MJD in the header ``TIMESYS``."""
         return self.mjd_ref + time_val * self.to_days
 
+    def to_mjd_scale(self, time_val: Tensor, scale: str) -> Tensor:
+        """Convert relative time to absolute MJD in another supported scale."""
+        return convert_time_scale(self.to_mjd(time_val), self.timesys, scale)
+
     def from_mjd(self, mjd: Tensor) -> Tensor:
-        """Convert absolute MJD to relative time."""
+        """Convert absolute MJD in the header ``TIMESYS`` to relative time."""
         return (mjd - self.mjd_ref) / self.to_days
+
+    def from_mjd_scale(self, mjd: Tensor, scale: str) -> Tensor:
+        """Convert absolute MJD in ``scale`` to relative header time values."""
+        local = convert_time_scale(mjd, scale, self.timesys)
+        return self.from_mjd(local)
+
+    def convert_scale(self, mjd: Tensor, to_scale: str, from_scale: str | None = None) -> Tensor:
+        """Convert MJD values from ``from_scale`` or header ``TIMESYS`` to ``to_scale``."""
+        return convert_time_scale(mjd, from_scale or self.timesys, to_scale)
 
     @staticmethod
     def mjd_to_jd(mjd: float | Tensor) -> float | Tensor:
@@ -75,8 +261,43 @@ class TemporalWCS:
 
     def apply_corrections(self, mjd: Tensor, ra: Tensor, dec: Tensor) -> Tensor:
         """
-        Placeholder for light travel time corrections (RSET, BSET).
-        Requires orbital ephemeris for Barycentric corrections.
+        Apply reference-position light-time corrections when locally available.
+
+        Full barycentric/heliocentric/geocentric corrections require observatory
+        location plus solar-system ephemerides. torchsky does not currently ship
+        an ephemeris backend, so unsupported corrections fail explicitly instead
+        of returning a silently wrong timestamp.
         """
-        # For now, return identity
-        return mjd
+        if self.trefpos in {"TOPOCENTER", "TOPOCENTRE"}:
+            return mjd
+        raise NotImplementedError(
+            f"{self.trefpos} temporal corrections require an ephemeris backend"
+        )
+
+    @property
+    def requires_ephemeris(self) -> bool:
+        return self.trefpos not in {"TOPOCENTER", "TOPOCENTRE"}
+
+    @property
+    def reference_position(self) -> str:
+        return self.trefpos
+
+    @property
+    def reference_direction(self) -> Any:
+        return self.trefdir
+
+    @property
+    def ephemeris(self) -> Any:
+        return self.plephem
+
+    @property
+    def has_observatory_location(self) -> bool:
+        return self.obsgeo_xyz_m is not None or self.obsgeo_lon_lat_height is not None
+
+    @property
+    def observatory_xyz_m(self) -> tuple[float, float, float] | None:
+        return self.obsgeo_xyz_m
+
+    @property
+    def observatory_lon_lat_height_deg_m(self) -> tuple[float, float, float] | None:
+        return self.obsgeo_lon_lat_height

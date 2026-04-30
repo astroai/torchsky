@@ -172,7 +172,14 @@ with torchsky.open("cat.fits") as hdul:
 
 ### `Header`
 
-Dict-like FITS header. Supports `header["KEY"]`, `header.get("KEY", default)`, `header["KEY"] = val`, `.items()`.
+Dict-like FITS header with ordered card tracking. Supports `header["KEY"]`,
+`header.get("KEY", default)`, `header["KEY"] = val`, `.items()`, `.cards`,
+`.card(key)`, `.comments(key)`, `.append(card)`, `.insert(index, card)`,
+`.remove(key)`, `.add_history(text)`, `.add_comment(text)`,
+`.get_history()`, and `.get_comment()`.
+
+`Card(key, value, comment="")` represents one FITS header card and is tuple-compatible
+with `(key, value, comment)` internal records.
 
 ---
 
@@ -182,15 +189,41 @@ Dict-like FITS header. Supports `header["KEY"]`, `header.get("KEY", default)`, `
 from torchsky.wcs import WCS
 
 wcs = WCS(header_dict)           # from a dict / FITS header
+alt = WCS(header_dict, key="A")   # alternate FITS-WCS version
 wcs = torchsky.get_wcs("image.fits", hdu="auto")
 
 ra, dec = wcs.pixel_to_world(x, y)
 x, y = wcs.world_to_pixel(ra, dec)
+pixel, world = wcs.mixed_pixel_world(pixel=[[12.0, float("nan")]], world=[[float("nan"), -1.2]])
 ```
 
 Pure-PyTorch implementation. Runs on CPU, CUDA, or MPS. Follows the same `pixel_to_world` / `world_to_pixel` interface as [astropy.wcs](https://docs.astropy.org/en/stable/wcs/).
 
 **Supported projections (13):** TAN, SIN, ARC, ZPN, ZEA, STG, CEA, CAR, MER, AIT, MOL, HPX, SFL. Distortions: SIP, TPV, TNX, ZPX.
+
+Compatibility-oriented WCS surfaces:
+
+- `WCS.available_wcs_keys(header)` returns primary (`""`) and alternate (`"A"` .. `"Z"`) FITS-WCS versions present in a header.
+- `WCS(header, key="A")` selects alternate-version FITS-WCS keywords such as `CTYPE1A`, `CRPIX1A`, and `PV2_1A`.
+- `all_pix2world(...)` and `all_world2pix(...)` are Astropy-compatible aliases that accept stacked coordinate arrays plus positional `origin`, or separate coordinate arrays plus positional `origin`.
+- `mixed_pixel_world(pixel=..., world=...)` accepts arrays with trailing dimension `naxis`; mark unknown pixel/world entries with `NaN`. It fills the missing side for full pixel/full world inputs and solves the common Kapteyn-style mixed 2D celestial case with one known pixel axis plus one known world axis.
+- Metadata properties: `pixel_n_dim`, `world_n_dim`, `pixel_axis_names`, `world_axis_names`, `world_axis_units`, `world_axis_physical_types`, `pixel_shape`, `array_shape`, `pixel_bounds`, and `axis_correlation_matrix`.
+- Geometry helpers: `footprint()` returns celestial image corners and `in_image(pixels)` masks coordinates inside `NAXISi` bounds.
+- Astropy-style value/index helpers: `pixel_to_world_values(...)`, `world_to_pixel_values(...)`, `array_index_to_world_values(...)`, and `world_to_array_index_values(...)`. Array-index helpers use NumPy order, so a 2D image accepts or returns `(row, column)`.
+- Cutout helpers: `slice(view, numpy_order=True)` returns a dimensionality-preserving WCS for positive-step array slices, updating `CRPIX` and `CD` so cropped or strided image views keep correct coordinates.
+- Axis-reduction helpers: `dropaxis(axis)` removes one uncoupled FITS-order axis, and `celestial` extracts a 2D celestial WCS from a spatial cube when extra axes are uncoupled. Coupled axis drops fail closed.
+- Differentiable geometry helpers: `pixel_to_world_differentiable(...)`, `world_to_pixel_differentiable(...)`, `pixel_to_world_jacobian(...)`, and `world_to_pixel_jacobian(...)` use pure Torch paths so WCS can sit inside INR/field-model training and multi-modal geometry encoders without routing gradients through native C++ shortcuts.
+- Spectral helpers: `spectral_to_frequency(...)` and `frequency_to_spectral(...)` convert the selected WCS spectral axis through frequency using `CTYPE`, `CUNIT`, and `RESTFRQ` / `RESTFREQ` / `RESTWAV` metadata.
+
+Low-level torch-native spectral conversion helpers are also available from `torchsky.wcs` and `torchsky.coords`: `convert_spectral`, `spectral_to_frequency`, `frequency_to_spectral`, `air_wavelength_to_vacuum`, and `vacuum_wavelength_to_air`. Supported coordinate types are `FREQ`, `WAVE`, `WAVN`, `AWAV`, `ENER`, `ZOPT`, `VRAD`, `VOPT`, `VELO`, and `BETA`; defaults follow FITS SI units unless explicit units such as `"Angstrom"`, `"cm-1"`, `"eV"`, or `"km/s"` are provided. The WCS transform path also supports the validated one-axis FITS spectral `-LOG` algorithm for `FREQ-LOG`, `WAVE-LOG`, and `WAVN-LOG`; compound grism and nonlinear Paper III algorithm chains remain roadmap work.
+
+Temporal helpers in `torchsky.wcs.temporal` include `TemporalWCS`, `convert_time_scale`, `temporal_unit_to_days`, and `tai_minus_utc_seconds`. They support UTC/TAI/TT/GPS MJD conversions with a built-in leap-second table, common FITS/VO time units from nanoseconds through days/years/centuries, and reference-position / observatory metadata surfaces (`TREFPOS`, `TREFDIR`, `PLEPHEM`, `OBSGEO-*`). Ephemeris-dependent reference-position corrections currently fail closed with `NotImplementedError`.
+
+Celestial frame helpers from `torchsky.wcs` and `torchsky.coords` include `icrs_to_galactic`, `galactic_to_icrs`, `precess_fk5`, and `convert_celestial`. The current native frame slice covers fixed ICRS/Galactic rotations and FK5 Julian-equinox mean precession; FK4 E-terms, nutation, aberration, proper motion, and apparent-place corrections remain roadmap items.
+
+Alignment helpers include `fit_affine_2d(source, target, geometry=...)` for weighted correction fits. Supported geometries are `shift`, `rshift`, `rscale`, and `general`; the result carries the matrix, offset, residuals, RMS, inlier mask, and an `apply(points)` helper. `TangentPlaneFrame` provides differentiable gnomonic sky-to-plane transforms, and `fit_sky_affine(...)` fits the same correction families in that local sky plane.
+
+Tabular lookup helpers include `TabularAxis(pixel, world, bounds="nan")` and `TabularLookupWCS([...])`. They provide torch-native piecewise-linear lookup axes, monotonic inverse lookup, optional clamp-vs-NaN bounds behavior, and autograd through the local interpolation slope. `WCS(header, tabular_axes={axis_number: axis})` wires independent `CTYPEi` `-TAB` axes into forward, inverse, and differentiable linear paths using FITS 1-based axis numbers. `tabular_axes_from_fits(header, tables)` builds that explicit axis mapping for the independent 1D FITS `-TAB` subset using `PSi_0` table selection, `PSi_1` coordinate columns, and optional `PSi_2` indexing vectors. Coupled multidimensional coordinate-array semantics remain roadmap work.
 
 After `.compile()`, use a single **stacked** tensor so the transform goes through the compiled Torch graph: for 2D spatial WCS and FITS `origin` **0 or 1**, `pixel_to_world(pixels)` with `pixels.shape == (..., 2)` fuses `pixels + (1-origin) - CRPIX` with the projection and uses **Torch-only** forward pole rotation (so `torch.compile` can optimize end-to-end). Symmetrically, `world_to_pixel(world)` with `world.shape == (..., 2)` uses a fused inverse graph with **Torch-only** inverse pole rotation. The two-argument `pixel_to_world(x, y)` and `world_to_pixel(ra, dec)` forms may still use native C++ fast paths. Run `benchmarks/bench_wcs_small_n_paths.py` on your machine; Astropy may still win at tiny `N`, but the fused compiled paths are the ones to tune. Parity vs Astropy is enforced in `tests/test_wcs_parity.py`.
 

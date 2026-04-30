@@ -58,7 +58,14 @@ from .geom import (
     to_exact_region,
 )
 from .moc import MOC, nest2uniq, uniq2nest
-from .sparse import HealSparseMap, SkyMaskPipe, SparseMap, WideBitMask
+from .sparse import (
+    HealSparseMap,
+    SkyMaskPipe,
+    SparseMap,
+    WideBitMask,
+    sum_intersection,
+    sum_union,
+)
 from .spectral import (
     alm2lonlat,
     alm2lonlat_spin,
@@ -151,6 +158,8 @@ __all__ = [
     "alm2map_spin",
     "smoothalm",
     "smoothmap",
+    "sum_intersection",
+    "sum_union",
     "synalm",
     "synfast",
     "ang2pix",

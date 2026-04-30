@@ -20,9 +20,6 @@ FIXTURE_CASES: dict[str, np.ndarray] = {
     "tpvonly.hdr": np.array([[0.0, 0.0], [100.0, -100.0], [200.0, 200.0]]),
 }
 
-_NAN_BOUNDARY_XFAILS = {"outside_sky.hdr", "zpn-hole.hdr"}
-
-
 def _load_wcs_pair(name: str) -> tuple[AstropyWCS, dict[str, object]]:
     raw_header = get_pkg_data_contents(
         f"data/{name}", package="astropy.wcs.tests", encoding="binary"
@@ -38,10 +35,6 @@ def _ra_wrap_delta_deg(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 @pytest.mark.parametrize("fixture_name", sorted(FIXTURE_CASES))
 def test_astropy_fixture_pixel_to_world_matches_torchsky(fixture_name: str) -> None:
-    if fixture_name in _NAN_BOUNDARY_XFAILS:
-        pytest.xfail(
-            reason=f"{fixture_name}: torchsky does not propagate NaN for out-of-domain pixels"
-        )
     awcs, torch_header = _load_wcs_pair(fixture_name)
     twcs = TorchWCS(torch_header)
     xy = FIXTURE_CASES[fixture_name]
@@ -72,10 +65,6 @@ def test_astropy_fixture_pixel_to_world_matches_torchsky(fixture_name: str) -> N
 
 @pytest.mark.parametrize("fixture_name", sorted(FIXTURE_CASES))
 def test_astropy_fixture_world_to_pixel_matches_torchsky(fixture_name: str) -> None:
-    if fixture_name in _NAN_BOUNDARY_XFAILS:
-        pytest.xfail(
-            reason=f"{fixture_name}: torchsky does not propagate NaN for out-of-domain pixels"
-        )
     awcs, torch_header = _load_wcs_pair(fixture_name)
     twcs = TorchWCS(torch_header)
     xy = FIXTURE_CASES[fixture_name]
