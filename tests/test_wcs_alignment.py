@@ -2,7 +2,7 @@ import math
 
 import torch
 
-from torchsky.wcs import TangentPlaneFrame, fit_affine_2d, fit_sky_affine
+from torchsky.wcs import WCS, TangentPlaneFrame, fit_affine_2d, fit_sky_affine
 
 
 def _points() -> torch.Tensor:
@@ -107,3 +107,44 @@ def test_fit_sky_affine_shift_in_tangent_plane() -> None:
     torch.testing.assert_close(corrected_ra, target_ra, atol=1e-10, rtol=1e-12)
     torch.testing.assert_close(corrected_dec, target_dec, atol=1e-10, rtol=1e-12)
     assert float(fit.rms) < 1e-12
+
+
+def test_wcs_with_affine_fit_correction_updates_linear_header() -> None:
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 100,
+        "NAXIS2": 100,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 40.0,
+        "CRPIX2": 30.0,
+        "CRVAL1": 12.0,
+        "CRVAL2": -5.0,
+        "CDELT1": -0.002,
+        "CDELT2": 0.002,
+    }
+    wcs = WCS(header)
+    angle = math.radians(2.0)
+    matrix = torch.tensor(
+        [[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]],
+        dtype=torch.float64,
+    )
+    offset = torch.tensor([1.5, -2.0], dtype=torch.float64)
+    source_pixels = torch.tensor(
+        [[35.0, 28.0], [40.0, 30.0], [43.0, 32.0], [37.0, 35.0]],
+        dtype=torch.float64,
+    )
+    corrected_pixels = torch.matmul(source_pixels, matrix.T) + offset
+    fit = fit_affine_2d(source_pixels, corrected_pixels, geometry="general")
+
+    corrected_wcs = wcs.with_affine_fit_correction(fit)
+
+    torch.testing.assert_close(
+        corrected_wcs.pixel_to_world(corrected_pixels),
+        wcs.pixel_to_world(source_pixels),
+        atol=5e-10,
+        rtol=0.0,
+    )
+    header_out = corrected_wcs.to_header()
+    assert header_out["TSKYAF0"] == "pixel_affine"
+    assert "CD1_1" in header_out

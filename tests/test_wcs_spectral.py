@@ -216,6 +216,49 @@ def test_wcs_spectral_log_axis_matches_astropy(ctype: str) -> None:
     np.testing.assert_allclose(pix_t.numpy(), pixels, atol=1e-9)
 
 
+@pytest.mark.parametrize("ctype", ["WAVE-F2W", "FREQ-W2F"])
+def test_wcs_spectral_compound_reciprocal_axis_matches_astropy(ctype: str) -> None:
+    header = {
+        "NAXIS": 1,
+        "CTYPE1": ctype,
+        "CRPIX1": 1.0,
+        "CRVAL1": 10.0,
+        "CDELT1": 0.1,
+    }
+    twcs = torchsky.WCS(header)
+    awcs = AstropyWCS(header)
+    pixels = np.array([[0.0], [1.0], [2.0], [10.0]], dtype=np.float64)
+
+    world_t = twcs.pixel_to_world(torch.from_numpy(pixels), origin=0)
+    world_a = awcs.all_pix2world(pixels, 0)
+    pix_t = twcs.world_to_pixel(torch.from_numpy(world_a), origin=0)
+
+    np.testing.assert_allclose(world_t.numpy(), world_a, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(pix_t.numpy(), pixels, atol=1e-9)
+
+
+@pytest.mark.parametrize("ctype", ["WAVE-F2W", "FREQ-W2F"])
+def test_wcs_spectral_compound_reciprocal_singular_domain_nan(ctype: str) -> None:
+    header = {
+        "NAXIS": 1,
+        "CTYPE1": ctype,
+        "CRPIX1": 1.0,
+        "CRVAL1": 10.0,
+        "CDELT1": 0.1,
+    }
+    wcs = torchsky.WCS(header)
+
+    singular_world = wcs.pixel_to_world(
+        torch.tensor([[100.0]], dtype=torch.float64), origin=0
+    )
+    singular_pixel = wcs.world_to_pixel(
+        torch.tensor([[0.0]], dtype=torch.float64), origin=0
+    )
+
+    assert torch.isnan(singular_world).all()
+    assert torch.isnan(singular_pixel).all()
+
+
 def test_convert_spectral_and_legacy_transform_spectral() -> None:
     rest_hz = 1420.40575177e6
     freq = torch.tensor([rest_hz, 1.419e9], dtype=torch.float64)

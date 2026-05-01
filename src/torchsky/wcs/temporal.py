@@ -120,9 +120,23 @@ def tai_minus_utc_seconds(mjd_utc: Any) -> Tensor:
     mjd = _as_float_tensor(mjd_utc)
     table = _LEAP_EFFECTIVE_MJD.to(device=mjd.device)
     offsets = _TAI_MINUS_UTC.to(device=mjd.device)
-    idx = torch.bucketize(mjd.reshape(-1), table, right=True) - 1
+    flat = mjd.reshape(-1)
+    idx = torch.bucketize(flat, table, right=True) - 1
     idx = torch.clamp(idx, min=0, max=offsets.numel() - 1)
-    return offsets[idx].reshape(mjd.shape)
+    values = offsets[idx]
+
+    # UTC MJD days containing an inserted leap second have 86401 SI seconds.
+    # Astropy/ERFA-compatible MJD coordinates therefore carry a linear
+    # fractional-day offset ramp on [effective_mjd - 1, effective_mjd).
+    for i in range(1, offsets.numel()):
+        delta = offsets[i] - offsets[i - 1]
+        if delta == 0:
+            continue
+        start = table[i] - 1.0
+        mask = (flat >= start) & (flat < table[i])
+        if torch.any(mask):
+            values = torch.where(mask, offsets[i - 1] + (flat - start) * delta, values)
+    return values.reshape(mjd.shape)
 
 
 def convert_time_scale(mjd: Any, from_scale: str, to_scale: str) -> Tensor:
@@ -167,6 +181,25 @@ def temporal_unit_to_days(unit: str | None) -> float:
         raise ValueError(f"unsupported temporal unit {unit!r}") from exc
 
 
+def datetime_to_mjd(value: datetime.datetime) -> float:
+    """Convert a timezone-aware or naive UTC datetime to MJD."""
+    if value.tzinfo is not None:
+        value = value.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    epoch = datetime.datetime(1858, 11, 17)
+    delta = value - epoch
+    return delta.days + (delta.seconds + delta.microseconds * 1.0e-6) / SECONDS_PER_DAY
+
+
+def iso_to_mjd(value: str) -> float:
+    """Parse a common FITS ISO date/time string as UTC MJD."""
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    if "T" not in text and " " not in text:
+        text = text + "T00:00:00"
+    return datetime_to_mjd(datetime.datetime.fromisoformat(text))
+
+
 class TemporalWCS:
     """
     FITS Temporal WCS implementation (Paper IV).
@@ -209,6 +242,12 @@ class TemporalWCS:
                 float(header["OBSGEO-B"]),
                 float(header["OBSGEO-H"]),
             )
+
+        self.mjd_obs = self._mjd_metadata(header, "OBS")
+        self.mjd_beg = self._mjd_metadata(header, "BEG")
+        self.mjd_end = self._mjd_metadata(header, "END")
+        self.exposure = self._optional_float(header, "EXPOSURE")
+        self.telapse = self._optional_float(header, "TELAPSE")
 
         # Scaling factor to days
         self.to_days = temporal_unit_to_days(self.timeunit)
@@ -301,3 +340,38 @@ class TemporalWCS:
     @property
     def observatory_lon_lat_height_deg_m(self) -> tuple[float, float, float] | None:
         return self.obsgeo_lon_lat_height
+
+    @property
+    def duration_days(self) -> float | None:
+        """Observation duration in days from MJD-BEG/END, TELAPSE, or EXPOSURE."""
+        if self.mjd_beg is not None and self.mjd_end is not None:
+            return self.mjd_end - self.mjd_beg
+        if self.telapse is not None:
+            return self.telapse * self.to_days
+        if self.exposure is not None:
+            return self.exposure / SECONDS_PER_DAY
+        return None
+
+    @property
+    def midpoint_mjd(self) -> float | None:
+        """Observation midpoint MJD when enough metadata is available."""
+        if self.mjd_beg is not None and self.mjd_end is not None:
+            return 0.5 * (self.mjd_beg + self.mjd_end)
+        duration = self.duration_days
+        if self.mjd_obs is not None and duration is not None:
+            return self.mjd_obs + 0.5 * duration
+        return self.mjd_obs
+
+    @staticmethod
+    def _mjd_metadata(header: dict[str, Any], suffix: str) -> float | None:
+        mjd_key = f"MJD-{suffix}"
+        date_key = f"DATE-{suffix}"
+        if mjd_key in header:
+            return float(header[mjd_key])
+        if date_key in header:
+            return iso_to_mjd(str(header[date_key]))
+        return None
+
+    @staticmethod
+    def _optional_float(header: dict[str, Any], key: str) -> float | None:
+        return float(header[key]) if key in header else None

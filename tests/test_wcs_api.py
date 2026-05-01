@@ -460,6 +460,233 @@ def test_wcs_slice_updates_cd_for_strided_view():
     assert sliced.pixel_shape == (10, 10)
 
 
+def test_wcs_slice_integer_index_drops_numpy_order_spectral_axis():
+    header = {
+        "NAXIS": 3,
+        "NAXIS1": 80,
+        "NAXIS2": 60,
+        "NAXIS3": 12,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CTYPE3": "WAVE",
+        "CRPIX1": 40.0,
+        "CRPIX2": 30.0,
+        "CRPIX3": 1.0,
+        "CRVAL1": 12.0,
+        "CRVAL2": -5.0,
+        "CRVAL3": 500.0,
+        "CDELT1": -0.002,
+        "CDELT2": 0.002,
+        "CDELT3": 10.0,
+    }
+    cube_wcs = WCS(header)
+    sliced = cube_wcs.slice((-1, slice(10, 50), slice(20, 70)))
+    pixels_2d = torch.tensor([[0.0, 0.0], [15.0, 20.0]], dtype=torch.float64)
+    pixels_3d = torch.stack(
+        [
+            20.0 + pixels_2d[:, 0],
+            10.0 + pixels_2d[:, 1],
+            torch.full((pixels_2d.shape[0],), 11.0, dtype=torch.float64),
+        ],
+        dim=-1,
+    )
+
+    torch.testing.assert_close(
+        sliced.pixel_to_world(pixels_2d),
+        cube_wcs.pixel_to_world(pixels_3d)[:, :2],
+        atol=2e-10,
+        rtol=0.0,
+    )
+    assert sliced.pixel_n_dim == 2
+    assert sliced.pixel_shape == (50, 40)
+
+
+def test_wcs_slice_integer_index_drops_uncoupled_fits_order_axis():
+    header = {
+        "NAXIS": 3,
+        "NAXIS1": 10,
+        "NAXIS2": 20,
+        "NAXIS3": 30,
+        "CTYPE1": "X",
+        "CTYPE2": "Y",
+        "CTYPE3": "Z",
+        "CRPIX1": 1.0,
+        "CRPIX2": 2.0,
+        "CRPIX3": 3.0,
+        "CRVAL1": 10.0,
+        "CRVAL2": 20.0,
+        "CRVAL3": 30.0,
+        "CDELT1": 2.0,
+        "CDELT2": 3.0,
+        "CDELT3": 4.0,
+    }
+    wcs = WCS(header)
+    sliced = wcs.slice((slice(2, 8), 4, slice(5, 20, 3)), numpy_order=False)
+    pixels_2d = torch.tensor([[0.0, 0.0], [3.0, 2.0]], dtype=torch.float64)
+    pixels_3d = torch.stack(
+        [
+            2.0 + pixels_2d[:, 0],
+            torch.full((pixels_2d.shape[0],), 4.0, dtype=torch.float64),
+            5.0 + 3.0 * pixels_2d[:, 1],
+        ],
+        dim=-1,
+    )
+
+    torch.testing.assert_close(
+        sliced.pixel_to_world(pixels_2d),
+        wcs.pixel_to_world(pixels_3d)[:, [0, 2]],
+    )
+    assert sliced.world_axis_names == ("X", "Z")
+    assert sliced.pixel_shape == (6, 5)
+
+
+def test_wcs_slice_integer_index_rejects_coupled_axis_drop():
+    header = {
+        "NAXIS": 3,
+        "CTYPE1": "X",
+        "CTYPE2": "Y",
+        "CTYPE3": "Z",
+        "CRPIX1": 1.0,
+        "CRPIX2": 1.0,
+        "CRPIX3": 1.0,
+        "CRVAL1": 0.0,
+        "CRVAL2": 0.0,
+        "CRVAL3": 0.0,
+        "CD1_1": 1.0,
+        "CD1_2": 0.1,
+        "CD1_3": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": 1.0,
+        "CD2_3": 0.0,
+        "CD3_1": 0.0,
+        "CD3_2": 0.0,
+        "CD3_3": 1.0,
+    }
+    wcs = WCS(header)
+
+    with pytest.raises(NotImplementedError, match="coupled"):
+        wcs.slice((slice(None), 4, slice(None)), numpy_order=False)
+
+
+def test_wcs_slice_preserves_spatial_cube_extra_axis_cd_scale():
+    header = {
+        "NAXIS": 3,
+        "NAXIS1": 80,
+        "NAXIS2": 60,
+        "NAXIS3": 12,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CTYPE3": "WAVE",
+        "CRPIX1": 40.0,
+        "CRPIX2": 30.0,
+        "CRPIX3": 1.0,
+        "CRVAL1": 12.0,
+        "CRVAL2": -5.0,
+        "CRVAL3": 500.0,
+        "CDELT1": -0.002,
+        "CDELT2": 0.002,
+        "CDELT3": 10.0,
+    }
+    cube_wcs = WCS(header)
+    sliced = cube_wcs.slice((slice(2, 8, 2), slice(10, 50), slice(20, 70)))
+    pixels_3d_sliced = torch.tensor(
+        [[0.0, 0.0, 0.0], [15.0, 20.0, 2.0]], dtype=torch.float64
+    )
+    pixels_3d_original = torch.stack(
+        [
+            20.0 + pixels_3d_sliced[:, 0],
+            10.0 + pixels_3d_sliced[:, 1],
+            2.0 + 2.0 * pixels_3d_sliced[:, 2],
+        ],
+        dim=-1,
+    )
+
+    torch.testing.assert_close(
+        sliced.pixel_to_world(pixels_3d_sliced),
+        cube_wcs.pixel_to_world(pixels_3d_original),
+        atol=2e-10,
+        rtol=0.0,
+    )
+    assert sliced.pixel_shape == (50, 40, 3)
+
+
+def test_wcs_sub_reorders_uncoupled_linear_axes():
+    header = {
+        "NAXIS": 3,
+        "NAXIS1": 10,
+        "NAXIS2": 20,
+        "NAXIS3": 30,
+        "CTYPE1": "X",
+        "CTYPE2": "Y",
+        "CTYPE3": "Z",
+        "CRPIX1": 1.0,
+        "CRPIX2": 2.0,
+        "CRPIX3": 3.0,
+        "CRVAL1": 10.0,
+        "CRVAL2": 20.0,
+        "CRVAL3": 30.0,
+        "CD1_1": 2.0,
+        "CD1_2": 0.25,
+        "CD1_3": 0.0,
+        "CD2_1": -0.5,
+        "CD2_2": 3.0,
+        "CD2_3": 0.0,
+        "CD3_1": 0.0,
+        "CD3_2": 0.0,
+        "CD3_3": 4.0,
+    }
+    wcs = WCS(header)
+    reordered = wcs.sub([1, 0, 2])
+    pixels = torch.tensor([[4.0, 2.0, 5.0], [6.0, 3.0, 8.0]], dtype=torch.float64)
+
+    torch.testing.assert_close(
+        reordered.pixel_to_world(pixels[:, [1, 0, 2]]),
+        wcs.pixel_to_world(pixels)[:, [1, 0, 2]],
+    )
+    assert reordered.world_axis_names == ("Y", "X", "Z")
+    assert reordered.pixel_shape == (20, 10, 30)
+
+
+def test_wcs_sub_reorders_spatial_extra_axes_after_celestial_pair():
+    header = {
+        "NAXIS": 4,
+        "NAXIS1": 80,
+        "NAXIS2": 60,
+        "NAXIS3": 12,
+        "NAXIS4": 7,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CTYPE3": "WAVE",
+        "CTYPE4": "TIME",
+        "CRPIX1": 40.0,
+        "CRPIX2": 30.0,
+        "CRPIX3": 1.0,
+        "CRPIX4": 2.0,
+        "CRVAL1": 12.0,
+        "CRVAL2": -5.0,
+        "CRVAL3": 500.0,
+        "CRVAL4": 60000.0,
+        "CDELT1": -0.002,
+        "CDELT2": 0.002,
+        "CDELT3": 10.0,
+        "CDELT4": 0.5,
+    }
+    wcs = WCS(header)
+    reordered = wcs.sub([0, 1, 3, 2])
+    pixels = torch.tensor(
+        [[39.0, 29.0, 3.0, 4.0], [42.0, 31.0, 5.0, 1.0]], dtype=torch.float64
+    )
+
+    torch.testing.assert_close(
+        reordered.pixel_to_world(pixels[:, [0, 1, 3, 2]]),
+        wcs.pixel_to_world(pixels)[:, [0, 1, 3, 2]],
+        atol=2e-10,
+        rtol=0.0,
+    )
+    assert reordered.world_axis_names == ("RA---TAN", "DEC--TAN", "TIME", "WAVE")
+    assert reordered.pixel_shape == (80, 60, 7, 12)
+
+
 def test_wcs_celestial_extracts_spatial_wcs_from_cube():
     header = {
         "NAXIS": 3,

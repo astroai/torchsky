@@ -2,7 +2,7 @@
 
 This file tracks roadmap status from live code and tests. Treat narrative docs as secondary when they disagree with implementation.
 
-Last updated: 2026-04-30.
+Last updated: 2026-05-01.
 
 ## Current Baseline
 
@@ -10,14 +10,15 @@ Last updated: 2026-04-30.
 - Latest local gate result: `1501 passed, 61 skipped, 1 xfailed`.
 - Focused FITS gate result: `78 passed, 1 skipped`.
 - Focused FITS closeout gate result: `30 passed`.
-- Focused WCS API gate result: `18 passed`.
-- Focused WCS broad replay result: `262 passed, 2 skipped`.
-- Focused WCS spectral translation result: `16 passed`.
-- Focused WCS temporal scale result: `10 passed`.
+- Focused WCS API gate result: `24 passed`.
+- Focused WCS broad replay result: `277 passed, 2 skipped`.
+- Focused WCS spectral translation result: `20 passed`.
+- Focused WCS temporal scale result: `14 passed`.
 - Focused WCS celestial frame result: `4 passed`.
-- Focused WCS alignment correction result: `5 passed`.
+- Focused WCS alignment correction result: `6 passed`.
 - Focused WCS tabular lookup result: `13 passed`.
-- Focused WCS API + perf gate result: `23 passed`.
+- Focused WCS API + perf gate result: `29 passed`.
+- Focused WCS spectral/temporal WCSLIB benchmark result: `pixi run bench-wcs-spectral-temporal` passed at `N=200000`. Spectral parity was exact/roundoff-level (`<= 3.55e-15` world units, `<= 2.39e-12` pixel). Temporal scale parity was exact or `<= 7.28e-12` days after adding UTC leap-day fractional-offset handling. WCSLIB remains faster for the one-axis spectral benchmark; torchsky was faster for UTC/TAI/TT/GPS scale conversion in this run.
 - Public API surfaces are now grouped into `core`, `compat`, and `experimental` tiers in `torchsky.surfaces`.
 
 ## Completed In Current Slice
@@ -50,17 +51,23 @@ Last updated: 2026-04-30.
   - Added GWCS/Astropy-style WCS metadata surfaces: axis counts, axis names, units, physical types, pixel/array shape, pixel bounds, correlation matrix, image footprint, and in-image masking.
   - Added Astropy-style WCS value/index helpers: `pixel_to_world_values`, `world_to_pixel_values`, `array_index_to_world_values`, and `world_to_array_index_values`, with NumPy array-order behavior.
   - Added Astropy-compatible `all_pix2world(...)` and `all_world2pix(...)` aliases for stacked-coordinate and separate-coordinate call styles with positional `origin`.
-  - Added dimensionality-preserving WCS slicing for positive-step array cutouts/views, updating `CRPIX` and `CD` so cropped and strided image arrays retain correct coordinates.
-  - Added high-impact cube/image axis reduction helpers: `dropaxis(axis)` for uncoupled FITS-order axes and `celestial` for extracting a 2D sky WCS from spatial cubes, with explicit fail-closed behavior for coupled axes.
+  - Added WCS slicing for positive-step array cutouts/views, updating `CRPIX` and `CD` so cropped and strided image arrays retain correct coordinates, including integer-index slicing that fixes and drops uncoupled axes.
+  - Added high-impact cube/image axis reduction and subsetting helpers: `dropaxis(axis)` for uncoupled FITS-order axes, `sub(axes)` for selected/reordered uncoupled axes, and `celestial` for extracting a 2D sky WCS from spatial cubes, with explicit fail-closed behavior for coupled axes.
+  - Fixed spatial cube slicing/subsetting so extra spectral/time axes keep their `CD` scale after the output header is normalized from `CDELT` to `CD`.
   - Added a Kapteyn-style `mixed_pixel_world(...)` solver for mixed pixel/world coordinate inputs, including the common 2D celestial case with one known pixel axis and one known world axis.
   - Added pure-Torch differentiable WCS entry points for INR/field-model use: `pixel_to_world_differentiable`, `world_to_pixel_differentiable`, `pixel_to_world_jacobian`, and `world_to_pixel_jacobian`.
   - Added torch-native spectral translations for frequency, vacuum wavelength, energy, air wavelength, redshift, radio velocity, optical velocity, relativistic velocity, and rest-frequency/rest-wavelength handling, with Astropy unit-equivalency parity tests where comparable.
   - Added wavenumber (`WAVN`) spectral conversion support with `cm-1`/inverse-meter unit handling and Astropy spectral-equivalency parity coverage.
   - Added validated one-axis FITS spectral `-LOG` WCS algorithm handling for `FREQ-LOG`, `WAVE-LOG`, and `WAVN-LOG`, with Astropy WCS parity coverage for forward and inverse transforms.
+  - Added validated one-axis FITS spectral reciprocal compound algorithms for `WAVE-F2W` and `FREQ-W2F`, with Astropy/WCSLIB parity coverage for forward and inverse transforms plus fail-closed `NaN` behavior at reciprocal singularities.
   - Added leap-second-aware temporal scale conversions for UTC, TAI, TT, and GPS, with Astropy Time parity tests and explicit fail-closed behavior for ephemeris-dependent barycentric corrections.
+  - Fixed UTC leap-day fractional `TAI-UTC` handling so UTC MJD values inside leap-second days match Astropy/ERFA semantics instead of using a midnight-only step.
   - Expanded temporal unit handling to common FITS/VO sub-day units (`ns`, `us`, `ms`, `s`, `min`, `h`) plus days/years/centuries, and added temporal reference metadata surfaces for `TREFPOS`, `TREFDIR`, `PLEPHEM`, and `OBSGEO-*`.
+  - Added exact temporal observation-date metadata parsing for `MJD-OBS`/`DATE-OBS`, `MJD-BEG`/`DATE-BEG`, and `MJD-END`/`DATE-END`.
+  - Added temporal duration/midpoint metadata from `MJD-BEG`/`MJD-END`, `TELAPSE`, or `EXPOSURE`, plus `WCS.temporal_axis_indices` and `WCS.temporal_wcs(...)` integration for main WCS headers.
   - Added first torch-native celestial frame utilities: ICRS/Galactic rotation, FK5 Julian-equinox mean precession, WCS `RADESYS`/`RADECSYS`/`EQUINOX` metadata parsing, and Astropy parity tests at classical-precession precision.
   - Added tweakwcs-inspired weighted 2D affine correction fitting for `shift`, `rshift`, `rscale`, and `general` geometries with residuals, RMS, inlier mask, and sigma-clipping diagnostics.
+  - Added distortion-free pixel-affine WCS correction helpers, including `to_header()`, `with_pixel_affine_correction(...)`, `with_affine_fit_correction(...)`, and torchsky correction metadata roundtrip.
   - Added differentiable gnomonic tangent-plane frames and sky-coordinate affine fitting so catalog corrections can be solved in a local plane and applied back to RA/Dec.
   - Added a torch-native tabular lookup substrate for FITS `-TAB`-style axes: piecewise-linear `TabularAxis`, monotonic inverse lookup, separable `TabularLookupWCS`, bounds modes, and autograd through local interpolation slopes.
   - Wired independent `CTYPEi` `-TAB` axes into `WCS(..., tabular_axes={axis_number: axis})` for forward, inverse, spatial-cube extra-axis, and differentiable linear-path use.
@@ -86,34 +93,35 @@ The WCS roadmap must distinguish active gates from remaining replacement claims.
 - High-dimensional linear extra axes for basic spatial + spectral cube workflows.
 - Alternate FITS-WCS version keys (`A` .. `Z`) for standard suffixed WCS keywords.
 - Metadata and geometry surfaces needed by downstream map/INR code: axis names, units, physical-type hints, axis-correlation matrix, pixel bounds, `footprint`, and `in_image`.
-- Broad Astropy-style image interoperability helpers: `all_pix2world` / `all_world2pix`, value aliases, NumPy-order array index conversion, dimensionality-preserving WCS slicing for positive-step cutouts/views, and uncoupled axis reduction / celestial WCS extraction for cubes.
+- Broad Astropy-style image interoperability helpers: `all_pix2world` / `all_world2pix`, value aliases, NumPy-order array index conversion, WCS slicing for positive-step cutouts/views plus integer-index drops of uncoupled axes, and uncoupled axis reduction / selected-axis reordering / celestial WCS extraction for cubes.
 - Mixed pixel/world solving for full-pixel, full-world, and the common 2D case with one known pixel axis plus one known world axis.
 - Differentiable pure-Torch WCS paths and local Jacobian extraction for optimization, INR renderers, field-model training, and multi-modal geometry encoders.
 - Spectral translation primitives through frequency for `FREQ`, `WAVE`, `WAVN`, `AWAV`, `ENER`, `ZOPT`, `VRAD`, `VOPT`, `VELO`, and `BETA`, including `RESTFRQ`/`RESTFREQ`/`RESTWAV` handling and WCS convenience methods for spectral axes.
-- First FITS spectral algorithm-code transform: validated one-axis `-LOG` support for `FREQ-LOG`, `WAVE-LOG`, and `WAVN-LOG`.
-- Temporal scale conversion primitives for UTC/TAI/TT/GPS with a built-in IERS/NIST leap-second table current through the 2026-06-30 no-leap Bulletin C 71 window; common sub-day/year units and reference metadata are parsed; barycentric/heliocentric corrections explicitly require a future ephemeris backend.
+- First FITS spectral algorithm-code transforms: validated one-axis `-LOG` support for `FREQ-LOG`, `WAVE-LOG`, and `WAVN-LOG`, plus reciprocal `WAVE-F2W` and `FREQ-W2F` support.
+- Temporal scale conversion primitives for UTC/TAI/TT/GPS with a built-in IERS/NIST leap-second table current through the 2026-06-30 no-leap Bulletin C 71 window; common sub-day/year units, observation-date metadata, duration/midpoint metadata, WCS temporal-axis discovery, and reference metadata are parsed; barycentric/heliocentric corrections explicitly require a future ephemeris backend.
+- Comparator-only WCSLIB/Astropy benchmark surface for spectral FITS-WCS algorithms and temporal scale conversions: `pixi run bench-wcs-spectral-temporal`. This is benchmark/reference infrastructure only; runtime WCS paths must remain torch-native and must never fall back to WCSLIB.
 - Celestial frame primitives for ICRS/Galactic conversion and FK5 Julian-equinox mean precession, plus WCS helpers for `RADESYS`/`EQUINOX` metadata.
-- First catalog-alignment correction primitives: weighted 2D affine fitting with shift / rotation+shift / rotation+scale+shift / full affine modes, plus differentiable gnomonic tangent-plane fitting for sky catalogs.
+- First catalog-alignment correction primitives: weighted 2D affine fitting with shift / rotation+shift / rotation+scale+shift / full affine modes, differentiable gnomonic tangent-plane fitting for sky catalogs, and distortion-free direct WCS header updates from pixel-affine fits.
 - First table-driven WCS support: independent one-dimensional lookup axes with differentiable interpolation, monotonic inverse lookup, explicit `WCS` integration for FITS 1-based `CTYPEi` `-TAB` axes, and a parser helper for the independent 1D `PSi_0`/`PSi_1`/`PSi_2` metadata subset.
 
 ### WCS Partially Done
 
-- Spectral/time axes: spectral coordinate translation primitives, `-LOG` spectral WCS, and temporal scale/unit/reference metadata primitives now exist, but full FITS Paper III spectral algorithm-code WCS (`CTYPE` algorithm chains such as `F2W`, `W2F`, velocity grisms, etc.) and full Paper IV space-time corrections are not replacement-complete.
+- Spectral/time axes: spectral coordinate translation primitives, validated one-axis `-LOG` / `WAVE-F2W` / `FREQ-W2F` spectral WCS, and temporal scale/unit/date/duration/reference metadata primitives now exist, but full FITS Paper III spectral algorithm-code WCS (velocity/grism algorithms and coupled chains) and full Paper IV space-time corrections are not replacement-complete.
 - Kapteyn-style mixed coordinates: the common 2D celestial mixed solve is active; arbitrary N-dimensional mixtures and non-celestial coupled axes remain open.
-- Axis subsetting: uncoupled axis drops and celestial extraction from spatial cubes are active; arbitrary reordering, integer-index slicing, and coupled-axis subsetting are not implemented.
+- Axis subsetting: uncoupled axis drops, selected-axis reordering, integer-index slicing for uncoupled axes, and celestial extraction from spatial cubes are active; coupled-axis subsetting remains open.
 - GWCS/AST-style composition: metadata surfaces exist, but explicit frame/mapping pipeline objects and reusable transform graph nodes are not implemented.
 - FITS `-TAB` / lookup-table WCS: independent lookup-axis interpolation is active in the main `WCS` transform when axes are supplied explicitly, and the independent 1D `PSi_0`/`PSi_1`/`PSi_2` parser helper exists; direct HDUList auto-discovery, `PVi_ma` version/level handling, multidimensional coordinate arrays, and coupled table-driven distortions are not yet implemented.
-- Performance: common CPU/vectorized/C++/compiled paths exist and a CI-friendly TAN forward/inverse smoke gate is active, but replacement claims still need broader timing baselines across projection, distortion, batch-size, device, and inverse-solve regimes.
+- Performance: common CPU/vectorized/C++/compiled paths exist, a CI-friendly TAN forward/inverse smoke gate is active, and spectral/temporal WCSLIB comparator timing now has a focused benchmark surface. Replacement claims still need broader timing baselines across projection, distortion, batch-size, device, spectral/time algorithm, and inverse-solve regimes.
 - Compatibility replay: Astropy/WCSLIB fixture coverage is active, but Kapteyn/PyAST/Cornish bridge replays are not yet formal gates.
 
 ### WCS Not Done
 
 - Full celestial frame-system conversions beyond the first FK5/ICRS/Galactic slice: FK4/Besselian E-terms, high-precision frame bias, nutation, aberration, proper motion/parallax/radial velocity propagation, and observer-dependent apparent-place behavior comparable to Kapteyn/AST.
-- Full FITS Paper III spectral WCS algorithm-code parsing beyond validated one-axis `-LOG`: compound `F2W`/`W2F`, velocity/grism algorithms, and coupled nonlinear spectral pixel-axis transforms.
+- Full FITS Paper III spectral WCS algorithm-code parsing beyond validated one-axis `-LOG`, `WAVE-F2W`, and `FREQ-W2F`: velocity/grism algorithms and coupled nonlinear spectral pixel-axis transforms.
 - Full temporal WCS reference-position corrections: Earth orientation, barycentric/heliocentric light-time corrections, and coupled space-time corrections.
 - Generalized AST/GWCS frame graphs, serialization, and conversion to/from approximating FITS SIP/TAB representations.
 - Full FITS `-TAB` HDUList auto-discovery, version/level disambiguation, multidimensional coordinate arrays, and generalized coupled table-driven distortions.
-- Full tweakwcs-class correction workflows: iterative matching, correction metadata serialization, and direct WCS header updates.
+- Full tweakwcs-class correction workflows: iterative matching, richer correction metadata serialization, and distorted-WCS header updates.
 - Plot-grid/formatting helpers and sexagesimal/unit-aware coordinate formatting at Kapteyn/AST breadth.
 
 ## Near-Term Next Work
@@ -123,10 +131,11 @@ The WCS roadmap must distinguish active gates from remaining replacement claims.
    - Future parity hardening should focus on broader astropy.io.fits/fitsio fixture replay, large-table mutation benchmarks, and additional realistic VLA/table fixtures.
 2. WCS completeness:
    - Current active gates cover supported projections/distortions, slant `SIN`, ZPN hole fixtures, alternate WCS keys, axis metadata, footprint, mixed pixel/world transforms, and differentiable Jacobians.
-   - Current spectral/temporal slice covers `WAVN`, `-LOG`, common time units, and temporal reference metadata. Next spectral step is compound FITS Paper III algorithm-code parsing (`F2W`, `W2F`, velocity/grism algorithms) in actual WCS pixel/world transforms; next temporal step is ephemeris-backed reference-position corrections and realistic observatory fixtures.
+   - Current spectral/temporal slice covers `WAVN`, `-LOG`, `WAVE-F2W`, `FREQ-W2F`, common time units, observation-date metadata, duration/midpoint metadata, WCS temporal-axis discovery, and temporal reference metadata. Next spectral step is velocity/grism FITS Paper III algorithm-code parsing in actual WCS pixel/world transforms; next temporal step is ephemeris-backed reference-position corrections and realistic observatory fixtures.
+   - Use WCSLIB/Astropy for benchmark and parity comparison only. Do not add WCSLIB runtime fallback paths in `src/torchsky`.
    - Add a formal Kapteyn/PyAST/Cornish legacy-bridge replay matrix for sky-system conversions, epochs/equinoxes, mixed coordinates, alternate headers, spectral translations, and formatting/plot grid behavior where comparable.
    - Adopt the GWCS/AST design pattern of explicit transform pipelines and frame/mapping composition for future non-FITS-native WCS, but keep runtime implementation torch-native.
-   - Build on the new tangent-plane affine correction primitives with iterative catalog matching, correction metadata serialization, and direct WCS header update helpers.
+   - Build on the tangent-plane affine correction and direct linear-WCS update primitives with iterative catalog matching, richer correction metadata, and distorted-WCS header update helpers.
    - Build direct HDUList/path auto-discovery and `PVi_ma` version/level disambiguation on top of `tabular_axes_from_fits(...)`, then add coupled multidimensional table-coordinate semantics.
    - Harden high-dimensional spatial/spectral/time axes against Astropy/WCSLIB fixtures.
    - Add more fixture replay gates for mixed projection plus distortion headers.

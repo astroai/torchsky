@@ -3,10 +3,12 @@ import torch
 from astropy.time import Time
 
 import pytest
+import torchsky
 
 from torchsky.wcs.temporal import (
     TemporalWCS,
     convert_time_scale,
+    iso_to_mjd,
     tai_minus_utc_seconds,
     temporal_unit_to_days,
 )
@@ -99,7 +101,23 @@ def test_temporal_tai_minus_utc_leap_table_current_offset() -> None:
     mjd = torch.tensor([57753.999, 57754.0, 61049.0], dtype=torch.float64)
     offsets = tai_minus_utc_seconds(mjd)
 
-    np.testing.assert_allclose(offsets.numpy(), np.array([36.0, 37.0, 37.0]))
+    np.testing.assert_allclose(offsets.numpy(), np.array([36.999, 37.0, 37.0]))
+
+
+def test_temporal_utc_leap_day_fraction_matches_astropy_time() -> None:
+    mjd_utc = torch.tensor(
+        [57203.0, 57203.5, 57203.99999, 57753.0, 57753.5, 57753.99999],
+        dtype=torch.float64,
+    )
+    astropy_utc = Time(mjd_utc.numpy(), format="mjd", scale="utc")
+
+    tai = convert_time_scale(mjd_utc, "UTC", "TAI")
+    tt = convert_time_scale(mjd_utc, "UTC", "TT")
+    utc_back = convert_time_scale(tai, "TAI", "UTC")
+
+    np.testing.assert_allclose(tai.numpy(), astropy_utc.tai.mjd, atol=2e-12)
+    np.testing.assert_allclose(tt.numpy(), astropy_utc.tt.mjd, atol=2e-12)
+    np.testing.assert_allclose(utc_back.numpy(), mjd_utc.numpy(), atol=2e-12)
 
 
 def test_temporal_scale_conversion_matches_astropy_time() -> None:
@@ -163,3 +181,53 @@ def test_temporal_reference_metadata_and_observatory_location() -> None:
     assert twcs.has_observatory_location
     assert twcs.observatory_xyz_m == (1.0, 2.0, 3.0)
     assert twcs.observatory_lon_lat_height_deg_m is None
+
+
+def test_temporal_date_metadata_parses_mjd_and_iso_dates() -> None:
+    twcs = TemporalWCS(
+        {
+            "DATE-OBS": "2020-01-01T12:00:00",
+            "MJD-BEG": 58849.0,
+            "DATE-END": "2020-01-02T00:00:00Z",
+        }
+    )
+
+    np.testing.assert_allclose(twcs.mjd_obs, 58849.5, atol=1e-12)
+    assert twcs.mjd_beg == 58849.0
+    np.testing.assert_allclose(twcs.mjd_end, 58850.0, atol=1e-12)
+    np.testing.assert_allclose(iso_to_mjd("2020-01-01"), 58849.0, atol=1e-12)
+
+
+def test_temporal_duration_and_midpoint_metadata() -> None:
+    interval = TemporalWCS({"MJD-BEG": 60000.0, "MJD-END": 60000.25})
+    exposure = TemporalWCS({"MJD-OBS": 60000.0, "EXPOSURE": 3600.0})
+    telapse = TemporalWCS({"MJD-OBS": 60000.0, "TIMEUNIT": "s", "TELAPSE": 7200.0})
+
+    assert interval.duration_days == 0.25
+    assert interval.midpoint_mjd == 60000.125
+    np.testing.assert_allclose(exposure.duration_days, 3600.0 / 86400.0)
+    np.testing.assert_allclose(exposure.midpoint_mjd, 60000.0 + 1800.0 / 86400.0)
+    np.testing.assert_allclose(telapse.duration_days, 7200.0 / 86400.0)
+
+
+def test_wcs_temporal_axis_metadata_view() -> None:
+    header = {
+        "NAXIS": 1,
+        "CTYPE1": "TIME",
+        "CUNIT1": "s",
+        "CRPIX1": 1.0,
+        "CRVAL1": 60000.0,
+        "CDELT1": 1.0,
+        "TIMESYS": "UTC",
+        "DATE-OBS": "2023-01-01T00:00:00",
+        "EXPOSURE": 30.0,
+    }
+    wcs = torchsky.WCS(header)
+    twcs = wcs.temporal_wcs()
+
+    assert wcs.temporal_axis_indices == (0,)
+    assert twcs.timeunit == "s"
+    assert twcs.timesys == "UTC"
+    np.testing.assert_allclose(twcs.mjd_ref, 60000.0)
+    np.testing.assert_allclose(twcs.mjd_obs, 59945.0)
+    np.testing.assert_allclose(twcs.duration_days, 30.0 / 86400.0)
