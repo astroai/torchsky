@@ -23,3 +23,7 @@
 ## 2025-04-20 - Preserving Structural Shape in Specific Element Focus Rings
 **Learning:** When defining specific `:focus-visible` styles for individual UI components (like `.cmap-swatch` or `input[type="range"]`) to override global focus rings, any structural properties like `border-radius` that were applied to the element must also be included in its specific `:focus-visible` declaration. Otherwise, the element may lose its rounded corners during keyboard navigation.
 **Action:** When adding `:focus-visible` to specific classes (e.g., `.cmap-swatch:focus-visible`), copy the base element's `border-radius` into the focus rule to prevent visual mismatches or flattened corners.
+
+## 2024-05-01 - Explicit Focus States for Inputs
+**Learning:** Text inputs that use custom backgrounds, borders, or CSS resets (like `outline: none;`) lose their browser-default focus rings. Relying only on generic `:focus-visible` on the `body` or `*` selector is often overridden by element-specific rules.
+**Action:** Always explicitly define `:focus-visible` styles with a clear `outline` when creating CSS rules for specific input types (`input[type="text"]`, `input[type="range"]`, etc.) to preserve keyboard accessibility and visual focus tracking.
