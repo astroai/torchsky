@@ -18,7 +18,10 @@ from typing import (
     Sequence,
     overload,
     Literal,
+    TypedDict,
+    Unpack,
 )
+from dataclasses import dataclass, fields
 from collections import OrderedDict
 
 import numpy as np
@@ -780,6 +783,41 @@ def _dispatch_read_image_cpp(
             return cpp.read_full(path, hdu, mmap)
 
 
+@dataclass
+class ReadOptions:
+    """Configuration options for reading FITS files."""
+
+    fp16: bool = False
+    bf16: bool = False
+    raw_scale: bool = False
+    scale_on_device: bool = True
+    use_cache: Optional[bool] = None
+    columns: Optional[List[str]] = None
+    start_row: int = 1
+    num_rows: int = -1
+    cache_capacity: int = 10
+    handle_cache_capacity: int = 16
+    fast_header: bool = True
+    mode: str = "auto"
+    policy: str = "default"
+
+
+class ReadOptionsKwargs(TypedDict, total=False):
+    fp16: bool
+    bf16: bool
+    raw_scale: bool
+    scale_on_device: bool
+    use_cache: Optional[bool]
+    columns: Optional[List[str]]
+    start_row: int
+    num_rows: int
+    cache_capacity: int
+    handle_cache_capacity: int
+    fast_header: bool
+    mode: str
+    policy: str
+
+
 def read_image(
     path: str,
     hdu: int = 0,
@@ -866,94 +904,50 @@ def read_table(
 
 
 @overload
-def read(
+def read(  # noqa: PLR0913
     path: str,
     hdu: Union[int, str, None] = None,
     device: str = "cpu",
     mmap: Union[bool, str] = "auto",
-    fp16: bool = False,
-    bf16: bool = False,
-    raw_scale: bool = False,
-    scale_on_device: bool = True,
-    use_cache: Optional[bool] = None,
-    columns: Optional[List[str]] = None,
-    start_row: int = 1,
-    num_rows: int = -1,
-    cache_capacity: int = 10,
-    handle_cache_capacity: int = 16,
-    fast_header: bool = True,
+    options: Optional[ReadOptions] = None,
     return_header: Literal[False] = False,
-    mode: str = "auto",
-    policy: str = "default",
+    **kwargs: Unpack[ReadOptionsKwargs],
 ) -> Union[Tensor, Dict[str, Any]]: ...
 
 
 @overload
-def read(
+def read(  # noqa: PLR0913
     path: str,
     hdu: Union[int, str, None] = None,
     device: str = "cpu",
     mmap: Union[bool, str] = "auto",
-    fp16: bool = False,
-    bf16: bool = False,
-    raw_scale: bool = False,
-    scale_on_device: bool = True,
-    use_cache: Optional[bool] = None,
-    columns: Optional[List[str]] = None,
-    start_row: int = 1,
-    num_rows: int = -1,
-    cache_capacity: int = 10,
-    handle_cache_capacity: int = 16,
-    fast_header: bool = True,
+    options: Optional[ReadOptions] = None,
     return_header: Literal[True] = ...,
-    mode: str = "auto",
-    policy: str = "default",
+    **kwargs: Unpack[ReadOptionsKwargs],
 ) -> Tuple[Union[Tensor, Dict[str, Any]], Header]: ...
 
 
 @overload
-def read(
+def read(  # noqa: PLR0913
     path: Union[List[str], Tuple[str, ...]],
     hdu: Union[int, str, None] = None,
     device: str = "cpu",
     mmap: Union[bool, str] = "auto",
-    fp16: bool = False,
-    bf16: bool = False,
-    raw_scale: bool = False,
-    scale_on_device: bool = True,
-    use_cache: Optional[bool] = None,
-    columns: Optional[List[str]] = None,
-    start_row: int = 1,
-    num_rows: int = -1,
-    cache_capacity: int = 10,
-    handle_cache_capacity: int = 16,
-    fast_header: bool = True,
+    options: Optional[ReadOptions] = None,
     return_header: Literal[False] = False,
-    mode: str = "auto",
-    policy: str = "default",
+    **kwargs: Unpack[ReadOptionsKwargs],
 ) -> List[Union[Tensor, Dict[str, Any]]]: ...
 
 
 @overload
-def read(
+def read(  # noqa: PLR0913
     path: Union[List[str], Tuple[str, ...]],
     hdu: Union[int, str, None] = None,
     device: str = "cpu",
     mmap: Union[bool, str] = "auto",
-    fp16: bool = False,
-    bf16: bool = False,
-    raw_scale: bool = False,
-    scale_on_device: bool = True,
-    use_cache: Optional[bool] = None,
-    columns: Optional[List[str]] = None,
-    start_row: int = 1,
-    num_rows: int = -1,
-    cache_capacity: int = 10,
-    handle_cache_capacity: int = 16,
-    fast_header: bool = True,
+    options: Optional[ReadOptions] = None,
     return_header: Literal[True] = ...,
-    mode: str = "auto",
-    policy: str = "default",
+    **kwargs: Unpack[ReadOptionsKwargs],
 ) -> List[Tuple[Union[Tensor, Dict[str, Any]], Header]]: ...
 
 
@@ -1601,25 +1595,14 @@ def _read_fallback(
         raise RuntimeError(f"Failed to read FITS file '{path}': {e}") from e
 
 
-def read(
+def read(  # noqa: PLR0913
     path: Union[str, List[str], Tuple[str, ...]],
     hdu: Union[int, str, List[int], Tuple[int, ...], None] = None,
     device: str = "cpu",
     mmap: Union[bool, str] = "auto",
-    fp16: bool = False,
-    bf16: bool = False,
-    raw_scale: bool = False,
-    scale_on_device: bool = True,
-    use_cache: Optional[bool] = None,
-    columns: Optional[List[str]] = None,
-    start_row: int = 1,
-    num_rows: int = -1,
-    cache_capacity: int = 10,
-    handle_cache_capacity: int = 16,
-    fast_header: bool = True,
+    options: Optional[ReadOptions] = None,
     return_header: bool = False,
-    mode: str = "auto",
-    policy: str = "default",
+    **kwargs: Unpack[ReadOptionsKwargs],
 ) -> Any:
     """Read FITS data with optimizations.
 
@@ -1652,6 +1635,25 @@ def read(
         RuntimeError: FITS reading errors
     """
     global _cache_stats, _file_cache
+
+    opts = options if options is not None else ReadOptions()
+    for field in fields(ReadOptions):
+        if field.name in kwargs:
+            setattr(opts, field.name, kwargs[field.name])
+
+    fp16 = opts.fp16
+    bf16 = opts.bf16
+    raw_scale = opts.raw_scale
+    scale_on_device = opts.scale_on_device
+    use_cache = opts.use_cache
+    columns = opts.columns
+    start_row = opts.start_row
+    num_rows = opts.num_rows
+    cache_capacity = opts.cache_capacity
+    handle_cache_capacity = opts.handle_cache_capacity
+    fast_header = opts.fast_header
+    mode = opts.mode
+    policy = opts.policy
 
     if not path:
         raise ValueError("Path must be a non-empty string")
