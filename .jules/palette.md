@@ -23,3 +23,11 @@
 ## 2025-04-20 - Preserving Structural Shape in Specific Element Focus Rings
 **Learning:** When defining specific `:focus-visible` styles for individual UI components (like `.cmap-swatch` or `input[type="range"]`) to override global focus rings, any structural properties like `border-radius` that were applied to the element must also be included in its specific `:focus-visible` declaration. Otherwise, the element may lose its rounded corners during keyboard navigation.
 **Action:** When adding `:focus-visible` to specific classes (e.g., `.cmap-swatch:focus-visible`), copy the base element's `border-radius` into the focus rule to prevent visual mismatches or flattened corners.
+
+## 2026-05-02 - Adding loading states to async operations
+**Learning:** In vanilla JS apps using , wrapping async calls in  blocks guarantees that loading indicators (like a spinner) are correctly dismissed even if the network request fails or an error is thrown, preventing the UI from getting stuck in an infinite loading state.
+**Action:** Always ensure loading state removal logic is placed within a  block rather than just after the  call.
+
+## 2025-05-02 - Adding loading states to async operations
+**Learning:** In vanilla JS apps using fetch, wrapping async calls in try/finally blocks guarantees that loading indicators (like a spinner) are correctly dismissed even if the network request fails or an error is thrown, preventing the UI from getting stuck in an infinite loading state.
+**Action:** Always ensure loading state removal logic is placed within a finally block rather than just after the await call.
