@@ -3430,14 +3430,8 @@ class WCS:
         theta_rad = theta * d2r
 
         # 1. Convert Native (phi, theta) to Cartesian (u, v, w)
-        # Consistent with zenithal.py definitions:
-        # phi = atan2(xi, -eta) -> xi ~ sin(phi), -eta ~ cos(phi)
-        # u matches xi direction (East)
-        # v matches eta direction (North) implies v = -cos(phi)?
-        # Wait, eta is North. -eta is South.
-        # xi = R sin(phi). u is unit vector component?
         # u = cos(theta) * sin(phi)
-        # v = -cos(theta) * cos(phi)  (Note: matches -eta direction? No. matches -cos(phi))
+        # v = -cos(theta) * cos(phi)
         # w = sin(theta)
 
         sin_theta = torch.sin(theta_rad)
@@ -3616,96 +3610,16 @@ class WCS:
         crval1_rad = self.crval[0] * rad
         crval2_rad = self.crval[1] * rad
 
-        # Standard WCS formulas for TAN
-        # r = sqrt(xi^2 + eta^2)
-        # beta = atan(r) // distance from CRVAL
-        # but the standard spherical rotation formulas often simpler:
-
-        # phi (RA relative), theta (Dec relative)
-        # For TAN:
-        # x = cos(theta)*sin(phi-phi0) / sin(theta) ? No
-
-        # Using WCSLIB logic for "zenithal" projections:
-        # (phi, theta) definition depends on projection.
-        # For TAN:
-        # phi = atan2(xi, -eta)
-        # r = hypot(xi, eta)
-        # theta = atan2(180/pi, r) ?? No.
-
-        # Let's use the robust spherical rotation matrix approach
-        # 1. Deproject from plane to sphere at (0, 90) or (0, 0) native?
-        # FITS standard: Native coordinates (phi, theta).
-        # Determine native coordinates from xi, eta.
-        # For TAN:
-        # r_sq = xi^2 + eta^2
-        # if r=0 -> phi=0, theta=90 (at pole)
-
-        # Standard Gnomonic:
-        # rho = sqrt(xi^2 + eta^2)
-        # c = atan(rho) assuming R=1 (radians)
-        # But xi, eta are in degrees in FITS intermediate?
-        # Yes, usually.
-
-        # Proper formulas from Calabretta & Greisen (2002):
-        # Native spherical coordinates (phi, theta)
-        # For TAN:
-        # phi = atan2(xi, -eta)  (Note: -eta because Y is usually "North" which is down from pole?)
-        # theta = atan2(180/pi, rho) -> implies projection from North Pole
-
-        # Let's stick to the simplest algebraic form for RA/Dec
-        # which combines deprojection + rotation.
-
-        # Derived from astropy/wcslib logic:
-        # x, y = xi_rad, eta_rad
-        # r = sqrt(x*x + y*y)
-        # if r == 0: return crval
-
-        # Native coordinates (phi, theta) relative to reference point
-        # For TAN (gnomonic):
-        # The plane is tangent at the reference point (CRVAL).
-        # We can use the direct rotation matrix formulation.
-
-        # Direction cosines in native system (centered at pole (0, 90) for TAN?)
-        # No, TAN is tangent at (0, 90) in native coords.
-
-        # Simple trigonometry for TAN (gnomonic):
-        # Project vector from center of sphere (0,0,0) through pixel on tangent plane at pole.
-        # Vector V_native = [xi, eta, 1] (unnormalized)?
-        # Actually V_native = [xi, eta, 1/tan(theta)]?
-
-        # Let's use the explicit rotation matrix method which is vectorizable.
+        # Use the explicit rotation matrix method which is vectorizable.
         # 1. Construct vector in tangent plane (3D).
         #    Plane is z=1 (tangent at North Pole of unit sphere).
-        #    V_plane = [xi_rad, eta_rad, 1.0] ?
-        #    Wait, for TAN, R_theta = 1.
-        #    So V = [xi, eta, 1] is correct direction.
+        #    V = [xi, eta, 1] is the correct direction.
         #    Normalize to get unit vector on sphere.
 
         x = xi_rad
         y = eta_rad
 
         # 2. Rotate this vector from North Pole (0, 90) to (CRVAL1, CRVAL2).
-        # Rotation Matrix R defined by Euler angles:
-        # 1. Rotate by -phi_p (RA of pole)? No.
-
-        # Standard FITS algorithm:
-        # phi_native, theta_native from xi, eta.
-        # Component angles
-        # cos(beta) = 1/sqrt(1+rho^2)
-        # sin(beta) = rho/sqrt(1+rho^2)
-
-        # Spherical coordinates of point (rel to CRVAL):
-        # We use the rotation formula directly.
-        # alpha_p = CRVAL1
-        # delta_p = CRVAL2
-        # BUT FITS WCS usually assumes the native pole is at (0, 90).
-        # And the reference point (CRVAL) is at the native (0, 0)? Or (0, 90)?
-        # For TAN, (0,0) of intermediate (xi, eta) corresponds to (CRVAL1, CRVAL2).
-
-        # Direct formula for TAN (Gnomonic):
-        # alpha = alpha0 + atan2( x, cos(delta0) - y*sin(delta0)*tan(delta0)? )
-        # Easier to just rotate vectors.
-
         # Vector in u,v,w space where w points to CRVAL.
         # u = x (East)
         # v = y (North)
@@ -3731,10 +3645,7 @@ class WCS:
         a0 = crval1_rad
         d0 = crval2_rad
 
-        # Rotation 1: Tilt up by delta0 (rotate around X-axis? No. Y-axis?)
-        # Base frame: Z is (0,0). We want Z to be (a0, d0).
-        # 1. Rotate around Y-axis by -(90-d0)?
-        # Let's construct the rotation matrix explicitly.
+        # Construct the rotation matrix explicitly.
 
         # Local basis at (a0, d0):
         # r (radial) = [cos(d0)cos(a0), cos(d0)sin(a0), sin(d0)]
