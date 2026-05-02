@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import torchsky.cpp as cpp
-
 from .. import table
 from ..dataloader import (
     create_dataloader,
@@ -127,9 +125,14 @@ __all__ = [
 ]
 
 # Internal capability flags for tests
-_HAS_READ_HDUS_BATCH = hasattr(cpp, "read_hdus_batch")
-_HAS_READ_FULL_RAW_WITH_SCALE = hasattr(cpp, "read_full_raw_with_scale")
-_HAS_READ_FULL_RAW = hasattr(cpp, "read_full_raw")
-_HAS_READ_FULL_UNMAPPED_RAW = hasattr(cpp, "read_full_unmapped_raw")
-_HAS_READ_FULL_UNMAPPED = hasattr(cpp, "read_full_unmapped")
-_HAS_READ_FULL_NOCACHE = hasattr(cpp, "read_full_nocache")
+try:
+    import torchsky.cpp as _cpp
+except Exception:
+    _cpp = None
+
+_HAS_READ_HDUS_BATCH = hasattr(_cpp, "read_hdus_batch")
+_HAS_READ_FULL_RAW_WITH_SCALE = hasattr(_cpp, "read_full_raw_with_scale")
+_HAS_READ_FULL_RAW = hasattr(_cpp, "read_full_raw")
+_HAS_READ_FULL_UNMAPPED_RAW = hasattr(_cpp, "read_full_unmapped_raw")
+_HAS_READ_FULL_UNMAPPED = hasattr(_cpp, "read_full_unmapped")
+_HAS_READ_FULL_NOCACHE = hasattr(_cpp, "read_full_nocache")
