@@ -11,15 +11,65 @@ This is **not** a goal of matching every internal detail of upstream packages. T
 | HEALPix pixel + harmonic API | **healpy**, **hpgeom** (strict queries), **astropy-healpix** | `torchsky.sphere.compat`, `torchsky.sphere.healpy` (alias), `torchsky.wcs.healpix`; spectral transforms are torch-native—compare to healpy in tests/benchmarks only |
 | WCS / projections | **Astropy** `astropy.wcs`, FITS WCS | `torchsky.wcs.WCS`, C++/fused paths; parity tests vs Astropy where scoped |
 | FITS I/O & tables | **fitsio**, **Astropy** `io.fits` / tables | `torchsky.read` / `write`, table module, Arrow/Polars interop |
-| Spherical geometry / polygons | **spherical_geometry**, **astropy-healpix** (where applicable) | `torchsky.sphere.geom`, exact regions, benchmarks vs upstream fixtures |
+| Spherical geometry / polygons | **spherical_geometry**, **astropy-healpix** (where applicable) | `torchsky.geom` as the public import surface, `torchsky.sphere.geom` as the implementation submodule; exact regions and benchmarks vs upstream fixtures |
 | Catalogs / coordinates | **Astropy** `SkyCoord`, etc. | Compatibility-oriented tests and helpers where explicitly maintained |
 
 ## Where compatibility lives
 
-- **HEALPix / healpy-shaped API** — [`torchsky.sphere.compat`](sphere.md#compatibility-map) and [`torchsky.sphere.healpy`](sphere.md#compatibility-map) (same symbols; use `import torchsky.sphere.healpy as hp` if you prefer healpy naming).
+- **HEALPix / healpy-shaped API** — [`torchsky.sphere.compat`](sphere.md#compatibility) and [`torchsky.sphere.healpy`](sphere.md#compatibility) (same symbols; use `import torchsky.sphere.healpy as hp` if you prefer healpy naming).
 - **Sphere native + extended geometry** — `torchsky.sphere` (regions, MOC, sparse maps, etc.), often compared to healpy/hpgeom/spherical_geometry in tests and benchmarks.
 - **WCS** — `torchsky.wcs` (see tests and WCS-related benchmarks).
-- **FITS / tables** — package root I/O and `torchsky.table` (see `docs/api.md`).
+- **FITS / tables** — package root I/O and `torchsky.table` (see `io.md` and `table.md`).
+- **Mapmaking** — `torchsky.map` for native map products, with external stackers used only as parity and benchmark comparators (see `map.md` and `benchmarks.md`).
+
+## Upstream Validation Matrix
+
+“Upstream” means reference libraries, fixture families, and public data surfaces
+used to validate behavior. It does not mean torchsky depends on those packages
+at runtime.
+
+### Astropy
+
+| Upstream surface | Source | Local coverage | Contract |
+|---|---|---|---|
+| WCS core fixture-heavy tests | `astropy/wcs/tests/test_wcs.py` | `tests/test_wcs_parity.py`, `tests/test_wcs_allsky.py`, `tests/test_wcs_tpv.py`, `tests/test_wcs_legacy.py`, `tests/test_wcs_zpx.py`, `benchmarks/bench_wcs.py`, `benchmarks/bench_wcs_suite.py` | parity-test, benchmark-hook |
+| FITS docs/examples | `astropy.io.fits` docs | `tests/test_release_smoke.py`, `tests/test_fitsio_upstream_smoke.py`, `benchmarks/bench_fits_io.py` | example-smoke, benchmark-hook |
+
+### Healpy
+
+| Upstream surface | Source | Local coverage | Contract |
+|---|---|---|---|
+| HEALPix primitive tests/tutorial flows | healpy tests/tutorials | `tests/test_healpix_parity.py`, `benchmarks/bench_healpix.py`, `benchmarks/bench_healpix_advanced.py`, `benchmarks/bench_spin_matrix.py` | parity-test, benchmark-hook |
+
+### HealSparse
+
+| Upstream surface | Source | Local coverage | Contract |
+|---|---|---|---|
+| I/O lifecycle | `tests/test_io.py` | `tests/test_healsparse_upstream.py`, `benchmarks/bench_sphere_sparse.py` | adapter-test, benchmark-hook |
+| Degrade semantics | `tests/test_degrade.py` | `tests/test_healsparse_upstream.py`, `benchmarks/bench_sphere_sparse.py` | adapter-test, benchmark-hook |
+| Geometry and map operations | `tests/test_geom.py`, `tests/test_operations.py` | `tests/test_healsparse_upstream.py`, `benchmarks/bench_sphere_sparse.py` | adapter-test |
+| Quickstart/basic interface | `basic_interface.html` | `tests/test_healsparse_upstream.py` | example-smoke |
+
+### Fitsio
+
+| Upstream surface | Source | Local coverage | Contract |
+|---|---|---|---|
+| README workflows | `fitsio/README.md` | `tests/test_fitsio_upstream_smoke.py`, `tests/test_release_smoke.py`, `benchmarks/bench_fits_io.py` | example-smoke, benchmark-hook |
+| Image/header/table/compression tests | `fitsio/tests/test_image.py`, `test_header.py`, `test_table.py`, `test_image_compression.py` | `tests/test_fitsio_upstream_smoke.py`, `benchmarks/bench_fits_io.py`, `benchmarks/bench_fitstable_io.py` | adapter-test, benchmark-hook |
+
+### Real-Data Reference Fixtures
+
+| Real-data surface | Source | Local coverage | Contract |
+|---|---|---|---|
+| Installed scaled/VLA/WCS FITS fixtures | `astropy` package test data | `tests/test_real_data_validation.py` | adapter-test |
+| Installed compressed image fixture | `fitsio` package test image | `tests/test_real_data_validation.py` | adapter-test |
+| Installed HEALPix weight table | `healpy` package data | `tests/test_real_data_validation.py` | adapter-test |
+| Public sample/reference FITS image | Astropy data server tutorial image | `tests/test_release_smoke.py` when network/fixture access is available | example-smoke |
+
+If upstream replay scripts return, add their source inventory and restore the
+corresponding docs/tests in the same PR. `healsparse` remains adapter-based
+rather than exact API replay because torchsky intentionally exposes sparse-map
+functionality through its own spherical namespace.
 
 ## Optional dependencies
 

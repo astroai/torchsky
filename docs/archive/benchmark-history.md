@@ -1,4 +1,8 @@
-# BENCHMARK_HISTORY.md
+# Benchmark History
+
+> Archive note: this is a historical benchmark snapshot. For current benchmark
+> methodology, comparator environments, and runnable commands, use
+> [benchmarks.md](../benchmarks.md).
 
 This document tracks the historical performance gates and competitive benchmarks for `torchsky`. It serves as a record of accuracy, throughput, and parity against established astronomy tools.
 

@@ -1417,7 +1417,7 @@ def _coadd_with_casutools(
 
 
 # SWarp ``FSCALASTRO_TYPE`` defaults to ``NONE`` here so comparator rows do not mix in
-# astrometric flux rescaling; see ``docs/mapping_parity.md`` (Phase 1) and
+# astrometric flux rescaling; see ``docs/map.md`` and
 # ``docs/benchmarks.md``.
 def _coadd_with_swarp(
     observations: list[ImageObservation],

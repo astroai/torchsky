@@ -7,7 +7,7 @@
 - [Pixel & Coordinate Utilities](#pixel--coordinate-utilities)
 - [Coordinate Conversions](#coordinate-conversions)
 - [Geometric Queries](#geometric-queries)
-- [Spherical Geometry](#spherical-geometry)
+- [Spherical Geometry](#spherical-geometry-classes)
 - [Sampling](#sampling)
 - [Sparse Maps](#sparse-maps)
 - [MOC](#moc)
@@ -15,7 +15,7 @@
 - [Power Spectra](#power-spectra)
 - [Beams & Windows](#beams--windows)
 - [Performance Notes](#performance-notes)
-- [Compatibility Map](#compatibility-map)
+- [Compatibility](#compatibility)
 
 ---
 
@@ -31,6 +31,11 @@ Convert angles to HEALPix pixel indices.
 ```python
 import torch
 import torchsky.sphere as sphere
+
+theta_rad = torch.tensor([0.5])
+phi_rad = torch.tensor([1.0])
+lon_deg = torch.tensor([10.0])
+lat_deg = torch.tensor([5.0])
 
 pix = sphere.ang2pix(128, theta_rad, phi_rad)
 pix = sphere.ang2pix(128, lon_deg, lat_deg, lonlat=True, nest=True)
@@ -165,15 +170,15 @@ Fit or subtract monopole + dipole from a HEALPix map.
 
 ## Sparse Maps
 
-### `SparseHealpixMap`
+### `HealSparseMap` / `SparseMap`
 
 Sparse HEALPix map storing values only for covered pixels. Compatible with [healsparse](https://healsparse.readthedocs.io/) semantics.
 
 ```python
-from torchsky.sphere import SparseHealpixMap
+from torchsky.sphere import HealSparseMap
 
-sparse = SparseHealpixMap(nside=64, pixels=pix_tensor, values=val_tensor)
-sparse = SparseHealpixMap.from_dense(dense_map, nside=64)
+sparse = HealSparseMap(nside=64, nest=True, pixels=pix_tensor, values=val_tensor)
+sparse = HealSparseMap.from_dense(dense_map, nside=64, nest=True)
 
 sparse.coverage_fraction
 sparse.to_dense()
@@ -181,7 +186,7 @@ sparse.interpolate(lon_deg=lon, lat_deg=lat, method='bilinear')
 sparse.ud_grade(nside_out=32)
 ```
 
-### `HealSparseMap` / `SparseMap` / `WideBitMask` / `SkyMaskPipe`
+### `WideBitMask` / `SkyMaskPipe`
 
 Additional sparse map types for interop with healsparse workflows.
 
@@ -210,7 +215,7 @@ json_repr = moc.to_json()
 | `MOC(uniq)` | Build from `UNIQ` cells |
 | `MOC.from_circle(lon_deg, lat_deg, radius_deg, max_order=10)` | Circular cap footprint |
 | `MOC.from_polygon(lon_deg, lat_deg, max_order=10)` | Polygon footprint |
-| `MOC.from_sparse_map(smap)` | Coverage from `SparseHealpixMap` |
+| `MOC.from_sparse_map(smap)` | Coverage from `HealSparseMap` / `SparseMap` |
 | `MOC.from_threshold(smap, threshold, op='>')` | Threshold sparse-map values |
 | `MOC.from_ascii(text)` | IVOA ASCII roundtrip |
 | `MOC.from_json(text)` | IVOA JSON roundtrip |
@@ -244,15 +249,7 @@ Analyze a HEALPix map into spherical harmonic coefficients.
 - Scalar: `(npix,)` in, `(nalm,)` out.
 - Polarized (`pol=True`): `(3, npix)` in, `(3, nalm)` out for (T, E, B).
 
-### `alm2map(alm_values, nside, *, lmax=None, pol=False, pixwin=False)`
-
 ### `alm2map(alm_values, nside, *, lmax=None, mmax=None, nest=False, pol=False, pixwin=False)`
-
-### `map2alm_lsq(map_values, lmax, *, tol=1e-10, maxiter=20)`
-
-Iterative least-squares analysis. Returns `(alm, rel_res, n_iter)`.
-
-### `map2alm_spin(maps, spin, *, lmax=None)` / `alm2map_spin(alm_plus, alm_minus, nside, spin, *, lmax=None)`
 
 ### `map2alm_lsq(map_values, lmax, mmax=None, *, nside=None, pol=True, tol=1e-10, maxiter=20, nest=False)`
 
@@ -290,8 +287,6 @@ Power spectrum from alm coefficients.
 
 Generate random alm or maps from input C_ell.
 
-### `smoothmap(map_values, *, fwhm_rad=None, beam_window=None, pol=False)` / `smoothalm(alm_values, *, fwhm_rad=None)`
-
 ### `synfast(cls, nside, lmax=None, mmax=None, *, alm=False, pol=True, pixwin=False, fwhm=0.0, sigma=None, new=False)`
 
 Synthesize map(s) from input $C_\ell$ power spectrum/spectra.
@@ -323,7 +318,7 @@ Pixel window data is packaged as FITS tables — no healpy runtime dependency.
 
 ---
 
-## Performance
+## Performance Notes
 
 The SHT implementation uses:
 
@@ -393,7 +388,7 @@ Functions in `torchsky.sphere.compat` (and the `torchsky.sphere.healpy` alias) m
 | `spherical_polygons_intersect` | extended | edge crossing + containment |
 | `SphericalBooleanRegion` (union/intersection/difference) | extended | controlled-error boolean algebra; optional exact backend |
 | `NativeExactSphericalRegion` | extended | dependency-free exact-backend scaffold |
-| `SparseHealpixMap` | parity | coverage-aware sparse map; dense-equivalent `ud_grade` |
+| `HealSparseMap` / `SparseMap` | parity | coverage-aware sparse map; dense-equivalent `ud_grade` |
 
 Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) delegates certain operations to [hpgeom](https://github.com/LSSTDESC/hpgeom) for bit-exact results where needed.
 
@@ -405,10 +400,8 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) delegates certain o
 |---|---|
 | `map2alm` | `use_pixel_weights` and `gal_cut` are not yet supported by the torch backend. Falls back to healpy when requested. |
 | `map2alm_spin` / `alm2map_spin` | Functional but slower than healpy's C implementation (~6-8x). Optimization target for 0.4.x. |
-| CYP projection | Forward and inverse not yet implemented in `torchsky.wcs`. |
 | Pixel windows | Packaged tables cover standard HEALPix NSIDE range. Higher NSIDE may require external data. |
 | GPU | HEALPix geometry primitives and SHT run on CUDA and MPS. Polygon operations are CPU-only. |
-| Complex columns | Not supported in mmap table reads or in-place updates. |
 
 ---
 
@@ -420,5 +413,5 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) delegates certain o
 - [astropy-healpix](https://astropy-healpix.readthedocs.io/)
 - [healsparse](https://healsparse.readthedocs.io/)
 - [spherical-geometry](https://github.com/spacetelescope/spherical_geometry)
-- [API reference](api.md)
+- [API guide](api.md)
 - [Benchmarks](benchmarks.md)

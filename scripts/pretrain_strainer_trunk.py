@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline synthetic pretraining for Strainer-style sky-encoder fields (inr_next.md).
+"""Offline synthetic pretraining for Strainer-style sky-encoder fields.
 
 Writes a trunk checkpoint for ``load_strainer_trunk_checkpoint``. After loading into a
 new model, call ``reset_decoder_head()`` then ``fit_field_model`` (optionally with

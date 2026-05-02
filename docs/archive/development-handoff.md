@@ -1,5 +1,9 @@
 # Development Handoff
 
+> Archive note: this is a point-in-time handoff snapshot. Current local data
+> policy lives in [contributing.md](../contributing.md), and current real-data
+> benchmark commands live in [benchmarks.md](../benchmarks.md).
+
 This repo checkpoint is intended to be portable to a fresh development machine.
 
 ## What Is Intentionally Not Committed

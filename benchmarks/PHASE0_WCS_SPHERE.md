@@ -2,7 +2,7 @@
 
 Run this **before** and **after** any WCS or `torchsky.sphere` / HEALPix spectral change. Use the **same** Pixi environment and seeds so CSV/JSON rows are comparable.
 
-For **all** wired open-source comparators (Astropy, healpy, hpgeom, legacy PyAST/Kapteyn, map tools, …), environments, and install commands, read **[`docs/benchmark_comparators.md`](../docs/benchmark_comparators.md)**. After bootstrapping optional deps, run `pixi run bench-comparator-versions-all` and archive the emitted JSON next to your `results.csv`.
+For **all** wired open-source comparators (Astropy, healpy, hpgeom, legacy PyAST/Kapteyn, map tools, …), environments, and install commands, read **[`docs/benchmarks.md`](../docs/benchmarks.md)**. After bootstrapping optional deps, run `pixi run bench-comparator-versions-all` and archive the emitted JSON next to your `results.csv`.
 
 ## 1. Record software versions
 
@@ -68,7 +68,7 @@ pixi run -e bench-all python benchmarks/bench_all.py --profile user --sphere-onl
 Spin parity and throughput (optional gates; use `--disable-gates` for reporting only):
 
 ```bash
-pixi run -e bench-all python benchmarks/replays/replay_upstream_healpy_spin.py --runs 3 --disable-gates --json-out benchmarks_results/"$RUN_ID"/spin_replay.json
+pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set default --runs 3 --json-out benchmarks_results/"$RUN_ID"/spin_matrix.json
 ```
 
 Optional full-domain runs (longer): omit `--quick` and use `pixi run bench` / `pixi run bench-wcs` / `pixi run bench-sphere` from [`pixi.toml`](../pixi.toml).
@@ -83,13 +83,13 @@ Under `benchmarks_results/<run_id>/`:
 | `torchsky_deficits.csv` | Rows where torchsky is not first |
 | `summary.md` | Human-readable summary |
 | `VERSIONS.json` | Git SHA, package versions, `TORCHSKY_*` env |
-| `spin_replay.json` | healpy spin replay output (if run) |
+| `spin_matrix.json` | healpy spin matrix output (if run) |
 
 ## 5. Post-change iteration
 
 Re-run sections 3–4 with a **new** `run_id`, then diff `torchsky_deficits.csv` and spin JSON against the Phase 0 baseline.
 
-## 6. One-shot acceptance (benches + pytest + spin replay)
+## 6. One-shot acceptance (benches + pytest + spin matrix)
 
 From repo root, after `pip install -e .` in `bench-all`:
 
@@ -97,4 +97,4 @@ From repo root, after `pip install -e .` in `bench-all`:
 pixi run wcs-sphere-acceptance
 ```
 
-This runs quick WCS and sphere `bench_all` rows (`acceptance_wcs` / `acceptance_sphere` under `benchmarks_results/`), then **all** `tests/test_wcs_*.py` and `tests/test_sphere_*.py`, then `replay_upstream_healpy_spin.py` with `--disable-gates` and writes `benchmarks_results/acceptance_spin_replay.json`. Inspect that JSON for median `torchsky/healpy` ratios; parity gates are intentionally off so local runs do not flake on throughput thresholds.
+This runs quick WCS and sphere `bench_all` rows (`acceptance_wcs` / `acceptance_sphere` under `benchmarks_results/`), then **all** `tests/test_wcs_*.py` and `tests/test_sphere_*.py`, then `benchmarks/bench_spin_matrix.py --case-set default --runs 2` and writes `benchmarks_results/acceptance_spin_matrix.json`. Inspect that JSON for median `torchsky/healpy` ratios.

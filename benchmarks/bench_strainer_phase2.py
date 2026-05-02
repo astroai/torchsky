@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 2 Strainer benchmark: multi-noise pretrain + early training loss + frozen trunk (inr_next.md).
+"""Phase 2 Strainer benchmark: multi-noise pretrain + early training loss + frozen trunk.
 
 Compares baseline fit, round-robin synthetic pretrain with fresh decoder, and frozen-trunk fine-tuning
 on a tiny synthetic ``strainer_sky_encoder_mlp`` observation. Emits JSON on stdout.

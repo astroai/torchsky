@@ -1,4 +1,7 @@
-# RESEARCH_KNOWLEDGE_BASE.md
+# Research Knowledge Base
+
+> Roadmap note: this is research context, not a public API or workflow contract.
+> For current shipped surfaces, start with [api.md](../api.md).
 
 This document provides a consolidated survey of research and paper summaries that inform the design of implicit neural representations (INR), neural fields, and latent sky modeling in `torchsky`.
 

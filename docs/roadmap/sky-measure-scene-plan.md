@@ -1,5 +1,8 @@
 # Implicit SkyMeasure Scene Implementation Plan
 
+> Roadmap note: this is research/planning context, not a public API or workflow
+> contract. For current shipped surfaces, start with [api.md](../api.md).
+
 ## Purpose
 
 This note lays out an implementation plan for an **implicit-first, measure-valued, multiscale sky scene** in `torchsky`: a latent sky representation designed to explain many exposures directly, rather than first collapsing them into a coadd.

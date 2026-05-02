@@ -1,14 +1,140 @@
 # torchsky Benchmarks
 
-torchsky is benchmarked for both **correctness** and **throughput** against upstream libraries across four domains. This page documents the methodology, how to reproduce the results, and the latest release snapshot.
+torchsky is benchmarked for both **correctness** and **throughput** against upstream libraries across four domains. This page documents the methodology, comparator environments, real-data benchmark setup, how to reproduce the results, and historical release snapshots.
 
-**Open-source comparator matrix (multi-env installs, legacy WCS, HEALPix ecosystem, map stackers):** see **[Benchmark comparators](benchmark_comparators.md)**. Record installed versions with `pixi run bench-comparator-versions-all` (writes under `benchmarks_results/`).
+Record installed comparator versions with `pixi run bench-comparator-versions-all` (writes under `benchmarks_results/`).
+
+Artifact roots used in this document:
+
+- `benchmarks_results/` is the default root for generic benchmark-suite outputs
+  and comparator-version captures.
+- `benchmark_results/` is used by several Pixi tasks for focused JSON/CSV
+  outputs.
+- `data/benchmark_results/` is for heavyweight local real-data runs, especially
+  SMACS/UPdec artifacts that should not be committed.
+
+## Comparator Environments
+
+Torchsky benchmarks are not Astropy- or healpy-only. Local and CI runs combine
+several Pixi environments because upstream wheels and ABI pins differ.
+
+| Environment | Purpose | Typical comparators |
+|---|---|---|
+| `bench-all` | Main `bench_all.py` WCS/sphere domains | Astropy (`astropy.wcs`), torch, optional legacy bridge rows |
+| `bench-legacy` | Legacy WCS libraries | PyAST (`starlink.Ast`) and optional Kapteyn for legacy WCS comparison |
+| `sphere-bench` | HEALPix and spherical geometry ecosystem | healpy, hpgeom, astropy-healpix, healsparse, spherical-geometry, optional healpix/mhealpy/skyproj |
+| `map-compat` | Optical/IR stacker compatibility | reproject, dfreproject, drizzle, Montage, SWarp, casutools |
+
+Representative commands:
+
+```bash
+pixi run -e bench-all -- python benchmarks/bench_all.py --profile user --wcs-only
+pixi run sphere-bench-geometry-ecosystem
+pixi run bench-map-compat-external
+pixi run bench-comparator-versions-all
+```
+
+For pip-only parity benches against the HEALPix / geometry comparator stack,
+install `pip install -e ".[bench-all]"` after installing a compatible PyTorch.
+
+Benchmark policy: on comparable rows in emitted CSV/JSON artifacts, torchsky
+should rank first on throughput while staying within parity tolerances. Rows
+where a comparator is skipped or has different semantics are not counted as
+losses; expand coverage carefully so skips shrink over time.
 
 ## CI: map compat gate
 
 On each push/PR, workflow **Map mosaic (bench extras + compat gate)** (see `.github/workflows/ci.yml`) installs **`torchsky[bench]`**, runs the full **`pytest tests/`** suite (including **`reproject`** bilinear/bicubic parity, optional **`dfreproject`** bilinear parity, and optional **`drizzle`** external-path smoke tests), then runs **`benchmarks/bench_map_compat.py`** on **`synthetic_shifted_wcs`** with **`benchmarks/baselines/map_compat_ci_gate.json`** enforcing status and comparator diff ceilings for the bilinear `reproject_interp` row. A follow-up bench step runs **`torchsky:fft_shift`** on **`upstream_drizzle_crpix_translation`** (no baseline; smoke only). A weekly **`workflow_dispatch` / schedule** copy is in **`.github/workflows/map_compat_weekly.yml`**.
 
 **Optional map-compat wall-time regression:** after recording representative `time_ms` rows on a pinned runner, pass **`--time-baseline-json`** (format in **`benchmarks/baselines/map_compat_time_gate_example.json`**) and **`--time-regression-tolerance`** (default `0.35`) to fail if OK rows slow down beyond the baseline. This is intentionally **off** in default CI because wall times vary by hardware.
+
+## Real-Data Benchmark Setup
+
+Large downloaded inputs under `data/`, generated benchmark artifacts under
+`data/benchmark_results/`, and temporary staging files under `data/_tmp/` are
+local products and are intentionally not committed.
+
+### SMACS J0723 Public Data
+
+Download public references plus public JWST inputs:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+pixi run -e test -- python scripts/download_smacs0723_multiband_public.py \
+  --bands F090W,F150W,F200W,F277W,F356W,F444W \
+  --module b \
+  --updec-iterations 0 \
+  --jwst-output-dir data/jwst_smacs0723 \
+  --updec-output-dir data/updec_webb
+```
+
+Fill one missing band when needed:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+pixi run -e test -- python scripts/download_jwst_smacs0723_mast.py \
+  --band F277W \
+  --module b \
+  --subgroup CAL \
+  --output-dir data/jwst_smacs0723
+```
+
+Run the full non-INR multiband stacker sweep:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+PYTHONPATH=src:benchmarks pixi run -e map-compat -- python benchmarks/bench_map_smacs0723_stackers_band_sweep.py \
+  --bands F090W,F150W,F200W,F277W,F356W,F444W \
+  --module b \
+  --input-product cal \
+  --crop-size 256 \
+  --crop-mode best_overlap \
+  --skip-missing \
+  --json-out data/benchmark_results/smacs0723_stackers_band_sweep_full_public_256.json \
+  --markdown-out data/benchmark_results/smacs0723_stackers_band_sweep_full_public_256.md
+```
+
+`best_overlap` is the recommended crop mode across bands. Use `--crop-size 512`
+for a more detailed pass when memory and runtime allow.
+
+### UPdec-Webb References
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+pixi run -e test -- python scripts/download_updec_webb.py \
+  --bands F090W,F150W,F200W,F277W,F356W,F444W \
+  --iterations 0,10 \
+  --output-dir data/updec_webb
+```
+
+### Field-Fit Smoke Runs
+
+Single-band real field fit:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+PYTHONPATH=src:benchmarks pixi run -e test -- python benchmarks/bench_map_smacs0723_field_fit.py \
+  --band-name F277W \
+  --input-product cal \
+  --filename-contains nrcblong \
+  --crop-size 128 \
+  --crop-mode best_overlap \
+  --steps 4
+```
+
+Multiband joint field fit:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+PYTHONPATH=src:benchmarks pixi run -e test -- python benchmarks/bench_map_smacs0723_field_fit_joint.py \
+  --bands F090W,F277W,F356W,F444W \
+  --crop-size 32 \
+  --crop-strategy best_overlap \
+  --steps 4
+```
+
+Real-data field-fit debug runs can be expensive. Treat their outputs as local
+artifacts unless a baseline is deliberately reviewed and committed.
 
 ## Main Scripts
 
@@ -20,10 +146,9 @@ On each push/PR, workflow **Map mosaic (bench extras + compat gate)** (see `.git
 | `bench_wcs_suite.py` | Authoritative WCS projection sweep runner with forward+inverse and `N={1k..10M}` tiers. |
 | `bench_sphere_suite.py` | Authoritative sphere-domain runner aggregating geometry/advanced/sparse/spectral/polygon/core benches. |
 | `bench_legacy_all.py` | Legacy monolithic exhaustive harness (opt-in only, no longer default contract). |
-| `bench_sentinel.py` | Fast 10-case gate with early-stop significance checks for optimization loops. |
 | `bench_ml_loader.py` | End-to-end DataLoader throughput benchmark (uncompressed + compressed). |
 | `bench_fast.py` | Fast regression loop for image-path changes. |
-| `bench_compressed_stability.py` | Randomized-order compressed benchmark for RICE/HCOMPRESS tuning with lower order/cache bias (`library_default` vs forced config modes). |
+| `bench_compressed.py` | Compressed FITS image benchmark for RICE/HCOMPRESS tuning. |
 | `bench_table.py` | FITS table-path read/scan/column access checks. |
 | `bench_arrow_tables.py` | Arrow conversion benchmark for table workloads. |
 | `bench_map_image_plane.py` | Image-plane mapmaking benchmark covering synthetic identical/shifted WCS coadds, a synthetic low-overlap TPV MEF case, a grouped synthetic multi-band compatibility cube, a header-derived planned spectral-cube row on a shared target grid, plus both single-HDU and generated MEF real Astropy SIP FITS cases in identical-WCS and shifted-WCS variants, including overlap and footprint diagnostics. |
@@ -44,7 +169,7 @@ On each push/PR, workflow **Map mosaic (bench extras + compat gate)** (see `.git
 | `bench_map_boundary_support.py` | Focused edge-support sweep for bilinear TAN weighted coadds on the large-union truth cases. It evaluates explicit source-boundary margins against ground-truth reconstruction metrics and `SWarp` agreement so edge-policy ideas can be benchmarked before touching the production resampler. |
 | `bench_map_multifield_truth.py` | Synthetic multiwavelength latent-field cube benchmark. It simulates wavelength-dependent continuous sky fields with mixed bandpasses, PSFs, WCS distortions, throughput, and overlap, using both analytic fields and an initial frozen implicit-neural-field variant, then scores `coadd_image_plane_cube(...)` against latent cube truth and emits per-case torchsky kernel recommendations. |
 | `bench_map_field_fit.py` | Experimental continuous-field fitting benchmark. It renders fitted field models and direct stack baselines onto the same requested final product, emits JSON plus Markdown summaries, and can optionally enforce representative baseline JSON gates. |
-| `bench_strainer_phase2.py` | Small JSON harness for Strainer-style field models: baseline vs trunk pretrain + head reset vs pretrain with frozen trunk, reporting initial / early-step / final training losses on a synthetic TAN observation (see `inr_next.md` Phase 2). Requested `--early-steps` above `--fit-steps` are omitted (see JSON `early_steps_skipped`) rather than emitted as NaNs. |
+| `bench_strainer_phase2.py` | Small JSON harness for Strainer-style field models: baseline vs trunk pretrain + head reset vs pretrain with frozen trunk, reporting initial / early-step / final training losses on a synthetic TAN observation. Requested `--early-steps` above `--fit-steps` are omitted (see JSON `early_steps_skipped`) rather than emitted as NaNs. |
 | `bench_map_smacs0723_strainer_transfer.py` | Optional real-data Strainer transfer smoke on SMACS J0723 (same crop stack as `bench_map_smacs0723_field_fit.py`): random init vs multi-noise pretrain + `reset_decoder_head()`, with training losses and support RMSE vs the drizzle reference. Exits 0 with `status: skipped` when `data/` inputs are absent. |
 | `bench_wcs.py` | WCS transform throughput checks, including small-batch center-projection `default vs python-only` fields on CPU. |
 | `bench_wcs_small_n_paths.py` | Small-`N` dispatch matrix: Astropy `all_pix2world` / `all_world2pix` vs torchsky two-arg vs stacked `(N,2)` vs stacked after `compile()` for **forward** (fused pixels→rel→world + Torch pole rotation) and **inverse** (fused world→pixels + Torch inverse pole rotation), FITS `origin` 0/1; median ms plus max |ΔRA|,|ΔDec| and max |Δx|,|Δy| vs Astropy on the stacked paths. |
@@ -59,9 +184,6 @@ On each push/PR, workflow **Map mosaic (bench extras + compat gate)** (see `.git
 | `bench_catalog_compat.py` | Catalog crossmatch compatibility benchmark against `astropy.coordinates.SkyCoord`, covering both synthetic clustered catalogs and vendored real Astropy VOTable fixtures, plus a real-data FITS roundtrip when native table I/O is available. |
 | `bench_sphere_spectral.py` | CPU-first spherical harmonic primitive benchmark (`map2alm`, `map2alm_lsq`, `alm2map`, `almxfl`, `alm2cl`, `anafast`, `map2alm_spin`, `alm2map_spin`) plus compatibility-generation paths (`synalm`, `synfast`, `bl2beam`, `beam2bl`) as needed. |
 | `bench_pipeline_table_sphere.py` | End-to-end benchmark: table predicate pushdown (`where`) + HEALPix spherical reduction pipeline. |
-| `replay_upstream_healpy_interp_edges.py` | Replays interpolation edge cases (lon wrap, poles, pixel-center inputs) against official healpy with parity/perf gates. |
-| `replay_upstream_healpy_spin.py` | Replays spin transform parity/throughput against official healpy releases (`map2alm_spin`, `alm2map_spin`). |
-| `replay_upstream_spherical_geometry_polygons.py` | Replays spherical-geometry upstream polygon fixtures/data (`test_intersects_*`, `difficult_intersections.txt`) against torchsky with multi-NSIDE difficult-overlap area gates. |
 
 ## Methodology
 
@@ -84,14 +206,14 @@ Correctness is validated separately using upstream test fixtures and public refe
 
 | Gate | Command | Validates |
 |---|---|---|
-| WCS parity | `pixi run wcs-upstream-gate` | `pixel_to_world` / `world_to_pixel` vs astropy.wcs across all projections |
-| FITS I/O parity | `pixi run fits-upstream-gate` | Image, header, table, compression round-trips vs fitsio test suite |
-| HealSparse parity | `pixi run healsparse-upstream-gate` | Sparse map I/O, degrade, geometry vs healsparse test suite |
-| HEALPix parity | `pixi run sphere-upstream-gate` | Primitives vs healpy / astropy-healpix test-style cases |
-| Spin transforms | `pixi run sphere-upstream-spin-gate` | `map2alm_spin` / `alm2map_spin` vs healpy |
-| Interpolation edges | `pixi run sphere-upstream-interp-edge-gate` | Pole, wrap, pixel-boundary edge cases vs healpy |
-| Polygon parity | `pixi run sphere-upstream-polygon-gate` | Non-convex polygon fixtures vs spherical-geometry |
-| Real-data | `pixi run real-data-gate` | End-to-end on installed FITS fixtures + public Astropy sample image |
+| Local CI parity | `pixi run ci-local` | Ruff, compileall, pyright, and the full pytest suite in the test env |
+| WCS parity/perf | `pixi run bench-wcs` and `pixi run bench-wcs-tpv-inverse` | WCS projections, spectral/temporal paths, and TPV inverse benchmarks |
+| FITS I/O parity/perf | `pixi run bench-fits` and `pixi run bench-fitstable` | FITS image and table benchmark suites |
+| HEALPix geometry | `pixi run sphere-bench-geometry-gate` | HEALPix geometry matrix with correctness and median ratio gates |
+| HEALPix advanced | `pixi run sphere-bench-healpix-advanced-gate` | Neighbors and interpolation checks vs healpy |
+| Spin transforms | `pixi run sphere-upstream-spin-matrix-gate` | Spin transform matrix benchmark against the committed baseline |
+| Polygon parity | `pixi run sphere-bench-geom-exact-contains-gate` | Non-convex containment checks vs spherical-geometry-backed exact regions |
+| Mapmaking acceptance | `pixi run bench-map-acceptance-smoke` | Synthetic map truth, multifield, field-fit, and real-fixture map compat gates |
 
 ### Output format
 
@@ -120,11 +242,11 @@ pixi run bench-wcs        # == pixi run bench-all -- --wcs-only
 pixi run bench-sphere     # == pixi run bench-all -- --sphere-only
 
 # Direct CLI (equivalent)
-pixi run python benchmarks/bench_all.py --scope all
-pixi run python benchmarks/bench_all.py --fits-only
-pixi run python benchmarks/bench_all.py --fitstable-only
-pixi run python benchmarks/bench_all.py --wcs-only
-pixi run python benchmarks/bench_all.py --sphere-only
+pixi run -e bench-all -- python benchmarks/bench_all.py --scope all
+pixi run -e bench-all -- python benchmarks/bench_all.py --fits-only
+pixi run -e bench-all -- python benchmarks/bench_all.py --fitstable-only
+pixi run -e bench-all -- python benchmarks/bench_all.py --wcs-only
+pixi run -e bench-all -- python benchmarks/bench_all.py --sphere-only
 
 # Output contract
 # benchmarks_results/<run_id>/
@@ -132,14 +254,14 @@ pixi run python benchmarks/bench_all.py --sphere-only
 #   - torchsky_deficits.csv
 #   - summary.md
 
-# Fast optimization gate (10 diverse cases, early-stop enabled)
-pixi run python benchmarks/bench_sentinel.py --initial-repeats 3 --full-repeats 9 --seed 123
+# Fast optimization gate
+pixi run bench-fast
 
-# Compressed-path stability run (randomized config order)
-pixi run python benchmarks/bench_compressed_stability.py --rounds 4 --repeats 12 --warmup 3
+# Compressed-path run
+pixi run -e bench -- python benchmarks/bench_compressed.py
 
 # ML loader throughput run
-pixi run python benchmarks/bench_ml_loader.py --device cpu --shape 2048,2048 --n-files 50 --batch-size 4 --num-workers 4 --epochs 3 --repeats 5 --warm-cache
+pixi run -e bench -- python benchmarks/bench_ml_loader.py --device cpu --shape 2048,2048 --n-files 50 --batch-size 4 --num-workers 4 --epochs 3 --repeats 5 --warm-cache
 
 # Image-plane mapmaking run (synthetic + real FITS fixture; native extension required)
 pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_image_plane.py --size 512 --n-obs 4 --runs 5 --footprint-order 8
@@ -310,8 +432,9 @@ pixi run -e sphere-bench python benchmarks/bench_map_field_fit.py --size 128 --s
 # exact or delta-like bands stay on the pure continuous path.
 pixi run -e sphere-bench python benchmarks/bench_map_field_fit.py --size 32 --steps 8 --step-profile sparse_mosaic_frontier --runs 1 --cases tpv_field_fit_sparse_large_mosaic_exact_3band_multivisit,tpv_field_fit_sparse_large_mosaic_broad_denseoverlap --models coadd_bilinear,sky_lambda_feature_field,operator_constrained_feature_field
 
-# The current regime scoreboard for that unified family is recorded in:
-# `benchmark_results/map_field_fit_unified_regimes.md`
+# Focused scoreboards from these runs are local generated artifacts; keep them
+# under `benchmark_results/` or `data/benchmark_results/` unless deliberately
+# promoted into a committed baseline.
 
 # Staged stronger non-INR baseline: a coadd-initialized explicit spectral grid
 # refined directly against the observations through the same forward model.
@@ -435,7 +558,7 @@ PYTHONPATH=src:benchmarks pixi run -e test python benchmarks/bench_map_field_fit
 PYTHONPATH=src:benchmarks pixi run -e test python benchmarks/bench_map_field_fit.py --size 128 --steps 8 --runs 1 --cases tan_sip_field_fit_sparse_large_mosaic_broad,tpv_field_fit_sparse_large_mosaic_exact --models coadd_bilinear,sky_encoder_bandpass_field,sky_encoder_mlp
 
 # The simulation and evaluation flow for these map truth benchmarks is documented in:
-# docs/map_truth_pipeline.md
+# docs/map.md
 
 # Real-fixture compatibility smoke gate on the fixed Astropy SIP products
 pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_compat.py --size 32 --n-obs 2 --runs 1 --cases real_astropy_sip_fixture,real_astropy_sip_shifted_wcs,real_astropy_sip_mef,real_astropy_sip_mef_shifted_wcs --torchsky-kernels bilinear --reproject-kernels bilinear --drizzle-kernels point --swarp-kernels bilinear --baseline-json benchmarks/baselines/map_compat_real_smoke.json
@@ -451,13 +574,13 @@ pixi run -e map-compat python scripts/bootstrap_map_compat_tools.py --tool casut
 # `CASUTOOLS_SOURCE=/path/to/tree` or `CASUTOOLS_URL=https://...tar.gz` if needed.
 
 # WCS parity+throughput run with mixed interior/boundary sampling and p99 gates
-pixi run python benchmarks/bench_wcs.py --cases TAN,SIN,ARC,AIT,MOL,HPX,CEA,MER,TAN_SIP,TPV --sample-profile mixed --n-points 200000 --runs 5 --p99-angular-error-arcsec 1e-2 --p99-inverse-pixel-error 1e-2
+pixi run -e bench-all -- python benchmarks/bench_wcs.py --cases TAN,SIN,ARC,AIT,MOL,HPX,CEA,MER,TAN_SIP,TPV --sample-profile mixed --n-points 200000 --runs 5 --p99-angular-error-arcsec 1e-2 --p99-inverse-pixel-error 1e-2
 
 # WCS small-N center-projection check (bench_wcs emits center_cpp_* fields when active)
-pixi run python benchmarks/bench_wcs.py --cases AIT,HPX,CEA,MER,CAR,SFL --sample-profile mixed --n-points 512 --runs 9
+pixi run -e bench-all -- python benchmarks/bench_wcs.py --cases AIT,HPX,CEA,MER,CAR,SFL --sample-profile mixed --n-points 512 --runs 9
 
 # WCS small-N: Astropy vs torchsky forward + inverse (two-arg vs stacked vs stacked+compile)
-pixi run python benchmarks/bench_wcs_small_n_paths.py --cases TAN,SIN,ARC --n-points 256 --runs 11
+pixi run -e bench-all -- python benchmarks/bench_wcs_small_n_paths.py --cases TAN,SIN,ARC --n-points 256 --runs 11
 
 # WCS spectral/time benchmark against Astropy/WCSLIB as comparator only.
 # The torchsky runtime must never fall back to Astropy/WCSLIB for these paths.
@@ -467,82 +590,67 @@ pixi run bench-wcs-spectral-temporal
 pixi run bench-wcs-tpv-inverse
 
 # HEALPix parity+throughput run on CPU (strict parity gates)
-pixi run python benchmarks/bench_healpix.py --device cpu --sample-profile mixed --nside 1024 --n-points 200000 --runs 5 --max-index-mismatches 0 --max-pix2ang-dra-deg 1e-10 --max-pix2ang-ddec-deg 1e-10
+pixi run -e sphere-bench -- python benchmarks/bench_healpix.py --device cpu --sample-profile mixed --nside 1024 --n-points 200000 --runs 5 --max-index-mismatches 0 --max-pix2ang-dra-deg 1e-10 --max-pix2ang-ddec-deg 1e-10
 
 # HEALPix CUDA run with CPU comparison gate
-pixi run python benchmarks/bench_healpix.py --device cuda --compare-cpu --sample-profile mixed --nside 1024 --n-points 200000 --runs 5 --min-cuda-speedup-vs-cpu 2.0
+pixi run -e sphere-bench -- python benchmarks/bench_healpix.py --device cuda --compare-cpu --sample-profile mixed --nside 1024 --n-points 200000 --runs 5 --min-cuda-speedup-vs-cpu 2.0
 
 # HEALPix Apple GPU (MPS) run with CPU comparison (float32 thresholds)
-pixi run python benchmarks/bench_healpix.py --device mps --compare-cpu --sample-profile uniform --nside 1024 --n-points 200000 --runs 5 --max-index-mismatches 10 --max-pix2ang-dra-deg 5e-4 --max-pix2ang-ddec-deg 5e-4
+pixi run -e sphere-bench -- python benchmarks/bench_healpix.py --device mps --compare-cpu --sample-profile uniform --nside 1024 --n-points 200000 --runs 5 --max-index-mismatches 10 --max-pix2ang-dra-deg 5e-4 --max-pix2ang-ddec-deg 5e-4
 
 # Advanced HEALPix benchmark (neighbors + interpolation)
-pixi run -e sphere-bench sphere-bench-healpix-advanced
+pixi run sphere-bench-healpix-advanced
 
 # Advanced HEALPix benchmark gate (ratio thresholds vs healpy)
-pixi run -e sphere-bench sphere-bench-healpix-advanced-gate
+pixi run sphere-bench-healpix-advanced-gate
 
 # Advanced HEALPix small-N gate (overhead-sensitive)
-pixi run -e sphere-bench sphere-bench-healpix-advanced-gate-small
+pixi run sphere-bench-healpix-advanced-gate-small
 
 # Sphere-core benchmark (multi-band sampling + geometry primitives)
-pixi run -e sphere-bench sphere-bench-core
+pixi run sphere-bench-core
 
 # Non-convex polygon benchmark (contains/intersects/query/area)
-pixi run -e sphere-bench sphere-bench-polygons
+pixi run sphere-bench-polygons
 
 # Catalog crossmatch refinement benchmark (declination vs coarse HEALPix candidate pruning)
-pixi run -e sphere-bench sphere-bench-catalog-crossmatch
+pixi run sphere-bench-catalog-crossmatch
 
 # Catalog crossmatch compatibility benchmark (torchsky vs astropy SkyCoord)
-pixi run -e sphere-bench sphere-bench-catalog-compat
+pixi run sphere-bench-catalog-compat
 
 # Spectral primitive benchmark (CPU-first scalar + spin transforms)
-pixi run -e sphere-bench sphere-bench-spectral
+pixi run sphere-bench-spectral
 
 # End-to-end table pushdown + sphere pipeline benchmark
-pixi run -e sphere-bench sphere-bench-pipeline
+pixi run sphere-bench-pipeline
 
 # End-to-end table pushdown + sphere pipeline gate (ratio thresholds)
-pixi run -e sphere-bench sphere-bench-pipeline-gate
+pixi run sphere-bench-pipeline-gate
 
 # Install optional sphere benchmark comparators from official releases
-pixi run -e sphere-bench sphere-bench-bootstrap
+pixi run sphere-bench-bootstrap
 
 # Install only core HEALPix comparator packages (lean setup)
-pixi run -e sphere-bench sphere-bench-bootstrap-core
+pixi run sphere-bench-bootstrap-core
 
 # Sync upstream release source artifacts and extract tests/data fixtures
-pixi run -e sphere-bench sphere-upstream-sync
+pixi run sphere-upstream-sync
 
-# Replay astropy-healpix upstream test-style HEALPix cases on torchsky vs healpy
-pixi run -e sphere-bench sphere-upstream-gate
-
-# Replay upstream test functions directly (including shape semantics + hypothesis inner tests)
-pixi run -e sphere-bench sphere-upstream-test-gate
-
-# Replay/gate upstream healpy spin transform cases
-pixi run -e sphere-bench sphere-upstream-spin-gate
-
-# Optional extended spin replay matrix (higher-complexity spin-2 cases)
-pixi run -e sphere-bench python benchmarks/replay_upstream_healpy_spin.py --case-set extended --runs 5
-
-# Replay/gate upstream interpolation edge cases (pole/wrap/pixel-boundary semantics)
-pixi run -e sphere-bench sphere-upstream-interp-edge-gate
-
-# Replay/gate upstream spherical-geometry polygon fixtures/data
-pixi run -e sphere-bench sphere-upstream-polygon-gate
+# Optional extended spin matrix (higher-complexity spin-2 cases)
+pixi run sphere-upstream-spin-matrix
 
 # Cross-library sphere geometry benchmark (fails if comparator comes from local/editable/VCS install)
-pixi run -e sphere-bench sphere-bench-geometry-fast
+pixi run sphere-bench-geometry-fast
 
 # Ecosystem benchmark snapshot against released packages (healpy/hpgeom/astropy-healpix/healpix/mhealpy)
-pixi run -e sphere-bench sphere-bench-geometry-ecosystem
+pixi run sphere-bench-geometry-ecosystem
 
 # Cross-library sphere geometry matrix with correctness + median ratio gates
-pixi run -e sphere-bench sphere-bench-geometry-gate
+pixi run sphere-bench-geometry-gate
 
 # Small-N matrix/profile gate to catch overhead-sensitive regressions
-pixi run -e sphere-bench sphere-bench-geometry-gate-small
+pixi run sphere-bench-geometry-gate-small
 ```
 
 ### Parallel by domain
@@ -568,21 +676,21 @@ pixi run -e bench-all python benchmarks/bench_all.py --scope fits --filter '^(sc
 
 ```bash
 # Fast regression gate (10 cases, early-stop)
-pixi run python benchmarks/bench_sentinel.py --initial-repeats 3 --full-repeats 9
+pixi run bench-fast
 
 # ML DataLoader throughput
-pixi run python benchmarks/bench_ml_loader.py --device cpu --shape 2048,2048 --n-files 50 --batch-size 4 --num-workers 4 --epochs 3 --repeats 5
+pixi run -e bench -- python benchmarks/bench_ml_loader.py --device cpu --shape 2048,2048 --n-files 50 --batch-size 4 --num-workers 4 --epochs 3 --repeats 5
 
 # Compressed image stability
-pixi run python benchmarks/bench_compressed_stability.py --rounds 4 --repeats 12
+pixi run -e bench -- python benchmarks/bench_compressed.py
 
 # Cross-library sphere geometry ecosystem snapshot
-pixi run -e sphere-bench sphere-bench-geometry-ecosystem
+pixi run sphere-bench-geometry-ecosystem
 ```
 
 ---
 
-## Release Snapshot (0.3.2)
+## Historical Release Snapshot (0.3.2)
 
 Run ID: `20260318_083620`. Run date: 2026-03-18. Profile: `user`. Platform: macOS arm64 (Apple Silicon).
 
@@ -763,9 +871,8 @@ Win rate: **88.9%** (16/18). Large-N: **100%** (13/13). Two deficits listed belo
 | `bench_fitstable_io.py` | fitstable | Table I/O across row counts, schemas, operations |
 | `bench_wcs_suite.py` | wcs | Projection sweep, forward + inverse, N = 1K &ndash; 10M |
 | `bench_sphere_suite.py` | sphere | Aggregates geometry, advanced, sparse, spectral, polygon benchmarks |
-| `bench_sentinel.py` | fits | Fast 10-case regression gate |
 | `bench_ml_loader.py` | fits | End-to-end DataLoader throughput |
-| `bench_compressed_stability.py` | fits | Randomized compressed-image stability |
+| `bench_compressed.py` | fits | Compressed-image benchmark |
 | `bench_wcs.py` | wcs | WCS throughput with parity gates |
 | `bench_wcs_spectral_temporal.py` | wcs | Comparator-only spectral FITS-WCS algorithm and temporal scale-conversion benchmark against Astropy/WCSLIB |
 | `bench_healpix.py` | sphere | HEALPix CPU/CUDA/MPS parity + throughput |
@@ -776,26 +883,19 @@ Win rate: **88.9%** (16/18). Large-N: **100%** (13/13). Two deficits listed belo
 | `bench_sphere_spectral.py` | sphere | Spherical harmonic primitives (scalar + spin) |
 | `bench_pipeline_table_sphere.py` | mixed | Table pushdown + HEALPix reduction pipeline |
 
-### Upstream replay scripts
+### Upstream-style gates
 
-| Script | Upstream | What it replays |
-|---|---|---|
-| `replay_upstream_astropy_wcs.py` | astropy.wcs | Fixture-heavy WCS projection tests |
-| `replay_upstream_fits_workflows.py` | astropy, fitsio | README/docs example workflows |
-| `replay_upstream_astropy_healpy.py` | astropy-healpix | HEALPix test-style primitives |
-| `replay_upstream_test_functions.py` | astropy-healpix | Selected upstream test functions via adapters |
-| `replay_upstream_healpy_interp_edges.py` | healpy | Interpolation edge cases (poles, wrap, boundaries) |
-| `replay_upstream_healpy_spin.py` | healpy | Spin transform parity + throughput |
-| `replay_upstream_spherical_geometry_polygons.py` | spherical-geometry | Polygon fixtures, difficult intersections, multi-NSIDE area convergence |
-| `replay_upstream_healsparse.py` | healsparse | I/O, degrade, geometry lifecycle |
-| `replay_real_data_validation.py` | astropy, fitsio, healpy | Installed FITS fixtures + public reference image |
+The current tree does not include the older `benchmarks/replays/` scripts.
+Use the committed benchmark and pytest gates above as the supported local parity
+surface. Reintroduce replay scripts only with corresponding docs, Pixi tasks,
+and `tests/test_docs_integrity.py` updates in the same PR.
 
 ## Sphere Benchmark Policy
 
 - Comparator libraries must come from official released distributions (pip/conda), not local repo clones.
 - `bench_healpix.py` and `bench_sphere_geometry.py` now print comparator package provenance and fail by default on local/editable/VCS installs.
 - `bench_sphere_matrix.py` runs `uniform/boundary/mixed` profiles and can enforce median torchsky/healpy speed-ratio floors.
-- `bench_sphere_polygons.py` benchmarks non-convex polygon contains/intersects/query/area, includes medium-size `contains` threshold rows plus upstream difficult-overlap intersection rows, optionally checks parity against released `spherical-geometry`, and now emits `torchsky_recommendation` rows describing the preferred contains/intersection backend on the measured workload.
+- `bench_sphere_polygons.py` benchmarks non-convex polygon contains/intersects/query/area, optionally checks parity against released `spherical-geometry`, and emits `torchsky_recommendation` rows describing the preferred contains/intersection backend on the measured workload.
 - `scripts/run_local_sphere_bench.py` is used by the polygon bench/replay tasks to editable-install the local package into the active `sphere-bench` env on demand, so those tasks can see the native `torchsky.cpp` extension instead of falling back to Python-only imports.
 - `bench_catalog_crossmatch.py` benchmarks crossmatch candidate generation with parity checks between the legacy declination-pruned path and the internal coarse nested-HEALPix index, reports candidate-row / pair-count reduction ratios plus the selected coarse NSIDE, and emits a `torchsky_recommendation` row summarizing which strategy should be preferred on the measured workload.
 - `bench_catalog_compat.py` benchmarks `torchsky.catalogs.crossmatch_sky` against `astropy.coordinates.SkyCoord.match_to_catalog_sky`, using both synthetic clustered catalogs and vendored real Astropy VOTable fixtures; when the native table extension is present it also runs a real-data FITS roundtrip case derived from those fixtures.
@@ -819,13 +919,9 @@ Win rate: **88.9%** (16/18). Large-N: **100%** (13/13). Two deficits listed belo
   1. official upstream tests/fixtures from the comparator package when they exist
   2. popular pipeline scenarios that actually exercise the package in production, for example DrizzlePac/HST and JWST level-3 style resampling flows
   3. torchsky-owned synthetic stress cases used to probe scaling, boundary behavior, and cross-device performance
-- `replay_upstream_spherical_geometry_polygons.py` replays polygon fixtures/data from upstream spherical-geometry test suite with correctness gates (contains + pair intersections + difficult-case nonempty parity + multi-NSIDE overlap-area/convergence checks, default ladder `128..16384`); a reduced version of this replay is also exercised from `pytest` as a regression gate.
-- `sync_upstream_sphere_sources.py` downloads release artifacts for selected packages and extracts upstream `tests/` + `data/` trees with a pinned manifest.
-- `replay_upstream_astropy_healpy.py` replays astropy-healpix test-style HEALPix cases (same NSIDE range and boundary example-style vectors) against torchsky/healpy with correctness + ratio gates.
-- `replay_upstream_test_functions.py` executes selected upstream astropy-healpix test functions directly against torchsky adapters for closer semantic parity checks.
-- `replay_upstream_healpy_interp_edges.py` replays interpolation edge cases (lon wrap, poles, edge pixels) against healpy with mismatch/error and ratio gates.
-- `replay_upstream_healpy_spin.py` replays spin transform cases (`map2alm_spin`, `alm2map_spin`) against healpy with per-case error gates and median throughput ratio thresholds.
-- Spin replay applies a validated profile via `setdefault` in `replay_upstream_healpy_spin.py` when unset: `TORCHSKY_RING_FOURIER_CPP=1`, spin recurrence CPP off, `TORCHSKY_SPIN_RING_AUTO_MIN_BYTES=32 MiB`, and related `TORCHSKY_SPIN_*_RING_TORCH=auto` flags. The `torchsky.sphere.spectral` module defaults differ (for example `TORCHSKY_SPIN_RING_AUTO_MIN_BYTES` defaults to `0` until the replay or benchmarks set it); see **Default `TORCHSKY_*` knobs (WCS / sphere)** below.
+- `sync_upstream_sphere_sources.py` downloads release artifacts for selected packages and extracts upstream `tests/` + `data/` trees with a pinned manifest. The legacy replay runners that consumed those extracted fixtures are not present in this tree; use the supported benchmark gates listed above unless a future PR restores the replay scripts and docs together.
+- `bench_spin_matrix.py` exercises spin transform cases (`map2alm_spin`, `alm2map_spin`) against the committed benchmark baseline with regression thresholds.
+- Spin matrix runs can use validated `TORCHSKY_*` profiles for local experiments; see **Default `TORCHSKY_*` knobs (WCS / sphere)** below.
 - Override only for local development experiments with:
   - `bench_healpix.py --allow-nonrelease-healpy`
   - `bench_sphere_geometry.py --allow-nonrelease-distributions`
@@ -851,14 +947,15 @@ These are the **code defaults** when the environment variable is unset (see `tor
 | `TORCHSKY_SCALAR_ALM2MAP_RECURRENCE_CPP` | `1` | Scalar `alm2map` recurrence backend. |
 | `TORCHSKY_SPIN_RING_AUTO_MIN_BYTES` | `0` | Minimum map size (bytes) before auto-selecting some ring fast paths; replays often set `32 MiB`. |
 
-Phase 0 benchmark procedure for WCS + sphere: [`benchmarks/PHASE0_WCS_SPHERE.md`](../benchmarks/PHASE0_WCS_SPHERE.md). Pixi: `pixi run wcs-sphere-phase0` (benches only) or `pixi run wcs-sphere-acceptance` (benches + full WCS/sphere pytest + spin replay report).
+Phase 0 benchmark procedure for WCS + sphere: [`benchmarks/PHASE0_WCS_SPHERE.md`](../benchmarks/PHASE0_WCS_SPHERE.md). Pixi: `pixi run wcs-sphere-phase0` (benches only) or `pixi run wcs-sphere-acceptance` (benches + full WCS/sphere pytest + spin matrix report).
 
 ## Optimization History
 
-For a concise log of attempted optimizations and outcomes (including dead ends), see:
-- `docs/performance_attempts.md`
+Older benchmark snapshots and optimization history now live in
+[archive/benchmark-history.md](archive/benchmark-history.md). Keep current
+methodology, commands, and supported benchmark tasks in this file.
 
-## 0.3.1 Release Snapshot
+## Historical Release Snapshot (0.3.1)
 
 Run metadata:
 - Date: `2026-03-06`
@@ -892,12 +989,12 @@ Run metadata:
 - **WCS (Small-N)**: Some forward small-N rows still lag vs `pyast` (legacy), especially away from the center-equator projections. `bench_wcs.py` now tracks the CPU center-helper crossover explicitly through `center_cpp_*` fields for `AIT/CAR/CEA/HPX/MER/SFL`. The CPU fused path (`TORCHSKY_WCS_FUSED=1`) includes **ARC** alongside TAN/SIN and the other supported codes; re-profile after native extension rebuilds. For torchsky-vs-Astropy timing on **two-arg vs stacked `(N,2)` vs `compile()`** for both **pixel→world and world→pixel**, use `bench_wcs_small_n_paths.py`; pytest gates stacked and compiled-stacked parity (forward and inverse) in `tests/test_wcs_parity.py`.
 - **ZPN/AIT Projections**: Slight visible deficits in intermediate size tiers.
 
-## ML Loader Snapshot (0.3.0)
+## Historical ML Loader Snapshot (0.3.0)
 
 Command used:
 
 ```bash
-pixi run python benchmarks/bench_ml_loader.py --device cpu --shape 2048,2048 --n-files 50 --batch-size 4 --num-workers 4 --epochs 3 --repeats 5 --warm-cache
+pixi run -e bench -- python benchmarks/bench_ml_loader.py --device cpu --shape 2048,2048 --n-files 50 --batch-size 4 --num-workers 4 --epochs 3 --repeats 5 --warm-cache
 ```
 
 Results (Median of 5 runs):

@@ -20,7 +20,7 @@ Not a CI gate by default.
 
 Example::
 
-    pixi run python benchmarks/bench_wcs_small_n_paths.py --cases TAN,SIN --n-points 256 --runs 11
+    pixi run -e bench-all -- python benchmarks/bench_wcs_small_n_paths.py --cases TAN,SIN --n-points 256 --runs 11
 """
 
 from __future__ import annotations

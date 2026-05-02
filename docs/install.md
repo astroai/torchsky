@@ -12,7 +12,7 @@ pip install torchsky
 
 Pre-built wheels are available for Linux (x86_64, aarch64) and macOS (x86_64, arm64). The wheels bundle [CFITSIO](https://heasarc.gsfc.nasa.gov/fitsio/) — no system library needed.
 
-Requires Python 3.10+ and [PyTorch](https://pytorch.org/) 2.0+.
+Requires Python **>=3.12,<3.15** and [PyTorch](https://pytorch.org/) 2.0+.
 
 To build `torchsky` from source, you'll need a C++ compiler and CMake.
 
@@ -20,7 +20,7 @@ To build `torchsky` from source, you'll need a C++ compiler and CMake.
 
 - Python **3.12+** and **below 3.15** (matches `requires-python` in `pyproject.toml`)
 - C++17 compatible compiler (GCC, Clang, MSVC)
-- CMake 3.15+ (as in the top-level `CMakeLists.txt`; use a recent release when building against current PyTorch/CUDA)
+- CMake 3.15+ for the native project, with 3.21+ recommended for the packaged build environment and current PyTorch/CUDA toolchains
 - Ninja (recommended)
 - **Python build backend** (see below): `scikit-build-core`, `nanobind`, plus runtime deps `torch` and `numpy` (versions in `pyproject.toml`)
 

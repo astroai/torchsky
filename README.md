@@ -36,6 +36,10 @@ delegating to torchsky-native primitives. Field/INR modelling under
 `torchsky.map.field` and the browser visualization server under `torchsky.viz`
 are active but experimental.
 
+Additional public namespaces such as `torchsky.coords`, `torchsky.geom`,
+`torchsky.catalogs`, `torchsky.spectral`, and `torchsky.encoders` are documented
+in [docs/api.md](docs/api.md).
+
 ## Install
 
 For users installing a released wheel:
@@ -180,7 +184,7 @@ src/torchsky/sphere/      HEALPix, spherical geometry, sparse maps, SHT
 src/torchsky/map/         Image-plane, HEALPix, field, and product mapmaking
 src/torchsky/viz/         Optional browser visualization server
 tests/                    Unit, integration, parity, and performance smoke tests
-benchmarks/               Benchmark and upstream replay runners
+benchmarks/               Benchmark, parity, and upstream-derived validation runners
 examples/                 Runnable usage examples
 docs/                     API, install, benchmark, compatibility, roadmap docs
 extern/                   Vendored native dependency bootstrap
@@ -188,15 +192,29 @@ extern/                   Vendored native dependency bootstrap
 
 ## Documentation
 
-- [API reference](docs/api.md)
+- [Documentation index](docs/README.md)
+- [Getting started](docs/getting-started.md)
+- [API guide](docs/api.md)
 - [Installation and source builds](docs/install.md)
 - [Examples](docs/examples.md)
-- [Ecosystem compatibility](docs/compatibility.md)
+- [I/O](docs/io.md)
+- [Tables](docs/table.md)
+- [WCS](docs/wcs.md)
+- [Coordinates](docs/coords.md)
+- [Geometry](docs/geom.md)
 - [Sphere and HEALPix API](docs/sphere.md)
+- [Map](docs/map.md)
+- [Catalogs](docs/catalogs.md)
+- [Spectral data](docs/spectral.md)
+- [ML and runtime](docs/ml.md)
+- [Encoders](docs/encoders.md)
+- [Visualization](docs/viz.md)
+- [CLI](docs/cli.md)
+- [Ecosystem compatibility](docs/compatibility.md)
 - [Benchmarks](docs/benchmarks.md)
-- [Roadmap](docs/ROADMAP.md)
-- [Code-grounded roadmap status](docs/roadmap_status.md)
+- [Roadmap status](docs/roadmap/status.md)
 - [Contributing guide](docs/contributing.md)
+- [Release checklist](docs/release.md)
 - [Agent and maintainer operating guide](AGENTS.md)
 - [Changelog](docs/changelog.md)
 

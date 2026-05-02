@@ -1,5 +1,8 @@
 # World-Model Whitepaper Plan
 
+> Roadmap note: this is research/planning context, not a public API or workflow
+> contract. For current shipped surfaces, start with [api.md](../api.md).
+
 This document replaces the abandoned root-level `continuous_latent_field_world_model_whitepaper_revised*.md` drafts.
 
 Its purpose is not to be the white paper itself. It is the plan for a full white paper that is aligned with what `torchsky` actually is, what it already implements, and what should move into a separate research layer rather than into the core library.
@@ -158,7 +161,7 @@ The white paper must describe the proposal in a way that is consistent with both
 
 The new white paper should extend existing docs rather than compete with them.
 
-### 7.1 `docs/ROADMAP.md`
+### 7.1 `docs/roadmap/status.md`
 
 Keep:
 
@@ -174,7 +177,7 @@ Extend with:
 - a research-layer split outside `torchsky`,
 - explicit falsification criteria.
 
-### 7.2 `docs/map_operator_progress.md`
+### 7.2 `docs/map.md`
 
 Treat this as the reality anchor for what is implemented versus scaffolded.
 
@@ -185,7 +188,7 @@ The white paper should inherit its honesty:
 - incomplete learned nuisance models,
 - incomplete identifiability framework.
 
-### 7.3 `docs/AUDIT_MAPPING_INR.md`
+### 7.3 `docs/map.md`
 
 Use this as the methodological discipline for evaluation:
 

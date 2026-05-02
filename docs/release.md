@@ -24,20 +24,21 @@ All tests must pass.
 
 ## 4. Correctness gates
 
-Run all upstream parity gates:
+Run the supported local parity and benchmark gates:
 
 ```bash
-pixi run wcs-upstream-gate
-pixi run fits-upstream-gate
-pixi run healsparse-upstream-gate
-pixi run sphere-upstream-gate
-pixi run sphere-upstream-spin-gate
-pixi run sphere-upstream-interp-edge-gate
-pixi run sphere-upstream-polygon-gate
-pixi run real-data-gate
+pixi run ci-local
+pixi run bench-wcs
+pixi run bench-wcs-tpv-inverse
+pixi run sphere-bench-geometry-gate
+pixi run sphere-bench-healpix-advanced-gate
+pixi run sphere-upstream-spin-matrix-gate
+pixi run sphere-bench-geom-exact-contains-gate
+pixi run bench-map-acceptance-smoke
 ```
 
-All gates must pass.
+All gates must pass. If upstream replay scripts are reintroduced, add their
+tasks and documentation in the same change before making them release blockers.
 
 ## 5. Benchmark evidence
 
@@ -50,7 +51,7 @@ pixi run bench-all
 Run the ML loader benchmark:
 
 ```bash
-pixi run python benchmarks/bench_ml_loader.py \
+pixi run -e bench -- python benchmarks/bench_ml_loader.py \
   --device cpu --shape 2048,2048 --n-files 50 \
   --batch-size 4 --num-workers 4 --epochs 3 --repeats 5 --warm-cache
 ```

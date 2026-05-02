@@ -19,13 +19,13 @@ nanobind = ">=2.10.2"
 scikit-build-core = ">=0.11.6"
 cmake = ">=3.21"
 ninja = ">=1.10"
-python = ">=3.12,<3.15"
+python = ">=3.12,<3.14"
 pytorch = ">=2.0"
 cfitsio = ">=4"
 
 # Host dependencies - libraries that will be linked into the package
 [package.host-dependencies]
-python = ">=3.12,<3.15"
+python = ">=3.12,<3.14"
 pytorch = ">=2.0"
 cfitsio = ">=4"
 nanobind = ">=2.10.2"
@@ -82,9 +82,8 @@ typecheck = "pixi run -e test pyright"
 verify = "pixi run -e default -- python scripts/verify_setup.py"
 setup-hooks = "python scripts/install_hooks.py"
 pre-commit = "pre-commit run --all-files"
-release-manual = "twine upload release_0.2.1/*"
+release-manual = "twine upload dist/*"
 
-# Core benchmarks (essential)
 # Core benchmarks (essential)
 bench = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --scope all"
 bench-fits = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --fits-only"
@@ -132,9 +131,9 @@ bootstrap-map-compat-casutools = "pixi run -e map-compat python scripts/bootstra
 bench-wcs-legacy = "pixi run -e bench-legacy python benchmarks/bench_all.py --profile user --wcs-only --legacy-wcs"
 # Phase 0 WCS + sphere smoke baselines (see benchmarks/PHASE0_WCS_SPHERE.md); run after `pip install -e .` in bench-all.
 wcs-sphere-phase0 = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --wcs-only --quick --run-id phase0_wcs --output-dir benchmarks_results && pixi run -e bench-all python benchmarks/bench_all.py --profile user --sphere-only --quick --run-id phase0_sphere --output-dir benchmarks_results"
-# Plan §4: Phase 0 quick benches + full WCS/sphere pytest + spin replay (gates off for local acceptance; CI can tighten).
-wcs-sphere-acceptance = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --wcs-only --quick --run-id acceptance_wcs --output-dir benchmarks_results && pixi run -e bench-all python benchmarks/bench_all.py --profile user --sphere-only --quick --run-id acceptance_sphere --output-dir benchmarks_results && pixi run -e bench-all pytest tests/test_wcs_*.py tests/test_sphere_*.py -q --tb=line && pixi run -e bench-all python benchmarks/replays/replay_upstream_healpy_spin.py --runs 2 --disable-gates --json-out benchmarks_results/acceptance_spin_replay.json"
-# Comparator version matrix for open-source tools (see docs/benchmark_comparators.md); run per Pixi env you use for benches.
+# Plan §4: Phase 0 quick benches + full WCS/sphere pytest + spin matrix smoke.
+wcs-sphere-acceptance = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --wcs-only --quick --run-id acceptance_wcs --output-dir benchmarks_results && pixi run -e bench-all python benchmarks/bench_all.py --profile user --sphere-only --quick --run-id acceptance_sphere --output-dir benchmarks_results && pixi run -e bench-all pytest tests/test_wcs_*.py tests/test_sphere_*.py -q --tb=line && pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set default --runs 2 --json-out benchmarks_results/acceptance_spin_matrix.json"
+# Comparator version matrix for open-source tools (see docs/benchmarks.md); run per Pixi env you use for benches.
 bench-comparator-versions = "pixi run -e bench-all python scripts/print_benchmark_comparator_versions.py --json-out benchmarks_results/VERSIONS_comparators_bench-all.json"
 bench-comparator-versions-sphere = "pixi run -e sphere-bench python scripts/print_benchmark_comparator_versions.py --json-out benchmarks_results/VERSIONS_comparators_sphere-bench.json"
 bench-comparator-versions-legacy = "pixi run -e bench-legacy python scripts/print_benchmark_comparator_versions.py --json-out benchmarks_results/VERSIONS_comparators_bench-legacy.json"
@@ -170,20 +169,9 @@ sphere-bench-bootstrap = "pixi run -e sphere-bench python scripts/bootstrap_sphe
 sphere-bench-bootstrap-core = "pixi run -e sphere-bench python scripts/bootstrap_sphere_bench.py --installer pip --include astropy-healpix,hpgeom,healpix,mhealpy"
 sphere-bench-bootstrap-harmonics = "pixi run -e sphere-bench python scripts/bootstrap_sphere_bench.py --installer pip --with-harmonics"
 sphere-upstream-sync = "pixi run -e sphere-bench python scripts/sync_upstream_sphere_sources.py --prefer-sdist --include healpy,astropy-healpix,healpix,mhealpy,spherical-geometry --output-dir benchmark_results/upstream_fixtures"
-sphere-upstream-replay = "pixi run -e sphere-bench python benchmarks/replays/replay_upstream_astropy_healpy.py --n-points 200000 --runs 5 --json-out benchmark_results/upstream_replay_astropy_healpy.json"
-sphere-upstream-gate = "pixi run -e sphere-bench python benchmarks/replays/replay_upstream_astropy_healpy.py --n-points 200000 --runs 5 --max-index-mismatches 0 --max-pix2ang-dra-deg 1e-10 --max-pix2ang-ddec-deg 1e-10 --min-ratio-vs-healpy ang2pix_ring=1.8,ang2pix_nested=1.35,pix2ang_ring=1.1,pix2ang_nested=1.0,ring2nest=1.05,nest2ring=1.0 --json-out benchmark_results/upstream_replay_astropy_healpy.json"
-sphere-upstream-test-replay = "pixi run -e sphere-bench python benchmarks/replays/replay_upstream_test_functions.py --json-out benchmark_results/upstream_replay_test_functions.json"
-sphere-upstream-test-gate = "pixi run -e sphere-bench python benchmarks/replays/replay_upstream_test_functions.py --json-out benchmark_results/upstream_replay_test_functions.json"
-sphere-upstream-spin-replay = "pixi run -e sphere-bench python benchmarks/replays/replay_upstream_healpy_spin.py --runs 5 --json-out benchmark_results/upstream_replay_healpy_spin.json"
-sphere-upstream-spin-gate = "pixi run -e sphere-bench python benchmarks/replays/replay_upstream_healpy_spin.py --runs 5 --max-map2alm-rel-error 1e-9 --max-alm2map-rel-error 1e-9 --min-ratio-vs-healpy map2alm_spin=0.20,alm2map_spin=0.15 --json-out benchmark_results/upstream_replay_healpy_spin.json"
-sphere-upstream-spin-replay-extended = "pixi run -e sphere-bench python benchmarks/replays/replay_upstream_healpy_spin.py --case-set extended --runs 5 --disable-gates --json-out benchmark_results/upstream_replay_healpy_spin_extended.json"
-sphere-upstream-spin-gate-extended = "pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set extended --runs 5 --seed 123 --json-out benchmark_results/upstream_replay_healpy_spin_matrix.json --raw-json-out benchmark_results/upstream_replay_healpy_spin_extended_raw.json --baseline-json benchmarks/baselines/spin_matrix_extended_baseline.json --max-regression-frac 0.20"
+sphere-upstream-spin-matrix-gate-extended = "pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set extended --runs 5 --seed 123 --json-out benchmark_results/upstream_replay_healpy_spin_matrix.json --raw-json-out benchmark_results/upstream_replay_healpy_spin_extended_raw.json --baseline-json benchmarks/baselines/spin_matrix_extended_baseline.json --max-regression-frac 0.20"
 sphere-upstream-spin-matrix = "pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set extended --runs 5 --json-out benchmark_results/upstream_replay_healpy_spin_matrix.json --raw-json-out benchmark_results/upstream_replay_healpy_spin_extended_raw.json"
 sphere-upstream-spin-matrix-gate = "pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set extended --runs 5 --seed 123 --json-out benchmark_results/upstream_replay_healpy_spin_matrix.json --raw-json-out benchmark_results/upstream_replay_healpy_spin_extended_raw.json --baseline-json benchmarks/baselines/spin_matrix_extended_baseline.json --max-regression-frac 0.20"
-sphere-upstream-interp-edge-replay = "pixi run -e sphere-bench python benchmarks/replays/replay_upstream_healpy_interp_edges.py --runs 7 --json-out benchmark_results/upstream_replay_healpy_interp_edges.json"
-sphere-upstream-interp-edge-gate = "pixi run -e sphere-bench python benchmarks/replays/replay_upstream_healpy_interp_edges.py --runs 7 --max-weight-mismatches 0 --max-val-max-abs 1e-9 --min-ratio-vs-healpy interp_weights_edge=0.8,interp_val_edge=0.7,interp_weights_pix_edge=1.0 --json-out benchmark_results/upstream_replay_healpy_interp_edges.json"
-sphere-upstream-polygon-replay = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/replays/replay_upstream_spherical_geometry_polygons.py --n-points 20000 --runs 3 --intersection-nside 512 --difficult-area-nsides 128,256,512,1024,2048,4096,8192,16384 --json-out benchmark_results/upstream_replay_spherical_geometry_polygons.json"
-sphere-upstream-polygon-gate = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/replays/replay_upstream_spherical_geometry_polygons.py --n-points 20000 --runs 3 --intersection-nside 512 --difficult-area-nsides 128,256,512,1024,2048,4096,8192,16384 --max-contains-mismatches-nonboundary 0 --max-pair-intersection-mismatches 0 --max-difficult-nonempty-mismatches 0 --max-area-rel-error 1e-10 --max-difficult-area-rel-error-final 0.12 --max-difficult-area-convergence-rel 0.10 --json-out benchmark_results/upstream_replay_spherical_geometry_polygons.json"
 sphere-bench-geometry = "pixi run -e sphere-bench python benchmarks/bench_sphere_geometry.py --nside 1024 --n-points 200000 --runs 5 --device auto --sample-profile mixed --json-out benchmark_results/sphere_geometry.json --csv-out benchmark_results/sphere_geometry.csv"
 sphere-bench-geometry-ecosystem = "pixi run -e sphere-bench python benchmarks/bench_sphere_geometry.py --device cpu --sample-profile mixed --nside 1024 --n-points 200000 --runs 5 --libraries torchsky,healpy,hpgeom,astropy-healpix,healpix,mhealpy --json-out benchmark_results/sphere_geometry_ecosystem.json --csv-out benchmark_results/sphere_geometry_ecosystem.csv"
 sphere-bench-geometry-fast = "pixi run -e sphere-bench python benchmarks/bench_sphere_geometry.py --nside 256 --n-points 50000 --runs 3 --device auto --sample-profile mixed"
@@ -209,7 +197,7 @@ sphere-bench-pipeline = "pixi run -e sphere-bench python benchmarks/bench_pipeli
 sphere-bench-pipeline-gate = "pixi run -e sphere-bench python benchmarks/bench_pipeline_table_sphere.py --n-rows 1000000 --runs 3 --nside 256 --min-read-ratio-filtered-vs-torch 0.2 --min-pipeline-ratio-filtered-vs-no-pushdown 0.7 --min-pipeline-ratio-torch-vs-no-pushdown 0.7 --json-out benchmark_results/pipeline_table_sphere.json"
 
 [feature.prod.dependencies]
-python = ">=3.12,<3.15"
+python = ">=3.12,<3.14"
 
 # Test feature with comparison libraries
 [feature.test.dependencies]
