@@ -2670,6 +2670,22 @@ def _column_tform_map(header_map: dict[str, Any]) -> dict[str, str]:
     out: dict[str, str] = {}
 
     name_by_idx = _column_name_index_map(header_map)
+
+    # ⚡ Bolt: Fast-path O(1) dictionary lookups using TFIELDS to avoid O(N) iteration
+    try:
+        tfields = int(header_map.get("TFIELDS", 0))
+    except (ValueError, TypeError):
+        tfields = 0
+
+    if tfields > 0:
+        for i in range(1, tfields + 1):
+            name = name_by_idx.get(i)
+            if name is not None:
+                tform = header_map.get(f"TFORM{i}")
+                if tform is not None:
+                    out[name] = str(tform)
+        return out
+
     tform_by_idx: dict[int, str] = {}
     for key, value in header_map.items():
         key_u = str(key).upper()
@@ -2679,7 +2695,8 @@ def _column_tform_map(header_map: dict[str, Any]) -> dict[str, str]:
                 tform_by_idx[int(suffix)] = str(value)
 
     for idx, name in name_by_idx.items():
-        out[name] = tform_by_idx.get(idx, "")
+        if idx in tform_by_idx:
+            out[name] = tform_by_idx[idx]
     return out
 
 

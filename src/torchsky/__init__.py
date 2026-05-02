@@ -356,6 +356,26 @@ def _get_vla_columns(header_data: Optional[Dict[str, Any]]) -> set:
     vla_columns = set()
     if not header_data:
         return vla_columns
+
+    try:
+        tfields = int(header_data.get("TFIELDS", 0))
+    except (TypeError, ValueError):
+        tfields = 0
+
+    if tfields > 0:
+        for i in range(1, tfields + 1):
+            value = header_data.get(f"TFORM{i}")
+            if not isinstance(value, str) or not value:
+                continue
+            code = value.strip().upper()
+            if code.startswith("P") or code.startswith("Q"):
+                name = header_data.get(f"TTYPE{i}")
+                if isinstance(name, str) and name:
+                    vla_columns.add(name)
+                else:
+                    vla_columns.add(f"COL{i}")
+        return vla_columns
+
     for key, value in header_data.items():
         if not isinstance(key, str) or not key.startswith("TFORM"):
             continue
@@ -377,6 +397,44 @@ def _get_scaled_columns(header_data: Optional[Dict[str, Any]]) -> set:
     scaled_columns = set()
     if not header_data:
         return scaled_columns
+
+    # ⚡ Bolt: Fast-path O(1) dictionary lookups using TFIELDS to avoid O(N) iteration
+    try:
+        tfields = int(header_data.get("TFIELDS", 0))
+    except (TypeError, ValueError):
+        tfields = 0
+
+    if tfields > 0:
+        for i in range(1, tfields + 1):
+            is_scaled = False
+
+            tscal = header_data.get(f"TSCAL{i}")
+            if tscal is not None:
+                try:
+                    val = float(tscal)
+                    if val != 1.0:
+                        is_scaled = True
+                except (TypeError, ValueError):
+                    is_scaled = True
+
+            if not is_scaled:
+                tzero = header_data.get(f"TZERO{i}")
+                if tzero is not None:
+                    try:
+                        val = float(tzero)
+                        if val != 0.0:
+                            is_scaled = True
+                    except (TypeError, ValueError):
+                        is_scaled = True
+
+            if is_scaled:
+                name = header_data.get(f"TTYPE{i}")
+                if isinstance(name, str) and name:
+                    scaled_columns.add(name)
+                else:
+                    scaled_columns.add(f"COL{i}")
+        return scaled_columns
+
     for key, value in header_data.items():
         if not isinstance(key, str):
             continue
