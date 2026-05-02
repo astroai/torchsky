@@ -3,6 +3,7 @@ from torch import Tensor
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 import math
 import os
+import builtins
 import numpy as np
 
 try:
@@ -2845,7 +2846,7 @@ class WCS:
 
     def slice(
         self,
-        view: slice | int | tuple[slice | int | type(Ellipsis), ...],
+        view: builtins.slice | int | tuple[builtins.slice | int | type(Ellipsis), ...],
         *,
         numpy_order: bool = True,
     ) -> "WCS":
@@ -3021,10 +3022,10 @@ class WCS:
 
     def _normalize_wcs_slice(
         self,
-        view: slice | int | tuple[slice | int | type(Ellipsis), ...],
+        view: builtins.slice | int | tuple[builtins.slice | int | type(Ellipsis), ...],
         *,
         numpy_order: bool,
-    ) -> tuple[slice | int, ...]:
+    ) -> tuple[builtins.slice | int, ...]:
         if isinstance(view, (slice, int)) and not isinstance(view, bool):
             items: tuple[slice | int | type(Ellipsis), ...] = (view,)
         else:
