@@ -412,6 +412,16 @@ class DataCube:
         )
 
 
+@dataclass
+class Spectrum1DColumns:
+    """Configuration for column names when reading 1D spectra."""
+
+    flux: str = "FLUX"
+    wave: str = "WAVELENGTH"
+    ivar: Optional[str] = "IVAR"
+    mask: Optional[str] = "MASK"
+
+
 class SpectralReader:
     """Reader for spectral data from FITS files."""
 
@@ -419,30 +429,29 @@ class SpectralReader:
     def read_spectrum_1d(
         filepath: str,
         hdu: int = 0,
-        flux_col: str = "FLUX",
-        wave_col: str = "WAVELENGTH",
-        ivar_col: Optional[str] = "IVAR",
-        mask_col: Optional[str] = "MASK",
+        columns: Optional[Spectrum1DColumns] = None,
     ) -> "Spectrum1D":
         """Read 1D spectrum from FITS table."""
         import torchsky
+
+        cols = columns or Spectrum1DColumns()
 
         with torchsky.open(filepath) as hdul:
             table_hdu = hdul[hdu]
 
             # Read required columns
-            flux = table_hdu.data[flux_col]
-            wavelength = table_hdu.data[wave_col]
+            flux = table_hdu.data[cols.flux]
+            wavelength = table_hdu.data[cols.wave]
 
             # Read optional columns
             ivar = (
-                table_hdu.data[ivar_col]
-                if ivar_col and ivar_col in table_hdu.data.columns
+                table_hdu.data[cols.ivar]
+                if cols.ivar and cols.ivar in table_hdu.data.columns
                 else None
             )
             mask = (
-                table_hdu.data[mask_col]
-                if mask_col and mask_col in table_hdu.data.columns
+                table_hdu.data[cols.mask]
+                if cols.mask and cols.mask in table_hdu.data.columns
                 else None
             )
 
