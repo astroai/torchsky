@@ -307,6 +307,25 @@ class TestMainAPI:
                 if os.path.exists(f):
                     os.unlink(f)
 
+
+    def test_get_batch_info_edge_cases(self):
+        """Test get_batch_info with empty lists and non-existent files."""
+        # Empty list
+        info_empty = torchsky.get_batch_info([])
+        assert info_empty["num_files"] == 0
+        assert info_empty["valid_files"] == 0
+
+        # Mixed valid and non-existent files
+        try:
+            filepath, _ = self.create_test_fits()
+            files = [filepath, "nonexistent1.fits", "nonexistent2.fits"]
+            info_mixed = torchsky.get_batch_info(files)
+            assert info_mixed["num_files"] == 3
+            assert info_mixed["valid_files"] == 1
+        finally:
+            if 'filepath' in locals() and os.path.exists(filepath):
+                os.unlink(filepath)
+
     def test_cache_functions(self):
         """Test cache management functions."""
         # Test cache stats
