@@ -4,7 +4,10 @@ from typing import Union
 
 import torch
 
-import torchsky.cpp as cpp
+try:
+    import torchsky.cpp as cpp
+except Exception:
+    cpp = None
 
 _HAS_READ_HDUS_BATCH = hasattr(cpp, "read_hdus_batch")
 _HAS_READ_FULL_RAW_WITH_SCALE = hasattr(cpp, "read_full_raw_with_scale")
