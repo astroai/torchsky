@@ -19,3 +19,16 @@ def test_torch_table_path_heuristic_error_handling():
         "torchsky.get_header", side_effect=Exception("Failed to get header")
     ):
         assert _can_use_torch_table_path_for_full_read("dummy.fits", 1, None) is False
+
+def test_mmap_row_path_heuristic_tf_count_zero():
+    """Verify that _can_use_mmap_row_path_for_full_read returns False when TFIELDS <= 0."""
+    with unittest.mock.patch("torchsky.get_header", return_value={"TFIELDS": 0}):
+        assert _can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
+
+    with unittest.mock.patch("torchsky.get_header", return_value={"TFIELDS": -1}):
+        assert _can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
+
+def test_mmap_row_path_heuristic_invalid_tf_count():
+    """Verify that _can_use_mmap_row_path_for_full_read returns False when TFIELDS is invalid."""
+    with unittest.mock.patch("torchsky.get_header", return_value={"TFIELDS": "invalid"}):
+        assert _can_use_mmap_row_path_for_full_read("dummy.fits", 1, None) is False
