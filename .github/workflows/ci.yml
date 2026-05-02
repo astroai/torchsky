@@ -74,6 +74,9 @@ jobs:
       - name: Install test environment
         run: pixi install --frozen -e test
 
+      - name: Build editable torchsky (C++ extension)
+        run: pixi run -e test -- pip install -e . --no-build-isolation
+
       - name: Run full test suite
         run: pixi run -e test -- pytest -n auto -v --tb=short
 
@@ -180,6 +183,9 @@ jobs:
 
       - name: Install test environment
         run: pixi install --frozen -e test
+
+      - name: Build editable torchsky (C++ extension)
+        run: pixi run -e test -- pip install -e . --no-build-isolation
 
       - name: Run performance benchmarks
         run: pixi run -e test -- python benchmarks/bench_cpp_backend.py
