@@ -994,9 +994,6 @@ void bind_wcs(nb::module_& m) {
     m.def("read_fits_table_from_handle", [](torchsky::FITSFile& file, int hdu_num) -> nb::object {
         // try {
             nb::gil_scoped_release release;
-            // Assuming TableReader has a constructor taking fitsfile*
-            // If not, we need to add it.
-            // For now, let's assume it exists or we will fix it in table.cpp
             torchsky::TableReader reader(file.get_fptr(), hdu_num);
             auto result_map = reader.read_columns({}, 1, -1);
             nb::gil_scoped_acquire acquire;
