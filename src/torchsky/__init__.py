@@ -7,7 +7,6 @@ optimized for PyTorch tensors and pytorch-frame TensorFrames.
 
 import importlib
 import logging as _stdlib_logging
-from dataclasses import dataclass
 from typing import (
     Any,
     Dict,
@@ -21,6 +20,7 @@ from typing import (
     Literal,
 )
 from collections import OrderedDict
+from dataclasses import dataclass
 
 import numpy as np
 import torch
