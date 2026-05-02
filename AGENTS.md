@@ -42,7 +42,7 @@ Do **not** guess `python3` or bare `python` on PATH for project work.
 - **Feature-gated environments** (see `pixi.toml`):
   - **`test`** — `pytest` suite: **astropy**, **fitsio** (Python), **pyarrow**, **polars**, **pandas**, **scipy** (via solve), **requests**, etc., for fixtures, FITS generation, Arrow scans, and interop tests.
   - **`bench` / `bench-all`** — throughput comparators, plotting, **pandas**, **reproject**, optional map tools.
-  - **`sphere-bench`** — HEALPix / sparse **ecosystem** comparators (**healpy**, **hpgeom**, **healsparse**, **astropy-healpix**, **spherical-geometry**, …) and replay scripts.
+  - **`sphere-bench`** — HEALPix / sparse **ecosystem** comparators (**healpy**, **hpgeom**, **healsparse**, **astropy-healpix**, **spherical-geometry**, …) and upstream-derived benchmark gates.
   - **`map-compat`**, **`bench-legacy`** — external toolchains and legacy Python stacks as needed.
 - **`pixi run test`** runs **`pytest -n auto`** in the **`test`** environment.
 - **`pixi run preflight-push`** — **ruff** + **`python -m compileall`** using the **default** env interpreter (`pixi run -e default -- python …`), not an arbitrary system `python`.
@@ -54,7 +54,7 @@ Do **not** guess `python3` or bare `python` on PATH for project work.
 Use **astropy**, **Python fitsio**, **healpy**, **hpgeom**, **healsparse**, **astropy-healpix**, **spherical_geometry**, **pandas**, etc., only in:
 
 - **`tests/`** (fixtures, parity, regression),
-- **`benchmarks/`** and **`benchmarks/replays/`**,
+- **`benchmarks/`**,
 - **`scripts/`** that bootstrap or print comparator versions,
 - **CI workflows** that install extras for those jobs,
 - **docs** that describe compatibility.
@@ -152,7 +152,7 @@ Use packaged fixtures, upstream test data, or representative real astronomy data
 - catch edge cases synthetic generators miss
 - validate interoperability claims
 
-Examples already present in this repo include upstream replay scripts, parity suites, and FITS-based integration tests. Extend those patterns rather than inventing one-off checks.
+Examples already present in this repo include upstream-derived benchmark gates, parity suites, and FITS-based integration tests. Extend those patterns rather than inventing one-off checks.
 
 **Perf smoke:** `tests/test_perf_gate.py` enforces loose wall-time ceilings on a few hot paths (HEALPix bulk ops, FITS stub read, interp weights). Override with `TORCHSKY_PERF_GATE_*` env vars documented in that file if a CI runner is unusually slow.
 
@@ -188,7 +188,7 @@ Relevant benchmark surfaces live in:
 
 - `benchmarks/`
 - `docs/benchmarks.md`
-- upstream replay scripts under `benchmarks/replays/`
+- upstream-derived benchmark and parity gates documented in `docs/benchmarks.md`
 
 For sphere and catalog work specifically:
 

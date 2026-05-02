@@ -5,14 +5,14 @@ All notable changes to torchsky will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - 2026-03-18
+## [0.4.0.dev0] - Unreleased
 
 ### Added
 - **py.typed**: PEP 561 type-checker marker for downstream type inference.
 - **Incorporated legacy `torchfits` v0.3.2 changes into `torchsky`**:
   - **Secure where parser** (`_where.py`): Replaced `numexpr.evaluate`/`eval()` fallback in `TableHDU.filter` and table filtering with a secure SQL-like expression parser; `&`/`|`/`~` shimmed to `AND`/`OR`/`NOT`.
   - **HealSparse/real-data validation tests**: `test_healsparse_upstream.py`, `test_real_data_validation.py`, `test_security_fix.py`, `test_header_parser.py`.
-  - **Benchmark replay**: `benchmarks/replays/replay_real_data_validation.py` for local and public FITS parity validation.
+  - **Benchmark validation**: local and public FITS parity validation coverage through tests and maintained benchmark gates.
   - **Additional tests**: `test_fitsio_upstream_smoke.py`, `test_logging.py` from the legacy `torchfits` codebase.
 
 ### Fixed
