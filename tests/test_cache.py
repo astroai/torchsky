@@ -765,6 +765,7 @@ class TestCacheManagerFunctions:
             torchsky.cache._cache_manager = original_manager
 
 
+
     @patch('torchsky.cache._detect_environment_type')
     @patch.object(torchsky.cache.CacheConfig, 'for_environment')
     def test_get_optimal_cache_config(self, mock_for_environment, mock_detect_env):
