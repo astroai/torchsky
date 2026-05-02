@@ -7,6 +7,7 @@ optimized for PyTorch tensors and pytorch-frame TensorFrames.
 
 import importlib
 import logging as _stdlib_logging
+from dataclasses import dataclass
 from typing import (
     Any,
     Dict,
@@ -76,6 +77,28 @@ from .transforms import (
 from .wcs import WCS
 
 _log = _stdlib_logging.getLogger(__name__)
+
+@dataclass
+class _ReadConfig:
+    path: str
+    hdu: Union[int, str, None]
+    device: str
+    mmap: Union[bool, str]
+    fp16: bool
+    bf16: bool
+    raw_scale: bool
+    scale_on_device: bool
+    cache_capacity: int
+    handle_cache_capacity: int
+    fast_header: bool
+    return_header: bool
+    force_image: bool
+    force_table: bool
+    hdu_type_hint: Optional[str]
+    columns: Optional[List[str]]
+    start_row: int
+    num_rows: int
+    debug_scale: bool
 
 # Recoverable errors when probing C++/FITS image fast paths (avoid bare ``except Exception``).
 _READ_EXC_TYPES = (
@@ -1073,39 +1096,37 @@ def _read_batch_hdus(
     ]
 
 
-def _read_cpu_fast_path(
-    path, hdu, mmap, cache_capacity, handle_cache_capacity, fp16, bf16, force_image
-):
+def _read_cpu_fast_path(ctx: _ReadConfig):
     import torchsky.cpp as cpp
 
     try:
-        effective_mmap = _resolve_image_mmap(path, hdu, mmap, cache_capacity)
+        effective_mmap = _resolve_image_mmap(ctx.path, ctx.hdu, ctx.mmap, ctx.cache_capacity)
         # Prefer handle-cache fast path when enabled: cache_capacity only controls
         # data caching, while handle_cache_capacity controls open-handle reuse.
-        if handle_cache_capacity > 0:
+        if ctx.handle_cache_capacity > 0:
             if hasattr(cpp, "read_full_cached"):
                 # Keep the fast path fully inside C++ (shared handle/meta cache)
                 # to avoid Python-side handle-cache overhead per read.
-                data = cpp.read_full_cached(path, hdu, effective_mmap)
+                data = cpp.read_full_cached(ctx.path, ctx.hdu, effective_mmap)
             else:
-                file_handle, _cached = _get_cached_handle(path, handle_cache_capacity)
-                data = cpp.read_full(file_handle, hdu, effective_mmap)
-        elif cache_capacity == 0 and hasattr(cpp, "read_full_nocache"):
+                file_handle, _cached = _get_cached_handle(ctx.path, ctx.handle_cache_capacity)
+                data = cpp.read_full(file_handle, ctx.hdu, effective_mmap)
+        elif ctx.cache_capacity == 0 and hasattr(cpp, "read_full_nocache"):
             # Explicit no-cache mode when handle-cache is disabled.
-            data = cpp.read_full_nocache(path, hdu, effective_mmap)
+            data = cpp.read_full_nocache(ctx.path, ctx.hdu, effective_mmap)
         else:
-            file_handle = cpp.open_fits_file(path, "r")
+            file_handle = cpp.open_fits_file(ctx.path, "r")
             try:
-                data = cpp.read_full(file_handle, hdu, effective_mmap)
+                data = cpp.read_full(file_handle, ctx.hdu, effective_mmap)
             finally:
                 try:
                     file_handle.close()
                 except Exception:
                     pass
 
-        if fp16:
+        if ctx.fp16:
             data = data.to(torch.float16)
-        elif bf16:
+        elif ctx.bf16:
             data = data.to(torch.bfloat16)
 
         # Keep cache performance stats consistent even on fast-path returns.
@@ -1120,99 +1141,86 @@ def _read_cpu_fast_path(
         if _DEBUG_SCALE or _log.isEnabledFor(_stdlib_logging.DEBUG):
             _log.debug(
                 "read: CPU image fast-path fallback for %r hdu=%s: %s",
-                path,
-                hdu,
+                ctx.path,
+                ctx.hdu,
                 exc,
                 exc_info=True,
             )
-        if force_image:
+        if ctx.force_image:
             raise
         return None, True
 
 
-def _read_generic_fast_path(
-    path,
-    hdu,
-    device,
-    mmap,
-    cache_capacity,
-    handle_cache_capacity,
-    fp16,
-    bf16,
-    raw_scale,
-    scale_on_device,
-    force_image,
-    debug_scale,
-):
+def _read_generic_fast_path(ctx: _ReadConfig):
     import torchsky.cpp as cpp
 
     try:
-        effective_mmap = _resolve_image_mmap(path, hdu, mmap, cache_capacity)
-        if scale_on_device and not raw_scale:
+        effective_mmap = _resolve_image_mmap(ctx.path, ctx.hdu, ctx.mmap, ctx.cache_capacity)
+        if ctx.scale_on_device and not ctx.raw_scale:
             if hasattr(cpp, "read_full_raw_with_scale"):
-                if debug_scale:
+                if ctx.debug_scale:
                     print("TORCHSKY_DEBUG_SCALE: fast_path_scaled")
                 data, scaled, bscale, bzero = cpp.read_full_raw_with_scale(
-                    path, hdu, effective_mmap
+                    ctx.path, ctx.hdu, effective_mmap
                 )
                 if scaled:
-                    data = data.to(device=device, dtype=torch.float32)
+                    data = data.to(device=ctx.device, dtype=torch.float32)
                     if bscale != 1.0:
                         data.mul_(bscale)
                     if bzero != 0.0:
                         data.add_(bzero)
                 else:
-                    data = data.to(device)
+                    data = data.to(ctx.device)
             else:
-                data = cpp.read_full(path, hdu, effective_mmap)
-                data = data.to(device)
-        elif raw_scale:
-            if debug_scale:
+                data = cpp.read_full(ctx.path, ctx.hdu, effective_mmap)
+                data = data.to(ctx.device)
+        elif ctx.raw_scale:
+            if ctx.debug_scale:
                 print("TORCHSKY_DEBUG_SCALE: raw_scale")
             # Keep raw-scale path on the unified read_full_raw entry point.
             # This avoids a crash-prone unmapped-only variant on scaled HDUs.
             if not effective_mmap and hasattr(cpp, "read_full_unmapped_raw"):
-                data = cpp.read_full_unmapped_raw(path, hdu)
+                data = cpp.read_full_unmapped_raw(ctx.path, ctx.hdu)
             else:
-                data = cpp.read_full_raw(path, hdu, effective_mmap)
+                data = cpp.read_full_raw(ctx.path, ctx.hdu, effective_mmap)
         else:
-            if debug_scale:
+            if ctx.debug_scale:
                 print("TORCHSKY_DEBUG_SCALE: unscaled")
             if not effective_mmap and hasattr(cpp, "read_full_unmapped"):
-                data = cpp.read_full_unmapped(path, hdu)
+                data = cpp.read_full_unmapped(ctx.path, ctx.hdu)
             else:
                 if (
                     _COLD_NOCACHE
-                    and cache_capacity == 0
+                    and ctx.cache_capacity == 0
                     and hasattr(cpp, "read_full_nocache")
                 ):
-                    data = cpp.read_full_nocache(path, hdu, effective_mmap)
+                    data = cpp.read_full_nocache(ctx.path, ctx.hdu, effective_mmap)
                 else:
-                    if cache_capacity == 0 and hasattr(cpp, "read_full_nocache"):
+                    if ctx.cache_capacity == 0 and hasattr(cpp, "read_full_nocache"):
                         # Explicitly disable caching when cache_capacity==0.
-                        data = cpp.read_full_nocache(path, hdu, effective_mmap)
+                        data = cpp.read_full_nocache(ctx.path, ctx.hdu, effective_mmap)
                     else:
-                        data = cpp.read_full(path, hdu, effective_mmap)
+                        data = cpp.read_full(ctx.path, ctx.hdu, effective_mmap)
 
-        if fp16:
+        if ctx.fp16:
             data = data.to(torch.float16)
-        elif bf16:
+        elif ctx.bf16:
             data = data.to(torch.bfloat16)
 
-        if device != "cpu" and data.device.type == "cpu":
-            data = data.to(device)
+        if ctx.device != "cpu" and data.device.type == "cpu":
+            data = data.to(ctx.device)
 
         return data
     except ValueError:
         raise
     except _READ_EXC_TYPES as exc:
-        if force_image:
+        if ctx.force_image:
             raise
         if _log.isEnabledFor(_stdlib_logging.DEBUG):
             _log.debug(
                 "read: generic image fast-path fallback for %r hdu=%s: %s",
-                path,
-                hdu,
+                ctx.path,
+                ctx.hdu,
                 exc,
                 exc_info=True,
             )
@@ -1447,60 +1455,43 @@ def _read_fallback_table(
     return (table_data, header) if return_header else table_data
 
 
-def _read_fallback(
-    path,
-    hdu,
-    device,
-    mmap,
-    fp16,
-    bf16,
-    cache_capacity,
-    handle_cache_capacity,
-    fast_header,
-    return_header,
-    force_image,
-    force_table,
-    hdu_type_hint,
-    columns,
-    start_row,
-    num_rows,
-):
+def _read_fallback(ctx: _ReadConfig):
     import torchsky.cpp as cpp
 
     global _cache_stats
 
     hit, cached_res, cache_key = _read_check_cache(
-        path,
-        hdu,
-        device,
-        fp16,
-        bf16,
-        columns,
-        start_row,
-        num_rows,
-        return_header,
-        cache_capacity,
+        ctx.path,
+        ctx.hdu,
+        ctx.device,
+        ctx.fp16,
+        ctx.bf16,
+        ctx.columns,
+        ctx.start_row,
+        ctx.num_rows,
+        ctx.return_header,
+        ctx.cache_capacity,
     )
     if hit:
         return cached_res
 
-    if isinstance(hdu, int) and hdu < 0:
+    if isinstance(ctx.hdu, int) and ctx.hdu < 0:
         raise ValueError("HDU index must be non-negative")
-    if start_row < 1:
+    if ctx.start_row < 1:
         raise ValueError("start_row must be >= 1 (FITS uses 1-based indexing)")
-    if num_rows < -1 or num_rows == 0:
+    if ctx.num_rows < -1 or ctx.num_rows == 0:
         raise ValueError("num_rows must be > 0 or -1 for all rows")
-    if device not in ["cpu", "cuda", "mps"] and not device.startswith("cuda:"):
+    if ctx.device not in ["cpu", "cuda", "mps"] and not ctx.device.startswith("cuda:"):
         raise ValueError("device must be 'cpu', 'cuda', 'mps' or 'cuda:N'")
 
     try:
-        file_handle, cached_handle = _get_cached_handle(path, handle_cache_capacity)
+        file_handle, cached_handle = _get_cached_handle(ctx.path, ctx.handle_cache_capacity)
         try:
-            if isinstance(hdu, str):
+            if isinstance(ctx.hdu, str):
                 hdu_num = None
                 if hasattr(cpp, "resolve_hdu_name_cached"):
                     try:
-                        hdu_num = int(cpp.resolve_hdu_name_cached(path, hdu))
+                        hdu_num = int(cpp.resolve_hdu_name_cached(ctx.path, ctx.hdu))
                     except Exception:
                         hdu_num = None
 
@@ -1509,57 +1500,57 @@ def _read_fallback(
                     for i in range(num_hdus):
                         try:
                             hdr = cpp.read_header(file_handle, i)
-                            if hdr.get("EXTNAME") == hdu:
+                            if hdr.get("EXTNAME") == ctx.hdu:
                                 hdu_num = i
                                 break
                         except Exception:
                             continue
 
                 if hdu_num is None:
-                    raise ValueError(f"HDU '{hdu}' not found in file")
+                    raise ValueError(f"HDU '{ctx.hdu}' not found in file")
             else:
-                hdu_num = hdu
+                hdu_num = ctx.hdu
 
             header = None
             header_data = None
-            hdu_type = hdu_type_hint if isinstance(hdu_num, int) else None
+            hdu_type = ctx.hdu_type_hint if isinstance(hdu_num, int) else None
             if isinstance(hdu_num, int) and hdu_type is None:
                 try:
                     hdu_type = cpp.get_hdu_type(file_handle, hdu_num)
-                    _set_cached_hdu_type(path, hdu_num, hdu_type)
+                    _set_cached_hdu_type(ctx.path, hdu_num, hdu_type)
                 except Exception:
                     hdu_type = None
 
-            is_table_hdu = force_table or (hdu_type in {"ASCII_TABLE", "BINARY_TABLE"})
-            if force_image:
+            is_table_hdu = ctx.force_table or (hdu_type in {"ASCII_TABLE", "BINARY_TABLE"})
+            if ctx.force_image:
                 is_table_hdu = False
 
             if not is_table_hdu:
                 try:
                     return _read_fallback_image(
                         file_handle,
-                        path,
+                        ctx.path,
                         hdu_num,
-                        device,
-                        mmap,
-                        fp16,
-                        bf16,
-                        cache_capacity,
-                        fast_header,
-                        return_header,
+                        ctx.device,
+                        ctx.mmap,
+                        ctx.fp16,
+                        ctx.bf16,
+                        ctx.cache_capacity,
+                        ctx.fast_header,
+                        ctx.return_header,
                         cache_key,
-                        cache_capacity > 0,
+                        ctx.cache_capacity > 0,
                     )
                 except (RuntimeError, TypeError):
-                    if force_image:
+                    if ctx.force_image:
                         raise
                     if isinstance(hdu_num, int):
                         try:
                             hdu_type = cpp.get_hdu_type(file_handle, hdu_num)
-                            _set_cached_hdu_type(path, hdu_num, hdu_type)
+                            _set_cached_hdu_type(ctx.path, hdu_num, hdu_type)
                         except Exception:
                             hdu_type = None
-                    is_table_hdu = force_table or (
+                    is_table_hdu = ctx.force_table or (
                         hdu_type in {"ASCII_TABLE", "BINARY_TABLE"}
                     )
                     if not is_table_hdu:
@@ -1568,18 +1559,18 @@ def _read_fallback(
             try:
                 return _read_fallback_table(
                     file_handle,
-                    path,
+                    ctx.path,
                     hdu_num,
-                    device,
-                    mmap,
-                    cache_capacity,
-                    fast_header,
-                    return_header,
+                    ctx.device,
+                    ctx.mmap,
+                    ctx.cache_capacity,
+                    ctx.fast_header,
+                    ctx.return_header,
                     cache_key,
-                    cache_capacity > 0,
-                    columns,
-                    start_row,
-                    num_rows,
+                    ctx.cache_capacity > 0,
+                    ctx.columns,
+                    ctx.start_row,
+                    ctx.num_rows,
                     header_data,
                     header,
                 )
@@ -1594,7 +1585,7 @@ def _read_fallback(
                     pass
 
     except Exception as e:
-        raise RuntimeError(f"Failed to read FITS file '{path}': {e}") from e
+        raise RuntimeError(f"Failed to read FITS file '{ctx.path}': {e}") from e
 
 
 def read(
@@ -1757,6 +1748,28 @@ def read(
         except Exception:
             cpp_is_mocked = False
 
+    ctx = _ReadConfig(
+        path=path,
+        hdu=hdu,
+        device=device,
+        mmap=mmap,
+        fp16=fp16,
+        bf16=bf16,
+        raw_scale=raw_scale,
+        scale_on_device=scale_on_device,
+        cache_capacity=cache_capacity,
+        handle_cache_capacity=handle_cache_capacity,
+        fast_header=fast_header,
+        return_header=return_header,
+        force_image=force_image,
+        force_table=force_table,
+        hdu_type_hint=hdu_type_hint,
+        columns=columns,
+        start_row=start_row,
+        num_rows=num_rows,
+        debug_scale=debug_scale,
+    )
+
     if (
         scale_on_device
         and not raw_scale
@@ -1769,16 +1782,7 @@ def read(
         and num_rows == -1
         and not is_cached_table_hdu
     ):
-        res, fallback = _read_cpu_fast_path(
-            path,
-            hdu,
-            mmap,
-            cache_capacity,
-            handle_cache_capacity,
-            fp16,
-            bf16,
-            force_image,
-        )
+        res, fallback = _read_cpu_fast_path(ctx)
         if not fallback:
             return res
         skip_generic_image_fast_path = True
@@ -1791,41 +1795,11 @@ def read(
         and num_rows == -1
         and not skip_generic_image_fast_path
     ):
-        res = _read_generic_fast_path(
-            path,
-            hdu,
-            device,
-            mmap,
-            cache_capacity,
-            handle_cache_capacity,
-            fp16,
-            bf16,
-            raw_scale,
-            scale_on_device,
-            force_image,
-            debug_scale,
-        )
+        res = _read_generic_fast_path(ctx)
         if res is not None:
             return res
 
-    return _read_fallback(
-        path,
-        hdu,
-        device,
-        mmap,
-        fp16,
-        bf16,
-        cache_capacity,
-        handle_cache_capacity,
-        fast_header,
-        return_header,
-        force_image,
-        force_table,
-        hdu_type_hint,
-        columns,
-        start_row,
-        num_rows,
-    )
+    return _read_fallback(ctx)
 
 
 def read_subset(
