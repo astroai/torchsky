@@ -268,6 +268,140 @@ class Header(dict):
         elif key in self:
             super().__delitem__(key)
 
+    def get_table_schema(
+        self, selected_columns: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Parse table schema from FITS headers.
+
+        Args:
+            selected_columns: Optional list of columns to include in the schema.
+
+        Returns:
+            Dictionary containing column definitions, string columns, and VLA columns.
+        """
+        name_by_idx: Dict[int, str] = {}
+        tform_by_idx: Dict[int, str] = {}
+        tdim_by_idx: Dict[int, str] = {}
+
+        # Performance optimization:
+        # Avoid O(N) iteration over all header cards (which can be large due to HISTORY/COMMENT)
+        # by using TFIELDS for O(1) direct dictionary lookups.
+        try:
+            tfields = int(self.get("TFIELDS", 0))
+        except (TypeError, ValueError):
+            tfields = 0
+
+        if tfields > 0:
+            for i in range(1, tfields + 1):
+                name = self.get(f"TTYPE{i}")
+                if name is not None:
+                    name_by_idx[i] = str(name)
+                tform = self.get(f"TFORM{i}")
+                if tform is not None:
+                    tform_by_idx[i] = str(tform)
+                tdim = self.get(f"TDIM{i}")
+                if tdim is not None:
+                    tdim_by_idx[i] = str(tdim)
+        else:
+            for key, value in self.items():
+                if isinstance(key, str) and key.startswith("TTYPE"):
+                    idx_str = key[5:]
+                    if idx_str.isdigit():
+                        name_by_idx[int(idx_str)] = str(value)
+                if isinstance(key, str) and key.startswith("TFORM"):
+                    idx_str = key[5:]
+                    if idx_str.isdigit():
+                        tform_by_idx[int(idx_str)] = str(value)
+                if isinstance(key, str) and key.startswith("TDIM"):
+                    idx_str = key[4:]
+                    if idx_str.isdigit():
+                        tdim_by_idx[int(idx_str)] = str(value)
+
+        def _parse_tform(tform: str) -> Dict[str, Any]:
+            import re
+
+            tform = tform.strip().upper()
+            m = re.match(r"(\d*)([PQ]?)([A-Z])", tform)
+            if not m:
+                return {"tform": tform, "repeat": None, "vla": False, "code": None}
+            repeat = int(m.group(1)) if m.group(1) else 1
+            vla = m.group(2) in ("P", "Q")
+            code = m.group(3)
+            base = {"tform": tform, "repeat": repeat, "vla": vla, "code": code}
+            if vla:
+                base["vla_descriptor"] = m.group(2)
+            return base
+
+        selected = set(selected_columns) if selected_columns is not None else None
+        columns = []
+        string_cols = []
+        vla_cols = []
+        for idx in sorted(name_by_idx.keys()):
+            name = name_by_idx[idx]
+            if selected is not None and name not in selected:
+                continue
+            tform = tform_by_idx.get(idx, "")
+            info = (
+                _parse_tform(tform)
+                if tform
+                else {"tform": "", "repeat": None, "vla": False, "code": None}
+            )
+            tdim = tdim_by_idx.get(idx)
+            is_string = info.get("code") == "A"
+            if is_string:
+                string_cols.append(name)
+            if info.get("vla"):
+                vla_cols.append(name)
+            columns.append(
+                {
+                    "name": name,
+                    "tform": info.get("tform", ""),
+                    "repeat": info.get("repeat"),
+                    "code": info.get("code"),
+                    "string": is_string,
+                    "vla": bool(info.get("vla")),
+                    "tdim": tdim,
+                }
+            )
+
+        return {
+            "columns": columns,
+            "string_columns": string_cols,
+            "vla_columns": vla_cols,
+        }
+
+    def _get_string_columns(self) -> set:
+        """Internal helper to get string column names."""
+        string_cols = set()
+        try:
+            tfields = int(self.get("TFIELDS", 0))
+        except (TypeError, ValueError):
+            tfields = 0
+
+        if tfields > 0:
+            for i in range(1, tfields + 1):
+                tform = self.get(f"TFORM{i}")
+                if tform is not None and "A" in str(tform).upper():
+                    ttype = self.get(f"TTYPE{i}")
+                    if ttype is not None:
+                        string_cols.add(str(ttype))
+        else:
+            name_by_idx = {}
+            for key, value in self.items():
+                if isinstance(key, str) and key.upper().startswith("TTYPE"):
+                    idx = key[5:]
+                    if idx.isdigit():
+                        name_by_idx[idx] = str(value)
+            for key, value in self.items():
+                if isinstance(key, str) and key.upper().startswith("TFORM"):
+                    idx = key[5:]
+                    tform = str(value)
+                    if idx.isdigit() and "A" in tform.upper():
+                        col_name = name_by_idx.get(idx)
+                        if col_name:
+                            string_cols.add(col_name)
+        return string_cols
+
 
 class DataView:
     """Lazy data accessor."""
@@ -509,7 +643,8 @@ class TableHDU(TensorFrame):
         # Convert raw data to proper TensorFrame format
         feat_dict = {}
         col_names_dict = {}
-        string_cols = self._get_string_columns(header)
+        self.header = header or Header()
+        string_cols = self.header._get_string_columns()
 
         for col_name, data in tensor_dict.items():
             try:
@@ -599,7 +734,6 @@ class TableHDU(TensorFrame):
             feat_dict = {"dummy": torch.zeros(max(1, nrows), 1)}
             col_names_dict = {"dummy": ["0"]}
 
-        self.header = header or Header()
         if HAS_TORCH_FRAME:
             tf_feat_dict, tf_col_names_dict = self._tensorframe_validation_payload(
                 feat_dict
@@ -636,146 +770,15 @@ class TableHDU(TensorFrame):
         st = _torch_frame_stype.numerical if _torch_frame_stype is not None else "numerical"
         return {st: torch.zeros((num_rows, num_cols), dtype=torch.float32)}, {st: names}
 
-    def _get_string_columns(self, header: Optional[Header]) -> set:
-        """Infer string columns from TTYPE/TFORM header cards."""
-        if not header:
-            return set()
-        string_cols = set()
-
-        # ⚡ Bolt: Fast-path O(1) dictionary lookups using TFIELDS to avoid O(N) iteration
-        # over thousands of header cards in large FITS tables.
-        try:
-            tfields = int(header.get("TFIELDS", 0))
-        except (TypeError, ValueError):
-            tfields = 0
-
-        if tfields > 0:
-            for i in range(1, tfields + 1):
-                tform = header.get(f"TFORM{i}")
-                if tform is not None and "A" in str(tform).upper():
-                    ttype = header.get(f"TTYPE{i}")
-                    if ttype is not None:
-                        string_cols.add(str(ttype))
-        else:
-            name_by_idx = {}
-            for key, value in header.items():
-                if isinstance(key, str) and key.upper().startswith("TTYPE"):
-                    idx = key[5:]
-                    if idx.isdigit():
-                        name_by_idx[idx] = str(value)
-            for key, value in header.items():
-                if isinstance(key, str) and key.upper().startswith("TFORM"):
-                    idx = key[5:]
-                    tform = str(value)
-                    if idx.isdigit() and "A" in tform.upper():
-                        col_name = name_by_idx.get(idx)
-                        if col_name:
-                            string_cols.add(col_name)
-
-        return string_cols
-
     @property
     def string_columns(self) -> List[str]:
         """Return column names inferred as strings."""
-        return sorted(self._get_string_columns(self.header))
+        return sorted(self.header._get_string_columns())
 
     @property
     def schema(self) -> Dict[str, Any]:
         """Return basic schema info parsed from FITS headers."""
-        return self._build_schema()
-
-    def _build_schema(self) -> Dict[str, Any]:
-        if not self.header:
-            return {"columns": [], "string_columns": [], "vla_columns": []}
-
-        name_by_idx: Dict[int, str] = {}
-        tform_by_idx: Dict[int, str] = {}
-        tdim_by_idx: Dict[int, str] = {}
-
-        # Performance optimization:
-        # Avoid O(N) iteration over all header cards (which can be large due to HISTORY/COMMENT)
-        # by using TFIELDS for O(1) direct dictionary lookups.
-        try:
-            tfields = int(self.header.get("TFIELDS", 0))
-        except (TypeError, ValueError):
-            tfields = 0
-
-        if tfields > 0:
-            for i in range(1, tfields + 1):
-                name = self.header.get(f"TTYPE{i}")
-                if name is not None:
-                    name_by_idx[i] = str(name)
-                tform = self.header.get(f"TFORM{i}")
-                if tform is not None:
-                    tform_by_idx[i] = str(tform)
-                tdim = self.header.get(f"TDIM{i}")
-                if tdim is not None:
-                    tdim_by_idx[i] = str(tdim)
-        else:
-            for key, value in self.header.items():
-                if isinstance(key, str) and key.startswith("TTYPE"):
-                    idx = int(key[5:]) if key[5:].isdigit() else None
-                    if idx is not None:
-                        name_by_idx[idx] = str(value)
-                if isinstance(key, str) and key.startswith("TFORM"):
-                    idx = int(key[5:]) if key[5:].isdigit() else None
-                    if idx is not None:
-                        tform_by_idx[idx] = str(value)
-                if isinstance(key, str) and key.startswith("TDIM"):
-                    idx = int(key[4:]) if key[4:].isdigit() else None
-                    if idx is not None:
-                        tdim_by_idx[idx] = str(value)
-
-        def _parse_tform(tform: str) -> Dict[str, Any]:
-            # Examples: "E", "20A", "1PB", "1PJ"
-            import re
-
-            tform = tform.strip().upper()
-            m = re.match(r"(\d*)([PQ]?)([A-Z])", tform)
-            if not m:
-                return {"tform": tform, "repeat": None, "vla": False, "code": None}
-            repeat = int(m.group(1)) if m.group(1) else 1
-            vla = m.group(2) in ("P", "Q")
-            code = m.group(3)
-            base = {"tform": tform, "repeat": repeat, "vla": vla, "code": code}
-            if vla:
-                base["vla_descriptor"] = m.group(2)
-            return base
-
-        columns = []
-        string_cols = []
-        vla_cols = []
-        for idx in sorted(name_by_idx.keys()):
-            name = name_by_idx[idx]
-            tform = tform_by_idx.get(idx, "")
-            info = (
-                _parse_tform(tform)
-                if tform
-                else {"tform": "", "repeat": None, "vla": False, "code": None}
-            )
-            tdim = tdim_by_idx.get(idx)
-            is_string = info["code"] == "A"
-            if is_string:
-                string_cols.append(name)
-            if info["vla"]:
-                vla_cols.append(name)
-            columns.append(
-                {
-                    "name": name,
-                    "tform": info["tform"],
-                    "repeat": info["repeat"],
-                    "code": info["code"],
-                    "string": is_string,
-                    "vla": info["vla"],
-                    "tdim": tdim,
-                }
-            )
-
-        return {
-            "columns": columns,
-            "string_columns": string_cols,
-            "vla_columns": vla_cols,
-        }
+        return self.header.get_table_schema()
 
     def get_vla_column(self, name: str) -> List[Tensor]:
         """Return a VLA column as a list of tensors."""
@@ -1422,140 +1425,15 @@ class TableHDURef:
     @property
     def string_columns(self) -> List[str]:
         # Mirror TableHDU behavior: infer from header TFORMn with 'A' code.
-        cols = []
-
-        # ⚡ Bolt: Fast-path O(1) dictionary lookups using TFIELDS to avoid O(N) iteration
-        # over thousands of header cards in large FITS tables.
-        try:
-            tfields = int(self.header.get("TFIELDS", 0))
-        except (TypeError, ValueError):
-            tfields = 0
-
-        if tfields > 0:
-            for i in range(1, tfields + 1):
-                tform = self.header.get(f"TFORM{i}")
-                if tform is not None and "A" in str(tform).upper():
-                    ttype = self.header.get(f"TTYPE{i}")
-                    if ttype is not None:
-                        cols.append(str(ttype))
-        else:
-            name_by_idx: Dict[str, str] = {}
-            for k, v in self.header.items():
-                if isinstance(k, str) and k.upper().startswith("TTYPE"):
-                    idx = k[5:]
-                    if idx.isdigit():
-                        name_by_idx[idx] = str(v)
-            for k, v in self.header.items():
-                if not isinstance(k, str) or not k.upper().startswith("TFORM"):
-                    continue
-                idx = k[5:]
-                tform = str(v).strip().upper()
-                if idx.isdigit() and "A" in tform:
-                    name = name_by_idx.get(idx)
-                    if name:
-                        cols.append(name)
-
+        cols = self.header._get_string_columns()
         if self._columns is not None:
-            cols = [c for c in cols if c in set(self._columns)]
-        return sorted(set(cols))
+            cols = {c for c in cols if c in set(self._columns)}
+        return sorted(cols)
 
     @property
     def schema(self) -> Dict[str, Any]:
-        # Reuse the same basic schema format as TableHDU._build_schema().
-        if not self.header:
-            return {"columns": [], "string_columns": [], "vla_columns": []}
-
-        name_by_idx: Dict[int, str] = {}
-        tform_by_idx: Dict[int, str] = {}
-        tdim_by_idx: Dict[int, str] = {}
-
-        # Performance optimization:
-        # Avoid O(N) iteration over all header cards (which can be large due to HISTORY/COMMENT)
-        # by using TFIELDS for O(1) direct dictionary lookups.
-        try:
-            tfields = int(self.header.get("TFIELDS", 0))
-        except (TypeError, ValueError):
-            tfields = 0
-
-        if tfields > 0:
-            for i in range(1, tfields + 1):
-                name = self.header.get(f"TTYPE{i}")
-                if name is not None:
-                    name_by_idx[i] = str(name)
-                tform = self.header.get(f"TFORM{i}")
-                if tform is not None:
-                    tform_by_idx[i] = str(tform)
-                tdim = self.header.get(f"TDIM{i}")
-                if tdim is not None:
-                    tdim_by_idx[i] = str(tdim)
-        else:
-            for key, value in self.header.items():
-                if isinstance(key, str) and key.startswith("TTYPE"):
-                    idx = int(key[5:]) if key[5:].isdigit() else None
-                    if idx is not None:
-                        name_by_idx[idx] = str(value)
-                if isinstance(key, str) and key.startswith("TFORM"):
-                    idx = int(key[5:]) if key[5:].isdigit() else None
-                    if idx is not None:
-                        tform_by_idx[idx] = str(value)
-                if isinstance(key, str) and key.startswith("TDIM"):
-                    idx = int(key[4:]) if key[4:].isdigit() else None
-                    if idx is not None:
-                        tdim_by_idx[idx] = str(value)
-
-        def _parse_tform(tform: str) -> Dict[str, Any]:
-            # Examples: "E", "20A", "1PB", "1PJ"
-            import re
-
-            tform = tform.strip().upper()
-            m = re.match(r"(\d*)([PQ]?)([A-Z])", tform)
-            if not m:
-                return {"tform": tform, "repeat": None, "vla": False, "code": None}
-            repeat = int(m.group(1)) if m.group(1) else 1
-            vla = m.group(2) in ("P", "Q")
-            code = m.group(3)
-            base = {"tform": tform, "repeat": repeat, "vla": vla, "code": code}
-            if vla:
-                base["vla_descriptor"] = m.group(2)
-            return base
-
-        selected = set(self._columns) if self._columns is not None else None
-        columns = []
-        string_cols = []
-        vla_cols = []
-        for idx in sorted(name_by_idx.keys()):
-            name = name_by_idx[idx]
-            if selected is not None and name not in selected:
-                continue
-            tform = tform_by_idx.get(idx, "")
-            info = (
-                _parse_tform(tform)
-                if tform
-                else {"tform": "", "repeat": None, "vla": False, "code": None}
-            )
-            tdim = tdim_by_idx.get(idx)
-            is_string = info.get("code") == "A"
-            if is_string:
-                string_cols.append(name)
-            if info.get("vla"):
-                vla_cols.append(name)
-            columns.append(
-                {
-                    "name": name,
-                    "tform": info.get("tform", ""),
-                    "repeat": info.get("repeat"),
-                    "code": info.get("code"),
-                    "string": is_string,
-                    "vla": bool(info.get("vla")),
-                    "tdim": tdim,
-                }
-            )
-
-        return {
-            "columns": columns,
-            "string_columns": string_cols,
-            "vla_columns": vla_cols,
-        }
+        # Reuse the same basic schema format as TableHDU.schema.
+        return self.header.get_table_schema(selected_columns=self._columns)
 
     def select(self, cols: List[str]) -> "TableHDURef":
         if not isinstance(cols, list) or not all(isinstance(c, str) for c in cols):
@@ -1626,6 +1504,20 @@ class TableHDURef:
         mmap: bool = True,
         device: str = "cpu",
     ) -> Dict[str, Any]:
+        """Read table data from the associated FITS file.
+
+        This method explicitly disables the Python-side result cache for the
+        file handle to avoid returning stale data if the file is updated in-place.
+
+        Args:
+            columns: Optional list of column names to read.
+            row_slice: Optional slice or (start, stop) tuple of rows to read.
+            mmap: Whether to use memory mapping (default: True).
+            device: Target device for the data (default: "cpu").
+
+        Returns:
+            Dictionary mapping column names to tensors or VLA lists.
+        """
         import torchsky
 
         path, hdu = self._require_source()
@@ -1646,8 +1538,6 @@ class TableHDURef:
             num_rows=num_rows,
             mmap=effective_mmap,
             device=device,
-            # Don't use the python-side result cache for an open() handle: it can
-            # return stale data if the file is updated in-place.
             cache_capacity=0,
         )
 
