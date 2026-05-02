@@ -6,6 +6,7 @@ This module provides Dataset implementations for machine learning workflows:
 - IterableFITSDataset: Streaming dataset for large-scale data
 """
 
+from dataclasses import dataclass
 from typing import Any, Callable, Iterator, List, Optional, Union
 
 import torch
@@ -14,6 +15,17 @@ from torch.utils.data import Dataset, IterableDataset
 # Import stream_table lazily in methods to avoid circular imports
 # Import will be done locally to avoid circular imports
 
+
+@dataclass(frozen=True)
+class FITSDatasetConfig:
+    """Configuration for FITSDataset."""
+    device: str = "cpu"
+    include_header: bool = False
+    mmap: Union[bool, str] = "auto"
+    cache_capacity: int = 0
+    handle_cache_capacity: int = 64
+    scale_on_device: bool = True
+    raw_scale: bool = False
 
 class FITSDataset(Dataset):
     """
@@ -28,13 +40,8 @@ class FITSDataset(Dataset):
         file_paths: List[str],
         hdu: Union[int, str, None] = "auto",
         transform: Optional[Callable] = None,
-        device: str = "cpu",
-        include_header: bool = False,
-        mmap: Union[bool, str] = "auto",
-        cache_capacity: int = 0,
-        handle_cache_capacity: int = 64,
-        scale_on_device: bool = True,
-        raw_scale: bool = False,
+        config: Optional[FITSDatasetConfig] = None,
+        **kwargs: Any,
     ):
         """
         Initialize FITSDataset.
@@ -53,13 +60,32 @@ class FITSDataset(Dataset):
         self.file_paths = file_paths
         self.hdu = hdu
         self.transform = transform
-        self.device = device
-        self.include_header = include_header
-        self.mmap = mmap
-        self.cache_capacity = cache_capacity
-        self.handle_cache_capacity = handle_cache_capacity
-        self.scale_on_device = scale_on_device
-        self.raw_scale = raw_scale
+
+        # Backward compatibility for positional/keyword arguments mapped to config
+        device = kwargs.get("device", "cpu")
+        include_header = kwargs.get("include_header", False)
+        mmap = kwargs.get("mmap", "auto")
+        cache_capacity = kwargs.get("cache_capacity", 0)
+        handle_cache_capacity = kwargs.get("handle_cache_capacity", 64)
+        scale_on_device = kwargs.get("scale_on_device", True)
+        raw_scale = kwargs.get("raw_scale", False)
+
+        if config is not None:
+            self.device = config.device
+            self.include_header = config.include_header
+            self.mmap = config.mmap
+            self.cache_capacity = config.cache_capacity
+            self.handle_cache_capacity = config.handle_cache_capacity
+            self.scale_on_device = config.scale_on_device
+            self.raw_scale = config.raw_scale
+        else:
+            self.device = device
+            self.include_header = include_header
+            self.mmap = mmap
+            self.cache_capacity = cache_capacity
+            self.handle_cache_capacity = handle_cache_capacity
+            self.scale_on_device = scale_on_device
+            self.raw_scale = raw_scale
 
         # Build manifest of all samples
         self._build_manifest()
@@ -116,6 +142,12 @@ class FITSDataset(Dataset):
         return (data, header) if self.include_header else data
 
 
+@dataclass(frozen=True)
+class IterableFITSDatasetConfig:
+    """Configuration for IterableFITSDataset."""
+    device: str = "cpu"
+    shard_size: int = 1000
+
 class IterableFITSDataset(IterableDataset):
     """
     Streaming dataset for scenarios where the dataset is too large to list all files.
@@ -129,8 +161,8 @@ class IterableFITSDataset(IterableDataset):
         index_url: str,
         hdu: int = 0,
         transform: Optional[Callable] = None,
-        device: str = "cpu",
-        shard_size: int = 1000,
+        config: Optional[IterableFITSDatasetConfig] = None,
+        **kwargs: Any,
     ):
         """
         Initialize IterableFITSDataset.
@@ -145,8 +177,16 @@ class IterableFITSDataset(IterableDataset):
         self.index_url = index_url
         self.hdu = hdu
         self.transform = transform
-        self.device = device
-        self.shard_size = shard_size
+
+        device = kwargs.get("device", "cpu")
+        shard_size = kwargs.get("shard_size", 1000)
+
+        if config is not None:
+            self.device = config.device
+            self.shard_size = config.shard_size
+        else:
+            self.device = device
+            self.shard_size = shard_size
 
     def __iter__(self) -> Iterator[Any]:
         """Iterate over the dataset."""
@@ -204,6 +244,18 @@ class IterableFITSDataset(IterableDataset):
                 raise
 
 
+@dataclass(frozen=True)
+class TableChunkDatasetConfig:
+    """Configuration for TableChunkDataset."""
+    chunk_rows: int = 10000
+    max_chunks: Optional[int] = None
+    mmap: bool = False
+    device: str = "cpu"
+    non_blocking_transfer: bool = True
+    pin_memory_transfer: bool = False
+    transform: Optional[Callable] = None
+    include_header: bool = False
+
 class TableChunkDataset(IterableDataset):
     """
     Iterable dataset that yields table chunks from one or more FITS files.
@@ -214,26 +266,40 @@ class TableChunkDataset(IterableDataset):
         file_paths: List[str],
         hdu: int = 1,
         columns: Optional[List[str]] = None,
-        chunk_rows: int = 10000,
-        max_chunks: Optional[int] = None,
-        mmap: bool = False,
-        device: str = "cpu",
-        non_blocking_transfer: bool = True,
-        pin_memory_transfer: bool = False,
-        transform: Optional[Callable] = None,
-        include_header: bool = False,
+        config: Optional[TableChunkDatasetConfig] = None,
+        **kwargs: Any,
     ):
         self.file_paths = file_paths
         self.hdu = hdu
         self.columns = columns
-        self.chunk_rows = chunk_rows
-        self.max_chunks = max_chunks
-        self.mmap = mmap
-        self.device = device
-        self.non_blocking_transfer = non_blocking_transfer
-        self.pin_memory_transfer = pin_memory_transfer
-        self.transform = transform
-        self.include_header = include_header
+
+        chunk_rows = kwargs.get("chunk_rows", 10000)
+        max_chunks = kwargs.get("max_chunks", None)
+        mmap = kwargs.get("mmap", False)
+        device = kwargs.get("device", "cpu")
+        non_blocking_transfer = kwargs.get("non_blocking_transfer", True)
+        pin_memory_transfer = kwargs.get("pin_memory_transfer", False)
+        transform = kwargs.get("transform", None)
+        include_header = kwargs.get("include_header", False)
+
+        if config is not None:
+            self.chunk_rows = config.chunk_rows
+            self.max_chunks = config.max_chunks
+            self.mmap = config.mmap
+            self.device = config.device
+            self.non_blocking_transfer = config.non_blocking_transfer
+            self.pin_memory_transfer = config.pin_memory_transfer
+            self.transform = config.transform
+            self.include_header = config.include_header
+        else:
+            self.chunk_rows = chunk_rows
+            self.max_chunks = max_chunks
+            self.mmap = mmap
+            self.device = device
+            self.non_blocking_transfer = non_blocking_transfer
+            self.pin_memory_transfer = pin_memory_transfer
+            self.transform = transform
+            self.include_header = include_header
 
     def __iter__(self) -> Iterator[Any]:
         from . import get_header, table as table_api
