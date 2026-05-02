@@ -19,13 +19,13 @@ nanobind = ">=2.10.2"
 scikit-build-core = ">=0.11.6"
 cmake = ">=3.21"
 ninja = ">=1.10"
-python = ">=3.12,<3.15"
+python = ">=3.12,<3.14"
 pytorch = ">=2.0"
 cfitsio = ">=4"
 
 # Host dependencies - libraries that will be linked into the package
 [package.host-dependencies]
-python = ">=3.12,<3.15"
+python = ">=3.12,<3.14"
 pytorch = ">=2.0"
 cfitsio = ">=4"
 nanobind = ">=2.10.2"
@@ -84,7 +84,6 @@ setup-hooks = "python scripts/install_hooks.py"
 pre-commit = "pre-commit run --all-files"
 release-manual = "twine upload dist/*"
 
-# Core benchmarks (essential)
 # Core benchmarks (essential)
 bench = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --scope all"
 bench-fits = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --fits-only"
@@ -198,7 +197,7 @@ sphere-bench-pipeline = "pixi run -e sphere-bench python benchmarks/bench_pipeli
 sphere-bench-pipeline-gate = "pixi run -e sphere-bench python benchmarks/bench_pipeline_table_sphere.py --n-rows 1000000 --runs 3 --nside 256 --min-read-ratio-filtered-vs-torch 0.2 --min-pipeline-ratio-filtered-vs-no-pushdown 0.7 --min-pipeline-ratio-torch-vs-no-pushdown 0.7 --json-out benchmark_results/pipeline_table_sphere.json"
 
 [feature.prod.dependencies]
-python = ">=3.12,<3.15"
+python = ">=3.12,<3.14"
 
 # Test feature with comparison libraries
 [feature.test.dependencies]
