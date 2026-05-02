@@ -52,7 +52,7 @@ The shared `_HashGridEncoder` in `torchsky.map.field` implements several of thes
 ### Scalability Considerations
 - **Query Cost:** Billing-pixel queries are expensive. `render_field_cube` uses **chunking** and windowing to cap peak activation memory.
 - **Capacity:** Pure MLPs have fixed parameters; hash grids scale memory with resolution. **Tiling** or multi-field mosaics are the practical path for all-sky coverage at arcsec resolution.
-- **Native Execution:** Large-map paths utilize HEALPix évaluation (`render_field_healpix`) or `torch.func` vmapping for JAX-style point batching.
+- **Native Execution:** Large-map paths utilize HEALPix evaluation (`render_field_healpix`) or `torch.func` vmapping for JAX-style point batching.
 
 ---
 

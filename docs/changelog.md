@@ -105,7 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ML loader benchmark script (`bench_ml_loader.py`).
 
 ### Changed
-- Minimum supported Python version raised to 3.11 (later relaxed to 3.10 in 0.3.0).
+- Minimum supported Python version raised to 3.11 (later raised to 3.12 in 0.4.0.dev0).
 - Build system updated for vendored CFITSIO. AVX2/SSSE3 optimizations in C++ hot paths.
 
 ### Fixed

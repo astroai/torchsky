@@ -188,7 +188,7 @@ The white paper should inherit its honesty:
 - incomplete learned nuisance models,
 - incomplete identifiability framework.
 
-### 7.3 `docs/map.md`
+### 7.3 `docs/benchmarks.md`
 
 Use this as the methodological discipline for evaluation:
 

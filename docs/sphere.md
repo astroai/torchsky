@@ -283,9 +283,9 @@ Auto/cross angular power spectrum C_ell.
 
 Power spectrum from alm coefficients.
 
-### `synalm(cls, lmax=None)` / `synfast(cls, nside, lmax=None, *, pol=True)`
+### `synalm(cls, lmax=None)`
 
-Generate random alm or maps from input C_ell.
+Generate random alm from input C_ell.
 
 ### `synfast(cls, nside, lmax=None, mmax=None, *, alm=False, pol=True, pixwin=False, fwhm=0.0, sigma=None, new=False)`
 

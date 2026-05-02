@@ -61,7 +61,7 @@ corrected = wcs.with_affine_fit_correction(fit)
 
 Main class:
 
-- `WCS(header, key=None, tabular_axes=None)`
+- `WCS(header, key="", tabular_axes=None)`
 - `pixel_to_world(...)`, `world_to_pixel(...)`
 - `all_pix2world(...)`, `all_world2pix(...)`
 - `mixed_pixel_world(...)`

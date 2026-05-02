@@ -14,6 +14,8 @@ Pre-built wheels are available for Linux (x86_64, aarch64) and macOS (x86_64, ar
 
 Requires Python **>=3.12,<3.15** and [PyTorch](https://pytorch.org/) 2.0+.
 
+## Source Build
+
 To build `torchsky` from source, you'll need a C++ compiler and CMake.
 
 ### Prerequisites

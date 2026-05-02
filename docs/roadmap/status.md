@@ -21,7 +21,7 @@ The ultimate target is a **single continuous scene** that explains multi-epoch, 
 
 ---
 
-## 2. Implementation Roadmap
+## 1. Implementation Roadmap
 
 ### Phase 1: Static Sky Fields (Current Core)
 - **$F_{\theta}$:** Field-like MLPs/encoders over sky + wavelength on tangent patches or spheres.
@@ -45,7 +45,7 @@ The ultimate target is a **single continuous scene** that explains multi-epoch, 
 
 ---
 
-## 3. Beyond Maps: Strategic Directions
+## 2. Beyond Maps: Strategic Directions
 
 - **Generative Physics (Improved MeanFlow):** Moving from "fitting a map" to "generative modeling of the latent physics." This allows for rigorous non-Gaussian cosmology constraints.
 - **Any-to-Any Modality:** Cross-wavelength field representations as central building blocks, not side products.
@@ -53,7 +53,7 @@ The ultimate target is a **single continuous scene** that explains multi-epoch, 
 
 ---
 
-## 4. Feasibility and Scalability
+## 3. Feasibility and Scalability
 
 Large-scale survey fusion is not a monolithic single-job problem, but a **systems and engineering challenge**:
 1. **Modular Likelihoods:** Surveys share only what the data actually constrain.
@@ -153,7 +153,7 @@ The WCS roadmap must distinguish active gates from remaining replacement claims.
 
 ### WCS Done And Active
 
-- Core 2D FITS-WCS celestial transforms for the currently supported projection set: `TAN`, `SIN`, `ARC`, `ZPN`, `ZEA`, `STG`, `CEA`, `CAR`, `MER`, `AIT`, `MOL`, `HPX`, `SFL`.
+- Core 2D FITS-WCS celestial transforms for the currently supported projection set: `TAN`, `SIN`, `ARC`, `ZPN`, `ZEA`, `STG`, `CEA`, `CAR`, `MER`, `CYP`, `AIT`, `MOL`, `HPX`, `SFL`.
 - Distortion families with active tests: `SIP`, `TPV`, `TNX`, `ZPX`, plus CYP/PV projection parameters, slant `SIN`, and ZPN hole-domain behavior.
 - High-dimensional linear extra axes for basic spatial + spectral cube workflows.
 - Alternate FITS-WCS version keys (`A` .. `Z`) for standard suffixed WCS keywords.
