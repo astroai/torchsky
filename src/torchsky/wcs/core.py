@@ -2845,7 +2845,7 @@ class WCS:
 
     def slice(
         self,
-        view: slice | int | tuple[slice | int | type(Ellipsis), ...],
+        view: "slice | int | tuple[slice | int | type(Ellipsis), ...]",
         *,
         numpy_order: bool = True,
     ) -> "WCS":
@@ -3021,10 +3021,10 @@ class WCS:
 
     def _normalize_wcs_slice(
         self,
-        view: slice | int | tuple[slice | int | type(Ellipsis), ...],
+        view: "slice | int | tuple[slice | int | type(Ellipsis), ...]",
         *,
         numpy_order: bool,
-    ) -> tuple[slice | int, ...]:
+    ) -> "tuple[slice | int, ...]":
         if isinstance(view, (slice, int)) and not isinstance(view, bool):
             items: tuple[slice | int | type(Ellipsis), ...] = (view,)
         else:

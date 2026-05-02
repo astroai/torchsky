@@ -765,5 +765,34 @@ class TestCacheManagerFunctions:
             torchsky.cache._cache_manager = original_manager
 
 
+    @patch('torchsky.cache._detect_environment_type')
+    @patch.object(torchsky.cache.CacheConfig, 'for_environment')
+    def test_get_optimal_cache_config(self, mock_for_environment, mock_detect_env):
+        from torchsky.cache import get_optimal_cache_config, CacheConfig
+
+        # Set up mocks
+        mock_detect_env.return_value = "custom_env"
+        mock_config = CacheConfig(
+            max_files=123,
+            max_memory_mb=456,
+            disk_cache_gb=789,
+            prefetch_enabled=True,
+        )
+        mock_for_environment.return_value = mock_config
+
+        # Call the function
+        result = get_optimal_cache_config()
+
+        # Verify
+        mock_for_environment.assert_called_once()
+        mock_detect_env.assert_called_once()
+        assert result == {
+            "max_files": 123,
+            "max_memory_mb": 456,
+            "disk_cache_gb": 789,
+            "prefetch_enabled": True,
+            "environment": "custom_env",
+        }
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
