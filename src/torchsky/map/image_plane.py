@@ -1195,7 +1195,7 @@ def _resample_weighted_to_target(
             device=image.device,
         )
         weighted_image = image * source_weight * source_area_sr
-        weighted_weight = source_weight * torch.square(source_area_sr)
+        weighted_weight = source_weight * (source_area_sr * source_area_sr)
     elif target_representative_area_sr is not None:
         source_area_sr = _representative_pixel_area_sr(
             source_wcs,
@@ -1735,7 +1735,7 @@ def _forward_project_weighted_to_target(
             device=image.device,
         )
         weighted_image = image * source_weight * source_area_sr
-        weighted_weight = source_weight * torch.square(source_area_sr)
+        weighted_weight = source_weight * (source_area_sr * source_area_sr)
     elif target.representative_pixel_area_sr is not None:
         source_area_sr = _representative_pixel_area_sr(
             source_wcs,

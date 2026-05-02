@@ -111,11 +111,15 @@ def _batch_to_device(
     if not tensors:
         return []
     if len(tensors) == 1:
-        return [tensors[0].to(device)]
-    try:
-        return list(torch.stack(tensors).to(device).unbind(0))
-    except Exception:
-        return [t.to(device) for t in tensors]
+        return [tensors[0].to(device, non_blocking=True)]
+
+    first = tensors[0]
+    shape = first.shape
+    dtype = first.dtype
+
+    if all(t.shape == shape and t.dtype == dtype for t in tensors):
+        return list(torch.stack(tensors).to(device, non_blocking=True).unbind(0))
+    return [t.to(device, non_blocking=True) for t in tensors]
 
 
 def _invalidate_path_caches(path: str) -> None:
