@@ -19,6 +19,7 @@ from typing import (
     overload,
     Literal,
 )
+from dataclasses import dataclass
 from collections import OrderedDict
 
 import numpy as np
@@ -738,6 +739,18 @@ def _read_scaled_cpu_fast(path: str, hdu: int = 0, mmap: bool = True) -> Tensor:
     return data
 
 
+@dataclass
+class _DispatchArgs:
+    """Arguments for low-level C++ image reading dispatch."""
+
+    cpp: Any
+    path: str
+    hdu: int
+    mmap: bool
+    handle_cache: bool
+    raw_scale: bool
+
+
 def _validate_read_image_args(
     path: str, hdu: int, mmap: bool, handle_cache: bool, device: str
 ) -> None:
@@ -754,26 +767,24 @@ def _validate_read_image_args(
         raise ValueError("device must be 'cpu', 'cuda', 'mps' or 'cuda:N'")
 
 
-def _dispatch_read_image_cpp(
-    cpp: Any, path: str, hdu: int, mmap: bool, handle_cache: bool, raw_scale: bool
-) -> Tensor:
+def _dispatch_read_image_cpp(args: _DispatchArgs) -> Tensor:
     """Dispatch the correct C++ function for low-level image reading."""
-    if raw_scale:
-        if not mmap and hasattr(cpp, "read_full_unmapped_raw"):
-            return cpp.read_full_unmapped_raw(path, hdu)
-        elif hasattr(cpp, "read_full_raw"):
-            return cpp.read_full_raw(path, hdu, mmap)
+    if args.raw_scale:
+        if not args.mmap and hasattr(args.cpp, "read_full_unmapped_raw"):
+            return args.cpp.read_full_unmapped_raw(args.path, args.hdu)
+        elif hasattr(args.cpp, "read_full_raw"):
+            return args.cpp.read_full_raw(args.path, args.hdu, args.mmap)
         else:
-            return cpp.read_full(path, hdu, mmap)
+            return args.cpp.read_full(args.path, args.hdu, args.mmap)
     else:
-        if handle_cache and hasattr(cpp, "read_full_cached"):
-            return cpp.read_full_cached(path, hdu, mmap)
-        elif not mmap and hasattr(cpp, "read_full_unmapped"):
-            return cpp.read_full_unmapped(path, hdu)
-        elif hasattr(cpp, "read_full_nocache"):
-            return cpp.read_full_nocache(path, hdu, mmap)
+        if args.handle_cache and hasattr(args.cpp, "read_full_cached"):
+            return args.cpp.read_full_cached(args.path, args.hdu, args.mmap)
+        elif not args.mmap and hasattr(args.cpp, "read_full_unmapped"):
+            return args.cpp.read_full_unmapped(args.path, args.hdu)
+        elif hasattr(args.cpp, "read_full_nocache"):
+            return args.cpp.read_full_nocache(args.path, args.hdu, args.mmap)
         else:
-            return cpp.read_full(path, hdu, mmap)
+            return args.cpp.read_full(args.path, args.hdu, args.mmap)
 
 
 def read_image(
@@ -797,7 +808,15 @@ def read_image(
 
     _validate_read_image_args(path, hdu, mmap, handle_cache, device)
 
-    data = _dispatch_read_image_cpp(cpp, path, hdu, mmap, handle_cache, raw_scale)
+    dispatch_args = _DispatchArgs(
+        cpp=cpp,
+        path=path,
+        hdu=hdu,
+        mmap=mmap,
+        handle_cache=handle_cache,
+        raw_scale=raw_scale,
+    )
+    data = _dispatch_read_image_cpp(dispatch_args)
 
     if fp16:
         data = data.to(torch.float16)
