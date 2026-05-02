@@ -100,7 +100,7 @@ def _register_survey_sync(
         )
 
     try:
-        tensor, header = torchsky.read_image(abs_path, hdu=hdu, return_header=True)
+        tensor, header = torchsky.read_image(abs_path, hdu=hdu, config=torchsky.ReadImageConfig(return_header=True))
         h, w = int(tensor.shape[-2]), int(tensor.shape[-1])
         n_pix = h * w
         max_px = int(getattr(request.app.state, "max_image_pixels", 536_870_912))

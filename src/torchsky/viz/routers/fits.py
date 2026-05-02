@@ -102,7 +102,7 @@ def _fits_info_sync(request: Request, path: str, hdu: int) -> JSONResponse:
         ) from e
 
     try:
-        tensor, header = torchsky.read_image(abs_path, hdu=hdu, return_header=True)
+        tensor, header = torchsky.read_image(abs_path, hdu=hdu, config=torchsky.ReadImageConfig(return_header=True))
         shape = list(tensor.shape)
         bitpix = int(header.get("BITPIX", 0))
     except Exception as e:

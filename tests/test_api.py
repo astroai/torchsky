@@ -74,7 +74,7 @@ class TestMainAPI:
 
         try:
             result, header = torchsky.read_image(
-                filepath, return_header=True, mmap=False
+                filepath, config=torchsky.ReadImageConfig(return_header=True, mmap=False)
             )
             assert isinstance(result, torch.Tensor)
             assert result.shape == expected_data.shape
@@ -90,7 +90,7 @@ class TestMainAPI:
 
         try:
             default = torchsky.read(filepath, hdu=0, mmap=False)
-            image = torchsky.read_image(filepath, hdu=0, mmap=False)
+            image = torchsky.read_image(filepath, hdu=0, config=torchsky.ReadImageConfig(mmap=False))
             torch.testing.assert_close(default, image)
         finally:
             os.unlink(filepath)
@@ -100,7 +100,7 @@ class TestMainAPI:
         filepath, _ = self.create_test_fits()
         try:
             with pytest.raises(ValueError, match="non-negative integer"):
-                torchsky.read_image(filepath, hdu="auto", mmap=False)  # type: ignore[arg-type]
+                torchsky.read_image(filepath, hdu="auto", config=torchsky.ReadImageConfig(mmap=False))  # type: ignore[arg-type]
         finally:
             os.unlink(filepath)
 
@@ -127,11 +127,11 @@ class TestMainAPI:
         """read_image should accept explicit handle-cache control."""
         filepath, _ = self.create_test_fits(shape=(96, 96), dtype=np.float32)
         try:
-            a = torchsky.read_image(filepath, hdu=0, mmap=False, handle_cache=True)
-            b = torchsky.read_image(filepath, hdu=0, mmap=False, handle_cache=False)
+            a = torchsky.read_image(filepath, hdu=0, config=torchsky.ReadImageConfig(mmap=False, handle_cache=True))
+            b = torchsky.read_image(filepath, hdu=0, config=torchsky.ReadImageConfig(mmap=False, handle_cache=False))
             torch.testing.assert_close(a, b)
             with pytest.raises(ValueError, match="handle_cache must be bool"):
-                torchsky.read_image(filepath, hdu=0, mmap=False, handle_cache="yes")  # type: ignore[arg-type]
+                torchsky.read_image(filepath, hdu=0, config=torchsky.ReadImageConfig(mmap=False, handle_cache="yes"))  # type: ignore[arg-type]
         finally:
             os.unlink(filepath)
 
@@ -160,7 +160,7 @@ class TestMainAPI:
 
         try:
             a = torchsky.read(filepath, hdu=0, mode="image", mmap=False)
-            b = torchsky.read_image(filepath, hdu=0, mmap=False)
+            b = torchsky.read_image(filepath, hdu=0, config=torchsky.ReadImageConfig(mmap=False))
             torch.testing.assert_close(a, b)
         finally:
             os.unlink(filepath)

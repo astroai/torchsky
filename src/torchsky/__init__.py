@@ -20,6 +20,7 @@ from typing import (
     Literal,
 )
 from collections import OrderedDict
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -187,6 +188,7 @@ __all__ = [
     # Core I/O functions
     "read",
     "read_image",
+    "ReadImageConfig",
     "read_table",
     "write",
     "insert_hdu",
@@ -738,6 +740,17 @@ def _read_scaled_cpu_fast(path: str, hdu: int = 0, mmap: bool = True) -> Tensor:
     return data
 
 
+@dataclass
+class ReadImageConfig:
+    device: str = "cpu"
+    mmap: bool = True
+    handle_cache: bool = True
+    fp16: bool = False
+    bf16: bool = False
+    raw_scale: bool = False
+    return_header: bool = False
+
+
 def _validate_read_image_args(
     path: str, hdu: int, mmap: bool, handle_cache: bool, device: str
 ) -> None:
@@ -779,13 +792,7 @@ def _dispatch_read_image_cpp(
 def read_image(
     path: str,
     hdu: int = 0,
-    device: str = "cpu",
-    mmap: bool = True,
-    handle_cache: bool = True,
-    fp16: bool = False,
-    bf16: bool = False,
-    raw_scale: bool = False,
-    return_header: bool = False,
+    config: Optional[ReadImageConfig] = None,
 ) -> Union[Tensor, Tuple[Tensor, Header]]:
     """Read image data through a direct low-level path (no runtime policy dispatch).
 
@@ -794,20 +801,21 @@ def read_image(
     By default it reuses C++ shared FITS handles (`handle_cache=True`) for repeated reads.
     """
     import torchsky.cpp as cpp
+    config = config or ReadImageConfig()
 
-    _validate_read_image_args(path, hdu, mmap, handle_cache, device)
+    _validate_read_image_args(path, hdu, config.mmap, config.handle_cache, config.device)
 
-    data = _dispatch_read_image_cpp(cpp, path, hdu, mmap, handle_cache, raw_scale)
+    data = _dispatch_read_image_cpp(cpp, path, hdu, config.mmap, config.handle_cache, config.raw_scale)
 
-    if fp16:
+    if config.fp16:
         data = data.to(torch.float16)
-    elif bf16:
+    elif config.bf16:
         data = data.to(torch.bfloat16)
 
-    if device != "cpu" and data.device.type == "cpu":
-        data = data.to(device)
+    if config.device != "cpu" and data.device.type == "cpu":
+        data = data.to(config.device)
 
-    if return_header:
+    if config.return_header:
         try:
             return data, Header(cpp.read_header_dict(path, hdu))
         except Exception:
