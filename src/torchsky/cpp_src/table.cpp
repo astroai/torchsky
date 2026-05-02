@@ -145,7 +145,7 @@ struct ColumnInfo {
 
 class TableReader {
 public:
-    TableReader(const std::string& filename, int hdu_num = 1) : filename_(filename), hdu_num_(hdu_num) {
+    TableReader(const std::string& filename, int hdu_num = 1) : filename_(filename), hdu_num_(hdu_num), owns_fptr_(true) {
         validate_fits_filename(filename);
         int status = 0;
         torchsky::check_fits_filename_security(filename);
@@ -162,7 +162,7 @@ public:
         analyze_table();
     }
 
-    TableReader(fitsfile* fptr, int hdu_num = 1) : fptr_(fptr), hdu_num_(hdu_num) {
+    TableReader(fitsfile* fptr, int hdu_num = 1) : fptr_(fptr), hdu_num_(hdu_num), owns_fptr_(false) {
         int status = 0;
         fits_movabs_hdu(fptr_, hdu_num + 1, nullptr, &status);
         if (status != 0) {
@@ -172,7 +172,7 @@ public:
     }
 
     ~TableReader() {
-        if (fptr_ && !filename_.empty()) {
+        if (fptr_ && owns_fptr_) {
             int status = 0;
             fits_close_file(fptr_, &status);
         }
@@ -1983,6 +1983,7 @@ private:
     fitsfile* fptr_ = nullptr;
     std::string filename_;
     int hdu_num_;
+    bool owns_fptr_ = true;
     long nrows_;
     int ncols_;
     long row_width_bytes_ = 0;
