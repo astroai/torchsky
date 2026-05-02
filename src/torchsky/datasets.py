@@ -15,6 +15,20 @@ from torch.utils.data import Dataset, IterableDataset
 # Import will be done locally to avoid circular imports
 
 
+from dataclasses import dataclass
+
+
+@dataclass
+class ReadOptions:
+    """Options for reading FITS data."""
+
+    mmap: Union[bool, str] = "auto"
+    cache_capacity: int = 0
+    handle_cache_capacity: int = 64
+    scale_on_device: bool = True
+    raw_scale: bool = False
+
+
 class FITSDataset(Dataset):
     """
     Map-style dataset for random access to a collection of FITS files.
@@ -30,11 +44,7 @@ class FITSDataset(Dataset):
         transform: Optional[Callable] = None,
         device: str = "cpu",
         include_header: bool = False,
-        mmap: Union[bool, str] = "auto",
-        cache_capacity: int = 0,
-        handle_cache_capacity: int = 64,
-        scale_on_device: bool = True,
-        raw_scale: bool = False,
+        read_options: Optional[ReadOptions] = None,
     ):
         """
         Initialize FITSDataset.
@@ -44,22 +54,15 @@ class FITSDataset(Dataset):
             hdu: HDU index/name or `"auto"` to detect first payload HDU
             transform: Optional transform to apply to each sample
             device: PyTorch device to load data onto
-            mmap: Memory mapping mode for image reads (`True`, `False`, `'auto'`)
-            cache_capacity: Python-side data cache entries for repeated reads
-            handle_cache_capacity: Open-handle cache entries for repeated reads
-            scale_on_device: Apply FITS scaling in the reader fast path
-            raw_scale: Return raw stored values instead of physical scaled values
+            include_header: Whether to include FITS header in samples
+            read_options: Optional ReadOptions for performance tuning
         """
         self.file_paths = file_paths
         self.hdu = hdu
         self.transform = transform
         self.device = device
         self.include_header = include_header
-        self.mmap = mmap
-        self.cache_capacity = cache_capacity
-        self.handle_cache_capacity = handle_cache_capacity
-        self.scale_on_device = scale_on_device
-        self.raw_scale = raw_scale
+        self.read_options = read_options or ReadOptions()
 
         # Build manifest of all samples
         self._build_manifest()
@@ -96,11 +99,11 @@ class FITSDataset(Dataset):
             sample_info["file_path"],
             hdu=sample_info["hdu"],
             device=self.device,
-            mmap=self.mmap,
-            cache_capacity=self.cache_capacity,
-            handle_cache_capacity=self.handle_cache_capacity,
-            scale_on_device=self.scale_on_device,
-            raw_scale=self.raw_scale,
+            mmap=self.read_options.mmap,
+            cache_capacity=self.read_options.cache_capacity,
+            handle_cache_capacity=self.read_options.handle_cache_capacity,
+            scale_on_device=self.read_options.scale_on_device,
+            raw_scale=self.read_options.raw_scale,
             return_header=self.include_header,
         )
 

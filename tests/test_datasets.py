@@ -2,7 +2,7 @@ import pytest
 import torch
 from unittest.mock import MagicMock, patch
 
-from torchsky.datasets import FITSDataset, IterableFITSDataset, TableChunkDataset
+from torchsky.datasets import FITSDataset, IterableFITSDataset, TableChunkDataset, ReadOptions
 
 # Tests will be implemented here
 

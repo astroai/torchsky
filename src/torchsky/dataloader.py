@@ -13,7 +13,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 import torchsky
 
-from .datasets import FITSDataset, IterableFITSDataset, TableChunkDataset
+from .datasets import FITSDataset, IterableFITSDataset, TableChunkDataset, ReadOptions
 
 
 def create_dataloader(
@@ -75,11 +75,7 @@ def create_fits_dataloader(
     transform: Optional[Callable] = None,
     device: str = "cpu",
     include_header: bool = False,
-    mmap: Union[bool, str] = "auto",
-    cache_capacity: int = 0,
-    handle_cache_capacity: int = 64,
-    scale_on_device: bool = True,
-    raw_scale: bool = False,
+    read_options: Optional[ReadOptions] = None,
     **dataloader_kwargs,
 ) -> DataLoader:
     """
@@ -90,11 +86,8 @@ def create_fits_dataloader(
         hdu: HDU index/name or `"auto"` to detect first payload HDU
         transform: Optional transform to apply to each sample
         device: PyTorch device to load data onto
-        mmap: Memory mapping mode (`True`, `False`, or `'auto'`)
-        cache_capacity: Python-side data cache entries for repeated reads
-        handle_cache_capacity: Open-handle cache entries for repeated reads
-        scale_on_device: Apply FITS scaling in the reader fast path
-        raw_scale: Return raw stored values instead of physical scaled values
+        include_header: Whether to include FITS header in samples
+        read_options: Optional ReadOptions for performance tuning
         **dataloader_kwargs: Arguments passed to create_dataloader
 
     Returns:
@@ -106,11 +99,7 @@ def create_fits_dataloader(
         transform=transform,
         device=device,
         include_header=include_header,
-        mmap=mmap,
-        cache_capacity=cache_capacity,
-        handle_cache_capacity=handle_cache_capacity,
-        scale_on_device=scale_on_device,
-        raw_scale=raw_scale,
+        read_options=read_options,
     )
 
     return create_dataloader(dataset, **dataloader_kwargs)

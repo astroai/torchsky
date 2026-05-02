@@ -17,7 +17,7 @@ from torchsky.dataloader import (
     create_table_dataloader,
     get_optimal_dataloader_config,
 )
-from torchsky.datasets import FITSDataset, IterableFITSDataset
+from torchsky.datasets import FITSDataset, IterableFITSDataset, ReadOptions
 
 
 class TestDataLoaderCreation:
@@ -86,11 +86,7 @@ class TestDataLoaderCreation:
                 transform=None,
                 device="cpu",
                 include_header=False,
-                mmap="auto",
-                cache_capacity=0,
-                handle_cache_capacity=64,
-                scale_on_device=True,
-                raw_scale=False,
+                read_options=None,
             )
 
     def test_create_streaming_dataloader(self):
@@ -132,16 +128,19 @@ class TestDataLoaderCreation:
 
     def test_fitsdataset_forwards_read_options(self):
         """FITSDataset should forward read-performance options to torchsky.read."""
-        dataset = FITSDataset(
-            ["file1.fits"],
-            hdu=2,
-            device="cpu",
-            include_header=False,
+        options = ReadOptions(
             mmap=False,
             cache_capacity=3,
             handle_cache_capacity=7,
             scale_on_device=False,
             raw_scale=True,
+        )
+        dataset = FITSDataset(
+            ["file1.fits"],
+            hdu=2,
+            device="cpu",
+            include_header=False,
+            read_options=options,
         )
 
         with patch("torchsky.read", return_value=torch.zeros((2, 2))) as mock_read:
