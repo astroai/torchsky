@@ -7,6 +7,7 @@ optimized for PyTorch tensors and pytorch-frame TensorFrames.
 
 import importlib
 import logging as _stdlib_logging
+from dataclasses import dataclass
 from typing import (
     Any,
     Dict,
@@ -953,24 +954,29 @@ def read(
 ) -> List[Tuple[Union[Tensor, Dict[str, Any]], Header]]: ...
 
 
+@dataclass
+class ReadOptions:
+    device: str
+    mmap: Union[bool, str]
+    fp16: bool
+    bf16: bool
+    raw_scale: bool
+    scale_on_device: bool
+    columns: Optional[List[str]]
+    start_row: int
+    num_rows: int
+    cache_capacity: int
+    handle_cache_capacity: int
+    fast_header: bool
+    return_header: bool
+    mode: str
+    policy: str
+
+
 def _read_batch_paths(
     path,
     hdu,
-    device,
-    mmap,
-    fp16,
-    bf16,
-    raw_scale,
-    scale_on_device,
-    columns,
-    start_row,
-    num_rows,
-    cache_capacity,
-    handle_cache_capacity,
-    fast_header,
-    return_header,
-    mode,
-    policy,
+    options: ReadOptions,
 ):
     import torchsky.cpp as cpp
 
@@ -980,17 +986,17 @@ def _read_batch_paths(
     ):
         if not path:
             raise ValueError("Batch read requires a non-empty path list")
-        hdu_batch = _autodetect_hdu(path[0], handle_cache_capacity)
+        hdu_batch = _autodetect_hdu(path[0], options.handle_cache_capacity)
     if not isinstance(hdu_batch, int):
         raise ValueError("Batch read requires a single integer HDU")
     hdu = hdu_batch
     # C++ batch API does not expose mmap mode controls. Keep the default fast
     # path for mmap='auto' and explicit mmap=True.
-    if mmap is not False:
+    if options.mmap is not False:
         try:
             data_list = cpp.read_images_batch(list(path), hdu)
-            if device != "cpu":
-                data_list = _batch_to_device(data_list, device)
+            if options.device != "cpu":
+                data_list = _batch_to_device(data_list, options.device)
             return data_list
         except Exception:
             pass
@@ -1001,20 +1007,20 @@ def _read_batch_paths(
             read(
                 p,
                 hdu=hdu,
-                mode=mode,
-                policy=policy,
-                device=device,
-                mmap=mmap,
-                fp16=fp16,
-                bf16=bf16,
-                raw_scale=raw_scale,
-                columns=columns,
-                start_row=start_row,
-                num_rows=num_rows,
-                cache_capacity=cache_capacity,
-                handle_cache_capacity=handle_cache_capacity,
-                fast_header=fast_header,
-                return_header=return_header,
+                mode=options.mode,
+                policy=options.policy,
+                device=options.device,
+                mmap=options.mmap,
+                fp16=options.fp16,
+                bf16=options.bf16,
+                raw_scale=options.raw_scale,
+                columns=options.columns,
+                start_row=options.start_row,
+                num_rows=options.num_rows,
+                cache_capacity=options.cache_capacity,
+                handle_cache_capacity=options.handle_cache_capacity,
+                fast_header=options.fast_header,
+                return_header=options.return_header,
             )
         )
     return data_list
@@ -1023,21 +1029,7 @@ def _read_batch_paths(
 def _read_batch_hdus(
     path,
     hdu,
-    device,
-    mmap,
-    fp16,
-    bf16,
-    raw_scale,
-    scale_on_device,
-    columns,
-    start_row,
-    num_rows,
-    cache_capacity,
-    handle_cache_capacity,
-    fast_header,
-    return_header,
-    mode,
-    policy,
+    options: ReadOptions,
 ):
     import torchsky.cpp as cpp
 
@@ -1045,29 +1037,29 @@ def _read_batch_hdus(
         try:
             data = cpp.read_hdus_batch(path, list(hdu))
         except TypeError:
-            effective_mmap = True if isinstance(mmap, str) else mmap
+            effective_mmap = True if isinstance(options.mmap, str) else options.mmap
             data = cpp.read_hdus_batch(path, list(hdu), effective_mmap)
-        if device != "cpu":
-            data = _batch_to_device(data, device)
+        if options.device != "cpu":
+            data = _batch_to_device(data, options.device)
         return data
     return [
         read(
             path,
             hdu=h,
-            device=device,
-            policy=policy,
-            mmap=mmap,
-            fp16=fp16,
-            bf16=bf16,
-            raw_scale=raw_scale,
-            scale_on_device=scale_on_device,
-            columns=columns,
-            start_row=start_row,
-            num_rows=num_rows,
-            cache_capacity=cache_capacity,
-            handle_cache_capacity=handle_cache_capacity,
-            fast_header=fast_header,
-            return_header=return_header,
+            device=options.device,
+            policy=options.policy,
+            mmap=options.mmap,
+            fp16=options.fp16,
+            bf16=options.bf16,
+            raw_scale=options.raw_scale,
+            scale_on_device=options.scale_on_device,
+            columns=options.columns,
+            start_row=options.start_row,
+            num_rows=options.num_rows,
+            cache_capacity=options.cache_capacity,
+            handle_cache_capacity=options.handle_cache_capacity,
+            fast_header=options.fast_header,
+            return_header=options.return_header,
         )
         for h in hdu
     ]
@@ -1669,21 +1661,23 @@ def read(
         return _read_batch_paths(
             path,
             hdu,
-            device,
-            mmap,
-            fp16,
-            bf16,
-            raw_scale,
-            scale_on_device,
-            columns,
-            start_row,
-            num_rows,
-            cache_capacity,
-            handle_cache_capacity,
-            fast_header,
-            return_header,
-            mode,
-            policy,
+            ReadOptions(
+                device=device,
+                mmap=mmap,
+                fp16=fp16,
+                bf16=bf16,
+                raw_scale=raw_scale,
+                scale_on_device=scale_on_device,
+                columns=columns,
+                start_row=start_row,
+                num_rows=num_rows,
+                cache_capacity=cache_capacity,
+                handle_cache_capacity=handle_cache_capacity,
+                fast_header=fast_header,
+                return_header=return_header,
+                mode=mode,
+                policy=policy,
+            ),
         )
 
     if not isinstance(path, str):
@@ -1727,21 +1721,23 @@ def read(
         return _read_batch_hdus(
             path,
             hdu,
-            device,
-            mmap,
-            fp16,
-            bf16,
-            raw_scale,
-            scale_on_device,
-            columns,
-            start_row,
-            num_rows,
-            cache_capacity,
-            handle_cache_capacity,
-            fast_header,
-            return_header,
-            mode,
-            policy,
+            ReadOptions(
+                device=device,
+                mmap=mmap,
+                fp16=fp16,
+                bf16=bf16,
+                raw_scale=raw_scale,
+                scale_on_device=scale_on_device,
+                columns=columns,
+                start_row=start_row,
+                num_rows=num_rows,
+                cache_capacity=cache_capacity,
+                handle_cache_capacity=handle_cache_capacity,
+                fast_header=fast_header,
+                return_header=return_header,
+                mode=mode,
+                policy=policy,
+            ),
         )
 
     debug_scale = _DEBUG_SCALE
