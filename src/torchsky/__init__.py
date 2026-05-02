@@ -20,6 +20,7 @@ from typing import (
     Literal,
 )
 from collections import OrderedDict
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -1020,24 +1021,30 @@ def _read_batch_paths(
     return data_list
 
 
+
+@dataclass
+class _ReadConfig:
+    device: str
+    mmap: Union[bool, str]
+    fp16: bool
+    bf16: bool
+    raw_scale: bool
+    scale_on_device: bool
+    columns: Optional[List[str]]
+    start_row: int
+    num_rows: int
+    cache_capacity: int
+    handle_cache_capacity: int
+    fast_header: bool
+    return_header: bool
+    mode: str
+    policy: str
+
+
 def _read_batch_hdus(
     path,
     hdu,
-    device,
-    mmap,
-    fp16,
-    bf16,
-    raw_scale,
-    scale_on_device,
-    columns,
-    start_row,
-    num_rows,
-    cache_capacity,
-    handle_cache_capacity,
-    fast_header,
-    return_header,
-    mode,
-    policy,
+    config: _ReadConfig,
 ):
     import torchsky.cpp as cpp
 
@@ -1045,29 +1052,29 @@ def _read_batch_hdus(
         try:
             data = cpp.read_hdus_batch(path, list(hdu))
         except TypeError:
-            effective_mmap = True if isinstance(mmap, str) else mmap
+            effective_mmap = True if isinstance(config.mmap, str) else config.mmap
             data = cpp.read_hdus_batch(path, list(hdu), effective_mmap)
-        if device != "cpu":
-            data = _batch_to_device(data, device)
+        if config.device != "cpu":
+            data = _batch_to_device(data, config.device)
         return data
     return [
         read(
             path,
             hdu=h,
-            device=device,
-            policy=policy,
-            mmap=mmap,
-            fp16=fp16,
-            bf16=bf16,
-            raw_scale=raw_scale,
-            scale_on_device=scale_on_device,
-            columns=columns,
-            start_row=start_row,
-            num_rows=num_rows,
-            cache_capacity=cache_capacity,
-            handle_cache_capacity=handle_cache_capacity,
-            fast_header=fast_header,
-            return_header=return_header,
+            device=config.device,
+            policy=config.policy,
+            mmap=config.mmap,
+            fp16=config.fp16,
+            bf16=config.bf16,
+            raw_scale=config.raw_scale,
+            scale_on_device=config.scale_on_device,
+            columns=config.columns,
+            start_row=config.start_row,
+            num_rows=config.num_rows,
+            cache_capacity=config.cache_capacity,
+            handle_cache_capacity=config.handle_cache_capacity,
+            fast_header=config.fast_header,
+            return_header=config.return_header,
         )
         for h in hdu
     ]
@@ -1724,25 +1731,24 @@ def read(
         and start_row == 1
         and num_rows == -1
     ):
-        return _read_batch_hdus(
-            path,
-            hdu,
-            device,
-            mmap,
-            fp16,
-            bf16,
-            raw_scale,
-            scale_on_device,
-            columns,
-            start_row,
-            num_rows,
-            cache_capacity,
-            handle_cache_capacity,
-            fast_header,
-            return_header,
-            mode,
-            policy,
+        config = _ReadConfig(
+            device=device,
+            mmap=mmap,
+            fp16=fp16,
+            bf16=bf16,
+            raw_scale=raw_scale,
+            scale_on_device=scale_on_device,
+            columns=columns,
+            start_row=start_row,
+            num_rows=num_rows,
+            cache_capacity=cache_capacity,
+            handle_cache_capacity=handle_cache_capacity,
+            fast_header=fast_header,
+            return_header=return_header,
+            mode=mode,
+            policy=policy,
         )
+        return _read_batch_hdus(path, hdu, config)
 
     debug_scale = _DEBUG_SCALE
     cpp_is_mocked = False
