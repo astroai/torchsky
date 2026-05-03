@@ -449,11 +449,15 @@ def _avg_pool_map(image: Tensor, *, factor: int) -> Tensor:
 
 
 def _coordinate_grid(
-    header: dict,
+    observation_or_header: FieldObservation | dict,
     *,
     shape: tuple[int, int],
     device: torch.device,
 ) -> tuple[Tensor, Tensor]:
+    if hasattr(observation_or_header, "_cached_ra_deg") and observation_or_header._cached_ra_deg is not None:
+        return observation_or_header._cached_ra_deg.to(device=device), observation_or_header._cached_dec_deg.to(device=device)
+
+    header = observation_or_header.header if hasattr(observation_or_header, "header") else observation_or_header
     height, width = _header_shape(header, fallback=shape)
     y, x = torch.meshgrid(
         torch.arange(height, dtype=torch.float64, device=device),
@@ -461,6 +465,12 @@ def _coordinate_grid(
         indexing="ij",
     )
     ra_deg, dec_deg = WCS(header).pixel_to_world(x, y)
+
+    if hasattr(observation_or_header, "_cached_ra_deg"):
+        # Cache on CPU to save GPU memory if we are doing many observations
+        observation_or_header._cached_ra_deg = ra_deg.cpu()
+        observation_or_header._cached_dec_deg = dec_deg.cpu()
+
     return ra_deg, dec_deg
 
 
@@ -1383,7 +1393,7 @@ class FieldComponentDecomposition(_BaseFieldModel):
             raise ValueError("FieldObservation.image must be 2D")
         device = next((p.device for p in self.parameters()), default_compute_device())
         ra_deg, dec_deg = _coordinate_grid(
-            base_observation.header,
+            base_observation,
             shape=tuple(image.shape),
             device=device,
         )
@@ -5933,7 +5943,7 @@ def render_field_observation_distribution(
         raise ValueError("FieldObservation.image must be 2D")
     device = next((p.device for p in model.parameters()), default_compute_device())
     ra_deg, dec_deg = _coordinate_grid(
-        observation.header,
+        observation,
         shape=tuple(image.shape),
         device=device,
     )
@@ -6163,7 +6173,7 @@ def render_field_observation(
         raise ValueError("FieldObservation.image must be 2D")
     device = next((p.device for p in model.parameters()), default_compute_device())
     ra_deg, dec_deg = _coordinate_grid(
-        observation.header,
+        observation,
         shape=tuple(image.shape),
         device=device,
     )

@@ -211,6 +211,10 @@ class FieldObservation:
     band_name: str | None = None
     spectral_quantity: FieldSpectralQuantity | None = None
 
+    # Cached coordinate grids to prevent repeated WCS calls during training
+    _cached_ra_deg: Tensor | None = None
+    _cached_dec_deg: Tensor | None = None
+
     def __post_init__(self) -> None:
         if self.psf_spec is None:
             if float(self.psf_sigma_pix) > 0.0:
