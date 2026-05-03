@@ -476,9 +476,79 @@ usually enough to diagnose remotely.
 5. An exported hyperspectral FITS cube openable in standard astronomy tools.
 6. A written comparison of stack baseline vs INR, including failures.
 
-Reusable primitives belong in `src/torchsky/`. Training loops, plots, and research
-experiments should live in `examples/`, `examples/notebooks/`, or a separate
-research repo until they are stable enough to review.
+Reusable primitives belong in `src/torchsky/`. Training loops, plots, and
+research experiments should live in `examples/`, `examples/notebooks/`, or a
+separate research repo until they are stable enough to review.
 
-See [field.md](../field.md), [implicit_forward.md](../implicit_forward.md),
-[map.md](../map.md), and [spectral.md](../spectral.md) for technical references.
+## 13. Further Reading
+
+You do not need to read all of these. Pick the topic you are working on and
+read one or two items per area; come back to the rest as the project deepens.
+
+### torchsky internal docs
+
+- [field.md](../field.md) — `FieldObservation`, fitting, rendering API.
+- [implicit_forward.md](../implicit_forward.md) — multi-survey losses,
+  `KinematicState`, Charbonnier scaffold.
+- [map.md](../map.md) — `ImageObservation`, coadds, map products.
+- [spectral.md](../spectral.md) — spectral cubes and FITS I/O.
+- [AGENTS.md](../../AGENTS.md) — repo policy: dependencies, Pixi, performance
+  and testing rules.
+
+### Astronomy data formats and conventions
+
+- FITS standard at NASA GSFC: https://fits.gsfc.nasa.gov/
+- WCS paper I (Greisen & Calabretta 2002), the world coordinate convention used
+  in FITS headers: https://www.aanda.org/articles/aa/abs/2002/45/aah3859/aah3859.html
+- WCS paper II (Calabretta & Greisen 2002), spherical projections including TAN:
+  https://www.aanda.org/articles/aa/abs/2002/45/aah3860/aah3860.html
+- Astropy WCS user guide: https://docs.astropy.org/en/stable/wcs/
+- SAOImage DS9 viewer (open `.fits` files visually): https://sites.google.com/cfa.harvard.edu/saoimageds9
+
+### JWST, NIRCam, and SMACS J0723
+
+- JWST NIRCam filter overview: https://jwst-docs.stsci.edu/jwst-near-infrared-camera/nircam-instrumentation/nircam-filters
+- NASA press release for JWST first deep field (SMACS J0723): https://www.nasa.gov/missions/webb/nasas-webb-delivers-deepest-infrared-image-of-universe-yet/
+- Pontoppidan et al. 2022, JWST Early Release Observations overview:
+  https://arxiv.org/abs/2207.13067
+- Pascale et al. 2022, JWST lensed galaxies behind SMACS 0723:
+  https://arxiv.org/abs/2207.07102
+- UPdec-Webb dataset page (the public coadds we crop from):
+  https://nadc.china-vo.org/res/r101424
+- UPdec-Webb paper (Wang et al. 2024) describing UPDC and the Drizzle baseline:
+  https://arxiv.org/abs/2411.13891
+
+### Drizzle and classical coaddition
+
+- Fruchter & Hook 2002, the Drizzle algorithm:
+  https://arxiv.org/abs/astro-ph/9808087
+- STScI `drizzlepac` user docs:
+  https://www.stsci.edu/scientific-community/software/drizzlepac
+
+### Neural fields and INRs
+
+- Mildenhall et al. 2020, NeRF, the canonical neural-field paper:
+  https://arxiv.org/abs/2003.08934
+- Sitzmann et al. 2020, SIREN, sinusoidal implicit representations:
+  https://arxiv.org/abs/2006.09661
+- Müller et al. 2022, Instant-NGP, hash-grid features used in
+  `hashgrid_spectral_field`: https://arxiv.org/abs/2201.05989
+- Xie et al. 2022, neural fields in visual computing review (good entry point
+  to the field as a whole): https://arxiv.org/abs/2111.11426
+
+### Bundle adjustment and joint scene + pose optimization
+
+- Triggs et al. 1999, "Bundle Adjustment — A Modern Synthesis" (still the
+  standard reference): https://hal.inria.fr/inria-00548290/document
+- Lin et al. 2021, BARF, bundle-adjusting neural radiance fields, the closest
+  computer-vision analogue of what `ExposurePose` does here:
+  https://arxiv.org/abs/2104.06405
+
+### Astronomy meets neural fields (optional but inspiring)
+
+- Levis et al. 2022, neural rendering for black-hole emission tomography, an
+  example of inverse problems with neural fields applied to astronomy:
+  https://arxiv.org/abs/2204.03715
+
+If you want a current shortlist of astronomy-plus-neural-fields papers, ask
+your supervisor — that area moves fast and is best curated by hand.
