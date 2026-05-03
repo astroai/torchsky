@@ -18,6 +18,8 @@ Runnable references:
 - [examples/example_map_field_survey_split.py](../examples/example_map_field_survey_split.py)
 - [examples/notebooks/01_field_fit_synthetic.ipynb](../examples/notebooks/01_field_fit_synthetic.ipynb) (synthetic quickstart)
 - [scripts/build_smacs0723_minicutout.py](../scripts/build_smacs0723_minicutout.py) (optional real JWST UPdec mini-cutouts + `manifest.json`)
+- [scripts/build_smacs0723_stack_baseline.py](../scripts/build_smacs0723_stack_baseline.py) (classical multiband stack cube baseline)
+- [scripts/visualize_smacs0723_products.py](../scripts/visualize_smacs0723_products.py) (PNG quicklooks for cutouts, stack cubes, and residuals)
 - [docs/projects/hyperspectral-fusion.md](projects/hyperspectral-fusion.md) (student onboarding)
 
 ## `FieldObservation`
@@ -147,7 +149,13 @@ pred = render_field_observation(model, obs)
 
 - Each band is usually its own **`FieldObservation`** with distinct spectral metadata; **`fit_field_model`** aggregates losses across all of them.
 - Tabulated throughput (`transmission_wavelength`, `transmission_throughput`) is preferred when combining HST/JWST filters with different shapes.
+- Build a classical baseline first with **`coadd_image_plane_multiband`** so INR residuals can be interpreted against a conventional WCS-aligned stack.
+- Make PNG quicklooks before and after fitting so axis flips, misregistration,
+  artifacts, and tile-boundary problems are caught visually.
 - For writing a dense λ cube after fitting, render with **`render_field_cube`** and **`write_cube_fits`**.
+- For larger contiguous fields, keep training and rendering chunked: use
+  **`training_patch_size`** / **`shared_sky_patch_sampling`** during fitting and
+  **`spatial_tile_hw`** / **`spectral_chunk`** when calling **`render_field_cube`**.
 
 ## See also
 

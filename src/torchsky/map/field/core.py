@@ -454,10 +454,19 @@ def _coordinate_grid(
     shape: tuple[int, int],
     device: torch.device,
 ) -> tuple[Tensor, Tensor]:
-    if hasattr(observation_or_header, "_cached_ra_deg") and observation_or_header._cached_ra_deg is not None:
-        return observation_or_header._cached_ra_deg.to(device=device), observation_or_header._cached_dec_deg.to(device=device)
+    if isinstance(observation_or_header, FieldObservation):
+        cached_ra = observation_or_header._cached_ra_deg
+        cached_dec = observation_or_header._cached_dec_deg
+        if cached_ra is not None and cached_dec is not None:
+            if tuple(cached_ra.shape) == tuple(shape):
+                return cached_ra.to(device=device), cached_dec.to(device=device)
+            observation_or_header.clear_coordinate_cache()
 
-    header = observation_or_header.header if hasattr(observation_or_header, "header") else observation_or_header
+    header = (
+        observation_or_header.header
+        if isinstance(observation_or_header, FieldObservation)
+        else observation_or_header
+    )
     height, width = _header_shape(header, fallback=shape)
     y, x = torch.meshgrid(
         torch.arange(height, dtype=torch.float64, device=device),
@@ -466,8 +475,8 @@ def _coordinate_grid(
     )
     ra_deg, dec_deg = WCS(header).pixel_to_world(x, y)
 
-    if hasattr(observation_or_header, "_cached_ra_deg"):
-        # Cache on CPU to save GPU memory if we are doing many observations
+    if isinstance(observation_or_header, FieldObservation):
+        # Keep the reusable WCS grid off accelerator memory between training steps.
         observation_or_header._cached_ra_deg = ra_deg.cpu()
         observation_or_header._cached_dec_deg = dec_deg.cpu()
 

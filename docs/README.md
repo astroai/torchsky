@@ -52,7 +52,7 @@ validation, and API pointers.
 ## Projects
 
 - [Hyperspectral fusion / neural fields (student onboarding)](projects/hyperspectral-fusion.md) -
-  notebook path, SMACS mini-cutout script, library vs research split.
+  SMACS mini-cutouts, classical stack baseline, quicklook visualization, INR first fit, and library vs research split.
 
 ## Contributor Docs
 

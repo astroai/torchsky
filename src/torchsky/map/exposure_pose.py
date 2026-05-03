@@ -91,15 +91,16 @@ class ExposurePose(nn.Module):
         center_ra_deg: float,
         center_dec_deg: float,
     ) -> tuple[Tensor, Tensor]:
-        """Apply :meth:`apply_to_world`, then ``wcs.world_to_pixel`` (FITS pixel convention)."""
+        """Apply :meth:`apply_to_world`, then differentiable ``wcs.world_to_pixel``."""
         ra_p, dec_p = self.apply_to_world(
             ra_deg,
             dec_deg,
             center_ra_deg=center_ra_deg,
             center_dec_deg=center_dec_deg,
         )
-        # CFITSIO-backed ``world_to_pixel`` does not accept tensors that require grad.
-        return wcs.world_to_pixel(ra_p.detach(), dec_p.detach())
+        world = torch.stack((ra_p, dec_p), dim=-1)
+        pixels = wcs.world_to_pixel_differentiable(world)
+        return pixels[..., 0], pixels[..., 1]
 
 
 def freeze_pose(pose: ExposurePose) -> None:

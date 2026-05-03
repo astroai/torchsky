@@ -68,7 +68,15 @@ match the domain guides.
 | [`02_multiband_hyperspectral_synthetic.ipynb`](../examples/notebooks/02_multiband_hyperspectral_synthetic.ipynb) | Multi-band throughput, `render_field_cube`, `write_cube_fits`, `ExposurePose`. |
 | [`03_smacs0723_real_minicutout.ipynb`](../examples/notebooks/03_smacs0723_real_minicutout.ipynb) | Real JWST UPdec cutouts; requires running `scripts/build_smacs0723_minicutout.py`. |
 
-See [projects/hyperspectral-fusion.md](projects/hyperspectral-fusion.md) for context.
+For the real-data path, run `scripts/build_smacs0723_minicutout.py --list-bands`
+first in the Pixi `test` environment, build the mini-cutouts, then run
+`scripts/build_smacs0723_stack_baseline.py` to create the classical multiband
+stack baseline used for INR comparisons. Run
+`scripts/visualize_smacs0723_products.py` after each data product to create PNG
+quicklooks before trusting a loss curve. Use explicit `--center-x` / `--center-y`
+values to make adjacent reproducible tiles as the project grows beyond the first
+center crop. See
+[projects/hyperspectral-fusion.md](projects/hyperspectral-fusion.md) for context.
 
 ## Running Examples
 

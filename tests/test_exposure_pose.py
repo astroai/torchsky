@@ -74,6 +74,25 @@ def test_exposure_pose_compose_with_wcs_shift() -> None:
     assert not torch.allclose(x0, x1)
 
 
+def test_exposure_pose_compose_with_wcs_preserves_gradients() -> None:
+    header = _tan_header()
+    wcs = WCS(header)
+    ra = torch.tensor([150.01, 150.02], dtype=torch.float64)
+    dec = torch.tensor([2.0, 2.01], dtype=torch.float64)
+    pose = ExposurePose()
+    x_pix, y_pix = pose.compose_with_wcs(
+        wcs,
+        ra,
+        dec,
+        center_ra_deg=float(header["CRVAL1"]),
+        center_dec_deg=float(header["CRVAL2"]),
+    )
+    loss = (x_pix.square() + y_pix.square()).mean()
+    loss.backward()
+    assert pose.delta_ra_deg.grad is not None
+    assert pose.delta_dec_deg.grad is not None
+
+
 def test_freeze_pose_disables_gradients() -> None:
     pose = ExposurePose()
     freeze_pose(pose)

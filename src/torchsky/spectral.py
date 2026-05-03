@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
 
+import torchsky as ts
 from .wcs import WCS
 
 
@@ -192,8 +193,6 @@ def write_cube_fits(
     header["CRPIX3"] = 1.0
     header["CRVAL3"] = float(vals[0].item())
     header["CDELT3"] = float(cdelt3)
-
-    import torchsky as ts
 
     ts.write(
         path,

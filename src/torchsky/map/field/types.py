@@ -211,9 +211,13 @@ class FieldObservation:
     band_name: str | None = None
     spectral_quantity: FieldSpectralQuantity | None = None
 
-    # Cached coordinate grids to prevent repeated WCS calls during training
-    _cached_ra_deg: Tensor | None = None
-    _cached_dec_deg: Tensor | None = None
+    _cached_ra_deg: Tensor | None = field(default=None, init=False, repr=False)
+    _cached_dec_deg: Tensor | None = field(default=None, init=False, repr=False)
+
+    def clear_coordinate_cache(self) -> None:
+        """Drop cached WCS coordinate grids after mutating image shape or header."""
+        self._cached_ra_deg = None
+        self._cached_dec_deg = None
 
     def __post_init__(self) -> None:
         if self.psf_spec is None:
