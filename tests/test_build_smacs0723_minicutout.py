@@ -191,6 +191,24 @@ def test_minicutout_and_stack_baseline_end_to_end(
     assert cube.data.shape == (2, 16, 16)
     assert cube.spectral_axis.values.tolist() == [9000.0, 15000.0]
 
+    drizzle_output = tmp_path / "baseline_drizzle.fits"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_smacs0723_stack_baseline.py",
+            "--manifest",
+            str(manifest),
+            "--output",
+            str(drizzle_output),
+            "--resampling-kernel",
+            "drizzle_square",
+        ],
+    )
+    assert baseline_module.main() == 0
+    drizzle_cube = SpectralReader.read_data_cube(str(drizzle_output), hdu=0)
+    assert drizzle_cube.data.shape == (2, 16, 16)
+
     visualize_module = _load_visualize_module()
     quicklook_dir = tmp_path / "quicklooks"
     monkeypatch.setattr(

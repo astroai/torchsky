@@ -24,7 +24,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from torchsky.map import ImageObservation, coadd_image_plane_multiband  # noqa: E402
+from torchsky.map import ImageObservation, coadd_image_plane_cube  # noqa: E402
 from torchsky.spectral import write_cube_fits  # noqa: E402
 
 FILTER_BANDPASS_ANGSTROM: dict[str, tuple[float, float, float]] = {
@@ -104,7 +104,23 @@ def main() -> int:
     parser.add_argument(
         "--resampling-kernel",
         default="bilinear",
-        choices=("nearest", "bilinear", "spectral_nonuniform_fast"),
+        choices=(
+            "nearest",
+            "bilinear",
+            "drizzle_point",
+            "drizzle_square",
+            "spectral_nonuniform_fast",
+        ),
+        help=(
+            "Reprojection kernel. Start with bilinear for debugging; use "
+            "drizzle_square as the torchsky drizzle-like baseline."
+        ),
+    )
+    parser.add_argument(
+        "--drizzle-pixfrac",
+        type=float,
+        default=1.0,
+        help="Pixel fraction for drizzle_* kernels.",
     )
     parser.add_argument("--device", default="cpu")
     parser.add_argument(
@@ -124,9 +140,10 @@ def main() -> int:
         observations = _observations_from_manifest(manifest_path)
     except FileNotFoundError as exc:
         raise SystemExit(str(exc)) from exc
-    result = coadd_image_plane_multiband(
+    result = coadd_image_plane_cube(
         observations,
         resampling_kernel=args.resampling_kernel,
+        drizzle_pixfrac=float(args.drizzle_pixfrac),
         device=args.device,
     )
     output = args.output or (manifest_path.parent / "smacs0723_stack_baseline.fits")

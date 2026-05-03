@@ -1,13 +1,31 @@
 # Student Project: Hyperspectral Fusion with Neural Spectral Fields
 
-This project should start with a reliable astronomical baseline, then move to
-continuous neural fields. The near-term goal is not to replace every reduction
-step on day one; it is to make one small JWST/HST-style patch reproducible,
-stacked, fitted with an INR, and compared honestly.
+One-line goal: turn several telescope images of the same sky into one deeper
+spatial-plus-wavelength model of that sky.
 
-## 0. If You Are New To Astro Data
+First principle: start with things you can see and debug. Build a normal stack,
+make quicklook images, then fit a neural field.
 
-Astronomical images are not just pictures. A calibrated FITS image usually has:
+Near-term goal: make one small JWST-style patch reproducible, stacked, visualized,
+fitted with an INR, and compared honestly.
+
+Long-term goal: scale from one patch to a larger contiguous sky field.
+
+## 0. Big Picture
+
+This project has three layers:
+
+1. **Data layer:** FITS files, WCS headers, filters, masks, and weights.
+2. **Baseline layer:** a classical stack/coadd, including a drizzle-like baseline.
+3. **Research layer:** a neural field that predicts intensity at `(RA, Dec, wavelength)`.
+
+Keep those layers separate. If the data layer is wrong, the neural field will
+learn the wrong thing.
+
+## 1. If You Are New To Astro Data
+
+Astronomical images are not just pictures. A calibrated FITS image usually has an
+image array and a header. The header tells us where the pixels are on the sky.
 
 | Term | What it means here |
 |------|--------------------|
@@ -22,10 +40,33 @@ Astronomical images are not just pictures. A calibrated FITS image usually has:
 | Cube | A 3D product `(wavelength, y, x)`: many sky images sampled along a spectral axis. |
 | INR / neural field | A neural network that represents the sky as a continuous function instead of a fixed pixel grid. |
 
-The classical stack is the baseline. It answers: "What do we get if we trust the
-headers, put all images on one pixel grid, and average them sensibly?" The INR
-answers a harder question: "Can one continuous model explain all bands directly,
-and maybe improve resolution, alignment, or spectral interpolation?"
+### What Is A Stack?
+
+A stack, or coadd, is the normal astronomy baseline.
+
+One-liner: put several images onto the same WCS grid and combine their pixels.
+
+It answers: "What do we get if we trust the headers, put all images on one pixel
+grid, and average them sensibly?"
+
+### What Is Drizzle?
+
+Drizzle is a standard HST/JWST-style way to combine dithered images. Instead of
+just interpolating pixels, it drops small pixel "footprints" onto an output grid.
+
+One-liner: drizzle is a careful, geometry-aware coadd baseline.
+
+In `torchsky`, start with `resampling_kernel="bilinear"` because it is easy to
+debug. Then run the drizzle-like baseline with `resampling_kernel="drizzle_square"`.
+
+### What Is A Neural Field?
+
+A neural field is a model of the sky as a function, not an image.
+
+One-liner: ask the model for brightness at any `(RA, Dec, wavelength)`.
+
+The classical stack asks, "What image do I get after resampling?" The INR asks,
+"Can one continuous function explain all the observations directly?"
 
 The research direction is a continuous sky model:
 
@@ -49,7 +90,7 @@ exposure:
 (\alpha', \delta') = \mathrm{Pose}_{\phi_i}(\alpha_{\mathrm{WCS}}(x,y), \delta_{\mathrm{WCS}}(x,y)).
 \]
 
-The later experiment is a joint solve for scene and pose:
+Later in the project, the experiment becomes a joint solve for scene and pose:
 
 \[
 \min_{\theta,\phi}
@@ -58,7 +99,7 @@ The later experiment is a joint solve for scene and pose:
 \right\|^2 .
 \]
 
-## 1. First Week Workflow
+## 2. First Week Workflow
 
 Run commands from the repository root. Use Pixi for project Python:
 
@@ -68,17 +109,47 @@ pixi run preflight-push
 
 Recommended path:
 
-1. Run the synthetic single-band notebook to verify the field API.
-2. Build the SMACS J0723 mini-cutouts.
-3. Build a classical multiband stack baseline from those cutouts.
-4. Make quicklook PNGs and inspect them before training anything.
-5. Fit a small INR on the same cutouts.
-6. Compare stack residuals, INR residuals, and exported cube products.
+1. **Read the glossary.** Know what FITS, WCS, band, stack, cube, and INR mean.
+2. **List the available bands.** This confirms the data script works.
+3. **Build SMACS J0723 mini-cutouts.** This makes small files you can inspect.
+4. **Build a bilinear stack baseline.** This is the simplest classical product.
+5. **Build a drizzle-like stack baseline.** This is closer to a standard astronomy coadd.
+6. **Make quicklook PNGs.** Inspect images before training anything.
+7. **Fit a small INR.** Only start model tuning after the data products look sane.
+8. **Compare residuals.** Look at stack residuals, INR residuals, and exported cubes.
 
 First-day success means the commands run, the baseline FITS cube exists, and the
 student can explain what FITS, WCS, band, stack, and cube mean in one sentence.
 
-## 2. Data Preparation
+## 3. Where The SMACS Data Comes From
+
+The starter data is not raw JWST exposure data. It is a small crop made from
+public UPdec-Webb coadded JWST/NIRCam products for SMACS J0723.
+
+One-liner: we begin from public coadded JWST mosaics, not from raw detector reads.
+
+Useful facts:
+
+- UPdec-Webb is a public dataset for coaddition of JWST NIRCam images of SMACS J0723.
+- The paper describes UPDC: upsampling and PSF deconvolution coaddition.
+- The public data page describes iteration 0 as the Drizzle product.
+- Later iterations add UPDC deconvolution; sharper images can also amplify noise.
+- Our starter script uses iteration 0 files and crops their `SCI` image extension.
+
+Why this choice? Iteration 0 is a conservative place to start. It gives a
+drizzle-style public product that is easier to compare against before we attempt
+neural fields or deconvolution-like behavior.
+
+Important limitation: this starter fixture is already coadded. A future stronger
+project stage should go back to calibrated exposures and build the stack/neural
+field from individual observations.
+
+References:
+
+- UPdec-Webb data page: `https://nadc.china-vo.org/res/r101424`
+- UPdec-Webb paper: `https://arxiv.org/abs/2411.13891`
+
+## 4. Data Preparation
 
 The repo does not commit FITS cutouts. Build a small public JWST NIRCam fixture:
 
@@ -114,17 +185,28 @@ pixi run -e test -- python scripts/build_smacs0723_stack_baseline.py
 ```
 
 This writes `smacs0723_stack_baseline.fits`, a small spectral FITS cube made by
-reprojecting the cutouts onto the first cutout's WCS. It is the baseline product
-the INR work should beat or explain, not a final scientific reduction.
+reprojecting the cutouts onto the first cutout's WCS.
+
+To make the drizzle-like torchsky baseline:
+
+```bash
+pixi run -e test -- python scripts/build_smacs0723_stack_baseline.py \
+  --resampling-kernel drizzle_square \
+  --output data/smacs0723_minicutout/smacs0723_stack_drizzle_square.fits
+```
+
+One-liner: bilinear is the simple debugging baseline; drizzle-like is the
+astronomy baseline to compare against.
 
 What the two scripts create:
 
 - `manifest.json`: paths, bands, shapes, and checksums for the mini-cutouts.
 - `smacs0723_*_cutout_*.fits`: one small FITS image per filter.
 - `smacs0723_stack_baseline.fits`: a conventional multiband cube on one WCS grid.
+- `smacs0723_stack_drizzle_square.fits`: optional drizzle-like stack baseline.
 - `quicklooks/*.png`: visual checks created in the next step.
 
-## 3. Quicklook Visualization
+## 5. Quicklook Visualization
 
 Before fitting a neural field, make pictures. Many astronomy mistakes are obvious
 visually: flipped axes, wrong crop, bad background, missing band, or sources not
@@ -152,7 +234,7 @@ This adds `comparison_residuals.png` with baseline, reconstruction, and residual
 panels. The first questions are simple: are sources in the same place, are
 residuals structured, and did the model invent artifacts at tile boundaries?
 
-## 4. Baseline Stack API
+## 6. Baseline Stack API
 
 For scripts or notebooks, the classical baseline is:
 
@@ -184,6 +266,10 @@ write_cube_fits(
 Use this before fitting neural fields. If the baseline looks wrong, debug data,
 headers, masks, or units before changing the INR.
 
+For a drizzle-like baseline in code, use `coadd_image_plane_cube(...,
+resampling_kernel="drizzle_square", drizzle_pixfrac=1.0)`. The helper script
+uses this lower-level API when you pass `--resampling-kernel drizzle_square`.
+
 Useful baseline checks:
 
 - Does every cutout have similar `NAXIS1`, `NAXIS2`, `CRVAL1`, and `CRVAL2`?
@@ -191,7 +277,7 @@ Useful baseline checks:
 - Are bright objects in roughly the same place in each band?
 - Does the weight/coverage map show where there is real data?
 
-## 5. INR Starting Point
+## 7. INR Starting Point
 
 The first neural-field model should be deliberately small:
 
@@ -241,7 +327,7 @@ When rendering larger products, use `render_field_cube(..., spatial_tile_hw=(256
 or similar chunking so the output cube does not require all wavelengths and all
 pixels in one forward pass.
 
-## 6. Bundle Adjustment
+## 8. Bundle Adjustment
 
 Once the fixed-WCS INR works, add pose residuals:
 
@@ -266,7 +352,7 @@ The "gauge" point matters: if every exposure is allowed to move, the model can
 shift the whole sky and still fit the data. Freezing one reference pose defines
 what "no shift" means.
 
-## 7. Path To A Larger Contiguous Field
+## 9. Path To A Larger Contiguous Field
 
 The term project should grow from one patch to a larger contiguous region in
 stages. Do not jump straight to "fit the whole mosaic"; that usually hides data
@@ -291,7 +377,7 @@ The important design idea is that the field is continuous, but the engineering i
 still tiled and chunked. A large contiguous reconstruction is assembled from
 carefully tracked local evidence, not from one giant untracked tensor.
 
-## 8. Notebooks
+## 10. Notebooks
 
 | Notebook | Goal |
 |----------|------|
@@ -299,7 +385,7 @@ carefully tracked local evidence, not from one giant untracked tensor.
 | [examples/notebooks/02_multiband_hyperspectral_synthetic.ipynb](../../examples/notebooks/02_multiband_hyperspectral_synthetic.ipynb) | Multiband throughput, cube export, and pose hook. |
 | [examples/notebooks/03_smacs0723_real_minicutout.ipynb](../../examples/notebooks/03_smacs0723_real_minicutout.ipynb) | Real JWST mini-cutouts after running the data scripts. |
 
-## 9. Term-Scale Success Criteria
+## 11. Term-Scale Success Criteria
 
 1. A reproducible data fixture with manifest, baseline stack cube, and quicklook plots.
 2. A fixed-WCS INR fit to at least two calibrated bands on the same patch.

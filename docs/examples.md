@@ -71,7 +71,9 @@ match the domain guides.
 For the real-data path, run `scripts/build_smacs0723_minicutout.py --list-bands`
 first in the Pixi `test` environment, build the mini-cutouts, then run
 `scripts/build_smacs0723_stack_baseline.py` to create the classical multiband
-stack baseline used for INR comparisons. Run
+stack baseline used for INR comparisons. Run it once with the default bilinear
+kernel for debugging, then with `--resampling-kernel drizzle_square` for a
+drizzle-like astronomy baseline. Run
 `scripts/visualize_smacs0723_products.py` after each data product to create PNG
 quicklooks before trusting a loss curve. Use explicit `--center-x` / `--center-y`
 values to make adjacent reproducible tiles as the project grows beyond the first
