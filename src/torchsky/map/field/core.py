@@ -6050,7 +6050,11 @@ def render_field_samples_distribution(
     override_wavelengths: Tensor | None = None,
     override_weights: Tensor | None = None,
     forward_context: ForwardContext | None = None,
+    exposure_pose: ExposurePose | None = None,
 ) -> tuple[Tensor, Tensor]:
+    ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
+        ra_deg, dec_deg, observation, exposure_pose
+    )
     operator_bundle = field_observation_operator_bundle(observation)
     if operator_bundle.psf is not None:
         raise ValueError("pixel-sampled field rendering does not support PSF blurring")
@@ -6291,7 +6295,11 @@ def render_field_samples(
     override_wavelengths: Tensor | None = None,
     override_weights: Tensor | None = None,
     forward_context: ForwardContext | None = None,
+    exposure_pose: ExposurePose | None = None,
 ) -> Tensor:
+    ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
+        ra_deg, dec_deg, observation, exposure_pose
+    )
     operator_bundle = field_observation_operator_bundle(observation)
     if operator_bundle.psf is not None:
         raise ValueError("pixel-sampled field rendering does not support PSF blurring")
@@ -6804,21 +6812,35 @@ def fit_field_model(
     freeze_field_body: bool = False,
     device: torch.device | str | None = None,
     observation_forward_contexts: Sequence[ForwardContext | None] | None = None,
+    observation_exposure_poses: Sequence[ExposurePose | None] | None = None,
 ) -> FieldFitResult:
     if not observations:
         raise ValueError("fit_field_model requires at least one observation")
     train_device = resolve_fit_device(model, device)
     model = model.to(device=train_device)
-    if observation_forward_contexts is not None:
-        if len(observation_forward_contexts) != len(observations):
-            raise ValueError(
-                "observation_forward_contexts must have the same length as observations"
-            )
-        obs_forward_ctx: tuple[ForwardContext | None, ...] = tuple(
-            observation_forward_contexts
+
+    obs_forward_ctx: tuple[ForwardContext | None, ...] = (
+        tuple(observation_forward_contexts)
+        if observation_forward_contexts is not None
+        else tuple(None for _ in observations)
+    )
+    if len(obs_forward_ctx) != len(observations):
+        raise ValueError(
+            "observation_forward_contexts must have the same length as observations"
         )
-    else:
-        obs_forward_ctx = tuple(None for _ in observations)
+
+    obs_exposure_poses: tuple[ExposurePose | None, ...] = (
+        tuple(observation_exposure_poses)
+        if observation_exposure_poses is not None
+        else tuple(None for _ in observations)
+    )
+    if len(obs_exposure_poses) != len(observations):
+        raise ValueError(
+            "observation_exposure_poses must have the same length as observations"
+        )
+    for pose in obs_exposure_poses:
+        if pose is not None:
+            pose.to(device=train_device)
     if steps <= 0:
         raise ValueError("steps must be positive")
     pretrain_steps = max(int(noise_pretrain_steps), 0)
@@ -6847,6 +6869,12 @@ def fit_field_model(
             if freeze_field_body and name.startswith("body."):
                 param.requires_grad = False
     trainable_params = [p for p in model.parameters() if p.requires_grad]
+    seen_poses = set()
+    for pose in obs_exposure_poses:
+        if pose is not None and id(pose) not in seen_poses:
+            trainable_params.extend([p for p in pose.parameters() if p.requires_grad])
+            seen_poses.add(id(pose))
+
     if not trainable_params:
         raise ValueError(
             "fit_field_model: no trainable parameters (check freeze_field_encoder / freeze_field_body)"
@@ -6947,10 +6975,11 @@ def fit_field_model(
             observation_sampling=observation_sampling,
             generator=sampling_generator,
         )
-        selected_pairs: list[tuple[FieldObservation, ForwardContext | None]] = []
+        selected_pairs: list[tuple[FieldObservation, ForwardContext | None, ExposurePose | None]] = []
         if pixel_sample_count > 0:
             selected_pairs = [
-                (observations[idx], obs_forward_ctx[idx]) for idx in selected_indices
+                (observations[idx], obs_forward_ctx[idx], obs_exposure_poses[idx])
+                for idx in selected_indices
             ]
         elif (
             shared_sky_patch_sampling
@@ -6961,7 +6990,8 @@ def fit_field_model(
             cropped_indices = selected_indices[uncropped_count:]
             if uncropped_indices:
                 selected_pairs.extend(
-                    (observations[i], obs_forward_ctx[i]) for i in uncropped_indices
+                    (observations[i], obs_forward_ctx[i], obs_exposure_poses[i])
+                    for i in uncropped_indices
                 )
             for _ in range(patches_per_observation):
                 ref_position = int(
@@ -6994,19 +7024,24 @@ def fit_field_model(
                     )
                     if cropped is not None:
                         selected_pairs.append(
-                            (cropped, obs_forward_ctx[observation_index])
+                            (
+                                cropped,
+                                obs_forward_ctx[observation_index],
+                                obs_exposure_poses[observation_index],
+                            )
                         )
             if not selected_pairs:
                 selected_pairs = [
-                    (observations[idx], obs_forward_ctx[idx])
+                    (observations[idx], obs_forward_ctx[idx], obs_exposure_poses[idx])
                     for idx in selected_indices
                 ]
         else:
             for selected_rank, observation_index in enumerate(selected_indices):
                 base_observation = observations[observation_index]
                 base_ctx = obs_forward_ctx[observation_index]
+                base_pose = obs_exposure_poses[observation_index]
                 if training_patch_size is None or selected_rank < uncropped_count:
-                    selected_pairs.append((base_observation, base_ctx))
+                    selected_pairs.append((base_observation, base_ctx, base_pose))
                     continue
                 patch = min(
                     int(training_patch_size),
@@ -7017,7 +7052,7 @@ def fit_field_model(
                     patch >= int(base_observation.image.shape[-2])
                     and patch >= int(base_observation.image.shape[-1])
                 ):
-                    selected_pairs.append((base_observation, base_ctx))
+                    selected_pairs.append((base_observation, base_ctx, base_pose))
                     continue
                 for _ in range(patches_per_observation):
                     x0, y0 = _sample_patch_origin(
@@ -7035,10 +7070,13 @@ def fit_field_model(
                                 height=patch,
                             ),
                             base_ctx,
+                            base_pose,
                         )
                     )
-        selected_observations = [o for o, _ in selected_pairs]
-        context_pairs: list[tuple[FieldObservation, ForwardContext | None]] = []
+        selected_observations = [o for o, _, _ in selected_pairs]
+        context_pairs: list[
+            tuple[FieldObservation, ForwardContext | None, ExposurePose | None]
+        ] = []
         if context_count > 0 and context_weight > 0.0:
             context_indices = _sample_observation_indices(
                 observations,
@@ -7047,7 +7085,8 @@ def fit_field_model(
                 generator=sampling_generator,
             )
             context_pairs = [
-                (observations[idx], obs_forward_ctx[idx]) for idx in context_indices
+                (observations[idx], obs_forward_ctx[idx], obs_exposure_poses[idx])
+                for idx in context_indices
             ]
 
         streamed_total_loss = 0.0
@@ -7070,7 +7109,7 @@ def fit_field_model(
                     selected_band_weight_sum[band_key] = selected_band_weight_sum.get(
                         band_key, 0.0
                     ) + _observation_weight_sum_scalar(observation)
-        for observation, forward_context in selected_pairs:
+        for observation, forward_context, exposure_pose in selected_pairs:
             render_kwargs = {}
             if training_spectral_sampling == "mixture_mc":
                 assert mixture_wavelengths is not None and mixture_probs is not None
@@ -7087,6 +7126,7 @@ def fit_field_model(
                     training_spectral_sampling_grid_size
                 )
             render_kwargs["forward_context"] = forward_context
+            render_kwargs["exposure_pose"] = exposure_pose
             if pixel_sample_count > 0 and (
                 observation.psf_spec is None or observation.psf_spec.mode == "none"
             ):
@@ -7302,13 +7342,14 @@ def fit_field_model(
                     generator=sampling_generator,
                 )[:max_anchor_count].tolist()
                 for anchor_index in anchor_perm:
-                    anchor_observation, anchor_fctx = selected_pairs[anchor_index]
+                    anchor_observation, anchor_fctx, anchor_pose = selected_pairs[anchor_index]
                     anchor_pred = render_field_observation(
                         model,
                         anchor_observation,
                         num_spectral_samples=anchor_num_samples,
                         spectral_sampling="deterministic_quadrature",
                         forward_context=anchor_fctx,
+                        exposure_pose=anchor_pose,
                     )
                     anchor_image = anchor_observation.image.to(
                         device=anchor_pred.device,
@@ -7414,8 +7455,9 @@ def fit_field_model(
                 total_loss = total_loss + centroid_anchor_loss
         if context_pairs and context_weight > 0.0:
             scaled_context_weight = context_weight / max(len(context_pairs), 1)
-            for context_observation, ctx_f in context_pairs:
+            for context_observation, ctx_f, ctx_pose in context_pairs:
                 context_render_kwargs = {}
+                context_render_kwargs["exposure_pose"] = ctx_pose
                 if training_spectral_sampling == "mixture_mc":
                     assert mixture_wavelengths is not None and mixture_probs is not None
                     context_render_kwargs["override_wavelengths"] = mixture_wavelengths

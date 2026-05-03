@@ -13,12 +13,16 @@ Poles and very large fields may need a spherically exact formulation (research e
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
 from ..wcs import WCS
+
+if TYPE_CHECKING:
+    from .field.types import FieldObservation
 
 
 def _wrapped_delta_ra_deg(ra_a_deg: Tensor, ra_b_deg: float) -> Tensor:
@@ -102,3 +106,21 @@ def freeze_pose(pose: ExposurePose) -> None:
     """Disable gradients on all pose parameters (e.g. anchor one exposure)."""
     for p in pose.parameters():
         p.requires_grad = False
+
+
+def create_exposure_poses(
+    observations: list[FieldObservation],
+    *,
+    anchor_first: bool = True,
+) -> list[ExposurePose]:
+    """Create a list of ExposurePose objects, one for each observation.
+
+    Args:
+        observations: List of observations to create poses for.
+        anchor_first: If True, the first pose will have ``requires_grad=False``
+            to fix the absolute astrometric gauge (preventing global drift).
+    """
+    poses = [ExposurePose() for _ in observations]
+    if anchor_first and poses:
+        freeze_pose(poses[0])
+    return poses

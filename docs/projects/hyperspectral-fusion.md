@@ -44,6 +44,25 @@ Adding **HST ACS** cutouts is the same pipeline once FITS + WCS headers are on d
 | Training orchestration, logging, paper experiments | `examples/notebooks/`, `examples/`, or a private research repo |
 | Student thesis-only analysis | Same as experiments; avoid widening public API without review |
 
+## Tip: Simultaneous Alignment
+
+To solve for registration and scene properties together, pass a list of `ExposurePose` objects (one per observation) to `fit_field_model`:
+
+```python
+from torchsky.map import create_exposure_poses, fit_field_model
+
+poses = create_exposure_poses(observations, anchor_first=True)
+result = fit_field_model(
+    observations,
+    model,
+    observation_exposure_poses=poses,
+    steps=500,
+    lr=5e-3,
+)
+```
+
+The first pose is "frozen" by default to fix the global astrometric gauge.
+
 See [field.md](../field.md), [implicit_forward.md](../implicit_forward.md), [spectral.md](../spectral.md).
 
 ## Success criteria (term-scale)
