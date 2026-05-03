@@ -35,6 +35,7 @@ from ..operators.spectral import (
     mixture_importance_weights as _shared_mixture_importance_weights,
     mixture_mc_samples as _shared_mixture_mc_samples,
 )
+from ..exposure_pose import ExposurePose
 from ..solvers import ComponentDecompositionDiagnostics, SurveyInstrumentComponentMixer
 
 from .types import (
@@ -461,6 +462,21 @@ def _coordinate_grid(
     )
     ra_deg, dec_deg = WCS(header).pixel_to_world(x, y)
     return ra_deg, dec_deg
+
+
+def _apply_exposure_pose_to_sky_grid(
+    ra_deg: Tensor,
+    dec_deg: Tensor,
+    observation: FieldObservation,
+    exposure_pose: ExposurePose | None,
+) -> tuple[Tensor, Tensor]:
+    if exposure_pose is None:
+        return ra_deg, dec_deg
+    center_ra = float(observation.header.get("CRVAL1", 0.0))
+    center_dec = float(observation.header.get("CRVAL2", 0.0))
+    return exposure_pose.apply_to_world(
+        ra_deg, dec_deg, center_ra_deg=center_ra, center_dec_deg=center_dec
+    )
 
 
 def _gaussian_kernel1d(sigma_pix: float, *, device: torch.device) -> Tensor:
@@ -5910,6 +5926,7 @@ def render_field_observation_distribution(
     override_wavelengths: Tensor | None = None,
     override_weights: Tensor | None = None,
     forward_context: ForwardContext | None = None,
+    exposure_pose: ExposurePose | None = None,
 ) -> tuple[Tensor, Tensor]:
     image = observation.image
     if image.ndim != 2:
@@ -5919,6 +5936,9 @@ def render_field_observation_distribution(
         observation.header,
         shape=tuple(image.shape),
         device=device,
+    )
+    ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
+        ra_deg, dec_deg, observation, exposure_pose
     )
     if override_wavelengths is not None or override_weights is not None:
         if override_wavelengths is None or override_weights is None:
@@ -5996,6 +6016,7 @@ def render_field_observation_distribution(
                 override_wavelengths=override_wavelengths,
                 override_weights=override_weights,
                 forward_context=forward_context,
+                exposure_pose=exposure_pose,
             )
             logvar = torch.zeros_like(mean)
     operator_bundle = field_observation_operator_bundle(observation)
@@ -6131,6 +6152,7 @@ def render_field_observation(
     use_func_vmap: bool = False,
     func_vmap_chunk: int = 65536,
     forward_context: ForwardContext | None = None,
+    exposure_pose: ExposurePose | None = None,
 ) -> Tensor:
     image = observation.image
     if image.ndim != 2:
@@ -6140,6 +6162,9 @@ def render_field_observation(
         observation.header,
         shape=tuple(image.shape),
         device=device,
+    )
+    ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
+        ra_deg, dec_deg, observation, exposure_pose
     )
     operator_bundle = field_observation_operator_bundle(observation)
     if override_wavelengths is not None or override_weights is not None:

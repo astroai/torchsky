@@ -8,9 +8,10 @@ This module is an experimental helper layer built on top of torchsky FITS I/O.
 It is not part of the core FITS read/write parity surface.
 """
 
+from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
 
@@ -84,6 +85,124 @@ def spectral_axis_from_header(
         SpectralAxis(values=values, unit=spectral_unit, type=spectral_type),
         tensor_axis_index,
     )
+
+
+def _strip_axis3_and_naxis_keys(header: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove NAXIS* and axis-3 WCS keys so a 2D spatial header can become cube axis 1–2."""
+    out: Dict[str, Any] = {}
+    for key, value in header.items():
+        ku = key.upper()
+        if ku == "NAXIS" or ku.startswith("NAXIS"):
+            continue
+        if ku.startswith("CTYPE3"):
+            continue
+        if ku.startswith("CUNIT3"):
+            continue
+        if ku.startswith("CRVAL3"):
+            continue
+        if ku.startswith("CRPIX3"):
+            continue
+        if ku.startswith("CDELT3"):
+            continue
+        if ku.startswith("CROTA3"):
+            continue
+        if ku.startswith("PC03") or ku.startswith("PC3_") or ku.startswith("PC_3"):
+            continue
+        if ku.startswith("CD3_") or ku.startswith("CD_3"):
+            continue
+        out[key] = value
+    return out
+
+
+def write_cube_fits(
+    path: str,
+    cube: torch.Tensor,
+    *,
+    spatial_header: Dict[str, Any],
+    spectral_axis: SpectralAxis,
+    spectral_axis_index: int = 0,
+    overwrite: bool = False,
+    compress: Union[bool, str] = False,
+) -> Dict[str, Any]:
+    """Write a 3D spectral cube to a FITS primary image HDU.
+
+    The cube is written with **FITS axis 3 = spectral** (``CTYPE3`` / ``CRVAL3`` /
+    ``CDELT3``), matching :meth:`SpectralReader.read_data_cube` when the spectral
+    axis is the slowest-varying FITS axis (tensor index ``0``).
+
+    Args:
+        path: Output ``.fits`` path.
+        cube: Three-dimensional tensor. Default layout is ``(L, H, W)`` with
+            ``L == len(spectral_axis.values)`` when ``spectral_axis_index=0``.
+        spatial_header: Header-like dict for the **spatial** plane (axes 1 and 2):
+            e.g. ``CTYPE1/2``, ``CRPIX1/2``, ``CRVAL1/2``, ``CD*`` or ``CDELT*``.
+            ``NAXIS`` / ``NAXIS1`` / ``NAXIS2`` are replaced using ``cube`` shape.
+        spectral_axis: Linear spectral coordinates for axis 3; ``values`` length
+            must match the spectral dimension of ``cube``. Values must be **uniformly
+            spaced** (within float tolerance) so a single ``CDELT3`` describes the grid.
+        spectral_axis_index: Which dimension of ``cube`` is spectral (default ``0``).
+        overwrite: Passed to :func:`torchsky.write`.
+        compress: Passed to :func:`torchsky.write`.
+
+    Returns:
+        The merged FITS header dictionary written with the array.
+
+    Raises:
+        ValueError: If ``cube`` is not 3D, shapes disagree, or the spectral grid
+            is not linear.
+    """
+    if cube.ndim != 3:
+        raise ValueError(f"cube must be 3D, got shape {tuple(cube.shape)}")
+    if spectral_axis_index not in (0, 1, 2):
+        raise ValueError("spectral_axis_index must be 0, 1, or 2")
+    L = int(cube.shape[spectral_axis_index])
+    spatial_dims = [int(d) for i, d in enumerate(cube.shape) if i != spectral_axis_index]
+    height, width = spatial_dims[0], spatial_dims[1]
+
+    vals = spectral_axis.values.detach().to(dtype=torch.float64).reshape(-1)
+    if vals.numel() != L:
+        raise ValueError(
+            f"spectral_axis.values length {vals.numel()} != spectral cube dim {L}"
+        )
+    if vals.numel() >= 2:
+        steps = vals[1:] - vals[:-1]
+        step0 = steps[0]
+        if not torch.allclose(steps, step0, rtol=1e-5, atol=1e-8):
+            raise ValueError(
+                "write_cube_fits requires uniformly spaced spectral_axis.values "
+                "(single CDELT3); use a linear grid or resample first."
+            )
+        cdelt3 = float(step0.item())
+    else:
+        cdelt3 = 1.0
+
+    perm = (spectral_axis_index,) + tuple(
+        i for i in range(3) if i != spectral_axis_index
+    )
+    # Tensor layout (L, H, W): FITS NAXIS3=L, NAXIS2=H, NAXIS1=W (fast axis).
+    data_write = cube.permute(*perm).contiguous()
+
+    header: Dict[str, Any] = dict(_strip_axis3_and_naxis_keys(spatial_header))
+    header["NAXIS"] = 3
+    header["NAXIS1"] = width
+    header["NAXIS2"] = height
+    header["NAXIS3"] = L
+    header["CTYPE3"] = str(spectral_axis.type)
+    header["CUNIT3"] = str(spectral_axis.unit)
+    header["CRPIX3"] = 1.0
+    header["CRVAL3"] = float(vals[0].item())
+    header["CDELT3"] = float(cdelt3)
+
+    import torchsky as ts
+
+    ts.write(
+        path,
+        data_write,
+        header=header,
+        overwrite=overwrite,
+        compress=compress,
+    )
+    return dict(header)
 
 
 def spectral_bin_edges_from_header(

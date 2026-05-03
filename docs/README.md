@@ -28,6 +28,10 @@ validation, and API pointers.
   sparse maps, MOC, and harmonic primitives.
 - [Map](map.md) - `torchsky.map`, products, kernels, value semantics, truth
   evaluation, operators, and field/INR workflows.
+- [Field / INR fitting](field.md) - `FieldObservation`, `make_field_model`,
+  `fit_field_model`, rendering cubes and HEALPix (experimental).
+- [Implicit forward modeling](implicit_forward.md) - multi-survey losses,
+  kinematics, `predict_observation_mean`, Charbonnier scaffold.
 - [Catalogs](catalogs.md) - `torchsky.catalogs`, crossmatch, and streaming
   catalog datasets.
 - [Spectral data](spectral.md) - `torchsky.spectral`, spectra, cubes, and
@@ -44,6 +48,11 @@ validation, and API pointers.
   compatibility surfaces, and upstream validation coverage.
 - [Benchmarks](benchmarks.md) - methodology, comparator environments, real-data
   setup, SMACS/UPdec runs, tasks, and benchmark snapshot.
+
+## Projects
+
+- [Hyperspectral fusion / neural fields (student onboarding)](projects/hyperspectral-fusion.md) -
+  notebook path, SMACS mini-cutout script, library vs research split.
 
 ## Contributor Docs
 

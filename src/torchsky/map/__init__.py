@@ -27,6 +27,7 @@ from .periodic_affine import resample_linear_affine_periodic_bilinear_2d
 from .spectral_affine import resample_linear_affine_spectral_2d
 from .spectral_nufft import resample_nonuniform_spectral_fast_2d
 from .spectral_nonuniform import resample_nonuniform_spectral_2d
+from .exposure_pose import ExposurePose, freeze_pose
 from .field import (
     BandpassConditionedField,
     ConditionedSpectralField,
@@ -229,8 +230,10 @@ __all__ = [
     "evaluate_map_frontier_regions",
     "evaluate_map_uncertainty",
     "evaluate_map_product",
+    "ExposurePose",
     "fit_field_component_decomposition",
     "fit_field_model",
+    "freeze_pose",
     "STRAINER_TRUNK_CHECKPOINT_FORMAT",
     "load_strainer_trunk_checkpoint",
     "make_field_component_decomposition",

@@ -14,7 +14,8 @@ comparators and parity baselines, not runtime dependencies of the core map path.
 
 Stable promoted surfaces include `coadd_image_plane(...)`,
 `stack_map_product(...)`, and `MapProductSpec`. Field/INR modelling under
-`torchsky.map.field` is active but experimental.
+`torchsky.map.field` is active but experimental — see [field.md](field.md) and
+[implicit_forward.md](implicit_forward.md).
 
 ## Core Concepts
 
@@ -117,7 +118,8 @@ Evaluation:
 - `evaluate_map_product(...)`
 - `evaluate_map_frontier_regions(...)`
 
-Experimental field/INR layer:
+Experimental field/INR layer (tutorial: [field.md](field.md), losses/context:
+[implicit_forward.md](implicit_forward.md)):
 
 - `FieldObservation`, `FieldDomain`, `fit_field_model(...)`
 - `render_field_observation(...)`, `render_field_cube(...)`,

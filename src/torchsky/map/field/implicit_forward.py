@@ -1,4 +1,4 @@
-"""Implicit forward-modeling shell aligned with ``implicit_forward.md`` (repo root).
+"""Implicit forward-modeling shell aligned with ``docs/implicit_forward.md``.
 
 This module is the **code counterpart** to the architectural note: shared scene INR
 ``F_θ``, optional kinematics ``ζ``, context ``c``, and instrument-side rendering

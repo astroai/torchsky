@@ -60,6 +60,16 @@ match the domain guides.
 | [`example_image_dataset.py`](../examples/example_image_dataset.py) | PyTorch `Dataset` for FITS images with caching and `DataLoader`. |
 | [`example_ml_pipeline.py`](../examples/example_ml_pipeline.py) | End-to-end ML pipeline: loading, transforms, caching, distributed training. |
 
+## Notebooks (field / hyperspectral)
+
+| Notebook | What it demonstrates |
+|---|---|
+| [`01_field_fit_synthetic.ipynb`](../examples/notebooks/01_field_fit_synthetic.ipynb) | Synthetic single-band `fit_field_model` quickstart. |
+| [`02_multiband_hyperspectral_synthetic.ipynb`](../examples/notebooks/02_multiband_hyperspectral_synthetic.ipynb) | Multi-band throughput, `render_field_cube`, `write_cube_fits`, `ExposurePose`. |
+| [`03_smacs0723_real_minicutout.ipynb`](../examples/notebooks/03_smacs0723_real_minicutout.ipynb) | Real JWST UPdec cutouts; requires running `scripts/build_smacs0723_minicutout.py`. |
+
+See [projects/hyperspectral-fusion.md](projects/hyperspectral-fusion.md) for context.
+
 ## Running Examples
 
 ```bash

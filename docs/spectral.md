@@ -50,9 +50,13 @@ collapsed = cube.collapse_spectral(method="mean")
 - `DataCube`
 - `SpectralAxis`
 - `SpectralReader`
+- `write_cube_fits(...)` — write a `(L, H, W)` tensor with a 3-axis FITS WCS
+  (spectral axis `CTYPE3`); pair with `SpectralReader.read_data_cube` for round-trips.
 
 ## Related Guides
 
 - [io.md](io.md) for FITS files and HDUs.
 - [wcs.md](wcs.md) for spectral WCS transforms.
 - [map.md](map.md) for cube and multiband map products.
+- [field.md](field.md) for fitting continuous spectral fields and writing cubes with
+  `write_cube_fits`.
