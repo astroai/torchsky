@@ -1,26 +1,23 @@
 # Student Project: Hyperspectral Fusion with Neural Spectral Fields
 
-One-line goal: turn several telescope images of the same sky into one deeper
-spatial-plus-wavelength model of that sky.
+This project takes several telescope images of the same patch of sky and turns
+them into one deeper model of that patch in space and wavelength. We start with
+a small JWST-style patch and a normal astronomy stack, make quicklook images so
+we can see what we are doing, then fit a neural field, and only later scale to a
+larger contiguous sky field.
 
-First principle: start with things you can see and debug. Build a normal stack,
-make quicklook images, then fit a neural field.
-
-Near-term goal: make one small JWST-style patch reproducible, stacked, visualized,
-fitted with an INR, and compared honestly.
-
-Long-term goal: scale from one patch to a larger contiguous sky field.
+Guiding rule: start with things you can see and debug. If the data layer is
+wrong, the neural field will learn the wrong thing.
 
 ## 0. Big Picture
 
-This project has three layers:
+This project has three layers, and we work on them in this order:
 
 1. **Data layer:** FITS files, WCS headers, filters, masks, and weights.
 2. **Baseline layer:** a classical stack/coadd, including a drizzle-like baseline.
 3. **Research layer:** a neural field that predicts intensity at `(RA, Dec, wavelength)`.
 
-Keep those layers separate. If the data layer is wrong, the neural field will
-learn the wrong thing.
+Each layer should make sense on its own before you build on top of it.
 
 ## 1. If You Are New To Astro Data
 
@@ -68,23 +65,28 @@ One-liner: ask the model for brightness at any `(RA, Dec, wavelength)`.
 The classical stack asks, "What image do I get after resampling?" The INR asks,
 "Can one continuous function explain all the observations directly?"
 
-The research direction is a continuous sky model:
+### A Little Math (Optional First Read)
+
+You do not need to derive these equations to use the code; the library calls
+them for you. They are here so you know what the code is doing.
+
+The continuous sky model is a function:
 
 \[
 F_\theta(\alpha, \delta, \lambda)
 \]
 
-where a telescope image is predicted by querying the sky through its WCS and
-integrating over the filter throughput:
+A telescope image is predicted by querying the sky through its WCS and
+integrating over the filter throughput \(T(\lambda)\):
 
 \[
 I_{\mathrm{pred}}(x, y) =
 \int F_\theta(\alpha(x,y), \delta(x,y), \lambda) T(\lambda) d\lambda .
 \]
 
-Images from different visits or telescopes can have pointing residuals. For
-small cutouts, `ExposurePose` supplies a learnable tangent-plane residual per
-exposure:
+Images from different visits or telescopes can have small pointing residuals.
+For small cutouts, `ExposurePose` supplies a learnable tangent-plane residual
+per exposure:
 
 \[
 (\alpha', \delta') = \mathrm{Pose}_{\phi_i}(\alpha_{\mathrm{WCS}}(x,y), \delta_{\mathrm{WCS}}(x,y)).
@@ -101,25 +103,40 @@ Later in the project, the experiment becomes a joint solve for scene and pose:
 
 ## 2. First Week Workflow
 
-Run commands from the repository root. Use Pixi for project Python:
+You should be able to do all of the following from a fresh terminal in the
+repository root. Project Python lives inside Pixi environments; this guide
+uses the `test` environment because it has the FITS and astronomy dependencies.
+
+Sanity check that the environment is healthy:
 
 ```bash
 pixi run preflight-push
 ```
 
-Recommended path:
+If that command fails, ask before continuing; do not try to install Python
+packages by hand.
 
-1. **Read the glossary.** Know what FITS, WCS, band, stack, cube, and INR mean.
-2. **List the available bands.** This confirms the data script works.
-3. **Build SMACS J0723 mini-cutouts.** This makes small files you can inspect.
-4. **Build a bilinear stack baseline.** This is the simplest classical product.
-5. **Build a drizzle-like stack baseline.** This is closer to a standard astronomy coadd.
-6. **Make quicklook PNGs.** Inspect images before training anything.
-7. **Fit a small INR.** Only start model tuning after the data products look sane.
-8. **Compare residuals.** Look at stack residuals, INR residuals, and exported cubes.
+Recommended path (each step has a command later in the doc):
 
-First-day success means the commands run, the baseline FITS cube exists, and the
-student can explain what FITS, WCS, band, stack, and cube mean in one sentence.
+1. **Read the glossary** above so the words FITS, WCS, band, stack, cube, and
+   INR are not surprising.
+2. **List the available bands** with `build_smacs0723_minicutout.py --list-bands`
+   to confirm the data script can be invoked.
+3. **Build SMACS J0723 mini-cutouts** with `--download` (Section 4).
+4. **Build a bilinear stack baseline** with `build_smacs0723_stack_baseline.py`
+   (Section 4); this is the simplest classical product.
+5. **Build a drizzle-like stack baseline** with `--resampling-kernel drizzle_square`
+   (Section 4); this is closer to a standard astronomy coadd.
+6. **Make quicklook PNGs** with `visualize_smacs0723_products.py` (Section 5)
+   and inspect them before training anything.
+7. **Fit a small INR** (Section 7); only start tuning after the data products
+   look sane.
+8. **Compare residuals** between the stack baseline and the INR cube (Section 5
+   with `--comparison-cube`).
+
+First-day success: the commands above run, a baseline FITS cube exists, and
+you can describe what FITS, WCS, band, stack, and cube mean in one sentence
+each.
 
 ## 3. Where The SMACS Data Comes From
 
@@ -140,9 +157,14 @@ Why this choice? Iteration 0 is a conservative place to start. It gives a
 drizzle-style public product that is easier to compare against before we attempt
 neural fields or deconvolution-like behavior.
 
-Important limitation: this starter fixture is already coadded. A future stronger
-project stage should go back to calibrated exposures and build the stack/neural
-field from individual observations.
+Important limitation: this starter fixture is already coadded. A future
+stronger project stage should go back to calibrated exposures and build the
+stack/neural field from individual observations.
+
+This first fixture is JWST-only. That is intentional: it gives a clean
+starting point. HST data can be added later, after you understand the same
+steps for one telescope: file discovery, FITS headers, WCS sanity checks,
+stack, INR fit, and residual comparison.
 
 References:
 
@@ -166,17 +188,6 @@ To see the currently supported public fixture bands:
 ```bash
 pixi run -e test -- python scripts/build_smacs0723_minicutout.py --list-bands
 ```
-
-This first fixture is JWST-only. That is intentional: it gives a clean starting
-point. HST can be added after the student understands the same steps for one
-dataset: file discovery, FITS headers, WCS sanity checks, stack, INR fit, and
-residual comparison.
-
-For adjacent tiles, keep the same `--crop-size` and vary `--center-x` /
-`--center-y`. The manifest records `source_shape`, `crop_origin_xy`,
-`crop_bounds_xy`, and the requested/actual crop centers so each tile can be
-recreated later. This is intentionally simple provenance, but it is enough to
-avoid losing track of which source pixels became which training patch.
 
 Then build the WCS-harmonized stack baseline:
 
@@ -236,10 +247,10 @@ residuals structured, and did the model invent artifacts at tile boundaries?
 
 ## 6. Baseline Stack API
 
-For scripts or notebooks, the classical baseline is:
+For your own scripts or notebooks, the classical baseline is:
 
 ```python
-from torchsky.map import ImageObservation, coadd_image_plane_multiband
+from torchsky.map import ImageObservation, coadd_image_plane_cube
 from torchsky.spectral import write_cube_fits
 
 observations = [
@@ -253,7 +264,11 @@ observations = [
     # Add the remaining bands from manifest.json.
 ]
 
-baseline = coadd_image_plane_multiband(observations, resampling_kernel="bilinear")
+baseline = coadd_image_plane_cube(
+    observations,
+    resampling_kernel="bilinear",  # use "drizzle_square" for the drizzle-like baseline
+    drizzle_pixfrac=1.0,
+)
 write_cube_fits(
     "smacs0723_stack_baseline.fits",
     baseline.data,
@@ -263,12 +278,9 @@ write_cube_fits(
 )
 ```
 
-Use this before fitting neural fields. If the baseline looks wrong, debug data,
-headers, masks, or units before changing the INR.
-
-For a drizzle-like baseline in code, use `coadd_image_plane_cube(...,
-resampling_kernel="drizzle_square", drizzle_pixfrac=1.0)`. The helper script
-uses this lower-level API when you pass `--resampling-kernel drizzle_square`.
+The `build_smacs0723_stack_baseline.py` helper calls this same function. If
+the baseline looks wrong here, debug data, headers, masks, or units before
+changing the INR.
 
 Useful baseline checks:
 
@@ -279,18 +291,50 @@ Useful baseline checks:
 
 ## 7. INR Starting Point
 
+Before fitting, build one `FieldObservation` per cutout. `FieldObservation`
+wraps the image tensor, the FITS header (so the WCS is known), and the
+spectral metadata for that band:
+
+```python
+import torch
+import torchsky
+from torchsky.map import FieldObservation
+
+def field_observation_from_cutout(path, wavelength, spectral_min, spectral_max, band):
+    image, header = torchsky.read(path, return_header=True)
+    return FieldObservation(
+        image=torch.as_tensor(image, dtype=torch.float32),
+        header=dict(header),
+        wavelength=wavelength,
+        spectral_min=spectral_min,
+        spectral_max=spectral_max,
+        transmission_center=wavelength,
+        band_name=band,
+    )
+
+field_observations = [
+    field_observation_from_cutout(
+        "data/smacs0723_minicutout/smacs0723_F090W_cutout_256.fits",
+        wavelength=9000.0, spectral_min=8000.0, spectral_max=10000.0, band="F090W",
+    ),
+    field_observation_from_cutout(
+        "data/smacs0723_minicutout/smacs0723_F150W_cutout_256.fits",
+        wavelength=15000.0, spectral_min=13000.0, spectral_max=17000.0, band="F150W",
+    ),
+]
+target_header = field_observations[0].header
+```
+
 The first neural-field model should be deliberately small:
 
 ```python
 from torchsky.map import (
-    FieldObservation,
     estimate_field_domain,
     fit_field_model,
     make_field_model,
     render_field_cube,
 )
 from torchsky.spectral import SpectralAxis, write_cube_fits
-import torch
 
 domain = estimate_field_domain(field_observations)
 model = make_field_model("hashgrid_spectral_field", domain, hidden_dim=64, num_levels=4)
@@ -311,6 +355,12 @@ write_cube_fits(
 )
 ```
 
+What to expect: with two bands at `crop_size=256` on CPU, this should take a
+few minutes. The 100 wavelengths span all NIRCam bands so the rendered cube
+also covers wavelengths between the two bands (which the INR has to
+extrapolate). For a first run, restrict the rendering axis to the wavelength
+range you actually trained on.
+
 `FieldObservation` caches WCS coordinate grids after the first render so repeated
 training steps do not recompute the same pixel-to-sky transform. If you mutate an
 observation header or image shape in-place, call `observation.clear_coordinate_cache()`.
@@ -328,6 +378,10 @@ or similar chunking so the output cube does not require all wavelengths and all
 pixels in one forward pass.
 
 ## 8. Bundle Adjustment
+
+"Fixed-WCS" means we trust the FITS header coordinates exactly. Bundle
+adjustment relaxes that by letting each exposure shift, rotate, and scale
+slightly to better align with the others while the neural field is being fit.
 
 Once the fixed-WCS INR works, add pose residuals:
 
@@ -360,9 +414,12 @@ problems and memory problems at the same time.
 
 1. **One center crop:** prove the download, FITS read, WCS, baseline stack, and
    INR fit all work.
-2. **A few adjacent crops:** use explicit `--center-x` / `--center-y` values and
-   keep overlap between neighboring crops. Check that sources line up across tile
-   boundaries in the baseline stack and quicklook PNGs.
+2. **A few adjacent crops:** keep the same `--crop-size` and vary `--center-x`
+   and `--center-y` in `build_smacs0723_minicutout.py`. The manifest records
+   `source_shape`, `crop_origin_xy`, `crop_bounds_xy`, and the requested/actual
+   crop centers so each tile can be recreated later. Keep overlap between
+   neighboring crops and check that sources line up across tile boundaries in
+   the baseline stack and quicklook PNGs.
 3. **One shared target grid:** choose a reference WCS/header for the contiguous
    output, then compare every tile or exposure against that grid. The classical
    stack should be able to produce a sane product before the INR is trusted.
@@ -373,11 +430,15 @@ problems and memory problems at the same time.
    `spectral_chunk` to control memory. Write intermediate products and keep the
    manifest/checksums/quicklooks; do not rely on notebook state.
 
-The important design idea is that the field is continuous, but the engineering is
-still tiled and chunked. A large contiguous reconstruction is assembled from
-carefully tracked local evidence, not from one giant untracked tensor.
+The important design idea is that the field is continuous, but the engineering
+is still tiled and chunked. A large contiguous reconstruction is assembled
+from carefully tracked local evidence, not from one giant untracked tensor.
 
 ## 10. Notebooks
+
+If you prefer notebooks, start with `01_field_fit_synthetic.ipynb` to learn the
+field API on synthetic data; the SMACS notebook expects the data scripts above
+to have been run first.
 
 | Notebook | Goal |
 |----------|------|
@@ -385,7 +446,28 @@ carefully tracked local evidence, not from one giant untracked tensor.
 | [examples/notebooks/02_multiband_hyperspectral_synthetic.ipynb](../../examples/notebooks/02_multiband_hyperspectral_synthetic.ipynb) | Multiband throughput, cube export, and pose hook. |
 | [examples/notebooks/03_smacs0723_real_minicutout.ipynb](../../examples/notebooks/03_smacs0723_real_minicutout.ipynb) | Real JWST mini-cutouts after running the data scripts. |
 
-## 11. Term-Scale Success Criteria
+## 11. If Something Goes Wrong
+
+Common first-day issues:
+
+- **`pixi: command not found`**: Pixi is not installed yet. Ask before
+  installing Python tooling by hand; the project is meant to run through Pixi.
+- **`ModuleNotFoundError: torchsky.cpp`**: you ran in the `default` Pixi env
+  instead of `test`. Re-run with `pixi run -e test -- python ...`.
+- **`missing reference ...`**: the UPdec FITS files have not been downloaded.
+  Re-run the cutout script with `--download`.
+- **Quicklook PNGs look empty or all black**: open the FITS files in DS9, or
+  rerun with a smaller `--crop-size` and check `manifest.json` for the actual
+  `crop_bounds_xy`.
+- **INR loss does not decrease**: shrink the model
+  (`hidden_dim`, `num_levels`), drop to a single band, and confirm the
+  baseline stack already shows the expected sources.
+
+When asking for help, include: the exact command you ran, the full error, the
+relevant `manifest.json` entry, and a quicklook PNG if there is one. That is
+usually enough to diagnose remotely.
+
+## 12. Term-Scale Success Criteria
 
 1. A reproducible data fixture with manifest, baseline stack cube, and quicklook plots.
 2. A fixed-WCS INR fit to at least two calibrated bands on the same patch.
