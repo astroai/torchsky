@@ -23,3 +23,7 @@
 ## 2025-04-20 - Preserving Structural Shape in Specific Element Focus Rings
 **Learning:** When defining specific `:focus-visible` styles for individual UI components (like `.cmap-swatch` or `input[type="range"]`) to override global focus rings, any structural properties like `border-radius` that were applied to the element must also be included in its specific `:focus-visible` declaration. Otherwise, the element may lose its rounded corners during keyboard navigation.
 **Action:** When adding `:focus-visible` to specific classes (e.g., `.cmap-swatch:focus-visible`), copy the base element's `border-radius` into the focus rule to prevent visual mismatches or flattened corners.
+
+## 2025-05-09 - CSS Cascade and Focus Specificity
+**Learning:** Type-specific resets (e.g., `input[type="text"]` combined with custom background/border rules) have higher CSS specificity than global `:focus-visible` pseudo-classes. Additionally, redundant structural declarations like `border-radius` inside `:focus-visible` states are unnecessary, as they inherit the base element's structure automatically.
+**Action:** When creating text inputs, explicitly re-declare `:focus-visible` fallbacks with a clear outline on such elements to preserve keyboard accessibility focus rings. Remove duplicate structural properties from pseudo-classes to respect the CSS cascade and maintain clean code.
