@@ -784,7 +784,8 @@
       <span class="label">Value</span>
       <span class="value text-mono" id="coord-val">—</span>
     </div>
-    <div style="margin-left:auto" class="footer-item">
+    <div style="margin-left:auto" class="footer-item" aria-live="polite" aria-atomic="true">
+      <div id="footer-spinner" class="spinner" style="display:none; width:14px; height:14px; border-width:1.5px; margin-right:4px;"></div>
       <span class="value" id="footer-status">Ready</span>
     </div>
   </footer>
@@ -836,7 +837,11 @@ async function api(path, opts = {}) {
   return r.json();
 }
 
-function status(msg) { $('footer-status').textContent = msg; }
+function status(msg) {
+  $('footer-status').textContent = msg;
+  const isAsync = msg.endsWith('…');
+  $('footer-spinner').style.display = isAsync ? 'block' : 'none';
+}
 
 // ─── Aladin setup ────────────────────────────────────────────
 function initAladinFits() {
@@ -1182,6 +1187,7 @@ $('vmax-slider').addEventListener('change', rerenderSurvey);
 
 async function rerenderSurvey() {
   if (!state.currentFile) return;
+  status('Rendering…');
   const hd = state.histData;
   const vmin = hd ? sliderToValue(parseFloat($('vmin-slider').value), hd) : state.currentFile.vmin;
   const vmax = hd ? sliderToValue(parseFloat($('vmax-slider').value), hd) : state.currentFile.vmax;
@@ -1195,6 +1201,7 @@ async function rerenderSurvey() {
     const layer = A.createImageSurvey(survey.id, path.split('/').pop(), hipsUrl,
       'equatorial', survey.max_order, { imgFormat: 'png' });
     state.aladinFits.setImageSurvey(layer);
+    status('Ready');
   } catch(e) { status(`Error: ${e.message}`); }
 }
 
