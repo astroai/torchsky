@@ -37,3 +37,7 @@
 ## 2024-05-18 - _batch_to_device Fast Path vs Safe Path
 **Learning:** Checking for uniform tensor shapes in Python before passing to `torch.stack()` is roughly 3-4x faster when shapes are heterogeneous than handling the exception `torch.stack()` throws. For homogenous shapes, the shape check is about 20% slower than a direct `try/except` around `torch.stack()`. Given that reading HDUs/cutouts frequently yields heterogeneous shapes, prioritizing the safe explicit shape check is better than utilizing exceptions for flow control on the hot path.
 **Action:** Always prefer explicitly validating assumptions in Python instead of using exceptions for control flow when the exception pathway is frequently hit, especially when wrapping PyTorch operations.
+
+## 2024-05-24 - Tensor Loop Unbinding
+**Learning:** Extracting sub-tensors from a PyTorch tensor via explicit python indexing within a comprehension (e.g. `[data[idx] for idx in range(int(data.shape[0]))]`) is slow because it creates a new python object and view each iteration.
+**Action:** Always prefer `data.unbind(dim)` which splits the tensor at the C++ level and returns a tuple of tensors. Using `[band for band in data.unbind(0)]` is generally 15-20% faster than explicit index slicing.
