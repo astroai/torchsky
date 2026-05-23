@@ -726,6 +726,14 @@
       <div style="font-size:14px;font-weight:500;">Open a FITS file to begin</div>
       <div style="font-size:12px;">← Navigate the file tree</div>
     </div>
+
+    <!-- Loading state -->
+    <div id="loading-state" class="hidden" style="position:absolute;inset:0;flex-direction:column;
+         align-items:center;justify-content:center;gap:var(--sp3);background:var(--bg-void);z-index:50;"
+         aria-live="polite" aria-atomic="true">
+      <div class="spinner"></div>
+      <div id="loading-text" style="font-size:14px;font-weight:500;color:var(--text-primary);">Loading…</div>
+    </div>
   </main>
 
   <!-- ── INFO PANEL ── -->
@@ -931,6 +939,9 @@ async function openFile(path, hdu = 0) {
 
   status('Loading…');
   $('empty-state').style.display = 'none';
+  $('loading-state').classList.remove('hidden');
+  $('loading-state').style.display = 'flex';
+  $('loading-text').textContent = 'Loading FITS…';
 
   try {
     // 1. Get file info + HDU list
@@ -975,6 +986,9 @@ async function openFile(path, hdu = 0) {
   } catch (e) {
     status(`Error: ${e.message}`);
     console.error(e);
+  } finally {
+    $('loading-state').classList.add('hidden');
+    $('loading-state').style.display = '';
   }
 }
 
@@ -1182,6 +1196,11 @@ $('vmax-slider').addEventListener('change', rerenderSurvey);
 
 async function rerenderSurvey() {
   if (!state.currentFile) return;
+
+  $('loading-state').classList.remove('hidden');
+  $('loading-state').style.display = 'flex';
+  $('loading-text').textContent = 'Applying settings…';
+
   const hd = state.histData;
   const vmin = hd ? sliderToValue(parseFloat($('vmin-slider').value), hd) : state.currentFile.vmin;
   const vmax = hd ? sliderToValue(parseFloat($('vmax-slider').value), hd) : state.currentFile.vmax;
@@ -1195,13 +1214,22 @@ async function rerenderSurvey() {
     const layer = A.createImageSurvey(survey.id, path.split('/').pop(), hipsUrl,
       'equatorial', survey.max_order, { imgFormat: 'png' });
     state.aladinFits.setImageSurvey(layer);
-  } catch(e) { status(`Error: ${e.message}`); }
+  } catch(e) {
+    status(`Error: ${e.message}`);
+  } finally {
+    $('loading-state').classList.add('hidden');
+    $('loading-state').style.display = '';
+  }
 }
 
 // ─── Validation panel ────────────────────────────────────────
 // (Simplified wiring — full implementation would add file pickers)
 async function loadValidationPair(truthPath, modelPath, sigmaPath = null) {
   status('Running validation…');
+  $('loading-state').classList.remove('hidden');
+  $('loading-state').style.display = 'flex';
+  $('loading-text').textContent = 'Running validation…';
+
   try {
     const body = { truth_path: truthPath, model_path: modelPath, sigma_path: sigmaPath,
                    truth_hdu: 0, model_hdu: 0, sigma_hdu: 0 };
@@ -1221,7 +1249,12 @@ async function loadValidationPair(truthPath, modelPath, sigmaPath = null) {
     drawPullHistogram(hist);
 
     status('Validation complete');
-  } catch(e) { status(`Validation error: ${e.message}`); }
+  } catch(e) {
+    status(`Validation error: ${e.message}`);
+  } finally {
+    $('loading-state').classList.add('hidden');
+    $('loading-state').style.display = '';
+  }
 }
 
 function drawPullHistogram(data) {

@@ -23,3 +23,6 @@
 ## 2025-04-20 - Preserving Structural Shape in Specific Element Focus Rings
 **Learning:** When defining specific `:focus-visible` styles for individual UI components (like `.cmap-swatch` or `input[type="range"]`) to override global focus rings, any structural properties like `border-radius` that were applied to the element must also be included in its specific `:focus-visible` declaration. Otherwise, the element may lose its rounded corners during keyboard navigation.
 **Action:** When adding `:focus-visible` to specific classes (e.g., `.cmap-swatch:focus-visible`), copy the base element's `border-radius` into the focus rule to prevent visual mismatches or flattened corners.
+## 2024-05-24 - explicit loading states and visual spinners with async calls
+**Learning:** Slow asynchronous UI updates like FITS data loading, parameter application, and validation require pairing explicit loading states with `aria-live="polite"` and a visual spinner to ensure screen readers announce the state changes.
+**Action:** Pair `aria-live="polite" aria-atomic="true"` properties and `.spinner` CSS class to show an explicit loading state when starting asynchronous updates and hide it in the `finally` block of the relevant logic.
