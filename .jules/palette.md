@@ -23,3 +23,7 @@
 ## 2025-04-20 - Preserving Structural Shape in Specific Element Focus Rings
 **Learning:** When defining specific `:focus-visible` styles for individual UI components (like `.cmap-swatch` or `input[type="range"]`) to override global focus rings, any structural properties like `border-radius` that were applied to the element must also be included in its specific `:focus-visible` declaration. Otherwise, the element may lose its rounded corners during keyboard navigation.
 **Action:** When adding `:focus-visible` to specific classes (e.g., `.cmap-swatch:focus-visible`), copy the base element's `border-radius` into the focus rule to prevent visual mismatches or flattened corners.
+
+## 2025-05-15 - ARIA Live Regions for Async Async Spinners
+**Learning:** Visual spinners used to indicate loading states (like data fetching or rendering) are invisible to screen readers unless explicitly wrapped or paired with an ARIA live region. Users relying on assistive technology will not be notified that an asynchronous process has started or completed, leading to confusion about the application state.
+**Action:** Always wrap or associate visual spinners (or status text containers) for asynchronous operations with `aria-live="polite"` and `aria-atomic="true"` to ensure screen readers announce the loading state and subsequent updates.

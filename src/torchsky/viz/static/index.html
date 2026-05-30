@@ -784,7 +784,8 @@
       <span class="label">Value</span>
       <span class="value text-mono" id="coord-val">—</span>
     </div>
-    <div style="margin-left:auto" class="footer-item">
+    <div style="margin-left:auto" class="footer-item" aria-live="polite" aria-atomic="true">
+      <div id="status-spinner" class="spinner hidden" style="width: 14px; height: 14px; border-width: 2px; margin-right: 4px;"></div>
       <span class="value" id="footer-status">Ready</span>
     </div>
   </footer>
@@ -836,7 +837,13 @@ async function api(path, opts = {}) {
   return r.json();
 }
 
-function status(msg) { $('footer-status').textContent = msg; }
+function status(msg, isLoading = false) {
+  $('footer-status').textContent = msg;
+  const spinner = $('status-spinner');
+  if (spinner) {
+    spinner.classList.toggle('hidden', !isLoading);
+  }
+}
 
 // ─── Aladin setup ────────────────────────────────────────────
 function initAladinFits() {
@@ -929,7 +936,7 @@ async function openFile(path, hdu = 0) {
       el.classList.add('active');
   });
 
-  status('Loading…');
+  status('Loading…', true);
   $('empty-state').style.display = 'none';
 
   try {
@@ -1182,6 +1189,7 @@ $('vmax-slider').addEventListener('change', rerenderSurvey);
 
 async function rerenderSurvey() {
   if (!state.currentFile) return;
+  status('Rendering…', true);
   const hd = state.histData;
   const vmin = hd ? sliderToValue(parseFloat($('vmin-slider').value), hd) : state.currentFile.vmin;
   const vmax = hd ? sliderToValue(parseFloat($('vmax-slider').value), hd) : state.currentFile.vmax;
@@ -1195,13 +1203,14 @@ async function rerenderSurvey() {
     const layer = A.createImageSurvey(survey.id, path.split('/').pop(), hipsUrl,
       'equatorial', survey.max_order, { imgFormat: 'png' });
     state.aladinFits.setImageSurvey(layer);
+    status('Ready');
   } catch(e) { status(`Error: ${e.message}`); }
 }
 
 // ─── Validation panel ────────────────────────────────────────
 // (Simplified wiring — full implementation would add file pickers)
 async function loadValidationPair(truthPath, modelPath, sigmaPath = null) {
-  status('Running validation…');
+  status('Running validation…', true);
   try {
     const body = { truth_path: truthPath, model_path: modelPath, sigma_path: sigmaPath,
                    truth_hdu: 0, model_hdu: 0, sigma_hdu: 0 };
