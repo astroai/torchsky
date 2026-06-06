@@ -37,3 +37,7 @@
 ## 2024-05-18 - _batch_to_device Fast Path vs Safe Path
 **Learning:** Checking for uniform tensor shapes in Python before passing to `torch.stack()` is roughly 3-4x faster when shapes are heterogeneous than handling the exception `torch.stack()` throws. For homogenous shapes, the shape check is about 20% slower than a direct `try/except` around `torch.stack()`. Given that reading HDUs/cutouts frequently yields heterogeneous shapes, prioritizing the safe explicit shape check is better than utilizing exceptions for flow control on the hot path.
 **Action:** Always prefer explicitly validating assumptions in Python instead of using exceptions for control flow when the exception pathway is frequently hit, especially when wrapping PyTorch operations.
+
+## 2024-05-18 - Avoid O(N) iteration in legacy string/scaled parsing routines
+**Learning:** Legacy routines `_get_vla_columns`, `_get_scaled_columns`, and `_column_tform_map` were iterating through all `header.items()` to perform substring checks (e.g. `key.startswith("TFORM")`), resulting in a slower `O(N)` traversal of potentially massive headers.
+**Action:** When extracting table schema data in legacy parsing paths, follow the established convention to parse `TFIELDS` and perform `O(1)` dictionary lookups (like `header.get(f"TFORM{i}")`) looping over `1..TFIELDS`, falling back to the `O(N)` iteration only if `TFIELDS` is unreadable.

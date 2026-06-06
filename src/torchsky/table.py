@@ -2671,12 +2671,24 @@ def _column_tform_map(header_map: dict[str, Any]) -> dict[str, str]:
 
     name_by_idx = _column_name_index_map(header_map)
     tform_by_idx: dict[int, str] = {}
-    for key, value in header_map.items():
-        key_u = str(key).upper()
-        if key_u.startswith("TFORM"):
-            suffix = key_u[5:]
-            if suffix.isdigit():
-                tform_by_idx[int(suffix)] = str(value)
+
+    try:
+        tfields = int(header_map.get("TFIELDS", 0))
+    except (ValueError, TypeError):
+        tfields = 0
+
+    if tfields > 0:
+        for i in range(1, tfields + 1):
+            val = header_map.get(f"TFORM{i}")
+            if val is not None:
+                tform_by_idx[i] = str(val)
+    else:
+        for key, value in header_map.items():
+            key_u = str(key).upper()
+            if key_u.startswith("TFORM"):
+                suffix = key_u[5:]
+                if suffix.isdigit():
+                    tform_by_idx[int(suffix)] = str(value)
 
     for idx, name in name_by_idx.items():
         out[name] = tform_by_idx.get(idx, "")
