@@ -18,10 +18,9 @@ from typing import (
     Sequence,
     overload,
     Literal,
-    TypedDict,
     Unpack,
 )
-from dataclasses import dataclass, fields
+from dataclasses import fields
 
 import numpy as np
 import torch
@@ -59,6 +58,7 @@ from ._io_engine.caches import (
     image_meta_cache as _image_meta_cache,
     invalidate_path_caches as _invalidate_io_path_caches,
 )
+from ._io_engine.options import ReadOptions, ReadOptionsKwargs
 from .surfaces import (
     APISurface,
     API_SURFACES,
@@ -742,41 +742,6 @@ def _dispatch_read_image_cpp(
             return cpp.read_full_nocache(path, hdu, mmap)
         else:
             return cpp.read_full(path, hdu, mmap)
-
-
-@dataclass
-class ReadOptions:
-    """Configuration options for reading FITS files."""
-
-    fp16: bool = False
-    bf16: bool = False
-    raw_scale: bool = False
-    scale_on_device: bool = True
-    use_cache: Optional[bool] = None
-    columns: Optional[List[str]] = None
-    start_row: int = 1
-    num_rows: int = -1
-    cache_capacity: int = 10
-    handle_cache_capacity: int = 16
-    fast_header: bool = True
-    mode: str = "auto"
-    policy: str = "default"
-
-
-class ReadOptionsKwargs(TypedDict, total=False):
-    fp16: bool
-    bf16: bool
-    raw_scale: bool
-    scale_on_device: bool
-    use_cache: Optional[bool]
-    columns: Optional[List[str]]
-    start_row: int
-    num_rows: int
-    cache_capacity: int
-    handle_cache_capacity: int
-    fast_header: bool
-    mode: str
-    policy: str
 
 
 def read_image(

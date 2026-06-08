@@ -65,6 +65,16 @@ Start gate: May 8, 2026, `America/Vancouver`
   - Result: `1 passed`.
 - North Star connection: this moves root I/O policy toward a testable private
   subsystem while preserving the lean public facade and existing FITS behavior.
+- Moved `ReadOptions` and `ReadOptionsKwargs` into
+  `torchsky._io_engine.options`, leaving root overloads and runtime behavior
+  unchanged.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_io.py tests/test_api.py::TestMainAPI::test_read_basic tests/test_api.py::TestMainAPI::test_read_mode_image tests/test_api.py::TestMainAPI::test_cache_functions -q`
+  - Result: `23 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_api.py -k 'read_mode_table' -q`
+  - Result: `1 passed, 31 deselected, 2 warnings`.
+- North Star connection: this is a small B1 step toward a private, testable I/O
+  engine while keeping user-facing reads stable.
 
 ## Work Queue Snapshot
 
