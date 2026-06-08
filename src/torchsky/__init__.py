@@ -60,6 +60,7 @@ from ._io_engine.caches import (
 )
 from ._io_engine.image import read_image as _read_image_impl
 from ._io_engine.options import ReadOptions, ReadOptionsKwargs
+from ._io_engine.table_api import read_table as _read_table_impl
 from .surfaces import (
     APISurface,
     API_SURFACES,
@@ -758,30 +759,21 @@ def read_table(
     Uses the same ``mmap='auto'`` default as :func:`read` (explicit ``True``/``False``
     still overrides).
     """
-    if not isinstance(hdu, int) or hdu < 0:
-        raise ValueError("hdu must be a non-negative integer")
-
-    out = read(
+    return _read_table_impl(
+        read_func=read,
         path=path,
         hdu=hdu,
-        mode="table",
-        device=device,
-        mmap=mmap,
         columns=columns,
         start_row=start_row,
         num_rows=num_rows,
+        device=device,
+        mmap=mmap,
         cache_capacity=cache_capacity,
         handle_cache_capacity=handle_cache_capacity,
         fast_header=fast_header,
         return_header=return_header,
         policy=policy,
     )
-    data = out[0] if return_header else out
-    if isinstance(data, torch.Tensor):
-        raise ValueError(
-            f"HDU {hdu!r} is an image HDU. Use read_image(...) or read(...)."
-        )
-    return out
 
 
 @overload

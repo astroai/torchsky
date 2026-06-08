@@ -86,6 +86,16 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this moves an expert low-level I/O path behind a
   private engine boundary while preserving deterministic tensor-native image
   reads for performance profiling and downstream tools.
+- Moved the specialized `read_table` wrapper into
+  `torchsky._io_engine.table_api`, with root `torchsky.read_table` delegating to
+  that implementation through the existing unified `read(...)` function.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_api.py -k 'read_table or read_mode_table' -q`
+  - Result: `8 passed, 24 deselected, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_io.py tests/test_cold_import.py -q`
+  - Result: `21 passed, 2 warnings`.
+- North Star connection: this keeps table reads on the same behavior path while
+  reducing root-module policy weight and preserving the lean user API.
 
 ## Work Queue Snapshot
 
