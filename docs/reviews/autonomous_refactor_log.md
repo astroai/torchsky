@@ -96,6 +96,17 @@ Start gate: May 8, 2026, `America/Vancouver`
   - Result: `21 passed, 2 warnings`.
 - North Star connection: this keeps table reads on the same behavior path while
   reducing root-module policy weight and preserving the lean user API.
+- Moved `read_hdus` and the shared image batch device helper into
+  `torchsky._io_engine.image`, keeping root `torchsky.read_hdus` as the public
+  wrapper.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_api.py::TestMainAPI::test_read_hdus_direct tests/test_io.py -q`
+  - Result: `21 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_cold_import.py tests/test_io_engine_caches.py -q`
+  - Result: `2 passed, 2 warnings`.
+- North Star connection: this keeps direct multi-HDU tensor image reads
+  explicit and testable while continuing to reduce the root facade's
+  implementation load.
 
 ## Work Queue Snapshot
 

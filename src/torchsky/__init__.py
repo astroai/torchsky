@@ -58,7 +58,11 @@ from ._io_engine.caches import (
     image_meta_cache as _image_meta_cache,
     invalidate_path_caches as _invalidate_io_path_caches,
 )
-from ._io_engine.image import read_image as _read_image_impl
+from ._io_engine.image import (
+    batch_to_device as _batch_to_device,
+    read_hdus as _read_hdus_impl,
+    read_image as _read_image_impl,
+)
 from ._io_engine.options import ReadOptions, ReadOptionsKwargs
 from ._io_engine.table_api import read_table as _read_table_impl
 from .surfaces import (
@@ -112,23 +116,6 @@ _READ_EXC_TYPES = (
 warnings.filterwarnings(
     "ignore", message=".*torch.jit.script.*", category=DeprecationWarning
 )
-
-def _batch_to_device(
-    tensors: list[torch.Tensor], device: str | torch.device
-) -> list[torch.Tensor]:
-    if not tensors:
-        return []
-    if len(tensors) == 1:
-        return [tensors[0].to(device, non_blocking=True)]
-
-    first = tensors[0]
-    shape = first.shape
-    dtype = first.dtype
-
-    if all(t.shape == shape and t.dtype == dtype for t in tensors):
-        return list(torch.stack(tensors).to(device, non_blocking=True).unbind(0))
-    return [t.to(device, non_blocking=True) for t in tensors]
-
 
 def _invalidate_path_caches(path: str) -> None:
     """Invalidate Python-side caches/handles for a path that is being modified."""
@@ -1750,40 +1737,13 @@ def read_hdus(
 
     This is an explicit user-facing fast path for multi-HDU image reads.
     """
-    import torchsky.cpp as cpp
-
-    if not isinstance(path, str):
-        raise ValueError("path must be a string")
-    if not isinstance(hdus, (list, tuple)) or len(hdus) == 0:
-        raise ValueError("hdus must be a non-empty list/tuple of HDU indices or names")
-    if device not in ["cpu", "cuda", "mps"] and not str(device).startswith("cuda:"):
-        raise ValueError("device must be 'cpu', 'cuda', 'mps' or 'cuda:N'")
-    if not isinstance(mmap, bool):
-        raise ValueError("mmap must be a bool for read_hdus")
-
-    resolved_hdus: List[int] = []
-    for hdu in hdus:
-        if isinstance(hdu, int):
-            if hdu < 0:
-                raise ValueError("HDU index must be non-negative")
-            resolved_hdus.append(int(hdu))
-            continue
-        if isinstance(hdu, str):
-            if hasattr(cpp, "resolve_hdu_name_cached"):
-                resolved_hdus.append(int(cpp.resolve_hdu_name_cached(path, hdu)))
-                continue
-            raise ValueError("named HDUs require resolve_hdu_name_cached support")
-        raise ValueError("each item in hdus must be an int or str")
-
-    data = cpp.read_hdus_batch(path, resolved_hdus, mmap)
-    if device != "cpu":
-        data = _batch_to_device(data, device)
-
-    if not return_header:
-        return data
-
-    headers = [Header(cpp.read_header_dict(path, hdu_num)) for hdu_num in resolved_hdus]
-    return data, headers
+    return _read_hdus_impl(
+        path=path,
+        hdus=hdus,
+        device=device,
+        mmap=mmap,
+        return_header=return_header,
+    )
 
 
 class SubsetReader:
