@@ -58,6 +58,11 @@ from ._io_engine.caches import (
     image_meta_cache as _image_meta_cache,
     invalidate_path_caches as _invalidate_io_path_caches,
 )
+from ._io_engine.hdu_api import (
+    get_header as _get_header_impl,
+    get_wcs as _get_wcs_impl,
+    open_hdulist as _open_hdulist_impl,
+)
 from ._io_engine.image import (
     batch_to_device as _batch_to_device,
     read_hdus as _read_hdus_impl,
@@ -2814,17 +2819,7 @@ def open(path: str, mode: str = "r") -> HDUList:
         PermissionError: If insufficient permissions
         RuntimeError: For other FITS-related errors
     """
-    import os
-
-    if mode == "r" and not os.path.exists(path):
-        raise FileNotFoundError(f"FITS file not found: {path}")
-
-    try:
-        return HDUList.fromfile(path, mode)
-    except PermissionError:
-        raise PermissionError(f"Permission denied accessing file: {path}")
-    except Exception as e:
-        raise RuntimeError(f"Failed to open FITS file '{path}': {e}") from e
+    return _open_hdulist_impl(path, mode)
 
 
 def get_header(path: str, hdu: Union[int, str, None] = None) -> Header:
@@ -2838,33 +2833,7 @@ def get_header(path: str, hdu: Union[int, str, None] = None) -> Header:
     Returns:
         Header object.
     """
-    import torchsky.cpp as cpp
-
-    if hdu is None or (isinstance(hdu, str) and hdu.strip().lower() == "auto"):
-        hdu = _autodetect_hdu(path, handle_cache_capacity=16)
-
-    # Resolve HDU index if string
-    if isinstance(hdu, str):
-        if hasattr(cpp, "resolve_hdu_name_cached"):
-            try:
-                hdu = int(cpp.resolve_hdu_name_cached(path, hdu))
-                return Header(cpp.read_header_dict(path, hdu))
-            except Exception:
-                pass
-
-        for i in range(100):  # Fallback scan
-            try:
-                h_list = cpp.read_header_dict(path, i)
-                if not h_list:
-                    break
-                h = Header(h_list)
-                if h.get("EXTNAME") == hdu:
-                    return h
-            except Exception:
-                break
-        raise ValueError(f"HDU '{hdu}' not found")
-
-    return Header(cpp.read_header_dict(path, hdu))
+    return _get_header_impl(path, hdu, autodetect_hdu=_autodetect_hdu)
 
 
 def get_wcs(
@@ -2882,10 +2851,7 @@ def get_wcs(
     Returns:
         WCS object initialized from the selected HDU header.
     """
-    wcs = WCS(get_header(path, hdu=hdu))
-    if device is not None:
-        wcs = wcs.to(torch.device(device))
-    return wcs
+    return _get_wcs_impl(path, hdu, device, get_header_func=get_header)
 
 
 _DEBUG_SCALE = os.environ.get("TORCHSKY_DEBUG_SCALE") == "1"

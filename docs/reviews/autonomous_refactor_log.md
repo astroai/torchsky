@@ -119,6 +119,16 @@ Start gate: May 8, 2026, `America/Vancouver`
   - Result: `20 passed, 2 warnings`.
 - North Star connection: this preserves efficient tensor cutout workflows while
   continuing to separate root API routing from private I/O implementation.
+- Moved `open`, `get_header`, and `get_wcs` implementation logic into
+  `torchsky._io_engine.hdu_api`, keeping root wrappers and auto-HDU behavior
+  intact.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_api.py -k 'get_header or get_wcs or top_level_namespaces or read_by_extname or read_hdu_auto or cache_functions' -q`
+  - Result: `5 passed, 27 deselected, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_header_cards.py tests/test_io.py tests/test_cold_import.py -q`
+  - Result: `27 passed, 2 warnings`.
+- North Star connection: this keeps HDU/header/WCS access as a lean public route
+  while moving file-format implementation details into the private I/O engine.
 
 ## Work Queue Snapshot
 
