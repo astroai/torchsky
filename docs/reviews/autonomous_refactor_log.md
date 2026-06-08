@@ -147,6 +147,18 @@ Start gate: May 8, 2026, `America/Vancouver`
   - Result: `6 passed, 46 deselected, 2 warnings`.
 - North Star connection: this keeps survey-scale multi-file tensor ingestion
   explicit while continuing to shrink root I/O implementation code.
+- Updated `torchsky.io` so extracted surfaces (`read_image`, `read_hdus`,
+  `read_table`, `open`, `stream_table`, and `read_large_table`) call
+  `_io_engine` implementation modules instead of routing back through the root
+  wrappers. Root-only surfaces remain delegated until their implementation is
+  moved.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_io.py tests/test_api.py -k 'top_level_namespaces or read_image or read_hdus or read_table or large_table or stream_table' tests/test_header_cards.py::test_card_exported_on_public_io_surfaces -q`
+  - Result: `14 passed, 39 deselected, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_cold_import.py -q`
+  - Result: `1 passed`.
+- North Star connection: this starts correcting the reverse-alias `torchsky.io`
+  architecture while preserving the lean namespace users already import.
 
 ## Work Queue Snapshot
 

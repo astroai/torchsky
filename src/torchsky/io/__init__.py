@@ -17,6 +17,14 @@ from ..datasets import FITSDataset, IterableFITSDataset, TableChunkDataset
 from ..frame import read_tensor_frame, to_tensor_frame, write_tensor_frame
 from ..hdu import Card, HDUList, Header, TableHDU, TableHDURef, TensorHDU
 from ..interop import to_arrow, to_pandas, to_polars
+from .._io_engine.hdu_api import open_hdulist as _open_hdulist_impl
+from .._io_engine.image import read_hdus as _read_hdus_impl
+from .._io_engine.image import read_image as _read_image_impl
+from .._io_engine.table_api import read_table as _read_table_impl
+from .._io_engine.table_streaming import (
+    read_large_table as _read_large_table_impl,
+)
+from .._io_engine.table_streaming import stream_table as _stream_table_impl
 
 
 def read_fast(*args: Any, **kwargs: Any):
@@ -32,21 +40,20 @@ def read(*args: Any, **kwargs: Any):
 
 
 def read_image(*args: Any, **kwargs: Any):
-    from .. import read_image as _read_image
+    from .. import get_header as _get_header
 
-    return _read_image(*args, **kwargs)
+    kwargs.setdefault("fallback_get_header", _get_header)
+    return _read_image_impl(*args, **kwargs)
 
 
 def read_table(*args: Any, **kwargs: Any):
-    from .. import read_table as _read_table
+    from .. import read as _read
 
-    return _read_table(*args, **kwargs)
+    return _read_table_impl(_read, *args, **kwargs)
 
 
 def read_hdus(*args: Any, **kwargs: Any):
-    from .. import read_hdus as _read_hdus
-
-    return _read_hdus(*args, **kwargs)
+    return _read_hdus_impl(*args, **kwargs)
 
 
 def read_subset(*args: Any, **kwargs: Any):
@@ -56,9 +63,7 @@ def read_subset(*args: Any, **kwargs: Any):
 
 
 def open(*args: Any, **kwargs: Any):
-    from .. import open as _open
-
-    return _open(*args, **kwargs)
+    return _open_hdulist_impl(*args, **kwargs)
 
 
 def write(*args: Any, **kwargs: Any):
@@ -80,15 +85,15 @@ def get_wcs(*args: Any, **kwargs: Any):
 
 
 def stream_table(*args: Any, **kwargs: Any):
-    from .. import stream_table as _stream_table
+    from .. import get_header as _get_header
 
-    return _stream_table(*args, **kwargs)
+    return _stream_table_impl(_get_header, *args, **kwargs)
 
 
 def read_large_table(*args: Any, **kwargs: Any):
-    from .. import read_large_table as _read_large_table
+    from .. import get_header as _get_header
 
-    return _read_large_table(*args, **kwargs)
+    return _read_large_table_impl(_get_header, *args, **kwargs)
 
 
 __all__ = [
