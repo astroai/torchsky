@@ -181,6 +181,17 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this isolates image-read policy from the public facade
   while preserving exact FITS header normalization, mmap behavior, and lean core
   runtime dependencies.
+- Moved fast header probing, first-payload HDU discovery, and auto-HDU cache
+  resolution into `torchsky._io_engine.hdu_api`, keeping root private aliases
+  for the remaining root read paths.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_api.py -k 'read_hdu_auto or get_header or get_wcs or read_by_extname or read_hdus or top_level_namespaces' tests/test_header_cards.py tests/test_io.py tests/test_cache.py tests/test_cold_import.py -q`
+  - Result: `7 passed, 91 deselected, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_api.py tests/test_io.py tests/test_cache.py tests/test_io_engine_caches.py tests/test_header_cards.py tests/test_cold_import.py -q`
+  - Result: `99 passed, 2 warnings`.
+- North Star connection: this keeps HDU selection and compressed-image probing
+  near the HDU/header API instead of in the package root, while preserving
+  payload preference semantics for image-first tensor workflows.
 
 ## Work Queue Snapshot
 

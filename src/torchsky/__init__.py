@@ -67,9 +67,12 @@ from ._io_engine.caches import (
     set_cached_hdu_type as _set_cached_hdu_type,
 )
 from ._io_engine.hdu_api import (
+    autodetect_hdu as _autodetect_hdu,
+    find_first_hdu as _find_first_hdu,
     get_header as _get_header_impl,
     get_wcs as _get_wcs_impl,
     open_hdulist as _open_hdulist_impl,
+    read_header_fast as _read_header_fast,
 )
 from ._io_engine.image import (
     batch_to_device as _batch_to_device,
@@ -130,10 +133,12 @@ from .wcs import WCS
 _log = _stdlib_logging.getLogger(__name__)
 
 _PRESERVED_PRIVATE_CACHE_ALIASES = (
+    _auto_hdu_cache,
     _auto_mmap_cache,
     _cold_nommap_cache,
     _file_handle_cache,
     _file_handle_sig_cache,
+    _find_first_hdu,
     _hdu_type_cache,
     _image_meta_cache,
 )
@@ -276,75 +281,6 @@ __all__ = [
 ]
 
 
-def _read_header_fast(file_handle, hdu_index: int, fast_header: bool = True):
-    """Read header using fast bulk parsing or fallback to slow method."""
-    import torchsky.cpp as cpp
-
-    if fast_header:
-        try:
-            # Try fast bulk header reading
-            header_string = cpp.read_header_string(file_handle, hdu_index)
-            if header_string:
-                return fast_parse_header(header_string)
-        except (AttributeError, RuntimeError, IOError):
-            # Fall back to slow method if fast parsing fails
-            pass
-
-    # Fall back to keyword-by-keyword reading
-    return cpp.read_header(file_handle, hdu_index)
-
-
-def _find_first_hdu(
-    path: str,
-    handle_cache_capacity: int = 16,
-) -> Optional[int]:
-    """Find first payload HDU, preferring image/compressed-image over table."""
-    import torchsky.cpp as cpp
-
-    file_handle, cached = _get_cached_handle(path, handle_cache_capacity)
-    first_table_hdu: Optional[int] = None
-    try:
-        num_hdus = cpp.get_num_hdus(file_handle)
-        for i in range(num_hdus):
-            hdu_type = _get_cached_hdu_type(path, i)
-            if hdu_type is None:
-                try:
-                    hdu_type = cpp.get_hdu_type(file_handle, i)
-                    _set_cached_hdu_type(path, i, hdu_type)
-                except Exception:
-                    hdu_type = None
-            if hdu_type == "IMAGE":
-                try:
-                    shape = file_handle.get_shape(i)
-                except Exception:
-                    shape = []
-                if shape and all(int(dim) > 0 for dim in shape):
-                    return i
-                continue
-
-            if hdu_type in {"ASCII_TABLE", "BINARY_TABLE"}:
-                try:
-                    hdr = _read_header_fast(file_handle, i, fast_header=True)
-                except Exception:
-                    hdr = {}
-                zimage = _header_truthy(hdr.get("ZIMAGE"))
-                has_compression_keys = any(
-                    k in hdr for k in ("ZCMPTYPE", "ZBITPIX", "ZNAXIS", "ZTILE1")
-                )
-                if zimage or has_compression_keys:
-                    return i
-                if first_table_hdu is None:
-                    first_table_hdu = i
-    finally:
-        if not cached:
-            try:
-                file_handle.close()
-            except Exception:
-                pass
-
-    return first_table_hdu
-
-
 def _get_vla_columns(header_data: Optional[Dict[str, Any]]) -> set:
     """Extract VLA column names from header metadata."""
     vla_columns = set()
@@ -407,40 +343,6 @@ def _get_image_meta_from_handle(file_handle, path: str, hdu: int):
     return _get_image_meta_from_handle_impl(
         file_handle, path, hdu, read_header=_read_header_fast
     )
-
-
-def _header_truthy(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().upper() in {"T", "TRUE", "1", "YES", "Y"}
-    try:
-        return bool(int(value))
-    except Exception:
-        return bool(value)
-
-
-def _autodetect_hdu(path: str, handle_cache_capacity: int = 16) -> int:
-    """Return the first HDU with payload, preferring image/compressed-image HDUs."""
-    sig = _path_signature(path)
-    cache_key = (path, "payload")
-    cached = _auto_hdu_cache.get(cache_key)
-    if cached is not None:
-        cached_sig, cached_hdu = cached
-        if sig is None or cached_sig is None or cached_sig == sig:
-            _auto_hdu_cache.move_to_end(cache_key)
-            return int(cached_hdu)
-        _auto_hdu_cache.pop(cache_key, None)
-
-    resolved = _find_first_hdu(path, handle_cache_capacity=handle_cache_capacity)
-    if resolved is None:
-        return 0
-
-    _auto_hdu_cache[cache_key] = (sig, int(resolved))
-    _auto_hdu_cache.move_to_end(cache_key)
-    while len(_auto_hdu_cache) > 512:
-        _auto_hdu_cache.popitem(last=False)
-    return int(resolved)
 
 
 def _should_use_cold_nommap(
