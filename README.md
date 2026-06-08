@@ -7,11 +7,14 @@
 `torchsky` is a torch-native astronomy stack for FITS I/O, FITS tables,
 WCS transforms, spherical geometry, HEALPix workflows, and mapmaking.
 
-The project is designed for survey-scale workloads where tensors, device
-placement, differentiability, and throughput matter. Existing astronomy
-libraries such as Astropy, fitsio, healpy, hpgeom, healsparse, reproject, and
-drizzle are used as references, parity baselines, or optional compatibility
-targets. They are not required imports for the core runtime path.
+The project is designed for survey-scale joint modelling of sky observations
+where tensors, device placement, differentiability, and throughput matter. It
+aims to support explicit physical components, learned implicit components,
+instruments, foregrounds, backgrounds, and hybrid scenes across wavelength,
+instrument type, and data modality. Existing astronomy libraries such as
+Astropy, fitsio, healpy, hpgeom, healsparse, reproject, and drizzle are used as
+references, parity baselines, or optional compatibility targets. They are not
+required imports for the core runtime path.
 
 ## Status
 

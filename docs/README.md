@@ -8,6 +8,8 @@ validation, and API pointers.
 
 - [Getting started](getting-started.md) - first 10 minutes through I/O, tables,
   WCS, HEALPix, and map products.
+- [Architecture](architecture.md) - north-star design, public pillars, and
+  refactor rules.
 - [API guide](api.md) - routing table for public namespaces and domain pages.
 - [Installation and source builds](install.md) - wheels, source builds, CFITSIO,
   CUDA notes, and pip-only fallback guidance.

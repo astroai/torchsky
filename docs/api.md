@@ -7,6 +7,9 @@ For migration from common astronomy libraries, see
 [compatibility.md](compatibility.md). For validation and performance, see
 [benchmarks.md](benchmarks.md).
 
+For the high-level design target and refactor rules, see
+[architecture.md](architecture.md).
+
 ## Quick Paths
 
 | Goal | Entry point | Guide |
@@ -35,9 +38,20 @@ For migration from common astronomy libraries, see
 - **Experimental:** active modelling and workflow surfaces such as field/INR
   map models, visualization server paths, and training-facing utilities.
 
-Use `torchsky.API_SURFACES`, `torchsky.SurfaceTier`, and
-`torchsky.api_surfaces_by_tier(...)` when you need programmatic API-surface
+Surfaces are also assigned to architecture pillars: `io`, `world`, `scene`, and
+`viz`. Use `torchsky.API_SURFACES`, `torchsky.SurfaceTier`,
+`torchsky.SurfacePillar`, `torchsky.api_surfaces_by_tier(...)`, and
+`torchsky.api_surfaces_by_pillar(...)` when you need programmatic API-surface
 metadata.
+
+## Architecture Pillars
+
+| Pillar | Role |
+|---|---|
+| `io` | FITS images, HDUs, tables, cutouts, streaming, and cache policy. |
+| `world` | WCS, frames, spherical geometry, HEALPix, MOC, sparse maps, and harmonics. |
+| `scene` | Observations, operators, instruments, latent scenes, products, coadds, objectives, renderers, and fits. |
+| `viz` | Browser and notebook-facing visualization. |
 
 ## Public Namespaces
 

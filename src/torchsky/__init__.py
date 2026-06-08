@@ -49,7 +49,9 @@ from . import io
 from .surfaces import (
     APISurface,
     API_SURFACES,
+    SurfacePillar,
     SurfaceTier,
+    api_surfaces_by_pillar,
     api_surfaces_by_tier,
     get_api_surface,
 )
@@ -209,7 +211,9 @@ __all__ = [
     "io",
     "APISurface",
     "API_SURFACES",
+    "SurfacePillar",
     "SurfaceTier",
+    "api_surfaces_by_pillar",
     "api_surfaces_by_tier",
     "get_api_surface",
     # Batch operations

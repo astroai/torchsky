@@ -1,0 +1,47 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+def test_cold_import_keeps_viz_and_field_surfaces_lazy() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    existing_path = env.get("PYTHONPATH")
+    src_path = str(repo_root / "src")
+    env["PYTHONPATH"] = (
+        src_path if not existing_path else os.pathsep.join([src_path, existing_path])
+    )
+
+    code = """
+import json
+import sys
+
+import torchsky
+
+names = (
+    "fastapi",
+    "torchsky.viz",
+    "torchsky.map.field",
+)
+print(json.dumps({name: name in sys.modules for name in names}, sort_keys=True))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=repo_root,
+        env=env,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    imported = json.loads(result.stdout)
+    assert imported == {
+        "fastapi": False,
+        "torchsky.map.field": False,
+        "torchsky.viz": False,
+    }
