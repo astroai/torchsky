@@ -57,10 +57,14 @@ from ._io_engine.caches import (
     file_cache as _file_cache,
     file_handle_cache as _file_handle_cache,
     file_handle_sig_cache as _file_handle_sig_cache,
+    get_cached_handle as _get_cached_handle,
+    get_cached_hdu_type as _get_cached_hdu_type,
     get_cache_performance as _get_io_cache_performance,
     hdu_type_cache as _hdu_type_cache,
     image_meta_cache as _image_meta_cache,
     invalidate_path_caches as _invalidate_io_path_caches,
+    path_signature as _path_signature,
+    set_cached_hdu_type as _set_cached_hdu_type,
 )
 from ._io_engine.hdu_api import (
     get_header as _get_header_impl,
@@ -118,6 +122,12 @@ from .transforms import (
 from .wcs import WCS
 
 _log = _stdlib_logging.getLogger(__name__)
+
+_PRESERVED_PRIVATE_CACHE_ALIASES = (
+    _file_handle_cache,
+    _file_handle_sig_cache,
+    _hdu_type_cache,
+)
 
 # Recoverable errors when probing C++/FITS image fast paths (avoid bare ``except Exception``).
 _READ_EXC_TYPES = (
@@ -379,56 +389,6 @@ def _get_scaled_columns(header_data: Optional[Dict[str, Any]]) -> set:
     return scaled_columns
 
 
-def _path_signature(path: str):
-    try:
-        st = os.stat(path)
-    except Exception:
-        return None
-    mtime_ns = getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))
-    return (int(st.st_size), int(mtime_ns), int(st.st_ino))
-
-
-def _get_cached_handle(path: str, handle_cache_capacity: int):
-    import torchsky.cpp as cpp
-
-    if handle_cache_capacity <= 0:
-        return cpp.open_fits_file(path, "r"), False
-
-    # Keep a small Python-level LRU of open CFITSIO handles. This avoids open/close
-    # overhead on repeated reads and is intentionally very cheap per call.
-    cur_sig = _path_signature(path)
-    handle = _file_handle_cache.get(path)
-    if handle is not None:
-        prev_sig = _file_handle_sig_cache.get(path)
-        if cur_sig is not None and prev_sig is not None and prev_sig != cur_sig:
-            # File changed on disk (size/mtime/inode): drop stale handle.
-            try:
-                handle.close()
-            except Exception:
-                pass
-            _file_handle_cache.pop(path, None)
-            _file_handle_sig_cache.pop(path, None)
-            handle = None
-        else:
-            _file_handle_cache.move_to_end(path)
-            _file_handle_sig_cache.move_to_end(path)
-
-    if handle is None:
-        handle = cpp.open_fits_file(path, "r")
-        _file_handle_cache[path] = handle
-        _file_handle_sig_cache[path] = cur_sig
-
-    while len(_file_handle_cache) > handle_cache_capacity:
-        old_path, old_handle = _file_handle_cache.popitem(last=False)
-        _file_handle_sig_cache.pop(old_path, None)
-        try:
-            old_handle.close()
-        except Exception:
-            pass
-
-    return handle, True
-
-
 def _get_image_meta(path: str, hdu: int):
     import torchsky.cpp as cpp
 
@@ -524,24 +484,6 @@ def _get_image_meta_from_handle(file_handle, path: str, hdu: int):
     while len(_image_meta_cache) > 256:
         _image_meta_cache.popitem(last=False)
     return meta
-
-
-def _get_cached_hdu_type(path: str, hdu: int) -> Optional[str]:
-    sig = (path, hdu)
-    cached = _hdu_type_cache.get(sig)
-    if cached is not None:
-        _hdu_type_cache.move_to_end(sig)
-    return cached
-
-
-def _set_cached_hdu_type(path: str, hdu: int, hdu_type: Optional[str]) -> None:
-    if not hdu_type:
-        return
-    sig = (path, hdu)
-    _hdu_type_cache[sig] = hdu_type
-    _hdu_type_cache.move_to_end(sig)
-    while len(_hdu_type_cache) > 512:
-        _hdu_type_cache.popitem(last=False)
 
 
 def _header_truthy(value: Any) -> bool:

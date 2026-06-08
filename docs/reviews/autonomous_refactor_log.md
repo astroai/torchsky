@@ -159,6 +159,17 @@ Start gate: May 8, 2026, `America/Vancouver`
   - Result: `1 passed`.
 - North Star connection: this starts correcting the reverse-alias `torchsky.io`
   architecture while preserving the lean namespace users already import.
+- Moved Python-side file signature, CFITSIO handle-cache, and cached HDU-type
+  helpers into `torchsky._io_engine.caches`, keeping the existing root private
+  names as compatibility aliases for the remaining root dispatch code.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_cache.py tests/test_api.py -k 'read_hdu_auto or get_header or read_by_extname or read_hdus or cache_functions or subset' tests/test_io.py tests/test_io_engine_caches.py tests/test_cold_import.py -q`
+  - Result: `8 passed, 85 deselected, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_api.py tests/test_io.py tests/test_cache.py tests/test_io_engine_caches.py tests/test_cold_import.py -q`
+  - Result: `93 passed, 2 warnings`.
+- North Star connection: this concentrates stale-file and open-handle policy in
+  one cache module, which makes the remaining FITS root facade smaller without
+  changing tensor IO semantics or adding runtime dependencies.
 
 ## Work Queue Snapshot
 
