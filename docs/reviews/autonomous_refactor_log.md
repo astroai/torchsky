@@ -75,6 +75,17 @@ Start gate: May 8, 2026, `America/Vancouver`
   - Result: `1 passed, 31 deselected, 2 warnings`.
 - North Star connection: this is a small B1 step toward a private, testable I/O
   engine while keeping user-facing reads stable.
+- Moved deterministic low-level `read_image` validation and C++ dispatch into
+  `torchsky._io_engine.image`, leaving the root `torchsky.read_image` wrapper
+  and return semantics unchanged.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_api.py::TestMainAPI::test_read_image_basic tests/test_api.py::TestMainAPI::test_read_image_matches_read tests/test_api.py::TestMainAPI::test_read_image_rejects_auto_hdu tests/test_api.py::TestMainAPI::test_read_image_handle_cache_flag tests/test_api.py::TestMainAPI::test_read_mode_image -q`
+  - Result: `5 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_io.py -q`
+  - Result: `20 passed, 2 warnings`.
+- North Star connection: this moves an expert low-level I/O path behind a
+  private engine boundary while preserving deterministic tensor-native image
+  reads for performance profiling and downstream tools.
 
 ## Work Queue Snapshot
 

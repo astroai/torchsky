@@ -58,6 +58,7 @@ from ._io_engine.caches import (
     image_meta_cache as _image_meta_cache,
     invalidate_path_caches as _invalidate_io_path_caches,
 )
+from ._io_engine.image import read_image as _read_image_impl
 from ._io_engine.options import ReadOptions, ReadOptionsKwargs
 from .surfaces import (
     APISurface,
@@ -706,44 +707,6 @@ def _read_scaled_cpu_fast(path: str, hdu: int = 0, mmap: bool = True) -> Tensor:
     return data
 
 
-def _validate_read_image_args(
-    path: str, hdu: int, mmap: bool, handle_cache: bool, device: str
-) -> None:
-    """Validate arguments for low-level read_image."""
-    if not isinstance(path, str) or not path:
-        raise ValueError("path must be a non-empty string")
-    if not isinstance(hdu, int) or hdu < 0:
-        raise ValueError("hdu must be a non-negative integer")
-    if not isinstance(mmap, bool):
-        raise ValueError("read_image requires explicit mmap=True/False")
-    if not isinstance(handle_cache, bool):
-        raise ValueError("handle_cache must be bool")
-    if device not in ["cpu", "cuda", "mps"] and not device.startswith("cuda:"):
-        raise ValueError("device must be 'cpu', 'cuda', 'mps' or 'cuda:N'")
-
-
-def _dispatch_read_image_cpp(
-    cpp: Any, path: str, hdu: int, mmap: bool, handle_cache: bool, raw_scale: bool
-) -> Tensor:
-    """Dispatch the correct C++ function for low-level image reading."""
-    if raw_scale:
-        if not mmap and hasattr(cpp, "read_full_unmapped_raw"):
-            return cpp.read_full_unmapped_raw(path, hdu)
-        elif hasattr(cpp, "read_full_raw"):
-            return cpp.read_full_raw(path, hdu, mmap)
-        else:
-            return cpp.read_full(path, hdu, mmap)
-    else:
-        if handle_cache and hasattr(cpp, "read_full_cached"):
-            return cpp.read_full_cached(path, hdu, mmap)
-        elif not mmap and hasattr(cpp, "read_full_unmapped"):
-            return cpp.read_full_unmapped(path, hdu)
-        elif hasattr(cpp, "read_full_nocache"):
-            return cpp.read_full_nocache(path, hdu, mmap)
-        else:
-            return cpp.read_full(path, hdu, mmap)
-
-
 def read_image(
     path: str,
     hdu: int = 0,
@@ -761,26 +724,18 @@ def read_image(
     It bypasses Python-side policy logic and calls C++ image readers directly.
     By default it reuses C++ shared FITS handles (`handle_cache=True`) for repeated reads.
     """
-    import torchsky.cpp as cpp
-
-    _validate_read_image_args(path, hdu, mmap, handle_cache, device)
-
-    data = _dispatch_read_image_cpp(cpp, path, hdu, mmap, handle_cache, raw_scale)
-
-    if fp16:
-        data = data.to(torch.float16)
-    elif bf16:
-        data = data.to(torch.bfloat16)
-
-    if device != "cpu" and data.device.type == "cpu":
-        data = data.to(device)
-
-    if return_header:
-        try:
-            return data, Header(cpp.read_header_dict(path, hdu))
-        except Exception:
-            return data, get_header(path, hdu)
-    return data
+    return _read_image_impl(
+        path=path,
+        hdu=hdu,
+        device=device,
+        mmap=mmap,
+        handle_cache=handle_cache,
+        fp16=fp16,
+        bf16=bf16,
+        raw_scale=raw_scale,
+        return_header=return_header,
+        fallback_get_header=get_header,
+    )
 
 
 def read_table(
