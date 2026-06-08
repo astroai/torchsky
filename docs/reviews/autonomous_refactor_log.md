@@ -10,8 +10,9 @@ Start gate: May 8, 2026, `America/Vancouver`
 - Active branch: `codex/autonomous-refactor-2026-05`.
 - Completed A0, A1, and A2 from
   `docs/reviews/autonomous_refactor_launch.md`.
-- Next recommended slice: B1/B2, extracting root FITS I/O internals and cache
-  policy without user-visible churn.
+- Next recommended slice: B1/B3, extracting root FITS I/O dispatch internals and
+  making `torchsky.io` call implementation modules directly without
+  user-visible churn.
 
 ## Daily Entries
 
@@ -50,6 +51,20 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this prevents the public facade from accidentally
   pulling experimental field or browser-server surfaces into the core import
   path while the larger I/O extraction proceeds.
+- Extracted root FITS I/O Python cache state and generic cache operations into
+  `torchsky._io_engine.caches`.
+- Kept root private aliases and public wrappers (`get_cache_performance`,
+  `clear_file_cache`, `_invalidate_path_caches`) intact so read/write dispatch
+  behavior and tests remain stable.
+- Added a direct private-module test for clearing data, handles, metadata, HDU
+  type, auto-mmap, auto-HDU, and stats caches.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_io_engine_caches.py tests/test_cache.py::TestCaching::test_cache_performance_tracking tests/test_cache.py::TestCaching::test_cache_clearing tests/test_cache.py::TestCaching::test_multiple_file_caching tests/test_cache.py::TestCaching::test_cold_nommap_heuristic_with_cache_enabled_int16 tests/test_cache.py::TestCaching::test_read_mmap_auto_defaults_to_false_for_compressed tests/test_cache.py::TestCaching::test_read_mmap_true_is_explicit_override tests/test_api.py::TestMainAPI::test_cache_functions -q`
+  - Result: `8 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_cold_import.py -q`
+  - Result: `1 passed`.
+- North Star connection: this moves root I/O policy toward a testable private
+  subsystem while preserving the lean public facade and existing FITS behavior.
 
 ## Work Queue Snapshot
 
@@ -57,7 +72,7 @@ Start gate: May 8, 2026, `America/Vancouver`
 - [x] A1: Declare the public modelling spine in docs and API-surface metadata.
 - [x] A2: Add or tighten tests for public API tiers and cold import behavior.
 - [ ] B1: Extract root FITS I/O implementation without user-visible churn.
-- [ ] B2: Move Python-side root I/O caches behind a single cache facade.
+- [x] B2: Move Python-side root I/O caches behind a single cache facade.
 - [ ] B3: Make `torchsky.io` call the implementation directly.
 - [ ] B4: Preserve root FITS public behavior.
 - [ ] C1: Add promoted observation/product/scene facades.

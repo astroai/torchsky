@@ -22,7 +22,6 @@ from typing import (
     Unpack,
 )
 from dataclasses import dataclass, fields
-from collections import OrderedDict
 
 import numpy as np
 import torch
@@ -46,6 +45,20 @@ from .interop import to_arrow, to_pandas, to_polars
 from . import table
 from . import sphere
 from . import io
+from ._io_engine.caches import (
+    auto_hdu_cache as _auto_hdu_cache,
+    auto_mmap_cache as _auto_mmap_cache,
+    cache_stats as _cache_stats,
+    clear_python_caches as _clear_python_file_caches,
+    cold_nommap_cache as _cold_nommap_cache,
+    file_cache as _file_cache,
+    file_handle_cache as _file_handle_cache,
+    file_handle_sig_cache as _file_handle_sig_cache,
+    get_cache_performance as _get_io_cache_performance,
+    hdu_type_cache as _hdu_type_cache,
+    image_meta_cache as _image_meta_cache,
+    invalidate_path_caches as _invalidate_io_path_caches,
+)
 from .surfaces import (
     APISurface,
     API_SURFACES,
@@ -98,18 +111,6 @@ warnings.filterwarnings(
     "ignore", message=".*torch.jit.script.*", category=DeprecationWarning
 )
 
-# Simple cache tracking for tests
-_cache_stats = {"total_requests": 0, "hits": 0, "misses": 0, "cache_size": 0}
-_file_cache = OrderedDict()
-_file_handle_cache = OrderedDict()
-_file_handle_sig_cache = OrderedDict()
-_image_meta_cache = OrderedDict()
-_hdu_type_cache = OrderedDict()
-_cold_nommap_cache = OrderedDict()
-_auto_mmap_cache = OrderedDict()
-_auto_hdu_cache = OrderedDict()
-
-
 def _batch_to_device(
     tensors: list[torch.Tensor], device: str | torch.device
 ) -> list[torch.Tensor]:
@@ -129,51 +130,7 @@ def _batch_to_device(
 
 def _invalidate_path_caches(path: str) -> None:
     """Invalidate Python-side caches/handles for a path that is being modified."""
-    global \
-        _file_cache, \
-        _file_handle_cache, \
-        _file_handle_sig_cache, \
-        _image_meta_cache, \
-        _hdu_type_cache, \
-        _cold_nommap_cache, \
-        _auto_mmap_cache, \
-        _auto_hdu_cache
-
-    stale_data_keys = [
-        k
-        for k in list(_file_cache.keys())
-        if isinstance(k, tuple) and k and k[0] == path
-    ]
-    for key in stale_data_keys:
-        _file_cache.pop(key, None)
-    handle = _file_handle_cache.pop(path, None)
-    _file_handle_sig_cache.pop(path, None)
-    if handle is not None:
-        try:
-            handle.close()
-        except Exception:
-            pass
-
-    for key in [k for k in _image_meta_cache.keys() if k[0] == path]:
-        _image_meta_cache.pop(key, None)
-    for key in [k for k in _hdu_type_cache.keys() if k[0] == path]:
-        _hdu_type_cache.pop(key, None)
-    for key in [k for k in _cold_nommap_cache.keys() if k[0] == path]:
-        _cold_nommap_cache.pop(key, None)
-    for key in [k for k in _auto_mmap_cache.keys() if k[0] == path]:
-        _auto_mmap_cache.pop(key, None)
-    _auto_hdu_cache.pop(path, None)
-    for key in [
-        k for k in _auto_hdu_cache.keys() if isinstance(k, tuple) and k and k[0] == path
-    ]:
-        _auto_hdu_cache.pop(key, None)
-
-    # Keep Arrow table reader/handle caches coherent across write/append/update paths.
-    try:
-        if hasattr(table, "_invalidate_caches_for_path"):
-            table._invalidate_caches_for_path(path)
-    except Exception:
-        pass
+    _invalidate_io_path_caches(path, table)
 
 
 # Auto-configure cache and buffers on import
@@ -1233,7 +1190,6 @@ def _read_check_cache(
     return_header,
     cache_capacity,
 ):
-    global _cache_stats
     _cache_stats["total_requests"] += 1
     use_cache = cache_capacity > 0
 
@@ -1469,8 +1425,6 @@ def _read_fallback(
 ):
     import torchsky.cpp as cpp
 
-    global _cache_stats
-
     hit, cached_res, cache_key = _read_check_cache(
         path,
         hdu,
@@ -1638,8 +1592,6 @@ def read(  # noqa: PLR0913
         FileNotFoundError: File not found
         RuntimeError: FITS reading errors
     """
-    global _cache_stats, _file_cache
-
     opts = options if options is not None else ReadOptions()
     for field in fields(ReadOptions):
         if field.name in kwargs:
@@ -2714,19 +2666,7 @@ def get_cache_performance() -> Dict[str, Any]:
     Returns:
         Dictionary with cache statistics
     """
-    global _cache_stats
-    total = _cache_stats["total_requests"]
-    hits = _cache_stats["hits"]
-    misses = _cache_stats["misses"]
-
-    return {
-        "cache_size": _cache_stats["cache_size"],
-        "hit_rate": hits / total if total > 0 else 0.0,
-        "miss_rate": misses / total if total > 0 else 0.0,
-        "total_requests": total,
-        "hits": hits,
-        "misses": misses,
-    }
+    return _get_io_cache_performance()
 
 
 def clear_file_cache(
@@ -2746,40 +2686,13 @@ def clear_file_cache(
     - stats: reset cache performance counters
     - cpp: clear C++-side caches (if available)
     """
-    global \
-        _cache_stats, \
-        _file_cache, \
-        _file_handle_cache, \
-        _file_handle_sig_cache, \
-        _image_meta_cache, \
-        _hdu_type_cache, \
-        _cold_nommap_cache, \
-        _auto_mmap_cache, \
-        _auto_hdu_cache
-
-    if data:
-        _file_cache.clear()
-
-    if handles:
-        for _, handle in list(_file_handle_cache.items()):
-            try:
-                handle.close()
-            except Exception:
-                pass
-        _file_handle_cache.clear()
-        _file_handle_sig_cache.clear()
-
-    if meta:
-        _image_meta_cache.clear()
-    if hdu_types:
-        _hdu_type_cache.clear()
-        _auto_hdu_cache.clear()
-    if meta:
-        _cold_nommap_cache.clear()
-        _auto_mmap_cache.clear()
-
-    if stats:
-        _cache_stats = {"total_requests": 0, "hits": 0, "misses": 0, "cache_size": 0}
+    _clear_python_file_caches(
+        data=data,
+        handles=handles,
+        meta=meta,
+        hdu_types=hdu_types,
+        stats=stats,
+    )
 
     if cpp:
         try:
