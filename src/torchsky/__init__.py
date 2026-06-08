@@ -64,6 +64,11 @@ from ._io_engine.image import (
     read_image as _read_image_impl,
 )
 from ._io_engine.options import ReadOptions, ReadOptionsKwargs
+from ._io_engine.subset import (
+    SubsetReader,
+    open_subset_reader as _open_subset_reader_impl,
+    read_subset as _read_subset_impl,
+)
 from ._io_engine.table_api import read_table as _read_table_impl
 from .surfaces import (
     APISurface,
@@ -1711,18 +1716,16 @@ def read_subset(
     Returns:
         Tensor containing the subset
     """
-    try:
-        file_handle, cached = _get_cached_handle(path, handle_cache_capacity)
-        try:
-            return file_handle.read_subset(hdu, x1, y1, x2, y2)
-        finally:
-            if not cached:
-                try:
-                    file_handle.close()
-                except Exception:
-                    pass
-    except Exception as e:
-        raise RuntimeError(f"Failed to read subset from '{path}': {e}") from e
+    return _read_subset_impl(
+        get_cached_handle=_get_cached_handle,
+        path=path,
+        hdu=hdu,
+        x1=x1,
+        y1=y1,
+        x2=x2,
+        y2=y2,
+        handle_cache_capacity=handle_cache_capacity,
+    )
 
 
 def read_hdus(
@@ -1746,53 +1749,9 @@ def read_hdus(
     )
 
 
-class SubsetReader:
-    """Persistent subset reader for repeated cutouts on one image HDU."""
-
-    def __init__(self, path: str, hdu: int = 0, device: str = "cpu"):
-        import torchsky.cpp as cpp
-
-        if not isinstance(path, str):
-            raise ValueError("path must be a string")
-        if not isinstance(hdu, int) or hdu < 0:
-            raise ValueError("hdu must be a non-negative integer")
-        if device not in ["cpu", "cuda", "mps"] and not str(device).startswith("cuda:"):
-            raise ValueError("device must be 'cpu', 'cuda', 'mps' or 'cuda:N'")
-
-        self._reader = cpp.SubsetReader(path, int(hdu))
-        self._device = device
-
-    @property
-    def hdu(self) -> int:
-        return int(self._reader.hdu)
-
-    @property
-    def shape(self) -> Tuple[int, int]:
-        return int(self._reader.height), int(self._reader.width)
-
-    def read_subset(self, x1: int, y1: int, x2: int, y2: int) -> Tensor:
-        out = self._reader.read(int(x1), int(y1), int(x2), int(y2))
-        if self._device != "cpu":
-            out = out.to(self._device)
-        return out
-
-    def close(self) -> None:
-        self._reader.close()
-
-    def __call__(self, x1: int, y1: int, x2: int, y2: int) -> Tensor:
-        return self.read_subset(x1, y1, x2, y2)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        self.close()
-        return False
-
-
 def open_subset_reader(path: str, hdu: int = 0, device: str = "cpu") -> SubsetReader:
     """Open a persistent cutout reader for repeated subsets on one HDU."""
-    return SubsetReader(path=path, hdu=hdu, device=device)
+    return _open_subset_reader_impl(path=path, hdu=hdu, device=device)
 
 
 def _host_tensor_for_fits_write(tensor: Tensor) -> Tensor:

@@ -107,6 +107,18 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this keeps direct multi-HDU tensor image reads
   explicit and testable while continuing to reduce the root facade's
   implementation load.
+- Moved `read_subset`, `SubsetReader`, and `open_subset_reader` into
+  `torchsky._io_engine.subset`, keeping root wrappers and the existing
+  Python-side handle-cache policy unchanged.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_api.py -k 'subset or read_basic or cache_functions' tests/test_io.py -q`
+  - Result: `4 passed, 48 deselected, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_cutout_performance_api.py tests/test_cold_import.py -q`
+  - Result: `2 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_io.py -q`
+  - Result: `20 passed, 2 warnings`.
+- North Star connection: this preserves efficient tensor cutout workflows while
+  continuing to separate root API routing from private I/O implementation.
 
 ## Work Queue Snapshot
 
