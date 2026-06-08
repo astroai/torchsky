@@ -76,6 +76,12 @@ from ._io_engine.image import (
     read_hdus as _read_hdus_impl,
     read_image as _read_image_impl,
 )
+from ._io_engine.image_meta import (
+    get_image_meta as _get_image_meta_impl,
+    get_image_meta_from_handle as _get_image_meta_from_handle_impl,
+    resolve_image_mmap as _resolve_image_mmap_impl,
+    should_use_cold_nommap as _should_use_cold_nommap_impl,
+)
 from ._io_engine.options import ReadOptions, ReadOptionsKwargs
 from ._io_engine.subset import (
     SubsetReader,
@@ -124,9 +130,12 @@ from .wcs import WCS
 _log = _stdlib_logging.getLogger(__name__)
 
 _PRESERVED_PRIVATE_CACHE_ALIASES = (
+    _auto_mmap_cache,
+    _cold_nommap_cache,
     _file_handle_cache,
     _file_handle_sig_cache,
     _hdu_type_cache,
+    _image_meta_cache,
 )
 
 # Recoverable errors when probing C++/FITS image fast paths (avoid bare ``except Exception``).
@@ -390,100 +399,14 @@ def _get_scaled_columns(header_data: Optional[Dict[str, Any]]) -> set:
 
 
 def _get_image_meta(path: str, hdu: int):
-    import torchsky.cpp as cpp
-
-    sig = (path, hdu)
-
-    cached = _image_meta_cache.get(sig)
-    if cached is not None:
-        return cached
-
-    try:
-        header = Header(cpp.read_header_dict(path, hdu))
-        bitpix = int(header.get("BITPIX", 0))
-        naxis = int(header.get("NAXIS", 0))
-        try:
-            bscale = float(header.get("BSCALE", 1.0))
-        except Exception:
-            bscale = 1.0
-        try:
-            bzero = float(header.get("BZERO", 0.0))
-        except Exception:
-            bzero = 0.0
-        dims = []
-        for i in range(1, naxis + 1):
-            key = f"NAXIS{i}"
-            if key in header:
-                try:
-                    dims.append(int(header.get(key)))
-                except Exception:
-                    break
-        zimage = header.get("ZIMAGE", False)
-        if isinstance(zimage, str):
-            zimage = zimage.strip().upper() in {"T", "TRUE", "1"}
-        xtension = str(header.get("XTENSION", "")).strip().upper()
-        has_compression_keys = any(
-            k in header for k in ("ZCMPTYPE", "ZBITPIX", "ZNAXIS", "ZTILE1")
-        )
-        is_compressed = bool(zimage) or (
-            xtension == "BINTABLE" and has_compression_keys
-        )
-        meta = (bitpix, naxis, tuple(dims), bscale, bzero, is_compressed)
-    except Exception:
-        meta = None
-
-    _image_meta_cache[sig] = meta
-    # Keep a bounded cache to avoid unbounded growth on many files.
-    while len(_image_meta_cache) > 256:
-        _image_meta_cache.popitem(last=False)
-    return meta
+    return _get_image_meta_impl(path, hdu, cpp_module=globals().get("cpp"))
 
 
 def _get_image_meta_from_handle(file_handle, path: str, hdu: int):
     """Fetch image metadata using an already-open FITS handle (avoids open/close)."""
-    sig = (path, hdu)
-    cached = _image_meta_cache.get(sig)
-    if cached is not None:
-        return cached
-
-    try:
-        header_data = _read_header_fast(file_handle, hdu, fast_header=True)
-        bitpix = int(header_data.get("BITPIX", 0))
-        naxis = int(header_data.get("NAXIS", 0))
-        try:
-            bscale = float(header_data.get("BSCALE", 1.0))
-        except Exception:
-            bscale = 1.0
-        try:
-            bzero = float(header_data.get("BZERO", 0.0))
-        except Exception:
-            bzero = 0.0
-        dims = []
-        for i in range(1, naxis + 1):
-            key = f"NAXIS{i}"
-            if key in header_data:
-                try:
-                    dims.append(int(header_data.get(key)))
-                except Exception:
-                    break
-        zimage = header_data.get("ZIMAGE", False)
-        if isinstance(zimage, str):
-            zimage = zimage.strip().upper() in {"T", "TRUE", "1"}
-        xtension = str(header_data.get("XTENSION", "")).strip().upper()
-        has_compression_keys = any(
-            k in header_data for k in ("ZCMPTYPE", "ZBITPIX", "ZNAXIS", "ZTILE1")
-        )
-        is_compressed = bool(zimage) or (
-            xtension == "BINTABLE" and has_compression_keys
-        )
-        meta = (bitpix, naxis, tuple(dims), bscale, bzero, is_compressed)
-    except Exception:
-        meta = None
-
-    _image_meta_cache[sig] = meta
-    while len(_image_meta_cache) > 256:
-        _image_meta_cache.popitem(last=False)
-    return meta
+    return _get_image_meta_from_handle_impl(
+        file_handle, path, hdu, read_header=_read_header_fast
+    )
 
 
 def _header_truthy(value: Any) -> bool:
@@ -523,67 +446,14 @@ def _autodetect_hdu(path: str, handle_cache_capacity: int = 16) -> int:
 def _should_use_cold_nommap(
     path: str, hdu: int, cache_capacity: int, mmap: bool
 ) -> bool:
-    # Keep cache_capacity in the signature for backward compatibility with
-    # existing call sites; nommap selection now depends on file/HDU traits.
-    _ = cache_capacity
-    if not mmap:
-        return False
-    if _COLD_NOMMAP:
-        return True
-
-    cached = _cold_nommap_cache.get((path, hdu))
-    if cached is not None:
-        return bool(cached)
-
-    # Auto-select non-mmap for common uncompressed integer/float32 cold reads where
-    # mmap has consistently higher latency than direct reads.
-    # Keep this scoped to larger files so tiny-image latency is unaffected.
-    try:
-        file_size = os.path.getsize(path)
-        if file_size < (1 << 20):  # 1 MiB
-            _cold_nommap_cache[(path, hdu)] = False
-            return False
-    except Exception:
-        _cold_nommap_cache[(path, hdu)] = False
-        return False
-
-    meta = _image_meta_cache.get((path, hdu))
-    if meta is None:
-        meta = _get_image_meta(path, hdu)
-    if not meta:
-        _cold_nommap_cache[(path, hdu)] = False
-        return False
-
-    try:
-        bitpix = int(meta[0])
-    except Exception:
-        _cold_nommap_cache[(path, hdu)] = False
-        return False
-
-    is_compressed = False
-    if len(meta) >= 6:
-        try:
-            is_compressed = bool(meta[5])
-        except Exception:
-            is_compressed = False
-    if is_compressed:
-        _cold_nommap_cache[(path, hdu)] = False
-        return False
-
-    # TARGET: common medium/large science images where direct reads are often
-    # lower-latency than mmap+byteswap in real workloads.
-    if bitpix in (16, 32, -32):
-        _cold_nommap_cache[(path, hdu)] = True
-        _cold_nommap_cache.move_to_end((path, hdu))
-        while len(_cold_nommap_cache) > 512:
-            _cold_nommap_cache.popitem(last=False)
-        return True
-
-    _cold_nommap_cache[(path, hdu)] = False
-    _cold_nommap_cache.move_to_end((path, hdu))
-    while len(_cold_nommap_cache) > 512:
-        _cold_nommap_cache.popitem(last=False)
-    return False
+    return _should_use_cold_nommap_impl(
+        path,
+        hdu,
+        cache_capacity,
+        mmap,
+        force_cold_nommap=_COLD_NOMMAP,
+        get_image_meta_func=_get_image_meta,
+    )
 
 
 def _resolve_image_mmap(
@@ -592,50 +462,15 @@ def _resolve_image_mmap(
     mmap: Union[bool, str],
     cache_capacity: int,
 ) -> bool:
-    """Resolve mmap mode for image reads.
-
-    - mmap=True/False are explicit user overrides.
-    - mmap='auto' uses heuristics:
-      * compressed HDUs -> mmap disabled by default
-      * otherwise use cold-read nommap heuristic
-    """
-    if isinstance(mmap, bool):
-        return mmap
-
-    if isinstance(mmap, str):
-        mode = mmap.strip().lower()
-        if mode != "auto":
-            raise ValueError("mmap must be bool or 'auto'")
-
-        sig = (path, hdu)
-        cached = _auto_mmap_cache.get(sig)
-        if cached is not None:
-            _auto_mmap_cache.move_to_end(sig)
-            return bool(cached)
-
-        meta = _image_meta_cache.get((path, hdu))
-        if meta is None:
-            meta = _get_image_meta(path, hdu)
-
-        if meta is not None and len(meta) >= 6:
-            try:
-                if bool(meta[5]):  # compressed image HDU
-                    _auto_mmap_cache[sig] = False
-                    _auto_mmap_cache.move_to_end(sig)
-                    while len(_auto_mmap_cache) > 512:
-                        _auto_mmap_cache.popitem(last=False)
-                    return False
-            except Exception:
-                pass
-
-        resolved = not _should_use_cold_nommap(path, hdu, cache_capacity, True)
-        _auto_mmap_cache[sig] = bool(resolved)
-        _auto_mmap_cache.move_to_end(sig)
-        while len(_auto_mmap_cache) > 512:
-            _auto_mmap_cache.popitem(last=False)
-        return bool(resolved)
-
-    raise ValueError("mmap must be bool or 'auto'")
+    """Resolve mmap mode for image reads."""
+    return _resolve_image_mmap_impl(
+        path,
+        hdu,
+        mmap,
+        cache_capacity,
+        get_image_meta_func=_get_image_meta,
+        should_use_cold_nommap_func=_should_use_cold_nommap,
+    )
 
 
 def _read_scaled_cpu_fast(path: str, hdu: int = 0, mmap: bool = True) -> Tensor:

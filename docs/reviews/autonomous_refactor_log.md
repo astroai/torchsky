@@ -170,6 +170,17 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this concentrates stale-file and open-handle policy in
   one cache module, which makes the remaining FITS root facade smaller without
   changing tensor IO semantics or adding runtime dependencies.
+- Moved image metadata parsing and mmap auto-policy helpers into
+  `torchsky._io_engine.image_meta`, keeping root wrappers for the existing
+  monkeypatchable private names used by tests and remaining root dispatch code.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_io.py::TestIORead::test_read_basic tests/test_io.py::TestIORead::test_read_scale_on_device_scaled tests/test_io.py::TestIORead::test_read_scale_on_device_not_scaled tests/test_io.py::TestIORead::test_read_use_cache_raw_scale tests/test_io.py::TestIORead::test_read_use_cache_no_raw_scale tests/test_cache.py::TestCaching::test_cold_nommap_heuristic_with_cache_enabled_int16 -q`
+  - Result: `6 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_api.py tests/test_io.py tests/test_cache.py tests/test_io_engine_caches.py tests/test_cold_import.py -q`
+  - Result: `93 passed, 2 warnings`.
+- North Star connection: this isolates image-read policy from the public facade
+  while preserving exact FITS header normalization, mmap behavior, and lean core
+  runtime dependencies.
 
 ## Work Queue Snapshot
 
