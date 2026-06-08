@@ -75,6 +75,10 @@ from ._io_engine.subset import (
     read_subset as _read_subset_impl,
 )
 from ._io_engine.table_api import read_table as _read_table_impl
+from ._io_engine.table_streaming import (
+    read_large_table as _read_large_table_impl,
+    stream_table as _stream_table_impl,
+)
 from .surfaces import (
     APISurface,
     API_SURFACES,
@@ -2576,144 +2580,14 @@ def read_large_table(
     Returns:
         Dictionary with table data, or an iterator if return_iterator=True
     """
-    try:
-        import os
-
-        import torchsky.cpp as cpp
-
-        if not os.path.exists(file_path):
-            return {}
-
-        if not streaming:
-            if return_iterator:
-                return iter([cpp.read_fits_table(file_path, hdu)])
-            return cpp.read_fits_table(file_path, hdu)
-
-        # Streaming-like chunked read (returns full dict, but limits peak memory)
-        if not hasattr(cpp, "read_fits_table_rows"):
-            return cpp.read_fits_table(file_path, hdu)
-
-        try:
-            header = get_header(file_path, hdu)
-            total_rows = header.get("NAXIS2", 0)
-            try:
-                if isinstance(total_rows, str):
-                    total_rows = int(float(total_rows))
-                else:
-                    total_rows = int(total_rows)
-            except Exception:
-                total_rows = 0
-            if total_rows == 0:
-                return cpp.read_fits_table(file_path, hdu)
-
-            # Sample a small batch to estimate bytes per row
-            sample_rows = min(256, total_rows)
-            if hasattr(cpp, "read_fits_table_rows_from_handle"):
-                file_handle = cpp.open_fits_file(file_path, "r")
-                try:
-                    if hasattr(cpp, "TableReader"):
-                        reader = cpp.TableReader(file_handle, hdu)
-                        sample = reader.read_rows([], 1, sample_rows)
-                    else:
-                        sample = cpp.read_fits_table_rows_from_handle(
-                            file_handle, hdu, [], 1, sample_rows
-                        )
-                finally:
-                    file_handle.close()
-            else:
-                sample = cpp.read_fits_table_rows(
-                    file_path, hdu, [], 1, sample_rows, False
-                )
-
-            def _estimate_bytes(data: Dict[str, Any], rows: int) -> float:
-                total = 0
-                for v in data.values():
-                    if isinstance(v, torch.Tensor):
-                        total += v.numel() * v.element_size()
-                    elif isinstance(v, list):
-                        for item in v:
-                            if isinstance(item, torch.Tensor):
-                                total += item.numel() * item.element_size()
-                return total / max(1, rows)
-
-            bytes_per_row = _estimate_bytes(sample, sample_rows)
-            if bytes_per_row <= 0:
-                bytes_per_row = 1024.0  # Fallback guess
-
-            max_bytes = max_memory_mb * 1024 * 1024
-            rows_per_chunk = max(1, int(max_bytes / bytes_per_row))
-
-            if return_iterator:
-                return stream_table(
-                    file_path,
-                    hdu=hdu,
-                    columns=None,
-                    start_row=1,
-                    num_rows=-1,
-                    chunk_rows=rows_per_chunk,
-                    mmap=False,
-                )
-
-            accum = {}
-            start = 1
-            if hasattr(cpp, "read_fits_table_rows_from_handle"):
-                file_handle = cpp.open_fits_file(file_path, "r")
-                try:
-                    reader = None
-                    if hasattr(cpp, "TableReader"):
-                        reader = cpp.TableReader(file_handle, hdu)
-
-                    while start <= total_rows:
-                        remaining = total_rows - start + 1
-                        num = min(rows_per_chunk, remaining)
-                        if reader is not None:
-                            chunk = reader.read_rows([], start, num)
-                        else:
-                            chunk = cpp.read_fits_table_rows_from_handle(
-                                file_handle, hdu, [], start, num
-                            )
-
-                        for k, v in chunk.items():
-                            if isinstance(v, torch.Tensor):
-                                if k not in accum:
-                                    out_shape = (total_rows,) + tuple(v.shape[1:])
-                                    accum[k] = torch.empty(out_shape, dtype=v.dtype)
-                                accum[k][start - 1 : start - 1 + v.shape[0]] = v
-                            elif isinstance(v, list):
-                                accum.setdefault(k, []).extend(v)
-                            else:
-                                accum.setdefault(k, []).append(v)
-
-                        start += num
-                finally:
-                    file_handle.close()
-            else:
-                while start <= total_rows:
-                    remaining = total_rows - start + 1
-                    num = min(rows_per_chunk, remaining)
-                    chunk = cpp.read_fits_table_rows(
-                        file_path, hdu, [], start, num, False
-                    )
-
-                    for k, v in chunk.items():
-                        if isinstance(v, torch.Tensor):
-                            if k not in accum:
-                                out_shape = (total_rows,) + tuple(v.shape[1:])
-                                accum[k] = torch.empty(out_shape, dtype=v.dtype)
-                            accum[k][start - 1 : start - 1 + v.shape[0]] = v
-                        elif isinstance(v, list):
-                            accum.setdefault(k, []).extend(v)
-                        else:
-                            accum.setdefault(k, []).append(v)
-
-                    start += num
-
-            return accum
-        except Exception:
-            return cpp.read_fits_table(file_path, hdu)
-
-    except Exception:
-        return {}
+    return _read_large_table_impl(
+        get_header_func=get_header,
+        file_path=file_path,
+        hdu=hdu,
+        max_memory_mb=max_memory_mb,
+        streaming=streaming,
+        return_iterator=return_iterator,
+    )
 
 
 def stream_table(
@@ -2732,76 +2606,17 @@ def stream_table(
 
     Falls back to a single full-table read if row streaming is unavailable.
     """
-    import os
-
-    import torchsky.cpp as cpp
-
-    if not os.path.exists(file_path):
-        return
-
-    col_list = columns if columns else []
-
-    if not hasattr(cpp, "read_fits_table_rows"):
-        result = cpp.read_fits_table(file_path, hdu, col_list, mmap)
-        yield result
-        return
-
-    header = get_header(file_path, hdu)
-    total_rows = header.get("NAXIS2", 0)
-    try:
-        if isinstance(total_rows, str):
-            total_rows = int(float(total_rows))
-        else:
-            total_rows = int(total_rows)
-    except Exception:
-        total_rows = 0
-    if total_rows == 0:
-        return
-
-    if num_rows != -1:
-        total_rows = min(total_rows, start_row + num_rows - 1)
-
-    row = start_row
-    emitted = 0
-    if mmap and hasattr(cpp, "read_fits_table_rows"):
-        while row <= total_rows:
-            remaining = total_rows - row + 1
-            size = min(chunk_rows, remaining)
-            yield cpp.read_fits_table_rows(file_path, hdu, col_list, row, size, mmap)
-            row += size
-            emitted += 1
-            if max_chunks is not None and emitted >= max_chunks:
-                return
-    elif hasattr(cpp, "read_fits_table_rows_from_handle"):
-        file_handle = cpp.open_fits_file(file_path, "r")
-        try:
-            reader = None
-            if hasattr(cpp, "TableReader"):
-                reader = cpp.TableReader(file_handle, hdu)
-            while row <= total_rows:
-                remaining = total_rows - row + 1
-                size = min(chunk_rows, remaining)
-                if reader is not None:
-                    yield reader.read_rows(col_list, row, size)
-                else:
-                    yield cpp.read_fits_table_rows_from_handle(
-                        file_handle, hdu, col_list, row, size
-                    )
-                row += size
-                emitted += 1
-                if max_chunks is not None and emitted >= max_chunks:
-                    return
-        finally:
-            file_handle.close()
-    else:
-        while row <= total_rows:
-            remaining = total_rows - row + 1
-            size = min(chunk_rows, remaining)
-            yield cpp.read_fits_table_rows(file_path, hdu, col_list, row, size, mmap)
-            row += size
-            emitted += 1
-            if max_chunks is not None and emitted >= max_chunks:
-                return
+    yield from _stream_table_impl(
+        get_header_func=get_header,
+        file_path=file_path,
+        hdu=hdu,
+        columns=columns,
+        start_row=start_row,
+        num_rows=num_rows,
+        chunk_rows=chunk_rows,
+        mmap=mmap,
+        max_chunks=max_chunks,
+    )
 
 
 def open(path: str, mode: str = "r") -> HDUList:
