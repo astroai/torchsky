@@ -139,6 +139,14 @@ Start gate: May 8, 2026, `America/Vancouver`
   - Result: `21 passed, 2 warnings`.
 - North Star connection: this keeps survey-scale table streaming and chunking as
   an explicit private I/O subsystem while preserving public convenience APIs.
+- Moved `read_batch` and `get_batch_info` implementation logic into
+  `torchsky._io_engine.batch`, keeping root wrappers and C++ batch fast-path
+  behavior intact.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_api.py -k 'batch or cache_functions' tests/test_io.py -q`
+  - Result: `6 passed, 46 deselected, 2 warnings`.
+- North Star connection: this keeps survey-scale multi-file tensor ingestion
+  explicit while continuing to shrink root I/O implementation code.
 
 ## Work Queue Snapshot
 

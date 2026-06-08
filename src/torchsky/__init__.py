@@ -44,6 +44,10 @@ from .interop import to_arrow, to_pandas, to_polars
 from . import table
 from . import sphere
 from . import io
+from ._io_engine.batch import (
+    get_batch_info as _get_batch_info_impl,
+    read_batch as _read_batch_impl,
+)
 from ._io_engine.caches import (
     auto_hdu_cache as _auto_hdu_cache,
     auto_mmap_cache as _auto_mmap_cache,
@@ -2446,36 +2450,15 @@ def read_batch(
     Returns:
         List of tensors from each file (only successfully read when strict=False).
     """
-    if not file_paths:
-        return []
-
-    if device not in ["cpu", "cuda", "mps"] and not device.startswith("cuda:"):
-        raise ValueError("device must be 'cpu', 'cuda', 'mps' or 'cuda:N'")
-
-    try:
-        if isinstance(hdu, int) and hdu >= 0:
-            import torchsky.cpp as cpp
-
-            tensors = cpp.read_images_batch(list(file_paths), hdu)
-            if device != "cpu":
-                tensors = _batch_to_device(tensors, device)
-            return tensors
-    except _READ_EXC_TYPES as exc:
-        if strict:
-            raise
-        _log.debug("read_batch: C++ batch path failed, falling back per file: %s", exc)
-
-    results = []
-    for path in file_paths:
-        try:
-            tensor = read(path, hdu=hdu, device=device, return_header=False)
-            results.append(tensor)
-        except _READ_EXC_TYPES as exc:
-            if strict:
-                raise
-            _log.debug("read_batch: skipped %r: %s", path, exc, exc_info=True)
-            continue
-    return results
+    return _read_batch_impl(
+        read_func=read,
+        read_exc_types=_READ_EXC_TYPES,
+        log=_log,
+        file_paths=file_paths,
+        hdu=hdu,
+        device=device,
+        strict=strict,
+    )
 
 
 def get_batch_info(file_paths: List[str]) -> Dict[str, Any]:
@@ -2487,17 +2470,7 @@ def get_batch_info(file_paths: List[str]) -> Dict[str, Any]:
     Returns:
         Dictionary with batch statistics
     """
-    import os
-
-    valid_files = 0
-    for path in file_paths:
-        try:
-            if os.path.exists(path):
-                valid_files += 1
-        except Exception:
-            continue
-
-    return {"num_files": len(file_paths), "valid_files": valid_files}
+    return _get_batch_info_impl(file_paths)
 
 
 def get_cache_performance() -> Dict[str, Any]:
