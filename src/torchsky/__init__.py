@@ -334,59 +334,6 @@ __all__ = [
 ]
 
 
-def _get_vla_columns(header_data: Optional[Dict[str, Any]]) -> set:
-    """Extract VLA column names from header metadata."""
-    vla_columns = set()
-    if not header_data:
-        return vla_columns
-    for key, value in header_data.items():
-        if not isinstance(key, str) or not key.startswith("TFORM"):
-            continue
-        if not isinstance(value, str) or not value:
-            continue
-        code = value.strip().upper()
-        if code.startswith("P") or code.startswith("Q"):
-            idx = key[5:]
-            name = header_data.get(f"TTYPE{idx}")
-            if isinstance(name, str) and name:
-                vla_columns.add(name)
-            else:
-                vla_columns.add(f"COL{idx}")
-    return vla_columns
-
-
-def _get_scaled_columns(header_data: Optional[Dict[str, Any]]) -> set:
-    """Extract scaled column names (TSCALn/TZEROn) from header metadata."""
-    scaled_columns = set()
-    if not header_data:
-        return scaled_columns
-    for key, value in header_data.items():
-        if not isinstance(key, str):
-            continue
-        key_upper = key.upper()
-        if not (key_upper.startswith("TSCAL") or key_upper.startswith("TZERO")):
-            continue
-        idx = key_upper[5:]
-        if not idx:
-            continue
-        try:
-            val = float(value)
-        except (TypeError, ValueError):
-            val = None
-        is_scaled = False
-        if key_upper.startswith("TSCAL"):
-            is_scaled = val is None or val != 1.0
-        else:
-            is_scaled = val is None or val != 0.0
-        if is_scaled:
-            name = header_data.get(f"TTYPE{idx}")
-            if isinstance(name, str) and name:
-                scaled_columns.add(name)
-            else:
-                scaled_columns.add(f"COL{idx}")
-    return scaled_columns
-
-
 def _get_image_meta(path: str, hdu: int):
     return _get_image_meta_impl(path, hdu, cpp_module=globals().get("cpp"))
 

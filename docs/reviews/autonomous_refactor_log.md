@@ -339,6 +339,19 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this keeps cache policy centralized in the private I/O
   cache facade, reducing root orchestration while preserving stale-handle and
   C++ shared-metadata invalidation semantics.
+- Removed two unused root-only table-header helper functions
+  (`_get_vla_columns`, `_get_scaled_columns`) after verifying they had no
+  remaining references.
+- Tests run:
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run -e test -- pytest tests/test_api.py -k 'namespace or top_level or api_surface' tests/test_cold_import.py -q`
+  - Result: `1 passed, 32 deselected, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_cold_import.py -q`
+  - Result: `1 passed`.
+- North Star connection: this keeps the root package focused as a public facade
+  and removes obsolete private FITS table parsing code that no longer belongs
+  in the root namespace.
 
 ## Work Queue Snapshot
 
