@@ -65,6 +65,8 @@ from ._io_engine.caches import (
     path_signature as _path_signature,
     set_cached_hdu_type as _set_cached_hdu_type,
 )
+from ._io_engine.checksum_api import verify_checksums as _verify_checksums_impl
+from ._io_engine.checksum_api import write_checksums as _write_checksums_impl
 from ._io_engine.hdu_api import (
     autodetect_hdu as _autodetect_hdu,
     find_first_hdu as _find_first_hdu,
@@ -1107,7 +1109,7 @@ def clear_file_cache(
 
 def write_checksums(path: str, hdu: int = 0) -> None:
     """Compute and write DATASUM/CHECKSUM keywords for an HDU (CFITSIO)."""
-    ChecksumVerifier.write_hdu_checksums(path, hdu)
+    return _write_checksums_impl(path, hdu)
 
 
 def verify_checksums(path: str, hdu: int = 0) -> Dict[str, Any]:
@@ -1118,7 +1120,7 @@ def verify_checksums(path: str, hdu: int = 0) -> Dict[str, Any]:
     - 0: keyword not present / undefined
     - -1: verification not correct
     """
-    return dict(ChecksumVerifier.verify_hdu_checksums(path, hdu))
+    return _verify_checksums_impl(path, hdu)
 
 
 def read_large_table(

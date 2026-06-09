@@ -316,6 +316,18 @@ Start gate: May 8, 2026, `America/Vancouver`
   implementation block while keeping the lean public API stable, preserving
   cache invalidation and compressed-write behavior, and making `torchsky.io`
   the canonical I/O implementation facade.
+- Moved root checksum helper implementations into
+  `torchsky._io_engine.checksum_api`, keeping `torchsky.write_checksums(...)`
+  and `torchsky.verify_checksums(...)` as root compatibility wrappers backed by
+  `ChecksumVerifier`.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_checksum.py tests/test_core.py::test_checksum_verifier_in_memory_methods_fail_closed tests/test_fitsio_upstream_smoke.py::test_fitsio_readme_table_mutation_header_and_checksum_workflows -q`
+  - Result: `9 passed, 2 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+- North Star connection: this keeps checksum behavior on the established
+  CFITSIO-backed verifier while removing another implementation detail from the
+  root facade.
 
 ## Work Queue Snapshot
 
