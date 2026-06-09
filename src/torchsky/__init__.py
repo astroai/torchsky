@@ -91,6 +91,8 @@ from ._io_engine.read_dispatch import (
     read_batch_hdus as _read_batch_hdus_impl,
     read_batch_paths as _read_batch_paths_impl,
     read_cpu_fast_path as _read_cpu_fast_path_impl,
+    read_fallback_image as _read_fallback_image_impl,
+    read_fallback_table as _read_fallback_table_impl,
     read_generic_fast_path as _read_generic_fast_path_impl,
     read_scaled_cpu_fast as _read_scaled_cpu_fast_impl,
 )
@@ -144,11 +146,13 @@ _PRESERVED_PRIVATE_CACHE_ALIASES = (
     _auto_hdu_cache,
     _auto_mmap_cache,
     _cold_nommap_cache,
+    _file_cache,
     _file_handle_cache,
     _file_handle_sig_cache,
     _find_first_hdu,
     _hdu_type_cache,
     _image_meta_cache,
+    _path_signature,
 )
 
 # Recoverable errors when probing C++/FITS image fast paths (avoid bare ``except Exception``).
@@ -686,38 +690,23 @@ def _read_fallback_image(
     cache_key,
     use_cache,
 ):
-    import torchsky.cpp as cpp
-
-    effective_mmap = _resolve_image_mmap(path, hdu_num, mmap, cache_capacity)
-    data = cpp.read_full(file_handle, hdu_num, effective_mmap)
-
-    if fp16:
-        data = data.to(torch.float16)
-    elif bf16:
-        data = data.to(torch.bfloat16)
-
-    if device != "cpu":
-        data = data.to(device)
-
-    header = None
-    if return_header:
-        header_data = _read_header_fast(file_handle, hdu_num, fast_header)
-        header = Header(header_data)
-
-    if use_cache and cache_key is not None:
-        path_sig = _path_signature(path)
-        _file_cache[cache_key] = (
-            data.cpu() if device != "cpu" else data,
-            header,
-            path_sig,
-        )
-        while len(_file_cache) > cache_capacity:
-            _file_cache.popitem(last=False)
-        _cache_stats["cache_size"] = len(_file_cache)
-
-    if isinstance(hdu_num, int):
-        _set_cached_hdu_type(path, hdu_num, "IMAGE")
-    return (data, header) if return_header else data
+    return _read_fallback_image_impl(
+        cpp_module=globals().get("cpp"),
+        file_handle=file_handle,
+        path=path,
+        hdu_num=hdu_num,
+        device=device,
+        mmap=mmap,
+        fp16=fp16,
+        bf16=bf16,
+        cache_capacity=cache_capacity,
+        fast_header=fast_header,
+        return_header=return_header,
+        cache_key=cache_key,
+        use_cache=use_cache,
+        resolve_image_mmap=_resolve_image_mmap,
+        read_header=_read_header_fast,
+    )
 
 
 def _read_fallback_table(
@@ -737,81 +726,25 @@ def _read_fallback_table(
     header_data,
     header,
 ):
-    import torchsky.cpp as cpp
-
-    if (return_header or isinstance(hdu_num, str)) and header_data is None:
-        header_data = _read_header_fast(file_handle, hdu_num, fast_header)
-        header = Header(header_data)
-
-    col_list = columns if columns else []
-    table_result = None
-    table_mmap = mmap if isinstance(mmap, bool) else True
-    if table_mmap:
-        try:
-            if start_row > 1 or num_rows != -1:
-                if hasattr(cpp, "read_fits_table_rows"):
-                    table_result = cpp.read_fits_table_rows(
-                        path, hdu_num, col_list, start_row, num_rows, True
-                    )
-                else:
-                    table_result = cpp.read_fits_table(path, hdu_num, col_list, True)
-            else:
-                table_result = cpp.read_fits_table(path, hdu_num, col_list, True)
-        except Exception:
-            table_result = None
-
-    if table_result is None:
-        if columns is None and start_row == 1 and num_rows == -1:
-            table_result = cpp.read_fits_table_from_handle(file_handle, hdu_num)
-        elif hasattr(cpp, "read_fits_table_rows_from_handle"):
-            table_result = cpp.read_fits_table_rows_from_handle(
-                file_handle, hdu_num, col_list, start_row, num_rows
-            )
-        elif start_row > 1 or num_rows != -1:
-            if hasattr(cpp, "read_fits_table_rows"):
-                table_result = cpp.read_fits_table_rows(
-                    path, hdu_num, col_list, start_row, num_rows, False
-                )
-            else:
-                table_result = cpp.read_fits_table(path, hdu_num, col_list, False)
-        else:
-            table_result = cpp.read_fits_table(path, hdu_num, col_list, False)
-
-    table_data = table_result
-
-    if (start_row > 1 or num_rows != -1) and not hasattr(cpp, "read_fits_table_rows"):
-        for k, v in table_data.items():
-            if isinstance(v, torch.Tensor):
-                end_row = start_row + num_rows - 1 if num_rows != -1 else len(v)
-                table_data[k] = v[start_row - 1 : end_row]
-
-    if use_cache and cache_key is not None:
-        path_sig = _path_signature(path)
-        _file_cache[cache_key] = (table_data, header, path_sig)
-        while len(_file_cache) > cache_capacity:
-            _file_cache.popitem(last=False)
-        _cache_stats["cache_size"] = len(_file_cache)
-
-    if device != "cpu":
-        new_data = {}
-        for k, v in table_data.items():
-            if isinstance(v, torch.Tensor):
-                new_data[k] = v.to(device)
-            elif isinstance(v, list):
-                new_list = []
-                for item in v:
-                    if isinstance(item, torch.Tensor):
-                        new_list.append(item.to(device))
-                    else:
-                        new_list.append(item)
-                new_data[k] = new_list
-            else:
-                new_data[k] = v
-        table_data = new_data
-
-    if isinstance(hdu_num, int):
-        _set_cached_hdu_type(path, hdu_num, "BINARY_TABLE")
-    return (table_data, header) if return_header else table_data
+    return _read_fallback_table_impl(
+        cpp_module=globals().get("cpp"),
+        file_handle=file_handle,
+        path=path,
+        hdu_num=hdu_num,
+        device=device,
+        mmap=mmap,
+        cache_capacity=cache_capacity,
+        fast_header=fast_header,
+        return_header=return_header,
+        cache_key=cache_key,
+        use_cache=use_cache,
+        columns=columns,
+        start_row=start_row,
+        num_rows=num_rows,
+        header_data=header_data,
+        header=header,
+        read_header=_read_header_fast,
+    )
 
 
 def _read_fallback(
