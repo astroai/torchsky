@@ -88,6 +88,8 @@ from ._io_engine.image_meta import (
 )
 from ._io_engine.options import ReadOptions, ReadOptionsKwargs
 from ._io_engine.read_dispatch import (
+    read_batch_hdus as _read_batch_hdus_impl,
+    read_batch_paths as _read_batch_paths_impl,
     read_cpu_fast_path as _read_cpu_fast_path_impl,
     read_generic_fast_path as _read_generic_fast_path_impl,
     read_scaled_cpu_fast as _read_scaled_cpu_fast_impl,
@@ -521,52 +523,28 @@ def _read_batch_paths(
     mode,
     policy,
 ):
-    import torchsky.cpp as cpp
-
-    hdu_batch = hdu
-    if hdu_batch is None or (
-        isinstance(hdu_batch, str) and hdu_batch.strip().lower() == "auto"
-    ):
-        if not path:
-            raise ValueError("Batch read requires a non-empty path list")
-        hdu_batch = _autodetect_hdu(path[0], handle_cache_capacity)
-    if not isinstance(hdu_batch, int):
-        raise ValueError("Batch read requires a single integer HDU")
-    hdu = hdu_batch
-    # C++ batch API does not expose mmap mode controls. Keep the default fast
-    # path for mmap='auto' and explicit mmap=True.
-    if mmap is not False:
-        try:
-            data_list = cpp.read_images_batch(list(path), hdu)
-            if device != "cpu":
-                data_list = _batch_to_device(data_list, device)
-            return data_list
-        except Exception:
-            pass
-
-    data_list = []
-    for p in path:
-        data_list.append(
-            read(
-                p,
-                hdu=hdu,
-                mode=mode,
-                policy=policy,
-                device=device,
-                mmap=mmap,
-                fp16=fp16,
-                bf16=bf16,
-                raw_scale=raw_scale,
-                columns=columns,
-                start_row=start_row,
-                num_rows=num_rows,
-                cache_capacity=cache_capacity,
-                handle_cache_capacity=handle_cache_capacity,
-                fast_header=fast_header,
-                return_header=return_header,
-            )
-        )
-    return data_list
+    return _read_batch_paths_impl(
+        cpp_module=globals().get("cpp"),
+        path=path,
+        hdu=hdu,
+        device=device,
+        mmap=mmap,
+        fp16=fp16,
+        bf16=bf16,
+        raw_scale=raw_scale,
+        columns=columns,
+        start_row=start_row,
+        num_rows=num_rows,
+        cache_capacity=cache_capacity,
+        handle_cache_capacity=handle_cache_capacity,
+        fast_header=fast_header,
+        return_header=return_header,
+        mode=mode,
+        policy=policy,
+        autodetect_hdu=_autodetect_hdu,
+        batch_to_device=_batch_to_device,
+        read_func=read,
+    )
 
 
 def _read_batch_hdus(
@@ -588,38 +566,27 @@ def _read_batch_hdus(
     mode,
     policy,
 ):
-    import torchsky.cpp as cpp
-
-    if hasattr(cpp, "read_hdus_batch"):
-        try:
-            data = cpp.read_hdus_batch(path, list(hdu))
-        except TypeError:
-            effective_mmap = True if isinstance(mmap, str) else mmap
-            data = cpp.read_hdus_batch(path, list(hdu), effective_mmap)
-        if device != "cpu":
-            data = _batch_to_device(data, device)
-        return data
-    return [
-        read(
-            path,
-            hdu=h,
-            device=device,
-            policy=policy,
-            mmap=mmap,
-            fp16=fp16,
-            bf16=bf16,
-            raw_scale=raw_scale,
-            scale_on_device=scale_on_device,
-            columns=columns,
-            start_row=start_row,
-            num_rows=num_rows,
-            cache_capacity=cache_capacity,
-            handle_cache_capacity=handle_cache_capacity,
-            fast_header=fast_header,
-            return_header=return_header,
-        )
-        for h in hdu
-    ]
+    return _read_batch_hdus_impl(
+        cpp_module=globals().get("cpp"),
+        path=path,
+        hdu=hdu,
+        device=device,
+        mmap=mmap,
+        fp16=fp16,
+        bf16=bf16,
+        raw_scale=raw_scale,
+        scale_on_device=scale_on_device,
+        columns=columns,
+        start_row=start_row,
+        num_rows=num_rows,
+        cache_capacity=cache_capacity,
+        handle_cache_capacity=handle_cache_capacity,
+        fast_header=fast_header,
+        return_header=return_header,
+        policy=policy,
+        batch_to_device=_batch_to_device,
+        read_func=read,
+    )
 
 
 def _read_cpu_fast_path(

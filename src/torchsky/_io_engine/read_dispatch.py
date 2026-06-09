@@ -9,6 +9,130 @@ import torch
 from torch import Tensor
 
 
+def read_batch_paths(
+    *,
+    cpp_module: Any,
+    path: list[str] | tuple[str, ...],
+    hdu: Any,
+    device: str,
+    mmap: bool | str,
+    fp16: bool,
+    bf16: bool,
+    raw_scale: bool,
+    columns: Any,
+    start_row: int,
+    num_rows: int,
+    cache_capacity: int,
+    handle_cache_capacity: int,
+    fast_header: bool,
+    return_header: bool,
+    mode: str,
+    policy: str,
+    autodetect_hdu: Callable[[str, int], int],
+    batch_to_device: Callable[[list[Tensor], str], list[Tensor]],
+    read_func: Callable[..., Any],
+) -> list[Any]:
+    """Dispatch a list of FITS paths through batch C++ or recursive reads."""
+    hdu_batch = hdu
+    if hdu_batch is None or (
+        isinstance(hdu_batch, str) and hdu_batch.strip().lower() == "auto"
+    ):
+        if not path:
+            raise ValueError("Batch read requires a non-empty path list")
+        hdu_batch = autodetect_hdu(path[0], handle_cache_capacity)
+    if not isinstance(hdu_batch, int):
+        raise ValueError("Batch read requires a single integer HDU")
+    hdu = hdu_batch
+
+    if mmap is not False:
+        try:
+            data_list = cpp_module.read_images_batch(list(path), hdu)
+            if device != "cpu":
+                data_list = batch_to_device(data_list, device)
+            return data_list
+        except Exception:
+            pass
+
+    data_list = []
+    for item_path in path:
+        data_list.append(
+            read_func(
+                item_path,
+                hdu=hdu,
+                mode=mode,
+                policy=policy,
+                device=device,
+                mmap=mmap,
+                fp16=fp16,
+                bf16=bf16,
+                raw_scale=raw_scale,
+                columns=columns,
+                start_row=start_row,
+                num_rows=num_rows,
+                cache_capacity=cache_capacity,
+                handle_cache_capacity=handle_cache_capacity,
+                fast_header=fast_header,
+                return_header=return_header,
+            )
+        )
+    return data_list
+
+
+def read_batch_hdus(
+    *,
+    cpp_module: Any,
+    path: str,
+    hdu: list[int] | tuple[int, ...],
+    device: str,
+    mmap: bool | str,
+    fp16: bool,
+    bf16: bool,
+    raw_scale: bool,
+    scale_on_device: bool,
+    columns: Any,
+    start_row: int,
+    num_rows: int,
+    cache_capacity: int,
+    handle_cache_capacity: int,
+    fast_header: bool,
+    return_header: bool,
+    policy: str,
+    batch_to_device: Callable[[list[Tensor], str], list[Tensor]],
+    read_func: Callable[..., Any],
+) -> Any:
+    """Dispatch multiple HDUs from one FITS path."""
+    if hasattr(cpp_module, "read_hdus_batch"):
+        try:
+            data = cpp_module.read_hdus_batch(path, list(hdu))
+        except TypeError:
+            effective_mmap = True if isinstance(mmap, str) else mmap
+            data = cpp_module.read_hdus_batch(path, list(hdu), effective_mmap)
+        if device != "cpu":
+            data = batch_to_device(data, device)
+        return data
+    return [
+        read_func(
+            path,
+            hdu=item_hdu,
+            device=device,
+            policy=policy,
+            mmap=mmap,
+            fp16=fp16,
+            bf16=bf16,
+            raw_scale=raw_scale,
+            scale_on_device=scale_on_device,
+            columns=columns,
+            start_row=start_row,
+            num_rows=num_rows,
+            cache_capacity=cache_capacity,
+            handle_cache_capacity=handle_cache_capacity,
+            fast_header=fast_header,
+            return_header=return_header,
+        )
+        for item_hdu in hdu
+    ]
+
+
 def read_scaled_cpu_fast(
     cpp_module: Any, path: str, hdu: int = 0, mmap: bool = True
 ) -> Tensor:

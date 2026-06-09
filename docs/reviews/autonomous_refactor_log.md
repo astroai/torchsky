@@ -214,6 +214,17 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this keeps read-cache policy centralized, preserving
   correctness for stale files and cached CPU/GPU tensor transfer while reducing
   root dispatch state.
+- Moved batch-path and multi-HDU read dispatch helpers into
+  `torchsky._io_engine.read_dispatch`, keeping root wrappers and recursive
+  `read(...)` fallback behavior unchanged.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_io.py::TestIORead::test_read_batch_paths tests/test_io.py::TestIORead::test_read_batch_hdus tests/test_api.py -k 'read_hdus or read_image or read_hdu_auto' tests/test_cold_import.py -q`
+  - Result: `5 passed, 30 deselected, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_api.py tests/test_io.py tests/test_cache.py tests/test_io_engine_caches.py tests/test_header_cards.py tests/test_cold_import.py -q`
+  - Result: `99 passed, 2 warnings`.
+- North Star connection: this keeps bulk image ingestion policy in the private
+  read engine while preserving batch C++ fast paths and recursive torch-native
+  fallback behavior.
 
 ## Work Queue Snapshot
 
