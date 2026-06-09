@@ -20,7 +20,6 @@ from typing import (
     Literal,
     Unpack,
 )
-from dataclasses import fields
 
 import numpy as np
 import torch
@@ -96,6 +95,7 @@ from ._io_engine.read_dispatch import (
     read_fallback_table as _read_fallback_table_impl,
     read_generic_fast_path as _read_generic_fast_path_impl,
     read_scaled_cpu_fast as _read_scaled_cpu_fast_impl,
+    read_unified as _read_unified_impl,
 )
 from ._io_engine.subset import (
     SubsetReader,
@@ -151,6 +151,7 @@ _PRESERVED_PRIVATE_CACHE_ALIASES = (
     _file_handle_cache,
     _file_handle_sig_cache,
     _find_first_hdu,
+    _get_cached_hdu_type,
     _hdu_type_cache,
     _image_meta_cache,
     _path_signature,
@@ -830,201 +831,24 @@ def read(  # noqa: PLR0913
         FileNotFoundError: File not found
         RuntimeError: FITS reading errors
     """
-    opts = options if options is not None else ReadOptions()
-    for field in fields(ReadOptions):
-        if field.name in kwargs:
-            setattr(opts, field.name, kwargs[field.name])
-
-    fp16 = opts.fp16
-    bf16 = opts.bf16
-    raw_scale = opts.raw_scale
-    scale_on_device = opts.scale_on_device
-    use_cache = opts.use_cache
-    columns = opts.columns
-    start_row = opts.start_row
-    num_rows = opts.num_rows
-    cache_capacity = opts.cache_capacity
-    handle_cache_capacity = opts.handle_cache_capacity
-    fast_header = opts.fast_header
-    mode = opts.mode
-    policy = opts.policy
-
-    if not path:
-        raise ValueError("Path must be a non-empty string")
-
-    if use_cache is not None and not isinstance(use_cache, bool):
-        raise ValueError("use_cache must be bool when provided")
-    if use_cache is True:
-        if cache_capacity <= 0:
-            cache_capacity = 10
-        # Preserve historical behavior of reading by path in cached mode.
-        handle_cache_capacity = 0
-    elif use_cache is False:
-        cache_capacity = 0
-        handle_cache_capacity = 0
-
-    if isinstance(path, (list, tuple)):
-        if any(not isinstance(p, str) or not p for p in path):
-            raise ValueError("Path must be a string or list of strings")
-        return _read_batch_paths(
-            path,
-            hdu,
-            device,
-            mmap,
-            fp16,
-            bf16,
-            raw_scale,
-            scale_on_device,
-            columns,
-            start_row,
-            num_rows,
-            cache_capacity,
-            handle_cache_capacity,
-            fast_header,
-            return_header,
-            mode,
-            policy,
-        )
-
-    if not isinstance(path, str):
-        raise ValueError("Path must be a string or list of strings")
-    if isinstance(hdu, int) and hdu < 0:
-        raise ValueError("HDU index must be a non-negative integer")
-    if device not in ["cpu", "cuda", "mps"] and not device.startswith("cuda:"):
-        raise ValueError("device must be 'cpu', 'cuda', 'mps' or 'cuda:N'")
-    if isinstance(mmap, str) and mmap.strip().lower() != "auto":
-        raise ValueError("mmap must be bool or 'auto'")
-    if not isinstance(mmap, (bool, str)):
-        raise ValueError("mmap must be bool or 'auto'")
-    mode = str(mode).strip().lower()
-    if mode not in {"auto", "image", "table"}:
-        raise ValueError("mode must be 'auto', 'image', or 'table'")
-    policy = str(policy).strip().lower()
-    if policy not in {"default", "smart"}:
-        raise ValueError("policy must be 'default' or 'smart'")
-    force_image = mode == "image"
-    force_table = mode == "table"
-    if force_image and (columns is not None or start_row != 1 or num_rows != -1):
-        raise ValueError("mode='image' does not support table row/column options")
-
-    if hdu is None or (isinstance(hdu, str) and hdu.strip().lower() == "auto"):
-        hdu = _autodetect_hdu(path, handle_cache_capacity)
-
-    hdu_type_hint = _get_cached_hdu_type(path, hdu) if isinstance(hdu, int) else None
-    is_cached_table_hdu = force_table or (
-        hdu_type_hint in {"ASCII_TABLE", "BINARY_TABLE"}
-    )
-
-    skip_generic_image_fast_path = is_cached_table_hdu
-
-    if (
-        isinstance(hdu, (list, tuple))
-        and not return_header
-        and columns is None
-        and start_row == 1
-        and num_rows == -1
-    ):
-        return _read_batch_hdus(
-            path,
-            hdu,
-            device,
-            mmap,
-            fp16,
-            bf16,
-            raw_scale,
-            scale_on_device,
-            columns,
-            start_row,
-            num_rows,
-            cache_capacity,
-            handle_cache_capacity,
-            fast_header,
-            return_header,
-            mode,
-            policy,
-        )
-
-    debug_scale = _DEBUG_SCALE
-    cpp_is_mocked = False
-    if isinstance(hdu, int):
-        try:
-            import unittest.mock as _unittest_mock
-            import torchsky.cpp as _cpp_mod
-
-            cpp_is_mocked = isinstance(
-                getattr(_cpp_mod, "read_full", None), _unittest_mock.Mock
-            )
-        except Exception:
-            cpp_is_mocked = False
-
-    if (
-        scale_on_device
-        and not raw_scale
-        and not cpp_is_mocked
-        and device == "cpu"
-        and not return_header
-        and isinstance(hdu, int)
-        and columns is None
-        and start_row == 1
-        and num_rows == -1
-        and not is_cached_table_hdu
-    ):
-        res, fallback = _read_cpu_fast_path(
-            path,
-            hdu,
-            mmap,
-            cache_capacity,
-            handle_cache_capacity,
-            fp16,
-            bf16,
-            force_image,
-        )
-        if not fallback:
-            return res
-        skip_generic_image_fast_path = True
-
-    if (
-        not return_header
-        and isinstance(hdu, int)
-        and columns is None
-        and start_row == 1
-        and num_rows == -1
-        and not skip_generic_image_fast_path
-    ):
-        res = _read_generic_fast_path(
-            path,
-            hdu,
-            device,
-            mmap,
-            cache_capacity,
-            handle_cache_capacity,
-            fp16,
-            bf16,
-            raw_scale,
-            scale_on_device,
-            force_image,
-            debug_scale,
-        )
-        if res is not None:
-            return res
-
-    return _read_fallback(
-        path,
-        hdu,
-        device,
-        mmap,
-        fp16,
-        bf16,
-        cache_capacity,
-        handle_cache_capacity,
-        fast_header,
-        return_header,
-        force_image,
-        force_table,
-        hdu_type_hint,
-        columns,
-        start_row,
-        num_rows,
+    return _read_unified_impl(
+        cpp_module=globals().get("cpp"),
+        path=path,
+        hdu=hdu,
+        device=device,
+        mmap=mmap,
+        options=options,
+        return_header=return_header,
+        kwargs=dict(kwargs),
+        autodetect_hdu=_autodetect_hdu,
+        batch_to_device=_batch_to_device,
+        resolve_image_mmap=_resolve_image_mmap,
+        read_check_cache=_read_check_cache,
+        read_header=_read_header_fast,
+        debug_scale=_DEBUG_SCALE,
+        cold_nocache=_COLD_NOCACHE,
+        read_exc_types=_READ_EXC_TYPES,
+        logger=_log,
     )
 
 

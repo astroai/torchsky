@@ -246,6 +246,17 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this puts named-HDU resolution, image/table fallback
   selection, and handle closing in the private read engine while leaving the
   public `read(...)` contract unchanged.
+- Moved the remaining unified `read(...)` orchestration into
+  `torchsky._io_engine.read_dispatch.read_unified`, leaving the root public
+  function as an overload-preserving wrapper.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_io.py tests/test_api.py tests/test_cache.py tests/test_table.py tests/test_io_engine_caches.py tests/test_cold_import.py -q`
+  - Result: `116 passed, 2 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+- North Star connection: this makes the root package a thinner public facade
+  while keeping the canonical `torchsky.read(...)` contract, option semantics,
+  batch dispatch, cache behavior, and device policy stable.
 
 ## Work Queue Snapshot
 
