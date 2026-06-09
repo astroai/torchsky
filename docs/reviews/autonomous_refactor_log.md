@@ -270,6 +270,19 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this advances the canonical `torchsky.io` namespace
   toward implementation ownership, while preserving root compatibility and test
   seams for existing users.
+- Updated `torchsky.io.get_header`, `torchsky.io.get_wcs`, `torchsky.io.read_image`
+  fallback headers, `torchsky.io.stream_table`, and
+  `torchsky.io.read_large_table` to use local direct header/HDU helpers instead
+  of importing root `get_header`.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_api.py -k 'get_header or get_wcs or top_level_namespaces or read_image or large_table or stream_table' tests/test_header_cards.py tests/test_io.py tests/test_table.py -k 'large_table or stream_table or read_table' tests/test_cold_import.py -q`
+  - Result: `10 passed, 72 deselected, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_api.py tests/test_io.py tests/test_cache.py tests/test_table.py tests/test_io_engine_caches.py tests/test_header_cards.py tests/test_cold_import.py -q`
+  - Result: `122 passed, 2 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+- North Star connection: this removes another reverse dependency from the
+  canonical I/O namespace while preserving header/WCS and streaming behavior.
 
 ## Work Queue Snapshot
 

@@ -25,6 +25,8 @@ from .._io_engine.caches import (
     invalidate_path_caches as _invalidate_path_caches_impl,
 )
 from .._io_engine.hdu_api import autodetect_hdu as _autodetect_hdu_impl
+from .._io_engine.hdu_api import get_header as _get_header_impl
+from .._io_engine.hdu_api import get_wcs as _get_wcs_impl
 from .._io_engine.hdu_api import open_hdulist as _open_hdulist_impl
 from .._io_engine.hdu_api import read_header_fast as _read_header_fast_impl
 from .._io_engine.image import batch_to_device as _batch_to_device_impl
@@ -146,9 +148,7 @@ def read(
 
 
 def read_image(*args: Any, **kwargs: Any):
-    from .. import get_header as _get_header
-
-    kwargs.setdefault("fallback_get_header", _get_header)
+    kwargs.setdefault("fallback_get_header", get_header)
     return _read_image_impl(*args, **kwargs)
 
 
@@ -176,28 +176,20 @@ def write(*args: Any, **kwargs: Any):
     return _write(*args, **kwargs)
 
 
-def get_header(*args: Any, **kwargs: Any):
-    from .. import get_header as _get_header
-
-    return _get_header(*args, **kwargs)
+def get_header(path: str, hdu: Any = None):
+    return _get_header_impl(path, hdu, autodetect_hdu=_autodetect_hdu_impl)
 
 
-def get_wcs(*args: Any, **kwargs: Any):
-    from .. import get_wcs as _get_wcs
-
-    return _get_wcs(*args, **kwargs)
+def get_wcs(path: str, hdu: Any = "auto", device: Any = None):
+    return _get_wcs_impl(path, hdu, device, get_header_func=get_header)
 
 
 def stream_table(*args: Any, **kwargs: Any):
-    from .. import get_header as _get_header
-
-    return _stream_table_impl(_get_header, *args, **kwargs)
+    return _stream_table_impl(get_header, *args, **kwargs)
 
 
 def read_large_table(*args: Any, **kwargs: Any):
-    from .. import get_header as _get_header
-
-    return _read_large_table_impl(_get_header, *args, **kwargs)
+    return _read_large_table_impl(get_header, *args, **kwargs)
 
 
 __all__ = [
