@@ -257,6 +257,19 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this makes the root package a thinner public facade
   while keeping the canonical `torchsky.read(...)` contract, option semantics,
   batch dispatch, cache behavior, and device policy stable.
+- Updated `torchsky.io.read` and `torchsky.io.read_table` to call the private
+  read engine directly instead of routing backward through the package root,
+  while preserving the existing `torchsky.cpp` monkeypatch seam used by tests.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_io.py::TestIORead -q`
+  - Result: `20 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_api.py tests/test_io.py tests/test_cache.py tests/test_table.py tests/test_io_engine_caches.py tests/test_header_cards.py tests/test_cold_import.py -q`
+  - Result: `122 passed, 2 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+- North Star connection: this advances the canonical `torchsky.io` namespace
+  toward implementation ownership, while preserving root compatibility and test
+  seams for existing users.
 
 ## Work Queue Snapshot
 
