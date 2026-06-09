@@ -91,6 +91,7 @@ from ._io_engine.read_dispatch import (
     read_batch_hdus as _read_batch_hdus_impl,
     read_batch_paths as _read_batch_paths_impl,
     read_cpu_fast_path as _read_cpu_fast_path_impl,
+    read_fallback as _read_fallback_impl,
     read_fallback_image as _read_fallback_image_impl,
     read_fallback_table as _read_fallback_table_impl,
     read_generic_fast_path as _read_generic_fast_path_impl,
@@ -153,6 +154,7 @@ _PRESERVED_PRIVATE_CACHE_ALIASES = (
     _hdu_type_cache,
     _image_meta_cache,
     _path_signature,
+    _set_cached_hdu_type,
 )
 
 # Recoverable errors when probing C++/FITS image fast paths (avoid bare ``except Exception``).
@@ -765,134 +767,28 @@ def _read_fallback(
     start_row,
     num_rows,
 ):
-    import torchsky.cpp as cpp
-
-    hit, cached_res, cache_key = _read_check_cache(
-        path,
-        hdu,
-        device,
-        fp16,
-        bf16,
-        columns,
-        start_row,
-        num_rows,
-        return_header,
-        cache_capacity,
+    return _read_fallback_impl(
+        cpp_module=globals().get("cpp"),
+        path=path,
+        hdu=hdu,
+        device=device,
+        mmap=mmap,
+        fp16=fp16,
+        bf16=bf16,
+        cache_capacity=cache_capacity,
+        handle_cache_capacity=handle_cache_capacity,
+        fast_header=fast_header,
+        return_header=return_header,
+        force_image=force_image,
+        force_table=force_table,
+        hdu_type_hint=hdu_type_hint,
+        columns=columns,
+        start_row=start_row,
+        num_rows=num_rows,
+        read_check_cache=_read_check_cache,
+        resolve_image_mmap=_resolve_image_mmap,
+        read_header=_read_header_fast,
     )
-    if hit:
-        return cached_res
-
-    if isinstance(hdu, int) and hdu < 0:
-        raise ValueError("HDU index must be non-negative")
-    if start_row < 1:
-        raise ValueError("start_row must be >= 1 (FITS uses 1-based indexing)")
-    if num_rows < -1 or num_rows == 0:
-        raise ValueError("num_rows must be > 0 or -1 for all rows")
-    if device not in ["cpu", "cuda", "mps"] and not device.startswith("cuda:"):
-        raise ValueError("device must be 'cpu', 'cuda', 'mps' or 'cuda:N'")
-
-    try:
-        file_handle, cached_handle = _get_cached_handle(path, handle_cache_capacity)
-        try:
-            if isinstance(hdu, str):
-                hdu_num = None
-                if hasattr(cpp, "resolve_hdu_name_cached"):
-                    try:
-                        hdu_num = int(cpp.resolve_hdu_name_cached(path, hdu))
-                    except Exception:
-                        hdu_num = None
-
-                if hdu_num is None:
-                    num_hdus = cpp.get_num_hdus(file_handle)
-                    for i in range(num_hdus):
-                        try:
-                            hdr = cpp.read_header(file_handle, i)
-                            if hdr.get("EXTNAME") == hdu:
-                                hdu_num = i
-                                break
-                        except Exception:
-                            continue
-
-                if hdu_num is None:
-                    raise ValueError(f"HDU '{hdu}' not found in file")
-            else:
-                hdu_num = hdu
-
-            header = None
-            header_data = None
-            hdu_type = hdu_type_hint if isinstance(hdu_num, int) else None
-            if isinstance(hdu_num, int) and hdu_type is None:
-                try:
-                    hdu_type = cpp.get_hdu_type(file_handle, hdu_num)
-                    _set_cached_hdu_type(path, hdu_num, hdu_type)
-                except Exception:
-                    hdu_type = None
-
-            is_table_hdu = force_table or (hdu_type in {"ASCII_TABLE", "BINARY_TABLE"})
-            if force_image:
-                is_table_hdu = False
-
-            if not is_table_hdu:
-                try:
-                    return _read_fallback_image(
-                        file_handle,
-                        path,
-                        hdu_num,
-                        device,
-                        mmap,
-                        fp16,
-                        bf16,
-                        cache_capacity,
-                        fast_header,
-                        return_header,
-                        cache_key,
-                        cache_capacity > 0,
-                    )
-                except (RuntimeError, TypeError):
-                    if force_image:
-                        raise
-                    if isinstance(hdu_num, int):
-                        try:
-                            hdu_type = cpp.get_hdu_type(file_handle, hdu_num)
-                            _set_cached_hdu_type(path, hdu_num, hdu_type)
-                        except Exception:
-                            hdu_type = None
-                    is_table_hdu = force_table or (
-                        hdu_type in {"ASCII_TABLE", "BINARY_TABLE"}
-                    )
-                    if not is_table_hdu:
-                        raise
-
-            try:
-                return _read_fallback_table(
-                    file_handle,
-                    path,
-                    hdu_num,
-                    device,
-                    mmap,
-                    cache_capacity,
-                    fast_header,
-                    return_header,
-                    cache_key,
-                    cache_capacity > 0,
-                    columns,
-                    start_row,
-                    num_rows,
-                    header_data,
-                    header,
-                )
-            except Exception as e:
-                raise RuntimeError(f"Failed to read table extension: {e}")
-
-        finally:
-            if not cached_handle:
-                try:
-                    file_handle.close()
-                except Exception:
-                    pass
-
-    except Exception as e:
-        raise RuntimeError(f"Failed to read FITS file '{path}': {e}") from e
 
 
 def read(  # noqa: PLR0913

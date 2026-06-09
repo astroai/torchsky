@@ -235,6 +235,17 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this moves image/table fallback I/O policy into the
   private read engine while preserving return-header behavior, table slicing,
   cache writes, and device movement.
+- Moved the generic fallback read orchestrator into
+  `torchsky._io_engine.read_dispatch`, keeping the root private wrapper used by
+  the public `read(...)` dispatcher.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_io.py tests/test_table.py tests/test_cache.py -k 'read_basic or use_cache or no_cache or read_table or return_header or cache_functions' tests/test_api.py -k 'read_table or read_image or read_hdu_auto or read_by_extname' tests/test_cold_import.py -q`
+  - Result: `14 passed, 101 deselected, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_api.py tests/test_io.py tests/test_cache.py tests/test_io_engine_caches.py tests/test_header_cards.py tests/test_table.py tests/test_cold_import.py -q`
+  - Result: `122 passed, 2 warnings`.
+- North Star connection: this puts named-HDU resolution, image/table fallback
+  selection, and handle closing in the private read engine while leaving the
+  public `read(...)` contract unchanged.
 
 ## Work Queue Snapshot
 
