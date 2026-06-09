@@ -52,6 +52,7 @@ from ._io_engine.caches import (
     auto_hdu_cache as _auto_hdu_cache,
     auto_mmap_cache as _auto_mmap_cache,
     cache_stats as _cache_stats,
+    check_read_cache as _check_read_cache_impl,
     clear_python_caches as _clear_python_file_caches,
     cold_nommap_cache as _cold_nommap_cache,
     file_cache as _file_cache,
@@ -689,77 +690,19 @@ def _read_check_cache(
     return_header,
     cache_capacity,
 ):
-    _cache_stats["total_requests"] += 1
-    use_cache = cache_capacity > 0
-
-    cache_key = None
-    if use_cache:
-        try:
-            cache_key = (
-                path,
-                hdu,
-                device,
-                fp16,
-                bf16,
-                tuple(columns) if columns else None,
-                start_row,
-                num_rows,
-                return_header,
-            )
-        except TypeError:
-            cache_key = None
-
-        if cache_key is not None:
-            if cache_key in _file_cache:
-                cached_entry = _file_cache.pop(cache_key)
-                if isinstance(cached_entry, tuple) and len(cached_entry) == 3:
-                    cached_data, cached_header, cached_sig = cached_entry
-                else:
-                    cached_data, cached_header = cached_entry
-                    cached_sig = None
-
-                cur_sig = _path_signature(path)
-                stale_cache_entry = (
-                    cached_sig is not None
-                    and cur_sig is not None
-                    and cached_sig != cur_sig
-                )
-                if stale_cache_entry:
-                    _invalidate_path_caches(path)
-                    _cache_stats["misses"] += 1
-                else:
-                    _cache_stats["hits"] += 1
-                    _file_cache[cache_key] = (cached_data, cached_header, cached_sig)
-
-                    if device != "cpu":
-                        if isinstance(cached_data, torch.Tensor):
-                            cached_data = cached_data.to(device)
-                        elif isinstance(cached_data, dict):
-                            new_data = {}
-                            for k, v in cached_data.items():
-                                if isinstance(v, torch.Tensor):
-                                    new_data[k] = v.to(device)
-                                else:
-                                    new_data[k] = v
-                            cached_data = new_data
-
-                    return (
-                        True,
-                        (
-                            (cached_data, cached_header)
-                            if return_header
-                            else cached_data
-                        ),
-                        cache_key,
-                    )
-            else:
-                _cache_stats["misses"] += 1
-        else:
-            _cache_stats["misses"] += 1
-    else:
-        _cache_stats["misses"] += 1
-
-    return False, None, cache_key
+    return _check_read_cache_impl(
+        path=path,
+        hdu=hdu,
+        device=device,
+        fp16=fp16,
+        bf16=bf16,
+        columns=columns,
+        start_row=start_row,
+        num_rows=num_rows,
+        return_header=return_header,
+        cache_capacity=cache_capacity,
+        invalidate_path=_invalidate_path_caches,
+    )
 
 
 def _read_fallback_image(

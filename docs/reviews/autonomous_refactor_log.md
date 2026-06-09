@@ -203,6 +203,17 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this keeps hot image tensor dispatch isolated and
   testable while preserving device conversion, mmap auto-policy, and cache
   accounting semantics.
+- Moved the unified read cache-hit check into `torchsky._io_engine.caches`,
+  leaving root `read(...)` with a wrapper while cache counters, stale-file
+  detection, and device transfer of cached data are owned by the cache facade.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_cache.py tests/test_io.py tests/test_api.py -k 'cache_functions or read_basic or use_cache or no_cache or read_image or read_hdu_auto' tests/test_io_engine_caches.py tests/test_cold_import.py -q`
+  - Result: `14 passed, 79 deselected, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_api.py tests/test_io.py tests/test_cache.py tests/test_io_engine_caches.py tests/test_header_cards.py tests/test_cold_import.py -q`
+  - Result: `99 passed, 2 warnings`.
+- North Star connection: this keeps read-cache policy centralized, preserving
+  correctness for stale files and cached CPU/GPU tensor transfer while reducing
+  root dispatch state.
 
 ## Work Queue Snapshot
 

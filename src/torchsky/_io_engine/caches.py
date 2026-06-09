@@ -95,6 +95,96 @@ def set_cached_hdu_type(path: str, hdu: int, hdu_type: str | None) -> None:
         hdu_type_cache.popitem(last=False)
 
 
+def check_read_cache(
+    *,
+    path: str,
+    hdu: Any,
+    device: str,
+    fp16: bool,
+    bf16: bool,
+    columns: Any,
+    start_row: int,
+    num_rows: int,
+    return_header: bool,
+    cache_capacity: int,
+    invalidate_path: Any,
+) -> tuple[bool, Any, Any]:
+    """Check the Python-side read cache and update cache counters."""
+    import torch
+
+    cache_stats["total_requests"] += 1
+    use_cache = cache_capacity > 0
+
+    cache_key = None
+    if use_cache:
+        try:
+            cache_key = (
+                path,
+                hdu,
+                device,
+                fp16,
+                bf16,
+                tuple(columns) if columns else None,
+                start_row,
+                num_rows,
+                return_header,
+            )
+        except TypeError:
+            cache_key = None
+
+        if cache_key is not None:
+            if cache_key in file_cache:
+                cached_entry = file_cache.pop(cache_key)
+                if isinstance(cached_entry, tuple) and len(cached_entry) == 3:
+                    cached_data, cached_header, cached_sig = cached_entry
+                else:
+                    cached_data, cached_header = cached_entry
+                    cached_sig = None
+
+                cur_sig = path_signature(path)
+                stale_cache_entry = (
+                    cached_sig is not None
+                    and cur_sig is not None
+                    and cached_sig != cur_sig
+                )
+                if stale_cache_entry:
+                    invalidate_path(path)
+                    cache_stats["misses"] += 1
+                else:
+                    cache_stats["hits"] += 1
+                    file_cache[cache_key] = (cached_data, cached_header, cached_sig)
+
+                    if device != "cpu":
+                        if isinstance(cached_data, torch.Tensor):
+                            cached_data = cached_data.to(device)
+                        elif isinstance(cached_data, dict):
+                            new_data = {}
+                            for key, value in cached_data.items():
+                                if isinstance(value, torch.Tensor):
+                                    new_data[key] = value.to(device)
+                                else:
+                                    new_data[key] = value
+                            cached_data = new_data
+
+                    return (
+                        True,
+                        (
+                            (cached_data, cached_header)
+                            if return_header
+                            else cached_data
+                        ),
+                        cache_key,
+                    )
+            else:
+                cache_stats["misses"] += 1
+        else:
+            cache_stats["misses"] += 1
+    else:
+        cache_stats["misses"] += 1
+
+    return False, None, cache_key
+
+
 def invalidate_path_caches(path: str, table_module: ModuleType | None = None) -> None:
     """Invalidate Python-side caches and open handles for one path."""
     stale_data_keys = [
