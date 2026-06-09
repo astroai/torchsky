@@ -45,6 +45,7 @@ from .._io_engine.table_streaming import (
     read_large_table as _read_large_table_impl,
 )
 from .._io_engine.table_streaming import stream_table as _stream_table_impl
+from .._io_engine.write_api import write as _write_impl
 
 _log = _stdlib_logging.getLogger(__name__)
 _DEBUG_SCALE = os.environ.get("TORCHSKY_DEBUG_SCALE") == "1"
@@ -188,9 +189,7 @@ def open(*args: Any, **kwargs: Any):
 
 
 def write(*args: Any, **kwargs: Any):
-    from .. import write as _write
-
-    return _write(*args, **kwargs)
+    return _write_impl(*args, **kwargs)
 
 
 def get_header(path: str, hdu: Any = None):

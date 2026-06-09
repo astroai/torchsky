@@ -294,6 +294,28 @@ Start gate: May 8, 2026, `America/Vancouver`
   - Result: `All checks passed`.
 - North Star connection: this keeps cutout/subset reads in the private I/O
   engine and further reduces reverse routing through the package root.
+- Moved the FITS write implementation, table normalization helpers, compressed
+  rewrite helpers, and HDU insert/replace/delete implementations into
+  `torchsky._io_engine.write_api`, leaving root functions as compatibility
+  wrappers and preserving root private helper aliases used by table/HDU code.
+  Updated `torchsky.io.write` to call the write engine directly instead of
+  importing `torchsky.write`.
+- Added a regression test that monkeypatches `torchsky.write` and verifies
+  `torchsky.io.write` still writes and reads back a valid image, locking in the
+  direct canonical-namespace route.
+- Tests run:
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run -e test -- pytest tests/test_writing.py tests/test_hdu_file_ops.py tests/test_table_file_ops.py tests/test_header_cards.py tests/test_checksum.py -q`
+  - Result: `52 passed, 1 skipped, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_api.py tests/test_io.py tests/test_cache.py tests/test_table.py tests/test_io_engine_caches.py tests/test_header_cards.py tests/test_writing.py tests/test_hdu_file_ops.py tests/test_table_file_ops.py tests/test_cold_import.py -q`
+  - Result: `161 passed, 1 skipped, 2 warnings`.
+  - `pixi run ci-local`
+  - Result: `1589 passed, 61 skipped, 1 xfailed, 74 warnings`.
+- North Star connection: this removes the largest remaining root-owned FITS I/O
+  implementation block while keeping the lean public API stable, preserving
+  cache invalidation and compressed-write behavior, and making `torchsky.io`
+  the canonical I/O implementation facade.
 
 ## Work Queue Snapshot
 

@@ -95,6 +95,21 @@ def test_table_write_bool_preserved():
             os.remove(filename)
 
 
+def test_io_write_does_not_delegate_to_root_write(tmp_path, monkeypatch):
+    data = torch.arange(9, dtype=torch.float32).reshape(3, 3)
+    path = tmp_path / "io_direct_write.fits"
+
+    def fail_root_write(*args, **kwargs):
+        raise AssertionError("torchsky.io.write delegated to torchsky.write")
+
+    monkeypatch.setattr(torchsky, "write", fail_root_write)
+
+    torchsky.io.write(str(path), data, overwrite=True)
+    result = torchsky.io.read(str(path), hdu=0, mmap=False)
+
+    torch.testing.assert_close(result, data)
+
+
 def test_write_accepts_list_table_dict():
     filename = "test_write_list_table_dict.fits"
     table = {"flag": [True, False, True]}
