@@ -86,6 +86,11 @@ from ._io_engine.image_meta import (
     should_use_cold_nommap as _should_use_cold_nommap_impl,
 )
 from ._io_engine.options import ReadOptions, ReadOptionsKwargs
+from ._io_engine.read_dispatch import (
+    read_cpu_fast_path as _read_cpu_fast_path_impl,
+    read_generic_fast_path as _read_generic_fast_path_impl,
+    read_scaled_cpu_fast as _read_scaled_cpu_fast_impl,
+)
 from ._io_engine.subset import (
     SubsetReader,
     open_subset_reader as _open_subset_reader_impl,
@@ -377,19 +382,7 @@ def _resolve_image_mmap(
 
 def _read_scaled_cpu_fast(path: str, hdu: int = 0, mmap: bool = True) -> Tensor:
     """Internal helper for the CPU scaled fast path."""
-    import torchsky.cpp as cpp
-
-    if not hasattr(cpp, "read_full_raw_with_scale"):
-        raise RuntimeError("Scaled fast path unavailable in this build")
-
-    data, scaled, bscale, bzero = cpp.read_full_raw_with_scale(path, hdu, mmap)
-    if scaled:
-        data = data.to(dtype=torch.float32)
-        if bscale != 1.0:
-            data.mul_(bscale)
-        if bzero != 0.0:
-            data.add_(bzero)
-    return data
+    return _read_scaled_cpu_fast_impl(globals().get("cpp"), path, hdu, mmap)
 
 
 def read_image(
@@ -631,58 +624,23 @@ def _read_batch_hdus(
 def _read_cpu_fast_path(
     path, hdu, mmap, cache_capacity, handle_cache_capacity, fp16, bf16, force_image
 ):
-    import torchsky.cpp as cpp
-
-    try:
-        effective_mmap = _resolve_image_mmap(path, hdu, mmap, cache_capacity)
-        # Prefer handle-cache fast path when enabled: cache_capacity only controls
-        # data caching, while handle_cache_capacity controls open-handle reuse.
-        if handle_cache_capacity > 0:
-            if hasattr(cpp, "read_full_cached"):
-                # Keep the fast path fully inside C++ (shared handle/meta cache)
-                # to avoid Python-side handle-cache overhead per read.
-                data = cpp.read_full_cached(path, hdu, effective_mmap)
-            else:
-                file_handle, _cached = _get_cached_handle(path, handle_cache_capacity)
-                data = cpp.read_full(file_handle, hdu, effective_mmap)
-        elif cache_capacity == 0 and hasattr(cpp, "read_full_nocache"):
-            # Explicit no-cache mode when handle-cache is disabled.
-            data = cpp.read_full_nocache(path, hdu, effective_mmap)
-        else:
-            file_handle = cpp.open_fits_file(path, "r")
-            try:
-                data = cpp.read_full(file_handle, hdu, effective_mmap)
-            finally:
-                try:
-                    file_handle.close()
-                except Exception:
-                    pass
-
-        if fp16:
-            data = data.to(torch.float16)
-        elif bf16:
-            data = data.to(torch.bfloat16)
-
-        # Keep cache performance stats consistent even on fast-path returns.
-        try:
-            _cache_stats["total_requests"] += 1
-            _cache_stats["misses"] += 1
-        except Exception:
-            pass
-        return data, False
-    except _READ_EXC_TYPES as exc:
-        # Not an image HDU or reader mismatch; skip generic image fast path and fall through.
-        if _DEBUG_SCALE or _log.isEnabledFor(_stdlib_logging.DEBUG):
-            _log.debug(
-                "read: CPU image fast-path fallback for %r hdu=%s: %s",
-                path,
-                hdu,
-                exc,
-                exc_info=True,
-            )
-        if force_image:
-            raise
-        return None, True
+    return _read_cpu_fast_path_impl(
+        cpp_module=globals().get("cpp"),
+        path=path,
+        hdu=hdu,
+        mmap=mmap,
+        cache_capacity=cache_capacity,
+        handle_cache_capacity=handle_cache_capacity,
+        fp16=fp16,
+        bf16=bf16,
+        force_image=force_image,
+        resolve_image_mmap=_resolve_image_mmap,
+        get_cached_handle=_get_cached_handle,
+        cache_stats=_cache_stats,
+        read_exc_types=_READ_EXC_TYPES,
+        debug_scale=_DEBUG_SCALE,
+        logger=_log,
+    )
 
 
 def _read_generic_fast_path(
@@ -699,79 +657,24 @@ def _read_generic_fast_path(
     force_image,
     debug_scale,
 ):
-    import torchsky.cpp as cpp
-
-    try:
-        effective_mmap = _resolve_image_mmap(path, hdu, mmap, cache_capacity)
-        if scale_on_device and not raw_scale:
-            if hasattr(cpp, "read_full_raw_with_scale"):
-                if debug_scale:
-                    print("TORCHSKY_DEBUG_SCALE: fast_path_scaled")
-                data, scaled, bscale, bzero = cpp.read_full_raw_with_scale(
-                    path, hdu, effective_mmap
-                )
-                if scaled:
-                    data = data.to(device=device, dtype=torch.float32)
-                    if bscale != 1.0:
-                        data.mul_(bscale)
-                    if bzero != 0.0:
-                        data.add_(bzero)
-                else:
-                    data = data.to(device)
-            else:
-                data = cpp.read_full(path, hdu, effective_mmap)
-                data = data.to(device)
-        elif raw_scale:
-            if debug_scale:
-                print("TORCHSKY_DEBUG_SCALE: raw_scale")
-            # Keep raw-scale path on the unified read_full_raw entry point.
-            # This avoids a crash-prone unmapped-only variant on scaled HDUs.
-            if not effective_mmap and hasattr(cpp, "read_full_unmapped_raw"):
-                data = cpp.read_full_unmapped_raw(path, hdu)
-            else:
-                data = cpp.read_full_raw(path, hdu, effective_mmap)
-        else:
-            if debug_scale:
-                print("TORCHSKY_DEBUG_SCALE: unscaled")
-            if not effective_mmap and hasattr(cpp, "read_full_unmapped"):
-                data = cpp.read_full_unmapped(path, hdu)
-            else:
-                if (
-                    _COLD_NOCACHE
-                    and cache_capacity == 0
-                    and hasattr(cpp, "read_full_nocache")
-                ):
-                    data = cpp.read_full_nocache(path, hdu, effective_mmap)
-                else:
-                    if cache_capacity == 0 and hasattr(cpp, "read_full_nocache"):
-                        # Explicitly disable caching when cache_capacity==0.
-                        data = cpp.read_full_nocache(path, hdu, effective_mmap)
-                    else:
-                        data = cpp.read_full(path, hdu, effective_mmap)
-
-        if fp16:
-            data = data.to(torch.float16)
-        elif bf16:
-            data = data.to(torch.bfloat16)
-
-        if device != "cpu" and data.device.type == "cpu":
-            data = data.to(device)
-
-        return data
-    except ValueError:
-        raise
-    except _READ_EXC_TYPES as exc:
-        if force_image:
-            raise
-        if _log.isEnabledFor(_stdlib_logging.DEBUG):
-            _log.debug(
-                "read: generic image fast-path fallback for %r hdu=%s: %s",
-                path,
-                hdu,
-                exc,
-                exc_info=True,
-            )
-        return None
+    return _read_generic_fast_path_impl(
+        cpp_module=globals().get("cpp"),
+        path=path,
+        hdu=hdu,
+        device=device,
+        mmap=mmap,
+        cache_capacity=cache_capacity,
+        fp16=fp16,
+        bf16=bf16,
+        raw_scale=raw_scale,
+        scale_on_device=scale_on_device,
+        force_image=force_image,
+        debug_scale=debug_scale,
+        cold_nocache=_COLD_NOCACHE,
+        resolve_image_mmap=_resolve_image_mmap,
+        read_exc_types=_READ_EXC_TYPES,
+        logger=_log,
+    )
 
 
 def _read_check_cache(

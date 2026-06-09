@@ -192,6 +192,17 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this keeps HDU selection and compressed-image probing
   near the HDU/header API instead of in the package root, while preserving
   payload preference semantics for image-first tensor workflows.
+- Moved CPU and generic image fast-path dispatch helpers into
+  `torchsky._io_engine.read_dispatch`, keeping root private wrappers for the
+  remaining unified `read(...)` orchestrator and mocked C++ test seams.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_io.py tests/test_cache.py tests/test_api.py -k 'read_image or read_hdu_auto or read_hdus or cache_functions or read_basic or raw_scale or scale_on_device or no_cache' tests/test_cold_import.py -q`
+  - Result: `17 passed, 75 deselected, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_api.py tests/test_io.py tests/test_cache.py tests/test_io_engine_caches.py tests/test_header_cards.py tests/test_cold_import.py -q`
+  - Result: `99 passed, 2 warnings`.
+- North Star connection: this keeps hot image tensor dispatch isolated and
+  testable while preserving device conversion, mmap auto-policy, and cache
+  accounting semantics.
 
 ## Work Queue Snapshot
 
