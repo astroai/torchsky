@@ -22,6 +22,7 @@ from ..hdu import Card, HDUList, Header, TableHDU, TableHDURef, TensorHDU
 from ..interop import to_arrow, to_pandas, to_polars
 from .._io_engine.caches import (
     check_read_cache as _check_read_cache_impl,
+    get_cached_handle as _get_cached_handle_impl,
     invalidate_path_caches as _invalidate_path_caches_impl,
 )
 from .._io_engine.hdu_api import autodetect_hdu as _autodetect_hdu_impl
@@ -38,6 +39,7 @@ from .._io_engine.image_meta import (
     should_use_cold_nommap as _should_use_cold_nommap_impl,
 )
 from .._io_engine.read_dispatch import read_unified as _read_unified_impl
+from .._io_engine.subset import read_subset as _read_subset_impl
 from .._io_engine.table_api import read_table as _read_table_impl
 from .._io_engine.table_streaming import (
     read_large_table as _read_large_table_impl,
@@ -160,10 +162,25 @@ def read_hdus(*args: Any, **kwargs: Any):
     return _read_hdus_impl(*args, **kwargs)
 
 
-def read_subset(*args: Any, **kwargs: Any):
-    from .. import read_subset as _read_subset
-
-    return _read_subset(*args, **kwargs)
+def read_subset(
+    path: str,
+    hdu: int,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    handle_cache_capacity: int = 16,
+):
+    return _read_subset_impl(
+        get_cached_handle=_get_cached_handle_impl,
+        path=path,
+        hdu=hdu,
+        x1=x1,
+        y1=y1,
+        x2=x2,
+        y2=y2,
+        handle_cache_capacity=handle_cache_capacity,
+    )
 
 
 def open(*args: Any, **kwargs: Any):

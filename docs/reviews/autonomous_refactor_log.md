@@ -283,6 +283,17 @@ Start gate: May 8, 2026, `America/Vancouver`
   - Result: `All checks passed`.
 - North Star connection: this removes another reverse dependency from the
   canonical I/O namespace while preserving header/WCS and streaming behavior.
+- Updated `torchsky.io.read_subset` to call `torchsky._io_engine.subset`
+  directly instead of importing root `read_subset`.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_api.py -k 'subset or top_level_namespaces' tests/test_cutout_performance_api.py tests/test_io.py tests/test_cold_import.py -q`
+  - Result: `3 passed, 51 deselected, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_api.py tests/test_io.py tests/test_cache.py tests/test_table.py tests/test_io_engine_caches.py tests/test_header_cards.py tests/test_cutout_performance_api.py tests/test_cold_import.py -q`
+  - Result: `123 passed, 2 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+- North Star connection: this keeps cutout/subset reads in the private I/O
+  engine and further reduces reverse routing through the package root.
 
 ## Work Queue Snapshot
 
