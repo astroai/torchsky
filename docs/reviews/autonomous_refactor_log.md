@@ -328,6 +328,17 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this keeps checksum behavior on the established
   CFITSIO-backed verifier while removing another implementation detail from the
   root facade.
+- Moved the combined Python/C++ FITS cache clearing routine into
+  `torchsky._io_engine.caches.clear_file_cache`, keeping
+  `torchsky.clear_file_cache(...)` as a root compatibility wrapper.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_api.py::TestMainAPI::test_cache_functions tests/test_cache.py tests/test_io_engine_caches.py -q`
+  - Result: `41 passed, 2 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+- North Star connection: this keeps cache policy centralized in the private I/O
+  cache facade, reducing root orchestration while preserving stale-handle and
+  C++ shared-metadata invalidation semantics.
 
 ## Work Queue Snapshot
 

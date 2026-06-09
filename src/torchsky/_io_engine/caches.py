@@ -283,3 +283,36 @@ def clear_python_caches(
 
     if stats:
         reset_cache_stats()
+
+
+def clear_file_cache(
+    *,
+    data: bool = True,
+    handles: bool = True,
+    meta: bool = True,
+    hdu_types: bool = True,
+    stats: bool = True,
+    cpp: bool = True,
+    cpp_module: Any = None,
+) -> None:
+    """Clear Python/C++ FITS I/O caches."""
+    clear_python_caches(
+        data=data,
+        handles=handles,
+        meta=meta,
+        hdu_types=hdu_types,
+        stats=stats,
+    )
+
+    if not cpp:
+        return
+
+    try:
+        if cpp_module is None:
+            import torchsky.cpp as cpp_module
+
+        cpp_module.clear_file_cache()
+        if hasattr(cpp_module, "clear_shared_read_meta_cache"):
+            cpp_module.clear_shared_read_meta_cache()
+    except (AttributeError, RuntimeError):
+        pass

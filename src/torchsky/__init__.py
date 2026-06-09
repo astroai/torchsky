@@ -51,7 +51,7 @@ from ._io_engine.caches import (
     auto_mmap_cache as _auto_mmap_cache,
     cache_stats as _cache_stats,
     check_read_cache as _check_read_cache_impl,
-    clear_python_caches as _clear_python_file_caches,
+    clear_file_cache as _clear_file_cache_impl,
     cold_nommap_cache as _cold_nommap_cache,
     file_cache as _file_cache,
     file_handle_cache as _file_handle_cache,
@@ -1088,23 +1088,14 @@ def clear_file_cache(
     - stats: reset cache performance counters
     - cpp: clear C++-side caches (if available)
     """
-    _clear_python_file_caches(
+    return _clear_file_cache_impl(
         data=data,
         handles=handles,
         meta=meta,
         hdu_types=hdu_types,
         stats=stats,
+        cpp=cpp,
     )
-
-    if cpp:
-        try:
-            import torchsky.cpp as _cpp
-
-            _cpp.clear_file_cache()
-            if hasattr(_cpp, "clear_shared_read_meta_cache"):
-                _cpp.clear_shared_read_meta_cache()
-        except (AttributeError, RuntimeError):
-            pass
 
 
 def write_checksums(path: str, hdu: int = 0) -> None:
