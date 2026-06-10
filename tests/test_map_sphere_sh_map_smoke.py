@@ -8,7 +8,7 @@ import torch
 pytest.importorskip("torchsky.cpp")
 
 from torchsky.sphere.spectral import alm2map, map2alm  # noqa: E402
-from torchsky.wcs import healpix as hp  # noqa: E402
+from torchsky.sphere import healpix as hp  # noqa: E402
 
 
 def test_map2alm_alm2map_pipeline_finite_torch_backend() -> None:

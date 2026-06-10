@@ -1,6 +1,6 @@
 """Sample HEALPix ring/nest maps onto 2D FITS/WCS image grids (torchsky HEALPix only).
 
-Uses :func:`torchsky.wcs.healpix.get_interp_val` (no ``reproject``). The target grid
+Uses :func:`torchsky.sphere.healpix.get_interp_val` (no ``reproject``). The target grid
 can be any valid 2D WCS (TAN, CAR, SIN, ZEA, …); pixel centers are converted with
 :class:`torchsky.WCS` then interpolated on the sphere.
 """
@@ -13,7 +13,7 @@ import torch
 from torch import Tensor
 
 from .. import WCS
-from ..wcs import healpix as hp
+from ..sphere import healpix as hp
 
 
 def sample_healpix_map_on_image_header(
@@ -28,7 +28,7 @@ def sample_healpix_map_on_image_header(
 
     ``CTYPE1``/``CTYPE2`` may be any projection supported by :class:`torchsky.WCS`
     (e.g. ``RA---TAN``, ``RA---CAR``). Sampling is spherical bilinear interpolation
-    via :func:`torchsky.wcs.healpix.get_interp_val`.
+    via :func:`torchsky.sphere.healpix.get_interp_val`.
 
     Args:
         healpix_map: Length ``12 * nside**2`` tensor (one map).
@@ -41,7 +41,7 @@ def sample_healpix_map_on_image_header(
         ``[NAXIS2, NAXIS1]`` tensor matching the target image shape.
 
     Note:
-        Map values are detached before :func:`torchsky.wcs.healpix.get_interp_val`
+        Map values are detached before :func:`torchsky.sphere.healpix.get_interp_val`
         because the native interpolation kernels do not accept tensors that require
         grad through DLPack. Use :func:`render_field_cube` for direct autograd through
         pixel centers, or a future pure-torch interpolator if spherical resampling must

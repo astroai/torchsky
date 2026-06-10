@@ -13,7 +13,7 @@ try:
 except Exception:  # pragma: no cover - optional extension
     _cpp = None
 
-from ..wcs import healpix as _healpix
+from . import healpix as _healpix
 from ._pixwin_embedded import REFERENCE_PIXWIN_TABLES as _REFERENCE_PIXWIN_TABLES
 
 _ANGLE_CACHE: dict[tuple[int, bool], tuple[Tensor, Tensor, Tensor, float]] = {}

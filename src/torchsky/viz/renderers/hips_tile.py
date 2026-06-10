@@ -5,7 +5,7 @@ Converts any torchsky-readable FITS image into HiPS (Hierarchical Progressive
 Survey) PNG tiles suitable for Aladin Lite v3.
 
 Pipeline per tile:
-    1. Compute (lon, lat) grid covering the HEALPix tile using torchsky.wcs.healpix
+    1. Compute (lon, lat) grid covering the HEALPix tile using torchsky.sphere.healpix
     2. Project (lon, lat) → FITS pixel coords via torchsky.WCS.world_to_pixel_2d
     3. Extract sub-image via torch.nn.functional.grid_sample (bilinear, GPU if avail)
     4. Apply stretch (ZScale/Asinh/Log/…) via renderers.image
@@ -30,7 +30,7 @@ _WCS = None
 def _lazy_import() -> None:
     global _healpix, _WCS
     if _healpix is None:
-        from torchsky.wcs import healpix as _hp
+        from torchsky.sphere import healpix as _hp
 
         _healpix = _hp
     if _WCS is None:

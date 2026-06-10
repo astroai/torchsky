@@ -20,7 +20,7 @@ from torchsky.sphere.geom import (
     spherical_polygon_area,
     spherical_triangle_area,
 )
-from torchsky.wcs import healpix as hp
+from torchsky.sphere import healpix as hp
 
 
 def test_wrap_longitude_domains() -> None:

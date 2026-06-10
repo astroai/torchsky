@@ -5,7 +5,7 @@ from typing import Literal, Any, TYPE_CHECKING
 import torch
 from torch import Tensor
 
-from ..wcs import healpix as _healpix
+from . import healpix as _healpix
 
 if TYPE_CHECKING:
     from .moc import MOC

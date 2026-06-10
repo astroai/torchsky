@@ -314,7 +314,7 @@ def test_validate_register_and_panel(client: TestClient, tmp_fits_dir: Path):
 def test_moc_stats_synthetic(client: TestClient, tmp_fits_dir: Path):
     """Test MOC endpoint with a synthetic MOC created via torchsky."""
     from torchsky.sphere.moc import MOC
-    from torchsky.wcs.healpix import query_disc
+    from torchsky.sphere.healpix import query_disc
     from torchsky.sphere.core import lonlat_to_unit_xyz
     import math
 
@@ -340,7 +340,7 @@ def test_catalog_filter_moc_column_discovery(tmp_path: Path):
     from torchsky.sphere.core import lonlat_to_unit_xyz
     from torchsky.sphere.moc import MOC
     from torchsky.viz.server import create_app
-    from torchsky.wcs.healpix import query_disc
+    from torchsky.sphere.healpix import query_disc
 
     root = tmp_path
     torchsky.write(

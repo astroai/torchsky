@@ -23,7 +23,7 @@ try:
 except Exception:  # pragma: no cover - optional extension
     _cpp = None
 
-from ..wcs import healpix as _healpix
+from . import healpix as _healpix
 from .core import (
     great_circle_distance,
     lonlat_to_unit_xyz,

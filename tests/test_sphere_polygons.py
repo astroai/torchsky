@@ -15,7 +15,7 @@ from torchsky.sphere.geom import (
     spherical_polygons_intersect,
     spherical_polygon_signed_area,
 )
-from torchsky.wcs import healpix as hp
+from torchsky.sphere import healpix as hp
 
 try:
     from spherical_geometry.polygon import SphericalPolygon as SGP  # type: ignore

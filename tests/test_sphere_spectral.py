@@ -27,7 +27,7 @@ from torchsky.sphere.spectral import (
     synalm,
     synfast,
 )
-from torchsky.wcs import healpix as hp
+from torchsky.sphere import healpix as hp
 
 try:
     import healpy as _hp  # type: ignore

@@ -21,7 +21,7 @@ from ..spectral import (
     spectral_axis_from_header,
     spectral_bin_edges_from_header,
 )
-from ..wcs import healpix as _healpix
+from ..sphere import healpix as _healpix
 
 from .fft_affine_ldu import resample_fft_ldu_affine_2d
 from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_fft2d

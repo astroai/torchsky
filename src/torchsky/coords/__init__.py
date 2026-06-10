@@ -1,7 +1,7 @@
 """Coordinate transforms and indexing helpers."""
 
 from ..wcs import WCS
-from ..wcs import healpix
+from ..sphere import healpix
 from ..wcs.alignment import (
     AffineFitResult,
     SkyAffineFitResult,
@@ -9,7 +9,7 @@ from ..wcs.alignment import (
     fit_affine_2d,
     fit_sky_affine,
 )
-from ..wcs.healpix import (
+from ..sphere.healpix import (
     ang2pix,
     angular_distance_deg,
     get_all_neighbours,

@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 
-from torchsky.wcs.healpix import (
+from torchsky.sphere.healpix import (
     ang2vec,
     boundaries,
     get_map_size,

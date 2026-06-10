@@ -13,7 +13,7 @@ import torch
 pytest.importorskip("torchsky.cpp")
 
 import torchsky  # noqa: E402
-from torchsky.wcs import healpix  # noqa: E402
+from torchsky.sphere import healpix  # noqa: E402
 
 _FIXTURE = Path(__file__).resolve().parent / "data" / "radio_mm_stub.fits"
 

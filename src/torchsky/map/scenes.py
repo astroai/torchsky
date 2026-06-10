@@ -103,7 +103,7 @@ class HealpixMapScene(SceneRepresentation):
                 )
 
     def _resolved_nside(self) -> int:
-        from ..wcs import healpix as hp
+        from ..sphere import healpix as hp
 
         if self.nside is not None:
             return int(self.nside)

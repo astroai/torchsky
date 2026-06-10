@@ -148,6 +148,14 @@ area_sr = r1.area()
 
 ---
 
+## Native HEALPix Pixel API
+
+`torchsky.sphere.healpix` owns the torch-native HEALPix pixel primitives:
+`ang2pix`, `pix2ang`, `vec2pix`, `pix2vec`, neighbor queries, interpolation
+weights, disc/box/polygon queries, ordering conversions, range compression, and
+map reordering. `torchsky.wcs.healpix` currently re-exports this module as a
+compatibility shim while the older WCS placement is phased out.
+
 ## Sampling
 
 ### `sample_healpix_map(values, nside, lon_deg, lat_deg, *, interpolation='bilinear')`

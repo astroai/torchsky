@@ -8,11 +8,12 @@ Start gate: May 8, 2026, `America/Vancouver`
 
 - Resumed manually on June 8, 2026 after the scheduled automation did not run.
 - Active branch: `codex/autonomous-refactor-2026-05`.
-- Completed A0, A1, and A2 from
+- Completed A0, A1, A2, B1-B4, C1-C2, and D1 from
   `docs/reviews/autonomous_refactor_launch.md`.
-- Next recommended slice: B1/B3, extracting root FITS I/O dispatch internals and
-  making `torchsky.io` call implementation modules directly without
-  user-visible churn.
+- D2 is deferred pending a policy decision on whether `torchsky.coords` and
+  `torchsky.geom` should remain backward-compatible aliases.
+- Next recommended slice: E1, adding narrow `torchsky info` and `torchsky cat`
+  CLI workflows, or revisiting D2 once the compatibility policy is settled.
 
 ## Daily Entries
 
@@ -412,6 +413,31 @@ Start gate: May 8, 2026, `America/Vancouver`
   existing map code: users get clear observation/product/scene vocabulary, while
   parity tests ensure the promoted operator adapter still uses the same
   torch-native map/field operator bundle behavior.
+- Moved the native HEALPix pixel implementation from `torchsky.wcs.healpix` to
+  `torchsky.sphere.healpix`, making sphere the owning namespace for indexing,
+  neighbors, interpolation, ordering conversion, range compression, and query
+  primitives.
+- Kept `torchsky.wcs.healpix` as a small re-export shim for now because the D2
+  backward-compatibility policy is intentionally undecided.
+- Updated internal imports in catalogs, coords, encoders, map, sphere, and viz
+  code to depend on `torchsky.sphere.healpix` directly, and documented the new
+  ownership in `docs/sphere.md`, `docs/coords.md`, and
+  `docs/compatibility.md`.
+- Added a regression test proving the WCS shim re-exports the sphere-owned
+  functions without creating a second implementation.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_healpix_primitives.py tests/test_healpix_parity.py tests/test_healpix_spectral.py tests/test_sphere_core.py tests/test_sphere_sparse.py tests/test_sphere_spectral.py tests/test_sphere_compat.py tests/test_sphere_ecosystem.py tests/test_viz_renderers.py tests/test_viz_server.py tests/test_map_sphere_sh_map_smoke.py tests/test_perf_gate.py -q`
+  - Result: `266 passed, 9 skipped, 10 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+  - `pixi run ci-local`
+  - Result: `1594 passed, 61 skipped, 1 xfailed, 102 warnings`.
+- North Star connection: this puts spherical sky pixel primitives under the
+  sphere pillar where survey-scale map, sparse, MOC, and compatibility layers
+  already live, while preserving the torch-native kernels and avoiding a
+  premature decision about long-term alias compatibility.
 
 ## Work Queue Snapshot
 
@@ -424,8 +450,9 @@ Start gate: May 8, 2026, `America/Vancouver`
 - [x] B4: Preserve root FITS public behavior.
 - [x] C1: Add promoted observation/product/scene facades.
 - [x] C2: Define executable operator protocols or adapters.
-- [ ] D1: Move HEALPix ownership toward `torchsky.sphere`.
-- [ ] D2: Mark `coords` and `geom` as compatibility aliases.
+- [x] D1: Move HEALPix ownership toward `torchsky.sphere`.
+- [ ] D2: Mark `coords` and `geom` as compatibility aliases. Deferred until
+  the backward-compatibility policy is decided.
 - [ ] E1: Add `torchsky info` and `torchsky cat` CLI workflows.
 - [ ] F1: Rationalize field model exposure through presets and factories.
 - [ ] G1: Continue roadmap implementation from `docs/roadmap/status.md`.

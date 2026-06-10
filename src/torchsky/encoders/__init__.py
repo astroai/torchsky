@@ -9,11 +9,11 @@ import torch
 from torch import Tensor, nn
 
 from ..coords import spherical_fourier_features
-from ..wcs.healpix import lonlat_to_xyz
+from ..sphere.healpix import lonlat_to_xyz
 
 
 def sky_encoder_fourier_min_frequency(*, patch_extent_deg: float) -> float:
-    """Minimum ``min_frequency`` for :func:`~torchsky.wcs.healpix.spherical_fourier_features`.
+    """Minimum ``min_frequency`` for :func:`~torchsky.sphere.healpix.spherical_fourier_features`.
 
     Maps approximately one oscillation across an angular patch whose typical extent is
     ``patch_extent_deg`` (degrees). Use ``FieldDomain.spatial_scale_deg`` from

@@ -7,7 +7,7 @@ from typing import Literal
 import torch
 from torch import Tensor
 
-from ..wcs import healpix as _healpix
+from . import healpix as _healpix
 
 
 def _float_dtype(device: torch.device) -> torch.dtype:

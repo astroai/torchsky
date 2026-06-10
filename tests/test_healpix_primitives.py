@@ -1,9 +1,10 @@
 import numpy as np
 import pytest
 import torch
-import torchsky.wcs.healpix as healpix_mod
+import torchsky.sphere.healpix as healpix_mod
+import torchsky.wcs.healpix as wcs_healpix_mod
 
-from torchsky.wcs.healpix import (
+from torchsky.sphere.healpix import (
     ang2pix,
     ang2vec,
     ang2pix_ring,
@@ -49,6 +50,11 @@ from torchsky.wcs.healpix import (
     vec2pix,
     xyz_to_lonlat,
 )
+
+
+def test_wcs_healpix_shim_reexports_sphere_owner() -> None:
+    assert wcs_healpix_mod.ang2pix is healpix_mod.ang2pix
+    assert wcs_healpix_mod.query_disc is healpix_mod.query_disc
 
 
 def _ra_delta_deg(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:

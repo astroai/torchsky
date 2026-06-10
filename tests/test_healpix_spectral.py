@@ -12,7 +12,7 @@ from torchsky.map import (
     sample_spin_alm_on_image_header_spectral,
 )
 from torchsky.sphere import alm2lonlat, alm2lonlat_spin, alm2map, alm2map_spin, alm_size
-from torchsky.wcs import healpix as hp
+from torchsky.sphere import healpix as hp
 
 
 def _tan_header(size: int) -> dict:

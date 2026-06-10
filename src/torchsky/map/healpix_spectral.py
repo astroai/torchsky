@@ -22,7 +22,7 @@ from ..sphere import (
     smoothalm,
 )
 from ..sphere.spectral import _legendre_l_sequence, _wigner_d_l_sequence, alm_index
-from ..wcs import healpix as hp
+from ..sphere import healpix as hp
 from .healpix_image_plane import sample_healpix_map_on_image_header
 
 

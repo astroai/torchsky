@@ -12,7 +12,7 @@ from torch import Tensor
 from torch.utils.data import IterableDataset, get_worker_info
 
 from ..geom import great_circle_distance
-from ..wcs import healpix as _healpix
+from ..sphere import healpix as _healpix
 
 
 def _identity_partition(partition: Any) -> Any:

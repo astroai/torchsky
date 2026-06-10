@@ -229,7 +229,7 @@ class TestMocGeoJson:
     def test_synthetic_moc(self):
         from torchsky.viz.renderers.moc_geojson import moc_to_geojson
         from torchsky.sphere.moc import MOC
-        from torchsky.wcs.healpix import query_disc
+        from torchsky.sphere.healpix import query_disc
         from torchsky.sphere.core import lonlat_to_unit_xyz
         import torch
         import math

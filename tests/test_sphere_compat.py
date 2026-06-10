@@ -3,8 +3,8 @@ import torch
 import pytest
 
 from torchsky.sphere import compat
+from torchsky.sphere import healpix as hp
 from torchsky.sphere.geom import query_ellipse as geom_query_ellipse
-from torchsky.wcs import healpix as hp
 
 
 def test_compat_ang2pix_pix2ang_roundtrip_matches_healpix() -> None:
@@ -300,8 +300,8 @@ def test_compat_pixwin_api() -> None:
     assert pwp.shape == (lmax + 1,)
 
 
-def test_compat_vec_queries_match_wcs_healpix_aliases() -> None:
-    """compat re-exports match :mod:`torchsky.wcs.healpix` (torch-native) entry points."""
+def test_compat_vec_queries_match_sphere_healpix_aliases() -> None:
+    """compat re-exports match the sphere-owned HEALPix entry points."""
     nside = 32
     lon = 25.0
     lat = -15.0

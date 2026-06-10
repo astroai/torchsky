@@ -21,7 +21,8 @@ from .core import (
     unit_xyz_to_lonlat,
     wrap_longitude,
 )
-from ..wcs.healpix import (
+from . import healpix
+from .healpix import (
     ang2pix,
     npix2nside,
     nside2npix,
@@ -114,6 +115,7 @@ __all__ = [
     "Vector3d",
     "WideBitMask",
     "compat",
+    "healpix",
     "healpy",
     "convex_polygon_contains",
     "fit_monopole_dipole",

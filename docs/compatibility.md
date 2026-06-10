@@ -8,7 +8,7 @@ The goal is **not** to match every internal detail of upstream packages. The int
 
 | Area | Typical references | torchsky entry / notes |
 |------|-------------------|-------------------------|
-| HEALPix pixel + harmonic API | **healpy**, **hpgeom** (strict queries), **astropy-healpix** | `torchsky.sphere.compat`, `torchsky.sphere.healpy` (alias), `torchsky.wcs.healpix`; spectral transforms are torch-native—compare to healpy in tests/benchmarks only |
+| HEALPix pixel + harmonic API | **healpy**, **hpgeom** (strict queries), **astropy-healpix** | `torchsky.sphere.healpix`, `torchsky.sphere.compat`, `torchsky.sphere.healpy` (alias); `torchsky.wcs.healpix` is currently a shim while compatibility policy is decided; spectral transforms are torch-native—compare to healpy in tests/benchmarks only |
 | WCS / projections | **Astropy** `astropy.wcs`, FITS WCS | `torchsky.wcs.WCS`, C++/fused paths; parity tests vs Astropy where scoped |
 | FITS I/O & tables | **fitsio**, **Astropy** `io.fits` / tables | `torchsky.read` / `write`, table module, Arrow/Polars interop |
 | Spherical geometry / polygons | **spherical_geometry**, **astropy-healpix** (where applicable) | `torchsky.geom` as the public import surface, `torchsky.sphere.geom` as the implementation submodule; exact regions and benchmarks vs upstream fixtures |
@@ -16,6 +16,7 @@ The goal is **not** to match every internal detail of upstream packages. The int
 
 ## Where compatibility lives
 
+- **HEALPix native pixel API** — `torchsky.sphere.healpix` owns indexing, neighbors, interpolation, range helpers, and query primitives.
 - **HEALPix / healpy-shaped API** — [`torchsky.sphere.compat`](sphere.md#compatibility) and [`torchsky.sphere.healpy`](sphere.md#compatibility) (same symbols; use `import torchsky.sphere.healpy as hp` if you prefer healpy naming).
 - **Sphere native + extended geometry** — `torchsky.sphere` (regions, MOC, sparse maps, etc.), often compared to healpy/hpgeom/spherical_geometry in tests and benchmarks.
 - **WCS** — `torchsky.wcs` (see tests and WCS-related benchmarks).

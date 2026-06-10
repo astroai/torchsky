@@ -14,8 +14,8 @@ maps and spherical geometry objects, use [sphere.md](sphere.md).
 - Celestial helpers cover the current native ICRS/Galactic and FK5 precession
   slice.
 - Spectral helpers share semantics with `torchsky.wcs` and FITS spectral units.
-- HEALPix-oriented helpers are re-exported here as well as through `sphere` and
-  `geom`; pick one import style per subsystem.
+- HEALPix-oriented helpers are re-exported here for coordinate-centric code; the
+  owning namespace is `torchsky.sphere.healpix`.
 
 ## API Surface
 
@@ -43,7 +43,7 @@ HEALPix and geometry helpers:
 - `ang2pix(...)`, `pix2ang(...)`, `vec2pix(...)`, `pix2vec(...)`
 - `query_disc(...)`, `query_polygon(...)`
 - `query_strip(...)` through `torchsky.coords.healpix` /
-  `torchsky.wcs.healpix`
+  `torchsky.sphere.healpix`
 - `get_all_neighbours(...)`, `get_interp_weights(...)`, `get_interp_val(...)`
 
 Temporal, tabular, and alignment helpers:

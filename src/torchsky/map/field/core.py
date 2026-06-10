@@ -18,7 +18,7 @@ from ... import WCS
 from ...device import default_compute_device, resolve_fit_device
 from ...encoders import SkyCoordinateEncoder, sky_encoder_fourier_min_frequency
 from ...spectral import SpectralAxis
-from ...wcs import healpix as _healpix_wcs
+from ...sphere import healpix as _healpix_wcs
 
 from ..healpix_image_plane import sample_healpix_map_on_image_header
 from ..operators.bundle import field_observation_operator_bundle
@@ -6615,7 +6615,7 @@ def render_field_healpix(
 ) -> Tensor:
     """Render ``(nλ, npix)`` on the native HEALPix pixel ordering (RING or NEST).
 
-    Pixels are visited in increasing ``ipix`` order via :func:`torchsky.wcs.healpix.pix2ang`.
+    Pixels are visited in increasing ``ipix`` order via :func:`torchsky.sphere.healpix.pix2ang`.
     Use ``spatial_chunk_pixels`` to limit the number of sky samples per ``model`` call
     (memory). Combine with ``spectral_chunk`` and optional ``use_func_vmap`` like
     :func:`render_field_cube`.

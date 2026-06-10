@@ -11,8 +11,8 @@ This module implements healpy’s NumPy-oriented HEALPix API with
 **Scope**
 
 * **Pixel / geometry** — indexing, neighbors, disc/box/polygon queries, reordering,
-  and related helpers are delegated to :mod:`torchsky.wcs.healpix` (re-exported here
-  under familiar healpy names).
+  and related helpers are delegated to :mod:`torchsky.sphere.healpix` (re-exported
+  here under familiar healpy names).
 * **Harmonic / map** — ``map2alm``, ``alm2map``, ``synfast``, ``pixwin``, spin
   transforms, smoothing, etc. delegate to :mod:`torchsky.sphere.spectral` (torch +
   torchsky C++ only).
@@ -42,7 +42,7 @@ from typing import Literal
 import torch
 from torch import Tensor
 
-from ..wcs import healpix as _healpix
+from . import healpix as _healpix
 from .core import fit_monopole_dipole as _fit_monopole_dipole
 from .geom import query_ellipse as _query_ellipse
 from .spectral import alm2map as _alm2map
