@@ -291,7 +291,8 @@ torch::Tensor read_rice_parallel(const std::string& path, int hdu, int num_threa
             // Call vendored logic
             int err = tf_rdecomp(cdata, (int)len, scratch.data(), (int)npix, 32);
             if (err) {
-                 memset(scratch.data(), 0, npix * sizeof(unsigned int));
+                throw std::runtime_error(
+                    "RICE decompression failed for tile row " + std::to_string(r));
             }
 
             if (output.scalar_type() == torch::kFloat32) {

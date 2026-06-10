@@ -544,10 +544,9 @@ public:
             result[col.name] = ColumnData(tensor);
         }
 
-        // Heuristic: Use buffered reading if we are reading a significant portion of the row
-        // or if we are reading many columns.
-        // Threshold: > 25% of row bytes OR > 50% of columns
-        // Note: Buffered reading currently does NOT support VLA.
+        // Row-buffered reads via fits_read_tblbytes when the selected fixed-width
+        // columns cover the full binary-table row payload (no unused bytes).
+        // Partial column projections use per-column fits_read_col to avoid I/O waste.
         long requested_bytes = 0;
         bool has_vla = false;
         bool has_bit = false;
@@ -568,12 +567,7 @@ public:
         bool use_buffered = false;
         if (table_buffered_read_enabled() &&
             !is_ascii_ && !has_vla && !has_bit && !has_complex && row_width_bytes_ > 0) {
-            double byte_fraction = (double)requested_bytes / row_width_bytes_;
-            double col_fraction = (double)col_indices.size() / ncols_;
-
-            if (byte_fraction > 0.25 || col_fraction > 0.5) {
-                use_buffered = true;
-            }
+            use_buffered = (requested_bytes == row_width_bytes_);
         }
 
         auto read_column_by_column = [&]() {
@@ -1906,9 +1900,9 @@ public:
         size_t row_stride = row_width_bytes_;
         size_t col_offset = col.byte_offset;
 
-        // Optimized loops for common types
-        // Note: FITS is Big Endian, we need to swap if host is Little Endian
-        // Assuming Little Endian host (x86/ARM)
+        // Optimized loops for common types.
+        // FITS binary tables are big-endian; swap on little-endian hosts only.
+        const bool swap_endian = host_is_little_endian();
 
         if (col.type == FITSColumnType::LOGICAL) {
              // Convert 'T'/'F' (or '1'/'0') to bool
@@ -1926,46 +1920,33 @@ public:
                  std::memcpy(dest + i * total_width, buffer + i * row_stride + col_offset, total_width);
              }
         } else if (col_width == 2) {
-            // Int16
-            uint16_t* d = (uint16_t*)dest;
-            for (long i = 0; i < num_rows * col.repeat; i++) {
-                // Need to handle repeat stride if repeat > 1
-                // Actually, buffer layout is: [Row1][Row2]...
-                // Row1: ... [ColData] ...
-                // ColData: [Elem1][Elem2]...
-                // So we can just copy the block if we handle stride correctly.
-                // But wait, we need to iterate rows.
-            }
-
             for (long i = 0; i < num_rows; i++) {
                 const uint8_t* src_cell = buffer + i * row_stride + col_offset;
                 uint16_t* dest_cell = (uint16_t*)(dest + i * total_width);
                 for (int j = 0; j < col.repeat; j++) {
                     uint16_t val;
                     std::memcpy(&val, src_cell + j * 2, 2);
-                    dest_cell[j] = __builtin_bswap16(val);
+                    dest_cell[j] = swap_endian ? __builtin_bswap16(val) : val;
                 }
             }
         } else if (col_width == 4) {
-            // Int32, Float32
             for (long i = 0; i < num_rows; i++) {
                 const uint8_t* src_cell = buffer + i * row_stride + col_offset;
                 uint32_t* dest_cell = (uint32_t*)(dest + i * total_width);
                 for (int j = 0; j < col.repeat; j++) {
                     uint32_t val;
                     std::memcpy(&val, src_cell + j * 4, 4);
-                    dest_cell[j] = __builtin_bswap32(val);
+                    dest_cell[j] = swap_endian ? __builtin_bswap32(val) : val;
                 }
             }
         } else if (col_width == 8) {
-            // Int64, Double
             for (long i = 0; i < num_rows; i++) {
                 const uint8_t* src_cell = buffer + i * row_stride + col_offset;
                 uint64_t* dest_cell = (uint64_t*)(dest + i * total_width);
                 for (int j = 0; j < col.repeat; j++) {
                     uint64_t val;
                     std::memcpy(&val, src_cell + j * 8, 8);
-                    dest_cell[j] = __builtin_bswap64(val);
+                    dest_cell[j] = swap_endian ? __builtin_bswap64(val) : val;
                 }
             }
         } else {

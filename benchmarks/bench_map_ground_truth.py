@@ -523,7 +523,7 @@ def build_truth_image(
     if value_semantics == "flux":
         if flux_area_norm_sr is None:
             raise ValueError("flux_area_norm_sr is required for flux truth images")
-        area_sr = image_plane_mod._pixel_area_sr_map(
+        area_sr = image_plane_mod.pixel_area_sr_map(
             wcs,
             (height, width),
             device=truth.device,
@@ -568,7 +568,7 @@ def _simulate_observation(
     if value_semantics == "flux":
         if flux_area_norm_sr is None:
             raise ValueError("flux_area_norm_sr is required for flux observations")
-        area_sr = image_plane_mod._pixel_area_sr_map(
+        area_sr = image_plane_mod.pixel_area_sr_map(
             wcs,
             (height, width),
             device=signal.device,
@@ -586,7 +586,7 @@ def _simulate_observation(
             raise ValueError("flux_area_scaled noise_model requires flux semantics")
         if flux_area_norm_sr is None:
             raise ValueError("flux_area_norm_sr is required for flux_area_scaled noise")
-        area_sr = image_plane_mod._pixel_area_sr_map(
+        area_sr = image_plane_mod.pixel_area_sr_map(
             wcs,
             (height, width),
             device=signal.device,
@@ -1109,7 +1109,7 @@ def make_case(
     if case_spec.value_semantics == "flux":
         flux_area_norm_sr = float(
             torch.median(
-                image_plane_mod._pixel_area_sr_map(
+                image_plane_mod.pixel_area_sr_map(
                     WCS(truth_header),
                     (target_height, target_width),
                     device=torch.device("cpu"),

@@ -1152,110 +1152,6 @@ public:
             }
         }
 
-        // Fast uncompressed raw path for multi-byte native dtypes:
-        // read raw bytes directly and byteswap in-place (FITS is big-endian).
-        if (want_mmap && !compressed && !scaled && !has_extension_) {
-            size_t elem_size = 0;
-            switch (bitpix) {
-                case SHORT_IMG: elem_size = sizeof(uint16_t); break;
-                case LONG_IMG: elem_size = sizeof(uint32_t); break;
-                case LONGLONG_IMG: elem_size = sizeof(uint64_t); break;
-                // Keep FLOAT_IMG on CFITSIO read path: pread+byteswap is
-                // consistently slower for large float32 images.
-                case FLOAT_IMG: elem_size = 0; break;
-                case DOUBLE_IMG: elem_size = sizeof(uint64_t); break;
-                default: elem_size = 0; break;
-            }
-            if (elem_size > 0) {
-                LONGLONG headstart = 0, data_offset = 0, dataend = 0;
-                status = 0;
-                fits_get_hduaddrll(fptr_, &headstart, &data_offset, &dataend, &status);
-                if (status == 0 && data_offset > 0) {
-                    const size_t nbytes = static_cast<size_t>(nelements) * elem_size;
-                    if (nbytes > 0) {
-                        const size_t end_off = static_cast<size_t>(data_offset) + nbytes;
-                        if (ensure_raw_fd(end_off)) {
-                            uint8_t* dst = static_cast<uint8_t*>(tensor.data_ptr());
-                            size_t remaining = nbytes;
-                            off_t off = static_cast<off_t>(data_offset);
-                            bool ok = true;
-                            while (remaining > 0) {
-                                ssize_t got = ::pread(raw_fd_, dst, remaining, off);
-                                if (got < 0) {
-                                    if (errno == EINTR) {
-                                        continue;
-                                    }
-                                    ok = false;
-                                    break;
-                                }
-                                if (got == 0) {
-                                    ok = false;
-                                    break;
-                                }
-                                dst += static_cast<size_t>(got);
-                                off += static_cast<off_t>(got);
-                                remaining -= static_cast<size_t>(got);
-                            }
-                            if (!ok) {
-                                const long page_size = sysconf(_SC_PAGE_SIZE);
-                                const off_t page_offset = static_cast<off_t>(data_offset) & ~(page_size - 1);
-                                const size_t diff = static_cast<size_t>(static_cast<off_t>(data_offset) - page_offset);
-                                const size_t map_len = nbytes + diff;
-
-                                void* map_ptr = mmap(
-                                    nullptr,
-                                    map_len,
-                                    PROT_READ,
-                                    MAP_SHARED,
-                                    raw_fd_,
-                                    page_offset
-                                );
-                                if (map_ptr != MAP_FAILED) {
-                                    const size_t available_bytes = (static_cast<size_t>(data_offset) + nbytes <= static_cast<size_t>(raw_file_size_)) ?
-                                        nbytes : (static_cast<size_t>(raw_file_size_) > static_cast<size_t>(data_offset) ? static_cast<size_t>(raw_file_size_) - static_cast<size_t>(data_offset) : 0);
-                                    if (available_bytes > 0) {
-                                        const uint8_t* src = static_cast<const uint8_t*>(map_ptr) + diff;
-                                        std::memcpy(tensor.data_ptr(), src, available_bytes);
-                                    }
-                                    munmap(map_ptr, map_len);
-                                    ok = true;
-                                }
-                            }
-                            if (ok) {
-                                if (host_is_little_endian()) {
-                                    if (elem_size == sizeof(uint16_t)) {
-                                        auto* p = static_cast<uint16_t*>(tensor.data_ptr());
-                                        at::parallel_for(0, static_cast<int64_t>(nelements), 1 << 16, [&](int64_t begin, int64_t end) {
-                                            for (int64_t i = begin; i < end; ++i) {
-                                                p[i] = bswap_16(p[i]);
-                                            }
-                                        });
-                                    } else if (elem_size == sizeof(uint32_t)) {
-                                        auto* p = static_cast<uint32_t*>(tensor.data_ptr());
-                                        at::parallel_for(0, static_cast<int64_t>(nelements), 1 << 16, [&](int64_t begin, int64_t end) {
-                                            for (int64_t i = begin; i < end; ++i) {
-                                                p[i] = bswap_32(p[i]);
-                                            }
-                                        });
-                                    } else if (elem_size == sizeof(uint64_t)) {
-                                        auto* p = static_cast<uint64_t*>(tensor.data_ptr());
-                                        at::parallel_for(0, static_cast<int64_t>(nelements), 1 << 16, [&](int64_t begin, int64_t end) {
-                                            for (int64_t i = begin; i < end; ++i) {
-                                                p[i] = bswap_64(p[i]);
-                                            }
-                                        });
-                                    }
-                                }
-                                return tensor;
-                            }
-                        }
-                    }
-                } else {
-                    status = 0;
-                }
-            }
-        }
-
         // Note: CFITSIO also exposes a tile cache API for compressed images in
         // some builds, but our vendored CFITSIO doesn't provide a stable symbol
         // for it. We instead tune CFITSIO buffering via compile-time knobs in
@@ -2617,7 +2513,7 @@ torch::Tensor read_full_cached(const std::string& path, int hdu_num, bool use_mm
     // Fast uncompressed raw path for BYTE images (matches FITSFile::read_image).
     // Also handle common signed-byte scaling (BITPIX=8 with BZERO=-128) by xor'ing
     // the sign bit in-place after reading raw bytes.
-    // For multi-byte types, CFITSIO is generally faster (optimized + endian swap).
+    // Multi-byte native types use CFITSIO fits_read_img (see fallback below).
     const bool signed_byte_scaled = scaled && bitpix == BYTE_IMG && bscale == 1.0 && bzero == -128.0;
     if (use_mmap && !compressed && bitpix == BYTE_IMG && (!scaled || signed_byte_scaled)) {
         LONGLONG headstart = 0, data_offset = 0, dataend = 0;
@@ -2634,64 +2530,6 @@ torch::Tensor read_full_cached(const std::string& path, int hdu_num, bool use_mm
             }
         } else {
             status = 0;
-        }
-    }
-
-    // Raw pread path for uncompressed multi-byte native dtypes:
-    // read raw bytes directly and byteswap in-place (FITS is big-endian).
-    if (use_mmap && !compressed && !scaled && path.find('[') == std::string::npos) {
-        size_t elem_size = 0;
-        switch (bitpix) {
-            case SHORT_IMG: elem_size = sizeof(uint16_t); break;
-            // LONG_IMG (int32) moved to CFITSIO path (matching FLOAT_IMG)
-            case LONG_IMG: elem_size = 0; break;
-            case LONGLONG_IMG: elem_size = sizeof(uint64_t); break;
-            // Keep FLOAT_IMG on CFITSIO read path: pread+byteswap is
-            // consistently slower for large float32 images.
-            case FLOAT_IMG: elem_size = 0; break;
-            case DOUBLE_IMG: elem_size = sizeof(uint64_t); break;
-            default: elem_size = 0; break;
-        }
-        if (elem_size > 0) {
-            LONGLONG headstart = 0, data_offset = 0, dataend = 0;
-            status = 0;
-            fits_get_hduaddrll(fptr, &headstart, &data_offset, &dataend, &status);
-            if (status == 0 && data_offset > 0) {
-                const size_t nbytes = static_cast<size_t>(nelements) * elem_size;
-                if (nbytes > 0) {
-                    const int fd = get_shared_raw_fd(meta, path);
-                    if (fd != -1 &&
-                        read_region_via_fd(fd, static_cast<off_t>(data_offset), tensor.data_ptr(), nbytes)) {
-                        if (host_is_little_endian()) {
-                            if (elem_size == sizeof(uint16_t)) {
-                                auto* p = static_cast<uint16_t*>(tensor.data_ptr());
-                                at::parallel_for(0, static_cast<int64_t>(nelements), 1 << 16, [&](int64_t begin, int64_t end) {
-                                    for (int64_t i = begin; i < end; ++i) {
-                                        p[i] = _bswap16(p[i]);
-                                    }
-                                });
-                            } else if (elem_size == sizeof(uint32_t)) {
-                                auto* p = static_cast<uint32_t*>(tensor.data_ptr());
-                                at::parallel_for(0, static_cast<int64_t>(nelements), 1 << 16, [&](int64_t begin, int64_t end) {
-                                    for (int64_t i = begin; i < end; ++i) {
-                                        p[i] = _bswap32(p[i]);
-                                    }
-                                });
-                            } else if (elem_size == sizeof(uint64_t)) {
-                                auto* p = static_cast<uint64_t*>(tensor.data_ptr());
-                                at::parallel_for(0, static_cast<int64_t>(nelements), 1 << 16, [&](int64_t begin, int64_t end) {
-                                    for (int64_t i = begin; i < end; ++i) {
-                                        p[i] = _bswap64(p[i]);
-                                    }
-                                });
-                            }
-                        }
-                        return tensor;
-                    }
-                }
-            } else {
-                status = 0;
-            }
         }
     }
 
@@ -2872,9 +2710,10 @@ std::pair<FITSFile*, std::vector<HDUInfo>> open_and_read_headers(const std::stri
     return {file, hdus};
 }
 
-// Adaptive batch reading of images (auto-fallback to sequential for tiny reads)
+// Batch read images from multiple files. Each thread opens its own CFITSIO handle
+// (required for thread safety).
 std::vector<torch::Tensor> read_images_batch(const std::vector<std::string>& paths, int hdu_num) {
-    size_t n = paths.size();
+    const size_t n = paths.size();
     std::vector<torch::Tensor> results(n);
     std::vector<std::string> errors(n);
 
@@ -2882,65 +2721,29 @@ std::vector<torch::Tensor> read_images_batch(const std::vector<std::string>& pat
         return results;
     }
 
-    // Read the first file synchronously to get a per-file cost estimate.
-    auto t0 = std::chrono::steady_clock::now();
-    try {
+    if (n == 1) {
         FITSFile file(paths[0].c_str(), 0);
         results[0] = file.read_image(hdu_num);
-    } catch (const std::exception& e) {
-        errors[0] = e.what();
-    }
-    auto t1 = std::chrono::steady_clock::now();
-    auto first_read_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-
-    if (!errors[0].empty()) {
-        throw std::runtime_error("Error reading " + paths[0] + ": " + errors[0]);
-    }
-
-    if (n == 1) {
         return results;
     }
 
-    // Measure thread launch overhead on this machine.
-    auto t2 = std::chrono::steady_clock::now();
-    std::thread overhead_thread([]() {});
-    overhead_thread.join();
-    auto t3 = std::chrono::steady_clock::now();
-    auto thread_overhead_us = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
-
-    bool use_parallel = first_read_us > thread_overhead_us;
-
-    if (!use_parallel) {
-        for (size_t i = 1; i < n; ++i) {
+    std::vector<std::thread> threads;
+    threads.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        threads.emplace_back([&, i]() {
             try {
                 FITSFile file(paths[i].c_str(), 0);
                 results[i] = file.read_image(hdu_num);
             } catch (const std::exception& e) {
                 errors[i] = e.what();
             }
-        }
-    } else {
-        // Use simple std::thread for now. For production, a thread pool is better.
-        std::vector<std::thread> threads;
-        threads.reserve(n - 1);
-        for (size_t i = 1; i < n; ++i) {
-            threads.emplace_back([&, i]() {
-                try {
-                    // Each thread opens its own file handle - CRITICAL for cfitsio thread safety
-                    FITSFile file(paths[i].c_str(), 0);
-                    results[i] = file.read_image(hdu_num);
-                } catch (const std::exception& e) {
-                    errors[i] = e.what();
-                }
-            });
-        }
-
-        for (auto& t : threads) {
-            t.join();
-        }
+        });
     }
 
-    // Check for errors
+    for (auto& t : threads) {
+        t.join();
+    }
+
     for (size_t i = 0; i < n; ++i) {
         if (!errors[i].empty()) {
             throw std::runtime_error("Error reading " + paths[i] + ": " + errors[i]);
@@ -3280,64 +3083,6 @@ torch::Tensor read_full_nocache(const std::string& path, int hdu_num, bool use_m
                 }
             } else {
                 status = 0;
-            }
-        }
-
-        // Raw pread path for uncompressed multi-byte native dtypes:
-        // read raw bytes directly and byteswap in-place (FITS is big-endian).
-        if (use_mmap && !compressed && !scaled && path.find('[') == std::string::npos) {
-            size_t elem_size = 0;
-            switch (bitpix) {
-                case SHORT_IMG: elem_size = sizeof(uint16_t); break;
-                case LONG_IMG: elem_size = sizeof(uint32_t); break;
-                case LONGLONG_IMG: elem_size = sizeof(uint64_t); break;
-                // Keep FLOAT_IMG on CFITSIO read path: pread+byteswap is
-                // consistently slower for large float32 images.
-                case FLOAT_IMG: elem_size = 0; break;
-                case DOUBLE_IMG: elem_size = sizeof(uint64_t); break;
-                default: elem_size = 0; break;
-            }
-            if (elem_size > 0) {
-                LONGLONG headstart = 0, data_offset = 0, dataend = 0;
-                status = 0;
-                fits_get_hduaddrll(fptr, &headstart, &data_offset, &dataend, &status);
-                if (status == 0 && data_offset > 0) {
-                    const size_t nbytes = static_cast<size_t>(nelements) * elem_size;
-                    if (nbytes > 0) {
-                        const int fd = get_shared_raw_fd(shared_meta, path);
-                        if (fd != -1 &&
-                            read_region_via_fd(fd, static_cast<off_t>(data_offset), tensor.data_ptr(), nbytes)) {
-                            if (host_is_little_endian()) {
-                                if (elem_size == sizeof(uint16_t)) {
-                                    auto* p = static_cast<uint16_t*>(tensor.data_ptr());
-                                    at::parallel_for(0, static_cast<int64_t>(nelements), 1 << 16, [&](int64_t begin, int64_t end) {
-                                        for (int64_t i = begin; i < end; ++i) {
-                                            p[i] = _bswap16(p[i]);
-                                        }
-                                    });
-                                } else if (elem_size == sizeof(uint32_t)) {
-                                    auto* p = static_cast<uint32_t*>(tensor.data_ptr());
-                                    at::parallel_for(0, static_cast<int64_t>(nelements), 1 << 16, [&](int64_t begin, int64_t end) {
-                                        for (int64_t i = begin; i < end; ++i) {
-                                            p[i] = _bswap32(p[i]);
-                                        }
-                                    });
-                                } else if (elem_size == sizeof(uint64_t)) {
-                                    auto* p = static_cast<uint64_t*>(tensor.data_ptr());
-                                    at::parallel_for(0, static_cast<int64_t>(nelements), 1 << 16, [&](int64_t begin, int64_t end) {
-                                        for (int64_t i = begin; i < end; ++i) {
-                                            p[i] = _bswap64(p[i]);
-                                        }
-                                    });
-                                }
-                            }
-                            close_guard();
-                            return tensor;
-                        }
-                    }
-                } else {
-                    status = 0;
-                }
             }
         }
 
