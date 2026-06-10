@@ -2,7 +2,7 @@
 
 `torchsky.spectral` contains experimental helpers for 1D spectra, spectral axes,
 and IFU-style data cubes. It complements, but does not replace, the lower-level
-spectral coordinate transforms in `torchsky.wcs` and `torchsky.coords`.
+spectral coordinate transforms in `torchsky.wcs`.
 
 ## What This Namespace Is For
 

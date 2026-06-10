@@ -1,5 +1,6 @@
 import math
 from pathlib import Path
+import sys
 
 import numpy as np
 import torch
@@ -412,6 +413,10 @@ def test_spherical_polygon_intersects_matches_upstream_difficult_pairs() -> None
     reason="spherical-geometry fixtures not available",
 )
 def test_upstream_polygon_replay_gate_small() -> None:
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
     from benchmarks.replays.replay_upstream_spherical_geometry_polygons import (
         ReplaySettings,
         run_replay,

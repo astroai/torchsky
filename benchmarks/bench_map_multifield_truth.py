@@ -27,7 +27,7 @@ if str(BENCHMARKS) not in sys.path:
 import torchsky  # noqa: E402
 import bench_map_compat as map_compat  # noqa: E402
 from torchsky import WCS  # noqa: E402
-from torchsky.wcs import healpix as hp  # noqa: E402
+from torchsky.sphere import healpix as hp  # noqa: E402
 from torchsky.map import (  # noqa: E402
     FieldObservation,
     ImageObservation,

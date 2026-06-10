@@ -21,7 +21,7 @@ except ImportError as exc:  # pragma: no cover
     raise SystemExit("healpy is required for bench_healpix.py") from exc
 
 try:
-    from torchsky.wcs.healpix import (
+    from torchsky.sphere.healpix import (
         ang2pix_nested,
         ang2pix_ring,
         nest2ring,

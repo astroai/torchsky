@@ -79,7 +79,7 @@ Spectral/temporal WCS:
 
 - `spectral_to_frequency(...)`, `frequency_to_spectral(...)`
 - `WCS.temporal_wcs(...)`
-- `TemporalWCS` from `torchsky.coords` or `torchsky.wcs.temporal`
+- `TemporalWCS` from `torchsky.wcs` or `torchsky.wcs.temporal`
 - `convert_time_scale(...)`, `iso_to_mjd(...)` from `torchsky.wcs.temporal`
 - `TabularAxis`, `TabularLookupWCS`, `tabular_axes_from_fits(...)`
 

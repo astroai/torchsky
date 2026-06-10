@@ -95,10 +95,9 @@ The queue is ordered to match the safest common path across
       `MapProductSpec`, and `SceneRepresentation` concepts.
 - [ ] C2: Define executable operator protocols or adapters for the existing
       observation operator bundle, with parity tests against current behavior.
-- [ ] D1: Move HEALPix ownership toward `torchsky.sphere` while preserving
-      `torchsky.wcs.healpix` as a compatibility shim.
-- [ ] D2: Mark `torchsky.coords` and `torchsky.geom` as compatibility aliases in
-      docs and metadata before any removal.
+- [ ] D1: Move HEALPix ownership toward `torchsky.sphere`.
+- [ ] D2: Remove leftover HEALPix, coords, and geom alias surfaces so the public
+      API points cleanly at `torchsky.wcs` and `torchsky.sphere`.
 - [ ] E1: Add `torchsky info` and `torchsky cat` read-only CLI workflows with
       JSON output.
 - [ ] F1: Rationalize field model exposure through presets and factories while

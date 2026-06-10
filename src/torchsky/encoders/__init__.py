@@ -8,8 +8,7 @@ from typing import Optional
 import torch
 from torch import Tensor, nn
 
-from ..coords import spherical_fourier_features
-from ..sphere.healpix import lonlat_to_xyz
+from ..sphere.healpix import lonlat_to_xyz, spherical_fourier_features
 
 
 def sky_encoder_fourier_min_frequency(*, patch_extent_deg: float) -> float:

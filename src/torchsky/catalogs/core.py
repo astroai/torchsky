@@ -11,7 +11,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import IterableDataset, get_worker_info
 
-from ..geom import great_circle_distance
+from ..sphere import great_circle_distance
 from ..sphere import healpix as _healpix
 
 

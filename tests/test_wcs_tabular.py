@@ -3,7 +3,6 @@ import math
 import pytest
 import torch
 
-from torchsky.coords import TabularAxis as CoordTabularAxis
 from torchsky.wcs import TabularAxis, TabularLookupWCS, WCS, tabular_axes_from_fits
 
 
@@ -99,10 +98,6 @@ def test_tabular_axis_rejects_invalid_tables_and_nonmonotonic_inverse() -> None:
     axis = TabularAxis([0.0, 1.0, 2.0], [0.0, 2.0, 1.0])
     with pytest.raises(ValueError, match="world must be strictly monotonic"):
         axis.world_to_pixel([1.5])
-
-
-def test_tabular_axis_is_exported_from_coords_namespace() -> None:
-    assert CoordTabularAxis is TabularAxis
 
 
 def test_wcs_uses_independent_tabular_axis_forward_inverse_and_jacobian() -> None:

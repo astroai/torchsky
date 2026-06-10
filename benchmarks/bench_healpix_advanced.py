@@ -30,7 +30,11 @@ import healpy  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
-from torchsky.wcs.healpix import get_all_neighbours, get_interp_val, get_interp_weights  # noqa: E402
+from torchsky.sphere.healpix import (  # noqa: E402
+    get_all_neighbours,
+    get_interp_val,
+    get_interp_weights,
+)
 
 
 def _to_numpy(x: Any) -> np.ndarray:

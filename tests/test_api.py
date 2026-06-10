@@ -516,8 +516,12 @@ class TestTableAPI:
 
 def test_top_level_namespaces_expose_phase1_modules() -> None:
     assert callable(torchsky.io.read)
-    assert torchsky.coords.WCS is torchsky.WCS
-    assert hasattr(torchsky.geom, "great_circle_distance")
+    assert torchsky.wcs.WCS is torchsky.WCS
+    assert hasattr(torchsky.sphere, "great_circle_distance")
+    with pytest.raises(AttributeError):
+        torchsky.coords  # noqa: B018
+    with pytest.raises(AttributeError):
+        torchsky.geom  # noqa: B018
     assert hasattr(torchsky.map, "coadd_image_plane")
     assert hasattr(torchsky.map, "coadd_image_plane_cube")
     assert hasattr(torchsky.map, "coadd_image_plane_multiband")

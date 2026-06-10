@@ -17,7 +17,7 @@ import numpy as np
 import torch
 
 try:
-    from torchsky.wcs.healpix import (
+    from torchsky.sphere.healpix import (
         ang2pix_nested as tf_ang2pix_nested,
         ang2pix_ring as tf_ang2pix_ring,
         nest2ring as tf_nest2ring,

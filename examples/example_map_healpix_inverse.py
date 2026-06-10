@@ -25,7 +25,7 @@ from torchsky.map import (
     MapProductSpec,
     build_spherical_healpix_solver_hooks,
 )
-from torchsky.wcs import healpix as hp
+from torchsky.sphere import healpix as hp
 
 
 def _tan_header() -> dict[str, float | int | str]:

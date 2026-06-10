@@ -25,7 +25,7 @@ from torchsky.map.solvers import (
     compose_bound_operators,
 )
 from torchsky.map.target import TargetRenderSpec
-from torchsky.wcs import healpix as hp
+from torchsky.sphere import healpix as hp
 
 
 def _tan_header(

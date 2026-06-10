@@ -17,7 +17,7 @@ import torch
 
 from torchsky.map import build_spherical_healpix_solver_hooks
 from torchsky.map.target import TargetRenderSpec
-from torchsky.wcs import healpix as hp
+from torchsky.sphere import healpix as hp
 
 
 def _tan_header(

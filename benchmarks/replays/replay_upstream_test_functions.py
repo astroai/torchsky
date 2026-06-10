@@ -28,7 +28,7 @@ import healpy as hp  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
-from torchsky.wcs.healpix import (  # noqa: E402
+from torchsky.sphere.healpix import (  # noqa: E402
     ang2vec as tf_ang2vec,
     boundaries as tf_boundaries,
     get_interp_val as tf_get_interp_val,

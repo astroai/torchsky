@@ -36,7 +36,7 @@ API.
 ## Related Guides
 
 - [map.md](map.md) for field/INR workflows.
-- [coords.md](coords.md) for coordinate conversions.
+- [wcs.md](wcs.md) for coordinate conversions.
 - [ml.md](ml.md) for datasets and transform pipelines.
 
 ## Validation

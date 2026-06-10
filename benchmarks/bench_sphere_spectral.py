@@ -36,7 +36,7 @@ from torchsky.sphere.spectral import (  # noqa: E402
     map2alm_lsq,
     map2alm_spin,
 )
-from torchsky.wcs import healpix as hp  # noqa: E402
+from torchsky.sphere import healpix as hp  # noqa: E402
 
 
 @dataclass

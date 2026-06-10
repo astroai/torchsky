@@ -24,7 +24,7 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
 from torchsky.sphere.sparse import SparseHealpixMap  # noqa: E402
-from torchsky.wcs import healpix as hp  # noqa: E402
+from torchsky.sphere import healpix as hp  # noqa: E402
 
 
 def _time_many(fn: Callable[[], Any], runs: int) -> float:

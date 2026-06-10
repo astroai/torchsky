@@ -21,7 +21,7 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from benchmarks.config import DEFAULT_OUTPUT_DIR  # noqa: E402
-from torchsky.wcs.healpix import get_interp_val, get_interp_weights  # noqa: E402
+from torchsky.sphere.healpix import get_interp_val, get_interp_weights  # noqa: E402
 
 
 @dataclass

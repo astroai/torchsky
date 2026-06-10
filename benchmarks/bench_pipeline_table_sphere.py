@@ -26,7 +26,7 @@ from astropy.io import fits  # noqa: E402
 
 import torchsky  # noqa: E402
 import torchsky.cpp as cpp  # noqa: E402
-from torchsky.wcs import healpix as hp  # noqa: E402
+from torchsky.sphere import healpix as hp  # noqa: E402
 
 
 @dataclass

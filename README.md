@@ -39,9 +39,8 @@ delegating to torchsky-native primitives. Field/INR modelling under
 `torchsky.map.field` and the browser visualization server under `torchsky.viz`
 are active but experimental.
 
-Additional public namespaces such as `torchsky.coords`, `torchsky.geom`,
-`torchsky.catalogs`, `torchsky.spectral`, and `torchsky.encoders` are documented
-in [docs/api.md](docs/api.md).
+Additional public namespaces such as `torchsky.catalogs`, `torchsky.spectral`,
+and `torchsky.encoders` are documented in [docs/api.md](docs/api.md).
 
 ## Install
 
@@ -203,8 +202,6 @@ extern/                   Vendored native dependency bootstrap
 - [I/O](docs/io.md)
 - [Tables](docs/table.md)
 - [WCS](docs/wcs.md)
-- [Coordinates](docs/coords.md)
-- [Geometry](docs/geom.md)
 - [Sphere and HEALPix API](docs/sphere.md)
 - [Map](docs/map.md)
 - [Catalogs](docs/catalogs.md)

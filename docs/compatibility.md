@@ -8,10 +8,10 @@ The goal is **not** to match every internal detail of upstream packages. The int
 
 | Area | Typical references | torchsky entry / notes |
 |------|-------------------|-------------------------|
-| HEALPix pixel + harmonic API | **healpy**, **hpgeom** (strict queries), **astropy-healpix** | `torchsky.sphere.healpix`, `torchsky.sphere.compat`, `torchsky.sphere.healpy` (alias); `torchsky.wcs.healpix` is currently a shim while compatibility policy is decided; spectral transforms are torch-native—compare to healpy in tests/benchmarks only |
+| HEALPix pixel + harmonic API | **healpy**, **hpgeom** (strict queries), **astropy-healpix** | `torchsky.sphere.healpix`, `torchsky.sphere.compat`, `torchsky.sphere.healpy` (alias); spectral transforms are torch-native—compare to healpy in tests/benchmarks only |
 | WCS / projections | **Astropy** `astropy.wcs`, FITS WCS | `torchsky.wcs.WCS`, C++/fused paths; parity tests vs Astropy where scoped |
 | FITS I/O & tables | **fitsio**, **Astropy** `io.fits` / tables | `torchsky.read` / `write`, table module, Arrow/Polars interop |
-| Spherical geometry / polygons | **spherical_geometry**, **astropy-healpix** (where applicable) | `torchsky.geom` as the public import surface, `torchsky.sphere.geom` as the implementation submodule; exact regions and benchmarks vs upstream fixtures |
+| Spherical geometry / polygons | **spherical_geometry**, **astropy-healpix** (where applicable) | `torchsky.sphere` and `torchsky.sphere.geom`; exact regions and benchmarks vs upstream fixtures |
 | Catalogs / coordinates | **Astropy** `SkyCoord`, etc. | Compatibility-oriented tests and helpers where explicitly maintained |
 
 ## Where compatibility lives
