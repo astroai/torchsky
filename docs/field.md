@@ -9,7 +9,9 @@ For map products and classical stacks, see [map.md](map.md). For the Charbonnier
 
 1. Build one **`FieldObservation`** per band (or per exposure): image tensor, FITS-like **`header`** dict (WCS), spectral limits or tabulated throughput, optional **`weight`** / **`mask`**, optional **`PSFSpec`**.
 2. Call **`estimate_field_domain(observations)`** to get a **`FieldDomain`** (sky center, spatial scale, wavelength center/scale) unless you set the domain by hand.
-3. **`make_field_model(kind, domain, **kwargs)`** constructs the PyTorch module.
+3. **`make_field_model_preset(name, domain, **kwargs)`** constructs a recommended
+   PyTorch module for common cases. Use **`make_field_model(kind, domain, **kwargs)`**
+   when you need an explicit expert model kind.
 4. **`fit_field_model(observations, model, ...)`** runs the built-in optimizer loop (or wire your own loop with **`render_field_observation`**).
 5. **`render_field_observation`** / **`render_field_cube`** / **`render_field_healpix`** produce predictions or export products.
 
@@ -52,7 +54,32 @@ Helpers to build observation lists from IFU cubes or bin edges: **`torchsky.map.
 
 **`estimate_field_domain(observations)`** derives these from the first observation’s `CRVAL*` / CD matrix and from spectral bounds across all observations.
 
-## `make_field_model` and model kinds
+## Presets and model kinds
+
+Use presets first unless you already know which concrete model family you want:
+
+```python
+from torchsky.map.field import make_field_model_preset
+
+model = make_field_model_preset("balanced", domain)
+```
+
+Current presets:
+
+| Preset | Underlying kind | When to use it |
+|--------|-----------------|----------------|
+| `fast` | `sky_encoder_mlp` | Smoke tests and quick baselines. |
+| `balanced` | `sky_lambda_feature_field` | Default multi-band field model with explicit sky-lambda features. |
+| `spectral` | `hashgrid_spectral_field` | Higher-capacity spectral structure. |
+| `operator_constrained` | `operator_constrained_feature_field` | Advanced experiments that attach operator-side constraints. |
+
+Pass explicit keyword overrides to tune the selected model:
+
+```python
+model = make_field_model_preset("fast", domain, hidden_dim=64, hidden_layers=2)
+```
+
+## Expert model kinds
 
 **`make_field_model(kind: FieldModelKind, domain: FieldDomain, **kwargs)`** dispatches to concrete `nn.Module` classes. Kinds include:
 
@@ -115,7 +142,7 @@ from torchsky.map import (
     FieldObservation,
     estimate_field_domain,
     fit_field_model,
-    make_field_model,
+    make_field_model_preset,
     render_field_observation,
 )
 
@@ -140,7 +167,7 @@ obs = FieldObservation(
     transmission_center=5000.0,
 )
 domain = estimate_field_domain([obs])
-model = make_field_model("hashgrid_spectral_field", domain, hidden_dim=64, num_levels=4)
+model = make_field_model_preset("balanced", domain)
 fit_field_model([obs], model, steps=50, lr=1e-2)
 pred = render_field_observation(model, obs)
 ```

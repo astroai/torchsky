@@ -12,8 +12,8 @@ Start gate: May 8, 2026, `America/Vancouver`
   `docs/reviews/autonomous_refactor_launch.md`.
 - Backward compatibility for unused alias namespaces is no longer a goal; the
   public API should stay clean and route users to the owning modules.
-- Active slice: F1, rationalizing field model exposure through presets and
-  factories.
+- Active slice: G1, continuing roadmap implementation after completing the
+  field-model preset surface.
 
 ## Daily Entries
 
@@ -485,6 +485,25 @@ Start gate: May 8, 2026, `America/Vancouver`
   shell surface for inspecting FITS files and table samples before building
   heavier map or modelling workflows.
 
+### 2026-06-10
+
+- Added `FieldModelPreset`, `FIELD_MODEL_PRESETS`,
+  `FIELD_MODEL_PRESET_NAMES`, `get_field_model_preset(...)`, and
+  `make_field_model_preset(...)` under `torchsky.map.field`, re-exported
+  through `torchsky.map` for the main modelling workflow.
+- Defined four low-jargon presets over the current expert model zoo:
+  `fast`, `balanced`, `spectral`, and `operator_constrained`.
+- Updated `docs/field.md` to recommend presets first while keeping
+  `make_field_model(kind, ...)` documented for expert selection.
+- Added focused tests for preset names, immutable registry exposure, name
+  normalization, override forwarding, and equivalence with the existing factory.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_field_model_presets.py tests/test_cli_inspect.py tests/test_cli_map.py tests/test_docs_integrity.py -q`
+  - Result: `15 passed, 2 warnings`.
+- North Star connection: this lowers the jargon barrier for continuous-field
+  modelling while preserving the torch-native expert model families needed for
+  ambitious multi-wavelength survey-scale experiments.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.
@@ -499,5 +518,5 @@ Start gate: May 8, 2026, `America/Vancouver`
 - [x] D1: Move HEALPix ownership toward `torchsky.sphere`.
 - [x] D2: Remove leftover HEALPix, coords, and geom alias surfaces.
 - [x] E1: Add `torchsky info` and `torchsky cat` CLI workflows.
-- [ ] F1: Rationalize field model exposure through presets and factories.
+- [x] F1: Rationalize field model exposure through presets and factories.
 - [ ] G1: Continue roadmap implementation from `docs/roadmap/status.md`.

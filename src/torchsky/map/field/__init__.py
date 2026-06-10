@@ -78,6 +78,13 @@ from .observation_builders import (
     ifu_cube_spectral_to_leading,
     make_tangent_plane_header,
 )
+from .presets import (
+    FIELD_MODEL_PRESET_NAMES,
+    FIELD_MODEL_PRESETS,
+    FieldModelPreset,
+    get_field_model_preset,
+    make_field_model_preset,
+)
 from .registry import (
     FIELD_MODEL_KINDS,
     RECOMMENDED_FIELD_MODEL_KINDS,
@@ -114,6 +121,8 @@ from .types import (
 
 __all__ = [
     "FIELD_MODEL_KINDS",
+    "FIELD_MODEL_PRESET_NAMES",
+    "FIELD_MODEL_PRESETS",
     "RECOMMENDED_FIELD_MODEL_KINDS",
     "ForwardContext",
     "KinematicState",
@@ -135,6 +144,7 @@ __all__ = [
     "FieldLossReduction",
     "FieldLRSchedule",
     "FieldModelKind",
+    "FieldModelPreset",
     "FieldNoisePretrainKind",
     "FieldObservation",
     "FieldObservationSampling",
@@ -144,6 +154,7 @@ __all__ = [
     "field_observations_from_bin_centers",
     "field_observations_from_bin_edges",
     "field_observations_from_ifu_cube",
+    "get_field_model_preset",
     "is_recommended_field_model",
     "ifu_cube_spectral_to_leading",
     "make_tangent_plane_header",
@@ -173,6 +184,7 @@ __all__ = [
     "fit_field_model",
     "fit_field_component_decomposition",
     "make_field_model",
+    "make_field_model_preset",
     "make_field_component_decomposition",
     "evaluate_field_coordinates_vmapped",
     "render_field_cube",
