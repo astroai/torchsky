@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 
+import torchsky.map as map_api
 from torchsky.map import FieldObservation, ImageObservation, PSFSpec
 from torchsky.map.operators import (
     ConservativePolygonRemapOp,
@@ -26,6 +27,7 @@ from torchsky.map.operators import geometry_conservative as geometry_conservativ
 
 
 def test_observation_operator_bundle_iter_enabled_skips_disabled_entries() -> None:
+    assert map_api.ObservationOperatorBundle is ObservationOperatorBundle
     bundle = ObservationOperatorBundle(
         geometry=InterpolationGeometryOp(),
         spectral_response=ExplicitSpectralResponseOp(),

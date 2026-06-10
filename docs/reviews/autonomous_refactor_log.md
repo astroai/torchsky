@@ -543,6 +543,33 @@ Start gate: May 8, 2026, `America/Vancouver`
   shared operator execution substrate, while preserving the large-map windowing
   path needed for survey-scale coadds.
 
+- Added `scripts/audit_refactor_cohesion.py` plus the
+  `pixi run audit-refactor-cohesion` task as a cheap, default-env wiring audit
+  for the refactor/benchmark surface.
+- The audit checks that key map/WCS/sphere benchmark gates remain wired in both
+  `pixi.toml` and `pyproject.toml`, that benchmark baselines and docs exist,
+  that map/field/architecture docs mention the promoted surfaces, and that
+  source exports expose the current public map/operator/scene spine.
+- Promoted `ObservationOperatorBundle` through `torchsky.map` because the audit
+  caught that docs described it as shared map substrate while only
+  `torchsky.map.operators` exported it.
+- The audit currently passes with two intentional warnings:
+  `src/torchsky/map/image_plane.py` and `src/torchsky/map/field/core.py` remain
+  above their cohesion pressure thresholds and should keep guiding future G1
+  extraction slices.
+- Tests run:
+  - `pixi run audit-refactor-cohesion`
+  - Result: `0 failures, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_refactor_cohesion_audit.py tests/test_map_operator_bundle.py::test_observation_operator_bundle_iter_enabled_skips_disabled_entries tests/test_docs_integrity.py -q`
+  - Result: `4 passed, 2 warnings`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+- North Star connection: this gives the refactor a recurring, automated audit
+  surface that ties API cohesion to benchmark evidence before larger
+  architecture moves.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.

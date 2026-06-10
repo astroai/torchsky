@@ -123,6 +123,7 @@ from .image_plane import (
     plan_image_plane_cube_target_from_header,
     plan_image_plane_target,
 )
+from .operators import ObservationOperatorBundle
 from .product import (
     MapUncertaintyMode,
     MapBandpassSpec,
@@ -214,6 +215,7 @@ __all__ = [
     "MapUncertaintyMode",
     "MultiBandMapResult",
     "ObservationSpectralSummary",
+    "ObservationOperatorBundle",
     "MapResamplingKernel",
     "MapStackingMethod",
     "MapValueSemantics",

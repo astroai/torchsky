@@ -207,6 +207,7 @@ Correctness is validated separately using upstream test fixtures and public refe
 | Gate | Command | Validates |
 |---|---|---|
 | Local CI parity | `pixi run ci-local` | Ruff, compileall, pyright, and the full pytest suite in the test env |
+| Refactor cohesion audit | `pixi run audit-refactor-cohesion` | Cheap wiring check for benchmark tasks, docs, promoted map/operator APIs, and known large-file pressure points |
 | WCS parity/perf | `pixi run bench-wcs` and `pixi run bench-wcs-tpv-inverse` | WCS projections, spectral/temporal paths, and TPV inverse benchmarks |
 | FITS I/O parity/perf | `pixi run bench-fits` and `pixi run bench-fitstable` | FITS image and table benchmark suites |
 | HEALPix geometry | `pixi run sphere-bench-geometry-gate` | HEALPix geometry matrix with correctness and median ratio gates |
