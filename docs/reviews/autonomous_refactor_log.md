@@ -352,6 +352,17 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this keeps the root package focused as a public facade
   and removes obsolete private FITS table parsing code that no longer belongs
   in the root namespace.
+- Removed two unused root private read helper wrappers
+  (`_get_image_meta_from_handle`, `_read_scaled_cpu_fast`) and their unused
+  implementation imports after verifying they had no references outside their
+  own definitions.
+- Tests run:
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run -e test -- pytest tests/test_api.py -k 'read_image or read_table or read_hdus or read_mode or read_policy or namespace' tests/test_io.py::TestIORead tests/test_cold_import.py -q`
+  - Result: `17 passed, 36 deselected, 2 warnings`.
+- North Star connection: this keeps root read APIs as intentional public
+  wrappers while removing obsolete private hooks from the root namespace.
 
 ## Work Queue Snapshot
 

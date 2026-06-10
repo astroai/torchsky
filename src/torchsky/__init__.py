@@ -82,7 +82,6 @@ from ._io_engine.image import (
 )
 from ._io_engine.image_meta import (
     get_image_meta as _get_image_meta_impl,
-    get_image_meta_from_handle as _get_image_meta_from_handle_impl,
     resolve_image_mmap as _resolve_image_mmap_impl,
     should_use_cold_nommap as _should_use_cold_nommap_impl,
 )
@@ -95,7 +94,6 @@ from ._io_engine.read_dispatch import (
     read_fallback_image as _read_fallback_image_impl,
     read_fallback_table as _read_fallback_table_impl,
     read_generic_fast_path as _read_generic_fast_path_impl,
-    read_scaled_cpu_fast as _read_scaled_cpu_fast_impl,
     read_unified as _read_unified_impl,
 )
 from ._io_engine.subset import (
@@ -338,13 +336,6 @@ def _get_image_meta(path: str, hdu: int):
     return _get_image_meta_impl(path, hdu, cpp_module=globals().get("cpp"))
 
 
-def _get_image_meta_from_handle(file_handle, path: str, hdu: int):
-    """Fetch image metadata using an already-open FITS handle (avoids open/close)."""
-    return _get_image_meta_from_handle_impl(
-        file_handle, path, hdu, read_header=_read_header_fast
-    )
-
-
 def _should_use_cold_nommap(
     path: str, hdu: int, cache_capacity: int, mmap: bool
 ) -> bool:
@@ -373,11 +364,6 @@ def _resolve_image_mmap(
         get_image_meta_func=_get_image_meta,
         should_use_cold_nommap_func=_should_use_cold_nommap,
     )
-
-
-def _read_scaled_cpu_fast(path: str, hdu: int = 0, mmap: bool = True) -> Tensor:
-    """Internal helper for the CPU scaled fast path."""
-    return _read_scaled_cpu_fast_impl(globals().get("cpp"), path, hdu, mmap)
 
 
 def read_image(
