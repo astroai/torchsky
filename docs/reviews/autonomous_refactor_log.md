@@ -570,6 +570,27 @@ Start gate: May 8, 2026, `America/Vancouver`
   surface that ties API cohesion to benchmark evidence before larger
   architecture moves.
 
+- Moved plain-TAN and no-distortion fast-policy predicates into
+  `torchsky.map.operators.execution` as `is_plain_tan_header(...)` and
+  `wcs_has_distortion(...)`, then exported them through `torchsky.map.operators`.
+- Updated `image_plane.py` to use those shared predicates in both
+  surface-brightness area-scaling policy and large-TAN target windowing.
+- Extended the cohesion audit so those reusable fast-policy predicates are part
+  of the checked operator execution surface.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_map_operator_execution.py tests/test_map_image_plane.py::test_project_observation_large_tan_windowing_matches_full_reprojection tests/test_map_image_plane.py::test_surface_brightness_area_scaling_gate_uses_target_vs_harmonic_source_scale tests/test_refactor_cohesion_audit.py -q`
+  - Result: `13 passed, 2 warnings`.
+  - `pixi run audit-refactor-cohesion`
+  - Result: `0 failures, 2 warnings`; `image_plane.py` is now `3212` lines,
+    still above the `3000`-line cohesion warning threshold.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+- North Star connection: this keeps fast mapmaking policy reusable and tested
+  outside the monolithic image-plane module, so future benchmark-driven
+  windowing and scaling changes have one shared decision point.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.

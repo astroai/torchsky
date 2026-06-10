@@ -87,9 +87,11 @@ REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
         "coadd_image_plane",
     ),
     "src/torchsky/map/operators/__init__.py": (
+        "is_plain_tan_header",
         "source_bbox_on_target",
         "LearnedInstrumentOperator",
         "ObservationOperatorBundle",
+        "wcs_has_distortion",
     ),
     "src/torchsky/scene/__init__.py": (
         "SceneRepresentation",

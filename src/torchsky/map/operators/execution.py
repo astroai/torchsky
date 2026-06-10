@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 
 import torch
 from torch import Tensor
@@ -337,3 +337,15 @@ def source_bbox_on_target(
     if x0 >= x1 or y0 >= y1:
         return None
     return y0, y1, x0, x1
+
+
+def is_plain_tan_header(header: Mapping[str, object]) -> bool:
+    """Return True for simple 2D TAN celestial headers."""
+    return str(header.get("CTYPE1", "")).endswith("TAN") and str(
+        header.get("CTYPE2", "")
+    ).endswith("TAN")
+
+
+def wcs_has_distortion(wcs) -> bool:
+    """Return True when a WCS carries distortion terms unsupported by fast policies."""
+    return getattr(wcs, "sip", None) is not None or bool(getattr(wcs, "_is_tpv", False))

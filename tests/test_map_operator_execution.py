@@ -11,11 +11,13 @@ from torchsky.map.operators import (
     InterpolationGeometryOp,
     accumulate_projected_observation,
     finalize_projected_stack,
+    is_plain_tan_header,
     masked_median_stack,
     prepare_image_observation_data,
     project_image_observation_geometry,
     source_bbox_on_target,
     stack_inputs_from_projected_observation,
+    wcs_has_distortion,
 )
 from torchsky.map.operators import execution as execution_mod
 
@@ -201,6 +203,30 @@ def test_source_bbox_on_target_clips_plain_tan_source_boundary() -> None:
     )
 
     assert bbox == (2, 14, 2, 14)
+
+
+def test_plain_tan_and_distortion_predicates_cover_fast_policy_inputs() -> None:
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 8,
+        "NAXIS2": 8,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 4.0,
+        "CRPIX2": 4.0,
+        "CRVAL1": 12.0,
+        "CRVAL2": -3.0,
+        "CDELT1": -0.01,
+        "CDELT2": 0.01,
+    }
+    assert is_plain_tan_header(header)
+    assert not is_plain_tan_header({**header, "CTYPE1": "RA---TPV"})
+    assert not wcs_has_distortion(WCS(header))
+
+    tpv_header = dict(header)
+    tpv_header["CTYPE1"] = "RA---TPV"
+    tpv_header["CTYPE2"] = "DEC--TPV"
+    assert wcs_has_distortion(WCS(tpv_header))
 
 
 def test_stack_inputs_from_projected_observation_applies_flux_area_for_mean_stack() -> (

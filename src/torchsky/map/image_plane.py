@@ -30,11 +30,13 @@ from .operators.bundle import ObservationOperatorBundle
 from .operators.execution import (
     accumulate_projected_observation,
     finalize_projected_stack,
+    is_plain_tan_header,
     masked_median_stack,
     prepare_image_observation_data,
     project_image_observation_geometry,
     source_bbox_on_target,
     stack_inputs_from_projected_observation,
+    wcs_has_distortion,
 )
 from .operators.geometry import InterpolationGeometryOp
 from .operators.mask_weight import load_image_observation_weight_map
@@ -433,7 +435,7 @@ def _should_apply_surface_brightness_area_scaling(
     target_shape: tuple[int, int],
     first_header: dict | None = None,
 ) -> bool:
-    if not observations or not _is_plain_tan_header(target_header):
+    if not observations or not is_plain_tan_header(target_header):
         return True
     target_area_sr = _representative_pixel_area_sr(
         WCS(target_header),
@@ -446,12 +448,10 @@ def _should_apply_surface_brightness_area_scaling(
             obs,
             cached_header=first_header if obs_idx == 0 else None,
         )
-        if not _is_plain_tan_header(header_dict_obs):
+        if not is_plain_tan_header(header_dict_obs):
             return True
         source_wcs = WCS(header_dict_obs)
-        if getattr(source_wcs, "sip", None) is not None or bool(
-            getattr(source_wcs, "_is_tpv", False)
-        ):
+        if wcs_has_distortion(source_wcs):
             return True
         source_shape = (
             int(header_dict_obs.get("NAXIS2", 0)),
@@ -1966,12 +1966,6 @@ def _prepare_target(
     )
 
 
-def _is_plain_tan_header(header: dict) -> bool:
-    return str(header.get("CTYPE1", "")).endswith("TAN") and str(
-        header.get("CTYPE2", "")
-    ).endswith("TAN")
-
-
 def _slice_prepared_target(
     target: _PreparedImagePlaneTarget,
     *,
@@ -2020,13 +2014,11 @@ def _window_large_tan_target(
         < _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS
     ):
         return target, None
-    if not _is_plain_tan_header(source_header) or not _is_plain_tan_header(
+    if not is_plain_tan_header(source_header) or not is_plain_tan_header(
         target_header
     ):
         return target, None
-    if getattr(source_wcs, "sip", None) is not None or bool(
-        getattr(source_wcs, "_is_tpv", False)
-    ):
+    if wcs_has_distortion(source_wcs):
         return target, None
     bbox = source_bbox_on_target(
         source_wcs,

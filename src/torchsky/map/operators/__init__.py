@@ -49,12 +49,14 @@ from .geometry_conservative import conservative_polygon_project
 from .execution import (
     accumulate_projected_observation,
     finalize_projected_stack,
+    is_plain_tan_header,
     masked_median_stack,
     PreparedImageObservationData,
     prepare_image_observation_data,
     project_image_observation_geometry,
     source_bbox_on_target,
     stack_inputs_from_projected_observation,
+    wcs_has_distortion,
 )
 from .learned import (
     DEFAULT_LEARNED_OPERATOR_CONDITIONING,
@@ -165,6 +167,7 @@ __all__ = [
     "geometry_op_for_kernel",
     "image_observation_operator_bundle",
     "image_observations_operator_bundle",
+    "is_plain_tan_header",
     "finalize_projected_stack",
     "masked_median_stack",
     "prepare_image_observation_data",
@@ -183,4 +186,5 @@ __all__ = [
     "stack_inputs_from_projected_observation",
     "swap_bundle_operator_families",
     "validate_learned_operator_families",
+    "wcs_has_distortion",
 ]
