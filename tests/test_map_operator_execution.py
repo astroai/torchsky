@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import pytest
 
 from torchsky import WCS
 from torchsky.map import ImageObservation
@@ -13,11 +14,14 @@ from torchsky.map.operators import (
     finalize_projected_stack,
     is_plain_tan_header,
     masked_median_stack,
+    pixel_area_sr_map,
     prepare_image_observation_data,
     project_image_observation_geometry,
+    representative_pixel_area_sr,
     source_bbox_on_target,
     stack_inputs_from_projected_observation,
     wcs_has_distortion,
+    wrapped_delta_ra_deg,
 )
 from torchsky.map.operators import execution as execution_mod
 
@@ -227,6 +231,37 @@ def test_plain_tan_and_distortion_predicates_cover_fast_policy_inputs() -> None:
     tpv_header["CTYPE1"] = "RA---TPV"
     tpv_header["CTYPE2"] = "DEC--TPV"
     assert wcs_has_distortion(WCS(tpv_header))
+
+
+def test_pixel_area_helpers_are_positive_and_consistent_for_plain_tan() -> None:
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 8,
+        "NAXIS2": 8,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 4.0,
+        "CRPIX2": 4.0,
+        "CRVAL1": 12.0,
+        "CRVAL2": -3.0,
+        "CDELT1": -0.01,
+        "CDELT2": 0.01,
+    }
+    wcs = WCS(header)
+    area = pixel_area_sr_map(wcs, (8, 8), device=torch.device("cpu"))
+    representative = representative_pixel_area_sr(
+        wcs,
+        (8, 8),
+        device=torch.device("cpu"),
+    )
+
+    assert area.shape == (8, 8)
+    assert bool((area > 0.0).all())
+    assert float(torch.median(area).item()) == pytest.approx(representative, rel=0.02)
+    torch.testing.assert_close(
+        wrapped_delta_ra_deg(torch.tensor([359.0]), torch.tensor([1.0])),
+        torch.tensor([-2.0]),
+    )
 
 
 def test_stack_inputs_from_projected_observation_applies_flux_area_for_mean_stack() -> (

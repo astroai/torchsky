@@ -22,6 +22,7 @@ from torchsky.map import (
     plan_image_plane_target,
     stack_map_product,
 )
+from torchsky.map.operators import pixel_area_sr_map, representative_pixel_area_sr
 from torchsky.spectral import SpectralAxis
 
 pytest.importorskip("torchsky.cpp")
@@ -1478,12 +1479,12 @@ def test_coadd_image_plane_flux_semantics_improves_flux_conservation(tmp_path) -
 
     source_wcs = torchsky.WCS(source_header)
     target_wcs = torchsky.WCS(target_header)
-    source_area = image_plane_mod._pixel_area_sr_map(
+    source_area = pixel_area_sr_map(
         source_wcs,
         (8, 8),
         device=torch.device("cpu"),
     )
-    target_area = image_plane_mod._pixel_area_sr_map(
+    target_area = pixel_area_sr_map(
         target_wcs,
         (8, 8),
         device=torch.device("cpu"),
@@ -1554,12 +1555,12 @@ def test_coadd_image_plane_weighted_mean_scales_surface_brightness_weights_only_
         stacking_method="weighted_mean",
     )
 
-    fine_area = image_plane_mod._representative_pixel_area_sr(
+    fine_area = representative_pixel_area_sr(
         torchsky.WCS(fine_target),
         (8, 8),
         device=torch.device("cpu"),
     )
-    coarse_area = image_plane_mod._representative_pixel_area_sr(
+    coarse_area = representative_pixel_area_sr(
         torchsky.WCS(coarse_target),
         (8, 8),
         device=torch.device("cpu"),

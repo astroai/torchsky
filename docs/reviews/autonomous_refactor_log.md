@@ -591,6 +591,28 @@ Start gate: May 8, 2026, `America/Vancouver`
   outside the monolithic image-plane module, so future benchmark-driven
   windowing and scaling changes have one shared decision point.
 
+- Extracted pixel-area math from `image_plane.py` into
+  `torchsky.map.operators.pixel_area`, exported as `pixel_area_sr_map(...)`,
+  `representative_pixel_area_sr(...)`, and `wrapped_delta_ra_deg(...)`.
+- Updated flux-semantics coadds, surface-brightness information-density scaling,
+  target preparation, and product flux metrics to use the shared operator
+  helpers instead of private image-plane functions.
+- Updated tests that previously reached into private image-plane helpers to use
+  `torchsky.map.operators` exports.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_map_operator_execution.py tests/test_map_image_plane.py::test_coadd_image_plane_flux_semantics_improves_flux_conservation tests/test_map_image_plane.py::test_coadd_image_plane_weighted_mean_scales_surface_brightness_weights_only_for_coarser_targets tests/test_map_product.py tests/test_refactor_cohesion_audit.py -q`
+  - Result: `28 passed, 2 warnings`.
+  - `pixi run audit-refactor-cohesion`
+  - Result: `0 failures, 2 warnings`; `image_plane.py` is now `3162` lines,
+    still above the `3000`-line cohesion warning threshold.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+- North Star connection: this centralizes physically meaningful solid-angle
+  estimation for projection, flux accounting, and benchmark metrics, reducing
+  hidden policy in the image-plane orchestrator.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.

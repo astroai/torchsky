@@ -25,7 +25,6 @@ from .image_plane import (
     PlannedImagePlaneCubeTarget,
     PlannedImagePlaneTarget,
     SpectralCubeMapResult,
-    _pixel_area_sr_map,
     _validated_map_resampling_kernel,
     _validated_map_stacking_method,
     _validated_map_value_semantics,
@@ -34,6 +33,7 @@ from .image_plane import (
     plan_image_plane_cube_target,
     plan_image_plane_target,
 )
+from .operators.pixel_area import pixel_area_sr_map
 from .scenes import ContinuousFieldModel, SceneRepresentation, as_scene_representation
 from .solvers import SolverHooks
 from .target import TargetRenderSpec
@@ -659,7 +659,7 @@ def evaluate_map_product(
     residual_rms = float(torch.sqrt(torch.mean(torch.square(residual_flat))).item())
     snr_linear = signal_rms / max(residual_rms, 1.0e-12)
     if value_semantics == "surface_brightness":
-        area_sr = _pixel_area_sr_map(
+        area_sr = pixel_area_sr_map(
             WCS(header),
             (int(pred_data.shape[-2]), int(pred_data.shape[-1])),
             device=pred_data.device,

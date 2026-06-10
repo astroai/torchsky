@@ -89,6 +89,11 @@ from .psf import (
     gaussian_blur,
     gaussian_kernel1d,
 )
+from .pixel_area import (
+    pixel_area_sr_map,
+    representative_pixel_area_sr,
+    wrapped_delta_ra_deg,
+)
 from .radiometry import ExplicitRadiometryOp, apply_image_observation_calibration
 from .spectral import (
     ExplicitSpectralResponseOp,
@@ -182,9 +187,12 @@ __all__ = [
     "mixture_mc_samples",
     "observation_background_components",
     "polynomial_background",
+    "pixel_area_sr_map",
     "sanitize_inverse_variance",
+    "representative_pixel_area_sr",
     "stack_inputs_from_projected_observation",
     "swap_bundle_operator_families",
     "validate_learned_operator_families",
     "wcs_has_distortion",
+    "wrapped_delta_ra_deg",
 ]

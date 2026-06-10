@@ -88,10 +88,13 @@ REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
     ),
     "src/torchsky/map/operators/__init__.py": (
         "is_plain_tan_header",
+        "pixel_area_sr_map",
+        "representative_pixel_area_sr",
         "source_bbox_on_target",
         "LearnedInstrumentOperator",
         "ObservationOperatorBundle",
         "wcs_has_distortion",
+        "wrapped_delta_ra_deg",
     ),
     "src/torchsky/scene/__init__.py": (
         "SceneRepresentation",

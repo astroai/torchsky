@@ -41,6 +41,11 @@ from .operators.execution import (
 from .operators.geometry import InterpolationGeometryOp
 from .operators.mask_weight import load_image_observation_weight_map
 from .operators.noise import ExplicitNoiseOp
+from .operators.pixel_area import (
+    pixel_area_sr_map,
+    representative_pixel_area_sr,
+    wrapped_delta_ra_deg,
+)
 from .operators.radiometry import apply_image_observation_calibration
 from .operators.spectral import ExplicitSpectralResponseOp
 from .periodic_affine import resample_linear_affine_periodic_bilinear_2d
@@ -352,61 +357,6 @@ def _build_target_world_grid(
     return ra, dec
 
 
-def _wrapped_delta_ra_deg(ra_a_deg: Tensor, ra_b_deg: Tensor) -> Tensor:
-    return ((ra_a_deg - ra_b_deg + 180.0) % 360.0) - 180.0
-
-
-def _pixel_area_sr_map(
-    wcs: WCS,
-    shape: tuple[int, int],
-    *,
-    device: torch.device,
-) -> Tensor:
-    height, width = int(shape[0]), int(shape[1])
-    y, x = torch.meshgrid(
-        torch.arange(height, dtype=torch.float64, device=device),
-        torch.arange(width, dtype=torch.float64, device=device),
-        indexing="ij",
-    )
-    ra_c, dec_c = wcs.pixel_to_world(x, y)
-    ra_dx, dec_dx = wcs.pixel_to_world(x + 1.0, y)
-    ra_dy, dec_dy = wcs.pixel_to_world(x, y + 1.0)
-    cos_dec = torch.cos(torch.deg2rad(dec_c))
-    dra_dx = _wrapped_delta_ra_deg(ra_dx, ra_c) * cos_dec
-    dra_dy = _wrapped_delta_ra_deg(ra_dy, ra_c) * cos_dec
-    ddec_dx = dec_dx - dec_c
-    ddec_dy = dec_dy - dec_c
-    det_deg2 = torch.abs(dra_dx * ddec_dy - dra_dy * ddec_dx)
-    # Optimization: precalculate square for performance
-    d2r = torch.pi / 180.0
-    area_sr = torch.clamp(det_deg2 * (d2r * d2r), min=1e-16)
-    return area_sr.to(dtype=torch.float32)
-
-
-def _representative_pixel_area_sr(
-    wcs: WCS,
-    shape: tuple[int, int],
-    *,
-    device: torch.device,
-) -> float:
-    height, width = int(shape[0]), int(shape[1])
-    y = torch.tensor([(max(height - 1, 0)) * 0.5], dtype=torch.float64, device=device)
-    x = torch.tensor([(max(width - 1, 0)) * 0.5], dtype=torch.float64, device=device)
-    ra_c, dec_c = wcs.pixel_to_world(x, y)
-    ra_dx, dec_dx = wcs.pixel_to_world(x + 1.0, y)
-    ra_dy, dec_dy = wcs.pixel_to_world(x, y + 1.0)
-    cos_dec = torch.cos(torch.deg2rad(dec_c))
-    dra_dx = _wrapped_delta_ra_deg(ra_dx, ra_c) * cos_dec
-    dra_dy = _wrapped_delta_ra_deg(ra_dy, ra_c) * cos_dec
-    ddec_dx = dec_dx - dec_c
-    ddec_dy = dec_dy - dec_c
-    det_deg2 = torch.abs(dra_dx * ddec_dy - dra_dy * ddec_dx)
-    # Optimization: precalculate square for performance
-    d2r = torch.pi / 180.0
-    area_sr = torch.clamp(det_deg2 * (d2r * d2r), min=1e-16)
-    return float(area_sr.mean().item())
-
-
 def _observation_header_for_area_scaling(
     obs: ImageObservation,
     *,
@@ -437,7 +387,7 @@ def _should_apply_surface_brightness_area_scaling(
 ) -> bool:
     if not observations or not is_plain_tan_header(target_header):
         return True
-    target_area_sr = _representative_pixel_area_sr(
+    target_area_sr = representative_pixel_area_sr(
         WCS(target_header),
         target_shape,
         device=torch.device("cpu"),
@@ -459,7 +409,7 @@ def _should_apply_surface_brightness_area_scaling(
         )
         if source_shape[0] <= 0 or source_shape[1] <= 0:
             return True
-        source_area_sr = _representative_pixel_area_sr(
+        source_area_sr = representative_pixel_area_sr(
             source_wcs,
             source_shape,
             device=torch.device("cpu"),
@@ -826,7 +776,7 @@ def _spherical_cap_radius_from_world_grid(
     center_ra_deg: float,
     center_dec_deg: float,
 ) -> float:
-    dra = _wrapped_delta_ra_deg(
+    dra = wrapped_delta_ra_deg(
         ra_deg, torch.tensor(center_ra_deg, dtype=ra_deg.dtype, device=ra_deg.device)
     )
     dec0 = torch.tensor(center_dec_deg, dtype=dec_deg.dtype, device=dec_deg.device)
@@ -866,7 +816,7 @@ def _angular_separation_deg(
 def _source_pixel_diameter_arcsec(
     source_wcs: WCS, shape: tuple[int, int], *, device: torch.device
 ) -> float:
-    area_sr = _pixel_area_sr_map(source_wcs, shape, device=device)
+    area_sr = pixel_area_sr_map(source_wcs, shape, device=device)
     median_area_sr = float(torch.median(area_sr).item())
     if not math.isfinite(median_area_sr) or median_area_sr <= 0.0:
         return 0.0
@@ -1190,7 +1140,7 @@ def _resample_weighted_to_target(
     # Reproject weighted signal and weight separately, then form the weighted mean
     # only after all observations have been accumulated on the target grid.
     if value_semantics == "flux":
-        source_area_sr = _pixel_area_sr_map(
+        source_area_sr = pixel_area_sr_map(
             source_wcs,
             tuple(image.shape),
             device=image.device,
@@ -1198,7 +1148,7 @@ def _resample_weighted_to_target(
         weighted_image = image * source_weight * source_area_sr
         weighted_weight = source_weight * (source_area_sr * source_area_sr)
     elif target_representative_area_sr is not None:
-        source_area_sr = _representative_pixel_area_sr(
+        source_area_sr = representative_pixel_area_sr(
             source_wcs,
             tuple(image.shape),
             device=image.device,
@@ -1730,7 +1680,7 @@ def _forward_project_weighted_to_target(
     h_src, w_src = image.shape
 
     if value_semantics == "flux":
-        source_area_sr = _pixel_area_sr_map(
+        source_area_sr = pixel_area_sr_map(
             source_wcs,
             tuple(image.shape),
             device=image.device,
@@ -1738,7 +1688,7 @@ def _forward_project_weighted_to_target(
         weighted_image = image * source_weight * source_area_sr
         weighted_weight = source_weight * (source_area_sr * source_area_sr)
     elif target.representative_pixel_area_sr is not None:
-        source_area_sr = _representative_pixel_area_sr(
+        source_area_sr = representative_pixel_area_sr(
             source_wcs,
             tuple(image.shape),
             device=image.device,
@@ -1945,12 +1895,12 @@ def _prepare_target(
             center_dec_deg=center_dec_deg,
         ),
         pixel_area_sr=(
-            _pixel_area_sr_map(target_wcs, target_shape, device=device)
+            pixel_area_sr_map(target_wcs, target_shape, device=device)
             if include_pixel_area
             else None
         ),
         representative_pixel_area_sr=(
-            _representative_pixel_area_sr(target_wcs, target_shape, device=device)
+            representative_pixel_area_sr(target_wcs, target_shape, device=device)
             if include_representative_pixel_area
             else None
         ),
@@ -2363,8 +2313,8 @@ def _project_observation_to_target_chunk(
                 resampling_kernel=resampling_kernel,
                 value_semantics=value_semantics,
                 drizzle_pixfrac=drizzle_pixfrac,
-                pixel_area_sr_map_fn=_pixel_area_sr_map,
-                representative_pixel_area_fn=_representative_pixel_area_sr,
+                pixel_area_sr_map_fn=pixel_area_sr_map,
+                representative_pixel_area_fn=representative_pixel_area_sr,
                 chunk_pixels=_DRIZZLE_FORWARD_CHUNK_PIXELS,
                 resample_weighted_to_target_fn=_resample_weighted_to_target,
                 forward_project_weighted_to_target_fn=(
