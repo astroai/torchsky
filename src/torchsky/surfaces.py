@@ -95,6 +95,12 @@ _SURFACES: dict[str, APISurface] = {
         "declared map-product execution API",
         pillar=SurfacePillar.SCENE,
     ),
+    "torchsky.scene": APISurface(
+        "torchsky.scene",
+        SurfaceTier.EXPERIMENTAL,
+        "promoted scene/observation/product facade over current map primitives",
+        pillar=SurfacePillar.SCENE,
+    ),
     "torchsky.map.field": APISurface(
         "torchsky.map.field",
         SurfaceTier.EXPERIMENTAL,

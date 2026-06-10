@@ -384,6 +384,34 @@ Start gate: May 8, 2026, `America/Vancouver`
   making the root package a stable public facade and `torchsky.io` the complete
   direct implementation namespace for FITS I/O, without adding runtime
   dependencies or changing tensor/device semantics.
+- Added the promoted `torchsky.scene` facade as an additive namespace over the
+  existing map/field implementation:
+  - `scene.FieldObservation` / `scene.ImageObservation`
+  - `scene.TargetRenderSpec`
+  - `scene.MapProductSpec` / `scene.MapBandpassSpec`
+  - `scene.SceneRepresentation` and existing scene adapters
+  - factory helpers such as `target_from_header`, `target_from_product`,
+    `product_spec`, `render`, and `predict`.
+- Added `torchsky.scene.operators` with `ObservationOperatorAdapter`,
+  `ObservationOperatorBundleProtocol`, `operator_adapter_for_observation(...)`,
+  and `operator_bundle_for_observation(...)`, preserving the current
+  `ObservationOperatorBundle` implementation while exposing an executable
+  scene-level adapter.
+- Exposed `torchsky.scene` through the root lazy namespace and API surface
+  metadata, and added `docs/scene.md`.
+- Tests run:
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run -e test -- pytest tests/test_scene_facade.py tests/test_map_target_render_spec.py tests/test_cold_import.py -q`
+  - Result: `7 passed, 2 warnings`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+  - `pixi run ci-local`
+  - Result: `1593 passed, 61 skipped, 1 xfailed, 102 warnings`.
+- North Star connection: this starts the scene pillar without destabilizing
+  existing map code: users get clear observation/product/scene vocabulary, while
+  parity tests ensure the promoted operator adapter still uses the same
+  torch-native map/field operator bundle behavior.
 
 ## Work Queue Snapshot
 
@@ -394,8 +422,8 @@ Start gate: May 8, 2026, `America/Vancouver`
 - [x] B2: Move Python-side root I/O caches behind a single cache facade.
 - [x] B3: Make `torchsky.io` call the implementation directly.
 - [x] B4: Preserve root FITS public behavior.
-- [ ] C1: Add promoted observation/product/scene facades.
-- [ ] C2: Define executable operator protocols or adapters.
+- [x] C1: Add promoted observation/product/scene facades.
+- [x] C2: Define executable operator protocols or adapters.
 - [ ] D1: Move HEALPix ownership toward `torchsky.sphere`.
 - [ ] D2: Mark `coords` and `geom` as compatibility aliases.
 - [ ] E1: Add `torchsky info` and `torchsky cat` CLI workflows.
