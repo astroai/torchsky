@@ -31,6 +31,11 @@ from torchsky.map import (  # noqa: E402
     plan_map_product,
     stack_map_product,
 )
+from torchsky.map.operators import (  # noqa: E402
+    headers_equivalent_for_direct_copy,
+    target_shape_from_header,
+    validate_image_plane_2d,
+)
 import torchsky.map.image_plane as image_plane_mod  # noqa: E402
 
 try:  # noqa: E402
@@ -56,7 +61,7 @@ def _time_many(fn, runs: int) -> float:
 def _target_setup(
     target_header: dict[str, Any], device: torch.device
 ) -> tuple[tuple[int, int], image_plane_mod._PreparedImagePlaneTarget]:
-    target_shape = image_plane_mod._target_shape_from_header(
+    target_shape = target_shape_from_header(
         target_header,
         fallback=(int(target_header["NAXIS2"]), int(target_header["NAXIS1"])),
     )
@@ -83,11 +88,11 @@ def _torchsky_weighted_observation(
     image, header = torchsky.read(
         observation.path, hdu=observation.hdu, return_header=True
     )
-    image = image_plane_mod._validate_image_plane(image)
+    image = validate_image_plane_2d(image)
     header_dict_obs = dict(header)
     source_wcs = None
     if not (
-        image_plane_mod._headers_equivalent_for_direct_copy(
+        headers_equivalent_for_direct_copy(
             header_dict_obs, target_header
         )
         and tuple(int(v) for v in image.shape) == target_shape

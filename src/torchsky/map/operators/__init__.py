@@ -57,6 +57,13 @@ from .geometry import (
     SpectralGlobalGeometryOp,
 )
 from .geometry_conservative import conservative_polygon_project
+from .image_grid import (
+    GRID_EQUIVALENT_IGNORE_KEYS,
+    headers_equivalent_for_direct_copy,
+    normalized_header_for_shape,
+    target_shape_from_header,
+    validate_image_plane_2d,
+)
 from .execution import (
     accumulate_projected_observation,
     finalize_projected_stack,
@@ -136,6 +143,7 @@ __all__ = [
     "ExplicitSpectralResponseOp",
     "ForwardSplatGeometryOp",
     "GeometryOp",
+    "GRID_EQUIVALENT_IGNORE_KEYS",
     "GatedResidualOperator",
     "InstrumentBackgroundOp",
     "InstrumentStateEncoder",
@@ -187,11 +195,13 @@ __all__ = [
     "gaussian_kernel2d",
     "gaussian_kernel1d",
     "geometry_op_for_kernel",
+    "headers_equivalent_for_direct_copy",
     "image_observation_operator_bundle",
     "image_observations_operator_bundle",
     "is_plain_tan_header",
     "finalize_projected_stack",
     "masked_median_stack",
+    "normalized_header_for_shape",
     "prepare_image_observation_data",
     "project_image_observation_geometry",
     "spherical_spectral_operator_bundle",
@@ -209,7 +219,9 @@ __all__ = [
     "representative_pixel_area_sr",
     "stack_inputs_from_projected_observation",
     "swap_bundle_operator_families",
+    "target_shape_from_header",
     "validate_learned_operator_families",
+    "validate_image_plane_2d",
     "validate_map_resampling_kernel",
     "validate_map_stacking_method",
     "validate_map_value_semantics",

@@ -45,10 +45,12 @@ import torchsky.map.image_plane as image_plane_mod  # noqa: E402
 from torchsky.map.product import render_scene_product  # noqa: E402
 from torchsky.map.target import TargetRenderSpec  # noqa: E402
 from torchsky.map.operators import (  # noqa: E402
+    headers_equivalent_for_direct_copy,
     ObservationOperatorBundle,
     make_minimal_learned_operator_scaffold,
     spherical_spectral_operator_bundle,
     swap_bundle_operator_families,
+    validate_image_plane_2d,
 )
 from torchsky.map.scenes import DiscreteTargetImage, HealpixMapScene  # noqa: E402
 from torchsky.map.solvers import (  # noqa: E402
@@ -1297,11 +1299,11 @@ def _target_mask_region_masks(
         image, header = torchsky.read(
             obs_with_mask.path, hdu=obs_with_mask.hdu, return_header=True
         )
-        image = image_plane_mod._validate_image_plane(image).to(device=device)
+        image = validate_image_plane_2d(image).to(device=device)
         header_dict_obs = dict(header)
         source_wcs = None
         if not (
-            image_plane_mod._headers_equivalent_for_direct_copy(
+            headers_equivalent_for_direct_copy(
                 header_dict_obs, target_header
             )
             and tuple(int(v) for v in image.shape) == target_shape

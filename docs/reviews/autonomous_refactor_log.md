@@ -634,6 +634,32 @@ Start gate: May 8, 2026, `America/Vancouver`
   reusable validation surface and removes another private dependency from the
   product-planning layer.
 
+- Added `torchsky.map.operators.image_grid` for reusable image-plane
+  validation and FITS-like image-grid header helpers:
+  `validate_image_plane_2d(...)`, `target_shape_from_header(...)`,
+  `normalized_header_for_shape(...)`, and
+  `headers_equivalent_for_direct_copy(...)`.
+- Updated `image_plane.py`, mask/weight loading, diagnostics, and benchmark
+  scripts to use the shared operator helper surface instead of private
+  image-plane functions or local duplicate predicates.
+- Extended the cohesion audit and operator tests so image-grid helpers are now
+  part of the checked operator API.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_map_operator_execution.py tests/test_map_image_plane.py::test_project_observation_large_tan_windowing_matches_full_reprojection tests/test_map_operator_bundle.py tests/test_refactor_cohesion_audit.py -q`
+  - Result: `25 passed, 2 warnings`.
+  - `pixi run audit-refactor-cohesion`
+  - Result: `0 failures, 2 warnings`; `image_plane.py` is now `3055` lines,
+    still above the `3000`-line cohesion warning threshold.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+  - `pixi run -e test -- pytest tests/test_docs_integrity.py -q`
+  - Result: `1 passed`.
+- North Star connection: image-grid shape/header semantics now live in a
+  reusable operator module, which reduces monolithic map orchestration and
+  keeps diagnostics, benchmarks, and production code on one exact policy.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.

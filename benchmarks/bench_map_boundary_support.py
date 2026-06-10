@@ -23,6 +23,7 @@ import bench_map_ground_truth as truth_bench  # noqa: E402
 import bench_map_compat as compat_bench  # noqa: E402
 import torchsky.map.image_plane as image_plane_mod  # noqa: E402
 from torchsky.map import ImageObservation, coadd_image_plane  # noqa: E402
+from torchsky.map.operators import validate_image_plane_2d  # noqa: E402
 
 
 def _is_tpv(header: dict[str, object]) -> bool:
@@ -89,8 +90,8 @@ def _make_boundary_gate_wrapper(margin: float):
                 resampling_kernel=resampling_kernel,
                 value_semantics=value_semantics,
             )
-        image = image_plane_mod._validate_image_plane(image).to(dtype=torch.float32)
-        source_weight = image_plane_mod._validate_image_plane(source_weight).to(
+        image = validate_image_plane_2d(image).to(dtype=torch.float32)
+        source_weight = validate_image_plane_2d(source_weight).to(
             dtype=torch.float32
         )
         if (
@@ -171,8 +172,8 @@ def _make_coverage_gate_wrapper(min_coverage: float):
                 resampling_kernel=resampling_kernel,
                 value_semantics=value_semantics,
             )
-        image = image_plane_mod._validate_image_plane(image).to(dtype=torch.float32)
-        source_weight = image_plane_mod._validate_image_plane(source_weight).to(
+        image = validate_image_plane_2d(image).to(dtype=torch.float32)
+        source_weight = validate_image_plane_2d(source_weight).to(
             dtype=torch.float32
         )
         if (

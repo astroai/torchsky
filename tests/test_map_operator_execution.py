@@ -15,14 +15,18 @@ from torchsky.map.operators import (
     MAP_VALUE_SEMANTICS,
     accumulate_projected_observation,
     finalize_projected_stack,
+    headers_equivalent_for_direct_copy,
     is_plain_tan_header,
     masked_median_stack,
+    normalized_header_for_shape,
     pixel_area_sr_map,
     prepare_image_observation_data,
     project_image_observation_geometry,
     representative_pixel_area_sr,
     source_bbox_on_target,
     stack_inputs_from_projected_observation,
+    target_shape_from_header,
+    validate_image_plane_2d,
     wcs_has_distortion,
     wrapped_delta_ra_deg,
     validate_map_resampling_kernel,
@@ -283,6 +287,46 @@ def test_map_config_validators_share_public_option_sets() -> None:
         validate_map_value_semantics("counts")
     with pytest.raises(ValueError, match="stacking_method"):
         validate_map_stacking_method("trimmed_mean")
+
+
+def test_image_grid_helpers_validate_shape_and_headers() -> None:
+    image = torch.zeros((2, 3), dtype=torch.float32)
+    assert validate_image_plane_2d(image) is image
+    with pytest.raises(ValueError, match="2D images only"):
+        validate_image_plane_2d(torch.zeros((1, 2, 3), dtype=torch.float32))
+
+    header = {"NAXIS1": 5, "NAXIS2": 4, "CTYPE1": "RA---TAN"}
+    assert target_shape_from_header(header, fallback=(2, 3)) == (4, 5)
+    assert target_shape_from_header({"CTYPE1": "RA---TAN"}, fallback=(2, 3)) == (2, 3)
+    with pytest.raises(ValueError, match="positive NAXIS1/NAXIS2"):
+        target_shape_from_header({"NAXIS1": 0, "NAXIS2": 4}, fallback=(2, 3))
+
+    normalized = normalized_header_for_shape(
+        {"NAXIS1": 9, "NAXIS2": 8, "A": 1},
+        (6, 7),
+        overrides={"B": 2},
+    )
+    assert normalized == {"NAXIS": 2, "NAXIS1": 7, "NAXIS2": 6, "A": 1, "B": 2}
+
+    source = {
+        "NAXIS1": 7,
+        "NAXIS2": 6,
+        "CTYPE1": "RA---TAN",
+        "CHECKSUM": "old",
+        "A_COMMENT": "source",
+    }
+    target = {
+        "NAXIS1": 7,
+        "NAXIS2": 6,
+        "CTYPE1": "RA---TAN",
+        "CHECKSUM": "new",
+        "A_COMMENT": "target",
+    }
+    assert headers_equivalent_for_direct_copy(source, target)
+    assert not headers_equivalent_for_direct_copy(
+        source,
+        {**target, "CTYPE1": "RA---TPV"},
+    )
 
 
 def test_stack_inputs_from_projected_observation_applies_flux_area_for_mean_stack() -> (

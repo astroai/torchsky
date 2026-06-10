@@ -22,6 +22,12 @@ if str(BENCHMARKS) not in sys.path:
 import bench_map_ground_truth as truth_bench  # noqa: E402
 import torchsky.map.image_plane as image_plane_mod  # noqa: E402
 from torchsky.map import ImageObservation  # noqa: E402
+from torchsky.map.operators import (  # noqa: E402
+    headers_equivalent_for_direct_copy,
+    normalized_header_for_shape,
+    target_shape_from_header,
+    validate_image_plane_2d,
+)
 
 
 @contextmanager
@@ -223,13 +229,13 @@ def main() -> int:
             first.path, hdu=first.hdu, return_header=True
         )
         stage_totals_ms["first_image_read"] = (time.perf_counter() - t0) * 1000.0
-        first_image = image_plane_mod._validate_image_plane(first_image)
-        header_dict = image_plane_mod._normalized_header_for_shape(
+        first_image = validate_image_plane_2d(first_image)
+        header_dict = normalized_header_for_shape(
             dict(first_header),
             tuple(int(v) for v in first_image.shape[-2:]),
             overrides=target_header,
         )
-        target_shape = image_plane_mod._target_shape_from_header(
+        target_shape = target_shape_from_header(
             header_dict,
             fallback=tuple(int(v) for v in first_image.shape[-2:]),
         )
@@ -275,12 +281,12 @@ def main() -> int:
                 )
                 image_read_ms = (time.perf_counter() - read0) * 1000.0
                 stage_totals_ms["image_read"] += image_read_ms
-                image = image_plane_mod._validate_image_plane(image)
+                image = validate_image_plane_2d(image)
                 header_dict_obs = dict(header)
             image = image.to(device=device)
 
             direct_copy = (
-                image_plane_mod._headers_equivalent_for_direct_copy(
+                headers_equivalent_for_direct_copy(
                     header_dict_obs, header_dict
                 )
                 and tuple(int(v) for v in image.shape) == target_shape

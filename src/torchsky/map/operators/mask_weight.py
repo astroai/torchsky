@@ -9,18 +9,13 @@ from torch import Tensor
 
 from ... import read
 from .base import MaskWeightOp
+from .image_grid import validate_image_plane_2d
 
 
 @dataclass
 class ExplicitMaskWeightOp(MaskWeightOp):
     def __init__(self, *, name: str = "explicit_mask_weight") -> None:
         super().__init__(name=name, learned=False)
-
-
-def _validate_image_plane_2d(image: Tensor) -> Tensor:
-    if image.ndim != 2:
-        raise ValueError("Image-plane mapmaking currently supports 2D images only")
-    return image
 
 
 def load_image_observation_weight_map(
@@ -37,9 +32,8 @@ def load_image_observation_weight_map(
             hdu=getattr(obs, "weight_hdu"),
             device=str(device),
         )
-        source_weight = _validate_image_plane_2d(source_weight)
-        if tuple(source_weight.shape) != tuple(image.shape
-        ):
+        source_weight = validate_image_plane_2d(source_weight)
+        if tuple(source_weight.shape) != tuple(image.shape):
             raise ValueError("Weight map shape must match the observation image shape")
         source_weight = source_weight.to(device=device, dtype=torch.float32)
         source_weight = torch.where(
@@ -53,7 +47,7 @@ def load_image_observation_weight_map(
         mask = read(
             getattr(obs, "mask_path"), hdu=getattr(obs, "mask_hdu"), device=str(device)
         )
-        mask = _validate_image_plane_2d(mask)
+        mask = validate_image_plane_2d(mask)
         if tuple(mask.shape) != tuple(image.shape):
             raise ValueError("Mask shape must match the observation image shape")
         mask = mask.to(device=device, dtype=torch.float32)
@@ -70,7 +64,7 @@ def load_image_observation_weight_map(
             hdu=getattr(obs, "primary_beam_hdu"),
             device=str(device),
         )
-        pb = _validate_image_plane_2d(pb)
+        pb = validate_image_plane_2d(pb)
         if tuple(pb.shape) != tuple(image.shape):
             raise ValueError(
                 "primary_beam map shape must match the observation image shape"

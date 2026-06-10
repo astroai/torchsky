@@ -22,7 +22,11 @@ from torchsky.map import (
     plan_image_plane_target,
     stack_map_product,
 )
-from torchsky.map.operators import pixel_area_sr_map, representative_pixel_area_sr
+from torchsky.map.operators import (
+    pixel_area_sr_map,
+    representative_pixel_area_sr,
+    validate_image_plane_2d,
+)
 from torchsky.spectral import SpectralAxis
 
 pytest.importorskip("torchsky.cpp")
@@ -1642,7 +1646,7 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
     )
     obs = ImageObservation(str(path))
     image, header = torchsky.read(str(path), return_header=True)
-    image = image_plane_mod._validate_image_plane(image)
+    image = validate_image_plane_2d(image)
     source_wcs = image_plane_mod.WCS(dict(header))
 
     original_threshold = image_plane_mod._LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS

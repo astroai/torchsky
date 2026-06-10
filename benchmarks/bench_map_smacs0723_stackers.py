@@ -38,10 +38,10 @@ from bench_map_compat import (  # noqa: E402
     _coadd_with_reproject,
     _coadd_with_swarp,
     _geometry_family_for_torchsky_kernel,
-    _headers_equivalent_for_direct_copy,
     _load_weight_map,
     geometry_family_for_library_variant,
 )
+from torchsky.map.operators import headers_equivalent_for_direct_copy  # noqa: E402
 from bench_map_field_fit import (
     _field_fit_kwargs_for_model,
     _field_model_kwargs_for_case,
@@ -634,7 +634,7 @@ def _coadd_with_reproject_exact(
         image = image.to(dtype=torch.float32)
         weight = _load_weight_map(obs, image)
         if (
-            _headers_equivalent_for_direct_copy(dict(header), target_header)
+            headers_equivalent_for_direct_copy(dict(header), target_header)
             and tuple(int(v) for v in image.shape) == target_shape
         ):
             obs_numer = (
@@ -687,7 +687,7 @@ def _coadd_with_reproject_adaptive(
         image = image.to(dtype=torch.float32)
         weight = _load_weight_map(obs, image)
         if (
-            _headers_equivalent_for_direct_copy(dict(header), target_header)
+            headers_equivalent_for_direct_copy(dict(header), target_header)
             and tuple(int(v) for v in image.shape) == target_shape
         ):
             obs_numer = (

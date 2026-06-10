@@ -7,6 +7,8 @@ import sys
 import pytest
 import torch
 
+from torchsky.map.operators import validate_image_plane_2d
+
 pytest.importorskip("torchsky.cpp")
 
 
@@ -439,9 +441,7 @@ def test_distorted_quadrature_batches_world_to_pixel_calls(tmp_path: Path) -> No
         hdu=tpv_obs.observation.hdu,
         return_header=True,
     )
-    image = _truth_bench.image_plane_mod._validate_image_plane(image).to(
-        dtype=torch.float32
-    )
+    image = validate_image_plane_2d(image).to(dtype=torch.float32)
     source_wcs = _truth_bench.WCS(tpv_obs.header)
     prepared_target = _truth_bench.image_plane_mod._prepare_target(
         header=target_header,

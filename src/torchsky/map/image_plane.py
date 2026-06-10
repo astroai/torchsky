@@ -47,6 +47,12 @@ from .operators.execution import (
     wcs_has_distortion,
 )
 from .operators.geometry import InterpolationGeometryOp
+from .operators.image_grid import (
+    headers_equivalent_for_direct_copy,
+    normalized_header_for_shape,
+    target_shape_from_header,
+    validate_image_plane_2d,
+)
 from .operators.mask_weight import load_image_observation_weight_map
 from .operators.noise import ExplicitNoiseOp
 from .operators.pixel_area import (
@@ -259,73 +265,6 @@ def _try_external_drizzle_helpers():
         calc_pixmap,
         estimate_pixel_scale_ratio,
     )
-
-
-def _validate_image_plane(image: Tensor) -> Tensor:
-    if image.ndim != 2:
-        raise ValueError("Image-plane mapmaking currently supports 2D images only")
-    return image
-
-
-def _target_shape_from_header(
-    header: dict,
-    *,
-    fallback: tuple[int, int],
-) -> tuple[int, int]:
-    naxis1 = header.get("NAXIS1")
-    naxis2 = header.get("NAXIS2")
-    if naxis1 is None or naxis2 is None:
-        return fallback
-    width = int(naxis1)
-    height = int(naxis2)
-    if width <= 0 or height <= 0:
-        raise ValueError("Target header must define positive NAXIS1/NAXIS2")
-    return height, width
-
-
-def _normalized_header_for_shape(
-    header: dict,
-    shape: tuple[int, int],
-    *,
-    overrides: Optional[dict] = None,
-) -> dict:
-    out = dict(header)
-    out["NAXIS"] = 2
-    out["NAXIS1"] = int(shape[1])
-    out["NAXIS2"] = int(shape[0])
-    if overrides is not None:
-        out.update(dict(overrides))
-    return out
-
-
-_GRID_EQUIVALENT_IGNORE_KEYS = {
-    "COMMENT",
-    "HISTORY",
-    "SIMPLE",
-    "BITPIX",
-    "EXTEND",
-    "XTENSION",
-    "EXTNAME",
-    "EXTVER",
-    "PCOUNT",
-    "GCOUNT",
-    "CHECKSUM",
-    "DATASUM",
-}
-
-
-def _headers_equivalent_for_direct_copy(source: dict, target: dict) -> bool:
-    def normalize(header: dict) -> dict:
-        out: dict = {}
-        for key, value in header.items():
-            if str(key).endswith("_COMMENT"):
-                continue
-            if key in _GRID_EQUIVALENT_IGNORE_KEYS:
-                continue
-            out[key] = value
-        return out
-
-    return normalize(source) == normalize(target)
 
 
 def _build_target_world_grid(
@@ -1114,8 +1053,8 @@ def _resample_weighted_to_target(
     resampling_kernel: MapResamplingKernel,
     value_semantics: MapValueSemantics,
 ) -> tuple[Tensor, Tensor]:
-    image = _validate_image_plane(image).to(dtype=torch.float32)
-    source_weight = _validate_image_plane(source_weight).to(dtype=torch.float32)
+    image = validate_image_plane_2d(image).to(dtype=torch.float32)
+    source_weight = validate_image_plane_2d(source_weight).to(dtype=torch.float32)
 
     h_src, w_src = image.shape
     target_representative_area_sr = target.representative_pixel_area_sr
@@ -1629,8 +1568,8 @@ def _forward_project_weighted_to_target(
             f"forward projection only supports splat kernels, got {resampling_kernel!r}"
         )
 
-    image = _validate_image_plane(image).to(dtype=torch.float32)
-    source_weight = _validate_image_plane(source_weight).to(dtype=torch.float32)
+    image = validate_image_plane_2d(image).to(dtype=torch.float32)
+    source_weight = validate_image_plane_2d(source_weight).to(dtype=torch.float32)
     h_src, w_src = image.shape
 
     if value_semantics == "flux":
@@ -2205,7 +2144,7 @@ def _project_observation_to_target_chunk(
         image, header = read(
             obs.path, hdu=obs.hdu, return_header=True, device=str(device)
         )
-        image = _validate_image_plane(image)
+        image = validate_image_plane_2d(image)
         header_dict_obs = dict(header)
     image = image.to(device=device)
     prepared_observation = prepare_image_observation_data(
@@ -2222,7 +2161,7 @@ def _project_observation_to_target_chunk(
     prepared_target_view = prepared_target
     target_window = None
     if (
-        _headers_equivalent_for_direct_copy(header_dict_obs, target_header)
+        headers_equivalent_for_direct_copy(header_dict_obs, target_header)
         and tuple(image.shape) == target_shape
     ):
         if value_semantics == "flux":
@@ -2383,9 +2322,9 @@ def plan_image_plane_target(
     ref = observations[reference_index]
     read_dev = str(_resolve_map_device(device))
     image, header = read(ref.path, hdu=ref.hdu, return_header=True, device=read_dev)
-    image = _validate_image_plane(image)
+    image = validate_image_plane_2d(image)
     shape = tuple(image.shape)
-    normalized_header = _normalized_header_for_shape(
+    normalized_header = normalized_header_for_shape(
         dict(header),
         shape,
         overrides=header_overrides,
@@ -2505,7 +2444,7 @@ def _coadd_image_plane_spatial_tiles(
     first_image, first_header = read(
         first.path, hdu=first.hdu, return_header=True, device=read_dev
     )
-    first_image = _validate_image_plane(first_image)
+    first_image = validate_image_plane_2d(first_image)
     device = map_device
     mosaic_surface_brightness_area_scaling: bool | None = None
     if value_semantics == "surface_brightness" and stacking_method == "weighted_mean":
@@ -2591,24 +2530,24 @@ def coadd_image_plane(
     first_image, first_header = read(
         first.path, hdu=first.hdu, return_header=True, device=read_dev
     )
-    first_image = _validate_image_plane(first_image)
+    first_image = validate_image_plane_2d(first_image)
     if target_header is not None and "CRVAL1" in target_header:
-        target_shape = _target_shape_from_header(
+        target_shape = target_shape_from_header(
             target_header,
             fallback=tuple(first_image.shape[-2:]),
         )
-        header_dict = _normalized_header_for_shape(
+        header_dict = normalized_header_for_shape(
             dict(target_header),
             target_shape,
             overrides=None,
         )
     else:
-        header_dict = _normalized_header_for_shape(
+        header_dict = normalized_header_for_shape(
             dict(first_header),
             tuple(first_image.shape[-2:]),
             overrides=target_header,
         )
-        target_shape = _target_shape_from_header(
+        target_shape = target_shape_from_header(
             header_dict,
             fallback=tuple(first_image.shape[-2:]),
         )
@@ -2678,7 +2617,7 @@ def coadd_image_plane(
             image, header = read(
                 obs.path, hdu=obs.hdu, return_header=True, device=read_dev
             )
-            image = _validate_image_plane(image)
+            image = validate_image_plane_2d(image)
             header_dict_obs = dict(header)
         need_prepared_target = (
             value_semantics == "flux"
@@ -2688,7 +2627,7 @@ def coadd_image_plane(
         )
         source_wcs = None
         if need_prepared_target and not (
-            _headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
+            headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
             and tuple(image.shape) == target_shape
         ):
             source_wcs = WCS(header_dict_obs)
@@ -2939,7 +2878,7 @@ def coadd_image_plane_cube(
         return_header=True,
         device=read_dev,
     )
-    first_image = _validate_image_plane(first_image)
+    first_image = validate_image_plane_2d(first_image)
     device = map_device
     header_dict = dict(target.header)
     target_shape = target.shape
@@ -2990,7 +2929,7 @@ def coadd_image_plane_cube(
             image, header = read(
                 obs.path, hdu=obs.hdu, return_header=True, device=read_dev
             )
-            image = _validate_image_plane(image)
+            image = validate_image_plane_2d(image)
             header_dict_obs = dict(header)
         need_prepared_target = (
             value_semantics == "flux"
@@ -3000,7 +2939,7 @@ def coadd_image_plane_cube(
         )
         source_wcs = None
         if need_prepared_target and not (
-            _headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
+            headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
             and tuple(image.shape) == target_shape
         ):
             source_wcs = WCS(header_dict_obs)

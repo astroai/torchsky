@@ -33,6 +33,7 @@ from torchsky.map import (  # noqa: E402
     coadd_image_plane,
     plan_image_plane_target,
 )
+from torchsky.map.operators import headers_equivalent_for_direct_copy  # noqa: E402
 
 try:  # noqa: E402
     import torchsky.cpp  # noqa: F401
@@ -567,38 +568,6 @@ def _write_header_template(path: Path, header: dict[str, Any]) -> None:
     header_astropy.totextfile(str(path), endcard=True, overwrite=True)
 
 
-_GRID_EQUIVALENT_IGNORE_KEYS = {
-    "COMMENT",
-    "HISTORY",
-    "SIMPLE",
-    "BITPIX",
-    "EXTEND",
-    "XTENSION",
-    "EXTNAME",
-    "EXTVER",
-    "PCOUNT",
-    "GCOUNT",
-    "CHECKSUM",
-    "DATASUM",
-}
-
-
-def _headers_equivalent_for_direct_copy(
-    source: dict[str, Any], target: dict[str, Any]
-) -> bool:
-    def normalize(header: dict[str, Any]) -> dict[str, Any]:
-        out: dict[str, Any] = {}
-        for key, value in header.items():
-            if str(key).endswith("_COMMENT"):
-                continue
-            if key in _GRID_EQUIVALENT_IGNORE_KEYS:
-                continue
-            out[key] = value
-        return out
-
-    return normalize(source) == normalize(target)
-
-
 def _target_projection(header: dict[str, Any]) -> str:
     ctype1 = str(header.get("CTYPE1", ""))
     if len(ctype1) < 8:
@@ -807,7 +776,7 @@ def _reproject_weighted_observation(
     target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
 
     if (
-        _headers_equivalent_for_direct_copy(dict(header), target_header)
+        headers_equivalent_for_direct_copy(dict(header), target_header)
         and tuple(int(v) for v in image.shape) == target_shape
     ):
         numer = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
@@ -854,7 +823,7 @@ def _reproject_exact_weighted_observation(
     target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
 
     if (
-        _headers_equivalent_for_direct_copy(dict(header), target_header)
+        headers_equivalent_for_direct_copy(dict(header), target_header)
         and tuple(int(v) for v in image.shape) == target_shape
     ):
         numer = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
@@ -901,7 +870,7 @@ def _dfreproject_weighted_observation(
     target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
 
     if (
-        _headers_equivalent_for_direct_copy(dict(header), target_header)
+        headers_equivalent_for_direct_copy(dict(header), target_header)
         and tuple(int(v) for v in image.shape) == target_shape
     ):
         numer = torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight
@@ -1173,7 +1142,7 @@ def _coadd_with_montage(
                 mode = "mProject"
                 backend_path = str(default_bin)
             if (
-                _headers_equivalent_for_direct_copy(dict(header), target_header)
+                headers_equivalent_for_direct_copy(dict(header), target_header)
                 and tuple(int(v) for v in image.shape) == target_shape
             ):
                 obs_numer = (
@@ -1276,7 +1245,7 @@ def _align_array_to_target(
 ) -> np.ndarray:
     target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
     if (
-        _headers_equivalent_for_direct_copy(header, target_header)
+        headers_equivalent_for_direct_copy(header, target_header)
         and tuple(int(v) for v in array.shape) == target_shape
     ):
         return np.asarray(array, dtype=np.float32)
@@ -1440,7 +1409,7 @@ def _coadd_with_swarp(
             image, header = torchsky.read(obs.path, hdu=obs.hdu, return_header=True)
             image = image.to(dtype=torch.float32)
             if not (
-                _headers_equivalent_for_direct_copy(dict(header), target_header)
+                headers_equivalent_for_direct_copy(dict(header), target_header)
                 and tuple(int(v) for v in image.shape) == target_shape
             ):
                 all_direct_copy = False
