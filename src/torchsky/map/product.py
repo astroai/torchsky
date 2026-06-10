@@ -25,13 +25,15 @@ from .image_plane import (
     PlannedImagePlaneCubeTarget,
     PlannedImagePlaneTarget,
     SpectralCubeMapResult,
-    _validated_map_resampling_kernel,
-    _validated_map_stacking_method,
-    _validated_map_value_semantics,
     coadd_image_plane,
     coadd_image_plane_cube,
     plan_image_plane_cube_target,
     plan_image_plane_target,
+)
+from .operators.config import (
+    validate_map_resampling_kernel,
+    validate_map_stacking_method,
+    validate_map_value_semantics,
 )
 from .operators.pixel_area import pixel_area_sr_map
 from .scenes import ContinuousFieldModel, SceneRepresentation, as_scene_representation
@@ -221,7 +223,7 @@ def plan_map_product(
 ) -> MapProductSpec:
     if footprint_order is not None and int(footprint_order) < 0:
         raise ValueError("footprint_order must be non-negative")
-    value_semantics = _validated_map_value_semantics(value_semantics)
+    value_semantics = validate_map_value_semantics(value_semantics)
     if bands is not None and (
         spectral_axis is not None or spectral_bin_edges is not None
     ):
@@ -425,8 +427,8 @@ def stack_map_product(
 ) -> MapProductResult:
     if method != "coadd":
         raise ValueError("stack_map_product currently supports only method='coadd'")
-    resampling_kernel = _validated_map_resampling_kernel(resampling_kernel)
-    stacking_method = _validated_map_stacking_method(stacking_method)
+    resampling_kernel = validate_map_resampling_kernel(resampling_kernel)
+    stacking_method = validate_map_stacking_method(stacking_method)
     if len(product.bands) == 1:
         band = product.bands[0]
         if band.spectral_min is None and band.spectral_max is None:

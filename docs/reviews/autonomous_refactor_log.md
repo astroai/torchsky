@@ -613,6 +613,27 @@ Start gate: May 8, 2026, `America/Vancouver`
   estimation for projection, flux accounting, and benchmark metrics, reducing
   hidden policy in the image-plane orchestrator.
 
+- Added `torchsky.map.operators.config` for shared map resampling kernels,
+  value semantics, stacking methods, and validators.
+- Updated `image_plane.py` to delegate its private compatibility validators to
+  the shared config module, and updated `product.py` so map-product planning no
+  longer imports private image-plane validators.
+- Exposed the option tuples and validators through `torchsky.map.operators`, and
+  added focused tests for supported values and error reporting.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_map_operator_execution.py tests/test_map_image_plane.py::test_coadd_image_plane_rejects_unknown_value_semantics tests/test_map_image_plane.py::test_coadd_image_plane_rejects_unknown_stacking_method tests/test_map_product.py tests/test_refactor_cohesion_audit.py -q`
+  - Result: `29 passed, 2 warnings`.
+  - `pixi run audit-refactor-cohesion`
+  - Result: `0 failures, 2 warnings`; `image_plane.py` is now `3116` lines,
+    still above the `3000`-line cohesion warning threshold.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+- North Star connection: this gives user-facing map configuration a single
+  reusable validation surface and removes another private dependency from the
+  product-planning layer.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.

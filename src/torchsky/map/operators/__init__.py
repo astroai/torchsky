@@ -34,6 +34,17 @@ from .bundle import (
     merge_operator_bundles,
     spherical_spectral_operator_bundle,
 )
+from .config import (
+    MAP_RESAMPLING_KERNELS,
+    MAP_STACKING_METHODS,
+    MAP_VALUE_SEMANTICS,
+    MapResamplingKernel,
+    MapStackingMethod,
+    MapValueSemantics,
+    validate_map_resampling_kernel,
+    validate_map_stacking_method,
+    validate_map_value_semantics,
+)
 from .geometry import (
     ConservativePolygonRemapOp,
     ExactDrizzleGeometryOp,
@@ -139,6 +150,12 @@ __all__ = [
     "LearnedPSFOp",
     "LearnedSpectralResponseOp",
     "MaskWeightOp",
+    "MAP_RESAMPLING_KERNELS",
+    "MAP_STACKING_METHODS",
+    "MAP_VALUE_SEMANTICS",
+    "MapResamplingKernel",
+    "MapStackingMethod",
+    "MapValueSemantics",
     "NoiseOp",
     "ObservationOperator",
     "ObservationOperatorBundle",
@@ -193,6 +210,9 @@ __all__ = [
     "stack_inputs_from_projected_observation",
     "swap_bundle_operator_families",
     "validate_learned_operator_families",
+    "validate_map_resampling_kernel",
+    "validate_map_stacking_method",
+    "validate_map_value_semantics",
     "wcs_has_distortion",
     "wrapped_delta_ra_deg",
 ]

@@ -10,6 +10,9 @@ from torchsky.map.operators import (
     ExactDrizzleGeometryOp,
     ForwardSplatGeometryOp,
     InterpolationGeometryOp,
+    MAP_RESAMPLING_KERNELS,
+    MAP_STACKING_METHODS,
+    MAP_VALUE_SEMANTICS,
     accumulate_projected_observation,
     finalize_projected_stack,
     is_plain_tan_header,
@@ -22,6 +25,9 @@ from torchsky.map.operators import (
     stack_inputs_from_projected_observation,
     wcs_has_distortion,
     wrapped_delta_ra_deg,
+    validate_map_resampling_kernel,
+    validate_map_stacking_method,
+    validate_map_value_semantics,
 )
 from torchsky.map.operators import execution as execution_mod
 
@@ -262,6 +268,21 @@ def test_pixel_area_helpers_are_positive_and_consistent_for_plain_tan() -> None:
         wrapped_delta_ra_deg(torch.tensor([359.0]), torch.tensor([1.0])),
         torch.tensor([-2.0]),
     )
+
+
+def test_map_config_validators_share_public_option_sets() -> None:
+    assert validate_map_resampling_kernel("bilinear") == "bilinear"
+    assert validate_map_value_semantics("flux") == "flux"
+    assert validate_map_stacking_method("median") == "median"
+    assert "conservative_polygon" in MAP_RESAMPLING_KERNELS
+    assert MAP_VALUE_SEMANTICS == ("surface_brightness", "flux")
+    assert MAP_STACKING_METHODS == ("weighted_mean", "mean", "median")
+    with pytest.raises(ValueError, match="resampling_kernel"):
+        validate_map_resampling_kernel("unsupported")
+    with pytest.raises(ValueError, match="value_semantics"):
+        validate_map_value_semantics("counts")
+    with pytest.raises(ValueError, match="stacking_method"):
+        validate_map_stacking_method("trimmed_mean")
 
 
 def test_stack_inputs_from_projected_observation_applies_flux_area_for_mean_stack() -> (

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import math
 import os
 from pathlib import Path
-from typing import Literal, Optional, Sequence
+from typing import Optional, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -27,6 +27,14 @@ from .fft_affine_ldu import resample_fft_ldu_affine_2d
 from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_fft2d
 from .operators.background import SkyBackgroundOp
 from .operators.bundle import ObservationOperatorBundle
+from .operators.config import (
+    MapResamplingKernel,
+    MapStackingMethod,
+    MapValueSemantics,
+    validate_map_resampling_kernel,
+    validate_map_stacking_method,
+    validate_map_value_semantics,
+)
 from .operators.execution import (
     accumulate_projected_observation,
     finalize_projected_stack,
@@ -52,31 +60,6 @@ from .periodic_affine import resample_linear_affine_periodic_bilinear_2d
 from .spectral_affine import resample_linear_affine_spectral_2d
 from .spectral_nufft import resample_nonuniform_spectral_fast_2d
 from .spectral_nonuniform import resample_nonuniform_spectral_2d
-
-MapResamplingKernel = Literal[
-    "nearest",
-    "bilinear",
-    "bicubic",
-    "lanczos3",
-    "lanczos5",
-    "mitchell_netravali",
-    "catmull_rom",
-    "fft_shift",
-    "fft_diagonal_affine",
-    "periodic_linear_affine",
-    "fft_linear_affine",
-    "spectral_linear_affine",
-    "spectral_nonuniform",
-    "spectral_nonuniform_fast",
-    "drizzle_point",
-    "drizzle_square",
-    "conservative_polygon",
-    "splat_point",
-    "splat_box",
-]
-MapValueSemantics = Literal["surface_brightness", "flux"]
-MapStackingMethod = Literal["weighted_mean", "mean", "median"]
-
 
 # Header probe for area scaling: recoverable failures when reading metadata only.
 def _resolve_map_device(device: torch.device | str | None) -> torch.device:
@@ -1609,39 +1592,13 @@ def _resample_weighted_to_target(
 def _validated_map_resampling_kernel(
     resampling_kernel: str,
 ) -> MapResamplingKernel:
-    allowed = (
-        "nearest",
-        "bilinear",
-        "bicubic",
-        "lanczos3",
-        "lanczos5",
-        "mitchell_netravali",
-        "catmull_rom",
-        "fft_shift",
-        "fft_diagonal_affine",
-        "periodic_linear_affine",
-        "fft_linear_affine",
-        "spectral_linear_affine",
-        "spectral_nonuniform",
-        "spectral_nonuniform_fast",
-        "drizzle_point",
-        "drizzle_square",
-        "conservative_polygon",
-        "splat_point",
-        "splat_box",
-    )
-    if resampling_kernel not in allowed:
-        raise ValueError(f"resampling_kernel must be one of {allowed}")
-    return resampling_kernel
+    return validate_map_resampling_kernel(resampling_kernel)
 
 
 def _validated_map_value_semantics(
     value_semantics: str,
 ) -> MapValueSemantics:
-    allowed = ("surface_brightness", "flux")
-    if value_semantics not in allowed:
-        raise ValueError(f"value_semantics must be one of {allowed}")
-    return value_semantics
+    return validate_map_value_semantics(value_semantics)
 
 
 def _validated_drizzle_pixfrac(drizzle_pixfrac: float) -> float:
@@ -1654,10 +1611,7 @@ def _validated_drizzle_pixfrac(drizzle_pixfrac: float) -> float:
 def _validated_map_stacking_method(
     stacking_method: str,
 ) -> MapStackingMethod:
-    allowed = ("weighted_mean", "mean", "median")
-    if stacking_method not in allowed:
-        raise ValueError(f"stacking_method must be one of {allowed}")
-    return stacking_method
+    return validate_map_stacking_method(stacking_method)
 
 
 def _forward_project_weighted_to_target(
