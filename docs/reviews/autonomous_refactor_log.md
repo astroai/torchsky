@@ -660,6 +660,33 @@ Start gate: May 8, 2026, `America/Vancouver`
   reusable operator module, which reduces monolithic map orchestration and
   keeps diagnostics, benchmarks, and production code on one exact policy.
 
+- Added `torchsky.map.operators.resampling` for reusable image-plane sampling,
+  custom separable kernels, affine WCS pixel-map inference, and periodic
+  resampling finalization helpers.
+- Updated `image_plane.py` to import resampling mechanics from the operator
+  module while keeping target preparation, distortion policy, quadrature, and
+  coadd orchestration local to the image-plane mapmaker.
+- Updated tests, diagnostics, and boundary-support benchmarks to instrument the
+  new resampling module directly instead of reaching into private image-plane
+  sampling helpers.
+- Extended the cohesion audit to check the new resampling helper exports.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_map_image_plane.py::test_sample_image_plane_batched_channels_matches_separate_sampling tests/test_map_image_plane.py::test_coadd_image_plane_passes_resampling_kernel_to_grid_sample tests/test_map_image_plane.py::test_project_observation_large_tan_windowing_matches_full_reprojection tests/test_map_operator_execution.py tests/test_refactor_cohesion_audit.py -q`
+  - Result: `20 passed, 2 warnings`.
+  - `pixi run audit-refactor-cohesion`
+  - Result: `0 failures, 1 warnings`; `image_plane.py` is now `2610` lines,
+    below the `3000`-line cohesion warning threshold. The remaining warning is
+    `field/core.py`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+  - `pixi run -e test -- pytest tests/test_docs_integrity.py -q`
+  - Result: `1 passed`.
+- North Star connection: interpolation and FFT/affine resampling are now
+  reusable, testable operator mechanics rather than private mapmaker internals,
+  which keeps future performance work closer to a single benchmarkable surface.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.

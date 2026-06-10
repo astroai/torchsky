@@ -23,6 +23,7 @@ import bench_map_ground_truth as truth_bench  # noqa: E402
 import bench_map_compat as compat_bench  # noqa: E402
 import torchsky.map.image_plane as image_plane_mod  # noqa: E402
 from torchsky.map import ImageObservation, coadd_image_plane  # noqa: E402
+import torchsky.map.operators.resampling as resampling_mod  # noqa: E402
 from torchsky.map.operators import validate_image_plane_2d  # noqa: E402
 
 
@@ -119,7 +120,7 @@ def _make_boundary_gate_wrapper(margin: float):
         y_norm = (2.0 * y_src / max(h_src - 1, 1)) - 1.0
         grid = torch.stack([x_norm, y_norm], dim=-1).to(dtype=torch.float32)
         stacked = torch.stack([weighted_image, weighted_weight], dim=0)
-        sampled = image_plane_mod._sample_image_plane_batched_channels(
+        sampled = resampling_mod.sample_image_plane_batched_channels(
             stacked,
             x_src=x_src,
             y_src=y_src,
@@ -202,7 +203,7 @@ def _make_coverage_gate_wrapper(min_coverage: float):
         y_norm = (2.0 * y_src / max(h_src - 1, 1)) - 1.0
         grid = torch.stack([x_norm, y_norm], dim=-1).to(dtype=torch.float32)
         stacked = torch.stack([weighted_image, weighted_weight, support_image], dim=0)
-        sampled = image_plane_mod._sample_image_plane_batched_channels(
+        sampled = resampling_mod.sample_image_plane_batched_channels(
             stacked,
             x_src=x_src,
             y_src=y_src,

@@ -21,6 +21,7 @@ if str(BENCHMARKS) not in sys.path:
 
 import bench_map_ground_truth as truth_bench  # noqa: E402
 import torchsky.map.image_plane as image_plane_mod  # noqa: E402
+import torchsky.map.operators.resampling as resampling_mod  # noqa: E402
 from torchsky.map import ImageObservation  # noqa: E402
 from torchsky.map.operators import (  # noqa: E402
     headers_equivalent_for_direct_copy,
@@ -372,8 +373,8 @@ def main() -> int:
                 resample0 = time.perf_counter()
                 with _timed_call(source_wcs, "world_to_pixel", world_to_pixel_calls):
                     with _timed_call(
-                        image_plane_mod,
-                        "_sample_image_plane_batched_channels",
+                        resampling_mod,
+                        "sample_image_plane_batched_channels",
                         sampling_calls,
                     ):
                         sampled_numer, sampled_weight = (

@@ -27,10 +27,10 @@ def test_refactor_cohesion_audit_has_no_hard_failures() -> None:
     assert audit._exit_code(results, strict_warnings=False) == 0
 
 
-def test_refactor_cohesion_audit_keeps_large_file_pressure_visible() -> None:
+def test_refactor_cohesion_audit_keeps_remaining_large_file_pressure_visible() -> None:
     audit = _audit_module()
     results = audit.run_audit(ROOT)
     warnings = [result for result in results if result.status == "warn"]
-    assert any("map/image_plane.py" in result.name for result in warnings)
+    assert not any("map/image_plane.py" in result.name for result in warnings)
     assert any("map/field/core.py" in result.name for result in warnings)
     assert audit._exit_code(results, strict_warnings=True) == 1

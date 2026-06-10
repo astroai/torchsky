@@ -10,6 +10,7 @@ from astropy.io import fits
 
 import torchsky
 import torchsky.map.image_plane as image_plane_mod
+import torchsky.map.operators.resampling as resampling_mod
 from torchsky.map import (
     ImageObservation,
     coadd_image_plane,
@@ -666,13 +667,13 @@ def test_coadd_image_plane_passes_resampling_kernel_to_grid_sample(
     torchsky.write(str(path_b), data + 1.0, header=header_b, overwrite=True)
 
     calls: list[str] = []
-    original = image_plane_mod.F.grid_sample
+    original = resampling_mod.F.grid_sample
 
     def recorded(*args, **kwargs):
         calls.append(kwargs["mode"])
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(image_plane_mod.F, "grid_sample", recorded)
+    monkeypatch.setattr(resampling_mod.F, "grid_sample", recorded)
 
     result = coadd_image_plane(
         [ImageObservation(str(path_a)), ImageObservation(str(path_b))],
@@ -703,7 +704,7 @@ def test_sample_image_plane_batched_channels_matches_separate_sampling(
     )
     stacked = torch.stack([image, weight, support], dim=0)
 
-    combined = image_plane_mod._sample_image_plane_batched_channels(
+    combined = resampling_mod.sample_image_plane_batched_channels(
         stacked,
         x_src=x_src,
         y_src=y_src,
@@ -712,7 +713,7 @@ def test_sample_image_plane_batched_channels_matches_separate_sampling(
     )
     separate = torch.stack(
         [
-            image_plane_mod._sample_image_plane_batched(
+            resampling_mod.sample_image_plane_batched(
                 plane,
                 x_src=x_src,
                 y_src=y_src,
@@ -786,13 +787,13 @@ def test_coadd_image_plane_forward_geometry_kernels_bypass_grid_sample(
     torchsky.write(str(path_b), data + 1.0, header=header_b, overwrite=True)
 
     calls: list[str] = []
-    original = image_plane_mod.F.grid_sample
+    original = resampling_mod.F.grid_sample
 
     def recorded(*args, **kwargs):
         calls.append(kwargs["mode"])
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(image_plane_mod.F, "grid_sample", recorded)
+    monkeypatch.setattr(resampling_mod.F, "grid_sample", recorded)
 
     result = coadd_image_plane(
         [ImageObservation(str(path_a)), ImageObservation(str(path_b))],
