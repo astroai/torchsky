@@ -67,6 +67,15 @@ from .learned import (
     swap_bundle_operator_families,
     validate_learned_operator_families,
 )
+from .learned_kernel import (
+    AffineRadiometry,
+    ConstrainedKernelPSF,
+    GatedResidualOperator,
+    InstrumentStateEncoder,
+    LearnedInstrumentOperator,
+    SubPixelShift,
+    gaussian_kernel2d,
+)
 from .mask_weight import load_image_observation_weight_map
 from .noise import ExplicitNoiseOp, LearnedNoiseOp, sanitize_inverse_variance
 from .psf import (
@@ -92,7 +101,9 @@ from .spectral import (
 __all__ = [
     "BackgroundOp",
     "BackgroundFitSummary",
+    "AffineRadiometry",
     "ConservativePolygonRemapOp",
+    "ConstrainedKernelPSF",
     "DEFAULT_LEARNED_OPERATOR_CONDITIONING",
     "LEARNED_OPERATOR_FAMILIES",
     "LEARNED_OPERATOR_REGISTRY",
@@ -106,10 +117,13 @@ __all__ = [
     "ExplicitSpectralResponseOp",
     "ForwardSplatGeometryOp",
     "GeometryOp",
+    "GatedResidualOperator",
     "InstrumentBackgroundOp",
+    "InstrumentStateEncoder",
     "InterpolationGeometryOp",
     "LearnedBackgroundOp",
     "LearnedGeometryOp",
+    "LearnedInstrumentOperator",
     "LearnedNoiseOp",
     "LearnedOperatorManifest",
     "LearnedOperatorScaffold",
@@ -129,6 +143,7 @@ __all__ = [
     "SkyBackgroundOp",
     "SpectralGlobalGeometryOp",
     "SpectralResponseOp",
+    "SubPixelShift",
     "apply_background_components",
     "apply_image_observation_calibration",
     "apply_kernel2d",
@@ -144,6 +159,7 @@ __all__ = [
     "field_observations_operator_bundle",
     "fit_background_plane",
     "gaussian_blur",
+    "gaussian_kernel2d",
     "gaussian_kernel1d",
     "geometry_op_for_kernel",
     "image_observation_operator_bundle",

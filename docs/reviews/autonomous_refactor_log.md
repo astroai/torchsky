@@ -504,6 +504,23 @@ Start gate: May 8, 2026, `America/Vancouver`
   modelling while preserving the torch-native expert model families needed for
   ambitious multi-wavelength survey-scale experiments.
 
+- Promoted constrained learned instrument-operator components through
+  `torchsky.map.operators`: `ConstrainedKernelPSF`, `AffineRadiometry`,
+  `SubPixelShift`, `GatedResidualOperator`, `InstrumentStateEncoder`, and
+  `LearnedInstrumentOperator`.
+- Kept the operator family constrained by construction: positive unit-sum PSF
+  basis kernels, affine radiometry initialized from caller-provided gains,
+  zero-gated nonlinear residuals, and staged training controls.
+- Added focused tests for flux conservation, conditioning, identity-at-init
+  residuals, radiometry initialization, differentiable sub-pixel shifts,
+  masked instrument-state pooling, and curriculum gradients.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_learned_kernel_operators.py tests/test_map_learned_ops.py tests/test_map_operator_bundle.py tests/test_docs_integrity.py -q`
+  - Result: `23 passed, 2 warnings`.
+- North Star connection: this gives future field-fitting work a torch-native
+  learned-instrument path that can absorb real survey nuisance structure without
+  collapsing the scene model into unconstrained black-box corrections.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.

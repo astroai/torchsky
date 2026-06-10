@@ -126,6 +126,8 @@ Experimental field/INR layer (tutorial: [field.md](field.md), losses/context:
   `render_field_healpix(...)`
 - SIREN/WIRE, Fourier, spectral-basis, sky-encoder, hash-grid, and
   operator-constrained field factories.
+- `ConstrainedKernelPSF`, `AffineRadiometry`, `SubPixelShift`, and
+  `LearnedInstrumentOperator` for constrained learned instrument effects.
 
 ## Resampling And Value Semantics
 
