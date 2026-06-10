@@ -363,16 +363,37 @@ Start gate: May 8, 2026, `America/Vancouver`
   - Result: `17 passed, 36 deselected, 2 warnings`.
 - North Star connection: this keeps root read APIs as intentional public
   wrappers while removing obsolete private hooks from the root namespace.
+- Expanded `torchsky.io` into the complete canonical FITS I/O namespace by
+  adding direct private-engine routes for `open_subset_reader`, HDU
+  insert/replace/delete, checksum helpers, batch helpers, and cache helpers.
+  Root remains a compatibility facade for existing users.
+- Added a routing regression that monkeypatches the root helpers and verifies
+  the `torchsky.io` helpers still mutate HDUs, write/verify checksums, report
+  batch/cache status, and clear caches without delegating back to root.
+- Updated `docs/io.md` to state the completed B-stage API split: root keeps
+  compatibility names, while `torchsky.io` is the canonical namespace-oriented
+  FITS surface.
+- Tests run:
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run -e test -- pytest tests/test_io.py tests/test_writing.py tests/test_hdu_file_ops.py tests/test_checksum.py tests/test_cache.py tests/test_api.py -k 'io or read_batch or cache_functions or namespace or checksum or read_hdus or read_image or read_table' tests/test_cold_import.py -q`
+  - Result: `61 passed, 62 deselected, 2 warnings`.
+  - `pixi run ci-local`
+  - Result: `1590 passed, 61 skipped, 1 xfailed, 88 warnings`.
+- North Star connection: this finishes the B-stage architecture direction by
+  making the root package a stable public facade and `torchsky.io` the complete
+  direct implementation namespace for FITS I/O, without adding runtime
+  dependencies or changing tensor/device semantics.
 
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.
 - [x] A1: Declare the public modelling spine in docs and API-surface metadata.
 - [x] A2: Add or tighten tests for public API tiers and cold import behavior.
-- [ ] B1: Extract root FITS I/O implementation without user-visible churn.
+- [x] B1: Extract root FITS I/O implementation without user-visible churn.
 - [x] B2: Move Python-side root I/O caches behind a single cache facade.
-- [ ] B3: Make `torchsky.io` call the implementation directly.
-- [ ] B4: Preserve root FITS public behavior.
+- [x] B3: Make `torchsky.io` call the implementation directly.
+- [x] B4: Preserve root FITS public behavior.
 - [ ] C1: Add promoted observation/product/scene facades.
 - [ ] C2: Define executable operator protocols or adapters.
 - [ ] D1: Move HEALPix ownership toward `torchsky.sphere`.

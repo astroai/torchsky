@@ -1,8 +1,9 @@
 # `torchsky.io` And Root FITS I/O
 
-`torchsky` keeps high-frequency FITS operations at the package root.
-`torchsky.io` exposes the core read/write/HDU subset for namespace-oriented
-code, while a few convenience and mutation helpers remain root-package APIs.
+`torchsky` keeps high-frequency FITS operations at the package root for
+compatibility. `torchsky.io` is the canonical namespace-oriented FITS surface:
+it exposes the same core readers/writers plus HDU mutation, checksum, batch,
+streaming, and cache helpers through direct private-engine routes.
 
 ## What This Namespace Is For
 
@@ -83,8 +84,8 @@ Root writers and mutations:
 - `torchsky.write_checksums(...)`
 - `torchsky.verify_checksums(...)`
 
-Checksum helpers are package-callable as qualified names. They are not part of
-the `from torchsky import *` surface.
+Checksum helpers are package-callable as qualified root names and through
+`torchsky.io`.
 
 HDU and header objects:
 
@@ -103,9 +104,12 @@ Root batch/runtime helpers:
 - `torchsky.clear_file_cache(...)`
 - `torchsky.configure_for_environment(...)`
 
-`torchsky.io` re-exports the core I/O subset (`read`, `read_image`,
-`read_table`, `read_hdus`, `read_subset`, `open`, `write`, `get_header`,
-`get_wcs`, streaming table helpers, HDU/header types, table interop helpers, and
+`torchsky.io` re-exports the complete FITS I/O helper set (`read`,
+`read_image`, `read_table`, `read_hdus`, `read_subset`,
+`open_subset_reader`, `open`, `write`, `insert_hdu`, `replace_hdu`,
+`delete_hdu`, `write_checksums`, `verify_checksums`, `get_header`, `get_wcs`,
+`read_batch`, `get_batch_info`, `get_cache_performance`, `clear_file_cache`,
+streaming table helpers, HDU/header types, table interop helpers, and
 dataloader helpers).
 
 ## Examples

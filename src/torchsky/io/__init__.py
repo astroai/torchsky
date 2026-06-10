@@ -20,11 +20,19 @@ from ..datasets import FITSDataset, IterableFITSDataset, TableChunkDataset
 from ..frame import read_tensor_frame, to_tensor_frame, write_tensor_frame
 from ..hdu import Card, HDUList, Header, TableHDU, TableHDURef, TensorHDU
 from ..interop import to_arrow, to_pandas, to_polars
+from .._io_engine.batch import (
+    get_batch_info as _get_batch_info_impl,
+    read_batch as _read_batch_impl,
+)
 from .._io_engine.caches import (
     check_read_cache as _check_read_cache_impl,
+    clear_file_cache as _clear_file_cache_impl,
+    get_cache_performance as _get_cache_performance_impl,
     get_cached_handle as _get_cached_handle_impl,
     invalidate_path_caches as _invalidate_path_caches_impl,
 )
+from .._io_engine.checksum_api import verify_checksums as _verify_checksums_impl
+from .._io_engine.checksum_api import write_checksums as _write_checksums_impl
 from .._io_engine.hdu_api import autodetect_hdu as _autodetect_hdu_impl
 from .._io_engine.hdu_api import get_header as _get_header_impl
 from .._io_engine.hdu_api import get_wcs as _get_wcs_impl
@@ -39,12 +47,16 @@ from .._io_engine.image_meta import (
     should_use_cold_nommap as _should_use_cold_nommap_impl,
 )
 from .._io_engine.read_dispatch import read_unified as _read_unified_impl
+from .._io_engine.subset import open_subset_reader as _open_subset_reader_impl
 from .._io_engine.subset import read_subset as _read_subset_impl
 from .._io_engine.table_api import read_table as _read_table_impl
 from .._io_engine.table_streaming import (
     read_large_table as _read_large_table_impl,
 )
 from .._io_engine.table_streaming import stream_table as _stream_table_impl
+from .._io_engine.write_api import delete_hdu as _delete_hdu_impl
+from .._io_engine.write_api import insert_hdu as _insert_hdu_impl
+from .._io_engine.write_api import replace_hdu as _replace_hdu_impl
 from .._io_engine.write_api import write as _write_impl
 
 _log = _stdlib_logging.getLogger(__name__)
@@ -184,12 +196,28 @@ def read_subset(
     )
 
 
+def open_subset_reader(*args: Any, **kwargs: Any):
+    return _open_subset_reader_impl(*args, **kwargs)
+
+
 def open(*args: Any, **kwargs: Any):
     return _open_hdulist_impl(*args, **kwargs)
 
 
 def write(*args: Any, **kwargs: Any):
     return _write_impl(*args, **kwargs)
+
+
+def insert_hdu(*args: Any, **kwargs: Any):
+    return _insert_hdu_impl(*args, **kwargs)
+
+
+def replace_hdu(*args: Any, **kwargs: Any):
+    return _replace_hdu_impl(*args, **kwargs)
+
+
+def delete_hdu(*args: Any, **kwargs: Any):
+    return _delete_hdu_impl(*args, **kwargs)
 
 
 def get_header(path: str, hdu: Any = None):
@@ -208,6 +236,44 @@ def read_large_table(*args: Any, **kwargs: Any):
     return _read_large_table_impl(get_header, *args, **kwargs)
 
 
+def read_batch(
+    file_paths: list[str],
+    hdu: int = 0,
+    device: str = "cpu",
+    *,
+    strict: bool = False,
+):
+    return _read_batch_impl(
+        read_func=read,
+        read_exc_types=_READ_EXC_TYPES,
+        log=_log,
+        file_paths=file_paths,
+        hdu=hdu,
+        device=device,
+        strict=strict,
+    )
+
+
+def get_batch_info(file_paths: list[str]):
+    return _get_batch_info_impl(file_paths)
+
+
+def get_cache_performance():
+    return _get_cache_performance_impl()
+
+
+def clear_file_cache(*args: Any, **kwargs: Any):
+    return _clear_file_cache_impl(*args, **kwargs)
+
+
+def write_checksums(*args: Any, **kwargs: Any):
+    return _write_checksums_impl(*args, **kwargs)
+
+
+def verify_checksums(*args: Any, **kwargs: Any):
+    return _verify_checksums_impl(*args, **kwargs)
+
+
 __all__ = [
     "FITSDataset",
     "HDUList",
@@ -218,14 +284,21 @@ __all__ = [
     "TableHDU",
     "TableHDURef",
     "TensorHDU",
+    "clear_file_cache",
     "create_dataloader",
     "create_fits_dataloader",
     "create_streaming_dataloader",
     "create_table_dataloader",
+    "delete_hdu",
+    "get_batch_info",
+    "get_cache_performance",
     "get_header",
     "get_wcs",
+    "insert_hdu",
     "open",
+    "open_subset_reader",
     "read",
+    "read_batch",
     "read_fast",
     "read_hdus",
     "read_image",
@@ -233,13 +306,16 @@ __all__ = [
     "read_subset",
     "read_table",
     "read_tensor_frame",
+    "replace_hdu",
     "stream_table",
     "table",
     "to_arrow",
     "to_pandas",
     "to_polars",
     "to_tensor_frame",
+    "verify_checksums",
     "write",
+    "write_checksums",
     "write_tensor_frame",
 ]
 

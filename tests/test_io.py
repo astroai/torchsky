@@ -2,6 +2,7 @@ import pytest
 import torch
 from unittest import mock
 
+import torchsky
 from torchsky import io
 
 
@@ -104,6 +105,45 @@ class TestIORead:
         """Test reading multiple HDUs from a single path."""
         io.read("file.fits", hdu=[0, 1])
         mock_cpp.read_hdus_batch.assert_called_once_with("file.fits", [0, 1])
+
+    def test_full_io_helpers_do_not_delegate_to_root(self, tmp_path, monkeypatch):
+        """Namespace helpers should route to the private engine, not root wrappers."""
+        path = tmp_path / "io_helpers.fits"
+        io.write(str(path), torch.arange(4, dtype=torch.float32).reshape(2, 2))
+
+        def fail_root_helper(*args, **kwargs):
+            raise AssertionError("torchsky.io helper delegated to the root facade")
+
+        for name in (
+            "insert_hdu",
+            "replace_hdu",
+            "delete_hdu",
+            "write_checksums",
+            "verify_checksums",
+            "read_batch",
+            "get_batch_info",
+            "get_cache_performance",
+            "clear_file_cache",
+        ):
+            monkeypatch.setattr(torchsky, name, fail_root_helper)
+
+        io.insert_hdu(
+            str(path),
+            torch.ones((2, 2), dtype=torch.float32),
+            index=1,
+            header={"EXTNAME": "SCI"},
+        )
+        io.replace_hdu(str(path), "SCI", torch.full((2, 2), 2.0))
+        torch.testing.assert_close(io.read(str(path), hdu=1, mmap=False), torch.full((2, 2), 2.0))
+        io.delete_hdu(str(path), 1)
+
+        io.write_checksums(str(path), hdu=0)
+        assert io.verify_checksums(str(path), hdu=0)["ok"] is True
+
+        assert io.read_batch([]) == []
+        assert io.get_batch_info([]) == {"num_files": 0, "valid_files": 0}
+        assert "hit_rate" in io.get_cache_performance()
+        io.clear_file_cache(cpp=False)
 
     def test_read_fp16(self, mock_cpp, mock_flags):
         """Test fp16 conversion."""
