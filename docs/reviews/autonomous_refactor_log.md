@@ -12,8 +12,8 @@ Start gate: May 8, 2026, `America/Vancouver`
   `docs/reviews/autonomous_refactor_launch.md`.
 - Backward compatibility for unused alias namespaces is no longer a goal; the
   public API should stay clean and route users to the owning modules.
-- Next recommended slice: E1, adding narrow `torchsky info` and `torchsky cat`
-  CLI workflows.
+- Active slice: F1, rationalizing field model exposure through presets and
+  factories.
 
 ## Daily Entries
 
@@ -464,6 +464,26 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: this reduces jargon-heavy duplicate import paths and
   makes the world pillar easier to learn: WCS owns coordinate transforms and
   sphere owns sky geometry, pixelization, MOC, sparse maps, and harmonics.
+- Added read-only CLI inspection workflows:
+  - `torchsky info PATH` prints HDU summaries without materializing data;
+  - `torchsky info PATH --json` emits automation-friendly JSON, with optional
+    `--headers`;
+  - `torchsky cat PATH --hdu ... --columns ... --rows ...` prints a bounded
+    table sample;
+  - `torchsky cat ... --json` emits row dictionaries with JSON-safe tensor
+    scalars/lists.
+- Added focused CLI tests for JSON and text output on image/table FITS fixtures,
+  and updated `docs/cli.md` / `docs/api.md`.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_cli_inspect.py tests/test_cli_map.py tests/test_api.py::test_map_cli_exposes_resampling_kernel_option tests/test_docs_integrity.py -q`
+  - Result: `12 passed, 2 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+- North Star connection: this gives agents and users a low-jargon, read-only
+  shell surface for inspecting FITS files and table samples before building
+  heavier map or modelling workflows.
 
 ## Work Queue Snapshot
 
@@ -478,6 +498,6 @@ Start gate: May 8, 2026, `America/Vancouver`
 - [x] C2: Define executable operator protocols or adapters.
 - [x] D1: Move HEALPix ownership toward `torchsky.sphere`.
 - [x] D2: Remove leftover HEALPix, coords, and geom alias surfaces.
-- [ ] E1: Add `torchsky info` and `torchsky cat` CLI workflows.
+- [x] E1: Add `torchsky info` and `torchsky cat` CLI workflows.
 - [ ] F1: Rationalize field model exposure through presets and factories.
 - [ ] G1: Continue roadmap implementation from `docs/roadmap/status.md`.

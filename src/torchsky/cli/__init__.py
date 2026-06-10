@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+from .inspect_command import register_inspect_parsers
 from .map_command import register_map_parser
 
 
@@ -131,6 +132,7 @@ def _viz_handler(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="torchsky")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    register_inspect_parsers(subparsers)
     register_map_parser(subparsers)
     _register_viz_parser(subparsers)
     return parser

@@ -24,6 +24,7 @@ For the high-level design target and refactor rules, see
 | Work with spectra and cubes | `torchsky.spectral` | [spectral.md](spectral.md) |
 | Build PyTorch datasets/loaders | `torchsky.FITSDataset`, `torchsky.transforms`, root loader/cache helpers | [ml.md](ml.md) |
 | Use field encoders | `torchsky.encoders` | [encoders.md](encoders.md) |
+| Inspect FITS files from a shell | `torchsky info`, `torchsky cat` | [cli.md](cli.md) |
 | Run the browser viewer | `torchsky.viz`, `torchsky viz` | [viz.md](viz.md), [cli.md](cli.md) |
 
 ## Stable Surface Tiers

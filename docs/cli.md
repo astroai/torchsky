@@ -10,6 +10,28 @@ Python API when composing tensor-native pipelines inside another application.
 
 ## Commands
 
+### `torchsky info`
+
+Prints a read-only FITS HDU summary without materializing image/table data:
+
+```bash
+torchsky info image_or_table.fits
+torchsky info image_or_table.fits --json
+```
+
+Use `--headers` when an automation needs per-HDU header cards in the output.
+
+### `torchsky cat`
+
+Prints a bounded sample from a FITS table HDU:
+
+```bash
+torchsky cat catalog.fits --hdu CAT --columns RA,DEC --rows 5
+torchsky cat catalog.fits --hdu 1 --rows 5 --json
+```
+
+`--start-row` is 1-based, matching the Python table-read API.
+
 ### `torchsky viz`
 
 Starts the optional browser viewer. Install the `viz` extra first:
