@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 
+from torchsky import WCS
 from torchsky.map import ImageObservation
 from torchsky.map.operators import (
     ConservativePolygonRemapOp,
@@ -13,6 +14,7 @@ from torchsky.map.operators import (
     masked_median_stack,
     prepare_image_observation_data,
     project_image_observation_geometry,
+    source_bbox_on_target,
     stack_inputs_from_projected_observation,
 )
 from torchsky.map.operators import execution as execution_mod
@@ -167,6 +169,38 @@ def test_project_image_observation_geometry_dispatches_by_operator_family(
     assert calls == ["drizzle_square", "conservative"]
     assert splat_calls == ["splat"]
     assert resample_calls == ["interp"]
+
+
+def test_source_bbox_on_target_clips_plain_tan_source_boundary() -> None:
+    source_header = {
+        "NAXIS": 2,
+        "NAXIS1": 8,
+        "NAXIS2": 8,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 4.0,
+        "CRPIX2": 4.0,
+        "CRVAL1": 12.0,
+        "CRVAL2": -3.0,
+        "CDELT1": -0.01,
+        "CDELT2": 0.01,
+    }
+    target_header = dict(source_header)
+    target_header["NAXIS1"] = 16
+    target_header["NAXIS2"] = 16
+    target_header["CRPIX1"] = 8.0
+    target_header["CRPIX2"] = 8.0
+
+    bbox = source_bbox_on_target(
+        WCS(source_header),
+        (8, 8),
+        WCS(target_header),
+        (16, 16),
+        margin=1,
+        edge_samples=5,
+    )
+
+    assert bbox == (2, 14, 2, 14)
 
 
 def test_stack_inputs_from_projected_observation_applies_flux_area_for_mean_stack() -> (

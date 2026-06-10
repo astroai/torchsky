@@ -1714,6 +1714,54 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
     assert forced_weight.sum().item() > 0.0
 
 
+def test_project_observation_window_no_overlap_skips_geometry(monkeypatch) -> None:
+    source_header = _simple_header()
+    image = torch.ones((8, 8), dtype=torch.float32)
+    target_header = dict(source_header)
+    target_header["CRVAL1"] = target_header["CRVAL1"] + 10.0
+    target_shape = (8, 8)
+    prepared_target = image_plane_mod._prepare_target(
+        header=target_header,
+        target_wcs=image_plane_mod.WCS(target_header),
+        target_shape=target_shape,
+        device=torch.device("cpu"),
+        include_pixel_area=False,
+        include_representative_pixel_area=True,
+        include_quadrature=False,
+    )
+
+    def no_overlap_window(**kwargs):
+        return None, (0, 0, 0, 0)
+
+    def fail_projection(*args, **kwargs):
+        raise AssertionError("no-overlap window must not call geometry projection")
+
+    monkeypatch.setattr(image_plane_mod, "_window_large_tan_target", no_overlap_window)
+    monkeypatch.setattr(
+        image_plane_mod, "project_image_observation_geometry", fail_projection
+    )
+
+    projected = image_plane_mod._project_observation_to_target_chunk(
+        ImageObservation("mock.fits"),
+        image=image,
+        header_dict_obs=source_header,
+        source_wcs=image_plane_mod.WCS(source_header),
+        prepared_target=prepared_target,
+        target_header=target_header,
+        target_shape=target_shape,
+        device=torch.device("cpu"),
+        footprint_order=None,
+        resampling_kernel="bilinear",
+        value_semantics="surface_brightness",
+        drizzle_pixfrac=1.0,
+    )
+
+    assert projected.target_window == (0, 0, 0, 0)
+    assert projected.numer.shape == (0, 0)
+    assert projected.weight.shape == (0, 0)
+    assert projected.overlap.shape == (0, 0)
+
+
 def test_surface_brightness_area_scaling_gate_uses_target_vs_harmonic_source_scale(
     tmp_path: Path,
 ) -> None:

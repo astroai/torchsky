@@ -33,6 +33,7 @@ from .operators.execution import (
     masked_median_stack,
     prepare_image_observation_data,
     project_image_observation_geometry,
+    source_bbox_on_target,
     stack_inputs_from_projected_observation,
 )
 from .operators.geometry import InterpolationGeometryOp
@@ -1971,58 +1972,6 @@ def _is_plain_tan_header(header: dict) -> bool:
     ).endswith("TAN")
 
 
-def _source_bbox_on_target(
-    source_wcs: WCS,
-    source_shape: tuple[int, int],
-    target_wcs: WCS,
-    target_shape: tuple[int, int],
-    *,
-    margin: int,
-    edge_samples: int,
-) -> tuple[int, int, int, int] | None:
-    h_src, w_src = int(source_shape[0]), int(source_shape[1])
-    edge_samples = max(int(edge_samples), 2)
-    xs = torch.linspace(
-        0.0,
-        float(w_src - 1),
-        steps=edge_samples,
-        dtype=torch.float64,
-        device=source_wcs.device,
-    )
-    ys = torch.linspace(
-        0.0,
-        float(h_src - 1),
-        steps=edge_samples,
-        dtype=torch.float64,
-        device=source_wcs.device,
-    )
-    top_x = xs
-    top_y = torch.zeros_like(xs)
-    bottom_x = xs
-    bottom_y = torch.full_like(xs, float(h_src - 1))
-    left_x = torch.zeros_like(ys)
-    left_y = ys
-    right_x = torch.full_like(ys, float(w_src - 1))
-    right_y = ys
-    x_src = torch.cat([top_x, bottom_x, left_x, right_x], dim=0)
-    y_src = torch.cat([top_y, bottom_y, left_y, right_y], dim=0)
-    ra_deg, dec_deg = source_wcs.pixel_to_world(x_src, y_src)
-    x_tgt, y_tgt = target_wcs.world_to_pixel(ra_deg, dec_deg)
-    finite = torch.isfinite(x_tgt) & torch.isfinite(y_tgt)
-    if not bool(finite.any()):
-        return None
-    x_good = x_tgt[finite]
-    y_good = y_tgt[finite]
-    height, width = int(target_shape[0]), int(target_shape[1])
-    x0 = max(int(torch.floor(x_good.min()).item()) - margin, 0)
-    x1 = min(int(torch.ceil(x_good.max()).item()) + margin + 1, width)
-    y0 = max(int(torch.floor(y_good.min()).item()) - margin, 0)
-    y1 = min(int(torch.ceil(y_good.max()).item()) + margin + 1, height)
-    if x0 >= x1 or y0 >= y1:
-        return None
-    return y0, y1, x0, x1
-
-
 def _slice_prepared_target(
     target: _PreparedImagePlaneTarget,
     *,
@@ -2079,7 +2028,7 @@ def _window_large_tan_target(
         getattr(source_wcs, "_is_tpv", False)
     ):
         return target, None
-    bbox = _source_bbox_on_target(
+    bbox = source_bbox_on_target(
         source_wcs,
         source_shape,
         target.wcs,
@@ -2412,21 +2361,24 @@ def _project_observation_to_target_chunk(
         if prepared_target_view is None:
             sampled_numer = torch.zeros((0, 0), dtype=torch.float32, device=device)
             sampled_weight = torch.zeros((0, 0), dtype=torch.float32, device=device)
-        sampled_numer, sampled_weight = project_image_observation_geometry(
-            image,
-            source_weight,
-            source_wcs,
-            prepared_target_view,
-            geometry=operator_bundle.geometry,
-            resampling_kernel=resampling_kernel,
-            value_semantics=value_semantics,
-            drizzle_pixfrac=drizzle_pixfrac,
-            pixel_area_sr_map_fn=_pixel_area_sr_map,
-            representative_pixel_area_fn=_representative_pixel_area_sr,
-            chunk_pixels=_DRIZZLE_FORWARD_CHUNK_PIXELS,
-            resample_weighted_to_target_fn=_resample_weighted_to_target,
-            forward_project_weighted_to_target_fn=_forward_project_weighted_to_target,
-        )
+        else:
+            sampled_numer, sampled_weight = project_image_observation_geometry(
+                image,
+                source_weight,
+                source_wcs,
+                prepared_target_view,
+                geometry=operator_bundle.geometry,
+                resampling_kernel=resampling_kernel,
+                value_semantics=value_semantics,
+                drizzle_pixfrac=drizzle_pixfrac,
+                pixel_area_sr_map_fn=_pixel_area_sr_map,
+                representative_pixel_area_fn=_representative_pixel_area_sr,
+                chunk_pixels=_DRIZZLE_FORWARD_CHUNK_PIXELS,
+                resample_weighted_to_target_fn=_resample_weighted_to_target,
+                forward_project_weighted_to_target_fn=(
+                    _forward_project_weighted_to_target
+                ),
+            )
     overlap = (sampled_weight > 0.0).to(torch.int32)
     moc = None
     if footprint_order is not None:

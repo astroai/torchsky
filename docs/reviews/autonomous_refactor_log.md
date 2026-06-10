@@ -521,6 +521,28 @@ Start gate: May 8, 2026, `America/Vancouver`
   learned-instrument path that can absorb real survey nuisance structure without
   collapsing the scene model into unconstrained black-box corrections.
 
+- Started G1 map-architecture work by moving source-to-target window bbox
+  planning out of `map/image_plane.py` into
+  `torchsky.map.operators.execution.source_bbox_on_target(...)`, then exposing
+  it through `torchsky.map.operators`.
+- Kept private target slicing local to `image_plane.py` because it depends on
+  the private prepared-target dataclass, but routed the geometry decision
+  through the operator execution module.
+- Fixed the large-TAN no-overlap branch so it returns an empty projection
+  instead of falling through into geometry projection with a `None` target view.
+- Added focused tests for clipped source-boundary bbox planning and no-overlap
+  window handling.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_map_operator_execution.py tests/test_map_operator_bundle.py tests/test_map_image_plane.py::test_project_observation_large_tan_windowing_matches_full_reprojection tests/test_map_image_plane.py::test_project_observation_window_no_overlap_skips_geometry -q`
+  - Result: `20 passed, 2 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+- North Star connection: this continues moving map projection policy toward the
+  shared operator execution substrate, while preserving the large-map windowing
+  path needed for survey-scale coadds.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.

@@ -53,6 +53,7 @@ from .execution import (
     PreparedImageObservationData,
     prepare_image_observation_data,
     project_image_observation_geometry,
+    source_bbox_on_target,
     stack_inputs_from_projected_observation,
 )
 from .learned import (
@@ -169,6 +170,7 @@ __all__ = [
     "prepare_image_observation_data",
     "project_image_observation_geometry",
     "spherical_spectral_operator_bundle",
+    "source_bbox_on_target",
     "learned_operator_manifest",
     "load_image_observation_weight_map",
     "make_minimal_learned_operator_scaffold",
