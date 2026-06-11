@@ -103,6 +103,11 @@ REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
         "sample_observation_pixels",
         "crop_field_observation",
     ),
+    "src/torchsky/map/field/forwarding.py": (
+        "call_scalar_field_forward",
+        "call_render_bandpass",
+        "type_method_accepts_kwarg",
+    ),
     "src/torchsky/map/__init__.py": (
         "make_field_model_preset",
         "ObservationOperatorBundle",
@@ -136,9 +141,25 @@ REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
     ),
 }
 
-WARN_LINE_LIMITS = {
-    "src/torchsky/map/image_plane.py": 3_000,
-    "src/torchsky/map/field/core.py": 6_000,
+FORBIDDEN_SOURCE_PHRASES: Mapping[str, tuple[str, ...]] = {
+    "src/torchsky/map/field/core.py": (
+        "def _call_scalar_field_forward",
+        "def _call_render_bandpass",
+        "def _type_method_accepts_kwarg",
+        "def _bandpass_quadrature",
+        "def _bandpass_response",
+        "def _mixture_mc_samples",
+        "def _sample_observation_indices",
+        "def _sample_observation_pixels",
+        "def _crop_field_observation",
+        "def _coordinate_grid",
+    ),
+    "src/torchsky/map/image_plane.py": (
+        "def _sample_image_plane_batched_channels",
+        "def _infer_linear_affine_pixel_map",
+        "def _headers_equivalent_for_direct_copy",
+        "def _target_shape_from_header",
+    ),
 }
 
 
@@ -255,17 +276,31 @@ def check_source_exports(root: Path) -> list[AuditResult]:
     return results
 
 
-def check_line_limits(root: Path) -> list[AuditResult]:
+def check_source_boundaries(root: Path) -> list[AuditResult]:
     results: list[AuditResult] = []
-    for relpath, limit in WARN_LINE_LIMITS.items():
+    for relpath, phrases in FORBIDDEN_SOURCE_PHRASES.items():
         path = root / relpath
         if not path.exists():
             results.append(AuditResult(f"cohesion:{relpath}", "fail", "missing"))
             continue
-        line_count = len(path.read_text(encoding="utf-8").splitlines())
-        status = "warn" if line_count > limit else "pass"
-        detail = f"{line_count} lines; warning threshold is {limit}"
-        results.append(AuditResult(f"cohesion:{relpath}", status, detail))
+        text = path.read_text(encoding="utf-8")
+        present = [phrase for phrase in phrases if phrase in text]
+        if present:
+            results.append(
+                AuditResult(
+                    f"cohesion:{relpath}",
+                    "fail",
+                    f"extracted helpers moved back into core module: {present}",
+                )
+            )
+        else:
+            results.append(
+                AuditResult(
+                    f"cohesion:{relpath}",
+                    "pass",
+                    "extracted helper boundaries preserved",
+                )
+            )
     return results
 
 
@@ -275,7 +310,7 @@ def run_audit(root: Path = ROOT) -> list[AuditResult]:
         *check_files(root),
         *check_docs(root),
         *check_source_exports(root),
-        *check_line_limits(root),
+        *check_source_boundaries(root),
     ]
 
 
@@ -293,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--strict-warnings",
         action="store_true",
-        help="treat cohesion warnings, such as large files, as failures",
+        help="treat any audit warnings as failures",
     )
     args = parser.parse_args(argv)
 

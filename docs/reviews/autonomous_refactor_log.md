@@ -717,6 +717,29 @@ Start gate: May 8, 2026, `America/Vancouver`
   clearer primitive names, while reusable observation/bandpass mechanics are no
   longer hidden inside the model-zoo core module.
 
+- Reworked `audit-refactor-cohesion` to stop using line-count thresholds.
+  Cohesion is now checked through structural boundaries:
+  - required field/map helper modules and concise field namespace exports must
+    exist;
+  - helpers already extracted from `image_plane.py` and `field/core.py` must not
+    move back into those orchestration/model modules.
+- Extracted field forward-dispatch helpers into `torchsky.map.field.forwarding`
+  so context-aware calls to `forward`, `render_bandpass`, and distribution
+  methods are reusable plumbing rather than embedded core-model code.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_refactor_cohesion_audit.py tests/test_api.py::test_field_namespace_uses_short_composable_verbs tests/test_implicit_forward.py::test_render_field_observation_passes_forward_context_when_supported tests/test_implicit_forward.py::test_fit_field_model_threads_observation_forward_contexts -q`
+  - Result: `5 passed, 2 warnings`.
+  - `pixi run audit-refactor-cohesion`
+  - Result: `0 failures, 0 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+  - `pixi run -e test -- pytest tests/test_docs_integrity.py -q`
+  - Result: `1 passed`.
+- North Star connection: the audit now encourages clean architecture and API
+  boundaries directly instead of optimizing for arbitrary file sizes.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.

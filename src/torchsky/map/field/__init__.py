@@ -17,7 +17,7 @@ Submodules
 
 from __future__ import annotations
 
-from . import bandpass, observation_ops
+from . import bandpass, forwarding, observation_ops
 from .core import (
     BandpassConditionedField,
     ConditionedSpectralField,
@@ -156,6 +156,7 @@ __all__ = [
     "field_observations_from_bin_centers",
     "field_observations_from_bin_edges",
     "field_observations_from_ifu_cube",
+    "forwarding",
     "get_field_model_preset",
     "is_recommended_field_model",
     "ifu_cube_spectral_to_leading",
