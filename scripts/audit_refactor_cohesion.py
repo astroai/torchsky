@@ -108,6 +108,11 @@ REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
         "call_render_bandpass",
         "type_method_accepts_kwarg",
     ),
+    "src/torchsky/map/field/hashgrid.py": (
+        "HashGridEncoder",
+        "hash_grid_smoothstep",
+        "sample_feature_plane",
+    ),
     "src/torchsky/map/__init__.py": (
         "make_field_model_preset",
         "ObservationOperatorBundle",
@@ -153,6 +158,9 @@ FORBIDDEN_SOURCE_PHRASES: Mapping[str, tuple[str, ...]] = {
         "def _sample_observation_pixels",
         "def _crop_field_observation",
         "def _coordinate_grid",
+        "def _hash_grid_smoothstep",
+        "def _sample_feature_plane",
+        "class _HashGridEncoder",
     ),
     "src/torchsky/map/image_plane.py": (
         "def _sample_image_plane_batched_channels",

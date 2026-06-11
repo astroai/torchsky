@@ -17,7 +17,7 @@ Submodules
 
 from __future__ import annotations
 
-from . import bandpass, forwarding, observation_ops
+from . import bandpass, forwarding, hashgrid, observation_ops
 from .core import (
     BandpassConditionedField,
     ConditionedSpectralField,
@@ -158,6 +158,7 @@ __all__ = [
     "field_observations_from_ifu_cube",
     "forwarding",
     "get_field_model_preset",
+    "hashgrid",
     "is_recommended_field_model",
     "ifu_cube_spectral_to_leading",
     "make_tangent_plane_header",

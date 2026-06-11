@@ -29,10 +29,8 @@ from torchsky.map import (
 from torchsky.spectral import SpectralAxis
 from torchsky.map.field import _noise_pretrain_field_model
 from torchsky.map.field.bandpass import bandpass_quadrature
-from torchsky.map.field.core import (
-    _BaseFieldModel,
-    _HashGridEncoder,
-)
+from torchsky.map.field.core import _BaseFieldModel
+from torchsky.map.field.hashgrid import HashGridEncoder
 
 
 def _tan_header(
@@ -3124,11 +3122,11 @@ def test_hashgrid_conditioned_field_supports_exact_wavelength_fit() -> None:
 
 def test_hashgrid_encoder_rejects_mismatched_log2_sequence() -> None:
     with pytest.raises(ValueError, match="log2_hashmap_size"):
-        _HashGridEncoder(2, num_levels=4, log2_hashmap_size=(10, 11, 12))
+        HashGridEncoder(2, num_levels=4, log2_hashmap_size=(10, 11, 12))
 
 
 def test_hashgrid_encoder_coarse_dense_fine_hash() -> None:
-    enc = _HashGridEncoder(
+    enc = HashGridEncoder(
         2,
         num_levels=5,
         base_resolution=8,

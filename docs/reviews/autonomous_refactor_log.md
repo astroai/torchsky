@@ -740,6 +740,30 @@ Start gate: May 8, 2026, `America/Vancouver`
 - North Star connection: the audit now encourages clean architecture and API
   boundaries directly instead of optimizing for arbitrary file sizes.
 
+- Extracted hash-grid and feature-plane encoding mechanics into
+  `torchsky.map.field.hashgrid`.
+- Kept the public user-facing field API lean: the new module is reusable by
+  field implementations and tests, while high-level users still compose through
+  `torchsky.field.model`, `torchsky.field.fit`, `torchsky.field.render`, and
+  `torchsky.field.sample`.
+- Extended `audit-refactor-cohesion` so the new hash-grid module is required and
+  the old private hash-grid helpers cannot drift back into
+  `torchsky.map.field.core`.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_map_field.py::test_hashgrid_encoder_rejects_mismatched_log2_sequence tests/test_map_field.py::test_hashgrid_encoder_coarse_dense_fine_hash tests/test_refactor_cohesion_audit.py -q`
+  - Result: `4 passed, 2 warnings`.
+  - `pixi run audit-refactor-cohesion`
+  - Result: `0 failures, 0 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+  - `pixi run -e test -- pytest tests/test_docs_integrity.py -q`
+  - Result: `1 passed`.
+- North Star connection: hash-grid encoding is a performance-sensitive field
+  primitive, so it now has a direct module boundary for future benchmarking and
+  reuse instead of living inside the overloaded model core.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.
