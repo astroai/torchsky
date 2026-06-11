@@ -21,10 +21,13 @@ from . import (
     bandpass,
     forwarding,
     hashgrid,
+    losses,
     networks,
+    noise,
     observation_ops,
     rendering,
     sky_encoding,
+    training,
 )
 from .core import (
     BandpassConditionedField,
@@ -53,8 +56,6 @@ from .core import (
     estimate_field_domain,
     field_component_anchor_loss,
     field_component_centroid_anchor_loss,
-    fit_field_model,
-    fit_field_component_decomposition,
     make_field_model,
     make_field_component_decomposition,
     STRAINER_TRUNK_CHECKPOINT_FORMAT,
@@ -62,7 +63,6 @@ from .core import (
     pretrain_strainer_trunk_synthetic,
     save_strainer_trunk_checkpoint,
     _BaseFieldModel,
-    _noise_pretrain_field_model,
 )
 from .rendering import (
     evaluate_field_coordinates_vmapped,
@@ -73,6 +73,11 @@ from .rendering import (
     render_field_observation_distribution,
     render_field_samples,
     render_field_samples_distribution,
+)
+from .training import (
+    fit_field_component_decomposition,
+    fit_field_model,
+    _noise_pretrain_field_model,
 )
 from .implicit_forward import (
     KinematicState,
@@ -211,10 +216,12 @@ __all__ = [
     "rendering",
     "STRAINER_TRUNK_CHECKPOINT_FORMAT",
     "load_strainer_trunk_checkpoint",
+    "losses",
     "pretrain_strainer_trunk_synthetic",
     "save_strainer_trunk_checkpoint",
     "multi_survey_charbonnier_loss",
     "networks",
+    "noise",
     "observation_charbonnier_loss",
     "observation_ops",
     "predict_observation_mean",
@@ -223,6 +230,7 @@ __all__ = [
     "suggest_num_spectral_samples",
     "suggest_spectral_model_capacity",
     "sky_encoding",
+    "training",
     "_BaseFieldModel",
     "_noise_pretrain_field_model",
 ]

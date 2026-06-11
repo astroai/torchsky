@@ -39,13 +39,13 @@ from ..map.field.core import (
     StrainerSkyEncoderMLPField as StrainerSkyEncoderMLP,
     WireImplicitField as Wire,
     estimate_field_domain as estimate_domain,
-    evaluate_field_coordinates_vmapped as evaluate,
     field_component_anchor_loss as component_anchor_loss,
     field_component_centroid_anchor_loss as centroid_anchor_loss,
-    fit_field_component_decomposition as fit_component_decomposition,
-    fit_field_model as fit,
     make_field_component_decomposition as component_decomposition,
     make_field_model as model,
+)
+from ..map.field.rendering import (
+    evaluate_field_coordinates_vmapped as evaluate,
     render_field_cube,
     render_field_cube_via_healpix,
     render_field_healpix,
@@ -53,6 +53,10 @@ from ..map.field.core import (
     render_field_observation_distribution,
     render_field_samples,
     render_field_samples_distribution,
+)
+from ..map.field.training import (
+    fit_field_component_decomposition as fit_component_decomposition,
+    fit_field_model as fit,
 )
 from ..map.field.observation_builders import (
     field_observations_from_bin_centers,

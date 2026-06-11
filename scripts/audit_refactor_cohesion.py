@@ -127,6 +127,17 @@ REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
         "render_field_cube",
         "evaluate_field_coordinates_vmapped",
     ),
+    "src/torchsky/map/field/losses.py": (
+        "_field_residual_loss",
+    ),
+    "src/torchsky/map/field/noise.py": (
+        "_synthetic_noise_target",
+    ),
+    "src/torchsky/map/field/training.py": (
+        "fit_field_model",
+        "fit_field_component_decomposition",
+        "_noise_pretrain_field_model",
+    ),
     "src/torchsky/map/__init__.py": (
         "make_field_model_preset",
         "ObservationOperatorBundle",
@@ -185,6 +196,10 @@ FORBIDDEN_SOURCE_PHRASES: Mapping[str, tuple[str, ...]] = {
         "def render_field_observation",
         "def render_field_cube",
         "def evaluate_field_coordinates_vmapped",
+        "def _field_residual_loss",
+        "def _noise_pretrain_field_model",
+        "def fit_field_model",
+        "def fit_field_component_decomposition",
     ),
     "src/torchsky/map/image_plane.py": (
         "def _sample_image_plane_batched_channels",

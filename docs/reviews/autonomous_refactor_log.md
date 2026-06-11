@@ -814,6 +814,30 @@ Start gate: May 8, 2026, `America/Vancouver`
   observation, cube, HEALPix, tiled, and vmap evaluation instead of being mixed
   into model definitions.
 
+- Extracted field fitting and noise-pretraining loops into
+  `torchsky.map.field.training`.
+- Extracted shared residual-loss logic into `torchsky.map.field.losses` and
+  synthetic-noise targets into `torchsky.map.field.noise`, so `core.py` and
+  training code share the helpers without a circular dependency.
+- Redirected public `fit_field_model`, `fit_field_component_decomposition`, and
+  `_noise_pretrain_field_model` exports through the new training module.
+- Extended `audit-refactor-cohesion` so training, loss, and noise helpers are
+  required outside `field/core.py`.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_map_field.py::test_fit_field_model_reduces_loss_and_renders_cube tests/test_map_field.py::test_noise_pretraining_updates_trunk_but_restores_decoder_head tests/test_map_field.py::test_fit_field_model_supports_pixel_sampled_training tests/test_map_field.py::test_fit_field_model_supports_mixture_mc_training tests/test_map_field_strainer.py tests/test_field_fit_bundle.py tests/test_refactor_cohesion_audit.py -q`
+  - Result: `16 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_docs_integrity.py tests/test_api.py::test_field_namespace_uses_short_composable_verbs -q`
+  - Result: `2 passed, 2 warnings`.
+  - `pixi run audit-refactor-cohesion`
+  - Result: `0 failures, 0 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+- North Star connection: `field/core.py` is now mostly model definitions,
+  factories, and decomposition regularizers, while fitting policy and optimizer
+  orchestration live in a module named for the job.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.
