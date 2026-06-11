@@ -122,6 +122,11 @@ REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
         "make_sky_coordinate_encoder",
         "sky_encoder_output_dim",
     ),
+    "src/torchsky/map/field/rendering.py": (
+        "render_field_observation",
+        "render_field_cube",
+        "evaluate_field_coordinates_vmapped",
+    ),
     "src/torchsky/map/__init__.py": (
         "make_field_model_preset",
         "ObservationOperatorBundle",
@@ -177,6 +182,9 @@ FORBIDDEN_SOURCE_PHRASES: Mapping[str, tuple[str, ...]] = {
         "def _silu_mlp_sequential",
         "def _reset_silu_mlp_linears",
         "def _reset_logflux_readout_linear",
+        "def render_field_observation",
+        "def render_field_cube",
+        "def evaluate_field_coordinates_vmapped",
     ),
     "src/torchsky/map/image_plane.py": (
         "def _sample_image_plane_batched_channels",

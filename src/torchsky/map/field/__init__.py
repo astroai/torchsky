@@ -17,7 +17,15 @@ Submodules
 
 from __future__ import annotations
 
-from . import bandpass, forwarding, hashgrid, networks, observation_ops, sky_encoding
+from . import (
+    bandpass,
+    forwarding,
+    hashgrid,
+    networks,
+    observation_ops,
+    rendering,
+    sky_encoding,
+)
 from .core import (
     BandpassConditionedField,
     ConditionedSpectralField,
@@ -49,6 +57,14 @@ from .core import (
     fit_field_component_decomposition,
     make_field_model,
     make_field_component_decomposition,
+    STRAINER_TRUNK_CHECKPOINT_FORMAT,
+    load_strainer_trunk_checkpoint,
+    pretrain_strainer_trunk_synthetic,
+    save_strainer_trunk_checkpoint,
+    _BaseFieldModel,
+    _noise_pretrain_field_model,
+)
+from .rendering import (
     evaluate_field_coordinates_vmapped,
     render_field_cube,
     render_field_cube_via_healpix,
@@ -57,12 +73,6 @@ from .core import (
     render_field_observation_distribution,
     render_field_samples,
     render_field_samples_distribution,
-    STRAINER_TRUNK_CHECKPOINT_FORMAT,
-    load_strainer_trunk_checkpoint,
-    pretrain_strainer_trunk_synthetic,
-    save_strainer_trunk_checkpoint,
-    _BaseFieldModel,
-    _noise_pretrain_field_model,
 )
 from .implicit_forward import (
     KinematicState,
@@ -198,6 +208,7 @@ __all__ = [
     "render_field_observation_distribution",
     "render_field_samples",
     "render_field_samples_distribution",
+    "rendering",
     "STRAINER_TRUNK_CHECKPOINT_FORMAT",
     "load_strainer_trunk_checkpoint",
     "pretrain_strainer_trunk_synthetic",

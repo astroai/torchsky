@@ -19,7 +19,7 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from .core import _header_shape
+from .observation_ops import header_shape as _header_shape
 from .types import FieldObservation, FieldSpectralQuantity
 
 

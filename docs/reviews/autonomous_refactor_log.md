@@ -791,6 +791,29 @@ Start gate: May 8, 2026, `America/Vancouver`
   composition, while reusable network and encoding primitives have direct module
   homes for future reuse and benchmarking.
 
+- Extracted field rendering and coordinate evaluation into
+  `torchsky.map.field.rendering`.
+- Redirected public rendering exports through the new module while preserving the
+  existing `torchsky.map` / `torchsky.map.field` names.
+- Removed a stale `observation_builders -> core` helper dependency by importing
+  header-shape logic from `torchsky.map.field.observation_ops`.
+- Extended `audit-refactor-cohesion` so rendering helpers cannot drift back into
+  `field/core.py`.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_map_field_render_scale.py tests/test_implicit_forward.py::test_render_field_observation_passes_forward_context_when_supported tests/test_map_background_ops.py tests/test_refactor_cohesion_audit.py -q`
+  - Result: `17 passed, 2 warnings`.
+  - `pixi run audit-refactor-cohesion`
+  - Result: `0 failures, 0 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+  - `pixi run -e test -- pytest tests/test_docs_integrity.py -q`
+  - Result: `1 passed`.
+- North Star connection: rendering is now a reusable execution surface for
+  observation, cube, HEALPix, tiled, and vmap evaluation instead of being mixed
+  into model definitions.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.
