@@ -821,6 +821,8 @@ Start gate: May 8, 2026, `America/Vancouver`
   training code share the helpers without a circular dependency.
 - Redirected public `fit_field_model`, `fit_field_component_decomposition`, and
   `_noise_pretrain_field_model` exports through the new training module.
+- Redirected scene-product field rendering to import from
+  `torchsky.map.field.rendering` instead of the old core module.
 - Extended `audit-refactor-cohesion` so training, loss, and noise helpers are
   required outside `field/core.py`.
 - Tests run:
@@ -828,12 +830,16 @@ Start gate: May 8, 2026, `America/Vancouver`
   - Result: `16 passed, 2 warnings`.
   - `pixi run -e test -- pytest tests/test_docs_integrity.py tests/test_api.py::test_field_namespace_uses_short_composable_verbs -q`
   - Result: `2 passed, 2 warnings`.
+  - `pixi run -e test -- pytest --lf -q`
+  - Result after fixing the stale scene import: `114 passed, 4 skipped, 2 warnings`.
   - `pixi run audit-refactor-cohesion`
   - Result: `0 failures, 0 warnings`.
   - `pixi run preflight-push`
   - Result: `All checks passed`.
   - `pixi run typecheck`
   - Result: `0 errors, 0 warnings, 0 informations`.
+  - `pixi run test`
+  - Result: `1618 passed, 61 skipped, 1 xfailed, 88 warnings`.
 - North Star connection: `field/core.py` is now mostly model definitions,
   factories, and decomposition regularizers, while fitting policy and optimizer
   orchestration live in a module named for the job.

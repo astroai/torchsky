@@ -281,7 +281,7 @@ class ContinuousFieldModel(SceneRepresentation):
                 target,
                 device=kwargs.get("device"),
             )
-        from .field.core import render_field_observation
+        from .field.rendering import render_field_observation
 
         return render_field_observation(
             self.model,
@@ -300,7 +300,7 @@ class ContinuousFieldModel(SceneRepresentation):
                 target,
                 device=kwargs.get("device"),
             )
-        from .field.core import render_field_observation_distribution
+        from .field.rendering import render_field_observation_distribution
 
         if callable(
             getattr(self.model, "render_bandpass_distribution", None)
