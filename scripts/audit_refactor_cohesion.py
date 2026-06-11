@@ -113,6 +113,15 @@ REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
         "hash_grid_smoothstep",
         "sample_feature_plane",
     ),
+    "src/torchsky/map/field/networks.py": (
+        "ResidualMLPBlock",
+        "ResidualStack",
+        "silu_mlp_sequential",
+    ),
+    "src/torchsky/map/field/sky_encoding.py": (
+        "make_sky_coordinate_encoder",
+        "sky_encoder_output_dim",
+    ),
     "src/torchsky/map/__init__.py": (
         "make_field_model_preset",
         "ObservationOperatorBundle",
@@ -161,6 +170,13 @@ FORBIDDEN_SOURCE_PHRASES: Mapping[str, tuple[str, ...]] = {
         "def _hash_grid_smoothstep",
         "def _sample_feature_plane",
         "class _HashGridEncoder",
+        "class _ResidualMLPBlock",
+        "class _ResidualStack",
+        "def _make_sky_coordinate_encoder",
+        "def _sky_encoder_output_dim",
+        "def _silu_mlp_sequential",
+        "def _reset_silu_mlp_linears",
+        "def _reset_logflux_readout_linear",
     ),
     "src/torchsky/map/image_plane.py": (
         "def _sample_image_plane_batched_channels",

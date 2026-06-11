@@ -14,7 +14,6 @@ from torch import Tensor
 
 from ... import WCS
 from ...device import default_compute_device, resolve_fit_device
-from ...encoders import SkyCoordinateEncoder, sky_encoder_fourier_min_frequency
 from ...spectral import SpectralAxis
 from ...sphere import healpix as _healpix_wcs
 
@@ -43,6 +42,13 @@ from .forwarding import (
     call_scalar_field_forward as _call_scalar_field_forward,
 )
 from .hashgrid import HashGridEncoder, sample_feature_plane
+from .networks import (
+    ResidualMLPBlock,
+    ResidualStack,
+    reset_logflux_readout_linear,
+    reset_silu_mlp_linears,
+    silu_mlp_sequential,
+)
 from .observation_ops import (
     apply_exposure_pose_to_sky_grid as _apply_exposure_pose_to_sky_grid,
     avg_pool_map as _avg_pool_map,
@@ -57,6 +63,7 @@ from .observation_ops import (
     sample_patch_origin as _sample_patch_origin,
     wrapped_delta_ra_deg as _wrapped_delta_ra_deg,
 )
+from .sky_encoding import make_sky_coordinate_encoder, sky_encoder_output_dim
 from .types import (
     FieldComponentAnchorTerm,
     FieldCentroidAnchorTerm,
@@ -1923,13 +1930,13 @@ class SkyEncoderBandpassField(_BaseFieldModel):
     ) -> None:
         super().__init__(domain)
         self.num_bandpass_frequencies = int(num_bandpass_frequencies)
-        self.encoder = _make_sky_coordinate_encoder(
+        self.encoder = make_sky_coordinate_encoder(
             domain,
             num_fourier_frequencies=num_fourier_frequencies,
             spectral_frequencies=spectral_frequencies,
             scale_fourier_to_domain=scale_fourier_to_domain,
         )
-        encoded_dim = _sky_encoder_output_dim(self.encoder)
+        encoded_dim = sky_encoder_output_dim(self.encoder)
         bandpass_in_dim = 4 + 2 * max(self.num_bandpass_frequencies, 0)
         self.bandpass_hidden = nn.Sequential(
             nn.Linear(bandpass_in_dim, bandpass_hidden_dim),
@@ -1952,8 +1959,8 @@ class SkyEncoderBandpassField(_BaseFieldModel):
             if type(module) is nn.Linear:
                 nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
                 nn.init.zeros_(module.bias)
-        _reset_silu_mlp_linears(self.hidden)
-        _reset_logflux_readout_linear(self.output)
+        reset_silu_mlp_linears(self.hidden)
+        reset_logflux_readout_linear(self.output)
 
     def _bandpass_features(self, wavelengths: Tensor, weights: Tensor) -> Tensor:
         lam = (
@@ -2282,96 +2289,6 @@ class HashGridConditionedField(_BaseFieldModel):
         return F.softplus(out) + 1.0e-4
 
 
-class _ResidualMLPBlock(nn.Module):
-    def __init__(self, hidden_dim: int) -> None:
-        super().__init__()
-        self.fc1 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.norm = nn.LayerNorm(hidden_dim)
-        self.act = nn.SiLU()
-        self._reset_parameters()
-
-    def _reset_parameters(self) -> None:
-        nn.init.xavier_uniform_(self.fc1.weight)
-        nn.init.zeros_(self.fc1.bias)
-        nn.init.xavier_uniform_(self.fc2.weight)
-        nn.init.zeros_(self.fc2.bias)
-
-    def forward(self, x: Tensor) -> Tensor:
-        residual = x
-        x = self.act(self.fc1(x))
-        x = self.fc2(x)
-        return self.act(self.norm(residual + x))
-
-
-class _ResidualStack(nn.Module):
-    def __init__(self, hidden_dim: int, num_blocks: int) -> None:
-        super().__init__()
-        self.blocks = nn.ModuleList(
-            [_ResidualMLPBlock(hidden_dim) for _ in range(max(int(num_blocks), 0))]
-        )
-
-    def forward(self, x: Tensor) -> Tensor:
-        for block in self.blocks:
-            x = block(x)
-        return x
-
-
-def _make_sky_coordinate_encoder(
-    domain: FieldDomain,
-    *,
-    num_fourier_frequencies: int,
-    spectral_frequencies: int,
-    include_degree2: bool = True,
-    scale_fourier_to_domain: bool = True,
-) -> SkyCoordinateEncoder:
-    min_freq = 1.0
-    if scale_fourier_to_domain:
-        min_freq = sky_encoder_fourier_min_frequency(
-            patch_extent_deg=float(domain.spatial_scale_deg),
-        )
-    return SkyCoordinateEncoder(
-        num_fourier_frequencies=num_fourier_frequencies,
-        spectral_frequencies=spectral_frequencies,
-        include_degree2=include_degree2,
-        min_frequency=min_freq,
-    )
-
-
-def _sky_encoder_output_dim(encoder: SkyCoordinateEncoder) -> int:
-    with torch.no_grad():
-        tensor = encoder(
-            torch.zeros(1, dtype=torch.float64),
-            torch.zeros(1, dtype=torch.float64),
-            wavelength=torch.ones(1, dtype=torch.float64),
-        )
-    return int(tensor.shape[-1])
-
-
-def _silu_mlp_sequential(
-    in_dim: int, hidden_dim: int, hidden_layers: int
-) -> nn.Sequential:
-    layers: list[nn.Module] = []
-    current_dim = in_dim
-    for _ in range(max(int(hidden_layers), 1)):
-        layers.append(nn.Linear(current_dim, hidden_dim))
-        layers.append(nn.SiLU())
-        current_dim = hidden_dim
-    return nn.Sequential(*layers)
-
-
-def _reset_silu_mlp_linears(sequence: nn.Sequential) -> None:
-    for module in sequence:
-        if type(module) is nn.Linear:
-            nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
-            nn.init.zeros_(module.bias)
-
-
-def _reset_logflux_readout_linear(linear: nn.Linear) -> None:
-    nn.init.uniform_(linear.weight, -1e-2, 1e-2)
-    nn.init.constant_(linear.bias, -3.0)
-
-
 class SkyEncoderMLPField(_BaseFieldModel):
     def __init__(
         self,
@@ -2384,20 +2301,20 @@ class SkyEncoderMLPField(_BaseFieldModel):
         scale_fourier_to_domain: bool = True,
     ) -> None:
         super().__init__(domain)
-        self.encoder = _make_sky_coordinate_encoder(
+        self.encoder = make_sky_coordinate_encoder(
             domain,
             num_fourier_frequencies=num_fourier_frequencies,
             spectral_frequencies=spectral_frequencies,
             scale_fourier_to_domain=scale_fourier_to_domain,
         )
-        in_dim = _sky_encoder_output_dim(self.encoder)
-        self.hidden = _silu_mlp_sequential(in_dim, hidden_dim, hidden_layers)
+        in_dim = sky_encoder_output_dim(self.encoder)
+        self.hidden = silu_mlp_sequential(in_dim, hidden_dim, hidden_layers)
         self.output = nn.Linear(hidden_dim, 1)
         self._reset_parameters()
 
     def _reset_parameters(self) -> None:
-        _reset_silu_mlp_linears(self.hidden)
-        _reset_logflux_readout_linear(self.output)
+        reset_silu_mlp_linears(self.hidden)
+        reset_logflux_readout_linear(self.output)
 
     def forward(
         self,
@@ -2441,14 +2358,14 @@ class StrainerSkyEncoderMLPField(_BaseFieldModel):
         scale_fourier_to_domain: bool = True,
     ) -> None:
         super().__init__(domain)
-        self.encoder = _make_sky_coordinate_encoder(
+        self.encoder = make_sky_coordinate_encoder(
             domain,
             num_fourier_frequencies=num_fourier_frequencies,
             spectral_frequencies=spectral_frequencies,
             scale_fourier_to_domain=scale_fourier_to_domain,
         )
-        in_dim = _sky_encoder_output_dim(self.encoder)
-        self.body = _silu_mlp_sequential(in_dim, hidden_dim, hidden_layers)
+        in_dim = sky_encoder_output_dim(self.encoder)
+        self.body = silu_mlp_sequential(in_dim, hidden_dim, hidden_layers)
         self.decoder_head = nn.Linear(hidden_dim, 1)
         self._reset_parameters()
 
@@ -2457,8 +2374,8 @@ class StrainerSkyEncoderMLPField(_BaseFieldModel):
         return self.decoder_head
 
     def _reset_parameters(self) -> None:
-        _reset_silu_mlp_linears(self.body)
-        _reset_logflux_readout_linear(self.decoder_head)
+        reset_silu_mlp_linears(self.body)
+        reset_logflux_readout_linear(self.decoder_head)
 
     def reset_decoder_head(self, *, bias_init: float = -3.0) -> None:
         nn.init.uniform_(self.decoder_head.weight, -1e-2, 1e-2)
@@ -2667,16 +2584,16 @@ class SkyEncoderResMLPField(_BaseFieldModel):
     ) -> None:
         super().__init__(domain)
         self.multiscale_readout = bool(multiscale_readout)
-        self.encoder = _make_sky_coordinate_encoder(
+        self.encoder = make_sky_coordinate_encoder(
             domain,
             num_fourier_frequencies=num_fourier_frequencies,
             spectral_frequencies=spectral_frequencies,
             scale_fourier_to_domain=scale_fourier_to_domain,
         )
-        in_dim = _sky_encoder_output_dim(self.encoder)
+        in_dim = sky_encoder_output_dim(self.encoder)
         self.input = nn.Linear(in_dim, hidden_dim)
         self.blocks = nn.ModuleList(
-            [_ResidualMLPBlock(hidden_dim) for _ in range(max(int(num_blocks), 1))]
+            [ResidualMLPBlock(hidden_dim) for _ in range(max(int(num_blocks), 1))]
         )
         if self.multiscale_readout:
             stacked_dim = hidden_dim * (1 + len(self.blocks))
@@ -2844,7 +2761,7 @@ class HashGridResMLPField(_BaseFieldModel):
         in_dim = self.coord_dim + num_levels * features_per_level
         self.input = nn.Linear(in_dim, hidden_dim)
         self.blocks = nn.ModuleList(
-            [_ResidualMLPBlock(hidden_dim) for _ in range(max(int(num_res_blocks), 1))]
+            [ResidualMLPBlock(hidden_dim) for _ in range(max(int(num_res_blocks), 1))]
         )
         self.output = nn.Linear(hidden_dim, 1)
         self._reset_parameters()
@@ -3285,7 +3202,7 @@ class SkyLambdaFeatureField(_BaseFieldModel):
                 nn.Sequential(
                     nn.Linear(per_scale_dim, self.scale_hidden_dim),
                     nn.SiLU(),
-                    _ResidualStack(self.scale_hidden_dim, int(scale_num_blocks)),
+                    ResidualStack(self.scale_hidden_dim, int(scale_num_blocks)),
                 )
                 for _ in range(self.num_scales)
             ]
@@ -3305,7 +3222,7 @@ class SkyLambdaFeatureField(_BaseFieldModel):
             self.global_encoder = nn.Sequential(
                 nn.Linear(self.spatial_dim + 1, self.global_hidden_dim),
                 nn.SiLU(),
-                _ResidualStack(self.global_hidden_dim, int(global_num_blocks)),
+                ResidualStack(self.global_hidden_dim, int(global_num_blocks)),
             )
         else:
             self.global_encoder = None
@@ -3320,7 +3237,7 @@ class SkyLambdaFeatureField(_BaseFieldModel):
                 int(decoder_hidden_dim),
             ),
             nn.SiLU(),
-            _ResidualStack(int(decoder_hidden_dim), int(decoder_num_blocks)),
+            ResidualStack(int(decoder_hidden_dim), int(decoder_num_blocks)),
         )
         self.base_output = nn.Linear(int(decoder_hidden_dim), 1)
         self.refine = nn.Sequential(
@@ -3901,7 +3818,7 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
                 nn.Sequential(
                     nn.Linear(per_scale_dim, self.scale_hidden_dim),
                     nn.SiLU(),
-                    _ResidualStack(self.scale_hidden_dim, int(scale_num_blocks)),
+                    ResidualStack(self.scale_hidden_dim, int(scale_num_blocks)),
                 )
                 for _ in range(self.num_scales)
             ]
@@ -3941,7 +3858,7 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
                 int(decoder_hidden_dim),
             ),
             nn.SiLU(),
-            _ResidualStack(int(decoder_hidden_dim), int(decoder_num_blocks)),
+            ResidualStack(int(decoder_hidden_dim), int(decoder_num_blocks)),
         )
         self.base_output = nn.Linear(int(decoder_hidden_dim), 1)
         self.refine = nn.Sequential(

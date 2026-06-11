@@ -764,6 +764,33 @@ Start gate: May 8, 2026, `America/Vancouver`
   primitive, so it now has a direct module boundary for future benchmarking and
   reuse instead of living inside the overloaded model core.
 
+- Extracted generic field network building blocks into
+  `torchsky.map.field.networks`:
+  - residual MLP block/stack;
+  - shared SiLU MLP construction;
+  - shared log-flux readout initialization.
+- Extracted sky-coordinate encoder construction helpers into
+  `torchsky.map.field.sky_encoding`.
+- Kept these as implementation submodules under `torchsky.map.field`; the
+  high-level `torchsky.field` surface remains focused on the short composable
+  verbs.
+- Extended `audit-refactor-cohesion` so those helper boundaries are required and
+  the old private helper definitions cannot return to `field/core.py`.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_map_field.py::test_sky_encoder_mlp_field_supports_charbonnier_fit tests/test_map_field.py::test_sky_encoder_resmlp_field_supports_charbonnier_fit tests/test_map_field.py::test_hashgrid_resmlp_field_supports_charbonnier_fit tests/test_refactor_cohesion_audit.py -q`
+  - Result: `5 passed, 2 warnings`.
+  - `pixi run audit-refactor-cohesion`
+  - Result: `0 failures, 0 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+  - `pixi run -e test -- pytest tests/test_docs_integrity.py -q`
+  - Result: `1 passed`.
+- North Star connection: field model classes now read more like model
+  composition, while reusable network and encoding primitives have direct module
+  homes for future reuse and benchmarking.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.

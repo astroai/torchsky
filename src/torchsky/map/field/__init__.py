@@ -17,7 +17,7 @@ Submodules
 
 from __future__ import annotations
 
-from . import bandpass, forwarding, hashgrid, observation_ops
+from . import bandpass, forwarding, hashgrid, networks, observation_ops, sky_encoding
 from .core import (
     BandpassConditionedField,
     ConditionedSpectralField,
@@ -203,6 +203,7 @@ __all__ = [
     "pretrain_strainer_trunk_synthetic",
     "save_strainer_trunk_checkpoint",
     "multi_survey_charbonnier_loss",
+    "networks",
     "observation_charbonnier_loss",
     "observation_ops",
     "predict_observation_mean",
@@ -210,6 +211,7 @@ __all__ = [
     "spectral_data_budget",
     "suggest_num_spectral_samples",
     "suggest_spectral_model_capacity",
+    "sky_encoding",
     "_BaseFieldModel",
     "_noise_pretrain_field_model",
 ]
