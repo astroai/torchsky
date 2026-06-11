@@ -28,6 +28,14 @@ def test_api_surface_tiers_are_code_visible() -> None:
         torchsky.get_api_surface("torchsky.map.field").pillar
         is torchsky.SurfacePillar.SCENE
     )
+    assert (
+        torchsky.get_api_surface("torchsky.field").tier
+        is torchsky.SurfaceTier.EXPERIMENTAL
+    )
+    assert (
+        torchsky.get_api_surface("torchsky.field").pillar
+        is torchsky.SurfacePillar.SCENE
+    )
 
 
 def test_api_surfaces_by_tier_are_immutable_public_metadata() -> None:
@@ -53,6 +61,7 @@ def test_api_surfaces_by_pillar_declare_modelling_spine() -> None:
     assert {
         "torchsky.map.coadd_image_plane",
         "torchsky.map.stack_map_product",
+        "torchsky.field",
         "torchsky.map.field",
     } <= scene_names
     assert {"torchsky.viz"} == viz_names

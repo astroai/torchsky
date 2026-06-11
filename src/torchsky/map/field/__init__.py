@@ -17,6 +17,7 @@ Submodules
 
 from __future__ import annotations
 
+from . import bandpass, observation_ops
 from .core import (
     BandpassConditionedField,
     ConditionedSpectralField,
@@ -132,6 +133,7 @@ __all__ = [
     "SpectralDataBudget",
     "SpectralModelCapacityHints",
     "BandpassConditionedField",
+    "bandpass",
     "ConditionedSpectralField",
     "FieldComponentDecomposition",
     "FieldComponentAnchorTerm",
@@ -200,6 +202,7 @@ __all__ = [
     "save_strainer_trunk_checkpoint",
     "multi_survey_charbonnier_loss",
     "observation_charbonnier_loss",
+    "observation_ops",
     "predict_observation_mean",
     "scale_observation_for_rest_frame_scene",
     "spectral_data_budget",

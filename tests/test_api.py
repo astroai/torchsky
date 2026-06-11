@@ -536,6 +536,51 @@ def test_top_level_namespaces_expose_phase1_modules() -> None:
     assert hasattr(torchsky.map, "plan_image_plane_cube_target")
     assert hasattr(torchsky.map, "plan_image_plane_cube_target_from_header")
     assert hasattr(torchsky.map, "plan_image_plane_target")
+    assert hasattr(torchsky, "field")
+    assert torchsky.field.fit is torchsky.map.field.fit_field_model
+    assert torchsky.field.model is torchsky.map.field.make_field_model
+    assert torchsky.field.Observation is torchsky.map.field.FieldObservation
+
+
+def test_field_namespace_uses_short_composable_verbs() -> None:
+    from torchsky import field
+
+    domain = field.Domain(
+        center_ra_deg=0.5,
+        center_dec_deg=0.5,
+        spatial_scale_deg=1.0,
+        wavelength_center=450.0,
+        wavelength_scale=100.0,
+    )
+    model = field.model("sine_implicit", domain, hidden_dim=8, hidden_layers=1)
+    assert isinstance(model, field.Sine)
+    assert field.preset("fast", domain).__class__ is field.SkyEncoderMLP
+
+    obs = field.Observation(
+        image=torch.zeros((3, 4), dtype=torch.float32),
+        header={
+            "NAXIS": 2,
+            "NAXIS1": 4,
+            "NAXIS2": 3,
+            "CTYPE1": "RA---TAN",
+            "CTYPE2": "DEC--TAN",
+            "CRPIX1": 2.0,
+            "CRPIX2": 2.0,
+            "CRVAL1": 0.5,
+            "CRVAL2": 0.5,
+            "CDELT1": -0.01,
+            "CDELT2": 0.01,
+        },
+        spectral_min=400.0,
+        spectral_max=500.0,
+    )
+    rendered = field.render(model, obs, num_spectral_samples=1)
+    assert rendered.shape == obs.image.shape
+
+    ra = torch.full((2,), 0.5, dtype=torch.float32)
+    dec = torch.full((2,), 0.5, dtype=torch.float32)
+    sampled = field.sample(model, obs, ra_deg=ra, dec_deg=dec, num_spectral_samples=1)
+    assert sampled.shape == (2,)
 
 
 def test_map_cli_exposes_resampling_kernel_option() -> None:

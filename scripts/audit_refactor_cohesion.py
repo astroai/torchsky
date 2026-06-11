@@ -69,7 +69,9 @@ DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {
         "ConstrainedKernelPSF",
     ),
     "docs/field.md": (
-        "make_field_model_preset",
+        "field.fit",
+        "field.render",
+        "field.sample",
         "operator_constrained",
     ),
     "docs/architecture.md": (
@@ -81,6 +83,26 @@ DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {
 
 REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
     "src/torchsky/__init__.py": ("API_SURFACES", "api_surfaces_by_pillar"),
+    "src/torchsky/field/__init__.py": (
+        "fit",
+        "render",
+        "sample",
+        "model",
+        "preset",
+        "Domain",
+        "Observation",
+    ),
+    "src/torchsky/map/field/bandpass.py": (
+        "bandpass_quadrature",
+        "bandpass_response",
+        "mixture_mc_samples",
+    ),
+    "src/torchsky/map/field/observation_ops.py": (
+        "coordinate_grid",
+        "sample_observation_indices",
+        "sample_observation_pixels",
+        "crop_field_observation",
+    ),
     "src/torchsky/map/__init__.py": (
         "make_field_model_preset",
         "ObservationOperatorBundle",

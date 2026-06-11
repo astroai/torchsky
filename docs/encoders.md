@@ -7,7 +7,7 @@ coordinate-aware ML workflows.
 
 Use encoders when building continuous fields or learned models that need
 sky-aware, harmonic, Fourier, or wavelength-aware features. Most users will meet
-these through `torchsky.map.field` factories; advanced users can import encoder
+these through `torchsky.field` models; advanced users can import encoder
 pieces directly.
 
 ## Core Concepts
@@ -20,16 +20,16 @@ pieces directly.
 
 ## Recipes
 
-Use field factories first when possible:
+Use the field namespace first when possible:
 
 ```python
-from torchsky.map.field import estimate_field_domain, make_field_model
+from torchsky import field
 
-domain = estimate_field_domain(field_observations, coord_mode="sphere_xyz")
-field = make_field_model("sky_encoder_mlp", domain)
+domain = field.estimate_domain(field_observations, coord_mode="sphere_xyz")
+model = field.model("sky_encoder_mlp", domain)
 ```
 
-`field_observations` should be a sequence of `torchsky.map.field.FieldObservation`
+`field_observations` should be a sequence of `torchsky.field.Observation`
 objects, not `torchsky.map.ImageObservation` objects from the image-plane coadd
 API.
 

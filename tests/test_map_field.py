@@ -28,10 +28,10 @@ from torchsky.map import (
 )
 from torchsky.spectral import SpectralAxis
 from torchsky.map.field import _noise_pretrain_field_model
+from torchsky.map.field.bandpass import bandpass_quadrature
 from torchsky.map.field.core import (
     _BaseFieldModel,
     _HashGridEncoder,
-    _bandpass_quadrature,
 )
 
 
@@ -3307,7 +3307,7 @@ def test_bandpass_quadrature_trapezoid_closer_than_uniform_for_quadratic() -> No
         spectral_max=1.0,
     )
     device = torch.device("cpu")
-    samples, weights = _bandpass_quadrature(obs, num_spectral_samples=6, device=device)
+    samples, weights = bandpass_quadrature(obs, num_spectral_samples=6, device=device)
     lam2 = torch.square(samples)
     trap_est = float(torch.sum(weights * lam2).item())
     uniform_est = float(torch.mean(lam2).item())
@@ -3340,7 +3340,7 @@ def test_tabulated_bandpass_quadrature_runs_on_cuda() -> None:
         transmission_wavelength=wl_tab,
         transmission_throughput=tt_tab,
     )
-    samples, weights = _bandpass_quadrature(
+    samples, weights = bandpass_quadrature(
         obs, num_spectral_samples=128, device=device
     )
     assert samples.device == device
@@ -3363,7 +3363,7 @@ def test_bandpass_quadrature_tabulated_triangle_weighted_mean() -> None:
         transmission_throughput=tt_tab,
     )
     device = torch.device("cpu")
-    samples, weights = _bandpass_quadrature(
+    samples, weights = bandpass_quadrature(
         obs, num_spectral_samples=2001, device=device
     )
     est = float(torch.sum(weights * samples).item())

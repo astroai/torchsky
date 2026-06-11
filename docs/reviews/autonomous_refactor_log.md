@@ -687,6 +687,36 @@ Start gate: May 8, 2026, `America/Vancouver`
   reusable, testable operator mechanics rather than private mapmaker internals,
   which keeps future performance work closer to a single benchmarkable surface.
 
+- Added the concise `torchsky.field` namespace for composable continuous-field
+  workflows:
+  - `field.model(...)` and `field.preset(...)` for construction;
+  - `field.fit(...)` for the built-in optimizer loop;
+  - `field.render(...)`, `field.sample(...)`, and `field.distribution(...)` for
+    explicit evaluation.
+- Updated API-surface metadata and docs so new user-facing examples recommend
+  `torchsky.field` instead of centering the API on long `make_field_*` /
+  `render_field_*` names.
+- Extracted field bandpass helpers into `torchsky.map.field.bandpass` and
+  observation geometry/cropping/pixel-sampling helpers into
+  `torchsky.map.field.observation_ops`.
+- Extended the cohesion audit to check the new field namespace and extracted
+  helper modules.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_api.py::test_field_namespace_uses_short_composable_verbs tests/test_map_field.py::test_bandpass_quadrature_trapezoid_closer_than_uniform_for_quadratic tests/test_map_field.py::test_bandpass_quadrature_tabulated_triangle_weighted_mean tests/test_map_field_render_scale.py tests/test_implicit_forward.py::test_fit_field_model_threads_observation_forward_contexts tests/test_refactor_cohesion_audit.py -q`
+  - Result: `13 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_docs_integrity.py tests/test_api.py::test_field_namespace_uses_short_composable_verbs tests/test_api_surfaces.py tests/test_map_field.py::test_bandpass_quadrature_tabulated_triangle_weighted_mean -q`
+  - Result: `8 passed, 2 warnings`.
+  - `pixi run audit-refactor-cohesion`
+  - Result: `0 failures, 1 warnings`; `field/core.py` is now `7310` lines,
+    still above the `6000`-line cohesion warning threshold.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+- North Star connection: field workflows now have short, composable verbs and
+  clearer primitive names, while reusable observation/bandpass mechanics are no
+  longer hidden inside the model-zoo core module.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.

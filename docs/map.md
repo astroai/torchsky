@@ -118,16 +118,15 @@ Evaluation:
 - `evaluate_map_product(...)`
 - `evaluate_map_frontier_regions(...)`
 
-Experimental field/INR layer (tutorial: [field.md](field.md), losses/context:
+Experimental continuous-field layer (tutorial: [field.md](field.md), losses/context:
 [implicit_forward.md](implicit_forward.md)):
 
-- `FieldObservation`, `FieldDomain`, `fit_field_model(...)`
+- `torchsky.field.Observation`, `torchsky.field.Domain`, `torchsky.field.fit(...)`
 - `ObservationOperatorBundle` as the shared observation-law substrate across
   image-plane and field paths.
-- `render_field_observation(...)`, `render_field_cube(...)`,
-  `render_field_healpix(...)`
+- `torchsky.field.render(...)`, `torchsky.field.sample(...)`
 - SIREN/WIRE, Fourier, spectral-basis, sky-encoder, hash-grid, and
-  operator-constrained field factories.
+  operator-constrained field models.
 - `ConstrainedKernelPSF`, `AffineRadiometry`, `SubPixelShift`, and
   `LearnedInstrumentOperator` for constrained learned instrument effects.
 

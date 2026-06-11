@@ -1158,7 +1158,7 @@ _DEBUG_SCALE = os.environ.get("TORCHSKY_DEBUG_SCALE") == "1"
 _COLD_NOMMAP = os.environ.get("TORCHSKY_COLD_NOMMAP") == "1"
 _COLD_NOCACHE = os.environ.get("TORCHSKY_COLD_NOCACHE") == "1"
 
-_LAZY_NAMESPACES = {"io", "scene", "map", "encoders", "catalogs"}
+_LAZY_NAMESPACES = {"io", "scene", "map", "field", "encoders", "catalogs"}
 
 
 def __getattr__(name: str):

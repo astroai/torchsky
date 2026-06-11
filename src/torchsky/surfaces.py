@@ -104,7 +104,13 @@ _SURFACES: dict[str, APISurface] = {
     "torchsky.map.field": APISurface(
         "torchsky.map.field",
         SurfaceTier.EXPERIMENTAL,
-        "continuous-field/INR fitting and training surface",
+        "implementation-oriented continuous-field module used by map workflows",
+        pillar=SurfacePillar.SCENE,
+    ),
+    "torchsky.field": APISurface(
+        "torchsky.field",
+        SurfaceTier.EXPERIMENTAL,
+        "concise composable continuous-field modeling API",
         pillar=SurfacePillar.SCENE,
     ),
     "torchsky.map.fit_field_model": APISurface(

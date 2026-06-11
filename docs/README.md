@@ -27,8 +27,8 @@ validation, and API pointers.
   sparse maps, MOC, and harmonic primitives.
 - [Map](map.md) - `torchsky.map`, products, kernels, value semantics, truth
   evaluation, operators, and field/INR workflows.
-- [Field / INR fitting](field.md) - `FieldObservation`, `make_field_model`,
-  `fit_field_model`, rendering cubes and HEALPix (experimental).
+- [Continuous fields](field.md) - `torchsky.field`, composable `model`, `fit`,
+  `render`, and `sample` workflows (experimental).
 - [Implicit forward modeling](implicit_forward.md) - multi-survey losses,
   kinematics, `predict_observation_mean`, Charbonnier scaffold.
 - [Catalogs](catalogs.md) - `torchsky.catalogs`, crossmatch, and streaming
