@@ -30,6 +30,10 @@ import healpy  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
+from benchmarks.config import ensure_src_on_path  # noqa: E402
+
+ensure_src_on_path()
+
 from torchsky.sphere.healpix import (  # noqa: E402
     get_all_neighbours,
     get_interp_val,

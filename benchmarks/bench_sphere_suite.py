@@ -26,6 +26,7 @@ from benchmarks.bench_contract import (
     write_csv,
     write_json,
 )  # noqa: E402
+from benchmarks.config import benchmark_subprocess_env  # noqa: E402
 
 
 REQUIRED_COMPARATORS = ["healpy", "hpgeom", "astropy-healpix", "healsparse"]
@@ -35,7 +36,7 @@ def _run_json_command(
     name: str, cmd: list[str], out_json: Path
 ) -> tuple[bool, list[dict[str, Any]], str]:
     out_json.parent.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "PYTHONPATH": str(root)}
+    env = benchmark_subprocess_env()
     proc = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env
     )

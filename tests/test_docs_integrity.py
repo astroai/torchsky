@@ -10,6 +10,7 @@ def test_docs_reference_existing_local_files() -> None:
     expected_paths = [
         "docs/api.md",
         "docs/benchmarks.md",
+        "benchmarks/scorecards/README.md",
         "docs/catalogs.md",
         "docs/changelog.md",
         "docs/cli.md",

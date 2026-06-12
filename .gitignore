@@ -91,6 +91,10 @@ benchmarks/baselines/
 !benchmarks/baselines/spin_matrix_extended_baseline.json
 !benchmarks/baselines/sphere_geom_exact_contains_gate.json
 
+# committed scorecard history (ephemeral runs stay in benchmarks_results/)
+!benchmarks/scorecards/
+!benchmarks/scorecards/**
+
 # native build artifacts
 wcslib.tar.bz2
 wcslib_src/

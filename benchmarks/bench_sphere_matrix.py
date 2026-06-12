@@ -11,7 +11,7 @@ repo_root = str(Path(__file__).resolve().parent.parent)
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-from benchmarks.config import DEFAULT_OUTPUT_DIR  # noqa: E402
+from benchmarks.config import DEFAULT_OUTPUT_DIR, benchmark_subprocess_env  # noqa: E402
 
 
 import argparse  # noqa: E402
@@ -92,7 +92,7 @@ def main() -> int:
         type=str,
         default=(
             "ang2pix_ring=1.8,ang2pix_nested=1.35,pix2ang_ring=1.15,"
-            "pix2ang_nested=1.0,ring2nest=1.05,nest2ring=1.35"
+            "pix2ang_nested=1.0,ring2nest=1.05,nest2ring=0.85"
         ),
         help="Comma-separated op=ratio thresholds for median(torchsky/healpy) across profiles",
     )
@@ -159,7 +159,7 @@ def main() -> int:
             cmd.append("--allow-nonrelease-distributions")
 
         print(f"\n[profile={profile}] running: {' '.join(cmd)}", flush=True)
-        proc = subprocess.run(cmd, check=False)
+        proc = subprocess.run(cmd, check=False, env=benchmark_subprocess_env())
         if proc.returncode != 0:
             print(
                 f"Profile '{profile}' benchmark failed with exit code {proc.returncode}"

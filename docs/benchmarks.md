@@ -4,6 +4,22 @@ torchsky is benchmarked for both **correctness** and **throughput** against upst
 
 Record installed comparator versions with `pixi run bench-comparator-versions-all` (writes under `benchmarks_results/`).
 
+### Scorecard history (committed)
+
+Full local runs write to gitignored `benchmarks_results/<run_id>/`. To keep a
+compact, diff-friendly history in the repo, archive a snapshot after a
+representative four-domain sweep:
+
+```bash
+pixi run bench-archive-scorecard -- \
+  --label main_domains \
+  --runs fits=<fits_run_id>,fitstable=<fitstable_run_id>,wcs=<wcs_run_id>,sphere=<sphere_run_id>
+```
+
+Committed snapshots live under [`benchmarks/scorecards/`](../benchmarks/scorecards/)
+(`index.md` plus dated `*.json` / `*.md`). Older narrative notes remain in
+[`docs/archive/benchmark-history.md`](archive/benchmark-history.md).
+
 Artifact roots used in this document:
 
 - `benchmarks_results/` is the default root for generic benchmark-suite outputs

@@ -3,6 +3,13 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_repo_root = Path(__file__).resolve().parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
 import argparse
 import csv
 import importlib
@@ -10,11 +17,14 @@ import importlib.util
 import importlib.metadata as importlib_metadata
 import json
 import time
-from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
 import torch
+
+from benchmarks.config import ensure_src_on_path
+
+ensure_src_on_path()
 
 try:
     from torchsky.sphere.healpix import (
@@ -28,10 +38,10 @@ try:
 except Exception:
     # Allow benchmarks in envs where torchsky package/extensions are not installed.
     local_mod = (
-        Path(__file__).resolve().parents[1] / "src" / "torchsky" / "wcs" / "healpix.py"
+        Path(__file__).resolve().parents[1] / "src" / "torchsky" / "sphere" / "healpix.py"
     )
     spec = importlib.util.spec_from_file_location(
-        "torchsky_wcs_healpix_local", local_mod
+        "torchsky_sphere_healpix_local", local_mod
     )
     if spec is None or spec.loader is None:
         raise SystemExit(f"Unable to load local HEALPix module from {local_mod}")
