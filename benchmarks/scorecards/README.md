@@ -31,3 +31,7 @@ pixi run bench-archive-scorecard -- \
 Older narrative optimization notes remain in
 [`docs/archive/benchmark-history.md`](../../docs/archive/benchmark-history.md).
 Release-style prose snapshots remain in [`docs/benchmarks.md`](../../docs/benchmarks.md).
+
+**Open investigation:** WCS small-N zenithal `pixel_to_world(x,y)` vs Astropy —
+attempt log, baseline, and future directions in
+[`docs/projects/wcs-small-n-investigation.md`](../../docs/projects/wcs-small-n-investigation.md).
