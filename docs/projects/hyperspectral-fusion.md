@@ -282,6 +282,9 @@ The `build_smacs0723_stack_baseline.py` helper calls this same function. If
 the baseline looks wrong here, debug data, headers, masks, or units before
 changing the INR.
 
+> [!NOTE]
+> `write_cube_fits` requires a uniformly spaced spectral axis (due to FITS WCS standard linear coordinate representation). Because the 4 JWST filter bands are not uniformly spaced, trying to write them directly using `write_cube_fits` will raise a `ValueError`. To bypass this constraint, the `build_smacs0723_stack_baseline.py` script uses a custom writer helper to save the nonuniform bands directly to a 3D FITS file.
+
 Useful baseline checks:
 
 - Does every cutout have similar `NAXIS1`, `NAXIS2`, `CRVAL1`, and `CRVAL2`?

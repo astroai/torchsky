@@ -25,7 +25,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from torchsky.map import ImageObservation, coadd_image_plane_cube  # noqa: E402
-from torchsky.spectral import write_cube_fits  # noqa: E402
 
 FILTER_BANDPASS_ANGSTROM: dict[str, tuple[float, float, float]] = {
     # Approximate NIRCam wide-filter support for tutorial metadata only.
@@ -46,6 +45,42 @@ def _resolve_manifest_path(path_text: str, *, manifest_dir: Path) -> Path:
     if root_path.exists():
         return root_path
     return (manifest_dir / path).resolve()
+
+
+def _write_nonuniform_cube_fits(
+    path: str,
+    cube: Any,
+    *,
+    spatial_header: dict,
+    spectral_axis: Any,
+    overwrite: bool = True,
+) -> dict:
+    from astropy.io import fits
+    from torchsky.spectral import _strip_axis3_and_naxis_keys
+    data = cube.cpu().numpy()
+    clean_hdr = _strip_axis3_and_naxis_keys(spatial_header)
+    header = fits.Header(clean_hdr)
+    header["NAXIS"] = 3
+    header["NAXIS1"] = data.shape[2]
+    header["NAXIS2"] = data.shape[1]
+    header["NAXIS3"] = data.shape[0]
+
+    header["CTYPE3"] = str(spectral_axis.type)
+    header["CUNIT3"] = str(spectral_axis.unit)
+
+    vals = spectral_axis.values.detach().cpu().numpy()
+    header["CRPIX3"] = 1.0
+    header["CRVAL3"] = float(vals[0])
+    if len(vals) >= 2:
+        header["CDELT3"] = float(vals[1] - vals[0])
+    else:
+        header["CDELT3"] = 1.0
+
+    for i, val in enumerate(vals):
+        header[f"WAVE{i}"] = float(val)
+
+    fits.PrimaryHDU(data=data, header=header).writeto(path, overwrite=overwrite)
+    return dict(header)
 
 
 def _observations_from_manifest(manifest_path: Path) -> list[ImageObservation]:
@@ -148,7 +183,7 @@ def main() -> int:
     )
     output = args.output or (manifest_path.parent / "smacs0723_stack_baseline.fits")
     output.parent.mkdir(parents=True, exist_ok=True)
-    header = write_cube_fits(
+    header = _write_nonuniform_cube_fits(
         str(output),
         result.data,
         spatial_header=result.header,

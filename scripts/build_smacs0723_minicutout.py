@@ -83,7 +83,7 @@ def _center_cutout_2d(
     header: Any,
     *,
     crop_size: int,
-) -> tuple[np.ndarray, dict[str, Any], dict[str, Any]]:
+) -> tuple[np.ndarray, fits.Header, dict[str, Any]]:
     h, w = int(data.shape[0]), int(data.shape[1])
     return _cutout_2d(
         data,
@@ -101,7 +101,7 @@ def _cutout_2d(
     crop_size: int,
     center_x_pix: float,
     center_y_pix: float,
-) -> tuple[np.ndarray, dict[str, Any], dict[str, Any]]:
+) -> tuple[np.ndarray, fits.Header, dict[str, Any]]:
     h, w = int(data.shape[0]), int(data.shape[1])
     half = int(crop_size) // 2
     cx = int(round(float(center_x_pix)))
@@ -127,7 +127,7 @@ def _cutout_2d(
         "requested_center_xy": [float(center_x_pix), float(center_y_pix)],
         "actual_center_xy": [0.5 * float(x0 + x1 - 1), 0.5 * float(y0 + y1 - 1)],
     }
-    return patch, dict(hdr), crop_meta
+    return patch, hdr, crop_meta
 
 
 def _sha256(path: Path) -> str:
@@ -239,7 +239,7 @@ def main() -> int:
                 )
         hdr["BAND"] = band
         out_path = out_dir / f"smacs0723_{band}_cutout_{args.crop_size}.fits"
-        fits.PrimaryHDU(data=patch, header=fits.Header(hdr)).writeto(
+        fits.PrimaryHDU(data=patch, header=hdr).writeto(
             out_path, overwrite=True
         )
         manifest["outputs"].append(
