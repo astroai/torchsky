@@ -84,6 +84,7 @@ def test_healsparse_write_read_partial_and_header_roundtrip() -> None:
         np.testing.assert_allclose(
             roundtrip.values.cpu().numpy(), values, atol=0.0, rtol=0.0
         )
+        assert roundtrip.metadata == {"TESTING": 1.0}
     finally:
         path.unlink(missing_ok=True)
 
@@ -180,10 +181,6 @@ def test_healsparse_get_values_matches_upstream() -> None:
     )
 
 
-@pytest.mark.xfail(
-    reason="MOC.from_circle / HealSparseMap.from_moc interop not yet working",
-    strict=True,
-)
 def test_healsparse_geom_circle_coverage_matches_upstream_sparse_mask() -> None:
     nside_coverage = 32
     nside_map = 128
@@ -191,7 +188,7 @@ def test_healsparse_geom_circle_coverage_matches_upstream_sparse_mask() -> None:
     lat = 0.0
     radius = 0.2 / 60.0
     pixels = (
-        compat.query_circle(nside_map, lon, lat, radius, nest=True, degrees=True)
+        compat.query_circle(nside_map, lon, lat, radius, nest=True, degrees=True, inclusive=True)
         .cpu()
         .numpy()
     )

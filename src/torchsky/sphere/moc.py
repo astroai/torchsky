@@ -367,12 +367,12 @@ class MOC:
 
     @classmethod
     def from_circle(
-        cls, lon_deg: float, lat_deg: float, radius_deg: float, max_order: int = 10
+        cls, lon_deg: float, lat_deg: float, radius_deg: float, max_order: int = 10, inclusive: bool = True
     ) -> "MOC":
         """Create a MOC from a circular cap."""
         nside = 1 << max_order
         pix = _healpix.query_circle(
-            nside, lon_deg, lat_deg, radius_deg, nest=True, degrees=True
+            nside, lon_deg, lat_deg, radius_deg, nest=True, degrees=True, inclusive=inclusive
         )
         uniqs = nest2uniq(nside, pix)
         return cls(uniqs)

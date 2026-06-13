@@ -63,6 +63,7 @@ class SparseHealpixMap:
         fill_value: float | Any = None,
         coverage_mode: str = "any",
         nside_coverage: int | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> "SparseHealpixMap":
         vals = torch.as_tensor(dense)
         if nside is None:
@@ -123,6 +124,7 @@ class SparseHealpixMap:
             if fill_value is not None
             else float(_healpix.UNSEEN),
             nside_coverage=nside_coverage,
+            metadata=metadata,
         )
         if nside_coverage is not None:
             obj._build_coverage_map()
@@ -137,6 +139,7 @@ class SparseHealpixMap:
         nest: bool = True,
         nside_coverage: int | None = None,
         sentinel: float | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> "SparseHealpixMap":
         fv = float(sentinel) if sentinel is not None else float(_healpix.UNSEEN)
         pix = torch.as_tensor(pixels, dtype=torch.int64)
@@ -149,6 +152,7 @@ class SparseHealpixMap:
             values=vals,
             fill_value=fv,
             nside_coverage=nside_coverage,
+            metadata=metadata,
         )
 
         if nside_coverage is not None:
@@ -162,6 +166,7 @@ class SparseHealpixMap:
         nside_map: int,
         dtype: Any = torch.float64,
         sentinel: float | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> "SparseHealpixMap":
         """Create an empty HealSparseMap with specified configuration."""
         fv = float(sentinel) if sentinel is not None else float(_healpix.UNSEEN)
@@ -189,6 +194,7 @@ class SparseHealpixMap:
             values=torch.empty((0,), dtype=dtype),
             fill_value=fv,
             nside_coverage=nside_coverage,
+            metadata=metadata,
         )
 
     @classmethod
@@ -198,10 +204,11 @@ class SparseHealpixMap:
         nside_coverage: int,
         nest: bool = True,
         sentinel: float | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> "SparseHealpixMap":
         fv = float(sentinel) if sentinel is not None else float(_healpix.UNSEEN)
         # Create from dense normally
-        smap = cls.from_dense(dense, nest=nest, fill_value=fv)
+        smap = cls.from_dense(dense, nest=nest, fill_value=fv, metadata=metadata)
         smap.nside_coverage = nside_coverage
         smap._build_coverage_map()
         return smap
@@ -618,6 +625,18 @@ class SparseHealpixMap:
         }
         if self.nside_coverage:
             header["NSIDE_COV"] = self.nside_coverage
+
+        reserved_keys = {
+            "NSIDE", "ORDERING", "SENTINEL", "EXTNAME", "NSIDE_COV",
+            "SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "PCOUNT", "GCOUNT",
+            "TFIELDS", "XTENSION", "TFORM1", "TFORM2", "TTYPE1", "TTYPE2", "TUNIT1", "TUNIT2"
+        }
+        if self.metadata:
+            for k, v in self.metadata.items():
+                k_upper = str(k).upper()
+                if k_upper not in reserved_keys:
+                    header[k_upper] = v
+
         pix = self.pixels.detach().cpu().reshape(-1).to(torch.int64)
         val = self.values.detach().cpu().reshape(-1).to(torch.float32)
         torchsky.write(
@@ -642,6 +661,32 @@ class SparseHealpixMap:
         ns_cov = hdr.get("NSIDE_COV")
         ns_cov_i = int(ns_cov) if ns_cov is not None else None
 
+        standard_keys = {
+            "SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "EXTEND", "COMMENT", "HISTORY",
+            "XTENSION", "PCOUNT", "GCOUNT", "TFIELDS", "EXTNAME", "NSIDE", "ORDERING",
+            "SENTINEL", "NSIDE_COV", "TFORM1", "TFORM2", "TTYPE1", "TTYPE2", "TUNIT1", "TUNIT2"
+        }
+        metadata = {}
+        for k, v in hdr.items():
+            k_upper = str(k).upper()
+            if (
+                k_upper not in standard_keys
+                and not k_upper.startswith("TTYPE")
+                and not k_upper.startswith("TFORM")
+                and not k_upper.startswith("TUNIT")
+            ):
+                val = v
+                if isinstance(val, str):
+                    val_s = val.strip()
+                    try:
+                        if "." in val_s or "E" in val_s.upper():
+                            val = float(val_s)
+                        else:
+                            val = int(val_s)
+                    except ValueError:
+                        pass
+                metadata[k_upper] = val
+
         pix_key = next((k for k in ("PIXEL", "pixel") if k in table), None)
         val_key = next((k for k in ("VALUE", "value") if k in table), None)
         if pix_key is None or val_key is None:
@@ -650,7 +695,7 @@ class SparseHealpixMap:
         pixels = torch.as_tensor(table[pix_key], dtype=torch.int64).reshape(-1)
         values = torch.as_tensor(table[val_key], dtype=torch.float32).reshape(-1)
         return cls.from_pixels(
-            pixels, values, nside, nest=nest, nside_coverage=ns_cov_i, sentinel=fv
+            pixels, values, nside, nest=nest, nside_coverage=ns_cov_i, sentinel=fv, metadata=metadata
         )
 
 

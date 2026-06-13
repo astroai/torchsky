@@ -1594,7 +1594,9 @@ def query_polygon(
     centroid fails the inside test, this falls back to a full-sky chunked scan.
     """
     _validate_nside(nside)
-    v = torch.as_tensor(vertices, dtype=torch.float64)
+    t_input = torch.as_tensor(vertices)
+    dtype = torch.float32 if t_input.device.type == "mps" else torch.float64
+    v = t_input.to(dtype=dtype)
     if v.ndim != 2:
         raise ValueError("vertices must be 2D")
 
@@ -1946,7 +1948,11 @@ def mask_bad(
     """Boolean mask for bad (UNSEEN/non-finite) map values."""
     t = torch.as_tensor(m)
     if not t.is_floating_point():
-        return torch.zeros_like(t, dtype=torch.bool)
+        try:
+            bad = torch.tensor(badval, dtype=t.dtype, device=t.device)
+            return t == bad
+        except (ValueError, TypeError, RuntimeError):
+            return torch.zeros_like(t, dtype=torch.bool)
     bad = torch.tensor(float(badval), dtype=t.dtype, device=t.device)
     return (~torch.isfinite(t)) | torch.isclose(t, bad, rtol=rtol, atol=atol)
 
