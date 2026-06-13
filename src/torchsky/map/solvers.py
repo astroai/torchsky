@@ -2214,12 +2214,12 @@ def build_spherical_healpix_solver_hooks(
                     return torch.stack(
                         [
                             accumulate_image_on_healpix_map_adjoint(
-                                image[idx],
+                                img,
                                 nside=int(nside),
                                 nest=bool(nest),
                                 source_header=target.header,
                             )
-                            for idx in range(int(image.shape[0]))
+                            for img in image.unbind(0)
                         ],
                         dim=0,
                     )
@@ -2301,12 +2301,12 @@ def build_spherical_harmonic_solver_hooks(
                 return torch.stack(
                     [
                         accumulate_image_on_alm_adjoint(
-                            image[idx],
+                            img,
                             source_header=target.header,
                             lmax=ll,
                             mmax=mm,
                         )
-                        for idx in range(int(image.shape[0]))
+                        for img in image.unbind(0)
                     ],
                     dim=0,
                 )

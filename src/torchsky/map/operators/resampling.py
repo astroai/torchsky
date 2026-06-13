@@ -201,11 +201,11 @@ def sample_image_plane_batched(
         samples = [
             custom_separable_sample(
                 image,
-                x_src=x_src[idx],
-                y_src=y_src[idx],
+                x_src=xs,
+                y_src=ys,
                 kernel=kernel,
             )
-            for idx in range(int(x_src.shape[0]))
+            for xs, ys in zip(x_src.unbind(0), y_src.unbind(0))
         ]
         return torch.stack(samples, dim=0)
     batch = int(grid.shape[0])
@@ -243,11 +243,11 @@ def sample_image_plane_batched_channels(
         samples = [
             custom_separable_sample(
                 image,
-                x_src=x_src[idx],
-                y_src=y_src[idx],
+                x_src=xs,
+                y_src=ys,
                 kernel=kernel,
             )
-            for idx in range(int(x_src.shape[0]))
+            for xs, ys in zip(x_src.unbind(0), y_src.unbind(0))
         ]
         return torch.stack(samples, dim=0)
     batch = int(grid.shape[0])

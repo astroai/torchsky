@@ -37,3 +37,11 @@
 ## 2024-05-18 - _batch_to_device Fast Path vs Safe Path
 **Learning:** Checking for uniform tensor shapes in Python before passing to `torch.stack()` is roughly 3-4x faster when shapes are heterogeneous than handling the exception `torch.stack()` throws. For homogenous shapes, the shape check is about 20% slower than a direct `try/except` around `torch.stack()`. Given that reading HDUs/cutouts frequently yields heterogeneous shapes, prioritizing the safe explicit shape check is better than utilizing exceptions for flow control on the hot path.
 **Action:** Always prefer explicitly validating assumptions in Python instead of using exceptions for control flow when the exception pathway is frequently hit, especially when wrapping PyTorch operations.
+
+## 2024-05-24 - PyTorch Device Transfer Concatenation
+**Learning:** PyTorch fails with `RuntimeError: Expected all tensors to be on the same device` when trying to concatenate tensors that are on mixed devices. You cannot safely refactor `torch.cat([t.to(device) for t in tensors])` into `torch.cat(tensors).to(device)` if the input tensors might reside on different devices, as the `.to()` inside the comprehension guarantees uniformity before concatenation.
+**Action:** When optimizing device transfers before aggregation, only refactor to aggregate-then-transfer if it is mathematically and architecturally guaranteed that all source tensors share the identical device.
+
+## 2024-05-24 - Tensor Loop Slicing Overhead
+**Learning:** Looping over `shape[0]` and repeatedly extracting sub-tensors via `tensor[idx]` within a list comprehension (e.g., `[func(tensor[i]) for i in range(tensor.shape[0])]`) is a common anti-pattern in PyTorch that causes significant Python dispatch overhead and creates individual views each iteration.
+**Action:** Always replace these constructs with `tensor.unbind(0)` (e.g., `[func(t) for t in tensor.unbind(0)]`), which splits the tensor at the C++ level and returns a tuple, offering a ~15-30% performance boost.

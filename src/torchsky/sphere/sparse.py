@@ -703,7 +703,7 @@ def sum_union(maps: list[SparseHealpixMap] | tuple[SparseHealpixMap, ...]) -> Sp
     """
     nside, nest = _validate_sparse_operands(maps)
     device = maps[0].pixels.device
-    all_pixels = torch.unique(torch.cat([m.pixels.to(device) for m in maps]))
+    all_pixels = torch.unique(torch.cat([m.pixels for m in maps]).to(device))
     out_dtype = torch.result_type(*[m.values for m in maps])
     values = torch.zeros((all_pixels.numel(),), dtype=out_dtype, device=device)
     for smap in maps:

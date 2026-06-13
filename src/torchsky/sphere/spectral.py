@@ -3278,9 +3278,7 @@ def _normalize_cls_input(
         if cls.ndim == 1:
             return [cls.to(torch.float64)], [(0, 0)], 1
         if cls.ndim == 2:
-            seq: list[Tensor | None] = [
-                cls[i].to(torch.float64) for i in range(int(cls.shape[0]))
-            ]
+            seq: list[Tensor | None] = list(cls.to(torch.float64).unbind(0))
         else:
             raise ValueError("cls tensor must be 1D or 2D")
     elif isinstance(cls, (list, tuple)):

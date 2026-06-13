@@ -878,8 +878,8 @@ class FieldComponentDecomposition(_BaseFieldModel):
             else:
                 rendered = torch.stack(
                     [
-                        apply_psf_spec(rendered[idx], base_observation.psf_spec)
-                        for idx in range(int(rendered.shape[0]))
+                        apply_psf_spec(r, base_observation.psf_spec)
+                        for r in rendered.unbind(0)
                     ],
                     dim=0,
                 )
