@@ -343,11 +343,13 @@ class TensorHDU:
         header: Optional[Header] = None,
         file_handle=None,
         hdu_index: int = 0,
+        source_path: Optional[str] = None,
     ):
         self._data = data
         self._header = header or Header()
         self._file_handle = file_handle
         self._hdu_index = hdu_index
+        self._source_path = source_path
         self._data_view = DataView(file_handle, hdu_index) if file_handle else None
         self._wcs_cache = None
         self._wcs_version = -1
@@ -375,7 +377,25 @@ class TensorHDU:
         if self._wcs_cache is None or self._wcs_version != current_version:
             from .wcs import WCS
 
-            self._wcs_cache = WCS(self._header)
+            # Check if there is any tabular axis in CTYPE keywords
+            has_tab = False
+            for idx in range(1, 10):
+                ctype = self._header.get(f"CTYPE{idx}")
+                if ctype is not None and str(ctype).strip().upper().endswith("-TAB"):
+                    has_tab = True
+                    break
+
+            extracted_axes = None
+            if has_tab and getattr(self, "_source_path", None) is not None:
+                try:
+                    with HDUList.fromfile(self._source_path) as hdul:
+                        from .wcs.tabular import tabular_axes_from_fits
+
+                        extracted_axes = tabular_axes_from_fits(self._header, hdul)
+                except Exception:
+                    pass
+
+            self._wcs_cache = WCS(self._header, tabular_axes=extracted_axes)
             self._wcs_version = current_version
         return self._wcs_cache
 
@@ -1975,7 +1995,9 @@ class HDUList:
                 i = info.index
 
                 if hdu_type == "IMAGE":
-                    hdu = TensorHDU(header=header, file_handle=handle, hdu_index=i)
+                    hdu = TensorHDU(
+                        header=header, file_handle=handle, hdu_index=i, source_path=path
+                    )
                 elif hdu_type in ["ASCII_TABLE", "BINARY_TABLE"]:
                     # Safe-by-default: do not materialize tables at open().
                     hdu = TableHDURef(header=header, source_path=path, source_hdu=i)

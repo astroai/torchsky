@@ -148,17 +148,41 @@ def test_temporal_header_scale_helpers() -> None:
     torch.testing.assert_close(rel_back, rel)
 
 
-def test_temporal_ephemeris_corrections_fail_closed() -> None:
-    twcs = TemporalWCS({"MJDREF": 60000.0, "TREFPOS": "BARYCENTER"})
-    assert twcs.requires_ephemeris
-    try:
-        twcs.apply_corrections(
-            torch.tensor([60000.0]), torch.tensor([0.0]), torch.tensor([0.0])
-        )
-    except NotImplementedError as exc:
-        assert "ephemeris" in str(exc)
-    else:  # pragma: no cover
-        raise AssertionError("barycentric temporal correction must fail closed")
+def test_temporal_ephemeris_corrections() -> None:
+    # Test topocenter (no corrections applied)
+    twcs_topo = TemporalWCS({"MJDREF": 60000.0, "TREFPOS": "TOPOCENTER"})
+    mjd = torch.tensor([60000.0])
+    ra = torch.tensor([120.0])
+    dec = torch.tensor([30.0])
+    torch.testing.assert_close(twcs_topo.apply_corrections(mjd, ra, dec), mjd)
+
+    # Test BARYCENTER (should apply light travel time corrections)
+    twcs_bary = TemporalWCS({
+        "MJDREF": 60000.0,
+        "TREFPOS": "BARYCENTER",
+        "OBSGEO-X": 6378137.0,
+        "OBSGEO-Y": 0.0,
+        "OBSGEO-Z": 0.0,
+    })
+    assert twcs_bary.requires_ephemeris
+    mjd_corr = twcs_bary.apply_corrections(mjd, ra, dec)
+
+    delta_days = (mjd_corr - mjd).item()
+    assert abs(delta_days) < 0.01
+
+    from astropy.coordinates import SkyCoord, EarthLocation
+    import astropy.units as u
+    from astropy.time import Time
+
+    loc = EarthLocation.from_geocentric(6378137.0 * u.m, 0.0 * u.m, 0.0 * u.m)
+    t = Time(60000.0, format="mjd", scale="utc", location=loc)
+    sc = SkyCoord(ra=120.0 * u.deg, dec=30.0 * u.deg)
+    ltt = t.light_travel_time(sc, "barycentric")
+    expected_mjd = 60000.0 + ltt.to(u.day).value
+
+    # Keplerian approximation is extremely fast and matches astropy to within 15 seconds
+    np.testing.assert_allclose(mjd_corr.item(), expected_mjd, atol=15.0 / 86400.0)
+
 
 
 def test_temporal_reference_metadata_and_observatory_location() -> None:

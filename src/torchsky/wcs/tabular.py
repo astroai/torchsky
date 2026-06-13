@@ -217,6 +217,20 @@ def _resolve_tab_table(tables: Any, extname: str | None) -> Any:
         return tables
     if isinstance(tables, Mapping) and extname in tables:
         return tables[extname]
+    # Check if tables supports string lookup (like HDUList)
+    if hasattr(tables, "__getitem__"):
+        try:
+            return tables[extname]
+        except (KeyError, TypeError, ValueError, IndexError):
+            pass
+    # If it is a sequence/list/iterable, search for matching EXTNAME
+    if hasattr(tables, "__iter__") or isinstance(tables, (list, tuple)):
+        if not isinstance(tables, (str, bytes, Mapping)):
+            for hdu in tables:
+                if hasattr(hdu, "header"):
+                    name = hdu.header.get("EXTNAME")
+                    if name is not None and str(name).strip().upper() == extname.upper():
+                        return hdu
     raise KeyError(f"table extension {extname!r} not found")
 
 

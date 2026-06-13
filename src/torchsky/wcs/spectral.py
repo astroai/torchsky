@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import torch
@@ -290,3 +291,328 @@ def transform_spectral(
     return frequency_to_spectral(
         freq, target, unit="km/s", rest_frequency=rest_freq
     )
+
+
+class SpectralTransform:
+    """Implement FITS Paper III spectral algorithm transformations.
+
+    Handles grism (GRI/GRA), logarithmic (LOG), and compound X2P algorithms.
+    """
+
+    def __init__(
+        self,
+        ctype: str,
+        crval: float,
+        cdelt: float,
+        cunit: str | None = None,
+        restfrq: float | None = None,
+        restwav: float | None = None,
+        pv: list[float] | None = None,
+    ):
+        self.ctype = ctype.strip().upper()
+        parts = self.ctype.split("-")
+        self.stype = parts[0]
+        self.algo = parts[1] if len(parts) > 1 else ""
+
+        if cunit is None:
+            if self.stype in {"WAVE", "AWAV"}:
+                self.cunit = "m"
+            elif self.stype == "FREQ":
+                self.cunit = "Hz"
+            elif self.stype == "WAVN":
+                self.cunit = "m-1"
+            elif self.stype == "ENER":
+                self.cunit = "J"
+            elif self.stype in {"VRAD", "VOPT", "VELO"}:
+                self.cunit = "m/s"
+            else:
+                self.cunit = "m"
+        else:
+            self.cunit = cunit
+
+        self.restfrq = restfrq or 0.0
+        self.restwav = restwav or 0.0
+        if self.restfrq == 0.0 and self.restwav != 0.0:
+            self.restfrq = SPEED_OF_LIGHT / self.restwav
+        elif self.restwav == 0.0 and self.restfrq != 0.0:
+            self.restwav = SPEED_OF_LIGHT / self.restfrq
+
+        self.scale = spectral_unit_scale(self.stype, self.cunit)
+        self.crval_si = crval * self.scale
+
+        self.pv = [0.0] * 7
+        self.pv[3] = 1.0  # default n_r
+        if pv is not None:
+            for idx, val in enumerate(pv):
+                if idx < 7:
+                    self.pv[idx] = val
+
+        self.is_grism = self.algo in {"GRI", "GRA"}
+        self.is_log = self.algo == "LOG"
+
+        is_compound = (
+            len(self.algo) == 3
+            and self.algo[1] == "2"
+            and self.algo[0] in {"F", "W", "A", "V"}
+            and self.algo[2] in {"F", "W", "A", "V"}
+        )
+        if not is_compound and not self.is_log and not self.is_grism:
+            self.algo = ""
+
+        if self.is_grism:
+            G = self.pv[0]
+            m = self.pv[1]
+            alpha = self.pv[2]
+            n_r = self.pv[3]
+            dn_r = self.pv[4]
+            epsilon = self.pv[5]
+            theta = self.pv[6]
+
+            d2r = math.pi / 180.0
+            r2d = 180.0 / math.pi
+
+            if self.stype in {"WAVE", "AWAV"}:
+                self.lambda_r = self.crval_si
+            else:
+                self.lambda_r = float(
+                    convert_spectral(
+                        self.crval_si,
+                        self.stype,
+                        "WAVE",
+                        rest_frequency=self.restfrq,
+                        rest_wavelength=self.restwav,
+                    ).item()
+                )
+
+            self.t = G * m / math.cos(epsilon * d2r)
+            sin_arg = self.t * self.lambda_r - n_r * math.sin(alpha * d2r)
+            sin_arg_clamped = max(-1.0, min(1.0, sin_arg))
+            self.beta_r = math.asin(sin_arg_clamped) * r2d
+
+            self.t_prime = self.t - dn_r * math.sin(alpha * d2r)
+            self.w1 = -math.tan(theta * d2r)
+
+            if self.stype in {"WAVE", "AWAV"}:
+                self.dXdS = 1.0
+            elif self.stype == "FREQ":
+                self.dXdS = -SPEED_OF_LIGHT / (self.crval_si**2)
+            elif self.stype == "AFRQ":
+                f = self.crval_si / (2.0 * math.pi)
+                self.dXdS = -SPEED_OF_LIGHT / (2.0 * math.pi * f**2)
+            elif self.stype == "ENER":
+                f = self.crval_si / PLANCK
+                self.dXdS = -SPEED_OF_LIGHT / (PLANCK * f**2)
+            elif self.stype == "WAVN":
+                self.dXdS = -1.0 / (self.crval_si**2)
+            elif self.stype == "VRAD":
+                f = self.restfrq * (1.0 - self.crval_si / SPEED_OF_LIGHT)
+                self.dXdS = self.restfrq / (f**2)
+            elif self.stype == "VOPT":
+                self.dXdS = self.restwav / SPEED_OF_LIGHT
+            elif self.stype == "ZOPT":
+                self.dXdS = self.restwav
+            elif self.stype == "VELO":
+                try:
+                    import torch
+                    s_tensor = torch.tensor(self.crval_si, dtype=torch.float64, requires_grad=True)
+                    X_tensor = convert_spectral(
+                        s_tensor,
+                        self.stype,
+                        "WAVE",
+                        rest_frequency=self.restfrq,
+                        rest_wavelength=self.restwav,
+                    )
+                    X_tensor.backward()
+                    self.dXdS = float(s_tensor.grad.item())
+                except Exception:
+                    eps = 1e-6 * max(1.0, abs(self.crval_si))
+                    val_plus = float(
+                        convert_spectral(
+                            self.crval_si + eps,
+                            self.stype,
+                            "WAVE",
+                            rest_frequency=self.restfrq,
+                            rest_wavelength=self.restwav,
+                        ).item()
+                    )
+                    val_minus = float(
+                        convert_spectral(
+                            self.crval_si - eps,
+                            self.stype,
+                            "WAVE",
+                            rest_frequency=self.restfrq,
+                            rest_wavelength=self.restwav,
+                        ).item()
+                    )
+                    self.dXdS = (val_plus - val_minus) / (2.0 * eps)
+            else:
+                self.dXdS = 1.0
+
+            cos_b = math.cos(self.beta_r * d2r)
+            cos_t = math.cos(theta * d2r)
+            if abs(cos_b) < 1e-12:
+                cos_b = 1e-12 if cos_b >= 0 else -1e-12
+            self.w2 = self.dXdS * self.t_prime / (cos_b * (cos_t**2))
+            self.w2 = self.w2 * self.scale
+
+            self.w3 = self.beta_r + theta
+            self.w4 = (n_r - dn_r * self.lambda_r) * math.sin(alpha * d2r)
+            self.w5 = 1.0 / self.t_prime
+
+        elif self.is_log:
+            pass
+
+        elif self.algo:
+            self.xtype_char = self.algo[0]
+            self.ptype_char = self.algo[2]
+
+            xtype_map = {"F": "FREQ", "W": "WAVE", "A": "AWAV", "V": "VELO"}
+            self.xtype_name = xtype_map[self.xtype_char]
+            self.ptype_name = xtype_map[self.ptype_char]
+
+            self.crvalX_si = float(
+                convert_spectral(
+                    self.crval_si,
+                    self.stype,
+                    self.xtype_name,
+                    rest_frequency=self.restfrq,
+                    rest_wavelength=self.restwav,
+                ).item()
+            )
+
+            try:
+                    import torch
+                    s_tensor = torch.tensor(self.crval_si, dtype=torch.float64, requires_grad=True)
+                    X_tensor = convert_spectral(
+                        s_tensor,
+                        self.stype,
+                        self.xtype_name,
+                        rest_frequency=self.restfrq,
+                        rest_wavelength=self.restwav,
+                    )
+                    X_tensor.backward()
+                    self.dXdS_si = float(s_tensor.grad.item())
+            except Exception:
+                eps = 1e-6 * max(1.0, abs(self.crval_si))
+                val_plus = float(
+                    convert_spectral(
+                        self.crval_si + eps,
+                        self.stype,
+                        self.xtype_name,
+                        rest_frequency=self.restfrq,
+                        rest_wavelength=self.restwav,
+                    ).item()
+                )
+                val_minus = float(
+                    convert_spectral(
+                        self.crval_si - eps,
+                        self.stype,
+                        self.xtype_name,
+                        rest_frequency=self.restfrq,
+                        rest_wavelength=self.restwav,
+                    ).item()
+                )
+                self.dXdS_si = (val_plus - val_minus) / (2.0 * eps)
+            self.dXdS = self.dXdS_si * self.scale
+
+    def pixel_to_world(self, x: Tensor) -> Tensor:
+        if self.is_grism:
+            d2r = math.pi / 180.0
+            r2d = 180.0 / math.pi
+
+            val = self.w1 + x * self.w2
+            beta = torch.atan(val) * r2d + self.w3
+            lambda_val = (torch.sin(beta * d2r) + self.w4) * self.w5
+
+            if self.algo == "GRA":
+                lambda_vac = air_wavelength_to_vacuum(lambda_val, unit="m")
+            else:
+                lambda_vac = lambda_val
+
+            spec_si = convert_spectral(
+                lambda_vac,
+                "WAVE",
+                self.stype,
+                rest_frequency=self.restfrq,
+                rest_wavelength=self.restwav,
+            )
+            return spec_si / self.scale
+
+        elif self.is_log:
+            x_si = x * self.scale
+            X = self.crval_si * torch.exp(x_si / self.crval_si)
+            return X / self.scale
+
+        elif self.algo:
+            X = self.crvalX_si + x * self.dXdS
+            X_safe = torch.where(X > 0.0, X, torch.full_like(X, torch.nan))
+            spec_si = convert_spectral(
+                X_safe,
+                self.xtype_name,
+                self.stype,
+                rest_frequency=self.restfrq,
+                rest_wavelength=self.restwav,
+            )
+            res = spec_si / self.scale
+            return torch.where(X > 0.0, res, torch.full_like(res, torch.nan))
+
+        else:
+            return self.crval_si / self.scale + x
+
+    def world_to_pixel(self, spec: Tensor) -> Tensor:
+        spec_si = spec * self.scale
+
+        if self.is_grism:
+            d2r = math.pi / 180.0
+            r2d = 180.0 / math.pi
+
+            lambda_vac = convert_spectral(
+                spec_si,
+                self.stype,
+                "WAVE",
+                rest_frequency=self.restfrq,
+                rest_wavelength=self.restwav,
+            )
+
+            if self.algo == "GRA":
+                lambda_val = vacuum_wavelength_to_air(lambda_vac, unit="m")
+            else:
+                lambda_val = lambda_vac
+
+            s = lambda_val / self.w5 - self.w4
+            s_clamped = torch.clamp(s, min=-1.0, max=1.0)
+            beta = torch.asin(s_clamped) * r2d
+            val = torch.tan((beta - self.w3) * d2r)
+
+            x = (val - self.w1) / self.w2
+            return torch.where(torch.abs(s) <= 1.0, x, torch.full_like(x, torch.nan))
+
+        elif self.is_log:
+            ratio = spec_si / self.crval_si
+            x_si = self.crval_si * torch.log(ratio)
+            x = x_si / self.scale
+            return torch.where(ratio > 0.0, x, torch.full_like(x, torch.nan))
+
+        elif self.algo:
+            is_positive_type = self.stype in {"WAVE", "FREQ", "AWAV", "WAVN", "ENER"}
+            if is_positive_type:
+                spec_safe = torch.where(spec_si > 0.0, spec_si, torch.full_like(spec_si, torch.nan))
+            else:
+                spec_safe = spec_si
+
+            X = convert_spectral(
+                spec_safe,
+                self.stype,
+                self.xtype_name,
+                rest_frequency=self.restfrq,
+                rest_wavelength=self.restwav,
+            )
+            res = (X - self.crvalX_si) / self.dXdS
+            valid = torch.isfinite(X)
+            if is_positive_type:
+                valid = valid & (spec_si > 0.0)
+            return torch.where(valid, res, torch.full_like(res, torch.nan))
+
+        else:
+            return spec - self.crval_si / self.scale
+

@@ -239,3 +239,93 @@ def test_tabular_axes_from_fits_rejects_coupled_table_arrays() -> None:
             header,
             {"COORD": torch.ones((2, 2), dtype=torch.float64)},
         )
+
+
+def test_wcs_grism_transform() -> None:
+    # Set up a WAVE-GRI grism header
+    header = {
+        "NAXIS": 1,
+        "CTYPE1": "WAVE-GRI",
+        "CUNIT1": "m",
+        "CRPIX1": 1.0,
+        "CRVAL1": 5.0e-7, # reference wavelength = 500 nm
+        "CDELT1": 1.0e-9, # linear step = 1 nm
+        # PV1_j parameters
+        "PV1_0": 300000.0, # G (lines/m)
+        "PV1_1": 1.0,      # m (order)
+        "PV1_2": 15.0,     # alpha (grism angle deg)
+        "PV1_3": 1.5,      # n_r (index)
+        "PV1_4": -1.0e5,   # dn_r (dispersion)
+        "PV1_5": 0.0,      # epsilon (deg)
+        "PV1_6": 10.0,     # theta (deg)
+    }
+    wcs = WCS(header)
+    assert 0 in wcs.spectral_transforms
+    transform = wcs.spectral_transforms[0]
+    assert transform.is_grism
+    assert not transform.is_log
+
+    # Test roundtrip
+    pixels = torch.tensor([[0.0], [10.0], [-5.0]], dtype=torch.float64)
+    world = wcs.pixel_to_world(pixels, origin=0)
+
+    # Assert world coordinates are physically reasonable (around 500 nm +/- grism dispersion)
+    assert torch.all(world > 0.0)
+    assert torch.all(world < 1e-5)
+
+    pixels_back = wcs.world_to_pixel(world, origin=0)
+    torch.testing.assert_close(pixels_back, pixels)
+
+
+def test_wcs_tabular_fits_lazy_auto_loading(tmp_path) -> None:
+    fits_path = tmp_path / "tabular_auto.fits"
+
+    # Write a FITS file with image (referencing tabular axes) and table HDU
+    from torchsky.hdu import TensorHDU, TableHDU, HDUList, Header
+
+    image_header = Header()
+    image_header["SIMPLE"] = True
+    image_header["BITPIX"] = -64
+    image_header["NAXIS"] = 1
+    image_header["NAXIS1"] = 10
+    image_header["CTYPE1"] = "WAVE-TAB"
+    image_header["CUNIT1"] = "nm"
+    image_header["CRPIX1"] = 1.0
+    image_header["CRVAL1"] = 0.0
+    image_header["CDELT1"] = 1.0
+    image_header["PS1_0"] = "WCS-TAB"
+    image_header["PS1_1"] = "WAVE"
+    image_header["PS1_2"] = "PIX"
+
+    image_hdu = TensorHDU(data=torch.zeros(10), header=image_header)
+
+    table_header = Header()
+    table_header["XTENSION"] = "BINTABLE"
+    table_header["EXTNAME"] = "WCS-TAB"
+    table_hdu = TableHDU(
+        tensor_dict={
+            "PIX": torch.tensor([0.0, 2.0, 5.0], dtype=torch.float64),
+            "WAVE": torch.tensor([400.0, 420.0, 510.0], dtype=torch.float64),
+        },
+        header=table_header
+    )
+
+    hdul = HDUList([image_hdu, table_hdu])
+    hdul.write(str(fits_path), overwrite=True)
+
+    # Now open and read
+    with HDUList.fromfile(str(fits_path)) as loaded_hdul:
+        assert len(loaded_hdul) == 2
+        img = loaded_hdul[0]
+        # Accessing img.wcs should automatically trigger tabular axis resolution
+        w = img.wcs
+        assert 0 in w.tabular_axes
+
+        # Test coordinate transformation
+        pixels = torch.tensor([[1.0], [3.5]], dtype=torch.float64)
+        world = w.pixel_to_world(pixels, origin=0)
+        torch.testing.assert_close(
+            world,
+            torch.tensor([[410.0], [465.0]], dtype=torch.float64),
+        )
+

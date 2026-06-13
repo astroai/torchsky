@@ -101,6 +101,7 @@ class WCS:
         header: Optional[Dict[str, Any]] = None,
         key: str = "",
         tabular_axes: Mapping[int, TabularAxis] | None = None,
+        tables: Any = None,
         **kwargs,
     ):
         """
@@ -170,7 +171,77 @@ class WCS:
 
         # Move parameters to appropriate buffers/tensors
         self._setup_tensors()
+
+        if header is not None and tabular_axes is None and tables is not None:
+            try:
+                from .tabular import tabular_axes_from_fits
+
+                tabular_axes = tabular_axes_from_fits(header, tables, key=self.wcs_key)
+            except Exception:
+                pass
+
         self._setup_tabular_axes(tabular_axes)
+
+        # Build spectral transforms
+        from .spectral import SpectralTransform, canonical_spectral_type
+
+        self.spectral_transforms = {}
+
+        # We need restfrq/restwav if present
+        restfrq = self.wcs_params.get("RESTFRQ", self.wcs_params.get("RESTFREQ"))
+        restwav = self.wcs_params.get("RESTWAV")
+
+        for axis_idx in range(self.naxis):
+            axis_number = axis_idx + 1
+            ctype = str(self.wcs_params.get(f"CTYPE{axis_number}", "")).strip().upper()
+            try:
+                canonical_spectral_type(ctype)
+                is_spectral = True
+            except ValueError:
+                is_spectral = False
+
+            if is_spectral:
+                crval = float(self.wcs_params.get(f"CRVAL{axis_number}", 0.0))
+                cdelt = float(self.wcs_params.get(f"CDELT{axis_number}", 1.0))
+                cunit = self.wcs_params.get(f"CUNIT{axis_number}")
+
+                # Extract PV keywords for this axis
+                max_j = -1
+                keys_to_search = set()
+                if header is not None:
+                    keys_to_search.update(header.keys())
+                keys_to_search.update(self.wcs_params.keys())
+
+                prefix = f"PV{axis_number}_"
+                for k in keys_to_search:
+                    if str(k).upper().startswith(prefix):
+                        try:
+                            j = int(str(k)[len(prefix) :])
+                            if j > max_j:
+                                max_j = j
+                        except ValueError:
+                            pass
+                pv_list = None
+                if max_j >= 0:
+                    pv_list = [0.0] * (max_j + 1)
+                    for j in range(max_j + 1):
+                        pv_key = f"PV{axis_number}_{j}"
+                        if pv_key in self.wcs_params:
+                            pv_list[j] = float(self.wcs_params[pv_key])
+                        elif header is not None and self._header_has(header, pv_key):
+                            val = float(self._header_get(header, pv_key))
+                            self.wcs_params[pv_key] = val
+                            pv_list[j] = val
+
+                self.spectral_transforms[axis_idx] = SpectralTransform(
+                    ctype=ctype,
+                    crval=crval,
+                    cdelt=cdelt,
+                    cunit=cunit,
+                    restfrq=restfrq,
+                    restwav=restwav,
+                    pv=pv_list,
+                )
         self._compiled_transform_fn = None
         self._compiled_pixel_to_world_2d_fn = None
         self._compiled_world_to_pixel_2d_fn = None
@@ -438,6 +509,11 @@ class WCS:
     def _apply_spectral_algorithm_pixel_to_world(
         self, linear_world: Tensor, axis: int
     ) -> Tensor:
+        if hasattr(self, "spectral_transforms") and axis in self.spectral_transforms:
+            crval = self.crval[axis].to(device=linear_world.device, dtype=linear_world.dtype)
+            x = linear_world - crval
+            return self.spectral_transforms[axis].pixel_to_world(x)
+
         algorithm = self._axis_algorithm_code(axis)
         if algorithm not in {"LOG", "F2W", "W2F"}:
             return linear_world
@@ -457,6 +533,11 @@ class WCS:
     def _apply_spectral_algorithm_world_to_pixel(
         self, world: Tensor, axis: int
     ) -> Tensor:
+        if hasattr(self, "spectral_transforms") and axis in self.spectral_transforms:
+            crval = self.crval[axis].to(device=world.device, dtype=world.dtype)
+            x = self.spectral_transforms[axis].world_to_pixel(world)
+            return crval + x
+
         algorithm = self._axis_algorithm_code(axis)
         if algorithm not in {"LOG", "F2W", "W2F"}:
             return world

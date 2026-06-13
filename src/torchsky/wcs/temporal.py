@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import math
 from typing import Any
 
 import torch
@@ -200,6 +201,89 @@ def iso_to_mjd(value: str) -> float:
     return datetime_to_mjd(datetime.datetime.fromisoformat(text))
 
 
+SPEED_OF_LIGHT = 299792458.0  # m / s
+
+
+def _earth_position_equatorial(mjd: Tensor) -> Tensor:
+    """Approximate Earth J2000 equatorial position relative to the Sun in meters.
+
+    Uses Keplerian orbital elements of the Earth/Moon Barycenter from JPL.
+    """
+    device = mjd.device
+    dtype = mjd.dtype
+
+    jd = mjd + 2400000.5
+    T = (jd - 2451545.0) / 36525.0
+
+    d2r = math.pi / 180.0
+
+    # Keplerian elements (values from JPL "Approximate Positions of the Planets")
+    T_flat = T.to(dtype=torch.float64)
+    a = (1.00000011 - 0.00000005 * T_flat).to(device=device, dtype=dtype)
+    e = (0.01671022 - 0.00003804 * T_flat).to(device=device, dtype=dtype)
+    i = ((0.00005 - 0.01303889 * T_flat) * d2r).to(device=device, dtype=dtype)
+    L = ((100.46435 + 35999.37239722 * T_flat) * d2r).to(device=device, dtype=dtype)
+    varpi = ((102.94719 + 0.33285556 * T_flat) * d2r).to(device=device, dtype=dtype)
+    omega_node = ((-11.26064 - 5.06340278 * T_flat) * d2r).to(device=device, dtype=dtype)
+
+    omega_arg = varpi - omega_node
+    M = L - varpi
+
+    # Solve Kepler's equation M = E - e*sin(E)
+    E = M.clone()
+    for _ in range(3):
+        E = E - (E - e * torch.sin(E) - M) / (1.0 - e * torch.cos(E))
+
+    x_orb = a * (torch.cos(E) - e)
+    y_orb = a * torch.sqrt(1.0 - e**2) * torch.sin(E)
+
+    cos_o = torch.cos(omega_node)
+    sin_o = torch.sin(omega_node)
+    cos_w = torch.cos(omega_arg)
+    sin_w = torch.sin(omega_arg)
+    cos_i = torch.cos(i)
+    sin_i = torch.sin(i)
+
+    P_x = cos_o * cos_w - sin_o * sin_w * cos_i
+    P_y = sin_o * cos_w + cos_o * sin_w * cos_i
+    P_z = sin_w * sin_i
+
+    Q_x = -cos_o * sin_w - sin_o * cos_w * cos_i
+    Q_y = -sin_o * sin_w + cos_o * cos_w * cos_i
+    Q_z = cos_w * sin_i
+
+    r_x = x_orb * P_x + y_orb * Q_x
+    r_y = x_orb * P_y + y_orb * Q_y
+    r_z = x_orb * P_z + y_orb * Q_z
+
+    obliq = 23.4392911 * d2r
+    cos_ob = math.cos(obliq)
+    sin_ob = math.sin(obliq)
+
+    x_eq = r_x
+    y_eq = r_y * cos_ob - r_z * sin_ob
+    z_eq = r_y * sin_ob + r_z * cos_ob
+
+    pos_au = torch.stack([x_eq, y_eq, z_eq], dim=-1)
+
+    AU_IN_METERS = 1.495978707e11
+    return pos_au * AU_IN_METERS
+
+
+def _gmst_rotation_matrix(mjd: Tensor) -> tuple[Tensor, Tensor]:
+    """Calculate Greenwich Mean Sidereal Time (GMST) cos/sin at mjd."""
+    jd = mjd + 2400000.5
+    T = (jd - 2451545.0) / 36525.0
+
+    T_flat = T.to(dtype=torch.float64)
+    jd_flat = jd.to(dtype=torch.float64)
+
+    gmst = 280.46061837 + 360.98564736629 * (jd_flat - 2451545.0) + 0.000387933 * T_flat**2 - T_flat**3 / 38710000.0
+    gmst_rad = (gmst * (math.pi / 180.0)).to(device=mjd.device, dtype=mjd.dtype)
+
+    return torch.cos(gmst_rad), torch.sin(gmst_rad)
+
+
 class TemporalWCS:
     """
     FITS Temporal WCS implementation (Paper IV).
@@ -302,16 +386,64 @@ class TemporalWCS:
         """
         Apply reference-position light-time corrections when locally available.
 
-        Full barycentric/heliocentric/geocentric corrections require observatory
-        location plus solar-system ephemerides. torchsky does not currently ship
-        an ephemeris backend, so unsupported corrections fail explicitly instead
-        of returning a silently wrong timestamp.
+        Computes light-travel corrections to the Solar System Barycenter (BJD)
+        or Heliocenter (HJD).
         """
         if self.trefpos in {"TOPOCENTER", "TOPOCENTRE"}:
             return mjd
-        raise NotImplementedError(
-            f"{self.trefpos} temporal corrections require an ephemeris backend"
-        )
+
+        if self.trefpos not in {"BARYCENTER", "HELIOCENTER"}:
+            raise NotImplementedError(
+                f"{self.trefpos} temporal corrections are not supported"
+            )
+
+        # Vectorized Keplerian Earth position relative to the Sun in meters
+        r_earth = _earth_position_equatorial(mjd)
+
+        # Convert observatory coordinates to Cartesian meters in J2000 equatorial frame
+        obs_x, obs_y, obs_z = 0.0, 0.0, 0.0
+        has_obs = False
+        if self.obsgeo_xyz_m is not None:
+            obs_x, obs_y, obs_z = self.obsgeo_xyz_m
+            has_obs = True
+        elif self.obsgeo_lon_lat_height is not None:
+            lon, lat, height = self.obsgeo_lon_lat_height
+            d2r = math.pi / 180.0
+            a_wgs = 6378137.0
+            f_wgs = 1.0 / 298.257223563
+            e2 = 2 * f_wgs - f_wgs**2
+            sin_lat = math.sin(lat * d2r)
+            cos_lat = math.cos(lat * d2r)
+            N = a_wgs / math.sqrt(1.0 - e2 * sin_lat**2)
+            obs_x = (N + height) * cos_lat * math.cos(lon * d2r)
+            obs_y = (N + height) * cos_lat * math.sin(lon * d2r)
+            obs_z = (N * (1.0 - e2) + height) * sin_lat
+            has_obs = True
+
+        if has_obs:
+            cos_g, sin_g = _gmst_rotation_matrix(mjd)
+            obs_inertial_x = obs_x * cos_g - obs_y * sin_g
+            obs_inertial_y = obs_x * sin_g + obs_y * cos_g
+            obs_inertial_z = torch.full_like(obs_inertial_x, obs_z)
+            r_obs = torch.stack([obs_inertial_x, obs_inertial_y, obs_inertial_z], dim=-1)
+            r = r_earth + r_obs
+        else:
+            r = r_earth
+
+        # Source unit vector pointing from observer to the source
+        d2r = math.pi / 180.0
+        cos_dec = torch.cos(dec * d2r)
+        s_x = cos_dec * torch.cos(ra * d2r)
+        s_y = cos_dec * torch.sin(ra * d2r)
+        s_z = torch.sin(dec * d2r)
+        s = torch.stack([s_x, s_y, s_z], dim=-1)
+
+        # Dot product: dot(r, s)
+        dot_r_s = torch.sum(r * s, dim=-1)
+
+        # Correction in days: dot(r, s) / (c * SECONDS_PER_DAY)
+        dt_days = dot_r_s / (SPEED_OF_LIGHT * SECONDS_PER_DAY)
+        return mjd + dt_days
 
     @property
     def requires_ephemeris(self) -> bool:
