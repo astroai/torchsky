@@ -272,6 +272,8 @@ __all__ = [
     # WCS functionality
     "WCS",
     "ChecksumVerifier",
+    "write_checksums",
+    "verify_checksums",
     # Dataset classes
     "FITSDataset",
     "IterableFITSDataset",
@@ -326,6 +328,7 @@ __all__ = [
     "scene",
     "sphere",
     "map",
+    "field",
     "encoders",
     "catalogs",
 ]

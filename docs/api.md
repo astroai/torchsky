@@ -20,6 +20,7 @@ For the high-level design target and refactor rules, see
 | Use coordinate conversion helpers | `torchsky.wcs` | [wcs.md](wcs.md) |
 | Use spherical predicates, regions, HEALPix, MOC, sparse maps, SHT | `torchsky.sphere` | [sphere.md](sphere.md) |
 | Build coadds and map products | `torchsky.map` | [map.md](map.md) |
+| Work with scenes and observation facades | `torchsky.scene` | [scene.md](scene.md) |
 | Crossmatch catalogs | `torchsky.catalogs` | [catalogs.md](catalogs.md) |
 | Work with spectra and cubes | `torchsky.spectral` | [spectral.md](spectral.md) |
 | Build PyTorch datasets/loaders | `torchsky.FITSDataset`, `torchsky.transforms`, root loader/cache helpers | [ml.md](ml.md) |
@@ -60,6 +61,7 @@ metadata.
 - [`torchsky.wcs`](wcs.md)
 - [`torchsky.sphere`](sphere.md)
 - [`torchsky.map`](map.md)
+- [`torchsky.scene`](scene.md)
 - [`torchsky.catalogs`](catalogs.md)
 - [`torchsky.spectral`](spectral.md)
 - [`torchsky.encoders`](encoders.md)

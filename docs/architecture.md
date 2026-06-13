@@ -28,7 +28,7 @@ work should move toward these pillars without breaking existing imports.
 |---|---|---|
 | `io` | FITS images, HDUs, headers, tables, cutouts, streaming, and cache policy | `torchsky.read`, `torchsky.write`, `torchsky.open`, `torchsky.table` |
 | `world` | Coordinates, WCS, frames, spherical geometry, HEALPix, MOC, sparse maps, and harmonics | `torchsky.wcs.WCS`, `torchsky.sphere` |
-| `scene` | Observations, operators, instruments, latent scenes, products, coadds, objectives, renderers, and fits | promoted `torchsky.map` paths, field/INR modelling while it remains experimental |
+| `scene` | Observations, operators, instruments, latent scenes, products, coadds, objectives, renderers, and fits | promoted `torchsky.map` paths, `torchsky.scene` facade, and field/INR modelling while it remains experimental |
 | `viz` | Browser and notebook-facing visualization | `torchsky.viz` |
 
 Use `torchsky.API_SURFACES`, `torchsky.SurfaceTier`,

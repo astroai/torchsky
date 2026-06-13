@@ -23,6 +23,8 @@ validation, and API pointers.
   predicate pushdown, and table mutation.
 - [WCS](wcs.md) - `torchsky.wcs`, transforms, spectral/time axes, frames,
   alignment, TAB axes, and compiled tensor paths.
+- [Scene](scene.md) - `torchsky.scene`, promoted facade, observations, target render
+  specifications, and operator adapters.
 - [Sphere and HEALPix](sphere.md) - `torchsky.sphere`, HEALPix, geometry,
   sparse maps, MOC, and harmonic primitives.
 - [Map](map.md) - `torchsky.map`, products, kernels, value semantics, truth
