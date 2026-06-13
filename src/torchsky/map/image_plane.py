@@ -13,14 +13,13 @@ from torch import Tensor
 
 from .. import WCS, read, write
 from ..device import default_compute_device
-from ..sphere.moc import MOC, nest2uniq
+from ..sphere.moc import MOC
 from ..spectral import (
     DataCube,
     SpectralAxis,
     spectral_axis_from_header,
     spectral_bin_edges_from_header,
 )
-from ..sphere import healpix as _healpix
 
 from .fft_affine_ldu import resample_fft_ldu_affine_2d
 from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_fft2d
@@ -41,7 +40,6 @@ from .operators.execution import (
     masked_median_stack,
     prepare_image_observation_data,
     project_image_observation_geometry,
-    source_bbox_on_target,
     stack_inputs_from_projected_observation,
     wcs_has_distortion,
 )
@@ -57,7 +55,18 @@ from .operators.noise import ExplicitNoiseOp
 from .operators.pixel_area import (
     pixel_area_sr_map,
     representative_pixel_area_sr,
-    wrapped_delta_ra_deg,
+)
+from .windowing import (
+    _prepare_target,
+    _window_large_tan_target,
+    _weight_map_to_moc,
+    _subtarget_header_for_window,
+    _PreparedImagePlaneTarget,
+    _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS,  # noqa: F401
+    _LARGE_TAN_WINDOWING_EDGE_SAMPLES,      # noqa: F401
+    _LARGE_TAN_WINDOWING_MARGIN_PIXELS,    # noqa: F401
+    _build_target_world_grid,                # noqa: F401
+    _quadrature_target_world_grids,
 )
 from .operators.radiometry import apply_image_observation_calibration
 from .operators.resampling import (
@@ -74,6 +83,10 @@ from .spectral_nufft import resample_nonuniform_spectral_fast_2d
 from .spectral_nonuniform import resample_nonuniform_spectral_2d
 
 # Header probe for area scaling: recoverable failures when reading metadata only.
+from .io_utils import (
+    read_image_plane_observation,
+    _observation_header_for_area_scaling,
+)
 def _resolve_map_device(device: torch.device | str | None) -> torch.device:
     if device is not None:
         return torch.device(device)
@@ -210,20 +223,6 @@ class SpectralCubeMapResult:
         )
 
 
-@dataclass
-class _PreparedImagePlaneTarget:
-    header: dict
-    wcs: WCS
-    shape: tuple[int, int]
-    ra_deg: Tensor
-    dec_deg: Tensor
-    center_ra_deg: float
-    center_dec_deg: float
-    cap_radius_deg: float
-    pixel_area_sr: Tensor | None = None
-    representative_pixel_area_sr: float | None = None
-    quadrature_world_grids: tuple[tuple[Tensor, Tensor], ...] | None = None
-
 
 @dataclass
 class _ProjectedImagePlaneObservation:
@@ -234,9 +233,6 @@ class _ProjectedImagePlaneObservation:
     target_window: tuple[int, int, int, int] | None = None
 
 
-_LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS = 1_500_000
-_LARGE_TAN_WINDOWING_EDGE_SAMPLES = 9
-_LARGE_TAN_WINDOWING_MARGIN_PIXELS = 2
 _DRIZZLE_FORWARD_CHUNK_PIXELS = 262_144
 
 _DEFAULT_MAP_OPERATOR_BUNDLE = ObservationOperatorBundle(
@@ -272,38 +268,6 @@ def _try_external_drizzle_helpers():
         estimate_pixel_scale_ratio,
     )
 
-
-def _build_target_world_grid(
-    target_wcs: WCS, height: int, width: int, device: torch.device
-) -> tuple[Tensor, Tensor]:
-    y, x = torch.meshgrid(
-        torch.arange(height, dtype=torch.float64, device=device),
-        torch.arange(width, dtype=torch.float64, device=device),
-        indexing="ij",
-    )
-    ra, dec = target_wcs.pixel_to_world(x, y)
-    return ra, dec
-
-
-def _observation_header_for_area_scaling(
-    obs: ImageObservation,
-    *,
-    cached_header: dict | None = None,
-) -> dict:
-    if cached_header is not None:
-        return dict(cached_header)
-    try:
-        from .. import Header, cpp as _cpp
-
-        hdu = obs.hdu
-        if isinstance(hdu, int) or hdu is None:
-            return dict(
-                Header(_cpp.read_header_dict(obs.path, 0 if hdu is None else hdu))
-            )
-    except _HEADER_PROBE_EXC:
-        pass
-    _, header = read(obs.path, hdu=obs.hdu, return_header=True)
-    return dict(header)
 
 
 def _should_apply_surface_brightness_area_scaling(
@@ -448,24 +412,6 @@ def _tpv_candidate_mask(
     xi_min, xi_max, eta_min, eta_max = _tpv_affine_envelope(source_wcs, image_shape)
 
 
-def _spherical_cap_radius_from_world_grid(
-    ra_deg: Tensor,
-    dec_deg: Tensor,
-    *,
-    center_ra_deg: float,
-    center_dec_deg: float,
-) -> float:
-    dra = wrapped_delta_ra_deg(
-        ra_deg, torch.tensor(center_ra_deg, dtype=ra_deg.dtype, device=ra_deg.device)
-    )
-    dec0 = torch.tensor(center_dec_deg, dtype=dec_deg.dtype, device=dec_deg.device)
-    cos_dec = torch.cos(dec_deg * (math.pi / 180.0))
-    # Optimization: use * instead of **2 for performance
-    dra_cos = dra * cos_dec
-    ddec = dec_deg - dec0
-    chord = torch.sqrt(dra_cos * dra_cos + ddec * ddec)
-    return float(torch.max(chord).item())
-
 
 def _tpv_source_cap_radius_deg(source_wcs: WCS, image_shape: tuple[int, int]) -> float:
     xi_min, xi_max, eta_min, eta_max = _tpv_affine_envelope(source_wcs, image_shape)
@@ -536,45 +482,6 @@ def _roundtrip_validity_mask(
     valid[in_bounds] = err_arcsec <= max_err_arcsec
     return valid.reshape_as(x_src)
 
-
-def _quadrature_target_world_grid(
-    target_wcs: WCS,
-    shape: tuple[int, int],
-    *,
-    device: torch.device,
-    offset_x: float,
-    offset_y: float,
-) -> tuple[Tensor, Tensor]:
-    height, width = int(shape[0]), int(shape[1])
-    y, x = torch.meshgrid(
-        torch.arange(height, dtype=torch.float64, device=device) + float(offset_y),
-        torch.arange(width, dtype=torch.float64, device=device) + float(offset_x),
-        indexing="ij",
-    )
-    return target_wcs.pixel_to_world(x, y)
-
-
-def _quadrature_target_world_grids(
-    target_wcs: WCS,
-    shape: tuple[int, int],
-    *,
-    device: torch.device,
-) -> tuple[tuple[Tensor, Tensor], ...]:
-    offset = 0.5 / math.sqrt(3.0)
-    offsets = (-offset, offset)
-    grids: list[tuple[Tensor, Tensor]] = []
-    for offset_y in offsets:
-        for offset_x in offsets:
-            grids.append(
-                _quadrature_target_world_grid(
-                    target_wcs,
-                    shape,
-                    device=device,
-                    offset_x=offset_x,
-                    offset_y=offset_y,
-                )
-            )
-    return tuple(grids)
 
 
 def _load_observation_weight_map(
@@ -1310,154 +1217,6 @@ def _maybe_external_drizzle_resample_weighted_to_target(
     return out_img * out_wht, out_wht
 
 
-def _prepare_target(
-    *,
-    header: dict,
-    target_wcs: WCS,
-    target_shape: tuple[int, int],
-    device: torch.device,
-    include_pixel_area: bool = False,
-    include_representative_pixel_area: bool = False,
-    include_quadrature: bool = False,
-) -> _PreparedImagePlaneTarget:
-    ra_deg, dec_deg = _build_target_world_grid(
-        target_wcs,
-        target_shape[0],
-        target_shape[1],
-        device=device,
-    )
-    center_ra_deg = float(target_wcs.alpha0)
-    center_dec_deg = float(target_wcs.delta0)
-    return _PreparedImagePlaneTarget(
-        header=header,
-        wcs=target_wcs,
-        shape=target_shape,
-        ra_deg=ra_deg,
-        dec_deg=dec_deg,
-        center_ra_deg=center_ra_deg,
-        center_dec_deg=center_dec_deg,
-        cap_radius_deg=_spherical_cap_radius_from_world_grid(
-            ra_deg,
-            dec_deg,
-            center_ra_deg=center_ra_deg,
-            center_dec_deg=center_dec_deg,
-        ),
-        pixel_area_sr=(
-            pixel_area_sr_map(target_wcs, target_shape, device=device)
-            if include_pixel_area
-            else None
-        ),
-        representative_pixel_area_sr=(
-            representative_pixel_area_sr(target_wcs, target_shape, device=device)
-            if include_representative_pixel_area
-            else None
-        ),
-        quadrature_world_grids=(
-            _quadrature_target_world_grids(
-                target_wcs,
-                target_shape,
-                device=device,
-            )
-            if include_quadrature
-            else None
-        ),
-    )
-
-
-def _slice_prepared_target(
-    target: _PreparedImagePlaneTarget,
-    *,
-    y0: int,
-    y1: int,
-    x0: int,
-    x1: int,
-) -> _PreparedImagePlaneTarget:
-    quadrature = None
-    if target.quadrature_world_grids is not None:
-        quadrature = tuple(
-            (ra[y0:y1, x0:x1], dec[y0:y1, x0:x1])
-            for ra, dec in target.quadrature_world_grids
-        )
-    pixel_area = (
-        None if target.pixel_area_sr is None else target.pixel_area_sr[y0:y1, x0:x1]
-    )
-    return _PreparedImagePlaneTarget(
-        header=target.header,
-        wcs=target.wcs,
-        shape=(y1 - y0, x1 - x0),
-        ra_deg=target.ra_deg[y0:y1, x0:x1],
-        dec_deg=target.dec_deg[y0:y1, x0:x1],
-        center_ra_deg=target.center_ra_deg,
-        center_dec_deg=target.center_dec_deg,
-        cap_radius_deg=target.cap_radius_deg,
-        pixel_area_sr=pixel_area,
-        representative_pixel_area_sr=target.representative_pixel_area_sr,
-        quadrature_world_grids=quadrature,
-    )
-
-
-def _window_large_tan_target(
-    *,
-    source_wcs: WCS,
-    source_header: dict,
-    source_shape: tuple[int, int],
-    target: _PreparedImagePlaneTarget,
-    target_header: dict,
-    value_semantics: MapValueSemantics,
-) -> tuple[_PreparedImagePlaneTarget | None, tuple[int, int, int, int] | None]:
-    if value_semantics != "surface_brightness":
-        return target, None
-    if (
-        int(target.shape[0]) * int(target.shape[1])
-        < _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS
-    ):
-        return target, None
-    if not is_plain_tan_header(source_header) or not is_plain_tan_header(
-        target_header
-    ):
-        return target, None
-    if wcs_has_distortion(source_wcs):
-        return target, None
-    bbox = source_bbox_on_target(
-        source_wcs,
-        source_shape,
-        target.wcs,
-        target.shape,
-        margin=_LARGE_TAN_WINDOWING_MARGIN_PIXELS,
-        edge_samples=_LARGE_TAN_WINDOWING_EDGE_SAMPLES,
-    )
-    if bbox is None:
-        return None, (0, 0, 0, 0)
-    y0, y1, x0, x1 = bbox
-    if (
-        y0 == 0
-        and y1 == int(target.shape[0])
-        and x0 == 0
-        and x1 == int(target.shape[1])
-    ):
-        return target, None
-    return _slice_prepared_target(target, y0=y0, y1=y1, x0=x0, x1=x1), bbox
-
-
-def _weight_map_to_moc(
-    weight_map: Tensor,
-    target: _PreparedImagePlaneTarget,
-    *,
-    max_order: int,
-) -> MOC:
-    valid = weight_map > 0.0
-    if not bool(valid.any()):
-        return MOC(torch.empty((0,), dtype=torch.int64))
-    nside = 1 << int(max_order)
-    pix = _healpix.ang2pix(
-        nside,
-        target.ra_deg[valid],
-        target.dec_deg[valid],
-        nest=True,
-        lonlat=True,
-    )
-    return MOC(nest2uniq(nside, pix.to(torch.int64)))
-
 
 def _validated_spectral_axis(axis: SpectralAxis) -> SpectralAxis:
     values = axis.values.to(dtype=torch.float64)
@@ -1696,11 +1455,9 @@ def _project_observation_to_target_chunk(
         raise ValueError("Observation weights must be positive")
 
     if image is None or header_dict_obs is None:
-        image, header = read(
-            obs.path, hdu=obs.hdu, return_header=True, device=str(device)
+        image, header_dict_obs = read_image_plane_observation(
+            obs.path, hdu=obs.hdu, device=str(device)
         )
-        image = validate_image_plane_2d(image)
-        header_dict_obs = dict(header)
     image = image.to(device=device)
     prepared_observation = prepare_image_observation_data(
         obs,
@@ -1757,7 +1514,7 @@ def _project_observation_to_target_chunk(
                 source_weight,
                 source_wcs,
                 prepared_target_view,
-                geometry=operator_bundle.geometry,
+                operator_bundle=operator_bundle,
                 resampling_kernel=resampling_kernel,
                 value_semantics=value_semantics,
                 drizzle_pixfrac=drizzle_pixfrac,
@@ -1834,32 +1591,6 @@ def _project_observation_to_target(
         overlap[y0:y1, x0:x1] = projected.overlap
     return sampled_numer, sampled_weight, overlap, projected.moc
 
-
-def _subtarget_header_for_window(
-    full_header: dict,
-    *,
-    full_shape: tuple[int, int],
-    y0: int,
-    y1: int,
-    x0: int,
-    x1: int,
-) -> tuple[dict, tuple[int, int]]:
-    """Build WCS header for a pixel window ``[y0,y1) × [x0,x1)`` in the full grid."""
-    h = int(y1) - int(y0)
-    w = int(x1) - int(x0)
-    if h <= 0 or w <= 0:
-        raise ValueError("subtarget window must have positive width and height")
-    fh, fw = int(full_shape[0]), int(full_shape[1])
-    if y0 < 0 or x0 < 0 or y1 > fh or x1 > fw:
-        raise ValueError("subtarget window exceeds full image bounds")
-    out = dict(full_header)
-    out["NAXIS1"] = w
-    out["NAXIS2"] = h
-    if "CRPIX1" in out:
-        out["CRPIX1"] = float(out["CRPIX1"]) - float(x0)
-    if "CRPIX2" in out:
-        out["CRPIX2"] = float(out["CRPIX2"]) - float(y0)
-    return out, (h, w)
 
 
 def plan_image_plane_target(

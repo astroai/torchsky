@@ -221,7 +221,8 @@ def project_image_observation_geometry(
     source_wcs,
     target,
     *,
-    geometry,
+    geometry=None,
+    operator_bundle: ObservationOperatorBundle | None = None,
     resampling_kernel: str,
     value_semantics: str,
     drizzle_pixfrac: float,
@@ -232,6 +233,10 @@ def project_image_observation_geometry(
     forward_project_weighted_to_target_fn: ForwardProjectFn,
 ) -> tuple[Tensor, Tensor]:
     """Dispatch geometry execution through operator-family types instead of local branches."""
+    if geometry is None:
+        if operator_bundle is None:
+            raise ValueError("Either geometry or operator_bundle must be provided")
+        geometry = operator_bundle.geometry
     if isinstance(geometry, ExactDrizzleGeometryOp):
         if resampling_kernel == "drizzle_square":
             return exact_square_drizzle_project(
