@@ -68,7 +68,10 @@ validation, and API pointers.
 These files are planning and research context, not the current public API
 contract.
 
-- [Roadmap status](roadmap/status.md) - roadmap thesis plus code-grounded status.
+- [Roadmap status](roadmap/status.md) - high-level roadmap thesis plus
+  code-grounded capability status.
+- [Implementation ledger](roadmap/implementation-ledger.md) - maintained
+  low-level record of shipped improvements, validation gates, and follow-ups.
 - [Research knowledge base](roadmap/knowledge-base.md)
 - [World model whitepaper plan](roadmap/world-model-whitepaper-plan.md)
 - [Sky measure scene plan](roadmap/sky-measure-scene-plan.md)

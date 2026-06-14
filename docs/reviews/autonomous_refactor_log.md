@@ -1,5 +1,10 @@
 # Autonomous Refactor Log
 
+> Archived audit trail. This file is no longer the active roadmap or work
+> queue. Use `../roadmap/status.md` for the high-level current roadmap and
+> `../roadmap/implementation-ledger.md` for the maintained low-level record of
+> shipped improvements, tests, and follow-ups.
+
 Target branch: `codex/autonomous-refactor-2026-05`
 
 Start gate: May 8, 2026, `America/Vancouver`
@@ -1252,20 +1257,3 @@ Start gate: May 8, 2026, `America/Vancouver`
   - Result: `1721 passed, 59 skipped, 63 warnings`.
   - Note: pytest exited cleanly after printing existing nanobind shutdown leak
     diagnostics for `FITSFile`.
-
-## Work Queue Snapshot
-
-- [x] A0: Establish branch, baseline, and safety checks.
-- [x] A1: Declare the public modelling spine in docs and API-surface metadata.
-- [x] A2: Add or tighten tests for public API tiers and cold import behavior.
-- [x] B1: Extract root FITS I/O implementation without user-visible churn.
-- [x] B2: Move Python-side root I/O caches behind a single cache facade.
-- [x] B3: Make `torchsky.io` call the implementation directly.
-- [x] B4: Preserve root FITS public behavior.
-- [x] C1: Add promoted observation/product/scene facades.
-- [x] C2: Define executable operator protocols or adapters.
-- [x] D1: Move HEALPix ownership toward `torchsky.sphere`.
-- [x] D2: Remove leftover HEALPix, coords, and geom alias surfaces.
-- [x] E1: Add `torchsky info` and `torchsky cat` CLI workflows.
-- [x] F1: Rationalize field model exposure through presets and factories.
-- [ ] G1: Continue roadmap implementation from `docs/roadmap/status.md`.

@@ -1,6 +1,11 @@
 # Roadmap Status
 
 > Roadmap and research note: this file is a time-sensitive planning/status surface, not the current public API contract. For shipped APIs, start with `../api.md`.
+>
+> Navigation: this file is the high-level roadmap and capability status. Use
+> `implementation-ledger.md` for the maintained low-level record of shipped
+> improvements, validation gates, and concrete follow-ups. The old
+> `../reviews/autonomous_refactor_log.md` is an archive only.
 
 ## Vision
 
@@ -72,7 +77,7 @@ Last updated: 2026-06-14.
 ## Current Baseline
 
 - `pixi run ci-local` passes.
-- Latest local gate result: `1718 passed, 59 skipped, 77 warnings`.
+- Latest local gate result: `1721 passed, 59 skipped, 63 warnings`.
 - Focused FITS gate result: `78 passed, 1 skipped`.
 - Focused FITS closeout gate result: `30 passed`.
 - Focused WCS API gate result: `24 passed`.
@@ -82,7 +87,7 @@ Last updated: 2026-06-14.
 - Focused WCS celestial frame result: `4 passed`.
 - Focused WCS alignment correction result: `6 passed`.
 - Focused WCS tabular lookup result: `29 passed`.
-- Focused autonomous-review hardening gates: WCS/tabular, sparse/MOC, spectral/viz, field diagnostics, API/cold import, scene/operator binding, and spectral cache clear regressions passed in targeted replay.
+- Focused autonomous-review hardening gates: WCS/tabular, sparse/MOC, spectral/viz, field diagnostics, API/cold import, scene/operator binding, spectral cache clear, datasets/dataloaders, transforms, and frame mock regressions passed in targeted replay.
 - Focused field diagnostics/bundle/presets/docs gate result: `45 passed`.
 - Focused WCS + field diagnostics/bundle gate result: `96 passed`.
 - Focused WCS API + perf gate result: `29 passed`.
