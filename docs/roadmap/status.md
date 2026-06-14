@@ -76,27 +76,20 @@ Last updated: 2026-06-14.
 
 ## Current Baseline
 
-- `pixi run ci-local` passes.
-- Latest local gate result: `1721 passed, 59 skipped, 63 warnings`.
-- Focused FITS gate result: `78 passed, 1 skipped`.
-- Focused FITS closeout gate result: `30 passed`.
-- Focused WCS API gate result: `24 passed`.
-- Focused WCS broad replay result: `277 passed, 2 skipped`.
-- Focused WCS spectral/grism/velocity result: `29 passed`.
-- Focused WCS temporal scale/reference-position result: `15 passed`.
-- Focused WCS celestial frame result: `4 passed`.
-- Focused WCS alignment correction result: `6 passed`.
-- Focused WCS tabular lookup result: `29 passed`.
-- Focused autonomous-review hardening gates: WCS/tabular, sparse/MOC, spectral/viz, field diagnostics, API/cold import, scene/operator binding, spectral cache clear, datasets/dataloaders, transforms, and frame mock regressions passed in targeted replay.
-- Focused field diagnostics/bundle/presets/docs gate result: `45 passed`.
-- Focused WCS + field diagnostics/bundle gate result: `96 passed`.
-- Focused WCS API + perf gate result: `29 passed`.
-- Focused WCS spectral/temporal WCSLIB benchmark result: `pixi run bench-wcs-spectral-temporal` passed at `N=200000`. Spectral parity was exact/roundoff-level (`<= 3.55e-15` world units, `<= 2.39e-12` pixel). Temporal scale parity was exact or `<= 7.28e-12` days after adding UTC leap-day fractional-offset handling. WCSLIB remains faster for the one-axis spectral benchmark; torchsky was faster for UTC/TAI/TT/GPS scale conversion in this run.
-- Focused WCS grism/velocity benchmark smoke result: `pixi run bench-wcs-spectral-temporal --n-points 1000 --runs 1 --skip-temporal` passed with added `WAVE-GRI`, `WAVE-GRA`, `FREQ-GRA`, `WAVE-V2W`, `VELO-F2V`, and `FREQ-V2F` cases.
-- Focused scene/operator-adapter gate result: `68 passed`.
-- Public API surfaces are now grouped into `core`, `compat`, and `experimental` tiers in `torchsky.surfaces`.
+- Full local gate: `pixi run ci-local` passes.
+- Latest full local gate result: `1721 passed, 59 skipped, 63 warnings`.
+- High-level roadmap and replacement status live in this file.
+- Low-level shipped-item records, focused replay counts, benchmark snippets, and concrete follow-ups live in `implementation-ledger.md`.
+- The archived `../reviews/autonomous_refactor_log.md` is no longer the active work queue.
+- Public API surfaces are grouped into `core`, `compat`, and `experimental` tiers in `torchsky.surfaces`.
+- Root import remains a lean lazy facade; heavier functionality is discoverable through owning domain namespaces.
+- Current technical center of gravity: common observation operators, support-aware field diagnostics, adaptive local-capacity field components, WCS/sphere replacement closure, and real-data/scale gates.
 
 ## Completed In Current Slice
+
+This section is the high-level shipped-capability summary. For lower-level
+test counts, benchmark details, and exact follow-up items, use
+`implementation-ledger.md`.
 
 - API stability tiers:
   - Added `torchsky.surfaces.SurfaceTier`, `torchsky.surfaces.APISurface`, `torchsky.surfaces.API_SURFACES`, `torchsky.surfaces.get_api_surface`, and `torchsky.surfaces.api_surfaces_by_tier`.

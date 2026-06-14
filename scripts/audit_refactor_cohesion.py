@@ -42,6 +42,7 @@ REQUIRED_FILES = (
     "docs/field.md",
     "docs/scene.md",
     "docs/reviews/autonomous_refactor_log.md",
+    "docs/roadmap/implementation-ledger.md",
     "docs/roadmap/status.md",
     "benchmarks/bench_map_ground_truth.py",
     "benchmarks/bench_map_multifield_truth.py",
