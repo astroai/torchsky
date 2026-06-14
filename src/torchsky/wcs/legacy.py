@@ -144,7 +144,6 @@ class LegacyPolynomial:
         return basis
 
 
-
 _ZPX_PATTERN = re.compile(r"projp(\d+)\s*=\s*(\S+)", re.IGNORECASE)
 
 

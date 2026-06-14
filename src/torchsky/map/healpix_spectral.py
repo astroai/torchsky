@@ -11,7 +11,6 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from .. import WCS
 from ..sphere import (
     alm2lonlat,
     alm2lonlat_spin,
@@ -21,8 +20,9 @@ from ..sphere import (
     map2alm_spin,
     smoothalm,
 )
-from ..sphere.spectral import _legendre_l_sequence, _wigner_d_l_sequence, alm_index
 from ..sphere import healpix as hp
+from ..sphere.spectral import _legendre_l_sequence, _wigner_d_l_sequence, alm_index
+from ..wcs import WCS
 from .healpix_image_plane import sample_healpix_map_on_image_header
 
 

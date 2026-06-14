@@ -10,6 +10,7 @@ import pytest
 import torch
 
 import torchsky
+import torchsky.cpp as cpp
 from torchsky.cli import build_parser
 
 
@@ -73,7 +74,7 @@ class TestMainAPI:
         filepath, expected_data = self.create_test_fits()
 
         try:
-            result, header = torchsky.read_image(
+            result, header = torchsky.io.read_image(
                 filepath, return_header=True, mmap=False
             )
             assert isinstance(result, torch.Tensor)
@@ -90,7 +91,7 @@ class TestMainAPI:
 
         try:
             default = torchsky.read(filepath, hdu=0, mmap=False)
-            image = torchsky.read_image(filepath, hdu=0, mmap=False)
+            image = torchsky.io.read_image(filepath, hdu=0, mmap=False)
             torch.testing.assert_close(default, image)
         finally:
             os.unlink(filepath)
@@ -100,7 +101,7 @@ class TestMainAPI:
         filepath, _ = self.create_test_fits()
         try:
             with pytest.raises(ValueError, match="non-negative integer"):
-                torchsky.read_image(filepath, hdu="auto", mmap=False)  # type: ignore[arg-type]
+                torchsky.io.read_image(filepath, hdu="auto", mmap=False)  # type: ignore[arg-type]
         finally:
             os.unlink(filepath)
 
@@ -108,13 +109,13 @@ class TestMainAPI:
         """read_hdus should use one-handle image reads for int/name HDUs."""
         filepath, d0, d1, d2 = self.create_test_mef()
         try:
-            out = torchsky.read_hdus(filepath, [0, "SCI", 2], mmap=False)
+            out = torchsky.io.read_hdus(filepath, [0, "SCI", 2], mmap=False)
             assert len(out) == 3
             np.testing.assert_allclose(out[0].numpy(), d0, rtol=1e-5)
             np.testing.assert_allclose(out[1].numpy(), d1, rtol=1e-5)
             np.testing.assert_allclose(out[2].numpy(), d2, rtol=1e-5)
 
-            out2, headers = torchsky.read_hdus(
+            out2, headers = torchsky.io.read_hdus(
                 filepath, ["SCI", "ERR"], mmap=False, return_header=True
             )
             assert len(out2) == 2
@@ -127,11 +128,11 @@ class TestMainAPI:
         """read_image should accept explicit handle-cache control."""
         filepath, _ = self.create_test_fits(shape=(96, 96), dtype=np.float32)
         try:
-            a = torchsky.read_image(filepath, hdu=0, mmap=False, handle_cache=True)
-            b = torchsky.read_image(filepath, hdu=0, mmap=False, handle_cache=False)
+            a = torchsky.io.read_image(filepath, hdu=0, mmap=False, handle_cache=True)
+            b = torchsky.io.read_image(filepath, hdu=0, mmap=False, handle_cache=False)
             torch.testing.assert_close(a, b)
             with pytest.raises(ValueError, match="handle_cache must be bool"):
-                torchsky.read_image(filepath, hdu=0, mmap=False, handle_cache="yes")  # type: ignore[arg-type]
+                torchsky.io.read_image(filepath, hdu=0, mmap=False, handle_cache="yes")  # type: ignore[arg-type]
         finally:
             os.unlink(filepath)
 
@@ -160,7 +161,7 @@ class TestMainAPI:
 
         try:
             a = torchsky.read(filepath, hdu=0, mode="image", mmap=False)
-            b = torchsky.read_image(filepath, hdu=0, mmap=False)
+            b = torchsky.io.read_image(filepath, hdu=0, mmap=False)
             torch.testing.assert_close(a, b)
         finally:
             os.unlink(filepath)
@@ -253,15 +254,17 @@ class TestMainAPI:
         """SubsetReader should match read_subset for repeated cutouts."""
         filepath, _ = self.create_test_fits(shape=(128, 128), dtype=np.float32)
         try:
-            with torchsky.open_subset_reader(filepath, hdu=0, device="cpu") as reader:
+            with torchsky.io.open_subset_reader(
+                filepath, hdu=0, device="cpu"
+            ) as reader:
                 assert reader.hdu == 0
                 assert reader.shape == (128, 128)
                 a = reader.read_subset(10, 12, 30, 40)
-                b = torchsky.read_subset(filepath, 0, 10, 12, 30, 40)
+                b = torchsky.io.read_subset(filepath, 0, 10, 12, 30, 40)
                 torch.testing.assert_close(a, b)
 
                 c = reader(0, 0, 16, 16)
-                d = torchsky.read_subset(filepath, 0, 0, 0, 16, 16)
+                d = torchsky.io.read_subset(filepath, 0, 0, 0, 16, 16)
                 torch.testing.assert_close(c, d)
         finally:
             os.unlink(filepath)
@@ -292,13 +295,13 @@ class TestMainAPI:
                 expected_shapes.append(shape)
 
             # Test batch reading
-            results = torchsky.read_batch(files)
+            results = torchsky.io.read_batch(files)
             assert len(results) == 3
             for i, result in enumerate(results):
                 assert result.shape == expected_shapes[i]
 
             # Test batch info
-            info = torchsky.get_batch_info(files)
+            info = torchsky.io.get_batch_info(files)
             assert info["num_files"] == 3
             assert info["valid_files"] == 3
 
@@ -310,11 +313,11 @@ class TestMainAPI:
     def test_cache_functions(self):
         """Test cache management functions."""
         # Test cache stats
-        stats = torchsky.get_cache_performance()
+        stats = torchsky.io.get_cache_performance()
         assert isinstance(stats, dict)
 
         # Test cache clearing
-        torchsky.clear_file_cache()  # Should not raise
+        torchsky.cache.clear()  # Should not raise
 
     def test_error_handling(self):
         """Test error handling for invalid inputs."""
@@ -360,10 +363,10 @@ class TestMainAPI:
         )
 
         try:
-            baseline = torchsky.cpp.read_full_raw(filepath, 0, False)
+            baseline = cpp.read_full_raw(filepath, 0, False)
             # Run multiple times to catch crashy regressions in this code path.
             for _ in range(20):
-                result = torchsky.cpp.read_full_unmapped_raw(filepath, 0)
+                result = cpp.read_full_unmapped_raw(filepath, 0)
                 torch.testing.assert_close(result, baseline)
             np.testing.assert_allclose(
                 baseline.numpy(), expected_data, rtol=1e-12, atol=0.0
@@ -401,7 +404,7 @@ class TestTableAPI:
 
         try:
             # Test streaming read
-            result = torchsky.read_large_table(
+            result = torchsky.io.read_large_table(
                 filepath, max_memory_mb=10, streaming=True
             )
             assert isinstance(result, dict)
@@ -409,7 +412,7 @@ class TestTableAPI:
             assert len(result["RA"]) == 10000
 
             # Test non-streaming read
-            result2 = torchsky.read_large_table(filepath, streaming=False)
+            result2 = torchsky.io.read_large_table(filepath, streaming=False)
             assert isinstance(result2, dict)
 
         finally:
@@ -420,7 +423,7 @@ class TestTableAPI:
         filepath = self.create_test_table(256)
 
         try:
-            data = torchsky.read_table(filepath, hdu=1)
+            data = torchsky.io.read_table(filepath, hdu=1)
             assert isinstance(data, dict)
             assert "RA" in data
             assert len(data["RA"]) == 256
@@ -431,8 +434,8 @@ class TestTableAPI:
         """read_table should accept explicit policy selection."""
         filepath = self.create_test_table(128)
         try:
-            fast = torchsky.read_table(filepath, hdu=1, policy="default")
-            smart = torchsky.read_table(filepath, hdu=1, policy="smart")
+            fast = torchsky.io.read_table(filepath, hdu=1, policy="default")
+            smart = torchsky.io.read_table(filepath, hdu=1, policy="smart")
             assert isinstance(fast, dict)
             assert isinstance(smart, dict)
             for k in fast.keys():
@@ -460,7 +463,7 @@ class TestTableAPI:
         filepath = self.create_test_table(64)
 
         try:
-            data = torchsky.read_table(filepath)
+            data = torchsky.io.read_table(filepath)
             assert isinstance(data, dict)
             assert "ID" in data
             assert len(data["ID"]) == 64
@@ -472,7 +475,7 @@ class TestTableAPI:
         filepath = self.create_test_table(512)
 
         try:
-            data = torchsky.read_table(filepath, hdu=1, start_row=11, num_rows=25)
+            data = torchsky.io.read_table(filepath, hdu=1, start_row=11, num_rows=25)
             assert isinstance(data, dict)
             assert "ID" in data
             assert len(data["ID"]) == 25
@@ -485,7 +488,7 @@ class TestTableAPI:
         filepath = self.create_test_table(128)
 
         try:
-            data = torchsky.read_table(filepath, start_row=6, num_rows=10)
+            data = torchsky.io.read_table(filepath, start_row=6, num_rows=10)
             assert "ID" in data
             assert len(data["ID"]) == 10
             assert int(data["ID"][0].item()) == 5
@@ -498,7 +501,7 @@ class TestTableAPI:
 
         try:
             with pytest.raises(ValueError, match="non-negative integer"):
-                torchsky.read_table(filepath, hdu="auto")  # type: ignore[arg-type]
+                torchsky.io.read_table(filepath, hdu="auto")  # type: ignore[arg-type]
         finally:
             os.unlink(filepath)
 
@@ -515,27 +518,68 @@ class TestTableAPI:
 
 
 def test_top_level_namespaces_expose_phase1_modules() -> None:
+    assert set(torchsky.__all__) == {
+        "read",
+        "write",
+        "open",
+        "get_header",
+        "get_wcs",
+        "WCS",
+        "Header",
+        "Card",
+        "HDUList",
+        "TensorHDU",
+        "TableHDU",
+        "io",
+        "table",
+        "wcs",
+        "sphere",
+        "spectral",
+        "map",
+        "scene",
+        "field",
+        "transforms",
+        "datasets",
+        "cache",
+        "buffer",
+        "interop",
+        "surfaces",
+        "encoders",
+        "catalogs",
+    }
     assert callable(torchsky.io.read)
+    assert hasattr(torchsky.datasets, "create_dataloader")
+    assert hasattr(torchsky.transforms, "Normalize")
+    assert callable(torchsky.cache.clear)
+    assert isinstance(torchsky.cache.stats(), dict)
+    assert torchsky.read_image is torchsky.io.read_image
+    assert torchsky.to_pandas is torchsky.interop.to_pandas
+    assert torchsky.Normalize is torchsky.transforms.Normalize
+    assert torchsky.get_api_surface is torchsky.surfaces.get_api_surface
     assert torchsky.wcs.WCS is torchsky.WCS
     assert hasattr(torchsky.sphere, "great_circle_distance")
     with pytest.raises(AttributeError):
         torchsky.coords  # noqa: B018
     with pytest.raises(AttributeError):
         torchsky.geom  # noqa: B018
-    assert hasattr(torchsky.map, "coadd_image_plane")
-    assert hasattr(torchsky.map, "coadd_image_plane_cube")
-    assert hasattr(torchsky.map, "coadd_image_plane_multiband")
-    assert hasattr(torchsky.map, "fit_field_model")
-    assert hasattr(torchsky.map, "render_field_cube")
-    assert hasattr(torchsky.map, "render_field_product")
-    assert hasattr(torchsky.map, "plan_map_product")
-    assert hasattr(torchsky.map, "stack_map_product")
-    assert hasattr(torchsky.map, "evaluate_map_product")
-    assert hasattr(torchsky.map, "MapBandpassSpec")
-    assert hasattr(torchsky.map, "MapProductSpec")
-    assert hasattr(torchsky.map, "plan_image_plane_cube_target")
-    assert hasattr(torchsky.map, "plan_image_plane_cube_target_from_header")
-    assert hasattr(torchsky.map, "plan_image_plane_target")
+    assert set(torchsky.map.__all__) == {
+        "coadd_image_plane",
+        "coadd_image_plane_cube",
+        "coadd_image_plane_multiband",
+        "stack_map_product",
+        "MapProductSpec",
+        "TargetRenderSpec",
+        "MapBandpassSpec",
+        "MapProductResult",
+        "MapResult",
+        "MultiBandMapResult",
+        "SpectralCubeMapResult",
+    }
+    assert callable(torchsky.map.coadd_image_plane)
+    assert callable(torchsky.map.stack_map_product)
+    assert "fit_field_model" not in torchsky.map.__all__
+    assert "SineImplicitField" not in torchsky.map.__all__
+    assert "fit_field_model" in dir(torchsky.map)
     assert hasattr(torchsky, "field")
     assert torchsky.field.fit is torchsky.map.field.fit_field_model
     assert torchsky.field.model is torchsky.map.field.make_field_model
@@ -581,6 +625,11 @@ def test_field_namespace_uses_short_composable_verbs() -> None:
     dec = torch.full((2,), 0.5, dtype=torch.float32)
     sampled = field.sample(model, obs, ra_deg=ra, dec_deg=dec, num_spectral_samples=1)
     assert sampled.shape == (2,)
+    metric_summary = field.metrics(rendered, obs.image)
+    assert metric_summary["weighted_rmse"] >= 0.0
+    assert callable(field.quality)
+    assert callable(field.residual)
+    assert not hasattr(field, "image_quality_metrics")
 
 
 def test_map_cli_exposes_resampling_kernel_option() -> None:

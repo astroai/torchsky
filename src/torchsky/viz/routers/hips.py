@@ -79,7 +79,8 @@ def _register_survey_sync(
 
     The survey ID is used as the prefix for all subsequent tile requests.
     """
-    import torchsky
+    from ...io import read_image
+    from ...wcs import WCS
 
     root: Path = request.app.state.root_dir
     abs_path = str(resolve_under_root(root, path))
@@ -100,7 +101,7 @@ def _register_survey_sync(
         )
 
     try:
-        tensor, header = torchsky.read_image(abs_path, hdu=hdu, return_header=True)
+        tensor, header = read_image(abs_path, hdu=hdu, return_header=True)
         h, w = int(tensor.shape[-2]), int(tensor.shape[-1])
         n_pix = h * w
         max_px = int(getattr(request.app.state, "max_image_pixels", 536_870_912))
@@ -110,7 +111,7 @@ def _register_survey_sync(
                 detail=f"Image has {n_pix} pixels; max allowed is {max_px} (--max-image-pixels).",
             )
 
-        wcs = torchsky.WCS(dict(header))
+        wcs = WCS(dict(header))
         max_order = compute_hips_order(wcs, (h, w))
 
         if vmin is None or vmax is None:

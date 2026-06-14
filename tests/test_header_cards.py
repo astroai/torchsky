@@ -66,7 +66,9 @@ def test_image_write_preserves_header_card_comments_and_history(tmp_path) -> Non
     header.add_history("created by torchsky")
     header.add_comment("image comment")
 
-    torchsky.write(str(path), torch.arange(4, dtype=torch.float32).reshape(2, 2), header=header)
+    torchsky.write(
+        str(path), torch.arange(4, dtype=torch.float32).reshape(2, 2), header=header
+    )
 
     out = torchsky.get_header(str(path), 0)
     assert out["OBJECT"] == "M31"

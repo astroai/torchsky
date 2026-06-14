@@ -27,7 +27,11 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from torchsky.wcs.core import WCS as TorchWCS  # noqa: E402
-from torchsky.wcs.temporal import SECONDS_PER_DAY, TAI_MINUS_GPS_SECONDS, convert_time_scale  # noqa: E402
+from torchsky.wcs.temporal import (
+    SECONDS_PER_DAY,
+    TAI_MINUS_GPS_SECONDS,
+    convert_time_scale,
+)  # noqa: E402
 
 
 SPECTRAL_CASES = (
@@ -39,6 +43,12 @@ SPECTRAL_CASES = (
     "WAVN-LOG",
     "WAVE-F2W",
     "FREQ-W2F",
+    "WAVE-GRI",
+    "WAVE-GRA",
+    "FREQ-GRA",
+    "WAVE-V2W",
+    "VELO-F2V",
+    "FREQ-V2F",
 )
 TEMPORAL_CASES = (
     ("UTC", "TAI"),
@@ -65,11 +75,49 @@ def _spectral_header(ctype: str) -> fits.Header:
     header["NAXIS1"] = 4096
     header["CTYPE1"] = ctype
     header["CRPIX1"] = 1.0
-    header["CRVAL1"] = 10.0
-    header["CDELT1"] = 1.0e-3
-    header["CUNIT1"] = "Hz" if ctype.startswith("FREQ") else "m"
-    if ctype.startswith("WAVN"):
-        header["CUNIT1"] = "m-1"
+    if ctype in {"WAVE-GRI", "WAVE-GRA"}:
+        header["CRVAL1"] = 5.0e-7
+        header["CDELT1"] = 1.0e-9
+        header["CUNIT1"] = "m"
+        header["PV1_0"] = 300000.0
+        header["PV1_1"] = 1.0
+        header["PV1_2"] = 15.0
+        header["PV1_3"] = 1.5
+        header["PV1_4"] = -1.0e5
+        header["PV1_5"] = 0.0
+        header["PV1_6"] = 10.0
+    elif ctype == "FREQ-GRA":
+        header["CRVAL1"] = 6.0e14
+        header["CDELT1"] = 1.0e9
+        header["CUNIT1"] = "Hz"
+        header["PV1_0"] = 300000.0
+        header["PV1_1"] = 1.0
+        header["PV1_2"] = 15.0
+        header["PV1_3"] = 1.5
+        header["PV1_4"] = -1.0e5
+        header["PV1_5"] = 0.0
+        header["PV1_6"] = 10.0
+    elif ctype == "WAVE-V2W":
+        header["CRVAL1"] = 0.21
+        header["CDELT1"] = 1.0e-4
+        header["CUNIT1"] = "m"
+        header["RESTFRQ"] = 1.42040575177e9
+    elif ctype == "VELO-F2V":
+        header["CRVAL1"] = 10.0
+        header["CDELT1"] = 0.1
+        header["CUNIT1"] = "m/s"
+        header["RESTFRQ"] = 1.42040575177e9
+    elif ctype == "FREQ-V2F":
+        header["CRVAL1"] = 1.420e9
+        header["CDELT1"] = 1.0e5
+        header["CUNIT1"] = "Hz"
+        header["RESTFRQ"] = 1.42040575177e9
+    else:
+        header["CRVAL1"] = 10.0
+        header["CDELT1"] = 1.0e-3
+        header["CUNIT1"] = "Hz" if ctype.startswith("FREQ") else "m"
+        if ctype.startswith("WAVN"):
+            header["CUNIT1"] = "m-1"
     return header
 
 
@@ -79,7 +127,9 @@ def _as_numpy(value: Any) -> np.ndarray:
     return np.asarray(value)
 
 
-def _run_spectral_case(ctype: str, pixels: np.ndarray, runs: int) -> list[dict[str, Any]]:
+def _run_spectral_case(
+    ctype: str, pixels: np.ndarray, runs: int
+) -> list[dict[str, Any]]:
     header = _spectral_header(ctype)
     torch_wcs = TorchWCS(dict(header))
     astropy_wcs = AstropyWCS(header)
@@ -144,14 +194,18 @@ def _time_values(scale: str, base_utc_mjd: np.ndarray) -> np.ndarray:
         return base_utc_mjd
     if scale == "GPS":
         tai = Time(base_utc_mjd, format="mjd", scale="utc").tai.mjd
-        return np.asarray(tai - TAI_MINUS_GPS_SECONDS / SECONDS_PER_DAY, dtype=np.float64)
+        return np.asarray(
+            tai - TAI_MINUS_GPS_SECONDS / SECONDS_PER_DAY, dtype=np.float64
+        )
     return np.asarray(
         getattr(Time(base_utc_mjd, format="mjd", scale="utc"), scale.lower()).mjd,
         dtype=np.float64,
     )
 
 
-def _astropy_time_scale(values: np.ndarray, from_scale: str, to_scale: str) -> np.ndarray:
+def _astropy_time_scale(
+    values: np.ndarray, from_scale: str, to_scale: str
+) -> np.ndarray:
     if from_scale == "GPS":
         tai_mjd = values + TAI_MINUS_GPS_SECONDS / SECONDS_PER_DAY
         time_value = Time(tai_mjd, format="mjd", scale="tai")
@@ -199,7 +253,9 @@ def _run_temporal_case(
 
 
 def _print_summary(rows: list[dict[str, Any]]) -> None:
-    print("| Domain | Case | Direction | N | torchsky | WCSLIB/Astropy | Speedup | Max error |")
+    print(
+        "| Domain | Case | Direction | N | torchsky | WCSLIB/Astropy | Speedup | Max error |"
+    )
     print("|---|---|---|---:|---:|---:|---:|---:|")
     for row in rows:
         print(
@@ -230,14 +286,18 @@ def main() -> None:
     pixels = np.linspace(0.0, 1000.0, args.n_points, dtype=np.float64).reshape(-1, 1)
     rows: list[dict[str, Any]] = []
 
-    spectral_cases = [c.strip().upper() for c in args.spectral_cases.split(",") if c.strip()]
+    spectral_cases = [
+        c.strip().upper() for c in args.spectral_cases.split(",") if c.strip()
+    ]
     for ctype in spectral_cases:
         rows.extend(_run_spectral_case(ctype, pixels, args.runs))
 
     if not args.skip_temporal:
         base_utc_mjd = np.linspace(57204.0, 61049.0, args.n_points, dtype=np.float64)
         for from_scale, to_scale in TEMPORAL_CASES:
-            rows.append(_run_temporal_case(from_scale, to_scale, base_utc_mjd, args.runs))
+            rows.append(
+                _run_temporal_case(from_scale, to_scale, base_utc_mjd, args.runs)
+            )
 
     _print_summary(rows)
     if args.json_out is not None:

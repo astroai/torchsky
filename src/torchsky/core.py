@@ -172,9 +172,7 @@ class ChecksumVerifier:
         )
 
     @staticmethod
-    def verify_checksum(
-        header: dict[str, Any], data: np.ndarray | None = None
-    ) -> bool:
+    def verify_checksum(header: dict[str, Any], data: np.ndarray | None = None) -> bool:
         """Deprecated in-memory stub kept only to fail closed."""
         raise NotImplementedError(
             "FITS CHECKSUM verification requires the source HDU bytes; use "

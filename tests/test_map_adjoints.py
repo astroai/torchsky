@@ -22,7 +22,9 @@ from torchsky.map.image_plane import (
 pytest.importorskip("torchsky.cpp")
 
 
-def _simple_header(nx=8, ny=8, crval1=12.0, crval2=-3.0, cdelt1=-0.01, cdelt2=0.01) -> dict:
+def _simple_header(
+    nx=8, ny=8, crval1=12.0, crval2=-3.0, cdelt1=-0.01, cdelt2=0.01
+) -> dict:
     return {
         "NAXIS": 2,
         "NAXIS1": nx,
@@ -40,7 +42,9 @@ def _simple_header(nx=8, ny=8, crval1=12.0, crval2=-3.0, cdelt1=-0.01, cdelt2=0.
 
 @pytest.mark.parametrize("kernel_name", ["nearest", "bilinear", "lanczos3"])
 @pytest.mark.parametrize("value_semantics", ["surface_brightness", "flux"])
-def test_interpolation_resampler_adjoint(kernel_name: str, value_semantics: str) -> None:
+def test_interpolation_resampler_adjoint(
+    kernel_name: str, value_semantics: str
+) -> None:
     device = torch.device("cpu")
     src_h, src_w = 8, 8
     tgt_h, tgt_w = 6, 6
@@ -62,7 +66,9 @@ def test_interpolation_resampler_adjoint(kernel_name: str, value_semantics: str)
     )
 
     # x represents the source image pixel values, requires_grad=True to compute adjoint via autograd
-    x = torch.randn((src_h, src_w), dtype=torch.float32, device=device, requires_grad=True)
+    x = torch.randn(
+        (src_h, src_w), dtype=torch.float32, device=device, requires_grad=True
+    )
     source_weight = torch.ones((src_h, src_w), dtype=torch.float32, device=device)
 
     y_pred, _ = project_image_observation_geometry(
@@ -82,7 +88,9 @@ def test_interpolation_resampler_adjoint(kernel_name: str, value_semantics: str)
     )
 
     # Ensure y_pred is not trivially zero
-    assert torch.any(y_pred != 0.0), f"y_pred is completely zero for {kernel_name} ({value_semantics})"
+    assert torch.any(y_pred != 0.0), (
+        f"y_pred is completely zero for {kernel_name} ({value_semantics})"
+    )
 
     # y is a random target-space dual vector
     y = torch.randn_like(y_pred)
@@ -121,7 +129,9 @@ def test_conservative_polygon_remapper_adjoint(value_semantics: str) -> None:
         include_representative_pixel_area=True,
     )
 
-    x = torch.randn((src_h, src_w), dtype=torch.float32, device=device, requires_grad=True)
+    x = torch.randn(
+        (src_h, src_w), dtype=torch.float32, device=device, requires_grad=True
+    )
     source_weight = torch.ones((src_h, src_w), dtype=torch.float32, device=device)
 
     y_pred, _ = project_image_observation_geometry(
@@ -140,7 +150,9 @@ def test_conservative_polygon_remapper_adjoint(value_semantics: str) -> None:
         forward_project_weighted_to_target_fn=_forward_project_weighted_to_target,
     )
 
-    assert torch.any(y_pred != 0.0), f"y_pred is completely zero for conservative_polygon ({value_semantics})"
+    assert torch.any(y_pred != 0.0), (
+        f"y_pred is completely zero for conservative_polygon ({value_semantics})"
+    )
 
     y = torch.randn_like(y_pred)
     val1 = torch.sum(y_pred * y)

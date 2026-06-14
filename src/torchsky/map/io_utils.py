@@ -2,7 +2,10 @@
 
 from torch import Tensor
 
-from .. import Header, read, cpp as _cpp
+import torchsky.cpp as _cpp
+
+from ..hdu import Header
+from ..io import read
 from .operators.image_grid import validate_image_plane_2d
 
 _HEADER_PROBE_EXC: tuple[type[BaseException], ...] = (
@@ -40,9 +43,7 @@ def _observation_header_for_area_scaling(
         hdu = getattr(obs, "hdu", None)
         path = getattr(obs, "path")
         if isinstance(hdu, int) or hdu is None:
-            return dict(
-                Header(_cpp.read_header_dict(path, 0 if hdu is None else hdu))
-            )
+            return dict(Header(_cpp.read_header_dict(path, 0 if hdu is None else hdu)))
     except _HEADER_PROBE_EXC:
         pass
     path = getattr(obs, "path")

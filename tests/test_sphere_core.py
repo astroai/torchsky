@@ -61,6 +61,16 @@ def test_pairwise_distance_symmetry() -> None:
     )
 
 
+def test_pairwise_distance_tiny_angle_matches_great_circle() -> None:
+    lon = torch.tensor([0.0, 1.0e-7], dtype=torch.float64)
+    lat = torch.tensor([0.0, 0.0], dtype=torch.float64)
+    d = pairwise_angular_distance(lon, lat)
+    expected = great_circle_distance(lon[0], lat[0], lon[1], lat[1])
+
+    torch.testing.assert_close(d[0, 1], expected, atol=1e-12, rtol=0.0)
+    assert float(d[0, 1]) > 0.0
+
+
 def test_slerp_endpoints_and_midpoint() -> None:
     lon0, lat0 = slerp_lonlat(0.0, 0.0, 90.0, 0.0, t=0.0)
     lon1, lat1 = slerp_lonlat(0.0, 0.0, 90.0, 0.0, t=1.0)

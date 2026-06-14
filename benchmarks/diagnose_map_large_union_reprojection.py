@@ -92,9 +92,7 @@ def _torchsky_weighted_observation(
     header_dict_obs = dict(header)
     source_wcs = None
     if not (
-        headers_equivalent_for_direct_copy(
-            header_dict_obs, target_header
-        )
+        headers_equivalent_for_direct_copy(header_dict_obs, target_header)
         and tuple(int(v) for v in image.shape) == target_shape
     ):
         source_wcs = WCS(header_dict_obs)

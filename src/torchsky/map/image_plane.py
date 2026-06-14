@@ -11,8 +11,8 @@ from typing import Optional, Sequence
 import torch
 from torch import Tensor
 
-from .. import WCS, read, write
 from ..device import default_compute_device
+from ..io import read, write
 from ..sphere.moc import MOC
 from ..spectral import (
     DataCube,
@@ -20,6 +20,7 @@ from ..spectral import (
     spectral_axis_from_header,
     spectral_bin_edges_from_header,
 )
+from ..wcs import WCS
 
 from .fft_affine_ldu import resample_fft_ldu_affine_2d
 from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_fft2d
@@ -63,9 +64,9 @@ from .windowing import (
     _subtarget_header_for_window,
     _PreparedImagePlaneTarget,
     _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS,  # noqa: F401
-    _LARGE_TAN_WINDOWING_EDGE_SAMPLES,      # noqa: F401
-    _LARGE_TAN_WINDOWING_MARGIN_PIXELS,    # noqa: F401
-    _build_target_world_grid,                # noqa: F401
+    _LARGE_TAN_WINDOWING_EDGE_SAMPLES,  # noqa: F401
+    _LARGE_TAN_WINDOWING_MARGIN_PIXELS,  # noqa: F401
+    _build_target_world_grid,  # noqa: F401
     _quadrature_target_world_grids,
 )
 from .operators.radiometry import apply_image_observation_calibration
@@ -87,6 +88,8 @@ from .io_utils import (
     read_image_plane_observation,
     _observation_header_for_area_scaling,
 )
+
+
 def _resolve_map_device(device: torch.device | str | None) -> torch.device:
     if device is not None:
         return torch.device(device)
@@ -223,7 +226,6 @@ class SpectralCubeMapResult:
         )
 
 
-
 @dataclass
 class _ProjectedImagePlaneObservation:
     numer: Tensor
@@ -267,7 +269,6 @@ def _try_external_drizzle_helpers():
         calc_pixmap,
         estimate_pixel_scale_ratio,
     )
-
 
 
 def _should_apply_surface_brightness_area_scaling(
@@ -412,7 +413,6 @@ def _tpv_candidate_mask(
     xi_min, xi_max, eta_min, eta_max = _tpv_affine_envelope(source_wcs, image_shape)
 
 
-
 def _tpv_source_cap_radius_deg(source_wcs: WCS, image_shape: tuple[int, int]) -> float:
     xi_min, xi_max, eta_min, eta_max = _tpv_affine_envelope(source_wcs, image_shape)
     r_max = math.sqrt(
@@ -481,7 +481,6 @@ def _roundtrip_validity_mask(
     )
     valid[in_bounds] = err_arcsec <= max_err_arcsec
     return valid.reshape_as(x_src)
-
 
 
 def _load_observation_weight_map(
@@ -1217,7 +1216,6 @@ def _maybe_external_drizzle_resample_weighted_to_target(
     return out_img * out_wht, out_wht
 
 
-
 def _validated_spectral_axis(axis: SpectralAxis) -> SpectralAxis:
     values = axis.values.to(dtype=torch.float64)
     if values.ndim != 1 or values.numel() == 0:
@@ -1590,7 +1588,6 @@ def _project_observation_to_target(
         sampled_weight[y0:y1, x0:x1] = projected.weight
         overlap[y0:y1, x0:x1] = projected.overlap
     return sampled_numer, sampled_weight, overlap, projected.moc
-
 
 
 def plan_image_plane_target(

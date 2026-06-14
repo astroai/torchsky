@@ -1,8 +1,10 @@
 import time
 import torch
 
+
 def transfer_list(data_list, device):
     return [t.to(device) for t in data_list]
+
 
 def transfer_batch(data_list, device):
     if not data_list:
@@ -16,8 +18,9 @@ def transfer_batch(data_list, device):
     except Exception:
         return [t.to(device) for t in data_list]
 
+
 def run_benchmark():
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
     # Simulating the tensor data typically output from read_images_batch
@@ -43,7 +46,10 @@ def run_benchmark():
     if t_batch < t_list:
         print(f"Speedup: {t_list / t_batch:.2f}x")
     else:
-        print(f"Slowdown: {t_batch / t_list:.2f}x (expected on CPU without copy overhead)")
+        print(
+            f"Slowdown: {t_batch / t_list:.2f}x (expected on CPU without copy overhead)"
+        )
+
 
 if __name__ == "__main__":
     run_benchmark()

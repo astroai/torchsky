@@ -22,7 +22,8 @@ hybrid models where that is the honest representation of the problem.
 
 Public surfaces are organized around four architectural pillars. The current
 code still has compatibility namespaces and historical layout, but new public
-work should move toward these pillars without breaking existing imports.
+work should move toward these pillars while keeping the advertised public API
+small and namespace-oriented.
 
 | Pillar | Purpose | Current surfaces |
 |---|---|---|
@@ -31,13 +32,12 @@ work should move toward these pillars without breaking existing imports.
 | `scene` | Observations, operators, instruments, latent scenes, products, coadds, objectives, renderers, and fits | promoted `torchsky.map` paths, `torchsky.scene` facade, and field/INR modelling while it remains experimental |
 | `viz` | Browser and notebook-facing visualization | `torchsky.viz` |
 
-Use `torchsky.API_SURFACES`, `torchsky.SurfaceTier`,
-`torchsky.SurfacePillar`, `torchsky.api_surfaces_by_tier(...)`, and
-`torchsky.api_surfaces_by_pillar(...)` to inspect this contract from code.
+Use `torchsky.surfaces` to inspect this contract from code.
 
 ## Refactor Rules
 
-- Preserve public behavior first; use staged compatibility shims for moved names.
+- Preserve the lean public contract first; keep implementation helpers in their
+  owning namespaces.
 - Keep core runtime dependencies lean: PyTorch, NumPy, and compiled extensions.
 - Use Astropy, fitsio, healpy, hpgeom, healsparse, reproject, drizzle, and
   similar packages as references, fixtures, comparators, or optional

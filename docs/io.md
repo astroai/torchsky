@@ -1,9 +1,9 @@
 # `torchsky.io` And Root FITS I/O
 
-`torchsky` keeps high-frequency FITS operations at the package root for
-compatibility. `torchsky.io` is the canonical namespace-oriented FITS surface:
-it exposes the same core readers/writers plus HDU mutation, checksum, batch,
-streaming, and cache helpers through direct private-engine routes.
+`torchsky` keeps only the core FITS operations at the package root:
+`read`, `write`, `open`, `get_header`, and `get_wcs`. `torchsky.io` is the
+canonical namespace-oriented FITS surface for specialized readers, HDU
+mutation, checksum, batch, streaming, and low-level cache helpers.
 
 ## What This Namespace Is For
 
@@ -36,13 +36,15 @@ data, header = torchsky.read("science.fits", hdu="auto", return_header=True)
 ### Read A Cutout Without Loading The Full Image
 
 ```python
-stamp = torchsky.read_subset("mosaic.fits", hdu=0, x1=1000, y1=1000, x2=1256, y2=1256)
+stamp = torchsky.io.read_subset(
+    "mosaic.fits", hdu=0, x1=1000, y1=1000, x2=1256, y2=1256
+)
 ```
 
 ### Keep A File Open For Repeated Cutouts
 
 ```python
-with torchsky.open_subset_reader("mosaic.fits", hdu=0) as reader:
+with torchsky.io.open_subset_reader("mosaic.fits", hdu=0) as reader:
     a = reader(0, 0, 256, 256)
     b = reader(256, 256, 512, 512)
 ```
@@ -67,25 +69,28 @@ torchsky.write("cat.fits", {"RA": ra, "DEC": dec}, overwrite=True)
 Root readers:
 
 - `torchsky.read(...)`
-- `torchsky.read_image(...)`
-- `torchsky.read_table(...)`
-- `torchsky.read_hdus(...)`
-- `torchsky.read_subset(...)`
-- `torchsky.open_subset_reader(...)`
-- `torchsky.stream_table(...)`
-- `torchsky.read_large_table(...)`
+- `torchsky.open(...)`
+- `torchsky.get_header(...)`
+- `torchsky.get_wcs(...)`
 
-Root writers and mutations:
+Root writer:
 
 - `torchsky.write(...)`
-- `torchsky.insert_hdu(...)`
-- `torchsky.replace_hdu(...)`
-- `torchsky.delete_hdu(...)`
-- `torchsky.write_checksums(...)`
-- `torchsky.verify_checksums(...)`
 
-Checksum helpers are package-callable as qualified root names and through
-`torchsky.io`.
+Specialized readers, writers, and mutations live under `torchsky.io`:
+
+- `torchsky.io.read_image(...)`
+- `torchsky.io.read_table(...)`
+- `torchsky.io.read_hdus(...)`
+- `torchsky.io.read_subset(...)`
+- `torchsky.io.open_subset_reader(...)`
+- `torchsky.io.stream_table(...)`
+- `torchsky.io.read_large_table(...)`
+- `torchsky.io.insert_hdu(...)`
+- `torchsky.io.replace_hdu(...)`
+- `torchsky.io.delete_hdu(...)`
+- `torchsky.io.write_checksums(...)`
+- `torchsky.io.verify_checksums(...)`
 
 HDU and header objects:
 
@@ -96,13 +101,14 @@ HDU and header objects:
 - `torchsky.Header`
 - `torchsky.Card`
 
-Root batch/runtime helpers:
+Batch and low-level FITS cache helpers:
 
-- `torchsky.read_batch(...)`
-- `torchsky.get_batch_info(...)`
-- `torchsky.get_cache_performance(...)`
-- `torchsky.clear_file_cache(...)`
-- `torchsky.configure_for_environment(...)`
+- `torchsky.io.read_batch(...)`
+- `torchsky.io.get_batch_info(...)`
+- `torchsky.io.get_cache_performance(...)`
+- `torchsky.io.clear_file_cache(...)`
+- `torchsky.cache.clear(...)`
+- `torchsky.cache.stats(...)`
 
 `torchsky.io` re-exports the complete FITS I/O helper set (`read`,
 `read_image`, `read_table`, `read_hdus`, `read_subset`,
@@ -110,7 +116,7 @@ Root batch/runtime helpers:
 `delete_hdu`, `write_checksums`, `verify_checksums`, `get_header`, `get_wcs`,
 `read_batch`, `get_batch_info`, `get_cache_performance`, `clear_file_cache`,
 streaming table helpers, HDU/header types, table interop helpers, and
-dataloader helpers).
+table interop helpers).
 
 ## Examples
 

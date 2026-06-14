@@ -92,9 +92,7 @@ def _make_boundary_gate_wrapper(margin: float):
                 value_semantics=value_semantics,
             )
         image = validate_image_plane_2d(image).to(dtype=torch.float32)
-        source_weight = validate_image_plane_2d(source_weight).to(
-            dtype=torch.float32
-        )
+        source_weight = validate_image_plane_2d(source_weight).to(dtype=torch.float32)
         if (
             bool(getattr(source_wcs, "_is_tpv", False))
             or getattr(source_wcs, "sip", None) is not None
@@ -174,9 +172,7 @@ def _make_coverage_gate_wrapper(min_coverage: float):
                 value_semantics=value_semantics,
             )
         image = validate_image_plane_2d(image).to(dtype=torch.float32)
-        source_weight = validate_image_plane_2d(source_weight).to(
-            dtype=torch.float32
-        )
+        source_weight = validate_image_plane_2d(source_weight).to(dtype=torch.float32)
         if (
             bool(getattr(source_wcs, "_is_tpv", False))
             or getattr(source_wcs, "sip", None) is not None

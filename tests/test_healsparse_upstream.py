@@ -102,6 +102,27 @@ def test_healsparse_degrade_matches_upstream_mean_semantics() -> None:
     )
 
 
+@pytest.mark.parametrize("nside_out", [16, 32, 128])
+def test_healsparse_ud_grade_coverage_resolution_matches_upstream(
+    nside_out: int,
+) -> None:
+    hs_map, tf_map, _pixels, _values = _make_sparse_pair()
+
+    if nside_out < hs_map.nside_sparse:
+        hs_resampled = hs_map.degrade(nside_out)
+    elif nside_out > hs_map.nside_sparse:
+        hs_resampled = hs_map.upgrade(nside_out)
+    else:
+        hs_resampled = hs_map
+    tf_resampled = tf_map.ud_grade(nside_out)
+
+    assert tf_resampled.nside_coverage == hs_resampled.nside_coverage
+    np.testing.assert_array_equal(
+        tf_resampled.coverage_mask.cpu().numpy().astype(np.int64),
+        hs_resampled.coverage_mask.astype(np.int64),
+    )
+
+
 def test_healsparse_bool_degrade_matches_upstream_dense_behavior() -> None:
     nside_coverage = 32
     nside_map = 256
@@ -139,7 +160,9 @@ def test_healsparse_sum_union_and_intersection_match_upstream() -> None:
     extra_pixels = np.array([3, 35, 36, 9000], dtype=np.int64)
     extra_values = np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float64)
     hs_b.update_values_pix(extra_pixels, extra_values)
-    tf_b.update_values_pix(torch.from_numpy(extra_pixels), torch.from_numpy(extra_values))
+    tf_b.update_values_pix(
+        torch.from_numpy(extra_pixels), torch.from_numpy(extra_values)
+    )
 
     hs_union = healsparse.sum_union([hs_a, hs_b])
     hs_intersection = healsparse.sum_intersection([hs_a, hs_b])
@@ -188,7 +211,9 @@ def test_healsparse_geom_circle_coverage_matches_upstream_sparse_mask() -> None:
     lat = 0.0
     radius = 0.2 / 60.0
     pixels = (
-        compat.query_circle(nside_map, lon, lat, radius, nest=True, degrees=True, inclusive=True)
+        compat.query_circle(
+            nside_map, lon, lat, radius, nest=True, degrees=True, inclusive=True
+        )
         .cpu()
         .numpy()
     )

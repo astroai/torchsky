@@ -12,17 +12,19 @@ from typing import Sequence
 
 import torch
 
-from .. import read, write
 from ..device import default_compute_device
-from ..map import (
+from ..io import read, write
+from ..map.field import (
     FieldObservation,
-    ImageObservation,
-    ImagePlaneMapMaker,
     estimate_field_domain,
     fit_field_model,
     make_field_model,
-    plan_image_plane_target,
     render_field_observation,
+)
+from ..map.image_plane import (
+    ImageObservation,
+    ImagePlaneMapMaker,
+    plan_image_plane_target,
 )
 from ..filter_profiles import field_observation_spectral_kwargs, resolve_inr_bandpass
 

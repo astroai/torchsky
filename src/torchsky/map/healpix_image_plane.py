@@ -12,8 +12,8 @@ import math
 import torch
 from torch import Tensor
 
-from .. import WCS
 from ..sphere import healpix as hp
+from ..wcs import WCS
 
 
 def sample_healpix_map_on_image_header(

@@ -6,11 +6,14 @@ Implementation of ``nn.Module`` subclasses and training live in :mod:`torchsky.m
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import math
 import torch.nn as nn
 from torch import Tensor
+
+if TYPE_CHECKING:
+    from ..exposure_pose import ExposurePose
 
 SpectralCapacityProfile = Literal[
     "photometric_wide",
@@ -213,11 +216,22 @@ class FieldObservation:
 
     _cached_ra_deg: Tensor | None = field(default=None, init=False, repr=False)
     _cached_dec_deg: Tensor | None = field(default=None, init=False, repr=False)
+    _cached_coordinate_signature: tuple[Any, ...] | None = field(
+        default=None, init=False, repr=False
+    )
 
     def clear_coordinate_cache(self) -> None:
         """Drop cached WCS coordinate grids after mutating image shape or header."""
         self._cached_ra_deg = None
         self._cached_dec_deg = None
+        self._cached_coordinate_signature = None
+
+    def coordinate_cache_signature(self, shape: tuple[int, int]) -> tuple[Any, ...]:
+        """Return a lightweight signature for cached WCS coordinate grids."""
+        header_items = tuple(
+            sorted((str(key), repr(value)) for key, value in self.header.items())
+        )
+        return (tuple(self.image.shape), tuple(shape), header_items)
 
     def __post_init__(self) -> None:
         if self.psf_spec is None:
@@ -248,8 +262,7 @@ class FieldObservation:
                 continue
             if component.ndim != 2:
                 raise ValueError(f"FieldObservation {name} must be 2D")
-            if tuple(component.shape) != tuple(self.image.shape
-            ):
+            if tuple(component.shape) != tuple(self.image.shape):
                 raise ValueError(
                     f"FieldObservation {name} shape must match image shape"
                 )
@@ -322,8 +335,7 @@ class FieldComponentAnchorTerm:
                 raise ValueError(
                     "sample_ra_deg and sample_dec_deg must be provided together"
                 )
-            if tuple(self.sample_ra_deg.shape) != tuple(self.sample_dec_deg.shape
-            ):
+            if tuple(self.sample_ra_deg.shape) != tuple(self.sample_dec_deg.shape):
                 raise ValueError("sample_ra_deg and sample_dec_deg must match in shape")
             sample_shape = tuple(self.sample_ra_deg.shape)
         if pixel_sample_mode:
@@ -331,8 +343,7 @@ class FieldComponentAnchorTerm:
                 raise ValueError(
                     "sample_x_pix and sample_y_pix must be provided together"
                 )
-            if tuple(self.sample_x_pix.shape) != tuple(self.sample_y_pix.shape
-            ):
+            if tuple(self.sample_x_pix.shape) != tuple(self.sample_y_pix.shape):
                 raise ValueError("sample_x_pix and sample_y_pix must match in shape")
             sample_shape = tuple(self.sample_x_pix.shape)
         if sample_mode:
@@ -360,8 +371,7 @@ class FieldComponentAnchorTerm:
         if self.target_image is not None:
             if self.target_image.ndim != 2:
                 raise ValueError("target_image must be 2D")
-            if tuple(self.target_image.shape) != tuple(self.observation.image.shape
-            ):
+            if tuple(self.target_image.shape) != tuple(self.observation.image.shape):
                 raise ValueError("target_image shape must match observation.image")
         if (self.override_wavelengths is None) != (
             self.override_bandpass_weights is None
@@ -377,7 +387,8 @@ class FieldComponentAnchorTerm:
                 raise ValueError("override_wavelengths must be 1D")
             if self.override_bandpass_weights.ndim != 1:
                 raise ValueError("override_bandpass_weights must be 1D")
-            if tuple(self.override_wavelengths.shape) != tuple(self.override_bandpass_weights.shape
+            if tuple(self.override_wavelengths.shape) != tuple(
+                self.override_bandpass_weights.shape
             ):
                 raise ValueError(
                     "override_wavelengths and override_bandpass_weights must match in shape"
@@ -427,6 +438,8 @@ class FieldFitResult:
     model: nn.Module
     loss_history: tuple[float, ...]
     final_loss: float
+    diagnostics: dict[str, Any] | None = None
+    exposure_poses: tuple[ExposurePose | None, ...] | None = None
 
     @property
     def initial_loss(self) -> float:

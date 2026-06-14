@@ -44,6 +44,12 @@ from ..map.field.core import (
     make_field_component_decomposition as component_decomposition,
     make_field_model as model,
 )
+from ..map.field.adaptive import (
+    ResidualTileBasisField as ResidualTileBasis,
+    ResidualTileBasisSpec,
+    make_residual_tile_basis_field as residual_tile_basis,
+    residual_tile_basis_spec_from_observation as residual_tile_basis_spec,
+)
 from ..map.field.rendering import (
     evaluate_field_coordinates_vmapped as evaluate,
     render_field_cube,
@@ -53,6 +59,17 @@ from ..map.field.rendering import (
     render_field_observation_distribution,
     render_field_samples,
     render_field_samples_distribution,
+)
+from ..map.field.quality import (
+    FieldResidualProduct as ResidualProduct,
+    FieldResidualTile as ResidualTile,
+    field_image_residual_product as residual_product,
+    field_image_quality_metrics as metrics,
+    field_quality_scorecard as scorecard,
+    render_field_quality as quality,
+    render_field_residual as residual,
+    render_field_residual_product as render_residual_product,
+    select_field_residual_tiles as residual_tiles,
 )
 from ..map.field.training import (
     fit_field_component_decomposition as fit_component_decomposition,
@@ -157,7 +174,9 @@ def render(
     """Render a field to an observation, coordinate samples, cube, or HEALPix map."""
     if target == "observation":
         if observation is None:
-            raise ValueError("field.render(..., target='observation') requires observation")
+            raise ValueError(
+                "field.render(..., target='observation') requires observation"
+            )
         return render_field_observation(field_model, observation, **kwargs)
     if target == "samples":
         if observation is None:
@@ -242,6 +261,10 @@ __all__ = [
     "PSFSpec",
     "PresetName",
     "RenderTarget",
+    "ResidualProduct",
+    "ResidualTile",
+    "ResidualTileBasis",
+    "ResidualTileBasisSpec",
     "Sine",
     "SkyEncoderBandpass",
     "SkyEncoderMLP",
@@ -272,10 +295,19 @@ __all__ = [
     "ifu_cube_spectral_to_leading",
     "is_recommended_field_model",
     "make_tangent_plane_header",
+    "metrics",
     "model",
     "preset",
+    "quality",
     "render",
+    "render_residual_product",
+    "residual",
+    "residual_product",
+    "residual_tile_basis",
+    "residual_tile_basis_spec",
+    "residual_tiles",
     "sample",
+    "scorecard",
     "spectral_data_budget",
     "suggest_num_spectral_samples",
     "suggest_spectral_model_capacity",

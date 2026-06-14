@@ -565,7 +565,9 @@ def test_compressed_mixed_image_and_table_roundtrip():
             compress=True,
         )
 
-        np.testing.assert_allclose(torchsky.read(path.name, hdu=1).numpy(), image.numpy())
+        np.testing.assert_allclose(
+            torchsky.read(path.name, hdu=1).numpy(), image.numpy()
+        )
         table = torchsky.table.read(path.name, hdu=2)
         assert table.column("ID").to_pylist() == [10, 20]
         np.testing.assert_allclose(table.column("FLUX").to_pylist(), [1.5, 2.5])

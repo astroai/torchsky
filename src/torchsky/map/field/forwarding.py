@@ -86,7 +86,9 @@ def call_forward_distribution(
     fd = model.forward_distribution
     if forward_context is None:
         return fd(ra, dec, wavelength)
-    if type_method_accepts_kwarg(type(model), "forward_distribution", "forward_context"):
+    if type_method_accepts_kwarg(
+        type(model), "forward_distribution", "forward_context"
+    ):
         return fd(ra, dec, wavelength, forward_context=forward_context)
     return fd(ra, dec, wavelength)
 

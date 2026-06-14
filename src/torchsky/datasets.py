@@ -6,7 +6,11 @@ This module provides Dataset implementations for machine learning workflows:
 - IterableFITSDataset: Streaming dataset for large-scale data
 """
 
+import json
+from pathlib import Path
 from typing import Any, Callable, Iterator, List, Optional, Union
+from urllib.parse import unquote, urlparse
+from urllib.request import urlopen
 
 import torch
 from torch.utils.data import Dataset, IterableDataset
@@ -90,7 +94,7 @@ class FITSDataset(Dataset):
         sample_info = self.manifest[idx]
 
         # Load data (import locally to avoid circular imports)
-        from . import read
+        from .io import read
 
         result = read(
             sample_info["file_path"],
@@ -146,7 +150,10 @@ class IterableFITSDataset(IterableDataset):
         self.hdu = hdu
         self.transform = transform
         self.device = device
-        self.shard_size = shard_size
+        self.shard_size = int(shard_size)
+        if self.shard_size <= 0:
+            raise ValueError("shard_size must be positive")
+        self._shards: list[list[str]] | None = None
 
     def __iter__(self) -> Iterator[Any]:
         """Iterate over the dataset."""
@@ -168,26 +175,19 @@ class IterableFITSDataset(IterableDataset):
 
     def _get_assigned_shards(self, worker_id: int, num_workers: int) -> List[int]:
         """Get shard IDs assigned to this worker."""
-        # Simplified implementation - would load from index_url
-        total_shards = 10  # Placeholder
-        shards_per_worker = total_shards // num_workers
-        start_shard = worker_id * shards_per_worker
-        end_shard = start_shard + shards_per_worker
-
-        if worker_id == num_workers - 1:
-            end_shard = total_shards  # Last worker gets remaining shards
+        shards = self._load_shards()
+        total_shards = len(shards)
+        start_shard = total_shards * int(worker_id) // int(num_workers)
+        end_shard = total_shards * (int(worker_id) + 1) // int(num_workers)
 
         return list(range(start_shard, end_shard))
 
     def _process_shard(self, shard_id: int) -> Iterator[Any]:
         """Process a single shard and yield samples."""
-        from . import read
+        from .io import read
         from .logging import logger
 
-        # Simplified implementation - would load shard manifest
-        shard_files = [f"file_{shard_id}_{i}.fits" for i in range(self.shard_size)]
-
-        for file_path in shard_files:
+        for file_path in self._load_shards()[shard_id]:
             try:
                 data = read(file_path, hdu=self.hdu, device=self.device)
 
@@ -202,6 +202,85 @@ class IterableFITSDataset(IterableDataset):
             except Exception as e:
                 logger.critical(f"Unexpected error processing {file_path}: {str(e)}")
                 raise
+
+    def _load_shards(self) -> list[list[str]]:
+        """Load and cache the streaming manifest."""
+        if self._shards is not None:
+            return self._shards
+
+        text = self._read_index_text()
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            files = [
+                line.strip()
+                for line in text.splitlines()
+                if line.strip() and not line.lstrip().startswith("#")
+            ]
+            shards = self._chunk_files(files)
+        else:
+            shards = self._shards_from_json(payload)
+
+        self._shards = [shard for shard in shards if shard]
+        return self._shards
+
+    def _read_index_text(self) -> str:
+        parsed = urlparse(self.index_url)
+        if parsed.scheme in {"http", "https"}:
+            with urlopen(self.index_url, timeout=30) as response:
+                return response.read().decode("utf-8")
+        if parsed.scheme == "file":
+            return Path(unquote(parsed.path)).read_text(encoding="utf-8")
+        return Path(self.index_url).read_text(encoding="utf-8")
+
+    def _chunk_files(self, files: list[str]) -> list[list[str]]:
+        return [
+            files[start : start + self.shard_size]
+            for start in range(0, len(files), self.shard_size)
+        ]
+
+    def _shards_from_json(self, payload: Any) -> list[list[str]]:
+        if isinstance(payload, dict):
+            if "shards" in payload:
+                return [self._coerce_shard(shard) for shard in payload["shards"]]
+            if "files" in payload:
+                return self._chunk_files(self._coerce_file_list(payload["files"]))
+        if isinstance(payload, list):
+            if all(isinstance(item, (str, dict)) for item in payload):
+                return self._chunk_files(self._coerce_file_list(payload))
+            return [self._coerce_shard(shard) for shard in payload]
+        raise ValueError("streaming index must be a JSON list or object")
+
+    def _coerce_shard(self, shard: Any) -> list[str]:
+        if isinstance(shard, dict):
+            for key in ("files", "paths"):
+                if key in shard:
+                    return self._coerce_file_list(shard[key])
+            raise ValueError("shard objects must contain 'files' or 'paths'")
+        if isinstance(shard, list):
+            return self._coerce_file_list(shard)
+        if isinstance(shard, str):
+            return [shard]
+        raise ValueError("shards must be strings, lists, or objects")
+
+    @staticmethod
+    def _coerce_file_list(entries: Any) -> list[str]:
+        if not isinstance(entries, list):
+            raise ValueError("file entries must be a list")
+        files: list[str] = []
+        for entry in entries:
+            if isinstance(entry, str):
+                files.append(entry)
+            elif isinstance(entry, dict):
+                for key in ("path", "file", "url", "uri"):
+                    if key in entry:
+                        files.append(str(entry[key]))
+                        break
+                else:
+                    raise ValueError("file objects must contain path/file/url/uri")
+            else:
+                raise ValueError("file entries must be strings or objects")
+        return files
 
 
 class TableChunkDataset(IterableDataset):
@@ -236,12 +315,13 @@ class TableChunkDataset(IterableDataset):
         self.include_header = include_header
 
     def __iter__(self) -> Iterator[Any]:
-        from . import get_header, table as table_api
+        from .io import get_header
+        from .table import scan_torch
 
         emitted = 0
         for path in self.file_paths:
             header = get_header(path, self.hdu) if self.include_header else None
-            for chunk in table_api.scan_torch(
+            for chunk in scan_torch(
                 path,
                 hdu=self.hdu,
                 columns=self.columns,
@@ -260,3 +340,38 @@ class TableChunkDataset(IterableDataset):
                     break
             if self.max_chunks is not None and emitted >= self.max_chunks:
                 break
+
+
+def create_dataloader(*args: Any, **kwargs: Any) -> Any:
+    from .dataloader import create_dataloader as factory
+
+    return factory(*args, **kwargs)
+
+
+def create_fits_dataloader(*args: Any, **kwargs: Any) -> Any:
+    from .dataloader import create_fits_dataloader as factory
+
+    return factory(*args, **kwargs)
+
+
+def create_streaming_dataloader(*args: Any, **kwargs: Any) -> Any:
+    from .dataloader import create_streaming_dataloader as factory
+
+    return factory(*args, **kwargs)
+
+
+def create_table_dataloader(*args: Any, **kwargs: Any) -> Any:
+    from .dataloader import create_table_dataloader as factory
+
+    return factory(*args, **kwargs)
+
+
+__all__ = [
+    "FITSDataset",
+    "IterableFITSDataset",
+    "TableChunkDataset",
+    "create_dataloader",
+    "create_fits_dataloader",
+    "create_streaming_dataloader",
+    "create_table_dataloader",
+]

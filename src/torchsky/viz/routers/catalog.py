@@ -41,13 +41,13 @@ def _catalog_load_sync(
     hdu: int,
     max_rows: int,
 ) -> JSONResponse:
-    import torchsky
+    from ...io import read_table
 
     root: Path = request.app.state.root_dir
     abs_path = str(_resolve(root, path))
 
     try:
-        data = torchsky.read_table(abs_path, hdu=hdu)
+        data = read_table(abs_path, hdu=hdu)
     except HTTPException:
         raise
     except Exception as e:
@@ -117,15 +117,15 @@ def _catalog_filter_moc_sync(
     dec_col: str,
     hdu: int,
 ) -> JSONResponse:
-    import torchsky
-    from torchsky.sphere.moc import MOC
+    from ...io import read_table
+    from ...sphere.moc import MOC
 
     root: Path = request.app.state.root_dir
     cat_abs = str(_resolve(root, catalog_path))
     moc_abs = str(_resolve(root, moc_path))
 
     try:
-        data = torchsky.read_table(cat_abs, hdu=hdu)
+        data = read_table(cat_abs, hdu=hdu)
         moc = MOC.read_fits(moc_abs)
     except HTTPException:
         raise

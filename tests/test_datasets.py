@@ -1,6 +1,7 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
 import torch
-from unittest.mock import MagicMock, patch
 
 from torchsky.datasets import FITSDataset, IterableFITSDataset, TableChunkDataset
 
@@ -21,7 +22,7 @@ class TestFITSDataset:
         assert manifest[0] == {"file_path": "file1.fits", "hdu": 1, "sample_id": 0}
         assert manifest[1] == {"file_path": "file2.fits", "hdu": 1, "sample_id": 1}
 
-    @patch("torchsky.read")
+    @patch("torchsky.io.read")
     def test_getitem_without_header(self, mock_read):
         mock_data = torch.tensor([1, 2, 3])
         mock_read.return_value = mock_data
@@ -42,7 +43,7 @@ class TestFITSDataset:
             return_header=False,
         )
 
-    @patch("torchsky.read")
+    @patch("torchsky.io.read")
     def test_getitem_with_header(self, mock_read):
         mock_data = torch.tensor([1, 2, 3])
         mock_header = {"NAXIS": 1}
@@ -65,7 +66,7 @@ class TestFITSDataset:
             return_header=True,
         )
 
-    @patch("torchsky.read")
+    @patch("torchsky.io.read")
     def test_getitem_with_transform(self, mock_read):
         mock_data = torch.tensor([1, 2, 3])
         mock_read.return_value = mock_data
@@ -94,13 +95,18 @@ class TestIterableFITSDataset:
         assert dataset.shard_size == 500
 
     @patch("torch.utils.data.get_worker_info")
-    @patch("torchsky.read")
-    def test_iteration_single_worker(self, mock_read, mock_worker_info):
+    @patch("torchsky.io.read")
+    def test_iteration_single_worker(self, mock_read, mock_worker_info, tmp_path):
         mock_worker_info.return_value = None  # Single process
         mock_data = torch.tensor([1, 2, 3])
         mock_read.return_value = mock_data
+        index = tmp_path / "index.txt"
+        index.write_text(
+            "\n".join(["file0.fits", "file1.fits", "file2.fits", "file3.fits"]),
+            encoding="utf-8",
+        )
 
-        dataset = IterableFITSDataset("http://index.url", shard_size=2)
+        dataset = IterableFITSDataset(str(index), shard_size=2)
 
         # Test just the first few items to avoid infinite loops if shards are unbounded
         items = []
@@ -113,36 +119,40 @@ class TestIterableFITSDataset:
         assert all(torch.equal(item, mock_data) for item in items)
 
     @patch("torch.utils.data.get_worker_info")
-    def test_worker_sharding(self, mock_worker_info):
+    def test_worker_sharding(self, mock_worker_info, tmp_path):
         # Mock a worker info object
         mock_worker = MagicMock()
         mock_worker.id = 1
         mock_worker.num_workers = 4
         mock_worker_info.return_value = mock_worker
+        index = tmp_path / "index.json"
+        index.write_text(
+            '{"shards": [["f0"], ["f1"], ["f2"], ["f3"], ["f4"], ["f5"], ["f6"], ["f7"]]}',
+            encoding="utf-8",
+        )
 
-        dataset = IterableFITSDataset("http://index.url")
+        dataset = IterableFITSDataset(str(index))
         shards = dataset._get_assigned_shards(1, 4)
 
-        # The simplified implementation has total_shards=10
-        # shards_per_worker = 10 // 4 = 2
-        # worker 1 gets shards 2 to 4
         assert shards == [2, 3]
 
         # Last worker
         shards_last = dataset._get_assigned_shards(3, 4)
-        assert shards_last == [6, 7, 8, 9]
+        assert shards_last == [6, 7]
 
     @patch("torch.utils.data.get_worker_info")
-    @patch("torchsky.read")
-    def test_iteration_with_transform(self, mock_read, mock_worker_info):
+    @patch("torchsky.io.read")
+    def test_iteration_with_transform(self, mock_read, mock_worker_info, tmp_path):
         mock_worker_info.return_value = None
         mock_data = torch.tensor([1, 2, 3])
         mock_read.return_value = mock_data
+        index = tmp_path / "index.json"
+        index.write_text('{"files": ["file0.fits", "file1.fits"]}', encoding="utf-8")
 
         def mock_transform(x):
             return x + 1
 
-        dataset = IterableFITSDataset("http://index.url", transform=mock_transform)
+        dataset = IterableFITSDataset(str(index), transform=mock_transform)
 
         items = []
         for i, item in enumerate(dataset):
@@ -154,15 +164,17 @@ class TestIterableFITSDataset:
         assert all(torch.equal(item, torch.tensor([2, 3, 4])) for item in items)
 
     @patch("torch.utils.data.get_worker_info")
-    @patch("torchsky.read")
-    def test_error_handling(self, mock_read, mock_worker_info):
+    @patch("torchsky.io.read")
+    def test_error_handling(self, mock_read, mock_worker_info, tmp_path):
         mock_worker_info.return_value = None
+        index = tmp_path / "index.txt"
+        index.write_text("bad.fits\ngood.fits\n", encoding="utf-8")
 
         # Make read fail on the first call, succeed on the second
         mock_data = torch.tensor([1, 2, 3])
         mock_read.side_effect = [IOError("Simulated read error"), mock_data]
 
-        dataset = IterableFITSDataset("http://index.url", shard_size=2)
+        dataset = IterableFITSDataset(str(index), shard_size=2)
 
         # Should gracefully handle the error and continue to the second item
         items = []
@@ -218,7 +230,7 @@ class TestTableChunkDataset:
             pin_memory=False,
         )
 
-    @patch("torchsky.get_header")
+    @patch("torchsky.io.get_header")
     @patch("torchsky.table.scan_torch")
     def test_iteration_with_header(self, mock_scan, mock_get_header):
         mock_chunk = {"col1": torch.tensor([1, 2])}

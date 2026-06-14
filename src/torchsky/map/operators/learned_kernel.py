@@ -216,7 +216,8 @@ class AffineRadiometry(nn.Module):
         if image.ndim != 4:
             raise ValueError(f"image must be [B,C,H,W], got {tuple(image.shape)}")
         gain, background = self.gain_and_background(
-            gain_init.to(image.dtype), cond.to(image.dtype) if cond is not None else None
+            gain_init.to(image.dtype),
+            cond.to(image.dtype) if cond is not None else None,
         )
         return image * gain.view(-1, 1, 1, 1) + background.view(-1, 1, 1, 1)
 
@@ -341,7 +342,9 @@ class LearnedInstrumentOperator(nn.Module):
 
     def set_stage(self, stage: str) -> None:
         if stage not in self.STAGES:
-            raise ValueError(f"stage must be one of {tuple(self.STAGES)}, got {stage!r}")
+            raise ValueError(
+                f"stage must be one of {tuple(self.STAGES)}, got {stage!r}"
+            )
         self._stage = stage
         core_trainable = stage in ("core", "full")
         self.psf.raw_kernels.requires_grad_(core_trainable)

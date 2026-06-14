@@ -163,8 +163,7 @@ def resolve_image_mmap(
     cache_capacity: int,
     *,
     get_image_meta_func: Callable[[str, int], ImageMeta | None] = get_image_meta,
-    should_use_cold_nommap_func: Callable[[str, int, int, bool], bool]
-    | None = None,
+    should_use_cold_nommap_func: Callable[[str, int, int, bool], bool] | None = None,
 ) -> bool:
     """Resolve bool/'auto' mmap policy for image reads."""
     if isinstance(mmap, bool):

@@ -66,7 +66,9 @@ def get_field_model_preset(name: str) -> FieldModelPreset:
         return FIELD_MODEL_PRESETS[key]
     except KeyError as exc:
         allowed = ", ".join(FIELD_MODEL_PRESET_NAMES)
-        raise ValueError(f"unknown field model preset {name!r}; choose one of: {allowed}") from exc
+        raise ValueError(
+            f"unknown field model preset {name!r}; choose one of: {allowed}"
+        ) from exc
 
 
 def make_field_model_preset(

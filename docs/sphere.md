@@ -193,6 +193,18 @@ sparse.interpolate(lon_deg=lon, lat_deg=lat, method='bilinear')
 sparse.ud_grade(nside_out=32)
 ```
 
+`HealSparseMap.from_pixels(...)` canonicalizes inputs to sorted unique pixels,
+keeping the last value supplied for duplicates, so `get_values(...)` and
+interpolation can use indexed lookup reliably. Maps with `nside_coverage` derive
+coverage maps in the NESTED coverage hierarchy even when sparse pixels are stored
+in RING ordering, and `ud_grade(...)` preserves the coverage hierarchy when the
+output resolution allows it.
+
+`HealSparseMap.from_moc(moc, nside=...)` realizes MOC coverage directly as sparse
+nested pixels without materializing a full dense HEALPix mask. Sparse FITS
+roundtrips preserve the `VALUE` column dtype for boolean, integer, and
+floating-point coverage maps.
+
 ### `WideBitMask` / `SkyMaskPipe`
 
 Additional sparse map types for interop with healsparse workflows.
@@ -221,10 +233,11 @@ json_repr = moc.to_json()
 |---|---|
 | `MOC(uniq)` | Build from `UNIQ` cells |
 | `MOC.from_circle(lon_deg, lat_deg, radius_deg, max_order=10)` | Circular cap footprint |
-| `MOC.from_polygon(lon_deg, lat_deg, max_order=10)` | Polygon footprint |
+| `MOC.from_polygon(lon_deg, lat_deg, max_order=10)` | Simple polygon footprint, including non-convex polygons |
+| `MOC.from_region(region, max_order=None)` | Pixelize a torchsky spherical region, boolean region, exact-region wrapper, or `PixelizedRegion` into NUNIQ coverage; `PixelizedRegion` inputs preserve their current resolution by default, while other regions default to order 10 |
 | `MOC.from_sparse_map(smap)` | Coverage from `HealSparseMap` / `SparseMap` |
 | `MOC.from_threshold(smap, threshold, op='>')` | Threshold sparse-map values |
-| `MOC.from_ascii(text)` | IVOA ASCII roundtrip |
+| `MOC.from_ascii(text)` | IVOA ASCII roundtrip, including compact pixel ranges like `3/5-7` |
 | `MOC.from_json(text)` | IVOA JSON roundtrip |
 | `MOC.read_fits(path)` | IVOA FITS roundtrip |
 
@@ -233,14 +246,16 @@ json_repr = moc.to_json()
 | Method | Description |
 |---|---|
 | `contains(lon_deg, lat_deg)` | Point-in-MOC predicate |
+| `contains_pixels(nside, pixels, nest=True)` | Pixel-in-MOC predicate for HEALPix-indexed catalogs or sparse maps |
 | `filter_catalog(lon_deg, lat_deg)` | Filter catalog coordinates by coverage |
 | `contains_moc(other)` | Subset check |
 | `union(other)` / `intersection(other)` / `difference(other)` | Boolean operations |
 | `flatten(nside)` | Dense boolean mask at fixed resolution |
+| `to_pixelized_region(nside, nest=True)` | Realize coverage as a `PixelizedRegion`, with optional RING conversion |
 | `to_sparse_map(nside, sentinel=0.0)` | Realize coverage as sparse HEALPix map |
 | `boundary()` | Boundary loops at the MOC's maximum order |
 | `write_fits(path)` | Write IVOA MOC FITS |
-| `to_ascii()` / `to_json()` | Text serialization |
+| `to_ascii(compact=False)` / `to_json()` | Text serialization; compact ASCII emits contiguous pixel runs as ranges |
 | `area` / `area_sq_deg` | Covered area |
 
 `boundary()` returns one or more closed loops of shape `[N, 2]` in `(lon_deg, lat_deg)` coordinates. The loops are traced from stitched HEALPix cell edges at the MOC's current maximum order.

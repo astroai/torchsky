@@ -287,9 +287,7 @@ def main() -> int:
             image = image.to(device=device)
 
             direct_copy = (
-                headers_equivalent_for_direct_copy(
-                    header_dict_obs, header_dict
-                )
+                headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
                 and tuple(int(v) for v in image.shape) == target_shape
             )
             need_prepared_target = (

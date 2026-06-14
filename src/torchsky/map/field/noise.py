@@ -51,4 +51,5 @@ def _synthetic_noise_target(
     scaled = centered / torch.clamp(centered.std(unbiased=False), min=1.0e-5)
     return torch.clamp(0.5 + 0.18 * scaled, min=1.0e-4)
 
+
 __all__ = ["_synthetic_noise_target"]

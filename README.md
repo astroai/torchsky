@@ -93,7 +93,7 @@ print(header.get("OBJECT"))
 ### 2. Read Sub-region Cutouts (Lazy I/O)
 ```python
 # Extract stamp cutouts without loading the full image into memory
-stamp = torchsky.read_subset(
+stamp = torchsky.io.read_subset(
     "mosaic.fits",
     hdu=0,
     x1=1000,

@@ -65,10 +65,11 @@ For details, see [sphere.md](sphere.md).
 ## Build A Map Product
 
 ```python
-from torchsky.map import ImageObservation, coadd_image_plane
+from torchsky import scene
+from torchsky.map import coadd_image_plane
 
 # Plan and run an image-plane coadd
-result = coadd_image_plane([ImageObservation("science.fits")])
+result = coadd_image_plane([scene.image_observation("science.fits")])
 ```
 
 For details, see [map.md](map.md).

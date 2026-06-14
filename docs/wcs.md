@@ -14,7 +14,8 @@ and benchmarks, not runtime fallbacks for public tensor paths.
 
 - Coordinates use Python 0-based pixel convention; celestial world values are in
   degrees unless noted.
-- WCS objects can be built from FITS headers or from `torchsky.get_wcs(...)`.
+- WCS objects can be built from FITS headers, from `torchsky.get_wcs(...)`,
+  or from headers plus table HDUs for independent FITS `-TAB` axes.
 - Tensor paths run on CPU, CUDA, or MPS where the underlying operations support
   the device.
 - Differentiable helpers are available for field-model training and geometry
@@ -39,6 +40,7 @@ x_back, y_back = wcs.world_to_pixel(ra, dec)
 from torchsky.wcs import WCS
 
 wcs_a = WCS(header, key="A")
+wcs_a_from_file = torchsky.get_wcs("science.fits", hdu=0, key="A")
 ```
 
 ### Keep A Compiled Tensor Path
@@ -47,6 +49,45 @@ wcs_a = WCS(header, key="A")
 wcs = WCS(header).compile()
 world = wcs.pixel_to_world(pixels)  # pixels.shape == (..., 2)
 ```
+
+### Load `-TAB` Axes
+
+```python
+from torchsky.hdu import HDUList
+from torchsky.wcs import WCS
+
+with HDUList.fromfile("cube_with_wave_tab.fits") as hdul:
+    wcs = WCS(hdul[0].header, tables=hdul)
+
+# `torchsky.get_wcs(path, hdu=...)` also resolves supported `-TAB`
+# coordinate tables when the selected image HDU points at table extensions.
+```
+
+One-dimensional lookup axes use `PSi_0` for table extension name, `PSi_1` for
+coordinate column, optional `PSi_2` for the indexing vector, `PVi_1` for
+`EXTVER`, and `PVi_2` for `EXTLEVEL`. Separable multidimensional coordinate
+arrays can use `PVi_3` to select the table dimension for each WCS axis; arrays
+that vary along more than that selected dimension fail explicitly because they
+need a true coupled interpolation substrate. Missing required tables or columns
+fail instead of falling back to a linear axis. Coordinate and indexing columns
+are resolved by exact name first, then by a unique case-insensitive match;
+ambiguous case variants fail explicitly.
+
+For genuinely coupled multidimensional table arrays, use
+`coupled_tabular_wcs_from_fits(...)` to build a `CoupledTabularLookupWCS`
+forward interpolator. It performs torch-native multilinear interpolation over
+the table grid and intentionally does not guess a general inverse.
+
+### Spectral And Temporal Axes
+
+Spectral WCS covers linear spectral axes, `-LOG`, reciprocal compound axes such
+as `WAVE-F2W` / `FREQ-W2F`, velocity compound axes such as `WAVE-V2W`, and
+one-axis grism algorithms `GRI` / `GRA` for the supported spectral types.
+
+Temporal helpers provide UTC/TAI/TT/GPS scale conversions and a fast local
+Keplerian light-time correction for topocentric barycentric/heliocentric use
+cases. Full ephemeris-grade apparent-place and Earth-orientation corrections are
+still outside the runtime contract.
 
 ### Fit A Pixel-Affine Correction
 
@@ -61,7 +102,7 @@ corrected = wcs.with_affine_fit_correction(fit)
 
 Main class:
 
-- `WCS(header, key="", tabular_axes=None)`
+- `WCS(header, key="", tabular_axes=None, tables=None)`
 - `pixel_to_world(...)`, `world_to_pixel(...)`
 - `all_pix2world(...)`, `all_world2pix(...)`
 - `mixed_pixel_world(...)`
@@ -81,7 +122,8 @@ Spectral/temporal WCS:
 - `WCS.temporal_wcs(...)`
 - `TemporalWCS` from `torchsky.wcs` or `torchsky.wcs.temporal`
 - `convert_time_scale(...)`, `iso_to_mjd(...)` from `torchsky.wcs.temporal`
-- `TabularAxis`, `TabularLookupWCS`, `tabular_axes_from_fits(...)`
+- `TabularAxis`, `TabularLookupWCS`, `CoupledTabularLookupWCS`
+- `tabular_axes_from_fits(...)`, `coupled_tabular_wcs_from_fits(...)`
 
 Frames and alignment:
 

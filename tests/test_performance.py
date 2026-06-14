@@ -99,7 +99,7 @@ class TestPerformance:
 
             # Test batch reading performance
             start_time = time.time()
-            results = torchsky.read_batch(files)  # Removed max_workers
+            results = torchsky.io.read_batch(files)  # Removed max_workers
             batch_time = time.time() - start_time
 
             assert len(results) == 5
@@ -119,7 +119,7 @@ class TestPerformance:
 
         try:
             # Clear cache first
-            torchsky.clear_file_cache()
+            torchsky.cache.clear()
 
             # First read (cache miss)
             start_time = time.time()
@@ -140,7 +140,7 @@ class TestPerformance:
 
         finally:
             os.unlink(filepath)
-            torchsky.clear_file_cache()
+            torchsky.cache.clear()
 
     def test_large_file_performance(self):
         """Test performance with large files."""

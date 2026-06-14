@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import torch
 from torch import Tensor
 
-from ..field.types import FieldObservation
 from .base import SpectralResponseOp
+
+if TYPE_CHECKING:
+    from ..field.types import FieldObservation
 
 
 @dataclass

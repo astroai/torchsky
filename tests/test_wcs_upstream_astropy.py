@@ -20,6 +20,7 @@ FIXTURE_CASES: dict[str, np.ndarray] = {
     "tpvonly.hdr": np.array([[0.0, 0.0], [100.0, -100.0], [200.0, 200.0]]),
 }
 
+
 def _load_wcs_pair(name: str) -> tuple[AstropyWCS, dict[str, object]]:
     raw_header = get_pkg_data_contents(
         f"data/{name}", package="astropy.wcs.tests", encoding="binary"

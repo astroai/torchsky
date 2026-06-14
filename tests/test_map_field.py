@@ -3338,9 +3338,7 @@ def test_tabulated_bandpass_quadrature_runs_on_cuda() -> None:
         transmission_wavelength=wl_tab,
         transmission_throughput=tt_tab,
     )
-    samples, weights = bandpass_quadrature(
-        obs, num_spectral_samples=128, device=device
-    )
+    samples, weights = bandpass_quadrature(obs, num_spectral_samples=128, device=device)
     assert samples.device == device
     assert weights.device == device
     assert torch.isfinite(samples).all() and torch.isfinite(weights).all()

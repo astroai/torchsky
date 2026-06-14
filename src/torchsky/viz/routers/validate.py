@@ -70,14 +70,14 @@ def _tensor_pixel_count(t: object) -> int:
 
 def _register_pair_sync(request: Request, pair: ValidationPair) -> JSONResponse:
     """Register a truth/model/(optional sigma) FITS pair. Returns pair ID."""
-    import torchsky
+    from ...io import read_image
 
     root: Path = request.app.state.root_dir
     max_px = int(getattr(request.app.state, "max_image_pixels", 512 * 1024 * 1024))
 
     def load(rel: str, hdu: int) -> object:
         abs_p = resolve_under_root(root, rel)
-        return torchsky.read_image(str(abs_p), hdu=hdu)
+        return read_image(str(abs_p), hdu=hdu)
 
     try:
         truth = load(pair.truth_path, pair.truth_hdu).float()

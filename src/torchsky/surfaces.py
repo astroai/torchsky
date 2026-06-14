@@ -113,8 +113,8 @@ _SURFACES: dict[str, APISurface] = {
         "concise composable continuous-field modeling API",
         pillar=SurfacePillar.SCENE,
     ),
-    "torchsky.map.fit_field_model": APISurface(
-        "torchsky.map.fit_field_model",
+    "torchsky.field.fit": APISurface(
+        "torchsky.field.fit",
         SurfaceTier.EXPERIMENTAL,
         "INR optimizer entry point with evolving science contracts",
         pillar=SurfacePillar.SCENE,
@@ -141,7 +141,9 @@ def get_api_surface(name: str) -> APISurface:
 def api_surfaces_by_tier(tier: SurfaceTier | str) -> tuple[APISurface, ...]:
     """Return declared surfaces for one stability tier."""
     tier_value = SurfaceTier(tier)
-    return tuple(surface for surface in API_SURFACES.values() if surface.tier is tier_value)
+    return tuple(
+        surface for surface in API_SURFACES.values() if surface.tier is tier_value
+    )
 
 
 def api_surfaces_by_pillar(pillar: SurfacePillar | str) -> tuple[APISurface, ...]:

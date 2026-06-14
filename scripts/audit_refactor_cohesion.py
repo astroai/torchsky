@@ -31,9 +31,7 @@ REQUIRED_TASKS: Mapping[str, tuple[str, ...]] = {
     "bench-map-field-fit-gate": ("bench_map_field_fit.py",),
     "bench-map-compat-gate": ("bench_map_compat.py",),
     "bench-wcs-tpv-inverse": ("bench_wcs_tpv_inverse.py",),
-    "sphere-bench-geom-exact-contains-gate": (
-        "bench_sphere_geom_exact_contains.py",
-    ),
+    "sphere-bench-geom-exact-contains-gate": ("bench_sphere_geom_exact_contains.py",),
     "audit-refactor-cohesion": ("scripts/audit_refactor_cohesion.py",),
 }
 
@@ -82,7 +80,7 @@ DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {
 }
 
 REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
-    "src/torchsky/__init__.py": ("API_SURFACES", "api_surfaces_by_pillar"),
+    "src/torchsky/surfaces.py": ("API_SURFACES", "api_surfaces_by_pillar"),
     "src/torchsky/field/__init__.py": (
         "fit",
         "render",
@@ -127,12 +125,8 @@ REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
         "render_field_cube",
         "evaluate_field_coordinates_vmapped",
     ),
-    "src/torchsky/map/field/losses.py": (
-        "_field_residual_loss",
-    ),
-    "src/torchsky/map/field/noise.py": (
-        "_synthetic_noise_target",
-    ),
+    "src/torchsky/map/field/losses.py": ("_field_residual_loss",),
+    "src/torchsky/map/field/noise.py": ("_synthetic_noise_target",),
     "src/torchsky/map/field/training.py": (
         "fit_field_model",
         "fit_field_component_decomposition",
@@ -255,7 +249,9 @@ def check_tasks(root: Path) -> list[AuditResult]:
                     )
                 )
                 continue
-            missing_fragments = [fragment for fragment in fragments if fragment not in command]
+            missing_fragments = [
+                fragment for fragment in fragments if fragment not in command
+            ]
             if missing_fragments:
                 results.append(
                     AuditResult(
@@ -371,7 +367,9 @@ def _exit_code(results: list[AuditResult], *, strict_warnings: bool) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    parser.add_argument(
+        "--json", action="store_true", help="emit machine-readable JSON"
+    )
     parser.add_argument(
         "--strict-warnings",
         action="store_true",

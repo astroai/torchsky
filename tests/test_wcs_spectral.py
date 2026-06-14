@@ -259,6 +259,102 @@ def test_wcs_spectral_compound_reciprocal_singular_domain_nan(ctype: str) -> Non
     assert torch.isnan(singular_pixel).all()
 
 
+def _grism_header(ctype: str) -> dict[str, float | int | str]:
+    if ctype.startswith("FREQ"):
+        crval = 6.0e14
+        cdelt = 1.0e9
+        cunit = "Hz"
+    else:
+        crval = 5.0e-7
+        cdelt = 1.0e-9
+        cunit = "m"
+    return {
+        "NAXIS": 1,
+        "NAXIS1": 128,
+        "CTYPE1": ctype,
+        "CUNIT1": cunit,
+        "CRPIX1": 1.0,
+        "CRVAL1": crval,
+        "CDELT1": cdelt,
+        "PV1_0": 300000.0,
+        "PV1_1": 1.0,
+        "PV1_2": 15.0,
+        "PV1_3": 1.5,
+        "PV1_4": -1.0e5,
+        "PV1_5": 0.0,
+        "PV1_6": 10.0,
+    }
+
+
+@pytest.mark.parametrize(
+    "ctype",
+    ["WAVE-GRI", "WAVE-GRA", "AWAV-GRI", "AWAV-GRA", "FREQ-GRI", "FREQ-GRA"],
+)
+def test_wcs_spectral_grism_axes_match_astropy(ctype: str) -> None:
+    header = _grism_header(ctype)
+    twcs = torchsky.WCS(header)
+    awcs = AstropyWCS(header)
+    pixels = np.array([[0.0], [1.0], [2.0], [10.0], [1000.0]], dtype=np.float64)
+
+    world_t = twcs.pixel_to_world(torch.from_numpy(pixels), origin=0)
+    world_a = awcs.all_pix2world(pixels, 0)
+    pix_t = twcs.world_to_pixel(torch.from_numpy(world_a), origin=0)
+
+    np.testing.assert_allclose(world_t.numpy(), world_a, rtol=5e-9, atol=1e-20)
+    np.testing.assert_allclose(pix_t.numpy(), pixels, rtol=1e-12, atol=5e-6)
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        {
+            "NAXIS": 1,
+            "NAXIS1": 128,
+            "CTYPE1": "WAVE-V2W",
+            "CUNIT1": "m",
+            "CRPIX1": 1.0,
+            "CRVAL1": 0.21,
+            "CDELT1": 1.0e-4,
+            "RESTFRQ": 1.42040575177e9,
+        },
+        {
+            "NAXIS": 1,
+            "NAXIS1": 128,
+            "CTYPE1": "VELO-F2V",
+            "CUNIT1": "m/s",
+            "CRPIX1": 1.0,
+            "CRVAL1": 10.0,
+            "CDELT1": 0.1,
+            "RESTFRQ": 1.42040575177e9,
+        },
+        {
+            "NAXIS": 1,
+            "NAXIS1": 128,
+            "CTYPE1": "FREQ-V2F",
+            "CUNIT1": "Hz",
+            "CRPIX1": 1.0,
+            "CRVAL1": 1.420e9,
+            "CDELT1": 1.0e5,
+            "RESTFRQ": 1.42040575177e9,
+        },
+    ],
+)
+def test_wcs_spectral_velocity_compound_axes_match_astropy(
+    header: dict[str, float | int | str],
+) -> None:
+    twcs = torchsky.WCS(header)
+    awcs = AstropyWCS(header)
+    pixels = np.array([[0.0], [1.0], [2.0], [10.0]], dtype=np.float64)
+
+    world_t = twcs.pixel_to_world(torch.from_numpy(pixels), origin=0)
+    world_a = awcs.all_pix2world(pixels, 0)
+    pix_t = twcs.world_to_pixel(torch.from_numpy(world_a), origin=0)
+
+    assert np.isfinite(world_t.numpy()).all()
+    np.testing.assert_allclose(world_t.numpy(), world_a, rtol=1e-11, atol=1e-7)
+    np.testing.assert_allclose(pix_t.numpy(), pixels, rtol=1e-11, atol=1e-6)
+
+
 def test_convert_spectral_and_legacy_transform_spectral() -> None:
     rest_hz = 1420.40575177e6
     freq = torch.tensor([rest_hz, 1.419e9], dtype=torch.float64)

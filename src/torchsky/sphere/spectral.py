@@ -469,7 +469,12 @@ def _ylm_basis(
     # ⚡ Bolt: Vectorized phase multipliers for all m
     m_range = torch.arange(mmax + 1, device=phi.device, dtype=phi.dtype)
     # [mmax+1, npix]
-    all_phases = torch.exp(torch.complex(torch.zeros(1, device=phi.device, dtype=phi.dtype), m_range.unsqueeze(1) * phi.unsqueeze(0)))
+    all_phases = torch.exp(
+        torch.complex(
+            torch.zeros(1, device=phi.device, dtype=phi.dtype),
+            m_range.unsqueeze(1) * phi.unsqueeze(0),
+        )
+    )
 
     for m in range(mmax + 1):
         p_seq = _legendre_l_sequence(m, x, lmax)
@@ -626,7 +631,12 @@ def _spin_ylm_basis(
     # ⚡ Bolt: Vectorized phase multipliers for all m
     m_range = torch.arange(mmax + 1, device=phi.device, dtype=phi.dtype)
     # [mmax+1, npix]
-    all_phases = torch.exp(torch.complex(torch.zeros(1, device=phi.device, dtype=phi.dtype), m_range.unsqueeze(1) * phi.unsqueeze(0)))
+    all_phases = torch.exp(
+        torch.complex(
+            torch.zeros(1, device=phi.device, dtype=phi.dtype),
+            m_range.unsqueeze(1) * phi.unsqueeze(0),
+        )
+    )
     spin_phase = -1.0 if (spin & 1) else 1.0  # (-1)^spin
 
     # ⚡ Bolt: Pre-calculate all possible ell norms for the given lmax and spin
@@ -4084,6 +4094,63 @@ def alm2map_spin(
     )
 
 
+def clear_spectral_caches() -> None:
+    """Clear internal spectral/SHT lookup caches."""
+
+    global _RING_SCALAR_BASIS_CONCAT_CACHE_TOTAL_BYTES
+    global _RING_SPIN_CONCAT_CACHE_TOTAL_BYTES
+    global _SCALAR_ALM2MAP_MAT_CACHE_TOTAL_BYTES
+    global _SCALAR_MAP2ALM_MAT_CACHE_TOTAL_BYTES
+    global _SPIN_ALM2MAP_MAT_CACHE_TOTAL_BYTES
+    global _SPIN_MAP2ALM_MAT_CACHE_TOTAL_BYTES
+    global _SPIN_YLM_CONCAT_CACHE_TOTAL_BYTES
+
+    for cache in (
+        _ANGLE_CACHE,
+        _YLM_CACHE,
+        _ALM_ELL_CACHE,
+        _ALM_M_CACHE,
+        _SPIN_YLM_CACHE,
+        _SPIN_MAP2ALM_MAT_CACHE,
+        _SPIN_ALM2MAP_MAT_CACHE,
+        _SCALAR_MAP2ALM_MAT_CACHE,
+        _SCALAR_ALM2MAP_MAT_CACHE,
+        _RING_LAYOUT_CACHE,
+        _RING_SCALAR_BASIS_CACHE,
+        _RING_PHI0_PHASE_CACHE,
+        _RING_AZIMUTH_PHASE_CACHE,
+        _RING_ALIAS_INDEX_CACHE,
+        _RING_SPIN_CONJ_INDEX_CACHE,
+        _RING_PIX2RING_CACHE,
+        _RING2NEST_PERM_CACHE,
+        _NEST2RING_PERM_CACHE,
+        _RING_SPIN_BASIS_CACHE,
+        _RING_SCALAR_BASIS_CONCAT_CACHE,
+        _RING_SCALAR_BASIS_CONCAT_CACHE_BYTES,
+        _RING_GROUP_CACHE,
+        _SPIN_MAP2ALM_MAT_CACHE_ENTRY_BYTES,
+        _SPIN_ALM2MAP_MAT_CACHE_ENTRY_BYTES,
+        _SCALAR_MAP2ALM_MAT_CACHE_ENTRY_BYTES,
+        _SCALAR_ALM2MAP_MAT_CACHE_ENTRY_BYTES,
+        _PIXWIN_TABLE_CACHE,
+        _LEGENDRE_REC_CACHE,
+        _SPIN_YLM_CONCAT_CACHE,
+        _SPIN_YLM_CONCAT_CACHE_ENTRY_BYTES,
+        _RING_SPIN_CONCAT_CACHE,
+        _RING_SPIN_CONCAT_CACHE_ENTRY_BYTES,
+        _M_PER_ALM_CACHE,
+    ):
+        cache.clear()
+
+    _SPIN_MAP2ALM_MAT_CACHE_TOTAL_BYTES = 0
+    _SPIN_ALM2MAP_MAT_CACHE_TOTAL_BYTES = 0
+    _SCALAR_MAP2ALM_MAT_CACHE_TOTAL_BYTES = 0
+    _SCALAR_ALM2MAP_MAT_CACHE_TOTAL_BYTES = 0
+    _SPIN_YLM_CONCAT_CACHE_TOTAL_BYTES = 0
+    _RING_SCALAR_BASIS_CONCAT_CACHE_TOTAL_BYTES = 0
+    _RING_SPIN_CONCAT_CACHE_TOTAL_BYTES = 0
+
+
 __all__ = [
     "alm2lonlat",
     "alm2lonlat_spin",
@@ -4097,6 +4164,7 @@ __all__ = [
     "anafast",
     "beam2bl",
     "bl2beam",
+    "clear_spectral_caches",
     "gaussian_beam",
     "map2alm",
     "map2alm_batched",

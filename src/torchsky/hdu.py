@@ -385,17 +385,14 @@ class TensorHDU:
                     has_tab = True
                     break
 
-            extracted_axes = None
             if has_tab and getattr(self, "_source_path", None) is not None:
-                try:
-                    with HDUList.fromfile(self._source_path) as hdul:
-                        from .wcs.tabular import tabular_axes_from_fits
+                with HDUList.fromfile(self._source_path) as hdul:
+                    from .wcs.tabular import tabular_axes_from_fits
 
-                        extracted_axes = tabular_axes_from_fits(self._header, hdul)
-                except Exception:
-                    pass
-
-            self._wcs_cache = WCS(self._header, tabular_axes=extracted_axes)
+                    extracted_axes = tabular_axes_from_fits(self._header, hdul)
+                self._wcs_cache = WCS(self._header, tabular_axes=extracted_axes)
+            else:
+                self._wcs_cache = WCS(self._header)
             self._wcs_version = current_version
         return self._wcs_cache
 
@@ -653,7 +650,11 @@ class TableHDU(TensorFrame):
         if num_cols <= 0:
             num_cols = 1
             names = ["dummy"]
-        st = _torch_frame_stype.numerical if _torch_frame_stype is not None else "numerical"
+        st = (
+            _torch_frame_stype.numerical
+            if _torch_frame_stype is not None
+            else "numerical"
+        )
         return {st: torch.zeros((num_rows, num_cols), dtype=torch.float32)}, {st: names}
 
     def _get_string_columns(self, header: Optional[Header]) -> set:
@@ -2233,6 +2234,7 @@ class HDUList:
             row = [idx, name, hdu_type, cards, dims, fmt]
             html.append("<tr>")
             import html as pyhtml
+
             for val, s in zip(row, styles):
                 escaped_val = pyhtml.escape(str(val))
                 html.append(

@@ -49,7 +49,6 @@ def to_tensor_frame(
 
     num_rows = -1
 
-
     for name, tensor in data.items():
         if num_rows == -1:
             num_rows = tensor.shape[0]
@@ -140,9 +139,9 @@ def read_tensor_frame(
     Returns:
         A torch_frame.TensorFrame object.
     """
-    import torchsky
+    from .io import read
 
-    data = torchsky.read(path, hdu=hdu, columns=columns, return_header=False)
+    data = read(path, hdu=hdu, columns=columns, return_header=False)
     return to_tensor_frame(data, schema=schema)
 
 
@@ -155,7 +154,7 @@ def write_tensor_frame(path: str, tf: TensorFrame, overwrite: bool = False):
         tf: TensorFrame object to write.
         overwrite: Whether to overwrite existing file.
     """
-    import torchsky
+    from .io import write
 
     if not HAS_TORCH_FRAME:
         raise ImportError("torch-frame is not installed.")
@@ -227,4 +226,4 @@ def write_tensor_frame(path: str, tf: TensorFrame, overwrite: bool = False):
                 ]
                 data[name] = list_of_tensors
 
-    torchsky.write(path, data, overwrite=overwrite)
+    write(path, data, overwrite=overwrite)

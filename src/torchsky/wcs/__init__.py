@@ -25,9 +25,11 @@ from .spectral import (
     vacuum_wavelength_to_air,
 )
 from .tabular import (
+    CoupledTabularLookupWCS,
     TabularAxis,
     TabularBoundsMode,
     TabularLookupWCS,
+    coupled_tabular_wcs_from_fits,
     tabular_axes_from_fits,
 )
 
@@ -36,6 +38,7 @@ __all__ = [
     "AffineFitResult",
     "SkyAffineFitResult",
     "TangentPlaneFrame",
+    "CoupledTabularLookupWCS",
     "TabularAxis",
     "TabularBoundsMode",
     "TabularLookupWCS",
@@ -53,6 +56,7 @@ __all__ = [
     "precess_fk5",
     "rest_frequency_from_header",
     "spectral_to_frequency",
+    "coupled_tabular_wcs_from_fits",
     "tabular_axes_from_fits",
     "transform_spectral",
     "vacuum_wavelength_to_air",

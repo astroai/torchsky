@@ -8,10 +8,8 @@ for FITS datasets with appropriate defaults for astronomical data.
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset as TorchIterableDataset
 from torch.utils.data.distributed import DistributedSampler
-
-import torchsky
 
 from .datasets import FITSDataset, IterableFITSDataset, TableChunkDataset
 
@@ -48,7 +46,7 @@ def create_dataloader(
         dataset = FITSDataset(dataset)
 
     # Adjust parameters based on dataset type
-    if isinstance(dataset, torchsky.datasets.IterableFITSDataset):
+    if isinstance(dataset, TorchIterableDataset):
         # IterableDataset doesn't support shuffle
         shuffle = False
 

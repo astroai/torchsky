@@ -239,9 +239,7 @@ def main() -> int:
                 )
         hdr["BAND"] = band
         out_path = out_dir / f"smacs0723_{band}_cutout_{args.crop_size}.fits"
-        fits.PrimaryHDU(data=patch, header=hdr).writeto(
-            out_path, overwrite=True
-        )
+        fits.PrimaryHDU(data=patch, header=hdr).writeto(out_path, overwrite=True)
         manifest["outputs"].append(
             {
                 "band": band,

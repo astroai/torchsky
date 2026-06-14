@@ -14,9 +14,9 @@ table HDUs.
 - **Projection:** request only the columns you need.
 - **Predicate pushdown:** `where=` filters rows before data reaches Python.
 - **Streaming:** scan large tables in chunks.
-- **Root streaming:** `torchsky.stream_table(...)` and
-  `torchsky.read_large_table(...)` are convenience wrappers for package-level
-  workflows; `torchsky.table.scan(...)` and `torchsky.table.reader(...)` are the
+- **Streaming:** `torchsky.io.stream_table(...)` and
+  `torchsky.io.read_large_table(...)` handle FITS table streaming workflows;
+  `torchsky.table.scan(...)` and `torchsky.table.reader(...)` are the
   table-namespace scan/reader APIs.
 - **Interop:** convert to PyArrow, Polars, DuckDB, Pandas, or tensors when those
   optional dependencies are installed.

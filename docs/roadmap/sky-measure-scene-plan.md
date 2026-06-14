@@ -810,7 +810,7 @@ pred = state.render_observation(observation)
 Product rendering should remain compatible with the existing map-product surface:
 
 ```python
-from torchsky.map import plan_map_product, evaluate_map_product
+from torchsky.map.product import evaluate_map_product, plan_map_product
 
 product = plan_map_product(observations)
 pred_product = render_scene_product(state, product)

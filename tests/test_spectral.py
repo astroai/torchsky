@@ -58,6 +58,19 @@ class TestSpectralAxis:
         expected = wave_nm * 10.0
         assert torch.allclose(wave_angstrom, expected)
 
+        freq_ghz = torch.tensor([100.0, 200.0], dtype=torch.float64)
+        axis = SpectralAxis(freq_ghz, "GHz", "FREQ")
+        expected_wave = 299_792_458.0e10 / (freq_ghz * 1.0e9)
+        torch.testing.assert_close(axis.to_wavelength(), expected_wave)
+
+        freq_mhz = torch.tensor([100.0, 200.0], dtype=torch.float64)
+        axis = SpectralAxis(freq_mhz, "MHz", "FREQ")
+        expected_freq = freq_mhz * 1.0e6
+        torch.testing.assert_close(axis.to_frequency(), expected_freq)
+
+        axis = SpectralAxis(freq_ghz, "ghz", "freq")
+        torch.testing.assert_close(axis.to_wavelength(), expected_wave)
+
     def test_unsupported_conversion_raises_valueerror(self):
         axis = SpectralAxis(torch.tensor([1.0, 2.0]), "keV", "ENER")
         with pytest.raises(ValueError, match="Unsupported spectral conversion"):
@@ -175,6 +188,28 @@ class TestSpectrum1D:
         # Check that flux values are reasonable
         assert torch.all(torch.isfinite(resampled.flux))
 
+    def test_resampling_uses_linear_interpolation(self):
+        """Spectrum resampling should interpolate instead of taking nearest samples."""
+        spectrum = Spectrum1D(
+            flux=torch.tensor([0.0, 10.0, 20.0], dtype=torch.float64),
+            spectral_axis=SpectralAxis(
+                torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64),
+                "Angstrom",
+                "WAVE",
+            ),
+            ivar=torch.tensor([1.0, 1.0, 1.0], dtype=torch.float64),
+        )
+
+        resampled = spectrum.resample(torch.tensor([0.5, 1.5], dtype=torch.float64))
+        torch.testing.assert_close(
+            resampled.flux,
+            torch.tensor([5.0, 15.0], dtype=torch.float64),
+        )
+        torch.testing.assert_close(
+            resampled.ivar,
+            torch.tensor([2.0, 2.0], dtype=torch.float64),
+        )
+
 
 class TestDataCube:
     """Test 3D data cube functionality."""
@@ -228,6 +263,24 @@ class TestDataCube:
         assert isinstance(spectrum, Spectrum1D)
         assert len(spectrum.flux) == cube.n_spectral
         assert torch.allclose(spectrum.spectral_axis.values, cube.spectral_axis.values)
+
+    def test_spectrum_extraction_preserves_yx_for_middle_spectral_axis(self):
+        data = torch.arange(2 * 3 * 4, dtype=torch.float32).reshape(2, 3, 4)
+        axis = SpectralAxis(torch.tensor([4000.0, 5000.0, 6000.0]), "Angstrom", "WAVE")
+        cube = DataCube(data, axis, spectral_axis_index=1)
+
+        spectrum = cube.extract_spectrum(y=1, x=2)
+
+        torch.testing.assert_close(spectrum.flux, data[1, :, 2])
+
+    def test_spectrum_extraction_preserves_yx_for_last_spectral_axis(self):
+        data = torch.arange(2 * 4 * 3, dtype=torch.float32).reshape(2, 4, 3)
+        axis = SpectralAxis(torch.tensor([4000.0, 5000.0, 6000.0]), "Angstrom", "WAVE")
+        cube = DataCube(data, axis, spectral_axis_index=2)
+
+        spectrum = cube.extract_spectrum(y=1, x=2)
+
+        torch.testing.assert_close(spectrum.flux, data[1, 2, :])
 
     def test_spectral_collapse(self):
         """Test collapsing cube along spectral axis."""
@@ -318,7 +371,6 @@ class TestSpectralReader:
             hdu.writeto(f.name, overwrite=True)
             return f.name
 
-    @pytest.mark.skip("Requires full torchsky implementation")
     def test_read_spectrum_1d(self):
         """Test reading 1D spectrum from FITS table."""
         filepath = self.create_test_spectrum_file()
@@ -341,7 +393,7 @@ class TestSpectralReader:
 
     @unittest.mock.patch("torchsky.spectral.WCS")
     @unittest.mock.patch("torchsky.spectral.spectral_axis_from_header")
-    @unittest.mock.patch("torchsky.open")
+    @unittest.mock.patch("torchsky.io.open")
     def test_read_data_cube_wcs_error(
         self, mock_open, mock_spectral_axis, mock_wcs_class
     ):
@@ -370,7 +422,6 @@ class TestSpectralReader:
         assert isinstance(cube, DataCube)
         assert cube.spatial_wcs is None
 
-    @pytest.mark.skip("Requires full torchsky implementation")
     def test_read_data_cube(self):
         """Test reading 3D data cube from FITS image."""
         filepath = self.create_test_cube_file()

@@ -57,6 +57,7 @@ def _write_nonuniform_cube_fits(
 ) -> dict:
     from astropy.io import fits
     from torchsky.spectral import _strip_axis3_and_naxis_keys
+
     data = cube.cpu().numpy()
     clean_hdr = _strip_axis3_and_naxis_keys(spatial_header)
     header = fits.Header(clean_hdr)

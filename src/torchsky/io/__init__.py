@@ -224,8 +224,8 @@ def get_header(path: str, hdu: Any = None):
     return _get_header_impl(path, hdu, autodetect_hdu=_autodetect_hdu_impl)
 
 
-def get_wcs(path: str, hdu: Any = "auto", device: Any = None):
-    return _get_wcs_impl(path, hdu, device, get_header_func=get_header)
+def get_wcs(path: str, hdu: Any = "auto", device: Any = None, *, key: str | None = ""):
+    return _get_wcs_impl(path, hdu, device, key=key, get_header_func=get_header)
 
 
 def stream_table(*args: Any, **kwargs: Any):

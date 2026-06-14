@@ -71,6 +71,7 @@ class MockModel:
     def load_trunk_state_dict(self, state_dict, strict=True):
         pass
 
+
 def test_load_strainer_trunk_checkpoint_security():
     """Test that load_strainer_trunk_checkpoint rejects unsafe payloads."""
     from torchsky.map.field.core import load_strainer_trunk_checkpoint
@@ -78,12 +79,9 @@ def test_load_strainer_trunk_checkpoint_security():
     # A class that represents a malicious payload which attempts to execute code when pickled
     class MaliciousPayload:
         def __reduce__(self):
-            return (os.system, ('echo PWNED > pwned.txt',))
+            return (os.system, ("echo PWNED > pwned.txt",))
 
-    payload = {
-        "format": "torchsky.strainer_trunk.v1",
-        "trunk": MaliciousPayload()
-    }
+    payload = {"format": "torchsky.strainer_trunk.v1", "trunk": MaliciousPayload()}
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pt") as tmp:
         tmp_path = tmp.name

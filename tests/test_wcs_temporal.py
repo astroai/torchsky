@@ -157,13 +157,15 @@ def test_temporal_ephemeris_corrections() -> None:
     torch.testing.assert_close(twcs_topo.apply_corrections(mjd, ra, dec), mjd)
 
     # Test BARYCENTER (should apply light travel time corrections)
-    twcs_bary = TemporalWCS({
-        "MJDREF": 60000.0,
-        "TREFPOS": "BARYCENTER",
-        "OBSGEO-X": 6378137.0,
-        "OBSGEO-Y": 0.0,
-        "OBSGEO-Z": 0.0,
-    })
+    twcs_bary = TemporalWCS(
+        {
+            "MJDREF": 60000.0,
+            "TREFPOS": "BARYCENTER",
+            "OBSGEO-X": 6378137.0,
+            "OBSGEO-Y": 0.0,
+            "OBSGEO-Z": 0.0,
+        }
+    )
     assert twcs_bary.requires_ephemeris
     mjd_corr = twcs_bary.apply_corrections(mjd, ra, dec)
 
@@ -183,6 +185,45 @@ def test_temporal_ephemeris_corrections() -> None:
     # Keplerian approximation is extremely fast and matches astropy to within 15 seconds
     np.testing.assert_allclose(mjd_corr.item(), expected_mjd, atol=15.0 / 86400.0)
 
+
+def test_temporal_reference_position_corrections_match_astropy_grid() -> None:
+    from astropy.coordinates import EarthLocation, SkyCoord
+    from astropy.time import Time
+    import astropy.units as u
+
+    location = EarthLocation.from_geocentric(
+        6378137.0 * u.m,
+        0.0 * u.m,
+        0.0 * u.m,
+    )
+    header = {
+        "MJDREF": 60000.0,
+        "TREFPOS": "BARYCENTER",
+        "OBSGEO-X": 6378137.0,
+        "OBSGEO-Y": 0.0,
+        "OBSGEO-Z": 0.0,
+    }
+    twcs = TemporalWCS(header)
+
+    mjd_values = torch.tensor([58000.0, 59000.0, 60000.0, 61000.0], dtype=torch.float64)
+    ra_values = torch.tensor([0.0, 90.0, 180.0, 270.0], dtype=torch.float64)
+    dec_values = torch.tensor([-60.0, 0.0, 45.0, 30.0], dtype=torch.float64)
+
+    corrected = twcs.apply_corrections(mjd_values, ra_values, dec_values)
+    expected = []
+    for mjd, ra, dec in zip(
+        mjd_values.tolist(), ra_values.tolist(), dec_values.tolist()
+    ):
+        time = Time(mjd, format="mjd", scale="utc", location=location)
+        coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg)
+        light_time = time.light_travel_time(coord, "barycentric").to(u.day).value
+        expected.append(mjd + light_time)
+
+    np.testing.assert_allclose(
+        corrected.numpy(),
+        np.asarray(expected, dtype=np.float64),
+        atol=5.0 / 86400.0,
+    )
 
 
 def test_temporal_reference_metadata_and_observatory_location() -> None:

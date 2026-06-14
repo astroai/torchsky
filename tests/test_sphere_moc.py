@@ -2,6 +2,9 @@ import json
 
 import pytest
 import torch
+from torchsky.sphere import SphericalCap, SphericalPolygon
+from torchsky.sphere import healpix as hp
+from torchsky.sphere.geom import PixelizedRegion
 from torchsky.sphere.moc import (
     MOC,
     nest2uniq,
@@ -44,6 +47,34 @@ def test_moc_contains_empty():
     assert not moc.contains(0.0, 0.0).item()
 
 
+def test_moc_contains_pixels_nested_and_ring_inputs() -> None:
+    nside = 8
+    pix_nest = torch.tensor([0, 5, 17], dtype=torch.int64)
+    moc = MOC(nest2uniq(nside, pix_nest))
+    query_nest = torch.tensor([0, 1, 5, 17, 18], dtype=torch.int64)
+    query_ring = hp.nest2ring(nside, query_nest)
+
+    expected = torch.tensor([True, False, True, True, False])
+    torch.testing.assert_close(
+        moc.contains_pixels(nside, query_nest, nest=True),
+        expected,
+    )
+    torch.testing.assert_close(
+        moc.contains_pixels(nside, query_ring, nest=False),
+        expected,
+    )
+
+    lon, lat = hp.pix2ang(nside, query_nest, nest=True, lonlat=True)
+    torch.testing.assert_close(moc.contains(lon, lat), expected)
+
+
+def test_moc_contains_pixels_requires_sufficient_resolution() -> None:
+    moc = MOC(nest2uniq(8, torch.tensor([0], dtype=torch.int64)))
+
+    with pytest.raises(ValueError, match="at least the MOC maximum order"):
+        moc.contains_pixels(4, torch.tensor([0], dtype=torch.int64))
+
+
 def test_moc_area_empty():
     moc = MOC(torch.tensor([], dtype=torch.int64))
     assert moc.area == 0.0
@@ -64,6 +95,24 @@ def test_moc_from_sparse_map_empty():
     )
     moc = MOC.from_sparse_map(smap)
     assert moc.uniq.numel() == 0
+
+
+def test_moc_from_sparse_map_converts_ring_pixels_to_nested_uniq() -> None:
+    nside = 8
+    pix_nest = torch.tensor([0, 5, 17], dtype=torch.int64)
+    pix_ring = hp.nest2ring(nside, pix_nest)
+    smap = HealSparseMap.from_pixels(
+        pix_ring,
+        torch.ones_like(pix_ring, dtype=torch.float32),
+        nside_sparse=nside,
+        nest=False,
+        nside_coverage=2,
+        sentinel=0.0,
+    )
+
+    moc = MOC.from_sparse_map(smap)
+
+    torch.testing.assert_close(moc.uniq, MOC(nest2uniq(nside, pix_nest)).uniq)
 
 
 def test_moc_from_threshold():
@@ -92,6 +141,40 @@ def test_moc_from_threshold():
     # Test invalid op
     with pytest.raises(ValueError):
         MOC.from_threshold(smap, 10.0, op="==")
+
+
+def test_moc_from_threshold_uses_sparse_pixel_list_not_coverage_offsets() -> None:
+    pixels = torch.tensor([0, 10, 42], dtype=torch.int64)
+    values = torch.tensor([1.0, 5.0, 2.0], dtype=torch.float64)
+    smap = HealSparseMap.from_pixels(
+        pixels,
+        values,
+        nside_sparse=8,
+        nside_coverage=2,
+        sentinel=0.0,
+    )
+
+    moc = MOC.from_threshold(smap, 2.0, op=">")
+
+    torch.testing.assert_close(moc.uniq, MOC(nest2uniq(8, torch.tensor([10]))).uniq)
+
+
+def test_moc_from_threshold_converts_ring_sparse_pixels() -> None:
+    pixels_nest = torch.tensor([0, 10, 42], dtype=torch.int64)
+    pixels_ring = hp.nest2ring(8, pixels_nest)
+    values = torch.tensor([1.0, 5.0, 2.0], dtype=torch.float64)
+    smap = HealSparseMap.from_pixels(
+        pixels_ring,
+        values,
+        nside_sparse=8,
+        nest=False,
+        nside_coverage=2,
+        sentinel=0.0,
+    )
+
+    moc = MOC.from_threshold(smap, 2.0, op=">")
+
+    torch.testing.assert_close(moc.uniq, MOC(nest2uniq(8, torch.tensor([10]))).uniq)
 
 
 def test_moc_from_threshold_empty():
@@ -134,15 +217,110 @@ def test_moc_boundary_complex():
     assert len(boundary) > 0
 
 
+def test_moc_from_polygon_supports_nonconvex_simple_regions() -> None:
+    lon = torch.tensor([-20.0, 20.0, 20.0, 0.0, 0.0, -20.0], dtype=torch.float64)
+    lat = torch.tensor([-20.0, -20.0, 0.0, 0.0, 20.0, 20.0], dtype=torch.float64)
+
+    moc = MOC.from_polygon(lon, lat, max_order=7)
+
+    assert bool(moc.contains(-12.0, 12.0))
+    assert bool(moc.contains(12.0, -12.0))
+    assert not bool(moc.contains(12.0, 12.0))
+
+
+def test_moc_from_region_converts_ring_pixelized_region_to_nested_uniq() -> None:
+    nside = 8
+    pix_nest = torch.tensor([0, 3, 10, 10], dtype=torch.int64)
+    pix_ring = hp.nest2ring(nside, pix_nest)
+    region = PixelizedRegion(nside=nside, nest=False, pixels=pix_ring)
+
+    moc = MOC.from_region(region)
+    expected = MOC(nest2uniq(nside, pix_nest))
+    back_ring = moc.to_pixelized_region(nside, nest=False)
+
+    torch.testing.assert_close(moc.uniq, expected.uniq)
+    assert not back_ring.nest
+    torch.testing.assert_close(back_ring.pixels, torch.unique(pix_ring))
+
+    with pytest.raises(ValueError, match="does not match requested max_order"):
+        MOC.from_region(region, max_order=4)
+
+
+def test_moc_from_region_pixelizes_boolean_region() -> None:
+    square = SphericalPolygon(
+        torch.tensor([-8.0, 8.0, 8.0, -8.0], dtype=torch.float64),
+        torch.tensor([-6.0, -6.0, 6.0, 6.0], dtype=torch.float64),
+    )
+    region = square.difference(SphericalCap(0.0, 0.0, 3.0))
+
+    moc = MOC.from_region(region, max_order=7)
+
+    assert bool(moc.contains(6.0, 0.0))
+    assert not bool(moc.contains(0.0, 0.0))
+
+
+def test_healsparse_from_moc_uses_sparse_nested_pixels() -> None:
+    nside = 8
+    pix = torch.tensor([0, 3, 7], dtype=torch.int64)
+    moc = MOC(nest2uniq(nside, pix))
+
+    smap = HealSparseMap.from_moc(moc, nside=nside, nside_coverage=2)
+
+    assert smap.nest
+    assert smap.nside_sparse == nside
+    assert smap.nside_coverage == 2
+    torch.testing.assert_close(smap.pixels, pix)
+    assert smap.values.dtype == torch.bool
+    assert bool(smap.values.all())
+
+
+def test_moc_to_sparse_map_sets_values_and_small_coverage_resolution() -> None:
+    nside = 4
+    pix = torch.tensor([0, 1], dtype=torch.int64)
+    moc = MOC(nest2uniq(nside, pix))
+
+    smap = moc.to_sparse_map(nside, sentinel=0.0)
+
+    assert smap.nside_sparse == nside
+    assert smap.nside_coverage == 1
+    torch.testing.assert_close(smap.pixels, pix)
+    torch.testing.assert_close(smap.values, torch.ones(2, dtype=torch.float32))
+    dense = smap.to_dense(fill_value=0.0)
+    torch.testing.assert_close(dense[pix], torch.ones(2, dtype=torch.float32))
+    assert float(dense[2].item()) == 0.0
+
+
 def test_moc_to_ascii_empty():
     moc = MOC(torch.tensor([], dtype=torch.int64))
     assert moc.to_ascii() == ""
+
+
+def test_moc_to_ascii_compact_ranges_roundtrip() -> None:
+    moc = MOC(nest2uniq(8, torch.tensor([5, 6, 7, 10], dtype=torch.int64)))
+
+    ascii_str = moc.to_ascii(compact=True)
+    got = MOC.from_ascii(ascii_str)
+
+    assert "3/5-7 10" == ascii_str
+    torch.testing.assert_close(got.uniq, moc.uniq)
 
 
 def test_moc_from_ascii_empty():
     assert MOC.from_ascii("").uniq.numel() == 0
     assert MOC.from_ascii("   ").uniq.numel() == 0
     assert MOC.from_ascii("0/").uniq.numel() == 0
+
+
+def test_moc_from_ascii_expands_pixel_ranges_and_commas() -> None:
+    moc = MOC.from_ascii("3/5-7,10")
+    expected = MOC(nest2uniq(8, torch.tensor([5, 6, 7, 10], dtype=torch.int64)))
+
+    torch.testing.assert_close(moc.uniq, expected.uniq)
+
+
+def test_moc_from_ascii_rejects_descending_ranges() -> None:
+    with pytest.raises(ValueError, match="descending MOC pixel range"):
+        MOC.from_ascii("3/7-5")
 
 
 def test_moc_to_json_empty():

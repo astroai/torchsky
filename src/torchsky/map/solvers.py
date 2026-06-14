@@ -737,8 +737,7 @@ def build_state_subspace_operator(
         out = torch.zeros_like(state)
         if squeeze:
             adj = torch.as_tensor(adjoint_tensor)
-            if adj.ndim != state.ndim - 1 or tuple(adj.shape) != tuple(state.shape[1:]
-            ):
+            if adj.ndim != state.ndim - 1 or tuple(adj.shape) != tuple(state.shape[1:]):
                 raise ValueError("subspace adjoint returned an incompatible tensor")
             out[indices[0]] = adj.to(dtype=state.dtype, device=state.device)
             return out
@@ -1215,8 +1214,7 @@ class HarmonicComponentDecomposition(nn.Module):
         calibration_transfer_stability = None
         if calibration_anchor is not None:
             anchor = torch.as_tensor(calibration_anchor)
-            if tuple(anchor.shape) != tuple(shared_truth.shape
-            ):
+            if tuple(anchor.shape) != tuple(shared_truth.shape):
                 raise ValueError(
                     "calibration_anchor must match the aggregated shared-state shape"
                 )

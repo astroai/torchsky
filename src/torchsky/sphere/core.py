@@ -96,7 +96,15 @@ def pairwise_angular_distance(
 
     v = lonlat_to_unit_xyz(lon_t, lat_t)
     dot = torch.clamp(v @ v.transpose(0, 1), -1.0, 1.0)
-    dist_rad = torch.acos(dot)
+    x, y, z = v.unbind(dim=-1)
+    cross_x = y[:, None] * z[None, :] - z[:, None] * y[None, :]
+    cross_sq = cross_x.square()
+    cross_y = z[:, None] * x[None, :] - x[:, None] * z[None, :]
+    cross_sq = cross_sq + cross_y.square()
+    cross_z = x[:, None] * y[None, :] - y[:, None] * x[None, :]
+    cross_sq = cross_sq + cross_z.square()
+    cross = torch.sqrt(torch.clamp(cross_sq, min=0.0))
+    dist_rad = torch.atan2(cross, dot)
     dist_rad.fill_diagonal_(0.0)
     if degrees:
         return torch.rad2deg(dist_rad)

@@ -2,13 +2,30 @@
 
 import json
 import math
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import torch
 from torch import Tensor
 
 from . import healpix as _healpix
 from .sparse import HealSparseMap
+
+if TYPE_CHECKING:
+    from .geom import PixelizedRegion
+
+
+def _order_from_nside(nside: int, *, name: str = "nside") -> int:
+    nside_i = int(nside)
+    if nside_i <= 0 or (nside_i & (nside_i - 1)) != 0:
+        raise ValueError(f"{name} must be a positive power of two")
+    return nside_i.bit_length() - 1
+
+
+def _nside_from_max_order(max_order: int) -> int:
+    order = int(max_order)
+    if order < 0:
+        raise ValueError("max_order must be non-negative")
+    return 1 << order
 
 
 def nest2uniq(nside: int | Tensor, pix: int | Tensor) -> Tensor:
@@ -142,6 +159,38 @@ def _uniq_column_from_table_dict(table: dict) -> Tensor:
     )
 
 
+def _parse_ascii_pixel_tokens(pix_str: str) -> list[int]:
+    pixels: list[int] = []
+    for token in pix_str.replace(",", " ").split():
+        if "-" not in token:
+            pixels.append(int(token))
+            continue
+        start_s, end_s = token.split("-", 1)
+        start = int(start_s)
+        end = int(end_s)
+        if end < start:
+            raise ValueError(f"invalid descending MOC pixel range {token!r}")
+        pixels.extend(range(start, end + 1))
+    return pixels
+
+
+def _format_ascii_pixels(pixels: Tensor, *, compact: bool) -> str:
+    values = [int(p) for p in pixels.tolist()]
+    if not compact or len(values) <= 1:
+        return " ".join(map(str, values))
+    parts: list[str] = []
+    start = values[0]
+    prev = values[0]
+    for value in values[1:]:
+        if value == prev + 1:
+            prev = value
+            continue
+        parts.append(f"{start}-{prev}" if start != prev else str(start))
+        start = prev = value
+    parts.append(f"{start}-{prev}" if start != prev else str(start))
+    return " ".join(parts)
+
+
 class MOC:
     """Multi-Order Coverage map."""
 
@@ -163,38 +212,50 @@ class MOC:
         if self.uniq.numel() == 0:
             return torch.zeros_like(lon, dtype=torch.bool)
 
-        # A point is in MOC if its pixel at order O is in MOC for ANY O.
-        # Efficient way: for each point, get its pixel at MAX_ORDER.
-        # Check if that pixel OR any of its ancestors are in the MOC.
-
         max_o = self.max_order
         nside_max = 1 << max_o
         p_max = _healpix.ang2pix(nside_max, lon, lat, nest=True, lonlat=True)
+        return self.contains_pixels(nside_max, p_max, nest=True)
 
-        # Convert MOC UNIQ to max_order ranges [start, end)
-        nsides, pix_nested = uniq2nest(self.uniq)
-        ranges = []
-        for ns, p in zip(nsides, pix_nested):
-            o = int(torch.log2(ns.to(torch.float64)).item())
-            shift = 2 * (max_o - o)
-            start = p << shift
-            end = (p + 1) << shift
-            ranges.append((start.item(), end.item()))
+    def contains_pixels(
+        self,
+        nside: int,
+        pixels: Tensor | int,
+        *,
+        nest: bool = True,
+    ) -> Tensor:
+        """Check whether HEALPix pixels are covered by this MOC.
 
-        # Sort and merge ranges (should already be merged if MOC is normalized)
-        ranges.sort()
+        ``pixels`` are interpreted at ``nside``. MOC cells are internally NUNIQ /
+        NESTED, so RING inputs are converted exactly when ``nest=False``.
+        """
+        pix = torch.as_tensor(pixels, dtype=torch.int64)
+        shape = pix.shape
+        if self.uniq.numel() == 0:
+            return torch.zeros(shape, dtype=torch.bool, device=pix.device)
 
-        # Use searchsorted to check if p_max is within any range
+        order = _order_from_nside(nside)
+        if order < self.max_order:
+            raise ValueError("nside must be at least the MOC maximum order resolution")
+        pix_nest = pix.reshape(-1)
+        if not nest and pix_nest.numel() > 0:
+            pix_nest = _healpix.ring2nest(int(nside), pix_nest)
+
+        ranges = self._to_ranges(order)
+        if not ranges:
+            return torch.zeros(shape, dtype=torch.bool, device=pix.device)
         starts = torch.tensor(
-            [r[0] for r in ranges], device=p_max.device, dtype=torch.int64
+            [r[0] for r in ranges], device=pix.device, dtype=torch.int64
         )
         ends = torch.tensor(
-            [r[1] for r in ranges], device=p_max.device, dtype=torch.int64
+            [r[1] for r in ranges], device=pix.device, dtype=torch.int64
         )
 
-        idx = torch.searchsorted(starts, p_max, right=True) - 1
-        mask = (idx >= 0) & (p_max < ends[idx])
-        return mask
+        idx = torch.searchsorted(starts, pix_nest, right=True) - 1
+        in_range = idx >= 0
+        idx_safe = idx.clamp(min=0)
+        mask = in_range & (pix_nest < ends[idx_safe])
+        return mask.reshape(shape)
 
     def filter_catalog(self, lon_deg: Tensor, lat_deg: Tensor) -> tuple[Tensor, Tensor]:
         """Filter a catalogue by point-in-MOC containment. Returns (lon, lat) of contained points."""
@@ -315,22 +376,38 @@ class MOC:
         return cls(_ranges_to_uniq(ranges, max_order))
 
     def _flat_pixels(self, nside: int) -> Tensor:
-        max_o = int(math.log2(nside))
+        max_o = _order_from_nside(nside)
+        if max_o < self.max_order:
+            raise ValueError("nside must be at least the MOC maximum order resolution")
         ranges = self._to_ranges(max_o)
         if not ranges:
-            return torch.empty((0,), dtype=torch.int64)
+            return torch.empty((0,), dtype=torch.int64, device=self.uniq.device)
         chunks = [
             torch.arange(start, end, dtype=torch.int64, device=self.uniq.device)
             for start, end in ranges
         ]
         return torch.cat(chunks)
 
-    def to_sparse_map(self, nside: int, sentinel: float = 0.0) -> HealSparseMap:
-        """Realize MOC as a HealSparseMap at fixed resolution."""
-        pix = self._flat_pixels(nside)
-        if pix.numel() == 0:
-            return HealSparseMap.make_empty(nside // 8, nside, torch.float32, sentinel)
-        return HealSparseMap.from_pixels(pix, nside, nside // 8, sentinel=sentinel)
+    def to_sparse_map(
+        self,
+        nside: int,
+        sentinel: float = 0.0,
+        *,
+        nside_coverage: int | None = None,
+        dtype: torch.dtype = torch.float32,
+    ) -> HealSparseMap:
+        """Realize MOC coverage as a sparse HEALPix map at fixed resolution."""
+        nside_i = int(nside)
+        if nside_coverage is None:
+            nside_coverage = max(1, nside_i // 8)
+        return HealSparseMap.from_moc(
+            self,
+            nside=nside_i,
+            nside_coverage=nside_coverage,
+            value=1.0,
+            sentinel=sentinel,
+            dtype=dtype,
+        )
 
     def flatten(self, nside: int) -> Tensor:
         """Project MOC to a dense HEALPix mask at fixed resolution."""
@@ -339,6 +416,19 @@ class MOC:
         if pix.numel() > 0:
             mask[pix] = True
         return mask
+
+    def to_pixelized_region(self, nside: int, *, nest: bool = True) -> "PixelizedRegion":
+        """Realize this MOC as a ``PixelizedRegion`` at ``nside``.
+
+        MOC UNIQ cells are NESTED by definition. Set ``nest=False`` to receive
+        a RING-ordered ``PixelizedRegion`` after exact ordering conversion.
+        """
+        from .geom import PixelizedRegion
+
+        pix = self._flat_pixels(nside)
+        if not nest and pix.numel() > 0:
+            pix = _healpix.nest2ring(int(nside), pix)
+        return PixelizedRegion(nside=int(nside), nest=nest, pixels=pix)
 
     @classmethod
     def from_sparse_map(cls, smap: HealSparseMap) -> "MOC":
@@ -350,6 +440,8 @@ class MOC:
         # Convert to ranges
         if pix.numel() == 0:
             return cls(torch.empty((0,), dtype=torch.int64))
+        if not smap.nest:
+            pix = _healpix.ring2nest(smap.nside_sparse, pix)
 
         pix = torch.sort(pix)[0]
         # Find contiguous chunks
@@ -367,12 +459,23 @@ class MOC:
 
     @classmethod
     def from_circle(
-        cls, lon_deg: float, lat_deg: float, radius_deg: float, max_order: int = 10, inclusive: bool = True
+        cls,
+        lon_deg: float,
+        lat_deg: float,
+        radius_deg: float,
+        max_order: int = 10,
+        inclusive: bool = True,
     ) -> "MOC":
         """Create a MOC from a circular cap."""
         nside = 1 << max_order
         pix = _healpix.query_circle(
-            nside, lon_deg, lat_deg, radius_deg, nest=True, degrees=True, inclusive=inclusive
+            nside,
+            lon_deg,
+            lat_deg,
+            radius_deg,
+            nest=True,
+            degrees=True,
+            inclusive=inclusive,
         )
         uniqs = nest2uniq(nside, pix)
         return cls(uniqs)
@@ -384,15 +487,55 @@ class MOC:
         lat_deg: Tensor | list[float],
         max_order: int = 10,
     ) -> "MOC":
-        """Create a MOC from a spherical polygon."""
-        nside = 1 << max_order
-        # query_polygon works on lonlat if requested
-        vertices = torch.stack(
-            [torch.as_tensor(lon_deg), torch.as_tensor(lat_deg)], dim=-1
-        )
-        pix = _healpix.query_polygon(nside, vertices, nest=True, lonlat=True)
+        """Create a MOC from a simple spherical polygon.
+
+        Convex and non-convex simple polygons are supported through the shared
+        torch-native spherical-geometry pixelizer.
+        """
+        from .geom import query_polygon_general
+
+        nside = _nside_from_max_order(max_order)
+        pix = query_polygon_general(nside, lon_deg, lat_deg, nest=True)
         uniqs = nest2uniq(nside, pix)
         return cls(uniqs)
+
+    @classmethod
+    def from_region(cls, region: object, max_order: int | None = None) -> "MOC":
+        """Create a MOC from a torchsky spherical region or PixelizedRegion.
+
+        Pixelized regions preserve their current resolution by default. Other
+        regions are pixelized at ``2**max_order`` in NESTED ordering before
+        conversion to UNIQ, defaulting to order 10 when ``max_order`` is omitted.
+        Pass a matching ``max_order`` with a ``PixelizedRegion`` to assert the
+        expected resolution.
+        """
+        from .geom import PixelizedRegion
+
+        if isinstance(region, PixelizedRegion):
+            nside = int(region.nside)
+            if max_order is not None and nside != _nside_from_max_order(max_order):
+                raise ValueError(
+                    "PixelizedRegion nside does not match requested max_order"
+                )
+            pix = region.pixels.to(dtype=torch.int64)
+            if not region.nest and pix.numel() > 0:
+                pix = _healpix.ring2nest(nside, pix)
+            return cls(nest2uniq(nside, pix))
+
+        order = 10 if max_order is None else int(max_order)
+        nside = _nside_from_max_order(order)
+        if hasattr(region, "pixelize"):
+            pixelized = region.pixelize(nside=nside, nest=True)
+            pix = torch.as_tensor(pixelized.pixels, dtype=torch.int64)
+            return cls(nest2uniq(nside, pix))
+        if hasattr(region, "query_pixels"):
+            pix = torch.as_tensor(
+                region.query_pixels(nside, nest=True), dtype=torch.int64
+            )
+            return cls(nest2uniq(nside, pix))
+        raise TypeError(
+            "region must be a PixelizedRegion or expose pixelize/query_pixels"
+        )
 
     @classmethod
     def from_threshold(
@@ -413,41 +556,25 @@ class MOC:
         else:
             raise ValueError(f"Invalid operator {op}")
 
-        # Get covered pixels at nside_sparse
-        valid_indices = torch.where(mask)[0]
-        if valid_indices.numel() == 0:
+        if mask.ndim > 1:
+            mask = torch.any(mask.reshape(-1, mask.shape[-1]), dim=0)
+        if mask.shape[-1] != smap.pixels.numel():
+            raise ValueError("threshold mask must align with sparse-map pixels")
+        if not bool(mask.any()):
             return cls(torch.empty((0,), dtype=torch.int64))
 
-        # We need to map local indices back to global nside_sparse pixel indices
-        # This is more efficient if done via coverage_map
-        all_global_pix = []
-        cov_valid = torch.where(smap.coverage_map >= 0)[0]
-        pixels_per_cov = smap.pixels_per_cov
-
-        # We can optimize this by only checking valid_indices within each block
-        for cp in cov_valid:
-            offset = int(smap.coverage_map[cp].item())
-            # Check if any pixels in this block are in valid_indices
-            # Actually, simpler: mask the values locally
-            block_mask = mask[offset : offset + pixels_per_cov]
-            if block_mask.any():
-                local_offsets = torch.where(block_mask)[0]
-                global_start = int(cp.item()) * pixels_per_cov
-                all_global_pix.append(global_start + local_offsets)
-
-        if not all_global_pix:
-            return cls(torch.empty((0,), dtype=torch.int64))
-
-        pix = torch.cat(all_global_pix)
+        pix = smap.pixels[mask]
+        if not smap.nest:
+            pix = _healpix.ring2nest(smap.nside_sparse, pix)
         uniqs = nest2uniq(smap.nside_sparse, pix)
         return cls(uniqs)
 
     def write_fits(self, filename: str, overwrite: bool = False) -> None:
         """Write the MOC to a FITS file following the IVOA MOC standard.
 
-        Uses :func:`torchsky.write` (CFITSIO-backed) — no Python ``fitsio`` dependency.
+        Uses :func:`torchsky.io.write` (CFITSIO-backed) — no Python ``fitsio`` dependency.
         """
-        import torchsky
+        from ..io import write
 
         header = {
             "PIXTYPE": "HEALPIX",
@@ -458,15 +585,15 @@ class MOC:
             "EXTNAME": "MOC",
         }
         u = self.uniq.detach().cpu().reshape(-1).to(torch.int64)
-        torchsky.write(filename, {"UNIQ": u}, header=header, overwrite=overwrite)
+        write(filename, {"UNIQ": u}, header=header, overwrite=overwrite)
 
     @classmethod
     def read_fits(cls, filename: str) -> "MOC":
-        """Read a MOC from an IVOA FITS file via :func:`torchsky.read_table`."""
-        import torchsky
+        """Read a MOC from an IVOA FITS file via :func:`torchsky.io.read_table`."""
+        from ..io import read_table
 
         hdu = _resolve_moc_table_hdu_index(filename)
-        table = torchsky.read_table(filename, hdu=hdu)
+        table = read_table(filename, hdu=hdu)
         uniqs = _uniq_column_from_table_dict(table)
         return cls(uniqs)
 
@@ -549,7 +676,7 @@ class MOC:
             loops.append(torch.stack((lon, lat), dim=-1).to(torch.float64))
         return loops
 
-    def to_ascii(self) -> str:
+    def to_ascii(self, *, compact: bool = False) -> str:
         """Return IVOA ASCII representation of the MOC."""
         # ASCII format is: ORDER/PIX1 PIX2 ORDER2/PIX3 ...
         if self.uniq.numel() == 0:
@@ -562,7 +689,7 @@ class MOC:
         for o in unique_orders:
             mask = orders == o
             o_pix = pix_nested[mask].sort()[0]
-            pix_str = " ".join(map(str, o_pix.tolist()))
+            pix_str = _format_ascii_pixels(o_pix, compact=compact)
             parts.append(f"{int(o.item())}/{pix_str}")
         return " ".join(parts)
 
@@ -585,7 +712,7 @@ class MOC:
             if not pix_str:
                 continue
             nside = 1 << order
-            pix_list = [int(p) for p in pix_str.replace(",", " ").split()]
+            pix_list = _parse_ascii_pixel_tokens(pix_str)
             uniqs.append(nest2uniq(nside, torch.tensor(pix_list, dtype=torch.int64)))
 
         if not uniqs:

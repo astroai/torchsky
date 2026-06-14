@@ -85,15 +85,12 @@ def _extract_n_points(row: dict[str, Any]) -> int | None:
 
 def _git_sha() -> str:
     try:
-        return (
-            subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],
-                cwd=ROOT,
-                text=True,
-                stderr=subprocess.DEVNULL,
-            )
-            .strip()
-        )
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
     except Exception:
         return "unknown"
 
@@ -187,8 +184,12 @@ def _compute_domain_scorecard(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "wins": wins,
             "total": total,
             "win_rate": (wins / total) if total else 0.0,
-            "large_n_wins": int(large_n_scorecard.get((domain, family), {}).get("wins", 0)),
-            "large_n_total": int(large_n_scorecard.get((domain, family), {}).get("total", 0)),
+            "large_n_wins": int(
+                large_n_scorecard.get((domain, family), {}).get("wins", 0)
+            ),
+            "large_n_total": int(
+                large_n_scorecard.get((domain, family), {}).get("total", 0)
+            ),
         }
 
     skipped = sum(1 for r in rows if str(r.get("status")) == "SKIPPED")

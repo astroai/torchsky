@@ -64,7 +64,7 @@ def test_release_smoke_table_read() -> None:
 
     try:
         table.write(path, format="fits", overwrite=True)
-        data = torchsky.read_table(path, hdu=1, columns=["RA", "ID"])
+        data = torchsky.io.read_table(path, hdu=1, columns=["RA", "ID"])
 
         assert set(data.keys()) == {"RA", "ID"}
         assert torch.allclose(

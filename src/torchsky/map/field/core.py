@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import copy
 import math
-from typing import Literal, Sequence
+import time
+from typing import Any, Literal, Sequence
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from ... import WCS
 from ...device import default_compute_device
+from ...wcs import WCS
 
 from ..operators.bundle import field_observation_operator_bundle
 from ..operators.psf import apply_psf_spec, gaussian_blur as _shared_gaussian_blur
@@ -1486,11 +1487,15 @@ class SpectralBasisField(_BaseFieldModel):
             cos_phase = torch.cos(phase)
 
             # Mask out inactive frequencies
-            mask = torch.arange(self.num_spectral_frequencies, device=lam.device) < active
+            mask = (
+                torch.arange(self.num_spectral_frequencies, device=lam.device) < active
+            )
             sin_phase = sin_phase * mask
             cos_phase = cos_phase * mask
 
-            stacked_fourier = torch.stack([sin_phase, cos_phase], dim=-1).view(*lam.shape, -1)
+            stacked_fourier = torch.stack([sin_phase, cos_phase], dim=-1).view(
+                *lam.shape, -1
+            )
             base_feats = torch.stack([torch.ones_like(lam), lam, lam * lam], dim=-1)
             return torch.cat([base_feats, stacked_fourier], dim=-1)
         else:
@@ -1703,7 +1708,7 @@ class BandpassConditionedField(_BaseFieldModel):
             wavelengths.to(dtype=self.output.weight.dtype)
             - float(self.domain.wavelength_center)
         ) / float(self.domain.wavelength_scale)
-        weights = weights.to(dtype=self.output.weight.dtype)
+        weights = weights.to(device=lam.device, dtype=self.output.weight.dtype)
         weights = weights / torch.clamp(weights.sum(), min=1.0e-8)
         mean = torch.sum(weights * lam)
         centered = lam - mean
@@ -1749,8 +1754,11 @@ class BandpassConditionedField(_BaseFieldModel):
         wavelengths: Tensor,
         weights: Tensor,
     ) -> Tensor:
+        representative_wavelength = float(wavelengths.detach().mean())
         spatial_latent = self._spatial_latent(
-            ra_deg, dec_deg, float(wavelengths.mean())
+            ra_deg,
+            dec_deg,
+            representative_wavelength,
         )
         bandpass_latent = self.bandpass_hidden(
             self._bandpass_features(wavelengths, weights)
@@ -2119,7 +2127,9 @@ class ConditionedSpectralField(_BaseFieldModel):
             sin_feats = torch.sin(phase)
             cos_feats = torch.cos(phase)
 
-            stacked_fourier = torch.stack([sin_feats, cos_feats], dim=-1).view(*lam.shape, -1)
+            stacked_fourier = torch.stack([sin_feats, cos_feats], dim=-1).view(
+                *lam.shape, -1
+            )
             base_feats = torch.stack([lam, lam * lam, torch.tanh(lam)], dim=-1)
             return torch.cat([base_feats, stacked_fourier], dim=-1)
         else:
@@ -2230,7 +2240,9 @@ class HashGridConditionedField(_BaseFieldModel):
             sin_feats = torch.sin(phase)
             cos_feats = torch.cos(phase)
 
-            stacked_fourier = torch.stack([sin_feats, cos_feats], dim=-1).view(*lam.shape, -1)
+            stacked_fourier = torch.stack([sin_feats, cos_feats], dim=-1).view(
+                *lam.shape, -1
+            )
             base_feats = torch.stack([lam, lam * lam, torch.tanh(lam)], dim=-1)
             return torch.cat([base_feats, stacked_fourier], dim=-1)
         else:
@@ -2464,12 +2476,12 @@ def pretrain_strainer_trunk_synthetic(
     num_terms: int = 48,
     max_frequency: float = 8.0,
     seed: int = 42,
-) -> None:
+) -> dict[str, Any] | None:
     if not isinstance(model, _BaseFieldModel):
         raise TypeError("model must be a torchsky map field _BaseFieldModel subclass")
     steps = max(int(steps), 0)
     if steps == 0:
-        return
+        return None
     if noise_kinds is not None:
         kinds = tuple(k for k in noise_kinds if k != "none")
         if not kinds:
@@ -2495,6 +2507,11 @@ def pretrain_strainer_trunk_synthetic(
     noise_gen.manual_seed(int(seed) + 17)
     batch = max(int(batch_size), 1)
     num_kinds = len(kinds)
+
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    start_time = time.perf_counter()
+
     for step_idx in range(steps):
         step_noise = kinds[step_idx % num_kinds]
         optimizer.zero_grad(set_to_none=True)
@@ -2543,6 +2560,26 @@ def pretrain_strainer_trunk_synthetic(
         loss = torch.mean(diff_pt * diff_pt)
         loss.backward()
         optimizer.step()
+
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    end_time = time.perf_counter()
+    duration = end_time - start_time
+
+    max_mem = 0
+    if device.type == "cuda":
+        max_mem = torch.cuda.max_memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+
+    step_duration_mean_ms = (duration / steps * 1000.0) if steps > 0 else 0.0
+    throughput = (steps * batch) / duration if duration > 0 else 0.0
+
+    return {
+        "total_duration_sec": duration,
+        "step_duration_mean_ms": step_duration_mean_ms,
+        "throughput_samples_per_sec": throughput,
+        "max_memory_allocated_bytes": max_mem,
+    }
 
 
 class SkyEncoderResMLPField(_BaseFieldModel):
@@ -2835,7 +2872,9 @@ class HashGridSpectralField(_BaseFieldModel):
             sin_feats = torch.sin(phase)
             cos_feats = torch.cos(phase)
 
-            stacked_fourier = torch.stack([sin_feats, cos_feats], dim=-1).view(*lam.shape, -1)
+            stacked_fourier = torch.stack([sin_feats, cos_feats], dim=-1).view(
+                *lam.shape, -1
+            )
             base_feats = torch.stack([torch.ones_like(lam), lam, lam * lam], dim=-1)
             return torch.cat([base_feats, stacked_fourier], dim=-1)
         else:

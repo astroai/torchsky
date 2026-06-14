@@ -18,6 +18,7 @@ For map products and classical stacks, see [map.md](map.md). For the Charbonnier
 Runnable references:
 
 - [examples/example_map_field_survey_split.py](../examples/example_map_field_survey_split.py)
+- [examples/example_field_multiband_quality.py](../examples/example_field_multiband_quality.py)
 - [examples/notebooks/01_field_fit_synthetic.ipynb](../examples/notebooks/01_field_fit_synthetic.ipynb) (synthetic quickstart)
 - [scripts/build_smacs0723_minicutout.py](../scripts/build_smacs0723_minicutout.py) (optional real JWST UPdec mini-cutouts + `manifest.json`)
 - [scripts/build_smacs0723_stack_baseline.py](../scripts/build_smacs0723_stack_baseline.py) (classical multiband stack cube baseline)
@@ -44,6 +45,10 @@ Defined in [`types.py`](../src/torchsky/map/field/types.py). Important fields:
 Helpers to build observation lists from IFU cubes or bin edges are exported from
 **`torchsky.field`** (`field_observations_from_bin_edges`,
 `make_tangent_plane_header`, …).
+
+Observation coordinate grids are cached for repeated render/fit calls. The cache
+tracks image shape, requested grid shape, and header card values, so in-place WCS
+header edits or image-shape changes recompute RA/Dec grids on the next render.
 
 ## `field.Domain`
 
@@ -120,7 +125,33 @@ Exact constructor kwargs vary by kind (hidden sizes, grid resolution, Fourier fr
 
 Pass **`observation_forward_contexts`** (same length as `observations`) for models that take **`forward_context`**.
 
-Returns **`FieldFitResult`** (`model`, `loss_history`, `final_loss`).
+Returns **`FieldFitResult`** (`model`, `loss_history`, `final_loss`,
+`diagnostics`). The diagnostics dictionary records:
+
+- `spatial_spectral_leakage` and `gradient_correlation` from local autograd probes.
+- `reduced_chi2` and `psf_alignment` from rendered observation residuals.
+- `quality_metrics` with weighted RMSE/MAE, residual SNR, residual bias/std,
+  prediction-vs-target sharpness, multiscale residual RMSE, support fraction,
+  and effective weight.
+- Opt-in residual products and scorecards expose rendered predictions,
+  residual maps, support masks, band-group summaries, and exact worst-observation
+  extrema without changing the default scalar diagnostics.
+- `uncertainty_stats` for support vs out-of-support predictive uncertainty when
+  the model exposes `forward_distribution`.
+- `performance_profile` with total fit time, mean step time, pixel throughput,
+  and CUDA peak memory when available.
+
+`final_loss` and diagnostics use the same exposure poses passed to the optimizer,
+so bundle-adjusted fits are evaluated in the refined coordinate frame.
+
+For sharper data-consistent fits, set **`gradient_residual_weight > 0`**. This
+adds a finite-difference residual term on the rendered observation image, so it
+penalizes mismatched edges after the same WCS/bandpass/PSF forward model instead
+of post-hoc sharpening the latent field.
+
+`pretrain_strainer_trunk_synthetic(...)` returns a small timing profile with
+total duration, mean step time, sample throughput, and CUDA peak memory; it
+returns `None` only when `steps=0`.
 
 ## Rendering
 
@@ -134,9 +165,49 @@ Returns **`FieldFitResult`** (`model`, `loss_history`, `final_loss`).
 
 For cube export to FITS, use **`torchsky.spectral.write_cube_fits`** ([spectral.md](spectral.md)).
 
+## Residual Quality
+
+Use **`field.quality(model, observations, ...)`** after a fit to compute rendered
+residual metrics across observations. For single images, **`field.metrics(pred, target, weight=..., mask=...)`**
+returns weighted residual, SNR, sharpness, and multiscale residual metrics. By
+default the report includes `residual_rmse_scale_1`, `_2`, and `_4`, which measure
+coherent residuals after exact block averaging with the same support/weight mask.
+Non-finite prediction, target, weight, or masked pixels are excluded from these
+diagnostics. **`field.residual(model, observation, ...)`** returns the rendered
+residual map (`prediction - image`) for quicklooks or downstream diagnostics.
+
+For structured QA artifacts, use **`field.residual_product(...)`** on existing
+prediction/target tensors or **`field.render_residual_product(model,
+observation, ...)`** after rendering. The returned product carries prediction,
+target, residual, weight, support mask, band name, and scalar metrics together.
+Pass **`include_scorecard=True`** and/or **`include_residual_products=True`** to
+**`field.quality(...)`** to include band-group aggregate metrics, exact extrema
+for worst RMSE / lowest SNR / lowest support, and per-observation residual
+products.
+
+For adaptive local-capacity experiments, **`field.residual_tiles(product,
+tile_hw=(h, w), ...)`** ranks fixed-size residual-product tiles by exact weighted
+residual energy. This is an evidence-selection primitive for later sparse local
+basis or feature-tile models: tile size, maximum tile count, and minimum support
+fraction are explicit inputs, and no source labels are inferred.
+
+To turn that evidence into an explicit local-capacity layer, wrap an existing
+diffuse model with **`field.residual_tile_basis(...)`**. It builds a signed
+additive `ResidualTileBasis` field whose Gaussian atoms are initialized from the
+selected residual tiles and observation WCS. The number of atoms is bounded by
+`max_tiles`; tile geometry comes from the WCS; amplitudes initialize from
+weighted mean residuals. This remains an experimental opt-in correction layer,
+not a default model path.
+
 ## Bundle adjustment / alignment (gauge-aware)
 
 **`ExposurePose`** ([`map/exposure_pose.py`](../src/torchsky/map/exposure_pose.py)) adds a small **learnable** tangent-plane residual per exposure: translation (`delta_ra_deg`, `delta_dec_deg`), in-plane rotation (`delta_theta_rad`), and log-scale (`delta_log_scale`). Defaults are zero ⇒ identity.
+
+For the common case, pass **`refine_poses=True`** to **`field.fit(...)`** /
+**`fit_field_model(...)`**. This creates one pose per observation, freezes the
+first pose by default to fix the gauge, includes the rest in the optimizer, and
+returns the tuple on **`FieldFitResult.exposure_poses`**. The result diagnostics
+also include a compact **`pose_refinement`** block with final pose parameters.
 
 **Gauge fixing:** multiple exposures can absorb a global shift. Typical pattern:
 

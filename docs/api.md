@@ -23,7 +23,7 @@ For the high-level design target and refactor rules, see
 | Work with scenes and observation facades | `torchsky.scene` | [scene.md](scene.md) |
 | Crossmatch catalogs | `torchsky.catalogs` | [catalogs.md](catalogs.md) |
 | Work with spectra and cubes | `torchsky.spectral` | [spectral.md](spectral.md) |
-| Build PyTorch datasets/loaders | `torchsky.FITSDataset`, `torchsky.transforms`, root loader/cache helpers | [ml.md](ml.md) |
+| Build PyTorch datasets/loaders | `torchsky.datasets`, `torchsky.transforms`, `torchsky.cache` | [ml.md](ml.md) |
 | Use field encoders | `torchsky.encoders` | [encoders.md](encoders.md) |
 | Inspect FITS files from a shell | `torchsky info`, `torchsky cat` | [cli.md](cli.md) |
 | Run the browser viewer | `torchsky.viz`, `torchsky viz` | [viz.md](viz.md), [cli.md](cli.md) |
@@ -40,10 +40,7 @@ For the high-level design target and refactor rules, see
   map models, visualization server paths, and training-facing utilities.
 
 Surfaces are also assigned to architecture pillars: `io`, `world`, `scene`, and
-`viz`. Use `torchsky.API_SURFACES`, `torchsky.SurfaceTier`,
-`torchsky.SurfacePillar`, `torchsky.api_surfaces_by_tier(...)`, and
-`torchsky.api_surfaces_by_pillar(...)` when you need programmatic API-surface
-metadata.
+`viz`. Use `torchsky.surfaces` when you need programmatic API-surface metadata.
 
 ## Architecture Pillars
 
@@ -62,6 +59,10 @@ metadata.
 - [`torchsky.sphere`](sphere.md)
 - [`torchsky.map`](map.md)
 - [`torchsky.scene`](scene.md)
+- [`torchsky.field`](field.md)
+- [`torchsky.transforms`](ml.md)
+- [`torchsky.datasets`](ml.md)
+- [`torchsky.cache`](ml.md)
 - [`torchsky.catalogs`](catalogs.md)
 - [`torchsky.spectral`](spectral.md)
 - [`torchsky.encoders`](encoders.md)

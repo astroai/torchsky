@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import torch
 
 from torchsky.sphere.sparse import SparseHealpixMap
@@ -16,6 +17,86 @@ def test_sparse_from_dense_roundtrip() -> None:
     back = sp.to_dense()
     torch.testing.assert_close(back, dense)
     assert sp.pixels.numel() == keep.numel()
+
+
+def test_sparse_from_pixels_canonicalizes_unsorted_duplicates() -> None:
+    pixels = torch.tensor([5, 2, 5, 1], dtype=torch.int64)
+    values = torch.tensor([50.0, 20.0, 55.0, 10.0], dtype=torch.float64)
+
+    sp = SparseHealpixMap.from_pixels(
+        pixels, values, nside_sparse=8, sentinel=-1.0
+    )
+
+    torch.testing.assert_close(sp.pixels, torch.tensor([1, 2, 5], dtype=torch.int64))
+    torch.testing.assert_close(
+        sp.values,
+        torch.tensor([10.0, 20.0, 55.0], dtype=torch.float64),
+    )
+    torch.testing.assert_close(
+        sp.get_values(torch.tensor([5, 2, 1, 7], dtype=torch.int64)),
+        torch.tensor([55.0, 20.0, 10.0, -1.0], dtype=torch.float64),
+    )
+
+
+def test_sparse_from_pixels_canonicalizes_multiband_values() -> None:
+    pixels = torch.tensor([4, 1, 4, 2], dtype=torch.int64)
+    values = torch.tensor(
+        [[40.0, 10.0, 44.0, 20.0], [400.0, 100.0, 444.0, 200.0]],
+        dtype=torch.float64,
+    )
+
+    sp = SparseHealpixMap.from_pixels(
+        pixels, values, nside_sparse=8, sentinel=-1.0
+    )
+
+    torch.testing.assert_close(sp.pixels, torch.tensor([1, 2, 4], dtype=torch.int64))
+    torch.testing.assert_close(
+        sp.values,
+        torch.tensor(
+            [[10.0, 20.0, 44.0], [100.0, 200.0, 444.0]],
+            dtype=torch.float64,
+        ),
+    )
+
+
+def test_sparse_update_values_pix_keeps_latest_duplicate() -> None:
+    sp = SparseHealpixMap.from_pixels(
+        torch.tensor([2, 5], dtype=torch.int64),
+        torch.tensor([20.0, 50.0], dtype=torch.float64),
+        nside_sparse=8,
+        sentinel=-1.0,
+    )
+
+    sp.update_values_pix(
+        torch.tensor([5, 1, 5], dtype=torch.int64),
+        torch.tensor([51.0, 10.0, 55.0], dtype=torch.float64),
+    )
+
+    torch.testing.assert_close(sp.pixels, torch.tensor([1, 2, 5], dtype=torch.int64))
+    torch.testing.assert_close(
+        sp.values,
+        torch.tensor([10.0, 20.0, 55.0], dtype=torch.float64),
+    )
+
+
+def test_sparse_update_values_pix_keeps_latest_multiband_duplicate() -> None:
+    sp = SparseHealpixMap.from_pixels(
+        torch.tensor([2], dtype=torch.int64),
+        torch.tensor([[20.0], [200.0]], dtype=torch.float64),
+        nside_sparse=8,
+        sentinel=-1.0,
+    )
+
+    sp.update_values_pix(
+        torch.tensor([1, 2], dtype=torch.int64),
+        torch.tensor([[10.0, 22.0], [100.0, 222.0]], dtype=torch.float64),
+    )
+
+    torch.testing.assert_close(sp.pixels, torch.tensor([1, 2], dtype=torch.int64))
+    torch.testing.assert_close(
+        sp.values,
+        torch.tensor([[10.0, 22.0], [100.0, 222.0]], dtype=torch.float64),
+    )
 
 
 def test_sparse_nearest_interpolation_on_centers() -> None:
@@ -62,6 +143,25 @@ def test_sparse_ud_grade_workflow() -> None:
     sp2 = sp.ud_grade(8)
     assert sp2.nside == 8
     assert sp2.pixels.numel() > 0
+
+
+def test_sparse_ud_grade_preserves_valid_coverage_hierarchy() -> None:
+    sp = SparseHealpixMap.from_pixels(
+        torch.tensor([0, 1, 2, 63], dtype=torch.int64),
+        torch.ones(4, dtype=torch.float64),
+        nside_sparse=16,
+        nest=True,
+        nside_coverage=4,
+        metadata={"SURVEY": "synthetic"},
+    )
+
+    for nside_out, expected_cov in ((32, 4), (8, 4), (4, 4), (2, 2)):
+        got = sp.ud_grade(nside_out)
+        assert got.nside_coverage == expected_cov
+        assert got.coverage_map is not None
+        assert got.coverage_mask.shape == (hp.nside2npix(expected_cov),)
+        assert got.metadata == {"SURVEY": "synthetic"}
+        assert got.metadata is not sp.metadata
 
 
 def test_sparse_multiband_support() -> None:
@@ -157,6 +257,116 @@ def test_sparse_coverage_mask_and_any_coverage_mode() -> None:
     cov = sp_any.coverage_mask
     assert cov.dtype == torch.bool
     assert bool(cov[3]) and bool(cov[7]) and (int(cov.sum().item()) == 2)
+
+
+def test_sparse_direct_construction_builds_coverage_map_after_canonicalization() -> None:
+    sp = SparseHealpixMap(
+        nside=8,
+        nest=True,
+        pixels=torch.tensor([20, 5, 5], dtype=torch.int64),
+        values=torch.tensor([2.0, 1.0, 3.0], dtype=torch.float64),
+        nside_coverage=2,
+    )
+
+    torch.testing.assert_close(sp.pixels, torch.tensor([5, 20], dtype=torch.int64))
+    torch.testing.assert_close(
+        sp.values, torch.tensor([3.0, 2.0], dtype=torch.float64)
+    )
+    assert sp.coverage_map is not None
+    torch.testing.assert_close(
+        torch.nonzero(sp.coverage_map >= 0, as_tuple=False).flatten(),
+        torch.tensor([0, 1], dtype=torch.int64),
+    )
+    assert int(sp.coverage_map[0].item()) == 0
+    assert int(sp.coverage_map[1].item()) == 1
+
+
+def test_sparse_coverage_map_keeps_first_index_for_duplicate_parents() -> None:
+    sp = SparseHealpixMap.from_pixels(
+        torch.tensor([3, 2, 21, 20], dtype=torch.int64),
+        torch.tensor([30.0, 20.0, 210.0, 200.0], dtype=torch.float64),
+        nside_sparse=8,
+        nest=True,
+        nside_coverage=2,
+    )
+
+    assert sp.coverage_map is not None
+    torch.testing.assert_close(sp.pixels, torch.tensor([2, 3, 20, 21]))
+    assert int(sp.coverage_map[0].item()) == 0
+    assert int(sp.coverage_map[1].item()) == 2
+
+
+def test_sparse_ring_coverage_mask_uses_nested_coverage_pixels() -> None:
+    nside = 8
+    nside_cov = 2
+    ratio2 = (nside // nside_cov) ** 2
+    all_nest = torch.arange(hp.nside2npix(nside), dtype=torch.int64)
+    all_ring = hp.nest2ring(nside, all_nest)
+    pix_nest = all_nest[(all_nest // ratio2) != (all_ring // ratio2)][::37][:8]
+    pix_ring = hp.nest2ring(nside, pix_nest)
+    expected_cov = torch.unique(torch.div(pix_nest, ratio2, rounding_mode="floor"))
+
+    wrong_cov = torch.unique(torch.div(pix_ring, ratio2, rounding_mode="floor"))
+    assert set(wrong_cov.tolist()) != set(expected_cov.tolist())
+
+    smap = SparseHealpixMap.from_pixels(
+        pix_ring,
+        torch.arange(pix_ring.numel(), dtype=torch.float64),
+        nside_sparse=nside,
+        nest=False,
+        nside_coverage=nside_cov,
+        sentinel=-1.0,
+    )
+    expected_mask = torch.zeros(hp.nside2npix(nside_cov), dtype=torch.bool)
+    expected_mask[expected_cov] = True
+
+    torch.testing.assert_close(smap.coverage_mask, expected_mask)
+    assert smap.coverage_map is not None
+    torch.testing.assert_close(
+        torch.nonzero(smap.coverage_map >= 0, as_tuple=False).flatten(),
+        expected_cov,
+    )
+
+
+def test_sparse_rejects_coverage_nside_larger_than_sparse_nside() -> None:
+    with pytest.raises(ValueError, match="nside_coverage"):
+        SparseHealpixMap.from_pixels(
+            torch.tensor([0], dtype=torch.int64),
+            torch.tensor([1.0], dtype=torch.float64),
+            nside_sparse=4,
+            nside_coverage=8,
+        )
+
+
+@pytest.mark.parametrize(
+    ("values", "sentinel"),
+    [
+        (torch.tensor([True, False, True], dtype=torch.bool), False),
+        (torch.tensor([10, 20, 30], dtype=torch.int64), -1.0),
+        (torch.tensor([1.25, 2.5, 3.75], dtype=torch.float64), -999.0),
+    ],
+)
+def test_sparse_fits_roundtrip_preserves_value_dtype(
+    tmp_path, values: torch.Tensor, sentinel: float | bool
+) -> None:
+    path = tmp_path / f"sparse_{values.dtype}.fits"
+    pixels = torch.tensor([0, 10, 42], dtype=torch.int64)
+    smap = SparseHealpixMap.from_pixels(
+        pixels,
+        values,
+        nside_sparse=8,
+        nside_coverage=2,
+        sentinel=float(sentinel),
+        metadata={"BAND": "R"},
+    )
+
+    smap.write_fits(str(path), overwrite=True)
+    got = SparseHealpixMap.read_fits(str(path))
+
+    assert got.values.dtype == values.dtype
+    torch.testing.assert_close(got.pixels, pixels)
+    torch.testing.assert_close(got.values, values)
+    assert got.metadata == {"BAND": "R"}
 
 
 def test_sparse_ud_grade_dense_equivalence_with_bad_values() -> None:

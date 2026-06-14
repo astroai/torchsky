@@ -45,6 +45,34 @@ def _header_truthy(value: Any) -> bool:
         return bool(value)
 
 
+def _normalize_wcs_key(key: str | None) -> str:
+    if key is None:
+        return ""
+    norm = str(key).strip().upper()
+    if norm in {"", " "}:
+        return ""
+    if len(norm) != 1 or not ("A" <= norm <= "Z"):
+        raise ValueError("alternate WCS key must be '', ' ', or one letter A-Z")
+    return norm
+
+
+def _wcs_header_key(name: str, key: str) -> str:
+    return f"{name}{key}" if key else name
+
+
+def _header_has_tabular_axis(header: Header, *, key: str = "") -> bool:
+    try:
+        wcsaxes_key = _wcs_header_key("WCSAXES", key)
+        naxis = int(header.get(wcsaxes_key, header.get("NAXIS", 0)))
+    except Exception:
+        naxis = 0
+    for axis_number in range(1, max(naxis, 0) + 1):
+        ctype = header.get(_wcs_header_key(f"CTYPE{axis_number}", key))
+        if ctype is not None and str(ctype).strip().upper().endswith("-TAB"):
+            return True
+    return False
+
+
 def find_first_hdu(
     path: str,
     handle_cache_capacity: int = 16,
@@ -171,11 +199,18 @@ def get_wcs(
     path: str,
     hdu: Union[int, str, None] = "auto",
     device: Optional[Union[str, torch.device]] = None,
+    key: str | None = "",
     *,
     get_header_func: Callable[[str, Union[int, str, None]], Header],
 ) -> WCS:
     """Build a WCS object directly from a FITS file/header HDU."""
-    wcs = WCS(get_header_func(path, hdu))
+    wcs_key = _normalize_wcs_key(key)
+    header = get_header_func(path, hdu)
+    if _header_has_tabular_axis(header, key=wcs_key):
+        with HDUList.fromfile(path) as hdul:
+            wcs = WCS(header, key=wcs_key, tables=hdul)
+    else:
+        wcs = WCS(header, key=wcs_key)
     if device is not None:
         wcs = wcs.to(torch.device(device))
     return wcs

@@ -1,8 +1,10 @@
 # `torchsky.map`
 
-`torchsky.map` is the native mapmaking surface: image-plane coadds, product
-specifications, differentiable field/INR models, native spherical bridges, and
-operator-oriented inverse solves.
+`torchsky.map` is the promoted mapmaking facade: image-plane coadds, spectral
+cube coadds, multiband coadds, and declared map-product specs/results.
+Implementation modules such as `torchsky.map.field`, `torchsky.map.product`,
+and `torchsky.map.image_plane` remain available for advanced workflows, but the
+flat `torchsky.map` namespace is intentionally lean.
 
 ## What This Namespace Is For
 
@@ -13,9 +15,10 @@ weights. External tools such as SWarp, Montage, drizzle, and `reproject` are
 comparators and parity baselines, not runtime dependencies of the core map path.
 
 Stable promoted surfaces include `coadd_image_plane(...)`,
-`stack_map_product(...)`, and `MapProductSpec`. Field/INR modelling under
-`torchsky.map.field` is active but experimental — see [field.md](field.md) and
-[implicit_forward.md](implicit_forward.md).
+`coadd_image_plane_cube(...)`, `coadd_image_plane_multiband(...)`,
+`stack_map_product(...)`, `MapProductSpec`, and the map result/spec objects.
+Field/INR modelling is exposed through the shorter `torchsky.field` namespace;
+the implementation still lives under `torchsky.map.field`.
 
 ## Core Concepts
 
@@ -37,12 +40,13 @@ Stable promoted surfaces include `coadd_image_plane(...)`,
 ### Coadd Images Onto A Shared Grid
 
 ```python
-from torchsky.map import ImageObservation, coadd_image_plane
+from torchsky import scene
+from torchsky.map import coadd_image_plane
 
 result = coadd_image_plane(
     [
-        ImageObservation("img_a.fits", weight=1.0),
-        ImageObservation("img_b.fits", weight_path="img_b_wht.fits"),
+        scene.image_observation("img_a.fits", weight=1.0),
+        scene.image_observation("img_b.fits", weight_path="img_b_wht.fits"),
     ],
     resampling_kernel="bilinear",
     value_semantics="surface_brightness",
@@ -53,10 +57,15 @@ result = coadd_image_plane(
 ### Plan A Product Once, Stack Many Times
 
 ```python
-from torchsky.map import ImageObservation, plan_map_product, stack_map_product
+from torchsky import scene
+from torchsky.map import MapBandpassSpec, MapProductSpec, stack_map_product
 
-observations = [ImageObservation("g_1.fits"), ImageObservation("g_2.fits")]
-product = plan_map_product(observations, value_semantics="surface_brightness")
+observations = [scene.image_observation("g_1.fits"), scene.image_observation("g_2.fits")]
+product = MapProductSpec(
+    target_header=target_header,
+    bands=(MapBandpassSpec(label="g"),),
+    value_semantics="surface_brightness",
+)
 stacked = stack_map_product(observations, product, resampling_kernel="bilinear")
 ```
 
@@ -64,24 +73,23 @@ stacked = stack_map_product(observations, product, resampling_kernel="bilinear")
 
 ```python
 import torch
-from torchsky.map import coadd_image_plane_cube, plan_image_plane_cube_target
+from torchsky.map import coadd_image_plane_cube
 from torchsky.spectral import SpectralAxis
 
 wavelengths = torch.tensor([4800.0, 6500.0], dtype=torch.float64)
 edges = torch.tensor([4700.0, 4900.0, 6600.0], dtype=torch.float64)
 
-target = plan_image_plane_cube_target(
+cube = coadd_image_plane_cube(
     observations,
     spectral_axis=SpectralAxis(values=wavelengths, unit="Angstrom", type="WAVE"),
     spectral_bin_edges=edges,
 )
-cube = coadd_image_plane_cube(observations, target=target)
 ```
 
 ### Compare A Stack To Truth
 
 ```python
-from torchsky.map import evaluate_map_product
+from torchsky.map.product import evaluate_map_product
 
 metrics = evaluate_map_product(
     prediction=stacked.data,
@@ -94,29 +102,23 @@ print(metrics["reconstruction_rmse"])
 
 ## API Surface
 
-Product and planning:
-
-- `ImageObservation(...)`
-- `MapBandpassSpec(...)`
-- `MapProductSpec(...)`
-- `plan_map_product(...)`
-- `plan_image_plane_target(...)`
-- `plan_image_plane_cube_target(...)`
-- `plan_image_plane_cube_target_from_header(...)`
-
-Stacking and rendering:
+Promoted flat `torchsky.map` names:
 
 - `coadd_image_plane(...)`
 - `coadd_image_plane_cube(...)`
 - `coadd_image_plane_multiband(...)`
 - `stack_map_product(...)`
-- `render_field_product(...)`
-- `ImagePlaneMapMaker(...)`
+- `MapProductSpec(...)`
+- `TargetRenderSpec(...)`
+- `MapBandpassSpec(...)`
+- `MapProductResult`
+- `MapResult`
+- `MultiBandMapResult`
+- `SpectralCubeMapResult`
 
-Evaluation:
-
-- `evaluate_map_product(...)`
-- `evaluate_map_frontier_regions(...)`
+Advanced planning, evaluation, and implementation helpers live in explicit
+submodules such as `torchsky.map.image_plane`, `torchsky.map.product`,
+`torchsky.map.operators`, and `torchsky.map.field`.
 
 Experimental continuous-field layer (tutorial: [field.md](field.md), losses/context:
 [implicit_forward.md](implicit_forward.md)):

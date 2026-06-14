@@ -49,7 +49,9 @@ def test_exposure_pose_identity_world_to_pixel_roundtrip() -> None:
     pose = ExposurePose()
     center_ra = float(header["CRVAL1"])
     center_dec = float(header["CRVAL2"])
-    ra2, dec2 = pose.apply_to_world(ra, dec, center_ra_deg=center_ra, center_dec_deg=center_dec)
+    ra2, dec2 = pose.apply_to_world(
+        ra, dec, center_ra_deg=center_ra, center_dec_deg=center_dec
+    )
     with torch.no_grad():
         xp, yp = wcs.world_to_pixel(ra2.detach(), dec2.detach())
     torch.testing.assert_close(xp, x, rtol=1e-5, atol=1e-5)

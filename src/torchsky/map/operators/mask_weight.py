@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import torch
 from torch import Tensor
 
-from ... import read
+from ...io import read
 from .base import MaskWeightOp
 from .image_grid import validate_image_plane_2d
+from .noise import sanitize_inverse_variance
 
 
 @dataclass
@@ -73,4 +75,8 @@ def load_image_observation_weight_map(
         pb = torch.where(torch.isfinite(pb) & (pb > 0.0), pb, torch.zeros_like(pb))
         weight_map = weight_map * pb
 
-    return weight_map * float(getattr(obs, "weight", 1.0))
+    scalar_weight = float(getattr(obs, "weight", 1.0))
+    if not math.isfinite(scalar_weight):
+        raise ValueError("observation weight must be finite")
+    scalar = torch.tensor(scalar_weight, dtype=weight_map.dtype, device=device)
+    return weight_map * sanitize_inverse_variance(scalar)

@@ -38,7 +38,11 @@ try:
 except Exception:
     # Allow benchmarks in envs where torchsky package/extensions are not installed.
     local_mod = (
-        Path(__file__).resolve().parents[1] / "src" / "torchsky" / "sphere" / "healpix.py"
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "torchsky"
+        / "sphere"
+        / "healpix.py"
     )
     spec = importlib.util.spec_from_file_location(
         "torchsky_sphere_healpix_local", local_mod

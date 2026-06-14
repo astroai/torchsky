@@ -7,9 +7,9 @@ import math
 import torch
 from torch import Tensor
 
-from .. import WCS
 from ..sphere.moc import MOC, nest2uniq
 from ..sphere import healpix as _healpix
+from ..wcs import WCS
 from .operators.pixel_area import (
     pixel_area_sr_map,
     representative_pixel_area_sr,
@@ -224,14 +224,9 @@ def _window_large_tan_target(
         edge_samples = _LARGE_TAN_WINDOWING_EDGE_SAMPLES
         margin_pixels = _LARGE_TAN_WINDOWING_MARGIN_PIXELS
 
-    if (
-        int(target.shape[0]) * int(target.shape[1])
-        < min_pixels
-    ):
+    if int(target.shape[0]) * int(target.shape[1]) < min_pixels:
         return target, None
-    if not is_plain_tan_header(source_header) or not is_plain_tan_header(
-        target_header
-    ):
+    if not is_plain_tan_header(source_header) or not is_plain_tan_header(target_header):
         return target, None
     if wcs_has_distortion(source_wcs):
         return target, None

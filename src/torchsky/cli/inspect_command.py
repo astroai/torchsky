@@ -10,9 +10,9 @@ from typing import Any
 
 import torch
 
-from .. import open as open_fits
-from .. import read
 from ..hdu import Header, TableHDU, TableHDURef, TensorHDU
+from ..io import open as open_fits
+from ..io import read
 
 
 def _json_value(value: Any) -> Any:
@@ -109,8 +109,7 @@ def _print_info_text(payload: dict[str, Any], *, include_headers: bool) -> None:
             extent = "x".join(str(dim) for dim in shape) if shape is not None else ""
             fmt = hdu["dtype"] or ""
         print(
-            f"{hdu['index']:<4} {hdu['name']:<12} {hdu['kind']:<14} "
-            f"{extent:<16} {fmt}"
+            f"{hdu['index']:<4} {hdu['name']:<12} {hdu['kind']:<14} {extent:<16} {fmt}"
         )
         if include_headers:
             for key, value in hdu.get("header", {}).items():
@@ -150,7 +149,9 @@ def _row_value(column: Any, row_index: int) -> Any:
     return _json_value(column[row_index])
 
 
-def _rows_from_columns(data: Mapping[str, Any], *, max_rows: int) -> list[dict[str, Any]]:
+def _rows_from_columns(
+    data: Mapping[str, Any], *, max_rows: int
+) -> list[dict[str, Any]]:
     nrows = min(max(0, int(max_rows)), _table_num_rows(data))
     names = [str(name) for name in data.keys()]
     return [
@@ -178,7 +179,11 @@ def _cat_payload(
     )
     if not isinstance(data, Mapping):
         raise RuntimeError(f"{path}: selected HDU did not return a table")
-    names = [str(name) for name in columns] if columns is not None else [str(name) for name in data.keys()]
+    names = (
+        [str(name) for name in columns]
+        if columns is not None
+        else [str(name) for name in data.keys()]
+    )
     return {
         "path": path,
         "hdu": hdu,
@@ -240,7 +245,9 @@ def register_inspect_parsers(subparsers: argparse.Action) -> None:
         help="Print a bounded sample of a FITS table HDU.",
     )
     cat.add_argument("path", help="FITS file containing a table HDU.")
-    cat.add_argument("--hdu", default=1, help="Table HDU index or EXTNAME (default: 1).")
+    cat.add_argument(
+        "--hdu", default=1, help="Table HDU index or EXTNAME (default: 1)."
+    )
     cat.add_argument(
         "--columns",
         default=None,

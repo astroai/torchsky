@@ -34,22 +34,22 @@ class TestCaching:
 
         try:
             # Clear cache first
-            torchsky.clear_file_cache()
+            torchsky.cache.clear()
 
             # First read should be a cache miss
             torchsky.read(filepath)
-            stats1 = torchsky.get_cache_performance()
+            stats1 = torchsky.io.get_cache_performance()
 
             # Second read should be a cache hit
             torchsky.read(filepath)
-            stats2 = torchsky.get_cache_performance()
+            stats2 = torchsky.io.get_cache_performance()
 
             # Verify cache behavior
             assert stats2["total_requests"] > stats1["total_requests"]
 
         finally:
             os.unlink(filepath)
-            torchsky.clear_file_cache()
+            torchsky.cache.clear()
 
     def test_get_cache_stats(self):
         """Test get_cache_stats returns expected dictionary structure."""
@@ -103,10 +103,10 @@ class TestCaching:
             torchsky.read(filepath)
 
             # Clear cache
-            torchsky.clear_file_cache()
+            torchsky.cache.clear()
 
             # Verify cache is cleared
-            torchsky.get_cache_performance()
+            torchsky.io.get_cache_performance()
             # After clearing, stats should be reset or show no cached entries
 
         finally:
@@ -123,7 +123,7 @@ class TestCaching:
                 files.append(filepath)
 
             # Clear cache
-            torchsky.clear_file_cache()
+            torchsky.cache.clear()
 
             # Read all files
             for filepath in files:
@@ -134,14 +134,14 @@ class TestCaching:
                 torchsky.read(filepath)
 
             # Check cache performance
-            stats = torchsky.get_cache_performance()
+            stats = torchsky.io.get_cache_performance()
             assert stats["total_requests"] >= len(files) * 2
 
         finally:
             for f in files:
                 if os.path.exists(f):
                     os.unlink(f)
-            torchsky.clear_file_cache()
+            torchsky.cache.clear()
 
     def test_cached_numpy_reads_survive_repeated_cache_clears(self):
         """Regression: cached numpy reads should remain stable across cache clears."""
@@ -154,7 +154,7 @@ class TestCaching:
 
         try:
             for i in range(300):
-                torchsky.clear_file_cache()
+                torchsky.cache.clear()
                 if i % 2 == 0:
                     arr = cpp.read_full_numpy_cached(file_a, 0, True)
                     assert arr.shape == (257,)
@@ -165,7 +165,7 @@ class TestCaching:
             for path in (file_a, file_b):
                 if os.path.exists(path):
                     os.unlink(path)
-            torchsky.clear_file_cache()
+            torchsky.cache.clear()
 
     def test_cached_multibyte_read_matches_nocache_reference(self):
         """Regression: cached mmap raw path must match the no-cache path exactly."""
@@ -183,14 +183,14 @@ class TestCaching:
             path = f.name
 
         try:
-            torchsky.clear_file_cache()
+            torchsky.cache.clear()
             cached = cpp.read_full_cached(path, 0, True).numpy()
             reference = cpp.read_full_nocache(path, 0, True).numpy()
             np.testing.assert_array_equal(cached, reference)
         finally:
             if os.path.exists(path):
                 os.unlink(path)
-            torchsky.clear_file_cache()
+            torchsky.cache.clear()
 
     def test_cold_nommap_heuristic_with_cache_enabled_int16(self):
         """Large int16 images should prefer non-mmap even when cache is enabled."""
@@ -202,14 +202,14 @@ class TestCaching:
             path = f.name
 
         try:
-            torchsky.clear_file_cache()
-            assert torchsky._should_use_cold_nommap(
+            torchsky.cache.clear()
+            assert torchsky.io._should_use_cold_nommap(
                 path, 0, cache_capacity=10, mmap=True
             )
         finally:
             if os.path.exists(path):
                 os.unlink(path)
-            torchsky.clear_file_cache()
+            torchsky.cache.clear()
 
     def test_cold_nommap_heuristic_float64_and_small_guard(self):
         """64-bit and sub-1MiB payloads should keep mmap enabled by default."""
@@ -227,18 +227,18 @@ class TestCaching:
             small_path = f_small.name
 
         try:
-            torchsky.clear_file_cache()
-            assert not torchsky._should_use_cold_nommap(
+            torchsky.cache.clear()
+            assert not torchsky.io._should_use_cold_nommap(
                 large_path, 0, cache_capacity=10, mmap=True
             )
-            assert not torchsky._should_use_cold_nommap(
+            assert not torchsky.io._should_use_cold_nommap(
                 small_path, 0, cache_capacity=10, mmap=True
             )
         finally:
             for path in (large_path, small_path):
                 if os.path.exists(path):
                     os.unlink(path)
-            torchsky.clear_file_cache()
+            torchsky.cache.clear()
 
     def test_read_mmap_auto_defaults_to_false_for_compressed(self, monkeypatch):
         """In smart policy, `mmap='auto'` should disable mmap for compressed HDUs."""
@@ -249,12 +249,12 @@ class TestCaching:
         observed = []
 
         monkeypatch.setattr(
-            torchsky,
+            torchsky.io,
             "_get_image_meta",
             lambda path, hdu: (-32, 2, (64, 64), 1.0, 0.0, True),
         )
         monkeypatch.setattr(
-            torchsky,
+            torchsky.io,
             "_should_use_cold_nommap",
             lambda *args, **kwargs: (_ for _ in ()).throw(
                 AssertionError(
@@ -300,12 +300,12 @@ class TestCaching:
         observed = []
 
         monkeypatch.setattr(
-            torchsky,
+            torchsky.io,
             "_get_image_meta",
             lambda path, hdu: (-32, 2, (64, 64), 1.0, 0.0, True),
         )
         monkeypatch.setattr(
-            torchsky,
+            torchsky.io,
             "_should_use_cold_nommap",
             lambda *args, **kwargs: (_ for _ in ()).throw(
                 AssertionError(
@@ -407,7 +407,7 @@ class TestCaching:
         finally:
             if os.path.exists(path):
                 os.unlink(path)
-            torchsky.clear_file_cache()
+            torchsky.cache.clear()
 
     def test_get_header_auto_matches_detected_hdu(self):
         """`get_header(..., hdu='auto')` should return the detected payload header."""
@@ -428,7 +428,7 @@ class TestCaching:
         finally:
             if os.path.exists(path):
                 os.unlink(path)
-            torchsky.clear_file_cache()
+            torchsky.cache.clear()
 
 
 class TestCacheManager:

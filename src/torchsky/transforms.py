@@ -5,6 +5,7 @@ This module provides GPU-accelerated transformations for common
 astronomical data preparation tasks (Phase 4 of implementation).
 """
 
+import math
 from typing import Optional, Tuple, Union
 
 import torch
@@ -26,12 +27,17 @@ class AsinhStretch:
             a: Softening parameter
             Q: Stretch parameter
         """
+        if a <= 0:
+            raise ValueError("a must be positive")
+        if Q <= 0:
+            raise ValueError("Q must be positive")
         self.a = a
         self.Q = Q
 
     def __call__(self, tensor: Tensor) -> Tensor:
         """Apply asinh stretch to tensor."""
-        return torch.asinh(self.Q * tensor) / self.Q
+        scale = self.Q / self.a
+        return torch.asinh(scale * tensor) / math.asinh(scale)
 
     def __repr__(self):
         return f"AsinhStretch(a={self.a}, Q={self.Q})"
@@ -52,17 +58,84 @@ class ZScale:
             contrast: Contrast parameter
             max_reject: Maximum fraction of pixels to reject
         """
+        if contrast <= 0:
+            raise ValueError("contrast must be positive")
+        if max_reject < 0 or max_reject >= 1:
+            raise ValueError("max_reject must be in [0, 1)")
         self.contrast = contrast
         self.max_reject = max_reject
 
     def __call__(self, tensor: Tensor) -> Tensor:
         """Apply ZScale normalization."""
-        # Simplified implementation - full version would use iterative algorithm
-        qs = torch.quantile(
-            tensor,
-            torch.tensor([0.05, 0.95], dtype=tensor.dtype, device=tensor.device),
-        )
-        z1, z2 = qs[0], qs[1]
+        flat = tensor.flatten()
+        valid = flat[torch.isfinite(flat)]
+        if valid.numel() == 0:
+            return torch.zeros_like(tensor)
+
+        if valid.numel() > 600:
+            step = max(1, valid.numel() // 600)
+            sample = valid[::step]
+        else:
+            sample = valid
+
+        sample, _ = torch.sort(sample)
+        n = sample.numel()
+        if n < 5:
+            z1, z2 = sample[0], sample[-1]
+        else:
+            good = torch.ones(n, dtype=torch.bool, device=sample.device)
+            x = torch.arange(n, dtype=torch.float64, device=sample.device)
+            y = sample.to(torch.float64)
+            for _ in range(5):
+                xg = x[good]
+                yg = y[good]
+                if xg.numel() < 5:
+                    break
+                xm = xg.mean()
+                ym = yg.mean()
+                slope = ((xg - xm) * (yg - ym)).sum() / (
+                    (xg - xm) ** 2
+                ).sum().clamp_min(1e-30)
+                intercept = ym - slope * xm
+                residuals = y - (slope * x + intercept)
+                sigma = residuals[good].std()
+                if float(sigma.item()) < 1e-10:
+                    break
+                new_good = torch.abs(residuals) < 2.5 * sigma
+                if int(new_good.sum().item()) < 5:
+                    break
+                if float(new_good.sum().item()) / n < 1.0 - self.max_reject:
+                    break
+                good = new_good
+
+            xg = x[good]
+            yg = y[good]
+            if xg.numel() < 2:
+                z1, z2 = sample[n // 4], sample[3 * n // 4]
+            else:
+                xm = xg.mean()
+                ym = yg.mean()
+                slope = ((xg - xm) * (yg - ym)).sum() / (
+                    (xg - xm) ** 2
+                ).sum().clamp_min(1e-30)
+                intercept = ym - slope * xm
+                center = n / 2.0
+                z1 = torch.maximum(
+                    sample[0],
+                    (intercept + slope * (0.0 - center) / self.contrast).to(
+                        sample.dtype
+                    ),
+                )
+                z2 = torch.minimum(
+                    sample[-1],
+                    (intercept + slope * (n - center) / self.contrast).to(
+                        sample.dtype
+                    ),
+                )
+                if bool(z2 <= z1):
+                    median = torch.median(sample)
+                    std = sample.float().std().to(dtype=sample.dtype)
+                    z1, z2 = median - 3.0 * std, median + 3.0 * std
 
         # Prevent division by zero
         range_val = z2 - z1
@@ -89,9 +162,10 @@ class LogStretch:
         Args:
             a: Scaling parameter
         """
+        if a <= 0:
+            raise ValueError("a must be positive")
         self.a = a
-        # Cache the log computation to avoid repeated calculation
-        self._log_factor = torch.log(torch.tensor(self.a + 1))
+        self._log_factor = math.log(self.a + 1.0)
 
     def __call__(self, tensor: Tensor) -> Tensor:
         """Apply log stretch."""
@@ -141,8 +215,16 @@ class Normalize:
 
     def __call__(self, tensor: Tensor) -> Tensor:
         """Apply normalization."""
-        mean = self.mean if self.mean is not None else tensor.mean()
-        std = self.std if self.std is not None else tensor.std()
+        mean = (
+            torch.as_tensor(self.mean, dtype=tensor.dtype, device=tensor.device)
+            if self.mean is not None
+            else tensor.mean()
+        )
+        std = (
+            torch.as_tensor(self.std, dtype=tensor.dtype, device=tensor.device)
+            if self.std is not None
+            else tensor.std()
+        )
 
         # Prevent division by zero
         if torch.abs(std) < 1e-8:
@@ -524,9 +606,6 @@ class RedshiftShift:
         # f_obs(lambda) = f_rest(lambda / (1+z))
 
         orig_len = tensor.shape[-1]
-        # Create grid [-1, 1]
-        torch.linspace(-1, 1, orig_len, device=tensor.device)
-
         # Shifted grid positions in original frame
         # We want to sample at x_new.
         # The value at x_new comes from x_old = x_new / (1+z) ?
@@ -559,7 +638,7 @@ class RedshiftShift:
         idx_ceil = idx_floor + 1
         idx_ceil = torch.clamp(idx_ceil, 0, orig_len - 1)
 
-        weight = sample_indices - idx_floor.float()
+        weight = sample_indices - idx_floor.to(dtype=tensor.dtype)
 
         if tensor.dim() == 1:
             val_floor = tensor[idx_floor]

@@ -51,6 +51,9 @@ class TestBasicTransforms:
         assert result.shape == data.shape
         assert torch.isfinite(result).all()
 
+        softer = AsinhStretch(a=0.5, Q=8.0)(data)
+        assert not torch.allclose(result, softer)
+
     def test_log_stretch(self):
         """Test logarithmic stretch."""
         data = torch.abs(torch.randn(50, 50)) + 1  # Ensure positive values
@@ -82,6 +85,9 @@ class TestBasicTransforms:
         assert result.shape == data.shape
         assert abs(result.mean().item()) < 0.1  # Should be close to 0
         assert abs(result.std().item() - 1.0) < 0.1  # Should be close to 1
+
+        explicit = Normalize(mean=10.0, std=5.0)(data)
+        torch.testing.assert_close(explicit, (data - 10.0) / 5.0)
 
     def test_minmax_scale(self):
         """Test min-max scaling."""

@@ -65,10 +65,10 @@ def test_write_tensor_frame_stypes():
 
     tf = TensorFrame(feat_dict=feat_dict, col_names_dict=col_names_dict)
 
-    with unittest.mock.patch("torchsky.write") as mock_write:
+    with unittest.mock.patch("torchsky.io.write") as mock_write:
         write_tensor_frame("dummy.fits", tf, overwrite=True)
 
-        # Verify the data dict passed to torchsky.write
+        # Verify the data dict passed to torchsky.io.write
         args, kwargs = mock_write.call_args
         assert args[0] == "dummy.fits"
         data = args[1]

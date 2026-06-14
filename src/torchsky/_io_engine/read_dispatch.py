@@ -524,9 +524,7 @@ def read_fallback_table(
                         path, hdu_num, col_list, True
                     )
             else:
-                table_result = cpp_module.read_fits_table(
-                    path, hdu_num, col_list, True
-                )
+                table_result = cpp_module.read_fits_table(path, hdu_num, col_list, True)
         except Exception:
             table_result = None
 

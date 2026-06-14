@@ -110,7 +110,7 @@ class TestTableReading:
 
         try:
             # Test with memory limit to force streaming
-            result = torchsky.read_large_table(
+            result = torchsky.io.read_large_table(
                 filepath, max_memory_mb=1, streaming=True
             )
 
@@ -368,7 +368,7 @@ class TestTablePerformance:
         try:
             # Test streaming read
             start_time = time.time()
-            result = torchsky.read_large_table(
+            result = torchsky.io.read_large_table(
                 filepath, max_memory_mb=10, streaming=True
             )
             streaming_time = time.time() - start_time
@@ -395,7 +395,7 @@ class TestTablePerformance:
             mem_before = process.memory_info().rss / 1024 / 1024  # MB
 
             # Read table
-            result = torchsky.read_large_table(filepath, max_memory_mb=50)
+            result = torchsky.io.read_large_table(filepath, max_memory_mb=50)
 
             mem_after = process.memory_info().rss / 1024 / 1024  # MB
             memory_increase = mem_after - mem_before
@@ -463,11 +463,11 @@ class TestTablePerformance:
         assert mock_close_cpp_handle.call_count == 2
 
 
-
 def test_close_cpp_handle_suppresses_exception():
     """Test that _close_cpp_handle catches and suppresses exceptions."""
     import unittest.mock
     from torchsky.table import _close_cpp_handle
+
     mock_handle = unittest.mock.Mock()
     mock_handle.close.side_effect = Exception("Test exception")
     _close_cpp_handle(mock_handle)

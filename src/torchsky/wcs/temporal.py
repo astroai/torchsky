@@ -224,7 +224,9 @@ def _earth_position_equatorial(mjd: Tensor) -> Tensor:
     i = ((0.00005 - 0.01303889 * T_flat) * d2r).to(device=device, dtype=dtype)
     L = ((100.46435 + 35999.37239722 * T_flat) * d2r).to(device=device, dtype=dtype)
     varpi = ((102.94719 + 0.33285556 * T_flat) * d2r).to(device=device, dtype=dtype)
-    omega_node = ((-11.26064 - 5.06340278 * T_flat) * d2r).to(device=device, dtype=dtype)
+    omega_node = ((-11.26064 - 5.06340278 * T_flat) * d2r).to(
+        device=device, dtype=dtype
+    )
 
     omega_arg = varpi - omega_node
     M = L - varpi
@@ -278,7 +280,12 @@ def _gmst_rotation_matrix(mjd: Tensor) -> tuple[Tensor, Tensor]:
     T_flat = T.to(dtype=torch.float64)
     jd_flat = jd.to(dtype=torch.float64)
 
-    gmst = 280.46061837 + 360.98564736629 * (jd_flat - 2451545.0) + 0.000387933 * T_flat**2 - T_flat**3 / 38710000.0
+    gmst = (
+        280.46061837
+        + 360.98564736629 * (jd_flat - 2451545.0)
+        + 0.000387933 * T_flat**2
+        - T_flat**3 / 38710000.0
+    )
     gmst_rad = (gmst * (math.pi / 180.0)).to(device=mjd.device, dtype=mjd.dtype)
 
     return torch.cos(gmst_rad), torch.sin(gmst_rad)
@@ -353,7 +360,9 @@ class TemporalWCS:
         local = convert_time_scale(mjd, scale, self.timesys)
         return self.from_mjd(local)
 
-    def convert_scale(self, mjd: Tensor, to_scale: str, from_scale: str | None = None) -> Tensor:
+    def convert_scale(
+        self, mjd: Tensor, to_scale: str, from_scale: str | None = None
+    ) -> Tensor:
         """Convert MJD values from ``from_scale`` or header ``TIMESYS`` to ``to_scale``."""
         return convert_time_scale(mjd, from_scale or self.timesys, to_scale)
 
@@ -425,7 +434,9 @@ class TemporalWCS:
             obs_inertial_x = obs_x * cos_g - obs_y * sin_g
             obs_inertial_y = obs_x * sin_g + obs_y * cos_g
             obs_inertial_z = torch.full_like(obs_inertial_x, obs_z)
-            r_obs = torch.stack([obs_inertial_x, obs_inertial_y, obs_inertial_z], dim=-1)
+            r_obs = torch.stack(
+                [obs_inertial_x, obs_inertial_y, obs_inertial_z], dim=-1
+            )
             r = r_earth + r_obs
         else:
             r = r_earth

@@ -57,7 +57,12 @@ _LENGTH_TO_M = {
     "a": 1.0e-10,
 }
 _FREQ_TO_HZ = {"hz": 1.0, "khz": 1.0e3, "mhz": 1.0e6, "ghz": 1.0e9, "thz": 1.0e12}
-_ENERGY_TO_J = {"j": 1.0, "ev": ELECTRON_VOLT, "kev": 1.0e3 * ELECTRON_VOLT, "mev": 1.0e6 * ELECTRON_VOLT}
+_ENERGY_TO_J = {
+    "j": 1.0,
+    "ev": ELECTRON_VOLT,
+    "kev": 1.0e3 * ELECTRON_VOLT,
+    "mev": 1.0e6 * ELECTRON_VOLT,
+}
 _VELOCITY_TO_M_S = {"m/s": 1.0, "ms-1": 1.0, "km/s": 1.0e3, "kms-1": 1.0e3}
 _WAVENUMBER_TO_INV_M = {
     "m-1": 1.0,
@@ -80,7 +85,9 @@ def canonical_spectral_type(spectral_type: str) -> str:
     try:
         return _SPECTRAL_ALIASES[key]
     except KeyError as exc:
-        raise ValueError(f"unsupported spectral coordinate type {spectral_type!r}") from exc
+        raise ValueError(
+            f"unsupported spectral coordinate type {spectral_type!r}"
+        ) from exc
 
 
 def spectral_unit_scale(spectral_type: str, unit: str | None = None) -> float:
@@ -190,7 +197,9 @@ def spectral_to_frequency(
     if kind == "WAVN":
         return SPEED_OF_LIGHT * x
     if kind == "AWAV":
-        vac = air_wavelength_to_vacuum(value, unit=unit) * spectral_unit_scale("WAVE", unit)
+        vac = air_wavelength_to_vacuum(value, unit=unit) * spectral_unit_scale(
+            "WAVE", unit
+        )
         return SPEED_OF_LIGHT / vac
     if kind == "ENER":
         return x / PLANCK
@@ -277,6 +286,62 @@ def convert_spectral(
     )
 
 
+def _is_positive_spectral_type(spectral_type: str) -> bool:
+    return canonical_spectral_type(spectral_type) in {
+        "WAVE",
+        "FREQ",
+        "AWAV",
+        "WAVN",
+        "ENER",
+    }
+
+
+def _spectral_derivative_si(
+    value_si: float,
+    from_type: str,
+    to_type: str,
+    *,
+    rest_frequency: float | None,
+    rest_wavelength: float | None,
+) -> float:
+    if canonical_spectral_type(from_type) == canonical_spectral_type(to_type):
+        return 1.0
+    try:
+        x = torch.tensor(value_si, dtype=torch.float64, requires_grad=True)
+        y = convert_spectral(
+            x,
+            from_type,
+            to_type,
+            rest_frequency=rest_frequency,
+            rest_wavelength=rest_wavelength,
+        )
+        y.backward()
+        if x.grad is not None and torch.isfinite(x.grad):
+            return float(x.grad.item())
+    except Exception:
+        pass
+    eps = 1e-6 * max(1.0, abs(value_si))
+    plus = float(
+        convert_spectral(
+            value_si + eps,
+            from_type,
+            to_type,
+            rest_frequency=rest_frequency,
+            rest_wavelength=rest_wavelength,
+        ).item()
+    )
+    minus = float(
+        convert_spectral(
+            value_si - eps,
+            from_type,
+            to_type,
+            rest_frequency=rest_frequency,
+            rest_wavelength=rest_wavelength,
+        ).item()
+    )
+    return (plus - minus) / (2.0 * eps)
+
+
 def transform_spectral(
     freq: Tensor, rest_freq: float, convention: str = "RADIO"
 ) -> Tensor:
@@ -288,9 +353,7 @@ def transform_spectral(
     }.get(convention.upper())
     if target is None:
         raise ValueError(f"Unknown spectral convention: {convention}")
-    return frequency_to_spectral(
-        freq, target, unit="km/s", rest_frequency=rest_freq
-    )
+    return frequency_to_spectral(freq, target, unit="km/s", rest_frequency=rest_freq)
 
 
 class SpectralTransform:
@@ -367,18 +430,19 @@ class SpectralTransform:
             dn_r = self.pv[4]
             epsilon = self.pv[5]
             theta = self.pv[6]
+            self.grism_xtype = "AWAV" if self.algo == "GRA" else "WAVE"
 
             d2r = math.pi / 180.0
             r2d = 180.0 / math.pi
 
-            if self.stype in {"WAVE", "AWAV"}:
+            if canonical_spectral_type(self.stype) == self.grism_xtype:
                 self.lambda_r = self.crval_si
             else:
                 self.lambda_r = float(
                     convert_spectral(
                         self.crval_si,
                         self.stype,
-                        "WAVE",
+                        self.grism_xtype,
                         rest_frequency=self.restfrq,
                         rest_wavelength=self.restwav,
                     ).item()
@@ -392,61 +456,13 @@ class SpectralTransform:
             self.t_prime = self.t - dn_r * math.sin(alpha * d2r)
             self.w1 = -math.tan(theta * d2r)
 
-            if self.stype in {"WAVE", "AWAV"}:
-                self.dXdS = 1.0
-            elif self.stype == "FREQ":
-                self.dXdS = -SPEED_OF_LIGHT / (self.crval_si**2)
-            elif self.stype == "AFRQ":
-                f = self.crval_si / (2.0 * math.pi)
-                self.dXdS = -SPEED_OF_LIGHT / (2.0 * math.pi * f**2)
-            elif self.stype == "ENER":
-                f = self.crval_si / PLANCK
-                self.dXdS = -SPEED_OF_LIGHT / (PLANCK * f**2)
-            elif self.stype == "WAVN":
-                self.dXdS = -1.0 / (self.crval_si**2)
-            elif self.stype == "VRAD":
-                f = self.restfrq * (1.0 - self.crval_si / SPEED_OF_LIGHT)
-                self.dXdS = self.restfrq / (f**2)
-            elif self.stype == "VOPT":
-                self.dXdS = self.restwav / SPEED_OF_LIGHT
-            elif self.stype == "ZOPT":
-                self.dXdS = self.restwav
-            elif self.stype == "VELO":
-                try:
-                    import torch
-                    s_tensor = torch.tensor(self.crval_si, dtype=torch.float64, requires_grad=True)
-                    X_tensor = convert_spectral(
-                        s_tensor,
-                        self.stype,
-                        "WAVE",
-                        rest_frequency=self.restfrq,
-                        rest_wavelength=self.restwav,
-                    )
-                    X_tensor.backward()
-                    self.dXdS = float(s_tensor.grad.item())
-                except Exception:
-                    eps = 1e-6 * max(1.0, abs(self.crval_si))
-                    val_plus = float(
-                        convert_spectral(
-                            self.crval_si + eps,
-                            self.stype,
-                            "WAVE",
-                            rest_frequency=self.restfrq,
-                            rest_wavelength=self.restwav,
-                        ).item()
-                    )
-                    val_minus = float(
-                        convert_spectral(
-                            self.crval_si - eps,
-                            self.stype,
-                            "WAVE",
-                            rest_frequency=self.restfrq,
-                            rest_wavelength=self.restwav,
-                        ).item()
-                    )
-                    self.dXdS = (val_plus - val_minus) / (2.0 * eps)
-            else:
-                self.dXdS = 1.0
+            self.dXdS = _spectral_derivative_si(
+                self.crval_si,
+                self.stype,
+                self.grism_xtype,
+                rest_frequency=self.restfrq,
+                rest_wavelength=self.restwav,
+            )
 
             cos_b = math.cos(self.beta_r * d2r)
             cos_t = math.cos(theta * d2r)
@@ -481,17 +497,18 @@ class SpectralTransform:
             )
 
             try:
-                    import torch
-                    s_tensor = torch.tensor(self.crval_si, dtype=torch.float64, requires_grad=True)
-                    X_tensor = convert_spectral(
-                        s_tensor,
-                        self.stype,
-                        self.xtype_name,
-                        rest_frequency=self.restfrq,
-                        rest_wavelength=self.restwav,
-                    )
-                    X_tensor.backward()
-                    self.dXdS_si = float(s_tensor.grad.item())
+                s_tensor = torch.tensor(
+                    self.crval_si, dtype=torch.float64, requires_grad=True
+                )
+                X_tensor = convert_spectral(
+                    s_tensor,
+                    self.stype,
+                    self.xtype_name,
+                    rest_frequency=self.restfrq,
+                    rest_wavelength=self.restwav,
+                )
+                X_tensor.backward()
+                self.dXdS_si = float(s_tensor.grad.item())
             except Exception:
                 eps = 1e-6 * max(1.0, abs(self.crval_si))
                 val_plus = float(
@@ -524,18 +541,16 @@ class SpectralTransform:
             beta = torch.atan(val) * r2d + self.w3
             lambda_val = (torch.sin(beta * d2r) + self.w4) * self.w5
 
-            if self.algo == "GRA":
-                lambda_vac = air_wavelength_to_vacuum(lambda_val, unit="m")
+            if canonical_spectral_type(self.stype) == self.grism_xtype:
+                spec_si = lambda_val
             else:
-                lambda_vac = lambda_val
-
-            spec_si = convert_spectral(
-                lambda_vac,
-                "WAVE",
-                self.stype,
-                rest_frequency=self.restfrq,
-                rest_wavelength=self.restwav,
-            )
+                spec_si = convert_spectral(
+                    lambda_val,
+                    self.grism_xtype,
+                    self.stype,
+                    rest_frequency=self.restfrq,
+                    rest_wavelength=self.restwav,
+                )
             return spec_si / self.scale
 
         elif self.is_log:
@@ -545,7 +560,12 @@ class SpectralTransform:
 
         elif self.algo:
             X = self.crvalX_si + x * self.dXdS
-            X_safe = torch.where(X > 0.0, X, torch.full_like(X, torch.nan))
+            if _is_positive_spectral_type(self.xtype_name):
+                valid_x = X > 0.0
+                X_safe = torch.where(valid_x, X, torch.full_like(X, torch.nan))
+            else:
+                valid_x = torch.ones_like(X, dtype=torch.bool)
+                X_safe = X
             spec_si = convert_spectral(
                 X_safe,
                 self.xtype_name,
@@ -554,7 +574,8 @@ class SpectralTransform:
                 rest_wavelength=self.restwav,
             )
             res = spec_si / self.scale
-            return torch.where(X > 0.0, res, torch.full_like(res, torch.nan))
+            valid = valid_x & torch.isfinite(res)
+            return torch.where(valid, res, torch.full_like(res, torch.nan))
 
         else:
             return self.crval_si / self.scale + x
@@ -566,18 +587,16 @@ class SpectralTransform:
             d2r = math.pi / 180.0
             r2d = 180.0 / math.pi
 
-            lambda_vac = convert_spectral(
-                spec_si,
-                self.stype,
-                "WAVE",
-                rest_frequency=self.restfrq,
-                rest_wavelength=self.restwav,
-            )
-
-            if self.algo == "GRA":
-                lambda_val = vacuum_wavelength_to_air(lambda_vac, unit="m")
+            if canonical_spectral_type(self.stype) == self.grism_xtype:
+                lambda_val = spec_si
             else:
-                lambda_val = lambda_vac
+                lambda_val = convert_spectral(
+                    spec_si,
+                    self.stype,
+                    self.grism_xtype,
+                    rest_frequency=self.restfrq,
+                    rest_wavelength=self.restwav,
+                )
 
             s = lambda_val / self.w5 - self.w4
             s_clamped = torch.clamp(s, min=-1.0, max=1.0)
@@ -594,9 +613,11 @@ class SpectralTransform:
             return torch.where(ratio > 0.0, x, torch.full_like(x, torch.nan))
 
         elif self.algo:
-            is_positive_type = self.stype in {"WAVE", "FREQ", "AWAV", "WAVN", "ENER"}
+            is_positive_type = _is_positive_spectral_type(self.stype)
             if is_positive_type:
-                spec_safe = torch.where(spec_si > 0.0, spec_si, torch.full_like(spec_si, torch.nan))
+                spec_safe = torch.where(
+                    spec_si > 0.0, spec_si, torch.full_like(spec_si, torch.nan)
+                )
             else:
                 spec_safe = spec_si
 
@@ -615,4 +636,3 @@ class SpectralTransform:
 
         else:
             return spec - self.crval_si / self.scale
-

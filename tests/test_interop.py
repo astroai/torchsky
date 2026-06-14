@@ -26,7 +26,7 @@ def test_to_pandas_decode_bytes():
 
     try:
         data, _ = torchsky.read(path, hdu=1, return_header=True)
-        df = torchsky.to_pandas(data, decode_bytes=True)
+        df = torchsky.interop.to_pandas(data, decode_bytes=True)
 
         assert df.shape[0] == 2
         assert df["NAME"].tolist() == ["STAR_A", "STAR_B"]
@@ -51,7 +51,7 @@ def test_to_polars_decode_bytes():
 
     try:
         data, _ = torchsky.read(path, hdu=1, return_header=True)
-        df = torchsky.to_polars(data, decode_bytes=True)
+        df = torchsky.interop.to_polars(data, decode_bytes=True)
 
         assert df.height == 2
         assert df["NAME"].to_list() == ["STAR_A", "STAR_B"]
@@ -77,7 +77,7 @@ def test_to_arrow_vla_list():
 
     try:
         data, _ = torchsky.read(path, hdu=1, return_header=True)
-        arrow = torchsky.to_arrow(data, vla_policy="list")
+        arrow = torchsky.interop.to_arrow(data, vla_policy="list")
 
         assert arrow.num_rows == 2
         assert "VLA" in arrow.column_names
@@ -93,7 +93,7 @@ def test_to_arrow_vla_invalid_policy():
         "VLA": [torch.tensor([1, 2]), torch.tensor([3])],
     }
     with pytest.raises(ValueError, match="vla_policy must be 'list' or 'drop'"):
-        torchsky.to_arrow(data, vla_policy="invalid_policy")
+        torchsky.interop.to_arrow(data, vla_policy="invalid_policy")
 
 
 def test_to_pandas_missing_pandas():
@@ -101,4 +101,4 @@ def test_to_pandas_missing_pandas():
         with pytest.raises(
             ImportError, match="Pandas is required for to_pandas conversion."
         ):
-            torchsky.to_pandas({"a": torch.tensor([1, 2, 3])})
+            torchsky.interop.to_pandas({"a": torch.tensor([1, 2, 3])})

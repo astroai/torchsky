@@ -134,7 +134,9 @@ class TestIORead:
             header={"EXTNAME": "SCI"},
         )
         io.replace_hdu(str(path), "SCI", torch.full((2, 2), 2.0))
-        torch.testing.assert_close(io.read(str(path), hdu=1, mmap=False), torch.full((2, 2), 2.0))
+        torch.testing.assert_close(
+            io.read(str(path), hdu=1, mmap=False), torch.full((2, 2), 2.0)
+        )
         io.delete_hdu(str(path), 1)
 
         io.write_checksums(str(path), hdu=0)

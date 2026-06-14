@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from ... import WCS
+from ...wcs import WCS
 from ..exposure_pose import ExposurePose
 from .types import FieldObservation, FieldObservationSampling
 
@@ -56,7 +56,9 @@ def observation_band_key(observation: FieldObservation) -> tuple[object, ...]:
 def observation_support_mask(observation: FieldObservation) -> Tensor:
     support = torch.isfinite(observation.image)
     if observation.weight is not None:
-        support = support & torch.isfinite(observation.weight) & (observation.weight > 0)
+        support = (
+            support & torch.isfinite(observation.weight) & (observation.weight > 0)
+        )
     if observation.mask is not None:
         support = support & torch.isfinite(observation.mask) & (observation.mask > 0)
     return support
@@ -64,12 +66,18 @@ def observation_support_mask(observation: FieldObservation) -> Tensor:
 
 def observation_weight_sum_scalar(observation: FieldObservation) -> float:
     if observation.weight is not None:
-        weight = observation.weight.detach().to(dtype=torch.float32)
+        weight = torch.nan_to_num(
+            observation.weight.detach().to(dtype=torch.float32),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
     else:
         weight = torch.ones_like(observation.image, dtype=torch.float32)
-    if observation.mask is not None:
-        valid = observation.mask.detach() > 0
-        weight = torch.where(valid, weight, torch.zeros_like(weight))
+    support = observation_support_mask(observation)
+    weight = torch.where(
+        support, torch.clamp(weight, min=0.0), torch.zeros_like(weight)
+    )
     return float(weight.sum().item())
 
 
@@ -326,12 +334,15 @@ def coordinate_grid(
     device: torch.device,
 ) -> tuple[Tensor, Tensor]:
     if isinstance(observation_or_header, FieldObservation):
+        signature = observation_or_header.coordinate_cache_signature(shape)
         cached_ra = observation_or_header._cached_ra_deg
         cached_dec = observation_or_header._cached_dec_deg
         if cached_ra is not None and cached_dec is not None:
-            if tuple(cached_ra.shape) == tuple(shape):
+            if observation_or_header._cached_coordinate_signature == signature:
                 return cached_ra.to(device=device), cached_dec.to(device=device)
             observation_or_header.clear_coordinate_cache()
+    else:
+        signature = None
 
     header = (
         observation_or_header.header
@@ -349,6 +360,7 @@ def coordinate_grid(
     if isinstance(observation_or_header, FieldObservation):
         observation_or_header._cached_ra_deg = ra_deg.cpu()
         observation_or_header._cached_dec_deg = dec_deg.cpu()
+        observation_or_header._cached_coordinate_signature = signature
 
     return ra_deg, dec_deg
 

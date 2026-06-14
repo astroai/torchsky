@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 
 import torchsky.map as map_api
@@ -14,6 +15,7 @@ from torchsky.map.operators import (
     ExplicitSpectralResponseOp,
     InterpolationGeometryOp,
     ObservationOperatorBundle,
+    bind_image_plane_target_operator,
     conservative_polygon_project,
     field_observation_operator_bundle,
     geometry_op_for_kernel,
@@ -24,6 +26,23 @@ from torchsky.map.operators import (
     swap_bundle_operator_families,
 )
 from torchsky.map.operators import geometry_conservative as geometry_conservative_mod
+from torchsky.map.target import TargetRenderSpec
+
+
+def _simple_header() -> dict[str, float | int | str]:
+    return {
+        "NAXIS": 2,
+        "NAXIS1": 3,
+        "NAXIS2": 2,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 2.0,
+        "CRPIX2": 1.5,
+        "CRVAL1": 180.0,
+        "CRVAL2": 0.0,
+        "CDELT1": -0.01,
+        "CDELT2": 0.01,
+    }
 
 
 def test_observation_operator_bundle_iter_enabled_skips_disabled_entries() -> None:
@@ -236,3 +255,59 @@ def test_conservative_polygon_op_and_helper_use_full_footprint_contract(
     assert (numer, weight) == ("numer", "weight")
     assert calls["args"] == ("image", "source_weight", "source_wcs", "target")
     assert calls["kwargs"]["chunk_pixels"] == 1024
+
+
+def test_image_plane_target_operator_binder_exposes_exact_adjoint() -> None:
+    target = TargetRenderSpec.from_header(_simple_header())
+    operator = bind_image_plane_target_operator(
+        ImageObservation("unused.fits"),
+        target,
+        observation_header=_simple_header(),
+        resampling_kernel="bilinear",
+    )
+    state = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    dual = torch.linspace(-1.0, 2.0, 6, dtype=torch.float32).reshape(2, 3)
+
+    prediction = operator.apply(state)
+    lhs = torch.sum(prediction * dual)
+    rhs = torch.sum(state * operator.adjoint(dual))
+
+    torch.testing.assert_close(prediction, state, rtol=1.0e-5, atol=1.0e-5)
+    torch.testing.assert_close(lhs, rhs, rtol=1.0e-5, atol=1.0e-5)
+
+    with pytest.raises(ValueError, match="adjoint input shape"):
+        operator.adjoint(torch.ones((1, 2, 3), dtype=torch.float32))
+
+
+def test_image_plane_target_operator_noise_is_shape_checked_and_nonnegative() -> None:
+    target = TargetRenderSpec.from_header(_simple_header())
+    negative_weight_operator = bind_image_plane_target_operator(
+        ImageObservation("unused.fits", weight=-2.0),
+        target,
+        observation_header=_simple_header(),
+        resampling_kernel="bilinear",
+    )
+
+    data = torch.ones((2, 3), dtype=torch.float32)
+    torch.testing.assert_close(
+        negative_weight_operator.apply_noise_model(data),
+        torch.zeros_like(data),
+    )
+
+    with pytest.raises(ValueError, match="at least two image axes"):
+        negative_weight_operator.apply_noise_model(torch.ones(3, dtype=torch.float32))
+
+    positive_weight_operator = bind_image_plane_target_operator(
+        ImageObservation("unused.fits", weight=2.0),
+        target,
+        observation_header=_simple_header(),
+        resampling_kernel="bilinear",
+    )
+    torch.testing.assert_close(
+        positive_weight_operator.apply_noise_model(torch.ones((1, 3))),
+        torch.full((1, 3), 2.0),
+    )
+    torch.testing.assert_close(
+        positive_weight_operator.apply_noise_model(data),
+        torch.full_like(data, 2.0),
+    )

@@ -3,7 +3,21 @@ import math
 import pytest
 import torch
 
-from torchsky.wcs import TabularAxis, TabularLookupWCS, WCS, tabular_axes_from_fits
+import torchsky
+from torchsky.wcs import (
+    CoupledTabularLookupWCS,
+    TabularAxis,
+    TabularLookupWCS,
+    WCS,
+    coupled_tabular_wcs_from_fits,
+    tabular_axes_from_fits,
+)
+
+
+class _TabTable:
+    def __init__(self, header: dict, data: dict) -> None:
+        self.header = header
+        self.data = data
 
 
 def test_tabular_axis_forward_and_inverse_piecewise_linear() -> None:
@@ -33,10 +47,23 @@ def test_tabular_axis_decreasing_world_inverse() -> None:
     assert axis.world_direction == -1
 
 
+def test_tabular_axis_decreasing_pixel_grid_forward_inverse() -> None:
+    axis = TabularAxis([2.0, 1.0, 0.0], [20.0, 10.0, 0.0])
+
+    pixel = torch.tensor([1.5, 0.5], dtype=torch.float64)
+    world = axis.pixel_to_world(pixel)
+    pixel_back = axis.world_to_pixel(world)
+
+    torch.testing.assert_close(world, torch.tensor([15.0, 5.0], dtype=torch.float64))
+    torch.testing.assert_close(pixel_back, pixel)
+
+
 def test_tabular_axis_bounds_nan_and_clamp() -> None:
     axis = TabularAxis([0.0, 1.0, 2.0], [0.0, 10.0, 30.0])
 
-    nan_values = axis.pixel_to_world(torch.tensor([-1.0, 0.5, 3.0], dtype=torch.float64))
+    nan_values = axis.pixel_to_world(
+        torch.tensor([-1.0, 0.5, 3.0], dtype=torch.float64)
+    )
     clamp_values = axis.pixel_to_world(
         torch.tensor([-1.0, 0.5, 3.0], dtype=torch.float64),
         bounds="clamp",
@@ -89,6 +116,78 @@ def test_tabular_lookup_wcs_separable_axes_roundtrip() -> None:
     assert lookup.world_n_dim == 2
 
 
+def test_coupled_tabular_lookup_wcs_multilinear_forward_and_autograd() -> None:
+    x = torch.tensor([0.0, 2.0], dtype=torch.float64)
+    y = torch.tensor([0.0, 10.0, 20.0], dtype=torch.float64)
+    xx = x[:, None].expand(2, 3)
+    yy = y[None, :].expand(2, 3)
+    world = torch.stack((xx + 0.1 * yy, xx * yy), dim=-1)
+    lookup = CoupledTabularLookupWCS(
+        (x, y), world, names=("tilted", "product"), units=("nm", "d")
+    )
+    pixels = torch.tensor([[1.0, 5.0], [2.0, 15.0]], dtype=torch.float64)
+
+    got = lookup.pixel_to_world(pixels)
+
+    torch.testing.assert_close(
+        got,
+        torch.tensor([[1.5, 5.0], [3.5, 30.0]], dtype=torch.float64),
+    )
+    assert lookup.pixel_n_dim == 2
+    assert lookup.world_n_dim == 2
+    assert lookup.grid_shape == (2, 3)
+    assert lookup.names == ("tilted", "product")
+    assert lookup.units == ("nm", "d")
+
+    differentiable_pixel = torch.tensor([[1.0, 5.0]], dtype=torch.float64, requires_grad=True)
+    lookup.pixel_to_world(differentiable_pixel)[..., 0].sum().backward()
+    torch.testing.assert_close(
+        differentiable_pixel.grad,
+        torch.tensor([[1.0, 0.1]], dtype=torch.float64),
+    )
+
+
+def test_coupled_tabular_lookup_wcs_bounds_nan_and_clamp() -> None:
+    lookup = CoupledTabularLookupWCS(
+        (
+            torch.tensor([0.0, 1.0], dtype=torch.float64),
+            torch.tensor([0.0, 1.0], dtype=torch.float64),
+        ),
+        torch.tensor(
+            [[[0.0], [10.0]], [[100.0], [110.0]]],
+            dtype=torch.float64,
+        ),
+    )
+    query = torch.tensor([[-1.0, 0.5], [0.5, 2.0]], dtype=torch.float64)
+
+    nan_out = lookup.pixel_to_world(query)
+    clamp_out = lookup.pixel_to_world(query, bounds="clamp")
+
+    assert torch.isnan(nan_out).all()
+    torch.testing.assert_close(
+        clamp_out,
+        torch.tensor([[5.0], [60.0]], dtype=torch.float64),
+    )
+    with pytest.raises(NotImplementedError, match="coupled tabular"):
+        lookup.world_to_pixel(torch.tensor([[1.0]], dtype=torch.float64))
+
+
+def test_coupled_tabular_lookup_wcs_normalizes_descending_grid_axes() -> None:
+    x_desc = torch.tensor([2.0, 0.0], dtype=torch.float64)
+    y = torch.tensor([0.0, 10.0], dtype=torch.float64)
+    xx = x_desc[:, None].expand(2, 2)
+    yy = y[None, :].expand(2, 2)
+    world = (10.0 * xx + yy).unsqueeze(-1)
+    lookup = CoupledTabularLookupWCS((x_desc, y), world)
+
+    got = lookup.pixel_to_world(torch.tensor([[1.0, 5.0]], dtype=torch.float64))
+
+    torch.testing.assert_close(
+        lookup.pixel_axes[0], torch.tensor([0.0, 2.0], dtype=torch.float64)
+    )
+    torch.testing.assert_close(got, torch.tensor([[15.0]], dtype=torch.float64))
+
+
 def test_tabular_axis_rejects_invalid_tables_and_nonmonotonic_inverse() -> None:
     with pytest.raises(ValueError, match="pixel and world tables"):
         TabularAxis([0.0, 1.0], [0.0, 1.0, 2.0])
@@ -98,6 +197,14 @@ def test_tabular_axis_rejects_invalid_tables_and_nonmonotonic_inverse() -> None:
     axis = TabularAxis([0.0, 1.0, 2.0], [0.0, 2.0, 1.0])
     with pytest.raises(ValueError, match="world must be strictly monotonic"):
         axis.world_to_pixel([1.5])
+
+
+def test_tabular_axis_caches_monotonic_inverse_direction() -> None:
+    axis = TabularAxis([0.0, 1.0, 2.0], [0.0, 2.0, 4.0])
+
+    assert axis.world_direction == 1
+    assert axis.world_direction == 1
+    assert getattr(axis, "_world_direction") == 1
 
 
 def test_wcs_uses_independent_tabular_axis_forward_inverse_and_jacobian() -> None:
@@ -203,6 +310,234 @@ def test_tabular_axes_from_fits_metadata_with_indexing_vector() -> None:
     )
 
 
+def test_tabular_axes_from_fits_separable_multidimensional_arrays_with_pv3() -> None:
+    header = {
+        "NAXIS": 2,
+        "CTYPE1": "WAVE-TAB",
+        "CTYPE2": "TIME-TAB",
+        "CUNIT1": "nm",
+        "CUNIT2": "d",
+        "CRPIX1": 1.0,
+        "CRPIX2": 1.0,
+        "CRVAL1": 0.0,
+        "CRVAL2": 0.0,
+        "CDELT1": 1.0,
+        "CDELT2": 1.0,
+        "PS1_1": "WAVE_GRID",
+        "PV1_3": 1,
+        "PS2_1": "TIME_GRID",
+        "PV2_3": 2,
+    }
+    tables = {
+        "WAVE_GRID": torch.tensor(
+            [[400.0, 400.0], [420.0, 420.0], [460.0, 460.0]],
+            dtype=torch.float64,
+        ),
+        "TIME_GRID": torch.tensor(
+            [[10.0, 20.0], [10.0, 20.0], [10.0, 20.0]],
+            dtype=torch.float64,
+        ),
+    }
+
+    axes = tabular_axes_from_fits(header, tables)
+    wcs = WCS(header, tabular_axes=axes)
+    pixels = torch.tensor([[0.5, 0.5], [1.5, 0.25]], dtype=torch.float64)
+    world = wcs.pixel_to_world(pixels, origin=0)
+    pixels_back = wcs.world_to_pixel(world, origin=0)
+
+    assert set(axes) == {1, 2}
+    torch.testing.assert_close(
+        world,
+        torch.tensor([[410.0, 15.0], [440.0, 12.5]], dtype=torch.float64),
+    )
+    torch.testing.assert_close(pixels_back, pixels, atol=1e-12, rtol=0.0)
+
+
+def test_coupled_tabular_wcs_from_fits_accepts_nonseparable_arrays() -> None:
+    header = {
+        "NAXIS": 2,
+        "CTYPE1": "WAVE-TAB",
+        "CTYPE2": "TIME-TAB",
+        "CUNIT1": "nm",
+        "CUNIT2": "d",
+        "PS1_1": "WAVE_GRID",
+        "PV1_3": 1,
+        "PS2_1": "TIME_GRID",
+        "PV2_3": 2,
+    }
+    x = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
+    y = torch.tensor([0.0, 1.0], dtype=torch.float64)
+    xx = x[:, None].expand(3, 2)
+    yy = y[None, :].expand(3, 2)
+    tables = {
+        "WAVE_GRID": 400.0 + 10.0 * xx + 2.0 * yy + xx * yy,
+        "TIME_GRID": 50.0 + 5.0 * yy + xx * yy,
+    }
+
+    lookup = coupled_tabular_wcs_from_fits(header, tables)
+    got = lookup.pixel_to_world(torch.tensor([[1.5, 0.5]], dtype=torch.float64))
+
+    assert lookup.pixel_n_dim == 2
+    assert lookup.world_n_dim == 2
+    assert lookup.names == ("WAVE_GRID", "TIME_GRID")
+    assert lookup.units == ("nm", "d")
+    torch.testing.assert_close(
+        got,
+        torch.tensor([[416.75, 53.25]], dtype=torch.float64),
+    )
+
+
+def test_tabular_axes_from_fits_uses_unique_case_insensitive_column_match() -> None:
+    header = {
+        "NAXIS": 1,
+        "CTYPE1": "WAVE-TAB",
+        "CUNIT1": "nm",
+        "PS1_1": "WAVE",
+        "PS1_2": "PIX",
+    }
+    tables = {
+        "wave": torch.tensor([400.0, 420.0, 510.0], dtype=torch.float64),
+        "pix": torch.tensor([0.0, 2.0, 5.0], dtype=torch.float64),
+    }
+
+    axes = tabular_axes_from_fits(header, tables)
+
+    torch.testing.assert_close(
+        axes[1].pixel_to_world(torch.tensor([1.0, 3.5], dtype=torch.float64)),
+        torch.tensor([410.0, 465.0], dtype=torch.float64),
+    )
+
+
+def test_tabular_axes_from_fits_rejects_ambiguous_case_column_match() -> None:
+    header = {
+        "NAXIS": 1,
+        "CTYPE1": "WAVE-TAB",
+        "PS1_1": "Wave",
+    }
+    tables = {
+        "wave": torch.tensor([400.0, 420.0], dtype=torch.float64),
+        "WAVE": torch.tensor([500.0, 520.0], dtype=torch.float64),
+    }
+
+    with pytest.raises(KeyError, match="ambiguous"):
+        tabular_axes_from_fits(header, tables)
+
+
+def test_wcs_auto_loads_tabular_axes_from_tables_mapping() -> None:
+    header = {
+        "NAXIS": 1,
+        "CTYPE1": "WAVE-TAB",
+        "CUNIT1": "nm",
+        "CRPIX1": 1.0,
+        "CRVAL1": 0.0,
+        "CDELT1": 1.0,
+        "PS1_0": "WCS-TAB",
+        "PS1_1": "WAVE",
+        "PS1_2": "PIX",
+    }
+    tables = {
+        "wcs-tab": {
+            "PIX": torch.tensor([0.0, 2.0, 5.0], dtype=torch.float64),
+            "WAVE": torch.tensor([400.0, 420.0, 510.0], dtype=torch.float64),
+        }
+    }
+
+    wcs = WCS(header, tables=tables)
+    world = wcs.pixel_to_world(torch.tensor([[1.0], [3.5]], dtype=torch.float64))
+
+    assert set(wcs.tabular_axes) == {0}
+    torch.testing.assert_close(
+        world,
+        torch.tensor([[410.0], [465.0]], dtype=torch.float64),
+    )
+
+
+def test_tabular_axes_from_fits_selects_extver_and_extlevel() -> None:
+    header = {
+        "NAXIS": 1,
+        "CTYPE1": "WAVE-TAB",
+        "CUNIT1": "nm",
+        "PS1_0": "WCS-TAB",
+        "PS1_1": "WAVE",
+        "PV1_1": 2,
+        "PV1_2": 3,
+    }
+    tables = [
+        _TabTable(
+            {"EXTNAME": "WCS-TAB", "EXTVER": 1, "EXTLEVEL": 3},
+            {"WAVE": torch.tensor([100.0, 110.0], dtype=torch.float64)},
+        ),
+        _TabTable(
+            {"EXTNAME": "WCS-TAB", "EXTVER": 2, "EXTLEVEL": 3},
+            {"WAVE": torch.tensor([400.0, 420.0], dtype=torch.float64)},
+        ),
+    ]
+
+    axes = tabular_axes_from_fits(header, tables)
+
+    assert set(axes) == {1}
+    torch.testing.assert_close(
+        axes[1].pixel_to_world(torch.tensor([0.0, 1.0], dtype=torch.float64)),
+        torch.tensor([400.0, 420.0], dtype=torch.float64),
+    )
+
+
+def test_tabular_axes_from_fits_versioned_mapping_keys() -> None:
+    header = {
+        "NAXIS": 1,
+        "CTYPE1": "WAVE-TAB",
+        "PS1_0": "WCS-TAB",
+        "PS1_1": "WAVE",
+        "PV1_1": 2,
+        "PV1_2": 1,
+    }
+    tables = {
+        ("WCS-TAB", 1, 1): {"WAVE": torch.tensor([10.0, 20.0])},
+        ("WCS-TAB", 2, 1): {"WAVE": torch.tensor([40.0, 60.0])},
+    }
+
+    axes = tabular_axes_from_fits(header, tables)
+
+    torch.testing.assert_close(
+        axes[1].pixel_to_world(torch.tensor([0.0, 0.5, 1.0])),
+        torch.tensor([40.0, 50.0, 60.0], dtype=torch.float64),
+    )
+
+
+def test_tabular_axes_from_fits_rejects_missing_extver_extlevel() -> None:
+    header = {
+        "NAXIS": 1,
+        "CTYPE1": "WAVE-TAB",
+        "PS1_0": "WCS-TAB",
+        "PS1_1": "WAVE",
+        "PV1_1": 2,
+        "PV1_2": 4,
+    }
+    tables = [
+        _TabTable(
+            {"EXTNAME": "WCS-TAB", "EXTVER": 2, "EXTLEVEL": 3},
+            {"WAVE": torch.tensor([400.0, 420.0], dtype=torch.float64)},
+        )
+    ]
+
+    with pytest.raises(KeyError, match="EXTVER=2 EXTLEVEL=4"):
+        tabular_axes_from_fits(header, tables)
+
+
+def test_wcs_tabular_axis_requires_coordinate_table() -> None:
+    header = {
+        "NAXIS": 1,
+        "CTYPE1": "WAVE-TAB",
+        "CRPIX1": 1.0,
+        "CRVAL1": 0.0,
+        "CDELT1": 1.0,
+        "PS1_1": "WAVE",
+    }
+
+    with pytest.raises(ValueError, match="FITS -TAB axis"):
+        WCS(header)
+
+
 def test_tabular_axes_from_fits_metadata_defaults_to_sample_index() -> None:
     header = {
         "NAXIS": 1,
@@ -228,53 +563,37 @@ def test_tabular_axes_from_fits_metadata_defaults_to_sample_index() -> None:
     )
 
 
-def test_tabular_axes_from_fits_rejects_coupled_table_arrays() -> None:
+def test_tabular_axes_from_fits_requires_pv3_for_multidimensional_arrays() -> None:
     header = {
         "NAXIS": 1,
         "CTYPE1": "WAVE-TAB",
         "PS1_1": "COORD",
     }
-    with pytest.raises(ValueError, match="one independent tabular axis"):
+    with pytest.raises(ValueError, match="requires PVi_3"):
         tabular_axes_from_fits(
             header,
             {"COORD": torch.ones((2, 2), dtype=torch.float64)},
         )
 
 
-def test_wcs_grism_transform() -> None:
-    # Set up a WAVE-GRI grism header
+def test_tabular_axes_from_fits_rejects_nonseparable_multidimensional_arrays() -> None:
     header = {
         "NAXIS": 1,
-        "CTYPE1": "WAVE-GRI",
-        "CUNIT1": "m",
-        "CRPIX1": 1.0,
-        "CRVAL1": 5.0e-7, # reference wavelength = 500 nm
-        "CDELT1": 1.0e-9, # linear step = 1 nm
-        # PV1_j parameters
-        "PV1_0": 300000.0, # G (lines/m)
-        "PV1_1": 1.0,      # m (order)
-        "PV1_2": 15.0,     # alpha (grism angle deg)
-        "PV1_3": 1.5,      # n_r (index)
-        "PV1_4": -1.0e5,   # dn_r (dispersion)
-        "PV1_5": 0.0,      # epsilon (deg)
-        "PV1_6": 10.0,     # theta (deg)
+        "CTYPE1": "WAVE-TAB",
+        "PS1_1": "WAVE",
+        "PV1_3": 1,
     }
-    wcs = WCS(header)
-    assert 0 in wcs.spectral_transforms
-    transform = wcs.spectral_transforms[0]
-    assert transform.is_grism
-    assert not transform.is_log
 
-    # Test roundtrip
-    pixels = torch.tensor([[0.0], [10.0], [-5.0]], dtype=torch.float64)
-    world = wcs.pixel_to_world(pixels, origin=0)
-
-    # Assert world coordinates are physically reasonable (around 500 nm +/- grism dispersion)
-    assert torch.all(world > 0.0)
-    assert torch.all(world < 1e-5)
-
-    pixels_back = wcs.world_to_pixel(world, origin=0)
-    torch.testing.assert_close(pixels_back, pixels)
+    with pytest.raises(ValueError, match="coupled multidimensional coordinate array"):
+        tabular_axes_from_fits(
+            header,
+            {
+                "WAVE": torch.tensor(
+                    [[400.0, 401.0], [420.0, 422.0], [460.0, 464.0]],
+                    dtype=torch.float64,
+                )
+            },
+        )
 
 
 def test_wcs_tabular_fits_lazy_auto_loading(tmp_path) -> None:
@@ -307,7 +626,7 @@ def test_wcs_tabular_fits_lazy_auto_loading(tmp_path) -> None:
             "PIX": torch.tensor([0.0, 2.0, 5.0], dtype=torch.float64),
             "WAVE": torch.tensor([400.0, 420.0, 510.0], dtype=torch.float64),
         },
-        header=table_header
+        header=table_header,
     )
 
     hdul = HDUList([image_hdu, table_hdu])
@@ -329,3 +648,56 @@ def test_wcs_tabular_fits_lazy_auto_loading(tmp_path) -> None:
             torch.tensor([[410.0], [465.0]], dtype=torch.float64),
         )
 
+    root_wcs = torchsky.get_wcs(str(fits_path), hdu=0)
+    assert 0 in root_wcs.tabular_axes
+    torch.testing.assert_close(
+        root_wcs.pixel_to_world(torch.tensor([[1.0], [3.5]], dtype=torch.float64)),
+        torch.tensor([[410.0], [465.0]], dtype=torch.float64),
+    )
+
+
+def test_get_wcs_auto_loads_alternate_key_tabular_axes(tmp_path) -> None:
+    fits_path = tmp_path / "tabular_alt_auto.fits"
+
+    from torchsky.hdu import HDUList, Header, TableHDU, TensorHDU
+
+    image_header = Header()
+    image_header["SIMPLE"] = True
+    image_header["BITPIX"] = -64
+    image_header["NAXIS"] = 1
+    image_header["NAXIS1"] = 10
+    image_header["CTYPE1"] = "WAVE"
+    image_header["CRPIX1"] = 1.0
+    image_header["CRVAL1"] = 0.0
+    image_header["CDELT1"] = 1.0
+    image_header["CTYPE1A"] = "WAVE-TAB"
+    image_header["CUNIT1A"] = "nm"
+    image_header["CRPIX1A"] = 1.0
+    image_header["CRVAL1A"] = 0.0
+    image_header["CDELT1A"] = 1.0
+    image_header["PS1_0A"] = "WCS-TAB"
+    image_header["PS1_1A"] = "WAVE"
+    image_header["PS1_2A"] = "PIX"
+
+    table_header = Header()
+    table_header["XTENSION"] = "BINTABLE"
+    table_header["EXTNAME"] = "WCS-TAB"
+    table_hdu = TableHDU(
+        tensor_dict={
+            "PIX": torch.tensor([0.0, 2.0, 5.0], dtype=torch.float64),
+            "WAVE": torch.tensor([400.0, 420.0, 510.0], dtype=torch.float64),
+        },
+        header=table_header,
+    )
+    HDUList([TensorHDU(data=torch.zeros(10), header=image_header), table_hdu]).write(
+        str(fits_path), overwrite=True
+    )
+
+    wcs = torchsky.get_wcs(str(fits_path), hdu=0, key="A")
+
+    assert wcs.wcs_key == "A"
+    assert 0 in wcs.tabular_axes
+    torch.testing.assert_close(
+        wcs.pixel_to_world(torch.tensor([[1.0], [3.5]], dtype=torch.float64)),
+        torch.tensor([[410.0], [465.0]], dtype=torch.float64),
+    )

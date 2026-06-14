@@ -64,7 +64,9 @@ def project_zenithal(
         y = eta * D2R
         a = pv2[1] if pv2 is not None and pv2.numel() > 1 else 0.0
         b = pv2[2] if pv2 is not None and pv2.numel() > 2 else 0.0
-        if pv2 is not None and bool((torch.as_tensor(a).abs() > 1e-15) | (torch.as_tensor(b).abs() > 1e-15)):
+        if pv2 is not None and bool(
+            (torch.as_tensor(a).abs() > 1e-15) | (torch.as_tensor(b).abs() > 1e-15)
+        ):
             # Slant orthographic SIN (WCS Paper II): solve for z = sin(theta)
             # from the sphere constraint after subtracting the slant terms.
             x0 = x - a

@@ -78,13 +78,15 @@ async def file_tree(request: Request, path: str = "") -> JSONResponse:
 
 def _fits_info_sync(request: Request, path: str, hdu: int) -> JSONResponse:
     """Return FITS image metadata: shape, BITPIX, WCS summary, HDU list."""
-    import torchsky
+    from ...io import open as open_fits
+    from ...io import read_image
+    from ...wcs import WCS
 
     root: Path = request.app.state.root_dir
     abs_path = str(_resolve_path(root, path))
 
     try:
-        hdul = torchsky.open(abs_path)
+        hdul = open_fits(abs_path)
         hdu_list = [
             {
                 "index": i,
@@ -102,7 +104,7 @@ def _fits_info_sync(request: Request, path: str, hdu: int) -> JSONResponse:
         ) from e
 
     try:
-        tensor, header = torchsky.read_image(abs_path, hdu=hdu, return_header=True)
+        tensor, header = read_image(abs_path, hdu=hdu, return_header=True)
         shape = list(tensor.shape)
         bitpix = int(header.get("BITPIX", 0))
     except Exception as e:
@@ -110,7 +112,7 @@ def _fits_info_sync(request: Request, path: str, hdu: int) -> JSONResponse:
 
     wcs_info = {}
     try:
-        wcs = torchsky.WCS(dict(header))
+        wcs = WCS(dict(header))
         wcs_info = {
             "ctype1": wcs.wcs_params.get("CTYPE1", ""),
             "ctype2": wcs.wcs_params.get("CTYPE2", ""),
@@ -150,14 +152,14 @@ def _fits_histogram_sync(
     nbins: int,
 ) -> JSONResponse:
     """Return image histogram, ZScale limits, and dynamic range report."""
-    import torchsky
+    from ...io import read_image
     from ..renderers.image import compute_histogram
 
     root: Path = request.app.state.root_dir
     abs_path = str(_resolve_path(root, path))
 
     try:
-        tensor = torchsky.read_image(abs_path, hdu=hdu)
+        tensor = read_image(abs_path, hdu=hdu)
         flat = tensor.float().flatten()
         if flat.numel() > 1_000_000:
             flat = flat[:: flat.numel() // 1_000_000]
@@ -182,13 +184,13 @@ async def fits_histogram(
 
 def _fits_header_sync(request: Request, path: str, hdu: int) -> JSONResponse:
     """Return the full FITS header as a key-value dict."""
-    import torchsky
+    from ...io import get_header
 
     root: Path = request.app.state.root_dir
     abs_path = str(_resolve_path(root, path))
 
     try:
-        header = torchsky.get_header(abs_path, hdu)
+        header = get_header(abs_path, hdu)
         hdr_dict = {}
         for k, v in header.items():
             if isinstance(v, (int, float, str, bool, type(None))):

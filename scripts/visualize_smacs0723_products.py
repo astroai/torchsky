@@ -108,7 +108,9 @@ def _save_image_grid(
     shown_images = images[:max_panels]
     shown_titles = titles[:max_panels]
     rows, cols = _grid_shape(len(shown_images))
-    fig, axes = plt.subplots(rows, cols, figsize=(4.0 * cols, 4.0 * rows), squeeze=False)
+    fig, axes = plt.subplots(
+        rows, cols, figsize=(4.0 * cols, 4.0 * rows), squeeze=False
+    )
     for ax in axes.ravel():
         ax.axis("off")
     for ax, image, title in zip(axes.ravel(), shown_images, shown_titles, strict=True):
@@ -175,7 +177,9 @@ def _manifest_cutout_paths(
     paths: list[Path] = []
     titles: list[str] = []
     for item in manifest.get("outputs", []):
-        paths.append(_resolve_manifest_path(str(item["path"]), manifest_dir=manifest_dir))
+        paths.append(
+            _resolve_manifest_path(str(item["path"]), manifest_dir=manifest_dir)
+        )
         band = str(item.get("band", "unknown"))
         origin = item.get("crop_origin_xy")
         suffix = f" origin={origin}" if origin is not None else ""

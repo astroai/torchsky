@@ -844,6 +844,415 @@ Start gate: May 8, 2026, `America/Vancouver`
   factories, and decomposition regularizers, while fitting policy and optimizer
   orchestration live in a module named for the job.
 
+- Added executable target binding to `torchsky.scene.ObservationOperatorAdapter`.
+- Routed adapter-bound targets through the existing `build_solver_hooks` /
+  `BoundObservationOperator` substrate so promoted scene workflows can assemble
+  normal-equation probes and run CG solves without reaching into map internals.
+- Kept exact adjoints explicit: solve/probe workflows require an
+  `apply_adjoint` hook or target binder for the concrete operator family.
+- Added scene-facade tests for the exact adjoint relation and a normal-equation
+  recovery solve through the promoted adapter.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_scene_facade.py -q`
+  - Result: `5 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_map_solvers.py tests/test_map_operator_bundle.py -q`
+  - Result: `58 passed, 2 warnings`.
+  - `pixi run preflight-push`
+  - Result: `All checks passed`.
+  - `pixi run typecheck`
+  - Result: `0 errors, 0 warnings, 0 informations`.
+  - `pixi run -e test -- pytest tests/test_docs_integrity.py -q`
+  - Result: `1 passed`.
+- North Star connection: `torchsky.scene` can now describe and execute the same
+  observation law as the lower-level map solver path, which is the first
+  promoted gate for making `ObservationOperatorBundle` the common execution
+  substrate.
+
+- Added `ObservationOperatorAdapter.bind_image_plane_target(...)`, which maps a
+  target-grid tensor scene into an `ImageObservation` grid using the existing
+  image-plane projection helper.
+- Implemented the corresponding exact adjoint as the vector-Jacobian product of
+  that same projection, so the promoted path has a real `A` / `A^T` pair instead
+  of separate approximation code.
+- Added `scene.bind_image_plane_observations_to_target(...)` to assemble a
+  `BoundObservationOperatorSet` for multiple image-plane observations sharing
+  one latent target grid.
+- Routed scalar image-observation weights plus explicit weight/mask/primary-beam
+  maps through the bound operator inverse-noise hook.
+- Added same-grid gates for projection identity, the adjoint dot-product
+  relation, single-observation normal-equation recovery, and summed
+  multi-observation normal equations, including scalar inverse-noise weighting.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_scene_facade.py -q`
+  - Result: `9 passed, 2 warnings`.
+- North Star connection: the promoted scene facade now has an executable
+  image-plane inverse operator over a shared latent target grid, which is the
+  first concrete bridge from classical image stacks toward joint scene solving.
+
+- Added `FieldResidualProduct`, `field_image_residual_product(...)`, and
+  `render_field_residual_product(...)` so rendered residual products keep
+  prediction, target, residual, weight, support, band label, and metrics together.
+- Added `field_quality_scorecard(...)` with by-band aggregates and exact extrema
+  for worst weighted RMSE, lowest residual SNR, lowest support fraction, and
+  lowest effective weight.
+- Kept `render_field_quality(...)` backward-compatible by making scorecards and
+  residual products opt-in with `include_scorecard` and
+  `include_residual_products`.
+- Exported the new helpers through `torchsky.map.field`, compatibility lazy
+  `torchsky.map` access, and concise `torchsky.field` names.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_field_diagnostics.py -q`
+  - Result: `10 passed, 2 warnings`.
+- North Star connection: field fits can now emit support-aware products and
+  band-group diagnostics that are closer to a survey QA artifact than a single
+  pixel-RMSE scalar.
+
+- Added `FieldResidualTile` and `select_field_residual_tiles(...)` to rank
+  fixed-size residual-product tiles by exact weighted residual energy.
+- Exported the selector through `torchsky.map.field`, compatibility lazy
+  `torchsky.map`, and concise `torchsky.field.residual_tiles`.
+- Added a focused gate for residual-energy ranking, tile bounds, band label
+  propagation, and explicit support filtering.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_field_diagnostics.py -q`
+  - Result: `11 passed, 2 warnings`.
+- North Star connection: adaptive local capacity now has a support-aware,
+  survey-scale evidence primitive before adding any sparse basis or feature-tile
+  model parameters.
+
+- Added `torchsky.map.field.adaptive` with `ResidualTileBasisField`,
+  `ResidualTileBasisSpec`, `residual_tile_basis_spec_from_observation(...)`, and
+  `make_residual_tile_basis_field(...)`.
+- The new field wrapper adds bounded signed local Gaussian correction atoms on
+  top of an existing diffuse field. Atom centers/scales come from residual-tile
+  WCS geometry; amplitudes initialize from weighted mean residuals.
+- Exported the adaptive helper through `torchsky.map.field`, lazy `torchsky.map`,
+  and concise `torchsky.field.residual_tile_basis`.
+- Added a focused gate that selects the strongest residual tile, initializes the
+  local correction amplitude, and verifies stronger response at the tile WCS
+  center than away from it.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_field_diagnostics.py -q`
+  - Result: `12 passed, 2 warnings`.
+- North Star connection: the field stack now has its first explicit opt-in
+  local-capacity correction layer, tied to residual evidence and bounded by a
+  caller-specified tile budget.
+
+- Extracted image-plane inverse operator binding into
+  `torchsky.map.operators.inverse`.
+- `bind_image_plane_target_operator(...)` and
+  `bind_image_plane_observations_to_target_operator_set(...)` now own the
+  concrete target-grid scene to image-observation projection, exact VJP adjoint,
+  and inverse-noise hook.
+- Simplified `torchsky.scene.ObservationOperatorAdapter.bind_image_plane_target`
+  and `scene.bind_image_plane_observations_to_target(...)` into facade delegates
+  over the shared map-operator implementation.
+- Added a direct map-operator gate for projection identity and the adjoint
+  dot-product relation, alongside the existing scene facade gates.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_map_operator_bundle.py tests/test_scene_facade.py -q`
+  - Result: `20 passed, 2 warnings`.
+- North Star connection: the executable `A` / `A^T` image-plane inverse path is
+  now a map-operator primitive rather than scene-facade policy.
+
+- Promoted `MOC.from_polygon(...)` to the shared general spherical-polygon
+  pixelizer so simple non-convex footprints no longer use the convex-only
+  HEALPix polygon query path.
+- Added `MOC.from_region(...)` for torchsky spherical regions, native/exact
+  region wrappers, boolean regions, and `PixelizedRegion` inputs, preserving
+  NUNIQ/NESTED semantics and converting RING pixels explicitly at the boundary.
+- Added `MOC.to_pixelized_region(...)` so MOC coverage can round-trip back into
+  the region boolean API at a requested HEALPix resolution.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_sphere_moc.py tests/test_sphere_ecosystem_p3.py tests/test_sphere_polygons.py tests/test_sphere_exact_regions.py -q`
+  - Result: `54 passed, 2 warnings`.
+  - `pixi run preflight-push`
+  - Result: passed.
+  - `pixi run typecheck`
+  - Result: passed.
+  - `pixi run -e test -- pytest tests/test_docs_integrity.py -q`
+  - Result: `1 passed`.
+- North Star connection: exact/native region work now feeds survey-scale MOC,
+  sparse-map, and FITS coverage products directly instead of remaining a
+  separate geometry side surface.
+
+- Reworked `HealSparseMap.from_moc(...)` to build sparse nested pixels directly
+  from `MOC.to_pixelized_region(...)` instead of allocating a dense full-sky
+  boolean mask.
+- Fixed `MOC.to_sparse_map(...)` to pass explicit coverage values, sentinel,
+  dtype, and coverage resolution through `HealSparseMap.from_moc(...)`; small
+  NSIDE maps now default to `nside_coverage=1` instead of an invalid zero.
+- Added focused sparse/MOC tests for direct nested-pixel realization, boolean
+  coverage values, float coverage-map values, and dense readback.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_sphere_moc.py tests/test_sphere_ecosystem_p2.py tests/test_sphere_ecosystem_p3.py tests/test_sphere_sparse.py -q`
+  - Result: `49 passed, 2 warnings`.
+  - `pixi run preflight-push`
+  - Result: passed.
+  - `pixi run typecheck`
+  - Result: passed.
+  - `pixi run -e test -- pytest tests/test_docs_integrity.py -q`
+  - Result: `1 passed`.
+- North Star connection: MOC-to-sparse conversion now scales with covered
+  pixels, not all-sky pixel count, which is the right direction for survey
+  footprints and sparse masks.
+
+- Stopped coercing sparse FITS `VALUE` columns to `float32` on write/read.
+- Added dtype-preserving sparse FITS roundtrip coverage for boolean, integer,
+  and float64 sparse maps while retaining metadata/header roundtrip behavior.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_sphere_sparse.py tests/test_sphere_ecosystem_p2.py::test_sparse_fits_io -q`
+  - Result: `13 passed, 2 warnings`.
+  - `pixi run preflight-push`
+  - Result: passed.
+  - `pixi run typecheck`
+  - Result: passed.
+  - `pixi run -e test -- pytest tests/test_docs_integrity.py -q`
+  - Result: `1 passed`.
+- North Star connection: sparse survey masks and typed coverage products can now
+  survive FITS interchange without value-type degradation, which matters for
+  bool masks, label-like maps, and higher-precision weights.
+
+- Added `key=` support to file-backed `torchsky.get_wcs(...)` and
+  `torchsky.io.get_wcs(...)`, so alternate FITS-WCS versions can be loaded from
+  paths without manually opening the HDU.
+- Extended file-backed TAB autodiscovery to respect the selected alternate WCS
+  key, including `CTYPEiA` and `PSi_jA` metadata.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_wcs_api.py::test_get_wcs_from_file_selects_alternate_key tests/test_wcs_api.py::test_wcs_alternate_key_matches_astropy tests/test_wcs_tabular.py -q`
+  - Result: `23 passed`.
+  - `pixi run preflight-push`
+  - Result: passed.
+  - `pixi run typecheck`
+  - Result: passed.
+  - `pixi run -e test -- pytest tests/test_docs_integrity.py -q`
+  - Result: `1 passed`.
+- North Star connection: alternate WCS and table-driven axes are now usable
+  through the same file-level entry point as primary WCS, which matters for
+  survey products carrying multiple calibrated coordinate solutions.
+
+- Added `MOC.contains_pixels(nside, pixels, nest=True)` for direct HEALPix
+  pixel membership checks in MOC coverage.
+- Routed lon/lat `MOC.contains(...)` through the same range-membership logic so
+  point and pixel containment use one implementation.
+- Fixed `MOC.from_sparse_map(...)` to convert RING-ordered sparse-map pixels to
+  NESTED before NUNIQ construction.
+- Added nested/RING ordering tests plus an explicit lower-resolution rejection
+  gate and a sparse-map RING conversion regression.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_sphere_moc.py tests/test_sphere_sparse.py tests/test_sphere_ecosystem.py tests/test_sphere_ecosystem_p2.py tests/test_sphere_ecosystem_p3.py -q`
+  - Result: `59 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_wcs_api.py::test_get_wcs_from_file_selects_alternate_key tests/test_wcs_tabular.py -q`
+  - Result: `22 passed`.
+  - `pixi run preflight-push`
+  - Result: passed.
+  - `pixi run typecheck`
+  - Result: passed.
+  - `pixi run -e test -- pytest tests/test_docs_integrity.py -q`
+  - Result: `1 passed`.
+- North Star connection: high-NSIDE catalogs and sparse maps can now filter by
+  MOC coverage without converting already-indexed pixels back through
+  coordinates.
+
+- Final full local gate for this continuation:
+  - `pixi run ci-local`
+  - Result: `1688 passed, 59 skipped, 77 warnings`.
+
+- Enforced sorted-unique sparse-map pixels inside `SparseHealpixMap`.
+- `from_pixels(...)`, direct construction, and `update_values_pix(...)` now keep
+  the last value supplied for duplicate pixels, matching update semantics and
+  preserving correct `searchsorted`-based `get_values(...)` lookups.
+- Added single-band, multi-band, and update-overwrite regression tests plus
+  upstream-style valid-pixel/get-values parity checks.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_sphere_sparse.py tests/test_healsparse_upstream.py::test_healsparse_quickstart_make_empty_update_and_valid_pixels_match tests/test_healsparse_upstream.py::test_healsparse_get_values_matches_upstream -q`
+  - Result: `17 passed, 2 warnings`.
+- North Star connection: sparse survey masks and catalogs now have deterministic
+  indexed lookup behavior even when input chunks arrive unsorted or contain
+  repeated pixel updates.
+
+- Fixed `MOC.from_threshold(...)` to select actual sparse-map pixels after
+  thresholding instead of reconstructing global pixels from coverage-map block
+  offsets.
+- Added RING sparse-map conversion in the threshold path so threshold-derived
+  NUNIQ coverage is correct for both sparse-map orderings.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_sphere_moc.py tests/test_sphere_sparse.py tests/test_sphere_ecosystem_p2.py tests/test_sphere_ecosystem_p3.py -q`
+  - Result: `60 passed, 2 warnings`.
+- North Star connection: thresholded survey masks now preserve the exact sparse
+  footprint users supplied, including sparse/non-contiguous chunks.
+
+- Hardened independent FITS `-TAB` table-column lookup.
+- Exact column names still win; when exact lookup fails, coordinate and indexing
+  columns can resolve through a unique case-insensitive match, while ambiguous
+  case variants fail explicitly.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_wcs_tabular.py -q`
+  - Result: `23 passed`.
+- North Star connection: table-driven WCS ingestion is more tolerant of common
+  FITS table naming drift without guessing when a file is ambiguous.
+
+- Extended `MOC.from_ascii(...)` to parse compact inclusive MOC pixel ranges
+  such as `3/5-7` and comma-separated range/list mixtures.
+- Added optional `MOC.to_ascii(compact=True)` so contiguous pixel runs can be
+  emitted as compact ranges while the default output remains unchanged.
+- Added fail-closed coverage for descending ranges.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_sphere_moc.py tests/test_sphere_ecosystem_p3.py -q`
+  - Result: `42 passed, 2 warnings`.
+- North Star connection: compact MOC coverage exchange can ingest common ASCII
+  serializations without requiring callers to expand large pixel lists first.
+
+- Final full local gate after this continuation:
+  - `pixi run ci-local`
+  - Result: `1698 passed, 59 skipped, 91 warnings`.
+
+- Hardened `SparseHealpixMap` coverage hierarchy handling.
+- Direct construction, `from_dense(...)`, `from_pixels(...)`, updates, and FITS reads now
+  materialize a derived `coverage_map` whenever `nside_coverage` is set, and invalid
+  coverage NSIDE values are rejected before parent-index math can become invalid.
+- RING-ordered sparse maps now compute coverage parents by converting sparse pixels
+  through the NESTED hierarchy first, so `coverage_mask` and `coverage_map` match
+  HealSparse-style coverage semantics instead of RING integer-division artifacts.
+- `SparseHealpixMap.ud_grade(...)` now preserves valid coverage hierarchy metadata,
+  retaining the old coverage NSIDE when possible and lowering it to the output NSIDE
+  when degrading below the old coverage resolution.
+- Added native regression tests plus upstream HealSparse parity coverage for
+  coverage-mask ordering and resampled coverage resolution.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_sphere_sparse.py tests/test_healsparse_upstream.py::test_healsparse_coverage_mask_matches_upstream tests/test_healsparse_upstream.py::test_healsparse_ud_grade_coverage_resolution_matches_upstream tests/test_sphere_ecosystem.py::test_sparse_map tests/test_sphere_ecosystem_p2.py::test_sparse_fits_io -q`
+  - Result: `25 passed, 2 warnings`.
+- North Star connection: sparse survey masks now carry stable, ordering-independent
+  hierarchical coverage through construction, mutation, persistence, and resolution
+  changes.
+
+- Final full local gate after this continuation:
+  - Initial `pixi run ci-local` hit a stale TorchInductor precompiled-header cache
+    failure in `tests/test_wcs_parity.py::test_projection_inverse_stack_compiled_matches_astropy[1-HPX]`.
+  - Exact failing test rerun:
+    `pixi run -e test -- pytest 'tests/test_wcs_parity.py::test_projection_inverse_stack_compiled_matches_astropy[1-HPX]' -q`
+  - Result: `1 passed, 14 warnings`.
+  - Clean full rerun: `pixi run ci-local`
+  - Result: `1705 passed, 59 skipped, 77 warnings`.
+
+- Extended FITS `-TAB` parsing beyond independent one-dimensional columns.
+- `tabular_axes_from_fits(...)` now accepts `PVi_3` mappings when a
+  multidimensional coordinate array is exactly separable along the selected table
+  dimension, recovering it into the existing per-axis `TabularAxis` execution
+  path.
+- Multidimensional coordinate arrays without `PVi_3`, or arrays that vary along
+  non-selected dimensions, fail explicitly instead of being flattened or guessed.
+- Added a `WCS` roundtrip gate for two separable multidimensional table axes plus
+  fail-closed tests for missing `PVi_3` and genuinely coupled coordinate arrays.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_wcs_tabular.py -q`
+  - Result: `24 passed`.
+- North Star connection: table-driven cube axes can now ingest a wider class of
+  realistic FITS lookup tables while preserving exact semantics and leaving truly
+  coupled interpolation as an explicit future substrate.
+
+- Final full local gate after this continuation:
+  - `pixi run ci-local`
+  - Result: `1706 passed, 59 skipped, 77 warnings`.
+
+- Added the first torch-native coupled multidimensional FITS `-TAB` lookup
+  substrate.
+- `CoupledTabularLookupWCS` performs multilinear forward interpolation over
+  explicit table-grid pixel axes, supports autograd through the local cell
+  weights, exposes metadata names/units, and intentionally fails closed for the
+  general inverse instead of guessing one.
+- Added `coupled_tabular_wcs_from_fits(...)` to build that forward substrate from
+  nonseparable multidimensional `-TAB` coordinate arrays with `PVi_3` mappings,
+  including finite/shape validation and default table-index axes.
+- Added focused gates for multilinear interpolation, clamp/NaN bounds behavior,
+  autograd slope propagation, inverse fail-closed behavior, and FITS helper
+  construction from genuinely nonseparable coordinate arrays.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_wcs_tabular.py -q`
+  - Result: `27 passed`.
+  - `pixi run preflight-push`
+  - Result: passed.
+- North Star connection: torchsky now has a native forward engine for coupled
+  table-coordinate cubes, which is the substrate needed before adding honest
+  inverse solving and main-`WCS` integration for arbitrary multidimensional
+  `-TAB`.
+
+- Final full local gate after this continuation:
+  - `pixi run ci-local`
+  - Result: `1709 passed, 59 skipped, 63 warnings`.
+  - Note: pytest exited cleanly after printing existing nanobind shutdown leak
+    diagnostics for `FITSFile`/`TableReader`.
+
+- Autonomous review closeout hardened consistency and edge cases across the
+  current roadmap changes.
+- Table-WCS fixes now support decreasing pixel grids for independent axes,
+  normalize descending coupled-grid axes, reject complex lookup values, and keep
+  coupled `-TAB` inverse behavior fail-closed.
+- Sparse-map fixes preserve metadata through `ud_grade(...)`, move pixels to the
+  value device before canonicalization, build coverage maps deterministically
+  without duplicate scatter ordering, and cover multiband duplicate updates.
+- Image-plane inverse binding now imports through domain modules, caches
+  inverse-noise maps by device and image shape, rejects non-image noise inputs,
+  clamps scalar inverse weights to nonnegative values, and checks adjoint input
+  shape before autograd can broadcast.
+- Field and spectral review fixes aligned support fractions with positive
+  effective weights, fixed middle/last spectral-axis y/x indexing in cube
+  spectrum extraction and plotting, and added a spectral-cache clear regression.
+- Root and map facades remain lean in `__all__` while compatibility aliases are
+  still lazily resolvable through `__getattr__` and `dir(...)`.
+- Tests run:
+  - `pixi run -e test -- pytest tests/test_wcs_tabular.py -q`
+  - Result: `29 passed`.
+  - `pixi run -e test -- pytest tests/test_sphere_moc.py tests/test_sphere_sparse.py tests/test_healsparse_upstream.py::test_healsparse_ud_grade_coverage_resolution_matches_upstream tests/test_healsparse_upstream.py::test_healsparse_geom_circle_coverage_matches_upstream_sparse_mask -q`
+  - Result: `56 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_spectral.py::TestDataCube::test_spectrum_extraction tests/test_spectral.py::TestDataCube::test_spectrum_extraction_preserves_yx_for_middle_spectral_axis tests/test_spectral.py::TestDataCube::test_spectrum_extraction_preserves_yx_for_last_spectral_axis tests/test_viz_plots.py tests/test_field_diagnostics.py::test_field_quality_scorecard_groups_bands_and_tracks_extrema tests/test_field_diagnostics.py::test_select_field_residual_tiles_ranks_weighted_residual_energy tests/test_field_diagnostics.py::test_residual_tile_basis_field_initializes_local_capacity_from_tiles -q`
+  - Result: `11 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_api.py::test_top_level_namespaces_expose_phase1_modules tests/test_api_surfaces.py tests/test_cold_import.py -q`
+  - Result: `8 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_map_operator_bundle.py::test_image_plane_target_operator_binder_exposes_exact_adjoint tests/test_map_operator_bundle.py::test_image_plane_target_operator_noise_is_shape_checked_and_nonnegative -q`
+  - Result: `2 passed, 2 warnings`.
+  - `pixi run -e test -- pytest tests/test_sphere_spectral.py::test_clear_spectral_caches_resets_lookup_state -q`
+  - Result: `1 passed, 2 warnings`.
+
+- Final full local gate after this autonomous review:
+  - `pixi run ci-local`
+  - Result: `1718 passed, 59 skipped, 77 warnings`.
+  - Note: pytest exited cleanly after printing existing nanobind shutdown leak
+    diagnostics for `FITSFile`.
+
+- Extended all-code review pass after the initial closeout.
+- Lean-import cleanup now routes dataset, spectral, frame, map I/O, CLI, sphere
+  FITS helpers, and viz request handlers through concrete domain modules instead
+  of package-root lazy dispatch where practical, leaving table/HDU internals
+  unchanged unless they expose a concrete issue.
+- Spherical pairwise distances now use the same stable `atan2(cross, dot)`
+  formulation as scalar great-circle distances, preserving tiny separations that
+  `acos(dot)` can round to zero.
+- High-level spectral helpers now normalize FREQ units before wavelength
+  conversion, use exact speed-of-light constants, compare spectral type/unit
+  names case-insensitively, fail closed for missing FITS `-TAB` coordinate
+  tables, and resample `Spectrum1D` with explicit linear interpolation plus
+  inverse-variance propagation instead of nearest-neighbor overwrite.
+- ML transforms now use both `AsinhStretch` parameters, avoid cached CPU tensor
+  constants in `LogStretch`, handle explicit scalar `Normalize(...)` values on
+  the input device/dtype, and replace percentile `ZScale` with iterative
+  sigma-clipped zscale limits.
+- `IterableFITSDataset` now consumes real JSON or newline manifests from local,
+  `file://`, `http://`, or `https://` indexes instead of fabricating placeholder
+  shard file names.
+- Focused tests run:
+  - `pixi run -e test -- pytest tests/test_spectral.py tests/test_spectral_nonuniform.py tests/test_transforms.py tests/test_datasets.py tests/test_dataloader.py tests/test_sphere_core.py tests/test_sphere_moc.py tests/test_sphere_sparse.py -q`
+  - Result: `147 passed, 1 skipped, 2 warnings`.
+- Final full local gate after this extended review:
+  - First `pixi run ci-local` found one stale frame test mock after the direct
+    `torchsky.io.write` import cleanup; the targeted rerun
+    `pixi run -e test -- pytest tests/test_frame_stypes.py::test_write_tensor_frame_stypes -q`
+    passed after updating the mock.
+  - Clean full rerun: `pixi run ci-local`
+  - Result: `1721 passed, 59 skipped, 63 warnings`.
+  - Note: pytest exited cleanly after printing existing nanobind shutdown leak
+    diagnostics for `FITSFile`.
+
 ## Work Queue Snapshot
 
 - [x] A0: Establish branch, baseline, and safety checks.

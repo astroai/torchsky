@@ -11,15 +11,12 @@ from typing import Any, TypeAlias
 
 from torch import Tensor, nn
 
-from ..map import (
+from ..map.field import (
     ForwardContext,
-    ImageObservation,
     KinematicState,
-    MapBandpassSpec,
-    MapProductResult,
-    MapProductSpec,
     PSFSpec,
     SurveyDataTerm,
+    FieldObservation,
     field_observations_from_bin_centers,
     field_observations_from_bin_edges,
     field_observations_from_ifu_cube,
@@ -32,11 +29,16 @@ from ..map import (
     render_field_healpix,
     render_field_observation,
     render_field_observation_distribution,
-    render_field_product,
     scale_observation_for_rest_frame_scene,
+)
+from ..map.image_plane import ImageObservation
+from ..map.product import (
+    MapBandpassSpec,
+    MapProductResult,
+    MapProductSpec,
+    render_field_product,
     stack_map_product,
 )
-from ..map.field import FieldObservation
 from ..map.scenes import (
     ContinuousFieldModel,
     DiscreteTargetImage,
@@ -52,6 +54,7 @@ from .operators import (
     ObservationOperatorAdapter,
     ObservationOperatorBundle,
     ObservationOperatorBundleProtocol,
+    bind_image_plane_observations_to_target,
     operator_adapter_for_observation,
     operator_bundle_for_observation,
 )
@@ -117,7 +120,11 @@ def product_spec(
     )
 
 
-def render(scene: SceneRepresentation | nn.Module | Tensor, target: TargetRenderSpec, **kwargs: Any) -> Tensor:
+def render(
+    scene: SceneRepresentation | nn.Module | Tensor,
+    target: TargetRenderSpec,
+    **kwargs: Any,
+) -> Tensor:
     """Render any supported scene representation to a target grid."""
     return as_scene_representation(scene).render_to_target(target, **kwargs)
 
@@ -157,6 +164,7 @@ __all__ = [
     "Target",
     "TargetRenderSpec",
     "as_scene_representation",
+    "bind_image_plane_observations_to_target",
     "field_observation",
     "field_observations_from_bin_centers",
     "field_observations_from_bin_edges",

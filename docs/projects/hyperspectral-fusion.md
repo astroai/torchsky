@@ -250,11 +250,12 @@ residuals structured, and did the model invent artifacts at tile boundaries?
 For your own scripts or notebooks, the classical baseline is:
 
 ```python
-from torchsky.map import ImageObservation, coadd_image_plane_cube
+from torchsky import scene
+from torchsky.map import coadd_image_plane_cube
 from torchsky.spectral import write_cube_fits
 
 observations = [
-    ImageObservation(
+    scene.image_observation(
         path="data/smacs0723_minicutout/smacs0723_F090W_cutout_256.fits",
         wavelength=9000.0,
         spectral_min=8000.0,
@@ -301,11 +302,11 @@ spectral metadata for that band:
 ```python
 import torch
 import torchsky
-from torchsky.map import FieldObservation
+from torchsky.field import Observation
 
 def field_observation_from_cutout(path, wavelength, spectral_min, spectral_max, band):
     image, header = torchsky.read(path, return_header=True)
-    return FieldObservation(
+    return Observation(
         image=torch.as_tensor(image, dtype=torch.float32),
         header=dict(header),
         wavelength=wavelength,
@@ -373,6 +374,9 @@ For early work, prefer boring experiments:
 - Fit two or four bands before trying all available data.
 - Use small crops and CPU first; move to GPU only after the loss and plots make sense.
 - Plot `observation.image`, `render_field_observation(model, observation)`, and the residual.
+- Track `field.quality(model, field_observations)["aggregate"]`; weighted RMSE,
+  residual SNR, sharpness ratio, and `residual_rmse_scale_*` are more useful
+  than loss alone.
 - Change one thing at a time: model size, learning rate, spectral samples, or pose.
 - Save quicklooks for every important run. A loss curve without images is not enough.
 
@@ -389,21 +393,28 @@ slightly to better align with the others while the neural field is being fit.
 Once the fixed-WCS INR works, add pose residuals:
 
 ```python
-from torchsky.map import create_exposure_poses, fit_field_model
+from torchsky.field import fit
 
-poses = create_exposure_poses(field_observations, anchor_first=True)
-result = fit_field_model(
+result = fit(
     field_observations,
     model,
-    observation_exposure_poses=poses,
+    refine_poses=True,
     steps=500,
     lr=5e-3,
 )
 ```
 
-`anchor_first=True` freezes the first pose to fix the global astrometric gauge.
-Do not judge bundle adjustment from a single exposure; use at least two
-overlapping observations and compare fixed-WCS and learned-pose residuals.
+`refine_poses=True` creates one `ExposurePose` per observation, freezes the first
+pose by default to fix the global astrometric gauge, and returns the tuple on
+`result.exposure_poses`. For custom anchoring, create poses manually with
+`create_exposure_poses(...)` and pass `observation_exposure_poses=...`.
+Do not judge bundle adjustment from a single exposure; use at least two overlapping
+observations and compare fixed-WCS and learned-pose residuals.
+
+If learned-pose fits remain visually too soft but residuals are data-consistent,
+try a small `gradient_residual_weight` in `fit_field_model(...)`. This compares
+finite differences of the rendered observation to finite differences of the data,
+so it encourages edge fidelity under the same PSF/bandpass forward model.
 
 The "gauge" point matters: if every exposure is allowed to move, the model can
 shift the whole sky and still fit the data. Freezing one reference pose defines

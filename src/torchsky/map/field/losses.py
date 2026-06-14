@@ -41,4 +41,62 @@ def _field_residual_loss(
         return 0.5 * (torch.exp(-clipped) * (residual * residual) + clipped)
     raise ValueError(f"unsupported field loss kind {loss_kind!r}")
 
-__all__ = ["_field_residual_loss"]
+
+def _field_gradient_residual_weighted_loss(
+    prediction: Tensor,
+    target: Tensor,
+    weight: Tensor,
+    valid: Tensor,
+    *,
+    loss_kind: FieldLossKind,
+    charbonnier_eps: float,
+    huber_delta: float,
+) -> tuple[Tensor, Tensor]:
+    """Return weighted image-gradient residual numerator and denominator."""
+    if prediction.ndim != 2 or target.ndim != 2:
+        raise ValueError("gradient residual loss expects 2D prediction and target")
+    if weight.shape != prediction.shape or valid.shape != prediction.shape:
+        raise ValueError("weight and valid masks must match prediction shape")
+    gradient_loss_kind: FieldLossKind = (
+        "mse" if loss_kind == "gaussian_nll" else loss_kind
+    )
+
+    grad_num = torch.zeros((), device=prediction.device, dtype=prediction.dtype)
+    grad_den = torch.zeros((), device=prediction.device, dtype=prediction.dtype)
+
+    if prediction.shape[-1] > 1:
+        pred_dx = prediction[:, 1:] - prediction[:, :-1]
+        target_dx = target[:, 1:] - target[:, :-1]
+        valid_dx = valid[:, 1:] & valid[:, :-1]
+        weight_dx = 0.5 * (weight[:, 1:] + weight[:, :-1])
+        weight_dx = torch.where(valid_dx, weight_dx, torch.zeros_like(weight_dx))
+        loss_dx = _field_residual_loss(
+            pred_dx - target_dx,
+            loss_kind=gradient_loss_kind,
+            charbonnier_eps=charbonnier_eps,
+            huber_delta=huber_delta,
+            logvar=None,
+        )
+        grad_num = grad_num + torch.sum(weight_dx * loss_dx)
+        grad_den = grad_den + weight_dx.sum()
+
+    if prediction.shape[-2] > 1:
+        pred_dy = prediction[1:, :] - prediction[:-1, :]
+        target_dy = target[1:, :] - target[:-1, :]
+        valid_dy = valid[1:, :] & valid[:-1, :]
+        weight_dy = 0.5 * (weight[1:, :] + weight[:-1, :])
+        weight_dy = torch.where(valid_dy, weight_dy, torch.zeros_like(weight_dy))
+        loss_dy = _field_residual_loss(
+            pred_dy - target_dy,
+            loss_kind=gradient_loss_kind,
+            charbonnier_eps=charbonnier_eps,
+            huber_delta=huber_delta,
+            logvar=None,
+        )
+        grad_num = grad_num + torch.sum(weight_dy * loss_dy)
+        grad_den = grad_den + weight_dy.sum()
+
+    return grad_num, grad_den
+
+
+__all__ = ["_field_gradient_residual_weighted_loss", "_field_residual_loss"]

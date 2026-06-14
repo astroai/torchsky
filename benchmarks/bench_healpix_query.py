@@ -80,7 +80,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--nside", type=int, default=1024)
     parser.add_argument("--runs", type=int, default=5)
-    parser.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
+    parser.add_argument(
+        "--device", choices=["auto", "cpu", "cuda", "mps"], default="auto"
+    )
     parser.add_argument(
         "--json-out", type=Path, default=DEFAULT_OUTPUT_DIR / "healpix_query.json"
     )
@@ -123,9 +125,7 @@ def main() -> int:
         return query_polygon(nside, poly_vertices, nest=True, lonlat=True)
 
     # healpy query_polygon uses vectors
-    poly_hp_vecs = [
-        healpy.ang2vec(v[0], v[1], lonlat=True) for v in poly_vertices_np
-    ]
+    poly_hp_vecs = [healpy.ang2vec(v[0], v[1], lonlat=True) for v in poly_vertices_np]
 
     def poly_hp():
         return healpy.query_polygon(nside, poly_hp_vecs, nest=True)
@@ -136,7 +136,9 @@ def main() -> int:
     ]
 
     rows = []
-    print(f"{'operation':>22s} {'ms (torchsky)':>15s} {'ms (healpy)':>12s} {'ratio':>8s} {'mismatches':>10s}")
+    print(
+        f"{'operation':>22s} {'ms (torchsky)':>15s} {'ms (healpy)':>12s} {'ratio':>8s} {'mismatches':>10s}"
+    )
     for name, tf_fn, hp_fn in ops:
         t_tf = _time_many(tf_fn, runs=args.runs, sync_device=device)
         t_hp = _time_many(hp_fn, runs=args.runs, sync_device=None)
@@ -144,20 +146,26 @@ def main() -> int:
         # Correctness check
         res_tf = _to_numpy(tf_fn())
         res_hp = _to_numpy(hp_fn())
-        mismatches = int(np.sum(~np.isin(res_tf, res_hp)) + np.sum(~np.isin(res_hp, res_tf)))
+        mismatches = int(
+            np.sum(~np.isin(res_tf, res_hp)) + np.sum(~np.isin(res_hp, res_tf))
+        )
 
         ratio = t_hp / t_tf
-        print(f"{name:>22s} {t_tf*1000:15.3f} {t_hp*1000:12.3f} {ratio:8.3f} {mismatches:10d}")
+        print(
+            f"{name:>22s} {t_tf * 1000:15.3f} {t_hp * 1000:12.3f} {ratio:8.3f} {mismatches:10d}"
+        )
 
-        rows.append({
-            "operation": name,
-            "nside": nside,
-            "device": device.type,
-            "time_ms_torchsky": t_tf * 1000,
-            "time_ms_healpy": t_hp * 1000,
-            "ratio_torchsky_vs_healpy": ratio,
-            "mismatches": mismatches
-        })
+        rows.append(
+            {
+                "operation": name,
+                "nside": nside,
+                "device": device.type,
+                "time_ms_torchsky": t_tf * 1000,
+                "time_ms_healpy": t_hp * 1000,
+                "ratio_torchsky_vs_healpy": ratio,
+                "mismatches": mismatches,
+            }
+        )
 
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(rows, indent=2), encoding="utf-8")

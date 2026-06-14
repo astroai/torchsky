@@ -4,7 +4,13 @@ from astropy.coordinates import FK5, Galactic, ICRS, SkyCoord
 from astropy.time import Time
 import astropy.units as u
 
-from torchsky.wcs import WCS, convert_celestial, galactic_to_icrs, icrs_to_galactic, precess_fk5
+from torchsky.wcs import (
+    WCS,
+    convert_celestial,
+    galactic_to_icrs,
+    icrs_to_galactic,
+    precess_fk5,
+)
 
 
 def _wrap_delta(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -24,7 +30,9 @@ def test_icrs_galactic_matches_astropy() -> None:
     np.testing.assert_allclose(b_t.numpy(), sky.galactic.b.deg, atol=2e-5)
 
     ra_back, dec_back = galactic_to_icrs(l_t, b_t)
-    np.testing.assert_allclose(_wrap_delta(ra_back.numpy(), ra.numpy()), 0.0, atol=2e-10)
+    np.testing.assert_allclose(
+        _wrap_delta(ra_back.numpy(), ra.numpy()), 0.0, atol=2e-10
+    )
     np.testing.assert_allclose(dec_back.numpy(), dec.numpy(), atol=2e-10)
 
 
@@ -92,7 +100,5 @@ def test_wcs_celestial_frame_metadata_and_helpers() -> None:
         frame=FK5(equinox=Time("J2050")),
     ).transform_to(FK5(equinox=Time("J2000")))
 
-    np.testing.assert_allclose(
-        _wrap_delta(ra_2000.numpy(), exp.ra.deg), 0.0, atol=5e-5
-    )
+    np.testing.assert_allclose(_wrap_delta(ra_2000.numpy(), exp.ra.deg), 0.0, atol=5e-5)
     np.testing.assert_allclose(dec_2000.numpy(), exp.dec.deg, atol=5e-5)

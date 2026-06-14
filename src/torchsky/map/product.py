@@ -12,9 +12,9 @@ import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
 
-from .. import WCS
 from ..sphere.moc import MOC
 from ..spectral import SpectralAxis
+from ..wcs import WCS
 from .image_plane import (
     BandMetadataTable,
     ImageObservation,

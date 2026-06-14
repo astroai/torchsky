@@ -24,7 +24,7 @@ to keep ingestion tensor-native, chunkable, and compatible with PyTorch
 ### Build An Image Dataset
 
 ```python
-from torchsky import FITSDataset
+from torchsky.datasets import FITSDataset
 from torchsky.transforms import Compose, RandomCrop, ZScale
 
 dataset = FITSDataset(
@@ -38,9 +38,9 @@ dataset = FITSDataset(
 ### Create A DataLoader
 
 ```python
-import torchsky
+from torchsky.datasets import create_fits_dataloader
 
-loader = torchsky.create_fits_dataloader(
+loader = create_fits_dataloader(
     file_paths,
     hdu="auto",
     batch_size=32,
@@ -51,11 +51,10 @@ loader = torchsky.create_fits_dataloader(
 ### Tune Runtime Caches
 
 ```python
-import torchsky
+from torchsky import cache
 
-torchsky.configure_for_environment()
-stats = torchsky.get_cache_stats()
-torchsky.clear_file_cache()
+stats = cache.stats()
+cache.clear()
 ```
 
 ## API Surface
@@ -65,10 +64,10 @@ Datasets and loaders:
 - `FITSDataset`
 - `IterableFITSDataset`
 - `TableChunkDataset`
-- `create_dataloader(...)`
-- `create_fits_dataloader(...)`
-- `create_streaming_dataloader(...)`
-- `create_table_dataloader(...)`
+- `torchsky.datasets.create_dataloader(...)`
+- `torchsky.datasets.create_fits_dataloader(...)`
+- `torchsky.datasets.create_streaming_dataloader(...)`
+- `torchsky.datasets.create_table_dataloader(...)`
 
 Transforms:
 
@@ -82,11 +81,13 @@ Transforms:
 
 Runtime:
 
-- `configure_for_environment(...)`
-- `get_cache_stats(...)`, `get_cache_performance(...)`, `clear_cache(...)`
-- `clear_file_cache(...)` with knobs for data, handles, metadata, HDU types,
+- `torchsky.cache.stats(...)`
+- `torchsky.cache.clear(...)`
+- `torchsky.io.get_cache_performance(...)`
+- `torchsky.io.clear_file_cache(...)` with knobs for data, handles, metadata, HDU types,
   stats, and C++ cache state
-- `configure_buffers(...)`, `get_buffer_stats(...)`, `clear_buffers(...)`
+- `torchsky.buffer.configure_buffers(...)`,
+  `torchsky.buffer.get_buffer_stats(...)`, `torchsky.buffer.clear_buffers(...)`
 
 ## Examples
 

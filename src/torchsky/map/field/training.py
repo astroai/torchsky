@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import copy
 import math
+import time
 from collections.abc import Sequence
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -12,7 +14,7 @@ from torch import Tensor
 
 from ...device import default_compute_device, resolve_fit_device
 
-from ..exposure_pose import ExposurePose
+from ..exposure_pose import ExposurePose, create_exposure_poses
 
 from .bandpass import (
     bandpass_bounds as _bandpass_bounds,
@@ -39,7 +41,7 @@ from .core import (
     field_component_centroid_anchor_loss,
     make_field_component_decomposition,
 )
-from .losses import _field_residual_loss
+from .losses import _field_gradient_residual_weighted_loss, _field_residual_loss
 from .noise import _synthetic_noise_target
 from .observation_ops import (
     avg_pool_map as _avg_pool_map,
@@ -51,6 +53,7 @@ from .observation_ops import (
     sample_observation_pixels as _sample_observation_pixels,
     sample_patch_origin as _sample_patch_origin,
 )
+from .quality import _aggregate_quality_metrics, field_image_quality_metrics
 from .rendering import (
     render_field_observation,
     render_field_observation_distribution,
@@ -192,6 +195,7 @@ def _noise_pretrain_field_model(
     for module, state_dict in zip(head_modules, preserved_heads, strict=True):
         module.load_state_dict(state_dict)
 
+
 def fit_field_component_decomposition(
     observations: Sequence[FieldObservation],
     *,
@@ -245,6 +249,264 @@ def fit_field_component_decomposition(
     )
 
 
+def compute_field_fit_diagnostics(
+    model: nn.Module,
+    observations: Sequence[FieldObservation],
+    obs_forward_ctx: Sequence[ForwardContext | None],
+    obs_exposure_poses: Sequence[ExposurePose | None],
+    num_spectral_samples: int,
+    fit_duration_sec: float,
+    steps: int,
+    total_pixels: int,
+    max_mem: int,
+) -> dict[str, Any]:
+    device = next((p.device for p in model.parameters()), torch.device("cpu"))
+    domain = getattr(model, "domain", None)
+
+    grad_corr = 0.0
+    leakage_index = 0.0
+
+    if domain is not None:
+        try:
+            n_samples = 512
+            gen = torch.Generator(device=device)
+            gen.manual_seed(1234)
+
+            dra = (
+                torch.rand(
+                    n_samples,
+                    generator=gen,
+                    dtype=torch.float64,
+                    device=device,
+                )
+                - 0.5
+            ) * (2.0 * float(domain.spatial_scale_deg))
+            ddec = (
+                torch.rand(
+                    n_samples,
+                    generator=gen,
+                    dtype=torch.float64,
+                    device=device,
+                )
+                - 0.5
+            ) * (2.0 * float(domain.spatial_scale_deg))
+            ra = (
+                torch.remainder(float(domain.center_ra_deg) + dra, 360.0)
+                .to(dtype=torch.float32)
+                .requires_grad_(True)
+            )
+            dec = (
+                torch.clamp(
+                    float(domain.center_dec_deg) + ddec,
+                    min=-90.0,
+                    max=90.0,
+                )
+                .to(dtype=torch.float32)
+                .requires_grad_(True)
+            )
+
+            lam_offset = (
+                torch.rand(
+                    n_samples,
+                    generator=gen,
+                    dtype=torch.float64,
+                    device=device,
+                )
+                - 0.5
+            ) * (2.0 * float(domain.wavelength_scale))
+            wavelength = (
+                (float(domain.wavelength_center) + lam_offset)
+                .to(dtype=torch.float32)
+                .requires_grad_(True)
+            )
+
+            with torch.enable_grad():
+                pred = model(ra, dec, wavelength)
+                grad_outputs = torch.ones_like(pred)
+                grads = torch.autograd.grad(
+                    pred,
+                    [ra, dec, wavelength],
+                    grad_outputs=grad_outputs,
+                    create_graph=True,
+                    retain_graph=True,
+                    allow_unused=True,
+                )
+
+                grad_ra, grad_dec, grad_lam = grads
+                if (
+                    grad_ra is not None
+                    and grad_dec is not None
+                    and grad_lam is not None
+                ):
+                    grad_spatial_mag = torch.sqrt(grad_ra**2 + grad_dec**2 + 1.0e-8)
+
+                    mx = grad_spatial_mag.mean()
+                    my = grad_lam.mean()
+                    xm, ym = grad_spatial_mag - mx, grad_lam - my
+                    r_num = torch.sum(xm * ym)
+                    r_den = torch.sqrt(torch.sum(xm**2) * torch.sum(ym**2) + 1.0e-8)
+                    grad_corr = float(r_num.detach() / r_den.detach())
+
+                    try:
+                        cross_grads = torch.autograd.grad(
+                            grad_lam,
+                            [ra, dec],
+                            grad_outputs=torch.ones_like(grad_lam),
+                            retain_graph=True,
+                            allow_unused=True,
+                        )
+                        grad_lam_ra, grad_lam_dec = cross_grads
+                        if grad_lam_ra is not None and grad_lam_dec is not None:
+                            cross_deriv_mean = 0.5 * (
+                                grad_lam_ra.abs().mean() + grad_lam_dec.abs().mean()
+                            )
+                            lam_deriv_mean = grad_lam.abs().mean()
+                            leakage_index = float(
+                                cross_deriv_mean.detach()
+                                / (lam_deriv_mean.detach() + 1.0e-8)
+                            )
+                    except Exception:
+                        leakage_index = 0.0
+        except Exception:
+            grad_corr = 0.0
+            leakage_index = 0.0
+
+    reduced_chi2s = []
+    psf_residual_correlations = []
+    quality_metrics: list[dict[str, float]] = []
+
+    support_uncs = []
+    outer_uncs = []
+
+    from ..operators.bundle import field_observation_operator_bundle
+
+    with torch.no_grad():
+        for obs_idx, observation in enumerate(observations):
+            try:
+                fctx = obs_forward_ctx[obs_idx]
+                pose = obs_exposure_poses[obs_idx]
+
+                pred = render_field_observation(
+                    model,
+                    observation,
+                    num_spectral_samples=num_spectral_samples,
+                    forward_context=fctx,
+                    exposure_pose=pose,
+                )
+
+                obs_img = observation.image.to(device=pred.device, dtype=pred.dtype)
+                weight = (
+                    observation.weight.to(device=pred.device, dtype=pred.dtype)
+                    if observation.weight is not None
+                    else torch.ones_like(pred)
+                )
+
+                if observation.mask is not None:
+                    mask = observation.mask.to(device=pred.device) > 0
+                else:
+                    mask = torch.ones_like(pred, dtype=torch.bool)
+
+                residual = pred - obs_img
+                valid_res = residual[mask]
+                valid_weight = weight[mask]
+
+                if valid_res.numel() > 0:
+                    weighted_sq_res = (valid_res**2) * valid_weight
+                    obs_chi2 = float(weighted_sq_res.mean())
+                    reduced_chi2s.append(obs_chi2)
+                    quality_metrics.append(
+                        field_image_quality_metrics(
+                            pred,
+                            observation.image,
+                            weight=observation.weight,
+                            mask=observation.mask,
+                        )
+                    )
+
+                    operator_bundle = field_observation_operator_bundle(observation)
+                    if operator_bundle.psf is not None:
+                        from ..operators.psf import apply_psf_spec
+
+                        res_convolved = apply_psf_spec(residual, observation.psf_spec)
+                        valid_res_conv = res_convolved[mask]
+
+                        mx = valid_res.mean()
+                        my = valid_res_conv.mean()
+                        xm, ym = valid_res - mx, valid_res_conv - my
+                        r_num = torch.sum(xm * ym)
+                        r_den = torch.sqrt(torch.sum(xm**2) * torch.sum(ym**2) + 1.0e-8)
+                        psf_corr = float(r_num / r_den)
+                        psf_residual_correlations.append(psf_corr)
+
+                forward_distribution = getattr(model, "forward_distribution", None)
+                if callable(forward_distribution):
+                    _pred_mean, pred_logvar = render_field_observation_distribution(
+                        model,
+                        observation,
+                        num_spectral_samples=num_spectral_samples,
+                        forward_context=fctx,
+                        exposure_pose=pose,
+                    )
+                    stddev = torch.sqrt(torch.clamp(torch.exp(pred_logvar), min=1.0e-8))
+
+                    if observation.mask is not None:
+                        mask = observation.mask.to(device=stddev.device) > 0
+                        support_unc = stddev[mask]
+                        outer_unc = stddev[~mask]
+                        if support_unc.numel() > 0:
+                            support_uncs.append(float(support_unc.mean()))
+                        if outer_unc.numel() > 0:
+                            outer_uncs.append(float(outer_unc.mean()))
+                    else:
+                        support_uncs.append(float(stddev.mean()))
+            except Exception:
+                pass
+
+    mean_reduced_chi2 = (
+        sum(reduced_chi2s) / len(reduced_chi2s) if reduced_chi2s else 1.0
+    )
+    mean_psf_residual_corr = (
+        sum(psf_residual_correlations) / len(psf_residual_correlations)
+        if psf_residual_correlations
+        else 0.0
+    )
+
+    support_mean_uncertainty = (
+        sum(support_uncs) / len(support_uncs) if support_uncs else 0.0
+    )
+    outer_mean_uncertainty = sum(outer_uncs) / len(outer_uncs) if outer_uncs else 0.0
+    uncertainty_ratio = (
+        outer_mean_uncertainty / (support_mean_uncertainty + 1.0e-8)
+        if support_mean_uncertainty > 0.0
+        else 1.0
+    )
+    quality_summary = _aggregate_quality_metrics(quality_metrics)
+
+    step_duration_mean_ms = (fit_duration_sec / steps * 1000.0) if steps > 0 else 0.0
+    throughput_pixels_per_sec = (
+        total_pixels / fit_duration_sec if fit_duration_sec > 0.0 else 0.0
+    )
+
+    return {
+        "spatial_spectral_leakage": leakage_index,
+        "gradient_correlation": grad_corr,
+        "reduced_chi2": mean_reduced_chi2,
+        "psf_alignment": mean_psf_residual_corr,
+        "quality_metrics": quality_summary,
+        "uncertainty_stats": {
+            "support_mean_uncertainty": support_mean_uncertainty,
+            "outer_mean_uncertainty": outer_mean_uncertainty,
+            "uncertainty_ratio": uncertainty_ratio,
+        },
+        "performance_profile": {
+            "total_duration_sec": fit_duration_sec,
+            "step_duration_mean_ms": step_duration_mean_ms,
+            "throughput_pixels_per_sec": throughput_pixels_per_sec,
+            "max_memory_allocated_bytes": max_mem,
+        },
+    }
+
+
 def fit_field_model(
     observations: Sequence[FieldObservation],
     model: nn.Module,
@@ -273,6 +535,7 @@ def fit_field_model(
     lr_warmup_steps: int = 0,
     spatial_smoothness_weight: float = 0.0,
     spatial_smoothness_grid_size: int = 8,
+    gradient_residual_weight: float = 0.0,
     observations_per_step: int | None = None,
     observation_sampling: FieldObservationSampling = "uniform",
     training_patch_size: int | None = None,
@@ -299,6 +562,8 @@ def fit_field_model(
     device: torch.device | str | None = None,
     observation_forward_contexts: Sequence[ForwardContext | None] | None = None,
     observation_exposure_poses: Sequence[ExposurePose | None] | None = None,
+    refine_poses: bool = False,
+    anchor_first_pose: bool = True,
 ) -> FieldFitResult:
     if not observations:
         raise ValueError("fit_field_model requires at least one observation")
@@ -315,6 +580,15 @@ def fit_field_model(
             "observation_forward_contexts must have the same length as observations"
         )
 
+    if refine_poses:
+        if observation_exposure_poses is not None:
+            raise ValueError(
+                "refine_poses cannot be combined with observation_exposure_poses"
+            )
+        observation_exposure_poses = create_exposure_poses(
+            list(observations),
+            anchor_first=bool(anchor_first_pose),
+        )
     obs_exposure_poses: tuple[ExposurePose | None, ...] = (
         tuple(observation_exposure_poses)
         if observation_exposure_poses is not None
@@ -391,6 +665,7 @@ def fit_field_model(
     warmup_steps = max(int(lr_warmup_steps), 0)
     smoothness_weight = max(float(spatial_smoothness_weight), 0.0)
     smoothness_grid_size = max(int(spatial_smoothness_grid_size), 2)
+    gradient_weight = max(float(gradient_residual_weight), 0.0)
     patches_per_observation = max(int(training_patches_per_observation), 1)
     pixel_sample_count = (
         max(int(pixel_samples_per_observation), 1)
@@ -416,6 +691,13 @@ def fit_field_model(
             for param in model.parameters()
             if param.requires_grad
         ]
+
+    total_pixels = 0
+    if train_device.type == "cuda":
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+    start_time = time.perf_counter()
+
     for step_idx in range(int(steps)):
         progress = float(step_idx + 1) / max(int(steps), 1)
         set_progress = getattr(model, "set_curriculum_progress", None)
@@ -461,7 +743,9 @@ def fit_field_model(
             observation_sampling=observation_sampling,
             generator=sampling_generator,
         )
-        selected_pairs: list[tuple[FieldObservation, ForwardContext | None, ExposurePose | None]] = []
+        selected_pairs: list[
+            tuple[FieldObservation, ForwardContext | None, ExposurePose | None]
+        ] = []
         if pixel_sample_count > 0:
             selected_pairs = [
                 (observations[idx], obs_forward_ctx[idx], obs_exposure_poses[idx])
@@ -560,6 +844,13 @@ def fit_field_model(
                         )
                     )
         selected_observations = [o for o, _, _ in selected_pairs]
+        for observation in selected_observations:
+            if pixel_sample_count > 0 and (
+                observation.psf_spec is None or observation.psf_spec.mode == "none"
+            ):
+                total_pixels += pixel_sample_count
+            else:
+                total_pixels += observation.image.numel()
         context_pairs: list[
             tuple[FieldObservation, ForwardContext | None, ExposurePose | None]
         ] = []
@@ -678,6 +969,27 @@ def fit_field_model(
                     num_spectral_samples=num_spectral_samples,
                     **render_kwargs,
                 )
+                image = observation.image.to(device=pred.device, dtype=pred.dtype)
+                valid = _observation_support_mask(observation).to(device=pred.device)
+                image = torch.where(valid, image, torch.zeros_like(image))
+                residual = torch.where(valid, pred - image, torch.zeros_like(pred))
+                weight = (
+                    observation.weight.to(device=pred.device, dtype=pred.dtype)
+                    if observation.weight is not None
+                    else torch.ones_like(pred)
+                )
+                weight = torch.where(valid, weight, torch.zeros_like(weight))
+                weighted_loss = torch.sum(
+                    weight
+                    * _field_residual_loss(
+                        residual,
+                        loss_kind=loss_kind,
+                        charbonnier_eps=charbonnier_eps,
+                        huber_delta=huber_delta,
+                        logvar=pred_logvar,
+                    )
+                )
+                weight_sum = weight.sum()
             else:
                 pred = render_field_observation(
                     model,
@@ -707,6 +1019,18 @@ def fit_field_model(
                     )
                 )
                 weight_sum = weight.sum()
+            if gradient_weight > 0.0 and pred.ndim == 2:
+                grad_num, grad_den = _field_gradient_residual_weighted_loss(
+                    pred,
+                    image,
+                    weight,
+                    valid,
+                    loss_kind=loss_kind,
+                    charbonnier_eps=charbonnier_eps,
+                    huber_delta=huber_delta,
+                )
+                grad_loss = grad_num / torch.clamp(grad_den, min=1.0e-8)
+                weighted_loss = weighted_loss + gradient_weight * weight_sum * grad_loss
             band_key = (
                 observation.spectral_min,
                 observation.spectral_max,
@@ -828,7 +1152,9 @@ def fit_field_model(
                     generator=sampling_generator,
                 )[:max_anchor_count].tolist()
                 for anchor_index in anchor_perm:
-                    anchor_observation, anchor_fctx, anchor_pose = selected_pairs[anchor_index]
+                    anchor_observation, anchor_fctx, anchor_pose = selected_pairs[
+                        anchor_index
+                    ]
                     anchor_pred = render_field_observation(
                         model,
                         anchor_observation,
@@ -1143,12 +1469,14 @@ def fit_field_model(
         band_weight_sum = {}
         for obs_idx, observation in enumerate(observations):
             fctx = obs_forward_ctx[obs_idx]
+            pose = obs_exposure_poses[obs_idx]
             if loss_kind == "gaussian_nll":
                 pred, pred_logvar = render_field_observation_distribution(
                     model,
                     observation,
                     num_spectral_samples=num_spectral_samples,
                     forward_context=fctx,
+                    exposure_pose=pose,
                 )
             else:
                 pred = render_field_observation(
@@ -1156,6 +1484,7 @@ def fit_field_model(
                     observation,
                     num_spectral_samples=num_spectral_samples,
                     forward_context=fctx,
+                    exposure_pose=pose,
                 )
                 pred_logvar = None
             image = observation.image.to(device=pred.device, dtype=pred.dtype)
@@ -1179,6 +1508,18 @@ def fit_field_model(
                 )
             )
             weight_sum = weight.sum()
+            if gradient_weight > 0.0 and pred.ndim == 2:
+                grad_num, grad_den = _field_gradient_residual_weighted_loss(
+                    pred,
+                    image,
+                    weight,
+                    valid,
+                    loss_kind=loss_kind,
+                    charbonnier_eps=charbonnier_eps,
+                    huber_delta=huber_delta,
+                )
+                grad_loss = grad_num / torch.clamp(grad_den, min=1.0e-8)
+                weighted_loss = weighted_loss + gradient_weight * weight_sum * grad_loss
             if loss_reduction == "per_observation":
                 denom = torch.clamp(weight_sum, min=1.0e-8)
                 final_losses.append(float(weighted_loss / denom))
@@ -1259,11 +1600,64 @@ def fit_field_model(
                 global_weighted_loss / torch.clamp(global_weight_sum, min=1.0e-8)
             )
             final_losses = [0.5 * (sum(band_losses) + global_loss)]
+    if train_device.type == "cuda":
+        torch.cuda.synchronize()
+    end_time = time.perf_counter()
+    duration = end_time - start_time
+
+    max_mem = 0
+    if train_device.type == "cuda":
+        max_mem = torch.cuda.max_memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+
+    diagnostics = compute_field_fit_diagnostics(
+        model=model,
+        observations=observations,
+        obs_forward_ctx=obs_forward_ctx,
+        obs_exposure_poses=obs_exposure_poses,
+        num_spectral_samples=num_spectral_samples,
+        fit_duration_sec=duration,
+        steps=int(steps),
+        total_pixels=total_pixels,
+        max_mem=max_mem,
+    )
+    if any(pose is not None for pose in obs_exposure_poses):
+        diagnostics = dict(diagnostics or {})
+        diagnostics["pose_refinement"] = {
+            "enabled": bool(refine_poses or observation_exposure_poses is not None),
+            "auto_created": bool(refine_poses),
+            "anchor_first_pose": bool(anchor_first_pose) if refine_poses else None,
+            "num_poses": sum(pose is not None for pose in obs_exposure_poses),
+            "num_trainable_poses": sum(
+                pose is not None
+                and any(param.requires_grad for param in pose.parameters())
+                for pose in obs_exposure_poses
+            ),
+            "parameters": [
+                None
+                if pose is None
+                else {
+                    "delta_ra_deg": float(pose.delta_ra_deg.detach().cpu()),
+                    "delta_dec_deg": float(pose.delta_dec_deg.detach().cpu()),
+                    "delta_theta_rad": float(pose.delta_theta_rad.detach().cpu()),
+                    "delta_log_scale": float(pose.delta_log_scale.detach().cpu()),
+                }
+                for pose in obs_exposure_poses
+            ],
+        }
+
     return FieldFitResult(
         model=model,
         loss_history=tuple(loss_history),
         final_loss=float(sum(final_losses)),
+        diagnostics=diagnostics,
+        exposure_poses=(
+            obs_exposure_poses
+            if any(pose is not None for pose in obs_exposure_poses)
+            else None
+        ),
     )
+
 
 __all__ = [
     "fit_field_component_decomposition",

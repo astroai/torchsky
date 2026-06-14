@@ -8,7 +8,7 @@ Use this namespace for the mission-level objects:
 - `scene.TargetRenderSpec`
 - `scene.MapProductSpec` and `scene.MapBandpassSpec`
 - `scene.SceneRepresentation` plus tensor, HEALPix, harmonic, and field-model adapters
-- `scene.ObservationOperatorAdapter` and `scene.operator_bundle_for_observation(...)`
+- `scene.ObservationOperatorAdapter`, `scene.operator_bundle_for_observation(...)`, and image-plane operator-set binding
 
 The intent is that users can describe an observation, a target product, and a scene representation without needing to know which lower-level map module owns the current implementation.
 
@@ -43,3 +43,35 @@ For differentiable field models, `scene.predict(...)` and `scene.predict_observa
 ## Operator Adapter
 
 `scene.operator_adapter_for_observation(...)` wraps the existing `ObservationOperatorBundle` used by map and field rendering. It exposes enabled operator names, slot checks, and the deterministic prediction path while keeping the underlying bundle available through `.bundle` for lower-level integrations.
+
+The adapter also binds the bundle to a `TargetRenderSpec` through the same normal-equation substrate used by the map solvers:
+
+```python
+adapter = scene.operator_adapter_for_observation(observation)
+operator = adapter.bind_target(
+    target,
+    apply_operator=my_forward_model,
+    apply_adjoint=my_exact_adjoint,
+    apply_noise=my_inverse_noise,
+)
+
+probe = operator.normal_equation_probe(scene_tensor, data)
+result = operator.solve_normal_equation_cg(data, iterations=8)
+```
+
+Exact adjoints are explicit: pass `apply_adjoint` or a target binder for the operator family being solved. The default render path remains available for prediction-only workflows.
+
+For image-plane inverse problems, `ObservationOperatorAdapter.bind_image_plane_target(...)` binds one `ImageObservation` to a latent target grid and uses an exact vector-Jacobian product as the adjoint of the same projection:
+
+```python
+observation = scene.image_observation("science.fits")
+target = scene.target_from_header(target_header)
+operator = scene.operator_adapter_for_observation(
+    observation,
+    resampling_kernel="bilinear",
+).bind_image_plane_target(target)
+
+result = operator.solve_normal_equation_cg(observed_image, iterations=8)
+```
+
+Scalar observation weights and explicit weight/mask/primary-beam maps feed the bound operator's inverse-noise hook. Use `scene.bind_image_plane_observations_to_target(...)` when several image-plane observations share the same latent target grid. It returns the multi-observation operator set used by the map solver substrate, so `A^T N^-1 A` and `A^T N^-1 y` are summed across observations.

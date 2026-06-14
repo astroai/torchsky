@@ -25,7 +25,7 @@ match the domain guides.
 
 | Script | What it demonstrates |
 |---|---|
-| [`example_wcs_transform.py`](../examples/example_wcs_transform.py) | Pixel-to-world and world-to-pixel transforms for images and spectra. |
+| [`example_wcs_transform.py`](../examples/example_wcs_transform.py) | Pixel-to-world/world-to-pixel transforms for images, spectra, cubes, independent `WAVE-TAB` axes, grism axes, and temporal light-time corrections. |
 
 ## Sphere And HEALPix
 
@@ -47,6 +47,7 @@ match the domain guides.
 | [`example_map_harmonic_mixed_constraints.py`](../examples/example_map_harmonic_mixed_constraints.py) | Harmonic mixed-constraint solve. |
 | [`example_map_harmonic_survey_split.py`](../examples/example_map_harmonic_survey_split.py) | Shared-versus-survey-private harmonic decomposition. |
 | [`example_map_harmonic_learned_survey_instrument_split.py`](../examples/example_map_harmonic_learned_survey_instrument_split.py) | Learned survey/instrument mixer. |
+| [`example_field_multiband_quality.py`](../examples/example_field_multiband_quality.py) | Tiny multiband field fit with residual SNR, sharpness, and multiscale quality metrics. |
 | [`example_map_field_survey_split.py`](../examples/example_map_field_survey_split.py) | Train-time field decomposition. |
 | [`example_map_teb_joint_cl_prior.py`](../examples/example_map_teb_joint_cl_prior.py) | Joint T/E/B harmonic solve. |
 | [`example_map_spin_harmonic_inverse.py`](../examples/example_map_spin_harmonic_inverse.py) | Spin harmonic inverse solve for Q/U-like cutouts. |

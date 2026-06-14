@@ -2488,7 +2488,9 @@ def duckdb_query(
 
     stmt_type = statements[0].type
     if stmt_type not in {duckdb.StatementType.SELECT, duckdb.StatementType.EXPLAIN}:
-        raise ValueError(f"query must be a SELECT or EXPLAIN statement, got {stmt_type}")
+        raise ValueError(
+            f"query must be a SELECT or EXPLAIN statement, got {stmt_type}"
+        )
 
     result = con.sql(query)
     if return_arrow:
@@ -3102,7 +3104,7 @@ def insert_column(
     rewritten_schema = _ordered_dict_for_columns(new_columns, schema_by_name)
 
     torchsky._invalidate_path_caches(path)
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     _rewrite_table_hdu_with_schema(
         path,
         target_hdu,
@@ -3111,7 +3113,7 @@ def insert_column(
         table_header,
         table_type,
     )
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     torchsky._invalidate_path_caches(path)
 
 
@@ -3185,7 +3187,7 @@ def replace_column(
     rewritten_data = _ordered_dict_for_columns(columns, rewritten_data)
 
     torchsky._invalidate_path_caches(path)
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     _rewrite_table_hdu_with_schema(
         path,
         target_hdu,
@@ -3194,7 +3196,7 @@ def replace_column(
         table_header,
         table_type,
     )
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     torchsky._invalidate_path_caches(path)
 
 
@@ -3420,9 +3422,9 @@ def append_rows(
 
     # Ensure no stale cached handles/metadata exist before mutating the file in-place.
     torchsky._invalidate_path_caches(path)
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     cpp.append_fits_table_rows(path, target_hdu, normalized)
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     torchsky._invalidate_path_caches(path)
 
 
@@ -3473,7 +3475,7 @@ def insert_rows(
 
     start_row = row + 1  # FITS rows are 1-based.
     torchsky._invalidate_path_caches(path)
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     if hasattr(cpp, "insert_fits_table_rows"):
         cpp.insert_fits_table_rows(path, target_hdu, normalized, start_row)
     else:
@@ -3484,7 +3486,7 @@ def insert_rows(
                 existing[name], normalized[name], row
             )
         torchsky.replace_hdu(path, target_hdu, rewritten)
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     torchsky._invalidate_path_caches(path)
 
 
@@ -3530,7 +3532,7 @@ def delete_rows(
         return
 
     torchsky._invalidate_path_caches(path)
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     if hasattr(cpp, "delete_fits_table_rows"):
         cpp.delete_fits_table_rows(path, target_hdu, start_row, num_rows)
     else:
@@ -3541,7 +3543,7 @@ def delete_rows(
         for name in columns:
             rewritten[name] = _delete_column_rows(existing[name], start0, num_rows)
         torchsky.replace_hdu(path, target_hdu, rewritten)
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     torchsky._invalidate_path_caches(path)
 
 
@@ -3663,20 +3665,20 @@ def update_rows(
         has_string = any(isinstance(v, (list, tuple)) for v in normalized.values())
         if not has_string:
             try:
-                torchsky.clear_cache()
+                torchsky.cache.clear()
                 cpp.update_fits_table_rows_mmap(
                     path, target_hdu, normalized, start_row, num_rows
                 )
-                torchsky.clear_cache()
+                torchsky.cache.clear()
                 torchsky._invalidate_path_caches(path)
                 return
             except Exception:
                 if mmap is True:
                     raise
 
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     cpp.update_fits_table_rows(path, target_hdu, normalized, start_row, num_rows)
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     torchsky._invalidate_path_caches(path)
 
 
@@ -3720,9 +3722,9 @@ def rename_columns(
     import torchsky.cpp as cpp
 
     torchsky._invalidate_path_caches(path)
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     cpp.rename_fits_table_columns(path, target_hdu, normalized)
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     torchsky._invalidate_path_caches(path)
 
 
@@ -3743,8 +3745,8 @@ def drop_columns(
     if len(set(normalized)) != len(normalized):
         raise ValueError("drop_columns received duplicate column names")
 
-    target_hdu, _header, existing_columns, _tform_map = _resolve_table_hdu_index_and_columns(
-        path, hdu
+    target_hdu, _header, existing_columns, _tform_map = (
+        _resolve_table_hdu_index_and_columns(path, hdu)
     )
     missing = sorted(set(normalized) - set(existing_columns))
     if missing:
@@ -3754,7 +3756,7 @@ def drop_columns(
     import torchsky.cpp as cpp
 
     torchsky._invalidate_path_caches(path)
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     cpp.drop_fits_table_columns(path, target_hdu, normalized)
-    torchsky.clear_cache()
+    torchsky.cache.clear()
     torchsky._invalidate_path_caches(path)

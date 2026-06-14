@@ -131,7 +131,7 @@ class TestDataLoaderCreation:
             )
 
     def test_fitsdataset_forwards_read_options(self):
-        """FITSDataset should forward read-performance options to torchsky.read."""
+        """FITSDataset should forward read-performance options to torchsky.io.read."""
         dataset = FITSDataset(
             ["file1.fits"],
             hdu=2,
@@ -144,7 +144,7 @@ class TestDataLoaderCreation:
             raw_scale=True,
         )
 
-        with patch("torchsky.read", return_value=torch.zeros((2, 2))) as mock_read:
+        with patch("torchsky.io.read", return_value=torch.zeros((2, 2))) as mock_read:
             _ = dataset[0]
 
         mock_read.assert_called_once_with(

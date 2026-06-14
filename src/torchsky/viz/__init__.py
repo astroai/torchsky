@@ -20,6 +20,9 @@ import threading
 import webbrowser
 from pathlib import Path
 
+from .plots import plot_pixel_spectrum as plot_pixel_spectrum
+from .plots import plot_pseudo_rgb as plot_pseudo_rgb
+
 
 def serve(
     root: str | Path = ".",
@@ -123,4 +126,10 @@ def show_url(port: int = 8822, host: str = "127.0.0.1") -> str:
     return base
 
 
-__all__ = ["serve", "serve_background", "show_url"]
+__all__ = [
+    "serve",
+    "serve_background",
+    "show_url",
+    "plot_pseudo_rgb",
+    "plot_pixel_spectrum",
+]

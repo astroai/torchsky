@@ -178,6 +178,45 @@ def test_wcs_alternate_key_matches_astropy():
     assert twcs.pixel_bounds == [(0.0, 99.0), (0.0, 99.0)]
 
 
+def test_get_wcs_from_file_selects_alternate_key():
+    image = np.zeros((16, 16), dtype=np.float32)
+    with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
+        hdu = fits.PrimaryHDU(image)
+        hdu.header["CTYPE1"] = "RA---TAN"  # type: ignore
+        hdu.header["CTYPE2"] = "DEC--TAN"  # type: ignore
+        hdu.header["CRPIX1"] = 1.0  # type: ignore
+        hdu.header["CRPIX2"] = 1.0  # type: ignore
+        hdu.header["CRVAL1"] = 10.0  # type: ignore
+        hdu.header["CRVAL2"] = 20.0  # type: ignore
+        hdu.header["CDELT1"] = -0.01  # type: ignore
+        hdu.header["CDELT2"] = 0.01  # type: ignore
+        hdu.header["CTYPE1A"] = "RA---TAN"  # type: ignore
+        hdu.header["CTYPE2A"] = "DEC--TAN"  # type: ignore
+        hdu.header["CRPIX1A"] = 1.0  # type: ignore
+        hdu.header["CRPIX2A"] = 1.0  # type: ignore
+        hdu.header["CRVAL1A"] = 120.0  # type: ignore
+        hdu.header["CRVAL2A"] = -30.0  # type: ignore
+        hdu.header["CDELT1A"] = -0.02  # type: ignore
+        hdu.header["CDELT2A"] = 0.02  # type: ignore
+        hdu.writeto(f.name, overwrite=True)
+        path = f.name
+
+    try:
+        wcs = torchsky.get_wcs(path, hdu=0, key="A")
+        world = wcs.pixel_to_world(torch.tensor([[0.0, 0.0]], dtype=torch.float64))
+
+        assert wcs.wcs_key == "A"
+        torch.testing.assert_close(
+            world,
+            torch.tensor([[120.0, -30.0]], dtype=torch.float64),
+            atol=1e-6,
+            rtol=0.0,
+        )
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+
 def test_wcs_axis_metadata_and_footprint():
     header = {
         "NAXIS": 3,

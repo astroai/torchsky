@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from ... import WCS
+from ...wcs import WCS
 from .config import MapResamplingKernel, MapValueSemantics
 
 

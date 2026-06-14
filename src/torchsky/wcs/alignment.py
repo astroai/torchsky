@@ -22,7 +22,9 @@ class AffineFitResult:
     iterations: int
 
     def apply(self, points: Any) -> Tensor:
-        pts = torch.as_tensor(points, dtype=self.matrix.dtype, device=self.matrix.device)
+        pts = torch.as_tensor(
+            points, dtype=self.matrix.dtype, device=self.matrix.device
+        )
         return torch.matmul(pts, self.matrix.T) + self.offset
 
 
@@ -62,8 +64,12 @@ class TangentPlaneFrame:
         r2d = torch.as_tensor(180.0 / torch.pi, dtype=torch.float64, device=ra_t.device)
         ra_rad = ra_t * d2r
         dec_rad = dec_t * d2r
-        ra0_rad = torch.as_tensor(self.ra0, dtype=torch.float64, device=ra_t.device) * d2r
-        dec0_rad = torch.as_tensor(self.dec0, dtype=torch.float64, device=ra_t.device) * d2r
+        ra0_rad = (
+            torch.as_tensor(self.ra0, dtype=torch.float64, device=ra_t.device) * d2r
+        )
+        dec0_rad = (
+            torch.as_tensor(self.dec0, dtype=torch.float64, device=ra_t.device) * d2r
+        )
 
         dra = torch.remainder(ra_rad - ra0_rad + torch.pi, 2.0 * torch.pi) - torch.pi
         sin_dec = torch.sin(dec_rad)
@@ -89,8 +95,12 @@ class TangentPlaneFrame:
         r2d = torch.as_tensor(180.0 / torch.pi, dtype=torch.float64, device=xi_t.device)
         x = xi_t * d2r
         y = eta_t * d2r
-        ra0_rad = torch.as_tensor(self.ra0, dtype=torch.float64, device=xi_t.device) * d2r
-        dec0_rad = torch.as_tensor(self.dec0, dtype=torch.float64, device=xi_t.device) * d2r
+        ra0_rad = (
+            torch.as_tensor(self.ra0, dtype=torch.float64, device=xi_t.device) * d2r
+        )
+        dec0_rad = (
+            torch.as_tensor(self.dec0, dtype=torch.float64, device=xi_t.device) * d2r
+        )
 
         rho = torch.sqrt(x * x + y * y)
         c = torch.atan(rho)
@@ -248,7 +258,12 @@ def fit_affine_2d(
         w = torch.as_tensor(weights, dtype=torch.float64, device=src.device)
         if w.shape != (src.shape[0],):
             raise ValueError("weights must have shape (N,)")
-    valid = torch.isfinite(src).all(dim=1) & torch.isfinite(tgt).all(dim=1) & torch.isfinite(w) & (w > 0)
+    valid = (
+        torch.isfinite(src).all(dim=1)
+        & torch.isfinite(tgt).all(dim=1)
+        & torch.isfinite(w)
+        & (w > 0)
+    )
     if not bool(valid.any()):
         raise ValueError("no valid weighted point pairs")
 
@@ -277,7 +292,10 @@ def fit_affine_2d(
         new_inliers = valid & (norm <= limit)
         if bool(torch.equal(new_inliers, inliers)):
             break
-        if int(new_inliers.sum().item()) < {"shift": 1, "rshift": 2, "rscale": 2, "general": 3}[geometry]:
+        if (
+            int(new_inliers.sum().item())
+            < {"shift": 1, "rshift": 2, "rscale": 2, "general": 3}[geometry]
+        ):
             break
         inliers = new_inliers
 
@@ -313,8 +331,14 @@ def fit_sky_affine(
     src_dec = torch.as_tensor(source_dec, dtype=torch.float64)
     tgt_ra = torch.as_tensor(target_ra, dtype=torch.float64)
     tgt_dec = torch.as_tensor(target_dec, dtype=torch.float64)
-    if src_ra.shape != src_dec.shape or src_ra.shape != tgt_ra.shape or src_ra.shape != tgt_dec.shape:
-        raise ValueError("source and target sky coordinate arrays must have matching shapes")
+    if (
+        src_ra.shape != src_dec.shape
+        or src_ra.shape != tgt_ra.shape
+        or src_ra.shape != tgt_dec.shape
+    ):
+        raise ValueError(
+            "source and target sky coordinate arrays must have matching shapes"
+        )
     if frame is None:
         frame = TangentPlaneFrame.from_points(
             torch.cat([src_ra.reshape(-1), tgt_ra.reshape(-1)]),

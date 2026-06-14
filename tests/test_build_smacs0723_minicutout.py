@@ -15,7 +15,11 @@ from torchsky.spectral import SpectralReader
 
 
 def _load_script_module():
-    script = Path(__file__).resolve().parents[1] / "scripts" / "build_smacs0723_minicutout.py"
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "build_smacs0723_minicutout.py"
+    )
     spec = importlib.util.spec_from_file_location("build_smacs0723_minicutout", script)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
@@ -25,8 +29,14 @@ def _load_script_module():
 
 
 def _load_baseline_module():
-    script = Path(__file__).resolve().parents[1] / "scripts" / "build_smacs0723_stack_baseline.py"
-    spec = importlib.util.spec_from_file_location("build_smacs0723_stack_baseline", script)
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "build_smacs0723_stack_baseline.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "build_smacs0723_stack_baseline", script
+    )
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -35,8 +45,14 @@ def _load_baseline_module():
 
 
 def _load_visualize_module():
-    script = Path(__file__).resolve().parents[1] / "scripts" / "visualize_smacs0723_products.py"
-    spec = importlib.util.spec_from_file_location("visualize_smacs0723_products", script)
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "visualize_smacs0723_products.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "visualize_smacs0723_products", script
+    )
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -48,7 +64,10 @@ def test_manifest_path_is_relative_inside_repo() -> None:
     module = _load_script_module()
     root = Path("/tmp/torchsky-root").resolve()
     path = root / "data" / "smacs0723_minicutout" / "cutout.fits"
-    assert module._manifest_path(path, root=root) == "data/smacs0723_minicutout/cutout.fits"
+    assert (
+        module._manifest_path(path, root=root)
+        == "data/smacs0723_minicutout/cutout.fits"
+    )
 
 
 def test_manifest_path_allows_external_data_root() -> None:
@@ -69,7 +88,10 @@ def test_stack_baseline_resolves_manifest_paths(tmp_path: Path) -> None:
         == local.resolve()
     )
     external = tmp_path / "external" / "cutout.fits"
-    assert module._resolve_manifest_path(str(external), manifest_dir=manifest_dir) == external
+    assert (
+        module._resolve_manifest_path(str(external), manifest_dir=manifest_dir)
+        == external
+    )
 
 
 def test_cutout_builder_validates_crop_size() -> None:

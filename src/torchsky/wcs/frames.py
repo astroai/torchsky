@@ -178,4 +178,6 @@ def convert_celestial(
             from_equinox=2000.0,
             to_equinox=2000.0 if to_equinox is None else float(to_equinox),
         )
-    raise ValueError(f"unsupported celestial frame conversion {from_frame!r}->{to_frame!r}")
+    raise ValueError(
+        f"unsupported celestial frame conversion {from_frame!r}->{to_frame!r}"
+    )
