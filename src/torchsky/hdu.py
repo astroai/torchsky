@@ -2043,10 +2043,20 @@ class HDUList:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def close(self):
         if self._file_handle:
             self._file_handle.close()
             self._file_handle = None
+        for hdu in self._hdus:
+            if isinstance(hdu, TensorHDU):
+                hdu._file_handle = None
+                hdu._data_view = None
 
     def write(self, path: str, overwrite: bool = False):
         import torchsky

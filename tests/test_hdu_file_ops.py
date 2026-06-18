@@ -30,6 +30,22 @@ def test_hdu_file_ops_insert_replace_delete(tmp_path):
         _ = torchsky.read(str(path), hdu=1)
 
 
+def test_hdulist_close_detaches_lazy_image_handles(tmp_path):
+    path = tmp_path / "lazy_image_handle.fits"
+    torchsky.write(str(path), torch.arange(4, dtype=torch.float32).reshape(2, 2), overwrite=True)
+
+    hdul = torchsky.open(str(path))
+    image_hdu = hdul[0]
+    assert image_hdu._file_handle is not None
+    assert image_hdu._data_view is not None
+
+    hdul.close()
+
+    assert hdul._file_handle is None
+    assert image_hdu._file_handle is None
+    assert image_hdu._data_view is None
+
+
 @pytest.mark.skipif(
     os.environ.get("CI") == "true", reason="Flaky cache invalidation on CI"
 )

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging as _stdlib_logging
 import os
 import sys
+import atexit
 from typing import Any
 
 import torchsky.cpp as cpp
@@ -270,6 +271,18 @@ def cache_subsystem_policy(name: str) -> dict[str, bool]:
 
 def clear_cache_subsystem(name: str) -> None:
     _clear_cache_subsystem_impl(name, table_module=table)
+
+
+def _shutdown_fits_io_caches() -> None:
+    cpp_module = sys.modules.get("torchsky.cpp")
+    _clear_cache_subsystem_impl(
+        "all",
+        table_module=table,
+        cpp_module=cpp_module,
+    )
+
+
+atexit.register(_shutdown_fits_io_caches)
 
 
 def write_checksums(*args: Any, **kwargs: Any):

@@ -82,6 +82,7 @@ def stream_table(
                 if max_chunks is not None and emitted >= max_chunks:
                     return
         finally:
+            reader = None
             file_handle.close()
     else:
         while row <= total_rows:
@@ -126,6 +127,7 @@ def read_large_table(
             if hasattr(cpp, "read_fits_table_rows_from_handle"):
                 file_handle = cpp.open_fits_file(file_path, "r")
                 try:
+                    reader = None
                     if hasattr(cpp, "TableReader"):
                         reader = cpp.TableReader(file_handle, hdu)
                         sample = reader.read_rows([], 1, sample_rows)
@@ -134,6 +136,7 @@ def read_large_table(
                             file_handle, hdu, [], 1, sample_rows
                         )
                 finally:
+                    reader = None
                     file_handle.close()
             else:
                 sample = cpp.read_fits_table_rows(
@@ -206,6 +209,7 @@ def read_large_table(
 
                         start += num
                 finally:
+                    reader = None
                     file_handle.close()
             else:
                 while start <= total_rows:
