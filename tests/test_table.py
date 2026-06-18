@@ -6,6 +6,7 @@ import os
 import tempfile
 
 import numpy as np
+import pytest
 from unittest import mock
 import torch
 
@@ -29,6 +30,15 @@ def test_column_name_index_map_falls_back_without_tfields():
     header = {"TTYPE2": "RA", "TTYPE1": "ID", "HISTORY": "ignored"}
 
     assert _column_name_index_map(header) == {2: "RA", 1: "ID"}
+
+
+def test_table_backend_policy_is_private_and_explicit():
+    from torchsky._table_engine import TABLE_BACKENDS, validate_table_backend
+
+    assert TABLE_BACKENDS == frozenset({"auto", "torch", "cpp_numpy"})
+    assert validate_table_backend("auto") == "auto"
+    with pytest.raises(ValueError, match="backend must be one of"):
+        validate_table_backend("unknown")
 
 
 class TestTableReading:

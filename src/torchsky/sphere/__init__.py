@@ -6,6 +6,7 @@ documented in ``docs/compatibility.md``; HEALPix/healpy entry points are
 """
 
 from . import compat
+from . import harmonics
 from . import healpy
 from .core import (
     fit_monopole_dipole,
@@ -115,6 +116,7 @@ __all__ = [
     "Vector3d",
     "WideBitMask",
     "compat",
+    "harmonics",
     "healpix",
     "healpy",
     "convex_polygon_contains",

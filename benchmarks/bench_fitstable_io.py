@@ -429,6 +429,7 @@ def _bench_case(
                 )
             )
 
+    rows.extend(_bench_mutation_ops(run_id=run_id, case=case, warmup=warmup))
     return rows
 
 
@@ -524,6 +525,136 @@ def _torchsky_scan_count_local(path: Path, *, col: str, mmap: bool):
     if isinstance(values, torch.Tensor):
         return int(values.shape[0])
     return int(len(values))
+
+
+def _mutation_payload(schema: list[tuple[str, str]], *, nrows: int) -> dict[str, Any]:
+    rng = np.random.default_rng(99)
+    payload: dict[str, Any] = {}
+    for col_name, dtype in schema:
+        payload[col_name] = _dtype_values(dtype, nrows, rng)
+    return payload
+
+
+def _mutation_case_supported(schema: list[tuple[str, str]] | None) -> bool:
+    if schema is None:
+        return False
+    return not any(dtype.startswith("S") for _name, dtype in schema)
+
+
+def _with_mutation_copy(path: Path, fn):
+    with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as handle:
+        work_path = Path(handle.name)
+    try:
+        shutil.copyfile(path, work_path)
+        return fn(work_path)
+    finally:
+        work_path.unlink(missing_ok=True)
+
+
+def _bench_mutation_ops(
+    *,
+    run_id: str,
+    case: dict[str, Any],
+    warmup: int,
+) -> list[dict[str, Any]]:
+    schema: list[tuple[str, str]] | None = case.get("schema")
+    path: Path = case["path"]
+    nrows = int(case["nrows"])
+    case_name = str(case["name"])
+    rows: list[dict[str, Any]] = []
+    operations = ("mutation_append", "mutation_update", "mutation_rename_drop")
+
+    if not _mutation_case_supported(schema):
+        for operation in operations:
+            rows.append(
+                _make_row(
+                    run_id=run_id,
+                    case_name=case_name,
+                    case=case,
+                    operation=operation,
+                    family="specialized",
+                    method="torchsky_table_mutation",
+                    library="torchsky",
+                    mode="specialized",
+                    mmap_target="n/a",
+                    status="SKIPPED",
+                    comparable=False,
+                    skip_reason="mutation_benchmark_requires_fixed_width_non_string_schema",
+                    time_s=None,
+                    throughput=None,
+                    unit="rows/s",
+                    n_points=nrows,
+                )
+            )
+        return rows
+
+    assert schema is not None
+    numeric_col = _choose_numeric_col(list(case["columns"]), schema)
+    numeric_dtype = next(dtype for name, dtype in schema if name == numeric_col)
+    drop_col = next(
+        (name for name, _dtype in reversed(schema) if name != numeric_col),
+        schema[0][0],
+    )
+    append_rows = min(1024, max(8, nrows // 100))
+    update_rows = min(4096, max(8, nrows // 50))
+
+    mutation_fns = {
+        "mutation_append": lambda work_path: torchsky.table.append_rows(
+            str(work_path),
+            _mutation_payload(schema, nrows=append_rows),
+            hdu=1,
+        ),
+        "mutation_update": lambda work_path: torchsky.table.update_rows(
+            str(work_path),
+            {
+                numeric_col: _dtype_values(
+                    numeric_dtype,
+                    update_rows,
+                    np.random.default_rng(123),
+                )
+            },
+            row_slice=slice(0, update_rows),
+            hdu=1,
+        ),
+        "mutation_rename_drop": lambda work_path: (
+            torchsky.table.rename_columns(
+                str(work_path),
+                {numeric_col: f"{numeric_col}_RENAMED"},
+                hdu=1,
+            ),
+            torchsky.table.drop_columns(str(work_path), [drop_col], hdu=1),
+        ),
+    }
+
+    for operation, mutation_fn in mutation_fns.items():
+        t_val, err = _time_median(
+            lambda fn=mutation_fn: _with_mutation_copy(path, fn),
+            runs=_repeats_for_rows(nrows),
+            warmup=warmup,
+        )
+        status = "OK" if t_val is not None else "FAILED"
+        throughput = (nrows / t_val) if (t_val is not None and t_val > 0) else None
+        rows.append(
+            _make_row(
+                run_id=run_id,
+                case_name=case_name,
+                case=case,
+                operation=operation,
+                family="specialized",
+                method="torchsky_table_mutation",
+                library="torchsky",
+                mode="specialized",
+                mmap_target="n/a",
+                status=status,
+                comparable=status == "OK",
+                skip_reason="" if err is None else err,
+                time_s=t_val,
+                throughput=throughput,
+                unit="rows/s",
+                n_points=nrows,
+            )
+        )
+    return rows
 
 
 def _make_row(

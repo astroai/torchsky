@@ -1,9 +1,9 @@
 # `torchsky.io` And Root FITS I/O
 
 `torchsky` keeps only the core FITS operations at the package root:
-`read`, `write`, `open`, `get_header`, and `get_wcs`. `torchsky.io` is the
-canonical namespace-oriented FITS surface for specialized readers, HDU
-mutation, checksum, batch, streaming, and low-level cache helpers.
+`read`, `write`, `open`, `get_header`, and `get_wcs`. `torchsky.io.fits` owns
+the CFITSIO-backed FITS file operations; `torchsky.io` re-exports those helpers
+alongside datasets, dataloaders, interop helpers, and table conveniences.
 
 ## What This Namespace Is For
 
@@ -77,8 +77,12 @@ Root writer:
 
 - `torchsky.write(...)`
 
-Specialized readers, writers, and mutations live under `torchsky.io`:
+Specialized readers, writers, and mutations live under both `torchsky.io.fits`
+and the compatibility convenience namespace `torchsky.io`:
 
+- `torchsky.io.fits.read(...)`
+- `torchsky.io.fits.write(...)`
+- `torchsky.io.fits.open(...)`
 - `torchsky.io.read_image(...)`
 - `torchsky.io.read_table(...)`
 - `torchsky.io.read_hdus(...)`
@@ -103,20 +107,32 @@ HDU and header objects:
 
 Batch and low-level FITS cache helpers:
 
+- `torchsky.io.fits.read_batch(...)`
 - `torchsky.io.read_batch(...)`
 - `torchsky.io.get_batch_info(...)`
+- `torchsky.io.cache_subsystem_policy(...)`
+- `torchsky.io.clear_cache_subsystem(...)`
 - `torchsky.io.get_cache_performance(...)`
 - `torchsky.io.clear_file_cache(...)`
 - `torchsky.cache.clear(...)`
 - `torchsky.cache.stats(...)`
 
-`torchsky.io` re-exports the complete FITS I/O helper set (`read`,
+Named FITS I/O cache subsystems are:
+
+- `fits_image_data`
+- `fits_table_data`
+- `fits_header_metadata`
+- `fits_wcs_extraction`
+- `all`
+
+`torchsky.io.fits` is the implementation-owning FITS namespace. `torchsky.io`
+re-exports the complete FITS I/O helper set (`read`,
 `read_image`, `read_table`, `read_hdus`, `read_subset`,
 `open_subset_reader`, `open`, `write`, `insert_hdu`, `replace_hdu`,
 `delete_hdu`, `write_checksums`, `verify_checksums`, `get_header`, `get_wcs`,
 `read_batch`, `get_batch_info`, `get_cache_performance`, `clear_file_cache`,
 streaming table helpers, HDU/header types, table interop helpers, and
-table interop helpers).
+named cache-subsystem helpers).
 
 ## Examples
 

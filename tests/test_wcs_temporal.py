@@ -7,6 +7,7 @@ import torchsky
 
 from torchsky.wcs.temporal import (
     TemporalWCS,
+    canonical_time_reference_position,
     convert_time_scale,
     iso_to_mjd,
     tai_minus_utc_seconds,
@@ -82,6 +83,17 @@ def test_temporal_common_subday_units() -> None:
     assert temporal_unit_to_days("hour") == 3600.0 / 86400.0
     with pytest.raises(ValueError, match="unsupported temporal unit"):
         temporal_unit_to_days("fortnight")
+
+
+def test_temporal_reference_position_aliases_fail_closed() -> None:
+    assert canonical_time_reference_position(None) == "TOPOCENTER"
+    assert canonical_time_reference_position("topocentre") == "TOPOCENTER"
+    assert canonical_time_reference_position("GEO") == "GEOCENTER"
+    assert canonical_time_reference_position("BARYCENTRE") == "BARYCENTER"
+    assert canonical_time_reference_position("SSB") == "BARYCENTER"
+    assert canonical_time_reference_position("HELIOCENTRE") == "HELIOCENTER"
+    with pytest.raises(ValueError, match="unsupported temporal reference position"):
+        canonical_time_reference_position("MARS")
 
 
 def test_temporal_jd_mjd_conversion_and_iso_output() -> None:
@@ -186,6 +198,16 @@ def test_temporal_ephemeris_corrections() -> None:
     np.testing.assert_allclose(mjd_corr.item(), expected_mjd, atol=15.0 / 86400.0)
 
 
+def test_temporal_geocenter_reference_requires_no_ephemeris() -> None:
+    twcs = TemporalWCS({"MJDREF": 60000.0, "TREFPOS": "GEOCENTER"})
+    mjd = torch.tensor([60000.0, 60001.0], dtype=torch.float64)
+    ra = torch.tensor([0.0, 120.0], dtype=torch.float64)
+    dec = torch.tensor([0.0, 30.0], dtype=torch.float64)
+
+    assert not twcs.requires_ephemeris
+    torch.testing.assert_close(twcs.apply_corrections(mjd, ra, dec), mjd)
+
+
 def test_temporal_reference_position_corrections_match_astropy_grid() -> None:
     from astropy.coordinates import EarthLocation, SkyCoord
     from astropy.time import Time
@@ -217,6 +239,46 @@ def test_temporal_reference_position_corrections_match_astropy_grid() -> None:
         time = Time(mjd, format="mjd", scale="utc", location=location)
         coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg)
         light_time = time.light_travel_time(coord, "barycentric").to(u.day).value
+        expected.append(mjd + light_time)
+
+    np.testing.assert_allclose(
+        corrected.numpy(),
+        np.asarray(expected, dtype=np.float64),
+        atol=5.0 / 86400.0,
+    )
+
+
+def test_temporal_geodetic_observatory_location_matches_astropy_grid() -> None:
+    from astropy.coordinates import EarthLocation, SkyCoord
+    from astropy.time import Time
+    import astropy.units as u
+
+    lon = -70.403
+    lat = -24.625
+    height = 2635.0
+    location = EarthLocation.from_geodetic(lon * u.deg, lat * u.deg, height * u.m)
+    twcs = TemporalWCS(
+        {
+            "MJDREF": 60000.0,
+            "TREFPOS": "HELIOCENTER",
+            "OBSGEO-L": lon,
+            "OBSGEO-B": lat,
+            "OBSGEO-H": height,
+        }
+    )
+
+    mjd_values = torch.tensor([59000.0, 60000.0, 61000.0], dtype=torch.float64)
+    ra_values = torch.tensor([15.0, 180.0, 315.0], dtype=torch.float64)
+    dec_values = torch.tensor([-20.0, 15.0, 65.0], dtype=torch.float64)
+
+    corrected = twcs.apply_corrections(mjd_values, ra_values, dec_values)
+    expected = []
+    for mjd, ra, dec in zip(
+        mjd_values.tolist(), ra_values.tolist(), dec_values.tolist()
+    ):
+        time = Time(mjd, format="mjd", scale="utc", location=location)
+        coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg)
+        light_time = time.light_travel_time(coord, "heliocentric").to(u.day).value
         expected.append(mjd + light_time)
 
     np.testing.assert_allclose(

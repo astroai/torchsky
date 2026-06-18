@@ -286,6 +286,7 @@ class ContinuousFieldModel(SceneRepresentation):
             self.model,
             observation,
             num_spectral_samples=int(kwargs.get("num_spectral_samples", 9)),
+            operator_bundle=kwargs.get("operator_bundle"),
         )
 
     def render_distribution_to_target(
@@ -308,6 +309,7 @@ class ContinuousFieldModel(SceneRepresentation):
                 self.model,
                 observation,
                 num_spectral_samples=int(kwargs.get("num_spectral_samples", 9)),
+                operator_bundle=kwargs.get("operator_bundle"),
             )
         rendered = self.render_to_target(
             target,

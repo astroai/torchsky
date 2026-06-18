@@ -53,6 +53,12 @@ _SURFACES: dict[str, APISurface] = {
         "multi-HDU handle API",
         pillar=SurfacePillar.IO,
     ),
+    "torchsky.io.fits": APISurface(
+        "torchsky.io.fits",
+        SurfaceTier.CORE,
+        "owning namespace for CFITSIO-backed FITS file operations",
+        pillar=SurfacePillar.IO,
+    ),
     "torchsky.table": APISurface(
         "torchsky.table",
         SurfaceTier.CORE,

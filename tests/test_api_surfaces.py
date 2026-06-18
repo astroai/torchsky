@@ -51,7 +51,12 @@ def test_api_surfaces_by_pillar_declare_modelling_spine() -> None:
     scene_names = {surface.name for surface in surfaces.api_surfaces_by_pillar("scene")}
     viz_names = {surface.name for surface in surfaces.api_surfaces_by_pillar("viz")}
 
-    assert {"torchsky.read", "torchsky.write", "torchsky.table"} <= io_names
+    assert {
+        "torchsky.read",
+        "torchsky.write",
+        "torchsky.io.fits",
+        "torchsky.table",
+    } <= io_names
     assert {"torchsky.wcs.WCS", "torchsky.sphere"} <= world_names
     assert {
         "torchsky.map.coadd_image_plane",

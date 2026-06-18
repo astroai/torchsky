@@ -254,6 +254,23 @@ def operator_bundle_for_observation(
     ).bundle
 
 
+def operator_bundles_for_observations(
+    observations: Sequence[FieldObservation | ImageObservation],
+    *,
+    resampling_kernel: str = "bilinear",
+    geometry: object | None = None,
+) -> tuple[ObservationOperatorBundle, ...]:
+    """Return one observation-operator bundle per observation, preserving order."""
+    return tuple(
+        operator_bundle_for_observation(
+            observation,
+            resampling_kernel=resampling_kernel,
+            geometry=geometry,
+        )
+        for observation in observations
+    )
+
+
 def bind_image_plane_observations_to_target(
     observations: Sequence[ImageObservation],
     scene_target: TargetRenderSpec,
@@ -285,4 +302,5 @@ __all__ = [
     "bind_image_plane_observations_to_target",
     "operator_adapter_for_observation",
     "operator_bundle_for_observation",
+    "operator_bundles_for_observations",
 ]

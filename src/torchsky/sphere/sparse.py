@@ -8,6 +8,7 @@ from torch import Tensor
 from . import healpix as _healpix
 
 if TYPE_CHECKING:
+    from .geom import PixelizedRegion
     from .moc import MOC
 
 
@@ -290,6 +291,38 @@ class SparseHealpixMap:
     def get_covered_pixels(self) -> Tensor:
         return self.pixels
 
+    def to_moc(self) -> "MOC":
+        """Create a MOC from this sparse map's coverage."""
+        from .moc import MOC
+
+        return MOC.from_sparse_map(self)
+
+    def to_pixelized_region(
+        self,
+        nside: int | None = None,
+        *,
+        nest: bool | None = None,
+    ) -> "PixelizedRegion":
+        """Expose sparse-map coverage as a ``PixelizedRegion``.
+
+        Same-resolution conversions only change HEALPix ordering. Different
+        resolutions go through MOC coverage normalization, avoiding dense masks.
+        """
+        from .geom import PixelizedRegion
+
+        nside_i = int(self.nside if nside is None else nside)
+        nest_out = bool(self.nest if nest is None else nest)
+        if nside_i == int(self.nside):
+            pix = self.pixels
+            if pix.numel() > 0 and nest_out != bool(self.nest):
+                pix = (
+                    _healpix.ring2nest(nside_i, pix)
+                    if nest_out
+                    else _healpix.nest2ring(nside_i, pix)
+                )
+            return PixelizedRegion(nside=nside_i, nest=nest_out, pixels=pix)
+        return self.to_moc().to_pixelized_region(nside_i, nest=nest_out)
+
     @property
     def valid_pixels(self) -> Tensor:
         """Returns the list of valid pixel indices."""
@@ -340,11 +373,14 @@ class SparseHealpixMap:
         sentinel: float | None = False,
         dtype: Any | None = None,
         metadata: dict[str, Any] | None = None,
+        nest: bool = True,
     ) -> "SparseHealpixMap":
         """Create a sparse map from MOC coverage without materializing a dense mask."""
         nside_i = int(nside)
         region = moc.to_pixelized_region(nside_i, nest=True)
         pix = region.pixels.to(dtype=torch.int64)
+        if not nest and pix.numel() > 0:
+            pix = _healpix.nest2ring(nside_i, pix)
         if dtype is None:
             value_t = torch.as_tensor(value, device=pix.device)
             dtype_t = value_t.dtype
@@ -363,10 +399,83 @@ class SparseHealpixMap:
             pix,
             values,
             nside_sparse=nside_i,
-            nest=True,
+            nest=nest,
             nside_coverage=nside_coverage,
             sentinel=sentinel,
             metadata=metadata,
+        )
+
+    @classmethod
+    def from_region(
+        cls,
+        region: object,
+        nside: int,
+        *,
+        nest: bool = True,
+        nside_coverage: int | None = None,
+        value: Any = True,
+        sentinel: float | None = False,
+        dtype: Any | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> "SparseHealpixMap":
+        """Create a sparse coverage map from a spherical region.
+
+        ``PixelizedRegion`` inputs preserve exact pixels at matching resolution
+        and otherwise use MOC flattening at the requested resolution. Exact
+        regions are pixelized through their ``pixelize`` or ``query_pixels``
+        method via :meth:`torchsky.sphere.moc.MOC.from_region`.
+        """
+        from .geom import PixelizedRegion
+        from .moc import MOC
+
+        nside_i = int(nside)
+        _healpix.nside2npix(nside_i)
+        if nside_i <= 0 or (nside_i & (nside_i - 1)) != 0:
+            raise ValueError("nside must be a positive power of two")
+
+        if isinstance(region, PixelizedRegion) and int(region.nside) == nside_i:
+            pix = region.pixels.to(dtype=torch.int64)
+            if pix.numel() > 0 and bool(region.nest) != nest:
+                pix = (
+                    _healpix.ring2nest(nside_i, pix)
+                    if nest
+                    else _healpix.nest2ring(nside_i, pix)
+                )
+            if dtype is None:
+                value_t = torch.as_tensor(value, device=pix.device)
+                dtype_t = value_t.dtype
+            else:
+                dtype_t = _coerce_torch_dtype(dtype)
+                value_t = torch.as_tensor(value, dtype=dtype_t, device=pix.device)
+            if value_t.ndim != 0:
+                raise ValueError("value must be a scalar")
+            values = torch.full(
+                (pix.numel(),),
+                value_t.item(),
+                dtype=dtype_t,
+                device=pix.device,
+            )
+            return cls.from_pixels(
+                pix,
+                values,
+                nside_sparse=nside_i,
+                nest=nest,
+                nside_coverage=nside_coverage,
+                sentinel=sentinel,
+                metadata=metadata,
+            )
+
+        order = nside_i.bit_length() - 1
+        moc = MOC.from_region(region, max_order=order)
+        return cls.from_moc(
+            moc,
+            nside=nside_i,
+            nside_coverage=nside_coverage,
+            value=value,
+            sentinel=sentinel,
+            dtype=dtype,
+            metadata=metadata,
+            nest=nest,
         )
 
     def generate_healpix_map(self) -> Tensor:
@@ -939,21 +1048,40 @@ class SkyMaskPipe:
     def combine(self, operation: Literal["and", "or"] = "and") -> SparseHealpixMap:
         if not self.stages:
             raise ValueError("no stages")
+        if operation not in {"and", "or"}:
+            raise ValueError("operation must be one of {'and', 'or'}")
         stage_names = list(self.stages.keys())
-        result = self.stages[stage_names[0]]
+        result_pixels = _positive_mask_pixels(self.stages[stage_names[0]])
         for name in stage_names[1:]:
-            other = self.stages[name]
-            d1 = result.to_dense(fill_value=0)
-            d2 = other.to_dense(fill_value=0)
-            res_dense = (
-                torch.logical_and(d1 > 0, d2 > 0).to(torch.float32)
-                if operation == "and"
-                else torch.logical_or(d1 > 0, d2 > 0).to(torch.float32)
-            )
-            result = SparseHealpixMap.from_dense(
-                res_dense, nside=self.nside, nest=self.nest, fill_value=0
-            )
-        return result
+            other_pixels = _positive_mask_pixels(self.stages[name])
+            if operation == "and":
+                result_pixels = result_pixels[
+                    torch.isin(result_pixels, other_pixels, assume_unique=True)
+                ]
+            else:
+                result_pixels = torch.unique(torch.cat([result_pixels, other_pixels]))
+
+        result_pixels = torch.unique(result_pixels).to(dtype=torch.int64)
+        values = torch.ones(
+            (result_pixels.numel(),), dtype=torch.float32, device=result_pixels.device
+        )
+        first = self.stages[stage_names[0]]
+        return SparseHealpixMap.from_pixels(
+            result_pixels,
+            values,
+            nside_sparse=self.nside,
+            nest=self.nest,
+            nside_coverage=first.nside_coverage,
+            sentinel=0.0,
+        )
+
+
+def _positive_mask_pixels(mask: SparseHealpixMap) -> Tensor:
+    values = mask.values
+    valid = values > 0
+    if valid.ndim > 1:
+        valid = torch.any(valid, dim=tuple(range(valid.ndim - 1)))
+    return mask.pixels[valid.reshape(-1)]
 
 
 __all__ = [

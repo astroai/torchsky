@@ -352,11 +352,233 @@ class CoupledTabularLookupWCS:
         return _interp_multilinear(query, axes, values, bounds=bounds_mode)
 
     def world_to_pixel(
-        self, world: Any, *, bounds: TabularBoundsMode | None = None
+        self,
+        world: Any,
+        *,
+        bounds: TabularBoundsMode | None = None,
+        max_iter: int = 20,
+        tol: float = 1.0e-10,
     ) -> Tensor:
-        raise NotImplementedError(
-            "general inverse lookup for coupled tabular grids is not implemented"
+        pts = torch.as_tensor(world)
+        if pts.shape[-1] != self.world_n_dim:
+            raise ValueError(f"world last dimension must be {self.world_n_dim}")
+        if self.pixel_n_dim != self.world_n_dim:
+            raise NotImplementedError(
+                "coupled tabular inverse requires pixel_n_dim == world_n_dim"
+            )
+        bounds_mode = bounds or self.bounds
+        if bounds_mode not in {"nan", "clamp"}:
+            raise ValueError("bounds must be 'nan' or 'clamp'")
+
+        query_shape = tuple(pts.shape[:-1])
+        dtype = self.world.dtype if pts.is_floating_point() else torch.float64
+        if pts.is_floating_point():
+            dtype = torch.promote_types(pts.dtype, self.world.dtype)
+        device = pts.device
+        target = pts.to(dtype=dtype).reshape(-1, self.world_n_dim)
+        axes = tuple(axis.to(device=device, dtype=dtype) for axis in self.pixel_axes)
+        world_grid = self.world.to(device=device, dtype=dtype)
+        flat_world = world_grid.reshape(-1, self.world_n_dim)
+        flat_axes = _flat_grid_pixel_coordinates(axes)
+
+        distances = torch.sum((target[:, None, :] - flat_world[None, :, :]) ** 2, dim=-1)
+        nearest = torch.argmin(distances, dim=-1)
+        initial = flat_axes.index_select(0, nearest)
+
+        solved = []
+        for row_index in range(target.shape[0]):
+            if self.pixel_n_dim == 2:
+                solved.append(
+                    _solve_coupled_tabular_point_2d_global(
+                        self,
+                        target[row_index],
+                        axes,
+                        max_iter=max_iter,
+                        tol=tol,
+                    )
+                )
+            else:
+                solved.append(
+                    _solve_coupled_tabular_point(
+                        self,
+                        target[row_index],
+                        initial[row_index],
+                        axes,
+                        max_iter=max_iter,
+                        tol=tol,
+                        bounds=bounds_mode,
+                        lower_bounds=None,
+                        upper_bounds=None,
+                    )
+                )
+        out = torch.stack(solved, dim=0)
+        return out.reshape(*query_shape, self.pixel_n_dim)
+
+
+def _flat_grid_pixel_coordinates(axes: tuple[Tensor, ...]) -> Tensor:
+    meshes = torch.meshgrid(*axes, indexing="ij")
+    return torch.stack([mesh.reshape(-1) for mesh in meshes], dim=-1)
+
+
+def _solve_coupled_tabular_point(
+    lookup: CoupledTabularLookupWCS,
+    target: Tensor,
+    initial: Tensor,
+    axes: tuple[Tensor, ...],
+    *,
+    max_iter: int,
+    tol: float,
+    bounds: TabularBoundsMode,
+    lower_bounds: Tensor | None,
+    upper_bounds: Tensor | None,
+) -> Tensor:
+    current = initial.clone()
+    if lower_bounds is None:
+        lower = torch.stack([axis[0] for axis in axes]).to(
+            device=target.device, dtype=target.dtype
         )
+    else:
+        lower = lower_bounds.to(device=target.device, dtype=target.dtype)
+    if upper_bounds is None:
+        upper = torch.stack([axis[-1] for axis in axes]).to(
+            device=target.device, dtype=target.dtype
+        )
+    else:
+        upper = upper_bounds.to(device=target.device, dtype=target.dtype)
+    eps = torch.stack(
+        [
+            torch.clamp((axis[-1] - axis[0]).abs() * 1.0e-6, min=1.0e-8)
+            for axis in axes
+        ]
+    ).to(device=target.device, dtype=target.dtype)
+    for _ in range(max_iter):
+        value = lookup.pixel_to_world(current.unsqueeze(0), bounds="clamp")[0].to(
+            dtype=target.dtype
+        )
+        residual = value - target
+        if not bool(torch.isfinite(residual).all().detach().cpu().item()):
+            break
+        if float(torch.linalg.vector_norm(residual).detach().cpu().item()) <= tol:
+            return current
+        columns = []
+        for axis_index in range(len(axes)):
+            perturbed = current.clone()
+            step = eps[axis_index]
+            if bool((current[axis_index] + step > axes[axis_index][-1]).detach().cpu().item()):
+                step = -step
+            perturbed[axis_index] = perturbed[axis_index] + step
+            pvalue = lookup.pixel_to_world(perturbed.unsqueeze(0), bounds="clamp")[0].to(
+                dtype=target.dtype
+            )
+            columns.append((pvalue - value) / step)
+        jac = torch.stack(columns, dim=-1)
+        try:
+            step = torch.linalg.solve(jac, residual)
+        except RuntimeError:
+            break
+        if not bool(torch.isfinite(step).all().detach().cpu().item()):
+            break
+        current = current - step
+        current = torch.minimum(torch.maximum(current, lower), upper)
+    return torch.full_like(current, torch.nan)
+
+
+def _solve_coupled_tabular_point_2d_global(
+    lookup: CoupledTabularLookupWCS,
+    target: Tensor,
+    axes: tuple[Tensor, ...],
+    *,
+    max_iter: int,
+    tol: float,
+) -> Tensor:
+    x_axis, y_axis = axes
+    world = lookup.world.to(device=target.device, dtype=target.dtype)
+    axis_tol = torch.stack(
+        [
+            torch.clamp((x_axis[-1] - x_axis[0]).abs() * 1.0e-9, min=1.0e-10),
+            torch.clamp((y_axis[-1] - y_axis[0]).abs() * 1.0e-9, min=1.0e-10),
+        ]
+    ).to(device=target.device, dtype=target.dtype)
+    world_tol = torch.as_tensor(tol, device=target.device, dtype=target.dtype)
+    solutions: list[Tensor] = []
+
+    for x_index in range(x_axis.shape[0] - 1):
+        for y_index in range(y_axis.shape[0] - 1):
+            corners = world[
+                x_index : x_index + 2,
+                y_index : y_index + 2,
+                :,
+            ].reshape(-1, lookup.world_n_dim)
+            if bool(
+                torch.any(target < corners.amin(dim=0) - world_tol)
+                .detach()
+                .cpu()
+                .item()
+            ):
+                continue
+            if bool(
+                torch.any(target > corners.amax(dim=0) + world_tol)
+                .detach()
+                .cpu()
+                .item()
+            ):
+                continue
+
+            lower = torch.stack((x_axis[x_index], y_axis[y_index])).to(
+                device=target.device, dtype=target.dtype
+            )
+            upper = torch.stack((x_axis[x_index + 1], y_axis[y_index + 1])).to(
+                device=target.device, dtype=target.dtype
+            )
+            initial = (lower + upper) * 0.5
+            candidate = _solve_coupled_tabular_point(
+                lookup,
+                target,
+                initial,
+                axes,
+                max_iter=max_iter,
+                tol=tol,
+                bounds="clamp",
+                lower_bounds=lower,
+                upper_bounds=upper,
+            )
+            if not bool(torch.isfinite(candidate).all().detach().cpu().item()):
+                continue
+            if bool(
+                torch.any(candidate < lower - axis_tol)
+                .detach()
+                .cpu()
+                .item()
+            ) or bool(
+                torch.any(candidate > upper + axis_tol)
+                .detach()
+                .cpu()
+                .item()
+            ):
+                continue
+            residual = lookup.pixel_to_world(candidate.unsqueeze(0), bounds="clamp")[
+                0
+            ].to(dtype=target.dtype) - target
+            if float(torch.linalg.vector_norm(residual).detach().cpu().item()) > tol:
+                continue
+            duplicate = False
+            for solution in solutions:
+                if bool(
+                    torch.all(torch.abs(solution - candidate) <= axis_tol)
+                    .detach()
+                    .cpu()
+                    .item()
+                ):
+                    duplicate = True
+                    break
+            if not duplicate:
+                solutions.append(candidate)
+                if len(solutions) > 1:
+                    return torch.full_like(target, torch.nan)
+
+    if len(solutions) == 1:
+        return solutions[0]
+    return torch.full_like(target, torch.nan)
 
 
 def _interp_multilinear(
@@ -764,13 +986,13 @@ def tabular_axes_from_fits(
     return axes
 
 
-def coupled_tabular_wcs_from_fits(
+def coupled_tabular_wcs_and_axes_from_fits(
     header: Mapping[str, Any],
     tables: Any,
     *,
     key: str = "",
-) -> CoupledTabularLookupWCS:
-    """Build a forward coupled table-lookup WCS from FITS ``-TAB`` metadata.
+) -> tuple[CoupledTabularLookupWCS, tuple[int, ...]]:
+    """Build a coupled table-lookup WCS plus the corresponding FITS axes.
 
     This helper targets the genuinely multidimensional ``-TAB`` case where
     multiple WCS axes are represented by coordinate arrays over a shared table
@@ -887,4 +1109,18 @@ def coupled_tabular_wcs_from_fits(
     pixel_axes = tuple(pixel_axes_by_tab_axis[index] for index in range(1, len(grid_shape) + 1))
     names = tuple(item[1] for item in coords)
     units = tuple(item[2] for item in coords)
-    return CoupledTabularLookupWCS(pixel_axes, world, names=names, units=units)
+    lookup = CoupledTabularLookupWCS(pixel_axes, world, names=names, units=units)
+    return lookup, tuple(item[0] for item in coords)
+
+
+def coupled_tabular_wcs_from_fits(
+    header: Mapping[str, Any],
+    tables: Any,
+    *,
+    key: str = "",
+) -> CoupledTabularLookupWCS:
+    """Build a forward coupled table-lookup WCS from FITS ``-TAB`` metadata."""
+    lookup, _axes = coupled_tabular_wcs_and_axes_from_fits(
+        header, tables, key=key
+    )
+    return lookup

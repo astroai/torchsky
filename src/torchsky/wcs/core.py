@@ -24,7 +24,7 @@ from .spectral import (
     rest_frequency_from_header,
     spectral_to_frequency as _spectral_to_frequency,
 )
-from .tabular import TabularAxis
+from .tabular import CoupledTabularLookupWCS, TabularAxis
 from .temporal import TemporalWCS
 from .frames import (
     canonical_celestial_frame,
@@ -101,6 +101,8 @@ class WCS:
         header: Optional[Dict[str, Any]] = None,
         key: str = "",
         tabular_axes: Mapping[int, TabularAxis] | None = None,
+        coupled_tabular: CoupledTabularLookupWCS | None = None,
+        coupled_tabular_axes: Sequence[int] | None = None,
         tables: Any = None,
         **kwargs,
     ):
@@ -118,6 +120,8 @@ class WCS:
         self.wcs_key = self._normalize_wcs_key(key)
         self._pixel_shape: tuple[int, ...] | None = None
         self.tabular_axes: dict[int, TabularAxis] = {}
+        self.coupled_tabular: CoupledTabularLookupWCS | None = None
+        self.coupled_tabular_axes: tuple[int, ...] = ()
 
         if header is not None:
             self.naxis = self._infer_wcs_naxis(header)
@@ -173,11 +177,26 @@ class WCS:
         self._setup_tensors()
 
         if header is not None and tabular_axes is None and tables is not None:
-            from .tabular import tabular_axes_from_fits
+            from .tabular import (
+                coupled_tabular_wcs_and_axes_from_fits,
+                tabular_axes_from_fits,
+            )
 
-            tabular_axes = tabular_axes_from_fits(header, tables, key=self.wcs_key)
+            try:
+                tabular_axes = tabular_axes_from_fits(
+                    header, tables, key=self.wcs_key
+                )
+            except ValueError as exc:
+                if "coupled multidimensional coordinate array" not in str(exc):
+                    raise
+                coupled_tabular, coupled_tabular_axes = (
+                    coupled_tabular_wcs_and_axes_from_fits(
+                        header, tables, key=self.wcs_key
+                    )
+                )
 
         self._setup_tabular_axes(tabular_axes)
+        self._setup_coupled_tabular(coupled_tabular, coupled_tabular_axes)
         self._validate_required_tabular_axes()
 
         # Build spectral transforms
@@ -484,6 +503,49 @@ class WCS:
             axes[idx] = axis.to(device=self.device, dtype=torch.float64)
         self.tabular_axes = axes
 
+    def _setup_coupled_tabular(
+        self,
+        coupled_tabular: CoupledTabularLookupWCS | None,
+        coupled_tabular_axes: Sequence[int] | None,
+    ) -> None:
+        if coupled_tabular is None:
+            self.coupled_tabular = None
+            self.coupled_tabular_axes = ()
+            return
+        if not isinstance(coupled_tabular, CoupledTabularLookupWCS):
+            raise TypeError("coupled_tabular must be a CoupledTabularLookupWCS")
+        if coupled_tabular_axes is None:
+            coupled_tabular_axes = tuple(range(1, self.naxis + 1))
+        axes = tuple(int(axis_number) for axis_number in coupled_tabular_axes)
+        if len(axes) == 0:
+            raise ValueError("coupled_tabular_axes must not be empty")
+        if len(set(axes)) != len(axes):
+            raise ValueError("coupled_tabular_axes must be unique")
+        for axis_number in axes:
+            if axis_number < 1 or axis_number > self.naxis:
+                raise ValueError(
+                    f"coupled_tabular axis {axis_number} outside WCS axes 1..{self.naxis}"
+                )
+            ctype = str(self.wcs_params.get(f"CTYPE{axis_number}", "")).strip().upper()
+            if not ctype.endswith("-TAB"):
+                raise ValueError(
+                    "coupled_tabular axes require corresponding CTYPEi ending in '-TAB'"
+                )
+        if coupled_tabular.pixel_n_dim != len(axes):
+            raise ValueError(
+                "coupled_tabular pixel_n_dim must match coupled_tabular_axes "
+                f"({coupled_tabular.pixel_n_dim} != {len(axes)})"
+            )
+        if coupled_tabular.world_n_dim != len(axes):
+            raise ValueError(
+                "coupled_tabular world_n_dim must match coupled_tabular_axes "
+                f"({coupled_tabular.world_n_dim} != {len(axes)})"
+            )
+        self.coupled_tabular = coupled_tabular.to(
+            device=self.device, dtype=torch.float64
+        )
+        self.coupled_tabular_axes = tuple(axis - 1 for axis in axes)
+
     def _required_tabular_axis_numbers(self) -> set[int]:
         axes: set[int] = set()
         for axis_number in range(1, self.naxis + 1):
@@ -497,6 +559,8 @@ class WCS:
         if not required:
             return
         supplied = {axis + 1 for axis in self.tabular_axes}
+        if self.coupled_tabular is not None:
+            supplied.update(axis + 1 for axis in self.coupled_tabular_axes)
         missing = sorted(required.difference(supplied))
         if missing:
             axes = ", ".join(str(axis) for axis in missing)
@@ -510,11 +574,39 @@ class WCS:
             return self._apply_spectral_algorithm_pixel_to_world(linear_world, axis)
         return tabular.pixel_to_world(linear_world)
 
+    def _apply_coupled_tabular_pixel_to_world(
+        self, linear_world: Tensor
+    ) -> dict[int, Tensor]:
+        if self.coupled_tabular is None:
+            return {}
+        query = torch.stack(
+            [linear_world[:, axis] for axis in self.coupled_tabular_axes], dim=-1
+        )
+        coupled_world = self.coupled_tabular.pixel_to_world(query)
+        return {
+            axis: coupled_world[:, index]
+            for index, axis in enumerate(self.coupled_tabular_axes)
+        }
+
     def _apply_tabular_world_to_pixel(self, world: Tensor, axis: int) -> Tensor:
         tabular = self.tabular_axes.get(axis)
         if tabular is None:
             return self._apply_spectral_algorithm_world_to_pixel(world, axis)
         return tabular.world_to_pixel(world)
+
+    def _apply_coupled_tabular_world_to_pixel(
+        self, world: Tensor
+    ) -> dict[int, Tensor]:
+        if self.coupled_tabular is None:
+            return {}
+        query = torch.stack(
+            [world[:, axis] for axis in self.coupled_tabular_axes], dim=-1
+        )
+        coupled_pixel = self.coupled_tabular.world_to_pixel(query)
+        return {
+            axis: coupled_pixel[:, index]
+            for index, axis in enumerate(self.coupled_tabular_axes)
+        }
 
     def _axis_algorithm_code(self, axis: int) -> str:
         ctype = str(self.wcs_params.get(f"CTYPE{axis + 1}", "")).strip().upper()
@@ -2338,6 +2430,10 @@ class WCS:
             axis: tabular.to(device=self.device, dtype=torch.float64)
             for axis, tabular in self.tabular_axes.items()
         }
+        if self.coupled_tabular is not None:
+            self.coupled_tabular = self.coupled_tabular.to(
+                device=self.device, dtype=torch.float64
+            )
         return self
 
     @property
@@ -2824,6 +2920,10 @@ class WCS:
                 world_flat, float(origin), allow_cpp_inverse_sphere=False
             )
         elif not self._is_spatial:
+            if self.coupled_tabular is not None:
+                raise NotImplementedError(
+                    "general inverse lookup for coupled tabular grids is not implemented"
+                )
             linear_world = world_flat.clone()
             for i in range(self.naxis):
                 linear_world[:, i] = self._apply_tabular_world_to_pixel(
@@ -3449,8 +3549,13 @@ class WCS:
 
         if not is_spatial:
             linear_world = self.crval + torch.matmul(rel, self.cd_full.T)
+            if self.coupled_tabular_axes == tuple(range(self.naxis)):
+                return self.coupled_tabular.pixel_to_world(linear_world)
+            coupled_world = self._apply_coupled_tabular_pixel_to_world(linear_world)
             results = [
-                self._apply_tabular_pixel_to_world(linear_world[:, i], i)
+                coupled_world.get(
+                    i, self._apply_tabular_pixel_to_world(linear_world[:, i], i)
+                )
                 for i in range(self.naxis)
             ]
         else:
@@ -3478,10 +3583,14 @@ class WCS:
 
         # Handle NAXIS > 2 (e.g. Spectral axis 3)
         if self.naxis >= 3:
+            linear_extra = self.crval + torch.matmul(rel, self.cd_full.T)
+            coupled_world = self._apply_coupled_tabular_pixel_to_world(linear_extra)
             for i in range(2, self.naxis):
                 # Basic linear transformation for non-spatial axes
-                val = self.crval[i] + rel[:, i] * self.cd_full[i, i]
-                results.append(self._apply_tabular_pixel_to_world(val, i))
+                val = linear_extra[:, i]
+                results.append(
+                    coupled_world.get(i, self._apply_tabular_pixel_to_world(val, i))
+                )
 
         return torch.stack(results[: self.naxis], dim=-1)
 
@@ -3906,9 +4015,10 @@ class WCS:
             # Entirely linear transformation
             # pix_rel = cd_inv @ (world - crval)
             linear_world = world_flat.clone()
+            coupled_pixel = self._apply_coupled_tabular_world_to_pixel(world_flat)
             for i in range(self.naxis):
-                linear_world[:, i] = self._apply_tabular_world_to_pixel(
-                    world_flat[:, i], i
+                linear_world[:, i] = coupled_pixel.get(
+                    i, self._apply_tabular_world_to_pixel(world_flat[:, i], i)
                 )
             rel_flat = torch.matmul(self.cd_inv_full, (linear_world - self.crval).T).T
             pix_internal_flat = rel_flat + self.crpix
@@ -4031,8 +4141,11 @@ class WCS:
             pass
         elif is_spatial and self.naxis >= 3:
             # Basic linear inverse for axis 3+
+            coupled_pixel = self._apply_coupled_tabular_world_to_pixel(world_flat)
             for i in range(2, self.naxis):
-                linear_world = self._apply_tabular_world_to_pixel(world_flat[:, i], i)
+                linear_world = coupled_pixel.get(
+                    i, self._apply_tabular_world_to_pixel(world_flat[:, i], i)
+                )
                 pix_internal_flat[:, i] = (linear_world - self.crval[i]) / self.cd_full[
                     i, i
                 ] + self.crpix[i]

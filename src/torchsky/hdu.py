@@ -387,10 +387,7 @@ class TensorHDU:
 
             if has_tab and getattr(self, "_source_path", None) is not None:
                 with HDUList.fromfile(self._source_path) as hdul:
-                    from .wcs.tabular import tabular_axes_from_fits
-
-                    extracted_axes = tabular_axes_from_fits(self._header, hdul)
-                self._wcs_cache = WCS(self._header, tabular_axes=extracted_axes)
+                    self._wcs_cache = WCS(self._header, tables=hdul)
             else:
                 self._wcs_cache = WCS(self._header)
             self._wcs_version = current_version

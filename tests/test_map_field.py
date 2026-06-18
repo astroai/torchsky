@@ -31,6 +31,7 @@ from torchsky.map.field import _noise_pretrain_field_model
 from torchsky.map.field.bandpass import bandpass_quadrature
 from torchsky.map.field.core import _BaseFieldModel
 from torchsky.map.field.hashgrid import HashGridEncoder
+from torchsky.map.field import rendering as field_rendering
 
 
 def _tan_header(
@@ -206,6 +207,60 @@ def test_render_field_observation_changes_with_bandpass() -> None:
     assert low_render.shape == (16, 16)
     assert high_render.shape == (16, 16)
     assert not torch.allclose(low_render, high_render)
+
+
+def test_render_field_observation_accepts_explicit_operator_bundle() -> None:
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=1000.0,
+    )
+    model = _ConstantField(domain, 2.0)
+    observation = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=_tan_header(4, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
+        wavelength=5600.0,
+        background_offset=3.0,
+    )
+
+    implicit = render_field_observation(model, observation, num_spectral_samples=1)
+    explicit = render_field_observation(
+        model,
+        observation,
+        num_spectral_samples=1,
+        operator_bundle=field_rendering.ObservationOperatorBundle(),
+    )
+
+    torch.testing.assert_close(implicit, torch.full((4, 4), 5.0))
+    torch.testing.assert_close(explicit, torch.full((4, 4), 2.0))
+
+
+def test_render_field_observation_distribution_fallback_applies_operators_once() -> None:
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=1000.0,
+    )
+    model = _ConstantField(domain, 2.0)
+    observation = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=_tan_header(4, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
+        wavelength=5600.0,
+        background_offset=3.0,
+    )
+
+    mean, logvar = render_field_observation_distribution(
+        model,
+        observation,
+        num_spectral_samples=1,
+    )
+
+    torch.testing.assert_close(mean, torch.full((4, 4), 5.0))
+    torch.testing.assert_close(logvar, torch.zeros((4, 4), dtype=torch.float32))
 
 
 def test_field_component_decomposition_respects_contextual_roles() -> None:

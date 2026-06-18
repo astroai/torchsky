@@ -12,8 +12,13 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from ..exposure_pose import ExposurePose
+from ..operators.bundle import (
+    ObservationOperatorBundle,
+    field_observation_operator_bundle,
+)
+from ..operators.psf import apply_psf_spec
 from .rendering import render_field_observation
-from .types import FieldObservation, ForwardContext
+from .types import FieldFitResult, FieldObservation, ForwardContext
 
 
 @dataclass(frozen=True)
@@ -156,7 +161,7 @@ def _aggregate_quality_metrics(
 ) -> dict[str, float]:
     if not per_observation:
         return {}
-    keys = per_observation[0].keys()
+    keys = sorted({key for metrics in per_observation for key in metrics})
     weights = [
         max(float(metrics.get("effective_weight_sum", 0.0)), 0.0)
         for metrics in per_observation
@@ -166,17 +171,26 @@ def _aggregate_quality_metrics(
     for key in keys:
         if key == "effective_weight_sum":
             aggregate[key] = total_weight
-        elif total_weight > 0.0:
+            continue
+        available = [
+            (metrics, weight)
+            for metrics, weight in zip(per_observation, weights, strict=True)
+            if key in metrics
+        ]
+        if not available:
+            continue
+        key_weight = sum(weight for _, weight in available)
+        if key_weight > 0.0:
             aggregate[key] = (
                 sum(
                     float(metrics[key]) * weight
-                    for metrics, weight in zip(per_observation, weights, strict=True)
+                    for metrics, weight in available
                 )
-                / total_weight
+                / key_weight
             )
         else:
-            aggregate[key] = sum(metrics[key] for metrics in per_observation) / float(
-                len(per_observation)
+            aggregate[key] = sum(metrics[key] for metrics, _ in available) / float(
+                len(available)
             )
     return aggregate
 
@@ -255,6 +269,84 @@ def field_quality_scorecard(
     }
 
 
+def field_quality_acceptance_report(
+    per_observation: Sequence[dict[str, float]],
+    *,
+    observations: Sequence[FieldObservation] | None = None,
+    max_weighted_rmse: float | None = None,
+    min_residual_snr: float | None = None,
+    min_support_fraction: float | None = None,
+    min_effective_weight_sum: float | None = None,
+    max_abs_psf_residual_alignment: float | None = None,
+) -> dict[str, Any]:
+    """Evaluate explicit per-observation quality gates with no default thresholds."""
+    if observations is not None and len(observations) != len(per_observation):
+        raise ValueError("observations must have the same length as per_observation")
+    criteria: dict[str, tuple[str, float]] = {}
+    if max_weighted_rmse is not None:
+        criteria["weighted_rmse"] = ("max", float(max_weighted_rmse))
+    if min_residual_snr is not None:
+        criteria["residual_snr"] = ("min", float(min_residual_snr))
+    if min_support_fraction is not None:
+        criteria["support_fraction"] = ("min", float(min_support_fraction))
+    if min_effective_weight_sum is not None:
+        criteria["effective_weight_sum"] = ("min", float(min_effective_weight_sum))
+    if max_abs_psf_residual_alignment is not None:
+        criteria["psf_residual_alignment"] = (
+            "max_abs",
+            float(max_abs_psf_residual_alignment),
+        )
+    violations: list[dict[str, Any]] = []
+    for index, metrics in enumerate(per_observation):
+        band = (
+            _observation_quality_group_key(observations[index], index)
+            if observations is not None
+            else None
+        )
+        for metric, (direction, threshold) in criteria.items():
+            if metric not in metrics:
+                violations.append(
+                    {
+                        "index": int(index),
+                        "band": band,
+                        "metric": metric,
+                        "reason": "missing",
+                        "threshold": threshold,
+                    }
+                )
+                continue
+            value = float(metrics[metric])
+            compare_value = abs(value) if direction == "max_abs" else value
+            failed = (
+                compare_value > threshold
+                if direction in {"max", "max_abs"}
+                else compare_value < threshold
+            )
+            if failed:
+                violations.append(
+                    {
+                        "index": int(index),
+                        "band": band,
+                        "metric": metric,
+                        "value": value,
+                        "threshold": threshold,
+                        "direction": direction,
+                    }
+                )
+    return {
+        "passed": not violations,
+        "criteria": {
+            metric: {"direction": direction, "threshold": threshold}
+            for metric, (direction, threshold) in criteria.items()
+        },
+        "violations": tuple(violations),
+        "scorecard": field_quality_scorecard(
+            per_observation,
+            observations=observations,
+        ),
+    }
+
+
 def field_image_quality_metrics(
     prediction: Tensor,
     target: Tensor,
@@ -303,12 +395,49 @@ def field_image_quality_metrics(
     return metrics
 
 
+def _psf_residual_alignment(
+    residual: Tensor,
+    weight: Tensor,
+    support: Tensor,
+    psf_spec: object | None,
+) -> float:
+    psf_residual = apply_psf_spec(residual, psf_spec)
+    if psf_residual.shape != residual.shape:
+        raise ValueError("PSF residual alignment requires shape-preserving PSF output")
+    valid_weight = torch.where(
+        support,
+        torch.clamp(weight, min=0.0),
+        torch.zeros_like(weight),
+    )
+    weight_sum = valid_weight.sum()
+    if float(weight_sum.detach().cpu()) <= 0.0:
+        return 0.0
+    residual_mean = torch.sum(valid_weight * residual) / torch.clamp(
+        weight_sum,
+        min=1.0e-12,
+    )
+    psf_mean = torch.sum(valid_weight * psf_residual) / torch.clamp(
+        weight_sum,
+        min=1.0e-12,
+    )
+    residual_centered = residual - residual_mean
+    psf_centered = psf_residual - psf_mean
+    numerator = torch.sum(valid_weight * residual_centered * psf_centered)
+    denominator = torch.sqrt(
+        torch.sum(valid_weight * residual_centered * residual_centered)
+        * torch.sum(valid_weight * psf_centered * psf_centered)
+        + 1.0e-12
+    )
+    return float((numerator / denominator).detach().cpu())
+
+
 def field_image_residual_product(
     prediction: Tensor,
     target: Tensor,
     *,
     weight: Tensor | None = None,
     mask: Tensor | None = None,
+    psf_spec: object | None = None,
     residual_scales: Sequence[int] = (1, 2, 4),
     band_name: str | None = None,
 ) -> FieldResidualProduct:
@@ -322,12 +451,20 @@ def field_image_residual_product(
         mask=valid,
         residual_scales=residual_scales,
     )
+    support = valid & (w > 0.0)
+    if psf_spec is not None and getattr(psf_spec, "mode", "none") != "none":
+        metrics["psf_residual_alignment"] = _psf_residual_alignment(
+            residual,
+            w,
+            support,
+            psf_spec,
+        )
     return FieldResidualProduct(
         prediction=torch.where(valid, pred, torch.zeros_like(pred)),
         target=torch.where(valid, tgt, torch.zeros_like(tgt)),
         residual=residual,
         weight=w,
-        support=valid & (w > 0.0),
+        support=support,
         metrics=metrics,
         band_name=band_name,
     )
@@ -406,6 +543,7 @@ def render_field_residual(
     num_spectral_samples: int = 9,
     forward_context: ForwardContext | None = None,
     exposure_pose: ExposurePose | None = None,
+    operator_bundle: ObservationOperatorBundle | None = None,
     masked: bool = True,
     **render_kwargs: Any,
 ) -> Tensor:
@@ -416,6 +554,7 @@ def render_field_residual(
         num_spectral_samples=num_spectral_samples,
         forward_context=forward_context,
         exposure_pose=exposure_pose,
+        operator_bundle=operator_bundle,
         **render_kwargs,
     )
     image = observation.image.to(device=prediction.device, dtype=prediction.dtype)
@@ -433,16 +572,23 @@ def render_field_residual_product(
     num_spectral_samples: int = 9,
     forward_context: ForwardContext | None = None,
     exposure_pose: ExposurePose | None = None,
+    operator_bundle: ObservationOperatorBundle | None = None,
     residual_scales: Sequence[int] = (1, 2, 4),
     **render_kwargs: Any,
 ) -> FieldResidualProduct:
     """Render a field observation and return a structured residual product."""
+    resolved_operator_bundle = (
+        operator_bundle
+        if operator_bundle is not None
+        else field_observation_operator_bundle(observation)
+    )
     prediction = render_field_observation(
         model,
         observation,
         num_spectral_samples=num_spectral_samples,
         forward_context=forward_context,
         exposure_pose=exposure_pose,
+        operator_bundle=resolved_operator_bundle,
         **render_kwargs,
     )
     return field_image_residual_product(
@@ -450,6 +596,9 @@ def render_field_residual_product(
         observation.image,
         weight=observation.weight,
         mask=observation.mask,
+        psf_spec=observation.psf_spec
+        if resolved_operator_bundle.psf is not None
+        else None,
         residual_scales=residual_scales,
         band_name=observation.band_name,
     )
@@ -462,6 +611,8 @@ def render_field_quality(
     num_spectral_samples: int = 9,
     observation_forward_contexts: Sequence[ForwardContext | None] | None = None,
     observation_exposure_poses: Sequence[ExposurePose | None] | None = None,
+    observation_operator_bundles: Sequence[ObservationOperatorBundle | None]
+    | None = None,
     residual_scales: Sequence[int] = (1, 2, 4),
     include_scorecard: bool = False,
     include_residual_products: bool = False,
@@ -478,6 +629,11 @@ def render_field_quality(
         if observation_exposure_poses is not None
         else tuple(None for _ in observations)
     )
+    operator_bundles = (
+        tuple(observation_operator_bundles)
+        if observation_operator_bundles is not None
+        else tuple(None for _ in observations)
+    )
     if len(contexts) != len(observations):
         raise ValueError(
             "observation_forward_contexts must have the same length as observations"
@@ -486,16 +642,32 @@ def render_field_quality(
         raise ValueError(
             "observation_exposure_poses must have the same length as observations"
         )
+    if len(operator_bundles) != len(observations):
+        raise ValueError(
+            "observation_operator_bundles must have the same length as observations"
+        )
 
     per_observation: list[dict[str, float]] = []
     residual_products: list[FieldResidualProduct] = []
-    for observation, context, pose in zip(observations, contexts, poses, strict=True):
+    for observation, context, pose, operator_bundle in zip(
+        observations,
+        contexts,
+        poses,
+        operator_bundles,
+        strict=True,
+    ):
+        resolved_operator_bundle = (
+            operator_bundle
+            if operator_bundle is not None
+            else field_observation_operator_bundle(observation)
+        )
         prediction = render_field_observation(
             model,
             observation,
             num_spectral_samples=num_spectral_samples,
             forward_context=context,
             exposure_pose=pose,
+            operator_bundle=resolved_operator_bundle,
             **render_kwargs,
         )
         product = field_image_residual_product(
@@ -503,6 +675,9 @@ def render_field_quality(
             observation.image,
             weight=observation.weight,
             mask=observation.mask,
+            psf_spec=observation.psf_spec
+            if resolved_operator_bundle.psf is not None
+            else None,
             residual_scales=residual_scales,
             band_name=observation.band_name,
         )
@@ -529,12 +704,53 @@ def render_field_quality(
     return result
 
 
+def render_field_fit_quality(
+    fit_result: FieldFitResult,
+    observations: Sequence[FieldObservation],
+    *,
+    num_spectral_samples: int = 9,
+    observation_forward_contexts: Sequence[ForwardContext | None] | None = None,
+    observation_exposure_poses: Sequence[ExposurePose | None] | None = None,
+    observation_operator_bundles: Sequence[ObservationOperatorBundle | None]
+    | None = None,
+    residual_scales: Sequence[int] = (1, 2, 4),
+    include_scorecard: bool = False,
+    include_residual_products: bool = False,
+    **render_kwargs: Any,
+) -> dict[str, Any]:
+    """Render quality summaries using model and observation-law metadata from a fit."""
+    poses = (
+        fit_result.exposure_poses
+        if observation_exposure_poses is None
+        else observation_exposure_poses
+    )
+    bundles = (
+        fit_result.observation_operator_bundles
+        if observation_operator_bundles is None
+        else observation_operator_bundles
+    )
+    return render_field_quality(
+        fit_result.model,
+        observations,
+        num_spectral_samples=num_spectral_samples,
+        observation_forward_contexts=observation_forward_contexts,
+        observation_exposure_poses=poses,
+        observation_operator_bundles=bundles,
+        residual_scales=residual_scales,
+        include_scorecard=include_scorecard,
+        include_residual_products=include_residual_products,
+        **render_kwargs,
+    )
+
+
 __all__ = [
     "FieldResidualProduct",
     "FieldResidualTile",
     "field_image_residual_product",
     "field_image_quality_metrics",
+    "field_quality_acceptance_report",
     "field_quality_scorecard",
+    "render_field_fit_quality",
     "render_field_quality",
     "render_field_residual",
     "render_field_residual_product",

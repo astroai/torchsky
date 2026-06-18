@@ -2,8 +2,11 @@ import numpy as np
 import pytest
 import torch
 
-from torchsky.sphere.sparse import SparseHealpixMap
+from torchsky.sphere.sparse import SkyMaskPipe, SparseHealpixMap
 from torchsky.sphere import healpix as hp
+from torchsky.sphere import SphericalCap
+from torchsky.sphere.geom import PixelizedRegion
+from torchsky.sphere.moc import MOC, nest2uniq
 
 
 def test_sparse_from_dense_roundtrip() -> None:
@@ -97,6 +100,99 @@ def test_sparse_update_values_pix_keeps_latest_multiband_duplicate() -> None:
         sp.values,
         torch.tensor([[10.0, 22.0], [100.0, 222.0]], dtype=torch.float64),
     )
+
+
+def test_sparse_to_moc_and_pixelized_region_preserve_ordering() -> None:
+    nside = 8
+    pix_nest = torch.tensor([0, 3, 10], dtype=torch.int64)
+    pix_ring = hp.nest2ring(nside, pix_nest)
+    sp = SparseHealpixMap.from_pixels(
+        pix_ring,
+        torch.ones(pix_ring.numel(), dtype=torch.float32),
+        nside_sparse=nside,
+        nest=False,
+        nside_coverage=2,
+        sentinel=0.0,
+    )
+
+    moc = sp.to_moc()
+    torch.testing.assert_close(moc.uniq, MOC(nest2uniq(nside, pix_nest)).uniq)
+
+    ring_region = sp.to_pixelized_region()
+    assert not ring_region.nest
+    torch.testing.assert_close(ring_region.pixels, torch.unique(pix_ring))
+
+    nested_region = sp.to_pixelized_region(nest=True)
+    assert nested_region.nest
+    torch.testing.assert_close(nested_region.pixels, torch.unique(pix_nest))
+
+    upsampled = sp.to_pixelized_region(nside=16, nest=True)
+    expected_children = (
+        pix_nest.unsqueeze(1) * 4
+        + torch.arange(4, dtype=torch.int64).unsqueeze(0)
+    ).reshape(-1)
+    torch.testing.assert_close(upsampled.pixels, torch.sort(expected_children)[0])
+
+
+def test_sparse_from_region_preserves_pixelized_region_values_and_ordering() -> None:
+    nside = 8
+    pix_nest = torch.tensor([0, 3, 10, 10], dtype=torch.int64)
+    pix_ring = hp.nest2ring(nside, pix_nest)
+    region = PixelizedRegion(nside=nside, nest=False, pixels=pix_ring)
+
+    smap = SparseHealpixMap.from_region(
+        region,
+        nside=nside,
+        nest=False,
+        nside_coverage=2,
+        value=2.5,
+        sentinel=0.0,
+        dtype=torch.float32,
+        metadata={"SURVEY": "synthetic"},
+    )
+
+    assert not smap.nest
+    assert smap.nside_coverage == 2
+    assert smap.metadata == {"SURVEY": "synthetic"}
+    torch.testing.assert_close(smap.pixels, torch.unique(pix_ring))
+    torch.testing.assert_close(
+        smap.values,
+        torch.full((torch.unique(pix_ring).numel(),), 2.5, dtype=torch.float32),
+    )
+
+    nested = SparseHealpixMap.from_region(
+        region,
+        nside=nside,
+        nest=True,
+        value=True,
+        sentinel=False,
+    )
+    assert nested.nest
+    assert nested.values.dtype == torch.bool
+    assert bool(nested.values.all())
+    torch.testing.assert_close(nested.pixels, torch.unique(pix_nest))
+
+
+def test_sparse_from_region_pixelizes_exact_region_without_dense_map() -> None:
+    cap = SphericalCap(0.0, 0.0, 5.0)
+
+    smap = SparseHealpixMap.from_region(
+        cap,
+        nside=64,
+        nside_coverage=8,
+        value=1.0,
+        sentinel=0.0,
+        dtype=torch.float32,
+    )
+
+    assert smap.nest
+    assert smap.nside_coverage == 8
+    assert smap.coverage_map is not None
+    assert smap.pixels.numel() > 0
+    torch.testing.assert_close(smap.values, torch.ones_like(smap.values))
+    moc = smap.to_moc()
+    assert bool(moc.contains(0.0, 0.0))
+    assert not bool(moc.contains(180.0, 0.0))
 
 
 def test_sparse_nearest_interpolation_on_centers() -> None:
@@ -336,6 +432,62 @@ def test_sparse_rejects_coverage_nside_larger_than_sparse_nside() -> None:
             nside_sparse=4,
             nside_coverage=8,
         )
+
+
+def test_sky_mask_pipe_combines_masks_without_dense_materialization() -> None:
+    nside = 1024
+    a = SparseHealpixMap.from_pixels(
+        torch.tensor([1, 10, 100, 1000, 10_000], dtype=torch.int64),
+        torch.ones(5, dtype=torch.float32),
+        nside_sparse=nside,
+        nest=True,
+        nside_coverage=64,
+        sentinel=0.0,
+    )
+    b = SparseHealpixMap.from_pixels(
+        torch.tensor([10, 100, 999, 10_000], dtype=torch.int64),
+        torch.ones(4, dtype=torch.float32),
+        nside_sparse=nside,
+        nest=True,
+        nside_coverage=64,
+        sentinel=0.0,
+    )
+    pipe = SkyMaskPipe(nside=nside, nest=True)
+    pipe.add_stage("a", a)
+    pipe.add_stage("b", b)
+
+    both = pipe.combine("and")
+    either = pipe.combine("or")
+
+    torch.testing.assert_close(
+        both.pixels,
+        torch.tensor([10, 100, 10_000], dtype=torch.int64),
+    )
+    torch.testing.assert_close(
+        either.pixels,
+        torch.tensor([1, 10, 100, 999, 1000, 10_000], dtype=torch.int64),
+    )
+    assert both.nside_coverage == 64
+    assert either.nside_coverage == 64
+    torch.testing.assert_close(both.values, torch.ones(3, dtype=torch.float32))
+    torch.testing.assert_close(either.values, torch.ones(6, dtype=torch.float32))
+
+
+def test_sky_mask_pipe_rejects_unknown_operation() -> None:
+    pipe = SkyMaskPipe(nside=8, nest=True)
+    pipe.add_stage(
+        "mask",
+        SparseHealpixMap.from_pixels(
+            torch.tensor([0], dtype=torch.int64),
+            torch.tensor([1.0], dtype=torch.float32),
+            nside_sparse=8,
+            nest=True,
+            sentinel=0.0,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="operation"):
+        pipe.combine("xor")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

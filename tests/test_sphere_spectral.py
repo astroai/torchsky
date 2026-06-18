@@ -5,7 +5,9 @@ import pytest
 import torch
 
 from torchsky.sphere import compat
+from torchsky.sphere import healpix as hp
 import torchsky.sphere.spectral as spectral_mod
+import torchsky.sphere.harmonics as harmonics_mod
 from torchsky.sphere.spectral import (
     alm2map,
     alm2map_batched,
@@ -28,7 +30,13 @@ from torchsky.sphere.spectral import (
     synalm,
     synfast,
 )
-from torchsky.sphere import healpix as hp
+
+
+def test_harmonics_alias_matches_spectral_module() -> None:
+    assert harmonics_mod.__all__ == spectral_mod.__all__
+    assert harmonics_mod.map2alm is spectral_mod.map2alm
+    assert harmonics_mod.alm2map is spectral_mod.alm2map
+
 
 try:
     import healpy as _hp  # type: ignore

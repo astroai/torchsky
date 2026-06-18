@@ -17,6 +17,7 @@ from torchsky.map import (
     render_field_observation,
     scale_observation_for_rest_frame_scene,
 )
+from torchsky.map.operators.bundle import ObservationOperatorBundle
 
 
 def _tan_header(
@@ -41,6 +42,12 @@ def _tan_header(
         "CD2_1": 0.0,
         "CD2_2": scale_deg,
     }
+
+
+class _ZeroField(nn.Module):
+    def forward(self, ra, dec, lam):
+        del dec, lam
+        return torch.zeros_like(ra, dtype=torch.float32)
 
 
 def test_scale_observation_divides_spectral_metadata_by_one_plus_z() -> None:
@@ -104,6 +111,27 @@ def test_predict_observation_mean_matches_render_without_rest_frame() -> None:
     pred = predict_observation_mean(model, obs, num_spectral_samples=5)
     ref = render_field_observation(model, obs, num_spectral_samples=5)
     assert torch.allclose(pred, ref)
+
+
+def test_predict_observation_mean_forwards_operator_bundle() -> None:
+    model = _ZeroField()
+    obs = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=_tan_header(4, crval1=150.0, crval2=2.0, scale_deg=0.01),
+        wavelength=5600.0,
+        background_offset=3.0,
+    )
+
+    implicit = predict_observation_mean(model, obs, num_spectral_samples=1)
+    explicit = predict_observation_mean(
+        model,
+        obs,
+        num_spectral_samples=1,
+        operator_bundle=ObservationOperatorBundle(),
+    )
+
+    torch.testing.assert_close(implicit, torch.full((4, 4), 3.0))
+    torch.testing.assert_close(explicit, torch.zeros((4, 4)))
 
 
 def test_predict_observation_mean_rest_frame_matches_manual_scale() -> None:
@@ -180,6 +208,30 @@ def test_multi_survey_charbonnier_loss_runs_backward() -> None:
     assert any(p.grad is not None for p in model.parameters())
 
 
+def test_multi_survey_loss_forwards_operator_bundles() -> None:
+    model = _ZeroField()
+    obs = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=_tan_header(4, crval1=150.0, crval2=2.0, scale_deg=0.01),
+        wavelength=5600.0,
+        background_offset=3.0,
+    )
+    term = SurveyDataTerm(
+        "survey",
+        (obs,),
+        operator_bundle_per_observation=(ObservationOperatorBundle(),),
+    )
+
+    loss = multi_survey_charbonnier_loss(
+        model,
+        (term,),
+        charbonnier_eps=1.0e-3,
+        num_spectral_samples=1,
+    )
+
+    torch.testing.assert_close(loss, torch.zeros((), dtype=torch.float32))
+
+
 def test_kinematic_state_rejects_invalid_one_plus_z() -> None:
     with pytest.raises(ValueError, match="positive"):
         KinematicState(one_plus_z=0.0).effective_one_plus_z()
@@ -210,6 +262,12 @@ def test_survey_data_term_forward_context_length_must_match() -> None:
             "t",
             (o1, o2),
             forward_context_per_observation=(ForwardContext(survey="a"),),
+        )
+    with pytest.raises(ValueError, match="operator_bundle"):
+        SurveyDataTerm(
+            "t",
+            (o1, o2),
+            operator_bundle_per_observation=(ObservationOperatorBundle(),),
         )
 
 

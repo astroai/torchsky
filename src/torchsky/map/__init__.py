@@ -329,8 +329,13 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "torchsky.map.field",
         "field_quality_scorecard",
     ),
+    "field_quality_acceptance_report": (
+        "torchsky.map.field",
+        "field_quality_acceptance_report",
+    ),
     "FieldResidualProduct": ("torchsky.map.field", "FieldResidualProduct"),
     "FieldResidualTile": ("torchsky.map.field", "FieldResidualTile"),
+    "render_field_fit_quality": ("torchsky.map.field", "render_field_fit_quality"),
     "render_field_quality": ("torchsky.map.field", "render_field_quality"),
     "render_field_residual": ("torchsky.map.field", "render_field_residual"),
     "render_field_residual_product": (

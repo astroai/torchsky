@@ -650,5 +650,16 @@ def test_map_cli_exposes_resampling_kernel_option() -> None:
     assert args.value_semantics == "flux"
 
 
+def test_fits_io_ownership_namespace_preserves_compatibility_aliases() -> None:
+    assert callable(torchsky.io.read)
+    assert torchsky.io.read.__name__ == "read"
+    assert torchsky.io.fits.write is torchsky.io.write
+    assert torchsky.io.fits.open is torchsky.io.open
+    assert torchsky.io.fits.get_header is torchsky.io.get_header
+    assert torchsky.io.fits.get_wcs is torchsky.io.get_wcs
+    assert torchsky.read.__name__ == "read"
+    assert torchsky.read.__module__ == "torchsky"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

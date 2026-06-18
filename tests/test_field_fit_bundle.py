@@ -9,6 +9,7 @@ import torch.nn as nn
 from torchsky.map import (
     ExposurePose,
     FieldObservation,
+    PSFSpec,
     fit_field_model,
 )
 
@@ -181,3 +182,40 @@ def test_fit_field_model_refine_poses_rejects_explicit_pose_sequence() -> None:
             observation_exposure_poses=[ExposurePose()],
             steps=1,
         )
+
+
+def test_fit_field_model_returns_merged_operator_bundle() -> None:
+    obs = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=_tan_header(h=4, w=4),
+        weight=torch.ones((4, 4), dtype=torch.float32),
+        mask=torch.ones((4, 4), dtype=torch.float32),
+        wavelength=5000.0,
+        spectral_min=4500.0,
+        spectral_max=5500.0,
+        psf_spec=PSFSpec.gaussian(0.5),
+        background_offset=0.1,
+    )
+
+    result = fit_field_model([obs], _BiasModel(), steps=1, lr=1.0e-3)
+
+    bundle = result.operator_bundle
+    assert bundle is not None
+    assert bundle.spectral_response is not None
+    assert bundle.spectral_response.name == "explicit_spectral_response"
+    assert bundle.psf is not None
+    assert bundle.psf.name == "explicit_psf"
+    assert bundle.background is not None
+    assert bundle.background.name == "detector_background"
+    assert bundle.mask_weight is not None
+    assert bundle.mask_weight.name == "explicit_mask_weight"
+    assert bundle.noise is not None
+    assert bundle.noise.name == "explicit_noise"
+    assert result.diagnostics is not None
+    assert result.diagnostics["operator_bundle"] == {
+        "spectral_response": "explicit_spectral_response",
+        "psf": "explicit_psf",
+        "background": "detector_background",
+        "mask_weight": "explicit_mask_weight",
+        "noise": "explicit_noise",
+    }

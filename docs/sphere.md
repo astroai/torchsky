@@ -1,6 +1,6 @@
 # Sphere & HEALPix
 
-`torchsky.sphere` is a PyTorch-native library for spherical geometry and HEALPix maps, with high-performance C++ kernels for Spherical Harmonic Transforms (SHT) and selected polygon geometry hot paths on CPU.
+`torchsky.sphere` is a PyTorch-native library for spherical geometry and HEALPix maps, with high-performance C++ kernels for Spherical Harmonic Transforms (SHT) and selected polygon geometry hot paths on CPU. Harmonic transforms are available through `torchsky.sphere.harmonics`; the older `torchsky.sphere.spectral` module remains a compatibility alias.
 
 ## Table of Contents
 
@@ -263,6 +263,12 @@ json_repr = moc.to_json()
 ---
 
 ## Harmonic Space (SHT)
+
+Preferred module import:
+
+```python
+import torchsky.sphere.harmonics as harmonics
+```
 
 ### `map2alm(map_values, lmax=None, mmax=None, *, nside=None, nest=False, iter=0, pol=False, use_pixel_weights=False)`
 

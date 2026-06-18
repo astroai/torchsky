@@ -237,6 +237,60 @@ def test_wcs_spectral_compound_reciprocal_axis_matches_astropy(ctype: str) -> No
     np.testing.assert_allclose(pix_t.numpy(), pixels, atol=1e-9)
 
 
+_SUPPORTED_COMPOUND_CASES = [
+    "FREQ-F2F",
+    "FREQ-W2F",
+    "FREQ-A2F",
+    "FREQ-V2F",
+    "WAVE-F2W",
+    "WAVE-W2W",
+    "WAVE-A2W",
+    "WAVE-V2W",
+    "AWAV-F2A",
+    "AWAV-W2A",
+    "AWAV-A2A",
+    "AWAV-V2A",
+    "VELO-F2V",
+    "VELO-W2V",
+    "VELO-A2V",
+    "VELO-V2V",
+]
+
+
+def _compound_header(ctype: str) -> dict[str, float | int | str]:
+    stype = ctype.split("-", 1)[0]
+    header: dict[str, float | int | str] = {
+        "NAXIS": 1,
+        "NAXIS1": 128,
+        "CTYPE1": ctype,
+        "CRPIX1": 1.0,
+        "RESTFRQ": 1.42040575177e9,
+    }
+    if stype == "FREQ":
+        header.update({"CRVAL1": 1.420e9, "CDELT1": 1.0e5, "CUNIT1": "Hz"})
+    elif stype in {"WAVE", "AWAV"}:
+        header.update({"CRVAL1": 0.21, "CDELT1": 1.0e-4, "CUNIT1": "m"})
+    elif stype == "VELO":
+        header.update({"CRVAL1": 10.0, "CDELT1": 0.1, "CUNIT1": "m/s"})
+    return header
+
+
+@pytest.mark.parametrize("ctype", _SUPPORTED_COMPOUND_CASES)
+def test_wcs_spectral_supported_compound_matrix_matches_astropy(ctype: str) -> None:
+    header = _compound_header(ctype)
+    twcs = torchsky.WCS(header)
+    awcs = AstropyWCS(header)
+    pixels = np.array([[0.0], [1.0], [2.0], [10.0]], dtype=np.float64)
+
+    world_t = twcs.pixel_to_world(torch.from_numpy(pixels), origin=0)
+    world_a = awcs.all_pix2world(pixels, 0)
+    pix_t = twcs.world_to_pixel(torch.from_numpy(world_a), origin=0)
+
+    assert np.isfinite(world_t.numpy()).all()
+    np.testing.assert_allclose(world_t.numpy(), world_a, rtol=1e-11, atol=1e-7)
+    np.testing.assert_allclose(pix_t.numpy(), pixels, rtol=1e-10, atol=2e-6)
+
+
 @pytest.mark.parametrize("ctype", ["WAVE-F2W", "FREQ-W2F"])
 def test_wcs_spectral_compound_reciprocal_singular_domain_nan(ctype: str) -> None:
     header = {

@@ -63,6 +63,14 @@ def test_observation_operator_bundle_iter_enabled_skips_disabled_entries() -> No
         "explicit_background",
         "explicit_noise",
     ]
+    assert bundle.enabled_operator_names() == {
+        "geometry": "interpolation_geometry",
+        "spectral_response": "explicit_spectral_response",
+        "psf": "explicit_psf",
+        "radiometry": "explicit_radiometry",
+        "background": "explicit_background",
+        "noise": "explicit_noise",
+    }
     assert bundle.psf is not None
     bundle.psf.enabled = False
     assert [op.name for op in bundle.iter_enabled()] == [
@@ -72,6 +80,7 @@ def test_observation_operator_bundle_iter_enabled_skips_disabled_entries() -> No
         "explicit_background",
         "explicit_noise",
     ]
+    assert "psf" not in bundle.enabled_operator_names()
 
 
 def test_minimal_learned_operator_scaffold_declares_shared_conditioning() -> None:

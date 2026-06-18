@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import warnings
 
+import pytest
 import torch
 import torch.nn as nn
 
@@ -9,12 +10,16 @@ from torchsky import WCS
 from torchsky.map import (
     BandpassConditionedField,
     FieldDomain,
+    FieldFitResult,
     FieldObservation,
+    PSFSpec,
     field_image_residual_product,
     field_image_quality_metrics,
+    field_quality_acceptance_report,
     field_quality_scorecard,
     fit_field_model,
     make_residual_tile_basis_field,
+    render_field_fit_quality,
     render_field_quality,
     render_field_residual,
     render_field_residual_product,
@@ -27,6 +32,7 @@ from torchsky.map.field.observation_ops import (
     coordinate_grid,
     observation_weight_sum_scalar,
 )
+from torchsky.map.operators.bundle import ObservationOperatorBundle
 
 
 def _tan_header(
@@ -332,6 +338,34 @@ def test_field_residual_product_carries_support_weight_and_metrics() -> None:
     assert product.metrics["support_fraction"] == 0.5
 
 
+def test_field_residual_product_reports_psf_alignment_for_psf_observations() -> None:
+    prediction = torch.zeros((5, 5), dtype=torch.float32)
+    prediction[2, 2] = 1.0
+    target = torch.zeros_like(prediction)
+    weight = torch.ones_like(prediction)
+    mask = torch.ones_like(prediction)
+
+    no_psf = field_image_residual_product(
+        prediction,
+        target,
+        weight=weight,
+        mask=mask,
+    )
+    with_psf = field_image_residual_product(
+        prediction,
+        target,
+        weight=weight,
+        mask=mask,
+        psf_spec=PSFSpec.gaussian(1.0),
+    )
+    scorecard = field_quality_scorecard((no_psf.metrics, with_psf.metrics))
+
+    alignment = with_psf.metrics["psf_residual_alignment"]
+    assert "psf_residual_alignment" not in no_psf.metrics
+    assert -1.0 <= alignment <= 1.0
+    assert scorecard["aggregate"]["psf_residual_alignment"] == alignment
+
+
 def test_field_quality_scorecard_groups_bands_and_tracks_extrema() -> None:
     observations = (
         FieldObservation(
@@ -384,6 +418,61 @@ def test_field_quality_scorecard_groups_bands_and_tracks_extrema() -> None:
     assert scorecard["extrema"]["highest_weighted_rmse"]["index"] == 1
     assert scorecard["extrema"]["lowest_residual_snr"]["index"] == 1
     assert scorecard["extrema"]["lowest_support_fraction"]["index"] == 2
+
+
+def test_field_quality_acceptance_report_flags_explicit_threshold_violations() -> None:
+    observations = (
+        FieldObservation(
+            image=torch.ones((2, 2), dtype=torch.float32),
+            header=_tan_header(2, crval1=150.0, crval2=2.0, scale_deg=0.01),
+            wavelength=5000.0,
+            band_name="g",
+        ),
+        FieldObservation(
+            image=torch.ones((2, 2), dtype=torch.float32),
+            header=_tan_header(2, crval1=150.0, crval2=2.0, scale_deg=0.01),
+            wavelength=6500.0,
+            band_name="r",
+        ),
+    )
+    metrics = (
+        {
+            "weighted_rmse": 0.05,
+            "residual_snr": 20.0,
+            "support_fraction": 0.95,
+            "effective_weight_sum": 10.0,
+            "psf_residual_alignment": 0.1,
+        },
+        {
+            "weighted_rmse": 0.2,
+            "residual_snr": 3.0,
+            "support_fraction": 0.4,
+            "effective_weight_sum": 2.0,
+        },
+    )
+
+    report = field_quality_acceptance_report(
+        metrics,
+        observations=observations,
+        max_weighted_rmse=0.1,
+        min_residual_snr=5.0,
+        min_support_fraction=0.5,
+        min_effective_weight_sum=3.0,
+        max_abs_psf_residual_alignment=0.2,
+    )
+
+    assert report["passed"] is False
+    assert report["scorecard"]["by_band"]["g"]["observation_count"] == 1
+    assert {
+        (violation["index"], violation["metric"], violation.get("reason"))
+        for violation in report["violations"]
+    } == {
+        (1, "weighted_rmse", None),
+        (1, "residual_snr", None),
+        (1, "support_fraction", None),
+        (1, "effective_weight_sum", None),
+        (1, "psf_residual_alignment", "missing"),
+    }
 
 
 def test_select_field_residual_tiles_ranks_weighted_residual_energy() -> None:
@@ -541,3 +630,136 @@ def test_render_field_quality_and_residual_helpers() -> None:
     assert quality_with_products["scorecard"]["extrema"]["lowest_support_fraction"][
         "index"
     ] == 0
+
+
+def test_render_field_quality_helpers_accept_operator_bundles() -> None:
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=900.0,
+        coord_mode="sphere_xyz",
+    )
+    model = _ZeroField(domain)
+    obs = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=_tan_header(4, crval1=150.0, crval2=2.0, scale_deg=0.01),
+        weight=torch.ones((4, 4), dtype=torch.float32),
+        mask=torch.ones((4, 4), dtype=torch.float32),
+        wavelength=5600.0,
+        background_offset=3.0,
+    )
+    empty_bundle = ObservationOperatorBundle()
+
+    implicit_residual = render_field_residual(model, obs, num_spectral_samples=1)
+    explicit_residual = render_field_residual(
+        model,
+        obs,
+        num_spectral_samples=1,
+        operator_bundle=empty_bundle,
+    )
+    product = render_field_residual_product(
+        model,
+        obs,
+        num_spectral_samples=1,
+        operator_bundle=empty_bundle,
+    )
+    quality = render_field_quality(
+        model,
+        [obs],
+        num_spectral_samples=1,
+        observation_operator_bundles=(empty_bundle,),
+    )
+
+    torch.testing.assert_close(implicit_residual, torch.full((4, 4), 3.0))
+    torch.testing.assert_close(explicit_residual, torch.zeros((4, 4)))
+    torch.testing.assert_close(product.residual, torch.zeros((4, 4)))
+    assert quality["aggregate"]["weighted_rmse"] == 0.0
+
+    with pytest.raises(ValueError, match="observation_operator_bundles"):
+        render_field_quality(
+            model,
+            [obs],
+            num_spectral_samples=1,
+            observation_operator_bundles=(),
+        )
+
+
+def test_render_field_quality_reports_psf_alignment_from_default_bundle() -> None:
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=900.0,
+        coord_mode="sphere_xyz",
+    )
+    model = _ZeroField(domain)
+    obs = FieldObservation(
+        image=torch.zeros((5, 5), dtype=torch.float32),
+        header=_tan_header(5, crval1=150.0, crval2=2.0, scale_deg=0.01),
+        weight=torch.ones((5, 5), dtype=torch.float32),
+        mask=torch.ones((5, 5), dtype=torch.float32),
+        wavelength=5600.0,
+        psf_sigma_pix=1.0,
+    )
+    empty_bundle = ObservationOperatorBundle()
+
+    default_quality = render_field_quality(model, [obs], num_spectral_samples=1)
+    explicit_quality = render_field_quality(
+        model,
+        [obs],
+        num_spectral_samples=1,
+        observation_operator_bundles=(empty_bundle,),
+    )
+
+    assert "psf_residual_alignment" in default_quality["per_observation"][0]
+    assert "psf_residual_alignment" not in explicit_quality["per_observation"][0]
+
+
+def test_render_field_fit_quality_uses_fit_operator_bundles() -> None:
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=900.0,
+        coord_mode="sphere_xyz",
+    )
+    model = _ZeroField(domain)
+    obs = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=_tan_header(4, crval1=150.0, crval2=2.0, scale_deg=0.01),
+        weight=torch.ones((4, 4), dtype=torch.float32),
+        mask=torch.ones((4, 4), dtype=torch.float32),
+        wavelength=5600.0,
+        background_offset=3.0,
+    )
+    empty_bundle = ObservationOperatorBundle()
+    fit = FieldFitResult(
+        model=model,
+        loss_history=(1.0,),
+        final_loss=1.0,
+        observation_operator_bundles=(empty_bundle,),
+    )
+
+    quality = render_field_fit_quality(
+        fit,
+        [obs],
+        num_spectral_samples=1,
+        include_residual_products=True,
+    )
+    overridden = render_field_fit_quality(
+        fit,
+        [obs],
+        num_spectral_samples=1,
+        observation_operator_bundles=(None,),
+    )
+
+    assert quality["aggregate"]["weighted_rmse"] == 0.0
+    torch.testing.assert_close(
+        quality["residual_products"][0].residual,
+        torch.zeros((4, 4)),
+    )
+    assert overridden["aggregate"]["weighted_rmse"] == 3.0

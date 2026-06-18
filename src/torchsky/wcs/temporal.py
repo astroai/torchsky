@@ -109,6 +109,23 @@ _TIMEUNIT_TO_DAYS = {
     "centuries": 36525.0,
 }
 
+_TREFPOS_ALIASES = {
+    "TOPO": "TOPOCENTER",
+    "TOPOCENTER": "TOPOCENTER",
+    "TOPOCENTRE": "TOPOCENTER",
+    "GEO": "GEOCENTER",
+    "GEOCENTER": "GEOCENTER",
+    "GEOCENTRE": "GEOCENTER",
+    "BARY": "BARYCENTER",
+    "BARYCENTER": "BARYCENTER",
+    "BARYCENTRE": "BARYCENTER",
+    "SSB": "BARYCENTER",
+    "SOLARSYSTEMBARYCENTER": "BARYCENTER",
+    "HELIO": "HELIOCENTER",
+    "HELIOCENTER": "HELIOCENTER",
+    "HELIOCENTRE": "HELIOCENTER",
+}
+
 
 def _as_float_tensor(value: Any) -> Tensor:
     if isinstance(value, Tensor):
@@ -180,6 +197,16 @@ def temporal_unit_to_days(unit: str | None) -> float:
         return _TIMEUNIT_TO_DAYS[key]
     except KeyError as exc:
         raise ValueError(f"unsupported temporal unit {unit!r}") from exc
+
+
+def canonical_time_reference_position(value: str | None) -> str:
+    """Normalize common FITS temporal reference-position names."""
+    key = "TOPOCENTER" if value is None else str(value).strip().upper()
+    key = key.replace(" ", "").replace("_", "").replace("-", "")
+    try:
+        return _TREFPOS_ALIASES[key]
+    except KeyError as exc:
+        raise ValueError(f"unsupported temporal reference position {value!r}") from exc
 
 
 def datetime_to_mjd(value: datetime.datetime) -> float:
@@ -302,7 +329,7 @@ class TemporalWCS:
     - MJDREF: Reference MJD
     - TIMESYS: Time scale (UTC, TT, TAI, TDB, GPS)
     - TIMEUNIT: 's', 'd', 'a', 'cy'
-    - TREFPOS: 'TOPOCENTER', 'GEOCENTER', 'BARYCENTER'
+    - TREFPOS: 'TOPOCENTER', 'GEOCENTER', 'BARYCENTER', 'HELIOCENTER'
     """
 
     def __init__(self, header: dict[str, Any]):
@@ -313,7 +340,7 @@ class TemporalWCS:
 
         self.timesys = header.get("TIMESYS", "UTC").upper()
         self.timeunit = header.get("TIMEUNIT", "d").lower()
-        self.trefpos = header.get("TREFPOS", "TOPOCENTER").upper()
+        self.trefpos = canonical_time_reference_position(header.get("TREFPOS"))
         self.trefdir = header.get("TREFDIR", None)
         self.plephem = header.get("PLEPHEM", None)
         self.timeoffs = float(header.get("TIMEOFFS", 0.0))
@@ -398,7 +425,7 @@ class TemporalWCS:
         Computes light-travel corrections to the Solar System Barycenter (BJD)
         or Heliocenter (HJD).
         """
-        if self.trefpos in {"TOPOCENTER", "TOPOCENTRE"}:
+        if self.trefpos in {"TOPOCENTER", "GEOCENTER"}:
             return mjd
 
         if self.trefpos not in {"BARYCENTER", "HELIOCENTER"}:
@@ -458,7 +485,10 @@ class TemporalWCS:
 
     @property
     def requires_ephemeris(self) -> bool:
-        return self.trefpos not in {"TOPOCENTER", "TOPOCENTRE"}
+        return self.trefpos not in {
+            "TOPOCENTER",
+            "GEOCENTER",
+        }
 
     @property
     def reference_position(self) -> str:

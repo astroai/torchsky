@@ -57,6 +57,7 @@ from .operators import (
     bind_image_plane_observations_to_target,
     operator_adapter_for_observation,
     operator_bundle_for_observation,
+    operator_bundles_for_observations,
 )
 
 Observation: TypeAlias = FieldObservation | ImageObservation
@@ -176,6 +177,7 @@ __all__ = [
     "observation_charbonnier_loss",
     "operator_adapter_for_observation",
     "operator_bundle_for_observation",
+    "operator_bundles_for_observations",
     "predict",
     "predict_observation_mean",
     "product_spec",

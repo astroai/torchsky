@@ -14,6 +14,7 @@ from torch import Tensor
 
 if TYPE_CHECKING:
     from ..exposure_pose import ExposurePose
+    from ..operators.bundle import ObservationOperatorBundle
 
 SpectralCapacityProfile = Literal[
     "photometric_wide",
@@ -440,6 +441,8 @@ class FieldFitResult:
     final_loss: float
     diagnostics: dict[str, Any] | None = None
     exposure_poses: tuple[ExposurePose | None, ...] | None = None
+    operator_bundle: ObservationOperatorBundle | None = None
+    observation_operator_bundles: tuple[ObservationOperatorBundle, ...] | None = None
 
     @property
     def initial_loss(self) -> float:

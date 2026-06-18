@@ -1,5 +1,7 @@
 """Internal observation-operator scaffolding for mapmaking and INR paths."""
 
+from importlib import import_module
+
 from .background import (
     DetectorBackgroundOp,
     ExplicitBackgroundOp,
@@ -63,10 +65,6 @@ from .image_grid import (
     normalized_header_for_shape,
     target_shape_from_header,
     validate_image_plane_2d,
-)
-from .inverse import (
-    bind_image_plane_observations_to_target_operator_set,
-    bind_image_plane_target_operator,
 )
 from .execution import (
     accumulate_projected_observation,
@@ -140,6 +138,27 @@ from .spectral import (
     mixture_importance_weights,
     mixture_mc_samples,
 )
+
+_LAZY_EXPORTS = {
+    "bind_image_plane_observations_to_target_operator_set": (
+        "torchsky.map.operators.inverse",
+        "bind_image_plane_observations_to_target_operator_set",
+    ),
+    "bind_image_plane_target_operator": (
+        "torchsky.map.operators.inverse",
+        "bind_image_plane_target_operator",
+    ),
+}
+
+
+def __getattr__(name: str):
+    if name not in _LAZY_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attr_name = _LAZY_EXPORTS[name]
+    value = getattr(import_module(module_name), attr_name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "BackgroundOp",

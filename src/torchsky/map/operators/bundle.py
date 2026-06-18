@@ -31,6 +31,17 @@ from .radiometry import ExplicitRadiometryOp
 from .spectral import ExplicitSpectralResponseOp
 
 
+OPERATOR_BUNDLE_SLOT_NAMES = (
+    "geometry",
+    "spectral_response",
+    "psf",
+    "radiometry",
+    "background",
+    "mask_weight",
+    "noise",
+)
+
+
 @dataclass
 class ObservationOperatorBundle:
     """Composable observation-law bundle used internally by map and INR paths."""
@@ -43,18 +54,21 @@ class ObservationOperatorBundle:
     mask_weight: MaskWeightOp | None = None
     noise: NoiseOp | None = None
 
+    def iter_slots(self):
+        for slot_name in OPERATOR_BUNDLE_SLOT_NAMES:
+            yield slot_name, getattr(self, slot_name)
+
     def iter_enabled(self):
-        for op in (
-            self.geometry,
-            self.spectral_response,
-            self.psf,
-            self.radiometry,
-            self.background,
-            self.mask_weight,
-            self.noise,
-        ):
+        for _, op in self.iter_slots():
             if op is not None and op.enabled:
                 yield op
+
+    def enabled_operator_names(self) -> dict[str, str]:
+        return {
+            slot_name: op.name
+            for slot_name, op in self.iter_slots()
+            if op is not None and op.enabled
+        }
 
     def with_updates(self, **updates) -> "ObservationOperatorBundle":
         return replace(self, **updates)

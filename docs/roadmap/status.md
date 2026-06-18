@@ -72,12 +72,14 @@ Large-scale survey fusion is not a monolithic single-job problem, but a **system
 
 This file tracks roadmap status from live code and tests. Treat narrative docs as secondary when they disagree with implementation.
 
-Last updated: 2026-06-14.
+Last updated: 2026-06-18.
 
 ## Current Baseline
 
 - Full local gate: `pixi run ci-local` passes.
-- Latest full local gate result: `1721 passed, 59 skipped, 63 warnings`.
+- Latest full local gate result: `1775 passed, 59 skipped, 63 warnings`.
+- Latest focused WCS gate result: `134 passed, 8 warnings`.
+- Latest focused sphere gate result: `344 passed, 8 skipped, 10 warnings`.
 - High-level roadmap and replacement status live in this file.
 - Low-level shipped-item records, focused replay counts, benchmark snippets, and concrete follow-ups live in `implementation-ledger.md`.
 - The archived `../reviews/autonomous_refactor_log.md` is no longer the active work queue.
@@ -148,9 +150,10 @@ test counts, benchmark details, and exact follow-up items, use
   - Added wavenumber (`WAVN`) spectral conversion support with `cm-1`/inverse-meter unit handling and Astropy spectral-equivalency parity coverage.
   - Added validated one-axis FITS spectral `-LOG` WCS algorithm handling for `FREQ-LOG`, `WAVE-LOG`, and `WAVN-LOG`, with Astropy WCS parity coverage for forward and inverse transforms.
   - Added validated one-axis FITS spectral reciprocal compound algorithms for `WAVE-F2W` and `FREQ-W2F`, with Astropy/WCSLIB parity coverage for forward and inverse transforms plus fail-closed `NaN` behavior at reciprocal singularities.
+  - Broadened FITS Paper III compound spectral replay to the full supported F/W/A/V matrix for `FREQ-*2F`, `WAVE-*2W`, `AWAV-*2A`, and `VELO-*2V` algorithms, with Astropy/WCSLIB forward/inverse parity gates and benchmark rows.
   - Added validated one-axis FITS spectral grism and velocity compound algorithms for `WAVE-GRI`, `WAVE-GRA`, `AWAV-GRI`, `AWAV-GRA`, `FREQ-GRI`, `FREQ-GRA`, `WAVE-V2W`, `VELO-F2V`, and `FREQ-V2F`, with Astropy/WCSLIB parity coverage for forward and inverse transforms.
   - Added leap-second-aware temporal scale conversions for UTC, TAI, TT, and GPS, with Astropy Time parity tests.
-  - Added a fast local Keplerian barycentric/heliocentric light-time correction for topocentric temporal WCS use, with Astropy parity tests at seconds-level accuracy; full ephemeris-grade Earth-orientation/apparent-place behavior remains open.
+  - Added normalized temporal reference-position aliases (`TOPOCENTRE`, `GEO`, `BARYCENTRE`, `SSB`, `HELIOCENTRE`, etc.), a fast local Keplerian barycentric/heliocentric light-time correction for topocentric and geodetic observatory temporal WCS use, with Astropy parity tests at seconds-level accuracy; `GEOCENTER` is now explicit no-ephemeris behavior. Full ephemeris-grade Earth-orientation/apparent-place behavior remains open.
   - Fixed UTC leap-day fractional `TAI-UTC` handling so UTC MJD values inside leap-second days match Astropy/ERFA semantics instead of using a midnight-only step.
   - Expanded temporal unit handling to common FITS/VO sub-day units (`ns`, `us`, `ms`, `s`, `min`, `h`) plus days/years/centuries, and added temporal reference metadata surfaces for `TREFPOS`, `TREFDIR`, `PLEPHEM`, and `OBSGEO-*`.
   - Added exact temporal observation-date metadata parsing for `MJD-OBS`/`DATE-OBS`, `MJD-BEG`/`DATE-BEG`, and `MJD-END`/`DATE-END`.
@@ -167,6 +170,8 @@ test counts, benchmark details, and exact follow-up items, use
   - Hardened `-TAB` coordinate/index column lookup to use exact names first, then unique case-insensitive matches, with explicit ambiguity errors.
   - Added fail-closed `PVi_3` handling for `-TAB`: separable multidimensional coordinate arrays are recovered into per-axis tabular transforms, while genuinely coupled arrays that vary along non-selected table dimensions are rejected explicitly.
   - Added `CoupledTabularLookupWCS` plus `coupled_tabular_wcs_from_fits(...)` as the first torch-native forward substrate for genuinely coupled multidimensional FITS `-TAB` coordinate arrays, using multilinear interpolation over explicit table-grid axes and fail-closed inverse behavior.
+  - Wired coupled FITS `-TAB` tables into main `WCS(header, tables=...)` forward transforms, `TensorHDU.wcs`, `torchsky.get_wcs(path, hdu=...)`, differentiable Jacobians, and local square-grid inverse roundtrips for both all-axis non-spatial lookup WCS and mixed spatial WCS with coupled extra axes, including a file-backed FITS image plus WCS-TAB table-array replay gate and 2D square-grid inverse ambiguity detection.
+  - Added `bench_wcs_tabular.py` / `pixi run bench-wcs-tabular` for coupled `-TAB` lookup and main-`WCS` forward plus ambiguity-safe inverse timing.
   - Added CI-friendly WCS performance smoke gates for common bulk TAN `pixel_to_world` and `world_to_pixel` paths, with `TORCHSKY_PERF_GATE_WCS_*` overrides.
 - Sphere and tiling:
   - Added sparse-map operand validation plus union/intersection sum helpers.
@@ -184,6 +189,10 @@ test counts, benchmark details, and exact follow-up items, use
   - Added optional `MOC.to_ascii(compact=True)` range emission for compact MOC ASCII roundtrips while preserving the existing default text form.
   - Made sparse-map coverage hierarchy explicit for direct construction, dense conversion, pixel construction, updates, and FITS reads: maps with `nside_coverage` now always materialize a derived `coverage_map`, reject invalid coverage NSIDE values, and compute RING sparse-map coverage parents through the NESTED hierarchy.
   - Preserved valid sparse-map `nside_coverage` through `ud_grade(...)`, matching HealSparse-style behavior by retaining the old coverage resolution when possible and lowering it to the output NSIDE when degrading below the old coverage map.
+  - Added a high-NSIDE sphere query gate at `nside=1024` covering HEALPix center roundtrips, neighbors, interpolation weights, sparse lookup, MOC pixel containment, and MOC catalog filtering without dense full-sky materialization.
+  - Added sparse-map coverage bridges: `SparseHealpixMap.to_moc(...)`, `SparseHealpixMap.to_pixelized_region(...)`, and `SparseHealpixMap.from_region(...)` now round-trip sparse maps, MOC coverage, `PixelizedRegion`, and exact spherical regions without dense full-sky masks, preserving explicit RING/NESTED ordering and scalar value dtype.
+  - Reworked `SkyMaskPipe.combine(...)` to perform AND/OR mask algebra through sparse pixel sets instead of materializing dense full-sky maps, with high-NSIDE sparse coverage tests.
+  - Added `torchsky.sphere.harmonics` as the preferred harmonic-transform namespace while keeping `torchsky.sphere.spectral` as a backward-compatible alias.
 - Map:
   - Re-enabled ground-truth map and multi-field truth tests.
 - INR and field models:
@@ -200,6 +209,16 @@ test counts, benchmark details, and exact follow-up items, use
   - Added opt-in band/support-aware quality scorecards with by-band aggregates and exact extrema for worst RMSE, lowest SNR, lowest support, and lowest effective weight.
   - Added support-aware residual-energy tile selection as the first evidence layer for later sparse local-capacity/adaptive-foam field components.
   - Added an explicit experimental residual-tile basis wrapper that adds bounded signed local correction atoms on top of a diffuse field from selected residual evidence.
+  - Field-fit results now retain the merged `ObservationOperatorBundle` for the input observations and report enabled operator slots in diagnostics, giving field fitting an inspectable bridge into the common map/scene operator substrate.
+  - Field renderers now accept an explicit per-observation operator bundle, and `fit_field_model(...)` threads cached bundles through training, final scoring, and diagnostics instead of recomputing observation-law metadata on every render.
+  - Fixed field-distribution fallback rendering so PSF/background operators are not applied twice when a model lacks distribution-specific forward methods.
+  - Field residual and quality helpers now accept explicit per-observation operator bundles, and fit results retain the per-observation bundle sequence so post-fit quality reports can use the same observation-law metadata as training.
+  - Field residual products and quality reports now include PSF residual-alignment metrics for PSF-enabled observations, with scorecard aggregation handling optional metrics across mixed observation sets.
+  - Added explicit support-aware quality acceptance reports over weighted RMSE, residual SNR, support fraction, effective weight, and optional PSF residual alignment.
+  - Added `render_field_fit_quality(...)` so post-fit quality summaries can consume `FieldFitResult` directly, reusing stored model, pose, and observation-operator metadata unless explicitly overridden.
+  - `ContinuousFieldModel` scene rendering now forwards explicit operator bundles into field render and distribution paths, aligning scene-level rendering with the field fit/quality observation-law substrate.
+  - Added `scene.operator_bundles_for_observations(...)` to construct ordered per-observation bundle sequences for fit, quality, and implicit-forward workflows.
+  - The implicit forward-model shell now accepts per-observation operator bundles in `predict_observation_mean(...)` and `SurveyDataTerm`, so multi-survey loss scaffolds can use the same observation-law metadata path as rendering, fitting, and quality diagnostics.
 
 ## WCS Replacement Status
 
@@ -216,21 +235,21 @@ The WCS roadmap must distinguish active gates from remaining replacement claims.
 - Mixed pixel/world solving for full-pixel, full-world, and the common 2D case with one known pixel axis plus one known world axis.
 - Differentiable pure-Torch WCS paths and local Jacobian extraction for optimization, INR renderers, field-model training, and multi-modal geometry encoders.
 - Spectral translation primitives through frequency for `FREQ`, `WAVE`, `WAVN`, `AWAV`, `ENER`, `ZOPT`, `VRAD`, `VOPT`, `VELO`, and `BETA`, including `RESTFRQ`/`RESTFREQ`/`RESTWAV` handling and WCS convenience methods for spectral axes.
-- First FITS spectral algorithm-code transforms: validated one-axis `-LOG` support for `FREQ-LOG`, `WAVE-LOG`, and `WAVN-LOG`; reciprocal `WAVE-F2W` and `FREQ-W2F`; grism `GRI`/`GRA` for wavelength/frequency/air-wavelength cases; and selected velocity compound axes including `WAVE-V2W`, `VELO-F2V`, and `FREQ-V2F`.
-- Temporal scale conversion primitives for UTC/TAI/TT/GPS with a built-in IERS/NIST leap-second table current through the 2026-06-30 no-leap Bulletin C 71 window; common sub-day/year units, observation-date metadata, duration/midpoint metadata, WCS temporal-axis discovery, reference metadata, and fast Keplerian barycentric/heliocentric light-time corrections are active. Full ephemeris-grade Earth orientation, apparent place, and coupled space-time corrections remain open.
+- First FITS spectral algorithm-code transforms: validated one-axis `-LOG` support for `FREQ-LOG`, `WAVE-LOG`, and `WAVN-LOG`; the full supported F/W/A/V one-axis compound matrix for `FREQ-*2F`, `WAVE-*2W`, `AWAV-*2A`, and `VELO-*2V`; and grism `GRI`/`GRA` for wavelength/frequency/air-wavelength cases.
+- Temporal scale conversion primitives for UTC/TAI/TT/GPS with a built-in IERS/NIST leap-second table current through the 2026-06-30 no-leap Bulletin C 71 window; common sub-day/year units, observation-date metadata, duration/midpoint metadata, WCS temporal-axis discovery, normalized reference metadata aliases, explicit GEOCENTER no-correction behavior, and fast Keplerian barycentric/heliocentric light-time corrections are active. Full ephemeris-grade Earth orientation, apparent place, and coupled space-time corrections remain open.
 - Comparator-only WCSLIB/Astropy benchmark surface for spectral FITS-WCS algorithms and temporal scale conversions: `pixi run bench-wcs-spectral-temporal`. This is benchmark/reference infrastructure only; runtime WCS paths must remain torch-native and must never fall back to WCSLIB.
 - Celestial frame primitives for ICRS/Galactic conversion and FK5 Julian-equinox mean precession, plus WCS helpers for `RADESYS`/`EQUINOX` metadata.
 - First catalog-alignment correction primitives: weighted 2D affine fitting with shift / rotation+shift / rotation+scale+shift / full affine modes, differentiable gnomonic tangent-plane fitting for sky catalogs, and distortion-free direct WCS header updates from pixel-affine fits.
-- First table-driven WCS support: independent one-dimensional lookup axes with differentiable interpolation, monotonic inverse lookup, explicit `WCS` integration for FITS 1-based `CTYPEi` `-TAB` axes, a parser helper for the independent 1D `PSi_0`/`PSi_1`/`PSi_2` plus `PVi_1`/`PVi_2` metadata subset, separable multidimensional coordinate-array recovery via `PVi_3`, a forward coupled-grid lookup helper for genuinely multidimensional arrays, and path/HDUList auto-discovery for the invertible per-axis subset.
+- First table-driven WCS support: independent one-dimensional lookup axes with differentiable interpolation, monotonic inverse lookup, explicit `WCS` integration for FITS 1-based `CTYPEi` `-TAB` axes, a parser helper for the independent 1D `PSi_0`/`PSi_1`/`PSi_2` plus `PVi_1`/`PVi_2` metadata subset, separable multidimensional coordinate-array recovery via `PVi_3`, a forward coupled-grid lookup helper for genuinely multidimensional arrays, path/HDUList auto-discovery for the invertible per-axis subset, and main-`WCS` forward/local-inverse integration for all-axis non-spatial coupled grids plus mixed spatial WCS with coupled extra axes.
 
 ### WCS Partially Done
 
-- Spectral/time axes: spectral coordinate translation primitives, validated one-axis `-LOG`, reciprocal, selected velocity, and grism spectral WCS plus temporal scale/unit/date/duration/reference metadata and fast Keplerian light-time primitives now exist, but full FITS Paper III coupled spectral chains and full Paper IV space-time corrections are not replacement-complete.
+- Spectral/time axes: spectral coordinate translation primitives, validated one-axis `-LOG`, supported F/W/A/V one-axis compound spectral WCS, and grism spectral WCS plus temporal scale/unit/date/duration/reference metadata and fast Keplerian light-time primitives now exist, but full FITS Paper III coupled spectral chains and full Paper IV space-time corrections are not replacement-complete.
 - Kapteyn-style mixed coordinates: the common 2D celestial mixed solve is active; arbitrary N-dimensional mixtures and non-celestial coupled axes remain open.
 - Axis subsetting: uncoupled axis drops, selected-axis reordering, integer-index slicing for uncoupled axes, and celestial extraction from spatial cubes are active; coupled-axis subsetting remains open.
 - GWCS/AST-style composition: metadata surfaces exist, but explicit frame/mapping pipeline objects and reusable transform graph nodes are not implemented.
-- FITS `-TAB` / lookup-table WCS: independent lookup-axis interpolation is active in the main `WCS` transform when axes are supplied explicitly or discovered from an HDUList/path, and the parser handles independent 1D axes plus separable multidimensional coordinate arrays selected by `PVi_3`; arbitrary coupled table-coordinate arrays now have a forward multilinear lookup substrate, but general inverse solving and main-`WCS` integration for coupled grids are not yet implemented.
-- Performance: common CPU/vectorized/C++/compiled paths exist, a CI-friendly TAN forward/inverse smoke gate is active, and spectral/temporal WCSLIB comparator timing now has a focused benchmark surface. Replacement claims still need broader timing baselines across projection, distortion, batch-size, device, spectral/time algorithm, and inverse-solve regimes.
+- FITS `-TAB` / lookup-table WCS: independent lookup-axis interpolation is active in the main `WCS` transform when axes are supplied explicitly or discovered from an HDUList/path, and the parser handles independent 1D axes plus separable multidimensional coordinate arrays selected by `PVi_3`; arbitrary coupled table-coordinate arrays now have a multilinear lookup substrate, and both all-axis non-spatial coupled grids and mixed spatial WCS with coupled extra axes are integrated into main `WCS` forward/Jacobian/local-inverse evaluation with file-backed table-array replay through `TensorHDU.wcs` and `get_wcs`. The 2D square-grid inverse path now detects multiple distinct candidate cells and fails closed, while higher-dimensional/global ambiguity handling and broader upstream-style fixture replay remain open.
+- Performance: common CPU/vectorized/C++/compiled paths exist, a CI-friendly TAN forward/inverse smoke gate is active, spectral/temporal WCSLIB comparator timing has a focused benchmark surface, and coupled `-TAB` forward/inverse timing has a focused torch-native benchmark surface. Replacement claims still need broader timing baselines across projection, distortion, batch-size, device, spectral/time algorithm, and inverse-solve regimes.
 - Compatibility replay: Astropy/WCSLIB fixture coverage is active, but Kapteyn/PyAST/Cornish bridge replays are not yet formal gates.
 
 ### WCS Not Done
@@ -239,36 +258,88 @@ The WCS roadmap must distinguish active gates from remaining replacement claims.
 - Full FITS Paper III spectral WCS algorithm-code parsing beyond the validated one-axis `-LOG`, reciprocal, selected velocity, and grism cases: coupled nonlinear spectral pixel-axis transforms and broader algorithm-code replay remain open.
 - Full temporal WCS reference-position corrections: Earth orientation, ephemeris-grade barycentric/heliocentric light-time corrections, apparent-place behavior, and coupled space-time corrections.
 - Generalized AST/GWCS frame graphs, serialization, and conversion to/from approximating FITS SIP/TAB representations.
-- Full FITS `-TAB` arbitrary coupled multidimensional coordinate arrays with inverse solving and main-`WCS` integration, plus generalized coupled table-driven distortions beyond the current forward coupled-grid substrate.
+- Full FITS `-TAB` arbitrary coupled multidimensional coordinate arrays with global ambiguity handling and generalized coupled table-driven distortions beyond the current local square-grid coupled path.
 - Full tweakwcs-class correction workflows: iterative matching, richer correction metadata serialization, and distorted-WCS header updates.
 - Plot-grid/formatting helpers and sexagesimal/unit-aware coordinate formatting at Kapteyn/AST breadth.
 
-## Near-Term Next Work
+## FITS, WCS, And Sphere Consolidated Plan
 
-1. FITS completeness:
-   - FITS is closed for the current roadmap slice.
-   - Future parity hardening should focus on broader astropy.io.fits/fitsio fixture replay, large-table mutation benchmarks, and additional realistic VLA/table fixtures.
-2. WCS completeness:
-   - Current active gates cover supported projections/distortions, slant `SIN`, ZPN hole fixtures, alternate WCS keys, axis metadata, footprint, mixed pixel/world transforms, and differentiable Jacobians.
-   - Current spectral/temporal slice covers `WAVN`, `-LOG`, `WAVE-F2W`, `FREQ-W2F`, selected velocity compound axes, grism `GRI`/`GRA`, common time units, observation-date metadata, duration/midpoint metadata, WCS temporal-axis discovery, temporal reference metadata, and fast Keplerian barycentric/heliocentric light-time corrections. Next spectral step is coupled FITS Paper III algorithm-chain replay; next temporal step is ephemeris-backed Earth-orientation/apparent-place corrections and realistic observatory fixtures.
-   - Use WCSLIB/Astropy for benchmark and parity comparison only. Do not add WCSLIB runtime fallback paths in `src/torchsky`.
-   - Add a formal Kapteyn/PyAST/Cornish legacy-bridge replay matrix for sky-system conversions, epochs/equinoxes, mixed coordinates, alternate headers, spectral translations, and formatting/plot grid behavior where comparable.
-   - Adopt the GWCS/AST design pattern of explicit transform pipelines and frame/mapping composition for future non-FITS-native WCS, but keep runtime implementation torch-native.
-   - Build on the tangent-plane affine correction and direct linear-WCS update primitives with iterative catalog matching, richer correction metadata, and distorted-WCS header update helpers.
-   - Build true coupled multidimensional table-coordinate inverse semantics and main-`WCS` integration on top of `CoupledTabularLookupWCS`, including realistic FITS table-array fixtures.
-   - Harden high-dimensional spatial/spectral/time axes against Astropy/WCSLIB fixtures.
-   - Add more fixture replay gates for mixed projection plus distortion headers.
-3. Sphere and tiling:
-   - Continue replacing exact-geometry gaps with robust MOC/geometry coverage; MOC now consumes general polygon and exact/native/boolean region pixelization directly.
-   - Expand HealSparse metadata/header fidelity beyond the current sparse FITS roundtrip; sparse MOC realization now avoids dense-mask materialization, scalar value dtype is preserved across sparse FITS roundtrips, and coverage-map hierarchy is ordering-aware through construction, updates, FITS reads, and `ud_grade(...)`.
-   - Add high-NSIDE query and spin/SHT replacement gates; MOC now has a pixel-native containment predicate for high-NSIDE indexed workflows.
-4. Map architecture:
-   - Make `ObservationOperatorBundle` the common execution substrate across promoted map paths.
-   - Move remaining planning/windowing/I/O policy out of `map/image_plane.py`.
-   - Add exact adjoint gates for promoted kernels.
-5. INR and fields:
-   - Keep new architectures behind explicit experimental factories.
-   - Prioritize identifiability, PSF/noise/nuisance models, richer photometric metrics, residual products beyond current rendered residual maps and multiscale RMSE summaries, support masks, leakage metrics, timing baselines, and richer pose-refinement workflows around matching and priors.
+This is the active tracker for FITS I/O, WCS replacement, and sphere/HEALPix
+infrastructure. Update this section when a task ships, moves priority, changes
+scope, or gets a new validation gate.
+
+Status key:
+
+- `[x]` shipped and covered by active tests or benchmark gates.
+- `[~]` partially implemented; continue work before making replacement claims.
+- `[ ]` open.
+
+### FITS I/O Tracker
+
+FITS is functionally strong for the current roadmap slice. The remaining work is
+mostly hardening, scale evidence, and API ownership cleanup; it should not add
+Python `fitsio` or Astropy runtime dependencies to core `src/torchsky` code.
+
+| Status | Priority | Task | Acceptance gate / update trigger |
+| --- | --- | --- | --- |
+| [x] | P0 | Keep native CFITSIO-backed image, header, checksum, compression, and table read/write paths as the default core I/O substrate. | `pixi run ci-local`; FITS image/table tests; no core imports of Python `fitsio` or Astropy. |
+| [x] | P0 | Preserve ordered FITS header/card behavior, repeated `HISTORY`/`COMMENT`, checksum write/verify, compressed table writes, and validated table mutation failure modes. | Existing FITS checksum/header/table mutation tests remain active. |
+| [x] | P1 | Move root FITS implementation ownership behind `torchsky.io.fits` while keeping `torchsky.read`, `torchsky.open`, `torchsky.write`, `torchsky.get_header`, and `torchsky.get_wcs` stable wrappers. | API import tests plus FITS I/O tests pass; docs route new users through `torchsky.io`. |
+| [x] | P1 | Build a maintained FITS fixture replay matrix against `astropy.io.fits` and Python `fitsio` for images, MEFs, compression, checksums, headers, BINTABLEs, variable-length arrays, strings, masks, and edge dtypes. | `tests/test_fits_fixture_replay_matrix.py` covers generated MEFs, compressed images, string/boolean/numeric BINTABLEs, and Astropy VLA fixtures. |
+| [x] | P1 | Add large-table mutation and scan benchmarks that cover append/insert/delete/update rows, column rename/drop/replace, chunked reads, and mmap/auto fallback behavior. | `benchmarks/bench_fitstable_io.py` emits read/scan rows plus `mutation_append`, `mutation_update`, and `mutation_rename_drop` rows. |
+| [x] | P1 | Add realistic radio/VLA-style table fixtures and representative large survey table fixtures. | `tests/test_fits_fixture_replay_matrix.py` includes a deterministic VLA-style visibility table with time, antenna pairs, UVW vectors, complex visibilities, weights, flags, metadata, and mutation-safe row updates. |
+| [~] | P2 | Split table implementation by scan/read, Arrow conversion, mutation, and backend policy once behavior is stable. | Backend policy now lives in private `_table_engine`; full scan/read/Arrow/mutation extraction remains a structural cleanup with public table APIs unchanged. |
+| [x] | P2 | Define cache policy for FITS image, FITS table, header metadata, and WCS extraction as named subsystems instead of scattered knobs. | `IO_CACHE_SUBSYSTEMS`, `cache_subsystem_policy(...)`, and `clear_cache_subsystem(...)` cover image data, table data, header metadata, WCS extraction, and all-cache invalidation with focused tests. |
+
+### WCS Tracker
+
+WCS remains a core replacement project. Runtime paths must stay torch-native:
+Astropy, WCSLIB, Kapteyn, PyAST, Cornish, and GWCS are references, comparators,
+or design targets only.
+
+| Status | Priority | Task | Acceptance gate / update trigger |
+| --- | --- | --- | --- |
+| [x] | P0 | Keep current celestial projection/distortion coverage active: `TAN`, `SIN`, `ARC`, `ZPN`, `ZEA`, `STG`, `CEA`, `CAR`, `MER`, `CYP`, `AIT`, `MOL`, `HPX`, `SFL`, plus `SIP`, `TPV`, `TNX`, `ZPX`, slant `SIN`, and ZPN hole-domain behavior. | `tests/test_wcs_*.py`; parity fixtures against Astropy/WCSLIB where available. |
+| [x] | P0 | Maintain Astropy-style metadata, slicing, axis dropping/subsetting, celestial extraction, mixed 2D celestial solve, and differentiable WCS/Jacobian paths. | WCS API, slicing, parity, differentiable, and perf-smoke tests remain active. |
+| [~] | P0 | Finish FITS Paper III spectral WCS replacement beyond current one-axis `-LOG`, supported F/W/A/V compound, and grism cases. | Coupled spectral algorithm-chain fixtures replay against Astropy/WCSLIB without WCSLIB runtime fallback. |
+| [~] | P0 | Finish FITS Paper IV temporal/reference-position behavior beyond common unit/scale/date metadata, normalized reference-position aliases, explicit TOPOCENTER/GEOCENTER handling, and fast Keplerian light-time approximation. | Observatory fixtures with ephemeris-backed barycentric/heliocentric, Earth-orientation, apparent-place, and coupled space-time checks. |
+| [~] | P0 | Complete FITS `-TAB` support for arbitrary coupled multidimensional coordinate arrays: generalized ambiguity handling plus broader fixture replay on top of `CoupledTabularLookupWCS`. | All-axis non-spatial and mixed spatial+extra-axis forward/Jacobian/local-inverse `WCS(header, tables=...)`, `TensorHDU.wcs`, and `get_wcs` integration is active with a file-backed table-array fixture; 2D square-grid inverse ambiguity tests are active; higher-dimensional ambiguity and broader upstream-style fixtures remain. |
+| [ ] | P1 | Formalize a legacy bridge replay matrix for Kapteyn/PyAST/Cornish behaviors: sky systems, epochs/equinoxes, mixed coordinates, alternate headers, spectral translations, and formatting/plot-grid behavior where comparable. | New replay docs plus optional benchmark/test tasks that can skip cleanly when legacy deps are absent. |
+| [ ] | P1 | Add explicit transform graph/frame mapping objects inspired by AST/GWCS for non-FITS-native WCS composition while preserving torch-native execution. | Internal transform graph can represent existing linear/projection/distortion/TAB paths; no public API churn until proven. |
+| [~] | P1 | Grow catalog-correction workflows from weighted affine fits into tweakwcs-class iterative matching, richer metadata serialization, and distorted-WCS header update helpers. | Synthetic and fixture-based catalog alignment tests with correction metadata roundtrip. |
+| [~] | P1 | Broaden WCS performance baselines across projection, distortion, inverse solve, batch size, device, spectral/time, and TAB regimes. | `bench-wcs`, `bench-wcs-spectral-temporal`, `bench-wcs-tabular`, and targeted benchmark JSON/markdown are updated with regression thresholds where stable. |
+| [ ] | P2 | Expand celestial frame conversions beyond ICRS/Galactic/FK5 mean precession: FK4/Besselian E-terms, frame bias, nutation, aberration, proper motion, parallax, radial velocity, and observer-dependent apparent place. | Astropy/Kapteyn/AST parity fixtures with explicit accuracy budgets. |
+| [ ] | P2 | Add sexagesimal/unit-aware formatting, plot-grid helpers, and coordinate display breadth only after core transform parity is stronger. | Formatting tests and docs; no impact on transform hot paths. |
+
+### Sphere, HEALPix, Sparse Map, And MOC Tracker
+
+Sphere work supports full-sky products, cross-survey tiling, sparse coverage, and
+map/field bridges. Compatibility layers should sit on top of torchsky-native
+kernels, not replace them.
+
+| Status | Priority | Task | Acceptance gate / update trigger |
+| --- | --- | --- | --- |
+| [x] | P0 | Keep core HEALPix primitives, MOC range membership, sparse map construction/update/FITS roundtrip, ordering conversion, and general-region pixelization tests active. | `tests/test_sphere_*.py`, `tests/test_healpix_*.py`, HealSparse/MOC parity tests. |
+| [x] | P0 | Move HEALPix implementation ownership from `torchsky.wcs.healpix` toward `torchsky.sphere.healpix`, leaving compatibility shims where needed. | Source implementation lives in `torchsky.sphere.healpix`; imports and public discovery route through `torchsky.sphere`; stale `torchsky.wcs.healpix` source references are gone outside archived review docs. |
+| [x] | P0 | Expand exact geometry and MOC coverage for polygons, boolean/native regions, high-NSIDE indexed catalogs, sparse maps, and NUNIQ FITS MOC exchange. | MOC, sparse, region, FITS MOC, high-NSIDE catalog, and no-dense sparse workflow gates are active in `tests/test_sphere_moc.py`, `tests/test_sphere_sparse.py`, and `tests/test_sphere_high_nside.py`. |
+| [x] | P0 | Harden HealSparse-style metadata/header fidelity: coverage maps, ordering, sentinel/null behavior, dtype preservation, partial maps, and `ud_grade(...)`. | HealSparse upstream replay tests and sparse FITS roundtrip tests pass; sparse construction/update/FITS/`ud_grade(...)` preserve coverage hierarchy and ordering contracts. |
+| [x] | P0 | Add formal high-NSIDE query gates for coverage predicates, interpolation, neighbors, sparse lookup, and catalog filtering. | `tests/test_sphere_high_nside.py` covers correctness at `nside=1024`; `sphere-bench-healpix-*` tasks cover high-NSIDE throughput for HEALPix/interpolation primitives. |
+| [ ] | P1 | Add spin/SHT replacement gates and throughput baselines for scalar and spin transforms. | `bench_spin_matrix.py`, `bench_sphere_spectral.py`, and parity tests have stable baselines. |
+| [ ] | P1 | Expand catalog crossmatch and spherical indexing gates for survey-scale table + sphere pipelines. | `bench_catalog_crossmatch.py`, `bench_catalog_compat.py`, and `bench_pipeline_table_sphere.py` have maintained baselines. |
+| [x] | P1 | Define sparse-map algebra and region interoperability contracts across dense maps, sparse maps, MOC, pixelized regions, and exact regions. | Sparse `sum_union`/`sum_intersection`, MOC/sparse/pixelized-region/exact-region bridges, and sparse `SkyMaskPipe` AND/OR gates are active without dense full-sky materialization. |
+| [x] | P2 | Rename or alias harmonic-specific public concepts so `sphere.spectral` is not confused with WCS spectral coordinates. | `torchsky.sphere.harmonics` is the preferred alias; `torchsky.sphere.spectral` remains import-compatible and tests assert matching exports. |
+| [ ] | P2 | Add device-specific sphere gates for CPU/CUDA/MPS where kernels claim support. | Device matrix tests/benches skip cleanly when devices are unavailable. |
+
+### Shared Validation Gates
+
+- Pre-push remains `pixi run ci-local`.
+- FITS-focused changes should run the relevant FITS/table tests plus
+  `pixi run bench-fits` or `pixi run bench-fitstable` when performance or scale
+  behavior changes.
+- WCS/sphere replacement changes should run `pixi run wcs-sphere-acceptance`
+  before making replacement or performance claims.
+- Comparator packages remain optional extras/environments. They are allowed in
+  tests, benchmarks, docs, and scripts, but not as default runtime imports.
 
 ## Next Execution Roadmap
 
@@ -284,7 +355,7 @@ This is the proposed work order after the lean public-API cleanup lands.
    - Move residual planning, windowing, and I/O orchestration out of `map/image_plane.py` into smaller operator/product modules.
 3. INR and multiband image quality:
    - Treat "best SNR and sharp image of a given sky field" as the field-model acceptance target, not just low pixel RMSE.
-   - Extend the current residual/SNR/sharpness metrics into persisted residual products, support-aware scorecards, PSF residual alignment reports, and per-band leakage diagnostics.
+   - Extend the current residual/SNR/sharpness metrics into persisted residual products, support-aware scorecards, and per-band leakage diagnostics.
    - Keep all promoted fit paths bandpass-aware, PSF/noise-aware, differentiable where practical, and benchmarked against direct stack baselines.
 4. Adaptive foam / local capacity:
    - Build the first optional adaptive local-capacity layer on top of the diffuse field: multiscale cells, sparse local basis atoms, or feature tiles that add capacity only where residual evidence justifies it.

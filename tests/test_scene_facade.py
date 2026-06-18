@@ -94,6 +94,30 @@ def test_scene_operator_adapter_matches_field_bundle() -> None:
     assert adapter.has("noise")
 
 
+def test_scene_operator_bundles_for_observations_preserves_order() -> None:
+    field_obs = scene.field_observation(
+        image=torch.zeros((2, 3)),
+        header=_simple_header(),
+        wavelength=6500.0,
+        background_offset=0.5,
+    )
+    image_obs = scene.image_observation(
+        path="science.fits",
+        photometric_scale=2.0,
+        weight_path="weight.fits",
+    )
+
+    bundles = scene.operator_bundles_for_observations(
+        (field_obs, image_obs),
+        resampling_kernel="bilinear",
+    )
+
+    assert len(bundles) == 2
+    assert bundles[0].background is not None
+    assert bundles[1].radiometry is not None
+    assert bundles[1].mask_weight is not None
+
+
 def test_scene_operator_adapter_matches_image_bundle() -> None:
     observation = scene.image_observation(
         path="science.fits",

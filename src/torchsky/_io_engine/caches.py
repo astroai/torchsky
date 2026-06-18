@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections import OrderedDict
+from types import MappingProxyType
 from types import ModuleType
 from typing import Any
 
@@ -24,6 +25,101 @@ hdu_type_cache = OrderedDict()
 cold_nommap_cache = OrderedDict()
 auto_mmap_cache = OrderedDict()
 auto_hdu_cache = OrderedDict()
+
+IO_CACHE_SUBSYSTEMS = MappingProxyType(
+    {
+        "fits_image_data": MappingProxyType(
+            {
+                "data": True,
+                "handles": False,
+                "meta": False,
+                "hdu_types": False,
+                "stats": False,
+                "cpp": False,
+                "table_handles": False,
+            }
+        ),
+        "fits_table_data": MappingProxyType(
+            {
+                "data": True,
+                "handles": False,
+                "meta": False,
+                "hdu_types": False,
+                "stats": False,
+                "cpp": False,
+                "table_handles": True,
+            }
+        ),
+        "fits_header_metadata": MappingProxyType(
+            {
+                "data": False,
+                "handles": False,
+                "meta": True,
+                "hdu_types": True,
+                "stats": False,
+                "cpp": False,
+                "table_handles": False,
+            }
+        ),
+        "fits_wcs_extraction": MappingProxyType(
+            {
+                "data": False,
+                "handles": False,
+                "meta": True,
+                "hdu_types": True,
+                "stats": False,
+                "cpp": False,
+                "table_handles": False,
+            }
+        ),
+        "all": MappingProxyType(
+            {
+                "data": True,
+                "handles": True,
+                "meta": True,
+                "hdu_types": True,
+                "stats": True,
+                "cpp": True,
+                "table_handles": True,
+            }
+        ),
+    }
+)
+
+
+def cache_subsystem_policy(name: str) -> dict[str, bool]:
+    """Return the concrete clear flags for a named FITS I/O cache subsystem."""
+    try:
+        return dict(IO_CACHE_SUBSYSTEMS[name])
+    except KeyError as exc:
+        valid = ", ".join(sorted(IO_CACHE_SUBSYSTEMS))
+        raise KeyError(f"unknown FITS I/O cache subsystem {name!r}; valid: {valid}") from exc
+
+
+def clear_cache_subsystem(
+    name: str,
+    *,
+    table_module: ModuleType | None = None,
+    cpp_module: Any = None,
+) -> None:
+    """Clear one named FITS I/O cache subsystem."""
+    policy = cache_subsystem_policy(name)
+    clear_file_cache(
+        data=policy["data"],
+        handles=policy["handles"],
+        meta=policy["meta"],
+        hdu_types=policy["hdu_types"],
+        stats=policy["stats"],
+        cpp=policy["cpp"],
+        cpp_module=cpp_module,
+    )
+    if policy["table_handles"] and table_module is not None:
+        try:
+            close_handles = getattr(table_module, "_close_all_cached_handles", None)
+            if close_handles is not None:
+                close_handles()
+        except Exception:
+            pass
 
 
 def path_signature(path: str) -> tuple[int, int, int] | None:

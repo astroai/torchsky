@@ -15,6 +15,11 @@ from torch import Tensor
 from ...device import default_compute_device, resolve_fit_device
 
 from ..exposure_pose import ExposurePose, create_exposure_poses
+from ..operators.bundle import (
+    ObservationOperatorBundle,
+    field_observation_operator_bundle,
+    merge_operator_bundles,
+)
 
 from .bandpass import (
     bandpass_bounds as _bandpass_bounds,
@@ -254,6 +259,7 @@ def compute_field_fit_diagnostics(
     observations: Sequence[FieldObservation],
     obs_forward_ctx: Sequence[ForwardContext | None],
     obs_exposure_poses: Sequence[ExposurePose | None],
+    obs_operator_bundles: Sequence[ObservationOperatorBundle],
     num_spectral_samples: int,
     fit_duration_sec: float,
     steps: int,
@@ -378,13 +384,12 @@ def compute_field_fit_diagnostics(
     support_uncs = []
     outer_uncs = []
 
-    from ..operators.bundle import field_observation_operator_bundle
-
     with torch.no_grad():
         for obs_idx, observation in enumerate(observations):
             try:
                 fctx = obs_forward_ctx[obs_idx]
                 pose = obs_exposure_poses[obs_idx]
+                observation_bundle = obs_operator_bundles[obs_idx]
 
                 pred = render_field_observation(
                     model,
@@ -392,6 +397,7 @@ def compute_field_fit_diagnostics(
                     num_spectral_samples=num_spectral_samples,
                     forward_context=fctx,
                     exposure_pose=pose,
+                    operator_bundle=observation_bundle,
                 )
 
                 obs_img = observation.image.to(device=pred.device, dtype=pred.dtype)
@@ -423,8 +429,7 @@ def compute_field_fit_diagnostics(
                         )
                     )
 
-                    operator_bundle = field_observation_operator_bundle(observation)
-                    if operator_bundle.psf is not None:
+                    if observation_bundle.psf is not None:
                         from ..operators.psf import apply_psf_spec
 
                         res_convolved = apply_psf_spec(residual, observation.psf_spec)
@@ -446,6 +451,7 @@ def compute_field_fit_diagnostics(
                         num_spectral_samples=num_spectral_samples,
                         forward_context=fctx,
                         exposure_pose=pose,
+                        operator_bundle=observation_bundle,
                     )
                     stddev = torch.sqrt(torch.clamp(torch.exp(pred_logvar), min=1.0e-8))
 
@@ -569,6 +575,10 @@ def fit_field_model(
         raise ValueError("fit_field_model requires at least one observation")
     train_device = resolve_fit_device(model, device)
     model = model.to(device=train_device)
+    obs_operator_bundles = tuple(
+        field_observation_operator_bundle(observation) for observation in observations
+    )
+    operator_bundle = merge_operator_bundles(*obs_operator_bundles)
 
     obs_forward_ctx: tuple[ForwardContext | None, ...] = (
         tuple(observation_forward_contexts)
@@ -744,11 +754,21 @@ def fit_field_model(
             generator=sampling_generator,
         )
         selected_pairs: list[
-            tuple[FieldObservation, ForwardContext | None, ExposurePose | None]
+            tuple[
+                FieldObservation,
+                ForwardContext | None,
+                ExposurePose | None,
+                ObservationOperatorBundle,
+            ]
         ] = []
         if pixel_sample_count > 0:
             selected_pairs = [
-                (observations[idx], obs_forward_ctx[idx], obs_exposure_poses[idx])
+                (
+                    observations[idx],
+                    obs_forward_ctx[idx],
+                    obs_exposure_poses[idx],
+                    obs_operator_bundles[idx],
+                )
                 for idx in selected_indices
             ]
         elif (
@@ -760,7 +780,12 @@ def fit_field_model(
             cropped_indices = selected_indices[uncropped_count:]
             if uncropped_indices:
                 selected_pairs.extend(
-                    (observations[i], obs_forward_ctx[i], obs_exposure_poses[i])
+                    (
+                        observations[i],
+                        obs_forward_ctx[i],
+                        obs_exposure_poses[i],
+                        obs_operator_bundles[i],
+                    )
                     for i in uncropped_indices
                 )
             for _ in range(patches_per_observation):
@@ -798,11 +823,17 @@ def fit_field_model(
                                 cropped,
                                 obs_forward_ctx[observation_index],
                                 obs_exposure_poses[observation_index],
+                                obs_operator_bundles[observation_index],
                             )
                         )
             if not selected_pairs:
                 selected_pairs = [
-                    (observations[idx], obs_forward_ctx[idx], obs_exposure_poses[idx])
+                    (
+                        observations[idx],
+                        obs_forward_ctx[idx],
+                        obs_exposure_poses[idx],
+                        obs_operator_bundles[idx],
+                    )
                     for idx in selected_indices
                 ]
         else:
@@ -810,8 +841,11 @@ def fit_field_model(
                 base_observation = observations[observation_index]
                 base_ctx = obs_forward_ctx[observation_index]
                 base_pose = obs_exposure_poses[observation_index]
+                base_bundle = obs_operator_bundles[observation_index]
                 if training_patch_size is None or selected_rank < uncropped_count:
-                    selected_pairs.append((base_observation, base_ctx, base_pose))
+                    selected_pairs.append(
+                        (base_observation, base_ctx, base_pose, base_bundle)
+                    )
                     continue
                 patch = min(
                     int(training_patch_size),
@@ -822,7 +856,9 @@ def fit_field_model(
                     patch >= int(base_observation.image.shape[-2])
                     and patch >= int(base_observation.image.shape[-1])
                 ):
-                    selected_pairs.append((base_observation, base_ctx, base_pose))
+                    selected_pairs.append(
+                        (base_observation, base_ctx, base_pose, base_bundle)
+                    )
                     continue
                 for _ in range(patches_per_observation):
                     x0, y0 = _sample_patch_origin(
@@ -841,18 +877,22 @@ def fit_field_model(
                             ),
                             base_ctx,
                             base_pose,
+                            base_bundle,
                         )
                     )
-        selected_observations = [o for o, _, _ in selected_pairs]
-        for observation in selected_observations:
-            if pixel_sample_count > 0 and (
-                observation.psf_spec is None or observation.psf_spec.mode == "none"
-            ):
+        selected_observations = [o for o, _, _, _ in selected_pairs]
+        for observation, _, _, observation_bundle in selected_pairs:
+            if pixel_sample_count > 0 and observation_bundle.psf is None:
                 total_pixels += pixel_sample_count
             else:
                 total_pixels += observation.image.numel()
         context_pairs: list[
-            tuple[FieldObservation, ForwardContext | None, ExposurePose | None]
+            tuple[
+                FieldObservation,
+                ForwardContext | None,
+                ExposurePose | None,
+                ObservationOperatorBundle,
+            ]
         ] = []
         if context_count > 0 and context_weight > 0.0:
             context_indices = _sample_observation_indices(
@@ -862,7 +902,12 @@ def fit_field_model(
                 generator=sampling_generator,
             )
             context_pairs = [
-                (observations[idx], obs_forward_ctx[idx], obs_exposure_poses[idx])
+                (
+                    observations[idx],
+                    obs_forward_ctx[idx],
+                    obs_exposure_poses[idx],
+                    obs_operator_bundles[idx],
+                )
                 for idx in context_indices
             ]
 
@@ -886,7 +931,12 @@ def fit_field_model(
                     selected_band_weight_sum[band_key] = selected_band_weight_sum.get(
                         band_key, 0.0
                     ) + _observation_weight_sum_scalar(observation)
-        for observation, forward_context, exposure_pose in selected_pairs:
+        for (
+            observation,
+            forward_context,
+            exposure_pose,
+            observation_bundle,
+        ) in selected_pairs:
             render_kwargs = {}
             if training_spectral_sampling == "mixture_mc":
                 assert mixture_wavelengths is not None and mixture_probs is not None
@@ -904,9 +954,8 @@ def fit_field_model(
                 )
             render_kwargs["forward_context"] = forward_context
             render_kwargs["exposure_pose"] = exposure_pose
-            if pixel_sample_count > 0 and (
-                observation.psf_spec is None or observation.psf_spec.mode == "none"
-            ):
+            render_kwargs["operator_bundle"] = observation_bundle
+            if pixel_sample_count > 0 and observation_bundle.psf is None:
                 sampled = _sample_observation_pixels(
                     observation,
                     num_samples=pixel_sample_count,
@@ -1152,9 +1201,12 @@ def fit_field_model(
                     generator=sampling_generator,
                 )[:max_anchor_count].tolist()
                 for anchor_index in anchor_perm:
-                    anchor_observation, anchor_fctx, anchor_pose = selected_pairs[
-                        anchor_index
-                    ]
+                    (
+                        anchor_observation,
+                        anchor_fctx,
+                        anchor_pose,
+                        anchor_bundle,
+                    ) = selected_pairs[anchor_index]
                     anchor_pred = render_field_observation(
                         model,
                         anchor_observation,
@@ -1162,6 +1214,7 @@ def fit_field_model(
                         spectral_sampling="deterministic_quadrature",
                         forward_context=anchor_fctx,
                         exposure_pose=anchor_pose,
+                        operator_bundle=anchor_bundle,
                     )
                     anchor_image = anchor_observation.image.to(
                         device=anchor_pred.device,
@@ -1267,7 +1320,7 @@ def fit_field_model(
                 total_loss = total_loss + centroid_anchor_loss
         if context_pairs and context_weight > 0.0:
             scaled_context_weight = context_weight / max(len(context_pairs), 1)
-            for context_observation, ctx_f, ctx_pose in context_pairs:
+            for context_observation, ctx_f, ctx_pose, ctx_bundle in context_pairs:
                 context_render_kwargs = {}
                 context_render_kwargs["exposure_pose"] = ctx_pose
                 if training_spectral_sampling == "mixture_mc":
@@ -1291,6 +1344,7 @@ def fit_field_model(
                         training_spectral_sampling_grid_size
                     )
                 context_render_kwargs["forward_context"] = ctx_f
+                context_render_kwargs["operator_bundle"] = ctx_bundle
                 context_pred = render_field_observation(
                     model,
                     context_observation,
@@ -1470,6 +1524,7 @@ def fit_field_model(
         for obs_idx, observation in enumerate(observations):
             fctx = obs_forward_ctx[obs_idx]
             pose = obs_exposure_poses[obs_idx]
+            observation_bundle = obs_operator_bundles[obs_idx]
             if loss_kind == "gaussian_nll":
                 pred, pred_logvar = render_field_observation_distribution(
                     model,
@@ -1477,6 +1532,7 @@ def fit_field_model(
                     num_spectral_samples=num_spectral_samples,
                     forward_context=fctx,
                     exposure_pose=pose,
+                    operator_bundle=observation_bundle,
                 )
             else:
                 pred = render_field_observation(
@@ -1485,6 +1541,7 @@ def fit_field_model(
                     num_spectral_samples=num_spectral_samples,
                     forward_context=fctx,
                     exposure_pose=pose,
+                    operator_bundle=observation_bundle,
                 )
                 pred_logvar = None
             image = observation.image.to(device=pred.device, dtype=pred.dtype)
@@ -1615,14 +1672,16 @@ def fit_field_model(
         observations=observations,
         obs_forward_ctx=obs_forward_ctx,
         obs_exposure_poses=obs_exposure_poses,
+        obs_operator_bundles=obs_operator_bundles,
         num_spectral_samples=num_spectral_samples,
         fit_duration_sec=duration,
         steps=int(steps),
         total_pixels=total_pixels,
         max_mem=max_mem,
     )
+    diagnostics = dict(diagnostics or {})
+    diagnostics["operator_bundle"] = operator_bundle.enabled_operator_names()
     if any(pose is not None for pose in obs_exposure_poses):
-        diagnostics = dict(diagnostics or {})
         diagnostics["pose_refinement"] = {
             "enabled": bool(refine_poses or observation_exposure_poses is not None),
             "auto_created": bool(refine_poses),
@@ -1656,6 +1715,8 @@ def fit_field_model(
             if any(pose is not None for pose in obs_exposure_poses)
             else None
         ),
+        operator_bundle=operator_bundle,
+        observation_operator_bundles=obs_operator_bundles,
     )
 
 

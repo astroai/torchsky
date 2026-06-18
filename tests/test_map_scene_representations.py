@@ -14,12 +14,20 @@ from torchsky.map.scenes import (
 )
 from torchsky.map.target import TargetRenderSpec
 from torchsky.map import FieldObservation
-from torchsky.map.operators import spherical_spectral_operator_bundle
+from torchsky.map.operators import (
+    ObservationOperatorBundle,
+    spherical_spectral_operator_bundle,
+)
 
 
 class _OnesField(torch.nn.Module):
     def forward(self, ra, dec, wavelength):
         return torch.ones_like(ra, dtype=torch.float32)
+
+
+class _DistributionOnesField(_OnesField):
+    def forward_distribution(self, ra, dec, wavelength):
+        return self.forward(ra, dec, wavelength), torch.zeros_like(ra, dtype=torch.float32)
 
 
 def _simple_header() -> dict:
@@ -58,6 +66,49 @@ def test_continuous_field_model_uses_field_render_path() -> None:
         num_spectral_samples=1,
     )
     torch.testing.assert_close(rendered, torch.ones((4, 4), dtype=torch.float32))
+
+
+def test_continuous_field_model_forwards_operator_bundle() -> None:
+    target = TargetRenderSpec.from_header(_simple_header())
+    obs = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=_simple_header(),
+        wavelength=5000.0,
+        background_offset=3.0,
+    )
+    scene = ContinuousFieldModel(_OnesField())
+
+    implicit = scene.render_to_target(target, observation=obs, num_spectral_samples=1)
+    explicit = scene.render_to_target(
+        target,
+        observation=obs,
+        num_spectral_samples=1,
+        operator_bundle=ObservationOperatorBundle(),
+    )
+
+    torch.testing.assert_close(implicit, torch.full((4, 4), 4.0))
+    torch.testing.assert_close(explicit, torch.ones((4, 4), dtype=torch.float32))
+
+
+def test_continuous_field_model_distribution_forwards_operator_bundle() -> None:
+    target = TargetRenderSpec.from_header(_simple_header())
+    obs = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=_simple_header(),
+        wavelength=5000.0,
+        background_offset=3.0,
+    )
+    scene = ContinuousFieldModel(_DistributionOnesField())
+
+    mean, logvar = scene.render_distribution_to_target(
+        target,
+        observation=obs,
+        num_spectral_samples=1,
+        operator_bundle=ObservationOperatorBundle(),
+    )
+
+    torch.testing.assert_close(mean, torch.ones((4, 4), dtype=torch.float32))
+    torch.testing.assert_close(logvar, torch.zeros((4, 4), dtype=torch.float32))
 
 
 def test_target_to_field_observation_preserves_bandpass_and_psf_metadata() -> None:

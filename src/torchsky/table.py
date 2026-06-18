@@ -21,6 +21,7 @@ from ._where import (
     parse_where_expression,
     where_columns_from_ast,
 )
+from ._table_engine import validate_table_backend
 
 logger = logging.getLogger(__name__)
 
@@ -1456,8 +1457,7 @@ def scan(
     """
     if batch_size <= 0:
         raise ValueError("batch_size must be > 0")
-    if backend not in {"auto", "torch", "cpp_numpy"}:
-        raise ValueError("backend must be one of: auto, torch, cpp_numpy")
+    validate_table_backend(backend)
 
     if where is not None:
         table = read(
@@ -1553,8 +1553,7 @@ def read(
 
     FITS character columns are decoded to Python strings by default (`decode_bytes=True`).
     """
-    if backend not in {"auto", "torch", "cpp_numpy"}:
-        raise ValueError("backend must be one of: auto, torch, cpp_numpy")
+    validate_table_backend(backend)
     pa = _require_pyarrow()
 
     if backend in {"auto", "cpp_numpy"}:
@@ -1767,8 +1766,7 @@ def schema(
 ):
     """Fetch Arrow schema for a FITS table with minimal read."""
     pa = _require_pyarrow()
-    if backend not in {"auto", "torch", "cpp_numpy"}:
-        raise ValueError("backend must be one of: auto, torch, cpp_numpy")
+    validate_table_backend(backend)
     scan_backend = backend
     iterator = scan(
         path,
@@ -2178,8 +2176,7 @@ def reader(
     FITS character columns are decoded to Python strings by default (`decode_bytes=True`).
     """
     pa = _require_pyarrow()
-    if backend not in {"auto", "torch", "cpp_numpy"}:
-        raise ValueError("backend must be one of: auto, torch, cpp_numpy")
+    validate_table_backend(backend)
     scan_backend = backend
     batches = scan(
         path,

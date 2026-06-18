@@ -23,6 +23,7 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
+from ..operators.bundle import ObservationOperatorBundle
 from .core import render_field_observation
 from .types import FieldObservation, ForwardContext
 
@@ -59,6 +60,9 @@ class SurveyDataTerm:
     loss_weight: float = 1.0
     kinematics_per_observation: tuple[KinematicState | None, ...] | None = None
     forward_context_per_observation: tuple[ForwardContext | None, ...] | None = None
+    operator_bundle_per_observation: (
+        tuple[ObservationOperatorBundle | None, ...] | None
+    ) = None
 
     def __post_init__(self) -> None:
         if self.loss_weight < 0.0:
@@ -72,6 +76,11 @@ class SurveyDataTerm:
             if len(self.forward_context_per_observation) != len(self.observations):
                 raise ValueError(
                     "forward_context_per_observation length must match observations"
+                )
+        if self.operator_bundle_per_observation is not None:
+            if len(self.operator_bundle_per_observation) != len(self.observations):
+                raise ValueError(
+                    "operator_bundle_per_observation length must match observations"
                 )
 
 
@@ -133,6 +142,7 @@ def predict_observation_mean(
     kinematics: KinematicState | None = None,
     rest_frame_scene: bool = False,
     forward_context: ForwardContext | None = None,
+    operator_bundle: ObservationOperatorBundle | None = None,
     **render_kw: Any,
 ) -> Tensor:
     """Predict mean sky patch for one :class:`FieldObservation` (deterministic ``G_ψ`` path).
@@ -141,8 +151,8 @@ def predict_observation_mean(
     ``kinematics.one_plus_z`` is set, spectral metadata is scaled with
     :func:`scale_observation_for_rest_frame_scene` before rendering.
 
-    ``forward_context`` is forwarded to :func:`render_field_observation` for models that
-    accept ``forward_context`` in ``forward`` / ``render_bandpass``.
+    ``forward_context`` and ``operator_bundle`` are forwarded to
+    :func:`render_field_observation`.
     """
     obs = observation
     if rest_frame_scene:
@@ -150,7 +160,11 @@ def predict_observation_mean(
         if opz != 1.0:
             obs = scale_observation_for_rest_frame_scene(observation, one_plus_z=opz)
     return render_field_observation(
-        model, obs, forward_context=forward_context, **render_kw
+        model,
+        obs,
+        forward_context=forward_context,
+        operator_bundle=operator_bundle,
+        **render_kw,
     )
 
 
@@ -199,15 +213,18 @@ def multi_survey_charbonnier_loss(
     for term in terms:
         kin_list = term.kinematics_per_observation
         ctx_list = term.forward_context_per_observation
+        bundle_list = term.operator_bundle_per_observation
         for i, obs in enumerate(term.observations):
             kin = None if kin_list is None else kin_list[i]
             fctx = None if ctx_list is None else ctx_list[i]
+            operator_bundle = None if bundle_list is None else bundle_list[i]
             pred = predict_observation_mean(
                 model,
                 obs,
                 kinematics=kin,
                 rest_frame_scene=rest_frame_scene,
                 forward_context=fctx,
+                operator_bundle=operator_bundle,
                 **render_kw,
             )
             li = observation_charbonnier_loss(

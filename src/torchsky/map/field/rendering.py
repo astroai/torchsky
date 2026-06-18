@@ -17,7 +17,10 @@ from ..operators.background import (
     apply_background_components,
     observation_background_components,
 )
-from ..operators.bundle import field_observation_operator_bundle
+from ..operators.bundle import (
+    ObservationOperatorBundle,
+    field_observation_operator_bundle,
+)
 from ..operators.psf import apply_psf_spec
 from ..exposure_pose import ExposurePose
 
@@ -39,6 +42,15 @@ from .observation_ops import (
 from .types import FieldObservation, FieldSpectralSampling, ForwardContext
 
 
+def _resolve_operator_bundle(
+    observation: FieldObservation,
+    operator_bundle: ObservationOperatorBundle | None,
+) -> ObservationOperatorBundle:
+    if operator_bundle is not None:
+        return operator_bundle
+    return field_observation_operator_bundle(observation)
+
+
 def render_field_observation_distribution(
     model: nn.Module,
     observation: FieldObservation,
@@ -51,10 +63,12 @@ def render_field_observation_distribution(
     override_weights: Tensor | None = None,
     forward_context: ForwardContext | None = None,
     exposure_pose: ExposurePose | None = None,
+    operator_bundle: ObservationOperatorBundle | None = None,
 ) -> tuple[Tensor, Tensor]:
     image = observation.image
     if image.ndim != 2:
         raise ValueError("FieldObservation.image must be 2D")
+    operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
     device = next((p.device for p in model.parameters()), default_compute_device())
     ra_deg, dec_deg = _coordinate_grid(
         observation,
@@ -92,6 +106,7 @@ def render_field_observation_distribution(
     else:
         raise ValueError(f"unsupported spectral_sampling {spectral_sampling!r}")
     render_bandpass_distribution = getattr(model, "render_bandpass_distribution", None)
+    operators_applied = False
     if callable(render_bandpass_distribution):
         mean, logvar = _call_render_bandpass_distribution(
             model,
@@ -141,9 +156,12 @@ def render_field_observation_distribution(
                 override_weights=override_weights,
                 forward_context=forward_context,
                 exposure_pose=exposure_pose,
+                operator_bundle=operator_bundle,
             )
             logvar = torch.zeros_like(mean)
-    operator_bundle = field_observation_operator_bundle(observation)
+            operators_applied = True
+    if operators_applied:
+        return mean.to(dtype=image.dtype), logvar.to(dtype=image.dtype)
     if operator_bundle.psf is not None:
         mean = apply_psf_spec(mean, observation.psf_spec)
         variance = apply_psf_spec(torch.exp(logvar), observation.psf_spec)
@@ -175,11 +193,12 @@ def render_field_samples_distribution(
     override_weights: Tensor | None = None,
     forward_context: ForwardContext | None = None,
     exposure_pose: ExposurePose | None = None,
+    operator_bundle: ObservationOperatorBundle | None = None,
 ) -> tuple[Tensor, Tensor]:
     ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
         ra_deg, dec_deg, observation, exposure_pose
     )
-    operator_bundle = field_observation_operator_bundle(observation)
+    operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
     if operator_bundle.psf is not None:
         raise ValueError("pixel-sampled field rendering does not support PSF blurring")
     if operator_bundle.background is not None:
@@ -262,6 +281,7 @@ def render_field_samples_distribution(
         override_wavelengths=override_wavelengths,
         override_weights=override_weights,
         forward_context=forward_context,
+        operator_bundle=operator_bundle,
     )
     return mean, torch.zeros_like(mean)
 
@@ -281,10 +301,12 @@ def render_field_observation(
     func_vmap_chunk: int = 65536,
     forward_context: ForwardContext | None = None,
     exposure_pose: ExposurePose | None = None,
+    operator_bundle: ObservationOperatorBundle | None = None,
 ) -> Tensor:
     image = observation.image
     if image.ndim != 2:
         raise ValueError("FieldObservation.image must be 2D")
+    operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
     device = next((p.device for p in model.parameters()), default_compute_device())
     ra_deg, dec_deg = _coordinate_grid(
         observation,
@@ -294,7 +316,6 @@ def render_field_observation(
     ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
         ra_deg, dec_deg, observation, exposure_pose
     )
-    operator_bundle = field_observation_operator_bundle(observation)
     if override_wavelengths is not None or override_weights is not None:
         if override_wavelengths is None or override_weights is None:
             raise ValueError(
@@ -420,11 +441,12 @@ def render_field_samples(
     override_weights: Tensor | None = None,
     forward_context: ForwardContext | None = None,
     exposure_pose: ExposurePose | None = None,
+    operator_bundle: ObservationOperatorBundle | None = None,
 ) -> Tensor:
     ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
         ra_deg, dec_deg, observation, exposure_pose
     )
-    operator_bundle = field_observation_operator_bundle(observation)
+    operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
     if operator_bundle.psf is not None:
         raise ValueError("pixel-sampled field rendering does not support PSF blurring")
     if operator_bundle.background is not None:

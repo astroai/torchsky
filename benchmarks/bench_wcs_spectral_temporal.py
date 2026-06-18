@@ -41,14 +41,25 @@ SPECTRAL_CASES = (
     "FREQ-LOG",
     "WAVE-LOG",
     "WAVN-LOG",
-    "WAVE-F2W",
+    "FREQ-F2F",
     "FREQ-W2F",
+    "FREQ-A2F",
+    "FREQ-V2F",
+    "WAVE-F2W",
+    "WAVE-W2W",
+    "WAVE-A2W",
+    "WAVE-V2W",
+    "AWAV-F2A",
+    "AWAV-W2A",
+    "AWAV-A2A",
+    "AWAV-V2A",
+    "VELO-F2V",
+    "VELO-W2V",
+    "VELO-A2V",
+    "VELO-V2V",
     "WAVE-GRI",
     "WAVE-GRA",
     "FREQ-GRA",
-    "WAVE-V2W",
-    "VELO-F2V",
-    "FREQ-V2F",
 )
 TEMPORAL_CASES = (
     ("UTC", "TAI"),
@@ -97,21 +108,25 @@ def _spectral_header(ctype: str) -> fits.Header:
         header["PV1_4"] = -1.0e5
         header["PV1_5"] = 0.0
         header["PV1_6"] = 10.0
-    elif ctype == "WAVE-V2W":
-        header["CRVAL1"] = 0.21
-        header["CDELT1"] = 1.0e-4
-        header["CUNIT1"] = "m"
+    elif (
+        "-" in ctype
+        and len(ctype.rsplit("-", 1)[1]) == 3
+        and ctype.rsplit("-", 1)[1][1] == "2"
+    ):
+        stype = ctype.split("-", 1)[0]
         header["RESTFRQ"] = 1.42040575177e9
-    elif ctype == "VELO-F2V":
-        header["CRVAL1"] = 10.0
-        header["CDELT1"] = 0.1
-        header["CUNIT1"] = "m/s"
-        header["RESTFRQ"] = 1.42040575177e9
-    elif ctype == "FREQ-V2F":
-        header["CRVAL1"] = 1.420e9
-        header["CDELT1"] = 1.0e5
-        header["CUNIT1"] = "Hz"
-        header["RESTFRQ"] = 1.42040575177e9
+        if stype == "FREQ":
+            header["CRVAL1"] = 1.420e9
+            header["CDELT1"] = 1.0e5
+            header["CUNIT1"] = "Hz"
+        elif stype in {"WAVE", "AWAV"}:
+            header["CRVAL1"] = 0.21
+            header["CDELT1"] = 1.0e-4
+            header["CUNIT1"] = "m"
+        elif stype == "VELO":
+            header["CRVAL1"] = 10.0
+            header["CDELT1"] = 0.1
+            header["CUNIT1"] = "m/s"
     else:
         header["CRVAL1"] = 10.0
         header["CDELT1"] = 1.0e-3
@@ -125,6 +140,11 @@ def _as_numpy(value: Any) -> np.ndarray:
     if isinstance(value, torch.Tensor):
         return value.detach().cpu().numpy()
     return np.asarray(value)
+
+
+def _spectral_pixels(ctype: str, n_points: int) -> np.ndarray:
+    upper = 10.0 if ctype.endswith("-LOG") else 1000.0
+    return np.linspace(0.0, upper, n_points, dtype=np.float64).reshape(-1, 1)
 
 
 def _run_spectral_case(
@@ -283,13 +303,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    pixels = np.linspace(0.0, 1000.0, args.n_points, dtype=np.float64).reshape(-1, 1)
     rows: list[dict[str, Any]] = []
 
     spectral_cases = [
         c.strip().upper() for c in args.spectral_cases.split(",") if c.strip()
     ]
     for ctype in spectral_cases:
+        pixels = _spectral_pixels(ctype, args.n_points)
         rows.extend(_run_spectral_case(ctype, pixels, args.runs))
 
     if not args.skip_temporal:
