@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import torch
@@ -8,6 +9,9 @@ from torch import Tensor
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
 ARCSEC_TO_RAD = D2R / 3600.0
+JD_B1900 = 2415020.31352
+JD_B1950 = 2433282.42345905
+TROPICAL_YEAR_DAYS = 365.242198781
 
 _ICRS_TO_GAL = torch.tensor(
     [
@@ -18,6 +22,24 @@ _ICRS_TO_GAL = torch.tensor(
     dtype=torch.float64,
 )
 
+_B1950_TO_J2000_M = torch.tensor(
+    [
+        [0.9999256794956877, -0.0111814832204662, -0.0048590038153592],
+        [0.0111814832391717, 0.9999374848933135, -0.0000271625947142],
+        [0.0048590037723143, -0.0000271702937440, 0.9999881946023742],
+    ],
+    dtype=torch.float64,
+)
+
+_FK4_CORR = torch.tensor(
+    [
+        [-0.0026455262, -1.1539918689, 2.1111346190],
+        [1.1540628161, -0.0129042997, 0.0236021478],
+        [-2.1112979048, -0.0056024448, 0.0102587734],
+    ],
+    dtype=torch.float64,
+) * 1.0e-6
+
 
 def _as_tensor(value: Any) -> Tensor:
     if isinstance(value, Tensor):
@@ -27,6 +49,155 @@ def _as_tensor(value: Any) -> Tensor:
 
 def _wrap360(angle: Tensor) -> Tensor:
     return torch.remainder(angle, 360.0)
+
+
+def _besselian_epoch_to_jd(epoch: float) -> float:
+    return JD_B1900 + (float(epoch) - 1900.0) * TROPICAL_YEAR_DAYS
+
+
+def _besselian_epoch_to_julian_epoch(epoch: float) -> float:
+    return 2000.0 + (_besselian_epoch_to_jd(epoch) - 2451545.0) / 365.25
+
+
+def _rotation_matrix_z(angle_deg: float, *, device: torch.device) -> Tensor:
+    a = torch.as_tensor(angle_deg * D2R, dtype=torch.float64, device=device)
+    s = torch.sin(a)
+    c = torch.cos(a)
+    z = torch.zeros((), dtype=torch.float64, device=device)
+    o = torch.ones((), dtype=torch.float64, device=device)
+    return torch.stack(
+        (
+            torch.stack((c, s, z)),
+            torch.stack((-s, c, z)),
+            torch.stack((z, z, o)),
+        )
+    )
+
+
+def _rotation_matrix_y(angle_deg: float, *, device: torch.device) -> Tensor:
+    a = torch.as_tensor(angle_deg * D2R, dtype=torch.float64, device=device)
+    s = torch.sin(a)
+    c = torch.cos(a)
+    z = torch.zeros((), dtype=torch.float64, device=device)
+    o = torch.ones((), dtype=torch.float64, device=device)
+    return torch.stack(
+        (
+            torch.stack((c, z, -s)),
+            torch.stack((z, o, z)),
+            torch.stack((s, z, c)),
+        )
+    )
+
+
+def _fk4_precession_matrix(
+    from_equinox: float, to_equinox: float, *, device: torch.device
+) -> Tensor:
+    t1 = (float(from_equinox) - 1850.0) / 1000.0
+    dt = (float(to_equinox) - 1850.0) / 1000.0 - t1
+    dt_over_3600 = dt / 3600.0
+
+    z1 = zeta1 = (0.060 * t1 + 139.720) * t1 + 23035.545
+    zeta2 = -0.27 * t1 + 30.240
+    zeta = ((17.995 * dt + zeta2) * dt + zeta1) * dt_over_3600
+
+    z2 = 109.480 + 0.39 * t1
+    z = ((18.325 * dt + z2) * dt + z1) * dt_over_3600
+
+    theta1 = (-0.37 * t1 - 85.29) * t1 + 20051.12
+    theta2 = -0.37 * t1 - 42.65
+    theta = ((-41.8 * dt + theta2) * dt + theta1) * dt_over_3600
+
+    return (
+        _rotation_matrix_z(-z, device=device)
+        @ _rotation_matrix_y(theta, device=device)
+        @ _rotation_matrix_z(-zeta, device=device)
+    )
+
+
+def _mean_obliquity_iau1980(jd: float) -> float:
+    t = (float(jd) - 2451545.0) / 36525.0
+    eps_arcsec = 84381.448 - 46.8150 * t - 0.00059 * t * t + 0.001813 * t * t * t
+    return eps_arcsec * ARCSEC_TO_RAD
+
+
+def _fk4_e_terms(equinox: float, *, device: torch.device) -> Tensor:
+    k = 0.0056932 * D2R
+    jd = _besselian_epoch_to_jd(equinox)
+    t = (jd - JD_B1950) / 36525.0
+    ek = k * ((-0.000000126 * t - 0.00004193) * t + 0.01673011)
+    g = ((((0.012 * t + 1.65) * t + 6190.67) * t + 1015489.951) / 3600.0) * D2R
+    eps = _mean_obliquity_iau1980(jd)
+    minus_ek_cos_g = -ek * math.cos(g)
+    return torch.tensor(
+        [
+            ek * math.sin(g),
+            minus_ek_cos_g * math.cos(eps),
+            minus_ek_cos_g * math.sin(eps),
+        ],
+        dtype=torch.float64,
+        device=device,
+    )
+
+
+def _remove_fk4_e_terms(vec: Tensor, equinox: float) -> Tensor:
+    eterms = _fk4_e_terms(equinox, device=vec.device).to(dtype=vec.dtype)
+    return vec - eterms + torch.sum(eterms * vec, dim=-1, keepdim=True) * vec
+
+
+def _add_fk4_e_terms(vec: Tensor, equinox: float) -> Tensor:
+    eterms = _fk4_e_terms(equinox, device=vec.device).to(dtype=vec.dtype)
+    rep = eterms + vec
+    for _ in range(10):
+        rep = (eterms + vec) / (1.0 + torch.sum(eterms * rep, dim=-1, keepdim=True))
+    return rep / torch.linalg.norm(rep, dim=-1, keepdim=True).clamp_min(1e-30)
+
+
+def _fk4_no_e_to_fk5_vec(
+    vec: Tensor,
+    *,
+    from_equinox: float,
+    to_equinox: float,
+    obstime: float | None = None,
+) -> Tensor:
+    obstime = from_equinox if obstime is None else float(obstime)
+    device = vec.device
+    p1 = _fk4_precession_matrix(from_equinox, 1950.0, device=device)
+    jyear = _besselian_epoch_to_julian_epoch(obstime)
+    t = (jyear - 1950.0) / 100.0
+    b = _B1950_TO_J2000_M.to(device=device, dtype=vec.dtype) + _FK4_CORR.to(
+        device=device, dtype=vec.dtype
+    ) * t
+    out = torch.matmul(vec, p1.T.to(dtype=vec.dtype))
+    out = torch.matmul(out, b.T)
+    if float(to_equinox) != 2000.0:
+        ra, dec = unit_to_radec(out)
+        ra, dec = precess_fk5(ra, dec, from_equinox=2000.0, to_equinox=to_equinox)
+        out = radec_to_unit(ra, dec)
+    return out
+
+
+def _fk5_to_fk4_no_e_vec(
+    vec: Tensor,
+    *,
+    from_equinox: float,
+    to_equinox: float,
+    obstime: float | None = None,
+) -> Tensor:
+    obstime = to_equinox if obstime is None else float(obstime)
+    device = vec.device
+    if float(from_equinox) != 2000.0:
+        ra, dec = unit_to_radec(vec)
+        ra, dec = precess_fk5(ra, dec, from_equinox=from_equinox, to_equinox=2000.0)
+        vec = radec_to_unit(ra, dec)
+    jyear = _besselian_epoch_to_julian_epoch(obstime)
+    t = (jyear - 1950.0) / 100.0
+    b = _B1950_TO_J2000_M.to(device=device, dtype=vec.dtype) + _FK4_CORR.to(
+        device=device, dtype=vec.dtype
+    ) * t
+    p2 = _fk4_precession_matrix(1950.0, to_equinox, device=device)
+    out = torch.matmul(vec, b.to(dtype=vec.dtype))
+    out = torch.matmul(out, p2.T.to(dtype=vec.dtype))
+    return out
 
 
 def radec_to_unit(lon_deg: Any, lat_deg: Any) -> Tensor:
@@ -152,10 +323,19 @@ def convert_celestial(
     lon = _as_tensor(lon_deg)
     lat = _as_tensor(lat_deg).to(device=lon.device)
 
-    if src == "FK4" or dst == "FK4":
-        raise NotImplementedError("FK4/Besselian E-term conversion is not implemented")
-
-    if src == "GALACTIC":
+    if src == "FK4":
+        source_equinox = 1950.0 if from_equinox is None else float(from_equinox)
+        vec = radec_to_unit(lon, lat)
+        vec = _remove_fk4_e_terms(vec, source_equinox)
+        vec = _fk4_no_e_to_fk5_vec(
+            vec,
+            from_equinox=source_equinox,
+            to_equinox=2000.0,
+            obstime=source_equinox,
+        )
+        lon, lat = unit_to_radec(vec)
+        src = "ICRS"
+    elif src == "GALACTIC":
         lon, lat = galactic_to_icrs(lon, lat)
         src = "ICRS"
     elif src == "FK5":
@@ -169,6 +349,17 @@ def convert_celestial(
 
     if dst == "ICRS":
         return lon, lat
+    if dst == "FK4":
+        target_equinox = 1950.0 if to_equinox is None else float(to_equinox)
+        vec = radec_to_unit(lon, lat)
+        vec = _fk5_to_fk4_no_e_vec(
+            vec,
+            from_equinox=2000.0,
+            to_equinox=target_equinox,
+            obstime=target_equinox,
+        )
+        vec = _add_fk4_e_terms(vec, target_equinox)
+        return unit_to_radec(vec)
     if dst == "GALACTIC":
         return icrs_to_galactic(lon, lat)
     if dst == "FK5":

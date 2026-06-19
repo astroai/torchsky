@@ -25,11 +25,17 @@ from .core import (
 from . import healpix
 from .healpix import (
     ang2pix,
+    degrade_pixels,
+    degrade_pixel_ranges,
     npix2nside,
     nside2npix,
+    pixel_ranges_to_pixels,
+    pixels_to_pixel_ranges,
     pix2ang,
     pix2vec,
     query_disc,
+    upgrade_pixels,
+    upgrade_pixel_ranges,
     vec2pix,
 )
 from .geom import (
@@ -167,10 +173,16 @@ __all__ = [
     "synalm",
     "synfast",
     "ang2pix",
+    "degrade_pixels",
+    "degrade_pixel_ranges",
     "npix2nside",
     "nside2npix",
+    "pixel_ranges_to_pixels",
+    "pixels_to_pixel_ranges",
     "pix2ang",
     "pix2vec",
     "query_disc",
+    "upgrade_pixels",
+    "upgrade_pixel_ranges",
     "vec2pix",
 ]

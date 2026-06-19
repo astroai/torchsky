@@ -1837,6 +1837,109 @@ def upgrade_pixel_ranges(
     return ranges * factor
 
 
+def degrade_pixel_ranges(
+    nside: int,
+    pixel_ranges: Tensor | Sequence[Sequence[int]],
+    nside_degrade: int,
+) -> Tensor:
+    """
+    Degrade NESTED pixel ranges from `nside` to `nside_degrade`.
+
+    Half-open child ranges [start, stop) map to every parent pixel touched by at
+    least one child. Output ranges are sorted, disjoint, and half-open.
+    """
+    _validate_nside(nside)
+    _validate_nside(nside_degrade)
+    if nside_degrade > nside:
+        raise ValueError("The value for nside_degrade must be <= nside.")
+    ranges = torch.as_tensor(pixel_ranges, dtype=torch.int64)
+    if ranges.ndim != 2 or ranges.shape[1] != 2:
+        raise ValueError("pixel_ranges must have shape (N, 2)")
+    if ranges.numel() == 0:
+        return torch.empty((0, 2), dtype=torch.int64, device=ranges.device)
+    if nside_degrade == nside:
+        return pixels_to_pixel_ranges(pixel_ranges_to_pixels(ranges, inclusive=False))
+
+    levels = nside2order(nside) - nside2order(nside_degrade)
+    factor = 1 << (2 * levels)
+    starts = torch.div(ranges[:, 0], factor, rounding_mode="floor")
+    stops = torch.div(ranges[:, 1] + factor - 1, factor, rounding_mode="floor")
+    parent_ranges = torch.stack((starts, stops), dim=1)
+    valid = parent_ranges[:, 1] > parent_ranges[:, 0]
+    if not bool(valid.any()):
+        return torch.empty((0, 2), dtype=torch.int64, device=ranges.device)
+    parent_pixels = pixel_ranges_to_pixels(parent_ranges[valid], inclusive=False)
+    return pixels_to_pixel_ranges(parent_pixels)
+
+
+def upgrade_pixels(
+    nside: int,
+    pixels: Tensor | Sequence[int],
+    nside_upgrade: int,
+    *,
+    nest: bool = False,
+) -> Tensor:
+    """
+    Upgrade explicit HEALPix pixel ids to a finer resolution.
+
+    Each input pixel expands to all child pixels at `nside_upgrade`. Duplicates are
+    removed and output is sorted in the requested output ordering.
+    """
+    _validate_nside(nside)
+    _validate_nside(nside_upgrade)
+    if nside_upgrade < nside:
+        raise ValueError("The value for nside_upgrade must be >= nside.")
+
+    pix = _as_int64(pixels).reshape(-1)
+    if pix.numel() == 0:
+        return torch.empty((0,), dtype=torch.int64, device=pix.device)
+    npix = nside2npix(nside)
+    if bool(((pix < 0) | (pix >= npix)).any()):
+        raise ValueError("pixels contain values outside the input nside range")
+    if nside_upgrade == nside:
+        return torch.unique(pix, sorted=True)
+
+    levels = nside2order(nside_upgrade) - nside2order(nside)
+    pix_nest = pix if nest else ring2nest(nside, pix)
+    child_nest = nest_children(pix_nest, levels=levels).reshape(-1)
+    child = child_nest if nest else nest2ring(nside_upgrade, child_nest)
+    return torch.unique(child, sorted=True)
+
+
+def degrade_pixels(
+    nside: int,
+    pixels: Tensor | Sequence[int],
+    nside_degrade: int,
+    *,
+    nest: bool = False,
+) -> Tensor:
+    """
+    Degrade explicit HEALPix pixel ids to a coarser resolution.
+
+    Every parent pixel touched by at least one input child is returned. Duplicates are
+    removed and output is sorted in the requested output ordering.
+    """
+    _validate_nside(nside)
+    _validate_nside(nside_degrade)
+    if nside_degrade > nside:
+        raise ValueError("The value for nside_degrade must be <= nside.")
+
+    pix = _as_int64(pixels).reshape(-1)
+    if pix.numel() == 0:
+        return torch.empty((0,), dtype=torch.int64, device=pix.device)
+    npix = nside2npix(nside)
+    if bool(((pix < 0) | (pix >= npix)).any()):
+        raise ValueError("pixels contain values outside the input nside range")
+    if nside_degrade == nside:
+        return torch.unique(pix, sorted=True)
+
+    levels = nside2order(nside) - nside2order(nside_degrade)
+    pix_nest = pix if nest else ring2nest(nside, pix)
+    parent_nest = nest_parent(pix_nest, levels=levels)
+    parent = parent_nest if nest else nest2ring(nside_degrade, parent_nest)
+    return torch.unique(parent, sorted=True)
+
+
 def query_box(
     nside: int,
     lon_min: float,
@@ -2243,6 +2346,8 @@ __all__ = [
     "angular_distance_deg",
     "boundaries",
     "compact_bits",
+    "degrade_pixels",
+    "degrade_pixel_ranges",
     "get_all_neighbours",
     "get_interp_val",
     "get_interp_weights",
@@ -2285,6 +2390,7 @@ __all__ = [
     "ring_to_nested",
     "spread_bits",
     "ud_grade",
+    "upgrade_pixels",
     "upgrade_pixel_ranges",
     "vec2ang",
     "vec2pix",

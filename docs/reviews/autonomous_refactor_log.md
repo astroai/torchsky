@@ -1,8 +1,8 @@
 # Autonomous Refactor Log
 
 > Archived audit trail. This file is no longer the active roadmap or work
-> queue. Use `../roadmap/status.md` for the high-level current roadmap and
-> `../roadmap/implementation-ledger.md` for the maintained low-level record of
+> queue. Use `../roadmap/status.md` for the current status dashboard and
+> `../roadmap/history.md` for the maintained low-level record of
 > shipped improvements, tests, and follow-ups.
 
 Target branch: `codex/autonomous-refactor-2026-05`

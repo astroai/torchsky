@@ -452,6 +452,7 @@ def test_wcs_auto_loads_coupled_tabular_lookup_forward_and_jacobian() -> None:
     world = wcs.pixel_to_world(pixels, origin=0)
     pixels_back = wcs.world_to_pixel(world, origin=0)
     jac = wcs.pixel_to_world_jacobian(pixels, origin=0)
+    inv_jac = wcs.world_to_pixel_jacobian(world, origin=0)
 
     assert wcs.coupled_tabular is not None
     assert wcs.tabular_axes == {}
@@ -464,8 +465,12 @@ def test_wcs_auto_loads_coupled_tabular_lookup_forward_and_jacobian() -> None:
         jac,
         torch.tensor([[[10.5, 3.5], [0.5, 6.5]]], dtype=torch.float64),
     )
-    with pytest.raises(NotImplementedError, match="coupled tabular"):
-        wcs.world_to_pixel_jacobian(world, origin=0)
+    torch.testing.assert_close(
+        inv_jac,
+        torch.linalg.inv(jac),
+        atol=1e-7,
+        rtol=1e-7,
+    )
 
 
 def test_wcs_mixed_spatial_and_coupled_tabular_extra_axes_forward() -> None:
@@ -528,6 +533,14 @@ def test_wcs_mixed_spatial_and_coupled_tabular_extra_axes_forward() -> None:
     torch.testing.assert_close(
         jac[0, 2:, 2:],
         torch.tensor([[10.5, 3.5], [0.5, 6.5]], dtype=torch.float64),
+    )
+    inv_jac = wcs.world_to_pixel_jacobian(world, origin=0)
+    assert torch.isfinite(inv_jac).all()
+    torch.testing.assert_close(
+        inv_jac[0, 2:, 2:],
+        torch.linalg.inv(jac[0, 2:, 2:]),
+        atol=1e-8,
+        rtol=1e-8,
     )
     torch.testing.assert_close(pixels_back, pixels, atol=1e-8, rtol=1e-8)
 

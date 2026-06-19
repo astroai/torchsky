@@ -3495,3 +3495,46 @@ def test_render_field_cube_spectral_chunk_matches_per_plane_loop() -> None:
         model, target_header=header, spectral_axis=axis, spectral_chunk=0
     )
     assert torch.allclose(c1, c_all, rtol=0.0, atol=1.0e-5)
+
+
+def test_render_field_observation_rejects_non_positive_spatial_tile() -> None:
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=900.0,
+    )
+    model = SineImplicitField(domain, hidden_dim=8, hidden_layers=1)
+    obs = FieldObservation(
+        image=torch.zeros((8, 8), dtype=torch.float32),
+        header=_tan_header(8, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
+        wavelength=5600.0,
+    )
+    with pytest.raises(ValueError, match="spatial_tile_hw entries must be positive"):
+        render_field_observation(model, obs, spatial_tile_hw=(0, 4))
+
+
+def test_render_field_cube_rejects_non_positive_spatial_tile() -> None:
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=900.0,
+    )
+    model = SineImplicitField(domain, hidden_dim=8, hidden_layers=1)
+    axis = SpectralAxis(
+        values=torch.tensor([5600.0], dtype=torch.float64),
+        unit="Angstrom",
+        type="WAVE",
+    )
+    with pytest.raises(ValueError, match="spatial_tile_hw entries must be positive"):
+        render_field_cube(
+            model,
+            target_header=_tan_header(
+                8, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0
+            ),
+            spectral_axis=axis,
+            spatial_tile_hw=(4, 0),
+        )

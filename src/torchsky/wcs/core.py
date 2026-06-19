@@ -2608,8 +2608,22 @@ class WCS:
     def precess_celestial(
         self, ra: Any, dec: Any, to_equinox: float, *, from_equinox: float | None = None
     ) -> Tuple[Tensor, Tensor]:
-        """Precess FK5-style celestial coordinates using WCS equinox metadata."""
+        """Precess celestial coordinates using WCS frame/equinox metadata."""
         frame = self.celestial_frame
+        if frame == "FK4":
+            source = (
+                float(from_equinox)
+                if from_equinox is not None
+                else float(self.celestial_equinox or 1950.0)
+            )
+            return _convert_celestial(
+                ra,
+                dec,
+                from_frame="FK4",
+                to_frame="FK4",
+                from_equinox=source,
+                to_equinox=float(to_equinox),
+            )
         if frame not in {"ICRS", "FK5"}:
             raise NotImplementedError(f"precession is not implemented for {frame}")
         source = (
@@ -2660,13 +2674,21 @@ class WCS:
     def axis_correlation_matrix(self) -> np.ndarray:
         """Boolean matrix showing which world axes depend on which pixel axes."""
         matrix = np.zeros((self.world_n_dim, self.pixel_n_dim), dtype=bool)
+        cd_deps = (
+            torch.abs(self.cd_full).detach().cpu().numpy() > 1.0e-15
+        )
         if self._is_spatial and self.naxis >= 2:
             matrix[:2, :2] = True
             for i in range(2, self.naxis):
-                matrix[i, i] = True
+                matrix[i, :] = cd_deps[i, :]
         else:
-            for i in range(self.naxis):
-                matrix[i, i] = True
+            matrix[:, :] = cd_deps
+        for axis in self.tabular_axes:
+            if 0 <= axis < self.naxis:
+                matrix[axis, axis] = True
+        for axis in self.coupled_tabular_axes:
+            matrix[axis, :] = False
+            matrix[axis, list(self.coupled_tabular_axes)] = True
         return matrix
 
     def footprint(self, *, origin: int = 0) -> Tensor:
@@ -2759,6 +2781,19 @@ class WCS:
         out_pixel = pixel_t.clone()
         out_world = world_t.clone()
 
+        if not self._is_spatial:
+            if self.tabular_axes or self.coupled_tabular is not None:
+                raise NotImplementedError(
+                    "mixed tabular WCS transforms require explicit pixel or world coordinates"
+                )
+            return self._mixed_linear_pixel_world(
+                out_pixel,
+                out_world,
+                pixel_known=pixel_known,
+                world_known=world_known,
+                origin=origin,
+            )
+
         if self.naxis >= 3:
             for axis in range(2, self.naxis):
                 if bool(pixel_known[..., axis].all()):
@@ -2813,6 +2848,69 @@ class WCS:
         if torch.isnan(out_pixel).any() or torch.isnan(out_world).any():
             raise NotImplementedError("mixed transform left unresolved axes")
         return out_pixel, out_world
+
+    def _mixed_linear_pixel_world(
+        self,
+        out_pixel: Tensor,
+        out_world: Tensor,
+        *,
+        pixel_known: Tensor,
+        world_known: Tensor,
+        origin: int,
+    ) -> tuple[Tensor, Tensor]:
+        pixel_axes_known = [
+            axis for axis in range(self.naxis) if bool(pixel_known[..., axis].all())
+        ]
+        world_axes_known = [
+            axis for axis in range(self.naxis) if bool(world_known[..., axis].all())
+        ]
+        unknown_pixel_axes = [
+            axis for axis in range(self.naxis) if axis not in pixel_axes_known
+        ]
+        if len(unknown_pixel_axes) == 0:
+            world_full = self.pixel_to_world(out_pixel, origin=origin)
+            if isinstance(world_full, tuple):
+                world_full = torch.stack(world_full, dim=-1)
+            return out_pixel, world_full
+        if len(world_axes_known) != len(unknown_pixel_axes):
+            raise NotImplementedError(
+                "linear mixed transforms require one known world equation per "
+                "unknown pixel axis"
+            )
+        if any(not bool(pixel_known[..., axis].all()) for axis in pixel_axes_known):
+            raise NotImplementedError("mixed linear pixel known-mask varies by row")
+        if any(not bool(world_known[..., axis].all()) for axis in world_axes_known):
+            raise NotImplementedError("mixed linear world known-mask varies by row")
+
+        original_shape = out_pixel.shape
+        pixel_flat = out_pixel.reshape(-1, self.naxis)
+        world_flat = out_world.reshape(-1, self.naxis)
+        rel_flat = pixel_flat + (1.0 - float(origin)) - self.crpix
+
+        known_pix = torch.as_tensor(
+            pixel_axes_known, dtype=torch.long, device=self.device
+        )
+        unknown_pix = torch.as_tensor(
+            unknown_pixel_axes, dtype=torch.long, device=self.device
+        )
+        known_world = torch.as_tensor(
+            world_axes_known, dtype=torch.long, device=self.device
+        )
+
+        rhs = world_flat[:, known_world] - self.crval[known_world]
+        if len(pixel_axes_known) > 0:
+            rhs = rhs - torch.matmul(
+                rel_flat[:, known_pix], self.cd_full[known_world, :][:, known_pix].T
+            )
+        solved_rel = torch.linalg.solve(
+            self.cd_full[known_world, :][:, unknown_pix], rhs.T
+        ).T
+        rel_flat[:, unknown_pix] = solved_rel
+        pixel_flat[:, unknown_pix] = (
+            solved_rel + self.crpix[unknown_pix] + (float(origin) - 1.0)
+        )
+        world_full = self.crval + torch.matmul(rel_flat, self.cd_full.T)
+        return pixel_flat.view(original_shape), world_full.view(original_shape)
 
     def _coerce_optional_coord(self, value: Any | None, *, fill: float) -> Tensor:
         if value is None:
@@ -2919,15 +3017,43 @@ class WCS:
             pix_flat = self._stacked_world_to_pixel_flat(
                 world_flat, float(origin), allow_cpp_inverse_sphere=False
             )
-        elif not self._is_spatial:
-            if self.coupled_tabular is not None:
-                raise NotImplementedError(
-                    "general inverse lookup for coupled tabular grids is not implemented"
+        elif self._is_spatial:
+            pix_flat = torch.empty_like(world_flat)
+            spatial_pix = self._stacked_world_to_pixel_flat(
+                world_flat[:, :2], float(origin), allow_cpp_inverse_sphere=False
+            )
+            pix_flat[:, :2] = spatial_pix
+            if self.naxis >= 3:
+                coupled_pixel = self._apply_coupled_tabular_world_to_pixel(world_flat)
+                if any(axis < 2 for axis in coupled_pixel):
+                    raise NotImplementedError(
+                        "coupled tabular spatial axes are not supported"
+                    )
+                extra_linear = torch.stack(
+                    [
+                        coupled_pixel.get(
+                            i, self._apply_tabular_world_to_pixel(world_flat[:, i], i)
+                        )
+                        for i in range(2, self.naxis)
+                    ],
+                    dim=-1,
                 )
+                rel_spatial = spatial_pix + (1.0 - float(origin)) - self.crpix[:2]
+                cd_extra_spatial = self.cd_full[2:, :2]
+                cd_extra = self.cd_full[2:, 2:]
+                rhs = (
+                    extra_linear
+                    - self.crval[2:]
+                    - torch.matmul(rel_spatial, cd_extra_spatial.T)
+                )
+                rel_extra = torch.linalg.solve(cd_extra, rhs.T).T
+                pix_flat[:, 2:] = rel_extra + self.crpix[2:] + (float(origin) - 1.0)
+        elif not self._is_spatial:
             linear_world = world_flat.clone()
+            coupled_pixel = self._apply_coupled_tabular_world_to_pixel(world_flat)
             for i in range(self.naxis):
-                linear_world[:, i] = self._apply_tabular_world_to_pixel(
-                    world_flat[:, i], i
+                linear_world[:, i] = coupled_pixel.get(
+                    i, self._apply_tabular_world_to_pixel(world_flat[:, i], i)
                 )
             rel_flat = torch.matmul(self.cd_inv_full, (linear_world - self.crval).T).T
             pix_flat = rel_flat + self.crpix + (float(origin) - 1.0)
@@ -2972,6 +3098,14 @@ class WCS:
     ) -> Tensor:
         """Return local ``d(pixel)/d(world)`` Jacobians."""
         world_t = self._coerce_stacked_coord(world, "world")
+        if self.coupled_tabular is not None and self.pixel_n_dim == self.world_n_dim:
+            pixels = self.world_to_pixel(world_t, origin=origin)
+            forward_jacobian = self.pixel_to_world_jacobian(
+                pixels,
+                origin=origin,
+                create_graph=create_graph,
+            )
+            return torch.linalg.inv(forward_jacobian)
         coords = world_t.clone().detach().requires_grad_(True)
         pixels = self.world_to_pixel_differentiable(coords, origin=origin)
         grads = []
@@ -3116,7 +3250,7 @@ class WCS:
 
         sliced = self._slice_preserve_axes(tuple(slice_items))
         for axis in sorted(fixed_axes, reverse=True):
-            sliced = sliced.dropaxis(axis)
+            sliced = sliced._dropaxis_fixed_at_zero(axis)
         return sliced
 
     def _slice_preserve_axes(self, pixel_slices: tuple[slice, ...]) -> "WCS":
@@ -3392,7 +3526,32 @@ class WCS:
         if bool(coupled.detach().cpu().item()):
             raise NotImplementedError("cannot drop a linearly coupled WCS axis")
 
-    def _sub_wcs(self, keep_axes: list[int]) -> "WCS":
+    def _dropaxis_fixed_at_zero(self, axis: int) -> "WCS":
+        """Drop an axis fixed by slicing at zero-based pixel coordinate 0."""
+        idx = int(axis)
+        if idx < 0:
+            idx += self.naxis
+        if idx < 0 or idx >= self.naxis:
+            raise ValueError(f"axis {axis!r} outside WCS axes")
+        if self.naxis <= 1:
+            raise ValueError("cannot drop the only WCS axis")
+        if self._is_spatial and idx < 2:
+            raise NotImplementedError(
+                "dropping celestial projection axes is not implemented"
+            )
+        if self.tabular_axes or self.coupled_tabular is not None:
+            self._validate_axis_uncoupled_for_drop(idx)
+            return self._sub_wcs([i for i in range(self.naxis) if i != idx])
+        fixed_rel = 1.0 - self.crpix[idx]
+        keep = [i for i in range(self.naxis) if i != idx]
+        return self._sub_wcs(keep, fixed_rel_by_axis={idx: fixed_rel})
+
+    def _sub_wcs(
+        self,
+        keep_axes: list[int],
+        *,
+        fixed_rel_by_axis: dict[int, Tensor] | None = None,
+    ) -> "WCS":
         if len(keep_axes) == 0:
             raise ValueError("at least one WCS axis must be kept")
         if len(set(keep_axes)) != len(keep_axes):
@@ -3401,9 +3560,11 @@ class WCS:
             raise NotImplementedError(
                 "spatial WCS subsetting must keep the first two celestial axes"
             )
+        fixed_rel_by_axis = {} if fixed_rel_by_axis is None else fixed_rel_by_axis
         dropped_axes = [axis for axis in range(self.naxis) if axis not in keep_axes]
         for axis in dropped_axes:
-            self._validate_axis_uncoupled_for_drop(axis)
+            if axis not in fixed_rel_by_axis:
+                self._validate_axis_uncoupled_for_drop(axis)
 
         header: dict[str, Any] = {"NAXIS": len(keep_axes), "WCSAXES": len(keep_axes)}
         global_keys = (
@@ -3432,8 +3593,11 @@ class WCS:
             header[f"CRPIX{new_axis}"] = float(
                 self.crpix[old_axis].detach().cpu().item()
             )
+            crval = self.crval[old_axis]
+            for fixed_axis, fixed_rel in fixed_rel_by_axis.items():
+                crval = crval + self.cd_full[old_axis, fixed_axis] * fixed_rel
             header[f"CRVAL{new_axis}"] = float(
-                self.crval[old_axis].detach().cpu().item()
+                crval.detach().cpu().item()
             )
             if f"CUNIT{old_num}" in self.wcs_params:
                 header[f"CUNIT{new_axis}"] = self.wcs_params[f"CUNIT{old_num}"]
@@ -3603,6 +3767,17 @@ class WCS:
     ) -> Tensor:
         """Fused ``pixels (internal) -> rel -> world`` for ``torch.compile`` (2D spatial)."""
         rel = pixels_flat + (1.0 - origin) - self.crpix
+        if (
+            self.naxis == 2
+            and self._is_tan
+            and not self._is_tpv
+            and not self._is_tnx
+            and not self._is_zpx
+            and self.sip is None
+        ):
+            xi, eta = self._apply_cd_2d(rel[:, 0], rel[:, 1])
+            ra, dec = self._project_tan(xi, eta)
+            return torch.stack((ra, dec), dim=-1)
         return self._transform_optimized(rel, allow_cpp_sphere=allow_cpp_sphere)
 
     def _spherical_rotation_optimized(

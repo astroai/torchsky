@@ -1,7 +1,8 @@
-# Implicit SkyMeasure Scene Implementation Plan
+# Archived Implicit SkyMeasure Scene Implementation Plan
 
-> Roadmap note: this is research/planning context, not a public API or workflow
-> contract. For current shipped surfaces, start with [api.md](../api.md).
+> Archived research/planning context, not a public API or workflow contract.
+> Use [`../roadmap/status.md`](../roadmap/status.md) for the current roadmap and
+> [`../api.md`](../api.md) for shipped public surfaces.
 
 ## Purpose
 

@@ -39,6 +39,60 @@ def test_compat_neighbors_angle_form_matches_healpix() -> None:
     torch.testing.assert_close(got, expected)
 
 
+@pytest.mark.parametrize("nest", [False, True])
+def test_compat_ang2pix_pix2ang_match_hpgeom(nest: bool) -> None:
+    hpgeom = pytest.importorskip("hpgeom")
+    nside = 32
+    lon_np = np.array([0.25, 17.5, 92.25, 181.0, 359.1], dtype=np.float64)
+    lat_np = np.array([-63.0, -12.5, 0.75, 34.0, 71.25], dtype=np.float64)
+    lon = torch.from_numpy(lon_np)
+    lat = torch.from_numpy(lat_np)
+
+    got_pix = compat.ang2pix(nside, lon, lat, nest=nest, lonlat=True)
+    expected_pix = torch.as_tensor(
+        hpgeom.angle_to_pixel(
+            nside, lon_np, lat_np, nest=nest, lonlat=True, degrees=True
+        ),
+        dtype=torch.int64,
+    )
+    torch.testing.assert_close(got_pix, expected_pix)
+
+    got_lon, got_lat = compat.pix2ang(nside, got_pix, nest=nest, lonlat=True)
+    expected_lon_np, expected_lat_np = hpgeom.pixel_to_angle(
+        nside, expected_pix.numpy(), nest=nest, lonlat=True, degrees=True
+    )
+    torch.testing.assert_close(
+        got_lon, torch.as_tensor(expected_lon_np), atol=1e-12, rtol=0.0
+    )
+    torch.testing.assert_close(
+        got_lat, torch.as_tensor(expected_lat_np), atol=1e-12, rtol=0.0
+    )
+
+
+@pytest.mark.parametrize("nest", [False, True])
+def test_compat_ang2pix_matches_astropy_healpix(nest: bool) -> None:
+    pytest.importorskip("astropy_healpix")
+    units = pytest.importorskip("astropy.units")
+    from astropy_healpix import HEALPix
+
+    nside = 16
+    lon_np = np.array([3.0, 45.5, 127.25, 250.0, 315.75], dtype=np.float64)
+    lat_np = np.array([-50.0, -5.5, 22.0, 48.75, 80.0], dtype=np.float64)
+    got = compat.ang2pix(
+        nside,
+        torch.from_numpy(lon_np),
+        torch.from_numpy(lat_np),
+        nest=nest,
+        lonlat=True,
+    )
+    order = "nested" if nest else "ring"
+    expected = HEALPix(nside=nside, order=order).lonlat_to_healpix(
+        lon_np * units.deg,
+        lat_np * units.deg,
+    )
+    torch.testing.assert_close(got, torch.as_tensor(expected, dtype=torch.int64))
+
+
 def test_compat_query_circle_strict_mode_matches_non_strict() -> None:
     """Strict mode uses the same torch-native kernel as the default path."""
     args = (32, 25.0, -15.0, 5.0)
@@ -354,6 +408,99 @@ def test_compat_pixels_to_ranges_roundtrip() -> None:
     restored = compat.pixel_ranges_to_pixels(ranges, inclusive=False)
     torch.testing.assert_close(
         restored, torch.tensor([8, 9, 10, 15, 17, 18], dtype=torch.int64)
+    )
+
+
+def test_compat_pixel_range_helpers_match_hpgeom() -> None:
+    hpgeom = pytest.importorskip("hpgeom")
+    ranges = np.array([[0, 3], [7, 8], [20, 24]], dtype=np.int64)
+
+    got_exclusive = compat.pixel_ranges_to_pixels(ranges, inclusive=False)
+    expected_exclusive = torch.as_tensor(
+        hpgeom.pixel_ranges_to_pixels(ranges, inclusive=False), dtype=torch.int64
+    )
+    torch.testing.assert_close(got_exclusive, expected_exclusive)
+
+    got_inclusive = compat.pixel_ranges_to_pixels(ranges, inclusive=True)
+    expected_inclusive = torch.as_tensor(
+        hpgeom.pixel_ranges_to_pixels(ranges, inclusive=True), dtype=torch.int64
+    )
+    torch.testing.assert_close(got_inclusive, expected_inclusive)
+
+    upgraded = compat.upgrade_pixel_ranges(2, ranges, 16)
+    expected_upgraded = torch.as_tensor(
+        hpgeom.upgrade_pixel_ranges(2, ranges, 16), dtype=torch.int64
+    )
+    torch.testing.assert_close(upgraded, expected_upgraded)
+
+
+@pytest.mark.parametrize("nest", [False, True])
+def test_compat_upgrade_pixels_match_hpgeom(nest: bool) -> None:
+    hpgeom = pytest.importorskip("hpgeom")
+    if not hasattr(hpgeom, "upgrade_pixels"):
+        pytest.skip("hpgeom does not expose upgrade_pixels")
+
+    pixels_np = np.array([2, 5, 18], dtype=np.int64)
+    pixels = torch.from_numpy(pixels_np)
+    got = compat.upgrade_pixels(4, pixels, 16, nest=nest)
+    expected = torch.as_tensor(
+        hpgeom.upgrade_pixels(4, pixels_np, 16, nest=nest),
+        dtype=torch.int64,
+    )
+    if not nest:
+        expected = torch.unique(expected, sorted=True)
+    torch.testing.assert_close(got, expected)
+
+
+def test_compat_degrade_pixels_expected_nested_and_ring() -> None:
+    parent_nest = torch.tensor([2, 5], dtype=torch.int64)
+    child_nest = compat.upgrade_pixels(2, parent_nest, 8, nest=True)
+    torch.testing.assert_close(
+        compat.degrade_pixels(8, child_nest[[0, 1, 20, -1]], 2, nest=True),
+        parent_nest,
+    )
+
+    parent_ring = compat.nest2ring(2, parent_nest)
+    child_ring = compat.upgrade_pixels(2, parent_ring, 8, nest=False)
+    degraded_ring = compat.degrade_pixels(8, child_ring[[0, 1, 20, -1]], 2, nest=False)
+    degraded_nest = torch.sort(compat.ring2nest(2, degraded_ring)).values
+    torch.testing.assert_close(degraded_nest, parent_nest)
+
+
+def test_compat_query_circle_pixel_ranges_match_hpgeom_expansion() -> None:
+    hpgeom = pytest.importorskip("hpgeom")
+    nside = 32
+    lon = 42.0
+    lat = -12.5
+    radius = 3.0
+
+    got_ranges = compat.query_circle(
+        nside,
+        lon,
+        lat,
+        radius,
+        nest=True,
+        inclusive=False,
+        degrees=True,
+        return_pixel_ranges=True,
+    )
+    got_pixels = compat.pixel_ranges_to_pixels(got_ranges, inclusive=False)
+    expected_pixels = torch.as_tensor(
+        hpgeom.query_circle(
+            nside,
+            lon,
+            lat,
+            radius,
+            nest=True,
+            inclusive=False,
+            degrees=True,
+        ),
+        dtype=torch.int64,
+    )
+
+    torch.testing.assert_close(
+        torch.sort(got_pixels).values,
+        torch.sort(expected_pixels).values,
     )
 
 

@@ -291,6 +291,58 @@ def test_wcs_mixed_pixel_world_solves_single_spatial_axis():
     torch.testing.assert_close(solved_world, world_true, atol=2e-8, rtol=0.0)
 
 
+def test_wcs_mixed_pixel_world_solves_coupled_linear_system():
+    header = {
+        "NAXIS": 3,
+        "CTYPE1": "X",
+        "CTYPE2": "Y",
+        "CTYPE3": "Z",
+        "CRPIX1": 1.0,
+        "CRPIX2": 2.0,
+        "CRPIX3": 3.0,
+        "CRVAL1": 10.0,
+        "CRVAL2": 20.0,
+        "CRVAL3": 30.0,
+        "CD1_1": 2.0,
+        "CD1_2": 0.5,
+        "CD1_3": -0.25,
+        "CD2_1": -0.75,
+        "CD2_2": 3.0,
+        "CD2_3": 0.5,
+        "CD3_1": 0.25,
+        "CD3_2": -0.5,
+        "CD3_3": 4.0,
+    }
+    wcs = WCS(header)
+    pixels_true = torch.tensor(
+        [[4.0, 3.0, 7.0], [6.0, 5.0, 2.0]], dtype=torch.float64
+    )
+    world_true = wcs.pixel_to_world(pixels_true)
+    mixed_pixel = torch.stack(
+        [
+            pixels_true[:, 0],
+            torch.full((2,), float("nan"), dtype=torch.float64),
+            torch.full((2,), float("nan"), dtype=torch.float64),
+        ],
+        dim=-1,
+    )
+    mixed_world = torch.stack(
+        [
+            torch.full((2,), float("nan"), dtype=torch.float64),
+            world_true[:, 1],
+            world_true[:, 2],
+        ],
+        dim=-1,
+    )
+
+    solved_pixel, solved_world = wcs.mixed_pixel_world(
+        pixel=mixed_pixel, world=mixed_world
+    )
+
+    torch.testing.assert_close(solved_pixel, pixels_true, atol=1e-10, rtol=1e-10)
+    torch.testing.assert_close(solved_world, world_true, atol=1e-10, rtol=1e-10)
+
+
 def test_wcs_differentiable_pixel_to_world_supports_autograd_and_jacobian():
     header = {
         "NAXIS": 2,
@@ -346,6 +398,111 @@ def test_wcs_differentiable_world_to_pixel_jacobian_inverts_forward_jacobian():
 
     torch.testing.assert_close(
         ident, torch.eye(2, dtype=torch.float64), atol=2e-5, rtol=2e-5
+    )
+
+
+def test_wcs_tan_center_pixel_to_world_jacobian_is_finite():
+    header = {
+        "NAXIS": 2,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 32.0,
+        "CRPIX2": 32.0,
+        "CRVAL1": 120.0,
+        "CRVAL2": 35.0,
+        "CDELT1": -0.001,
+        "CDELT2": 0.001,
+    }
+    wcs = WCS(header)
+    pixels = torch.tensor([[31.0, 31.0]], dtype=torch.float64)
+
+    jac = wcs.pixel_to_world_jacobian(pixels)[0]
+    expected = torch.tensor(
+        [
+            [-0.001 / np.cos(np.deg2rad(35.0)), 0.0],
+            [0.0, 0.001],
+        ],
+        dtype=torch.float64,
+    )
+
+    assert torch.isfinite(jac).all()
+    torch.testing.assert_close(jac, expected, atol=1e-10, rtol=1e-10)
+
+
+def test_wcs_spatial_cube_world_to_pixel_differentiable_roundtrip():
+    header = {
+        "NAXIS": 3,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CTYPE3": "WAVE",
+        "CRPIX1": 32.0,
+        "CRPIX2": 32.0,
+        "CRPIX3": 1.0,
+        "CRVAL1": 120.0,
+        "CRVAL2": 35.0,
+        "CRVAL3": 500.0,
+        "CD1_1": -0.001,
+        "CD1_2": 0.0,
+        "CD1_3": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": 0.001,
+        "CD2_3": 0.0,
+        "CD3_1": 0.25,
+        "CD3_2": -0.5,
+        "CD3_3": 10.0,
+    }
+    wcs = WCS(header)
+    pixels = torch.tensor([[31.4, 30.6, 2.5], [32.2, 31.3, 4.0]], dtype=torch.float64)
+
+    world = wcs.pixel_to_world_differentiable(pixels)
+    pixels_back = wcs.world_to_pixel_differentiable(world)
+    j_fw = wcs.pixel_to_world_jacobian(pixels)
+    j_inv = wcs.world_to_pixel_jacobian(world)
+    ident = torch.matmul(j_inv, j_fw)
+
+    torch.testing.assert_close(pixels_back, pixels, atol=2e-8, rtol=2e-8)
+    assert torch.isfinite(j_inv).all()
+    torch.testing.assert_close(
+        ident,
+        torch.eye(3, dtype=torch.float64).expand_as(ident),
+        atol=2e-5,
+        rtol=2e-5,
+    )
+
+
+def test_wcs_axis_correlation_matrix_reports_extra_axis_cd_coupling():
+    header = {
+        "NAXIS": 3,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CTYPE3": "WAVE",
+        "CRPIX1": 32.0,
+        "CRPIX2": 32.0,
+        "CRPIX3": 1.0,
+        "CRVAL1": 120.0,
+        "CRVAL2": 35.0,
+        "CRVAL3": 500.0,
+        "CD1_1": -0.001,
+        "CD1_2": 0.0,
+        "CD1_3": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": 0.001,
+        "CD2_3": 0.0,
+        "CD3_1": 0.25,
+        "CD3_2": -0.5,
+        "CD3_3": 10.0,
+    }
+    wcs = WCS(header)
+
+    np.testing.assert_array_equal(
+        wcs.axis_correlation_matrix,
+        np.array(
+            [
+                [True, True, False],
+                [True, True, False],
+                [True, True, True],
+            ]
+        ),
     )
 
 
@@ -579,7 +736,7 @@ def test_wcs_slice_integer_index_drops_uncoupled_fits_order_axis():
     assert sliced.pixel_shape == (6, 5)
 
 
-def test_wcs_slice_integer_index_rejects_coupled_axis_drop():
+def test_wcs_slice_integer_index_folds_coupled_linear_axis_into_crval():
     header = {
         "NAXIS": 3,
         "CTYPE1": "X",
@@ -602,9 +759,22 @@ def test_wcs_slice_integer_index_rejects_coupled_axis_drop():
         "CD3_3": 1.0,
     }
     wcs = WCS(header)
+    reduced = wcs.slice((slice(None), 4, slice(None)), numpy_order=False)
+    pixels_2d = torch.tensor([[0.0, 0.0], [3.0, 2.0]], dtype=torch.float64)
+    pixels_3d = torch.stack(
+        [
+            pixels_2d[:, 0],
+            torch.full((pixels_2d.shape[0],), 4.0, dtype=torch.float64),
+            pixels_2d[:, 1],
+        ],
+        dim=-1,
+    )
 
-    with pytest.raises(NotImplementedError, match="coupled"):
-        wcs.slice((slice(None), 4, slice(None)), numpy_order=False)
+    torch.testing.assert_close(
+        reduced.pixel_to_world(pixels_2d),
+        wcs.pixel_to_world(pixels_3d)[:, [0, 2]],
+    )
+    assert reduced.world_axis_names == ("X", "Z")
 
 
 def test_wcs_slice_preserves_spatial_cube_extra_axis_cd_scale():

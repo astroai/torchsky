@@ -138,9 +138,13 @@ def query_circle(
     chunk_size: int = 1_000_000,
     fact: int = 4,
     strict: bool | None = None,
+    return_pixel_ranges: bool = False,
 ) -> Tensor:
     del strict  # torch-native path only; flag kept for healpy-shaped API compatibility
-    return _healpix.query_circle(
+    del fact
+    if return_pixel_ranges and not nest:
+        raise ValueError("return_pixel_ranges is only supported with nest=True")
+    pix = _healpix.query_circle(
         nside,
         lon,
         lat,
@@ -150,6 +154,7 @@ def query_circle(
         nest=nest,
         chunk_size=chunk_size,
     )
+    return _healpix.pixels_to_pixel_ranges(pix) if return_pixel_ranges else pix
 
 
 def query_circle_vec(
@@ -162,9 +167,12 @@ def query_circle_vec(
     nest: bool = False,
     chunk_size: int = 1_000_000,
     strict: bool | None = None,
+    return_pixel_ranges: bool = False,
 ) -> Tensor:
     del strict
-    return _healpix.query_circle_vec(
+    if return_pixel_ranges and not nest:
+        raise ValueError("return_pixel_ranges is only supported with nest=True")
+    pix = _healpix.query_circle_vec(
         nside,
         vec,
         radius,
@@ -173,6 +181,7 @@ def query_circle_vec(
         nest=nest,
         chunk_size=chunk_size,
     )
+    return _healpix.pixels_to_pixel_ranges(pix) if return_pixel_ranges else pix
 
 
 def query_ellipse(
@@ -708,6 +717,8 @@ nside2npix = _healpix.nside2npix
 nside2order = _healpix.nside2order
 order2nside = _healpix.order2nside
 pix2vec = _healpix.pix2vec
+degrade_pixels = _healpix.degrade_pixels
+degrade_pixel_ranges = _healpix.degrade_pixel_ranges
 pixel_ranges_to_pixels = _healpix.pixel_ranges_to_pixels
 pixels_to_pixel_ranges = _healpix.pixels_to_pixel_ranges
 query_box = _healpix.query_box
@@ -718,6 +729,7 @@ query_strip = _healpix.query_strip
 reorder = _healpix.reorder
 ring2nest = _healpix.ring2nest
 ud_grade = _healpix.ud_grade
+upgrade_pixels = _healpix.upgrade_pixels
 upgrade_pixel_ranges = _healpix.upgrade_pixel_ranges
 vec2ang = _healpix.vec2ang
 vec2pix = _healpix.vec2pix
@@ -760,6 +772,8 @@ __all__ = [
     "order2nside",
     "pix2ang",
     "pix2vec",
+    "degrade_pixels",
+    "degrade_pixel_ranges",
     "pixel_ranges_to_pixels",
     "pixels_to_pixel_ranges",
     "query_box",
@@ -782,6 +796,7 @@ __all__ = [
     "set_strict_mode",
     "strict_mode",
     "ud_grade",
+    "upgrade_pixels",
     "upgrade_pixel_ranges",
     "vec2ang",
     "vec2pix",

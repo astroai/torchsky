@@ -51,6 +51,27 @@ pip install "torchsky[map]"
 torchsky map --help
 ```
 
+Classical stacks accept scalar weights plus optional per-input weight and mask
+maps:
+
+```bash
+torchsky map out.fits img_a.fits img_b.fits \
+  --weights 1.0 0.8 \
+  --photometric-scales 1.0 1.02 \
+  --background-offsets 0.0 12.5 \
+  --weight-maps img_a_wht.fits img_b_wht.fits \
+  --mask-maps img_a_mask.fits img_b_mask.fits \
+  --primary-beam-maps img_a_pb.fits img_b_pb.fits
+```
+
+INR renders use the same scalar weighting, weight-map, mask-map, and
+background-offset flags. Pass `--reference` when the output should be rendered
+on a specific FITS WCS/shape instead of the planned union grid.
+
+Use `--dry-run` before large jobs to validate the expanded input list and print
+the planned output shape/tiling decision without writing the map or fitting an
+INR.
+
 ## Automation Guidance
 
 - Prefer explicit input/output paths and non-interactive flags.

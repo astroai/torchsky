@@ -8,8 +8,13 @@ from torchsky.sphere import (
     HealSparseMap,
     SkyMaskPipe,
     MOC,
+    degrade_pixels,
+    degrade_pixel_ranges,
     nest2uniq,
+    pixel_ranges_to_pixels,
+    pixels_to_pixel_ranges,
     uniq2nest,
+    upgrade_pixels,
 )
 
 
@@ -96,3 +101,16 @@ def test_mask_pipe():
     assert (dense_c[0:8] == 0).all()
     assert (dense_c[8:16] == 1).all()
     assert (dense_c[16:] == 0).all()
+
+
+def test_sphere_namespace_exports_healpix_range_helpers():
+    ranges = pixels_to_pixel_ranges(torch.tensor([0, 1, 8], dtype=torch.int64))
+    degraded = degrade_pixel_ranges(4, ranges, 2)
+
+    torch.testing.assert_close(pixel_ranges_to_pixels(degraded), torch.tensor([0, 2]))
+
+
+def test_sphere_namespace_exports_healpix_pixel_resolution_helpers():
+    pixels = torch.tensor([2, 5], dtype=torch.int64)
+    upgraded = upgrade_pixels(2, pixels, 8, nest=True)
+    torch.testing.assert_close(degrade_pixels(8, upgraded[[0, -1]], 2, nest=True), pixels)

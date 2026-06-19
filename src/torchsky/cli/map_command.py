@@ -115,18 +115,60 @@ def _paths_to_field_observations(
     hdu: int,
     spectral_kw: dict,
     read_device: str,
+    weights: Sequence[float] | None = None,
+    background_offsets: Sequence[float] | None = None,
+    weight_maps: Sequence[str | None] | None = None,
+    mask_maps: Sequence[str | None] | None = None,
+    weight_hdu: int | str | None = 0,
+    mask_hdu: int | str | None = 0,
 ) -> list[FieldObservation]:
     skw = spectral_kw
     out: list[FieldObservation] = []
-    for p in paths:
+    scalar_weights = list(weights) if weights is not None else [1.0] * len(paths)
+    backgrounds = (
+        list(background_offsets) if background_offsets is not None else [0.0] * len(paths)
+    )
+    wpaths = list(weight_maps) if weight_maps is not None else [None] * len(paths)
+    mpaths = list(mask_maps) if mask_maps is not None else [None] * len(paths)
+    if len(scalar_weights) != len(paths):
+        raise ValueError("weights count must match input path count")
+    if len(backgrounds) != len(paths):
+        raise ValueError("background_offsets count must match input path count")
+    if len(wpaths) != len(paths):
+        raise ValueError("weight_maps count must match input path count")
+    if len(mpaths) != len(paths):
+        raise ValueError("mask_maps count must match input path count")
+    for p, scalar_weight, background_offset, weight_path, mask_path in zip(
+        paths, scalar_weights, backgrounds, wpaths, mpaths
+    ):
         img, hdr = read(p, hdu=hdu, return_header=True, device=read_device)
         if img.ndim != 2:
             raise ValueError(f"{p}: expected 2D image")
+        weight = torch.ones_like(img, dtype=torch.float32) * float(scalar_weight)
+        if weight_path is not None:
+            wmap = read(str(weight_path), hdu=weight_hdu, device=read_device)
+            if tuple(wmap.shape) != tuple(img.shape):
+                raise ValueError(
+                    f"{weight_path}: weight map shape {tuple(wmap.shape)} "
+                    f"does not match image shape {tuple(img.shape)}"
+                )
+            weight = weight * wmap.to(device=img.device, dtype=torch.float32)
+        mask = None
+        if mask_path is not None:
+            mmap = read(str(mask_path), hdu=mask_hdu, device=read_device)
+            if tuple(mmap.shape) != tuple(img.shape):
+                raise ValueError(
+                    f"{mask_path}: mask map shape {tuple(mmap.shape)} "
+                    f"does not match image shape {tuple(img.shape)}"
+                )
+            mask = mmap.to(device=img.device, dtype=torch.float32)
         out.append(
             FieldObservation(
                 image=img,
                 header=dict(hdr),
-                weight=torch.ones_like(img, dtype=torch.float32),
+                weight=weight,
+                mask=mask,
+                background_offset=float(background_offset),
                 **skw,
             )
         )
@@ -162,8 +204,28 @@ def _run_coadd(args: argparse.Namespace) -> int:
         return 2
     read_dev = _map_read_device_str(args)
     observations = [
-        ImageObservation(path=p, hdu=args.hdu, weight=float(w))
-        for p, w in zip(inputs, args.weights)
+        ImageObservation(
+            path=p,
+            hdu=args.hdu,
+            weight=float(w),
+            photometric_scale=float(ps),
+            background_offset=float(bg),
+            weight_path=wp,
+            weight_hdu=args.weight_map_hdu,
+            mask_path=mp,
+            mask_hdu=args.mask_map_hdu,
+            primary_beam_path=pbp,
+            primary_beam_hdu=args.primary_beam_hdu,
+        )
+        for p, w, ps, bg, wp, mp, pbp in zip(
+            inputs,
+            args.weights,
+            args.photometric_scales,
+            args.background_offsets,
+            args.weight_maps,
+            args.mask_maps,
+            args.primary_beam_maps,
+        )
     ]
     pr = int(args.plan_reference)
     if pr < 0 or pr >= len(observations):
@@ -207,6 +269,15 @@ def _run_coadd(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
+    if getattr(args, "dry_run", False):
+        print(
+            f"torchsky map: dry-run output_shape={planned_shape[0]}×{planned_shape[1]} "
+            f"method=coadd kernel={args.kernel} stack={args.stack} "
+            f"value_semantics={args.value_semantics} tiled={tile_hw is not None}",
+            file=sys.stderr,
+        )
+        return 0
+
     maker = ImagePlaneMapMaker(
         target_header=target_header,
         resampling_kernel=args.kernel,
@@ -234,14 +305,15 @@ def _run_inr(args: argparse.Namespace) -> int:
         return 2
     read_dev = _map_read_device_str(args)
     if args.per_filter:
-        groups: dict[str, list[str]] = defaultdict(list)
-        for p in inputs:
+        groups: dict[str, list[int]] = defaultdict(list)
+        for idx, p in enumerate(inputs):
             _, hdr = read(p, hdu=args.hdu, return_header=True, device=read_dev)
             fk = _header_filter_keyword(dict(hdr)) or "UNKNOWN"
-            groups[fk].append(p)
+            groups[fk].append(idx)
         rc = 0
         out_path = Path(args.output)
-        for fk, gpaths in sorted(groups.items()):
+        for fk, indices in sorted(groups.items()):
+            gpaths = [inputs[i] for i in indices]
             if fk == "UNKNOWN" and args.inr_band is None:
                 print(
                     f"torchsky map inr: skip UNKNOWN filter group ({len(gpaths)} files); "
@@ -260,6 +332,11 @@ def _run_inr(args: argparse.Namespace) -> int:
             ns = argparse.Namespace(**vars(args))
             ns.output = str(sub_out)
             ns.inputs = gpaths
+            ns.weights = [args.weights[i] for i in indices]
+            ns.background_offsets = [args.background_offsets[i] for i in indices]
+            ns.weight_maps = [args.weight_maps[i] for i in indices]
+            ns.mask_maps = [args.mask_maps[i] for i in indices]
+            ns.primary_beam_maps = [args.primary_beam_maps[i] for i in indices]
             ns.per_filter = False
             ns.inr_band = band
             rc = rc or _run_inr_single(ns)
@@ -291,28 +368,59 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         band = str(args.inr_band).upper()
 
     skw = _inr_spectral_field_kwargs(args, band)
-    fields = _paths_to_field_observations(
-        inputs, hdu=args.hdu, spectral_kw=skw, read_device=read_dev
-    )
     image_obs = [ImageObservation(path=p, hdu=args.hdu) for p in inputs]
     pr = int(args.plan_reference)
     if pr < 0 or pr >= len(image_obs):
         raise SystemExit(
             f"--plan-reference {pr} out of range for {len(image_obs)} input(s) (0-based)"
         )
-    plan = plan_image_plane_target(
-        image_obs,
-        reference_index=pr,
-        device=args.device,
-    )
-    h, w = int(plan.shape[0]), int(plan.shape[1])
+    if args.reference is not None:
+        _, rh = read(
+            str(args.reference),
+            hdu=args.reference_hdu,
+            return_header=True,
+            device=read_dev,
+        )
+        plan_header = dict(rh)
+        plan_shape = (int(plan_header["NAXIS2"]), int(plan_header["NAXIS1"]))
+    else:
+        plan = plan_image_plane_target(
+            image_obs,
+            reference_index=pr,
+            device=args.device,
+        )
+        plan_header = dict(plan.header)
+        plan_shape = plan.shape
+    h, w = int(plan_shape[0]), int(plan_shape[1])
     max_px = int(args.inr_max_pixels)
     if h * w > max_px:
         raise SystemExit(
             f"INR target {h}×{w} exceeds --inr-max-pixels={max_px}; "
             "use a smaller subset, coadd first, or increase the limit (memory)."
         )
+    th = int(args.inr_render_tile)
+    render_tiled = h > th or w > th
 
+    if getattr(args, "dry_run", False):
+        print(
+            f"torchsky map: dry-run output_shape={h}×{w} method=inr "
+            f"model={args.inr_model} band={band} render_tiled={render_tiled}",
+            file=sys.stderr,
+        )
+        return 0
+
+    fields = _paths_to_field_observations(
+        inputs,
+        hdu=args.hdu,
+        spectral_kw=skw,
+        read_device=read_dev,
+        weights=args.weights,
+        background_offsets=args.background_offsets,
+        weight_maps=args.weight_maps,
+        mask_maps=args.mask_maps,
+        weight_hdu=args.weight_map_hdu,
+        mask_hdu=args.mask_map_hdu,
+    )
     domain = estimate_field_domain(fields, coord_mode="sphere_xyz")
     model = make_field_model(args.inr_model, domain)
     patch = int(args.inr_patch_size)
@@ -329,18 +437,17 @@ def _run_inr_single(args: argparse.Namespace) -> int:
     dev = next((p.device for p in model.parameters()), default_compute_device())
     target_obs = FieldObservation(
         image=torch.zeros((h, w), dtype=torch.float32, device=dev),
-        header=dict(plan.header),
+        header=plan_header,
         weight=torch.ones((h, w), dtype=torch.float32, device=dev),
         **skw,
     )
     model.eval()
     render_kw: dict = {"num_spectral_samples": int(args.inr_spectral_samples)}
-    th, tw = int(args.inr_render_tile), int(args.inr_render_tile)
-    if h > th or w > tw:
-        render_kw["spatial_tile_hw"] = (th, tw)
+    if render_tiled:
+        render_kw["spatial_tile_hw"] = (th, th)
     with torch.no_grad():
         pred = render_field_observation(model, target_obs, **render_kw)
-    write(str(args.output), pred, header=dict(plan.header), overwrite=True)
+    write(str(args.output), pred, header=plan_header, overwrite=True)
     print(
         f"wrote {args.output} shape={tuple(pred.shape)} method=inr "
         f"model={args.inr_model} band={band}",
@@ -361,6 +468,11 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Input FITS images (paths or globs)",
     )
     p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate inputs and print planned output shape without writing a map",
+    )
+    p.add_argument(
         "--method",
         choices=("coadd", "inr"),
         default="coadd",
@@ -372,13 +484,63 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         nargs="*",
         type=float,
-        help="Per-input scalar weights (coadd only); default 1.0 each",
+        help="Per-input scalar inverse-variance weights; default 1.0 each",
+    )
+    p.add_argument(
+        "--photometric-scales",
+        default=None,
+        nargs="*",
+        type=float,
+        help="Per-input coadd calibration scale applied as scale * (image - background)",
+    )
+    p.add_argument(
+        "--background-offsets",
+        default=None,
+        nargs="*",
+        type=float,
+        help="Per-input background offsets; coadd subtracts them, INR models them in rendering",
+    )
+    p.add_argument(
+        "--weight-maps",
+        default=None,
+        nargs="*",
+        help="Per-input FITS weight maps; multiplied by --weights when set",
+    )
+    p.add_argument(
+        "--weight-map-hdu",
+        default=0,
+        type=int,
+        help="HDU index for all --weight-maps",
+    )
+    p.add_argument(
+        "--mask-maps",
+        default=None,
+        nargs="*",
+        help="Per-input FITS mask maps; nonzero pixels contribute",
+    )
+    p.add_argument(
+        "--mask-map-hdu",
+        default=0,
+        type=int,
+        help="HDU index for all --mask-maps",
+    )
+    p.add_argument(
+        "--primary-beam-maps",
+        default=None,
+        nargs="*",
+        help="Per-input primary-beam maps for coadd weighting",
+    )
+    p.add_argument(
+        "--primary-beam-hdu",
+        default=None,
+        type=int,
+        help="HDU index for all --primary-beam-maps; default follows torchsky image read",
     )
     p.add_argument(
         "--reference",
         type=Path,
         default=None,
-        help="FITS whose WCS+shape define the output grid (coadd)",
+        help="FITS whose WCS+shape define the output grid",
     )
     p.add_argument("--reference-hdu", default=0, type=int)
     p.add_argument(
@@ -584,11 +746,106 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
 
 def _dispatch_map(args: argparse.Namespace) -> int:
     expanded = _expand_inputs(args.inputs)
+    n_inputs = len(expanded)
+    if not hasattr(args, "weight_maps"):
+        args.weight_maps = None
+    if not hasattr(args, "mask_maps"):
+        args.mask_maps = None
+    if not hasattr(args, "primary_beam_maps"):
+        args.primary_beam_maps = None
+    if not hasattr(args, "photometric_scales"):
+        args.photometric_scales = None
+    if not hasattr(args, "background_offsets"):
+        args.background_offsets = None
     if args.weights is None:
-        args.weights = [1.0] * len(expanded)
-    if len(args.weights) != len(expanded):
+        args.weights = [1.0] * n_inputs
+    if len(args.weights) != n_inputs:
         raise SystemExit("--weights count must match expanded input file count")
     args.weights = list(args.weights)
+    if any(not math.isfinite(float(w)) or float(w) < 0.0 for w in args.weights):
+        raise SystemExit("--weights must be finite and non-negative")
+    if args.photometric_scales is None:
+        args.photometric_scales = [1.0] * n_inputs
+    if len(args.photometric_scales) != n_inputs:
+        raise SystemExit(
+            "--photometric-scales count must match expanded input file count"
+        )
+    args.photometric_scales = list(args.photometric_scales)
+    if any(
+        not math.isfinite(float(s)) or float(s) <= 0.0
+        for s in args.photometric_scales
+    ):
+        raise SystemExit("--photometric-scales must be finite and positive")
+    if args.background_offsets is None:
+        args.background_offsets = [0.0] * n_inputs
+    if len(args.background_offsets) != n_inputs:
+        raise SystemExit(
+            "--background-offsets count must match expanded input file count"
+        )
+    args.background_offsets = list(args.background_offsets)
+    if any(not math.isfinite(float(b)) for b in args.background_offsets):
+        raise SystemExit("--background-offsets must be finite")
+    if args.weight_maps is None:
+        args.weight_maps = [None] * n_inputs
+    if len(args.weight_maps) != n_inputs:
+        raise SystemExit("--weight-maps count must match expanded input file count")
+    args.weight_maps = list(args.weight_maps)
+    if args.mask_maps is None:
+        args.mask_maps = [None] * n_inputs
+    if len(args.mask_maps) != n_inputs:
+        raise SystemExit("--mask-maps count must match expanded input file count")
+    args.mask_maps = list(args.mask_maps)
+    if args.primary_beam_maps is None:
+        args.primary_beam_maps = [None] * n_inputs
+    if len(args.primary_beam_maps) != n_inputs:
+        raise SystemExit(
+            "--primary-beam-maps count must match expanded input file count"
+        )
+    args.primary_beam_maps = list(args.primary_beam_maps)
+    if args.method == "inr" and any(
+        not math.isclose(float(s), 1.0, rel_tol=0.0, abs_tol=0.0)
+        for s in args.photometric_scales
+    ):
+        raise SystemExit("--photometric-scales are currently supported for coadd only")
+    if args.method == "inr" and any(p is not None for p in args.primary_beam_maps):
+        raise SystemExit("--primary-beam-maps are currently supported for coadd only")
+    hdu = int(getattr(args, "hdu", 0))
+    reference_hdu = int(getattr(args, "reference_hdu", 0))
+    weight_map_hdu = int(getattr(args, "weight_map_hdu", 0))
+    mask_map_hdu = int(getattr(args, "mask_map_hdu", 0))
+    primary_beam_hdu = getattr(args, "primary_beam_hdu", None)
+    if hdu < 0 or reference_hdu < 0:
+        raise SystemExit("--hdu and --reference-hdu must be non-negative")
+    if weight_map_hdu < 0 or mask_map_hdu < 0:
+        raise SystemExit("--weight-map-hdu and --mask-map-hdu must be non-negative")
+    if primary_beam_hdu is not None and int(primary_beam_hdu) < 0:
+        raise SystemExit("--primary-beam-hdu must be non-negative")
+    drizzle_pixfrac = float(getattr(args, "drizzle_pixfrac", 1.0))
+    if drizzle_pixfrac <= 0.0 or not math.isfinite(drizzle_pixfrac):
+        raise SystemExit("--drizzle-pixfrac must be finite and positive")
+    tile_pixels = getattr(args, "tile_pixels", None)
+    if tile_pixels is not None and int(tile_pixels) <= 0:
+        raise SystemExit("--tile-pixels must be positive")
+    tile_above_megapixels = float(getattr(args, "tile_above_megapixels", 32.0))
+    if not math.isfinite(tile_above_megapixels) or tile_above_megapixels <= 0.0:
+        raise SystemExit("--tile-above-megapixels must be finite and positive")
+    if int(getattr(args, "inr_steps", 0)) < 0:
+        raise SystemExit("--inr-steps must be non-negative")
+    inr_lr = float(getattr(args, "inr_lr", 1.0))
+    if not math.isfinite(inr_lr) or inr_lr <= 0.0:
+        raise SystemExit("--inr-lr must be finite and positive")
+    if int(getattr(args, "inr_patch_size", 0)) < 0:
+        raise SystemExit("--inr-patch-size must be non-negative")
+    if int(getattr(args, "inr_patches_per_obs", 1)) <= 0:
+        raise SystemExit("--inr-patches-per-obs must be positive")
+    if int(getattr(args, "inr_obs_per_step", 1)) <= 0:
+        raise SystemExit("--inr-obs-per-step must be positive")
+    if int(getattr(args, "inr_spectral_samples", 1)) <= 0:
+        raise SystemExit("--inr-spectral-samples must be positive")
+    if int(getattr(args, "inr_render_tile", 1)) <= 0:
+        raise SystemExit("--inr-render-tile must be positive")
+    if int(getattr(args, "inr_max_pixels", 1)) <= 0:
+        raise SystemExit("--inr-max-pixels must be positive")
     args.inputs = expanded
     if args.method == "coadd":
         return _run_coadd(args)

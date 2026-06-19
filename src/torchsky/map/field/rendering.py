@@ -386,7 +386,7 @@ def render_field_observation(
     if spatial_tile_hw is None:
         tiles = [(0, H, 0, W)]
     else:
-        th, tw = int(spatial_tile_hw[0]), int(spatial_tile_hw[1])
+        th, tw = _validate_spatial_tile_hw(spatial_tile_hw)
         tiles = list(_iter_spatial_tiles(H, W, th, tw))
     rendered = torch.zeros((H, W), device=device, dtype=torch.float32)
     for y0, y1, x0, x1 in tiles:
@@ -511,13 +511,21 @@ def render_field_samples(
 def _iter_spatial_tiles(
     height: int, width: int, tile_h: int, tile_w: int
 ) -> Iterator[tuple[int, int, int, int]]:
-    th = max(int(tile_h), 1)
-    tw = max(int(tile_w), 1)
+    th, tw = int(tile_h), int(tile_w)
     for y0 in range(0, height, th):
         for x0 in range(0, width, tw):
             y1 = min(y0 + th, height)
             x1 = min(x0 + tw, width)
             yield y0, y1, x0, x1
+
+
+def _validate_spatial_tile_hw(
+    spatial_tile_hw: tuple[int, int],
+) -> tuple[int, int]:
+    th, tw = int(spatial_tile_hw[0]), int(spatial_tile_hw[1])
+    if th <= 0 or tw <= 0:
+        raise ValueError("spatial_tile_hw entries must be positive")
+    return th, tw
 
 
 def evaluate_field_coordinates_vmapped(
@@ -711,7 +719,7 @@ def render_field_cube(
     if spatial_tile_hw is None:
         tiles = [(0, H, 0, W)]
     else:
-        th, tw = int(spatial_tile_hw[0]), int(spatial_tile_hw[1])
+        th, tw = _validate_spatial_tile_hw(spatial_tile_hw)
         tiles = list(_iter_spatial_tiles(H, W, th, tw))
     out = torch.empty((nw, H, W), device=device, dtype=torch.float32)
     for y0, y1, x0, x1 in tiles:

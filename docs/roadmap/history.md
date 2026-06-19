@@ -1,18 +1,30 @@
-# Implementation Ledger
+# Roadmap History
 
-> Maintained low-level companion to `status.md`. This file records shipped
+> Maintained history for the active roadmap. This file records shipped
 > implementation improvements, validation gates, and concrete follow-ups by
-> subsystem. Keep `status.md` focused on high-level roadmap state; keep the old
-> `../reviews/autonomous_refactor_log.md` as an archival audit trail only.
+> subsystem. Keep [`status.md`](status.md) as the current plan and queue. The
+> old `../reviews/autonomous_refactor_log.md` remains an archival audit trail
+> only.
 
 Last updated: 2026-06-18.
 
 ## Latest Local Gate
 
 - `pixi run ci-local`
-- Result: `1775 passed, 59 skipped, 63 warnings`.
+- Result: `1778 passed, 57 skipped, 77 warnings`.
 - Notes: pytest exits cleanly. Existing nanobind shutdown leak diagnostics for
   `FITSFile` still print during interpreter teardown.
+
+## Latest FITS/WCS/Sphere Closure Gate
+
+- `pixi run wcs-sphere-acceptance`
+- Result: passes.
+- Pytest phase: `537 passed, 2 skipped, 26 warnings`.
+- WCS quick benchmarks: only small-N negligible deficits.
+- Sphere quick benchmarks: no comparable deficits.
+- Spin matrix default acceptance: passes and writes
+  `benchmarks_results/acceptance_spin_matrix.json`.
+- FITS focused gate: `123 passed, 2 warnings`.
 
 ## Cross-Cutting API And Architecture
 
@@ -124,13 +136,16 @@ Last updated: 2026-06-18.
   mixed spatial WCS with coupled extra axes. The 2D square-grid inverse path
   enumerates candidate cells and fails closed when multiple distinct inverse
   solutions are valid.
+- Non-spatial square coupled `-TAB` WCS now exposes
+  `world_to_pixel_jacobian(...)` by solving the local inverse and inverting the
+  forward Jacobian at the recovered pixel coordinate.
 - High-level spectral cube helpers now fail closed for missing `-TAB`
   coordinate tables and preserve non-uniform wavelength grids.
 
 ### Validation
 
 - Broad WCS replay uses Astropy/WCSLIB fixtures where comparable.
-- Latest focused WCS gate: `134 passed, 8 warnings`.
+- Latest focused WCS gate: `328 passed, 2 skipped, 22 warnings`.
 - Focused gates cover:
   - `tests/test_wcs_api.py`
   - `tests/test_wcs_tabular.py`
@@ -146,6 +161,9 @@ Last updated: 2026-06-18.
   - `benchmarks/bench_wcs_tabular.py --grid-size 8 --n-points 32 --runs 1`
   - The benchmark covers direct `CoupledTabularLookupWCS` and main
     `WCS(header, tables=...)` forward plus ambiguity-safe inverse timing.
+- WCS/sphere acceptance:
+  - `pixi run wcs-sphere-acceptance`
+  - The WCS/sphere pytest phase reports `537 passed, 2 skipped, 26 warnings`.
 
 ### Follow-Ups
 
@@ -185,6 +203,9 @@ Last updated: 2026-06-18.
 - `torchsky.sphere.harmonics` is now the preferred harmonic-transform namespace;
   `torchsky.sphere.spectral` remains a backward-compatible import path.
 - Pairwise angular distances use a stable `atan2(cross, dot)` formulation.
+- Stale unconditional skips were removed from healpy parity gates for
+  `bl2beam`/`beam2bl` and `map2alm_lsq` residual comparison; both are now active
+  when healpy is installed.
 
 ### Validation
 
@@ -199,8 +220,16 @@ Last updated: 2026-06-18.
   - `61 passed, 2 warnings`.
 - Latest focused sparse/high-NSIDE gate:
   - `25 passed, 2 warnings`.
-- Latest focused sphere gate:
-  - `344 passed, 8 skipped, 10 warnings`.
+- Latest focused sphere/HEALPix gate:
+  - `335 passed, 6 skipped, 10 warnings`.
+- Latest sphere harmonic gate:
+  - `tests/test_sphere_spectral.py`
+  - `63 passed, 2 warnings`.
+- Spin matrix acceptance:
+  - `benchmarks/bench_spin_matrix.py --case-set default --runs 2`
+  - The benchmark driver now resolves the replay script from
+    `benchmarks/replays/` and treats absent large buckets as expected for the
+    default case set.
 
 ### Follow-Ups
 
@@ -340,3 +369,29 @@ Last updated: 2026-06-18.
 - Add broader spectral cube fixtures with realistic wavelength tables.
 - Keep transform behavior documented as preprocessing/display helpers, not
   calibrated photometric operations.
+
+## HEALPix Pixel Resolution Helpers
+
+### Shipped
+
+- Added torch-native `upgrade_pixels(...)` and `degrade_pixels(...)` for
+  explicit HEALPix pixel-id sets.
+- Both helpers support NESTED and RING ordering, validate resolution direction
+  and pixel bounds, canonicalize duplicates, and preserve tensor device
+  placement.
+- Re-exported the helpers through `torchsky.sphere.healpix`,
+  `torchsky.sphere.compat`, and top-level `torchsky.sphere`.
+- Added hpgeom parity for child expansion and exact nested/ring round-trip tests
+  for parent coverage.
+
+### Validation
+
+- `pixi run -e test -- pytest tests/test_healpix_primitives.py tests/test_sphere_compat.py tests/test_sphere_ecosystem.py -q`
+  reports `61 passed, 4 skipped, 4 warnings`.
+- `pixi run -e test -- pytest tests/test_sphere_*.py tests/test_healpix_*.py -q`
+  reports `351 passed, 6 skipped, 10 warnings`.
+
+### Follow-Ups
+
+- Keep broader hpgeom / astropy-healpix / PyMOC replay focused on named
+  behaviors and fixtures rather than generic compatibility bullets.

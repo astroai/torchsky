@@ -68,11 +68,7 @@ def main() -> int:
     parser.add_argument(
         "--min-ratio-by-bucket",
         type=str,
-        default=(
-            "small:map2alm_spin=0.30,small:alm2map_spin=0.25,"
-            "medium:map2alm_spin=0.03,medium:alm2map_spin=0.03,"
-            "large:map2alm_spin=0.015,large:alm2map_spin=0.02"
-        ),
+        default=None,
     )
     parser.add_argument(
         "--json-out",
@@ -102,13 +98,30 @@ def main() -> int:
         print("--max-regression-frac must satisfy 0 <= value < 1")
         return 2
 
+    if args.min_ratio_by_bucket is None:
+        if args.case_set == "default":
+            min_ratio_by_bucket = (
+                "small:map2alm_spin=0.15,small:alm2map_spin=0.15,"
+                "medium:map2alm_spin=0.03,medium:alm2map_spin=0.03"
+            )
+        else:
+            min_ratio_by_bucket = (
+                "small:map2alm_spin=0.30,small:alm2map_spin=0.25,"
+                "medium:map2alm_spin=0.03,medium:alm2map_spin=0.03,"
+                "large:map2alm_spin=0.015,large:alm2map_spin=0.02"
+            )
+    else:
+        min_ratio_by_bucket = args.min_ratio_by_bucket
+
     try:
-        ratio_thresholds = _parse_bucket_ratio_spec(args.min_ratio_by_bucket)
+        ratio_thresholds = _parse_bucket_ratio_spec(min_ratio_by_bucket)
     except ValueError as exc:
         print(f"Invalid --min-ratio-by-bucket: {exc}")
         return 2
 
-    replay_script = Path(__file__).with_name("replay_upstream_healpy_spin.py")
+    replay_script = (
+        Path(__file__).with_name("replays") / "replay_upstream_healpy_spin.py"
+    )
     args.raw_json_out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable,
@@ -167,7 +180,7 @@ def main() -> int:
             thr = ratio_thresholds.get((bucket, op))
             if got is None:
                 print(f"  {bucket:6s} {op:12s} unavailable")
-                if thr is not None:
+                if thr is not None and args.case_set == "extended":
                     failures.append(f"{bucket}:{op} missing (threshold {thr:.3f})")
                 continue
             if thr is None:

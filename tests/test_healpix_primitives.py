@@ -10,6 +10,8 @@ from torchsky.sphere.healpix import (
     angular_distance_deg,
     boundaries,
     vec2ang,
+    degrade_pixels,
+    degrade_pixel_ranges,
     get_all_neighbours,
     get_interp_val,
     get_interp_weights,
@@ -44,6 +46,7 @@ from torchsky.sphere.healpix import (
     query_polygon_vec,
     query_strip,
     ring2nest,
+    upgrade_pixels,
     upgrade_pixel_ranges,
     ud_grade,
     vec2pix,
@@ -487,6 +490,64 @@ def test_pixel_ranges_helpers_expected_values() -> None:
     torch.testing.assert_close(
         got_ranges, torch.tensor([[7, 10], [15, 17], [18, 19]], dtype=torch.int64)
     )
+
+
+def test_degrade_pixel_ranges_matches_explicit_parent_pixels() -> None:
+    ranges = torch.tensor([[0, 3], [6, 10], [20, 21]], dtype=torch.int64)
+    degraded = degrade_pixel_ranges(8, ranges, 2)
+    child_pixels = pixel_ranges_to_pixels(ranges, inclusive=False)
+    parent_pixels = torch.unique(torch.div(child_pixels, 16, rounding_mode="floor"))
+    expected = pixels_to_pixel_ranges(parent_pixels)
+
+    torch.testing.assert_close(degraded, expected)
+
+
+def test_degrade_pixel_ranges_canonicalizes_same_resolution() -> None:
+    ranges = torch.tensor([[5, 8], [7, 10], [12, 13]], dtype=torch.int64)
+    torch.testing.assert_close(
+        degrade_pixel_ranges(4, ranges, 4),
+        torch.tensor([[5, 10], [12, 13]], dtype=torch.int64),
+    )
+
+
+def test_upgrade_degrade_pixels_nested_expected_values() -> None:
+    parents = torch.tensor([2, 2, 5], dtype=torch.int64)
+    upgraded = upgrade_pixels(2, parents, 8, nest=True)
+    expected_children = torch.cat(
+        [
+            torch.arange(2 * 16, 3 * 16, dtype=torch.int64),
+            torch.arange(5 * 16, 6 * 16, dtype=torch.int64),
+        ]
+    )
+    torch.testing.assert_close(upgraded, expected_children)
+
+    touched = expected_children[torch.tensor([0, 1, 20, -1])]
+    degraded = degrade_pixels(8, touched, 2, nest=True)
+    torch.testing.assert_close(degraded, torch.tensor([2, 5], dtype=torch.int64))
+
+
+def test_upgrade_degrade_pixels_ring_matches_nested_roundtrip() -> None:
+    parent_nest = torch.tensor([2, 5], dtype=torch.int64)
+    parent_ring = nest2ring(2, parent_nest)
+
+    child_ring = upgrade_pixels(2, parent_ring, 8, nest=False)
+    child_nest = torch.sort(ring2nest(8, child_ring)).values
+    expected_child_nest = upgrade_pixels(2, parent_nest, 8, nest=True)
+    torch.testing.assert_close(child_nest, expected_child_nest)
+
+    degraded_ring = degrade_pixels(8, child_ring[torch.tensor([0, 3, 19, -1])], 2)
+    degraded_nest = torch.sort(ring2nest(2, degraded_ring)).values
+    torch.testing.assert_close(degraded_nest, parent_nest)
+
+
+def test_upgrade_degrade_pixels_validate_resolution_direction() -> None:
+    pixels = torch.tensor([0, 1], dtype=torch.int64)
+    with pytest.raises(ValueError, match="nside_upgrade"):
+        upgrade_pixels(8, pixels, 2, nest=True)
+    with pytest.raises(ValueError, match="nside_degrade"):
+        degrade_pixels(2, pixels, 8, nest=True)
+    with pytest.raises(ValueError, match="outside"):
+        degrade_pixels(2, torch.tensor([48], dtype=torch.int64), 1, nest=True)
 
 
 def test_neighbors_and_interp_shapes() -> None:

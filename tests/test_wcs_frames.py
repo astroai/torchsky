@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from astropy.coordinates import FK5, Galactic, ICRS, SkyCoord
+from astropy.coordinates import FK4, FK5, Galactic, ICRS, SkyCoord
 from astropy.time import Time
 import astropy.units as u
 
@@ -72,6 +72,50 @@ def test_convert_celestial_fk5_to_galactic_matches_astropy() -> None:
     np.testing.assert_allclose(b_t.numpy(), sky.b.deg, atol=2e-4)
 
 
+def test_convert_celestial_fk4_to_fk5_matches_astropy() -> None:
+    ra = torch.tensor([12.0, 150.0, 275.0], dtype=torch.float64)
+    dec = torch.tensor([-20.0, 5.0, 55.0], dtype=torch.float64)
+
+    ra_t, dec_t = convert_celestial(
+        ra,
+        dec,
+        from_frame="FK4",
+        to_frame="FK5",
+        from_equinox=1950.0,
+        to_equinox=2000.0,
+    )
+    sky = SkyCoord(
+        ra=ra.numpy() * u.deg,
+        dec=dec.numpy() * u.deg,
+        frame=FK4(equinox=Time("B1950"), obstime=Time("B1950")),
+    ).transform_to(FK5(equinox=Time("J2000")))
+
+    np.testing.assert_allclose(_wrap_delta(ra_t.numpy(), sky.ra.deg), 0.0, atol=2e-4)
+    np.testing.assert_allclose(dec_t.numpy(), sky.dec.deg, atol=2e-4)
+
+
+def test_convert_celestial_fk5_to_fk4_matches_astropy() -> None:
+    ra = torch.tensor([15.0, 155.0, 310.0], dtype=torch.float64)
+    dec = torch.tensor([-10.0, 35.0, -65.0], dtype=torch.float64)
+
+    ra_t, dec_t = convert_celestial(
+        ra,
+        dec,
+        from_frame="FK5",
+        to_frame="FK4",
+        from_equinox=2000.0,
+        to_equinox=1950.0,
+    )
+    sky = SkyCoord(
+        ra=ra.numpy() * u.deg,
+        dec=dec.numpy() * u.deg,
+        frame=FK5(equinox=Time("J2000")),
+    ).transform_to(FK4(equinox=Time("B1950"), obstime=Time("B1950")))
+
+    np.testing.assert_allclose(_wrap_delta(ra_t.numpy(), sky.ra.deg), 0.0, atol=2e-4)
+    np.testing.assert_allclose(dec_t.numpy(), sky.dec.deg, atol=2e-4)
+
+
 def test_wcs_celestial_frame_metadata_and_helpers() -> None:
     header = {
         "NAXIS": 2,
@@ -102,3 +146,63 @@ def test_wcs_celestial_frame_metadata_and_helpers() -> None:
 
     np.testing.assert_allclose(_wrap_delta(ra_2000.numpy(), exp.ra.deg), 0.0, atol=5e-5)
     np.testing.assert_allclose(dec_2000.numpy(), exp.dec.deg, atol=5e-5)
+
+
+def test_wcs_convert_celestial_fk4_metadata_matches_astropy() -> None:
+    header = {
+        "NAXIS": 2,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 1.0,
+        "CRPIX2": 1.0,
+        "CRVAL1": 10.0,
+        "CRVAL2": -10.0,
+        "CDELT1": -0.1,
+        "CDELT2": 0.1,
+        "RADESYS": "FK4",
+        "EQUINOX": 1950.0,
+    }
+    wcs = WCS(header)
+    ra = torch.tensor([10.0], dtype=torch.float64)
+    dec = torch.tensor([-10.0], dtype=torch.float64)
+
+    ra_fk5, dec_fk5 = wcs.convert_celestial(ra, dec, "FK5", to_equinox=2000.0)
+    exp = SkyCoord(
+        ra=ra.numpy() * u.deg,
+        dec=dec.numpy() * u.deg,
+        frame=FK4(equinox=Time("B1950"), obstime=Time("B1950")),
+    ).transform_to(FK5(equinox=Time("J2000")))
+
+    np.testing.assert_allclose(_wrap_delta(ra_fk5.numpy(), exp.ra.deg), 0.0, atol=2e-4)
+    np.testing.assert_allclose(dec_fk5.numpy(), exp.dec.deg, atol=2e-4)
+
+
+def test_wcs_precess_celestial_fk4_matches_astropy() -> None:
+    header = {
+        "NAXIS": 2,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 1.0,
+        "CRPIX2": 1.0,
+        "CRVAL1": 10.0,
+        "CRVAL2": -10.0,
+        "CDELT1": -0.1,
+        "CDELT2": 0.1,
+        "RADESYS": "FK4",
+        "EQUINOX": 1950.0,
+    }
+    wcs = WCS(header)
+    ra = torch.tensor([12.0, 120.0], dtype=torch.float64)
+    dec = torch.tensor([-20.0, 40.0], dtype=torch.float64)
+
+    ra_b1975, dec_b1975 = wcs.precess_celestial(ra, dec, to_equinox=1975.0)
+    exp = SkyCoord(
+        ra=ra.numpy() * u.deg,
+        dec=dec.numpy() * u.deg,
+        frame=FK4(equinox=Time("B1950"), obstime=Time("B1950")),
+    ).transform_to(FK4(equinox=Time("B1975"), obstime=Time("B1975")))
+
+    np.testing.assert_allclose(
+        _wrap_delta(ra_b1975.numpy(), exp.ra.deg), 0.0, atol=2e-4
+    )
+    np.testing.assert_allclose(dec_b1975.numpy(), exp.dec.deg, atol=2e-4)
