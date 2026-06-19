@@ -32,7 +32,7 @@ does not mean claiming untested upstream behavior as done.
 ## Current Baseline
 
 - Full local gate: `pixi run ci-local`.
-- Latest full local gate result: `1795 passed, 57 skipped, 91 warnings`.
+- Latest full local gate result: `1817 passed, 53 skipped, 77 warnings`.
 - Latest focused FITS gate result: `123 passed, 2 warnings`.
 - Latest focused WCS gate result: `336 passed, 2 skipped, 22 warnings`.
 - Latest focused sphere/HEALPix gate result: `351 passed, 6 skipped, 10 warnings`.
