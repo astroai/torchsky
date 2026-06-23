@@ -395,3 +395,32 @@ Last updated: 2026-06-18.
 
 - Keep broader hpgeom / astropy-healpix / PyMOC replay focused on named
   behaviors and fixtures rather than generic compatibility bullets.
+
+## WCS Mixed Spatial Cube Solves
+
+### Shipped
+
+- `WCS.mixed_pixel_world(...)` now resolves spatial WCS cubes with linearly
+  coupled extra axes instead of filling spectral/time-style axes one at a time.
+- The celestial part uses the internal 2D spatial pixel/world cores, which fixes
+  the previous `naxis > 2` path that could accidentally call the public 2D-only
+  shortcut.
+- Extra axes are solved as an exact linear block after RA/Dec are resolved,
+  including coupling from spatial relative pixels into WAVE/TIME rows and
+  coupling among the extra axes.
+- Tabular extra-axis mixtures keep their previous fail-closed behavior unless
+  the axis can be handled independently.
+
+### Validation
+
+- Added regressions in `tests/test_wcs_api.py` for known spatial pixels plus
+  known coupled extra-world equations, and for a combined one-celestial-axis
+  mixed solve plus coupled extra axes.
+- `pixi run -e test -- pytest tests/test_wcs_api.py -q` reports `31 passed`.
+- `pixi run -e test -- pytest tests/test_wcs_*.py -q` reports
+  `338 passed, 2 skipped, 22 warnings`.
+
+### Follow-Ups
+
+- Keep generalized mixed tabular transforms fail-closed until there are explicit
+  FITS `-TAB` fixtures that define the expected mixed-coordinate solve.

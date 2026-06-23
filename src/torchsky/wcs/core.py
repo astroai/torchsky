@@ -2794,28 +2794,17 @@ class WCS:
                 origin=origin,
             )
 
-        if self.naxis >= 3:
-            for axis in range(2, self.naxis):
-                if bool(pixel_known[..., axis].all()):
-                    out_world[..., axis] = self._linear_axis_pixel_to_world(
-                        out_pixel[..., axis], axis, origin
-                    )
-                elif bool(world_known[..., axis].all()):
-                    out_pixel[..., axis] = self._linear_axis_world_to_pixel(
-                        out_world[..., axis], axis, origin
-                    )
-
         if self.naxis >= 2 and self._is_spatial:
             spatial_pix_known = [bool(pixel_known[..., i].all()) for i in range(2)]
             spatial_world_known = [bool(world_known[..., i].all()) for i in range(2)]
             if all(spatial_pix_known):
-                ra, dec = self.pixel_to_world(
+                ra, dec = self._pixel_to_world_2d_fast(
                     out_pixel[..., 0], out_pixel[..., 1], origin=origin
                 )
                 out_world[..., 0] = ra
                 out_world[..., 1] = dec
             elif all(spatial_world_known):
-                x, y = self.world_to_pixel(
+                x, y = self._world_to_pixel_2d_fast(
                     out_world[..., 0], out_world[..., 1], origin=origin
                 )
                 out_pixel[..., 0] = x
@@ -2834,7 +2823,7 @@ class WCS:
                     tol=tol,
                 )
                 out_pixel[..., solve_pixel_axis] = solved
-                ra, dec = self.pixel_to_world(
+                ra, dec = self._pixel_to_world_2d_fast(
                     out_pixel[..., 0], out_pixel[..., 1], origin=origin
                 )
                 out_world[..., 0] = ra
@@ -2845,9 +2834,100 @@ class WCS:
                     "axis plus one world axis"
                 )
 
+        if self.naxis >= 3 and self._is_spatial:
+            out_pixel, out_world = self._mixed_spatial_extra_pixel_world(
+                out_pixel,
+                out_world,
+                pixel_known=pixel_known,
+                world_known=world_known,
+                origin=origin,
+            )
+
         if torch.isnan(out_pixel).any() or torch.isnan(out_world).any():
             raise NotImplementedError("mixed transform left unresolved axes")
         return out_pixel, out_world
+
+    def _mixed_spatial_extra_pixel_world(
+        self,
+        out_pixel: Tensor,
+        out_world: Tensor,
+        *,
+        pixel_known: Tensor,
+        world_known: Tensor,
+        origin: int,
+    ) -> tuple[Tensor, Tensor]:
+        extra_axes = list(range(2, self.naxis))
+        if self.tabular_axes or self.coupled_tabular is not None:
+            for axis in extra_axes:
+                if bool(pixel_known[..., axis].all()):
+                    out_world[..., axis] = self._linear_axis_pixel_to_world(
+                        out_pixel[..., axis], axis, origin
+                    )
+                elif bool(world_known[..., axis].all()):
+                    out_pixel[..., axis] = self._linear_axis_world_to_pixel(
+                        out_world[..., axis], axis, origin
+                    )
+            return out_pixel, out_world
+
+        for axis in extra_axes:
+            p_any = bool(pixel_known[..., axis].any())
+            p_all = bool(pixel_known[..., axis].all())
+            w_any = bool(world_known[..., axis].any())
+            w_all = bool(world_known[..., axis].all())
+            if p_any and not p_all:
+                raise NotImplementedError(
+                    "mixed spatial extra pixel known-mask varies by row"
+                )
+            if w_any and not w_all:
+                raise NotImplementedError(
+                    "mixed spatial extra world known-mask varies by row"
+                )
+
+        pixel_axes_known = [0, 1] + [
+            axis for axis in extra_axes if bool(pixel_known[..., axis].all())
+        ]
+        unknown_pixel_axes = [
+            axis for axis in extra_axes if axis not in pixel_axes_known
+        ]
+        world_axes_known = [
+            axis for axis in extra_axes if bool(world_known[..., axis].all())
+        ]
+
+        original_shape = out_pixel.shape
+        pixel_flat = out_pixel.reshape(-1, self.naxis)
+        world_flat = out_world.reshape(-1, self.naxis)
+        rel_flat = pixel_flat + (1.0 - float(origin)) - self.crpix
+
+        if unknown_pixel_axes:
+            if len(world_axes_known) != len(unknown_pixel_axes):
+                raise NotImplementedError(
+                    "mixed spatial extra axes require one known extra-world "
+                    "equation per unknown extra pixel axis"
+                )
+            known_pix = torch.as_tensor(
+                pixel_axes_known, dtype=torch.long, device=self.device
+            )
+            unknown_pix = torch.as_tensor(
+                unknown_pixel_axes, dtype=torch.long, device=self.device
+            )
+            known_world = torch.as_tensor(
+                world_axes_known, dtype=torch.long, device=self.device
+            )
+            rhs = world_flat[:, known_world] - self.crval[known_world]
+            rhs = rhs - torch.matmul(
+                rel_flat[:, known_pix], self.cd_full[known_world, :][:, known_pix].T
+            )
+            solved_rel = torch.linalg.solve(
+                self.cd_full[known_world, :][:, unknown_pix], rhs.T
+            ).T
+            rel_flat[:, unknown_pix] = solved_rel
+            pixel_flat[:, unknown_pix] = (
+                solved_rel + self.crpix[unknown_pix] + (float(origin) - 1.0)
+            )
+
+        world_full = self.crval + torch.matmul(rel_flat, self.cd_full.T)
+        world_flat[:, 2:] = world_full[:, 2:]
+        return pixel_flat.view(original_shape), world_flat.view(original_shape)
 
     def _mixed_linear_pixel_world(
         self,
@@ -2960,7 +3040,7 @@ class WCS:
         for _ in range(max_iter):
             x = known_pixel if known_pixel_axis == 0 else guess
             y = guess if known_pixel_axis == 0 else known_pixel
-            ra, dec = self.pixel_to_world(x, y, origin=origin)
+            ra, dec = self._pixel_to_world_2d_fast(x, y, origin=origin)
             value = ra if target_world_axis == 0 else dec
             resid = (
                 _wrap_lon180(value - target_world)
@@ -2971,7 +3051,9 @@ class WCS:
                 break
             x_eps = known_pixel if known_pixel_axis == 0 else guess + eps
             y_eps = guess + eps if known_pixel_axis == 0 else known_pixel
-            ra_eps, dec_eps = self.pixel_to_world(x_eps, y_eps, origin=origin)
+            ra_eps, dec_eps = self._pixel_to_world_2d_fast(
+                x_eps, y_eps, origin=origin
+            )
             value_eps = ra_eps if target_world_axis == 0 else dec_eps
             diff = (
                 _wrap_lon180(value_eps - value)

@@ -4,7 +4,7 @@
 > APIs, start with [`../api.md`](../api.md). For shipped-work history, use
 > [`history.md`](history.md).
 
-Last updated: 2026-06-18.
+Last updated: 2026-06-23.
 
 ## Mission
 
@@ -32,12 +32,12 @@ does not mean claiming untested upstream behavior as done.
 ## Current Baseline
 
 - Full local gate: `pixi run ci-local`.
-- Latest full local gate result: `1817 passed, 53 skipped, 77 warnings`.
+- Latest full local gate result: `1815 passed, 57 skipped, 77 warnings`.
 - Latest focused FITS gate result: `123 passed, 2 warnings`.
-- Latest focused WCS gate result: `336 passed, 2 skipped, 22 warnings`.
+- Latest focused WCS gate result: `338 passed, 2 skipped, 22 warnings`.
 - Latest focused sphere/HEALPix gate result: `351 passed, 6 skipped, 10 warnings`.
 - Latest WCS/sphere acceptance result: `pixi run wcs-sphere-acceptance` passes.
-  The pytest phase reports `556 passed, 2 skipped, 26 warnings`; WCS quick
+  The pytest phase reports `558 passed, 2 skipped, 26 warnings`; WCS quick
   benchmarks have only small-N negligible deficits; sphere quick benchmarks
   report no comparable deficits; spin matrix default acceptance passes.
 - Root `import torchsky` is a lean lazy facade.
@@ -81,6 +81,10 @@ does not mean claiming untested upstream behavior as done.
   `CD` systems exactly when the known world equations determine the unknown
   pixel axes; the focused WCS gate now reports
   `336 passed, 2 skipped, 22 warnings`.
+- WCS: mixed pixel/world solving now also resolves spatial cubes with linearly
+  coupled extra axes, using the 2D celestial core for RA/Dec and an exact extra
+  linear block solve for spectral/time-style axes; the focused WCS gate now
+  reports `338 passed, 2 skipped, 22 warnings`.
 - Sphere: stale unconditional harmonic parity skips were removed; `bl2beam`,
   `beam2bl`, and `map2alm_lsq` healpy parity gates now run when healpy is
   installed; `tests/test_sphere_spectral.py` reports `63 passed, 2 warnings`.
