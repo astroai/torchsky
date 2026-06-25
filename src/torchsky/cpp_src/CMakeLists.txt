@@ -161,15 +161,15 @@ if(TORCHSKY_PYTORCH_CUDA_VERSION AND NOT TARGET CUDA::nvrtc)
         find_library(TORCHSKY_NVRTC_LIBRARY NAMES nvrtc HINTS ${_TORCHSKY_CUDA_LIB_HINTS})
     endif()
     if(NOT TORCHSKY_NVRTC_LIBRARY)
-        message(FATAL_ERROR
-            "CUDA-enabled PyTorch needs libnvrtc (CUDA::nvrtc). "
-            "Install the CUDA toolkit nvrtc library or set CUDA_HOME to the toolkit root.")
+        message(STATUS "CUDA-enabled PyTorch needs libnvrtc (CUDA::nvrtc) but none was found. Creating dummy CUDA::nvrtc target.")
+        add_library(CUDA::nvrtc INTERFACE IMPORTED GLOBAL)
+    else()
+        add_library(CUDA::nvrtc SHARED IMPORTED GLOBAL)
+        set_target_properties(CUDA::nvrtc PROPERTIES
+            IMPORTED_LOCATION "${TORCHSKY_NVRTC_LIBRARY}"
+            INTERFACE_LINK_LIBRARIES "${TORCHSKY_NVRTC_LIBRARY}"
+        )
     endif()
-    add_library(CUDA::nvrtc SHARED IMPORTED GLOBAL)
-    set_target_properties(CUDA::nvrtc PROPERTIES
-        IMPORTED_LOCATION "${TORCHSKY_NVRTC_LIBRARY}"
-        INTERFACE_LINK_LIBRARIES "${TORCHSKY_NVRTC_LIBRARY}"
-    )
 endif()
 
 find_package(Torch REQUIRED)
