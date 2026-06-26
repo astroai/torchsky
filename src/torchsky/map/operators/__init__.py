@@ -66,6 +66,10 @@ from .image_grid import (
     target_shape_from_header,
     validate_image_plane_2d,
 )
+#from .inverse import (
+#    bind_image_plane_observations_to_target_operator_set,
+#    bind_image_plane_target_operator,
+#)
 from .execution import (
     accumulate_projected_observation,
     finalize_projected_stack,

@@ -277,9 +277,72 @@ cython = "<3.0"
 pytorch = ">=2.0"
 
 [feature.bench-legacy.pypi-dependencies]
+
+#[feature.cuda.dependencies]
+#pytorch-gpu = ">=2.0"
+#cuda-version = ">=12"
 # Kapteyn is not pinned here: its sdist build often fails under isolated solves
 # (requires NumPy at build time). After `pixi install -e bench-legacy`, install when needed:
 #   pixi run -e bench-legacy python -m pip install kapteyn
+[feature.cuda]
+platforms = ["linux-64"]
+
+[feature.cuda.system-requirements]
+cuda = "12"
+
+[feature.cuda.dependencies]
+pytorch-gpu = ">=2.0"
+cuda-version = "12.6.*"
+photutils = ">=3.0.0,<4"
+python = "3.12.*"
+c-compiler = ">=1.10.0,<2"
+setuptools = "<82"
+cxx-compiler = ">=1.10.0,<2"
+cmake = ">=4.3.4,<5"
+ninja = ">=1.13.2,<2"
+cuda-libraries-dev = "12.6.*"
+cuda-nvcc = "12.6.*"
+cuda-nvvm-tools = "12.6.*"
+cuda-crt-tools = "12.6.*"
+cuda-nvtx-dev = "12.6.*"
+cuda-nvrtc-dev = "12.6.*"
+cuda-driver-dev = "12.6.*"
+dlpack = ">=1.3,<2"
+
+[feature.cuda.pypi-dependencies]
+jwst = ">=1.9.1, <2"
+
+[feature.hybpsf]
+platforms = ["linux-64"]
+
+[feature.hybpsf.dependencies]
+python = "3.11.*"
+numpy = "1.26.*"
+scipy = "1.11.*"
+astropy = "5.3.*"
+matplotlib = "3.7.*"
+setuptools = "68.*"
+c-compiler = "*"
+cxx-compiler = "*"
+make = "*"
+cfitsio = "*"
+astromatic-source-extractor = ">=2.28.2,<3"
+
+[feature.hybpsf.pypi-dependencies]
+webbpsf = "==1.4.0"
+
+[feature.jwstpipe]
+platforms = ["linux-64"]
+
+[feature.jwstpipe.dependencies]
+python = "3.11.*"
+pip = ">=24"
+setuptools = "<81"
+
+[feature.jwstpipe.pypi-dependencies]
+jwst = ">=1.13.3,<1.14"
+crds = ">=11.17,<12"
+stdatamodels = ">=1.9.0,<1.10.0"
 
 # Environment definitions
 [environments]
@@ -290,3 +353,6 @@ sphere-bench = { features = ["prod", "bench", "sphere-bench"], solve-group = "de
 bench-all = { features = ["prod", "bench", "sphere-bench"], solve-group = "default" }
 map-compat = { features = ["prod", "bench", "sphere-bench", "map-compat"], solve-group = "map-compat" }
 bench-legacy = { features = ["bench-legacy"], solve-group = "bench-legacy" }
+cuda = { features = ["prod", "test", "cuda"], solve-group = "cuda" }
+hybpsf = ["hybpsf"]
+jwstpipe = { features = ["jwstpipe"], no-default-feature = true }
