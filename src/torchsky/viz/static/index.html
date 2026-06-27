@@ -292,6 +292,7 @@
     .pill:focus-visible {
       outline: 2px solid var(--accent);
       outline-offset: 2px;
+      border-radius: var(--r-sm);
     }
     .pill:hover { border-color: var(--accent); color: var(--accent); }
     .pill.active {
@@ -373,6 +374,7 @@
     .toggle:focus-visible {
       outline: 2px solid var(--accent);
       outline-offset: 2px;
+      border-radius: 9px;
     }
     .toggle.on { background: var(--accent); }
     .toggle::after {
@@ -698,19 +700,19 @@
       <div class="validate-grid">
         <div class="val-cell" id="val-truth">
           <div class="val-cell-label">Truth</div>
-          <img id="val-truth-img" src="" alt="" />
+          <img id="val-truth-img" src="" alt="Truth validation image" />
         </div>
         <div class="val-cell" id="val-model">
           <div class="val-cell-label">Model</div>
-          <img id="val-model-img" src="" alt="" />
+          <img id="val-model-img" src="" alt="Model validation image" />
         </div>
         <div class="val-cell" id="val-residual">
           <div class="val-cell-label">Residual</div>
-          <img id="val-residual-img" src="" alt="" />
+          <img id="val-residual-img" src="" alt="Residual validation image" />
         </div>
         <div class="val-cell" id="val-pull">
           <div class="val-cell-label">Pull (σ)</div>
-          <img id="val-pull-img" src="" alt="" />
+          <img id="val-pull-img" src="" alt="Pull distribution validation image" />
         </div>
       </div>
       <div class="validate-footer" id="val-hist-container">
