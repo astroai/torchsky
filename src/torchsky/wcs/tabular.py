@@ -316,7 +316,8 @@ class CoupledTabularLookupWCS:
 
     @property
     def grid_shape(self) -> tuple[int, ...]:
-        return tuple(int(axis.shape[0]) for axis in self.pixel_axes)
+        # ⚡ Bolt: Remove redundant int casting generator
+        return tuple(axis.shape[0] for axis in self.pixel_axes)
 
     def to(
         self,
@@ -613,7 +614,8 @@ def _interp_multilinear(
         highs.append(hi)
         weights_hi.append(t)
 
-    grid_shape = tuple(int(axis.shape[0]) for axis in axes)
+    # ⚡ Bolt: Remove redundant int casting generator
+    grid_shape = tuple(axis.shape[0] for axis in axes)
     strides: list[int] = []
     stride = 1
     for size in reversed(grid_shape[1:]):
@@ -1058,7 +1060,8 @@ def coupled_tabular_wcs_and_axes_from_fits(
             coord = coord.to(dtype=torch.float64)
         if not bool(torch.isfinite(coord).all().detach().cpu().item()):
             raise ValueError(f"PS{axis_number}_1 column {coord_col!r} is not finite")
-        shape = tuple(int(size) for size in coord.shape)
+        # ⚡ Bolt: Use direct tuple wrapping instead of explicit int casting generator
+        shape = tuple(coord.shape)
         if grid_shape is None:
             grid_shape = shape
         elif shape != grid_shape:

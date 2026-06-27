@@ -128,7 +128,8 @@ def bind_image_plane_target_operator(
         if tensor_t.ndim < 2:
             raise ValueError("inverse-noise input must have at least two image axes")
         device = tensor_t.device
-        shape = tuple(int(v) for v in tensor_t.shape[-2:])
+        # ⚡ Bolt: Use direct tuple wrapping instead of explicit int casting generator
+        shape = tuple(tensor_t.shape[-2:])
         cache_key = (device, shape)
         weight_map = noise_cache.get(cache_key)
         if weight_map is None:
