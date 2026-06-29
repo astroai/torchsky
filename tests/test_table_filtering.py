@@ -29,7 +29,7 @@ def fits_file(tmp_path):
 
 
 def test_filter_lt(fits_file):
-    import torchsky.cpp
+    import torchfits.cpp
 
     # MAG < 50.0. linspace(0,100,1000) means values are 0.0, 0.1, ... 99.9.
     # < 50.0 should be indices 0 to 499 (500 items).
@@ -38,7 +38,7 @@ def test_filter_lt(fits_file):
     filters = [("MAG", "<", 50.0)]
     cols = ["ID", "MAG"]
 
-    data = torchsky.cpp.read_fits_table_filtered(fits_file, 1, cols, filters)
+    data = torchfits.cpp.read_fits_table_filtered(fits_file, 1, cols, filters)
 
     assert "ID" in data
     assert "MAG" in data
@@ -53,12 +53,12 @@ def test_filter_lt(fits_file):
 
 
 def test_filter_gt(fits_file):
-    import torchsky.cpp
+    import torchfits.cpp
 
     filters = [("ID", ">", 800)]
     cols = ["ID"]
 
-    data = torchsky.cpp.read_fits_table_filtered(fits_file, 1, cols, filters)
+    data = torchfits.cpp.read_fits_table_filtered(fits_file, 1, cols, filters)
     ids = data["ID"]
 
     # 801 to 999 -> 199 items
@@ -97,20 +97,20 @@ def test_table_read_where_torch_backend(fits_file):
 
 
 def test_filter_eq(fits_file):
-    import torchsky.cpp
+    import torchfits.cpp
 
     filters = [("ID", "==", 500)]
-    data = torchsky.cpp.read_fits_table_filtered(fits_file, 1, ["ID"], filters)
+    data = torchfits.cpp.read_fits_table_filtered(fits_file, 1, ["ID"], filters)
     assert len(data["ID"]) == 1
     assert data["ID"][0].item() == 500
 
 
 def test_filter_compound(fits_file):
-    import torchsky.cpp
+    import torchfits.cpp
 
     # ID > 100 AND ID < 200
     filters = [("ID", ">", 100), ("ID", "<", 200)]
-    data = torchsky.cpp.read_fits_table_filtered(fits_file, 1, ["ID"], filters)
+    data = torchfits.cpp.read_fits_table_filtered(fits_file, 1, ["ID"], filters)
     ids = data["ID"]
 
     assert len(ids) == 99  # 101 to 199
@@ -119,10 +119,10 @@ def test_filter_compound(fits_file):
 
 
 def test_filter_short(fits_file):
-    import torchsky.cpp
+    import torchfits.cpp
 
     # SHORT_VAL is int16. Filter on it.
     filters = [("SHORT_VAL", "==", 10)]
-    data = torchsky.cpp.read_fits_table_filtered(fits_file, 1, ["SHORT_VAL"], filters)
+    data = torchfits.cpp.read_fits_table_filtered(fits_file, 1, ["SHORT_VAL"], filters)
     assert len(data["SHORT_VAL"]) == 1
     assert data["SHORT_VAL"][0].item() == 10

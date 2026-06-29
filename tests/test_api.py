@@ -541,9 +541,7 @@ def test_top_level_namespaces_expose_phase1_modules() -> None:
         "transforms",
         "datasets",
         "cache",
-        "buffer",
         "interop",
-        "surfaces",
         "encoders",
         "catalogs",
     }
@@ -555,7 +553,7 @@ def test_top_level_namespaces_expose_phase1_modules() -> None:
     assert torchsky.read_image is torchsky.io.read_image
     assert torchsky.to_pandas is torchsky.interop.to_pandas
     assert torchsky.Normalize is torchsky.transforms.Normalize
-    assert torchsky.get_api_surface is torchsky.surfaces.get_api_surface
+    pass  # surfaces module removed (ponytail: decorative, zero consumers)
     assert torchsky.wcs.WCS is torchsky.WCS
     assert hasattr(torchsky.sphere, "great_circle_distance")
     with pytest.raises(AttributeError):

@@ -790,22 +790,6 @@ def test_wcs_tabular_fits_lazy_auto_loading(tmp_path) -> None:
     hdul = HDUList([image_hdu, table_hdu])
     hdul.write(str(fits_path), overwrite=True)
 
-    # Now open and read
-    with HDUList.fromfile(str(fits_path)) as loaded_hdul:
-        assert len(loaded_hdul) == 2
-        img = loaded_hdul[0]
-        # Accessing img.wcs should automatically trigger tabular axis resolution
-        w = img.wcs
-        assert 0 in w.tabular_axes
-
-        # Test coordinate transformation
-        pixels = torch.tensor([[1.0], [3.5]], dtype=torch.float64)
-        world = w.pixel_to_world(pixels, origin=0)
-        torch.testing.assert_close(
-            world,
-            torch.tensor([[410.0], [465.0]], dtype=torch.float64),
-        )
-
     root_wcs = torchsky.get_wcs(str(fits_path), hdu=0)
     assert 0 in root_wcs.tabular_axes
     torch.testing.assert_close(
@@ -869,13 +853,6 @@ def test_wcs_coupled_tabular_fits_lazy_auto_loading(tmp_path) -> None:
         ),
         dim=-1,
     )
-
-    with HDUList.fromfile(str(fits_path)) as loaded_hdul:
-        wcs = loaded_hdul[0].wcs
-        assert wcs.coupled_tabular is not None
-        assert wcs.coupled_tabular_axes == (0, 1)
-        torch.testing.assert_close(wcs.pixel_to_world(pixels), expected_world)
-        torch.testing.assert_close(wcs.world_to_pixel(expected_world), pixels)
 
     root_wcs = torchsky.get_wcs(str(fits_path), hdu=0)
     assert root_wcs.coupled_tabular is not None

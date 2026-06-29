@@ -37,8 +37,8 @@ def _clear_torchsky_native_io_handles_after_test():
     if close_handles is not None:
         close_handles()
 
-    caches_mod = sys.modules.get("torchsky._io_engine.caches")
-    clear_file_cache = getattr(caches_mod, "clear_file_cache", None)
-    if clear_file_cache is not None:
-        cpp_mod = sys.modules.get("torchsky.cpp")
-        clear_file_cache(cpp_module=cpp_mod)
+    try:
+        import torchfits
+        torchfits.clear_file_cache()
+    except Exception:
+        pass

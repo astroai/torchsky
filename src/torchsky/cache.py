@@ -213,7 +213,7 @@ def clear_cache():
     """Clear Python, C++ I/O, table-handle, and spectral caches."""
     get_cache_manager().clear()
     try:
-        from ._io_engine.caches import clear_file_cache
+        from torchfits import clear_file_cache
 
         clear_file_cache()
     except Exception:
@@ -243,7 +243,7 @@ def stats() -> Dict[str, Any]:
     """Return cache statistics for the public cache namespace."""
     result = get_cache_stats()
     try:
-        from ._io_engine.caches import get_cache_performance
+        from torchfits import get_cache_performance
 
         result = {**result, "io": get_cache_performance()}
     except Exception:

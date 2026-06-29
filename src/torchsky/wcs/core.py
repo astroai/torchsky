@@ -4047,7 +4047,29 @@ class WCS:
             if self._use_center_equator_fast:
                 phi = _wrap_lon180_checked(ra - self.alpha0)
                 return phi, dec
-            return self._spherical_rotation(ra, dec, native_type)
+            d2r = 0.017453292519943295
+            r2d = 57.29577951308232
+            ra_rad = ra * d2r
+            dec_rad = dec * d2r
+            sin_dec, cos_dec = _sincos(dec_rad)
+            sin_ra, cos_ra = _sincos(ra_rad)
+            x_cel = cos_dec * cos_ra
+            y_cel = cos_dec * sin_ra
+            z_cel = sin_dec
+            u = x_cel * self._pole_east_x + y_cel * self._pole_east_y
+            w = (
+                x_cel * self._pole_north_x
+                + y_cel * self._pole_north_y
+                + z_cel * self._pole_north_z
+            )
+            v = -(
+                x_cel * self._pole_radial_x
+                + y_cel * self._pole_radial_y
+                + z_cel * self._pole_radial_z
+            )
+            theta = torch.asin(torch.clamp(w, -1.0, 1.0)) * r2d
+            phi = torch.remainder(torch.atan2(u, -v) * r2d + self.phi_p, 360.0)
+            return phi, theta
 
         if (
             allow_cpp_inverse_sphere
@@ -4099,14 +4121,6 @@ class WCS:
             + y_cel * self._pole_radial_y
             + z_cel * self._pole_radial_z
         )
-
-        # theta = asin(w)
-        # phi - phi_p = atan2(u, v) -- Wait, let's re-verify this.
-        # Original _spherical_rotation had:
-        # X = u*ex + v*nx + w*rx
-        # Y = u*ey + v*ny + w*ry
-        # Z = u*ez + v*nz + w*rz
-        # This means u, v, w are the components in the (e, n, r) basis.
 
         theta = torch.asin(torch.clamp(w, -1.0, 1.0)) * r2d
         phi = torch.remainder(torch.atan2(u, v) * r2d + self.phi_p, 360.0)
@@ -4458,7 +4472,7 @@ class WCS:
         sin_phi = torch.sin(phi_rad)
         cos_phi = torch.cos(phi_rad)
 
-        xi = cos_theta * sin_phi * deg
+        xi = -cos_theta * sin_phi * deg
         eta = -cos_theta * cos_phi * deg
 
         pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
@@ -4479,11 +4493,10 @@ class WCS:
         # Get native coordinates via inverse spherical rotation
         phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
 
-        theta * self._d2r
         R = 90.0 - theta
 
         phi_rad = phi * self._d2r
-        xi = R * torch.sin(phi_rad)
+        xi = -R * torch.sin(phi_rad)
         eta = -R * torch.cos(phi_rad)
 
         pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
@@ -4535,8 +4548,8 @@ class WCS:
         dec = world[:, 1]
         pix_internal = self._alloc_pix_internal_like(world)
 
-        if self._use_center_fast:
-            phi = _wrap_lon180_checked(ra)
+        if self._use_center_equator_fast:
+            phi = _wrap_lon180_checked(ra - self.alpha0)
             theta = dec
         else:
             phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
@@ -4555,8 +4568,8 @@ class WCS:
         dec = world[:, 1]
         pix_internal = self._alloc_pix_internal_like(world)
 
-        if self._use_center_fast:
-            xi = torch.remainder(ra + 180.0, 360.0) - 180.0
+        if self._use_center_equator_fast:
+            xi = torch.remainder(ra - self.alpha0 + 180.0, 360.0) - 180.0
             eta = self._cea_eta_scale * torch.sin(dec * self._d2r)
         else:
             phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
@@ -4574,8 +4587,8 @@ class WCS:
         dec = world[:, 1]
         pix_internal = self._alloc_pix_internal_like(world)
 
-        if self._use_center_fast:
-            phi = _wrap_lon180_checked(ra)
+        if self._use_center_equator_fast:
+            phi = _wrap_lon180_checked(ra - self.alpha0)
             theta = dec
         else:
             phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
@@ -4602,7 +4615,7 @@ class WCS:
         r = 2.0 * torch.rad2deg(torch.sin((math.pi / 2.0 - theta_rad) / 2.0))
 
         phi_rad = phi * self._d2r
-        xi = r * torch.sin(phi_rad)
+        xi = -r * torch.sin(phi_rad)
         eta = -r * torch.cos(phi_rad)
 
         pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
@@ -4623,7 +4636,7 @@ class WCS:
         r = 2.0 * torch.rad2deg(torch.tan((math.pi / 2.0 - theta_rad) / 2.0))
 
         phi_rad = phi * self._d2r
-        xi = r * torch.sin(phi_rad)
+        xi = -r * torch.sin(phi_rad)
         eta = -r * torch.cos(phi_rad)
 
         pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)

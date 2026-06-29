@@ -3132,9 +3132,11 @@ def _load_pixwin_table(nside: int) -> tuple[Tensor, Tensor]:
         )
 
     data = None
-    if _cpp is not None and hasattr(_cpp, "read_fits_table"):
+    import torchfits.cpp as _tf_cpp
+
+    if hasattr(_tf_cpp, "read_fits_table"):
         try:
-            data = _cpp.read_fits_table(str(path), 1)
+            data = _tf_cpp.read_fits_table(str(path), 1)
         except Exception:
             data = None
     if data is None:
@@ -4050,34 +4052,10 @@ def alm2map_spin(
         P_plus_pos = torch.mv(Y_plus.T, coeff_plus)
         P_minus_pos = torch.mv(Y_minus.T, coeff_minus)
 
-        # Now add contributions from m < 0.
-        # Contribution to P_+ from m<0 is sum_{m<0} a_{s,l,m} Y_{s,l,m}
-        # By symmetry: a_{s,l,-m} Y_{s,l,-m} = conj(a_{-s, l, m} Y_{-s, l, m})
-        # = conj(contribution to P_- from mode m)
-        # = conj(P_minus_m)
-
-        # BUT P_minus_pos = sum_{m>=0} P_minus_m.
-        # We need sum_{m>0} conj(P_minus_m).
-        # We need to subtract m=0 component from P_minus_pos before conjugating?
-        # Yes.
-
-        # We need P_minus_m=0 separately?
-        # m=0 corresponds to the first (lmax+1) elements of the vectors.
-        # We can compute m=0 part separately or extract it?
-        # Computing separately is safer/easier if we have the block.
-        # Or we can just use the indices.
-
-        # Let's extract m=0 part of P_minus_pos efficiently?
-        # No, P_minus_pos is summed over all m. We can't extract after sum.
-        # We must compute m=0 and m>0 separately.
-
-        # Or:
-        # P_plus_total = P_plus_pos + conj(P_minus_pos - P_minus_{m=0})
-        # P_minus_total = P_minus_pos + conj(P_plus_pos - P_plus_{m=0})
-
-        # To do this, we need P_minus_{m=0}.
-        # This is coeff_minus[0:lmax+1] @ Y_minus[0:lmax+1]
-
+        # m<0 contributions via symmetry:
+        # a_{s,l,-m} Y_{s,l,-m} = conj(a_{-s,l,m} Y_{-s,l,m})
+        # We sum m>=0 contributions into P_minus_pos, then subtract the m=0
+        # term before conjugating to get the m>0 contributions.
         l_count_m0 = ll + 1
 
         P_plus_m0 = torch.mv(Y_plus[:l_count_m0].T, coeff_plus[:l_count_m0])

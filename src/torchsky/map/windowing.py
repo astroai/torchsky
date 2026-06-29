@@ -122,11 +122,7 @@ def _prepare_target(
     include_representative_pixel_area: bool = False,
     include_quadrature: bool = False,
 ) -> _PreparedImagePlaneTarget:
-    try:
-        from .image_plane import _build_target_world_grid as build_grid
-    except ImportError:
-        build_grid = _build_target_world_grid
-    ra_deg, dec_deg = build_grid(
+    ra_deg, dec_deg = _build_target_world_grid(
         target_wcs,
         target_shape[0],
         target_shape[1],
@@ -213,16 +209,9 @@ def _window_large_tan_target(
 ) -> tuple[_PreparedImagePlaneTarget | None, tuple[int, int, int, int] | None]:
     if value_semantics != "surface_brightness":
         return target, None
-    try:
-        from .image_plane import (
-            _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS as min_pixels,
-            _LARGE_TAN_WINDOWING_EDGE_SAMPLES as edge_samples,
-            _LARGE_TAN_WINDOWING_MARGIN_PIXELS as margin_pixels,
-        )
-    except ImportError:
-        min_pixels = _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS
-        edge_samples = _LARGE_TAN_WINDOWING_EDGE_SAMPLES
-        margin_pixels = _LARGE_TAN_WINDOWING_MARGIN_PIXELS
+    min_pixels = _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS
+    edge_samples = _LARGE_TAN_WINDOWING_EDGE_SAMPLES
+    margin_pixels = _LARGE_TAN_WINDOWING_MARGIN_PIXELS
 
     if int(target.shape[0]) * int(target.shape[1]) < min_pixels:
         return target, None

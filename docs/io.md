@@ -1,149 +1,100 @@
-# `torchsky.io` And Root FITS I/O
+# FITS I/O Boundary
 
-`torchsky` keeps only the core FITS operations at the package root:
-`read`, `write`, `open`, `get_header`, and `get_wcs`. `torchsky.io.fits` owns
-the CFITSIO-backed FITS file operations; `torchsky.io` re-exports those helpers
-alongside datasets, dataloaders, interop helpers, and table conveniences.
+FITS file and table I/O is owned by
+[`torchfits`](https://github.com/sfabbro/torchfits). `torchsky` does not define a
+second FITS backend. Its compute APIs consume tensors, FITS-like header
+mappings, masks, weights, and streamed table batches.
 
-## What This Namespace Is For
+## Install
 
-Use this surface for FITS images, HDUs, headers, checksums, cutouts, streaming
-table reads, and writes. Results are PyTorch tensors where possible, with
-optional placement on CPU, CUDA, or MPS after data are read.
+Install both packages for FITS-backed sky workflows:
 
-## Core Concepts
-
-- **Unified read:** `torchsky.read(...)` auto-detects image or table HDUs.
-- **Explicit read:** `read_image(...)`, `read_table(...)`, `read_hdus(...)`, and
-  `read_subset(...)` skip auto-detection when you know the payload.
-- **Lazy handles:** `torchsky.open(...)` returns an `HDUList`; table HDUs expose
-  `TableHDURef` for column reads, Arrow scans, and materialization.
-- **Headers:** `Header` preserves ordered FITS cards, comments, history, and
-  WCS metadata needed downstream.
-- **Checksums:** checksum helpers write and verify FITS `DATASUM` / `CHECKSUM`
-  keywords at file/HDU level.
-
-## Recipes
-
-### Read An Image And Header
-
-```python
-import torchsky
-
-data, header = torchsky.read("science.fits", hdu="auto", return_header=True)
+```bash
+pip install torchsky torchfits
 ```
 
-### Read A Cutout Without Loading The Full Image
+`torchsky` remains usable without `torchfits` when inputs are already in memory
+or come from another storage system.
+
+## Version Contract
+
+The next supported integration baseline is `torchfits 0.5.0`, currently in
+development. The examples on this page show the intended boundary, not a frozen
+0.5 API guarantee. Before torchsky release:
+
+1. test against the `torchfits 0.5.0` release candidate;
+2. update exact call signatures from the released torchfits API docs;
+3. pin the supported range only after that contract passes end-to-end gates;
+4. do not add compatibility code for transient development signatures.
+
+## Image And WCS Workflow
 
 ```python
-stamp = torchsky.io.read_subset(
-    "mosaic.fits", hdu=0, x1=1000, y1=1000, x2=1256, y2=1256
+import torchfits
+from torchsky.wcs import WCS
+
+image, header = torchfits.read(
+    "science.fits",
+    hdu="auto",
+    device="cuda",
+    return_header=True,
 )
+
+wcs = WCS(header)
+ra, dec = wcs.pixel_to_world(x, y)
 ```
 
-### Keep A File Open For Repeated Cutouts
+The boundary is deliberately data-oriented:
+
+- `torchfits` owns file selection, HDU semantics, dtype decoding, compression,
+  checksums, cutouts, caches, and writes.
+- `torchsky.wcs` owns coordinate transforms constructed from metadata.
+- `torchsky.map`, `torchsky.scene`, and `torchsky.field` own tensor-domain
+  observation and modelling semantics.
+
+## Tables And Catalogs
 
 ```python
-with torchsky.io.open_subset_reader("mosaic.fits", hdu=0) as reader:
-    a = reader(0, 0, 256, 256)
-    b = reader(256, 256, 512, 512)
+import torchfits
+from torchsky.catalogs import crossmatch_sky
+
+for batch in torchfits.table.scan(
+    "catalog.fits",
+    columns=["RA", "DEC"],
+    batch_size=100_000,
+):
+    matches = crossmatch_sky(batch["RA"], batch["DEC"], ref_ra, ref_dec)
 ```
 
-### Work With HDUs
+FITS table mutation, Arrow conversion, and predicate pushdown belong to
+`torchfits.table`. Sky partitioning, spherical indexing, crossmatch, and catalog
+models belong to `torchsky.catalogs`.
 
-```python
-with torchsky.open("mef.fits") as hdul:
-    sci = hdul["SCI"].data
-    header = hdul["SCI"].header
-```
+## Contract Requirements
 
-### Write Images Or Tables
+Adapters crossing the package boundary must preserve:
 
-```python
-torchsky.write("out.fits", data, header={"OBJECT": "M31"}, overwrite=True)
-torchsky.write("cat.fits", {"RA": ra, "DEC": dec}, overwrite=True)
-```
+- tensor dtype, shape, device, and byte-order normalization;
+- ordered header values needed by WCS, including alternate keys and `-TAB`
+  references;
+- mask and weight meaning—never infer inverse variance or validity silently;
+- spectral/time units and axis ordering;
+- chunk boundaries without changing row order or duplicating rows.
 
-## API Surface
+Ambiguous metadata must fail closed. Core torchsky code should not inspect file
+paths to guess semantics.
 
-Root readers:
+## Compatibility Transition
 
-- `torchsky.read(...)`
-- `torchsky.open(...)`
-- `torchsky.get_header(...)`
-- `torchsky.get_wcs(...)`
-
-Root writer:
-
-- `torchsky.write(...)`
-
-Specialized readers, writers, and mutations live under both `torchsky.io.fits`
-and the compatibility convenience namespace `torchsky.io`:
-
-- `torchsky.io.fits.read(...)`
-- `torchsky.io.fits.write(...)`
-- `torchsky.io.fits.open(...)`
-- `torchsky.io.read_image(...)`
-- `torchsky.io.read_table(...)`
-- `torchsky.io.read_hdus(...)`
-- `torchsky.io.read_subset(...)`
-- `torchsky.io.open_subset_reader(...)`
-- `torchsky.io.stream_table(...)`
-- `torchsky.io.read_large_table(...)`
-- `torchsky.io.insert_hdu(...)`
-- `torchsky.io.replace_hdu(...)`
-- `torchsky.io.delete_hdu(...)`
-- `torchsky.io.write_checksums(...)`
-- `torchsky.io.verify_checksums(...)`
-
-HDU and header objects:
-
-- `torchsky.HDUList`
-- `torchsky.TensorHDU`
-- `torchsky.TableHDU`
-- `torchsky.TableHDURef`
-- `torchsky.Header`
-- `torchsky.Card`
-
-Batch and low-level FITS cache helpers:
-
-- `torchsky.io.fits.read_batch(...)`
-- `torchsky.io.read_batch(...)`
-- `torchsky.io.get_batch_info(...)`
-- `torchsky.io.cache_subsystem_policy(...)`
-- `torchsky.io.clear_cache_subsystem(...)`
-- `torchsky.io.get_cache_performance(...)`
-- `torchsky.io.clear_file_cache(...)`
-- `torchsky.cache.clear(...)`
-- `torchsky.cache.stats(...)`
-
-Named FITS I/O cache subsystems are:
-
-- `fits_image_data`
-- `fits_table_data`
-- `fits_header_metadata`
-- `fits_wcs_extraction`
-- `all`
-
-`torchsky.io.fits` is the implementation-owning FITS namespace. `torchsky.io`
-re-exports the complete FITS I/O helper set (`read`,
-`read_image`, `read_table`, `read_hdus`, `read_subset`,
-`open_subset_reader`, `open`, `write`, `insert_hdu`, `replace_hdu`,
-`delete_hdu`, `write_checksums`, `verify_checksums`, `get_header`, `get_wcs`,
-`read_batch`, `get_batch_info`, `get_cache_performance`, `clear_file_cache`,
-streaming table helpers, HDU/header types, table interop helpers, and
-named cache-subsystem helpers).
-
-## Examples
-
-- [Image read example](../examples/example_image.py)
-- [Cutout example](../examples/example_image_cutouts.py)
-- [Image cube example](../examples/example_image_cube.py)
-- [Multi-extension FITS example](../examples/example_image_mef.py)
+Any residual `torchsky.read`, `torchsky.open`, `torchsky.io`, or
+`torchsky.table` surface is migration-only. It must be a thin delegate to
+`torchfits`, emit a deprecation warning, and have a documented removal release.
+No new behavior should be added to those namespaces.
 
 ## Validation And Performance
 
-FITS I/O parity and throughput are covered by `tests/test_fitsio_upstream_smoke.py`,
-`tests/test_real_data_validation.py`, `benchmarks/bench_fits_io.py`, and
-`benchmarks/bench_fitstable_io.py`. See [benchmarks.md](benchmarks.md) for
-commands and comparator policy.
+- FITS image/table correctness and throughput are validated in `torchfits`.
+- `torchsky` keeps one integration gate covering `torchfits 0.5.x` output
+  passed into WCS/map/catalog computation.
+- End-to-end torchsky benchmarks start after data is decoded, but must still
+  report transfer volume and device movement when those affect the workflow.

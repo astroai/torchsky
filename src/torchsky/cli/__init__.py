@@ -6,6 +6,7 @@ import argparse
 
 from .inspect_command import register_inspect_parsers
 from .map_command import register_map_parser
+from .sky_command import register_sky_parsers
 
 
 def _register_viz_parser(subparsers: argparse.Action) -> None:
@@ -134,6 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     register_inspect_parsers(subparsers)
     register_map_parser(subparsers)
+    register_sky_parsers(subparsers)
     _register_viz_parser(subparsers)
     return parser
 

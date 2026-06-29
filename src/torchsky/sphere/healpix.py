@@ -1228,6 +1228,7 @@ def get_interp_val(
         and maps.device.type == "cpu"
         and maps.is_floating_point()
         and nest
+        and not maps.requires_grad
     ):
         lon_or_theta = _as_float64(theta)
         lat_or_phi = _as_float64(phi)

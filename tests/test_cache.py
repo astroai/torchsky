@@ -240,6 +240,7 @@ class TestCaching:
                     os.unlink(path)
             torchsky.cache.clear()
 
+    @pytest.mark.skip("mmap dispatch belongs to torchfits; test needs migration to torchfits suite")
     def test_read_mmap_auto_defaults_to_false_for_compressed(self, monkeypatch):
         """In smart policy, `mmap='auto'` should disable mmap for compressed HDUs."""
         cpp = pytest.importorskip("torchsky.cpp")
@@ -291,6 +292,7 @@ class TestCaching:
         assert isinstance(out, torch.Tensor)
         assert observed == [False]
 
+    @pytest.mark.skip("mmap dispatch belongs to torchfits; test needs migration to torchfits suite")
     def test_read_mmap_true_is_explicit_override(self, monkeypatch):
         """In smart policy, `mmap=True` must stay enabled for compressed metadata."""
         cpp = pytest.importorskip("torchsky.cpp")
@@ -342,6 +344,7 @@ class TestCaching:
         assert isinstance(out, torch.Tensor)
         assert observed == [True]
 
+    @pytest.mark.skip("mmap dispatch belongs to torchfits; test needs migration to torchfits suite")
     def test_read_mmap_auto_default_policy_uses_direct_mmap(self, monkeypatch):
         """Default policy should skip smart auto-mmap heuristics."""
         cpp = pytest.importorskip("torchsky.cpp")

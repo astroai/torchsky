@@ -404,15 +404,6 @@ def _tpv_affine_envelope(
     )
 
 
-def _tpv_candidate_mask(
-    source_wcs: WCS,
-    xi: Tensor,
-    eta: Tensor,
-    image_shape: tuple[int, int],
-) -> Tensor:
-    xi_min, xi_max, eta_min, eta_max = _tpv_affine_envelope(source_wcs, image_shape)
-
-
 def _tpv_source_cap_radius_deg(source_wcs: WCS, image_shape: tuple[int, int]) -> float:
     xi_min, xi_max, eta_min, eta_max = _tpv_affine_envelope(source_wcs, image_shape)
     r_max = math.sqrt(
@@ -1449,7 +1440,7 @@ def _project_observation_to_target_chunk(
 ) -> _ProjectedImagePlaneObservation:
     if not torch.isfinite(torch.tensor(obs.weight, dtype=torch.float64)):
         raise ValueError("Observation weights must be finite")
-    if obs.weight <= 0.0:
+    if not (obs.weight > 0.0):
         raise ValueError("Observation weights must be positive")
 
     if image is None or header_dict_obs is None:

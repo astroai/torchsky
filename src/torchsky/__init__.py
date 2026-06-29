@@ -8,7 +8,6 @@ are imported on first access.
 
 from __future__ import annotations
 
-import os
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
@@ -26,9 +25,7 @@ _NAMESPACES: dict[str, str] = {
     "transforms": "torchsky.transforms",
     "datasets": "torchsky.datasets",
     "cache": "torchsky.cache",
-    "buffer": "torchsky.buffer",
-    "interop": "torchsky.interop",
-    "surfaces": "torchsky.surfaces",
+    "interop": "torchfits.interop",
     "encoders": "torchsky.encoders",
     "catalogs": "torchsky.catalogs",
 }
@@ -108,33 +105,16 @@ _INTERNAL_ATTRS: dict[str, tuple[str, str | None]] = {
         "create_validation_transform",
     ),
     "fast_parse_header": ("torchsky.header_parser", "fast_parse_header"),
-    "clear_buffers": ("torchsky.buffer", "clear_buffers"),
-    "configure_buffers": ("torchsky.buffer", "configure_buffers"),
-    "get_buffer_stats": ("torchsky.buffer", "get_buffer_stats"),
+
     "configure_for_environment": ("torchsky.cache", "configure_for_environment"),
     "get_cache_stats": ("torchsky.cache", "get_cache_stats"),
     "clear_cache": ("torchsky.cache", "clear_cache"),
-    "to_arrow": ("torchsky.interop", "to_arrow"),
-    "to_pandas": ("torchsky.interop", "to_pandas"),
-    "to_polars": ("torchsky.interop", "to_polars"),
-    "APISurface": ("torchsky.surfaces", "APISurface"),
-    "API_SURFACES": ("torchsky.surfaces", "API_SURFACES"),
-    "SurfacePillar": ("torchsky.surfaces", "SurfacePillar"),
-    "SurfaceTier": ("torchsky.surfaces", "SurfaceTier"),
-    "api_surfaces_by_pillar": ("torchsky.surfaces", "api_surfaces_by_pillar"),
-    "api_surfaces_by_tier": ("torchsky.surfaces", "api_surfaces_by_tier"),
-    "get_api_surface": ("torchsky.surfaces", "get_api_surface"),
+    "to_arrow": ("torchfits.interop", "to_arrow"),
+    "to_pandas": ("torchfits.interop", "to_pandas"),
+
     "_invalidate_path_caches": ("torchsky.io.fits", "_invalidate_path_caches"),
-    "_normalize_cpp_table_data": (
-        "torchsky._io_engine.write_api",
-        "_normalize_cpp_table_data",
-    ),
     "_resolve_image_mmap": ("torchsky.io.fits", "_resolve_image_mmap"),
     "_where": ("torchsky._where", None),
-    "_write_header_cards_if_supported": (
-        "torchsky._io_engine.write_api",
-        "_write_header_cards_if_supported",
-    ),
 }
 
 __all__ = tuple(
@@ -167,16 +147,6 @@ def _ensure_runtime_init() -> None:
 
     cache = import_module("torchsky.cache")
     cache.configure_for_environment()
-    try:
-        cpp = import_module("torchsky.cpp")
-        cache_mb = os.environ.get("TORCHSKY_CFITSIO_CACHE_MB")
-        cache_files = os.environ.get("TORCHSKY_CFITSIO_CACHE_FILES")
-        if cache_mb is not None or cache_files is not None:
-            max_files = int(cache_files) if cache_files is not None else 32
-            max_mb = int(cache_mb) if cache_mb is not None else 256
-            cpp.configure_cache(max_files, max_mb)
-    except Exception:
-        pass
 
     _RUNTIME_INITIALIZED = True
 
@@ -226,19 +196,16 @@ def __dir__() -> list[str]:
 
 if TYPE_CHECKING:
     from . import (
-        buffer as buffer,
         cache as cache,
         catalogs as catalogs,
         datasets as datasets,
         encoders as encoders,
         field as field,
-        interop as interop,
         io as io,
         map as map,
         scene as scene,
         sphere as sphere,
         spectral as spectral,
-        surfaces as surfaces,
         table as table,
         transforms as transforms,
         wcs as wcs,

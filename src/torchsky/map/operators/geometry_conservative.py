@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import math
-
 import torch
 from torch import Tensor
 
 from .geometry import ConservativePolygonRemapOp
-from .geometry_drizzle import _clip_polygon_to_pixel, _polygon_area
+from .geometry_drizzle import _batch_quad_pixel_areas
 
 
 def _exact_conservative_polygon_project(
@@ -30,31 +28,8 @@ def _exact_conservative_polygon_project(
             tuple(image.shape),
             device=image.device,
         )
-        source_representative_area_sr = float(
-            representative_pixel_area_fn(
-                source_wcs,
-                tuple(image.shape),
-                device=image.device,
-            )
-        )
-        target_representative_area_sr = (
-            float(target.representative_pixel_area_sr)
-            if target.representative_pixel_area_sr is not None
-            else float(
-                representative_pixel_area_fn(
-                    target.wcs,
-                    tuple(target.shape),
-                    device=image.device,
-                )
-            )
-        )
-        flux_scale = (
-            target_representative_area_sr / max(source_representative_area_sr, 1.0e-16)
-        ) ** 2
         weighted_image = image * source_weight * source_area_sr
         weighted_weight = source_weight * torch.square(source_area_sr)
-        weighted_image = weighted_image * float(flux_scale)
-        weighted_weight = weighted_weight * float(flux_scale)
     else:
         weighted_image = image * source_weight
         weighted_weight = source_weight
@@ -104,41 +79,36 @@ def _exact_conservative_polygon_project(
         weight_chunk = weight_chunk[finite]
 
         for idx in range(int(x_tgt.shape[0])):
-            quad = [
-                (float(x_tgt[idx, corner].item()), float(y_tgt[idx, corner].item()))
-                for corner in range(4)
-            ]
-            area = _polygon_area(quad)
-            if not math.isfinite(area) or area <= 0.0:
+            quad_x = x_tgt[idx]
+            quad_y = y_tgt[idx]
+            area = 0.5 * torch.abs(
+                torch.sum(
+                    quad_x * torch.roll(quad_y, shifts=-1)
+                    - torch.roll(quad_x, shifts=-1) * quad_y
+                )
+            )
+            if not (area > 0.0):
                 continue
-            min_x = max(int(math.ceil(min(point[0] for point in quad) - 0.5)), 0)
-            max_x = min(
-                int(math.floor(max(point[0] for point in quad) + 0.5)), width - 1
-            )
-            min_y = max(int(math.ceil(min(point[1] for point in quad) - 0.5)), 0)
-            max_y = min(
-                int(math.floor(max(point[1] for point in quad) + 0.5)), height - 1
-            )
+            min_x = max(int(torch.ceil(quad_x.min() - 0.5).item()), 0)
+            max_x = min(int(torch.floor(quad_x.max() + 0.5).item()), width - 1)
+            min_y = max(int(torch.ceil(quad_y.min() - 0.5).item()), 0)
+            max_y = min(int(torch.floor(quad_y.max() + 0.5).item()), height - 1)
             if min_x > max_x or min_y > max_y:
                 continue
-            idxs: list[int] = []
-            coeffs: list[float] = []
-            for iy in range(min_y, max_y + 1):
-                for ix in range(min_x, max_x + 1):
-                    clipped = _clip_polygon_to_pixel(quad, x_center=ix, y_center=iy)
-                    overlap = _polygon_area(clipped)
-                    if overlap <= 0.0:
-                        continue
-                    idxs.append(iy * width + ix)
-                    coeffs.append(float(overlap / area))
-            if not idxs:
+            cy = torch.arange(min_y, max_y + 1, dtype=torch.float64, device=image.device)
+            cx = torch.arange(min_x, max_x + 1, dtype=torch.float64, device=image.device)
+            gy, gx = torch.meshgrid(cy, cx, indexing="ij")
+            centers = torch.stack((gx.reshape(-1), gy.reshape(-1)), dim=-1)
+            overlaps = _batch_quad_pixel_areas(quad_x, quad_y, centers)
+            valid = overlaps > 0.0
+            if not valid.any():
                 continue
-            idx_tensor = torch.tensor(idxs, dtype=torch.int64, device=image.device)
-            coeff_tensor = torch.tensor(
-                coeffs, dtype=torch.float32, device=image.device
-            )
-            flat_numer.scatter_add_(0, idx_tensor, numer_chunk[idx] * coeff_tensor)
-            flat_weight.scatter_add_(0, idx_tensor, weight_chunk[idx] * coeff_tensor)
+            vc = centers[valid]
+            vo = overlaps[valid]
+            i_idx = (vc[:, 1].to(dtype=torch.int64) * width + vc[:, 0].to(dtype=torch.int64)).to(dtype=torch.int64)
+            c_coeff = (vo / area).to(dtype=torch.float32)
+            flat_numer.scatter_add_(0, i_idx, numer_chunk[idx] * c_coeff)
+            flat_weight.scatter_add_(0, i_idx, weight_chunk[idx] * c_coeff)
 
     numer = flat_numer.reshape(target.shape)
     weight = flat_weight.reshape(target.shape)

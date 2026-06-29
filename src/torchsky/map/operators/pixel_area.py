@@ -16,26 +16,35 @@ def pixel_area_sr_map(
     shape: tuple[int, int],
     *,
     device: torch.device,
+    chunk_size: int = 128,
 ) -> Tensor:
-    """Estimate per-pixel solid angle in steradians from local WCS Jacobians."""
+    """Estimate per-pixel solid angle in steradians from local WCS Jacobians.
+
+    Processes the image in row chunks to keep peak memory at
+    ``O(chunk_size × width)`` instead of ``O(height × width)``.
+    """
     height, width = int(shape[0]), int(shape[1])
-    y, x = torch.meshgrid(
-        torch.arange(height, dtype=torch.float64, device=device),
-        torch.arange(width, dtype=torch.float64, device=device),
-        indexing="ij",
-    )
-    ra_c, dec_c = wcs.pixel_to_world(x, y)
-    ra_dx, dec_dx = wcs.pixel_to_world(x + 1.0, y)
-    ra_dy, dec_dy = wcs.pixel_to_world(x, y + 1.0)
-    cos_dec = torch.cos(torch.deg2rad(dec_c))
-    dra_dx = wrapped_delta_ra_deg(ra_dx, ra_c) * cos_dec
-    dra_dy = wrapped_delta_ra_deg(ra_dy, ra_c) * cos_dec
-    ddec_dx = dec_dx - dec_c
-    ddec_dy = dec_dy - dec_c
-    det_deg2 = torch.abs(dra_dx * ddec_dy - dra_dy * ddec_dx)
+    area_sr = torch.empty(height, width, dtype=torch.float32, device=device)
     d2r = torch.pi / 180.0
-    area_sr = torch.clamp(det_deg2 * (d2r * d2r), min=1e-16)
-    return area_sr.to(dtype=torch.float32)
+    d2r_sq = d2r * d2r
+    for y_start in range(0, height, chunk_size):
+        y_end = min(y_start + chunk_size, height)
+        y, x = torch.meshgrid(
+            torch.arange(y_start, y_end, dtype=torch.float64, device=device),
+            torch.arange(width, dtype=torch.float64, device=device),
+            indexing="ij",
+        )
+        ra_c, dec_c = wcs.pixel_to_world(x, y)
+        ra_dx, dec_dx = wcs.pixel_to_world(x + 1.0, y)
+        ra_dy, dec_dy = wcs.pixel_to_world(x, y + 1.0)
+        cos_dec = torch.cos(torch.deg2rad(dec_c))
+        dra_dx = wrapped_delta_ra_deg(ra_dx, ra_c) * cos_dec
+        dra_dy = wrapped_delta_ra_deg(ra_dy, ra_c) * cos_dec
+        ddec_dx = dec_dx - dec_c
+        ddec_dy = dec_dy - dec_c
+        det_deg2 = torch.abs(dra_dx * ddec_dy - dra_dy * ddec_dx)
+        area_sr[y_start:y_end] = torch.clamp(det_deg2 * d2r_sq, min=1e-16)
+    return area_sr
 
 
 def representative_pixel_area_sr(

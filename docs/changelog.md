@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.0.dev0] - Unreleased
 
+### Architecture
+
+- **FITS I/O ownership moved to `torchfits`**: FITS images, HDUs, headers,
+  compression, checksums, file caches, tables, Arrow scans, and I/O benchmarks
+  are no longer torchsky-owned surfaces.
+- Torchsky's active scope is WCS, sphere/HEALPix/MOC, catalog geometry,
+  observation operators, mapmaking, scenes, and field models.
+- Residual root I/O and `torchsky.io` / `torchsky.table` surfaces are migration
+  debt pending removal or thin deprecation-only delegation.
+- The next integration baseline is the forthcoming `torchfits 0.5.0`; exact
+  version bounds will be set after release-candidate contract validation.
+
 ### Added
 - **py.typed**: PEP 561 type-checker marker for downstream type inference.
 - **Incorporated legacy `torchfits` v0.3.2 changes into `torchsky`**:

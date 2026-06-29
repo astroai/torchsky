@@ -67,10 +67,11 @@ def polynomial_background(
     *,
     coeffs: Tensor,
     device: torch.device,
-    dtype: torch.dtype = torch.float32,
+    dtype: torch.dtype | None = None,
     normalized_coordinates: bool = True,
 ) -> Tensor:
     """Evaluate a 2D polynomial background in increasing total-degree order."""
+    dtype = dtype or coeffs.dtype
     height, width = int(shape[0]), int(shape[1])
     yy, xx = torch.meshgrid(
         torch.arange(height, dtype=dtype, device=device),

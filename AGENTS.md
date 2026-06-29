@@ -14,6 +14,13 @@ This file gives repository-specific operating guidance for coding agents and mai
 - cross-device execution across CPU, CUDA, and MPS when practical
 - compatibility layers with established astronomy libraries, without forcing primitive-for-primitive mimicry where a higher-level compatibility surface is better
 
+FITS file and table I/O is owned by the sibling
+[`torchfits`](https://github.com/sfabbro/torchfits) package (a required runtime
+dependency). `torchsky` owns sky coordinates, geometry, maps, observation
+operators, scenes, and field models. Exchange tensors, header mappings, table
+batches, and small protocols across this boundary; `torchsky` does not contain
+any FITS/CFITSIO code.
+
 The project should prefer designs that remain viable at survey scale, not just toy examples or notebook-sized inputs.
 The core should not collapse into a thin wrapper around legacy astronomy packages.
 Geometric primitives, mapmaking, and cross-wavelength field representations are central building blocks, not side surfaces.
@@ -22,7 +29,10 @@ Geometric primitives, mapmaking, and cross-wavelength field representations are 
 
 ### PyPI / `pyproject.toml` contract
 
-- **Runtime (`[project].dependencies`)** is intentionally small: **`torch`**, **`numpy`**, plus the compiled extension (CFITSIO-backed FITS I/O, nanobind, etc.). This is what `pip install torchsky` pulls by default.
+- **Runtime (`[project].dependencies`)** is intentionally small: **`torch`**,
+  **`numpy`**, and only compiled geometry/WCS kernels justified by benchmarks.
+  FITS/CFITSIO belongs to `torchfits`, not the `torchsky` wheel. `torchfits` is
+  itself a required runtime dependency (the FITS I/O layer for `torchsky`).
 - **Heavy or domain-ecosystem packages** belong in **`[project.optional-dependencies]`** (`test`, `bench`, `viz`, `map`, `examples`, …), not in the core runtime list. Use them for tests, benchmarks, viz servers, map pipelines, and parity—not as silent requirements of `import torchsky`.
 - **Table interchange:** prefer **PyArrow**-native paths and **`polars`** where a DataFrame-like API is needed; **`pandas`** remains optional (e.g. `to_pandas`, bench scripts).
 - **Supported Python:** **`>=3.12,<3.15`** (`requires-python` in `pyproject.toml`). CI primary matrix uses **3.12**.
@@ -40,7 +50,9 @@ Do **not** guess `python3` or bare `python` on PATH for project work.
 - **`[package.*]`** (pixi-build): build/host/run deps for compiling the wheel; keep aligned with `pyproject.toml` runtime.
 - **Workspace `[dependencies]`** (`default` environment): lean **dev tooling** (pytest, ruff, cmake, pytorch, numpy, …). Do **not** treat this list as “libraries torchsky wraps at runtime.”
 - **Feature-gated environments** (see `pixi.toml`):
-  - **`test`** — `pytest` suite: **astropy**, **fitsio** (Python), **pyarrow**, **polars**, **pandas**, **scipy** (via solve), **requests**, etc., for fixtures, FITS generation, Arrow scans, and interop tests.
+  - **`test`** — `pytest` suite: **astropy**, **torchfits**, **pyarrow**,
+    **polars**, **pandas**, **scipy** (via solve), **requests**, **pytorch-frame**, etc., for WCS
+    fixtures, integration inputs, table batches, and interop tests.
   - **`bench` / `bench-all`** — throughput comparators, plotting, **pandas**, **reproject**, optional map tools.
   - **`sphere-bench`** — HEALPix / sparse **ecosystem** comparators (**healpy**, **hpgeom**, **healsparse**, **astropy-healpix**, **spherical-geometry**, …) and upstream-derived benchmark gates.
   - **`map-compat`**, **`bench-legacy`** — external toolchains and legacy Python stacks as needed.
@@ -49,7 +61,11 @@ Do **not** guess `python3` or bare `python` on PATH for project work.
 - **`pixi run ci-local`** — **preflight-push** + **typecheck** + **test** (local parity with main CI gates before push).
 - **`pixi run ci-local-heavy`** — optional import smoke for sphere comparators in the **`bench-all`** env.
 
-### Where legacy astronomy / I/O packages are allowed
+### I/O ownership and optional ecosystem packages
+
+Use `torchfits` at file boundaries and keep it behind optional adapters or
+application/CLI layers. Core geometry, map, scene, and field code should accept
+in-memory tensors and metadata rather than opening FITS files.
 
 Use **astropy**, **Python fitsio**, **healpy**, **hpgeom**, **healsparse**, **astropy-healpix**, **spherical_geometry**, **pandas**, etc., only in:
 
@@ -59,7 +75,9 @@ Use **astropy**, **Python fitsio**, **healpy**, **hpgeom**, **healsparse**, **as
 - **CI workflows** that install extras for those jobs,
 - **docs** that describe compatibility.
 
-They **must not** become required imports for core **`src/torchsky`** behavior on the default install path. C++ may link **CFITSIO** directly; that is not the same as depending on the **Python** `fitsio` package in library code.
+They **must not** become required imports for core **`src/torchsky`** behavior
+on the default install path. FITS parser, HDU, checksum, compression,
+file-cache, and FITS-table implementations belong in `torchfits`.
 
 ### pip-from-source / wheels (non-Pixi)
 
@@ -106,15 +124,25 @@ They **must not** become required imports for core **`src/torchsky`** behavior o
 ## API and Compatibility Policy
 
 - Public APIs should stay thin and stable unless there is a strong reason to widen them.
-- Prefer **torchsky-native** primitives in `src/torchsky`; use established astronomy stacks (**healpy**, **astropy-healpix**, **spherical-geometry**, **astropy** / Python **fitsio**, **healsparse**, …) as **references, parity baselines, and migration targets**—see **Dependencies, installation, and ecosystem packages** above and `docs/compatibility.md`.
+- Prefer **torchsky-native** geometry and modelling primitives in
+  `src/torchsky`; use `torchfits` for FITS interchange and established
+  astronomy stacks (**healpy**, **astropy-healpix**, **spherical-geometry**,
+  **Astropy**, **healsparse**, …) as references, parity baselines, and migration
+  targets—see **Dependencies, installation, and ecosystem packages** above and
+  `docs/compatibility.md`.
 - Compatibility layers (e.g. healpy-shaped HEALPix under `torchsky.sphere.compat`) should sit **on top of** torchsky kernels (`torchsky.wcs.healpix`, sphere C++/torch paths), not the other way around.
 - Compatibility work should target behavior users depend on, test fixtures, and operational workflows.
 - Avoid exposing low-level internal kernels as public API unless repeated use or composability clearly justifies them.
 
-## Naming: `torchsky.table` vs `dataframe`
+## Table ownership
 
-- **Recommendation: keep `torchsky.table`.** It matches FITS **table HDU** / BINTABLE language, covers **Arrow** datasets/scans, streaming, Parquet bridges, and Polars—not only a single in-memory “dataframe” backend.
-- Renaming to `dataframe` would suggest Pandas/Polars-centric scope, invite churn across `torchsky.io`, docs, and user imports, and still mis-describe low-level Arrow/FITS paths. If a second name is ever needed, prefer a **thin alias** (re-export) after a deprecation cycle, not a wholesale rename.
+- FITS table reads, writes, scans, mutation, Arrow conversion, and predicate
+  pushdown belong to `torchfits.table`.
+- `torchsky.catalogs` may consume tensor/Arrow batches and own sky-domain
+  partitioning, crossmatch, spherical indexing, and catalog modelling.
+- Do not restore `torchsky.table` as a second implementation. Any temporary
+  compatibility alias must be thin, documented, tested, and scheduled for
+  removal.
 
 ## Performance Policy
 
@@ -152,9 +180,14 @@ Use packaged fixtures, upstream test data, or representative real astronomy data
 - catch edge cases synthetic generators miss
 - validate interoperability claims
 
-Examples already present in this repo include upstream-derived benchmark gates, parity suites, and FITS-based integration tests. Extend those patterns rather than inventing one-off checks.
+Examples already present in this repo include upstream-derived benchmark gates,
+parity suites, and FITS-based integration tests. FITS integration fixtures may
+be loaded through `torchfits`; I/O correctness and throughput claims must be
+tested in the `torchfits` repository.
 
-**Perf smoke:** `tests/test_perf_gate.py` enforces loose wall-time ceilings on a few hot paths (HEALPix bulk ops, FITS stub read, interp weights). Override with `TORCHSKY_PERF_GATE_*` env vars documented in that file if a CI runner is unusually slow.
+**Perf smoke:** `tests/test_perf_gate.py` should cover torchsky-owned hot paths
+such as WCS, HEALPix, indexing, resampling, and operators. FITS read/write
+performance gates belong to `torchfits`.
 
 ### For new features or optimizations
 
@@ -174,6 +207,26 @@ Try to include:
 - Do not add broad new dependencies casually.
 - Do not replace exact semantics with approximate shortcuts unless the tradeoff is explicit and tested.
 - Do not reduce torchsky to a wrapper around `scamp`, `sextractor`, `swarp`, `psfex`, LSST Stack components, `drizzle`, `astropy`, `fitsio`, `healpy`, or similar packages.
+- Do not add FITS parsing, HDU/table mutation, checksum, compression,
+  or file-cache code to `torchsky`; contribute it to `torchfits`.
+
+## Work prioritization
+
+Prioritize code by expected scientific and operational impact, then correctness
+risk, then performance at survey scale:
+
+1. Remove duplicated ownership and make invalid states fail closed.
+2. Fix correctness in shared geometry and observation operators, with trusted
+   parity fixtures and exact adjoint/round-trip tests.
+3. Replace asymptotically poor algorithms with indexing, tiling, chunking,
+   sparsity, or matrix-free execution.
+4. Optimize measured hot kernels across realistic small, medium, and massive
+   workloads.
+5. Add convenience surfaces only when they compose the primitives above.
+
+Avoid isolated micro-optimizations, cosmetic refactors, and compatibility
+breadth that do not materially advance correctness, scale, or measured
+throughput.
 
 ## Native Code Guidance
 

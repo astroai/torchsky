@@ -42,7 +42,6 @@ def test_docs_reference_existing_local_files() -> None:
         "examples/example_image_cutouts.py",
         "examples/example_image_dataset.py",
         "examples/example_image_mef.py",
-        "examples/example_ml_pipeline.py",
         "examples/example_polars.py",
         "examples/example_spectral_sht.py",
         "examples/example_table.py",

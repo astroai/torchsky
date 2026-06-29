@@ -1059,6 +1059,55 @@ def test_alm2map_batched_scalar_matches_rowwise() -> None:
     torch.testing.assert_close(out_b, ref, atol=0.0, rtol=0.0)
 
 
+def test_alm2map_ring_torch_gradcheck(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Analytic alm->map Jacobian matches finite differences (ring torch path)."""
+    nside = 4
+    lmax = 3
+    nalm = alm_size(lmax)
+    alm = torch.randn(nalm, dtype=torch.complex128, requires_grad=True)
+
+    monkeypatch.setenv("TORCHSKY_SCALAR_ALM2MAP_RING_TORCH", "force")
+
+    def f(a: torch.Tensor) -> torch.Tensor:
+        return alm2map(a, nside=nside, lmax=lmax)
+
+    assert torch.autograd.gradcheck(f, (alm,), atol=1e-4, rtol=1e-4)
+
+
+def test_map2alm_ring_torch_gradcheck(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Analytic map->alm Jacobian matches finite differences (ring torch path)."""
+    nside = 4
+    lmax = 3
+    npix = hp.nside2npix(nside)
+    m = torch.randn(npix, dtype=torch.float64, requires_grad=True)
+
+    monkeypatch.setenv("TORCHSKY_SCALAR_MAP2ALM_RING_TORCH", "force")
+
+    def f(x: torch.Tensor) -> torch.Tensor:
+        return map2alm(x, nside=nside, lmax=lmax, mmax=lmax)
+
+    assert torch.autograd.gradcheck(f, (m,), atol=1e-4, rtol=1e-4)
+
+
+def test_alm2map_map2alm_roundtrip_gradcheck(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Full map->alm->map roundtrip preserves gradients (both paths forced)."""
+    nside = 4
+    lmax = 3
+    npix = hp.nside2npix(nside)
+    m = torch.randn(npix, dtype=torch.float64, requires_grad=True)
+
+    monkeypatch.setenv("TORCHSKY_SCALAR_MAP2ALM_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SCALAR_ALM2MAP_RING_TORCH", "force")
+
+    def f(x: torch.Tensor) -> torch.Tensor:
+        a = map2alm(x, nside=nside, lmax=lmax, mmax=lmax)
+        return alm2map(a, nside=nside, lmax=lmax)
+
+    assert torch.autograd.gradcheck(f, (m,), atol=2e-4, rtol=2e-4)
+
+
 def test_validated_spin_profile_defaults_match_docs() -> None:
     """Bench replay profile defaults (see docs/benchmarks.md): RING Fourier + spin concat on."""
     import torchsky.sphere.spectral as spectral_mod

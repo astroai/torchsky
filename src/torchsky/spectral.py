@@ -669,7 +669,7 @@ class SpectralReader:
             # Create spectral axis
             spectral_axis = SpectralAxis(
                 values=wavelength,
-                unit="Angstrom",  # Default, should be read from header
+                unit=table_hdu.header.get("CUNIT1", "Angstrom"),
                 type="WAVE",
             )
 

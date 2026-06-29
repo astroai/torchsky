@@ -5,9 +5,16 @@
 [![CI status](https://github.com/sfabbro/torchsky/actions/workflows/ci.yml/badge.svg)](https://github.com/sfabbro/torchsky/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-GPL--2.0-blue.svg)](LICENSE)
 
-`torchsky` is a **high-performance, torch-native astronomy stack** designed for survey-scale joint modelling of sky observations. It provides optimized implementations of FITS I/O, FITS binary tables, WCS coordinate transforms, spherical geometry, HEALPix workflows, and mapmaking.
+`torchsky` is a **high-performance, torch-native astronomy stack** for
+survey-scale coordinates, spherical geometry, catalog indexing, mapmaking,
+observation operators, and joint modelling of sky observations.
 
-The project is built for workflows where tensor placement (CPU/CUDA/MPS), differentiability, and high-throughput data pipelines matter. It replaces legacy astronomy stacks in performance-critical paths while maintaining clean compatibility layers.
+FITS image and table I/O is provided by the focused
+[`torchfits`](https://github.com/sfabbro/torchfits) package. The boundary is
+intentional: `torchfits` loads tensors and metadata; `torchsky` performs
+sky-domain computation without embedding a second FITS/CFITSIO engine.
+The integration target is the forthcoming `torchfits 0.5.0`; its development
+API may change before release.
 
 ---
 
@@ -25,21 +32,27 @@ The project is built for workflows where tensor placement (CPU/CUDA/MPS), differ
 
 ## Key Features
 
-- ⚡ **Zero-Copy FITS I/O**: Direct-to-tensor data loading (image and binary table HDUs) backed by a compiled C++/nanobind engine.
 - 🌌 **Torch-Native WCS**: FITS-WCS transforms (`TAN`, `SIN`, `ARC`, `AIT`, etc.) and polynomial distortions (`SIP`, `TPV`, `TNX`, `ZPX`) running directly on CPU, CUDA, and MPS.
 - 🌐 **Spherical Geometry & HEALPix**: Vectorized HEALPix primitives, Spherical Polygons, Multi-Order Coverage (MOC) maps, and high-performance Spherical Harmonic Transforms (SHT).
-- 🗺️ **Scalable Mapmaking**: Area-aware coadds, spectral-cube stacking, and observation operator bundles.
+- 🗺️ **Scalable Mapmaking**: Area-aware coadds, spectral-cube stacking, matrix-free observation operator bundles, and bounded-memory execution.
+- 🔭 **Survey-Scale Catalog Geometry**: Tensor-native crossmatch and spherical indexing primitives designed for candidate pruning and chunked execution.
 - 🧠 **Continuous Field Models**: Experimental continuous spectral neural fields (\(F_\theta(\mathrm{RA}, \mathrm{Dec}, \lambda)\)) for implicit forward modeling.
-- 💾 **Dataframe Interoperability**: Seamless integration with Arrow, Polars, DuckDB, and Pandas.
+- 🔌 **Explicit I/O Boundary**: Tensor/header/table-batch interchange with `torchfits` and other readers.
 
 ---
 
 ## Performance Highlights
 
-`torchsky` is built for survey-scale workloads. On comparable data scales, it ranks first on throughput against standard Python astronomy libraries:
-- **FITS I/O**: Maintains a **100% win rate** on throughput against `fitsio` and `astropy` for large datasets.
-- **WCS Transforms**: Pure-PyTorch execution delivers **1.1x–1.3x speedups** in high-volume ($N > 100\text{k}$) forward and inverse transformations.
-- **HEALPix Primitives**: OpenMP-parallelized Ring FFT and Legendre recurrence block kernels out-perform pure-Python alternatives.
+`torchsky` performance claims cover only torchsky-owned computation:
+
+- **WCS transforms**: tensor-native forward, inverse, Jacobian, spectral/time,
+  and TAB paths with focused parity and scale benchmarks.
+- **Sphere/HEALPix**: vectorized pixel, region, sparse-map, and harmonic
+  primitives with upstream comparator gates.
+- **Map/catalog workflows**: end-to-end throughput, peak memory, candidate
+  reduction, exact-adjoint checks, and science-error metrics are the priority.
+
+FITS image/table throughput is measured and documented in `torchfits`.
 
 For detailed benchmarks and methodology, see the [Benchmarks Guide](docs/benchmarks.md).
 
@@ -53,11 +66,20 @@ Install the pre-built wheels from PyPI:
 pip install torchsky
 ```
 
-Pre-built wheels target Python `>=3.12,<3.15` and PyTorch `>=2.0` on Linux and macOS. Core runtime dependencies are minimal: only `torch` and `numpy`.
+Pre-built wheels target Python `>=3.12,<3.15` and PyTorch `>=2.0` on
+Linux and macOS. Install `torchfits` separately when a workflow reads or writes
+FITS files:
+
+```bash
+pip install torchsky torchfits
+```
+
+Until `torchfits 0.5.0` is published, install its development checkout when
+validating the combined stack.
 
 ### Optional Extras
 
-- **`viz`**: Browser FITS / sky viewer
+- **`viz`**: Browser sky viewer
   ```bash
   pip install "torchsky[viz]"
   ```
@@ -74,56 +96,38 @@ Pre-built wheels target Python `>=3.12,<3.15` and PyTorch `>=2.0` on Linux and m
 
 ## Quick Start
 
-### 1. Read FITS Image Data to GPU
+### 1. Load Data With torchfits, Compute With torchsky
 ```python
-import torchsky
+import torchfits
+from torchsky.wcs import WCS
 
-# Load an image directly into PyTorch on a requested device
-data, header = torchsky.read(
+# File I/O belongs to torchfits.
+data, header = torchfits.read(
     "science.fits",
     hdu="auto",
     device="cuda",
     return_header=True,
 )
 
-print(data.shape, data.dtype)
-print(header.get("OBJECT"))
+# Sky-coordinate computation belongs to torchsky.
+wcs = WCS(header)
+ra, dec = wcs.pixel_to_world(x, y)
 ```
 
-### 2. Read Sub-region Cutouts (Lazy I/O)
+### 2. Stream Catalog Batches
 ```python
-# Extract stamp cutouts without loading the full image into memory
-stamp = torchsky.io.read_subset(
-    "mosaic.fits",
-    hdu=0,
-    x1=1000,
-    y1=1000,
-    x2=1256,
-    y2=1256,
-)
-```
-
-### 3. FITS Table Scan with Predicate Pushdown
-```python
-# Filter and project columns before loading into Python
-table = torchsky.table.read(
+# torchfits owns FITS table projection and predicate pushdown.
+for batch in torchfits.table.scan(
     "catalog.fits",
     hdu=1,
     columns=["RA", "DEC", "MAG_G"],
     where="MAG_G < 20",
-)
+    batch_size=100_000,
+):
+    process_catalog_batch(batch)
 ```
 
-### 4. Differentiable WCS Coordinate Transform
-```python
-# Transform sky coordinates and back using torch-native WCS
-wcs = torchsky.get_wcs("science.fits", hdu="auto")
-
-ra, dec = wcs.pixel_to_world(x, y)
-x_back, y_back = wcs.world_to_pixel(ra, dec)
-```
-
-### 5. HEALPix Operations
+### 3. HEALPix Operations
 ```python
 import torch
 import torchsky.sphere as sphere
@@ -146,7 +150,6 @@ Contributors should use `pixi` for environment management:
 git clone https://github.com/sfabbro/torchsky.git
 cd torchsky
 pixi install
-./extern/vendor.sh      # Download CFITSIO source dependency
 pixi run dev            # Rebuild native extensions
 pixi run verify         # Verify torchsky import smoke
 ```
@@ -166,11 +169,11 @@ For more information, see the [Contributing Guide](docs/contributing.md).
 ### Getting Started & Installation
 - [Documentation Index](docs/README.md) &mdash; Entry point for repository docs.
 - [Getting Started Guide](docs/getting-started.md) &mdash; 10-minute introduction to the stack.
-- [Installation Guide](docs/install.md) &mdash; CFITSIO and CUDA build configurations.
+- [Installation Guide](docs/install.md) &mdash; torchfits integration and native build configuration.
 
 ### Core Modules
-- [I/O Guide](docs/io.md) &mdash; Unified readers, caching, and checksums.
-- [Tables Guide](docs/table.md) &mdash; Arrow scanners and table mutations.
+- [I/O Boundary Guide](docs/io.md) &mdash; `torchfits` integration and tensor/metadata contracts.
+- [Table Boundary Guide](docs/table.md) &mdash; `torchfits.table` and torchsky catalog batches.
 - [WCS Guide](docs/wcs.md) &mdash; Coordinate projections and distortions.
 - [Sphere & HEALPix Guide](docs/sphere.md) &mdash; Spherical geometry and SHT.
 - [Mapmaking Guide](docs/map.md) &mdash; Image-plane coadds and product targets.
@@ -186,7 +189,7 @@ For more information, see the [Contributing Guide](docs/contributing.md).
 
 ### Platform & Tooling
 - [CLI Guide](docs/cli.md) &mdash; Command-line query, print, and viz tools.
-- [Visualization Guide](docs/viz.md) &mdash; Browser FITS/HiPS server.
+- [Visualization Guide](docs/viz.md) &mdash; Browser sky/HiPS server.
 - [Ecosystem Compatibility Matrix](docs/compatibility.md) &mdash; AST, astropy, healpy interop boundaries.
 - [Benchmarks Guide](docs/benchmarks.md) &mdash; Command lines, runs, and correctness gates.
 - [Contributing Guidelines](docs/contributing.md) &mdash; PR policy and code rules.

@@ -6,8 +6,8 @@ and streaming dataset adapters.
 ## What This Namespace Is For
 
 Use this namespace when tabular sky data needs spatial matching or partitioned
-streaming. Use [table.md](table.md) for FITS table I/O and Arrow/Polars/DuckDB
-interop.
+streaming. Use [table.md](table.md) for the `torchfits.table` boundary and
+Arrow/tensor batch interchange.
 
 ## Core Concepts
 

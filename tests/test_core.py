@@ -3,7 +3,6 @@ import pytest
 import torch
 
 from torchsky.core import (
-    ChecksumVerifier,
     CompressionHandler,
     CompressionType,
     FITSCore,
@@ -168,13 +167,6 @@ def test_is_compressed():
     assert CompressionHandler.is_compressed({"ZCMPTYPE": "   "}) is False
     assert CompressionHandler.is_compressed({"ZCMPTYPE": "GZIP_1"}) is True
 
-
-def test_checksum_verifier_in_memory_methods_fail_closed():
-    with pytest.raises(NotImplementedError, match="verify_hdu_checksums"):
-        ChecksumVerifier.verify_datasum(np.arange(3), "0")
-
-    with pytest.raises(NotImplementedError, match="verify_hdu_checksums"):
-        ChecksumVerifier.verify_checksum({"CHECKSUM": "unused"})
 
 
 def test_get_data_info_naxis_zero():

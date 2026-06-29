@@ -40,7 +40,7 @@ import torch  # noqa: E402
 
 import fitsio  # noqa: E402
 import torchsky  # noqa: E402
-import torchsky.cpp as torchsky_cpp  # noqa: E402
+import torchfits.cpp as torchfits_cpp  # noqa: E402
 
 try:
     import psutil
@@ -414,8 +414,8 @@ def _run_scenario(
     start_row = 1
     num_rows = rows
 
-    def _torchsky_cpp_numpy_chunk():
-        return torchsky_cpp.read_fits_table_rows_numpy(
+    def _torchfits_cpp_numpy_chunk():
+        return torchfits_cpp.read_fits_table_rows_numpy(
             str(file_path), 1, col_list, start_row, num_rows, False
         )
 
@@ -456,10 +456,10 @@ def _run_scenario(
         return pa.table(pydict)
 
     methods = [
-        ("torchsky_cpp_numpy_raw", _torchsky_cpp_numpy_chunk),
+        ("torchfits_cpp_numpy_raw", _torchfits_cpp_numpy_chunk),
         (
-            "torchsky_cpp_numpy_to_arrow",
-            lambda: _torchsky_numpy_chunk_to_arrow(_torchsky_cpp_numpy_chunk()),
+            "torchfits_cpp_numpy_to_arrow",
+            lambda: _torchsky_numpy_chunk_to_arrow(_torchfits_cpp_numpy_chunk()),
         ),
         (
             "torchsky_read_raw",

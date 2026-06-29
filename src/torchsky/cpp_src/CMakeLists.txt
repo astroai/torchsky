@@ -24,23 +24,7 @@ else()
     message(STATUS "IPO/LTO not supported: ${IPO_ERROR}")
 endif()
 
-# Enable SIMD optimizations globally (propagates to cfitsio)
-# Note: For wheels, avoid -march=native. Using reasonable baselines.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-    # Enable SSSE3 for Rice compression optimization (reasonable baseline for modern PyTorch)
-    add_compile_definitions(CFITSIO_HAVE_SSSE3)
-    add_compile_options(-mssse3)
-    message(STATUS "Enabled x86_64 optimizations (SSSE3)")
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-    # ARM64 implies NEON, -O3 handles vectorization well.
-    # On Apple Silicon, -mcpu=native ensures correct scheduling for M-series.
-    # This assumes building on M1+ for M1+ target (standard for macOS wheels).
-    if(APPLE)
-       message(STATUS "Enabled Native Apple Silicon optimizations")
-    else()
-       message(STATUS "Enabled ARM64 optimizations")
-    endif()
-endif()
+
 
 
 # Add environment prefix to search path (important for pixi/conda)
@@ -193,175 +177,9 @@ if(TARGET torch)
     endif()
 endif()
 
-# Find ZLIB (Required for compressed FITS support)
-find_package(ZLIB REQUIRED)
-set(_TORCHSKY_ZLIB_SELECTED "")
-if(DEFINED ZLIB_LIBRARY_RELEASE AND ZLIB_LIBRARY_RELEASE)
-    set(_TORCHSKY_ZLIB_SELECTED "${ZLIB_LIBRARY_RELEASE}")
-elseif(DEFINED ZLIB_LIBRARY AND ZLIB_LIBRARY)
-    set(_TORCHSKY_ZLIB_SELECTED "${ZLIB_LIBRARY}")
-endif()
 
-if(_TORCHSKY_ZLIB_SELECTED AND NOT EXISTS "${_TORCHSKY_ZLIB_SELECTED}")
-    get_filename_component(_TORCHSKY_ZLIB_DIR "${_TORCHSKY_ZLIB_SELECTED}" DIRECTORY)
-    set(_TORCHSKY_ZLIB_CANDIDATES
-        "${_TORCHSKY_ZLIB_DIR}/libz.1.dylib"
-        "${_TORCHSKY_ZLIB_DIR}/libzlib.dylib"
-    )
-    foreach(_zlib_candidate IN LISTS _TORCHSKY_ZLIB_CANDIDATES)
-        if(EXISTS "${_zlib_candidate}")
-            message(WARNING "ZLIB library path '${_TORCHSKY_ZLIB_SELECTED}' does not exist; using '${_zlib_candidate}'")
-            if(NOT EXISTS "${_TORCHSKY_ZLIB_SELECTED}")
-                file(CREATE_LINK "${_zlib_candidate}" "${_TORCHSKY_ZLIB_SELECTED}" SYMBOLIC RESULT _TORCHSKY_ZLIB_LINK_RESULT)
-                if(_TORCHSKY_ZLIB_LINK_RESULT)
-                    message(WARNING "Failed to create compatibility symlink '${_TORCHSKY_ZLIB_SELECTED}' -> '${_zlib_candidate}': ${_TORCHSKY_ZLIB_LINK_RESULT}")
-                else()
-                    message(STATUS "Created compatibility symlink '${_TORCHSKY_ZLIB_SELECTED}' -> '${_zlib_candidate}'")
-                endif()
-            endif()
-            set(ZLIB_LIBRARY_RELEASE "${_zlib_candidate}" CACHE FILEPATH "Path to a library." FORCE)
-            set(ZLIB_LIBRARY "${_zlib_candidate}" CACHE FILEPATH "Path to a library." FORCE)
-            if(TARGET ZLIB::ZLIB)
-                set_property(TARGET ZLIB::ZLIB PROPERTY IMPORTED_LOCATION "${_zlib_candidate}")
-                set_property(TARGET ZLIB::ZLIB PROPERTY IMPORTED_LOCATION_RELEASE "${_zlib_candidate}")
-            endif()
-            break()
-        endif()
-    endforeach()
-endif()
 
-if(ZLIB_FOUND)
-    message(STATUS "Found ZLIB: ${ZLIB_INCLUDE_DIRS}")
-else()
-    message(FATAL_ERROR "ZLIB not found - required for compressed FITS support")
-endif()
 
-get_filename_component(TORCHSKY_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
-set(CFITSIO_SOURCE_DIR "${TORCHSKY_REPO_ROOT}/extern/cfitsio")
-set(TORCHSKY_VENDOR_SCRIPT "${TORCHSKY_REPO_ROOT}/extern/vendor.sh")
-option(TORCHSKY_AUTO_VENDOR_DEPS "Auto-run extern/vendor.sh when vendored deps are missing" ON)
-set(TORCHSKY_VENDOR_RAN FALSE)
-
-macro(torchsky_run_vendor_once)
-    if(TORCHSKY_AUTO_VENDOR_DEPS AND NOT TORCHSKY_VENDOR_RAN)
-        if(EXISTS "${TORCHSKY_VENDOR_SCRIPT}")
-            message(STATUS "Vendored deps missing; running ${TORCHSKY_VENDOR_SCRIPT}")
-            execute_process(
-                COMMAND bash "${TORCHSKY_VENDOR_SCRIPT}"
-                WORKING_DIRECTORY "${TORCHSKY_REPO_ROOT}"
-                RESULT_VARIABLE TORCHSKY_VENDOR_RESULT
-            )
-            if(NOT TORCHSKY_VENDOR_RESULT EQUAL 0)
-                message(FATAL_ERROR "Failed to run ${TORCHSKY_VENDOR_SCRIPT} (exit ${TORCHSKY_VENDOR_RESULT})")
-            endif()
-            set(TORCHSKY_VENDOR_RAN TRUE)
-        endif()
-    endif()
-endmacro()
-
-# Find CFITSIO
-option(TORCHSKY_USE_VENDORED_CFITSIO "Prefer vendored CFITSIO over environment" ON)
-set(TORCHSKY_NIOBUF "" CACHE STRING "Override CFITSIO NIOBUF (default 40)")
-set(TORCHSKY_MINDIRECT "" CACHE STRING "Override CFITSIO MINDIRECT (default 8640)")
-
-if(TORCHSKY_USE_VENDORED_CFITSIO)
-    unset(CFITSIO_FOUND CACHE)
-    unset(CFITSIO_INCLUDE_DIR CACHE)
-    unset(CFITSIO_LIBRARY CACHE)
-    unset(CFITSIO_INCLUDE_DIRS CACHE)
-    unset(CFITSIO_LIBRARIES CACHE)
-    unset(CFITSIO_LIBRARY_DIRS CACHE)
-    set(CFITSIO_FOUND FALSE)
-endif()
-
-if(NOT TORCHSKY_USE_VENDORED_CFITSIO)
-    find_package(PkgConfig QUIET)
-    if(PKG_CONFIG_FOUND)
-        pkg_check_modules(CFITSIO QUIET cfitsio)
-    endif()
-
-    if(NOT CFITSIO_FOUND)
-        find_path(CFITSIO_INCLUDE_DIR fitsio.h)
-        find_library(CFITSIO_LIBRARY cfitsio)
-        if(CFITSIO_INCLUDE_DIR AND CFITSIO_LIBRARY)
-            set(CFITSIO_FOUND TRUE)
-        endif()
-    endif()
-endif()
-
-if(CFITSIO_FOUND)
-    message(STATUS "Found environment CFITSIO: ${CFITSIO_INCLUDE_DIRS} ${CFITSIO_LIBRARIES}")
-else()
-    # Vendor CFITSIO as fallback
-    if(NOT EXISTS "${CFITSIO_SOURCE_DIR}/CMakeLists.txt")
-        torchsky_run_vendor_once()
-    endif()
-
-    if(EXISTS "${CFITSIO_SOURCE_DIR}/CMakeLists.txt")
-        message(STATUS "Building vendored CFITSIO from ${CFITSIO_SOURCE_DIR}")
-
-        # CFITSIO hard-defines NIOBUF/MINDIRECT in headers. When we want to tune these
-        # compile-time constants, patch in #ifndef guards once so command-line -D values
-        # can actually take effect.
-        if(TORCHSKY_NIOBUF OR TORCHSKY_MINDIRECT)
-            set(_CFITSIO_FITSIO_H "${CFITSIO_SOURCE_DIR}/fitsio.h")
-            if(EXISTS "${_CFITSIO_FITSIO_H}")
-                file(READ "${_CFITSIO_FITSIO_H}" _fitsio_h_content)
-                if(NOT _fitsio_h_content MATCHES "#ifndef NIOBUF")
-                    string(REPLACE
-                        "#define NIOBUF  40  /* number of IO buffers to create (default = 40) */"
-                        "#ifndef NIOBUF\n#define NIOBUF  40  /* number of IO buffers to create (default = 40) */\n#endif"
-                        _fitsio_h_content
-                        "${_fitsio_h_content}"
-                    )
-                    file(WRITE "${_CFITSIO_FITSIO_H}" "${_fitsio_h_content}")
-                endif()
-            endif()
-
-            set(_CFITSIO_FITSIO2_H "${CFITSIO_SOURCE_DIR}/fitsio2.h")
-            if(EXISTS "${_CFITSIO_FITSIO2_H}")
-                file(READ "${_CFITSIO_FITSIO2_H}" _fitsio2_h_content)
-                if(NOT _fitsio2_h_content MATCHES "#ifndef MINDIRECT")
-                    string(REPLACE
-                        "#define MINDIRECT 8640   /* minimum size for direct reads and writes */"
-                        "#ifndef MINDIRECT\n#define MINDIRECT 8640   /* minimum size for direct reads and writes */\n#endif"
-                        _fitsio2_h_content
-                        "${_fitsio2_h_content}"
-                    )
-                    file(WRITE "${_CFITSIO_FITSIO2_H}" "${_fitsio2_h_content}")
-                endif()
-            endif()
-        endif()
-
-        # CFITSIO Build Options
-        set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libraries" FORCE)
-        set(TESTS OFF CACHE BOOL "Disable tests" FORCE)
-        set(UTILS OFF CACHE BOOL "Disable utils" FORCE)
-        set(USE_PTHREADS ON CACHE BOOL "Enable thread-safe build" FORCE)
-
-        # Force position-independent code for static library to be linked into shared library
-        set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-
-        add_subdirectory("${CFITSIO_SOURCE_DIR}" cfitsio_build)
-
-        # CFITSIO target is named 'cfitsio'
-        set(CFITSIO_LIBRARY cfitsio)
-        set(CFITSIO_INCLUDE_DIR "${CFITSIO_SOURCE_DIR}")
-        set(CFITSIO_FOUND TRUE)
-        if(TORCHSKY_NIOBUF)
-            # CFITSIO reads this compile-time macro directly from fitsio.h.
-            target_compile_definitions(cfitsio PRIVATE NIOBUF=${TORCHSKY_NIOBUF})
-            message(STATUS "Overriding CFITSIO NIOBUF=${TORCHSKY_NIOBUF}")
-        endif()
-        if(TORCHSKY_MINDIRECT)
-            # CFITSIO direct I/O threshold (bytes), defined in fitsio2.h.
-            target_compile_definitions(cfitsio PRIVATE MINDIRECT=${TORCHSKY_MINDIRECT})
-            message(STATUS "Overriding CFITSIO MINDIRECT=${TORCHSKY_MINDIRECT}")
-        endif()
-    else()
-        message(FATAL_ERROR "CFITSIO not found in environment and vendored version not found at ${CFITSIO_SOURCE_DIR}. Run ./extern/vendor.sh")
-    endif()
-endif()
 
 # Find DLPack headers (used for zero-copy tensor exchange)
 find_path(DLPACK_INCLUDE_DIR dlpack/dlpack.h)
@@ -378,10 +196,10 @@ set(SOURCES
 )
 
 # Create python binding module
-nanobind_add_module(cpp ${SOURCES})
+nanobind_add_module(_cpp ${SOURCES})
 
 # Link libraries
-target_link_libraries(cpp PRIVATE ${TORCH_LIBRARIES})
+target_link_libraries(_cpp PRIVATE ${TORCH_LIBRARIES})
 
 # Link torch_python for THPVariable_Wrap (bypasses DLPack overhead)
 execute_process(
@@ -397,35 +215,22 @@ unset(TORCH_PYTHON_LIBRARY_FALLBACK CACHE)
 
 find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_ROOT}/lib" NO_DEFAULT_PATH)
 if(TORCH_PYTHON_LIBRARY)
-    target_link_libraries(cpp PRIVATE ${TORCH_PYTHON_LIBRARY})
+    target_link_libraries(_cpp PRIVATE ${TORCH_PYTHON_LIBRARY})
     message(STATUS "Found libtorch_python: ${TORCH_PYTHON_LIBRARY}")
 else()
     message(WARNING "libtorch_python not found in ${TORCH_ROOT}/lib - tensor returns will use slower DLPack path")
 endif()
 
-if(TARGET cfitsio)
-    target_link_libraries(cpp PRIVATE cfitsio)
-    target_include_directories(cpp PRIVATE "${CFITSIO_INCLUDE_DIR}")
-else()
-    target_link_libraries(cpp PRIVATE ${CFITSIO_LIBRARIES} ${CFITSIO_LIBRARY})
-    target_include_directories(cpp PRIVATE ${CFITSIO_INCLUDE_DIRS} ${CFITSIO_INCLUDE_DIR})
-    if(CFITSIO_LIBRARY_DIRS)
-        target_link_directories(cpp PRIVATE ${CFITSIO_LIBRARY_DIRS})
-    endif()
-endif()
-target_link_libraries(cpp PRIVATE ZLIB::ZLIB)
-
 if(DLPACK_INCLUDE_DIR)
-    target_include_directories(cpp PRIVATE ${DLPACK_INCLUDE_DIR})
+    target_include_directories(_cpp PRIVATE ${DLPACK_INCLUDE_DIR})
 endif()
-target_compile_definitions(cpp PRIVATE HAS_CFITSIO)
 
 
 # Compiler flags
-target_compile_definitions(cpp PRIVATE VERSION_INFO="")
-target_compile_features(cpp PRIVATE cxx_std_17)
+target_compile_definitions(_cpp PRIVATE VERSION_INFO="")
+target_compile_features(_cpp PRIVATE cxx_std_17)
 
 
 # Install the compiled module
 # For scikit-build-core, install to the package directory
-install(TARGETS cpp DESTINATION torchsky)
+install(TARGETS _cpp DESTINATION torchsky)

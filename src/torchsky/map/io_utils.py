@@ -2,7 +2,7 @@
 
 from torch import Tensor
 
-import torchsky.cpp as _cpp
+import torchfits.cpp as _cpp
 
 from ..hdu import Header
 from ..io import read

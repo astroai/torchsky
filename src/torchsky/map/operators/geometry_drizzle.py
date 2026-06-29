@@ -143,19 +143,26 @@ def _clip_polygon_to_rect(
     return poly
 
 
-def _eval_inversion(
-    pixmap: Tensor,
-    x: float,
-    y: float,
-    xref: float,
-    yref: float,
-) -> float | None:
-    mapped = _interpolate_point_from_pixmap(pixmap, x, y)
-    if mapped is None:
-        return None
-    dx = mapped[0] - xref
-    dy = mapped[1] - yref
-    return dx * dx + dy * dy
+def _batch_interpolate_pixmap(
+    pixmap: Tensor, xs: Tensor, ys: Tensor
+) -> Tensor:
+    H, W = pixmap.shape[:2]
+    i0 = xs.to(torch.int64).clamp(0, W - 2)
+    j0 = ys.to(torch.int64).clamp(0, H - 2)
+    x = xs - i0.to(xs.dtype)
+    y = ys - j0.to(ys.dtype)
+    x1 = 1.0 - x
+    y1 = 1.0 - y
+    f00 = pixmap[j0, i0]
+    f10 = pixmap[j0, i0 + 1]
+    f01 = pixmap[j0 + 1, i0]
+    f11 = pixmap[j0 + 1, i0 + 1]
+    return (
+        f00 * (x1 * y1).unsqueeze(-1)
+        + f10 * (x * y1).unsqueeze(-1)
+        + f01 * (x1 * y).unsqueeze(-1)
+        + f11 * (x * y).unsqueeze(-1)
+    )
 
 
 def _invert_pixmap(
@@ -175,34 +182,47 @@ def _invert_pixmap(
     ymax_f = float(ymax) + 0.5
     dx = xmax_f - xmin_f
     dy = ymax_f - ymin_f
+    device = pixmap.device
+    dtype = pixmap.dtype
+    xs = torch.empty(4, device=device, dtype=dtype)
+    ys = torch.empty(4, device=device, dtype=dtype)
+    xout_t = torch.tensor(xout, device=device, dtype=dtype)
+    yout_t = torch.tensor(yout, device=device, dtype=dtype)
     niter = 0
     while (dx > _DRIZZLE_MAX_INV_ERR or dy > _DRIZZLE_MAX_INV_ERR) and niter < 50:
         niter += 1
-        x1 = xmax_f - gr * dx
-        x2 = xmin_f + gr * dx
-        y1 = ymax_f - gr * dy
-        y2 = ymin_f + gr * dy
-        d11 = _eval_inversion(pixmap, x1, y1, xout, yout)
-        d12 = _eval_inversion(pixmap, x1, y2, xout, yout)
-        d21 = _eval_inversion(pixmap, x2, y1, xout, yout)
-        d22 = _eval_inversion(pixmap, x2, y2, xout, yout)
-        if None in (d11, d12, d21, d22):
+        x1_val = xmax_f - gr * dx
+        x2_val = xmin_f + gr * dx
+        y1_val = ymax_f - gr * dy
+        y2_val = ymin_f + gr * dy
+        xs[0] = x1_val
+        xs[1] = x1_val
+        xs[2] = x2_val
+        xs[3] = x2_val
+        ys[0] = y1_val
+        ys[1] = y2_val
+        ys[2] = y1_val
+        ys[3] = y2_val
+        mapped = _batch_interpolate_pixmap(pixmap, xs, ys)
+        if not torch.isfinite(mapped).all():
             return None
-        assert (
-            d11 is not None and d12 is not None and d21 is not None and d22 is not None
-        )
+        errs = (mapped[:, 0] - xout_t).pow_(2) + (mapped[:, 1] - yout_t).pow_(2)
+        d11 = errs[0].item()
+        d12 = errs[1].item()
+        d21 = errs[2].item()
+        d22 = errs[3].item()
         if d11 < d12 and d11 < d21 and d11 < d22:
-            xmax_f = x2
-            ymax_f = y2
+            xmax_f = x2_val
+            ymax_f = y2_val
         elif d12 < d11 and d12 < d21 and d12 < d22:
-            xmax_f = x2
-            ymin_f = y1
+            xmax_f = x2_val
+            ymin_f = y1_val
         elif d21 < d11 and d21 < d12 and d21 < d22:
-            xmin_f = x1
-            ymax_f = y2
+            xmin_f = x1_val
+            ymax_f = y2_val
         else:
-            xmin_f = x1
-            ymin_f = y1
+            xmin_f = x1_val
+            ymin_f = y1_val
         dx = xmax_f - xmin_f
         dy = ymax_f - ymin_f
     if niter == 50:
@@ -511,6 +531,144 @@ def _clip_polygon_to_pixel(
     return poly
 
 
+def _half_plane_clip_batch(
+    x: Tensor,
+    y: Tensor,
+    n: Tensor,
+    axis: int,
+    boundaries: Tensor,
+    keep_greater: bool,
+) -> tuple[Tensor, Tensor, Tensor]:
+    M, V = x.shape
+    device = x.device
+
+    nan_scalar = torch.tensor(float("nan"), device=device)
+    Vn_slots = 2 * V
+    slots = torch.full((M, Vn_slots, 2), float("nan"), dtype=x.dtype, device=device)
+    idx_m = torch.arange(M, device=device)
+
+    def inside(vals: Tensor, bnd: Tensor) -> Tensor:
+        return vals >= bnd if keep_greater else vals <= bnd
+
+    bnd = boundaries
+
+    last_idx = (n - 1).clamp(min=0)
+    e_valid = n > 0
+    px = x[idx_m, last_idx]
+    py = y[idx_m, last_idx]
+    cx_ = x[:, 0]
+    cy_ = y[:, 0]
+
+    pv = px if axis == 0 else py
+    cv = cx_ if axis == 0 else cy_
+    pi = inside(pv, bnd)
+    ci = inside(cv, bnd)
+
+    dv = cv - pv
+    dv_s = torch.where(torch.abs(dv) < 1e-12, torch.ones_like(dv), dv)
+    t = torch.where(torch.abs(dv) < 1e-12, torch.zeros_like(dv), (bnd - pv) / dv_s)
+    xi_ = px + t * (cx_ - px)
+    yi_ = py + t * (cy_ - py)
+
+    add_both = ci & ~pi
+    add_curr = ci & pi
+    add_int = ~ci & pi
+
+    s0_mask = (add_both | add_int) & e_valid
+    s1_mask = (add_both | add_curr) & e_valid
+    slots[:, 0, 0] = torch.where(s0_mask, xi_, nan_scalar)
+    slots[:, 0, 1] = torch.where(s0_mask, yi_, nan_scalar)
+    slots[:, 1, 0] = torch.where(s1_mask, cx_, nan_scalar)
+    slots[:, 1, 1] = torch.where(s1_mask, cy_, nan_scalar)
+
+    for e in range(1, V):
+        px = x[:, e - 1]
+        py = y[:, e - 1]
+        cx_ = x[:, e]
+        cy_ = y[:, e]
+
+        pv = px if axis == 0 else py
+        cv = cx_ if axis == 0 else cy_
+        pi = inside(pv, bnd)
+        ci = inside(cv, bnd)
+        e_valid = e < n
+
+        dv = cv - pv
+        dv_s = torch.where(torch.abs(dv) < 1e-12, torch.ones_like(dv), dv)
+        t = torch.where(torch.abs(dv) < 1e-12, torch.zeros_like(dv), (bnd - pv) / dv_s)
+        xi_ = px + t * (cx_ - px)
+        yi_ = py + t * (cy_ - py)
+
+        add_both = ci & ~pi
+        add_curr = ci & pi
+        add_int = ~ci & pi
+
+        s0_mask = (add_both | add_int) & e_valid
+        s1_mask = (add_both | add_curr) & e_valid
+        s0 = 2 * e
+        s1 = 2 * e + 1
+        slots[:, s0, 0] = torch.where(s0_mask, xi_, nan_scalar)
+        slots[:, s0, 1] = torch.where(s0_mask, yi_, nan_scalar)
+        slots[:, s1, 0] = torch.where(s1_mask, cx_, nan_scalar)
+        slots[:, s1, 1] = torch.where(s1_mask, cy_, nan_scalar)
+
+    is_nan = torch.isnan(slots[..., 0])
+    count = Vn_slots - is_nan.sum(dim=-1)
+    n_out = count.clamp(max=V + 1)
+    order = torch.argsort(is_nan.to(torch.int64), dim=-1, stable=True)
+    x_all = torch.gather(slots[..., 0], 1, order)
+    y_all = torch.gather(slots[..., 1], 1, order)
+    x_out = x_all[:, : V + 1]
+    y_out = y_all[:, : V + 1]
+    x_out = torch.nan_to_num(x_out, 0.0)
+    y_out = torch.nan_to_num(y_out, 0.0)
+
+    return x_out, y_out, n_out
+
+
+def _batch_quad_pixel_areas(
+    quad_x: Tensor,
+    quad_y: Tensor,
+    centers: Tensor,
+) -> Tensor:
+    M = centers.shape[0]
+    if M == 0:
+        return torch.empty(0, dtype=quad_x.dtype, device=quad_x.device)
+
+    x = quad_x.unsqueeze(0).expand(M, -1).clone()
+    y = quad_y.unsqueeze(0).expand(M, -1).clone()
+    n = torch.full((M,), 4, dtype=torch.int64, device=quad_x.device)
+
+    b = centers[:, 0] - 0.5
+    x, y, n = _half_plane_clip_batch(x, y, n, 0, b, keep_greater=True)
+
+    b = centers[:, 0] + 0.5
+    x, y, n = _half_plane_clip_batch(x, y, n, 0, b, keep_greater=False)
+
+    b = centers[:, 1] - 0.5
+    x, y, n = _half_plane_clip_batch(x, y, n, 1, b, keep_greater=True)
+
+    b = centers[:, 1] + 0.5
+    x, y, n = _half_plane_clip_batch(x, y, n, 1, b, keep_greater=False)
+
+    Vn = x.shape[1]
+    x_r = torch.cat([x[:, 1:], x[:, 0:1]], dim=1)
+    y_r = torch.cat([y[:, 1:], y[:, 0:1]], dim=1)
+    s1 = (x[:, : Vn - 1] * y_r[:, : Vn - 1] - x_r[:, : Vn - 1] * y[:, : Vn - 1]).sum(
+        dim=1
+    )
+    idx = (n - 1).clamp(min=0).unsqueeze(1)
+    xn1 = torch.gather(x, 1, idx).squeeze(1)
+    yn1 = torch.gather(y, 1, idx).squeeze(1)
+    s2 = xn1 * y[:, 0] - x[:, 0] * yn1
+    valid = n >= 3
+    s = s1 + s2 * valid.to(s1.dtype)
+    areas = 0.5 * s.abs()
+    areas = areas * valid.to(areas.dtype)
+
+    return areas
+
+
 def exact_square_drizzle_project(
     image: Tensor,
     source_weight: Tensor,
@@ -532,31 +690,8 @@ def exact_square_drizzle_project(
             tuple(image.shape),
             device=image.device,
         )
-        source_representative_area_sr = float(
-            representative_pixel_area_fn(
-                source_wcs,
-                tuple(image.shape),
-                device=image.device,
-            )
-        )
-        target_representative_area_sr = (
-            float(target.representative_pixel_area_sr)
-            if target.representative_pixel_area_sr is not None
-            else float(
-                representative_pixel_area_fn(
-                    target.wcs,
-                    tuple(target.shape),
-                    device=image.device,
-                )
-            )
-        )
-        flux_scale = (
-            target_representative_area_sr / max(source_representative_area_sr, 1.0e-16)
-        ) ** 2
         weighted_image = image * source_weight * source_area_sr
         weighted_weight = source_weight * torch.square(source_area_sr)
-        weighted_image = weighted_image * float(flux_scale)
-        weighted_weight = weighted_weight * float(flux_scale)
     else:
         weighted_image = image * source_weight
         weighted_weight = source_weight
@@ -651,39 +786,36 @@ def exact_square_drizzle_project(
         numer_chunk = numer_chunk[finite]
         weight_chunk = weight_chunk[finite]
         for idx in range(int(x_tgt.shape[0])):
-            quad = [
-                (float(x_tgt[idx, corner].item()), float(y_tgt[idx, corner].item()))
-                for corner in range(4)
-            ]
-            area = _polygon_area(quad)
-            if not math.isfinite(area) or area <= 0.0:
+            quad_x = x_tgt[idx]
+            quad_y = y_tgt[idx]
+            area = 0.5 * torch.abs(
+                torch.sum(
+                    quad_x * torch.roll(quad_y, shifts=-1)
+                    - torch.roll(quad_x, shifts=-1) * quad_y
+                )
+            )
+            if not (area > 0.0):
                 continue
-            min_x = max(int(math.ceil(min(point[0] for point in quad) - 0.5)), 0)
-            max_x = min(
-                int(math.floor(max(point[0] for point in quad) + 0.5)), width - 1
-            )
-            min_y = max(int(math.ceil(min(point[1] for point in quad) - 0.5)), 0)
-            max_y = min(
-                int(math.floor(max(point[1] for point in quad) + 0.5)), height - 1
-            )
-            idxs: list[int] = []
-            coeffs: list[float] = []
-            for iy in range(min_y, max_y + 1):
-                for ix in range(min_x, max_x + 1):
-                    clipped = _clip_polygon_to_pixel(quad, x_center=ix, y_center=iy)
-                    overlap = _polygon_area(clipped)
-                    if overlap <= 0.0:
-                        continue
-                    idxs.append(iy * width + ix)
-                    coeffs.append(float(overlap / area))
-            if not idxs:
+            min_x = max(int(torch.ceil(quad_x.min() - 0.5).item()), 0)
+            max_x = min(int(torch.floor(quad_x.max() + 0.5).item()), width - 1)
+            min_y = max(int(torch.ceil(quad_y.min() - 0.5).item()), 0)
+            max_y = min(int(torch.floor(quad_y.max() + 0.5).item()), height - 1)
+            if min_x > max_x or min_y > max_y:
                 continue
-            idx_tensor = torch.tensor(idxs, dtype=torch.int64, device=image.device)
-            coeff_tensor = torch.tensor(
-                coeffs, dtype=torch.float32, device=image.device
-            )
-            flat_numer.scatter_add_(0, idx_tensor, numer_chunk[idx] * coeff_tensor)
-            flat_weight.scatter_add_(0, idx_tensor, weight_chunk[idx] * coeff_tensor)
+            cy = torch.arange(min_y, max_y + 1, dtype=torch.float64, device=image.device)
+            cx = torch.arange(min_x, max_x + 1, dtype=torch.float64, device=image.device)
+            gy, gx = torch.meshgrid(cy, cx, indexing="ij")
+            centers = torch.stack((gx.reshape(-1), gy.reshape(-1)), dim=-1)
+            overlaps = _batch_quad_pixel_areas(quad_x, quad_y, centers)
+            valid = overlaps > 0.0
+            if not valid.any():
+                continue
+            vc = centers[valid]
+            vo = overlaps[valid]
+            i_idx = (vc[:, 1].to(dtype=torch.int64) * width + vc[:, 0].to(dtype=torch.int64)).to(dtype=torch.int64)
+            c_coeff = (vo / area).to(dtype=torch.float32)
+            flat_numer.scatter_add_(0, i_idx, numer_chunk[idx] * c_coeff)
+            flat_weight.scatter_add_(0, i_idx, weight_chunk[idx] * c_coeff)
 
     numer = flat_numer.reshape(target.shape)
     weight = flat_weight.reshape(target.shape)
@@ -711,31 +843,8 @@ def exact_point_drizzle_project(
             tuple(image.shape),
             device=image.device,
         )
-        source_representative_area_sr = float(
-            representative_pixel_area_fn(
-                source_wcs,
-                tuple(image.shape),
-                device=image.device,
-            )
-        )
-        target_representative_area_sr = (
-            float(target.representative_pixel_area_sr)
-            if target.representative_pixel_area_sr is not None
-            else float(
-                representative_pixel_area_fn(
-                    target.wcs,
-                    tuple(target.shape),
-                    device=image.device,
-                )
-            )
-        )
-        flux_scale = (
-            target_representative_area_sr / max(source_representative_area_sr, 1.0e-16)
-        ) ** 2
         weighted_image = image * source_weight * source_area_sr
         weighted_weight = source_weight * torch.square(source_area_sr)
-        weighted_image = weighted_image * float(flux_scale)
-        weighted_weight = weighted_weight * float(flux_scale)
     else:
         weighted_image = image * source_weight
         weighted_weight = source_weight

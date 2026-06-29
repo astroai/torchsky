@@ -6,21 +6,21 @@ validation, and API pointers.
 
 ## Start Here
 
-- [Getting started](getting-started.md) - first 10 minutes through I/O, tables,
-  WCS, HEALPix, and map products.
+- [Getting started](getting-started.md) - first 10 minutes through the
+  `torchfits` boundary, WCS, HEALPix, and map products.
 - [Architecture](architecture.md) - north-star design, public pillars, and
   refactor rules.
 - [API guide](api.md) - routing table for public namespaces and domain pages.
-- [Installation and source builds](install.md) - wheels, source builds, CFITSIO,
-  CUDA notes, and pip-only fallback guidance.
+- [Installation and source builds](install.md) - wheels, `torchfits`
+  integration, native builds, CUDA notes, and pip-only fallback guidance.
 - [Examples](examples.md) - runnable scripts grouped by domain.
 
 ## Domain Guides
 
-- [I/O](io.md) - root FITS I/O, `torchsky.io`, HDUs, headers, cutouts,
-  checksums, batch reads, and runtime caches.
-- [Tables](table.md) - `torchsky.table`, Arrow scanners, Polars/DuckDB/Pandas,
-  predicate pushdown, and table mutation.
+- [I/O boundary](io.md) - loading tensors and metadata with `torchfits`, then
+  passing them into torchsky compute APIs.
+- [Table boundary](table.md) - `torchfits.table` scans and tensor/Arrow batches
+  consumed by `torchsky.catalogs`.
 - [WCS](wcs.md) - `torchsky.wcs`, transforms, spectral/time axes, frames,
   alignment, TAB axes, and compiled tensor paths.
 - [Scene](scene.md) - `torchsky.scene`, promoted facade, observations, target render

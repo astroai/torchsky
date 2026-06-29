@@ -3663,7 +3663,7 @@ class ExhaustiveBenchmarkSuite:
         plot_args = [] if generate_plots else ["--no-plots"]
         subprocess_targets = [
             ("transforms", [sys.executable, "bench_transforms.py", *plot_args], False),
-            ("buffer", [sys.executable, "bench_buffer.py", *plot_args], False),
+
             ("cache", [sys.executable, "bench_cache.py", *plot_args], False),
             ("cold_targets", [sys.executable, "bench_cold_targets.py"], True),
         ]

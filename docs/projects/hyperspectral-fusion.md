@@ -301,11 +301,12 @@ spectral metadata for that band:
 
 ```python
 import torch
+import torchfits
 import torchsky
 from torchsky.field import Observation
 
 def field_observation_from_cutout(path, wavelength, spectral_min, spectral_max, band):
-    image, header = torchsky.read(path, return_header=True)
+    image, header = torchfits.read(path, return_header=True)
     return Observation(
         image=torch.as_tensor(image, dtype=torch.float32),
         header=dict(header),
@@ -505,7 +506,7 @@ read one or two items per area; come back to the rest as the project deepens.
 - [implicit_forward.md](../implicit_forward.md) — multi-survey losses,
   `KinematicState`, Charbonnier scaffold.
 - [map.md](../map.md) — `ImageObservation`, coadds, map products.
-- [spectral.md](../spectral.md) — spectral cubes and FITS I/O.
+- [spectral.md](../spectral.md) — spectral cubes and the `torchfits` I/O boundary.
 - [AGENTS.md](../../AGENTS.md) — repo policy: dependencies, Pixi, performance
   and testing rules.
 

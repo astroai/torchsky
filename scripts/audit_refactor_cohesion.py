@@ -81,7 +81,6 @@ DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {
 }
 
 REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
-    "src/torchsky/surfaces.py": ("API_SURFACES", "api_surfaces_by_pillar"),
     "src/torchsky/field/__init__.py": (
         "fit",
         "render",
@@ -236,7 +235,6 @@ def check_tasks(root: Path) -> list[AuditResult]:
     results: list[AuditResult] = []
     task_sources = {
         "pixi.toml": _tasks_from_pixi_toml(root),
-        "pyproject.toml": _tasks_from_pyproject(root),
     }
     for source_name, tasks in task_sources.items():
         for task, fragments in REQUIRED_TASKS.items():

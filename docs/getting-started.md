@@ -8,15 +8,17 @@ This is the shortest path through the main `torchsky` surfaces.
 pip install torchsky
 ```
 
-Wheels target Python `>=3.12,<3.15` and PyTorch `>=2.0`. See [install.md](install.md) for source builds, Pixi contributor setup, and optional extras.
+Wheels target Python `>=3.12,<3.15` and PyTorch `>=2.0`. Install `torchfits`
+alongside torchsky for FITS-backed workflows. See [install.md](install.md) for
+source builds, Pixi contributor setup, and optional integrations.
 
 ## Read FITS Data
 
 ```python
-import torchsky
+import torchfits
 
-# Read image data and FITS header
-data, header = torchsky.read("science.fits", hdu="auto", return_header=True)
+# torchfits owns file I/O; torchsky consumes the tensor and metadata.
+data, header = torchfits.read("science.fits", hdu="auto", return_header=True)
 ```
 
 For details, see [io.md](io.md).
@@ -24,10 +26,10 @@ For details, see [io.md](io.md).
 ## Read A Table With Predicate Pushdown
 
 ```python
-import torchsky
+import torchfits
 
 # Select columns and filter rows on read
-table = torchsky.table.read(
+table = torchfits.table.read(
     "catalog.fits",
     hdu=1,
     columns=["RA", "DEC", "MAG_G"],
@@ -40,10 +42,10 @@ For details, see [table.md](table.md).
 ## Use WCS
 
 ```python
-import torchsky
+from torchsky.wcs import WCS
 
-# Get WCS coordinate projection object
-wcs = torchsky.get_wcs("science.fits", hdu="auto")
+# Build a tensor-native coordinate transform from the loaded header.
+wcs = WCS(header)
 ra, dec = wcs.pixel_to_world(x, y)
 x_back, y_back = wcs.world_to_pixel(ra, dec)
 ```
