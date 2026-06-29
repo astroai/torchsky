@@ -99,23 +99,16 @@ class MeshSkyEstimator:
         dtype = image.dtype
         H, W = image.shape[-2:]
 
-        if mask is not None and self.statistic != "median":
-            raise NotImplementedError(
-                f"statistic '{self.statistic}' does not support masks; "
-                f"use 'median'"
-            )
-
         blocks = self._extract_blocks(image)  # [nH, nW, bh, bw]
+        flat = blocks.reshape(*blocks.shape[:2], -1)
 
         if mask is not None:
             mask_blocks = self._extract_blocks(mask.to(image.dtype))
-            flat = blocks.reshape(*blocks.shape[:2], -1)
             flat_mask = mask_blocks.reshape(*mask_blocks.shape[:2], -1) > 0.5
+            flat = flat.clone()
             flat[flat_mask] = torch.nan
-            mesh = self._reduce_mesh_masked(flat)
-        else:
-            flat = blocks.reshape(*blocks.shape[:2], -1)
-            mesh = self._reduce_mesh(flat)
+
+        mesh = self._reduce_mesh(flat)
 
         if self.mesh_filter is not None:
             mesh = self._filter_mesh(mesh)
@@ -138,18 +131,12 @@ class MeshSkyEstimator:
         return xp.unfold(0, bh, bh).unfold(1, bw, bw)
 
     def _reduce_mesh(self, flat: Tensor) -> Tensor:
-        nH, nW, _ = flat.shape
+        has_nan = flat.isnan().any()
+        if has_nan:
+            fill = torch.nanmedian(flat, dim=-1).values[..., None]
+            flat = torch.where(flat.isnan(), fill, flat)
         stat_fn = _STATISTIC_REGISTRY[self.statistic]
-        mesh = stat_fn(flat, dim=-1)
-        return mesh
-
-    def _reduce_mesh_masked(self, flat: Tensor) -> Tensor:
-        if self.statistic == "median":
-            return torch.nanmedian(flat, dim=-1).values
-        raise NotImplementedError(
-            f"masked estimation with statistic '{self.statistic}' is not yet "
-            f"implemented; use 'median' for mask support"
-        )
+        return stat_fn(flat, dim=-1)
 
     def _filter_mesh(self, mesh: Tensor) -> Tensor:
         if self.mesh_filter == "median_3":

@@ -62,13 +62,13 @@ def _run_match(args: argparse.Namespace) -> int:
 
     est = _resolve_estimator(args)
     corrector = CrossExposureSkyCorrector(estimator=est)
-    offsets = corrector.fit_offsets(images, masks)
 
     if args.output:
-        for i, (img, hdr) in enumerate(zip(images, hdrs)):
-            corrected = img - offsets[i]
-            write(str(args.output).replace("{i}", str(i)), corrected, header=hdr, overwrite=True)
+        corrected = corrector.correct(images, masks)
+        for i, (corr, hdr) in enumerate(zip(corrected, hdrs)):
+            write(str(args.output).replace("{i}", str(i)), corr, header=hdr, overwrite=True)
     else:
+        offsets = corrector.fit_offsets(images, masks)
         for i, off in enumerate(offsets):
             print(f"  offset[{i}] = {float(off):.6f}")
     return 0

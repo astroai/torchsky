@@ -26,6 +26,7 @@ from ..map.image_plane import (
     ImagePlaneMapMaker,
     plan_image_plane_target,
 )
+from ..map.sky import MeshSkyEstimator, PolynomialSkyModel
 from ..filter_profiles import field_observation_spectral_kwargs, resolve_inr_bandpass
 
 # Minimal bandpass hints for INR when FITS headers lack spectral metadata (Angstrom).
@@ -203,10 +204,62 @@ def _run_coadd(args: argparse.Namespace) -> int:
         print("torchsky map: no input files matched", file=sys.stderr)
         return 2
     read_dev = _map_read_device_str(args)
+
+    # Optional sky estimation pre-processing
+    sky_inputs = list(inputs)
+    sky_weights = list(args.weights)
+    sky_photometric_scales = list(args.photometric_scales)
+    sky_background_offsets = list(args.background_offsets)
+    sky_weight_maps = list(args.weight_maps)
+    sky_mask_maps = list(args.mask_maps)
+    sky_primary_beam_maps = list(args.primary_beam_maps)
+
+    if getattr(args, "sky", False):
+        from tempfile import NamedTemporaryFile
+
+        sky_method = getattr(args, "sky_method", "mesh")
+        sky_stat = getattr(args, "sky_statistic", "huber")
+        sky_block = int(getattr(args, "sky_block_size", 128))
+        sky_order = int(getattr(args, "sky_order", 3))
+        sky_filter = getattr(args, "sky_mesh_filter", "median_3")
+        sky_interp = getattr(args, "sky_interpolate", "bicubic")
+
+        if sky_method == "mesh":
+            est = MeshSkyEstimator(
+                block_size=sky_block,
+                statistic=sky_stat,
+                mesh_filter=sky_filter,
+                interpolate=sky_interp,
+            )
+        else:
+            est = PolynomialSkyModel(order=sky_order, statistic=sky_stat)
+
+        temp_paths: list[str] = []
+        for i, p in enumerate(inputs):
+            img, hdr = read(p, hdu=args.hdu, return_header=True, device=read_dev)
+            mask = None
+            if sky_mask_maps[i] is not None:
+                mask = read(str(sky_mask_maps[i]), hdu=args.mask_map_hdu, device=read_dev)
+                mask = mask.to(dtype=torch.bool)
+            sky = est(img, mask) if mask is not None else est(img)
+            subbed = img - sky
+            tf = NamedTemporaryFile(suffix=".fits", delete=False)
+            write(tf.name, subbed.cpu(), header=dict(hdr), overwrite=True)
+            temp_paths.append(tf.name)
+            print(
+                f"  sky [{i}] method={sky_method} stat={sky_stat} "
+                f"mean_sky={float(sky.mean()):.4f}",
+                file=sys.stderr,
+            )
+
+        sky_inputs = temp_paths
+        # Reset offsets since sky is already subtracted
+        sky_background_offsets = [0.0] * len(inputs)
+
     observations = [
         ImageObservation(
             path=p,
-            hdu=args.hdu,
+            hdu=0 if getattr(args, "sky", False) else args.hdu,
             weight=float(w),
             photometric_scale=float(ps),
             background_offset=float(bg),
@@ -218,13 +271,13 @@ def _run_coadd(args: argparse.Namespace) -> int:
             primary_beam_hdu=args.primary_beam_hdu,
         )
         for p, w, ps, bg, wp, mp, pbp in zip(
-            inputs,
-            args.weights,
-            args.photometric_scales,
-            args.background_offsets,
-            args.weight_maps,
-            args.mask_maps,
-            args.primary_beam_maps,
+            sky_inputs,
+            sky_weights,
+            sky_photometric_scales,
+            sky_background_offsets,
+            sky_weight_maps,
+            sky_mask_maps,
+            sky_primary_beam_maps,
         )
     ]
     pr = int(args.plan_reference)
@@ -295,6 +348,14 @@ def _run_coadd(args: argparse.Namespace) -> int:
         f"value_semantics={args.value_semantics} tiled={tile_hw is not None}",
         file=sys.stderr,
     )
+
+    # Clean up sky temp files
+    if getattr(args, "sky", False) and sky_inputs is temp_paths:
+        from os import unlink
+
+        for p in temp_paths:
+            unlink(p)
+
     return 0
 
 
@@ -499,6 +560,47 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         nargs="*",
         type=float,
         help="Per-input background offsets; coadd subtracts them, INR models them in rendering",
+    )
+    p.add_argument(
+        "--sky",
+        action="store_true",
+        help="Auto-estimate and subtract 2D sky background per input (replaces --background-offsets)",
+    )
+    p.add_argument(
+        "--sky-method",
+        default="mesh",
+        choices=("mesh", "polynomial"),
+        help="Sky model type (default: mesh)",
+    )
+    p.add_argument(
+        "--sky-statistic",
+        default="huber",
+        choices=("median", "huber", "tukey"),
+        help="Sky per-cell statistic (default: huber)",
+    )
+    p.add_argument(
+        "--sky-block-size",
+        type=int,
+        default=128,
+        help="Mesh block size in pixels (mesh method, default: 128)",
+    )
+    p.add_argument(
+        "--sky-mesh-filter",
+        default="median_3",
+        choices=("median_3", "gaussian_3", "none"),
+        help="Mesh post-filter (mesh method, default: median_3)",
+    )
+    p.add_argument(
+        "--sky-interpolate",
+        default="bicubic",
+        choices=("bilinear", "bicubic"),
+        help="Mesh-to-image interpolation (mesh method, default: bicubic)",
+    )
+    p.add_argument(
+        "--sky-order",
+        type=int,
+        default=3,
+        help="Polynomial degree (polynomial method, default: 3)",
     )
     p.add_argument(
         "--weight-maps",

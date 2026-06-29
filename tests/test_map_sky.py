@@ -84,9 +84,10 @@ class TestMeshSkyEstimator:
         image[30:34, 30:34] = 1000.0
         mask = torch.zeros((64, 64), dtype=torch.bool)
         mask[30:34, 30:34] = True
-        est = MeshSkyEstimator(block_size=16, statistic="median")
-        sky_masked = est(image, mask=mask)
-        assert float(sky_masked.max()) < 10.0
+        for stat in ("median", "huber", "tukey"):
+            est = MeshSkyEstimator(block_size=16, statistic=stat)
+            sky_masked = est(image, mask=mask)
+            assert float(sky_masked.max()) < 10.0, f"stat={stat}"
 
     def test_non_divisible_dimensions(self):
         image = torch.randn(70, 50, dtype=torch.float32)
