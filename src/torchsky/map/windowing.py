@@ -15,11 +15,7 @@ from .operators.pixel_area import (
     representative_pixel_area_sr,
     wrapped_delta_ra_deg,
 )
-from .operators.execution import (
-    source_bbox_on_target,
-    is_plain_tan_header,
-    wcs_has_distortion,
-)
+from .operators.execution import source_bbox_on_target
 from .operators.config import MapValueSemantics
 
 _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS = 1_500_000
@@ -214,10 +210,6 @@ def _window_large_tan_target(
     margin_pixels = _LARGE_TAN_WINDOWING_MARGIN_PIXELS
 
     if int(target.shape[0]) * int(target.shape[1]) < min_pixels:
-        return target, None
-    if not is_plain_tan_header(source_header) or not is_plain_tan_header(target_header):
-        return target, None
-    if wcs_has_distortion(source_wcs):
         return target, None
     bbox = source_bbox_on_target(
         source_wcs,

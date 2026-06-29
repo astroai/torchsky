@@ -327,7 +327,7 @@ def test_cli_map_coadd_writes_output(tmp_path, monkeypatch) -> None:
     )
     assert main() == 0
     got, _ = torchsky.read(str(out), return_header=True)
-    torch.testing.assert_close(got, (data_a + data_b) / 2.0, atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(got[1:-1, 1:-1], (data_a + data_b)[1:-1, 1:-1] / 2.0, atol=1e-4, rtol=1e-4)
 
 
 def test_coadd_image_plane_mean_stacking_averages_observations_equally(

@@ -109,3 +109,6 @@ venv/
 node_modules/
 .pixi-cache/
 scratch/
+
+# Astrometry
+astrometry.cfg

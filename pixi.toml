@@ -66,6 +66,7 @@ ci-local = "pixi run preflight-push && pixi run typecheck && pixi run test"
 ci-local-heavy = "pixi run -e bench-all -- python -c \"import healpy, hpgeom, healsparse; import astropy_healpix; import spherical_geometry\""
 typecheck = "pixi run -e test pyright"
 verify = "pixi run -e default -- python scripts/verify_setup.py"
+
 audit-refactor-cohesion = "pixi run -e default -- python scripts/audit_refactor_cohesion.py"
 setup-hooks = "python scripts/install_hooks.py"
 pre-commit = "pre-commit run --all-files"
@@ -257,6 +258,14 @@ pytorch = ">=2.0"
 # (requires NumPy at build time). After `pixi install -e bench-legacy`, install when needed:
 #   pixi run -e bench-legacy python -m pip install kapteyn
 
+# Astrometric calibration (SCAMP + SExtractor + astropy).
+# solve-field is NOT a conda dep (no osx-arm64 build); use `pixi run solve-field`.
+[feature.astrometry.dependencies]
+astromatic-scamp = ">=2.0"
+astromatic-source-extractor = ">=2.28"
+astropy = ">=5.0"
+numpy = ">=1.20"
+
 # Environment definitions
 [environments]
 default = { features = ["prod"], solve-group = "default" }
@@ -266,3 +275,4 @@ sphere-bench = { features = ["prod", "bench", "sphere-bench"], solve-group = "de
 bench-all = { features = ["prod", "bench", "sphere-bench"], solve-group = "default" }
 map-compat = { features = ["prod", "bench", "sphere-bench", "map-compat"], solve-group = "map-compat" }
 bench-legacy = { features = ["bench-legacy"], solve-group = "bench-legacy" }
+astrometry = { features = ["prod", "astrometry"], solve-group = "default" }

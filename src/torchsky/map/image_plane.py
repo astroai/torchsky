@@ -26,6 +26,7 @@ from .fft_affine_ldu import resample_fft_ldu_affine_2d
 from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_fft2d
 from .operators.background import SkyBackgroundOp
 from .operators.bundle import ObservationOperatorBundle
+from .operators.geometry import ForwardSplatGeometryOp
 from .operators.config import (
     MapResamplingKernel,
     MapStackingMethod,
@@ -88,6 +89,10 @@ from .io_utils import (
     read_image_plane_observation,
     _observation_header_for_area_scaling,
 )
+
+# Module-level cache for observation reads (persists across coadd_image_plane calls,
+# notably for the spatial-tiled path which calls coadd_image_plane per tile).
+_obs_image_cache: dict[tuple[str, int | str | None], tuple[Tensor, dict]] = {}
 
 
 def _resolve_map_device(device: torch.device | str | None) -> torch.device:
@@ -322,6 +327,16 @@ def _is_conservative_kernel(kernel: MapResamplingKernel) -> bool:
 
 def _is_splat_kernel(kernel: MapResamplingKernel) -> bool:
     return kernel in {"splat_point", "splat_box"}
+
+_FORWARD_SOURCE_RATIO = 0.2  # use forward projection when source < 20% of target
+
+def _splat_for_interpolation(kernel: MapResamplingKernel) -> MapResamplingKernel | None:
+    """Return equivalent splat kernel for interpolation kernels, or None."""
+    if kernel == "nearest":
+        return "splat_point"
+    if kernel == "bilinear":
+        return "splat_box"
+    return None
 
 
 def _requires_roundtrip_validity_check(source_wcs: WCS) -> bool:
@@ -1498,13 +1513,24 @@ def _project_observation_to_target_chunk(
             sampled_numer = torch.zeros((0, 0), dtype=torch.float32, device=device)
             sampled_weight = torch.zeros((0, 0), dtype=torch.float32, device=device)
         else:
+            _kernel = resampling_kernel
+            if isinstance(operator_bundle.geometry, ForwardSplatGeometryOp):
+                _forward_remap = _splat_for_interpolation(resampling_kernel)
+                if _forward_remap is not None:
+                    src_pix = int(image.shape[0]) * int(image.shape[1])
+                    tgt_pix = (
+                        int(prepared_target_view.shape[0])
+                        * int(prepared_target_view.shape[1])
+                    )
+                    if src_pix < tgt_pix * _FORWARD_SOURCE_RATIO:
+                        _kernel = _forward_remap
             sampled_numer, sampled_weight = project_image_observation_geometry(
                 image,
                 source_weight,
                 source_wcs,
                 prepared_target_view,
                 operator_bundle=operator_bundle,
-                resampling_kernel=resampling_kernel,
+                resampling_kernel=_kernel,
                 value_semantics=value_semantics,
                 drizzle_pixfrac=drizzle_pixfrac,
                 pixel_area_sr_map_fn=pixel_area_sr_map,
@@ -1581,15 +1607,155 @@ def _project_observation_to_target(
     return sampled_numer, sampled_weight, overlap, projected.moc
 
 
+def _true_image_shape(header: dict) -> tuple[int, int]:
+    """Return (height, width) of the image described by *header*.
+
+    Compressed FITS stores the true dimensions in ``ZNAXIS1``/``ZNAXIS2``;
+    uncompressed images use the standard ``NAXIS1``/``NAXIS2`` cards.
+    """
+    if header.get("ZCMPTYPE") is not None:
+        nx = int(header.get("ZNAXIS1", header.get("NAXIS1", 0)))
+        ny = int(header.get("ZNAXIS2", header.get("NAXIS2", 0)))
+    else:
+        nx = int(header.get("NAXIS1", 0))
+        ny = int(header.get("NAXIS2", 0))
+    return (ny, nx)
+
+
+def _observation_header_for_footprint(
+    obs: ImageObservation,
+    device: torch.device | str | None = None,
+) -> dict:
+    """Read the FITS header for *obs*, correcting compressed NAXIS cards."""
+    from .io_utils import _observation_header_for_area_scaling
+
+    hdr = _observation_header_for_area_scaling(obs)
+    ny, nx = _true_image_shape(hdr)
+    if ny > 0 and nx > 0:
+        hdr["NAXIS1"] = nx
+        hdr["NAXIS2"] = ny
+    return hdr
+
+
+def _compute_union_footprint(
+    observations: Sequence[ImageObservation],
+    *,
+    device: torch.device | str | None = None,
+    padding: float = 1.05,
+) -> tuple[float, float, float, float, float]:
+    """Compute the union RA/Dec bounding box and median pixel scale.
+
+    Returns ``(ra_min, ra_max, dec_min, dec_max, pixel_scale_deg)``.
+    """
+    ra_min = float("inf")
+    ra_max = float("-inf")
+    dec_min = float("inf")
+    dec_max = float("-inf")
+    pixel_scales: list[float] = []
+
+    for obs in observations:
+        hdr = _observation_header_for_footprint(obs, device=device)
+        if not hdr:
+            continue
+        wcs = WCS(hdr)
+        fp = wcs.footprint()
+        ra_min = min(ra_min, float(fp[:, 0].min()))
+        ra_max = max(ra_max, float(fp[:, 0].max()))
+        dec_min = min(dec_min, float(fp[:, 1].min()))
+        dec_max = max(dec_max, float(fp[:, 1].max()))
+        cd11 = abs(float(hdr.get("CD1_1", hdr.get("PC1_1", hdr.get("CDELT1", 0.0)))))
+        cd22 = abs(float(hdr.get("CD2_2", hdr.get("PC2_2", hdr.get("CDELT2", 0.0)))))
+        if cd11 > 0.0 and cd22 > 0.0:
+            pixel_scales.append((cd11 + cd22) / 2.0)
+
+    if not pixel_scales:
+        raise RuntimeError("Could not determine pixel scale from observation headers")
+    pixel_scale = float(torch.tensor(pixel_scales, dtype=torch.float64).median())
+
+    ra_center = (ra_min + ra_max) / 2.0
+    dec_center = (dec_min + dec_max) / 2.0
+    ra_half = (ra_max - ra_min) / 2.0 * padding
+    dec_half = (dec_max - dec_min) / 2.0 * padding
+
+    return (
+        ra_center - ra_half,
+        ra_center + ra_half,
+        dec_center - dec_half,
+        dec_center + dec_half,
+        pixel_scale,
+    )
+
+
+def _target_header_from_footprint(
+    ra_min: float,
+    ra_max: float,
+    dec_min: float,
+    dec_max: float,
+    pixel_scale_deg: float,
+) -> tuple[dict, tuple[int, int]]:
+    """Create a target WCS header covering the given bounding box.
+
+    Returns ``(header, (height, width))``.
+    """
+    import math
+
+    ra_center = (ra_min + ra_max) / 2.0
+    dec_center = (dec_min + dec_max) / 2.0
+    naxis1 = max(1, int(math.ceil((ra_max - ra_min) / pixel_scale_deg)))
+    naxis2 = max(1, int(math.ceil((dec_max - dec_min) / pixel_scale_deg)))
+    header: dict = {
+        "NAXIS": 2,
+        "NAXIS1": naxis1,
+        "NAXIS2": naxis2,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CUNIT1": "deg",
+        "CUNIT2": "deg",
+        "CRVAL1": ra_center,
+        "CRVAL2": dec_center,
+        "CRPIX1": float(naxis1) / 2.0 + 0.5,
+        "CRPIX2": float(naxis2) / 2.0 + 0.5,
+        "CD1_1": -pixel_scale_deg,
+        "CD1_2": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": pixel_scale_deg,
+    }
+    return header, (naxis2, naxis1)
+
+
 def plan_image_plane_target(
     observations: Sequence[ImageObservation],
     *,
-    reference_index: int = 0,
+    reference_index: int | None = 0,
     header_overrides: Optional[dict] = None,
     device: torch.device | str | None = None,
+    union_footprint: bool = False,
+    footprint_padding: float = 1.05,
+    max_footprint_pixels: int | None = None,
 ) -> PlannedImagePlaneTarget:
     if not observations:
         raise ValueError("At least one observation is required")
+
+    if union_footprint or reference_index is None:
+        ra_min, ra_max, dec_min, dec_max, pixel_scale = _compute_union_footprint(
+            observations, device=device, padding=footprint_padding,
+        )
+        header, shape = _target_header_from_footprint(
+            ra_min, ra_max, dec_min, dec_max, pixel_scale,
+        )
+        if max_footprint_pixels is not None and shape[0] * shape[1] > max_footprint_pixels:
+            raise RuntimeError(
+                f"Union footprint output {shape[0]}×{shape[1]} "
+                f"({shape[0] * shape[1] / 1e6:.1f} MPix) exceeds --max-footprint-pixels="
+                f"{max_footprint_pixels}"
+            )
+        if header_overrides:
+            header.update(dict(header_overrides))
+        return PlannedImagePlaneTarget(
+            header=normalized_header_for_shape(header, shape, overrides=header_overrides),
+            shape=shape,
+        )
+
     if reference_index < 0 or reference_index >= len(observations):
         raise IndexError("reference_index is out of range")
 
@@ -1715,10 +1881,17 @@ def _coadd_image_plane_spatial_tiles(
     tw = max(int(tile_width), 1)
     first = observations[0]
     read_dev = str(map_device)
-    first_image, first_header = read(
-        first.path, hdu=first.hdu, return_header=True, device=read_dev
-    )
-    first_image = validate_image_plane_2d(first_image)
+    _first_key = (first.path, first.hdu)
+    if _first_key in _obs_image_cache:
+        first_image, first_header = _obs_image_cache[_first_key]
+        first_image = validate_image_plane_2d(first_image)
+    else:
+        first_image, first_header = read(
+            first.path, hdu=first.hdu, return_header=True, device=read_dev
+        )
+        first_image = validate_image_plane_2d(first_image)
+        first_header = dict(first_header)
+        _obs_image_cache[_first_key] = (first_image, first_header)
     device = map_device
     mosaic_surface_brightness_area_scaling: bool | None = None
     if value_semantics == "surface_brightness" and stacking_method == "weighted_mean":
@@ -1801,10 +1974,17 @@ def coadd_image_plane(
     map_device = _resolve_map_device(device)
     read_dev = str(map_device)
     first = observations[0]
-    first_image, first_header = read(
-        first.path, hdu=first.hdu, return_header=True, device=read_dev
-    )
-    first_image = validate_image_plane_2d(first_image)
+    _first_key = (first.path, first.hdu)
+    if _first_key in _obs_image_cache:
+        first_image, first_header = _obs_image_cache[_first_key]
+        first_image = validate_image_plane_2d(first_image)
+    else:
+        first_image, first_header = read(
+            first.path, hdu=first.hdu, return_header=True, device=read_dev
+        )
+        first_image = validate_image_plane_2d(first_image)
+        first_header = dict(first_header)
+        _obs_image_cache[_first_key] = (first_image, first_header)
     if target_header is not None and "CRVAL1" in target_header:
         target_shape = target_shape_from_header(
             target_header,
@@ -1883,16 +2063,39 @@ def coadd_image_plane(
     median_images: list[Tensor] | None = [] if stacking_method == "median" else None
     median_support: list[Tensor] | None = [] if stacking_method == "median" else None
 
+    # Batch MEF reading: group observations by path, read files with ≥2 HDUs once
+    # into the module-level _obs_image_cache (persists across tiled calls).
+    from collections import defaultdict as _defaultdict
+    _path_hdus: dict[str, list[int | str | None]] = _defaultdict(list)
+    for _obs in observations:
+        _path_hdus[_obs.path].append(_obs.hdu)
+    for _path, _hdus in _path_hdus.items():
+        if len(_hdus) > 1:
+            _hdu_set = sorted({h for h in _hdus if isinstance(h, int)})
+            _hdu_uncached = [h for h in _hdu_set if (_path, h) not in _obs_image_cache]
+            if _hdu_uncached:
+                try:
+                    from torchfits import read_hdus as _read_hdus
+                    _imgs, _hdrs = _read_hdus(_path, _hdu_uncached, device=read_dev, return_header=True)
+                    for _h, _img, _hdr in zip(_hdu_uncached, _imgs, _hdrs):
+                        _obs_image_cache[(_path, _h)] = (validate_image_plane_2d(_img), dict(_hdr))
+                except Exception:
+                    pass  # fall through to on-demand reads
+
+    # Ensure the first observation is in the cache
+    _obs_image_cache.setdefault((first.path, first.hdu), (first_image, dict(first_header)))
+
     for obs_idx, obs in enumerate(observations):
-        if obs_idx == 0:
-            image = first_image
-            header_dict_obs = dict(first_header)
+        key = (obs.path, obs.hdu)
+        if key in _obs_image_cache:
+            image, header_dict_obs = _obs_image_cache[key]
         else:
             image, header = read(
                 obs.path, hdu=obs.hdu, return_header=True, device=read_dev
             )
             image = validate_image_plane_2d(image)
             header_dict_obs = dict(header)
+            _obs_image_cache[key] = (image, header_dict_obs)
         need_prepared_target = (
             value_semantics == "flux"
             or footprint_order is not None
