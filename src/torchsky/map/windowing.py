@@ -263,10 +263,16 @@ def _weight_map_to_moc(
     if not bool(valid.any()):
         return MOC(torch.empty((0,), dtype=torch.int64))
     nside = 1 << int(max_order)
+    if target.ra_deg is not None:
+        ra_deg, dec_deg = target.ra_deg, target.dec_deg
+    else:
+        ra_deg, dec_deg = _build_target_world_grid(
+            target.wcs, *target.shape, device=weight_map.device,
+        )
     pix = _healpix.ang2pix(
         nside,
-        target.ra_deg[valid],
-        target.dec_deg[valid],
+        ra_deg[valid],
+        dec_deg[valid],
         nest=True,
         lonlat=True,
     )

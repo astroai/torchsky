@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from ..device import default_compute_device
@@ -345,6 +346,58 @@ def _requires_roundtrip_validity_check(source_wcs: WCS) -> bool:
     # through a wrong TAN-only shortcut, but after fixing that dispatch the same
     # gate became over-rejective on realistic warped-stack benchmarks.
     return bool(getattr(source_wcs, "sip", None) is not None)
+
+
+def _coarse_grid_shape(height: int, width: int, *, coarse_stride: int = 128) -> tuple[int, int, int]:
+    stride = max(1, min(height, width) // coarse_stride, 1)
+    stride = min(stride, 128)
+    hc = max(1, height // stride)
+    wc = max(1, width // stride)
+    if hc < 4 or wc < 4:
+        stride = 1
+        hc, wc = height, width
+    return stride, hc, wc
+
+
+def _interpolate_forward_mapping_from_coarse(
+    source_wcs: WCS,
+    target_wcs: WCS,
+    height: int,
+    width: int,
+    *,
+    device: torch.device,
+    coarse_stride: int = 128,
+) -> tuple[Tensor, Tensor]:
+    stride, hc, wc = _coarse_grid_shape(height, width, coarse_stride=coarse_stride)
+
+    y_coarse = torch.arange(0, height, stride, dtype=torch.float64, device=device)
+    x_coarse = torch.arange(0, width, stride, dtype=torch.float64, device=device)
+
+    yy, xx = torch.meshgrid(y_coarse, x_coarse, indexing='ij')
+    ra_c, dec_c = target_wcs.pixel_to_world(xx, yy)
+    x_src_c, y_src_c = source_wcs.world_to_pixel(ra_c, dec_c)
+
+    if stride == 1:
+        x_out = x_src_c.reshape(height, width).to(dtype=torch.float32)
+        y_out = y_src_c.reshape(height, width).to(dtype=torch.float32)
+        return x_out, y_out
+
+    hc, wc = int(y_coarse.numel()), int(x_coarse.numel())
+    coarse = torch.stack([x_src_c, y_src_c], dim=0).to(dtype=torch.float32).reshape(1, 2, hc, wc)
+
+    y_g = torch.arange(height, dtype=torch.float32, device=device) / stride
+    x_g = torch.arange(width, dtype=torch.float32, device=device) / stride
+
+    # Bicubic grid_sample expects one row/col of margin for boundary handling.
+    # The last coarse pixel has index stride*(Nc-1). Pixels beyond that have
+    # normalized coordinate > 1 and are clamped to border.
+    y_n = y_g / max(hc - 1, 1) * 2.0 - 1.0
+    x_n = x_g / max(wc - 1, 1) * 2.0 - 1.0
+    gy, gx = torch.meshgrid(y_n.clamp(-1.0, 1.0), x_n.clamp(-1.0, 1.0), indexing='ij')
+    grid = torch.stack([gx, gy], dim=-1).unsqueeze(0)
+
+    full = F.grid_sample(coarse, grid, mode='bicubic', padding_mode='border', align_corners=True)
+    return full[0, 0], full[0, 1]
 
 
 def _requires_target_pixel_quadrature(
@@ -802,8 +855,8 @@ def _resample_weighted_to_target(
         x_src: Tensor,
         y_src: Tensor,
         *,
-        flat_ra: Tensor,
-        flat_dec: Tensor,
+        flat_ra: Tensor | None = None,
+        flat_dec: Tensor | None = None,
     ) -> tuple[Tensor, Tensor]:
         if resampling_kernel == "spectral_nonuniform":
             sampled_numer = resample_nonuniform_spectral_2d(
@@ -959,16 +1012,28 @@ def _resample_weighted_to_target(
         source_wcs,
         value_semantics=value_semantics,
     ):
-        return _sample_on_world_grid(target.ra_deg, target.dec_deg)
+        if target.ra_deg is not None:
+            return _sample_on_world_grid(target.ra_deg, target.dec_deg)
+        h_tgt, w_tgt = int(target.shape[0]), int(target.shape[1])
+        if min(h_tgt, w_tgt) < 500:
+            ra_g, dec_g = _build_target_world_grid(
+                target.wcs, h_tgt, w_tgt, device=image.device,
+            )
+            return _sample_on_world_grid(ra_g, dec_g)
+        x_src, y_src = _interpolate_forward_mapping_from_coarse(
+            source_wcs, target.wcs, h_tgt, w_tgt, device=image.device,
+        )
+        return _sample_on_source_grid(x_src, y_src, flat_ra=None, flat_dec=None)
 
-    accum_numer = torch.zeros_like(target.ra_deg, dtype=torch.float32)
-    accum_weight = torch.zeros_like(target.ra_deg, dtype=torch.float32)
+    device = target.wcs.device
+    accum_numer = torch.zeros(target.shape, dtype=torch.float32, device=device)
+    accum_weight = torch.zeros(target.shape, dtype=torch.float32, device=device)
     quadrature_world_grids = target.quadrature_world_grids
     if quadrature_world_grids is None:
         quadrature_world_grids = _quadrature_target_world_grids(
             target.wcs,
             target.shape,
-            device=target.ra_deg.device,
+            device=device,
         )
     flat_ra = torch.cat(
         [sub_ra.reshape(-1) for sub_ra, _ in quadrature_world_grids], dim=0
@@ -2053,7 +2118,7 @@ def coadd_image_plane(
                 include_pixel_area=(value_semantics == "flux"),
                 include_representative_pixel_area=apply_surface_brightness_area_scaling,
                 include_quadrature=(value_semantics == "flux"),
-                include_world_grid=not _is_splat_kernel(resampling_kernel),
+                include_world_grid=False,
             )
         return prepared_target
 
@@ -2384,7 +2449,7 @@ def coadd_image_plane_cube(
                 include_pixel_area=(value_semantics == "flux"),
                 include_representative_pixel_area=apply_surface_brightness_area_scaling,
                 include_quadrature=(value_semantics == "flux"),
-                include_world_grid=not _is_splat_kernel(resampling_kernel),
+                include_world_grid=False,
             )
         return prepared_target
 

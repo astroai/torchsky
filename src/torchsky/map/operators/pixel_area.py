@@ -11,6 +11,13 @@ def wrapped_delta_ra_deg(ra_a_deg: Tensor, ra_b_deg: Tensor) -> Tensor:
     return ((ra_a_deg - ra_b_deg + 180.0) % 360.0) - 180.0
 
 
+def _is_undistorted_tan(wcs) -> bool:
+    tan_check = bool(getattr(wcs, "_is_tan", False))
+    is_tpv = bool(getattr(wcs, "_is_tpv", False))
+    has_sip = getattr(wcs, "sip", None) is not None
+    return tan_check and not is_tpv and not has_sip
+
+
 def pixel_area_sr_map(
     wcs,
     shape: tuple[int, int],
@@ -18,12 +25,15 @@ def pixel_area_sr_map(
     device: torch.device,
     chunk_size: int = 128,
 ) -> Tensor:
-    """Estimate per-pixel solid angle in steradians from local WCS Jacobians.
+    """Per-pixel solid angle in steradians from local WCS Jacobians.
 
-    Processes the image in row chunks to keep peak memory at
-    ``O(chunk_size × width)`` instead of ``O(height × width)``.
+    Uses a constant-area shortcut for undistorted TAN projections and
+    computes the full per-pixel map otherwise (row-chunked for memory).
     """
     height, width = int(shape[0]), int(shape[1])
+    if _is_undistorted_tan(wcs):
+        rep = representative_pixel_area_sr(wcs, shape, device=device)
+        return torch.full((height, width), rep, dtype=torch.float32, device=device)
     area_sr = torch.empty(height, width, dtype=torch.float32, device=device)
     d2r = torch.pi / 180.0
     d2r_sq = d2r * d2r
