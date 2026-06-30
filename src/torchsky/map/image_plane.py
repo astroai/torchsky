@@ -2053,6 +2053,7 @@ def coadd_image_plane(
                 include_pixel_area=(value_semantics == "flux"),
                 include_representative_pixel_area=apply_surface_brightness_area_scaling,
                 include_quadrature=(value_semantics == "flux"),
+                include_world_grid=not _is_splat_kernel(resampling_kernel),
             )
         return prepared_target
 
@@ -2383,6 +2384,7 @@ def coadd_image_plane_cube(
                 include_pixel_area=(value_semantics == "flux"),
                 include_representative_pixel_area=apply_surface_brightness_area_scaling,
                 include_quadrature=(value_semantics == "flux"),
+                include_world_grid=not _is_splat_kernel(resampling_kernel),
             )
         return prepared_target
 
