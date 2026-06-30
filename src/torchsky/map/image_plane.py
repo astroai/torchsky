@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 import math
 import os
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -1937,6 +1938,7 @@ def _coadd_image_plane_spatial_tiles(
     stacking_method: MapStackingMethod,
     drizzle_pixfrac: float,
     map_device: torch.device,
+    background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
 ) -> MapResult:
     """Accumulate a large map in non-overlapping spatial tiles to cap per-tile memory."""
     if not observations:
@@ -1994,6 +1996,7 @@ def _coadd_image_plane_spatial_tiles(
                 spatial_tile_hw=None,
                 surface_brightness_area_scaling=mosaic_surface_brightness_area_scaling,
                 device=map_device,
+                background_estimator=background_estimator,
             )
             full_data[y0:y1, x0:x1] = sub.data.to(device=device)
             full_weight[y0:y1, x0:x1] = sub.weight.to(device=device)
@@ -2026,6 +2029,7 @@ def coadd_image_plane(
     spatial_tile_hw: tuple[int, int] | None = None,
     surface_brightness_area_scaling: bool | None = None,
     device: torch.device | str | None = None,
+    background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
 ) -> MapResult:
     if not observations:
         raise ValueError("At least one observation is required")
@@ -2089,6 +2093,7 @@ def coadd_image_plane(
             stacking_method=stacking_method,
             drizzle_pixfrac=drizzle_pixfrac,
             map_device=map_device,
+            background_estimator=background_estimator,
         )
     if not (
         value_semantics == "surface_brightness" and stacking_method == "weighted_mean"
@@ -2162,6 +2167,10 @@ def coadd_image_plane(
             image = validate_image_plane_2d(image)
             header_dict_obs = dict(header)
             _obs_image_cache[key] = (image, header_dict_obs)
+        if background_estimator is not None:
+            bg_model = background_estimator(image, None)
+            image = image - bg_model
+            obs = dataclasses.replace(obs, background_offset=0.0)
         need_prepared_target = (
             value_semantics == "flux"
             or footprint_order is not None
@@ -2305,6 +2314,7 @@ class ImagePlaneMapMaker:
         drizzle_pixfrac: float = 1.0,
         spatial_tile_hw: tuple[int, int] | None = None,
         device: torch.device | str | None = None,
+        background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     ) -> None:
         self.target_header = target_header
         self.resampling_kernel = _validated_map_resampling_kernel(resampling_kernel)
@@ -2317,6 +2327,7 @@ class ImagePlaneMapMaker:
             else (int(spatial_tile_hw[0]), int(spatial_tile_hw[1]))
         )
         self.device = device
+        self.background_estimator = background_estimator
 
     def run(
         self,
@@ -2336,6 +2347,7 @@ class ImagePlaneMapMaker:
             drizzle_pixfrac=self.drizzle_pixfrac,
             spatial_tile_hw=self.spatial_tile_hw,
             device=eff_device,
+            background_estimator=self.background_estimator,
         )
 
 
@@ -2355,6 +2367,7 @@ def coadd_image_plane_cube(
     spectral_type: str = "WAVE",
     reference_index: int = 0,
     device: torch.device | str | None = None,
+    background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
 ) -> SpectralCubeMapResult:
     if not observations:
         raise ValueError("At least one observation is required")
@@ -2475,6 +2488,10 @@ def coadd_image_plane_cube(
             )
             image = validate_image_plane_2d(image)
             header_dict_obs = dict(header)
+        if background_estimator is not None:
+            bg_model = background_estimator(image, None)
+            image = image - bg_model
+            obs = dataclasses.replace(obs, background_offset=0.0)
         need_prepared_target = (
             value_semantics == "flux"
             or footprint_order is not None
