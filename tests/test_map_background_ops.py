@@ -4,12 +4,15 @@ import torch
 
 from torchsky.map import FieldObservation, render_field_observation
 from torchsky.map.operators.background import (
+    BackgroundOp,
+    SpatialSkyBackgroundOp,
     apply_background_components,
     constant_background,
     fit_background_plane,
     observation_background_components,
     polynomial_background,
 )
+from torchsky.map.sky import MeshSkyEstimator
 
 
 class _ZeroField(torch.nn.Module):
@@ -145,3 +148,31 @@ def test_field_observation_rejects_mismatched_background_shape() -> None:
         assert "sky_background shape must match image shape" in str(exc)
     else:
         raise AssertionError("expected mismatched background shape to raise")
+
+
+def test_spatial_sky_background_op_is_background_op() -> None:
+    est = MeshSkyEstimator(block_size=16, statistic="median")
+    op = SpatialSkyBackgroundOp(est)
+    assert isinstance(op, BackgroundOp)
+    assert op.name == "spatial_sky_background"
+    assert not op.learned
+    assert op.enabled
+    assert op.background_estimator is est
+
+
+def test_spatial_sky_background_op_can_estimate_sky() -> None:
+    image = torch.ones((32, 32), dtype=torch.float32)
+    est = MeshSkyEstimator(block_size=16, statistic="median")
+    op = SpatialSkyBackgroundOp(est)
+    estimator = op.background_estimator
+    assert estimator is not None
+    sky = estimator(image, None)
+    assert sky.shape == (32, 32)
+    assert torch.allclose(sky, torch.ones_like(sky), atol=1e-4)
+
+
+def test_spatial_sky_background_op_can_be_disabled() -> None:
+    est = MeshSkyEstimator(block_size=16, statistic="median")
+    op = SpatialSkyBackgroundOp(est, name="test_bg")
+    op.enabled = False
+    assert not op.enabled

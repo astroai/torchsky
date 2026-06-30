@@ -163,3 +163,221 @@ class TestMeshSkyEstimator:
         loss.backward()
         assert x.grad is not None
         assert x.grad.isfinite().all()
+
+
+class TestMeshFilterNewApi:
+    def test_median_with_size(self):
+        image = torch.randn(64, 64, dtype=torch.float32) + 5.0
+        est = MeshSkyEstimator(
+            block_size=16, mesh_filter="median", mesh_filter_size=5
+        )
+        sky = est(image)
+        assert sky.shape == (64, 64)
+
+    def test_gaussian_with_size(self):
+        image = torch.randn(64, 64, dtype=torch.float32) + 5.0
+        est = MeshSkyEstimator(
+            block_size=16, mesh_filter="gaussian", mesh_filter_size=5
+        )
+        sky = est(image)
+        assert sky.shape == (64, 64)
+
+    def test_legacy_median_3_still_works(self):
+        image = torch.randn(64, 64, dtype=torch.float32) + 5.0
+        est = MeshSkyEstimator(block_size=16, mesh_filter="median_3")
+        sky = est(image)
+        assert sky.shape == (64, 64)
+
+    def test_legacy_gaussian_3_still_works(self):
+        image = torch.randn(64, 64, dtype=torch.float32) + 5.0
+        est = MeshSkyEstimator(block_size=16, mesh_filter="gaussian_3")
+        sky = est(image)
+        assert sky.shape == (64, 64)
+
+    def test_larger_filter_gives_smoother(self):
+        torch.manual_seed(42)
+        image = torch.randn(64, 64, dtype=torch.float32)
+        est_small = MeshSkyEstimator(
+            block_size=16, statistic="median", mesh_filter="gaussian",
+            mesh_filter_size=3
+        )
+        est_large = MeshSkyEstimator(
+            block_size=16, statistic="median", mesh_filter="gaussian",
+            mesh_filter_size=7
+        )
+        sky_small = est_small(image)
+        sky_large = est_large(image)
+        assert sky_large.std() < sky_small.std()
+
+
+class TestBlockStride:
+    def test_half_stride_coverage(self):
+        image = torch.full((64, 64), 100.0, dtype=torch.float32)
+        est = MeshSkyEstimator(
+            block_size=16, block_stride=8, statistic="median"
+        )
+        sky = est(image)
+        assert sky.shape == (64, 64)
+        assert torch.allclose(sky, torch.full_like(sky, 100.0), atol=1e-4)
+
+    def test_half_stride_more_detail_than_no_overlap(self):
+        torch.manual_seed(42)
+        image = torch.randn(64, 64, dtype=torch.float32) + 5.0
+        est_no = MeshSkyEstimator(
+            block_size=16, statistic="median", mesh_filter=None
+        )
+        est_over = MeshSkyEstimator(
+            block_size=16, block_stride=8, statistic="median", mesh_filter=None
+        )
+        sky_no = est_no(image)
+        sky_over = est_over(image)
+        assert sky_no.shape == sky_over.shape == (64, 64)
+        assert sky_over.std() > sky_no.std()
+
+    def test_non_divisible_with_overlap(self):
+        image = torch.randn(70, 50, dtype=torch.float32)
+        est = MeshSkyEstimator(
+            block_size=16, block_stride=8, statistic="median"
+        )
+        sky = est(image)
+        assert sky.shape == (70, 50)
+
+    def test_stride_equals_block_size(self):
+        image = torch.randn(64, 64, dtype=torch.float32)
+        est = MeshSkyEstimator(
+            block_size=16, block_stride=16, statistic="median"
+        )
+        sky = est(image)
+        assert sky.shape == (64, 64)
+
+    def test_stride_greater_than_block_raises(self):
+        with pytest.raises(ValueError, match="block_stride"):
+            MeshSkyEstimator(block_size=16, block_stride=32)
+
+
+class TestSelfMaskSigma:
+    def test_self_mask_rejects_outliers(self):
+        image = torch.zeros((64, 64), dtype=torch.float32)
+        image[30:34, 30:34] = 1000.0
+        est = MeshSkyEstimator(
+            block_size=16, statistic="median", self_mask_sigma=3.0
+        )
+        sky = est(image)
+        assert float(sky.max()) < 10.0
+
+    def test_self_mask_with_user_mask(self):
+        image = torch.zeros((64, 64), dtype=torch.float32)
+        image[30:34, 30:34] = 1000.0
+        image[10:12, 10:12] = 500.0
+        user_mask = torch.zeros((64, 64), dtype=torch.bool)
+        user_mask[10:12, 10:12] = True
+        est = MeshSkyEstimator(
+            block_size=16, statistic="median", self_mask_sigma=3.0
+        )
+        sky = est(image, mask=user_mask)
+        assert float(sky.max()) < 10.0
+
+    def test_self_mask_default_disabled(self):
+        image = torch.randn(64, 64, dtype=torch.float32) + 5.0
+        est = MeshSkyEstimator(block_size=16, statistic="median")
+        assert est.self_mask_sigma is None
+        sky = est(image)
+        assert sky.shape == (64, 64)
+
+    def test_self_mask_deterministic(self):
+        torch.manual_seed(42)
+        image = torch.randn(64, 64, dtype=torch.float32) + 5.0
+        est = MeshSkyEstimator(
+            block_size=16, statistic="huber", self_mask_sigma=3.0
+        )
+        sky_a = est(image)
+        sky_b = est(image)
+        assert torch.equal(sky_a, sky_b)
+
+
+class TestPolynomialOnMesh:
+    def test_linear_surface_synthetic(self):
+        H, W = 64, 64
+        yy, xx = torch.meshgrid(
+            torch.linspace(0, 1, H), torch.linspace(0, 1, W), indexing="ij"
+        )
+        image = 10.0 + 5.0 * xx + 3.0 * yy
+        est = MeshSkyEstimator(
+            block_size=16, statistic="median",
+            mesh_filter=None, mesh_polynomial_order=1,
+        )
+        sky = est(image)
+        residual = (image - sky).abs().mean()
+        assert float(residual) < 0.5
+
+    def test_quadratic_surface(self):
+        H, W = 64, 64
+        yy, xx = torch.meshgrid(
+            torch.linspace(-1, 1, H), torch.linspace(-1, 1, W), indexing="ij"
+        )
+        image = 5.0 + 2.0 * xx + 3.0 * yy + 0.5 * xx * yy + 1.0 * xx**2
+        est = MeshSkyEstimator(
+            block_size=16, statistic="median",
+            mesh_filter=None, mesh_polynomial_order=2,
+        )
+        sky = est(image)
+        residual = (image - sky).abs().mean()
+        assert float(residual) < 0.5
+
+    def test_fallback_when_too_few_mesh_points(self):
+        image = torch.randn(24, 24, dtype=torch.float32)
+        est = MeshSkyEstimator(
+            block_size=16, statistic="median",
+            mesh_polynomial_order=4,  # 15 terms, but only 4 mesh cells
+        )
+        sky = est(image)
+        assert sky.shape == (24, 24)
+
+    def test_polynomial_with_filter(self):
+        image = torch.randn(64, 64, dtype=torch.float32) + 5.0
+        est = MeshSkyEstimator(
+            block_size=16, statistic="median",
+            mesh_filter="median", mesh_filter_size=3,
+            mesh_polynomial_order=2,
+        )
+        sky = est(image)
+        assert sky.shape == (64, 64)
+
+    def test_polynomial_differentiable(self):
+        image = torch.randn(32, 32, dtype=torch.float64, requires_grad=True)
+        est = MeshSkyEstimator(
+            block_size=8, statistic="huber",
+            mesh_filter=None, mesh_polynomial_order=2,
+        )
+        sky = est(image)
+        loss = sky.sum()
+        loss.backward()
+        assert image.grad is not None
+        assert image.grad.isfinite().any()
+
+    def test_polynomial_order_one(self):
+        image = torch.randn(64, 64, dtype=torch.float32) + 5.0
+        est = MeshSkyEstimator(
+            block_size=16, statistic="median",
+            mesh_filter=None, mesh_polynomial_order=1,
+        )
+        sky = est(image)
+        assert sky.shape == (64, 64)
+
+    def test_invalid_order_raises(self):
+        with pytest.raises(ValueError, match="mesh_polynomial_order"):
+            MeshSkyEstimator(mesh_polynomial_order=0)
+
+
+class TestValidation:
+    def test_unknown_statistic(self):
+        with pytest.raises(ValueError, match="unknown statistic"):
+            MeshSkyEstimator(statistic="invalid")
+
+    def test_unknown_mesh_filter(self):
+        with pytest.raises(ValueError, match="unknown mesh_filter"):
+            MeshSkyEstimator(mesh_filter="invalid")
+
+    def test_unknown_interpolate(self):
+        with pytest.raises(ValueError, match="unknown interpolate"):
+            MeshSkyEstimator(interpolate="invalid")

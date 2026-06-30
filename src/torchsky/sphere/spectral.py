@@ -487,7 +487,7 @@ def _ylm_basis(
     return out
 
 
-@torch.jit.script
+@torch.compile
 def _wigner_d_element(ell: int, m: int, mp: int, theta: Tensor) -> Tensor:
     """
     Compute Wigner small-d element d^ell_{m,mp}(theta).
@@ -533,7 +533,7 @@ def _wigner_d_element(ell: int, m: int, mp: int, theta: Tensor) -> Tensor:
     return out
 
 
-@torch.jit.script
+@torch.compile
 def _wigner_d_l_sequence(
     ell_min: int, ell_max: int, m: int, mp: int, theta: Tensor
 ) -> Tensor:

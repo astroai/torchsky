@@ -8,6 +8,7 @@ from typing import Callable, Mapping, Sequence
 import torch
 from torch import Tensor
 
+from .background import SpatialSkyBackgroundOp
 from .bundle import ObservationOperatorBundle, image_observation_operator_bundle
 from .geometry import (
     ConservativePolygonRemapOp,
@@ -184,12 +185,24 @@ def prepare_image_observation_data(
     resampling_kernel: str,
     load_weight_map_fn: LoadWeightMapFn,
     apply_calibration_fn: ApplyCalibrationFn,
+    background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
 ) -> PreparedImageObservationData:
-    """Normalize image-plane observation inputs into operator-ready tensors."""
+    """Normalize image-plane observation inputs into operator-ready tensors.
+
+    When *background_estimator* is provided, a
+    :class:`SpatialSkyBackgroundOp` is injected into the operator bundle.
+    The spatial sky model is estimated and subtracted **after** calibration
+    (which handles the constant ``background_offset``), so the spatial model
+    captures residual spatially-varying background on calibrated data.
+    """
     operator_bundle = image_observation_operator_bundle(
         observation,
         resampling_kernel=resampling_kernel,
     )
+    if background_estimator is not None:
+        operator_bundle = operator_bundle.with_updates(
+            background=SpatialSkyBackgroundOp(background_estimator),
+        )
     if operator_bundle.mask_weight is not None or operator_bundle.noise is not None:
         source_weight = load_weight_map_fn(observation, image, device=device)
     else:
@@ -208,6 +221,12 @@ def prepare_image_observation_data(
             neginf=0.0,
         )
         prepared_weight = source_weight.to(dtype=torch.float32)
+    spatial_bg = operator_bundle.background
+    if isinstance(spatial_bg, SpatialSkyBackgroundOp) and spatial_bg.enabled:
+        estimator = spatial_bg.background_estimator
+        assert estimator is not None
+        sky_model = estimator(prepared_image, None)
+        prepared_image = prepared_image - sky_model.to(dtype=prepared_image.dtype)
     return PreparedImageObservationData(
         image=prepared_image,
         source_weight=prepared_weight,

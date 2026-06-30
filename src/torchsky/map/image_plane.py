@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 from dataclasses import dataclass
 import math
 import os
@@ -27,6 +26,7 @@ from ..wcs import WCS
 from .fft_affine_ldu import resample_fft_ldu_affine_2d
 from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_fft2d
 from .operators.background import SkyBackgroundOp
+from .sky import CrossExposureSkyCorrector
 from .operators.bundle import ObservationOperatorBundle
 from .operators.geometry import ForwardSplatGeometryOp
 from .operators.config import (
@@ -1518,6 +1518,7 @@ def _project_observation_to_target_chunk(
     resampling_kernel: MapResamplingKernel,
     value_semantics: MapValueSemantics,
     drizzle_pixfrac: float,
+    background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
 ) -> _ProjectedImagePlaneObservation:
     if not torch.isfinite(torch.tensor(obs.weight, dtype=torch.float64)):
         raise ValueError("Observation weights must be finite")
@@ -1536,6 +1537,7 @@ def _project_observation_to_target_chunk(
         resampling_kernel=resampling_kernel,
         load_weight_map_fn=_load_observation_weight_map,
         apply_calibration_fn=_apply_observation_calibration,
+        background_estimator=background_estimator,
     )
     image = prepared_observation.image
     source_weight = prepared_observation.source_weight
@@ -1641,6 +1643,7 @@ def _project_observation_to_target(
     resampling_kernel: MapResamplingKernel,
     value_semantics: MapValueSemantics,
     drizzle_pixfrac: float = 1.0,
+    background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
 ) -> tuple[Tensor, Tensor, Tensor, MOC | None]:
     projected = _project_observation_to_target_chunk(
         obs,
@@ -1655,6 +1658,7 @@ def _project_observation_to_target(
         resampling_kernel=resampling_kernel,
         value_semantics=value_semantics,
         drizzle_pixfrac=drizzle_pixfrac,
+        background_estimator=background_estimator,
     )
     if projected.target_window is None:
         return projected.numer, projected.weight, projected.overlap, projected.moc
@@ -1939,6 +1943,7 @@ def _coadd_image_plane_spatial_tiles(
     drizzle_pixfrac: float,
     map_device: torch.device,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
+    cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
 ) -> MapResult:
     """Accumulate a large map in non-overlapping spatial tiles to cap per-tile memory."""
     if not observations:
@@ -1997,6 +2002,7 @@ def _coadd_image_plane_spatial_tiles(
                 surface_brightness_area_scaling=mosaic_surface_brightness_area_scaling,
                 device=map_device,
                 background_estimator=background_estimator,
+                cross_exposure_sky_corrector=cross_exposure_sky_corrector,
             )
             full_data[y0:y1, x0:x1] = sub.data.to(device=device)
             full_weight[y0:y1, x0:x1] = sub.weight.to(device=device)
@@ -2030,6 +2036,7 @@ def coadd_image_plane(
     surface_brightness_area_scaling: bool | None = None,
     device: torch.device | str | None = None,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
+    cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
 ) -> MapResult:
     if not observations:
         raise ValueError("At least one observation is required")
@@ -2094,6 +2101,7 @@ def coadd_image_plane(
             drizzle_pixfrac=drizzle_pixfrac,
             map_device=map_device,
             background_estimator=background_estimator,
+            cross_exposure_sky_corrector=cross_exposure_sky_corrector,
         )
     if not (
         value_semantics == "surface_brightness" and stacking_method == "weighted_mean"
@@ -2133,6 +2141,10 @@ def coadd_image_plane(
     observation_mocs: list[MOC] | None = [] if footprint_order is not None else None
     median_images: list[Tensor] | None = [] if stacking_method == "median" else None
     median_support: list[Tensor] | None = [] if stacking_method == "median" else None
+    projected_store: list[dict] | None = (
+        [] if cross_exposure_sky_corrector is not None and stacking_method != "median"
+        else None
+    )
 
     # Batch MEF reading: group observations by path, read files with ≥2 HDUs once
     # into the module-level _obs_image_cache (persists across tiled calls).
@@ -2167,10 +2179,6 @@ def coadd_image_plane(
             image = validate_image_plane_2d(image)
             header_dict_obs = dict(header)
             _obs_image_cache[key] = (image, header_dict_obs)
-        if background_estimator is not None:
-            bg_model = background_estimator(image, None)
-            image = image - bg_model
-            obs = dataclasses.replace(obs, background_offset=0.0)
         need_prepared_target = (
             value_semantics == "flux"
             or footprint_order is not None
@@ -2200,6 +2208,7 @@ def coadd_image_plane(
                     resampling_kernel=resampling_kernel,
                     value_semantics=value_semantics,
                     drizzle_pixfrac=drizzle_pixfrac,
+                    background_estimator=background_estimator,
                 )
             )
             contrib_numer, contrib_weight = stack_inputs_from_projected_observation(
@@ -2235,6 +2244,7 @@ def coadd_image_plane(
                 resampling_kernel=resampling_kernel,
                 value_semantics=value_semantics,
                 drizzle_pixfrac=drizzle_pixfrac,
+                background_estimator=background_estimator,
             )
             pixel_area_sr = None
             if value_semantics == "flux":
@@ -2259,8 +2269,54 @@ def coadd_image_plane(
                 pixel_area_sr=pixel_area_sr,
                 target_window=projected.target_window,
             )
+            if projected_store is not None:
+                projected_store.append(
+                    {
+                        "numer": projected.numer,
+                        "weight": projected.weight,
+                        "overlap": projected.overlap,
+                        "target_window": projected.target_window,
+                    }
+                )
             if observation_mocs is not None and projected.moc is not None:
                 observation_mocs.append(projected.moc)
+
+    if cross_exposure_sky_corrector is not None:
+        if stacking_method == "median":
+            assert median_images is not None and median_support is not None
+            corrector_masks = [~(s > 0.0) for s in median_support]
+            corrected = cross_exposure_sky_corrector.correct(median_images, corrector_masks)
+            median_images.clear()
+            median_images.extend(corrected)
+        else:
+            assert projected_store is not None
+            images = []
+            masks = []
+            for ps in projected_store:
+                n = ps["numer"]
+                w = ps["weight"]
+                img = torch.where(w > 0.0, n / w, torch.zeros_like(n))
+                images.append(img)
+                masks.append(~(w > 0.0))
+            corrected = cross_exposure_sky_corrector.correct(images, masks)
+            numer.zero_()
+            denom.zero_()
+            overlap_count.zero_()
+            for i, ps in enumerate(projected_store):
+                w = ps["weight"]
+                overlap_contrib = ps["overlap"]
+                corrected_numer = corrected[i] * w
+                tw = ps["target_window"]
+                if tw is None:
+                    numer.add_(corrected_numer)
+                    denom.add_(w)
+                    overlap_count.add_(overlap_contrib)
+                else:
+                    y0, y1, x0, x1 = tw
+                    if y1 > y0 and x1 > x0:
+                        numer[y0:y1, x0:x1].add_(corrected_numer)
+                        denom[y0:y1, x0:x1].add_(w)
+                        overlap_count[y0:y1, x0:x1].add_(overlap_contrib)
 
     if stacking_method == "median":
         assert median_images is not None and median_support is not None
@@ -2315,6 +2371,7 @@ class ImagePlaneMapMaker:
         spatial_tile_hw: tuple[int, int] | None = None,
         device: torch.device | str | None = None,
         background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
+        cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
     ) -> None:
         self.target_header = target_header
         self.resampling_kernel = _validated_map_resampling_kernel(resampling_kernel)
@@ -2328,6 +2385,7 @@ class ImagePlaneMapMaker:
         )
         self.device = device
         self.background_estimator = background_estimator
+        self.cross_exposure_sky_corrector = cross_exposure_sky_corrector
 
     def run(
         self,
@@ -2348,6 +2406,7 @@ class ImagePlaneMapMaker:
             spatial_tile_hw=self.spatial_tile_hw,
             device=eff_device,
             background_estimator=self.background_estimator,
+            cross_exposure_sky_corrector=self.cross_exposure_sky_corrector,
         )
 
 
@@ -2368,9 +2427,15 @@ def coadd_image_plane_cube(
     reference_index: int = 0,
     device: torch.device | str | None = None,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
+    cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
 ) -> SpectralCubeMapResult:
     if not observations:
         raise ValueError("At least one observation is required")
+    if cross_exposure_sky_corrector is not None:
+        raise NotImplementedError(
+            "cross_exposure_sky_corrector is not yet implemented for cube coaddition; "
+            "use coadd_image_plane with per-band observations"
+        )
     if target is not None and (
         target_header is not None
         or spectral_axis is not None
@@ -2488,10 +2553,6 @@ def coadd_image_plane_cube(
             )
             image = validate_image_plane_2d(image)
             header_dict_obs = dict(header)
-        if background_estimator is not None:
-            bg_model = background_estimator(image, None)
-            image = image - bg_model
-            obs = dataclasses.replace(obs, background_offset=0.0)
         need_prepared_target = (
             value_semantics == "flux"
             or footprint_order is not None
@@ -2517,6 +2578,7 @@ def coadd_image_plane_cube(
             resampling_kernel=resampling_kernel,
             value_semantics=value_semantics,
             drizzle_pixfrac=drizzle_pixfrac,
+            background_estimator=background_estimator,
         )
         coeffs = (
             projection[obs_idx]
