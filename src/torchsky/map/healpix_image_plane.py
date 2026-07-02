@@ -41,13 +41,12 @@ def sample_healpix_map_on_image_header(
         ``[NAXIS2, NAXIS1]`` tensor matching the target image shape.
 
     Note:
-        Map values are detached before :func:`torchsky.sphere.healpix.get_interp_val`
-        because the native interpolation kernels do not accept tensors that require
-        grad through DLPack. Use :func:`render_field_cube` for direct autograd through
-        pixel centers, or a future pure-torch interpolator if spherical resampling must
-        remain differentiable end-to-end.
+        When ``healpix_map.requires_grad`` is ``True``, gradient flow is
+        preserved through the Python fallback interpolator which uses pure
+        Torch advanced indexing and weighted summation. The C++ fast path is
+        used automatically when no gradient tracking is needed.
     """
-    m = torch.as_tensor(healpix_map).detach()
+    m = torch.as_tensor(healpix_map)
     if m.ndim != 1:
         raise ValueError("healpix_map must be a 1D tensor of length 12*nside**2")
     npix = hp.nside2npix(int(nside))
@@ -62,20 +61,27 @@ def sample_healpix_map_on_image_header(
         raise ValueError("target header must have positive NAXIS1/NAXIS2")
 
     wcs = WCS(dict(target_header))
-    y, x = torch.meshgrid(
-        torch.arange(h, dtype=torch.float64, device=dev),
-        torch.arange(w, dtype=torch.float64, device=dev),
-        indexing="ij",
-    )
-    ra, dec = wcs.pixel_to_world(x, y)
-    flat = hp.get_interp_val(
-        m.to(dtype=torch.float64, device=dev),
-        ra.reshape(-1),
-        dec.reshape(-1),
-        nest=nest,
-        lonlat=True,
-    )
-    return flat.reshape(h, w).to(dtype=m.dtype)
+    result = torch.empty(h, w, dtype=m.dtype, device=dev)
+    chunk_size = 128
+    m_f64 = m.to(dtype=torch.float64, device=dev)
+    for y_start in range(0, h, chunk_size):
+        y_end = min(y_start + chunk_size, h)
+        n_rows = y_end - y_start
+        y, x = torch.meshgrid(
+            torch.arange(y_start, y_end, dtype=torch.float64, device=dev),
+            torch.arange(w, dtype=torch.float64, device=dev),
+            indexing="ij",
+        )
+        ra, dec = wcs.pixel_to_world(x, y)
+        flat = hp.get_interp_val(
+            m_f64,
+            ra.reshape(-1),
+            dec.reshape(-1),
+            nest=nest,
+            lonlat=True,
+        )
+        result[y_start:y_end] = flat.reshape(n_rows, w).to(dtype=m.dtype)
+    return result
 
 
 sample_healpix_map_on_tan_header = sample_healpix_map_on_image_header
@@ -109,36 +115,43 @@ def accumulate_image_on_healpix_map_adjoint(
     dev = device if device is not None else img.device
     npix = hp.nside2npix(int(nside))
     wcs = WCS(dict(source_header))
-    y, x = torch.meshgrid(
-        torch.arange(h, dtype=torch.float64, device=dev),
-        torch.arange(w, dtype=torch.float64, device=dev),
-        indexing="ij",
-    )
-    ra, dec = wcs.pixel_to_world(x, y)
-    valid = (
-        torch.isfinite(ra) & torch.isfinite(dec) & torch.isfinite(img.to(device=dev))
-    )
-    if not bool(valid.any()):
-        return torch.zeros(npix, dtype=img.dtype, device=dev)
-    pix, weight = hp.get_interp_weights(
-        int(nside),
-        ra.reshape(-1),
-        dec.reshape(-1),
-        nest=nest,
-        lonlat=True,
-    )
-    valid_flat = valid.reshape(-1)
-    pix_flat = pix.reshape(4, -1)[:, valid_flat]
-    weight_flat = weight.reshape(4, -1)[:, valid_flat].to(
-        dtype=torch.float64, device=dev
-    )
-    values_flat = img.reshape(-1)[valid_flat].to(dtype=torch.float64, device=dev)
     out = torch.zeros(npix, dtype=torch.float64, device=dev)
-    out.scatter_add_(
-        0,
-        pix_flat.reshape(-1),
-        (weight_flat * values_flat.unsqueeze(0)).reshape(-1),
-    )
+    img_f64 = img.to(dtype=torch.float64, device=dev)
+    chunk_size = 128
+    any_valid = False
+    for y_start in range(0, h, chunk_size):
+        y_end = min(y_start + chunk_size, h)
+        y, x = torch.meshgrid(
+            torch.arange(y_start, y_end, dtype=torch.float64, device=dev),
+            torch.arange(w, dtype=torch.float64, device=dev),
+            indexing="ij",
+        )
+        ra, dec = wcs.pixel_to_world(x, y)
+        chunk_img = img_f64[y_start:y_end]
+        valid = torch.isfinite(ra) & torch.isfinite(dec) & torch.isfinite(chunk_img)
+        if not bool(valid.any()):
+            continue
+        any_valid = True
+        pix, weight = hp.get_interp_weights(
+            int(nside),
+            ra.reshape(-1),
+            dec.reshape(-1),
+            nest=nest,
+            lonlat=True,
+        )
+        valid_flat = valid.reshape(-1)
+        pix_flat = pix.reshape(4, -1)[:, valid_flat]
+        weight_flat = weight.reshape(4, -1)[:, valid_flat].to(
+            dtype=torch.float64, device=dev
+        )
+        values_flat = chunk_img.reshape(-1)[valid_flat]
+        out.scatter_add_(
+            0,
+            pix_flat.reshape(-1),
+            (weight_flat * values_flat.unsqueeze(0)).reshape(-1),
+        )
+    if not any_valid:
+        return torch.zeros(npix, dtype=img.dtype, device=dev)
     return out.to(dtype=img.dtype)
 
 

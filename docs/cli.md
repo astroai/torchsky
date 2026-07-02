@@ -10,27 +10,14 @@ Python API when composing tensor-native pipelines inside another application.
 
 ## Commands
 
-### `torchsky info`
+### FITS inspection
 
-Prints a read-only FITS HDU summary without materializing image/table data:
+FITS inspection and table sampling belong to `torchfits`. The legacy
+`torchsky info` and `torchsky cat` commands are migration-only and must not gain
+new behavior. Use the corresponding `torchfits` API/tooling for new automation.
 
-```bash
-torchsky info image_or_table.fits
-torchsky info image_or_table.fits --json
-```
-
-Use `--headers` when an automation needs per-HDU header cards in the output.
-
-### `torchsky cat`
-
-Prints a bounded sample from a FITS table HDU:
-
-```bash
-torchsky cat catalog.fits --hdu CAT --columns RA,DEC --rows 5
-torchsky cat catalog.fits --hdu 1 --rows 5 --json
-```
-
-`--start-row` is 1-based, matching the Python table-read API.
+Torchsky CLI work is limited to sky-domain map, scene, and visualization
+workflows. File decoding should enter through an explicit `torchfits` adapter.
 
 ### `torchsky viz`
 
@@ -71,6 +58,10 @@ on a specific FITS WCS/shape instead of the planned union grid.
 Use `--dry-run` before large jobs to validate the expanded input list and print
 the planned output shape/tiling decision without writing the map or fitting an
 INR.
+
+The current path-oriented map CLI is an application-layer integration with
+`torchfits`; map kernels themselves consume decoded observations and do not own
+FITS I/O.
 
 ## Automation Guidance
 

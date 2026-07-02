@@ -342,7 +342,8 @@ Apply beam smoothing directly to alm coefficients.
 | `pixwin(nside, *, pol=False, lmax=None)` | HEALPix pixel window function |
 | `bl2beam(bl, theta)` / `beam2bl(beam, theta, lmax)` | Beam profile to/from harmonic window |
 
-Pixel window data is packaged as FITS tables — no healpy runtime dependency.
+Pixel window coefficients are embedded as generated package data—no healpy or
+FITS reader runtime dependency.
 
 ---
 
@@ -405,7 +406,7 @@ Functions in `torchsky.sphere.compat` (and the `torchsky.sphere.healpy` alias) m
 | `synalm` | parity | scalar/multi-field; `new` ordering |
 | `synfast` | parity | scalar/polarized; optional `alm` return |
 | `gaussian_beam` / `gauss_beam` | parity | scalar + polarized |
-| `pixwin` | parity | packaged pixel-window FITS tables (no healpy runtime dep) |
+| `pixwin` | parity | embedded generated pixel-window data (no healpy/FITS runtime dependency) |
 | `bl2beam` / `beam2bl` | parity | beam profile ↔ harmonic window |
 | `smoothalm` | parity | scalar + polarized |
 | `smoothmap` / `smoothing` | parity | scalar + polarized; torch-native |

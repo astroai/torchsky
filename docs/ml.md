@@ -1,73 +1,40 @@
-# ML, Datasets, Transforms, And Runtime Tuning
+# ML, Transforms, And Runtime Tuning
 
-This page covers PyTorch datasets, dataloader helpers, transforms, cache tuning,
-and buffer utilities used in survey-scale ML pipelines.
+Torchsky owns tensor transforms, observation models, training utilities, and
+compute buffers. File-backed FITS datasets and FITS table chunk readers belong
+to `torchfits` or to application code composed around it.
 
-## What This Surface Is For
+## Data Boundary
 
-Use these helpers when FITS images or table chunks are training data. The goal is
-to keep ingestion tensor-native, chunkable, and compatible with PyTorch
-`DataLoader` patterns.
-
-## Core Concepts
-
-- `FITSDataset` is map-style and works well for random image access.
-- `IterableFITSDataset` streams large file collections and supports multi-worker
-  loading.
-- `TableChunkDataset` streams FITS table chunks.
-- Transforms are tensor-first and can run on GPU when their operations support
-  the target device.
-- Cache and buffer helpers expose explicit knobs for long-running processes.
-
-## Recipes
-
-### Build An Image Dataset
+Build a PyTorch `Dataset` or `IterableDataset` that loads with `torchfits`, then
+apply torchsky tensor transforms:
 
 ```python
-from torchsky.datasets import FITSDataset
+import torchfits
+from torch.utils.data import Dataset
 from torchsky.transforms import Compose, RandomCrop, ZScale
 
-dataset = FITSDataset(
-    file_paths,
-    hdu="auto",
-    transform=Compose([RandomCrop(256), ZScale()]),
-    mmap="auto",
-)
+
+class ImageDataset(Dataset):
+    def __init__(self, paths):
+        self.paths = paths
+        self.transform = Compose([RandomCrop(256), ZScale()])
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, index):
+        image, header = torchfits.read(
+            self.paths[index], hdu="auto", return_header=True
+        )
+        return self.transform(image), header
 ```
 
-### Create A DataLoader
+For massive datasets, prefer manifest-backed iterable datasets with explicit
+sharding, bounded prefetch, deterministic worker partitioning, and measurable
+peak memory. Do not hide file I/O in geometry or model objects.
 
-```python
-from torchsky.datasets import create_fits_dataloader
-
-loader = create_fits_dataloader(
-    file_paths,
-    hdu="auto",
-    batch_size=32,
-    num_workers=4,
-)
-```
-
-### Tune Runtime Caches
-
-```python
-from torchsky import cache
-
-stats = cache.stats()
-cache.clear()
-```
-
-## API Surface
-
-Datasets and loaders:
-
-- `FITSDataset`
-- `IterableFITSDataset`
-- `TableChunkDataset`
-- `torchsky.datasets.create_dataloader(...)`
-- `torchsky.datasets.create_fits_dataloader(...)`
-- `torchsky.datasets.create_streaming_dataloader(...)`
-- `torchsky.datasets.create_table_dataloader(...)`
+## Torchsky-Owned Surface
 
 Transforms:
 
@@ -79,22 +46,18 @@ Transforms:
 - `create_training_transform(...)`, `create_validation_transform(...)`,
   `create_inference_transform(...)`
 
-Runtime:
+Runtime buffers:
 
-- `torchsky.cache.stats(...)`
-- `torchsky.cache.clear(...)`
-- `torchsky.io.get_cache_performance(...)`
-- `torchsky.io.clear_file_cache(...)` with knobs for data, handles, metadata, HDU types,
-  stats, and C++ cache state
-- `torchsky.buffer.configure_buffers(...)`,
-  `torchsky.buffer.get_buffer_stats(...)`, `torchsky.buffer.clear_buffers(...)`
+- `torchsky.buffer.configure_buffers(...)`
+- `torchsky.buffer.get_buffer_stats(...)`
+- `torchsky.buffer.clear_buffers(...)`
 
-## Examples
-
-- [Image dataset example](../examples/example_image_dataset.py)
-- [ML pipeline example](../examples/example_ml_pipeline.py)
+FITS handle/data/metadata cache policy belongs to `torchfits`.
 
 ## Validation And Performance
 
-Use `benchmarks/bench_ml_loader.py`, `benchmarks/bench_cache.py`, and
-`benchmarks/bench_buffer.py` for throughput and runtime tuning checks.
+Measure end-to-end training input throughput separately from model throughput.
+Report worker count, batch size, transfer volume, peak host/device memory, and
+the point where input becomes the bottleneck. FITS decode/cache microbenchmarks
+belong in `torchfits`; torchsky benchmarks should focus on transforms,
+operators, and model execution.

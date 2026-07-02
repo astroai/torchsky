@@ -10,6 +10,11 @@ on:
 
 env:
   FORCE_COLOR: 1
+  KMP_DUPLICATE_LIB_OK: TRUE
+  OMP_NUM_THREADS: 1
+  MKL_NUM_THREADS: 1
+  OPENBLAS_NUM_THREADS: 1
+  NUMEXPR_NUM_THREADS: 1
 
 jobs:
   pre-commit:
@@ -139,88 +144,4 @@ jobs:
           pixi run -e sphere-bench -- env PYTHONPATH=src:benchmarks python benchmarks/bench_map_smacs0723_strainer_transfer.py \
             --steps 4 --synthetic-pretrain-steps 8
 
-  memory-safety:
-    name: Memory Leak Detection
-    runs-on: ubuntu-latest
-    needs: build-test
 
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y valgrind build-essential
-
-      - uses: prefix-dev/setup-pixi@v0.8.0
-        with:
-          pixi-version: latest
-
-      - name: Install default environment
-        run: pixi install --frozen -e default
-
-      - name: Run memory leak tests
-        run: |
-          echo "Memory leak testing would run here with valgrind"
-          echo "Skipping for initial release"
-
-  performance-benchmark:
-    name: Performance Benchmarks
-    runs-on: ubuntu-latest
-    needs: build-test
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
-
-      - uses: prefix-dev/setup-pixi@v0.8.0
-        with:
-          pixi-version: latest
-
-      - name: Install test environment
-        run: pixi install --frozen -e test
-
-      - name: Build editable torchsky (C++ extension)
-        run: pixi run -e test -- pip install -e . --no-build-isolation
-
-      - name: Run performance benchmarks
-        run: pixi run -e test -- python benchmarks/bench_cpp_backend.py
-
-      - name: Generate performance report
-        run: |
-          pixi run -e test -- python -c "
-          import json
-          import os
-          if os.path.exists('benchmark_results/cpp_backend_results.json'):
-              with open('benchmark_results/cpp_backend_results.json') as f:
-                   data = json.load(f)
-              print('Benchmark successfully ran.')
-          else:
-              print('Benchmark results not found.')
-          "
-
-  documentation:
-    name: Documentation Build
-    runs-on: ubuntu-latest
-    needs: pre-commit
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install sphinx sphinx-rtd-theme
-
-      - name: Build documentation
-        run: |
-          echo "Documentation build would go here"
-          echo "README.md exists: $(ls -la README.md)"

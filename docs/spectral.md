@@ -8,7 +8,7 @@ spectral coordinate transforms in `torchsky.wcs`.
 
 Use this namespace when you want containers and readers for spectra or cubes.
 Use [wcs.md](wcs.md) for FITS-WCS spectral coordinate transforms and
-[io.md](io.md) for generic FITS I/O.
+[io.md](io.md) for the `torchfits` file-I/O boundary.
 
 ## Core Concepts
 
@@ -17,7 +17,7 @@ Use [wcs.md](wcs.md) for FITS-WCS spectral coordinate transforms and
   masks.
 - `DataCube` represents spatial plus spectral arrays with helpers for slices,
   collapse, and spectrum extraction.
-- This surface is experimental; broad FITS I/O remains in the core I/O docs.
+- This surface is experimental; generic FITS I/O belongs to `torchfits`.
 
 ## Recipes
 
@@ -55,7 +55,7 @@ collapsed = cube.collapse_spectral(method="mean")
 
 ## Related Guides
 
-- [io.md](io.md) for FITS files and HDUs.
+- [io.md](io.md) for loading FITS files and HDUs through `torchfits`.
 - [wcs.md](wcs.md) for spectral WCS transforms.
 - [map.md](map.md) for cube and multiband map products.
 - [field.md](field.md) for fitting continuous spectral fields and writing cubes with

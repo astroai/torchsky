@@ -13,7 +13,7 @@ from typing import Sequence
 import torch
 
 from ..device import default_compute_device
-from ..io import read, write
+from ..io import HDUList, TensorHDU, read, write
 from ..map.field import (
     FieldObservation,
     estimate_field_domain,
@@ -25,7 +25,9 @@ from ..map.image_plane import (
     ImageObservation,
     ImagePlaneMapMaker,
     plan_image_plane_target,
+    target_shape_from_header,
 )
+from ..map.sky import MeshSkyEstimator, PolynomialSkyModel
 from ..filter_profiles import field_observation_spectral_kwargs, resolve_inr_bandpass
 
 # Minimal bandpass hints for INR when FITS headers lack spectral metadata (Angstrom).
@@ -109,10 +111,33 @@ def _map_read_device_str(args: argparse.Namespace) -> str:
     return str(default_compute_device())
 
 
+def _probe_image_hdus(path: str) -> tuple[int, ...]:
+    """Return tuple of HDU indices containing image data (TensorHDU with NAXIS>0).
+
+    Returns empty tuple for unreadable files or files with no image HDUs.
+    """
+    try:
+        with HDUList.fromfile(path) as hdul:
+            indices: list[int] = []
+            for i, h in enumerate(hdul):
+                if not isinstance(h, TensorHDU):
+                    continue
+                naxis_raw = h.header.get("NAXIS", "0")
+                try:
+                    naxis = int(str(naxis_raw).strip())
+                except (ValueError, AttributeError):
+                    naxis = 0
+                if naxis > 0:
+                    indices.append(i)
+            return tuple(indices)
+    except Exception:
+        return ()
+
+
 def _paths_to_field_observations(
     paths: Sequence[str],
     *,
-    hdu: int,
+    hdu: int | Sequence[int] = 0,
     spectral_kw: dict,
     read_device: str,
     weights: Sequence[float] | None = None,
@@ -138,10 +163,17 @@ def _paths_to_field_observations(
         raise ValueError("weight_maps count must match input path count")
     if len(mpaths) != len(paths):
         raise ValueError("mask_maps count must match input path count")
-    for p, scalar_weight, background_offset, weight_path, mask_path in zip(
-        paths, scalar_weights, backgrounds, wpaths, mpaths
+    hdus: Sequence[int]
+    if isinstance(hdu, int):
+        hdus = [hdu] * len(paths)
+    else:
+        hdus = list(hdu)
+        if len(hdus) != len(paths):
+            raise ValueError("hdus (len={}) count must match paths count ({})".format(len(hdus), len(paths)))
+    for p, hdu_i, scalar_weight, background_offset, weight_path, mask_path in zip(
+        paths, hdus, scalar_weights, backgrounds, wpaths, mpaths
     ):
-        img, hdr = read(p, hdu=hdu, return_header=True, device=read_device)
+        img, hdr = read(p, hdu=hdu_i, return_header=True, device=read_device)
         if img.ndim != 2:
             raise ValueError(f"{p}: expected 2D image")
         weight = torch.ones_like(img, dtype=torch.float32) * float(scalar_weight)
@@ -203,10 +235,133 @@ def _run_coadd(args: argparse.Namespace) -> int:
         print("torchsky map: no input files matched", file=sys.stderr)
         return 2
     read_dev = _map_read_device_str(args)
+
+    # Expand MEFs: probe each file for image HDUs and create per-HDU entries.
+    expanded_paths: list[str] = []
+    expanded_hdus: list[int] = []
+    expanded_weights: list[float] = []
+    expanded_photometric_scales: list[float] = []
+    expanded_background_offsets: list[float] = []
+    expanded_weight_maps: list[str | None] = []
+    expanded_mask_maps: list[str | None] = []
+    expanded_primary_beam_maps: list[str | None] = []
+
+    user_hdu = int(args.hdu)
+    for i, p in enumerate(inputs):
+        image_hdus = _probe_image_hdus(p)
+        if len(image_hdus) == 0:
+            # Can't probe (file missing, unreadable, or has no image HDU).
+            # Fall back to user-specified --hdu so read() errors naturally later.
+            expanded_paths.append(p)
+            expanded_hdus.append(user_hdu)
+            expanded_weights.append(float(args.weights[i]))
+            expanded_photometric_scales.append(float(args.photometric_scales[i]))
+            expanded_background_offsets.append(float(args.background_offsets[i]))
+            expanded_weight_maps.append(args.weight_maps[i])
+            expanded_mask_maps.append(args.mask_maps[i])
+            expanded_primary_beam_maps.append(args.primary_beam_maps[i])
+        elif len(image_hdus) == 1:
+            # Single-image file: use user-specified HDU (or the detected one)
+            hdu = user_hdu if user_hdu in image_hdus else image_hdus[0]
+            expanded_paths.append(p)
+            expanded_hdus.append(hdu)
+            expanded_weights.append(float(args.weights[i]))
+            expanded_photometric_scales.append(float(args.photometric_scales[i]))
+            expanded_background_offsets.append(float(args.background_offsets[i]))
+            expanded_weight_maps.append(args.weight_maps[i])
+            expanded_mask_maps.append(args.mask_maps[i])
+            expanded_primary_beam_maps.append(args.primary_beam_maps[i])
+        else:
+            # MEF: one observation per HDU
+            if user_hdu != 0 and user_hdu in image_hdus:
+                # User explicitly wants one specific HDU
+                expanded_paths.append(p)
+                expanded_hdus.append(user_hdu)
+                expanded_weights.append(float(args.weights[i]))
+                expanded_photometric_scales.append(float(args.photometric_scales[i]))
+                expanded_background_offsets.append(float(args.background_offsets[i]))
+                expanded_weight_maps.append(args.weight_maps[i])
+                expanded_mask_maps.append(args.mask_maps[i])
+                expanded_primary_beam_maps.append(args.primary_beam_maps[i])
+            else:
+                # Auto-expand: one per image HDU
+                for hdu in image_hdus:
+                    expanded_paths.append(p)
+                    expanded_hdus.append(hdu)
+                    expanded_weights.append(float(args.weights[i]))
+                    expanded_photometric_scales.append(float(args.photometric_scales[i]))
+                    expanded_background_offsets.append(float(args.background_offsets[i]))
+                    expanded_weight_maps.append(args.weight_maps[i])
+                    expanded_mask_maps.append(args.mask_maps[i])
+                    expanded_primary_beam_maps.append(args.primary_beam_maps[i])
+                n_hdus = len(image_hdus)
+                print(
+                    f"  {p}: auto-expanded {n_hdus} image HDUs {list(image_hdus)}",
+                    file=sys.stderr,
+                )
+
+    n_observations = len(expanded_paths)
+
+    # Optional sky estimation pre-processing
+    sky_paths = list(expanded_paths)
+    sky_hdus = list(expanded_hdus)
+    sky_weights = list(expanded_weights)
+    sky_photometric_scales = list(expanded_photometric_scales)
+    sky_background_offsets = list(expanded_background_offsets)
+    sky_weight_maps = list(expanded_weight_maps)
+    sky_mask_maps = list(expanded_mask_maps)
+    sky_primary_beam_maps = list(expanded_primary_beam_maps)
+
+    if getattr(args, "sky", False):
+        from tempfile import NamedTemporaryFile
+
+        sky_method = getattr(args, "sky_method", "mesh")
+        sky_stat = getattr(args, "sky_statistic", "huber")
+        sky_block = int(getattr(args, "sky_block_size", 128))
+        sky_order = int(getattr(args, "sky_order", 3))
+        sky_filter = getattr(args, "sky_mesh_filter", "median_3")
+        sky_interp = getattr(args, "sky_interpolate", "bicubic")
+
+        if sky_method == "mesh":
+            est = MeshSkyEstimator(
+                block_size=sky_block,
+                statistic=sky_stat,
+                mesh_filter=sky_filter,
+                interpolate=sky_interp,
+            )
+        else:
+            est = PolynomialSkyModel(order=sky_order, statistic=sky_stat)
+
+        temp_paths: list[str] = []
+        for i in range(n_observations):
+            p = sky_paths[i]
+            hdu = sky_hdus[i]
+            img, hdr = read(p, hdu=hdu, return_header=True, device=read_dev)
+            mask = None
+            if sky_mask_maps[i] is not None:
+                mask = read(str(sky_mask_maps[i]), hdu=args.mask_map_hdu, device=read_dev)
+                mask = mask.to(dtype=torch.bool)
+            sky = est(img, mask) if mask is not None else est(img)
+            subbed = img - sky
+            tf = NamedTemporaryFile(suffix=".fits", delete=False)
+            write(tf.name, subbed.cpu(), header=dict(hdr), overwrite=True)
+            temp_paths.append(tf.name)
+            print(
+                f"  sky [{i}] path={Path(p).name} hdu={hdu} "
+                f"method={sky_method} stat={sky_stat} "
+                f"mean_sky={float(sky.mean()):.4f}",
+                file=sys.stderr,
+            )
+
+        sky_paths = temp_paths
+        sky_hdus = [0] * n_observations
+        # Reset offsets since sky is already subtracted
+        sky_background_offsets = [0.0] * n_observations
+
     observations = [
         ImageObservation(
             path=p,
-            hdu=args.hdu,
+            hdu=hdu,
             weight=float(w),
             photometric_scale=float(ps),
             background_offset=float(bg),
@@ -217,14 +372,15 @@ def _run_coadd(args: argparse.Namespace) -> int:
             primary_beam_path=pbp,
             primary_beam_hdu=args.primary_beam_hdu,
         )
-        for p, w, ps, bg, wp, mp, pbp in zip(
-            inputs,
-            args.weights,
-            args.photometric_scales,
-            args.background_offsets,
-            args.weight_maps,
-            args.mask_maps,
-            args.primary_beam_maps,
+        for p, hdu, w, ps, bg, wp, mp, pbp in zip(
+            sky_paths,
+            sky_hdus,
+            sky_weights,
+            sky_photometric_scales,
+            sky_background_offsets,
+            sky_weight_maps,
+            sky_mask_maps,
+            sky_primary_beam_maps,
         )
     ]
     pr = int(args.plan_reference)
@@ -242,22 +398,17 @@ def _run_coadd(args: argparse.Namespace) -> int:
         )
         target_header = dict(rh)
 
-    planned_shape: tuple[int, int] | None = None
     if target_header is None:
         plan = plan_image_plane_target(
             observations,
-            reference_index=pr,
+            reference_index=None,
             device=args.device,
+            union_footprint=True,
         )
-        planned_shape = plan.shape
-    else:
-        planned_shape = (
-            int(target_header["NAXIS2"]),
-            int(target_header["NAXIS1"]),
-        )
+        target_header = dict(plan.header)
 
     tile_hw = _compute_spatial_tile_hw(
-        planned_shape,
+        target_shape_from_header(target_header, fallback=(0, 0)),
         auto_tile=bool(args.auto_tile),
         tile_pixels=args.tile_pixels,
         tile_above_megapixels=float(args.tile_above_megapixels),
@@ -265,13 +416,13 @@ def _run_coadd(args: argparse.Namespace) -> int:
     if tile_hw is not None:
         print(
             f"torchsky map: spatial tiling {tile_hw[0]}×{tile_hw[1]} "
-            f"for output {planned_shape[0]}×{planned_shape[1]} pixels",
+            f"for output {target_shape_from_header(target_header, fallback=(0, 0))} pixels",
             file=sys.stderr,
         )
 
     if getattr(args, "dry_run", False):
         print(
-            f"torchsky map: dry-run output_shape={planned_shape[0]}×{planned_shape[1]} "
+            f"torchsky map: dry-run output_shape={target_shape_from_header(target_header, fallback=(0, 0))} "
             f"method=coadd kernel={args.kernel} stack={args.stack} "
             f"value_semantics={args.value_semantics} tiled={tile_hw is not None}",
             file=sys.stderr,
@@ -295,6 +446,14 @@ def _run_coadd(args: argparse.Namespace) -> int:
         f"value_semantics={args.value_semantics} tiled={tile_hw is not None}",
         file=sys.stderr,
     )
+
+    # Clean up sky temp files
+    if getattr(args, "sky", False) and sky_paths is temp_paths:
+        from os import unlink
+
+        for p in temp_paths:
+            unlink(p)
+
     return 0
 
 
@@ -348,11 +507,76 @@ def _safe_name(s: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in s) or "band"
 
 
+def _expand_paths_for_inr(
+    paths: list[str],
+    hdu: int,
+    weights: list[float],
+    background_offsets: list[float],
+    weight_maps: list[str | None],
+    mask_maps: list[str | None],
+) -> tuple[list[str], list[int], list[float], list[float], list[str | None], list[str | None]]:
+    """Expand MEF files into per-HDU entries for INR processing."""
+    expanded_paths: list[str] = []
+    expanded_hdus: list[int] = []
+    expanded_weights: list[float] = []
+    expanded_background_offsets: list[float] = []
+    expanded_weight_maps: list[str | None] = []
+    expanded_mask_maps: list[str | None] = []
+
+    for i, p in enumerate(paths):
+        image_hdus = _probe_image_hdus(p)
+        if len(image_hdus) == 0:
+            expanded_paths.append(p)
+            expanded_hdus.append(hdu)
+            expanded_weights.append(float(weights[i]))
+            expanded_background_offsets.append(float(background_offsets[i]))
+            expanded_weight_maps.append(weight_maps[i])
+            expanded_mask_maps.append(mask_maps[i])
+        elif len(image_hdus) == 1:
+            h = hdu if hdu in image_hdus else image_hdus[0]
+            expanded_paths.append(p)
+            expanded_hdus.append(h)
+            expanded_weights.append(float(weights[i]))
+            expanded_background_offsets.append(float(background_offsets[i]))
+            expanded_weight_maps.append(weight_maps[i])
+            expanded_mask_maps.append(mask_maps[i])
+        else:
+            if hdu != 0 and hdu in image_hdus:
+                expanded_paths.append(p)
+                expanded_hdus.append(hdu)
+                expanded_weights.append(float(weights[i]))
+                expanded_background_offsets.append(float(background_offsets[i]))
+                expanded_weight_maps.append(weight_maps[i])
+                expanded_mask_maps.append(mask_maps[i])
+            else:
+                for h in image_hdus:
+                    expanded_paths.append(p)
+                    expanded_hdus.append(h)
+                    expanded_weights.append(float(weights[i]))
+                    expanded_background_offsets.append(float(background_offsets[i]))
+                    expanded_weight_maps.append(weight_maps[i])
+                    expanded_mask_maps.append(mask_maps[i])
+    return (
+        expanded_paths, expanded_hdus,
+        expanded_weights, expanded_background_offsets,
+        expanded_weight_maps, expanded_mask_maps,
+    )
+
+
 def _run_inr_single(args: argparse.Namespace) -> int:
     inputs = _expand_inputs(args.inputs)
     read_dev = _map_read_device_str(args)
+    inr_paths, inr_hdus, inr_weights, inr_bg, inr_wmaps, inr_mmaps = _expand_paths_for_inr(
+        inputs,
+        hdu=args.hdu,
+        weights=args.weights,
+        background_offsets=args.background_offsets,
+        weight_maps=args.weight_maps,
+        mask_maps=args.mask_maps,
+    )
+
     if args.inr_band is None:
-        _, h0 = read(inputs[0], hdu=args.hdu, return_header=True, device=read_dev)
+        _, h0 = read(inr_paths[0], hdu=inr_hdus[0], return_header=True, device=read_dev)
         fk = _header_filter_keyword(dict(h0))
         if fk is None:
             raise SystemExit(
@@ -368,7 +592,7 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         band = str(args.inr_band).upper()
 
     skw = _inr_spectral_field_kwargs(args, band)
-    image_obs = [ImageObservation(path=p, hdu=args.hdu) for p in inputs]
+    image_obs = [ImageObservation(path=p, hdu=h) for p, h in zip(inr_paths, inr_hdus)]
     pr = int(args.plan_reference)
     if pr < 0 or pr >= len(image_obs):
         raise SystemExit(
@@ -386,8 +610,9 @@ def _run_inr_single(args: argparse.Namespace) -> int:
     else:
         plan = plan_image_plane_target(
             image_obs,
-            reference_index=pr,
+            reference_index=None,
             device=args.device,
+            union_footprint=True,
         )
         plan_header = dict(plan.header)
         plan_shape = plan.shape
@@ -410,14 +635,14 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         return 0
 
     fields = _paths_to_field_observations(
-        inputs,
-        hdu=args.hdu,
+        inr_paths,
+        hdu=inr_hdus,
         spectral_kw=skw,
         read_device=read_dev,
-        weights=args.weights,
-        background_offsets=args.background_offsets,
-        weight_maps=args.weight_maps,
-        mask_maps=args.mask_maps,
+        weights=inr_weights,
+        background_offsets=inr_bg,
+        weight_maps=inr_wmaps,
+        mask_maps=inr_mmaps,
         weight_hdu=args.weight_map_hdu,
         mask_hdu=args.mask_map_hdu,
     )
@@ -499,6 +724,47 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         nargs="*",
         type=float,
         help="Per-input background offsets; coadd subtracts them, INR models them in rendering",
+    )
+    p.add_argument(
+        "--sky",
+        action="store_true",
+        help="Auto-estimate and subtract 2D sky background per input (replaces --background-offsets)",
+    )
+    p.add_argument(
+        "--sky-method",
+        default="mesh",
+        choices=("mesh", "polynomial"),
+        help="Sky model type (default: mesh)",
+    )
+    p.add_argument(
+        "--sky-statistic",
+        default="huber",
+        choices=("median", "huber", "tukey"),
+        help="Sky per-cell statistic (default: huber)",
+    )
+    p.add_argument(
+        "--sky-block-size",
+        type=int,
+        default=128,
+        help="Mesh block size in pixels (mesh method, default: 128)",
+    )
+    p.add_argument(
+        "--sky-mesh-filter",
+        default="median_3",
+        choices=("median_3", "gaussian_3", "none"),
+        help="Mesh post-filter (mesh method, default: median_3)",
+    )
+    p.add_argument(
+        "--sky-interpolate",
+        default="bicubic",
+        choices=("bilinear", "bicubic"),
+        help="Mesh-to-image interpolation (mesh method, default: bicubic)",
+    )
+    p.add_argument(
+        "--sky-order",
+        type=int,
+        default=3,
+        help="Polynomial degree (polynomial method, default: 3)",
     )
     p.add_argument(
         "--weight-maps",

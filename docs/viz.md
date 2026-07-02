@@ -1,7 +1,8 @@
 # `torchsky.viz`
 
-`torchsky.viz` is the optional browser visualization surface for inspecting FITS
-images, catalogs, MOC/HiPS-style products, and rendered sky data.
+`torchsky.viz` is the optional browser visualization surface for inspecting
+decoded images, catalogs, MOC/HiPS-style products, and rendered sky data. FITS
+decoding at the application boundary is provided by `torchfits`.
 
 ## What This Namespace Is For
 
@@ -36,8 +37,8 @@ serve(root="/path/to/data", port=8822)
 - Treat the server as a local/development viewer unless you put it behind your
   own authentication and reverse proxy.
 - Keep roots narrow; do not serve an entire home directory by accident.
-- Large FITS products should be inspected with cache and tiling behavior in
-  mind.
+- Large products should use explicit tiling and bounded caches. FITS
+  handle/decode caches belong to `torchfits`.
 
 ## Related Guides
 

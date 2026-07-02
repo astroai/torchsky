@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import torch
@@ -40,6 +41,32 @@ class DetectorBackgroundOp(ExplicitBackgroundOp):
         super().__init__(name="detector_background")
 
 
+@dataclass
+class SpatialSkyBackgroundOp(ExplicitBackgroundOp):
+    """Background operator wrapping a spatially-varying sky model estimator.
+
+    The ``background_estimator`` callable is evaluated on each calibrated
+    observation during ``prepare_image_observation_data``.  It receives
+    ``(image, mask)`` and must return a sky-background tensor of the same
+    shape.  The result is subtracted from the calibrated image before
+    geometry projection.
+
+    This op replaces the standalone ``background_estimator`` parameter
+    formerly handled inline in ``coadd_image_plane``.
+    """
+
+    background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None
+
+    def __init__(
+        self,
+        background_estimator: Callable[[Tensor, Tensor | None], Tensor],
+        *,
+        name: str = "spatial_sky_background",
+    ) -> None:
+        super().__init__(name=name)
+        self.background_estimator = background_estimator
+
+
 @dataclass(frozen=True)
 class BackgroundFitSummary:
     model: Tensor
@@ -67,10 +94,11 @@ def polynomial_background(
     *,
     coeffs: Tensor,
     device: torch.device,
-    dtype: torch.dtype = torch.float32,
+    dtype: torch.dtype | None = None,
     normalized_coordinates: bool = True,
 ) -> Tensor:
     """Evaluate a 2D polynomial background in increasing total-degree order."""
+    dtype = dtype or coeffs.dtype
     height, width = int(shape[0]), int(shape[1])
     yy, xx = torch.meshgrid(
         torch.arange(height, dtype=dtype, device=device),

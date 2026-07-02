@@ -1,7 +1,7 @@
 import sys
 from unittest.mock import patch
 import pytest
-import torchsky.interop
+import torchfits.interop
 
 
 def test_to_arrow_import_error():
@@ -10,7 +10,7 @@ def test_to_arrow_import_error():
         with pytest.raises(
             ImportError, match="PyArrow is required for to_arrow conversion."
         ):
-            torchsky.interop.to_arrow({})
+            torchfits.interop.to_arrow({})
 
 
 def test_to_pandas_import_error():
@@ -19,4 +19,4 @@ def test_to_pandas_import_error():
         with pytest.raises(
             ImportError, match="Pandas is required for to_pandas conversion."
         ):
-            torchsky.interop.to_pandas({})
+            torchfits.interop.to_pandas({})

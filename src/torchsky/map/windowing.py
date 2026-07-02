@@ -15,11 +15,7 @@ from .operators.pixel_area import (
     representative_pixel_area_sr,
     wrapped_delta_ra_deg,
 )
-from .operators.execution import (
-    source_bbox_on_target,
-    is_plain_tan_header,
-    wcs_has_distortion,
-)
+from .operators.execution import source_bbox_on_target
 from .operators.config import MapValueSemantics
 
 _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS = 1_500_000
@@ -32,22 +28,27 @@ class _PreparedImagePlaneTarget:
     header: dict
     wcs: WCS
     shape: tuple[int, int]
-    ra_deg: Tensor
-    dec_deg: Tensor
-    center_ra_deg: float
-    center_dec_deg: float
-    cap_radius_deg: float
+    ra_deg: Tensor | None = None
+    dec_deg: Tensor | None = None
+    center_ra_deg: float = 0.0
+    center_dec_deg: float = 0.0
+    cap_radius_deg: float = 0.0
     pixel_area_sr: Tensor | None = None
     representative_pixel_area_sr: float | None = None
     quadrature_world_grids: tuple[tuple[Tensor, Tensor], ...] | None = None
 
 
 def _build_target_world_grid(
-    target_wcs: WCS, height: int, width: int, device: torch.device
+    target_wcs: WCS,
+    height: int,
+    width: int,
+    device: torch.device,
+    *,
+    subsample: int = 1,
 ) -> tuple[Tensor, Tensor]:
     y, x = torch.meshgrid(
-        torch.arange(height, dtype=torch.float64, device=device),
-        torch.arange(width, dtype=torch.float64, device=device),
+        torch.arange(0, height, subsample, dtype=torch.float64, device=device),
+        torch.arange(0, width, subsample, dtype=torch.float64, device=device),
         indexing="ij",
     )
     ra, dec = target_wcs.pixel_to_world(x, y)
@@ -121,19 +122,32 @@ def _prepare_target(
     include_pixel_area: bool = False,
     include_representative_pixel_area: bool = False,
     include_quadrature: bool = False,
+    include_world_grid: bool = True,
 ) -> _PreparedImagePlaneTarget:
-    try:
-        from .image_plane import _build_target_world_grid as build_grid
-    except ImportError:
-        build_grid = _build_target_world_grid
-    ra_deg, dec_deg = build_grid(
-        target_wcs,
-        target_shape[0],
-        target_shape[1],
-        device=device,
-    )
     center_ra_deg = float(target_wcs.alpha0)
     center_dec_deg = float(target_wcs.delta0)
+    h, w = int(target_shape[0]), int(target_shape[1])
+
+    cap_subsample = max(1, min(h, w) // 100)
+    if cap_subsample > 1:
+        ra_sample, dec_sample = _build_target_world_grid(
+            target_wcs, h, w, device=device, subsample=cap_subsample,
+        )
+        cap_radius_deg = _spherical_cap_radius_from_world_grid(
+            ra_sample, dec_sample,
+            center_ra_deg=center_ra_deg,
+            center_dec_deg=center_dec_deg,
+        )
+    else:
+        cap_radius_deg = 0.0
+
+    if include_world_grid:
+        ra_deg, dec_deg = _build_target_world_grid(
+            target_wcs, h, w, device=device,
+        )
+    else:
+        ra_deg, dec_deg = None, None
+
     return _PreparedImagePlaneTarget(
         header=header,
         wcs=target_wcs,
@@ -142,12 +156,7 @@ def _prepare_target(
         dec_deg=dec_deg,
         center_ra_deg=center_ra_deg,
         center_dec_deg=center_dec_deg,
-        cap_radius_deg=_spherical_cap_radius_from_world_grid(
-            ra_deg,
-            dec_deg,
-            center_ra_deg=center_ra_deg,
-            center_dec_deg=center_dec_deg,
-        ),
+        cap_radius_deg=cap_radius_deg,
         pixel_area_sr=(
             pixel_area_sr_map(target_wcs, target_shape, device=device)
             if include_pixel_area
@@ -187,12 +196,16 @@ def _slice_prepared_target(
     pixel_area = (
         None if target.pixel_area_sr is None else target.pixel_area_sr[y0:y1, x0:x1]
     )
+    ra_slice = dec_slice = None
+    if target.ra_deg is not None:
+        ra_slice = target.ra_deg[y0:y1, x0:x1]
+        dec_slice = target.dec_deg[y0:y1, x0:x1]
     return _PreparedImagePlaneTarget(
         header=target.header,
         wcs=target.wcs,
         shape=(y1 - y0, x1 - x0),
-        ra_deg=target.ra_deg[y0:y1, x0:x1],
-        dec_deg=target.dec_deg[y0:y1, x0:x1],
+        ra_deg=ra_slice,
+        dec_deg=dec_slice,
         center_ra_deg=target.center_ra_deg,
         center_dec_deg=target.center_dec_deg,
         cap_radius_deg=target.cap_radius_deg,
@@ -213,22 +226,11 @@ def _window_large_tan_target(
 ) -> tuple[_PreparedImagePlaneTarget | None, tuple[int, int, int, int] | None]:
     if value_semantics != "surface_brightness":
         return target, None
-    try:
-        from .image_plane import (
-            _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS as min_pixels,
-            _LARGE_TAN_WINDOWING_EDGE_SAMPLES as edge_samples,
-            _LARGE_TAN_WINDOWING_MARGIN_PIXELS as margin_pixels,
-        )
-    except ImportError:
-        min_pixels = _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS
-        edge_samples = _LARGE_TAN_WINDOWING_EDGE_SAMPLES
-        margin_pixels = _LARGE_TAN_WINDOWING_MARGIN_PIXELS
+    min_pixels = _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS
+    edge_samples = _LARGE_TAN_WINDOWING_EDGE_SAMPLES
+    margin_pixels = _LARGE_TAN_WINDOWING_MARGIN_PIXELS
 
     if int(target.shape[0]) * int(target.shape[1]) < min_pixels:
-        return target, None
-    if not is_plain_tan_header(source_header) or not is_plain_tan_header(target_header):
-        return target, None
-    if wcs_has_distortion(source_wcs):
         return target, None
     bbox = source_bbox_on_target(
         source_wcs,
@@ -261,10 +263,16 @@ def _weight_map_to_moc(
     if not bool(valid.any()):
         return MOC(torch.empty((0,), dtype=torch.int64))
     nside = 1 << int(max_order)
+    if target.ra_deg is not None:
+        ra_deg, dec_deg = target.ra_deg, target.dec_deg
+    else:
+        ra_deg, dec_deg = _build_target_world_grid(
+            target.wcs, *target.shape, device=weight_map.device,
+        )
     pix = _healpix.ang2pix(
         nside,
-        target.ra_deg[valid],
-        target.dec_deg[valid],
+        ra_deg[valid],
+        dec_deg[valid],
         nest=True,
         lonlat=True,
     )

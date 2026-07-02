@@ -30,9 +30,10 @@ def apply_image_observation_calibration(
         raise ValueError("Observation photometric_scale must be finite and positive")
     if not math.isfinite(background):
         raise ValueError("Observation background_offset must be finite")
+    dtype = torch.promote_types(image.dtype, source_weight.dtype)
     calibrated_image = scale * (
-        torch.nan_to_num(image.to(dtype=torch.float32), nan=0.0, posinf=0.0, neginf=0.0)
+        torch.nan_to_num(image.to(dtype=dtype), nan=0.0, posinf=0.0, neginf=0.0)
         - background
     )
-    calibrated_weight = source_weight.to(dtype=torch.float32) / (scale * scale)
+    calibrated_weight = source_weight.to(dtype=dtype) / (scale * scale)
     return calibrated_image, calibrated_weight

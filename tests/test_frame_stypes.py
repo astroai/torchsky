@@ -10,7 +10,7 @@ try:
 except Exception:
     stype = None
 
-from torchsky.frame import write_tensor_frame  # noqa: E402
+from torchfits.frame import write_tensor_frame  # noqa: E402
 
 
 def test_write_tensor_frame_stypes():
@@ -65,7 +65,7 @@ def test_write_tensor_frame_stypes():
 
     tf = TensorFrame(feat_dict=feat_dict, col_names_dict=col_names_dict)
 
-    with unittest.mock.patch("torchsky.io.write") as mock_write:
+    with unittest.mock.patch("torchfits.write") as mock_write:
         write_tensor_frame("dummy.fits", tf, overwrite=True)
 
         # Verify the data dict passed to torchsky.io.write

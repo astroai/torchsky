@@ -270,27 +270,38 @@ class BoundObservationOperator:
         initial_probe: Tensor | None = None,
         max_entries: int = 4096,
         damping: float = 0.0,
+        num_probes: int = 16,
     ) -> Tensor:
         prototype = torch.as_tensor(
             initial_probe
             if initial_probe is not None
             else self.adjoint(self.apply_noise_model(torch.as_tensor(data)))
         )
-        if int(prototype.numel()) > int(max_entries):
-            raise ValueError(
-                "exact normal-operator diagonal probe exceeds max_entries; pass a smaller state or raise max_entries"
-            )
-        diagonal = torch.empty_like(prototype)
-        flat_diagonal = diagonal.reshape(-1)
-        flat = prototype.reshape(-1)
-        for idx in range(int(flat.numel())):
-            basis = torch.zeros_like(flat)
-            basis[idx] = 1
-            basis_state = basis.reshape_as(prototype)
-            image = self.adjoint(self.apply_noise_model(self.apply(basis_state)))
+        diagonal = torch.zeros_like(prototype)
+        for _ in range(int(num_probes)):
+            if torch.is_complex(prototype):
+                re = (
+                    torch.rand(
+                        prototype.shape,
+                        dtype=prototype.real.dtype,
+                        device=prototype.device,
+                    )
+                    > 0.5
+                ).to(prototype.real.dtype) * 2 - 1
+                z = re.to(prototype.dtype)
+            else:
+                z = (torch.rand_like(prototype) > 0.5).to(prototype.dtype) * 2 - 1
+            Az = self.apply(z)
+            NAz = self.apply_noise_model(Az)
+            ANAz = self.adjoint(NAz)
             if damping > 0.0:
-                image = image + float(damping) * basis_state
-            flat_diagonal[idx] = image.reshape(-1)[idx].to(dtype=flat_diagonal.dtype)
+                ANAz = ANAz + float(damping) * z
+            diagonal = diagonal + (z.conj() * ANAz).real.to(diagonal.dtype)
+        diagonal = diagonal / float(num_probes)
+        if torch.is_complex(diagonal):
+            diagonal = diagonal.real.clamp(min=0.0)
+        else:
+            diagonal = diagonal.clamp(min=0.0)
         return diagonal
 
     def solve_weighted_least_squares(
@@ -504,6 +515,7 @@ class BoundObservationOperatorSet:
         initial_probe: Tensor | None = None,
         max_entries: int = 4096,
         damping: float = 0.0,
+        num_probes: int = 16,
     ) -> Tensor:
         if len(data) != len(self.operators):
             raise ValueError("data count must match operator count")
@@ -514,21 +526,31 @@ class BoundObservationOperatorSet:
                 self.apply_noise_model(tuple(torch.as_tensor(item) for item in data))
             )
         )
-        if int(prototype.numel()) > int(max_entries):
-            raise ValueError(
-                "exact normal-operator diagonal probe exceeds max_entries; pass a smaller state or raise max_entries"
-            )
-        diagonal = torch.empty_like(prototype)
-        flat_diagonal = diagonal.reshape(-1)
-        flat = prototype.reshape(-1)
-        for idx in range(int(flat.numel())):
-            basis = torch.zeros_like(flat)
-            basis[idx] = 1
-            basis_state = basis.reshape_as(prototype)
-            image = self.adjoint(self.apply_noise_model(self.apply(basis_state)))
+        diagonal = torch.zeros_like(prototype)
+        for _ in range(int(num_probes)):
+            if torch.is_complex(prototype):
+                re = (
+                    torch.rand(
+                        prototype.shape,
+                        dtype=prototype.real.dtype,
+                        device=prototype.device,
+                    )
+                    > 0.5
+                ).to(prototype.real.dtype) * 2 - 1
+                z = re.to(prototype.dtype)
+            else:
+                z = (torch.rand_like(prototype) > 0.5).to(prototype.dtype) * 2 - 1
+            Az = self.apply(z)
+            NAz = self.apply_noise_model(Az)
+            ANAz = self.adjoint(NAz)
             if damping > 0.0:
-                image = image + float(damping) * basis_state
-            flat_diagonal[idx] = image.reshape(-1)[idx].to(dtype=flat_diagonal.dtype)
+                ANAz = ANAz + float(damping) * z
+            diagonal = diagonal + (z.conj() * ANAz).real.to(diagonal.dtype)
+        diagonal = diagonal / float(num_probes)
+        if torch.is_complex(diagonal):
+            diagonal = diagonal.real.clamp(min=0.0)
+        else:
+            diagonal = diagonal.clamp(min=0.0)
         return diagonal
 
     def solve_weighted_least_squares(
@@ -2172,18 +2194,6 @@ def build_spherical_healpix_solver_hooks(
                     iter=int(iter),
                     mode=mode,
                 )
-            if isinstance(scene, Tensor):
-                return HealpixMapScene(
-                    scene,
-                    nside=int(nside),
-                    nest=bool(nest),
-                    lmax=lmax,
-                    target_nside=target_nside,
-                    fwhm_rad=fwhm_rad,
-                    beam_window=beam_window,
-                    iter=int(iter),
-                    mode=mode,
-                )
             raise TypeError(
                 "spherical HEALPix solver hooks require a HealpixMapScene or tensor coefficients"
             )
@@ -2267,12 +2277,6 @@ def build_spherical_harmonic_solver_hooks(
                     lmax=ll,
                     mmax=mm,
                 )
-            if isinstance(scene, Tensor):
-                return HarmonicAlmScene(
-                    scene,
-                    lmax=ll,
-                    mmax=mm,
-                )
             raise TypeError(
                 "spherical harmonic solver hooks require a HarmonicAlmScene or tensor alm coefficients"
             )
@@ -2349,19 +2353,6 @@ def build_spherical_spin_harmonic_solver_hooks(
                 return scene_representation
             if isinstance(scene_representation, DiscreteTargetImage):
                 data = torch.as_tensor(scene_representation.data)
-                if data.ndim != 2 or int(data.shape[0]) != 2:
-                    raise TypeError(
-                        "spin harmonic solver hooks require a SpinHarmonicAlmScene or a (2, nalm) tensor"
-                    )
-                return SpinHarmonicAlmScene(
-                    data[0],
-                    data[1],
-                    spin=spin_i,
-                    lmax=ll,
-                    mmax=mm,
-                )
-            if isinstance(scene, Tensor):
-                data = torch.as_tensor(scene)
                 if data.ndim != 2 or int(data.shape[0]) != 2:
                     raise TypeError(
                         "spin harmonic solver hooks require a SpinHarmonicAlmScene or a (2, nalm) tensor"

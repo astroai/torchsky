@@ -90,5 +90,7 @@ Publishing triggers `.github/workflows/build_wheels.yml`, which:
 
 - [ ] `pip install torchsky==X.Y.Z` works in a fresh environment.
 - [ ] `import torchsky; print(torchsky.__version__)` shows correct version.
-- [ ] `torchsky.read(...)` runs without import errors.
+- [ ] Core WCS and sphere imports run without `torchfits` or CFITSIO.
+- [ ] The documented optional integration works with the supported `torchfits`
+      0.5.x release.
 - [ ] Changelog and release notes links resolve.

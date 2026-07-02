@@ -1,5 +1,13 @@
 from pathlib import Path
+import os
 import sys
+
+# xdist + MKL/OpenMP: avoid fork-related deadlocks under pytest -n auto.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 import pytest
 
@@ -11,6 +19,16 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 
+def pytest_configure(config) -> None:
+    try:
+        import torch
+    except ImportError:
+        return
+    torch.set_num_threads(1)
+    if hasattr(torch, "set_num_interop_threads"):
+        torch.set_num_interop_threads(1)
+
+
 @pytest.fixture(autouse=True)
 def _clear_torchsky_native_io_handles_after_test():
     yield
@@ -19,8 +37,8 @@ def _clear_torchsky_native_io_handles_after_test():
     if close_handles is not None:
         close_handles()
 
-    caches_mod = sys.modules.get("torchsky._io_engine.caches")
-    clear_file_cache = getattr(caches_mod, "clear_file_cache", None)
-    if clear_file_cache is not None:
-        cpp_mod = sys.modules.get("torchsky.cpp")
-        clear_file_cache(cpp_module=cpp_mod)
+    try:
+        import torchfits
+        torchfits.clear_file_cache()
+    except Exception:
+        pass

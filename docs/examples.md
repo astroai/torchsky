@@ -3,23 +3,17 @@
 This page indexes runnable scripts under [examples/](../examples), grouped to
 match the domain guides.
 
-## I/O
+## I/O Boundary
 
 | Script | What it demonstrates |
 |---|---|
-| [`example_image.py`](../examples/example_image.py) | Read a FITS image into a tensor and inspect the header. |
-| [`example_image_cutouts.py`](../examples/example_image_cutouts.py) | Extract sub-regions with `read_subset`. |
-| [`example_image_cube.py`](../examples/example_image_cube.py) | Read and slice 3D image cubes. |
-| [`example_image_mef.py`](../examples/example_image_mef.py) | Work with multi-extension FITS files. |
+| Legacy image examples | These pre-split scripts are pending migration to `torchfits`; use the examples in the `torchfits` repository for FITS read/cutout/MEF behavior. |
 
 ## Tables
 
 | Script | What it demonstrates |
 |---|---|
-| [`example_table.py`](../examples/example_table.py) | Read binary tables into tensors and write back. |
-| [`example_table_interop.py`](../examples/example_table_interop.py) | Variable-length columns and Astropy interop. |
-| [`example_polars.py`](../examples/example_polars.py) | Polars and Arrow workflows. |
-| [`example_table_recipes.py`](../examples/example_table_recipes.py) | Arrow scanner, Polars lazy frames, and DuckDB SQL. |
+| Legacy table examples | These pre-split scripts are pending migration to `torchfits`; torchsky examples should begin with decoded tensor or Arrow batches. |
 
 ## WCS
 
@@ -58,8 +52,7 @@ match the domain guides.
 
 | Script | What it demonstrates |
 |---|---|
-| [`example_image_dataset.py`](../examples/example_image_dataset.py) | PyTorch `Dataset` for FITS images with caching and `DataLoader`. |
-| [`example_ml_pipeline.py`](../examples/example_ml_pipeline.py) | End-to-end ML pipeline: loading, transforms, caching, distributed training. |
+| [`example_image_dataset.py`](../examples/example_image_dataset.py) | Legacy file-backed example pending conversion to a `torchfits` loader plus torchsky transforms. |
 
 ## Notebooks (field / hyperspectral)
 

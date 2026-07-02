@@ -2794,28 +2794,17 @@ class WCS:
                 origin=origin,
             )
 
-        if self.naxis >= 3:
-            for axis in range(2, self.naxis):
-                if bool(pixel_known[..., axis].all()):
-                    out_world[..., axis] = self._linear_axis_pixel_to_world(
-                        out_pixel[..., axis], axis, origin
-                    )
-                elif bool(world_known[..., axis].all()):
-                    out_pixel[..., axis] = self._linear_axis_world_to_pixel(
-                        out_world[..., axis], axis, origin
-                    )
-
         if self.naxis >= 2 and self._is_spatial:
             spatial_pix_known = [bool(pixel_known[..., i].all()) for i in range(2)]
             spatial_world_known = [bool(world_known[..., i].all()) for i in range(2)]
             if all(spatial_pix_known):
-                ra, dec = self.pixel_to_world(
+                ra, dec = self._pixel_to_world_2d_fast(
                     out_pixel[..., 0], out_pixel[..., 1], origin=origin
                 )
                 out_world[..., 0] = ra
                 out_world[..., 1] = dec
             elif all(spatial_world_known):
-                x, y = self.world_to_pixel(
+                x, y = self._world_to_pixel_2d_fast(
                     out_world[..., 0], out_world[..., 1], origin=origin
                 )
                 out_pixel[..., 0] = x
@@ -2834,7 +2823,7 @@ class WCS:
                     tol=tol,
                 )
                 out_pixel[..., solve_pixel_axis] = solved
-                ra, dec = self.pixel_to_world(
+                ra, dec = self._pixel_to_world_2d_fast(
                     out_pixel[..., 0], out_pixel[..., 1], origin=origin
                 )
                 out_world[..., 0] = ra
@@ -2845,9 +2834,100 @@ class WCS:
                     "axis plus one world axis"
                 )
 
+        if self.naxis >= 3 and self._is_spatial:
+            out_pixel, out_world = self._mixed_spatial_extra_pixel_world(
+                out_pixel,
+                out_world,
+                pixel_known=pixel_known,
+                world_known=world_known,
+                origin=origin,
+            )
+
         if torch.isnan(out_pixel).any() or torch.isnan(out_world).any():
             raise NotImplementedError("mixed transform left unresolved axes")
         return out_pixel, out_world
+
+    def _mixed_spatial_extra_pixel_world(
+        self,
+        out_pixel: Tensor,
+        out_world: Tensor,
+        *,
+        pixel_known: Tensor,
+        world_known: Tensor,
+        origin: int,
+    ) -> tuple[Tensor, Tensor]:
+        extra_axes = list(range(2, self.naxis))
+        if self.tabular_axes or self.coupled_tabular is not None:
+            for axis in extra_axes:
+                if bool(pixel_known[..., axis].all()):
+                    out_world[..., axis] = self._linear_axis_pixel_to_world(
+                        out_pixel[..., axis], axis, origin
+                    )
+                elif bool(world_known[..., axis].all()):
+                    out_pixel[..., axis] = self._linear_axis_world_to_pixel(
+                        out_world[..., axis], axis, origin
+                    )
+            return out_pixel, out_world
+
+        for axis in extra_axes:
+            p_any = bool(pixel_known[..., axis].any())
+            p_all = bool(pixel_known[..., axis].all())
+            w_any = bool(world_known[..., axis].any())
+            w_all = bool(world_known[..., axis].all())
+            if p_any and not p_all:
+                raise NotImplementedError(
+                    "mixed spatial extra pixel known-mask varies by row"
+                )
+            if w_any and not w_all:
+                raise NotImplementedError(
+                    "mixed spatial extra world known-mask varies by row"
+                )
+
+        pixel_axes_known = [0, 1] + [
+            axis for axis in extra_axes if bool(pixel_known[..., axis].all())
+        ]
+        unknown_pixel_axes = [
+            axis for axis in extra_axes if axis not in pixel_axes_known
+        ]
+        world_axes_known = [
+            axis for axis in extra_axes if bool(world_known[..., axis].all())
+        ]
+
+        original_shape = out_pixel.shape
+        pixel_flat = out_pixel.reshape(-1, self.naxis)
+        world_flat = out_world.reshape(-1, self.naxis)
+        rel_flat = pixel_flat + (1.0 - float(origin)) - self.crpix
+
+        if unknown_pixel_axes:
+            if len(world_axes_known) != len(unknown_pixel_axes):
+                raise NotImplementedError(
+                    "mixed spatial extra axes require one known extra-world "
+                    "equation per unknown extra pixel axis"
+                )
+            known_pix = torch.as_tensor(
+                pixel_axes_known, dtype=torch.long, device=self.device
+            )
+            unknown_pix = torch.as_tensor(
+                unknown_pixel_axes, dtype=torch.long, device=self.device
+            )
+            known_world = torch.as_tensor(
+                world_axes_known, dtype=torch.long, device=self.device
+            )
+            rhs = world_flat[:, known_world] - self.crval[known_world]
+            rhs = rhs - torch.matmul(
+                rel_flat[:, known_pix], self.cd_full[known_world, :][:, known_pix].T
+            )
+            solved_rel = torch.linalg.solve(
+                self.cd_full[known_world, :][:, unknown_pix], rhs.T
+            ).T
+            rel_flat[:, unknown_pix] = solved_rel
+            pixel_flat[:, unknown_pix] = (
+                solved_rel + self.crpix[unknown_pix] + (float(origin) - 1.0)
+            )
+
+        world_full = self.crval + torch.matmul(rel_flat, self.cd_full.T)
+        world_flat[:, 2:] = world_full[:, 2:]
+        return pixel_flat.view(original_shape), world_flat.view(original_shape)
 
     def _mixed_linear_pixel_world(
         self,
@@ -2960,7 +3040,7 @@ class WCS:
         for _ in range(max_iter):
             x = known_pixel if known_pixel_axis == 0 else guess
             y = guess if known_pixel_axis == 0 else known_pixel
-            ra, dec = self.pixel_to_world(x, y, origin=origin)
+            ra, dec = self._pixel_to_world_2d_fast(x, y, origin=origin)
             value = ra if target_world_axis == 0 else dec
             resid = (
                 _wrap_lon180(value - target_world)
@@ -2971,7 +3051,9 @@ class WCS:
                 break
             x_eps = known_pixel if known_pixel_axis == 0 else guess + eps
             y_eps = guess + eps if known_pixel_axis == 0 else known_pixel
-            ra_eps, dec_eps = self.pixel_to_world(x_eps, y_eps, origin=origin)
+            ra_eps, dec_eps = self._pixel_to_world_2d_fast(
+                x_eps, y_eps, origin=origin
+            )
             value_eps = ra_eps if target_world_axis == 0 else dec_eps
             diff = (
                 _wrap_lon180(value_eps - value)
@@ -3965,7 +4047,29 @@ class WCS:
             if self._use_center_equator_fast:
                 phi = _wrap_lon180_checked(ra - self.alpha0)
                 return phi, dec
-            return self._spherical_rotation(ra, dec, native_type)
+            d2r = 0.017453292519943295
+            r2d = 57.29577951308232
+            ra_rad = ra * d2r
+            dec_rad = dec * d2r
+            sin_dec, cos_dec = _sincos(dec_rad)
+            sin_ra, cos_ra = _sincos(ra_rad)
+            x_cel = cos_dec * cos_ra
+            y_cel = cos_dec * sin_ra
+            z_cel = sin_dec
+            u = x_cel * self._pole_east_x + y_cel * self._pole_east_y
+            w = (
+                x_cel * self._pole_north_x
+                + y_cel * self._pole_north_y
+                + z_cel * self._pole_north_z
+            )
+            v = -(
+                x_cel * self._pole_radial_x
+                + y_cel * self._pole_radial_y
+                + z_cel * self._pole_radial_z
+            )
+            theta = torch.asin(torch.clamp(w, -1.0, 1.0)) * r2d
+            phi = torch.remainder(torch.atan2(u, -v) * r2d + self.phi_p, 360.0)
+            return phi, theta
 
         if (
             allow_cpp_inverse_sphere
@@ -4017,14 +4121,6 @@ class WCS:
             + y_cel * self._pole_radial_y
             + z_cel * self._pole_radial_z
         )
-
-        # theta = asin(w)
-        # phi - phi_p = atan2(u, v) -- Wait, let's re-verify this.
-        # Original _spherical_rotation had:
-        # X = u*ex + v*nx + w*rx
-        # Y = u*ey + v*ny + w*ry
-        # Z = u*ez + v*nz + w*rz
-        # This means u, v, w are the components in the (e, n, r) basis.
 
         theta = torch.asin(torch.clamp(w, -1.0, 1.0)) * r2d
         phi = torch.remainder(torch.atan2(u, v) * r2d + self.phi_p, 360.0)
@@ -4376,7 +4472,7 @@ class WCS:
         sin_phi = torch.sin(phi_rad)
         cos_phi = torch.cos(phi_rad)
 
-        xi = cos_theta * sin_phi * deg
+        xi = -cos_theta * sin_phi * deg
         eta = -cos_theta * cos_phi * deg
 
         pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
@@ -4397,11 +4493,10 @@ class WCS:
         # Get native coordinates via inverse spherical rotation
         phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
 
-        theta * self._d2r
         R = 90.0 - theta
 
         phi_rad = phi * self._d2r
-        xi = R * torch.sin(phi_rad)
+        xi = -R * torch.sin(phi_rad)
         eta = -R * torch.cos(phi_rad)
 
         pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
@@ -4453,8 +4548,8 @@ class WCS:
         dec = world[:, 1]
         pix_internal = self._alloc_pix_internal_like(world)
 
-        if self._use_center_fast:
-            phi = _wrap_lon180_checked(ra)
+        if self._use_center_equator_fast:
+            phi = _wrap_lon180_checked(ra - self.alpha0)
             theta = dec
         else:
             phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
@@ -4473,8 +4568,8 @@ class WCS:
         dec = world[:, 1]
         pix_internal = self._alloc_pix_internal_like(world)
 
-        if self._use_center_fast:
-            xi = torch.remainder(ra + 180.0, 360.0) - 180.0
+        if self._use_center_equator_fast:
+            xi = torch.remainder(ra - self.alpha0 + 180.0, 360.0) - 180.0
             eta = self._cea_eta_scale * torch.sin(dec * self._d2r)
         else:
             phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
@@ -4492,8 +4587,8 @@ class WCS:
         dec = world[:, 1]
         pix_internal = self._alloc_pix_internal_like(world)
 
-        if self._use_center_fast:
-            phi = _wrap_lon180_checked(ra)
+        if self._use_center_equator_fast:
+            phi = _wrap_lon180_checked(ra - self.alpha0)
             theta = dec
         else:
             phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
@@ -4520,7 +4615,7 @@ class WCS:
         r = 2.0 * torch.rad2deg(torch.sin((math.pi / 2.0 - theta_rad) / 2.0))
 
         phi_rad = phi * self._d2r
-        xi = r * torch.sin(phi_rad)
+        xi = -r * torch.sin(phi_rad)
         eta = -r * torch.cos(phi_rad)
 
         pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
@@ -4541,7 +4636,7 @@ class WCS:
         r = 2.0 * torch.rad2deg(torch.tan((math.pi / 2.0 - theta_rad) / 2.0))
 
         phi_rad = phi * self._d2r
-        xi = r * torch.sin(phi_rad)
+        xi = -r * torch.sin(phi_rad)
         eta = -r * torch.cos(phi_rad)
 
         pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)

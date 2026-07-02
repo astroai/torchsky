@@ -40,6 +40,7 @@ def test_ensure_local_cpp_installs_when_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = {"installed": False, "calls": 0}
+    _real_import_module = importlib.import_module
 
     def _fake_import_module(name: str):
         if name == "torchsky":
@@ -48,7 +49,7 @@ def test_ensure_local_cpp_installs_when_missing(
             if state["installed"]:
                 return object()
             raise ModuleNotFoundError(name)
-        return importlib.import_module(name)
+        return _real_import_module(name)
 
     def _fake_check_call(cmd, cwd):
         del cmd, cwd

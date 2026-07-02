@@ -6,7 +6,7 @@
 > old `../reviews/autonomous_refactor_log.md` remains an archival audit trail
 > only.
 
-Last updated: 2026-06-18.
+Last updated: 2026-06-27.
 
 ## Latest Local Gate
 
@@ -395,3 +395,88 @@ Last updated: 2026-06-18.
 
 - Keep broader hpgeom / astropy-healpix / PyMOC replay focused on named
   behaviors and fixtures rather than generic compatibility bullets.
+
+## WCS Mixed Spatial Cube Solves
+
+### Shipped
+
+- `WCS.mixed_pixel_world(...)` now resolves spatial WCS cubes with linearly
+  coupled extra axes instead of filling spectral/time-style axes one at a time.
+- The celestial part uses the internal 2D spatial pixel/world cores, which fixes
+  the previous `naxis > 2` path that could accidentally call the public 2D-only
+  shortcut.
+- Extra axes are solved as an exact linear block after RA/Dec are resolved,
+  including coupling from spatial relative pixels into WAVE/TIME rows and
+  coupling among the extra axes.
+- Tabular extra-axis mixtures keep their previous fail-closed behavior unless
+  the axis can be handled independently.
+
+### Validation
+
+- Added regressions in `tests/test_wcs_api.py` for known spatial pixels plus
+  known coupled extra-world equations, and for a combined one-celestial-axis
+  mixed solve plus coupled extra axes.
+- `pixi run -e test -- pytest tests/test_wcs_api.py -q` reports `31 passed`.
+- `pixi run -e test -- pytest tests/test_wcs_*.py -q` reports
+  `338 passed, 2 skipped, 22 warnings`.
+
+### Follow-Ups
+
+- Keep generalized mixed tabular transforms fail-closed until there are explicit
+  FITS `-TAB` fixtures that define the expected mixed-coordinate solve.
+## 2026-06-26 — FITS I/O ownership returned to torchfits
+
+### Decision
+
+- `torchfits` is the sole implementation owner for FITS images, headers, HDUs,
+  compression, checksums, file caches, FITS tables, Arrow scans, and I/O
+  throughput benchmarks.
+- `torchsky` owns WCS, spherical geometry, HEALPix/MOC/sparse maps, catalog
+  indexing, observation operators, mapmaking, scenes, and continuous fields.
+- The package boundary exchanges tensors, FITS-like header mappings, masks,
+  weights, and streamed table batches. Core torchsky computation does not open
+  files.
+
+### Follow-ups
+
+- Remove residual duplicated FITS implementation and CFITSIO build wiring from
+  torchsky and enforce the boundary with a package-isolation test.
+- Maintain one optional cross-repo integration gate; keep FITS parity and
+  performance matrices in torchfits.
+- Target the forthcoming `torchfits 0.5.0` contract. Do not pin torchsky to the
+  old 0.3.x surface or to unstable pre-release signatures.
+- Re-rank torchsky work around operator correctness, asymptotic scalability,
+  survey-scale indexing, and end-to-end throughput.
+
+## 2026-06-27 — P0 boundary cleanup completed; minor bug fixes
+
+### Shipped
+
+- **Package isolation gate hardened** (`test_package_isolation.py`):
+  - Strict hard asserts for no CFITSIO/zlib in cmake, no FITS implementation code
+    in Python source. Cross-repo integration gate added
+    (`test_torchfits_integration.py`) validates torchsky↔torchfits contract.
+- **`_where.py` delegated to `torchfits._where`**: The 415-line hand-written
+  WHERE expression parser is now a 15-line delegation shim. Public API surface
+  (`parse_where_expression`, `evaluate_where`, `where_columns_from_ast`)
+  preserved.
+- **`map/windowing.py` dead code removed**: Circular-import workaround
+  (try-except `from .image_plane import ...`) removed; local
+  `_build_target_world_grid` was always available.
+- **`spectral.py` unit fix**: `SpectralReader` now reads `CUNIT1` from the
+  FITS header instead of hardcoding `"Angstrom"`.
+- **`hdu.py` explicit re-exports**: Replaced star-import from `torchfits.hdu`
+  with explicit name-by-name re-exports for all public symbols.
+
+### Validation
+
+- `pixi run preflight-push` — clean (ruff + compileall).
+- Targeted gates: `test_where.py` (10/10), `test_package_isolation.py` (2/2),
+  `test_torchfits_integration.py` (2/2), `test_spectral.py` (23/23) — all pass.
+- `tests/test_map_operator_bundle.py` (12/12) — passes.
+
+### Follow-Ups
+
+- Continue P1 operator performance and catalog indexing work.
+- Watch for `torchfits 0.5` release to freeze the adapter contract and remove
+  the temporary `Card` dataclass from `torchsky.hdu`.

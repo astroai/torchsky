@@ -21,19 +21,6 @@ inline bool THPVariable_Check(PyObject* obj) {
 // Extern declaration for THPVariable_Wrap (exported by libtorch_python)
 extern PyObject* THPVariable_Wrap(const at::TensorBase& var);
 
-inline void check_fits_filename(const std::string& filename_) {
-    if (!filename_.empty()) {
-        size_t first = filename_.find_first_not_of(" \t");
-        size_t last = filename_.find_last_not_of(" \t");
-
-        if (first != std::string::npos) {
-            if (filename_[first] == '|' || filename_[last] == '|') {
-                throw std::runtime_error("Security Error: Filenames starting or ending with '|' are not allowed to prevent command execution.");
-            }
-        }
-    }
-}
-
 
 // Helper function to convert torch::Tensor to Python object - FAST PATH
 inline nb::object tensor_to_python(const torch::Tensor& tensor) {
@@ -67,6 +54,17 @@ inline torch::Tensor python_to_tensor(nb::object obj) {
     // a second time after ATen takes ownership.
     if (PyCapsule_SetName(capsule.ptr(), "used_dltensor") != 0) {
         PyErr_Clear();
+    }
+    return t;
+}
+
+inline torch::Tensor as_f64_contig(nb::object obj) {
+    auto t = python_to_tensor(obj);
+    if (t.scalar_type() != torch::kFloat64) {
+        t = t.to(torch::kFloat64);
+    }
+    if (!t.is_contiguous()) {
+        t = t.contiguous();
     }
     return t;
 }

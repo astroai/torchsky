@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import math
+import tempfile
 from dataclasses import dataclass
 from itertools import islice
+from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
 import torch
@@ -39,6 +41,49 @@ class CatalogStreamDataset(IterableDataset):
             partitions = islice(iter(partitions), worker.id, None, worker.num_workers)
         for partition in partitions:
             yield self._loader(partition)
+
+    @classmethod
+    def from_arrow(
+        cls,
+        source: Any,
+        *,
+        batch_size: int = 65536,
+        columns: tuple[str, str] = ("ra", "dec"),
+    ) -> CatalogStreamDataset:
+        """Build a CatalogStreamDataset that yields (ra, dec) Tensor pairs from Arrow.
+
+        Parameters
+        ----------
+        source
+            A ``pyarrow.Table``, ``pyarrow.ipc.RecordBatchReader``, or a path
+            string / ``pathlib.Path`` to an Arrow IPC Feather file.
+        batch_size
+            Row count per yielded batch.
+        columns
+            Column names for RA (degrees) and Dec (degrees).
+        """
+        import pyarrow as pa
+
+        if isinstance(source, (str, Path)):
+            source = pa.ipc.open_file(str(source)).read_all()
+        if isinstance(source, pa.Table):
+            reader = source.to_batches(max_chunksize=batch_size)
+        elif isinstance(source, pa.ipc.RecordBatchReader):
+            reader = source
+        else:
+            batches = list(source) if hasattr(source, "__iter__") else [source]
+            reader = iter(batches)
+
+        def _loader(batch: pa.RecordBatch) -> tuple[Tensor, Tensor]:
+            col_ra, col_dec = columns
+            ra_np = batch.column(col_ra).to_numpy()
+            dec_np = batch.column(col_dec).to_numpy()
+            return (
+                torch.from_numpy(ra_np.copy().astype("f8", copy=False)),
+                torch.from_numpy(dec_np.copy().astype("f8", copy=False)),
+            )
+
+        return cls(partitions=lambda: iter(reader), loader=_loader)
 
 
 @dataclass
@@ -537,3 +582,414 @@ def crossmatch_sky(
         left_chunk_size=left_chunk_size,
         right_chunk_size=right_chunk_size,
     )
+
+
+def crossmatch_sky_streamed(
+    left_batches: Iterable[tuple[Tensor, Tensor]],
+    right_ra_deg: Tensor,
+    right_dec_deg: Tensor,
+    *,
+    radius_arcsec: float,
+    right_chunk_size: int = 65536,
+) -> CrossmatchResult:
+    """Streamed crossmatch where the left catalog arrives in batches.
+
+    The right catalog must fit in memory (required for the coarse HEALPix
+    index). The left catalog is consumed incrementally from *left_batches*,
+    which yields ``(ra_deg, dec_deg)`` tensor pairs.
+
+    Parameters
+    ----------
+    left_batches
+        Iterator yielding ``(ra_tensor, dec_tensor)`` pairs (each 1-D
+        float64). Batches are concatenated in order and their indices are
+        mapped back into the final ``left_index`` output.
+    right_ra_deg, right_dec_deg
+        Full right-catalog coordinates (1-D float64).
+    radius_arcsec
+        Match radius in arcseconds.
+    right_chunk_size
+        Right-side chunk size for the inner distance loop.
+    """
+    right_ra = torch.as_tensor(right_ra_deg, dtype=torch.float64).reshape(-1)
+    right_dec = torch.as_tensor(right_dec_deg, dtype=torch.float64).reshape(-1)
+    device = right_ra.device
+
+    if radius_arcsec <= 0.0:
+        raise ValueError("radius_arcsec must be positive")
+    if right_chunk_size <= 0:
+        raise ValueError("chunk sizes must be positive")
+
+    coarse_nside = _choose_default_coarse_nside(
+        torch.empty(0, device=device),
+        torch.empty(0, device=device),
+        right_ra,
+        right_dec,
+        radius_arcsec=radius_arcsec,
+    )
+    coarse_index = _build_coarse_healpix_index(
+        right_ra, right_dec, coarse_nside=coarse_nside
+    )
+    radius_deg = radius_arcsec / 3600.0
+    candidate_radius_rad = math.radians(radius_deg) + (
+        2.0 * _healpix.max_pixrad(coarse_nside, degrees=False)
+    )
+
+    left_hits: list[Tensor] = []
+    right_hits: list[Tensor] = []
+    sep_hits: list[Tensor] = []
+    left_offset = 0
+    candidate_cache: dict[int, Tensor] = {}
+
+    for left_ra, left_dec in left_batches:
+        left_ra = torch.as_tensor(left_ra, dtype=torch.float64, device=device).reshape(-1)
+        left_dec = torch.as_tensor(left_dec, dtype=torch.float64, device=device).reshape(-1)
+        chunk_len = int(left_ra.numel())
+        if chunk_len == 0:
+            continue
+
+        left_coarse_pixel = _healpix.ang2pix(
+            coarse_nside,
+            left_ra,
+            left_dec,
+            nest=True,
+            lonlat=True,
+        ).to(torch.int64)
+
+        left_order = torch.argsort(left_coarse_pixel, stable=True)
+        coarse_sorted = left_coarse_pixel[left_order]
+        unique_pixels, counts = torch.unique_consecutive(coarse_sorted, return_counts=True)
+        offsets = torch.cat(
+            (
+                torch.zeros(1, dtype=torch.int64, device=device),
+                torch.cumsum(counts[:-1].to(torch.int64), dim=0),
+            )
+        )
+        left_abs = torch.arange(
+            left_offset, left_offset + chunk_len, dtype=torch.int64, device=device
+        )
+
+        for coarse_pixel, offset, count in zip(
+            unique_pixels.tolist(), offsets.tolist(), counts.tolist(), strict=False
+        ):
+            rel_sorted = left_order[offset : offset + count]
+            group_ra = left_ra[rel_sorted]
+            group_dec = left_dec[rel_sorted]
+            group_abs = left_abs[rel_sorted]
+
+            candidate_pixels = candidate_cache.get(coarse_pixel)
+            if candidate_pixels is None:
+                candidate_pixels = _candidate_coarse_pixels_for_left_pixel(
+                    coarse_nside,
+                    coarse_pixel,
+                    radius_rad=candidate_radius_rad,
+                    device=device,
+                )
+                candidate_cache[coarse_pixel] = candidate_pixels
+
+            candidate_right_idx = coarse_index.lookup(candidate_pixels)
+            if candidate_right_idx.numel() == 0:
+                continue
+
+            best_sep = torch.full(
+                (count,), torch.inf, dtype=torch.float64, device=device
+            )
+            best_idx = torch.full((count,), -1, dtype=torch.int64, device=device)
+            group_ra_col = group_ra.unsqueeze(1)
+            group_dec_col = group_dec.unsqueeze(1)
+
+            for right_ids in candidate_right_idx.split(right_chunk_size):
+                sep = great_circle_distance(
+                    group_ra_col,
+                    group_dec_col,
+                    right_ra[right_ids].unsqueeze(0),
+                    right_dec[right_ids].unsqueeze(0),
+                    degrees=True,
+                )
+                cand_sep, cand_idx = sep.min(dim=1)
+                improved = cand_sep < best_sep
+                if bool(improved.any()):
+                    best_sep = torch.where(improved, cand_sep, best_sep)
+                    best_idx = torch.where(improved, right_ids[cand_idx], best_idx)
+
+            mask = best_sep <= radius_deg
+            if bool(mask.any()):
+                left_hits.append(group_abs[mask])
+                right_hits.append(best_idx[mask])
+                sep_hits.append(best_sep[mask] * 3600.0)
+
+        left_offset += chunk_len
+
+    return _finalize_crossmatch(
+        left_hits, right_hits, sep_hits, device=device, stats=_CrossmatchStats(
+            left_points=left_offset,
+            right_points=int(right_ra.numel()),
+        )
+    )
+
+
+def _tile_catalog_to_parquet(
+    source: Any,
+    *,
+    ra_col: str,
+    dec_col: str,
+    coarse_nside: int,
+    path: str | Path,
+    batch_size: int = 131072,
+) -> tuple[dict[int, list[int]], int]:
+    """Stream a catalog through coarse HEALPix tiling into a single Parquet file.
+
+    Each per-batch pixel group is written as its own row group, so that
+    ``read_row_groups(groups)`` reads exactly one pixel's data.
+
+    Returns ``(pixel_to_rgs, n_rows)`` — mapping from pixel to list of
+    row-group indices and total row count.
+    """
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from ..sphere import healpix as _healpix
+
+    if isinstance(source, (str, Path)):
+        source = pa.ipc.open_file(pa.memory_map(str(source), "r")).read_all()
+    if isinstance(source, pa.Table):
+        reader = source.to_batches(max_chunksize=batch_size)
+    elif isinstance(source, pa.ipc.RecordBatchReader):
+        reader = source
+    else:
+        raise TypeError(f"unsupported Arrow source: {type(source).__name__}")
+
+    pixel_to_rgs: dict[int, list[int]] = {}
+    writer: pq.ParquetWriter | None = None
+    rg_idx = 0
+    n_rows = 0
+
+    for batch in reader:
+        ra_np = batch.column(ra_col).to_numpy().astype("f8", copy=False)
+        dec_np = batch.column(dec_col).to_numpy().astype("f8", copy=False)
+        ra_t = torch.from_numpy(ra_np.copy())
+        dec_t = torch.from_numpy(dec_np.copy())
+        pixels = _healpix.ang2pix(
+            coarse_nside, ra_t, dec_t, nest=True, lonlat=True
+        )
+        pixels_np = pixels.numpy().astype(np.int64)
+
+        order = np.argsort(pixels_np, kind="stable")
+        n = len(order)
+        if n == 0:
+            continue
+
+        ra_sorted = ra_np[order]
+        dec_sorted = dec_np[order]
+        pix_sorted = pixels_np[order]
+
+        pixel_start = 0
+        for i in range(1, n):
+            if pix_sorted[i] != pix_sorted[pixel_start]:
+                pix = int(pix_sorted[pixel_start])
+                pixel_batch = pa.RecordBatch.from_arrays(
+                    [
+                        pa.array(ra_sorted[pixel_start:i]),
+                        pa.array(dec_sorted[pixel_start:i]),
+                        pa.array(pix_sorted[pixel_start:i]),
+                    ],
+                    names=[ra_col, dec_col, "coarse_pixel"],
+                )
+                if writer is None:
+                    writer = pq.ParquetWriter(str(path), pixel_batch.schema)
+                assert writer is not None
+                writer.write_batch(pixel_batch)
+                n_rows += len(pixel_batch)
+                pixel_to_rgs.setdefault(pix, []).append(rg_idx)
+                rg_idx += 1
+                pixel_start = i
+
+        # last pixel group in this batch
+        pix = int(pix_sorted[pixel_start])
+        pixel_batch = pa.RecordBatch.from_arrays(
+            [
+                pa.array(ra_sorted[pixel_start:n]),
+                pa.array(dec_sorted[pixel_start:n]),
+                pa.array(pix_sorted[pixel_start:n]),
+            ],
+            names=[ra_col, dec_col, "coarse_pixel"],
+        )
+        if writer is None:
+            writer = pq.ParquetWriter(str(path), pixel_batch.schema)
+        assert writer is not None
+        writer.write_batch(pixel_batch)
+        n_rows += len(pixel_batch)
+        pixel_to_rgs.setdefault(pix, []).append(rg_idx)
+        rg_idx += 1
+
+    if writer is not None:
+        writer.close()
+    else:
+        raise ValueError("catalog is empty")
+
+    return pixel_to_rgs, n_rows
+
+
+def crossmatch_sky_from_arrow(
+    left_source: Any,
+    right_source: Any,
+    *,
+    radius_arcsec: float,
+    left_columns: tuple[str, str] = ("ra", "dec"),
+    right_columns: tuple[str, str] = ("ra", "dec"),
+    batch_size: int = 131072,
+) -> CrossmatchResult:
+    """Bounded-memory crossmatch via HEALPix tiling — no catalog is loaded
+    into memory at once.
+
+    Both catalogs are streamed once (partitioned by coarse HEALPix pixel
+    into temporary Parquet files with a ``coarse_pixel`` column).  Per-pixel
+    tiles are then loaded one at a time for fine-grained distance
+    computation.  Memory scales with the largest per-pixel tile, not the
+    total catalog size.
+
+    For uniformly distributed sky positions and a well-chosen coarse nside,
+    per-pixel tile size is typically a few thousand rows regardless of
+    whether the total catalog has 10^6 or 10^9 rows.
+
+    Parameters
+    ----------
+    left_source, right_source
+        Each can be a ``pyarrow.Table``, ``pyarrow.ipc.RecordBatchReader``,
+        or a path string / ``pathlib.Path`` to an Arrow IPC file (Feather
+        format v2).  File sources use memory-mapped I/O.
+    radius_arcsec
+        Match radius in arcseconds.
+    left_columns, right_columns
+        ``(ra_column_name, dec_column_name)`` for each catalog.
+    batch_size
+        Row count per streaming batch during the tiling phase.
+    """
+    import pyarrow.parquet as pq
+
+    tmpdir = tempfile.mkdtemp(prefix="torchsky_xmatch_")
+    try:
+        left_path = Path(tmpdir) / "left.parquet"
+        right_path = Path(tmpdir) / "right.parquet"
+
+        left_pixel_map, _ = _tile_catalog_to_parquet(
+            left_source,
+            ra_col=left_columns[0],
+            dec_col=left_columns[1],
+            coarse_nside=64,
+            path=left_path,
+            batch_size=batch_size,
+        )
+        right_pixel_map, n_right = _tile_catalog_to_parquet(
+            right_source,
+            ra_col=right_columns[0],
+            dec_col=right_columns[1],
+            coarse_nside=64,
+            path=right_path,
+            batch_size=batch_size,
+        )
+
+        left_pixels = set(left_pixel_map)
+        right_pixels = set(right_pixel_map)
+
+        radius_deg = radius_arcsec / 3600.0
+        candidate_radius_rad = math.radians(radius_deg) + (
+            2.0 * _healpix.max_pixrad(64, degrees=False)
+        )
+
+        left_hits: list[Tensor] = []
+        right_hits: list[Tensor] = []
+        sep_hits: list[Tensor] = []
+        left_offset = 0
+        device = torch.device("cpu")
+
+        left_pf = pq.ParquetFile(str(left_path))
+        right_pf = pq.ParquetFile(str(right_path))
+
+        for left_pixel in sorted(left_pixels):
+            left_rgs = left_pixel_map[left_pixel]
+            left_tables = left_pf.read_row_groups(
+                left_rgs,
+                columns=[left_columns[0], left_columns[1]],
+            )
+            left_ra = torch.from_numpy(
+                left_tables.column(0).to_numpy().copy().astype("f8", copy=False)
+            )
+            left_dec = torch.from_numpy(
+                left_tables.column(1).to_numpy().copy().astype("f8", copy=False)
+            )
+            count = int(left_ra.numel())
+            if count == 0:
+                continue
+
+            cand_pixels = _candidate_coarse_pixels_for_left_pixel(
+                64, left_pixel, radius_rad=candidate_radius_rad, device=device
+            )
+            relevant_right = set(cand_pixels.tolist()) & right_pixels
+            if not relevant_right:
+                left_offset += count
+                continue
+
+            right_rg_indices = [
+                rg for rp in relevant_right for rg in right_pixel_map[rp]
+            ]
+            right_rg_indices.sort()
+            right_tables = right_pf.read_row_groups(
+                right_rg_indices,
+                columns=[right_columns[0], right_columns[1]],
+            )
+            right_ra = torch.from_numpy(
+                right_tables.column(0).to_numpy().copy().astype("f8", copy=False)
+            )
+            right_dec = torch.from_numpy(
+                right_tables.column(1).to_numpy().copy().astype("f8", copy=False)
+            )
+            n_right = int(right_ra.numel())
+            if n_right == 0:
+                left_offset += count
+                continue
+
+            left_abs = torch.arange(
+                left_offset, left_offset + count, dtype=torch.int64, device=device
+            )
+            left_ra_2d = left_ra.unsqueeze(1)
+            left_dec_2d = left_dec.unsqueeze(1)
+
+            best_sep = torch.full((count,), torch.inf, dtype=torch.float64)
+            best_idx = torch.full((count,), -1, dtype=torch.int64)
+            for right_ids in range(0, n_right, 65536):
+                chunk = slice(right_ids, min(right_ids + 65536, n_right))
+                sep = great_circle_distance(
+                    left_ra_2d,
+                    left_dec_2d,
+                    right_ra[chunk].unsqueeze(0),
+                    right_dec[chunk].unsqueeze(0),
+                    degrees=True,
+                )
+                cand_sep, cand_idx = sep.min(dim=1)
+                improved = cand_sep < best_sep
+                if bool(improved.any()):
+                    best_sep = torch.where(improved, cand_sep, best_sep)
+                    best_idx = torch.where(improved, right_ids + cand_idx, best_idx)
+
+            mask = best_sep <= radius_deg
+            if bool(mask.any()):
+                left_hits.append(left_abs[mask])
+                right_hits.append(best_idx[mask])
+                sep_hits.append(best_sep[mask] * 3600.0)
+
+            left_offset += count
+
+        return _finalize_crossmatch(
+            left_hits,
+            right_hits,
+            sep_hits,
+            device=device,
+            stats=_CrossmatchStats(
+                left_points=left_offset,
+                right_points=n_right,
+            ),
+        )
+    finally:
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)

@@ -20,25 +20,32 @@ hybrid models where that is the honest representation of the problem.
 
 ## Public Pillars
 
-Public surfaces are organized around four architectural pillars. The current
+Public surfaces are organized around three architectural pillars. The current
 code still has compatibility namespaces and historical layout, but new public
 work should move toward these pillars while keeping the advertised public API
 small and namespace-oriented.
 
 | Pillar | Purpose | Current surfaces |
 |---|---|---|
-| `io` | FITS images, HDUs, headers, tables, cutouts, streaming, and cache policy | `torchsky.read`, `torchsky.write`, `torchsky.open`, `torchsky.table` |
 | `world` | Coordinates, WCS, frames, spherical geometry, HEALPix, MOC, sparse maps, and harmonics | `torchsky.wcs.WCS`, `torchsky.sphere` |
 | `scene` | Observations, operators, instruments, latent scenes, products, coadds, objectives, renderers, and fits | promoted `torchsky.map` paths, `torchsky.scene` facade, and field/INR modelling while it remains experimental |
 | `viz` | Browser and notebook-facing visualization | `torchsky.viz` |
 
 Use `torchsky.surfaces` to inspect this contract from code.
 
+FITS I/O is an external boundary owned by `torchfits`. File-oriented
+applications load tensors, header mappings, masks/weights, or streamed table
+batches there and pass those values into torchsky. Core computation must not
+open files or depend on CFITSIO.
+
 ## Refactor Rules
 
 - Preserve the lean public contract first; keep implementation helpers in their
   owning namespaces.
-- Keep core runtime dependencies lean: PyTorch, NumPy, and compiled extensions.
+- Keep core runtime dependencies lean: PyTorch, NumPy, and benchmark-justified
+  geometry/WCS extensions.
+- Do not duplicate FITS/HDU/table/cache implementations or link CFITSIO; those
+  belong to `torchfits`.
 - Use Astropy, fitsio, healpy, hpgeom, healsparse, reproject, drizzle, and
   similar packages as references, fixtures, comparators, or optional
   compatibility targets, not as hidden core backends.
@@ -46,6 +53,8 @@ Use `torchsky.surfaces` to inspect this contract from code.
   placement.
 - Prefer survey-scale designs: chunking, streaming, tiling, sparse
   representations, explicit operators, and benchmarked kernels.
+- Prioritize exact operator semantics, asymptotic improvements, bounded memory,
+  and end-to-end throughput before convenience APIs or micro-optimizations.
 - Make user-facing APIs and CLIs clean, low-jargon, and easy to adopt.
 - Avoid cosmetic churn unless it materially improves architecture, usability,
   scalability, differentiability, or correctness.

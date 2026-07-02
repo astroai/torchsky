@@ -12,7 +12,7 @@ Add an option `allow_nonuniform: bool = False` or `nonuniform_fallback: str = "c
 
 ### Status Note
 Independent one-dimensional `-TAB` WCS reading and transforms are now available
-through `WCS(header, tables=...)`, `TensorHDU.wcs`, and `torchsky.get_wcs(path)`.
+through `WCS(header, tables=...)`; file/HDU decoding is supplied by `torchfits`.
 The reader path now honors independent-axis `PVi_1`/`PVi_2` `EXTVER`/`EXTLEVEL`
 table disambiguation and rejects non-independent `PVi_3` mappings explicitly.
 The proposed `write_cube_fits(..., allow_nonuniform=...)` writer fallback is

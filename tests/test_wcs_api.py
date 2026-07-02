@@ -343,6 +343,111 @@ def test_wcs_mixed_pixel_world_solves_coupled_linear_system():
     torch.testing.assert_close(solved_world, world_true, atol=1e-10, rtol=1e-10)
 
 
+def test_wcs_mixed_pixel_world_solves_spatial_cube_coupled_extra_axes():
+    header = {
+        "NAXIS": 4,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CTYPE3": "WAVE",
+        "CTYPE4": "TIME",
+        "CRPIX1": 40.0,
+        "CRPIX2": 30.0,
+        "CRPIX3": 5.0,
+        "CRPIX4": 2.0,
+        "CRVAL1": 12.0,
+        "CRVAL2": -5.0,
+        "CRVAL3": 500.0,
+        "CRVAL4": 60000.0,
+        "CD1_1": -0.002,
+        "CD1_2": 0.0,
+        "CD1_3": 0.0,
+        "CD1_4": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": 0.002,
+        "CD2_3": 0.0,
+        "CD2_4": 0.0,
+        "CD3_1": 0.1,
+        "CD3_2": 0.0,
+        "CD3_3": 10.0,
+        "CD3_4": 0.25,
+        "CD4_1": 0.0,
+        "CD4_2": -0.01,
+        "CD4_3": 0.05,
+        "CD4_4": 0.5,
+    }
+    wcs = WCS(header)
+    pixels_true = torch.tensor(
+        [[39.0, 29.0, 7.0, 3.0], [41.5, 31.0, 2.0, 5.0]],
+        dtype=torch.float64,
+    )
+    world_true = wcs.pixel_to_world(pixels_true)
+
+    mixed_pixel = pixels_true.clone()
+    mixed_pixel[:, 2:] = float("nan")
+    mixed_world = torch.full_like(world_true, float("nan"))
+    mixed_world[:, 2:] = world_true[:, 2:]
+
+    solved_pixel, solved_world = wcs.mixed_pixel_world(
+        pixel=mixed_pixel, world=mixed_world
+    )
+
+    torch.testing.assert_close(solved_pixel, pixels_true, atol=1e-10, rtol=1e-10)
+    torch.testing.assert_close(solved_world, world_true, atol=2e-10, rtol=0.0)
+
+
+def test_wcs_mixed_pixel_world_solves_spatial_and_coupled_extra_axes_together():
+    header = {
+        "NAXIS": 4,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CTYPE3": "WAVE",
+        "CTYPE4": "TIME",
+        "CRPIX1": 40.0,
+        "CRPIX2": 30.0,
+        "CRPIX3": 5.0,
+        "CRPIX4": 2.0,
+        "CRVAL1": 12.0,
+        "CRVAL2": -5.0,
+        "CRVAL3": 500.0,
+        "CRVAL4": 60000.0,
+        "CD1_1": -0.002,
+        "CD1_2": 0.0,
+        "CD1_3": 0.0,
+        "CD1_4": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": 0.002,
+        "CD2_3": 0.0,
+        "CD2_4": 0.0,
+        "CD3_1": 0.1,
+        "CD3_2": 0.0,
+        "CD3_3": 10.0,
+        "CD3_4": 0.25,
+        "CD4_1": 0.0,
+        "CD4_2": -0.01,
+        "CD4_3": 0.05,
+        "CD4_4": 0.5,
+    }
+    wcs = WCS(header)
+    pixels_true = torch.tensor(
+        [[39.0, 29.0, 7.0, 3.0], [41.5, 31.0, 2.0, 5.0]],
+        dtype=torch.float64,
+    )
+    world_true = wcs.pixel_to_world(pixels_true)
+
+    mixed_pixel = torch.full_like(pixels_true, float("nan"))
+    mixed_pixel[:, 0] = pixels_true[:, 0]
+    mixed_world = torch.full_like(world_true, float("nan"))
+    mixed_world[:, 1] = world_true[:, 1]
+    mixed_world[:, 2:] = world_true[:, 2:]
+
+    solved_pixel, solved_world = wcs.mixed_pixel_world(
+        pixel=mixed_pixel, world=mixed_world
+    )
+
+    torch.testing.assert_close(solved_pixel, pixels_true, atol=3e-6, rtol=0.0)
+    torch.testing.assert_close(solved_world, world_true, atol=2e-8, rtol=0.0)
+
+
 def test_wcs_differentiable_pixel_to_world_supports_autograd_and_jacobian():
     header = {
         "NAXIS": 2,

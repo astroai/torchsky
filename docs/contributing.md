@@ -12,6 +12,10 @@ Repository-specific coding-agent and engineering guidance lives in `../AGENTS.md
 - Preserve differentiability and tensor-native execution in public compute paths where practical.
 - Validate substantial changes on both synthetic data and representative real or upstream-fixture data.
 - Include benchmark evidence for performance-sensitive work, especially when changing default execution paths.
+- Keep FITS/HDU/table/CFITSIO implementation work in `torchfits`; torchsky
+  integration code should exchange decoded tensors and metadata.
+- Rank work by massive workflow impact, correctness risk, asymptotic scale, and
+  measured end-to-end performance. Avoid standalone micro-cleanups.
 
 ## Development Setup
 
@@ -19,7 +23,6 @@ Repository-specific coding-agent and engineering guidance lives in `../AGENTS.md
 git clone https://github.com/sfabbro/torchsky.git
 cd torchsky
 pixi install
-./extern/vendor.sh
 pixi run dev
 pixi run verify
 ```
@@ -31,7 +34,6 @@ work instead of a bare `python` or `python3` from your shell.
 
 - Python package: `src/torchsky/`
 - Native extension: `src/torchsky/cpp_src/`
-- Vendored native deps: `extern/cfitsio/`
 - Tests: `tests/`
 - Benchmarks: `benchmarks/`
 - Docs: `docs/`
@@ -47,10 +49,9 @@ Fresh clones should recreate those products locally using the commands in
 
 ```
 src/torchsky/          Python package
-src/torchsky/cpp_src/  C++ native extension (nanobind + CFITSIO)
+src/torchsky/cpp_src/  C++ native geometry/compute extension
 src/torchsky/wcs/      Pure-PyTorch WCS implementation
 src/torchsky/sphere/   HEALPix, spherical geometry, SHT
-extern/cfitsio/         Vendored CFITSIO sources
 tests/                  Unit and integration tests
 benchmarks/             Benchmark scripts and upstream-derived validation gates
 docs/                   Documentation
@@ -59,11 +60,10 @@ examples/               Runnable example scripts
 
 ## Native extension
 
-The C++ extension is built by [scikit-build-core](https://scikit-build-core.readthedocs.io/) with [nanobind](https://nanobind.readthedocs.io/) bindings. Populate vendored sources with:
-
-```bash
-./extern/vendor.sh
-```
+The C++ extension is built by
+[scikit-build-core](https://scikit-build-core.readthedocs.io/) with
+[nanobind](https://nanobind.readthedocs.io/) bindings. It must not link CFITSIO
+or implement FITS/table operations.
 
 Rebuild after C++ changes:
 
@@ -71,19 +71,14 @@ Rebuild after C++ changes:
 pixi run dev
 ```
 
-To build against system CFITSIO instead of the vendored source, pass the CMake
-flag through pip/scikit-build:
-
-```bash
-python -m pip install . --config-settings=cmake.args="-DTORCHSKY_USE_VENDORED_CFITSIO=OFF"
-```
+Use the `torchfits` repository for CFITSIO build configuration.
 
 ## Test Expectations
 
 Minimum pre-PR checks:
 
 ```bash
-pixi run -e test -- pytest tests/test_api.py tests/test_table.py -q
+pixi run -e test -- pytest tests/test_api.py tests/test_wcs_api.py -q
 ```
 
 Full suite:
@@ -108,8 +103,7 @@ Quick regression check:
 pixi run bench-fast
 ```
 
-For investigation, narrow scope with `bench-core`, `bench-table`,
-`bench-cache`, or domain-specific tasks such as `bench-wcs`,
+For investigation, narrow scope with domain-specific tasks such as `bench-wcs`,
 `bench-sphere`, and `bench-map-acceptance-smoke`. `bench-all` is
 comprehensive and can take over an hour on a laptop-class machine.
 
@@ -123,6 +117,8 @@ comprehensive and can take over an hour on a laptop-class machine.
 - `docs/examples.md` and `docs/benchmarks.md`: operational guides.
 
 If a PR changes a public API, update the relevant namespace guide and `docs/api.md` routing in the same PR.
+FITS I/O documentation and benchmarks belong in `torchfits`; update only the
+cross-package contract here.
 
 ## Release Checklist (Maintainers)
 

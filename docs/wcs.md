@@ -14,8 +14,8 @@ and benchmarks, not runtime fallbacks for public tensor paths.
 
 - Coordinates use Python 0-based pixel convention; celestial world values are in
   degrees unless noted.
-- WCS objects can be built from FITS headers, from `torchsky.get_wcs(...)`,
-  or from headers plus table HDUs for independent FITS `-TAB` axes.
+- WCS objects are built from FITS-like header mappings, optionally with decoded
+  lookup-table data for FITS `-TAB` axes. File decoding belongs to `torchfits`.
 - Tensor paths run on CPU, CUDA, or MPS where the underlying operations support
   the device.
 - Differentiable helpers are available for field-model training and geometry
@@ -27,9 +27,11 @@ and benchmarks, not runtime fallbacks for public tensor paths.
 ### Pixel To World And Back
 
 ```python
-import torchsky
+import torchfits
+from torchsky.wcs import WCS
 
-wcs = torchsky.get_wcs("science.fits", hdu="auto")
+_, header = torchfits.read("science.fits", hdu="auto", return_header=True)
+wcs = WCS(header)
 ra, dec = wcs.pixel_to_world(x, y)
 x_back, y_back = wcs.world_to_pixel(ra, dec)
 ```
@@ -40,7 +42,6 @@ x_back, y_back = wcs.world_to_pixel(ra, dec)
 from torchsky.wcs import WCS
 
 wcs_a = WCS(header, key="A")
-wcs_a_from_file = torchsky.get_wcs("science.fits", hdu=0, key="A")
 ```
 
 ### Keep A Compiled Tensor Path
@@ -53,14 +54,11 @@ world = wcs.pixel_to_world(pixels)  # pixels.shape == (..., 2)
 ### Load `-TAB` Axes
 
 ```python
-from torchsky.hdu import HDUList
+import torchfits
 from torchsky.wcs import WCS
 
-with HDUList.fromfile("cube_with_wave_tab.fits") as hdul:
+with torchfits.open("cube_with_wave_tab.fits") as hdul:
     wcs = WCS(hdul[0].header, tables=hdul)
-
-# `torchsky.get_wcs(path, hdu=...)` also resolves supported `-TAB`
-# coordinate tables when the selected image HDU points at table extensions.
 ```
 
 One-dimensional lookup axes use `PSi_0` for table extension name, `PSi_1` for

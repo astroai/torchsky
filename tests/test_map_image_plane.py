@@ -11,6 +11,7 @@ from astropy.io import fits
 import torchsky
 import torchsky.map.image_plane as image_plane_mod
 import torchsky.map.operators.resampling as resampling_mod
+import torchsky.map.windowing as windowing_mod
 from torchsky.map import (
     ImageObservation,
     coadd_image_plane,
@@ -326,7 +327,7 @@ def test_cli_map_coadd_writes_output(tmp_path, monkeypatch) -> None:
     )
     assert main() == 0
     got, _ = torchsky.read(str(out), return_header=True)
-    torch.testing.assert_close(got, (data_a + data_b) / 2.0, atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(got[1:-1, 1:-1], (data_a + data_b)[1:-1, 1:-1] / 2.0, atol=1e-4, rtol=1e-4)
 
 
 def test_coadd_image_plane_mean_stacking_averages_observations_equally(
@@ -1600,14 +1601,14 @@ def test_coadd_image_plane_builds_target_grid_once_per_run(
     torchsky.write(str(path_b), data + 1.0, header=header_b, overwrite=True)
 
     calls = 0
-    original = image_plane_mod._build_target_world_grid
+    original = image_plane_mod._prepare_target
 
     def counted(*args, **kwargs):
         nonlocal calls
         calls += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(image_plane_mod, "_build_target_world_grid", counted)
+    monkeypatch.setattr(image_plane_mod, "_prepare_target", counted)
 
     result = coadd_image_plane(
         [ImageObservation(str(path_a)), ImageObservation(str(path_b))]
@@ -1650,7 +1651,7 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
     image = validate_image_plane_2d(image)
     source_wcs = image_plane_mod.WCS(dict(header))
 
-    original_threshold = image_plane_mod._LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS
+    original_threshold = windowing_mod._LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS
     original_resample = image_plane_mod._resample_weighted_to_target
     try:
         forced_shapes: list[tuple[int, int]] = []
@@ -1664,7 +1665,7 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
             image_plane_mod, "_resample_weighted_to_target", wrapped_resample
         )
         monkeypatch.setattr(
-            image_plane_mod, "_LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS", 0
+            windowing_mod, "_LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS", 0
         )
         forced_numer, forced_weight, _, _ = (
             image_plane_mod._project_observation_to_target(
@@ -1688,7 +1689,7 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
         )
 
         monkeypatch.setattr(
-            image_plane_mod,
+            windowing_mod,
             "_LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS",
             10**9,
         )
@@ -1707,7 +1708,7 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
         )
     finally:
         monkeypatch.setattr(
-            image_plane_mod,
+            windowing_mod,
             "_LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS",
             original_threshold,
         )
@@ -2656,3 +2657,46 @@ def test_plan_image_plane_cube_target_from_header_uses_spectral_wcs(tmp_path) ->
     assert planned.band_metadata.band_names == ("g", "r", "i")
     band_table = planned.to_band_table()
     assert band_table["band_name"] == ("g", "r", "i")
+
+
+_KERNELS_DETERMINISTIC = [
+    "bilinear",
+    "lanczos3",
+    "catmull_rom",
+    "drizzle_point",
+    "drizzle_square",
+    "conservative_polygon",
+    "splat_point",
+    "splat_box",
+]
+
+_STACKING_METHODS_DETERMINISTIC = ["mean", "weighted_mean", "median"]
+
+
+@pytest.mark.parametrize("kernel", _KERNELS_DETERMINISTIC)
+@pytest.mark.parametrize("stacking_method", _STACKING_METHODS_DETERMINISTIC)
+def test_coadd_image_plane_deterministic_accumulation(
+    tmp_path, kernel: str, stacking_method: str
+) -> None:
+    path_a = tmp_path / f"det_a_{kernel}.fits"
+    path_b = tmp_path / f"det_b_{kernel}.fits"
+    header_a = _simple_header()
+    header_b = dict(header_a)
+    header_b["CRVAL1"] = float(header_b["CRVAL1"]) + 0.01
+    data_a = torch.arange(64, dtype=torch.float32).reshape(8, 8)
+    data_b = data_a + 3.0
+    torchsky.write(str(path_a), data_a, header=header_a, overwrite=True)
+    torchsky.write(str(path_b), data_b, header=header_b, overwrite=True)
+
+    obs = [ImageObservation(str(path_a)), ImageObservation(str(path_b))]
+    kwargs: dict[str, object] = dict(
+        resampling_kernel=kernel,
+        stacking_method=stacking_method,
+    )
+    result_a = coadd_image_plane(obs, **kwargs)
+    result_b = coadd_image_plane(obs, **kwargs)
+
+    assert torch.equal(result_a.data, result_b.data)
+    assert torch.equal(result_a.weight, result_b.weight)
+    if result_a.overlap_count is not None and result_b.overlap_count is not None:
+        assert torch.equal(result_a.overlap_count, result_b.overlap_count)

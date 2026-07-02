@@ -1,5 +1,11 @@
 # torchsky Benchmarks
 
+> FITS image/table I/O benchmarks have moved to
+> [`torchfits`](https://github.com/sfabbro/torchfits). References below to
+> `bench_fits_io.py`, `bench_fitstable_io.py`, `bench-fits`, or historical FITS
+> scorecards document the pre-split repository and are not active torchsky
+> ownership. They will be removed with the residual implementation.
+
 torchsky is benchmarked for both **correctness** and **throughput** against upstream libraries across four domains. This page documents the methodology, comparator environments, real-data benchmark setup, how to reproduce the results, and historical release snapshots.
 
 Record installed comparator versions with `pixi run bench-comparator-versions-all` (writes under `benchmarks_results/`).
@@ -156,9 +162,9 @@ artifacts unless a baseline is deliberately reviewed and committed.
 
 | Script | Description |
 |--------|-------------|
-| `bench_all.py` | 4-domain orchestrator: FITS I/O, FITS Table I/O, WCS, Sphere. |
-| `bench_fits_io.py` | Authoritative FITS image-domain runner (1D/2D/3D, dtype/size/compression/scaled, MEFs, cutouts, headers). |
-| `bench_fitstable_io.py` | Authoritative FITS table-domain runner (row scales, schema mixes, varlen, projection/slice/filter/scan, and table mutation rows). |
+| `bench_all.py` | Legacy orchestrator being narrowed to torchsky-owned WCS and sphere domains. |
+| `bench_fits_io.py` | Migrated to `torchfits`; residual copy pending removal. |
+| `bench_fitstable_io.py` | Migrated to `torchfits`; residual copy pending removal. |
 | `bench_wcs_suite.py` | Authoritative WCS projection sweep runner with forward+inverse and `N={1k..10M}` tiers. |
 | `bench_sphere_suite.py` | Authoritative sphere-domain runner aggregating geometry/advanced/sparse/spectral/polygon/core benches. |
 | `bench_legacy_all.py` | Legacy monolithic exhaustive harness (opt-in only, no longer default contract). |
@@ -207,7 +213,8 @@ artifacts unless a baseline is deliberately reviewed and committed.
 
 Each case measures **median wall-clock time** over multiple repetitions (typically 3-9 runs). Cases are grouped into two families:
 
-- **smart** &mdash; the idiomatic, high-level API a user would call (e.g. `torchsky.read()` vs `astropy.io.fits.getdata()` + `torch.from_numpy()`). Primary adoption view.
+- **smart** &mdash; the idiomatic high-level torchsky compute API. Historical
+  FITS smart-path rows are owned by `torchfits`.
 - **specialized** &mdash; lower-level or library-specific call paths with explicit mmap control. Used for controlled I/O comparisons.
 
 Fairness controls:
@@ -225,7 +232,7 @@ Correctness is validated separately using upstream test fixtures and public refe
 | Local CI parity | `pixi run ci-local` | Ruff, compileall, pyright, and the full pytest suite in the test env |
 | Refactor cohesion audit | `pixi run audit-refactor-cohesion` | Cheap wiring check for benchmark tasks, docs, promoted map/operator APIs, and known large-file pressure points |
 | WCS parity/perf | `pixi run bench-wcs` and `pixi run bench-wcs-tpv-inverse` | WCS projections, spectral/temporal paths, and TPV inverse benchmarks |
-| FITS I/O parity/perf | `pixi run bench-fits` and `pixi run bench-fitstable` | FITS image and table benchmark suites |
+| FITS boundary integration | focused cross-package smoke | `torchfits` output preserves torchsky WCS/map/catalog semantics |
 | HEALPix geometry | `pixi run sphere-bench-geometry-gate` | HEALPix geometry matrix with correctness and median ratio gates |
 | HEALPix advanced | `pixi run sphere-bench-healpix-advanced-gate` | Neighbors and interpolation checks vs healpy |
 | Spin transforms | `pixi run sphere-upstream-spin-matrix-gate` | Spin transform matrix benchmark against the committed baseline |

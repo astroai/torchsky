@@ -930,7 +930,7 @@ class SparseHealpixMap:
 
 def _resolve_sparse_table_hdu_index(path: str) -> int:
     """Return 0-based HDU index of the HealSparse ``SPARSE`` binary table extension."""
-    import torchsky.cpp as cpp
+    import torchfits.cpp as cpp
 
     if hasattr(cpp, "resolve_hdu_name_cached"):
         try:

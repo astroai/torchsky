@@ -122,7 +122,7 @@ def _normalize_moc(uniq: Tensor) -> Tensor:
 
 def _resolve_moc_table_hdu_index(path: str) -> int:
     """Return 0-based HDU index of the IVOA MOC binary table extension."""
-    import torchsky.cpp as cpp
+    import torchfits.cpp as cpp
 
     if hasattr(cpp, "resolve_hdu_name_cached"):
         try:

@@ -10,7 +10,19 @@ The easiest way to install `torchsky` is using `pip`:
 pip install torchsky
 ```
 
-Pre-built wheels are available for Linux (x86_64, aarch64) and macOS (x86_64, arm64). The wheels bundle [CFITSIO](https://heasarc.gsfc.nasa.gov/fitsio/) — no system library needed.
+Pre-built wheels are available for Linux (x86_64, aarch64) and macOS (x86_64,
+arm64). Torchsky does not own or bundle CFITSIO. Install
+[`torchfits`](https://github.com/sfabbro/torchfits) separately when FITS file or
+table I/O is required:
+
+```bash
+pip install torchsky torchfits
+```
+
+The target integration baseline is the forthcoming `torchfits 0.5.0`. While it
+is under development, use the local/dev installation for combined-stack
+validation. Add a concrete compatible version range only after the 0.5 release
+candidate passes the cross-repository contract gate.
 
 Requires Python **>=3.12,<3.15** and [PyTorch](https://pytorch.org/) 2.0+.
 
@@ -44,22 +56,27 @@ Optional extras (from `pyproject.toml`):
   ``--inr-spectral-source=svo`` (SVO filter profiles). Install with
   `pip install 'torchsky[map]'` when using PyPI wheels, or install those packages in your env.
 
+`torchfits` is an integration package, not a hidden backend. In-memory
+tensor/header workflows do not require it.
+
+The current development tree may temporarily retain legacy CFITSIO build files
+while the P0 extraction cleanup in [roadmap/status.md](roadmap/status.md) is
+completed. They are not part of the forward public contract.
+
 On macOS, install Xcode Command Line Tools if not present:
 
 ```bash
 xcode-select --install
 ```
 
-Clone the repository and prepare vendored sources:
+Clone the repository and build:
 
 ```bash
 git clone https://github.com/sfabbro/torchsky.git
 cd torchsky
-./extern/vendor.sh      # download vendored CFITSIO sources
 pip install -e .        # editable install
 ```
 
-`torchsky` vendors its C dependency (`cfitsio`) to simplify installation.
 For a non-editable install, run:
 
 ```bash
@@ -68,20 +85,11 @@ pip install .
 
 The build uses [scikit-build-core](https://scikit-build-core.readthedocs.io/) and [nanobind](https://nanobind.readthedocs.io/) for the C++ extension.
 
-### Vendored CFITSIO
+### FITS support
 
-Editable install (typical development):
-
-```bash
-./extern/vendor.sh --cfitsio-version cfitsio-4.6.2
-pip install -e . --no-build-isolation
-```
-
-System CFITSIO (disable vendored build):
-
-```bash
-pip install . --config-settings=cmake.args="-DTORCHSKY_USE_VENDORED_CFITSIO=OFF"
-```
+CFITSIO build configuration, vendoring, and troubleshooting belong to
+`torchfits`. Torchsky's native extension is limited to torchsky-owned geometry
+and compute kernels.
 
 #### Pip only (no Pixi / no conda env manager)
 
@@ -110,7 +118,7 @@ Adjust `CUDA_HOME` if your toolkit lives elsewhere (e.g. `/usr/local/cuda`). CPU
 
 ### Troubleshooting
 
-torchsky reads FITS data on the CPU and places the resulting tensor on the requested device. No GPU-specific build steps are required — just install PyTorch with CUDA or MPS support:
+Install PyTorch with CUDA or MPS support for torchsky tensor computation:
 
 - **Compiler Errors?**
   Verify your C++ compiler supports C++17. On macOS, ensure Xcode Command Line Tools are installed (`xcode-select --install`).

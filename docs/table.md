@@ -1,105 +1,58 @@
-# `torchsky.table`
+# FITS Tables And Catalog Batches
 
-`torchsky.table` is the table-oriented surface for FITS binary tables, Arrow
-scans, predicate pushdown, file-backed mutation, and dataframe interop.
+FITS table I/O is owned by
+[`torchfits.table`](https://github.com/sfabbro/torchfits). The former
+`torchsky.table` implementation is not a torchsky roadmap surface.
+The integration target is `torchfits 0.5.0`; verify exact scan/read signatures
+against its release-candidate docs before treating the examples below as stable.
 
-## What This Namespace Is For
+Use `torchfits.table` for:
 
-Use `torchsky.table` when the primary object is a table HDU or an Arrow-style
-scan. Use root `torchsky.read(...)` when you want auto-detection across image and
-table HDUs.
+- FITS BINTABLE/ASCII table reads and writes;
+- projection and predicate pushdown;
+- bounded-memory scans;
+- row/column mutation;
+- Arrow, Polars, DuckDB, and Pandas interchange.
 
-## Core Concepts
+Use `torchsky.catalogs` and `torchsky.sphere` for:
 
-- **Projection:** request only the columns you need.
-- **Predicate pushdown:** `where=` filters rows before data reaches Python.
-- **Streaming:** scan large tables in chunks.
-- **Streaming:** `torchsky.io.stream_table(...)` and
-  `torchsky.io.read_large_table(...)` handle FITS table streaming workflows;
-  `torchsky.table.scan(...)` and `torchsky.table.reader(...)` are the
-  table-namespace scan/reader APIs.
-- **Interop:** convert to PyArrow, Polars, DuckDB, Pandas, or tensors when those
-  optional dependencies are installed.
-- **Mutation:** file-backed row and column mutation is explicit and validates
-  unsupported columns before touching data.
+- sky-coordinate validation and conversion;
+- spherical partitioning and indices;
+- crossmatch and neighborhood queries;
+- HEALPix/MOC joins and map accumulation;
+- tensor-native catalog modelling.
 
-## Recipes
-
-### Read A Filtered Table
+## Stream Into Torchsky
 
 ```python
-import torchsky
+import torchfits
+from torchsky.catalogs import crossmatch_sky
 
-table = torchsky.table.read(
+for batch in torchfits.table.scan(
     "catalog.fits",
     hdu=1,
     columns=["RA", "DEC", "MAG_G"],
-    where="MAG_G < 20 AND DEC > 0",
-)
+    where="MAG_G < 20",
+    batch_size=100_000,
+):
+    result = crossmatch_sky(batch["RA"], batch["DEC"], ref_ra, ref_dec)
+    consume(result)
 ```
 
-### Stream Row Chunks
+The batch boundary must preserve row order, null/mask semantics, units, dtype,
+and device placement. `torchsky` must not depend on a particular dataframe
+implementation in its core compute paths.
 
-```python
-for batch in torchsky.table.scan("catalog.fits", hdu=1, batch_size=100_000):
-    process(batch["RA"], batch["DEC"])
-```
+## Scale And Performance Policy
 
-### Use Polars Or DuckDB
+Catalog work is evaluated by:
 
-```python
-import polars as pl
+- asymptotic complexity and avoidance of all-pairs materialization;
+- candidate-reduction ratio for indexed searches;
+- peak memory and bounded batch behavior;
+- CPU/CUDA/MPS correctness where claimed;
+- parity against brute force on synthetic cases and trusted real fixtures;
+- throughput at small, medium, and survey-scale row counts.
 
-lazy = torchsky.table.to_polars_lazy("catalog.fits", hdu=1)
-bright = lazy.filter(pl.col("MAG_G") < 20).collect()
-
-rel = torchsky.table.to_duckdb("catalog.fits", hdu=1, relation_name="cat")
-```
-
-## API Surface
-
-Read/write:
-
-- `torchsky.table.read(...)`
-- `torchsky.table.scan(...)`
-- `torchsky.table.reader(...)`
-- `torchsky.table.write(...)`
-
-Mutation:
-
-- `torchsky.table.append_rows(...)`
-- `torchsky.table.update_rows(...)`
-- `torchsky.table.insert_rows(...)`
-- `torchsky.table.delete_rows(...)`
-- `torchsky.table.insert_column(...)`
-- `torchsky.table.replace_column(...)`
-- `torchsky.table.rename_columns(...)`
-- `torchsky.table.drop_columns(...)`
-
-Interop:
-
-- `to_polars_lazy(...)`
-- `to_duckdb(...)`
-- `duckdb_query(...)`
-- `scanner(...)`
-- root helpers `torchsky.to_arrow(...)`, `torchsky.to_pandas(...)`,
-  `torchsky.to_polars(...)`
-
-## Predicate Pushdown
-
-Supported operators include `=`, `!=`, `<`, `>`, `<=`, `>=`, `AND`, `OR`,
-`NOT`, `IN (...)`, `NOT IN (...)`, `BETWEEN ... AND ...`, `IS NULL`, and
-`IS NOT NULL`.
-
-## Examples
-
-- [Table read/write example](../examples/example_table.py)
-- [Astropy interop example](../examples/example_table_interop.py)
-- [Polars example](../examples/example_polars.py)
-- [Table recipes](../examples/example_table_recipes.py)
-
-## Validation And Performance
-
-Table behavior is covered by table tests, Arrow/Polars interop tests, and
-`benchmarks/bench_fitstable_io.py`, `benchmarks/bench_arrow_tables.py`, and
-`benchmarks/bench_pipeline_table_sphere.py`.
+FITS table decode/encode and predicate-pushdown benchmarks belong to
+`torchfits`. Torchsky benchmarks begin with decoded tensor or Arrow batches.
