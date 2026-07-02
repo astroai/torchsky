@@ -170,6 +170,48 @@ def _read_ext(path: Path, ext: str) -> np.ndarray:
         return np.asarray(hdul[ext].data, dtype=np.float32)
 
 
+def _unique_sorted_paths(paths: list[Path]) -> list[Path]:
+    """Return unique paths in sorted order.
+
+    Added for UPDC-preprocessed inputs, where multiple glob patterns may overlap.
+    """
+    return sorted(dict.fromkeys(paths))
+
+
+def _valid_data_mask(exposure_path: Path, err: np.ndarray) -> np.ndarray:
+    """Build a valid-pixel mask from ERR, DQ, and optional UPDCMASK.
+
+    Original TorchSky benchmark logic used:
+        finite positive ERR and DQ == 0.
+
+    UPDC-preprocessed corrected exposures additionally include UPDCMASK.
+    Pixels with UPDCMASK != 0 were replaced or excluded during preprocessing,
+    so we exclude them from TorchSky coadd/field fitting.
+    """
+    valid = np.isfinite(err) & (err > 0)
+
+    with fits.open(exposure_path) as hdul:
+        if "DQ" in hdul:
+            dq = np.asarray(hdul["DQ"].data)
+            if dq.shape != err.shape:
+                raise ValueError(
+                    f"DQ shape {dq.shape} does not match ERR shape {err.shape} "
+                    f"in {exposure_path}"
+                )
+            valid &= np.isfinite(dq) & (dq == 0)
+
+        if "UPDCMASK" in hdul:
+            updc_mask = np.asarray(hdul["UPDCMASK"].data)
+            if updc_mask.shape != err.shape:
+                raise ValueError(
+                    f"UPDCMASK shape {updc_mask.shape} does not match ERR shape "
+                    f"{err.shape} in {exposure_path}"
+                )
+            valid &= np.isfinite(updc_mask) & (updc_mask == 0)
+
+    return valid
+
+
 def _discover_exposure_paths(
     exposure_dir: Path,
     *,
@@ -179,14 +221,25 @@ def _discover_exposure_paths(
     filename_contains: str | None = None,
 ) -> list[Path]:
     product = str(input_product).lower()
-    if product not in {"auto", "crf", "cal"}:
-        raise ValueError("input_product must be one of {'auto', 'crf', 'cal'}")
+    if product not in {"auto", "crf", "cal", "updc"}:
+        raise ValueError(
+            "input_product must be one of {'auto', 'crf', 'cal', 'updc'}"
+        )
     crf_paths = sorted(exposure_dir.glob("*_crf.fits"))
     cal_paths = sorted(exposure_dir.glob("*_cal.fits"))
+    updc_paths = _unique_sorted_paths(
+        [
+            *exposure_dir.glob("*_cal_1overf_completed_dqfix.fits"),
+            *exposure_dir.glob("*_cal_1overf_completed.fits"),
+            *exposure_dir.glob("*_cal_*completed*dqfix*.fits"),
+        ]
+    )
     if product == "crf":
         paths = crf_paths
     elif product == "cal":
         paths = cal_paths
+    elif product == "updc":
+        paths = updc_paths
     elif crf_paths:
         paths = crf_paths
     else:
@@ -435,8 +488,10 @@ def _prepare_aux_files(
         header = _linearize_sip_header(header)
     science = _read_ext(exposure_path, "SCI")
     err = _read_ext(exposure_path, "ERR")
-    dq = _read_ext(exposure_path, "DQ")
-    valid = np.isfinite(err) & (err > 0) & np.isfinite(dq) & (dq == 0)
+    # Original logic used ERR + DQ directly here.
+    # We now route through _valid_data_mask so corrected UPDC inputs can also
+    # respect the optional UPDCMASK extension.
+    valid = _valid_data_mask(exposure_path, err)
     weight = np.zeros_like(err, dtype=np.float32)
     weight[valid] = 1.0 / np.square(err[valid])
     mask = valid.astype(np.float32)

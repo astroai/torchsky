@@ -107,3 +107,10 @@ venv/
 .venv/
 .venv/
 node_modules/
+
+# Local notebooks/checkpoints
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# External local dependency clone
+external/HybPSF/

@@ -45,6 +45,7 @@ from bench_map_smacs0723_real import (  # noqa: E402
     _read_ext,
     _reference_path_for_band,
     _sci_header,
+    _valid_data_mask,
 )
 from download_jwst_smacs0723_mast import (  # noqa: E402
     download_product as download_jwst_product,
@@ -100,17 +101,62 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bands", default=",".join(ALL_BANDS))
     parser.add_argument("--module", default="b")
     parser.add_argument(
-        "--input-product", choices=("auto", "crf", "cal"), default="cal"
+        "--exposure-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory containing local exposures. If omitted, defaults to "
+            "<root>/jwst_smacs0723. For UPDC-preprocessed inputs, use "
+            "data/updc_inputs/F277W/completed_dqfix."
+        ),
+    )
+    parser.add_argument(
+        "--input-product", choices=("auto", "crf", "cal", "updc"), default="cal"
+    )
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="Torch device for TorchSky coadd/fit, e.g. 'cuda', 'cuda:0', or 'cpu'.",
     )
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--skip-coadd", action="store_true")
     parser.add_argument("--skip-train", action="store_true")
+    parser.add_argument(
+        "--background-offset",
+        choices=("none", "median", "sigma_clip_median"),
+        default="none",
+        help=(
+            "Per-individual-exposure background subtraction before coadd. "
+            "'median' subtracts median(SCI[valid]); "
+            "'sigma_clip_median' iteratively clips out bright sources first."
+        ),
+    )
+    parser.add_argument(
+        "--background-sigma",
+        type=float,
+        default=2.5,
+        help="Sigma threshold used by --background-offset sigma_clip_median.",
+    )
+    parser.add_argument(
+        "--background-maxiters",
+        type=int,
+        default=5,
+        help="Maximum clipping iterations for sigma-clipped background estimate.",
+    )
     parser.add_argument("--train-model", default="spectral_basis_field")
     parser.add_argument("--train-steps", type=int, default=12)
     parser.add_argument("--train-runs", type=int, default=1)
     parser.add_argument("--updec-attempts", type=int, default=12)
     parser.add_argument("--updec-timeout-s", type=float, default=240.0)
     parser.add_argument("--updec-backoff-s", type=float, default=3.0)
+    parser.add_argument(
+        "--output-label",
+        default="",
+        help=(
+            "Optional label inserted into the full mosaic filename, e.g. "
+            "'raw_cal' -> F277W_raw_cal_torchsky_full_mosaic.fits."
+        ),
+    )
     parser.add_argument("--overwrite", action="store_true")
     return parser
 
@@ -157,6 +203,62 @@ def _full_target_header(reference_path: Path) -> tuple[np.ndarray, dict[str, Any
     return reference, header
 
 
+def _sigma_clip_median_numpy(
+    values: np.ndarray,
+    *,
+    sigma: float,
+    maxiters: int,
+) -> float:
+    """Robust median used for per-individual-exposure background estimation."""
+    x = np.asarray(values, dtype=np.float32)
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        return 0.0
+    for _ in range(max(int(maxiters), 0)):
+        med = float(np.median(x))
+        std = float(np.std(x))
+        if not np.isfinite(std) or std <= 0.0:
+            break
+        keep = np.abs(x - med) < float(sigma) * std
+        if int(keep.sum()) == int(x.size):
+            break
+        if int(keep.sum()) == 0:
+            break
+        x = x[keep]
+    return float(np.median(x))
+
+
+def _estimate_exposure_background_offset(
+    exposure_path: Path,
+    *,
+    mode: str,
+    sigma: float,
+    maxiters: int,
+) -> float:
+    """Estimate one scalar sky/background offset for one individual exposure."""
+    mode = str(mode).lower()
+    if mode == "none":
+        return 0.0
+
+    science = _read_ext(exposure_path, "SCI")
+    err = _read_ext(exposure_path, "ERR")
+    valid = _valid_data_mask(exposure_path, err)
+    values = science[valid & np.isfinite(science)]
+
+    if values.size == 0:
+        return 0.0
+    if mode == "median":
+        return float(np.median(values))
+    if mode == "sigma_clip_median":
+        return _sigma_clip_median_numpy(
+            values,
+            sigma=float(sigma),
+            maxiters=int(maxiters),
+        )
+    raise ValueError(f"unknown background offset mode: {mode}")
+
+
+
 def _coadd_full_band(
     *,
     band: str,
@@ -166,6 +268,11 @@ def _coadd_full_band(
     updec_dir: Path,
     mosaic_dir: Path,
     metric_dir: Path,
+    background_offset_mode: str,
+    background_sigma: float,
+    background_maxiters: int,
+    output_label: str,
+    device: str | None,
 ) -> dict[str, Any]:
     reference_path = updec_dir / _reference_path_for_band(band).name
     if not reference_path.exists():
@@ -190,11 +297,24 @@ def _coadd_full_band(
     ) as tmp:
         tmpdir = Path(tmp)
         observations: list[ImageObservation] = []
-        for exposure_path in exposure_paths:
+        background_offsets: list[float] = []
+        for idx, exposure_path in enumerate(exposure_paths, start=1):
             science_path, weight_path, mask_path = _prepare_aux_files(
                 exposure_path,
                 tmpdir,
                 linearize_sip=False,
+            )
+            bg_offset = _estimate_exposure_background_offset(
+                exposure_path,
+                mode=background_offset_mode,
+                sigma=float(background_sigma),
+                maxiters=int(background_maxiters),
+            )
+            background_offsets.append(float(bg_offset))
+            print(
+                f"[background] {idx}/{len(exposure_paths)} "
+                f"{exposure_path.name}: offset={bg_offset:.8g}",
+                flush=True,
             )
             observations.append(
                 ImageObservation(
@@ -204,8 +324,10 @@ def _coadd_full_band(
                     weight_hdu=0,
                     mask_path=str(mask_path),
                     mask_hdu=0,
+                    background_offset=float(bg_offset),
                 )
             )
+        print(f"Running TorchSky coadd on device={device or 'auto'}")
         result = coadd_image_plane(
             observations,
             target_header=target_header,
@@ -213,6 +335,7 @@ def _coadd_full_band(
             value_semantics="surface_brightness",
             stacking_method="weighted_mean",
             drizzle_pixfrac=1.0,
+            device=device,
         )
 
     pred = result.data.detach().cpu().numpy().astype(np.float32)
@@ -222,7 +345,11 @@ def _coadd_full_band(
 
     mosaic_dir.mkdir(parents=True, exist_ok=True)
     metric_dir.mkdir(parents=True, exist_ok=True)
-    output_path = mosaic_dir / f"{band}_torchsky_full_mosaic.fits"
+    label = str(output_label).strip()
+    if label:
+        output_path = mosaic_dir / f"{band}_{label}_torchsky_full_mosaic.fits"
+    else:
+        output_path = mosaic_dir / f"{band}_torchsky_full_mosaic.fits"
     torchsky.write(str(output_path), result.data, header=target_header, overwrite=True)
 
     row = {
@@ -249,6 +376,10 @@ def _coadd_full_band(
         "max_overlap": int(result.overlap_count.max().item())
         if result.overlap_count is not None
         else 0,
+        "background_offset_mode": background_offset_mode,
+        "background_sigma": float(background_sigma),
+        "background_maxiters": int(background_maxiters),
+        "background_offsets": background_offsets,
     }
     metric_path = metric_dir / f"{band}_coadd_compare.json"
     metric_path.write_text(json.dumps(row, indent=2), encoding="utf-8")
@@ -314,8 +445,9 @@ def _fit_full_band(
             )
             science = _read_ext(exposure_path, "SCI")
             err = _read_ext(exposure_path, "ERR")
-            dq = _read_ext(exposure_path, "DQ")
-            valid = np.isfinite(err) & (err > 0) & np.isfinite(dq) & (dq == 0)
+            # Original logic used ERR + DQ directly.
+            # Route through helper so UPDC-preprocessed inputs can also use UPDCMASK.
+            valid = _valid_data_mask(exposure_path, err)
             weight = np.zeros_like(err, dtype=np.float32)
             weight[valid] = 1.0 / np.square(err[valid])
             raw_field_inputs.append(
@@ -453,7 +585,11 @@ def main() -> int:
         _ensure_local_cpp()
         bands = _parse_csv(args.bands)
         root = args.root
-        jwst_dir = root / "jwst_smacs0723"
+        jwst_dir = (
+            args.exposure_dir.expanduser().resolve()
+            if args.exposure_dir is not None
+            else root / "jwst_smacs0723"
+        )
         updec_dir = root / "updec_webb"
         mosaic_dir = root / "full_mosaics"
         fit_dir = root / "full_inr"
@@ -461,7 +597,13 @@ def main() -> int:
         for path in (jwst_dir, updec_dir, mosaic_dir, fit_dir, metric_dir):
             path.mkdir(parents=True, exist_ok=True)
 
-        subgroup = "CRF" if str(args.input_product).lower() == "crf" else "CAL"
+        input_product = str(args.input_product).lower()
+        if input_product == "updc" and not args.skip_download:
+            raise SystemExit(
+                "--input-product updc expects corrected exposures already produced "
+                "by myscripts; pass --skip-download."
+            )
+        subgroup = "CRF" if input_product == "crf" else "CAL"
 
         if not args.skip_download:
             _download_all(
@@ -488,6 +630,11 @@ def main() -> int:
                         updec_dir=updec_dir,
                         mosaic_dir=mosaic_dir,
                         metric_dir=metric_dir,
+                        background_offset_mode=str(args.background_offset),
+                        background_sigma=float(args.background_sigma),
+                        background_maxiters=int(args.background_maxiters),
+                        output_label=str(args.output_label),
+                        device=args.device,
                     )
                 )
         if not args.skip_train:

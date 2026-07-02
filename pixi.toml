@@ -292,7 +292,7 @@ cuda = "12"
 
 [feature.cuda.dependencies]
 pytorch-gpu = ">=2.0"
-cuda-version = "12.6.*"
+cuda-version = "*"
 photutils = ">=3.0.0,<4"
 python = "3.12.*"
 c-compiler = ">=1.10.0,<2"
