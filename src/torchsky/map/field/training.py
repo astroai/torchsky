@@ -656,6 +656,156 @@ def fit_field_model(
         lr=base_lr,
         weight_decay=max(float(weight_decay), 0.0),
     )
+
+    # ── Pre-training loss on full observations ──────────────────────
+    # Measure the loss BEFORE any optimizer steps, on full observation images
+    # (same computation path as the post-training final_loss), so initial_loss
+    # and final_loss are directly comparable regardless of which random patches
+    # happen to be selected in the first training step.
+    with torch.no_grad():
+        pre_train_losses: list[float] = []
+        pre_global_weighted_loss = None
+        pre_global_weight_sum = None
+        pre_band_weighted_loss: dict[tuple[object, ...], Tensor] = {}
+        pre_band_weight_sum: dict[tuple[object, ...], Tensor] = {}
+        for obs_idx, observation in enumerate(observations):
+            fctx = obs_forward_ctx[obs_idx]
+            pose = obs_exposure_poses[obs_idx]
+            observation_bundle = obs_operator_bundles[obs_idx]
+            if loss_kind == "gaussian_nll":
+                pred, pred_logvar = render_field_observation_distribution(
+                    model,
+                    observation,
+                    num_spectral_samples=num_spectral_samples,
+                    forward_context=fctx,
+                    exposure_pose=pose,
+                    operator_bundle=observation_bundle,
+                )
+            else:
+                pred = render_field_observation(
+                    model,
+                    observation,
+                    num_spectral_samples=num_spectral_samples,
+                    forward_context=fctx,
+                    exposure_pose=pose,
+                    operator_bundle=observation_bundle,
+                )
+                pred_logvar = None
+            image = observation.image.to(device=pred.device, dtype=pred.dtype)
+            valid = _observation_support_mask(observation).to(device=pred.device)
+            image = torch.where(valid, image, torch.zeros_like(image))
+            residual = torch.where(valid, pred - image, torch.zeros_like(pred))
+            weight = (
+                observation.weight.to(device=pred.device, dtype=pred.dtype)
+                if observation.weight is not None
+                else torch.ones_like(pred)
+            )
+            weight = torch.where(valid, weight, torch.zeros_like(weight))
+            weighted_loss = torch.sum(
+                weight
+                * _field_residual_loss(
+                    residual,
+                    loss_kind=loss_kind,
+                    charbonnier_eps=charbonnier_eps,
+                    huber_delta=huber_delta,
+                    logvar=pred_logvar,
+                )
+            )
+            weight_sum = weight.sum()
+            if gradient_residual_weight > 0.0 and pred.ndim == 2:
+                grad_num, grad_den = _field_gradient_residual_weighted_loss(
+                    pred,
+                    image,
+                    weight,
+                    valid,
+                    loss_kind=loss_kind,
+                    charbonnier_eps=charbonnier_eps,
+                    huber_delta=huber_delta,
+                )
+                grad_loss = grad_num / torch.clamp(grad_den, min=1.0e-8)
+                weighted_loss = weighted_loss + gradient_residual_weight * weight_sum * grad_loss
+            if loss_reduction == "per_observation":
+                denom = torch.clamp(weight_sum, min=1.0e-8)
+                pre_train_losses.append(float(weighted_loss / denom))
+            elif loss_reduction == "per_band":
+                band_key = (
+                    observation.spectral_min,
+                    observation.spectral_max,
+                    observation.wavelength,
+                    observation.band_name,
+                )
+                pre_band_weighted_loss[band_key] = (
+                    weighted_loss
+                    if band_key not in pre_band_weighted_loss
+                    else pre_band_weighted_loss[band_key] + weighted_loss
+                )
+                pre_band_weight_sum[band_key] = (
+                    weight_sum
+                    if band_key not in pre_band_weight_sum
+                    else pre_band_weight_sum[band_key] + weight_sum
+                )
+            elif loss_reduction == "global":
+                pre_global_weighted_loss = (
+                    weighted_loss
+                    if pre_global_weighted_loss is None
+                    else pre_global_weighted_loss + weighted_loss
+                )
+                pre_global_weight_sum = (
+                    weight_sum
+                    if pre_global_weight_sum is None
+                    else pre_global_weight_sum + weight_sum
+                )
+            elif loss_reduction == "band_global_mix":
+                band_key = (
+                    observation.spectral_min,
+                    observation.spectral_max,
+                    observation.wavelength,
+                    observation.band_name,
+                )
+                pre_band_weighted_loss[band_key] = (
+                    weighted_loss
+                    if band_key not in pre_band_weighted_loss
+                    else pre_band_weighted_loss[band_key] + weighted_loss
+                )
+                pre_band_weight_sum[band_key] = (
+                    weight_sum
+                    if band_key not in pre_band_weight_sum
+                    else pre_band_weight_sum[band_key] + weight_sum
+                )
+                pre_global_weighted_loss = (
+                    weighted_loss
+                    if pre_global_weighted_loss is None
+                    else pre_global_weighted_loss + weighted_loss
+                )
+                pre_global_weight_sum = (
+                    weight_sum
+                    if pre_global_weight_sum is None
+                    else pre_global_weight_sum + weight_sum
+                )
+            else:
+                raise ValueError(f"unsupported loss_reduction {loss_reduction!r}")
+        if loss_reduction == "global":
+            assert pre_global_weighted_loss is not None and pre_global_weight_sum is not None
+            pre_train_losses = [
+                float(pre_global_weighted_loss / torch.clamp(pre_global_weight_sum, min=1.0e-8))
+            ]
+        elif loss_reduction == "per_band":
+            pre_train_losses = [
+                float(weighted / torch.clamp(pre_band_weight_sum[band_key], min=1.0e-8))
+                for band_key, weighted in pre_band_weighted_loss.items()
+            ]
+        elif loss_reduction == "band_global_mix":
+            assert pre_global_weighted_loss is not None and pre_global_weight_sum is not None
+            band_losses = [
+                float(weighted / torch.clamp(pre_band_weight_sum[band_key], min=1.0e-8))
+                for band_key, weighted in pre_band_weighted_loss.items()
+            ]
+            global_loss = float(
+                pre_global_weighted_loss / torch.clamp(pre_global_weight_sum, min=1.0e-8)
+            )
+            pre_train_losses = [0.5 * (sum(band_losses) + global_loss)]
+        pre_train_loss = float(sum(pre_train_losses)) if pre_train_losses else 0.0
+
     model.train()
     loss_history: list[float] = []
     anchor_count = max(int(spectral_anchor_observations_per_step), 0)
@@ -1720,6 +1870,7 @@ def fit_field_model(
         ),
         operator_bundle=operator_bundle,
         observation_operator_bundles=obs_operator_bundles,
+        _pre_train_loss=pre_train_loss,
     )
 
 

@@ -443,9 +443,14 @@ class FieldFitResult:
     exposure_poses: tuple[ExposurePose | None, ...] | None = None
     operator_bundle: ObservationOperatorBundle | None = None
     observation_operator_bundles: tuple[ObservationOperatorBundle, ...] | None = None
+    _pre_train_loss: float | None = None
 
     @property
     def initial_loss(self) -> float:
+        """Loss on full observations before any training (when available),
+        otherwise ``loss_history[0]`` (loss after the first optimizer step)."""
+        if self._pre_train_loss is not None:
+            return self._pre_train_loss
         return self.loss_history[0]
 
     def training_loss_after_step(self, step: int) -> float:
