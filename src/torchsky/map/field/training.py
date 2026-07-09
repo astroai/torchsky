@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import math
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import torch
@@ -570,6 +570,7 @@ def fit_field_model(
     observation_exposure_poses: Sequence[ExposurePose | None] | None = None,
     refine_poses: bool = False,
     anchor_first_pose: bool = True,
+    _progress_callback: Callable[[int, float], None] | None = None,
 ) -> FieldFitResult:
     if not observations:
         raise ValueError("fit_field_model requires at least one observation")
@@ -1506,6 +1507,8 @@ def fit_field_model(
                         alpha=1.0 - ema_rate,
                     )
                     ema_index += 1
+        if _progress_callback is not None:
+            _progress_callback(step_idx, float(loss_history[-1]))
     if use_ema and ema_params is not None:
         ema_index = 0
         with torch.no_grad():

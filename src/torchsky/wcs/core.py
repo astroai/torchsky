@@ -17,6 +17,7 @@ from .sip import SIP
 from .zenithal import project_zenithal, deproject_zenithal
 from .cylindrical import project_cylindrical, deproject_cylindrical
 from .allsky import project_allsky, deproject_allsky
+from .conic import project_conic, deproject_conic
 from .legacy import invert_tnx_plane, project_tnx, project_zpx
 from .spectral import (
     canonical_spectral_type,
@@ -91,9 +92,12 @@ class WCS:
     Base class for TorchWCS (PyTorch-native World Coordinate System).
     """
 
-    ZENITHAL_CODES = ("TAN", "SIN", "ARC", "ZPN", "STG", "ZEA")
+    ZENITHAL_CODES = ("TAN", "SIN", "ARC", "ZPN", "STG", "ZEA", "AZP", "SZP", "AIR")
     CYLINDRICAL_CODES = ("CEA", "MER", "CYP")
     ALLSKY_CODES = ("AIT", "MOL", "HPX")
+    CONIC_CODES = ("COP", "COE", "COD", "COO")
+    POLYCONIC_CODES = ("BON",)
+    PSEUDOCYLINDRICAL_CODES = ("PAR",)
     SPECIAL_CODES = ("ZPX", "TNX", "TPV", "CAR", "SFL")
 
     def __init__(
@@ -755,8 +759,14 @@ class WCS:
         self._is_tpv = self.tpv is not None or self._proj_code == "TPV"
 
         self._theta0 = 90.0  # Zenithal
-        if self._proj_code in ("AIT", "MOL", "HPX", "CEA", "MER", "CYP", "CAR", "SFL"):
+        if self._proj_code in ("AIT", "MOL", "HPX", "CEA", "MER", "CYP", "CAR", "SFL", "PAR"):
             self._theta0 = 0.0
+        elif self._proj_code in self.CONIC_CODES or self._proj_code in self.POLYCONIC_CODES:
+            # Conic and Bonne use PV2_1 (standard parallel) as theta_0.
+            self._theta0 = float(self.wcs_params.get("PV2_1", 0.0))
+            # Bonne with theta_1=0 degenerates to Sanson-Flamsteed (equatorial)
+            if self._proj_code in self.POLYCONIC_CODES and abs(self._theta0) < 1e-12:
+                self._theta0 = 0.0
 
         # LONPOLE / LATPOLE
         self.phi_p = float(
@@ -788,6 +798,22 @@ class WCS:
             self.delta_p = self.delta0
             self.alpha_p = self.alpha0
             self._native_type = "pole"
+        elif self._proj_code in self.CONIC_CODES:
+            # Conic: theta_0 = PV2_1, phi_0 = 0.
+            # For pole-type rotation with phi_p=0, the reference (phi=0, theta=theta_0)
+            # must map to (alpha_0, delta_0). Two solutions exist; the one with
+            # correct d(dec)/d(theta) = +1 sign is:
+            #   delta_p = theta_0 + 90 - delta_0,  alpha_p = alpha_0 + 180
+            self.delta_p = self._theta0 + 90.0 - self.delta0
+            self.alpha_p = self.alpha0 + 180.0
+            self._native_type = "pole"
+        elif self._proj_code in self.POLYCONIC_CODES:
+            # Bonne: theta_0 = PV2_1, phi_0 = 0. Use "center" type since the
+            # projection's y-offset places intermediate (0,0) at native (0,0),
+            # matching the center-equator rotation when delta_0 ≈ 0.
+            self.delta_p = 90.0
+            self.alpha_p = self.alpha0 + 180.0 if self.phi_p == 0.0 else self.alpha0
+            self._native_type = "center"
         else:
             self.delta_p = 90.0
             self.alpha_p = self.alpha0 + 180.0 if self.phi_p == 0.0 else self.alpha0
@@ -860,12 +886,19 @@ class WCS:
         self._cea_eta_scale = 57.29577951308232 / pv2_1
         self._sqrt2 = math.sqrt(2.0)
         self._mol_abs_eta_max = self._sqrt2 * self._r2d
-        self._hpx_h = float(
-            self.wcs_params.get("PV1_1", self.wcs_params.get("PV2_1", 4.0))
-        )
-        self._hpx_k = float(
-            self.wcs_params.get("PV1_2", self.wcs_params.get("PV2_2", 3.0))
-        )
+        # HPX parameters: only read PV1/PV2 when projection is HPX, so that
+        # AZP/SZP/AIR/conic PV2_1 (mu, theta_b, standard parallel) doesn't
+        # clobber the HPX H/K defaults.
+        if self._proj_code == "HPX":
+            self._hpx_h = float(
+                self.wcs_params.get("PV1_1", self.wcs_params.get("PV2_1", 4.0))
+            )
+            self._hpx_k = float(
+                self.wcs_params.get("PV1_2", self.wcs_params.get("PV2_2", 3.0))
+            )
+        else:
+            self._hpx_h = 4.0
+            self._hpx_k = 3.0
         if abs(self._hpx_h) < 1e-12:
             self._hpx_h = 4.0
         if abs(self._hpx_k) < 1e-12:
@@ -902,6 +935,12 @@ class WCS:
             if self._is_tpv
             else torch.empty(0, dtype=torch.float64, device="cpu")
         )
+
+        # Apply projection-specific PV defaults before tensorization.
+        # The pre-tensorized PV arrays fill missing keys with 0.0, but some
+        # projections have non-zero defaults (e.g. SZP theta_c = 90°).
+        if self._proj_code == "SZP" and "PV2_3" not in self.wcs_params:
+            self.wcs_params["PV2_3"] = 90.0
 
         # Pre-tensorize PV parameters to avoid dict lookups in compiled hot paths.
         pv1_data = [self.wcs_params.get(k, 0.0) for k in PV1_KEYS]
@@ -967,6 +1006,9 @@ class WCS:
             self.ZENITHAL_CODES
             + self.CYLINDRICAL_CODES
             + self.ALLSKY_CODES
+            + self.CONIC_CODES
+            + self.POLYCONIC_CODES
+            + self.PSEUDOCYLINDRICAL_CODES
             + self.SPECIAL_CODES
         )
         self._use_center_equator_fast = (
@@ -1177,9 +1219,19 @@ class WCS:
             self._project_native_kind = "cylindrical"
             self._project_native_type = "center"
             return
-        if self._proj_code in self.ALLSKY_CODES:
+        if self._proj_code in self.ALLSKY_CODES or self._proj_code == "PAR":
             self._project_native_fn = project_allsky
             self._project_native_kind = "allsky"
+            self._project_native_type = "center"
+            return
+        if self._proj_code in self.CONIC_CODES:
+            self._project_native_fn = project_conic
+            self._project_native_kind = "conic"
+            self._project_native_type = "pole"
+            return
+        if self._proj_code in self.POLYCONIC_CODES:
+            self._project_native_fn = project_conic
+            self._project_native_kind = "conic"
             self._project_native_type = "center"
             return
         self._project_native_fn = None
@@ -1484,6 +1536,18 @@ class WCS:
                 theta = 90.0 - r
             else:
                 phi, theta = project_zenithal(xi, eta, "ZPN", None, self._pv2_tensor)
+        elif self._proj_code in self.CONIC_CODES or self._proj_code in self.POLYCONIC_CODES:
+            phi, theta = project_conic(
+                xi, eta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+            )
+        elif self._proj_code == "PAR":
+            phi, theta = project_allsky(
+                xi, eta, "PAR", self._pv1_tensor, self._pv2_tensor
+            )
+        elif self._proj_code in ("AZP", "SZP", "AIR"):
+            phi, theta = project_zenithal(
+                xi, eta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+            )
         else:
             # Linear fallback
             phi, theta = xi, eta
@@ -2084,11 +2148,40 @@ class WCS:
                 eta = -r * cos_phi
             else:
                 xi, eta = deproject_zenithal(phi, theta, "ZPN", None, self._pv2_tensor)
-        else:
-            # Fallback
+        elif self._proj_code in self.CONIC_CODES or self._proj_code in self.POLYCONIC_CODES:
+            xi, eta = deproject_conic(
+                phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+            )
+        elif self._proj_code == "PAR":
+            xi, eta = deproject_allsky(
+                phi, theta, "PAR", self._pv1_tensor, self._pv2_tensor
+            )
+        elif self._proj_code in ("AZP", "SZP", "AIR"):
             xi, eta = deproject_zenithal(
                 phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
             )
+        else:
+            # Fallback: dispatch to the appropriate deproject function.
+            if self._project_native_kind == "zenithal":
+                xi, eta = deproject_zenithal(
+                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                )
+            elif self._project_native_kind == "cylindrical":
+                xi, eta = deproject_cylindrical(
+                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                )
+            elif self._project_native_kind == "allsky":
+                xi, eta = deproject_allsky(
+                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                )
+            elif self._project_native_kind == "conic":
+                xi, eta = deproject_conic(
+                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                )
+            else:
+                xi, eta = deproject_zenithal(
+                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                )
 
         # 3. Inverse TPV / Special distortions
         if self._is_tpv:
@@ -2226,14 +2319,14 @@ class WCS:
                     ra,
                     dec,
                     self._phi_p_rad,
-                    self._east_x,
-                    self._east_y,
-                    self._north_x,
-                    self._north_y,
-                    self._north_z,
-                    self._radial_x,
-                    self._radial_y,
-                    self._radial_z,
+                    self._pole_east_x,
+                    self._pole_east_y,
+                    self._pole_north_x,
+                    self._pole_north_y,
+                    self._pole_north_z,
+                    self._pole_radial_x,
+                    self._pole_radial_y,
+                    self._pole_radial_z,
                 )
                 phi_w = _wrap_lon180(phi)
             else:
@@ -4085,14 +4178,14 @@ class WCS:
                 ra,
                 dec,
                 self._phi_p_rad,
-                self._east_x,
-                self._east_y,
-                self._north_x,
-                self._north_y,
-                self._north_z,
-                self._radial_x,
-                self._radial_y,
-                self._radial_z,
+                self._pole_east_x,
+                self._pole_east_y,
+                self._pole_north_x,
+                self._pole_north_y,
+                self._pole_north_z,
+                self._pole_radial_x,
+                self._pole_radial_y,
+                self._pole_radial_z,
             )
 
         d2r = 0.017453292519943295

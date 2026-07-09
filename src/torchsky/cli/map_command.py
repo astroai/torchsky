@@ -627,9 +627,12 @@ def _run_inr_single(args: argparse.Namespace) -> int:
     render_tiled = h > th or w > th
 
     if getattr(args, "dry_run", False):
+        n_obs = len(inr_paths)
         print(
             f"torchsky map: dry-run output_shape={h}×{w} method=inr "
-            f"model={args.inr_model} band={band} render_tiled={render_tiled}",
+            f"model={args.inr_model} band={band} render_tiled={render_tiled} "
+            f"observations={n_obs} steps={args.inr_steps} "
+            f"device={torch.device(args.device) if args.device else default_compute_device()}",
             file=sys.stderr,
         )
         return 0
@@ -646,19 +649,74 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         weight_hdu=args.weight_map_hdu,
         mask_hdu=args.mask_map_hdu,
     )
+    print(
+        f"torchsky map inr: {len(fields)} observation(s), "
+        f"band={band}, model={args.inr_model}, "
+        f"device={torch.device(args.device) if args.device else default_compute_device()}",
+        file=sys.stderr,
+    )
     domain = estimate_field_domain(fields, coord_mode="sphere_xyz")
     model = make_field_model(args.inr_model, domain)
-    patch = int(args.inr_patch_size)
-    fit_field_model(
-        fields,
-        model,
-        steps=int(args.inr_steps),
-        lr=float(args.inr_lr),
-        training_patch_size=None if patch <= 0 else patch,
-        training_patches_per_observation=int(args.inr_patches_per_obs),
-        observations_per_step=min(len(fields), int(args.inr_obs_per_step)),
-        device=args.device,
+    total_params = sum(p.numel() for p in model.parameters())
+    print(
+        f"torchsky map inr: domain centre=({domain.center_ra_deg:.2f}°, {domain.center_dec_deg:.2f}°) "
+        f"spatial_scale={domain.spatial_scale_deg:.4f}° "
+        f"wavelength=[{domain.wavelength_center - domain.wavelength_scale:.0f}, "
+        f"{domain.wavelength_center + domain.wavelength_scale:.0f}] Å "
+        f"params={total_params:,}",
+        file=sys.stderr,
     )
+    patch = int(args.inr_patch_size)
+    steps = int(args.inr_steps)
+    try:
+        from tqdm import tqdm as _tqdm
+
+        def _progress_callback(step_idx: int, loss_val: float) -> None:
+            _progress_callback._bar.update(1)
+            _progress_callback._bar.set_postfix(loss=f"{loss_val:.4f}")
+
+        _progress_callback._bar = _tqdm(
+            total=steps, desc="INR fit", unit="step", file=sys.stderr
+        )
+        if not _progress_callback._bar.disable:
+            fit_field_model(
+                fields,
+                model,
+                steps=steps,
+                lr=float(args.inr_lr),
+                training_patch_size=None if patch <= 0 else patch,
+                training_patches_per_observation=int(args.inr_patches_per_obs),
+                observations_per_step=min(len(fields), int(args.inr_obs_per_step)),
+                device=args.device,
+                _progress_callback=_progress_callback,
+            )
+        else:
+            fit_field_model(
+                fields,
+                model,
+                steps=steps,
+                lr=float(args.inr_lr),
+                training_patch_size=None if patch <= 0 else patch,
+                training_patches_per_observation=int(args.inr_patches_per_obs),
+                observations_per_step=min(len(fields), int(args.inr_obs_per_step)),
+                device=args.device,
+            )
+        _progress_callback._bar.close()
+    except ImportError:
+        print(
+            "torchsky map inr: tqdm not installed — install 'tqdm' for progress bars",
+            file=sys.stderr,
+        )
+        fit_field_model(
+            fields,
+            model,
+            steps=steps,
+            lr=float(args.inr_lr),
+            training_patch_size=None if patch <= 0 else patch,
+            training_patches_per_observation=int(args.inr_patches_per_obs),
+            observations_per_step=min(len(fields), int(args.inr_obs_per_step)),
+            device=args.device,
+        )
     dev = next((p.device for p in model.parameters()), default_compute_device())
     target_obs = FieldObservation(
         image=torch.zeros((h, w), dtype=torch.float32, device=dev),

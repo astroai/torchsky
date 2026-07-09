@@ -126,6 +126,28 @@ def project_allsky(
         theta = eta
         # SFL: phi = xi / cos(theta)
         phi = xi / torch.clamp(torch.cos(theta * D2R), min=1e-12)
+
+    elif projection_code == "PAR":
+        # Parabolic pseudocylindrical (WCSLIB parx2s).
+        # x = w1 * xi, y = w3 * eta  (w1 = 1/r0_rad, w3 = 1/(pi*r0_deg))
+        r0 = R2D
+        w1 = 1.0 / (r0 * D2R)  # = 1.0 when r0 = R2D
+        w3 = 1.0 / (math.pi * r0)
+        s = w1 * xi
+        r = w3 * eta
+        valid = (r <= 1.0) & (r >= -1.0)
+        denom = 1.0 - 4.0 * r * r
+        # At |r|=0.5, denom=0; WCSLIB uses a deferred test on theta sign.
+        # phi = s / (1 - 4r^2), theta = 3 * asin(r)
+        safe_denom = torch.where(denom == 0.0, torch.ones_like(denom), denom)
+        phi = s / safe_denom
+        theta = 3.0 * torch.asin(torch.clamp(r, -1.0, 1.0)) * R2D
+        # Handle the denom==0 edge: theta must be < 0 for validity
+        edge_valid = theta < 0.0
+        valid = torch.where(denom == 0.0, edge_valid, valid)
+        phi = torch.where(valid, phi, torch.full_like(phi, float("nan")))
+        theta = torch.where(valid, theta, torch.full_like(theta, float("nan")))
+
     else:
         phi, theta = xi, eta
 
@@ -202,6 +224,18 @@ def deproject_allsky(
         phi_wrapped = _wrap_lon180_checked(phi)
         xi = phi_wrapped * torch.cos(theta * D2R)
         eta = theta
+        return xi, eta
+
+    elif projection_code == "PAR":
+        # Forward PAR (WCSLIB pars2x).
+        r0 = R2D
+        w0 = r0 * D2R  # = 1.0
+        w2 = math.pi * r0
+        phi_wrapped = _wrap_lon180_checked(phi)
+        xi_raw = w0 * phi_wrapped
+        s = torch.sin(theta * D2R / 3.0)
+        xi = (1.0 - 4.0 * s * s) * xi_raw
+        eta = w2 * s
         return xi, eta
 
     return phi, theta
