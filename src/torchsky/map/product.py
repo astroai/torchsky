@@ -219,8 +219,18 @@ def plan_map_product(
     spectral_type: str = "WAVE",
     value_semantics: MapValueSemantics = "surface_brightness",
     footprint_order: int | None = None,
+    union_footprint: bool = False,
+    footprint_padding: float = 1.05,
+    max_footprint_pixels: int | None = None,
     device: torch.device | str | None = None,
 ) -> MapProductSpec:
+    """Plan a map product from a sequence of image-plane observations.
+
+    When ``union_footprint=True``, the target WCS is computed automatically from
+    the union bounding box of all input footprints (like SWarp's automatic
+    output grid).  Set ``--reference`` to a FITS file path to override the
+    spatial target completely.
+    """
     if footprint_order is not None and int(footprint_order) < 0:
         raise ValueError("footprint_order must be non-negative")
     value_semantics = validate_map_value_semantics(value_semantics)
@@ -236,6 +246,9 @@ def plan_map_product(
             reference_index=reference_index,
             header_overrides=header_overrides,
             device=device,
+            union_footprint=union_footprint,
+            footprint_padding=footprint_padding,
+            max_footprint_pixels=max_footprint_pixels,
         )
         validated_bands = tuple(_coerce_band(band) for band in bands)
         if not validated_bands:
@@ -423,6 +436,8 @@ def stack_map_product(
     resampling_kernel: MapResamplingKernel = "bilinear",
     method: str = "coadd",
     stacking_method: MapStackingMethod = "weighted_mean",
+    drizzle_pixfrac: float = 1.0,
+    spatial_tile_hw: tuple[int, int] | None = None,
     device: torch.device | str | None = None,
 ) -> MapProductResult:
     if method != "coadd":
@@ -439,6 +454,8 @@ def stack_map_product(
                 resampling_kernel=resampling_kernel,
                 value_semantics=product.value_semantics,
                 stacking_method=stacking_method,
+                drizzle_pixfrac=drizzle_pixfrac,
+                spatial_tile_hw=spatial_tile_hw,
                 device=device,
             )
             return _wrap_map_result(result, product)
@@ -450,6 +467,7 @@ def stack_map_product(
         resampling_kernel=resampling_kernel,
         value_semantics=product.value_semantics,
         stacking_method=stacking_method,
+        drizzle_pixfrac=drizzle_pixfrac,
         device=device,
     )
     return _wrap_cube_result(result, product)
@@ -559,11 +577,63 @@ def render_field_product(
     product: MapProductSpec,
     *,
     num_spectral_samples: int = 9,
+    spatial_tile_hw: tuple[int, int] | None = None,
 ) -> MapProductResult:
-    return render_scene_product(
-        model,
-        product,
-        num_spectral_samples=num_spectral_samples,
+    if spatial_tile_hw is None:
+        return render_scene_product(
+            model,
+            product,
+            num_spectral_samples=num_spectral_samples,
+        )
+    # Tiled rendering: render each spatial tile separately to cap memory.
+    from .field.rendering import render_field_observation
+    from .field.types import FieldObservation
+
+    h, w = product.shape
+    th, tw = int(spatial_tile_hw[0]), int(spatial_tile_hw[1])
+    n_bands = product.n_bands
+    data = torch.zeros((n_bands, h, w), dtype=torch.float32)
+    weight = torch.zeros((n_bands, h, w), dtype=torch.float32)
+    for band_index in range(n_bands):
+        band = product.bands[band_index]
+        for y0 in range(0, h, th):
+            for x0 in range(0, w, tw):
+                y1, x1 = min(y0 + th, h), min(x0 + tw, w)
+                tile_hdr = dict(product.target_header)
+                tile_hdr["NAXIS1"] = x1 - x0
+                tile_hdr["NAXIS2"] = y1 - y0
+                tile_hdr["CRPIX1"] = float(product.target_header.get("CRPIX1", 1.0)) - float(x0)
+                tile_hdr["CRPIX2"] = float(product.target_header.get("CRPIX2", 1.0)) - float(y0)
+                tile_obs = FieldObservation(
+                    image=torch.zeros((y1 - y0, x1 - x0), dtype=torch.float32),
+                    header=tile_hdr,
+                    weight=torch.ones((y1 - y0, x1 - x0), dtype=torch.float32),
+                    wavelength=band.transmission_center if band.transmission_center is not None else (
+                        0.5 * (float(band.spectral_min) + float(band.spectral_max))
+                        if band.spectral_min is not None and band.spectral_max is not None
+                        else None
+                    ),
+                    spectral_min=band.spectral_min,
+                    spectral_max=band.spectral_max,
+                    transmission_center=band.transmission_center,
+                    transmission_sigma=band.transmission_sigma,
+                    band_name=band.label,
+                )
+                model.eval()
+                with torch.no_grad():
+                    tile_pred = render_field_observation(
+                        model, tile_obs,
+                        num_spectral_samples=num_spectral_samples,
+                    )
+                data[band_index, y0:y1, x0:x1] = tile_pred
+                weight[band_index, y0:y1, x0:x1] = 1.0
+    return MapProductResult(
+        product=product,
+        data=data,
+        weight=weight,
+        header=dict(product.target_header),
+        overlap_count=torch.ones_like(data, dtype=torch.int32),
+        coverage_mocs=None,
     )
 
 

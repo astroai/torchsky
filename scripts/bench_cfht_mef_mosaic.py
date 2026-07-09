@@ -19,8 +19,8 @@ if str(BENCHMARKS) not in sys.path:
 
 import bench_map_compat  # noqa: E402
 
-from torchsky.map import ImageObservation, coadd_image_plane  # noqa: E402
-from torchsky.map.image_plane import WCS  # noqa: E402
+from torchsky.map import ImageObservation  # noqa: E402
+from torchsky.map.product import plan_map_product, stack_map_product  # noqa: E402
 
 DATA_DIR = ROOT / "data" / "cfht" / "MegaPipe.028.181" / "g"
 
@@ -98,47 +98,7 @@ def main():
     print(f"    min={min(bg_values):.1f}  max={max(bg_values):.1f}  "
           f"median={float(np.median(bg_values)):.1f}")
 
-    # ── Step 2: Plan target WCS ────────────────────────────────────
-    print("\n── Planning target WCS ──")
-    t0 = time.perf_counter()
-    # Use 4 corners of first exposure to get bounding box
-    import torchsky
-    all_ras: list[float] = []
-    all_decs: list[float] = []
-    for ext_idx in range(1, args.ccds + 1):
-        _, hdr = torchsky.read(str(exposures[0]), hdu=int(ext_idx), return_header=True)
-        wcs = WCS(hdr)
-        for y in (0, CCD_H - 1):
-            for x in (0, CCD_W - 1):
-                ra, dec = wcs.pixel_to_world(float(x), float(y))
-                all_ras.append(float(ra))
-                all_decs.append(float(dec))
-    ra_lo, ra_hi = min(all_ras), max(all_ras)
-    dec_lo, dec_hi = min(all_decs), max(all_decs)
-
-    _, ref_hdr = torchsky.read(str(exposures[0]), hdu=1, return_header=True)
-    _wcs = WCS(ref_hdr)
-    cd00 = abs(float(_wcs._cd00)) if hasattr(_wcs, "_cd00") else 5.177e-05
-    cd11 = float(ref_hdr.get("CD2_2", ref_hdr.get("CDELT2", -cd00)))
-    nx = max(int((ra_hi - ra_lo) / cd00) + 100, 100)
-    ny = max(int((dec_hi - dec_lo) / abs(cd11)) + 100, 100)
-
-    target_header = {
-        "NAXIS": 2, "NAXIS1": nx, "NAXIS2": ny,
-        "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
-        "CRPIX1": (nx + 1) / 2.0, "CRPIX2": (ny + 1) / 2.0,
-        "CRVAL1": (ra_lo + ra_hi) / 2.0, "CRVAL2": (dec_lo + dec_hi) / 2.0,
-        "CD1_1": -cd00, "CD1_2": 0.0, "CD2_1": 0.0, "CD2_2": cd11,
-        "RADESYS": "ICRS", "EQUINOX": 2000.0,
-    }
-    plan_time = time.perf_counter() - t0
-    mpix_tgt = nx * ny / 1e6
-    print(f"  Target: {nx} x {ny}  ({mpix_tgt:.1f}M pix)")
-    print(f"  CRVAL: {target_header['CRVAL1']:.6f}, {target_header['CRVAL2']:.6f}")
-    print(f"  CD:    {cd00:.3e} arcsec/pix")
-    print(f"  Plan:  {plan_time * 1000:.0f}ms")
-
-    # ── Step 3: Build observations with background offsets ──────────
+    # ── Step 2: Build observations with background offsets ──────────
     print("\n── Building observations w/ background_offset ──")
     t0 = time.perf_counter()
     obs_list = []
@@ -150,14 +110,28 @@ def main():
             ))
     print(f"  Created {len(obs_list)} observations in {(time.perf_counter() - t0) * 1000:.0f}ms")
 
-    # ── Step 4: torchsky coadd ──────────────────────────────────────
-    print("\n── torchsky coadd (surf_brightness, weighted_mean, bilinear) ──")
+    # ── Step 3: Plan product from union footprint ─────────────────
+    print("\n── Planning map product (union footprint) ──")
+    t0 = time.perf_counter()
+    product = plan_map_product(
+        obs_list,
+        union_footprint=True,
+        max_footprint_pixels=None,
+    )
+    nx, ny = product.shape[1], product.shape[0]
+    mpix_tgt = nx * ny / 1e6
+    plan_time = time.perf_counter() - t0
+    print(f"  Target: {nx} x {ny}  ({mpix_tgt:.1f}M pix)")
+    print(f"  Plan:   {plan_time * 1000:.0f}ms")
+
+    # ── Step 4: torchsky coadd ────────────────────────────────────
+    print("\n── torchsky coadd (stack_map_product, bilinear) ──")
     torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     t0 = time.perf_counter()
-    result = coadd_image_plane(
+    result = stack_map_product(
         obs_list,
-        target_header=target_header,
+        product,
         resampling_kernel="bilinear",
         device=args.device,
     )
@@ -184,6 +158,14 @@ def main():
         swarp_bin = bench_map_compat._find_swarp_binary()
         swarp_env = bench_map_compat._external_tool_env()
 
+        # Derive SWarp parameters from the planned product WCS
+        sw_crval1 = float(product.target_header["CRVAL1"])
+        sw_crval2 = float(product.target_header["CRVAL2"])
+        sw_pixscale = abs(float(product.target_header.get("CD1_1", product.target_header.get("CDELT1", 5e-5)))) * 3600.0
+        sw_nx = product.shape[1]
+        sw_ny = product.shape[0]
+        proj = "TAN"
+
         with tempfile.TemporaryDirectory(prefix="ts_swarp_") as tmpdir:
             tmp = Path(tmpdir)
 
@@ -204,9 +186,6 @@ def main():
             decomp_time = time.perf_counter() - t0
             print(f"  Decompressed {n_exp} files in {decomp_time:.1f}s")
 
-            ps_arcsec = abs(cd00) * 3600.0
-            proj = "TAN"
-
             def _run_swarp(subtract_back: str) -> tuple[float, np.ndarray | None]:
                 cfg = tmp / f"swarp_bg{subtract_back}.conf"
                 imgout = tmp / f"coadd_bg{subtract_back}.fits"
@@ -219,10 +198,10 @@ def main():
                     f"PROJECTION_TYPE        {proj}",
                     "PROJECTION_ERR         0.0",
                     "CENTER_TYPE            MANUAL",
-                    f"CENTER                 {target_header['CRVAL1']:.10f}, {target_header['CRVAL2']:.10f}",
+                    f"CENTER                 {sw_crval1:.10f}, {sw_crval2:.10f}",
                     "PIXELSCALE_TYPE        MANUAL",
-                    f"PIXEL_SCALE            {ps_arcsec:.10f}",
-                    f"IMAGE_SIZE             {nx},{ny}",
+                    f"PIXEL_SCALE            {sw_pixscale:.10f}",
+                    f"IMAGE_SIZE             {sw_nx},{sw_ny}",
                     "RESAMPLE               Y",
                     "RESAMPLING_TYPE        BILINEAR",
                     "INTERPOLATE            N",
@@ -262,8 +241,8 @@ def main():
                 print(f"  Output:     {list(sw_data.shape)}  "
                       f"range=[{sw_data.min():.2f}, {sw_data.max():.2f}]")
 
-                if sw_data.shape == result.data.shape:
-                    mask = (result.weight.cpu().numpy() > 0) & (sw_data > 0)
+                if sw_data.shape == result.data.shape[-2:]:
+                    mask = (result.weight.cpu().numpy()[0] > 0) & (sw_data > 0)
                     if mask.any():
                         diff = result.data.cpu().numpy() - sw_data
                         rd = diff[mask]

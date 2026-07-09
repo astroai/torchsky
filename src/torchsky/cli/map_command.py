@@ -19,15 +19,17 @@ from ..map.field import (
     estimate_field_domain,
     fit_field_model,
     make_field_model,
-    render_field_observation,
 )
 from ..map.image_plane import (
     ImageObservation,
-    ImagePlaneMapMaker,
-    plan_image_plane_target,
-    target_shape_from_header,
 )
-from ..map.sky import MeshSkyEstimator, PolynomialSkyModel
+from ..map.product import (
+    MapBandpassSpec,
+    plan_map_product,
+    render_field_product,
+    stack_map_product,
+)
+
 from ..filter_profiles import field_observation_spectral_kwargs, resolve_inr_bandpass
 
 # Minimal bandpass hints for INR when FITS headers lack spectral metadata (Angstrom).
@@ -250,8 +252,6 @@ def _run_coadd(args: argparse.Namespace) -> int:
     for i, p in enumerate(inputs):
         image_hdus = _probe_image_hdus(p)
         if len(image_hdus) == 0:
-            # Can't probe (file missing, unreadable, or has no image HDU).
-            # Fall back to user-specified --hdu so read() errors naturally later.
             expanded_paths.append(p)
             expanded_hdus.append(user_hdu)
             expanded_weights.append(float(args.weights[i]))
@@ -261,7 +261,6 @@ def _run_coadd(args: argparse.Namespace) -> int:
             expanded_mask_maps.append(args.mask_maps[i])
             expanded_primary_beam_maps.append(args.primary_beam_maps[i])
         elif len(image_hdus) == 1:
-            # Single-image file: use user-specified HDU (or the detected one)
             hdu = user_hdu if user_hdu in image_hdus else image_hdus[0]
             expanded_paths.append(p)
             expanded_hdus.append(hdu)
@@ -272,9 +271,7 @@ def _run_coadd(args: argparse.Namespace) -> int:
             expanded_mask_maps.append(args.mask_maps[i])
             expanded_primary_beam_maps.append(args.primary_beam_maps[i])
         else:
-            # MEF: one observation per HDU
             if user_hdu != 0 and user_hdu in image_hdus:
-                # User explicitly wants one specific HDU
                 expanded_paths.append(p)
                 expanded_hdus.append(user_hdu)
                 expanded_weights.append(float(args.weights[i]))
@@ -284,7 +281,6 @@ def _run_coadd(args: argparse.Namespace) -> int:
                 expanded_mask_maps.append(args.mask_maps[i])
                 expanded_primary_beam_maps.append(args.primary_beam_maps[i])
             else:
-                # Auto-expand: one per image HDU
                 for hdu in image_hdus:
                     expanded_paths.append(p)
                     expanded_hdus.append(hdu)
@@ -299,64 +295,6 @@ def _run_coadd(args: argparse.Namespace) -> int:
                     f"  {p}: auto-expanded {n_hdus} image HDUs {list(image_hdus)}",
                     file=sys.stderr,
                 )
-
-    n_observations = len(expanded_paths)
-
-    # Optional sky estimation pre-processing
-    sky_paths = list(expanded_paths)
-    sky_hdus = list(expanded_hdus)
-    sky_weights = list(expanded_weights)
-    sky_photometric_scales = list(expanded_photometric_scales)
-    sky_background_offsets = list(expanded_background_offsets)
-    sky_weight_maps = list(expanded_weight_maps)
-    sky_mask_maps = list(expanded_mask_maps)
-    sky_primary_beam_maps = list(expanded_primary_beam_maps)
-
-    if getattr(args, "sky", False):
-        from tempfile import NamedTemporaryFile
-
-        sky_method = getattr(args, "sky_method", "mesh")
-        sky_stat = getattr(args, "sky_statistic", "huber")
-        sky_block = int(getattr(args, "sky_block_size", 128))
-        sky_order = int(getattr(args, "sky_order", 3))
-        sky_filter = getattr(args, "sky_mesh_filter", "median_3")
-        sky_interp = getattr(args, "sky_interpolate", "bicubic")
-
-        if sky_method == "mesh":
-            est = MeshSkyEstimator(
-                block_size=sky_block,
-                statistic=sky_stat,
-                mesh_filter=sky_filter,
-                interpolate=sky_interp,
-            )
-        else:
-            est = PolynomialSkyModel(order=sky_order, statistic=sky_stat)
-
-        temp_paths: list[str] = []
-        for i in range(n_observations):
-            p = sky_paths[i]
-            hdu = sky_hdus[i]
-            img, hdr = read(p, hdu=hdu, return_header=True, device=read_dev)
-            mask = None
-            if sky_mask_maps[i] is not None:
-                mask = read(str(sky_mask_maps[i]), hdu=args.mask_map_hdu, device=read_dev)
-                mask = mask.to(dtype=torch.bool)
-            sky = est(img, mask) if mask is not None else est(img)
-            subbed = img - sky
-            tf = NamedTemporaryFile(suffix=".fits", delete=False)
-            write(tf.name, subbed.cpu(), header=dict(hdr), overwrite=True)
-            temp_paths.append(tf.name)
-            print(
-                f"  sky [{i}] path={Path(p).name} hdu={hdu} "
-                f"method={sky_method} stat={sky_stat} "
-                f"mean_sky={float(sky.mean()):.4f}",
-                file=sys.stderr,
-            )
-
-        sky_paths = temp_paths
-        sky_hdus = [0] * n_observations
-        # Reset offsets since sky is already subtracted
-        sky_background_offsets = [0.0] * n_observations
 
     observations = [
         ImageObservation(
@@ -373,42 +311,37 @@ def _run_coadd(args: argparse.Namespace) -> int:
             primary_beam_hdu=args.primary_beam_hdu,
         )
         for p, hdu, w, ps, bg, wp, mp, pbp in zip(
-            sky_paths,
-            sky_hdus,
-            sky_weights,
-            sky_photometric_scales,
-            sky_background_offsets,
-            sky_weight_maps,
-            sky_mask_maps,
-            sky_primary_beam_maps,
+            expanded_paths, expanded_hdus, expanded_weights,
+            expanded_photometric_scales, expanded_background_offsets,
+            expanded_weight_maps, expanded_mask_maps, expanded_primary_beam_maps,
         )
     ]
-    pr = int(args.plan_reference)
-    if pr < 0 or pr >= len(observations):
-        raise SystemExit(
-            f"--plan-reference {pr} out of range for {len(observations)} input(s) (0-based)"
-        )
-    target_header = None
-    if args.reference is not None:
-        _, rh = read(
-            str(args.reference),
-            hdu=args.reference_hdu,
-            return_header=True,
-            device=read_dev,
-        )
-        target_header = dict(rh)
 
-    if target_header is None:
-        plan = plan_image_plane_target(
-            observations,
-            reference_index=None,
-            device=args.device,
-            union_footprint=True,
+    if args.sky:
+        print(
+            "torchsky map: --sky is no longer built into the coadd pipeline. "
+            "Pre-compute per-exposure backgrounds (e.g. via the MegaCam benchmark "
+            "script's estimate_background_offsets) and pass them with --background-offsets.",
+            file=sys.stderr,
         )
-        target_header = dict(plan.header)
+    ref_header = None
+    if args.reference is not None:
+        _, rh = read(str(args.reference), hdu=args.reference_hdu, return_header=True, device=read_dev)
+        ref_header = dict(rh)
+
+    product = plan_map_product(
+        observations,
+        reference_index=int(args.plan_reference),
+        header_overrides=ref_header,
+        union_footprint=bool(args.union_footprint),
+        footprint_padding=float(args.footprint_padding),
+        max_footprint_pixels=args.max_footprint_pixels,
+        value_semantics=args.value_semantics,
+        device=args.device,
+    )
 
     tile_hw = _compute_spatial_tile_hw(
-        target_shape_from_header(target_header, fallback=(0, 0)),
+        product.shape,
         auto_tile=bool(args.auto_tile),
         tile_pixels=args.tile_pixels,
         tile_above_megapixels=float(args.tile_above_megapixels),
@@ -416,44 +349,38 @@ def _run_coadd(args: argparse.Namespace) -> int:
     if tile_hw is not None:
         print(
             f"torchsky map: spatial tiling {tile_hw[0]}×{tile_hw[1]} "
-            f"for output {target_shape_from_header(target_header, fallback=(0, 0))} pixels",
+            f"for output {product.shape} pixels",
             file=sys.stderr,
         )
 
     if getattr(args, "dry_run", False):
         print(
-            f"torchsky map: dry-run output_shape={target_shape_from_header(target_header, fallback=(0, 0))} "
+            f"torchsky map: dry-run output_shape={product.shape} "
             f"method=coadd kernel={args.kernel} stack={args.stack} "
-            f"value_semantics={args.value_semantics} tiled={tile_hw is not None}",
+            f"value_semantics={args.value_semantics} tiled={tile_hw is not None} "
+            f"n_bands={product.n_bands}",
             file=sys.stderr,
         )
         return 0
 
-    maker = ImagePlaneMapMaker(
-        target_header=target_header,
+    result = stack_map_product(
+        observations,
+        product,
         resampling_kernel=args.kernel,
-        value_semantics=args.value_semantics,
         stacking_method=args.stack,
         drizzle_pixfrac=float(args.drizzle_pixfrac),
         spatial_tile_hw=tile_hw,
         device=args.device,
     )
-    result = maker.run(observations, output_path=str(args.output))
+    write(str(args.output), result.data.squeeze(0), header=result.header, overwrite=True)
     print(
         f"wrote {args.output} shape={tuple(result.data.shape)} "
         f"mean_weight={float(result.weight.mean().item()):.4f} "
         f"method=coadd kernel={args.kernel} stack={args.stack} "
-        f"value_semantics={args.value_semantics} tiled={tile_hw is not None}",
+        f"value_semantics={args.value_semantics} tiled={tile_hw is not None} "
+        f"n_bands={result.n_bands}",
         file=sys.stderr,
     )
-
-    # Clean up sky temp files
-    if getattr(args, "sky", False) and sky_paths is temp_paths:
-        from os import unlink
-
-        for p in temp_paths:
-            unlink(p)
-
     return 0
 
 
@@ -592,31 +519,32 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         band = str(args.inr_band).upper()
 
     skw = _inr_spectral_field_kwargs(args, band)
+
+    # Plan the product — use product pipeline for target planning.
     image_obs = [ImageObservation(path=p, hdu=h) for p, h in zip(inr_paths, inr_hdus)]
-    pr = int(args.plan_reference)
-    if pr < 0 or pr >= len(image_obs):
-        raise SystemExit(
-            f"--plan-reference {pr} out of range for {len(image_obs)} input(s) (0-based)"
-        )
+    ref_header = None
     if args.reference is not None:
-        _, rh = read(
-            str(args.reference),
-            hdu=args.reference_hdu,
-            return_header=True,
-            device=read_dev,
-        )
-        plan_header = dict(rh)
-        plan_shape = (int(plan_header["NAXIS2"]), int(plan_header["NAXIS1"]))
-    else:
-        plan = plan_image_plane_target(
-            image_obs,
-            reference_index=None,
-            device=args.device,
-            union_footprint=True,
-        )
-        plan_header = dict(plan.header)
-        plan_shape = plan.shape
-    h, w = int(plan_shape[0]), int(plan_shape[1])
+        _, rh = read(str(args.reference), hdu=args.reference_hdu, return_header=True, device=read_dev)
+        ref_header = dict(rh)
+
+    band_spec = MapBandpassSpec(
+        label=band,
+        transmission_center=skw.get("transmission_center"),
+        transmission_sigma=skw.get("transmission_sigma"),
+        spectral_min=skw.get("spectral_min"),
+        spectral_max=skw.get("spectral_max"),
+    )
+    product = plan_map_product(
+        image_obs,
+        bands=[band_spec],
+        header_overrides=ref_header,
+        union_footprint=bool(args.union_footprint),
+        footprint_padding=float(args.footprint_padding),
+        max_footprint_pixels=args.max_footprint_pixels,
+        value_semantics="surface_brightness",
+        device=args.device,
+    )
+    h, w = product.shape
     max_px = int(args.inr_max_pixels)
     if h * w > max_px:
         raise SystemExit(
@@ -717,22 +645,16 @@ def _run_inr_single(args: argparse.Namespace) -> int:
             observations_per_step=min(len(fields), int(args.inr_obs_per_step)),
             device=args.device,
         )
-    dev = next((p.device for p in model.parameters()), default_compute_device())
-    target_obs = FieldObservation(
-        image=torch.zeros((h, w), dtype=torch.float32, device=dev),
-        header=plan_header,
-        weight=torch.ones((h, w), dtype=torch.float32, device=dev),
-        **skw,
-    )
     model.eval()
-    render_kw: dict = {"num_spectral_samples": int(args.inr_spectral_samples)}
-    if render_tiled:
-        render_kw["spatial_tile_hw"] = (th, th)
-    with torch.no_grad():
-        pred = render_field_observation(model, target_obs, **render_kw)
-    write(str(args.output), pred, header=plan_header, overwrite=True)
+    result = render_field_product(
+        model,
+        product,
+        num_spectral_samples=int(args.inr_spectral_samples),
+        spatial_tile_hw=(th, th) if render_tiled else None,
+    )
+    write(str(args.output), result.data.squeeze(0), header=result.header, overwrite=True)
     print(
-        f"wrote {args.output} shape={tuple(pred.shape)} method=inr "
+        f"wrote {args.output} shape={tuple(result.data.shape)} method=inr "
         f"model={args.inr_model} band={band}",
         file=sys.stderr,
     )
@@ -1055,6 +977,28 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         "--per-filter",
         action="store_true",
         help="Group inputs by FITS FILTER/FILTNAM; one output per band (inr)",
+    )
+    p.add_argument(
+        "--union-footprint",
+        dest="union_footprint",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Auto-compute output WCS from union bounding box of all input footprints "
+            "(like SWarp). Use --no-union-footprint to use the first input as reference."
+        ),
+    )
+    p.add_argument(
+        "--footprint-padding",
+        type=float,
+        default=1.05,
+        help="Padding factor applied to the union footprint bounding box (default: 1.05 = 5%)",
+    )
+    p.add_argument(
+        "--max-footprint-pixels",
+        type=int,
+        default=None,
+        help="Refuse targets exceeding this many pixels (memory guard, coadd/inr)",
     )
     p.add_argument(
         "--device",
