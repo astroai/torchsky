@@ -38,12 +38,12 @@ def _resolve_hdu(hdu: int | str, path: str) -> int:
         if any(k in dict(hdr) for k in ("CTYPE1", "WCSAXES", "CRPIX1")):
             return candidate
     return 0
-read_image = torchfits.read_image
+read_image = torchfits.read_tensor
 read_table = torchfits.read_table
 read_hdus = torchfits.read_hdus
 read_subset = torchfits.read_subset
 read_batch = torchfits.read_batch
-# read_large_table in torchfits 0.6.0 requires get_header_func as first arg;
+# read_large_table in torchfits 0.6.0 was replaced by read_table_rows;
 # wrap it with the convenience surface torchsky callers expect.
 
 
@@ -54,8 +54,8 @@ def read_large_table(
     streaming: bool = False,
     return_iterator: bool = False,
 ) -> Any:
-    return torchfits.read_large_table(
-        torchfits.get_header, file_path,
+    return torchfits.read_table_rows(
+        file_path,
         hdu=hdu, max_memory_mb=max_memory_mb,
         streaming=streaming, return_iterator=return_iterator,
     )
