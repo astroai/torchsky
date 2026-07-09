@@ -820,6 +820,7 @@ def fit_field_model(
         lr=base_lr,
         weight_decay=max(float(weight_decay), 0.0),
     )
+    gradient_weight = max(float(gradient_residual_weight), 0.0)
 
     # ── Pre-training loss on full observations ──────────────────────
     # Measure the loss BEFORE any optimizer steps, on full observation images
@@ -838,7 +839,7 @@ def fit_field_model(
             charbonnier_eps=charbonnier_eps,
             huber_delta=huber_delta,
             loss_reduction=loss_reduction,
-            gradient_residual_weight=gradient_residual_weight,
+            gradient_residual_weight=gradient_weight,
         )
 
     model.train()
@@ -861,7 +862,6 @@ def fit_field_model(
     warmup_steps = max(int(lr_warmup_steps), 0)
     smoothness_weight = max(float(spatial_smoothness_weight), 0.0)
     smoothness_grid_size = max(int(spatial_smoothness_grid_size), 2)
-    gradient_weight = max(float(gradient_residual_weight), 0.0)
     patches_per_observation = max(int(training_patches_per_observation), 1)
     pixel_sample_count = (
         max(int(pixel_samples_per_observation), 1)
@@ -1715,7 +1715,7 @@ def fit_field_model(
             charbonnier_eps=charbonnier_eps,
             huber_delta=huber_delta,
             loss_reduction=loss_reduction,
-            gradient_residual_weight=gradient_residual_weight,
+            gradient_residual_weight=gradient_weight,
         )
     if train_device.type == "cuda":
         torch.cuda.synchronize()
