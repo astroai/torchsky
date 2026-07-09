@@ -35,6 +35,8 @@ class CaseSpec:
     projection: str
     sip: bool = False
     tpv: bool = False
+    conic: bool = False  # COP, COE, COD, COO need theta_0 from PV2_1
+    polyconic: bool = False  # BON needs theta_0 from PV2_1
 
     @property
     def is_allsky(self) -> bool:
@@ -44,6 +46,18 @@ class CaseSpec:
     def is_cylindrical(self) -> bool:
         return self.projection in {"CEA", "MER", "CAR", "SFL"}
 
+    @property
+    def is_pseudocylindrical(self) -> bool:
+        return self.projection == "PAR"
+
+    @property
+    def is_conic(self) -> bool:
+        return self.projection in {"COP", "COE", "COD", "COO"}
+
+    @property
+    def is_polyconic(self) -> bool:
+        return self.projection == "BON"
+
 
 CASES = {
     "TAN": CaseSpec("TAN", "TAN"),
@@ -52,6 +66,9 @@ CASES = {
     "ZEA": CaseSpec("ZEA", "ZEA"),
     "STG": CaseSpec("STG", "STG"),
     "ZPN": CaseSpec("ZPN", "ZPN"),
+    "AZP": CaseSpec("AZP", "AZP"),
+    "SZP": CaseSpec("SZP", "SZP"),
+    "AIR": CaseSpec("AIR", "AIR"),
     "AIT": CaseSpec("AIT", "AIT"),
     "MOL": CaseSpec("MOL", "MOL"),
     "HPX": CaseSpec("HPX", "HPX"),
@@ -59,6 +76,12 @@ CASES = {
     "MER": CaseSpec("MER", "MER"),
     "CAR": CaseSpec("CAR", "CAR"),
     "SFL": CaseSpec("SFL", "SFL"),
+    "PAR": CaseSpec("PAR", "PAR"),
+    "COP": CaseSpec("COP", "COP", conic=True),
+    "COE": CaseSpec("COE", "COE", conic=True),
+    "COD": CaseSpec("COD", "COD", conic=True),
+    "COO": CaseSpec("COO", "COO", conic=True),
+    "BON": CaseSpec("BON", "BON", polyconic=True),
     "TAN_SIP": CaseSpec("TAN_SIP", "TAN", sip=True),
     "TPV": CaseSpec("TPV", "TPV", tpv=True),
 }
@@ -93,6 +116,11 @@ def _make_header(case: CaseSpec) -> fits.Header:
         header["CD1_2"] = 0.0
         header["CD2_1"] = 0.0
         header["CD2_2"] = 1.0
+    elif case.is_pseudocylindrical:
+        header["CD1_1"] = -0.5
+        header["CD1_2"] = 0.0
+        header["CD2_1"] = 0.0
+        header["CD2_2"] = 0.5
     elif case.is_cylindrical:
         header["CD1_1"] = -0.5
         header["CD1_2"] = 0.0
@@ -106,8 +134,21 @@ def _make_header(case: CaseSpec) -> fits.Header:
         header["CD2_1"] = 0.0
         header["CD2_2"] = 2.8e-4
         if case.projection == "ZPN":
-            # ZPN requires at least one valid polynomial coefficient.
             header["PV2_1"] = 1.0
+        elif case.projection == "AZP":
+            header["PV2_1"] = 2.0  # mu: distance parameter
+            header["PV2_2"] = 0.0  # gamma: tilt (deg)
+        elif case.projection == "SZP":
+            header["PV2_1"] = 3.0  # mu
+            header["PV2_2"] = 0.0  # phi_c (deg)
+            header["PV2_3"] = 90.0  # theta_c (deg)
+        elif case.projection == "AIR":
+            header["PV2_1"] = 90.0  # theta_b (deg)
+        elif case.is_conic:
+            header["PV2_1"] = 45.0  # theta_0: standard parallel (deg)
+            header["PV2_2"] = 0.0  # eta (deg) for two-standard-parallel variants
+        elif case.is_polyconic:
+            header["PV2_1"] = 45.0  # theta_0 (deg)
 
     if case.sip:
         header["A_ORDER"] = 3
@@ -157,7 +198,7 @@ def _sample_pixels(
             span_x, span_y = 60.0, 40.0
         else:
             span_x, span_y = 140.0, 90.0
-    elif case.is_cylindrical:
+    elif case.is_cylindrical or case.is_pseudocylindrical:
         if profile == "interior":
             span_x, span_y = 180.0, 90.0
         else:
@@ -578,7 +619,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cases",
         type=str,
-        default="TAN,SIN,ARC,ZEA,STG,ZPN,AIT,MOL,HPX,CEA,MER,CAR,SFL,TAN_SIP,TPV",
+        default="TAN,SIN,ARC,ZEA,STG,ZPN,AZP,SZP,AIR,AIT,MOL,HPX,CEA,MER,CAR,SFL,PAR,COP,COE,COD,COO,BON,TAN_SIP,TPV",
         help=f"Comma-separated case names. Available: {','.join(CASES.keys())}",
     )
     parser.add_argument(
