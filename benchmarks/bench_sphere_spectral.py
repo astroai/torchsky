@@ -149,9 +149,9 @@ def main() -> int:
             os.environ["TORCHSKY_SCALAR_ALM2MAP_CPP"] = "1"
         elif prev_cpp_env is not None:
             os.environ["TORCHSKY_SCALAR_ALM2MAP_CPP"] = "0"
-        hp = None
+        _healpy = None
         if backend == "healpy":
-            import healpy as hp  # type: ignore
+            import healpy as _healpy  # type: ignore
         try:
             if False:  # Skip scalar for now to avoid OOM in matrix path
                 t = _time_many(
@@ -266,7 +266,7 @@ def main() -> int:
                 qu_np = qu_vals.detach().cpu().numpy()
 
                 def _hp_map2alm_spin() -> None:
-                    hp.map2alm_spin(  # type: ignore[union-attr]
+                    _healpy.map2alm_spin(  # type: ignore[union-attr]
                         qu_np, spin=args.spin, lmax=args.lmax
                     )
 
@@ -295,7 +295,7 @@ def main() -> int:
                 ab_np = spin_alm_b.detach().cpu().numpy()
 
                 def _hp_alm2map_spin() -> None:
-                    hp.alm2map_spin(  # type: ignore[union-attr]
+                    _healpy.alm2map_spin(  # type: ignore[union-attr]
                         [ae_np, ab_np],
                         nside=args.nside,
                         spin=args.spin,
