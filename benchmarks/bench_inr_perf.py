@@ -231,8 +231,8 @@ def _render_truth_to_observation(
         ra_deg.reshape(-1).to(torch.float64),
         dec_deg.reshape(-1).to(torch.float64),
     )
-    px = px.reshape(h, w).to(torch.float32)
-    py = py.reshape(h, w).to(torch.float32)
+    px = px.reshape(h, w).to(dtype=torch.float32, device=device)
+    py = py.reshape(h, w).to(dtype=torch.float32, device=device)
 
     # Normalize to [-1, 1] for grid_sample
     px_norm = (2.0 * px / max(src_w - 1, 1)) - 1.0
