@@ -43,7 +43,23 @@ read_table = torchfits.read_table
 read_hdus = torchfits.read_hdus
 read_subset = torchfits.read_subset
 read_batch = torchfits.read_batch
-read_large_table = torchfits.read_large_table
+# read_large_table in torchfits 0.6.0 requires get_header_func as first arg;
+# wrap it with the convenience surface torchsky callers expect.
+
+
+def read_large_table(
+    file_path: str,
+    hdu: int = 1,
+    max_memory_mb: int = 100,
+    streaming: bool = False,
+    return_iterator: bool = False,
+) -> Any:
+    return torchfits.read_large_table(
+        torchfits.get_header, file_path,
+        hdu=hdu, max_memory_mb=max_memory_mb,
+        streaming=streaming, return_iterator=return_iterator,
+    )
+
 open_subset_reader = torchfits.open_subset_reader
 stream_table = torchfits.stream_table
 delete_hdu = torchfits.delete_hdu
@@ -68,24 +84,6 @@ _HAS_READ_FULL_RAW = hasattr(cpp, "read_full_raw")
 _HAS_READ_FULL_UNMAPPED_RAW = hasattr(cpp, "read_full_unmapped_raw")
 _HAS_READ_FULL_UNMAPPED = hasattr(cpp, "read_full_unmapped")
 _HAS_READ_FULL_NOCACHE = hasattr(cpp, "read_full_nocache")
-
-
-def _invalidate_path_caches(path: str) -> None:
-    torchfits._invalidate_path_caches(path)
-
-
-def _get_image_meta(path: str, hdu: int):
-    return torchfits._get_image_meta(path, hdu)
-
-
-def _should_use_cold_nommap(
-    path: str, hdu: int, cache_capacity: int, mmap: bool
-) -> bool:
-    return torchfits._should_use_cold_nommap(path, hdu, cache_capacity, mmap)
-
-
-def _resolve_image_mmap(path: str, hdu: int, mmap: bool | str, cache_capacity: int):
-    return torchfits._resolve_image_mmap(path, hdu, mmap, cache_capacity)
 
 
 __all__ = [

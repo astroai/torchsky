@@ -17,8 +17,13 @@ from ..dataloader import (
     create_table_dataloader,
 )
 from ..datasets import FITSDataset, IterableFITSDataset, TableChunkDataset
-from torchfits.frame import read_tensor_frame, to_tensor_frame, write_tensor_frame
+from ..frame import read_tensor_frame, to_tensor_frame, write_tensor_frame
 from torchfits.interop import to_arrow, to_pandas
+from torchfits.io import (
+    _get_image_meta as _get_image_meta,
+    _resolve_image_mmap as _resolve_image_mmap,
+    _should_use_cold_nommap as _should_use_cold_nommap,
+)
 from ..hdu import Card, HDUList, Header, TableHDU, TableHDURef, TensorHDU
 from . import fits as fits
 from .fits import (
@@ -46,9 +51,6 @@ from .fits import (
 )
 
 read = torchfits.read
-_get_image_meta = torchfits._get_image_meta
-_resolve_image_mmap = torchfits._resolve_image_mmap
-_should_use_cold_nommap = torchfits._should_use_cold_nommap
 
 __all__ = [
     "FITSDataset",

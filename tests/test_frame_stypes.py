@@ -10,7 +10,7 @@ try:
 except Exception:
     stype = None
 
-from torchfits.frame import write_tensor_frame  # noqa: E402
+from torchsky.frame import write_tensor_frame  # noqa: E402
 
 
 def test_write_tensor_frame_stypes():

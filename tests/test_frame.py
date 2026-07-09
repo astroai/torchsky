@@ -8,7 +8,7 @@ try:
 except Exception:
     stype = None
 
-from torchfits.frame import read_tensor_frame, to_tensor_frame, write_tensor_frame
+from torchsky.frame import read_tensor_frame, to_tensor_frame, write_tensor_frame
 
 
 def test_frame_integration():
