@@ -139,6 +139,38 @@ _PIXWIN_DATA_DIR = Path(__file__).resolve().parent / "data" / "pixel_window_func
 _LEGENDRE_REC_CACHE: dict[tuple[int, int], tuple[list[float], list[float]]] = {}
 
 
+def _smoke_test_torch_compile() -> bool:
+    """Smoke-test torch.compile at import time so that missing CUDA headers
+    (cuda.h) don't cause runtime failures later in Wigner d-matrix helpers."""
+    try:
+
+        @torch.compile
+        def _test_fn(x: Tensor) -> Tensor:
+            return x.sin() + x.cos()
+
+        _test_fn(torch.randn(10, dtype=torch.float64))
+        return True
+    except Exception:
+        import warnings
+
+        warnings.warn(
+            "torch.compile unavailable (missing CUDA headers or other issue); "
+            "Wigner d-matrix helpers will run uncompiled.",
+            stacklevel=2,
+        )
+        return False
+
+
+_COMPILE_OK: bool = _smoke_test_torch_compile()
+
+
+def _maybe_compile(fn):
+    """Apply torch.compile only when the import-time smoke test passed."""
+    if _COMPILE_OK:
+        return torch.compile(fn)
+    return fn
+
+
 def _preferred_real_dtype(device: torch.device) -> torch.dtype:
     return torch.float64 if device.type == "cpu" else torch.float32
 
@@ -487,6 +519,7 @@ def _ylm_basis(
     return out
 
 
+@_maybe_compile
 def _wigner_d_element(ell: int, m: int, mp: int, theta: Tensor) -> Tensor:
     """
     Compute Wigner small-d element d^ell_{m,mp}(theta).
@@ -532,6 +565,7 @@ def _wigner_d_element(ell: int, m: int, mp: int, theta: Tensor) -> Tensor:
     return out
 
 
+@_maybe_compile
 def _wigner_d_l_sequence(
     ell_min: int, ell_max: int, m: int, mp: int, theta: Tensor
 ) -> Tensor:
