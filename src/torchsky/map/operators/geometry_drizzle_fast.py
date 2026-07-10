@@ -19,7 +19,6 @@ from torch import Tensor
 
 from .geometry_drizzle import (
     _DRIZZLE_BOUNDARY_EPS,
-    _batch_interpolate_pixmap,
     _build_center_pixmap,
     _half_plane_clip_batch,
     _scanner_row_bounds,
@@ -331,13 +330,15 @@ def exact_square_drizzle_project_vectorized(
             dy = torch.arange(max_h, dtype=torch.int64, device=device).view(1, max_h, 1)
             cx = min_x[sl].view(sub_n, 1, 1) + dx
             cy = min_y[sl].view(sub_n, 1, 1) + dy
+            cx_grid = cx.expand(sub_n, max_h, max_w)
+            cy_grid = cy.expand(sub_n, max_h, max_w)
             candidate_mask = (
                 (dx < bbox_w[sl].view(sub_n, 1, 1))
                 & (dy < bbox_h[sl].view(sub_n, 1, 1))
             )
 
             centers = torch.stack(
-                (cx.to(dtype=torch.float64), cy.to(dtype=torch.float64)), dim=-1
+                (cx_grid.to(dtype=torch.float64), cy_grid.to(dtype=torch.float64)), dim=-1
             ).reshape(-1, 2)
             candidate_mask_flat = candidate_mask.reshape(-1)
             if not bool(candidate_mask_flat.any()):
@@ -367,8 +368,8 @@ def exact_square_drizzle_project_vectorized(
                 .expand(sub_n, max_h, max_w)
                 .reshape(-1)
             )
-            cx_flat = cx.expand(sub_n, max_h, max_w).reshape(-1)
-            cy_flat = cy.expand(sub_n, max_h, max_w).reshape(-1)
+            cx_flat = cx_grid.reshape(-1)
+            cy_flat = cy_grid.reshape(-1)
             out_index = (cy_flat[valid_overlap] * width + cx_flat[valid_overlap]).to(
                 dtype=torch.int64
             )
