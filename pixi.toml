@@ -1,7 +1,11 @@
 [workspace]
 preview = ["pixi-build"]
 channels = ["conda-forge"]
-platforms = ["osx-arm64", "linux-64"]
+platforms = [
+  "osx-arm64",
+  "linux-64",
+  { name = "linux-64-cuda-12", platform = "linux-64", cuda = "12" },
+]
 
 [package]
 name = "torchsky"
@@ -212,6 +216,7 @@ pyarrow = ">=14.0"
 pyright = ">=1.1.350"
 pytest-xdist = ">=3.0"
 requests = ">=2.28"
+astroquery = ">=0.4.11,<0.5"
 
 [feature.test.pypi-dependencies]
 pytorch-frame = ">=0.2.0"
@@ -284,11 +289,11 @@ pytorch = ">=2.0"
 # Kapteyn is not pinned here: its sdist build often fails under isolated solves
 # (requires NumPy at build time). After `pixi install -e bench-legacy`, install when needed:
 #   pixi run -e bench-legacy python -m pip install kapteyn
-[feature.cuda]
-platforms = ["linux-64"]
+#[feature.cuda]
+#platforms = ["linux-64"]
 
-[feature.cuda.system-requirements]
-cuda = "12"
+[feature.cuda]
+platforms = ["linux-64-cuda-12"]
 
 [feature.cuda.dependencies]
 pytorch-gpu = ">=2.0"

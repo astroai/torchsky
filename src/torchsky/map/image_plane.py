@@ -940,7 +940,11 @@ def _resample_weighted_to_target(
             & (y_src >= 0.0)
             & (y_src <= (h_src - 1))
         )
-        if _requires_roundtrip_validity_check(source_wcs):
+        if (
+            _requires_roundtrip_validity_check(source_wcs)
+            and flat_ra is not None
+            and flat_dec is not None
+        ):
             in_bounds = in_bounds & _roundtrip_validity_mask(
                 source_wcs,
                 x_src=x_src,

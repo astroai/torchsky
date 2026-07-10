@@ -342,6 +342,16 @@ def _coadd_full_band(
     support = result.weight.detach().cpu().numpy() > 0
     mask = _metric_mask(pred, reference, support)
     diff = pred[mask] - reference[mask]
+    abs_diff = np.abs(diff)
+    frac_abs_diff_le_5 = (
+        float(np.mean(abs_diff <= 5.0)) if diff.size else float("nan")
+    )
+    abs_diff_p99 = (
+        float(np.percentile(abs_diff, 99.0)) if diff.size else float("nan")
+    )
+    passes_99pct_abs_le_5 = (
+        bool(frac_abs_diff_le_5 >= 0.99) if diff.size else False
+    )
 
     mosaic_dir.mkdir(parents=True, exist_ok=True)
     metric_dir.mkdir(parents=True, exist_ok=True)
@@ -366,7 +376,10 @@ def _coadd_full_band(
         "support_rmse": float(np.sqrt(np.mean(diff * diff)))
         if diff.size
         else float("nan"),
-        "support_mae": float(np.mean(np.abs(diff))) if diff.size else float("nan"),
+        "support_mae": float(np.mean(abs_diff)) if diff.size else float("nan"),
+        "frac_abs_diff_le_5": frac_abs_diff_le_5,
+        "abs_diff_p99": abs_diff_p99,
+        "passes_99pct_abs_le_5": passes_99pct_abs_le_5,
         "support_flux_ratio": (
             float(np.sum(pred[mask]) / np.sum(reference[mask]))
             if diff.size
