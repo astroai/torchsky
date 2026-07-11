@@ -135,13 +135,14 @@ Re-baseline them after the repository boundary cleanup.
 - Dead code in `map/windowing.py` (circular-import workaround) removed ✓
 - `SpectralReader` in `spectral.py` now reads `CUNIT1` instead of hardcoding
   `"Angstrom"` ✓
-- `_where.py` delegated to `torchfits._where` ✓
+- `_where.py` delegated to the stable `torchfits.where` public boundary ✓
 
 ### Open
 
-- Freeze the exact adapter/signature contract only after the `torchfits 0.5`
-  release candidate is available; do not encode transient development APIs or
-  preserve obsolete 0.3.x behavior in new torchsky code.
+- Freeze the exact adapter/signature contract against the stable
+  `torchfits.where`, `torchfits.hdu`, and `torchfits.table` public modules; do
+  not encode transient private implementation APIs or preserve obsolete 0.3.x
+  behavior in new torchsky code.
 - Preserve header/WCS metadata, dtype, device, masks/weights, spectral axes,
   and table-batch semantics across the boundary. Invalid or ambiguous inputs
   fail closed.

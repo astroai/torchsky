@@ -5,16 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from torchfits.hdu import (  # noqa: F405
+from torchfits.hdu import (
+    DataView as DataView,
     HDUList as HDUList,
     Header as Header,
+    TableDataAccessor as TableDataAccessor,
     TableHDU as TableHDU,
     TableHDURef as TableHDURef,
+    TensorFrame as TensorFrame,
     TensorHDU as TensorHDU,
 )
-from torchfits._hdu.dataview import DataView as DataView  # noqa: F401
-from torchfits._hdu.table_hdu import TableDataAccessor as TableDataAccessor  # noqa: F401
-from torchfits._hdu.table_hdu import TensorFrame as TensorFrame  # noqa: F401
 
 
 @dataclass(frozen=True)
