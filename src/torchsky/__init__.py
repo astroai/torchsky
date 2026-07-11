@@ -29,6 +29,7 @@ _NAMESPACES: dict[str, str] = {
     "interop": "torchfits.interop",
     "encoders": "torchsky.encoders",
     "catalogs": "torchsky.catalogs",
+    "quality": "torchsky.quality",
 }
 
 _ROOT_FUNCTIONS: dict[str, tuple[str, str]] = {

@@ -545,6 +545,7 @@ def test_top_level_namespaces_expose_phase1_modules() -> None:
         "interop",
         "encoders",
         "catalogs",
+        "quality",
     }
     assert callable(torchsky.io.read)
     assert hasattr(torchsky.datasets, "create_dataloader")
