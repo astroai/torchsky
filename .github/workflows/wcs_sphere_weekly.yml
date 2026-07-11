@@ -6,7 +6,6 @@ on:
     - cron: "0 7 * * 3"
 
 env:
-  CONDA_OVERRIDE_CUDA: "12.0"
   FORCE_COLOR: 1
   KMP_DUPLICATE_LIB_OK: TRUE
   OMP_NUM_THREADS: 1
