@@ -52,6 +52,7 @@ jobs:
       CIBW_BUILD: cp312-* cp313-*
       CIBW_SKIP: pp* *-musllinux_* *-manylinux_i686 *-win32
       CIBW_ARCHS_LINUX: x86_64
+      CONDA_OVERRIDE_CUDA: 12.0
       CIBW_TEST_REQUIRES: pytest
       CIBW_TEST_COMMAND: python -c "import torchsky; print(torchsky.__version__)"
       CIBW_BEFORE_ALL_LINUX: bash ./extern/vendor.sh --cfitsio-version cfitsio-4.6.3
