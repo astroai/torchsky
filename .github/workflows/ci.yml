@@ -86,6 +86,8 @@ jobs:
 
       - name: Build editable torchsky (C++ extension)
         run: pixi run -e test -- pip install -e . --no-build-isolation
+        env:
+          CONDA_OVERRIDE_CUDA: 12.0
 
       - name: Run full test suite
         run: pixi run -e test -- pytest -n auto -v --tb=short
@@ -113,6 +115,8 @@ jobs:
 
       - name: Build editable torchsky (C++ extension)
         run: pixi run -e sphere-bench -- pip install -e . --no-build-isolation
+        env:
+          CONDA_OVERRIDE_CUDA: 12.0
 
       - name: Run full pytest (includes reproject + drizzle smoke)
         run: pixi run -e sphere-bench -- pytest -n auto -q --tb=short
