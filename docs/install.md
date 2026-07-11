@@ -19,10 +19,9 @@ table I/O is required:
 pip install torchsky torchfits
 ```
 
-The target integration baseline is the forthcoming `torchfits 0.5.0`. While it
-is under development, use the local/dev installation for combined-stack
-validation. Add a concrete compatible version range only after the 0.5 release
-candidate passes the cross-repository contract gate.
+The supported integration baseline is `torchfits 0.7.0` or newer. Use the
+released package or a local checkout for combined-stack validation; the
+cross-repository contract gate exercises the `torchfits.data` dataset names.
 
 Requires Python **>=3.12,<3.15** and [PyTorch](https://pytorch.org/) 2.0+.
 

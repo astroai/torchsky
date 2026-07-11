@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import torch
 from torch.utils.data import IterableDataset
 
-from torchfits import FITSDataset as FITSDataset  # noqa: F401
-from torchfits import IterableFITSDataset as IterableFITSDataset  # noqa: F401
+from torchfits.data import (
+    FitsImageDataset as FitsImageDataset,
+    FitsImageIterableDataset as FitsImageIterableDataset,
+)
+from torchfits import get_header as _tf_get_header
+from torchfits.table import scan_torch as _tf_scan_torch
 
-# torchfits.io is not a direct submodule in 0.6.0; access read via top-level.
-from torchfits import read as _tf_read
+# Compatibility names belong to torchsky, not torchfits.  New code should use
+# the explicit image-dataset names above.
+FITSDataset = FitsImageDataset
+IterableFITSDataset = FitsImageIterableDataset
 
 
 class TableChunkDataset(IterableDataset):
@@ -84,54 +89,26 @@ class TableChunkDataset(IterableDataset):
             paths = self.file_paths
 
         for file_path in paths:
-            # Read the full table once (may be memory-mapped).
-            result = _tf_read(
-                file_path,
-                hdu=self.hdu,
-                device="cpu",
-                mmap=self.mmap,
-                columns=self.columns,
+            header = (
+                _tf_get_header(file_path, self.hdu) if self.include_header else None
             )
-            if isinstance(result, dict):
-                table_data = result
-                header = result.get("_header")
-            else:
-                table_data = {"data": result}
-                header = None
-
-            # Determine total rows from the first column tensor shape.
-            num_rows = None
-            for v in table_data.values():
-                if isinstance(v, torch.Tensor) and v.ndim >= 1:
-                    num_rows = int(v.shape[0])
+            for chunk_idx, batch in enumerate(
+                _tf_scan_torch(
+                    file_path,
+                    hdu=self.hdu,
+                    columns=self.columns,
+                    batch_size=self.chunk_rows,
+                    mmap=self.mmap,
+                    device=self.device,
+                    non_blocking=self.non_blocking_transfer,
+                    pin_memory=self.pin_memory_transfer,
+                )
+            ):
+                if self.max_chunks is not None and chunk_idx >= self.max_chunks:
                     break
-
-            if num_rows is None:
-                continue
-
-            num_chunks = math.ceil(num_rows / self.chunk_rows)
-            if self.max_chunks is not None:
-                num_chunks = min(num_chunks, self.max_chunks)
-
-            for c in range(num_chunks):
-                start = c * self.chunk_rows
-                end = min(start + self.chunk_rows, num_rows)
-
-                chunk: dict[str, Any] = {}
-                for key, val in table_data.items():
-                    if isinstance(val, torch.Tensor) and val.ndim >= 1 and val.shape[0] == num_rows:
-                        chunk[key] = val[start:end].to(
-                            self.device, non_blocking=self.non_blocking_transfer
-                        )
-                    elif isinstance(val, list) and len(val) == num_rows:
-                        chunk[key] = val[start:end]
-                    else:
-                        chunk[key] = val
-
+                chunk = dict(batch)
                 if self.include_header and header is not None:
                     chunk["_header"] = header
-
                 if self.transform is not None:
                     chunk = self.transform(chunk)
-
                 yield chunk

@@ -43,7 +43,7 @@ read_table = torchfits.read_table
 read_hdus = torchfits.read_hdus
 read_subset = torchfits.read_subset
 read_batch = torchfits.read_batch
-# read_large_table in torchfits 0.6.0 was replaced by read_table_rows;
+# read_large_table in torchfits 0.7.0 is replaced by read_table_rows;
 # wrap it with the convenience surface torchsky callers expect.
 
 

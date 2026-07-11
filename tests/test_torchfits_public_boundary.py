@@ -9,3 +9,18 @@ def test_torchsky_does_not_import_torchfits_private_modules():
             if "torchfits._" in line:
                 offenders.append(f"{path}:{line_number}: {line.strip()}")
     assert not offenders, "\n".join(offenders)
+
+
+def test_dataset_boundary_uses_torchfits_07_names():
+    from torchfits.data import FitsImageDataset, FitsImageIterableDataset
+    from torchsky.datasets import (
+        FITSDataset,
+        FitsImageDataset as TorchskyFitsImageDataset,
+        FitsImageIterableDataset as TorchskyFitsImageIterableDataset,
+        IterableFITSDataset,
+    )
+
+    assert TorchskyFitsImageDataset is FitsImageDataset
+    assert TorchskyFitsImageIterableDataset is FitsImageIterableDataset
+    assert FITSDataset is FitsImageDataset
+    assert IterableFITSDataset is FitsImageIterableDataset

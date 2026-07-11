@@ -4,7 +4,7 @@
 > APIs, start with [`../api.md`](../api.md). For shipped-work history, use
 > [`history.md`](history.md).
 
-Last updated: 2026-06-28.
+Last updated: 2026-07-11.
 
 ## Mission And Ownership
 
@@ -198,8 +198,8 @@ cleanup, operator correctness, scalable indexing, and measured bottlenecks.
 
 - Pre-push: `pixi run ci-local`.
 - Package boundary: no FITS implementation modules, CFITSIO/zlib linkage, or
-  FITS-owned benchmarks in torchsky; optional integration smoke against the
-  `torchfits 0.5.0` release candidate, then the supported 0.5.x range.
+  FITS-owned benchmarks in torchsky; integration smoke against the supported
+  `torchfits 0.7.x` range.
 - FITS/table I/O behavior and throughput changes: validate in the `torchfits`
   repository.
 - WCS/sphere claims: `pixi run wcs-sphere-acceptance` plus focused parity tests

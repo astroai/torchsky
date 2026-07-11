@@ -68,6 +68,12 @@ _INTERNAL_ATTRS: dict[str, tuple[str, str | None]] = {
     "verify_checksums": ("torchsky.io.fits", "verify_checksums"),
     "get_cache_performance": ("torchsky.io.fits", "get_cache_performance"),
     "clear_file_cache": ("torchsky.io.fits", "clear_file_cache"),
+    "FitsImageDataset": ("torchsky.datasets", "FitsImageDataset"),
+    "FitsImageIterableDataset": (
+        "torchsky.datasets",
+        "FitsImageIterableDataset",
+    ),
+    # Legacy torchsky aliases; torchfits no longer provides these names.
     "FITSDataset": ("torchsky.datasets", "FITSDataset"),
     "IterableFITSDataset": ("torchsky.datasets", "IterableFITSDataset"),
     "TableChunkDataset": ("torchsky.datasets", "TableChunkDataset"),
@@ -105,13 +111,11 @@ _INTERNAL_ATTRS: dict[str, tuple[str, str | None]] = {
         "create_validation_transform",
     ),
     "fast_parse_header": ("torchsky.header_parser", "fast_parse_header"),
-
     "configure_for_environment": ("torchsky.cache", "configure_for_environment"),
     "get_cache_stats": ("torchsky.cache", "get_cache_stats"),
     "clear_cache": ("torchsky.cache", "clear_cache"),
     "to_arrow": ("torchfits.interop", "to_arrow"),
     "to_pandas": ("torchfits.interop", "to_pandas"),
-
     "_invalidate_path_caches": ("torchsky.io.fits", "_invalidate_path_caches"),
     "_resolve_image_mmap": ("torchsky.io.fits", "_resolve_image_mmap"),
     "_where": ("torchsky._where", None),

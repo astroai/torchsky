@@ -1,6 +1,6 @@
 """TensorFrame ↔ FITS conversion helpers.
 
-`torchfits.frame` was removed in torchfits 0.6.0.  These functions now live in
+`torchfits.frame` was removed before torchfits 0.7.0. These functions now live in
 torchsky and bridge :mod:`torch_frame` with torchfits I/O.
 """
 

@@ -3,8 +3,9 @@
 FITS table I/O is owned by
 [`torchfits.table`](https://github.com/sfabbro/torchfits). The former
 `torchsky.table` implementation is not a torchsky roadmap surface.
-The integration target is `torchfits 0.5.0`; verify exact scan/read signatures
-against its release-candidate docs before treating the examples below as stable.
+The supported integration baseline is `torchfits 0.7.0` or newer; verify exact
+scan/read signatures against its API docs before treating the examples below as
+stable.
 
 Use `torchfits.table` for:
 

@@ -1,4 +1,4 @@
-"""HDU types — delegated to torchfits (Card kept locally until torchfits 0.5)."""
+"""HDU types delegated to the torchfits 0.7 public boundary."""
 
 from __future__ import annotations
 

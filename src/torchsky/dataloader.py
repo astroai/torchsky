@@ -5,9 +5,19 @@ from __future__ import annotations
 from typing import Any
 
 import torch
-from torch.utils.data import DataLoader, DistributedSampler, IterableDataset, RandomSampler
+from torch.utils.data import (
+    DataLoader,
+    DistributedSampler,
+    IterableDataset,
+    RandomSampler,
+)
 
-from torchfits import FITSDataset, IterableFITSDataset
+from torchfits.data import FitsImageDataset, FitsImageIterableDataset
+
+# torchsky compatibility aliases; torchfits 0.7 exposes only the explicit
+# ``Fits*Dataset`` names.
+FITSDataset = FitsImageDataset
+IterableFITSDataset = FitsImageIterableDataset
 
 
 def create_dataloader(
@@ -23,7 +33,7 @@ def create_dataloader(
 ) -> DataLoader:
     """Create a DataLoader with sensible defaults for FITS workflows.
 
-    If *dataset* is a list of file paths, a :class:`FITSDataset` is created
+    If *dataset* is a list of file paths, a :class:`FitsImageDataset` is created
     internally.  When *dataset* is an :class:`IterableDataset`, ``shuffle`` is
     silently dropped (PyTorch does not support shuffling iterable-style
     datasets via a sampler).
@@ -32,7 +42,7 @@ def create_dataloader(
     """
     # Accept raw file lists
     if isinstance(dataset, (list, tuple)):
-        dataset = FITSDataset(list(dataset))
+        dataset = FitsImageDataset(list(dataset))
 
     # Iterable datasets cannot use a sampler.
     if isinstance(dataset, IterableDataset):
@@ -71,12 +81,7 @@ def create_fits_dataloader(
     batch_size: int = 1,
     transform: Any = None,
     device: str = "cpu",
-    include_header: bool = False,
     mmap: str = "auto",
-    cache_capacity: int = 0,
-    handle_cache_capacity: int = 64,
-    scale_on_device: bool = True,
-    raw_scale: bool = False,
     shuffle: bool = False,
     num_workers: int = 0,
     pin_memory: bool = False,
@@ -84,17 +89,16 @@ def create_fits_dataloader(
 ) -> DataLoader:
     """Convenience dataloader for map-style FITS datasets.
 
-    Creates a :class:`FITSDataset` with the given parameters and wraps it in a
+    Creates a :class:`FitsImageDataset` with the given parameters and wraps it in a
     :class:`DataLoader`.  Extra keyword arguments are forwarded to
     :func:`create_dataloader`.
     """
-    dataset = FITSDataset(
+    dataset = FitsImageDataset(
         paths=file_paths,
         hdu=hdu,
         transform=transform,
         device=device,
         mmap=mmap != "auto",
-        cache_capacity=cache_capacity,
     )
     return create_dataloader(
         dataset,
@@ -107,19 +111,26 @@ def create_fits_dataloader(
 
 
 def create_streaming_dataloader(
-    index_url: str,
+    file_paths: str | list[str] | None = None,
     hdu: int = 0,
     batch_size: int = 1,
     num_workers: int = 0,
     pin_memory: bool = False,
+    *,
+    index_url: str | None = None,
     **loader_kwargs: Any,
 ) -> DataLoader:
     """Streaming dataloader for iterable FITS datasets.
 
-    Creates an :class:`IterableFITSDataset` sourced from *index_url* and wraps
+    Creates a :class:`FitsImageIterableDataset` over *file_paths* and wraps
     it in a :class:`DataLoader`.
     """
-    dataset = IterableFITSDataset(paths=[index_url], hdu=hdu)
+    if file_paths is None:
+        file_paths = index_url
+    if file_paths is None:
+        raise TypeError("file_paths is required")
+    paths = [file_paths] if isinstance(file_paths, str) else list(file_paths)
+    dataset = FitsImageIterableDataset(paths=paths, hdu=hdu)
     return create_dataloader(
         dataset,
         batch_size=batch_size,
@@ -188,9 +199,9 @@ def create_distributed_dataloader(
 ) -> DataLoader:
     """Create a distributed DataLoader with a :class:`DistributedSampler`.
 
-    Wraps a :class:`FITSDataset` over *file_paths*.
+    Wraps a :class:`FitsImageDataset` over *file_paths*.
     """
-    dataset = FITSDataset(list(file_paths))
+    dataset = FitsImageDataset(list(file_paths))
     sampler = DistributedSampler(
         dataset, num_replicas=num_replicas, rank=rank, shuffle=shuffle, seed=seed
     )
@@ -306,6 +317,7 @@ def _os_cpu_count() -> int:
     """Return the number of available CPUs, defaulting to 4 on error."""
     try:
         import os as _os
+
         return _os.cpu_count() or 4
     except Exception:
         return 4

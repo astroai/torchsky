@@ -16,8 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   observation operators, mapmaking, scenes, and field models.
 - Residual root I/O and `torchsky.io` / `torchsky.table` surfaces are migration
   debt pending removal or thin deprecation-only delegation.
-- The next integration baseline is the forthcoming `torchfits 0.5.0`; exact
-  version bounds will be set after release-candidate contract validation.
+- The supported integration baseline is `torchfits 0.7.0` or newer; dataset
+  classes are imported from `torchfits.data`.
 
 ### Added
 - **py.typed**: PEP 561 type-checker marker for downstream type inference.

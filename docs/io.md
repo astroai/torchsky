@@ -18,14 +18,10 @@ or come from another storage system.
 
 ## Version Contract
 
-The next supported integration baseline is `torchfits 0.5.0`, currently in
-development. The examples on this page show the intended boundary, not a frozen
-0.5 API guarantee. Before torchsky release:
-
-1. test against the `torchfits 0.5.0` release candidate;
-2. update exact call signatures from the released torchfits API docs;
-3. pin the supported range only after that contract passes end-to-end gates;
-4. do not add compatibility code for transient development signatures.
+The supported integration baseline is `torchfits 0.7.0` or newer. Dataset
+classes live under `torchfits.data`; use `FitsImageDataset`,
+`FitsImageIterableDataset`, `FitsTableDataset`, or
+`FitsTableIterableDataset` rather than removed root-level legacy aliases.
 
 ## Image And WCS Workflow
 
@@ -94,7 +90,7 @@ No new behavior should be added to those namespaces.
 ## Validation And Performance
 
 - FITS image/table correctness and throughput are validated in `torchfits`.
-- `torchsky` keeps one integration gate covering `torchfits 0.5.x` output
+- `torchsky` keeps one integration gate covering `torchfits 0.7.x` output
   passed into WCS/map/catalog computation.
 - End-to-end torchsky benchmarks start after data is decoded, but must still
   report transfer volume and device movement when those affect the workflow.
