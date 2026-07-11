@@ -43,6 +43,8 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.8.0
         with:
           pixi-version: latest
+        env:
+          CONDA_OVERRIDE_CUDA: "12.0"
 
       - name: Install Pixi env (test — pyright + built package)
         run: pixi install --frozen -e test
@@ -75,6 +77,8 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.8.0
         with:
           pixi-version: latest
+        env:
+          CONDA_OVERRIDE_CUDA: "12.0"
 
       - name: Install test environment
         run: pixi install --frozen -e test
@@ -100,6 +104,8 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.8.0
         with:
           pixi-version: latest
+        env:
+          CONDA_OVERRIDE_CUDA: "12.0"
 
       - name: Install sphere-bench environment
         run: pixi install --frozen -e sphere-bench
