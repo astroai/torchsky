@@ -785,9 +785,13 @@ def exact_square_drizzle_project(
         y_tgt = y_tgt[finite]
         numer_chunk = numer_chunk[finite]
         weight_chunk = weight_chunk[finite]
-        for idx in range(int(x_tgt.shape[0])):
-            quad_x = x_tgt[idx]
-            quad_y = y_tgt[idx]
+        for quad_x, quad_y, c_numer, c_weight in zip(
+            x_tgt.unbind(0),
+            y_tgt.unbind(0),
+            numer_chunk.unbind(0),
+            weight_chunk.unbind(0),
+            strict=False,
+        ):
             area = 0.5 * torch.abs(
                 torch.sum(
                     quad_x * torch.roll(quad_y, shifts=-1)
@@ -814,8 +818,8 @@ def exact_square_drizzle_project(
             vo = overlaps[valid]
             i_idx = (vc[:, 1].to(dtype=torch.int64) * width + vc[:, 0].to(dtype=torch.int64)).to(dtype=torch.int64)
             c_coeff = (vo / area).to(dtype=torch.float32)
-            flat_numer.scatter_add_(0, i_idx, numer_chunk[idx] * c_coeff)
-            flat_weight.scatter_add_(0, i_idx, weight_chunk[idx] * c_coeff)
+            flat_numer.scatter_add_(0, i_idx, c_numer * c_coeff)
+            flat_weight.scatter_add_(0, i_idx, c_weight * c_coeff)
 
     numer = flat_numer.reshape(target.shape)
     weight = flat_weight.reshape(target.shape)

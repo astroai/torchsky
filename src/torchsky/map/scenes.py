@@ -179,8 +179,8 @@ class HealpixMapScene(SceneRepresentation):
             return self._project_single_map(data[band_index], target, mode=mode)
         return torch.stack(
             [
-                self._project_single_map(data[idx], target, mode=mode)
-                for idx in range(int(data.shape[0]))
+                self._project_single_map(d, target, mode=mode)
+                for d in data.unbind(0)
             ],
             dim=0,
         )
@@ -230,8 +230,8 @@ class HarmonicAlmScene(SceneRepresentation):
             return self._project_single_alm(data[band_index], target)
         return torch.stack(
             [
-                self._project_single_alm(data[idx], target)
-                for idx in range(int(data.shape[0]))
+                self._project_single_alm(d, target)
+                for d in data.unbind(0)
             ],
             dim=0,
         )
