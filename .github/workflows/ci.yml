@@ -46,6 +46,8 @@ jobs:
 
       - name: Install Pixi env (test — pyright + built package)
         run: pixi install --frozen -e test
+        env:
+          CONDA_OVERRIDE_CUDA: 12.0
 
       # Ruff is enforced in the pre-commit job; this job focuses on typecheck.
       - name: Pyright (scoped allowlist in pyrightconfig.json)
@@ -78,6 +80,8 @@ jobs:
 
       - name: Install test environment
         run: pixi install --frozen -e test
+        env:
+          CONDA_OVERRIDE_CUDA: 12.0
 
       - name: Build editable torchsky (C++ extension)
         run: pixi run -e test -- pip install -e . --no-build-isolation
@@ -103,6 +107,8 @@ jobs:
 
       - name: Install sphere-bench environment
         run: pixi install --frozen -e sphere-bench
+        env:
+          CONDA_OVERRIDE_CUDA: 12.0
 
       - name: Build editable torchsky (C++ extension)
         run: pixi run -e sphere-bench -- pip install -e . --no-build-isolation

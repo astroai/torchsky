@@ -37,6 +37,8 @@ jobs:
         run: |
           pixi install --frozen -e test
           pixi run -e test -- pytest tests/ -q --maxfail=1
+        env:
+          CONDA_OVERRIDE_CUDA: 12.0
 
   build_wheels:
     name: Build wheels on ${{ matrix.os }}
