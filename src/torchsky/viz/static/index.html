@@ -403,6 +403,21 @@
     select:focus:not(:focus-visible) { outline: none; }
     select option { background: var(--bg-surface); }
 
+    input[type="text"] {
+      background: var(--bg-input);
+      border: 1px solid var(--bg-border);
+      border-radius: var(--r-sm);
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 4px var(--sp2);
+      outline: none;
+    }
+    input[type="text"]:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: var(--r-sm);
+    }
     /* Divider */
     .divider {
       height: 1px;
@@ -675,13 +690,9 @@
         </select>
         <div style="display:flex;gap:var(--sp2)">
           <input type="text" id="ra-col-input" placeholder="RA col" value="RA" aria-label="Right Ascension column"
-            style="flex:1;background:var(--bg-input);border:1px solid var(--bg-border);
-                   border-radius:var(--r-sm);color:var(--text-primary);font-family:var(--font-mono);
-                   font-size:11px;padding:4px var(--sp2);" />
+            style="flex:1;" />
           <input type="text" id="dec-col-input" placeholder="Dec col" value="DEC" aria-label="Declination column"
-            style="flex:1;background:var(--bg-input);border:1px solid var(--bg-border);
-                   border-radius:var(--r-sm);color:var(--text-primary);font-family:var(--font-mono);
-                   font-size:11px;padding:4px var(--sp2);" />
+            style="flex:1;" />
         </div>
       </div>
     </div>
