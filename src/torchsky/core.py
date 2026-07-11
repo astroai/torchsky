@@ -1,9 +1,5 @@
-"""FITS core types — delegated to torchfits."""
+"""Compatibility view of the torchfits 0.7 checksum boundary."""
 
-from torchfits.core import (  # noqa: F401
-    ChecksumVerifier as ChecksumVerifier,
-    CompressionHandler as CompressionHandler,
-    CompressionType as CompressionType,
-    FITSCore as FITSCore,
-    FITSDataTypeHandler as FITSDataTypeHandler,
-)
+from torchfits.core import ChecksumVerifier as ChecksumVerifier
+
+__all__ = ["ChecksumVerifier"]

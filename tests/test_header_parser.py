@@ -132,7 +132,7 @@ class TestFastParseHeader:
         assert parsed["SIMPLE"] is True
         assert parsed["BITPIX"] == 8
         assert parsed["NAXIS"] == 0
-        assert parsed["OBJECT"] == "M31     "
+        assert parsed["OBJECT"] == "M31"
         assert parsed["EXPTIME"] == 100.5
         assert parsed["OBSERVER"] == "John Doe"
 

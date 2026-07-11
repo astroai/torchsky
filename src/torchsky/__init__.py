@@ -49,8 +49,6 @@ _ROOT_OBJECTS: dict[str, tuple[str, str]] = {
 
 _INTERNAL_ATTRS: dict[str, tuple[str, str | None]] = {
     "ChecksumVerifier": ("torchsky.core", "ChecksumVerifier"),
-    "FITSCore": ("torchsky.core", "FITSCore"),
-    "CompressionType": ("torchsky.core", "CompressionType"),
     "TableHDURef": ("torchsky.hdu", "TableHDURef"),
     "read_image": ("torchsky.io.fits", "read_image"),
     "read_table": ("torchsky.io.fits", "read_table"),
