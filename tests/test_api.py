@@ -535,6 +535,7 @@ def test_top_level_namespaces_expose_phase1_modules() -> None:
         "wcs",
         "sphere",
         "spectral",
+        "spectrophotometry",
         "map",
         "scene",
         "field",
