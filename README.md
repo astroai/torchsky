@@ -3,7 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/torchsky.svg)](https://pypi.org/project/torchsky/)
 [![Wheels build](https://github.com/sfabbro/torchsky/actions/workflows/build_wheels.yml/badge.svg)](https://github.com/sfabbro/torchsky/actions/workflows/build_wheels.yml)
 [![CI status](https://github.com/sfabbro/torchsky/actions/workflows/ci.yml/badge.svg)](https://github.com/sfabbro/torchsky/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/License-GPL--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 `torchsky` is a **high-performance, torch-native astronomy stack** for
 survey-scale coordinates, spherical geometry, catalog indexing, mapmaking,
@@ -202,4 +202,4 @@ For more information, see the [Contributing Guide](docs/contributing.md).
 
 ## License
 
-`torchsky` is licensed under the [GNU GPL v2.0-only](LICENSE).
+`torchsky` is licensed under the [MIT License](LICENSE).
