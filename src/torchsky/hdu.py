@@ -1,4 +1,4 @@
-"""HDU types delegated to the torchfits 0.7 public boundary."""
+"""HDU types delegated to the torchfits 0.8 public boundary."""
 
 from __future__ import annotations
 

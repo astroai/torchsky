@@ -37,7 +37,7 @@ requires-python = ">=3.12,<3.15"
 dependencies = [
     "torch>=2.0.0",
     "numpy>=1.20.0",  # Core numerical operations
-    "torchfits>=0.7.0",  # FITS I/O (CFITSIO bindings, table interchange, HDU layer)
+    "torchfits>=0.8.0",  # Public table helpers used by the torchsky boundary.
 ]
 
 [project.urls]
@@ -171,5 +171,4 @@ markers = [
 "benchmarks/**/*.py" = ["E402"]
 "tests/test_map_smacs0723_stackers.py" = ["E402"]
 "tests/test_map_smacs0723_stackers_band_sweep.py" = ["E402"]
-
 

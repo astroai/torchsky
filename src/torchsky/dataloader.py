@@ -14,7 +14,7 @@ from torch.utils.data import (
 
 from torchfits.data import FitsImageDataset, FitsImageIterableDataset
 
-# torchsky compatibility aliases; torchfits 0.7 exposes only the explicit
+# torchsky compatibility aliases; torchfits 0.8 exposes only the explicit
 # ``Fits*Dataset`` names.
 FITSDataset = FitsImageDataset
 IterableFITSDataset = FitsImageIterableDataset

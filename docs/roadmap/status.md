@@ -199,7 +199,7 @@ cleanup, operator correctness, scalable indexing, and measured bottlenecks.
 - Pre-push: `pixi run ci-local`.
 - Package boundary: no FITS implementation modules, CFITSIO/zlib linkage, or
   FITS-owned benchmarks in torchsky; integration smoke against the supported
-  `torchfits 0.7.x` range.
+  `torchfits 0.8.x` range.
 - FITS/table I/O behavior and throughput changes: validate in the `torchfits`
   repository.
 - WCS/sphere claims: `pixi run wcs-sphere-acceptance` plus focused parity tests

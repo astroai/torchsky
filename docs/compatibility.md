@@ -58,7 +58,7 @@ FITS I/O parity, compression, checksum, HDU, table, and throughput matrices
 live in `torchfits`. Duplicating those matrices in torchsky would blur ownership
 and waste CI. Torchsky validates only that decoded data and metadata cross the
 boundary without changing WCS/map/catalog semantics. The supported
-cross-package baseline is `torchfits 0.7.0` or newer.
+cross-package baseline is `torchfits 0.8.0` or newer.
 
 ### Real-Data Reference Fixtures
 

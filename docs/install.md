@@ -19,7 +19,7 @@ table I/O is required:
 pip install torchsky torchfits
 ```
 
-The supported integration baseline is `torchfits 0.7.0` or newer. Use the
+The supported integration baseline is `torchfits 0.8.0` or newer. Use the
 released package or a local checkout for combined-stack validation; the
 cross-repository contract gate exercises the `torchfits.data` dataset names.
 
