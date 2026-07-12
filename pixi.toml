@@ -182,7 +182,10 @@ sphere-bench-pipeline-gate = "pixi run -e sphere-bench python benchmarks/bench_p
 python = ">=3.12,<3.14"
 
 [feature.prod.pypi-dependencies]
-torchfits = ">=0.8.0"
+# Keep the local multi-repository environment on the same public boundary as
+# the package metadata. CANFAR replaces this relative path with the immutable
+# staged torchfits 0.8 source/artifact before promotion.
+torchfits = { path = "../torchfits", editable = true }
 
 # Test feature with comparison libraries
 [feature.test.dependencies]
