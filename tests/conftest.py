@@ -33,9 +33,9 @@ def pytest_configure(config) -> None:
 def _clear_torchsky_native_io_handles_after_test():
     yield
     table_mod = sys.modules.get("torchsky.table")
-    close_handles = getattr(table_mod, "_close_all_cached_handles", None)
-    if close_handles is not None:
-        close_handles()
+    clear_cache = getattr(table_mod, "clear_cache", None)
+    if clear_cache is not None:
+        clear_cache()
 
     try:
         import torchfits

@@ -412,6 +412,7 @@ def test_spherical_polygon_intersects_matches_upstream_difficult_pairs() -> None
     SGP is None or SG_ROOT_DIR is None,
     reason="spherical-geometry fixtures not available",
 )
+@pytest.mark.performance
 def test_upstream_polygon_replay_gate_small() -> None:
     root = Path(__file__).resolve().parents[1]
     if str(root) not in sys.path:

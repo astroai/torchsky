@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -281,7 +282,7 @@ def test_run_coadd_dry_run_does_not_execute_mapmaker(monkeypatch, tmp_path) -> N
     def fail_run(*args, **kwargs):
         raise AssertionError("ImagePlaneMapMaker should not run during dry-run")
 
-    monkeypatch.setattr(map_command.ImagePlaneMapMaker, "run", fail_run)
+    monkeypatch.setattr(map_command, "stack_map_product", fail_run)
 
     args = argparse.Namespace(
         inputs=[str(path)],
@@ -340,6 +341,7 @@ def test_run_inr_single_uses_reference_header(monkeypatch, tmp_path) -> None:
     written: dict[str, object] = {}
 
     monkeypatch.setattr(map_command, "read", fake_read)
+    monkeypatch.setattr("torchsky.map.image_plane.read", fake_read)
     monkeypatch.setattr(
         map_command,
         "_paths_to_field_observations",
@@ -354,13 +356,25 @@ def test_run_inr_single_uses_reference_header(monkeypatch, tmp_path) -> None:
             "transmission_center": 1.5,
         },
     )
-    monkeypatch.setattr(map_command, "estimate_field_domain", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        map_command,
+        "estimate_field_domain",
+        lambda *args, **kwargs: SimpleNamespace(
+            center_ra_deg=0.0,
+            center_dec_deg=0.0,
+            spatial_scale_deg=1.0,
+            wavelength_center=1.5,
+            wavelength_scale=0.5,
+        ),
+    )
     monkeypatch.setattr(map_command, "make_field_model", lambda *args, **kwargs: TinyModel())
     monkeypatch.setattr(map_command, "fit_field_model", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         map_command,
-        "render_field_observation",
-        lambda model, obs, **kwargs: torch.ones_like(obs.image),
+        "render_field_product",
+        lambda model, product, **kwargs: SimpleNamespace(
+            data=torch.ones((1, *product.shape)), header=product.target_header
+        ),
     )
     monkeypatch.setattr(
         map_command,
@@ -417,6 +431,7 @@ def test_run_inr_single_dry_run_skips_fit(monkeypatch, tmp_path) -> None:
         return image
 
     monkeypatch.setattr(map_command, "read", fake_read)
+    monkeypatch.setattr("torchsky.map.image_plane.read", fake_read)
     monkeypatch.setattr(
         map_command,
         "_paths_to_field_observations",

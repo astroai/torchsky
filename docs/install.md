@@ -12,16 +12,14 @@ pip install torchsky
 
 Pre-built wheels are available for Linux (x86_64, aarch64) and macOS (x86_64,
 arm64). Torchsky does not own or bundle CFITSIO. Install
-[`torchfits`](https://github.com/sfabbro/torchfits) separately when FITS file or
-table I/O is required:
+[`torchfits`](https://github.com/astroai/torchfits) for FITS file and table I/O:
 
 ```bash
 pip install torchsky torchfits
 ```
 
-The supported published integration baseline is `torchfits 0.7.0` or newer.
-Torchsky supplies compatibility shims for the table and WHERE helpers that
-become public in the forthcoming 0.8 line.
+The supported integration baseline is `torchfits 0.8.0` or newer. Torchsky
+keeps thin compatibility import paths for one migration release.
 
 Requires Python **>=3.12,<3.15** and [PyTorch](https://pytorch.org/) 2.0+.
 

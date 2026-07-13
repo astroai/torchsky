@@ -30,7 +30,9 @@ def _coerce_torch_dtype(dtype: Any) -> torch.dtype:
     return torch.as_tensor([], dtype=dtype).dtype
 
 
-def _canonicalize_pixels_values(pixels: Tensor, values: Tensor) -> tuple[Tensor, Tensor]:
+def _canonicalize_pixels_values(
+    pixels: Tensor, values: Tensor
+) -> tuple[Tensor, Tensor]:
     """Sort sparse pixels and keep the last value supplied for duplicates."""
     if pixels.numel() == 0:
         return pixels, values
@@ -87,9 +89,7 @@ class SparseHealpixMap:
             raise ValueError("Size of last dimension of values must match pixels")
         if self.pixels.device != self.values.device:
             self.pixels = self.pixels.to(device=self.values.device)
-        self.pixels, self.values = _canonicalize_pixels_values(
-            self.pixels, self.values
-        )
+        self.pixels, self.values = _canonicalize_pixels_values(self.pixels, self.values)
         if self.nside_coverage is not None:
             self.nside_coverage = int(self.nside_coverage)
             _validate_nside_coverage(int(self.nside), self.nside_coverage)
@@ -810,7 +810,9 @@ class SparseHealpixMap:
             "EXTNAME": "SPARSE",
         }
         if self.nside_coverage:
-            header["NSIDE_COV"] = self.nside_coverage
+            # NSIDECOV is the eight-character HEALPix convention; longer FITS
+            # keywords require HIERARCH parsing that not every reader preserves.
+            header["NSIDECOV"] = self.nside_coverage
 
         reserved_keys = {
             "NSIDE",
@@ -818,6 +820,7 @@ class SparseHealpixMap:
             "SENTINEL",
             "EXTNAME",
             "NSIDE_COV",
+            "NSIDECOV",
             "SIMPLE",
             "BITPIX",
             "NAXIS",
@@ -861,7 +864,14 @@ class SparseHealpixMap:
         nest = str(hdr.get("ORDERING", "NEST")).strip() == "NEST"
         fv_raw = hdr.get("SENTINEL", float(_healpix.UNSEEN))
         fv = float(fv_raw) if fv_raw is not None else float(_healpix.UNSEEN)
-        ns_cov = hdr.get("NSIDE_COV")
+        ns_cov = hdr.get("NSIDECOV", hdr.get("NSIDE_COV"))
+        legacy_hierarch = hdr.get("HIERARCH")
+        legacy_nside_cov = isinstance(
+            legacy_hierarch, str
+        ) and legacy_hierarch.lstrip().startswith("NSIDE_COV")
+        if ns_cov is None and legacy_nside_cov:
+            _, _, ns_cov = legacy_hierarch.partition("=")
+            ns_cov = ns_cov.strip()
         ns_cov_i = int(ns_cov) if ns_cov is not None else None
 
         standard_keys = {
@@ -882,6 +892,7 @@ class SparseHealpixMap:
             "ORDERING",
             "SENTINEL",
             "NSIDE_COV",
+            "NSIDECOV",
             "TFORM1",
             "TFORM2",
             "TTYPE1",
@@ -894,6 +905,7 @@ class SparseHealpixMap:
             k_upper = str(k).upper()
             if (
                 k_upper not in standard_keys
+                and not (k_upper == "HIERARCH" and legacy_nside_cov)
                 and not k_upper.startswith("TTYPE")
                 and not k_upper.startswith("TFORM")
                 and not k_upper.startswith("TUNIT")

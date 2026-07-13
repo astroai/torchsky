@@ -16,20 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   observation operators, mapmaking, scenes, and field models.
 - Residual root I/O and `torchsky.io` / `torchsky.table` surfaces are migration
   debt pending removal or thin deprecation-only delegation.
-- The supported integration baseline is `torchfits 0.8.0` or newer; dataset
-  classes are imported from `torchfits.data`.
+- The supported integration baseline is `torchfits 0.8.0` or newer;
+  dataset classes are imported from `torchfits.data`.
 
 ### Added
 - **py.typed**: PEP 561 type-checker marker for downstream type inference.
-- **Incorporated legacy `torchfits` v0.3.2 changes into `torchsky`**:
-  - **Secure where parser** (`_where.py`): Replaced `numexpr.evaluate`/`eval()` fallback in `TableHDU.filter` and table filtering with a secure SQL-like expression parser; `&`/`|`/`~` shimmed to `AND`/`OR`/`NOT`.
-  - **HealSparse/real-data validation tests**: `test_healsparse_upstream.py`, `test_real_data_validation.py`, `test_security_fix.py`, `test_header_parser.py`.
-  - **Benchmark validation**: local and public FITS parity validation coverage through tests and maintained benchmark gates.
-  - **Additional tests**: `test_fitsio_upstream_smoke.py`, `test_logging.py` from the legacy `torchfits` codebase.
 
-### Fixed
-- **Security**: `TableHDU.filter` no longer uses `eval()` or `numexpr.evaluate`; code injection attempts now raise `ValueError`.
-- **BSCALE/BZERO**: Relaxed float32 tolerance to `atol=1e-4` in scaled image validation tests.
+### Removed
+- FITS image/table/checksum implementation tests and benchmarks now owned by
+  `torchfits`.
+- The private WHERE parser fallback; table filtering delegates to the public
+  `torchfits.table` API.
 
 ### Performance
 - **sphere/spectral.py**: O(1) `alm_size` via closed-form formula; precision fixes in harmonic primitives (`(ell-1)**2` → explicit multiplication).

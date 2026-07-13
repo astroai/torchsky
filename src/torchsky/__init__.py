@@ -59,7 +59,6 @@ _INTERNAL_ATTRS: dict[str, tuple[str, str | None]] = {
     "open_subset_reader": ("torchsky.io.fits", "open_subset_reader"),
     "read_batch": ("torchsky.io.fits", "read_batch"),
     "get_batch_info": ("torchsky.io.fits", "get_batch_info"),
-    "read_large_table": ("torchsky.io.fits", "read_large_table"),
     "stream_table": ("torchsky.io.fits", "stream_table"),
     "insert_hdu": ("torchsky.io.fits", "insert_hdu"),
     "replace_hdu": ("torchsky.io.fits", "replace_hdu"),
@@ -111,14 +110,13 @@ _INTERNAL_ATTRS: dict[str, tuple[str, str | None]] = {
         "create_validation_transform",
     ),
     "fast_parse_header": ("torchsky.header_parser", "fast_parse_header"),
-    "configure_for_environment": ("torchsky.cache", "configure_for_environment"),
-    "get_cache_stats": ("torchsky.cache", "get_cache_stats"),
-    "clear_cache": ("torchsky.cache", "clear_cache"),
+    "configure_for_environment": ("torchfits.cache", "configure_for_environment"),
+    "get_cache_stats": ("torchfits.cache", "get_cache_stats"),
+    "clear_cache": ("torchfits.cache", "clear_cache"),
     "to_arrow": ("torchfits.interop", "to_arrow"),
     "to_pandas": ("torchfits.interop", "to_pandas"),
     "_invalidate_path_caches": ("torchsky.io.fits", "_invalidate_path_caches"),
     "_resolve_image_mmap": ("torchsky.io.fits", "_resolve_image_mmap"),
-    "_where": ("torchsky._where", None),
 }
 
 __all__ = tuple(
@@ -149,7 +147,7 @@ def _ensure_runtime_init() -> None:
     if _RUNTIME_INITIALIZED:
         return
 
-    cache = import_module("torchsky.cache")
+    cache = import_module("torchfits.cache")
     cache.configure_for_environment()
 
     _RUNTIME_INITIALIZED = True

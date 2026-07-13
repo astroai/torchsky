@@ -16,9 +16,9 @@ class TestFitsImageDataset:
         assert dataset.hdu == 1
         assert len(dataset) == 2
 
-    @patch("torchfits.read_tensor")
-    def test_getitem_and_transform(self, mock_read_tensor):
-        mock_read_tensor.return_value = torch.tensor([[1, 2]])
+    @patch("torchfits.read")
+    def test_getitem_and_transform(self, mock_read):
+        mock_read.return_value = torch.tensor([[1, 2]])
         dataset = FitsImageDataset(
             ["file1.fits"], labels=[7], transform=lambda image: image + 1
         )
@@ -27,8 +27,8 @@ class TestFitsImageDataset:
 
         assert torch.equal(image, torch.tensor([[[2, 3]]]))
         assert torch.equal(label, torch.tensor(7))
-        mock_read_tensor.assert_called_once_with(
-            "file1.fits", hdu=0, device="cpu", mmap=True
+        mock_read.assert_called_once_with(
+            "file1.fits", hdu=0, mode="image", device="cpu", mmap=True
         )
 
     def test_out_of_bounds(self):
@@ -47,9 +47,9 @@ class TestFitsImageIterableDataset:
         assert dataset.files == ["file1.fits"]
         assert dataset.hdu == 2
 
-    @patch("torchfits.read_tensor")
-    def test_iteration_and_transform(self, mock_read_tensor):
-        mock_read_tensor.return_value = torch.tensor([1, 2, 3])
+    @patch("torchfits.read")
+    def test_iteration_and_transform(self, mock_read):
+        mock_read.return_value = torch.tensor([1, 2, 3])
         dataset = FitsImageIterableDataset(
             ["file0.fits", "file1.fits"], transform=lambda image: image + 1
         )
@@ -58,7 +58,7 @@ class TestFitsImageIterableDataset:
 
         assert len(items) == 2
         assert all(torch.equal(item, torch.tensor([2, 3, 4])) for item in items)
-        assert mock_read_tensor.call_count == 2
+        assert mock_read.call_count == 2
 
     @patch("torch.utils.data.get_worker_info")
     def test_worker_sharding(self, mock_worker_info):
@@ -66,7 +66,7 @@ class TestFitsImageIterableDataset:
         mock_worker_info.return_value = worker
         dataset = FitsImageIterableDataset(["file0.fits", "file1.fits", "file2.fits"])
 
-        with patch("torchfits.read_tensor", return_value=torch.ones(2)) as read:
+        with patch("torchfits.read", return_value=torch.ones(2)) as read:
             list(dataset)
 
         assert [call.args[0] for call in read.call_args_list] == ["file2.fits"]

@@ -97,15 +97,9 @@ pixi run ci-local
 
 ## Benchmarks
 
-Quick regression check:
-
-```bash
-pixi run bench-fast
-```
-
 For investigation, narrow scope with domain-specific tasks such as `bench-wcs`,
 `bench-sphere`, and `bench-map-acceptance-smoke`. `bench-all` is
-comprehensive and can take over an hour on a laptop-class machine.
+comprehensive and belongs on CANFAR for resource-intensive runs.
 
 ## Documentation Policy
 

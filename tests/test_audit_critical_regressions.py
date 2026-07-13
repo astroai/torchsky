@@ -1,9 +1,7 @@
 """Regression tests for historically critical correctness issues (see AUDIT_REPORT.md).
 
-These guard against:
-  * ``MOC.flatten`` dense mask living on a different device than UNIQ pixels.
-  * FITS complex-column plumbing treating ``_COMPLEX_DTYPE_MAP`` as a mere code set
-    (must remain a mapping for dtype lookup).
+These guard against ``MOC.flatten`` placing its dense mask on a different
+device than the UNIQ pixels.
 """
 
 from __future__ import annotations
@@ -32,8 +30,3 @@ def test_moc_flatten_dense_mask_matches_uniq_device_cuda() -> None:
     mask = moc.flatten(4)
     assert mask.device.type == "cuda"
     assert mask.device == moc.uniq.device
-
-
-@pytest.mark.skip("_COMPLEX_DTYPE_MAP and _COMPLEX_TFORM_CODS moved to torchfits internals")
-def test_complex_tform_map_remains_subscriptable_after_update_rows() -> None:
-    pass

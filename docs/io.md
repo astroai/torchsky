@@ -1,7 +1,7 @@
 # FITS I/O Boundary
 
 FITS file and table I/O is owned by
-[`torchfits`](https://github.com/sfabbro/torchfits). `torchsky` does not define a
+[`torchfits`](https://github.com/astroai/torchfits). `torchsky` does not define a
 second FITS backend. Its compute APIs consume tensors, FITS-like header
 mappings, masks, weights, and streamed table batches.
 
@@ -18,7 +18,7 @@ or come from another storage system.
 
 ## Version Contract
 
-The supported published integration baseline is `torchfits 0.7.0` or newer. Dataset
+The supported integration baseline is `torchfits 0.8.0` or newer. Dataset
 classes live under `torchfits.data`; use `FitsImageDataset`,
 `FitsImageIterableDataset`, `FitsTableDataset`, or
 `FitsTableIterableDataset` rather than removed root-level legacy aliases.
@@ -90,7 +90,7 @@ No new behavior should be added to those namespaces.
 ## Validation And Performance
 
 - FITS image/table correctness and throughput are validated in `torchfits`.
-- `torchsky` keeps one integration gate covering the published `torchfits 0.7.x`
+- `torchsky` keeps one integration gate covering the supported `torchfits 0.8.x`
   output passed into WCS/map/catalog computation; 0.8 adds optimized helpers.
 - End-to-end torchsky benchmarks start after data is decoded, but must still
   report transfer volume and device movement when those affect the workflow.

@@ -10,7 +10,7 @@ The goal is **not** to match every internal detail of upstream packages. The int
 |------|-------------------|-------------------------|
 | HEALPix pixel + harmonic API | **healpy**, **hpgeom** (strict queries), **astropy-healpix** | `torchsky.sphere.healpix`, `torchsky.sphere.compat`, `torchsky.sphere.healpy` (alias); spectral transforms are torch-native—compare to healpy in tests/benchmarks only |
 | WCS / projections | **Astropy** `astropy.wcs`, FITS WCS | `torchsky.wcs.WCS`, C++/fused paths; parity tests vs Astropy where scoped |
-| FITS I/O & tables | **fitsio**, **Astropy** `io.fits` / tables | [`torchfits`](https://github.com/sfabbro/torchfits); out of scope for torchsky |
+| FITS I/O & tables | **fitsio**, **Astropy** `io.fits` / tables | [`torchfits`](https://github.com/astroai/torchfits); out of scope for torchsky |
 | Spherical geometry / polygons | **spherical_geometry**, **astropy-healpix** (where applicable) | `torchsky.sphere` and `torchsky.sphere.geom`; exact regions and benchmarks vs upstream fixtures |
 | Catalogs / coordinates | **Astropy** `SkyCoord`, etc. | Compatibility-oriented tests and helpers where explicitly maintained |
 

@@ -110,7 +110,11 @@ def build_weight_product(
 def quality_bit_names(value: int | QualityBit) -> frozenset[str]:
     """Decode a bitset into stable public names."""
     integer = int(value)
-    return frozenset(bit.name for bit in QualityBit if integer & int(bit))
+    return frozenset(
+        bit.name
+        for bit in QualityBit
+        if bit.name is not None and integer & int(bit)
+    )
 
 
 def quality_bits_from_names(

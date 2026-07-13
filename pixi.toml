@@ -74,17 +74,8 @@ release-manual = "twine upload dist/*"
 
 # Core benchmarks (essential)
 bench = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --scope all"
-bench-fits = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --fits-only"
-bench-fitstable = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --fitstable-only"
 bench-wcs = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --wcs-only"
 bench-sphere = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --sphere-only"
-bench-fast = "pixi run -e bench python benchmarks/bench_fast.py --output benchmark_results/fast_results.csv"
-bench-fast-stable = "pixi run -e bench python benchmarks/bench_fast.py --output benchmark_results/fast_results.csv --torch-threads 1 --compressed-repeats 3"
-bench-core = "pixi run -e bench python benchmarks/bench_fast.py"
-bench-table = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --fitstable-only"
-bench-table-arrow = "pixi run -e bench python benchmarks/bench_arrow_tables.py"
-bench-table-arrow-diverse = "pixi run -e bench python benchmarks/bench_arrow_tables_diverse.py"
-bench-ml-loader = "pixi run -e bench python benchmarks/bench_ml_loader.py"
 bench-map-image-plane = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_image_plane.py --json-out benchmark_results/map_image_plane.json"
 bench-map-compat = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_compat.py --json-out benchmark_results/map_compat.json"
 bench-map-ground-truth = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_ground_truth.py --json-out benchmark_results/map_ground_truth.json"
@@ -134,8 +125,7 @@ bench-all = "pixi run -e bench-all python benchmarks/bench_all.py --profile user
 bench-all-keep = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --scope all --keep-temp"
 bench-all-force = "pixi run -e bench-all python benchmarks/bench_all.py --profile lab --scope all"
 bench-transforms = "pixi run -e bench python benchmarks/bench_transforms.py"
-bench-cache = "pixi run -e bench python benchmarks/bench_cache.py"
-bench-focused = "pixi run -e bench python benchmarks/bench_transforms.py && pixi run -e bench python benchmarks/bench_cache.py"
+bench-focused = "pixi run -e bench python benchmarks/bench_transforms.py"
 
 # Pytest-based benchmarking
 bench-pytest = "pytest benchmarks/ --benchmark-only"
@@ -182,7 +172,7 @@ sphere-bench-pipeline-gate = "pixi run -e sphere-bench python benchmarks/bench_p
 python = ">=3.12,<3.14"
 
 [feature.prod.pypi-dependencies]
-torchfits = "==0.7.0"
+torchfits = "==0.8.0"
 
 # Test feature with comparison libraries
 [feature.test.dependencies]

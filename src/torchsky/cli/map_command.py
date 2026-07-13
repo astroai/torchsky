@@ -317,7 +317,7 @@ def _run_coadd(args: argparse.Namespace) -> int:
         )
     ]
 
-    if args.sky:
+    if getattr(args, "sky", False):
         print(
             "torchsky map: --sky is no longer built into the coadd pipeline. "
             "Pre-compute per-exposure backgrounds (e.g. via the MegaCam benchmark "
@@ -329,13 +329,21 @@ def _run_coadd(args: argparse.Namespace) -> int:
         _, rh = read(str(args.reference), hdu=args.reference_hdu, return_header=True, device=read_dev)
         ref_header = dict(rh)
 
+    union_footprint = bool(getattr(args, "union_footprint", False))
+    reference_index = int(args.plan_reference)
+    if not union_footprint and not 0 <= reference_index < len(observations):
+        raise SystemExit(
+            f"--plan-reference {reference_index} out of range for "
+            f"{len(observations)} observations"
+        )
+
     product = plan_map_product(
         observations,
-        reference_index=int(args.plan_reference),
+        reference_index=reference_index,
         header_overrides=ref_header,
-        union_footprint=bool(args.union_footprint),
-        footprint_padding=float(args.footprint_padding),
-        max_footprint_pixels=args.max_footprint_pixels,
+        union_footprint=union_footprint,
+        footprint_padding=float(getattr(args, "footprint_padding", 1.0)),
+        max_footprint_pixels=getattr(args, "max_footprint_pixels", None),
         value_semantics=args.value_semantics,
         device=args.device,
     )
@@ -538,9 +546,9 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         image_obs,
         bands=[band_spec],
         header_overrides=ref_header,
-        union_footprint=bool(args.union_footprint),
-        footprint_padding=float(args.footprint_padding),
-        max_footprint_pixels=args.max_footprint_pixels,
+        union_footprint=bool(getattr(args, "union_footprint", False)),
+        footprint_padding=float(getattr(args, "footprint_padding", 1.0)),
+        max_footprint_pixels=getattr(args, "max_footprint_pixels", None),
         value_semantics="surface_brightness",
         device=args.device,
     )
@@ -559,7 +567,7 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         print(
             f"torchsky map: dry-run output_shape={h}×{w} method=inr "
             f"model={args.inr_model} band={band} render_tiled={render_tiled} "
-            f"observations={n_obs} steps={args.inr_steps} "
+            f"observations={n_obs} steps={getattr(args, 'inr_steps', 0)} "
             f"device={torch.device(args.device) if args.device else default_compute_device()}",
             file=sys.stderr,
         )

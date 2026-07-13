@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 import torch
 
+pytestmark = pytest.mark.performance
+
 pytest.importorskip("torchsky.cpp")
 
 import torchsky  # noqa: E402

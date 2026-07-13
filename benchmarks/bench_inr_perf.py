@@ -107,12 +107,8 @@ def _gaussian_blur(image: torch.Tensor, sigma_pix: float) -> torch.Tensor:
     kernel_x = kernel.view(1, 1, 1, -1)
     kernel_y = kernel.view(1, 1, -1, 1)
     out = image.unsqueeze(0).unsqueeze(0)
-    out = torch.nn.functional.conv2d(
-        out, kernel_x, padding=(0, kernel.numel() // 2)
-    )
-    out = torch.nn.functional.conv2d(
-        out, kernel_y, padding=(kernel.numel() // 2, 0)
-    )
+    out = torch.nn.functional.conv2d(out, kernel_x, padding=(0, kernel.numel() // 2))
+    out = torch.nn.functional.conv2d(out, kernel_y, padding=(kernel.numel() // 2, 0))
     return out.squeeze(0).squeeze(0)
 
 
@@ -249,10 +245,7 @@ def _render_truth_to_observation(
     ).reshape(h, w)
 
     in_bounds = (
-        (px >= 0.0)
-        & (px <= float(src_w - 1))
-        & (py >= 0.0)
-        & (py <= float(src_h - 1))
+        (px >= 0.0) & (px <= float(src_w - 1)) & (py >= 0.0) & (py <= float(src_h - 1))
     )
     signal = torch.where(in_bounds, sampled, torch.zeros_like(sampled))
 
@@ -279,8 +272,10 @@ def build_perf_observations(
     # Build truth on a common target grid
     th, tw = spec.target_pixels
     truth_header = _make_tangent_header(
-        ra=180.0, dec=0.0,
-        naxis1=tw, naxis2=th,
+        ra=180.0,
+        dec=0.0,
+        naxis1=tw,
+        naxis2=th,
         cd_scale=max(spec.cd_scale_deg * 0.5, 0.002),
     )
     truth_image = build_truth_image(truth_header).to(device=dev)
@@ -354,7 +349,12 @@ def measure_training_throughput(
     device: torch.device | str | None = None,
 ) -> TrainingThroughput:
     """Run a full fit_field_model benchmark and return throughput metrics."""
-    dev = torch.device(device) if isinstance(device, str) else (device or default_compute_device())
+    torch.manual_seed(int(spec.synthetic_seed))
+    dev = (
+        torch.device(device)
+        if isinstance(device, str)
+        else (device or default_compute_device())
+    )
 
     observations = build_perf_observations(spec, device=dev)
     domain = estimate_domain_from_observations(observations)
@@ -477,7 +477,9 @@ def _ssim(pred: Tensor, target: Tensor, *, window_size: int = 11) -> float:
     )
     sigma_targ_sq = (
         torch.nn.functional.conv2d(
-            (target * target).view(1, 1, *target.shape), kernel, padding=window_size // 2
+            (target * target).view(1, 1, *target.shape),
+            kernel,
+            padding=window_size // 2,
         )
         - mu_targ_sq
     )
@@ -488,10 +490,9 @@ def _ssim(pred: Tensor, target: Tensor, *, window_size: int = 11) -> float:
         - mu_pred_targ
     )
 
-    ssim_map = (
-        (2.0 * mu_pred_targ + C1)
-        * (2.0 * sigma_pred_targ + C2)
-    ) / ((mu_pred_sq + mu_targ_sq + C1) * (sigma_pred_sq + sigma_targ_sq + C2))
+    ssim_map = ((2.0 * mu_pred_targ + C1) * (2.0 * sigma_pred_targ + C2)) / (
+        (mu_pred_sq + mu_targ_sq + C1) * (sigma_pred_sq + sigma_targ_sq + C2)
+    )
 
     return float(ssim_map.mean().item())
 
@@ -506,13 +507,19 @@ def measure_render_quality(
     Uses SWarp if available; falls back to a simple weighted-mean coadd.
     Both are compared against the synthetic ground truth.
     """
-    dev = torch.device(device) if isinstance(device, str) else (device or default_compute_device())
+    dev = (
+        torch.device(device)
+        if isinstance(device, str)
+        else (device or default_compute_device())
+    )
 
     # Build truth on the target grid
     th, tw = spec.target_pixels
     truth_header = _make_tangent_header(
-        ra=180.0, dec=0.0,
-        naxis1=tw, naxis2=th,
+        ra=180.0,
+        dec=0.0,
+        naxis1=tw,
+        naxis2=th,
         cd_scale=max(spec.cd_scale_deg * 0.5, 0.002),
     )
     truth_image = build_truth_image(truth_header).to(device=dev)
@@ -552,9 +559,7 @@ def measure_render_quality(
         torch.cuda.synchronize()
     t0 = time.perf_counter()
     with torch.no_grad():
-        inr_render = render_field_observation(
-            model, target_obs, num_spectral_samples=9
-        )
+        inr_render = render_field_observation(model, target_obs, num_spectral_samples=9)
     if dev.type == "cuda":
         torch.cuda.synchronize()
     inr_duration = time.perf_counter() - t0
@@ -565,8 +570,7 @@ def measure_render_quality(
     coadd_library: str = "none"
 
     swarp_available = (
-        _map_compat is not None
-        and _map_compat._find_swarp_binary() is not None
+        _map_compat is not None and _map_compat._find_swarp_binary() is not None
     )
 
     if swarp_available:
@@ -595,7 +599,9 @@ def measure_render_quality(
                     device=dev,
                 )
                 img_path = tmpdir / f"coadd_obs_{i}.fits"
-                torchsky.write(str(img_path), clean.cpu(), header=obs_header, overwrite=True)
+                torchsky.write(
+                    str(img_path), clean.cpu(), header=obs_header, overwrite=True
+                )
                 obs_list.append(ImageObservation(str(img_path)))
 
             if dev.type == "cuda":
@@ -748,7 +754,7 @@ def main() -> None:
             print(
                 f"{tp_data['case']:40s}  {tp_data['device']:6s}  "
                 f"{tp_data['steps_per_sec']:8.1f} step/s  "
-                f"{tp_data['pixels_per_sec']/1e6:8.1f} Mpix/s  "
+                f"{tp_data['pixels_per_sec'] / 1e6:8.1f} Mpix/s  "
                 f"loss {tp_data['initial_loss']:.4f}→{tp_data['final_loss']:.4f}"
             )
             print(

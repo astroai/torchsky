@@ -1,12 +1,10 @@
 # torchsky Benchmarks
 
-> FITS image/table I/O benchmarks have moved to
-> [`torchfits`](https://github.com/sfabbro/torchfits). References below to
-> `bench_fits_io.py`, `bench_fitstable_io.py`, `bench-fits`, or historical FITS
-> scorecards document the pre-split repository and are not active torchsky
-> ownership. They will be removed with the residual implementation.
+> FITS image/table I/O benchmarks live in
+> [`torchfits`](https://github.com/astroai/torchfits). Torchsky benchmarks begin
+> with decoded tensors or Arrow batches.
 
-torchsky is benchmarked for both **correctness** and **throughput** against upstream libraries across four domains. This page documents the methodology, comparator environments, real-data benchmark setup, how to reproduce the results, and historical release snapshots.
+torchsky is benchmarked for both **correctness** and **throughput** against upstream libraries across WCS, sphere, catalog, map, and field workloads. This page documents the methodology, comparator environments, real-data benchmark setup, and how to reproduce the results.
 
 Record installed comparator versions with `pixi run bench-comparator-versions-all` (writes under `benchmarks_results/`).
 
@@ -14,7 +12,7 @@ Record installed comparator versions with `pixi run bench-comparator-versions-al
 
 Full local runs write to gitignored `benchmarks_results/<run_id>/`. To keep a
 compact, diff-friendly history in the repo, archive a snapshot after a
-representative four-domain sweep:
+representative WCS/sphere sweep:
 
 ```bash
 pixi run bench-archive-scorecard -- \
@@ -162,17 +160,9 @@ artifacts unless a baseline is deliberately reviewed and committed.
 
 | Script | Description |
 |--------|-------------|
-| `bench_all.py` | Legacy orchestrator being narrowed to torchsky-owned WCS and sphere domains. |
-| `bench_fits_io.py` | Migrated to `torchfits`; residual copy pending removal. |
-| `bench_fitstable_io.py` | Migrated to `torchfits`; residual copy pending removal. |
+| `bench_all.py` | WCS and sphere benchmark orchestrator. |
 | `bench_wcs_suite.py` | Authoritative WCS projection sweep runner with forward+inverse and `N={1k..10M}` tiers. |
 | `bench_sphere_suite.py` | Authoritative sphere-domain runner aggregating geometry/advanced/sparse/spectral/polygon/core benches. |
-| `bench_legacy_all.py` | Legacy monolithic exhaustive harness (opt-in only, no longer default contract). |
-| `bench_ml_loader.py` | End-to-end DataLoader throughput benchmark (uncompressed + compressed). |
-| `bench_fast.py` | Fast regression loop for image-path changes. |
-| `bench_compressed.py` | Compressed FITS image benchmark for RICE/HCOMPRESS tuning. |
-| `bench_table.py` | FITS table-path read/scan/column access checks. |
-| `bench_arrow_tables.py` | Arrow conversion benchmark for table workloads. |
 | `bench_map_image_plane.py` | Image-plane mapmaking benchmark covering synthetic identical/shifted WCS coadds, a synthetic low-overlap TPV MEF case, a grouped synthetic multi-band compatibility cube, a header-derived planned spectral-cube row on a shared target grid, plus both single-HDU and generated MEF real Astropy SIP FITS cases in identical-WCS and shifted-WCS variants, including overlap and footprint diagnostics. |
 | `bench_updec_webb_real.py` | Real-data smoke benchmark on public UPdec-Webb JWST SMACS J0723 products. It compares the published iteration-0 Drizzle product against the iteration-10 UPDC product on the same WCS grid, reports product-format details plus same-grid delta and sharpness ratios, and can auto-download selected public bands from NADC. |
 | `bench_map_smacs0723_real.py` | Real-exposure JWST SMACS J0723 smoke benchmark. It coadds local public NIRCam exposures onto a cropped target grid derived from the published F277W Drizzle product, preferring local `*_crf.fits` inputs when present and falling back to `*_cal.fits`, then reports support-domain agreement against that real reference patch. The current real JWST path also accepts `drizzle_point` / `drizzle_square` plus explicit `--drizzle-pixfrac` so the in-tree map code can be compared against the published drizzle contract directly. |
@@ -256,19 +246,15 @@ Every benchmark run produces three artifacts in `benchmarks_results/<run_id>/`:
 ### Full suite
 
 ```bash
-# Contract run (all four domains)
+# Contract run (WCS and sphere)
 pixi run bench-all
 
 # Exact scope aliases
-pixi run bench-fits       # == pixi run bench-all -- --fits-only
-pixi run bench-fitstable  # == pixi run bench-all -- --fitstable-only
 pixi run bench-wcs        # == pixi run bench-all -- --wcs-only
 pixi run bench-sphere     # == pixi run bench-all -- --sphere-only
 
 # Direct CLI (equivalent)
 pixi run -e bench-all -- python benchmarks/bench_all.py --scope all
-pixi run -e bench-all -- python benchmarks/bench_all.py --fits-only
-pixi run -e bench-all -- python benchmarks/bench_all.py --fitstable-only
 pixi run -e bench-all -- python benchmarks/bench_all.py --wcs-only
 pixi run -e bench-all -- python benchmarks/bench_all.py --sphere-only
 
@@ -277,15 +263,6 @@ pixi run -e bench-all -- python benchmarks/bench_all.py --sphere-only
 #   - results.csv
 #   - torchsky_deficits.csv
 #   - summary.md
-
-# Fast optimization gate
-pixi run bench-fast
-
-# Compressed-path run
-pixi run -e bench -- python benchmarks/bench_compressed.py
-
-# ML loader throughput run
-pixi run -e bench -- python benchmarks/bench_ml_loader.py --device cpu --shape 2048,2048 --n-files 50 --batch-size 4 --num-workers 4 --epochs 3 --repeats 5 --warm-cache
 
 # Image-plane mapmaking run (synthetic + real FITS fixture; native extension required)
 pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_image_plane.py --size 512 --n-obs 4 --runs 5 --footprint-order 8
@@ -683,34 +660,14 @@ pixi run sphere-bench-geometry-gate-small
 ### Parallel by domain
 
 ```bash
-pixi run bench-fits &             # FITS image I/O
-pixi run bench-fitstable &        # FITS table I/O
 pixi run bench-wcs &              # WCS projections
 pixi run bench-sphere &           # HEALPix + harmonics + polygons
 wait
 ```
 
-### Partitioned FITS (for large case counts)
-
-```bash
-pixi run -e bench-all python benchmarks/bench_all.py --scope fits --filter '^(tiny_)'
-pixi run -e bench-all python benchmarks/bench_all.py --scope fits --filter '^(small_)'
-pixi run -e bench-all python benchmarks/bench_all.py --scope fits --filter '^(medium_|large_)'
-pixi run -e bench-all python benchmarks/bench_all.py --scope fits --filter '^(scaled_|compressed_|mef_)'
-```
-
 ### Specialized runs
 
 ```bash
-# Fast regression gate (10 cases, early-stop)
-pixi run bench-fast
-
-# ML DataLoader throughput
-pixi run -e bench -- python benchmarks/bench_ml_loader.py --device cpu --shape 2048,2048 --n-files 50 --batch-size 4 --num-workers 4 --epochs 3 --repeats 5
-
-# Compressed image stability
-pixi run -e bench -- python benchmarks/bench_compressed.py
-
 # Cross-library sphere geometry ecosystem snapshot
 pixi run sphere-bench-geometry-ecosystem
 ```
@@ -893,13 +850,9 @@ Win rate: **88.9%** (16/18). Large-N: **100%** (13/13). Two deficits listed belo
 
 | Script | Domain | Description |
 |---|---|---|
-| `bench_all.py` | all | Four-domain orchestrator |
-| `bench_fits_io.py` | fits | Image I/O across dtypes, sizes, compression |
-| `bench_fitstable_io.py` | fitstable | Table I/O across row counts, schemas, operations |
+| `bench_all.py` | wcs/sphere | WCS and sphere orchestrator |
 | `bench_wcs_suite.py` | wcs | Projection sweep, forward + inverse, N = 1K &ndash; 10M |
 | `bench_sphere_suite.py` | sphere | Aggregates geometry, advanced, sparse, spectral, polygon benchmarks |
-| `bench_ml_loader.py` | fits | End-to-end DataLoader throughput |
-| `bench_compressed.py` | fits | Compressed-image benchmark |
 | `bench_wcs.py` | wcs | WCS throughput with parity gates |
 | `bench_wcs_spectral_temporal.py` | wcs | Comparator-only spectral FITS-WCS algorithm and temporal scale-conversion benchmark against Astropy/WCSLIB |
 | `bench_wcs_tabular.py` | wcs | Coupled FITS `-TAB` lookup/WCS forward and ambiguity-safe inverse throughput |
@@ -1017,15 +970,3 @@ Run metadata:
 - **Sphere (Spin Transforms)**: `map2alm_spin` and `alm2map_spin` show ~6x-7x lag vs `healpy`. These will be optimized with a custom RING-Fouier kernel.
 - **WCS (Small-N)**: Some forward small-N rows still lag vs `pyast` (legacy), especially away from the center-equator projections. `bench_wcs.py` now tracks the CPU center-helper crossover explicitly through `center_cpp_*` fields for `AIT/CAR/CEA/HPX/MER/SFL`. The CPU fused path (`TORCHSKY_WCS_FUSED=1`) includes **ARC** alongside TAN/SIN and the other supported codes; re-profile after native extension rebuilds. For torchsky-vs-Astropy timing on **two-arg vs stacked `(N,2)` vs `compile()`** for both **pixel→world and world→pixel**, use `bench_wcs_small_n_paths.py`; pytest gates stacked and compiled-stacked parity (forward and inverse) in `tests/test_wcs_parity.py`.
 - **ZPN/AIT Projections**: Slight visible deficits in intermediate size tiers.
-
-## Historical ML Loader Snapshot (0.3.0)
-
-Command used:
-
-```bash
-pixi run -e bench -- python benchmarks/bench_ml_loader.py --device cpu --shape 2048,2048 --n-files 50 --batch-size 4 --num-workers 4 --epochs 3 --repeats 5 --warm-cache
-```
-
-Results (Median of 5 runs):
-- Uncompressed: `0.985x` (vs `fitsio + numpy`)
-- Compressed (RICE): `1.008x` (vs `fitsio`)

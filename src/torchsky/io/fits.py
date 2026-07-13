@@ -43,23 +43,6 @@ read_table = torchfits.read_table
 read_hdus = torchfits.read_hdus
 read_subset = torchfits.read_subset
 read_batch = torchfits.read_batch
-# read_large_table in the pre-boundary torchfits API is replaced by read_table_rows;
-# wrap it with the convenience surface torchsky callers expect.
-
-
-def read_large_table(
-    file_path: str,
-    hdu: int = 1,
-    max_memory_mb: int = 100,
-    streaming: bool = False,
-    return_iterator: bool = False,
-) -> Any:
-    return torchfits.read_table_rows(
-        file_path,
-        hdu=hdu, max_memory_mb=max_memory_mb,
-        streaming=streaming, return_iterator=return_iterator,
-    )
-
 open_subset_reader = torchfits.open_subset_reader
 stream_table = torchfits.stream_table
 delete_hdu = torchfits.delete_hdu
@@ -101,7 +84,6 @@ __all__ = [
     "read_fast",
     "read_hdus",
     "read_image",
-    "read_large_table",
     "read_subset",
     "read_table",
     "replace_hdu",

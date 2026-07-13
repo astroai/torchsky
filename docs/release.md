@@ -42,18 +42,10 @@ tasks and documentation in the same change before making them release blockers.
 
 ## 5. Benchmark evidence
 
-Run the exhaustive benchmark suite:
+Run the WCS/sphere benchmark suite on CANFAR:
 
 ```bash
 pixi run bench-all
-```
-
-Run the ML loader benchmark:
-
-```bash
-pixi run -e bench -- python benchmarks/bench_ml_loader.py \
-  --device cpu --shape 2048,2048 --n-files 50 \
-  --batch-size 4 --num-workers 4 --epochs 3 --repeats 5 --warm-cache
 ```
 
 Update `docs/benchmarks.md` with the run ID, date, and snapshot tables.

@@ -1,11 +1,11 @@
 # FITS Tables And Catalog Batches
 
 FITS table I/O is owned by
-[`torchfits.table`](https://github.com/sfabbro/torchfits). The former
+[`torchfits.table`](https://github.com/astroai/torchfits). The former
 `torchsky.table` implementation is not a torchsky roadmap surface.
-The supported integration baseline is `torchfits 0.8.0` or newer; verify exact
-scan/read signatures against its API docs before treating the examples below as
-stable.
+The supported integration baseline is `torchfits 0.8.0` or newer;
+verify exact scan/read signatures against its API docs before treating the
+examples below as stable.
 
 Use `torchfits.table` for:
 
@@ -41,8 +41,9 @@ for batch in torchfits.table.scan(
 ```
 
 The batch boundary must preserve row order, null/mask semantics, units, dtype,
-and device placement. `torchsky` must not depend on a particular dataframe
-implementation in its core compute paths.
+and device placement. Arrow is the interchange boundary and Polars is the
+supported dataframe surface. The optional `torchsky.frame` adapter is only for
+explicit `torch_frame` ML workflows; core compute paths do not depend on it.
 
 ## Scale And Performance Policy
 

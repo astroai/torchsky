@@ -2,17 +2,13 @@
   "include": [
     "src/torchsky/__init__.py",
     "src/torchsky/header_parser.py",
-    "src/torchsky/surfaces.py"
+    "src/torchsky/quality.py",
+    "src/torchsky/spectrophotometry.py"
   ],
   "typeCheckingMode": "basic",
   "reportMissingImports": "warning",
   "reportMissingTypeStubs": "none",
   "pythonVersion": "3.12",
   "pythonPlatform": "All",
-  "useLibraryCodeForTypes": false,
-  "comment": [
-    "Expansion plan (audit §5.2): add modules as type coverage improves.",
-    "Next candidates: spectral/, transforms/, catalogs/, encoders/, buffer/, cache/.",
-    "wcs/, sphere/, map/, field/ need non-trivial annotation work first."
-  ]
+  "useLibraryCodeForTypes": false
 }

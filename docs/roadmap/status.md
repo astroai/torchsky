@@ -14,7 +14,7 @@ operators, differentiable scene/field rendering, and cross-device execution
 where the module claims it.
 
 FITS image/table I/O has moved back to
-[`torchfits`](https://github.com/sfabbro/torchfits). `torchsky` consumes tensors,
+[`torchfits`](https://github.com/astroai/torchfits). `torchsky` consumes tensors,
 header mappings, masks/weights, and streamed table batches. It does not own
 CFITSIO, FITS HDU machinery, compression, checksums, file caches, or FITS table
 mutation.

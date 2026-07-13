@@ -21,6 +21,7 @@ import pytest
 import torch
 
 BENCHMARKS = Path(__file__).resolve().parents[1] / "benchmarks"
+pytestmark = pytest.mark.performance
 
 
 def _load_benchmark_module(name: str, filename: str):
@@ -50,7 +51,9 @@ def test_inr_training_reduces_loss(case_name: str) -> None:
     spec = next(c for c in _inr_perf.DEFAULT_PERF_CASES if c.name == case_name)
     tp = _inr_perf.measure_training_throughput(spec, device="cpu")
 
-    assert tp.initial_loss > 0.0, f"initial_loss must be positive, got {tp.initial_loss}"
+    assert tp.initial_loss > 0.0, (
+        f"initial_loss must be positive, got {tp.initial_loss}"
+    )
     assert tp.final_loss > 0.0, f"final_loss must be positive, got {tp.final_loss}"
     assert tp.final_loss < tp.initial_loss, (
         f"loss must improve: {tp.initial_loss:.4f} → {tp.final_loss:.4f}"
@@ -59,7 +62,9 @@ def test_inr_training_reduces_loss(case_name: str) -> None:
         f"loss_improvement_ratio {tp.loss_improvement_ratio:.2f} must be > 1.01"
     )
     assert tp.steps_per_sec > 0.0, f"steps_per_sec {tp.steps_per_sec} must be positive"
-    assert tp.pixels_per_sec > 0.0, f"pixels_per_sec {tp.pixels_per_sec} must be positive"
+    assert tp.pixels_per_sec > 0.0, (
+        f"pixels_per_sec {tp.pixels_per_sec} must be positive"
+    )
     assert tp.num_params > 0, f"num_params {tp.num_params} must be positive"
 
 
@@ -127,7 +132,9 @@ def test_perf_specs_are_well_formed() -> None:
         assert spec.steps > 0, f"{spec.name}: steps must be positive"
         assert spec.lr > 0.0, f"{spec.name}: lr must be positive"
         assert spec.patch_size > 0, f"{spec.name}: patch_size must be positive"
-        assert spec.patches_per_obs > 0, f"{spec.name}: patches_per_obs must be positive"
+        assert spec.patches_per_obs > 0, (
+            f"{spec.name}: patches_per_obs must be positive"
+        )
         assert spec.obs_per_step > 0, f"{spec.name}: obs_per_step must be positive"
         assert spec.target_pixels[0] > 0 and spec.target_pixels[1] > 0
         assert spec.num_observation_images > 0
@@ -150,7 +157,9 @@ def test_inr_perf_exports_public_api() -> None:
         "measure_training_throughput",
     }
     actual = set(_inr_perf.__all__)
-    assert expected == actual, f"__all__ mismatch: missing {expected - actual}, extra {actual - expected}"
+    assert expected == actual, (
+        f"__all__ mismatch: missing {expected - actual}, extra {actual - expected}"
+    )
 
 
 # ── Coadd vs INR quality regression ───────────────────────────────────
@@ -175,7 +184,9 @@ def test_inr_coadd_comparison() -> None:
 
     # Both INR and coadd quality metrics must be finite
     assert math.isfinite(rq.inr_psnr_vs_truth_db), "INR vs truth PSNR must be finite"
-    assert math.isfinite(rq.coadd_psnr_vs_truth_db), "coadd vs truth PSNR must be finite"
+    assert math.isfinite(rq.coadd_psnr_vs_truth_db), (
+        "coadd vs truth PSNR must be finite"
+    )
     assert math.isfinite(rq.inr_ssim_vs_truth), "INR vs truth SSIM must be finite"
     assert math.isfinite(rq.coadd_ssim_vs_truth), "coadd vs truth SSIM must be finite"
 
@@ -204,8 +215,7 @@ def test_inr_coadd_comparison() -> None:
 
 
 @pytest.mark.skipif(
-    _inr_perf._map_compat is None
-    or _inr_perf._map_compat._find_swarp_binary() is None,
+    _inr_perf._map_compat is None or _inr_perf._map_compat._find_swarp_binary() is None,
     reason="SWarp binary not installed or not on PATH",
 )
 def test_inr_swarp_parity() -> None:
@@ -227,9 +237,7 @@ def test_inr_swarp_parity() -> None:
     assert math.isfinite(rq.coadd_psnr_vs_truth_db), (
         "coadd vs truth PSNR must be finite"
     )
-    assert math.isfinite(rq.coadd_ssim_vs_truth), (
-        "coadd vs truth SSIM must be finite"
-    )
+    assert math.isfinite(rq.coadd_ssim_vs_truth), "coadd vs truth SSIM must be finite"
     assert 0.0 <= rq.coadd_ssim_vs_truth <= 1.0, (
         f"coadd vs truth SSIM {rq.coadd_ssim_vs_truth} must be in [0, 1]"
     )
@@ -245,9 +253,7 @@ def test_inr_swarp_parity() -> None:
 
     # INR should also produce finite quality metrics (already tested in
     # test_inr_render_quality_vs_truth, but verify alongside SWarp here)
-    assert math.isfinite(rq.inr_psnr_vs_truth_db), (
-        "INR vs truth PSNR must be finite"
-    )
+    assert math.isfinite(rq.inr_psnr_vs_truth_db), "INR vs truth PSNR must be finite"
     assert 0.0 <= rq.inr_ssim_vs_truth <= 1.0, (
         f"INR vs truth SSIM {rq.inr_ssim_vs_truth} must be in [0, 1]"
     )

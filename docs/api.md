@@ -60,7 +60,7 @@ when you need programmatic API-surface metadata.
 - [`torchsky.field`](field.md)
 - [`torchsky.transforms`](ml.md)
 - [`torchsky.datasets`](ml.md)
-- [`torchsky.cache`](ml.md)
+- `torchsky.cache` is a compatibility alias for `torchfits.cache`.
 - [`torchsky.catalogs`](catalogs.md)
 - [`torchsky.spectral`](spectral.md)
 - [`torchsky.encoders`](encoders.md)
