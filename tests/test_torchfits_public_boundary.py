@@ -42,3 +42,9 @@ def test_table_boundary_keeps_compatibility_helpers_for_published_torchfits():
         "_column_name_index_map",
     ):
         assert hasattr(sky_table, name), name
+
+
+def test_hdu_boundary_does_not_reexport_tensor_frame():
+    import torchsky.hdu as hdu
+
+    assert not hasattr(hdu, "TensorFrame")

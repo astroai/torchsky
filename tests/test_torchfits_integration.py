@@ -8,7 +8,7 @@ def test_torchsky_read_dummy_via_torchfits() -> None:
     from torchsky.io import get_header
 
     hdr = get_header("tests/data/dummy.fits", 0)
-    assert dict(hdr)["SIMPLE"] == "T"
+    assert dict(hdr)["SIMPLE"] is True
 
 
 def test_torchsky_wcs_from_torchfits_header() -> None:

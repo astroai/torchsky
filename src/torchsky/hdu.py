@@ -17,7 +17,6 @@ TensorHDU = _fits_hdu.TensorHDU
 # surface aliases in torchsky, so object is the safe compatibility fallback.
 DataView = getattr(_fits_hdu, "DataView", object)
 TableDataAccessor = getattr(_fits_hdu, "TableDataAccessor", object)
-TensorFrame = getattr(_fits_hdu, "TensorFrame", object)
 
 
 @dataclass(frozen=True)
@@ -52,6 +51,5 @@ __all__ = [
     "TableDataAccessor",
     "TableHDU",
     "TableHDURef",
-    "TensorFrame",
     "TensorHDU",
 ]
