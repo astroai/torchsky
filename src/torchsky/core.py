@@ -1,4 +1,4 @@
-"""Compatibility view of the torchfits 0.8 checksum boundary."""
+"""Compatibility view of the published torchfits checksum boundary."""
 
 from torchfits.core import ChecksumVerifier as ChecksumVerifier
 

@@ -11,7 +11,7 @@ def test_torchsky_does_not_import_torchfits_private_modules():
     assert not offenders, "\n".join(offenders)
 
 
-def test_dataset_boundary_uses_torchfits_08_names():
+def test_dataset_boundary_uses_published_torchfits_names():
     from torchfits.data import FitsImageDataset, FitsImageIterableDataset
     from torchsky.datasets import (
         FITSDataset,
@@ -26,14 +26,19 @@ def test_dataset_boundary_uses_torchfits_08_names():
     assert IterableFITSDataset is FitsImageIterableDataset
 
 
-def test_table_boundary_uses_torchfits_08_public_helpers():
+def test_table_boundary_keeps_compatibility_helpers_for_published_torchfits():
+    import torchfits
     from torchfits import table as fits_table
+    from torchsky import table as sky_table
 
-    for name in (
-        "TABLE_BACKENDS",
-        "clear_cache",
-        "can_use_mmap_row_path_for_full_read",
-        "can_use_torch_table_path_for_full_read",
-        "column_name_index_map",
-    ):
+    major, minor, *_ = (int(part) for part in torchfits.__version__.split("."))
+    assert (major, minor) >= (0, 7)
+    for name in ("TABLE_BACKENDS", "read", "scan", "scan_torch"):
         assert hasattr(fits_table, name), name
+    for name in (
+        "clear_cache",
+        "_can_use_mmap_row_path_for_full_read",
+        "_can_use_torch_table_path_for_full_read",
+        "_column_name_index_map",
+    ):
+        assert hasattr(sky_table, name), name

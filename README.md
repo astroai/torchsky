@@ -13,9 +13,9 @@ FITS image and table I/O is provided by the focused
 [`torchfits`](https://github.com/sfabbro/torchfits) package. The boundary is
 intentional: `torchfits` loads tensors and metadata; `torchsky` performs
 sky-domain computation without embedding a second FITS/CFITSIO engine.
-The supported integration baseline is `torchfits 0.8.0` or newer. Dataset
-classes live under `torchfits.data`; the removed root-level legacy aliases are
-not used by torchsky.
+The supported published integration baseline is `torchfits 0.7.0` or newer.
+Torchsky supplies compatibility shims for table heuristics and WHERE parsing
+that become public in the forthcoming 0.8 line.
 
 ---
 
@@ -75,8 +75,9 @@ FITS files:
 pip install torchsky torchfits
 ```
 
-The supported integration baseline is `torchfits 0.8.0` or newer. Dataset
-classes are provided by `torchfits.data` rather than removed root-level aliases.
+The published integration baseline is `torchfits 0.7.0` or newer. Dataset
+classes are provided by `torchfits.data`; torchsky retains its own compatibility
+aliases for older downstream callers.
 
 ### Optional Extras
 

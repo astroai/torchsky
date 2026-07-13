@@ -1,4 +1,4 @@
-"""FITS header parser compatibility wrapper over torchfits 0.8."""
+"""FITS header parser compatibility wrapper over published torchfits."""
 
 import time
 from typing import Any

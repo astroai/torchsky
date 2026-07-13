@@ -19,9 +19,9 @@ table I/O is required:
 pip install torchsky torchfits
 ```
 
-The supported integration baseline is `torchfits 0.8.0` or newer. Use the
-released package or a local checkout for combined-stack validation; the
-cross-repository contract gate exercises the `torchfits.data` dataset names.
+The supported published integration baseline is `torchfits 0.7.0` or newer.
+Torchsky supplies compatibility shims for the table and WHERE helpers that
+become public in the forthcoming 0.8 line.
 
 Requires Python **>=3.12,<3.15** and [PyTorch](https://pytorch.org/) 2.0+.
 

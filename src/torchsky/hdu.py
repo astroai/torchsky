@@ -1,20 +1,23 @@
-"""HDU types delegated to the torchfits 0.8 public boundary."""
+"""HDU types delegated to the published torchfits public boundary."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
-from torchfits.hdu import (
-    DataView as DataView,
-    HDUList as HDUList,
-    Header as Header,
-    TableDataAccessor as TableDataAccessor,
-    TableHDU as TableHDU,
-    TableHDURef as TableHDURef,
-    TensorFrame as TensorFrame,
-    TensorHDU as TensorHDU,
-)
+import torchfits.hdu as _fits_hdu
+
+HDUList = _fits_hdu.HDUList
+Header = _fits_hdu.Header
+TableHDU = _fits_hdu.TableHDU
+TableHDURef = _fits_hdu.TableHDURef
+TensorHDU = _fits_hdu.TensorHDU
+
+# These names were added after the published 0.7 wheel.  They are only type
+# surface aliases in torchsky, so object is the safe compatibility fallback.
+DataView = getattr(_fits_hdu, "DataView", object)
+TableDataAccessor = getattr(_fits_hdu, "TableDataAccessor", object)
+TensorFrame = getattr(_fits_hdu, "TensorFrame", object)
 
 
 @dataclass(frozen=True)
