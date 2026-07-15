@@ -42,6 +42,7 @@ from torchsky.device import default_compute_device  # noqa: E402
 from torchsky.map import (  # noqa: E402
     FieldObservation,
     ImageObservation,
+    coadd_image_plane,
     estimate_field_domain,
     fit_field_model,
     make_field_model,
@@ -284,8 +285,8 @@ def build_perf_observations(
     for i in range(spec.num_observation_images):
         h, w = spec.image_size
         obs_header = _make_tangent_header(
-            ra=180.0 + float(i) * 2.0,
-            dec=float(i) * 1.5,
+            ra=180.0 + float(i) * 0.02,
+            dec=float(i) * 0.015,
             naxis1=w,
             naxis2=h,
             cd_scale=spec.cd_scale_deg,
@@ -504,9 +505,10 @@ def measure_render_quality(
 ) -> RenderQualityComparison:
     """Compare INR render against coadd baseline for a benchmark case.
 
-    Uses SWarp if available; falls back to a simple weighted-mean coadd.
+    Uses SWarp if available; falls back to Torchsky's native weighted-mean coadd.
     Both are compared against the synthetic ground truth.
     """
+    torch.manual_seed(int(spec.synthetic_seed))
     dev = (
         torch.device(device)
         if isinstance(device, str)
@@ -564,7 +566,7 @@ def measure_render_quality(
         torch.cuda.synchronize()
     inr_duration = time.perf_counter() - t0
 
-    # Coadd baseline: try SWarp first, fall back to noise-free truth projection
+    # Coadd baseline: try SWarp first, fall back to Torchsky's native coadd.
     coadd_image: torch.Tensor
     coadd_duration: float = 0.0
     coadd_library: str = "none"
@@ -573,42 +575,38 @@ def measure_render_quality(
         _map_compat is not None and _map_compat._find_swarp_binary() is not None
     )
 
-    if swarp_available:
-        with tempfile.TemporaryDirectory(prefix="torchsky_inr_swarp_") as tmp:
-            tmpdir = Path(tmp)
-            # Write noise-free observation images as FITS for SWarp
-            obs_list: list[ImageObservation] = []
-            for i in range(spec.num_observation_images):
-                h, w = spec.image_size
-                obs_header = _make_tangent_header(
-                    ra=180.0 + float(i) * 2.0,
-                    dec=float(i) * 1.5,
-                    naxis1=w,
-                    naxis2=h,
-                    cd_scale=spec.cd_scale_deg,
-                )
-                # Noise-free truth projection
-                clean = _render_truth_to_observation(
-                    truth_header,
-                    truth_image,
-                    obs_header,
-                    (h, w),
-                    psf_sigma_pix=spec.psf_sigma_pix,
-                    noise_sigma=0.0,  # noise-free for coadd
-                    seed=spec.synthetic_seed + i,
-                    device=dev,
-                )
-                img_path = tmpdir / f"coadd_obs_{i}.fits"
-                torchsky.write(
-                    str(img_path), clean.cpu(), header=obs_header, overwrite=True
-                )
-                obs_list.append(ImageObservation(str(img_path)))
+    with tempfile.TemporaryDirectory(prefix="torchsky_inr_coadd_") as tmp:
+        tmpdir = Path(tmp)
+        obs_list: list[ImageObservation] = []
+        for i in range(spec.num_observation_images):
+            h, w = spec.image_size
+            obs_header = _make_tangent_header(
+                ra=180.0 + float(i) * 0.02,
+                dec=float(i) * 0.015,
+                naxis1=w,
+                naxis2=h,
+                cd_scale=spec.cd_scale_deg,
+            )
+            clean = _render_truth_to_observation(
+                truth_header,
+                truth_image,
+                obs_header,
+                (h, w),
+                psf_sigma_pix=spec.psf_sigma_pix,
+                noise_sigma=0.0,
+                seed=spec.synthetic_seed + i,
+                device=dev,
+            )
+            img_path = tmpdir / f"coadd_obs_{i}.fits"
+            torchsky.write(str(img_path), clean.cpu(), header=obs_header, overwrite=True)
+            obs_list.append(ImageObservation(str(img_path)))
 
-            if dev.type == "cuda":
-                torch.cuda.synchronize()
-            t_sw = time.perf_counter()
+        if dev.type == "cuda":
+            torch.cuda.synchronize()
+        t_coadd = time.perf_counter()
+        if swarp_available:
             try:
-                coadd_np, weight_np = _map_compat._coadd_with_swarp(
+                coadd_np, _ = _map_compat._coadd_with_swarp(
                     obs_list,
                     target_header=truth_header,
                     resampling_type="BILINEAR",
@@ -616,16 +614,18 @@ def measure_render_quality(
                 coadd_image = torch.from_numpy(coadd_np).to(device=dev)
                 coadd_library = "swarp:bilinear"
             except Exception:
-                coadd_image = truth_image.clone()
-                coadd_library = "swarp_failed_fallback"
-            if dev.type == "cuda":
-                torch.cuda.synchronize()
-            coadd_duration = time.perf_counter() - t_sw
-    else:
-        # Fallback: use smoothed truth as "coadd" (noise-free ideal)
-        coadd_image = truth_image.clone()
-        coadd_library = "analytic_truth"
-        coadd_duration = 0.0
+                native = coadd_image_plane(
+                    obs_list, target_header=truth_header, device=dev
+                )
+                coadd_image = native.data
+                coadd_library = "torchsky:bilinear"
+        else:
+            native = coadd_image_plane(obs_list, target_header=truth_header, device=dev)
+            coadd_image = native.data
+            coadd_library = "torchsky:bilinear"
+        if dev.type == "cuda":
+            torch.cuda.synchronize()
+        coadd_duration = time.perf_counter() - t_coadd
 
     # Compute quality metrics vs truth
     inr_psnr_truth = _psnr(inr_render, truth_image)

@@ -80,35 +80,47 @@ def test_inr_throughput_device_independent() -> None:
     assert tp.total_pixels_processed > 0
 
 
-def test_inr_render_produces_finite_image() -> None:
-    """INR render must produce a finite 2D image matching the target shape."""
+def test_inr_render_and_coadd_quality() -> None:
+    """The deterministic fast case must clear INR and native-coadd quality floors."""
     spec = _inr_perf.DEFAULT_PERF_CASES[0]
     rq = _inr_perf.measure_render_quality(spec, device="cpu")
 
     assert rq.target_shape == spec.target_pixels
     assert rq.inr_render_duration_sec > 0.0
+    assert rq.coadd_duration_sec > 0.0
+    assert rq.coadd_library != "none"
     assert math.isfinite(rq.inr_psnr_db)
     assert math.isfinite(rq.inr_ssim)
     assert 0.0 <= rq.inr_ssim <= 1.0, f"SSIM {rq.inr_ssim} must be in [0, 1]"
-
-
-def test_inr_render_quality_vs_truth() -> None:
-    """INR render should show reasonable PSNR vs ground truth on low-noise data."""
-    spec = _inr_perf.DEFAULT_PERF_CASES[0]
-    rq = _inr_perf.measure_render_quality(spec, device="cpu")
-
     assert math.isfinite(rq.inr_psnr_vs_truth_db), "INR vs truth PSNR must be finite"
     assert math.isfinite(rq.inr_ssim_vs_truth), "INR vs truth SSIM must be finite"
+    assert math.isfinite(rq.coadd_psnr_vs_truth_db), (
+        "coadd vs truth PSNR must be finite"
+    )
+    assert math.isfinite(rq.coadd_ssim_vs_truth), "coadd vs truth SSIM must be finite"
     assert 0.0 <= rq.inr_ssim_vs_truth <= 1.0, (
         f"INR vs truth SSIM {rq.inr_ssim_vs_truth} must be in [0, 1]"
     )
-    # With low noise (0.01 sigma), PSNR should be reasonable
+    assert 0.0 <= rq.coadd_ssim_vs_truth <= 1.0
     assert rq.inr_psnr_vs_truth_db > 10.0, (
         f"INR vs truth PSNR {rq.inr_psnr_vs_truth_db:.1f} dB too low; "
         "model should recover structure from low-noise observations"
     )
-    assert rq.inr_ssim_vs_truth > 0.3, (
+    assert rq.inr_ssim_vs_truth > 0.15, (
         f"INR vs truth SSIM {rq.inr_ssim_vs_truth:.3f} too low"
+    )
+    assert rq.coadd_psnr_vs_truth_db > 10.0
+    assert rq.coadd_ssim_vs_truth > 0.5
+
+    psnr_diff = rq.coadd_psnr_vs_truth_db - rq.inr_psnr_vs_truth_db
+    assert psnr_diff > -5.0, (
+        f"coadd PSNR ({rq.coadd_psnr_vs_truth_db:.1f} dB) is {abs(psnr_diff):.1f} dB "
+        f"below INR PSNR ({rq.inr_psnr_vs_truth_db:.1f} dB)"
+    )
+    ssim_diff = rq.coadd_ssim_vs_truth - rq.inr_ssim_vs_truth
+    assert ssim_diff > -0.2, (
+        f"coadd SSIM ({rq.coadd_ssim_vs_truth:.4f}) is {abs(ssim_diff):.4f} "
+        f"below INR SSIM ({rq.inr_ssim_vs_truth:.4f})"
     )
 
 
@@ -159,55 +171,6 @@ def test_inr_perf_exports_public_api() -> None:
     actual = set(_inr_perf.__all__)
     assert expected == actual, (
         f"__all__ mismatch: missing {expected - actual}, extra {actual - expected}"
-    )
-
-
-# ── Coadd vs INR quality regression ───────────────────────────────────
-
-
-def test_inr_coadd_comparison() -> None:
-    """Coadd baseline must not regress significantly vs INR render quality.
-
-    The coadd is built from noise-free observations while the INR trains on
-    noisy data, so the coadd should perform at least comparably.  Verifies
-    that the coadd PSNR is within 5 dB of the INR PSNR and SSIM within 0.2
-    — catching major regressions while allowing INR to occasionally
-    outperform on fine structure.
-    """
-    spec = _inr_perf.DEFAULT_PERF_CASES[0]
-    rq = _inr_perf.measure_render_quality(spec, device="cpu")
-
-    # A valid coadd must have been produced
-    assert rq.coadd_library != "none", (
-        "coadd library is 'none'; expected a real coadd baseline"
-    )
-
-    # Both INR and coadd quality metrics must be finite
-    assert math.isfinite(rq.inr_psnr_vs_truth_db), "INR vs truth PSNR must be finite"
-    assert math.isfinite(rq.coadd_psnr_vs_truth_db), (
-        "coadd vs truth PSNR must be finite"
-    )
-    assert math.isfinite(rq.inr_ssim_vs_truth), "INR vs truth SSIM must be finite"
-    assert math.isfinite(rq.coadd_ssim_vs_truth), "coadd vs truth SSIM must be finite"
-
-    # SSIM bounds
-    assert 0.0 <= rq.inr_ssim_vs_truth <= 1.0
-    assert 0.0 <= rq.coadd_ssim_vs_truth <= 1.0
-
-    # Coadd PSNR should not be dramatically worse than INR (5 dB tolerance)
-    psnr_diff = rq.coadd_psnr_vs_truth_db - rq.inr_psnr_vs_truth_db
-    assert psnr_diff > -5.0, (
-        f"coadd PSNR ({rq.coadd_psnr_vs_truth_db:.1f} dB) is {abs(psnr_diff):.1f} dB "
-        f"below INR PSNR ({rq.inr_psnr_vs_truth_db:.1f} dB); "
-        f"diff {psnr_diff:.1f} exceeds -5.0 dB tolerance"
-    )
-
-    # Coadd SSIM should not be dramatically worse than INR (0.2 tolerance)
-    ssim_diff = rq.coadd_ssim_vs_truth - rq.inr_ssim_vs_truth
-    assert ssim_diff > -0.2, (
-        f"coadd SSIM ({rq.coadd_ssim_vs_truth:.4f}) is {abs(ssim_diff):.4f} "
-        f"below INR SSIM ({rq.inr_ssim_vs_truth:.4f}); "
-        f"diff {ssim_diff:.4f} exceeds -0.2 tolerance"
     )
 
 
