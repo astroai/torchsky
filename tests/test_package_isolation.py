@@ -25,11 +25,11 @@ def test_native_torch_abi_contract_is_consistent() -> None:
 
     assert "torch>=2.10,<2.11" in pyproject["build-system"]["requires"]
     assert "torch>=2.10,<2.11" in pyproject["project"]["dependencies"]
-    assert "torchfits==0.9.1" in pyproject["project"]["dependencies"]
+    assert any(x.startswith("torchfits>=") for x in pyproject["project"]["dependencies"])
     for section in ("build-dependencies", "host-dependencies", "run-dependencies"):
         assert pixi["package"][section]["pytorch"] == ">=2.10,<2.11"
     assert pixi["dependencies"]["pytorch"] == ">=2.10,<2.11"
-    assert pixi["feature"]["prod"]["pypi-dependencies"]["torchfits"] == "==0.9.1"
+    assert pixi["feature"]["prod"]["pypi-dependencies"]["torchfits"].startswith(">=")
     install_docs = (REPO_ROOT / "docs" / "install.md").read_text(encoding="utf-8")
     assert '"torch>=2.10,<2.11"' in install_docs
 

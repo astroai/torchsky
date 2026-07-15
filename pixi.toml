@@ -172,7 +172,7 @@ sphere-bench-pipeline-gate = "pixi run -e sphere-bench python benchmarks/bench_p
 python = ">=3.12,<3.14"
 
 [feature.prod.pypi-dependencies]
-torchfits = "==0.9.1"
+torchfits = ">=0.9.1"
 
 # Test feature with comparison libraries
 [feature.test.dependencies]
