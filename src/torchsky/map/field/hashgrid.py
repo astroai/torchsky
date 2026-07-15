@@ -7,7 +7,6 @@ from typing import Literal, Sequence
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch import Tensor
 
 
@@ -180,18 +179,29 @@ class HashGridEncoder(nn.Module):
 
 
 def sample_feature_plane(plane: Tensor, coord_u: Tensor, coord_v: Tensor) -> Tensor:
-    flat_u = coord_u.reshape(-1)
-    flat_v = coord_v.reshape(-1)
-    grid = torch.stack([2.0 * flat_u - 1.0, 2.0 * flat_v - 1.0], dim=-1)
-    grid = grid.view(1, -1, 1, 2).to(dtype=plane.dtype, device=plane.device)
-    sampled = F.grid_sample(
-        plane.unsqueeze(0),
-        grid,
-        mode="bilinear",
-        padding_mode="border",
-        align_corners=True,
+    height, width = int(plane.shape[-2]), int(plane.shape[-1])
+    flat_u = coord_u.reshape(-1).to(device=plane.device, dtype=plane.dtype)
+    flat_v = coord_v.reshape(-1).to(device=plane.device, dtype=plane.dtype)
+    x = flat_u.clamp(0.0, 1.0) * float(max(width - 1, 0))
+    y = flat_v.clamp(0.0, 1.0) * float(max(height - 1, 0))
+    x0 = torch.floor(x).to(dtype=torch.long)
+    y0 = torch.floor(y).to(dtype=torch.long)
+    x1 = (x0 + 1).clamp(max=width - 1)
+    y1 = (y0 + 1).clamp(max=height - 1)
+    wx = (x - x0.to(dtype=x.dtype)).unsqueeze(-1)
+    wy = (y - y0.to(dtype=y.dtype)).unsqueeze(-1)
+
+    flat_plane = plane.reshape(plane.shape[0], -1)
+    p00 = flat_plane[:, y0 * width + x0].transpose(0, 1)
+    p01 = flat_plane[:, y0 * width + x1].transpose(0, 1)
+    p10 = flat_plane[:, y1 * width + x0].transpose(0, 1)
+    p11 = flat_plane[:, y1 * width + x1].transpose(0, 1)
+    sampled = (
+        p00 * (1.0 - wx) * (1.0 - wy)
+        + p01 * wx * (1.0 - wy)
+        + p10 * (1.0 - wx) * wy
+        + p11 * wx * wy
     )
-    sampled = sampled.squeeze(0).squeeze(-1).transpose(0, 1)
     return sampled.reshape(*coord_u.shape, plane.shape[0])
 
 

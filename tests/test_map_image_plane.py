@@ -50,6 +50,30 @@ def _simple_header() -> dict:
     }
 
 
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
+def test_target_wcs_grids_mps_match_cpu() -> None:
+    wcs = torchsky.WCS(_simple_header())
+    ra_cpu, dec_cpu = windowing_mod._build_target_world_grid(
+        wcs, 8, 8, torch.device("cpu")
+    )
+    ra_mps, dec_mps = windowing_mod._build_target_world_grid(
+        wcs, 8, 8, torch.device("mps")
+    )
+    quad_cpu = windowing_mod._quadrature_target_world_grid(
+        wcs, (8, 8), device=torch.device("cpu"), offset_x=0.25, offset_y=-0.25
+    )
+    quad_mps = windowing_mod._quadrature_target_world_grid(
+        wcs, (8, 8), device=torch.device("mps"), offset_x=0.25, offset_y=-0.25
+    )
+
+    assert ra_mps.device.type == "mps"
+    assert dec_mps.device.type == "mps"
+    torch.testing.assert_close(ra_mps.cpu(), ra_cpu.to(dtype=torch.float32))
+    torch.testing.assert_close(dec_mps.cpu(), dec_cpu.to(dtype=torch.float32))
+    torch.testing.assert_close(quad_mps[0].cpu(), quad_cpu[0].to(dtype=torch.float32))
+    torch.testing.assert_close(quad_mps[1].cpu(), quad_cpu[1].to(dtype=torch.float32))
+
+
 def _astropy_sip_fixture() -> Path:
     import astropy
 

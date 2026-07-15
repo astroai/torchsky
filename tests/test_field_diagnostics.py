@@ -5,6 +5,7 @@ import warnings
 import pytest
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from torchsky import WCS
 from torchsky.map import (
@@ -28,6 +29,7 @@ from torchsky.map import (
     StrainerSkyEncoderMLPField,
 )
 from torchsky.map.field.core import _BaseFieldModel
+from torchsky.map.field.hashgrid import sample_feature_plane
 from torchsky.map.field.observation_ops import (
     coordinate_grid,
     observation_weight_sum_scalar,
@@ -267,6 +269,59 @@ def test_field_observation_coordinate_cache_tracks_header_mutation() -> None:
     assert observation._cached_coordinate_signature is not None
     assert not torch.allclose(ra_initial, ra_shifted)
     torch.testing.assert_close(dec_initial, dec_shifted, atol=2.0e-4, rtol=0.0)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
+def test_field_coordinate_grid_mps_matches_cpu() -> None:
+    header = _tan_header(5, crval1=150.0, crval2=2.0, scale_deg=0.01)
+    ra_cpu, dec_cpu = coordinate_grid(
+        header, shape=(5, 5), device=torch.device("cpu")
+    )
+    observation = FieldObservation(
+        image=torch.ones((5, 5), dtype=torch.float32),
+        header=header,
+        wavelength=5600.0,
+    )
+    ra_mps, dec_mps = coordinate_grid(
+        observation, shape=(5, 5), device=torch.device("mps")
+    )
+    ra_cached, dec_cached = coordinate_grid(
+        observation, shape=(5, 5), device=torch.device("mps")
+    )
+
+    assert ra_mps.device.type == "mps"
+    assert dec_mps.device.type == "mps"
+    torch.testing.assert_close(ra_mps.cpu(), ra_cpu.to(dtype=torch.float32))
+    torch.testing.assert_close(dec_mps.cpu(), dec_cpu.to(dtype=torch.float32))
+    torch.testing.assert_close(ra_cached.cpu(), ra_mps.cpu())
+    torch.testing.assert_close(dec_cached.cpu(), dec_mps.cpu())
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
+def test_feature_plane_mps_border_sampling_matches_cpu() -> None:
+    plane = torch.tensor([[[0.0, 1.0], [2.0, 3.0]]], requires_grad=True)
+    coord_u = torch.tensor([-0.5, 0.25, 1.5], requires_grad=True)
+    coord_v = torch.tensor([0.5, 0.75, -0.5], requires_grad=True)
+    grid = torch.stack([2.0 * coord_u - 1.0, 2.0 * coord_v - 1.0], dim=-1)
+    expected = F.grid_sample(
+        plane.unsqueeze(0),
+        grid.view(1, -1, 1, 2),
+        mode="bilinear",
+        padding_mode="border",
+        align_corners=True,
+    ).squeeze(0).squeeze(-1).transpose(0, 1)
+    expected.sum().backward()
+
+    plane_mps = plane.detach().to("mps").requires_grad_()
+    coord_u_mps = coord_u.detach().to("mps").requires_grad_()
+    coord_v_mps = coord_v.detach().to("mps").requires_grad_()
+    actual = sample_feature_plane(plane_mps, coord_u_mps, coord_v_mps)
+    actual.sum().backward()
+
+    torch.testing.assert_close(actual.cpu(), expected.detach())
+    torch.testing.assert_close(plane_mps.grad.cpu(), plane.grad)
+    torch.testing.assert_close(coord_u_mps.grad.cpu(), coord_u.grad)
+    torch.testing.assert_close(coord_v_mps.grad.cpu(), coord_v.grad)
 
 
 def test_field_quality_metrics_track_snr_and_sharpness() -> None:

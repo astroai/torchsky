@@ -46,13 +46,17 @@ def _build_target_world_grid(
     *,
     subsample: int = 1,
 ) -> tuple[Tensor, Tensor]:
+    grid_device = torch.device("cpu") if device.type == "mps" else device
     y, x = torch.meshgrid(
-        torch.arange(0, height, subsample, dtype=torch.float64, device=device),
-        torch.arange(0, width, subsample, dtype=torch.float64, device=device),
+        torch.arange(0, height, subsample, dtype=torch.float64, device=grid_device),
+        torch.arange(0, width, subsample, dtype=torch.float64, device=grid_device),
         indexing="ij",
     )
     ra, dec = target_wcs.pixel_to_world(x, y)
-    return ra, dec
+    output_dtype = torch.float32 if device.type == "mps" else ra.dtype
+    return ra.to(device=device, dtype=output_dtype), dec.to(
+        device=device, dtype=output_dtype
+    )
 
 
 def _spherical_cap_radius_from_world_grid(
@@ -82,12 +86,17 @@ def _quadrature_target_world_grid(
     offset_y: float,
 ) -> tuple[Tensor, Tensor]:
     height, width = int(shape[0]), int(shape[1])
+    grid_device = torch.device("cpu") if device.type == "mps" else device
     y, x = torch.meshgrid(
-        torch.arange(height, dtype=torch.float64, device=device) + float(offset_y),
-        torch.arange(width, dtype=torch.float64, device=device) + float(offset_x),
+        torch.arange(height, dtype=torch.float64, device=grid_device) + float(offset_y),
+        torch.arange(width, dtype=torch.float64, device=grid_device) + float(offset_x),
         indexing="ij",
     )
-    return target_wcs.pixel_to_world(x, y)
+    ra, dec = target_wcs.pixel_to_world(x, y)
+    output_dtype = torch.float32 if device.type == "mps" else ra.dtype
+    return ra.to(device=device, dtype=output_dtype), dec.to(
+        device=device, dtype=output_dtype
+    )
 
 
 def _quadrature_target_world_grids(

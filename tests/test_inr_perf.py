@@ -16,6 +16,7 @@ from __future__ import annotations
 import math
 import sys
 import importlib.util
+from dataclasses import replace
 from pathlib import Path
 import pytest
 import torch
@@ -37,6 +38,17 @@ def _load_benchmark_module(name: str, filename: str):
 
 
 _inr_perf = _load_benchmark_module("bench_inr_perf", "bench_inr_perf.py")
+_ACCELERATOR_SMOKE_SPEC = replace(
+    _inr_perf.DEFAULT_PERF_CASES[0],
+    steps=2,
+    patch_size=16,
+    patches_per_obs=1,
+    obs_per_step=1,
+    target_pixels=(32, 32),
+    num_observation_images=1,
+    image_size=(32, 32),
+    psf_sigma_pix=0.5,
+)
 
 
 # ── Throughput benchmark tests ────────────────────────────────────────
@@ -233,8 +245,7 @@ def test_inr_swarp_parity() -> None:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_inr_training_throughput_cuda() -> None:
     """INR training on CUDA should be measurable and produce correct metrics."""
-    spec = _inr_perf.DEFAULT_PERF_CASES[0]
-    tp = _inr_perf.measure_training_throughput(spec, device="cuda")
+    tp = _inr_perf.measure_training_throughput(_ACCELERATOR_SMOKE_SPEC, device="cuda")
 
     assert tp.device.startswith("cuda")
     assert tp.steps_per_sec > 0.0
@@ -245,8 +256,7 @@ def test_inr_training_throughput_cuda() -> None:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_inr_render_quality_cuda() -> None:
     """INR render on CUDA should produce valid quality metrics."""
-    spec = _inr_perf.DEFAULT_PERF_CASES[0]
-    rq = _inr_perf.measure_render_quality(spec, device="cuda")
+    rq = _inr_perf.measure_render_quality(_ACCELERATOR_SMOKE_SPEC, device="cuda")
 
     assert rq.device.startswith("cuda")
     assert math.isfinite(rq.inr_psnr_db)
@@ -265,8 +275,7 @@ def _mps_available() -> bool:
 @pytest.mark.skipif(not _mps_available(), reason="MPS not available")
 def test_inr_training_throughput_mps() -> None:
     """INR training on MPS should be measurable and produce correct metrics."""
-    spec = _inr_perf.DEFAULT_PERF_CASES[0]
-    tp = _inr_perf.measure_training_throughput(spec, device="mps")
+    tp = _inr_perf.measure_training_throughput(_ACCELERATOR_SMOKE_SPEC, device="mps")
 
     assert tp.device == "mps"
     assert tp.steps_per_sec > 0.0
@@ -277,8 +286,7 @@ def test_inr_training_throughput_mps() -> None:
 @pytest.mark.skipif(not _mps_available(), reason="MPS not available")
 def test_inr_render_quality_mps() -> None:
     """INR render on MPS should produce valid quality metrics."""
-    spec = _inr_perf.DEFAULT_PERF_CASES[0]
-    rq = _inr_perf.measure_render_quality(spec, device="mps")
+    rq = _inr_perf.measure_render_quality(_ACCELERATOR_SMOKE_SPEC, device="mps")
 
     assert rq.device == "mps"
     assert math.isfinite(rq.inr_psnr_db)

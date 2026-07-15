@@ -339,7 +339,13 @@ def coordinate_grid(
         cached_dec = observation_or_header._cached_dec_deg
         if cached_ra is not None and cached_dec is not None:
             if observation_or_header._cached_coordinate_signature == signature:
-                return cached_ra.to(device=device), cached_dec.to(device=device)
+                output_dtype = (
+                    torch.float32 if device.type == "mps" else cached_ra.dtype
+                )
+                return (
+                    cached_ra.to(device=device, dtype=output_dtype),
+                    cached_dec.to(device=device, dtype=output_dtype),
+                )
             observation_or_header.clear_coordinate_cache()
     else:
         signature = None
@@ -350,9 +356,10 @@ def coordinate_grid(
         else observation_or_header
     )
     height, width = header_shape(header, fallback=shape)
+    grid_device = torch.device("cpu") if device.type == "mps" else device
     y, x = torch.meshgrid(
-        torch.arange(height, dtype=torch.float64, device=device),
-        torch.arange(width, dtype=torch.float64, device=device),
+        torch.arange(height, dtype=torch.float64, device=grid_device),
+        torch.arange(width, dtype=torch.float64, device=grid_device),
         indexing="ij",
     )
     ra_deg, dec_deg = WCS(header).pixel_to_world(x, y)
@@ -362,7 +369,11 @@ def coordinate_grid(
         observation_or_header._cached_dec_deg = dec_deg.cpu()
         observation_or_header._cached_coordinate_signature = signature
 
-    return ra_deg, dec_deg
+    output_dtype = torch.float32 if device.type == "mps" else ra_deg.dtype
+    return (
+        ra_deg.to(device=device, dtype=output_dtype),
+        dec_deg.to(device=device, dtype=output_dtype),
+    )
 
 
 def apply_exposure_pose_to_sky_grid(
