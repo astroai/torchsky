@@ -1,0 +1,4 @@
+# Production PSF generation for scripts/smacs0723_wcs_aware_multiband_inr.py
+# Install inside the existing CUDA Pixi environment with:
+#   pixi run -e cuda python -m pip install -r requirements/wcs-aware-inr.txt
+stpsf==2.2.0
