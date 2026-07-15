@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torchfits`.
 - The private WHERE parser fallback; table filtering delegates to the public
   `torchfits.table` API.
+- The optional `torchsky.frame` / `pytorch-frame` adapter; Arrow and Polars are
+  the supported table interchange surfaces.
 
 ### Performance
 - **sphere/spectral.py**: O(1) `alm_size` via closed-form formula; precision fixes in harmonic primitives (`(ell-1)**2` → explicit multiplication).

@@ -88,3 +88,14 @@ def test_no_fits_implementation_in_python_source() -> None:
                     f"FITS implementation code found in {rel}: "
                     f"contains forbidden pattern '{pattern}'"
                 )
+
+
+def test_no_torch_frame_surface_or_dependency() -> None:
+    """Arrow/Polars are the table boundary; torch_frame is not supported."""
+    assert not (PACKAGE_ROOT / "frame.py").exists()
+    io_facade = (PACKAGE_ROOT / "io" / "__init__.py").read_text(encoding="utf-8")
+    for name in ("read_tensor_frame", "to_tensor_frame", "write_tensor_frame"):
+        assert name not in io_facade
+    for manifest in ("pyproject.toml", "pixi.toml"):
+        text = (REPO_ROOT / manifest).read_text(encoding="utf-8").lower()
+        assert "pytorch-frame" not in text

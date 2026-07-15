@@ -4972,8 +4972,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/webencodings-0.5.1-pyhd8ed1ab_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/widgetsnbextension-4.0.15-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
-      - pypi: https://files.pythonhosted.org/packages/0f/31/557a7bf6047553ccb0dec77c239bac5e8d70a9f336b98076f97322e156ab/pytorch_frame-0.3.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/22/2a/5e5e750890ada51017d18d0d4c30da696e5b5bd3180947729927628fc3cb/tqdm-4.68.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/23/16/9b40dd8b5ed2d8c32b8ff874148f340f221cf9048c9f0021b1b871fc5695/torchfits-0.9.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -5285,9 +5283,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
-      - pypi: https://files.pythonhosted.org/packages/0f/31/557a7bf6047553ccb0dec77c239bac5e8d70a9f336b98076f97322e156ab/pytorch_frame-0.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/66/b2/6d496de186e5ae2d92e13ebbbd34b4211a41017b91c9aa4e3b67e1999d3d/torchfits-0.9.1-cp313-cp313-macosx_11_0_arm64.whl
-      - pypi: https://files.pythonhosted.org/packages/d8/8e/bb97bb0c71802080bfc8952937d174e49cfc50de5c951dd47b2496f0dcdb/tqdm-4.68.3-py3-none-any.whl
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-7_kmp_llvm.conda
   build_number: 7
@@ -19962,32 +19958,6 @@ packages:
     - zstd >=1.5.7,<1.6.0a0
   size: 433413
   timestamp: 1764777166076
-- pypi: https://files.pythonhosted.org/packages/0f/31/557a7bf6047553ccb0dec77c239bac5e8d70a9f336b98076f97322e156ab/pytorch_frame-0.3.0-py3-none-any.whl
-  name: pytorch-frame
-  version: 0.3.0
-  sha256: 88916f53865230e4fe04c912ed774ac65f566b5b3424b43a80fe88beac63589f
-  requires_dist:
-  - numpy
-  - pandas
-  - torch
-  - tqdm
-  - pyarrow
-  - pillow
-  - pytorch-frame[test] ; extra == 'dev'
-  - pre-commit ; extra == 'dev'
-  - scikit-learn ; extra == 'full'
-  - xgboost>=1.7.0,<2.0.0 ; extra == 'full'
-  - optuna>=3.0.0 ; extra == 'full'
-  - optuna-integration ; extra == 'full'
-  - mpmath==1.3.0 ; extra == 'full'
-  - catboost ; extra == 'full'
-  - lightgbm ; extra == 'full'
-  - datasets ; extra == 'full'
-  - torchmetrics ; extra == 'full'
-  - pytest ; extra == 'test'
-  - pytest-cov ; extra == 'test'
-  - mypy ; extra == 'test'
-  requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/12/f0/24a3352a9ea58eac7ad12250fca475277a3a658a1cca35212564a4ef07e8/dfreproject-1.3.1-py3-none-any.whl
   name: dfreproject
   version: 1.3.1
@@ -20005,20 +19975,6 @@ packages:
   - matplotlib>=3.4.0 ; extra == 'docs'
   - sphinx-copybutton==0.5.2 ; extra == 'docs'
   - sphinx-nefertiti==0.8.10 ; extra == 'docs'
-  requires_python: '>=3.8'
-- pypi: https://files.pythonhosted.org/packages/22/2a/5e5e750890ada51017d18d0d4c30da696e5b5bd3180947729927628fc3cb/tqdm-4.68.4-py3-none-any.whl
-  name: tqdm
-  version: 4.68.4
-  sha256: 5168118b2368f48c561afda8020fd79195b1bdb0bdf8086b88442c267a315dc2
-  requires_dist:
-  - colorama ; sys_platform == 'win32'
-  - requests ; extra == 'discord'
-  - envwrap ; extra == 'discord'
-  - slack-sdk ; extra == 'slack'
-  - envwrap ; extra == 'slack'
-  - requests ; extra == 'telegram'
-  - envwrap ; extra == 'telegram'
-  - ipywidgets>=6 ; extra == 'notebook'
   requires_python: '>=3.8'
 - pypi: https://files.pythonhosted.org/packages/23/16/9b40dd8b5ed2d8c32b8ff874148f340f221cf9048c9f0021b1b871fc5695/torchfits-0.9.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
   name: torchfits
@@ -20174,20 +20130,6 @@ packages:
   - pytest-cov>=2.0 ; extra == 'test'
   - matplotlib>=3.0 ; extra == 'examples'
   requires_python: '>=3.10'
-- pypi: https://files.pythonhosted.org/packages/d8/8e/bb97bb0c71802080bfc8952937d174e49cfc50de5c951dd47b2496f0dcdb/tqdm-4.68.3-py3-none-any.whl
-  name: tqdm
-  version: 4.68.3
-  sha256: 39832cc2def2789a6f29df83f172db7416cea70052c0907a57801c5f2fdccb03
-  requires_dist:
-  - colorama ; sys_platform == 'win32'
-  - requests ; extra == 'discord'
-  - envwrap ; extra == 'discord'
-  - slack-sdk ; extra == 'slack'
-  - envwrap ; extra == 'slack'
-  - requests ; extra == 'telegram'
-  - envwrap ; extra == 'telegram'
-  - ipywidgets>=6 ; extra == 'notebook'
-  requires_python: '>=3.8'
 - pypi: https://files.pythonhosted.org/packages/fa/83/c0d4761161a3c308a451af7ee00c719a501aefabd5ac4e55088739029e75/drizzle-2.2.0-cp312-cp312-macosx_11_0_arm64.whl
   name: drizzle
   version: 2.2.0

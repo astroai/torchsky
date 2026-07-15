@@ -116,7 +116,6 @@ test = [
     "astropy>=5.0",
     "fitsio>=1.1",
     "pyright>=1.1.350",
-    "pytorch-frame>=0.2.0",
 ]
 examples = [
     "torchvision>=0.15.0",  # For MNIST example
