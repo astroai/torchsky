@@ -41,8 +41,8 @@ class ExposureCalibrationInput:
 
 @dataclass(frozen=True)
 class BandpassCalibration:
-    wavelength: Tensor
-    weight: Tensor
+    wavelength: Tensor  # [E, L]
+    weight: Tensor  # [E, L]
     metadata: list[dict[str, Any]]
 
 
@@ -95,7 +95,7 @@ def _read_two_column_curve(path: Path) -> tuple[np.ndarray, np.ndarray]:
     order = np.argsort(wavelength)
     wavelength = wavelength[order]
     throughput = throughput[order]
-    if float(wavelength.max()) < 100.0:
+    if float(wavelength.max()) < 100.0:  # official NIRCam tables are usually micron
         wavelength = wavelength * 1.0e4
     if float(throughput.max()) <= 0.0:
         raise ValueError(f"{path} has no positive throughput")
@@ -422,14 +422,19 @@ def _stpsf_stack(
     kernels: list[np.ndarray] = []
     for value in wavelength.detach().cpu().tolist():
         result = simulator.calc_psf(
-            monochromatic=float(value) * 1.0e-10,
+            monochromatic=float(value) * 1.0e-10,  # Angstrom -> metre
             fov_pixels=int(kernel_size),
             oversample=1,
         )
-        if extension not in result:
+        try:
+            kernel = np.array(result[extension].data, dtype=np.float32, copy=True)
+        except (KeyError, IndexError) as exc:
             names = [hdu.name for hdu in result]
-            raise KeyError(f"STPSF extension {extension!r} unavailable; found {names}")
-        kernel = np.asarray(result[extension].data, dtype=np.float32)
+            raise KeyError(
+                f"STPSF extension {extension!r} unavailable; found {names}"
+            ) from exc
+        finally:
+            result.close()
         kernel = np.clip(kernel, 0.0, None)
         mass = float(kernel.sum())
         if not math.isfinite(mass) or mass <= 0.0:
@@ -461,8 +466,8 @@ def build_psf_calibration(
         return PSFCalibration(None, [])
     if bandpass_wavelength.ndim != 2 or bandpass_wavelength.shape[0] != len(exposures):
         raise ValueError("bandpass_wavelength must have shape [E,L]")
-    if kernel_size % 2 != 1:
-        raise ValueError("kernel_size must be odd")
+    if kernel_size <= 0 or kernel_size % 2 != 1:
+        raise ValueError("kernel_size must be a positive odd integer")
     gaussian_fwhm_by_band = gaussian_fwhm_by_band or {}
     if cache_dir is not None:
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -534,6 +539,16 @@ def build_psf_calibration(
             info["source"] = str(cache)
         else:
             raise ValueError(f"unsupported PSF mode: {mode}")
+        array = np.asarray(array, dtype=np.float32)
+        if array.ndim != 3 or tuple(array.shape[-2:]) != (kernel_size, kernel_size):
+            raise ValueError(
+                f"PSF stack for {exposure.path.name} must have shape "
+                f"[L,{kernel_size},{kernel_size}], got {array.shape}"
+            )
+        # The core renderer evaluates neighboring scene samples with a
+        # correlation-style gather. Flip the optical impulse response so the
+        # resulting operation is the mathematical convolution K * S, including
+        # for asymmetric STPSF kernels.
         array = np.flip(np.asarray(array, dtype=np.float32), axis=(-2, -1)).copy()
         info["stored_kernel_orientation"] = "flipped_for_convolution"
         stacks.append(torch.as_tensor(array, dtype=torch.float32))
