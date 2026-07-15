@@ -41,8 +41,8 @@ class ExposureCalibrationInput:
 
 @dataclass(frozen=True)
 class BandpassCalibration:
-    wavelength: Tensor  # [E, L]
-    weight: Tensor  # [E, L]
+    wavelength: Tensor
+    weight: Tensor
     metadata: list[dict[str, Any]]
 
 
@@ -57,6 +57,20 @@ def normalize_detector(value: str | None) -> str:
         return ""
     token = str(value).strip().upper().replace(" ", "")
     return {"NRCALONG": "NRCA5", "NRCBLONG": "NRCB5"}.get(token, token)
+
+
+def _detector_aliases(detector: str) -> tuple[str, ...]:
+    detector = normalize_detector(detector)
+    aliases = {detector}
+    if detector.startswith("NRC") and len(detector) >= 5:
+        aliases.add(detector[3:])
+    if detector.endswith("5") and detector.startswith("NRCA"):
+        aliases.add("NRCALONG")
+        aliases.add("ALONG")
+    if detector.endswith("5") and detector.startswith("NRCB"):
+        aliases.add("NRCBLONG")
+        aliases.add("BLONG")
+    return tuple(sorted(alias for alias in aliases if alias))
 
 
 def _read_two_column_curve(path: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -110,13 +124,17 @@ def _manifest_curve(
     detector: str,
     allow_mean: bool,
 ) -> Path | None:
-    detector = normalize_detector(detector)
-    keys = [
-        f"{detector}/{band}",
-        f"{detector}:{band}",
-        f"{band}/{detector}",
-        f"{band}:{detector}",
-    ]
+    aliases = _detector_aliases(detector)
+    keys: list[str] = []
+    for alias in aliases:
+        keys.extend(
+            [
+                f"{alias}/{band}",
+                f"{alias}:{band}",
+                f"{band}/{alias}",
+                f"{band}:{alias}",
+            ]
+        )
     if allow_mean:
         keys.extend([band, f"MEAN/{band}", f"{band}/MEAN"])
     for key in keys:
@@ -133,6 +151,7 @@ def _discover_curve(
     allow_mean: bool,
 ) -> Path:
     detector = normalize_detector(detector)
+    aliases = _detector_aliases(detector)
     scored: list[tuple[int, str, Path]] = []
     for path in root.rglob("*"):
         if not path.is_file():
@@ -140,7 +159,7 @@ def _discover_curve(
         name = path.name.upper()
         if band not in name:
             continue
-        detector_match = bool(detector and detector in name)
+        detector_match = any(alias in name for alias in aliases)
         mean_match = "MEAN" in name or "AVERAGE" in name
         if not detector_match and not (allow_mean and mean_match):
             continue
@@ -190,10 +209,12 @@ def _positive_support(
     relative_threshold: float = 1.0e-6,
 ) -> tuple[float, float]:
     threshold = float(throughput.max()) * relative_threshold
-    positive = throughput > threshold
-    if not bool(positive.any()):
-        positive = throughput > 0.0
-    return float(wavelength[positive].min()), float(wavelength[positive].max())
+    positive = np.flatnonzero(throughput > threshold)
+    if positive.size == 0:
+        positive = np.flatnonzero(throughput > 0.0)
+    first = max(int(positive[0]) - 1, 0)
+    last = min(int(positive[-1]) + 1, wavelength.size - 1)
+    return float(wavelength[first]), float(wavelength[last])
 
 
 def _bandpass_observation(
@@ -513,6 +534,8 @@ def build_psf_calibration(
             info["source"] = str(cache)
         else:
             raise ValueError(f"unsupported PSF mode: {mode}")
+        array = np.flip(np.asarray(array, dtype=np.float32), axis=(-2, -1)).copy()
+        info["stored_kernel_orientation"] = "flipped_for_convolution"
         stacks.append(torch.as_tensor(array, dtype=torch.float32))
         metadata.append(info)
     bank = PSFKernelBank(
