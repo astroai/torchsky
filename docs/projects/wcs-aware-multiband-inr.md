@@ -114,7 +114,7 @@ pixi run -e cuda -- python scripts/smacs0723_wcs_aware_multiband_inr.py \
   --bandpass-mode gaussian \
   --bandpass-samples 5 \
   --psf-mode gaussian \
-  --psf-size  nine \
+  --psf-size 9 \
   --psf-fwhm-pix F090W=1.1,F150W=1.3,F200W=1.6,F277W=2.1,F356W=2.6,F444W=3.1
 ```
 
