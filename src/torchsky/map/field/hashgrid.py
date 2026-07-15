@@ -7,6 +7,7 @@ from typing import Literal, Sequence
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
 
@@ -179,6 +180,21 @@ class HashGridEncoder(nn.Module):
 
 
 def sample_feature_plane(plane: Tensor, coord_u: Tensor, coord_v: Tensor) -> Tensor:
+    if plane.device.type != "mps":
+        flat_u = coord_u.reshape(-1)
+        flat_v = coord_v.reshape(-1)
+        grid = torch.stack([2.0 * flat_u - 1.0, 2.0 * flat_v - 1.0], dim=-1)
+        grid = grid.view(1, -1, 1, 2).to(dtype=plane.dtype, device=plane.device)
+        sampled = F.grid_sample(
+            plane.unsqueeze(0),
+            grid,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=True,
+        )
+        sampled = sampled.squeeze(0).squeeze(-1).transpose(0, 1)
+        return sampled.reshape(*coord_u.shape, plane.shape[0])
+
     height, width = int(plane.shape[-2]), int(plane.shape[-1])
     flat_u = coord_u.reshape(-1).to(device=plane.device, dtype=plane.dtype)
     flat_v = coord_v.reshape(-1).to(device=plane.device, dtype=plane.dtype)
