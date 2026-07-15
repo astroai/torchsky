@@ -1,72 +1,181 @@
 """WCS-aware multi-wavelength INR for native JWST exposure pixels.
 
-The scene is trained directly against native detector pixels.  Each forward
-pass evaluates the fixed exposure WCS, maps the pixel into a union TAN canvas,
-encodes position (planar Fourier or spherical), applies trainable alignment in
-feature space (option A), and decodes a shared wavelength-conditioned scene.
+The scene is trained directly against native detector pixels. Each forward pass
+uses the fixed exposure WCS, maps the pixel into a union TAN canvas, encodes the
+position (planar Fourier or spherical), applies trainable alignment in feature
+space (alignment option A), and decodes one shared wavelength-conditioned scene.
+
+Bandpass quadrature is intentionally delegated to TorchSky's native
+``FieldObservation``/``bandpass_quadrature`` implementation. The observation
+operator optionally accepts a wavelength-dependent PSF bank with shape
+``[exposure, spectral_sample, kernel_y, kernel_x]`` and applies each PSF *inside*
+the wavelength loop before the weighted bandpass sum.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Sequence
 
 import torch
 from torch import Tensor, nn
+from torch.utils.checkpoint import checkpoint
 
-from ..wcs import WCS
 from ..encoders import harmonic_sky_encoding
 from ..sphere.healpix import spherical_fourier_features
+from ..wcs import WCS
+from .field.bandpass import bandpass_quadrature
+
+if TYPE_CHECKING:
+    from .field.types import FieldObservation
 
 EncodingKind = Literal["fourier", "spherical"]
 
 
 @dataclass(frozen=True)
 class UnionCanvas:
+    """Rectangular TAN canvas covering the union of exposure footprints."""
+
     header: dict[str, Any]
     shape: tuple[int, int]
     pixel_scale_arcsec: float
 
 
 @dataclass(frozen=True)
-class BandpassTable:
-    wavelength: Tensor  # [E,L]
-    weight: Tensor      # [E,L]
-
-    def __post_init__(self) -> None:
-        if self.wavelength.ndim != 2 or self.weight.shape != self.wavelength.shape:
-            raise ValueError("bandpass tensors must have identical [E,L] shapes")
-        if bool((self.wavelength <= 0).any()) or bool((self.weight < 0).any()):
-            raise ValueError("invalid bandpass values")
-
-    def normalized(self) -> "BandpassTable":
-        return BandpassTable(
-            self.wavelength,
-            self.weight / self.weight.sum(-1, keepdim=True).clamp_min(1e-20),
-        )
-
-    def to(self, device: torch.device | str) -> "BandpassTable":
-        return BandpassTable(self.wavelength.to(device), self.weight.to(device))
-
-
-@dataclass(frozen=True)
 class PSFKernelBank:
-    kernel: Tensor  # [E,L,K,K]
+    """Per-exposure, per-quadrature-sample detector-plane PSF kernels.
+
+    Parameters
+    ----------
+    kernel
+        Tensor with shape ``[E, L, K, K]``. Kernels must be finite,
+        non-negative, square, odd-sized, and have positive total mass.
+    wavelength
+        Optional quadrature wavelengths with shape ``[E, L]``. Supplying these
+        is strongly recommended because it lets the renderer verify that the
+        PSFs were generated at exactly the same wavelength samples as the
+        native TorchSky bandpass quadrature.
+    """
+
+    kernel: Tensor
+    wavelength: Tensor | None = None
 
     def __post_init__(self) -> None:
         if self.kernel.ndim != 4 or self.kernel.shape[-1] != self.kernel.shape[-2]:
             raise ValueError("PSF kernels must have shape [E,L,K,K]")
         if self.kernel.shape[-1] % 2 != 1:
             raise ValueError("PSF kernel size must be odd")
+        if not bool(torch.isfinite(self.kernel).all()):
+            raise ValueError("PSF kernels must be finite")
+        if bool((self.kernel < 0).any()):
+            raise ValueError("PSF kernels must be non-negative")
+        mass = self.kernel.sum(dim=(-1, -2))
+        if bool((mass <= 0).any()):
+            raise ValueError("every PSF kernel must have positive total mass")
+        if self.wavelength is not None:
+            expected = self.kernel.shape[:2]
+            if self.wavelength.ndim != 2 or tuple(self.wavelength.shape) != tuple(expected):
+                raise ValueError("PSF wavelengths must have shape [E,L]")
+            if not bool(torch.isfinite(self.wavelength).all()):
+                raise ValueError("PSF wavelengths must be finite")
+
+    @property
+    def num_exposures(self) -> int:
+        return int(self.kernel.shape[0])
+
+    @property
+    def num_samples(self) -> int:
+        return int(self.kernel.shape[1])
+
+    @property
+    def size(self) -> int:
+        return int(self.kernel.shape[-1])
 
     def normalized(self) -> "PSFKernelBank":
-        return PSFKernelBank(
-            self.kernel / self.kernel.sum((-1, -2), keepdim=True).clamp_min(1e-20)
-        )
+        denom = self.kernel.sum(dim=(-1, -2), keepdim=True).clamp_min(1e-20)
+        return PSFKernelBank(self.kernel / denom, self.wavelength)
 
     def to(self, device: torch.device | str) -> "PSFKernelBank":
-        return PSFKernelBank(self.kernel.to(device))
+        return PSFKernelBank(
+            self.kernel.to(device=device),
+            None if self.wavelength is None else self.wavelength.to(device=device),
+        )
+
+    def validate_against(
+        self,
+        wavelengths: Tensor,
+        *,
+        rtol: float = 1e-5,
+        atol: float = 1e-3,
+    ) -> None:
+        if wavelengths.ndim != 2:
+            raise ValueError("bandpass wavelengths must have shape [E,L]")
+        if tuple(wavelengths.shape) != tuple(self.kernel.shape[:2]):
+            raise ValueError(
+                "PSF bank [E,L] dimensions do not match bandpass quadrature: "
+                f"{tuple(self.kernel.shape[:2])} != {tuple(wavelengths.shape)}"
+            )
+        if self.wavelength is not None and not torch.allclose(
+            self.wavelength.to(device=wavelengths.device, dtype=wavelengths.dtype),
+            wavelengths,
+            rtol=rtol,
+            atol=atol,
+        ):
+            max_error = float(
+                (
+                    self.wavelength.to(device=wavelengths.device, dtype=wavelengths.dtype)
+                    - wavelengths
+                )
+                .abs()
+                .max()
+                .detach()
+                .cpu()
+            )
+            raise ValueError(
+                "PSF-bank wavelengths do not match native bandpass quadrature; "
+                f"maximum absolute mismatch is {max_error:g}"
+            )
+
+
+def native_bandpass_quadrature_bank(
+    observations: Sequence["FieldObservation"],
+    *,
+    num_spectral_samples: int,
+    device: torch.device | str = "cpu",
+) -> tuple[Tensor, Tensor]:
+    """Build ``[E,L]`` wavelengths and weights using TorchSky's native code.
+
+    This is the only bandpass construction path used by the WCS-aware INR. It
+    therefore inherits the native handling of tabulated throughput curves,
+    linear interpolation, trapezoidal quadrature, normalization, and the
+    uniform/Gaussian fallbacks encoded by ``FieldObservation``.
+    """
+
+    if not observations:
+        raise ValueError("at least one FieldObservation is required")
+    target_device = torch.device(device)
+    wavelength_rows: list[Tensor] = []
+    weight_rows: list[Tensor] = []
+    expected_samples: int | None = None
+    for observation in observations:
+        wavelength, weight = bandpass_quadrature(
+            observation,
+            num_spectral_samples=int(num_spectral_samples),
+            device=target_device,
+        )
+        if expected_samples is None:
+            expected_samples = int(wavelength.numel())
+        elif int(wavelength.numel()) != expected_samples:
+            raise ValueError(
+                "all observations must yield the same number of quadrature samples"
+            )
+        wavelength_rows.append(wavelength)
+        weight_rows.append(weight)
+    wavelengths = torch.stack(wavelength_rows, dim=0)
+    weights = torch.stack(weight_rows, dim=0)
+    weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-20)
+    return wavelengths, weights
 
 
 def _pixel_scale_arcsec(wcs: WCS) -> float:
@@ -78,7 +187,10 @@ def _pixel_scale_arcsec(wcs: WCS) -> float:
 
 def _circular_mean_deg(ra: Tensor) -> float:
     angle = torch.deg2rad(ra.double())
-    return float(torch.rad2deg(torch.atan2(torch.sin(angle).mean(), torch.cos(angle).mean())) % 360)
+    value = torch.rad2deg(
+        torch.atan2(torch.sin(angle).mean(), torch.cos(angle).mean())
+    ) % 360
+    return float(value)
 
 
 def build_union_canvas(
@@ -89,10 +201,13 @@ def build_union_canvas(
 ) -> UnionCanvas:
     """Plan a rectangular TAN canvas covering the union of WCS footprints.
 
-    No image values are resampled here.
+    No science image is resampled or coadded here.
     """
+
     if not headers:
         raise ValueError("at least one exposure header is required")
+    if padding_pixels < 0:
+        raise ValueError("padding_pixels must be non-negative")
     footprints: list[Tensor] = []
     scales: list[float] = []
     for header in headers:
@@ -107,19 +222,31 @@ def build_union_canvas(
     ra0 = _circular_mean_deg(world[:, 0])
     dec0 = float(world[:, 1].mean())
     scale_arcsec = float(pixel_scale_arcsec) if pixel_scale_arcsec else min(scales)
+    if not math.isfinite(scale_arcsec) or scale_arcsec <= 0:
+        raise ValueError("pixel_scale_arcsec must be finite and positive")
     scale_deg = scale_arcsec / 3600.0
     provisional = {
-        "NAXIS": 2, "NAXIS1": 1, "NAXIS2": 1,
-        "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
-        "CUNIT1": "deg", "CUNIT2": "deg",
-        "CRVAL1": ra0, "CRVAL2": dec0,
-        "CRPIX1": 0.5, "CRPIX2": 0.5,
-        "CD1_1": -scale_deg, "CD1_2": 0.0,
-        "CD2_1": 0.0, "CD2_2": scale_deg,
+        "NAXIS": 2,
+        "NAXIS1": 1,
+        "NAXIS2": 1,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CUNIT1": "deg",
+        "CUNIT2": "deg",
+        "CRVAL1": ra0,
+        "CRVAL2": dec0,
+        "CRPIX1": 0.5,
+        "CRPIX2": 0.5,
+        "CD1_1": -scale_deg,
+        "CD1_2": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": scale_deg,
     }
     wcs = WCS(provisional)
     x, y = wcs.world_to_pixel(world[:, 0], world[:, 1])
     finite = torch.isfinite(x) & torch.isfinite(y)
+    if not bool(finite.any()):
+        raise ValueError("union projection produced no finite pixels")
     x, y = x[finite], y[finite]
     x0 = math.floor(float(x.min())) - padding_pixels
     x1 = math.ceil(float(x.max())) + padding_pixels
@@ -130,11 +257,15 @@ def build_union_canvas(
     header["NAXIS2"] = int(y1 - y0 + 1)
     header["CRPIX1"] = provisional["CRPIX1"] - x0
     header["CRPIX2"] = provisional["CRPIX2"] - y0
-    return UnionCanvas(header, (header["NAXIS2"], header["NAXIS1"]), scale_arcsec)
+    return UnionCanvas(
+        header=header,
+        shape=(header["NAXIS2"], header["NAXIS1"]),
+        pixel_scale_arcsec=scale_arcsec,
+    )
 
 
 class WCSGeometryBank:
-    """Fixed per-exposure WCS geometry evaluated inside model.forward."""
+    """Fixed per-exposure WCS geometry evaluated inside ``model.forward``."""
 
     def __init__(self, headers: Sequence[dict[str, Any]], canvas: UnionCanvas) -> None:
         self.headers = tuple(dict(h) for h in headers)
@@ -150,24 +281,37 @@ class WCSGeometryBank:
             )
         return self._cache[key]
 
-    def native_to_union(self, uv: Tensor, exposure_id: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    def native_to_union(
+        self,
+        uv: Tensor,
+        exposure_id: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
         source, target = self._on(uv.device)
         uv64 = uv.double()
         xy = torch.empty_like(uv64)
         sky = torch.empty_like(uv64)
         for raw_id in torch.unique(exposure_id).detach().cpu().tolist():
             e = int(raw_id)
+            if e < 0 or e >= len(source):
+                raise IndexError(f"exposure_id {e} is out of range")
             choose = exposure_id == e
             ra, dec = source[e].pixel_to_world(uv64[choose, 0], uv64[choose, 1])
             x, y = target.world_to_pixel(ra, dec)
             sky[choose] = torch.stack((ra, dec), -1)
             xy[choose] = torch.stack((x, y), -1)
         valid = torch.isfinite(xy).all(-1) & torch.isfinite(sky).all(-1)
+        valid = (
+            valid
+            & (xy[:, 0] >= 0)
+            & (xy[:, 0] <= self.canvas.shape[1] - 1)
+            & (xy[:, 1] >= 0)
+            & (xy[:, 1] <= self.canvas.shape[0] - 1)
+        )
         return xy, sky, valid
 
 
 class FourierPlaneEncoder(nn.Module):
-    """Planar Fourier features separated into sin/cos pairs for exact phase shifts."""
+    """Planar Fourier features with explicit sine/cosine pairs."""
 
     def __init__(self, canvas: UnionCanvas, num_frequencies: int = 10) -> None:
         super().__init__()
@@ -191,14 +335,17 @@ class FourierPlaneEncoder(nn.Module):
 
 
 class FourierFeatureShiftAlignment(nn.Module):
-    """Per-exposure trainable translation applied between h and z.
+    """Per-exposure trainable translation applied between ``h`` and ``z``."""
 
-    Translation is implemented as the exact Fourier phase rotation, so the
-    alignment remains physically interpretable in union-canvas pixels.
-    """
-
-    def __init__(self, encoder: FourierPlaneEncoder, n_exposures: int, anchor: int = 0) -> None:
+    def __init__(
+        self,
+        encoder: FourierPlaneEncoder,
+        n_exposures: int,
+        anchor: int = 0,
+    ) -> None:
         super().__init__()
+        if anchor < 0 or anchor >= n_exposures:
+            raise ValueError("anchor exposure is out of range")
         self.encoder = encoder
         self.shift_pixels = nn.Parameter(torch.zeros(n_exposures, 2))
         mask = torch.ones(n_exposures, 1)
@@ -213,13 +360,13 @@ class FourierFeatureShiftAlignment(nn.Module):
         shift = self.effective_shift_pixels()[exposure_id]
         dx = 2.0 * shift[:, 0] / self.encoder.width
         dy = 2.0 * shift[:, 1] / self.encoder.height
-        fx = self.encoder.frequencies[None, :]
-        phx, phy = dx[:, None] * fx, dy[:, None] * fx
+        freq = self.encoder.frequencies[None, :]
+        phx, phy = dx[:, None] * freq, dy[:, None] * freq
         start = 2
-        sx = features[:, start:start+nfreq]
-        cx = features[:, start+nfreq:start+2*nfreq]
-        sy = features[:, start+2*nfreq:start+3*nfreq]
-        cy = features[:, start+3*nfreq:start+4*nfreq]
+        sx = features[:, start : start + nfreq]
+        cx = features[:, start + nfreq : start + 2 * nfreq]
+        sy = features[:, start + 2 * nfreq : start + 3 * nfreq]
+        cy = features[:, start + 3 * nfreq : start + 4 * nfreq]
         sx2 = sx * torch.cos(phx) + cx * torch.sin(phx)
         cx2 = cx * torch.cos(phx) - sx * torch.sin(phx)
         sy2 = sy * torch.cos(phy) + cy * torch.sin(phy)
@@ -244,7 +391,8 @@ class SphericalPositionEncoder(nn.Module):
         ra, dec = ra_dec[:, 0], ra_dec[:, 1]
         harmonic = harmonic_sky_encoding(ra, dec, include_degree2=True)
         fourier = spherical_fourier_features(
-            ra, dec,
+            ra,
+            dec,
             num_frequencies=self.num_frequencies,
             min_frequency=self.min_frequency,
             include_xyz=True,
@@ -254,10 +402,18 @@ class SphericalPositionEncoder(nn.Module):
 
 
 class ResidualFeatureAlignment(nn.Module):
-    """Exposure-specific low-rank trainable h->z adapter for spherical PE."""
+    """Exposure-specific low-rank trainable ``h -> z`` adapter for spherical PE."""
 
-    def __init__(self, n_exposures: int, dim: int, rank: int = 8, anchor: int = 0) -> None:
+    def __init__(
+        self,
+        n_exposures: int,
+        dim: int,
+        rank: int = 8,
+        anchor: int = 0,
+    ) -> None:
         super().__init__()
+        if anchor < 0 or anchor >= n_exposures:
+            raise ValueError("anchor exposure is out of range")
         self.rank = rank
         self.down = nn.Parameter(torch.zeros(n_exposures, dim, rank))
         self.up = nn.Parameter(torch.zeros(n_exposures, rank, dim))
@@ -276,7 +432,11 @@ class ResidualFeatureAlignment(nn.Module):
         return h + delta
 
     def regularization(self) -> Tensor:
-        return (self.down.square().mean() + self.up.square().mean() + self.bias.square().mean())
+        return (
+            self.down.square().mean()
+            + self.up.square().mean()
+            + self.bias.square().mean()
+        )
 
 
 def _mlp(in_dim: int, out_dim: int, hidden: int, depth: int) -> nn.Sequential:
@@ -314,88 +474,218 @@ class WCSAwareMultiWavelengthINR(nn.Module):
         self.encoding = encoding
         self.spectral_frequencies = spectral_frequencies
         self.output_activation = output_activation
-        n_exp = len(headers)
+        self.num_exposures = len(headers)
         if encoding == "fourier":
             self.position_encoder = FourierPlaneEncoder(canvas, spatial_frequencies)
             self.feature_alignment = FourierFeatureShiftAlignment(
-                self.position_encoder, n_exp, anchor_exposure
+                self.position_encoder,
+                self.num_exposures,
+                anchor_exposure,
             )
         elif encoding == "spherical":
             self.position_encoder = SphericalPositionEncoder(
-                spatial_frequencies, spherical_min_frequency
+                spatial_frequencies,
+                spherical_min_frequency,
             )
             self.feature_alignment = ResidualFeatureAlignment(
-                n_exp, self.position_encoder.output_dim,
-                spherical_alignment_rank, anchor_exposure
+                self.num_exposures,
+                self.position_encoder.output_dim,
+                spherical_alignment_rank,
+                anchor_exposure,
             )
         else:
             raise ValueError("encoding must be fourier or spherical")
-        self.trunk = _mlp(self.position_encoder.output_dim, latent_dim, hidden_dim, trunk_depth)
+        self.trunk = _mlp(
+            self.position_encoder.output_dim,
+            latent_dim,
+            hidden_dim,
+            trunk_depth,
+        )
         spectral_dim = 1 + 2 * spectral_frequencies
-        self.decoder = _mlp(latent_dim + spectral_dim, 1, hidden_dim, decoder_depth)
-        self.background = nn.Parameter(torch.zeros(n_exp), requires_grad=learn_background)
+        self.decoder = _mlp(
+            latent_dim + spectral_dim,
+            1,
+            hidden_dim,
+            decoder_depth,
+        )
+        self.background = nn.Parameter(
+            torch.zeros(self.num_exposures),
+            requires_grad=learn_background,
+        )
 
     def _spectral_features(self, wavelength: Tensor) -> Tensor:
         logw = torch.log(wavelength.clamp_min(1e-12))
         scales = 2.0 ** torch.arange(
-            self.spectral_frequencies, device=logw.device, dtype=logw.dtype
+            self.spectral_frequencies,
+            device=logw.device,
+            dtype=logw.dtype,
         )
         phase = logw[:, None] * scales[None, :]
-        return torch.cat((logw[:, None], torch.sin(phase), torch.cos(phase)), -1).float()
+        return torch.cat(
+            (logw[:, None], torch.sin(phase), torch.cos(phase)),
+            -1,
+        ).float()
 
-    def spatial_latent(self, uv: Tensor, exposure_id: Tensor) -> tuple[Tensor, Tensor]:
+    def spatial_latent(
+        self,
+        uv: Tensor,
+        exposure_id: Tensor,
+    ) -> tuple[Tensor, Tensor]:
         xy, sky, valid = self.geometry.native_to_union(uv, exposure_id)
-        raw = self.position_encoder(xy) if self.encoding == "fourier" else self.position_encoder(sky)
+        raw = (
+            self.position_encoder(xy)
+            if self.encoding == "fourier"
+            else self.position_encoder(sky)
+        )
         aligned = self.feature_alignment(raw, exposure_id)
         return self.trunk(aligned), valid
 
     def decode(self, latent: Tensor, wavelength: Tensor, valid: Tensor) -> Tensor:
-        value = self.decoder(torch.cat((latent, self._spectral_features(wavelength)), -1)).squeeze(-1)
+        value = self.decoder(
+            torch.cat((latent, self._spectral_features(wavelength)), -1)
+        ).squeeze(-1)
         if self.output_activation == "softplus":
             value = torch.nn.functional.softplus(value)
+        elif self.output_activation != "linear":
+            raise ValueError("output_activation must be softplus or linear")
         return torch.where(valid, value, torch.zeros_like(value))
 
-    def scene(self, uv: Tensor, exposure_id: Tensor, wavelength: Tensor) -> tuple[Tensor, Tensor]:
+    def scene(
+        self,
+        uv: Tensor,
+        exposure_id: Tensor,
+        wavelength: Tensor,
+    ) -> tuple[Tensor, Tensor]:
         latent, valid = self.spatial_latent(uv, exposure_id)
         return self.decode(latent, wavelength, valid), valid
+
+    @staticmethod
+    def _validate_bandpass_tensors(
+        wavelengths: Tensor,
+        weights: Tensor,
+        *,
+        num_exposures: int,
+    ) -> tuple[Tensor, Tensor]:
+        if wavelengths.ndim != 2 or weights.ndim != 2:
+            raise ValueError("bandpass tensors must have shape [E,L]")
+        if wavelengths.shape != weights.shape:
+            raise ValueError("bandpass wavelengths and weights must have identical shapes")
+        if int(wavelengths.shape[0]) != int(num_exposures):
+            raise ValueError("bandpass exposure count does not match the model")
+        if not bool(torch.isfinite(wavelengths).all()) or bool((wavelengths <= 0).any()):
+            raise ValueError("bandpass wavelengths must be finite and positive")
+        if not bool(torch.isfinite(weights).all()) or bool((weights < 0).any()):
+            raise ValueError("bandpass weights must be finite and non-negative")
+        if bool((weights.sum(dim=-1) <= 0).any()):
+            raise ValueError("every exposure must have positive total bandpass weight")
+        return wavelengths, weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-20)
 
     def predict_observation(
         self,
         uv: Tensor,
         exposure_id: Tensor,
-        bandpass: BandpassTable,
+        bandpass_wavelength: Tensor,
+        bandpass_weight: Tensor,
         *,
         psf: PSFKernelBank | None = None,
+        psf_offset_chunk: int = 256,
+        checkpoint_psf_chunks: bool = True,
     ) -> tuple[Tensor, Tensor]:
-        wavelength = bandpass.wavelength[exposure_id]
-        weight = bandpass.weight[exposure_id]
-        weight = weight / weight.sum(-1, keepdim=True).clamp_min(1e-20)
-        pred = torch.zeros(uv.shape[0], device=uv.device, dtype=uv.dtype)
-        valid_any = torch.zeros(uv.shape[0], device=uv.device, dtype=torch.bool)
+        """Render native pixels through bandpass and optional wavelength PSFs.
+
+        For a PSF bank, the computation is exactly
+
+        ``sum_j w[e,j] * (K[e,j] * S(theta, lambda[e,j]))``.
+
+        The kernel is therefore applied before the spectral sum. The optional
+        checkpointing trades extra compute for lower activation memory when the
+        kernel support is large.
+        """
+
+        wavelengths, weights = self._validate_bandpass_tensors(
+            bandpass_wavelength,
+            bandpass_weight,
+            num_exposures=self.num_exposures,
+        )
+        wavelengths = wavelengths.to(device=uv.device)[exposure_id]
+        weights = weights.to(device=uv.device)[exposure_id]
+        prediction = torch.zeros(uv.shape[0], device=uv.device, dtype=uv.dtype)
+
         if psf is None:
-            latent, valid = self.spatial_latent(uv, exposure_id)
-            valid_any = valid
-            for j in range(wavelength.shape[1]):
-                pred += weight[:, j] * self.decode(latent, wavelength[:, j], valid)
+            latent, center_valid = self.spatial_latent(uv, exposure_id)
+            for j in range(wavelengths.shape[1]):
+                prediction = prediction + weights[:, j] * self.decode(
+                    latent,
+                    wavelengths[:, j],
+                    center_valid,
+                )
         else:
-            k = psf.kernel.shape[-1]
-            r = k // 2
-            axis = torch.arange(-r, r + 1, device=uv.device, dtype=uv.dtype)
+            psf.validate_against(
+                bandpass_wavelength.to(device=psf.kernel.device, dtype=torch.float32)
+            )
+            if psf.num_exposures != self.num_exposures:
+                raise ValueError("PSF exposure count does not match the model")
+            _, _, center_valid = self.geometry.native_to_union(uv, exposure_id)
+            radius = psf.size // 2
+            axis = torch.arange(
+                -radius,
+                radius + 1,
+                device=uv.device,
+                dtype=uv.dtype,
+            )
             dy, dx = torch.meshgrid(axis, axis, indexing="ij")
             offsets = torch.stack((dx.flatten(), dy.flatten()), -1)
-            q = uv[:, None, :] + offsets[None, :, :]
-            qe = exposure_id[:, None].expand(-1, offsets.shape[0])
-            latent, valid = self.spatial_latent(q.reshape(-1, 2), qe.reshape(-1))
-            latent = latent.reshape(uv.shape[0], offsets.shape[0], -1)
-            valid = valid.reshape(uv.shape[0], offsets.shape[0])
-            valid_any = valid.any(-1)
-            kernels = psf.kernel[exposure_id]
-            for j in range(wavelength.shape[1]):
-                wave = wavelength[:, j:j+1].expand(-1, offsets.shape[0])
-                scene = self.decode(latent.reshape(-1, latent.shape[-1]), wave.reshape(-1), valid.reshape(-1))
-                scene = scene.reshape(uv.shape[0], offsets.shape[0])
-                pred += weight[:, j] * (scene * kernels[:, j].reshape(uv.shape[0], -1)).sum(-1)
-        return pred + self.background[exposure_id], valid_any
+            total_offsets = int(offsets.shape[0])
+            chunk_size = max(1, int(psf_offset_chunk))
+            convolved = torch.zeros(
+                uv.shape[0],
+                wavelengths.shape[1],
+                device=uv.device,
+                dtype=uv.dtype,
+            )
+
+            for start in range(0, total_offsets, chunk_size):
+                stop = min(start + chunk_size, total_offsets)
+                offset_chunk = offsets[start:stop]
+                count = int(offset_chunk.shape[0])
+                query_uv = uv[:, None, :] + offset_chunk[None, :, :]
+                query_exposure = exposure_id[:, None].expand(-1, count)
+                query_uv_flat = query_uv.reshape(-1, 2)
+                query_exposure_flat = query_exposure.reshape(-1)
+
+                def evaluate_chunk(query: Tensor) -> Tensor:
+                    latent, valid = self.spatial_latent(query, query_exposure_flat)
+                    contributions: list[Tensor] = []
+                    for sample_index in range(wavelengths.shape[1]):
+                        wave = wavelengths[:, sample_index : sample_index + 1].expand(
+                            -1, count
+                        )
+                        scene = self.decode(
+                            latent,
+                            wave.reshape(-1),
+                            valid,
+                        ).reshape(uv.shape[0], count)
+                        kernel = psf.kernel[
+                            exposure_id,
+                            sample_index,
+                        ].reshape(uv.shape[0], total_offsets)[:, start:stop]
+                        contributions.append(
+                            (scene * kernel.to(device=scene.device, dtype=scene.dtype)).sum(-1)
+                        )
+                    return torch.stack(contributions, dim=-1)
+
+                if checkpoint_psf_chunks and self.training and torch.is_grad_enabled():
+                    chunk_value = checkpoint(
+                        evaluate_chunk,
+                        query_uv_flat,
+                        use_reentrant=False,
+                    )
+                else:
+                    chunk_value = evaluate_chunk(query_uv_flat)
+                convolved = convolved + chunk_value
+            prediction = (weights * convolved).sum(dim=-1)
+
+        return prediction + self.background[exposure_id], center_valid
 
     def alignment_regularization(self) -> Tensor:
         return self.feature_alignment.regularization()
@@ -404,9 +694,15 @@ class WCSAwareMultiWavelengthINR(nn.Module):
         if isinstance(self.feature_alignment, FourierFeatureShiftAlignment):
             return {
                 "kind": "fourier_phase_shift",
-                "shift_pixels_xy": self.feature_alignment.effective_shift_pixels().detach().cpu().tolist(),
+                "shift_pixels_xy": self.feature_alignment.effective_shift_pixels()
+                .detach()
+                .cpu()
+                .tolist(),
             }
-        return {"kind": "spherical_low_rank_feature_adapter", "rank": self.feature_alignment.rank}
+        return {
+            "kind": "spherical_low_rank_feature_adapter",
+            "rank": self.feature_alignment.rank,
+        }
 
 
 def weighted_robust_loss(
@@ -419,13 +715,23 @@ def weighted_robust_loss(
     delta: float = 0.1,
     max_relative_weight: float = 100.0,
 ) -> tuple[Tensor, dict[str, Tensor]]:
-    valid = mask.bool() & torch.isfinite(prediction) & torch.isfinite(target) & torch.isfinite(err) & (err > 0)
+    valid = (
+        mask.bool()
+        & torch.isfinite(prediction)
+        & torch.isfinite(target)
+        & torch.isfinite(err)
+        & (err > 0)
+    )
     if not bool(valid.any()):
         raise RuntimeError("batch has no valid pixels")
     residual = prediction[valid] - target[valid]
     if kind == "huber":
-        a = residual.abs()
-        rho = torch.where(a <= delta, 0.5 * residual.square(), delta * (a - 0.5 * delta))
+        absolute = residual.abs()
+        rho = torch.where(
+            absolute <= delta,
+            0.5 * residual.square(),
+            delta * (absolute - 0.5 * delta),
+        )
     elif kind == "charbonnier":
         rho = torch.sqrt(residual.square() + delta * delta) - delta
     else:
@@ -443,6 +749,8 @@ def weighted_robust_loss(
 def gaussian_psf_kernel(fwhm_pixels: float, size: int = 7) -> Tensor:
     if size % 2 != 1:
         raise ValueError("PSF size must be odd")
+    if not math.isfinite(fwhm_pixels) or fwhm_pixels <= 0:
+        raise ValueError("PSF FWHM must be finite and positive")
     sigma = fwhm_pixels / 2.354820045
     axis = torch.arange(-(size // 2), size // 2 + 1, dtype=torch.float32)
     yy, xx = torch.meshgrid(axis, axis, indexing="ij")
@@ -451,7 +759,11 @@ def gaussian_psf_kernel(fwhm_pixels: float, size: int = 7) -> Tensor:
 
 
 __all__ = [
-    "BandpassTable", "PSFKernelBank", "UnionCanvas",
-    "WCSAwareMultiWavelengthINR", "build_union_canvas",
-    "gaussian_psf_kernel", "weighted_robust_loss",
+    "PSFKernelBank",
+    "UnionCanvas",
+    "WCSAwareMultiWavelengthINR",
+    "build_union_canvas",
+    "gaussian_psf_kernel",
+    "native_bandpass_quadrature_bank",
+    "weighted_robust_loss",
 ]
