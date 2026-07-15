@@ -8,9 +8,49 @@ in-tree FITS implementation code.
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import sys
+import tomllib
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "src" / "torchsky"
+REPO_ROOT = PACKAGE_ROOT.parents[1]
+
+
+def test_native_torch_abi_contract_is_consistent() -> None:
+    pyproject = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    pixi = tomllib.loads((REPO_ROOT / "pixi.toml").read_text(encoding="utf-8"))
+
+    assert "torch>=2.10,<2.11" in pyproject["build-system"]["requires"]
+    assert "torch>=2.10,<2.11" in pyproject["project"]["dependencies"]
+    assert "torchfits==0.9.1" in pyproject["project"]["dependencies"]
+    for section in ("build-dependencies", "host-dependencies", "run-dependencies"):
+        assert pixi["package"][section]["pytorch"] == ">=2.10,<2.11"
+    assert pixi["dependencies"]["pytorch"] == ">=2.10,<2.11"
+    assert pixi["feature"]["prod"]["pypi-dependencies"]["torchfits"] == "==0.9.1"
+    install_docs = (REPO_ROOT / "docs" / "install.md").read_text(encoding="utf-8")
+    assert '"torch>=2.10,<2.11"' in install_docs
+
+    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(encoding="utf-8")
+    bindings = (PACKAGE_ROOT / "cpp_src" / "bindings.cpp").read_text(encoding="utf-8")
+    assert "TORCHSKY_BUILD_TORCH_VERSION" in cmake
+    assert 'TORCHSKY_TORCH_ABI="2.10"' in cmake
+    assert "matching_abi" in bindings
+
+
+def test_native_extension_rejects_mismatched_torch_runtime() -> None:
+    script = """
+import torch
+torch.__version__ = "2.11.0"
+import torchsky._cpp
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+    )
+    assert result.returncode != 0
+    assert "built for PyTorch 2.10.x but found PyTorch 2.11.0" in result.stderr
 
 
 def test_no_cfitsio_or_zlib_in_cmake() -> None:

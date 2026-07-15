@@ -1654,5 +1654,24 @@ void bind_wcs(nb::module_& m) {
 }
 
 NB_MODULE(_cpp, m) {
+    const nb::str runtime_version_object(
+        nb::module_::import_("torch").attr("__version__")
+    );
+    const std::string runtime_version(runtime_version_object.c_str());
+    const std::string required_abi = TORCHSKY_TORCH_ABI;
+    const bool matching_abi =
+        runtime_version.compare(0, required_abi.size(), required_abi) == 0
+        && (runtime_version.size() == required_abi.size()
+            || runtime_version[required_abi.size()] == '.'
+            || runtime_version[required_abi.size()] == '+');
+    if (!matching_abi) {
+        PyErr_Format(
+            PyExc_ImportError,
+            "torchsky was built for PyTorch %s.x but found PyTorch %s",
+            required_abi.c_str(),
+            runtime_version.c_str()
+        );
+        throw nb::python_error();
+    }
     bind_wcs(m);
 }

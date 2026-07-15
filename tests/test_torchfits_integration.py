@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 
-def test_torchsky_read_dummy_via_torchfits() -> None:
+
+_FIXTURE = str(Path(__file__).resolve().parent / "data" / "radio_mm_stub.fits")
+
+
+def test_torchsky_reads_fixture_via_torchfits() -> None:
     """torchsky.io delegation to torchfits works."""
     from torchsky.io import get_header
 
-    hdr = get_header("tests/data/dummy.fits", 0)
+    hdr = get_header(_FIXTURE, 0)
     assert dict(hdr)["SIMPLE"] is True
 
 
@@ -16,7 +21,7 @@ def test_torchsky_wcs_from_torchfits_header() -> None:
     from torchsky.io import get_header
     from torchsky.wcs import WCS
 
-    hdr = get_header("tests/data/dummy.fits", 0)
+    hdr = get_header(_FIXTURE, 0)
     d = dict(hdr)
     d.update({
         "NAXIS": 2,
