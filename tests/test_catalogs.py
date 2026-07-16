@@ -1,3 +1,4 @@
+import pytest
 import torch
 from torch.utils.data import DataLoader
 
@@ -34,6 +35,99 @@ def test_crossmatch_sky_handles_empty_right_catalog() -> None:
     )
     assert result.left_index.numel() == 0
     assert result.right_index.numel() == 0
+
+
+def test_crossmatch_sky_find_all_returns_stably_ordered_pairs() -> None:
+    result = crossmatch_sky(
+        torch.tensor([10.0, 20.0], dtype=torch.float64),
+        torch.tensor([0.0, 0.0], dtype=torch.float64),
+        torch.tensor([10.0002, 10.0001, 20.0001, 80.0], dtype=torch.float64),
+        torch.tensor([0.0, 0.0, 0.0, 0.0], dtype=torch.float64),
+        radius_arcsec=2.0,
+        left_chunk_size=1,
+        right_chunk_size=1,
+        find="all",
+    )
+
+    assert result.left_index.tolist() == [0, 0, 1]
+    assert result.right_index.tolist() == [1, 0, 2]
+    assert result.separation_arcsec[0] <= result.separation_arcsec[1]
+
+
+def test_crossmatch_sky_rejects_unknown_find_mode() -> None:
+    with pytest.raises(ValueError, match="find"):
+        crossmatch_sky(
+            torch.tensor([10.0], dtype=torch.float64),
+            torch.tensor([0.0], dtype=torch.float64),
+            torch.tensor([10.0], dtype=torch.float64),
+            torch.tensor([0.0], dtype=torch.float64),
+            radius_arcsec=1.0,
+            find="nearest",
+        )
+
+
+def test_crossmatch_sky_find_all_matches_brute_force_across_chunks() -> None:
+    rng = torch.Generator().manual_seed(20260716)
+    left_ra = torch.rand(12, generator=rng, dtype=torch.float64) * 360.0
+    left_dec = torch.rad2deg(
+        torch.asin((torch.rand(12, generator=rng, dtype=torch.float64) * 2.0) - 1.0)
+    )
+    right_ra = torch.rand(24, generator=rng, dtype=torch.float64) * 360.0
+    right_dec = torch.rad2deg(
+        torch.asin((torch.rand(24, generator=rng, dtype=torch.float64) * 2.0) - 1.0)
+    )
+    right_ra[:8] = torch.remainder(
+        left_ra[:4].repeat_interleave(2)
+        + torch.tensor(
+            [0.05, -0.1, 0.15, -0.2, 0.1, -0.15, 0.2, -0.05],
+            dtype=torch.float64,
+        )
+        / 3600.0,
+        360.0,
+    )
+    right_dec[:8] = left_dec[:4].repeat_interleave(2)
+
+    result = crossmatch_sky(
+        left_ra,
+        left_dec,
+        right_ra,
+        right_dec,
+        radius_arcsec=1.0,
+        left_chunk_size=3,
+        right_chunk_size=4,
+        find="all",
+    )
+    separation_arcsec = (
+        catalogs_core.great_circle_distance(
+            left_ra.unsqueeze(1),
+            left_dec.unsqueeze(1),
+            right_ra.unsqueeze(0),
+            right_dec.unsqueeze(0),
+            degrees=True,
+        )
+        * 3600.0
+    )
+    expected_left, expected_right = torch.nonzero(
+        separation_arcsec <= 1.0, as_tuple=True
+    )
+    expected = sorted(
+        zip(
+            expected_left.tolist(),
+            expected_right.tolist(),
+            separation_arcsec[expected_left, expected_right].tolist(),
+            strict=True,
+        ),
+        key=lambda row: (row[0], row[2], row[1]),
+    )
+
+    assert result.left_index.tolist() == [row[0] for row in expected]
+    assert result.right_index.tolist() == [row[1] for row in expected]
+    torch.testing.assert_close(
+        result.separation_arcsec,
+        torch.tensor([row[2] for row in expected], dtype=torch.float64),
+        atol=1e-9,
+        rtol=0.0,
+    )
 
 
 def test_crossmatch_sky_handles_ra_wraparound() -> None:

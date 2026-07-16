@@ -34,6 +34,11 @@ matches = crossmatch_sky(
 )
 ```
 
+Use `find="all"` when downstream association policy needs every candidate
+within the radius. Pair rows are deterministically ordered by left index,
+separation, then right index. The default `find="best"` returns only the
+nearest candidate per left row.
+
 ### Stream Catalog Partitions
 
 ```python

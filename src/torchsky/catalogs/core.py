@@ -172,6 +172,7 @@ def _finalize_crossmatch(
     *,
     device: torch.device,
     stats: _CrossmatchStats,
+    sort_within_left: bool = False,
 ) -> CrossmatchResult:
     if not left_hits:
         return _empty_crossmatch(device)
@@ -179,6 +180,15 @@ def _finalize_crossmatch(
     left_index = torch.cat(left_hits)
     right_index = torch.cat(right_hits)
     separation_arcsec = torch.cat(sep_hits)
+    if sort_within_left:
+        order = torch.argsort(right_index, stable=True)
+        left_index = left_index[order]
+        right_index = right_index[order]
+        separation_arcsec = separation_arcsec[order]
+        order = torch.argsort(separation_arcsec, stable=True)
+        left_index = left_index[order]
+        right_index = right_index[order]
+        separation_arcsec = separation_arcsec[order]
     order = torch.argsort(left_index, stable=True)
     left_index = left_index[order]
     right_index = right_index[order]
@@ -409,6 +419,7 @@ def _crossmatch_sky_coarse_indexed(
     radius_arcsec: float,
     left_chunk_size: int,
     right_chunk_size: int,
+    find: str = "best",
     return_stats: bool = False,
 ) -> CrossmatchResult | tuple[CrossmatchResult, _CrossmatchStats]:
     device = left_ra.device
@@ -491,6 +502,29 @@ def _crossmatch_sky_coarse_indexed(
             if candidate_right_idx.numel() == 0:
                 continue
 
+            if find == "all":
+                group_ra_col = group_ra.unsqueeze(1)
+                group_dec_col = group_dec.unsqueeze(1)
+                for right_ids in candidate_right_idx.split(right_chunk_size):
+                    right_chunk_len = right_ids.shape[0]
+                    sep = great_circle_distance(
+                        group_ra_col,
+                        group_dec_col,
+                        right_ra[right_ids].unsqueeze(0),
+                        right_dec[right_ids].unsqueeze(0),
+                        degrees=True,
+                    )
+                    stats.pairs_evaluated += count * right_chunk_len
+                    left_rel, right_rel = torch.nonzero(
+                        sep <= radius_deg, as_tuple=True
+                    )
+                    if left_rel.numel() == 0:
+                        continue
+                    left_hits.append(group_abs[left_rel])
+                    right_hits.append(right_ids[right_rel])
+                    sep_hits.append(sep[left_rel, right_rel] * 3600.0)
+                continue
+
             best_sep = torch.full(
                 (count,),
                 torch.inf,
@@ -534,6 +568,7 @@ def _crossmatch_sky_coarse_indexed(
         sep_hits,
         device=device,
         stats=stats,
+        sort_within_left=find == "all",
     )
     if return_stats:
         return result, stats
@@ -549,8 +584,14 @@ def crossmatch_sky(
     radius_arcsec: float,
     left_chunk_size: int = 4096,
     right_chunk_size: int = 65536,
+    find: str = "best",
 ) -> CrossmatchResult:
-    """Chunked nearest-neighbour angular crossmatch suitable for refinement stages."""
+    """Chunked angular crossmatch suitable for catalog refinement stages.
+
+    ``find="best"`` returns the nearest right-catalog row per left row.
+    ``find="all"`` returns every pair within the radius, ordered by left
+    index, separation, then right index.
+    """
     left_ra = torch.as_tensor(left_ra_deg, dtype=torch.float64).reshape(-1)
     device = left_ra.device
     left_dec = torch.as_tensor(
@@ -566,6 +607,8 @@ def crossmatch_sky(
         raise ValueError("radius_arcsec must be positive")
     if left_chunk_size <= 0 or right_chunk_size <= 0:
         raise ValueError("chunk sizes must be positive")
+    if find not in ("best", "all"):
+        raise ValueError("find must be 'best' or 'all'")
     if left_ra.shape != left_dec.shape:
         raise ValueError("left_ra_deg and left_dec_deg must have the same shape")
     if right_ra.shape != right_dec.shape:
@@ -581,6 +624,7 @@ def crossmatch_sky(
         radius_arcsec=radius_arcsec,
         left_chunk_size=left_chunk_size,
         right_chunk_size=right_chunk_size,
+        find=find,
     )
 
 
