@@ -185,7 +185,7 @@ jobs:
 
       - name: Run map pytest (includes reproject + drizzle smoke)
         run: >-
-          pixi run -e sphere-bench -- pytest -n auto -q --tb=short
+          pixi run -e sphere-bench -- pytest -n auto -v --tb=short
           ${{ matrix.tests }} ${{ matrix.pytest_args }}
 
       - name: Map compat gate vs baseline (synthetic_shifted_wcs)
