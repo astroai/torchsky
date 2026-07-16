@@ -106,31 +106,44 @@ jobs:
               tests/test_map_periodic_affine.py
               tests/test_map_product.py
               tests/test_map_solvers.py
-          - shard: field-model
+            pytest_args: ""
+          - shard: field-components
+            tests: tests/test_map_field.py
+            pytest_args: -k component
+          - shard: field-training
+            tests: tests/test_map_field.py
+            pytest_args: -k 'not component and (fit or training or pretraining)'
+          - shard: field-contracts
+            tests: tests/test_map_field.py
+            pytest_args: -k 'not component and not fit and not training and not pretraining'
+          - shard: field-auxiliary
             tests: >-
-              tests/test_map_field.py
               tests/test_map_field_fit.py
               tests/test_map_field_render_scale.py
               tests/test_map_field_strainer.py
               tests/test_map_learned_ops.py
               tests/test_map_scene_representations.py
               tests/test_map_target_render_spec.py
+            pytest_args: ""
           - shard: sky-model
             tests: >-
               tests/test_map_sky.py
               tests/test_map_sky_corrector.py
               tests/test_map_sky_polynomial.py
+            pytest_args: ""
           - shard: smacs-fit
             tests: >-
               tests/test_map_smacs0723_field_fit.py
               tests/test_map_smacs0723_field_fit_band_sweep.py
               tests/test_map_smacs0723_field_fit_joint.py
+            pytest_args: ""
           - shard: smacs-reproduction
             tests: >-
               tests/test_map_smacs0723_real.py
               tests/test_map_smacs0723_reproduce.py
               tests/test_map_smacs0723_stackers.py
               tests/test_map_smacs0723_stackers_band_sweep.py
+            pytest_args: ""
           - shard: integration
             tests: >-
               tests/test_map_compat_bench.py
@@ -151,6 +164,7 @@ jobs:
               tests/test_map_spectral_nufft.py
               tests/test_map_sphere_sh_map_smoke.py
               tests/test_map_swarp_optional_parity.py
+            pytest_args: ""
     steps:
       - uses: actions/checkout@v4
 
@@ -170,7 +184,9 @@ jobs:
         run: pixi run -e sphere-bench -- pip install -e . --no-build-isolation
 
       - name: Run map pytest (includes reproject + drizzle smoke)
-        run: pixi run -e sphere-bench -- pytest -n auto -q --tb=short ${{ matrix.tests }}
+        run: >-
+          pixi run -e sphere-bench -- pytest -n auto -q --tb=short
+          ${{ matrix.tests }} ${{ matrix.pytest_args }}
 
       - name: Map compat gate vs baseline (synthetic_shifted_wcs)
         if: matrix.shard == 'integration'
