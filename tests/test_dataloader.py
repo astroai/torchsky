@@ -283,14 +283,15 @@ class TestOptimalConfiguration:
         assert config["batch_size"] <= 16
         assert not config["pin_memory"]  # No GPU
 
-    def test_optimal_config_large_dataset(self):
+    @patch("torchsky.dataloader._os_cpu_count", return_value=16)
+    def test_optimal_config_large_dataset(self, _mock_cpu_count):
         """Test configuration for large datasets."""
         config = get_optimal_dataloader_config(
             dataset_size=100000, file_size_mb=50.0, available_memory_gb=32.0, num_gpus=2
         )
 
         # Large dataset with GPUs should have aggressive settings
-        assert config["num_workers"] > 2
+        assert config["num_workers"] == 8
         assert config["pin_memory"]  # Has GPUs
         assert config["persistent_workers"]
 
