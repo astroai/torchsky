@@ -110,9 +110,15 @@ jobs:
           - shard: field-components
             tests: tests/test_map_field.py
             pytest_args: -k component
-          - shard: field-training
+          - shard: field-training-sampling
             tests: tests/test_map_field.py
-            pytest_args: -k 'not component and (fit or training or pretraining)'
+            pytest_args: -k 'not component and fit_field_model and (training or pretraining)'
+          - shard: field-training-core
+            tests: tests/test_map_field.py
+            pytest_args: -k 'not component and fit_field_model and not training and not pretraining'
+          - shard: field-model-fits
+            tests: tests/test_map_field.py
+            pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining)'
           - shard: field-contracts
             tests: tests/test_map_field.py
             pytest_args: -k 'not component and not fit and not training and not pretraining'
