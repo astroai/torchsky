@@ -23,7 +23,6 @@ from ..datasets import (
     IterableFITSDataset,
     TableChunkDataset,
 )
-from ..frame import read_tensor_frame, to_tensor_frame, write_tensor_frame
 from torchfits.interop import to_arrow, to_pandas
 from torchfits.io import (
     _get_image_meta as _get_image_meta,
@@ -90,15 +89,12 @@ __all__ = [
     "read_image",
     "read_subset",
     "read_table",
-    "read_tensor_frame",
     "replace_hdu",
     "stream_table",
     "table",
     "to_arrow",
     "to_pandas",
-    "to_tensor_frame",
     "verify_checksums",
     "write",
     "write_checksums",
-    "write_tensor_frame",
 ]

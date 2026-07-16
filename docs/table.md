@@ -42,8 +42,7 @@ for batch in torchfits.table.scan(
 
 The batch boundary must preserve row order, null/mask semantics, units, dtype,
 and device placement. Arrow is the interchange boundary and Polars is the
-supported dataframe surface. The optional `torchsky.frame` adapter is only for
-explicit `torch_frame` ML workflows; core compute paths do not depend on it.
+supported dataframe surface.
 
 ## Scale And Performance Policy
 

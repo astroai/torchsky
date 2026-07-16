@@ -51,7 +51,7 @@ Do **not** guess `python3` or bare `python` on PATH for project work.
 - **Workspace `[dependencies]`** (`default` environment): lean **dev tooling** (pytest, ruff, cmake, pytorch, numpy, …). Do **not** treat this list as “libraries torchsky wraps at runtime.”
 - **Feature-gated environments** (see `pixi.toml`):
   - **`test`** — `pytest` suite: **astropy**, **torchfits**, **pyarrow**,
-    **polars**, **pandas**, **scipy** (via solve), **requests**, **pytorch-frame**, etc., for WCS
+    **polars**, **pandas**, **scipy** (via solve), **requests**, etc., for WCS
     fixtures, integration inputs, table batches, and interop tests.
   - **`bench` / `bench-all`** — throughput comparators, plotting, **pandas**, **reproject**, optional map tools.
   - **`sphere-bench`** — HEALPix / sparse **ecosystem** comparators (**healpy**, **hpgeom**, **healsparse**, **astropy-healpix**, **spherical-geometry**, …) and upstream-derived benchmark gates.
