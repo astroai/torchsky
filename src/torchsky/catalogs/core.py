@@ -410,6 +410,180 @@ def _crossmatch_sky_declination_pruned(
     return result
 
 
+def _ragged_candidate_batches(
+    starts: Tensor,
+    stops: Tensor,
+    *,
+    max_pairs: int,
+) -> Iterator[tuple[Tensor, Tensor]]:
+    """Yield bounded ``(left-relative, right-sorted)`` candidate pairs."""
+    counts = (stops - starts).to(torch.int64)
+    cursor = 0
+    rows = int(counts.numel())
+    while cursor < rows:
+        first_count = int(counts[cursor].item())
+        if first_count > max_pairs:
+            first_start = int(starts[cursor].item())
+            first_stop = int(stops[cursor].item())
+            for right_start in range(first_start, first_stop, max_pairs):
+                right_stop = min(right_start + max_pairs, first_stop)
+                right_sorted = torch.arange(
+                    right_start,
+                    right_stop,
+                    dtype=torch.int64,
+                    device=starts.device,
+                )
+                yield torch.full_like(right_sorted, cursor), right_sorted
+            cursor += 1
+            continue
+
+        cumulative = torch.cumsum(counts[cursor:], dim=0)
+        limit = torch.tensor(max_pairs, dtype=torch.int64, device=starts.device)
+        take = int(torch.searchsorted(cumulative, limit, right=True).item())
+        take = max(take, 1)
+        stop_cursor = min(cursor + take, rows)
+        group_counts = counts[cursor:stop_cursor]
+        total = int(group_counts.sum().item())
+        if total > 0:
+            left_rows = torch.arange(
+                cursor,
+                stop_cursor,
+                dtype=torch.int64,
+                device=starts.device,
+            )
+            left_relative = torch.repeat_interleave(left_rows, group_counts)
+            repeated_starts = torch.repeat_interleave(
+                starts[cursor:stop_cursor], group_counts
+            )
+            group_bases = torch.repeat_interleave(
+                torch.cumsum(group_counts, dim=0) - group_counts,
+                group_counts,
+            )
+            right_sorted = repeated_starts + (
+                torch.arange(total, dtype=torch.int64, device=starts.device)
+                - group_bases
+            )
+            yield left_relative, right_sorted
+        cursor = stop_cursor
+
+
+def _best_hits(
+    left_index: Tensor,
+    right_index: Tensor,
+    separation_arcsec: Tensor,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Keep the deterministic nearest hit for each left row."""
+    if left_index.numel() == 0:
+        return left_index, right_index, separation_arcsec
+    order = torch.argsort(right_index, stable=True)
+    left_index = left_index[order]
+    right_index = right_index[order]
+    separation_arcsec = separation_arcsec[order]
+    order = torch.argsort(separation_arcsec, stable=True)
+    left_index = left_index[order]
+    right_index = right_index[order]
+    separation_arcsec = separation_arcsec[order]
+    order = torch.argsort(left_index, stable=True)
+    left_index = left_index[order]
+    right_index = right_index[order]
+    separation_arcsec = separation_arcsec[order]
+    keep = torch.ones_like(left_index, dtype=torch.bool)
+    keep[1:] = left_index[1:] != left_index[:-1]
+    return left_index[keep], right_index[keep], separation_arcsec[keep]
+
+
+def _crossmatch_sky_declination_indexed(
+    left_ra: Tensor,
+    left_dec: Tensor,
+    right_ra: Tensor,
+    right_dec: Tensor,
+    *,
+    radius_arcsec: float,
+    left_chunk_size: int,
+    right_chunk_size: int,
+    find: str = "best",
+    return_stats: bool = False,
+) -> CrossmatchResult | tuple[CrossmatchResult, _CrossmatchStats]:
+    """Crossmatch through exact per-row declination windows."""
+    device = left_ra.device
+    stats = _CrossmatchStats(
+        left_points=int(left_ra.numel()),
+        right_points=int(right_ra.numel()),
+    )
+    radius_deg = radius_arcsec / 3600.0
+    right_order = torch.argsort(right_dec, stable=True)
+    right_dec_sorted = right_dec[right_order]
+    left_hits: list[Tensor] = []
+    right_hits: list[Tensor] = []
+    sep_hits: list[Tensor] = []
+
+    for start, left_ra_chunk, left_dec_chunk in zip(
+        range(0, int(left_ra.numel()), left_chunk_size),
+        left_ra.split(left_chunk_size),
+        left_dec.split(left_chunk_size),
+        strict=False,
+    ):
+        lower = torch.clamp(left_dec_chunk - radius_deg, min=-90.0, max=90.0)
+        upper = torch.clamp(left_dec_chunk + radius_deg, min=-90.0, max=90.0)
+        starts = torch.searchsorted(right_dec_sorted, lower, right=False)
+        stops = torch.searchsorted(right_dec_sorted, upper, right=True)
+        stats.candidate_rows_considered += int((stops - starts).sum().item())
+
+        for left_relative, right_sorted in _ragged_candidate_batches(
+            starts,
+            stops,
+            max_pairs=right_chunk_size,
+        ):
+            stats.candidate_groups += 1
+            stats.pairs_evaluated += int(left_relative.numel())
+            right_index = right_order[right_sorted]
+            separation_arcsec = (
+                great_circle_distance(
+                    left_ra_chunk[left_relative],
+                    left_dec_chunk[left_relative],
+                    right_ra[right_index],
+                    right_dec[right_index],
+                    degrees=True,
+                )
+                * 3600.0
+            )
+            mask = separation_arcsec <= radius_arcsec
+            if not bool(mask.any()):
+                continue
+            batch_left = left_relative[mask] + start
+            batch_right = right_index[mask]
+            batch_sep = separation_arcsec[mask]
+            if find == "best":
+                batch_left, batch_right, batch_sep = _best_hits(
+                    batch_left,
+                    batch_right,
+                    batch_sep,
+                )
+            left_hits.append(batch_left)
+            right_hits.append(batch_right)
+            sep_hits.append(batch_sep)
+
+    result = _finalize_crossmatch(
+        left_hits,
+        right_hits,
+        sep_hits,
+        device=device,
+        stats=stats,
+        sort_within_left=True,
+    )
+    if find == "best":
+        left_index, right_index, separation_arcsec = _best_hits(
+            result.left_index,
+            result.right_index,
+            result.separation_arcsec,
+        )
+        result = CrossmatchResult(left_index, right_index, separation_arcsec)
+        stats.matched_rows = int(left_index.numel())
+    if return_stats:
+        return result, stats
+    return result
+
+
 def _crossmatch_sky_coarse_indexed(
     left_ra: Tensor,
     left_dec: Tensor,
@@ -616,7 +790,7 @@ def crossmatch_sky(
     if right_ra.numel() == 0 or left_ra.numel() == 0:
         return _empty_crossmatch(device)
 
-    return _crossmatch_sky_coarse_indexed(
+    return _crossmatch_sky_declination_indexed(
         left_ra,
         left_dec,
         right_ra,
@@ -686,8 +860,12 @@ def crossmatch_sky_streamed(
     candidate_cache: dict[int, Tensor] = {}
 
     for left_ra, left_dec in left_batches:
-        left_ra = torch.as_tensor(left_ra, dtype=torch.float64, device=device).reshape(-1)
-        left_dec = torch.as_tensor(left_dec, dtype=torch.float64, device=device).reshape(-1)
+        left_ra = torch.as_tensor(left_ra, dtype=torch.float64, device=device).reshape(
+            -1
+        )
+        left_dec = torch.as_tensor(
+            left_dec, dtype=torch.float64, device=device
+        ).reshape(-1)
         chunk_len = int(left_ra.numel())
         if chunk_len == 0:
             continue
@@ -702,7 +880,9 @@ def crossmatch_sky_streamed(
 
         left_order = torch.argsort(left_coarse_pixel, stable=True)
         coarse_sorted = left_coarse_pixel[left_order]
-        unique_pixels, counts = torch.unique_consecutive(coarse_sorted, return_counts=True)
+        unique_pixels, counts = torch.unique_consecutive(
+            coarse_sorted, return_counts=True
+        )
         offsets = torch.cat(
             (
                 torch.zeros(1, dtype=torch.int64, device=device),
@@ -765,10 +945,14 @@ def crossmatch_sky_streamed(
         left_offset += chunk_len
 
     return _finalize_crossmatch(
-        left_hits, right_hits, sep_hits, device=device, stats=_CrossmatchStats(
+        left_hits,
+        right_hits,
+        sep_hits,
+        device=device,
+        stats=_CrossmatchStats(
             left_points=left_offset,
             right_points=int(right_ra.numel()),
-        )
+        ),
     )
 
 
@@ -813,9 +997,7 @@ def _tile_catalog_to_parquet(
         dec_np = batch.column(dec_col).to_numpy().astype("f8", copy=False)
         ra_t = torch.from_numpy(ra_np.copy())
         dec_t = torch.from_numpy(dec_np.copy())
-        pixels = _healpix.ang2pix(
-            coarse_nside, ra_t, dec_t, nest=True, lonlat=True
-        )
+        pixels = _healpix.ang2pix(coarse_nside, ra_t, dec_t, nest=True, lonlat=True)
         pixels_np = pixels.numpy().astype(np.int64)
 
         order = np.argsort(pixels_np, kind="stable")
@@ -1036,4 +1218,5 @@ def crossmatch_sky_from_arrow(
         )
     finally:
         import shutil
+
         shutil.rmtree(tmpdir, ignore_errors=True)

@@ -25,6 +25,20 @@ def test_crossmatch_sky_returns_nearest_matches_within_radius() -> None:
     assert torch.all(result.separation_arcsec < 2.0)
 
 
+def test_crossmatch_sky_best_breaks_equal_separation_by_right_index() -> None:
+    result = crossmatch_sky(
+        torch.tensor([10.0], dtype=torch.float64),
+        torch.tensor([0.0], dtype=torch.float64),
+        torch.tensor([10.0, 10.0], dtype=torch.float64),
+        torch.tensor([0.0, 0.0], dtype=torch.float64),
+        radius_arcsec=1.0,
+        right_chunk_size=1,
+    )
+
+    assert result.left_index.tolist() == [0]
+    assert result.right_index.tolist() == [0]
+
+
 def test_crossmatch_sky_handles_empty_right_catalog() -> None:
     result = crossmatch_sky(
         torch.tensor([10.0], dtype=torch.float64),
