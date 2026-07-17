@@ -16,14 +16,19 @@ def err_whitened_robust_loss(
     *,
     kind: str = "huber",
     delta: float = 3.0,
+    max_relative_weight: float | None = None,
 ) -> tuple[Tensor, dict[str, Tensor]]:
     """Apply a robust loss to residuals whitened by the per-pixel ERR map.
 
     The optimized residual is ``z = (prediction - target) / err``. Therefore a
     Huber threshold of ``delta=3`` has the direct interpretation of a three-sigma
     transition. No second inverse-variance weighting is applied after whitening.
+
+    ``max_relative_weight`` is accepted only for compatibility with the previous
+    training API and is intentionally ignored.
     """
 
+    _ = max_relative_weight
     delta_value = float(delta)
     if not math.isfinite(delta_value) or delta_value <= 0.0:
         raise ValueError("delta must be finite and positive")
