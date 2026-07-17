@@ -504,6 +504,26 @@ def train_model(
     return records
 
 
+def _union_latent_for_xy(
+    model: WCSAwareMultiWavelengthINR,
+    canvas: UnionCanvas,
+    xy: Tensor,
+    *,
+    anchor_exposure: int,
+    device: torch.device,
+) -> Tensor:
+    target_wcs = WCS(canvas.header).to(device)
+    if model.encoding == "fourier":
+        raw = model.position_encoder(xy)
+    else:
+        ra, dec = target_wcs.pixel_to_world(xy[:, 0].double(), xy[:, 1].double())
+        raw = model.position_encoder(torch.stack((ra, dec), dim=-1))
+    exposure_id = torch.full(
+        (xy.shape[0],), anchor_exposure, dtype=torch.long, device=device
+    )
+    return model.trunk(model.feature_alignment(raw, exposure_id))
+
+
 @torch.no_grad()
 def render_union_band(
     model: WCSAwareMultiWavelengthINR,
@@ -521,30 +541,63 @@ def render_union_band(
     output = torch.empty(height * width, dtype=torch.float32, device=device)
     wavelength = bandpass_wavelength[representative_exposure].to(device)
     weight = bandpass_weight[representative_exposure].to(device)
-    target_wcs = WCS(canvas.header).to(device)
     for start in range(0, output.numel(), tile_pixels):
         stop = min(start + tile_pixels, output.numel())
         index = torch.arange(start, stop, device=device)
         y = torch.div(index, width, rounding_mode="floor")
         x = index - y * width
         xy = torch.stack((x, y), -1).float()
-        if model.encoding == "fourier":
-            raw = model.position_encoder(xy)
-        else:
-            ra, dec = target_wcs.pixel_to_world(
-                xy[:, 0].double(), xy[:, 1].double()
-            )
-            raw = model.position_encoder(torch.stack((ra, dec), dim=-1))
-        exposure_id = torch.full(
-            (xy.shape[0],), anchor_exposure, dtype=torch.long, device=device
+        latent = _union_latent_for_xy(
+            model,
+            canvas,
+            xy,
+            anchor_exposure=anchor_exposure,
+            device=device,
         )
-        latent = model.trunk(model.feature_alignment(raw, exposure_id))
         valid = torch.ones(xy.shape[0], dtype=torch.bool, device=device)
         value = torch.zeros(xy.shape[0], dtype=torch.float32, device=device)
         for sample_index in range(wavelength.numel()):
             wave = torch.full_like(value, float(wavelength[sample_index]))
             value += weight[sample_index] * model.decode(latent, wave, valid)
         output[start:stop] = value
+    return output.reshape(height, width)
+
+
+@torch.no_grad()
+def render_union_decoder_slice(
+    model: WCSAwareMultiWavelengthINR,
+    canvas: UnionCanvas,
+    wavelength: float,
+    *,
+    anchor_exposure: int,
+    device: torch.device,
+    tile_pixels: int,
+) -> Tensor:
+    """Render the direct decoder output S_theta(x, y, wavelength).
+
+    This is the monochromatic decoder value before bandpass integration,
+    background addition, and any explicit PSF operation.
+    """
+    model.eval()
+    height, width = canvas.shape
+    output = torch.empty(height * width, dtype=torch.float32, device=device)
+    wave_value = float(wavelength)
+    for start in range(0, output.numel(), tile_pixels):
+        stop = min(start + tile_pixels, output.numel())
+        index = torch.arange(start, stop, device=device)
+        y = torch.div(index, width, rounding_mode="floor")
+        x = index - y * width
+        xy = torch.stack((x, y), -1).float()
+        latent = _union_latent_for_xy(
+            model,
+            canvas,
+            xy,
+            anchor_exposure=anchor_exposure,
+            device=device,
+        )
+        valid = torch.ones(xy.shape[0], dtype=torch.bool, device=device)
+        wave = torch.full((xy.shape[0],), wave_value, dtype=torch.float32, device=device)
+        output[start:stop] = model.decode(latent, wave, valid)
     return output.reshape(height, width)
 
 
@@ -556,6 +609,7 @@ __all__ = [
     "load_exposure_pool",
     "normalize_pools",
     "render_union_band",
+    "render_union_decoder_slice",
     "robust_intensity_scale",
     "seed_everything",
     "train_model",
