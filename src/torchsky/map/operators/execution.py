@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 
 import torch
 from torch import Tensor
 
-from .background import SpatialSkyBackgroundOp
 from .bundle import ObservationOperatorBundle, image_observation_operator_bundle
 from .geometry import (
     ConservativePolygonRemapOp,
@@ -17,7 +16,6 @@ from .geometry import (
 )
 from .geometry_conservative import conservative_polygon_project
 from .geometry_drizzle import exact_point_drizzle_project, exact_square_drizzle_project
-from .geometry_drizzle_fast import exact_square_drizzle_project_vectorized
 
 
 LoadWeightMapFn = Callable[[object, Tensor, torch.device], Tensor]
@@ -186,24 +184,12 @@ def prepare_image_observation_data(
     resampling_kernel: str,
     load_weight_map_fn: LoadWeightMapFn,
     apply_calibration_fn: ApplyCalibrationFn,
-    background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
 ) -> PreparedImageObservationData:
-    """Normalize image-plane observation inputs into operator-ready tensors.
-
-    When *background_estimator* is provided, a
-    :class:`SpatialSkyBackgroundOp` is injected into the operator bundle.
-    The spatial sky model is estimated and subtracted **after** calibration
-    (which handles the constant ``background_offset``), so the spatial model
-    captures residual spatially-varying background on calibrated data.
-    """
+    """Normalize image-plane observation inputs into operator-ready tensors."""
     operator_bundle = image_observation_operator_bundle(
         observation,
         resampling_kernel=resampling_kernel,
     )
-    if background_estimator is not None:
-        operator_bundle = operator_bundle.with_updates(
-            background=SpatialSkyBackgroundOp(background_estimator),
-        )
     if operator_bundle.mask_weight is not None or operator_bundle.noise is not None:
         source_weight = load_weight_map_fn(observation, image, device=device)
     else:
@@ -222,12 +208,6 @@ def prepare_image_observation_data(
             neginf=0.0,
         )
         prepared_weight = source_weight.to(dtype=torch.float32)
-    spatial_bg = operator_bundle.background
-    if isinstance(spatial_bg, SpatialSkyBackgroundOp) and spatial_bg.enabled:
-        estimator = spatial_bg.background_estimator
-        assert estimator is not None
-        sky_model = estimator(prepared_image, None)
-        prepared_image = prepared_image - sky_model.to(dtype=prepared_image.dtype)
     return PreparedImageObservationData(
         image=prepared_image,
         source_weight=prepared_weight,
@@ -259,18 +239,6 @@ def project_image_observation_geometry(
         geometry = operator_bundle.geometry
     if isinstance(geometry, ExactDrizzleGeometryOp):
         if resampling_kernel == "drizzle_square":
-            if image.device.type == "cuda":
-                return exact_square_drizzle_project_vectorized(
-                    image,
-                    source_weight,
-                    source_wcs,
-                    target,
-                    value_semantics=value_semantics,
-                    drizzle_pixfrac=drizzle_pixfrac,
-                    pixel_area_sr_map_fn=pixel_area_sr_map_fn,
-                    representative_pixel_area_fn=representative_pixel_area_fn,
-                    chunk_pixels=chunk_pixels,
-                )
             return exact_square_drizzle_project(
                 image,
                 source_weight,
@@ -371,6 +339,18 @@ def source_bbox_on_target(
     x1 = min(int(torch.ceil(x_good.max()).item()) + margin + 1, width)
     y0 = max(int(torch.floor(y_good.min()).item()) - margin, 0)
     y1 = min(int(torch.ceil(y_good.max()).item()) + margin + 1, height)
-    if x1 <= x0 or y1 <= y0:
+    if x0 >= x1 or y0 >= y1:
         return None
     return y0, y1, x0, x1
+
+
+def is_plain_tan_header(header: Mapping[str, object]) -> bool:
+    """Return True for simple 2D TAN celestial headers."""
+    return str(header.get("CTYPE1", "")).endswith("TAN") and str(
+        header.get("CTYPE2", "")
+    ).endswith("TAN")
+
+
+def wcs_has_distortion(wcs) -> bool:
+    """Return True when a WCS carries distortion terms unsupported by fast policies."""
+    return getattr(wcs, "sip", None) is not None or bool(getattr(wcs, "_is_tpv", False))
