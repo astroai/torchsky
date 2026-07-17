@@ -1,4 +1,5 @@
-# Production PSF generation for scripts/smacs0723_wcs_aware_multiband_inr.py
-# Install inside the existing CUDA Pixi environment with:
-#   pixi run -e cuda python -m pip install -r requirements/wcs-aware-inr.txt
+# SVO FPS throughput retrieval for bandpass_mode=official.
+astroquery>=0.4.11,<0.5
+
+# Production PSF generation when psf_mode=stpsf is enabled.
 stpsf==2.2.0
