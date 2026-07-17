@@ -180,7 +180,7 @@ def load_exposure_pool(
     dq_mode: str,
     rng: np.random.Generator,
 ) -> ExposurePool:
-    with fits.open(path, memmap=True) as hdul:
+    with fits.open(path, memmap=False) as hdul:
         if "SCI" not in hdul or "ERR" not in hdul:
             raise ValueError(f"{path} must contain SCI and ERR")
         image = np.asarray(hdul["SCI"].data, dtype=np.float32)
