@@ -116,9 +116,18 @@ jobs:
           - shard: field-training-core
             tests: tests/test_map_field.py
             pytest_args: -k 'not component and fit_field_model and not training and not pretraining'
-          - shard: field-model-fits
+          - shard: field-model-fits-base
             tests: tests/test_map_field.py
-            pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining)'
+            pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and not hashgrid and not sky_encoder and not feature_atlas'
+          - shard: field-model-feature-atlas
+            tests: tests/test_map_field.py
+            pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and feature_atlas'
+          - shard: field-model-sky-encoder
+            tests: tests/test_map_field.py
+            pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and sky_encoder'
+          - shard: field-model-hashgrid
+            tests: tests/test_map_field.py
+            pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and hashgrid'
           - shard: field-contracts
             tests: tests/test_map_field.py
             pytest_args: -k 'not component and not fit and not training and not pretraining'
@@ -190,9 +199,17 @@ jobs:
         run: pixi run -e sphere-bench -- pip install -e . --no-build-isolation
 
       - name: Run map pytest (includes reproject + drizzle smoke)
-        run: >-
-          pixi run -e sphere-bench -- pytest -n auto -v --tb=short
-          ${{ matrix.tests }} ${{ matrix.pytest_args }}
+        run: |
+          pixi run -e sphere-bench -- pytest -n auto -v --tb=short \
+            ${{ matrix.tests }} ${{ matrix.pytest_args }} &
+          pytest_pid=$!
+          (while kill -0 "$pytest_pid" 2>/dev/null; do
+            sleep 60
+            kill -0 "$pytest_pid" 2>/dev/null && echo "torchsky map pytest is still running"
+          done) &
+          heartbeat_pid=$!
+          trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
+          wait "$pytest_pid"
 
       - name: Map compat gate vs baseline (synthetic_shifted_wcs)
         if: matrix.shard == 'integration'
