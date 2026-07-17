@@ -1,0 +1,66 @@
+"""Loss functions for the WCS-aware multi-wavelength INR."""
+
+from __future__ import annotations
+
+import math
+
+import torch
+from torch import Tensor
+
+
+def err_whitened_robust_loss(
+    prediction: Tensor,
+    target: Tensor,
+    err: Tensor,
+    mask: Tensor,
+    *,
+    kind: str = "huber",
+    delta: float = 3.0,
+) -> tuple[Tensor, dict[str, Tensor]]:
+    """Apply a robust loss to residuals whitened by the per-pixel ERR map.
+
+    The optimized residual is ``z = (prediction - target) / err``. Therefore a
+    Huber threshold of ``delta=3`` has the direct interpretation of a three-sigma
+    transition. No second inverse-variance weighting is applied after whitening.
+    """
+
+    delta_value = float(delta)
+    if not math.isfinite(delta_value) or delta_value <= 0.0:
+        raise ValueError("delta must be finite and positive")
+
+    valid = (
+        mask.bool()
+        & torch.isfinite(prediction)
+        & torch.isfinite(target)
+        & torch.isfinite(err)
+        & (err > 0)
+    )
+    if not bool(valid.any()):
+        raise RuntimeError("batch has no valid pixels")
+
+    # Keep the statistical normalization in float32 even under CUDA autocast.
+    residual = (prediction[valid] - target[valid]).float()
+    whitened = residual / err[valid].float()
+    if kind == "huber":
+        absolute = whitened.abs()
+        rho = torch.where(
+            absolute <= delta_value,
+            0.5 * whitened.square(),
+            delta_value * (absolute - 0.5 * delta_value),
+        )
+    elif kind == "charbonnier":
+        scaled = whitened / delta_value
+        rho = delta_value * delta_value * (torch.sqrt(1.0 + scaled.square()) - 1.0)
+    else:
+        raise ValueError("kind must be huber or charbonnier")
+
+    return rho.mean(), {
+        "rmse": residual.square().mean().sqrt().detach(),
+        "mae": residual.abs().mean().detach(),
+        "whitened_rmse": whitened.square().mean().sqrt().detach(),
+        "whitened_mae": whitened.abs().mean().detach(),
+        "valid_fraction": valid.float().mean().detach(),
+    }
+
+
+__all__ = ["err_whitened_robust_loss"]
