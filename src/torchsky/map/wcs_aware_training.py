@@ -56,6 +56,9 @@ class TrainingRecord:
     data_loss: float
     rmse: float
     mae: float
+    whitened_rmse: float
+    whitened_mae: float
+    valid_fraction: float
     alignment_regularization: float
     background_regularization: float
     seconds: float
@@ -470,6 +473,17 @@ def train_model(
                 data_loss=float(data_loss.detach()),
                 rmse=float(diagnostics["rmse"]),
                 mae=float(diagnostics["mae"]),
+                whitened_rmse=(
+                    float(diagnostics["whitened_rmse"])
+                    if "whitened_rmse" in diagnostics
+                    else float("nan")
+                ),
+                whitened_mae=(
+                    float(diagnostics["whitened_mae"])
+                    if "whitened_mae" in diagnostics
+                    else float("nan")
+                ),
+                valid_fraction=float(diagnostics["valid_fraction"]),
                 alignment_regularization=float(alignment_reg.detach()),
                 background_regularization=float(background_reg.detach()),
                 seconds=time.perf_counter() - started,
