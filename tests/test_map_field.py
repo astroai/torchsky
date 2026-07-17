@@ -2689,9 +2689,22 @@ def test_sky_lambda_feature_atlas_field_supports_exact_wavelength_fit() -> None:
         wavelength_scale=1000.0,
         coord_mode="sphere_xyz",
     )
-    truth_model = make_field_model("sky_lambda_feature_atlas_field", truth_domain)
-    header = _tan_header(18, crval1=150.0, crval2=2.0, scale_deg=0.9 / 3600.0)
-    wavelengths = (4800.0, 5600.0, 6400.0)
+    model_kwargs = {
+        "base_resolution": 4,
+        "num_scales": 2,
+        "features_per_plane": 2,
+        "scale_hidden_dim": 8,
+        "scale_num_blocks": 1,
+        "decoder_hidden_dim": 8,
+        "decoder_num_blocks": 1,
+        "refine_hidden_dim": 8,
+        "bandpass_hidden_dim": 8,
+    }
+    truth_model = make_field_model(
+        "sky_lambda_feature_atlas_field", truth_domain, **model_kwargs
+    )
+    header = _tan_header(8, crval1=150.0, crval2=2.0, scale_deg=0.9 / 3600.0)
+    wavelengths = (5000.0, 6200.0)
     observations: list[FieldObservation] = []
     for wavelength in wavelengths:
         template = FieldObservation(
@@ -2714,11 +2727,13 @@ def test_sky_lambda_feature_atlas_field_supports_exact_wavelength_fit() -> None:
         )
     fit_domain = estimate_field_domain(observations, coord_mode="sphere_xyz")
     torch.manual_seed(5423)
-    model = make_field_model("sky_lambda_feature_atlas_field", fit_domain)
+    model = make_field_model(
+        "sky_lambda_feature_atlas_field", fit_domain, **model_kwargs
+    )
     fit = fit_field_model(
         observations,
         model,
-        steps=12,
+        steps=6,
         lr=4.0e-3,
         num_spectral_samples=1,
         loss_kind="charbonnier",

@@ -1284,6 +1284,10 @@ def _maybe_external_drizzle_resample_weighted_to_target(
     )
     out_img = torch.as_tensor(drizzle.out_img, dtype=torch.float32, device=image.device)
     out_wht = torch.as_tensor(drizzle.out_wht, dtype=torch.float32, device=image.device)
+    if value_semantics == "flux":
+        # drizzle leaves out_wht in input-weight units even when iscale changes
+        # the science values; convert it to inverse variance in output units.
+        out_wht = out_wht / float(iscale * iscale)
     out_img = torch.where(out_wht > 0.0, out_img, torch.zeros_like(out_img))
     return out_img * out_wht, out_wht
 
