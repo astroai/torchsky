@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Train the final WCS-aware multi-wavelength INR on native SMACS J0723 data.
+"""Train the WCS-aware multi-wavelength INR on native SMACS J0723 data.
 
-Production defaults use official throughput curves and exposure/wavelength-
-specific STPSF kernels. Earlier center/top-hat/Gaussian bandpasses and
-none/Gaussian/NPY PSFs remain available for debugging and ablation.
+The official bandpass path queries JWST/NIRCam throughput curves from SVO FPS
+through astroquery and stores local snapshots for reproducibility. Simpler
+bandpasses and optional explicit PSF models remain available for ablations.
 """
 
 from __future__ import annotations
@@ -127,9 +127,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="official",
     )
     parser.add_argument("--bandpass-samples", type=int, default=9)
-    parser.add_argument("--throughput-dir", type=Path, default=None)
-    parser.add_argument("--throughput-manifest", type=Path, default=None)
-    parser.add_argument("--allow-mean-throughput", action="store_true")
+    parser.add_argument("--svo-collection", default="JWST/NIRCam2025")
+    parser.add_argument(
+        "--svo-cache-dir",
+        type=Path,
+        default=None,
+        help="Local NPZ snapshots of SVO curves; defaults under OUTPUT_DIR.",
+    )
+    parser.add_argument("--svo-timeout", type=float, default=60.0)
+    parser.add_argument("--svo-force-refresh", action="store_true")
 
     parser.add_argument(
         "--psf-mode",
@@ -182,15 +188,10 @@ def main() -> int:
     input_dir = args.exposure_dir.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    throughput_dir = (
-        args.throughput_dir.expanduser().resolve()
-        if args.throughput_dir is not None
-        else input_dir / "calibration" / "throughput"
-    )
-    throughput_manifest = (
-        args.throughput_manifest.expanduser().resolve()
-        if args.throughput_manifest is not None
-        else None
+    svo_cache_dir = (
+        args.svo_cache_dir.expanduser().resolve()
+        if args.svo_cache_dir is not None
+        else output_dir / "calibration_cache" / "svo"
     )
     psf_cache_dir = (
         args.psf_cache_dir.expanduser().resolve()
@@ -243,9 +244,10 @@ def main() -> int:
         mode=args.bandpass_mode,
         num_samples=args.bandpass_samples,
         band_specs=BAND_SPECS_ANGSTROM,
-        throughput_dir=throughput_dir,
-        throughput_manifest=throughput_manifest,
-        allow_mean_throughput=args.allow_mean_throughput,
+        svo_collection=args.svo_collection,
+        svo_cache_dir=svo_cache_dir,
+        svo_timeout=args.svo_timeout,
+        svo_force_refresh=args.svo_force_refresh,
     )
     psf_calibration = build_psf_calibration(
         calibration_inputs,
