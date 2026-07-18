@@ -23,6 +23,7 @@ def test_native_torch_abi_contract_is_consistent() -> None:
     )
     pixi = tomllib.loads((REPO_ROOT / "pixi.toml").read_text(encoding="utf-8"))
 
+    assert "scikit-build-core>=1.0.0" in pyproject["build-system"]["requires"]
     assert "torch>=2.10,<2.11" in pyproject["build-system"]["requires"]
     assert "torch>=2.10,<2.11" in pyproject["project"]["dependencies"]
     assert any(x.startswith("torchfits>=") for x in pyproject["project"]["dependencies"])
@@ -38,6 +39,20 @@ def test_native_torch_abi_contract_is_consistent() -> None:
     assert "TORCHSKY_BUILD_TORCH_VERSION" in cmake
     assert 'TORCHSKY_TORCH_ABI="2.10"' in cmake
     assert "matching_abi" in bindings
+
+
+def test_macos_source_wheels_target_the_portable_arm64_baseline() -> None:
+    pyproject = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    overrides = pyproject["tool"]["scikit-build"]["overrides"]
+    macos = next(
+        override
+        for override in overrides
+        if override["if"]["platform-system"] == "^darwin"
+    )
+
+    assert macos["cmake"]["define"]["CMAKE_OSX_DEPLOYMENT_TARGET"] == "11.0"
 
 
 def test_native_extension_rejects_mismatched_torch_runtime() -> None:
