@@ -722,7 +722,7 @@
     <!-- Empty state -->
     <div id="empty-state" style="position:absolute;inset:0;display:flex;flex-direction:column;
          align-items:center;justify-content:center;gap:var(--sp3);color:var(--text-dim);">
-      <div style="font-size:48px;opacity:0.3;">✦</div>
+      <div style="font-size:48px;opacity:0.3;" aria-hidden="true">✦</div>
       <div style="font-size:14px;font-weight:500;">Open a FITS file to begin</div>
       <div style="font-size:12px;">← Navigate the file tree</div>
     </div>
@@ -784,8 +784,8 @@
       <span class="label">Value</span>
       <span class="value text-mono" id="coord-val">—</span>
     </div>
-    <div style="margin-left:auto" class="footer-item">
-      <span class="value" id="footer-status">Ready</span>
+    <div style="margin-left:auto" class="footer-item" aria-live="polite" aria-atomic="true">
+      <span class="value" id="footer-status" style="display:flex;align-items:center;gap:8px;">Ready</span>
     </div>
   </footer>
 
@@ -836,7 +836,14 @@ async function api(path, opts = {}) {
   return r.json();
 }
 
-function status(msg) { $('footer-status').textContent = msg; }
+function status(msg) {
+  const el = $('footer-status');
+  if (msg.includes('Loading') || msg.includes('Running validation')) {
+    el.innerHTML = `<div class="spinner" style="width:14px;height:14px;border-width:1.5px;"></div> <span>${htmlEscape(msg)}</span>`;
+  } else {
+    el.textContent = msg;
+  }
+}
 
 // ─── Aladin setup ────────────────────────────────────────────
 function initAladinFits() {
@@ -902,7 +909,7 @@ async function loadFileTree(basePath = '') {
     const back = document.createElement('button');
     back.type = 'button';
     back.className = 'tree-item tree-dir';
-    back.innerHTML = '<span class="icon">←</span><span class="name">..</span>';
+    back.innerHTML = '<span class="icon" aria-hidden="true">←</span><span class="name">..</span>';
     back.onclick = () => loadFileTree(basePath.split('/').slice(0,-1).join('/'));
     container.appendChild(back);
   }
@@ -911,7 +918,7 @@ async function loadFileTree(basePath = '') {
     el.type = 'button';
     el.className = 'tree-item' + (item.type === 'dir' ? ' tree-dir' : '');
     el.innerHTML = `
-      <span class="icon">${item.type === 'dir' ? '📁' : '🔭'}</span>
+      <span class="icon" aria-hidden="true">${item.type === 'dir' ? '📁' : '🔭'}</span>
       <span class="name">${htmlEscape(item.name)}</span>
       ${item.size ? `<span class="size">${fmtSize(item.size)}</span>` : ''}
     `;
