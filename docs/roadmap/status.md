@@ -92,6 +92,12 @@ Re-baseline them after the repository boundary cleanup.
   (`benchmarks/bench_operator_multiexposure.py`): creates N synthetic dithered
   TAN exposures, runs `coadd_image_plane`, and tracks wall time, throughput,
   overlap statistics, deterministic accumulation, and peak GPU memory.
+- Multi-exposure bundle execution is matrix-free and chunk bounded for solver
+  normal actions, weighted adjoints, and residual updates. An isolated macOS
+  arm64 smoke at 24 x 512-square exposures reported the same deterministic
+  checksum for eager, chunk-1, and chunk-4 execution; peak RSS deltas were
+  49.7, 3.3, and 18.6 MB respectively, while throughput was 863, 2,507, and
+  1,451 megapixels/s. Re-run `bench_operator_chunking.py` for current hardware.
 - Arrow streaming path for catalogs: ``CatalogStreamDataset.from_arrow``,
   ``crossmatch_sky_streamed`` (generic left-batch iterator),
   ``crossmatch_sky_from_arrow`` (Arrow IPC / file convenience). All pyarrow

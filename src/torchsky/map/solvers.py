@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Sequence
+from typing import Callable, Iterator, Sequence
 
 import torch
 from torch import Tensor, nn
@@ -414,18 +414,42 @@ class BoundObservationOperatorSet:
     """Shared-scene operator assembled from multiple target-bound observations."""
 
     operators: tuple[BoundObservationOperator, ...]
+    exposure_chunk_size: int = 1
 
     def __post_init__(self) -> None:
         if len(self.operators) == 0:
             raise ValueError(
                 "BoundObservationOperatorSet requires at least one operator"
             )
+        if not isinstance(self.exposure_chunk_size, int) or isinstance(
+            self.exposure_chunk_size, bool
+        ):
+            raise TypeError("exposure_chunk_size must be an integer")
+        if self.exposure_chunk_size < 1:
+            raise ValueError("exposure_chunk_size must be positive")
+
+    def _iter_operator_chunks(self) -> Iterator[tuple[BoundObservationOperator, ...]]:
+        # ponytail: schedule chunks serially; add cross-exposure fusion only after profiling.
+        for start in range(0, len(self.operators), self.exposure_chunk_size):
+            yield self.operators[start : start + self.exposure_chunk_size]
+
+    def iter_apply_chunks(
+        self,
+        scene: SceneRepresentation | nn.Module | Tensor,
+    ) -> Iterator[tuple[Tensor, ...]]:
+        """Yield predictions in bounded, deterministic exposure-order chunks."""
+        for operators in self._iter_operator_chunks():
+            yield tuple(operator.apply(scene) for operator in operators)
 
     def apply(
         self,
         scene: SceneRepresentation | nn.Module | Tensor,
     ) -> tuple[Tensor, ...]:
-        return tuple(operator.apply(scene) for operator in self.operators)
+        return tuple(
+            prediction
+            for chunk in self.iter_apply_chunks(scene)
+            for prediction in chunk
+        )
 
     def apply_noise_model(self, tensors: Sequence[Tensor]) -> tuple[Tensor, ...]:
         if len(tensors) != len(self.operators):
@@ -444,6 +468,78 @@ class BoundObservationOperatorSet:
             total = contribution if total is None else total + contribution
         assert total is not None
         return total
+
+    def weighted_adjoint(self, tensors: Sequence[Tensor]) -> Tensor:
+        """Apply ``A^T N^-1`` without materializing weighted exposures."""
+        if len(tensors) != len(self.operators):
+            raise ValueError("tensor count must match operator count")
+        total: Tensor | None = None
+        for operator, tensor in zip(self.operators, tensors, strict=True):
+            contribution = operator.adjoint(operator.apply_noise_model(tensor))
+            total = contribution if total is None else total + contribution
+        assert total is not None
+        return total
+
+    def normal_operator_action(
+        self,
+        scene: SceneRepresentation | nn.Module | Tensor,
+    ) -> Tensor:
+        """Apply ``A^T N^-1 A`` with chunk-bounded prediction intermediates."""
+        total: Tensor | None = None
+        for operators in self._iter_operator_chunks():
+            predictions = tuple(operator.apply(scene) for operator in operators)
+            for operator, prediction in zip(operators, predictions, strict=True):
+                weighted_prediction = operator.apply_noise_model(prediction)
+                contribution = operator.adjoint(weighted_prediction)
+                total = contribution if total is None else total + contribution
+        assert total is not None
+        return total
+
+    def _residual_norm(
+        self,
+        scene: SceneRepresentation | nn.Module | Tensor,
+        data: Sequence[Tensor],
+    ) -> Tensor:
+        if len(data) != len(self.operators):
+            raise ValueError("data count must match operator count")
+        squared_norm: Tensor | None = None
+        offset = 0
+        for operators in self._iter_operator_chunks():
+            predictions = tuple(operator.apply(scene) for operator in operators)
+            for prediction in predictions:
+                datum = torch.as_tensor(data[offset])
+                residual = datum.to(dtype=prediction.dtype) - prediction
+                squared = torch.sum(torch.abs(residual).square())
+                squared_norm = squared if squared_norm is None else squared_norm + squared
+                offset += 1
+        assert squared_norm is not None
+        return torch.sqrt(squared_norm)
+
+    def _residual_adjoint_and_norm(
+        self,
+        scene: SceneRepresentation | nn.Module | Tensor,
+        data: Sequence[Tensor],
+    ) -> tuple[Tensor, Tensor]:
+        if len(data) != len(self.operators):
+            raise ValueError("data count must match operator count")
+        total: Tensor | None = None
+        squared_norm: Tensor | None = None
+        offset = 0
+        for operators in self._iter_operator_chunks():
+            predictions = tuple(operator.apply(scene) for operator in operators)
+            for operator, prediction in zip(operators, predictions, strict=True):
+                datum = torch.as_tensor(data[offset])
+                residual = datum.to(dtype=prediction.dtype) - prediction
+                squared = torch.sum(torch.abs(residual).square())
+                squared_norm = squared if squared_norm is None else squared_norm + squared
+                contribution = operator.adjoint(
+                    operator.apply_noise_model(residual)
+                )
+                total = contribution if total is None else total + contribution
+                offset += 1
+        assert total is not None
+        assert squared_norm is not None
+        return total, torch.sqrt(squared_norm)
 
     def normal_equation_probe(
         self,
@@ -478,15 +574,11 @@ class BoundObservationOperatorSet:
             raise ValueError("data count must match operator count")
         probe = initial_probe
         if probe is None:
-            weighted_data = self.apply_noise_model(
-                tuple(torch.as_tensor(item) for item in data)
-            )
-            probe = self.adjoint(weighted_data)
+            probe = self.weighted_adjoint(data)
         state = _normalized_probe(torch.as_tensor(probe))
         estimate = 0.0
         for _ in range(int(iterations)):
-            weighted_predictions = self.apply_noise_model(self.apply(state))
-            image = self.adjoint(weighted_predictions)
+            image = self.normal_operator_action(state)
             estimate = _rayleigh_quotient(state, image)
             state = _normalized_probe(image)
         return estimate
@@ -522,9 +614,7 @@ class BoundObservationOperatorSet:
         prototype = torch.as_tensor(
             initial_probe
             if initial_probe is not None
-            else self.adjoint(
-                self.apply_noise_model(tuple(torch.as_tensor(item) for item in data))
-            )
+            else self.weighted_adjoint(data)
         )
         diagonal = torch.zeros_like(prototype)
         for _ in range(int(num_probes)):
@@ -540,9 +630,7 @@ class BoundObservationOperatorSet:
                 z = re.to(prototype.dtype)
             else:
                 z = (torch.rand_like(prototype) > 0.5).to(prototype.dtype) * 2 - 1
-            Az = self.apply(z)
-            NAz = self.apply_noise_model(Az)
-            ANAz = self.adjoint(NAz)
+            ANAz = self.normal_operator_action(z)
             if damping > 0.0:
                 ANAz = ANAz + float(damping) * z
             diagonal = diagonal + (z.conj() * ANAz).real.to(diagonal.dtype)
@@ -570,7 +658,7 @@ class BoundObservationOperatorSet:
         history: list[float] = []
         data_t = tuple(torch.as_tensor(item) for item in data)
         if initial_solution is None:
-            prototype = self.adjoint(self.apply_noise_model(data_t))
+            prototype = self.weighted_adjoint(data_t)
             solution = torch.zeros_like(prototype)
         else:
             solution = torch.as_tensor(initial_solution).clone()
@@ -587,20 +675,12 @@ class BoundObservationOperatorSet:
         if step <= 0.0:
             raise ValueError("step_size must be positive")
         for _ in range(int(iterations)):
-            predictions = self.apply(solution)
-            residuals = tuple(
-                datum.to(dtype=prediction.dtype) - prediction
-                for datum, prediction in zip(data_t, predictions, strict=True)
-            )
-            residual_norm = torch.sqrt(
-                torch.stack(
-                    [torch.sum(torch.abs(residual).square()) for residual in residuals]
-                ).sum()
+            update, residual_norm = self._residual_adjoint_and_norm(
+                solution,
+                data_t,
             )
             history.append(float(residual_norm.item()))
-            weighted_residuals = self.apply_noise_model(residuals)
-            update = self.adjoint(weighted_residuals).to(dtype=solution.dtype)
-            solution = solution + step * update
+            solution = solution + step * update.to(dtype=solution.dtype)
         return LinearSolveResult(
             solution=solution,
             residual_norm_history=tuple(history),
@@ -622,14 +702,14 @@ class BoundObservationOperatorSet:
         if len(data) != len(self.operators):
             raise ValueError("data count must match operator count")
         data_t = tuple(torch.as_tensor(item) for item in data)
-        rhs = self.adjoint(self.apply_noise_model(data_t))
+        rhs = self.weighted_adjoint(data_t)
         if initial_solution is None:
             solution = torch.zeros_like(rhs)
         else:
             solution = torch.as_tensor(initial_solution).clone()
 
         def _normal_action(state: Tensor) -> Tensor:
-            image = self.adjoint(self.apply_noise_model(self.apply(state)))
+            image = self.normal_operator_action(state)
             if damping > 0.0:
                 image = image + float(damping) * state
             return image
@@ -642,16 +722,7 @@ class BoundObservationOperatorSet:
         rz_old = _inner_product(residual, preconditioned_residual).real
         history: list[float] = []
         for _ in range(int(iterations)):
-            predictions = self.apply(solution)
-            residuals = tuple(
-                datum.to(dtype=prediction.dtype) - prediction
-                for datum, prediction in zip(data_t, predictions, strict=True)
-            )
-            residual_norm = torch.sqrt(
-                torch.stack(
-                    [torch.sum(torch.abs(resid).square()) for resid in residuals]
-                ).sum()
-            )
+            residual_norm = self._residual_norm(solution, data_t)
             history.append(float(residual_norm.item()))
             ap = _normal_action(direction)
             denom = _inner_product(direction, ap).real
@@ -679,6 +750,7 @@ class BoundObservationOperatorSet:
 
 def compose_bound_operators(
     *parts: BoundObservationOperator | BoundObservationOperatorSet,
+    exposure_chunk_size: int = 1,
 ) -> BoundObservationOperatorSet:
     operators: list[BoundObservationOperator] = []
     for part in parts:
@@ -690,7 +762,10 @@ def compose_bound_operators(
             raise TypeError(
                 "compose_bound_operators accepts bound operators or bound-operator sets"
             )
-    return BoundObservationOperatorSet(tuple(operators))
+    return BoundObservationOperatorSet(
+        tuple(operators),
+        exposure_chunk_size=exposure_chunk_size,
+    )
 
 
 def build_state_identity_operator(
@@ -796,7 +871,8 @@ def build_state_subspace_operator(
         return _wrap_bound(base_operator)
     if isinstance(base_operator, BoundObservationOperatorSet):
         return BoundObservationOperatorSet(
-            tuple(_wrap_bound(op) for op in base_operator.operators)
+            tuple(_wrap_bound(op) for op in base_operator.operators),
+            exposure_chunk_size=base_operator.exposure_chunk_size,
         )
     raise TypeError(
         "base_operator must be a BoundObservationOperator or BoundObservationOperatorSet"
@@ -884,7 +960,8 @@ def build_state_component_mixture_operator(
         return _wrap_bound(base_operator)
     if isinstance(base_operator, BoundObservationOperatorSet):
         return BoundObservationOperatorSet(
-            tuple(_wrap_bound(op) for op in base_operator.operators)
+            tuple(_wrap_bound(op) for op in base_operator.operators),
+            exposure_chunk_size=base_operator.exposure_chunk_size,
         )
     raise TypeError(
         "base_operator must be a BoundObservationOperator or BoundObservationOperatorSet"
@@ -1374,7 +1451,8 @@ def build_conditioned_component_mixture_operator(
         return _wrap_bound(base_operator)
     if isinstance(base_operator, BoundObservationOperatorSet):
         return BoundObservationOperatorSet(
-            tuple(_wrap_bound(op) for op in base_operator.operators)
+            tuple(_wrap_bound(op) for op in base_operator.operators),
+            exposure_chunk_size=base_operator.exposure_chunk_size,
         )
     raise TypeError(
         "base_operator must be a BoundObservationOperator or BoundObservationOperatorSet"
@@ -2124,9 +2202,12 @@ class SolverHooks:
     def bind_targets(
         self,
         targets: Sequence[TargetRenderSpec],
+        *,
+        exposure_chunk_size: int = 1,
     ) -> BoundObservationOperatorSet:
         return BoundObservationOperatorSet(
-            tuple(self.bind_target(target) for target in targets)
+            tuple(self.bind_target(target) for target in targets),
+            exposure_chunk_size=exposure_chunk_size,
         )
 
 
