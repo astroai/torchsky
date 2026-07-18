@@ -163,6 +163,7 @@ def bind_image_plane_observations_to_target_operator_set(
     value_semantics: str | None = None,
     drizzle_pixfrac: float = 1.0,
     chunk_pixels: int = 262_144,
+    exposure_chunk_size: int = 1,
 ) -> BoundObservationOperatorSet:
     """Bind several image-plane observations to one latent target-grid scene."""
     if len(observations) == 0:
@@ -185,7 +186,10 @@ def bind_image_plane_observations_to_target_operator_set(
         )
         for observation, header in zip(observations, headers, strict=True)
     ]
-    return BoundObservationOperatorSet(tuple(operators))
+    return BoundObservationOperatorSet(
+        tuple(operators),
+        exposure_chunk_size=exposure_chunk_size,
+    )
 
 
 __all__ = [

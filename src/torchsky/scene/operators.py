@@ -164,6 +164,7 @@ class ObservationOperatorAdapter:
         apply_adjoint: AdjointOperatorFn | None = None,
         apply_noise: ApplyNoiseFn | None = None,
         bind_target_fn: BindTargetFn | None = None,
+        exposure_chunk_size: int = 1,
     ) -> BoundObservationOperatorSet:
         """Bind this observation law to several target render grids."""
         return self.solver_hooks(
@@ -171,7 +172,7 @@ class ObservationOperatorAdapter:
             apply_adjoint=apply_adjoint,
             apply_noise=apply_noise,
             bind_target_fn=bind_target_fn,
-        ).bind_targets(targets)
+        ).bind_targets(targets, exposure_chunk_size=exposure_chunk_size)
 
     def normal_equation_probe(
         self,
@@ -280,6 +281,7 @@ def bind_image_plane_observations_to_target(
     value_semantics: str | None = None,
     drizzle_pixfrac: float = 1.0,
     chunk_pixels: int = 262_144,
+    exposure_chunk_size: int = 1,
 ) -> BoundObservationOperatorSet:
     """Bind several image-plane observations to one latent target-grid scene."""
     if len(observations) == 0:
@@ -292,6 +294,7 @@ def bind_image_plane_observations_to_target(
         value_semantics=value_semantics,
         drizzle_pixfrac=drizzle_pixfrac,
         chunk_pixels=chunk_pixels,
+        exposure_chunk_size=exposure_chunk_size,
     )
 
 
