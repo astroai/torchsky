@@ -2,7 +2,7 @@
 # Compatible with both pip and pixi-build cmake backend
 # When using pixi-build, these are automatically provided but we keep them for pip compatibility
 requires = [
-    "scikit-build-core>=0.11.6",
+    "scikit-build-core>=1.0.0",
     "nanobind>=2.10.2",
     "torch>=2.10,<2.11",
     "numpy>=1.20.0"
@@ -154,6 +154,10 @@ sdist.include = ["src/torchsky/sphere/data/pixel_window_functions/*.fits"]
 # CMake and Ninja will automatically detect which C++ files have changed and only
 # recompile those, leading to much faster iteration times.
 build-dir = "build/{wheel_tag}"
+
+[[tool.scikit-build.overrides]]
+if.platform-system = "^darwin"
+cmake.define.CMAKE_OSX_DEPLOYMENT_TARGET = "11.0"
 
 
 
