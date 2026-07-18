@@ -694,10 +694,10 @@ def evaluate_map_product(
             "reconstruction_max_abs_err": 0.0,
             "signal_to_residual_ratio": 0.0,
             "signal_to_residual_db": float("-inf"),
-            "band_reconstruction_rmse": [0.0 for _ in range(int(pred_data.shape[0]))],
+            "band_reconstruction_rmse": [0.0] * int(pred_data.shape[0]),
             "band_flux_relative_error_mean": 0.0,
             "band_flux_relative_error_max": 0.0,
-            "band_flux_relative_error": [0.0 for _ in range(int(pred_data.shape[0]))],
+            "band_flux_relative_error": [0.0] * int(pred_data.shape[0]),
             "total_flux_truth": 0.0,
             "total_flux_output": 0.0,
             "total_flux_absolute_error": 0.0,
@@ -717,7 +717,8 @@ def evaluate_map_product(
         band_valid = valid[band_idx]
         if bool(band_valid.any()):
             band_residual = residual[band_idx][band_valid]
-            band_rmse.append(torch.sqrt(torch.mean(torch.square(band_residual))))
+            # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
+            band_rmse.append(torch.sqrt(torch.mean(band_residual * band_residual)))
         else:
             band_rmse.append(
                 torch.zeros((), dtype=torch.float32, device=pred_data.device)
@@ -727,8 +728,9 @@ def evaluate_map_product(
     signal_flat = truth_data.reshape(-1)[valid_flat]
     residual_flat = residual.reshape(-1)[valid_flat]
     abs_flat = abs_err.reshape(-1)[valid_flat]
-    signal_rms = float(torch.sqrt(torch.mean(torch.square(signal_flat))).item())
-    residual_rms = float(torch.sqrt(torch.mean(torch.square(residual_flat))).item())
+    # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
+    signal_rms = float(torch.sqrt(torch.mean(signal_flat * signal_flat)).item())
+    residual_rms = float(torch.sqrt(torch.mean(residual_flat * residual_flat)).item())
     snr_linear = signal_rms / max(residual_rms, 1.0e-12)
     if value_semantics == "surface_brightness":
         area_sr = pixel_area_sr_map(
@@ -753,21 +755,18 @@ def evaluate_map_product(
         "zero_support_fraction": float((~valid).to(dtype=torch.float32).mean().item()),
         "mean_weight": float(pred_weight.mean().item()),
         "reconstruction_rmse": float(
-            torch.sqrt(torch.mean(torch.square(residual_flat))).item()
+            # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
+            torch.sqrt(torch.mean(residual_flat * residual_flat)).item()
         ),
         "reconstruction_mae": float(torch.mean(abs_flat).item()),
         "reconstruction_p95_abs_err": float(torch.quantile(abs_flat, 0.95).item()),
         "reconstruction_max_abs_err": float(torch.max(abs_flat).item()),
         "signal_to_residual_ratio": snr_linear,
         "signal_to_residual_db": 20.0 * math.log10(max(snr_linear, 1.0e-12)),
-        "band_reconstruction_rmse": [
-            float(value) for value in band_rmse_tensor.detach().cpu().tolist()
-        ],
+        "band_reconstruction_rmse": band_rmse_tensor.detach().cpu().tolist(),
         "band_flux_relative_error_mean": float(torch.mean(band_flux_rel_err).item()),
         "band_flux_relative_error_max": float(torch.max(band_flux_rel_err).item()),
-        "band_flux_relative_error": [
-            float(value) for value in band_flux_rel_err.detach().cpu().tolist()
-        ],
+        "band_flux_relative_error": band_flux_rel_err.detach().cpu().tolist(),
         "band_reconstruction_rmse_mean": float(torch.mean(band_rmse_tensor).item()),
         "band_reconstruction_rmse_max": float(torch.max(band_rmse_tensor).item()),
         "total_flux_truth": float(band_flux_truth.sum().item()),
@@ -842,7 +841,8 @@ def evaluate_map_frontier_regions(
             "prediction, truth, and support_weight must share the same shape"
         )
     residual = pred_cube - truth_cube
-    sq_residual = torch.square(residual)
+    # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
+    sq_residual = residual * residual
     support_mask = support_cube > 0.0
     local_support = _mean_pool_cube(
         support_mask.to(dtype=torch.float32),
@@ -997,7 +997,9 @@ def evaluate_map_uncertainty(
     sigma_centered = sigma - torch.mean(sigma)
     abs_centered = abs_err - torch.mean(abs_err)
     denom = torch.sqrt(
-        torch.sum(torch.square(sigma_centered)) * torch.sum(torch.square(abs_centered))
+        # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
+        torch.sum(sigma_centered * sigma_centered)
+        * torch.sum(abs_centered * abs_centered)
     )
     corr = (
         float(
