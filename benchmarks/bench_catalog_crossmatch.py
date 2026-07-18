@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark catalog crossmatch refinement: declination pruning vs coarse HEALPix index."""
+"""Benchmark catalog crossmatch candidate-generation strategies."""
 
 from __future__ import annotations
 
@@ -101,13 +101,9 @@ def _assert_same_matches(
     expected: catalogs_core.CrossmatchResult,
 ) -> None:
     if got.left_index.tolist() != expected.left_index.tolist():
-        raise RuntimeError(
-            "left_index mismatch between coarse and declination crossmatch"
-        )
+        raise RuntimeError("left_index mismatch between crossmatch strategies")
     if got.right_index.tolist() != expected.right_index.tolist():
-        raise RuntimeError(
-            "right_index mismatch between coarse and declination crossmatch"
-        )
+        raise RuntimeError("right_index mismatch between crossmatch strategies")
     torch.testing.assert_close(
         got.separation_arcsec,
         expected.separation_arcsec,
@@ -129,13 +125,19 @@ def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         (row for row in rows if row.get("operation") == "crossmatch_coarse_healpix"),
         None,
     )
-    if decl is None or coarse is None:
+    indexed = next(
+        (
+            row
+            for row in rows
+            if row.get("operation") == "crossmatch_declination_indexed"
+        ),
+        None,
+    )
+    if decl is None or coarse is None or indexed is None:
         return []
-    recommended = "crossmatch_coarse_healpix"
-    note = "Structured coarse HEALPix pruning is faster on this workload"
-    if float(coarse["time_s"]) >= float(decl["time_s"]):
-        recommended = "crossmatch_declination_pruned"
-        note = "Declination pruning is still better on this workload size"
+    recommended_row = min((decl, coarse, indexed), key=lambda row: float(row["time_s"]))
+    recommended = str(recommended_row["operation"])
+    note = "Lowest measured exact candidate-generation time on this workload"
     return [
         {
             "operation": "crossmatch_recommendation",
@@ -143,6 +145,7 @@ def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "recommended_operation": recommended,
             "time_s_declination": decl["time_s"],
             "time_s_coarse": coarse["time_s"],
+            "time_s_indexed": indexed["time_s"],
             "candidate_row_reduction_vs_declination": coarse.get(
                 "candidate_row_reduction_vs_declination",
                 float("nan"),
@@ -201,6 +204,16 @@ def main() -> int:
         right_chunk_size=args.right_chunk_size,
         return_stats=True,
     )
+    indexed_result, indexed_stats = catalogs_core._crossmatch_sky_declination_indexed(
+        left_ra,
+        left_dec,
+        right_ra,
+        right_dec,
+        radius_arcsec=args.radius_arcsec,
+        left_chunk_size=args.left_chunk_size,
+        right_chunk_size=args.right_chunk_size,
+        return_stats=True,
+    )
     coarse_nside = catalogs_core._choose_default_coarse_nside(
         left_ra,
         left_dec,
@@ -219,7 +232,8 @@ def main() -> int:
     )
 
     _assert_same_matches(coarse_result, decl_result)
-    _assert_same_matches(public_result, decl_result)
+    _assert_same_matches(indexed_result, decl_result)
+    _assert_same_matches(public_result, indexed_result)
 
     t_decl = _time_many(
         lambda: catalogs_core._crossmatch_sky_declination_pruned(
@@ -235,6 +249,18 @@ def main() -> int:
     )
     t_coarse = _time_many(
         lambda: catalogs_core._crossmatch_sky_coarse_indexed(
+            left_ra,
+            left_dec,
+            right_ra,
+            right_dec,
+            radius_arcsec=args.radius_arcsec,
+            left_chunk_size=args.left_chunk_size,
+            right_chunk_size=args.right_chunk_size,
+        ),
+        runs=args.runs,
+    )
+    t_indexed = _time_many(
+        lambda: catalogs_core._crossmatch_sky_declination_indexed(
             left_ra,
             left_dec,
             right_ra,
@@ -283,6 +309,25 @@ def main() -> int:
             "pair_reduction_vs_declination": decl_stats.pairs_evaluated
             / max(coarse_stats.pairs_evaluated, 1),
         },
+        {
+            "operation": "crossmatch_declination_indexed",
+            "library": "torchsky",
+            "left_points": args.n_left,
+            "right_points": args.n_right_band
+            + args.n_right_background
+            + min(max(16, args.n_left // 2), args.n_left),
+            "radius_arcsec": args.radius_arcsec,
+            "time_s": t_indexed,
+            "crossmatches_s": args.n_left / t_indexed,
+            "matched_rows": indexed_stats.matched_rows,
+            "candidate_groups": indexed_stats.candidate_groups,
+            "candidate_rows_considered": indexed_stats.candidate_rows_considered,
+            "pairs_evaluated": indexed_stats.pairs_evaluated,
+            "speedup_vs_declination": t_decl / t_indexed,
+            "speedup_vs_coarse": t_coarse / t_indexed,
+            "pair_reduction_vs_declination": decl_stats.pairs_evaluated
+            / max(indexed_stats.pairs_evaluated, 1),
+        },
     ]
     rows.extend(_recommendation_rows(rows))
 
@@ -301,6 +346,12 @@ def main() -> int:
         f"candidate_rows={coarse_stats.candidate_rows_considered} "
         f"nside={coarse_nside} "
         f"speedup={t_decl / t_coarse:.2f}x"
+    )
+    print(
+        f"  declination_indexed:{t_indexed:.4f}s "
+        f"pairs={indexed_stats.pairs_evaluated} "
+        f"candidate_rows={indexed_stats.candidate_rows_considered} "
+        f"speedup_vs_coarse={t_coarse / t_indexed:.2f}x"
     )
     recommendation = rows[-1]
     print(
