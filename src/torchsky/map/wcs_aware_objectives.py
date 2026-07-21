@@ -18,11 +18,18 @@ def err_whitened_robust_loss(
     delta: float = 3.0,
     max_relative_weight: float | None = None,
 ) -> tuple[Tensor, dict[str, Tensor]]:
-    """Apply a robust loss to residuals whitened by the per-pixel ERR map.
+    """Apply an objective to residuals whitened by the per-pixel ERR map.
 
-    The optimized residual is ``z = (prediction - target) / err``. Therefore a
-    Huber threshold of ``delta=3`` has the direct interpretation of a three-sigma
-    transition. No second inverse-variance weighting is applied after whitening.
+    The optimized residual is ``z = (prediction - target) / err``. Supported
+    objectives are:
+
+    - ``huber``: quadratic for ``|z| <= delta`` and linear outside;
+    - ``charbonnier``: smooth robust penalty with scale ``delta``;
+    - ``whitened_l2``: un-clipped ``0.5 * z**2``.
+
+    A Huber threshold of ``delta=3`` has the direct interpretation of a
+    three-sigma transition. No second inverse-variance weighting is applied
+    after whitening.
 
     ``max_relative_weight`` is accepted only for compatibility with the previous
     training API and is intentionally ignored.
@@ -30,8 +37,9 @@ def err_whitened_robust_loss(
 
     _ = max_relative_weight
     delta_value = float(delta)
-    if not math.isfinite(delta_value) or delta_value <= 0.0:
-        raise ValueError("delta must be finite and positive")
+    if kind in {"huber", "charbonnier"}:
+        if not math.isfinite(delta_value) or delta_value <= 0.0:
+            raise ValueError("delta must be finite and positive")
 
     valid = (
         mask.bool()
@@ -56,8 +64,10 @@ def err_whitened_robust_loss(
     elif kind == "charbonnier":
         scaled = whitened / delta_value
         rho = delta_value * delta_value * (torch.sqrt(1.0 + scaled.square()) - 1.0)
+    elif kind == "whitened_l2":
+        rho = 0.5 * whitened.square()
     else:
-        raise ValueError("kind must be huber or charbonnier")
+        raise ValueError("kind must be huber, charbonnier, or whitened_l2")
 
     return rho.mean(), {
         "rmse": residual.square().mean().sqrt().detach(),
