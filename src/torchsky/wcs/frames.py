@@ -296,6 +296,63 @@ def galactic_to_icrs(l_deg: Any, b_deg: Any) -> tuple[Tensor, Tensor]:
     return unit_to_radec(icrs_vec)
 
 
+def propagate_proper_motion(
+    lon_deg: Any,
+    lat_deg: Any,
+    pm_lon_coslat_mas_yr: Any,
+    pm_lat_mas_yr: Any,
+    *,
+    source_epoch_jyear: Any,
+    target_epoch_jyear: Any,
+) -> tuple[Tensor, Tensor]:
+    """Propagate angular coordinates with proper motion.
+
+    ``pm_lon_coslat_mas_yr`` is the conventional longitude proper motion with
+    the cosine-of-latitude factor already applied (for ICRS, ``pm_ra_cosdec``).
+    Epochs are Julian years. Inputs broadcast and outputs are longitude and
+    latitude in degrees, with longitude wrapped to ``[0, 360)``.
+
+    This follows the same unit-distance Cartesian propagation used by
+    ``SkyCoord.apply_space_motion`` when distance and radial velocity are not
+    supplied. It stays well behaved at the poles, unlike dividing a longitude
+    increment by ``cos(latitude)``.
+    """
+    lon = _as_tensor(lon_deg)
+    device = lon.device
+    lat = _as_tensor(lat_deg).to(device=device)
+    pm_lon = _as_tensor(pm_lon_coslat_mas_yr).to(device=device)
+    pm_lat = _as_tensor(pm_lat_mas_yr).to(device=device)
+    source_epoch = _as_tensor(source_epoch_jyear).to(device=device)
+    target_epoch = _as_tensor(target_epoch_jyear).to(device=device)
+    lon, lat, pm_lon, pm_lat, source_epoch, target_epoch = torch.broadcast_tensors(
+        lon, lat, pm_lon, pm_lat, source_epoch, target_epoch
+    )
+
+    lon_rad = lon * D2R
+    lat_rad = lat * D2R
+    sin_lon, cos_lon = torch.sin(lon_rad), torch.cos(lon_rad)
+    sin_lat, cos_lat = torch.sin(lat_rad), torch.cos(lat_rad)
+    position = torch.stack(
+        (cos_lat * cos_lon, cos_lat * sin_lon, sin_lat), dim=-1
+    )
+    tangent_lon = torch.stack((-sin_lon, cos_lon, torch.zeros_like(lon)), dim=-1)
+    tangent_lat = torch.stack(
+        (-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat), dim=-1
+    )
+
+    mas_to_rad = ARCSEC_TO_RAD / 1000.0
+    velocity = mas_to_rad * (
+        pm_lon.unsqueeze(-1) * tangent_lon + pm_lat.unsqueeze(-1) * tangent_lat
+    )
+    propagated = position + (target_epoch - source_epoch).unsqueeze(-1) * velocity
+    # ponytail: unit-distance linear motion is the exact no-distance Astropy
+    # contract; add parallax/radial velocity here when 6D phase space is needed.
+    propagated = propagated / torch.linalg.norm(
+        propagated, dim=-1, keepdim=True
+    ).clamp_min(1e-30)
+    return unit_to_radec(propagated)
+
+
 def canonical_celestial_frame(frame: str | None) -> str:
     """Normalize common FITS/AST celestial frame names."""
     if frame is None or str(frame).strip() == "":

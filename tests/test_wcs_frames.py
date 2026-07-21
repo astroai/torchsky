@@ -10,6 +10,7 @@ from torchsky.wcs import (
     galactic_to_icrs,
     icrs_to_galactic,
     precess_fk5,
+    propagate_proper_motion,
 )
 
 
@@ -34,6 +35,54 @@ def test_icrs_galactic_matches_astropy() -> None:
         _wrap_delta(ra_back.numpy(), ra.numpy()), 0.0, atol=2e-10
     )
     np.testing.assert_allclose(dec_back.numpy(), dec.numpy(), atol=2e-10)
+
+
+def test_propagate_proper_motion_matches_astropy() -> None:
+    ra = torch.tensor([10.0, 120.0, 359.0, 1.0], dtype=torch.float64)
+    dec = torch.tensor([20.0, -45.0, 89.9, -89.9], dtype=torch.float64)
+    pm_ra_cosdec = torch.tensor([100.0, -500.0, 10_000.0, -10_000.0])
+    pm_dec = torch.tensor([50.0, 1_000.0, -5_000.0, 5_000.0])
+    target_epoch = torch.tensor([2010.0, 2050.0, 2100.0, 2100.0])
+
+    ra_t, dec_t = propagate_proper_motion(
+        ra,
+        dec,
+        pm_ra_cosdec,
+        pm_dec,
+        source_epoch_jyear=2000.0,
+        target_epoch_jyear=target_epoch,
+    )
+    sky = SkyCoord(
+        ra=ra.numpy() * u.deg,
+        dec=dec.numpy() * u.deg,
+        pm_ra_cosdec=pm_ra_cosdec.numpy() * u.mas / u.yr,
+        pm_dec=pm_dec.numpy() * u.mas / u.yr,
+        obstime=Time(np.full(ra.shape, 2000.0), format="jyear", scale="tcb"),
+        frame=ICRS(),
+    ).apply_space_motion(
+        new_obstime=Time(target_epoch.numpy(), format="jyear", scale="tcb")
+    )
+
+    np.testing.assert_allclose(_wrap_delta(ra_t.numpy(), sky.ra.deg), 0.0, atol=3e-7)
+    np.testing.assert_allclose(dec_t.numpy(), sky.dec.deg, atol=1e-8)
+
+
+def test_propagate_proper_motion_broadcasts_and_is_differentiable() -> None:
+    ra = torch.tensor([10.0, 20.0], dtype=torch.float64, requires_grad=True)
+    dec = torch.tensor([89.999, -89.999], dtype=torch.float64, requires_grad=True)
+    ra_out, dec_out = propagate_proper_motion(
+        ra,
+        dec,
+        1_000.0,
+        -500.0,
+        source_epoch_jyear=torch.tensor([2000.0, 2010.0]),
+        target_epoch_jyear=2025.0,
+    )
+
+    assert ra_out.shape == dec_out.shape == (2,)
+    (ra_out.sum() + dec_out.sum()).backward()
+    assert ra.grad is not None and torch.isfinite(ra.grad).all()
+    assert dec.grad is not None and torch.isfinite(dec.grad).all()
 
 
 def test_fk5_precession_matches_astropy_common_epoch_range() -> None:

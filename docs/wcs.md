@@ -126,6 +126,7 @@ Spectral/temporal WCS:
 Frames and alignment:
 
 - `icrs_to_galactic(...)`, `galactic_to_icrs(...)`, `precess_fk5(...)`
+- `propagate_proper_motion(...)` for tensor-native angular space motion
 - `TangentPlaneFrame`
 - `fit_affine_2d(...)`, `fit_sky_affine(...)`
 
