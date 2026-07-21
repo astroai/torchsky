@@ -6,7 +6,12 @@ its band-balanced sampler while exposing three objectives:
 
 - ``huber``: current ERR-whitened Huber loss;
 - ``whitened_l2``: pure L2 on ``(prediction - target) / ERR``;
-- ``uniform_l2``: pure L2 on normalized residuals with no per-pixel ERR weight.
+- ``uniform_l2``: pure L2 on the globally normalized residual, with no
+  per-pixel ERR weighting.
+
+The numerical values of these objectives are not directly comparable because
+they use different residual normalizations. Compare their fixed-validation
+metrics and rendered source contrast instead of their raw training-loss values.
 """
 
 from __future__ import annotations
@@ -74,10 +79,11 @@ def diagnostic_loss(
     elif kind == "whitened_l2":
         rho = 0.5 * whitened.square()
     elif kind == "uniform_l2":
-        # A single detached scale keeps optimization numerically comparable while
-        # removing all relative per-pixel ERR weighting.
-        constant_scale = err_valid.median().detach().clamp_min(1.0e-12)
-        rho = 0.5 * (residual / constant_scale).square()
+        # Pools have already been divided by one global robust intensity scale.
+        # Using the raw normalized residual therefore gives every sampled pixel
+        # equal relative weight without the unstable batch-dependent division by
+        # median(ERR) used in the first diagnostic version.
+        rho = 0.5 * residual.square()
     else:
         raise ValueError("kind must be huber, whitened_l2, or uniform_l2")
 
