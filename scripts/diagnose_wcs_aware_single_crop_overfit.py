@@ -89,8 +89,13 @@ def _choose_crop(
     return x0, y0
 
 
-def _crop_header(header: dict, x0: int, y0: int, size: int) -> dict:
-    cropped = dict(header)
+def _crop_header(
+    header: fits.Header,
+    x0: int,
+    y0: int,
+    size: int,
+) -> fits.Header:
+    cropped = header.copy()
     cropped["NAXIS1"] = int(size)
     cropped["NAXIS2"] = int(size)
     if "CRPIX1" in cropped:
@@ -195,7 +200,7 @@ def main() -> int:
         image = np.asarray(hdul["SCI"].data, dtype=np.float32)
         err = np.asarray(hdul["ERR"].data, dtype=np.float32)
         valid = _valid_mask(hdul, image, err)
-        header = dict(hdul["SCI"].header)
+        header = hdul["SCI"].header.copy()
 
     scale = _robust_scale(image, valid)
     x0, y0 = _choose_crop(image, valid, args.crop_size)
@@ -377,19 +382,19 @@ def main() -> int:
 
     fits.PrimaryHDU(
         crop_image,
-        header=fits.Header(local_header),
+        header=local_header,
     ).writeto(output_dir / "target_crop.fits", overwrite=True)
     fits.PrimaryHDU(
         prediction_image,
-        header=fits.Header(local_header),
+        header=local_header,
     ).writeto(output_dir / "prediction_crop.fits", overwrite=True)
     fits.PrimaryHDU(
         residual_image,
-        header=fits.Header(local_header),
+        header=local_header,
     ).writeto(output_dir / "residual_crop.fits", overwrite=True)
     fits.PrimaryHDU(
         crop_valid.astype(np.uint8),
-        header=fits.Header(local_header),
+        header=local_header,
     ).writeto(output_dir / "valid_mask.fits", overwrite=True)
 
     summary = {
