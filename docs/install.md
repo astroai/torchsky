@@ -18,7 +18,7 @@ arm64). Torchsky does not own or bundle CFITSIO. Install
 pip install torchsky torchfits
 ```
 
-The supported integration baseline is `torchfits 0.8.0` or newer. Torchsky
+The supported integration baseline is `torchfits 1.0.0rc4` or newer. Torchsky
 keeps thin compatibility import paths for one migration release.
 
 Requires Python **>=3.12,<3.15** and [PyTorch](https://pytorch.org/) 2.0+.
@@ -98,11 +98,22 @@ python -m pip install --no-build-isolation -e .
 
 after installing `scikit-build-core` and `nanobind` into that environment (see **Build-backend packages**). Default isolation can pull a second Torch into `/tmp/...` and the C++ build may see **two different Torch include trees**, which fails with conflicting declarations.
 
+Torchsky normalizes conda's split PyTorch header layout when `TorchConfig.cmake`
+publishes `include/torch/csrc/api/include` separately from the parent `include`
+root. The build still fails closed if the corresponding autograd headers are
+not installed.
+
 If your conda base is **not writable**, use a virtual environment, `pip install --user`, or install with a conda tool you control; otherwise installation may fail when copying artifacts into `site-packages`.
 
 #### CUDA-enabled PyTorch
 
-If `torch.version.cuda` is set, CMake must find a **CUDA toolkit** compatible with your PyTorch build (headers, `nvcc`, NVRTC). On conda, `nvcc` is often present while **`CUDA_HOME` is unset**, which breaks `find_package(Torch)`. Point CMake at your toolkit root before building, for example:
+If `torch.version.cuda` is set, a source or editable build must find a **full
+CUDA toolkit** compatible with that PyTorch build (headers, `nvcc`, NVRTC).
+Runtime-only CUDA packages are not enough: PyTorch's own CMake package loads its
+CUDA configuration before Torchsky's CPU-only extension target is defined. On
+conda, `nvcc` is often present while **`CUDA_HOME` is unset**, which breaks
+`find_package(Torch)`. Point CMake at your toolkit root before building, for
+example:
 
 ```bash
 export CUDA_HOME="${CONDA_PREFIX}"   # conda base or active env prefix
@@ -111,7 +122,15 @@ export CUDAToolkit_ROOT="${CUDA_HOME}"
 python -m pip install --no-build-isolation -e .
 ```
 
-Adjust `CUDA_HOME` if your toolkit lives elsewhere (e.g. `/usr/local/cuda`). CPU-only PyTorch wheels do not need this.
+Adjust `CUDA_HOME` if your toolkit lives elsewhere (e.g. `/usr/local/cuda`).
+CPU-only PyTorch builds do not need this.
+
+A Torchsky wheel built against CPU-only PyTorch may be binary-compatible with
+an exact-version CUDA PyTorch runtime, but that combination is distribution- and
+ABI-sensitive. It is not a supported workaround for conda/Pixi or CANFAR until
+the exact build wheel and target runtime pass native import plus a first WCS
+construction/transform smoke. Use a full matching toolkit for source/editable
+installs in those environments.
 
 ### Troubleshooting
 
@@ -127,7 +146,9 @@ Install PyTorch with CUDA or MPS support for torchsky tensor computation:
   Use `--no-build-isolation` so the build uses a single Torch install (common with conda PyTorch).
 
 - **CMake / PyTorch: CUDA or `CUDA::nvrtc` errors** with a GPU build of PyTorch?
-  Set `CUDA_HOME` (and optionally `CUDAToolkit_ROOT`) to a full toolkit layout; ensure NVRTC is installed (conda: `cuda-nvrtc` / toolkit metapackage as appropriate for your channel).
+  Set `CUDA_HOME` (and optionally `CUDAToolkit_ROOT`) to a full toolkit layout;
+  ensure headers, `nvcc`, and NVRTC are installed. An NVRTC or CUDA runtime
+  package by itself is insufficient.
 
 - **Permission denied** installing into conda `site-packages`?
   Use a venv, `pip install --user`, or install with a writable prefix.

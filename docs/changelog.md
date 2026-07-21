@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   observation operators, mapmaking, scenes, and field models.
 - Residual root I/O and `torchsky.io` / `torchsky.table` surfaces are migration
   debt pending removal or thin deprecation-only delegation.
-- The supported integration baseline is `torchfits 0.9.1` with a matching
+- The supported integration baseline is `torchfits 1.0.0rc4` with a matching
   PyTorch 2.10 native ABI; dataset classes are imported from `torchfits.data`.
 
 ### Added

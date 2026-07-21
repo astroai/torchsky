@@ -4,7 +4,7 @@
 > APIs, start with [`../api.md`](../api.md). For shipped-work history, use
 > [`history.md`](history.md).
 
-Last updated: 2026-07-11.
+Last updated: 2026-07-18.
 
 ## Mission And Ownership
 
@@ -145,6 +145,11 @@ Re-baseline them after the repository boundary cleanup.
 
 ### Open
 
+- CUDA-enabled source/editable builds require a full matching CUDA toolkit;
+  runtime-only CANFAR/Pixi environments fail closed before `find_package(Torch)`.
+  A CPU-built Torchsky wheel with the exact CUDA PyTorch runtime remains a
+  packaging gate until that distribution/ABI combination passes native import
+  and a first WCS construction/transform on the target Linux environment.
 - Freeze the exact adapter/signature contract against the stable
   `torchfits.where`, `torchfits.hdu`, and `torchfits.table` public modules; do
   not encode transient private implementation APIs or preserve obsolete 0.3.x
@@ -205,7 +210,7 @@ cleanup, operator correctness, scalable indexing, and measured bottlenecks.
 - Pre-push: `pixi run ci-local`.
 - Package boundary: no FITS implementation modules, CFITSIO/zlib linkage, or
   FITS-owned benchmarks in torchsky; integration smoke against the supported
-  `torchfits 0.8.x` range.
+  `torchfits 1.0.0rc4+` range.
 - FITS/table I/O behavior and throughput changes: validate in the `torchfits`
   repository.
 - WCS/sphere claims: `pixi run wcs-sphere-acceptance` plus focused parity tests

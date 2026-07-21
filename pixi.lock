@@ -334,7 +334,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/webencodings-0.5.1-pyhd8ed1ab_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/widgetsnbextension-4.0.15-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
-      - pypi: https://files.pythonhosted.org/packages/23/16/9b40dd8b5ed2d8c32b8ff874148f340f221cf9048c9f0021b1b871fc5695/torchfits-0.9.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/55/c9/d904be72b637dd0bc27042965762069579fac6ad64e3826b1afbe85b01ad/torchfits-1.0.0rc4-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/aiobotocore-3.7.0-pyhcf101f3_0.conda
@@ -643,7 +643,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
-      - pypi: https://files.pythonhosted.org/packages/66/b2/6d496de186e5ae2d92e13ebbbd34b4211a41017b91c9aa4e3b67e1999d3d/torchfits-0.9.1-cp313-cp313-macosx_11_0_arm64.whl
+      - pypi: https://files.pythonhosted.org/packages/2a/aa/7d96a418250eedd9488c554769abcbadeb298135a4de15dfda17cff293d4/torchfits-1.0.0rc4-cp313-cp313-macosx_11_0_arm64.whl
   bench:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -1066,7 +1066,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zict-3.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: https://files.pythonhosted.org/packages/12/f0/24a3352a9ea58eac7ad12250fca475277a3a658a1cca35212564a4ef07e8/dfreproject-1.3.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/23/16/9b40dd8b5ed2d8c32b8ff874148f340f221cf9048c9f0021b1b871fc5695/torchfits-0.9.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/55/c9/d904be72b637dd0bc27042965762069579fac6ad64e3826b1afbe85b01ad/torchfits-1.0.0rc4-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/a7/ad/cd779c69253e07cde4888bddc259eafaeff63d56bdeec9dc94a58896e2a3/drizzle-2.2.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -1423,8 +1423,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: https://files.pythonhosted.org/packages/12/f0/24a3352a9ea58eac7ad12250fca475277a3a658a1cca35212564a4ef07e8/dfreproject-1.3.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/2a/aa/7d96a418250eedd9488c554769abcbadeb298135a4de15dfda17cff293d4/torchfits-1.0.0rc4-cp313-cp313-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/31/85/8b6441a658fb5f82b0ba8c14354a7d362000a5565b4a6abe7c9551e90641/drizzle-2.2.0-cp313-cp313-macosx_11_0_arm64.whl
-      - pypi: https://files.pythonhosted.org/packages/66/b2/6d496de186e5ae2d92e13ebbbd34b4211a41017b91c9aa4e3b67e1999d3d/torchfits-0.9.1-cp313-cp313-macosx_11_0_arm64.whl
   bench-all:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -1853,7 +1853,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zict-3.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: https://files.pythonhosted.org/packages/12/f0/24a3352a9ea58eac7ad12250fca475277a3a658a1cca35212564a4ef07e8/dfreproject-1.3.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/23/16/9b40dd8b5ed2d8c32b8ff874148f340f221cf9048c9f0021b1b871fc5695/torchfits-0.9.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/55/c9/d904be72b637dd0bc27042965762069579fac6ad64e3826b1afbe85b01ad/torchfits-1.0.0rc4-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/a7/ad/cd779c69253e07cde4888bddc259eafaeff63d56bdeec9dc94a58896e2a3/drizzle-2.2.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -2216,8 +2216,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: https://files.pythonhosted.org/packages/12/f0/24a3352a9ea58eac7ad12250fca475277a3a658a1cca35212564a4ef07e8/dfreproject-1.3.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/2a/aa/7d96a418250eedd9488c554769abcbadeb298135a4de15dfda17cff293d4/torchfits-1.0.0rc4-cp313-cp313-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/31/85/8b6441a658fb5f82b0ba8c14354a7d362000a5565b4a6abe7c9551e90641/drizzle-2.2.0-cp313-cp313-macosx_11_0_arm64.whl
-      - pypi: https://files.pythonhosted.org/packages/66/b2/6d496de186e5ae2d92e13ebbbd34b4211a41017b91c9aa4e3b67e1999d3d/torchfits-0.9.1-cp313-cp313-macosx_11_0_arm64.whl
   bench-legacy:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -2851,7 +2851,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/virtualenv-21.6.0-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
-      - pypi: https://files.pythonhosted.org/packages/23/16/9b40dd8b5ed2d8c32b8ff874148f340f221cf9048c9f0021b1b871fc5695/torchfits-0.9.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/55/c9/d904be72b637dd0bc27042965762069579fac6ad64e3826b1afbe85b01ad/torchfits-1.0.0rc4-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/backports-1.0-pyhd8ed1ab_5.conda
@@ -3026,7 +3026,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/yaml-0.2.5-h925e9cb_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
-      - pypi: https://files.pythonhosted.org/packages/66/b2/6d496de186e5ae2d92e13ebbbd34b4211a41017b91c9aa4e3b67e1999d3d/torchfits-0.9.1-cp313-cp313-macosx_11_0_arm64.whl
+      - pypi: https://files.pythonhosted.org/packages/2a/aa/7d96a418250eedd9488c554769abcbadeb298135a4de15dfda17cff293d4/torchfits-1.0.0rc4-cp313-cp313-macosx_11_0_arm64.whl
   map-compat:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -3470,7 +3470,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/12/f0/24a3352a9ea58eac7ad12250fca475277a3a658a1cca35212564a4ef07e8/dfreproject-1.3.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/38/76/e326dece295d6c256aa7f6b1b6f22e4d62ac38c331083554fab768f5a062/montagepy-2.3.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/50/8e/41b5a677fd750cb5c0694772839e5bc06d5eb6486a99bc6f924bc310b6f3/drizzle-2.2.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: https://files.pythonhosted.org/packages/ab/32/87aaac44f7957ec33f08d584588ca20ead7f53ac50805cde77da249ed94d/torchfits-0.9.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/7d/44/543ccfc85fedfb7a72b02a7757fb2ca886ec9b794713718b4de103001e82/torchfits-1.0.0rc4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/aiobotocore-3.7.0-pyhcf101f3_0.conda
@@ -3845,7 +3845,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: https://files.pythonhosted.org/packages/12/f0/24a3352a9ea58eac7ad12250fca475277a3a658a1cca35212564a4ef07e8/dfreproject-1.3.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4f/cd/5f180af7f0ba21b02b9eada3cb506792c5722f9d3ba3c8c8ed13a68d3845/montagepy-2.3.0-cp312-cp312-macosx_11_0_arm64.whl
-      - pypi: https://files.pythonhosted.org/packages/9f/17/997bc672088d4e77a24904723851a81f14795af0f9be13b6ce5a66a058ae/torchfits-0.9.1-cp312-cp312-macosx_11_0_arm64.whl
+      - pypi: https://files.pythonhosted.org/packages/f8/c5/e2412ba8c48fb86c17c05a76da697c4adb60a5afe2c40b6476605f444586/torchfits-1.0.0rc4-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/fa/83/c0d4761161a3c308a451af7ee00c719a501aefabd5ac4e55088739029e75/drizzle-2.2.0-cp312-cp312-macosx_11_0_arm64.whl
   sphere-bench:
     channels:
@@ -4275,7 +4275,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zict-3.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: https://files.pythonhosted.org/packages/12/f0/24a3352a9ea58eac7ad12250fca475277a3a658a1cca35212564a4ef07e8/dfreproject-1.3.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/23/16/9b40dd8b5ed2d8c32b8ff874148f340f221cf9048c9f0021b1b871fc5695/torchfits-0.9.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/55/c9/d904be72b637dd0bc27042965762069579fac6ad64e3826b1afbe85b01ad/torchfits-1.0.0rc4-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/a7/ad/cd779c69253e07cde4888bddc259eafaeff63d56bdeec9dc94a58896e2a3/drizzle-2.2.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -4638,8 +4638,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: https://files.pythonhosted.org/packages/12/f0/24a3352a9ea58eac7ad12250fca475277a3a658a1cca35212564a4ef07e8/dfreproject-1.3.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/2a/aa/7d96a418250eedd9488c554769abcbadeb298135a4de15dfda17cff293d4/torchfits-1.0.0rc4-cp313-cp313-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/31/85/8b6441a658fb5f82b0ba8c14354a7d362000a5565b4a6abe7c9551e90641/drizzle-2.2.0-cp313-cp313-macosx_11_0_arm64.whl
-      - pypi: https://files.pythonhosted.org/packages/66/b2/6d496de186e5ae2d92e13ebbbd34b4211a41017b91c9aa4e3b67e1999d3d/torchfits-0.9.1-cp313-cp313-macosx_11_0_arm64.whl
   test:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -4972,7 +4972,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/webencodings-0.5.1-pyhd8ed1ab_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/widgetsnbextension-4.0.15-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
-      - pypi: https://files.pythonhosted.org/packages/23/16/9b40dd8b5ed2d8c32b8ff874148f340f221cf9048c9f0021b1b871fc5695/torchfits-0.9.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/55/c9/d904be72b637dd0bc27042965762069579fac6ad64e3826b1afbe85b01ad/torchfits-1.0.0rc4-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/aiobotocore-3.7.0-pyhcf101f3_0.conda
@@ -5283,7 +5283,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
-      - pypi: https://files.pythonhosted.org/packages/66/b2/6d496de186e5ae2d92e13ebbbd34b4211a41017b91c9aa4e3b67e1999d3d/torchfits-0.9.1-cp313-cp313-macosx_11_0_arm64.whl
+      - pypi: https://files.pythonhosted.org/packages/2a/aa/7d96a418250eedd9488c554769abcbadeb298135a4de15dfda17cff293d4/torchfits-1.0.0rc4-cp313-cp313-macosx_11_0_arm64.whl
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-7_kmp_llvm.conda
   build_number: 7
@@ -19976,19 +19976,22 @@ packages:
   - sphinx-copybutton==0.5.2 ; extra == 'docs'
   - sphinx-nefertiti==0.8.10 ; extra == 'docs'
   requires_python: '>=3.8'
-- pypi: https://files.pythonhosted.org/packages/23/16/9b40dd8b5ed2d8c32b8ff874148f340f221cf9048c9f0021b1b871fc5695/torchfits-0.9.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+- pypi: https://files.pythonhosted.org/packages/2a/aa/7d96a418250eedd9488c554769abcbadeb298135a4de15dfda17cff293d4/torchfits-1.0.0rc4-cp313-cp313-macosx_11_0_arm64.whl
   name: torchfits
-  version: 0.9.1
-  sha256: eb49dea8a0f83ff73010720e29c91d126ef276dcbd3882f40f512697346ef328
+  version: 1.0.0rc4
+  sha256: 5c9fe71e136c34c1853db45aeaa40c81979d82328cc6cf39f302b6164375fd56
   requires_dist:
-  - torch>=2.10,<2.11
+  - torch>=2.10
   - numpy>=1.20.0
   - pyarrow>=5.0
   - pytest>=6.0 ; extra == 'dev'
   - pytest-cov>=2.0 ; extra == 'dev'
   - ruff>=0.1.0 ; extra == 'dev'
   - mypy>=1.0 ; extra == 'dev'
-  - ipykernel ; extra == 'dev'
+  - astropy>=5.0 ; extra == 'dev'
+  - fitsio>=1.1 ; extra == 'dev'
+  - pandas>=1.0 ; extra == 'dev'
+  - matplotlib>=3.0 ; extra == 'dev'
   - tomli>=2.0 ; python_full_version < '3.11' and extra == 'dev'
   - astropy>=5.0 ; extra == 'bench'
   - fitsio>=1.1 ; extra == 'bench'
@@ -20046,19 +20049,22 @@ packages:
   - matplotlib ; extra == 'docs'
   - pytest-doctestplus ; extra == 'docs'
   requires_python: '>=3.10'
-- pypi: https://files.pythonhosted.org/packages/66/b2/6d496de186e5ae2d92e13ebbbd34b4211a41017b91c9aa4e3b67e1999d3d/torchfits-0.9.1-cp313-cp313-macosx_11_0_arm64.whl
+- pypi: https://files.pythonhosted.org/packages/55/c9/d904be72b637dd0bc27042965762069579fac6ad64e3826b1afbe85b01ad/torchfits-1.0.0rc4-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
   name: torchfits
-  version: 0.9.1
-  sha256: 4e7987679b831540f8aba5867b7b854e6163e8ac4926170d236d59be453f46dc
+  version: 1.0.0rc4
+  sha256: aedda1c672a2469c8948e56e1311f21fcf4998b3d5af6ba89a56da5f32ae26c9
   requires_dist:
-  - torch>=2.10,<2.11
+  - torch>=2.10
   - numpy>=1.20.0
   - pyarrow>=5.0
   - pytest>=6.0 ; extra == 'dev'
   - pytest-cov>=2.0 ; extra == 'dev'
   - ruff>=0.1.0 ; extra == 'dev'
   - mypy>=1.0 ; extra == 'dev'
-  - ipykernel ; extra == 'dev'
+  - astropy>=5.0 ; extra == 'dev'
+  - fitsio>=1.1 ; extra == 'dev'
+  - pandas>=1.0 ; extra == 'dev'
+  - matplotlib>=3.0 ; extra == 'dev'
   - tomli>=2.0 ; python_full_version < '3.11' and extra == 'dev'
   - astropy>=5.0 ; extra == 'bench'
   - fitsio>=1.1 ; extra == 'bench'
@@ -20068,19 +20074,22 @@ packages:
   - pytest-cov>=2.0 ; extra == 'test'
   - matplotlib>=3.0 ; extra == 'examples'
   requires_python: '>=3.10'
-- pypi: https://files.pythonhosted.org/packages/9f/17/997bc672088d4e77a24904723851a81f14795af0f9be13b6ce5a66a058ae/torchfits-0.9.1-cp312-cp312-macosx_11_0_arm64.whl
+- pypi: https://files.pythonhosted.org/packages/7d/44/543ccfc85fedfb7a72b02a7757fb2ca886ec9b794713718b4de103001e82/torchfits-1.0.0rc4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
   name: torchfits
-  version: 0.9.1
-  sha256: 2063982ef64f009d4d7dbb1d4e9094c6c7bb18df80ee27e5fc847ab92722c78b
+  version: 1.0.0rc4
+  sha256: 964a70647b4eea4b06a6dd18c9fad33e7b4d60d949b5d82456591c874f14f0e3
   requires_dist:
-  - torch>=2.10,<2.11
+  - torch>=2.10
   - numpy>=1.20.0
   - pyarrow>=5.0
   - pytest>=6.0 ; extra == 'dev'
   - pytest-cov>=2.0 ; extra == 'dev'
   - ruff>=0.1.0 ; extra == 'dev'
   - mypy>=1.0 ; extra == 'dev'
-  - ipykernel ; extra == 'dev'
+  - astropy>=5.0 ; extra == 'dev'
+  - fitsio>=1.1 ; extra == 'dev'
+  - pandas>=1.0 ; extra == 'dev'
+  - matplotlib>=3.0 ; extra == 'dev'
   - tomli>=2.0 ; python_full_version < '3.11' and extra == 'dev'
   - astropy>=5.0 ; extra == 'bench'
   - fitsio>=1.1 ; extra == 'bench'
@@ -20108,19 +20117,22 @@ packages:
   - matplotlib ; extra == 'docs'
   - pytest-doctestplus ; extra == 'docs'
   requires_python: '>=3.10'
-- pypi: https://files.pythonhosted.org/packages/ab/32/87aaac44f7957ec33f08d584588ca20ead7f53ac50805cde77da249ed94d/torchfits-0.9.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+- pypi: https://files.pythonhosted.org/packages/f8/c5/e2412ba8c48fb86c17c05a76da697c4adb60a5afe2c40b6476605f444586/torchfits-1.0.0rc4-cp312-cp312-macosx_11_0_arm64.whl
   name: torchfits
-  version: 0.9.1
-  sha256: c9e3f6c6f0c15e9abd919bfb9e06bb1a6b558a1c2c14ba3f3096de915af30923
+  version: 1.0.0rc4
+  sha256: 19149639903f628c0aafdc91972bb9ee2cf1e8cc5f7107f67214aeff5ac73427
   requires_dist:
-  - torch>=2.10,<2.11
+  - torch>=2.10
   - numpy>=1.20.0
   - pyarrow>=5.0
   - pytest>=6.0 ; extra == 'dev'
   - pytest-cov>=2.0 ; extra == 'dev'
   - ruff>=0.1.0 ; extra == 'dev'
   - mypy>=1.0 ; extra == 'dev'
-  - ipykernel ; extra == 'dev'
+  - astropy>=5.0 ; extra == 'dev'
+  - fitsio>=1.1 ; extra == 'dev'
+  - pandas>=1.0 ; extra == 'dev'
+  - matplotlib>=3.0 ; extra == 'dev'
   - tomli>=2.0 ; python_full_version < '3.11' and extra == 'dev'
   - astropy>=5.0 ; extra == 'bench'
   - fitsio>=1.1 ; extra == 'bench'

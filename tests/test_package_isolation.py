@@ -7,6 +7,7 @@ in-tree FITS implementation code.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -41,6 +42,28 @@ def test_native_torch_abi_contract_is_consistent() -> None:
     assert "matching_abi" in bindings
 
 
+def test_cuda_source_build_requires_a_real_toolkit() -> None:
+    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CUDAToolkit_FOUND" in cmake
+    assert "CUDAToolkit_NVCC_EXECUTABLE" in cmake
+    assert "TARGET CUDA::nvrtc" in cmake
+    assert "Runtime-only CUDA libraries are" in cmake
+    assert "add_library(CUDA::" not in cmake
+
+
+def test_conda_torch_include_root_is_normalized() -> None:
+    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'DIR MATCHES "^(.+)/torch/csrc/api/include/?$"' in cmake
+    assert "torch/csrc/autograd/autograd.h" in cmake
+    assert "list(REMOVE_DUPLICATES TORCH_INCLUDE_DIRS_FILTERED)" in cmake
+
+
 def test_macos_source_wheels_target_the_portable_arm64_baseline() -> None:
     pyproject = tomllib.loads(
         (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -66,6 +89,48 @@ import torchsky._cpp
     )
     assert result.returncode != 0
     assert "built for PyTorch 2.10.x but found PyTorch 2.11.0" in result.stderr
+
+
+def test_native_extension_constructs_and_uses_wcs_in_subprocess() -> None:
+    script = """
+import torch
+import torchsky._cpp
+from torchsky.wcs import WCS
+
+header = {
+    "NAXIS": 2,
+    "NAXIS1": 16,
+    "NAXIS2": 16,
+    "CTYPE1": "RA---TAN",
+    "CTYPE2": "DEC--TAN",
+    "CRPIX1": 8.0,
+    "CRPIX2": 8.0,
+    "CRVAL1": 180.0,
+    "CRVAL2": 0.0,
+    "CD1_1": -0.01,
+    "CD1_2": 0.0,
+    "CD2_1": 0.0,
+    "CD2_2": 0.01,
+}
+world = WCS(header).pixel_to_world(
+    torch.tensor([[7.0, 7.0]], dtype=torch.float64)
+)
+torch.testing.assert_close(
+    world,
+    torch.tensor([[180.0, 0.0]], dtype=torch.float64),
+    atol=1e-9,
+    rtol=0.0,
+)
+"""
+    env = {**os.environ, "KMP_DUPLICATE_LIB_OK": "TRUE"}
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_no_cfitsio_or_zlib_in_cmake() -> None:

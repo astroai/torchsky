@@ -108,8 +108,9 @@ if(NOT TORCHSKY_BUILD_TORCH_VERSION MATCHES "^2\\.10([.+]|$)")
 endif()
 list(APPEND CMAKE_PREFIX_PATH ${TORCH_CMAKE_PREFIX_PATH})
 
-# CUDA-enabled PyTorch only: cuda.cmake expects CUDA::nvrtc before extension targets link. Conda
-# toolkits and CMake 4.x often omit that imported target; CPU-only PyTorch skips this path.
+# CUDA-enabled PyTorch only: PyTorch's CMake package requires the full matching
+# toolkit even though torchsky does not compile CUDA sources. Runtime libraries
+# alone are insufficient; fail here before Caffe2 emits a less actionable error.
 set(TORCHSKY_PYTORCH_CUDA_VERSION "")
 execute_process(
     COMMAND ${Python_EXECUTABLE} -c "import torch; print(torch.version.cuda or '')"
@@ -117,52 +118,15 @@ execute_process(
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
-# PyTorch's cuda.cmake (pulled in by find_package(Torch)) calls get_target_property on CUDA::nvrtc
-# before extension code runs. INTERFACE_LINK_LIBRARIES is read by PyTorch for nvrtc shorthash.
-if(TORCHSKY_PYTORCH_CUDA_VERSION AND NOT TARGET CUDA::nvrtc)
-    find_package(CUDAToolkit QUIET COMPONENTS nvrtc cudart)
-endif()
-if(TORCHSKY_PYTORCH_CUDA_VERSION AND NOT TARGET CUDA::nvrtc)
-    set(_TORCHSKY_CUDA_LIB_HINTS "")
-    foreach(_root IN ITEMS "${CUDAToolkit_ROOT}" "${CUDAToolkit_LIBRARY_ROOT}" "$ENV{CUDA_HOME}" "$ENV{CUDA_PATH}")
-        if(_root)
-            if(_root MATCHES "/include/?$")
-                get_filename_component(_root "${_root}" DIRECTORY)
-            endif()
-            list(APPEND _TORCHSKY_CUDA_LIB_HINTS "${_root}/lib" "${_root}/lib64")
-            list(APPEND _TORCHSKY_CUDA_LIB_HINTS "${_root}/targets/x86_64-linux/lib")
-            list(APPEND _TORCHSKY_CUDA_LIB_HINTS "${_root}/targets/sbsa/lib")
-        endif()
-    endforeach()
-    list(APPEND _TORCHSKY_CUDA_LIB_HINTS
-        "$ENV{CONDA_PREFIX}/targets/x86_64-linux/lib"
-        "$ENV{PREFIX}/targets/x86_64-linux/lib"
-        "$ENV{CONDA_PREFIX}/lib"
-        "$ENV{PREFIX}/lib"
-    )
-    list(REMOVE_DUPLICATES _TORCHSKY_CUDA_LIB_HINTS)
-    set(TORCHSKY_NVRTC_LIBRARY "")
-    foreach(_hint IN LISTS _TORCHSKY_CUDA_LIB_HINTS)
-        if(NOT EXISTS "${_hint}")
-            continue()
-        endif()
-        file(GLOB _TORCHSKY_NVRTC_GLOB "${_hint}/libnvrtc.so.*")
-        if(_TORCHSKY_NVRTC_GLOB)
-            list(GET _TORCHSKY_NVRTC_GLOB 0 TORCHSKY_NVRTC_LIBRARY)
-            break()
-        endif()
-    endforeach()
-    if(NOT TORCHSKY_NVRTC_LIBRARY)
-        find_library(TORCHSKY_NVRTC_LIBRARY NAMES nvrtc HINTS ${_TORCHSKY_CUDA_LIB_HINTS})
-    endif()
-    if(NOT TORCHSKY_NVRTC_LIBRARY)
-        message(STATUS "CUDA-enabled PyTorch needs libnvrtc (CUDA::nvrtc) but none was found. Creating dummy CUDA::nvrtc target.")
-        add_library(CUDA::nvrtc INTERFACE IMPORTED GLOBAL)
-    else()
-        add_library(CUDA::nvrtc SHARED IMPORTED GLOBAL)
-        set_target_properties(CUDA::nvrtc PROPERTIES
-            IMPORTED_LOCATION "${TORCHSKY_NVRTC_LIBRARY}"
-            INTERFACE_LINK_LIBRARIES "${TORCHSKY_NVRTC_LIBRARY}"
+if(TORCHSKY_PYTORCH_CUDA_VERSION)
+    find_package(CUDAToolkit QUIET)
+    if(NOT CUDAToolkit_FOUND OR NOT CUDAToolkit_NVCC_EXECUTABLE OR NOT TARGET CUDA::nvrtc)
+        message(FATAL_ERROR
+            "torchsky detected CUDA-enabled PyTorch ${TORCHSKY_BUILD_TORCH_VERSION} "
+            "(CUDA ${TORCHSKY_PYTORCH_CUDA_VERSION}), but CMake could not find a full "
+            "matching CUDA toolkit with CUDA::nvrtc. Runtime-only CUDA libraries are "
+            "not enough for find_package(Torch). Install the toolkit and set CUDA_HOME "
+            "or CUDAToolkit_ROOT, or build with CPU-only PyTorch."
         )
     endif()
 endif()
@@ -181,7 +145,18 @@ if(TARGET torch)
             else()
                 message(STATUS "Dropping missing Torch include dir: ${DIR}")
             endif()
+
+            # ponytail: normalize conda's known split header layout; generalize
+            # this adapter only if another TorchConfig layout appears.
+            if(DIR MATCHES "^(.+)/torch/csrc/api/include/?$")
+                set(_TORCHSKY_CONDA_INCLUDE_ROOT "${CMAKE_MATCH_1}")
+                if(EXISTS "${_TORCHSKY_CONDA_INCLUDE_ROOT}/torch/csrc/autograd/autograd.h")
+                    list(APPEND TORCH_INCLUDE_DIRS_FILTERED "${_TORCHSKY_CONDA_INCLUDE_ROOT}")
+                    message(STATUS "Added conda PyTorch include root: ${_TORCHSKY_CONDA_INCLUDE_ROOT}")
+                endif()
+            endif()
         endforeach()
+        list(REMOVE_DUPLICATES TORCH_INCLUDE_DIRS_FILTERED)
         if(TORCH_INCLUDE_DIRS_FILTERED)
             set_target_properties(torch PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${TORCH_INCLUDE_DIRS_FILTERED}")
         endif()
