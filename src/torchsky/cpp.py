@@ -5,9 +5,12 @@ This shim lets all existing ``import torchsky.cpp as cpp`` and
 to ``torchfits.cpp``.
 """
 
+import os
+
 # ── FITS I/O module (import first so torchsky._cpp can overwrite colliding
 #    HEALPix / WCS names with its own implementations) ────────────────────
 from torchfits.cpp import *  # noqa: F403
 
 # ── native (non-FITS) module: HEALPix, WCS, geometry, hardware ──────────
-from torchsky._cpp import *  # noqa: F403
+if os.environ.get("TORCHSKY_DISABLE_CPP", "0") != "1":
+    from torchsky._cpp import *  # noqa: F403

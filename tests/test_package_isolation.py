@@ -152,10 +152,12 @@ def test_native_compute_modules_do_not_load_torchfits_cpp() -> None:
 def test_wcs_can_disable_optional_native_extension_in_subprocess() -> None:
     script = """
 import torch
+import torchsky.cpp as merged_cpp
 from torchsky.wcs import WCS
 from torchsky.wcs import core
 
 assert core._cpp is None
+assert not hasattr(merged_cpp, "wcs_zenithal_project")
 wcs = WCS({
     "NAXIS": 2,
     "CTYPE1": "RA---TAN",
