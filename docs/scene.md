@@ -75,3 +75,25 @@ result = operator.solve_normal_equation_cg(observed_image, iterations=8)
 ```
 
 Scalar observation weights and explicit weight/mask/primary-beam maps feed the bound operator's inverse-noise hook. Use `scene.bind_image_plane_observations_to_target(...)` when several image-plane observations share the same latent target grid. It returns the multi-observation operator set used by the map solver substrate, so `A^T N^-1 A` and `A^T N^-1 y` are summed across observations. Set `exposure_chunk_size` to cap the number of prediction tensors retained at once; iterative solves use this matrix-free path while preserving exposure-order accumulation. `iter_apply_chunks(...)` exposes the same bounded execution for consumers that do not need all predictions materialized as one tuple.
+
+The same bound operator can estimate posterior map variance without forming a
+dense covariance matrix:
+
+```python
+variance = operator_set.estimate_posterior_variance_diagonal(
+    reference_map,
+    num_probes=64,
+    seed=7,
+    iterations=32,
+    damping=1.0e-6,
+)
+```
+
+This is a seeded Hutchinson estimate of
+`diag((A^T N^-1 A + damping I)^-1)`. Compose a prior operator into the set to
+include a non-identity prior precision. Each probe is solved independently by
+matrix-free CG, so memory stays bounded by one probe and the solver workspace;
+finite probe count and incomplete CG convergence both contribute estimation
+error. Negative finite-probe estimates are clipped to the positive machine
+floor so the returned variance remains usable; that clipping is biased near
+zero and is not a substitute for increasing probes or checking CG convergence.

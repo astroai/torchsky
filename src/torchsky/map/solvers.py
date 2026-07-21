@@ -31,6 +31,7 @@ ApplyOperatorFn = Callable[[SceneRepresentation, TargetRenderSpec], Tensor]
 AdjointOperatorFn = Callable[[Tensor], Tensor]
 ApplyNoiseFn = Callable[[Tensor], Tensor]
 PreconditionerFn = Callable[[Tensor], Tensor]
+NormalOperatorFn = Callable[[Tensor], Tensor]
 BindTargetFn = Callable[
     [ObservationOperatorBundle, TargetRenderSpec],
     tuple[ApplyOperatorFn | None, AdjointOperatorFn | None, ApplyNoiseFn | None],
@@ -180,6 +181,122 @@ def _apply_preconditioner(
     )
 
 
+def _solve_normal_system_cg(
+    normal_action: NormalOperatorFn,
+    rhs: Tensor,
+    *,
+    initial_solution: Tensor | None = None,
+    iterations: int = 16,
+    damping: float = 0.0,
+    preconditioner: PreconditionerFn | Tensor | None = None,
+) -> LinearSolveResult:
+    if iterations < 1:
+        raise ValueError("iterations must be positive")
+    if damping < 0.0:
+        raise ValueError("damping must be non-negative")
+    rhs_t = torch.as_tensor(rhs)
+    if not (torch.is_floating_point(rhs_t) or torch.is_complex(rhs_t)):
+        raise TypeError("rhs must have a floating-point or complex dtype")
+    solution = (
+        torch.zeros_like(rhs_t)
+        if initial_solution is None
+        else torch.as_tensor(initial_solution).to(
+            dtype=rhs_t.dtype,
+            device=rhs_t.device,
+        ).clone()
+    )
+    if tuple(solution.shape) != tuple(rhs_t.shape):
+        raise ValueError("initial_solution shape must match rhs")
+
+    def _action(state: Tensor) -> Tensor:
+        image = torch.as_tensor(normal_action(state)).to(dtype=state.dtype)
+        if tuple(image.shape) != tuple(rhs_t.shape):
+            raise ValueError("normal operator output shape must match rhs")
+        if damping > 0.0:
+            image = image + float(damping) * state
+        return image
+
+    residual = rhs_t - _action(solution)
+    preconditioned_residual = _apply_preconditioner(preconditioner, residual).to(
+        dtype=residual.dtype
+    )
+    direction = preconditioned_residual.clone()
+    rz_old = _inner_product(residual, preconditioned_residual).real
+    history: list[float] = []
+    for _ in range(int(iterations)):
+        history.append(float(torch.linalg.vector_norm(residual).item()))
+        ap = _action(direction)
+        denom = _inner_product(direction, ap).real
+        if float(torch.abs(denom).item()) <= 0.0:
+            break
+        alpha = rz_old / denom
+        solution = solution + alpha.to(dtype=solution.dtype) * direction
+        residual = residual - alpha.to(dtype=residual.dtype) * ap
+        preconditioned_residual = _apply_preconditioner(
+            preconditioner, residual
+        ).to(dtype=residual.dtype)
+        rz_new = _inner_product(residual, preconditioned_residual).real
+        if float(torch.sqrt(torch.clamp_min(rz_new, 0.0)).item()) == 0.0:
+            break
+        beta = rz_new / rz_old
+        direction = preconditioned_residual + beta.to(dtype=direction.dtype) * direction
+        rz_old = rz_new
+    return LinearSolveResult(
+        solution=solution,
+        residual_norm_history=tuple(history),
+    )
+
+
+def _estimate_inverse_diagonal_hutchinson(
+    solve: Callable[[Tensor], Tensor],
+    reference_state: Tensor,
+    *,
+    num_probes: int,
+    seed: int,
+) -> Tensor:
+    if not isinstance(num_probes, int) or isinstance(num_probes, bool):
+        raise TypeError("num_probes must be an integer")
+    if num_probes < 1:
+        raise ValueError("num_probes must be positive")
+    if not isinstance(seed, int) or isinstance(seed, bool):
+        raise TypeError("seed must be an integer")
+    state = torch.as_tensor(reference_state)
+    if not (torch.is_floating_point(state) or torch.is_complex(state)):
+        raise TypeError("reference_state must have a floating-point or complex dtype")
+    if state.numel() == 0:
+        raise ValueError("reference_state must not be empty")
+    if not torch.all(torch.isfinite(state)):
+        raise ValueError("reference_state must be finite")
+    real_dtype = state.real.dtype if torch.is_complex(state) else state.dtype
+    generator_device = (
+        state.device
+        if state.device.type in {"cpu", "cuda"}
+        else torch.device("cpu")
+    )
+    # ponytail: MPS has no local Generator; remove the CPU transfer when torch adds it.
+    generator = torch.Generator(device=generator_device).manual_seed(seed)
+    variance = torch.zeros(state.shape, dtype=real_dtype, device=state.device)
+    for _ in range(num_probes):
+        probe = torch.randint(
+            0,
+            2,
+            state.shape,
+            dtype=torch.int8,
+            device=generator_device,
+            generator=generator,
+        ).to(dtype=real_dtype, device=state.device)
+        probe = (probe * 2.0 - 1.0).to(dtype=state.dtype)
+        solution = torch.as_tensor(solve(probe))
+        contribution = (torch.conj(probe) * solution).real.to(dtype=real_dtype)
+        if not torch.all(torch.isfinite(contribution)):
+            raise RuntimeError("normal-system solve produced a non-finite variance probe")
+        variance.add_(contribution)
+    variance.div_(float(num_probes))
+    if not torch.all(torch.isfinite(variance)):
+        raise RuntimeError("variance probe accumulation produced non-finite values")
+    return variance.clamp_min(torch.finfo(real_dtype).tiny)
+
+
 @dataclass
 class BoundObservationOperator:
     """Target-bound observation operator shared by discrete and INR scene types."""
@@ -223,6 +340,62 @@ class BoundObservationOperator:
             weighted_data=weighted_data,
             lhs_probe=self.adjoint(weighted_prediction),
             rhs=self.adjoint(weighted_data),
+        )
+
+    def normal_operator_action(
+        self,
+        scene: SceneRepresentation | nn.Module | Tensor,
+    ) -> Tensor:
+        """Apply ``A^T N^-1 A`` without materializing the normal matrix."""
+        return self.adjoint(self.apply_noise_model(self.apply(scene)))
+
+    def solve_normal_system_cg(
+        self,
+        rhs: Tensor,
+        *,
+        initial_solution: Tensor | None = None,
+        iterations: int = 16,
+        damping: float = 0.0,
+        preconditioner: PreconditionerFn | Tensor | None = None,
+    ) -> LinearSolveResult:
+        """Solve ``(A^T N^-1 A + damping I) x = rhs`` matrix-free."""
+        return _solve_normal_system_cg(
+            self.normal_operator_action,
+            rhs,
+            initial_solution=initial_solution,
+            iterations=iterations,
+            damping=damping,
+            preconditioner=preconditioner,
+        )
+
+    def estimate_posterior_variance_diagonal(
+        self,
+        reference_state: Tensor,
+        *,
+        num_probes: int = 32,
+        seed: int = 0,
+        iterations: int = 32,
+        damping: float = 0.0,
+        preconditioner: PreconditionerFn | Tensor | None = None,
+    ) -> Tensor:
+        """Estimate ``diag((A^T N^-1 A + damping I)^-1)`` matrix-free.
+
+        Negative finite-probe estimates are clipped to the positive machine floor.
+        """
+
+        def _solve(rhs: Tensor) -> Tensor:
+            return self.solve_normal_system_cg(
+                rhs,
+                iterations=iterations,
+                damping=damping,
+                preconditioner=preconditioner,
+            ).solution
+
+        return _estimate_inverse_diagonal_hutchinson(
+            _solve,
+            reference_state,
+            num_probes=num_probes,
+            seed=seed,
         )
 
     def estimate_normal_operator_scale(
@@ -494,6 +667,55 @@ class BoundObservationOperatorSet:
                 total = contribution if total is None else total + contribution
         assert total is not None
         return total
+
+    def solve_normal_system_cg(
+        self,
+        rhs: Tensor,
+        *,
+        initial_solution: Tensor | None = None,
+        iterations: int = 16,
+        damping: float = 0.0,
+        preconditioner: PreconditionerFn | Tensor | None = None,
+    ) -> LinearSolveResult:
+        """Solve ``(A^T N^-1 A + damping I) x = rhs`` matrix-free."""
+        return _solve_normal_system_cg(
+            self.normal_operator_action,
+            rhs,
+            initial_solution=initial_solution,
+            iterations=iterations,
+            damping=damping,
+            preconditioner=preconditioner,
+        )
+
+    def estimate_posterior_variance_diagonal(
+        self,
+        reference_state: Tensor,
+        *,
+        num_probes: int = 32,
+        seed: int = 0,
+        iterations: int = 32,
+        damping: float = 0.0,
+        preconditioner: PreconditionerFn | Tensor | None = None,
+    ) -> Tensor:
+        """Estimate ``diag((A^T N^-1 A + damping I)^-1)`` matrix-free.
+
+        Negative finite-probe estimates are clipped to the positive machine floor.
+        """
+
+        def _solve(rhs: Tensor) -> Tensor:
+            return self.solve_normal_system_cg(
+                rhs,
+                iterations=iterations,
+                damping=damping,
+                preconditioner=preconditioner,
+            ).solution
+
+        return _estimate_inverse_diagonal_hutchinson(
+            _solve,
+            reference_state,
+            num_probes=num_probes,
+            seed=seed,
+        )
 
     def _residual_norm(
         self,

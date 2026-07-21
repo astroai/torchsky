@@ -6,6 +6,8 @@ import torch
 from torchsky.map.solvers import (
     BoundObservationOperatorSet,
     build_state_diagonal_operator,
+    build_state_matrix_operator,
+    make_diagonal_preconditioner,
 )
 
 
@@ -104,6 +106,75 @@ def test_chunked_cg_matches_across_exposure_chunk_sizes() -> None:
         else:
             assert torch.equal(result.solution, reference_solution)
             assert result.residual_norm_history == reference_history
+
+
+def test_seeded_posterior_variance_matches_small_dense_inverse() -> None:
+    state = torch.zeros(3, dtype=torch.float64)
+    normal = torch.tensor(
+        [[4.0, 0.20, -0.10], [0.20, 3.0, 0.15], [-0.10, 0.15, 2.0]],
+        dtype=torch.float64,
+    )
+    forward = torch.linalg.cholesky(normal).mT
+    operator = build_state_matrix_operator(state, forward)
+    damping = 0.25
+    expected = torch.linalg.inv(normal + damping * torch.eye(3)).diagonal()
+    rhs = torch.tensor([1.0, -0.5, 0.25], dtype=torch.float64)
+
+    solve = operator.solve_normal_system_cg(
+        rhs,
+        initial_solution=torch.zeros(3, dtype=torch.float32),
+        iterations=3,
+        damping=damping,
+        preconditioner=make_diagonal_preconditioner(
+            normal.diagonal() + damping
+        ),
+    )
+
+    variance = operator.estimate_posterior_variance_diagonal(
+        state,
+        num_probes=512,
+        seed=23,
+        iterations=3,
+        damping=damping,
+    )
+    repeated = operator.estimate_posterior_variance_diagonal(
+        state,
+        num_probes=512,
+        seed=23,
+        iterations=3,
+        damping=damping,
+    )
+
+    torch.testing.assert_close(
+        solve.solution,
+        torch.linalg.solve(normal + damping * torch.eye(3), rhs),
+        rtol=1.0e-12,
+        atol=1.0e-12,
+    )
+    assert solve.solution.dtype == rhs.dtype
+    torch.testing.assert_close(variance, expected, rtol=0.02, atol=0.0)
+    assert torch.equal(variance, repeated)
+    assert torch.all(torch.isfinite(variance))
+    assert torch.all(variance > 0.0)
+
+
+def test_posterior_variance_is_exposure_chunk_invariant() -> None:
+    state = torch.zeros((2, 3), dtype=torch.float64)
+    reference: torch.Tensor | None = None
+
+    for chunk_size in (1, 2, 5):
+        operator_set = _operator_set(exposure_chunk_size=chunk_size)
+        variance = operator_set.estimate_posterior_variance_diagonal(
+            state,
+            num_probes=8,
+            seed=91,
+            iterations=2,
+            damping=0.1,
+        )
+        if reference is None:
+            reference = variance
+        else:
+            assert torch.equal(variance, reference)
 
 
 @pytest.mark.parametrize(
