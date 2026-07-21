@@ -132,6 +132,12 @@ the exact build wheel and target runtime pass native import plus a first WCS
 construction/transform smoke. Use a full matching toolkit for source/editable
 installs in those environments.
 
+If an otherwise supported environment crashes while loading the optional native
+accelerator, set `TORCHSKY_DISABLE_CPP=1` before importing Torchsky. This keeps
+the Torch-native WCS and sphere implementations available while disabling only
+the C++ fast paths. Treat this as a safe diagnostic/fallback, and do not publish
+native performance claims from such a run.
+
 ### Troubleshooting
 
 Install PyTorch with CUDA or MPS support for torchsky tensor computation:

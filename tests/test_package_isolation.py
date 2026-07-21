@@ -149,6 +149,43 @@ def test_native_compute_modules_do_not_load_torchfits_cpp() -> None:
         assert "from .. import cpp" not in source
 
 
+def test_wcs_can_disable_optional_native_extension_in_subprocess() -> None:
+    script = """
+import torch
+from torchsky.wcs import WCS
+from torchsky.wcs import core
+
+assert core._cpp is None
+wcs = WCS({
+    "NAXIS": 2,
+    "CTYPE1": "RA---TAN",
+    "CTYPE2": "DEC--TAN",
+    "CRPIX1": 1.0,
+    "CRPIX2": 1.0,
+    "CRVAL1": 150.0,
+    "CRVAL2": 2.0,
+    "CDELT1": -0.0001,
+    "CDELT2": 0.0001,
+})
+ra, dec = wcs.all_pix2world(
+    torch.tensor([0.0], dtype=torch.float64),
+    torch.tensor([0.0], dtype=torch.float64),
+    0,
+)
+torch.testing.assert_close(ra, torch.tensor([150.0], dtype=torch.float64))
+torch.testing.assert_close(dec, torch.tensor([2.0], dtype=torch.float64))
+"""
+    env = {**os.environ, "TORCHSKY_DISABLE_CPP": "1"}
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_no_cfitsio_or_zlib_in_cmake() -> None:
     """Native build must not link CFITSIO or zlib."""
     cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text()

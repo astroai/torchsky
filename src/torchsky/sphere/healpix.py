@@ -9,10 +9,7 @@ try:
 except ImportError:
     vmap = None
 
-try:
-    from torchsky import _cpp
-except Exception:  # pragma: no cover - optional fast-path
-    _cpp = None
+from torchsky._native import cpp as _cpp
 
 
 _JRLL = torch.tensor([2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4], dtype=torch.int64)

@@ -2,10 +2,7 @@ import torch
 from torch import Tensor
 from typing import Dict, Any, Tuple
 
-try:
-    from torchsky import _cpp
-except Exception:  # pragma: no cover - optional fast path
-    _cpp = None
+from torchsky._native import cpp as _cpp
 
 try:
     from torch.func import vmap, jacrev

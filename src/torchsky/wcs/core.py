@@ -7,10 +7,7 @@ import math
 import os
 import numpy as np
 
-try:
-    from torchsky import _cpp
-except Exception:  # pragma: no cover - optional fast path
-    _cpp = None
+from torchsky._native import cpp as _cpp
 
 from .tpv import TPV, PV1_KEYS, PV2_KEYS, PV1_KEYS_SET, PV2_KEYS_SET
 from .sip import SIP

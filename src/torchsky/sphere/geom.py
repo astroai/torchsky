@@ -18,10 +18,7 @@ try:
 except ImportError:
     vmap = None
 
-try:
-    from .. import _cpp
-except Exception:  # pragma: no cover - optional extension
-    _cpp = None
+from .._native import cpp as _cpp
 
 from . import healpix as _healpix
 from .core import (

@@ -8,10 +8,7 @@ except ImportError:
     vmap = None
     jacrev = None
 
-try:
-    from torchsky import _cpp
-except Exception:  # pragma: no cover - optional fast path
-    _cpp = None
+from torchsky._native import cpp as _cpp
 
 
 PV1_KEYS = tuple(f"PV1_{i}" for i in range(40))

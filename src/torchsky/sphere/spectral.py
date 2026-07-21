@@ -8,10 +8,7 @@ from pathlib import Path
 import torch
 from torch import Tensor
 
-try:
-    from .. import _cpp
-except Exception:  # pragma: no cover - optional extension
-    _cpp = None
+from .._native import cpp as _cpp
 
 from . import healpix as _healpix
 from ._pixwin_embedded import REFERENCE_PIXWIN_TABLES as _REFERENCE_PIXWIN_TABLES
