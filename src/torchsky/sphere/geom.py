@@ -19,7 +19,7 @@ except ImportError:
     vmap = None
 
 try:
-    from .. import cpp as _cpp
+    from .. import _cpp
 except Exception:  # pragma: no cover - optional extension
     _cpp = None
 

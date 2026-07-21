@@ -133,6 +133,22 @@ torch.testing.assert_close(
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_native_compute_modules_do_not_load_torchfits_cpp() -> None:
+    """Loading an accelerator must not also load the unrelated FITS extension."""
+    native_modules = (
+        PACKAGE_ROOT / "wcs" / "core.py",
+        PACKAGE_ROOT / "wcs" / "sip.py",
+        PACKAGE_ROOT / "wcs" / "tpv.py",
+        PACKAGE_ROOT / "sphere" / "healpix.py",
+        PACKAGE_ROOT / "sphere" / "geom.py",
+        PACKAGE_ROOT / "sphere" / "spectral.py",
+    )
+    for path in native_modules:
+        source = path.read_text(encoding="utf-8")
+        assert "import torchsky.cpp" not in source
+        assert "from .. import cpp" not in source
+
+
 def test_no_cfitsio_or_zlib_in_cmake() -> None:
     """Native build must not link CFITSIO or zlib."""
     cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text()
