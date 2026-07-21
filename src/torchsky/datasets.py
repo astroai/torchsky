@@ -11,7 +11,7 @@ from torchfits.data import (
     FitsImageDataset as FitsImageDataset,
     FitsImageIterableDataset as FitsImageIterableDataset,
 )
-from torchfits import get_header as _tf_get_header
+from torchfits import read_header as _tf_get_header
 from torchfits.table import scan_torch as _tf_scan_torch
 
 # Compatibility names belong to torchsky, not torchfits.  New code should use

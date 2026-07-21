@@ -41,7 +41,7 @@ Transforms:
 - `ZScale`, `AsinhStretch`, `LogStretch`, `PowerStretch`
 - `Normalize`, `MinMaxScale`, `RobustScale`
 - `RandomCrop`, `CenterCrop`, `RandomFlip`, `RandomRotation`
-- `GaussianNoise`, `PoissonNoise`, `PerturbByError`, `RedshiftShift`
+- `GaussianNoise`, `PoissonNoise`, `PerturbByError`
 - `ToDevice`, `Compose`
 - `create_training_transform(...)`, `create_validation_transform(...)`,
   `create_inference_transform(...)`
@@ -53,6 +53,9 @@ Runtime buffers:
 - `torchsky.buffer.clear_buffers(...)`
 
 FITS handle/data/metadata cache policy belongs to `torchfits`.
+
+Wavelength-aware flux-conserving rebinning and relativistic Doppler shifts live
+in `torchsky.spectral`; they are not index-based image augmentation transforms.
 
 ## Validation And Performance
 

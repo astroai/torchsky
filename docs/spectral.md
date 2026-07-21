@@ -17,6 +17,10 @@ Use [wcs.md](wcs.md) for FITS-WCS spectral coordinate transforms and
   masks.
 - `DataCube` represents spatial plus spectral arrays with helpers for slices,
   collapse, and spectrum extraction.
+- `flux_conserving_rebin(...)` rebins flux density on explicit bin edges while
+  propagating masks and inverse variance.
+- `relativistic_doppler_shift(...)` applies signed physical radial velocities
+  and optionally rebins batches onto one observed wavelength grid.
 - This surface is experimental; generic FITS I/O belongs to `torchfits`.
 
 ## Recipes
@@ -44,12 +48,35 @@ halpha = cube.extract_slice(wavelength=6563.0, width=5)
 collapsed = cube.collapse_spectral(method="mean")
 ```
 
+### Rebin Or Doppler-Shift A Spectrum
+
+```python
+import torch
+from torchsky.spectral import flux_conserving_rebin, relativistic_doppler_shift
+
+edges = torch.tensor([5000.0, 5001.0, 5003.0, 5006.0])
+flux = torch.tensor([1.0, 2.0, 1.0])
+rebinned = flux_conserving_rebin(
+    flux,
+    edges,
+    torch.tensor([5000.0, 5002.0, 5006.0]),
+)
+shifted = relativistic_doppler_shift(flux, edges, 30_000.0)
+```
+
+Flux values are densities within the supplied bins. Positive radial velocity
+is receding, velocities are metres per second, and invalid or incompletely
+covered output bins are marked in the returned mask rather than renormalized.
+
 ## API Surface
 
 - `Spectrum1D`
 - `DataCube`
 - `SpectralAxis`
 - `SpectralReader`
+- `SpectralRebinResult`
+- `flux_conserving_rebin(...)`
+- `relativistic_doppler_shift(...)`
 - `write_cube_fits(...)` — write a `(L, H, W)` tensor with a 3-axis FITS WCS
   (spectral axis `CTYPE3`); pair with `SpectralReader.read_data_cube` for round-trips.
 

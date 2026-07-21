@@ -365,68 +365,6 @@ class RandomRotation:
             return x_rot.squeeze(0).squeeze(0)
         return x_rot
 
-class RedshiftShift:
-
-    def __init__(self, z_min: float = 0.0, z_max: float = 0.5):
-        self.z_min = z_min
-        self.z_max = z_max
-
-    def __call__(self, tensor: Tensor) -> Tensor:
-        # tensor shape: (C, L) or (L,)
-        z = torch.rand(1).item() * (self.z_max - self.z_min) + self.z_min
-        factor = 1.0 + z
-
-        # We need to resample.
-        # New grid corresponds to old grid * factor.
-        # If we want to keep the same wavelength grid, we need to interpolate
-        # from the shifted values back to the original grid.
-        # f_obs(lambda) = f_rest(lambda / (1+z))
-
-        orig_len = tensor.shape[-1]
-        # Shifted grid positions in original frame
-        # We want to sample at x_new.
-        # The value at x_new comes from x_old = x_new / (1+z) ?
-        # No, lambda_obs = lambda_rest * (1+z)
-        # So at lambda_obs, we see the flux from lambda_rest = lambda_obs / (1+z)
-
-        # In grid coordinates [-1, 1]:
-        # We effectively zoom in (if z > 0, features move to red/right).
-        # So we sample from "left" (smaller indices).
-        # grid_sample samples at (x, y).
-        # We want to sample at grid / (1+z).
-        # But grid is centered at 0. Wavelengths are usually positive.
-        # This simple grid_sample assumes spatial [-1, 1].
-        # For spectra, we usually want 1D interpolation on indices.
-
-        # Let's use simple linear interpolation on indices
-        indices = torch.arange(orig_len, device=tensor.device, dtype=tensor.dtype)
-        # We want value at index i to come from index i / (1+z)
-        # (Assuming linear wavelength spacing)
-        # If log-linear, it's a constant shift.
-        # Let's assume linear spacing for generic tensor.
-
-        sample_indices = indices / factor
-
-        # Clamp to valid range
-        sample_indices = torch.clamp(sample_indices, 0, orig_len - 1)
-
-        # Linear interpolation
-        idx_floor = sample_indices.floor().long()
-        idx_ceil = idx_floor + 1
-        idx_ceil = torch.clamp(idx_ceil, 0, orig_len - 1)
-
-        weight = sample_indices - idx_floor.to(dtype=tensor.dtype)
-
-        if tensor.dim() == 1:
-            val_floor = tensor[idx_floor]
-            val_ceil = tensor[idx_ceil]
-            return val_floor * (1 - weight) + val_ceil * weight
-        else:
-            # Handle (C, L)
-            val_floor = tensor[:, idx_floor]
-            val_ceil = tensor[:, idx_ceil]
-            return val_floor * (1 - weight) + val_ceil * weight
-
 class PerturbByError:
 
     def __init__(self, scale: float = 1.0):

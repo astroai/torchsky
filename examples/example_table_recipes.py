@@ -64,7 +64,7 @@ def main() -> None:
         except ImportError:
             print("polars not installed; skipping LazyFrame recipe")
         else:
-            lf = torchsky.table.to_polars_lazy(
+            lf = torchsky.table.scan_polars(
                 catalog_file.name, hdu=1, decode_bytes=True
             )
             summary = (

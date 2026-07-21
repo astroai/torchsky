@@ -132,6 +132,6 @@ def test_fits_compatibility_aliases_delegate_to_torchfits() -> None:
 
     assert torchsky.io.fits.write is torchfits.write
     assert torchsky.io.fits.open is torchfits.open
-    assert torchsky.io.fits.get_header is torchfits.get_header
+    assert torchsky.io.fits.get_header is torchfits.read_header
     assert torchsky.io.read is torchfits.read
     assert sky_cache.clear is torchfits.cache.clear

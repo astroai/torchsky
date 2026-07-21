@@ -24,21 +24,6 @@ def test_random_rotation():
     assert rotated.shape == img.shape
 
 
-def test_redshift_shift():
-    """Test RedshiftShift transform."""
-    # Create a spectrum with a peak
-    spec = torch.zeros(100)
-    spec[50] = 1.0  # Peak at 50
-    # Shift by z=0.1 -> factor 1.1
-    # New peak should be at 50 * 1.1 = 55
-
-    shifter = T.RedshiftShift(z_min=0.1, z_max=0.1)  # Fixed z=0.1
-    shifted = shifter(spec)
-
-    peak_idx = torch.argmax(shifted).item()
-    assert abs(peak_idx - 55) <= 1  # Allow interpolation error
-
-
 def test_perturb_by_error():
     """Test PerturbByError transform."""
     data = torch.zeros(1000)

@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **py.typed**: PEP 561 type-checker marker for downstream type inference.
+- Flux-conserving spectral rebinning and wavelength-aware relativistic Doppler
+  shifts with batched tensor, mask, and inverse-variance propagation.
 
 ### Removed
 - FITS image/table/checksum implementation tests and benchmarks now owned by
@@ -29,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torchfits.table` API.
 - The optional `torchsky.frame` / `pytorch-frame` adapter; Arrow and Polars are
   the supported table interchange surfaces.
+- The index-based random `RedshiftShift` image transform; use the physical
+  `torchsky.spectral.relativistic_doppler_shift` API.
 
 ### Performance
 - **sphere/spectral.py**: O(1) `alm_size` via closed-form formula; precision fixes in harmonic primitives (`(ell-1)**2` → explicit multiplication).

@@ -17,6 +17,8 @@ from torchsky.spectral import (
     SpectralAxis,
     SpectralReader,
     Spectrum1D,
+    flux_conserving_rebin,
+    relativistic_doppler_shift,
     spectral_axis_from_header,
     spectral_bin_edges_from_header,
 )
@@ -209,6 +211,142 @@ class TestSpectrum1D:
             resampled.ivar,
             torch.tensor([2.0, 2.0], dtype=torch.float64),
         )
+
+
+class TestSpectralPrimitives:
+    def test_irregular_rebin_conserves_integrated_flux(self):
+        input_edges = torch.tensor([1.0, 2.0, 4.0, 7.0], dtype=torch.float64)
+        output_edges = torch.tensor([1.0, 3.0, 7.0], dtype=torch.float64)
+        flux = torch.full((3,), 2.0, dtype=torch.float64)
+
+        result = flux_conserving_rebin(flux, input_edges, output_edges)
+
+        torch.testing.assert_close(
+            result.flux, torch.tensor([2.0, 2.0], dtype=torch.float64)
+        )
+        torch.testing.assert_close(
+            (result.flux * output_edges.diff()).sum(),
+            (flux * input_edges.diff()).sum(),
+        )
+        assert result.mask is not None and bool(result.mask.all())
+
+    def test_rebin_propagates_independent_inverse_variance(self):
+        result = flux_conserving_rebin(
+            torch.tensor([1.0, 3.0], dtype=torch.float64),
+            torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64),
+            torch.tensor([0.0, 2.0], dtype=torch.float64),
+            ivar=torch.tensor([4.0, 4.0], dtype=torch.float64),
+        )
+
+        torch.testing.assert_close(
+            result.flux, torch.tensor([2.0], dtype=torch.float64)
+        )
+        torch.testing.assert_close(
+            result.ivar, torch.tensor([8.0], dtype=torch.float64)
+        )
+        assert result.mask is not None and bool(result.mask.all())
+
+    def test_rebin_marks_masked_or_outside_bins_invalid_without_renormalizing(self):
+        result = flux_conserving_rebin(
+            torch.tensor([2.0, 10.0, 4.0], dtype=torch.float64),
+            torch.tensor([0.0, 1.0, 2.0, 3.0], dtype=torch.float64),
+            torch.tensor([-1.0, 0.0, 1.0, 2.0, 3.0], dtype=torch.float64),
+            ivar=torch.ones(3, dtype=torch.float64),
+            mask=torch.tensor([True, False, True]),
+        )
+
+        torch.testing.assert_close(
+            result.flux,
+            torch.tensor([0.0, 2.0, 0.0, 4.0], dtype=torch.float64),
+        )
+        assert result.mask is not None
+        torch.testing.assert_close(
+            result.mask, torch.tensor([False, True, False, True])
+        )
+        torch.testing.assert_close(
+            result.ivar,
+            torch.tensor([0.0, 1.0, 0.0, 1.0], dtype=torch.float64),
+        )
+
+    def test_relativistic_shift_scales_edges_and_flux_density(self):
+        velocity = 0.6 * 299_792_458.0  # Doppler factor = 2.
+        result = relativistic_doppler_shift(
+            torch.tensor([1.0, 0.0], dtype=torch.float64),
+            torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64),
+            velocity,
+            ivar=torch.tensor([4.0, 9.0], dtype=torch.float64),
+        )
+
+        torch.testing.assert_close(
+            result.spectral_edges,
+            torch.tensor([2.0, 4.0, 6.0], dtype=torch.float64),
+        )
+        torch.testing.assert_close(
+            result.flux, torch.tensor([0.5, 0.0], dtype=torch.float64)
+        )
+        torch.testing.assert_close(
+            result.ivar, torch.tensor([16.0, 36.0], dtype=torch.float64)
+        )
+
+    def test_relativistic_shift_rebins_batches_on_a_common_grid(self):
+        flux = torch.tensor([[1.0, 0.0], [1.0, 0.0]], dtype=torch.float64)
+        velocity = torch.tensor([0.0, 0.6 * 299_792_458.0], dtype=torch.float64)
+        result = relativistic_doppler_shift(
+            flux,
+            torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64),
+            velocity,
+            output_edges=torch.tensor([2.0, 4.0, 6.0], dtype=torch.float64),
+        )
+
+        torch.testing.assert_close(
+            result.flux,
+            torch.tensor([[0.0, 0.0], [0.5, 0.0]], dtype=torch.float64),
+        )
+        assert result.mask is not None
+        torch.testing.assert_close(
+            result.mask,
+            torch.tensor([[False, False], [True, True]]),
+        )
+
+    def test_rebin_is_differentiable_with_respect_to_flux(self):
+        flux = torch.tensor([1.0, 2.0], dtype=torch.float64, requires_grad=True)
+        result = flux_conserving_rebin(
+            flux,
+            torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64),
+            torch.tensor([0.0, 0.5, 1.5, 2.0], dtype=torch.float64),
+        )
+        result.flux.sum().backward()
+        assert flux.grad is not None and bool(torch.isfinite(flux.grad).all())
+
+    def test_rebin_matches_overlap_matrix_reference(self):
+        generator = torch.Generator().manual_seed(7)
+        input_edges = torch.cat(
+            [
+                torch.zeros(1, dtype=torch.float64),
+                torch.rand(17, generator=generator, dtype=torch.float64).cumsum(0),
+            ]
+        )
+        output_edges = torch.linspace(
+            input_edges[0], input_edges[-1], 12, dtype=torch.float64
+        )
+        flux = torch.randn(3, 17, generator=generator, dtype=torch.float64)
+
+        result = flux_conserving_rebin(flux, input_edges, output_edges)
+        overlap = (
+            torch.minimum(output_edges[1:, None], input_edges[None, 1:])
+            - torch.maximum(output_edges[:-1, None], input_edges[None, :-1])
+        ).clamp_min(0)
+        reference = torch.einsum("...n,mn->...m", flux, overlap) / output_edges.diff()
+
+        torch.testing.assert_close(result.flux, reference, atol=1e-12, rtol=1e-12)
+
+    def test_relativistic_shift_rejects_superluminal_velocity(self):
+        with pytest.raises(ValueError, match="below c"):
+            relativistic_doppler_shift(
+                torch.ones(2),
+                torch.tensor([1.0, 2.0, 3.0]),
+                299_792_458.0,
+            )
 
 
 class TestDataCube:

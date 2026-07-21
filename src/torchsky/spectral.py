@@ -23,6 +23,259 @@ _SPEED_OF_LIGHT_M_PER_S = 299_792_458.0
 _SPEED_OF_LIGHT_ANGSTROM_PER_S = _SPEED_OF_LIGHT_M_PER_S * 1.0e10
 
 
+@dataclass(frozen=True)
+class SpectralRebinResult:
+    """Flux-density samples and validity metadata on a spectral edge grid."""
+
+    flux: torch.Tensor
+    spectral_edges: torch.Tensor
+    ivar: Optional[torch.Tensor] = None
+    mask: Optional[torch.Tensor] = None
+
+
+def _validate_spectral_edges(edges: torch.Tensor, expected_bins: int, name: str) -> None:
+    if edges.ndim != 1 or edges.numel() != expected_bins + 1:
+        raise ValueError(f"{name} must be 1D with {expected_bins + 1} elements")
+    if not edges.is_floating_point() or not bool(torch.isfinite(edges).all()):
+        raise ValueError(f"{name} must contain finite floating-point coordinates")
+    if not bool(torch.all(edges[1:] > edges[:-1])):
+        raise ValueError(f"{name} must be strictly increasing")
+
+
+def _broadcast_spectral_inputs(
+    flux: torch.Tensor,
+    query_edges: torch.Tensor,
+    ivar: Optional[torch.Tensor],
+    mask: Optional[torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+    leading_shape = torch.broadcast_shapes(flux.shape[:-1], query_edges.shape[:-1])
+    flux = flux.expand(leading_shape + (flux.shape[-1],))
+    query_edges = query_edges.expand(leading_shape + (query_edges.shape[-1],))
+
+    if ivar is not None:
+        if ivar.shape[-1:] != flux.shape[-1:]:
+            raise ValueError("ivar must have the same spectral length as flux")
+        try:
+            ivar = ivar.expand(leading_shape + (flux.shape[-1],))
+        except RuntimeError as exc:
+            raise ValueError("ivar is not broadcastable to flux") from exc
+    if mask is not None:
+        if mask.shape[-1:] != flux.shape[-1:]:
+            raise ValueError("mask must have the same spectral length as flux")
+        try:
+            mask = mask.expand(leading_shape + (flux.shape[-1],))
+        except RuntimeError as exc:
+            raise ValueError("mask is not broadcastable to flux") from exc
+    return flux, query_edges, ivar, mask
+
+
+def _piecewise_constant_integral(
+    values: torch.Tensor,
+    input_edges: torch.Tensor,
+    points: torch.Tensor,
+) -> torch.Tensor:
+    """Integral from the first input edge to each query point."""
+    widths = (input_edges[1:] - input_edges[:-1]).to(dtype=values.dtype)
+    prefix = torch.cat(
+        [torch.zeros_like(values[..., :1]), torch.cumsum(values * widths, dim=-1)],
+        dim=-1,
+    )
+    clipped = points.clamp(min=input_edges[0], max=input_edges[-1])
+    indices = torch.searchsorted(input_edges, clipped, right=True).sub(1)
+    indices = indices.clamp(0, values.shape[-1] - 1)
+    prefix_at = torch.gather(prefix, -1, indices)
+    value_at = torch.gather(values, -1, indices)
+    left_edge = input_edges[indices]
+    return prefix_at + value_at * (clipped - left_edge).to(dtype=values.dtype)
+
+
+def _piecewise_constant_variance(
+    variance: torch.Tensor,
+    input_edges: torch.Tensor,
+    query_edges: torch.Tensor,
+) -> torch.Tensor:
+    """Variance of integrated independent piecewise-constant samples."""
+    a = query_edges[..., :-1].clamp(min=input_edges[0], max=input_edges[-1])
+    b = query_edges[..., 1:].clamp(min=input_edges[0], max=input_edges[-1])
+    n_bins = variance.shape[-1]
+    start = torch.searchsorted(input_edges, a, right=True).sub(1).clamp(0, n_bins - 1)
+    stop = torch.searchsorted(input_edges, b, right=False).sub(1).clamp(0, n_bins - 1)
+
+    widths = (input_edges[1:] - input_edges[:-1]).to(dtype=variance.dtype)
+    prefix = torch.cat(
+        [
+            torch.zeros_like(variance[..., :1]),
+            torch.cumsum(variance * widths.square(), dim=-1),
+        ],
+        dim=-1,
+    )
+    start_var = torch.gather(variance, -1, start)
+    stop_var = torch.gather(variance, -1, stop)
+    left_width = (input_edges[start + 1] - a).to(dtype=variance.dtype)
+    right_width = (b - input_edges[stop]).to(dtype=variance.dtype)
+    middle = torch.gather(prefix, -1, stop) - torch.gather(prefix, -1, start + 1)
+    split = start_var * left_width.square() + middle + stop_var * right_width.square()
+    same = start_var * (b - a).to(dtype=variance.dtype).square()
+    return torch.where(start == stop, same, split).clamp_min(0)
+
+
+def _rebin_piecewise_constant(
+    flux: torch.Tensor,
+    input_edges: torch.Tensor,
+    query_edges: torch.Tensor,
+    normalization_widths: torch.Tensor,
+    *,
+    ivar: Optional[torch.Tensor],
+    mask: Optional[torch.Tensor],
+) -> tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor]:
+    flux, query_edges, ivar, mask = _broadcast_spectral_inputs(
+        flux, query_edges, ivar, mask
+    )
+    valid = torch.isfinite(flux)
+    if mask is not None:
+        valid = valid & mask.to(dtype=torch.bool)
+    if ivar is not None:
+        valid = valid & torch.isfinite(ivar) & (ivar > 0)
+
+    safe_flux = torch.where(valid, flux, torch.zeros_like(flux))
+    integral = _piecewise_constant_integral(safe_flux, input_edges, query_edges)
+    integrated_flux = integral[..., 1:] - integral[..., :-1]
+    widths = normalization_widths.to(device=flux.device, dtype=flux.dtype)
+    output_flux = integrated_flux / widths
+
+    coord_dtype = input_edges.dtype
+    invalid = (~valid).to(dtype=coord_dtype)
+    invalid_integral = _piecewise_constant_integral(invalid, input_edges, query_edges)
+    invalid_overlap = invalid_integral[..., 1:] - invalid_integral[..., :-1]
+    inside = (query_edges[..., :-1] >= input_edges[0]) & (
+        query_edges[..., 1:] <= input_edges[-1]
+    )
+    scale = torch.maximum(
+        normalization_widths.to(device=flux.device, dtype=coord_dtype).abs(),
+        torch.ones((), device=flux.device, dtype=coord_dtype),
+    )
+    tolerance = 8 * torch.finfo(coord_dtype).eps * scale
+    output_mask = inside & (invalid_overlap.abs() <= tolerance)
+
+    output_ivar = None
+    if ivar is not None:
+        safe_variance = torch.where(valid, ivar.reciprocal(), torch.zeros_like(ivar))
+        integrated_variance = _piecewise_constant_variance(
+            safe_variance, input_edges, query_edges
+        )
+        output_variance = integrated_variance / widths.square()
+        output_ivar = torch.where(
+            output_mask & torch.isfinite(output_variance) & (output_variance > 0),
+            output_variance.reciprocal(),
+            torch.zeros_like(output_variance),
+        )
+    return output_flux, output_ivar, output_mask
+
+
+def flux_conserving_rebin(
+    flux: torch.Tensor,
+    input_edges: torch.Tensor,
+    output_edges: torch.Tensor,
+    *,
+    ivar: Optional[torch.Tensor] = None,
+    mask: Optional[torch.Tensor] = None,
+) -> SpectralRebinResult:
+    """Rebin piecewise-constant flux density while preserving integrated flux.
+
+    Spectral samples occupy bins described by ``input_edges``. Leading flux
+    dimensions are batches; all tensors remain on the input device. Output bins
+    that extend beyond the input range or overlap invalid input samples are
+    marked false without renormalising away missing flux.
+    """
+    if flux.ndim < 1 or not flux.is_floating_point():
+        raise ValueError("flux must be a floating-point tensor with a spectral axis")
+    input_edges = torch.as_tensor(input_edges, device=flux.device)
+    output_edges = torch.as_tensor(output_edges, device=flux.device)
+    _validate_spectral_edges(input_edges, flux.shape[-1], "input_edges")
+    _validate_spectral_edges(output_edges, output_edges.numel() - 1, "output_edges")
+    if input_edges.dtype != output_edges.dtype:
+        output_edges = output_edges.to(dtype=input_edges.dtype)
+
+    widths = output_edges[1:] - output_edges[:-1]
+    rebinned, rebinned_ivar, rebinned_mask = _rebin_piecewise_constant(
+        flux,
+        input_edges,
+        output_edges,
+        widths,
+        ivar=ivar,
+        mask=mask,
+    )
+    return SpectralRebinResult(rebinned, output_edges, rebinned_ivar, rebinned_mask)
+
+
+def relativistic_doppler_shift(
+    flux: torch.Tensor,
+    input_edges: torch.Tensor,
+    radial_velocity: Union[float, torch.Tensor],
+    *,
+    output_edges: Optional[torch.Tensor] = None,
+    ivar: Optional[torch.Tensor] = None,
+    mask: Optional[torch.Tensor] = None,
+) -> SpectralRebinResult:
+    """Apply a signed relativistic radial-velocity shift to flux density.
+
+    Positive velocity is receding. The Doppler factor is
+    ``sqrt((1 + v/c) / (1 - v/c))``. When ``output_edges`` is omitted, each
+    batch receives its shifted edge grid. Supplying a common output grid rebins
+    the shifted spectra onto that grid without losing integrated flux.
+    """
+    if flux.ndim < 1 or not flux.is_floating_point():
+        raise ValueError("flux must be a floating-point tensor with a spectral axis")
+    input_edges = torch.as_tensor(input_edges, device=flux.device)
+    _validate_spectral_edges(input_edges, flux.shape[-1], "input_edges")
+    velocity = torch.as_tensor(radial_velocity, device=flux.device, dtype=input_edges.dtype)
+    if not bool(torch.isfinite(velocity).all()) or bool(
+        torch.any(velocity.abs() >= _SPEED_OF_LIGHT_M_PER_S)
+    ):
+        raise ValueError("radial_velocity must be finite with absolute value below c")
+    factor = torch.sqrt(
+        (1.0 + velocity / _SPEED_OF_LIGHT_M_PER_S)
+        / (1.0 - velocity / _SPEED_OF_LIGHT_M_PER_S)
+    )
+
+    if output_edges is None:
+        leading_shape = torch.broadcast_shapes(flux.shape[:-1], factor.shape)
+        factor = factor.expand(leading_shape)
+        shifted_flux = flux.expand(leading_shape + (flux.shape[-1],)) / factor.unsqueeze(-1)
+        shifted_edges = input_edges.expand(leading_shape + input_edges.shape) * factor.unsqueeze(-1)
+        shifted_mask = torch.isfinite(shifted_flux)
+        if mask is not None:
+            shifted_mask = shifted_mask & mask.expand_as(shifted_flux).to(dtype=torch.bool)
+        shifted_ivar = None
+        if ivar is not None:
+            shifted_ivar = ivar.expand_as(shifted_flux) * factor.unsqueeze(-1).square()
+            shifted_mask = shifted_mask & torch.isfinite(shifted_ivar) & (shifted_ivar > 0)
+            shifted_ivar = torch.where(
+                shifted_mask, shifted_ivar, torch.zeros_like(shifted_ivar)
+            )
+        shifted_flux = torch.where(shifted_mask, shifted_flux, torch.zeros_like(shifted_flux))
+        return SpectralRebinResult(
+            shifted_flux, shifted_edges, shifted_ivar, shifted_mask
+        )
+
+    output_edges = torch.as_tensor(output_edges, device=flux.device)
+    _validate_spectral_edges(output_edges, output_edges.numel() - 1, "output_edges")
+    output_edges = output_edges.to(dtype=input_edges.dtype)
+    query_edges = output_edges / factor.unsqueeze(-1)
+    widths = output_edges[1:] - output_edges[:-1]
+    shifted_flux, shifted_ivar, shifted_mask = _rebin_piecewise_constant(
+        flux,
+        input_edges,
+        query_edges,
+        widths,
+        ivar=ivar,
+        mask=mask,
+    )
+    return SpectralRebinResult(
+        shifted_flux, output_edges, shifted_ivar, shifted_mask
+    )
+
+
 def _normalize_spectral_type(ctype: str) -> str:
     upper = ctype.upper()
     for key in _SPECTRAL_TYPE_KEYS:

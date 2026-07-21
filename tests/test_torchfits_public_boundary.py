@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 def test_torchsky_does_not_import_torchfits_private_modules():
@@ -31,9 +32,9 @@ def test_table_boundary_is_a_thin_public_torchfits_facade():
     from torchfits import table as fits_table
     from torchsky import table as sky_table
 
-    major, minor, *_ = (int(part) for part in torchfits.__version__.split("."))
-    assert (major, minor) >= (0, 8)
-    for name in ("read", "scan", "scan_torch", "to_polars", "to_polars_lazy"):
+    release = tuple(int(part) for part in re.findall(r"\d+", torchfits.__version__)[:3])
+    assert release >= (1, 0, 0)
+    for name in ("read", "scan", "scan_torch", "read_polars", "scan_polars"):
         assert getattr(sky_table, name) is getattr(fits_table, name)
     assert not any(name.startswith("_can_use_") for name in dir(sky_table))
 
