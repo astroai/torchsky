@@ -127,6 +127,8 @@ Frames and alignment:
 
 - `icrs_to_galactic(...)`, `galactic_to_icrs(...)`, `precess_fk5(...)`
 - `propagate_proper_motion(...)` for tensor-native angular space motion
+- `propagate_proper_motion_with_jacobian(...)` for local uncertainty transport
+  when distance/RV are unavailable
 - `propagate_space_motion(...)` for complete parallax/RV-aware ICRS motion
 - `propagate_space_motion_with_jacobian(...)` for batched local uncertainty
   transport
@@ -149,6 +151,12 @@ and lets callers propagate a covariance with `J @ C @ J.mT`. Catalogue-specific
 subspaces, such as Gaia's correlated five astrometric parameters without a
 joint radial-velocity covariance, can select the corresponding rows/columns
 without inventing missing correlations.
+
+`propagate_proper_motion_with_jacobian(...)` returns propagated position and a
+batched 2x4 Jacobian from local east/north position and proper-motion offsets
+to the destination tangent plane. It follows the same unit-distance angular
+model as `propagate_proper_motion(...)`: no distance or radial velocity is
+imputed, and perspective acceleration is therefore outside its contract.
 
 ## Examples
 

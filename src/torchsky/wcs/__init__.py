@@ -13,6 +13,7 @@ from .frames import (
     icrs_to_galactic,
     precess_fk5,
     propagate_proper_motion,
+    propagate_proper_motion_with_jacobian,
     propagate_space_motion,
     propagate_space_motion_with_jacobian,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "icrs_to_galactic",
     "precess_fk5",
     "propagate_proper_motion",
+    "propagate_proper_motion_with_jacobian",
     "propagate_space_motion",
     "propagate_space_motion_with_jacobian",
     "rest_frequency_from_header",

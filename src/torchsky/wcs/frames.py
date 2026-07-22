@@ -358,6 +358,133 @@ def propagate_proper_motion(
     return unit_to_radec(propagated)
 
 
+def _proper_motion_position_delta(
+    state: Tensor,
+    perturbation: Tensor,
+    propagated_position: Tensor,
+    source_epoch: Tensor,
+    target_epoch: Tensor,
+) -> Tensor:
+    """Map a local angular-state perturbation to propagated position."""
+    lon_rad = state[0] * D2R
+    lat_rad = state[1] * D2R
+    sin_lon, cos_lon = torch.sin(lon_rad), torch.cos(lon_rad)
+    sin_lat, cos_lat = torch.sin(lat_rad), torch.cos(lat_rad)
+    direction = torch.stack((cos_lat * cos_lon, cos_lat * sin_lon, sin_lat))
+    tangent_lon = torch.stack((-sin_lon, cos_lon, torch.zeros_like(lon_rad)))
+    tangent_lat = torch.stack(
+        (-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat)
+    )
+    perturbed_direction = direction + MAS_TO_RAD * (
+        perturbation[0] * tangent_lon + perturbation[1] * tangent_lat
+    )
+    perturbed_direction = perturbed_direction / torch.linalg.norm(
+        perturbed_direction
+    ).clamp_min(1e-30)
+    perturbed_lon, perturbed_lat = unit_to_radec(perturbed_direction)
+    moved_lon, moved_lat = propagate_proper_motion(
+        perturbed_lon,
+        perturbed_lat,
+        state[2] + perturbation[2],
+        state[3] + perturbation[3],
+        source_epoch_jyear=source_epoch,
+        target_epoch_jyear=target_epoch,
+    )
+    moved_direction = radec_to_unit(moved_lon, moved_lat)
+
+    output_lon_rad = propagated_position[0] * D2R
+    output_lat_rad = propagated_position[1] * D2R
+    output_sin_lon, output_cos_lon = (
+        torch.sin(output_lon_rad),
+        torch.cos(output_lon_rad),
+    )
+    output_sin_lat, output_cos_lat = (
+        torch.sin(output_lat_rad),
+        torch.cos(output_lat_rad),
+    )
+    output_direction = torch.stack(
+        (
+            output_cos_lat * output_cos_lon,
+            output_cos_lat * output_sin_lon,
+            output_sin_lat,
+        )
+    )
+    output_tangent_lon = torch.stack(
+        (-output_sin_lon, output_cos_lon, torch.zeros_like(output_lon_rad))
+    )
+    output_tangent_lat = torch.stack(
+        (
+            -output_sin_lat * output_cos_lon,
+            -output_sin_lat * output_sin_lon,
+            output_cos_lat,
+        )
+    )
+    direction_delta = moved_direction - output_direction
+    return torch.stack(
+        (
+            torch.dot(direction_delta, output_tangent_lon) / MAS_TO_RAD,
+            torch.dot(direction_delta, output_tangent_lat) / MAS_TO_RAD,
+        )
+    )
+
+
+def propagate_proper_motion_with_jacobian(
+    lon_deg: Any,
+    lat_deg: Any,
+    pm_lon_coslat_mas_yr: Any,
+    pm_lat_mas_yr: Any,
+    *,
+    source_epoch_jyear: Any,
+    target_epoch_jyear: Any,
+) -> tuple[tuple[Tensor, Tensor], Tensor]:
+    """Propagate angular motion and return its batched local Jacobian.
+
+    The Jacobian has trailing dimensions ``(2, 4)``. Its input order is
+    ``(position_east, position_north, pm_lon_coslat, pm_lat)`` and its output
+    rows are local east/north position at the propagated coordinate. Position
+    units are mas and proper-motion units are mas/yr.
+
+    This is the unit-distance angular-motion model used by
+    :func:`propagate_proper_motion`; it does not invent a distance or radial
+    velocity and therefore does not model perspective acceleration.
+    """
+    propagated = propagate_proper_motion(
+        lon_deg,
+        lat_deg,
+        pm_lon_coslat_mas_yr,
+        pm_lat_mas_yr,
+        source_epoch_jyear=source_epoch_jyear,
+        target_epoch_jyear=target_epoch_jyear,
+    )
+    lon = _as_tensor(lon_deg)
+    device = lon.device
+    values = torch.broadcast_tensors(
+        lon,
+        _as_tensor(lat_deg).to(device=device),
+        _as_tensor(pm_lon_coslat_mas_yr).to(device=device),
+        _as_tensor(pm_lat_mas_yr).to(device=device),
+        _as_tensor(source_epoch_jyear).to(device=device),
+        _as_tensor(target_epoch_jyear).to(device=device),
+    )
+    state = torch.stack(values[:4], dim=-1)
+    propagated_position = torch.stack(propagated, dim=-1)
+    batch_shape = state.shape[:-1]
+    flat_state = state.reshape(-1, 4)
+    flat_propagated = propagated_position.reshape(-1, 2)
+    perturbation = torch.zeros_like(flat_state)
+    jacobian = torch.vmap(
+        torch.func.jacrev(_proper_motion_position_delta, argnums=1),
+        in_dims=(0, 0, 0, 0, 0),
+    )(
+        flat_state,
+        perturbation,
+        flat_propagated,
+        values[4].reshape(-1),
+        values[5].reshape(-1),
+    )
+    return propagated, jacobian.reshape(batch_shape + (2, 4))
+
+
 def _propagate_space_motion(
     lon_deg: Any,
     lat_deg: Any,
