@@ -16,6 +16,11 @@ from torchsky.map.wcs_aware_inr import (
     build_union_canvas,
     weighted_robust_loss,
 )
+from torchsky.map.wcs_aware_training import (
+    ExposurePool,
+    effective_batch_size,
+    sample_balanced_batch,
+)
 
 BAND_SPECS = {
     "F090W": (9000.0, 8000.0, 10000.0),
@@ -251,3 +256,70 @@ def test_weighted_robust_loss_respects_mask() -> None:
     assert torch.isfinite(loss)
     torch.testing.assert_close(diagnostics["rmse"], torch.sqrt(torch.tensor(0.5)))
     torch.testing.assert_close(diagnostics["mae"], torch.tensor(0.5))
+
+
+def test_whitened_l2_matches_sigma_normalized_formula() -> None:
+    prediction = torch.tensor([2.0, 4.0])
+    target = torch.tensor([1.0, 2.0])
+    err = torch.tensor([0.5, 2.0])
+    loss, diagnostics = weighted_robust_loss(
+        prediction,
+        target,
+        err,
+        torch.ones(2, dtype=torch.bool),
+        kind="whitened_l2",
+    )
+    expected_whitened = torch.tensor([2.0, 1.0])
+    torch.testing.assert_close(loss, 0.5 * expected_whitened.square().mean())
+    torch.testing.assert_close(
+        diagnostics["whitened_rmse"], expected_whitened.square().mean().sqrt()
+    )
+
+
+def test_short_long_batch_spec_is_exact_per_exposure(tmp_path: Path) -> None:
+    def pool(index: int, band: str) -> ExposurePool:
+        count = 32
+        return ExposurePool(
+            path=tmp_path / f"{index}.fits",
+            band=band,
+            detector="NRCB1" if band == "F090W" else "NRCB5",
+            header=_header(),
+            shape=(16, 16),
+            uv=torch.arange(count * 2, dtype=torch.float32).reshape(count, 2),
+            value=torch.arange(count, dtype=torch.float32),
+            err=torch.ones(count),
+        )
+
+    pools = [pool(0, "F090W"), pool(1, "F090W"), pool(2, "F444W")]
+    batch = sample_balanced_batch(
+        pools,
+        batch_size=[3, 7],
+        generator=torch.Generator().manual_seed(4),
+    )
+    _, exposure_id, _, _, _ = batch
+    assert effective_batch_size(pools, [3, 7]) == 13
+    assert torch.bincount(exposure_id, minlength=3).tolist() == [3, 3, 7]
+
+
+def test_frozen_alignment_has_no_trainable_alignment_parameters(
+    tmp_path: Path,
+) -> None:
+    headers = [exposure.header for exposure in _exposures(tmp_path)]
+    canvas = build_union_canvas(headers, padding_pixels=2)
+    for mode in ("original_wcs", "tweakreg_frozen"):
+        model = WCSAwareMultiWavelengthINR(
+            headers,
+            canvas,
+            encoding="fourier",
+            spatial_frequencies=2,
+            spectral_frequencies=2,
+            hidden_dim=16,
+            latent_dim=8,
+            trunk_depth=1,
+            decoder_depth=1,
+            alignment_mode=mode,
+            output_activation="linear",
+        )
+        assert list(model.feature_alignment.parameters()) == []
+        assert model.alignment_summary() == {"kind": mode, "trainable": False}
+        torch.testing.assert_close(model.alignment_regularization(), torch.tensor(0.0))
