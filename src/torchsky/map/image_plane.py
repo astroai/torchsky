@@ -38,6 +38,7 @@ from .operators.config import (
     validate_map_value_semantics,
 )
 from .operators.execution import (
+    PreparedImageObservationData,
     accumulate_projected_observation,
     finalize_projected_stack,
     is_plain_tan_header,
@@ -91,11 +92,6 @@ from .io_utils import (
     read_image_plane_observation,
     _observation_header_for_area_scaling,
 )
-
-# Module-level cache for observation reads (persists across coadd_image_plane calls,
-# notably for the spatial-tiled path which calls coadd_image_plane per tile).
-_obs_image_cache: dict[tuple[str, int | str | None], tuple[Tensor, dict]] = {}
-
 
 def _resolve_map_device(device: torch.device | str | None) -> torch.device:
     if device is not None:
@@ -859,6 +855,36 @@ def _resample_weighted_to_target(
         flat_ra: Tensor | None = None,
         flat_dec: Tensor | None = None,
     ) -> tuple[Tensor, Tensor]:
+        # WCS round trips can land an exact edge just outside the image.  Keep
+        # the repair much smaller than a pixel even for float32/large mosaics.
+        roundoff_tol = min(
+            1.0e-7,
+            4096.0
+            * torch.finfo(x_src.dtype).eps
+            * float(max(h_src, w_src, 1)),
+        )
+        x_src = torch.where(
+            (x_src < 0.0) & (x_src >= -roundoff_tol),
+            torch.zeros_like(x_src),
+            x_src,
+        )
+        x_src = torch.where(
+            (x_src > float(w_src - 1))
+            & (x_src <= float(w_src - 1) + roundoff_tol),
+            torch.full_like(x_src, float(w_src - 1)),
+            x_src,
+        )
+        y_src = torch.where(
+            (y_src < 0.0) & (y_src >= -roundoff_tol),
+            torch.zeros_like(y_src),
+            y_src,
+        )
+        y_src = torch.where(
+            (y_src > float(h_src - 1))
+            & (y_src <= float(h_src - 1) + roundoff_tol),
+            torch.full_like(y_src, float(h_src - 1)),
+            y_src,
+        )
         if resampling_kernel == "spectral_nonuniform":
             sampled_numer = resample_nonuniform_spectral_2d(
                 weighted_image,
@@ -1514,6 +1540,7 @@ def _project_observation_to_target_chunk(
     image: Tensor | None = None,
     header_dict_obs: dict | None = None,
     source_wcs: WCS | None = None,
+    prepared_observation: PreparedImageObservationData | None = None,
     prepared_target: _PreparedImagePlaneTarget | None,
     target_header: dict,
     target_shape: tuple[int, int],
@@ -1534,15 +1561,16 @@ def _project_observation_to_target_chunk(
             obs.path, hdu=obs.hdu, device=str(device)
         )
     image = image.to(device=device)
-    prepared_observation = prepare_image_observation_data(
-        obs,
-        image,
-        device=device,
-        resampling_kernel=resampling_kernel,
-        load_weight_map_fn=_load_observation_weight_map,
-        apply_calibration_fn=_apply_observation_calibration,
-        background_estimator=background_estimator,
-    )
+    if prepared_observation is None:
+        prepared_observation = prepare_image_observation_data(
+            obs,
+            image,
+            device=device,
+            resampling_kernel=resampling_kernel,
+            load_weight_map_fn=_load_observation_weight_map,
+            apply_calibration_fn=_apply_observation_calibration,
+            background_estimator=background_estimator,
+        )
     image = prepared_observation.image
     source_weight = prepared_observation.source_weight
     operator_bundle = prepared_observation.operator_bundle
@@ -1998,6 +2026,8 @@ def plan_image_plane_cube_target_from_header(
 def _coadd_image_plane_spatial_tiles(
     observations: Sequence[ImageObservation],
     *,
+    first_image: Tensor,
+    first_header: dict,
     header_dict: dict,
     target_shape: tuple[int, int],
     tile_height: int,
@@ -2011,25 +2041,12 @@ def _coadd_image_plane_spatial_tiles(
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
 ) -> MapResult:
-    """Accumulate a large map in non-overlapping spatial tiles to cap per-tile memory."""
+    """Accumulate a large map with tile-bounded projection intermediates."""
     if not observations:
         raise ValueError("At least one observation is required")
     H, W = int(target_shape[0]), int(target_shape[1])
     th = max(int(tile_height), 1)
     tw = max(int(tile_width), 1)
-    first = observations[0]
-    read_dev = str(map_device)
-    _first_key = (first.path, first.hdu)
-    if _first_key in _obs_image_cache:
-        first_image, first_header = _obs_image_cache[_first_key]
-        first_image = validate_image_plane_2d(first_image)
-    else:
-        first_image, first_header = read(
-            first.path, hdu=first.hdu, return_header=True, device=read_dev
-        )
-        first_image = validate_image_plane_2d(first_image)
-        first_header = dict(first_header)
-        _obs_image_cache[_first_key] = (first_image, first_header)
     device = map_device
     mosaic_surface_brightness_area_scaling: bool | None = None
     if value_semantics == "surface_brightness" and stacking_method == "weighted_mean":
@@ -2041,39 +2058,154 @@ def _coadd_image_plane_spatial_tiles(
                 first_header=dict(first_header),
             )
         )
-    full_data = torch.zeros((H, W), dtype=torch.float32, device=device)
-    full_weight = torch.zeros((H, W), dtype=torch.float32, device=device)
-    full_overlap = torch.zeros((H, W), dtype=torch.int32, device=device)
-    for y0 in range(0, H, th):
-        for x0 in range(0, W, tw):
-            y1, x1 = min(y0 + th, H), min(x0 + tw, W)
-            sub_header, _ = _subtarget_header_for_window(
-                header_dict,
-                full_shape=(H, W),
-                y0=y0,
-                y1=y1,
-                x0=x0,
-                x1=x1,
-            )
-            sub = coadd_image_plane(
-                observations,
-                target_header=sub_header,
-                output_path=None,
-                footprint_order=None,
+
+    if stacking_method == "median" or cross_exposure_sky_corrector is not None:
+        # ponytail: these reducers need all exposure projections for each tile;
+        # keep memory tile-bounded and accept repeated I/O until a spillable reducer exists.
+        full_data = torch.zeros((H, W), dtype=torch.float32, device=device)
+        full_weight = torch.zeros((H, W), dtype=torch.float32, device=device)
+        full_overlap = torch.zeros((H, W), dtype=torch.int32, device=device)
+        for y0 in range(0, H, th):
+            for x0 in range(0, W, tw):
+                y1, x1 = min(y0 + th, H), min(x0 + tw, W)
+                sub_header, _ = _subtarget_header_for_window(
+                    header_dict,
+                    full_shape=(H, W),
+                    y0=y0,
+                    y1=y1,
+                    x0=x0,
+                    x1=x1,
+                )
+                sub = coadd_image_plane(
+                    observations,
+                    target_header=sub_header,
+                    output_path=None,
+                    footprint_order=None,
+                    resampling_kernel=resampling_kernel,
+                    value_semantics=value_semantics,
+                    stacking_method=stacking_method,
+                    drizzle_pixfrac=drizzle_pixfrac,
+                    spatial_tile_hw=None,
+                    surface_brightness_area_scaling=(
+                        mosaic_surface_brightness_area_scaling
+                    ),
+                    device=map_device,
+                    background_estimator=background_estimator,
+                    cross_exposure_sky_corrector=cross_exposure_sky_corrector,
+                )
+                full_data[y0:y1, x0:x1] = sub.data.to(device=device)
+                full_weight[y0:y1, x0:x1] = sub.weight.to(device=device)
+                if sub.overlap_count is not None:
+                    full_overlap[y0:y1, x0:x1] = sub.overlap_count.to(device=device)
+    else:
+        numer = torch.zeros((H, W), dtype=torch.float32, device=device)
+        denom = torch.zeros((H, W), dtype=torch.float32, device=device)
+        full_overlap = torch.zeros((H, W), dtype=torch.int32, device=device)
+        read_dev = str(device)
+        for obs_idx, obs in enumerate(observations):
+            if obs_idx == 0:
+                image = validate_image_plane_2d(first_image).to(device=device)
+                header_dict_obs = dict(first_header)
+            else:
+                image, header = read(
+                    obs.path, hdu=obs.hdu, return_header=True, device=read_dev
+                )
+                image = validate_image_plane_2d(image).to(device=device)
+                header_dict_obs = dict(header)
+            prepared_observation = prepare_image_observation_data(
+                obs,
+                image,
+                device=device,
                 resampling_kernel=resampling_kernel,
-                value_semantics=value_semantics,
-                stacking_method=stacking_method,
-                drizzle_pixfrac=drizzle_pixfrac,
-                spatial_tile_hw=None,
-                surface_brightness_area_scaling=mosaic_surface_brightness_area_scaling,
-                device=map_device,
+                load_weight_map_fn=_load_observation_weight_map,
+                apply_calibration_fn=_apply_observation_calibration,
                 background_estimator=background_estimator,
-                cross_exposure_sky_corrector=cross_exposure_sky_corrector,
             )
-            full_data[y0:y1, x0:x1] = sub.data.to(device=device)
-            full_weight[y0:y1, x0:x1] = sub.weight.to(device=device)
-            if sub.overlap_count is not None:
-                full_overlap[y0:y1, x0:x1] = sub.overlap_count.to(device=device)
+            source_wcs = WCS(header_dict_obs)
+            for y0 in range(0, H, th):
+                for x0 in range(0, W, tw):
+                    y1, x1 = min(y0 + th, H), min(x0 + tw, W)
+                    tile_shape = (y1 - y0, x1 - x0)
+                    sub_header, _ = _subtarget_header_for_window(
+                        header_dict,
+                        full_shape=(H, W),
+                        y0=y0,
+                        y1=y1,
+                        x0=x0,
+                        x1=x1,
+                    )
+                    need_prepared_target = (
+                        value_semantics == "flux"
+                        or header_dict_obs != sub_header
+                        or tuple(image.shape) != tile_shape
+                    )
+                    prepared_target = None
+                    if need_prepared_target:
+                        prepared_target = _prepare_target(
+                            header=sub_header,
+                            target_wcs=WCS(sub_header),
+                            target_shape=tile_shape,
+                            device=device,
+                            include_pixel_area=(value_semantics == "flux"),
+                            include_representative_pixel_area=bool(
+                                mosaic_surface_brightness_area_scaling
+                            ),
+                            include_quadrature=(value_semantics == "flux"),
+                            include_world_grid=False,
+                        )
+                    projected = _project_observation_to_target_chunk(
+                        obs,
+                        image=image,
+                        header_dict_obs=header_dict_obs,
+                        source_wcs=source_wcs,
+                        prepared_observation=prepared_observation,
+                        prepared_target=prepared_target,
+                        target_header=sub_header,
+                        target_shape=tile_shape,
+                        device=device,
+                        footprint_order=None,
+                        resampling_kernel=resampling_kernel,
+                        value_semantics=value_semantics,
+                        drizzle_pixfrac=drizzle_pixfrac,
+                        background_estimator=None,
+                    )
+                    pixel_area_sr = None
+                    if value_semantics == "flux":
+                        assert prepared_target is not None
+                        pixel_area_sr = prepared_target.pixel_area_sr
+                        if pixel_area_sr is None:
+                            raise RuntimeError(
+                                "target pixel area is required for flux semantics"
+                            )
+                        if projected.target_window is not None:
+                            py0, py1, px0, px1 = projected.target_window
+                            pixel_area_sr = pixel_area_sr[py0:py1, px0:px1]
+                    accumulate_projected_observation(
+                        numer[y0:y1, x0:x1],
+                        denom[y0:y1, x0:x1],
+                        full_overlap[y0:y1, x0:x1],
+                        projected_numer=projected.numer,
+                        projected_weight=projected.weight,
+                        projected_overlap=projected.overlap,
+                        stacking_method=stacking_method,
+                        value_semantics=value_semantics,
+                        pixel_area_sr=pixel_area_sr,
+                        target_window=projected.target_window,
+                    )
+            del prepared_observation, image
+
+        full_pixel_area_sr = None
+        if value_semantics == "flux":
+            full_pixel_area_sr = pixel_area_sr_map(
+                WCS(header_dict), target_shape, device=device
+            )
+        full_data, full_weight = finalize_projected_stack(
+            numer,
+            denom,
+            stacking_method=stacking_method,
+            value_semantics=value_semantics,
+            pixel_area_sr=full_pixel_area_sr,
+        )
     result = MapResult(
         data=full_data,
         weight=full_weight,
@@ -2116,17 +2248,11 @@ def coadd_image_plane(
     map_device = _resolve_map_device(device)
     read_dev = str(map_device)
     first = observations[0]
-    _first_key = (first.path, first.hdu)
-    if _first_key in _obs_image_cache:
-        first_image, first_header = _obs_image_cache[_first_key]
-        first_image = validate_image_plane_2d(first_image)
-    else:
-        first_image, first_header = read(
-            first.path, hdu=first.hdu, return_header=True, device=read_dev
-        )
-        first_image = validate_image_plane_2d(first_image)
-        first_header = dict(first_header)
-        _obs_image_cache[_first_key] = (first_image, first_header)
+    first_image, first_header = read(
+        first.path, hdu=first.hdu, return_header=True, device=read_dev
+    )
+    first_image = validate_image_plane_2d(first_image)
+    first_header = dict(first_header)
     if target_header is not None and "CRVAL1" in target_header:
         target_shape = target_shape_from_header(
             target_header,
@@ -2156,6 +2282,8 @@ def coadd_image_plane(
             )
         return _coadd_image_plane_spatial_tiles(
             observations,
+            first_image=first_image,
+            first_header=first_header,
             header_dict=header_dict,
             target_shape=target_shape,
             tile_height=int(spatial_tile_hw[0]),
@@ -2212,39 +2340,16 @@ def coadd_image_plane(
         else None
     )
 
-    # Batch MEF reading: group observations by path, read files with ≥2 HDUs once
-    # into the module-level _obs_image_cache (persists across tiled calls).
-    from collections import defaultdict as _defaultdict
-    _path_hdus: dict[str, list[int | str | None]] = _defaultdict(list)
-    for _obs in observations:
-        _path_hdus[_obs.path].append(_obs.hdu)
-    for _path, _hdus in _path_hdus.items():
-        if len(_hdus) > 1:
-            _hdu_set = sorted({h for h in _hdus if isinstance(h, int)})
-            _hdu_uncached = [h for h in _hdu_set if (_path, h) not in _obs_image_cache]
-            if _hdu_uncached:
-                try:
-                    from torchfits import read_hdus as _read_hdus
-                    _imgs, _hdrs = _read_hdus(_path, _hdu_uncached, device=read_dev, return_header=True)
-                    for _h, _img, _hdr in zip(_hdu_uncached, _imgs, _hdrs):
-                        _obs_image_cache[(_path, _h)] = (validate_image_plane_2d(_img), dict(_hdr))
-                except Exception:
-                    pass  # fall through to on-demand reads
-
-    # Ensure the first observation is in the cache
-    _obs_image_cache.setdefault((first.path, first.hdu), (first_image, dict(first_header)))
-
     for obs_idx, obs in enumerate(observations):
-        key = (obs.path, obs.hdu)
-        if key in _obs_image_cache:
-            image, header_dict_obs = _obs_image_cache[key]
+        if obs_idx == 0:
+            image = first_image
+            header_dict_obs = dict(first_header)
         else:
             image, header = read(
                 obs.path, hdu=obs.hdu, return_header=True, device=read_dev
             )
             image = validate_image_plane_2d(image)
             header_dict_obs = dict(header)
-            _obs_image_cache[key] = (image, header_dict_obs)
         need_prepared_target = (
             value_semantics == "flux"
             or footprint_order is not None

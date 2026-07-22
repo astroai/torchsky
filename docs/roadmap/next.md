@@ -17,9 +17,13 @@ a visually sharper image.
 
 These tasks protect every later INR/Foam result from operator or memory errors.
 
-- [ ] Replace the module-global image cache with exposure-major streaming and a
-  caller-scoped, byte-bounded cache. Tiled mosaics must not retain every input
-  tensor or return stale data after an input file changes.
+- [x] Remove the stale module-global image cache and make weighted/mean tiled
+  mosaics exposure-major: each input image and its calibration/weight preparation
+  are held for one exposure, reused across tiles, then released.
+- [ ] Add a caller-scoped byte-bounded cache only where repeated MEF access proves
+  it useful, and add a spillable/tile-local reducer so exact median and
+  cross-exposure background correction do not trade bounded memory for repeated
+  input reads.
 - [ ] Adaptively sample curved SIP/TPV footprint boundaries when planning union
   products; gate containment across the RA=0 seam and rotated/sheared grids.
 - [ ] Propagate inverse variance through resampling and PSF kernels explicitly,

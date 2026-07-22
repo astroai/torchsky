@@ -2,7 +2,8 @@
 """End-to-end multi-exposure operator benchmark: time, memory, deterministic accumulation.
 
 Creates N synthetic exposures (TAN projection, Gaussian sources with position
-offsets to simulate dithering) and runs the full coadd_image_plane pipeline.
+offsets to simulate dithering) and runs the full coadd_image_plane pipeline,
+optionally through exposure-major output tiles.
 
 Metrics tracked:
   - wall time (median of warm runs)
@@ -35,7 +36,7 @@ if str(SRC) not in sys.path:
 from benchmarks.config import DEFAULT_OUTPUT_DIR  # noqa: E402
 
 import torchsky  # noqa: E402
-from torchsky.map import ImageObservation, coadd_image_plane  # noqa: E402
+from torchsky.map import ImageObservation, MapResult, coadd_image_plane  # noqa: E402
 
 
 def _gaussian_source(
@@ -137,6 +138,7 @@ def run_bench(
     dither_arcsec: float,
     runs: int,
     device: torch.device | None,
+    tile_size: int | None = None,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory() as tmpdir_str:
         tmpdir = Path(tmpdir_str)
@@ -151,15 +153,19 @@ def run_bench(
             seed=42,
         )
 
-        def run_once() -> object:
-            return coadd_image_plane(observations, device=device)
+        def run_once() -> MapResult:
+            return coadd_image_plane(
+                observations,
+                device=device,
+                spatial_tile_hw=(tile_size, tile_size) if tile_size else None,
+            )
 
         # Warmup + timing
         dt = _median_time(run_once, warmup=1, runs=runs)
 
         # Deterministic accumulation check: run twice, compare data tensors
-        result_a = coadd_image_plane(observations, device=device)
-        result_b = coadd_image_plane(observations, device=device)
+        result_a = run_once()
+        result_b = run_once()
         deterministic = bool(
             torch.equal(result_a.data, result_b.data)
             and torch.equal(result_a.weight, result_b.weight)
@@ -174,15 +180,16 @@ def run_bench(
         peak_mem: float | None = None
         if device is not None and device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(device)
-            coadd_image_plane(observations, device=device)
+            run_once()
             peak_mem_val = _peak_memory_mb(device=device)
             peak_mem = round(peak_mem_val, 1) if peak_mem_val is not None else None
 
         mpix = size * size / 1e6
         return {
-            "case": f"size={size}_nobs={n_obs}",
+            "case": f"size={size}_nobs={n_obs}_tile={tile_size or 'none'}",
             "size": size,
             "n_obs": n_obs,
+            "tile_size": tile_size,
             "dither_arcsec": dither_arcsec,
             "time_s": round(dt, 4),
             "exposures_per_second": round(n_obs / dt, 1),
@@ -206,6 +213,7 @@ def run_operator_domain(
     runs: int = 3,
     device: torch.device | None = None,
     json_out: Path | None = None,
+    tile_size: int | None = None,
 ) -> list[dict[str, Any]]:
     sizes = sizes or [256, 512]
     n_obs_list = n_obs_list or [2, 5, 10]
@@ -219,6 +227,7 @@ def run_operator_domain(
                 dither_arcsec=1.0,
                 runs=runs,
                 device=device,
+                tile_size=tile_size,
             )
             rows.append(row)
             mem_str = f"{row['peak_memory_mb']:.0f} MB" if row['peak_memory_mb'] is not None else "N/A MB"
@@ -245,6 +254,12 @@ def main() -> int:
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument(
+        "--tile-size",
+        type=int,
+        default=None,
+        help="Optional square output tile size for exposure-major coaddition",
+    )
+    parser.add_argument(
         "--json-out",
         type=Path,
         default=DEFAULT_OUTPUT_DIR / "operator_multiexposure.json",
@@ -265,6 +280,7 @@ def main() -> int:
         runs=args.runs,
         device=device,
         json_out=args.json_out,
+        tile_size=args.tile_size,
     )
 
     return 0

@@ -432,6 +432,7 @@ def _source_row_vertical_bounds(
     source_height: int,
     target_height: int,
 ) -> tuple[Tensor, Tensor]:
+    """Point-drizzle center bounds preserving the established outer-edge contract."""
     lower = torch.full_like(source_y, -_DRIZZLE_BOUNDARY_EPS)
     upper = torch.full_like(
         source_y,
@@ -683,7 +684,7 @@ def exact_square_drizzle_project(
 ) -> tuple[Tensor, Tensor]:
     image = image.to(dtype=torch.float32)
     source_weight = source_weight.to(dtype=torch.float32)
-    h_src, _ = image.shape
+    h_src, w_src = image.shape
     if value_semantics == "flux":
         source_area_sr = pixel_area_sr_map_fn(
             source_wcs,
@@ -722,6 +723,37 @@ def exact_square_drizzle_project(
         source_shape=tuple(image.shape),
         target_shape=tuple(target.shape),
     )
+    base_min = row_min
+    base_max = row_max
+    # A finite square drop can cross the clipped target even when its center
+    # falls outside it, so conservatively dilate the center-derived scan rows.
+    row_min = torch.full_like(base_min, w_src)
+    row_max = torch.full_like(base_max, -1)
+    candidate_margin = 1 + int(math.ceil(0.5 * float(drizzle_pixfrac)))
+    for shift in range(-candidate_margin, candidate_margin + 1):
+        src_start = max(-shift, 0)
+        src_stop = min(h_src - shift, h_src)
+        dst_start = src_start + shift
+        dst_stop = src_stop + shift
+        valid_rows = base_min[src_start:src_stop] >= 0
+        candidate_min = torch.where(
+            valid_rows,
+            base_min[src_start:src_stop] - candidate_margin,
+            torch.full_like(base_min[src_start:src_stop], w_src),
+        )
+        candidate_max = torch.where(
+            valid_rows,
+            base_max[src_start:src_stop] + candidate_margin,
+            torch.full_like(base_max[src_start:src_stop], -1),
+        )
+        row_min[dst_start:dst_stop] = torch.minimum(
+            row_min[dst_start:dst_stop], candidate_min
+        )
+        row_max[dst_start:dst_stop] = torch.maximum(
+            row_max[dst_start:dst_stop], candidate_max
+        )
+    row_min = torch.where(row_max >= 0, row_min.clamp(min=0), row_min)
+    row_max = row_max.clamp(max=w_src - 1)
 
     for start in range(0, int(xs.numel()), int(chunk_pixels)):
         end = min(start + int(chunk_pixels), int(xs.numel()))
@@ -749,18 +781,7 @@ def exact_square_drizzle_project(
             dec_center_deg,
         )
         center_finite = torch.isfinite(x_center_tgt) & torch.isfinite(y_center_tgt)
-        y_lower, y_upper = _source_row_vertical_bounds(
-            y_chunk,
-            source_height=h_src,
-            target_height=height,
-        )
-        center_inside = (
-            center_finite
-            & (x_center_tgt >= -0.5 - _DRIZZLE_BOUNDARY_EPS)
-            & (x_center_tgt <= float(width - 1) + 0.5 + _DRIZZLE_BOUNDARY_EPS)
-            & (y_center_tgt >= y_lower)
-            & (y_center_tgt <= y_upper)
-        )
+        center_inside = center_finite
         if not bool(center_inside.any()):
             continue
         x_chunk = x_chunk[center_inside]

@@ -40,9 +40,8 @@ untested behavior.
 ## Current Baseline
 
 - Full local gate: `pixi run ci-local`.
-- Latest recorded full local gate: `1610 passed, 205 skipped, 12 warnings`
-  in 558.95 seconds (2026-07-22, bounded power-geometry and execution-roadmap
-  checkpoint).
+- Latest recorded full local gate: `1617 passed, 205 skipped, 12 warnings`
+  in 864.61 seconds (2026-07-22, exposure-major tiled-coadd checkpoint).
 - Latest focused WCS gate: `338 passed, 2 skipped, 22 warnings`.
 - Latest focused sphere/HEALPix gate: `351 passed, 6 skipped, 10 warnings`.
 - Latest WCS/sphere acceptance: `pixi run wcs-sphere-acceptance` passes; its
@@ -93,6 +92,12 @@ Re-baseline them after the repository boundary cleanup.
   The exact references are chunk-bounded but not yet asymptotically sparse; this
   is the geometry foundation for the [execution roadmap](next.md), not a claim
   that the full Power-Foam renderer or optimizer is shipped.
+- Weighted and equal-mean tiled coadds now execute exposure-major: an observation
+  is read and calibrated once, projected through every output tile, then released.
+  The stale unbounded module-global tensor cache is gone, overwrite freshness is
+  gated, and bilinear/flux/Drizzle/conservative tiled parity is covered. Exact
+  median and cross-exposure correction retain an explicit tile-major fallback
+  until a spillable reducer exists.
 
 - WCS mixed pixel/world solving covers spatial cubes with linearly coupled
   non-spatial axes; the focused gate reports
@@ -243,6 +248,7 @@ cleanup, operator correctness, scalable indexing, and measured bottlenecks.
   representative real-data/fixture gates proportional to the claim, and
   end-to-end multi-exposure operator benchmark for throughput/memory.
 - Operator benchmark: `pixi run -e test -- python benchmarks/bench_operator_multiexposure.py`
+  (add `--tile-size N` to measure exposure-major tiled execution).
 - Performance changes: benchmark small, medium, and massive cases and report
   peak memory, correctness tolerance, and crossover behavior.
 

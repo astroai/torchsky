@@ -428,6 +428,106 @@ def test_coadd_image_plane_spatial_tile_single_canvas_matches_non_tiled(
     torch.testing.assert_close(tiled.overlap_count, full.overlap_count)
 
 
+def test_coadd_image_plane_spatial_tiles_are_exposure_major(
+    tmp_path, monkeypatch
+) -> None:
+    path_a = tmp_path / "stream_a.fits"
+    path_b = tmp_path / "stream_b.fits"
+    header = _simple_header()
+    torchsky.write(
+        str(path_a), torch.arange(64, dtype=torch.float32).reshape(8, 8),
+        header=header, overwrite=True,
+    )
+    torchsky.write(
+        str(path_b), torch.full((8, 8), 5.0), header=header, overwrite=True
+    )
+    observations = [ImageObservation(str(path_a)), ImageObservation(str(path_b))]
+    expected = coadd_image_plane(observations)
+
+    read_calls: list[tuple[str, int | str | None]] = []
+    prepare_calls: list[str] = []
+    original_read = image_plane_mod.read
+    original_prepare = image_plane_mod.prepare_image_observation_data
+
+    def counted_read(path, *, hdu=None, **kwargs):
+        read_calls.append((str(path), hdu))
+        return original_read(path, hdu=hdu, **kwargs)
+
+    def counted_prepare(observation, image, **kwargs):
+        prepare_calls.append(str(observation.path))
+        return original_prepare(observation, image, **kwargs)
+
+    monkeypatch.setattr(image_plane_mod, "read", counted_read)
+    monkeypatch.setattr(
+        image_plane_mod, "prepare_image_observation_data", counted_prepare
+    )
+    tiled = coadd_image_plane(observations, spatial_tile_hw=(3, 5))
+
+    assert read_calls == [(str(path_a), None), (str(path_b), None)]
+    assert prepare_calls == [str(path_a), str(path_b)]
+    torch.testing.assert_close(tiled.data, expected.data, atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(tiled.weight, expected.weight, atol=1e-4, rtol=1e-4)
+    assert tiled.overlap_count is not None and expected.overlap_count is not None
+    torch.testing.assert_close(tiled.overlap_count, expected.overlap_count)
+
+
+def test_coadd_image_plane_does_not_reuse_overwritten_input(tmp_path) -> None:
+    path = tmp_path / "mutable.fits"
+    header = _simple_header()
+    torchsky.write(
+        str(path), torch.ones((8, 8)), header=header, overwrite=True
+    )
+    first = coadd_image_plane([ImageObservation(str(path))])
+    torchsky.write(
+        str(path), torch.full((8, 8), 7.0), header=header, overwrite=True
+    )
+    second = coadd_image_plane([ImageObservation(str(path))])
+
+    torch.testing.assert_close(first.data, torch.ones((8, 8)))
+    torch.testing.assert_close(second.data, torch.full((8, 8), 7.0))
+
+
+@pytest.mark.parametrize(
+    ("kernel", "value_semantics", "stacking_method"),
+    [
+        ("bilinear", "surface_brightness", "weighted_mean"),
+        ("bilinear", "surface_brightness", "mean"),
+        ("bilinear", "flux", "weighted_mean"),
+        ("drizzle_square", "surface_brightness", "weighted_mean"),
+        ("conservative_polygon", "surface_brightness", "weighted_mean"),
+    ],
+)
+def test_exposure_major_tiles_match_shifted_wcs_coadd(
+    tmp_path, kernel, value_semantics, stacking_method
+) -> None:
+    path_a = tmp_path / f"tile_{kernel}_a.fits"
+    path_b = tmp_path / f"tile_{kernel}_b.fits"
+    header_a = _simple_header()
+    header_b = dict(header_a)
+    header_b["CRPIX1"] = float(header_b["CRPIX1"]) + 0.35
+    header_b["CRPIX2"] = float(header_b["CRPIX2"]) - 0.2
+    target_header = dict(header_a)
+    target_header["CRPIX1"] = float(target_header["CRPIX1"]) + 0.1
+    data = torch.arange(64, dtype=torch.float32).reshape(8, 8) + 1.0
+    torchsky.write(str(path_a), data, header=header_a, overwrite=True)
+    torchsky.write(str(path_b), 0.8 * data + 2.0, header=header_b, overwrite=True)
+    observations = [ImageObservation(str(path_a)), ImageObservation(str(path_b))]
+    kwargs = {
+        "target_header": target_header,
+        "resampling_kernel": kernel,
+        "value_semantics": value_semantics,
+        "stacking_method": stacking_method,
+    }
+
+    expected = coadd_image_plane(observations, **kwargs)
+    tiled = coadd_image_plane(observations, spatial_tile_hw=(3, 5), **kwargs)
+
+    torch.testing.assert_close(tiled.data, expected.data, atol=2e-4, rtol=2e-4)
+    torch.testing.assert_close(tiled.weight, expected.weight, atol=2e-4, rtol=2e-4)
+    assert tiled.overlap_count is not None and expected.overlap_count is not None
+    torch.testing.assert_close(tiled.overlap_count, expected.overlap_count)
+
+
 def test_cli_map_coadd_writes_output(tmp_path, monkeypatch) -> None:
     from torchsky.cli import main
 
