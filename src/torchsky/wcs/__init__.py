@@ -13,6 +13,7 @@ from .frames import (
     icrs_to_galactic,
     precess_fk5,
     propagate_proper_motion,
+    propagate_space_motion,
 )
 from .spectral import (
     SPEED_OF_LIGHT,
@@ -56,6 +57,7 @@ __all__ = [
     "icrs_to_galactic",
     "precess_fk5",
     "propagate_proper_motion",
+    "propagate_space_motion",
     "rest_frequency_from_header",
     "spectral_to_frequency",
     "coupled_tabular_wcs_from_fits",

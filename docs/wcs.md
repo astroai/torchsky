@@ -127,8 +127,17 @@ Frames and alignment:
 
 - `icrs_to_galactic(...)`, `galactic_to_icrs(...)`, `precess_fk5(...)`
 - `propagate_proper_motion(...)` for tensor-native angular space motion
+- `propagate_space_motion(...)` for complete parallax/RV-aware ICRS motion
 - `TangentPlaneFrame`
 - `fit_affine_2d(...)`, `fit_sky_affine(...)`
+
+`propagate_space_motion(...)` propagates all six ICRS observables with the
+ERFA/SOFA changing-light-time and special-relativistic model. It requires a
+finite radial velocity and positive parallax, returns the propagated proper
+motions, parallax, and radial velocity as well as position, and never applies
+ERFA `pmsafe`'s implicit distance override. The tensor path broadcasts and is
+differentiable, so a state Jacobian is available directly through
+`torch.func.jacrev` for covariance propagation.
 
 ## Examples
 

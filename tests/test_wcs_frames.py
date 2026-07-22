@@ -1,4 +1,6 @@
+import erfa
 import numpy as np
+import pytest
 import torch
 from astropy.coordinates import FK4, FK5, Galactic, ICRS, SkyCoord
 from astropy.time import Time
@@ -11,6 +13,7 @@ from torchsky.wcs import (
     icrs_to_galactic,
     precess_fk5,
     propagate_proper_motion,
+    propagate_space_motion,
 )
 
 
@@ -83,6 +86,158 @@ def test_propagate_proper_motion_broadcasts_and_is_differentiable() -> None:
     (ra_out.sum() + dec_out.sum()).backward()
     assert ra.grad is not None and torch.isfinite(ra.grad).all()
     assert dec.grad is not None and torch.isfinite(dec.grad).all()
+
+
+def test_propagate_space_motion_matches_erfa_starpm() -> None:
+    ra = np.array([10.0, 269.452075, 42.0, 359.9, 339.50019800605236])
+    dec = np.array([20.0, 4.693391, -89.5, 70.0, 27.605252088646363])
+    pm_ra_cosdec = np.array(
+        [100.0, -801.551, 50.0, -30.0, -64_880.75716316896]
+    )
+    pm_dec = np.array([50.0, 10_362.394, -20.0, 40.0, 16_145.147314046984])
+    parallax = np.array([100.0, 548.31, 2.0, 0.5, 3.911354729847825])
+    radial_velocity = np.array(
+        [20.0, -110.6, 300.0, -200.0, 70_595.04657621654]
+    )
+    source_epoch = np.array([2000.0, 2000.0, 2050.0, 2030.0, 2000.0])
+    target_epoch = np.array([2100.0, 2025.0, 1950.0, 2200.0, 2100.0])
+
+    actual = propagate_space_motion(
+        torch.from_numpy(ra),
+        torch.from_numpy(dec),
+        torch.from_numpy(pm_ra_cosdec),
+        torch.from_numpy(pm_dec),
+        torch.from_numpy(parallax),
+        torch.from_numpy(radial_velocity),
+        source_epoch_jyear=torch.from_numpy(source_epoch),
+        target_epoch_jyear=torch.from_numpy(target_epoch),
+    )
+
+    degrees_to_radians = np.pi / 180.0
+    mas_to_radians = degrees_to_radians / 3_600_000.0
+    erfa_result = erfa.starpm(
+        ra * degrees_to_radians,
+        dec * degrees_to_radians,
+        pm_ra_cosdec * mas_to_radians / np.cos(dec * degrees_to_radians),
+        pm_dec * mas_to_radians,
+        parallax / 1000.0,
+        radial_velocity,
+        2_451_545.0,
+        (source_epoch - 2000.0) * 365.25,
+        2_451_545.0,
+        (target_epoch - 2000.0) * 365.25,
+    )
+    expected = (
+        erfa_result[0] / degrees_to_radians,
+        erfa_result[1] / degrees_to_radians,
+        erfa_result[2] * np.cos(erfa_result[1]) / mas_to_radians,
+        erfa_result[3] / mas_to_radians,
+        erfa_result[4] * 1000.0,
+        erfa_result[5],
+    )
+
+    for value, reference in zip(actual, expected, strict=True):
+        np.testing.assert_allclose(value.numpy(), reference, rtol=2e-13, atol=2e-10)
+
+
+def test_propagate_space_motion_matches_astropy_for_physical_states() -> None:
+    ra = torch.tensor([10.0, 269.452075], dtype=torch.float64)
+    dec = torch.tensor([20.0, 4.693391], dtype=torch.float64)
+    pm_ra_cosdec = torch.tensor([100.0, -801.551], dtype=torch.float64)
+    pm_dec = torch.tensor([50.0, 10_362.394], dtype=torch.float64)
+    parallax = torch.tensor([100.0, 548.31], dtype=torch.float64)
+    radial_velocity = torch.tensor([20.0, -110.6], dtype=torch.float64)
+
+    actual = propagate_space_motion(
+        ra,
+        dec,
+        pm_ra_cosdec,
+        pm_dec,
+        parallax,
+        radial_velocity,
+        source_epoch_jyear=2000.0,
+        target_epoch_jyear=torch.tensor([2100.0, 2025.0]),
+    )
+    sky = SkyCoord(
+        ra=ra.numpy() * u.deg,
+        dec=dec.numpy() * u.deg,
+        pm_ra_cosdec=pm_ra_cosdec.numpy() * u.mas / u.yr,
+        pm_dec=pm_dec.numpy() * u.mas / u.yr,
+        distance=(1000.0 / parallax.numpy()) * u.pc,
+        radial_velocity=radial_velocity.numpy() * u.km / u.s,
+        obstime=Time(2000.0, format="jyear", scale="tcb"),
+        frame=ICRS(),
+    ).apply_space_motion(
+        new_obstime=Time([2100.0, 2025.0], format="jyear", scale="tcb")
+    )
+    expected = (
+        sky.ra.deg,
+        sky.dec.deg,
+        sky.pm_ra_cosdec.to_value(u.mas / u.yr),
+        sky.pm_dec.to_value(u.mas / u.yr),
+        1000.0 / sky.distance.to_value(u.pc),
+        sky.radial_velocity.to_value(u.km / u.s),
+    )
+
+    for value, reference in zip(actual, expected, strict=True):
+        np.testing.assert_allclose(value.numpy(), reference, rtol=2e-10, atol=1e-7)
+
+
+def test_propagate_space_motion_broadcasts_and_has_finite_jacobian() -> None:
+    state = torch.tensor(
+        [10.0, 20.0, 100.0, 50.0, 100.0, 20.0], dtype=torch.float64
+    )
+
+    def propagate(value: torch.Tensor) -> torch.Tensor:
+        return torch.stack(
+            propagate_space_motion(
+                *value,
+                source_epoch_jyear=2000.0,
+                target_epoch_jyear=2100.0,
+            )
+        )
+
+    jacobian = torch.func.jacrev(propagate)(state)
+    assert jacobian.shape == (6, 6)
+    assert torch.isfinite(jacobian).all()
+
+    broadcast = propagate_space_motion(
+        torch.tensor([10.0, 20.0]),
+        30.0,
+        1.0,
+        2.0,
+        10.0,
+        20.0,
+        source_epoch_jyear=2025.0,
+        target_epoch_jyear=torch.tensor([2000.0, 2050.0]),
+    )
+    assert all(value.shape == (2,) for value in broadcast)
+
+
+def test_propagate_space_motion_rejects_incomplete_or_unphysical_states() -> None:
+    with pytest.raises(ValueError, match="parallax_mas must be positive"):
+        propagate_space_motion(
+            10.0,
+            20.0,
+            1.0,
+            2.0,
+            0.0,
+            20.0,
+            source_epoch_jyear=2000.0,
+            target_epoch_jyear=2025.0,
+        )
+
+    with pytest.raises(ValueError, match="at least 0.5c"):
+        propagate_space_motion(
+            10.0,
+            20.0,
+            1.0e9,
+            2.0,
+            1.0,
+            20.0,
+            source_epoch_jyear=2000.0,
+            target_epoch_jyear=2025.0,
+        )
 
 
 def test_fk5_precession_matches_astropy_common_epoch_range() -> None:

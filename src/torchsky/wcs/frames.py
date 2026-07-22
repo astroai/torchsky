@@ -9,6 +9,12 @@ from torch import Tensor
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
 ARCSEC_TO_RAD = D2R / 3600.0
+MAS_TO_RAD = ARCSEC_TO_RAD / 1000.0
+SECONDS_PER_JULIAN_YEAR = 365.25 * 86400.0
+PARSEC_KM = 3.0856775814913674e13
+KM_S_TO_PC_YR = SECONDS_PER_JULIAN_YEAR / PARSEC_KM
+SPEED_OF_LIGHT_KM_S = 299792.458
+SPEED_OF_LIGHT_PC_YR = SPEED_OF_LIGHT_KM_S * KM_S_TO_PC_YR
 JD_B1900 = 2415020.31352
 JD_B1950 = 2433282.42345905
 TROPICAL_YEAR_DAYS = 365.242198781
@@ -340,8 +346,7 @@ def propagate_proper_motion(
         (-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat), dim=-1
     )
 
-    mas_to_rad = ARCSEC_TO_RAD / 1000.0
-    velocity = mas_to_rad * (
+    velocity = MAS_TO_RAD * (
         pm_lon.unsqueeze(-1) * tangent_lon + pm_lat.unsqueeze(-1) * tangent_lat
     )
     propagated = position + (target_epoch - source_epoch).unsqueeze(-1) * velocity
@@ -351,6 +356,235 @@ def propagate_proper_motion(
         propagated, dim=-1, keepdim=True
     ).clamp_min(1e-30)
     return unit_to_radec(propagated)
+
+
+def propagate_space_motion(
+    lon_deg: Any,
+    lat_deg: Any,
+    pm_lon_coslat_mas_yr: Any,
+    pm_lat_mas_yr: Any,
+    parallax_mas: Any,
+    radial_velocity_km_s: Any,
+    *,
+    source_epoch_jyear: Any,
+    target_epoch_jyear: Any,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Propagate a complete barycentric astrometric state in ICRS.
+
+    Inputs and outputs are longitude/latitude in degrees, cosine-weighted
+    longitude and latitude proper motions in mas/yr, parallax in mas, and
+    radial velocity in km/s. Epochs are TCB Julian years. Inputs broadcast.
+
+    The implementation follows the ERFA/SOFA ``starpv`` → rectilinear motion
+    with changing light time → ``pvstar`` model, including the special-
+    relativistic conversion between catalog observables and inertial velocity.
+    A complete state is required: use :func:`propagate_proper_motion` when
+    distance or radial velocity is unavailable.
+
+    Returns:
+        ``(lon, lat, pm_lon_coslat, pm_lat, parallax, radial_velocity)``.
+    """
+    lon = _as_tensor(lon_deg)
+    device = lon.device
+    values = [
+        lon,
+        _as_tensor(lat_deg).to(device=device),
+        _as_tensor(pm_lon_coslat_mas_yr).to(device=device),
+        _as_tensor(pm_lat_mas_yr).to(device=device),
+        _as_tensor(parallax_mas).to(device=device),
+        _as_tensor(radial_velocity_km_s).to(device=device),
+        _as_tensor(source_epoch_jyear).to(device=device),
+        _as_tensor(target_epoch_jyear).to(device=device),
+    ]
+    (
+        lon,
+        lat,
+        pm_lon,
+        pm_lat,
+        parallax,
+        radial_velocity,
+        source_epoch,
+        target_epoch,
+    ) = torch.broadcast_tensors(*values)
+    finite = torch.ones_like(lon, dtype=torch.bool)
+    for value in (
+        lon,
+        lat,
+        pm_lon,
+        pm_lat,
+        parallax,
+        radial_velocity,
+        source_epoch,
+        target_epoch,
+    ):
+        finite &= torch.isfinite(value)
+    if not bool(torch.all(finite)):
+        raise ValueError("space-motion inputs must be finite")
+    if not bool(torch.all((lat >= -90.0) & (lat <= 90.0))):
+        raise ValueError("latitude must be within [-90, 90] degrees")
+    if not bool(torch.all(parallax > 0.0)):
+        raise ValueError("parallax_mas must be positive; use angular propagation otherwise")
+
+    lon_rad = lon * D2R
+    lat_rad = lat * D2R
+    sin_lon, cos_lon = torch.sin(lon_rad), torch.cos(lon_rad)
+    sin_lat, cos_lat = torch.sin(lat_rad), torch.cos(lat_rad)
+    direction = torch.stack(
+        (cos_lat * cos_lon, cos_lat * sin_lon, sin_lat), dim=-1
+    )
+    tangent_lon = torch.stack((-sin_lon, cos_lon, torch.zeros_like(lon)), dim=-1)
+    tangent_lat = torch.stack(
+        (-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat), dim=-1
+    )
+
+    distance_pc = 1000.0 / parallax
+    position = distance_pc.unsqueeze(-1) * direction
+    observed_tangent = distance_pc.unsqueeze(-1) * MAS_TO_RAD * (
+        pm_lon.unsqueeze(-1) * tangent_lon + pm_lat.unsqueeze(-1) * tangent_lat
+    )
+    observed_radial = radial_velocity * KM_S_TO_PC_YR
+    beta_radial = observed_radial / SPEED_OF_LIGHT_PC_YR
+    beta_tangent = (
+        torch.linalg.norm(observed_tangent, dim=-1) / SPEED_OF_LIGHT_PC_YR
+    )
+    if not bool(torch.all(beta_radial.square() + beta_tangent.square() < 0.25)):
+        raise ValueError("catalog state implies a space velocity of at least 0.5c")
+
+    # Invert the observed-to-inertial catalog correction. ERFA stops once the
+    # iteration reaches floating-point convergence; a fixed count keeps this
+    # tensor path differentiable and converges to the same float64 solution.
+    corrected_radial = beta_radial
+    corrected_tangent = beta_tangent
+    correction_scale = torch.ones_like(beta_radial)
+    correction_delta = torch.zeros_like(beta_radial)
+    for _ in range(16):
+        correction_scale = 1.0 + corrected_radial
+        beta_squared = corrected_radial.square() + corrected_tangent.square()
+        correction_delta = -beta_squared / (
+            torch.sqrt(torch.clamp_min(1.0 - beta_squared, 0.0)) + 1.0
+        )
+        corrected_radial = correction_scale * beta_radial + correction_delta
+        corrected_tangent = correction_scale * beta_tangent
+
+    next_scale = 1.0 + corrected_radial
+    next_beta_squared = corrected_radial.square() + corrected_tangent.square()
+    next_delta = -next_beta_squared / (
+        torch.sqrt(torch.clamp_min(1.0 - next_beta_squared, 0.0)) + 1.0
+    )
+    converged = torch.isclose(
+        next_scale, correction_scale, rtol=1e-14, atol=1e-15
+    ) & torch.isclose(next_delta, correction_delta, rtol=1e-14, atol=1e-15)
+    if not bool(torch.all(converged)):
+        # ponytail: real stellar catalogues converge in the fast loop; retain
+        # SOFA's 100-iteration ceiling only for rare near-relativistic states.
+        for _ in range(84):
+            correction_scale = 1.0 + corrected_radial
+            beta_squared = corrected_radial.square() + corrected_tangent.square()
+            correction_delta = -beta_squared / (
+                torch.sqrt(torch.clamp_min(1.0 - beta_squared, 0.0)) + 1.0
+            )
+            corrected_radial = correction_scale * beta_radial + correction_delta
+            corrected_tangent = correction_scale * beta_tangent
+        next_scale = 1.0 + corrected_radial
+        next_beta_squared = corrected_radial.square() + corrected_tangent.square()
+        next_delta = -next_beta_squared / (
+            torch.sqrt(torch.clamp_min(1.0 - next_beta_squared, 0.0)) + 1.0
+        )
+        converged = torch.isclose(
+            next_scale, correction_scale, rtol=1e-14, atol=1e-15
+        ) & torch.isclose(next_delta, correction_delta, rtol=1e-14, atol=1e-15)
+        if not bool(torch.all(converged)):
+            raise ValueError("relativistic space-motion correction did not converge")
+
+    inertial_velocity = (
+        correction_scale.unsqueeze(-1) * observed_tangent
+        + (
+            SPEED_OF_LIGHT_PC_YR
+            * (correction_scale * beta_radial + correction_delta)
+        ).unsqueeze(-1)
+        * direction
+    )
+
+    light_time_before = distance_pc / SPEED_OF_LIGHT_PC_YR
+    dt_years = target_epoch - source_epoch
+    geometric_position = position + (
+        dt_years + light_time_before
+    ).unsqueeze(-1) * inertial_velocity
+    radius_squared = (geometric_position * geometric_position).sum(dim=-1)
+    radial_dot = (geometric_position * inertial_velocity).sum(dim=-1)
+    speed_squared = (inertial_velocity * inertial_velocity).sum(dim=-1)
+    c2_minus_v2 = SPEED_OF_LIGHT_PC_YR**2 - speed_squared
+    if not bool(torch.all(c2_minus_v2 > 0.0)):
+        raise ValueError("inertial space velocity must remain subluminal")
+    light_time_after = (
+        -radial_dot
+        + torch.sqrt(
+            torch.clamp_min(
+                radial_dot.square() + c2_minus_v2 * radius_squared, 0.0
+            )
+        )
+    ) / c2_minus_v2
+    propagated_position = position + (
+        dt_years + light_time_before - light_time_after
+    ).unsqueeze(-1) * inertial_velocity
+
+    distance_out = torch.linalg.norm(propagated_position, dim=-1)
+    if not bool(torch.all(distance_out > 0.0)):
+        raise ValueError("space-motion trajectory crosses the observer")
+    direction_out = propagated_position / distance_out.unsqueeze(-1)
+    inertial_radial = (direction_out * inertial_velocity).sum(dim=-1)
+    inertial_tangent = inertial_velocity - inertial_radial.unsqueeze(-1) * direction_out
+    beta_radial_out = inertial_radial / SPEED_OF_LIGHT_PC_YR
+    beta_tangent_out = (
+        torch.linalg.norm(inertial_tangent, dim=-1) / SPEED_OF_LIGHT_PC_YR
+    )
+    observed_scale = 1.0 + beta_radial_out
+    beta_squared_out = beta_radial_out.square() + beta_tangent_out.square()
+    if not bool(torch.all((observed_scale != 0.0) & (beta_squared_out < 1.0))):
+        raise ValueError("propagated state cannot be converted to catalog observables")
+    observed_delta = -beta_squared_out / (
+        torch.sqrt(torch.clamp_min(1.0 - beta_squared_out, 0.0)) + 1.0
+    )
+    observed_velocity = inertial_tangent / observed_scale.unsqueeze(-1) + (
+        SPEED_OF_LIGHT_PC_YR
+        * (beta_radial_out - observed_delta)
+        / observed_scale
+    ).unsqueeze(-1) * direction_out
+
+    lon_out, lat_out = unit_to_radec(direction_out)
+    lon_out_rad = lon_out * D2R
+    lat_out_rad = lat_out * D2R
+    sin_lon_out, cos_lon_out = torch.sin(lon_out_rad), torch.cos(lon_out_rad)
+    sin_lat_out, cos_lat_out = torch.sin(lat_out_rad), torch.cos(lat_out_rad)
+    tangent_lon_out = torch.stack(
+        (-sin_lon_out, cos_lon_out, torch.zeros_like(lon_out)), dim=-1
+    )
+    tangent_lat_out = torch.stack(
+        (
+            -sin_lat_out * cos_lon_out,
+            -sin_lat_out * sin_lon_out,
+            cos_lat_out,
+        ),
+        dim=-1,
+    )
+    pm_lon_out = (observed_velocity * tangent_lon_out).sum(dim=-1) / (
+        distance_out * MAS_TO_RAD
+    )
+    pm_lat_out = (observed_velocity * tangent_lat_out).sum(dim=-1) / (
+        distance_out * MAS_TO_RAD
+    )
+    parallax_out = 1000.0 / distance_out
+    radial_velocity_out = (
+        (observed_velocity * direction_out).sum(dim=-1) / KM_S_TO_PC_YR
+    )
+    return (
+        lon_out,
+        lat_out,
+        pm_lon_out,
+        pm_lat_out,
+        parallax_out,
+        radial_velocity_out,
+    )
 
 
 def canonical_celestial_frame(frame: str | None) -> str:
