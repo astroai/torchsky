@@ -2,8 +2,9 @@
 
 The scene is trained directly against native detector pixels. Each forward pass
 uses the fixed exposure WCS, maps the pixel into a union TAN canvas, encodes the
-position (planar Fourier or spherical), applies trainable alignment in feature
-space (alignment option A), and decodes one shared wavelength-conditioned scene.
+position (planar Fourier or spherical), optionally applies trainable residual
+alignment, and decodes one shared wavelength-conditioned scene.  Deterministic
+TweakReg alignment is represented by corrected frozen exposure WCS headers.
 
 Bandpass quadrature is intentionally delegated to TorchSky's native
 ``FieldObservation``/``bandpass_quadrature`` implementation. The observation
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
     from .field.types import FieldObservation
 
 EncodingKind = Literal["fourier", "spherical"]
+AlignmentMode = Literal["original_wcs", "tweakreg_frozen", "trainable"]
 
 
 @dataclass(frozen=True)
@@ -439,6 +441,22 @@ class ResidualFeatureAlignment(nn.Module):
         )
 
 
+class IdentityFeatureAlignment(nn.Module):
+    """No residual feature alignment; geometry is entirely fixed by the WCS."""
+
+    def __init__(self, mode: str) -> None:
+        super().__init__()
+        self.mode = mode
+        self.register_buffer("zero", torch.zeros(()))
+
+    def forward(self, features: Tensor, exposure_id: Tensor) -> Tensor:
+        del exposure_id
+        return features
+
+    def regularization(self) -> Tensor:
+        return self.zero
+
+
 def _mlp(in_dim: int, out_dim: int, hidden: int, depth: int) -> nn.Sequential:
     layers: list[nn.Module] = []
     d = in_dim
@@ -465,6 +483,7 @@ class WCSAwareMultiWavelengthINR(nn.Module):
         trunk_depth: int = 4,
         decoder_depth: int = 3,
         anchor_exposure: int = 0,
+        alignment_mode: AlignmentMode = "trainable",
         learn_background: bool = True,
         output_activation: str = "softplus",
     ) -> None:
@@ -474,24 +493,37 @@ class WCSAwareMultiWavelengthINR(nn.Module):
         self.encoding = encoding
         self.spectral_frequencies = spectral_frequencies
         self.output_activation = output_activation
+        self.alignment_mode = alignment_mode
         self.num_exposures = len(headers)
+        if alignment_mode not in {"original_wcs", "tweakreg_frozen", "trainable"}:
+            raise ValueError(
+                "alignment_mode must be original_wcs, tweakreg_frozen, or trainable"
+            )
         if encoding == "fourier":
             self.position_encoder = FourierPlaneEncoder(canvas, spatial_frequencies)
-            self.feature_alignment = FourierFeatureShiftAlignment(
-                self.position_encoder,
-                self.num_exposures,
-                anchor_exposure,
+            self.feature_alignment = (
+                FourierFeatureShiftAlignment(
+                    self.position_encoder,
+                    self.num_exposures,
+                    anchor_exposure,
+                )
+                if alignment_mode == "trainable"
+                else IdentityFeatureAlignment(alignment_mode)
             )
         elif encoding == "spherical":
             self.position_encoder = SphericalPositionEncoder(
                 spatial_frequencies,
                 spherical_min_frequency,
             )
-            self.feature_alignment = ResidualFeatureAlignment(
-                self.num_exposures,
-                self.position_encoder.output_dim,
-                spherical_alignment_rank,
-                anchor_exposure,
+            self.feature_alignment = (
+                ResidualFeatureAlignment(
+                    self.num_exposures,
+                    self.position_encoder.output_dim,
+                    spherical_alignment_rank,
+                    anchor_exposure,
+                )
+                if alignment_mode == "trainable"
+                else IdentityFeatureAlignment(alignment_mode)
             )
         else:
             raise ValueError("encoding must be fourier or spherical")
@@ -691,9 +723,12 @@ class WCSAwareMultiWavelengthINR(nn.Module):
         return self.feature_alignment.regularization()
 
     def alignment_summary(self) -> dict[str, Any]:
+        if isinstance(self.feature_alignment, IdentityFeatureAlignment):
+            return {"kind": self.alignment_mode, "trainable": False}
         if isinstance(self.feature_alignment, FourierFeatureShiftAlignment):
             return {
                 "kind": "fourier_phase_shift",
+                "trainable": True,
                 "shift_pixels_xy": self.feature_alignment.effective_shift_pixels()
                 .detach()
                 .cpu()
@@ -701,6 +736,7 @@ class WCSAwareMultiWavelengthINR(nn.Module):
             }
         return {
             "kind": "spherical_low_rank_feature_adapter",
+            "trainable": True,
             "rank": self.feature_alignment.rank,
         }
 
@@ -725,6 +761,16 @@ def weighted_robust_loss(
     if not bool(valid.any()):
         raise RuntimeError("batch has no valid pixels")
     residual = prediction[valid] - target[valid]
+    if kind == "whitened_l2":
+        whitened = residual / err[valid]
+        loss = 0.5 * whitened.square().mean()
+        return loss, {
+            "rmse": residual.square().mean().sqrt().detach(),
+            "mae": residual.abs().mean().detach(),
+            "whitened_rmse": whitened.square().mean().sqrt().detach(),
+            "whitened_mae": whitened.abs().mean().detach(),
+            "valid_fraction": valid.float().mean().detach(),
+        }
     if kind == "huber":
         absolute = residual.abs()
         rho = torch.where(
@@ -735,7 +781,7 @@ def weighted_robust_loss(
     elif kind == "charbonnier":
         rho = torch.sqrt(residual.square() + delta * delta) - delta
     else:
-        raise ValueError("kind must be huber or charbonnier")
+        raise ValueError("kind must be huber, charbonnier, or whitened_l2")
     weight = err[valid].reciprocal().square()
     weight = (weight / weight.mean().clamp_min(1e-20)).clamp_max(max_relative_weight)
     loss = (weight * rho).sum() / weight.sum().clamp_min(1e-20)
