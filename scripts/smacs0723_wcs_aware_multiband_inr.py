@@ -35,10 +35,12 @@ from torchsky.map.wcs_aware_inr import (  # noqa: E402
 from torchsky.map.wcs_aware_training import (  # noqa: E402
     build_union_coverage_mask,
     discover_exposures,
+    effective_batch_size,
     load_exposure_pool,
     normalize_pools,
     render_union_band,
     robust_intensity_scale,
+    run_tweakreg_alignment,
     seed_everything,
     train_model,
 )
@@ -118,6 +120,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-activation", choices=("linear", "softplus"), default="softplus"
     )
     parser.add_argument("--anchor-exposure", type=int, default=0)
+    parser.add_argument(
+        "--alignment-mode",
+        choices=("original_wcs", "tweakreg_frozen", "trainable"),
+        default="trainable",
+        help=(
+            "original_wcs freezes input WCS; tweakreg_frozen first runs JWST "
+            "TweakReg and freezes the corrected WCS; trainable retains the "
+            "legacy residual feature alignment."
+        ),
+    )
+    parser.add_argument(
+        "--tweakreg-fitgeometry",
+        choices=("shift", "rshift", "rscale", "general"),
+        default="rshift",
+    )
+    parser.add_argument("--tweakreg-snr-threshold", type=float, default=10.0)
+    parser.add_argument("--tweakreg-minobj", type=int, default=15)
+    parser.add_argument("--tweakreg-searchrad", type=float, default=2.0)
+    parser.add_argument("--tweakreg-separation", type=float, default=1.0)
+    parser.add_argument("--tweakreg-tolerance", type=float, default=0.7)
+    parser.add_argument("--tweakreg-nclip", type=int, default=3)
+    parser.add_argument("--tweakreg-sigma", type=float, default=3.0)
     parser.add_argument("--union-pixel-scale-arcsec", type=float, default=None)
     parser.add_argument("--union-padding-pixels", type=int, default=32)
 
@@ -153,14 +177,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-checkpoint-psf", action="store_true")
 
     parser.add_argument("--steps", type=int, default=10000)
-    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        nargs="+",
+        default=[256],
+        metavar="N",
+        help=(
+            "One integer keeps legacy total-batch behavior. Two integers are "
+            "the exact short-wave and long-wave samples per exposure, e.g. "
+            "--batch-size 100 400."
+        ),
+    )
     parser.add_argument("--learning-rate", type=float, default=2.0e-4)
     parser.add_argument("--alignment-learning-rate", type=float, default=2.0e-5)
     parser.add_argument("--background-learning-rate", type=float, default=5.0e-5)
     parser.add_argument("--weight-decay", type=float, default=1.0e-6)
     parser.add_argument("--gradient-clip", type=float, default=1.0)
     parser.add_argument(
-        "--robust-loss", choices=("huber", "charbonnier"), default="huber"
+        "--loss",
+        "--robust-loss",
+        dest="robust_loss",
+        choices=("huber", "charbonnier", "whitened_l2"),
+        default="huber",
+        help="Training objective; --robust-loss remains as a compatibility alias.",
     )
     parser.add_argument("--robust-delta", type=float, default=0.1)
     parser.add_argument("--max-relative-weight", type=float, default=100.0)
@@ -209,6 +249,29 @@ def main() -> int:
         module=args.module,
         max_exposures_per_band=args.max_exposures_per_band,
     )
+    alignment_report: dict[str, Any] = {
+        "mode": args.alignment_mode,
+        "fitgeometry": None,
+        "products": [],
+    }
+    if args.alignment_mode == "tweakreg_frozen":
+        selected, tweakreg_report = run_tweakreg_alignment(
+            selected,
+            output_dir=(
+                output_dir
+                / "alignment"
+                / f"tweakreg_{args.tweakreg_fitgeometry}"
+            ),
+            fitgeometry=args.tweakreg_fitgeometry,
+            snr_threshold=args.tweakreg_snr_threshold,
+            minobj=args.tweakreg_minobj,
+            searchrad=args.tweakreg_searchrad,
+            separation=args.tweakreg_separation,
+            tolerance=args.tweakreg_tolerance,
+            nclip=args.tweakreg_nclip,
+            sigma=args.tweakreg_sigma,
+        )
+        alignment_report.update(tweakreg_report)
     rng = np.random.default_rng(args.seed)
     pools = [
         load_exposure_pool(
@@ -221,9 +284,20 @@ def main() -> int:
         )
         for path, band, detector in selected
     ]
-    if args.batch_size < len(pools):
+    batch_values = (
+        [args.batch_size] if isinstance(args.batch_size, int) else args.batch_size
+    )
+    batch_spec: int | list[int] = (
+        batch_values[0] if len(batch_values) == 1 else batch_values
+    )
+    if len(batch_values) not in {1, 2}:
+        raise SystemExit("batch-size accepts one total or two SW/LW integers")
+    if min(batch_values) <= 0:
+        raise SystemExit("batch-size values must be positive")
+    actual_batch_size = effective_batch_size(pools, batch_spec)
+    if len(batch_values) == 1 and actual_batch_size < len(pools):
         raise SystemExit(
-            f"batch-size {args.batch_size} is smaller than {len(pools)} exposures"
+            f"batch-size {actual_batch_size} is smaller than {len(pools)} exposures"
         )
     if not 0 <= args.anchor_exposure < len(pools):
         raise SystemExit("anchor exposure is outside the selected exposure range")
@@ -286,6 +360,8 @@ def main() -> int:
         },
         "bandpass": bandpass.metadata,
         "psf": psf_calibration.metadata,
+        "alignment": alignment_report,
+        "effective_total_batch_size": actual_batch_size,
         "args": _jsonable_args(args),
     }
     (output_dir / "manifest.json").write_text(
@@ -330,6 +406,7 @@ def main() -> int:
             trunk_depth=args.trunk_depth,
             decoder_depth=args.decoder_depth,
             anchor_exposure=args.anchor_exposure,
+            alignment_mode=args.alignment_mode,
             learn_background=not args.no_background,
             output_activation=args.output_activation,
         )
@@ -341,7 +418,7 @@ def main() -> int:
             psf=psf_calibration.bank,
             device=device,
             steps=args.steps,
-            batch_size=args.batch_size,
+            batch_size=batch_spec,
             seed=args.seed,
             learning_rate=args.learning_rate,
             alignment_learning_rate=args.alignment_learning_rate,
