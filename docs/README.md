@@ -70,6 +70,8 @@ contract.
 
 - [Roadmap](roadmap/status.md) - current strategy, domain status, active queue,
   and standing gates.
+- [Execution roadmap](roadmap/next.md) - ordered Torchsky map, INR, Power-Foam,
+  multi-wavelength depth, and infrastructure task list.
 - [Roadmap history](roadmap/history.md) - maintained record of shipped
   improvements, validation gates, and follow-ups.
 

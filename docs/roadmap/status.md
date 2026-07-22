@@ -40,10 +40,9 @@ untested behavior.
 ## Current Baseline
 
 - Full local gate: `pixi run ci-local`.
-- Latest recorded full local gate: `1681+ passed, 209 skipped, 0 failed, 55 warnings`
-  (adjoint + deterministic accumulation additions; 3 pre-existing failures
-  fixed. CI-local full run exceeds 10 min timeout; focused gate confirms all
-  changed surfaces pass.)
+- Latest recorded full local gate: `1610 passed, 205 skipped, 12 warnings`
+  in 558.95 seconds (2026-07-22, bounded power-geometry and execution-roadmap
+  checkpoint).
 - Latest focused WCS gate: `338 passed, 2 skipped, 22 warnings`.
 - Latest focused sphere/HEALPix gate: `351 passed, 6 skipped, 10 warnings`.
 - Latest WCS/sphere acceptance: `pixi run wcs-sphere-acceptance` passes; its
@@ -88,6 +87,12 @@ Re-baseline them after the repository boundary cleanup.
   before compute: expanded paths and HDUs, calibration inputs, target WCS and
   shape, tiling, method settings, and device. Coadd and INR dry-run integration
   tests gate the record without creating a FITS product.
+- Experimental field geometry now includes exact tensor-native power distance,
+  bounded power-cell ownership, Čech overlap adjacency, and radical-plane
+  equations, plus an explicitly labelled compact soft optimization surrogate.
+  The exact references are chunk-bounded but not yet asymptotically sparse; this
+  is the geometry foundation for the [execution roadmap](next.md), not a claim
+  that the full Power-Foam renderer or optimizer is shipped.
 
 - WCS mixed pixel/world solving covers spatial cubes with linearly coupled
   non-spatial axes; the focused gate reports
@@ -206,6 +211,9 @@ Re-baseline them after the repository boundary cleanup.
   map/scene solvers.
 - Treat world-model and measure-valued scene ideas as research-layer work on
   top of stable operators, not as core API commitments.
+- Execute the ordered INR, bounded Power-Foam, multiband-depth, and classical
+  map parity tasks in [`next.md`](next.md); promotion still depends on the gates
+  above rather than roadmap placement.
 
 ## Prioritization Rule
 
