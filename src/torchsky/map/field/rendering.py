@@ -11,6 +11,7 @@ from torch import Tensor
 from ...device import default_compute_device
 from ...spectral import SpectralAxis
 from ...sphere import healpix as _healpix_wcs
+from ...wcs import WCS
 
 from ..healpix_image_plane import sample_healpix_map_on_image_header
 from ..operators.background import (
@@ -39,7 +40,52 @@ from .observation_ops import (
     coordinate_grid as _coordinate_grid,
     header_shape as _header_shape,
 )
-from .types import FieldObservation, FieldSpectralSampling, ForwardContext
+from .types import (
+    FieldObservation,
+    FieldSpatialSampling,
+    FieldSpectralSampling,
+    ForwardContext,
+)
+
+
+def _spatial_quadrature_nodes(
+    spatial_sampling: FieldSpatialSampling,
+) -> tuple[tuple[float, float, float], ...]:
+    if spatial_sampling == "center":
+        return ((0.0, 0.0, 1.0),)
+    if spatial_sampling == "gauss_legendre_2x2":
+        offset = 0.5 / (3.0**0.5)
+        return tuple(
+            (offset_x, offset_y, 0.25)
+            for offset_y in (-offset, offset)
+            for offset_x in (-offset, offset)
+        )
+    raise ValueError(f"unsupported spatial_sampling {spatial_sampling!r}")
+
+
+def _tile_world_coordinate_grid(
+    wcs: WCS,
+    *,
+    y0: int,
+    y1: int,
+    x0: int,
+    x1: int,
+    offset_x: float,
+    offset_y: float,
+    device: torch.device,
+) -> tuple[Tensor, Tensor]:
+    grid_device = torch.device("cpu") if device.type == "mps" else device
+    y, x = torch.meshgrid(
+        torch.arange(y0, y1, dtype=torch.float64, device=grid_device) + offset_y,
+        torch.arange(x0, x1, dtype=torch.float64, device=grid_device) + offset_x,
+        indexing="ij",
+    )
+    ra_deg, dec_deg = wcs.pixel_to_world(x, y)
+    output_dtype = torch.float32 if device.type == "mps" else ra_deg.dtype
+    return (
+        ra_deg.to(device=device, dtype=output_dtype),
+        dec_deg.to(device=device, dtype=output_dtype),
+    )
 
 
 def _resolve_operator_bundle(
@@ -49,6 +95,137 @@ def _resolve_operator_bundle(
     if operator_bundle is not None:
         return operator_bundle
     return field_observation_operator_bundle(observation)
+
+
+def _render_spatially_integrated_distribution(
+    model: nn.Module,
+    observation: FieldObservation,
+    *,
+    wavelengths: Tensor,
+    weights: Tensor,
+    spatial_nodes: tuple[tuple[float, float, float], ...],
+    spatial_tile_hw: tuple[int, int] | None,
+    forward_context: ForwardContext | None,
+    exposure_pose: ExposurePose | None,
+    operator_bundle: ObservationOperatorBundle,
+    device: torch.device,
+) -> tuple[Tensor, Tensor]:
+    image = observation.image
+    height, width = _header_shape(
+        observation.header,
+        fallback=(int(image.shape[-2]), int(image.shape[-1])),
+    )
+    if spatial_tile_hw is not None and operator_bundle.psf is not None:
+        raise ValueError(
+            "spatially tiled distribution rendering cannot be used with a "
+            "non-trivial PSF because the PSF couples pixels across tiles"
+        )
+    if spatial_tile_hw is None:
+        tiles = [(0, height, 0, width)]
+    else:
+        tile_h, tile_w = _validate_spatial_tile_hw(spatial_tile_hw)
+        tiles = list(_iter_spatial_tiles(height, width, tile_h, tile_w))
+    sampling_wcs = WCS(observation.header)
+    grid_device = torch.device("cpu") if device.type == "mps" else device
+    sampling_wcs.to(grid_device)
+    output_mean = torch.zeros((height, width), device=device, dtype=torch.float32)
+    output_var = torch.zeros_like(output_mean)
+    render_distribution = getattr(model, "render_bandpass_distribution", None)
+    forward_distribution = getattr(model, "forward_distribution", None)
+    for y0, y1, x0, x1 in tiles:
+        patch_mean = torch.zeros(
+            (y1 - y0, x1 - x0), device=device, dtype=torch.float32
+        )
+        patch_var = torch.zeros_like(patch_mean)
+        for offset_x, offset_y, spatial_weight in spatial_nodes:
+            ra_deg, dec_deg = _tile_world_coordinate_grid(
+                sampling_wcs,
+                y0=y0,
+                y1=y1,
+                x0=x0,
+                x1=x1,
+                offset_x=offset_x,
+                offset_y=offset_y,
+                device=device,
+            )
+            ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
+                ra_deg,
+                dec_deg,
+                observation,
+                exposure_pose,
+            )
+            ra32 = ra_deg.to(dtype=torch.float32)
+            dec32 = dec_deg.to(dtype=torch.float32)
+            if callable(render_distribution):
+                node_mean, node_logvar = _call_render_bandpass_distribution(
+                    model,
+                    ra32,
+                    dec32,
+                    wavelengths,
+                    weights,
+                    forward_context=forward_context,
+                )
+                node_var = torch.exp(node_logvar)
+            elif callable(forward_distribution):
+                means: list[Tensor] = []
+                variances: list[Tensor] = []
+                for wavelength in wavelengths:
+                    mean, logvar = _call_forward_distribution(
+                        model,
+                        ra32,
+                        dec32,
+                        wavelength,
+                        forward_context=forward_context,
+                    )
+                    means.append(mean)
+                    variances.append(torch.exp(logvar))
+                stacked_mean = torch.stack(means, dim=0)
+                stacked_var = torch.stack(variances, dim=0)
+                node_mean = torch.sum(
+                    stacked_mean
+                    * weights.view(-1, 1, 1).to(dtype=stacked_mean.dtype),
+                    dim=0,
+                )
+                node_var = torch.sum(
+                    stacked_var
+                    * torch.square(weights).view(-1, 1, 1).to(
+                        dtype=stacked_var.dtype
+                    ),
+                    dim=0,
+                )
+            else:
+                node_mean = torch.zeros_like(patch_mean)
+                for index, wavelength in enumerate(wavelengths):
+                    plane = _call_scalar_field_forward(
+                        model,
+                        ra32,
+                        dec32,
+                        wavelength,
+                        forward_context=forward_context,
+                    )
+                    node_mean += plane * weights[index].to(dtype=plane.dtype)
+                node_var = torch.ones_like(node_mean)
+            patch_mean += float(spatial_weight) * node_mean
+            patch_var += float(spatial_weight) ** 2 * node_var
+        output_mean[y0:y1, x0:x1] = patch_mean
+        output_var[y0:y1, x0:x1] = patch_var
+    if operator_bundle.psf is not None:
+        output_mean = apply_psf_spec(output_mean, observation.psf_spec)
+        output_var = apply_psf_spec(output_var, observation.psf_spec)
+    if operator_bundle.background is not None:
+        output_mean = apply_background_components(
+            output_mean,
+            **observation_background_components(
+                observation,
+                shape=tuple(output_mean.shape),
+                device=output_mean.device,
+                dtype=output_mean.dtype,
+            ),
+        )
+    return (
+        output_mean.to(dtype=image.dtype),
+        torch.log(torch.clamp(output_var, min=1.0e-8)).to(dtype=image.dtype),
+    )
 
 
 def render_field_observation_distribution(
@@ -61,6 +238,8 @@ def render_field_observation_distribution(
     generator: torch.Generator | None = None,
     override_wavelengths: Tensor | None = None,
     override_weights: Tensor | None = None,
+    spatial_sampling: FieldSpatialSampling = "center",
+    spatial_tile_hw: tuple[int, int] | None = None,
     forward_context: ForwardContext | None = None,
     exposure_pose: ExposurePose | None = None,
     operator_bundle: ObservationOperatorBundle | None = None,
@@ -68,6 +247,7 @@ def render_field_observation_distribution(
     image = observation.image
     if image.ndim != 2:
         raise ValueError("FieldObservation.image must be 2D")
+    spatial_nodes = _spatial_quadrature_nodes(spatial_sampling)
     operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
     device = next((p.device for p in model.parameters()), default_compute_device())
     ra_deg, dec_deg = _coordinate_grid(
@@ -105,6 +285,19 @@ def render_field_observation_distribution(
         )
     else:
         raise ValueError(f"unsupported spectral_sampling {spectral_sampling!r}")
+    if spatial_sampling != "center":
+        return _render_spatially_integrated_distribution(
+            model,
+            observation,
+            wavelengths=wavelengths,
+            weights=weights,
+            spatial_nodes=spatial_nodes,
+            spatial_tile_hw=spatial_tile_hw,
+            forward_context=forward_context,
+            exposure_pose=exposure_pose,
+            operator_bundle=operator_bundle,
+            device=device,
+        )
     render_bandpass_distribution = getattr(model, "render_bandpass_distribution", None)
     operators_applied = False
     if callable(render_bandpass_distribution):
@@ -154,6 +347,7 @@ def render_field_observation_distribution(
                 generator=generator,
                 override_wavelengths=override_wavelengths,
                 override_weights=override_weights,
+                spatial_sampling=spatial_sampling,
                 forward_context=forward_context,
                 exposure_pose=exposure_pose,
                 operator_bundle=operator_bundle,
@@ -296,6 +490,7 @@ def render_field_observation(
     generator: torch.Generator | None = None,
     override_wavelengths: Tensor | None = None,
     override_weights: Tensor | None = None,
+    spatial_sampling: FieldSpatialSampling = "center",
     spatial_tile_hw: tuple[int, int] | None = None,
     use_func_vmap: bool = False,
     func_vmap_chunk: int = 65536,
@@ -308,14 +503,17 @@ def render_field_observation(
         raise ValueError("FieldObservation.image must be 2D")
     operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
     device = next((p.device for p in model.parameters()), default_compute_device())
-    ra_deg, dec_deg = _coordinate_grid(
-        observation,
-        shape=tuple(image.shape),
-        device=device,
-    )
-    ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
-        ra_deg, dec_deg, observation, exposure_pose
-    )
+    spatial_nodes = _spatial_quadrature_nodes(spatial_sampling)
+    center_coordinates: tuple[Tensor, Tensor] | None = None
+    if spatial_sampling == "center":
+        ra_deg, dec_deg = _coordinate_grid(
+            observation,
+            shape=tuple(image.shape),
+            device=device,
+        )
+        center_coordinates = _apply_exposure_pose_to_sky_grid(
+            ra_deg, dec_deg, observation, exposure_pose
+        )
     if override_wavelengths is not None or override_weights is not None:
         if override_wavelengths is None or override_weights is None:
             raise ValueError(
@@ -354,35 +552,23 @@ def render_field_observation(
             "forward_context=... (torch.func vmap path is context-free)"
         )
     render_bandpass = getattr(model, "render_bandpass", None)
-    if callable(render_bandpass):
-        if spatial_tile_hw is not None or use_func_vmap:
-            raise ValueError(
-                "spatial_tile_hw and use_func_vmap are not supported when model.render_bandpass is defined"
-            )
-        rendered = _call_render_bandpass(
-            model,
-            ra_deg.to(dtype=torch.float32),
-            dec_deg.to(dtype=torch.float32),
-            wavelengths,
-            weights,
-            forward_context=forward_context,
+    if callable(render_bandpass) and use_func_vmap:
+        raise ValueError(
+            "use_func_vmap is not supported when model.render_bandpass is defined"
         )
-        if operator_bundle.psf is not None:
-            rendered = apply_psf_spec(rendered, observation.psf_spec)
-        if operator_bundle.background is not None:
-            rendered = apply_background_components(
-                rendered,
-                **observation_background_components(
-                    observation,
-                    shape=tuple(rendered.shape),
-                    device=rendered.device,
-                    dtype=rendered.dtype,
-                ),
-            )
-        return rendered.to(dtype=image.dtype)
-    H, W = int(image.shape[-2]), int(image.shape[-1])
-    ra32 = ra_deg.to(dtype=torch.float32)
-    dec32 = dec_deg.to(dtype=torch.float32)
+    if center_coordinates is not None:
+        center_ra32 = center_coordinates[0].to(dtype=torch.float32)
+        center_dec32 = center_coordinates[1].to(dtype=torch.float32)
+        H, W = int(center_ra32.shape[-2]), int(center_ra32.shape[-1])
+    else:
+        center_ra32 = center_dec32 = None
+        H, W = _header_shape(
+            observation.header,
+            fallback=(int(image.shape[-2]), int(image.shape[-1])),
+        )
+    sampling_wcs = WCS(observation.header)
+    grid_device = torch.device("cpu") if device.type == "mps" else device
+    sampling_wcs.to(grid_device)
     if spatial_tile_hw is None:
         tiles = [(0, H, 0, W)]
     else:
@@ -391,26 +577,59 @@ def render_field_observation(
     rendered = torch.zeros((H, W), device=device, dtype=torch.float32)
     for y0, y1, x0, x1 in tiles:
         patch = torch.zeros((y1 - y0, x1 - x0), device=device, dtype=torch.float32)
-        ra_p = ra32[y0:y1, x0:x1]
-        dec_p = dec32[y0:y1, x0:x1]
-        for i, wavelength in enumerate(wavelengths):
-            if use_func_vmap:
-                plane = _evaluate_field_plane_func_vmap(
-                    model,
-                    ra_p,
-                    dec_p,
-                    wavelength=wavelength,
-                    chunk=func_vmap_chunk,
-                )
+        for offset_x, offset_y, spatial_weight in spatial_nodes:
+            if center_ra32 is not None and center_dec32 is not None:
+                ra_p = center_ra32[y0:y1, x0:x1]
+                dec_p = center_dec32[y0:y1, x0:x1]
             else:
-                plane = _call_scalar_field_forward(
+                ra_p, dec_p = _tile_world_coordinate_grid(
+                    sampling_wcs,
+                    y0=y0,
+                    y1=y1,
+                    x0=x0,
+                    x1=x1,
+                    offset_x=offset_x,
+                    offset_y=offset_y,
+                    device=device,
+                )
+                ra_p, dec_p = _apply_exposure_pose_to_sky_grid(
+                    ra_p,
+                    dec_p,
+                    observation,
+                    exposure_pose,
+                )
+                ra_p = ra_p.to(dtype=torch.float32)
+                dec_p = dec_p.to(dtype=torch.float32)
+            if callable(render_bandpass):
+                node_plane = _call_render_bandpass(
                     model,
                     ra_p,
                     dec_p,
-                    wavelength,
+                    wavelengths,
+                    weights,
                     forward_context=forward_context,
                 )
-            patch += plane * weights[i].to(dtype=plane.dtype)
+            else:
+                node_plane = torch.zeros_like(patch)
+                for i, wavelength in enumerate(wavelengths):
+                    if use_func_vmap:
+                        plane = _evaluate_field_plane_func_vmap(
+                            model,
+                            ra_p,
+                            dec_p,
+                            wavelength=wavelength,
+                            chunk=func_vmap_chunk,
+                        )
+                    else:
+                        plane = _call_scalar_field_forward(
+                            model,
+                            ra_p,
+                            dec_p,
+                            wavelength,
+                            forward_context=forward_context,
+                        )
+                    node_plane += plane * weights[i].to(dtype=plane.dtype)
+            patch += node_plane * spatial_weight
         rendered[y0:y1, x0:x1] = patch
     if operator_bundle.psf is not None:
         rendered = apply_psf_spec(rendered, observation.psf_spec)

@@ -50,6 +50,7 @@ def test_map_parser_defaults():
     assert args.mask_maps is None
     assert args.primary_beam_maps is None
     assert args.inr_spectral_source == "svo"
+    assert args.inr_spatial_sampling == "center"
 
 
 def test_map_parser_help_is_renderable(capsys) -> None:

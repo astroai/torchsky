@@ -159,6 +159,13 @@ returns `None` only when `steps=0`.
 
   Optional **`exposure_pose`**: an **`ExposurePose`** module applied to sky coordinates before `world_to_pixel` (see [`exposure_pose.py`](../src/torchsky/map/exposure_pose.py)). Use **`None`** for fixed WCS.
 
+  Set **`spatial_sampling="gauss_legendre_2x2"`** to render the detector-pixel
+  average from four Gauss–Legendre samples instead of the default pixel-centre
+  value. This is useful for compact or undersampled structure and composes with
+  spectral integration, exposure pose, PSF, and background operators. Combine
+  it with **`spatial_tile_hw=(h, w)`** to bound activation memory; the four
+  subpixel world grids are generated one tile at a time.
+
 - **`field.render(model, target="cube", ...)`** — samples the field on a 3D grid for export.
 
 - **`field.render(model, target="healpix", ...)`** / **`field.render(model, target="cube_via_healpix", ...)`** — spherical products.

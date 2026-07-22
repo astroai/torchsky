@@ -4,7 +4,7 @@
 > APIs, start with [`../api.md`](../api.md). For shipped-work history, use
 > [`history.md`](history.md).
 
-Last updated: 2026-07-18.
+Last updated: 2026-07-22.
 
 ## Mission And Ownership
 
@@ -72,6 +72,18 @@ Re-baseline them after the repository boundary cleanup.
 | Field models / INR / adaptive capacity | Experimental downstream work | Support-aware diagnostics, residual products, scorecards, pose refinement, and STRAINER-style scaffolding exist. | Promote only after operator correctness, memory scaling, and classical baselines are strong. |
 
 ## Recent Progress Evidence
+
+- Map-product union planning now uses a seam-safe spherical centre, exact TAN
+  plane bounds, and rotation-invariant CD determinant scale. The same union
+  contract reaches single-band, spectral, INR, and CLI paths; RA=0 seam and
+  rotated-CD containment regressions are gated.
+- Continuous-field observation rendering now has opt-in bounded-memory 2×2
+  Gauss–Legendre detector-pixel integration. Spatial samples nest around the
+  existing spectral response, receive exposure-pose transforms individually,
+  and are combined before PSF/background operators. Constant-field, subpixel
+  Gaussian error, gradient, tiled parity, product, and CLI-surface tests gate
+  the primitive. This is operator groundwork for compact adaptive/Foam-like
+  capacity, not a Power-Foam implementation claim.
 
 - WCS mixed pixel/world solving covers spatial cubes with linearly coupled
   non-spatial axes; the focused gate reports

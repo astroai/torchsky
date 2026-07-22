@@ -55,6 +55,11 @@ INR renders use the same scalar weighting, weight-map, mask-map, and
 background-offset flags. Pass `--reference` when the output should be rendered
 on a specific FITS WCS/shape instead of the planned union grid.
 
+For compact or undersampled structure, add
+`--inr-spatial-sampling gauss_legendre_2x2` to integrate the continuous field
+over each detector pixel with four deterministic samples. The default `center`
+mode remains faster for well-sampled fields.
+
 Use `--dry-run` before large jobs to validate the expanded input list and print
 the planned output shape/tiling decision without writing the map or fitting an
 INR.

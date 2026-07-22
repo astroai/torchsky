@@ -30,6 +30,7 @@ from .image_plane import (
     plan_image_plane_cube_target,
     plan_image_plane_target,
 )
+from .field.types import FieldSpatialSampling
 from .operators.config import (
     validate_map_resampling_kernel,
     validate_map_stacking_method,
@@ -583,14 +584,17 @@ def render_field_product(
     product: MapProductSpec,
     *,
     num_spectral_samples: int = 9,
+    spatial_sampling: FieldSpatialSampling = "center",
     spatial_tile_hw: tuple[int, int] | None = None,
 ) -> MapProductResult:
-    if spatial_tile_hw is None:
+    if spatial_tile_hw is None and spatial_sampling == "center":
         return render_scene_product(
             model,
             product,
             num_spectral_samples=num_spectral_samples,
         )
+    if spatial_tile_hw is None:
+        spatial_tile_hw = product.shape
     # Tiled rendering: render each spatial tile separately to cap memory.
     from .field.rendering import render_field_observation
     from .field.types import FieldObservation
@@ -630,6 +634,7 @@ def render_field_product(
                     tile_pred = render_field_observation(
                         model, tile_obs,
                         num_spectral_samples=num_spectral_samples,
+                        spatial_sampling=spatial_sampling,
                     )
                 data[band_index, y0:y1, x0:x1] = tile_pred
                 weight[band_index, y0:y1, x0:x1] = 1.0

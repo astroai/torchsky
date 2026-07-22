@@ -58,6 +58,7 @@ FieldSpectralSampling = Literal[
     "bandpass_mc",
     "mixture_mc",
 ]
+FieldSpatialSampling = Literal["center", "gauss_legendre_2x2"]
 FieldObservationSampling = Literal["uniform", "band_balanced"]
 FieldNoisePretrainKind = Literal["none", "uniform", "gaussian", "spectrum"]
 # wavelength | energy | frequency — meaning of spectral_min / spectral_max numeric values

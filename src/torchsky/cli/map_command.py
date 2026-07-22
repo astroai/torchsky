@@ -8,7 +8,7 @@ import math
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, cast
 
 import torch
 
@@ -16,6 +16,7 @@ from ..device import default_compute_device
 from ..io import HDUList, TensorHDU, read, write
 from ..map.field import (
     FieldObservation,
+    FieldSpatialSampling,
     estimate_field_domain,
     fit_field_model,
     make_field_model,
@@ -567,6 +568,7 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         print(
             f"torchsky map: dry-run output_shape={h}×{w} method=inr "
             f"model={args.inr_model} band={band} render_tiled={render_tiled} "
+            f"spatial_sampling={getattr(args, 'inr_spatial_sampling', 'center')} "
             f"observations={n_obs} steps={getattr(args, 'inr_steps', 0)} "
             f"device={torch.device(args.device) if args.device else default_compute_device()}",
             file=sys.stderr,
@@ -658,12 +660,17 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         model,
         product,
         num_spectral_samples=int(args.inr_spectral_samples),
+        spatial_sampling=cast(
+            FieldSpatialSampling,
+            str(getattr(args, "inr_spatial_sampling", "center")),
+        ),
         spatial_tile_hw=(th, th) if render_tiled else None,
     )
     write(str(args.output), result.data.squeeze(0), header=result.header, overwrite=True)
     print(
         f"wrote {args.output} shape={tuple(result.data.shape)} method=inr "
-        f"model={args.inr_model} band={band}",
+        f"model={args.inr_model} band={band} "
+        f"spatial_sampling={getattr(args, 'inr_spatial_sampling', 'center')}",
         file=sys.stderr,
     )
     return 0
@@ -969,6 +976,15 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--inr-patches-per-obs", type=int, default=2)
     p.add_argument("--inr-obs-per-step", type=int, default=2)
     p.add_argument("--inr-spectral-samples", type=int, default=9)
+    p.add_argument(
+        "--inr-spatial-sampling",
+        choices=("center", "gauss_legendre_2x2"),
+        default="center",
+        help=(
+            "Detector-pixel sampling for INR rendering: center (fast) or "
+            "gauss_legendre_2x2 (anti-aliased pixel average)"
+        ),
+    )
     p.add_argument(
         "--inr-render-tile",
         type=int,

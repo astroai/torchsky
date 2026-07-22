@@ -237,6 +237,138 @@ def test_render_field_observation_accepts_explicit_operator_bundle() -> None:
     torch.testing.assert_close(explicit, torch.full((4, 4), 2.0))
 
 
+def test_field_spatial_quadrature_preserves_constant_and_tiles() -> None:
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=1000.0,
+    )
+    model = _ConstantField(domain, 2.0)
+    observation = FieldObservation(
+        image=torch.zeros((9, 9), dtype=torch.float32),
+        header=_tan_header(9, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
+        wavelength=5600.0,
+        background_offset=3.0,
+    )
+
+    center = render_field_observation(model, observation, num_spectral_samples=1)
+    quadrature = render_field_observation(
+        model,
+        observation,
+        num_spectral_samples=1,
+        spatial_sampling="gauss_legendre_2x2",
+    )
+    tiled = render_field_observation(
+        model,
+        observation,
+        num_spectral_samples=1,
+        spatial_sampling="gauss_legendre_2x2",
+        spatial_tile_hw=(4, 5),
+    )
+
+    torch.testing.assert_close(center, torch.full((9, 9), 5.0))
+    torch.testing.assert_close(quadrature, center)
+    torch.testing.assert_close(tiled, quadrature)
+    quadrature.sum().backward()
+    torch.testing.assert_close(model.value.grad, torch.tensor(81.0))
+
+
+def test_field_spatial_quadrature_reduces_subpixel_gaussian_error() -> None:
+    size = 7
+    scale_deg = 1.0 / 3600.0
+    header = _tan_header(
+        size,
+        crval1=150.0,
+        crval2=2.0,
+        scale_deg=scale_deg,
+    )
+    observation = FieldObservation(
+        image=torch.zeros((size, size), dtype=torch.float32),
+        header=header,
+        wavelength=5600.0,
+    )
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=1000.0,
+    )
+    wcs = WCS(header)
+    dense_offsets = (
+        torch.arange(48, dtype=torch.float64) + 0.5
+    ) / 48.0 - 0.5
+    dy, dx, y, x = torch.meshgrid(
+        dense_offsets,
+        dense_offsets,
+        torch.arange(size, dtype=torch.float64),
+        torch.arange(size, dtype=torch.float64),
+        indexing="ij",
+    )
+    dense_ra, dense_dec = wcs.pixel_to_world(
+        (x + dx).reshape(-1),
+        (y + dy).reshape(-1),
+    )
+    center_error = 0.0
+    quadrature_error = 0.0
+    for phase_x, phase_y in ((-0.3, -0.2), (0.0, 0.25), (0.3, -0.25)):
+        spot_ra, spot_dec = wcs.pixel_to_world(
+            torch.tensor(3.0 + phase_x, dtype=torch.float64),
+            torch.tensor(3.0 + phase_y, dtype=torch.float64),
+        )
+        model = _GaussianSpotField(
+            domain,
+            amplitude=1.0,
+            center_ra_deg=float(spot_ra),
+            center_dec_deg=float(spot_dec),
+            sigma_deg=0.45 * scale_deg,
+        )
+        center = render_field_observation(
+            model,
+            observation,
+            num_spectral_samples=1,
+        )
+        quadrature = render_field_observation(
+            model,
+            observation,
+            num_spectral_samples=1,
+            spatial_sampling="gauss_legendre_2x2",
+        )
+        dense = model(dense_ra, dense_dec, 5600.0).reshape(
+            48, 48, size, size
+        ).mean(dim=(0, 1))
+        center_error += float(torch.mean(torch.abs(center - dense)).detach())
+        quadrature_error += float(
+            torch.mean(torch.abs(quadrature - dense)).detach()
+        )
+
+    assert quadrature_error < center_error
+
+
+def test_field_spatial_sampling_rejects_unknown_mode() -> None:
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=1000.0,
+    )
+    observation = FieldObservation(
+        image=torch.zeros((3, 3), dtype=torch.float32),
+        header=_tan_header(3, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
+        wavelength=5600.0,
+    )
+
+    with pytest.raises(ValueError, match="unsupported spatial_sampling"):
+        render_field_observation(
+            _ConstantField(domain, 1.0),
+            observation,
+            spatial_sampling="unknown",  # type: ignore[arg-type]
+        )
+
+
 def test_render_field_observation_distribution_fallback_applies_operators_once() -> None:
     domain = FieldDomain(
         center_ra_deg=150.0,
@@ -261,6 +393,17 @@ def test_render_field_observation_distribution_fallback_applies_operators_once()
 
     torch.testing.assert_close(mean, torch.full((4, 4), 5.0))
     torch.testing.assert_close(logvar, torch.zeros((4, 4), dtype=torch.float32))
+    quadrature_mean, quadrature_logvar = render_field_observation_distribution(
+        model,
+        observation,
+        num_spectral_samples=1,
+        spatial_sampling="gauss_legendre_2x2",
+    )
+    torch.testing.assert_close(quadrature_mean, mean)
+    torch.testing.assert_close(
+        quadrature_logvar,
+        torch.full_like(logvar, math.log(0.25)),
+    )
 
 
 def test_field_component_decomposition_respects_contextual_roles() -> None:

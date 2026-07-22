@@ -197,6 +197,32 @@ def test_render_field_product_matches_product_shape() -> None:
     assert bool(torch.all(result.weight > 0.0))
 
 
+def test_render_field_product_supports_spatial_quadrature() -> None:
+    class ConstantField(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.value = torch.nn.Parameter(torch.tensor(2.5))
+
+        def forward(self, ra, dec, wavelength):
+            del dec, wavelength
+            return torch.zeros_like(ra) + self.value
+
+    product = torchsky.map.MapProductSpec(
+        target_header=_simple_header(),
+        bands=(MapBandpassSpec(label="g", transmission_center=5000.0),),
+    )
+
+    result = map_product_mod.render_field_product(
+        ConstantField(),
+        product,
+        num_spectral_samples=1,
+        spatial_sampling="gauss_legendre_2x2",
+        spatial_tile_hw=(4, 3),
+    )
+
+    torch.testing.assert_close(result.data, torch.full((1, 6, 6), 2.5))
+
+
 def test_map_product_result_exposes_target_render_specs() -> None:
     product = torchsky.map.MapProductSpec(
         target_header=_simple_header(),
