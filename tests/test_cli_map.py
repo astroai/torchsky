@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -39,6 +40,7 @@ def test_map_parser_defaults():
     assert args.output == "out.fits"
     assert args.inputs == ["in1.fits", "in2.fits"]
     assert args.dry_run is False
+    assert args.plan_json is None
     assert args.method == "coadd"
     assert args.hdu == 0
     assert args.weights is None
@@ -337,6 +339,93 @@ def test_run_coadd_dry_run_does_not_execute_mapmaker(monkeypatch, tmp_path) -> N
     )
 
     assert map_command._run_coadd(args) == 0
+
+
+def test_cli_map_dry_run_writes_resolved_plan_json(monkeypatch, tmp_path) -> None:
+    from torchsky.cli import main
+
+    input_path = tmp_path / "input.fits"
+    output_path = tmp_path / "output.fits"
+    plan_path = tmp_path / "plans" / "output.plan.json"
+    torchsky.write(
+        str(input_path),
+        torch.ones((8, 8)),
+        header=_simple_header(),
+        overwrite=True,
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "torchsky",
+            "map",
+            str(output_path),
+            str(input_path),
+            "--dry-run",
+            "--plan-json",
+            str(plan_path),
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert main() == 0
+    assert plan_path.is_file()
+    assert not output_path.exists()
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert plan["schema_version"] == 1
+    assert plan["method"] == "coadd"
+    assert plan["inputs"][0]["path"] == str(input_path.resolve())
+    assert plan["inputs"][0]["hdu"] == 0
+    assert plan["target"]["shape"] == [9, 9]
+    assert plan["execution"]["kernel"] == "bilinear"
+    assert plan["execution"]["stack"] == "weighted_mean"
+    assert plan["execution"]["resolved_device"] == "cpu"
+    assert not list(plan_path.parent.glob("*.tmp"))
+
+
+def test_cli_map_inr_dry_run_writes_plan_json(monkeypatch, tmp_path) -> None:
+    from torchsky.cli import main
+
+    input_path = tmp_path / "input.fits"
+    output_path = tmp_path / "output.fits"
+    plan_path = tmp_path / "output.inr.plan.json"
+    torchsky.write(
+        str(input_path),
+        torch.ones((8, 8)),
+        header=_simple_header(),
+        overwrite=True,
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "torchsky",
+            "map",
+            str(output_path),
+            str(input_path),
+            "--method",
+            "inr",
+            "--inr-band",
+            "F277W",
+            "--inr-spectral-source",
+            "builtin",
+            "--inr-spatial-sampling",
+            "gauss_legendre_2x2",
+            "--dry-run",
+            "--plan-json",
+            str(plan_path),
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert main() == 0
+    assert not output_path.exists()
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert plan["method"] == "inr"
+    assert plan["spectral"]["band"] == "F277W"
+    assert plan["spectral"]["source"] == "builtin"
+    assert plan["execution"]["model"] == "sine_implicit"
+    assert plan["execution"]["spatial_sampling"] == "gauss_legendre_2x2"
 
 
 def test_run_inr_single_uses_reference_header(monkeypatch, tmp_path) -> None:

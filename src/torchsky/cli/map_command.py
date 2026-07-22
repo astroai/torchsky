@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import math
+import os
 import sys
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Sequence, cast
@@ -43,6 +46,38 @@ _INR_BAND_TABLE: dict[str, tuple[float, float, float, float]] = {
     "F356W": (31000.0, 40000.0, 35600.0, 1400.0),
     "F444W": (38000.0, 50000.0, 44400.0, 1800.0),
 }
+
+
+def _write_map_plan(path: Path, plan: dict) -> None:
+    """Atomically write one deterministic map execution plan."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = handle.name
+            json.dump(plan, handle, indent=2, sort_keys=True, allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    except Exception:
+        if temporary_path is not None:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+        raise
+
+
+def _resolved_path(path: str | Path | None) -> str | None:
+    return None if path is None else str(Path(path).expanduser().resolve())
 
 
 def _expand_inputs(patterns: Sequence[str]) -> list[str]:
@@ -362,6 +397,65 @@ def _run_coadd(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
+    plan_path = getattr(args, "plan_json", None)
+    if plan_path is not None:
+        _write_map_plan(
+            Path(plan_path),
+            {
+                "schema_version": 1,
+                "method": "coadd",
+                "output": _resolved_path(args.output),
+                "inputs": [
+                    {
+                        "path": _resolved_path(path),
+                        "hdu": int(hdu),
+                        "weight": float(weight),
+                        "photometric_scale": float(scale),
+                        "background_offset": float(background),
+                        "weight_map": _resolved_path(weight_map),
+                        "mask_map": _resolved_path(mask_map),
+                        "primary_beam_map": _resolved_path(primary_beam_map),
+                    }
+                    for (
+                        path,
+                        hdu,
+                        weight,
+                        scale,
+                        background,
+                        weight_map,
+                        mask_map,
+                        primary_beam_map,
+                    ) in zip(
+                        expanded_paths,
+                        expanded_hdus,
+                        expanded_weights,
+                        expanded_photometric_scales,
+                        expanded_background_offsets,
+                        expanded_weight_maps,
+                        expanded_mask_maps,
+                        expanded_primary_beam_maps,
+                    )
+                ],
+                "target": {
+                    "shape": list(product.shape),
+                    "header": dict(product.target_header),
+                    "reference": _resolved_path(args.reference),
+                    "reference_hdu": int(args.reference_hdu),
+                    "union_footprint": union_footprint,
+                    "footprint_padding": float(args.footprint_padding),
+                },
+                "execution": {
+                    "kernel": str(args.kernel),
+                    "stack": str(args.stack),
+                    "drizzle_pixfrac": float(args.drizzle_pixfrac),
+                    "value_semantics": str(args.value_semantics),
+                    "tile_hw": None if tile_hw is None else list(tile_hw),
+                    "requested_device": args.device,
+                    "resolved_device": read_dev,
+                },
+            },
+        )
+
     if getattr(args, "dry_run", False):
         print(
             f"torchsky map: dry-run output_shape={product.shape} "
@@ -434,6 +528,12 @@ def _run_inr(args: argparse.Namespace) -> int:
             ns.primary_beam_maps = [args.primary_beam_maps[i] for i in indices]
             ns.per_filter = False
             ns.inr_band = band
+            if getattr(args, "plan_json", None) is not None:
+                base_plan = Path(args.plan_json)
+                suffix = base_plan.suffix or ".json"
+                ns.plan_json = base_plan.with_name(
+                    f"{base_plan.stem}_{_safe_name(fk)}{suffix}"
+                )
             rc = rc or _run_inr_single(ns)
         return rc
     return _run_inr_single(args)
@@ -563,6 +663,73 @@ def _run_inr_single(args: argparse.Namespace) -> int:
     th = int(args.inr_render_tile)
     render_tiled = h > th or w > th
 
+    plan_path = getattr(args, "plan_json", None)
+    if plan_path is not None:
+        _write_map_plan(
+            Path(plan_path),
+            {
+                "schema_version": 1,
+                "method": "inr",
+                "output": _resolved_path(args.output),
+                "inputs": [
+                    {
+                        "path": _resolved_path(path),
+                        "hdu": int(hdu),
+                        "weight": float(weight),
+                        "background_offset": float(background),
+                        "weight_map": _resolved_path(weight_map),
+                        "mask_map": _resolved_path(mask_map),
+                    }
+                    for path, hdu, weight, background, weight_map, mask_map in zip(
+                        inr_paths,
+                        inr_hdus,
+                        inr_weights,
+                        inr_bg,
+                        inr_wmaps,
+                        inr_mmaps,
+                    )
+                ],
+                "target": {
+                    "shape": [h, w],
+                    "header": dict(product.target_header),
+                    "reference": _resolved_path(args.reference),
+                    "reference_hdu": int(args.reference_hdu),
+                    "union_footprint": bool(
+                        getattr(args, "union_footprint", False)
+                    ),
+                    "footprint_padding": float(
+                        getattr(args, "footprint_padding", 1.0)
+                    ),
+                },
+                "spectral": {
+                    "band": band,
+                    "source": str(args.inr_spectral_source),
+                    "spectral_min": skw.get("spectral_min"),
+                    "spectral_max": skw.get("spectral_max"),
+                    "transmission_center": skw.get("transmission_center"),
+                    "transmission_sigma": skw.get("transmission_sigma"),
+                    "transmission_path": _resolved_path(args.inr_transmission),
+                    "transmission_dir": _resolved_path(args.inr_transmission_dir),
+                    "svo_filter_id": args.svo_filter_id,
+                },
+                "execution": {
+                    "model": str(args.inr_model),
+                    "steps": int(args.inr_steps),
+                    "learning_rate": float(args.inr_lr),
+                    "patch_size": int(args.inr_patch_size),
+                    "patches_per_observation": int(args.inr_patches_per_obs),
+                    "observations_per_step": int(args.inr_obs_per_step),
+                    "spectral_samples": int(args.inr_spectral_samples),
+                    "spatial_sampling": str(
+                        getattr(args, "inr_spatial_sampling", "center")
+                    ),
+                    "render_tile": th if render_tiled else None,
+                    "requested_device": args.device,
+                    "resolved_device": read_dev,
+                },
+            },
+        )
+
     if getattr(args, "dry_run", False):
         n_obs = len(inr_paths)
         print(
@@ -691,6 +858,13 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         "--dry-run",
         action="store_true",
         help="Validate inputs and print planned output shape without writing a map",
+    )
+    p.add_argument(
+        "--plan-json",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Atomically write the resolved map plan before compute",
     )
     p.add_argument(
         "--method",

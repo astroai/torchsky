@@ -64,6 +64,13 @@ Use `--dry-run` before large jobs to validate the expanded input list and print
 the planned output shape/tiling decision without writing the map or fitting an
 INR.
 
+Add `--plan-json mosaic.plan.json` to atomically record the expanded input
+paths/HDUs, calibration inputs, target WCS and shape, tiling decision, method
+settings, and resolved device before compute. It composes with `--dry-run` and
+is suitable for batch-job review and reproducibility. With `--per-filter`, one
+plan is written per filter by appending the filter name to the requested plan
+stem.
+
 The current path-oriented map CLI is an application-layer integration with
 `torchfits`; map kernels themselves consume decoded observations and do not own
 FITS I/O.

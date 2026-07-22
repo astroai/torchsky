@@ -84,6 +84,10 @@ Re-baseline them after the repository boundary cleanup.
   Gaussian error, gradient, tiled parity, product, and CLI-surface tests gate
   the primitive. This is operator groundwork for compact adaptive/Foam-like
   capacity, not a Power-Foam implementation claim.
+- `torchsky map --plan-json` atomically records the resolved coadd/INR job
+  before compute: expanded paths and HDUs, calibration inputs, target WCS and
+  shape, tiling, method settings, and device. Coadd and INR dry-run integration
+  tests gate the record without creating a FITS product.
 
 - WCS mixed pixel/world solving covers spatial cubes with linearly coupled
   non-spatial axes; the focused gate reports
