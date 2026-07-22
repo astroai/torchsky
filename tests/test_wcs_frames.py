@@ -14,6 +14,7 @@ from torchsky.wcs import (
     precess_fk5,
     propagate_proper_motion,
     propagate_space_motion,
+    propagate_space_motion_with_jacobian,
 )
 
 
@@ -238,6 +239,138 @@ def test_propagate_space_motion_rejects_incomplete_or_unphysical_states() -> Non
             source_epoch_jyear=2000.0,
             target_epoch_jyear=2025.0,
         )
+
+
+def test_space_motion_jacobian_is_identity_at_same_epoch() -> None:
+    propagated, jacobian = propagate_space_motion_with_jacobian(
+        torch.tensor([10.0, 359.999], dtype=torch.float64),
+        torch.tensor([20.0, 89.9], dtype=torch.float64),
+        torch.tensor([100.0, 5.0], dtype=torch.float64),
+        torch.tensor([50.0, -2.0], dtype=torch.float64),
+        torch.tensor([100.0, 2.0], dtype=torch.float64),
+        torch.tensor([20.0, 30.0], dtype=torch.float64),
+        source_epoch_jyear=torch.tensor([2016.0, 2020.0], dtype=torch.float64),
+        target_epoch_jyear=torch.tensor([2016.0, 2020.0], dtype=torch.float64),
+    )
+
+    expected = torch.eye(6, dtype=torch.float64).expand(2, -1, -1)
+    torch.testing.assert_close(jacobian, expected, rtol=1e-9, atol=1e-9)
+    expected_state = torch.tensor(
+        [
+            [10.0, 359.999],
+            [20.0, 89.9],
+            [100.0, 5.0],
+            [50.0, -2.0],
+            [100.0, 2.0],
+            [20.0, 30.0],
+        ],
+        dtype=torch.float64,
+    )
+    for output, value in zip(propagated, expected_state, strict=True):
+        torch.testing.assert_close(output, value, rtol=1e-10, atol=1e-10)
+
+
+def test_space_motion_jacobian_matches_central_difference() -> None:
+    state = torch.tensor(
+        [359.9999, 20.0, 100.0, 50.0, 100.0, 20.0], dtype=torch.float64
+    )
+    source_epoch = 2016.0
+    target_epoch = 2041.0
+    _propagated, actual = propagate_space_motion_with_jacobian(
+        *state,
+        source_epoch_jyear=source_epoch,
+        target_epoch_jyear=target_epoch,
+    )
+    nominal = propagate_space_motion(
+        *state,
+        source_epoch_jyear=source_epoch,
+        target_epoch_jyear=target_epoch,
+    )
+
+    epsilons = torch.tensor([0.1, 0.1, 1e-3, 1e-3, 0.1, 1e-3], dtype=torch.float64)
+    columns = []
+    for column, epsilon in enumerate(epsilons):
+        plus = state.clone()
+        minus = state.clone()
+        if column == 0:
+            delta_deg = epsilon / (3_600_000.0 * torch.cos(state[1] * np.pi / 180.0))
+            plus[0] += delta_deg
+            minus[0] -= delta_deg
+        elif column == 1:
+            plus[1] += epsilon / 3_600_000.0
+            minus[1] -= epsilon / 3_600_000.0
+        else:
+            plus[column] += epsilon
+            minus[column] -= epsilon
+        moved_plus = propagate_space_motion(
+            *plus,
+            source_epoch_jyear=source_epoch,
+            target_epoch_jyear=target_epoch,
+        )
+        moved_minus = propagate_space_motion(
+            *minus,
+            source_epoch_jyear=source_epoch,
+            target_epoch_jyear=target_epoch,
+        )
+        east = (
+            ((moved_plus[0] - moved_minus[0] + 180.0) % 360.0 - 180.0)
+            * torch.cos(nominal[1] * np.pi / 180.0)
+            * 3_600_000.0
+            / (2.0 * epsilon)
+        )
+        north = (
+            (moved_plus[1] - moved_minus[1])
+            * 3_600_000.0
+            / (2.0 * epsilon)
+        )
+        columns.append(
+            torch.stack(
+                (
+                    east,
+                    north,
+                    (moved_plus[2] - moved_minus[2]) / (2.0 * epsilon),
+                    (moved_plus[3] - moved_minus[3]) / (2.0 * epsilon),
+                    (moved_plus[4] - moved_minus[4]) / (2.0 * epsilon),
+                    (moved_plus[5] - moved_minus[5]) / (2.0 * epsilon),
+                )
+            )
+        )
+    expected = torch.stack(columns, dim=-1)
+    torch.testing.assert_close(actual, expected, rtol=2e-5, atol=2e-5)
+
+
+def test_space_motion_jacobian_batches_like_scalar_calls() -> None:
+    states = torch.tensor(
+        [
+            [10.0, 20.0, 100.0, 50.0, 100.0, 20.0],
+            [359.9999, 89.9, 5.0, -2.0, 2.0, 30.0],
+            [120.0, -45.0, -500.0, 1000.0, 10.0, -50.0],
+        ],
+        dtype=torch.float64,
+    )
+    source_epochs = torch.tensor([2000.0, 2016.0, 2020.0], dtype=torch.float64)
+    target_epochs = torch.tensor([2025.0, 2040.0, 2000.0], dtype=torch.float64)
+    _propagated, batched = propagate_space_motion_with_jacobian(
+        *states.unbind(dim=-1),
+        source_epoch_jyear=source_epochs,
+        target_epoch_jyear=target_epochs,
+    )
+    scalar = torch.stack(
+        [
+            propagate_space_motion_with_jacobian(
+                *state,
+                source_epoch_jyear=source_epoch,
+                target_epoch_jyear=target_epoch,
+            )[1]
+            for state, source_epoch, target_epoch in zip(
+                states, source_epochs, target_epochs, strict=True
+            )
+        ]
+    )
+
+    assert batched.shape == (3, 6, 6)
+    assert torch.isfinite(batched).all()
+    torch.testing.assert_close(batched, scalar, rtol=2e-12, atol=2e-12)
 
 
 def test_fk5_precession_matches_astropy_common_epoch_range() -> None:

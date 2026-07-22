@@ -358,7 +358,7 @@ def propagate_proper_motion(
     return unit_to_radec(propagated)
 
 
-def propagate_space_motion(
+def _propagate_space_motion(
     lon_deg: Any,
     lat_deg: Any,
     pm_lon_coslat_mas_yr: Any,
@@ -368,6 +368,8 @@ def propagate_space_motion(
     *,
     source_epoch_jyear: Any,
     target_epoch_jyear: Any,
+    _validate: bool = True,
+    _correction_iterations: int = 16,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Propagate a complete barycentric astrometric state in ICRS.
 
@@ -418,11 +420,11 @@ def propagate_space_motion(
         target_epoch,
     ):
         finite &= torch.isfinite(value)
-    if not bool(torch.all(finite)):
+    if _validate and not bool(torch.all(finite)):
         raise ValueError("space-motion inputs must be finite")
-    if not bool(torch.all((lat >= -90.0) & (lat <= 90.0))):
+    if _validate and not bool(torch.all((lat >= -90.0) & (lat <= 90.0))):
         raise ValueError("latitude must be within [-90, 90] degrees")
-    if not bool(torch.all(parallax > 0.0)):
+    if _validate and not bool(torch.all(parallax > 0.0)):
         raise ValueError("parallax_mas must be positive; use angular propagation otherwise")
 
     lon_rad = lon * D2R
@@ -447,7 +449,9 @@ def propagate_space_motion(
     beta_tangent = (
         torch.linalg.norm(observed_tangent, dim=-1) / SPEED_OF_LIGHT_PC_YR
     )
-    if not bool(torch.all(beta_radial.square() + beta_tangent.square() < 0.25)):
+    if _validate and not bool(
+        torch.all(beta_radial.square() + beta_tangent.square() < 0.25)
+    ):
         raise ValueError("catalog state implies a space velocity of at least 0.5c")
 
     # Invert the observed-to-inertial catalog correction. ERFA stops once the
@@ -457,7 +461,7 @@ def propagate_space_motion(
     corrected_tangent = beta_tangent
     correction_scale = torch.ones_like(beta_radial)
     correction_delta = torch.zeros_like(beta_radial)
-    for _ in range(16):
+    for _ in range(_correction_iterations):
         correction_scale = 1.0 + corrected_radial
         beta_squared = corrected_radial.square() + corrected_tangent.square()
         correction_delta = -beta_squared / (
@@ -466,25 +470,7 @@ def propagate_space_motion(
         corrected_radial = correction_scale * beta_radial + correction_delta
         corrected_tangent = correction_scale * beta_tangent
 
-    next_scale = 1.0 + corrected_radial
-    next_beta_squared = corrected_radial.square() + corrected_tangent.square()
-    next_delta = -next_beta_squared / (
-        torch.sqrt(torch.clamp_min(1.0 - next_beta_squared, 0.0)) + 1.0
-    )
-    converged = torch.isclose(
-        next_scale, correction_scale, rtol=1e-14, atol=1e-15
-    ) & torch.isclose(next_delta, correction_delta, rtol=1e-14, atol=1e-15)
-    if not bool(torch.all(converged)):
-        # ponytail: real stellar catalogues converge in the fast loop; retain
-        # SOFA's 100-iteration ceiling only for rare near-relativistic states.
-        for _ in range(84):
-            correction_scale = 1.0 + corrected_radial
-            beta_squared = corrected_radial.square() + corrected_tangent.square()
-            correction_delta = -beta_squared / (
-                torch.sqrt(torch.clamp_min(1.0 - beta_squared, 0.0)) + 1.0
-            )
-            corrected_radial = correction_scale * beta_radial + correction_delta
-            corrected_tangent = correction_scale * beta_tangent
+    if _validate:
         next_scale = 1.0 + corrected_radial
         next_beta_squared = corrected_radial.square() + corrected_tangent.square()
         next_delta = -next_beta_squared / (
@@ -493,6 +479,21 @@ def propagate_space_motion(
         converged = torch.isclose(
             next_scale, correction_scale, rtol=1e-14, atol=1e-15
         ) & torch.isclose(next_delta, correction_delta, rtol=1e-14, atol=1e-15)
+        if not bool(torch.all(converged)) and _correction_iterations < 100:
+            # ponytail: real stellar catalogues converge in the fast loop;
+            # retry SOFA's 100-iteration ceiling only for rare extreme states.
+            return _propagate_space_motion(
+                lon,
+                lat,
+                pm_lon,
+                pm_lat,
+                parallax,
+                radial_velocity,
+                source_epoch_jyear=source_epoch,
+                target_epoch_jyear=target_epoch,
+                _validate=True,
+                _correction_iterations=100,
+            )
         if not bool(torch.all(converged)):
             raise ValueError("relativistic space-motion correction did not converge")
 
@@ -514,7 +515,7 @@ def propagate_space_motion(
     radial_dot = (geometric_position * inertial_velocity).sum(dim=-1)
     speed_squared = (inertial_velocity * inertial_velocity).sum(dim=-1)
     c2_minus_v2 = SPEED_OF_LIGHT_PC_YR**2 - speed_squared
-    if not bool(torch.all(c2_minus_v2 > 0.0)):
+    if _validate and not bool(torch.all(c2_minus_v2 > 0.0)):
         raise ValueError("inertial space velocity must remain subluminal")
     light_time_after = (
         -radial_dot
@@ -529,7 +530,7 @@ def propagate_space_motion(
     ).unsqueeze(-1) * inertial_velocity
 
     distance_out = torch.linalg.norm(propagated_position, dim=-1)
-    if not bool(torch.all(distance_out > 0.0)):
+    if _validate and not bool(torch.all(distance_out > 0.0)):
         raise ValueError("space-motion trajectory crosses the observer")
     direction_out = propagated_position / distance_out.unsqueeze(-1)
     inertial_radial = (direction_out * inertial_velocity).sum(dim=-1)
@@ -540,7 +541,9 @@ def propagate_space_motion(
     )
     observed_scale = 1.0 + beta_radial_out
     beta_squared_out = beta_radial_out.square() + beta_tangent_out.square()
-    if not bool(torch.all((observed_scale != 0.0) & (beta_squared_out < 1.0))):
+    if _validate and not bool(
+        torch.all((observed_scale != 0.0) & (beta_squared_out < 1.0))
+    ):
         raise ValueError("propagated state cannot be converted to catalog observables")
     observed_delta = -beta_squared_out / (
         torch.sqrt(torch.clamp_min(1.0 - beta_squared_out, 0.0)) + 1.0
@@ -585,6 +588,193 @@ def propagate_space_motion(
         parallax_out,
         radial_velocity_out,
     )
+
+
+def propagate_space_motion(
+    lon_deg: Any,
+    lat_deg: Any,
+    pm_lon_coslat_mas_yr: Any,
+    pm_lat_mas_yr: Any,
+    parallax_mas: Any,
+    radial_velocity_km_s: Any,
+    *,
+    source_epoch_jyear: Any,
+    target_epoch_jyear: Any,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Propagate a complete barycentric astrometric state in ICRS.
+
+    Inputs and outputs are longitude/latitude in degrees, cosine-weighted
+    longitude and latitude proper motions in mas/yr, parallax in mas, and
+    radial velocity in km/s. Epochs are TCB Julian years. Inputs broadcast.
+
+    The implementation follows the ERFA/SOFA ``starpv`` to rectilinear motion
+    with changing light time to ``pvstar`` model, including the special-
+    relativistic conversion between catalogue observables and inertial
+    velocity. A complete state is required: use
+    :func:`propagate_proper_motion` when distance or radial velocity is
+    unavailable.
+
+    Returns:
+        ``(lon, lat, pm_lon_coslat, pm_lat, parallax, radial_velocity)``.
+    """
+    return _propagate_space_motion(
+        lon_deg,
+        lat_deg,
+        pm_lon_coslat_mas_yr,
+        pm_lat_mas_yr,
+        parallax_mas,
+        radial_velocity_km_s,
+        source_epoch_jyear=source_epoch_jyear,
+        target_epoch_jyear=target_epoch_jyear,
+    )
+
+
+def _space_motion_local_delta(
+    state: Tensor,
+    perturbation: Tensor,
+    propagated_state: Tensor,
+    source_epoch: Tensor,
+    target_epoch: Tensor,
+) -> Tensor:
+    """Map a local catalogue perturbation to propagated local observables."""
+    lon_rad = state[0] * D2R
+    lat_rad = state[1] * D2R
+    sin_lon, cos_lon = torch.sin(lon_rad), torch.cos(lon_rad)
+    sin_lat, cos_lat = torch.sin(lat_rad), torch.cos(lat_rad)
+    direction = torch.stack((cos_lat * cos_lon, cos_lat * sin_lon, sin_lat))
+    tangent_lon = torch.stack((-sin_lon, cos_lon, torch.zeros_like(lon_rad)))
+    tangent_lat = torch.stack(
+        (-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat)
+    )
+    perturbed_direction = direction + MAS_TO_RAD * (
+        perturbation[0] * tangent_lon + perturbation[1] * tangent_lat
+    )
+    perturbed_direction = perturbed_direction / torch.linalg.norm(
+        perturbed_direction
+    ).clamp_min(1e-30)
+    perturbed_lon, perturbed_lat = unit_to_radec(perturbed_direction)
+
+    moved = _propagate_space_motion(
+        perturbed_lon,
+        perturbed_lat,
+        state[2] + perturbation[2],
+        state[3] + perturbation[3],
+        state[4] + perturbation[4],
+        state[5] + perturbation[5],
+        source_epoch_jyear=source_epoch,
+        target_epoch_jyear=target_epoch,
+        _validate=False,
+    )
+    moved_direction = radec_to_unit(moved[0], moved[1])
+
+    output_lon_rad = propagated_state[0] * D2R
+    output_lat_rad = propagated_state[1] * D2R
+    output_sin_lon, output_cos_lon = (
+        torch.sin(output_lon_rad),
+        torch.cos(output_lon_rad),
+    )
+    output_sin_lat, output_cos_lat = (
+        torch.sin(output_lat_rad),
+        torch.cos(output_lat_rad),
+    )
+    output_direction = torch.stack(
+        (
+            output_cos_lat * output_cos_lon,
+            output_cos_lat * output_sin_lon,
+            output_sin_lat,
+        )
+    )
+    output_tangent_lon = torch.stack(
+        (-output_sin_lon, output_cos_lon, torch.zeros_like(output_lon_rad))
+    )
+    output_tangent_lat = torch.stack(
+        (
+            -output_sin_lat * output_cos_lon,
+            -output_sin_lat * output_sin_lon,
+            output_cos_lat,
+        )
+    )
+    direction_delta = moved_direction - output_direction
+    return torch.stack(
+        (
+            torch.dot(direction_delta, output_tangent_lon) / MAS_TO_RAD,
+            torch.dot(direction_delta, output_tangent_lat) / MAS_TO_RAD,
+            moved[2] - propagated_state[2],
+            moved[3] - propagated_state[3],
+            moved[4] - propagated_state[4],
+            moved[5] - propagated_state[5],
+        )
+    )
+
+
+def propagate_space_motion_with_jacobian(
+    lon_deg: Any,
+    lat_deg: Any,
+    pm_lon_coslat_mas_yr: Any,
+    pm_lat_mas_yr: Any,
+    parallax_mas: Any,
+    radial_velocity_km_s: Any,
+    *,
+    source_epoch_jyear: Any,
+    target_epoch_jyear: Any,
+) -> tuple[tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor], Tensor]:
+    """Propagate space motion and return its batched local 6D Jacobian.
+
+    The Jacobian's trailing dimensions are ``(6, 6)``. Its input and output
+    order is ``(position_east, position_north, pm_lon_coslat, pm_lat,
+    parallax, radial_velocity)``. Position perturbations are in mas, proper
+    motions in mas/yr, parallax in mas, and radial velocity in km/s.
+
+    The positional rows use local tangent bases at the source and propagated
+    positions. This stays continuous across longitude wrap and avoids the
+    singular raw-longitude derivative near the poles. A covariance in these
+    local catalogue units can therefore be propagated with ``J @ C @ J.mT``.
+    Inputs broadcast and are validated by :func:`propagate_space_motion`.
+
+    Returns:
+        ``(propagated_state, jacobian)``.
+    """
+    propagated = propagate_space_motion(
+        lon_deg,
+        lat_deg,
+        pm_lon_coslat_mas_yr,
+        pm_lat_mas_yr,
+        parallax_mas,
+        radial_velocity_km_s,
+        source_epoch_jyear=source_epoch_jyear,
+        target_epoch_jyear=target_epoch_jyear,
+    )
+    lon = _as_tensor(lon_deg)
+    device = lon.device
+    state_values = torch.broadcast_tensors(
+        lon,
+        _as_tensor(lat_deg).to(device=device),
+        _as_tensor(pm_lon_coslat_mas_yr).to(device=device),
+        _as_tensor(pm_lat_mas_yr).to(device=device),
+        _as_tensor(parallax_mas).to(device=device),
+        _as_tensor(radial_velocity_km_s).to(device=device),
+        _as_tensor(source_epoch_jyear).to(device=device),
+        _as_tensor(target_epoch_jyear).to(device=device),
+    )
+    state = torch.stack(state_values[:6], dim=-1)
+    propagated_state = torch.stack(propagated, dim=-1)
+    batch_shape = state.shape[:-1]
+    flat_state = state.reshape(-1, 6)
+    flat_propagated = propagated_state.reshape(-1, 6)
+    flat_source_epoch = state_values[6].reshape(-1)
+    flat_target_epoch = state_values[7].reshape(-1)
+    perturbation = torch.zeros_like(flat_state)
+    jacobian = torch.vmap(
+        torch.func.jacrev(_space_motion_local_delta, argnums=1),
+        in_dims=(0, 0, 0, 0, 0),
+    )(
+        flat_state,
+        perturbation,
+        flat_propagated,
+        flat_source_epoch,
+        flat_target_epoch,
+    )
+    return propagated, jacobian.reshape(batch_shape + (6, 6))
 
 
 def canonical_celestial_frame(frame: str | None) -> str:

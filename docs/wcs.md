@@ -128,6 +128,8 @@ Frames and alignment:
 - `icrs_to_galactic(...)`, `galactic_to_icrs(...)`, `precess_fk5(...)`
 - `propagate_proper_motion(...)` for tensor-native angular space motion
 - `propagate_space_motion(...)` for complete parallax/RV-aware ICRS motion
+- `propagate_space_motion_with_jacobian(...)` for batched local uncertainty
+  transport
 - `TangentPlaneFrame`
 - `fit_affine_2d(...)`, `fit_sky_affine(...)`
 
@@ -136,8 +138,17 @@ ERFA/SOFA changing-light-time and special-relativistic model. It requires a
 finite radial velocity and positive parallax, returns the propagated proper
 motions, parallax, and radial velocity as well as position, and never applies
 ERFA `pmsafe`'s implicit distance override. The tensor path broadcasts and is
-differentiable, so a state Jacobian is available directly through
-`torch.func.jacrev` for covariance propagation.
+differentiable.
+
+`propagate_space_motion_with_jacobian(...)` returns the propagated state and a
+batched 6x6 Jacobian in local catalogue coordinates. Its positional axes are
+east/north tangent-plane offsets in mas at the source and destination, followed
+by cosine-weighted longitude proper motion, latitude proper motion, parallax,
+and radial velocity. This avoids raw-longitude discontinuities at 0/360 degrees
+and lets callers propagate a covariance with `J @ C @ J.mT`. Catalogue-specific
+subspaces, such as Gaia's correlated five astrometric parameters without a
+joint radial-velocity covariance, can select the corresponding rows/columns
+without inventing missing correlations.
 
 ## Examples
 

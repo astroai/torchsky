@@ -14,6 +14,7 @@ from .frames import (
     precess_fk5,
     propagate_proper_motion,
     propagate_space_motion,
+    propagate_space_motion_with_jacobian,
 )
 from .spectral import (
     SPEED_OF_LIGHT,
@@ -58,6 +59,7 @@ __all__ = [
     "precess_fk5",
     "propagate_proper_motion",
     "propagate_space_motion",
+    "propagate_space_motion_with_jacobian",
     "rest_frequency_from_header",
     "spectral_to_frequency",
     "coupled_tabular_wcs_from_fits",
