@@ -64,6 +64,95 @@ class TrainingRecord:
     seconds: float
 
 
+SHORT_WAVE_BANDS = frozenset({"F070W", "F090W", "F115W", "F140M", "F150W", "F162M", "F164N", "F182M", "F187N", "F200W", "F210M", "F212N"})
+
+
+def run_tweakreg_alignment(
+    selected: Sequence[tuple[Path, str, str]],
+    *,
+    output_dir: Path,
+    fitgeometry: str,
+    snr_threshold: float = 10.0,
+    minobj: int = 15,
+    searchrad: float = 2.0,
+    separation: float = 1.0,
+    tolerance: float = 0.7,
+    nclip: int = 3,
+    sigma: float = 3.0,
+) -> tuple[list[tuple[Path, str, str]], dict[str, Any]]:
+    """Run JWST TweakReg once across all selected bands and save corrected copies.
+
+    The input CRF/CAL products are never overwritten.  TweakReg updates the
+    GWCS and its FITS-WCS approximation; ``load_exposure_pool`` then reads the
+    corrected SCI header used by TorchSky's differentiable WCS implementation.
+    """
+    if fitgeometry not in {"shift", "rshift", "rscale", "general"}:
+        raise ValueError("invalid TweakReg fitgeometry")
+    if len(selected) < 2:
+        raise ValueError("TweakReg alignment requires at least two exposures")
+    try:
+        from jwst import datamodels
+        from jwst.tweakreg import TweakRegStep
+    except ImportError as exc:
+        raise RuntimeError(
+            "alignment-mode=tweakreg_frozen requires the jwst pipeline environment"
+        ) from exc
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    inputs = datamodels.ModelContainer(
+        [datamodels.open(str(path)) for path, _, _ in selected]
+    )
+    aligned = TweakRegStep.call(
+        inputs,
+        fitgeometry=fitgeometry,
+        snr_threshold=snr_threshold,
+        minobj=minobj,
+        searchrad=searchrad,
+        separation=separation,
+        tolerance=tolerance,
+        nclip=nclip,
+        sigma=sigma,
+        save_catalogs=False,
+        save_results=False,
+    )
+    if len(aligned) != len(selected):
+        close = getattr(aligned, "close", None)
+        if callable(close):
+            close()
+        raise RuntimeError("TweakReg returned a different number of exposures")
+
+    corrected: list[tuple[Path, str, str]] = []
+    products: list[dict[str, Any]] = []
+    try:
+        for index, ((source, band, detector), model) in enumerate(
+            zip(selected, aligned, strict=True)
+        ):
+            destination = output_dir / (
+                f"{index:03d}_{source.stem}_{fitgeometry}_tweakreg.fits"
+            )
+            model.save(destination, overwrite=True)
+            status = str(getattr(model.meta.cal_step, "tweakreg", "UNKNOWN"))
+            corrected.append((destination.resolve(), band, detector))
+            products.append(
+                {
+                    "source": str(source),
+                    "corrected": str(destination.resolve()),
+                    "band": band,
+                    "detector": detector,
+                    "status": status,
+                }
+            )
+    finally:
+        close = getattr(aligned, "close", None)
+        if callable(close):
+            close()
+    failed = [item for item in products if item["status"].upper() != "COMPLETE"]
+    if failed:
+        names = ", ".join(Path(item["source"]).name for item in failed[:5])
+        raise RuntimeError(f"TweakReg did not complete for: {names}")
+    return corrected, {"fitgeometry": fitgeometry, "products": products}
+
+
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -249,9 +338,31 @@ def normalize_pools(pools: Sequence[ExposurePool], scale: float) -> list[Exposur
 def sample_balanced_batch(
     pools: Sequence[ExposurePool],
     *,
-    batch_size: int,
+    batch_size: int | Sequence[int],
     generator: torch.Generator,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Sample either a legacy total batch or exact SW/LW samples per exposure."""
+    if not isinstance(batch_size, int):
+        values = tuple(int(value) for value in batch_size)
+        if len(values) != 2 or min(values) <= 0:
+            raise ValueError("batch_size must be one total or SW/LW positive integers")
+        short_count, long_count = values
+        uv, exposure_id, value, err = [], [], [], []
+        for index, pool in enumerate(pools):
+            each = short_count if pool.band in SHORT_WAVE_BANDS else long_count
+            chosen = torch.randint(0, pool.size, (each,), generator=generator)
+            uv.append(pool.uv[chosen])
+            value.append(pool.value[chosen])
+            err.append(pool.err[chosen])
+            exposure_id.append(torch.full((each,), index, dtype=torch.long))
+        value_t = torch.cat(value)
+        return (
+            torch.cat(uv),
+            torch.cat(exposure_id),
+            value_t,
+            torch.cat(err),
+            torch.ones_like(value_t, dtype=torch.bool),
+        )
     if batch_size < len(pools):
         raise ValueError("batch_size must be at least the number of exposures")
     each = math.ceil(batch_size / len(pools))
@@ -271,6 +382,22 @@ def sample_balanced_batch(
         uv_t, exposure_t = uv_t[order], exposure_t[order]
         value_t, err_t = value_t[order], err_t[order]
     return uv_t, exposure_t, value_t, err_t, torch.ones_like(value_t, dtype=torch.bool)
+
+
+def effective_batch_size(
+    pools: Sequence[ExposurePool], batch_size: int | Sequence[int]
+) -> int:
+    """Return the actual total samples produced by a batch specification."""
+    if isinstance(batch_size, int):
+        return batch_size
+    values = tuple(int(value) for value in batch_size)
+    if len(values) != 2 or min(values) <= 0:
+        raise ValueError("batch_size must be one total or SW/LW positive integers")
+    short_count, long_count = values
+    return sum(
+        short_count if pool.band in SHORT_WAVE_BANDS else long_count
+        for pool in pools
+    )
 
 
 def build_union_coverage_mask(
@@ -325,8 +452,9 @@ def _parameter_groups(
     ]
     groups: list[dict[str, Any]] = [
         {"params": main, "lr": learning_rate},
-        {"params": alignment, "lr": alignment_learning_rate},
     ]
+    if alignment:
+        groups.append({"params": alignment, "lr": alignment_learning_rate})
     if background:
         groups.append({"params": background, "lr": background_learning_rate})
     return groups
@@ -373,7 +501,7 @@ def train_model(
     psf: PSFKernelBank | None,
     device: torch.device,
     steps: int,
-    batch_size: int,
+    batch_size: int | Sequence[int],
     seed: int,
     learning_rate: float,
     alignment_learning_rate: float,
@@ -620,11 +748,14 @@ __all__ = [
     "TrainingRecord",
     "build_union_coverage_mask",
     "discover_exposures",
+    "effective_batch_size",
     "load_exposure_pool",
     "normalize_pools",
     "render_union_band",
     "render_union_decoder_slice",
     "robust_intensity_scale",
+    "run_tweakreg_alignment",
+    "sample_balanced_batch",
     "seed_everything",
     "train_model",
 ]
