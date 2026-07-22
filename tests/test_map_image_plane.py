@@ -159,6 +159,101 @@ def _rotated_cd(
     )
 
 
+def _assert_source_pixel_edges_inside_target(
+    source_header: dict,
+    target_header: dict,
+) -> None:
+    width = int(source_header["NAXIS1"])
+    height = int(source_header["NAXIS2"])
+    edges = torch.tensor(
+        [
+            [-0.5, -0.5],
+            [width - 0.5, -0.5],
+            [width - 0.5, height - 0.5],
+            [-0.5, height - 0.5],
+        ],
+        dtype=torch.float64,
+    )
+    world = torchsky.WCS(source_header).pixel_to_world(edges)
+    target_pixels = torchsky.WCS(target_header).world_to_pixel(world)
+    assert bool(torch.all(target_pixels[:, 0] >= -0.500001))
+    assert bool(
+        torch.all(target_pixels[:, 0] <= float(target_header["NAXIS1"]) - 0.499999)
+    )
+    assert bool(torch.all(target_pixels[:, 1] >= -0.500001))
+    assert bool(
+        torch.all(target_pixels[:, 1] <= float(target_header["NAXIS2"]) - 0.499999)
+    )
+
+
+def test_plan_union_footprint_is_ra_seam_safe(tmp_path: Path) -> None:
+    headers: list[dict] = []
+    observations: list[ImageObservation] = []
+    for index, center_ra in enumerate((359.99, 0.01)):
+        header = {
+            **_simple_header(),
+            "NAXIS1": 16,
+            "NAXIS2": 16,
+            "CRPIX1": 8.5,
+            "CRPIX2": 8.5,
+            "CRVAL1": center_ra,
+            "CRVAL2": 0.0,
+            "CDELT1": -0.001,
+            "CDELT2": 0.001,
+        }
+        path = tmp_path / f"seam_{index}.fits"
+        torchsky.write(
+            str(path), torch.ones((16, 16)), header=header, overwrite=True
+        )
+        headers.append(header)
+        observations.append(ImageObservation(str(path)))
+
+    target = plan_image_plane_target(
+        observations,
+        union_footprint=True,
+        footprint_padding=1.0,
+        max_footprint_pixels=10_000,
+    )
+
+    assert target.shape[1] < 64
+    assert min(
+        abs(float(target.header["CRVAL1"])),
+        abs(float(target.header["CRVAL1"]) - 360.0),
+    ) < 0.1
+    for header in headers:
+        _assert_source_pixel_edges_inside_target(header, target.header)
+
+
+def test_plan_union_footprint_accepts_rotated_cd(tmp_path: Path) -> None:
+    header = {
+        **_simple_header(),
+        "NAXIS1": 16,
+        "NAXIS2": 16,
+        "CRPIX1": 8.5,
+        "CRPIX2": 8.5,
+        "CRVAL1": 120.0,
+        "CRVAL2": 80.0,
+        "CD1_1": 0.0,
+        "CD1_2": 0.001,
+        "CD2_1": 0.001,
+        "CD2_2": 0.0,
+    }
+    header.pop("CDELT1")
+    header.pop("CDELT2")
+    path = tmp_path / "rotated.fits"
+    torchsky.write(str(path), torch.ones((16, 16)), header=header, overwrite=True)
+
+    target = plan_image_plane_target(
+        [ImageObservation(str(path))],
+        union_footprint=True,
+        footprint_padding=1.0,
+    )
+
+    assert math.isclose(abs(float(target.header["CD1_1"])), 0.001)
+    assert max(target.shape) <= 20
+    _assert_source_pixel_edges_inside_target(header, target.header)
+
+
 def _tpv_header(
     size: int,
     *,
@@ -347,7 +442,15 @@ def test_cli_map_coadd_writes_output(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         sys,
         "argv",
-        ["torchsky", "map", str(out), str(path_a), str(path_b), "--no-auto-tile"],
+        [
+            "torchsky",
+            "map",
+            str(out),
+            str(path_a),
+            str(path_b),
+            "--no-auto-tile",
+            "--no-union-footprint",
+        ],
     )
     assert main() == 0
     got, _ = torchsky.read(str(out), return_header=True)

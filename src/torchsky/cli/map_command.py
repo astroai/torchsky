@@ -1000,7 +1000,7 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         "--footprint-padding",
         type=float,
         default=1.05,
-        help="Padding factor applied to the union footprint bounding box (default: 1.05 = 5%)",
+        help="Padding factor applied to the union footprint bounding box (default: 1.05 = 5%%)",
     )
     p.add_argument(
         "--max-footprint-pixels",
@@ -1105,6 +1105,9 @@ def _dispatch_map(args: argparse.Namespace) -> int:
     tile_above_megapixels = float(getattr(args, "tile_above_megapixels", 32.0))
     if not math.isfinite(tile_above_megapixels) or tile_above_megapixels <= 0.0:
         raise SystemExit("--tile-above-megapixels must be finite and positive")
+    footprint_padding = float(getattr(args, "footprint_padding", 1.05))
+    if not math.isfinite(footprint_padding) or footprint_padding < 1.0:
+        raise SystemExit("--footprint-padding must be finite and at least 1.0")
     if int(getattr(args, "inr_steps", 0)) < 0:
         raise SystemExit("--inr-steps must be non-negative")
     inr_lr = float(getattr(args, "inr_lr", 1.0))

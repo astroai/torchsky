@@ -273,6 +273,9 @@ def plan_map_product(
             spectral_unit=spectral_unit,
             spectral_type=spectral_type,
             device=device,
+            union_footprint=union_footprint,
+            footprint_padding=footprint_padding,
+            max_footprint_pixels=max_footprint_pixels,
         )
         return MapProductSpec(
             target_header=target.header,
@@ -285,6 +288,9 @@ def plan_map_product(
         reference_index=reference_index,
         header_overrides=header_overrides,
         device=device,
+        union_footprint=union_footprint,
+        footprint_padding=footprint_padding,
+        max_footprint_pixels=max_footprint_pixels,
     )
     reference = observations[reference_index]
     return MapProductSpec(

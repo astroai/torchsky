@@ -1711,72 +1711,120 @@ def _observation_header_for_footprint(
     return hdr
 
 
-def _compute_union_footprint(
+def _spherical_union_center(footprints: Tensor) -> tuple[float, float]:
+    """Return a seam-safe mean direction for celestial footprint points."""
+    ra = torch.deg2rad(footprints[:, 0].to(dtype=torch.float64))
+    dec = torch.deg2rad(footprints[:, 1].to(dtype=torch.float64))
+    cos_dec = torch.cos(dec)
+    mean = torch.stack(
+        (cos_dec * torch.cos(ra), cos_dec * torch.sin(ra), torch.sin(dec)),
+        dim=-1,
+    ).mean(dim=0)
+    norm = torch.linalg.vector_norm(mean)
+    if not bool(torch.isfinite(norm)) or float(norm) <= 1.0e-12:
+        raise RuntimeError(
+            "Union footprint has no unique spherical centre; provide a reference "
+            "target or partition the mosaic"
+        )
+    mean = mean / norm
+    center_ra = torch.rad2deg(torch.atan2(mean[1], mean[0])) % 360.0
+    center_dec = torch.rad2deg(torch.asin(torch.clamp(mean[2], -1.0, 1.0)))
+    return float(center_ra), float(center_dec)
+
+
+def _world_to_tangent_plane(
+    footprint: Tensor,
+    *,
+    center_ra_deg: float,
+    center_dec_deg: float,
+) -> tuple[Tensor, Tensor]:
+    """Project celestial coordinates onto the exact gnomonic tangent plane."""
+    ra = torch.deg2rad(footprint[:, 0].to(dtype=torch.float64))
+    dec = torch.deg2rad(footprint[:, 1].to(dtype=torch.float64))
+    ra0 = math.radians(center_ra_deg)
+    dec0 = math.radians(center_dec_deg)
+    dra = torch.remainder(ra - ra0 + math.pi, 2.0 * math.pi) - math.pi
+    sin_dec, cos_dec = torch.sin(dec), torch.cos(dec)
+    sin_dec0, cos_dec0 = math.sin(dec0), math.cos(dec0)
+    denom = sin_dec0 * sin_dec + cos_dec0 * cos_dec * torch.cos(dra)
+    if bool(torch.any(~torch.isfinite(denom))) or bool(torch.any(denom <= 0.0)):
+        raise RuntimeError(
+            "Union footprint crosses the TAN projection horizon; provide a "
+            "reference target or partition the mosaic"
+        )
+    radians_to_degrees = 180.0 / math.pi
+    xi = cos_dec * torch.sin(dra) / denom * radians_to_degrees
+    eta = (
+        cos_dec0 * sin_dec - sin_dec0 * cos_dec * torch.cos(dra)
+    ) / denom * radians_to_degrees
+    if bool(torch.any(~torch.isfinite(xi))) or bool(torch.any(~torch.isfinite(eta))):
+        raise RuntimeError("Union footprint produced non-finite TAN coordinates")
+    return xi, eta
+
+
+def _plan_union_footprint_target(
     observations: Sequence[ImageObservation],
     *,
     device: torch.device | str | None = None,
     padding: float = 1.05,
-) -> tuple[float, float, float, float, float]:
-    """Compute the union RA/Dec bounding box and median pixel scale.
-
-    Returns ``(ra_min, ra_max, dec_min, dec_max, pixel_scale_deg)``.
-    """
-    ra_min = float("inf")
-    ra_max = float("-inf")
-    dec_min = float("inf")
-    dec_max = float("-inf")
-    pixel_scales: list[float] = []
-
-    for obs in observations:
-        hdr = _observation_header_for_footprint(obs, device=device)
-        if not hdr:
-            continue
-        wcs = WCS(hdr)
-        fp = wcs.footprint()
-        ra_min = min(ra_min, float(fp[:, 0].min()))
-        ra_max = max(ra_max, float(fp[:, 0].max()))
-        dec_min = min(dec_min, float(fp[:, 1].min()))
-        dec_max = max(dec_max, float(fp[:, 1].max()))
-        cd11 = abs(float(hdr.get("CD1_1", hdr.get("PC1_1", hdr.get("CDELT1", 0.0)))))
-        cd22 = abs(float(hdr.get("CD2_2", hdr.get("PC2_2", hdr.get("CDELT2", 0.0)))))
-        if cd11 > 0.0 and cd22 > 0.0:
-            pixel_scales.append((cd11 + cd22) / 2.0)
-
-    if not pixel_scales:
-        raise RuntimeError("Could not determine pixel scale from observation headers")
-    pixel_scale = float(torch.tensor(pixel_scales, dtype=torch.float64).median())
-
-    ra_center = (ra_min + ra_max) / 2.0
-    dec_center = (dec_min + dec_max) / 2.0
-    ra_half = (ra_max - ra_min) / 2.0 * padding
-    dec_half = (dec_max - dec_min) / 2.0 * padding
-
-    return (
-        ra_center - ra_half,
-        ra_center + ra_half,
-        dec_center - dec_half,
-        dec_center + dec_half,
-        pixel_scale,
-    )
-
-
-def _target_header_from_footprint(
-    ra_min: float,
-    ra_max: float,
-    dec_min: float,
-    dec_max: float,
-    pixel_scale_deg: float,
 ) -> tuple[dict, tuple[int, int]]:
-    """Create a target WCS header covering the given bounding box.
+    """Plan one rotation- and RA-seam-safe TAN grid for all observations."""
+    if not math.isfinite(float(padding)) or float(padding) < 1.0:
+        raise ValueError("footprint_padding must be finite and at least 1.0")
+    footprints: list[Tensor] = []
+    pixel_scales: list[float] = []
+    for observation in observations:
+        header = _observation_header_for_footprint(observation, device=device)
+        wcs = WCS(header)
+        height, width = _true_image_shape(header)
+        pixel_edges = torch.tensor(
+            [
+                [-0.5, -0.5],
+                [float(width) - 0.5, -0.5],
+                [float(width) - 0.5, float(height) - 0.5],
+                [-0.5, float(height) - 0.5],
+            ],
+            dtype=torch.float64,
+        )
+        footprint = wcs.pixel_to_world(pixel_edges)
+        if isinstance(footprint, tuple):
+            footprint = torch.stack(footprint[:2], dim=-1)
+        footprint = footprint.detach().to(device="cpu", dtype=torch.float64)
+        if footprint.shape != (4, 2) or not bool(
+            torch.all(torch.isfinite(footprint))
+        ):
+            raise RuntimeError(
+                f"Could not determine finite footprint for {observation.path}"
+            )
+        determinant = torch.linalg.det(
+            wcs.cd.detach().to(device="cpu", dtype=torch.float64)
+        )
+        pixel_scale = math.sqrt(abs(float(determinant)))
+        if not math.isfinite(pixel_scale) or pixel_scale <= 0.0:
+            raise RuntimeError(
+                f"Could not determine a non-singular spatial pixel scale for {observation.path}"
+            )
+        footprints.append(footprint)
+        pixel_scales.append(pixel_scale)
+    if not footprints:
+        raise RuntimeError("Could not determine any observation footprints")
 
-    Returns ``(header, (height, width))``.
-    """
-    import math
-
-    ra_center = (ra_min + ra_max) / 2.0
-    dec_center = (dec_min + dec_max) / 2.0
-    naxis1 = max(1, int(math.ceil((ra_max - ra_min) / pixel_scale_deg)))
-    naxis2 = max(1, int(math.ceil((dec_max - dec_min) / pixel_scale_deg)))
+    footprint = torch.cat(footprints, dim=0)
+    center_ra, center_dec = _spherical_union_center(footprint)
+    xi, eta = _world_to_tangent_plane(
+        footprint,
+        center_ra_deg=center_ra,
+        center_dec_deg=center_dec,
+    )
+    pixel_scale = float(torch.tensor(pixel_scales, dtype=torch.float64).median())
+    xi_mid = 0.5 * float(xi.min() + xi.max())
+    eta_mid = 0.5 * float(eta.min() + eta.max())
+    xi_half = 0.5 * float(xi.max() - xi.min()) * float(padding)
+    eta_half = 0.5 * float(eta.max() - eta.min()) * float(padding)
+    xi_min, xi_max = xi_mid - xi_half, xi_mid + xi_half
+    eta_min, eta_max = eta_mid - eta_half, eta_mid + eta_half
+    naxis1 = max(1, int(math.ceil((xi_max - xi_min) / pixel_scale)))
+    naxis2 = max(1, int(math.ceil((eta_max - eta_min) / pixel_scale)))
     header: dict = {
         "NAXIS": 2,
         "NAXIS1": naxis1,
@@ -1785,14 +1833,14 @@ def _target_header_from_footprint(
         "CTYPE2": "DEC--TAN",
         "CUNIT1": "deg",
         "CUNIT2": "deg",
-        "CRVAL1": ra_center,
-        "CRVAL2": dec_center,
-        "CRPIX1": float(naxis1) / 2.0 + 0.5,
-        "CRPIX2": float(naxis2) / 2.0 + 0.5,
-        "CD1_1": -pixel_scale_deg,
+        "CRVAL1": center_ra,
+        "CRVAL2": center_dec,
+        "CRPIX1": 0.5 + xi_max / pixel_scale,
+        "CRPIX2": 0.5 - eta_min / pixel_scale,
+        "CD1_1": -pixel_scale,
         "CD1_2": 0.0,
         "CD2_1": 0.0,
-        "CD2_2": pixel_scale_deg,
+        "CD2_2": pixel_scale,
     }
     return header, (naxis2, naxis1)
 
@@ -1809,13 +1857,14 @@ def plan_image_plane_target(
 ) -> PlannedImagePlaneTarget:
     if not observations:
         raise ValueError("At least one observation is required")
+    if max_footprint_pixels is not None and int(max_footprint_pixels) <= 0:
+        raise ValueError("max_footprint_pixels must be positive")
 
     if union_footprint or reference_index is None:
-        ra_min, ra_max, dec_min, dec_max, pixel_scale = _compute_union_footprint(
-            observations, device=device, padding=footprint_padding,
-        )
-        header, shape = _target_header_from_footprint(
-            ra_min, ra_max, dec_min, dec_max, pixel_scale,
+        header, shape = _plan_union_footprint_target(
+            observations,
+            device=device,
+            padding=footprint_padding,
         )
         if max_footprint_pixels is not None and shape[0] * shape[1] > max_footprint_pixels:
             raise RuntimeError(
@@ -1823,11 +1872,17 @@ def plan_image_plane_target(
                 f"({shape[0] * shape[1] / 1e6:.1f} MPix) exceeds --max-footprint-pixels="
                 f"{max_footprint_pixels}"
             )
-        if header_overrides:
-            header.update(dict(header_overrides))
+        final_shape = target_shape_from_header(
+            header_overrides or {},
+            fallback=shape,
+        )
         return PlannedImagePlaneTarget(
-            header=normalized_header_for_shape(header, shape, overrides=header_overrides),
-            shape=shape,
+            header=normalized_header_for_shape(
+                header,
+                final_shape,
+                overrides=header_overrides,
+            ),
+            shape=final_shape,
         )
 
     if reference_index < 0 or reference_index >= len(observations):
@@ -1838,6 +1893,7 @@ def plan_image_plane_target(
     image, header = read(ref.path, hdu=ref.hdu, return_header=True, device=read_dev)
     image = validate_image_plane_2d(image)
     shape = tuple(image.shape)
+    shape = target_shape_from_header(header_overrides or {}, fallback=shape)
     normalized_header = normalized_header_for_shape(
         dict(header),
         shape,
@@ -1856,12 +1912,18 @@ def plan_image_plane_cube_target(
     spectral_unit: str = "Angstrom",
     spectral_type: str = "WAVE",
     device: torch.device | str | None = None,
+    union_footprint: bool = False,
+    footprint_padding: float = 1.05,
+    max_footprint_pixels: int | None = None,
 ) -> PlannedImagePlaneCubeTarget:
     spatial_target = plan_image_plane_target(
         observations,
         reference_index=reference_index,
         header_overrides=header_overrides,
         device=device,
+        union_footprint=union_footprint,
+        footprint_padding=footprint_padding,
+        max_footprint_pixels=max_footprint_pixels,
     )
     (
         observation_center,

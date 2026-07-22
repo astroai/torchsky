@@ -67,6 +67,69 @@ def test_plan_map_product_single_band_stack_matches_image_plane(tmp_path: Path) 
     torch.testing.assert_close(result.data[0], (data_a + data_b) / 2.0)
 
 
+def test_plan_map_product_single_band_honors_union_footprint(tmp_path: Path) -> None:
+    path_a = tmp_path / "a.fits"
+    path_b = tmp_path / "b.fits"
+    header_a = _simple_header()
+    header_b = {**header_a, "CRVAL1": float(header_a["CRVAL1"]) + 0.04}
+    data = torch.ones((6, 6), dtype=torch.float32)
+    torchsky.write(str(path_a), data, header=header_a, overwrite=True)
+    torchsky.write(str(path_b), data, header=header_b, overwrite=True)
+
+    observations = [ImageObservation(str(path_a)), ImageObservation(str(path_b))]
+    reference = plan_map_product(observations, union_footprint=False)
+    union = plan_map_product(
+        observations,
+        union_footprint=True,
+        footprint_padding=1.0,
+    )
+
+    assert reference.shape == (6, 6)
+    assert union.shape[1] > reference.shape[1]
+
+
+def test_plan_map_product_spectral_honors_union_footprint(tmp_path: Path) -> None:
+    path_a = tmp_path / "a.fits"
+    path_b = tmp_path / "b.fits"
+    header_a = _simple_header()
+    header_b = {**header_a, "CRVAL1": float(header_a["CRVAL1"]) + 0.04}
+    data = torch.ones((6, 6), dtype=torch.float32)
+    torchsky.write(str(path_a), data, header=header_a, overwrite=True)
+    torchsky.write(str(path_b), data, header=header_b, overwrite=True)
+    observations = [
+        ImageObservation(str(path_a), wavelength=5000.0),
+        ImageObservation(str(path_b), wavelength=5000.0),
+    ]
+
+    union = plan_map_product(
+        observations,
+        union_footprint=True,
+        footprint_padding=1.0,
+    )
+
+    assert union.shape[1] > 6
+
+
+def test_plan_map_product_header_override_owns_output_shape(tmp_path: Path) -> None:
+    path = tmp_path / "input.fits"
+    torchsky.write(
+        str(path),
+        torch.ones((6, 6), dtype=torch.float32),
+        header=_simple_header(),
+        overwrite=True,
+    )
+    target = {**_simple_header(), "NAXIS1": 9, "NAXIS2": 4, "CRVAL1": 33.0}
+
+    product = plan_map_product(
+        [ImageObservation(str(path))],
+        header_overrides=target,
+        union_footprint=True,
+    )
+
+    assert product.shape == (4, 9)
+    assert product.target_header["CRVAL1"] == 33.0
+
+
 def test_plan_map_product_cube_tracks_requested_bands(tmp_path: Path) -> None:
     path_blue = tmp_path / "blue.fits"
     path_red = tmp_path / "red.fits"

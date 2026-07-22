@@ -52,6 +52,17 @@ def test_map_parser_defaults():
     assert args.inr_spectral_source == "svo"
 
 
+def test_map_parser_help_is_renderable(capsys) -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["map", "--help"])
+
+    assert exc_info.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--union-footprint" in help_text
+    assert "1.05 = 5%" in help_text
+
+
 @mock.patch("torchsky.cli.map_command._expand_inputs")
 def test_dispatch_map_weights_mismatch(mock_expand):
     mock_expand.return_value = ["in1.fits", "in2.fits"]
@@ -91,6 +102,19 @@ def test_dispatch_map_rejects_invalid_inr_tile(mock_expand):
         inr_render_tile=0,
     )
     with pytest.raises(SystemExit, match="--inr-render-tile must be positive"):
+        _dispatch_map(args)
+
+
+@mock.patch("torchsky.cli.map_command._expand_inputs")
+def test_dispatch_map_rejects_cropping_footprint_padding(mock_expand):
+    mock_expand.return_value = ["in1.fits"]
+    args = argparse.Namespace(
+        inputs=["in1.fits"],
+        weights=None,
+        method="coadd",
+        footprint_padding=0.9,
+    )
+    with pytest.raises(SystemExit, match="--footprint-padding"):
         _dispatch_map(args)
 
 
