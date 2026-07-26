@@ -1,0 +1,844 @@
+"""Dataset, training, and rendering helpers for the WCS-aware INR."""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+import json
+import math
+from pathlib import Path
+import random
+import time
+from types import TracebackType
+from typing import Any, Iterable, Sequence
+
+import numpy as np
+import torch
+from astropy.io import fits
+from torch import Tensor
+
+from ..wcs import WCS
+from .wcs_aware_calibration import ExposureCalibrationInput, normalize_detector
+from .wcs_aware_inr import (
+    PSFKernelBank,
+    UnionCanvas,
+    WCSAwareMultiWavelengthINR,
+    weighted_robust_loss,
+)
+
+
+@dataclass
+class ExposurePool:
+    path: Path
+    band: str
+    detector: str
+    header: dict[str, Any]
+    shape: tuple[int, int]
+    uv: Tensor
+    value: Tensor
+    err: Tensor
+
+    @property
+    def size(self) -> int:
+        return int(self.value.numel())
+
+    def calibration_input(self) -> ExposureCalibrationInput:
+        return ExposureCalibrationInput(
+            path=self.path,
+            band=self.band,
+            detector=self.detector,
+            header=self.header,
+            shape=self.shape,
+        )
+
+
+@dataclass
+class TrainingRecord:
+    step: int
+    loss: float
+    data_loss: float
+    rmse: float
+    mae: float
+    whitened_rmse: float
+    whitened_mae: float
+    valid_fraction: float
+    alignment_regularization: float
+    background_regularization: float
+    seconds: float
+
+
+class LossLogWriter:
+    """Append-only JSONL sink for the per-step training objective.
+
+    One JSON object per line, ``{"step": int, "loss": float}``, written while
+    training runs instead of being accumulated in memory and embedded in the
+    checkpoint.  The file is truncated on open, so it mirrors the lifetime of a
+    single training run.
+    """
+
+    def __init__(self, path: Path, *, flush_every: int = 500) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
+        self._handle = path.open("w", encoding="utf-8")
+        self._flush_every = max(1, int(flush_every))
+        self._pending = 0
+
+    def append(self, step: int, loss: float) -> None:
+        self._handle.write(
+            json.dumps({"step": int(step), "loss": float(loss)}) + "\n"
+        )
+        self._pending += 1
+        if self._pending >= self._flush_every:
+            self._handle.flush()
+            self._pending = 0
+
+    def close(self) -> None:
+        if not self._handle.closed:
+            self._handle.flush()
+            self._handle.close()
+
+    def __enter__(self) -> "LossLogWriter":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        self.close()
+        return False
+
+
+def read_loss_log(path: Path) -> list[dict[str, float | int]]:
+    """Read a JSONL loss log back into the list-of-dicts layout."""
+    records: list[dict[str, float | int]] = []
+    with Path(path).open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            item = json.loads(line)
+            records.append({"step": int(item["step"]), "loss": float(item["loss"])})
+    return records
+
+
+def default_loss_log_path(checkpoint_path: Path) -> Path:
+    """Sibling log file for a checkpoint, e.g. ``run.pt`` -> ``run.loss.jsonl``."""
+    checkpoint_path = Path(checkpoint_path)
+    return checkpoint_path.with_suffix(checkpoint_path.suffix + ".loss.jsonl")
+
+
+SHORT_WAVE_BANDS = frozenset({"F070W", "F090W", "F115W", "F140M", "F150W", "F162M", "F164N", "F182M", "F187N", "F200W", "F210M", "F212N"})
+
+
+def run_tweakreg_alignment(
+    selected: Sequence[tuple[Path, str, str]],
+    *,
+    output_dir: Path,
+    fitgeometry: str,
+    snr_threshold: float = 10.0,
+    minobj: int = 15,
+    searchrad: float = 2.0,
+    separation: float = 1.0,
+    tolerance: float = 0.7,
+    nclip: int = 3,
+    sigma: float = 3.0,
+) -> tuple[list[tuple[Path, str, str]], dict[str, Any]]:
+    """Run JWST TweakReg once across all selected bands and save corrected copies.
+
+    The input CRF/CAL products are never overwritten.  TweakReg updates the
+    GWCS and its FITS-WCS approximation; ``load_exposure_pool`` then reads the
+    corrected SCI header used by TorchSky's differentiable WCS implementation.
+    """
+    if fitgeometry not in {"shift", "rshift", "rscale", "general"}:
+        raise ValueError("invalid TweakReg fitgeometry")
+    if len(selected) < 2:
+        raise ValueError("TweakReg alignment requires at least two exposures")
+    try:
+        from jwst import datamodels
+        from jwst.tweakreg import TweakRegStep
+    except ImportError as exc:
+        raise RuntimeError(
+            "alignment-mode=tweakreg_frozen requires the jwst pipeline environment"
+        ) from exc
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    inputs = datamodels.ModelContainer(
+        [datamodels.open(str(path)) for path, _, _ in selected]
+    )
+    aligned = TweakRegStep.call(
+        inputs,
+        fitgeometry=fitgeometry,
+        snr_threshold=snr_threshold,
+        minobj=minobj,
+        searchrad=searchrad,
+        separation=separation,
+        tolerance=tolerance,
+        nclip=nclip,
+        sigma=sigma,
+        save_catalogs=False,
+        save_results=False,
+    )
+    if len(aligned) != len(selected):
+        close = getattr(aligned, "close", None)
+        if callable(close):
+            close()
+        raise RuntimeError("TweakReg returned a different number of exposures")
+
+    corrected: list[tuple[Path, str, str]] = []
+    products: list[dict[str, Any]] = []
+    try:
+        for index, ((source, band, detector), model) in enumerate(
+            zip(selected, aligned, strict=True)
+        ):
+            destination = output_dir / (
+                f"{index:03d}_{source.stem}_{fitgeometry}_tweakreg.fits"
+            )
+            model.save(destination, overwrite=True)
+            status = str(getattr(model.meta.cal_step, "tweakreg", "UNKNOWN"))
+            corrected.append((destination.resolve(), band, detector))
+            products.append(
+                {
+                    "source": str(source),
+                    "corrected": str(destination.resolve()),
+                    "band": band,
+                    "detector": detector,
+                    "status": status,
+                }
+            )
+    finally:
+        close = getattr(aligned, "close", None)
+        if callable(close):
+            close()
+    failed = [item for item in products if item["status"].upper() != "COMPLETE"]
+    if failed:
+        names = ", ".join(Path(item["source"]).name for item in failed[:5])
+        raise RuntimeError(f"TweakReg did not complete for: {names}")
+    return corrected, {"fitgeometry": fitgeometry, "products": products}
+
+
+def seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def _product_patterns(product: str) -> tuple[str, ...]:
+    return {
+        "crf": ("*_crf.fits",),
+        "cal": ("*_cal.fits",),
+        "updc": (
+            "*_cal_1overf_completed_dqfix.fits",
+            "*_cal_1overf_completed.fits",
+            "*_cal_*completed*dqfix*.fits",
+        ),
+        "auto": ("*_crf.fits", "*_cal.fits"),
+    }[product]
+
+
+def _read_band_detector(path: Path) -> tuple[str | None, str]:
+    try:
+        with fits.open(path, memmap=True) as hdul:
+            primary = hdul[0].header
+            science = hdul["SCI"].header if "SCI" in hdul else primary
+            band: str | None = None
+            for key in ("FILTER", "PUPIL"):
+                value = str(science.get(key) or primary.get(key) or "").strip().upper()
+                if value.startswith("F") and value.endswith("W"):
+                    band = value
+                    break
+            detector = normalize_detector(
+                science.get("DETECTOR") or primary.get("DETECTOR")
+            )
+            return band, detector
+    except (OSError, KeyError, ValueError, TypeError):
+        return None, ""
+
+
+def _detector_matches(detector: str, *, band: str, module: str) -> bool:
+    if module == "any":
+        return True
+    detector = normalize_detector(detector)
+    prefix = f"NRC{module.upper()}"
+    if band in {"F277W", "F356W", "F444W"}:
+        return detector == f"{prefix}5"
+    return detector in {f"{prefix}{index}" for index in range(1, 5)}
+
+
+def discover_exposures(
+    exposure_dir: Path,
+    *,
+    input_product: str,
+    bands: Sequence[str],
+    module: str,
+    max_exposures_per_band: int | None,
+) -> list[tuple[Path, str, str]]:
+    if not exposure_dir.exists():
+        raise FileNotFoundError(exposure_dir)
+    paths: list[Path] = []
+    for pattern in _product_patterns(input_product):
+        paths.extend(exposure_dir.rglob(pattern))
+        if input_product == "auto" and paths and pattern == "*_crf.fits":
+            break
+    paths = sorted(dict.fromkeys(path.resolve() for path in paths))
+    counts = {band: 0 for band in bands}
+    selected: list[tuple[Path, str, str]] = []
+    for path in paths:
+        band, detector = _read_band_detector(path)
+        if band not in counts:
+            continue
+        if not _detector_matches(detector, band=band, module=module):
+            continue
+        if max_exposures_per_band is not None and counts[band] >= max_exposures_per_band:
+            continue
+        selected.append((path, band, detector))
+        counts[band] += 1
+    missing = [band for band, count in counts.items() if count == 0]
+    if missing:
+        raise FileNotFoundError("no matching exposures for: " + ", ".join(missing))
+    return selected
+
+
+def _valid_pixel_mask(
+    hdul: fits.HDUList,
+    image: np.ndarray,
+    err: np.ndarray,
+    *,
+    dq_mode: str,
+) -> np.ndarray:
+    valid = np.isfinite(image) & np.isfinite(err) & (err > 0.0)
+    if "DQ" in hdul:
+        dq = np.asarray(hdul["DQ"].data)
+        if dq.shape != image.shape:
+            raise ValueError("DQ shape does not match SCI")
+        if dq_mode == "strict":
+            valid &= dq == 0
+        elif dq_mode == "do_not_use":
+            valid &= (dq.astype(np.uint64) & np.uint64(1)) == 0
+        else:
+            raise ValueError("dq_mode must be strict or do_not_use")
+    if "UPDCMASK" in hdul:
+        extra = np.asarray(hdul["UPDCMASK"].data)
+        if extra.shape != image.shape:
+            raise ValueError("UPDCMASK shape does not match SCI")
+        valid &= np.isfinite(extra) & (extra == 0)
+    return valid
+
+
+def load_exposure_pool(
+    path: Path,
+    band: str,
+    detector: str,
+    *,
+    max_pixels: int,
+    dq_mode: str,
+    rng: np.random.Generator,
+) -> ExposurePool:
+    with fits.open(path, memmap=False) as hdul:
+        if "SCI" not in hdul or "ERR" not in hdul:
+            raise ValueError(f"{path} must contain SCI and ERR")
+        image = np.asarray(hdul["SCI"].data, dtype=np.float32)
+        err = np.asarray(hdul["ERR"].data, dtype=np.float32)
+        if image.ndim != 2 or err.shape != image.shape:
+            raise ValueError(f"invalid SCI/ERR shapes in {path}")
+        valid = np.flatnonzero(
+            _valid_pixel_mask(hdul, image, err, dq_mode=dq_mode).reshape(-1)
+        )
+        if valid.size == 0:
+            raise ValueError(f"no valid pixels in {path}")
+        chosen = (
+            rng.choice(valid, size=max_pixels, replace=False)
+            if max_pixels > 0 and valid.size > max_pixels
+            else valid
+        )
+        y, x = np.unravel_index(np.asarray(chosen, dtype=np.int64), image.shape)
+        header = dict(hdul["SCI"].header)
+        header["NAXIS1"] = int(image.shape[1])
+        header["NAXIS2"] = int(image.shape[0])
+        return ExposurePool(
+            path=path,
+            band=band,
+            detector=detector,
+            header=header,
+            shape=(int(image.shape[0]), int(image.shape[1])),
+            uv=torch.from_numpy(np.stack((x, y), -1).astype(np.float32)),
+            value=torch.from_numpy(image.reshape(-1)[chosen].copy()),
+            err=torch.from_numpy(err.reshape(-1)[chosen].copy()),
+        )
+
+
+def robust_intensity_scale(pools: Iterable[ExposurePool]) -> float:
+    pieces: list[np.ndarray] = []
+    for pool in pools:
+        values = pool.value.numpy()
+        if values.size > 50000:
+            values = values[:: max(1, values.size // 50000)]
+        pieces.append(values[np.isfinite(values)])
+    merged = np.concatenate(pieces)
+    median = float(np.median(merged))
+    mad = float(np.median(np.abs(merged - median)))
+    p95 = float(np.percentile(np.abs(merged), 95.0))
+    return max(1.4826 * mad, p95, 1.0e-6)
+
+
+def normalize_pools(pools: Sequence[ExposurePool], scale: float) -> list[ExposurePool]:
+    return [
+        ExposurePool(
+            path=pool.path,
+            band=pool.band,
+            detector=pool.detector,
+            header=pool.header,
+            shape=pool.shape,
+            uv=pool.uv,
+            value=pool.value / scale,
+            err=pool.err / scale,
+        )
+        for pool in pools
+    ]
+
+
+def sample_balanced_batch(
+    pools: Sequence[ExposurePool],
+    *,
+    batch_size: int | Sequence[int],
+    generator: torch.Generator,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Sample either a legacy total batch or exact SW/LW samples per exposure."""
+    if not isinstance(batch_size, int):
+        values = tuple(int(value) for value in batch_size)
+        if len(values) != 2 or min(values) <= 0:
+            raise ValueError("batch_size must be one total or SW/LW positive integers")
+        short_count, long_count = values
+        uv, exposure_id, value, err = [], [], [], []
+        for index, pool in enumerate(pools):
+            each = short_count if pool.band in SHORT_WAVE_BANDS else long_count
+            chosen = torch.randint(0, pool.size, (each,), generator=generator)
+            uv.append(pool.uv[chosen])
+            value.append(pool.value[chosen])
+            err.append(pool.err[chosen])
+            exposure_id.append(torch.full((each,), index, dtype=torch.long))
+        value_t = torch.cat(value)
+        return (
+            torch.cat(uv),
+            torch.cat(exposure_id),
+            value_t,
+            torch.cat(err),
+            torch.ones_like(value_t, dtype=torch.bool),
+        )
+    if batch_size < len(pools):
+        raise ValueError("batch_size must be at least the number of exposures")
+    each = math.ceil(batch_size / len(pools))
+    uv, exposure_id, value, err = [], [], [], []
+    for index, pool in enumerate(pools):
+        chosen = torch.randint(0, pool.size, (each,), generator=generator)
+        uv.append(pool.uv[chosen])
+        value.append(pool.value[chosen])
+        err.append(pool.err[chosen])
+        exposure_id.append(torch.full((each,), index, dtype=torch.long))
+    uv_t = torch.cat(uv)
+    exposure_t = torch.cat(exposure_id)
+    value_t = torch.cat(value)
+    err_t = torch.cat(err)
+    if uv_t.shape[0] > batch_size:
+        order = torch.randperm(uv_t.shape[0], generator=generator)[:batch_size]
+        uv_t, exposure_t = uv_t[order], exposure_t[order]
+        value_t, err_t = value_t[order], err_t[order]
+    return uv_t, exposure_t, value_t, err_t, torch.ones_like(value_t, dtype=torch.bool)
+
+
+def effective_batch_size(
+    pools: Sequence[ExposurePool], batch_size: int | Sequence[int]
+) -> int:
+    """Return the actual total samples produced by a batch specification."""
+    if isinstance(batch_size, int):
+        return batch_size
+    values = tuple(int(value) for value in batch_size)
+    if len(values) != 2 or min(values) <= 0:
+        raise ValueError("batch_size must be one total or SW/LW positive integers")
+    short_count, long_count = values
+    return sum(
+        short_count if pool.band in SHORT_WAVE_BANDS else long_count
+        for pool in pools
+    )
+
+
+def build_union_coverage_mask(
+    headers: Sequence[dict[str, Any]],
+    canvas: UnionCanvas,
+    *,
+    device: torch.device,
+    tile_rows: int,
+) -> Tensor:
+    target = WCS(canvas.header).to(device)
+    sources = [WCS(header).to(device) for header in headers]
+    shapes = [
+        (int(header["NAXIS2"]), int(header["NAXIS1"])) for header in headers
+    ]
+    height, width = canvas.shape
+    coverage = torch.zeros((height, width), dtype=torch.bool, device=device)
+    x = torch.arange(width, device=device, dtype=torch.float64)
+    for row0 in range(0, height, tile_rows):
+        row1 = min(row0 + tile_rows, height)
+        y = torch.arange(row0, row1, device=device, dtype=torch.float64)
+        yy, xx = torch.meshgrid(y, x, indexing="ij")
+        ra, dec = target.pixel_to_world(xx.reshape(-1), yy.reshape(-1))
+        tile = torch.zeros(ra.shape, dtype=torch.bool, device=device)
+        for source, (source_h, source_w) in zip(sources, shapes):
+            u, v = source.world_to_pixel(ra, dec)
+            tile |= (
+                torch.isfinite(u)
+                & torch.isfinite(v)
+                & (u >= -0.5)
+                & (u <= source_w - 0.5)
+                & (v >= -0.5)
+                & (v <= source_h - 0.5)
+            )
+        coverage[row0:row1] = tile.reshape(row1 - row0, width)
+    return coverage
+
+
+def _parameter_groups(
+    model: WCSAwareMultiWavelengthINR,
+    *,
+    learning_rate: float,
+    alignment_learning_rate: float,
+    background_learning_rate: float,
+) -> list[dict[str, Any]]:
+    alignment = list(model.feature_alignment.parameters())
+    background = [model.background] if model.background.requires_grad else []
+    excluded = {id(parameter) for parameter in alignment + background}
+    main = [
+        parameter
+        for parameter in model.parameters()
+        if parameter.requires_grad and id(parameter) not in excluded
+    ]
+    groups: list[dict[str, Any]] = [
+        {"params": main, "lr": learning_rate},
+    ]
+    if alignment:
+        groups.append({"params": alignment, "lr": alignment_learning_rate})
+    if background:
+        groups.append({"params": background, "lr": background_learning_rate})
+    return groups
+
+
+def save_checkpoint(
+    path: Path,
+    *,
+    model: WCSAwareMultiWavelengthINR,
+    optimizer: torch.optim.Optimizer,
+    step: int,
+    intensity_scale: float,
+    canvas: UnionCanvas,
+    pools: Sequence[ExposurePool],
+    bandpass_wavelength: Tensor,
+    bandpass_weight: Tensor,
+    args: dict[str, Any],
+    training_history: Sequence[TrainingRecord],
+    loss_log_path: Path | None = None,
+) -> None:
+    torch.save(
+        {
+            "format": "torchsky-wcs-aware-multiband-inr-v2",
+            "step": step,
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "intensity_scale": intensity_scale,
+            "union_header": canvas.header,
+            "union_shape": canvas.shape,
+            "exposure_paths": [str(pool.path) for pool in pools],
+            "exposure_bands": [pool.band for pool in pools],
+            "bandpass_wavelength": bandpass_wavelength,
+            "bandpass_weight": bandpass_weight,
+            "args": args,
+            "training_history": [
+                asdict(record) for record in training_history
+            ],
+            "loss_log_path": (
+                str(loss_log_path) if loss_log_path is not None else None
+            ),
+        },
+        path,
+    )
+
+
+def train_model(
+    model: WCSAwareMultiWavelengthINR,
+    pools: Sequence[ExposurePool],
+    bandpass_wavelength: Tensor,
+    bandpass_weight: Tensor,
+    *,
+    psf: PSFKernelBank | None,
+    device: torch.device,
+    steps: int,
+    batch_size: int | Sequence[int],
+    seed: int,
+    learning_rate: float,
+    alignment_learning_rate: float,
+    background_learning_rate: float,
+    weight_decay: float,
+    gradient_clip: float,
+    robust_loss: str,
+    robust_delta: float,
+    max_relative_weight: float,
+    alignment_regularization: float,
+    background_regularization: float,
+    psf_offset_chunk: int,
+    checkpoint_psf_chunks: bool,
+    amp: bool,
+    log_every: int,
+    checkpoint_every: int,
+    checkpoint_path: Path,
+    intensity_scale: float,
+    canvas: UnionCanvas,
+    checkpoint_args: dict[str, Any],
+    loss_log_path: Path | None = None,
+    loss_log_flush_every: int = 500,
+) -> list[TrainingRecord]:
+    model.to(device)
+    wavelengths = bandpass_wavelength.to(device)
+    weights = bandpass_weight.to(device)
+    psf_device = psf.to(device) if psf is not None else None
+    optimizer = torch.optim.AdamW(
+        _parameter_groups(
+            model,
+            learning_rate=learning_rate,
+            alignment_learning_rate=alignment_learning_rate,
+            background_learning_rate=background_learning_rate,
+        ),
+        weight_decay=weight_decay,
+    )
+    records: list[TrainingRecord] = []
+    if loss_log_path is None:
+        loss_log_path = default_loss_log_path(checkpoint_path)
+
+    generator = torch.Generator(device="cpu").manual_seed(seed + 101)
+    amp_enabled = device.type == "cuda" and amp
+    try:
+        scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
+    except TypeError:
+        scaler = torch.amp.GradScaler(enabled=amp_enabled)
+    started = time.perf_counter()
+    model.train()
+    with LossLogWriter(loss_log_path, flush_every=loss_log_flush_every) as loss_log:
+        for step in range(1, steps + 1):
+            uv, exposure_id, target, err, mask = sample_balanced_batch(
+                pools, batch_size=batch_size, generator=generator
+            )
+            uv, exposure_id = uv.to(device), exposure_id.to(device)
+            target, err, mask = target.to(device), err.to(device), mask.to(device)
+            optimizer.zero_grad(set_to_none=True)
+            with torch.autocast(
+                device_type=device.type,
+                dtype=torch.float16,
+                enabled=amp_enabled,
+            ):
+                prediction, geometry_valid = model.predict_observation(
+                    uv,
+                    exposure_id,
+                    wavelengths,
+                    weights,
+                    psf=psf_device,
+                    psf_offset_chunk=psf_offset_chunk,
+                    checkpoint_psf_chunks=checkpoint_psf_chunks,
+                )
+                data_loss, diagnostics = weighted_robust_loss(
+                    prediction,
+                    target,
+                    err,
+                    mask & geometry_valid,
+                    kind=robust_loss,
+                    delta=robust_delta,
+                    max_relative_weight=max_relative_weight,
+                )
+                alignment_reg = model.alignment_regularization()
+                background_reg = model.background.square().mean()
+                loss = (
+                    data_loss
+                    + alignment_regularization * alignment_reg
+                    + background_regularization * background_reg
+                )
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+            scaler.step(optimizer)
+            scaler.update()
+
+            # Stream the model objective for every optimization step.
+            step_loss = float(loss.detach())
+            loss_log.append(step, step_loss)
+            if step == 1 or step % log_every == 0 or step == steps:
+                record = TrainingRecord(
+                    step=step,
+                    loss=step_loss,
+                    data_loss=float(data_loss.detach()),
+                    rmse=float(diagnostics["rmse"]),
+                    mae=float(diagnostics["mae"]),
+                    whitened_rmse=(
+                        float(diagnostics["whitened_rmse"])
+                        if "whitened_rmse" in diagnostics
+                        else float("nan")
+                    ),
+                    whitened_mae=(
+                        float(diagnostics["whitened_mae"])
+                        if "whitened_mae" in diagnostics
+                        else float("nan")
+                    ),
+                    valid_fraction=float(diagnostics["valid_fraction"]),
+                    alignment_regularization=float(alignment_reg.detach()),
+                    background_regularization=float(background_reg.detach()),
+                    seconds=time.perf_counter() - started,
+                )
+                records.append(record)
+                print(asdict(record), flush=True)
+            if checkpoint_every > 0 and step % checkpoint_every == 0:
+                save_checkpoint(
+                    checkpoint_path,
+                    model=model,
+                    optimizer=optimizer,
+                    step=step,
+                    intensity_scale=intensity_scale,
+                    canvas=canvas,
+                    pools=pools,
+                    bandpass_wavelength=bandpass_wavelength,
+                    bandpass_weight=bandpass_weight,
+                    args=checkpoint_args,
+                    training_history=records,
+                    loss_log_path=loss_log_path,
+                )
+    save_checkpoint(
+        checkpoint_path,
+        model=model,
+        optimizer=optimizer,
+        step=steps,
+        intensity_scale=intensity_scale,
+        canvas=canvas,
+        pools=pools,
+        bandpass_wavelength=bandpass_wavelength,
+        bandpass_weight=bandpass_weight,
+        args=checkpoint_args,
+        training_history=records,
+        loss_log_path=loss_log_path,
+    )
+    return records
+
+
+def _union_latent_for_xy(
+    model: WCSAwareMultiWavelengthINR,
+    canvas: UnionCanvas,
+    xy: Tensor,
+    *,
+    anchor_exposure: int,
+    device: torch.device,
+) -> Tensor:
+    target_wcs = WCS(canvas.header).to(device)
+    if model.encoding == "fourier":
+        raw = model.position_encoder(xy)
+    else:
+        ra, dec = target_wcs.pixel_to_world(xy[:, 0].double(), xy[:, 1].double())
+        raw = model.position_encoder(torch.stack((ra, dec), dim=-1))
+    exposure_id = torch.full(
+        (xy.shape[0],), anchor_exposure, dtype=torch.long, device=device
+    )
+    return model.trunk(model.feature_alignment(raw, exposure_id))
+
+
+@torch.no_grad()
+def render_union_band(
+    model: WCSAwareMultiWavelengthINR,
+    canvas: UnionCanvas,
+    bandpass_wavelength: Tensor,
+    bandpass_weight: Tensor,
+    representative_exposure: int,
+    *,
+    anchor_exposure: int,
+    device: torch.device,
+    tile_pixels: int,
+) -> Tensor:
+    model.eval()
+    height, width = canvas.shape
+    output = torch.empty(height * width, dtype=torch.float32, device=device)
+    wavelength = bandpass_wavelength[representative_exposure].to(device)
+    weight = bandpass_weight[representative_exposure].to(device)
+    for start in range(0, output.numel(), tile_pixels):
+        stop = min(start + tile_pixels, output.numel())
+        index = torch.arange(start, stop, device=device)
+        y = torch.div(index, width, rounding_mode="floor")
+        x = index - y * width
+        xy = torch.stack((x, y), -1).float()
+        latent = _union_latent_for_xy(
+            model,
+            canvas,
+            xy,
+            anchor_exposure=anchor_exposure,
+            device=device,
+        )
+        valid = torch.ones(xy.shape[0], dtype=torch.bool, device=device)
+        value = torch.zeros(xy.shape[0], dtype=torch.float32, device=device)
+        for sample_index in range(wavelength.numel()):
+            wave = torch.full_like(value, float(wavelength[sample_index]))
+            value += weight[sample_index] * model.decode(latent, wave, valid)
+        output[start:stop] = value
+    return output.reshape(height, width)
+
+
+@torch.no_grad()
+def render_union_decoder_slice(
+    model: WCSAwareMultiWavelengthINR,
+    canvas: UnionCanvas,
+    wavelength: float,
+    *,
+    anchor_exposure: int,
+    device: torch.device,
+    tile_pixels: int,
+) -> Tensor:
+    """Render the direct decoder output S_theta(x, y, wavelength).
+
+    This is the monochromatic decoder value before bandpass integration,
+    background addition, and any explicit PSF operation.
+    """
+    model.eval()
+    height, width = canvas.shape
+    output = torch.empty(height * width, dtype=torch.float32, device=device)
+    wave_value = float(wavelength)
+    for start in range(0, output.numel(), tile_pixels):
+        stop = min(start + tile_pixels, output.numel())
+        index = torch.arange(start, stop, device=device)
+        y = torch.div(index, width, rounding_mode="floor")
+        x = index - y * width
+        xy = torch.stack((x, y), -1).float()
+        latent = _union_latent_for_xy(
+            model,
+            canvas,
+            xy,
+            anchor_exposure=anchor_exposure,
+            device=device,
+        )
+        valid = torch.ones(xy.shape[0], dtype=torch.bool, device=device)
+        wave = torch.full((xy.shape[0],), wave_value, dtype=torch.float32, device=device)
+        output[start:stop] = model.decode(latent, wave, valid)
+    return output.reshape(height, width)
+
+
+__all__ = [
+    "ExposurePool",
+    "LossLogWriter",
+    "TrainingRecord",
+    "build_union_coverage_mask",
+    "default_loss_log_path",
+    "discover_exposures",
+    "effective_batch_size",
+    "load_exposure_pool",
+    "normalize_pools",
+    "read_loss_log",
+    "render_union_band",
+    "render_union_decoder_slice",
+    "robust_intensity_scale",
+    "run_tweakreg_alignment",
+    "sample_balanced_batch",
+    "seed_everything",
+    "train_model",
+]

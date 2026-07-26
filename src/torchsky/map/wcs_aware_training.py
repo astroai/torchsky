@@ -147,7 +147,7 @@ def run_tweakreg_alignment(
 ) -> tuple[list[tuple[Path, str, str]], dict[str, Any]]:
     """Run JWST TweakReg once across all selected bands and save corrected copies.
 
-    The input CRF/CAL products are never overwritten.  TweakReg updates the
+    The input CRF/CAL products are never overwritten. TweakReg updates the
     GWCS and its FITS-WCS approximation; ``load_exposure_pool`` then reads the
     corrected SCI header used by TorchSky's differentiable WCS implementation.
     """
@@ -155,6 +155,7 @@ def run_tweakreg_alignment(
         raise ValueError("invalid TweakReg fitgeometry")
     if len(selected) < 2:
         raise ValueError("TweakReg alignment requires at least two exposures")
+
     try:
         from jwst import datamodels
         from jwst.tweakreg import TweakRegStep
@@ -164,58 +165,138 @@ def run_tweakreg_alignment(
         ) from exc
 
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Keep source catalogs. They are extremely useful when TweakReg reports
+    # too few/mismatched sources, and they are not used as INR science catalogs.
+    catalog_dir = output_dir / "catalogs"
+    catalog_dir.mkdir(parents=True, exist_ok=True)
+
+    # Keep the input container alive until all aligned products have been saved.
     inputs = datamodels.ModelContainer(
         [datamodels.open(str(path)) for path, _, _ in selected]
     )
-    aligned = TweakRegStep.call(
-        inputs,
-        fitgeometry=fitgeometry,
-        snr_threshold=snr_threshold,
-        minobj=minobj,
-        searchrad=searchrad,
-        separation=separation,
-        tolerance=tolerance,
-        nclip=nclip,
-        sigma=sigma,
-        save_catalogs=False,
-        save_results=False,
-    )
-    if len(aligned) != len(selected):
-        close = getattr(aligned, "close", None)
-        if callable(close):
-            close()
-        raise RuntimeError("TweakReg returned a different number of exposures")
 
-    corrected: list[tuple[Path, str, str]] = []
-    products: list[dict[str, Any]] = []
     try:
-        for index, ((source, band, detector), model) in enumerate(
-            zip(selected, aligned, strict=True)
-        ):
-            destination = output_dir / (
-                f"{index:03d}_{source.stem}_{fitgeometry}_tweakreg.fits"
+        aligned = TweakRegStep.call(
+            inputs,
+            fitgeometry=fitgeometry,
+            snr_threshold=snr_threshold,
+            minobj=minobj,
+            searchrad=searchrad,
+            separation=separation,
+            tolerance=tolerance,
+            nclip=nclip,
+            sigma=sigma,
+            starfinder="iraf",
+            use_custom_catalogs=False,
+            save_catalogs=True,
+            catalog_format="ecsv",
+            output_dir=str(catalog_dir),
+            save_results=False,
+        )
+
+        if len(aligned) != len(selected):
+            raise RuntimeError(
+                "TweakReg returned a different number of exposures: "
+                f"{len(aligned)} != {len(selected)}"
             )
-            model.save(destination, overwrite=True)
-            status = str(getattr(model.meta.cal_step, "tweakreg", "UNKNOWN"))
-            corrected.append((destination.resolve(), band, detector))
-            products.append(
-                {
-                    "source": str(source),
-                    "corrected": str(destination.resolve()),
-                    "band": band,
-                    "detector": detector,
-                    "status": status,
-                }
+
+        corrected: list[tuple[Path, str, str]] = []
+        products: list[dict[str, Any]] = []
+
+        # JWST 1.20.2 returns a closed ModelLibrary.
+        # Every borrow must occur inside `with aligned:` and must be shelved.
+        with aligned:
+            for index, (source, band, detector) in enumerate(selected):
+                model = aligned.borrow(index)
+
+                try:
+                    destination = output_dir / (
+                        f"{index:03d}_{source.stem}_{fitgeometry}_tweakreg.fits"
+                    )
+
+                    model.save(destination, overwrite=True)
+
+                    cal_step = getattr(model.meta, "cal_step", None)
+                    status = str(
+                        getattr(cal_step, "tweakreg", "UNKNOWN")
+                    )
+
+                    # Validate the exact FITS-WCS representation that the INR
+                    # will consume. Fail here rather than several stages later.
+                    try:
+                        corrected_header = dict(
+                            fits.getheader(destination, "SCI")
+                        )
+                        corrected_wcs = WCS(corrected_header)
+
+                        footprint = torch.as_tensor(
+                            corrected_wcs.footprint(),
+                            dtype=torch.float64,
+                        )
+
+                        if (
+                            footprint.numel() == 0
+                            or not bool(torch.isfinite(footprint).all())
+                        ):
+                            raise ValueError(
+                                "non-finite corrected WCS footprint"
+                            )
+
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"invalid saved TweakReg WCS in {destination}"
+                        ) from exc
+
+                    corrected.append(
+                        (destination.resolve(), band, detector)
+                    )
+
+                    products.append(
+                        {
+                            "source": str(source),
+                            "corrected": str(destination.resolve()),
+                            "band": band,
+                            "detector": detector,
+                            "status": status,
+                        }
+                    )
+
+                finally:
+                    # We only inspect/save the returned model; no need to
+                    # propagate additional modifications into ModelLibrary.
+                    aligned.shelve(
+                        model,
+                        index,
+                        modify=False,
+                    )
+                    del model
+
+        failed = [
+            item
+            for item in products
+            if item["status"].upper() != "COMPLETE"
+        ]
+
+        if failed:
+            names = ", ".join(
+                Path(item["source"]).name
+                for item in failed[:5]
             )
+
+            raise RuntimeError(
+                f"TweakReg did not complete for: {names}. "
+                f"Inspect source catalogs in {catalog_dir}"
+            )
+
+        return corrected, {
+            "fitgeometry": fitgeometry,
+            "catalog_dir": str(catalog_dir.resolve()),
+            "products": products,
+        }
+
     finally:
-        close = getattr(aligned, "close", None)
-        if callable(close):
-            close()
-    failed = [item for item in products if item["status"].upper() != "COMPLETE"]
-    if failed:
-        names = ", ".join(Path(item["source"]).name for item in failed[:5])
-        raise RuntimeError(f"TweakReg did not complete for: {names}")
-    return corrected, {"fitgeometry": fitgeometry, "products": products}
+        inputs.close()
 
 
 def seed_everything(seed: int) -> None:
