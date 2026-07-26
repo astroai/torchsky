@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import json
 import math
 from pathlib import Path
 import random
 import time
+from types import TracebackType
 from typing import Any, Iterable, Sequence
 
 import numpy as np
@@ -62,6 +64,69 @@ class TrainingRecord:
     alignment_regularization: float
     background_regularization: float
     seconds: float
+
+
+class LossLogWriter:
+    """Append-only JSONL sink for the per-step training objective.
+
+    One JSON object per line, ``{"step": int, "loss": float}``, written while
+    training runs instead of being accumulated in memory and embedded in the
+    checkpoint.  The file is truncated on open, so it mirrors the lifetime of a
+    single training run.
+    """
+
+    def __init__(self, path: Path, *, flush_every: int = 500) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
+        self._handle = path.open("w", encoding="utf-8")
+        self._flush_every = max(1, int(flush_every))
+        self._pending = 0
+
+    def append(self, step: int, loss: float) -> None:
+        self._handle.write(
+            json.dumps({"step": int(step), "loss": float(loss)}) + "\n"
+        )
+        self._pending += 1
+        if self._pending >= self._flush_every:
+            self._handle.flush()
+            self._pending = 0
+
+    def close(self) -> None:
+        if not self._handle.closed:
+            self._handle.flush()
+            self._handle.close()
+
+    def __enter__(self) -> "LossLogWriter":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        self.close()
+        return False
+
+
+def read_loss_log(path: Path) -> list[dict[str, float | int]]:
+    """Read a JSONL loss log back into the list-of-dicts layout."""
+    records: list[dict[str, float | int]] = []
+    with Path(path).open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            item = json.loads(line)
+            records.append({"step": int(item["step"]), "loss": float(item["loss"])})
+    return records
+
+
+def default_loss_log_path(checkpoint_path: Path) -> Path:
+    """Sibling log file for a checkpoint, e.g. ``run.pt`` -> ``run.loss.jsonl``."""
+    checkpoint_path = Path(checkpoint_path)
+    return checkpoint_path.with_suffix(checkpoint_path.suffix + ".loss.jsonl")
 
 
 SHORT_WAVE_BANDS = frozenset({"F070W", "F090W", "F115W", "F140M", "F150W", "F162M", "F164N", "F182M", "F187N", "F200W", "F210M", "F212N"})
@@ -472,6 +537,8 @@ def save_checkpoint(
     bandpass_wavelength: Tensor,
     bandpass_weight: Tensor,
     args: dict[str, Any],
+    training_history: Sequence[TrainingRecord],
+    loss_log_path: Path | None = None,
 ) -> None:
     torch.save(
         {
@@ -487,6 +554,12 @@ def save_checkpoint(
             "bandpass_wavelength": bandpass_wavelength,
             "bandpass_weight": bandpass_weight,
             "args": args,
+            "training_history": [
+                asdict(record) for record in training_history
+            ],
+            "loss_log_path": (
+                str(loss_log_path) if loss_log_path is not None else None
+            ),
         },
         path,
     )
@@ -522,7 +595,8 @@ def train_model(
     intensity_scale: float,
     canvas: UnionCanvas,
     checkpoint_args: dict[str, Any],
-    resume: Path | None = None,
+    loss_log_path: Path | None = None,
+    loss_log_flush_every: int = 500,
 ) -> list[TrainingRecord]:
     model.to(device)
     wavelengths = bandpass_wavelength.to(device)
@@ -537,100 +611,104 @@ def train_model(
         ),
         weight_decay=weight_decay,
     )
-    start_step = 0
-    if resume is not None:
-        saved = torch.load(resume, map_location=device, weights_only=False)
-        model.load_state_dict(saved["model"])
-        optimizer.load_state_dict(saved["optimizer"])
-        start_step = int(saved.get("step", 0))
+    records: list[TrainingRecord] = []
+    if loss_log_path is None:
+        loss_log_path = default_loss_log_path(checkpoint_path)
+
     generator = torch.Generator(device="cpu").manual_seed(seed + 101)
     amp_enabled = device.type == "cuda" and amp
     try:
         scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
     except TypeError:
         scaler = torch.amp.GradScaler(enabled=amp_enabled)
-    records: list[TrainingRecord] = []
     started = time.perf_counter()
     model.train()
-    for step in range(start_step + 1, steps + 1):
-        uv, exposure_id, target, err, mask = sample_balanced_batch(
-            pools, batch_size=batch_size, generator=generator
-        )
-        uv, exposure_id = uv.to(device), exposure_id.to(device)
-        target, err, mask = target.to(device), err.to(device), mask.to(device)
-        optimizer.zero_grad(set_to_none=True)
-        with torch.autocast(
-            device_type=device.type,
-            dtype=torch.float16,
-            enabled=amp_enabled,
-        ):
-            prediction, geometry_valid = model.predict_observation(
-                uv,
-                exposure_id,
-                wavelengths,
-                weights,
-                psf=psf_device,
-                psf_offset_chunk=psf_offset_chunk,
-                checkpoint_psf_chunks=checkpoint_psf_chunks,
+    with LossLogWriter(loss_log_path, flush_every=loss_log_flush_every) as loss_log:
+        for step in range(1, steps + 1):
+            uv, exposure_id, target, err, mask = sample_balanced_batch(
+                pools, batch_size=batch_size, generator=generator
             )
-            data_loss, diagnostics = weighted_robust_loss(
-                prediction,
-                target,
-                err,
-                mask & geometry_valid,
-                kind=robust_loss,
-                delta=robust_delta,
-                max_relative_weight=max_relative_weight,
-            )
-            alignment_reg = model.alignment_regularization()
-            background_reg = model.background.square().mean()
-            loss = (
-                data_loss
-                + alignment_regularization * alignment_reg
-                + background_regularization * background_reg
-            )
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
-        scaler.step(optimizer)
-        scaler.update()
-        if step == 1 or step % log_every == 0 or step == steps:
-            record = TrainingRecord(
-                step=step,
-                loss=float(loss.detach()),
-                data_loss=float(data_loss.detach()),
-                rmse=float(diagnostics["rmse"]),
-                mae=float(diagnostics["mae"]),
-                whitened_rmse=(
-                    float(diagnostics["whitened_rmse"])
-                    if "whitened_rmse" in diagnostics
-                    else float("nan")
-                ),
-                whitened_mae=(
-                    float(diagnostics["whitened_mae"])
-                    if "whitened_mae" in diagnostics
-                    else float("nan")
-                ),
-                valid_fraction=float(diagnostics["valid_fraction"]),
-                alignment_regularization=float(alignment_reg.detach()),
-                background_regularization=float(background_reg.detach()),
-                seconds=time.perf_counter() - started,
-            )
-            records.append(record)
-            print(asdict(record), flush=True)
-        if checkpoint_every > 0 and step % checkpoint_every == 0:
-            save_checkpoint(
-                checkpoint_path,
-                model=model,
-                optimizer=optimizer,
-                step=step,
-                intensity_scale=intensity_scale,
-                canvas=canvas,
-                pools=pools,
-                bandpass_wavelength=bandpass_wavelength,
-                bandpass_weight=bandpass_weight,
-                args=checkpoint_args,
-            )
+            uv, exposure_id = uv.to(device), exposure_id.to(device)
+            target, err, mask = target.to(device), err.to(device), mask.to(device)
+            optimizer.zero_grad(set_to_none=True)
+            with torch.autocast(
+                device_type=device.type,
+                dtype=torch.float16,
+                enabled=amp_enabled,
+            ):
+                prediction, geometry_valid = model.predict_observation(
+                    uv,
+                    exposure_id,
+                    wavelengths,
+                    weights,
+                    psf=psf_device,
+                    psf_offset_chunk=psf_offset_chunk,
+                    checkpoint_psf_chunks=checkpoint_psf_chunks,
+                )
+                data_loss, diagnostics = weighted_robust_loss(
+                    prediction,
+                    target,
+                    err,
+                    mask & geometry_valid,
+                    kind=robust_loss,
+                    delta=robust_delta,
+                    max_relative_weight=max_relative_weight,
+                )
+                alignment_reg = model.alignment_regularization()
+                background_reg = model.background.square().mean()
+                loss = (
+                    data_loss
+                    + alignment_regularization * alignment_reg
+                    + background_regularization * background_reg
+                )
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+            scaler.step(optimizer)
+            scaler.update()
+
+            # Stream the model objective for every optimization step.
+            step_loss = float(loss.detach())
+            loss_log.append(step, step_loss)
+            if step == 1 or step % log_every == 0 or step == steps:
+                record = TrainingRecord(
+                    step=step,
+                    loss=step_loss,
+                    data_loss=float(data_loss.detach()),
+                    rmse=float(diagnostics["rmse"]),
+                    mae=float(diagnostics["mae"]),
+                    whitened_rmse=(
+                        float(diagnostics["whitened_rmse"])
+                        if "whitened_rmse" in diagnostics
+                        else float("nan")
+                    ),
+                    whitened_mae=(
+                        float(diagnostics["whitened_mae"])
+                        if "whitened_mae" in diagnostics
+                        else float("nan")
+                    ),
+                    valid_fraction=float(diagnostics["valid_fraction"]),
+                    alignment_regularization=float(alignment_reg.detach()),
+                    background_regularization=float(background_reg.detach()),
+                    seconds=time.perf_counter() - started,
+                )
+                records.append(record)
+                print(asdict(record), flush=True)
+            if checkpoint_every > 0 and step % checkpoint_every == 0:
+                save_checkpoint(
+                    checkpoint_path,
+                    model=model,
+                    optimizer=optimizer,
+                    step=step,
+                    intensity_scale=intensity_scale,
+                    canvas=canvas,
+                    pools=pools,
+                    bandpass_wavelength=bandpass_wavelength,
+                    bandpass_weight=bandpass_weight,
+                    args=checkpoint_args,
+                    training_history=records,
+                    loss_log_path=loss_log_path,
+                )
     save_checkpoint(
         checkpoint_path,
         model=model,
@@ -642,6 +720,8 @@ def train_model(
         bandpass_wavelength=bandpass_wavelength,
         bandpass_weight=bandpass_weight,
         args=checkpoint_args,
+        training_history=records,
+        loss_log_path=loss_log_path,
     )
     return records
 
@@ -745,12 +825,15 @@ def render_union_decoder_slice(
 
 __all__ = [
     "ExposurePool",
+    "LossLogWriter",
     "TrainingRecord",
     "build_union_coverage_mask",
+    "default_loss_log_path",
     "discover_exposures",
     "effective_batch_size",
     "load_exposure_pool",
     "normalize_pools",
+    "read_loss_log",
     "render_union_band",
     "render_union_decoder_slice",
     "robust_intensity_scale",

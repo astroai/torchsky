@@ -210,7 +210,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-amp", action="store_true")
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--checkpoint-every", type=int, default=1000)
-    parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument("--render-tile-pixels", type=int, default=131072)
     parser.add_argument("--coverage-tile-rows", type=int, default=128)
     parser.add_argument("--skip-render", action="store_true")
@@ -436,10 +435,11 @@ def main() -> int:
             log_every=args.log_every,
             checkpoint_every=args.checkpoint_every,
             checkpoint_path=run_dir / "checkpoint.pt",
+            loss_log_path=run_dir / "training_loss.jsonl",
+            loss_log_flush_every=100,
             intensity_scale=scale,
             canvas=canvas,
             checkpoint_args=checkpoint_args,
-            resume=args.resume,
         )
         outputs: dict[str, str] = {}
         if coverage is not None:
