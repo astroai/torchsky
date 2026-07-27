@@ -719,6 +719,13 @@ def _gate0_artifact(*, seed: int, size: int, bands: int, sources: int) -> dict[s
         generator=torch.Generator().manual_seed(manifest.noise),
         dtype=truth.dtype,
     )
+    photometry = flux_color_metrics(measured_flux, catalog.band_flux)
+    # ponytail: the noiseless contract is 1e-11; canonicalize sub-tolerance
+    # LAPACK roundoff so deterministic JSON does not depend on the CPU driver.
+    photometry = {
+        name: [0.0 if abs(value) < 1e-12 else value for value in values]
+        for name, values in photometry.items()
+    }
     return {
         "profile": "gate0",
         "seeds": asdict(manifest),
@@ -729,9 +736,7 @@ def _gate0_artifact(*, seed: int, size: int, bands: int, sources: int) -> dict[s
         "split": asdict(split),
         "spatial_oversample": 4,
         "spectral_samples": catalog.spectral_coordinate.numel(),
-        "noiseless_forced_photometry": flux_color_metrics(
-            measured_flux, catalog.band_flux
-        ),
+        "noiseless_forced_photometry": photometry,
         "heldout_truth_gaussian_nll": gaussian_nll(
             truth + noise, truth, noise_sigma
         ),

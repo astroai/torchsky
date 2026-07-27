@@ -39,6 +39,11 @@ def test_seed_catalog_render_and_artifact_are_deterministic() -> None:
     assert set(split["train"]).isdisjoint(split["test"])
     assert set(split["validation"]).isdisjoint(split["test"])
     assert first["spectral_samples"] == 129
+    assert all(
+        value == 0.0
+        for values in first["noiseless_forced_photometry"].values()
+        for value in values
+    )
 
 
 def test_truth_catalog_has_required_strata_and_conserves_flux() -> None:

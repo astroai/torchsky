@@ -125,6 +125,11 @@ Re-baseline them after the repository boundary cleanup.
   gated; local focused evidence is 11 passes and one CUDA skip. Classical/model
   baselines and the full smoke selection function remain open, so no depth-gain
   claim exists.
+- CANFAR's Linux LAPACK gate caught byte-level nondeterminism in the first
+  noiseless forced-photometry JSON: mathematically zero residuals varied around
+  `1e-16` between calls. The report boundary now canonicalizes values below the
+  declared `1e-12` noiseless tolerance while retaining unrounded tensors and
+  tight scientific tests.
 - Weighted and equal-mean tiled coadds now execute exposure-major: an observation
   is read and calibrated once, projected through every output tile, then released.
   The stale unbounded module-global tensor cache is gone, overwrite freshness is

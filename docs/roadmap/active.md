@@ -550,6 +550,12 @@ Current Gate 0/M0 evidence:
   Gate 0 tests plus the deterministic 96-square/six-band artifact. Artifacts:
   `/arc/projects/ots/torchsky-runs/20260727-multiband-gate0-3874b9a/`.
   Peak child RSS was 1,756,592 KiB on CUDA 12.9.
+- [x] Record H100 session `xqrm5rlw`, exact commit `a482f9f`: the CUDA and SMACS
+  boundary tests ran, but the deterministic-artifact gate exposed
+  cross-platform LAPACK roundoff (`~1e-16`) in noiseless forced-photometry
+  report values. The artifact now canonicalizes values below its declared
+  `1e-12` reporting tolerance; scientific tensors retain their tight tests.
+- [ ] Rerun the focused H100 gate after the deterministic-report fix is pushed.
 
 ## Checkpoint 4 — Absorb The Former Parallel Work
 
@@ -647,6 +653,12 @@ until repeated `SCI`/`ERR`/`DQ` reads measure bytes saved versus stale-data risk
   Located data root: `/arc/projects/ots/jwst_smacs0723`. The prior guessed
   `/arc/projects/ots/torchsky/data/...` roots do not exist. Run the committed
   Torchfits-backed inventory against this exact root.
+  Active exact-commit sessions: `g8ol0mcu` inventories the 27 root CRF files;
+  `g3s3wkdm` inventories the 135 aligned/tweakreg CRF products used by the
+  existing six-band work. Both use commit `a482f9f`, read all three named planes
+  through Torchfits, repeat one `SCI` read, and test a CUDA round trip. Artifacts:
+  `/arc/projects/ots/torchsky-runs/20260727-smacs-inventory-a482f9f/` and
+  `/arc/projects/ots/torchsky-runs/20260727-smacs-aligned-inventory-a482f9f/`.
 - [ ] Verify common support for F090W, F150W, F200W, F277W, F356W, and F444W
   under the pre-registered split:
   `train={1,2,4,5,7}`, `validation={3,8}`, `test={6,9}`.
