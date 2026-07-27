@@ -39,8 +39,11 @@ from .adaptive import (
     residual_tile_basis_spec_from_observation,
 )
 from .foam import (
+    PowerPixelOperator,
+    PowerValueSemantics,
     SparseCechGraph,
     TileDiskCSR,
+    bounded_power_pixel_operator,
     bounded_power_ownership,
     cech_adjacency,
     power_distance,
@@ -185,6 +188,7 @@ __all__ = [
     "SpectralModelCapacityHints",
     "BandpassConditionedField",
     "bandpass",
+    "bounded_power_pixel_operator",
     "bounded_power_ownership",
     "cech_adjacency",
     "TileDiskCSR",
@@ -233,6 +237,8 @@ __all__ = [
     "HashGridSpectralField",
     "LearnedSpectralBasisField",
     "OperatorConstrainedFeatureField",
+    "PowerPixelOperator",
+    "PowerValueSemantics",
     "SineImplicitField",
     "SparseCechGraph",
     "SkyEncoderBandpassField",

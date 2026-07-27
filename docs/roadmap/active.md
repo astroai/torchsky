@@ -97,29 +97,35 @@ exact disk-overlap predicate.
 - [x] Apply the exact Čech predicate after candidate generation; never use the
   binning approximation as the final topology.
   Evidence: squared-distance overlap is applied only after unique candidates.
-- [ ] Produce deterministic symmetric CSR (`indptr`, `indices`) on CPU and CUDA.
-  Local CPU and MPS parity/determinism pass. CANFAR CPU passed at `aeabf02`;
-  CUDA remains a gate in the new isolated `cuda-bench` environment.
+- [x] Produce deterministic symmetric CSR (`indptr`, `indices`) on CPU and CUDA.
+  Evidence: local CPU/MPS parity and determinism plus CANFAR staging session
+  `dhepgojh` at `d8839ed`, where both CUDA CSR parity tests passed on an
+  NVIDIA H100 NVL MIG 1g.12gb.
 - [x] Gate exact equality against the dense oracle on randomized, equal-center,
   zero-radius, touching, separated, large-radius, and chunked inputs.
   Evidence: `tests/test_map_field_foam.py`, 11 passed and one CUDA skip.
-- [ ] Gate translation, rotation, uniform-scale, dtype, empty-input, and
+- [x] Gate translation, rotation, uniform-scale, dtype, empty-input, and
   device-parity behavior.
-  CPU/MPS and float32/float64 behavior pass; CUDA remains a CANFAR gate.
+  Evidence: CPU/MPS and float32/float64 behavior pass locally; CUDA parity
+  passed in session `dhepgojh`.
 - [x] Add a benchmark that records total possible pairs, candidate pairs, exact
   edges, reduction ratio, wall time, and peak device memory.
   Evidence: `benchmarks/bench_map_foam_sparse.py` and Pixi task
   `bench-map-foam-sparse`.
-- [ ] Run small/medium local benchmarks and large CPU/CUDA CANFAR staging runs.
+- [x] Run small/medium local benchmarks and large CPU/CUDA CANFAR staging runs.
   Local evidence at 100,000 sites: 4,999,950,000 total pairs, 84,647 candidates,
   25,389 exact edges, 99.9983% candidate reduction, 0.424 s median CPU wall time,
   and exact parity on a 2,000-site dense oracle. At 1,000,000 sites: 848,574
   candidates from 499,999,500,000 pairs, 253,942 exact edges, 99.99983%
-  reduction, 4.36 s median, and 1.50 GiB peak process RSS. CANFAR remains
-  pending on CUDA. CANFAR staging CPU session `vet25ml3` reproduced exact
+  reduction, 4.36 s median, and 1.50 GiB peak process RSS. CANFAR staging CPU
+  session `vet25ml3` reproduced exact
   one-million-site parity in 3.683 s median with 1.29 GiB benchmark peak RSS;
-  artifacts:
-  `/arc/projects/ots/torchsky-runs/20260726-foam-cpu-aeabf02/`.
+  artifacts: `/arc/projects/ots/torchsky-runs/20260726-foam-cpu-aeabf02/`.
+  CUDA session `dhepgojh` at `d8839ed` passed the 2,000-site dense oracle and
+  reduced 499,999,500,000 possible pairs to 847,623 candidates and 253,290
+  exact edges in 0.0465 s median, using 675,155,456 bytes peak CUDA allocation.
+  Artifacts:
+  `/arc/projects/ots/torchsky-runs/20260726-foam-cuda-v5-d8839ed/`.
 - [x] Check the parent roadmap's survey-scale overlap-index box only after the
   exact parity and CANFAR evidence are recorded.
   Evidence: local and CANFAR CPU dense-oracle parity, candidate reduction, and
@@ -152,17 +158,22 @@ list of disks that can affect them before exact cell/pixel intersection begins.
   edge/corner, whole-grid, empty-input, similarity-scale, determinism, limit,
   and device tests in `tests/test_map_field_foam.py`; local focused gate passed
   15 tests with 2 device skips.
-- [ ] Report occupancy distribution, maximum candidates per tile, reduction
+- [x] Report occupancy distribution, maximum candidates per tile, reduction
   ratio, wall time, and peak memory locally and on CANFAR.
   Local million-site/1,048,576-tile evidence: 2,789,942 exact candidates from
   1,048,576,000,000 possible tests (99.999734% reduction), 2.66 mean,
   15 maximum, p50/p90/p99 = 2/5/7 candidates per tile, 0.569 s median CPU wall
-  time, 1.11 GiB peak RSS, and a 2,000-site dense oracle pass. CANFAR CPU/CUDA
-  remains pending. CANFAR staging CPU session `vet25ml3` reproduced the result
+  time, 1.11 GiB peak RSS, and a 2,000-site dense oracle pass. CANFAR staging
+  CPU session `vet25ml3` reproduced the result
   in 0.181 s median with 1.18 GiB benchmark peak RSS; artifacts:
-  `/arc/projects/ots/torchsky-runs/20260726-foam-cpu-aeabf02/`.
-- [ ] Check the parent roadmap's neighbor-CSR/tile-candidate box only after both
+  `/arc/projects/ots/torchsky-runs/20260726-foam-cpu-aeabf02/`. CUDA session
+  `dhepgojh` at `d8839ed` reproduced the million-site result with 2,791,311
+  exact candidates, mean/max/p50/p90/p99 occupancy 2.662/14/2/5/7, a 0.0269 s
+  median, 675,804,160 bytes peak CUDA allocation, and dense-oracle parity.
+- [x] Check the parent roadmap's neighbor-CSR/tile-candidate box only after both
   CSR directions are gated.
+  Evidence: CPU, MPS, and CUDA parity plus million-site CPU/CUDA artifacts are
+  recorded above; `docs/roadmap/next.md` is updated in the same commit.
 
 Focused continuation:
 
@@ -182,24 +193,41 @@ The hard renderer must integrate the intersection of a detector pixel, a
 power-cell's radical half-planes, and its finite-radius disk. Sampling a few
 points inside the pixel is not an exact-area implementation.
 
-- [ ] Define the sparse operator contract: candidate `(pixel, cell)` pairs,
+- [x] Define the sparse operator contract: candidate `(pixel, cell)` pairs,
   exact non-negative intersection areas, pixel-row CSR, cell-row transpose CSR,
   and explicit surface-brightness versus integrated-flux semantics.
-- [ ] Clip local tangent-plane pixel polygons by the candidate cell's radical
+  Evidence: `PowerPixelOperator` and `bounded_power_pixel_operator`, including
+  pixel-integrated `matvec`/`rmatvec` semantics and sparse candidate/neighbor
+  CSR inputs.
+- [x] Clip local tangent-plane pixel polygons by the candidate cell's radical
   half-planes, handling equal sites, dominated coincident sites, exact boundary
   touches, empty intersections, and finite input validation.
-- [ ] Integrate the remaining polygon against the cell's circular bound with
+  Evidence: deterministic convex half-plane clipping and lower-index tie
+  ownership, covered by analytic partition, coincident-site, sparse-candidate,
+  validation, and empty-contract tests.
+- [x] Integrate the remaining polygon against the cell's circular bound with
   analytic segment/circular-arc area contributions. Keep documented adaptive
   quadrature only for curved WCS pixel footprints.
-- [ ] Gate partition of area, single-cell analytic disk/rectangle cases,
+  Evidence: exact straight-edge segment/circular-arc integration; the API
+  explicitly requires curved WCS edges to be adaptively tessellated to a named
+  error budget and forbids reporting that approximation as analytic area.
+- [x] Gate partition of area, single-cell analytic disk/rectangle cases,
   translation/rotation/uniform-scale invariance, permutation invariance,
   non-overlap, and randomized agreement with a high-accuracy independent
   numerical oracle.
-- [ ] Gate the forward/transpose dot product for both value semantics and prove
+  Evidence: `tests/test_map_field_foam_intersection.py`; eight CPU tests pass,
+  including a 1024-square independent dense ownership oracle.
+- [x] Gate the forward/transpose dot product for both value semantics and prove
   tile-chunk invariance. Hard topology may be piecewise differentiable, but
   exact inference must not be labelled as the soft training surrogate.
+  Evidence: parametrized surface-brightness/integrated-flux dot products and
+  one-pixel chunk invariance.
 - [ ] Benchmark candidates/s, intersections/s, peak memory, and numerical error
   on CPU and CUDA; profile before adding a native kernel.
+  Local CPU reference at 256 sites and 256 pixels: 2,539 candidates, 931
+  positive intersections, 2.405 s median, 1,056 candidates/s, 387 positive
+  intersections/s, 1.07 GB peak RSS, and 0.044 square-unit error against the
+  independent 256-square coverage oracle. CUDA and CANFAR remain unchecked.
 - [ ] Only then check the parent roadmap's exact clipped
   power-cell/pixel-intersection box.
 
@@ -230,9 +258,13 @@ pixi run preflight-push
   `cuda-nvcc 12.9` and CMake 4.3.x. Session `xv84arv5` then proved that NVCC
   alone does not install CMake's `CUDA::nvrtc` development target; the isolated
   lock now also includes `cuda-nvrtc-dev 12.9`.
-- [ ] Build Torchsky in `cuda-bench` on CANFAR, require
+- [x] Build Torchsky in `cuda-bench` on CANFAR, require
   `torch.cuda.is_available()`, pass both sparse-index CUDA parity tests, and
   record million-site CUDA benchmarks.
+  Evidence: session `dhepgojh`, exact commit `d8839ed`, PyTorch 2.10.0 with
+  CUDA 12.9 on an H100 NVL MIG 1g.12gb; editable native build, both CUDA tests,
+  and both million-site benchmarks passed. Durable artifact:
+  `/arc/projects/ots/torchsky-runs/20260726-foam-cuda-v5-d8839ed/`.
 
 ### Exposure-major map scaling
 

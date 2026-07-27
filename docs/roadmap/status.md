@@ -4,7 +4,7 @@
 > APIs, start with [`../api.md`](../api.md). For shipped-work history, use
 > [`history.md`](history.md).
 
-Last updated: 2026-07-22.
+Last updated: 2026-07-26.
 
 ## Mission And Ownership
 
@@ -40,8 +40,8 @@ untested behavior.
 ## Current Baseline
 
 - Full local gate: `pixi run ci-local`.
-- Latest recorded full local gate: `1617 passed, 205 skipped, 12 warnings`
-  in 864.61 seconds (2026-07-22, exposure-major tiled-coadd checkpoint).
+- Latest recorded full local gate: `1643 passed, 201 skipped, 12 warnings`
+  in 530.91 seconds (2026-07-26, exact Power-Foam pixel-operator checkpoint).
 - Latest focused WCS gate: `338 passed, 2 skipped, 22 warnings`.
 - Latest focused sphere/HEALPix gate: `351 passed, 6 skipped, 10 warnings`.
 - Latest WCS/sphere acceptance: `pixi run wcs-sphere-acceptance` passes; its
@@ -93,8 +93,19 @@ Re-baseline them after the repository boundary cleanup.
   reduce 499,999,500,000 possible cell pairs to 848,574 candidates in 3.683 s
   median, and 1,048,576,000,000 possible tile/site tests to 2,789,942 exact
   candidates in 0.181 s median, both with independent dense-oracle parity.
-  These are geometry foundations, not a claim that the exact clipped
-  Power-Foam renderer or optimizer is shipped.
+  The isolated CUDA 12.9 environment now builds Torchsky on an H100 NVL MIG
+  slice; the corresponding million-site medians are 0.0465 s for sparse Čech
+  construction and 0.0269 s for tile candidates, with 675–676 MB peak CUDA
+  allocation and both dense-oracle checks passing.
+- The first exact bounded-power-cell/pixel reference operator now clips convex
+  tangent-plane pixels by radical half-planes, integrates circular bounds with
+  analytic segment/arc areas, exposes pixel-major and transposed sparse forms,
+  and gates surface-brightness/integrated-flux adjoints. Analytic circle,
+  rectangle, partition, transform, permutation, chunk, and independent
+  1024-square numerical-oracle tests pass. The Python reference processes about
+  1,056 candidates/s in its current 256-site/256-pixel CPU benchmark, so a
+  profiled vectorized/native renderer and CUDA gate remain before the full
+  Power-Foam renderer is claimed.
 - Weighted and equal-mean tiled coadds now execute exposure-major: an observation
   is read and calibrated once, projected through every output tile, then released.
   The stale unbounded module-global tensor cache is gone, overwrite freshness is
@@ -174,11 +185,11 @@ Re-baseline them after the repository boundary cleanup.
 
 ### Open
 
-- CUDA-enabled source/editable builds require a full matching CUDA toolkit;
-  runtime-only CANFAR/Pixi environments fail closed before `find_package(Torch)`.
-  A CPU-built Torchsky wheel with the exact CUDA PyTorch runtime remains a
-  packaging gate until that distribution/ABI combination passes native import
-  and a first WCS construction/transform on the target Linux environment.
+- CUDA-enabled source/editable builds now pass in the isolated CANFAR
+  `cuda-bench` environment with matching PyTorch/CUDA, NVCC, NVRTC development
+  files, and CMake. A distributable wheel with that exact CUDA runtime remains
+  a packaging gate until native import and a first WCS construction/transform
+  pass from the installed wheel on target Linux.
 - Freeze the exact adapter/signature contract against the stable
   `torchfits.where`, `torchfits.hdu`, and `torchfits.table` public modules; do
   not encode transient private implementation APIs or preserve obsolete 0.3.x

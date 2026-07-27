@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from typing import Literal
 
 import torch
 from torch import Tensor
+
+PowerValueSemantics = Literal["surface_brightness", "integrated_flux"]
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,124 @@ class TileDiskCSR:
     tile_shape: tuple[int, int]
     tile_origin: tuple[float, float]
     tile_size: tuple[float, float]
+
+
+@dataclass(frozen=True)
+class PowerPixelOperator:
+    """Exact sparse bounded-power-cell to convex-pixel area operator.
+
+    ``areas`` is pixel-major and ``transpose_areas`` is the same data in
+    cell-major order. Outputs from :meth:`matvec` are always pixel-integrated.
+    Surface-brightness inputs are multiplied by intersection area; integrated
+    cell-flux inputs are multiplied by the fraction of their bounded cell area.
+    """
+
+    indptr: Tensor
+    indices: Tensor
+    pixel_ids: Tensor
+    areas: Tensor
+    transpose_indptr: Tensor
+    transpose_indices: Tensor
+    transpose_areas: Tensor
+    cell_areas: Tensor
+    pixel_count: int
+    cell_count: int
+    candidate_pairs: int
+
+    def _weights(self, semantics: PowerValueSemantics, *, transposed: bool) -> Tensor:
+        if semantics not in ("surface_brightness", "integrated_flux"):
+            raise ValueError(
+                "semantics must be 'surface_brightness' or 'integrated_flux'"
+            )
+        areas = self.transpose_areas if transposed else self.areas
+        if semantics == "surface_brightness":
+            return areas
+        cell_ids = (
+            torch.repeat_interleave(
+                torch.arange(
+                    self.cell_count,
+                    dtype=torch.long,
+                    device=self.cell_areas.device,
+                ),
+                self.transpose_indptr[1:] - self.transpose_indptr[:-1],
+            )
+            if transposed
+            else self.indices
+        )
+        normalizers = self.cell_areas[cell_ids]
+        if bool(torch.any(normalizers <= 0)):
+            raise RuntimeError("referenced bounded cells must have positive area")
+        return areas / normalizers
+
+    def matvec(
+        self,
+        cell_values: Tensor,
+        *,
+        semantics: PowerValueSemantics = "surface_brightness",
+    ) -> Tensor:
+        """Map ``(..., cells)`` values to pixel-integrated ``(..., pixels)``."""
+        if not cell_values.is_floating_point() or cell_values.shape[-1:] != (
+            self.cell_count,
+        ):
+            raise ValueError(
+                "cell_values must be floating point with shape (..., cells)"
+            )
+        if (
+            cell_values.device != self.areas.device
+            or cell_values.dtype != self.areas.dtype
+        ):
+            raise ValueError("cell_values must match the operator dtype and device")
+        flat = cell_values.reshape(-1, self.cell_count)
+        contributions = flat[:, self.indices] * self._weights(
+            semantics,
+            transposed=False,
+        )
+        output = flat.new_zeros((flat.shape[0], self.pixel_count))
+        output.scatter_add_(
+            1,
+            self.pixel_ids.expand(flat.shape[0], -1),
+            contributions,
+        )
+        return output.reshape(cell_values.shape[:-1] + (self.pixel_count,))
+
+    def rmatvec(
+        self,
+        pixel_values: Tensor,
+        *,
+        semantics: PowerValueSemantics = "surface_brightness",
+    ) -> Tensor:
+        """Apply the exact transpose to ``(..., pixels)`` values."""
+        if not pixel_values.is_floating_point() or pixel_values.shape[-1:] != (
+            self.pixel_count,
+        ):
+            raise ValueError(
+                "pixel_values must be floating point with shape (..., pixels)"
+            )
+        if (
+            pixel_values.device != self.areas.device
+            or pixel_values.dtype != self.areas.dtype
+        ):
+            raise ValueError("pixel_values must match the operator dtype and device")
+        cell_ids = torch.repeat_interleave(
+            torch.arange(
+                self.cell_count,
+                dtype=torch.long,
+                device=self.areas.device,
+            ),
+            self.transpose_indptr[1:] - self.transpose_indptr[:-1],
+        )
+        flat = pixel_values.reshape(-1, self.pixel_count)
+        contributions = flat[:, self.transpose_indices] * self._weights(
+            semantics,
+            transposed=True,
+        )
+        output = flat.new_zeros((flat.shape[0], self.cell_count))
+        output.scatter_add_(
+            1,
+            cell_ids.expand(flat.shape[0], -1),
+            contributions,
+        )
+        return output.reshape(pixel_values.shape[:-1] + (self.cell_count,))
 
 
 def _validate_sites_and_radii(
@@ -597,9 +718,381 @@ def power_face_planes(
     return normals, offsets
 
 
+def _polygon_signed_area(vertices: Tensor) -> Tensor:
+    following = torch.roll(vertices, shifts=-1, dims=0)
+    return 0.5 * torch.sum(
+        vertices[:, 0] * following[:, 1] - vertices[:, 1] * following[:, 0]
+    )
+
+
+def _clip_polygon_half_plane(
+    vertices: Tensor,
+    normal: Tensor,
+    offset: Tensor,
+) -> Tensor:
+    """Clip one convex polygon by ``normal · x <= offset``."""
+    if vertices.shape[0] == 0:
+        return vertices
+    values = vertices @ normal - offset
+    scale = (
+        torch.abs(offset)
+        + torch.linalg.vector_norm(normal)
+        * torch.max(torch.linalg.vector_norm(vertices, dim=1))
+        + 1.0
+    )
+    tolerance = 64.0 * torch.finfo(vertices.dtype).eps * scale
+    inside = values <= tolerance
+    output: list[Tensor] = []
+    for index in range(vertices.shape[0]):
+        following = (index + 1) % vertices.shape[0]
+        start = vertices[index]
+        stop = vertices[following]
+        start_inside = bool(inside[index].item())
+        stop_inside = bool(inside[following].item())
+        if start_inside:
+            output.append(start)
+        if start_inside != stop_inside:
+            denominator = values[index] - values[following]
+            fraction = torch.clamp(values[index] / denominator, 0.0, 1.0)
+            output.append(start + fraction * (stop - start))
+    if not output:
+        return vertices.new_empty((0, 2))
+    return torch.stack(output)
+
+
+def _segment_circle_area(start: Tensor, stop: Tensor, radius: Tensor) -> Tensor:
+    """Return the signed disk intersection area swept by one polygon edge."""
+    delta = stop - start
+    quadratic = torch.dot(delta, delta)
+    if bool(quadratic == 0):
+        return start.new_zeros(())
+    linear = 2.0 * torch.dot(start, delta)
+    constant = torch.dot(start, start) - radius * radius
+    discriminant = linear * linear - 4.0 * quadratic * constant
+    parameters = [start.new_zeros(()), start.new_ones(())]
+    tolerance = (
+        64.0
+        * torch.finfo(start.dtype).eps
+        * (torch.abs(linear * linear) + torch.abs(4.0 * quadratic * constant) + 1.0)
+    )
+    if bool(discriminant >= -tolerance):
+        root = torch.sqrt(torch.clamp_min(discriminant, 0.0))
+        for parameter in (
+            (-linear - root) / (2.0 * quadratic),
+            (-linear + root) / (2.0 * quadratic),
+        ):
+            if bool((parameter > 0.0) & (parameter < 1.0)):
+                parameters.append(parameter)
+    parameters.sort(key=lambda value: float(value.item()))
+
+    area = start.new_zeros(())
+    for lower, upper in zip(parameters[:-1], parameters[1:], strict=True):
+        first = start + lower * delta
+        second = start + upper * delta
+        midpoint = 0.5 * (first + second)
+        cross = first[0] * second[1] - first[1] * second[0]
+        if bool(torch.dot(midpoint, midpoint) <= radius * radius + tolerance):
+            area = area + 0.5 * cross
+        else:
+            area = area + 0.5 * radius * radius * torch.atan2(
+                cross,
+                torch.dot(first, second),
+            )
+    return area
+
+
+def _polygon_disk_intersection_area(
+    vertices: Tensor,
+    center: Tensor,
+    radius: Tensor,
+) -> Tensor:
+    """Analytic area of a polygon intersected with a closed disk."""
+    if vertices.shape[0] < 3 or bool(radius <= 0):
+        return vertices.new_zeros(())
+    shifted = vertices - center
+    area = vertices.new_zeros(())
+    for index in range(shifted.shape[0]):
+        area = area + _segment_circle_area(
+            shifted[index],
+            shifted[(index + 1) % shifted.shape[0]],
+            radius,
+        )
+    return torch.abs(area)
+
+
+def _cell_clip_polygon(
+    vertices: Tensor,
+    *,
+    cell: int,
+    sites: Tensor,
+    radii: Tensor,
+    neighbors: Tensor,
+) -> Tensor:
+    clipped = vertices
+    for raw_neighbor in neighbors:
+        neighbor = int(raw_neighbor.item())
+        if neighbor == cell:
+            continue
+        normal = sites[neighbor] - sites[cell]
+        offset = 0.5 * (
+            torch.dot(sites[neighbor], sites[neighbor])
+            - torch.dot(sites[cell], sites[cell])
+            + radii[cell] * radii[cell]
+            - radii[neighbor] * radii[neighbor]
+        )
+        if bool(torch.all(normal == 0)):
+            if bool(offset < 0) or (bool(offset == 0) and neighbor < cell):
+                return vertices.new_empty((0, 2))
+            continue
+        clipped = _clip_polygon_half_plane(clipped, normal, offset)
+        if clipped.shape[0] == 0:
+            break
+    return clipped
+
+
+def _validate_csr(
+    indptr: Tensor,
+    indices: Tensor,
+    *,
+    rows: int,
+    columns: int,
+    name: str,
+    device: torch.device,
+) -> None:
+    if (
+        indptr.dtype != torch.long
+        or indices.dtype != torch.long
+        or indptr.device != device
+        or indices.device != device
+    ):
+        raise ValueError(f"{name} CSR tensors must be torch.long on the input device")
+    if indptr.shape != (rows + 1,) or indices.ndim != 1:
+        raise ValueError(f"{name} CSR has an invalid shape")
+    if (
+        int(indptr[0].item()) != 0
+        or int(indptr[-1].item()) != indices.numel()
+        or bool(torch.any(indptr[1:] < indptr[:-1]))
+    ):
+        raise ValueError(f"{name} indptr must be monotonic and span indices")
+    if indices.numel() and (
+        bool(torch.any(indices < 0)) or bool(torch.any(indices >= columns))
+    ):
+        raise ValueError(f"{name} indices contain an out-of-range entry")
+
+
+def bounded_power_pixel_operator(
+    pixel_polygons: Tensor,
+    sites: Tensor,
+    radii: Tensor,
+    *,
+    candidate_indptr: Tensor | None = None,
+    candidate_indices: Tensor | None = None,
+    neighbor_indptr: Tensor | None = None,
+    neighbor_indices: Tensor | None = None,
+    max_candidate_pairs: int = 1_000_000,
+) -> PowerPixelOperator:
+    """Build an exact sparse operator from bounded power cells to pixels.
+
+    Pixels are finite convex polygons with shape ``(P, V, 2)``. Candidate CSR
+    may conservatively include zero-area disk/pixel pairs; those are removed
+    after exact radical-half-plane clipping and analytic disk/polygon
+    integration. Neighbor CSR may use :func:`sparse_cech_graph`; omitted
+    neighbors use every site and are intended only as a small correctness path.
+    Curved WCS edges must first be adaptively tessellated to an error budget;
+    that controlled approximation is intentionally outside this exact
+    straight-edge operator and must not be reported as analytic pixel area.
+    """
+    _validate_sites_and_radii(sites, radii, allow_empty=True)
+    if sites.shape[1] != 2:
+        raise ValueError("bounded_power_pixel_operator requires 2-D sites")
+    if (
+        not pixel_polygons.is_floating_point()
+        or pixel_polygons.ndim != 3
+        or pixel_polygons.shape[-1] != 2
+        or pixel_polygons.shape[1] < 3
+    ):
+        raise ValueError("pixel_polygons must have floating shape (P, V>=3, 2)")
+    if pixel_polygons.device != sites.device or pixel_polygons.dtype != sites.dtype:
+        raise ValueError("pixels, sites, and radii must share dtype and device")
+    if not bool(torch.isfinite(pixel_polygons).all()):
+        raise ValueError("pixel polygons must be finite")
+    if pixel_polygons.shape[0]:
+        signed_pixel_areas = torch.stack(
+            [_polygon_signed_area(polygon) for polygon in pixel_polygons]
+        )
+        if bool(torch.any(torch.abs(signed_pixel_areas) == 0)):
+            raise ValueError("pixel polygons must have non-zero area")
+    edge_a = torch.roll(pixel_polygons, shifts=-1, dims=1) - pixel_polygons
+    edge_b = torch.roll(edge_a, shifts=-1, dims=1)
+    turns = edge_a[..., 0] * edge_b[..., 1] - edge_a[..., 1] * edge_b[..., 0]
+    positive = turns > 0
+    negative = turns < 0
+    if bool(torch.any(positive.any(dim=1) & negative.any(dim=1))):
+        raise ValueError("pixel polygons must be convex and consistently ordered")
+
+    pixel_count = pixel_polygons.shape[0]
+    cell_count = sites.shape[0]
+    candidate_limit = int(max_candidate_pairs)
+    if candidate_limit <= 0:
+        raise ValueError("max_candidate_pairs must be positive")
+    if (candidate_indptr is None) != (candidate_indices is None):
+        raise ValueError(
+            "candidate_indptr and candidate_indices must be supplied together"
+        )
+    if candidate_indptr is None:
+        candidate_count = pixel_count * cell_count
+        if candidate_count > candidate_limit:
+            raise ValueError(
+                f"dense fallback needs {candidate_count} candidate pairs, exceeding "
+                f"max_candidate_pairs={candidate_limit}; supply sparse candidate CSR"
+            )
+        candidate_indptr = (
+            torch.arange(
+                pixel_count + 1,
+                dtype=torch.long,
+                device=sites.device,
+            )
+            * cell_count
+        )
+        candidate_indices = torch.arange(
+            cell_count,
+            dtype=torch.long,
+            device=sites.device,
+        ).repeat(pixel_count)
+    assert candidate_indices is not None
+    _validate_csr(
+        candidate_indptr,
+        candidate_indices,
+        rows=pixel_count,
+        columns=cell_count,
+        name="candidate",
+        device=sites.device,
+    )
+    if candidate_indices.numel() > candidate_limit:
+        raise ValueError("candidate CSR exceeds max_candidate_pairs")
+
+    if (neighbor_indptr is None) != (neighbor_indices is None):
+        raise ValueError(
+            "neighbor_indptr and neighbor_indices must be supplied together"
+        )
+    if neighbor_indptr is not None:
+        assert neighbor_indices is not None
+        _validate_csr(
+            neighbor_indptr,
+            neighbor_indices,
+            rows=cell_count,
+            columns=cell_count,
+            name="neighbor",
+            device=sites.device,
+        )
+    all_cells = torch.arange(cell_count, dtype=torch.long, device=sites.device)
+
+    def neighbors(cell: int) -> Tensor:
+        if neighbor_indptr is None:
+            return all_cells
+        assert neighbor_indices is not None
+        return neighbor_indices[neighbor_indptr[cell] : neighbor_indptr[cell + 1]]
+
+    active_cells = torch.unique(candidate_indices, sorted=True)
+    cell_areas = sites.new_zeros((cell_count,))
+    for raw_cell in active_cells:
+        cell = int(raw_cell.item())
+        radius = radii[cell]
+        lower = sites[cell] - radius
+        upper = sites[cell] + radius
+        bounds = torch.stack(
+            (
+                lower,
+                torch.stack((upper[0], lower[1])),
+                upper,
+                torch.stack((lower[0], upper[1])),
+            )
+        )
+        cell_polygon = _cell_clip_polygon(
+            bounds,
+            cell=cell,
+            sites=sites,
+            radii=radii,
+            neighbors=neighbors(cell),
+        )
+        cell_areas[cell] = _polygon_disk_intersection_area(
+            cell_polygon,
+            sites[cell],
+            radius,
+        )
+
+    kept_pixels: list[int] = []
+    kept_cells: list[int] = []
+    kept_areas: list[Tensor] = []
+    row_counts: list[int] = []
+    for pixel in range(pixel_count):
+        row = torch.unique(
+            candidate_indices[candidate_indptr[pixel] : candidate_indptr[pixel + 1]],
+            sorted=True,
+        )
+        before = len(kept_areas)
+        for raw_cell in row:
+            cell = int(raw_cell.item())
+            clipped = _cell_clip_polygon(
+                pixel_polygons[pixel],
+                cell=cell,
+                sites=sites,
+                radii=radii,
+                neighbors=neighbors(cell),
+            )
+            area = _polygon_disk_intersection_area(
+                clipped,
+                sites[cell],
+                radii[cell],
+            )
+            if bool(area > 0):
+                kept_pixels.append(pixel)
+                kept_cells.append(cell)
+                kept_areas.append(area)
+        row_counts.append(len(kept_areas) - before)
+
+    indices = torch.tensor(kept_cells, dtype=torch.long, device=sites.device)
+    pixel_ids = torch.tensor(kept_pixels, dtype=torch.long, device=sites.device)
+    areas = torch.stack(kept_areas) if kept_areas else sites.new_empty((0,))
+    counts = torch.tensor(row_counts, dtype=torch.long, device=sites.device)
+    indptr = torch.cat(
+        (
+            torch.zeros(1, dtype=torch.long, device=sites.device),
+            torch.cumsum(counts, dim=0),
+        )
+    )
+    order = torch.argsort(pixel_ids, stable=True)
+    order = order[torch.argsort(indices[order], stable=True)]
+    transpose_indices = pixel_ids[order]
+    transpose_areas = areas[order]
+    transpose_counts = torch.bincount(indices, minlength=cell_count)
+    transpose_indptr = torch.cat(
+        (
+            torch.zeros(1, dtype=torch.long, device=sites.device),
+            torch.cumsum(transpose_counts, dim=0),
+        )
+    )
+    return PowerPixelOperator(
+        indptr=indptr,
+        indices=indices,
+        pixel_ids=pixel_ids,
+        areas=areas,
+        transpose_indptr=transpose_indptr,
+        transpose_indices=transpose_indices,
+        transpose_areas=transpose_areas,
+        cell_areas=cell_areas,
+        pixel_count=pixel_count,
+        cell_count=cell_count,
+        candidate_pairs=int(candidate_indices.numel()),
+    )
+
+
 __all__ = [
+    "PowerPixelOperator",
+    "PowerValueSemantics",
     "SparseCechGraph",
     "TileDiskCSR",
+    "bounded_power_pixel_operator",
     "bounded_power_ownership",
     "cech_adjacency",
     "power_distance",

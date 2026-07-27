@@ -50,7 +50,7 @@ not be presented as Foam.
   surrogate.
 - [x] Build a survey-scale overlap index before pair testing. Validate it against
   the exact chunked Čech reference and report candidate reduction and peak memory.
-- [ ] Construct per-cell neighbor CSR and tile-to-cell candidate lists without a
+- [x] Construct per-cell neighbor CSR and tile-to-cell candidate lists without a
   mandatory graphics or CUDA-only runtime dependency.
 - [ ] Implement exact clipped power-cell/pixel intersection in the local tangent
   plane, including flux-conserving area integration and an adjoint/dot-product
