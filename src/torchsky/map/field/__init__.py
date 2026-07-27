@@ -41,6 +41,7 @@ from .adaptive import (
 from .foam import (
     PowerPixelOperator,
     PowerValueSemantics,
+    SpectralPowerFoam,
     SparseCechGraph,
     TileDiskCSR,
     batched_bounded_power_pixel_operator,
@@ -244,6 +245,7 @@ __all__ = [
     "OperatorConstrainedFeatureField",
     "PowerPixelOperator",
     "PowerValueSemantics",
+    "SpectralPowerFoam",
     "SineImplicitField",
     "SparseCechGraph",
     "SkyEncoderBandpassField",

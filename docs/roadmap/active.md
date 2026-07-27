@@ -285,7 +285,7 @@ acceptable speed substitute.
   Local pixel/transpose CSR, area, `matvec`, and `rmatvec` equality pass for both
   value semantics, including candidate chunk size 3 versus the 4,096 default.
   The focused CUDA parity gate passed in session `o5ubrs02`.
-- [ ] Benchmark eager, `torch.compile`, and—only if still justified by
+- [x] Benchmark eager, `torch.compile`, and—only if still justified by
   profiling—one native CPU/CUDA kernel. Record candidates/s, intersections/s,
   peak allocation, synchronization count, and crossover size.
   Eager CPU at 256 sites/256 pixels: 0.136 s median and 18,699 candidates/s,
@@ -308,7 +308,17 @@ acceptable speed substitute.
   `/arc/projects/ots/torchsky-runs/20260726-foam-smooth-compile-1a47854/`.
   The steady-state gain is real, but whole-builder compilation is unsuitable
   for short CLI jobs; targeted numeric-kernel compilation remains the next gate
-  before deciding whether any native kernel is justified.
+  before deciding whether any native kernel is justified. Targeted compilation
+  at commit `8baa1b4` cut CPU warm-up/steady/RSS to 215.3 s, 0.208 s
+  (50,306 candidates/s), and 1,132,908,544 bytes; H100 CUDA fell to 87.3 s
+  warm-up and 0.0843 s steady (123,887 candidates/s), with 32,192,000-byte CUDA
+  allocation and 2,190,807,040-byte process RSS. Artifacts:
+  `/arc/projects/ots/torchsky-runs/20260726-foam-targeted-compile-8baa1b4/`.
+  There are no per-candidate host synchronizations in either batched execution;
+  trust-boundary validation and one maximum-neighbor scalar remain eager. Eager
+  stays the short-job default, targeted compile is the long-lived compromise,
+  and whole-builder compile is the maximum-throughput option. A native kernel
+  is not justified before a real downstream profile exceeds these baselines.
 - [x] Run small/medium/large CANFAR CPU/CUDA cases, define a production
   throughput baseline, and only then use the renderer in spectral Foam fitting.
   Evidence: sessions `o5ubrs02` and `idnlgxh7`, exact commit `d5408df`.
@@ -413,6 +423,47 @@ Focused continuation:
 
 ```bash
 pixi run -e test -- pytest tests/test_map_field_foam_spectral.py -q
+pixi run preflight-push
+```
+
+## Checkpoint 3F — Trainable Shared-Geometry Spectral Foam
+
+The trainable field reuses the gated smooth/hard split. Geometry is shared over
+wavelength; cell appearance is expressed in caller-supplied spectral bases so
+physical templates, learned decoders, broadband quadrature, and IFU channels
+remain interoperable.
+
+- [x] Add one trainable module containing shared 2-D sites, strictly positive
+  radii, and per-cell spectral-basis coefficients without owning WCS, bandpass,
+  or FITS concerns.
+  Evidence: `SpectralPowerFoam`; radii use a stable inverse-softplus
+  initialization plus an explicit non-negative floor, while sites and spectral
+  coefficients are ordinary Torch parameters.
+- [x] Render point/wavelength samples through smooth bounded ownership with
+  finite joint gradients for sites, radii, coefficients, queries, and basis
+  values; keep missing union mass explicitly zero/background.
+  Evidence: functional equality and joint-gradient tests cover all five
+  differentiable inputs; the smooth union occupancy supplies zero uncovered
+  mass without a hidden diffuse component.
+- [x] Render the same learned coefficients through a caller-supplied exact
+  `PowerPixelOperator`, and gate equality with the functional spectral path.
+  Evidence: `SpectralPowerFoam.render_exact` matches
+  `render_power_spectral_basis` under both surface-brightness and
+  integrated-flux semantics; five focused model tests pass.
+- [ ] Recover a seeded two-cell geometry/colour fixture from held-out spatial
+  and spectral samples, then report exact-pixel held-out error after the hard
+  inference handoff.
+  Local smoke: 1,500 samples with a fixed modulo-five validation split and
+  0.002 noise, 400 Adam steps in 0.212 s CPU, validation MSE
+  `0.396 -> 4.00e-6`, and exact two-band pixel relative RMSE `2.45e-4`;
+  CPU/CUDA CANFAR evidence remains unchecked.
+- [ ] Build the larger pre-registered multi-band injection/recovery benchmark
+  before making any depth claim.
+
+Focused continuation:
+
+```bash
+pixi run -e test -- pytest tests/test_map_field_foam_model.py -q
 pixi run preflight-push
 ```
 

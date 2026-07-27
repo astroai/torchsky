@@ -417,6 +417,132 @@ def smooth_bounded_power_weights(
     return conditional * union_occupancy
 
 
+class SpectralPowerFoam(torch.nn.Module):
+    """Trainable shared geometry with caller-defined spectral basis values.
+
+    Smooth point queries are the optimization path. :meth:`render_exact` reuses
+    the learned appearance coefficients with a hard ``PowerPixelOperator`` built
+    from detached geometry for scientific inference.
+    """
+
+    def __init__(
+        self,
+        sites: Tensor,
+        radii: Tensor,
+        cell_coefficients: Tensor,
+        *,
+        minimum_radius: float = 0.0,
+    ) -> None:
+        super().__init__()
+        _validate_sites_and_radii(sites, radii, allow_empty=False)
+        if sites.shape[1] != 2:
+            raise ValueError("SpectralPowerFoam requires 2-D sites")
+        if (
+            not cell_coefficients.is_floating_point()
+            or cell_coefficients.ndim != 2
+            or cell_coefficients.shape[0] != sites.shape[0]
+            or cell_coefficients.shape[1] == 0
+        ):
+            raise ValueError("cell_coefficients must have shape (cells, basis>=1)")
+        if (
+            cell_coefficients.device != sites.device
+            or cell_coefficients.dtype != sites.dtype
+        ):
+            raise ValueError(
+                "sites, radii, and cell_coefficients must share dtype and device"
+            )
+        if not bool(torch.isfinite(cell_coefficients).all()):
+            raise ValueError("cell_coefficients must be finite")
+        radius_floor = float(minimum_radius)
+        if not math.isfinite(radius_floor) or radius_floor < 0.0:
+            raise ValueError("minimum_radius must be finite and non-negative")
+        shifted = radii.detach() - radius_floor
+        if bool(torch.any(shifted < 0)):
+            raise ValueError("initial radii must be at least minimum_radius")
+        scale = torch.clamp(radii.detach().abs().max(), min=1.0)
+        shifted = torch.clamp(
+            shifted,
+            min=torch.finfo(radii.dtype).eps * scale,
+        )
+        raw_radii = shifted + torch.log(-torch.expm1(-shifted))
+
+        self.sites = torch.nn.Parameter(sites.detach().clone())
+        self.raw_radii = torch.nn.Parameter(raw_radii)
+        self.cell_coefficients = torch.nn.Parameter(
+            cell_coefficients.detach().clone()
+        )
+        self.register_buffer(
+            "_minimum_radius",
+            radii.new_tensor(radius_floor),
+        )
+
+    @property
+    def radii(self) -> Tensor:
+        """Strictly positive trainable radii in the geometry coordinate unit."""
+        return self._minimum_radius + torch.nn.functional.softplus(self.raw_radii)
+
+    @property
+    def basis_count(self) -> int:
+        return int(self.cell_coefficients.shape[1])
+
+    def forward(
+        self,
+        points: Tensor,
+        basis_values: Tensor,
+        *,
+        power_temperature: float = 10.0,
+        support_temperature: float = 10.0,
+    ) -> Tensor:
+        """Evaluate smooth point samples; uncovered union mass contributes zero."""
+        if (
+            not basis_values.is_floating_point()
+            or basis_values.ndim < 1
+            or basis_values.shape[-1] != self.basis_count
+        ):
+            raise ValueError("basis_values must have shape (..., basis)")
+        if (
+            basis_values.device != self.sites.device
+            or basis_values.dtype != self.sites.dtype
+        ):
+            raise ValueError("basis_values must match model dtype and device")
+        if basis_values.ndim > 1 and basis_values.shape[:-1] != points.shape[:-1]:
+            raise ValueError(
+                "non-scalar basis_values leading shape must match points"
+            )
+        weights = smooth_bounded_power_weights(
+            points,
+            self.sites,
+            self.radii,
+            power_temperature=power_temperature,
+            support_temperature=support_temperature,
+        )
+        cell_values = torch.einsum(
+            "...k,ck->...c",
+            basis_values,
+            self.cell_coefficients,
+        )
+        return torch.sum(weights * cell_values, dim=-1)
+
+    def render_exact(
+        self,
+        operator: PowerPixelOperator,
+        basis_samples: Tensor,
+        response_weights: Tensor,
+        *,
+        semantics: PowerValueSemantics = "surface_brightness",
+    ) -> Tensor:
+        """Render hard pixels with an operator built from detached model geometry."""
+        if operator.cell_count != self.sites.shape[0]:
+            raise ValueError("operator cell count must match the model")
+        return render_power_spectral_basis(
+            operator,
+            self.cell_coefficients,
+            basis_samples,
+            response_weights,
+            semantics=semantics,
+        )
+
+
 def cech_adjacency(
     sites: Tensor,
     radii: Tensor,
@@ -1670,6 +1796,7 @@ def batched_bounded_power_pixel_operator(
 __all__ = [
     "PowerPixelOperator",
     "PowerValueSemantics",
+    "SpectralPowerFoam",
     "SparseCechGraph",
     "TileDiskCSR",
     "batched_bounded_power_pixel_operator",
