@@ -8,8 +8,9 @@ needs sparse candidate construction and pixel/cell intersection integration.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import math
-from typing import Literal
+from typing import Any, Literal
 
 import torch
 from torch import Tensor
@@ -1444,6 +1445,15 @@ def _batched_polygon_disk_area(
     return torch.abs(torch.sum(intervals * valid_edges[..., None], dim=(1, 2)))
 
 
+@lru_cache(maxsize=1)
+def _compiled_batched_power_kernels() -> tuple[Any, Any]:
+    """Create compiled numeric kernels lazily; validation and assembly stay eager."""
+    return (
+        torch.compile(_batched_clip_power_cells, fullgraph=True),
+        torch.compile(_batched_polygon_disk_area, fullgraph=True),
+    )
+
+
 def batched_bounded_power_pixel_operator(
     pixel_polygons: Tensor,
     sites: Tensor,
@@ -1456,6 +1466,7 @@ def batched_bounded_power_pixel_operator(
     max_candidate_pairs: int = 1_000_000,
     max_packed_vertices: int = 64,
     candidate_chunk_size: int = 4096,
+    kernel_execution: Literal["eager", "compile"] = "eager",
 ) -> PowerPixelOperator:
     """Build the exact operator with batched Torch clipping and area integration.
 
@@ -1512,6 +1523,13 @@ def batched_bounded_power_pixel_operator(
     chunk_size = int(candidate_chunk_size)
     if chunk_size <= 0:
         raise ValueError("candidate_chunk_size must be positive")
+    if kernel_execution == "eager":
+        clip_cells = _batched_clip_power_cells
+        polygon_disk_area = _batched_polygon_disk_area
+    elif kernel_execution == "compile":
+        clip_cells, polygon_disk_area = _compiled_batched_power_kernels()
+    else:
+        raise ValueError("kernel_execution must be 'eager' or 'compile'")
 
     candidate_pixels = torch.repeat_interleave(
         torch.arange(pixel_count, device=sites.device),
@@ -1557,14 +1575,14 @@ def batched_bounded_power_pixel_operator(
             cell_count=cell_count,
             max_neighbors=max_neighbors,
         )
-        cell_vertices, cell_counts = _batched_clip_power_cells(
+        cell_vertices, cell_counts = clip_cells(
             bounds,
             chunk_cells,
             chunk_neighbors,
             sites,
             radii,
         )
-        cell_areas[chunk_cells] = _batched_polygon_disk_area(
+        cell_areas[chunk_cells] = polygon_disk_area(
             cell_vertices,
             cell_counts,
             sites[chunk_cells],
@@ -1584,14 +1602,14 @@ def batched_bounded_power_pixel_operator(
             cell_count=cell_count,
             max_neighbors=max_neighbors,
         )
-        vertices, counts = _batched_clip_power_cells(
+        vertices, counts = clip_cells(
             pixel_polygons[chunk_pixels],
             chunk_cells,
             chunk_neighbors,
             sites,
             radii,
         )
-        chunk_areas = _batched_polygon_disk_area(
+        chunk_areas = polygon_disk_area(
             vertices,
             counts,
             sites[chunk_cells],

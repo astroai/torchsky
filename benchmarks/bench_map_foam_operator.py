@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
 import json
 from pathlib import Path
 import resource
@@ -49,9 +50,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--execution",
-        choices=("eager", "compile"),
+        choices=("eager", "compile", "compile-kernels"),
         default="eager",
-        help="Compile the selected builder and report first-call warm-up separately",
+        help="Compile the whole builder or only its batched numeric kernels",
     )
     parser.add_argument("--oracle-resolution", type=int, default=256)
     parser.add_argument(
@@ -125,10 +126,19 @@ def main() -> int:
         if args.implementation == "batched"
         else bounded_power_pixel_operator
     )
+    if args.execution == "compile-kernels":
+        if args.implementation != "batched":
+            raise ValueError("compile-kernels requires --implementation batched")
+        builder = partial(
+            batched_bounded_power_pixel_operator,
+            kernel_execution="compile",
+        )
+
     compile_warmup_seconds = None
     operator = None
-    if args.execution == "compile":
-        builder = torch.compile(builder)
+    if args.execution in ("compile", "compile-kernels"):
+        if args.execution == "compile":
+            builder = torch.compile(builder)
         _synchronize(device)
         started = time.perf_counter()
         operator = builder(

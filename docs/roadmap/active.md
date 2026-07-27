@@ -299,8 +299,16 @@ acceptable speed substitute.
   0.240 s (43,535 candidates/s, 85,896,704-byte peak CUDA allocation).
   Artifacts:
   `/arc/projects/ots/torchsky-runs/20260726-foam-batched-cpu-cuda-d5408df/`.
-  `torch.compile` remains unchecked; no native kernel is justified before that
-  measurement.
+  Whole-builder `torch.compile` at commit `1a47854` reduced the same CPU case to
+  0.230 s (45,378 candidates/s) after a 423.1 s warm-up, but raised operator
+  peak RSS to 1,495,138,304 bytes. H100 CUDA fell to 0.0414 s
+  (252,514 candidates/s) after a 232.5 s warm-up, with 32,103,936-byte peak CUDA
+  allocation and 4,489,248,768-byte process peak RSS. Both retained identical
+  topology and tight area agreement. Artifacts:
+  `/arc/projects/ots/torchsky-runs/20260726-foam-smooth-compile-1a47854/`.
+  The steady-state gain is real, but whole-builder compilation is unsuitable
+  for short CLI jobs; targeted numeric-kernel compilation remains the next gate
+  before deciding whether any native kernel is justified.
 - [x] Run small/medium/large CANFAR CPU/CUDA cases, define a production
   throughput baseline, and only then use the renderer in spectral Foam fitting.
   Evidence: sessions `o5ubrs02` and `idnlgxh7`, exact commit `d5408df`.
@@ -390,8 +398,14 @@ channel.
   Evidence: `tests/test_map_field_foam_spectral.py`; five local tests pass,
   including manual response contraction, the exact `rmatvec` adjoint, and finite
   coefficient/basis gradients.
-- [ ] Run CPU/CUDA matched multi-band benchmarks and compare shared-geometry
+- [x] Run CPU/CUDA matched multi-band benchmarks and compare shared-geometry
   execution against independent per-band operator construction.
+  Evidence: CANFAR session `so72vztv`, exact commit `e8accfd`, six channels,
+  nine spectral samples, 1,000 sites, 1,024 pixels, and identical inputs. Shared
+  geometry exactly matched six independent operator outputs while reducing CPU
+  median time from 2.638 to 0.527 s (5.01x) and H100 CUDA from 1.034 to
+  0.244 s (4.24x). Shared CUDA peak allocation was 115,358,720 bytes. Artifacts:
+  `/arc/projects/ots/torchsky-runs/20260726-foam-spectral-e8accfd/`.
 - [ ] Only after those gates, build a trainable shared-geometry spectral Foam
   field and the seeded multi-band depth experiment.
 
