@@ -7,33 +7,65 @@ needs sparse candidate construction and pixel/cell intersection integration.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
 
 import torch
 from torch import Tensor
 
 
-def _validate_power_inputs(points: Tensor, sites: Tensor, radii: Tensor) -> None:
-    if not points.is_floating_point() or not sites.is_floating_point():
-        raise TypeError("points and sites must be floating-point tensors")
-    if points.ndim < 1 or sites.ndim != 2:
-        raise ValueError("points must end in coordinates and sites must have shape (N, D)")
-    if points.shape[-1] != sites.shape[-1]:
-        raise ValueError("points and sites must have the same coordinate dimension")
-    if sites.shape[0] == 0:
+@dataclass(frozen=True)
+class SparseCechGraph:
+    """Experimental exact Čech graph plus its sparse-index diagnostics."""
+
+    candidate_pairs: Tensor
+    edges: Tensor
+    indptr: Tensor
+    indices: Tensor
+    total_pairs: int
+    site_bin_memberships: int
+    occupied_bins: int
+    bin_size: float
+
+
+def _validate_sites_and_radii(
+    sites: Tensor,
+    radii: Tensor,
+    *,
+    allow_empty: bool,
+) -> None:
+    if not sites.is_floating_point():
+        raise TypeError("sites must be a floating-point tensor")
+    if sites.ndim != 2:
+        raise ValueError("sites must have shape (N, D)")
+    if not allow_empty and sites.shape[0] == 0:
         raise ValueError("at least one power site is required")
     if radii.ndim != 1 or radii.shape[0] != sites.shape[0]:
         raise ValueError("radii must have shape (N,) matching sites")
-    if points.device != sites.device or sites.device != radii.device:
-        raise ValueError("points, sites, and radii must be on the same device")
-    if points.dtype != sites.dtype or sites.dtype != radii.dtype:
-        raise ValueError("points, sites, and radii must have the same dtype")
-    if not bool(torch.isfinite(points).all()):
-        raise ValueError("points must be finite")
+    if sites.device != radii.device:
+        raise ValueError("sites and radii must be on the same device")
+    if sites.dtype != radii.dtype:
+        raise ValueError("sites and radii must have the same dtype")
     if not bool(torch.isfinite(sites).all()):
         raise ValueError("sites must be finite")
     if not bool(torch.isfinite(radii).all()) or bool(torch.any(radii < 0)):
         raise ValueError("radii must be finite and non-negative")
+
+
+def _validate_power_inputs(points: Tensor, sites: Tensor, radii: Tensor) -> None:
+    _validate_sites_and_radii(sites, radii, allow_empty=False)
+    if not points.is_floating_point():
+        raise TypeError("points must be a floating-point tensor")
+    if points.ndim < 1:
+        raise ValueError("points must end in coordinates")
+    if points.shape[-1] != sites.shape[-1]:
+        raise ValueError("points and sites must have the same coordinate dimension")
+    if points.device != sites.device:
+        raise ValueError("points, sites, and radii must be on the same device")
+    if points.dtype != sites.dtype:
+        raise ValueError("points, sites, and radii must have the same dtype")
+    if not bool(torch.isfinite(points).all()):
+        raise ValueError("points must be finite")
 
 
 def power_distance(points: Tensor, sites: Tensor, radii: Tensor) -> Tensor:
@@ -146,6 +178,211 @@ def cech_adjacency(
     return torch.cat(edges, dim=0).transpose(0, 1).contiguous()
 
 
+def _empty_sparse_cech_graph(
+    sites: Tensor,
+    *,
+    bin_size: float,
+    site_bin_memberships: int = 0,
+    occupied_bins: int = 0,
+) -> SparseCechGraph:
+    empty_pairs = torch.empty((2, 0), dtype=torch.long, device=sites.device)
+    return SparseCechGraph(
+        candidate_pairs=empty_pairs,
+        edges=empty_pairs,
+        indptr=torch.zeros(
+            sites.shape[0] + 1,
+            dtype=torch.long,
+            device=sites.device,
+        ),
+        indices=torch.empty((0,), dtype=torch.long, device=sites.device),
+        total_pairs=sites.shape[0] * (sites.shape[0] - 1) // 2,
+        site_bin_memberships=site_bin_memberships,
+        occupied_bins=occupied_bins,
+        bin_size=bin_size,
+    )
+
+
+def sparse_cech_graph(
+    sites: Tensor,
+    radii: Tensor,
+    *,
+    bin_size: float | None = None,
+    max_site_bin_memberships: int = 10_000_000,
+    max_candidate_pairs: int = 50_000_000,
+) -> SparseCechGraph:
+    """Build an exact 2-D Čech graph through a Torch-native uniform-grid index.
+
+    Each disk is inserted into every grid bin touched by its axis-aligned
+    bounding box. Candidate pairs share at least one bin, then the exact
+    disk-overlap predicate is applied. ``edges`` stores each overlap once as
+    ``i < j``; ``indptr`` and ``indices`` store the same graph symmetrically.
+    """
+    _validate_sites_and_radii(sites, radii, allow_empty=True)
+    if sites.shape[1] != 2:
+        raise ValueError("sparse_cech_graph currently requires 2-D disk sites")
+    membership_limit = int(max_site_bin_memberships)
+    candidate_limit = int(max_candidate_pairs)
+    if membership_limit <= 0 or candidate_limit <= 0:
+        raise ValueError("sparse Čech allocation limits must be positive")
+
+    if bin_size is None:
+        max_radius = float(radii.max().item()) if radii.numel() else 0.0
+        width = 2.0 * max_radius if max_radius > 0.0 else 1.0
+    else:
+        width = float(bin_size)
+    if not math.isfinite(width) or width <= 0.0:
+        raise ValueError("bin_size must be finite and positive")
+    if sites.shape[0] < 2:
+        return _empty_sparse_cech_graph(sites, bin_size=width)
+
+    with torch.no_grad():
+        index_dtype = (
+            torch.float32 if sites.device.type == "mps" else torch.float64
+        )
+        index_sites = sites.detach().to(dtype=index_dtype)
+        index_radii = radii.detach().to(dtype=index_dtype).unsqueeze(-1)
+        lower = index_sites - index_radii
+        upper = index_sites + index_radii
+        origin = lower.amin(dim=0)
+        lower_bin = torch.floor((lower - origin) / width).to(dtype=torch.long)
+        upper_bin = torch.floor((upper - origin) / width).to(dtype=torch.long)
+        lower_bin = lower_bin.clamp_min(0)
+        upper_bin = torch.maximum(upper_bin, lower_bin)
+        spans = upper_bin - lower_bin + 1
+        membership_counts = spans[:, 0] * spans[:, 1]
+        membership_count = int(membership_counts.sum().item())
+        if membership_count > membership_limit:
+            raise ValueError(
+                f"uniform-grid index needs {membership_count} site-bin memberships, "
+                f"exceeding max_site_bin_memberships={membership_limit}; increase "
+                "bin_size or the explicit limit"
+            )
+
+        site_ids = torch.repeat_interleave(
+            torch.arange(sites.shape[0], device=sites.device),
+            membership_counts,
+        )
+        membership_offsets = torch.cumsum(membership_counts, dim=0) - membership_counts
+        local = torch.arange(membership_count, device=sites.device) - (
+            torch.repeat_interleave(membership_offsets, membership_counts)
+        )
+        span_x = spans[site_ids, 0]
+        bin_x = lower_bin[site_ids, 0] + torch.remainder(local, span_x)
+        bin_y = lower_bin[site_ids, 1] + torch.div(
+            local,
+            span_x,
+            rounding_mode="floor",
+        )
+        bin_columns = int(upper_bin[:, 0].max().item()) + 1
+        max_bin_y = int(upper_bin[:, 1].max().item())
+        if max_bin_y > (torch.iinfo(torch.long).max - bin_columns + 1) // bin_columns:
+            raise ValueError("uniform-grid key range exceeds int64")
+        bin_keys = bin_y * bin_columns + bin_x
+
+        order = torch.argsort(site_ids, stable=True)
+        order = order[torch.argsort(bin_keys[order], stable=True)]
+        sorted_keys = bin_keys[order]
+        sorted_sites = site_ids[order]
+        _, bin_counts = torch.unique_consecutive(sorted_keys, return_counts=True)
+        occupied_bins = int(bin_counts.numel())
+        pair_counts = bin_counts * (bin_counts - 1) // 2
+        raw_pair_count = int(pair_counts.sum().item())
+        if raw_pair_count > candidate_limit:
+            raise ValueError(
+                f"uniform-grid bins produce {raw_pair_count} raw candidate pairs, "
+                f"exceeding max_candidate_pairs={candidate_limit}; decrease "
+                "occupancy with a smaller bin_size or raise the explicit limit"
+            )
+        if raw_pair_count == 0:
+            return _empty_sparse_cech_graph(
+                sites,
+                bin_size=width,
+                site_bin_memberships=membership_count,
+                occupied_bins=occupied_bins,
+            )
+
+        group_ids = torch.repeat_interleave(
+            torch.arange(occupied_bins, device=sites.device),
+            pair_counts,
+        )
+        pair_offsets = torch.cumsum(pair_counts, dim=0) - pair_counts
+        pair_rank = torch.arange(raw_pair_count, device=sites.device) - (
+            torch.repeat_interleave(pair_offsets, pair_counts)
+        )
+        group_size = bin_counts[group_ids]
+        solve_dtype = (
+            torch.float32 if sites.device.type == "mps" else torch.float64
+        )
+        diagonal = (2 * group_size - 1).to(dtype=solve_dtype)
+        row = torch.floor(
+            0.5
+            * (
+                diagonal
+                - torch.sqrt(
+                    diagonal * diagonal - 8.0 * pair_rank.to(dtype=solve_dtype)
+                )
+            )
+        ).to(dtype=torch.long)
+        row_start = row * (2 * group_size - row - 1) // 2
+        row = torch.where(row_start > pair_rank, row - 1, row)
+        row_start = row * (2 * group_size - row - 1) // 2
+        next_start = (row + 1) * (2 * group_size - row - 2) // 2
+        row = torch.where(next_start <= pair_rank, row + 1, row)
+        row_start = row * (2 * group_size - row - 1) // 2
+        column = row + 1 + pair_rank - row_start
+        group_start = (torch.cumsum(bin_counts, dim=0) - bin_counts)[group_ids]
+        pairs = torch.stack(
+            (
+                sorted_sites[group_start + row],
+                sorted_sites[group_start + column],
+            ),
+            dim=1,
+        )
+        pairs = torch.unique(torch.sort(pairs, dim=1).values, dim=0, sorted=True)
+        pair_order = torch.argsort(pairs[:, 1], stable=True)
+        pairs = pairs[pair_order]
+        pairs = pairs[torch.argsort(pairs[:, 0], stable=True)]
+        candidate_pairs = pairs.transpose(0, 1).contiguous()
+
+        left, right = candidate_pairs
+        delta = sites[left] - sites[right]
+        radius_sum = radii[left] + radii[right]
+        overlap = torch.sum(delta * delta, dim=-1) <= radius_sum * radius_sum
+        edges = candidate_pairs[:, overlap]
+        if edges.shape[1] == 0:
+            indptr = torch.zeros(
+                sites.shape[0] + 1,
+                dtype=torch.long,
+                device=sites.device,
+            )
+            indices = torch.empty((0,), dtype=torch.long, device=sites.device)
+        else:
+            rows = torch.cat((edges[0], edges[1]))
+            columns = torch.cat((edges[1], edges[0]))
+            csr_order = torch.argsort(columns, stable=True)
+            csr_order = csr_order[torch.argsort(rows[csr_order], stable=True)]
+            rows = rows[csr_order]
+            indices = columns[csr_order]
+            row_counts = torch.bincount(rows, minlength=sites.shape[0])
+            indptr = torch.cat(
+                (
+                    torch.zeros(1, dtype=torch.long, device=sites.device),
+                    torch.cumsum(row_counts, dim=0),
+                )
+            )
+
+    return SparseCechGraph(
+        candidate_pairs=candidate_pairs,
+        edges=edges,
+        indptr=indptr,
+        indices=indices,
+        total_pairs=sites.shape[0] * (sites.shape[0] - 1) // 2,
+        site_bin_memberships=membership_count,
+        occupied_bins=occupied_bins,
+        bin_size=width,
+    )
+
+
 def power_face_planes(
     sites: Tensor,
     radii: Tensor,
@@ -175,9 +412,11 @@ def power_face_planes(
 
 
 __all__ = [
+    "SparseCechGraph",
     "bounded_power_ownership",
     "cech_adjacency",
     "power_distance",
     "power_face_planes",
     "soft_bounded_power_weights",
+    "sparse_cech_graph",
 ]

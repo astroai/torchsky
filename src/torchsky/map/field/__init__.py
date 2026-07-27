@@ -39,11 +39,13 @@ from .adaptive import (
     residual_tile_basis_spec_from_observation,
 )
 from .foam import (
+    SparseCechGraph,
     bounded_power_ownership,
     cech_adjacency,
     power_distance,
     power_face_planes,
     soft_bounded_power_weights,
+    sparse_cech_graph,
 )
 from .core import (
     BandpassConditionedField,
@@ -228,6 +230,7 @@ __all__ = [
     "LearnedSpectralBasisField",
     "OperatorConstrainedFeatureField",
     "SineImplicitField",
+    "SparseCechGraph",
     "SkyEncoderBandpassField",
     "SkyEncoderMLPField",
     "SkyEncoderResMLPField",
@@ -272,6 +275,7 @@ __all__ = [
     "power_face_planes",
     "save_strainer_trunk_checkpoint",
     "soft_bounded_power_weights",
+    "sparse_cech_graph",
     "multi_survey_charbonnier_loss",
     "networks",
     "noise",

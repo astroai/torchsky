@@ -76,22 +76,37 @@ The exact dense `cech_adjacency` remains the correctness oracle. The production
 path will reduce pair tests with a Torch-native uniform-grid index and retain the
 exact disk-overlap predicate.
 
-- [ ] Define an experimental result contract containing deterministic unique
+- [x] Define an experimental result contract containing deterministic unique
   candidate pairs, exact overlap edges, symmetric neighbor CSR, and candidate
   reduction counters without adding a runtime dependency.
-- [ ] Bin finite non-negative-radius disks by AABB coverage, sort
+  Evidence: `SparseCechGraph` in `map.field.foam`.
+- [x] Bin finite non-negative-radius disks by AABB coverage, sort
   `(bin_key, site_id)` pairs with Torch operations, and generate unique pairs
   only from shared bins.
-- [ ] Apply the exact Čech predicate after candidate generation; never use the
+  Evidence: `sparse_cech_graph`; the default bin width bounds each disk to at
+  most four memberships while explicit widths remain allocation-guarded.
+- [x] Apply the exact Čech predicate after candidate generation; never use the
   binning approximation as the final topology.
+  Evidence: squared-distance overlap is applied only after unique candidates.
 - [ ] Produce deterministic symmetric CSR (`indptr`, `indices`) on CPU and CUDA.
-- [ ] Gate exact equality against the dense oracle on randomized, equal-center,
+  Local CPU and MPS parity/determinism pass; CUDA remains a CANFAR gate.
+- [x] Gate exact equality against the dense oracle on randomized, equal-center,
   zero-radius, touching, separated, large-radius, and chunked inputs.
+  Evidence: `tests/test_map_field_foam.py`, 11 passed and one CUDA skip.
 - [ ] Gate translation, rotation, uniform-scale, dtype, empty-input, and
   device-parity behavior.
-- [ ] Add a benchmark that records total possible pairs, candidate pairs, exact
+  CPU/MPS and float32/float64 behavior pass; CUDA remains a CANFAR gate.
+- [x] Add a benchmark that records total possible pairs, candidate pairs, exact
   edges, reduction ratio, wall time, and peak device memory.
+  Evidence: `benchmarks/bench_map_foam_sparse.py` and Pixi task
+  `bench-map-foam-sparse`.
 - [ ] Run small/medium local benchmarks and large CPU/CUDA CANFAR staging runs.
+  Local evidence at 100,000 sites: 4,999,950,000 total pairs, 84,647 candidates,
+  25,389 exact edges, 99.9983% candidate reduction, 0.424 s median CPU wall time,
+  and exact parity on a 2,000-site dense oracle. At 1,000,000 sites: 848,574
+  candidates from 499,999,500,000 pairs, 253,942 exact edges, 99.99983%
+  reduction, 4.36 s median, and 1.50 GiB peak process RSS. CANFAR remains
+  pending.
 - [ ] Check the parent roadmap's survey-scale overlap-index box only after the
   exact parity and CANFAR evidence are recorded.
 
