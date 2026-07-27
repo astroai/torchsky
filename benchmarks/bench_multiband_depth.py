@@ -13,10 +13,15 @@ from dataclasses import asdict, dataclass
 import json
 import math
 from pathlib import Path
+import tempfile
+import time
 from typing import Sequence
 
 import torch
 import torch.nn.functional as F
+
+import torchsky
+from torchsky.map import ImageObservation, coadd_image_plane
 
 
 _SOURCE_KINDS = (
@@ -109,6 +114,35 @@ class MatchResult:
     distances_px: tuple[float, ...]
     unmatched_truth: tuple[int, ...]
     unmatched_detections: tuple[int, ...]
+
+
+@dataclass
+class SyntheticExposureSet:
+    """Dithered detector images and their explicit WCS/noise contract."""
+
+    images: torch.Tensor
+    headers: tuple[dict[str, object], ...]
+    target_header: dict[str, object]
+    noise_sigma: torch.Tensor
+    dither_xy_px: torch.Tensor
+
+    def __post_init__(self) -> None:
+        if self.images.ndim != 4:
+            raise ValueError("images must have shape (exposures, bands, height, width)")
+        exposures, bands = self.images.shape[:2]
+        if len(self.headers) != exposures:
+            raise ValueError("one header is required per exposure")
+        if self.noise_sigma.shape != (bands,):
+            raise ValueError("noise_sigma must have shape (bands,)")
+        if self.dither_xy_px.shape != (exposures, 2):
+            raise ValueError("dither_xy_px must have shape (exposures, 2)")
+        if (
+            not torch.isfinite(self.images).all()
+            or not torch.isfinite(self.noise_sigma).all()
+            or not torch.isfinite(self.dither_xy_px).all()
+            or torch.any(self.noise_sigma <= 0)
+        ):
+            raise ValueError("exposure tensors must be finite and noise positive")
 
 
 def make_seed_manifest(root_seed: int) -> SeedManifest:
@@ -288,6 +322,172 @@ def render_truth(
         spatial_oversample=spatial_oversample,
     )
     return torch.einsum("nb,nhw->bhw", catalog.band_flux, profiles)
+
+
+def simple_tan_header(
+    height: int,
+    width: int,
+    *,
+    pixel_scale_arcsec: float = 0.04,
+    dither_xy_px: tuple[float, float] = (0.0, 0.0),
+) -> dict[str, object]:
+    """Return the small deterministic TAN grid used by synthetic detector data."""
+
+    if height < 1 or width < 1:
+        raise ValueError("image dimensions must be positive")
+    if pixel_scale_arcsec <= 0:
+        raise ValueError("pixel_scale_arcsec must be positive")
+    scale_deg = pixel_scale_arcsec / 3600.0
+    return {
+        "NAXIS": 2,
+        "NAXIS1": width,
+        "NAXIS2": height,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRVAL1": 110.0,
+        "CRVAL2": -73.0,
+        "CRPIX1": (width + 1.0) / 2.0 + dither_xy_px[0],
+        "CRPIX2": (height + 1.0) / 2.0 + dither_xy_px[1],
+        "CD1_1": -scale_deg,
+        "CD1_2": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": scale_deg,
+    }
+
+
+def _sample_target_cube(
+    cube: torch.Tensor,
+    *,
+    target_header: dict[str, object],
+    detector_header: dict[str, object],
+) -> torch.Tensor:
+    """Sample a target-plane cube at detector pixel centres through Torchsky WCS."""
+
+    height, width = cube.shape[-2:]
+    y, x = torch.meshgrid(
+        torch.arange(height, device=cube.device, dtype=torch.float64),
+        torch.arange(width, device=cube.device, dtype=torch.float64),
+        indexing="ij",
+    )
+    ra, dec = torchsky.WCS(detector_header).pixel_to_world(x, y)
+    target_x, target_y = torchsky.WCS(target_header).world_to_pixel(ra, dec)
+    grid = torch.stack(
+        (
+            target_x.to(cube.dtype) / max(width - 1, 1) * 2.0 - 1.0,
+            target_y.to(cube.dtype) / max(height - 1, 1) * 2.0 - 1.0,
+        ),
+        dim=-1,
+    )
+    return F.grid_sample(
+        cube[None],
+        grid[None],
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=True,
+    )[0]
+
+
+def simulate_dithered_exposures(
+    truth: torch.Tensor,
+    *,
+    seed: int,
+    exposure_count: int = 4,
+    noise_sigma: torch.Tensor | float = 0.05,
+    pixel_scale_arcsec: float = 0.04,
+) -> SyntheticExposureSet:
+    """Create independent noisy detector images with subpixel TAN dithers."""
+
+    if truth.ndim != 3 or not truth.is_floating_point():
+        raise ValueError("truth must be floating point with shape (bands, height, width)")
+    if exposure_count < 1:
+        raise ValueError("exposure_count must be positive")
+    bands, height, width = truth.shape
+    sigma = torch.as_tensor(noise_sigma, dtype=truth.dtype, device=truth.device)
+    if sigma.ndim == 0:
+        sigma = sigma.expand(bands).clone()
+    if sigma.shape != (bands,) or torch.any(sigma <= 0):
+        raise ValueError("noise_sigma must be positive and scalar or one per band")
+    generator = torch.Generator().manual_seed(seed)
+    dithers = torch.empty((exposure_count, 2), dtype=torch.float64).uniform_(
+        -0.45, 0.45, generator=generator
+    )
+    dithers[0].zero_()
+    target_header = simple_tan_header(
+        height, width, pixel_scale_arcsec=pixel_scale_arcsec
+    )
+    headers: list[dict[str, object]] = []
+    images: list[torch.Tensor] = []
+    for dither in dithers:
+        header = simple_tan_header(
+            height,
+            width,
+            pixel_scale_arcsec=pixel_scale_arcsec,
+            dither_xy_px=(float(dither[0]), float(dither[1])),
+        )
+        sampled = _sample_target_cube(
+            truth, target_header=target_header, detector_header=header
+        )
+        noise = torch.randn(
+            sampled.shape,
+            generator=generator,
+            dtype=sampled.dtype,
+            device="cpu",
+        ).to(sampled.device)
+        images.append(sampled + sigma[:, None, None] * noise)
+        headers.append(header)
+    return SyntheticExposureSet(
+        images=torch.stack(images),
+        headers=tuple(headers),
+        target_header=target_header,
+        noise_sigma=sigma,
+        dither_xy_px=dithers.to(truth.device),
+    )
+
+
+def coadd_synthetic_exposures(
+    exposures: SyntheticExposureSet,
+    *,
+    resampling_kernel: str,
+    drizzle_pixfrac: float = 1.0,
+    device: torch.device | str = "cpu",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Run the production Torchsky/Torchfits map boundary for every band."""
+
+    if resampling_kernel not in ("bilinear", "drizzle_square"):
+        raise ValueError("resampling_kernel must be 'bilinear' or 'drizzle_square'")
+    bands = exposures.images.shape[1]
+    products: list[torch.Tensor] = []
+    weights: list[torch.Tensor] = []
+    with tempfile.TemporaryDirectory(prefix="torchsky-multiband-") as directory:
+        root = Path(directory)
+        for band in range(bands):
+            observations: list[ImageObservation] = []
+            for exposure, header in enumerate(exposures.headers):
+                path = root / f"exposure-{exposure:02d}-band-{band:02d}.fits"
+                torchsky.write(
+                    str(path),
+                    exposures.images[exposure, band].to("cpu"),
+                    header=header,
+                    overwrite=True,
+                )
+                observations.append(
+                    ImageObservation(
+                        str(path),
+                        weight=float(exposures.noise_sigma[band].reciprocal().square()),
+                    )
+                )
+            result = coadd_image_plane(
+                observations,
+                target_header=exposures.target_header,
+                resampling_kernel=resampling_kernel,
+                value_semantics="surface_brightness",
+                stacking_method="weighted_mean",
+                drizzle_pixfrac=drizzle_pixfrac,
+                device=device,
+            )
+            products.append(result.data)
+            weights.append(result.weight)
+    return torch.stack(products), torch.stack(weights)
 
 
 def _gaussian_profiles(
@@ -476,6 +676,35 @@ def detection_statistic(
         responses.append(response)
     per_band = torch.stack(responses).amax(dim=0)
     return torch.sqrt(torch.clamp_min(per_band, 0.0).square().sum(dim=0))
+
+
+def independent_union_statistic(
+    images: torch.Tensor,
+    noise_sigma: torch.Tensor | float,
+    *,
+    template_sigmas_px: Sequence[float] = (1.05, 1.8),
+) -> torch.Tensor:
+    """Return the best positive single-band/template response at every pixel."""
+
+    if images.ndim != 3:
+        raise ValueError("images must have shape (bands, height, width)")
+    sigma = torch.as_tensor(noise_sigma, dtype=images.dtype, device=images.device)
+    if sigma.ndim == 0:
+        sigma = sigma.expand(images.shape[0])
+    if sigma.shape != (images.shape[0],) or torch.any(sigma <= 0):
+        raise ValueError("noise_sigma must be positive and scalar or one per band")
+    whitened = images / sigma[:, None, None]
+    responses = [
+        F.conv2d(
+            whitened[:, None],
+            kernel[None, None],
+            padding=kernel.shape[-1] // 2,
+        )[:, 0]
+        for kernel in gaussian_template_bank(
+            template_sigmas_px, device=images.device, dtype=images.dtype
+        )
+    ]
+    return torch.clamp_min(torch.stack(responses), 0.0).amax(dim=(0, 1))
 
 
 def find_detections(
@@ -743,21 +972,237 @@ def _gate0_artifact(*, seed: int, size: int, bands: int, sources: int) -> dict[s
     }
 
 
+def _classical_method_row(
+    *,
+    name: str,
+    product: torch.Tensor,
+    null_product: torch.Tensor,
+    catalog: TruthCatalog,
+    truth: torch.Tensor,
+    product_noise_sigma: torch.Tensor,
+    pixel_scale_arcsec: float,
+    statistic_kind: str,
+    runtime_seconds: float,
+    peak_cuda_bytes: int | None,
+) -> dict[str, object]:
+    if statistic_kind == "independent_union":
+        statistic = independent_union_statistic(product, product_noise_sigma)
+        null_statistic = independent_union_statistic(
+            null_product, product_noise_sigma
+        )
+    elif statistic_kind == "chi2":
+        statistic = detection_statistic(product, product_noise_sigma)
+        null_statistic = detection_statistic(null_product, product_noise_sigma)
+    else:
+        raise ValueError("unknown statistic_kind")
+    threshold = float(null_statistic.max()) + 16 * torch.finfo(statistic.dtype).eps
+    detections, _ = find_detections(
+        statistic,
+        threshold=threshold,
+        nms_radius_px=None,
+        nms_radius_arcsec=0.12,
+        pixel_scale_arcsec=pixel_scale_arcsec,
+    )
+    height, width = product.shape[-2:]
+    score = score_detections(
+        catalog.xy,
+        detections,
+        radius_px=min(1.0, 0.5 * 2.354820045 * 1.05),
+        area_square_arcmin=(
+            height * pixel_scale_arcsec / 60.0
+        ) * (width * pixel_scale_arcsec / 60.0),
+    )
+    measured_flux = forced_linear_flux(
+        product.to(dtype=catalog.xy.dtype),
+        catalog,
+    )
+    return {
+        "method": name,
+        "representation": (
+            "classical_coadd" if statistic_kind == "independent_union"
+            else "classical_detection"
+        ),
+        "statistic": statistic_kind,
+        "threshold_from_validation_null": threshold,
+        "null_detections": int(
+            find_detections(
+                null_statistic,
+                threshold=threshold,
+                nms_radius_px=None,
+                nms_radius_arcsec=0.12,
+                pixel_scale_arcsec=pixel_scale_arcsec,
+            )[0].shape[0]
+        ),
+        "detection": score,
+        "forced_photometry": flux_color_metrics(
+            measured_flux, catalog.band_flux
+        ),
+        "heldout_gaussian_nll": gaussian_nll(
+            product.to(truth.dtype), truth, product_noise_sigma.to(truth.dtype)
+        ),
+        "image_rmse": float(
+            torch.sqrt(torch.mean((product.to(truth.dtype) - truth).square()))
+        ),
+        "runtime_seconds": runtime_seconds,
+        "peak_cuda_bytes": peak_cuda_bytes,
+    }
+
+
+def _classical_smoke_artifact(
+    *,
+    seed: int,
+    size: int,
+    bands: int,
+    sources: int,
+    device: torch.device | str,
+    exposure_count: int = 4,
+) -> dict[str, object]:
+    """Run the first production-operator classical floor without a depth claim."""
+
+    target_device = torch.device(device)
+    manifest = make_seed_manifest(seed)
+    catalog = generate_truth_catalog(
+        height=size,
+        width=size,
+        bands=bands,
+        source_count=sources,
+        seed=manifest.scene,
+        device=target_device,
+    )
+    truth = render_truth(catalog, height=size, width=size)
+    noise_sigma = torch.linspace(
+        0.045,
+        0.065,
+        bands,
+        device=target_device,
+        dtype=truth.dtype,
+    )
+    exposures = simulate_dithered_exposures(
+        truth,
+        seed=manifest.noise,
+        exposure_count=exposure_count,
+        noise_sigma=noise_sigma,
+    )
+    null_exposures = simulate_dithered_exposures(
+        torch.zeros_like(truth),
+        seed=manifest.nuisance,
+        exposure_count=exposure_count,
+        noise_sigma=noise_sigma,
+    )
+    product_noise_sigma = noise_sigma / math.sqrt(exposure_count)
+    rows: list[dict[str, object]] = []
+    products: dict[str, tuple[torch.Tensor, torch.Tensor, float, int | None]] = {}
+    for name, kernel in (
+        ("weighted_bilinear", "bilinear"),
+        ("drizzle_square", "drizzle_square"),
+    ):
+        if target_device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(target_device)
+        started = time.perf_counter()
+        product, _ = coadd_synthetic_exposures(
+            exposures,
+            resampling_kernel=kernel,
+            device=target_device,
+        )
+        null_product, _ = coadd_synthetic_exposures(
+            null_exposures,
+            resampling_kernel=kernel,
+            device=target_device,
+        )
+        if target_device.type == "cuda":
+            torch.cuda.synchronize(target_device)
+        runtime_seconds = time.perf_counter() - started
+        peak_cuda_bytes = (
+            int(torch.cuda.max_memory_allocated(target_device))
+            if target_device.type == "cuda"
+            else None
+        )
+        products[name] = (
+            product,
+            null_product,
+            runtime_seconds,
+            peak_cuda_bytes,
+        )
+        rows.append(
+            _classical_method_row(
+                name=name,
+                product=product,
+                null_product=null_product,
+                catalog=catalog,
+                truth=truth,
+                product_noise_sigma=product_noise_sigma,
+                pixel_scale_arcsec=0.04,
+                statistic_kind="independent_union",
+                runtime_seconds=runtime_seconds,
+                peak_cuda_bytes=peak_cuda_bytes,
+            )
+        )
+    bilinear, null_bilinear, coadd_runtime, peak_cuda_bytes = products[
+        "weighted_bilinear"
+    ]
+    started = time.perf_counter()
+    chi2_row = _classical_method_row(
+        name="chi2_coadd",
+        product=bilinear,
+        null_product=null_bilinear,
+        catalog=catalog,
+        truth=truth,
+        product_noise_sigma=product_noise_sigma,
+        pixel_scale_arcsec=0.04,
+        statistic_kind="chi2",
+        runtime_seconds=0.0,
+        peak_cuda_bytes=peak_cuda_bytes,
+    )
+    if target_device.type == "cuda":
+        torch.cuda.synchronize(target_device)
+    chi2_row["runtime_seconds"] = coadd_runtime + time.perf_counter() - started
+    chi2_row["reuses_product"] = "weighted_bilinear"
+    rows.append(chi2_row)
+    return {
+        "profile": "classical-smoke",
+        "depth_claim": False,
+        "seeds": asdict(manifest),
+        "shape": [bands, size, size],
+        "source_count": sources,
+        "exposure_count": exposure_count,
+        "pixel_scale_arcsec": 0.04,
+        "dither_xy_px": exposures.dither_xy_px.tolist(),
+        "input_noise_sigma": noise_sigma.tolist(),
+        "propagated_product_noise_sigma": product_noise_sigma.tolist(),
+        "methods": rows,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("gate0",), default="gate0")
+    parser.add_argument(
+        "--profile", choices=("gate0", "classical-smoke"), default="gate0"
+    )
     parser.add_argument("--seed", type=int, default=101)
     parser.add_argument("--size", type=int, default=96)
     parser.add_argument("--bands", type=int, default=6)
     parser.add_argument("--sources", type=int, default=24)
+    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--exposures", type=int, default=4)
     parser.add_argument(
         "--json-out",
         type=Path,
         default=Path("benchmark_results/multiband_depth_gate0.json"),
     )
     args = parser.parse_args()
-    artifact = _gate0_artifact(
-        seed=args.seed, size=args.size, bands=args.bands, sources=args.sources
+    artifact = (
+        _gate0_artifact(
+            seed=args.seed, size=args.size, bands=args.bands, sources=args.sources
+        )
+        if args.profile == "gate0"
+        else _classical_smoke_artifact(
+            seed=args.seed,
+            size=args.size,
+            bands=args.bands,
+            sources=args.sources,
+            device=args.device,
+            exposure_count=args.exposures,
+        )
     )
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")

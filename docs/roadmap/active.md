@@ -515,6 +515,21 @@ extractor to the Torchsky runtime.
 - [ ] Implement only the smoke comparison first: weighted bilinear, square
   Drizzle, chi-square coadd detection, independent per-band Foam, and shared
   spectral Foam under matched seeds and a declared capacity/compute view.
+  - [x] Implement the classical floor through production WCS, Torchfits, and
+    coadd boundaries. `classical-smoke` now creates subpixel-dithered TAN
+    detector images, runs weighted bilinear and exact square Drizzle separately,
+    and adds independent-union and chi-square detection rows. The chi-square row
+    explicitly accounts for reusing the bilinear product.
+  - [x] Keep validation nulls and method-specific correlated-noise effects in
+    the first floor. Every row freezes its threshold above a separate null
+    realization and reports null detections, catalogue scores, forced
+    photometry, held-out Gaussian NLL, RMSE, wall time, and CUDA allocation.
+  - [ ] Pass the exact 96-square/six-band/four-exposure classical floor on H100.
+    The focused 20-square CPU contract passes. A full local attempt was stopped
+    during the second exact-Drizzle null product after several minutes; do not
+    replace it with bilinear or omit the null to make the benchmark look fast.
+  - [ ] Add capacity- and compute-declared independent per-band Foam and shared
+    spectral Foam rows, with hard-renderer inference after smooth fitting.
 - [ ] Gate zero-source false positives, noiseless bright-source flux/position,
   split disjointness, deterministic artifacts, shuffled-band loss of sharing
   gain, and CPU/CUDA parity.
@@ -527,6 +542,10 @@ Focused continuation:
 
 ```bash
 pixi run -e test -- pytest tests/test_multiband_depth_benchmark.py -q
+pixi run -e sphere-bench -- python benchmarks/bench_multiband_depth.py \
+  --profile classical-smoke --device cpu --seed 101 --size 20 \
+  --bands 3 --sources 3 --exposures 2 \
+  --json-out benchmark_results/multiband_depth_classical_tiny.json
 ```
 
 Current Gate 0/M0 evidence:

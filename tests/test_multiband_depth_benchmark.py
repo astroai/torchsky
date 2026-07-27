@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -12,19 +13,23 @@ if str(BENCHMARKS) not in sys.path:
     sys.path.insert(0, str(BENCHMARKS))
 
 from bench_multiband_depth import (  # noqa: E402
+    _classical_smoke_artifact,
     _gate0_artifact,
     calibrate_purity_threshold,
+    coadd_synthetic_exposures,
     detection_statistic,
     find_detections,
     flux_color_metrics,
     forced_linear_flux,
     gaussian_nll,
     generate_truth_catalog,
+    independent_union_statistic,
     make_seed_manifest,
     maximum_cardinality_angular_match,
     maximum_cardinality_match,
     render_truth,
     score_detections,
+    simulate_dithered_exposures,
     split_identifiers,
 )
 
@@ -133,6 +138,79 @@ def test_detector_recovers_noiseless_bright_sources_and_null_is_empty() -> None:
     null_statistic = detection_statistic(torch.zeros_like(cube), 0.01)
     null_detections, _ = find_detections(null_statistic, threshold=1.0)
     assert null_detections.shape == (0, 2)
+
+
+def test_dithered_exposures_and_production_classical_coadds_are_deterministic() -> None:
+    catalog = generate_truth_catalog(
+        height=20,
+        width=20,
+        bands=3,
+        source_count=2,
+        seed=17,
+        include_close_pair=False,
+    )
+    truth = render_truth(catalog, height=20, width=20)
+    first = simulate_dithered_exposures(
+        truth, seed=91, exposure_count=2, noise_sigma=0.01
+    )
+    second = simulate_dithered_exposures(
+        truth, seed=91, exposure_count=2, noise_sigma=0.01
+    )
+    torch.testing.assert_close(first.images, second.images, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(
+        first.dither_xy_px, second.dither_xy_px, rtol=0.0, atol=0.0
+    )
+    assert float(first.dither_xy_px.abs().max()) <= 0.45
+    assert first.dither_xy_px[0].tolist() == [0.0, 0.0]
+
+    bilinear, bilinear_weight = coadd_synthetic_exposures(
+        first, resampling_kernel="bilinear"
+    )
+    drizzle, drizzle_weight = coadd_synthetic_exposures(
+        first, resampling_kernel="drizzle_square"
+    )
+    assert bilinear.shape == drizzle.shape == truth.shape
+    assert bool(torch.all(bilinear_weight >= 0))
+    assert bool(torch.all(drizzle_weight >= 0))
+    assert torch.isfinite(bilinear).all()
+    assert torch.isfinite(drizzle).all()
+    # Both production paths should recover this small subpixel-dithered scene,
+    # but their interpolation kernels are intentionally not identical.
+    assert float(torch.sqrt(torch.mean((bilinear.double() - truth).square()))) < 0.02
+    assert float(torch.sqrt(torch.mean((drizzle.double() - truth).square()))) < 0.02
+    assert not torch.equal(bilinear, drizzle)
+
+
+def test_classical_smoke_reports_three_honest_rows() -> None:
+    artifact = _classical_smoke_artifact(
+        seed=101,
+        size=20,
+        bands=3,
+        sources=3,
+        device="cpu",
+        exposure_count=2,
+    )
+    assert artifact["depth_claim"] is False
+    rows = artifact["methods"]
+    assert [row["method"] for row in rows] == [
+        "weighted_bilinear",
+        "drizzle_square",
+        "chi2_coadd",
+    ]
+    assert rows[2]["reuses_product"] == "weighted_bilinear"
+    assert all(row["null_detections"] == 0 for row in rows)
+    assert all(row["runtime_seconds"] > 0 for row in rows)
+    assert all(row["detection"]["purity"] >= 0.0 for row in rows)
+
+
+def test_independent_union_statistic_does_not_combine_subthreshold_bands() -> None:
+    images = torch.zeros((2, 17, 17), dtype=torch.float64)
+    images[:, 8, 8] = 1.0
+    union = independent_union_statistic(
+        images, 1.0, template_sigmas_px=(1.0,)
+    )
+    chi = detection_statistic(images, 1.0, template_sigmas_px=(1.0,))
+    assert float(chi[8, 8]) == pytest.approx(math.sqrt(2) * float(union[8, 8]))
 
 
 def test_angular_nms_and_matching_use_target_pixel_scale() -> None:

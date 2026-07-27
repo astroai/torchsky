@@ -503,16 +503,21 @@ cd /Users/fabbros/src/torchsky
 pixi run -e test -- pytest tests/test_multiband_depth_benchmark.py -q
 ```
 
-Planned synthetic smoke:
+Current production-operator classical floor:
 
 ```bash
 cd /Users/fabbros/src/torchsky
 pixi run -e sphere-bench python benchmarks/bench_multiband_depth.py \
-  --profile smoke --device cpu --seeds 101,202,303 \
-  --methods bilinear,drizzle,chi2_coadd,independent_inr,joint_inr,joint_foam,hybrid \
-  --json-out benchmark_results/multiband_depth_smoke.json \
-  --markdown-out benchmark_results/multiband_depth_smoke.md
+  --profile classical-smoke --device cpu --seed 101 --size 20 \
+  --bands 3 --sources 3 --exposures 2 \
+  --json-out benchmark_results/multiband_depth_classical_tiny.json
 ```
+
+The tiny command is the local correctness gate. The exact square-Drizzle
+96-square/six-band/four-exposure run, including its separate null product, is a
+CANFAR accelerator gate because the exact polygon clipping path is intentionally
+not replaced by bilinear interpolation for convenience. The three-seed/two-noise
+smoke command is added only after the independent and shared Foam rows exist.
 
 Planned CANFAR publication run:
 
