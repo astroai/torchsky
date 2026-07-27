@@ -47,6 +47,12 @@ def main() -> int:
         choices=("batched", "reference"),
         default="batched",
     )
+    parser.add_argument(
+        "--execution",
+        choices=("eager", "compile"),
+        default="eager",
+        help="Compile the selected builder and report first-call warm-up separately",
+    )
     parser.add_argument("--oracle-resolution", type=int, default=256)
     parser.add_argument(
         "--json-out",
@@ -114,18 +120,36 @@ def main() -> int:
         dim=1,
     )
 
-    samples: list[float] = []
+    builder = (
+        batched_bounded_power_pixel_operator
+        if args.implementation == "batched"
+        else bounded_power_pixel_operator
+    )
+    compile_warmup_seconds = None
     operator = None
+    if args.execution == "compile":
+        builder = torch.compile(builder)
+        _synchronize(device)
+        started = time.perf_counter()
+        operator = builder(
+            pixels,
+            sites,
+            radii,
+            candidate_indptr=tile_candidates.indptr,
+            candidate_indices=tile_candidates.indices,
+            neighbor_indptr=graph.indptr,
+            neighbor_indices=graph.indices,
+            max_candidate_pairs=max(tile_candidates.indices.numel(), 1),
+        )
+        _synchronize(device)
+        compile_warmup_seconds = time.perf_counter() - started
+
+    samples: list[float] = []
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
     for _ in range(args.runs):
         _synchronize(device)
         started = time.perf_counter()
-        builder = (
-            batched_bounded_power_pixel_operator
-            if args.implementation == "batched"
-            else bounded_power_pixel_operator
-        )
         operator = builder(
             pixels,
             sites,
@@ -176,6 +200,8 @@ def main() -> int:
         "device": str(device),
         "dtype": args.dtype,
         "implementation": args.implementation,
+        "execution": args.execution,
+        "compile_warmup_seconds": compile_warmup_seconds,
         "runs": args.runs,
         "candidate_pairs": candidates,
         "positive_intersections": intersections,

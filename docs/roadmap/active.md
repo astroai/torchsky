@@ -272,16 +272,19 @@ acceptable speed substitute.
   Evidence: batched quadratic segment/disk roots and triangle/arc contributions
   match the scalar analytic oracle; a scale-aware area tolerance removes
   floating zero-area boundary ghosts in both paths.
-- [ ] Prove bitwise topology and tight area agreement with
+- [x] Prove bitwise topology and tight area agreement with
   `bounded_power_pixel_operator` across randomized/adversarial CPU, MPS, and
   CUDA cases. Retain the current implementation as the correctness oracle.
   CPU and MPS randomized, coincident/tie, zero-radius, tangent, transform, and
-  chunk cases pass; CUDA remains a CANFAR gate.
-- [ ] Route pixel-major/transpose sparse assembly and both value semantics
+  chunk cases pass. CANFAR session `o5ubrs02` at exact commit `d5408df` passed
+  all eleven non-MPS focused contracts, including the same-input CUDA oracle;
+  CPU and CUDA produced identical 3,825-entry topology, total area, and
+  independent-oracle error in the matched medium benchmark.
+- [x] Route pixel-major/transpose sparse assembly and both value semantics
   through the batched result; re-run adjoint and tile-chunk gates.
   Local pixel/transpose CSR, area, `matvec`, and `rmatvec` equality pass for both
-  value semantics, including candidate chunk size 3 versus the 4,096 default;
-  CUDA remains unchecked.
+  value semantics, including candidate chunk size 3 versus the 4,096 default.
+  The focused CUDA parity gate passed in session `o5ubrs02`.
 - [ ] Benchmark eager, `torch.compile`, and—only if still justified by
   profiling—one native CPU/CUDA kernel. Record candidates/s, intersections/s,
   peak allocation, synchronization count, and crossover size.
@@ -289,16 +292,74 @@ acceptable speed substitute.
   versus 2.164 s and 1,173 candidates/s for the matched scalar oracle, with
   identical 930-entry topology and total area. At 1,000 sites/1,024 pixels:
   0.707 s, 14,781 candidates/s, and 591 MB operator-only peak RSS under
-  4,096-candidate chunks. `torch.compile` and CUDA remain unchecked; no native
-  kernel is justified before those measurements.
-- [ ] Run small/medium/large CANFAR CPU/CUDA cases, define a production
+  4,096-candidate chunks. CANFAR session `o5ubrs02` reproduced that medium case
+  on identical CPU/CUDA inputs: 10,448 candidates, 3,825 intersections, and
+  1,017.414935 square units exact area on both devices. CPU measured 0.721 s
+  (14,486 candidates/s, 895,537,152-byte operator peak RSS); H100 CUDA measured
+  0.240 s (43,535 candidates/s, 85,896,704-byte peak CUDA allocation).
+  Artifacts:
+  `/arc/projects/ots/torchsky-runs/20260726-foam-batched-cpu-cuda-d5408df/`.
+  `torch.compile` remains unchecked; no native kernel is justified before that
+  measurement.
+- [x] Run small/medium/large CANFAR CPU/CUDA cases, define a production
   throughput baseline, and only then use the renderer in spectral Foam fitting.
+  Evidence: sessions `o5ubrs02` and `idnlgxh7`, exact commit `d5408df`.
+  Small CPU/CUDA: 2,539 candidates, 930 intersections, 0.178/0.0649 s,
+  14,226/39,128 candidates/s, and equal area within 3e-14. Medium CPU/CUDA:
+  10,448 candidates, 3,825 intersections, 0.721/0.240 s, and
+  14,486/43,535 candidates/s with bitwise-equal area. Large CPU/CUDA:
+  108,379 candidates, 51,572 intersections, 2.995/1.547 s, and
+  36,192/70,051 candidates/s with bitwise-equal area. Large operator-only
+  peaks were 910,188,544-byte process RSS and 84,674,560-byte CUDA allocation.
+  Artifacts:
+  `/arc/projects/ots/torchsky-runs/20260726-foam-batched-scale-d5408df/`.
 
 Focused continuation:
 
 ```bash
 pixi run -e test -- pytest tests/test_map_field_foam_intersection.py -q
 pixi run bench-map-foam-operator
+pixi run preflight-push
+```
+
+## Checkpoint 3D — Exact Inference And Differentiable Foam Training
+
+Exact inference and differentiable geometry optimization have different
+contracts. The exact pixel operator remains the reporting path; the training
+surrogate must expose useful gradients across both radical and radius boundaries
+and must never be described as exact area integration.
+
+- [x] Add an explicitly named smooth bounded-power weighting primitive whose
+  weights sum to a differentiable union-occupancy probability. Preserve
+  `soft_bounded_power_weights` as the compact, hard-support compatibility path.
+  Evidence: `smooth_bounded_power_weights` returns conditional power ownership
+  times a separately testable union occupancy; its missing mass is background.
+- [x] Use numerically stable log-domain support probabilities so sites, radii,
+  and query coordinates receive finite gradients near support boundaries,
+  including when no hard disk currently contains the query.
+  Evidence: log-sigmoid membership and outside-union accumulation remain finite
+  in the outside-support gradient and autograd finite-difference gates.
+- [ ] Gate permutation/similarity equivariance, background occupancy, hard-limit
+  convergence away from boundaries, coincident sites, float32/float64, and
+  CPU/MPS/CUDA parity.
+  CPU invariance, hard-limit, coincident-site, and dtype gates pass; MPS/CUDA
+  device parity remains unchecked.
+- [x] Gate autograd against finite differences for sites, radii, and queries;
+  include a toy optimization where a radius starts outside an observed point
+  and learns to include it.
+  Evidence: `torch.autograd.gradcheck` covers all three geometry inputs; a
+  deterministic Adam fixture grows a radius from 0.4 past an initially excluded
+  observation.
+- [x] Demonstrate the handoff from smooth training to exact hard inference on a
+  seeded pixel fixture, reporting both surrogate loss and exact rendered error.
+  Evidence: the smooth 31-square radius fit converges to 0.72 within 0.002, then
+  the analytic pixel operator recovers the target disk area within 0.01 square
+  units. Focused local Foam gates pass 31 tests with eight device skips.
+
+Focused continuation:
+
+```bash
+pixi run -e test -- pytest tests/test_map_field_foam.py -q
 pixi run preflight-push
 ```
 

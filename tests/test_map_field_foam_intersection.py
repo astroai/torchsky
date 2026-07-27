@@ -11,6 +11,7 @@ from torchsky.map.field import (
     batched_bounded_power_pixel_operator,
     bounded_power_ownership,
     bounded_power_pixel_operator,
+    smooth_bounded_power_weights,
     sparse_cech_graph,
     tile_disk_candidate_csr,
 )
@@ -65,6 +66,42 @@ def test_single_cell_matches_analytic_circle_and_rectangle_areas() -> None:
     )
     torch.testing.assert_close(integrated[0], torch.tensor(7.0, dtype=torch.float64))
     assert integrated[-1] == 0
+
+
+def test_smooth_radius_training_hands_off_to_exact_pixel_inference() -> None:
+    axis = torch.linspace(-1.0, 1.0, 31, dtype=torch.float64)
+    grid_y, grid_x = torch.meshgrid(axis, axis, indexing="ij")
+    points = torch.stack((grid_x.flatten(), grid_y.flatten()), dim=1)
+    site = torch.zeros((1, 2), dtype=torch.float64)
+    true_radius = torch.tensor([0.72], dtype=torch.float64)
+    target = smooth_bounded_power_weights(
+        points,
+        site,
+        true_radius,
+        support_temperature=18.0,
+    ).detach()
+    learned_radius = torch.tensor([0.3], dtype=torch.float64, requires_grad=True)
+    optimizer = torch.optim.Adam([learned_radius], lr=0.025)
+
+    for _ in range(120):
+        optimizer.zero_grad()
+        prediction = smooth_bounded_power_weights(
+            points,
+            site,
+            learned_radius,
+            support_temperature=18.0,
+        )
+        torch.mean(torch.square(prediction - target)).backward()
+        optimizer.step()
+
+    exact = bounded_power_pixel_operator(
+        _rectangle(-1.0, -1.0, 1.0, 1.0).unsqueeze(0),
+        site,
+        learned_radius.detach(),
+    )
+    target_area = math.pi * true_radius.square()
+    torch.testing.assert_close(learned_radius.detach(), true_radius, atol=2e-3, rtol=0)
+    torch.testing.assert_close(exact.areas, target_area, atol=1e-2, rtol=0)
 
 
 def test_radical_half_planes_partition_pixel_and_break_coincident_ties() -> None:

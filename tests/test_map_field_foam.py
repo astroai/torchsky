@@ -10,6 +10,7 @@ from torchsky.map.field.foam import (
     cech_adjacency,
     power_distance,
     power_face_planes,
+    smooth_bounded_power_weights,
     soft_bounded_power_weights,
     sparse_cech_graph,
     tile_disk_candidate_csr,
@@ -67,6 +68,170 @@ def test_soft_bounded_weights_partition_union_and_are_differentiable() -> None:
     for parameter in (points, sites, radii):
         assert parameter.grad is not None
         assert bool(torch.isfinite(parameter.grad).all())
+
+
+def test_smooth_bounded_weights_have_explicit_background_and_hard_limit() -> None:
+    sites = torch.tensor([[-1.0, 0.0], [1.0, 0.0]], dtype=torch.float64)
+    radii = torch.tensor([1.4, 1.4], dtype=torch.float64)
+    points = torch.tensor(
+        [[-1.0, 0.0], [1.0, 0.0], [0.0, 0.0], [4.0, 0.0]],
+        dtype=torch.float64,
+    )
+
+    weights = smooth_bounded_power_weights(
+        points,
+        sites,
+        radii,
+        power_temperature=100.0,
+        support_temperature=100.0,
+    )
+
+    torch.testing.assert_close(weights[0], weights.new_tensor([1.0, 0.0]))
+    torch.testing.assert_close(weights[1], weights.new_tensor([0.0, 1.0]))
+    torch.testing.assert_close(weights[2], weights.new_tensor([0.5, 0.5]))
+    torch.testing.assert_close(weights[3], weights.new_zeros(2), atol=1e-12, rtol=0)
+    assert bool(torch.all(weights.sum(dim=-1) <= 1.0))
+
+
+def test_smooth_bounded_weights_are_stable_and_differentiable_outside_support() -> None:
+    point = torch.tensor([[1.1, 0.0]], dtype=torch.float64, requires_grad=True)
+    site = torch.tensor([[0.0, 0.0]], dtype=torch.float64, requires_grad=True)
+    radius = torch.tensor([1.0], dtype=torch.float64, requires_grad=True)
+
+    weight = smooth_bounded_power_weights(
+        point,
+        site,
+        radius,
+        support_temperature=8.0,
+    )
+    expected = torch.sigmoid(-8.0 * power_distance(point, site, radius))
+    torch.testing.assert_close(weight, expected)
+    loss = torch.square(1.0 - weight).sum()
+    gradients = torch.autograd.grad(loss, (point, site, radius))
+    for gradient in gradients:
+        assert bool(torch.isfinite(gradient).all())
+    assert gradients[2].item() < 0.0
+
+
+def test_smooth_bounded_weights_autograd_matches_finite_differences() -> None:
+    points = torch.tensor(
+        [[-0.1, 0.2], [0.8, -0.3]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    sites = torch.tensor(
+        [[-0.5, 0.0], [0.7, 0.1]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    radii = torch.tensor([0.8, 1.1], dtype=torch.float64, requires_grad=True)
+
+    assert torch.autograd.gradcheck(
+        lambda query, centers, bounds: smooth_bounded_power_weights(
+            query,
+            centers,
+            bounds,
+            power_temperature=4.0,
+            support_temperature=6.0,
+        ),
+        (points, sites, radii),
+        eps=1e-6,
+        atol=1e-5,
+        rtol=1e-4,
+    )
+
+
+def test_smooth_bounded_weights_are_permutation_and_similarity_equivariant() -> None:
+    points = torch.tensor(
+        [[-0.2, 0.1], [0.9, -0.4], [2.0, 0.5]],
+        dtype=torch.float64,
+    )
+    sites = torch.tensor(
+        [[-0.7, 0.2], [0.6, -0.1], [1.4, 0.8]],
+        dtype=torch.float64,
+    )
+    radii = torch.tensor([0.9, 1.2, 0.7], dtype=torch.float64)
+    permutation = torch.tensor([2, 0, 1])
+    expected = smooth_bounded_power_weights(points, sites, radii)
+
+    permuted = smooth_bounded_power_weights(
+        points,
+        sites[permutation],
+        radii[permutation],
+    )
+    inverse = torch.argsort(permutation)
+    torch.testing.assert_close(permuted[:, inverse], expected)
+
+    scale = 3.0
+    transformed = smooth_bounded_power_weights(
+        scale * points + 2.0,
+        scale * sites + 2.0,
+        scale * radii,
+        power_temperature=10.0 / scale**2,
+        support_temperature=10.0 / scale**2,
+    )
+    torch.testing.assert_close(transformed, expected)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_smooth_bounded_weights_split_coincident_sites(dtype: torch.dtype) -> None:
+    points = torch.tensor([[0.1, -0.2], [1.1, 0.0]], dtype=dtype)
+    sites = torch.zeros((2, 2), dtype=dtype)
+    radii = torch.ones(2, dtype=dtype)
+
+    weights = smooth_bounded_power_weights(points, sites, radii)
+
+    torch.testing.assert_close(weights[:, 0], weights[:, 1])
+    assert bool(torch.all(weights >= 0))
+    assert bool(torch.all(weights.sum(dim=-1) <= 1.0))
+
+
+def test_smooth_bounded_weights_can_learn_into_initially_empty_support() -> None:
+    point = torch.tensor([[1.0, 0.0]], dtype=torch.float64)
+    site = torch.zeros((1, 2), dtype=torch.float64)
+    radius = torch.tensor([0.4], dtype=torch.float64, requires_grad=True)
+    optimizer = torch.optim.Adam([radius], lr=0.03)
+    initial = smooth_bounded_power_weights(
+        point, site, radius, support_temperature=8.0
+    ).item()
+
+    for _ in range(80):
+        optimizer.zero_grad()
+        occupancy = smooth_bounded_power_weights(
+            point, site, radius, support_temperature=8.0
+        )
+        torch.square(occupancy - 0.95).sum().backward()
+        optimizer.step()
+
+    final = smooth_bounded_power_weights(
+        point, site, radius, support_temperature=8.0
+    ).item()
+    assert radius.item() > 1.0
+    assert final > initial + 0.8
+
+
+def _assert_smooth_bounded_device_matches_cpu(device: str) -> None:
+    generator = torch.Generator().manual_seed(204)
+    points = torch.randn((31, 2), generator=generator)
+    sites = torch.randn((7, 2), generator=generator)
+    radii = 0.2 + torch.rand(7, generator=generator)
+    expected = smooth_bounded_power_weights(points, sites, radii)
+    actual = smooth_bounded_power_weights(
+        points.to(device),
+        sites.to(device),
+        radii.to(device),
+    )
+    torch.testing.assert_close(actual.cpu(), expected, atol=2e-5, rtol=2e-5)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
+def test_smooth_bounded_weights_mps_matches_cpu() -> None:
+    _assert_smooth_bounded_device_matches_cpu("mps")
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_smooth_bounded_weights_cuda_matches_cpu() -> None:
+    _assert_smooth_bounded_device_matches_cpu("cuda")
 
 
 def test_cech_adjacency_is_exact_and_chunk_invariant() -> None:
@@ -377,6 +542,14 @@ def test_power_input_validation_fails_closed() -> None:
         bounded_power_ownership(points, sites, torch.ones(2), point_chunk_size=0)
     with pytest.raises(ValueError, match="temperature"):
         soft_bounded_power_weights(points, sites, torch.ones(2), temperature=0.0)
+    with pytest.raises(ValueError, match="power_temperature"):
+        smooth_bounded_power_weights(
+            points, sites, torch.ones(2), power_temperature=0.0
+        )
+    with pytest.raises(ValueError, match="support_temperature"):
+        smooth_bounded_power_weights(
+            points, sites, torch.ones(2), support_temperature=float("nan")
+        )
 
 
 def test_empty_ownership_query_preserves_shape() -> None:

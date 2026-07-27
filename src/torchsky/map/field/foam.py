@@ -278,6 +278,43 @@ def soft_bounded_power_weights(
     return torch.where(any_support, weights, torch.zeros_like(weights))
 
 
+def smooth_bounded_power_weights(
+    points: Tensor,
+    sites: Tensor,
+    radii: Tensor,
+    *,
+    power_temperature: float = 10.0,
+    support_temperature: float = 10.0,
+) -> Tensor:
+    """Return smooth bounded-power weights for geometry optimization.
+
+    The result sums to a smooth probability that each query lies inside the
+    union of the site bounds; the missing mass is background. Conditional
+    ownership combines power distance with each site's smooth support
+    probability. This is a training surrogate, not exact power-cell inference
+    or exact pixel-area integration.
+    """
+    _validate_power_inputs(points, sites, radii)
+    power_scale = float(power_temperature)
+    support_scale = float(support_temperature)
+    if not math.isfinite(power_scale) or power_scale <= 0:
+        raise ValueError("power_temperature must be finite and positive")
+    if not math.isfinite(support_scale) or support_scale <= 0:
+        raise ValueError("support_temperature must be finite and positive")
+
+    distances = power_distance(points, sites, radii)
+    log_membership = torch.nn.functional.logsigmoid(-support_scale * distances)
+    conditional = torch.softmax(
+        -power_scale * distances + log_membership,
+        dim=-1,
+    )
+    log_outside_union = torch.nn.functional.logsigmoid(
+        support_scale * distances
+    ).sum(dim=-1, keepdim=True)
+    union_occupancy = -torch.expm1(log_outside_union)
+    return conditional * union_occupancy
+
+
 def cech_adjacency(
     sites: Tensor,
     radii: Tensor,
@@ -1522,6 +1559,7 @@ __all__ = [
     "cech_adjacency",
     "power_distance",
     "power_face_planes",
+    "smooth_bounded_power_weights",
     "soft_bounded_power_weights",
     "sparse_cech_graph",
     "tile_disk_candidate_csr",
