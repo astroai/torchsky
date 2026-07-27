@@ -71,7 +71,10 @@ canvas. The fix must express both boundaries rather than widening outer support.
   ```
 
   Evidence: 140 passed in 52.16 seconds.
-- [ ] Run the same focused gate on CANFAR staging Linux.
+- [x] Run the same focused gate on CANFAR staging Linux.
+  Evidence: session `np228qfy`, exact commit `380ecdd`, 139 passed and one
+  platform skip in 118.15 s with 2,705,668 KiB peak RSS. Durable artifacts:
+  `/arc/projects/ots/torchsky-runs/20260726-drizzle-fixed-v4-380ecdd/`.
 - [x] Commit the repair and update the evidence here.
   Evidence: `380ecdd`, pushed to `origin/main` after 1625 tests passed in
   `ci-local`.
@@ -95,7 +98,8 @@ exact disk-overlap predicate.
   binning approximation as the final topology.
   Evidence: squared-distance overlap is applied only after unique candidates.
 - [ ] Produce deterministic symmetric CSR (`indptr`, `indices`) on CPU and CUDA.
-  Local CPU and MPS parity/determinism pass; CUDA remains a CANFAR gate.
+  Local CPU and MPS parity/determinism pass. CANFAR CPU passed at `aeabf02`;
+  CUDA remains a gate in the new isolated `cuda-bench` environment.
 - [x] Gate exact equality against the dense oracle on randomized, equal-center,
   zero-radius, touching, separated, large-radius, and chunked inputs.
   Evidence: `tests/test_map_field_foam.py`, 11 passed and one CUDA skip.
@@ -112,9 +116,15 @@ exact disk-overlap predicate.
   and exact parity on a 2,000-site dense oracle. At 1,000,000 sites: 848,574
   candidates from 499,999,500,000 pairs, 253,942 exact edges, 99.99983%
   reduction, 4.36 s median, and 1.50 GiB peak process RSS. CANFAR remains
-  pending.
-- [ ] Check the parent roadmap's survey-scale overlap-index box only after the
+  pending on CUDA. CANFAR staging CPU session `vet25ml3` reproduced exact
+  one-million-site parity in 3.683 s median with 1.29 GiB benchmark peak RSS;
+  artifacts:
+  `/arc/projects/ots/torchsky-runs/20260726-foam-cpu-aeabf02/`.
+- [x] Check the parent roadmap's survey-scale overlap-index box only after the
   exact parity and CANFAR evidence are recorded.
+  Evidence: local and CANFAR CPU dense-oracle parity, candidate reduction, and
+  peak memory are recorded above; `docs/roadmap/next.md` is updated in the same
+  evidence commit.
 
 Focused continuation:
 
@@ -148,7 +158,9 @@ list of disks that can affect them before exact cell/pixel intersection begins.
   1,048,576,000,000 possible tests (99.999734% reduction), 2.66 mean,
   15 maximum, p50/p90/p99 = 2/5/7 candidates per tile, 0.569 s median CPU wall
   time, 1.11 GiB peak RSS, and a 2,000-site dense oracle pass. CANFAR CPU/CUDA
-  remains pending.
+  remains pending. CANFAR staging CPU session `vet25ml3` reproduced the result
+  in 0.181 s median with 1.18 GiB benchmark peak RSS; artifacts:
+  `/arc/projects/ots/torchsky-runs/20260726-foam-cpu-aeabf02/`.
 - [ ] Check the parent roadmap's neighbor-CSR/tile-candidate box only after both
   CSR directions are gated.
 
@@ -163,7 +175,59 @@ pixi run -e sphere-bench -- python benchmarks/bench_map_foam_tiles.py \
 pixi run preflight-push
 ```
 
+## Checkpoint 3B — Exact Bounded Power-Cell/Pixel Operator
+
+This is the next scientific implementation after both sparse index directions.
+The hard renderer must integrate the intersection of a detector pixel, a
+power-cell's radical half-planes, and its finite-radius disk. Sampling a few
+points inside the pixel is not an exact-area implementation.
+
+- [ ] Define the sparse operator contract: candidate `(pixel, cell)` pairs,
+  exact non-negative intersection areas, pixel-row CSR, cell-row transpose CSR,
+  and explicit surface-brightness versus integrated-flux semantics.
+- [ ] Clip local tangent-plane pixel polygons by the candidate cell's radical
+  half-planes, handling equal sites, dominated coincident sites, exact boundary
+  touches, empty intersections, and finite input validation.
+- [ ] Integrate the remaining polygon against the cell's circular bound with
+  analytic segment/circular-arc area contributions. Keep documented adaptive
+  quadrature only for curved WCS pixel footprints.
+- [ ] Gate partition of area, single-cell analytic disk/rectangle cases,
+  translation/rotation/uniform-scale invariance, permutation invariance,
+  non-overlap, and randomized agreement with a high-accuracy independent
+  numerical oracle.
+- [ ] Gate the forward/transpose dot product for both value semantics and prove
+  tile-chunk invariance. Hard topology may be piecewise differentiable, but
+  exact inference must not be labelled as the soft training surrogate.
+- [ ] Benchmark candidates/s, intersections/s, peak memory, and numerical error
+  on CPU and CUDA; profile before adding a native kernel.
+- [ ] Only then check the parent roadmap's exact clipped
+  power-cell/pixel-intersection box.
+
+Focused continuation:
+
+```bash
+pixi run -e test -- pytest tests/test_map_field_foam_intersection.py -q
+pixi run preflight-push
+```
+
 ## Checkpoint 4 — Absorb The Former Parallel Work
+
+### CANFAR CUDA enablement
+
+- [x] Diagnose the advertised staging CUDA image rather than accepting skipped
+  device tests as evidence.
+  Evidence: H100 NVL session `zyaylbxy` reports driver `610.43.02`; session
+  `b65nwd8h` proves the prior `sphere-bench` lock installed
+  `pytorch-2.10.0-cpu_mkl`, so both CUDA tests skipped and the explicit CUDA
+  benchmark failed closed.
+- [x] Add an isolated Linux-only `cuda-bench` Pixi environment while preserving
+  the normal CPU/MPS solve.
+  Evidence: a rich `linux-64-cuda` platform with CUDA 12.9 and
+  `pytorch-gpu >=2.10,<2.11` resolves PyTorch 2.10.0 CUDA 12.9; the environment
+  excludes the default CPU feature and retains `torchfits>=1.0.0rc4`.
+- [ ] Build Torchsky in `cuda-bench` on CANFAR, require
+  `torch.cuda.is_available()`, pass both sparse-index CUDA parity tests, and
+  record million-site CUDA benchmarks.
 
 ### Exposure-major map scaling
 

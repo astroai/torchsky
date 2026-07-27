@@ -48,7 +48,7 @@ not be presented as Foam.
 - [x] Tensor-native power distance, exact bounded-cell ownership, Čech overlap
   edges, radical-plane equations, and an explicitly labelled soft optimization
   surrogate.
-- [ ] Build a survey-scale overlap index before pair testing. Validate it against
+- [x] Build a survey-scale overlap index before pair testing. Validate it against
   the exact chunked Čech reference and report candidate reduction and peak memory.
 - [ ] Construct per-cell neighbor CSR and tile-to-cell candidate lists without a
   mandatory graphics or CUDA-only runtime dependency.

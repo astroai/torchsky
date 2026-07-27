@@ -1,7 +1,11 @@
 [workspace]
 preview = ["pixi-build"]
 channels = ["conda-forge"]
-platforms = ["osx-arm64", "linux-64"]
+platforms = [
+    "osx-arm64",
+    "linux-64",
+    { name = "linux-64-cuda", platform = "linux-64", cuda = "12.9" },
+]
 
 [package]
 name = "torchsky"
@@ -170,6 +174,9 @@ sphere-bench-sparse-gate = "pixi run -e sphere-bench python benchmarks/bench_sph
 sphere-bench-pipeline = "pixi run -e sphere-bench python benchmarks/bench_pipeline_table_sphere.py --n-rows 1000000 --runs 3 --nside 256 --json-out benchmark_results/pipeline_table_sphere.json"
 sphere-bench-pipeline-gate = "pixi run -e sphere-bench python benchmarks/bench_pipeline_table_sphere.py --n-rows 1000000 --runs 3 --nside 256 --min-read-ratio-filtered-vs-torch 0.2 --min-pipeline-ratio-filtered-vs-no-pushdown 0.7 --min-pipeline-ratio-torch-vs-no-pushdown 0.7 --json-out benchmark_results/pipeline_table_sphere.json"
 
+[feature.prod]
+platforms = ["osx-arm64", "linux-64"]
+
 [feature.prod.dependencies]
 python = ">=3.12,<3.14"
 
@@ -211,6 +218,26 @@ astropy-healpix = ">=1.0"
 spherical-geometry = ">=1.2"
 cython = ">=3.0"
 pybind11 = ">=2.12"
+
+# Linux-only accelerator environment. The normal solve stays CPU/MPS portable;
+# this feature selects conda-forge's CUDA build of the same supported PyTorch.
+[feature.cuda]
+platforms = ["linux-64-cuda"]
+
+[feature.cuda.dependencies]
+python = ">=3.12,<3.14"
+pytorch-gpu = ">=2.10,<2.11"
+numpy = ">=1.20"
+pytest = ">=8.0"
+pip = ">=24.0"
+scikit-build-core = ">=1.0.0"
+cmake = ">=3.21"
+ninja = ">=1.10"
+nanobind = ">=2.10.2"
+
+[feature.cuda.pypi-dependencies]
+torchfits = ">=1.0.0rc4"
+
 [feature.map-compat.dependencies]
 python = "3.12.*"
 cmake = ">=3.21"
@@ -261,6 +288,7 @@ default = { features = ["prod"], solve-group = "default" }
 test = { features = ["prod", "test"], solve-group = "default" }
 bench = { features = ["prod", "bench"], solve-group = "default" }
 sphere-bench = { features = ["prod", "bench", "sphere-bench"], solve-group = "default" }
+cuda-bench = { features = ["cuda"], no-default-feature = true, solve-group = "cuda" }
 bench-all = { features = ["prod", "bench", "sphere-bench"], solve-group = "default" }
 map-compat = { features = ["prod", "bench", "sphere-bench", "map-compat"], solve-group = "map-compat" }
 bench-legacy = { features = ["bench-legacy"], solve-group = "bench-legacy" }

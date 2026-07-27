@@ -87,11 +87,14 @@ Re-baseline them after the repository boundary cleanup.
   shape, tiling, method settings, and device. Coadd and INR dry-run integration
   tests gate the record without creating a FITS product.
 - Experimental field geometry now includes exact tensor-native power distance,
-  bounded power-cell ownership, Čech overlap adjacency, and radical-plane
-  equations, plus an explicitly labelled compact soft optimization surrogate.
-  The exact references are chunk-bounded but not yet asymptotically sparse; this
-  is the geometry foundation for the [execution roadmap](next.md), not a claim
-  that the full Power-Foam renderer or optimizer is shipped.
+  bounded power-cell ownership, Čech overlap adjacency, radical-plane
+  equations, an exact uniform-grid Čech index with symmetric neighbor CSR, and
+  exact disk-to-regular-tile candidate CSR. One-million-site CANFAR CPU gates
+  reduce 499,999,500,000 possible cell pairs to 848,574 candidates in 3.683 s
+  median, and 1,048,576,000,000 possible tile/site tests to 2,789,942 exact
+  candidates in 0.181 s median, both with independent dense-oracle parity.
+  These are geometry foundations, not a claim that the exact clipped
+  Power-Foam renderer or optimizer is shipped.
 - Weighted and equal-mean tiled coadds now execute exposure-major: an observation
   is read and calibrated once, projected through every output tile, then released.
   The stale unbounded module-global tensor cache is gone, overwrite freshness is
