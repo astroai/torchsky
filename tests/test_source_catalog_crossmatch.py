@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+import sys
 
 from astropy.table import Table
 
@@ -8,6 +9,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "compare_wcs_aware_so
 spec = importlib.util.spec_from_file_location("catalog_compare", SCRIPT)
 assert spec is not None and spec.loader is not None
 module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 
