@@ -486,12 +486,22 @@ extractor to the Torchsky runtime.
   spectral/morphology strata, a close pair, stable source identifiers, and an
   explicit blank catalogue. `SeedManifest` derives and serializes four
   independent streams; deterministic artifact and flux-conservation tests pass.
-- [ ] Render truth with denser spatial/spectral integration than any fitted
+- [x] Render truth with denser spatial/spectral integration than any fitted
   method, and split complete scene/exposure identifiers into disjoint
   train/validation/test sets.
-- [ ] Add one common Torch detector: propagated/empirical whitening, a fixed PSF
+  Evidence: truth uses 4x4 subpixel integration and 129-sample normalized
+  tabulated responses over smooth, line, and dropout spectra; `band_flux` is
+  recomputed and gated from the dense integral. `split_identifiers` shuffles
+  complete stable identifiers into deterministic, complete, pairwise-disjoint
+  partitions.
+- [x] Add one common Torch detector: propagated/empirical whitening, a fixed PSF
   template bank, local maxima, angular non-maximum suppression, and a threshold
   calibrated on validation nulls to 95% measured purity.
+  Evidence: per-band propagated noise whitening, a unit-energy Gaussian
+  template bank, positive chi statistic, deterministic local maxima/NMS, and
+  tied-score-safe validation purity thresholding are benchmark-local. NMS
+  accepts an explicit target-WCS pixel scale and angular radius; angular/pixel
+  equivalence and null/bright-source fixtures pass.
 - [x] Add deterministic maximum-cardinality one-to-one truth association within
   the pre-registered radius; count unmatched and duplicate detections as false
   positives and gate close-pair/duplicate fixtures.
@@ -528,14 +538,18 @@ Current Gate 0/M0 evidence:
   maxima, pixel-space NMS on the common target plane, and validation-only
   measured-purity threshold selection.
 - [x] Noiseless bright-source position recovery and zero-valued null control.
-- [ ] Extend truth from band-integrated SED samples to a denser tabulated
+- [x] Extend truth from band-integrated SED samples to a denser tabulated
   spectral truth integral than every fitted method.
-- [ ] Express NMS and association radii through the target WCS angular scale;
-  the current Gate 0 helper is deliberately pixel-space.
-- [ ] Add forced flux/color scoring and held-out detector likelihood before the
+- [x] Express NMS and association radii through the target WCS angular scale.
+- [x] Add forced flux/color scoring and held-out detector likelihood before the
   reporting checkbox above can be checked.
-- [ ] Pass the focused CUDA parity test on CANFAR; local CPU passes and the
-  locked local environment has no CUDA.
+- [x] Pass the focused CUDA parity test on CANFAR; local CPU passes and the
+  locked local environment has no CUDA. Exact evidence below covers the first
+  Gate 0 implementation commit; rerun after each material detector change.
+- [x] H100 session `of2wd541`, exact commit `3874b9a`, passed all 10 focused
+  Gate 0 tests plus the deterministic 96-square/six-band artifact. Artifacts:
+  `/arc/projects/ots/torchsky-runs/20260727-multiband-gate0-3874b9a/`.
+  Peak child RSS was 1,756,592 KiB on CUDA 12.9.
 
 ## Checkpoint 4 — Absorb The Former Parallel Work
 
@@ -567,13 +581,13 @@ Current Gate 0/M0 evidence:
 
 ### Exposure-major map scaling
 
-- [ ] Run untiled and `256`/`512` tiled multi-exposure benchmarks on CANFAR CPU
+- [x] Run untiled and `256`/`512` tiled multi-exposure benchmarks on CANFAR CPU
   and CUDA where advertised.
-- [ ] Cover at least 512/2048-square with 6/24 exposures; attempt 4096-square only
+- [x] Cover at least 512/2048-square with 6/24 exposures; attempt 4096-square only
   in the bounded tiled mode.
 - [ ] Decide from repeated evidence whether a caller-scoped byte-bounded MEF
   cache is justified. Do not implement one from assumption.
-- [ ] Record the tile-size crossover and peak-memory reduction in
+- [x] Record the tile-size crossover and peak-memory reduction in
   `docs/roadmap/status.md`.
 
 Active exact-commit runs:
@@ -591,12 +605,18 @@ Active exact-commit runs:
   allocation. At 2048-square/24 exposures, tile 256/512 measured
   6.967/1.978 s and 279/290 MB. The job manifest reports 1,765,264 KiB peak
   child RSS.
-- [ ] Replacement CPU session `i3lhh6tk`, exact commit `63be9b3`, runs the same
+- [x] Replacement CPU session `i3lhh6tk`, exact commit `63be9b3`, ran the same
   512/2048 matrix with the required per-command Pixi environment. Artifacts:
   `/arc/projects/ots/torchsky-runs/20260727-map-scaling-cpu-v4-63be9b3/`.
-- [ ] Bounded 4096-square/24-exposure H100 session `r0j9aehr`, exact commit
+  Evidence: deterministic 512-square/6-exposure untiled/256/512 times were
+  0.073/0.230/0.083 s. Deterministic 2048-square/24-exposure tile 256/512 times
+  were 14.073/4.335 s. The manifest reports 1,478,308 KiB peak child RSS.
+- [x] Bounded 4096-square/24-exposure H100 session `r0j9aehr`, exact commit
   `63be9b3`, compares tile 256 and 512 only. Artifacts:
   `/arc/projects/ots/torchsky-runs/20260727-map-scaling-cuda-4096-v3-63be9b3/`.
+  Evidence: both deterministic cases passed in 29.239/8.538 s with
+  1,095/1,106 MB peak CUDA allocation. The manifest reports 1,907,664 KiB peak
+  child RSS.
 - [x] Record replacement-launch failures `w7m1xl20`/`vdhsc9f8` (the same
   filtered-clone credential lifetime) and `axvovt1a`/`nibxmavo` (bootstrap
   passed, but raw commands omitted the required Pixi prefix). None produced
@@ -612,10 +632,21 @@ canfar logs r0j9aehr
 canfar ps --all --json
 ```
 
+Conclusion: untiled wins for 512-square products. For 24-exposure products,
+tile 512 is 3.25x faster than tile 256 on CPU at 2048 square, 3.52x faster on
+H100 at 2048 square, and 3.42x faster on H100 at 4096 square. At large sizes,
+the measured CUDA allocation differs by only 1–4% because the benchmark retains
+all input exposure tensors; output tiling does not solve input residency.
+Retain 512 as the operational default tile and leave the MEF-cache box open
+until repeated `SCI`/`ERR`/`DQ` reads measure bytes saved versus stale-data risk.
+
 ### SMACS J0723 six-band readiness
 
 - [ ] Inventory the calibrated `SCI`, `ERR`, and `DQ` planes on CANFAR through
   Torchfits/Torchsky boundaries.
+  Located data root: `/arc/projects/ots/jwst_smacs0723`. The prior guessed
+  `/arc/projects/ots/torchsky/data/...` roots do not exist. Run the committed
+  Torchfits-backed inventory against this exact root.
 - [ ] Verify common support for F090W, F150W, F200W, F277W, F356W, and F444W
   under the pre-registered split:
   `train={1,2,4,5,7}`, `validation={3,8}`, `test={6,9}`.
@@ -628,6 +659,12 @@ canfar ps --all --json
 
 - [ ] Exercise repeated MEF `SCI`/`ERR`/`DQ` reads, overwrite freshness, header
   preservation, dtype/device transfer, and large-image memory through Torchsky.
+  Partial evidence: the SMACS benchmark no longer imports Astropy FITS; filter
+  discovery, `SCI`/`ERR`/`DQ` reads, and generated science/weight/mask products
+  now use `torchsky.get_header`/`read`/`write`, hence Torchfits. A focused MEF
+  fixture gates headers, float/int plane reads, invalid-ERR/DQ masking, weights,
+  and round-trip auxiliary outputs. Repeated overwrite/device/large-real-file
+  stress remains open.
 - [ ] Record Torchfits defects in the sibling repository; keep FITS/cache fixes
   out of Torchsky.
 

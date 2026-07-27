@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 from astropy.io import fits
+import torchsky
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,9 @@ from bench_map_smacs0723_real import (  # noqa: E402
     _reference_path_for_band,
     _linearize_sip_header,
     _metric_mask,
+    _prepare_aux_files,
+    _read_ext,
+    _sci_header,
 )
 
 
@@ -136,6 +140,41 @@ def test_discover_exposure_paths_can_filter_by_band_and_module(tmp_path: Path) -
         module="b",
     )
     assert [path.name for path in paths] == ["a_nrcb1_cal.fits"]
+
+
+def test_smacs_mef_io_and_aux_files_use_torchfits_boundary(tmp_path: Path) -> None:
+    path = tmp_path / "fixture_cal.fits"
+    science = np.arange(9, dtype=np.float32).reshape(3, 3)
+    error = np.full((3, 3), 2.0, dtype=np.float32)
+    error[0, 0] = np.nan
+    dq = np.zeros((3, 3), dtype=np.int16)
+    dq[1, 1] = 1
+    sci = fits.ImageHDU(data=science, name="SCI")
+    sci.header["FILTER"] = "F200W"
+    fits.HDUList(
+        [
+            fits.PrimaryHDU(),
+            sci,
+            fits.ImageHDU(data=error, name="ERR"),
+            fits.ImageHDU(data=dq, name="DQ"),
+        ]
+    ).writeto(path)
+
+    assert _sci_header(path)["FILTER"] == "F200W"
+    assert np.array_equal(_read_ext(path, "SCI"), science)
+    aux_dir = tmp_path / "aux"
+    aux_dir.mkdir()
+    science_path, weight_path, mask_path = _prepare_aux_files(
+        path, aux_dir, linearize_sip=False
+    )
+    output_science = torchsky.read(str(science_path)).cpu().numpy()
+    output_weight = torchsky.read(str(weight_path)).cpu().numpy()
+    output_mask = torchsky.read(str(mask_path)).cpu().numpy()
+    assert np.array_equal(output_science, science)
+    assert output_weight[0, 0] == 0.0
+    assert output_weight[0, 1] == 0.25
+    assert output_weight[1, 1] == 0.0
+    assert np.array_equal(output_mask, output_weight > 0)
 
 
 def test_approx_overlap_grid_counts_projected_headers() -> None:

@@ -15,7 +15,6 @@ from typing import Any
 
 import numpy as np
 import torch
-from astropy.io import fits
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -146,28 +145,29 @@ def _module_detector_tokens(band: str, module: str | None) -> tuple[str, ...]:
 
 def _exposure_filter_band(path: Path) -> str | None:
     try:
-        with fits.open(path) as hdul:
-            primary = hdul[0].header
-            sci = hdul["SCI"].header if "SCI" in hdul else primary
-            for key in ("FILTER", "PUPIL"):
-                value = sci.get(key) or primary.get(key)
-                if value:
-                    text = str(value).strip().upper()
-                    if text.startswith("F") and text.endswith("W"):
-                        return text
+        primary = dict(torchsky.get_header(str(path), 0))
+        try:
+            science = dict(torchsky.get_header(str(path), "SCI"))
+        except Exception:
+            science = primary
+        for key in ("FILTER", "PUPIL"):
+            value = science.get(key) or primary.get(key)
+            if value:
+                text = str(value).strip().upper()
+                if text.startswith("F") and text.endswith("W"):
+                    return text
     except Exception:
         return None
     return None
 
 
-def _sci_header(path: Path) -> fits.Header:
-    with fits.open(path) as hdul:
-        return hdul["SCI"].header.copy()
+def _sci_header(path: Path) -> dict[str, Any]:
+    return dict(torchsky.get_header(str(path), "SCI"))
 
 
 def _read_ext(path: Path, ext: str) -> np.ndarray:
-    with fits.open(path) as hdul:
-        return np.asarray(hdul[ext].data, dtype=np.float32)
+    image = torchsky.read(str(path), hdu=ext)
+    return image.detach().cpu().numpy().astype(np.float32, copy=False)
 
 
 def _discover_exposure_paths(
@@ -209,7 +209,7 @@ def _discover_exposure_paths(
     return paths
 
 
-def _linearize_sip_header(header: fits.Header) -> fits.Header:
+def _linearize_sip_header(header: dict[str, Any]) -> dict[str, Any]:
     out = header.copy()
     for key in list(out.keys()):
         if key in {"A_ORDER", "B_ORDER", "AP_ORDER", "BP_ORDER"}:
@@ -224,7 +224,9 @@ def _linearize_sip_header(header: fits.Header) -> fits.Header:
     return out
 
 
-def _cutout_header(header: fits.Header, x0: int, y0: int, size: int) -> fits.Header:
+def _cutout_header(
+    header: dict[str, Any], x0: int, y0: int, size: int
+) -> dict[str, Any]:
     out = header.copy()
     out["NAXIS1"] = size
     out["NAXIS2"] = size
@@ -282,7 +284,7 @@ def _best_overlap_cutout(
     )
 
 
-def _header_samples(header: fits.Header) -> tuple[np.ndarray, np.ndarray]:
+def _header_samples(header: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
     width = int(header["NAXIS1"])
     height = int(header["NAXIS2"])
     xs = np.array(
@@ -317,8 +319,8 @@ def _header_samples(header: fits.Header) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _approx_overlap_grid(
-    headers: list[fits.Header],
-    target_header: fits.Header,
+    headers: list[dict[str, Any]],
+    target_header: dict[str, Any],
     *,
     coarse_step: int = 8,
 ) -> np.ndarray:
@@ -350,7 +352,7 @@ def _approx_overlap_grid(
     return overlap
 
 
-def _downsample_header(header: fits.Header, step: int) -> fits.Header:
+def _downsample_header(header: dict[str, Any], step: int) -> dict[str, Any]:
     if step <= 1:
         return header.copy()
     out = header.copy()
@@ -368,8 +370,8 @@ def _downsample_header(header: fits.Header, step: int) -> fits.Header:
 
 def _best_overlap_cutout_from_headers(
     reference: np.ndarray,
-    headers: list[fits.Header],
-    target_header: fits.Header,
+    headers: list[dict[str, Any]],
+    target_header: dict[str, Any],
     *,
     size: int,
     coarse_step: int = 8,
@@ -390,7 +392,7 @@ def _best_overlap_cutout_from_headers(
 def _best_overlap_cutout_from_observations(
     reference: np.ndarray,
     observations: list[ImageObservation],
-    target_header: fits.Header,
+    target_header: dict[str, Any],
     *,
     size: int,
     coarse_step: int = 8,
@@ -445,22 +447,22 @@ def _prepare_aux_files(
     science_path = tmpdir / f"{stem}_sci.fits"
     weight_path = tmpdir / f"{stem}_wht.fits"
     mask_path = tmpdir / f"{stem}_mask.fits"
-    fits.PrimaryHDU(
-        data=np.asarray(science, dtype=np.float32), header=header.copy()
-    ).writeto(
-        science_path,
+    torchsky.write(
+        str(science_path),
+        torch.from_numpy(np.asarray(science, dtype=np.float32)),
+        header=header,
         overwrite=True,
     )
-    fits.PrimaryHDU(
-        data=np.asarray(weight, dtype=np.float32), header=header.copy()
-    ).writeto(
-        weight_path,
+    torchsky.write(
+        str(weight_path),
+        torch.from_numpy(np.asarray(weight, dtype=np.float32)),
+        header=header,
         overwrite=True,
     )
-    fits.PrimaryHDU(
-        data=np.asarray(mask, dtype=np.float32), header=header.copy()
-    ).writeto(
-        mask_path,
+    torchsky.write(
+        str(mask_path),
+        torch.from_numpy(np.asarray(mask, dtype=np.float32)),
+        header=header,
         overwrite=True,
     )
     return science_path, weight_path, mask_path

@@ -120,15 +120,24 @@ Re-baseline them after the repository boundary cleanup.
   blank and close-pair scenes, flux-conserving 4x4 subpixel truth images, a
   common Torch whitening/matched-filter/local-max/NMS detector, validation-only
   purity thresholds, and exact maximum-cardinality one-to-one association.
-  Local evidence is 9 focused passes and one CUDA skip; denser spectral truth,
-  WCS-angular association, full catalogue metrics, baselines, and CANFAR CUDA
-  parity remain open, so no depth-gain claim exists.
+  Dense 129-sample spectral truth, WCS-angular NMS/association, joint forced
+  fluxes, adjacent-color metrics, and held-out Gaussian likelihood are now
+  gated; local focused evidence is 11 passes and one CUDA skip. Classical/model
+  baselines and the full smoke selection function remain open, so no depth-gain
+  claim exists.
 - Weighted and equal-mean tiled coadds now execute exposure-major: an observation
   is read and calibrated once, projected through every output tile, then released.
   The stale unbounded module-global tensor cache is gone, overwrite freshness is
   gated, and bilinear/flux/Drizzle/conservative tiled parity is covered. Exact
   median and cross-exposure correction retain an explicit tile-major fallback
   until a spillable reducer exists.
+- CANFAR multi-exposure scaling now covers 512/2048 square on CPU/H100 and a
+  bounded 4096-square H100 point. Untiled wins at 512; tile 512 beats tile 256
+  by 3.25x CPU and 3.52x H100 at 2048, and 3.42x H100 at 4096. Large-case CUDA
+  allocation differs by only 1–4% between tile sizes because all inputs remain
+  resident, so 512 is the throughput-oriented default rather than a claimed
+  input-memory fix. No caller MEF cache is justified until repeated
+  `SCI`/`ERR`/`DQ` stress quantifies its benefit and freshness behavior.
 
 - WCS mixed pixel/world solving covers spatial cubes with linearly coupled
   non-spatial axes; the focused gate reports
@@ -141,6 +150,11 @@ Re-baseline them after the repository boundary cleanup.
 - Sphere spin-matrix default acceptance passes.
 - Architecture ownership changed: FITS implementation work and I/O throughput
   claims now belong to `torchfits`; torchsky retains only integration contracts.
+- The real SMACS benchmark now follows that ownership: calibrated filter/header
+  discovery, `SCI`/`ERR`/`DQ` reads, and temporary science/weight/mask FITS
+  products all traverse Torchsky's public Torchfits facade. A focused MEF
+  round-trip/weight-mask fixture passes; CANFAR inventory and repeated
+  overwrite/device/large-image stress remain open.
 - WCS/sphere `gradcheck` gap closed: 26 WCS gradcheck tests (all 8 projections,
   SIP, TPV) + 3 sphere spectral gradcheck tests. Projections with analytic
   inverse (AIT, MOL, CEA, MER) get `world_to_pixel` gradcheck; TAN/SIN/ARC/HPX

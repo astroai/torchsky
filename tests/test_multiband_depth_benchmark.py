@@ -16,8 +16,12 @@ from bench_multiband_depth import (  # noqa: E402
     calibrate_purity_threshold,
     detection_statistic,
     find_detections,
+    flux_color_metrics,
+    forced_linear_flux,
+    gaussian_nll,
     generate_truth_catalog,
     make_seed_manifest,
+    maximum_cardinality_angular_match,
     maximum_cardinality_match,
     render_truth,
     score_detections,
@@ -30,6 +34,11 @@ def test_seed_catalog_render_and_artifact_are_deterministic() -> None:
     second = _gate0_artifact(seed=101, size=32, bands=6, sources=10)
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
     assert len(set(first["seeds"].values())) == 4
+    split = first["split"]
+    assert set(split["train"]).isdisjoint(split["validation"])
+    assert set(split["train"]).isdisjoint(split["test"])
+    assert set(split["validation"]).isdisjoint(split["test"])
+    assert first["spectral_samples"] == 129
 
 
 def test_truth_catalog_has_required_strata_and_conserves_flux() -> None:
@@ -50,7 +59,32 @@ def test_truth_catalog_has_required_strata_and_conserves_flux() -> None:
         rtol=2e-12,
         atol=2e-12,
     )
+    recomputed_flux = torch.trapezoid(
+        catalog.spectral_flux_density[:, None] * catalog.band_response[None],
+        catalog.spectral_coordinate,
+        dim=-1,
+    )
+    torch.testing.assert_close(catalog.band_flux, recomputed_flux)
+    assert catalog.spectral_coordinate.numel() == 129
     assert 2.0 < torch.linalg.vector_norm(catalog.xy[-1] - catalog.xy[-2]) < 4.0
+
+
+def test_forced_flux_color_and_heldout_likelihood() -> None:
+    catalog = generate_truth_catalog(
+        height=32,
+        width=32,
+        bands=4,
+        source_count=5,
+        seed=38,
+        include_close_pair=False,
+    )
+    cube = render_truth(catalog, height=32, width=32)
+    measured = forced_linear_flux(cube, catalog)
+    torch.testing.assert_close(measured, catalog.band_flux, rtol=2e-11, atol=2e-11)
+    metrics = flux_color_metrics(measured, catalog.band_flux)
+    assert max(abs(value) for value in metrics["median_fractional_flux_bias"]) < 2e-11
+    assert max(abs(value) for value in metrics["median_adjacent_color_bias_mag"]) < 2e-11
+    assert gaussian_nll(cube, cube, 0.2) == pytest.approx(torch.log(torch.tensor(0.2)).item())
 
 
 def test_blank_truth_scene() -> None:
@@ -94,6 +128,26 @@ def test_detector_recovers_noiseless_bright_sources_and_null_is_empty() -> None:
     null_statistic = detection_statistic(torch.zeros_like(cube), 0.01)
     null_detections, _ = find_detections(null_statistic, threshold=1.0)
     assert null_detections.shape == (0, 2)
+
+
+def test_angular_nms_and_matching_use_target_pixel_scale() -> None:
+    statistic = torch.zeros((9, 9), dtype=torch.float64)
+    statistic[4, 4] = 10.0
+    statistic[4, 6] = 9.0
+    angular_xy, _ = find_detections(
+        statistic,
+        threshold=8.0,
+        nms_radius_arcsec=0.12,
+        pixel_scale_arcsec=0.05,
+    )
+    assert angular_xy.tolist() == [[4.0, 4.0]]
+    match = maximum_cardinality_angular_match(
+        torch.tensor([[4.0, 4.0]]),
+        torch.tensor([[5.0, 4.0]]),
+        radius_arcsec=0.06,
+        pixel_scale_arcsec=0.05,
+    )
+    assert match.pairs == ((0, 0),)
 
 
 def test_matching_maximizes_cardinality_for_close_pair_and_counts_duplicate() -> None:

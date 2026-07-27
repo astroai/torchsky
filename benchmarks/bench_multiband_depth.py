@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass
 import json
+import math
 from pathlib import Path
 from typing import Sequence
 
@@ -52,6 +53,9 @@ class TruthCatalog:
 
     xy: torch.Tensor
     band_flux: torch.Tensor
+    spectral_coordinate: torch.Tensor
+    spectral_flux_density: torch.Tensor
+    band_response: torch.Tensor
     sigma_px: torch.Tensor
     kind: tuple[str, ...]
     source_id: tuple[str, ...]
@@ -62,6 +66,17 @@ class TruthCatalog:
             raise ValueError("xy must have shape (sources, 2)")
         if self.band_flux.ndim != 2 or self.band_flux.shape[0] != count:
             raise ValueError("band_flux must have shape (sources, bands)")
+        if self.spectral_coordinate.ndim != 1:
+            raise ValueError("spectral_coordinate must be one-dimensional")
+        spectral_samples = self.spectral_coordinate.shape[0]
+        if self.spectral_flux_density.shape != (count, spectral_samples):
+            raise ValueError(
+                "spectral_flux_density must have shape (sources, spectral samples)"
+            )
+        if self.band_response.shape != (self.band_flux.shape[1], spectral_samples):
+            raise ValueError(
+                "band_response must have shape (bands, spectral samples)"
+            )
         if self.sigma_px.shape != (count,):
             raise ValueError("sigma_px must have shape (sources,)")
         if len(self.kind) != count or len(self.source_id) != count:
@@ -69,11 +84,21 @@ class TruthCatalog:
         if not (
             torch.isfinite(self.xy).all()
             and torch.isfinite(self.band_flux).all()
+            and torch.isfinite(self.spectral_coordinate).all()
+            and torch.isfinite(self.spectral_flux_density).all()
+            and torch.isfinite(self.band_response).all()
             and torch.isfinite(self.sigma_px).all()
         ):
             raise ValueError("catalogue tensors must be finite")
-        if torch.any(self.band_flux < 0) or torch.any(self.sigma_px <= 0):
-            raise ValueError("fluxes must be non-negative and sigma_px positive")
+        if (
+            torch.any(self.band_flux < 0)
+            or torch.any(self.spectral_flux_density < 0)
+            or torch.any(self.band_response < 0)
+            or torch.any(self.sigma_px <= 0)
+        ):
+            raise ValueError(
+                "fluxes/responses must be non-negative and sigma_px positive"
+            )
 
 
 @dataclass(frozen=True)
@@ -141,6 +166,7 @@ def generate_truth_catalog(
     bands: int,
     source_count: int,
     seed: int,
+    spectral_samples: int = 129,
     include_close_pair: bool = True,
     device: torch.device | str = "cpu",
     dtype: torch.dtype = torch.float64,
@@ -151,13 +177,28 @@ def generate_truth_catalog(
         raise ValueError("height and width must be at least 16 pixels")
     if bands < 3:
         raise ValueError("at least three bands are required")
+    if spectral_samples < 33:
+        raise ValueError("spectral_samples must be at least 33")
     if source_count < 0:
         raise ValueError("source_count must be non-negative")
+    wavelength = torch.linspace(-1.0, 1.0, spectral_samples, dtype=dtype)
+    band_centers = torch.linspace(-0.85, 0.85, bands, dtype=dtype)
+    band_response = torch.exp(
+        -0.5 * ((wavelength[None] - band_centers[:, None]) / 0.24).square()
+    )
+    band_response /= torch.trapezoid(
+        band_response, wavelength, dim=-1
+    )[:, None]
     if source_count == 0:
         empty = torch.empty
         return TruthCatalog(
             xy=empty((0, 2), device=device, dtype=dtype),
             band_flux=empty((0, bands), device=device, dtype=dtype),
+            spectral_coordinate=wavelength.to(device),
+            spectral_flux_density=empty(
+                (0, spectral_samples), device=device, dtype=dtype
+            ),
+            band_response=band_response.to(device),
             sigma_px=empty((0,), device=device, dtype=dtype),
             kind=(),
             source_id=(),
@@ -173,8 +214,10 @@ def generate_truth_catalog(
             -0.7, 1.4, generator=generator
         )
     )
-    wavelength = torch.linspace(-1.0, 1.0, bands, dtype=dtype)
-    kinds = tuple(_SOURCE_KINDS[index % len(_SOURCE_KINDS)] for index in range(source_count))
+    kinds = tuple(
+        _SOURCE_KINDS[index % len(_SOURCE_KINDS)]
+        for index in range(source_count)
+    )
     spectra: list[torch.Tensor] = []
     sigma: list[float] = []
     for index, kind in enumerate(kinds):
@@ -184,7 +227,10 @@ def generate_truth_catalog(
         spectrum = torch.exp(slope * wavelength)
         if kind == "emission_line":
             spectrum = 0.08 * spectrum
-            spectrum[(2 * index + 1) % bands] += 2.5
+            line_center = band_centers[(2 * index + 1) % bands]
+            spectrum += 2.5 * torch.exp(
+                -0.5 * ((wavelength - line_center) / 0.018).square()
+            )
         elif kind == "blue_dropout":
             spectrum = spectrum * (wavelength <= 0.0)
         elif kind == "red_dropout":
@@ -198,9 +244,18 @@ def generate_truth_catalog(
         xy[-1, 0] += 1.25 * 2.354820045 * 1.05
         xy[-1, 0].clamp_(max=width - 1 - margin)
 
+    spectral_flux_density = torch.stack(spectra)
+    band_flux = torch.trapezoid(
+        spectral_flux_density[:, None] * band_response[None],
+        wavelength,
+        dim=-1,
+    )
     return TruthCatalog(
         xy=xy.to(device),
-        band_flux=torch.stack(spectra).to(device),
+        band_flux=band_flux.to(device),
+        spectral_coordinate=wavelength.to(device),
+        spectral_flux_density=spectral_flux_density.to(device),
+        band_response=band_response.to(device),
         sigma_px=torch.tensor(sigma, dtype=dtype, device=device),
         kind=kinds,
         source_id=tuple(f"source-{index:05d}" for index in range(source_count)),
@@ -226,7 +281,26 @@ def render_truth(
     )
     if catalog.xy.shape[0] == 0:
         return cube
+    profiles = _gaussian_profiles(
+        catalog,
+        height=height,
+        width=width,
+        spatial_oversample=spatial_oversample,
+    )
+    return torch.einsum("nb,nhw->bhw", catalog.band_flux, profiles)
 
+
+def _gaussian_profiles(
+    catalog: TruthCatalog,
+    *,
+    height: int,
+    width: int,
+    spatial_oversample: int,
+) -> torch.Tensor:
+    """Build normalized benchmark truth/measurement profiles."""
+
+    if height < 1 or width < 1 or spatial_oversample < 1:
+        raise ValueError("image dimensions and spatial_oversample must be positive")
     offsets = (
         torch.arange(
             spatial_oversample,
@@ -240,9 +314,8 @@ def render_truth(
         torch.arange(width, dtype=catalog.xy.dtype, device=catalog.xy.device),
         indexing="ij",
     )
-    for position, flux, sigma in zip(
-        catalog.xy, catalog.band_flux, catalog.sigma_px, strict=True
-    ):
+    profiles: list[torch.Tensor] = []
+    for position, sigma in zip(catalog.xy, catalog.sigma_px, strict=True):
         profile = torch.zeros_like(xx)
         for dy in offsets:
             for dx in offsets:
@@ -252,8 +325,104 @@ def render_truth(
                 profile += torch.exp(-0.5 * radius2 / sigma.square())
         profile /= spatial_oversample**2
         profile /= profile.sum()
-        cube += flux[:, None, None] * profile
-    return cube
+        profiles.append(profile)
+    return torch.stack(profiles)
+
+
+def forced_linear_flux(
+    images: torch.Tensor,
+    catalog: TruthCatalog,
+    *,
+    spatial_oversample: int = 4,
+) -> torch.Tensor:
+    """Jointly fit source amplitudes in every band at all truth positions."""
+
+    if images.ndim != 3 or images.shape[0] != catalog.band_flux.shape[1]:
+        raise ValueError("images must have shape (catalog bands, height, width)")
+    if images.device != catalog.xy.device or images.dtype != catalog.xy.dtype:
+        raise ValueError("images and catalogue must share device and dtype")
+    if catalog.xy.shape[0] == 0:
+        return torch.empty_like(catalog.band_flux)
+    profiles = _gaussian_profiles(
+        catalog,
+        height=images.shape[1],
+        width=images.shape[2],
+        spatial_oversample=spatial_oversample,
+    )
+    design = profiles.reshape(profiles.shape[0], -1).mT
+    return torch.linalg.lstsq(design, images.reshape(images.shape[0], -1).mT).solution
+
+
+def flux_color_metrics(
+    measured_flux: torch.Tensor,
+    truth_flux: torch.Tensor,
+) -> dict[str, list[float]]:
+    """Report all-injection fractional-flux and adjacent-color bias."""
+
+    if measured_flux.shape != truth_flux.shape or measured_flux.ndim != 2:
+        raise ValueError("measured_flux and truth_flux must share (sources, bands)")
+    if torch.any(truth_flux < 0):
+        raise ValueError("truth_flux must be non-negative")
+    fractional_bias: list[float] = []
+    fractional_nmad: list[float] = []
+    for band in range(truth_flux.shape[1]):
+        valid = truth_flux[:, band] > 0
+        if not torch.any(valid):
+            fractional_bias.append(float("nan"))
+            fractional_nmad.append(float("nan"))
+            continue
+        residual = (
+            measured_flux[valid, band] / truth_flux[valid, band] - 1.0
+        )
+        median = torch.median(residual)
+        fractional_bias.append(float(median))
+        fractional_nmad.append(
+            float(1.4826 * torch.median(torch.abs(residual - median)))
+        )
+
+    color_bias_mag: list[float] = []
+    for band in range(truth_flux.shape[1] - 1):
+        valid = (
+            (truth_flux[:, band] > 0)
+            & (truth_flux[:, band + 1] > 0)
+            & (measured_flux[:, band] > 0)
+            & (measured_flux[:, band + 1] > 0)
+        )
+        if not torch.any(valid):
+            color_bias_mag.append(float("nan"))
+            continue
+        measured_color = -2.5 * torch.log10(
+            measured_flux[valid, band] / measured_flux[valid, band + 1]
+        )
+        truth_color = -2.5 * torch.log10(
+            truth_flux[valid, band] / truth_flux[valid, band + 1]
+        )
+        color_bias_mag.append(float(torch.median(measured_color - truth_color)))
+    return {
+        "median_fractional_flux_bias": fractional_bias,
+        "fractional_flux_nmad": fractional_nmad,
+        "median_adjacent_color_bias_mag": color_bias_mag,
+    }
+
+
+def gaussian_nll(
+    observation: torch.Tensor,
+    prediction: torch.Tensor,
+    noise_sigma: torch.Tensor | float,
+) -> float:
+    """Mean held-out detector Gaussian negative log likelihood, up to a constant."""
+
+    if observation.shape != prediction.shape:
+        raise ValueError("observation and prediction must have matching shapes")
+    sigma = torch.as_tensor(
+        noise_sigma, device=observation.device, dtype=observation.dtype
+    )
+    if sigma.ndim == 1 and observation.ndim >= 1 and sigma.shape[0] == observation.shape[0]:
+        sigma = sigma.reshape((-1,) + (1,) * (observation.ndim - 1))
+    if torch.any(sigma <= 0):
+        raise ValueError("noise_sigma must be positive")
+    standardized = (observation - prediction) / sigma
+    return float(torch.mean(0.5 * standardized.square() + torch.log(sigma)))
 
 
 def gaussian_template_bank(
@@ -313,17 +482,26 @@ def find_detections(
     statistic: torch.Tensor,
     *,
     threshold: float,
-    nms_radius_px: int = 2,
+    nms_radius_px: float | None = 2.0,
+    nms_radius_arcsec: float | None = None,
+    pixel_scale_arcsec: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Find local maxima and apply deterministic Euclidean non-maximum suppression."""
 
     if statistic.ndim != 2 or not torch.isfinite(statistic).all():
         raise ValueError("statistic must be a finite 2-D tensor")
-    if nms_radius_px < 0:
+    if nms_radius_arcsec is not None:
+        if nms_radius_px not in (None, 2.0):
+            raise ValueError("set either pixel or angular NMS radius, not both")
+        if pixel_scale_arcsec is None or pixel_scale_arcsec <= 0:
+            raise ValueError("positive pixel_scale_arcsec is required")
+        nms_radius_px = nms_radius_arcsec / pixel_scale_arcsec
+    if nms_radius_px is None or nms_radius_px < 0:
         raise ValueError("nms_radius_px must be non-negative")
-    window = 2 * nms_radius_px + 1
+    pool_radius = int(math.ceil(nms_radius_px))
+    window = 2 * pool_radius + 1
     pooled = F.max_pool2d(
-        statistic[None, None], kernel_size=window, stride=1, padding=nms_radius_px
+        statistic[None, None], kernel_size=window, stride=1, padding=pool_radius
     )[0, 0]
     candidates = torch.nonzero(
         (statistic >= threshold) & (statistic == pooled), as_tuple=False
@@ -469,6 +647,24 @@ def maximum_cardinality_match(
     )
 
 
+def maximum_cardinality_angular_match(
+    truth_xy: torch.Tensor,
+    detection_xy: torch.Tensor,
+    *,
+    radius_arcsec: float,
+    pixel_scale_arcsec: float,
+) -> MatchResult:
+    """Associate target-plane coordinates using an explicit WCS angular scale."""
+
+    if pixel_scale_arcsec <= 0:
+        raise ValueError("pixel_scale_arcsec must be positive")
+    return maximum_cardinality_match(
+        truth_xy,
+        detection_xy,
+        radius_px=radius_arcsec / pixel_scale_arcsec,
+    )
+
+
 def score_detections(
     truth_xy: torch.Tensor,
     detection_xy: torch.Tensor,
@@ -504,6 +700,10 @@ def score_detections(
 
 def _gate0_artifact(*, seed: int, size: int, bands: int, sources: int) -> dict[str, object]:
     manifest = make_seed_manifest(seed)
+    split = split_identifiers(
+        tuple(f"scene-{index:03d}" for index in range(10)),
+        seed=manifest.pointing,
+    )
     catalog = generate_truth_catalog(
         height=size,
         width=size,
@@ -512,6 +712,13 @@ def _gate0_artifact(*, seed: int, size: int, bands: int, sources: int) -> dict[s
         seed=manifest.scene,
     )
     truth = render_truth(catalog, height=size, width=size)
+    measured_flux = forced_linear_flux(truth, catalog)
+    noise_sigma = 0.05
+    noise = noise_sigma * torch.randn(
+        truth.shape,
+        generator=torch.Generator().manual_seed(manifest.noise),
+        dtype=truth.dtype,
+    )
     return {
         "profile": "gate0",
         "seeds": asdict(manifest),
@@ -519,7 +726,15 @@ def _gate0_artifact(*, seed: int, size: int, bands: int, sources: int) -> dict[s
         "source_count": sources,
         "source_kinds": list(catalog.kind),
         "band_flux_sum": truth.sum(dim=(-2, -1)).tolist(),
+        "split": asdict(split),
         "spatial_oversample": 4,
+        "spectral_samples": catalog.spectral_coordinate.numel(),
+        "noiseless_forced_photometry": flux_color_metrics(
+            measured_flux, catalog.band_flux
+        ),
+        "heldout_truth_gaussian_nll": gaussian_nll(
+            truth + noise, truth, noise_sigma
+        ),
     }
 
 
