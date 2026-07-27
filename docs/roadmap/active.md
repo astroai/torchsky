@@ -227,7 +227,9 @@ pixi run preflight-push
   excludes the default CPU feature and retains `torchfits>=1.0.0rc4`. The first
   native build (`uuqpxybv`) then exposed a missing full-toolkit constraint and a
   CMake 4.4 `FindCUDAToolkit` failure; the lock now explicitly includes
-  `cuda-nvcc 12.9` and CMake 4.3.x.
+  `cuda-nvcc 12.9` and CMake 4.3.x. Session `xv84arv5` then proved that NVCC
+  alone does not install CMake's `CUDA::nvrtc` development target; the isolated
+  lock now also includes `cuda-nvrtc-dev 12.9`.
 - [ ] Build Torchsky in `cuda-bench` on CANFAR, require
   `torch.cuda.is_available()`, pass both sparse-index CUDA parity tests, and
   record million-site CUDA benchmarks.
