@@ -12,6 +12,7 @@ from torchsky.map.field.foam import (
     power_face_planes,
     soft_bounded_power_weights,
     sparse_cech_graph,
+    tile_disk_candidate_csr,
 )
 
 
@@ -198,6 +199,171 @@ def test_sparse_cech_graph_mps_matches_cpu() -> None:
 
     torch.testing.assert_close(mps.candidate_pairs.cpu(), cpu.candidate_pairs)
     torch.testing.assert_close(mps.edges.cpu(), cpu.edges)
+    torch.testing.assert_close(mps.indptr.cpu(), cpu.indptr)
+    torch.testing.assert_close(mps.indices.cpu(), cpu.indices)
+
+
+def _brute_force_tile_disk_lists(
+    sites: torch.Tensor,
+    radii: torch.Tensor,
+    *,
+    tile_shape: tuple[int, int],
+    tile_origin: tuple[float, float],
+    tile_size: tuple[float, float],
+) -> list[list[int]]:
+    rows, columns = tile_shape
+    origin = torch.tensor(tile_origin, dtype=sites.dtype, device=sites.device)
+    size = torch.tensor(tile_size, dtype=sites.dtype, device=sites.device)
+    result: list[list[int]] = []
+    for row in range(rows):
+        for column in range(columns):
+            lower = origin + size * torch.tensor(
+                [column, row],
+                dtype=sites.dtype,
+                device=sites.device,
+            )
+            upper = lower + size
+            closest = torch.minimum(torch.maximum(sites, lower), upper)
+            intersects = torch.sum((sites - closest) ** 2, dim=1) <= radii**2
+            result.append(torch.nonzero(intersects).flatten().tolist())
+    return result
+
+
+def test_tile_disk_candidate_csr_matches_brute_force_and_is_deterministic() -> None:
+    generator = torch.Generator().manual_seed(73)
+    sites = 8.0 * torch.rand((96, 2), generator=generator, dtype=torch.float64) - 1.0
+    radii = 0.05 + 1.0 * torch.rand(
+        (96,),
+        generator=generator,
+        dtype=torch.float64,
+    )
+    kwargs = {
+        "tile_shape": (5, 7),
+        "tile_origin": (-0.5, 0.25),
+        "tile_size": (0.9, 1.2),
+    }
+
+    result = tile_disk_candidate_csr(sites, radii, **kwargs)
+    repeated = tile_disk_candidate_csr(sites, radii, **kwargs)
+    expected = _brute_force_tile_disk_lists(sites, radii, **kwargs)
+
+    assert result.total_pairs == 5 * 7 * 96
+    assert result.indices.numel() < result.total_pairs
+    assert result.indptr.shape == (5 * 7 + 1,)
+    torch.testing.assert_close(repeated.indptr, result.indptr)
+    torch.testing.assert_close(repeated.indices, result.indices)
+    torch.testing.assert_close(repeated.tile_ids, result.tile_ids)
+    for tile_id, expected_sites in enumerate(expected):
+        actual = result.indices[
+            result.indptr[tile_id] : result.indptr[tile_id + 1]
+        ]
+        assert actual.tolist() == expected_sites
+
+
+def test_tile_disk_candidate_csr_closed_boundaries_and_wide_support() -> None:
+    sites = torch.tensor(
+        [
+            [1.0, 0.5],  # zero-radius point on an internal vertical boundary
+            [0.5, 1.0],  # zero-radius point on an internal horizontal boundary
+            [1.0, 1.0],  # shared four-tile corner
+            [-2.0, -2.0],  # outside
+            [1.0, 1.0],  # covers the complete grid
+            [3.25, 0.5],  # outside but touches the outer boundary
+        ],
+        dtype=torch.float64,
+    )
+    radii = torch.tensor([0.0, 0.0, 0.0, 0.1, 2.0, 1.25], dtype=torch.float64)
+    kwargs = {
+        "tile_shape": (2, 2),
+        "tile_origin": (0.0, 0.0),
+        "tile_size": (1.0, 1.0),
+    }
+
+    result = tile_disk_candidate_csr(sites, radii, **kwargs)
+    expected = _brute_force_tile_disk_lists(sites, radii, **kwargs)
+
+    for tile_id, expected_sites in enumerate(expected):
+        actual = result.indices[
+            result.indptr[tile_id] : result.indptr[tile_id + 1]
+        ]
+        assert actual.tolist() == expected_sites
+    assert all(4 in candidates for candidates in expected)
+    assert all(3 not in candidates for candidates in expected)
+
+
+def test_tile_disk_candidate_csr_empty_outside_scale_and_limits() -> None:
+    empty = tile_disk_candidate_csr(
+        torch.empty((0, 2)),
+        torch.empty((0,)),
+        tile_shape=(2, 3),
+    )
+    assert empty.indptr.tolist() == [0] * 7
+    assert empty.indices.numel() == empty.tile_ids.numel() == 0
+
+    outside = tile_disk_candidate_csr(
+        torch.tensor([[-10.0, -10.0]]),
+        torch.tensor([0.1]),
+        tile_shape=(2, 3),
+    )
+    assert outside.indptr.tolist() == [0] * 7
+    assert outside.indices.numel() == 0
+
+    sites = torch.tensor([[0.2, 0.3], [1.0, 0.8], [1.8, 1.7]])
+    radii = torch.tensor([0.2, 0.4, 0.1])
+    reference = tile_disk_candidate_csr(
+        sites,
+        radii,
+        tile_shape=(4, 4),
+        tile_origin=(0.0, 0.0),
+        tile_size=(0.5, 0.5),
+    )
+    scaled = tile_disk_candidate_csr(
+        3.5 * sites + torch.tensor([7.0, -2.0]),
+        3.5 * radii,
+        tile_shape=(4, 4),
+        tile_origin=(7.0, -2.0),
+        tile_size=(1.75, 1.75),
+    )
+    torch.testing.assert_close(scaled.indptr, reference.indptr)
+    torch.testing.assert_close(scaled.indices, reference.indices)
+
+    with pytest.raises(ValueError, match="tile memberships"):
+        tile_disk_candidate_csr(
+            torch.tensor([[1.0, 1.0]]),
+            torch.tensor([10.0]),
+            tile_shape=(20, 20),
+            max_aabb_memberships=100,
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_tile_disk_candidate_csr_cuda_matches_cpu() -> None:
+    generator = torch.Generator().manual_seed(17)
+    sites = torch.rand((128, 2), generator=generator)
+    radii = 0.01 + 0.2 * torch.rand((128,), generator=generator)
+    cpu = tile_disk_candidate_csr(sites, radii, tile_shape=(8, 8))
+    cuda = tile_disk_candidate_csr(
+        sites.cuda(),
+        radii.cuda(),
+        tile_shape=(8, 8),
+    )
+
+    torch.testing.assert_close(cuda.indptr.cpu(), cpu.indptr)
+    torch.testing.assert_close(cuda.indices.cpu(), cpu.indices)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
+def test_tile_disk_candidate_csr_mps_matches_cpu() -> None:
+    generator = torch.Generator().manual_seed(19)
+    sites = torch.rand((128, 2), generator=generator)
+    radii = 0.01 + 0.2 * torch.rand((128,), generator=generator)
+    cpu = tile_disk_candidate_csr(sites, radii, tile_shape=(8, 8))
+    mps = tile_disk_candidate_csr(
+        sites.to("mps"),
+        radii.to("mps"),
+        tile_shape=(8, 8),
+    )
+
     torch.testing.assert_close(mps.indptr.cpu(), cpu.indptr)
     torch.testing.assert_close(mps.indices.cpu(), cpu.indices)
 

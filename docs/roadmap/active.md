@@ -46,8 +46,12 @@ the science product's outer boundary. Finite drops need halo support across
 internal tiles, but the external Drizzle contract still controls the outer
 canvas. The fix must express both boundaries rather than widening outer support.
 
-- [ ] Reproduce the six Linux external-Drizzle failures in a CANFAR staging
+- [x] Reproduce the six Linux external-Drizzle failures in a CANFAR staging
   headless session using the exact commit and optional comparator environment.
+  Evidence: session `vw6i462r`, commit `0b10008`, image
+  `images.canfar.net/skaha/base-notebook:latest`, 6 expected and observed
+  failures in 72.70 s with 1,479,056 KiB peak RSS. Durable artifacts:
+  `/arc/projects/ots/torchsky-runs/20260726-drizzle-baseline-v2-0b10008/`.
 - [x] Add a regression that distinguishes global target boundaries from internal
   spatial-tile boundaries for rotated and shifted square drops.
   Evidence: `test_square_drizzle_tiles_keep_internal_halos_but_not_outer_canvas_halos`.
@@ -68,7 +72,9 @@ canvas. The fix must express both boundaries rather than widening outer support.
 
   Evidence: 140 passed in 52.16 seconds.
 - [ ] Run the same focused gate on CANFAR staging Linux.
-- [ ] Commit the repair and update the evidence here.
+- [x] Commit the repair and update the evidence here.
+  Evidence: `380ecdd`, pushed to `origin/main` after 1625 tests passed in
+  `ci-local`.
 
 ## Checkpoint 2 — Sparse Čech Candidates And Neighbor CSR
 
@@ -122,14 +128,40 @@ pixi run preflight-push
 This is separate from cell-to-cell adjacency: detector/map tiles need a bounded
 list of disks that can affect them before exact cell/pixel intersection begins.
 
-- [ ] Define tile bounds and disk support in one local tangent-plane convention.
-- [ ] Build deterministic tile-to-cell CSR without allocating `tiles × sites`.
-- [ ] Prove equality with brute-force disk/AABB intersection, including empty
+- [x] Define tile bounds and disk support in one local tangent-plane convention.
+  Evidence: `tile_disk_candidate_csr` uses `(x, y)` lower-left origin and tile
+  size, `(rows, columns)` shape, row-major tile IDs, and closed support so exact
+  boundary touches are conservatively retained.
+- [x] Build deterministic tile-to-cell CSR without allocating `tiles × sites`.
+  Evidence: the production path enumerates clipped per-disk AABB tile ranges,
+  applies exact disk/AABB intersection, and sorts `(tile_id, site_id)` before
+  constructing CSR. An explicit AABB-membership allocation guard fails closed.
+- [x] Prove equality with brute-force disk/AABB intersection, including empty
   tiles, boundary touches, and disks spanning many tiles.
+  Evidence: randomized brute-force parity plus outside, zero-radius
+  edge/corner, whole-grid, empty-input, similarity-scale, determinism, limit,
+  and device tests in `tests/test_map_field_foam.py`; local focused gate passed
+  15 tests with 2 device skips.
 - [ ] Report occupancy distribution, maximum candidates per tile, reduction
   ratio, wall time, and peak memory locally and on CANFAR.
+  Local million-site/1,048,576-tile evidence: 2,789,942 exact candidates from
+  1,048,576,000,000 possible tests (99.999734% reduction), 2.66 mean,
+  15 maximum, p50/p90/p99 = 2/5/7 candidates per tile, 0.569 s median CPU wall
+  time, 1.11 GiB peak RSS, and a 2,000-site dense oracle pass. CANFAR CPU/CUDA
+  remains pending.
 - [ ] Check the parent roadmap's neighbor-CSR/tile-candidate box only after both
   CSR directions are gated.
+
+Focused continuation:
+
+```bash
+pixi run -e test -- pytest tests/test_map_field_foam.py -q
+pixi run -e sphere-bench -- python benchmarks/bench_map_foam_tiles.py \
+  --n-sites 1000000 --rows 1024 --columns 1024 --runs 3 \
+  --oracle-sites 2000 --device cpu \
+  --json-out benchmark_results/map_foam_tiles.json
+pixi run preflight-push
+```
 
 ## Checkpoint 4 — Absorb The Former Parallel Work
 

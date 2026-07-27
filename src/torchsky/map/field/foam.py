@@ -28,6 +28,20 @@ class SparseCechGraph:
     bin_size: float
 
 
+@dataclass(frozen=True)
+class TileDiskCSR:
+    """Exact disk candidates for a regular tangent-plane tile grid."""
+
+    indptr: Tensor
+    indices: Tensor
+    tile_ids: Tensor
+    aabb_memberships: int
+    total_pairs: int
+    tile_shape: tuple[int, int]
+    tile_origin: tuple[float, float]
+    tile_size: tuple[float, float]
+
+
 def _validate_sites_and_radii(
     sites: Tensor,
     radii: Tensor,
@@ -383,6 +397,178 @@ def sparse_cech_graph(
     )
 
 
+def tile_disk_candidate_csr(
+    sites: Tensor,
+    radii: Tensor,
+    *,
+    tile_shape: tuple[int, int],
+    tile_origin: tuple[float, float] = (0.0, 0.0),
+    tile_size: tuple[float, float] = (1.0, 1.0),
+    max_aabb_memberships: int = 50_000_000,
+) -> TileDiskCSR:
+    """Return exact disk-to-tile candidates for a regular 2-D tile grid.
+
+    Coordinates use a local tangent plane with ``(x, y)`` sites, an ``(x, y)``
+    lower-left grid origin, an ``(x, y)`` tile size, and a ``(rows, columns)``
+    tile shape. Tiles are flattened in row-major order. A disk touching a tile
+    boundary is included in every adjacent tile sharing that boundary.
+
+    The index enumerates only the tiles covered by each disk's AABB, then
+    applies the exact closed disk/AABB intersection predicate. It never
+    allocates a ``number_of_tiles × number_of_sites`` matrix.
+    """
+    _validate_sites_and_radii(sites, radii, allow_empty=True)
+    if sites.shape[1] != 2:
+        raise ValueError("tile_disk_candidate_csr requires 2-D disk sites")
+    if len(tile_shape) != 2:
+        raise ValueError("tile_shape must contain (rows, columns)")
+    rows, columns = (int(tile_shape[0]), int(tile_shape[1]))
+    if rows <= 0 or columns <= 0:
+        raise ValueError("tile_shape entries must be positive")
+    if len(tile_origin) != 2 or len(tile_size) != 2:
+        raise ValueError("tile_origin and tile_size must contain (x, y)")
+    origin_x, origin_y = (float(tile_origin[0]), float(tile_origin[1]))
+    size_x, size_y = (float(tile_size[0]), float(tile_size[1]))
+    if not all(math.isfinite(value) for value in (origin_x, origin_y)):
+        raise ValueError("tile_origin entries must be finite")
+    if not all(
+        math.isfinite(value) and value > 0.0 for value in (size_x, size_y)
+    ):
+        raise ValueError("tile_size entries must be finite and positive")
+    membership_limit = int(max_aabb_memberships)
+    if membership_limit <= 0:
+        raise ValueError("max_aabb_memberships must be positive")
+    tile_count = rows * columns
+    if tile_count > torch.iinfo(torch.long).max:
+        raise ValueError("tile grid exceeds int64 indexing")
+
+    empty = torch.empty((0,), dtype=torch.long, device=sites.device)
+    if sites.shape[0] == 0:
+        return TileDiskCSR(
+            indptr=torch.zeros(tile_count + 1, dtype=torch.long, device=sites.device),
+            indices=empty,
+            tile_ids=empty,
+            aabb_memberships=0,
+            total_pairs=0,
+            tile_shape=(rows, columns),
+            tile_origin=(origin_x, origin_y),
+            tile_size=(size_x, size_y),
+        )
+
+    with torch.no_grad():
+        index_dtype = torch.float32 if sites.device.type == "mps" else torch.float64
+        index_sites = sites.detach().to(dtype=index_dtype)
+        index_radii = radii.detach().to(dtype=index_dtype)
+        grid_origin = torch.tensor(
+            [origin_x, origin_y],
+            dtype=index_dtype,
+            device=sites.device,
+        )
+        grid_size = torch.tensor(
+            [size_x, size_y],
+            dtype=index_dtype,
+            device=sites.device,
+        )
+        lower_scaled = (index_sites - index_radii[:, None] - grid_origin) / grid_size
+        upper_scaled = (index_sites + index_radii[:, None] - grid_origin) / grid_size
+        # Closed support includes the tile immediately left/below an exact boundary.
+        lower_tile = torch.ceil(lower_scaled).to(torch.long) - 1
+        upper_tile = torch.floor(upper_scaled).to(torch.long)
+        lower_tile[:, 0].clamp_(0, columns - 1)
+        upper_tile[:, 0].clamp_(0, columns - 1)
+        lower_tile[:, 1].clamp_(0, rows - 1)
+        upper_tile[:, 1].clamp_(0, rows - 1)
+
+        grid_upper = grid_origin + grid_size * torch.tensor(
+            [columns, rows],
+            dtype=index_dtype,
+            device=sites.device,
+        )
+        outside = torch.any(
+            (index_sites + index_radii[:, None] < grid_origin)
+            | (index_sites - index_radii[:, None] > grid_upper),
+            dim=1,
+        )
+        spans = upper_tile - lower_tile + 1
+        membership_counts = spans[:, 0] * spans[:, 1]
+        membership_counts = torch.where(
+            outside,
+            torch.zeros_like(membership_counts),
+            membership_counts,
+        )
+        membership_count = int(membership_counts.sum().item())
+        if membership_count > membership_limit:
+            raise ValueError(
+                f"disk AABBs cover {membership_count} tile memberships, exceeding "
+                f"max_aabb_memberships={membership_limit}; increase tile size or "
+                "the explicit limit"
+            )
+        if membership_count == 0:
+            return TileDiskCSR(
+                indptr=torch.zeros(
+                    tile_count + 1,
+                    dtype=torch.long,
+                    device=sites.device,
+                ),
+                indices=empty,
+                tile_ids=empty,
+                aabb_memberships=0,
+                total_pairs=tile_count * sites.shape[0],
+                tile_shape=(rows, columns),
+                tile_origin=(origin_x, origin_y),
+                tile_size=(size_x, size_y),
+            )
+
+        site_ids = torch.repeat_interleave(
+            torch.arange(sites.shape[0], device=sites.device),
+            membership_counts,
+        )
+        membership_offsets = torch.cumsum(membership_counts, dim=0) - membership_counts
+        local = torch.arange(membership_count, device=sites.device) - (
+            torch.repeat_interleave(membership_offsets, membership_counts)
+        )
+        span_x = spans[site_ids, 0]
+        tile_x = lower_tile[site_ids, 0] + torch.remainder(local, span_x)
+        tile_y = lower_tile[site_ids, 1] + torch.div(
+            local,
+            span_x,
+            rounding_mode="floor",
+        )
+
+        tile_lower = grid_origin + grid_size * torch.stack((tile_x, tile_y), dim=1)
+        tile_upper = tile_lower + grid_size
+        centers = index_sites[site_ids]
+        closest = torch.minimum(torch.maximum(centers, tile_lower), tile_upper)
+        intersects = torch.sum((centers - closest) ** 2, dim=1) <= (
+            index_radii[site_ids] ** 2
+        )
+        site_ids = site_ids[intersects]
+        tile_ids = (tile_y[intersects] * columns + tile_x[intersects]).to(torch.long)
+
+        order = torch.argsort(site_ids, stable=True)
+        order = order[torch.argsort(tile_ids[order], stable=True)]
+        tile_ids = tile_ids[order]
+        indices = site_ids[order]
+        tile_counts = torch.bincount(tile_ids, minlength=tile_count)
+        indptr = torch.cat(
+            (
+                torch.zeros(1, dtype=torch.long, device=sites.device),
+                torch.cumsum(tile_counts, dim=0),
+            )
+        )
+
+    return TileDiskCSR(
+        indptr=indptr,
+        indices=indices,
+        tile_ids=tile_ids,
+        aabb_memberships=membership_count,
+        total_pairs=tile_count * sites.shape[0],
+        tile_shape=(rows, columns),
+        tile_origin=(origin_x, origin_y),
+        tile_size=(size_x, size_y),
+    )
+
+
 def power_face_planes(
     sites: Tensor,
     radii: Tensor,
@@ -413,10 +599,12 @@ def power_face_planes(
 
 __all__ = [
     "SparseCechGraph",
+    "TileDiskCSR",
     "bounded_power_ownership",
     "cech_adjacency",
     "power_distance",
     "power_face_planes",
     "soft_bounded_power_weights",
     "sparse_cech_graph",
+    "tile_disk_candidate_csr",
 ]

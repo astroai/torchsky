@@ -92,6 +92,7 @@ bench-map-projection-mosaic-suite = "pixi run -e map-compat python benchmarks/be
 bench-map-projection-mosaic-suite-full = "pixi run -e map-compat python benchmarks/bench_map_projection_mosaic_suite.py --profile full --json-out benchmark_results/map_projection_mosaic_suite_full.json --markdown-out benchmark_results/map_projection_mosaic_suite_full.md"
 bench-map-field-fit = "pixi run -e sphere-bench python benchmarks/bench_map_field_fit.py --json-out benchmark_results/map_field_fit.json"
 bench-map-foam-sparse = "pixi run -e sphere-bench python benchmarks/bench_map_foam_sparse.py --json-out benchmark_results/map_foam_sparse.json"
+bench-map-foam-tiles = "pixi run -e sphere-bench python benchmarks/bench_map_foam_tiles.py --json-out benchmark_results/map_foam_tiles.json"
 bench-wcs-tpv-inverse = "pixi run -e sphere-bench python benchmarks/bench_wcs_tpv_inverse.py --json-out benchmark_results/wcs_tpv_inverse.json --markdown-out benchmark_results/wcs_tpv_inverse.md"
 bench-wcs-spectral-temporal = "pixi run -e bench-all python benchmarks/bench_wcs_spectral_temporal.py --json-out benchmark_results/wcs_spectral_temporal.json"
 bench-wcs-tabular = "pixi run -e bench-all python benchmarks/bench_wcs_tabular.py --json-out benchmark_results/wcs_tabular.json"

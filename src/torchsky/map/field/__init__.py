@@ -40,12 +40,14 @@ from .adaptive import (
 )
 from .foam import (
     SparseCechGraph,
+    TileDiskCSR,
     bounded_power_ownership,
     cech_adjacency,
     power_distance,
     power_face_planes,
     soft_bounded_power_weights,
     sparse_cech_graph,
+    tile_disk_candidate_csr,
 )
 from .core import (
     BandpassConditionedField,
@@ -185,6 +187,8 @@ __all__ = [
     "bandpass",
     "bounded_power_ownership",
     "cech_adjacency",
+    "TileDiskCSR",
+    "tile_disk_candidate_csr",
     "ConditionedSpectralField",
     "FieldComponentDecomposition",
     "FieldComponentAnchorTerm",
