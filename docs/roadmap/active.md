@@ -224,7 +224,10 @@ pixi run preflight-push
   the normal CPU/MPS solve.
   Evidence: a rich `linux-64-cuda` platform with CUDA 12.9 and
   `pytorch-gpu >=2.10,<2.11` resolves PyTorch 2.10.0 CUDA 12.9; the environment
-  excludes the default CPU feature and retains `torchfits>=1.0.0rc4`.
+  excludes the default CPU feature and retains `torchfits>=1.0.0rc4`. The first
+  native build (`uuqpxybv`) then exposed a missing full-toolkit constraint and a
+  CMake 4.4 `FindCUDAToolkit` failure; the lock now explicitly includes
+  `cuda-nvcc 12.9` and CMake 4.3.x.
 - [ ] Build Torchsky in `cuda-bench` on CANFAR, require
   `torch.cuda.is_available()`, pass both sparse-index CUDA parity tests, and
   record million-site CUDA benchmarks.
