@@ -4,6 +4,10 @@
 > This is a planning document, not a public API promise. Current shipped status
 > remains in [`status.md`](status.md). The current commit-by-commit checklist,
 > evidence, and continuation commands live in [`active.md`](active.md).
+> The user-authored FOSSIL/BISOU science and primitive work is incorporated as
+> a separate mission-neutral track in
+> [`../projects/fossil.md`](../projects/fossil.md); its immediate ordering is
+> downstream of the active exact/bounded map-operator gates.
 
 ## North Star
 
@@ -52,7 +56,7 @@ not be presented as Foam.
   the exact chunked Čech reference and report candidate reduction and peak memory.
 - [x] Construct per-cell neighbor CSR and tile-to-cell candidate lists without a
   mandatory graphics or CUDA-only runtime dependency.
-- [ ] Implement exact clipped power-cell/pixel intersection in the local tangent
+- [x] Implement exact clipped power-cell/pixel intersection in the local tangent
   plane, including flux-conserving area integration and an adjoint/dot-product
   gate. Use quadrature only as a documented fallback for curved WCS footprints.
 - [ ] Add exact hard-cell inference and a well-defined differentiable training

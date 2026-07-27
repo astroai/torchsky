@@ -916,10 +916,12 @@ def bounded_power_pixel_operator(
         raise ValueError("pixels, sites, and radii must share dtype and device")
     if not bool(torch.isfinite(pixel_polygons).all()):
         raise ValueError("pixel polygons must be finite")
+    signed_pixel_areas = (
+        torch.stack([_polygon_signed_area(polygon) for polygon in pixel_polygons])
+        if pixel_polygons.shape[0]
+        else pixel_polygons.new_empty((0,))
+    )
     if pixel_polygons.shape[0]:
-        signed_pixel_areas = torch.stack(
-            [_polygon_signed_area(polygon) for polygon in pixel_polygons]
-        )
         if bool(torch.any(torch.abs(signed_pixel_areas) == 0)):
             raise ValueError("pixel polygons must have non-zero area")
     edge_a = torch.roll(pixel_polygons, shifts=-1, dims=1) - pixel_polygons
@@ -1045,7 +1047,15 @@ def bounded_power_pixel_operator(
                 sites[cell],
                 radii[cell],
             )
-            if bool(area > 0):
+            area_tolerance = (
+                64.0
+                * torch.finfo(area.dtype).eps
+                * (
+                    torch.abs(signed_pixel_areas[pixel])
+                    + math.pi * radii[cell] * radii[cell]
+                )
+            )
+            if bool(area > area_tolerance):
                 kept_pixels.append(pixel)
                 kept_cells.append(cell)
                 kept_areas.append(area)
@@ -1087,11 +1097,426 @@ def bounded_power_pixel_operator(
     )
 
 
+def _padded_cell_neighbors(
+    cell_ids: Tensor,
+    *,
+    neighbor_indptr: Tensor | None,
+    neighbor_indices: Tensor | None,
+    cell_count: int,
+    max_neighbors: int,
+) -> Tensor:
+    if cell_ids.numel() == 0:
+        return cell_ids.new_empty((0, max_neighbors))
+    if neighbor_indptr is None:
+        return torch.arange(
+            cell_count,
+            dtype=torch.long,
+            device=cell_ids.device,
+        ).expand(cell_ids.shape[0], -1)
+    assert neighbor_indices is not None
+    counts = neighbor_indptr[cell_ids + 1] - neighbor_indptr[cell_ids]
+    rows = torch.repeat_interleave(
+        torch.arange(cell_ids.shape[0], device=cell_ids.device),
+        counts,
+    )
+    starts = torch.repeat_interleave(neighbor_indptr[cell_ids], counts)
+    offsets = torch.arange(rows.shape[0], device=cell_ids.device) - (
+        torch.repeat_interleave(torch.cumsum(counts, 0) - counts, counts)
+    )
+    padded = torch.full(
+        (cell_ids.shape[0], max_neighbors),
+        -1,
+        dtype=torch.long,
+        device=cell_ids.device,
+    )
+    padded[rows, offsets] = neighbor_indices[starts + offsets]
+    return padded
+
+
+def _batched_clip_power_cells(
+    polygons: Tensor,
+    cell_ids: Tensor,
+    padded_neighbors: Tensor,
+    sites: Tensor,
+    radii: Tensor,
+) -> tuple[Tensor, Tensor]:
+    """Clip equal-vertex-count polygons without candidate-wise synchronization."""
+    batch, initial_vertices, _ = polygons.shape
+    capacity = initial_vertices + padded_neighbors.shape[1]
+    vertices = polygons.new_zeros((batch, capacity, 2))
+    vertices[:, :initial_vertices] = polygons
+    counts = torch.full(
+        (batch,),
+        initial_vertices,
+        dtype=torch.long,
+        device=polygons.device,
+    )
+    positions = torch.arange(capacity, device=polygons.device).expand(batch, -1)
+    cell_sites = sites[cell_ids]
+    cell_radii = radii[cell_ids]
+
+    for plane in range(padded_neighbors.shape[1]):
+        neighbor_ids = padded_neighbors[:, plane]
+        present = neighbor_ids >= 0
+        safe_neighbors = neighbor_ids.clamp_min(0)
+        neighbor_sites = sites[safe_neighbors]
+        neighbor_radii = radii[safe_neighbors]
+        normals = neighbor_sites - cell_sites
+        offsets = 0.5 * (
+            torch.sum(neighbor_sites * neighbor_sites, dim=1)
+            - torch.sum(cell_sites * cell_sites, dim=1)
+            + cell_radii * cell_radii
+            - neighbor_radii * neighbor_radii
+        )
+        coincident = torch.all(normals == 0, dim=1)
+        dominated = present & coincident & (
+            (offsets < 0) | ((offsets == 0) & (neighbor_ids < cell_ids))
+        )
+        active = present & ~coincident & (counts > 0)
+
+        safe_counts = counts.clamp_min(1)
+        following = torch.remainder(positions + 1, safe_counts[:, None])
+        stop = torch.gather(vertices, 1, following[..., None].expand(-1, -1, 2))
+        start_values = torch.sum(vertices * normals[:, None, :], dim=2) - offsets[
+            :, None
+        ]
+        stop_values = torch.sum(stop * normals[:, None, :], dim=2) - offsets[:, None]
+        vertex_scale = torch.max(torch.linalg.vector_norm(vertices, dim=2), dim=1).values
+        tolerance = (
+            64.0
+            * torch.finfo(vertices.dtype).eps
+            * (
+                torch.abs(offsets)
+                + torch.linalg.vector_norm(normals, dim=1) * vertex_scale
+                + 1.0
+            )
+        )
+        valid_edges = positions < counts[:, None]
+        start_inside = start_values <= tolerance[:, None]
+        stop_inside = stop_values <= tolerance[:, None]
+        emit_start = valid_edges & start_inside
+        emit_intersection = valid_edges & (start_inside != stop_inside)
+        denominator = start_values - stop_values
+        fraction = torch.where(
+            emit_intersection,
+            start_values / torch.where(
+                denominator != 0,
+                denominator,
+                torch.ones_like(denominator),
+            ),
+            torch.zeros_like(start_values),
+        ).clamp(0.0, 1.0)
+        intersection = vertices + fraction[..., None] * (stop - vertices)
+        emitted = torch.stack((vertices, intersection), dim=2).reshape(
+            batch,
+            2 * capacity,
+            2,
+        )
+        emit = torch.stack((emit_start, emit_intersection), dim=2).reshape(
+            batch,
+            2 * capacity,
+        )
+        destinations = (torch.cumsum(emit, dim=1) - 1).clamp_min(0)
+        clipped = vertices.new_zeros(vertices.shape)
+        clipped.scatter_add_(
+            1,
+            destinations[..., None].expand(-1, -1, 2),
+            emitted * emit[..., None],
+        )
+        clipped_counts = torch.sum(emit, dim=1)
+        vertices = torch.where(active[:, None, None], clipped, vertices)
+        counts = torch.where(active, clipped_counts, counts)
+        counts = torch.where(dominated, torch.zeros_like(counts), counts)
+    return vertices, counts
+
+
+def _batched_polygon_disk_area(
+    vertices: Tensor,
+    counts: Tensor,
+    centers: Tensor,
+    radii: Tensor,
+) -> Tensor:
+    """Analytic polygon/disk areas for a padded polygon batch."""
+    batch, capacity, _ = vertices.shape
+    positions = torch.arange(capacity, device=vertices.device).expand(batch, -1)
+    safe_counts = counts.clamp_min(1)
+    following = torch.remainder(positions + 1, safe_counts[:, None])
+    start = vertices - centers[:, None, :]
+    stop = (
+        torch.gather(vertices, 1, following[..., None].expand(-1, -1, 2))
+        - centers[:, None, :]
+    )
+    delta = stop - start
+    quadratic = torch.sum(delta * delta, dim=2)
+    safe_quadratic = torch.where(
+        quadratic > 0,
+        quadratic,
+        torch.ones_like(quadratic),
+    )
+    linear = 2.0 * torch.sum(start * delta, dim=2)
+    constant = torch.sum(start * start, dim=2) - radii[:, None] ** 2
+    discriminant = linear * linear - 4.0 * quadratic * constant
+    tolerance = (
+        64.0
+        * torch.finfo(vertices.dtype).eps
+        * (
+            torch.abs(linear * linear)
+            + torch.abs(4.0 * quadratic * constant)
+            + 1.0
+        )
+    )
+    root = torch.sqrt(torch.clamp_min(discriminant, 0.0))
+    lower_root = (-linear - root) / (2.0 * safe_quadratic)
+    upper_root = (-linear + root) / (2.0 * safe_quadratic)
+    roots_exist = discriminant >= -tolerance
+    lower_valid = roots_exist & (lower_root > 0) & (lower_root < 1)
+    upper_valid = roots_exist & (upper_root > 0) & (upper_root < 1)
+    parameters = torch.stack(
+        (
+            torch.zeros_like(lower_root),
+            torch.where(lower_valid, lower_root, torch.ones_like(lower_root)),
+            torch.where(upper_valid, upper_root, torch.ones_like(upper_root)),
+            torch.ones_like(lower_root),
+        ),
+        dim=2,
+    )
+    parameters = torch.sort(parameters, dim=2).values
+    lower = parameters[..., :-1]
+    upper = parameters[..., 1:]
+    first = start[:, :, None, :] + lower[..., None] * delta[:, :, None, :]
+    second = start[:, :, None, :] + upper[..., None] * delta[:, :, None, :]
+    midpoint = 0.5 * (first + second)
+    cross = first[..., 0] * second[..., 1] - first[..., 1] * second[..., 0]
+    triangle = 0.5 * cross
+    sector = (
+        0.5
+        * radii[:, None, None] ** 2
+        * torch.atan2(cross, torch.sum(first * second, dim=3))
+    )
+    inside = torch.sum(midpoint * midpoint, dim=3) <= (
+        radii[:, None, None] ** 2 + tolerance[:, :, None]
+    )
+    intervals = torch.where(inside, triangle, sector)
+    intervals = torch.where(
+        upper > lower,
+        intervals,
+        torch.zeros_like(intervals),
+    )
+    valid_edges = (positions < counts[:, None]) & (counts[:, None] >= 3)
+    return torch.abs(torch.sum(intervals * valid_edges[..., None], dim=(1, 2)))
+
+
+def batched_bounded_power_pixel_operator(
+    pixel_polygons: Tensor,
+    sites: Tensor,
+    radii: Tensor,
+    *,
+    candidate_indptr: Tensor,
+    candidate_indices: Tensor,
+    neighbor_indptr: Tensor,
+    neighbor_indices: Tensor,
+    max_candidate_pairs: int = 1_000_000,
+    max_packed_vertices: int = 64,
+    candidate_chunk_size: int = 4096,
+) -> PowerPixelOperator:
+    """Build the exact operator with batched Torch clipping and area integration.
+
+    This production candidate requires both sparse CSR directions. The scalar
+    :func:`bounded_power_pixel_operator` remains the small-input oracle and dense
+    fallback.
+    """
+    _validate_sites_and_radii(sites, radii, allow_empty=True)
+    if sites.shape[1] != 2:
+        raise ValueError("batched_bounded_power_pixel_operator requires 2-D sites")
+    if (
+        not pixel_polygons.is_floating_point()
+        or pixel_polygons.ndim != 3
+        or pixel_polygons.shape[-1] != 2
+        or pixel_polygons.shape[1] < 3
+    ):
+        raise ValueError("pixel_polygons must have floating shape (P, V>=3, 2)")
+    if pixel_polygons.device != sites.device or pixel_polygons.dtype != sites.dtype:
+        raise ValueError("pixels, sites, and radii must share dtype and device")
+    if not bool(torch.isfinite(pixel_polygons).all()):
+        raise ValueError("pixel polygons must be finite")
+    signed_pixel_areas = (
+        torch.stack([_polygon_signed_area(polygon) for polygon in pixel_polygons])
+        if pixel_polygons.shape[0]
+        else pixel_polygons.new_empty((0,))
+    )
+    if bool(torch.any(torch.abs(signed_pixel_areas) == 0)):
+        raise ValueError("pixel polygons must have non-zero area")
+    edge_a = torch.roll(pixel_polygons, shifts=-1, dims=1) - pixel_polygons
+    edge_b = torch.roll(edge_a, shifts=-1, dims=1)
+    turns = edge_a[..., 0] * edge_b[..., 1] - edge_a[..., 1] * edge_b[..., 0]
+    if bool(torch.any((turns > 0).any(dim=1) & (turns < 0).any(dim=1))):
+        raise ValueError("pixel polygons must be convex and consistently ordered")
+    pixel_count = pixel_polygons.shape[0]
+    cell_count = sites.shape[0]
+    _validate_csr(
+        candidate_indptr,
+        candidate_indices,
+        rows=pixel_count,
+        columns=cell_count,
+        name="candidate",
+        device=sites.device,
+    )
+    _validate_csr(
+        neighbor_indptr,
+        neighbor_indices,
+        rows=cell_count,
+        columns=cell_count,
+        name="neighbor",
+        device=sites.device,
+    )
+    if candidate_indices.numel() > int(max_candidate_pairs):
+        raise ValueError("candidate CSR exceeds max_candidate_pairs")
+    chunk_size = int(candidate_chunk_size)
+    if chunk_size <= 0:
+        raise ValueError("candidate_chunk_size must be positive")
+
+    candidate_pixels = torch.repeat_interleave(
+        torch.arange(pixel_count, device=sites.device),
+        candidate_indptr[1:] - candidate_indptr[:-1],
+    )
+    if cell_count:
+        keys = candidate_pixels * cell_count + candidate_indices
+        keys = torch.unique(keys, sorted=True)
+        candidate_pixels = torch.div(keys, cell_count, rounding_mode="floor")
+        candidate_cells = torch.remainder(keys, cell_count)
+    else:
+        candidate_cells = candidate_indices
+    active_cells = torch.unique(candidate_cells, sorted=True)
+    neighbor_counts = neighbor_indptr[1:] - neighbor_indptr[:-1]
+    max_neighbors = (
+        int(neighbor_counts[active_cells].max().item()) if active_cells.numel() else 0
+    )
+    if pixel_polygons.shape[1] + max_neighbors > int(max_packed_vertices):
+        raise ValueError(
+            "batched clipping exceeds max_packed_vertices; raise the explicit "
+            "limit or use the scalar correctness oracle"
+        )
+
+    cell_areas = sites.new_zeros((cell_count,))
+    for start in range(0, active_cells.shape[0], chunk_size):
+        chunk_cells = active_cells[start : start + chunk_size]
+        chunk_radii = radii[chunk_cells]
+        lower = sites[chunk_cells] - chunk_radii[:, None]
+        upper = sites[chunk_cells] + chunk_radii[:, None]
+        bounds = torch.stack(
+            (
+                lower,
+                torch.stack((upper[:, 0], lower[:, 1]), dim=1),
+                upper,
+                torch.stack((lower[:, 0], upper[:, 1]), dim=1),
+            ),
+            dim=1,
+        )
+        chunk_neighbors = _padded_cell_neighbors(
+            chunk_cells,
+            neighbor_indptr=neighbor_indptr,
+            neighbor_indices=neighbor_indices,
+            cell_count=cell_count,
+            max_neighbors=max_neighbors,
+        )
+        cell_vertices, cell_counts = _batched_clip_power_cells(
+            bounds,
+            chunk_cells,
+            chunk_neighbors,
+            sites,
+            radii,
+        )
+        cell_areas[chunk_cells] = _batched_polygon_disk_area(
+            cell_vertices,
+            cell_counts,
+            sites[chunk_cells],
+            chunk_radii,
+        )
+
+    kept_pixels: list[Tensor] = []
+    kept_cells: list[Tensor] = []
+    kept_areas: list[Tensor] = []
+    for start in range(0, candidate_cells.shape[0], chunk_size):
+        chunk_cells = candidate_cells[start : start + chunk_size]
+        chunk_pixels = candidate_pixels[start : start + chunk_size]
+        chunk_neighbors = _padded_cell_neighbors(
+            chunk_cells,
+            neighbor_indptr=neighbor_indptr,
+            neighbor_indices=neighbor_indices,
+            cell_count=cell_count,
+            max_neighbors=max_neighbors,
+        )
+        vertices, counts = _batched_clip_power_cells(
+            pixel_polygons[chunk_pixels],
+            chunk_cells,
+            chunk_neighbors,
+            sites,
+            radii,
+        )
+        chunk_areas = _batched_polygon_disk_area(
+            vertices,
+            counts,
+            sites[chunk_cells],
+            radii[chunk_cells],
+        )
+        area_tolerance = (
+            64.0
+            * torch.finfo(chunk_areas.dtype).eps
+            * (
+                torch.abs(signed_pixel_areas[chunk_pixels])
+                + math.pi * radii[chunk_cells] ** 2
+            )
+        )
+        keep = chunk_areas > area_tolerance
+        kept_pixels.append(chunk_pixels[keep])
+        kept_cells.append(chunk_cells[keep])
+        kept_areas.append(chunk_areas[keep])
+    pixel_ids = (
+        torch.cat(kept_pixels) if kept_pixels else candidate_pixels.new_empty((0,))
+    )
+    indices = (
+        torch.cat(kept_cells) if kept_cells else candidate_cells.new_empty((0,))
+    )
+    areas = torch.cat(kept_areas) if kept_areas else sites.new_empty((0,))
+    row_counts = torch.bincount(pixel_ids, minlength=pixel_count)
+    indptr = torch.cat(
+        (
+            torch.zeros(1, dtype=torch.long, device=sites.device),
+            torch.cumsum(row_counts, dim=0),
+        )
+    )
+    order = torch.argsort(pixel_ids, stable=True)
+    order = order[torch.argsort(indices[order], stable=True)]
+    transpose_indices = pixel_ids[order]
+    transpose_areas = areas[order]
+    transpose_counts = torch.bincount(indices, minlength=cell_count)
+    transpose_indptr = torch.cat(
+        (
+            torch.zeros(1, dtype=torch.long, device=sites.device),
+            torch.cumsum(transpose_counts, dim=0),
+        )
+    )
+    return PowerPixelOperator(
+        indptr=indptr,
+        indices=indices,
+        pixel_ids=pixel_ids,
+        areas=areas,
+        transpose_indptr=transpose_indptr,
+        transpose_indices=transpose_indices,
+        transpose_areas=transpose_areas,
+        cell_areas=cell_areas,
+        pixel_count=pixel_count,
+        cell_count=cell_count,
+        candidate_pairs=int(candidate_indices.numel()),
+    )
+
+
 __all__ = [
     "PowerPixelOperator",
     "PowerValueSemantics",
     "SparseCechGraph",
     "TileDiskCSR",
+    "batched_bounded_power_pixel_operator",
     "bounded_power_pixel_operator",
     "bounded_power_ownership",
     "cech_adjacency",

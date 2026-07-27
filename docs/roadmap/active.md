@@ -222,19 +222,83 @@ points inside the pixel is not an exact-area implementation.
   exact inference must not be labelled as the soft training surrogate.
   Evidence: parametrized surface-brightness/integrated-flux dot products and
   one-pixel chunk invariance.
-- [ ] Benchmark candidates/s, intersections/s, peak memory, and numerical error
+- [x] Benchmark candidates/s, intersections/s, peak memory, and numerical error
   on CPU and CUDA; profile before adding a native kernel.
   Local CPU reference at 256 sites and 256 pixels: 2,539 candidates, 931
   positive intersections, 2.405 s median, 1,056 candidates/s, 387 positive
   intersections/s, 1.07 GB peak RSS, and 0.044 square-unit error against the
-  independent 256-square coverage oracle. CUDA and CANFAR remain unchecked.
-- [ ] Only then check the parent roadmap's exact clipped
+  independent 256-square coverage oracle. CANFAR session `m7ln4v57`, exact
+  commit `f16f939`, passed nine focused contracts plus the CUDA parity test.
+  Its matched-size reference benchmarks measured 3.924 s CPU
+  (647 candidates/s, 1.467 GB peak RSS) and 14.256 s H100 CUDA
+  (184 candidates/s, 705,991,168 bytes peak CUDA allocation), with independent
+  coverage-oracle absolute errors 0.044 and 0.0023 square units respectively.
+  The different CPU/CUDA random streams are not a parity comparison; the
+  focused same-input device test is. Artifacts:
+  `/arc/projects/ots/torchsky-runs/20260726-foam-operator-cpu-cuda-f16f939/`.
+  A local `cProfile` run attributes 77% of operator time to per-candidate cell
+  clipping, including 46% in half-plane clipping; scalar device decisions make
+  the exact reference unsuitable as the production CUDA renderer.
+- [x] Only then check the parent roadmap's exact clipped
   power-cell/pixel-intersection box.
+  Evidence: exact analytic/invariance/oracle/adjoint gates and matched
+  CPU/CUDA CANFAR measurements are recorded above; the parent roadmap is
+  updated without claiming production throughput.
 
 Focused continuation:
 
 ```bash
 pixi run -e test -- pytest tests/test_map_field_foam_intersection.py -q
+pixi run preflight-push
+```
+
+## Checkpoint 3C — Production Batched Exact Foam Renderer
+
+The reference establishes the mathematics but synchronizes once or more per
+candidate/edge on accelerators. Production must batch the same topology and
+analytic area calculation; soft ownership or fixed point sampling is not an
+acceptable speed substitute.
+
+- [x] Represent candidate polygons with bounded packed/padded storage and batch
+  radical-half-plane clipping without per-candidate `.item()` or host/device
+  synchronization.
+  Evidence: `batched_bounded_power_pixel_operator` uses a caller-bounded padded
+  vertex capacity, 4,096-candidate default chunks, CSR-padded neighbor planes,
+  and batched scatter compaction. It synchronizes once for the maximum neighbor
+  count, not per candidate or edge.
+- [x] Batch the exact segment/circular-arc disk intersection contribution,
+  preserving clockwise/counter-clockwise, tangent, zero-length, zero-radius,
+  coincident, and dominated-cell behavior.
+  Evidence: batched quadratic segment/disk roots and triangle/arc contributions
+  match the scalar analytic oracle; a scale-aware area tolerance removes
+  floating zero-area boundary ghosts in both paths.
+- [ ] Prove bitwise topology and tight area agreement with
+  `bounded_power_pixel_operator` across randomized/adversarial CPU, MPS, and
+  CUDA cases. Retain the current implementation as the correctness oracle.
+  CPU and MPS randomized, coincident/tie, zero-radius, tangent, transform, and
+  chunk cases pass; CUDA remains a CANFAR gate.
+- [ ] Route pixel-major/transpose sparse assembly and both value semantics
+  through the batched result; re-run adjoint and tile-chunk gates.
+  Local pixel/transpose CSR, area, `matvec`, and `rmatvec` equality pass for both
+  value semantics, including candidate chunk size 3 versus the 4,096 default;
+  CUDA remains unchecked.
+- [ ] Benchmark eager, `torch.compile`, and—only if still justified by
+  profiling—one native CPU/CUDA kernel. Record candidates/s, intersections/s,
+  peak allocation, synchronization count, and crossover size.
+  Eager CPU at 256 sites/256 pixels: 0.136 s median and 18,699 candidates/s,
+  versus 2.164 s and 1,173 candidates/s for the matched scalar oracle, with
+  identical 930-entry topology and total area. At 1,000 sites/1,024 pixels:
+  0.707 s, 14,781 candidates/s, and 591 MB operator-only peak RSS under
+  4,096-candidate chunks. `torch.compile` and CUDA remain unchecked; no native
+  kernel is justified before those measurements.
+- [ ] Run small/medium/large CANFAR CPU/CUDA cases, define a production
+  throughput baseline, and only then use the renderer in spectral Foam fitting.
+
+Focused continuation:
+
+```bash
+pixi run -e test -- pytest tests/test_map_field_foam_intersection.py -q
+pixi run bench-map-foam-operator
 pixi run preflight-push
 ```
 

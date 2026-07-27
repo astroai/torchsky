@@ -8,9 +8,11 @@ import pytest
 import torch
 
 from torchsky.map.field import (
+    batched_bounded_power_pixel_operator,
     bounded_power_ownership,
     bounded_power_pixel_operator,
     sparse_cech_graph,
+    tile_disk_candidate_csr,
 )
 
 
@@ -36,6 +38,7 @@ def test_single_cell_matches_analytic_circle_and_rectangle_areas() -> None:
             _rectangle(-1.0, -1.0, 1.0, 1.0),
             _rectangle(-0.1, -0.2, 0.1, 0.2),
             _rectangle(0.0, -1.0, 1.0, 1.0),
+            _rectangle(0.5, 0.0, 1.5, 1.0),
         )
     )
 
@@ -61,6 +64,7 @@ def test_single_cell_matches_analytic_circle_and_rectangle_areas() -> None:
         semantics="integrated_flux",
     )
     torch.testing.assert_close(integrated[0], torch.tensor(7.0, dtype=torch.float64))
+    assert integrated[-1] == 0
 
 
 def test_radical_half_planes_partition_pixel_and_break_coincident_ties() -> None:
@@ -273,6 +277,102 @@ def test_operator_validation_and_empty_contract() -> None:
         )
 
 
+def test_batched_operator_matches_scalar_oracle() -> None:
+    generator = torch.Generator().manual_seed(602)
+    sites = 2.0 * torch.rand((24, 2), generator=generator, dtype=torch.float64)
+    radii = 0.2 + 0.55 * torch.rand((24,), generator=generator, dtype=torch.float64)
+    pixels = torch.stack(
+        [
+            _rectangle(float(column), float(row), column + 1.0, row + 1.0)
+            for row in range(2)
+            for column in range(2)
+        ]
+    )
+    candidates = tile_disk_candidate_csr(sites, radii, tile_shape=(2, 2))
+    graph = sparse_cech_graph(sites, radii)
+    kwargs = {
+        "candidate_indptr": candidates.indptr,
+        "candidate_indices": candidates.indices,
+        "neighbor_indptr": graph.indptr,
+        "neighbor_indices": graph.indices,
+    }
+
+    scalar = bounded_power_pixel_operator(pixels, sites, radii, **kwargs)
+    batched = batched_bounded_power_pixel_operator(pixels, sites, radii, **kwargs)
+    chunked = batched_bounded_power_pixel_operator(
+        pixels,
+        sites,
+        radii,
+        candidate_chunk_size=3,
+        **kwargs,
+    )
+
+    torch.testing.assert_close(batched.indptr, scalar.indptr)
+    torch.testing.assert_close(batched.indices, scalar.indices)
+    torch.testing.assert_close(batched.pixel_ids, scalar.pixel_ids)
+    torch.testing.assert_close(batched.transpose_indptr, scalar.transpose_indptr)
+    torch.testing.assert_close(batched.transpose_indices, scalar.transpose_indices)
+    torch.testing.assert_close(batched.areas, scalar.areas, rtol=2e-12, atol=2e-12)
+    torch.testing.assert_close(
+        batched.transpose_areas,
+        scalar.transpose_areas,
+        rtol=2e-12,
+        atol=2e-12,
+    )
+    torch.testing.assert_close(
+        batched.cell_areas,
+        scalar.cell_areas,
+        rtol=2e-12,
+        atol=2e-12,
+    )
+    torch.testing.assert_close(chunked.indptr, batched.indptr)
+    torch.testing.assert_close(chunked.indices, batched.indices)
+    torch.testing.assert_close(chunked.areas, batched.areas)
+    values = torch.randn(24, generator=generator, dtype=torch.float64)
+    pixel_values = torch.randn(4, generator=generator, dtype=torch.float64)
+    for semantics in ("surface_brightness", "integrated_flux"):
+        torch.testing.assert_close(
+            batched.matvec(values, semantics=semantics),
+            scalar.matvec(values, semantics=semantics),
+            rtol=2e-12,
+            atol=2e-12,
+        )
+        torch.testing.assert_close(
+            batched.rmatvec(pixel_values, semantics=semantics),
+            scalar.rmatvec(pixel_values, semantics=semantics),
+            rtol=2e-12,
+            atol=2e-12,
+        )
+
+
+def test_batched_operator_preserves_coincident_tie_and_zero_radius() -> None:
+    sites = torch.tensor(
+        [[0.0, 0.0], [0.0, 0.0], [0.5, 0.0]],
+        dtype=torch.float64,
+    )
+    radii = torch.tensor([1.0, 1.0, 0.0], dtype=torch.float64)
+    pixel = _rectangle(-1.0, -1.0, 1.0, 1.0).unsqueeze(0)
+    candidates = torch.tensor([0, 1, 2], dtype=torch.long)
+    graph = sparse_cech_graph(sites, radii)
+
+    batched = batched_bounded_power_pixel_operator(
+        pixel,
+        sites,
+        radii,
+        candidate_indptr=torch.tensor([0, 3], dtype=torch.long),
+        candidate_indices=candidates,
+        neighbor_indptr=graph.indptr,
+        neighbor_indices=graph.indices,
+    )
+
+    assert batched.indices.tolist() == [0]
+    torch.testing.assert_close(
+        batched.areas,
+        torch.tensor([math.pi], dtype=torch.float64),
+    )
+    assert batched.cell_areas[1] == batched.cell_areas[2] == 0
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_power_pixel_operator_cuda_matches_cpu() -> None:
     sites = torch.tensor([[-0.4, 0.0], [0.4, 0.0]], dtype=torch.float32)
@@ -292,6 +392,32 @@ def test_power_pixel_operator_cuda_matches_cpu() -> None:
     torch.testing.assert_close(
         cuda.cell_areas.cpu(),
         cpu.cell_areas,
+        rtol=2e-5,
+        atol=2e-6,
+    )
+    candidates = tile_disk_candidate_csr(sites, radii, tile_shape=(2, 1))
+    graph = sparse_cech_graph(sites, radii)
+    batched_cpu = batched_bounded_power_pixel_operator(
+        pixels,
+        sites,
+        radii,
+        candidate_indptr=candidates.indptr,
+        candidate_indices=candidates.indices,
+        neighbor_indptr=graph.indptr,
+        neighbor_indices=graph.indices,
+    )
+    batched_cuda = batched_bounded_power_pixel_operator(
+        pixels.cuda(),
+        sites.cuda(),
+        radii.cuda(),
+        candidate_indptr=candidates.indptr.cuda(),
+        candidate_indices=candidates.indices.cuda(),
+        neighbor_indptr=graph.indptr.cuda(),
+        neighbor_indices=graph.indices.cuda(),
+    )
+    torch.testing.assert_close(
+        batched_cuda.areas.cpu(),
+        batched_cpu.areas,
         rtol=2e-5,
         atol=2e-6,
     )

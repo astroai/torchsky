@@ -14,6 +14,7 @@ import time
 import torch
 
 from torchsky.map.field import (
+    batched_bounded_power_pixel_operator,
     bounded_power_ownership,
     bounded_power_pixel_operator,
     sparse_cech_graph,
@@ -41,6 +42,11 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=947)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--dtype", choices=("float32", "float64"), default="float64")
+    parser.add_argument(
+        "--implementation",
+        choices=("batched", "reference"),
+        default="batched",
+    )
     parser.add_argument("--oracle-resolution", type=int, default=256)
     parser.add_argument(
         "--json-out",
@@ -59,36 +65,33 @@ def main() -> int:
         else ("cpu" if args.device == "auto" else args.device)
     )
     dtype = getattr(torch, args.dtype)
-    generator = torch.Generator(device=device).manual_seed(args.seed)
+    generator = torch.Generator().manual_seed(args.seed)
     sites = torch.stack(
         (
             args.columns
             * torch.rand(
                 args.n_sites,
                 generator=generator,
-                device=device,
                 dtype=dtype,
             ),
             args.rows
             * torch.rand(
                 args.n_sites,
                 generator=generator,
-                device=device,
                 dtype=dtype,
             ),
         ),
         dim=1,
-    )
+    ).to(device)
     radii = args.radius * (
         0.75
         + 0.5
         * torch.rand(
             args.n_sites,
             generator=generator,
-            device=device,
             dtype=dtype,
         )
-    )
+    ).to(device)
     tile_candidates = tile_disk_candidate_csr(
         sites,
         radii,
@@ -118,7 +121,12 @@ def main() -> int:
     for _ in range(args.runs):
         _synchronize(device)
         started = time.perf_counter()
-        operator = bounded_power_pixel_operator(
+        builder = (
+            batched_bounded_power_pixel_operator
+            if args.implementation == "batched"
+            else bounded_power_pixel_operator
+        )
+        operator = builder(
             pixels,
             sites,
             radii,
@@ -131,6 +139,12 @@ def main() -> int:
         _synchronize(device)
         samples.append(time.perf_counter() - started)
     assert operator is not None
+    operator_peak_rss_bytes = _peak_rss_bytes()
+    operator_peak_cuda_allocated_bytes = (
+        int(torch.cuda.max_memory_allocated(device))
+        if device.type == "cuda"
+        else None
+    )
 
     resolution = args.oracle_resolution
     oracle_y, oracle_x = torch.meshgrid(
@@ -161,6 +175,7 @@ def main() -> int:
         "radius": args.radius,
         "device": str(device),
         "dtype": args.dtype,
+        "implementation": args.implementation,
         "runs": args.runs,
         "candidate_pairs": candidates,
         "positive_intersections": intersections,
@@ -172,12 +187,9 @@ def main() -> int:
         "numerical_oracle_union_area": float(numerical_union_area.item()),
         "numerical_oracle_absolute_error": numerical_error,
         "oracle_resolution": resolution,
-        "peak_rss_bytes": _peak_rss_bytes(),
-        "peak_cuda_allocated_bytes": (
-            int(torch.cuda.max_memory_allocated(device))
-            if device.type == "cuda"
-            else None
-        ),
+        "operator_peak_rss_bytes": operator_peak_rss_bytes,
+        "operator_peak_cuda_allocated_bytes": operator_peak_cuda_allocated_bytes,
+        "process_peak_rss_bytes_including_oracle": _peak_rss_bytes(),
     }
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(payload, indent=2) + "\n")

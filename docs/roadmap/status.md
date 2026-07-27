@@ -40,8 +40,8 @@ untested behavior.
 ## Current Baseline
 
 - Full local gate: `pixi run ci-local`.
-- Latest recorded full local gate: `1643 passed, 201 skipped, 12 warnings`
-  in 530.91 seconds (2026-07-26, exact Power-Foam pixel-operator checkpoint).
+- Latest recorded full local gate: `1645 passed, 201 skipped, 12 warnings`
+  in 489.48 seconds (2026-07-26, batched exact Power-Foam renderer checkpoint).
 - Latest focused WCS gate: `338 passed, 2 skipped, 22 warnings`.
 - Latest focused sphere/HEALPix gate: `351 passed, 6 skipped, 10 warnings`.
 - Latest WCS/sphere acceptance: `pixi run wcs-sphere-acceptance` passes; its
@@ -103,9 +103,16 @@ Re-baseline them after the repository boundary cleanup.
   and gates surface-brightness/integrated-flux adjoints. Analytic circle,
   rectangle, partition, transform, permutation, chunk, and independent
   1024-square numerical-oracle tests pass. The Python reference processes about
-  1,056 candidates/s in its current 256-site/256-pixel CPU benchmark, so a
-  profiled vectorized/native renderer and CUDA gate remain before the full
-  Power-Foam renderer is claimed.
+  1,056 candidates/s in its local 256-site/256-pixel CPU benchmark. CANFAR
+  correctness and matched-size benchmarks pass on CPU and H100 CUDA, but the
+  scalar reference reaches only 647 and 184 candidates/s respectively because
+  device-synchronizing per-candidate clipping dominates. The exact reference is
+  therefore retained as the oracle. A first synchronization-free Torch-batched
+  renderer now matches its topology/areas locally and raises the matched CPU
+  rate to 18,699 candidates/s (0.136 s median, about 16x the current matched
+  one-run scalar rate); the 1,000-site/1,024-pixel case reaches 14,781
+  candidates/s with 591 MB operator-only peak RSS. CUDA, `torch.compile`, and
+  larger CANFAR gates remain open before it becomes the production default.
 - Weighted and equal-mean tiled coadds now execute exposure-major: an observation
   is read and calibrated once, projected through every output tile, then released.
   The stale unbounded module-global tensor cache is gone, overwrite freshness is
