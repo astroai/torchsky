@@ -2,7 +2,8 @@
 
 > Ordered engineering and science tasks after the 2026-07-22 map/INR milestone.
 > This is a planning document, not a public API promise. Current shipped status
-> remains in [`status.md`](status.md).
+> remains in [`status.md`](status.md). The current commit-by-commit checklist,
+> evidence, and continuation commands live in [`active.md`](active.md).
 
 ## North Star
 
