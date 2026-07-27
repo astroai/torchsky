@@ -4,6 +4,11 @@
 The official bandpass path queries JWST/NIRCam throughput curves from SVO FPS
 through astroquery and stores local snapshots for reproducibility. Simpler
 bandpasses and optional explicit PSF models remain available for ablations.
+
+The historical auto-union canvas remains the default.  ``--target-canvas-fits``
+optionally replaces only the common reconstruction grid with the celestial WCS
+and exact shape of an existing 2D FITS mosaic (e.g. a released UPDC i2d image).
+The template image values are never used in the training loss.
 """
 
 from __future__ import annotations
@@ -31,6 +36,11 @@ from torchsky.map.wcs_aware_calibration import (  # noqa: E402
 from torchsky.map.wcs_aware_inr import (  # noqa: E402
     WCSAwareMultiWavelengthINR,
     build_union_canvas,
+)
+from torchsky.map.wcs_aware_target_canvas import (  # noqa: E402
+    filter_sampled_pools_to_canvas,
+    load_target_canvas_from_fits,
+    sampled_pool_canvas_coverage,
 )
 from torchsky.map.wcs_aware_training import (  # noqa: E402
     build_union_coverage_mask,
@@ -142,8 +152,32 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tweakreg-tolerance", type=float, default=0.7)
     parser.add_argument("--tweakreg-nclip", type=int, default=3)
     parser.add_argument("--tweakreg-sigma", type=float, default=3.0)
+
+    # Historical auto-union path. These remain active when no template is supplied.
     parser.add_argument("--union-pixel-scale-arcsec", type=float, default=None)
     parser.add_argument("--union-padding-pixels", type=int, default=32)
+    parser.add_argument(
+        "--target-canvas-fits",
+        type=Path,
+        default=None,
+        help=(
+            "Optional 2D FITS template defining the common spatial WCS and exact "
+            "output shape. Its image values are not used for training."
+        ),
+    )
+    parser.add_argument(
+        "--target-canvas-hdu",
+        default=None,
+        help="Optional HDU name/index; default is the first 2D image HDU.",
+    )
+    parser.add_argument(
+        "--keep-outside-target-samples",
+        action="store_true",
+        help=(
+            "Keep sampled native pixels outside a template canvas and let geometry "
+            "mask them during the loss. Default behavior filters them before training."
+        ),
+    )
 
     parser.add_argument(
         "--bandpass-mode",
@@ -271,6 +305,7 @@ def main() -> int:
             sigma=args.tweakreg_sigma,
         )
         alignment_report.update(tweakreg_report)
+
     rng = np.random.default_rng(args.seed)
     pools = [
         load_exposure_pool(
@@ -293,24 +328,56 @@ def main() -> int:
         raise SystemExit("batch-size accepts one total or two SW/LW integers")
     if min(batch_values) <= 0:
         raise SystemExit("batch-size values must be positive")
-    actual_batch_size = effective_batch_size(pools, batch_spec)
-    if len(batch_values) == 1 and actual_batch_size < len(pools):
-        raise SystemExit(
-            f"batch-size {actual_batch_size} is smaller than {len(pools)} exposures"
-        )
     if not 0 <= args.anchor_exposure < len(pools):
         raise SystemExit("anchor exposure is outside the selected exposure range")
 
     scale = robust_intensity_scale(pools)
     pools = normalize_pools(pools, scale)
-    padding = args.union_padding_pixels
-    if args.psf_mode != "none":
-        padding = max(padding, args.psf_size // 2 + 2)
-    canvas = build_union_canvas(
-        [pool.header for pool in pools],
-        pixel_scale_arcsec=args.union_pixel_scale_arcsec,
-        padding_pixels=padding,
-    )
+
+    if args.target_canvas_fits is None:
+        # Preserve the original automatic union-canvas path.
+        padding = args.union_padding_pixels
+        if args.psf_mode != "none":
+            padding = max(padding, args.psf_size // 2 + 2)
+        canvas = build_union_canvas(
+            [pool.header for pool in pools],
+            pixel_scale_arcsec=args.union_pixel_scale_arcsec,
+            padding_pixels=padding,
+        )
+        target_canvas_report: dict[str, Any] = {
+            "mode": "auto_union",
+            "shape": list(canvas.shape),
+            "pixel_scale_arcsec": canvas.pixel_scale_arcsec,
+        }
+        target_sample_coverage = sampled_pool_canvas_coverage(pools, canvas)
+        target_sample_coverage["filter_applied"] = False
+    else:
+        canvas, target_canvas_report = load_target_canvas_from_fits(
+            args.target_canvas_fits,
+            hdu_selector=args.target_canvas_hdu,
+        )
+        if args.keep_outside_target_samples:
+            target_sample_coverage = sampled_pool_canvas_coverage(pools, canvas)
+            target_sample_coverage["filter_applied"] = False
+        else:
+            pools, target_sample_coverage = filter_sampled_pools_to_canvas(pools, canvas)
+        print(
+            json.dumps(
+                {
+                    "target_canvas": target_canvas_report,
+                    "sampled_pixel_coverage": target_sample_coverage,
+                },
+                indent=2,
+            ),
+            flush=True,
+        )
+
+    actual_batch_size = effective_batch_size(pools, batch_spec)
+    if len(batch_values) == 1 and actual_batch_size < len(pools):
+        raise SystemExit(
+            f"batch-size {actual_batch_size} is smaller than {len(pools)} exposures"
+        )
+
     calibration_inputs = [pool.calibration_input() for pool in pools]
     bandpass = build_bandpass_calibration(
         calibration_inputs,
@@ -357,6 +424,8 @@ def main() -> int:
             "pixel_scale_arcsec": canvas.pixel_scale_arcsec,
             "header": canvas.header,
         },
+        "target_canvas": target_canvas_report,
+        "target_canvas_sample_coverage": target_sample_coverage,
         "bandpass": bandpass.metadata,
         "psf": psf_calibration.metadata,
         "alignment": alignment_report,
@@ -389,6 +458,9 @@ def main() -> int:
     )
     summaries: dict[str, Any] = {}
     checkpoint_args = _jsonable_args(args)
+    checkpoint_args["target_canvas"] = target_canvas_report
+    checkpoint_args["target_canvas_sample_coverage"] = target_sample_coverage
+
     for encoding in encodings:
         run_dir = output_dir / encoding
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -468,6 +540,8 @@ def main() -> int:
             "encoding": encoding,
             "checkpoint": str(run_dir / "checkpoint.pt"),
             "outputs": outputs,
+            "target_canvas": target_canvas_report,
+            "target_canvas_sample_coverage": target_sample_coverage,
             "alignment": model.alignment_summary(),
             "background_physical": (model.background.detach().cpu() * scale).tolist(),
             "training": [asdict(record) for record in history],
