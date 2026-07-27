@@ -528,6 +528,70 @@ def test_exposure_major_tiles_match_shifted_wcs_coadd(
     torch.testing.assert_close(tiled.overlap_count, expected.overlap_count)
 
 
+def test_square_drizzle_tiles_keep_internal_halos_but_not_outer_canvas_halos(
+    tmp_path,
+) -> None:
+    path = tmp_path / "tile_square_rotated.fits"
+    source_header = _simple_header()
+    target_header = dict(source_header)
+    angle = math.radians(12.0)
+    scale = 0.01
+    target_header.pop("CDELT1")
+    target_header.pop("CDELT2")
+    target_header.update(
+        {
+            "CRPIX1": float(target_header["CRPIX1"]) + 0.3,
+            "CRPIX2": float(target_header["CRPIX2"]) - 0.2,
+            "CD1_1": -scale * math.cos(angle),
+            "CD1_2": scale * math.sin(angle),
+            "CD2_1": scale * math.sin(angle),
+            "CD2_2": scale * math.cos(angle),
+        }
+    )
+    data = torch.arange(64, dtype=torch.float32).reshape(8, 8) + 1.0
+    torchsky.write(str(path), data, header=source_header, overwrite=True)
+    kwargs = {
+        "target_header": target_header,
+        "resampling_kernel": "drizzle_square",
+        "value_semantics": "surface_brightness",
+        "drizzle_pixfrac": 1.0,
+    }
+
+    full = coadd_image_plane([ImageObservation(str(path))], **kwargs)
+    tiled = coadd_image_plane(
+        [ImageObservation(str(path))],
+        spatial_tile_hw=(3, 3),
+        **kwargs,
+    )
+
+    torch.testing.assert_close(tiled.data, full.data, atol=2e-4, rtol=2e-4)
+    torch.testing.assert_close(tiled.weight, full.weight, atol=2e-4, rtol=2e-4)
+
+    mask_path = tmp_path / "outer_center_mask.fits"
+    outer_mask = torch.zeros_like(data)
+    outer_mask[:, 0] = 1.0
+    torchsky.write(
+        str(mask_path), outer_mask, header=source_header, overwrite=True
+    )
+    outer_target = dict(source_header)
+    outer_target["CRPIX1"] = float(outer_target["CRPIX1"]) - 0.6
+    outer = coadd_image_plane(
+        [ImageObservation(str(path), mask_path=str(mask_path))],
+        target_header=outer_target,
+        resampling_kernel="drizzle_square",
+        drizzle_pixfrac=1.0,
+    )
+    outer_tiled = coadd_image_plane(
+        [ImageObservation(str(path), mask_path=str(mask_path))],
+        target_header=outer_target,
+        resampling_kernel="drizzle_square",
+        drizzle_pixfrac=1.0,
+        spatial_tile_hw=(3, 3),
+    )
+    assert int(torch.count_nonzero(outer.weight)) == 0
+    torch.testing.assert_close(outer_tiled.weight, outer.weight)
+
+
 def test_cli_map_coadd_writes_output(tmp_path, monkeypatch) -> None:
     from torchsky.cli import main
 

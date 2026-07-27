@@ -368,10 +368,15 @@ def _get_scanline_limits(scanner: _Scanner, y: int) -> tuple[int, int] | None:
 
 
 def _scanner_row_bounds(
-    pixmap: Tensor, *, source_shape: tuple[int, int], target_shape: tuple[int, int]
+    pixmap: Tensor,
+    *,
+    source_shape: tuple[int, int],
+    target_shape: tuple[int, int],
+    target_origin_yx: tuple[int, int] = (0, 0),
 ) -> tuple[Tensor, Tensor]:
     src_h, src_w = source_shape
     tgt_h, tgt_w = target_shape
+    origin_y, origin_x = target_origin_yx
     input_poly = [
         (-0.5, -0.5),
         (float(src_w) - 0.5, -0.5),
@@ -384,10 +389,10 @@ def _scanner_row_bounds(
         return invalid, invalid
     clipped = _clip_polygon_to_rect(
         [point for point in mapped_poly if point is not None],
-        xmin=-0.5,
-        xmax=float(tgt_w) - 0.5,
-        ymin=-0.5,
-        ymax=float(tgt_h) - 0.5,
+        xmin=-0.5 - float(origin_x),
+        xmax=float(tgt_w) - 0.5 - float(origin_x),
+        ymin=-0.5 - float(origin_y),
+        ymax=float(tgt_h) - 0.5 - float(origin_y),
     )
     if len(clipped) < 3:
         invalid = torch.full((src_h,), -1, dtype=torch.int64, device=pixmap.device)
@@ -711,6 +716,8 @@ def exact_square_drizzle_project(
     flat_weight = torch.zeros_like(flat_numer)
     width = int(target.shape[1])
     height = int(target.shape[0])
+    canvas_height, canvas_width = target.canvas_shape
+    canvas_origin_y, canvas_origin_x = target.canvas_origin_yx
     half = 0.5 * max(float(drizzle_pixfrac), 1.0e-6)
     pixmap = _build_center_pixmap(
         source_wcs,
@@ -723,37 +730,62 @@ def exact_square_drizzle_project(
         source_shape=tuple(image.shape),
         target_shape=tuple(target.shape),
     )
-    base_min = row_min
-    base_max = row_max
-    # A finite square drop can cross the clipped target even when its center
-    # falls outside it, so conservatively dilate the center-derived scan rows.
-    row_min = torch.full_like(base_min, w_src)
-    row_max = torch.full_like(base_max, -1)
-    candidate_margin = 1 + int(math.ceil(0.5 * float(drizzle_pixfrac)))
-    for shift in range(-candidate_margin, candidate_margin + 1):
-        src_start = max(-shift, 0)
-        src_stop = min(h_src - shift, h_src)
-        dst_start = src_start + shift
-        dst_stop = src_stop + shift
-        valid_rows = base_min[src_start:src_stop] >= 0
-        candidate_min = torch.where(
+    is_subwindow = (
+        tuple(target.shape) != tuple(target.canvas_shape)
+        or target.canvas_origin_yx != (0, 0)
+    )
+    if is_subwindow:
+        base_min = row_min
+        base_max = row_max
+        # A finite square drop can cross an internal tile when its center falls
+        # outside it, so conservatively dilate only the subwindow scan rows.
+        row_min = torch.full_like(base_min, w_src)
+        row_max = torch.full_like(base_max, -1)
+        candidate_margin = 1 + int(math.ceil(0.5 * float(drizzle_pixfrac)))
+        for shift in range(-candidate_margin, candidate_margin + 1):
+            src_start = max(-shift, 0)
+            src_stop = min(h_src - shift, h_src)
+            dst_start = src_start + shift
+            dst_stop = src_stop + shift
+            valid_rows = base_min[src_start:src_stop] >= 0
+            candidate_min = torch.where(
+                valid_rows,
+                base_min[src_start:src_stop] - candidate_margin,
+                torch.full_like(base_min[src_start:src_stop], w_src),
+            )
+            candidate_max = torch.where(
+                valid_rows,
+                base_max[src_start:src_stop] + candidate_margin,
+                torch.full_like(base_max[src_start:src_stop], -1),
+            )
+            row_min[dst_start:dst_stop] = torch.minimum(
+                row_min[dst_start:dst_stop], candidate_min
+            )
+            row_max[dst_start:dst_stop] = torch.maximum(
+                row_max[dst_start:dst_stop], candidate_max
+            )
+        row_min = torch.where(row_max >= 0, row_min.clamp(min=0), row_min)
+        row_max = row_max.clamp(max=w_src - 1)
+        canvas_min, canvas_max = _scanner_row_bounds(
+            pixmap,
+            source_shape=tuple(image.shape),
+            target_shape=tuple(target.canvas_shape),
+            target_origin_yx=target.canvas_origin_yx,
+        )
+        valid_rows = (row_max >= 0) & (canvas_max >= 0)
+        row_min = torch.where(
             valid_rows,
-            base_min[src_start:src_stop] - candidate_margin,
-            torch.full_like(base_min[src_start:src_stop], w_src),
+            torch.maximum(row_min, canvas_min),
+            torch.full_like(row_min, -1),
         )
-        candidate_max = torch.where(
+        row_max = torch.where(
             valid_rows,
-            base_max[src_start:src_stop] + candidate_margin,
-            torch.full_like(base_max[src_start:src_stop], -1),
+            torch.minimum(row_max, canvas_max),
+            torch.full_like(row_max, -1),
         )
-        row_min[dst_start:dst_stop] = torch.minimum(
-            row_min[dst_start:dst_stop], candidate_min
-        )
-        row_max[dst_start:dst_stop] = torch.maximum(
-            row_max[dst_start:dst_stop], candidate_max
-        )
-    row_min = torch.where(row_max >= 0, row_min.clamp(min=0), row_min)
-    row_max = row_max.clamp(max=w_src - 1)
+        valid_rows &= row_min <= row_max
+        row_min = torch.where(valid_rows, row_min, torch.full_like(row_min, -1))
+        row_max = torch.where(valid_rows, row_max, torch.full_like(row_max, -1))
 
     for start in range(0, int(xs.numel()), int(chunk_pixels)):
         end = min(start + int(chunk_pixels), int(xs.numel()))
@@ -781,7 +813,23 @@ def exact_square_drizzle_project(
             dec_center_deg,
         )
         center_finite = torch.isfinite(x_center_tgt) & torch.isfinite(y_center_tgt)
-        center_inside = center_finite
+        x_center_canvas = x_center_tgt + float(canvas_origin_x)
+        y_center_canvas = y_center_tgt + float(canvas_origin_y)
+        y_lower, y_upper = _source_row_vertical_bounds(
+            y_chunk,
+            source_height=h_src,
+            target_height=canvas_height,
+        )
+        center_inside = (
+            center_finite
+            & (x_center_canvas >= -0.5 - _DRIZZLE_BOUNDARY_EPS)
+            & (
+                x_center_canvas
+                <= float(canvas_width - 1) + 0.5 + _DRIZZLE_BOUNDARY_EPS
+            )
+            & (y_center_canvas >= y_lower)
+            & (y_center_canvas <= y_upper)
+        )
         if not bool(center_inside.any()):
             continue
         x_chunk = x_chunk[center_inside]

@@ -28,6 +28,8 @@ class _PreparedImagePlaneTarget:
     header: dict
     wcs: WCS
     shape: tuple[int, int]
+    canvas_shape: tuple[int, int]
+    canvas_origin_yx: tuple[int, int]
     ra_deg: Tensor | None = None
     dec_deg: Tensor | None = None
     center_ra_deg: float = 0.0
@@ -128,6 +130,8 @@ def _prepare_target(
     target_wcs: WCS,
     target_shape: tuple[int, int],
     device: torch.device,
+    canvas_shape: tuple[int, int] | None = None,
+    canvas_origin_yx: tuple[int, int] = (0, 0),
     include_pixel_area: bool = False,
     include_representative_pixel_area: bool = False,
     include_quadrature: bool = False,
@@ -136,6 +140,21 @@ def _prepare_target(
     center_ra_deg = float(target_wcs.alpha0)
     center_dec_deg = float(target_wcs.delta0)
     h, w = int(target_shape[0]), int(target_shape[1])
+    canvas_h, canvas_w = (
+        (h, w)
+        if canvas_shape is None
+        else (int(canvas_shape[0]), int(canvas_shape[1]))
+    )
+    origin_y, origin_x = int(canvas_origin_yx[0]), int(canvas_origin_yx[1])
+    if (
+        canvas_h <= 0
+        or canvas_w <= 0
+        or origin_y < 0
+        or origin_x < 0
+        or origin_y + h > canvas_h
+        or origin_x + w > canvas_w
+    ):
+        raise ValueError("target window must lie inside its science canvas")
 
     cap_subsample = max(1, min(h, w) // 100)
     if cap_subsample > 1:
@@ -161,6 +180,8 @@ def _prepare_target(
         header=header,
         wcs=target_wcs,
         shape=target_shape,
+        canvas_shape=(canvas_h, canvas_w),
+        canvas_origin_yx=(origin_y, origin_x),
         ra_deg=ra_deg,
         dec_deg=dec_deg,
         center_ra_deg=center_ra_deg,
@@ -196,6 +217,14 @@ def _slice_prepared_target(
     x0: int,
     x1: int,
 ) -> _PreparedImagePlaneTarget:
+    sub_header, sub_shape = _subtarget_header_for_window(
+        target.header,
+        full_shape=target.shape,
+        y0=y0,
+        y1=y1,
+        x0=x0,
+        x1=x1,
+    )
     quadrature = None
     if target.quadrature_world_grids is not None:
         quadrature = tuple(
@@ -210,9 +239,14 @@ def _slice_prepared_target(
         ra_slice = target.ra_deg[y0:y1, x0:x1]
         dec_slice = target.dec_deg[y0:y1, x0:x1]
     return _PreparedImagePlaneTarget(
-        header=target.header,
-        wcs=target.wcs,
-        shape=(y1 - y0, x1 - x0),
+        header=sub_header,
+        wcs=WCS(sub_header),
+        shape=sub_shape,
+        canvas_shape=target.canvas_shape,
+        canvas_origin_yx=(
+            target.canvas_origin_yx[0] + y0,
+            target.canvas_origin_yx[1] + x0,
+        ),
         ra_deg=ra_slice,
         dec_deg=dec_slice,
         center_ra_deg=target.center_ra_deg,

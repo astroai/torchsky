@@ -2146,6 +2146,8 @@ def _coadd_image_plane_spatial_tiles(
                             target_wcs=WCS(sub_header),
                             target_shape=tile_shape,
                             device=device,
+                            canvas_shape=(H, W),
+                            canvas_origin_yx=(y0, x0),
                             include_pixel_area=(value_semantics == "flux"),
                             include_representative_pixel_area=bool(
                                 mosaic_surface_brightness_area_scaling

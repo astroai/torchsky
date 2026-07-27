@@ -35,13 +35,9 @@
 - [x] Commit this checklist before implementation.
   Evidence: the commit containing this file, verified with
   `pixi run preflight-push`.
-- [ ] Push this checklist before implementation.
-  Continuation:
-
-  ```bash
-  pixi run ci-local
-  git push origin main
-  ```
+- [x] Push this checklist before implementation.
+  Evidence: `23c2008`; pre-push gate passed with 1617 tests and the commit is
+  on `origin/main`.
 
 ## Checkpoint 1 — Restore Releasable Drizzle Semantics
 
@@ -52,13 +48,17 @@ canvas. The fix must express both boundaries rather than widening outer support.
 
 - [ ] Reproduce the six Linux external-Drizzle failures in a CANFAR staging
   headless session using the exact commit and optional comparator environment.
-- [ ] Add a regression that distinguishes global target boundaries from internal
+- [x] Add a regression that distinguishes global target boundaries from internal
   spatial-tile boundaries for rotated and shifted square drops.
-- [ ] Restore external `drizzle_square` weight/data parity for surface-brightness,
+  Evidence: `test_square_drizzle_tiles_keep_internal_halos_but_not_outer_canvas_halos`.
+- [x] Restore external `drizzle_square` weight/data parity for surface-brightness,
   flux, weight-map, mask-map, and uniform-field cases.
-- [ ] Preserve tiled/non-tiled equality for bilinear, flux, square Drizzle, and
+  Evidence: all 27 optional external-Drizzle cases passed locally.
+- [x] Preserve tiled/non-tiled equality for bilinear, flux, square Drizzle, and
   conservative polygon paths.
-- [ ] Run the focused local gate:
+  Evidence: the exposure-major tiled parameter matrix and the new rotated
+  square-drop regression passed.
+- [x] Run the focused local gate:
 
   ```bash
   pixi run -e sphere-bench -- pytest \
@@ -66,6 +66,7 @@ canvas. The fix must express both boundaries rather than widening outer support.
     tests/test_map_image_plane.py -q
   ```
 
+  Evidence: 140 passed in 52.16 seconds.
 - [ ] Run the same focused gate on CANFAR staging Linux.
 - [ ] Commit the repair and update the evidence here.
 
