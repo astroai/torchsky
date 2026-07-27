@@ -1,14 +1,15 @@
 """Target-canvas helpers for WCS-aware INR training and rendering.
 
 This module adds an *optional* template-grid path without changing the existing
-auto-union-canvas logic.  A 2D FITS image (e.g. a released UPDC i2d mosaic)
-can define the common spatial WCS and shape used by the INR.  The science data
+auto-union-canvas logic. A 2D FITS image (e.g. a released UPDC i2d mosaic)
+can define the common spatial WCS and shape used by the INR. The science data
 used for the loss still come from the native CRF/CAL exposures; the template
 supplies geometry only.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -57,7 +58,7 @@ def load_target_canvas_from_fits(
     """Build a :class:`UnionCanvas` from an existing 2D FITS image grid.
 
     The returned header contains the celestial WCS normalized through Astropy
-    plus explicit NAXIS/NAXIS1/NAXIS2.  This avoids carrying compression/image
+    plus explicit NAXIS/NAXIS1/NAXIS2. This avoids carrying compression/image
     bookkeeping keywords from ``.fits.fz`` products into newly written files,
     while retaining the same celestial pixel/world mapping.
     """
@@ -84,7 +85,11 @@ def load_target_canvas_from_fits(
     wcs_header["NAXIS2"] = height
 
     scales = np.asarray(proj_plane_pixel_scales(astropy_wcs), dtype=np.float64) * 3600.0
-    if scales.size < 2 or not np.isfinite(scales[:2]).all() or bool((scales[:2] <= 0).any()):
+    if (
+        scales.size < 2
+        or not np.isfinite(scales[:2]).all()
+        or bool((scales[:2] <= 0).any())
+    ):
         raise ValueError(f"template {resolved} has an invalid celestial pixel scale")
     pixel_scale_arcsec = float(np.sqrt(scales[0] * scales[1]))
 
@@ -110,37 +115,35 @@ def load_target_canvas_from_fits(
     return canvas, metadata
 
 
+def _pool_inside_canvas_mask(pool: Any, canvas: UnionCanvas) -> torch.Tensor:
+    uv = pool.uv.detach().cpu().double()
+    source = WCS(dict(pool.header))
+    target = WCS(dict(canvas.header))
+    ra, dec = source.pixel_to_world(uv[:, 0], uv[:, 1])
+    x, y = target.world_to_pixel(ra, dec)
+    return (
+        torch.isfinite(x)
+        & torch.isfinite(y)
+        & (x >= 0)
+        & (x <= canvas.shape[1] - 1)
+        & (y >= 0)
+        & (y <= canvas.shape[0] - 1)
+    )
+
+
 def sampled_pool_canvas_coverage(
     pools: Sequence[Any],
     canvas: UnionCanvas,
 ) -> dict[str, Any]:
-    """Measure how many already-sampled native training pixels land on a canvas.
+    """Measure how many already-sampled native training pixels land on a canvas."""
 
-    This is a geometry diagnostic only.  It does not remove or resample pixels;
-    ``predict_observation`` will continue to mark out-of-canvas points invalid.
-    The report therefore makes any template-footprint loss explicit before a
-    long training run starts.
-    """
-
-    target = WCS(dict(canvas.header))
     rows: list[dict[str, Any]] = []
     total = 0
     inside_total = 0
 
     for index, pool in enumerate(pools):
-        uv = pool.uv.detach().cpu().double()
-        source = WCS(dict(pool.header))
-        ra, dec = source.pixel_to_world(uv[:, 0], uv[:, 1])
-        x, y = target.world_to_pixel(ra, dec)
-        valid = (
-            torch.isfinite(x)
-            & torch.isfinite(y)
-            & (x >= 0)
-            & (x <= canvas.shape[1] - 1)
-            & (y >= 0)
-            & (y <= canvas.shape[0] - 1)
-        )
-        count = int(uv.shape[0])
+        valid = _pool_inside_canvas_mask(pool, canvas)
+        count = int(pool.uv.shape[0])
         inside = int(valid.sum().item())
         total += count
         inside_total += inside
@@ -166,7 +169,43 @@ def sampled_pool_canvas_coverage(
     }
 
 
+def filter_sampled_pools_to_canvas(
+    pools: Sequence[Any],
+    canvas: UnionCanvas,
+) -> tuple[list[Any], dict[str, Any]]:
+    """Restrict sampled native pixels to the selected target-canvas footprint.
+
+    The original exposure SCI/ERR arrays are never resampled. Only already
+    selected native detector samples whose sky coordinates fall inside the
+    target grid are retained. This prevents a template grid smaller than the
+    exposure union from silently wasting batch entries on geometry-invalid
+    samples.
+    """
+
+    report = sampled_pool_canvas_coverage(pools, canvas)
+    filtered: list[Any] = []
+    for index, pool in enumerate(pools):
+        keep = _pool_inside_canvas_mask(pool, canvas)
+        if not bool(keep.any()):
+            raise ValueError(
+                "target canvas contains no sampled pixels for exposure "
+                f"{index}: {pool.path}"
+            )
+        filtered.append(
+            replace(
+                pool,
+                uv=pool.uv[keep],
+                value=pool.value[keep],
+                err=pool.err[keep],
+            )
+        )
+    report["filter_applied"] = True
+    report["post_filter_sampled_pixels"] = int(sum(pool.size for pool in filtered))
+    return filtered, report
+
+
 __all__ = [
+    "filter_sampled_pools_to_canvas",
     "load_target_canvas_from_fits",
     "sampled_pool_canvas_coverage",
 ]
