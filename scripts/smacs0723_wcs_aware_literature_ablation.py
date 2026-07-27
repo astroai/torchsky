@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Run A1 NeRF-style or A2 SIREN architecture ablations from a completed baseline.
+"""Run A1 NeRF-style or A2 SIREN architecture experiments from a completed baseline.
 
-This runner is deliberately strict: it reuses the completed baseline manifest's
-aligned exposure paths, intensity normalization, union canvas, bandpass
-quadrature, sampling settings, likelihood, optimizer settings, and background
-configuration.  The intended comparison therefore changes only the scene
-representation S_theta(x, y, lambda).
+By default this preserves the original architecture-ablation behavior and reuses
+all geometry from the baseline manifest.  Optionally, ``--target-canvas-fits``
+replaces only the common reconstruction grid with the celestial WCS and shape of
+a 2D FITS image (for example the released UPDC i2d mosaic).  Native CRF/CAL
+pixels remain the training targets; the template FITS supplies geometry only.
 
-All saved artifacts use an architecture-specific ``*_literature_ablation_*``
-prefix so they cannot collide with the existing 8+3 run products.
+Artifacts use architecture/geometry-specific prefixes and are never silently
+overwritten.
 """
 
 from __future__ import annotations
@@ -33,6 +33,11 @@ from torchsky.map.wcs_aware_inr import UnionCanvas  # noqa: E402
 from torchsky.map.wcs_aware_literature_inr import (  # noqa: E402
     WCSAwareLiteratureINR,
 )
+from torchsky.map.wcs_aware_target_canvas import (  # noqa: E402
+    filter_sampled_pools_to_canvas,
+    load_target_canvas_from_fits,
+    sampled_pool_canvas_coverage,
+)
 from torchsky.map.wcs_aware_training import (  # noqa: E402
     build_union_coverage_mask,
     effective_batch_size,
@@ -56,6 +61,40 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-render", action="store_true")
     parser.add_argument("--render-tile-pixels", type=int, default=None)
     parser.add_argument("--coverage-tile-rows", type=int, default=None)
+    parser.add_argument(
+        "--steps",
+        type=int,
+        default=None,
+        help="Override baseline training steps; default reuses the baseline value.",
+    )
+
+    parser.add_argument(
+        "--target-canvas-fits",
+        type=Path,
+        default=None,
+        help=(
+            "Optional 2D FITS template whose celestial WCS and exact image shape "
+            "replace the baseline auto-union canvas. The FITS pixel values are "
+            "never used as training targets."
+        ),
+    )
+    parser.add_argument(
+        "--target-canvas-hdu",
+        default=None,
+        help=(
+            "Optional HDU name/index for --target-canvas-fits. By default the "
+            "first 2D image HDU is selected; this works for compressed .fits.fz mosaics."
+        ),
+    )
+    parser.add_argument(
+        "--keep-outside-target-samples",
+        action="store_true",
+        help=(
+            "Do not filter already-sampled native pixels outside the target canvas. "
+            "The default filters them so every sampled batch entry belongs to the "
+            "requested reconstruction footprint."
+        ),
+    )
 
     # A1: canonical NeRF-style MLP defaults.
     parser.add_argument("--nerf-num-frequencies", type=int, default=10)
@@ -80,10 +119,6 @@ def _load_manifest(path: Path) -> tuple[Path, dict[str, Any]]:
         if key not in payload:
             raise ValueError(f"baseline manifest is missing {key!r}")
     return resolved, payload
-
-
-def _baseline_arg(manifest: dict[str, Any], key: str, default: Any = None) -> Any:
-    return manifest.get("args", {}).get(key, default)
 
 
 def _parse_batch_spec(raw: Any) -> int | list[int]:
@@ -168,33 +203,37 @@ def _canvas_from_manifest(manifest: dict[str, Any]) -> UnionCanvas:
 
 
 def _validate_baseline_for_architecture_ablation(manifest: dict[str, Any]) -> None:
-    """Reject cases that would no longer be a clean run2-style architecture test."""
+    """Reject cases that would no longer be a clean run2-style model comparison."""
     args = manifest.get("args", {})
     alignment_mode = str(args.get("alignment_mode", ""))
     if alignment_mode not in {"original_wcs", "tweakreg_frozen"}:
         raise ValueError(
-            "A1/A2 architecture ablations require a frozen geometry baseline; "
+            "A1/A2 architecture experiments require a frozen geometry baseline; "
             f"got alignment_mode={alignment_mode!r}"
         )
     if str(args.get("psf_mode", "none")) != "none":
         raise ValueError(
-            "This A1/A2 runner intentionally targets the completed no-PSF run2. "
-            "Use a no-PSF baseline manifest so architecture is the only changed component."
+            "This runner currently targets the completed no-PSF run2. "
+            "Use a no-PSF baseline manifest so the observation operator remains fixed."
         )
     if manifest.get("psf") not in ([], None):
         raise ValueError("baseline manifest unexpectedly contains PSF calibration metadata")
     if str(args.get("robust_loss", args.get("loss", ""))) != "whitened_l2":
         raise ValueError(
-            "This A1/A2 runner expects the run2 whitened_l2 baseline so the likelihood stays fixed"
+            "This runner expects the run2 whitened_l2 baseline so the likelihood stays fixed"
         )
 
 
-def _artifact_prefix(architecture: str) -> str:
+def _artifact_prefix(architecture: str, *, target_canvas: bool) -> str:
+    if target_canvas:
+        return f"{architecture}_target_canvas"
     return f"{architecture}_literature_ablation"
 
 
 def _assert_no_existing_artifacts(output_dir: Path, prefix: str) -> None:
     collisions = sorted(output_dir.glob(f"{prefix}*")) if output_dir.exists() else []
+    # Band images begin with the band name rather than the prefix.
+    collisions.extend(sorted(output_dir.glob(f"*_{prefix}_bandpass_scene.fits")))
     if collisions:
         shown = ", ".join(path.name for path in collisions[:8])
         raise FileExistsError(
@@ -217,7 +256,10 @@ def main() -> int:
 
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    prefix = _artifact_prefix(args.architecture)
+    prefix = _artifact_prefix(
+        args.architecture,
+        target_canvas=args.target_canvas_fits is not None,
+    )
     _assert_no_existing_artifacts(output_dir, prefix)
 
     selected = _selected_from_manifest(baseline)
@@ -241,13 +283,44 @@ def main() -> int:
         for path, band, detector in selected
     ]
 
-    # Reuse the exact baseline normalization rather than estimating it again.
+    # Reuse the exact baseline intensity normalization rather than estimating it again.
     scale = float(baseline["intensity_scale"])
     if not np.isfinite(scale) or scale <= 0:
         raise ValueError("baseline intensity_scale must be finite and positive")
     pools = normalize_pools(pools, scale)
 
-    canvas = _canvas_from_manifest(baseline)
+    if args.target_canvas_fits is None:
+        # Original behavior is intentionally preserved verbatim.
+        canvas = _canvas_from_manifest(baseline)
+        canvas_metadata: dict[str, Any] = {
+            "mode": "baseline_manifest",
+            "source_manifest": str(baseline_path),
+            "shape": list(canvas.shape),
+            "pixel_scale_arcsec": canvas.pixel_scale_arcsec,
+        }
+        canvas_coverage = sampled_pool_canvas_coverage(pools, canvas)
+        canvas_coverage["filter_applied"] = False
+    else:
+        canvas, canvas_metadata = load_target_canvas_from_fits(
+            args.target_canvas_fits,
+            hdu_selector=args.target_canvas_hdu,
+        )
+        if args.keep_outside_target_samples:
+            canvas_coverage = sampled_pool_canvas_coverage(pools, canvas)
+            canvas_coverage["filter_applied"] = False
+        else:
+            pools, canvas_coverage = filter_sampled_pools_to_canvas(pools, canvas)
+        print(
+            json.dumps(
+                {
+                    "target_canvas": canvas_metadata,
+                    "sampled_pixel_coverage": canvas_coverage,
+                },
+                indent=2,
+            ),
+            flush=True,
+        )
+
     wavelength, weight = _bandpass_from_manifest(
         baseline,
         num_exposures=len(pools),
@@ -257,12 +330,13 @@ def main() -> int:
 
     batch_spec = _parse_batch_spec(baseline_args.get("batch_size"))
     actual_batch_size = effective_batch_size(pools, batch_spec)
-    baseline_effective = baseline.get("effective_total_batch_size")
-    if baseline_effective is not None and int(baseline_effective) != actual_batch_size:
-        raise ValueError(
-            "effective batch size differs from the baseline manifest: "
-            f"{actual_batch_size} != {baseline_effective}"
-        )
+    if args.target_canvas_fits is None:
+        baseline_effective = baseline.get("effective_total_batch_size")
+        if baseline_effective is not None and int(baseline_effective) != actual_batch_size:
+            raise ValueError(
+                "effective batch size differs from the baseline manifest: "
+                f"{actual_batch_size} != {baseline_effective}"
+            )
 
     anchor_exposure = int(baseline_args.get("anchor_exposure", 0))
     if not 0 <= anchor_exposure < len(pools):
@@ -306,17 +380,32 @@ def main() -> int:
         if args.render_tile_pixels is not None
         else baseline_args.get("render_tile_pixels", 131072)
     )
+    steps = int(args.steps if args.steps is not None else baseline_args.get("steps", 10000))
+    if steps <= 0:
+        raise ValueError("training steps must be positive")
 
+    principle = (
+        "reuse baseline forward operator and training data; replace S_theta architecture"
+        if args.target_canvas_fits is None
+        else (
+            "reuse baseline corrected native exposures, intensity normalization, bandpass, "
+            "likelihood and optimizer; replace the common spatial canvas with the FITS "
+            "template while training only against native exposure pixels"
+        )
+    )
     artifact_manifest = {
-        "ablation": {
+        "experiment": {
             "architecture": args.architecture,
             "artifact_prefix": prefix,
             "baseline_manifest": str(baseline_path),
-            "principle": "reuse baseline forward operator; replace only S_theta architecture",
+            "principle": principle,
             "architecture_metadata": model.architecture_metadata,
             "parameter_count": parameter_count,
             "trainable_parameter_count": trainable_parameter_count,
+            "training_steps": steps,
         },
+        "target_canvas": canvas_metadata,
+        "target_canvas_sample_coverage": canvas_coverage,
         "exposures": [
             {
                 "index": index,
@@ -339,7 +428,7 @@ def main() -> int:
         "alignment": baseline.get("alignment", {}),
         "effective_total_batch_size": actual_batch_size,
         "baseline_args": baseline_args,
-        "ablation_args": {
+        "experiment_args": {
             key: str(value) if isinstance(value, Path) else value
             for key, value in vars(args).items()
         },
@@ -374,7 +463,9 @@ def main() -> int:
         "baseline_args": baseline_args,
         "architecture": args.architecture,
         "architecture_metadata": model.architecture_metadata,
-        "ablation_args": artifact_manifest["ablation_args"],
+        "target_canvas": canvas_metadata,
+        "target_canvas_sample_coverage": canvas_coverage,
+        "experiment_args": artifact_manifest["experiment_args"],
     }
 
     history = train_model(
@@ -384,7 +475,7 @@ def main() -> int:
         weight,
         psf=None,
         device=device,
-        steps=int(baseline_args.get("steps", 10000)),
+        steps=steps,
         batch_size=batch_spec,
         seed=seed,
         learning_rate=float(baseline_args.get("learning_rate", 2.0e-4)),
@@ -451,8 +542,11 @@ def main() -> int:
         "architecture": args.architecture,
         "architecture_metadata": model.architecture_metadata,
         "baseline_manifest": str(baseline_path),
+        "target_canvas": canvas_metadata,
+        "target_canvas_sample_coverage": canvas_coverage,
         "parameter_count": parameter_count,
         "trainable_parameter_count": trainable_parameter_count,
+        "training_steps": steps,
         "checkpoint": str(checkpoint_path),
         "loss_log": str(loss_log_path),
         "coverage_mask": None if coverage_path is None else str(coverage_path),
@@ -469,6 +563,7 @@ def main() -> int:
             {
                 "architecture": args.architecture,
                 "baseline_manifest": str(baseline_path),
+                "target_canvas": canvas_metadata,
                 "manifest": str(manifest_path),
                 "checkpoint": str(checkpoint_path),
                 "loss_log": str(loss_log_path),
