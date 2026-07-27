@@ -114,6 +114,15 @@ Re-baseline them after the repository boundary cleanup.
   same learned coefficients through arbitrary sampled responses or compact
   spectral bases. A matched six-channel CANFAR benchmark exactly equals six
   independent renders while reducing CPU time 5.01x and H100 time 4.24x.
+- The pre-registered multi-band depth benchmark has entered Gate 0/M0 without
+  expanding Torchsky's public API. Benchmark-local code now produces
+  deterministic independent seed manifests, required truth-catalogue strata,
+  blank and close-pair scenes, flux-conserving 4x4 subpixel truth images, a
+  common Torch whitening/matched-filter/local-max/NMS detector, validation-only
+  purity thresholds, and exact maximum-cardinality one-to-one association.
+  Local evidence is 9 focused passes and one CUDA skip; denser spectral truth,
+  WCS-angular association, full catalogue metrics, baselines, and CANFAR CUDA
+  parity remain open, so no depth-gain claim exists.
 - Weighted and equal-mean tiled coadds now execute exposure-major: an observation
   is read and calibrated once, projected through every output tile, then released.
   The stale unbounded module-global tensor cache is gone, overwrite freshness is

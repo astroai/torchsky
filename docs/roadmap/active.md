@@ -479,18 +479,26 @@ The first implementation milestone is Gate 0/M0 only. Keep source generation,
 detection, matching, and catalogue scoring benchmark-local; do not add a source
 extractor to the Torchsky runtime.
 
-- [ ] Add a deterministic truth catalogue for point sources and compact
+- [x] Add a deterministic truth catalogue for point sources and compact
   galaxies with smooth continua, lines, dropouts, close pairs, and blank/null
   scenes. Serialize scene, noise, pointing, and nuisance seeds separately.
+  Evidence: `benchmarks/bench_multiband_depth.py` generates all five required
+  spectral/morphology strata, a close pair, stable source identifiers, and an
+  explicit blank catalogue. `SeedManifest` derives and serializes four
+  independent streams; deterministic artifact and flux-conservation tests pass.
 - [ ] Render truth with denser spatial/spectral integration than any fitted
   method, and split complete scene/exposure identifiers into disjoint
   train/validation/test sets.
 - [ ] Add one common Torch detector: propagated/empirical whitening, a fixed PSF
   template bank, local maxima, angular non-maximum suppression, and a threshold
   calibrated on validation nulls to 95% measured purity.
-- [ ] Add deterministic maximum-cardinality one-to-one truth association within
+- [x] Add deterministic maximum-cardinality one-to-one truth association within
   the pre-registered radius; count unmatched and duplicate detections as false
   positives and gate close-pair/duplicate fixtures.
+  Evidence: benchmark-local augmenting-path association returns an exact
+  maximum-cardinality matching with deterministic distance/index edge order.
+  Close-pair, permutation-cardinality, unmatched-duplicate, completeness,
+  purity, false-density, and astrometric-score tests pass.
 - [ ] Report completeness, purity, false detections/area, astrometric residuals,
   forced flux/color bias, held-out detector likelihood, runtime, and peak memory.
   Image RMSE remains supporting evidence, never the depth claim.
@@ -510,6 +518,24 @@ Focused continuation:
 ```bash
 pixi run -e test -- pytest tests/test_multiband_depth_benchmark.py -q
 ```
+
+Current Gate 0/M0 evidence:
+
+- [x] Independent deterministic seed manifest, blank scene, required truth
+  strata, stable JSON, and 4x4 subpixel truth integration with band-flux
+  conservation.
+- [x] Propagated per-band whitening, fixed Torch Gaussian template bank, local
+  maxima, pixel-space NMS on the common target plane, and validation-only
+  measured-purity threshold selection.
+- [x] Noiseless bright-source position recovery and zero-valued null control.
+- [ ] Extend truth from band-integrated SED samples to a denser tabulated
+  spectral truth integral than every fitted method.
+- [ ] Express NMS and association radii through the target WCS angular scale;
+  the current Gate 0 helper is deliberately pixel-space.
+- [ ] Add forced flux/color scoring and held-out detector likelihood before the
+  reporting checkbox above can be checked.
+- [ ] Pass the focused CUDA parity test on CANFAR; local CPU passes and the
+  locked local environment has no CUDA.
 
 ## Checkpoint 4 — Absorb The Former Parallel Work
 
@@ -549,6 +575,42 @@ pixi run -e test -- pytest tests/test_multiband_depth_benchmark.py -q
   cache is justified. Do not implement one from assumption.
 - [ ] Record the tile-size crossover and peak-memory reduction in
   `docs/roadmap/status.md`.
+
+Active exact-commit runs:
+
+- [x] CPU session `lf94h6du`, commit `7e78c57`, was attempted for the
+  512/2048 matrix but failed before environment setup: an ephemeral partial
+  clone could not fetch a promised Git object after the runner removed its
+  temporary credential, and the image lacked its configured `gh` helper. It
+  produced no performance evidence. Diagnostic artifact directory:
+  `/arc/projects/ots/torchsky-runs/20260726-map-scaling-cpu-7e78c57/`.
+- [x] H100 session `epn3drw0`, commit `7e78c57`, same matrix and artifacts:
+  `/arc/projects/ots/torchsky-runs/20260726-map-scaling-cuda-7e78c57/`.
+  Evidence: all five deterministic cases passed. At 512-square/6 exposures,
+  untiled/256/512 measured 0.035/0.155/0.052 s and 34/26/34 MB peak CUDA
+  allocation. At 2048-square/24 exposures, tile 256/512 measured
+  6.967/1.978 s and 279/290 MB. The job manifest reports 1,765,264 KiB peak
+  child RSS.
+- [ ] Replacement CPU session `i3lhh6tk`, exact commit `63be9b3`, runs the same
+  512/2048 matrix with the required per-command Pixi environment. Artifacts:
+  `/arc/projects/ots/torchsky-runs/20260727-map-scaling-cpu-v4-63be9b3/`.
+- [ ] Bounded 4096-square/24-exposure H100 session `r0j9aehr`, exact commit
+  `63be9b3`, compares tile 256 and 512 only. Artifacts:
+  `/arc/projects/ots/torchsky-runs/20260727-map-scaling-cuda-4096-v3-63be9b3/`.
+- [x] Record replacement-launch failures `w7m1xl20`/`vdhsc9f8` (the same
+  filtered-clone credential lifetime) and `axvovt1a`/`nibxmavo` (bootstrap
+  passed, but raw commands omitted the required Pixi prefix). None produced
+  performance evidence; `i3lhh6tk`/`r0j9aehr` correct both launch contracts.
+
+Continuation:
+
+```bash
+canfar logs lf94h6du
+canfar logs epn3drw0
+canfar logs i3lhh6tk
+canfar logs r0j9aehr
+canfar ps --all --json
+```
 
 ### SMACS J0723 six-band readiness
 
