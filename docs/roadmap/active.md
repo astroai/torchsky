@@ -555,7 +555,12 @@ Current Gate 0/M0 evidence:
   cross-platform LAPACK roundoff (`~1e-16`) in noiseless forced-photometry
   report values. The artifact now canonicalizes values below its declared
   `1e-12` reporting tolerance; scientific tensors retain their tight tests.
-- [ ] Rerun the focused H100 gate after the deterministic-report fix is pushed.
+- [x] Rerun the focused H100 gate after the deterministic-report fix is pushed.
+  Evidence: session `longvrs3`, exact commit `9b58106`, passed all 23 Gate 0
+  and SMACS Torchfits-boundary tests in 44.75 s, then wrote the deterministic
+  96-square/six-band artifact in 2.11 s. CUDA 12.9 was available and peak child
+  RSS was 1,796,104 KiB. Artifacts:
+  `/arc/projects/ots/torchsky-runs/20260727-multiband-gate0-v2-9b58106/`.
 
 ## Checkpoint 4 — Absorb The Former Parallel Work
 
@@ -591,8 +596,14 @@ Current Gate 0/M0 evidence:
   and CUDA where advertised.
 - [x] Cover at least 512/2048-square with 6/24 exposures; attempt 4096-square only
   in the bounded tiled mode.
-- [ ] Decide from repeated evidence whether a caller-scoped byte-bounded MEF
+- [x] Decide from repeated evidence whether a caller-scoped byte-bounded MEF
   cache is justified. Do not implement one from assumption.
+  Decision: do not add a second Torchsky cache. Session `lzp0324s` repeatedly
+  read 2048-square `SCI`, `ERR`, and `DQ` planes through Torchfits with warm
+  medians of 0.068/0.060/0.066 ms. NaN masks, finite values, headers, dtypes,
+  and a 128-square CUDA round trip were exact. Retaining 405 full planes would
+  instead create a large stale-data and residency liability; exposure-major
+  callers already read each plane once.
 - [x] Record the tile-size crossover and peak-memory reduction in
   `docs/roadmap/status.md`.
 
@@ -643,42 +654,64 @@ tile 512 is 3.25x faster than tile 256 on CPU at 2048 square, 3.52x faster on
 H100 at 2048 square, and 3.42x faster on H100 at 4096 square. At large sizes,
 the measured CUDA allocation differs by only 1–4% because the benchmark retains
 all input exposure tensors; output tiling does not solve input residency.
-Retain 512 as the operational default tile and leave the MEF-cache box open
-until repeated `SCI`/`ERR`/`DQ` reads measure bytes saved versus stale-data risk.
+Retain 512 as the operational default tile. The real repeated-MEF measurement
+above rejects a second caller cache; revisit only if a later exposure-major
+profile shows genuine repeated cold I/O.
 
 ### SMACS J0723 six-band readiness
 
-- [ ] Inventory the calibrated `SCI`, `ERR`, and `DQ` planes on CANFAR through
+- [x] Inventory the calibrated `SCI`, `ERR`, and `DQ` planes on CANFAR through
   Torchfits/Torchsky boundaries.
-  Located data root: `/arc/projects/ots/jwst_smacs0723`. The prior guessed
-  `/arc/projects/ots/torchsky/data/...` roots do not exist. Run the committed
-  Torchfits-backed inventory against this exact root.
-  Active exact-commit sessions: `g8ol0mcu` inventories the 27 root CRF files;
-  `g3s3wkdm` inventories the 135 aligned/tweakreg CRF products used by the
-  existing six-band work. Both use commit `a482f9f`, read all three named planes
-  through Torchfits, repeat one `SCI` read, and test a CUDA round trip. Artifacts:
+  Evidence: the data root is `/arc/projects/ots/jwst_smacs0723`; the 135
+  aligned/tweakreg products actually used by the existing six-band work are
+  under `results/wcs_aware_multiband_inr/official_no_psf_whitened_l2_batch100_400_tweakreg_rshift_8plus3_run2/alignment/tweakreg_rshift`.
+  Session `g3s3wkdm`, exact commit `a482f9f`, found all 135 products and read
+  every named plane through Torchfits. Session `g8ol0mcu` separately explained
+  the recursive count of 162 as those 135 plus 27 duplicated root CRF products.
+  Artifacts:
   `/arc/projects/ots/torchsky-runs/20260727-smacs-inventory-a482f9f/` and
   `/arc/projects/ots/torchsky-runs/20260727-smacs-aligned-inventory-a482f9f/`.
-- [ ] Verify common support for F090W, F150W, F200W, F277W, F356W, and F444W
+- [x] Verify common support for F090W, F150W, F200W, F277W, F356W, and F444W
   under the pre-registered split:
   `train={1,2,4,5,7}`, `validation={3,8}`, `test={6,9}`.
-- [ ] Record a header/coverage-only crop decision. Do not use science pixels to
+  Evidence: the aligned inventory has short-band counts 20/8/8 and long-band
+  counts 5/2/2 for train/validation/test. Session `l3ux6x9i` then proved every
+  one of the 18 band/split groups has non-zero coverage throughout the selected
+  crop.
+- [x] Record a header/coverage-only crop decision. Do not use science pixels to
   choose the crop and do not treat a deeper coadd as truth.
+  Decision: use the 512-square target-grid crop `(x0=112, y0=0)` in the F277W
+  pattern-1 exposure
+  `108_jw02736001001_02101_00001_nrcblong_o001_crf_rshift_tweakreg.fits`.
+  Session `l3ux6x9i`, exact commit `9b58106`, chose it from headers and WCS
+  footprint coverage only at a declared 16-pixel coarse step. All 1,024 coarse
+  crop samples have support in every band/split group; 98.17% of the complete
+  target detector has the same common support. Artifact:
+  `/arc/projects/ots/torchsky-runs/20260727-smacs-header-crop-9b58106/header_crop.json`.
 - [ ] Run the existing six-band joint-fit smoke if the staged data and image
   provide the required environment.
 
 ### Torchfits consumer stress
 
-- [ ] Exercise repeated MEF `SCI`/`ERR`/`DQ` reads, overwrite freshness, header
+- [x] Exercise repeated MEF `SCI`/`ERR`/`DQ` reads, overwrite freshness, header
   preservation, dtype/device transfer, and large-image memory through Torchsky.
-  Partial evidence: the SMACS benchmark no longer imports Astropy FITS; filter
+  Evidence: the SMACS benchmark no longer imports Astropy FITS; filter
   discovery, `SCI`/`ERR`/`DQ` reads, and generated science/weight/mask products
   now use `torchsky.get_header`/`read`/`write`, hence Torchfits. A focused MEF
   fixture gates headers, float/int plane reads, invalid-ERR/DQ masking, weights,
-  and round-trip auxiliary outputs. Repeated overwrite/device/large-real-file
-  stress remains open.
-- [ ] Record Torchfits defects in the sibling repository; keep FITS/cache fixes
-  out of Torchsky.
+  and round-trip auxiliary outputs. Session `lzp0324s`, exact commit `9b58106`,
+  added real 2048-square SCI/ERR/DQ repetition: NaN masks and finite values were
+  exact, float32/uint32 dtypes were preserved, headers repeated exactly, and the
+  CUDA round trip was exact. Peak child RSS was 1,902,796 KiB. Existing
+  `test_coadd_image_plane_does_not_reuse_overwritten_input` supplies the
+  overwrite-freshness gate. Artifact:
+  `/arc/projects/ots/torchsky-runs/20260727-smacs-repeat-read-9b58106/repeat_read.json`.
+- [x] Record any Torchfits defects in the sibling repository; keep FITS/cache
+  fixes out of Torchsky.
+  Evidence: no Torchfits defect was exposed by the real-file stress, so no
+  sibling issue or speculative cache patch was created. The earlier apparent
+  repeat mismatch was solely `torch.equal` treating equal-position NaNs as
+  unequal; the corrected NaN-aware test passes.
 
 ## Checkpoint 5 — Close And Hand Off
 

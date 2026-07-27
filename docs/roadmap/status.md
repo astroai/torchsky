@@ -4,7 +4,7 @@
 > APIs, start with [`../api.md`](../api.md). For shipped-work history, use
 > [`history.md`](history.md).
 
-Last updated: 2026-07-26.
+Last updated: 2026-07-27.
 
 ## Mission And Ownership
 
@@ -40,8 +40,8 @@ untested behavior.
 ## Current Baseline
 
 - Full local gate: `pixi run ci-local`.
-- Latest recorded full local gate: `1653 passed, 213 skipped, 12 warnings`
-  in 481.24 seconds (2026-07-26, trainable spectral Power-Foam checkpoint).
+- Latest recorded full local gate: `1665 passed, 214 skipped, 12 warnings`
+  in 466.49 seconds (2026-07-27, stabilized multi-band Gate 0 checkpoint).
 - Latest focused WCS gate: `338 passed, 2 skipped, 22 warnings`.
 - Latest focused sphere/HEALPix gate: `351 passed, 6 skipped, 10 warnings`.
 - Latest WCS/sphere acceptance: `pixi run wcs-sphere-acceptance` passes; its
@@ -129,7 +129,8 @@ Re-baseline them after the repository boundary cleanup.
   noiseless forced-photometry JSON: mathematically zero residuals varied around
   `1e-16` between calls. The report boundary now canonicalizes values below the
   declared `1e-12` noiseless tolerance while retaining unrounded tensors and
-  tight scientific tests.
+  tight scientific tests. The corrected exact-commit H100 rerun passed 23
+  focused tests and emitted the deterministic six-band artifact.
 - Weighted and equal-mean tiled coadds now execute exposure-major: an observation
   is read and calibrated once, projected through every output tile, then released.
   The stale unbounded module-global tensor cache is gone, overwrite freshness is
@@ -141,8 +142,10 @@ Re-baseline them after the repository boundary cleanup.
   by 3.25x CPU and 3.52x H100 at 2048, and 3.42x H100 at 4096. Large-case CUDA
   allocation differs by only 1–4% between tile sizes because all inputs remain
   resident, so 512 is the throughput-oriented default rather than a claimed
-  input-memory fix. No caller MEF cache is justified until repeated
-  `SCI`/`ERR`/`DQ` stress quantifies its benefit and freshness behavior.
+  input-memory fix. Real 2048-square repeated `SCI`/`ERR`/`DQ` reads now have
+  0.060–0.068 ms warm medians and exact NaN-aware values/header/device transfer;
+  a second caller MEF cache is therefore rejected unless a future cold-I/O
+  profile overturns that evidence.
 
 - WCS mixed pixel/world solving covers spatial cubes with linearly coupled
   non-spatial axes; the focused gate reports
@@ -157,9 +160,12 @@ Re-baseline them after the repository boundary cleanup.
   claims now belong to `torchfits`; torchsky retains only integration contracts.
 - The real SMACS benchmark now follows that ownership: calibrated filter/header
   discovery, `SCI`/`ERR`/`DQ` reads, and temporary science/weight/mask FITS
-  products all traverse Torchsky's public Torchfits facade. A focused MEF
-  round-trip/weight-mask fixture passes; CANFAR inventory and repeated
-  overwrite/device/large-image stress remain open.
+  products all traverse Torchsky's public Torchfits facade. CANFAR inventories
+  all 135 aligned six-band exposures and every named MEF plane. The
+  pre-registered split has common support in a header-selected 512-square
+  F277W-grid crop at `(112, 0)`; no science pixel entered the crop decision.
+  Real repeated reads, float32/uint32 preservation, NaN-aware equality, CUDA
+  transfer, header equality, overwrite freshness, and bounded memory are gated.
 - WCS/sphere `gradcheck` gap closed: 26 WCS gradcheck tests (all 8 projections,
   SIP, TPV) + 3 sphere spectral gradcheck tests. Projections with analytic
   inverse (AIT, MOL, CEA, MER) get `world_to_pixel` gradcheck; TAN/SIN/ARC/HPX
