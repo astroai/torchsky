@@ -40,8 +40,8 @@ untested behavior.
 ## Current Baseline
 
 - Full local gate: `pixi run ci-local`.
-- Latest recorded full local gate: `1645 passed, 201 skipped, 12 warnings`
-  in 489.48 seconds (2026-07-26, batched exact Power-Foam renderer checkpoint).
+- Latest recorded full local gate: `1653 passed, 213 skipped, 12 warnings`
+  in 481.24 seconds (2026-07-26, trainable spectral Power-Foam checkpoint).
 - Latest focused WCS gate: `338 passed, 2 skipped, 22 warnings`.
 - Latest focused sphere/HEALPix gate: `351 passed, 6 skipped, 10 warnings`.
 - Latest WCS/sphere acceptance: `pixi run wcs-sphere-acceptance` passes; its
@@ -97,22 +97,23 @@ Re-baseline them after the repository boundary cleanup.
   slice; the corresponding million-site medians are 0.0465 s for sparse Čech
   construction and 0.0269 s for tile candidates, with 675–676 MB peak CUDA
   allocation and both dense-oracle checks passing.
-- The first exact bounded-power-cell/pixel reference operator now clips convex
-  tangent-plane pixels by radical half-planes, integrates circular bounds with
-  analytic segment/arc areas, exposes pixel-major and transposed sparse forms,
-  and gates surface-brightness/integrated-flux adjoints. Analytic circle,
-  rectangle, partition, transform, permutation, chunk, and independent
-  1024-square numerical-oracle tests pass. The Python reference processes about
-  1,056 candidates/s in its local 256-site/256-pixel CPU benchmark. CANFAR
-  correctness and matched-size benchmarks pass on CPU and H100 CUDA, but the
-  scalar reference reaches only 647 and 184 candidates/s respectively because
-  device-synchronizing per-candidate clipping dominates. The exact reference is
-  therefore retained as the oracle. A first synchronization-free Torch-batched
-  renderer now matches its topology/areas locally and raises the matched CPU
-  rate to 18,699 candidates/s (0.136 s median, about 16x the current matched
-  one-run scalar rate); the 1,000-site/1,024-pixel case reaches 14,781
-  candidates/s with 591 MB operator-only peak RSS. CUDA, `torch.compile`, and
-  larger CANFAR gates remain open before it becomes the production default.
+- The exact bounded-power-cell/pixel operator now has a scalar analytic oracle
+  and a production Torch-batched renderer. Small/medium/large CANFAR CPU/H100
+  runs preserve topology and area; the 10,000-site/16,384-pixel case processes
+  108,379 candidates in 2.995/1.547 s eager CPU/CUDA with bounded 4,096-candidate
+  chunks. Whole-builder compilation reaches 0.230/0.0414 s steady state but
+  costs 423/233 s warm-up and high process RSS. Targeted clipping/area-kernel
+  compilation provides the operational compromise: 0.208 s CPU and 0.0843 s
+  H100 with 215/87 s warm-up and substantially lower RSS. Eager remains the
+  short-job default; no native kernel is justified without a downstream profile.
+- Exact hard inference is paired with a separately named log-domain smooth
+  bounded-ownership training surrogate. Sites, strictly positive radii, and
+  per-cell spectral coefficients receive finite gradients even when a query is
+  initially outside all hard bounds; exact reporting still uses analytic pixel
+  areas. `SpectralPowerFoam` shares geometry over wavelength and renders the
+  same learned coefficients through arbitrary sampled responses or compact
+  spectral bases. A matched six-channel CANFAR benchmark exactly equals six
+  independent renders while reducing CPU time 5.01x and H100 time 4.24x.
 - Weighted and equal-mean tiled coadds now execute exposure-major: an observation
   is read and calibrated once, projected through every output tile, then released.
   The stale unbounded module-global tensor cache is gone, overwrite freshness is

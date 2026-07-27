@@ -59,14 +59,14 @@ not be presented as Foam.
 - [x] Implement exact clipped power-cell/pixel intersection in the local tangent
   plane, including flux-conserving area integration and an adjoint/dot-product
   gate. Use quadrature only as a documented fallback for curved WCS footprints.
-- [ ] Add exact hard-cell inference and a well-defined differentiable training
+- [x] Add exact hard-cell inference and a well-defined differentiable training
   path; never conflate a soft partition with the exact renderer.
 
 ### Astronomy-native appearance model
 
-- [ ] Share spatial sites, radii, and adjacency across wavelength while keeping
+- [x] Share spatial sites, radii, and adjacency across wavelength while keeping
   spectral appearance parameters separate from geometry.
-- [ ] Add per-cell spectral bases or compact spectral decoders evaluated through
+- [x] Add per-cell spectral bases or compact spectral decoders evaluated through
   the existing deterministic bandpass operator; support broadband images, narrow
   bands, IFU channels, and energy bins through the same contract.
 - [ ] Add within-cell detail sites with normalized soft-Voronoi interpolation for

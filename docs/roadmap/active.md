@@ -450,13 +450,17 @@ remain interoperable.
   Evidence: `SpectralPowerFoam.render_exact` matches
   `render_power_spectral_basis` under both surface-brightness and
   integrated-flux semantics; five focused model tests pass.
-- [ ] Recover a seeded two-cell geometry/colour fixture from held-out spatial
+- [x] Recover a seeded two-cell geometry/colour fixture from held-out spatial
   and spectral samples, then report exact-pixel held-out error after the hard
   inference handoff.
-  Local smoke: 1,500 samples with a fixed modulo-five validation split and
-  0.002 noise, 400 Adam steps in 0.212 s CPU, validation MSE
-  `0.396 -> 4.00e-6`, and exact two-band pixel relative RMSE `2.45e-4`;
-  CPU/CUDA CANFAR evidence remains unchecked.
+  Evidence: CANFAR session `sy8bl0ii`, exact commit `7e78c57`, 1,500 samples
+  with a fixed modulo-five validation split and 0.002 noise. Both CPU and H100
+  CUDA reproduce validation MSE `0.396 -> 4.00e-6` and exact two-band pixel
+  relative RMSE `2.45e-4`, while recovering sites, radii, and spectral
+  coefficients to the recorded tolerance. CPU/CUDA training times are
+  0.503/2.732 s; the tiny float64 workload is launch-bound on CUDA. Peak CUDA
+  allocation is 67,414,528 bytes. Artifacts:
+  `/arc/projects/ots/torchsky-runs/20260726-foam-training-7e78c57/`.
 - [ ] Build the larger pre-registered multi-band injection/recovery benchmark
   before making any depth claim.
 
@@ -465,6 +469,46 @@ Focused continuation:
 ```bash
 pixi run -e test -- pytest tests/test_map_field_foam_model.py -q
 pixi run preflight-push
+```
+
+## Checkpoint 3G — Pre-Registered Multi-Band Depth Harness
+
+The complete protocol is frozen in
+[`../../.cursor/harness/proposals/multiband-depth-demo.md`](../../.cursor/harness/proposals/multiband-depth-demo.md).
+The first implementation milestone is Gate 0/M0 only. Keep source generation,
+detection, matching, and catalogue scoring benchmark-local; do not add a source
+extractor to the Torchsky runtime.
+
+- [ ] Add a deterministic truth catalogue for point sources and compact
+  galaxies with smooth continua, lines, dropouts, close pairs, and blank/null
+  scenes. Serialize scene, noise, pointing, and nuisance seeds separately.
+- [ ] Render truth with denser spatial/spectral integration than any fitted
+  method, and split complete scene/exposure identifiers into disjoint
+  train/validation/test sets.
+- [ ] Add one common Torch detector: propagated/empirical whitening, a fixed PSF
+  template bank, local maxima, angular non-maximum suppression, and a threshold
+  calibrated on validation nulls to 95% measured purity.
+- [ ] Add deterministic maximum-cardinality one-to-one truth association within
+  the pre-registered radius; count unmatched and duplicate detections as false
+  positives and gate close-pair/duplicate fixtures.
+- [ ] Report completeness, purity, false detections/area, astrometric residuals,
+  forced flux/color bias, held-out detector likelihood, runtime, and peak memory.
+  Image RMSE remains supporting evidence, never the depth claim.
+- [ ] Implement only the smoke comparison first: weighted bilinear, square
+  Drizzle, chi-square coadd detection, independent per-band Foam, and shared
+  spectral Foam under matched seeds and a declared capacity/compute view.
+- [ ] Gate zero-source false positives, noiseless bright-source flux/position,
+  split disjointness, deterministic artifacts, shuffled-band loss of sharing
+  gain, and CPU/CUDA parity.
+- [ ] Run three smoke scene seeds and two noise realizations. Do not check the
+  parent depth-demonstration box or claim a magnitude gain from fewer scenes.
+- [ ] Only after Gate 0 passes, add joint INR/hybrid rows, the 30-scene
+  publication profile, bootstrap intervals, and detector-level SMACS injections.
+
+Focused continuation:
+
+```bash
+pixi run -e test -- pytest tests/test_multiband_depth_benchmark.py -q
 ```
 
 ## Checkpoint 4 — Absorb The Former Parallel Work
