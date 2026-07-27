@@ -163,6 +163,107 @@ class PowerPixelOperator:
         return output.reshape(pixel_values.shape[:-1] + (self.cell_count,))
 
 
+def render_power_spectral_samples(
+    operator: PowerPixelOperator,
+    cell_samples: Tensor,
+    response_weights: Tensor,
+    *,
+    semantics: PowerValueSemantics = "surface_brightness",
+) -> Tensor:
+    """Integrate sampled cell spectra and render them with shared geometry.
+
+    ``cell_samples`` has shape ``(..., samples, cells)``. Response weights have
+    shape ``(samples,)`` for one channel or ``(channels, samples)`` for many.
+    The weights are linear quadrature/response coefficients supplied by the
+    existing spectral operator; they are not renormalized here.
+    """
+    if (
+        not cell_samples.is_floating_point()
+        or cell_samples.ndim < 2
+        or cell_samples.shape[-1] != operator.cell_count
+    ):
+        raise ValueError(
+            "cell_samples must be floating point with shape (..., samples, cells)"
+        )
+    if (
+        cell_samples.device != operator.areas.device
+        or cell_samples.dtype != operator.areas.dtype
+    ):
+        raise ValueError("cell_samples must match the operator dtype and device")
+    if not response_weights.is_floating_point() or response_weights.ndim not in (1, 2):
+        raise ValueError("response_weights must have shape (samples,) or (channels, samples)")
+    if response_weights.shape[-1] != cell_samples.shape[-2]:
+        raise ValueError("response_weights and cell_samples must share sample count")
+    if not bool(torch.isfinite(cell_samples).all()) or not bool(
+        torch.isfinite(response_weights).all()
+    ):
+        raise ValueError("cell_samples and response_weights must be finite")
+
+    squeeze_channel = response_weights.ndim == 1
+    responses = response_weights.reshape(-1, response_weights.shape[-1]).to(
+        device=cell_samples.device,
+        dtype=cell_samples.dtype,
+    )
+    channel_cells = torch.einsum("bs,...sc->...bc", responses, cell_samples)
+    rendered = operator.matvec(channel_cells, semantics=semantics)
+    return rendered.squeeze(-2) if squeeze_channel else rendered
+
+
+def render_power_spectral_basis(
+    operator: PowerPixelOperator,
+    cell_coefficients: Tensor,
+    basis_samples: Tensor,
+    response_weights: Tensor,
+    *,
+    semantics: PowerValueSemantics = "surface_brightness",
+) -> Tensor:
+    """Evaluate compact cell spectra, integrate responses, and render pixels.
+
+    ``cell_coefficients`` has shape ``(..., cells, basis)`` and
+    ``basis_samples`` has shape ``(samples, basis)``.
+    """
+    if (
+        not cell_coefficients.is_floating_point()
+        or cell_coefficients.ndim < 2
+        or cell_coefficients.shape[-2] != operator.cell_count
+    ):
+        raise ValueError(
+            "cell_coefficients must be floating point with shape "
+            "(..., cells, basis)"
+        )
+    if (
+        cell_coefficients.device != operator.areas.device
+        or cell_coefficients.dtype != operator.areas.dtype
+    ):
+        raise ValueError(
+            "cell_coefficients must match the operator dtype and device"
+        )
+    if (
+        not basis_samples.is_floating_point()
+        or basis_samples.ndim != 2
+        or basis_samples.shape[1] != cell_coefficients.shape[-1]
+    ):
+        raise ValueError("basis_samples must have shape (samples, basis)")
+    if (
+        basis_samples.device != cell_coefficients.device
+        or basis_samples.dtype != cell_coefficients.dtype
+    ):
+        raise ValueError(
+            "basis_samples must match cell_coefficients dtype and device"
+        )
+    cell_samples = torch.einsum(
+        "...ck,sk->...sc",
+        cell_coefficients,
+        basis_samples,
+    )
+    return render_power_spectral_samples(
+        operator,
+        cell_samples,
+        response_weights,
+        semantics=semantics,
+    )
+
+
 def _validate_sites_and_radii(
     sites: Tensor,
     radii: Tensor,
@@ -1559,6 +1660,8 @@ __all__ = [
     "cech_adjacency",
     "power_distance",
     "power_face_planes",
+    "render_power_spectral_basis",
+    "render_power_spectral_samples",
     "smooth_bounded_power_weights",
     "soft_bounded_power_weights",
     "sparse_cech_graph",

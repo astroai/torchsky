@@ -342,8 +342,10 @@ and must never be described as exact area integration.
 - [ ] Gate permutation/similarity equivariance, background occupancy, hard-limit
   convergence away from boundaries, coincident sites, float32/float64, and
   CPU/MPS/CUDA parity.
-  CPU invariance, hard-limit, coincident-site, and dtype gates pass; MPS/CUDA
-  device parity remains unchecked.
+  CPU invariance, hard-limit, coincident-site, and dtype gates pass. CANFAR
+  session `nc1qx6se` at exact commit `1a47854` passed the CUDA same-input gate
+  within 35 focused passes; MPS remains unchecked because the locked local
+  environments currently report MPS unavailable.
 - [x] Gate autograd against finite differences for sites, radii, and queries;
   include a toy optimization where a radius starts outside an observed point
   and learns to include it.
@@ -360,6 +362,43 @@ Focused continuation:
 
 ```bash
 pixi run -e test -- pytest tests/test_map_field_foam.py -q
+pixi run preflight-push
+```
+
+## Checkpoint 3E — Shared-Geometry Spectral Foam
+
+Multi-wavelength Foam must reuse one exact spatial operator. Spectral samples
+or basis coefficients vary by cell and wavelength; bandpass integration remains
+the existing deterministic linear response rather than rebuilding geometry per
+channel.
+
+- [x] Render arbitrary per-cell spectral samples through one
+  `PowerPixelOperator` and one or many response-weight rows, preserving leading
+  batch dimensions and both surface-brightness/integrated-flux semantics.
+  Evidence: `render_power_spectral_samples` contracts response weights before
+  one shared-geometry `matvec`; single/multi-channel and leading-batch results
+  equal explicit per-channel operator application under both value semantics.
+- [x] Contract compact per-cell spectral basis coefficients with sampled basis
+  functions before response integration, without introducing a Foam-only
+  bandpass abstraction.
+  Evidence: `render_power_spectral_basis` is two Torch `einsum` contractions
+  plus the same sampled-spectra path; it accepts weights from the existing
+  deterministic spectral response without renormalizing them.
+- [x] Gate monochromatic, top-hat, delta-line, overlapping-band, broadband/IFU
+  equivalence, shape validation, exact spatial adjoints, and gradients through
+  cell spectra, coefficients, and basis samples.
+  Evidence: `tests/test_map_field_foam_spectral.py`; five local tests pass,
+  including manual response contraction, the exact `rmatvec` adjoint, and finite
+  coefficient/basis gradients.
+- [ ] Run CPU/CUDA matched multi-band benchmarks and compare shared-geometry
+  execution against independent per-band operator construction.
+- [ ] Only after those gates, build a trainable shared-geometry spectral Foam
+  field and the seeded multi-band depth experiment.
+
+Focused continuation:
+
+```bash
+pixi run -e test -- pytest tests/test_map_field_foam_spectral.py -q
 pixi run preflight-push
 ```
 
