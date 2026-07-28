@@ -227,6 +227,18 @@ Re-baseline them after the repository boundary cleanup.
 
 ## Current Work Queue
 
+### Active 2026-07-28 focus — ADASS UPdec depth sprint
+
+The broad FOSSIL/component-separation track is temporarily paused through
+2026-08-04. The active scientific gate is now a detector-level injection/recovery
+comparison on the six-band SMACS J0723 exposures underlying the UPdec-Webb
+products. A depth claim requires positive paired `m50` gain at fixed empirical
+purity relative to the strongest Drizzle/SWarp multiband detector, acceptable
+flux/color bias, and non-degraded held-out exposure likelihood. Current
+public-mosaic flux ratios are not calibrated well enough for that claim, and the
+real Foam/INR injection profile remains to be implemented. See
+[`../projects/adass_updec_depth_week.md`](../projects/adass_updec_depth_week.md).
+
 ### P0 — Boundary And Correctness — DONE
 
 - CFITSIO/zlib build wiring removed from `cpp_src/CMakeLists.txt` ✓

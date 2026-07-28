@@ -177,20 +177,17 @@ legacy option.
 
 ## Immediate Task Order
 
-1. Profile and compile/vectorize exact square-Drizzle polygon clipping; the
-   first H100 classical floor showed 3,691 s at effectively zero GPU use.
-2. Add capacity/compute-declared independent and shared spectral Foam rows to
-   the multiband smoke, retaining hard-renderer inference.
-3. Introduce the minimal `TensorSpec`/typed operator adapter, then promote
-   spectral response/channel mixing with exact adjoints.
-4. Add weighted target protection, cross-fit partitions, and paired injections
-   before training flexible component separators.
-5. Run three seeds/two noise realizations only after items 1–4; make no depth
-   claim from the current one-seed classical floor.
-6. Add full-sky spectral/monopole/open-residual products and start the CMB
-   `mu`-preservation and 21 cm foreground-leakage profiles.
-7. Continue Foam densification/pruning and diffuse-INR composition, followed by
-   equal-budget INR/Foam/classical ablations.
-8. Close external-tool workflow gaps in the order revealed by real survey use,
-   with background matching, variance/context outputs, and large-mosaic
-   streaming ahead of low-impact option breadth.
+Through 2026-08-04, the detailed executable order is
+[`../projects/adass_updec_depth_week.md`](../projects/adass_updec_depth_week.md):
+
+1. close detector-level injection, calibration/value semantics, and PSF truth;
+2. freeze upstream Drizzle/SWarp and multiband chi-square baselines;
+3. compare capacity/compute-matched independent and shared Foam/INR;
+4. run the blind CANFAR selection function and submit only a gated claim.
+
+After the ADASS sprint:
+
+5. profile and compile/vectorize exact square-Drizzle polygon clipping;
+6. resume Foam lifecycle/diffuse-INR composition and the larger depth profile;
+7. resume FOSSIL typed spectral/component-separation primitives;
+8. scale the frozen experiment to COSMOS and broader survey regimes.

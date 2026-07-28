@@ -1,0 +1,325 @@
+# ADASS UPdec Depth Sprint
+
+> Active focus: 2026-07-28 through 2026-08-04. This sprint temporarily pauses
+> FOSSIL/component-separation work and broad Torchsky roadmap expansion.
+>
+> ADASS XXXVI oral/tutorial abstracts are due **2026-08-01 Anywhere on Earth**:
+> <https://adass2026.icrar.org/call-for-contrib>. Submit a conservative version
+> by August 1 local time. The remaining sprint validates or strengthens it.
+
+## Outcome
+
+Produce one defensible detector-level result:
+
+> On six-band JWST/NIRCam exposures underlying the UPdec-Webb SMACS J0723
+> products, a shared spectral Power-Foam recovers fainter injected continuum
+> sources than the strongest matched classical pipeline at fixed purity, while
+> preserving fluxes and predicting held-out exposures.
+
+The abstract may say “deeper” only if the blind-test gates below pass. The
+strongest classical pipeline includes multiband detection from Drizzle/SWarp
+products; beating separate per-band images alone is not sufficient.
+
+## Scope Lock
+
+- [x] Use the existing 135 calibrated SMACS J0723 exposures: 36 exposures in
+  each of F090W/F150W/F200W and nine in each of
+  F277W/F356W/F444W.
+- [x] Use the header-selected common-support 512-square F277W target-grid crop
+  at `(x0=112, y0=0)`. Do not select the field from science-pixel appearance.
+- [x] Keep simultaneous short/long observations together:
+  `train={1,2,4,5,7}`, `validation={3,8}`, `test={6,9}` by `PATT_NUM`.
+- [x] Treat published UPdec/iter0 mosaics as registration and visual-QA
+  references only. They are neither independent truth nor the primary depth
+  comparator.
+- [x] Keep all FITS access through Torchfits/Torchsky.
+- [ ] Make no FOSSIL, component-separation, COSMOS, release, or unrelated API
+  changes during this sprint.
+- [ ] Fix only defects that block the experiment. Time-box exact Torchsky
+  Drizzle optimization; the official upstream Drizzle comparator can establish
+  the scientific baseline while the 3,691-second Torchsky path remains an
+  explicitly reported engineering result.
+
+## Existing Evidence
+
+- [x] Deterministic seed manifests, dense spectral truth, source strata, common
+  detector, validation-null thresholding, angular NMS, exact one-to-one
+  association, forced flux/color metrics, NLL, and classical rows exist in
+  `benchmarks/bench_multiband_depth.py`.
+- [x] The production weighted-bilinear, exact square-Drizzle, and chi-square
+  classical floor passed on a CANFAR H100 at commit `addb925`.
+- [x] Official Drizzle, SWarp, and Montage backends are wired in the existing
+  map-compat/SMACS stacker harness.
+- [x] `SpectralPowerFoam` has differentiable smooth fitting, shared spectral
+  coefficients, exact hard pixel rendering, sparse candidate geometry, and
+  CPU/CUDA primitive gates.
+- [x] Latest `main` (`aa778e8`) has green local and GitHub comprehensive CI.
+
+## Blocking Gaps
+
+- [ ] Resolve the current calibration/value-semantics mismatch before trusting
+  any public-mosaic metric. Existing per-band coadd/reference flux ratios span
+  roughly 4.7 to 18.7 and cannot support an abstract claim.
+- [ ] Add detector-level real-image injection/recovery. Never inject only into
+  a coadd.
+- [ ] Add an approved band-dependent PSF contract. Injection truth must use a
+  more accurate/oversampled PSF than the fitted approximation so this is not an
+  inverse-PSF experiment.
+- [ ] Route independent and shared Foam through the same WCS, bandpass, pixel
+  footprint, PSF, mask, weight, and exposure-nuisance operators used by the INR.
+- [ ] Apply one common detector/photometer to every final band product.
+- [ ] Freeze validation-selected hyperparameters and thresholds before
+  generating blind injection locations and noise/control identifiers.
+
+## Claim Contract
+
+### Primary endpoint
+
+At empirically calibrated 95% purity, report
+
+```text
+Delta m50 = m50(shared spectral Foam) - m50(best classical multiband pipeline)
+```
+
+Fit `m50` from per-source binomial recovery probabilities. Bootstrap complete
+injection-batch identifiers with 10,000 paired resamples.
+
+The abstract may claim greater depth only when all are true:
+
+- [ ] `Delta m50 > 0` and its paired 95% bootstrap interval excludes zero.
+- [ ] Measured test purity is at least 95%; its lower 95% confidence bound is at
+  least 93%.
+- [ ] Bright injected-source median absolute flux bias is at most 2% per band
+  and no more than one percentage point worse than the best classical method.
+- [ ] Adjacent-band median color bias is at most 0.02 mag for the claimed
+  smooth-continuum population.
+- [ ] Held-out test-exposure predictive NLL is improved or statistically
+  indistinguishable from the best independent model.
+- [ ] The gain appears in at least two of four science-blind 256-square
+  quadrants, not only in one favorable patch.
+- [ ] Blank, negative-injection, and shuffled-band controls pass.
+
+`0.2 mag` is a useful target, not a threshold that may be imposed after seeing
+the results. Report the measured effect, interval, wall time, parameters/atoms,
+peak RSS, and peak accelerator memory.
+
+### Required method matrix
+
+All methods receive identical exposures, masks, inverse variances, WCS,
+bandpasses, PSF metadata, split identifiers, injections, and final target grids.
+
+| Priority | Method | Role |
+| --- | --- | --- |
+| required | weighted per-band Torchsky stack | internal classical control |
+| required | upstream square Drizzle; validation-selected `pixfrac` | standard dithered-imaging baseline |
+| required | SWarp bilinear/LANCZOS3, chosen on validation only | standard survey-stacking baseline |
+| required | whitened chi-square detection over the best per-band stack products | strongest classical use of all six bands |
+| required | independent per-band Foam with union/best-band detection | isolates the gain from spectral sharing |
+| required | shared spectral Foam | primary candidate |
+| required fallback | shared spectral INR and independent per-band INR | protects the abstract if Foam integration is not ready or is not the winner |
+| secondary | Montage | reprojection/mosaicking context, not a blocker for the depth endpoint |
+| stretch | diffuse INR + compact Foam | run only after the primary matrix freezes |
+
+Compare both capacity-matched and compute-matched independent/shared models.
+Do not count independent models as receiving six times the optimization budget.
+
+## Real Injection Design
+
+- [ ] Start from the unchanged `SCI`, `ERR`, and `DQ` detector planes.
+- [ ] Cache a no-injection control fit/catalogue for every method.
+- [ ] Inject sources through each exposure WCS, oversampled PSF, pixel footprint,
+  calibration, and bandpass. Preserve the original background/noise/artifacts.
+- [ ] Use smooth continuum point sources for the abstract endpoint. Add compact
+  galaxies, dropouts, emission-line objects, and close pairs only after the
+  primary endpoint is frozen.
+- [ ] Use seven or more flux levels densely bracketing the validation estimate
+  of `m50`.
+- [ ] Use at most 5% injected-source areal occupancy per fit and reject isolated
+  injections within two PSF FWHM of the frozen control catalogue.
+- [ ] Run at least 20 independent batches distributed deterministically over the
+  four 256-square quadrants. Aim for at least 800 total continuum injections.
+- [ ] Run blank, sign-flipped/negative, and shuffled-band batches through the
+  identical fitting and detection path.
+- [ ] Detect on the full reconstructed products. Use the control catalogue to
+  distinguish pre-existing real objects; do not claim depth from an
+  injected-minus-control image with the real sky artificially removed.
+
+## Four-Day Submission Sprint
+
+### Day 1 — Tuesday 28 July: make the experiment trustworthy
+
+- [ ] Add a shipped `updec-adass` profile or equivalent stable CLI to
+  `benchmarks/bench_multiband_depth.py`; do not create a separate analysis
+  framework.
+- [ ] Add the real exposure/injection adapter by reusing discovery, cropping,
+  and `SCI/ERR/DQ` helpers from the SMACS joint benchmark.
+- [ ] Reconcile `MJy/sr`, pixel-area, photometric scale, inverse variance, and
+  surface-brightness versus integrated-flux semantics with bright noiseless
+  detector-level injections.
+- [ ] Add the band-dependent PSF truth/fitted-PSF contract and a deliberately
+  perturbed-PSF control.
+- [ ] Pass one 32-square, two-band, two-exposure CPU/CUDA smoke and write a
+  deterministic JSON artifact.
+
+Day-1 stop gate: a bright injected source must recover position and flux through
+each final method boundary. Otherwise do not begin model tuning.
+
+### Day 2 — Wednesday 29 July: freeze the strongest classical baseline
+
+- [ ] Run weighted Torchsky, upstream Drizzle, and SWarp on identical validation
+  exposures and the exact same target grid.
+- [ ] Select Drizzle `pixfrac` from a small predeclared grid and SWarp kernel
+  from `{BILINEAR, LANCZOS3}` using validation injections only.
+- [ ] Build the whitened chi-square six-band detector from each winning stack
+  family and select the empirical 95%-purity threshold on validation nulls.
+- [ ] Include Montage if its exact target grid is supported; otherwise record an
+  explicit secondary skip and continue.
+- [ ] Run at least three validation injection batches and one blank control.
+- [ ] Freeze `adass_updec_classical_config.json`, including commits, external
+  tool versions, target header hash, inputs, split, PSF, seeds, and thresholds.
+
+Day-2 stop gate: classical completeness curves must be monotonic within sampling
+uncertainty, blank controls must behave, and bright-source flux must satisfy the
+2% gate.
+
+### Day 3 — Thursday 30 July: independent versus shared Foam
+
+- [ ] Add the minimum field/observation adapter for `SpectralPowerFoam`; reuse
+  current rendering and training operators rather than creating a Foam pipeline.
+- [ ] Initialize geometry without test pixels. Use a fixed deterministic grid
+  for the first fair run; adaptive residual initialization is a validation-only
+  ablation.
+- [ ] Fit independent per-band Foam and shared spectral Foam under both matched
+  capacity and matched sampled-pixel/step budgets.
+- [ ] Hard-render final products with detached exact geometry; never score the
+  smooth training surrogate as the final Foam image.
+- [ ] Run the same matrix for the strongest current shared/independent INR as a
+  fallback and architectural control.
+- [ ] Tune only atom density/capacity, spectral basis size, learning rate,
+  temperature schedule, step budget, and stopping rule on validation batches.
+- [ ] Freeze `adass_updec_model_config.json` and commit before blind test IDs are
+  generated.
+
+Day-3 noon fallback: if exact Foam integration or flux recovery is still broken,
+freeze the joint INR as the primary submitted method and describe Foam as an
+experimental adaptive representation. Never rename an INR result as Foam.
+
+### Day 4 — Friday 31 July: blind CANFAR result and abstract numbers
+
+- [ ] Generate blind test injection/control identifiers only after both config
+  files are committed.
+- [ ] Run at least 20 batches on CANFAR H100 sessions from one exact commit.
+- [ ] Persist every batch under
+  `/arc/projects/ots/torchsky-runs/20260731-adass-updec-depth-<commit>/`.
+- [ ] Generate one merged JSON and Markdown report, including all failures.
+- [ ] Compute paired batch-bootstrap intervals and the complete claim gate.
+- [ ] Produce:
+  1. completeness versus AB magnitude at fixed purity;
+  2. `Delta m50` with 95% interval for each comparator;
+  3. flux/color bias and held-out NLL;
+  4. runtime/peak-memory/parameter-or-atom table;
+  5. one clearly labelled visual example as supporting evidence only.
+
+### Submission day — Saturday 1 August
+
+- [ ] Re-run one frozen batch and verify its artifact hash.
+- [ ] Fill the claim sentence only from the generated blind report.
+- [ ] Submit the conservative abstract by August 1 local time rather than using
+  the final AoE hours as operational margin.
+- [ ] If a claim gate fails, use the fallback wording below. Do not tune on blind
+  test failures.
+
+## Remaining Sprint — 2 through 4 August
+
+- [ ] Repeat the frozen endpoint with additional batches/quadrants.
+- [ ] Add compact galaxies, dropout/emission-line, crowded, and PSF-misspecified
+  strata.
+- [ ] Resolve any transient CANFAR/GitHub failures and obtain green exact-commit
+  CI.
+- [ ] Update the abstract only if the submission system still permits it.
+- [ ] Freeze a reproducibility bundle and define the later COSMOS scale-up; do
+  not start downloading or re-engineering COSMOS during this sprint.
+
+## Abstract Claim Ladder
+
+Use the strongest statement whose gates actually pass.
+
+### A — Desired quantitative Foam claim
+
+> On detector-level injections into six-band JWST/NIRCam observations of
+> SMACS J0723, shared spectral Power-Foam improves the 50%-completeness limit by
+> `X [95% CI: L, U]` mag at 95% purity relative to the strongest
+> Drizzle/SWarp multiband baseline, with `Y%` bright-source flux bias and no
+> degradation in held-out exposure likelihood.
+
+### B — Safe joint-INR result
+
+> A joint differentiable continuous-field model improves the
+> 50%-completeness limit by `X [L, U]` mag over matched classical multiband
+> stacks; Power-Foam is evaluated as an adaptive representation within the same
+> operator framework.
+
+Use this if INR wins or Foam is not fully gated. Do not put “Foam reaches
+deeper” in the title or abstract.
+
+### C — Methods-only fallback
+
+> We present a reproducible detector-level benchmark for classical coadds,
+> implicit fields, and adaptive Power-Foam representations, with common
+> completeness, purity, photometric-fidelity, held-out-likelihood, and
+> computational-cost measurements on JWST/NIRCam data.
+
+Use this if no positive blind depth interval exists. A correct negative result is
+safer than a post-selected depth claim.
+
+## Proposed Stable Commands
+
+These are the intended end-state CLI contracts; check the boxes only after the
+profile exists and `--help` confirms them.
+
+```bash
+cd /Users/fabbros/src/torchsky
+
+pixi run -e test -- pytest tests/test_multiband_depth_benchmark.py -q
+
+pixi run -e sphere-bench python benchmarks/bench_multiband_depth.py \
+  --profile updec-adass --stage validation --device cuda \
+  --input-root data/jwst_smacs0723 \
+  --bands F090W,F150W,F200W,F277W,F356W,F444W \
+  --train-patt-num 1,2,4,5,7 \
+  --validation-patt-num 3,8 --test-patt-num 6,9 \
+  --methods weighted,drizzle,swarp,chi2,independent_inr,joint_inr,independent_foam,joint_foam \
+  --config-out benchmark_results/adass_updec_frozen_config.json \
+  --json-out benchmark_results/adass_updec_validation.json
+
+pixi run -e sphere-bench python benchmarks/bench_multiband_depth.py \
+  --profile updec-adass --stage test --device cuda \
+  --config benchmark_results/adass_updec_frozen_config.json \
+  --injection-batches 20 --bootstrap-resamples 10000 \
+  --json-out benchmark_results/adass_updec_blind.json \
+  --markdown-out benchmark_results/adass_updec_blind.md
+```
+
+## Parallel Work
+
+### User/science and abstract
+
+- [ ] Create the Pretalx submission now and enter a conservative methods-first
+  title/summary so the deadline is operationally safe.
+- [ ] Confirm authors, affiliations, presenting author, requested format, and
+  Theme 2 (“AI as a tool for scientific discovery”) versus Theme 8.
+- [ ] Confirm how UPdec-Webb should be credited. The detector exposures are
+  JWST data used for the UPdec-Webb field; do not imply that UPdec produced the
+  raw exposures.
+- [ ] Approve the abstract endpoint population: smooth-continuum point sources
+  first, with extended/dropout/line sources labelled as robustness work.
+- [ ] Approve the PSF truth model and acceptable instrument systematic floor.
+- [ ] Draft the motivation/methods paragraphs without a numerical depth claim;
+  leave `X`, confidence interval, photometric bias, and runtime placeholders.
+
+### Torchsky engineering
+
+- [ ] Implement and test the stable profile, real injection adapter, unit/PSF
+  gates, method adapters, blind-run lock, report generator, and CANFAR runs.
+- [ ] Keep `main` releasable with focused tests during development,
+  `pixi run ci-local` before every push, and exact-commit artifacts.

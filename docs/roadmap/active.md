@@ -1,5 +1,25 @@
 # Active Torchsky Execution Checklist
 
+## Current Focus Override — ADASS UPdec Depth Sprint
+
+From 2026-07-28 through 2026-08-04, pause FOSSIL/component separation and broad
+roadmap work. The sole scientific priority is the detector-level UPdec/SMACS
+stacking-versus-INR/Foam depth result defined in
+[`../projects/adass_updec_depth_week.md`](../projects/adass_updec_depth_week.md).
+
+- [x] Freeze the field, target crop, six bands, exposure split, primary endpoint,
+  claim gates, required comparator matrix, four-day submission sprint, and
+  fallback abstract language.
+- [ ] Execute Day 1: real detector injection, unit/calibration closure, PSF
+  contract, and tiny CPU/CUDA smoke.
+- [ ] Execute Day 2: validation-selected upstream Drizzle/SWarp plus classical
+  multiband chi-square baseline.
+- [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
+  freeze configuration before blind identifiers.
+- [ ] Execute Day 4: 20-batch CANFAR blind test, paired intervals, report, and
+  figures.
+- [ ] Submit only the strongest abstract claim whose pre-registered gate passes.
+
 > Started 2026-07-26 from `main` at `0b10008`.
 >
 > This is the durable handoff for the current implementation cycle. Update a
