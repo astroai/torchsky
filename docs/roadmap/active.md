@@ -17,8 +17,11 @@ stacking-versus-INR/Foam depth result defined in
     weighted sigma-clipped background plane, and perturbed-PSF control.
     Evidence: the commit containing this checkpoint; 38 focused tests pass and
     the real F150W/F277W CPU artifact meets the bright-source unit/position gate.
-  - [ ] Run the same two-band/two-exposure smoke on CANFAR CUDA from the exact
+  - [x] Run the same two-band/two-exposure smoke on CANFAR CUDA from the exact
     pushed commit and record the session, command, runtime, memory, and artifact.
+    Evidence: session `jaannbqt`, commit `3bc6ca6`, `cuda-bench`, Torch 2.10.0 /
+    CUDA 12.9, 33.10 s, 1,675,628 KiB peak child RSS, durable artifact
+    `/arc/projects/ots/torchsky-runs/20260728-updec-day1-3bc6ca6-v3/`.
   - [ ] Replace or approve the smoke-only Gaussian PSF truth before blind
     science injections.
 - [ ] Execute Day 2: validation-selected upstream Drizzle/SWarp plus classical

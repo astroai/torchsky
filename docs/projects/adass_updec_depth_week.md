@@ -166,12 +166,18 @@ Do not count independent models as receiving six times the optimization budget.
 - [x] Add a band-dependent oversampled Gaussian truth/fitted-PSF plumbing
   contract and a deliberately perturbed-PSF control. The final science PSF
   model remains an approval gate above.
-- [ ] Pass one 32-square, two-band, two-exposure CPU/CUDA smoke and write a
+- [x] Pass one 32-square, two-band, two-exposure CPU/CUDA smoke and write a
   deterministic JSON artifact.
   - [x] CPU on real F150W/F277W calibrated exposures: rendered-flux error below
     `1e-8`, post-background exact-PSF flux error below `2e-6`, centroid error
     below `2e-8` pixel; the 5% PSF-width control shifts flux by 3–4%.
-  - [ ] CUDA exact-commit CANFAR staging artifact.
+  - [x] CUDA exact-commit CANFAR staging artifact: session `jaannbqt`, commit
+    `3bc6ca6e2b36b325dfad53686eaf8f9c01c53df6`, image
+    `images.canfar.net/skaha/astroflow-cuda:latest`, `cuda-bench`, Torch 2.10.0,
+    CUDA 12.9, one visible GPU, 33.10 s command wall time, and 1,675,628 KiB
+    peak child RSS. The two exact MAST detector products, runner result, logs,
+    and science JSON are under
+    `/arc/projects/ots/torchsky-runs/20260728-updec-day1-3bc6ca6-v3/`.
 
 Continue the unfinished Day-1 gate from a clean checkout of this checkpoint:
 
