@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Run A1 NeRF-style or A2 SIREN architecture experiments from a completed baseline.
+"""Run A1 NeRF-style or A2 SIREN experiments from a completed baseline.
 
 By default this preserves the original architecture-ablation behavior and reuses
-all geometry from the baseline manifest.  Optionally, ``--target-canvas-fits``
-replaces only the common reconstruction grid with the celestial WCS and shape of
-a 2D FITS image (for example the released UPDC i2d mosaic).  Native CRF/CAL
-pixels remain the training targets; the template FITS supplies geometry only.
+all geometry and sampling settings from the baseline manifest. Optionally,
+``--target-canvas-fits`` replaces the reconstruction grid, while
+``--max-pixels-per-exposure`` and ``--sampling-mode`` explicitly control the
+loaded native-pixel pool and mini-batch traversal. Native CRF/CAL pixels remain
+the training targets; a template FITS supplies geometry only.
 
-Artifacts use architecture/geometry-specific prefixes and are never silently
-overwritten.
+Artifacts use architecture/geometry/sampling-specific prefixes and are never
+silently overwritten.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import torchsky  # noqa: E402
+from torchsky.map.wcs_aware_epoch_sampling import install_epoch_sampler  # noqa: E402
 from torchsky.map.wcs_aware_inr import UnionCanvas  # noqa: E402
 from torchsky.map.wcs_aware_literature_inr import (  # noqa: E402
     WCSAwareLiteratureINR,
@@ -50,6 +52,7 @@ from torchsky.map.wcs_aware_training import (  # noqa: E402
 
 
 ARCH_CHOICES = ("A1_nerf", "A2_siren")
+SAMPLING_CHOICES = ("with_replacement", "epoch_without_replacement")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,6 +69,25 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Override baseline training steps; default reuses the baseline value.",
+    )
+    parser.add_argument(
+        "--max-pixels-per-exposure",
+        type=int,
+        default=None,
+        help=(
+            "Override the baseline native-pixel pool cap. Use 0 to load every valid "
+            "native SCI/ERR pixel; omitted means reuse the baseline cap."
+        ),
+    )
+    parser.add_argument(
+        "--sampling-mode",
+        choices=SAMPLING_CHOICES,
+        default="with_replacement",
+        help=(
+            "with_replacement preserves historical mini-batch sampling. "
+            "epoch_without_replacement walks through a per-exposure shuffled "
+            "permutation before that exposure reshuffles."
+        ),
     )
 
     parser.add_argument(
@@ -90,19 +112,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--keep-outside-target-samples",
         action="store_true",
         help=(
-            "Do not filter already-sampled native pixels outside the target canvas. "
-            "The default filters them so every sampled batch entry belongs to the "
+            "Do not filter loaded native pixels outside the target canvas. The "
+            "default filters them so every sampled batch entry belongs to the "
             "requested reconstruction footprint."
         ),
     )
 
-    # A1: canonical NeRF-style MLP defaults.
     parser.add_argument("--nerf-num-frequencies", type=int, default=10)
     parser.add_argument("--nerf-hidden-dim", type=int, default=256)
     parser.add_argument("--nerf-depth", type=int, default=8)
     parser.add_argument("--nerf-skip-after-layer", type=int, default=4)
 
-    # A2: canonical SIREN image-fit defaults.
     parser.add_argument("--siren-hidden-dim", type=int, default=256)
     parser.add_argument("--siren-hidden-layers", type=int, default=3)
     parser.add_argument("--siren-first-omega0", type=float, default=30.0)
@@ -203,7 +223,6 @@ def _canvas_from_manifest(manifest: dict[str, Any]) -> UnionCanvas:
 
 
 def _validate_baseline_for_architecture_ablation(manifest: dict[str, Any]) -> None:
-    """Reject cases that would no longer be a clean run2-style model comparison."""
     args = manifest.get("args", {})
     alignment_mode = str(args.get("alignment_mode", ""))
     if alignment_mode not in {"original_wcs", "tweakreg_frozen"}:
@@ -224,15 +243,25 @@ def _validate_baseline_for_architecture_ablation(manifest: dict[str, Any]) -> No
         )
 
 
-def _artifact_prefix(architecture: str, *, target_canvas: bool) -> str:
-    if target_canvas:
-        return f"{architecture}_target_canvas"
-    return f"{architecture}_literature_ablation"
+def _artifact_prefix(
+    architecture: str,
+    *,
+    target_canvas: bool,
+    sampling_mode: str,
+    max_pixels_override: int | None,
+    resolved_max_pixels: int,
+) -> str:
+    parts = [architecture]
+    parts.append("target_canvas" if target_canvas else "literature_ablation")
+    if max_pixels_override is not None:
+        parts.append("all_valid" if resolved_max_pixels == 0 else f"maxpix{resolved_max_pixels}")
+    if sampling_mode == "epoch_without_replacement":
+        parts.append("epoch")
+    return "_".join(parts)
 
 
 def _assert_no_existing_artifacts(output_dir: Path, prefix: str) -> None:
     collisions = sorted(output_dir.glob(f"{prefix}*")) if output_dir.exists() else []
-    # Band images begin with the band name rather than the prefix.
     collisions.extend(sorted(output_dir.glob(f"*_{prefix}_bandpass_scene.fits")))
     if collisions:
         shown = ", ".join(path.name for path in collisions[:8])
@@ -250,6 +279,16 @@ def main() -> int:
     seed = int(baseline_args.get("seed", 17))
     seed_everything(seed)
 
+    if args.max_pixels_per_exposure is None:
+        max_pixels = int(baseline_args.get("max_pixels_per_exposure", 200000))
+    else:
+        max_pixels = int(args.max_pixels_per_exposure)
+    if max_pixels < 0:
+        raise ValueError("max-pixels-per-exposure must be non-negative; 0 means all valid")
+
+    if args.sampling_mode == "epoch_without_replacement":
+        install_epoch_sampler()
+
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise SystemExit("CUDA requested but unavailable")
@@ -259,6 +298,9 @@ def main() -> int:
     prefix = _artifact_prefix(
         args.architecture,
         target_canvas=args.target_canvas_fits is not None,
+        sampling_mode=args.sampling_mode,
+        max_pixels_override=args.max_pixels_per_exposure,
+        resolved_max_pixels=max_pixels,
     )
     _assert_no_existing_artifacts(output_dir, prefix)
 
@@ -269,7 +311,6 @@ def main() -> int:
             bands.append(band)
 
     rng = np.random.default_rng(seed)
-    max_pixels = int(baseline_args.get("max_pixels_per_exposure", 200000))
     dq_mode = str(baseline_args.get("dq_mode", "strict"))
     pools = [
         load_exposure_pool(
@@ -283,14 +324,12 @@ def main() -> int:
         for path, band, detector in selected
     ]
 
-    # Reuse the exact baseline intensity normalization rather than estimating it again.
     scale = float(baseline["intensity_scale"])
     if not np.isfinite(scale) or scale <= 0:
         raise ValueError("baseline intensity_scale must be finite and positive")
     pools = normalize_pools(pools, scale)
 
     if args.target_canvas_fits is None:
-        # Original behavior is intentionally preserved verbatim.
         canvas = _canvas_from_manifest(baseline)
         canvas_metadata: dict[str, Any] = {
             "mode": "baseline_manifest",
@@ -384,15 +423,34 @@ def main() -> int:
     if steps <= 0:
         raise ValueError("training steps must be positive")
 
-    principle = (
-        "reuse baseline forward operator and training data; replace S_theta architecture"
-        if args.target_canvas_fits is None
-        else (
-            "reuse baseline corrected native exposures, intensity normalization, bandpass, "
-            "likelihood and optimizer; replace the common spatial canvas with the FITS "
-            "template while training only against native exposure pixels"
-        )
-    )
+    sampling_metadata = {
+        "mode": args.sampling_mode,
+        "max_pixels_per_exposure": max_pixels,
+        "all_valid_pixels": max_pixels == 0,
+        "epoch_definition": (
+            "independent per exposure; reshuffle after that exposure's loaded pool is exhausted"
+            if args.sampling_mode == "epoch_without_replacement"
+            else None
+        ),
+        "batch_spec": batch_spec,
+        "effective_total_batch_size": actual_batch_size,
+    }
+    principle_parts = [
+        "reuse baseline corrected native exposures, intensity normalization, bandpass, likelihood and optimizer",
+        "replace S_theta architecture",
+    ]
+    if args.target_canvas_fits is not None:
+        principle_parts.append("replace the common spatial canvas with the FITS template")
+    if args.max_pixels_per_exposure is not None:
+        principle_parts.append("override the loaded native-pixel pool cap")
+    if args.sampling_mode == "epoch_without_replacement":
+        principle_parts.append("traverse each exposure pool without replacement per exposure epoch")
+    principle = "; ".join(principle_parts)
+
+    experiment_args = {
+        key: str(value) if isinstance(value, Path) else value
+        for key, value in vars(args).items()
+    }
     artifact_manifest = {
         "experiment": {
             "architecture": args.architecture,
@@ -404,6 +462,7 @@ def main() -> int:
             "trainable_parameter_count": trainable_parameter_count,
             "training_steps": steps,
         },
+        "sampling": sampling_metadata,
         "target_canvas": canvas_metadata,
         "target_canvas_sample_coverage": canvas_coverage,
         "exposures": [
@@ -413,7 +472,7 @@ def main() -> int:
                 "band": pool.band,
                 "detector": pool.detector,
                 "shape": list(pool.shape),
-                "sampled_pixels": pool.size,
+                "loaded_pixels_after_canvas_filter": pool.size,
             }
             for index, pool in enumerate(pools)
         ],
@@ -428,10 +487,7 @@ def main() -> int:
         "alignment": baseline.get("alignment", {}),
         "effective_total_batch_size": actual_batch_size,
         "baseline_args": baseline_args,
-        "experiment_args": {
-            key: str(value) if isinstance(value, Path) else value
-            for key, value in vars(args).items()
-        },
+        "experiment_args": experiment_args,
     }
     manifest_path = output_dir / f"{prefix}_manifest.json"
     manifest_path.write_text(
@@ -463,9 +519,10 @@ def main() -> int:
         "baseline_args": baseline_args,
         "architecture": args.architecture,
         "architecture_metadata": model.architecture_metadata,
+        "sampling": sampling_metadata,
         "target_canvas": canvas_metadata,
         "target_canvas_sample_coverage": canvas_coverage,
-        "experiment_args": artifact_manifest["experiment_args"],
+        "experiment_args": experiment_args,
     }
 
     history = train_model(
@@ -542,6 +599,7 @@ def main() -> int:
         "architecture": args.architecture,
         "architecture_metadata": model.architecture_metadata,
         "baseline_manifest": str(baseline_path),
+        "sampling": sampling_metadata,
         "target_canvas": canvas_metadata,
         "target_canvas_sample_coverage": canvas_coverage,
         "parameter_count": parameter_count,
@@ -563,6 +621,7 @@ def main() -> int:
             {
                 "architecture": args.architecture,
                 "baseline_manifest": str(baseline_path),
+                "sampling": sampling_metadata,
                 "target_canvas": canvas_metadata,
                 "manifest": str(manifest_path),
                 "checkpoint": str(checkpoint_path),
