@@ -26,6 +26,14 @@ stacking-versus-INR/Foam depth result defined in
     science injections.
 - [ ] Execute Day 2: validation-selected upstream Drizzle/SWarp plus classical
   multiband chi-square baseline.
+  - [x] Freeze and locally verify the 135-file CAL filename grid; inventory 27
+    existing long-channel CRFs on CANFAR.
+  - [x] Add the atomic MAST staging/link utility and focused tests. It writes
+    CAL files under `torchsky-data/jwst_smacs0723/cal`, links the existing CRFs
+    under `crf`, and atomically emits `manifest.json`.
+  - [ ] Push the staging commit, complete missing downloads on CANFAR, and
+    verify 135 CAL plus 27 CRF entries from the persisted manifest.
+  - [ ] Run the validation-only Torchsky/Drizzle/SWarp configuration sweep.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
 - [ ] Execute Day 4: 20-batch CANFAR blind test, paired intervals, report, and

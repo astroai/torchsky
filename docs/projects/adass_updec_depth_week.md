@@ -55,6 +55,12 @@ products; beating separate per-band images alone is not sufficient.
   CPU/CUDA primitive gates.
 - [x] Pre-sprint `main` (`cb01c62`) has green local and GitHub comprehensive CI
   ([run 30396973217](https://github.com/sfabbro/torchsky/actions/runs/30396973217)).
+- [x] Freeze the complete calibrated-input inventory: 135 CAL files, with
+  15 files for every `PATT_NUM`; band counts are
+  F090W/F150W/F200W=`36/36/36` and F277W/F356W/F444W=`9/9/9`.
+- [x] Inventory the existing CANFAR CRFs: 27 long-channel products under
+  `/arc/projects/ots/jwst_smacs0723/`, covering three observation groups and
+  nine patterns.
 
 ## Blocking Gaps
 
@@ -197,6 +203,12 @@ each final method boundary. Otherwise do not begin model tuning.
 
 ### Day 2 — Wednesday 29 July: freeze the strongest classical baseline
 
+- [x] Add a dependency-free, atomic, resumable staging command for the frozen
+  135-file MAST grid and canonical links to existing CRFs:
+  `benchmarks/stage_smacs0723_canfar.py`.
+- [ ] Complete and verify
+  `/arc/projects/ots/torchsky-data/jwst_smacs0723/{cal,crf,manifest.json}`
+  from one exact pushed commit.
 - [ ] Run weighted Torchsky, upstream Drizzle, and SWarp on identical validation
   exposures and the exact same target grid.
 - [ ] Select Drizzle `pixfrac` from a small predeclared grid and SWarp kernel
