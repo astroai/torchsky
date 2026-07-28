@@ -524,10 +524,19 @@ extractor to the Torchsky runtime.
     the first floor. Every row freezes its threshold above a separate null
     realization and reports null detections, catalogue scores, forced
     photometry, held-out Gaussian NLL, RMSE, wall time, and CUDA allocation.
-  - [ ] Pass the exact 96-square/six-band/four-exposure classical floor on H100.
-    The focused 20-square CPU contract passes. A full local attempt was stopped
-    during the second exact-Drizzle null product after several minutes; do not
-    replace it with bilinear or omit the null to make the benchmark look fast.
+  - [x] Pass the exact 96-square/six-band/four-exposure classical floor on H100.
+    Exact commit `addb925`, session `bcnedhqg`, completed 15 focused CUDA tests
+    and the full benchmark in 3,702.98 s. Weighted bilinear took 0.281 s,
+    chi-square detection including the reused bilinear product took 0.330 s,
+    and exact square Drizzle took 3,691.03 s. Peak child RSS was 1,934,984 KiB;
+    peak reported CUDA allocation was 47,494,144 bytes. Artifact:
+    `/arc/projects/ots/torchsky-runs/20260727-multiband-classical-addb925/multiband_classical_smoke.json`.
+    This one-seed floor is correctness/runtime evidence, not a depth claim.
+  - [ ] Profile and compile/vectorize the exact square-Drizzle clipping path
+    before expanding the benchmark. CANFAR telemetry showed about 12% of eight
+    CPUs and 0% GPU utilization during the 3,691 s row: the CUDA tensors are
+    device-correct, but polygon clipping is effectively serial/launch-bound.
+    Preserve exact geometry and its separate validation null.
   - [ ] Add capacity- and compute-declared independent per-band Foam and shared
     spectral Foam rows, with hard-renderer inference after smooth fitting.
 - [ ] Gate zero-source false positives, noiseless bright-source flux/position,
@@ -734,17 +743,61 @@ profile shows genuine repeated cold I/O.
 
 ## Checkpoint 5 — Close And Hand Off
 
-- [ ] Update every checkbox above with commit IDs, artifact paths, and exact
+- [x] Update every checkbox above with commit IDs, artifact paths, and exact
   rerun commands.
-- [ ] Update [`next.md`](next.md) and [`status.md`](status.md) only for gates that
+- [x] Update [`next.md`](next.md) and [`status.md`](status.md) only for gates that
   actually passed.
-- [ ] Write the harness trajectory under `.cursor/harness/trajectories/`.
-- [ ] Run `pixi run ci-local`.
+- [x] Write the harness trajectory under `.cursor/harness/trajectories/`.
+- [x] Run `pixi run ci-local`.
+  Evidence: 1,669 passed, 215 skipped, 12 warnings in 545.03 s; Pyright reported
+  zero errors and the existing dynamic-`__all__` warning.
 - [ ] Commit and push all completed work on `main`.
 - [ ] Confirm GitHub Comprehensive CI is green.
 - [ ] Leave the tree clean and report:
   scientific/technical status, infrastructure status, next unchecked item, and
   explicit parallel work with repository, branch, data, and commands.
+
+## Checkpoint 6 — Common Differentiable Spatial-Spectral Primitives
+
+Source and scope: [`../projects/fossil.md`](../projects/fossil.md). These
+primitives must serve CMB spectral-distortion/component separation and 21 cm
+foreground inference first, while remaining useful for MOS/IFU sky/telluric
+removal and static-sky versus moving-object separation. Classical and neural
+separators share the same differentiable operator, split, injection, and open
+residual contracts.
+
+- [x] Read and distil the user-authored `fossil_primitives_plan.md` and
+  `fossil_science.docx` without modifying or committing either source.
+- [x] Harden the existing `SpectralAxis` instead of adding a parallel axis or
+  units dependency: normalized physical quantity, strict ascending/descending
+  and duplicate validation, regularity, explicit/derived edges, channel and
+  quadrature weights, interval selection, device/dtype transfer, and
+  differentiable wavelength/frequency/energy/wavenumber conversion.
+  Evidence: 36 focused spectral/FITS-WCS tests pass, including irregular
+  descending channels, explicit edges, energy/wavenumber round trips, and
+  autograd.
+- [ ] Add the minimum immutable `TensorSpec` needed to distinguish spectral,
+  spatial, detector, and time axes and reject physically incompatible operator
+  composition. Reuse existing metadata; do not build a units framework.
+- [ ] Promote current spectral transmission code into a differentiable
+  `SpectralResponse`/mixing operator with tabulated curves, channel mixing,
+  detector batches, photon/energy conventions, forward/adjoint, and dense
+  analytic oracles.
+- [ ] Add a weighted `ProtectedSubspace` primitive shared by parametric,
+  PCA/NMF, neural, and hybrid component separators. Report target attenuation,
+  nuisance overlap, retained target norm, rank, and conditioning.
+- [ ] Add deterministic cross-fit partitions and paired positive/negative
+  injections across sky, detector, time, scan, and frequency. Leakage-prone
+  random sample splits are not acceptable.
+- [ ] Add full-sky spectral products with explicit monopole/dipole/anisotropy,
+  masks/weights/coverage, RING/NEST, beams, splits/coadds, and open residuals.
+- [ ] Gate the common spine end to end:
+  `axis/response -> differentiable mixing -> protected target+nuisance ->
+  held-out cross-fit -> paired injection -> open residual`, including exact
+  adjoints, gradcheck, eager/chunk parity, CPU/CUDA parity, and bounded memory.
+- [ ] Only then add cosmology profiles: `mu ~ 2e-8` preservation, 21 cm/LIM
+  smooth-foreground leakage and wedge-aware validation, plus smaller MOS and
+  moving-object transfer demonstrations.
 
 ## CANFAR Staging Run Template
 

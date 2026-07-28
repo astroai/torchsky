@@ -73,8 +73,79 @@ class TestSpectralAxis:
         axis = SpectralAxis(freq_ghz, "ghz", "freq")
         torch.testing.assert_close(axis.to_wavelength(), expected_wave)
 
-    def test_unsupported_conversion_raises_valueerror(self):
-        axis = SpectralAxis(torch.tensor([1.0, 2.0]), "keV", "ENER")
+    def test_energy_wavenumber_and_differentiability(self):
+        energy = torch.tensor([1.0, 2.0], dtype=torch.float64, requires_grad=True)
+        axis = SpectralAxis(energy, "keV", "ENER")
+        frequency = axis.to_frequency()
+        torch.testing.assert_close(axis.to_energy("keV"), energy)
+        torch.testing.assert_close(
+            axis.to_wavenumber("1/m"),
+            frequency / 299_792_458.0,
+        )
+        axis.to_wavelength().sum().backward()
+        assert energy.grad is not None
+        assert bool(torch.isfinite(energy.grad).all())
+
+        wavenumber = SpectralAxis(
+            torch.tensor([1.0, 2.0], dtype=torch.float64), "cm^-1", "WAVN"
+        )
+        torch.testing.assert_close(
+            wavenumber.to_frequency(),
+            wavenumber.values * 100.0 * 299_792_458.0,
+        )
+        header_axis, tensor_axis = spectral_axis_from_header(
+            {
+                "NAXIS": 1,
+                "NAXIS1": 2,
+                "CTYPE1": "WAVN",
+                "CUNIT1": "cm^-1",
+                "CRVAL1": 1.0,
+                "CDELT1": 1.0,
+                "CRPIX1": 1.0,
+            }
+        )
+        assert tensor_axis == 0
+        assert header_axis.quantity == "wavenumber"
+        torch.testing.assert_close(
+            header_axis.to_frequency(),
+            torch.tensor([100.0, 200.0], dtype=torch.float64) * 299_792_458.0,
+        )
+
+    def test_irregular_descending_axis_contract(self):
+        values = torch.tensor([8.0, 5.0, 3.0], dtype=torch.float64)
+        edges = torch.tensor([9.5, 6.5, 4.0, 2.0], dtype=torch.float64)
+        axis = SpectralAxis(values, "GHz", "FREQ", bin_edges=edges)
+
+        assert axis.quantity == "frequency"
+        assert axis.direction == -1
+        assert not axis.is_regular()
+        torch.testing.assert_close(axis.edges(), edges)
+        torch.testing.assert_close(
+            axis.channel_widths(), torch.tensor([3.0, 2.5, 2.0], dtype=torch.float64)
+        )
+        torch.testing.assert_close(
+            axis.quadrature_weights(),
+            torch.tensor([1.5, 2.5, 1.0], dtype=torch.float64),
+        )
+
+        selected, mask = axis.select_interval(3.0, 5.0)
+        torch.testing.assert_close(
+            selected.values, torch.tensor([5.0, 3.0], dtype=torch.float64)
+        )
+        torch.testing.assert_close(selected.bin_edges, edges[1:])
+        torch.testing.assert_close(mask, torch.tensor([False, True, True]))
+        transferred = selected.to(dtype=torch.float32)
+        assert transferred.values.dtype == torch.float32
+        assert transferred.bin_edges is not None
+        assert transferred.bin_edges.dtype == torch.float32
+
+    def test_axis_validation_and_unsupported_conversion(self):
+        with pytest.raises(ValueError, match="duplicates"):
+            _ = SpectralAxis(torch.tensor([1.0, 1.0]), "Hz", "FREQ").direction
+        with pytest.raises(ValueError, match="strictly monotonic"):
+            _ = SpectralAxis(torch.tensor([1.0, 3.0, 2.0]), "Hz", "FREQ").direction
+
+        axis = SpectralAxis(torch.tensor([1.0, 2.0]), "m/s", "VELO")
         with pytest.raises(ValueError, match="Unsupported spectral conversion"):
             _ = axis.to_wavelength()
 

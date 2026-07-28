@@ -1,7 +1,8 @@
 # FOSSIL/BISOU Mission-Neutral Torchsky Track
 
-> Distilled on 2026-07-26 from the user-authored low-level primitive plan and
-> FOSSIL science-case working document. The source documents remain untouched.
+> Distilled through 2026-07-28 from the user-authored
+> `fossil_primitives_plan.md` and `fossil_science.docx`. The untracked source
+> documents remain untouched.
 > This file is the executable Torchsky backlog; mission configuration, telemetry,
 > sensitivity assumptions, and publication estimators remain outside core.
 
@@ -20,6 +21,29 @@ The ordered discovery programme is:
 2. joint monopole/anisotropy residual tomography and external cross-correlations;
 3. blinded dark-sector and unknown-shape challenge spectra;
 4. a falsifiable test of the standard thermalization manifold.
+
+The reusable implementation target is broader than one mission: the same
+spatial-spectral contracts should support CMB component separation and spectral
+distortions, 21 cm/line-intensity foreground inference, MOS/IFU sky and
+telluric removal, and static-sky separation for moving objects. Cosmology is the
+first validation profile because it makes weak-signal attenuation and
+foreground leakage impossible to ignore.
+
+## Common Differentiable Separation Spine
+
+Parametric fitting, moment expansions, PCA/NMF, neural fields, and hybrid
+models must plug into one spine rather than become separate pipelines:
+
+1. explicit spatial, spectral, detector, and time axes;
+2. a differentiable response/mixing operator with an exact adjoint;
+3. declared target and nuisance subspaces, including weighted protection;
+4. scientifically independent cross-fit partitions;
+5. paired positive/negative signal injections;
+6. an exportable open residual with attenuation and leakage diagnostics.
+
+The learned model may be highly flexible; the measurement contract and
+validation cannot be implicit. In particular, a low reconstruction loss is not
+evidence that a `mu`, 21 cm, line, telluric, or moving-object signal survived.
 
 ## Ownership Boundary
 
@@ -50,11 +74,16 @@ must not become a spacecraft packet decoder or a closed foreground ontology.
 
 ## Phase A — Reusable Spectral And Full-Sky Substrate
 
-- [ ] Harden `SpectralAxis` with an explicit
+- [x] Harden `SpectralAxis` with an explicit
   frequency/wavelength/energy/wavenumber quantity, unit conversion, bin edges,
   monotonic/duplicate checks, regularity diagnostics, interval selection,
   quadrature weights, device/dtype transfer, and a FITS-WCS adapter that leaves
   FITS I/O in Torchfits.
+  Evidence: the existing axis now supports ascending/descending irregular grids,
+  explicit or midpoint-derived edges, positive widths, interval-preserving
+  selection, transfer, and differentiable conversion among the four physical
+  quantities. The existing FITS-WCS header adapter remains authoritative.
+  Thirty-six focused spectral tests pass.
 - [ ] Add the smallest immutable `TensorSpec`/axis-spec contract needed to reject
   shape-compatible but physically incompatible tensors. Include named axes,
   value semantics, unit, and coordinate frame; do not build a new units package.
@@ -170,12 +199,12 @@ unsupported regimes, deterministic provenance, throughput, and peak memory.
 ## Immediate Ordering Relative To The Active Torchsky Cycle
 
 The active Foam/map operator gates in [`../roadmap/active.md`](../roadmap/active.md)
-remain first because FOSSIL spatial-spectral inference depends on correct,
-bounded map operators. After exact Foam rendering and exposure-scaling evidence:
+remain coupled to this track because spatial-spectral inference depends on
+correct, bounded map operators. The next implementation order is:
 
-1. harden the existing `SpectralAxis`;
-2. introduce the minimal `TensorSpec` and typed operator adapter;
-3. implement full-sky spectral/monopole products;
-4. implement partitions and injections;
-5. only then start decoded sequences and experimental FTS.
-
+1. introduce the minimal `TensorSpec` and typed operator adapter;
+2. promote spectral response/channel mixing and gate its adjoint;
+3. add weighted protected-subspace projections;
+4. implement cross-fit partitions and paired injections;
+5. implement full-sky spectral/monopole/open-residual products;
+6. only then start decoded sequences and experimental FTS.

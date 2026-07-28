@@ -125,6 +125,21 @@ Re-baseline them after the repository boundary cleanup.
   gated; local focused evidence is 11 passes and one CUDA skip. Classical/model
   baselines and the full smoke selection function remain open, so no depth-gain
   claim exists.
+- The production classical floor now has an exact H100 run at commit
+  `addb925`: all 15 focused CUDA tests passed and the 96-square, six-band,
+  four-exposure benchmark completed in 3,702.98 s. Bilinear and chi-square rows
+  each took under 0.34 s, while exact square Drizzle took 3,691.03 s with about
+  12% of eight CPUs and 0% GPU utilization. This closes the correctness floor
+  and exposes the next infrastructure bottleneck: compile/vectorize exact
+  polygon clipping before adding seeds. It is one-seed evidence, not a depth
+  claim.
+- The FOSSIL science and primitive notes are now distilled into a common
+  differentiable spatial-spectral track. `SpectralAxis` is hardened for
+  irregular/descending grids, explicit edges, quadrature, selection/transfer,
+  and autograd-preserving wavelength/frequency/energy/wavenumber conversion.
+  The focused spectral/FITS-WCS gate is 36 passes. Next is a minimal typed
+  tensor/operator contract, then response mixing and protected subspaces shared
+  by classical and neural component separation.
 - CANFAR's Linux LAPACK gate caught byte-level nondeterminism in the first
   noiseless forced-photometry JSON: mathematically zero residuals varied around
   `1e-16` between calls. The report boundary now canonicalizes values below the

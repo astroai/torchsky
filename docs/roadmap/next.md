@@ -7,7 +7,7 @@
 > The user-authored FOSSIL/BISOU science and primitive work is incorporated as
 > a separate mission-neutral track in
 > [`../projects/fossil.md`](../projects/fossil.md); its immediate ordering is
-> downstream of the active exact/bounded map-operator gates.
+> interleaved with the active exact/bounded map-operator gates.
 
 ## North Star
 
@@ -25,10 +25,11 @@ These tasks protect every later INR/Foam result from operator or memory errors.
 - [x] Remove the stale module-global image cache and make weighted/mean tiled
   mosaics exposure-major: each input image and its calibration/weight preparation
   are held for one exposure, reused across tiles, then released.
-- [ ] Add a caller-scoped byte-bounded cache only where repeated MEF access proves
-  it useful, and add a spillable/tile-local reducer so exact median and
-  cross-exposure background correction do not trade bounded memory for repeated
-  input reads.
+- [x] Decide caller-cache policy from repeated real MEF evidence: warmed
+  `SCI`/`ERR`/`DQ` reads are already 0.060–0.068 ms, so do not add a second
+  caller cache.
+- [ ] Add a spillable/tile-local reducer so exact median and cross-exposure
+  background correction do not trade bounded memory for repeated input reads.
 - [ ] Adaptively sample curved SIP/TPV footprint boundaries when planning union
   products; gate containment across the RA=0 seam and rotated/sheared grids.
 - [ ] Propagate inverse variance through resampling and PSF kernels explicitly,
@@ -176,14 +177,20 @@ legacy option.
 
 ## Immediate Task Order
 
-1. Land and benchmark exposure-major, bounded-memory classical coaddition.
-2. Implement sparse Čech candidates and exact 2D power-cell/pixel intersections.
-3. Add the shared-geometry spectral Foam field through existing bandpass and
-   observation operators.
-4. Build the seeded multiband injection/recovery benchmark before tuning models.
-5. Add Foam densification/pruning and diffuse-INR composition.
-6. Run the equal-budget INR/Foam/classical ablation, then optimize measured hot
-   paths and select user-facing presets.
-7. Close external-tool workflow gaps in the order revealed by real survey use,
-   with background matching, variance/context outputs, and large-mosaic streaming
-   ahead of low-impact option breadth.
+1. Profile and compile/vectorize exact square-Drizzle polygon clipping; the
+   first H100 classical floor showed 3,691 s at effectively zero GPU use.
+2. Add capacity/compute-declared independent and shared spectral Foam rows to
+   the multiband smoke, retaining hard-renderer inference.
+3. Introduce the minimal `TensorSpec`/typed operator adapter, then promote
+   spectral response/channel mixing with exact adjoints.
+4. Add weighted target protection, cross-fit partitions, and paired injections
+   before training flexible component separators.
+5. Run three seeds/two noise realizations only after items 1–4; make no depth
+   claim from the current one-seed classical floor.
+6. Add full-sky spectral/monopole/open-residual products and start the CMB
+   `mu`-preservation and 21 cm foreground-leakage profiles.
+7. Continue Foam densification/pruning and diffuse-INR composition, followed by
+   equal-budget INR/Foam/classical ablations.
+8. Close external-tool workflow gaps in the order revealed by real survey use,
+   with background matching, variance/context outputs, and large-mosaic
+   streaming ahead of low-impact option breadth.

@@ -514,10 +514,18 @@ pixi run -e sphere-bench python benchmarks/bench_multiband_depth.py \
 ```
 
 The tiny command is the local correctness gate. The exact square-Drizzle
-96-square/six-band/four-exposure run, including its separate null product, is a
-CANFAR accelerator gate because the exact polygon clipping path is intentionally
-not replaced by bilinear interpolation for convenience. The three-seed/two-noise
-smoke command is added only after the independent and shared Foam rows exist.
+96-square/six-band/four-exposure run, including its separate null product,
+passed on a CANFAR H100 at commit `addb925`. The full command took 3,702.98 s:
+weighted bilinear took 0.281 s, chi-square detection including reused bilinear
+took 0.330 s, and exact square Drizzle took 3,691.03 s. Peak child RSS was
+1,934,984 KiB and peak reported CUDA allocation was 47,494,144 bytes. Artifact:
+`/arc/projects/ots/torchsky-runs/20260727-multiband-classical-addb925/multiband_classical_smoke.json`.
+
+Telemetry showed about 12% of eight CPUs and 0% GPU utilization during exact
+Drizzle. Profile and compile/vectorize polygon clipping before expanding seeds;
+do not replace exact geometry with bilinear or omit the validation null. The
+three-seed/two-noise smoke command is added only after that bottleneck and the
+independent/shared Foam rows are addressed.
 
 Planned CANFAR publication run:
 

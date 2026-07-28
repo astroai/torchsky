@@ -10,6 +10,7 @@ It is not part of the core FITS read/write parity surface.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Union
 
@@ -18,9 +19,11 @@ import torch
 from .wcs import WCS
 
 
-_SPECTRAL_TYPE_KEYS = ("WAVE", "FREQ", "VELO", "ENER")
+_SPECTRAL_TYPE_KEYS = ("WAVE", "AWAV", "FREQ", "ENER", "WAVN", "VELO")
 _SPEED_OF_LIGHT_M_PER_S = 299_792_458.0
 _SPEED_OF_LIGHT_ANGSTROM_PER_S = _SPEED_OF_LIGHT_M_PER_S * 1.0e10
+_PLANCK_JOULE_SECOND = 6.626_070_15e-34
+_ELECTRON_VOLT_JOULE = 1.602_176_634e-19
 
 
 @dataclass(frozen=True)
@@ -33,7 +36,9 @@ class SpectralRebinResult:
     mask: Optional[torch.Tensor] = None
 
 
-def _validate_spectral_edges(edges: torch.Tensor, expected_bins: int, name: str) -> None:
+def _validate_spectral_edges(
+    edges: torch.Tensor, expected_bins: int, name: str
+) -> None:
     if edges.ndim != 1 or edges.numel() != expected_bins + 1:
         raise ValueError(f"{name} must be 1D with {expected_bins + 1} elements")
     if not edges.is_floating_point() or not bool(torch.isfinite(edges).all()):
@@ -228,7 +233,9 @@ def relativistic_doppler_shift(
         raise ValueError("flux must be a floating-point tensor with a spectral axis")
     input_edges = torch.as_tensor(input_edges, device=flux.device)
     _validate_spectral_edges(input_edges, flux.shape[-1], "input_edges")
-    velocity = torch.as_tensor(radial_velocity, device=flux.device, dtype=input_edges.dtype)
+    velocity = torch.as_tensor(
+        radial_velocity, device=flux.device, dtype=input_edges.dtype
+    )
     if not bool(torch.isfinite(velocity).all()) or bool(
         torch.any(velocity.abs() >= _SPEED_OF_LIGHT_M_PER_S)
     ):
@@ -241,19 +248,29 @@ def relativistic_doppler_shift(
     if output_edges is None:
         leading_shape = torch.broadcast_shapes(flux.shape[:-1], factor.shape)
         factor = factor.expand(leading_shape)
-        shifted_flux = flux.expand(leading_shape + (flux.shape[-1],)) / factor.unsqueeze(-1)
-        shifted_edges = input_edges.expand(leading_shape + input_edges.shape) * factor.unsqueeze(-1)
+        shifted_flux = flux.expand(
+            leading_shape + (flux.shape[-1],)
+        ) / factor.unsqueeze(-1)
+        shifted_edges = input_edges.expand(
+            leading_shape + input_edges.shape
+        ) * factor.unsqueeze(-1)
         shifted_mask = torch.isfinite(shifted_flux)
         if mask is not None:
-            shifted_mask = shifted_mask & mask.expand_as(shifted_flux).to(dtype=torch.bool)
+            shifted_mask = shifted_mask & mask.expand_as(shifted_flux).to(
+                dtype=torch.bool
+            )
         shifted_ivar = None
         if ivar is not None:
             shifted_ivar = ivar.expand_as(shifted_flux) * factor.unsqueeze(-1).square()
-            shifted_mask = shifted_mask & torch.isfinite(shifted_ivar) & (shifted_ivar > 0)
+            shifted_mask = (
+                shifted_mask & torch.isfinite(shifted_ivar) & (shifted_ivar > 0)
+            )
             shifted_ivar = torch.where(
                 shifted_mask, shifted_ivar, torch.zeros_like(shifted_ivar)
             )
-        shifted_flux = torch.where(shifted_mask, shifted_flux, torch.zeros_like(shifted_flux))
+        shifted_flux = torch.where(
+            shifted_mask, shifted_flux, torch.zeros_like(shifted_flux)
+        )
         return SpectralRebinResult(
             shifted_flux, shifted_edges, shifted_ivar, shifted_mask
         )
@@ -271,9 +288,7 @@ def relativistic_doppler_shift(
         ivar=ivar,
         mask=mask,
     )
-    return SpectralRebinResult(
-        shifted_flux, output_edges, shifted_ivar, shifted_mask
-    )
+    return SpectralRebinResult(shifted_flux, output_edges, shifted_ivar, shifted_mask)
 
 
 def _normalize_spectral_type(ctype: str) -> str:
@@ -576,45 +591,275 @@ class SpectralAxis:
     type: str  # Type ('WAVE', 'FREQ', 'ENER', 'VELO')
     rest_frequency: Optional[float] = None
     redshift: Optional[float] = None
+    bin_edges: Optional[torch.Tensor] = None
+
+    @property
+    def quantity(self) -> str:
+        """Return a normalized physical quantity name."""
+        kind = self.type.upper()
+        quantities = {
+            "WAVE": "wavelength",
+            "AWAV": "wavelength",
+            "FREQ": "frequency",
+            "ENER": "energy",
+            "WAVN": "wavenumber",
+        }
+        if kind not in quantities:
+            raise ValueError(f"Unsupported spectral axis type {self.type!r}")
+        return quantities[kind]
+
+    @property
+    def direction(self) -> int:
+        """Return ``1`` for ascending and ``-1`` for descending coordinates."""
+        values = self._validated_values()
+        if values.numel() < 2:
+            return 1
+        differences = torch.diff(values)
+        if bool(torch.any(differences == 0)):
+            raise ValueError("spectral axis coordinates must not contain duplicates")
+        if bool(torch.all(differences > 0)):
+            return 1
+        if bool(torch.all(differences < 0)):
+            return -1
+        raise ValueError("spectral axis coordinates must be strictly monotonic")
+
+    def is_regular(self, *, rtol: float = 1.0e-6, atol: float = 0.0) -> bool:
+        """Return whether adjacent coordinate steps are equal within tolerance."""
+        values = self._validated_values()
+        if values.numel() < 3:
+            return True
+        differences = torch.diff(values)
+        _ = self.direction
+        return bool(
+            torch.allclose(
+                differences,
+                differences[0].expand_as(differences),
+                rtol=rtol,
+                atol=atol,
+            )
+        )
+
+    def edges(self) -> torch.Tensor:
+        """Return explicit or midpoint-derived channel edges in axis units."""
+        values = self._validated_values()
+        _ = self.direction
+        if self.bin_edges is not None:
+            edges = self.bin_edges
+            if (
+                edges.ndim != 1
+                or edges.numel() != values.numel() + 1
+                or edges.device != values.device
+                or edges.dtype != values.dtype
+                or not bool(torch.isfinite(edges).all())
+            ):
+                raise ValueError(
+                    "bin_edges must be finite and have length coordinates + 1 "
+                    "with matching dtype/device"
+                )
+            if bool(torch.any(torch.diff(edges) * self.direction <= 0)):
+                raise ValueError("bin_edges must follow the coordinate direction")
+            return edges
+        if values.numel() < 2:
+            raise ValueError("one-channel axes require explicit bin_edges")
+        midpoints = 0.5 * (values[:-1] + values[1:])
+        edges = torch.empty(
+            values.numel() + 1, dtype=values.dtype, device=values.device
+        )
+        edges[1:-1] = midpoints
+        edges[0] = values[0] - 0.5 * (values[1] - values[0])
+        edges[-1] = values[-1] + 0.5 * (values[-1] - values[-2])
+        return edges
+
+    def channel_widths(self) -> torch.Tensor:
+        """Return positive channel widths in the declared axis unit."""
+        return torch.abs(torch.diff(self.edges()))
+
+    def quadrature_weights(self) -> torch.Tensor:
+        """Return positive trapezoid weights for samples on this axis."""
+        values = self._validated_values()
+        _ = self.direction
+        if values.numel() == 1:
+            return self.channel_widths()
+        spacing = torch.abs(torch.diff(values))
+        weights = torch.empty_like(values)
+        weights[0] = 0.5 * spacing[0]
+        weights[-1] = 0.5 * spacing[-1]
+        if values.numel() > 2:
+            weights[1:-1] = 0.5 * (spacing[:-1] + spacing[1:])
+        return weights
+
+    def select_interval(
+        self, lower: float, upper: float
+    ) -> tuple["SpectralAxis", torch.Tensor]:
+        """Select a closed physical interval and return the axis plus source mask."""
+        if not math.isfinite(lower) or not math.isfinite(upper) or lower > upper:
+            raise ValueError("interval bounds must be finite with lower <= upper")
+        values = self._validated_values()
+        mask = (values >= lower) & (values <= upper)
+        indices = torch.nonzero(mask, as_tuple=False).flatten()
+        if indices.numel() == 0:
+            raise ValueError("interval does not overlap the spectral axis")
+        if indices.numel() > 1 and not bool(torch.all(torch.diff(indices) == 1)):
+            raise RuntimeError("monotonic spectral interval must be contiguous")
+        selected_edges = None
+        if self.bin_edges is not None:
+            start = int(indices[0])
+            stop = int(indices[-1]) + 2
+            selected_edges = self.bin_edges[start:stop]
+        return (
+            SpectralAxis(
+                values=values[mask],
+                unit=self.unit,
+                type=self.type,
+                rest_frequency=self.rest_frequency,
+                redshift=self.redshift,
+                bin_edges=selected_edges,
+            ),
+            mask,
+        )
+
+    def to(
+        self,
+        *,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> "SpectralAxis":
+        """Transfer coordinate tensors without changing physical metadata."""
+        return SpectralAxis(
+            values=self.values.to(device=device, dtype=dtype),
+            unit=self.unit,
+            type=self.type,
+            rest_frequency=self.rest_frequency,
+            redshift=self.redshift,
+            bin_edges=(
+                None
+                if self.bin_edges is None
+                else self.bin_edges.to(device=device, dtype=dtype)
+            ),
+        )
+
+    def _validated_values(self) -> torch.Tensor:
+        if (
+            not self.values.is_floating_point()
+            or self.values.ndim != 1
+            or self.values.numel() == 0
+            or not bool(torch.isfinite(self.values).all())
+        ):
+            raise ValueError(
+                "spectral axis coordinates must be a non-empty finite "
+                "floating-point vector"
+            )
+        return self.values
+
+    def _positive_values(self) -> torch.Tensor:
+        values = self._validated_values()
+        if bool(torch.any(values <= 0)):
+            raise ValueError("spectral conversion coordinates must be positive")
+        return values
 
     def to_wavelength(self) -> torch.Tensor:
         """Convert to wavelength in Angstroms."""
         kind = self.type.upper()
         unit = self.unit.lower()
-        if kind == "WAVE":
-            if unit in ["angstrom", "a"]:
-                return self.values
-            elif unit in ["nm", "nanometer"]:
-                return self.values * 10.0
-            elif unit in ["um", "micrometer", "micron"]:
-                return self.values * 10000.0
-        elif kind == "FREQ":
+        values = self._validated_values()
+        if kind in {"WAVE", "AWAV"}:
+            scales = {
+                "angstrom": 1.0,
+                "a": 1.0,
+                "nm": 10.0,
+                "nanometer": 10.0,
+                "um": 1.0e4,
+                "micrometer": 1.0e4,
+                "micron": 1.0e4,
+                "mm": 1.0e7,
+                "cm": 1.0e8,
+                "m": 1.0e10,
+            }
+            if unit in scales:
+                return values * scales[unit]
+        elif kind in {"FREQ", "ENER", "WAVN"}:
+            _ = self._positive_values()
             return _SPEED_OF_LIGHT_ANGSTROM_PER_S / self.to_frequency()
 
         raise ValueError(
             f"Unsupported spectral conversion to wavelength for type={self.type!r}, unit={self.unit!r}. "
-            "Supported: WAVE[A, Angstrom, nm, um] and FREQ[Hz/GHz/MHz]."
+            "Supported quantities: WAVE/AWAV, FREQ, ENER, and WAVN."
         )
 
     def to_frequency(self) -> torch.Tensor:
         """Convert to frequency in Hz."""
         kind = self.type.upper()
         unit = self.unit.lower()
+        values = self._validated_values()
         if kind == "FREQ":
-            if unit == "hz":
-                return self.values
-            elif unit == "ghz":
-                return self.values * 1e9
-            elif unit == "mhz":
-                return self.values * 1e6
-        elif kind == "WAVE":
-            wavelength_m = self.to_wavelength() * 1e-10  # Convert to meters
+            scales = {
+                "hz": 1.0,
+                "khz": 1.0e3,
+                "mhz": 1.0e6,
+                "ghz": 1.0e9,
+                "thz": 1.0e12,
+            }
+            if unit in scales:
+                return values * scales[unit]
+        elif kind in {"WAVE", "AWAV"}:
+            _ = self._positive_values()
+            wavelength_m = self.to_wavelength() * 1.0e-10
             return _SPEED_OF_LIGHT_M_PER_S / wavelength_m
+        elif kind == "ENER":
+            _ = self._positive_values()
+            scales = {
+                "j": 1.0,
+                "joule": 1.0,
+                "ev": _ELECTRON_VOLT_JOULE,
+                "kev": 1.0e3 * _ELECTRON_VOLT_JOULE,
+                "mev": 1.0e6 * _ELECTRON_VOLT_JOULE,
+                "gev": 1.0e9 * _ELECTRON_VOLT_JOULE,
+            }
+            if unit in scales:
+                return values * scales[unit] / _PLANCK_JOULE_SECOND
+        elif kind == "WAVN":
+            _ = self._positive_values()
+            scales = {
+                "1/m": 1.0,
+                "m^-1": 1.0,
+                "m-1": 1.0,
+                "1/cm": 100.0,
+                "cm^-1": 100.0,
+                "cm-1": 100.0,
+            }
+            if unit in scales:
+                return _SPEED_OF_LIGHT_M_PER_S * values * scales[unit]
 
         raise ValueError(
             f"Unsupported spectral conversion to frequency for type={self.type!r}, unit={self.unit!r}. "
-            "Supported: FREQ[Hz/GHz/MHz] and WAVE[A, Angstrom, nm, um]."
+            "Supported quantities: WAVE/AWAV, FREQ, ENER, and WAVN."
         )
+
+    def to_energy(self, unit: str = "eV") -> torch.Tensor:
+        """Convert to photon energy in joules or electron-volt units."""
+        energy_joule = self.to_frequency() * _PLANCK_JOULE_SECOND
+        scales = {
+            "j": 1.0,
+            "joule": 1.0,
+            "ev": _ELECTRON_VOLT_JOULE,
+            "kev": 1.0e3 * _ELECTRON_VOLT_JOULE,
+            "mev": 1.0e6 * _ELECTRON_VOLT_JOULE,
+            "gev": 1.0e9 * _ELECTRON_VOLT_JOULE,
+        }
+        scale = scales.get(unit.lower())
+        if scale is None:
+            raise ValueError(f"Unsupported energy unit {unit!r}")
+        return energy_joule / scale
+
+    def to_wavenumber(self, unit: str = "1/m") -> torch.Tensor:
+        """Convert to reciprocal wavelength (cycles per metre or centimetre)."""
+        inverse_metre = self.to_frequency() / _SPEED_OF_LIGHT_M_PER_S
+        normalized = unit.lower()
+        if normalized in {"1/m", "m^-1", "m-1"}:
+            return inverse_metre
+        if normalized in {"1/cm", "cm^-1", "cm-1"}:
+            return inverse_metre / 100.0
+        raise ValueError(f"Unsupported wavenumber unit {unit!r}")
 
 
 @dataclass
