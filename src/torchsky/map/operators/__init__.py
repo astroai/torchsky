@@ -111,6 +111,7 @@ from .psf import (
     gaussian_kernel1d,
 )
 from .pixel_area import (
+    pixel_area_sr_at,
     pixel_area_sr_map,
     representative_pixel_area_sr,
     wrapped_delta_ra_deg,
@@ -261,6 +262,7 @@ __all__ = [
     "mixture_mc_samples",
     "observation_background_components",
     "polynomial_background",
+    "pixel_area_sr_at",
     "pixel_area_sr_map",
     "sanitize_inverse_variance",
     "sample_image_plane",

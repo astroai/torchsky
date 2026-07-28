@@ -53,18 +53,23 @@ products; beating separate per-band images alone is not sufficient.
 - [x] `SpectralPowerFoam` has differentiable smooth fitting, shared spectral
   coefficients, exact hard pixel rendering, sparse candidate geometry, and
   CPU/CUDA primitive gates.
-- [x] Latest `main` (`aa778e8`) has green local and GitHub comprehensive CI.
+- [x] Pre-sprint `main` (`cb01c62`) has green local and GitHub comprehensive CI
+  ([run 30396973217](https://github.com/sfabbro/torchsky/actions/runs/30396973217)).
 
 ## Blocking Gaps
 
-- [ ] Resolve the current calibration/value-semantics mismatch before trusting
-  any public-mosaic metric. Existing per-band coadd/reference flux ratios span
-  roughly 4.7 to 18.7 and cannot support an abstract claim.
-- [ ] Add detector-level real-image injection/recovery. Never inject only into
-  a coadd.
+- [x] Close the detector injection calibration/value-semantics boundary without
+  trusting the public-mosaic metric. Local real-data smoke evidence conserves
+  injected Jy through distorted-WCS `MJy/sr` pixels to about `1e-8` relative;
+  the existing 4.7-to-18.7 public-mosaic ratios remain excluded from claims.
+- [x] Add detector-level real-image injection/recovery. The
+  `updec-adass-smoke` profile reads unchanged `SCI/ERR/DQ`, injects into `SCI`,
+  and keeps the control image available. Never inject only into a coadd.
 - [ ] Add an approved band-dependent PSF contract. Injection truth must use a
   more accurate/oversampled PSF than the fitted approximation so this is not an
-  inverse-PSF experiment.
+  inverse-PSF experiment. A six-band oversampled Gaussian proxy and deliberate
+  5% width-mismatch control now gate the plumbing; science approval or an
+  empirical/WebbPSF truth model is still required before the blind campaign.
 - [ ] Route independent and shared Foam through the same WCS, bandpass, pixel
   footprint, PSF, mask, weight, and exposure-nuisance operators used by the INR.
 - [ ] Apply one common detector/photometer to every final band product.
@@ -125,7 +130,9 @@ Do not count independent models as receiving six times the optimization budget.
 
 ## Real Injection Design
 
-- [ ] Start from the unchanged `SCI`, `ERR`, and `DQ` detector planes.
+- [x] Start from the unchanged `SCI`, `ERR`, and `DQ` detector planes. The
+  real-data profile records `input_unchanged` and uses `ERR^-2` with valid
+  `DQ==0` support for its robust planar background fit.
 - [ ] Cache a no-injection control fit/catalogue for every method.
 - [ ] Inject sources through each exposure WCS, oversampled PSF, pixel footprint,
   calibration, and bandpass. Preserve the original background/noise/artifacts.
@@ -148,18 +155,36 @@ Do not count independent models as receiving six times the optimization budget.
 
 ### Day 1 — Tuesday 28 July: make the experiment trustworthy
 
-- [ ] Add a shipped `updec-adass` profile or equivalent stable CLI to
+- [x] Add a shipped `updec-adass` profile or equivalent stable CLI to
   `benchmarks/bench_multiband_depth.py`; do not create a separate analysis
   framework.
-- [ ] Add the real exposure/injection adapter by reusing discovery, cropping,
+- [x] Add the real exposure/injection adapter by reusing discovery, cropping,
   and `SCI/ERR/DQ` helpers from the SMACS joint benchmark.
-- [ ] Reconcile `MJy/sr`, pixel-area, photometric scale, inverse variance, and
+- [x] Reconcile `MJy/sr`, pixel-area, photometric scale, inverse variance, and
   surface-brightness versus integrated-flux semantics with bright noiseless
   detector-level injections.
-- [ ] Add the band-dependent PSF truth/fitted-PSF contract and a deliberately
-  perturbed-PSF control.
+- [x] Add a band-dependent oversampled Gaussian truth/fitted-PSF plumbing
+  contract and a deliberately perturbed-PSF control. The final science PSF
+  model remains an approval gate above.
 - [ ] Pass one 32-square, two-band, two-exposure CPU/CUDA smoke and write a
   deterministic JSON artifact.
+  - [x] CPU on real F150W/F277W calibrated exposures: rendered-flux error below
+    `1e-8`, post-background exact-PSF flux error below `2e-6`, centroid error
+    below `2e-8` pixel; the 5% PSF-width control shifts flux by 3–4%.
+  - [ ] CUDA exact-commit CANFAR staging artifact.
+
+Continue the unfinished Day-1 gate from a clean checkout of this checkpoint:
+
+```bash
+pixi run python benchmarks/bench_multiband_depth.py \
+  --profile updec-adass-smoke \
+  --input-root data/jwst_smacs0723 \
+  --updec-bands F150W,F277W \
+  --exposures 1 --cutout-size 32 --device cpu \
+  --json-out benchmark_results/updec_adass_smoke_local.json
+pixi run pytest tests/test_multiband_depth_benchmark.py \
+  tests/test_map_operator_execution.py tests/test_map_background_ops.py -q
+```
 
 Day-1 stop gate: a bright injected source must recover position and flux through
 each final method boundary. Otherwise do not begin model tuning.

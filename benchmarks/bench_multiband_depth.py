@@ -15,13 +15,14 @@ import math
 from pathlib import Path
 import tempfile
 import time
-from typing import Sequence
+from typing import Any, Sequence
 
 import torch
 import torch.nn.functional as F
 
 import torchsky
 from torchsky.map import ImageObservation, coadd_image_plane
+from torchsky.map.operators import fit_background_plane, pixel_area_sr_at
 
 
 _SOURCE_KINDS = (
@@ -31,6 +32,26 @@ _SOURCE_KINDS = (
     "blue_dropout",
     "red_dropout",
 )
+
+_NIRCAM_GAUSSIAN_PSF_FWHM_ARCSEC = {
+    "F090W": 0.033,
+    "F150W": 0.049,
+    "F200W": 0.066,
+    "F277W": 0.091,
+    "F356W": 0.116,
+    "F444W": 0.145,
+}
+_UPDEC_PATT_SPLIT = {
+    1: "train",
+    2: "train",
+    3: "validation",
+    4: "train",
+    5: "train",
+    6: "test",
+    7: "train",
+    8: "validation",
+    9: "test",
+}
 
 
 @dataclass(frozen=True)
@@ -143,6 +164,244 @@ class SyntheticExposureSet:
             or torch.any(self.noise_sigma <= 0)
         ):
             raise ValueError("exposure tensors must be finite and noise positive")
+
+
+@dataclass(frozen=True)
+class GaussianPSFContract:
+    """Explicit truth and fitted Gaussian PSF proxies for the sprint smoke."""
+
+    band: str
+    truth_fwhm_arcsec: float
+    fitted_fwhm_arcsec: float
+    spatial_oversample: int = 4
+
+    def __post_init__(self) -> None:
+        if self.band not in _NIRCAM_GAUSSIAN_PSF_FWHM_ARCSEC:
+            raise ValueError(f"unsupported NIRCam band {self.band!r}")
+        if self.truth_fwhm_arcsec <= 0 or self.fitted_fwhm_arcsec <= 0:
+            raise ValueError("PSF FWHM values must be positive")
+        if self.spatial_oversample < 1:
+            raise ValueError("spatial_oversample must be positive")
+
+
+@dataclass
+class DetectorInjectionResult:
+    """Detector image plus sparse, unit-audited point-source injection."""
+
+    image: torch.Tensor
+    delta: torch.Tensor
+    source_xy: torch.Tensor
+    accepted: torch.Tensor
+    rendered_flux_jy: torch.Tensor
+
+
+def gaussian_psf_contract(
+    band: str,
+    *,
+    fitted_scale: float = 1.05,
+    spatial_oversample: int = 4,
+) -> GaussianPSFContract:
+    """Return the frozen band-dependent Gaussian proxy and mismatch control."""
+
+    band = str(band).upper()
+    if fitted_scale <= 0:
+        raise ValueError("fitted_scale must be positive")
+    truth = _NIRCAM_GAUSSIAN_PSF_FWHM_ARCSEC.get(band)
+    if truth is None:
+        raise ValueError(f"unsupported NIRCam band {band!r}")
+    return GaussianPSFContract(
+        band=band,
+        truth_fwhm_arcsec=truth,
+        fitted_fwhm_arcsec=truth * fitted_scale,
+        spatial_oversample=spatial_oversample,
+    )
+
+
+def updec_patt_split(patt_num: int) -> str:
+    """Return the pre-registered split for a complete JWST dither identifier."""
+
+    try:
+        return _UPDEC_PATT_SPLIT[int(patt_num)]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("PATT_NUM must be an integer from 1 through 9") from exc
+
+
+def _validate_mjysr_image(
+    image: torch.Tensor,
+    header: dict[str, object],
+) -> None:
+    if image.ndim != 2 or not image.is_floating_point():
+        raise ValueError("detector image must be a floating-point 2D tensor")
+    unit = str(header.get("BUNIT", "")).strip().lower().replace(" ", "")
+    if unit not in {"mjy/sr", "mjypersteradian"}:
+        raise ValueError("detector injection currently requires BUNIT='MJy/sr'")
+
+
+def _oversampled_gaussian_patch(
+    *,
+    center_xy: torch.Tensor,
+    sigma_px: float,
+    x_min: int,
+    x_max: int,
+    y_min: int,
+    y_max: int,
+    oversample: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    dtype = center_xy.dtype
+    device = center_xy.device
+    yy, xx = torch.meshgrid(
+        torch.arange(y_min, y_max, dtype=dtype, device=device),
+        torch.arange(x_min, x_max, dtype=dtype, device=device),
+        indexing="ij",
+    )
+    offsets = (
+        torch.arange(oversample, dtype=dtype, device=device) + 0.5
+    ) / oversample - 0.5
+    profile = torch.zeros_like(xx)
+    for dy in offsets:
+        for dx in offsets:
+            radius2 = (xx + dx - center_xy[0]).square() + (
+                yy + dy - center_xy[1]
+            ).square()
+            profile += torch.exp(-0.5 * radius2 / sigma_px**2)
+    profile /= oversample**2
+    profile /= profile.sum()
+    return profile, xx, yy
+
+
+def inject_gaussian_sources_mjysr(
+    image: torch.Tensor,
+    *,
+    header: dict[str, object],
+    world_radec_deg: torch.Tensor,
+    flux_jy: torch.Tensor,
+    psf_fwhm_arcsec: float,
+    spatial_oversample: int = 4,
+    truncate_sigma: float = 5.0,
+) -> DetectorInjectionResult:
+    """Inject flux-conserving point sources through a detector WCS.
+
+    The output remains in ``MJy/sr``.  Every sparse footprint uses its local
+    WCS Jacobian, so summing ``delta * pixel_area_sr * 1e6`` returns Jy.
+    Sources whose full truncated footprint is not on the detector are rejected.
+    """
+
+    _validate_mjysr_image(image, header)
+    if (
+        world_radec_deg.ndim != 2
+        or world_radec_deg.shape[1] != 2
+        or flux_jy.shape != (world_radec_deg.shape[0],)
+    ):
+        raise ValueError("world_radec_deg must be (sources, 2) and flux_jy (sources,)")
+    if (
+        world_radec_deg.device != image.device
+        or flux_jy.device != image.device
+        or not torch.isfinite(world_radec_deg).all()
+        or not torch.isfinite(flux_jy).all()
+    ):
+        raise ValueError("image, coordinates, and finite fluxes must share a device")
+    if torch.any(flux_jy < 0):
+        raise ValueError("flux_jy must be non-negative")
+    if psf_fwhm_arcsec <= 0 or spatial_oversample < 1 or truncate_sigma <= 0:
+        raise ValueError("PSF, oversampling, and truncation values must be positive")
+
+    wcs = torchsky.WCS(header)
+    x, y = wcs.world_to_pixel(world_radec_deg[:, 0], world_radec_deg[:, 1])
+    source_xy = torch.stack((x, y), dim=-1).to(
+        device=image.device, dtype=torch.float64
+    )
+    delta = torch.zeros_like(image)
+    accepted = torch.zeros(world_radec_deg.shape[0], dtype=torch.bool, device=image.device)
+    rendered_flux = torch.zeros_like(flux_jy)
+    height, width = image.shape
+    sigma_arcsec = psf_fwhm_arcsec / 2.354820045
+
+    for index, position in enumerate(source_xy):
+        center_area = pixel_area_sr_at(wcs, position[0], position[1])
+        pixel_scale_arcsec = float(
+            torch.sqrt(center_area) * (180.0 / torch.pi) * 3600.0
+        )
+        sigma_px = sigma_arcsec / pixel_scale_arcsec
+        radius = max(1, math.ceil(truncate_sigma * sigma_px + 0.5))
+        x_min = math.floor(float(position[0])) - radius
+        x_max = math.floor(float(position[0])) + radius + 1
+        y_min = math.floor(float(position[1])) - radius
+        y_max = math.floor(float(position[1])) + radius + 1
+        if x_min < 0 or y_min < 0 or x_max > width or y_max > height:
+            continue
+        profile, xx, yy = _oversampled_gaussian_patch(
+            center_xy=position,
+            sigma_px=sigma_px,
+            x_min=x_min,
+            x_max=x_max,
+            y_min=y_min,
+            y_max=y_max,
+            oversample=spatial_oversample,
+        )
+        area_sr = pixel_area_sr_at(wcs, xx, yy)
+        contribution = (
+            flux_jy[index].to(torch.float64) * profile / (1.0e6 * area_sr)
+        ).to(image.dtype)
+        delta[y_min:y_max, x_min:x_max] += contribution
+        accepted[index] = True
+        rendered_flux[index] = (
+            contribution.to(torch.float64) * area_sr * 1.0e6
+        ).sum().to(flux_jy.dtype)
+
+    return DetectorInjectionResult(
+        image=image + delta,
+        delta=delta,
+        source_xy=source_xy,
+        accepted=accepted,
+        rendered_flux_jy=rendered_flux,
+    )
+
+
+def measure_gaussian_source_flux_jy(
+    image_mjysr: torch.Tensor,
+    *,
+    header: dict[str, object],
+    world_radec_deg: torch.Tensor,
+    psf_fwhm_arcsec: float,
+    spatial_oversample: int = 4,
+    truncate_sigma: float = 5.0,
+) -> float:
+    """Measure one source with a fixed Gaussian template in integrated Jy."""
+
+    _validate_mjysr_image(image_mjysr, header)
+    if world_radec_deg.shape != (2,) or not torch.isfinite(world_radec_deg).all():
+        raise ValueError("world_radec_deg must contain one finite (RA, Dec) pair")
+    wcs = torchsky.WCS(header)
+    x, y = wcs.world_to_pixel(world_radec_deg[0], world_radec_deg[1])
+    position = torch.stack((x, y)).to(
+        device=image_mjysr.device, dtype=torch.float64
+    )
+    area_center = pixel_area_sr_at(wcs, position[0], position[1])
+    scale_arcsec = float(torch.sqrt(area_center) * (180.0 / torch.pi) * 3600.0)
+    sigma_px = psf_fwhm_arcsec / 2.354820045 / scale_arcsec
+    radius = max(1, math.ceil(truncate_sigma * sigma_px + 0.5))
+    x_min = math.floor(float(position[0])) - radius
+    x_max = math.floor(float(position[0])) + radius + 1
+    y_min = math.floor(float(position[1])) - radius
+    y_max = math.floor(float(position[1])) + radius + 1
+    if x_min < 0 or y_min < 0 or x_max > image_mjysr.shape[1] or y_max > image_mjysr.shape[0]:
+        raise ValueError("source PSF footprint falls outside the detector")
+    profile, xx, yy = _oversampled_gaussian_patch(
+        center_xy=position,
+        sigma_px=sigma_px,
+        x_min=x_min,
+        x_max=x_max,
+        y_min=y_min,
+        y_max=y_max,
+        oversample=spatial_oversample,
+    )
+    area_sr = pixel_area_sr_at(wcs, xx, yy)
+    data_jy = (
+        image_mjysr[y_min:y_max, x_min:x_max].to(torch.float64)
+        * area_sr
+        * 1.0e6
+    )
+    return float((profile * data_jy).sum() / profile.square().sum())
 
 
 def make_seed_manifest(root_seed: int) -> SeedManifest:
@@ -1173,10 +1432,239 @@ def _classical_smoke_artifact(
     }
 
 
+def _updec_adass_smoke_artifact(
+    *,
+    input_root: Path,
+    bands: Sequence[str],
+    device: torch.device | str,
+    exposures_per_band: int,
+    cutout_size: int,
+    flux_jy: float,
+) -> dict[str, object]:
+    """Audit real SCI/ERR/DQ injection boundaries without making a depth claim."""
+
+    if exposures_per_band < 1 or cutout_size < 16 or flux_jy <= 0:
+        raise ValueError("positive exposures/flux and cutout_size >= 16 are required")
+    from bench_map_smacs0723_real import (
+        _center_cutout,
+        _cutout_header,
+        _discover_exposure_paths,
+        _exposure_filter_band,
+        _read_ext,
+        _sci_header,
+    )
+
+    target_device = torch.device(device)
+    normalized_bands = tuple(str(band).upper() for band in bands)
+    rows: list[dict[str, Any]] = []
+    for band in normalized_bands:
+        paths = _discover_exposure_paths(input_root, input_product="cal", band=band)
+        if not paths:
+            paths = [
+                path
+                for path in sorted(input_root.rglob("*_cal.fits"))
+                if _exposure_filter_band(path) == band
+            ]
+        if len(paths) < exposures_per_band:
+            raise FileNotFoundError(
+                f"need {exposures_per_band} {band} calibrated exposures under {input_root}"
+            )
+        contract = gaussian_psf_contract(band)
+        for path in paths[:exposures_per_band]:
+            science_array = _read_ext(path, "SCI")
+            error_array = _read_ext(path, "ERR")
+            dq_array = _read_ext(path, "DQ")
+            science_cutout, x0, y0 = _center_cutout(science_array, cutout_size)
+            error_cutout = error_array[
+                y0 : y0 + science_cutout.shape[0],
+                x0 : x0 + science_cutout.shape[1],
+            ]
+            dq_cutout = dq_array[
+                y0 : y0 + science_cutout.shape[0],
+                x0 : x0 + science_cutout.shape[1],
+            ]
+            header = _cutout_header(
+                _sci_header(path),
+                x0,
+                y0,
+                science_cutout.shape[0],
+            )
+            if tuple(science_cutout.shape) != (cutout_size, cutout_size):
+                raise ValueError(f"{path} is smaller than the requested cutout")
+            science = torch.from_numpy(science_cutout.copy()).to(target_device)
+            original = science.clone()
+            error = torch.from_numpy(error_cutout.copy()).to(target_device)
+            dq = torch.from_numpy(dq_cutout.copy()).to(target_device)
+            valid = (
+                torch.isfinite(science)
+                & torch.isfinite(error)
+                & (error > 0)
+                & (dq == 0)
+            )
+            inverse_variance = torch.where(
+                valid,
+                error.square().reciprocal(),
+                torch.zeros_like(error),
+            )
+            center = torch.tensor(
+                [(cutout_size - 1) * 0.5, (cutout_size - 1) * 0.5],
+                dtype=torch.float64,
+                device=target_device,
+            )
+            ra, dec = torchsky.WCS(header).pixel_to_world(center[0], center[1])
+            world = torch.stack((ra, dec))
+            injection = inject_gaussian_sources_mjysr(
+                science,
+                header=header,
+                world_radec_deg=world[None],
+                flux_jy=torch.tensor(
+                    [flux_jy], dtype=torch.float64, device=target_device
+                ),
+                psf_fwhm_arcsec=contract.truth_fwhm_arcsec,
+                spatial_oversample=contract.spatial_oversample,
+            )
+            yy, xx = torch.meshgrid(
+                torch.arange(cutout_size, device=target_device),
+                torch.arange(cutout_size, device=target_device),
+                indexing="ij",
+            )
+            pixel_scale_arcsec = float(
+                torch.sqrt(
+                    pixel_area_sr_at(
+                        torchsky.WCS(header),
+                        injection.source_xy[0, 0],
+                        injection.source_xy[0, 1],
+                    )
+                )
+                * (180.0 / torch.pi)
+                * 3600.0
+            )
+            source_mask = (
+                (xx - injection.source_xy[0, 0]).square()
+                + (yy - injection.source_xy[0, 1]).square()
+            ) > (2.0 * contract.truth_fwhm_arcsec / pixel_scale_arcsec) ** 2
+            background_mask = valid & source_mask
+            control_background = fit_background_plane(
+                science,
+                background_mask,
+                weight=inverse_variance,
+                sigma_clip=4.0,
+            )
+            injected_background = fit_background_plane(
+                injection.image,
+                background_mask,
+                weight=inverse_variance,
+                sigma_clip=4.0,
+            )
+            recovered_delta = (
+                injection.image
+                - injected_background.model
+                - (science - control_background.model)
+            )
+            exact_flux = measure_gaussian_source_flux_jy(
+                recovered_delta,
+                header=header,
+                world_radec_deg=world,
+                psf_fwhm_arcsec=contract.truth_fwhm_arcsec,
+                spatial_oversample=contract.spatial_oversample,
+            )
+            perturbed_flux = measure_gaussian_source_flux_jy(
+                recovered_delta,
+                header=header,
+                world_radec_deg=world,
+                psf_fwhm_arcsec=contract.fitted_fwhm_arcsec,
+                spatial_oversample=contract.spatial_oversample,
+            )
+            support_y, support_x = torch.nonzero(
+                injection.delta != 0,
+                as_tuple=True,
+            )
+            support_area = pixel_area_sr_at(
+                torchsky.WCS(header),
+                support_x.to(torch.float64),
+                support_y.to(torch.float64),
+            )
+            support_flux = (
+                injection.delta[support_y, support_x].to(torch.float64)
+                * support_area
+                * 1.0e6
+            )
+            centroid = torch.stack(
+                (
+                    (support_x * support_flux).sum() / support_flux.sum(),
+                    (support_y * support_flux).sum() / support_flux.sum(),
+                )
+            )
+            position_error_px = float(
+                torch.linalg.vector_norm(centroid - injection.source_xy[0])
+            )
+            primary_header = dict(torchsky.get_header(str(path), 0))
+            patt_num = int(primary_header["PATT_NUM"])
+            rows.append(
+                {
+                    "band": band,
+                    "path": str(path.resolve()),
+                    "patt_num": patt_num,
+                    "split": updec_patt_split(patt_num),
+                    "cutout_xy0": [x0, y0],
+                    "shape": list(science.shape),
+                    "bunit": header.get("BUNIT"),
+                    "valid_fraction": float(valid.float().mean()),
+                    "median_inverse_variance": float(
+                        torch.median(inverse_variance[valid])
+                    ),
+                    "input_unchanged": bool(
+                        torch.allclose(science, original, equal_nan=True)
+                    ),
+                    "source_xy": injection.source_xy[0].tolist(),
+                    "recovered_centroid_xy": centroid.tolist(),
+                    "position_error_px": position_error_px,
+                    "source_accepted": bool(injection.accepted[0]),
+                    "injected_flux_jy": flux_jy,
+                    "rendered_flux_jy": float(injection.rendered_flux_jy[0]),
+                    "exact_psf_flux_jy": exact_flux,
+                    "exact_psf_fractional_error": exact_flux / flux_jy - 1.0,
+                    "perturbed_psf_flux_jy": perturbed_flux,
+                    "perturbed_psf_fractional_error": perturbed_flux / flux_jy - 1.0,
+                    "psf_contract": asdict(contract),
+                    "background": {
+                        "model": "weighted_sigma_clipped_plane",
+                        "sigma_clip": 4.0,
+                        "control_coeffs": control_background.coeffs.tolist(),
+                        "injected_coeffs": injected_background.coeffs.tolist(),
+                        "coefficient_shift": (
+                            injected_background.coeffs
+                            - control_background.coeffs
+                        ).tolist(),
+                    },
+                }
+            )
+    return {
+        "profile": "updec-adass-smoke",
+        "depth_claim": False,
+        "input_root": str(input_root.resolve()),
+        "bands": list(normalized_bands),
+        "exposures_per_band": exposures_per_band,
+        "cutout_size": cutout_size,
+        "device": str(target_device),
+        "patt_split": {
+            name: [
+                patt_num
+                for patt_num, split_name in _UPDEC_PATT_SPLIT.items()
+                if split_name == name
+            ]
+            for name in ("train", "validation", "test")
+        },
+        "rows": rows,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--profile", choices=("gate0", "classical-smoke"), default="gate0"
+        "--profile",
+        choices=("gate0", "classical-smoke", "updec-adass-smoke"),
+        default="gate0",
     )
     parser.add_argument("--seed", type=int, default=101)
     parser.add_argument("--size", type=int, default=96)
@@ -1184,18 +1672,22 @@ def main() -> int:
     parser.add_argument("--sources", type=int, default=24)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--exposures", type=int, default=4)
+    parser.add_argument("--input-root", type=Path, default=Path("data/jwst_smacs0723"))
+    parser.add_argument("--updec-bands", default="F150W,F277W")
+    parser.add_argument("--cutout-size", type=int, default=32)
+    parser.add_argument("--flux-jy", type=float, default=1.0e-7)
     parser.add_argument(
         "--json-out",
         type=Path,
         default=Path("benchmark_results/multiband_depth_gate0.json"),
     )
     args = parser.parse_args()
-    artifact = (
-        _gate0_artifact(
+    if args.profile == "gate0":
+        artifact = _gate0_artifact(
             seed=args.seed, size=args.size, bands=args.bands, sources=args.sources
         )
-        if args.profile == "gate0"
-        else _classical_smoke_artifact(
+    elif args.profile == "classical-smoke":
+        artifact = _classical_smoke_artifact(
             seed=args.seed,
             size=args.size,
             bands=args.bands,
@@ -1203,7 +1695,19 @@ def main() -> int:
             device=args.device,
             exposure_count=args.exposures,
         )
-    )
+    else:
+        artifact = _updec_adass_smoke_artifact(
+            input_root=args.input_root,
+            bands=tuple(
+                value.strip()
+                for value in args.updec_bands.split(",")
+                if value.strip()
+            ),
+            device=args.device,
+            exposures_per_band=args.exposures,
+            cutout_size=args.cutout_size,
+            flux_jy=args.flux_jy,
+        )
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
     print(json.dumps(artifact, indent=2, sort_keys=True))

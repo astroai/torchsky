@@ -12,6 +12,15 @@ stacking-versus-INR/Foam depth result defined in
   fallback abstract language.
 - [ ] Execute Day 1: real detector injection, unit/calibration closure, PSF
   contract, and tiny CPU/CUDA smoke.
+  - [x] Add the stable real-data profile, distorted-WCS local pixel-area
+    primitive, flux-conserving `MJy/sr` injection, frozen `PATT_NUM` split,
+    weighted sigma-clipped background plane, and perturbed-PSF control.
+    Evidence: the commit containing this checkpoint; 38 focused tests pass and
+    the real F150W/F277W CPU artifact meets the bright-source unit/position gate.
+  - [ ] Run the same two-band/two-exposure smoke on CANFAR CUDA from the exact
+    pushed commit and record the session, command, runtime, memory, and artifact.
+  - [ ] Replace or approve the smoke-only Gaussian PSF truth before blind
+    science injections.
 - [ ] Execute Day 2: validation-selected upstream Drizzle/SWarp plus classical
   multiband chi-square baseline.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;

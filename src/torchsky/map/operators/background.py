@@ -197,12 +197,35 @@ def observation_background_components(
     return {"sky": sky, "instrument": instrument, "detector": detector}
 
 
-def fit_background_plane(residual: Tensor, mask: Tensor) -> BackgroundFitSummary:
-    """Fit a planar structured-background proxy to supported residuals."""
+def fit_background_plane(
+    residual: Tensor,
+    mask: Tensor,
+    *,
+    weight: Tensor | None = None,
+    sigma_clip: float | None = None,
+    max_iterations: int = 3,
+) -> BackgroundFitSummary:
+    """Fit an optionally weighted, sigma-clipped plane to supported residuals."""
     residual = residual.to(dtype=torch.float32)
     mask = mask.to(device=residual.device, dtype=torch.bool)
     if residual.ndim != 2 or mask.shape != residual.shape:
         raise ValueError("fit_background_plane expects 2D residual and matching mask")
+    if sigma_clip is not None and sigma_clip <= 0:
+        raise ValueError("sigma_clip must be positive")
+    if max_iterations < 0:
+        raise ValueError("max_iterations must be non-negative")
+    if weight is None:
+        weight = torch.ones_like(residual)
+    else:
+        weight = weight.to(device=residual.device, dtype=torch.float32)
+        if weight.shape != residual.shape:
+            raise ValueError("background weight must match residual shape")
+    mask = (
+        mask
+        & torch.isfinite(residual)
+        & torch.isfinite(weight)
+        & (weight > 0)
+    )
     if not bool(mask.any()):
         zeros = torch.zeros_like(residual)
         return BackgroundFitSummary(
@@ -218,20 +241,41 @@ def fit_background_plane(residual: Tensor, mask: Tensor) -> BackgroundFitSummary
         torch.arange(residual.shape[1], dtype=torch.float32, device=residual.device),
         indexing="ij",
     )
-    design = torch.stack(
-        [
-            xx[mask].to(dtype=torch.float64),
-            yy[mask].to(dtype=torch.float64),
-            torch.ones_like(xx[mask], dtype=torch.float64),
-        ],
-        dim=1,
-    )
-    response = residual[mask].to(dtype=torch.float64)
-    coeffs, *_ = torch.linalg.lstsq(design, response.unsqueeze(1))
-    coeffs = coeffs[:, 0].to(dtype=torch.float32)
-    model = coeffs[0] * xx + coeffs[1] * yy + coeffs[2]
-    supported_model = model[mask]
-    supported_residual = residual[mask]
+    support = mask
+    for iteration in range(max_iterations + 1):
+        design = torch.stack(
+            [
+                xx[support].to(dtype=torch.float64),
+                yy[support].to(dtype=torch.float64),
+                torch.ones_like(xx[support], dtype=torch.float64),
+            ],
+            dim=1,
+        )
+        response = residual[support].to(dtype=torch.float64)
+        sqrt_weight = torch.sqrt(weight[support].to(dtype=torch.float64))
+        coeffs, *_ = torch.linalg.lstsq(
+            design * sqrt_weight[:, None],
+            (response * sqrt_weight).unsqueeze(1),
+        )
+        coeffs = coeffs[:, 0].to(dtype=torch.float32)
+        model = coeffs[0] * xx + coeffs[1] * yy + coeffs[2]
+        if sigma_clip is None or iteration == max_iterations:
+            break
+        detrended = residual - model
+        center = torch.median(detrended[support])
+        robust_sigma = 1.4826 * torch.median(
+            torch.abs(detrended[support] - center)
+        )
+        tolerance = max(
+            float(sigma_clip * robust_sigma),
+            32.0 * torch.finfo(residual.dtype).eps,
+        )
+        clipped = mask & (torch.abs(detrended - center) <= tolerance)
+        if int(clipped.sum()) < 3 or torch.equal(clipped, support):
+            break
+        support = clipped
+    supported_model = model[support]
+    supported_residual = residual[support]
     detrended = supported_residual - supported_model
     residual_rms = torch.sqrt(torch.mean(torch.square(supported_residual)))
     model_rms = torch.sqrt(torch.mean(torch.square(supported_model)))

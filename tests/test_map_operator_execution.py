@@ -20,6 +20,7 @@ from torchsky.map.operators import (
     masked_median_stack,
     normalized_header_for_shape,
     pixel_area_sr_map,
+    pixel_area_sr_at,
     prepare_image_observation_data,
     project_image_observation_geometry,
     representative_pixel_area_sr,
@@ -268,6 +269,20 @@ def test_pixel_area_helpers_are_positive_and_consistent_for_plain_tan() -> None:
     assert area.shape == (8, 8)
     assert bool((area > 0.0).all())
     assert float(torch.median(area).item()) == pytest.approx(representative, rel=0.02)
+    sampled = pixel_area_sr_at(
+        wcs,
+        torch.tensor([0.0, 3.0, 7.0]),
+        torch.tensor([1.0, 4.0, 6.0]),
+    )
+    torch.testing.assert_close(
+        sampled,
+        area[
+            torch.tensor([1, 4, 6]),
+            torch.tensor([0, 3, 7]),
+        ].to(torch.float64),
+        rtol=2e-6,
+        atol=0.0,
+    )
     torch.testing.assert_close(
         wrapped_delta_ra_deg(torch.tensor([359.0]), torch.tensor([1.0])),
         torch.tensor([-2.0]),

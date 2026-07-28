@@ -7,6 +7,7 @@ import sys
 
 import pytest
 import torch
+import torchsky
 
 BENCHMARKS = Path(__file__).resolve().parents[1] / "benchmarks"
 if str(BENCHMARKS) not in sys.path:
@@ -22,15 +23,20 @@ from bench_multiband_depth import (  # noqa: E402
     flux_color_metrics,
     forced_linear_flux,
     gaussian_nll,
+    gaussian_psf_contract,
     generate_truth_catalog,
+    inject_gaussian_sources_mjysr,
     independent_union_statistic,
     make_seed_manifest,
     maximum_cardinality_angular_match,
     maximum_cardinality_match,
+    measure_gaussian_source_flux_jy,
     render_truth,
     score_detections,
+    simple_tan_header,
     simulate_dithered_exposures,
     split_identifiers,
+    updec_patt_split,
 )
 
 
@@ -79,6 +85,47 @@ def test_truth_catalog_has_required_strata_and_conserves_flux() -> None:
     assert 2.0 < torch.linalg.vector_norm(catalog.xy[-1] - catalog.xy[-2]) < 4.0
 
 
+def test_detector_mjysr_injection_conserves_jy_and_exposes_psf_mismatch() -> None:
+    header = simple_tan_header(32, 32, pixel_scale_arcsec=0.04)
+    header["BUNIT"] = "MJy/sr"
+    wcs = torchsky.WCS(header)
+    ra, dec = wcs.pixel_to_world(
+        torch.tensor([15.35], dtype=torch.float64),
+        torch.tensor([16.2], dtype=torch.float64),
+    )
+    world = torch.stack((ra, dec), dim=-1)
+    flux = torch.tensor([3.0e-8], dtype=torch.float64)
+    contract = gaussian_psf_contract("F200W")
+    result = inject_gaussian_sources_mjysr(
+        torch.zeros((32, 32), dtype=torch.float64),
+        header=header,
+        world_radec_deg=world,
+        flux_jy=flux,
+        psf_fwhm_arcsec=contract.truth_fwhm_arcsec,
+        spatial_oversample=contract.spatial_oversample,
+    )
+    assert result.accepted.tolist() == [True]
+    torch.testing.assert_close(result.rendered_flux_jy, flux, rtol=2e-12, atol=0.0)
+    exact = measure_gaussian_source_flux_jy(
+        result.delta,
+        header=header,
+        world_radec_deg=world[0],
+        psf_fwhm_arcsec=contract.truth_fwhm_arcsec,
+        spatial_oversample=contract.spatial_oversample,
+    )
+    perturbed = measure_gaussian_source_flux_jy(
+        result.delta,
+        header=header,
+        world_radec_deg=world[0],
+        psf_fwhm_arcsec=contract.fitted_fwhm_arcsec,
+        spatial_oversample=contract.spatial_oversample,
+    )
+    assert exact == pytest.approx(float(flux[0]), rel=2e-12)
+    assert abs(perturbed / float(flux[0]) - 1.0) > abs(
+        exact / float(flux[0]) - 1.0
+    )
+
+
 def test_forced_flux_color_and_heldout_likelihood() -> None:
     catalog = generate_truth_catalog(
         height=32,
@@ -114,6 +161,19 @@ def test_split_is_disjoint_complete_and_deterministic() -> None:
     assert set(split.train).isdisjoint(split.test)
     assert set(split.validation).isdisjoint(split.test)
     assert set(split.train + split.validation + split.test) == set(identifiers)
+    assert [updec_patt_split(value) for value in range(1, 10)] == [
+        "train",
+        "train",
+        "validation",
+        "train",
+        "train",
+        "test",
+        "train",
+        "validation",
+        "test",
+    ]
+    with pytest.raises(ValueError, match="PATT_NUM"):
+        updec_patt_split(10)
 
 
 def test_detector_recovers_noiseless_bright_sources_and_null_is_empty() -> None:

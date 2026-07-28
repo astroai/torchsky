@@ -78,6 +78,34 @@ def test_fit_background_plane_recovers_structured_residual() -> None:
     assert summary.leakage_fraction > 0.99
 
 
+def test_fit_background_plane_uses_weights_and_rejects_source_outlier() -> None:
+    yy, xx = torch.meshgrid(
+        torch.arange(9, dtype=torch.float32),
+        torch.arange(10, dtype=torch.float32),
+        indexing="ij",
+    )
+    truth = 0.02 * xx - 0.03 * yy + 1.2
+    observed = truth.clone()
+    observed[4, 5] = 100.0
+    weight = torch.ones_like(observed)
+    weight[:, :2] = 0.25
+
+    summary = fit_background_plane(
+        observed,
+        torch.ones_like(observed, dtype=torch.bool),
+        weight=weight,
+        sigma_clip=4.0,
+    )
+
+    torch.testing.assert_close(summary.model, truth, atol=2e-5, rtol=2e-5)
+    torch.testing.assert_close(
+        summary.coeffs,
+        torch.tensor([0.02, -0.03, 1.2]),
+        atol=2e-5,
+        rtol=2e-5,
+    )
+
+
 def test_render_field_observation_applies_background_offset() -> None:
     obs = FieldObservation(
         image=torch.zeros((4, 4), dtype=torch.float32),
