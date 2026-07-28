@@ -751,9 +751,12 @@ profile shows genuine repeated cold I/O.
 - [x] Run `pixi run ci-local`.
   Evidence: 1,669 passed, 215 skipped, 12 warnings in 545.03 s; Pyright reported
   zero errors and the existing dynamic-`__all__` warning.
-- [ ] Commit and push all completed work on `main`.
+- [x] Commit and push all completed work on `main`.
+  Evidence: implementation/roadmap commit `c5e657d` is on `origin/main`.
 - [ ] Confirm GitHub Comprehensive CI is green.
-- [ ] Leave the tree clean and report:
+  Pending run: `30382664582` for `c5e657d`.
+- [x] Leave the tracked tree clean (the two untouched user-authored `fossil_*`
+  source documents remain intentionally untracked) and report:
   scientific/technical status, infrastructure status, next unchecked item, and
   explicit parallel work with repository, branch, data, and commands.
 
