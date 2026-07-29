@@ -33,9 +33,9 @@ products; beating separate per-band images alone is not sufficient.
   references only. They are neither independent truth nor the primary depth
   comparator.
 - [x] Keep all FITS access through Torchfits/Torchsky.
-- [ ] Make no FOSSIL, component-separation, COSMOS, release, or unrelated API
+- [x] Make no FOSSIL, component-separation, COSMOS, release, or unrelated API
   changes during this sprint.
-- [ ] Fix only defects that block the experiment. Time-box exact Torchsky
+- [x] Fix only defects that block the experiment. Time-box exact Torchsky
   Drizzle optimization; the official upstream Drizzle comparator can establish
   the scientific baseline while the 3,691-second Torchsky path remains an
   explicitly reported engineering result.
@@ -206,17 +206,29 @@ each final method boundary. Otherwise do not begin model tuning.
 - [x] Add a dependency-free, atomic, resumable staging command for the frozen
   135-file MAST grid and canonical links to existing CRFs:
   `benchmarks/stage_smacs0723_canfar.py`.
-- [ ] Complete and verify
+- [x] Complete and verify
   `/arc/projects/ots/torchsky-data/jwst_smacs0723/{cal,crf,aligned,manifest.json}`
   from one exact pushed commit.
-  CAL/CRF evidence is complete: session `tmbk7b72`, commit `35af22e`,
-  downloaded all 135 CAL products, linked all 27 CRFs, and returned success.
-  The aligned-link manifest extension remains to run from its pushed commit.
+  Evidence: session `tmbk7b72` at commit `35af22e` downloaded all 135 CAL
+  products and linked all 27 CRFs. Session `e74yyfec` at commit `46c1ce5`
+  linked all 135 registered aligned products and atomically refreshed the
+  canonical manifest.
 - [x] Freeze the validation comparator interface: `--input-product aligned`,
   `--patt-nums 3,8`, `--crop-x0 112 --crop-y0 0`, and
   `--validation-classical --drizzle-pixfracs 0.6,0.8,1.0`.
-- [ ] Run weighted Torchsky, upstream Drizzle, and SWarp on identical validation
+- [x] Run weighted Torchsky, upstream Drizzle, and SWarp on identical validation
   exposures and the exact same target grid.
+  Evidence: Torchsky session `axix9wz3` at `803a200`, upstream Drizzle session
+  `z7t27ff0` at `46c1ce5`, and locked SWarp 2.41.5 session `gckyhwco` at
+  `62f572a`. Durable reports are under
+  `/arc/projects/ots/torchsky-runs/20260728-smacs-{torchsky-803a200,drizzle-46c1ce5,swarp-62f572a}/`.
+  These are backend/geometry diagnostics against an aligned detector image,
+  not depth measurements and not a scientific kernel selection.
+- [x] Add deterministic common-world smooth-continuum manifests, transient
+  detector-SCI injection overrides, and exact-target product persistence.
+  Archived CANFAR inputs remain unchanged; all classical families receive the
+  same injected detector pixels. Evidence: the commit containing this update
+  and the focused common-world conservation/blank-control tests.
 - [ ] Select Drizzle `pixfrac` from a small predeclared grid and SWarp kernel
   from `{BILINEAR, LANCZOS3}` using validation injections only.
 - [ ] Build the whitened chi-square six-band detector from each winning stack

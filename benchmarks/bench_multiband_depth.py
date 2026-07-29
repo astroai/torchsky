@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 import math
+import numpy as np
 from pathlib import Path
 import tempfile
 import time
@@ -52,6 +54,7 @@ _UPDEC_PATT_SPLIT = {
     8: "validation",
     9: "test",
 }
+_UPDEC_BANDS = ("F090W", "F150W", "F200W", "F277W", "F356W", "F444W")
 
 
 @dataclass(frozen=True)
@@ -193,6 +196,226 @@ class DetectorInjectionResult:
     source_xy: torch.Tensor
     accepted: torch.Tensor
     rendered_flux_jy: torch.Tensor
+
+
+def inject_common_world_exposures(
+    exposure_paths: Sequence[Path],
+    *,
+    band: str,
+    world_radec_deg: torch.Tensor,
+    flux_jy: torch.Tensor,
+    device: torch.device | str = "cpu",
+) -> tuple[dict[Path, np.ndarray], list[dict[str, object]]]:
+    """Create transient SCI overrides for one common sky catalogue.
+
+    Archived detector products are only read. A source may fall outside an
+    individual detector, but every requested source must be covered by at least
+    one selected exposure.
+    """
+
+    if not exposure_paths:
+        raise ValueError("at least one exposure path is required")
+    if (
+        world_radec_deg.ndim != 2
+        or world_radec_deg.shape[1] != 2
+        or flux_jy.shape != (world_radec_deg.shape[0],)
+    ):
+        raise ValueError("world_radec_deg must be (sources, 2) and flux_jy (sources,)")
+    from bench_map_smacs0723_real import _read_ext, _sci_header
+
+    target_device = torch.device(device)
+    world = world_radec_deg.to(device=target_device, dtype=torch.float64)
+    flux = flux_jy.to(device=target_device, dtype=torch.float64)
+    contract = gaussian_psf_contract(band)
+    overrides: dict[Path, np.ndarray] = {}
+    audit: list[dict[str, object]] = []
+    accepted_rows: list[torch.Tensor] = []
+    for exposure_path in exposure_paths:
+        science_array = _read_ext(exposure_path, "SCI")
+        science = torch.from_numpy(science_array.copy()).to(target_device)
+        if world.shape[0] == 0:
+            injected = DetectorInjectionResult(
+                image=science,
+                delta=torch.zeros_like(science),
+                source_xy=torch.empty(
+                    (0, 2), dtype=torch.float64, device=target_device
+                ),
+                accepted=torch.empty(
+                    (0,), dtype=torch.bool, device=target_device
+                ),
+                rendered_flux_jy=torch.empty(
+                    (0,), dtype=torch.float64, device=target_device
+                ),
+            )
+        else:
+            injected = inject_gaussian_sources_mjysr(
+                science,
+                header=dict(_sci_header(exposure_path)),
+                world_radec_deg=world,
+                flux_jy=flux,
+                psf_fwhm_arcsec=contract.truth_fwhm_arcsec,
+                spatial_oversample=contract.spatial_oversample,
+            )
+        accepted_rows.append(injected.accepted)
+        overrides[exposure_path] = (
+            injected.image.detach().cpu().numpy().astype(science_array.dtype, copy=False)
+        )
+        audit.append(
+            {
+                "path": str(exposure_path.resolve()),
+                "accepted": injected.accepted.detach().cpu().tolist(),
+                "source_xy": injected.source_xy.detach().cpu().tolist(),
+                "rendered_flux_jy": (
+                    injected.rendered_flux_jy.detach().cpu().tolist()
+                ),
+                "input_unchanged": bool(
+                    torch.equal(
+                        science.detach().cpu(),
+                        torch.from_numpy(science_array),
+                    )
+                ),
+            }
+        )
+    if world.shape[0] and not torch.stack(accepted_rows).any(dim=0).all():
+        missing = torch.nonzero(
+            ~torch.stack(accepted_rows).any(dim=0), as_tuple=False
+        ).flatten()
+        raise ValueError(
+            "common-world sources lack detector coverage: "
+            + ",".join(str(int(index)) for index in missing)
+        )
+    return overrides, audit
+
+
+def make_updec_common_world_manifest(
+    *,
+    target_header: dict[str, object],
+    bands: Sequence[str] = _UPDEC_BANDS,
+    source_count: int = 28,
+    seed: int = 101,
+    ab_magnitudes: Sequence[float] = (27.0, 27.5, 28.0, 28.5, 29.0, 29.5, 30.0),
+    margin_px: float = 12.0,
+    min_separation_px: float = 8.0,
+    batch_id: str = "validation-000",
+) -> dict[str, object]:
+    """Generate a deterministic four-quadrant smooth-continuum injection batch."""
+
+    width = int(target_header["NAXIS1"])
+    height = int(target_header["NAXIS2"])
+    normalized_bands = tuple(str(band).upper() for band in bands)
+    if (
+        source_count < 0
+        or seed < 0
+        or not normalized_bands
+        or not ab_magnitudes
+        or margin_px <= 0
+        or min_separation_px < 0
+        or width <= 3 * margin_px
+        or height <= 3 * margin_px
+    ):
+        raise ValueError("invalid source, seed, band, magnitude, or target-grid contract")
+    from bench_map_smacs0723_real import _band_spec
+
+    wavelengths = {
+        band: float(_band_spec(band)["wavelength_angstrom"])
+        for band in normalized_bands
+    }
+    generator = torch.Generator().manual_seed(seed)
+    positions: list[torch.Tensor] = []
+    quadrants: list[int] = []
+    attempts = 0
+    while len(positions) < source_count:
+        attempts += 1
+        if attempts > max(1000, 200 * source_count):
+            raise ValueError("cannot place requested sources at the frozen separation")
+        quadrant = len(positions) % 4
+        left = quadrant % 2 == 0
+        bottom = quadrant < 2
+        x_min = margin_px if left else 0.5 * width + 0.5 * margin_px
+        x_max = 0.5 * width - 0.5 * margin_px if left else width - margin_px
+        y_min = margin_px if bottom else 0.5 * height + 0.5 * margin_px
+        y_max = 0.5 * height - 0.5 * margin_px if bottom else height - margin_px
+        sample = torch.rand((2,), generator=generator, dtype=torch.float64)
+        candidate = torch.tensor(
+            [
+                x_min + float(sample[0]) * (x_max - x_min),
+                y_min + float(sample[1]) * (y_max - y_min),
+            ],
+            dtype=torch.float64,
+        )
+        if positions and min(
+            float(torch.linalg.vector_norm(candidate - position))
+            for position in positions
+        ) < min_separation_px:
+            continue
+        positions.append(candidate)
+        quadrants.append(quadrant)
+    target_xy = (
+        torch.stack(positions)
+        if positions
+        else torch.empty((0, 2), dtype=torch.float64)
+    )
+    world = torchsky.WCS(target_header).pixel_to_world(target_xy)
+    magnitudes = torch.tensor(
+        [
+            float(ab_magnitudes[index % len(ab_magnitudes)])
+            for index in range(source_count)
+        ],
+        dtype=torch.float64,
+    )
+    reference_flux_jy = 3631.0 * torch.pow(10.0, -0.4 * magnitudes)
+    slopes = (
+        torch.rand((source_count,), generator=generator, dtype=torch.float64) - 0.5
+    )
+    pivot = float(wavelengths["F200W"] if "F200W" in wavelengths else next(iter(wavelengths.values())))
+    band_flux = {
+        band: (
+            reference_flux_jy * (wavelength / pivot) ** slopes
+        ).tolist()
+        for band, wavelength in wavelengths.items()
+    }
+    canonical_header = {
+        str(key): (
+            value
+            if value is None or isinstance(value, (bool, int, float, str))
+            else str(value)
+        )
+        for key, value in target_header.items()
+    }
+    header_sha256 = hashlib.sha256(
+        json.dumps(
+            canonical_header, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "schema_version": 1,
+        "profile": "updec-adass-common-world-manifest",
+        "depth_claim": False,
+        "batch_id": str(batch_id),
+        "seed": seed,
+        "source_count": source_count,
+        "source_kind": "smooth_continuum_point",
+        "source_id": [
+            f"{batch_id}-source-{index:04d}" for index in range(source_count)
+        ],
+        "quadrant": quadrants,
+        "target_xy": target_xy.tolist(),
+        "world_radec_deg": world.tolist(),
+        "reference_ab_magnitude": magnitudes.tolist(),
+        "spectral_slope_fnu": slopes.tolist(),
+        "band_wavelength_angstrom": wavelengths,
+        "band_flux_jy": band_flux,
+        "target_header_sha256": header_sha256,
+        "placement": {
+            "margin_px": margin_px,
+            "min_separation_px": min_separation_px,
+            "quadrant_round_robin": True,
+        },
+        "psf_contract": {
+            band: asdict(gaussian_psf_contract(band))
+            for band in normalized_bands
+        },
+    }
 
 
 def gaussian_psf_contract(
@@ -1663,7 +1886,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--profile",
-        choices=("gate0", "classical-smoke", "updec-adass-smoke"),
+        choices=(
+            "gate0",
+            "classical-smoke",
+            "updec-adass-smoke",
+            "updec-adass-manifest",
+        ),
         default="gate0",
     )
     parser.add_argument("--seed", type=int, default=101)
@@ -1673,9 +1901,18 @@ def main() -> int:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--exposures", type=int, default=4)
     parser.add_argument("--input-root", type=Path, default=Path("data/jwst_smacs0723"))
-    parser.add_argument("--updec-bands", default="F150W,F277W")
-    parser.add_argument("--cutout-size", type=int, default=32)
+    parser.add_argument("--updec-bands", default=None)
+    parser.add_argument("--cutout-size", type=int, default=None)
     parser.add_argument("--flux-jy", type=float, default=1.0e-7)
+    parser.add_argument("--reference-path", type=Path, default=None)
+    parser.add_argument("--crop-x0", type=int, default=112)
+    parser.add_argument("--crop-y0", type=int, default=0)
+    parser.add_argument("--batch-sources", type=int, default=28)
+    parser.add_argument("--batch-id", default="validation-000")
+    parser.add_argument(
+        "--ab-magnitudes",
+        default="27,27.5,28,28.5,29,29.5,30",
+    )
     parser.add_argument(
         "--json-out",
         type=Path,
@@ -1695,19 +1932,55 @@ def main() -> int:
             device=args.device,
             exposure_count=args.exposures,
         )
-    else:
+    elif args.profile == "updec-adass-smoke":
+        smoke_bands = args.updec_bands or "F150W,F277W"
         artifact = _updec_adass_smoke_artifact(
             input_root=args.input_root,
             bands=tuple(
                 value.strip()
-                for value in args.updec_bands.split(",")
+                for value in smoke_bands.split(",")
                 if value.strip()
             ),
             device=args.device,
             exposures_per_band=args.exposures,
-            cutout_size=args.cutout_size,
+            cutout_size=args.cutout_size or 32,
             flux_jy=args.flux_jy,
         )
+    else:
+        if args.reference_path is None:
+            raise ValueError("--reference-path is required for updec-adass-manifest")
+        from bench_map_smacs0723_real import _cutout_header, _sci_header
+
+        target_header = dict(
+            _cutout_header(
+                _sci_header(args.reference_path),
+                args.crop_x0,
+                args.crop_y0,
+                args.cutout_size or 512,
+            )
+        )
+        artifact = make_updec_common_world_manifest(
+            target_header=target_header,
+            bands=tuple(
+                value.strip()
+                for value in (args.updec_bands or ",".join(_UPDEC_BANDS)).split(",")
+                if value.strip()
+            ),
+            source_count=args.batch_sources,
+            seed=args.seed,
+            ab_magnitudes=tuple(
+                float(value.strip())
+                for value in args.ab_magnitudes.split(",")
+                if value.strip()
+            ),
+            batch_id=args.batch_id,
+        )
+        artifact["reference_path"] = str(args.reference_path.resolve())
+        artifact["target_crop"] = {
+            "size": args.cutout_size or 512,
+            "x0": args.crop_x0,
+            "y0": args.crop_y0,
+        }
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
     print(json.dumps(artifact, indent=2, sort_keys=True))

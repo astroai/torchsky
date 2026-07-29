@@ -8,6 +8,7 @@ import sys
 import pytest
 import torch
 import torchsky
+from astropy.io import fits
 
 BENCHMARKS = Path(__file__).resolve().parents[1] / "benchmarks"
 if str(BENCHMARKS) not in sys.path:
@@ -27,7 +28,9 @@ from bench_multiband_depth import (  # noqa: E402
     generate_truth_catalog,
     inject_gaussian_sources_mjysr,
     independent_union_statistic,
+    inject_common_world_exposures,
     make_seed_manifest,
+    make_updec_common_world_manifest,
     maximum_cardinality_angular_match,
     maximum_cardinality_match,
     measure_gaussian_source_flux_jy,
@@ -123,6 +126,102 @@ def test_detector_mjysr_injection_conserves_jy_and_exposes_psf_mismatch() -> Non
     assert exact == pytest.approx(float(flux[0]), rel=2e-12)
     assert abs(perturbed / float(flux[0]) - 1.0) > abs(
         exact / float(flux[0]) - 1.0
+    )
+
+
+def test_common_world_injection_conserves_flux_and_blank_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    paths = []
+    headers = [
+        simple_tan_header(32, 32, pixel_scale_arcsec=0.04),
+        simple_tan_header(
+            32,
+            32,
+            pixel_scale_arcsec=0.04,
+            dither_xy_px=(0.35, -0.2),
+        ),
+    ]
+    for index, header in enumerate(headers):
+        path = tmp_path / f"exposure-{index}_cal.fits"
+        science = fits.ImageHDU(
+            data=torch.zeros((32, 32), dtype=torch.float32).numpy(),
+            name="SCI",
+        )
+        for key, value in header.items():
+            if key not in {"NAXIS", "NAXIS1", "NAXIS2"}:
+                science.header[key] = value
+        science.header["BUNIT"] = "MJy/sr"
+        fits.HDUList(
+            [
+                fits.PrimaryHDU(),
+                science,
+                fits.ImageHDU(
+                    data=torch.ones((32, 32), dtype=torch.float32).numpy(),
+                    name="ERR",
+                ),
+                fits.ImageHDU(
+                    data=torch.zeros((32, 32), dtype=torch.int16).numpy(),
+                    name="DQ",
+                ),
+            ]
+        ).writeto(path)
+        paths.append(path)
+
+    ra, dec = torchsky.WCS(headers[0]).pixel_to_world(
+        torch.tensor([15.25], dtype=torch.float64),
+        torch.tensor([16.1], dtype=torch.float64),
+    )
+    world = torch.stack((ra, dec), dim=-1)
+    flux = torch.tensor([3.0e-8], dtype=torch.float64)
+    overrides, audit = inject_common_world_exposures(
+        paths,
+        band="F200W",
+        world_radec_deg=world,
+        flux_jy=flux,
+    )
+    assert set(overrides) == set(paths)
+    assert all(row["accepted"] == [True] for row in audit)
+    assert all(row["rendered_flux_jy"][0] == pytest.approx(float(flux[0])) for row in audit)
+    assert audit[0]["source_xy"] != audit[1]["source_xy"]
+
+    blank, blank_audit = inject_common_world_exposures(
+        paths,
+        band="F200W",
+        world_radec_deg=torch.empty((0, 2), dtype=torch.float64),
+        flux_jy=torch.empty((0,), dtype=torch.float64),
+    )
+    assert all(torch.count_nonzero(torch.from_numpy(image)) == 0 for image in blank.values())
+    assert all(row["accepted"] == [] and row["input_unchanged"] for row in blank_audit)
+
+
+def test_common_world_manifest_is_deterministic_and_quadrant_balanced() -> None:
+    header = simple_tan_header(128, 128, pixel_scale_arcsec=0.04)
+    first = make_updec_common_world_manifest(
+        target_header=header,
+        source_count=28,
+        seed=44,
+        margin_px=8.0,
+    )
+    second = make_updec_common_world_manifest(
+        target_header=header,
+        source_count=28,
+        seed=44,
+        margin_px=8.0,
+    )
+    assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+    assert [first["quadrant"].count(value) for value in range(4)] == [7, 7, 7, 7]
+    assert len(set(first["reference_ab_magnitude"])) == 7
+    assert set(first["band_flux_jy"]) == {
+        "F090W",
+        "F150W",
+        "F200W",
+        "F277W",
+        "F356W",
+        "F444W",
+    }
+    assert all(
+        len(values) == 28 for values in first["band_flux_jy"].values()
     )
 
 

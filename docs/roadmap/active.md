@@ -35,10 +35,24 @@ stacking-versus-INR/Foam depth result defined in
   - [x] Add the frozen aligned-input, validation-pattern, fixed-crop, upstream
     Drizzle pixfrac, and SWarp-kernel controls to the real comparator.
   - [x] Push the staging commit, complete missing downloads on CANFAR, and
-    verify 135 CAL plus 27 CRF entries from the persisted manifest.
+    verify 135 CAL, 27 linked CRF, and 135 linked aligned entries from the
+    persisted manifest.
     Evidence: headless session `tmbk7b72`, exact commit `35af22e`, completed
-    successfully in 145 seconds of command time.
-  - [ ] Run the validation-only Torchsky/Drizzle/SWarp configuration sweep.
+    successfully in 145 seconds of command time; aligned completion session
+    `e74yyfec` at `46c1ce5`.
+  - [x] Run the validation-only Torchsky/Drizzle/SWarp backend sweep.
+    Evidence: Torchsky `axix9wz3` at `803a200`, upstream Drizzle `z7t27ff0` at
+    `46c1ce5`, and locked SWarp 2.41.5 `gckyhwco` at `62f572a`; durable reports
+    live below `/arc/projects/ots/torchsky-runs/20260728-smacs-*`. These
+    detector-reference diagnostics establish runnable backends but do not
+    select a scientific kernel.
+  - [x] Add deterministic common-world manifests, transient detector-level SCI
+    overrides, and persisted exact-grid products for identical classical
+    injection/control runs. Evidence: the commit containing this update and 37
+    focused passing tests (one optional skip).
+  - [ ] Run three positive validation batches plus one blank, build the
+    six-band whitened chi-square detector, and freeze the winning classical
+    configuration using only those validation batches.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
 - [ ] Execute Day 4: 20-batch CANFAR blind test, paired intervals, report, and

@@ -186,6 +186,20 @@ def test_smacs_mef_io_and_aux_files_use_torchfits_boundary(tmp_path: Path) -> No
     assert output_weight[1, 1] == 0.0
     assert np.array_equal(output_mask, output_weight > 0)
 
+    override = science + 10.0
+    override_dir = tmp_path / "override"
+    override_dir.mkdir()
+    override_science_path, _, _ = _prepare_aux_files(
+        path,
+        override_dir,
+        linearize_sip=False,
+        science_override=override,
+    )
+    assert np.array_equal(
+        torchsky.read(str(override_science_path)).cpu().numpy(),
+        override,
+    )
+
 
 def test_approx_overlap_grid_counts_projected_headers() -> None:
     target = fits.Header()

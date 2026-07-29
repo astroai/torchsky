@@ -436,13 +436,20 @@ def _prepare_aux_files(
     tmpdir: Path,
     *,
     linearize_sip: bool,
+    science_override: np.ndarray | None = None,
 ) -> tuple[Path, Path, Path]:
     header = _sci_header(exposure_path)
     if linearize_sip:
         header = _linearize_sip_header(header)
-    science = _read_ext(exposure_path, "SCI")
+    science = (
+        _read_ext(exposure_path, "SCI")
+        if science_override is None
+        else np.asarray(science_override)
+    )
     err = _read_ext(exposure_path, "ERR")
     dq = _read_ext(exposure_path, "DQ")
+    if science.shape != err.shape or science.shape != dq.shape:
+        raise ValueError("science override must match the exposure ERR/DQ shape")
     valid = np.isfinite(err) & (err > 0) & np.isfinite(dq) & (dq == 0)
     weight = np.zeros_like(err, dtype=np.float32)
     weight[valid] = 1.0 / np.square(err[valid])

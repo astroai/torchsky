@@ -55,6 +55,7 @@ from bench_map_smacs0723_field_fit import (  # noqa: E402
 from bench_map_smacs0723_reproduce import (
     _coadd_with_drizzle as _coadd_with_real_drizzle,
 )  # noqa: E402
+from bench_multiband_depth import inject_common_world_exposures  # noqa: E402
 from bench_map_smacs0723_real import (  # noqa: E402
     DATA,
     _best_overlap_cutout_from_observations,
@@ -898,6 +899,8 @@ def run_stacker_benchmark(
     linearize_sip: bool,
     inr_steps: int,
     crop_xy0: tuple[int, int] | None = None,
+    science_overrides: dict[Path, np.ndarray] | None = None,
+    product_out_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     ref_data = _read_ext(reference_path, "SCI")
     ref_header = _sci_header(reference_path)
@@ -909,10 +912,16 @@ def run_stacker_benchmark(
             tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]
         ] = []
         for exposure_path in exposure_paths:
+            science_override = (
+                science_overrides.get(exposure_path)
+                if science_overrides is not None
+                else None
+            )
             science_path, weight_path, mask_path = _prepare_aux_files(
                 exposure_path,
                 tmpdir,
                 linearize_sip=linearize_sip,
+                science_override=science_override,
             )
             observations.append(
                 ImageObservation(
@@ -924,7 +933,11 @@ def run_stacker_benchmark(
                     mask_hdu=0,
                 )
             )
-            science = _read_ext(exposure_path, "SCI")
+            science = (
+                _read_ext(exposure_path, "SCI")
+                if science_override is None
+                else np.asarray(science_override)
+            )
             err = _read_ext(exposure_path, "ERR")
             dq = _read_ext(exposure_path, "DQ")
             valid = np.isfinite(err) & (err > 0) & np.isfinite(dq) & (dq == 0)
@@ -1037,6 +1050,24 @@ def run_stacker_benchmark(
                 row.update(_compute_region_metrics(pred, ref_crop, support_mask))
                 row.update(extra)
                 row["time_ms"] = elapsed * 1000.0
+                if product_out_dir is not None:
+                    product_out_dir.mkdir(parents=True, exist_ok=True)
+                    product_path = product_out_dir / f"{spec['name']}_sci.fits"
+                    weight_path = product_out_dir / f"{spec['name']}_wht.fits"
+                    torchsky.write(
+                        str(product_path),
+                        torch.from_numpy(np.asarray(pred, dtype=np.float32)),
+                        header=published_target_header,
+                        overwrite=True,
+                    )
+                    torchsky.write(
+                        str(weight_path),
+                        torch.from_numpy(np.asarray(weight, dtype=np.float32)),
+                        header=published_target_header,
+                        overwrite=True,
+                    )
+                    row["product_path"] = str(product_path.resolve())
+                    row["product_weight_path"] = str(weight_path.resolve())
             except Exception as exc:
                 row["status"] = "FAIL"
                 row["message"] = str(exc)
@@ -1089,6 +1120,18 @@ def main() -> int:
     )
     parser.add_argument("--json-out", type=Path, default=DEFAULT_JSON_OUT)
     parser.add_argument("--markdown-out", type=Path, default=DEFAULT_MARKDOWN_OUT)
+    parser.add_argument(
+        "--injection-manifest",
+        type=Path,
+        default=None,
+        help="JSON common-world catalogue with world_radec_deg and band_flux_jy",
+    )
+    parser.add_argument(
+        "--product-out-dir",
+        type=Path,
+        default=None,
+        help="Persist each reconstructed SCI/weight product on the native target grid",
+    )
     args = parser.parse_args()
 
     band = str(args.band).upper()
@@ -1118,6 +1161,24 @@ def main() -> int:
         )
     if not exposure_paths:
         raise FileNotFoundError("No local exposures found for the requested selection")
+
+    science_overrides = None
+    injection_audit = None
+    if args.injection_manifest is not None:
+        injection_manifest = json.loads(
+            args.injection_manifest.read_text(encoding="utf-8")
+        )
+        band_flux = injection_manifest.get("band_flux_jy", {}).get(band)
+        if band_flux is None:
+            raise ValueError(f"injection manifest has no band_flux_jy entry for {band}")
+        science_overrides, injection_audit = inject_common_world_exposures(
+            exposure_paths,
+            band=band,
+            world_radec_deg=torch.as_tensor(
+                injection_manifest["world_radec_deg"], dtype=torch.float64
+            ),
+            flux_jy=torch.as_tensor(band_flux, dtype=torch.float64),
+        )
 
     if (args.crop_x0 is None) != (args.crop_y0 is None):
         raise ValueError("--crop-x0 and --crop-y0 must be provided together")
@@ -1155,12 +1216,17 @@ def main() -> int:
             if args.crop_x0 is not None and args.crop_y0 is not None
             else None
         ),
+        science_overrides=science_overrides,
+        product_out_dir=args.product_out_dir,
     )
     for row in rows:
         row["band"] = band
         row["module"] = args.module
         row["reference_path"] = str(reference_path)
     payload = {"rows": rows}
+    if injection_audit is not None:
+        payload["injection_manifest"] = str(args.injection_manifest.resolve())
+        payload["injection_audit"] = injection_audit
     if args.json_out is not None:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
         args.json_out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
