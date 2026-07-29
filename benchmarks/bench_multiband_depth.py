@@ -269,9 +269,10 @@ def inject_common_world_exposures(
                     injected.rendered_flux_jy.detach().cpu().tolist()
                 ),
                 "input_unchanged": bool(
-                    torch.equal(
+                    torch.allclose(
                         science.detach().cpu(),
                         torch.from_numpy(science_array),
+                        equal_nan=True,
                     )
                 ),
             }

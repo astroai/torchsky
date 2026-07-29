@@ -413,6 +413,25 @@ def _filter_exposure_paths_by_patterns(
     return [path for path in paths if any(token in path.name for token in tokens)]
 
 
+def _injection_manifest_tensors(
+    manifest: dict[str, Any],
+    *,
+    band: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Validate JSON injection arrays and restore the empty coordinate shape."""
+
+    band_flux = manifest.get("band_flux_jy", {}).get(band)
+    if band_flux is None:
+        raise ValueError(f"injection manifest has no band_flux_jy entry for {band}")
+    world = torch.as_tensor(manifest.get("world_radec_deg", []), dtype=torch.float64)
+    if world.numel() == 0:
+        world = world.reshape(0, 2)
+    flux = torch.as_tensor(band_flux, dtype=torch.float64)
+    if world.ndim != 2 or world.shape[1] != 2 or flux.shape != (world.shape[0],):
+        raise ValueError("injection manifest coordinates/flux have inconsistent shapes")
+    return world, flux
+
+
 def _resolve_target_header(
     mode: str,
     *,
@@ -1168,16 +1187,15 @@ def main() -> int:
         injection_manifest = json.loads(
             args.injection_manifest.read_text(encoding="utf-8")
         )
-        band_flux = injection_manifest.get("band_flux_jy", {}).get(band)
-        if band_flux is None:
-            raise ValueError(f"injection manifest has no band_flux_jy entry for {band}")
+        injection_world, injection_flux = _injection_manifest_tensors(
+            injection_manifest,
+            band=band,
+        )
         science_overrides, injection_audit = inject_common_world_exposures(
             exposure_paths,
             band=band,
-            world_radec_deg=torch.as_tensor(
-                injection_manifest["world_radec_deg"], dtype=torch.float64
-            ),
-            flux_jy=torch.as_tensor(band_flux, dtype=torch.float64),
+            world_radec_deg=injection_world,
+            flux_jy=injection_flux,
         )
 
     if (args.crop_x0 is None) != (args.crop_y0 is None):

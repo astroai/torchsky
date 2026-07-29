@@ -19,6 +19,7 @@ from bench_map_smacs0723_stackers import (
     _fixed_cutout,
     _filter_exposure_paths_by_patterns,
     _format_markdown,
+    _injection_manifest_tensors,
     _run_legacy_method,
 )
 
@@ -90,6 +91,19 @@ def test_pattern_filter_uses_complete_filename_token() -> None:
     ]
 
     assert _filter_exposure_paths_by_patterns(paths, (3, 8)) == paths[:2]
+
+
+def test_empty_injection_manifest_restores_coordinate_rank() -> None:
+    world, flux = _injection_manifest_tensors(
+        {
+            "world_radec_deg": [],
+            "band_flux_jy": {"F277W": []},
+        },
+        band="F277W",
+    )
+
+    assert world.shape == (0, 2)
+    assert flux.shape == (0,)
 
 
 def test_fixed_cutout_uses_registered_origin() -> None:
