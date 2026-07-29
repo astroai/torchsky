@@ -1475,14 +1475,12 @@ def combine_whitened_chi_responses(
     return torch.sqrt(positive.square().sum(dim=0))
 
 
-def stack_effective_psf(
+def _registered_effective_psf_stamps(
     difference_image: torch.Tensor,
     source_xy: torch.Tensor,
     *,
     radius_px: int = 9,
 ) -> torch.Tensor:
-    """Register and robustly stack isolated injected-minus-blank PSF responses."""
-
     if (
         difference_image.ndim != 2
         or not difference_image.is_floating_point()
@@ -1543,7 +1541,22 @@ def stack_effective_psf(
         ),
         dim=1,
     )
-    stamps = stamps - torch.median(border, dim=1).values[:, None, None]
+    return stamps - torch.median(border, dim=1).values[:, None, None]
+
+
+def stack_effective_psf(
+    difference_image: torch.Tensor,
+    source_xy: torch.Tensor,
+    *,
+    radius_px: int = 9,
+) -> torch.Tensor:
+    """Register and robustly stack isolated injected-minus-blank PSF responses."""
+
+    stamps = _registered_effective_psf_stamps(
+        difference_image,
+        source_xy,
+        radius_px=radius_px,
+    )
     totals = stamps.sum(dim=(-2, -1))
     if torch.any(~torch.isfinite(totals)) or torch.any(totals <= 0):
         raise ValueError("effective-PSF stamps must have positive finite total flux")
@@ -2387,9 +2400,15 @@ def _updec_effective_psf_artifact(
             blank_xy = torchsky.WCS(dict(blank_header)).world_to_pixel(world)
             if not torch.allclose(source_xy, blank_xy, rtol=0.0, atol=1e-6):
                 raise ValueError(f"positive/blank WCS mismatch for {band}/{method}")
+            difference = positive.to(torch.float64) - blank.to(torch.float64)
+            stamps = _registered_effective_psf_stamps(
+                difference,
+                source_xy.to(torch.float64),
+                radius_px=radius_px,
+            )
             effective = stack_effective_psf(
-                positive.to(torch.float64) - blank.to(torch.float64),
-                source_xy,
+                difference,
+                source_xy.to(torch.float64),
                 radius_px=radius_px,
             ).to(torch.float32)
             output_path = output_dir / f"{band}_{method}_effective_psf.fits"
@@ -2405,19 +2424,53 @@ def _updec_effective_psf_artifact(
                 },
                 overwrite=True,
             )
-            rows.append(
-                {
-                    "band": band,
-                    "method": str(method),
-                    "positive_path": str(positive_path),
-                    "blank_path": str(blank_path),
-                    "effective_psf_path": str(output_path.resolve()),
-                    "effective_psf_sha256": hashlib.sha256(
-                        output_path.read_bytes()
-                    ).hexdigest(),
-                    **effective_psf_metrics(effective),
-                }
-            )
+            row: dict[str, object] = {
+                "band": band,
+                "method": str(method),
+                "positive_path": str(positive_path),
+                "blank_path": str(blank_path),
+                "effective_psf_path": str(output_path.resolve()),
+                "effective_psf_sha256": hashlib.sha256(
+                    output_path.read_bytes()
+                ).hexdigest(),
+                **effective_psf_metrics(effective),
+            }
+            manifest_fluxes = manifest.get("band_flux_jy", {}).get(band)
+            if manifest_fluxes is not None:
+                truth_flux = torch.as_tensor(
+                    manifest_fluxes,
+                    dtype=torch.float64,
+                )
+                if truth_flux.shape != (world.shape[0],) or torch.any(truth_flux <= 0):
+                    raise ValueError(f"invalid manifest band fluxes for {band}")
+                offsets = torch.arange(
+                    -radius_px,
+                    radius_px + 1,
+                    dtype=torch.float64,
+                )
+                yy, xx = torch.meshgrid(offsets, offsets, indexing="ij")
+                area_sr = pixel_area_sr_at(
+                    torchsky.WCS(dict(positive_header)),
+                    source_xy[:, 0, None, None].to(torch.float64) + xx,
+                    source_xy[:, 1, None, None].to(torch.float64) + yy,
+                )
+                aperture_flux = (stamps * area_sr * 1.0e6).sum(dim=(-2, -1))
+                fractional = aperture_flux / truth_flux - 1.0
+                median = torch.median(fractional)
+                row.update(
+                    {
+                        "aperture_radius_px": radius_px,
+                        "aperture_flux_jy": aperture_flux.tolist(),
+                        "median_fractional_flux_bias": float(median),
+                        "fractional_flux_nmad": float(
+                            1.4826 * torch.median(torch.abs(fractional - median))
+                        ),
+                        "max_absolute_fractional_flux_error": float(
+                            torch.max(torch.abs(fractional))
+                        ),
+                    }
+                )
+            rows.append(row)
     return {
         "schema_version": 1,
         "profile": "updec-adass-effective-psf",

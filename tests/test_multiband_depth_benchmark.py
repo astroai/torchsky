@@ -595,6 +595,7 @@ def test_effective_psf_stack_registers_fractional_source_phases() -> None:
 
 def test_effective_psf_artifact_reads_torchsky_products(tmp_path: Path) -> None:
     header = simple_tan_header(32, 32, pixel_scale_arcsec=0.04)
+    header["BUNIT"] = "MJy/sr"
     source_xy = torch.tensor([[10.2, 11.3], [21.4, 20.1]], dtype=torch.float64)
     world = torchsky.WCS(header).pixel_to_world(source_xy)
     yy, xx = torch.meshgrid(
@@ -621,7 +622,15 @@ def test_effective_psf_artifact_reads_torchsky_products(tmp_path: Path) -> None:
     torchsky.write(str(blank_root / relative), torch.zeros_like(positive), header=header)
     torchsky.write(str(positive_root / relative), positive, header=header)
     manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps({"world_radec_deg": world.tolist()}))
+    flux_jy = (0.04 / 3600.0 * math.pi / 180.0) ** 2 * 1.0e6
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "world_radec_deg": world.tolist(),
+                "band_flux_jy": {"F200W": [flux_jy, flux_jy]},
+            }
+        )
+    )
 
     artifact = _updec_effective_psf_artifact(
         positive_product_root=positive_root,
@@ -638,6 +647,8 @@ def test_effective_psf_artifact_reads_torchsky_products(tmp_path: Path) -> None:
     assert row["band"] == "F200W"
     assert row["method"] == "torchsky_bilinear"
     assert row["negative_lobe_fraction"] < 0.002
+    assert abs(row["median_fractional_flux_bias"]) < 0.02
+    assert len(row["aperture_flux_jy"]) == 2
     psf = torchsky.read(row["effective_psf_path"])
     assert psf.shape == (9, 9)
     torch.testing.assert_close(psf.sum(), torch.tensor(1.0), atol=1e-6, rtol=0.0)

@@ -100,6 +100,9 @@ stacking-versus-INR/Foam depth result defined in
       stable CLI that persists their hashes and shape diagnostics.
     - [x] Session `ry4c9xv5` at `8cc3fb9` persisted all 42 ePSFs from eight
       isolated AB=25 sources; no completeness or kernel outcome was used.
+    - [x] Add exact-WCS aperture-flux recovery to the effective-PSF report so
+      the existing bright batch can enforce the pre-registered 2% flux-bias
+      gate rather than inferring photometry from PSF width.
   - [x] Add spatial-inverse-variance matched filtering and positive six-band
     chi detection that accepts the measured per-band effective PSFs, plus
     robust blank-response whitening for resampling-correlated noise. Empirical

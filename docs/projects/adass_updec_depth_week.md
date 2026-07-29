@@ -326,6 +326,10 @@ each final method boundary. Otherwise do not begin model tuning.
     `8cc3fb9`; Gaussian-equivalent FWHM spans 0.756–2.742 target pixels and the
     largest measured negative-lobe fraction is 4.58% for undersampled F090W
     Torchsky Lanczos3. These are PSF diagnostics, not kernel selection.
+  - [x] Extend the same effective-PSF report with exact-WCS, border-subtracted
+    aperture fluxes and robust fractional-bias diagnostics against the manifest
+    flux in every band. The existing 42-product calibration batch must be
+    rescored before the 2% gate is checked.
 - [ ] Select Drizzle `pixfrac` from a small predeclared grid and SWarp kernel
   from `{BILINEAR, LANCZOS3}` using validation injections only.
 - [ ] Build the whitened chi-square six-band detector from each winning stack
