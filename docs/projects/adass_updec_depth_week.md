@@ -349,6 +349,11 @@ each final method boundary. Otherwise do not begin model tuning.
     neighbouring cells and fail closed only when the whole mesh is masked.
     Session `bgjkc3jm` exposed the former NaN propagation before producing a
     catalogue; no scientific outcome was inspected.
+  - [x] Add `updec-adass-classical-validation`: remove detections near the
+    same-method frozen control catalogue, exact-match the remaining incremental
+    detections to injections, pool batches to select the lowest 95%-purity
+    threshold, and report per-batch and per-magnitude completeness. Real
+    validation execution remains unchecked.
 - [ ] Include Montage if its exact target grid is supported; otherwise record an
   explicit secondary skip and continue.
 - [ ] Run at least three validation injection batches and one blank control.

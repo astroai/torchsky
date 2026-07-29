@@ -18,6 +18,7 @@ from bench_multiband_depth import (  # noqa: E402
     _classical_smoke_artifact,
     _gate0_artifact,
     _updec_classical_detection_artifact,
+    _updec_classical_validation_artifact,
     _updec_control_union_artifact,
     _updec_effective_psf_artifact,
     calibrate_matched_filter_whitening,
@@ -739,6 +740,61 @@ def test_control_union_deduplicates_and_covers_all_method_peaks(
         [150.0001, 2.0001],
         [150.0004, 2.0004],
     ]
+
+
+def test_classical_validation_excludes_control_sources_and_calibrates_purity(
+    tmp_path: Path,
+) -> None:
+    method = "torchsky_bilinear"
+    control_path = tmp_path / "control.json"
+    control_path.write_text(
+        json.dumps(
+            {
+                "method": method,
+                "detection_xy": [[2.0, 2.0]],
+            }
+        )
+    )
+    detection_path = tmp_path / "detections.json"
+    detection_path.write_text(
+        json.dumps(
+            {
+                "method": method,
+                "detection_xy": [
+                    [2.2, 2.1],
+                    [10.2, 10.1],
+                    [20.1, 20.2],
+                    [40.0, 40.0],
+                ],
+                "scores": [12.0, 9.0, 8.0, 7.0],
+            }
+        )
+    )
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "batch_id": "validation-000",
+                "target_xy": [[10.0, 10.0], [20.0, 20.0]],
+                "reference_ab_magnitude": [27.0, 28.0],
+            }
+        )
+    )
+
+    artifact = _updec_classical_validation_artifact(
+        detection_json_paths=(detection_path,),
+        manifest_paths=(manifest_path,),
+        control_json_path=control_path,
+        control_radius_px=2.0,
+        match_radius_px=1.0,
+        target_purity=0.95,
+    )
+
+    assert artifact["selected_threshold"] == pytest.approx(8.0)
+    assert artifact["pooled"]["completeness"] == 1.0
+    assert artifact["pooled"]["purity"] == 1.0
+    assert artifact["input_rows"][0]["control_neighborhood_count"] == 1
+    assert artifact["completeness_by_ab_magnitude"]["28"]["matched_count"] == 1
 
 
 def test_dithered_exposures_and_production_classical_coadds_are_deterministic() -> None:

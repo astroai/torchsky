@@ -114,6 +114,10 @@ stacking-versus-INR/Foam depth result defined in
       finite neighbouring mesh values into fully masked cells. The primitive
       now stays finite on partial masks and fails closed on an entirely masked
       image; CANFAR session `bgjkc3jm` exposed this before catalogue creation.
+    - [x] Add a validation aggregator that subtracts the same-method frozen
+      control neighbourhoods, exact-matches incremental detections, calibrates
+      the lowest pooled 95%-purity threshold, and reports completeness by AB
+      magnitude without consulting blind identifiers.
   - [x] Add frozen blank-catalogue neighborhood exclusion to common-support
     manifests so science injections cannot be placed beside pre-existing
     sources. The exact catalogue/radius remain an execution gate.

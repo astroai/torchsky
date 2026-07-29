@@ -2732,6 +2732,187 @@ def _updec_control_union_artifact(
     }
 
 
+def _updec_classical_validation_artifact(
+    *,
+    detection_json_paths: Sequence[Path],
+    manifest_paths: Sequence[Path],
+    control_json_path: Path,
+    control_radius_px: float,
+    match_radius_px: float,
+    target_purity: float,
+) -> dict[str, object]:
+    """Calibrate one method threshold from injection-only validation detections."""
+
+    if (
+        not detection_json_paths
+        or len(detection_json_paths) != len(manifest_paths)
+        or not math.isfinite(control_radius_px)
+        or not math.isfinite(match_radius_px)
+        or control_radius_px < 0
+        or match_radius_px < 0
+        or not 0 < target_purity <= 1
+    ):
+        raise ValueError("invalid validation paths, radii, or target purity")
+    control_path = control_json_path.expanduser().resolve()
+    control = json.loads(control_path.read_text())
+    method = str(control["method"])
+    control_xy = torch.as_tensor(
+        control["detection_xy"], dtype=torch.float64
+    ).reshape(-1, 2)
+    pooled_scores: list[torch.Tensor] = []
+    pooled_labels: list[torch.Tensor] = []
+    batch_data: list[
+        tuple[str, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+    ] = []
+    input_rows: list[dict[str, object]] = []
+    for detection_value, manifest_value in zip(
+        detection_json_paths, manifest_paths, strict=True
+    ):
+        detection_path = detection_value.expanduser().resolve()
+        manifest_path = manifest_value.expanduser().resolve()
+        detection = json.loads(detection_path.read_text())
+        manifest = json.loads(manifest_path.read_text())
+        if str(detection["method"]) != method:
+            raise ValueError("validation and control methods differ")
+        detection_xy = torch.as_tensor(
+            detection["detection_xy"], dtype=torch.float64
+        ).reshape(-1, 2)
+        scores = torch.as_tensor(detection["scores"], dtype=torch.float64).reshape(-1)
+        truth_xy = torch.as_tensor(manifest["target_xy"], dtype=torch.float64).reshape(
+            -1, 2
+        )
+        magnitudes = torch.as_tensor(
+            manifest["reference_ab_magnitude"], dtype=torch.float64
+        ).reshape(-1)
+        if (
+            scores.shape != (detection_xy.shape[0],)
+            or magnitudes.shape != (truth_xy.shape[0],)
+            or not torch.isfinite(detection_xy).all()
+            or not torch.isfinite(scores).all()
+            or not torch.isfinite(truth_xy).all()
+            or not torch.isfinite(magnitudes).all()
+        ):
+            raise ValueError("malformed validation detection or truth catalogue")
+        near_control = (
+            (torch.cdist(detection_xy, control_xy) <= control_radius_px).any(dim=1)
+            if detection_xy.shape[0] and control_xy.shape[0]
+            else torch.zeros(detection_xy.shape[0], dtype=torch.bool)
+        )
+        incremental_xy = detection_xy[~near_control]
+        incremental_scores = scores[~near_control]
+        match = maximum_cardinality_match(
+            truth_xy,
+            incremental_xy,
+            radius_px=match_radius_px,
+        )
+        labels = torch.zeros(incremental_xy.shape[0], dtype=torch.bool)
+        for _, detection_index in match.pairs:
+            labels[detection_index] = True
+        pooled_scores.append(incremental_scores)
+        pooled_labels.append(labels)
+        batch_data.append(
+            (
+                str(manifest["batch_id"]),
+                truth_xy,
+                magnitudes,
+                incremental_xy,
+                incremental_scores,
+            )
+        )
+        input_rows.append(
+            {
+                "batch_id": str(manifest["batch_id"]),
+                "detection_json": str(detection_path),
+                "detection_sha256": hashlib.sha256(
+                    detection_path.read_bytes()
+                ).hexdigest(),
+                "manifest": str(manifest_path),
+                "manifest_sha256": hashlib.sha256(
+                    manifest_path.read_bytes()
+                ).hexdigest(),
+                "raw_detection_count": int(detection_xy.shape[0]),
+                "control_neighborhood_count": int(near_control.sum()),
+                "incremental_detection_count": int(incremental_xy.shape[0]),
+            }
+        )
+    scores = torch.cat(pooled_scores)
+    labels = torch.cat(pooled_labels)
+    if scores.numel() == 0:
+        raise ValueError("validation produced no incremental detections")
+    threshold = calibrate_purity_threshold(
+        scores,
+        labels,
+        target_purity=target_purity,
+    )
+    threshold_reached = math.isfinite(threshold)
+    rows: list[dict[str, object]] = []
+    magnitude_counts: dict[float, list[int]] = {}
+    total_truth = total_selected = total_matched = 0
+    for batch_id, truth_xy, magnitudes, detection_xy, detection_scores in batch_data:
+        selected = (
+            detection_xy[detection_scores >= threshold]
+            if threshold_reached
+            else detection_xy[:0]
+        )
+        match = maximum_cardinality_match(
+            truth_xy,
+            selected,
+            radius_px=match_radius_px,
+        )
+        matched_truth = {truth_index for truth_index, _ in match.pairs}
+        for index, magnitude in enumerate(magnitudes.tolist()):
+            counts = magnitude_counts.setdefault(float(magnitude), [0, 0])
+            counts[0] += 1
+            counts[1] += int(index in matched_truth)
+        total_truth += truth_xy.shape[0]
+        total_selected += selected.shape[0]
+        total_matched += len(match.pairs)
+        rows.append(
+            {
+                "batch_id": batch_id,
+                "truth_count": int(truth_xy.shape[0]),
+                "selected_detection_count": int(selected.shape[0]),
+                "matched_count": len(match.pairs),
+                "completeness": len(match.pairs) / truth_xy.shape[0],
+                "purity": (
+                    len(match.pairs) / selected.shape[0]
+                    if selected.shape[0]
+                    else 1.0
+                ),
+            }
+        )
+    return {
+        "schema_version": 1,
+        "profile": "updec-adass-classical-validation",
+        "depth_claim": False,
+        "method": method,
+        "target_purity": target_purity,
+        "target_purity_reached": threshold_reached,
+        "selected_threshold": threshold if threshold_reached else None,
+        "control_radius_px": control_radius_px,
+        "match_radius_px": match_radius_px,
+        "control_json": str(control_path),
+        "control_sha256": hashlib.sha256(control_path.read_bytes()).hexdigest(),
+        "pooled": {
+            "truth_count": total_truth,
+            "selected_detection_count": total_selected,
+            "matched_count": total_matched,
+            "completeness": total_matched / total_truth,
+            "purity": total_matched / total_selected if total_selected else 1.0,
+        },
+        "completeness_by_ab_magnitude": {
+            f"{magnitude:g}": {
+                "truth_count": counts[0],
+                "matched_count": counts[1],
+                "completeness": counts[1] / counts[0],
+            }
+            for magnitude, counts in sorted(magnitude_counts.items())
+        },
+        "batches": rows,
+        "input_rows": input_rows,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -2744,6 +2925,7 @@ def main() -> int:
             "updec-adass-effective-psf",
             "updec-adass-classical-detection",
             "updec-adass-control-union",
+            "updec-adass-classical-validation",
         ),
         default="gate0",
     )
@@ -2801,7 +2983,13 @@ def main() -> int:
     )
     parser.add_argument("--whitening-json", type=Path, default=None)
     parser.add_argument("--control-jsons", default="")
+    parser.add_argument("--control-json", type=Path, default=None)
+    parser.add_argument("--detection-jsons", default="")
+    parser.add_argument("--manifest-paths", default="")
     parser.add_argument("--dedup-radius-px", type=float, default=6.0)
+    parser.add_argument("--control-radius-px", type=float, default=6.0)
+    parser.add_argument("--match-radius-px", type=float, default=2.0)
+    parser.add_argument("--target-purity", type=float, default=0.95)
     parser.add_argument("--detection-threshold", type=float, default=5.0)
     parser.add_argument("--background-block-size", type=int, default=64)
     parser.add_argument(
@@ -2898,6 +3086,25 @@ def main() -> int:
                 if value.strip()
             ),
             dedup_radius_px=args.dedup_radius_px,
+        )
+    elif args.profile == "updec-adass-classical-validation":
+        if args.control_json is None:
+            raise ValueError("classical validation requires --control-json")
+        artifact = _updec_classical_validation_artifact(
+            detection_json_paths=tuple(
+                Path(value.strip())
+                for value in args.detection_jsons.split(",")
+                if value.strip()
+            ),
+            manifest_paths=tuple(
+                Path(value.strip())
+                for value in args.manifest_paths.split(",")
+                if value.strip()
+            ),
+            control_json_path=args.control_json,
+            control_radius_px=args.control_radius_px,
+            match_radius_px=args.match_radius_px,
+            target_purity=args.target_purity,
         )
     else:
         if args.reference_path is None:
