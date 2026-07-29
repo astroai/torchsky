@@ -15,7 +15,11 @@ if str(BENCHMARKS) not in sys.path:
     sys.path.insert(0, str(BENCHMARKS))
 
 from download_updec_webb import UPDEC_WEBB_FILES, resolve_specs  # noqa: E402
-from bench_updec_webb_real import _markdown, _open_sci  # noqa: E402
+from bench_updec_webb_real import (  # noqa: E402
+    _aligned_tan_center_crops,
+    _markdown,
+    _open_sci,
+)
 
 
 def test_updec_webb_public_manifest_contains_expected_sparse_smoke_band() -> None:
@@ -67,3 +71,35 @@ def test_open_sci_uses_torchfits_boundary(tmp_path: Path) -> None:
     assert n_hdus == 2
     assert header["EXTNAME"] == "SCI"
     np.testing.assert_array_equal(data, expected)
+
+
+def test_tan_pair_alignment_handles_shape_scale_and_crpix_changes() -> None:
+    target = np.arange(25, dtype=np.float32).reshape(5, 5)
+    source = np.zeros((7, 7), dtype=np.float32)
+    source[1:6, 1:6] = target
+    target_header = {
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRVAL1": 10.0,
+        "CRVAL2": 20.0,
+        "CRPIX1": 3.0,
+        "CRPIX2": 3.0,
+        "CDELT1": 1.0,
+        "CDELT2": 1.0,
+    }
+    source_header = {
+        **target_header,
+        "CRPIX1": 4.0,
+        "CRPIX2": 4.0,
+    }
+
+    target_crop, aligned, valid = _aligned_tan_center_crops(
+        target,
+        target_header,
+        source,
+        source_header,
+        crop_size=5,
+    )
+
+    assert valid.all()
+    np.testing.assert_allclose(aligned, target_crop, rtol=0.0, atol=3.0e-6)
