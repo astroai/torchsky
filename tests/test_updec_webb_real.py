@@ -86,6 +86,10 @@ def test_tan_pair_alignment_handles_shape_scale_and_crpix_changes() -> None:
         "CRPIX2": 3.0,
         "CDELT1": 1.0,
         "CDELT2": 1.0,
+        "CD1_1": None,
+        "CD1_2": None,
+        "CD2_1": None,
+        "CD2_2": None,
     }
     source_header = {
         **target_header,

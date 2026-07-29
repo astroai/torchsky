@@ -58,8 +58,11 @@ def _aligned_tan_center_crops(
         raise ValueError("UPdec pair alignment currently requires RA---TAN/DEC--TAN")
     for header in (target_header, source_header):
         if any(
-            key in header
-            for key in ("CD1_1", "CD1_2", "CD2_1", "CD2_2", "PC1_2", "PC2_1")
+            header.get(key) is not None
+            for key in ("CD1_1", "CD1_2", "CD2_1", "CD2_2")
+        ) or any(
+            abs(float(header.get(key) or 0.0)) > 1.0e-15
+            for key in ("PC1_2", "PC2_1")
         ):
             raise ValueError("UPdec pair alignment requires axis-aligned CDELT WCS")
 
