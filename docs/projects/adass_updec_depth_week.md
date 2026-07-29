@@ -325,6 +325,11 @@ each final method boundary. Otherwise do not begin model tuning.
     Robust clipped per-band response centering/scaling comes from the frozen
     blank to absorb resampling-correlated noise; the final purity threshold
     still comes from validation control products.
+  - [x] Add `updec-adass-classical-detection`: one Torchsky mesh-background,
+    effective-PSF matched-filter, blank-whitening, positive-chi, angular-WCS
+    catalogue path for every classical product family. It persists the
+    statistic image, detections, scores, WCS coordinates, hashes, and nuisance
+    diagnostics; the real threshold/catalogue run remains unchecked.
 - [ ] Include Montage if its exact target grid is supported; otherwise record an
   explicit secondary skip and continue.
 - [ ] Run at least three validation injection batches and one blank control.

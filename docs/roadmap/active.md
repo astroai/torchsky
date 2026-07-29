@@ -100,6 +100,9 @@ stacking-versus-INR/Foam depth result defined in
     chi detection that accepts the measured per-band effective PSFs, plus
     robust blank-response whitening for resampling-correlated noise. Empirical
     purity-threshold calibration remains part of the validation run.
+    - [x] Wire these primitives into one stable classical-detection profile
+      with the existing Torchsky mesh sky estimator and hashed
+      statistic/catalogue artifacts.
   - [x] Add frozen blank-catalogue neighborhood exclusion to common-support
     manifests so science injections cannot be placed beside pre-existing
     sources. The exact catalogue/radius remain an execution gate.

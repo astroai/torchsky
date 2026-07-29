@@ -25,6 +25,7 @@ import torch.nn.functional as F
 import torchsky
 from torchsky.map import ImageObservation, coadd_image_plane
 from torchsky.map.operators import fit_background_plane, pixel_area_sr_at
+from torchsky.map.sky import MeshSkyEstimator
 
 
 _SOURCE_KINDS = (
@@ -1360,12 +1361,12 @@ def weighted_matched_filter_snr(
     )
 
 
-def weighted_chi_detection_statistic(
+def weighted_matched_filter_response_cube(
     images: torch.Tensor,
     inverse_variances: torch.Tensor,
     psf_templates: Sequence[torch.Tensor],
 ) -> torch.Tensor:
-    """Combine positive per-band matched-filter S/N maps in quadrature."""
+    """Return one spatially weighted matched-filter response map per band."""
 
     if (
         images.ndim != 3
@@ -1375,11 +1376,31 @@ def weighted_chi_detection_statistic(
         raise ValueError(
             "images/inverse_variances must be (bands, height, width) with one PSF per band"
         )
-    responses = [
-        weighted_matched_filter_snr(images[band], inverse_variances[band], template)
-        for band, template in enumerate(psf_templates)
-    ]
-    positive = torch.clamp_min(torch.stack(responses), 0.0)
+    return torch.stack(
+        [
+            weighted_matched_filter_snr(
+                images[band],
+                inverse_variances[band],
+                template,
+            )
+            for band, template in enumerate(psf_templates)
+        ]
+    )
+
+
+def weighted_chi_detection_statistic(
+    images: torch.Tensor,
+    inverse_variances: torch.Tensor,
+    psf_templates: Sequence[torch.Tensor],
+) -> torch.Tensor:
+    """Combine positive per-band matched-filter S/N maps in quadrature."""
+
+    responses = weighted_matched_filter_response_cube(
+        images,
+        inverse_variances,
+        psf_templates,
+    )
+    positive = torch.clamp_min(responses, 0.0)
     return torch.sqrt(positive.square().sum(dim=0))
 
 
@@ -2408,6 +2429,195 @@ def _updec_effective_psf_artifact(
     }
 
 
+def _updec_classical_detection_artifact(
+    *,
+    product_root: Path,
+    effective_psf_root: Path,
+    support_mask_path: Path,
+    bands: Sequence[str],
+    method: str,
+    detection_threshold: float,
+    background_block_size: int,
+    statistic_out: Path,
+    whitening_path: Path | None = None,
+) -> dict[str, object]:
+    """Run one common background/matched-filter detector on classical products."""
+
+    if (
+        not bands
+        or not method
+        or not math.isfinite(detection_threshold)
+        or detection_threshold <= 0
+        or background_block_size < 8
+    ):
+        raise ValueError("invalid classical detection contract")
+    support = torchsky.read(str(support_mask_path)).to(torch.bool)
+    if support.ndim != 2 or not bool(support.any()):
+        raise ValueError("support mask must be a nonempty 2-D FITS image")
+    estimator = MeshSkyEstimator(
+        block_size=background_block_size,
+        block_stride=max(1, background_block_size // 2),
+        statistic="median",
+        mesh_filter="median",
+        interpolate="bicubic",
+        self_mask_sigma=3.0,
+    )
+    images: list[torch.Tensor] = []
+    inverse_variances: list[torch.Tensor] = []
+    psfs: list[torch.Tensor] = []
+    band_rows: list[dict[str, object]] = []
+    target_header: dict[str, object] | None = None
+    for band_value in bands:
+        band = str(band_value).upper()
+        science_path = (
+            product_root / band / "products" / f"{method}_sci.fits"
+        ).resolve()
+        weight_path = (
+            product_root / band / "products" / f"{method}_wht.fits"
+        ).resolve()
+        psf_path = (
+            effective_psf_root / f"{band}_{method}_effective_psf.fits"
+        ).resolve()
+        image, header = torchsky.read(str(science_path), return_header=True)
+        weight = torchsky.read(str(weight_path))
+        psf = torchsky.read(str(psf_path))
+        if (
+            image.shape != support.shape
+            or weight.shape != support.shape
+            or image.dtype != weight.dtype
+            or psf.ndim != 2
+        ):
+            raise ValueError(f"product/support/PSF mismatch for {band}/{method}")
+        valid = (
+            support
+            & torch.isfinite(image)
+            & torch.isfinite(weight)
+            & (weight > 0)
+        )
+        if int(valid.sum()) < 16:
+            raise ValueError(f"insufficient supported pixels for {band}/{method}")
+        safe_image = torch.where(valid, image, 0.0)
+        sky = estimator(safe_image, ~valid)
+        residual = torch.where(valid, safe_image - sky, 0.0)
+        images.append(residual)
+        inverse_variances.append(torch.where(valid, weight, 0.0))
+        psfs.append(psf.to(dtype=image.dtype))
+        residual_values = residual[valid]
+        residual_center = torch.median(residual_values)
+        residual_nmad = 1.4826 * torch.median(
+            torch.abs(residual_values - residual_center)
+        )
+        band_rows.append(
+            {
+                "band": band,
+                "science_path": str(science_path),
+                "weight_path": str(weight_path),
+                "effective_psf_path": str(psf_path),
+                "supported_pixel_count": int(valid.sum()),
+                "residual_median": float(residual_center),
+                "residual_nmad": float(residual_nmad),
+            }
+        )
+        if target_header is None:
+            target_header = dict(header)
+        else:
+            probe = torch.tensor(
+                [
+                    [0.0, 0.0],
+                    [support.shape[1] - 1.0, support.shape[0] - 1.0],
+                    [
+                        0.5 * (support.shape[1] - 1.0),
+                        0.5 * (support.shape[0] - 1.0),
+                    ],
+                ],
+                dtype=torch.float64,
+            )
+            if not torch.allclose(
+                torchsky.WCS(target_header).pixel_to_world(probe),
+                torchsky.WCS(dict(header)).pixel_to_world(probe),
+                rtol=0.0,
+                atol=1e-9,
+            ):
+                raise ValueError("classical detection products do not share one WCS")
+    image_cube = torch.stack(images)
+    inverse_variance_cube = torch.stack(inverse_variances)
+    response_cube = weighted_matched_filter_response_cube(
+        image_cube,
+        inverse_variance_cube,
+        psfs,
+    )
+    if whitening_path is None:
+        centers, scales = calibrate_matched_filter_whitening(
+            response_cube,
+            support,
+        )
+        whitening_source = "self_blank"
+    else:
+        whitening = json.loads(whitening_path.read_text())
+        centers = torch.as_tensor(
+            whitening["whitening"]["centers"],
+            dtype=response_cube.dtype,
+        )
+        scales = torch.as_tensor(
+            whitening["whitening"]["scales"],
+            dtype=response_cube.dtype,
+        )
+        whitening_source = str(whitening_path.resolve())
+    statistic = combine_whitened_chi_responses(
+        response_cube,
+        centers,
+        scales,
+    )
+    statistic = torch.where(support, statistic, 0.0)
+    detections, scores = find_detections(
+        statistic,
+        threshold=detection_threshold,
+        nms_radius_px=2.0,
+    )
+    assert target_header is not None
+    world = torchsky.WCS(target_header).pixel_to_world(detections)
+    statistic_out = statistic_out.expanduser().resolve()
+    statistic_out.parent.mkdir(parents=True, exist_ok=True)
+    torchsky.write(
+        str(statistic_out),
+        statistic,
+        header=target_header,
+        overwrite=True,
+    )
+    return {
+        "schema_version": 1,
+        "profile": "updec-adass-classical-detection",
+        "depth_claim": False,
+        "method": method,
+        "bands": [str(value).upper() for value in bands],
+        "support_mask_path": str(support_mask_path.resolve()),
+        "background": {
+            "model": "mesh",
+            "block_size": background_block_size,
+            "block_stride": max(1, background_block_size // 2),
+            "statistic": "median",
+            "mesh_filter": "median",
+            "self_mask_sigma": 3.0,
+        },
+        "whitening": {
+            "source": whitening_source,
+            "centers": centers.tolist(),
+            "scales": scales.tolist(),
+        },
+        "detection_threshold": detection_threshold,
+        "nms_radius_px": 2.0,
+        "detection_count": int(detections.shape[0]),
+        "detection_xy": detections.tolist(),
+        "world_radec_deg": world.tolist(),
+        "scores": scores.tolist(),
+        "statistic_path": str(statistic_out),
+        "statistic_sha256": hashlib.sha256(
+            statistic_out.read_bytes()
+        ).hexdigest(),
+        "band_rows": band_rows,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -2418,6 +2628,7 @@ def main() -> int:
             "updec-adass-smoke",
             "updec-adass-manifest",
             "updec-adass-effective-psf",
+            "updec-adass-classical-detection",
         ),
         default="gate0",
     )
@@ -2461,13 +2672,25 @@ def main() -> int:
     )
     parser.add_argument("--positive-product-root", type=Path, default=None)
     parser.add_argument("--blank-product-root", type=Path, default=None)
+    parser.add_argument("--product-root", type=Path, default=None)
+    parser.add_argument("--effective-psf-root", type=Path, default=None)
+    parser.add_argument("--support-mask-path", type=Path, default=None)
     parser.add_argument("--injection-manifest", type=Path, default=None)
     parser.add_argument("--methods", default="")
+    parser.add_argument("--method", default="")
     parser.add_argument("--psf-radius-px", type=int, default=9)
     parser.add_argument(
         "--psf-out-dir",
         type=Path,
         default=Path("benchmark_results/effective_psfs"),
+    )
+    parser.add_argument("--whitening-json", type=Path, default=None)
+    parser.add_argument("--detection-threshold", type=float, default=5.0)
+    parser.add_argument("--background-block-size", type=int, default=64)
+    parser.add_argument(
+        "--statistic-out",
+        type=Path,
+        default=Path("benchmark_results/classical_detection_statistic.fits"),
     )
     parser.add_argument(
         "--json-out",
@@ -2525,6 +2748,30 @@ def main() -> int:
                 value.strip() for value in args.methods.split(",") if value.strip()
             ),
             radius_px=args.psf_radius_px,
+        )
+    elif args.profile == "updec-adass-classical-detection":
+        if (
+            args.product_root is None
+            or args.effective_psf_root is None
+            or args.support_mask_path is None
+        ):
+            raise ValueError(
+                "classical detection requires product, PSF, and support roots"
+            )
+        artifact = _updec_classical_detection_artifact(
+            product_root=args.product_root,
+            effective_psf_root=args.effective_psf_root,
+            support_mask_path=args.support_mask_path,
+            bands=tuple(
+                value.strip()
+                for value in (args.updec_bands or ",".join(_UPDEC_BANDS)).split(",")
+                if value.strip()
+            ),
+            method=args.method,
+            detection_threshold=args.detection_threshold,
+            background_block_size=args.background_block_size,
+            statistic_out=args.statistic_out,
+            whitening_path=args.whitening_json,
         )
     else:
         if args.reference_path is None:

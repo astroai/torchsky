@@ -17,6 +17,7 @@ if str(BENCHMARKS) not in sys.path:
 from bench_multiband_depth import (  # noqa: E402
     _classical_smoke_artifact,
     _gate0_artifact,
+    _updec_classical_detection_artifact,
     _updec_effective_psf_artifact,
     calibrate_matched_filter_whitening,
     calibrate_purity_threshold,
@@ -638,6 +639,66 @@ def test_effective_psf_artifact_reads_torchsky_products(tmp_path: Path) -> None:
     psf = torchsky.read(row["effective_psf_path"])
     assert psf.shape == (9, 9)
     torch.testing.assert_close(psf.sum(), torch.tensor(1.0), atol=1e-6, rtol=0.0)
+
+
+def test_classical_detection_artifact_uses_mesh_psf_and_blank_whitening(
+    tmp_path: Path,
+) -> None:
+    size = 64
+    band = "F200W"
+    method = "torchsky_bilinear"
+    header = simple_tan_header(size, size, pixel_scale_arcsec=0.04)
+    coordinates = torch.arange(-4, 5, dtype=torch.float32)
+    psf_y, psf_x = torch.meshgrid(coordinates, coordinates, indexing="ij")
+    psf = torch.exp(-0.5 * (psf_x.square() + psf_y.square()) / 1.2**2)
+    psf /= psf.sum()
+    generator = torch.Generator().manual_seed(84)
+    image = 0.01 * torch.randn((size, size), generator=generator)
+    image += 0.2
+    image[28:37, 28:37] += 0.5 * psf
+    weight = torch.full_like(image, 1.0e4)
+    product_root = tmp_path / "products"
+    product_dir = product_root / band / "products"
+    product_dir.mkdir(parents=True)
+    torchsky.write(
+        str(product_dir / f"{method}_sci.fits"),
+        image,
+        header=header,
+    )
+    torchsky.write(
+        str(product_dir / f"{method}_wht.fits"),
+        weight,
+        header=header,
+    )
+    psf_root = tmp_path / "psfs"
+    psf_root.mkdir()
+    torchsky.write(
+        str(psf_root / f"{band}_{method}_effective_psf.fits"),
+        psf,
+    )
+    support_path = tmp_path / "support.fits"
+    torchsky.write(
+        str(support_path),
+        torch.ones((size, size), dtype=torch.uint8),
+        header=header,
+    )
+
+    artifact = _updec_classical_detection_artifact(
+        product_root=product_root,
+        effective_psf_root=psf_root,
+        support_mask_path=support_path,
+        bands=(band,),
+        method=method,
+        detection_threshold=5.0,
+        background_block_size=16,
+        statistic_out=tmp_path / "statistic.fits",
+    )
+
+    detections = torch.tensor(artifact["detection_xy"])
+    assert artifact["detection_count"] >= 1
+    assert float(torch.linalg.vector_norm(detections - 32.0, dim=1).min()) < 1.0
+    assert len(artifact["whitening"]["centers"]) == 1
+    assert Path(artifact["statistic_path"]).is_file()
 
 
 def test_dithered_exposures_and_production_classical_coadds_are_deterministic() -> None:
