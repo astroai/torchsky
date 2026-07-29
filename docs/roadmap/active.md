@@ -123,7 +123,11 @@ stacking-versus-INR/Foam depth result defined in
       magnitude without consulting blind identifiers.
   - [x] Add frozen blank-catalogue neighborhood exclusion to common-support
     manifests so science injections cannot be placed beside pre-existing
-    sources. The exact catalogue/radius remain an execution gate.
+    sources.
+    - [x] Session `c2iartol` at `32e0940` completed all seven method controls:
+      1,882 permissive detections covered by 282 distinct six-pixel frozen
+      neighbourhoods. Positive validation session `oi5mskje` uses that exact
+      union.
   - [ ] Run three positive validation batches plus one blank, build the
     six-band whitened chi-square detector, and freeze the winning classical
     configuration using only those validation batches.

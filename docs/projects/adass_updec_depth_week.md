@@ -347,8 +347,12 @@ each final method boundary. Otherwise do not begin model tuning.
   - [x] Add `updec-adass-control-union`: validate that every control catalogue
     shares the frozen support mask, deterministically cover duplicate
     cross-method peaks within the predeclared six-pixel radius, and persist the
-    input hashes plus exact world-coordinate avoidance catalogue. The seven
-    real blank catalogues remain an execution gate.
+    input hashes plus exact world-coordinate avoidance catalogue.
+  - [x] Run all seven real blank catalogues and freeze their union before any
+    depth validation. Session `c2iartol` at `32e0940` completed with 1,882
+    permissive method detections covered by 282 distinct six-pixel avoidance
+    neighbourhoods under
+    `/arc/projects/ots/torchsky-runs/20260729-smacs-control-catalogues-32e0940/`.
   - [x] Make `MeshSkyEstimator` fill fully masked coarse cells from finite
     neighbouring cells and fail closed only when the whole mesh is masked.
     Session `bgjkc3jm` exposed the former NaN propagation before producing a
@@ -361,6 +365,8 @@ each final method boundary. Otherwise do not begin model tuning.
 - [ ] Include Montage if its exact target grid is supported; otherwise record an
   explicit secondary skip and continue.
 - [ ] Run at least three validation injection batches and one blank control.
+  Session `oi5mskje` is running the three positive batches from the exact
+  frozen control union; leave unchecked until every artifact is complete.
 - [ ] Freeze `adass_updec_classical_config.json`, including commits, external
   tool versions, target header hash, inputs, split, PSF, seeds, and thresholds.
 
