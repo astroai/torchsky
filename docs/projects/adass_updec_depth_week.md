@@ -88,6 +88,12 @@ products; beating separate per-band images alone is not sufficient.
   stars are post-abstract robustness work, not tuning inputs.
 - [ ] Route independent and shared Foam through the same WCS, bandpass, pixel
   footprint, PSF, mask, weight, and exposure-nuisance operators used by the INR.
+  - [x] Add `SpectralPowerFoamField`, the minimum local-tangent field adapter:
+    smooth fitting now enters the existing `FieldObservation` WCS, bandpass,
+    PSF, mask/weight, and nuisance path; detached hard rendering reuses the same
+    Legendre spectral basis and learned coefficients.
+  - [ ] Exercise independent and shared instances on the frozen real exposure
+    adapter and persist their hard-rendered final products.
 - [ ] Apply one common detector/photometer to every final band product.
 - [ ] Freeze validation-selected hyperparameters and thresholds before
   generating blind injection locations and noise/control identifiers.
@@ -424,8 +430,13 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
 
 ### Day 3 — Thursday 30 July: independent versus shared Foam
 
-- [ ] Add the minimum field/observation adapter for `SpectralPowerFoam`; reuse
+- [x] Add the minimum field/observation adapter for `SpectralPowerFoam`; reuse
   current rendering and training operators rather than creating a Foam pipeline.
+  `SpectralPowerFoamField` supplies normalized local-tangent geometry,
+  well-conditioned Legendre spectral coefficients, temperature curriculum,
+  common field-forward compatibility, and detached exact-pixel handoff. Seven
+  focused tests cover gradients, broadcast spectra, hard rendering, and the
+  common bandpass/PSF render path.
 - [ ] Initialize geometry without test pixels. Use a fixed deterministic grid
   for the first fair run; adaptive residual initialization is a validation-only
   ablation.

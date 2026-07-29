@@ -164,6 +164,11 @@ stacking-versus-INR/Foam depth result defined in
       the complete matrix and automatically emits the effective-PSF/flux report.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
+  - [x] Add `SpectralPowerFoamField` as the minimum common-operator bridge:
+    normalized local-tangent geometry and a shared Legendre spectral basis now
+    run through the existing field WCS/bandpass/PSF/mask/weight fitter, with
+    detached hard-pixel rendering for final products. Seven focused contracts
+    pass. The real independent/shared matrix remains unchecked.
 - [ ] Execute Day 4: 20-batch CANFAR blind test, paired intervals, report, and
   figures.
 - [ ] Submit only the strongest abstract claim whose pre-registered gate passes.
@@ -707,6 +712,9 @@ extractor to the Torchsky runtime.
     Preserve exact geometry and its separate validation null.
   - [ ] Add capacity- and compute-declared independent per-band Foam and shared
     spectral Foam rows, with hard-renderer inference after smooth fitting.
+    The reusable `SpectralPowerFoamField` adapter is complete; the remaining
+    work is deterministic grid initialization, real fitting, and matrix
+    persistence rather than another observation pipeline.
 - [ ] Gate zero-source false positives, noiseless bright-source flux/position,
   split disjointness, deterministic artifacts, shuffled-band loss of sharing
   gain, and CPU/CUDA parity.

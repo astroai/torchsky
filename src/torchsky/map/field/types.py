@@ -28,6 +28,7 @@ FieldModelKind = Literal[
     "wire_implicit",
     "gaussian_basis",
     "fourier_mlp",
+    "spectral_power_foam",
     "spectral_basis_field",
     "learned_spectral_basis_field",
     "sky_encoder_bandpass_field",

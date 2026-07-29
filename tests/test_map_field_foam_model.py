@@ -6,9 +6,15 @@ import pytest
 import torch
 
 from torchsky.map.field import (
+    FieldDomain,
+    FieldObservation,
     SpectralPowerFoam,
+    SpectralPowerFoamField,
     bounded_power_pixel_operator,
+    make_field_model,
+    make_tangent_plane_header,
     render_power_spectral_basis,
+    render_field_observation,
     smooth_bounded_power_weights,
 )
 
@@ -146,3 +152,104 @@ def test_spectral_power_foam_validation_fails_closed() -> None:
         SpectralPowerFoam(sites, radii, torch.ones((3, 2), dtype=torch.float64))
     with pytest.raises(ValueError, match="basis_values"):
         _model()(torch.zeros((3, 2), dtype=torch.float64), torch.ones((3, 3)))
+
+
+def test_spectral_power_foam_field_reuses_smooth_and_exact_spectral_basis() -> None:
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    model = make_field_model(
+        "spectral_power_foam",
+        domain,
+        sites=torch.tensor([[0.0, 0.0]], dtype=torch.float64),
+        radii=torch.tensor([2.0], dtype=torch.float64),
+        cell_coefficients=torch.tensor([[2.0, 0.5, -0.25]], dtype=torch.float64),
+        temperature_start=4.0,
+        temperature_end=16.0,
+    )
+    assert isinstance(model, SpectralPowerFoamField)
+    model.set_curriculum_progress(0.5)
+
+    wavelength = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64)
+    ra = torch.full_like(wavelength, 10.0)
+    dec = torch.full_like(wavelength, 20.0)
+    smooth = model(ra, dec, wavelength)
+    expected = model.foam(
+        torch.zeros((3, 2), dtype=torch.float64),
+        model.spectral_basis(wavelength),
+        power_temperature=8.0,
+        support_temperature=8.0,
+    )
+    torch.testing.assert_close(smooth, expected)
+    broadcast = model(
+        torch.full((2, 3), 10.0, dtype=torch.float64),
+        torch.full((2, 3), 20.0, dtype=torch.float64),
+        torch.tensor([[1.0], [3.0]], dtype=torch.float64),
+    )
+    assert broadcast.shape == (2, 3)
+
+    pixels = torch.tensor(
+        [[[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]]],
+        dtype=torch.float64,
+    )
+    response = torch.tensor([[0.25, 0.5, 0.25]], dtype=torch.float64)
+    exact = model.render_exact(pixels, wavelength, response)
+    operator = bounded_power_pixel_operator(
+        pixels,
+        model.sites.detach(),
+        model.radii.detach(),
+    )
+    expected_exact = model.foam.render_exact(
+        operator,
+        model.spectral_basis(wavelength),
+        response,
+    )
+    torch.testing.assert_close(exact, expected_exact)
+
+
+def test_spectral_power_foam_field_uses_common_bandpass_psf_render_path() -> None:
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    model = SpectralPowerFoamField(
+        domain,
+        sites=torch.tensor([[0.0, 0.0]], dtype=torch.float32),
+        radii=torch.tensor([1.0], dtype=torch.float32),
+        cell_coefficients=torch.tensor([[1.0, 0.2]], dtype=torch.float32),
+    )
+    observation = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=make_tangent_plane_header(
+            4,
+            4,
+            crval_ra_deg=10.0,
+            crval_dec_deg=20.0,
+        ),
+        weight=torch.ones((4, 4), dtype=torch.float32),
+        mask=torch.ones((4, 4), dtype=torch.bool),
+        spectral_min=1.0,
+        spectral_max=3.0,
+        transmission_center=2.0,
+        transmission_sigma=0.4,
+        psf_sigma_pix=0.5,
+        band_name="TEST",
+    )
+
+    rendered = render_field_observation(
+        model,
+        observation,
+        num_spectral_samples=5,
+    )
+    assert rendered.shape == observation.image.shape
+    assert bool(torch.isfinite(rendered).all())
+    rendered.sum().backward()
+    assert model.cell_coefficients.grad is not None
+    assert bool(torch.isfinite(model.cell_coefficients.grad).all())

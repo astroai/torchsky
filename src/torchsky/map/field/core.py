@@ -26,6 +26,12 @@ from .bandpass import (
     bandpass_response as _bandpass_response,
 )
 from .forwarding import call_scalar_field_forward as _call_scalar_field_forward
+from .foam import (
+    PowerPixelOperator,
+    PowerValueSemantics,
+    SpectralPowerFoam,
+    bounded_power_pixel_operator,
+)
 from .hashgrid import HashGridEncoder, sample_feature_plane
 from .losses import _field_residual_loss
 from .networks import (
@@ -270,6 +276,141 @@ class _BaseFieldModel(nn.Module):
         mean = self.forward(ra_deg, dec_deg, wavelength_angstrom)
         logvar = torch.zeros_like(mean)
         return mean, logvar
+
+
+class SpectralPowerFoamField(_BaseFieldModel):
+    """Adapt a spectral Power Foam to the common sky-field forward interface.
+
+    Sites and radii use the normalized local-tangent coordinates defined by
+    ``domain``. Spectral coefficients multiply a Legendre basis over normalized
+    wavelength, avoiding poorly conditioned raw powers for broad bandpasses.
+    """
+
+    def __init__(
+        self,
+        domain: FieldDomain,
+        *,
+        sites: Tensor,
+        radii: Tensor,
+        cell_coefficients: Tensor,
+        minimum_radius: float = 0.0,
+        temperature_start: float = 4.0,
+        temperature_end: float = 24.0,
+    ) -> None:
+        super().__init__(domain)
+        if self.coord_mode != "local_tangent":
+            raise ValueError(
+                "SpectralPowerFoamField currently requires local_tangent coordinates"
+            )
+        start = float(temperature_start)
+        end = float(temperature_end)
+        if not math.isfinite(start) or not math.isfinite(end) or start <= 0 or end <= 0:
+            raise ValueError("Foam temperatures must be finite and positive")
+        self.foam = SpectralPowerFoam(
+            sites,
+            radii,
+            cell_coefficients,
+            minimum_radius=minimum_radius,
+        )
+        self.temperature_start = start
+        self.temperature_end = end
+        self._temperature = end
+
+    @property
+    def sites(self) -> Tensor:
+        return self.foam.sites
+
+    @property
+    def radii(self) -> Tensor:
+        return self.foam.radii
+
+    @property
+    def cell_coefficients(self) -> Tensor:
+        return self.foam.cell_coefficients
+
+    @property
+    def basis_count(self) -> int:
+        return self.foam.basis_count
+
+    def set_curriculum_progress(self, progress: float) -> None:
+        bounded = min(max(float(progress), 0.0), 1.0)
+        if self.temperature_start == self.temperature_end:
+            self._temperature = self.temperature_end
+            return
+        self._temperature = (
+            self.temperature_start
+            * (self.temperature_end / self.temperature_start) ** bounded
+        )
+
+    def _legendre_basis(self, normalized: Tensor) -> Tensor:
+        terms = [torch.ones_like(normalized)]
+        if self.basis_count > 1:
+            terms.append(normalized)
+        for degree in range(2, self.basis_count):
+            terms.append(
+                ((2 * degree - 1) * normalized * terms[-1] - (degree - 1) * terms[-2])
+                / degree
+            )
+        return torch.stack(terms, dim=-1)
+
+    def spectral_basis(self, wavelength: Tensor | float) -> Tensor:
+        """Return the Legendre basis shared by smooth and exact rendering."""
+        value = torch.as_tensor(
+            wavelength,
+            device=self.sites.device,
+            dtype=self.sites.dtype,
+        )
+        normalized = (value - float(self.domain.wavelength_center)) / float(
+            self.domain.wavelength_scale
+        )
+        return self._legendre_basis(normalized)
+
+    def forward(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength: Tensor | float,
+    ) -> Tensor:
+        coords = self._encoded_coords(ra_deg, dec_deg, wavelength).to(
+            dtype=self.sites.dtype
+        )
+        return self.foam(
+            coords[..., :2],
+            self._legendre_basis(coords[..., 2]),
+            power_temperature=self._temperature,
+            support_temperature=self._temperature,
+        )
+
+    def exact_operator(
+        self,
+        pixel_polygons: Tensor,
+        **operator_kwargs: Any,
+    ) -> PowerPixelOperator:
+        """Build a hard operator from detached geometry and normalized pixels."""
+        return bounded_power_pixel_operator(
+            pixel_polygons,
+            self.sites.detach(),
+            self.radii.detach(),
+            **operator_kwargs,
+        )
+
+    def render_exact(
+        self,
+        pixel_polygons: Tensor,
+        wavelengths: Tensor,
+        response_weights: Tensor,
+        *,
+        semantics: PowerValueSemantics = "surface_brightness",
+        **operator_kwargs: Any,
+    ) -> Tensor:
+        """Hard-render convex pixels with the learned spectral coefficients."""
+        operator = self.exact_operator(pixel_polygons, **operator_kwargs)
+        return self.foam.render_exact(
+            operator,
+            self.spectral_basis(wavelengths),
+            response_weights,
+            semantics=semantics,
+        )
 
 
 def _observation_without_background(observation: FieldObservation) -> FieldObservation:
@@ -4868,6 +5009,8 @@ def make_field_model(
     domain: FieldDomain,
     **kwargs: object,
 ) -> nn.Module:
+    if kind == "spectral_power_foam":
+        return SpectralPowerFoamField(domain, **kwargs)
     if kind == "sine_implicit":
         return SineImplicitField(domain, **kwargs)
     if kind == "wire_implicit":
