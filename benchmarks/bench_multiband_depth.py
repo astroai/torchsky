@@ -1985,6 +1985,11 @@ def main() -> int:
     parser.add_argument("--support-weight-threshold", type=float, default=0.0)
     parser.add_argument("--support-erode-radius-px", type=int, default=9)
     parser.add_argument(
+        "--target-mode",
+        choices=("published_native", "published_swarp_tan"),
+        default="published_swarp_tan",
+    )
+    parser.add_argument(
         "--json-out",
         type=Path,
         default=Path("benchmark_results/multiband_depth_gate0.json"),
@@ -2021,6 +2026,7 @@ def main() -> int:
         if args.reference_path is None:
             raise ValueError("--reference-path is required for updec-adass-manifest")
         from bench_map_smacs0723_real import _cutout_header, _sci_header
+        from bench_map_smacs0723_stackers import _north_up_tan_header
 
         target_header = dict(
             _cutout_header(
@@ -2030,6 +2036,8 @@ def main() -> int:
                 args.cutout_size or 512,
             )
         )
+        if args.target_mode == "published_swarp_tan":
+            target_header = _north_up_tan_header(target_header)
         support_paths = tuple(
             Path(value.strip()).expanduser().resolve()
             for value in (args.support_weight_paths or "").split(",")
@@ -2099,6 +2107,7 @@ def main() -> int:
             "size": args.cutout_size or 512,
             "x0": args.crop_x0,
             "y0": args.crop_y0,
+            "target_mode": args.target_mode,
         }
         artifact["common_support"] = (
             {

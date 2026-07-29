@@ -228,13 +228,15 @@ each final method boundary. Otherwise do not begin model tuning.
   `--patt-nums 3,8`, `--crop-x0 112 --crop-y0 0`, and
   `--validation-classical --drizzle-pixfracs 0.6,0.8,1.0`.
 - [x] Run weighted Torchsky, upstream Drizzle, and SWarp on identical validation
-  exposures and the exact same target grid.
+  exposures and method-compatible target grids.
   Evidence: Torchsky session `axix9wz3` at `803a200`, upstream Drizzle session
   `z7t27ff0` at `46c1ce5`, and locked SWarp 2.41.5 session `gckyhwco` at
   `62f572a`. Durable reports are under
   `/arc/projects/ots/torchsky-runs/20260728-smacs-{torchsky-803a200,drizzle-46c1ce5,swarp-62f572a}/`.
   These are backend/geometry diagnostics against an aligned detector image,
-  not depth measurements and not a scientific kernel selection.
+  not depth measurements and not a scientific kernel selection. They used the
+  native published crop for Torchsky/Drizzle and its north-up TAN equivalent
+  for SWarp, so they are not an exact common-grid comparison.
 - [x] Add deterministic common-world smooth-continuum manifests, transient
   detector-SCI injection overrides, and exact-target product persistence.
   Archived CANFAR inputs remain unchanged; all classical families receive the
@@ -260,6 +262,12 @@ each final method boundary. Otherwise do not begin model tuning.
   Therefore this is an astrometric/plumbing pass, not a photometric pass or
   kernel selection. Hashed artifacts are under
   `/arc/projects/ots/torchsky-runs/20260728-smacs-swarp-sip-fb779ef/`.
+- [x] Remove the target-grid ambiguity for every subsequent classical sweep.
+  The validation profile now forces Torchsky, upstream Drizzle, and both SWarp
+  kernels onto the same frozen north-up TAN header; the injection-manifest CLI
+  uses that target by default and rejects weight maps whose WCS differs at the
+  four corners or centre. This code gate must be exercised by the six-band
+  control sweep before configuration freeze.
 - [ ] Generate the frozen per-band/per-method common-support mask before the
   next injection manifests. Exclude the unsupported-source failure by design,
   not after examining recovery.

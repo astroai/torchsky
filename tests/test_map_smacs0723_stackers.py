@@ -81,6 +81,9 @@ def test_validation_specs_freeze_drizzle_and_swarp_grid() -> None:
     ]
     assert by_name["drizzle_square_pf0p600"]["pixfrac"] == 0.6
     assert by_name["torchsky_drizzle_square_pf0p600"]["drizzle_pixfrac"] == 0.6
+    assert {
+        spec["target_mode"] for spec in specs
+    } == {"published_swarp_tan"}
 
 
 def test_pattern_filter_uses_complete_filename_token() -> None:

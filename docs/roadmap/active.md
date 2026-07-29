@@ -45,7 +45,9 @@ stacking-versus-INR/Foam depth result defined in
     `46c1ce5`, and locked SWarp 2.41.5 `gckyhwco` at `62f572a`; durable reports
     live below `/arc/projects/ots/torchsky-runs/20260728-smacs-*`. These
     detector-reference diagnostics establish runnable backends but do not
-    select a scientific kernel.
+    select a scientific kernel. Torchsky/Drizzle used the native crop while
+    SWarp required its north-up TAN equivalent, so this first sweep was not an
+    exact common-grid comparison.
   - [x] Add deterministic common-world manifests, transient detector-level SCI
     overrides, and persisted exact-grid products for identical classical
     injection/control runs. Evidence: commits `278735e` and `419c94a`, with 37
@@ -66,6 +68,9 @@ stacking-versus-INR/Foam depth result defined in
     `/arc/projects/ots/torchsky-runs/20260728-smacs-swarp-sip-fb779ef/`.
     This remains a plumbing result: one bright source had no final SWarp signal
     and fixed injected-PSF flux recovery differs by kernel.
+  - [x] Force every subsequent validation method onto one canonical north-up
+    TAN target and make the manifest CLI use and validate that same WCS. The
+    complete six-band control sweep remains the execution evidence gate.
   - [ ] Freeze the intersection of all selected methods' six-band output weight
     maps, erode it by the PSF/injection footprint, and use only that mask for
     subsequent source placement.

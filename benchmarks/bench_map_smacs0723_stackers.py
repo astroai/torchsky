@@ -398,6 +398,8 @@ def _build_validation_method_specs(
             dict(base["swarp_lanczos3"]),
         )
     )
+    for spec in specs:
+        spec["target_mode"] = "published_swarp_tan"
     return specs
 
 
