@@ -693,6 +693,81 @@ def _write_swarp_config(
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _swarp_source_header(
+    header: dict[str, Any],
+    *,
+    shape: tuple[int, int],
+) -> dict[str, Any]:
+    """Translate FITS SIP polynomials to SWarp's equivalent TPV convention."""
+
+    if "SIP" not in str(header.get("CTYPE1", "")).upper():
+        return dict(header)
+    order = max(int(header.get("A_ORDER", 0)), int(header.get("B_ORDER", 0)))
+    if order < 1 or order > 7:
+        raise RuntimeError("SWarp SIP translation requires polynomial order 1..7")
+    height, width = shape
+    wcs = WCS(_as_fits_header(header))
+    matrix = np.asarray(wcs.pixel_scale_matrix, dtype=np.float64)
+    sample_count = max(12, 2 * (order + 1))
+    yy, xx = np.meshgrid(
+        np.linspace(0.0, height - 1.0, sample_count),
+        np.linspace(0.0, width - 1.0, sample_count),
+        indexing="ij",
+    )
+    u = xx.reshape(-1) + 1.0 - float(header["CRPIX1"])
+    v = yy.reshape(-1) + 1.0 - float(header["CRPIX2"])
+
+    def sip_delta(prefix: str) -> np.ndarray:
+        delta = np.zeros_like(u)
+        for i in range(order + 1):
+            for j in range(order + 1 - i):
+                coefficient = float(header.get(f"{prefix}_{i}_{j}", 0.0))
+                if coefficient:
+                    delta += coefficient * u**i * v**j
+        return delta
+
+    distorted = matrix @ np.stack((u + sip_delta("A"), v + sip_delta("B")))
+    linear = matrix @ np.stack((u, v))
+    scale = float(np.abs(linear).max(initial=0.0))
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise RuntimeError("invalid SIP intermediate-coordinate scale")
+    q, r = linear[0] / scale, linear[1] / scale
+    indices: list[int] = []
+    powers: list[tuple[int, int]] = []
+    index = 0
+    for degree in range(8):
+        for k in range(degree + 1):
+            if degree <= order:
+                indices.append(index)
+                powers.append((degree - k, k))
+            index += 1
+        if degree % 2 == 1:
+            index += 1
+    design1 = np.stack([q**px * r**py for px, py in powers], axis=1)
+    design2 = np.stack([r**px * q**py for px, py in powers], axis=1)
+    coeff1 = np.linalg.lstsq(design1, distorted[0], rcond=None)[0]
+    coeff2 = np.linalg.lstsq(design2, distorted[1], rcond=None)[0]
+
+    out = {
+        key: value
+        for key, value in header.items()
+        if not (
+            str(key).startswith(("A_", "B_", "AP_", "BP_", "PV1_", "PV2_"))
+            or key in {"A_ORDER", "B_ORDER", "AP_ORDER", "BP_ORDER"}
+        )
+    }
+    out["CTYPE1"] = "RA---TPV"
+    out["CTYPE2"] = "DEC--TPV"
+    for term_index, (px, py), value1, value2 in zip(
+        indices, powers, coeff1, coeff2, strict=True
+    ):
+        degree = px + py
+        factor = scale**degree
+        out[f"PV1_{term_index}"] = float(value1 / factor)
+        out[f"PV2_{term_index}"] = float(value2 / factor)
+    return out
+
+
 def _write_mef(
     path: Path,
     science_data: list[np.ndarray],
@@ -1435,15 +1510,24 @@ def _coadd_with_swarp(
             image, header = torchsky.read(obs.path, hdu=obs.hdu, return_header=True)
             image = image.to(dtype=torch.float32)
             weight = _load_weight_map(obs, image)
+            swarp_header = _swarp_source_header(
+                dict(header),
+                shape=tuple(int(value) for value in image.shape),
+            )
             numer_path = tmpdir / f"swarp_{idx}_numer.fits"
             denom_path = tmpdir / f"swarp_{idx}_denom.fits"
             torchsky.write(
                 str(numer_path),
                 torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0) * weight,
-                header=dict(header),
+                header=swarp_header,
                 overwrite=True,
             )
-            torchsky.write(str(denom_path), weight, header=dict(header), overwrite=True)
+            torchsky.write(
+                str(denom_path),
+                weight,
+                header=swarp_header,
+                overwrite=True,
+            )
             numer_paths.append(str(numer_path))
             denom_paths.append(str(denom_path))
 
@@ -1531,6 +1615,10 @@ def _coadd_with_swarp_direct_stack(
             image, header = torchsky.read(obs.path, hdu=obs.hdu, return_header=True)
             image = image.to(dtype=torch.float32)
             support = (_load_weight_map(obs, image) > 0.0).to(dtype=torch.float32)
+            swarp_header = _swarp_source_header(
+                dict(header),
+                shape=tuple(int(value) for value in image.shape),
+            )
             scale = float(obs.photometric_scale)
             background = float(obs.background_offset)
             if not math.isfinite(scale) or scale <= 0.0:
@@ -1550,13 +1638,13 @@ def _coadd_with_swarp_direct_stack(
                     torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0)
                     - background
                 ),
-                header=dict(header),
+                header=swarp_header,
                 overwrite=True,
             )
             torchsky.write(
                 str(weight_path),
                 support,
-                header=dict(header),
+                header=swarp_header,
                 overwrite=True,
             )
             image_paths.append(str(image_path))

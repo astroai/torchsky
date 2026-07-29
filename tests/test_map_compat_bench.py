@@ -67,6 +67,53 @@ def test_plan_image_plane_target_matches_montage_style_template(tmp_path) -> Non
         torch.testing.assert_close(dec_p, dec_t, atol=1e-6, rtol=1e-9)
 
 
+def test_swarp_source_header_translates_sip_to_equivalent_tpv() -> None:
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 128,
+        "NAXIS2": 96,
+        "CTYPE1": "RA---TAN-SIP",
+        "CTYPE2": "DEC--TAN-SIP",
+        "CRPIX1": 64.5,
+        "CRPIX2": 48.5,
+        "CRVAL1": 110.0,
+        "CRVAL2": -73.0,
+        "CD1_1": -1.7e-5,
+        "CD1_2": 2.0e-7,
+        "CD2_1": 1.0e-7,
+        "CD2_2": 1.8e-5,
+        "A_ORDER": 3,
+        "B_ORDER": 3,
+        "A_2_0": 2.0e-5,
+        "A_1_1": -1.0e-5,
+        "A_0_3": 4.0e-8,
+        "B_0_2": -1.5e-5,
+        "B_2_1": 3.0e-8,
+    }
+    translated = bench_map_compat._swarp_source_header(
+        header,
+        shape=(96, 128),
+    )
+    grid = np.stack(
+        np.meshgrid(
+            np.linspace(0.0, 127.0, 17),
+            np.linspace(0.0, 95.0, 13),
+            indexing="xy",
+        ),
+        axis=-1,
+    ).reshape(-1, 2)
+    expected = bench_map_compat.WCS(
+        bench_map_compat._as_fits_header(header)
+    ).all_pix2world(grid, 0)
+    actual = bench_map_compat.WCS(
+        bench_map_compat._as_fits_header(translated)
+    ).all_pix2world(grid, 0)
+
+    assert translated["CTYPE1"] == "RA---TPV"
+    assert all("SIP" not in str(value) for value in translated.values())
+    np.testing.assert_allclose(actual, expected, rtol=0.0, atol=2e-9)
+
+
 def test_plan_image_plane_target_matches_montage_template_cdelta_only(tmp_path) -> None:
     """Montage-style headers often use ``CDELT*`` without an explicit ``CD`` matrix."""
     header = {
