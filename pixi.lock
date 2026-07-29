@@ -3468,6 +3468,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/aiohttp-3.14.1-py312h5d8c7f2_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/alsa-lib-1.2.16.1-hb03c661_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/aom-3.14.1-pl5321h039972f_1.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/astromatic-swarp-2.41.5-hb03c661_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/astropy-base-8.0.1-py312h4f23490_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/astropy-healpix-2.0.0-py312h4f23490_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/autoconf-2.72-pl5321hbb4ee43_1.conda
@@ -4068,6 +4069,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/_openmp_mutex-4.5-7_kmp_llvm.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/aiohttp-3.14.1-py312h9f8c436_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/aom-3.14.1-pl5321h513545f_1.conda
+      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/astromatic-swarp-2.41.5-h84a0fba_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/astropy-base-8.0.0-py312hf57c059_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/astropy-healpix-1.1.3-py312hf57c059_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/autoconf-2.72-pl5321hd3c70e0_1.conda
@@ -5833,6 +5835,19 @@ packages:
   run_exports: {}
   size: 1364735
   timestamp: 1777886079687
+- conda: https://conda.anaconda.org/conda-forge/linux-64/astromatic-swarp-2.41.5-hb03c661_0.conda
+  sha256: 8df6d00ac80720ee728012f7bcdd430ec52f97abdd7bda7d0a260d44ab01cf35
+  md5: cc9672bc9707f66a86c167908e4e8677
+  depends:
+  - __glibc >=2.17,<3.0.a0
+  - cfitsio >=4.6.4,<4.6.5.0a0
+  - libgcc >=14
+  license: GPL-3.0-only
+  license_family: GPL
+  purls: []
+  run_exports: {}
+  size: 352504
+  timestamp: 1779017735345
 - conda: https://conda.anaconda.org/conda-forge/linux-64/astropy-6.1.7-py310hf462985_0.conda
   sha256: 9cafabb1f950055717abda76db080e40743794f39c924a137e44fce97bb8e14b
   md5: b1b72b1c8205f2dba8c976bdf4b9fd14
@@ -6773,7 +6788,7 @@ packages:
   license: Apache-2.0
   license_family: APACHE
   purls:
-  - pkg:pypi/coverage?source=hash-mapping
+  - pkg:pypi/coverage?source=compressed-mapping
   run_exports: {}
   size: 394452
   timestamp: 1783019257881
@@ -10297,8 +10312,7 @@ packages:
   - tornado >=5
   license: PSF-2.0
   license_family: PSF
-  purls:
-  - pkg:pypi/matplotlib?source=compressed-mapping
+  purls: []
   run_exports: {}
   size: 14887
   timestamp: 1782829550796
@@ -12582,7 +12596,7 @@ packages:
   license: Apache-2.0
   license_family: Apache
   purls:
-  - pkg:pypi/tornado?source=compressed-mapping
+  - pkg:pypi/tornado?source=hash-mapping
   run_exports: {}
   size: 864705
   timestamp: 1781006801632
@@ -15193,7 +15207,7 @@ packages:
   license: MIT
   license_family: MIT
   purls:
-  - pkg:pypi/pip?source=compressed-mapping
+  - pkg:pypi/pip?source=hash-mapping
   run_exports: {}
   size: 1203173
   timestamp: 1780262795392
@@ -16429,6 +16443,18 @@ packages:
   run_exports: {}
   size: 1304275
   timestamp: 1777886480103
+- conda: https://conda.anaconda.org/conda-forge/osx-arm64/astromatic-swarp-2.41.5-h84a0fba_0.conda
+  sha256: f1bf48c272137e085a9aa10f5482fbefdac14e9b159a253addf970ae41c066a4
+  md5: 0b4e21e544110ef347b98e2e4d68a499
+  depends:
+  - __osx >=11.0
+  - cfitsio >=4.6.4,<4.6.5.0a0
+  license: GPL-3.0-only
+  license_family: GPL
+  purls: []
+  run_exports: {}
+  size: 348469
+  timestamp: 1779018290289
 - conda: https://conda.anaconda.org/conda-forge/osx-arm64/astropy-6.1.7-py310hc12b6d3_0.conda
   sha256: 36b5ef8f9d328f522420edd4fdf627434c3390435e3c31ab39dd09854006a51e
   md5: 8498a5a17a0bef4daf0dd1eb07594e62
@@ -20947,7 +20973,7 @@ packages:
   license: BSD-3-Clause
   license_family: BSD
   purls:
-  - pkg:pypi/scipy?source=compressed-mapping
+  - pkg:pypi/scipy?source=hash-mapping
   run_exports: {}
   size: 14165071
   timestamp: 1781912652942

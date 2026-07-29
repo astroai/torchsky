@@ -255,6 +255,7 @@ libtool = ">=2.4"
 make = ">=4.4"
 pkg-config = ">=0.29"
 wcslib = ">=8"
+astromatic-swarp = ">=2.41"
 
 [feature.map-compat.pypi-dependencies]
 MontagePy = "*"

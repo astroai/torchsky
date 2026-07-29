@@ -253,6 +253,11 @@ def main() -> int:
 
     tools = ("swarp", "montage", "casutools") if args.tool == "all" else (args.tool,)
     for tool in tools:
+        if tool == "swarp" and (swarp := shutil.which("swarp")):
+            # ponytail: conda-forge already packages the legacy comparator; prefer
+            # its locked binary over rebuilding old Autoconf against modern CFITSIO.
+            print(f"swarp: using environment binary at {swarp}")
+            continue
         src_dir = _ensure_repo(tool)
         prefix = _prefix(tool)
         if tool == "swarp":

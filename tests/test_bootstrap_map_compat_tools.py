@@ -9,7 +9,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from bootstrap_map_compat_tools import _swarp_build_env  # noqa: E402
+from bootstrap_map_compat_tools import _swarp_build_env, main  # noqa: E402
 
 
 def test_swarp_build_env_exposes_conda_shared_dependencies() -> None:
@@ -37,3 +37,20 @@ def test_swarp_build_env_exposes_conda_shared_dependencies() -> None:
         env["PKG_CONFIG_PATH"]
         == "/opt/pixi/env/lib/pkgconfig:/system/pkgconfig"
     )
+
+
+def test_bootstrap_reuses_environment_swarp(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["bootstrap", "--tool", "swarp"])
+    with (
+        patch(
+            "bootstrap_map_compat_tools.shutil.which",
+            return_value="/opt/pixi/bin/swarp",
+        ),
+        patch("bootstrap_map_compat_tools._ensure_repo") as ensure_repo,
+    ):
+        assert main() == 0
+
+    ensure_repo.assert_not_called()
+    assert "using environment binary at /opt/pixi/bin/swarp" in capsys.readouterr().out
