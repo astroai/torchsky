@@ -107,6 +107,9 @@ stacking-versus-INR/Foam depth result defined in
     - [x] Wire these primitives into one stable classical-detection profile
       with the existing Torchsky mesh sky estimator and hashed
       statistic/catalogue artifacts.
+    - [x] Add a deterministic control-union profile that validates the common
+      support contract, hashes every method catalogue, and covers
+      cross-method duplicate peaks inside the frozen six-pixel radius.
   - [x] Add frozen blank-catalogue neighborhood exclusion to common-support
     manifests so science injections cannot be placed beside pre-existing
     sources. The exact catalogue/radius remain an execution gate.

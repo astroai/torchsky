@@ -18,6 +18,7 @@ from bench_multiband_depth import (  # noqa: E402
     _classical_smoke_artifact,
     _gate0_artifact,
     _updec_classical_detection_artifact,
+    _updec_control_union_artifact,
     _updec_effective_psf_artifact,
     calibrate_matched_filter_whitening,
     calibrate_purity_threshold,
@@ -699,6 +700,45 @@ def test_classical_detection_artifact_uses_mesh_psf_and_blank_whitening(
     assert float(torch.linalg.vector_norm(detections - 32.0, dim=1).min()) < 1.0
     assert len(artifact["whitening"]["centers"]) == 1
     assert Path(artifact["statistic_path"]).is_file()
+
+
+def test_control_union_deduplicates_and_covers_all_method_peaks(
+    tmp_path: Path,
+) -> None:
+    paths = []
+    for method, xy in (
+        ("torchsky_bilinear", [[10.0, 10.0], [40.0, 40.0]]),
+        ("drizzle_square_pf0p800", [[12.0, 10.0], [46.0, 40.0]]),
+    ):
+        path = tmp_path / f"{method}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "method": method,
+                    "support_mask_path": "/shared/support.fits",
+                    "detection_count": len(xy),
+                    "detection_xy": xy,
+                    "world_radec_deg": [
+                        [150.0 + 1.0e-5 * x, 2.0 + 1.0e-5 * y] for x, y in xy
+                    ],
+                    "scores": [7.0] * len(xy),
+                }
+            )
+        )
+        paths.append(path)
+
+    artifact = _updec_control_union_artifact(
+        control_json_paths=paths,
+        dedup_radius_px=6.0,
+    )
+
+    assert artifact["input_detection_count"] == 4
+    assert artifact["union_count"] == 2
+    assert artifact["max_input_to_union_distance_px"] == pytest.approx(6.0)
+    assert artifact["world_radec_deg"] == [
+        [150.0001, 2.0001],
+        [150.0004, 2.0004],
+    ]
 
 
 def test_dithered_exposures_and_production_classical_coadds_are_deterministic() -> None:

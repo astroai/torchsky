@@ -340,6 +340,11 @@ each final method boundary. Otherwise do not begin model tuning.
     catalogue path for every classical product family. It persists the
     statistic image, detections, scores, WCS coordinates, hashes, and nuisance
     diagnostics; the real threshold/catalogue run remains unchecked.
+  - [x] Add `updec-adass-control-union`: validate that every control catalogue
+    shares the frozen support mask, deterministically cover duplicate
+    cross-method peaks within the predeclared six-pixel radius, and persist the
+    input hashes plus exact world-coordinate avoidance catalogue. The seven
+    real blank catalogues remain an execution gate.
 - [ ] Include Montage if its exact target grid is supported; otherwise record an
   explicit secondary skip and continue.
 - [ ] Run at least three validation injection batches and one blank control.

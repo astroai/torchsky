@@ -2618,6 +2618,120 @@ def _updec_classical_detection_artifact(
     }
 
 
+def _updec_control_union_artifact(
+    *,
+    control_json_paths: Sequence[Path],
+    dedup_radius_px: float,
+) -> dict[str, object]:
+    """Union method control catalogues on their shared target grid."""
+
+    if not control_json_paths or not math.isfinite(dedup_radius_px):
+        raise ValueError("control JSON paths and a finite radius are required")
+    if dedup_radius_px < 0:
+        raise ValueError("dedup_radius_px must be non-negative")
+    candidates: list[tuple[float, float, float, float, str, int]] = []
+    rows: list[dict[str, object]] = []
+    common_support: str | None = None
+    seen_methods: set[str] = set()
+    for path_value in control_json_paths:
+        path = path_value.expanduser().resolve()
+        artifact = json.loads(path.read_text())
+        method = str(artifact["method"])
+        if method in seen_methods:
+            raise ValueError(f"duplicate control method: {method}")
+        seen_methods.add(method)
+        detection_xy = torch.as_tensor(
+            artifact["detection_xy"], dtype=torch.float64
+        ).reshape(-1, 2)
+        world = torch.as_tensor(
+            artifact["world_radec_deg"], dtype=torch.float64
+        ).reshape(-1, 2)
+        scores = torch.as_tensor(artifact["scores"], dtype=torch.float64).reshape(-1)
+        if (
+            detection_xy.shape != world.shape
+            or scores.shape != (detection_xy.shape[0],)
+            or not torch.isfinite(detection_xy).all()
+            or not torch.isfinite(world).all()
+            or not torch.isfinite(scores).all()
+            or int(artifact["detection_count"]) != detection_xy.shape[0]
+        ):
+            raise ValueError(f"malformed control catalogue: {path}")
+        support = str(artifact["support_mask_path"])
+        if common_support is None:
+            common_support = support
+        elif support != common_support:
+            raise ValueError("control catalogues do not share one support mask")
+        for index, (xy, radec) in enumerate(
+            zip(detection_xy, world, strict=True)
+        ):
+            candidates.append(
+                (
+                    float(xy[0]),
+                    float(xy[1]),
+                    float(radec[0]),
+                    float(radec[1]),
+                    method,
+                    index,
+                )
+            )
+        rows.append(
+            {
+                "method": method,
+                "path": str(path),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "detection_count": int(detection_xy.shape[0]),
+            }
+        )
+    # ponytail: controls are small; replace this O(N^2) covering pass with a
+    # grid index if permissive thresholds ever produce more than 10k peaks.
+    order = sorted(
+        range(len(candidates)),
+        key=lambda i: (
+            candidates[i][0],
+            candidates[i][1],
+            candidates[i][4],
+            candidates[i][5],
+        ),
+    )
+    kept: list[int] = []
+    radius2 = dedup_radius_px**2
+    for candidate_index in order:
+        x, y, *_ = candidates[candidate_index]
+        if all(
+            (x - candidates[kept_index][0]) ** 2
+            + (y - candidates[kept_index][1]) ** 2
+            > radius2
+            for kept_index in kept
+        ):
+            kept.append(candidate_index)
+    union_xy = [[candidates[index][0], candidates[index][1]] for index in kept]
+    union_world = [[candidates[index][2], candidates[index][3]] for index in kept]
+    union_methods = [candidates[index][4] for index in kept]
+    max_cover_distance = 0.0
+    for x, y, *_ in candidates:
+        max_cover_distance = max(
+            max_cover_distance,
+            min(
+                math.hypot(x - candidates[index][0], y - candidates[index][1])
+                for index in kept
+            ),
+        )
+    return {
+        "schema_version": 1,
+        "profile": "updec-adass-control-union",
+        "depth_claim": False,
+        "support_mask_path": common_support,
+        "dedup_radius_px": dedup_radius_px,
+        "input_detection_count": len(candidates),
+        "union_count": len(kept),
+        "max_input_to_union_distance_px": max_cover_distance,
+        "detection_xy": union_xy,
+        "world_radec_deg": union_world,
+        "representative_methods": union_methods,
+        "input_rows": rows,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -2629,6 +2743,7 @@ def main() -> int:
             "updec-adass-manifest",
             "updec-adass-effective-psf",
             "updec-adass-classical-detection",
+            "updec-adass-control-union",
         ),
         default="gate0",
     )
@@ -2685,6 +2800,8 @@ def main() -> int:
         default=Path("benchmark_results/effective_psfs"),
     )
     parser.add_argument("--whitening-json", type=Path, default=None)
+    parser.add_argument("--control-jsons", default="")
+    parser.add_argument("--dedup-radius-px", type=float, default=6.0)
     parser.add_argument("--detection-threshold", type=float, default=5.0)
     parser.add_argument("--background-block-size", type=int, default=64)
     parser.add_argument(
@@ -2772,6 +2889,15 @@ def main() -> int:
             background_block_size=args.background_block_size,
             statistic_out=args.statistic_out,
             whitening_path=args.whitening_json,
+        )
+    elif args.profile == "updec-adass-control-union":
+        artifact = _updec_control_union_artifact(
+            control_json_paths=tuple(
+                Path(value.strip())
+                for value in args.control_jsons.split(",")
+                if value.strip()
+            ),
+            dedup_radius_px=args.dedup_radius_px,
         )
     else:
         if args.reference_path is None:
