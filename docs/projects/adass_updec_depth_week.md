@@ -38,6 +38,12 @@ products; beating separate per-band images alone is not sufficient.
   iter0-versus-iter10 context comparison. They cannot enter the injected-depth
   method matrix unless the same injected detector exposures are rerun through
   the UPdec pipeline.
+  Evidence: session `yeym14dy` at exact commit `e87cb11` compared all six
+  published pairs after Torchfits read and analytic TAN alignment including
+  CRPIX, scale, rotation, and shape changes. Iter10/iter0 central-crop gradient
+  ratios are 1.48--2.11, Laplacian ratios are 1.29--4.22, and summed flux ratios
+  are 1.0008--1.0243. Artifacts:
+  `/arc/projects/ots/torchsky-runs/20260729-updec-iter0-vs-iter10-e87cb11/`.
 - [x] Keep all FITS access through Torchfits/Torchsky. The standalone public
   artifact-pair benchmark calls Torchfits directly, so it does not accidentally
   require Torchsky's compiled mapping extension merely to read FITS.

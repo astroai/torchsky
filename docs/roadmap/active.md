@@ -46,9 +46,14 @@ stacking-versus-INR/Foam depth result defined in
     Manifest audit `rrkjowzw` confirms the aligned 135 are links to the
     pre-existing local `official_no_psf.../alignment/tweakreg_rshift` pipeline
     directory; the staging utility downloads only CAL products from MAST.
-  - [ ] Run the existing public UPdec iter0-versus-iter10 artifact comparison
+  - [x] Run the existing public UPdec iter0-versus-iter10 artifact comparison
     as secondary static context. Do not mix it into injected completeness:
     fixed public iter10 stacks did not receive the injected detector exposures.
+    Session `yeym14dy` at exact commit `e87cb11` used Torchfits plus an analytic
+    full-linear-matrix TAN alignment on all six bands. Iter10/iter0 central-crop
+    gradient ratios are 1.48--2.11, Laplacian ratios are 1.29--4.22, and summed
+    flux ratios are 1.0008--1.0243. Durable JSON/Markdown:
+    `/arc/projects/ots/torchsky-runs/20260729-updec-iter0-vs-iter10-e87cb11/`.
   - [x] Run the validation-only Torchsky/Drizzle/SWarp backend sweep.
     Evidence: Torchsky `axix9wz3` at `803a200`, upstream Drizzle `z7t27ff0` at
     `46c1ce5`, and locked SWarp 2.41.5 `gckyhwco` at `62f572a`; durable reports
