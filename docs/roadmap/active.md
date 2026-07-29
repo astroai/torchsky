@@ -168,10 +168,14 @@ stacking-versus-INR/Foam depth result defined in
       batches for native `pixfrac=0.8/1.0`, select between them from validation
       recovery at fixed purity, then freeze `adass_updec_classical_config.json`.
       Do not select from effective-PSF sharpness alone.
-      The versioned headless entry point is
-      `scripts/run_canfar_adass_depth.sh native-band RUN_ID`; launch one
-      non-overlapping session per band with `SMACS_BAND` and an exact
-      `TORCHSKY_COMMIT`.
+    - [x] Add the versioned headless entry point
+      `scripts/run_canfar_adass_depth.sh native-band RUN_ID`, with exact-SHA
+      checkout, durable logs, frozen manifests, AstroAI-image enforcement, and
+      a `src`-layout import path. Launch one non-overlapping session per band
+      with `SMACS_BAND` and an exact `TORCHSKY_COMMIT`. The first AstroAI
+      authentication gate, session `bmvmo076` at `c4afdee`, reached the
+      benchmark and exposed the missing import path before any science run;
+      relaunch only from the fixing commit.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
   - [x] Add `SpectralPowerFoamField` as the minimum common-operator bridge:
@@ -1024,3 +1028,9 @@ The script must clone or update Torchsky under the session's ephemeral source
 directory, check out the recorded commit, use Pixi, write logs/JSON/Markdown to
 `/arc/projects/ots/torchsky-runs/<run-id>/`, and record `git rev-parse HEAD`,
 `pixi info`, device information, and the exact command.
+
+Use an `astroai/*` image. The current headless benchmark image is
+`astroai/notebook:latest`: it supplies the shell and authenticated GitHub
+tooling needed by this private-repository runner while still running as a
+headless session. Pass the fully qualified image through `CONTAINER_IMAGE`;
+`scripts/run_canfar_adass_depth.sh` rejects non-AstroAI images.

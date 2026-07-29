@@ -4,9 +4,18 @@ set -euo pipefail
 mode=${1:?usage: run_canfar_adass_depth.sh MODE RUN_ID}
 run_id=${2:?usage: run_canfar_adass_depth.sh MODE RUN_ID}
 commit=${TORCHSKY_COMMIT:?set TORCHSKY_COMMIT to an exact pushed SHA}
+container_image=${CONTAINER_IMAGE:-images.canfar.net/astroai/notebook:latest}
 artifact_root=/arc/projects/ots/torchsky-runs/${run_id}
 source_root=/scratch/${run_id}-src
 data_root=/arc/projects/ots/torchsky-data
+
+case "${container_image}" in
+  images.canfar.net/astroai/* | astroai/*) ;;
+  *)
+    echo "CONTAINER_IMAGE must name an AstroAI image, got: ${container_image}" >&2
+    exit 2
+    ;;
+esac
 
 mkdir -p "${artifact_root}"
 exec > >(tee "${artifact_root}/session.log") 2>&1
@@ -14,12 +23,16 @@ exec > >(tee "${artifact_root}/session.log") 2>&1
 echo "run_id=${run_id}"
 echo "mode=${mode}"
 echo "requested_commit=${commit}"
-echo "image=${CONTAINER_IMAGE:-unknown}"
+echo "image=${container_image}"
 echo "started_utc=$(date -u +%FT%TZ)"
 nvidia-smi || true
 
 rm -rf "${source_root}"
-git clone --filter=blob:none https://github.com/sfabbro/torchsky.git "${source_root}"
+if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
+  gh repo clone sfabbro/torchsky "${source_root}" -- --filter=blob:none
+else
+  git clone --filter=blob:none https://github.com/sfabbro/torchsky.git "${source_root}"
+fi
 git -C "${source_root}" checkout --detach "${commit}"
 test "$(git -C "${source_root}" rev-parse HEAD)" = "${commit}"
 git -C "${source_root}" status --short
@@ -28,6 +41,7 @@ export PIXI_HOME=/scratch/pixi
 export PIXI_CACHE_DIR=/scratch/pixi-cache
 export TORCHSKY_DATA="${data_root}"
 export PATH="${PIXI_HOME}/bin:${PATH}"
+export PYTHONPATH="${source_root}/src${PYTHONPATH:+:${PYTHONPATH}}"
 if ! command -v pixi >/dev/null 2>&1; then
   curl -fsSL https://pixi.sh/install.sh | bash
 fi
