@@ -168,6 +168,10 @@ stacking-versus-INR/Foam depth result defined in
       batches for native `pixfrac=0.8/1.0`, select between them from validation
       recovery at fixed purity, then freeze `adass_updec_classical_config.json`.
       Do not select from effective-PSF sharpness alone.
+      The versioned headless entry point is
+      `scripts/run_canfar_adass_depth.sh native-band RUN_ID`; launch one
+      non-overlapping session per band with `SMACS_BAND` and an exact
+      `TORCHSKY_COMMIT`.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
   - [x] Add `SpectralPowerFoamField` as the minimum common-operator bridge:
@@ -185,6 +189,10 @@ stacking-versus-INR/Foam depth result defined in
   - [ ] Run the shared adapter on the frozen real exposures, then add the
     capacity- and compute-matched independent per-band matrix. The real
     independent/shared products remain unchecked.
+    The versioned headless entry point is
+    `scripts/run_canfar_adass_depth.sh foam RUN_ID`; its first gate uses two
+    bands, a 32-square crop, two optimizer steps, and a 4-square site grid
+    before scaling capacity or compute.
 - [ ] Execute Day 4: 20-batch CANFAR blind test, paired intervals, report, and
   figures.
 - [ ] Submit only the strongest abstract claim whose pre-registered gate passes.
