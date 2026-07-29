@@ -135,6 +135,18 @@ stacking-versus-INR/Foam depth result defined in
   - [ ] Run three positive validation batches plus one blank, build the
     six-band whitened chi-square detector, and freeze the winning classical
     configuration using only those validation batches.
+    - [x] Session `oi5mskje` completed all three deterministic 28-source
+      positive batches; session `c2iartol` supplied all seven blank controls.
+      Exact products live under
+      `/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940/`.
+    - [x] Session `j4xy3vos` at `aa0aa21` selected pooled 95%-purity thresholds.
+      Upstream Drizzle `pixfrac=0.8` passes the six-band flux gate and recovers
+      74/84 (88.1%) sources; SWarp bilinear is the flux-valid SWarp winner at
+      72/84 (85.7%). Summaries live under
+      `/arc/projects/ots/torchsky-runs/20260729-smacs-validation-score-aa0aa21/`.
+    - [ ] Finish native Torchsky square-Drizzle calibration in `g1ajbo0l`,
+      rebuild its common-support/control evidence if it passes, then freeze
+      `adass_updec_classical_config.json`.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
 - [ ] Execute Day 4: 20-batch CANFAR blind test, paired intervals, report, and

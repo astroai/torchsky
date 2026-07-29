@@ -336,9 +336,15 @@ each final method boundary. Otherwise do not begin model tuning.
     a kernel selection. Session `g1ajbo0l` is testing the native
     flux-conserving Torchsky square-Drizzle variants before the candidate set is
     frozen.
-- [ ] Select Drizzle `pixfrac` from a small predeclared grid and SWarp kernel
-  from `{BILINEAR, LANCZOS3}` using validation injections only.
-- [ ] Build the whitened chi-square six-band detector from each winning stack
+- [x] Select Drizzle `pixfrac` from the predeclared grid and SWarp kernel from
+  `{BILINEAR, LANCZOS3}` using validation injections plus the predeclared flux
+  gate. At pooled purity at least 95%, upstream Drizzle `pixfrac=0.8` recovers
+  74/84 sources (88.1%; 50% at AB=30), tied with `pixfrac=0.6` in recovery but
+  passing the six-band 2% median-flux gate; it also out-recovers the other
+  flux-valid candidate, `pixfrac=1.0` (73/84). SWarp Lanczos3 recovers 76/84
+  but fails that gate in F200W (2.15%); the valid SWarp winner is bilinear at
+  72/84 (85.7%; 41.7% at AB=30).
+- [x] Build the whitened chi-square six-band detector from each winning stack
   family and select the empirical 95%-purity threshold on validation nulls.
   - [x] Add spatial-inverse-variance matched filtering with one effective PSF
     per band and positive per-band signal-to-noise combination in quadrature.
@@ -366,13 +372,22 @@ each final method boundary. Otherwise do not begin model tuning.
   - [x] Add `updec-adass-classical-validation`: remove detections near the
     same-method frozen control catalogue, exact-match the remaining incremental
     detections to injections, pool batches to select the lowest 95%-purity
-    threshold, and report per-batch and per-magnitude completeness. Real
-    validation execution remains unchecked.
+    threshold, and report per-batch and per-magnitude completeness.
+  - [x] Score all three completed batches in session `j4xy3vos` at `aa0aa21`.
+    Every method reached the pooled 95%-purity target. The seven persisted
+    thresholds and completeness tables are under
+    `/arc/projects/ots/torchsky-runs/20260729-smacs-validation-score-aa0aa21/`;
+    the upstream Drizzle `pixfrac=0.8` threshold is 4.9025 and the valid SWarp
+    bilinear threshold is 4.9117.
 - [ ] Include Montage if its exact target grid is supported; otherwise record an
   explicit secondary skip and continue.
-- [ ] Run at least three validation injection batches and one blank control.
-  Session `oi5mskje` is running the three positive batches from the exact
-  frozen control union; leave unchecked until every artifact is complete.
+- [x] Run at least three validation injection batches and one blank control.
+  Session `oi5mskje` completed three deterministic 28-source positive batches
+  from the exact frozen control union; session `c2iartol` supplied the seven
+  blank controls. Products and detections are under
+  `/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940/`, with
+  validation summaries under
+  `/arc/projects/ots/torchsky-runs/20260729-smacs-validation-score-aa0aa21/`.
 - [ ] Freeze `adass_updec_classical_config.json`, including commits, external
   tool versions, target header hash, inputs, split, PSF, seeds, and thresholds.
 
