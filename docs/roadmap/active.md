@@ -78,6 +78,12 @@ stacking-versus-INR/Foam depth result defined in
       maps into `updec-adass-manifest`; validate target WCS, persist the mask
       FITS/hash/count/fraction, and reject placements outside it. The remaining
       work is freezing the complete selected-method six-band mask.
+    - [x] Produce all 42 exact-grid blank products at `3ff8604`. CANFAR session
+      `kkpxfdxb` completed the products; zero-source probe `wxz900hl` measured
+      only 984 pixels after nine-pixel erosion, so the current crop is retained
+      as a diagnostic and not falsely frozen.
+    - [x] Make support-constrained placement sample shuffled valid pixels in
+      each quadrant instead of depending on low-occupancy rejection.
   - [ ] Propagate or fit the method-dependent effective PSF before comparing
     bright-source flux bias or selecting a classical kernel.
     - [x] Add robust fractional-phase stacking of isolated

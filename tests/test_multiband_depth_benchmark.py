@@ -261,6 +261,28 @@ def test_common_support_mask_intersects_erodes_and_gates_manifest() -> None:
     assert len(manifest["placement"]["valid_mask_sha256"]) == 64
 
 
+def test_manifest_samples_sparse_support_pixels_without_rejection_failure() -> None:
+    support = torch.zeros((128, 128), dtype=torch.bool)
+    support[18:34, 18:34] = True
+    support[18:34, 94:110] = True
+    support[94:110, 18:34] = True
+    support[94:110, 94:110] = True
+
+    manifest = make_updec_common_world_manifest(
+        target_header=simple_tan_header(128, 128, pixel_scale_arcsec=0.04),
+        source_count=12,
+        seed=9,
+        margin_px=8.0,
+        min_separation_px=5.0,
+        valid_mask=support,
+    )
+
+    assert manifest["placement"]["sampling"] == "shuffled_valid_pixels"
+    assert [manifest["quadrant"].count(value) for value in range(4)] == [3, 3, 3, 3]
+    for x, y in manifest["target_xy"]:
+        assert bool(support[round(y), round(x)])
+
+
 def test_manifest_cli_reads_final_weight_support(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -319,6 +341,13 @@ def test_manifest_cli_reads_final_weight_support(
     artifact = json.loads(output.read_text())
     assert artifact["common_support"]["weight_paths"] == [str(weight_path)]
     assert artifact["common_support"]["erode_radius_px"] == 2
+    assert artifact["common_support"]["raw_intersection_pixel_count"] == int(
+        (weight > 0).sum()
+    )
+    assert artifact["common_support"]["individual"][0]["pixel_count"] == int(
+        (weight > 0).sum()
+    )
+    assert len(artifact["common_support"]["quadrant_pixel_count"]) == 4
     assert artifact["placement"]["margin_px"] == 10.0
     assert artifact["placement"]["min_separation_px"] == 6.0
     assert all(y >= 14.0 for _, y in artifact["target_xy"])

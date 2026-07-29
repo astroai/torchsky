@@ -151,6 +151,17 @@ Do not count independent models as receiving six times the optimization budget.
     placement to the existing `updec-adass-manifest` CLI. Three focused
     contracts pass; the remaining unchecked work is freezing the selected
     six-band mask.
+  - [x] Complete all 42 blank products for six bands times seven classical
+    candidates on the exact TAN grid. Session `kkpxfdxb` at `3ff8604` persisted
+    every SCI/weight product under
+    `/arc/projects/ots/torchsky-runs/20260729-smacs-sixband-controls-3ff8604/`.
+    Zero-source probe `wxz900hl` measured only 984 pixels after nine-pixel
+    erosion (mask SHA-256 `99943000...2b9dc68`), so this candidate crop is not
+    frozen for science injections. Diagnose the limiting band/method and
+    support topology without using recovery outcomes.
+  - [x] Replace whole-quadrant rejection sampling with deterministic shuffled
+    valid-pixel pools per quadrant. Sparse valid masks now either place sources
+    reproducibly or report the unsupported quadrant directly.
 - [ ] Inject sources through each exposure WCS, oversampled PSF, pixel footprint,
   calibration, and bandpass. Preserve the original background/noise/artifacts.
 - [ ] Use smooth continuum point sources for the abstract endpoint. Add compact
@@ -275,6 +286,9 @@ each final method boundary. Otherwise do not begin model tuning.
     `--support-erode-radius-px` in the existing manifest profile. The emitted
     artifact records the resolved paths, retained pixel count/fraction, and
     SHA-256 of the exact boolean placement mask.
+  - [x] Produce all 42 exact-grid blank products at `3ff8604`. The zero-source
+    probe retained only 984 pixels after erosion, so the crop remains a
+    diagnostic while limiting-map and quadrant support are audited.
 - [ ] Fit or propagate each method's effective PSF before applying the 2% flux
   gate. A fixed injected-PSF fit is not comparable after different resampling
   kernels broaden the product differently.

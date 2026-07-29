@@ -331,39 +331,81 @@ def make_updec_common_world_manifest(
     generator = torch.Generator().manual_seed(seed)
     positions: list[torch.Tensor] = []
     quadrants: list[int] = []
-    attempts = 0
-    while len(positions) < source_count:
-        attempts += 1
-        if attempts > max(1000, 200 * source_count):
-            raise ValueError("cannot place requested sources at the frozen separation")
-        quadrant = len(positions) % 4
+    quadrant_bounds: list[tuple[float, float, float, float]] = []
+    for quadrant in range(4):
         left = quadrant % 2 == 0
         bottom = quadrant < 2
         x_min = margin_px if left else 0.5 * width + 0.5 * margin_px
         x_max = 0.5 * width - 0.5 * margin_px if left else width - margin_px
         y_min = margin_px if bottom else 0.5 * height + 0.5 * margin_px
         y_max = 0.5 * height - 0.5 * margin_px if bottom else height - margin_px
-        sample = torch.rand((2,), generator=generator, dtype=torch.float64)
-        candidate = torch.tensor(
-            [
-                x_min + float(sample[0]) * (x_max - x_min),
-                y_min + float(sample[1]) * (y_max - y_min),
-            ],
-            dtype=torch.float64,
-        )
-        candidate_x = int(round(float(candidate[0])))
-        candidate_y = int(round(float(candidate[1])))
-        if valid_mask is not None and not bool(
-            valid_mask[candidate_y, candidate_x]
-        ):
-            continue
-        if positions and min(
-            float(torch.linalg.vector_norm(candidate - position))
-            for position in positions
-        ) < min_separation_px:
-            continue
-        positions.append(candidate)
-        quadrants.append(quadrant)
+        quadrant_bounds.append((x_min, x_max, y_min, y_max))
+    if valid_mask is not None:
+        candidate_pools: list[torch.Tensor] = []
+        valid_y, valid_x = torch.nonzero(valid_mask, as_tuple=True)
+        for x_min, x_max, y_min, y_max in quadrant_bounds:
+            inside = (
+                (valid_x >= math.ceil(x_min))
+                & (valid_x <= math.floor(x_max))
+                & (valid_y >= math.ceil(y_min))
+                & (valid_y <= math.floor(y_max))
+            )
+            pool = torch.stack((valid_x[inside], valid_y[inside]), dim=1)
+            if pool.shape[0]:
+                pool = pool[
+                    torch.randperm(pool.shape[0], generator=generator)
+                ]
+            candidate_pools.append(pool)
+        pool_offsets = [0, 0, 0, 0]
+        while len(positions) < source_count:
+            quadrant = len(positions) % 4
+            pool = candidate_pools[quadrant]
+            accepted = False
+            while pool_offsets[quadrant] < pool.shape[0]:
+                pixel = pool[pool_offsets[quadrant]].to(torch.float64)
+                pool_offsets[quadrant] += 1
+                jitter = (
+                    torch.rand((2,), generator=generator, dtype=torch.float64) - 0.5
+                ) * 0.9
+                candidate = pixel + jitter
+                if positions and min(
+                    float(torch.linalg.vector_norm(candidate - position))
+                    for position in positions
+                ) < min_separation_px:
+                    continue
+                positions.append(candidate)
+                quadrants.append(quadrant)
+                accepted = True
+                break
+            if not accepted:
+                raise ValueError(
+                    "cannot place requested sources in every support quadrant"
+                )
+    else:
+        attempts = 0
+        while len(positions) < source_count:
+            attempts += 1
+            if attempts > max(1000, 200 * source_count):
+                raise ValueError(
+                    "cannot place requested sources at the frozen separation"
+                )
+            quadrant = len(positions) % 4
+            x_min, x_max, y_min, y_max = quadrant_bounds[quadrant]
+            sample = torch.rand((2,), generator=generator, dtype=torch.float64)
+            candidate = torch.tensor(
+                [
+                    x_min + float(sample[0]) * (x_max - x_min),
+                    y_min + float(sample[1]) * (y_max - y_min),
+                ],
+                dtype=torch.float64,
+            )
+            if positions and min(
+                float(torch.linalg.vector_norm(candidate - position))
+                for position in positions
+            ) < min_separation_px:
+                continue
+            positions.append(candidate)
+            quadrants.append(quadrant)
     target_xy = (
         torch.stack(positions)
         if positions
@@ -431,6 +473,11 @@ def make_updec_common_world_manifest(
                 hashlib.sha256(valid_mask.numpy().tobytes()).hexdigest()
                 if valid_mask is not None
                 else None
+            ),
+            "sampling": (
+                "shuffled_valid_pixels"
+                if valid_mask is not None
+                else "continuous_rejection"
             ),
         },
         "psf_contract": {
@@ -2403,6 +2450,14 @@ def main() -> int:
             if support_weights
             else None
         )
+        raw_support = (
+            common_support_mask(
+                support_weights,
+                threshold=args.support_weight_threshold,
+            )
+            if support_weights
+            else None
+        )
         support_mask_path: Path | None = None
         support_mask_sha256: str | None = None
         if valid_mask is not None and args.support_mask_out is not None:
@@ -2450,6 +2505,50 @@ def main() -> int:
                 "erode_radius_px": args.support_erode_radius_px,
                 "pixel_count": int(valid_mask.sum()),
                 "fraction": float(valid_mask.to(torch.float64).mean()),
+                "raw_intersection_pixel_count": int(raw_support.sum()),
+                "raw_intersection_fraction": float(
+                    raw_support.to(torch.float64).mean()
+                ),
+                "individual": [
+                    {
+                        "path": str(path),
+                        "pixel_count": int(
+                            (
+                                torch.isfinite(weight)
+                                & (weight > args.support_weight_threshold)
+                            ).sum()
+                        ),
+                    }
+                    for path, weight in zip(
+                        support_paths, support_weights, strict=True
+                    )
+                ],
+                "quadrant_pixel_count": [
+                    int(
+                        valid_mask[
+                            : target_shape[0] // 2,
+                            : target_shape[1] // 2,
+                        ].sum()
+                    ),
+                    int(
+                        valid_mask[
+                            : target_shape[0] // 2,
+                            target_shape[1] // 2 :,
+                        ].sum()
+                    ),
+                    int(
+                        valid_mask[
+                            target_shape[0] // 2 :,
+                            : target_shape[1] // 2,
+                        ].sum()
+                    ),
+                    int(
+                        valid_mask[
+                            target_shape[0] // 2 :,
+                            target_shape[1] // 2 :,
+                        ].sum()
+                    ),
+                ],
                 "mask_path": (
                     str(support_mask_path) if support_mask_path is not None else None
                 ),
