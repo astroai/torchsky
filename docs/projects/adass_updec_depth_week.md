@@ -38,7 +38,9 @@ products; beating separate per-band images alone is not sufficient.
   iter0-versus-iter10 context comparison. They cannot enter the injected-depth
   method matrix unless the same injected detector exposures are rerun through
   the UPdec pipeline.
-- [x] Keep all FITS access through Torchfits/Torchsky.
+- [x] Keep all FITS access through Torchfits/Torchsky. The standalone public
+  artifact-pair benchmark calls Torchfits directly, so it does not accidentally
+  require Torchsky's compiled mapping extension merely to read FITS.
 - [x] Make no FOSSIL, component-separation, COSMOS, release, or unrelated API
   changes during this sprint.
 - [x] Fix only defects that block the experiment. Time-box exact Torchsky

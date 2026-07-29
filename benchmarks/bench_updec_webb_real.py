@@ -24,7 +24,7 @@ if str(SRC) not in sys.path:
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import torchsky  # noqa: E402
+import torchfits  # noqa: E402
 from download_updec_webb import UPDEC_WEBB_FILES, download_spec  # noqa: E402
 
 
@@ -58,17 +58,17 @@ def _gradient_mean(array: np.ndarray) -> float:
     return float(finite.mean()) if finite.size else float("nan")
 
 
-def _time_torchsky_read(path: Path, *, hdu: int) -> tuple[float, tuple[int, ...]]:
+def _time_torchfits_read(path: Path, *, hdu: int) -> tuple[float, tuple[int, ...]]:
     t0 = time.perf_counter()
-    image = torchsky.read(str(path), hdu=hdu)
+    image = torchfits.read(str(path), hdu=hdu)
     dt = (time.perf_counter() - t0) * 1000.0
     return dt, tuple(int(v) for v in image.shape)
 
 
 def _open_sci(path: Path) -> tuple[np.ndarray, dict[str, Any], int]:
-    with torchsky.open(str(path)) as hdul:
+    with torchfits.open(str(path)) as hdul:
         n_hdus = len(hdul)
-    data, header = torchsky.read(str(path), hdu="SCI", return_header=True)
+    data, header = torchfits.read(str(path), hdu="SCI", return_header=True)
     return (
         data.detach().cpu().numpy().astype(np.float32, copy=False),
         dict(header),
@@ -92,8 +92,8 @@ def _compare_pair(
     crop_mask = np.isfinite(crop0) & np.isfinite(crop1)
     crop_diff = crop1[crop_mask] - crop0[crop_mask]
 
-    read_ms0, read_shape0 = _time_torchsky_read(iter0_path, hdu=1)
-    read_ms1, read_shape1 = _time_torchsky_read(iter10_path, hdu=1)
+    read_ms0, read_shape0 = _time_torchfits_read(iter0_path, hdu=1)
+    read_ms1, read_shape1 = _time_torchfits_read(iter10_path, hdu=1)
 
     wcs_keys = [
         "CTYPE1",
@@ -129,10 +129,10 @@ def _compare_pair(
         "crop_laplacian_std_ratio": float(
             _laplacian_std(crop1) / _laplacian_std(crop0)
         ),
-        "torchsky_iter0_read_ms": read_ms0,
-        "torchsky_iter10_read_ms": read_ms1,
-        "torchsky_iter0_shape": list(read_shape0),
-        "torchsky_iter10_shape": list(read_shape1),
+        "torchfits_iter0_read_ms": read_ms0,
+        "torchfits_iter10_read_ms": read_ms1,
+        "torchfits_iter0_shape": list(read_shape0),
+        "torchfits_iter10_shape": list(read_shape1),
     }
 
 
