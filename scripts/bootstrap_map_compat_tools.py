@@ -131,6 +131,11 @@ def _swarp_build_env(
         for value in (str(lib_dir / "pkgconfig"), env.get("PKG_CONFIG_PATH", ""))
         if value
     )
+    system_cc = shutil.which("cc", path="/usr/bin:/bin")
+    if system_cc:
+        # ponytail: SWarp's Autoconf build is Unix-only; prefer the host linker
+        # over a base-image Conda cross-toolchain with an incompatible glibc sysroot.
+        env["CC"] = system_cc
     return env
 
 
