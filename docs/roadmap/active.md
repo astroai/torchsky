@@ -69,6 +69,10 @@ stacking-versus-INR/Foam depth result defined in
   - [ ] Freeze the intersection of all selected methods' six-band output weight
     maps, erode it by the PSF/injection footprint, and use only that mask for
     subsequent source placement.
+    - [x] Add the support-intersection/erosion primitive and wire final weight
+      maps into `updec-adass-manifest`; validate target WCS, persist the mask
+      hash/count/fraction, and reject placements outside it. The remaining work
+      is generating and freezing the complete selected-method six-band weights.
   - [ ] Propagate or fit the method-dependent effective PSF before comparing
     bright-source flux bias or selecting a classical kernel.
   - [ ] Run three positive validation batches plus one blank, build the

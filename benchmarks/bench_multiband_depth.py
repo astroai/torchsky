@@ -298,11 +298,18 @@ def make_updec_common_world_manifest(
     margin_px: float = 12.0,
     min_separation_px: float = 8.0,
     batch_id: str = "validation-000",
+    valid_mask: torch.Tensor | None = None,
 ) -> dict[str, object]:
     """Generate a deterministic four-quadrant smooth-continuum injection batch."""
 
     width = int(target_header["NAXIS1"])
     height = int(target_header["NAXIS2"])
+    if valid_mask is not None and (
+        valid_mask.dtype is not torch.bool
+        or valid_mask.device.type != "cpu"
+        or valid_mask.shape != (height, width)
+    ):
+        raise ValueError("valid_mask must be a CPU bool tensor matching the target")
     normalized_bands = tuple(str(band).upper() for band in bands)
     if (
         source_count < 0
@@ -344,6 +351,12 @@ def make_updec_common_world_manifest(
             ],
             dtype=torch.float64,
         )
+        candidate_x = int(round(float(candidate[0])))
+        candidate_y = int(round(float(candidate[1])))
+        if valid_mask is not None and not bool(
+            valid_mask[candidate_y, candidate_x]
+        ):
+            continue
         if positions and min(
             float(torch.linalg.vector_norm(candidate - position))
             for position in positions
@@ -411,12 +424,62 @@ def make_updec_common_world_manifest(
             "margin_px": margin_px,
             "min_separation_px": min_separation_px,
             "quadrant_round_robin": True,
+            "valid_mask_pixel_count": (
+                int(valid_mask.sum()) if valid_mask is not None else None
+            ),
+            "valid_mask_sha256": (
+                hashlib.sha256(valid_mask.numpy().tobytes()).hexdigest()
+                if valid_mask is not None
+                else None
+            ),
         },
         "psf_contract": {
             band: asdict(gaussian_psf_contract(band))
             for band in normalized_bands
         },
     }
+
+
+def common_support_mask(
+    weights: Sequence[torch.Tensor],
+    *,
+    threshold: float = 0.0,
+    erode_radius_px: int = 0,
+) -> torch.Tensor:
+    """Intersect finite output weights and erode by a fixed source footprint."""
+
+    if not weights:
+        raise ValueError("at least one weight map is required")
+    shape = weights[0].shape
+    if (
+        len(shape) != 2
+        or not math.isfinite(threshold)
+        or not isinstance(erode_radius_px, int)
+        or erode_radius_px < 0
+        or any(weight.shape != shape for weight in weights)
+    ):
+        raise ValueError("weight maps must be matching 2-D tensors")
+    support = torch.ones(shape, dtype=torch.bool)
+    for weight in weights:
+        values = weight.detach().to(device="cpu")
+        support &= torch.isfinite(values) & (values > threshold)
+    if erode_radius_px:
+        invalid = (~support).to(dtype=torch.float32)[None, None]
+        invalid = F.pad(
+            invalid,
+            (erode_radius_px,) * 4,
+            mode="constant",
+            value=1.0,
+        )
+        support = (
+            F.max_pool2d(
+                invalid,
+                kernel_size=2 * erode_radius_px + 1,
+                stride=1,
+            )[0, 0]
+            == 0.0
+        )
+    return support
 
 
 def gaussian_psf_contract(
@@ -1915,6 +1978,13 @@ def main() -> int:
         default="27,27.5,28,28.5,29,29.5,30",
     )
     parser.add_argument(
+        "--support-weight-paths",
+        default=None,
+        help="Comma-separated final weight maps whose positive support is intersected",
+    )
+    parser.add_argument("--support-weight-threshold", type=float, default=0.0)
+    parser.add_argument("--support-erode-radius-px", type=int, default=9)
+    parser.add_argument(
         "--json-out",
         type=Path,
         default=Path("benchmark_results/multiband_depth_gate0.json"),
@@ -1960,6 +2030,53 @@ def main() -> int:
                 args.cutout_size or 512,
             )
         )
+        support_paths = tuple(
+            Path(value.strip()).expanduser().resolve()
+            for value in (args.support_weight_paths or "").split(",")
+            if value.strip()
+        )
+        support_weights: list[torch.Tensor] = []
+        target_shape = (
+            int(target_header["NAXIS2"]),
+            int(target_header["NAXIS1"]),
+        )
+        target_wcs = torchsky.WCS(target_header)
+        target_probe = torch.tensor(
+            [
+                [0.0, 0.0],
+                [target_shape[1] - 1.0, 0.0],
+                [0.0, target_shape[0] - 1.0],
+                [target_shape[1] - 1.0, target_shape[0] - 1.0],
+                [0.5 * (target_shape[1] - 1.0), 0.5 * (target_shape[0] - 1.0)],
+            ],
+            dtype=torch.float64,
+        )
+        target_world = target_wcs.pixel_to_world(target_probe)
+        for path in support_paths:
+            weight, header = torchsky.read(
+                str(path),
+                return_header=True,
+            )
+            if weight.shape != target_shape:
+                raise ValueError(f"support weight map has wrong shape: {path}")
+            weight_world = torchsky.WCS(dict(header)).pixel_to_world(target_probe)
+            if not torch.allclose(
+                weight_world,
+                target_world,
+                rtol=0.0,
+                atol=1e-9,
+            ):
+                raise ValueError(f"support weight map has a different target WCS: {path}")
+            support_weights.append(weight)
+        valid_mask = (
+            common_support_mask(
+                support_weights,
+                threshold=args.support_weight_threshold,
+                erode_radius_px=args.support_erode_radius_px,
+            )
+            if support_weights
+            else None
+        )
         artifact = make_updec_common_world_manifest(
             target_header=target_header,
             bands=tuple(
@@ -1975,6 +2092,7 @@ def main() -> int:
                 if value.strip()
             ),
             batch_id=args.batch_id,
+            valid_mask=valid_mask,
         )
         artifact["reference_path"] = str(args.reference_path.resolve())
         artifact["target_crop"] = {
@@ -1982,6 +2100,17 @@ def main() -> int:
             "x0": args.crop_x0,
             "y0": args.crop_y0,
         }
+        artifact["common_support"] = (
+            {
+                "weight_paths": [str(path) for path in support_paths],
+                "weight_threshold": args.support_weight_threshold,
+                "erode_radius_px": args.support_erode_radius_px,
+                "pixel_count": int(valid_mask.sum()),
+                "fraction": float(valid_mask.to(torch.float64).mean()),
+            }
+            if valid_mask is not None
+            else None
+        )
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
     print(json.dumps(artifact, indent=2, sort_keys=True))

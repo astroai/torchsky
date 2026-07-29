@@ -146,6 +146,11 @@ Do not count independent models as receiving six times the optimization budget.
   plumbing batch deliberately remains evidence for this gate: one AB 27.5
   source accepted by both input detectors was absent from SWarp's final
   product.
+  - [x] Add deterministic support intersection, configurable erosion, target-WCS
+    validation, mask hashing, and support-constrained source placement to the
+    existing `updec-adass-manifest` CLI. Three focused contracts pass; the
+    remaining unchecked work is producing and freezing all selected six-band
+    weight maps.
 - [ ] Inject sources through each exposure WCS, oversampled PSF, pixel footprint,
   calibration, and bandpass. Preserve the original background/noise/artifacts.
 - [ ] Use smooth continuum point sources for the abstract endpoint. Add compact
@@ -258,6 +263,10 @@ each final method boundary. Otherwise do not begin model tuning.
 - [ ] Generate the frozen per-band/per-method common-support mask before the
   next injection manifests. Exclude the unsupported-source failure by design,
   not after examining recovery.
+  - [x] Implement `--support-weight-paths`, `--support-weight-threshold`, and
+    `--support-erode-radius-px` in the existing manifest profile. The emitted
+    artifact records the resolved paths, retained pixel count/fraction, and
+    SHA-256 of the exact boolean placement mask.
 - [ ] Fit or propagate each method's effective PSF before applying the 2% flux
   gate. A fixed injected-PSF fit is not comparable after different resampling
   kernels broaden the product differently.

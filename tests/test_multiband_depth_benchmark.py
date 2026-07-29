@@ -19,6 +19,7 @@ from bench_multiband_depth import (  # noqa: E402
     _gate0_artifact,
     calibrate_purity_threshold,
     coadd_synthetic_exposures,
+    common_support_mask,
     detection_statistic,
     find_detections,
     flux_color_metrics,
@@ -31,6 +32,7 @@ from bench_multiband_depth import (  # noqa: E402
     inject_common_world_exposures,
     make_seed_manifest,
     make_updec_common_world_manifest,
+    main as multiband_main,
     maximum_cardinality_angular_match,
     maximum_cardinality_match,
     measure_gaussian_source_flux_jy,
@@ -223,6 +225,90 @@ def test_common_world_manifest_is_deterministic_and_quadrant_balanced() -> None:
     assert all(
         len(values) == 28 for values in first["band_flux_jy"].values()
     )
+
+
+def test_common_support_mask_intersects_erodes_and_gates_manifest() -> None:
+    first_weight = torch.ones((128, 128), dtype=torch.float32)
+    second_weight = torch.ones((128, 128), dtype=torch.float32)
+    second_weight[:20] = 0.0
+    second_weight[-20:] = 0.0
+    second_weight[:, :20] = 0.0
+    second_weight[:, -20:] = 0.0
+    second_weight[64, 64] = float("nan")
+    support = common_support_mask(
+        (first_weight, second_weight),
+        erode_radius_px=2,
+    )
+
+    assert support.dtype is torch.bool
+    assert not bool(support[21, 64])
+    assert bool(support[22, 64])
+    assert not bool(support[62:67, 62:67].any())
+    manifest = make_updec_common_world_manifest(
+        target_header=simple_tan_header(128, 128, pixel_scale_arcsec=0.04),
+        source_count=28,
+        seed=44,
+        margin_px=8.0,
+        valid_mask=support,
+    )
+    for x, y in manifest["target_xy"]:
+        assert bool(support[round(y), round(x)])
+    assert manifest["placement"]["valid_mask_pixel_count"] == int(support.sum())
+    assert len(manifest["placement"]["valid_mask_sha256"]) == 64
+
+
+def test_manifest_cli_reads_final_weight_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    header = simple_tan_header(64, 64, pixel_scale_arcsec=0.04)
+    reference = tmp_path / "reference.fits"
+    fits.HDUList(
+        [
+            fits.PrimaryHDU(),
+            fits.ImageHDU(
+                data=torch.zeros((64, 64), dtype=torch.float32).numpy(),
+                header=fits.Header(header),
+                name="SCI",
+            ),
+        ]
+    ).writeto(reference)
+    weight_path = tmp_path / "weight.fits"
+    weight = torch.ones((64, 64), dtype=torch.float32)
+    weight[:12] = 0.0
+    torchsky.write(str(weight_path), weight, header=header)
+    output = tmp_path / "manifest.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "bench_multiband_depth.py",
+            "--profile",
+            "updec-adass-manifest",
+            "--reference-path",
+            str(reference),
+            "--cutout-size",
+            "64",
+            "--crop-x0",
+            "0",
+            "--crop-y0",
+            "0",
+            "--batch-sources",
+            "8",
+            "--support-weight-paths",
+            str(weight_path),
+            "--support-erode-radius-px",
+            "2",
+            "--json-out",
+            str(output),
+        ],
+    )
+
+    assert multiband_main() == 0
+    artifact = json.loads(output.read_text())
+    assert artifact["common_support"]["weight_paths"] == [str(weight_path)]
+    assert artifact["common_support"]["erode_radius_px"] == 2
+    assert all(y >= 14.0 for _, y in artifact["target_xy"])
 
 
 def test_forced_flux_color_and_heldout_likelihood() -> None:
