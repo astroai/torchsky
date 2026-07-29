@@ -345,6 +345,10 @@ each final method boundary. Otherwise do not begin model tuning.
     cross-method peaks within the predeclared six-pixel radius, and persist the
     input hashes plus exact world-coordinate avoidance catalogue. The seven
     real blank catalogues remain an execution gate.
+  - [x] Make `MeshSkyEstimator` fill fully masked coarse cells from finite
+    neighbouring cells and fail closed only when the whole mesh is masked.
+    Session `bgjkc3jm` exposed the former NaN propagation before producing a
+    catalogue; no scientific outcome was inspected.
 - [ ] Include Montage if its exact target grid is supported; otherwise record an
   explicit secondary skip and continue.
 - [ ] Run at least three validation injection batches and one blank control.

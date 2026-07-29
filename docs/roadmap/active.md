@@ -110,6 +110,10 @@ stacking-versus-INR/Foam depth result defined in
     - [x] Add a deterministic control-union profile that validates the common
       support contract, hashes every method catalogue, and covers
       cross-method duplicate peaks inside the frozen six-pixel radius.
+    - [x] Harden `MeshSkyEstimator` for sparse common support by propagating
+      finite neighbouring mesh values into fully masked cells. The primitive
+      now stays finite on partial masks and fails closed on an entirely masked
+      image; CANFAR session `bgjkc3jm` exposed this before catalogue creation.
   - [x] Add frozen blank-catalogue neighborhood exclusion to common-support
     manifests so science injections cannot be placed beside pre-existing
     sources. The exact catalogue/radius remain an execution gate.

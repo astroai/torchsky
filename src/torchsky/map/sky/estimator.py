@@ -199,7 +199,32 @@ class MeshSkyEstimator:
             fill = torch.nanmedian(flat, dim=-1).values[..., None]
             flat = torch.where(flat.isnan(), fill, flat)
         stat_fn = _STATISTIC_REGISTRY[self.statistic]
-        return stat_fn(flat, dim=-1)
+        mesh = stat_fn(flat, dim=-1)
+        return self._fill_empty_mesh_cells(mesh)
+
+    @staticmethod
+    def _fill_empty_mesh_cells(mesh: Tensor) -> Tensor:
+        valid = torch.isfinite(mesh)
+        if bool(valid.all()):
+            return mesh
+        if not bool(valid.any()):
+            raise ValueError("mask excludes every sky mesh cell")
+        filled = torch.where(valid, mesh, 0.0)
+        kernel = torch.ones((1, 1, 3, 3), dtype=mesh.dtype, device=mesh.device)
+        for _ in range(max(mesh.shape)):
+            support = valid.to(mesh.dtype)
+            count = F.conv2d(support[None, None], kernel, padding=1)[0, 0]
+            neighbor_sum = F.conv2d(filled[None, None], kernel, padding=1)[0, 0]
+            can_fill = ~valid & (count > 0)
+            filled = torch.where(
+                can_fill,
+                neighbor_sum / count.clamp_min(1),
+                filled,
+            )
+            valid = valid | can_fill
+            if bool(valid.all()):
+                return filled
+        raise RuntimeError("failed to fill disconnected sky mesh cells")
 
     def _filter_mesh(self, mesh: Tensor) -> Tensor:
         ft = self._filter_type

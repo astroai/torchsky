@@ -89,6 +89,34 @@ class TestMeshSkyEstimator:
             sky_masked = est(image, mask=mask)
             assert float(sky_masked.max()) < 10.0, f"stat={stat}"
 
+    def test_fully_masked_mesh_cells_do_not_poison_valid_background(self):
+        yy, xx = torch.meshgrid(
+            torch.arange(64, dtype=torch.float32),
+            torch.arange(64, dtype=torch.float32),
+            indexing="ij",
+        )
+        image = 5.0 + 0.01 * xx + 0.02 * yy
+        mask = torch.zeros_like(image, dtype=torch.bool)
+        mask[:, :32] = True
+        est = MeshSkyEstimator(
+            block_size=16,
+            block_stride=16,
+            statistic="median",
+            mesh_filter="median",
+        )
+
+        sky = est(image, mask)
+
+        assert torch.isfinite(sky).all()
+        assert float((sky[:, 32:] - image[:, 32:]).abs().mean()) < 0.25
+
+    def test_entirely_masked_image_fails_closed(self):
+        image = torch.ones((32, 32), dtype=torch.float32)
+        est = MeshSkyEstimator(block_size=16, statistic="median")
+
+        with pytest.raises(ValueError, match="excludes every sky mesh cell"):
+            est(image, torch.ones_like(image, dtype=torch.bool))
+
     def test_non_divisible_dimensions(self):
         image = torch.randn(70, 50, dtype=torch.float32)
         est = MeshSkyEstimator(block_size=16, statistic="median")
