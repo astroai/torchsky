@@ -71,11 +71,15 @@ products; beating separate per-band images alone is not sufficient.
 - [x] Add detector-level real-image injection/recovery. The
   `updec-adass-smoke` profile reads unchanged `SCI/ERR/DQ`, injects into `SCI`,
   and keeps the control image available. Never inject only into a coadd.
-- [ ] Add an approved band-dependent PSF contract. Injection truth must use a
+- [x] Add an approved band-dependent PSF contract. Injection truth must use a
   more accurate/oversampled PSF than the fitted approximation so this is not an
-  inverse-PSF experiment. A six-band oversampled Gaussian proxy and deliberate
-  5% width-mismatch control now gate the plumbing; science approval or an
-  empirical/WebbPSF truth model is still required before the blind campaign.
+  inverse-PSF experiment. For the abstract endpoint, freeze the existing
+  four-times oversampled Gaussian truth at FWHM
+  `0.033/0.049/0.066/0.091/0.116/0.145` arcsec for
+  F090W/F150W/F200W/F277W/F356W/F444W and retain the deliberate 5% wider fitted
+  model as the misspecification control. This deterministic relative-depth
+  endpoint minimizes new instrument-model systematics; WebbPSF and empirical
+  stars are post-abstract robustness work, not tuning inputs.
 - [ ] Route independent and shared Foam through the same WCS, bandpass, pixel
   footprint, PSF, mask, weight, and exposure-nuisance operators used by the INR.
 - [ ] Apply one common detector/photometer to every final band product.
@@ -255,7 +259,10 @@ each final method boundary. Otherwise do not begin model tuning.
   Evidence: session `tmbk7b72` at commit `35af22e` downloaded all 135 CAL
   products and linked all 27 CRFs. Session `e74yyfec` at commit `46c1ce5`
   linked all 135 registered aligned products and atomically refreshed the
-  canonical manifest.
+  canonical manifest. The experiment consumes the 135 aligned
+  `*_crf_rshift_tweakreg.fits` products; the CAL inventory is a reproducibility
+  fallback, and the 27 unregistered CRFs are the long-channel originals found
+  at `/arc/projects/ots/jwst_smacs0723/`.
 - [x] Freeze the validation comparator interface: `--input-product aligned`,
   `--patt-nums 3,8`, `--crop-x0 112 --crop-y0 0`, and
   `--validation-classical --drizzle-pixfracs 0.6,0.8,1.0`.
@@ -336,6 +343,18 @@ each final method boundary. Otherwise do not begin model tuning.
     a kernel selection. Session `g1ajbo0l` is testing the native
     flux-conserving Torchsky square-Drizzle variants before the candidate set is
     frozen.
+    The primary comparison rows use the external Python `drizzle` package and
+    the SWarp 2.41.5 executable. Torchsky square Drizzle is a separately named
+    native candidate, never an alias for either external baseline.
+  - [x] Checkpoint and fan out the slow native calibration without changing its
+    frozen inputs or methods. Serial session `g1ajbo0l` completed both
+    positive/blank F090W and F150W products plus the F200W blank before being
+    stopped. The first fanout `z4yz1lrz`/`wgy6yrh6`/`fpkjir10`/`k1nm430k`
+    failed during bootstrap source parsing before scientific work. Corrected
+    sessions `kcumoz89`, `glns4y2r`, `x32kchen`, and `ys4tjw3v` independently
+    finish F200W/F277W/F356W/F444W in the same durable artifact root. Low-resource
+    continuation session `y5cbuwjy` waits for all 12 band/mode reports and then
+    generates `effective-psf-flux-report.json` automatically.
 - [x] Select Drizzle `pixfrac` from the predeclared grid and SWarp kernel from
   `{BILINEAR, LANCZOS3}` using validation injections plus the predeclared flux
   gate. At pooled purity at least 95%, upstream Drizzle `pixfrac=0.8` recovers
@@ -526,7 +545,10 @@ pixi run -e sphere-bench python benchmarks/bench_multiband_depth.py \
   raw exposures.
 - [ ] Approve the abstract endpoint population: smooth-continuum point sources
   first, with extended/dropout/line sources labelled as robustness work.
-- [ ] Approve the PSF truth model and acceptable instrument systematic floor.
+- [x] Approve the abstract PSF truth model: the frozen four-times oversampled
+  six-band Gaussian contract plus the 5% width-mismatch control. Treat
+  WebbPSF/empirical-star results as later robustness evidence and do not tune
+  the abstract endpoint on them.
 - [ ] Draft the motivation/methods paragraphs without a numerical depth claim;
   leave `X`, confidence interval, photometric bias, and runtime placeholders.
 

@@ -10,7 +10,7 @@ stacking-versus-INR/Foam depth result defined in
 - [x] Freeze the field, target crop, six bands, exposure split, primary endpoint,
   claim gates, required comparator matrix, four-day submission sprint, and
   fallback abstract language.
-- [ ] Execute Day 1: real detector injection, unit/calibration closure, PSF
+- [x] Execute Day 1: real detector injection, unit/calibration closure, PSF
   contract, and tiny CPU/CUDA smoke.
   - [x] Add the stable real-data profile, distorted-WCS local pixel-area
     primitive, flux-conserving `MJy/sr` injection, frozen `PATT_NUM` split,
@@ -22,8 +22,9 @@ stacking-versus-INR/Foam depth result defined in
     Evidence: session `jaannbqt`, commit `3bc6ca6`, `cuda-bench`, Torch 2.10.0 /
     CUDA 12.9, 33.10 s, 1,675,628 KiB peak child RSS, durable artifact
     `/arc/projects/ots/torchsky-runs/20260728-updec-day1-3bc6ca6-v3/`.
-  - [ ] Replace or approve the smoke-only Gaussian PSF truth before blind
-    science injections.
+  - [x] Approve the deterministic abstract PSF endpoint: four-times
+    oversampled band-dependent Gaussian truth with a deliberately 5% wider
+    fitted model. WebbPSF/empirical stars remain post-abstract robustness work.
 - [ ] Execute Day 2: validation-selected upstream Drizzle/SWarp plus classical
   multiband chi-square baseline.
   - [x] Freeze and locally verify the 135-file CAL filename grid; inventory 27
@@ -39,7 +40,9 @@ stacking-versus-INR/Foam depth result defined in
     persisted manifest.
     Evidence: headless session `tmbk7b72`, exact commit `35af22e`, completed
     successfully in 145 seconds of command time; aligned completion session
-    `e74yyfec` at `46c1ce5`.
+    `e74yyfec` at `46c1ce5`. The scientific runs use the 135 aligned
+    `*_crf_rshift_tweakreg.fits` files. CAL is the complete fallback inventory;
+    the 27 plain CRFs are the available unregistered long-channel originals.
   - [x] Run the validation-only Torchsky/Drizzle/SWarp backend sweep.
     Evidence: Torchsky `axix9wz3` at `803a200`, upstream Drizzle `z7t27ff0` at
     `46c1ce5`, and locked SWarp 2.41.5 `gckyhwco` at `62f572a`; durable reports
@@ -144,9 +147,15 @@ stacking-versus-INR/Foam depth result defined in
       74/84 (88.1%) sources; SWarp bilinear is the flux-valid SWarp winner at
       72/84 (85.7%). Summaries live under
       `/arc/projects/ots/torchsky-runs/20260729-smacs-validation-score-aa0aa21/`.
-    - [ ] Finish native Torchsky square-Drizzle calibration in `g1ajbo0l`,
-      rebuild its common-support/control evidence if it passes, then freeze
-      `adass_updec_classical_config.json`.
+    - [ ] Finish native Torchsky square-Drizzle calibration, rebuild its
+      common-support/control evidence if it passes, then freeze
+      `adass_updec_classical_config.json`. Serial session `g1ajbo0l` completed
+      F090W/F150W and the F200W blank before checkpointing. Exact-method fanout
+      sessions `kcumoz89`, `glns4y2r`, `x32kchen`, and `ys4tjw3v` now finish
+      F200W/F277W/F356W/F444W without overlapping output directories. The
+      preceding four sessions failed in bootstrap parsing before scientific
+      work and produced no products. Continuation session `y5cbuwjy` waits for
+      the complete matrix and automatically emits the effective-PSF/flux report.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
 - [ ] Execute Day 4: 20-batch CANFAR blind test, paired intervals, report, and
