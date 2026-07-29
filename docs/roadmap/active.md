@@ -71,7 +71,7 @@ stacking-versus-INR/Foam depth result defined in
   - [x] Force every subsequent validation method onto one canonical north-up
     TAN target and make the manifest CLI use and validate that same WCS. The
     complete six-band control sweep remains the execution evidence gate.
-  - [ ] Freeze the intersection of all selected methods' six-band output weight
+  - [x] Freeze the intersection of all selected methods' six-band output weight
     maps, erode it by the PSF/injection footprint, and use only that mask for
     subsequent source placement.
     - [x] Add the support-intersection/erosion primitive and wire final weight
@@ -91,11 +91,15 @@ stacking-versus-INR/Foam depth result defined in
     - [x] Freeze 99% local footprint coverage from weights only. Session
       `vedlmudw` at `a0a40bf` retained 109,393 pixels with at least 22,175 in
       every quadrant; no recovery outcome contributed to this choice.
-  - [ ] Propagate or fit the method-dependent effective PSF before comparing
+    - [x] Persist and exercise the selected mask in session `ry4c9xv5`; exact
+      FITS SHA-256 `adc31bd3...d2dfa253`.
+  - [x] Propagate or fit the method-dependent effective PSF before comparing
     bright-source flux bias or selecting a classical kernel.
     - [x] Add robust fractional-phase stacking of isolated
       injected-minus-blank responses into normalized effective PSFs, with a
       stable CLI that persists their hashes and shape diagnostics.
+    - [x] Session `ry4c9xv5` at `8cc3fb9` persisted all 42 ePSFs from eight
+      isolated AB=25 sources; no completeness or kernel outcome was used.
   - [x] Add spatial-inverse-variance matched filtering and positive six-band
     chi detection that accepts the measured per-band effective PSFs, plus
     robust blank-response whitening for resampling-correlated noise. Empirical

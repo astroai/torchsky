@@ -140,7 +140,7 @@ Do not count independent models as receiving six times the optimization budget.
   real-data profile records `input_unchanged` and uses `ERR^-2` with valid
   `DQ==0` support for its robust planar background fit.
 - [ ] Cache a no-injection control fit/catalogue for every method.
-- [ ] Build one frozen common-support mask from the intersection of every
+- [x] Build one frozen common-support mask from the intersection of every
   selected method's final per-band weight maps, eroded by the injection/PSF
   footprint. Generate source positions only inside this mask. The first F277W
   plumbing batch deliberately remains evidence for this gate: one AB 27.5
@@ -173,6 +173,12 @@ Do not count independent models as receiving six times the optimization budget.
     predeclared non-degenerate threshold: it permits at most four unsupported
     pixels in a 19-square footprint per method while still requiring positive
     center weight in all 42 products. No injection recovery was inspected.
+  - [x] Persist the selected placement mask and exercise it with eight
+    four-quadrant, 36-pixel-separated calibration sources. Session `ry4c9xv5`
+    wrote `common-support-r9-f0p99.fits` (SHA-256
+    `adc31bd3...d2dfa253`) and manifest mask hash
+    `37bb326a...742efd30` under
+    `/arc/projects/ots/torchsky-runs/20260729-smacs-psf-calibration-8cc3fb9/`.
 - [ ] Inject sources through each exposure WCS, oversampled PSF, pixel footprint,
   calibration, and bandpass. Preserve the original background/noise/artifacts.
 - [ ] Use smooth continuum point sources for the abstract endpoint. Add compact
@@ -294,7 +300,7 @@ each final method boundary. Otherwise do not begin model tuning.
   uses that target by default and rejects weight maps whose WCS differs at the
   four corners or centre. This code gate must be exercised by the six-band
   control sweep before configuration freeze.
-- [ ] Generate the frozen per-band/per-method common-support mask before the
+- [x] Generate the frozen per-band/per-method common-support mask before the
   next injection manifests. Exclude the unsupported-source failure by design,
   not after examining recovery.
   - [x] Implement `--support-weight-paths`, `--support-weight-threshold`, and
@@ -308,14 +314,18 @@ each final method boundary. Otherwise do not begin model tuning.
   - [x] Audit local coverage at 80/85/90/95/98/99/100% and freeze 99% before
     positive calibration. Exact session `vedlmudw`; selected support retains
     109,393 pixels across all quadrants.
-- [ ] Fit or propagate each method's effective PSF before applying the 2% flux
+- [x] Fit or propagate each method's effective PSF before applying the 2% flux
   gate. A fixed injected-PSF fit is not comparable after different resampling
   kernels broaden the product differently.
   - [x] Add fractional-phase registration and robust stacking of isolated
     injected-minus-blank responses into a normalized effective PSF. The
     `updec-adass-effective-psf` profile persists one hashed PSF and size/lobe
-    diagnostics per band and method. The remaining gate is running the bright
-    calibration batch for every selected method and band.
+    diagnostics per band and method.
+  - [x] Run eight isolated AB=25 sources through all 42 band/method products
+    and persist every measured ePSF. Session `ry4c9xv5` at exact commit
+    `8cc3fb9`; Gaussian-equivalent FWHM spans 0.756–2.742 target pixels and the
+    largest measured negative-lobe fraction is 4.58% for undersampled F090W
+    Torchsky Lanczos3. These are PSF diagnostics, not kernel selection.
 - [ ] Select Drizzle `pixfrac` from a small predeclared grid and SWarp kernel
   from `{BILINEAR, LANCZOS3}` using validation injections only.
 - [ ] Build the whitened chi-square six-band detector from each winning stack
