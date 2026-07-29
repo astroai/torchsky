@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import tempfile
 import time
@@ -35,6 +36,7 @@ from bench_map_smacs0723_field_fit import (  # noqa: E402
 )
 from bench_map_smacs0723_real import (  # noqa: E402
     DATA,
+    DEFAULT_EXPOSURE_DIR,
     _approx_overlap_grid,
     _best_overlap_cutout,
     _center_cutout,
@@ -62,6 +64,7 @@ from torchsky.map import (  # noqa: E402
     fit_field_model,
     make_field_model,
     render_field_observation,
+    render_spectral_power_foam_observation_exact,
 )
 
 
@@ -75,6 +78,47 @@ def _parse_csv(value: str) -> list[str]:
 def _safe_slug(value: str) -> str:
     text = str(value).strip().lower()
     return "".join(ch if ch.isalnum() else "_" for ch in text).strip("_") or "item"
+
+
+def _regular_foam_model_kwargs(
+    *,
+    grid_side: int,
+    basis_count: int,
+    extent: float = 1.0,
+) -> dict[str, Any]:
+    """Deterministic Power-Foam initialization independent of science pixels."""
+    side = int(grid_side)
+    basis = int(basis_count)
+    limit = float(extent)
+    if side < 2:
+        raise ValueError("grid_side must be at least 2")
+    if basis < 1:
+        raise ValueError("basis_count must be positive")
+    if not math.isfinite(limit) or limit <= 0:
+        raise ValueError("extent must be finite and positive")
+    step = 2.0 * limit / float(side)
+    centers = torch.linspace(
+        -limit + 0.5 * step,
+        limit - 0.5 * step,
+        steps=side,
+        dtype=torch.float32,
+    )
+    yy, xx = torch.meshgrid(centers, centers, indexing="ij")
+    sites = torch.stack((xx.reshape(-1), yy.reshape(-1)), dim=-1)
+    radii = torch.full(
+        (side * side,),
+        math.sqrt(2.0) * step,
+        dtype=torch.float32,
+    )
+    coefficients = torch.zeros((side * side, basis), dtype=torch.float32)
+    return {
+        "sites": sites,
+        "radii": radii,
+        "cell_coefficients": coefficients,
+        "minimum_radius": 0.25 * step,
+        "temperature_start": 4.0,
+        "temperature_end": 24.0,
+    }
 
 
 def _preview_uint8(image: np.ndarray) -> np.ndarray:
@@ -248,6 +292,10 @@ def _joint_real_fit_kwargs(
     )
     if model_kind == "coadd_bilinear":
         return kwargs
+    if model_kind == "spectral_power_foam":
+        kwargs["lr"] = 1.0e-3
+        kwargs["curriculum"] = "feature_scale_ramp"
+        kwargs["num_spectral_samples"] = 5
     kwargs["observations_per_step"] = min(max(num_observations, 1), 12)
     kwargs["observation_sampling"] = "band_balanced"
     kwargs["training_patch_size"] = None
@@ -383,13 +431,24 @@ def main() -> int:
     parser.add_argument("--bands", default="F090W,F277W,F356W,F444W")
     parser.add_argument("--module", default="b")
     parser.add_argument(
-        "--input-product", choices=("auto", "crf", "cal"), default="cal"
+        "--exposure-dir",
+        type=Path,
+        default=DEFAULT_EXPOSURE_DIR / "aligned",
+        help="Directory containing the selected CAL, CRF, or aligned detector products",
+    )
+    parser.add_argument(
+        "--input-product",
+        choices=("auto", "crf", "cal", "aligned"),
+        default="aligned",
     )
     parser.add_argument("--crop-size", type=int, default=32)
     parser.add_argument(
         "--crop-strategy", choices=("center", "best_overlap"), default="best_overlap"
     )
     parser.add_argument("--steps", type=int, default=4)
+    parser.add_argument("--seed", type=int, default=101)
+    parser.add_argument("--foam-grid-side", type=int, default=32)
+    parser.add_argument("--foam-basis-count", type=int, default=4)
     parser.add_argument(
         "--models",
         default="coadd_bilinear,spectral_basis_field,sky_encoder_resmlp,sky_lambda_feature_field,operator_constrained_feature_field",
@@ -424,7 +483,7 @@ def main() -> int:
         for band in bands:
             reference_path = _reference_path_for_band(band)
             exposure_paths = _discover_exposure_paths(
-                DATA / "jwst_smacs0723",
+                args.exposure_dir,
                 input_product=args.input_product,
                 band=band,
                 module=args.module,
@@ -642,7 +701,14 @@ def main() -> int:
                 )
             )
 
-        domain = estimate_field_domain(normalized_observations, coord_mode="sphere_xyz")
+        spherical_domain = estimate_field_domain(
+            normalized_observations,
+            coord_mode="sphere_xyz",
+        )
+        local_domain = estimate_field_domain(
+            normalized_observations,
+            coord_mode="local_tangent",
+        )
         forward_ctx_tuple: tuple[ForwardContext | None, ...] | None = None
         if args.forward_context:
             if len(all_forward_contexts) != len(normalized_observations):
@@ -651,7 +717,10 @@ def main() -> int:
                 )
             forward_ctx_tuple = tuple(all_forward_contexts)
 
-        fitted_models: dict[str, tuple[Any, float, dict[str, Any]]] = {}
+        fitted_models: dict[
+            str,
+            tuple[Any, float, dict[str, Any], dict[str, Any]],
+        ] = {}
         for model_kind in model_kinds:
             if model_kind == "coadd_bilinear":
                 continue
@@ -660,6 +729,11 @@ def main() -> int:
                 case=REAL_JOINT_CASE,
                 size=int(args.crop_size),
             )
+            if model_kind == "spectral_power_foam":
+                model_kwargs = _regular_foam_model_kwargs(
+                    grid_side=int(args.foam_grid_side),
+                    basis_count=int(args.foam_basis_count),
+                )
             fit_kwargs = _joint_real_fit_kwargs(
                 model_kind,
                 crop_size=int(args.crop_size),
@@ -669,6 +743,12 @@ def main() -> int:
             if forward_ctx_tuple is not None:
                 fit_kwargs = dict(fit_kwargs)
                 fit_kwargs["observation_forward_contexts"] = forward_ctx_tuple
+            domain = (
+                local_domain
+                if model_kind == "spectral_power_foam"
+                else spherical_domain
+            )
+            torch.manual_seed(int(args.seed))
             model = make_field_model(model_kind, domain, **model_kwargs)
             if args.forward_context:
                 model = _PerExposureScalarBias(model, len(normalized_observations))
@@ -680,7 +760,12 @@ def main() -> int:
                 **fit_kwargs,
             )
             fit_time_ms = (time.perf_counter() - t0) * 1000.0
-            fitted_models[model_kind] = (result.model, fit_time_ms, fit_kwargs)
+            fitted_models[model_kind] = (
+                result.model,
+                fit_time_ms,
+                fit_kwargs,
+                dict(result.diagnostics or {}),
+            )
 
         for entry in band_entries:
             band = str(entry["band"])
@@ -694,6 +779,9 @@ def main() -> int:
                     "model": model_kind,
                     "n_exposures": int(entry["n_exposures"]),
                     "forward_context": bool(args.forward_context),
+                    "optimizer_steps": int(args.steps)
+                    if model_kind != "coadd_bilinear"
+                    else 0,
                     "status": "OK",
                 }
                 try:
@@ -701,9 +789,22 @@ def main() -> int:
                         pred = entry["coadd_pred"]
                         fit_time_ms = 0.0
                     else:
-                        result_model, fit_time_ms, fit_kwargs = fitted_models[
-                            model_kind
-                        ]
+                        (
+                            result_model,
+                            fit_time_ms,
+                            fit_kwargs,
+                            fit_diagnostics,
+                        ) = fitted_models[model_kind]
+                        row["parameter_count"] = int(
+                            sum(parameter.numel() for parameter in result_model.parameters())
+                        )
+                        row["spectral_samples"] = int(
+                            fit_kwargs.get("num_spectral_samples", 1)
+                        )
+                        performance = fit_diagnostics.get("performance_profile", {})
+                        row["peak_accelerator_memory_bytes"] = int(
+                            performance.get("max_memory_allocated_bytes", 0)
+                        )
                         render_num_spectral_samples = int(
                             fit_kwargs.get("num_spectral_samples", 1)
                         )
@@ -712,14 +813,24 @@ def main() -> int:
                             if args.forward_context
                             else None
                         )
-                        pred = (
-                            render_field_observation(
+                        if model_kind == "spectral_power_foam":
+                            hard_model = getattr(result_model, "inner", result_model)
+                            rendered = render_spectral_power_foam_observation_exact(
+                                hard_model,
+                                target_observation,
+                                num_spectral_samples=render_num_spectral_samples,
+                            )
+                            row["render_mode"] = "hard_pixel_footprint"
+                        else:
+                            rendered = render_field_observation(
                                 result_model,
                                 target_observation,
                                 num_spectral_samples=render_num_spectral_samples,
                                 forward_context=render_ctx,
                             )
-                            .detach()
+                            row["render_mode"] = "pixel_center"
+                        pred = (
+                            rendered.detach()
                             .cpu()
                             .numpy()
                             .astype(np.float32, copy=False)
@@ -820,7 +931,20 @@ def main() -> int:
         )
     )
     fail_rows.sort(key=lambda row: (str(row["model"]), str(row["band"])))
-    payload = {"rows": ok_rows + fail_rows, "summary": _summarize_by_model(ok_rows)}
+    payload = {
+        "experiment": {
+            "input_product": str(args.input_product),
+            "exposure_dir": str(args.exposure_dir),
+            "bands": bands,
+            "crop_size": int(args.crop_size),
+            "optimizer_steps": int(args.steps),
+            "seed": int(args.seed),
+            "foam_grid_side": int(args.foam_grid_side),
+            "foam_basis_count": int(args.foam_basis_count),
+        },
+        "rows": ok_rows + fail_rows,
+        "summary": _summarize_by_model(ok_rows),
+    }
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     args.markdown_out.parent.mkdir(parents=True, exist_ok=True)

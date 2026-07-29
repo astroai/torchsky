@@ -25,6 +25,12 @@ products; beating separate per-band images alone is not sufficient.
 - [x] Use the existing 135 calibrated SMACS J0723 exposures: 36 exposures in
   each of F090W/F150W/F200W and nine in each of
   F277W/F356W/F444W.
+- [x] Use the complete 135 pre-existing aligned
+  `*_crf_rshift_tweakreg.fits` detector products for the matched scientific
+  method matrix. They retain detector `SCI/ERR/DQ` planes with registered WCS
+  metadata. The separately staged 135 CAL products remain a complete
+  detector-level fallback/audit set; no CRF refetch is required for this
+  experiment.
 - [x] Use the header-selected common-support 512-square F277W target-grid crop
   at `(x0=112, y0=0)`. Do not select the field from science-pixel appearance.
 - [x] Keep simultaneous short/long observations together:
@@ -100,6 +106,10 @@ products; beating separate per-band images alone is not sufficient.
     smooth fitting now enters the existing `FieldObservation` WCS, bandpass,
     PSF, mask/weight, and nuisance path; detached hard rendering reuses the same
     Legendre spectral basis and learned coefficients.
+  - [x] Add deterministic regular-grid initialization without science-pixel
+    tuning and hard-render target WCS pixel polygons through the common
+    bandpass, PSF, and background operators. The real adapter now records its
+    aligned/CAL input choice and declared Foam capacity.
   - [ ] Exercise independent and shared instances on the frozen real exposure
     adapter and persist their hard-rendered final products.
 - [ ] Apply one common detector/photometer to every final band product.

@@ -158,22 +158,33 @@ stacking-versus-INR/Foam depth result defined in
       74/84 (88.1%) sources; SWarp bilinear is the flux-valid SWarp winner at
       72/84 (85.7%). Summaries live under
       `/arc/projects/ots/torchsky-runs/20260729-smacs-validation-score-aa0aa21/`.
-    - [ ] Finish native Torchsky square-Drizzle calibration, rebuild its
-      common-support/control evidence if it passes, then freeze
-      `adass_updec_classical_config.json`. Serial session `g1ajbo0l` completed
-      F090W/F150W and the F200W blank before checkpointing. Exact-method fanout
-      sessions `kcumoz89`, `glns4y2r`, `x32kchen`, and `ys4tjw3v` now finish
-      F200W/F277W/F356W/F444W without overlapping output directories. The
-      preceding four sessions failed in bootstrap parsing before scientific
-      work and produced no products. Continuation session `y5cbuwjy` waits for
-      the complete matrix and automatically emits the effective-PSF/flux report.
+    - [x] Finish native Torchsky square-Drizzle effective-PSF/flux calibration.
+      Sessions `kcumoz89`, `glns4y2r`, `x32kchen`, and `ys4tjw3v` completed the
+      non-overlapping band fanout; aggregator `y5cbuwjy` emitted
+      `/arc/projects/ots/torchsky-runs/20260729-smacs-torchsky-drizzle-aa0aa21/effective-psf-flux-report.json`.
+      `pixfrac=0.8` and `1.0` both meet the absolute 2% median flux-bias gate in
+      all six bands; `0.6` fails F090W at +2.19%.
+    - [ ] Rebuild common-support/control and all three positive validation
+      batches for native `pixfrac=0.8/1.0`, select between them from validation
+      recovery at fixed purity, then freeze `adass_updec_classical_config.json`.
+      Do not select from effective-PSF sharpness alone.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
   - [x] Add `SpectralPowerFoamField` as the minimum common-operator bridge:
     normalized local-tangent geometry and a shared Legendre spectral basis now
     run through the existing field WCS/bandpass/PSF/mask/weight fitter, with
-    detached hard-pixel rendering for final products. Seven focused contracts
-    pass. The real independent/shared matrix remains unchecked.
+    detached hard-pixel rendering for final products.
+  - [x] Add science-pixel-independent regular-grid initialization and a
+    hard-pixel observation renderer that analytically converts each target WCS
+    footprint into normalized Foam geometry, restores surface-brightness
+    semantics from exact pixel integrals, then applies the common PSF/background
+    operators. The real joint adapter defaults explicitly to the canonical
+    aligned-CRF directory and persists input product, capacity, spectral basis,
+    optimizer steps, seed, parameter count, runtime, peak accelerator memory,
+    and render mode. Seventeen focused adapter/benchmark contracts pass.
+  - [ ] Run the shared adapter on the frozen real exposures, then add the
+    capacity- and compute-matched independent per-band matrix. The real
+    independent/shared products remain unchecked.
 - [ ] Execute Day 4: 20-batch CANFAR blind test, paired intervals, report, and
   figures.
 - [ ] Submit only the strongest abstract claim whose pre-registered gate passes.

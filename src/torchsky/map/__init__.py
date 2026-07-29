@@ -274,6 +274,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "torchsky.map.field",
         "render_field_observation_distribution",
     ),
+    "render_spectral_power_foam_observation_exact": (
+        "torchsky.map.field",
+        "render_spectral_power_foam_observation_exact",
+    ),
     "spectral_data_budget": ("torchsky.map.field", "spectral_data_budget"),
     "suggest_num_spectral_samples": (
         "torchsky.map.field",

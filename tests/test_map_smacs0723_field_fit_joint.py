@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
 pytest.importorskip("PIL")
 
@@ -21,6 +22,7 @@ from bench_map_smacs0723_field_fit_joint import _format_markdown, _summarize_by_
 from bench_map_smacs0723_field_fit_joint import _background_subtracted_source_stats  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _joint_real_fit_kwargs  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _preview_uint8  # noqa: E402
+from bench_map_smacs0723_field_fit_joint import _regular_foam_model_kwargs  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _source_metric_mask  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _write_export_products  # noqa: E402
 
@@ -108,6 +110,17 @@ def test_joint_real_fit_kwargs_use_pixel_sampling() -> None:
     assert kwargs["observations_per_step"] == 12
     assert kwargs["training_patch_size"] is None
     assert kwargs["pixel_samples_per_observation"] >= 256
+
+
+def test_regular_foam_initialization_is_deterministic_and_pixel_independent() -> None:
+    first = _regular_foam_model_kwargs(grid_side=3, basis_count=4)
+    second = _regular_foam_model_kwargs(grid_side=3, basis_count=4)
+
+    assert first["sites"].shape == (9, 2)
+    assert first["cell_coefficients"].shape == (9, 4)
+    assert bool(torch.all(first["radii"] > 0))
+    torch.testing.assert_close(first["sites"], second["sites"])
+    torch.testing.assert_close(first["radii"], second["radii"])
 
 
 def test_source_metric_mask_prefers_bright_reference_structure() -> None:

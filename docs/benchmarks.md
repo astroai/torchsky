@@ -148,9 +148,12 @@ Multiband joint field fit:
 cd "$(git rev-parse --show-toplevel)"
 PYTHONPATH=src:benchmarks pixi run -e test -- python benchmarks/bench_map_smacs0723_field_fit_joint.py \
   --bands F090W,F277W,F356W,F444W \
+  --exposure-dir "${TORCHSKY_DATA}/jwst_smacs0723/aligned" \
+  --input-product aligned \
   --crop-size 32 \
   --crop-strategy best_overlap \
-  --steps 4
+  --steps 4 \
+  --models coadd_bilinear,spectral_power_foam
 ```
 
 Real-data field-fit debug runs can be expensive. Treat their outputs as local

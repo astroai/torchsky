@@ -365,6 +365,21 @@ class SpectralPowerFoamField(_BaseFieldModel):
         )
         return self._legendre_basis(normalized)
 
+    def normalized_spatial_coordinates(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+    ) -> Tensor:
+        """Map sky coordinates to the Foam's normalized local tangent plane."""
+        wavelength = torch.full_like(
+            ra_deg,
+            float(self.domain.wavelength_center),
+        )
+        return self._encoded_coords(ra_deg, dec_deg, wavelength)[..., :2].to(
+            device=self.sites.device,
+            dtype=self.sites.dtype,
+        )
+
     def forward(
         self,
         ra_deg: Tensor,

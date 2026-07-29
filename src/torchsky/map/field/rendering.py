@@ -646,6 +646,98 @@ def render_field_observation(
     return rendered.to(dtype=image.dtype)
 
 
+def render_spectral_power_foam_observation_exact(
+    model: nn.Module,
+    observation: FieldObservation,
+    *,
+    num_spectral_samples: int = 9,
+    operator_kwargs: dict[str, object] | None = None,
+) -> Tensor:
+    """Hard-render a spectral Power Foam through target pixels and common operators."""
+    if observation.image.ndim != 2:
+        raise ValueError("FieldObservation.image must be 2D")
+    normalized_spatial_coordinates = getattr(
+        model,
+        "normalized_spatial_coordinates",
+        None,
+    )
+    render_exact = getattr(model, "render_exact", None)
+    if not callable(normalized_spatial_coordinates) or not callable(render_exact):
+        raise TypeError(
+            "model must provide normalized_spatial_coordinates and render_exact"
+        )
+    device = next(
+        (parameter.device for parameter in model.parameters()),
+        default_compute_device(),
+    )
+    height, width = _header_shape(
+        observation.header,
+        fallback=(int(observation.image.shape[-2]), int(observation.image.shape[-1])),
+    )
+    grid_device = torch.device("cpu") if device.type == "mps" else device
+    y, x = torch.meshgrid(
+        torch.arange(height, dtype=torch.float64, device=grid_device),
+        torch.arange(width, dtype=torch.float64, device=grid_device),
+        indexing="ij",
+    )
+    offsets = torch.tensor(
+        [
+            [-0.5, -0.5],
+            [0.5, -0.5],
+            [0.5, 0.5],
+            [-0.5, 0.5],
+        ],
+        dtype=torch.float64,
+        device=grid_device,
+    )
+    corner_x = x[..., None] + offsets[:, 0]
+    corner_y = y[..., None] + offsets[:, 1]
+    wcs = WCS(observation.header)
+    wcs.to(grid_device)
+    ra_deg, dec_deg = wcs.pixel_to_world(corner_x, corner_y)
+    polygons = normalized_spatial_coordinates(
+        ra_deg.to(device=device),
+        dec_deg.to(device=device),
+    ).reshape(height * width, 4, 2)
+    wavelengths, weights = _bandpass_quadrature(
+        observation,
+        num_spectral_samples=num_spectral_samples,
+        device=device,
+    )
+    pixel_integrals = render_exact(
+        polygons,
+        wavelengths,
+        weights,
+        semantics="surface_brightness",
+        **dict(operator_kwargs or {}),
+    )
+    next_vertices = torch.roll(polygons, shifts=-1, dims=-2)
+    pixel_areas = 0.5 * torch.abs(
+        torch.sum(
+            polygons[..., 0] * next_vertices[..., 1]
+            - polygons[..., 1] * next_vertices[..., 0],
+            dim=-1,
+        )
+    )
+    if bool(torch.any(pixel_areas <= 0)):
+        raise ValueError("target WCS produced a degenerate pixel polygon")
+    rendered = (pixel_integrals / pixel_areas).reshape(height, width)
+    operator_bundle = _resolve_operator_bundle(observation, None)
+    if operator_bundle.psf is not None:
+        rendered = apply_psf_spec(rendered, observation.psf_spec)
+    if operator_bundle.background is not None:
+        rendered = apply_background_components(
+            rendered,
+            **observation_background_components(
+                observation,
+                shape=tuple(rendered.shape),
+                device=rendered.device,
+                dtype=rendered.dtype,
+            ),
+        )
+    return rendered.to(dtype=observation.image.dtype)
+
+
 def render_field_samples(
     model: nn.Module,
     observation: FieldObservation,

@@ -102,6 +102,7 @@ from .rendering import (
     render_field_observation_distribution,
     render_field_samples,
     render_field_samples_distribution,
+    render_spectral_power_foam_observation_exact,
 )
 from .quality import (
     FieldResidualProduct,
@@ -277,6 +278,7 @@ __all__ = [
     "render_field_healpix",
     "render_field_observation",
     "render_field_observation_distribution",
+    "render_spectral_power_foam_observation_exact",
     "render_field_fit_quality",
     "render_field_quality",
     "render_field_residual",

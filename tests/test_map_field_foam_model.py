@@ -11,10 +11,12 @@ from torchsky.map.field import (
     SpectralPowerFoam,
     SpectralPowerFoamField,
     bounded_power_pixel_operator,
+    fit_field_model,
     make_field_model,
     make_tangent_plane_header,
     render_power_spectral_basis,
     render_field_observation,
+    render_spectral_power_foam_observation_exact,
     smooth_bounded_power_weights,
 )
 
@@ -253,3 +255,107 @@ def test_spectral_power_foam_field_uses_common_bandpass_psf_render_path() -> Non
     rendered.sum().backward()
     assert model.cell_coefficients.grad is not None
     assert bool(torch.isfinite(model.cell_coefficients.grad).all())
+
+
+def test_spectral_power_foam_field_hard_renders_target_pixel_footprints() -> None:
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    model = SpectralPowerFoamField(
+        domain,
+        sites=torch.tensor([[0.0, 0.0]], dtype=torch.float64),
+        radii=torch.tensor([10.0], dtype=torch.float64),
+        cell_coefficients=torch.tensor([[2.0, 0.0]], dtype=torch.float64),
+    )
+    observation = FieldObservation(
+        image=torch.zeros((3, 4), dtype=torch.float32),
+        header=make_tangent_plane_header(
+            3,
+            4,
+            crval_ra_deg=10.0,
+            crval_dec_deg=20.0,
+            cd11=-0.001,
+            cd22=0.001,
+        ),
+        spectral_min=1.0,
+        spectral_max=3.0,
+        transmission_center=2.0,
+        transmission_sigma=0.4,
+        background_offset=0.25,
+        band_name="TEST",
+    )
+
+    rendered = render_spectral_power_foam_observation_exact(
+        model,
+        observation,
+        num_spectral_samples=5,
+    )
+
+    torch.testing.assert_close(rendered, torch.full((3, 4), 2.25))
+
+
+def test_spectral_power_foam_fits_multiple_observations_then_hard_renders() -> None:
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    model = SpectralPowerFoamField(
+        domain,
+        sites=torch.tensor(
+            [[-0.25, -0.25], [0.25, -0.25], [-0.25, 0.25], [0.25, 0.25]]
+        ),
+        radii=torch.full((4,), 1.0),
+        cell_coefficients=torch.zeros((4, 2)),
+    )
+    header = make_tangent_plane_header(
+        4,
+        4,
+        crval_ra_deg=10.0,
+        crval_dec_deg=20.0,
+        cd11=-0.001,
+        cd22=0.001,
+    )
+    observations = [
+        FieldObservation(
+            image=torch.full((4, 4), level),
+            header=dict(header),
+            weight=torch.ones((4, 4)),
+            mask=torch.ones((4, 4), dtype=torch.bool),
+            spectral_min=center - 0.2,
+            spectral_max=center + 0.2,
+            transmission_center=center,
+            transmission_sigma=0.1,
+            band_name=name,
+        )
+        for level, center, name in ((1.0, 1.5, "BLUE"), (2.0, 2.5, "RED"))
+    ]
+    initial_coefficients = model.cell_coefficients.detach().clone()
+
+    fit = fit_field_model(
+        observations,
+        model,
+        steps=2,
+        lr=1.0e-2,
+        num_spectral_samples=3,
+        loss_kind="mse",
+        loss_reduction="global",
+        observations_per_step=2,
+        pixel_samples_per_observation=8,
+        curriculum="feature_scale_ramp",
+    )
+    rendered = render_spectral_power_foam_observation_exact(
+        fit.model,
+        observations[0],
+        num_spectral_samples=3,
+    )
+
+    assert len(fit.loss_history) == 2
+    assert bool(torch.isfinite(rendered).all())
+    assert not torch.equal(fit.model.cell_coefficients, initial_coefficients)
