@@ -162,6 +162,10 @@ Do not count independent models as receiving six times the optimization budget.
   - [x] Replace whole-quadrant rejection sampling with deterministic shuffled
     valid-pixel pools per quadrant. Sparse valid masks now either place sources
     reproducibly or report the unsupported quadrant directly.
+  - [x] Add an explicit minimum local footprint-coverage fraction per method.
+    The default remains strict 100% erosion; a lower predeclared fraction may
+    tolerate sparse Drizzle holes while still requiring positive center weight
+    in every candidate. Freeze it from weight topology before any recovery run.
 - [ ] Inject sources through each exposure WCS, oversampled PSF, pixel footprint,
   calibration, and bandpass. Preserve the original background/noise/artifacts.
 - [ ] Use smooth continuum point sources for the abstract endpoint. Add compact
@@ -283,8 +287,9 @@ each final method boundary. Otherwise do not begin model tuning.
   next injection manifests. Exclude the unsupported-source failure by design,
   not after examining recovery.
   - [x] Implement `--support-weight-paths`, `--support-weight-threshold`, and
-    `--support-erode-radius-px` in the existing manifest profile. The emitted
-    artifact records the resolved paths, retained pixel count/fraction, and
+    `--support-erode-radius-px` plus local footprint coverage in the existing
+    manifest profile. The emitted artifact records the resolved paths,
+    individual/raw/eroded support diagnostics, retained quadrant counts, and
     SHA-256 of the exact boolean placement mask.
   - [x] Produce all 42 exact-grid blank products at `3ff8604`. The zero-source
     probe retained only 984 pixels after erosion, so the crop remains a

@@ -492,8 +492,9 @@ def common_support_mask(
     *,
     threshold: float = 0.0,
     erode_radius_px: int = 0,
+    min_footprint_fraction: float = 1.0,
 ) -> torch.Tensor:
-    """Intersect finite output weights and erode by a fixed source footprint."""
+    """Require common center support and local footprint coverage in every map."""
 
     if not weights:
         raise ValueError("at least one weight map is required")
@@ -503,14 +504,17 @@ def common_support_mask(
         or not math.isfinite(threshold)
         or not isinstance(erode_radius_px, int)
         or erode_radius_px < 0
+        or not math.isfinite(min_footprint_fraction)
+        or not 0 < min_footprint_fraction <= 1
         or any(weight.shape != shape for weight in weights)
     ):
         raise ValueError("weight maps must be matching 2-D tensors")
-    support = torch.ones(shape, dtype=torch.bool)
+    masks: list[torch.Tensor] = []
     for weight in weights:
         values = weight.detach().to(device="cpu")
-        support &= torch.isfinite(values) & (values > threshold)
-    if erode_radius_px:
+        masks.append(torch.isfinite(values) & (values > threshold))
+    support = torch.stack(masks).all(dim=0)
+    if erode_radius_px and min_footprint_fraction == 1.0:
         invalid = (~support).to(dtype=torch.float32)[None, None]
         invalid = F.pad(
             invalid,
@@ -526,6 +530,23 @@ def common_support_mask(
             )[0, 0]
             == 0.0
         )
+    elif erode_radius_px:
+        kernel_size = 2 * erode_radius_px + 1
+        required = min_footprint_fraction - 0.5 / kernel_size**2
+        support = torch.ones(shape, dtype=torch.bool)
+        for mask in masks:
+            padded = F.pad(
+                mask.to(torch.float32)[None, None],
+                (erode_radius_px,) * 4,
+                mode="constant",
+                value=0.0,
+            )
+            local_fraction = F.avg_pool2d(
+                padded,
+                kernel_size=kernel_size,
+                stride=1,
+            )[0, 0]
+            support &= mask & (local_fraction >= required)
     return support
 
 
@@ -2314,6 +2335,7 @@ def main() -> int:
     )
     parser.add_argument("--support-weight-threshold", type=float, default=0.0)
     parser.add_argument("--support-erode-radius-px", type=int, default=9)
+    parser.add_argument("--support-min-footprint-fraction", type=float, default=1.0)
     parser.add_argument("--support-mask-out", type=Path, default=None)
     parser.add_argument(
         "--target-mode",
@@ -2446,6 +2468,7 @@ def main() -> int:
                 support_weights,
                 threshold=args.support_weight_threshold,
                 erode_radius_px=args.support_erode_radius_px,
+                min_footprint_fraction=args.support_min_footprint_fraction,
             )
             if support_weights
             else None
@@ -2503,6 +2526,7 @@ def main() -> int:
                 "weight_paths": [str(path) for path in support_paths],
                 "weight_threshold": args.support_weight_threshold,
                 "erode_radius_px": args.support_erode_radius_px,
+                "min_footprint_fraction": args.support_min_footprint_fraction,
                 "pixel_count": int(valid_mask.sum()),
                 "fraction": float(valid_mask.to(torch.float64).mean()),
                 "raw_intersection_pixel_count": int(raw_support.sum()),

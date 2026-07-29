@@ -84,6 +84,9 @@ stacking-versus-INR/Foam depth result defined in
       as a diagnostic and not falsely frozen.
     - [x] Make support-constrained placement sample shuffled valid pixels in
       each quadrant instead of depending on low-occupancy rejection.
+    - [x] Add per-method local footprint-coverage gating so isolated Drizzle
+      holes can be tolerated only through an explicit pre-recovery threshold;
+      strict 100% erosion remains the default.
   - [ ] Propagate or fit the method-dependent effective PSF before comparing
     bright-source flux bias or selecting a classical kernel.
     - [x] Add robust fractional-phase stacking of isolated

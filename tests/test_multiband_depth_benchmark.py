@@ -261,6 +261,27 @@ def test_common_support_mask_intersects_erodes_and_gates_manifest() -> None:
     assert len(manifest["placement"]["valid_mask_sha256"]) == 64
 
 
+def test_common_support_can_tolerate_sparse_footprint_holes() -> None:
+    weight = torch.ones((21, 21), dtype=torch.float32)
+    weight[2::4, 2::4] = 0.0
+
+    strict = common_support_mask((weight,), erode_radius_px=2)
+    tolerant = common_support_mask(
+        (weight,),
+        erode_radius_px=2,
+        min_footprint_fraction=0.8,
+    )
+
+    assert int(tolerant.sum()) > int(strict.sum())
+    assert not bool(tolerant[weight == 0].any())
+    with pytest.raises(ValueError, match="matching 2-D"):
+        common_support_mask(
+            (weight,),
+            erode_radius_px=2,
+            min_footprint_fraction=0.0,
+        )
+
+
 def test_manifest_samples_sparse_support_pixels_without_rejection_failure() -> None:
     support = torch.zeros((128, 128), dtype=torch.bool)
     support[18:34, 18:34] = True
