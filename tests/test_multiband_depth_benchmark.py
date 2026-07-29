@@ -18,9 +18,11 @@ from bench_multiband_depth import (  # noqa: E402
     _classical_smoke_artifact,
     _gate0_artifact,
     _updec_effective_psf_artifact,
+    calibrate_matched_filter_whitening,
     calibrate_purity_threshold,
     coadd_synthetic_exposures,
     common_support_mask,
+    combine_whitened_chi_responses,
     detection_statistic,
     exclude_catalogue_neighborhoods,
     find_detections,
@@ -533,6 +535,29 @@ def test_weighted_chi_detection_combines_positive_band_significance() -> None:
         statistic[4, 4],
         torch.sqrt(torch.tensor(13.0, dtype=torch.float64)) * template_norm,
     )
+
+
+def test_blank_responses_robustly_calibrate_whitened_chi() -> None:
+    generator = torch.Generator().manual_seed(72)
+    responses = torch.randn(
+        (3, 128, 128),
+        generator=generator,
+        dtype=torch.float64,
+    )
+    responses[:, :4, :4] = 100.0
+    support = torch.ones((128, 128), dtype=torch.bool)
+
+    centers, scales = calibrate_matched_filter_whitening(responses, support)
+    statistic = combine_whitened_chi_responses(responses, centers, scales)
+
+    torch.testing.assert_close(
+        centers, torch.zeros(3, dtype=responses.dtype), atol=0.03, rtol=0.0
+    )
+    torch.testing.assert_close(
+        scales, torch.ones(3, dtype=responses.dtype), atol=0.04, rtol=0.0
+    )
+    assert statistic.shape == support.shape
+    assert torch.isfinite(statistic).all()
 
 
 def test_effective_psf_stack_registers_fractional_source_phases() -> None:

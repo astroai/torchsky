@@ -1383,6 +1383,77 @@ def weighted_chi_detection_statistic(
     return torch.sqrt(positive.square().sum(dim=0))
 
 
+def calibrate_matched_filter_whitening(
+    responses: torch.Tensor,
+    support_mask: torch.Tensor,
+    *,
+    clip_sigma: float = 5.0,
+    max_iterations: int = 3,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Estimate robust per-band response centers/scales from blank controls."""
+
+    if (
+        responses.ndim != 3
+        or support_mask.shape != responses.shape[-2:]
+        or support_mask.dtype is not torch.bool
+        or support_mask.device != responses.device
+        or not responses.is_floating_point()
+        or not math.isfinite(clip_sigma)
+        or clip_sigma <= 0
+        or max_iterations < 0
+    ):
+        raise ValueError("invalid response cube, support mask, or clipping contract")
+    centers: list[torch.Tensor] = []
+    scales: list[torch.Tensor] = []
+    for response in responses:
+        values = response[support_mask & torch.isfinite(response)]
+        if values.numel() < 16:
+            raise ValueError("response whitening needs at least 16 supported pixels")
+        keep = torch.ones_like(values, dtype=torch.bool)
+        center = torch.median(values)
+        scale = 1.4826 * torch.median(torch.abs(values - center))
+        for _ in range(max_iterations):
+            if not torch.isfinite(scale) or scale <= 0:
+                raise ValueError("response whitening scale must be positive")
+            keep = torch.abs(values - center) <= clip_sigma * scale
+            if int(keep.sum()) < 16:
+                raise ValueError("response whitening clipping retained too few pixels")
+            center = torch.median(values[keep])
+            scale = 1.4826 * torch.median(torch.abs(values[keep] - center))
+        if not torch.isfinite(scale) or scale <= 0:
+            raise ValueError("response whitening scale must be positive")
+        centers.append(center)
+        scales.append(scale)
+    return torch.stack(centers), torch.stack(scales)
+
+
+def combine_whitened_chi_responses(
+    responses: torch.Tensor,
+    centers: torch.Tensor,
+    scales: torch.Tensor,
+) -> torch.Tensor:
+    """Center, empirically whiten, and positively combine matched-filter bands."""
+
+    if (
+        responses.ndim != 3
+        or centers.shape != (responses.shape[0],)
+        or scales.shape != (responses.shape[0],)
+        or centers.device != responses.device
+        or scales.device != responses.device
+        or centers.dtype != responses.dtype
+        or scales.dtype != responses.dtype
+        or not torch.isfinite(centers).all()
+        or not torch.isfinite(scales).all()
+        or torch.any(scales <= 0)
+    ):
+        raise ValueError("centers/scales must be finite positive per-band tensors")
+    whitened = (
+        responses - centers[:, None, None]
+    ) / scales[:, None, None]
+    positive = torch.clamp_min(whitened, 0.0)
+    return torch.sqrt(positive.square().sum(dim=0))
+
+
 def stack_effective_psf(
     difference_image: torch.Tensor,
     source_xy: torch.Tensor,

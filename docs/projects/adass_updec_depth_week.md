@@ -322,8 +322,9 @@ each final method boundary. Otherwise do not begin model tuning.
   family and select the empirical 95%-purity threshold on validation nulls.
   - [x] Add spatial-inverse-variance matched filtering with one effective PSF
     per band and positive per-band signal-to-noise combination in quadrature.
-    Correlated-noise and threshold calibration still come from the frozen
-    validation blank/control products.
+    Robust clipped per-band response centering/scaling comes from the frozen
+    blank to absorb resampling-correlated noise; the final purity threshold
+    still comes from validation control products.
 - [ ] Include Montage if its exact target grid is supported; otherwise record an
   explicit secondary skip and continue.
 - [ ] Run at least three validation injection batches and one blank control.

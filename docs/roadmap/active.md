@@ -97,8 +97,9 @@ stacking-versus-INR/Foam depth result defined in
       injected-minus-blank responses into normalized effective PSFs, with a
       stable CLI that persists their hashes and shape diagnostics.
   - [x] Add spatial-inverse-variance matched filtering and positive six-band
-    chi detection that accepts the measured per-band effective PSFs. Empirical
-    correlated-noise threshold calibration remains part of the validation run.
+    chi detection that accepts the measured per-band effective PSFs, plus
+    robust blank-response whitening for resampling-correlated noise. Empirical
+    purity-threshold calibration remains part of the validation run.
   - [x] Add frozen blank-catalogue neighborhood exclusion to common-support
     manifests so science injections cannot be placed beside pre-existing
     sources. The exact catalogue/radius remain an execution gate.
