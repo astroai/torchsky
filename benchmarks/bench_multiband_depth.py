@@ -2336,6 +2336,7 @@ def main() -> int:
     parser.add_argument("--support-weight-threshold", type=float, default=0.0)
     parser.add_argument("--support-erode-radius-px", type=int, default=9)
     parser.add_argument("--support-min-footprint-fraction", type=float, default=1.0)
+    parser.add_argument("--support-footprint-fraction-grid", default="")
     parser.add_argument("--support-mask-out", type=Path, default=None)
     parser.add_argument(
         "--target-mode",
@@ -2481,6 +2482,34 @@ def main() -> int:
             if support_weights
             else None
         )
+        footprint_fraction_grid = tuple(
+            float(value.strip())
+            for value in args.support_footprint_fraction_grid.split(",")
+            if value.strip()
+        )
+        footprint_fraction_sweep: list[dict[str, object]] = []
+        for fraction in footprint_fraction_grid:
+            candidate_mask = common_support_mask(
+                support_weights,
+                threshold=args.support_weight_threshold,
+                erode_radius_px=args.support_erode_radius_px,
+                min_footprint_fraction=fraction,
+            )
+            split_y = target_shape[0] // 2
+            split_x = target_shape[1] // 2
+            footprint_fraction_sweep.append(
+                {
+                    "min_footprint_fraction": fraction,
+                    "pixel_count": int(candidate_mask.sum()),
+                    "fraction": float(candidate_mask.to(torch.float64).mean()),
+                    "quadrant_pixel_count": [
+                        int(candidate_mask[:split_y, :split_x].sum()),
+                        int(candidate_mask[:split_y, split_x:].sum()),
+                        int(candidate_mask[split_y:, :split_x].sum()),
+                        int(candidate_mask[split_y:, split_x:].sum()),
+                    ],
+                }
+            )
         support_mask_path: Path | None = None
         support_mask_sha256: str | None = None
         if valid_mask is not None and args.support_mask_out is not None:
@@ -2547,6 +2576,7 @@ def main() -> int:
                         support_paths, support_weights, strict=True
                     )
                 ],
+                "footprint_fraction_sweep": footprint_fraction_sweep,
                 "quadrant_pixel_count": [
                     int(
                         valid_mask[

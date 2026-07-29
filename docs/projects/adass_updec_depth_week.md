@@ -165,7 +165,8 @@ Do not count independent models as receiving six times the optimization budget.
   - [x] Add an explicit minimum local footprint-coverage fraction per method.
     The default remains strict 100% erosion; a lower predeclared fraction may
     tolerate sparse Drizzle holes while still requiring positive center weight
-    in every candidate. Freeze it from weight topology before any recovery run.
+    in every candidate. The CLI records a predeclared coverage-grid sweep so it
+    can be frozen from weight topology before any recovery run.
 - [ ] Inject sources through each exposure WCS, oversampled PSF, pixel footprint,
   calibration, and bandpass. Preserve the original background/noise/artifacts.
 - [ ] Use smooth continuum point sources for the abstract endpoint. Add compact

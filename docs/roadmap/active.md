@@ -86,7 +86,8 @@ stacking-versus-INR/Foam depth result defined in
       each quadrant instead of depending on low-occupancy rejection.
     - [x] Add per-method local footprint-coverage gating so isolated Drizzle
       holes can be tolerated only through an explicit pre-recovery threshold;
-      strict 100% erosion remains the default.
+      strict 100% erosion remains the default and a diagnostic coverage grid is
+      persisted before selection.
   - [ ] Propagate or fit the method-dependent effective PSF before comparing
     bright-source flux bias or selecting a classical kernel.
     - [x] Add robust fractional-phase stacking of isolated

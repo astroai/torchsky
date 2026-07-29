@@ -351,6 +351,8 @@ def test_manifest_cli_reads_final_weight_support(
             str(weight_path),
             "--support-erode-radius-px",
             "2",
+            "--support-footprint-fraction-grid",
+            "0.8,1.0",
             "--support-mask-out",
             str(support_mask_path),
             "--json-out",
@@ -369,6 +371,9 @@ def test_manifest_cli_reads_final_weight_support(
         (weight > 0).sum()
     )
     assert len(artifact["common_support"]["quadrant_pixel_count"]) == 4
+    sweep = artifact["common_support"]["footprint_fraction_sweep"]
+    assert [row["min_footprint_fraction"] for row in sweep] == [0.8, 1.0]
+    assert sweep[0]["pixel_count"] >= sweep[1]["pixel_count"]
     assert artifact["placement"]["margin_px"] == 10.0
     assert artifact["placement"]["min_separation_px"] == 6.0
     assert all(y >= 14.0 for _, y in artifact["target_xy"])
