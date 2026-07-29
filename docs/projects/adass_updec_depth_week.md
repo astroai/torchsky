@@ -328,8 +328,14 @@ each final method boundary. Otherwise do not begin model tuning.
     Torchsky Lanczos3. These are PSF diagnostics, not kernel selection.
   - [x] Extend the same effective-PSF report with exact-WCS, border-subtracted
     aperture fluxes and robust fractional-bias diagnostics against the manifest
-    flux in every band. The existing 42-product calibration batch must be
-    rescored before the 2% gate is checked.
+    flux in every band.
+  - [x] Rescore the existing 42 products in session `q82737l1` at `aa0aa21`.
+    Upstream Drizzle pixfrac 0.8/1.0 and SWarp bilinear pass the 2% median-bias
+    gate in all six bands, while inverse Torchsky bilinear/Lanczos fail in the
+    undersampled short bands (F090W +15.3%/+12.1%). This is a gate failure, not
+    a kernel selection. Session `g1ajbo0l` is testing the native
+    flux-conserving Torchsky square-Drizzle variants before the candidate set is
+    frozen.
 - [ ] Select Drizzle `pixfrac` from a small predeclared grid and SWarp kernel
   from `{BILINEAR, LANCZOS3}` using validation injections only.
 - [ ] Build the whitened chi-square six-band detector from each winning stack
