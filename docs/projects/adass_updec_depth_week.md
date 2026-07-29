@@ -227,8 +227,16 @@ each final method boundary. Otherwise do not begin model tuning.
 - [x] Add deterministic common-world smooth-continuum manifests, transient
   detector-SCI injection overrides, and exact-target product persistence.
   Archived CANFAR inputs remain unchanged; all classical families receive the
-  same injected detector pixels. Evidence: the commit containing this update
-  and the focused common-world conservation/blank-control tests.
+  same injected detector pixels. Evidence: commits `278735e` and `419c94a`,
+  including the focused common-world conservation/blank-control tests.
+- [x] Run one 28-source validation plumbing batch and its zero-source blank
+  through Torchsky bilinear, upstream Drizzle `pixfrac=1`, and SWarp bilinear.
+  Evidence: CANFAR session `py7dl02x` at exact commit `419c94a`; every
+  detector audit preserves the archived input, all six positive/blank
+  products and weights were written and hashed under
+  `/arc/projects/ots/torchsky-runs/20260728-smacs-injection-419c94a/`.
+  This proves common-pixel delivery and artifact persistence only; completeness,
+  purity, and kernel selection remain unmeasured.
 - [ ] Select Drizzle `pixfrac` from a small predeclared grid and SWarp kernel
   from `{BILINEAR, LANCZOS3}` using validation injections only.
 - [ ] Build the whitened chi-square six-band detector from each winning stack

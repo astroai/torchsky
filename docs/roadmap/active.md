@@ -48,8 +48,16 @@ stacking-versus-INR/Foam depth result defined in
     select a scientific kernel.
   - [x] Add deterministic common-world manifests, transient detector-level SCI
     overrides, and persisted exact-grid products for identical classical
-    injection/control runs. Evidence: the commit containing this update and 37
+    injection/control runs. Evidence: commits `278735e` and `419c94a`, with 37
     focused passing tests (one optional skip).
+  - [x] Run one positive 28-source/seven-level/four-quadrant batch and one
+    zero-source blank through Torchsky bilinear, upstream Drizzle
+    `pixfrac=1`, and SWarp bilinear. Evidence: CANFAR session `py7dl02x`,
+    exact commit `419c94a`, with hashed manifests, SCI, weights, JSON, and
+    Markdown under
+    `/arc/projects/ots/torchsky-runs/20260728-smacs-injection-419c94a/`.
+    This is a plumbing gate, not completeness/purity or kernel-selection
+    evidence.
   - [ ] Run three positive validation batches plus one blank, build the
     six-band whitened chi-square detector, and freeze the winning classical
     configuration using only those validation batches.
