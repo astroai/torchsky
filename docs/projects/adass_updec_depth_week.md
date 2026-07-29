@@ -278,10 +278,18 @@ each final method boundary. Otherwise do not begin model tuning.
 - [ ] Fit or propagate each method's effective PSF before applying the 2% flux
   gate. A fixed injected-PSF fit is not comparable after different resampling
   kernels broaden the product differently.
+  - [x] Add fractional-phase registration and robust stacking of isolated
+    injected-minus-blank responses into a normalized effective PSF. The
+    remaining gate is running the bright calibration batch for every selected
+    method and band.
 - [ ] Select Drizzle `pixfrac` from a small predeclared grid and SWarp kernel
   from `{BILINEAR, LANCZOS3}` using validation injections only.
 - [ ] Build the whitened chi-square six-band detector from each winning stack
   family and select the empirical 95%-purity threshold on validation nulls.
+  - [x] Add spatial-inverse-variance matched filtering with one effective PSF
+    per band and positive per-band signal-to-noise combination in quadrature.
+    Correlated-noise and threshold calibration still come from the frozen
+    validation blank/control products.
 - [ ] Include Montage if its exact target grid is supported; otherwise record an
   explicit secondary skip and continue.
 - [ ] Run at least three validation injection batches and one blank control.

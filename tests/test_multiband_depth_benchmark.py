@@ -41,7 +41,10 @@ from bench_multiband_depth import (  # noqa: E402
     simple_tan_header,
     simulate_dithered_exposures,
     split_identifiers,
+    stack_effective_psf,
     updec_patt_split,
+    weighted_chi_detection_statistic,
+    weighted_matched_filter_snr,
 )
 
 
@@ -295,6 +298,10 @@ def test_manifest_cli_reads_final_weight_support(
             "0",
             "--batch-sources",
             "8",
+            "--margin-px",
+            "10",
+            "--min-separation-px",
+            "6",
             "--support-weight-paths",
             str(weight_path),
             "--support-erode-radius-px",
@@ -308,6 +315,8 @@ def test_manifest_cli_reads_final_weight_support(
     artifact = json.loads(output.read_text())
     assert artifact["common_support"]["weight_paths"] == [str(weight_path)]
     assert artifact["common_support"]["erode_radius_px"] == 2
+    assert artifact["placement"]["margin_px"] == 10.0
+    assert artifact["placement"]["min_separation_px"] == 6.0
     assert all(y >= 14.0 for _, y in artifact["target_xy"])
 
 
@@ -383,6 +392,80 @@ def test_detector_recovers_noiseless_bright_sources_and_null_is_empty() -> None:
     null_statistic = detection_statistic(torch.zeros_like(cube), 0.01)
     null_detections, _ = find_detections(null_statistic, threshold=1.0)
     assert null_detections.shape == (0, 2)
+
+
+def test_weighted_matched_filter_uses_spatial_inverse_variance() -> None:
+    template = torch.tensor(
+        [[0.0, 0.25, 0.0], [0.25, 1.0, 0.25], [0.0, 0.25, 0.0]],
+        dtype=torch.float64,
+    )
+    image = torch.zeros((9, 9), dtype=torch.float64)
+    amplitude = 3.0
+    image[3:6, 3:6] = amplitude * template
+    inverse_variance = torch.ones_like(image)
+    inverse_variance[3, 4] = 4.0
+
+    snr = weighted_matched_filter_snr(image, inverse_variance, template)
+    expected = amplitude * torch.sqrt(
+        torch.sum(inverse_variance[3:6, 3:6] * template.square())
+    )
+
+    torch.testing.assert_close(snr[4, 4], expected)
+    assert int(torch.argmax(snr)) == 4 * image.shape[1] + 4
+
+
+def test_weighted_chi_detection_combines_positive_band_significance() -> None:
+    template = torch.tensor(
+        [[0.0, 0.25, 0.0], [0.25, 1.0, 0.25], [0.0, 0.25, 0.0]],
+        dtype=torch.float64,
+    )
+    images = torch.zeros((3, 9, 9), dtype=torch.float64)
+    images[0, 3:6, 3:6] = 2.0 * template
+    images[1, 3:6, 3:6] = 3.0 * template
+    images[2, 3:6, 3:6] = -100.0 * template
+    inverse_variances = torch.ones_like(images)
+
+    statistic = weighted_chi_detection_statistic(
+        images,
+        inverse_variances,
+        (template, template, template),
+    )
+    template_norm = torch.linalg.vector_norm(template)
+
+    torch.testing.assert_close(
+        statistic[4, 4],
+        torch.sqrt(torch.tensor(13.0, dtype=torch.float64)) * template_norm,
+    )
+
+
+def test_effective_psf_stack_registers_fractional_source_phases() -> None:
+    dtype = torch.float64
+    yy, xx = torch.meshgrid(
+        torch.arange(64, dtype=dtype),
+        torch.arange(64, dtype=dtype),
+        indexing="ij",
+    )
+    source_xy = torch.tensor([[17.2, 18.7], [44.6, 42.3]], dtype=dtype)
+    difference = torch.zeros((64, 64), dtype=dtype)
+    for position in source_xy:
+        profile = torch.exp(
+            -0.5
+            * (
+                (xx - position[0]).square()
+                + (yy - position[1]).square()
+            )
+            / 1.3**2
+        )
+        difference += profile / profile.sum()
+
+    effective = stack_effective_psf(difference, source_xy, radius_px=6)
+
+    torch.testing.assert_close(effective.sum(), torch.tensor(1.0, dtype=dtype))
+    peak_yx = torch.stack(
+        torch.unravel_index(torch.argmax(effective), effective.shape)
+    ).tolist()
+    assert peak_yx == [6, 6]
+    torch.testing.assert_close(effective, effective.flip((0, 1)), atol=2e-2, rtol=0.0)
 
 
 def test_dithered_exposures_and_production_classical_coadds_are_deterministic() -> None:

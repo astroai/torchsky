@@ -1193,6 +1193,165 @@ def gaussian_template_bank(
     return tuple(kernels)
 
 
+def weighted_matched_filter_snr(
+    image: torch.Tensor,
+    inverse_variance: torch.Tensor,
+    template: torch.Tensor,
+) -> torch.Tensor:
+    """Return the spatially weighted matched-filter signal-to-noise map."""
+
+    if (
+        image.ndim != 2
+        or inverse_variance.shape != image.shape
+        or not image.is_floating_point()
+        or not inverse_variance.is_floating_point()
+        or image.device != inverse_variance.device
+        or image.dtype != inverse_variance.dtype
+    ):
+        raise ValueError(
+            "image and inverse_variance must be matching floating-point 2-D tensors"
+        )
+    if (
+        template.ndim != 2
+        or not template.is_floating_point()
+        or template.device != image.device
+        or template.dtype != image.dtype
+        or template.shape[0] % 2 != 1
+        or template.shape[1] % 2 != 1
+        or not torch.isfinite(template).all()
+        or not bool(torch.any(template != 0))
+    ):
+        raise ValueError(
+            "template must be a finite, nonzero, odd-shaped tensor matching image dtype/device"
+        )
+    if not torch.isfinite(inverse_variance).all() or torch.any(inverse_variance < 0):
+        raise ValueError("inverse_variance must be finite and non-negative")
+    supported = inverse_variance > 0
+    if not torch.isfinite(image[supported]).all():
+        raise ValueError("image must be finite wherever inverse_variance is positive")
+    safe_image = torch.where(supported, image, 0.0)
+    kernel = template[None, None]
+    padding = (template.shape[0] // 2, template.shape[1] // 2)
+    numerator = F.conv2d(
+        (safe_image * inverse_variance)[None, None],
+        kernel,
+        padding=padding,
+    )[0, 0]
+    denominator2 = F.conv2d(
+        inverse_variance[None, None],
+        kernel.square(),
+        padding=padding,
+    )[0, 0]
+    return torch.where(
+        denominator2 > 0,
+        numerator / torch.sqrt(torch.clamp_min(denominator2, 0.0)),
+        0.0,
+    )
+
+
+def weighted_chi_detection_statistic(
+    images: torch.Tensor,
+    inverse_variances: torch.Tensor,
+    psf_templates: Sequence[torch.Tensor],
+) -> torch.Tensor:
+    """Combine positive per-band matched-filter S/N maps in quadrature."""
+
+    if (
+        images.ndim != 3
+        or inverse_variances.shape != images.shape
+        or len(psf_templates) != images.shape[0]
+    ):
+        raise ValueError(
+            "images/inverse_variances must be (bands, height, width) with one PSF per band"
+        )
+    responses = [
+        weighted_matched_filter_snr(images[band], inverse_variances[band], template)
+        for band, template in enumerate(psf_templates)
+    ]
+    positive = torch.clamp_min(torch.stack(responses), 0.0)
+    return torch.sqrt(positive.square().sum(dim=0))
+
+
+def stack_effective_psf(
+    difference_image: torch.Tensor,
+    source_xy: torch.Tensor,
+    *,
+    radius_px: int = 9,
+) -> torch.Tensor:
+    """Register and robustly stack isolated injected-minus-blank PSF responses."""
+
+    if (
+        difference_image.ndim != 2
+        or not difference_image.is_floating_point()
+        or not torch.isfinite(difference_image).all()
+        or source_xy.ndim != 2
+        or source_xy.shape[1] != 2
+        or source_xy.device != difference_image.device
+        or source_xy.dtype != difference_image.dtype
+        or not torch.isfinite(source_xy).all()
+        or source_xy.shape[0] == 0
+        or not isinstance(radius_px, int)
+        or radius_px < 1
+    ):
+        raise ValueError(
+            "difference_image and nonempty source_xy must be finite matching tensors"
+        )
+    height, width = difference_image.shape
+    if (
+        torch.any(source_xy[:, 0] < radius_px)
+        or torch.any(source_xy[:, 0] > width - 1 - radius_px)
+        or torch.any(source_xy[:, 1] < radius_px)
+        or torch.any(source_xy[:, 1] > height - 1 - radius_px)
+    ):
+        raise ValueError("effective-PSF stamps must lie fully inside the image")
+    offsets = torch.arange(
+        -radius_px,
+        radius_px + 1,
+        device=difference_image.device,
+        dtype=difference_image.dtype,
+    )
+    yy, xx = torch.meshgrid(offsets, offsets, indexing="ij")
+    grids = []
+    for position in source_xy:
+        grids.append(
+            torch.stack(
+                (
+                    (position[0] + xx) / max(width - 1, 1) * 2.0 - 1.0,
+                    (position[1] + yy) / max(height - 1, 1) * 2.0 - 1.0,
+                ),
+                dim=-1,
+            )
+        )
+    # ponytail: bilinear phase registration is the small validation baseline;
+    # replace it with an oversampled spatial ePSF when field variation is material.
+    stamps = F.grid_sample(
+        difference_image[None, None].expand(source_xy.shape[0], -1, -1, -1),
+        torch.stack(grids),
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=True,
+    )[:, 0]
+    border = torch.cat(
+        (
+            stamps[:, 0],
+            stamps[:, -1],
+            stamps[:, 1:-1, 0],
+            stamps[:, 1:-1, -1],
+        ),
+        dim=1,
+    )
+    stamps = stamps - torch.median(border, dim=1).values[:, None, None]
+    totals = stamps.sum(dim=(-2, -1))
+    if torch.any(~torch.isfinite(totals)) or torch.any(totals <= 0):
+        raise ValueError("effective-PSF stamps must have positive finite total flux")
+    normalized = stamps / totals[:, None, None]
+    effective = torch.median(normalized, dim=0).values
+    total = effective.sum()
+    if not torch.isfinite(total) or total <= 0:
+        raise ValueError("stacked effective PSF must have positive finite total flux")
+    return effective / total
+
+
 def detection_statistic(
     images: torch.Tensor,
     noise_sigma: torch.Tensor | float,
@@ -1973,6 +2132,8 @@ def main() -> int:
     parser.add_argument("--crop-y0", type=int, default=0)
     parser.add_argument("--batch-sources", type=int, default=28)
     parser.add_argument("--batch-id", default="validation-000")
+    parser.add_argument("--margin-px", type=float, default=12.0)
+    parser.add_argument("--min-separation-px", type=float, default=8.0)
     parser.add_argument(
         "--ab-magnitudes",
         default="27,27.5,28,28.5,29,29.5,30",
@@ -2100,6 +2261,8 @@ def main() -> int:
                 if value.strip()
             ),
             batch_id=args.batch_id,
+            margin_px=args.margin_px,
+            min_separation_px=args.min_separation_px,
             valid_mask=valid_mask,
         )
         artifact["reference_path"] = str(args.reference_path.resolve())
