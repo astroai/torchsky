@@ -1124,7 +1124,7 @@ def main() -> int:
         choices=("auto", "crf", "cal", "aligned"),
         default="cal",
     )
-    parser.add_argument("--filename-contains", default="nrcblong")
+    parser.add_argument("--filename-contains", default="")
     parser.add_argument("--linearize-sip", action="store_true")
     parser.add_argument("--include-inr", action="store_true")
     parser.add_argument("--inr-steps", type=int, default=4)
