@@ -140,6 +140,12 @@ Do not count independent models as receiving six times the optimization budget.
   real-data profile records `input_unchanged` and uses `ERR^-2` with valid
   `DQ==0` support for its robust planar background fit.
 - [ ] Cache a no-injection control fit/catalogue for every method.
+- [ ] Build one frozen common-support mask from the intersection of every
+  selected method's final per-band weight maps, eroded by the injection/PSF
+  footprint. Generate source positions only inside this mask. The first F277W
+  plumbing batch deliberately remains evidence for this gate: one AB 27.5
+  source accepted by both input detectors was absent from SWarp's final
+  product.
 - [ ] Inject sources through each exposure WCS, oversampled PSF, pixel footprint,
   calibration, and bandpass. Preserve the original background/noise/artifacts.
 - [ ] Use smooth continuum point sources for the abstract endpoint. Add compact
@@ -237,6 +243,24 @@ each final method boundary. Otherwise do not begin model tuning.
   `/arc/projects/ots/torchsky-runs/20260728-smacs-injection-419c94a/`.
   This proves common-pixel delivery and artifact persistence only; completeness,
   purity, and kernel selection remain unmeasured.
+- [x] Repair and revalidate SWarp astrometry on SIP-distorted JWST inputs.
+  SWarp 2.41.5 does not consume SIP input distortion, so commit `fb779ef`
+  translates each SIP polynomial to its equivalent TPV convention before
+  invoking SWarp. The synthetic WCS parity test agrees to `2e-9` degree across
+  the detector. Exact CANFAR session `lf5xzbso` reran the same positive/blank
+  manifest: median peak offset fell from about 8.57 pixels to 0.39 pixels
+  (0.56 pixels for the bright `AB<=28` stratum). Detailed audit session
+  `pnk5hrr4` also found one unsupported bright source and a lower fixed-PSF
+  bright median flux ratio for SWarp (0.71 versus 0.86 for Torchsky/Drizzle).
+  Therefore this is an astrometric/plumbing pass, not a photometric pass or
+  kernel selection. Hashed artifacts are under
+  `/arc/projects/ots/torchsky-runs/20260728-smacs-swarp-sip-fb779ef/`.
+- [ ] Generate the frozen per-band/per-method common-support mask before the
+  next injection manifests. Exclude the unsupported-source failure by design,
+  not after examining recovery.
+- [ ] Fit or propagate each method's effective PSF before applying the 2% flux
+  gate. A fixed injected-PSF fit is not comparable after different resampling
+  kernels broaden the product differently.
 - [ ] Select Drizzle `pixfrac` from a small predeclared grid and SWarp kernel
   from `{BILINEAR, LANCZOS3}` using validation injections only.
 - [ ] Build the whitened chi-square six-band detector from each winning stack

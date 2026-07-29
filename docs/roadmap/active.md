@@ -58,6 +58,19 @@ stacking-versus-INR/Foam depth result defined in
     `/arc/projects/ots/torchsky-runs/20260728-smacs-injection-419c94a/`.
     This is a plumbing gate, not completeness/purity or kernel-selection
     evidence.
+  - [x] Diagnose and repair the SWarp SIP-registration failure. Commit
+    `fb779ef` translates SIP input distortion to equivalent TPV coefficients;
+    exact CANFAR session `lf5xzbso` reduced the common-world median peak offset
+    from about 8.57 to 0.39 pixels. Session `pnk5hrr4` stratified the audit and
+    confirmed a 0.56-pixel bright-source median. Artifacts are under
+    `/arc/projects/ots/torchsky-runs/20260728-smacs-swarp-sip-fb779ef/`.
+    This remains a plumbing result: one bright source had no final SWarp signal
+    and fixed injected-PSF flux recovery differs by kernel.
+  - [ ] Freeze the intersection of all selected methods' six-band output weight
+    maps, erode it by the PSF/injection footprint, and use only that mask for
+    subsequent source placement.
+  - [ ] Propagate or fit the method-dependent effective PSF before comparing
+    bright-source flux bias or selecting a classical kernel.
   - [ ] Run three positive validation batches plus one blank, build the
     six-band whitened chi-square detector, and freeze the winning classical
     configuration using only those validation batches.
