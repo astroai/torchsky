@@ -22,6 +22,7 @@ from bench_multiband_depth import (  # noqa: E402
     coadd_synthetic_exposures,
     common_support_mask,
     detection_statistic,
+    exclude_catalogue_neighborhoods,
     find_detections,
     flux_color_metrics,
     forced_linear_flux,
@@ -282,6 +283,20 @@ def test_common_support_can_tolerate_sparse_footprint_holes() -> None:
         )
 
 
+def test_catalogue_neighborhood_exclusion_is_circular_and_bounded() -> None:
+    support = torch.ones((21, 21), dtype=torch.bool)
+    result = exclude_catalogue_neighborhoods(
+        support,
+        torch.tensor([[10.0, 10.0], [-100.0, -100.0]], dtype=torch.float64),
+        radius_px=2.5,
+    )
+
+    assert not bool(result[10, 10])
+    assert not bool(result[10, 12])
+    assert bool(result[10, 13])
+    assert bool(result[0, 0])
+
+
 def test_manifest_samples_sparse_support_pixels_without_rejection_failure() -> None:
     support = torch.zeros((128, 128), dtype=torch.bool)
     support[18:34, 18:34] = True
@@ -326,6 +341,13 @@ def test_manifest_cli_reads_final_weight_support(
     torchsky.write(str(weight_path), weight, header=header)
     output = tmp_path / "manifest.json"
     support_mask_path = tmp_path / "support_mask.fits"
+    avoidance_path = tmp_path / "avoidance.json"
+    avoidance_world = torchsky.WCS(header).pixel_to_world(
+        torch.tensor([[32.0, 32.0]], dtype=torch.float64)
+    )
+    avoidance_path.write_text(
+        json.dumps({"world_radec_deg": avoidance_world.tolist()})
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -355,6 +377,10 @@ def test_manifest_cli_reads_final_weight_support(
             "0.8,1.0",
             "--support-mask-out",
             str(support_mask_path),
+            "--avoidance-catalogue",
+            str(avoidance_path),
+            "--avoidance-radius-px",
+            "3",
             "--json-out",
             str(output),
         ],
@@ -379,9 +405,15 @@ def test_manifest_cli_reads_final_weight_support(
     assert all(y >= 14.0 for _, y in artifact["target_xy"])
     assert artifact["common_support"]["mask_path"] == str(support_mask_path)
     assert len(artifact["common_support"]["mask_sha256"]) == 64
+    assert artifact["common_support"]["avoidance_source_count"] == 1
+    expected_support = exclude_catalogue_neighborhoods(
+        common_support_mask((weight,), erode_radius_px=2),
+        torchsky.WCS(header).world_to_pixel(avoidance_world),
+        radius_px=3,
+    )
     torch.testing.assert_close(
         torchsky.read(str(support_mask_path)),
-        common_support_mask((weight,), erode_radius_px=2).to(torch.uint8),
+        expected_support.to(torch.uint8),
     )
 
 

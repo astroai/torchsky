@@ -550,6 +550,49 @@ def common_support_mask(
     return support
 
 
+def exclude_catalogue_neighborhoods(
+    valid_mask: torch.Tensor,
+    catalogue_xy: torch.Tensor,
+    *,
+    radius_px: float,
+) -> torch.Tensor:
+    """Remove circular neighborhoods around a frozen control catalogue."""
+
+    if (
+        valid_mask.ndim != 2
+        or valid_mask.dtype is not torch.bool
+        or valid_mask.device.type != "cpu"
+        or catalogue_xy.ndim != 2
+        or catalogue_xy.shape[1] != 2
+        or catalogue_xy.device.type != "cpu"
+        or not catalogue_xy.is_floating_point()
+        or not torch.isfinite(catalogue_xy).all()
+        or not math.isfinite(radius_px)
+        or radius_px < 0
+    ):
+        raise ValueError("invalid CPU mask, catalogue_xy, or exclusion radius")
+    result = valid_mask.clone()
+    height, width = result.shape
+    for position in catalogue_xy:
+        x_min = max(0, math.floor(float(position[0] - radius_px)))
+        x_max = min(width, math.ceil(float(position[0] + radius_px)) + 1)
+        y_min = max(0, math.floor(float(position[1] - radius_px)))
+        y_max = min(height, math.ceil(float(position[1] + radius_px)) + 1)
+        if x_min >= x_max or y_min >= y_max:
+            continue
+        yy, xx = torch.meshgrid(
+            torch.arange(y_min, y_max, dtype=position.dtype),
+            torch.arange(x_min, x_max, dtype=position.dtype),
+            indexing="ij",
+        )
+        disk = (
+            (xx - position[0]).square() + (yy - position[1]).square()
+            <= radius_px**2
+        )
+        result[y_min:y_max, x_min:x_max] &= ~disk
+    return result
+
+
 def gaussian_psf_contract(
     band: str,
     *,
@@ -2338,6 +2381,8 @@ def main() -> int:
     parser.add_argument("--support-min-footprint-fraction", type=float, default=1.0)
     parser.add_argument("--support-footprint-fraction-grid", default="")
     parser.add_argument("--support-mask-out", type=Path, default=None)
+    parser.add_argument("--avoidance-catalogue", type=Path, default=None)
+    parser.add_argument("--avoidance-radius-px", type=float, default=0.0)
     parser.add_argument(
         "--target-mode",
         choices=("published_native", "published_swarp_tan"),
@@ -2482,6 +2527,39 @@ def main() -> int:
             if support_weights
             else None
         )
+        pre_avoidance_pixel_count = (
+            int(valid_mask.sum()) if valid_mask is not None else None
+        )
+        avoidance_catalogue_path: Path | None = None
+        avoidance_source_count = 0
+        if args.avoidance_catalogue is not None:
+            if valid_mask is None or args.avoidance_radius_px <= 0:
+                raise ValueError(
+                    "avoidance catalogue requires support weights and a positive radius"
+                )
+            avoidance_catalogue_path = (
+                args.avoidance_catalogue.expanduser().resolve()
+            )
+            avoidance_catalogue = json.loads(
+                avoidance_catalogue_path.read_text()
+            )
+            avoidance_world = torch.as_tensor(
+                avoidance_catalogue["world_radec_deg"],
+                dtype=torch.float64,
+            )
+            if avoidance_world.numel() == 0:
+                avoidance_world = avoidance_world.reshape(0, 2)
+            if avoidance_world.ndim != 2 or avoidance_world.shape[1] != 2:
+                raise ValueError(
+                    "avoidance catalogue world_radec_deg must have shape (N, 2)"
+                )
+            avoidance_xy = target_wcs.world_to_pixel(avoidance_world)
+            valid_mask = exclude_catalogue_neighborhoods(
+                valid_mask,
+                avoidance_xy,
+                radius_px=args.avoidance_radius_px,
+            )
+            avoidance_source_count = int(avoidance_xy.shape[0])
         footprint_fraction_grid = tuple(
             float(value.strip())
             for value in args.support_footprint_fraction_grid.split(",")
@@ -2556,6 +2634,14 @@ def main() -> int:
                 "weight_threshold": args.support_weight_threshold,
                 "erode_radius_px": args.support_erode_radius_px,
                 "min_footprint_fraction": args.support_min_footprint_fraction,
+                "pre_avoidance_pixel_count": pre_avoidance_pixel_count,
+                "avoidance_catalogue": (
+                    str(avoidance_catalogue_path)
+                    if avoidance_catalogue_path is not None
+                    else None
+                ),
+                "avoidance_source_count": avoidance_source_count,
+                "avoidance_radius_px": args.avoidance_radius_px,
                 "pixel_count": int(valid_mask.sum()),
                 "fraction": float(valid_mask.to(torch.float64).mean()),
                 "raw_intersection_pixel_count": int(raw_support.sum()),

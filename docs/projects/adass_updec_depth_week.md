@@ -182,6 +182,10 @@ Do not count independent models as receiving six times the optimization budget.
   of `m50`.
 - [ ] Use at most 5% injected-source areal occupancy per fit and reject isolated
   injections within two PSF FWHM of the frozen control catalogue.
+  - [x] Add target-WCS control-catalogue ingestion and deterministic circular
+    exclusion to the manifest CLI. It persists the catalogue, radius, source
+    count, and pre/post-exclusion support counts. The remaining gate is deriving
+    and freezing the real blank-field catalogue after effective PSFs exist.
 - [ ] Run at least 20 independent batches distributed deterministically over the
   four 256-square quadrants. Aim for at least 800 total continuum injections.
 - [ ] Run blank, sign-flipped/negative, and shuffled-band batches through the

@@ -99,6 +99,9 @@ stacking-versus-INR/Foam depth result defined in
   - [x] Add spatial-inverse-variance matched filtering and positive six-band
     chi detection that accepts the measured per-band effective PSFs. Empirical
     correlated-noise threshold calibration remains part of the validation run.
+  - [x] Add frozen blank-catalogue neighborhood exclusion to common-support
+    manifests so science injections cannot be placed beside pre-existing
+    sources. The exact catalogue/radius remain an execution gate.
   - [ ] Run three positive validation batches plus one blank, build the
     six-band whitened chi-square detector, and freeze the winning classical
     configuration using only those validation batches.
