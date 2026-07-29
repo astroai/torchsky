@@ -2906,6 +2906,24 @@ def test_coadd_image_plane_real_shifted_astropy_sip_fixture(tmp_path) -> None:
     assert result.weight.max().item() > 0.0
 
 
+def test_coadd_image_plane_large_sip_target_keeps_roundtrip_world_grid() -> None:
+    real_path = _astropy_sip_fixture()
+    _image, header = torchsky.read(str(real_path), return_header=True)
+    target_header = dict(header)
+    target_header["NAXIS1"] = 512
+    target_header["NAXIS2"] = 512
+
+    result = coadd_image_plane(
+        [ImageObservation(str(real_path))],
+        target_header=target_header,
+        value_semantics="surface_brightness",
+    )
+
+    assert result.data.shape == (512, 512)
+    assert torch.isfinite(result.data).all()
+    assert result.weight.max().item() > 0.0
+
+
 def test_plan_image_plane_cube_target_from_header_uses_spectral_wcs(tmp_path) -> None:
     header = _simple_header()
     path = tmp_path / "img.fits"

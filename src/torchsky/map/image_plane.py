@@ -1042,7 +1042,7 @@ def _resample_weighted_to_target(
         if target.ra_deg is not None:
             return _sample_on_world_grid(target.ra_deg, target.dec_deg)
         h_tgt, w_tgt = int(target.shape[0]), int(target.shape[1])
-        if min(h_tgt, w_tgt) < 500:
+        if min(h_tgt, w_tgt) < 500 or _requires_roundtrip_validity_check(source_wcs):
             ra_g, dec_g = _build_target_world_grid(
                 target.wcs, h_tgt, w_tgt, device=image.device,
             )

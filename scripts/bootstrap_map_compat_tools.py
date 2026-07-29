@@ -109,14 +109,37 @@ def _conda_prefix() -> Path:
     return Path(value)
 
 
+def _swarp_build_env(
+    conda_prefix: Path,
+    *,
+    base: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Expose Pixi's CFITSIO and its shared dependencies to Autoconf."""
+
+    env = dict(os.environ if base is None else base)
+    include_dir = conda_prefix / "include"
+    lib_dir = conda_prefix / "lib"
+    env["CPPFLAGS"] = f"-I{include_dir}"
+    env["LDFLAGS"] = (
+        f"-L{lib_dir} -Wl,-rpath,{lib_dir} -Wl,-rpath-link,{lib_dir}"
+    )
+    env["LD_LIBRARY_PATH"] = ":".join(
+        value for value in (str(lib_dir), env.get("LD_LIBRARY_PATH", "")) if value
+    )
+    env["PKG_CONFIG_PATH"] = ":".join(
+        value
+        for value in (str(lib_dir / "pkgconfig"), env.get("PKG_CONFIG_PATH", ""))
+        if value
+    )
+    return env
+
+
 def _build_swarp(src_dir: Path, prefix: Path, *, jobs: int) -> None:
     if (prefix / "bin" / "swarp").exists():
         print(f"swarp already built at {prefix / 'bin' / 'swarp'}")
         return
-    env = dict(os.environ)
     conda_prefix = _conda_prefix()
-    env["CPPFLAGS"] = f"-I{conda_prefix / 'include'}"
-    env["LDFLAGS"] = f"-L{conda_prefix / 'lib'}"
+    env = _swarp_build_env(conda_prefix)
     _run(["./autogen.sh"], cwd=src_dir, env=env)
     _run(
         [
