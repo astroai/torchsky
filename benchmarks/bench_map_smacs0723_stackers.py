@@ -91,6 +91,21 @@ def _uniform_mask(pred: np.ndarray, reference: np.ndarray) -> np.ndarray:
     return np.isfinite(pred) & np.isfinite(reference)
 
 
+def _fixed_cutout(
+    image: np.ndarray,
+    *,
+    size: int,
+    x0: int,
+    y0: int,
+) -> tuple[np.ndarray, int, int]:
+    if x0 < 0 or y0 < 0:
+        raise ValueError("fixed crop origin must be non-negative")
+    cutout = image[y0 : y0 + size, x0 : x0 + size]
+    if cutout.shape != (size, size):
+        raise ValueError("fixed crop extends beyond the reference image")
+    return cutout, x0, y0
+
+
 def _time_once(fn: Callable[[], Any]) -> tuple[float, Any]:
     t0 = time.perf_counter()
     result = fn()
@@ -179,6 +194,7 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
             "kind": "legacy",
             "runner": "drizzle",
             "kernel": "square",
+            "pixfrac": 1.0,
         },
         {
             "name": "drizzle_point",
@@ -189,6 +205,7 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
             "kind": "legacy",
             "runner": "drizzle",
             "kernel": "point",
+            "pixfrac": 1.0,
         },
         {
             "name": "reproject_bilinear",
@@ -338,6 +355,61 @@ def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
             ]
         )
     return specs
+
+
+def _build_validation_method_specs(
+    drizzle_pixfracs: tuple[float, ...] = (0.6, 0.8, 1.0),
+) -> list[dict[str, Any]]:
+    """Return the pre-registered classical validation sweep."""
+
+    if not drizzle_pixfracs or any(value <= 0.0 for value in drizzle_pixfracs):
+        raise ValueError("drizzle pixfracs must be positive")
+    base = {spec["name"]: spec for spec in _build_method_specs(include_inr=False)}
+    specs = [
+        dict(base["torchsky_bilinear"]),
+        dict(base["torchsky_lanczos3"]),
+    ]
+    for pixfrac in drizzle_pixfracs:
+        suffix = f"{pixfrac:.3f}".replace(".", "p")
+        torchsky_spec = dict(base["torchsky_drizzle_square"])
+        torchsky_spec.update(
+            {
+                "name": f"torchsky_drizzle_square_pf{suffix}",
+                "variant": (
+                    "torchsky:drizzle_square:surface_brightness:"
+                    f"pixfrac={pixfrac:.3f}"
+                ),
+                "drizzle_pixfrac": float(pixfrac),
+            }
+        )
+        upstream_spec = dict(base["drizzle_square"])
+        upstream_spec.update(
+            {
+                "name": f"drizzle_square_pf{suffix}",
+                "variant": f"drizzle:square:pixfrac={pixfrac:.3f}",
+                "pixfrac": float(pixfrac),
+            }
+        )
+        specs.extend((torchsky_spec, upstream_spec))
+    specs.extend(
+        (
+            dict(base["swarp_bilinear"]),
+            dict(base["swarp_lanczos3"]),
+        )
+    )
+    return specs
+
+
+def _filter_exposure_paths_by_patterns(
+    paths: list[Path],
+    pattern_numbers: tuple[int, ...],
+) -> list[Path]:
+    """Select complete JWST dither identifiers without opening FITS files."""
+
+    if any(pattern < 1 or pattern > 9 for pattern in pattern_numbers):
+        raise ValueError("PATT_NUM selections must be integers from 1 through 9")
+    tokens = tuple(f"_{pattern:05d}_" for pattern in pattern_numbers)
+    return [path for path in paths if any(token in path.name for token in tokens)]
 
 
 def _resolve_target_header(
@@ -572,7 +644,7 @@ def _run_legacy_method(
             observations,
             target_header=dict(target_header),
             kernel=str(spec["kernel"]),
-            pixfrac=1.0,
+            pixfrac=float(spec.get("pixfrac", 1.0)),
             value_semantics="surface_brightness",
         )
         return data, weight, {}
@@ -825,6 +897,7 @@ def run_stacker_benchmark(
     filename_contains: str,
     linearize_sip: bool,
     inr_steps: int,
+    crop_xy0: tuple[int, int] | None = None,
 ) -> list[dict[str, Any]]:
     ref_data = _read_ext(reference_path, "SCI")
     ref_header = _sci_header(reference_path)
@@ -865,7 +938,15 @@ def run_stacker_benchmark(
                     dict(_sci_header(exposure_path)),
                 )
             )
-        if crop_mode == "best_overlap":
+        if crop_xy0 is not None:
+            ref_crop, x0, y0 = _fixed_cutout(
+                ref_data,
+                size=crop_size,
+                x0=int(crop_xy0[0]),
+                y0=int(crop_xy0[1]),
+            )
+            resolved_crop_mode = "fixed"
+        elif crop_mode == "best_overlap":
             ref_crop, x0, y0 = _best_overlap_cutout_from_observations(
                 ref_data,
                 observations,
@@ -876,8 +957,10 @@ def run_stacker_benchmark(
                 value_semantics="surface_brightness",
                 stacking_method="weighted_mean",
             )
+            resolved_crop_mode = crop_mode
         else:
             ref_crop, x0, y0 = _center_cutout(ref_data, crop_size)
+            resolved_crop_mode = crop_mode
 
         published_target_header = dict(_cutout_header(ref_header, x0, y0, crop_size))
         linearized_target_header = dict(_linearize_sip_header(published_target_header))
@@ -899,7 +982,7 @@ def run_stacker_benchmark(
                 "status": "OK",
                 "target_mode_used": target_mode_used,
                 "crop_size": crop_size,
-                "crop_mode": crop_mode,
+                "crop_mode": resolved_crop_mode,
                 "crop_x0": int(x0),
                 "crop_y0": int(y0),
                 "n_exposures": len(exposure_paths),
@@ -970,21 +1053,35 @@ def main() -> int:
     parser.add_argument("--reference-path", type=Path, default=None)
     parser.add_argument("--band", default="F277W")
     parser.add_argument("--module", default="b")
+    parser.add_argument("--exposure-dir", type=Path, default=DEFAULT_EXPOSURE_DIR)
     parser.add_argument("--exposures", default="")
+    parser.add_argument(
+        "--patt-nums",
+        default="",
+        help="Comma-separated PATT_NUM identifiers, for example 3,8 for validation",
+    )
     parser.add_argument("--crop-size", type=int, default=512)
     parser.add_argument(
         "--crop-mode", choices=("center", "best_overlap"), default="center"
     )
     parser.add_argument("--overlap-step", type=int, default=8)
+    parser.add_argument("--crop-x0", type=int, default=None)
+    parser.add_argument("--crop-y0", type=int, default=None)
     parser.add_argument(
         "--input-product",
-        choices=("auto", "crf", "cal"),
+        choices=("auto", "crf", "cal", "aligned"),
         default="cal",
     )
     parser.add_argument("--filename-contains", default="nrcblong")
     parser.add_argument("--linearize-sip", action="store_true")
     parser.add_argument("--include-inr", action="store_true")
     parser.add_argument("--inr-steps", type=int, default=4)
+    parser.add_argument(
+        "--validation-classical",
+        action="store_true",
+        help="Run the frozen Torchsky/Drizzle/SWarp classical validation sweep",
+    )
+    parser.add_argument("--drizzle-pixfracs", default="0.6,0.8,1.0")
     parser.add_argument(
         "--methods",
         default="",
@@ -1003,16 +1100,36 @@ def main() -> int:
         ]
     else:
         exposure_paths = _discover_exposure_paths(
-            DEFAULT_EXPOSURE_DIR,
+            args.exposure_dir,
             input_product=args.input_product,
             band=band,
             module=args.module,
             filename_contains=args.filename_contains or None,
         )
+    if args.patt_nums.strip():
+        pattern_numbers = tuple(
+            int(part.strip())
+            for part in args.patt_nums.split(",")
+            if part.strip()
+        )
+        exposure_paths = _filter_exposure_paths_by_patterns(
+            exposure_paths,
+            pattern_numbers,
+        )
     if not exposure_paths:
         raise FileNotFoundError("No local exposures found for the requested selection")
 
-    specs = _build_method_specs(include_inr=args.include_inr)
+    if (args.crop_x0 is None) != (args.crop_y0 is None):
+        raise ValueError("--crop-x0 and --crop-y0 must be provided together")
+    if args.validation_classical:
+        pixfracs = tuple(
+            float(part.strip())
+            for part in args.drizzle_pixfracs.split(",")
+            if part.strip()
+        )
+        specs = _build_validation_method_specs(pixfracs)
+    else:
+        specs = _build_method_specs(include_inr=args.include_inr)
     if args.methods.strip():
         requested = {part.strip() for part in args.methods.split(",") if part.strip()}
         specs = [spec for spec in specs if spec["name"] in requested]
@@ -1033,6 +1150,11 @@ def main() -> int:
         filename_contains=args.filename_contains,
         linearize_sip=args.linearize_sip,
         inr_steps=args.inr_steps,
+        crop_xy0=(
+            (args.crop_x0, args.crop_y0)
+            if args.crop_x0 is not None and args.crop_y0 is not None
+            else None
+        ),
     )
     for row in rows:
         row["band"] = band

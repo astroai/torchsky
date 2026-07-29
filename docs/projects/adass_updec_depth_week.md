@@ -207,8 +207,14 @@ each final method boundary. Otherwise do not begin model tuning.
   135-file MAST grid and canonical links to existing CRFs:
   `benchmarks/stage_smacs0723_canfar.py`.
 - [ ] Complete and verify
-  `/arc/projects/ots/torchsky-data/jwst_smacs0723/{cal,crf,manifest.json}`
+  `/arc/projects/ots/torchsky-data/jwst_smacs0723/{cal,crf,aligned,manifest.json}`
   from one exact pushed commit.
+  CAL/CRF evidence is complete: session `tmbk7b72`, commit `35af22e`,
+  downloaded all 135 CAL products, linked all 27 CRFs, and returned success.
+  The aligned-link manifest extension remains to run from its pushed commit.
+- [x] Freeze the validation comparator interface: `--input-product aligned`,
+  `--patt-nums 3,8`, `--crop-x0 112 --crop-y0 0`, and
+  `--validation-classical --drizzle-pixfracs 0.6,0.8,1.0`.
 - [ ] Run weighted Torchsky, upstream Drizzle, and SWarp on identical validation
   exposures and the exact same target grid.
 - [ ] Select Drizzle `pixfrac` from a small predeclared grid and SWarp kernel

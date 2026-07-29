@@ -14,8 +14,12 @@ if str(BENCHMARKS) not in sys.path:
 from bench_map_compat import _as_fits_header
 from bench_map_smacs0723_stackers import (
     _build_method_specs,
+    _build_validation_method_specs,
     _compute_region_metrics,
+    _fixed_cutout,
+    _filter_exposure_paths_by_patterns,
     _format_markdown,
+    _run_legacy_method,
 )
 
 
@@ -58,6 +62,63 @@ def test_compute_region_metrics_reports_affine_and_local_terms() -> None:
     assert "center_support_rmse" in metrics
     assert "edge_support_rmse" in metrics
     assert "support_rmse_after_affine_fit" in metrics
+
+
+def test_validation_specs_freeze_drizzle_and_swarp_grid() -> None:
+    specs = _build_validation_method_specs((0.6, 1.0))
+    by_name = {spec["name"]: spec for spec in specs}
+
+    assert list(by_name) == [
+        "torchsky_bilinear",
+        "torchsky_lanczos3",
+        "torchsky_drizzle_square_pf0p600",
+        "drizzle_square_pf0p600",
+        "torchsky_drizzle_square_pf1p000",
+        "drizzle_square_pf1p000",
+        "swarp_bilinear",
+        "swarp_lanczos3",
+    ]
+    assert by_name["drizzle_square_pf0p600"]["pixfrac"] == 0.6
+    assert by_name["torchsky_drizzle_square_pf0p600"]["drizzle_pixfrac"] == 0.6
+
+
+def test_pattern_filter_uses_complete_filename_token() -> None:
+    paths = [
+        Path("jw02736001001_02101_00003_nrcblong_cal.fits"),
+        Path("jw02736001001_02101_00008_nrcblong_cal.fits"),
+        Path("jw02736001001_02101_00009_nrcblong_cal.fits"),
+    ]
+
+    assert _filter_exposure_paths_by_patterns(paths, (3, 8)) == paths[:2]
+
+
+def test_fixed_cutout_uses_registered_origin() -> None:
+    image = np.arange(36, dtype=np.float32).reshape(6, 6)
+
+    cutout, x0, y0 = _fixed_cutout(image, size=3, x0=2, y0=1)
+
+    assert (x0, y0) == (2, 1)
+    np.testing.assert_array_equal(cutout, image[1:4, 2:5])
+
+
+def test_upstream_drizzle_receives_selected_pixfrac(monkeypatch) -> None:
+    received: dict[str, float] = {}
+
+    def fake_drizzle(*args, **kwargs):
+        received["pixfrac"] = kwargs["pixfrac"]
+        return np.zeros((2, 2), dtype=np.float32), np.ones((2, 2), dtype=np.float32)
+
+    monkeypatch.setattr(
+        "bench_map_smacs0723_stackers._coadd_with_real_drizzle",
+        fake_drizzle,
+    )
+    _run_legacy_method(
+        [],
+        {"runner": "drizzle", "kernel": "square", "pixfrac": 0.6},
+        {"NAXIS1": 2, "NAXIS2": 2},
+    )
+
+    assert received["pixfrac"] == 0.6
 
 
 def test_format_markdown_includes_geometry_family_column() -> None:

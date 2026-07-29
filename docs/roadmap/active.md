@@ -30,9 +30,14 @@ stacking-versus-INR/Foam depth result defined in
     existing long-channel CRFs on CANFAR.
   - [x] Add the atomic MAST staging/link utility and focused tests. It writes
     CAL files under `torchsky-data/jwst_smacs0723/cal`, links the existing CRFs
-    under `crf`, and atomically emits `manifest.json`.
-  - [ ] Push the staging commit, complete missing downloads on CANFAR, and
+    under `crf`, links the 135 registered experiment inputs under `aligned`,
+    and atomically emits `manifest.json`.
+  - [x] Add the frozen aligned-input, validation-pattern, fixed-crop, upstream
+    Drizzle pixfrac, and SWarp-kernel controls to the real comparator.
+  - [x] Push the staging commit, complete missing downloads on CANFAR, and
     verify 135 CAL plus 27 CRF entries from the persisted manifest.
+    Evidence: headless session `tmbk7b72`, exact commit `35af22e`, completed
+    successfully in 145 seconds of command time.
   - [ ] Run the validation-only Torchsky/Drizzle/SWarp configuration sweep.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.

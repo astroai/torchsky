@@ -179,14 +179,19 @@ def _discover_exposure_paths(
     filename_contains: str | None = None,
 ) -> list[Path]:
     product = str(input_product).lower()
-    if product not in {"auto", "crf", "cal"}:
-        raise ValueError("input_product must be one of {'auto', 'crf', 'cal'}")
+    if product not in {"auto", "crf", "cal", "aligned"}:
+        raise ValueError(
+            "input_product must be one of {'auto', 'crf', 'cal', 'aligned'}"
+        )
     crf_paths = sorted(exposure_dir.glob("*_crf.fits"))
     cal_paths = sorted(exposure_dir.glob("*_cal.fits"))
+    aligned_paths = sorted(exposure_dir.glob("*_rshift_tweakreg.fits"))
     if product == "crf":
         paths = crf_paths
     elif product == "cal":
         paths = cal_paths
+    elif product == "aligned":
+        paths = aligned_paths
     elif crf_paths:
         paths = crf_paths
     else:

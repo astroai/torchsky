@@ -15,6 +15,11 @@ from urllib.request import urlopen
 OBSERVATION_GROUPS = ("02101", "02103", "02105")
 DETECTORS = ("nrcb1", "nrcb2", "nrcb3", "nrcb4", "nrcblong")
 MAST_DOWNLOAD = "https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:JWST/product/"
+DEFAULT_ALIGNED_SOURCE = Path(
+    "/arc/projects/ots/jwst_smacs0723/results/wcs_aware_multiband_inr/"
+    "official_no_psf_whitened_l2_batch100_400_tweakreg_rshift_8plus3_run2/"
+    "alignment/tweakreg_rshift"
+)
 
 
 def expected_cal_filenames() -> tuple[str, ...]:
@@ -40,18 +45,21 @@ def is_complete_fits(path: Path) -> bool:
         return False
 
 
-def link_existing_crfs(source: Path, destination: Path) -> list[dict[str, object]]:
-    """Link existing CRFs into the canonical data root without copying them."""
-
+def _link_existing_products(
+    source: Path,
+    destination: Path,
+    *,
+    pattern: str,
+) -> list[dict[str, object]]:
     destination.mkdir(parents=True, exist_ok=True)
     records: list[dict[str, object]] = []
-    for source_path in sorted(source.glob("*_crf.fits")):
+    for source_path in sorted(source.glob(pattern)):
         link = destination / source_path.name
         if link.is_symlink():
             if link.resolve() != source_path.resolve():
-                raise RuntimeError(f"existing CRF link targets the wrong file: {link}")
+                raise RuntimeError(f"existing link targets the wrong file: {link}")
         elif link.exists():
-            raise RuntimeError(f"refusing to replace existing CRF path: {link}")
+            raise RuntimeError(f"refusing to replace existing product path: {link}")
         else:
             link.symlink_to(source_path.resolve())
         records.append(
@@ -63,6 +71,25 @@ def link_existing_crfs(source: Path, destination: Path) -> list[dict[str, object
             }
         )
     return records
+
+
+def link_existing_crfs(source: Path, destination: Path) -> list[dict[str, object]]:
+    """Link existing CRFs into the canonical data root without copying them."""
+
+    return _link_existing_products(source, destination, pattern="*_crf.fits")
+
+
+def link_existing_aligned(
+    source: Path,
+    destination: Path,
+) -> list[dict[str, object]]:
+    """Link the aligned detector products used by the frozen experiment."""
+
+    return _link_existing_products(
+        source,
+        destination,
+        pattern="*_rshift_tweakreg.fits",
+    )
 
 
 def _download_cal(filename: str, destination: Path) -> dict[str, object]:
@@ -87,6 +114,7 @@ def stage(
     *,
     root: Path,
     crf_source: Path,
+    aligned_source: Path,
     workers: int,
 ) -> dict[str, object]:
     """Complete the CAL set, link CRFs, and atomically write its manifest."""
@@ -95,6 +123,7 @@ def stage(
         raise ValueError("workers must be positive")
     cal_dir = root / "cal"
     crf_dir = root / "crf"
+    aligned_dir = root / "aligned"
     cal_dir.mkdir(parents=True, exist_ok=True)
     filenames = expected_cal_filenames()
     records: list[dict[str, object]] = []
@@ -107,6 +136,7 @@ def stage(
             records.append(future.result())
     records.sort(key=lambda record: str(record["name"]))
     crfs = link_existing_crfs(crf_source, crf_dir)
+    aligned = link_existing_aligned(aligned_source, aligned_dir)
     missing = [
         filename
         for filename in filenames
@@ -126,6 +156,11 @@ def stage(
             "linked": len(crfs),
             "source": str(crf_source.resolve()),
             "files": crfs,
+        },
+        "aligned": {
+            "linked": len(aligned),
+            "source": str(aligned_source.resolve()),
+            "files": aligned,
         },
     }
     temporary = root / "manifest.json.part"
@@ -148,11 +183,17 @@ def main() -> int:
         type=Path,
         default=Path("/arc/projects/ots/jwst_smacs0723"),
     )
+    parser.add_argument(
+        "--aligned-source",
+        type=Path,
+        default=DEFAULT_ALIGNED_SOURCE,
+    )
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
     manifest = stage(
         root=args.root,
         crf_source=args.crf_source,
+        aligned_source=args.aligned_source,
         workers=args.workers,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))

@@ -12,6 +12,7 @@ if str(BENCHMARKS) not in sys.path:
 from stage_smacs0723_canfar import (  # noqa: E402
     expected_cal_filenames,
     is_complete_fits,
+    link_existing_aligned,
     link_existing_crfs,
 )
 
@@ -56,3 +57,15 @@ def test_crf_link_refuses_to_replace_regular_file(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="refusing"):
         link_existing_crfs(source, destination)
+
+
+def test_aligned_products_use_separate_canonical_links(tmp_path: Path) -> None:
+    source = tmp_path / "alignment"
+    source.mkdir()
+    aligned = source / "001_example_rshift_tweakreg.fits"
+    aligned.write_bytes(b"SIMPLE  " + b" " * 2872)
+
+    records = link_existing_aligned(source, tmp_path / "canonical" / "aligned")
+
+    assert len(records) == 1
+    assert Path(str(records[0]["link"])).resolve() == aligned.resolve()

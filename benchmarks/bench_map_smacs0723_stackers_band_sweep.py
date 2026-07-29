@@ -26,7 +26,12 @@ from bench_map_smacs0723_real import (  # noqa: E402
 
 DEFAULT_JSON_OUT = DATA / "benchmark_results" / "smacs0723_stackers_band_sweep.json"
 DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_stackers_band_sweep.md"
-from bench_map_smacs0723_stackers import _build_method_specs, run_stacker_benchmark  # noqa: E402
+from bench_map_smacs0723_stackers import (  # noqa: E402
+    _build_method_specs,
+    _build_validation_method_specs,
+    _filter_exposure_paths_by_patterns,
+    run_stacker_benchmark,
+)
 
 
 def _parse_csv(value: str) -> list[str]:
@@ -68,14 +73,34 @@ def main() -> int:
     parser.add_argument("--bands", default="F090W,F150W,F200W,F277W,F356W,F444W")
     parser.add_argument("--module", default="b")
     parser.add_argument(
-        "--input-product", choices=("auto", "crf", "cal"), default="cal"
+        "--exposure-dir",
+        type=Path,
+        default=DATA / "jwst_smacs0723",
+    )
+    parser.add_argument(
+        "--patt-nums",
+        default="",
+        help="Comma-separated PATT_NUM identifiers, for example 3,8 for validation",
+    )
+    parser.add_argument(
+        "--input-product",
+        choices=("auto", "crf", "cal", "aligned"),
+        default="cal",
     )
     parser.add_argument("--crop-size", type=int, default=512)
     parser.add_argument(
         "--crop-mode", choices=("center", "best_overlap"), default="best_overlap"
     )
     parser.add_argument("--overlap-step", type=int, default=8)
+    parser.add_argument("--crop-x0", type=int, default=None)
+    parser.add_argument("--crop-y0", type=int, default=None)
     parser.add_argument("--linearize-sip", action="store_true")
+    parser.add_argument(
+        "--validation-classical",
+        action="store_true",
+        help="Run the frozen Torchsky/Drizzle/SWarp classical validation sweep",
+    )
+    parser.add_argument("--drizzle-pixfracs", default="0.6,0.8,1.0")
     parser.add_argument(
         "--methods",
         default="",
@@ -94,7 +119,14 @@ def main() -> int:
     for band in bands:
         _band_spec(band)
 
-    specs = _build_method_specs(include_inr=False)
+    if (args.crop_x0 is None) != (args.crop_y0 is None):
+        raise ValueError("--crop-x0 and --crop-y0 must be provided together")
+    pattern_numbers = tuple(int(value) for value in _parse_csv(args.patt_nums))
+    if args.validation_classical:
+        pixfracs = tuple(float(value) for value in _parse_csv(args.drizzle_pixfracs))
+        specs = _build_validation_method_specs(pixfracs)
+    else:
+        specs = _build_method_specs(include_inr=False)
     if args.methods.strip():
         requested = {part.strip() for part in args.methods.split(",") if part.strip()}
         specs = [spec for spec in specs if spec["name"] in requested]
@@ -108,12 +140,17 @@ def main() -> int:
         reference_path = _reference_path_for_band(band)
         filename_contains = _recommended_filename_contains(band, args.module)
         exposure_paths = _discover_exposure_paths(
-            DATA / "jwst_smacs0723",
+            args.exposure_dir,
             input_product=args.input_product,
             band=band,
             module=args.module,
             filename_contains=filename_contains or None,
         )
+        if pattern_numbers:
+            exposure_paths = _filter_exposure_paths_by_patterns(
+                exposure_paths,
+                pattern_numbers,
+            )
         if not reference_path.exists() or not exposure_paths:
             if args.skip_missing:
                 continue
@@ -144,6 +181,11 @@ def main() -> int:
             filename_contains=filename_contains,
             linearize_sip=args.linearize_sip,
             inr_steps=0,
+            crop_xy0=(
+                (args.crop_x0, args.crop_y0)
+                if args.crop_x0 is not None and args.crop_y0 is not None
+                else None
+            ),
         )
         for row in band_rows:
             row["band"] = band

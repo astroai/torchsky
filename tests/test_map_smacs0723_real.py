@@ -102,6 +102,16 @@ def test_discover_exposure_paths_can_force_cal_or_crf(tmp_path: Path) -> None:
     assert [path.name for path in crf_paths] == ["b_crf.fits", "c_crf.fits"]
 
 
+def test_discover_exposure_paths_can_select_aligned_products(tmp_path: Path) -> None:
+    aligned = tmp_path / "001_example_rshift_tweakreg.fits"
+    aligned.touch()
+    (tmp_path / "example_cal.fits").touch()
+
+    paths = _discover_exposure_paths(tmp_path, input_product="aligned")
+
+    assert paths == [aligned]
+
+
 def test_discover_exposure_paths_can_filter_by_filename(tmp_path: Path) -> None:
     (tmp_path / "a_nrcalong_cal.fits").write_bytes(b"")
     (tmp_path / "b_nrcblong_cal.fits").write_bytes(b"")
