@@ -2267,6 +2267,7 @@ def main() -> int:
     )
     parser.add_argument("--support-weight-threshold", type=float, default=0.0)
     parser.add_argument("--support-erode-radius-px", type=int, default=9)
+    parser.add_argument("--support-mask-out", type=Path, default=None)
     parser.add_argument(
         "--target-mode",
         choices=("published_native", "published_swarp_tan"),
@@ -2402,6 +2403,20 @@ def main() -> int:
             if support_weights
             else None
         )
+        support_mask_path: Path | None = None
+        support_mask_sha256: str | None = None
+        if valid_mask is not None and args.support_mask_out is not None:
+            support_mask_path = args.support_mask_out.expanduser().resolve()
+            support_mask_path.parent.mkdir(parents=True, exist_ok=True)
+            torchsky.write(
+                str(support_mask_path),
+                valid_mask.to(torch.uint8),
+                header=target_header,
+                overwrite=True,
+            )
+            support_mask_sha256 = hashlib.sha256(
+                support_mask_path.read_bytes()
+            ).hexdigest()
         artifact = make_updec_common_world_manifest(
             target_header=target_header,
             bands=tuple(
@@ -2435,6 +2450,10 @@ def main() -> int:
                 "erode_radius_px": args.support_erode_radius_px,
                 "pixel_count": int(valid_mask.sum()),
                 "fraction": float(valid_mask.to(torch.float64).mean()),
+                "mask_path": (
+                    str(support_mask_path) if support_mask_path is not None else None
+                ),
+                "mask_sha256": support_mask_sha256,
             }
             if valid_mask is not None
             else None

@@ -76,8 +76,8 @@ stacking-versus-INR/Foam depth result defined in
     subsequent source placement.
     - [x] Add the support-intersection/erosion primitive and wire final weight
       maps into `updec-adass-manifest`; validate target WCS, persist the mask
-      hash/count/fraction, and reject placements outside it. The remaining work
-      is generating and freezing the complete selected-method six-band weights.
+      FITS/hash/count/fraction, and reject placements outside it. The remaining
+      work is freezing the complete selected-method six-band mask.
   - [ ] Propagate or fit the method-dependent effective PSF before comparing
     bright-source flux bias or selecting a classical kernel.
     - [x] Add robust fractional-phase stacking of isolated

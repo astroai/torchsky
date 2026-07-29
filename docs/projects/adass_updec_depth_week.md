@@ -147,10 +147,10 @@ Do not count independent models as receiving six times the optimization budget.
   source accepted by both input detectors was absent from SWarp's final
   product.
   - [x] Add deterministic support intersection, configurable erosion, target-WCS
-    validation, mask hashing, and support-constrained source placement to the
-    existing `updec-adass-manifest` CLI. Three focused contracts pass; the
-    remaining unchecked work is producing and freezing all selected six-band
-    weight maps.
+    validation, persisted mask FITS/hashing, and support-constrained source
+    placement to the existing `updec-adass-manifest` CLI. Three focused
+    contracts pass; the remaining unchecked work is freezing the selected
+    six-band mask.
 - [ ] Inject sources through each exposure WCS, oversampled PSF, pixel footprint,
   calibration, and bandpass. Preserve the original background/noise/artifacts.
 - [ ] Use smooth continuum point sources for the abstract endpoint. Add compact

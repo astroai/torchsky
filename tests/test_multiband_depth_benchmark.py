@@ -282,6 +282,7 @@ def test_manifest_cli_reads_final_weight_support(
     weight[:12] = 0.0
     torchsky.write(str(weight_path), weight, header=header)
     output = tmp_path / "manifest.json"
+    support_mask_path = tmp_path / "support_mask.fits"
     monkeypatch.setattr(
         sys,
         "argv",
@@ -307,6 +308,8 @@ def test_manifest_cli_reads_final_weight_support(
             str(weight_path),
             "--support-erode-radius-px",
             "2",
+            "--support-mask-out",
+            str(support_mask_path),
             "--json-out",
             str(output),
         ],
@@ -319,6 +322,12 @@ def test_manifest_cli_reads_final_weight_support(
     assert artifact["placement"]["margin_px"] == 10.0
     assert artifact["placement"]["min_separation_px"] == 6.0
     assert all(y >= 14.0 for _, y in artifact["target_xy"])
+    assert artifact["common_support"]["mask_path"] == str(support_mask_path)
+    assert len(artifact["common_support"]["mask_sha256"]) == 64
+    torch.testing.assert_close(
+        torchsky.read(str(support_mask_path)),
+        common_support_mask((weight,), erode_radius_px=2).to(torch.uint8),
+    )
 
 
 def test_forced_flux_color_and_heldout_likelihood() -> None:
