@@ -88,6 +88,9 @@ stacking-versus-INR/Foam depth result defined in
       holes can be tolerated only through an explicit pre-recovery threshold;
       strict 100% erosion remains the default and a diagnostic coverage grid is
       persisted before selection.
+    - [x] Freeze 99% local footprint coverage from weights only. Session
+      `vedlmudw` at `a0a40bf` retained 109,393 pixels with at least 22,175 in
+      every quadrant; no recovery outcome contributed to this choice.
   - [ ] Propagate or fit the method-dependent effective PSF before comparing
     bright-source flux bias or selecting a classical kernel.
     - [x] Add robust fractional-phase stacking of isolated

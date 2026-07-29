@@ -167,6 +167,12 @@ Do not count independent models as receiving six times the optimization budget.
     tolerate sparse Drizzle holes while still requiring positive center weight
     in every candidate. The CLI records a predeclared coverage-grid sweep so it
     can be frozen from weight topology before any recovery run.
+  - [x] Freeze `min_footprint_fraction=0.99` from weight topology alone.
+    CANFAR session `vedlmudw` at `a0a40bf` retained 109,393 pixels (41.73%)
+    with 22,175–31,681 pixels in every quadrant. This is the strictest
+    predeclared non-degenerate threshold: it permits at most four unsupported
+    pixels in a 19-square footprint per method while still requiring positive
+    center weight in all 42 products. No injection recovery was inspected.
 - [ ] Inject sources through each exposure WCS, oversampled PSF, pixel footprint,
   calibration, and bandpass. Preserve the original background/noise/artifacts.
 - [ ] Use smooth continuum point sources for the abstract endpoint. Add compact
@@ -295,6 +301,9 @@ each final method boundary. Otherwise do not begin model tuning.
   - [x] Produce all 42 exact-grid blank products at `3ff8604`. The zero-source
     probe retained only 984 pixels after erosion, so the crop remains a
     diagnostic while limiting-map and quadrant support are audited.
+  - [x] Audit local coverage at 80/85/90/95/98/99/100% and freeze 99% before
+    positive calibration. Exact session `vedlmudw`; selected support retains
+    109,393 pixels across all quadrants.
 - [ ] Fit or propagate each method's effective PSF before applying the 2% flux
   gate. A fixed injected-PSF fit is not comparable after different resampling
   kernels broaden the product differently.
