@@ -20,6 +20,7 @@ from bench_map_smacs0723_stackers import (
     _filter_exposure_paths_by_patterns,
     _format_markdown,
     _injection_manifest_tensors,
+    _product_and_metric_arrays,
     _run_legacy_method,
 )
 
@@ -116,6 +117,35 @@ def test_fixed_cutout_uses_registered_origin() -> None:
 
     assert (x0, y0) == (2, 1)
     np.testing.assert_array_equal(cutout, image[1:4, 2:5])
+
+
+def test_non_native_products_keep_method_grid_while_metrics_are_aligned(
+    monkeypatch,
+) -> None:
+    def fake_align(array, *, order, **_kwargs):
+        return array + (10.0 if order == "bilinear" else 20.0)
+
+    monkeypatch.setattr(
+        "bench_map_smacs0723_stackers._align_array_to_target",
+        fake_align,
+    )
+    pred = np.arange(4, dtype=np.float32).reshape(2, 2)
+    weight = np.ones((2, 2), dtype=np.float32)
+
+    product_pred, product_weight, metric_pred, metric_weight = (
+        _product_and_metric_arrays(
+            pred,
+            weight,
+            target_mode_used="published_swarp_tan",
+            target_header={"grid": "method"},
+            published_target_header={"grid": "reference"},
+        )
+    )
+
+    np.testing.assert_array_equal(product_pred, pred)
+    np.testing.assert_array_equal(product_weight, weight)
+    np.testing.assert_array_equal(metric_pred, pred + 10.0)
+    np.testing.assert_array_equal(metric_weight, weight + 20.0)
 
 
 def test_upstream_drizzle_receives_selected_pixfrac(monkeypatch) -> None:

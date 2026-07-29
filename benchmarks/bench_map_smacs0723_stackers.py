@@ -486,6 +486,33 @@ def _support_mask_from_weight(weight: np.ndarray) -> np.ndarray:
     return np.isfinite(weight) & (weight > 0.0)
 
 
+def _product_and_metric_arrays(
+    pred: np.ndarray,
+    weight: np.ndarray,
+    *,
+    target_mode_used: str,
+    target_header: dict[str, Any],
+    published_target_header: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    product_pred = np.asarray(pred, dtype=np.float32)
+    product_weight = np.asarray(weight, dtype=np.float32)
+    if target_mode_used == "published_native":
+        return product_pred, product_weight, product_pred, product_weight
+    metric_pred = _align_array_to_target(
+        product_pred,
+        header=target_header,
+        target_header=published_target_header,
+        order="bilinear",
+    )
+    metric_weight = _align_array_to_target(
+        product_weight,
+        header=target_header,
+        target_header=published_target_header,
+        order="nearest-neighbor",
+    )
+    return product_pred, product_weight, metric_pred, metric_weight
+
+
 def _radial_bin_masks(
     shape: tuple[int, int],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1045,20 +1072,16 @@ def run_stacker_benchmark(
                     )
                 else:
                     raise ValueError(f"unsupported method kind {spec['kind']!r}")
-                pred, weight, extra = result
-                if target_mode_used != "published_native":
-                    pred = _align_array_to_target(
-                        pred,
-                        header=target_header,
-                        target_header=published_target_header,
-                        order="bilinear",
+                raw_pred, raw_weight, extra = result
+                product_pred, product_weight, pred, weight = (
+                    _product_and_metric_arrays(
+                        raw_pred,
+                        raw_weight,
+                        target_mode_used=target_mode_used,
+                        target_header=target_header,
+                        published_target_header=published_target_header,
                     )
-                    weight = _align_array_to_target(
-                        weight,
-                        header=target_header,
-                        target_header=published_target_header,
-                        order="nearest-neighbor",
-                    )
+                )
                 support_mask = _support_mask_from_weight(weight)
                 if not np.any(support_mask):
                     raise RuntimeError(
@@ -1077,14 +1100,14 @@ def run_stacker_benchmark(
                     weight_path = product_out_dir / f"{spec['name']}_wht.fits"
                     torchsky.write(
                         str(product_path),
-                        torch.from_numpy(np.asarray(pred, dtype=np.float32)),
-                        header=published_target_header,
+                        torch.from_numpy(product_pred),
+                        header=target_header,
                         overwrite=True,
                     )
                     torchsky.write(
                         str(weight_path),
-                        torch.from_numpy(np.asarray(weight, dtype=np.float32)),
-                        header=published_target_header,
+                        torch.from_numpy(product_weight),
+                        header=target_header,
                         overwrite=True,
                     )
                     row["product_path"] = str(product_path.resolve())
@@ -1151,7 +1174,7 @@ def main() -> int:
         "--product-out-dir",
         type=Path,
         default=None,
-        help="Persist each reconstructed SCI/weight product on the native target grid",
+        help="Persist each reconstructed SCI/weight product on its method target grid",
     )
     args = parser.parse_args()
 
