@@ -49,6 +49,38 @@ def _aligned_tan_center_crops(
     crop_size: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Bilinearly sample a shared central TAN crop on the target pixel grid."""
+
+    def linear_matrix(header: dict[str, Any]) -> torch.Tensor:
+        cd_values = [
+            header.get(key) for key in ("CD1_1", "CD1_2", "CD2_1", "CD2_2")
+        ]
+        if all(value is not None for value in cd_values):
+            matrix = torch.tensor(cd_values, dtype=torch.float64).reshape(2, 2)
+        else:
+            cdelt1 = float(header["CDELT1"])
+            cdelt2 = float(header["CDELT2"])
+            pc11 = header.get("PC1_1")
+            pc12 = header.get("PC1_2")
+            pc21 = header.get("PC2_1")
+            pc22 = header.get("PC2_2")
+            matrix = torch.tensor(
+                [
+                    [
+                        cdelt1 * (1.0 if pc11 is None else float(pc11)),
+                        cdelt1 * (0.0 if pc12 is None else float(pc12)),
+                    ],
+                    [
+                        cdelt2 * (0.0 if pc21 is None else float(pc21)),
+                        cdelt2 * (1.0 if pc22 is None else float(pc22)),
+                    ],
+                ],
+                dtype=torch.float64,
+            )
+        determinant = torch.linalg.det(matrix)
+        if not bool(torch.isfinite(matrix).all()) or abs(float(determinant)) <= 1.0e-30:
+            raise ValueError("UPdec pair contains a singular FITS linear transform")
+        return matrix
+
     for key in ("CTYPE1", "CTYPE2", "CRVAL1", "CRVAL2"):
         if target_header.get(key) != source_header.get(key):
             raise ValueError(f"UPdec pair has incompatible {key}")
@@ -56,15 +88,6 @@ def _aligned_tan_center_crops(
         "CTYPE2"
     ) != "DEC--TAN":
         raise ValueError("UPdec pair alignment currently requires RA---TAN/DEC--TAN")
-    for header in (target_header, source_header):
-        if any(
-            header.get(key) is not None
-            for key in ("CD1_1", "CD1_2", "CD2_1", "CD2_2")
-        ) or any(
-            abs(float(header.get(key) or 0.0)) > 1.0e-15
-            for key in ("PC1_2", "PC2_1")
-        ):
-            raise ValueError("UPdec pair alignment requires axis-aligned CDELT WCS")
 
     size = min(int(crop_size), int(target.shape[-2]), int(target.shape[-1]))
     if size <= 0:
@@ -80,20 +103,24 @@ def _aligned_tan_center_crops(
     target_x = torch.arange(x0, x0 + size, dtype=torch.float64)
     target_y = torch.arange(y0, y0 + size, dtype=torch.float64)
     yy, xx = torch.meshgrid(target_y, target_x, indexing="ij")
-    source_x = (
-        (xx + 1.0 - float(target_header["CRPIX1"]))
-        * float(target_header["CDELT1"])
-        / float(source_header["CDELT1"])
-        + float(source_header["CRPIX1"])
-        - 1.0
+    target_offsets = torch.stack(
+        (
+            xx + 1.0 - float(target_header["CRPIX1"]),
+            yy + 1.0 - float(target_header["CRPIX2"]),
+        ),
+        dim=0,
     )
-    source_y = (
-        (yy + 1.0 - float(target_header["CRPIX2"]))
-        * float(target_header["CDELT2"])
-        / float(source_header["CDELT2"])
-        + float(source_header["CRPIX2"])
-        - 1.0
+    intermediate = torch.einsum(
+        "ij,jhw->ihw",
+        linear_matrix(target_header),
+        target_offsets,
     )
+    source_offsets = torch.linalg.solve(
+        linear_matrix(source_header),
+        intermediate.reshape(2, -1),
+    ).reshape_as(intermediate)
+    source_x = source_offsets[0] + float(source_header["CRPIX1"]) - 1.0
+    source_y = source_offsets[1] + float(source_header["CRPIX2"]) - 1.0
     grid = torch.stack(
         (
             2.0 * source_x / max(int(source.shape[-1]) - 1, 1) - 1.0,
@@ -201,7 +228,7 @@ def _compare_pair(
         "iter0_shape": list(drizzle.shape),
         "iter10_shape": list(updc.shape),
         "crop_size": crop_size,
-        "alignment": "analytic_axis_aligned_tan_bilinear",
+        "alignment": "analytic_linear_tan_bilinear",
         "aligned_valid_pixels": int(crop_mask.sum()),
         "iter0_hdus": n_hdus0,
         "iter10_hdus": n_hdus1,
