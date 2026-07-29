@@ -31,7 +31,13 @@ products; beating separate per-band images alone is not sufficient.
   `train={1,2,4,5,7}`, `validation={3,8}`, `test={6,9}` by `PATT_NUM`.
 - [x] Treat published UPdec/iter0 mosaics as registration and visual-QA
   references only. They are neither independent truth nor the primary depth
-  comparator.
+  comparator. The stacker harness also reports static residual diagnostics
+  against their pixels, but injected completeness/purity is measured only on
+  products regenerated from the injected detector exposures.
+- [x] Keep the public UPdec iter10 artifact stacks as a secondary static
+  iter0-versus-iter10 context comparison. They cannot enter the injected-depth
+  method matrix unless the same injected detector exposures are rerun through
+  the UPdec pipeline.
 - [x] Keep all FITS access through Torchfits/Torchsky.
 - [x] Make no FOSSIL, component-separation, COSMOS, release, or unrelated API
   changes during this sprint.
@@ -262,7 +268,9 @@ each final method boundary. Otherwise do not begin model tuning.
   canonical manifest. The experiment consumes the 135 aligned
   `*_crf_rshift_tweakreg.fits` products; the CAL inventory is a reproducibility
   fallback, and the 27 unregistered CRFs are the long-channel originals found
-  at `/arc/projects/ots/jwst_smacs0723/`.
+  at `/arc/projects/ots/jwst_smacs0723/`. Manifest audit session `rrkjowzw`
+  confirms that the aligned set is linked—not downloaded—from
+  `results/wcs_aware_multiband_inr/official_no_psf_whitened_l2_batch100_400_tweakreg_rshift_8plus3_run2/alignment/tweakreg_rshift`.
 - [x] Freeze the validation comparator interface: `--input-product aligned`,
   `--patt-nums 3,8`, `--crop-x0 112 --crop-y0 0`, and
   `--validation-classical --drizzle-pixfracs 0.6,0.8,1.0`.

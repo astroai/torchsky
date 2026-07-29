@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from astropy.io import fits
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -66,12 +65,15 @@ def _time_torchsky_read(path: Path, *, hdu: int) -> tuple[float, tuple[int, ...]
     return dt, tuple(int(v) for v in image.shape)
 
 
-def _open_sci(path: Path) -> tuple[np.ndarray, fits.Header, int]:
-    with fits.open(path) as hdul:
-        sci_hdu = next(i for i, hdu in enumerate(hdul) if hdu.name == "SCI")
-        data = np.asarray(hdul[sci_hdu].data, dtype=np.float32)
-        header = hdul[sci_hdu].header.copy()
-        return data, header, len(hdul)
+def _open_sci(path: Path) -> tuple[np.ndarray, dict[str, Any], int]:
+    with torchsky.open(str(path)) as hdul:
+        n_hdus = len(hdul)
+    data, header = torchsky.read(str(path), hdu="SCI", return_header=True)
+    return (
+        data.detach().cpu().numpy().astype(np.float32, copy=False),
+        dict(header),
+        n_hdus,
+    )
 
 
 def _compare_pair(

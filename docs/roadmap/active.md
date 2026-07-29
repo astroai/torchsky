@@ -43,6 +43,12 @@ stacking-versus-INR/Foam depth result defined in
     `e74yyfec` at `46c1ce5`. The scientific runs use the 135 aligned
     `*_crf_rshift_tweakreg.fits` files. CAL is the complete fallback inventory;
     the 27 plain CRFs are the available unregistered long-channel originals.
+    Manifest audit `rrkjowzw` confirms the aligned 135 are links to the
+    pre-existing local `official_no_psf.../alignment/tweakreg_rshift` pipeline
+    directory; the staging utility downloads only CAL products from MAST.
+  - [ ] Run the existing public UPdec iter0-versus-iter10 artifact comparison
+    as secondary static context. Do not mix it into injected completeness:
+    fixed public iter10 stacks did not receive the injected detector exposures.
   - [x] Run the validation-only Torchsky/Drizzle/SWarp backend sweep.
     Evidence: Torchsky `axix9wz3` at `803a200`, upstream Drizzle `z7t27ff0` at
     `46c1ce5`, and locked SWarp 2.41.5 `gckyhwco` at `62f572a`; durable reports

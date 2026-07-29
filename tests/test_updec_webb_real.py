@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import numpy as np
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -13,7 +15,7 @@ if str(BENCHMARKS) not in sys.path:
     sys.path.insert(0, str(BENCHMARKS))
 
 from download_updec_webb import UPDEC_WEBB_FILES, resolve_specs  # noqa: E402
-from bench_updec_webb_real import _markdown  # noqa: E402
+from bench_updec_webb_real import _markdown, _open_sci  # noqa: E402
 
 
 def test_updec_webb_public_manifest_contains_expected_sparse_smoke_band() -> None:
@@ -46,3 +48,22 @@ def test_updec_webb_markdown_renders_expected_columns() -> None:
     )
     assert "| band | iter0 hdus | iter10 hdus |" in text
     assert "| F277W | 10 | 2 | 0.100000 | 0.200000 | 1.5000 | 2.5000 | 1.0100 |" in text
+
+
+def test_open_sci_uses_torchfits_boundary(tmp_path: Path) -> None:
+    from astropy.io import fits
+
+    path = tmp_path / "updec_pair.fits"
+    expected = np.arange(12, dtype=np.float32).reshape(3, 4)
+    fits.HDUList(
+        [
+            fits.PrimaryHDU(),
+            fits.ImageHDU(expected, name="SCI"),
+        ]
+    ).writeto(path)
+
+    data, header, n_hdus = _open_sci(path)
+
+    assert n_hdus == 2
+    assert header["EXTNAME"] == "SCI"
+    np.testing.assert_array_equal(data, expected)
