@@ -1352,6 +1352,42 @@ def stack_effective_psf(
     return effective / total
 
 
+def effective_psf_metrics(psf: torch.Tensor) -> dict[str, float]:
+    """Summarize a normalized effective PSF, including resampling side lobes."""
+
+    if (
+        psf.ndim != 2
+        or not psf.is_floating_point()
+        or not torch.isfinite(psf).all()
+        or psf.shape[0] % 2 != 1
+        or psf.shape[1] % 2 != 1
+    ):
+        raise ValueError("psf must be a finite odd-shaped floating-point tensor")
+    positive = torch.clamp_min(psf, 0.0)
+    positive_total = positive.sum()
+    if positive_total <= 0:
+        raise ValueError("psf must have positive support")
+    positive = positive / positive_total
+    yy, xx = torch.meshgrid(
+        torch.arange(psf.shape[0], dtype=psf.dtype, device=psf.device),
+        torch.arange(psf.shape[1], dtype=psf.dtype, device=psf.device),
+        indexing="ij",
+    )
+    center_x = (positive * xx).sum()
+    center_y = (positive * yy).sum()
+    radius2 = (xx - center_x).square() + (yy - center_y).square()
+    sigma = torch.sqrt(0.5 * (positive * radius2).sum())
+    negative_fraction = torch.clamp_min(-psf, 0.0).sum() / positive_total
+    return {
+        "centroid_x_px": float(center_x),
+        "centroid_y_px": float(center_y),
+        "gaussian_equivalent_fwhm_px": float(2.354820045 * sigma),
+        "negative_lobe_fraction": float(negative_fraction),
+        "peak": float(psf.max()),
+        "sum": float(psf.sum()),
+    }
+
+
 def detection_statistic(
     images: torch.Tensor,
     noise_sigma: torch.Tensor | float,
@@ -2105,6 +2141,91 @@ def _updec_adass_smoke_artifact(
     }
 
 
+def _updec_effective_psf_artifact(
+    *,
+    positive_product_root: Path,
+    blank_product_root: Path,
+    injection_manifest_path: Path,
+    output_dir: Path,
+    bands: Sequence[str],
+    methods: Sequence[str],
+    radius_px: int,
+) -> dict[str, object]:
+    """Measure method/band effective PSFs from injected-minus-blank products."""
+
+    if radius_px < 1 or not bands or not methods:
+        raise ValueError("positive radius, bands, and methods are required")
+    manifest = json.loads(injection_manifest_path.read_text())
+    world = torch.as_tensor(manifest["world_radec_deg"], dtype=torch.float64)
+    if world.ndim != 2 or world.shape[1] != 2 or world.shape[0] == 0:
+        raise ValueError("effective-PSF manifest needs nonempty world_radec_deg")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, object]] = []
+    for band in (str(value).upper() for value in bands):
+        for method in methods:
+            relative = Path(band) / "products" / f"{method}_sci.fits"
+            positive_path = (positive_product_root / relative).resolve()
+            blank_path = (blank_product_root / relative).resolve()
+            positive, positive_header = torchsky.read(
+                str(positive_path),
+                return_header=True,
+            )
+            blank, blank_header = torchsky.read(
+                str(blank_path),
+                return_header=True,
+            )
+            if (
+                positive.shape != blank.shape
+                or positive.ndim != 2
+                or positive.dtype != blank.dtype
+            ):
+                raise ValueError(f"positive/blank product mismatch for {band}/{method}")
+            source_xy = torchsky.WCS(dict(positive_header)).world_to_pixel(world)
+            blank_xy = torchsky.WCS(dict(blank_header)).world_to_pixel(world)
+            if not torch.allclose(source_xy, blank_xy, rtol=0.0, atol=1e-6):
+                raise ValueError(f"positive/blank WCS mismatch for {band}/{method}")
+            effective = stack_effective_psf(
+                positive.to(torch.float64) - blank.to(torch.float64),
+                source_xy,
+                radius_px=radius_px,
+            ).to(torch.float32)
+            output_path = output_dir / f"{band}_{method}_effective_psf.fits"
+            torchsky.write(
+                str(output_path),
+                effective,
+                header={
+                    "BUNIT": "1",
+                    "PSFTYPE": "EFFECTIVE",
+                    "FILTER": band,
+                    "METHOD": str(method),
+                    "RADIUS": radius_px,
+                },
+                overwrite=True,
+            )
+            rows.append(
+                {
+                    "band": band,
+                    "method": str(method),
+                    "positive_path": str(positive_path),
+                    "blank_path": str(blank_path),
+                    "effective_psf_path": str(output_path.resolve()),
+                    "effective_psf_sha256": hashlib.sha256(
+                        output_path.read_bytes()
+                    ).hexdigest(),
+                    **effective_psf_metrics(effective),
+                }
+            )
+    return {
+        "schema_version": 1,
+        "profile": "updec-adass-effective-psf",
+        "depth_claim": False,
+        "injection_manifest": str(injection_manifest_path.resolve()),
+        "source_count": int(world.shape[0]),
+        "radius_px": radius_px,
+        "rows": rows,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -2114,6 +2235,7 @@ def main() -> int:
             "classical-smoke",
             "updec-adass-smoke",
             "updec-adass-manifest",
+            "updec-adass-effective-psf",
         ),
         default="gate0",
     )
@@ -2150,6 +2272,16 @@ def main() -> int:
         choices=("published_native", "published_swarp_tan"),
         default="published_swarp_tan",
     )
+    parser.add_argument("--positive-product-root", type=Path, default=None)
+    parser.add_argument("--blank-product-root", type=Path, default=None)
+    parser.add_argument("--injection-manifest", type=Path, default=None)
+    parser.add_argument("--methods", default="")
+    parser.add_argument("--psf-radius-px", type=int, default=9)
+    parser.add_argument(
+        "--psf-out-dir",
+        type=Path,
+        default=Path("benchmark_results/effective_psfs"),
+    )
     parser.add_argument(
         "--json-out",
         type=Path,
@@ -2182,6 +2314,30 @@ def main() -> int:
             exposures_per_band=args.exposures,
             cutout_size=args.cutout_size or 32,
             flux_jy=args.flux_jy,
+        )
+    elif args.profile == "updec-adass-effective-psf":
+        if (
+            args.positive_product_root is None
+            or args.blank_product_root is None
+            or args.injection_manifest is None
+        ):
+            raise ValueError(
+                "effective-PSF profile requires positive/blank roots and a manifest"
+            )
+        artifact = _updec_effective_psf_artifact(
+            positive_product_root=args.positive_product_root,
+            blank_product_root=args.blank_product_root,
+            injection_manifest_path=args.injection_manifest,
+            output_dir=args.psf_out_dir,
+            bands=tuple(
+                value.strip()
+                for value in (args.updec_bands or ",".join(_UPDEC_BANDS)).split(",")
+                if value.strip()
+            ),
+            methods=tuple(
+                value.strip() for value in args.methods.split(",") if value.strip()
+            ),
+            radius_px=args.psf_radius_px,
         )
     else:
         if args.reference_path is None:

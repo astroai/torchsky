@@ -81,7 +81,8 @@ stacking-versus-INR/Foam depth result defined in
   - [ ] Propagate or fit the method-dependent effective PSF before comparing
     bright-source flux bias or selecting a classical kernel.
     - [x] Add robust fractional-phase stacking of isolated
-      injected-minus-blank responses into normalized effective PSFs.
+      injected-minus-blank responses into normalized effective PSFs, with a
+      stable CLI that persists their hashes and shape diagnostics.
   - [x] Add spatial-inverse-variance matched filtering and positive six-band
     chi detection that accepts the measured per-band effective PSFs. Empirical
     correlated-noise threshold calibration remains part of the validation run.

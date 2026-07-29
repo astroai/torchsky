@@ -280,8 +280,9 @@ each final method boundary. Otherwise do not begin model tuning.
   kernels broaden the product differently.
   - [x] Add fractional-phase registration and robust stacking of isolated
     injected-minus-blank responses into a normalized effective PSF. The
-    remaining gate is running the bright calibration batch for every selected
-    method and band.
+    `updec-adass-effective-psf` profile persists one hashed PSF and size/lobe
+    diagnostics per band and method. The remaining gate is running the bright
+    calibration batch for every selected method and band.
 - [ ] Select Drizzle `pixfrac` from a small predeclared grid and SWarp kernel
   from `{BILINEAR, LANCZOS3}` using validation injections only.
 - [ ] Build the whitened chi-square six-band detector from each winning stack

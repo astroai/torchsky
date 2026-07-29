@@ -17,6 +17,7 @@ if str(BENCHMARKS) not in sys.path:
 from bench_multiband_depth import (  # noqa: E402
     _classical_smoke_artifact,
     _gate0_artifact,
+    _updec_effective_psf_artifact,
     calibrate_purity_threshold,
     coadd_synthetic_exposures,
     common_support_mask,
@@ -466,6 +467,56 @@ def test_effective_psf_stack_registers_fractional_source_phases() -> None:
     ).tolist()
     assert peak_yx == [6, 6]
     torch.testing.assert_close(effective, effective.flip((0, 1)), atol=2e-2, rtol=0.0)
+
+
+def test_effective_psf_artifact_reads_torchsky_products(tmp_path: Path) -> None:
+    header = simple_tan_header(32, 32, pixel_scale_arcsec=0.04)
+    source_xy = torch.tensor([[10.2, 11.3], [21.4, 20.1]], dtype=torch.float64)
+    world = torchsky.WCS(header).pixel_to_world(source_xy)
+    yy, xx = torch.meshgrid(
+        torch.arange(32, dtype=torch.float64),
+        torch.arange(32, dtype=torch.float64),
+        indexing="ij",
+    )
+    positive = torch.zeros((32, 32), dtype=torch.float64)
+    for position in source_xy:
+        profile = torch.exp(
+            -0.5
+            * (
+                (xx - position[0]).square()
+                + (yy - position[1]).square()
+            )
+            / 1.1**2
+        )
+        positive += profile / profile.sum()
+    blank_root = tmp_path / "blank"
+    positive_root = tmp_path / "positive"
+    relative = Path("F200W/products/torchsky_bilinear_sci.fits")
+    (blank_root / relative.parent).mkdir(parents=True)
+    (positive_root / relative.parent).mkdir(parents=True)
+    torchsky.write(str(blank_root / relative), torch.zeros_like(positive), header=header)
+    torchsky.write(str(positive_root / relative), positive, header=header)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps({"world_radec_deg": world.tolist()}))
+
+    artifact = _updec_effective_psf_artifact(
+        positive_product_root=positive_root,
+        blank_product_root=blank_root,
+        injection_manifest_path=manifest_path,
+        output_dir=tmp_path / "psfs",
+        bands=("F200W",),
+        methods=("torchsky_bilinear",),
+        radius_px=4,
+    )
+
+    assert artifact["source_count"] == 2
+    row = artifact["rows"][0]
+    assert row["band"] == "F200W"
+    assert row["method"] == "torchsky_bilinear"
+    assert row["negative_lobe_fraction"] < 0.002
+    psf = torchsky.read(row["effective_psf_path"])
+    assert psf.shape == (9, 9)
+    torch.testing.assert_close(psf.sum(), torch.tensor(1.0), atol=1e-6, rtol=0.0)
 
 
 def test_dithered_exposures_and_production_classical_coadds_are_deterministic() -> None:
