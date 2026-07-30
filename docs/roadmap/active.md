@@ -254,6 +254,17 @@ stacking-versus-INR/Foam depth result defined in
       execution pass and a model/configuration failure, not scientific
       evidence. Persist coefficient, geometry/target-range, and output-support
       diagnostics in the next run before changing capacity or learning rate.
+    - [x] Diagnose the zero hard products before tuning. Session `boc6g6x5` at
+      `cbbbab4` found zero learned coefficients because the actual target
+      footprint normalized to `x=-11.05..-10.22`, `y=1.44..2.27` while the
+      Foam sites occupy `[-0.94,0.94]`. The field-domain estimator used the
+      first detector `CRVAL` and detector size but ignored shifted cutout
+      footprints and pointing separation. This is a domain-geometry defect,
+      not evidence against Foam or for a larger model.
+    - [ ] Re-run the two-band diagnostic after the domain estimator is derived
+      from the union of actual detector-edge WCS footprints. Require target
+      coordinates inside the declared Foam support, nonzero coefficients, and
+      nonzero hard products before launching injected validation.
     - [x] Wire the same frozen common-world detector injection into the joint
       field adapter without modifying archived inputs. `--injection-manifest`
       now feeds transient SCI overrides to both the differentiable observations
@@ -1073,9 +1084,11 @@ residual contracts.
 
 ## CANFAR Staging Run Template
 
-Do not reuse or delete unrelated sessions. Select an image only after confirming
-it is advertised by staging. Every job writes its artifact to persistent `/arc`
-storage and exits.
+Do not reuse or delete unrelated sessions. `canfar image ls` does not currently
+report every pure headless image, so it is not an authoritative allowlist.
+Confirm the exact resolved image through a successful disposable session pull
+and the session metadata returned by `canfar ps --all --json`. Every job writes
+its artifact to persistent `/arc` storage and exits.
 
 ```bash
 canfar server use staging

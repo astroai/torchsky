@@ -97,31 +97,27 @@ def _smoothness_probe_grid(
     return ra, dec
 
 
-def _header_spatial_scale_terms_deg(header: dict) -> list[float]:
-    scale_terms: list[float] = []
-    for key in ("CD1_1", "CD1_2", "CD2_1", "CD2_2"):
-        value = header.get(key)
-        if value is not None:
-            scale_terms.append(abs(float(value)))
-    if scale_terms:
-        return scale_terms
-    d1 = header.get("CDELT1")
-    d2 = header.get("CDELT2")
-    if d1 is None or d2 is None:
-        return scale_terms
-    cdelt1 = abs(float(d1))
-    cdelt2 = abs(float(d2))
-    pc11 = float(header.get("PC1_1", 1.0))
-    pc12 = float(header.get("PC1_2", 0.0))
-    pc21 = float(header.get("PC2_1", 0.0))
-    pc22 = float(header.get("PC2_2", 1.0))
-    scale_terms.extend(
-        [
-            abs(pc11 * cdelt1) + abs(pc12 * cdelt2),
-            abs(pc21 * cdelt1) + abs(pc22 * cdelt2),
-        ]
+def _observation_footprint_world_deg(
+    observation: FieldObservation,
+) -> tuple[list[float], list[float]]:
+    """Return detector-edge sky samples, falling back to the reference position."""
+    nx = int(observation.header.get("NAXIS1", observation.image.shape[-1]))
+    ny = int(observation.header.get("NAXIS2", observation.image.shape[-2]))
+    x = torch.tensor([-0.5, nx - 0.5, nx - 0.5, -0.5], dtype=torch.float64)
+    y = torch.tensor([-0.5, -0.5, ny - 0.5, ny - 0.5], dtype=torch.float64)
+    try:
+        ra, dec = WCS(observation.header).pixel_to_world(x, y)
+        ra_values = torch.as_tensor(ra, dtype=torch.float64)
+        dec_values = torch.as_tensor(dec, dtype=torch.float64)
+        finite = torch.isfinite(ra_values) & torch.isfinite(dec_values)
+        if bool(torch.all(finite)):
+            return ra_values.tolist(), dec_values.tolist()
+    except (RuntimeError, TypeError, ValueError):
+        pass
+    return (
+        [float(observation.header.get("CRVAL1", 0.0))],
+        [float(observation.header.get("CRVAL2", 0.0))],
     )
-    return scale_terms
 
 
 def estimate_field_domain(
@@ -131,20 +127,40 @@ def estimate_field_domain(
 ) -> FieldDomain:
     if not observations:
         raise ValueError("estimate_field_domain requires at least one observation")
-    center_ra = float(observations[0].header.get("CRVAL1", 0.0))
-    center_dec = float(observations[0].header.get("CRVAL2", 0.0))
     wavelength_lowers: list[float] = []
     wavelength_uppers: list[float] = []
-    spatial_scales: list[float] = []
+    footprint_ra: list[float] = []
+    footprint_dec: list[float] = []
     for observation in observations:
         lower, upper = _bandpass_bounds(observation)
         wavelength_lowers.append(lower)
         wavelength_uppers.append(upper)
-        scale_terms = _header_spatial_scale_terms_deg(observation.header)
-        spatial_scale = max(scale_terms) if scale_terms else 1.0 / 3600.0
-        nx = int(observation.header.get("NAXIS1", observation.image.shape[-1]))
-        ny = int(observation.header.get("NAXIS2", observation.image.shape[-2]))
-        spatial_scales.append(spatial_scale * max(nx, ny))
+        ra, dec = _observation_footprint_world_deg(observation)
+        footprint_ra.extend(ra)
+        footprint_dec.extend(dec)
+    ra_rad = torch.deg2rad(torch.tensor(footprint_ra, dtype=torch.float64))
+    dec_rad = torch.deg2rad(torch.tensor(footprint_dec, dtype=torch.float64))
+    cos_dec = torch.cos(dec_rad)
+    mean_x = float(torch.mean(cos_dec * torch.cos(ra_rad)))
+    mean_y = float(torch.mean(cos_dec * torch.sin(ra_rad)))
+    mean_z = float(torch.mean(torch.sin(dec_rad)))
+    center_ra = math.degrees(math.atan2(mean_y, mean_x)) % 360.0
+    center_dec = math.degrees(
+        math.atan2(mean_z, math.hypot(mean_x, mean_y))
+    )
+    tangent_cos_dec = max(math.cos(math.radians(center_dec)), 1.0e-6)
+    x_offsets = [
+        ((ra - center_ra + 180.0) % 360.0 - 180.0) * tangent_cos_dec
+        for ra in footprint_ra
+    ]
+    y_offsets = [dec - center_dec for dec in footprint_dec]
+    # Preserve the historical normalization where one detector width maps to
+    # roughly one coordinate unit while covering the full footprint union.
+    spatial_scale = 2.02 * max(
+        max(abs(value) for value in x_offsets),
+        max(abs(value) for value in y_offsets),
+        1.0e-4,
+    )
     lower = min(wavelength_lowers)
     upper = max(wavelength_uppers)
     wavelength_center = 0.5 * (lower + upper)
@@ -152,7 +168,7 @@ def estimate_field_domain(
     return FieldDomain(
         center_ra_deg=center_ra,
         center_dec_deg=center_dec,
-        spatial_scale_deg=max(max(spatial_scales), 1e-4),
+        spatial_scale_deg=spatial_scale,
         wavelength_center=wavelength_center,
         wavelength_scale=wavelength_scale,
         coord_mode=coord_mode,

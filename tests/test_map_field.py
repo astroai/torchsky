@@ -3630,6 +3630,54 @@ def test_estimate_field_domain_uses_pc_cdelt_when_cd_absent() -> None:
     )
 
 
+def test_estimate_field_domain_uses_actual_shifted_footprints() -> None:
+    scale = 1.0 / 3600.0
+    headers = [
+        _tan_header(20, crval1=150.0, crval2=2.0, scale_deg=scale),
+        _tan_header(20, crval1=150.02, crval2=2.0, scale_deg=scale),
+    ]
+    observations = [
+        FieldObservation(
+            image=torch.zeros((20, 20), dtype=torch.float32),
+            header=header,
+            wavelength=5000.0,
+        )
+        for header in headers
+    ]
+
+    domain = estimate_field_domain(observations)
+    model = SineImplicitField(domain, hidden_dim=8, hidden_layers=1)
+    for observation in observations:
+        x = torch.tensor([-0.5, 19.5, 19.5, -0.5], dtype=torch.float64)
+        y = torch.tensor([-0.5, -0.5, 19.5, 19.5], dtype=torch.float64)
+        ra, dec = WCS(observation.header).pixel_to_world(x, y)
+        encoded = model._spatial_coords(ra, dec, 5000.0)
+        assert float(torch.max(torch.abs(encoded))) <= 1.0
+    assert abs(domain.center_ra_deg - 150.01) < 1.0e-3
+
+
+def test_estimate_field_domain_is_ra_wrap_safe() -> None:
+    scale = 1.0 / 3600.0
+    observations = [
+        FieldObservation(
+            image=torch.zeros((20, 20), dtype=torch.float32),
+            header=_tan_header(
+                20,
+                crval1=ra,
+                crval2=-10.0,
+                scale_deg=scale,
+            ),
+            wavelength=5000.0,
+        )
+        for ra in (359.99, 0.01)
+    ]
+
+    domain = estimate_field_domain(observations)
+
+    assert min(domain.center_ra_deg, 360.0 - domain.center_ra_deg) < 1.0e-3
+    assert domain.spatial_scale_deg < 0.03
+
+
 def test_render_field_cube_spectral_chunk_matches_per_plane_loop() -> None:
     torch.manual_seed(0)
     domain = FieldDomain(
