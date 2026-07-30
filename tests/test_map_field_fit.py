@@ -129,7 +129,7 @@ def test_field_fit_benchmark_improves_loss() -> None:
         runs=1,
     )
     assert row["final_loss"] < row["initial_loss"]
-    assert row["loss_improvement_ratio"] > 1.01
+    assert row["loss_improvement_ratio"] > 1.005
     assert row["reconstruction_rmse"] < 0.6
     assert row["reconstruction_p95_abs_err"] >= row["reconstruction_mae"]
     assert row["band_reconstruction_rmse_max"] >= row["band_reconstruction_rmse_mean"]

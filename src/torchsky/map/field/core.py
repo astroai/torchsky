@@ -156,7 +156,7 @@ def estimate_field_domain(
     y_offsets = [dec - center_dec for dec in footprint_dec]
     # Preserve the historical normalization where one detector width maps to
     # roughly one coordinate unit while covering the full footprint union.
-    spatial_scale = 2.02 * max(
+    spatial_scale = 2.0 * max(
         max(abs(value) for value in x_offsets),
         max(abs(value) for value in y_offsets),
         1.0e-4,
