@@ -480,8 +480,10 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     256-cell model spans roughly 75--140 target pixels per cell and is an
     under-capacity diagnostic, not a depth result. Record normalization and
     initial/final losses, contract the WCS-only grid to the footprint bound,
-    and scale smooth tiles inversely with cell count before testing a denser
-    fixed grid.
+    scale smooth tiles inversely with cell count, and express soft-ownership
+    temperature in inverse-cell-area units before testing a denser fixed grid.
+    A fixed absolute temperature makes finer grids less locally identifiable
+    because power distance is measured in squared coordinate units.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the

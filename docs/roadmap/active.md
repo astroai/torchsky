@@ -286,7 +286,10 @@ stacking-versus-INR/Foam depth result defined in
       are far too coarse for the 512-square JWST target. The next exact commit
       records intensity scale plus initial/final loss, uses the WCS-defined
       `[-0.5,0.5]` footprint bound with a 10% edge margin, and shrinks smooth
-      patch/diagnostic tiles as grid capacity grows.
+      patch/diagnostic tiles as grid capacity grows. It also scales the
+      temperature curriculum as inverse cell area: the previous fixed `4..24`
+      schedule becomes increasingly global as grid spacing shrinks and cannot
+      identify local source structure at high capacity.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous
       joint benchmark discovered all 36/9 exposures per band, while classical
       validation uses only `PATT_NUM={3,8}` (8/2 exposures). `--patt-nums`

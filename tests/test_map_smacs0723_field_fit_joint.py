@@ -26,6 +26,7 @@ from bench_map_smacs0723_field_fit_joint import _preview_uint8  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _regular_foam_model_kwargs  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _source_metric_mask  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _write_export_products  # noqa: E402
+from torchsky.map.field import SpectralPowerFoam  # noqa: E402
 
 
 def test_joint_field_fit_markdown_lists_summary_and_band_rows() -> None:
@@ -161,6 +162,38 @@ def test_regular_foam_footprint_extent_covers_normalized_domain() -> None:
     distance = torch.cdist(corners, sites)
 
     assert bool(torch.all(distance.min(dim=1).values <= radii.max()))
+
+
+def test_regular_foam_temperature_is_scale_invariant_in_cell_units() -> None:
+    coarse = _regular_foam_model_kwargs(grid_side=16, basis_count=4, extent=0.55)
+    fine = _regular_foam_model_kwargs(grid_side=64, basis_count=4, extent=0.55)
+    coarse_step = 2.0 * 0.55 / 16.0
+    fine_step = 2.0 * 0.55 / 64.0
+
+    assert coarse["temperature_start"] * coarse_step**2 == pytest.approx(1.0)
+    assert fine["temperature_start"] * fine_step**2 == pytest.approx(1.0)
+    assert coarse["temperature_end"] * coarse_step**2 == pytest.approx(16.0)
+    assert fine["temperature_end"] * fine_step**2 == pytest.approx(16.0)
+
+
+def test_regular_foam_final_temperature_localizes_cell_values() -> None:
+    kwargs = _regular_foam_model_kwargs(grid_side=4, basis_count=1, extent=0.55)
+    coefficients = torch.arange(16, dtype=torch.float32).unsqueeze(-1)
+    model = SpectralPowerFoam(
+        kwargs["sites"],
+        kwargs["radii"],
+        coefficients,
+        minimum_radius=kwargs["minimum_radius"],
+    )
+
+    prediction = model(
+        kwargs["sites"],
+        torch.ones((16, 1), dtype=torch.float32),
+        power_temperature=kwargs["temperature_end"],
+        support_temperature=kwargs["temperature_end"],
+    )
+
+    torch.testing.assert_close(prediction, coefficients[:, 0], atol=2.0e-6, rtol=0)
 
 
 def test_source_metric_mask_prefers_bright_reference_structure() -> None:

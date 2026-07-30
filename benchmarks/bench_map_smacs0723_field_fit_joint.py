@@ -76,6 +76,8 @@ from torchsky.map import (  # noqa: E402
 REAL_JOINT_CASE = "tpv_field_fit_deep_multiband_broad"
 FOAM_FOOTPRINT_EXTENT = 0.55
 FOAM_MAX_SMOOTH_PAIRS = 64 * 1024 * 1024
+FOAM_TEMPERATURE_START_CELL_UNITS = 1.0
+FOAM_TEMPERATURE_END_CELL_UNITS = 16.0
 
 
 def _parse_csv(value: str) -> list[str]:
@@ -118,13 +120,14 @@ def _regular_foam_model_kwargs(
         dtype=torch.float32,
     )
     coefficients = torch.zeros((side * side, basis), dtype=torch.float32)
+    inverse_cell_area = 1.0 / (step * step)
     return {
         "sites": sites,
         "radii": radii,
         "cell_coefficients": coefficients,
         "minimum_radius": 0.25 * step,
-        "temperature_start": 4.0,
-        "temperature_end": 24.0,
+        "temperature_start": FOAM_TEMPERATURE_START_CELL_UNITS * inverse_cell_area,
+        "temperature_end": FOAM_TEMPERATURE_END_CELL_UNITS * inverse_cell_area,
     }
 
 
@@ -1017,6 +1020,12 @@ def main() -> int:
                                 2.0
                                 * float(args.foam_extent)
                                 / float(args.foam_grid_side)
+                            )
+                            row["foam_temperature_start"] = float(
+                                hard_model.temperature_start
+                            )
+                            row["foam_temperature_end"] = float(
+                                hard_model.temperature_end
                             )
                             row["foam_target_x_range"] = [
                                 float(target_coordinates[:, 0].min()),
