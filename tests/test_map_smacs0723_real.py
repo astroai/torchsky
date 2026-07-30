@@ -89,6 +89,37 @@ def test_best_overlap_cutout_prefers_supported_window() -> None:
     assert np.array_equal(crop, reference[2:5, 1:4])
 
 
+def test_best_overlap_cutout_matches_brute_force() -> None:
+    rng = np.random.default_rng(7)
+    reference = rng.normal(size=(9, 11)).astype(np.float32)
+    reference[1, 2] = np.nan
+    overlap = rng.integers(0, 5, size=reference.shape).astype(np.float32)
+    size = 4
+    scores = np.array(
+        [
+            [
+                np.where(
+                    np.isfinite(reference[y : y + size, x : x + size]),
+                    overlap[y : y + size, x : x + size],
+                    0,
+                ).sum()
+                for x in range(reference.shape[1] - size + 1)
+            ]
+            for y in range(reference.shape[0] - size + 1)
+        ]
+    )
+    expected_y, expected_x = np.unravel_index(int(np.argmax(scores)), scores.shape)
+
+    crop, x0, y0 = _best_overlap_cutout(reference, overlap, size=size)
+
+    assert (x0, y0) == (expected_x, expected_y)
+    assert np.array_equal(
+        crop,
+        reference[y0 : y0 + size, x0 : x0 + size],
+        equal_nan=True,
+    )
+
+
 def test_metric_mask_excludes_non_finite_reference() -> None:
     pred = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
     reference = np.array([[1.0, np.nan], [np.inf, 4.0]], dtype=np.float32)

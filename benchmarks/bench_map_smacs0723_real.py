@@ -257,14 +257,6 @@ def _integral_image(array: np.ndarray) -> np.ndarray:
     return out.cumsum(axis=0).cumsum(axis=1)
 
 
-def _window_sum(integral: np.ndarray, x0: int, y0: int, size: int) -> float:
-    x1 = x0 + size
-    y1 = y0 + size
-    return float(
-        integral[y1, x1] - integral[y0, x1] - integral[y1, x0] + integral[y0, x0]
-    )
-
-
 def _best_overlap_cutout(
     reference: np.ndarray,
     overlap_count: np.ndarray,
@@ -277,20 +269,16 @@ def _best_overlap_cutout(
         np.isfinite(reference), np.maximum(overlap_count, 0), 0.0
     ).astype(np.float32)
     integral = _integral_image(overlap_score)
-    best_score = -1.0
-    best_x0 = 0
-    best_y0 = 0
-    for y0 in range(0, h - size + 1):
-        for x0 in range(0, w - size + 1):
-            score = _window_sum(integral, x0, y0, size)
-            if score > best_score:
-                best_score = score
-                best_x0 = x0
-                best_y0 = y0
+    window_sums = integral[size:, size:] - integral[:-size, size:]
+    window_sums -= integral[size:, :-size]
+    window_sums += integral[:-size, :-size]
+    best_y0, best_x0 = np.unravel_index(
+        int(np.argmax(window_sums)), window_sums.shape
+    )
     return (
         reference[best_y0 : best_y0 + size, best_x0 : best_x0 + size],
-        best_x0,
-        best_y0,
+        int(best_x0),
+        int(best_y0),
     )
 
 

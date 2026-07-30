@@ -203,7 +203,10 @@ stacking-versus-INR/Foam depth result defined in
     before scaling capacity or compute. Session `iaz5l4js` at `d8fece0`
     completed the native CUDA build and exposed compressed-image `NAXIS1`
     leaking the binary-table row width into the joint overlap grid; relaunch
-    only after normalizing `ZNAXIS1/2`.
+    only after normalizing `ZNAXIS1/2`. Session `nfhln02y` at `bcbd5d3` passed
+    that gate and exposed the resulting 5.7-million-window Python crop scan;
+    replace it with the equivalent vectorized integral-image reduction before
+    scaling.
 - [ ] Execute Day 4: 20-batch CANFAR blind test, paired intervals, report, and
   figures.
 - [ ] Submit only the strongest abstract claim whose pre-registered gate passes.
