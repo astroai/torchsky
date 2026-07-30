@@ -176,7 +176,9 @@ stacking-versus-INR/Foam depth result defined in
       authentication gate, session `bmvmo076` at `c4afdee`, reached the
       benchmark and exposed the missing import path before any science run;
       sessions `vjvoehq7` and `pkb3eptv` at `ba55f37` then exposed the missing
-      editable native build. Relaunch only through the existing
+      editable native build. Session `uhhhnba0` at `c768be8` built the wheel
+      successfully and exposed that the clean-environment verifier reused the
+      stale pre-install interpreter. Relaunch only through the fresh-interpreter
       `scripts/run_local_sphere_bench.py` build gate.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.

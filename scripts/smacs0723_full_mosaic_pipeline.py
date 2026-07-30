@@ -82,7 +82,8 @@ def _ensure_local_cpp() -> None:
     cmd = [sys.executable, "-m", "pip", "install", "-e", ".", "--no-build-isolation"]
     print("Installing local torchsky editable build into the active env")
     subprocess.check_call(cmd, cwd=ROOT)
-    if not _has_local_cpp():
+    probe = [sys.executable, "-c", "import torchsky; import torchsky.cpp"]
+    if subprocess.call(probe, cwd=ROOT) != 0:
         raise RuntimeError("torchsky.cpp still unavailable after editable install")
 
 

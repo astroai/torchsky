@@ -39,22 +39,25 @@ def test_parser_defaults_are_simple() -> None:
 def test_ensure_local_cpp_installs_when_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    state = {"installed": False, "calls": 0}
+    state = {"install_calls": 0, "probe_calls": 0}
     _real_import_module = importlib.import_module
 
     def _fake_import_module(name: str):
         if name == "torchsky":
             return object()
         if name == "torchsky.cpp":
-            if state["installed"]:
-                return object()
             raise ModuleNotFoundError(name)
         return _real_import_module(name)
 
     def _fake_check_call(cmd, cwd):
         del cmd, cwd
-        state["calls"] += 1
-        state["installed"] = True
+        state["install_calls"] += 1
+
+    def _fake_call(cmd, cwd):
+        assert cmd == [sys.executable, "-c", "import torchsky; import torchsky.cpp"]
+        assert cwd == ROOT
+        state["probe_calls"] += 1
+        return 0
 
     monkeypatch.setattr(
         "smacs0723_full_mosaic_pipeline.importlib.import_module", _fake_import_module
@@ -62,7 +65,10 @@ def test_ensure_local_cpp_installs_when_missing(
     monkeypatch.setattr(
         "smacs0723_full_mosaic_pipeline.subprocess.check_call", _fake_check_call
     )
+    monkeypatch.setattr(
+        "smacs0723_full_mosaic_pipeline.subprocess.call", _fake_call
+    )
 
     _ensure_local_cpp()
 
-    assert state["calls"] == 1
+    assert state == {"install_calls": 1, "probe_calls": 1}

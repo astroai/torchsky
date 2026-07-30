@@ -41,7 +41,6 @@ export PIXI_HOME=/scratch/pixi
 export PIXI_CACHE_DIR=/scratch/pixi-cache
 export TORCHSKY_DATA="${data_root}"
 export PATH="${PIXI_HOME}/bin:${PATH}"
-export PYTHONPATH="${source_root}/src${PYTHONPATH:+:${PYTHONPATH}}"
 if ! command -v pixi >/dev/null 2>&1; then
   curl -fsSL https://pixi.sh/install.sh | bash
 fi
