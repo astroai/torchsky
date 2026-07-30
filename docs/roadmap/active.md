@@ -271,6 +271,12 @@ stacking-versus-INR/Foam depth result defined in
     - [ ] Run one two-band blank fit on the exact frozen 512-square validation
       WCS. Require finite/nonzero hard products and sensible flux/contrast
       diagnostics before launching positive validation batches.
+      Sessions `y139noqg` at `618f064` (all exposures) and `sv73lk92` at
+      `700c3e3` (matched `PATT_NUM=3,8`) both failed before optimization:
+      the diagnostic initial-loss render formed dense smooth memberships for
+      every 512-square pixel at once and tripped the H100 allocator. The exact
+      hard renderer was not reached. The next exact run uses exact 64-square
+      diagnostic tiles plus streamed 128-square PSF-aware training patches.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous
       joint benchmark discovered all 36/9 exposures per band, while classical
       validation uses only `PATT_NUM={3,8}` (8/2 exposures). `--patt-nums`

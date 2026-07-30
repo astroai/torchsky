@@ -541,11 +541,6 @@ def render_field_observation(
         )
     else:
         raise ValueError(f"unsupported spectral_sampling {spectral_sampling!r}")
-    if spatial_tile_hw is not None and operator_bundle.psf is not None:
-        raise ValueError(
-            "render_field_observation(..., spatial_tile_hw=...) cannot be used with "
-            "a non-trivial PSF because the PSF couples pixels across tiles"
-        )
     if forward_context is not None and use_func_vmap:
         raise ValueError(
             "render_field_observation(..., use_func_vmap=True) does not support "

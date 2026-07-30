@@ -112,6 +112,19 @@ def test_joint_real_fit_kwargs_use_pixel_sampling() -> None:
     assert kwargs["pixel_samples_per_observation"] >= 256
 
 
+def test_joint_real_foam_fit_bounds_psf_training_and_diagnostics() -> None:
+    kwargs = _joint_real_fit_kwargs(
+        "spectral_power_foam",
+        crop_size=512,
+        steps=50,
+        num_observations=16,
+    )
+
+    assert kwargs["training_patch_size"] == 128
+    assert kwargs["streaming_accumulation"] is True
+    assert kwargs["diagnostic_spatial_tile_hw"] == (64, 64)
+
+
 def test_regular_foam_initialization_is_deterministic_and_pixel_independent() -> None:
     first = _regular_foam_model_kwargs(grid_side=3, basis_count=4)
     second = _regular_foam_model_kwargs(grid_side=3, basis_count=4)

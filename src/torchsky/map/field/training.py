@@ -265,6 +265,7 @@ def compute_field_fit_diagnostics(
     steps: int,
     total_pixels: int,
     max_mem: int,
+    spatial_tile_hw: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     device = next((p.device for p in model.parameters()), torch.device("cpu"))
     domain = getattr(model, "domain", None)
@@ -398,6 +399,7 @@ def compute_field_fit_diagnostics(
                     forward_context=fctx,
                     exposure_pose=pose,
                     operator_bundle=observation_bundle,
+                    spatial_tile_hw=spatial_tile_hw,
                 )
 
                 obs_img = observation.image.to(device=pred.device, dtype=pred.dtype)
@@ -444,7 +446,7 @@ def compute_field_fit_diagnostics(
                         psf_residual_correlations.append(psf_corr)
 
                 forward_distribution = getattr(model, "forward_distribution", None)
-                if callable(forward_distribution):
+                if callable(forward_distribution) and spatial_tile_hw is None:
                     _pred_mean, pred_logvar = render_field_observation_distribution(
                         model,
                         observation,
@@ -526,6 +528,7 @@ def _compute_full_observation_losses(
     huber_delta: float,
     loss_reduction: FieldLossReduction,
     gradient_residual_weight: float = 0.0,
+    spatial_tile_hw: tuple[int, int] | None = None,
 ) -> float:
     """Compute per-observation or aggregated reconstruction loss on full images.
 
@@ -543,6 +546,10 @@ def _compute_full_observation_losses(
         pose = obs_exposure_poses[obs_idx]
         observation_bundle = obs_operator_bundles[obs_idx]
         if loss_kind == "gaussian_nll":
+            if spatial_tile_hw is not None:
+                raise ValueError(
+                    "diagnostic spatial tiling is not supported with gaussian_nll"
+                )
             pred, pred_logvar = render_field_observation_distribution(
                 model,
                 observation,
@@ -559,6 +566,7 @@ def _compute_full_observation_losses(
                 forward_context=fctx,
                 exposure_pose=pose,
                 operator_bundle=observation_bundle,
+                spatial_tile_hw=spatial_tile_hw,
             )
             pred_logvar = None
         image = observation.image.to(device=pred.device, dtype=pred.dtype)
@@ -734,6 +742,7 @@ def fit_field_model(
     observation_exposure_poses: Sequence[ExposurePose | None] | None = None,
     refine_poses: bool = False,
     anchor_first_pose: bool = True,
+    diagnostic_spatial_tile_hw: tuple[int, int] | None = None,
     _progress_callback: Callable[[int, float], None] | None = None,
 ) -> FieldFitResult:
     if not observations:
@@ -840,6 +849,7 @@ def fit_field_model(
             huber_delta=huber_delta,
             loss_reduction=loss_reduction,
             gradient_residual_weight=gradient_weight,
+            spatial_tile_hw=diagnostic_spatial_tile_hw,
         )
 
     model.train()
@@ -1716,6 +1726,7 @@ def fit_field_model(
             huber_delta=huber_delta,
             loss_reduction=loss_reduction,
             gradient_residual_weight=gradient_weight,
+            spatial_tile_hw=diagnostic_spatial_tile_hw,
         )
     if train_device.type == "cuda":
         torch.cuda.synchronize()
@@ -1738,6 +1749,7 @@ def fit_field_model(
         steps=int(steps),
         total_pixels=total_pixels,
         max_mem=max_mem,
+        spatial_tile_hw=diagnostic_spatial_tile_hw,
     )
     diagnostics = dict(diagnostics or {})
     diagnostics["operator_bundle"] = operator_bundle.enabled_operator_names()

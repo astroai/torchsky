@@ -466,6 +466,11 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     the classical stackers' 8/2 short-/long-band exposure counts. The adapter
     records the selected patterns and the CANFAR validation runner defaults to
     them; all-exposure Foam products are excluded from method comparison.
+  - [ ] Pass the exact 512-square blank gate with bounded smooth rendering.
+    The first all-exposure and matched-split attempts failed in the same
+    pre-fit dense diagnostic render, before the sparse hard operator. Exact
+    tiled initial/final diagnostics and streamed PSF-aware training patches are
+    implemented locally and await the next exact-commit H100 run.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the

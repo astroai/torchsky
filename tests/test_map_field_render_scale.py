@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
 
 from torchsky.map import (
@@ -245,7 +244,7 @@ def test_render_field_observation_spatial_tile_matches_full() -> None:
     assert torch.allclose(a, b, rtol=0.0, atol=1.0e-5)
 
 
-def test_render_field_observation_tile_rejects_psf() -> None:
+def test_render_field_observation_tile_matches_full_with_psf() -> None:
     domain = FieldDomain(
         center_ra_deg=0.0,
         center_dec_deg=0.0,
@@ -262,10 +261,18 @@ def test_render_field_observation_tile_rejects_psf() -> None:
         wavelength=5000.0,
         psf_sigma_pix=1.5,
     )
-    with pytest.raises(ValueError, match="PSF couples pixels"):
-        render_field_observation(
-            model,
-            obs,
-            num_spectral_samples=3,
-            spatial_tile_hw=(4, 4),
-        )
+    full = render_field_observation(model, obs, num_spectral_samples=3)
+    tiled = render_field_observation(
+        model,
+        obs,
+        num_spectral_samples=3,
+        spatial_tile_hw=(4, 4),
+    )
+
+    assert torch.allclose(full, tiled, rtol=0.0, atol=1.0e-6)
+    full.sum().backward()
+    full_grads = [parameter.grad.detach().clone() for parameter in model.parameters()]
+    model.zero_grad(set_to_none=True)
+    tiled.sum().backward()
+    for parameter, expected in zip(model.parameters(), full_grads, strict=True):
+        torch.testing.assert_close(parameter.grad, expected, rtol=1.0e-5, atol=1.0e-6)

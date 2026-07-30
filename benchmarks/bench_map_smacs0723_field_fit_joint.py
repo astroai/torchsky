@@ -304,9 +304,13 @@ def _joint_real_fit_kwargs(
         kwargs["training_spectral_sampling"] = "deterministic_quadrature"
         kwargs["spectral_anchor_observations_per_step"] = 0
         kwargs["spectral_anchor_loss_weight"] = 0.0
+        kwargs["training_patch_size"] = min(int(crop_size), 128)
+        kwargs["streaming_accumulation"] = True
+        kwargs["diagnostic_spatial_tile_hw"] = (64, 64)
     kwargs["observations_per_step"] = min(max(num_observations, 1), 12)
     kwargs["observation_sampling"] = "band_balanced"
-    kwargs["training_patch_size"] = None
+    if model_kind != "spectral_power_foam":
+        kwargs["training_patch_size"] = None
     kwargs["pixel_samples_per_observation"] = max(
         256, min(int(crop_size) * int(crop_size), 1024)
     )
