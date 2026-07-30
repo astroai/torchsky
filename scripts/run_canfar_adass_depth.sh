@@ -71,6 +71,44 @@ case "${mode}" in
       --markdown-out "${artifact_root}/shared-foam.md" \
       --export-dir "${artifact_root}/products"
     ;;
+  foam-validation)
+    bands=${FOAM_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}
+    crop_size=${FOAM_CROP_SIZE:-512}
+    steps=${FOAM_STEPS:-200}
+    grid_side=${FOAM_GRID_SIDE:-32}
+    basis_count=${FOAM_BASIS_COUNT:-4}
+    seed=${FOAM_SEED:-101}
+    validation_root=/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940
+    target_header_path=${validation_root}/validation-000/common-support-r9-f0p99.fits
+    for batch in blank validation-000 validation-001 validation-002; do
+      injection_args=()
+      if [[ "${batch}" != blank ]]; then
+        injection_args=(
+          --injection-manifest "${validation_root}/${batch}/manifest.json"
+        )
+      fi
+      batch_root=${artifact_root}/${batch}
+      pixi run --manifest-path "${source_root}/pixi.toml" -e smacs-cuda -- \
+        python "${source_root}/scripts/run_local_sphere_bench.py" \
+        "${source_root}/benchmarks/bench_map_smacs0723_field_fit_joint.py" \
+        --bands "${bands}" \
+        --exposure-dir "${data_root}/jwst_smacs0723/aligned" \
+        --input-product aligned \
+        --crop-size "${crop_size}" \
+        --crop-x0 112 \
+        --crop-y0 0 \
+        --target-header-path "${target_header_path}" \
+        --steps "${steps}" \
+        --seed "${seed}" \
+        --foam-grid-side "${grid_side}" \
+        --foam-basis-count "${basis_count}" \
+        --models spectral_power_foam \
+        "${injection_args[@]}" \
+        --json-out "${batch_root}/shared-foam.json" \
+        --markdown-out "${batch_root}/shared-foam.md" \
+        --export-dir "${batch_root}/products"
+    done
+    ;;
   native-band)
     band=${SMACS_BAND:?set SMACS_BAND}
     methods=torchsky_drizzle_square_pf0p800,torchsky_drizzle_square_pf1p000

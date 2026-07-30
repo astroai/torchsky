@@ -254,6 +254,14 @@ stacking-versus-INR/Foam depth result defined in
       execution pass and a model/configuration failure, not scientific
       evidence. Persist coefficient, geometry/target-range, and output-support
       diagnostics in the next run before changing capacity or learning rate.
+    - [x] Wire the same frozen common-world detector injection into the joint
+      field adapter without modifying archived inputs. `--injection-manifest`
+      now feeds transient SCI overrides to both the differentiable observations
+      and the coadd diagnostic; `--target-header-path` plus fixed crop
+      coordinates pins every hard-rendered band to the exact classical WCS.
+      Runner mode `foam-validation` persists blank and all three validation
+      batches separately. Do not launch the four-fit matrix until the zero-hard-
+      product diagnostic is resolved.
 - [ ] Execute Day 4: 20-batch CANFAR blind test, paired intervals, report, and
   figures.
 - [ ] Submit only the strongest abstract claim whose pre-registered gate passes.

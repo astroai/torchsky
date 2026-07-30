@@ -49,6 +49,10 @@ from bench_map_smacs0723_real import (  # noqa: E402
     _reference_path_for_band,
     _sci_header,
 )
+from bench_map_smacs0723_stackers import (  # noqa: E402
+    _injection_manifest_tensors,
+)
+from bench_multiband_depth import inject_common_world_exposures  # noqa: E402
 
 DEFAULT_JSON_OUT = DATA / "benchmark_results" / "smacs0723_field_fit_joint.json"
 DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_field_fit_joint.md"
@@ -448,6 +452,20 @@ def main() -> int:
     parser.add_argument(
         "--crop-strategy", choices=("center", "best_overlap"), default="best_overlap"
     )
+    parser.add_argument("--crop-x0", type=int, default=None)
+    parser.add_argument("--crop-y0", type=int, default=None)
+    parser.add_argument(
+        "--target-header-path",
+        type=Path,
+        default=None,
+        help="FITS image supplying one exact target WCS for all output bands",
+    )
+    parser.add_argument(
+        "--injection-manifest",
+        type=Path,
+        default=None,
+        help="Frozen common-world detector-level injection manifest",
+    )
     parser.add_argument("--steps", type=int, default=4)
     parser.add_argument("--seed", type=int, default=101)
     parser.add_argument("--foam-grid-side", type=int, default=32)
@@ -480,6 +498,24 @@ def main() -> int:
     ] = []
     all_field_observations: list[FieldObservation] = []
     all_forward_contexts: list[ForwardContext] = []
+    injection_rows: list[dict[str, Any]] = []
+    injection_manifest = (
+        json.loads(args.injection_manifest.read_text(encoding="utf-8"))
+        if args.injection_manifest is not None
+        else None
+    )
+    explicit_target_header = (
+        dict(torchsky.read(str(args.target_header_path), return_header=True)[1])
+        if args.target_header_path is not None
+        else None
+    )
+    if (args.crop_x0 is None) != (args.crop_y0 is None):
+        raise ValueError("--crop-x0 and --crop-y0 must be provided together")
+    if explicit_target_header is not None and (
+        int(explicit_target_header.get("NAXIS1", -1)) != int(args.crop_size)
+        or int(explicit_target_header.get("NAXIS2", -1)) != int(args.crop_size)
+    ):
+        raise ValueError("explicit target header shape must match --crop-size")
 
     with tempfile.TemporaryDirectory(prefix="torchsky_smacs_joint_") as tmp:
         tmpdir = Path(tmp)
@@ -517,7 +553,21 @@ def main() -> int:
             ref_data = _read_ext(reference_path, "SCI")
             ref_header = _sci_header(reference_path)
             overlap_headers = [_sci_header(path) for path in exposure_paths]
-            if args.crop_strategy == "best_overlap":
+            if args.crop_x0 is not None:
+                x0 = int(args.crop_x0)
+                y0 = int(args.crop_y0)
+                if (
+                    x0 < 0
+                    or y0 < 0
+                    or x0 + int(args.crop_size) > ref_data.shape[1]
+                    or y0 + int(args.crop_size) > ref_data.shape[0]
+                ):
+                    raise ValueError("fixed crop lies outside the reference image")
+                ref_crop = ref_data[
+                    y0 : y0 + int(args.crop_size),
+                    x0 : x0 + int(args.crop_size),
+                ]
+            elif args.crop_strategy == "best_overlap":
                 coarse_step = 4
                 overlap_count = _approx_overlap_grid(
                     overlap_headers,
@@ -544,20 +594,43 @@ def main() -> int:
                 ]
             else:
                 ref_crop, x0, y0 = _center_cutout(ref_data, int(args.crop_size))
-            target_header = _cutout_header(ref_header, x0, y0, int(args.crop_size))
+            target_header = (
+                dict(explicit_target_header)
+                if explicit_target_header is not None
+                else _cutout_header(ref_header, x0, y0, int(args.crop_size))
+            )
             target_observation = _field_target_observation(
                 target_header, band_name=band
             )
+            science_overrides = None
+            if injection_manifest is not None:
+                injection_world, injection_flux = _injection_manifest_tensors(
+                    injection_manifest,
+                    band=band,
+                )
+                science_overrides, injection_audit = inject_common_world_exposures(
+                    exposure_paths,
+                    band=band,
+                    world_radec_deg=injection_world,
+                    flux_jy=injection_flux,
+                )
+                injection_rows.append({"band": band, **injection_audit})
 
             image_observations: list[ImageObservation] = []
             raw_field_inputs: list[
                 tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]
             ] = []
             for exposure_path in exposure_paths:
+                science_override = (
+                    science_overrides.get(exposure_path)
+                    if science_overrides is not None
+                    else None
+                )
                 science_path, weight_path, mask_path = _prepare_aux_files(
                     exposure_path,
                     tmpdir,
                     linearize_sip=False,
+                    science_override=science_override,
                 )
                 image_observations.append(
                     ImageObservation(
@@ -569,7 +642,11 @@ def main() -> int:
                         mask_hdu=0,
                     )
                 )
-                science = _read_ext(exposure_path, "SCI")
+                science = (
+                    _read_ext(exposure_path, "SCI")
+                    if science_override is None
+                    else np.asarray(science_override)
+                )
                 err = _read_ext(exposure_path, "ERR")
                 dq = _read_ext(exposure_path, "DQ")
                 valid = np.isfinite(err) & (err > 0) & np.isfinite(dq) & (dq == 0)
@@ -651,7 +728,11 @@ def main() -> int:
             band_entries.append(
                 {
                     "band": band,
-                    "reference_crop": ref_crop.astype(np.float32, copy=False),
+                    "reference_crop": (
+                        coadd_data
+                        if explicit_target_header is not None
+                        else ref_crop.astype(np.float32, copy=False)
+                    ),
                     "target_header": dict(target_header),
                     "target_observation": target_observation,
                     "support_mask": support_mask.astype(bool, copy=False),
@@ -1004,7 +1085,20 @@ def main() -> int:
             "seed": int(args.seed),
             "foam_grid_side": int(args.foam_grid_side),
             "foam_basis_count": int(args.foam_basis_count),
+            "crop_x0": args.crop_x0,
+            "crop_y0": args.crop_y0,
+            "target_header_path": (
+                str(args.target_header_path.resolve())
+                if args.target_header_path is not None
+                else None
+            ),
+            "injection_manifest": (
+                str(args.injection_manifest.resolve())
+                if args.injection_manifest is not None
+                else None
+            ),
         },
+        "injection_audit": injection_rows,
         "rows": ok_rows + fail_rows,
         "summary": _summarize_by_model(ok_rows),
     }
