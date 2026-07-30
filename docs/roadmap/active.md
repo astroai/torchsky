@@ -175,7 +175,9 @@ stacking-versus-INR/Foam depth result defined in
       with `SMACS_BAND` and an exact `TORCHSKY_COMMIT`. The first AstroAI
       authentication gate, session `bmvmo076` at `c4afdee`, reached the
       benchmark and exposed the missing import path before any science run;
-      relaunch only from the fixing commit.
+      sessions `vjvoehq7` and `pkb3eptv` at `ba55f37` then exposed the missing
+      editable native build. Relaunch only through the existing
+      `scripts/run_local_sphere_bench.py` build gate.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
   - [x] Add `SpectralPowerFoamField` as the minimum common-operator bridge:
@@ -1034,3 +1036,8 @@ Use an `astroai/*` image. The current headless benchmark image is
 tooling needed by this private-repository runner while still running as a
 headless session. Pass the fully qualified image through `CONTAINER_IMAGE`;
 `scripts/run_canfar_adass_depth.sh` rejects non-AstroAI images.
+
+Use `map-compat` for classical comparator jobs and `smacs-cuda` for real-data
+Foam jobs. Both run through `scripts/run_local_sphere_bench.py`, which installs
+the local project editable without build isolation and fails unless the native
+`torchsky.cpp` extension imports successfully.

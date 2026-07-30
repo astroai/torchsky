@@ -243,6 +243,10 @@ nanobind = ">=2.10.2"
 [feature.cuda.pypi-dependencies]
 torchfits = ">=1.0.0rc4"
 
+[feature.smacs.dependencies]
+pillow = ">=10"
+psutil = ">=5.9"
+
 [feature.map-compat.dependencies]
 python = "3.12.*"
 cmake = ">=3.21"
@@ -295,6 +299,7 @@ test = { features = ["prod", "test"], solve-group = "default" }
 bench = { features = ["prod", "bench"], solve-group = "default" }
 sphere-bench = { features = ["prod", "bench", "sphere-bench"], solve-group = "default" }
 cuda-bench = { features = ["cuda"], no-default-feature = true, solve-group = "cuda" }
+smacs-cuda = { features = ["cuda", "smacs"], no-default-feature = true, solve-group = "smacs-cuda" }
 bench-all = { features = ["prod", "bench", "sphere-bench"], solve-group = "default" }
 map-compat = { features = ["prod", "bench", "sphere-bench", "map-compat"], solve-group = "map-compat" }
 bench-legacy = { features = ["bench-legacy"], solve-group = "bench-legacy" }
