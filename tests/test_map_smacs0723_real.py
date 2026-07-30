@@ -42,6 +42,24 @@ def test_cutout_header_shifts_crpix_and_shape() -> None:
     assert cut["CRPIX2"] == 33.5
 
 
+def test_sci_header_restores_compressed_image_dimensions(monkeypatch) -> None:
+    monkeypatch.setattr(
+        torchsky,
+        "get_header",
+        lambda *_args: {
+            "NAXIS1": 24,
+            "NAXIS2": 9584,
+            "ZNAXIS1": 9584,
+            "ZNAXIS2": 9584,
+        },
+    )
+
+    header = _sci_header(Path("compressed.fits.fz"))
+
+    assert header["NAXIS1"] == 9584
+    assert header["NAXIS2"] == 9584
+
+
 def test_linearize_sip_header_drops_sip_terms() -> None:
     header = fits.Header()
     header["CTYPE1"] = "RA---TAN-SIP"

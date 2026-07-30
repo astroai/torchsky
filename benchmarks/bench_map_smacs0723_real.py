@@ -162,7 +162,12 @@ def _exposure_filter_band(path: Path) -> str | None:
 
 
 def _sci_header(path: Path) -> dict[str, Any]:
-    return dict(torchsky.get_header(str(path), "SCI"))
+    header = dict(torchsky.get_header(str(path), "SCI"))
+    for axis in (1, 2):
+        compressed_key = f"ZNAXIS{axis}"
+        if compressed_key in header:
+            header[f"NAXIS{axis}"] = int(header[compressed_key])
+    return header
 
 
 def _read_ext(path: Path, ext: str) -> np.ndarray:
