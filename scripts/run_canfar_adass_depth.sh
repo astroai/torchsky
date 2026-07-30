@@ -54,12 +54,14 @@ case "${mode}" in
     grid_side=${FOAM_GRID_SIDE:-4}
     basis_count=${FOAM_BASIS_COUNT:-3}
     seed=${FOAM_SEED:-101}
+    patt_nums=${FOAM_PATT_NUMS:-}
     pixi run --manifest-path "${source_root}/pixi.toml" -e smacs-cuda -- \
       python "${source_root}/scripts/run_local_sphere_bench.py" \
       "${source_root}/benchmarks/bench_map_smacs0723_field_fit_joint.py" \
       --bands "${bands}" \
       --exposure-dir "${data_root}/jwst_smacs0723/aligned" \
       --input-product aligned \
+      --patt-nums "${patt_nums}" \
       --crop-size "${crop_size}" \
       --crop-strategy best_overlap \
       --steps "${steps}" \
@@ -78,6 +80,7 @@ case "${mode}" in
     grid_side=${FOAM_GRID_SIDE:-32}
     basis_count=${FOAM_BASIS_COUNT:-4}
     seed=${FOAM_SEED:-101}
+    patt_nums=${FOAM_PATT_NUMS:-3,8}
     validation_root=/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940
     target_header_path=${validation_root}/validation-000/common-support-r9-f0p99.fits
     IFS=',' read -r -a validation_batches <<< \
@@ -100,6 +103,7 @@ case "${mode}" in
         --bands "${bands}" \
         --exposure-dir "${data_root}/jwst_smacs0723/aligned" \
         --input-product aligned \
+        --patt-nums "${patt_nums}" \
         --crop-size "${crop_size}" \
         --crop-x0 112 \
         --crop-y0 0 \

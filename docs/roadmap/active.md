@@ -271,6 +271,12 @@ stacking-versus-INR/Foam depth result defined in
     - [ ] Run one two-band blank fit on the exact frozen 512-square validation
       WCS. Require finite/nonzero hard products and sensible flux/contrast
       diagnostics before launching positive validation batches.
+    - [x] Enforce the frozen exposure split in the Foam adapter. The previous
+      joint benchmark discovered all 36/9 exposures per band, while classical
+      validation uses only `PATT_NUM={3,8}` (8/2 exposures). `--patt-nums`
+      now reuses the stacker filename filter, records the selection, and
+      `foam-validation` defaults to `3,8`. Any exact-grid run without this
+      filter remains an execution diagnostic, not comparator evidence.
     - [x] Wire the same frozen common-world detector injection into the joint
       field adapter without modifying archived inputs. `--injection-manifest`
       now feeds transient SCI overrides to both the differentiable observations

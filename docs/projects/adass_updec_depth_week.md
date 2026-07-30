@@ -462,6 +462,10 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     footprints rather than the first detector `CRVAL`. H100 session `snrobkst`
     at `51b757e` produced nonzero coefficients and exact hard products for the
     first time; this is a geometry gate, not a depth result.
+  - [x] Apply the frozen `PATT_NUM={3,8}` validation split to Foam, matching
+    the classical stackers' 8/2 short-/long-band exposure counts. The adapter
+    records the selected patterns and the CANFAR validation runner defaults to
+    them; all-exposure Foam products are excluded from method comparison.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the

@@ -50,6 +50,7 @@ from bench_map_smacs0723_real import (  # noqa: E402
     _sci_header,
 )
 from bench_map_smacs0723_stackers import (  # noqa: E402
+    _filter_exposure_paths_by_patterns,
     _injection_manifest_tensors,
 )
 from bench_multiband_depth import inject_common_world_exposures  # noqa: E402
@@ -466,6 +467,11 @@ def main() -> int:
         default=None,
         help="Frozen common-world detector-level injection manifest",
     )
+    parser.add_argument(
+        "--patt-nums",
+        default="",
+        help="Comma-separated PATT_NUM identifiers, for example 3,8 for validation",
+    )
     parser.add_argument("--steps", type=int, default=4)
     parser.add_argument("--seed", type=int, default=101)
     parser.add_argument("--foam-grid-side", type=int, default=32)
@@ -489,6 +495,7 @@ def main() -> int:
     args = parser.parse_args()
 
     bands = _parse_csv(args.bands)
+    pattern_numbers = tuple(int(value) for value in _parse_csv(args.patt_nums))
     model_kinds = [part.strip() for part in str(args.models).split(",") if part.strip()]
     rows: list[dict[str, Any]] = []
 
@@ -530,6 +537,11 @@ def main() -> int:
                 if band in {"F277W", "F356W", "F444W"}
                 else None,
             )
+            if pattern_numbers:
+                exposure_paths = _filter_exposure_paths_by_patterns(
+                    exposure_paths,
+                    pattern_numbers,
+                )
             if not reference_path.exists() or not exposure_paths:
                 message = (
                     f"missing reference={reference_path.exists()} "
@@ -1085,6 +1097,7 @@ def main() -> int:
             "seed": int(args.seed),
             "foam_grid_side": int(args.foam_grid_side),
             "foam_basis_count": int(args.foam_basis_count),
+            "patt_nums": list(pattern_numbers),
             "crop_x0": args.crop_x0,
             "crop_y0": args.crop_y0,
             "target_header_path": (
