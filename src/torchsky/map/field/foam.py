@@ -47,6 +47,20 @@ class TileDiskCSR:
 
 
 @dataclass(frozen=True)
+class PolygonDiskCSR:
+    """Conservative disk candidates for arbitrary convex pixel polygons."""
+
+    indptr: Tensor
+    indices: Tensor
+    polygon_ids: Tensor
+    polygon_bin_memberships: int
+    site_bin_memberships: int
+    raw_candidate_pairs: int
+    total_pairs: int
+    bin_size: float
+
+
+@dataclass(frozen=True)
 class PowerPixelOperator:
     """Exact sparse bounded-power-cell to convex-pixel area operator.
 
@@ -192,7 +206,9 @@ def render_power_spectral_samples(
     ):
         raise ValueError("cell_samples must match the operator dtype and device")
     if not response_weights.is_floating_point() or response_weights.ndim not in (1, 2):
-        raise ValueError("response_weights must have shape (samples,) or (channels, samples)")
+        raise ValueError(
+            "response_weights must have shape (samples,) or (channels, samples)"
+        )
     if response_weights.shape[-1] != cell_samples.shape[-2]:
         raise ValueError("response_weights and cell_samples must share sample count")
     if not bool(torch.isfinite(cell_samples).all()) or not bool(
@@ -229,16 +245,13 @@ def render_power_spectral_basis(
         or cell_coefficients.shape[-2] != operator.cell_count
     ):
         raise ValueError(
-            "cell_coefficients must be floating point with shape "
-            "(..., cells, basis)"
+            "cell_coefficients must be floating point with shape (..., cells, basis)"
         )
     if (
         cell_coefficients.device != operator.areas.device
         or cell_coefficients.dtype != operator.areas.dtype
     ):
-        raise ValueError(
-            "cell_coefficients must match the operator dtype and device"
-        )
+        raise ValueError("cell_coefficients must match the operator dtype and device")
     if (
         not basis_samples.is_floating_point()
         or basis_samples.ndim != 2
@@ -249,9 +262,7 @@ def render_power_spectral_basis(
         basis_samples.device != cell_coefficients.device
         or basis_samples.dtype != cell_coefficients.dtype
     ):
-        raise ValueError(
-            "basis_samples must match cell_coefficients dtype and device"
-        )
+        raise ValueError("basis_samples must match cell_coefficients dtype and device")
     cell_samples = torch.einsum(
         "...ck,sk->...sc",
         cell_coefficients,
@@ -351,7 +362,9 @@ def bounded_power_ownership(
         owner_parts.append(owners)
         distance_parts.append(minimum)
     shape = points.shape[:-1]
-    return torch.cat(owner_parts).reshape(shape), torch.cat(distance_parts).reshape(shape)
+    return torch.cat(owner_parts).reshape(shape), torch.cat(distance_parts).reshape(
+        shape
+    )
 
 
 def soft_bounded_power_weights(
@@ -375,7 +388,9 @@ def soft_bounded_power_weights(
     logits = -float(temperature) * distances
     masked_logits = torch.where(support, logits, torch.full_like(logits, -torch.inf))
     any_support = support.any(dim=-1, keepdim=True)
-    safe_logits = torch.where(any_support, masked_logits, torch.zeros_like(masked_logits))
+    safe_logits = torch.where(
+        any_support, masked_logits, torch.zeros_like(masked_logits)
+    )
     weights = torch.softmax(safe_logits, dim=-1)
     return torch.where(any_support, weights, torch.zeros_like(weights))
 
@@ -410,9 +425,9 @@ def smooth_bounded_power_weights(
         -power_scale * distances + log_membership,
         dim=-1,
     )
-    log_outside_union = torch.nn.functional.logsigmoid(
-        support_scale * distances
-    ).sum(dim=-1, keepdim=True)
+    log_outside_union = torch.nn.functional.logsigmoid(support_scale * distances).sum(
+        dim=-1, keepdim=True
+    )
     union_occupancy = -torch.expm1(log_outside_union)
     return conditional * union_occupancy
 
@@ -468,9 +483,7 @@ class SpectralPowerFoam(torch.nn.Module):
 
         self.sites = torch.nn.Parameter(sites.detach().clone())
         self.raw_radii = torch.nn.Parameter(raw_radii)
-        self.cell_coefficients = torch.nn.Parameter(
-            cell_coefficients.detach().clone()
-        )
+        self.cell_coefficients = torch.nn.Parameter(cell_coefficients.detach().clone())
         self.register_buffer(
             "_minimum_radius",
             radii.new_tensor(radius_floor),
@@ -506,9 +519,7 @@ class SpectralPowerFoam(torch.nn.Module):
         ):
             raise ValueError("basis_values must match model dtype and device")
         if basis_values.ndim > 1 and basis_values.shape[:-1] != points.shape[:-1]:
-            raise ValueError(
-                "non-scalar basis_values leading shape must match points"
-            )
+            raise ValueError("non-scalar basis_values leading shape must match points")
         weights = smooth_bounded_power_weights(
             points,
             self.sites,
@@ -636,9 +647,7 @@ def sparse_cech_graph(
         return _empty_sparse_cech_graph(sites, bin_size=width)
 
     with torch.no_grad():
-        index_dtype = (
-            torch.float32 if sites.device.type == "mps" else torch.float64
-        )
+        index_dtype = torch.float32 if sites.device.type == "mps" else torch.float64
         index_sites = sites.detach().to(dtype=index_dtype)
         index_radii = radii.detach().to(dtype=index_dtype).unsqueeze(-1)
         lower = index_sites - index_radii
@@ -710,9 +719,7 @@ def sparse_cech_graph(
             torch.repeat_interleave(pair_offsets, pair_counts)
         )
         group_size = bin_counts[group_ids]
-        solve_dtype = (
-            torch.float32 if sites.device.type == "mps" else torch.float64
-        )
+        solve_dtype = torch.float32 if sites.device.type == "mps" else torch.float64
         diagonal = (2 * group_size - 1).to(dtype=solve_dtype)
         row = torch.floor(
             0.5
@@ -817,9 +824,7 @@ def tile_disk_candidate_csr(
     size_x, size_y = (float(tile_size[0]), float(tile_size[1]))
     if not all(math.isfinite(value) for value in (origin_x, origin_y)):
         raise ValueError("tile_origin entries must be finite")
-    if not all(
-        math.isfinite(value) and value > 0.0 for value in (size_x, size_y)
-    ):
+    if not all(math.isfinite(value) and value > 0.0 for value in (size_x, size_y)):
         raise ValueError("tile_size entries must be finite and positive")
     membership_limit = int(max_aabb_memberships)
     if membership_limit <= 0:
@@ -952,6 +957,223 @@ def tile_disk_candidate_csr(
         tile_shape=(rows, columns),
         tile_origin=(origin_x, origin_y),
         tile_size=(size_x, size_y),
+    )
+
+
+def polygon_disk_candidate_csr(
+    pixel_polygons: Tensor,
+    sites: Tensor,
+    radii: Tensor,
+    *,
+    bin_size: float | None = None,
+    max_bin_memberships: int = 50_000_000,
+    max_candidate_pairs: int = 10_000_000,
+) -> PolygonDiskCSR:
+    """Return conservative disk candidates for arbitrary convex polygons.
+
+    Polygon and disk AABBs are joined through a uniform grid, then candidate
+    pairs that fail the exact disk/AABB intersection predicate are removed.
+    The result can contain false positives for rotated polygons, but it cannot
+    omit a disk that intersects a polygon.
+    """
+    _validate_sites_and_radii(sites, radii, allow_empty=True)
+    if sites.shape[1] != 2:
+        raise ValueError("polygon_disk_candidate_csr requires 2-D disk sites")
+    if (
+        not pixel_polygons.is_floating_point()
+        or pixel_polygons.ndim != 3
+        or pixel_polygons.shape[-1] != 2
+        or pixel_polygons.shape[1] < 3
+    ):
+        raise ValueError("pixel_polygons must have floating shape (P, V>=3, 2)")
+    if pixel_polygons.device != sites.device or pixel_polygons.dtype != sites.dtype:
+        raise ValueError("pixels, sites, and radii must share dtype and device")
+    if not bool(torch.isfinite(pixel_polygons).all()):
+        raise ValueError("pixel polygons must be finite")
+    membership_limit = int(max_bin_memberships)
+    candidate_limit = int(max_candidate_pairs)
+    if membership_limit <= 0 or candidate_limit <= 0:
+        raise ValueError("sparse allocation limits must be positive")
+    if bin_size is None:
+        max_radius = float(radii.max().item()) if radii.numel() else 0.0
+        width = max_radius if max_radius > 0.0 else 1.0
+    else:
+        width = float(bin_size)
+    if not math.isfinite(width) or width <= 0:
+        raise ValueError("bin_size must be finite and positive")
+
+    polygon_count = pixel_polygons.shape[0]
+    site_count = sites.shape[0]
+    empty = torch.empty((0,), dtype=torch.long, device=sites.device)
+    if polygon_count == 0 or site_count == 0:
+        return PolygonDiskCSR(
+            indptr=torch.zeros(
+                polygon_count + 1, dtype=torch.long, device=sites.device
+            ),
+            indices=empty,
+            polygon_ids=empty,
+            polygon_bin_memberships=0,
+            site_bin_memberships=0,
+            raw_candidate_pairs=0,
+            total_pairs=polygon_count * site_count,
+            bin_size=width,
+        )
+
+    with torch.no_grad():
+        index_dtype = torch.float32 if sites.device.type == "mps" else torch.float64
+        polygons = pixel_polygons.detach().to(dtype=index_dtype)
+        index_sites = sites.detach().to(dtype=index_dtype)
+        index_radii = radii.detach().to(dtype=index_dtype)
+        polygon_lower = polygons.amin(dim=1)
+        polygon_upper = polygons.amax(dim=1)
+        site_lower = index_sites - index_radii[:, None]
+        site_upper = index_sites + index_radii[:, None]
+        origin = torch.minimum(
+            polygon_lower.amin(dim=0),
+            site_lower.amin(dim=0),
+        )
+
+        def memberships(
+            lower: Tensor,
+            upper: Tensor,
+        ) -> tuple[Tensor, Tensor, int]:
+            lower_bin = torch.floor((lower - origin) / width).to(torch.long)
+            upper_bin = torch.floor((upper - origin) / width).to(torch.long)
+            spans = upper_bin - lower_bin + 1
+            counts = spans[:, 0] * spans[:, 1]
+            count = int(counts.sum().item())
+            if count > membership_limit:
+                raise ValueError(
+                    f"uniform-grid index needs {count} memberships, exceeding "
+                    f"max_bin_memberships={membership_limit}"
+                )
+            object_ids = torch.repeat_interleave(
+                torch.arange(lower.shape[0], device=sites.device),
+                counts,
+            )
+            starts = torch.cumsum(counts, dim=0) - counts
+            local = torch.arange(count, device=sites.device) - torch.repeat_interleave(
+                starts, counts
+            )
+            span_x = spans[object_ids, 0]
+            bin_x = lower_bin[object_ids, 0] + torch.remainder(local, span_x)
+            bin_y = lower_bin[object_ids, 1] + torch.div(
+                local, span_x, rounding_mode="floor"
+            )
+            return object_ids, torch.stack((bin_x, bin_y), dim=1), count
+
+        polygon_ids, polygon_bins, polygon_memberships = memberships(
+            polygon_lower, polygon_upper
+        )
+        site_ids, site_bins, site_memberships = memberships(site_lower, site_upper)
+        all_bins = torch.cat((polygon_bins, site_bins))
+        min_bins = all_bins.amin(dim=0)
+        all_bins = all_bins - min_bins
+        columns = int(all_bins[:, 0].max().item()) + 1
+        polygon_keys = (
+            all_bins[:polygon_memberships, 1] * columns
+            + all_bins[:polygon_memberships, 0]
+        )
+        site_keys = (
+            all_bins[polygon_memberships:, 1] * columns
+            + all_bins[polygon_memberships:, 0]
+        )
+
+        polygon_order = torch.argsort(polygon_ids, stable=True)
+        polygon_order = polygon_order[
+            torch.argsort(polygon_keys[polygon_order], stable=True)
+        ]
+        site_order = torch.argsort(site_ids, stable=True)
+        site_order = site_order[torch.argsort(site_keys[site_order], stable=True)]
+        polygon_keys = polygon_keys[polygon_order]
+        polygon_ids = polygon_ids[polygon_order]
+        site_keys = site_keys[site_order]
+        site_ids = site_ids[site_order]
+        unique_polygon_keys, polygon_counts = torch.unique_consecutive(
+            polygon_keys, return_counts=True
+        )
+        unique_site_keys, site_counts = torch.unique_consecutive(
+            site_keys, return_counts=True
+        )
+        polygon_starts = torch.cumsum(polygon_counts, dim=0) - polygon_counts
+        site_starts = torch.cumsum(site_counts, dim=0) - site_counts
+        site_groups = {
+            int(key): (int(start), int(count))
+            for key, start, count in zip(
+                unique_site_keys.tolist(),
+                site_starts.tolist(),
+                site_counts.tolist(),
+                strict=True,
+            )
+        }
+        pair_pixels: list[Tensor] = []
+        pair_sites: list[Tensor] = []
+        raw_count = 0
+        for key, start, count in zip(
+            unique_polygon_keys.tolist(),
+            polygon_starts.tolist(),
+            polygon_counts.tolist(),
+            strict=True,
+        ):
+            site_group = site_groups.get(int(key))
+            if site_group is None:
+                continue
+            site_start, site_count_in_bin = site_group
+            group_count = int(count) * site_count_in_bin
+            raw_count += group_count
+            if raw_count > candidate_limit:
+                raise ValueError(
+                    f"uniform-grid join needs {raw_count} raw candidate pairs, "
+                    f"exceeding max_candidate_pairs={candidate_limit}"
+                )
+            pair_pixels.append(
+                polygon_ids[int(start) : int(start) + int(count)].repeat_interleave(
+                    site_count_in_bin
+                )
+            )
+            pair_sites.append(
+                site_ids[site_start : site_start + site_count_in_bin].repeat(int(count))
+            )
+        if not pair_pixels:
+            candidate_pixels = empty
+            candidate_sites = empty
+        else:
+            candidate_pixels = torch.cat(pair_pixels)
+            candidate_sites = torch.cat(pair_sites)
+            keys = torch.unique(
+                candidate_pixels * site_count + candidate_sites,
+                sorted=True,
+            )
+            candidate_pixels = torch.div(keys, site_count, rounding_mode="floor")
+            candidate_sites = torch.remainder(keys, site_count)
+            closest = torch.minimum(
+                torch.maximum(
+                    index_sites[candidate_sites], polygon_lower[candidate_pixels]
+                ),
+                polygon_upper[candidate_pixels],
+            )
+            intersects = (
+                torch.sum((index_sites[candidate_sites] - closest) ** 2, dim=1)
+                <= index_radii[candidate_sites] ** 2
+            )
+            candidate_pixels = candidate_pixels[intersects]
+            candidate_sites = candidate_sites[intersects]
+        counts = torch.bincount(candidate_pixels, minlength=polygon_count)
+        indptr = torch.cat(
+            (
+                torch.zeros(1, dtype=torch.long, device=sites.device),
+                torch.cumsum(counts, dim=0),
+            )
+        )
+    return PolygonDiskCSR(
+        indptr=indptr,
+        indices=candidate_sites,
+        polygon_ids=candidate_pixels,
+        polygon_bin_memberships=polygon_memberships,
+        site_bin_memberships=site_memberships,
+        raw_candidate_pairs=raw_count,
+        total_pairs=polygon_count * site_count,
+        bin_size=width,
     )
 
 
@@ -1434,19 +1656,23 @@ def _batched_clip_power_cells(
             - neighbor_radii * neighbor_radii
         )
         coincident = torch.all(normals == 0, dim=1)
-        dominated = present & coincident & (
-            (offsets < 0) | ((offsets == 0) & (neighbor_ids < cell_ids))
+        dominated = (
+            present
+            & coincident
+            & ((offsets < 0) | ((offsets == 0) & (neighbor_ids < cell_ids)))
         )
         active = present & ~coincident & (counts > 0)
 
         safe_counts = counts.clamp_min(1)
         following = torch.remainder(positions + 1, safe_counts[:, None])
         stop = torch.gather(vertices, 1, following[..., None].expand(-1, -1, 2))
-        start_values = torch.sum(vertices * normals[:, None, :], dim=2) - offsets[
-            :, None
-        ]
+        start_values = (
+            torch.sum(vertices * normals[:, None, :], dim=2) - offsets[:, None]
+        )
         stop_values = torch.sum(stop * normals[:, None, :], dim=2) - offsets[:, None]
-        vertex_scale = torch.max(torch.linalg.vector_norm(vertices, dim=2), dim=1).values
+        vertex_scale = torch.max(
+            torch.linalg.vector_norm(vertices, dim=2), dim=1
+        ).values
         tolerance = (
             64.0
             * torch.finfo(vertices.dtype).eps
@@ -1464,7 +1690,8 @@ def _batched_clip_power_cells(
         denominator = start_values - stop_values
         fraction = torch.where(
             emit_intersection,
-            start_values / torch.where(
+            start_values
+            / torch.where(
                 denominator != 0,
                 denominator,
                 torch.ones_like(denominator),
@@ -1524,11 +1751,7 @@ def _batched_polygon_disk_area(
     tolerance = (
         64.0
         * torch.finfo(vertices.dtype).eps
-        * (
-            torch.abs(linear * linear)
-            + torch.abs(4.0 * quadratic * constant)
-            + 1.0
-        )
+        * (torch.abs(linear * linear) + torch.abs(4.0 * quadratic * constant) + 1.0)
     )
     root = torch.sqrt(torch.clamp_min(discriminant, 0.0))
     lower_root = (-linear - root) / (2.0 * safe_quadratic)
@@ -1756,9 +1979,7 @@ def batched_bounded_power_pixel_operator(
     pixel_ids = (
         torch.cat(kept_pixels) if kept_pixels else candidate_pixels.new_empty((0,))
     )
-    indices = (
-        torch.cat(kept_cells) if kept_cells else candidate_cells.new_empty((0,))
-    )
+    indices = torch.cat(kept_cells) if kept_cells else candidate_cells.new_empty((0,))
     areas = torch.cat(kept_areas) if kept_areas else sites.new_empty((0,))
     row_counts = torch.bincount(pixel_ids, minlength=pixel_count)
     indptr = torch.cat(
@@ -1793,7 +2014,52 @@ def batched_bounded_power_pixel_operator(
     )
 
 
+def sparse_bounded_power_pixel_operator(
+    pixel_polygons: Tensor,
+    sites: Tensor,
+    radii: Tensor,
+    *,
+    bin_size: float | None = None,
+    max_candidate_pairs: int = 10_000_000,
+    max_bin_memberships: int = 50_000_000,
+    max_site_bin_memberships: int = 10_000_000,
+    max_packed_vertices: int = 64,
+    candidate_chunk_size: int = 4096,
+    kernel_execution: Literal["eager", "compile"] = "eager",
+) -> PowerPixelOperator:
+    """Build the production sparse exact operator for arbitrary sky pixels."""
+    candidates = polygon_disk_candidate_csr(
+        pixel_polygons,
+        sites,
+        radii,
+        bin_size=bin_size,
+        max_bin_memberships=max_bin_memberships,
+        max_candidate_pairs=max_candidate_pairs,
+    )
+    neighbors = sparse_cech_graph(
+        sites,
+        radii,
+        bin_size=bin_size,
+        max_site_bin_memberships=max_site_bin_memberships,
+        max_candidate_pairs=max_candidate_pairs,
+    )
+    return batched_bounded_power_pixel_operator(
+        pixel_polygons,
+        sites,
+        radii,
+        candidate_indptr=candidates.indptr,
+        candidate_indices=candidates.indices,
+        neighbor_indptr=neighbors.indptr,
+        neighbor_indices=neighbors.indices,
+        max_candidate_pairs=max_candidate_pairs,
+        max_packed_vertices=max_packed_vertices,
+        candidate_chunk_size=candidate_chunk_size,
+        kernel_execution=kernel_execution,
+    )
+
+
 __all__ = [
+    "PolygonDiskCSR",
     "PowerPixelOperator",
     "PowerValueSemantics",
     "SpectralPowerFoam",
@@ -1805,10 +2071,12 @@ __all__ = [
     "cech_adjacency",
     "power_distance",
     "power_face_planes",
+    "polygon_disk_candidate_csr",
     "render_power_spectral_basis",
     "render_power_spectral_samples",
     "smooth_bounded_power_weights",
     "soft_bounded_power_weights",
+    "sparse_bounded_power_pixel_operator",
     "sparse_cech_graph",
     "tile_disk_candidate_csr",
 ]

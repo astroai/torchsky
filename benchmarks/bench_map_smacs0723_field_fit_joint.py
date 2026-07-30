@@ -296,6 +296,9 @@ def _joint_real_fit_kwargs(
         kwargs["lr"] = 1.0e-3
         kwargs["curriculum"] = "feature_scale_ramp"
         kwargs["num_spectral_samples"] = 5
+        kwargs["training_spectral_sampling"] = "deterministic_quadrature"
+        kwargs["spectral_anchor_observations_per_step"] = 0
+        kwargs["spectral_anchor_loss_weight"] = 0.0
     kwargs["observations_per_step"] = min(max(num_observations, 1), 12)
     kwargs["observation_sampling"] = "band_balanced"
     kwargs["training_patch_size"] = None
@@ -796,7 +799,10 @@ def main() -> int:
                             fit_diagnostics,
                         ) = fitted_models[model_kind]
                         row["parameter_count"] = int(
-                            sum(parameter.numel() for parameter in result_model.parameters())
+                            sum(
+                                parameter.numel()
+                                for parameter in result_model.parameters()
+                            )
                         )
                         row["spectral_samples"] = int(
                             fit_kwargs.get("num_spectral_samples", 1)

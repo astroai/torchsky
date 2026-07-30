@@ -105,6 +105,18 @@ case "${mode}" in
         --markdown-out "${batch_root}/stackers.md"
     done
     ;;
+  native-score)
+    pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
+      python "${source_root}/scripts/run_local_sphere_bench.py" \
+      "${source_root}/benchmarks/score_smacs0723_native_classical.py" \
+      --input-root-pattern \
+        "/arc/projects/ots/torchsky-runs/20260729-smacs-native-validation-d8fece0-{band}" \
+      --validation-root \
+        /arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940 \
+      --effective-psf-root \
+        /arc/projects/ots/torchsky-runs/20260729-smacs-torchsky-drizzle-aa0aa21/effective_psfs \
+      --out-dir "${artifact_root}/score"
+    ;;
   *)
     echo "unknown mode: ${mode}" >&2
     exit 2

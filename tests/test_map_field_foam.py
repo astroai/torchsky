@@ -8,6 +8,7 @@ import torch
 from torchsky.map.field.foam import (
     bounded_power_ownership,
     cech_adjacency,
+    polygon_disk_candidate_csr,
     power_distance,
     power_face_planes,
     smooth_bounded_power_weights,
@@ -25,9 +26,7 @@ def test_equal_radius_ownership_matches_nearest_site_and_bounds() -> None:
         dtype=torch.float64,
     )
 
-    owners, minimum = bounded_power_ownership(
-        points, sites, radii, point_chunk_size=2
-    )
+    owners, minimum = bounded_power_ownership(points, sites, radii, point_chunk_size=2)
 
     assert owners.tolist() == [0, 0, 1, -1]
     torch.testing.assert_close(
@@ -61,7 +60,9 @@ def test_soft_bounded_weights_partition_union_and_are_differentiable() -> None:
 
     weights = soft_bounded_power_weights(points, sites, radii, temperature=7.0)
 
-    torch.testing.assert_close(weights[:2].sum(dim=-1), torch.ones(2, dtype=weights.dtype))
+    torch.testing.assert_close(
+        weights[:2].sum(dim=-1), torch.ones(2, dtype=weights.dtype)
+    )
     torch.testing.assert_close(weights[2], torch.zeros(2, dtype=weights.dtype))
     loss = (weights[:2] * torch.tensor([1.0, 2.0])).sum()
     loss.backward()
@@ -264,9 +265,7 @@ def test_sparse_cech_graph_matches_dense_oracle_and_builds_symmetric_csr() -> No
         neighbors = graph.indices[graph.indptr[site] : graph.indptr[site + 1]]
         assert neighbors.tolist() == sorted(neighbors.tolist())
         for neighbor in neighbors.tolist():
-            reverse = graph.indices[
-                graph.indptr[neighbor] : graph.indptr[neighbor + 1]
-            ]
+            reverse = graph.indices[graph.indptr[neighbor] : graph.indptr[neighbor + 1]]
             assert site in reverse.tolist()
 
 
@@ -419,10 +418,58 @@ def test_tile_disk_candidate_csr_matches_brute_force_and_is_deterministic() -> N
     torch.testing.assert_close(repeated.indices, result.indices)
     torch.testing.assert_close(repeated.tile_ids, result.tile_ids)
     for tile_id, expected_sites in enumerate(expected):
-        actual = result.indices[
-            result.indptr[tile_id] : result.indptr[tile_id + 1]
-        ]
+        actual = result.indices[result.indptr[tile_id] : result.indptr[tile_id + 1]]
         assert actual.tolist() == expected_sites
+
+
+def test_polygon_disk_candidate_csr_matches_disk_aabb_oracle() -> None:
+    polygons = torch.tensor(
+        [
+            [[-1.0, -1.0], [0.0, -1.0], [0.0, 0.0], [-1.0, 0.0]],
+            [[0.2, -0.1], [1.0, 0.2], [0.8, 1.0], [0.0, 0.7]],
+            [[1.5, 1.5], [2.0, 1.5], [2.0, 2.0], [1.5, 2.0]],
+        ],
+        dtype=torch.float64,
+    )
+    sites = torch.tensor(
+        [[-0.2, -0.2], [0.7, 0.5], [1.2, 1.2], [3.0, 3.0]],
+        dtype=torch.float64,
+    )
+    radii = torch.tensor([0.4, 0.6, 0.5, 0.2], dtype=torch.float64)
+    result = polygon_disk_candidate_csr(
+        polygons,
+        sites,
+        radii,
+        bin_size=0.35,
+    )
+    repeated = polygon_disk_candidate_csr(
+        polygons,
+        sites,
+        radii,
+        bin_size=0.35,
+    )
+
+    lower = polygons.amin(dim=1)
+    upper = polygons.amax(dim=1)
+    expected = []
+    for polygon in range(polygons.shape[0]):
+        closest = torch.minimum(torch.maximum(sites, lower[polygon]), upper[polygon])
+        expected.append(
+            torch.nonzero(
+                torch.sum((sites - closest) ** 2, dim=1) <= radii**2,
+                as_tuple=False,
+            )
+            .flatten()
+            .tolist()
+        )
+    actual = [
+        result.indices[result.indptr[row] : result.indptr[row + 1]].tolist()
+        for row in range(polygons.shape[0])
+    ]
+    assert actual == expected
+    assert torch.equal(result.indptr, repeated.indptr)
+    assert torch.equal(result.indices, repeated.indices)
+    assert result.indices.numel() < result.total_pairs
 
 
 def test_tile_disk_candidate_csr_closed_boundaries_and_wide_support() -> None:
@@ -448,9 +495,7 @@ def test_tile_disk_candidate_csr_closed_boundaries_and_wide_support() -> None:
     expected = _brute_force_tile_disk_lists(sites, radii, **kwargs)
 
     for tile_id, expected_sites in enumerate(expected):
-        actual = result.indices[
-            result.indptr[tile_id] : result.indptr[tile_id + 1]
-        ]
+        actual = result.indices[result.indptr[tile_id] : result.indptr[tile_id + 1]]
         assert actual.tolist() == expected_sites
     assert all(4 in candidates for candidates in expected)
     assert all(3 not in candidates for candidates in expected)

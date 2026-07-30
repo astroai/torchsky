@@ -30,7 +30,7 @@ from .foam import (
     PowerPixelOperator,
     PowerValueSemantics,
     SpectralPowerFoam,
-    bounded_power_pixel_operator,
+    sparse_bounded_power_pixel_operator,
 )
 from .hashgrid import HashGridEncoder, sample_feature_plane
 from .losses import _field_residual_loss
@@ -402,7 +402,7 @@ class SpectralPowerFoamField(_BaseFieldModel):
         **operator_kwargs: Any,
     ) -> PowerPixelOperator:
         """Build a hard operator from detached geometry and normalized pixels."""
-        return bounded_power_pixel_operator(
+        return sparse_bounded_power_pixel_operator(
             pixel_polygons,
             self.sites.detach(),
             self.radii.detach(),

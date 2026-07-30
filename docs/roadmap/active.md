@@ -180,6 +180,18 @@ stacking-versus-INR/Foam depth result defined in
       successfully and exposed that the clean-environment verifier reused the
       stale pre-install interpreter. Relaunch only through the fresh-interpreter
       `scripts/run_local_sphere_bench.py` build gate.
+    - [x] Complete all six non-overlapping native validation fanouts from exact
+      source commit `d8fece0`: sessions `pw97y59a`, `cy3nnl82`, `ngpfssn5`,
+      `r3qhpsj6`, `wt8f7twf`, and `nfk3aihr` persisted blank plus
+      `validation-000/001/002` SCI/weight products for `pixfrac=0.8/1.0`.
+      Every session used `images.canfar.net/astroai/notebook:latest` headless.
+    - [x] Add the fail-closed native scoring entry point
+      `benchmarks/score_smacs0723_native_classical.py` and runner mode
+      `native-score`. It rebuilds common 99%-footprint support, rejects any
+      frozen injection outside that support, reuses the measured effective PSFs
+      and blank whitening, calibrates pooled 95%-purity thresholds, and hashes
+      the complete configuration provenance. The real scoring run remains
+      unchecked.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
   - [x] Add `SpectralPowerFoamField` as the minimum common-operator bridge:
@@ -207,6 +219,27 @@ stacking-versus-INR/Foam depth result defined in
     that gate and exposed the resulting 5.7-million-window Python crop scan;
     replace it with the equivalent vectorized integral-image reduction before
     scaling.
+  - [x] Pass the first real CUDA end-to-end gate. Session `tqkr0w47` at
+    `fd03e67` fit and hard-rendered a two-band, 32-square, two-step Foam with 96
+    parameters and about 149 MB peak accelerator memory under
+    `/arc/projects/ots/torchsky-runs/20260729-smacs-shared-foam-smoke-fd03e67/`.
+    This is an execution gate only, not a depth result.
+  - [ ] Re-run the capacity-matched shared/independent validation matrix through
+    the sparse exact operator.
+    - [x] Launch and diagnose the first 128-square matrix. Shared session
+      `muha9pim` and independent sessions `h3ap2flp`, `v7hefzh3`, `ddw1i4dw`,
+      `yz4qxmb4`, `xskdsbp2`, and `u6zppq7m` reached final hard rendering but
+      failed closed because the adapter omitted candidate CSR (4,194,304 shared
+      and 1,327,104 independent dense pairs). Major session `vrvm9kbp` exposed
+      the same dense path earlier as a CUDA allocator failure. These are
+      geometry-scaling failures, not scientific outcomes.
+    - [x] Add a Torch-native uniform-grid polygon/disk sparse index and a
+      production helper that builds conservative pixel candidates, exact sparse
+      Čech neighbours, and the batched analytic power-cell/pixel operator.
+      Arbitrary convex WCS polygons are supported; a 128-square/256-cell local
+      check reduced 4,194,304 dense pairs to 106,504 candidates while preserving
+      integrated area. Also replace the Foam-only full-frame spectral anchor
+      with deterministic quadrature over sampled detector pixels.
 - [ ] Execute Day 4: 20-batch CANFAR blind test, paired intervals, report, and
   figures.
 - [ ] Submit only the strongest abstract claim whose pre-registered gate passes.
