@@ -377,8 +377,7 @@ def _build_validation_method_specs(
             {
                 "name": f"torchsky_drizzle_square_pf{suffix}",
                 "variant": (
-                    "torchsky:drizzle_square:surface_brightness:"
-                    f"pixfrac={pixfrac:.3f}"
+                    f"torchsky:drizzle_square:surface_brightness:pixfrac={pixfrac:.3f}"
                 ),
                 "drizzle_pixfrac": float(pixfrac),
             }
@@ -448,6 +447,30 @@ def _resolve_target_header(
     if mode == "published_swarp_tan":
         return dict(swarp_target_header), "published_swarp_tan"
     raise ValueError(f"unsupported target mode {mode!r}")
+
+
+def _resolve_benchmark_target_header(
+    mode: str,
+    *,
+    crop_size: int,
+    explicit_header: dict[str, Any] | None,
+    published_target_header: dict[str, Any],
+    linearized_target_header: dict[str, Any],
+    swarp_target_header: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    if explicit_header is None:
+        return _resolve_target_header(
+            mode,
+            published_target_header=published_target_header,
+            linearized_target_header=linearized_target_header,
+            swarp_target_header=swarp_target_header,
+        )
+    if (
+        int(explicit_header.get("NAXIS1", -1)) != crop_size
+        or int(explicit_header.get("NAXIS2", -1)) != crop_size
+    ):
+        raise ValueError("explicit target header shape must match --crop-size")
+    return dict(explicit_header), "explicit_fits"
 
 
 def _north_up_tan_header(header: dict[str, Any]) -> dict[str, Any]:
@@ -948,6 +971,7 @@ def run_stacker_benchmark(
     inr_steps: int,
     crop_xy0: tuple[int, int] | None = None,
     science_overrides: dict[Path, np.ndarray] | None = None,
+    target_header_override: dict[str, Any] | None = None,
     product_out_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     ref_data = _read_ext(reference_path, "SCI")
@@ -1029,8 +1053,10 @@ def run_stacker_benchmark(
 
         rows: list[dict[str, Any]] = []
         for spec in specs:
-            target_header, target_mode_used = _resolve_target_header(
+            target_header, target_mode_used = _resolve_benchmark_target_header(
                 str(spec["target_mode"]),
+                crop_size=crop_size,
+                explicit_header=target_header_override,
                 published_target_header=published_target_header,
                 linearized_target_header=linearized_target_header,
                 swarp_target_header=swarp_target_header,
@@ -1073,14 +1099,12 @@ def run_stacker_benchmark(
                 else:
                     raise ValueError(f"unsupported method kind {spec['kind']!r}")
                 raw_pred, raw_weight, extra = result
-                product_pred, product_weight, pred, weight = (
-                    _product_and_metric_arrays(
-                        raw_pred,
-                        raw_weight,
-                        target_mode_used=target_mode_used,
-                        target_header=target_header,
-                        published_target_header=published_target_header,
-                    )
+                product_pred, product_weight, pred, weight = _product_and_metric_arrays(
+                    raw_pred,
+                    raw_weight,
+                    target_mode_used=target_mode_used,
+                    target_header=target_header,
+                    published_target_header=published_target_header,
                 )
                 support_mask = _support_mask_from_weight(weight)
                 if not np.any(support_mask):
@@ -1176,6 +1200,12 @@ def main() -> int:
         default=None,
         help="Persist each reconstructed SCI/weight product on its method target grid",
     )
+    parser.add_argument(
+        "--target-header-path",
+        type=Path,
+        default=None,
+        help="FITS image supplying one exact target WCS for every selected method",
+    )
     args = parser.parse_args()
 
     band = str(args.band).upper()
@@ -1195,9 +1225,7 @@ def main() -> int:
         )
     if args.patt_nums.strip():
         pattern_numbers = tuple(
-            int(part.strip())
-            for part in args.patt_nums.split(",")
-            if part.strip()
+            int(part.strip()) for part in args.patt_nums.split(",") if part.strip()
         )
         exposure_paths = _filter_exposure_paths_by_patterns(
             exposure_paths,
@@ -1260,6 +1288,11 @@ def main() -> int:
             else None
         ),
         science_overrides=science_overrides,
+        target_header_override=(
+            dict(torchsky.read(str(args.target_header_path), return_header=True)[1])
+            if args.target_header_path is not None
+            else None
+        ),
         product_out_dir=args.product_out_dir,
     )
     for row in rows:

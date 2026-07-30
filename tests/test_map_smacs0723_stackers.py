@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +21,7 @@ from bench_map_smacs0723_stackers import (
     _filter_exposure_paths_by_patterns,
     _format_markdown,
     _injection_manifest_tensors,
+    _resolve_benchmark_target_header,
     _product_and_metric_arrays,
     _run_legacy_method,
 )
@@ -82,9 +84,7 @@ def test_validation_specs_freeze_drizzle_and_swarp_grid() -> None:
     ]
     assert by_name["drizzle_square_pf0p600"]["pixfrac"] == 0.6
     assert by_name["torchsky_drizzle_square_pf0p600"]["drizzle_pixfrac"] == 0.6
-    assert {
-        spec["target_mode"] for spec in specs
-    } == {"published_swarp_tan"}
+    assert {spec["target_mode"] for spec in specs} == {"published_swarp_tan"}
 
 
 def test_pattern_filter_uses_complete_filename_token() -> None:
@@ -108,6 +108,30 @@ def test_empty_injection_manifest_restores_coordinate_rank() -> None:
 
     assert world.shape == (0, 2)
     assert flux.shape == (0,)
+
+
+def test_explicit_target_header_is_copied_and_shape_checked() -> None:
+    explicit = {"NAXIS1": 16, "NAXIS2": 16, "CRVAL1": 12.0}
+    selected, mode = _resolve_benchmark_target_header(
+        "published_native",
+        crop_size=16,
+        explicit_header=explicit,
+        published_target_header={},
+        linearized_target_header={},
+        swarp_target_header={},
+    )
+    selected["CRVAL1"] = 13.0
+    assert mode == "explicit_fits"
+    assert explicit["CRVAL1"] == 12.0
+    with pytest.raises(ValueError, match="shape must match"):
+        _resolve_benchmark_target_header(
+            "published_native",
+            crop_size=8,
+            explicit_header=explicit,
+            published_target_header={},
+            linearized_target_header={},
+            swarp_target_header={},
+        )
 
 
 def test_fixed_cutout_uses_registered_origin() -> None:

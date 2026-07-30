@@ -821,6 +821,59 @@ def main() -> int:
                         )
                         if model_kind == "spectral_power_foam":
                             hard_model = getattr(result_model, "inner", result_model)
+                            coefficients = hard_model.cell_coefficients.detach()
+                            sites = hard_model.sites.detach()
+                            radii = hard_model.radii.detach()
+                            probe = torch.tensor(
+                                [
+                                    [0.0, 0.0],
+                                    [float(args.crop_size - 1), 0.0],
+                                    [0.0, float(args.crop_size - 1)],
+                                    [
+                                        float(args.crop_size - 1),
+                                        float(args.crop_size - 1),
+                                    ],
+                                    [
+                                        0.5 * float(args.crop_size - 1),
+                                        0.5 * float(args.crop_size - 1),
+                                    ],
+                                ],
+                                dtype=torch.float64,
+                                device=sites.device,
+                            )
+                            world = (
+                                torchsky.WCS(target_header)
+                                .to(sites.device)
+                                .pixel_to_world(probe)
+                            )
+                            target_coordinates = (
+                                hard_model.normalized_spatial_coordinates(
+                                    world[:, 0], world[:, 1]
+                                )
+                            )
+                            row["foam_coefficient_abs_max"] = float(
+                                coefficients.abs().max()
+                            )
+                            row["foam_site_x_range"] = [
+                                float(sites[:, 0].min()),
+                                float(sites[:, 0].max()),
+                            ]
+                            row["foam_site_y_range"] = [
+                                float(sites[:, 1].min()),
+                                float(sites[:, 1].max()),
+                            ]
+                            row["foam_radius_range"] = [
+                                float(radii.min()),
+                                float(radii.max()),
+                            ]
+                            row["foam_target_x_range"] = [
+                                float(target_coordinates[:, 0].min()),
+                                float(target_coordinates[:, 0].max()),
+                            ]
+                            row["foam_target_y_range"] = [
+                                float(target_coordinates[:, 1].min()),
+                                float(target_coordinates[:, 1].max()),
+                            ]
                             rendered = render_spectral_power_foam_observation_exact(
                                 hard_model,
                                 target_observation,
@@ -841,6 +894,10 @@ def main() -> int:
                             .numpy()
                             .astype(np.float32, copy=False)
                         ) * intensity_scale
+                        row["prediction_abs_max"] = float(np.max(np.abs(pred)))
+                        row["prediction_nonzero_fraction"] = float(
+                            np.count_nonzero(pred) / pred.size
+                        )
                     support_metric_mask = _metric_mask(pred, ref_crop, support_mask)
                     uniform_metric_mask = np.isfinite(pred) & np.isfinite(ref_crop)
                     if not np.any(uniform_metric_mask):

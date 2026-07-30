@@ -192,6 +192,12 @@ stacking-versus-INR/Foam depth result defined in
       and blank whitening, calibrates pooled 95%-purity thresholds, and hashes
       the complete configuration provenance. The real scoring run remains
       unchecked.
+    - [x] Fail the first scorer attempt before selection. Session `a0qpgq4s`
+      found that the per-band native products used six different band-derived
+      TAN headers. Add `--target-header-path` to the stacker and pin subsequent
+      native products directly to the authoritative
+      `validation-000/common-support-r9-f0p99.fits` WCS; do not relax the
+      cross-band WCS check or add a post-hoc interpolation.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
   - [x] Add `SpectralPowerFoamField` as the minimum common-operator bridge:
@@ -240,6 +246,14 @@ stacking-versus-INR/Foam depth result defined in
       check reduced 4,194,304 dense pairs to 106,504 candidates while preserving
       integrated area. Also replace the Foam-only full-frame spectral anchor
       with deterministic quadrature over sampled detector pixels.
+    - [x] Complete the corrected independent 128-square execution matrix at
+      `7eee607`. Sessions `akbnf5c1`, `id61mt1s`, `f9luvv7y`, `dgq3oh2u`,
+      `pe4hbzgw`, and `u132cqex` all fit and hard-rendered successfully at
+      about 106 MB peak accelerator memory and 5.9--7.4 s fit time per band.
+      Their hard products are identically zero, so this is a sparse-operator
+      execution pass and a model/configuration failure, not scientific
+      evidence. Persist coefficient, geometry/target-range, and output-support
+      diagnostics in the next run before changing capacity or learning rate.
 - [ ] Execute Day 4: 20-batch CANFAR blind test, paired intervals, report, and
   figures.
 - [ ] Submit only the strongest abstract claim whose pre-registered gate passes.

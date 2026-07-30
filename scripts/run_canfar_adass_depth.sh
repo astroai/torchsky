@@ -96,6 +96,8 @@ case "${mode}" in
         --crop-mode center \
         --crop-x0 112 \
         --crop-y0 0 \
+        --target-header-path \
+          "${validation_root}/validation-000/common-support-r9-f0p99.fits" \
         --validation-classical \
         --drizzle-pixfracs 0.8,1.0 \
         --methods "${methods}" \
@@ -106,11 +108,11 @@ case "${mode}" in
     done
     ;;
   native-score)
+    native_input_root_pattern=${NATIVE_INPUT_ROOT_PATTERN:-/arc/projects/ots/torchsky-runs/20260729-smacs-native-validation-d8fece0-{band}}
     pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
       python "${source_root}/scripts/run_local_sphere_bench.py" \
       "${source_root}/benchmarks/score_smacs0723_native_classical.py" \
-      --input-root-pattern \
-        "/arc/projects/ots/torchsky-runs/20260729-smacs-native-validation-d8fece0-{band}" \
+      --input-root-pattern "${native_input_root_pattern}" \
       --validation-root \
         /arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940 \
       --effective-psf-root \
