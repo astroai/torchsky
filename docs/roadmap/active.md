@@ -268,15 +268,25 @@ stacking-versus-INR/Foam depth result defined in
       and both hard products have 100% nonzero pixels. This passes the geometry
       and execution gate, but its near-zero source-contrast slopes do not yet
       support a depth claim.
-    - [ ] Run one two-band blank fit on the exact frozen 512-square validation
-      WCS. Require finite/nonzero hard products and sensible flux/contrast
-      diagnostics before launching positive validation batches.
+    - [x] Run one two-band blank fit on the exact frozen 512-square validation
+      WCS and pass the execution/memory gate.
       Sessions `y139noqg` at `618f064` (all exposures) and `sv73lk92` at
       `700c3e3` (matched `PATT_NUM=3,8`) both failed before optimization:
       the diagnostic initial-loss render formed dense smooth memberships for
       every 512-square pixel at once and tripped the H100 allocator. The exact
-      hard renderer was not reached. The next exact run uses exact 64-square
-      diagnostic tiles plus streamed 128-square PSF-aware training patches.
+      hard renderer was not reached. Session `omf0qjkg` at `eb6cd59` then
+      completed the same matched-split blank with exact 64-square diagnostics
+      and streamed 128-square PSF-aware patches: 41.3 s for 50 steps,
+      186,634,752 bytes peak accelerator memory, and finite hard products with
+      about 98.7% nonzero pixels.
+    - [ ] Pass the separate blank scientific-fidelity gate before launching
+      positive validation batches. The successful 16-square-grid execution
+      run recovered source-contrast slopes near `-4.6e-6` and support-flux
+      ratios of 0.0155/0.0245. Output rescaling was already correct; 256 cells
+      are far too coarse for the 512-square JWST target. The next exact commit
+      records intensity scale plus initial/final loss, uses the WCS-defined
+      `[-0.5,0.5]` footprint bound with a 10% edge margin, and shrinks smooth
+      patch/diagnostic tiles as grid capacity grows.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous
       joint benchmark discovered all 36/9 exposures per band, while classical
       validation uses only `PATT_NUM={3,8}` (8/2 exposures). `--patt-nums`

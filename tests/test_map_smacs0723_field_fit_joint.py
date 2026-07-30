@@ -20,6 +20,7 @@ if str(BENCHMARKS) not in sys.path:
 
 from bench_map_smacs0723_field_fit_joint import _format_markdown, _summarize_by_model  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _background_subtracted_source_stats  # noqa: E402
+from bench_map_smacs0723_field_fit_joint import _foam_training_tile_side  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _joint_real_fit_kwargs  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _preview_uint8  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _regular_foam_model_kwargs  # noqa: E402
@@ -125,6 +126,20 @@ def test_joint_real_foam_fit_bounds_psf_training_and_diagnostics() -> None:
     assert kwargs["diagnostic_spatial_tile_hw"] == (64, 64)
 
 
+def test_joint_real_foam_fit_scales_tiles_with_grid_capacity() -> None:
+    kwargs = _joint_real_fit_kwargs(
+        "spectral_power_foam",
+        crop_size=512,
+        steps=50,
+        num_observations=16,
+        foam_grid_side=256,
+    )
+
+    assert _foam_training_tile_side(crop_size=512, grid_side=256) == 32
+    assert kwargs["training_patch_size"] == 32
+    assert kwargs["diagnostic_spatial_tile_hw"] == (32, 32)
+
+
 def test_regular_foam_initialization_is_deterministic_and_pixel_independent() -> None:
     first = _regular_foam_model_kwargs(grid_side=3, basis_count=4)
     second = _regular_foam_model_kwargs(grid_side=3, basis_count=4)
@@ -134,6 +149,18 @@ def test_regular_foam_initialization_is_deterministic_and_pixel_independent() ->
     assert bool(torch.all(first["radii"] > 0))
     torch.testing.assert_close(first["sites"], second["sites"])
     torch.testing.assert_close(first["radii"], second["radii"])
+
+
+def test_regular_foam_footprint_extent_covers_normalized_domain() -> None:
+    kwargs = _regular_foam_model_kwargs(grid_side=16, basis_count=4, extent=0.55)
+    sites = kwargs["sites"]
+    radii = kwargs["radii"]
+    corners = torch.tensor(
+        [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]]
+    )
+    distance = torch.cdist(corners, sites)
+
+    assert bool(torch.all(distance.min(dim=1).values <= radii.max()))
 
 
 def test_source_metric_mask_prefers_bright_reference_structure() -> None:

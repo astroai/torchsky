@@ -74,6 +74,8 @@ from torchsky.map import (  # noqa: E402
 
 
 REAL_JOINT_CASE = "tpv_field_fit_deep_multiband_broad"
+FOAM_FOOTPRINT_EXTENT = 0.55
+FOAM_MAX_SMOOTH_PAIRS = 64 * 1024 * 1024
 
 
 def _parse_csv(value: str) -> list[str]:
@@ -124,6 +126,23 @@ def _regular_foam_model_kwargs(
         "temperature_start": 4.0,
         "temperature_end": 24.0,
     }
+
+
+def _foam_training_tile_side(*, crop_size: int, grid_side: int) -> int:
+    """Bound dense smooth memberships while increasing fixed-grid capacity."""
+    crop = int(crop_size)
+    side = int(grid_side)
+    if crop <= 0:
+        raise ValueError("crop_size must be positive")
+    if side < 2:
+        raise ValueError("grid_side must be at least 2")
+    pair_limited = math.isqrt(FOAM_MAX_SMOOTH_PAIRS // (side * side))
+    if pair_limited < 8:
+        raise ValueError(
+            "Foam grid exceeds the dense smooth-training capacity at the "
+            f"{FOAM_MAX_SMOOTH_PAIRS:,}-pair limit"
+        )
+    return min(crop, 128, pair_limited)
 
 
 def _preview_uint8(image: np.ndarray) -> np.ndarray:
@@ -288,6 +307,7 @@ def _joint_real_fit_kwargs(
     crop_size: int,
     steps: int,
     num_observations: int,
+    foam_grid_side: int = 16,
 ) -> dict[str, Any]:
     kwargs = _field_fit_kwargs_for_model(
         model_kind,
@@ -298,15 +318,19 @@ def _joint_real_fit_kwargs(
     if model_kind == "coadd_bilinear":
         return kwargs
     if model_kind == "spectral_power_foam":
+        tile_side = _foam_training_tile_side(
+            crop_size=int(crop_size),
+            grid_side=int(foam_grid_side),
+        )
         kwargs["lr"] = 1.0e-3
         kwargs["curriculum"] = "feature_scale_ramp"
         kwargs["num_spectral_samples"] = 5
         kwargs["training_spectral_sampling"] = "deterministic_quadrature"
         kwargs["spectral_anchor_observations_per_step"] = 0
         kwargs["spectral_anchor_loss_weight"] = 0.0
-        kwargs["training_patch_size"] = min(int(crop_size), 128)
+        kwargs["training_patch_size"] = tile_side
         kwargs["streaming_accumulation"] = True
-        kwargs["diagnostic_spatial_tile_hw"] = (64, 64)
+        kwargs["diagnostic_spatial_tile_hw"] = (min(tile_side, 64),) * 2
     kwargs["observations_per_step"] = min(max(num_observations, 1), 12)
     kwargs["observation_sampling"] = "band_balanced"
     if model_kind != "spectral_power_foam":
@@ -480,6 +504,15 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=101)
     parser.add_argument("--foam-grid-side", type=int, default=32)
     parser.add_argument("--foam-basis-count", type=int, default=4)
+    parser.add_argument(
+        "--foam-extent",
+        type=float,
+        default=FOAM_FOOTPRINT_EXTENT,
+        help=(
+            "Half-width of the deterministic normalized Foam grid. The field "
+            "domain maps the exposure-footprint union inside +/-0.5."
+        ),
+    )
     parser.add_argument(
         "--models",
         default="coadd_bilinear,spectral_basis_field,sky_encoder_resmlp,sky_lambda_feature_field,operator_constrained_feature_field",
@@ -833,12 +866,14 @@ def main() -> int:
                 model_kwargs = _regular_foam_model_kwargs(
                     grid_side=int(args.foam_grid_side),
                     basis_count=int(args.foam_basis_count),
+                    extent=float(args.foam_extent),
                 )
             fit_kwargs = _joint_real_fit_kwargs(
                 model_kind,
                 crop_size=int(args.crop_size),
                 steps=int(args.steps),
                 num_observations=len(normalized_observations),
+                foam_grid_side=int(args.foam_grid_side),
             )
             if forward_ctx_tuple is not None:
                 fit_kwargs = dict(fit_kwargs)
@@ -864,7 +899,12 @@ def main() -> int:
                 result.model,
                 fit_time_ms,
                 fit_kwargs,
-                dict(result.diagnostics or {}),
+                {
+                    **dict(result.diagnostics or {}),
+                    "initial_loss": float(result.initial_loss),
+                    "final_loss": float(result.final_loss),
+                    "last_training_loss": float(result.loss_history[-1]),
+                },
             )
 
         for entry in band_entries:
@@ -903,6 +943,15 @@ def main() -> int:
                         )
                         row["spectral_samples"] = int(
                             fit_kwargs.get("num_spectral_samples", 1)
+                        )
+                        row["intensity_scale"] = float(intensity_scale)
+                        row["initial_loss"] = float(fit_diagnostics["initial_loss"])
+                        row["final_loss"] = float(fit_diagnostics["final_loss"])
+                        row["last_training_loss"] = float(
+                            fit_diagnostics["last_training_loss"]
+                        )
+                        row["training_patch_size"] = int(
+                            fit_kwargs.get("training_patch_size") or args.crop_size
                         )
                         performance = fit_diagnostics.get("performance_profile", {})
                         row["peak_accelerator_memory_bytes"] = int(
@@ -963,6 +1012,12 @@ def main() -> int:
                                 float(radii.min()),
                                 float(radii.max()),
                             ]
+                            row["foam_extent"] = float(args.foam_extent)
+                            row["foam_grid_cell_width"] = (
+                                2.0
+                                * float(args.foam_extent)
+                                / float(args.foam_grid_side)
+                            )
                             row["foam_target_x_range"] = [
                                 float(target_coordinates[:, 0].min()),
                                 float(target_coordinates[:, 0].max()),
@@ -1101,6 +1156,8 @@ def main() -> int:
             "seed": int(args.seed),
             "foam_grid_side": int(args.foam_grid_side),
             "foam_basis_count": int(args.foam_basis_count),
+            "foam_extent": float(args.foam_extent),
+            "intensity_scale": float(intensity_scale),
             "patt_nums": list(pattern_numbers),
             "crop_x0": args.crop_x0,
             "crop_y0": args.crop_y0,

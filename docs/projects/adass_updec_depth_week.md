@@ -466,11 +466,22 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     the classical stackers' 8/2 short-/long-band exposure counts. The adapter
     records the selected patterns and the CANFAR validation runner defaults to
     them; all-exposure Foam products are excluded from method comparison.
-  - [ ] Pass the exact 512-square blank gate with bounded smooth rendering.
+  - [x] Pass the exact 512-square blank execution gate with bounded smooth
+    rendering.
     The first all-exposure and matched-split attempts failed in the same
     pre-fit dense diagnostic render, before the sparse hard operator. Exact
-    tiled initial/final diagnostics and streamed PSF-aware training patches are
-    implemented locally and await the next exact-commit H100 run.
+    tiled initial/final diagnostics and streamed PSF-aware training patches
+    reduced session `omf0qjkg` at `eb6cd59` to 186,634,752 bytes peak H100
+    allocation and 41.3 s for 50 steps on the frozen 512-square WCS. Both hard
+    products were finite and about 98.7% nonzero.
+  - [ ] Pass the separate exact 512-square scientific-fidelity gate. The same
+    16-square-grid run recovered source-contrast slopes near `-4.6e-6` and only
+    1.6--2.5% of support flux. Physical-unit output scaling was present; this
+    256-cell model spans roughly 75--140 target pixels per cell and is an
+    under-capacity diagnostic, not a depth result. Record normalization and
+    initial/final losses, contract the WCS-only grid to the footprint bound,
+    and scale smooth tiles inversely with cell count before testing a denser
+    fixed grid.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the

@@ -53,6 +53,7 @@ case "${mode}" in
     steps=${FOAM_STEPS:-2}
     grid_side=${FOAM_GRID_SIDE:-4}
     basis_count=${FOAM_BASIS_COUNT:-3}
+    extent=${FOAM_EXTENT:-0.55}
     seed=${FOAM_SEED:-101}
     patt_nums=${FOAM_PATT_NUMS:-}
     pixi run --manifest-path "${source_root}/pixi.toml" -e smacs-cuda -- \
@@ -68,6 +69,7 @@ case "${mode}" in
       --seed "${seed}" \
       --foam-grid-side "${grid_side}" \
       --foam-basis-count "${basis_count}" \
+      --foam-extent "${extent}" \
       --models spectral_power_foam \
       --json-out "${artifact_root}/shared-foam.json" \
       --markdown-out "${artifact_root}/shared-foam.md" \
@@ -79,6 +81,7 @@ case "${mode}" in
     steps=${FOAM_STEPS:-200}
     grid_side=${FOAM_GRID_SIDE:-32}
     basis_count=${FOAM_BASIS_COUNT:-4}
+    extent=${FOAM_EXTENT:-0.55}
     seed=${FOAM_SEED:-101}
     patt_nums=${FOAM_PATT_NUMS:-3,8}
     validation_root=/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940
@@ -112,6 +115,7 @@ case "${mode}" in
         --seed "${seed}" \
         --foam-grid-side "${grid_side}" \
         --foam-basis-count "${basis_count}" \
+        --foam-extent "${extent}" \
         --models spectral_power_foam \
         "${injection_args[@]}" \
         --json-out "${batch_root}/shared-foam.json" \
