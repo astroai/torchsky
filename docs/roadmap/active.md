@@ -261,18 +261,25 @@ stacking-versus-INR/Foam depth result defined in
       first detector `CRVAL` and detector size but ignored shifted cutout
       footprints and pointing separation. This is a domain-geometry defect,
       not evidence against Foam or for a larger model.
-    - [ ] Re-run the two-band diagnostic after the domain estimator is derived
-      from the union of actual detector-edge WCS footprints. Require target
-      coordinates inside the declared Foam support, nonzero coefficients, and
-      nonzero hard products before launching injected validation.
+    - [x] Re-run the two-band diagnostic after deriving the domain from the
+      union of actual detector-edge WCS footprints. Session `snrobkst` at
+      `51b757e` moved the target from roughly `(-11,+2)` to
+      `x=-0.26..0.19`, `y=-0.22..0.23`; learned coefficients reached 0.0272,
+      and both hard products have 100% nonzero pixels. This passes the geometry
+      and execution gate, but its near-zero source-contrast slopes do not yet
+      support a depth claim.
+    - [ ] Run one two-band blank fit on the exact frozen 512-square validation
+      WCS. Require finite/nonzero hard products and sensible flux/contrast
+      diagnostics before launching positive validation batches.
     - [x] Wire the same frozen common-world detector injection into the joint
       field adapter without modifying archived inputs. `--injection-manifest`
       now feeds transient SCI overrides to both the differentiable observations
       and the coadd diagnostic; `--target-header-path` plus fixed crop
       coordinates pins every hard-rendered band to the exact classical WCS.
       Runner mode `foam-validation` persists blank and all three validation
-      batches separately. Do not launch the four-fit matrix until the zero-hard-
-      product diagnostic is resolved.
+      batches separately; `FOAM_VALIDATION_BATCHES` can select a comma-separated
+      subset and rejects unknown batch names. Do not launch the four-fit matrix
+      until the exact-grid blank passes.
 - [ ] Execute Day 4: 20-batch CANFAR blind test, paired intervals, report, and
   figures.
 - [ ] Submit only the strongest abstract claim whose pre-registered gate passes.

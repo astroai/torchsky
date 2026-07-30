@@ -458,6 +458,10 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
 - [ ] Initialize geometry without test pixels. Use a fixed deterministic grid
   for the first fair run; adaptive residual initialization is a validation-only
   ablation.
+  - [x] Fix the real-data field domain to use the union of detector-edge WCS
+    footprints rather than the first detector `CRVAL`. H100 session `snrobkst`
+    at `51b757e` produced nonzero coefficients and exact hard products for the
+    first time; this is a geometry gate, not a depth result.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the

@@ -80,7 +80,13 @@ case "${mode}" in
     seed=${FOAM_SEED:-101}
     validation_root=/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940
     target_header_path=${validation_root}/validation-000/common-support-r9-f0p99.fits
-    for batch in blank validation-000 validation-001 validation-002; do
+    IFS=',' read -r -a validation_batches <<< \
+      "${FOAM_VALIDATION_BATCHES:-blank,validation-000,validation-001,validation-002}"
+    for batch in "${validation_batches[@]}"; do
+      case "${batch}" in
+        blank | validation-000 | validation-001 | validation-002) ;;
+        *) echo "unsupported Foam validation batch: ${batch}" >&2; exit 2 ;;
+      esac
       injection_args=()
       if [[ "${batch}" != blank ]]; then
         injection_args=(
