@@ -201,7 +201,7 @@ def build_union_canvas(
     pixel_scale_arcsec: float | None = None,
     padding_pixels: int = 8,
 ) -> UnionCanvas:
-    """Plan a rectangular TAN canvas covering the union of WCS footprints.
+    """Plan a rectangular TAN canvas covering the union of exposure footprints.
 
     No science image is resampled or coadded here.
     """
@@ -288,6 +288,19 @@ class WCSGeometryBank:
         uv: Tensor,
         exposure_id: Tensor,
     ) -> tuple[Tensor, Tensor, Tensor]:
+        if uv.ndim != 2 or uv.shape[1] != 2:
+            raise ValueError(f"uv must have shape [N,2], got {tuple(uv.shape)}")
+        if exposure_id.ndim != 1:
+            raise ValueError(
+                "exposure_id must have shape [N], "
+                f"got {tuple(exposure_id.shape)}"
+            )
+        if uv.shape[0] != exposure_id.shape[0]:
+            raise ValueError(
+                "uv and exposure_id must contain the same number of rows: "
+                f"{uv.shape[0]} != {exposure_id.shape[0]}"
+            )
+
         source, target = self._on(uv.device)
         uv64 = uv.double()
         xy = torch.empty_like(uv64)
@@ -681,28 +694,49 @@ class WCSAwareMultiWavelengthINR(nn.Module):
                 offset_chunk = offsets[start:stop]
                 count = int(offset_chunk.shape[0])
                 query_uv = uv[:, None, :] + offset_chunk[None, :, :]
-                query_exposure = exposure_id[:, None].expand(-1, count)
                 query_uv_flat = query_uv.reshape(-1, 2)
-                query_exposure_flat = query_exposure.reshape(-1)
 
-                def evaluate_chunk(query: Tensor) -> Tensor:
-                    latent, valid = self.spatial_latent(query, query_exposure_flat)
+                # Activation checkpointing recomputes this function during
+                # backward, after the outer loop has advanced. Bind every
+                # ragged-chunk value explicitly so recomputation cannot combine
+                # an earlier query with the final short chunk's metadata.
+                def evaluate_chunk(
+                    query: Tensor,
+                    base_exposure_id: Tensor,
+                    chunk_count: int = count,
+                    chunk_start: int = start,
+                    chunk_stop: int = stop,
+                ) -> Tensor:
+                    query_exposure = (
+                        base_exposure_id[:, None]
+                        .expand(-1, chunk_count)
+                        .reshape(-1)
+                    )
+                    latent, valid = self.spatial_latent(query, query_exposure)
                     contributions: list[Tensor] = []
                     for sample_index in range(wavelengths.shape[1]):
                         wave = wavelengths[:, sample_index : sample_index + 1].expand(
-                            -1, count
+                            -1, chunk_count
                         )
                         scene = self.decode(
                             latent,
                             wave.reshape(-1),
                             valid,
-                        ).reshape(uv.shape[0], count)
+                        ).reshape(uv.shape[0], chunk_count)
                         kernel = psf.kernel[
-                            exposure_id,
+                            base_exposure_id,
                             sample_index,
-                        ].reshape(uv.shape[0], total_offsets)[:, start:stop]
+                        ].reshape(uv.shape[0], total_offsets)[
+                            :, chunk_start:chunk_stop
+                        ]
                         contributions.append(
-                            (scene * kernel.to(device=scene.device, dtype=scene.dtype)).sum(-1)
+                            (
+                                scene
+                                * kernel.to(
+                                    device=scene.device,
+                                    dtype=scene.dtype,
+                                )
+                            ).sum(-1)
                         )
                     return torch.stack(contributions, dim=-1)
 
@@ -710,10 +744,11 @@ class WCSAwareMultiWavelengthINR(nn.Module):
                     chunk_value = checkpoint(
                         evaluate_chunk,
                         query_uv_flat,
+                        exposure_id,
                         use_reentrant=False,
                     )
                 else:
-                    chunk_value = evaluate_chunk(query_uv_flat)
+                    chunk_value = evaluate_chunk(query_uv_flat, exposure_id)
                 convolved = convolved + chunk_value
             prediction = (weights * convolved).sum(dim=-1)
 
