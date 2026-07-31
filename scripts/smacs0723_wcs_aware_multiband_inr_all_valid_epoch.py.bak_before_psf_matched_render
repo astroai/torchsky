@@ -1,0 +1,875 @@
+#!/usr/bin/env python3
+"""A1 NeRF: all-valid epoch sampling, 400/400 batches, PSF, and tracking.
+
+The baseline manifest supplies only the completed run2 exposure selection,
+frozen WCS, bandpass quadrature, normalization, loss, and optimizer settings.
+This launcher forces A1 NeRF, all valid native pixels, epoch sampling without
+replacement, 400/400 SW/LW samples, and a wavelength-dependent PSF bank.
+
+After training it saves:
+  * PSF metadata and the resolved run configuration;
+  * sampled native observation residuals after PSF + bandpass + background;
+  * intrinsic A1 bandpass fields on each band's exact UPDC grid;
+  * A1-minus-UPDC residual and median-matched residual FITS;
+  * per-band residual statistics and one tracking manifest.
+
+F090W UPDC is used as the internal high-resolution training canvas by default.
+The final six fields are not forced onto that grid: every band is rendered on
+its own UPDC FITS template, preserving the SW/LW output-grid difference.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+from dataclasses import asdict, is_dataclass
+from datetime import datetime, timezone
+import json
+import math
+from pathlib import Path
+import sys
+import traceback
+from typing import Any, Sequence
+
+import numpy as np
+import torch
+from astropy.io import fits
+from astropy.table import Table
+from astropy.wcs import WCS as AstropyWCS
+from astropy.wcs.utils import proj_plane_pixel_scales
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+for path in (ROOT, SRC):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+import scripts.smacs0723_wcs_aware_literature_ablation as a1  # noqa: E402
+from torchsky.map.wcs_aware_calibration import build_psf_calibration  # noqa: E402
+
+BANDS = ("F090W", "F150W", "F200W", "F277W", "F356W", "F444W")
+DEFAULT_UPDC_DIR = Path("/arc/projects/ots/jwst_smacs0723/data")
+DEFAULT_UPDC_PATTERN = "{band}b_UPDC-v2_iter10_i2d.fits.fz"
+
+
+def jsonable(value: Any) -> Any:
+    if is_dataclass(value):
+        return jsonable(asdict(value))
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().tolist()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(k): jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [jsonable(v) for v in value]
+    return value
+
+
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(jsonable(payload), indent=2), encoding="utf-8")
+
+
+def now_utc() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def parse_band_float_map(text: str) -> dict[str, float]:
+    result: dict[str, float] = {}
+    for token in str(text).split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "=" not in token:
+            raise ValueError(f"expected BAND=value, got {token!r}")
+        band, value = token.split("=", 1)
+        result[band.strip().upper()] = float(value)
+    return result
+
+
+def parse_band_path_map(values: Sequence[str]) -> dict[str, Path]:
+    result: dict[str, Path] = {}
+    for token in values:
+        if "=" not in token:
+            raise ValueError(f"expected BAND=FITS, got {token!r}")
+        band, raw = token.split("=", 1)
+        band = band.strip().upper()
+        if band not in BANDS:
+            raise ValueError(f"unsupported band {band!r}")
+        result[band] = Path(raw).expanduser().resolve()
+    return result
+
+
+def launcher_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--batch-size", type=int, nargs="+", default=[400, 400])
+    parser.add_argument(
+        "--psf-mode", choices=("none", "gaussian", "npy", "stpsf"), default="stpsf"
+    )
+    parser.add_argument("--psf-size", type=int, default=15)
+    parser.add_argument("--psf-fwhm-pix", default="")
+    parser.add_argument("--default-psf-fwhm-pix", type=float, default=None)
+    parser.add_argument("--psf-kernel-dir", type=Path, default=None)
+    parser.add_argument("--psf-cache-dir", type=Path, default=None)
+    parser.add_argument("--stpsf-extension", default="DET_DIST")
+    parser.add_argument("--allow-static-stpsf-fallback", action="store_true")
+    parser.add_argument("--psf-offset-chunk", type=int, default=32)
+    parser.add_argument("--no-checkpoint-psf", action="store_true")
+
+    parser.add_argument("--updc-dir", type=Path, default=DEFAULT_UPDC_DIR)
+    parser.add_argument("--updc-pattern", default=DEFAULT_UPDC_PATTERN)
+    parser.add_argument(
+        "--updc-reference", action="append", default=[], metavar="BAND=FITS"
+    )
+    parser.add_argument(
+        "--updc-zero-is-invalid", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument("--use-baseline-canvas", action="store_true")
+    parser.add_argument("--also-render-union", action="store_true")
+    parser.add_argument(
+        "--diagnostics", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument("--diagnostic-tile-pixels", type=int, default=65536)
+    parser.add_argument("--native-residual-samples-per-exposure", type=int, default=512)
+    parser.add_argument(
+        "--save-median-matched-residual",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    return parser
+
+
+def has_option(arguments: Sequence[str], name: str) -> bool:
+    return any(arg == name or arg.startswith(name + "=") for arg in arguments)
+
+
+def option_value(arguments: Sequence[str], name: str) -> str | None:
+    for i, arg in enumerate(arguments):
+        if arg.startswith(name + "="):
+            return arg.split("=", 1)[1]
+        if arg == name and i + 1 < len(arguments):
+            return arguments[i + 1]
+    return None
+
+
+def normalize_batch(values: Sequence[int]) -> int | list[int]:
+    parsed = [int(v) for v in values]
+    if len(parsed) not in (1, 2) or min(parsed) <= 0:
+        raise ValueError("--batch-size accepts one total or two positive SW/LW values")
+    return parsed[0] if len(parsed) == 1 else parsed
+
+
+def batch_label(value: int | Sequence[int]) -> str:
+    return f"total{value}" if isinstance(value, int) else "_".join(map(str, value))
+
+
+def resolve_references(args: argparse.Namespace) -> dict[str, Path]:
+    overrides = parse_band_path_map(args.updc_reference)
+    root = args.updc_dir.expanduser().resolve()
+    return {
+        band: overrides.get(band, root / args.updc_pattern.format(band=band)).resolve()
+        for band in BANDS
+    }
+
+
+def read_reference(
+    path: Path, *, zero_is_invalid: bool
+) -> tuple[np.ndarray, fits.Header, np.ndarray, dict[str, Any]]:
+    with fits.open(path, memmap=False) as hdul:
+        image_hdu = None
+        for hdu in hdul:
+            if hdu.data is None or np.ndim(hdu.data) != 2:
+                continue
+            if str(hdu.header.get("EXTNAME", "")).upper() == "SCI":
+                image_hdu = hdu
+                break
+            if image_hdu is None:
+                image_hdu = hdu
+        if image_hdu is None:
+            raise ValueError(f"no 2D image HDU in {path}")
+        data = np.asarray(image_hdu.data, dtype=np.float32)
+        header = image_hdu.header.copy()
+        valid = np.isfinite(data)
+        coverage_name = None
+        for name in ("WHT", "WEIGHT", "COVERAGE", "NEXP"):
+            if name in hdul and hdul[name].data is not None:
+                coverage = np.asarray(hdul[name].data)
+                if coverage.shape == data.shape:
+                    valid &= np.isfinite(coverage) & (coverage > 0)
+                    coverage_name = name
+                    break
+        if "UPDCMASK" in hdul and hdul["UPDCMASK"].data is not None:
+            mask = np.asarray(hdul["UPDCMASK"].data)
+            if mask.shape == data.shape:
+                valid &= np.isfinite(mask) & (mask == 0)
+        if zero_is_invalid:
+            valid &= data != 0.0
+    return data, header, valid, {
+        "path": str(path),
+        "shape": list(data.shape),
+        "bunit": header.get("BUNIT"),
+        "coverage_extension": coverage_name,
+        "zero_is_invalid": zero_is_invalid,
+        "valid_fraction": float(valid.mean()),
+    }
+
+
+def write_image(
+    path: Path,
+    data: np.ndarray,
+    header: fits.Header,
+    *,
+    band: str,
+    stage: str,
+    reference: Path | None,
+) -> None:
+    out_header = header.copy()
+    out_header["BAND"] = band
+    out_header["MODEL"] = "A1_NERF"
+    out_header["STAGE"] = stage
+    out_header["HISTORY"] = "Generated by A1 all-valid 400/400 PSF launcher"
+    if reference is not None:
+        out_header["HISTORY"] = f"Reference: {reference}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fits.PrimaryHDU(np.asarray(data), header=out_header).writeto(path, overwrite=False)
+
+
+def bandpass_for_band(
+    pools: Sequence[Any], wavelength: torch.Tensor, weight: torch.Tensor, band: str
+) -> tuple[int, torch.Tensor, torch.Tensor, dict[str, Any]]:
+    indices = [i for i, pool in enumerate(pools) if str(pool.band).upper() == band]
+    if not indices:
+        raise ValueError(f"no exposure for {band}")
+    representative = indices[0]
+    wave = wavelength[representative].detach().cpu().float()
+    band_weight = weight[representative].detach().cpu().float()
+    band_weight /= band_weight.sum().clamp_min(1.0e-20)
+    max_dw = max(float((wavelength[i].cpu() - wave).abs().max()) for i in indices)
+    max_dwt = max(float((weight[i].cpu() - band_weight).abs().max()) for i in indices)
+    metadata = {
+        "representative_exposure": representative,
+        "exposure_count": len(indices),
+        "quadrature_wavelength": wave.tolist(),
+        "quadrature_weight": band_weight.tolist(),
+        "max_same_band_wavelength_difference": max_dw,
+        "max_same_band_weight_difference": max_dwt,
+    }
+    return representative, wave, band_weight, metadata
+
+
+def render_intrinsic_field(
+    *,
+    model: torch.nn.Module,
+    canvas: Any,
+    template_header: fits.Header,
+    representative: int,
+    wavelength: torch.Tensor,
+    weight: torch.Tensor,
+    intensity_scale: float,
+    device: torch.device,
+    tile_pixels: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    height = int(template_header["NAXIS2"])
+    width = int(template_header["NAXIS1"])
+    template_wcs = AstropyWCS(template_header).celestial
+    union_wcs = AstropyWCS(canvas.header).celestial
+    field = np.full((height, width), np.nan, dtype=np.float32)
+    union_valid = np.zeros((height, width), dtype=bool)
+    field_flat = field.reshape(-1)
+    valid_flat = union_valid.reshape(-1)
+    wave_values = wavelength.numpy()
+    weight_values = weight.numpy()
+
+    model.to(device).eval()
+    with torch.inference_mode():
+        for start in range(0, height * width, tile_pixels):
+            end = min(start + tile_pixels, height * width)
+            linear = np.arange(start, end, dtype=np.int64)
+            y = (linear // width).astype(np.float64)
+            x = (linear % width).astype(np.float64)
+            ra, dec = template_wcs.pixel_to_world_values(x, y)
+            ux, uy = union_wcs.world_to_pixel_values(ra, dec)
+            ux, uy = np.asarray(ux), np.asarray(uy)
+            valid = (
+                np.isfinite(ux)
+                & np.isfinite(uy)
+                & (ux >= 0)
+                & (ux <= canvas.shape[1] - 1)
+                & (uy >= 0)
+                & (uy <= canvas.shape[0] - 1)
+            )
+            tile = np.full(end - start, np.nan, dtype=np.float32)
+            if valid.any():
+                xy = torch.from_numpy(
+                    np.stack((ux[valid], uy[valid]), axis=-1).astype(np.float32)
+                ).to(device)
+                exposure_id = torch.full(
+                    (xy.shape[0],), representative, dtype=torch.long, device=device
+                )
+                raw = model.position_encoder(xy)
+                latent = model.trunk(model.feature_alignment(raw, exposure_id))
+                inside = torch.ones(xy.shape[0], dtype=torch.bool, device=device)
+                prediction = torch.zeros(xy.shape[0], dtype=xy.dtype, device=device)
+                for wave_value, weight_value in zip(
+                    wave_values, weight_values, strict=True
+                ):
+                    wave_tensor = torch.full_like(prediction, float(wave_value))
+                    prediction += float(weight_value) * model.decode(
+                        latent, wave_tensor, inside
+                    )
+                tile[valid] = (
+                    prediction.detach().float().cpu().numpy() * intensity_scale
+                )
+            field_flat[start:end] = tile
+            valid_flat[start:end] = valid
+    return field, union_valid
+
+
+def comparison_metrics(
+    field: np.ndarray,
+    reference: np.ndarray,
+    valid: np.ndarray,
+    *,
+    chunk_pixels: int = 2_000_000,
+    quantile_sample: int = 500_000,
+) -> dict[str, Any]:
+    field_flat = field.reshape(-1)
+    ref_flat = reference.reshape(-1)
+    valid_flat = valid.reshape(-1)
+    chunks = max(1, math.ceil(field_flat.size / chunk_pixels))
+    sample_each = max(1, quantile_sample // chunks)
+    n = 0
+    sum_f = sum_r = sum_f2 = sum_r2 = sum_fr = 0.0
+    sum_d = sum_d2 = sum_abs_d = 0.0
+    samples: list[np.ndarray] = []
+    for start in range(0, field_flat.size, chunk_pixels):
+        end = min(start + chunk_pixels, field_flat.size)
+        choose = valid_flat[start:end]
+        if not choose.any():
+            continue
+        fv = field_flat[start:end][choose].astype(np.float64, copy=False)
+        rv = ref_flat[start:end][choose].astype(np.float64, copy=False)
+        dv = fv - rv
+        n += fv.size
+        sum_f += float(fv.sum())
+        sum_r += float(rv.sum())
+        sum_f2 += float(np.dot(fv, fv))
+        sum_r2 += float(np.dot(rv, rv))
+        sum_fr += float(np.dot(fv, rv))
+        sum_d += float(dv.sum())
+        sum_d2 += float(np.dot(dv, dv))
+        sum_abs_d += float(np.abs(dv).sum())
+        take = min(sample_each, dv.size)
+        samples.append(dv[np.linspace(0, dv.size - 1, take, dtype=np.int64)])
+    if n == 0:
+        raise ValueError("no common valid pixels")
+    sample = np.concatenate(samples)
+    mean_f, mean_r, mean_d = sum_f / n, sum_r / n, sum_d / n
+    var_f = max(sum_f2 / n - mean_f**2, 0.0)
+    var_r = max(sum_r2 / n - mean_r**2, 0.0)
+    covariance = sum_fr / n - mean_f * mean_r
+    corr = covariance / math.sqrt(var_f * var_r) if var_f > 0 and var_r > 0 else np.nan
+    median = float(np.median(sample))
+    return {
+        "valid_pixels": int(n),
+        "valid_fraction": float(n / field_flat.size),
+        "field_mean": mean_f,
+        "updc_mean": mean_r,
+        "residual_mean": mean_d,
+        "residual_median_approx": median,
+        "residual_std": math.sqrt(max(sum_d2 / n - mean_d**2, 0.0)),
+        "residual_mad_sigma_approx": float(1.4826 * np.median(np.abs(sample - median))),
+        "rmse": math.sqrt(sum_d2 / n),
+        "mae": sum_abs_d / n,
+        "pearson_correlation": float(corr),
+        "residual_quantiles_approx": {
+            str(q): float(np.quantile(sample, q))
+            for q in (0.01, 0.05, 0.16, 0.50, 0.84, 0.95, 0.99)
+        },
+        "quantile_sample_size": int(sample.size),
+    }
+
+
+def native_observation_residuals(
+    *,
+    model: torch.nn.Module,
+    pools: Sequence[Any],
+    wavelength: torch.Tensor,
+    weight: torch.Tensor,
+    psf_bank: Any,
+    intensity_scale: float,
+    device: torch.device,
+    samples_per_exposure: int,
+    seed: int,
+    psf_offset_chunk: int,
+    output_dir: Path,
+) -> dict[str, Any]:
+    if samples_per_exposure <= 0:
+        return {"enabled": False}
+    rng = np.random.default_rng(seed + 909)
+    model.to(device).eval()
+    psf = psf_bank.to(device) if psf_bank is not None else None
+    wave = wavelength.to(device)
+    band_weight = weight.to(device)
+    rows: list[dict[str, Any]] = []
+    with torch.inference_mode():
+        for exposure_index, pool in enumerate(pools):
+            count = min(samples_per_exposure, pool.size)
+            chosen = torch.from_numpy(
+                rng.choice(pool.size, size=count, replace=False).astype(np.int64)
+            )
+            uv = pool.uv[chosen].to(device)
+            exposure_id = torch.full(
+                (count,), exposure_index, dtype=torch.long, device=device
+            )
+            prediction, valid = model.predict_observation(
+                uv,
+                exposure_id,
+                wave,
+                band_weight,
+                psf=psf,
+                psf_offset_chunk=psf_offset_chunk,
+                checkpoint_psf_chunks=False,
+            )
+            observed = pool.value[chosen].to(device)
+            error = pool.err[chosen].to(device)
+            valid &= torch.isfinite(prediction) & torch.isfinite(observed)
+            valid &= torch.isfinite(error) & (error > 0)
+            residual = (prediction - observed)[valid]
+            z = residual / error[valid]
+            residual_np = residual.detach().cpu().numpy() * intensity_scale
+            z_np = z.detach().cpu().numpy()
+            row = {
+                "exposure_index": exposure_index,
+                "path": str(pool.path),
+                "band": str(pool.band),
+                "detector": str(pool.detector),
+                "sampled": count,
+                "valid": int(valid.sum().item()),
+                "valid_fraction": float(valid.float().mean().item()),
+            }
+            if residual_np.size:
+                row.update(
+                    {
+                        "residual_median": float(np.median(residual_np)),
+                        "rmse": float(np.sqrt(np.mean(residual_np**2))),
+                        "mae": float(np.mean(np.abs(residual_np))),
+                        "abs_z_q50": float(np.quantile(np.abs(z_np), 0.50)),
+                        "abs_z_q68": float(np.quantile(np.abs(z_np), 0.68)),
+                        "abs_z_q90": float(np.quantile(np.abs(z_np), 0.90)),
+                        "abs_z_q95": float(np.quantile(np.abs(z_np), 0.95)),
+                        "abs_z_q99": float(np.quantile(np.abs(z_np), 0.99)),
+                    }
+                )
+            rows.append(row)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    table_path = output_dir / "native_observation_residuals.ecsv"
+    Table(rows=rows).write(table_path, format="ascii.ecsv", overwrite=False)
+    summary = {
+        "enabled": True,
+        "samples_per_exposure": samples_per_exposure,
+        "PSF_applied": psf_bank is not None,
+        "bandpass_applied": True,
+        "learned_background_applied": True,
+        "residual_sign": "prediction_minus_native_observation",
+        "table": str(table_path),
+    }
+    write_json(output_dir / "native_observation_residuals.json", summary)
+    return summary
+
+
+def diagnose_band(
+    *,
+    band: str,
+    reference_path: Path,
+    context: dict[str, Any],
+    args: argparse.Namespace,
+    output_root: Path,
+) -> dict[str, Any]:
+    band_dir = output_root / band
+    band_dir.mkdir(parents=True, exist_ok=True)
+    reference, header, reference_valid, reference_info = read_reference(
+        reference_path, zero_is_invalid=args.updc_zero_is_invalid
+    )
+    representative, wave, weight, bandpass_info = bandpass_for_band(
+        context["pools"], context["wavelength"], context["weight"], band
+    )
+    field, union_valid = render_intrinsic_field(
+        model=context["model"],
+        canvas=context["canvas"],
+        template_header=header,
+        representative=representative,
+        wavelength=wave,
+        weight=weight,
+        intensity_scale=context["intensity_scale"],
+        device=context["device"],
+        tile_pixels=args.diagnostic_tile_pixels,
+    )
+    common_valid = union_valid & reference_valid & np.isfinite(field)
+    field_path = band_dir / f"{band}_A1_intrinsic_bandpass_field.fits"
+    mask_path = band_dir / f"{band}_A1_UPDC_common_valid_mask.fits"
+    residual_path = band_dir / f"{band}_A1_minus_UPDC_residual.fits"
+    write_image(
+        field_path,
+        field,
+        header,
+        band=band,
+        stage="INTRINSIC_BANDPASS_FIELD",
+        reference=reference_path,
+    )
+    write_image(
+        mask_path,
+        common_valid.astype(np.uint8),
+        header,
+        band=band,
+        stage="COMMON_VALID_MASK",
+        reference=reference_path,
+    )
+    metrics = comparison_metrics(field, reference, common_valid)
+    residual = field - reference
+    residual[~common_valid] = np.nan
+    write_image(
+        residual_path,
+        residual.astype(np.float32),
+        header,
+        band=band,
+        stage="A1_MINUS_UPDC",
+        reference=reference_path,
+    )
+    median_path = None
+    if args.save_median_matched_residual:
+        median_residual = residual - metrics["residual_median_approx"]
+        median_path = band_dir / f"{band}_A1_minus_UPDC_median_matched.fits"
+        write_image(
+            median_path,
+            median_residual.astype(np.float32),
+            header,
+            band=band,
+            stage="A1_MINUS_UPDC_MEDIAN_MATCHED",
+            reference=reference_path,
+        )
+    pixel_scale = float(
+        np.sqrt(np.prod(proj_plane_pixel_scales(AstropyWCS(header).celestial)[:2]))
+        * 3600.0
+    )
+    record = {
+        "band": band,
+        "reference": reference_info,
+        "pixel_scale_arcsec": pixel_scale,
+        "bandpass": bandpass_info,
+        "products": {
+            "intrinsic_bandpass_field": str(field_path),
+            "common_valid_mask": str(mask_path),
+            "residual_A1_minus_UPDC": str(residual_path),
+            "median_matched_residual": None if median_path is None else str(median_path),
+        },
+        "metrics": metrics,
+        "stage_definition": {
+            "intrinsic_field": "deconvolved A1 bandpass field; no final-grid PSF",
+            "PSF_applied_stage": "native observation residual diagnostics",
+        },
+    }
+    write_json(band_dir / f"{band}_diagnostics.json", record)
+    return record
+
+
+def patch_json(path: Path, additions: dict[str, Any]) -> None:
+    if not path.exists():
+        return
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.update(jsonable(additions))
+    write_json(path, payload)
+
+
+def run_diagnostics(
+    *,
+    context: dict[str, Any],
+    references: dict[str, Path],
+    args: argparse.Namespace,
+    baseline_path: Path,
+    output_dir: Path,
+    underlying_argv: Sequence[str],
+) -> dict[str, Any]:
+    checkpoint_path = Path(context["checkpoint_path"])
+    prefix = checkpoint_path.stem.removesuffix("_checkpoint")
+    diagnostics_dir = output_dir / f"{prefix}_diagnostics"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    snapshot = diagnostics_dir / "baseline_manifest_snapshot.json"
+    snapshot.write_text(baseline_path.read_text(encoding="utf-8"), encoding="utf-8")
+    native = native_observation_residuals(
+        model=context["model"],
+        pools=context["pools"],
+        wavelength=context["wavelength"],
+        weight=context["weight"],
+        psf_bank=context["psf_bank"],
+        intensity_scale=context["intensity_scale"],
+        device=context["device"],
+        samples_per_exposure=args.native_residual_samples_per_exposure,
+        seed=context["seed"],
+        psf_offset_chunk=args.psf_offset_chunk,
+        output_dir=diagnostics_dir / "native_observation_stage",
+    )
+    band_records: dict[str, Any] = {}
+    for band in BANDS:
+        try:
+            band_records[band] = diagnose_band(
+                band=band,
+                reference_path=references[band],
+                context=context,
+                args=args,
+                output_root=diagnostics_dir / "updc_field_stage",
+            )
+        except Exception as exc:
+            band_records[band] = {
+                "status": "failed",
+                "error": repr(exc),
+                "traceback": traceback.format_exc(),
+            }
+            write_json(
+                diagnostics_dir / "updc_field_stage" / band / "failure.json",
+                band_records[band],
+            )
+    tracking = {
+        "status": "complete",
+        "completed_utc": now_utc(),
+        "baseline_manifest": str(baseline_path),
+        "baseline_snapshot": str(snapshot),
+        "underlying_argv": list(underlying_argv),
+        "launcher_args": vars(args),
+        "checkpoint": str(checkpoint_path),
+        "loss_log": str(context["loss_log_path"]),
+        "PSF": context["psf_record"],
+        "training_history_tail": context.get("training_history_tail", []),
+        "native_observation_stage": native,
+        "updc_field_stage": band_records,
+        "residual_signs": {
+            "native": "prediction_minus_native_observation",
+            "UPDC": "A1_intrinsic_field_minus_UPDC",
+        },
+    }
+    tracking_path = diagnostics_dir / "tracking_manifest.json"
+    write_json(tracking_path, tracking)
+    additions = {
+        "launcher": {
+            "kind": "A1_all_valid_epoch_400_400_psf_tracking",
+            "batch_size": context["batch_spec"],
+            "PSF": context["psf_record"],
+        },
+        "diagnostics": {
+            "directory": str(diagnostics_dir),
+            "tracking_manifest": str(tracking_path),
+        },
+    }
+    patch_json(output_dir / f"{prefix}_manifest.json", additions)
+    patch_json(output_dir / f"{prefix}_summary.json", additions)
+    return tracking
+
+
+def main() -> int:
+    launcher_args, remaining = launcher_parser().parse_known_args(sys.argv[1:])
+    batch = normalize_batch(launcher_args.batch_size)
+    references = resolve_references(launcher_args)
+
+    architecture = option_value(remaining, "--architecture")
+    if architecture not in (None, "A1_nerf"):
+        raise SystemExit("this launcher only supports --architecture A1_nerf")
+    if architecture is None:
+        remaining += ["--architecture", "A1_nerf"]
+    if not has_option(remaining, "--max-pixels-per-exposure"):
+        remaining += ["--max-pixels-per-exposure", "0"]
+    if not has_option(remaining, "--sampling-mode"):
+        remaining += ["--sampling-mode", "epoch_without_replacement"]
+    if not launcher_args.use_baseline_canvas and not has_option(
+        remaining, "--target-canvas-fits"
+    ):
+        remaining += ["--target-canvas-fits", str(references["F090W"])]
+    if not launcher_args.also_render_union and not has_option(remaining, "--skip-render"):
+        remaining += ["--skip-render"]
+
+    baseline_raw = option_value(remaining, "--baseline-manifest")
+    output_raw = option_value(remaining, "--output-dir")
+    if baseline_raw is None or output_raw is None:
+        raise SystemExit("--baseline-manifest and --output-dir are required")
+    baseline_path = Path(baseline_raw).expanduser().resolve()
+    output_dir = Path(output_raw).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if launcher_args.diagnostics:
+        missing = [str(path) for path in references.values() if not path.exists()]
+        if missing:
+            raise FileNotFoundError("missing UPDC references: " + ", ".join(missing))
+    if launcher_args.psf_size <= 0 or launcher_args.psf_size % 2 != 1:
+        raise SystemExit("--psf-size must be a positive odd integer")
+    if launcher_args.diagnostic_tile_pixels <= 0:
+        raise SystemExit("--diagnostic-tile-pixels must be positive")
+
+    original_load_manifest = a1._load_manifest
+    original_artifact_prefix = a1._artifact_prefix
+    original_train_model = a1.train_model
+    context: dict[str, Any] = {"batch_spec": batch}
+
+    def load_manifest(path: Path) -> tuple[Path, dict[str, Any]]:
+        resolved, payload = original_load_manifest(path)
+        payload = copy.deepcopy(payload)
+        payload.setdefault("args", {})["batch_size"] = batch
+        payload["effective_total_batch_size"] = None
+        return resolved, payload
+
+    def artifact_prefix(
+        architecture: str,
+        *,
+        target_canvas: bool,
+        sampling_mode: str,
+        max_pixels_override: int | None,
+        resolved_max_pixels: int,
+    ) -> str:
+        base = original_artifact_prefix(
+            architecture,
+            target_canvas=target_canvas,
+            sampling_mode=sampling_mode,
+            max_pixels_override=max_pixels_override,
+            resolved_max_pixels=resolved_max_pixels,
+        )
+        psf_label = (
+            "no_psf"
+            if launcher_args.psf_mode == "none"
+            else f"{launcher_args.psf_mode}_k{launcher_args.psf_size}"
+        )
+        return f"{base}_batch{batch_label(batch)}_{psf_label}"
+
+    def train_model(
+        model: torch.nn.Module,
+        pools: Sequence[Any],
+        wavelength: torch.Tensor,
+        weight: torch.Tensor,
+        *,
+        psf: Any,
+        **kwargs: Any,
+    ) -> Any:
+        del psf
+        checkpoint_path = Path(kwargs["checkpoint_path"])
+        cache_dir = (
+            launcher_args.psf_cache_dir.expanduser().resolve()
+            if launcher_args.psf_cache_dir is not None
+            else checkpoint_path.parent / "calibration_cache" / "psf"
+        )
+        kernel_dir = (
+            launcher_args.psf_kernel_dir.expanduser().resolve()
+            if launcher_args.psf_kernel_dir is not None
+            else None
+        )
+        calibration = build_psf_calibration(
+            [pool.calibration_input() for pool in pools],
+            wavelength,
+            mode=launcher_args.psf_mode,
+            kernel_size=launcher_args.psf_size,
+            gaussian_fwhm_by_band=parse_band_float_map(launcher_args.psf_fwhm_pix),
+            default_gaussian_fwhm=launcher_args.default_psf_fwhm_pix,
+            kernel_dir=kernel_dir,
+            cache_dir=cache_dir,
+            stpsf_extension=launcher_args.stpsf_extension,
+            allow_static_stpsf_fallback=launcher_args.allow_static_stpsf_fallback,
+        )
+        psf_record = {
+            "mode": launcher_args.psf_mode,
+            "kernel_size": launcher_args.psf_size,
+            "offset_chunk": launcher_args.psf_offset_chunk,
+            "checkpoint_chunks": not launcher_args.no_checkpoint_psf,
+            "cache_dir": str(cache_dir),
+            "kernel_dir": None if kernel_dir is None else str(kernel_dir),
+            "stpsf_extension": launcher_args.stpsf_extension,
+            "metadata": calibration.metadata,
+        }
+        psf_path = checkpoint_path.with_name(
+            checkpoint_path.stem.removesuffix("_checkpoint") + "_psf_calibration.json"
+        )
+        write_json(psf_path, psf_record)
+        checkpoint_args = dict(kwargs["checkpoint_args"])
+        checkpoint_args["launcher"] = {
+            "kind": "A1_all_valid_epoch_400_400_psf_tracking",
+            "batch_size": batch,
+            "PSF": psf_record,
+        }
+        kwargs["checkpoint_args"] = checkpoint_args
+        kwargs["psf_offset_chunk"] = launcher_args.psf_offset_chunk
+        kwargs["checkpoint_psf_chunks"] = not launcher_args.no_checkpoint_psf
+        context.update(
+            {
+                "model": model,
+                "pools": pools,
+                "wavelength": wavelength.detach().cpu(),
+                "weight": weight.detach().cpu(),
+                "psf_bank": calibration.bank,
+                "psf_record": psf_record,
+                "intensity_scale": float(kwargs["intensity_scale"]),
+                "canvas": kwargs["canvas"],
+                "device": kwargs["device"],
+                "checkpoint_path": checkpoint_path,
+                "loss_log_path": Path(kwargs["loss_log_path"]),
+                "seed": int(kwargs["seed"]),
+            }
+        )
+        print(
+            json.dumps(
+                {
+                    "launcher": "A1_all_valid_epoch_400_400_psf_tracking",
+                    "batch_size": batch,
+                    "PSF": {k: v for k, v in psf_record.items() if k != "metadata"},
+                    "UPDC_references": {k: str(v) for k, v in references.items()},
+                },
+                indent=2,
+            ),
+            flush=True,
+        )
+        history = original_train_model(
+            model,
+            pools,
+            wavelength,
+            weight,
+            psf=calibration.bank,
+            **kwargs,
+        )
+        context["training_history_tail"] = [jsonable(row) for row in history[-20:]]
+        return history
+
+    a1._load_manifest = load_manifest
+    a1._artifact_prefix = artifact_prefix
+    a1.train_model = train_model
+    sys.argv = [sys.argv[0], *remaining]
+
+    try:
+        status = int(a1.main())
+        if status == 0 and launcher_args.diagnostics:
+            run_diagnostics(
+                context=context,
+                references=references,
+                args=launcher_args,
+                baseline_path=baseline_path,
+                output_dir=output_dir,
+                underlying_argv=remaining,
+            )
+        return status
+    except BaseException as exc:
+        write_json(
+            output_dir / "A1_launcher_failure.json",
+            {
+                "failed_utc": now_utc(),
+                "error": repr(exc),
+                "traceback": traceback.format_exc(),
+                "launcher_args": vars(launcher_args),
+                "underlying_argv": remaining,
+            },
+        )
+        raise
+    finally:
+        a1._load_manifest = original_load_manifest
+        a1._artifact_prefix = original_artifact_prefix
+        a1.train_model = original_train_model
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
