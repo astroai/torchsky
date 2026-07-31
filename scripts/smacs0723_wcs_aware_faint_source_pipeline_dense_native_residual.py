@@ -37,6 +37,34 @@ _DQ_MODE = "strict"
 _REPRESENTATIVES: list[tuple[int, int]] | None = None
 _POOL_SIGNATURE: tuple[tuple[str, str, str], ...] | None = None
 _ORIGINAL_SAVE_PIPELINE_CHECKPOINT = base.save_pipeline_checkpoint
+_ORIGINAL_PIXEL_SCALE_ARCSEC = base.pixel_scale_arcsec
+
+
+def _clean_header_for_wcs(header: fits.Header | dict[str, Any]) -> fits.Header:
+    """Drop commentary cards and sanitize strings before AstropyWCS parsing."""
+
+    clean = fits.Header()
+    items = header.items() if hasattr(header, "items") else []
+    for raw_key, raw_value in items:
+        key = str(raw_key).strip().upper()
+        if not key or key in {"COMMENT", "HISTORY"}:
+            continue
+        value = raw_value
+        if isinstance(value, str):
+            value = "".join(
+                character if 32 <= ord(character) <= 126 else " "
+                for character in value
+            )
+        try:
+            clean[key] = value
+        except (TypeError, ValueError):
+            # Non-WCS provenance cards should not prevent pixel-scale parsing.
+            continue
+    return clean
+
+
+def _safe_pixel_scale_arcsec(header: fits.Header | dict[str, Any]) -> float:
+    return _ORIGINAL_PIXEL_SCALE_ARCSEC(_clean_header_for_wcs(header))
 
 
 def _diagnostic_metadata() -> dict[str, Any]:
@@ -463,6 +491,7 @@ def main() -> int:
     pipeline.patched_write_json = _patched_write_json
     pipeline.save_native_residual_snapshot = _save_dense_snapshot
     base.save_pipeline_checkpoint = _patched_save_pipeline_checkpoint
+    base.pixel_scale_arcsec = _safe_pixel_scale_arcsec
     return int(pipeline.main())
 
 
