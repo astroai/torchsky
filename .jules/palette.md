@@ -23,3 +23,7 @@
 ## 2025-04-20 - Preserving Structural Shape in Specific Element Focus Rings
 **Learning:** When defining specific `:focus-visible` styles for individual UI components (like `.cmap-swatch` or `input[type="range"]`) to override global focus rings, any structural properties like `border-radius` that were applied to the element must also be included in its specific `:focus-visible` declaration. Otherwise, the element may lose its rounded corners during keyboard navigation.
 **Action:** When adding `:focus-visible` to specific classes (e.g., `.cmap-swatch:focus-visible`), copy the base element's `border-radius` into the focus rule to prevent visual mismatches or flattened corners.
+
+## 2025-05-15 - ARIA Live Regions for Status Updates
+**Learning:** For dynamic single-page applications that perform asynchronous operations (like loading data or rendering complex charts), status text changes (e.g., "Loading...", "Ready", "Error") aren't inherently announced to screen readers. This leaves visually impaired users unaware of background processes or state transitions.
+**Action:** Always add `aria-live="polite"` (and typically `aria-atomic="true"` so the entire status is read together) to status containers or footer messages that indicate the application's current state. This ensures screen readers announce these changes without jarringly interrupting the user.
