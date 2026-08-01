@@ -325,7 +325,8 @@ def predict_learnable_psf(
     dy, dx = torch.meshgrid(axis, axis, indexing="ij")
     offsets = torch.stack((dx.flatten(), dy.flatten()), -1)
     total_offsets = offsets.shape[0]
-    prediction = torch.zeros(uv.shape[0], device=uv.device, dtype=uv.dtype)
+    batch_count = int(uv.shape[0])
+    prediction = torch.zeros(batch_count, device=uv.device, dtype=uv.dtype)
     for sample in range(wave.shape[1]):
         kernel_weight = kernel[:, sample].reshape(model.num_exposures, -1)[exposure_id]
         convolved = torch.zeros_like(prediction)
@@ -333,14 +334,23 @@ def predict_learnable_psf(
             stop = min(start + max(1, offset_chunk), total_offsets)
             local_offsets = offsets[start:stop]
             local_weight = kernel_weight[:, start:stop]
-            count = local_offsets.shape[0]
+            chunk_count = int(local_offsets.shape[0])
             query = (uv[:, None] + local_offsets[None]).reshape(-1, 2)
-            query_exposure = exposure_id[:, None].expand(-1, count).reshape(-1)
-            query_wave = wave[:, sample, None].expand(-1, count).reshape(-1)
+            query_exposure = exposure_id[:, None].expand(-1, chunk_count).reshape(-1)
+            query_wave = wave[:, sample, None].expand(-1, chunk_count).reshape(-1)
 
-            def evaluate(q: Tensor, eid: Tensor, w: Tensor, kw: Tensor) -> Tensor:
+            def evaluate(
+                q: Tensor,
+                eid: Tensor,
+                w: Tensor,
+                kw: Tensor,
+                fixed_batch_count: int = batch_count,
+                fixed_chunk_count: int = chunk_count,
+            ) -> Tensor:
                 latent, valid = model.spatial_latent(q, eid)
-                scene = model.decode(latent, w, valid).reshape(uv.shape[0], count)
+                scene = model.decode(latent, w, valid).reshape(
+                    fixed_batch_count, fixed_chunk_count
+                )
                 return (scene * kw.to(scene.dtype)).sum(-1)
 
             if checkpoint_chunks and model.training and torch.is_grad_enabled():
