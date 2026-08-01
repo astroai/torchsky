@@ -41,6 +41,7 @@ base = pipeline.base
 training_mod = pipeline.training_mod
 OriginalModel = base.WCSAwareLiteratureINR
 original_dense_snapshot = dense._save_dense_snapshot
+_ORIGINAL_VALIDATE_ARGUMENTS = base.validate_arguments
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,22 @@ def parse_options(argv: Sequence[str]) -> tuple[Options, list[str]]:
         latent_weight=ns.learnable_psf_latent_weight,
         basis_weight=ns.learnable_psf_basis_weight,
     ), remaining
+
+
+def validate_arguments(args: argparse.Namespace) -> None:
+    """Reuse all core checks except the fixed-PSF mode requirement."""
+
+    original_mode = args.psf_mode
+    original_final = args.final_psf_convolution
+    try:
+        # The legacy core uses psf_mode only as a proxy for whether stage 2 has
+        # a PSF. This launcher supplies its PSF as a model submodule instead.
+        args.psf_mode = "gaussian"
+        args.final_psf_convolution = False
+        _ORIGINAL_VALIDATE_ARGUMENTS(args)
+    finally:
+        args.psf_mode = original_mode
+        args.final_psf_convolution = original_final
 
 
 class LearnablePSFField(nn.Module):
@@ -376,10 +393,15 @@ def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
 def psf_arrays(model: LearnablePSFModel, wavelength: Tensor) -> dict[str, np.ndarray]:
     with torch.inference_mode():
         device = next(model.parameters()).device
-        kernel = model.learnable_psf(wavelength.to(device)).detach().cpu().float()
-        moment = model.learnable_psf.moments(kernel)
+        kernel_device = model.learnable_psf(wavelength.to(device)).detach().float()
+        moment_device = model.learnable_psf.moments(kernel_device)
+        kernel = kernel_device.cpu()
+        moment = {
+            key: value.detach().cpu().float()
+            for key, value in moment_device.items()
+        }
     kernel_np = kernel.numpy()
-    radius = model.learnable_psf.radius.cpu().numpy().reshape(-1)
+    radius = model.learnable_psf.radius.detach().cpu().numpy().reshape(-1)
     order = np.argsort(radius)
     sorted_radius = radius[order]
     r50 = np.empty(kernel_np.shape[:2], dtype=np.float32)
@@ -731,11 +753,22 @@ def remove_option(argv: list[str], name: str, takes_value: bool) -> list[str]:
 def force_core_flags(argv: Sequence[str]) -> list[str]:
     result = list(argv)
     for name, takes_value in (
-        ("--psf-mode", True), ("--psf-size", True),
-        ("--final-psf-convolution", False), ("--no-final-psf-convolution", False),
+        ("--psf-mode", True),
+        ("--psf-size", True),
+        ("--psf-exact-core-mass", True),
+        ("--psf-wing-samples", True),
+        ("--final-psf-convolution", False),
+        ("--no-final-psf-convolution", False),
     ):
         result = remove_option(result, name, takes_value)
-    return [*result, "--psf-mode", "none", "--psf-size", "1", "--no-final-psf-convolution"]
+    return [
+        *result,
+        "--psf-mode", "none",
+        "--psf-size", "1",
+        "--psf-exact-core-mass", "1.0",
+        "--psf-wing-samples", "0",
+        "--no-final-psf-convolution",
+    ]
 
 
 def require_finetune(argv: Sequence[str]) -> None:
@@ -751,6 +784,7 @@ def main() -> int:
     OPTIONS, remaining = parse_options(sys.argv[1:])
     require_finetune(remaining)
     sys.argv = [sys.argv[0], *force_core_flags(remaining)]
+    base.validate_arguments = validate_arguments
     base.WCSAwareLiteratureINR = LearnablePSFModel
     base.parameter_groups = parameter_groups
     base.build_psf_calibration = dummy_calibration
