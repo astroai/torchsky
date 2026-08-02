@@ -217,7 +217,14 @@ stacking-versus-INR/Foam depth result defined in
       262,140 supported pixels. These are engineering timings, not depth
       evidence; the single-band real-data gate remains required. The headless
       runner now accepts `NATIVE_VALIDATION_BATCHES=blank` so that gate does not
-      silently expand into all four frozen batches.
+      silently expand into all four frozen batches. The first strict F090W
+      blank gate, session `qp8j31vb` at `2634a33`, correctly failed both
+      pixfracs with zero support instead of persisting empty products. Local
+      diagnosis found that the four-corner footprint scanner can reject a
+      curved SIP/TPV detector whose interior overlaps the target. Distorted
+      exact Drizzle now bypasses that approximation and scans the full detector
+      through the batched exact kernel; a real SIP regression has finite
+      support. Re-run only this one F090W blank gate before any fanout.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
   - [x] Add `SpectralPowerFoamField` as the minimum common-operator bridge:
@@ -326,6 +333,12 @@ stacking-versus-INR/Foam depth result defined in
       0.03, matching their roughly 0.01 physical prediction peaks after the
       measured 0.211 intensity scale was restored. Trainable geometry remains
       an explicit later ablation, never silently mixed into the fixed control.
+      A local two-band fixed-geometry control independently confirms the scale:
+      in 50 steps, `lr=0.001` reduced MSE from 2.50 to 2.34 with coefficient
+      maximum 0.048, while `lr=0.02` reached 0.429 with coefficient maximum
+      0.868 and recovered the expected red/blue contrast. This is an optimizer
+      sanity check, not real-data depth evidence. Foam headless runs now also
+      fail nonzero when a requested model fails or is missing.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous
       joint benchmark discovered all 36/9 exposures per band, while classical
       validation uses only `PATT_NUM={3,8}` (8/2 exposures). `--patt-nums`

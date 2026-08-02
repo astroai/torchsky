@@ -402,8 +402,13 @@ def _scanner_row_bounds(
         ymax=float(tgt_h) - 0.5 - float(origin_y),
     )
     if len(clipped) < 3:
-        invalid = torch.full((src_h,), -1, dtype=torch.int64, device=pixmap.device)
-        return invalid, invalid
+        # ponytail: four detector corners cannot prove that a curved WCS
+        # footprint misses the target. Scan the detector in this uncertain
+        # case; upgrade to a sampled boundary polygon if this ceiling matters.
+        return (
+            torch.zeros((src_h,), dtype=torch.int64, device=pixmap.device),
+            torch.full((src_h,), src_w - 1, dtype=torch.int64, device=pixmap.device),
+        )
     input_overlap: list[tuple[float, float]] = []
     for xout, yout in clipped:
         vin = _invert_pixmap(
@@ -751,22 +756,36 @@ def exact_square_drizzle_project(
     canvas_height, canvas_width = target.canvas_shape
     canvas_origin_y, canvas_origin_x = target.canvas_origin_yx
     half = 0.5 * max(float(drizzle_pixfrac), 1.0e-6)
-    pixmap = _build_center_pixmap(
-        source_wcs,
-        target.wcs,
-        tuple(image.shape),
-        image.device,
+    has_distortion = any(
+        getattr(wcs, "sip", None) is not None or getattr(wcs, "tpv", None) is not None
+        for wcs in (source_wcs, target.wcs)
     )
-    row_min, row_max = _scanner_row_bounds(
-        pixmap,
-        source_shape=tuple(image.shape),
-        target_shape=tuple(target.shape),
-    )
+    if has_distortion:
+        # ponytail: the corner-derived scanner assumes near-linear footprints.
+        # Exact Drizzle must not drop curved SIP/TPV interiors; use the full
+        # detector and upgrade to a sampled-boundary scanner if profiling asks.
+        row_min = torch.zeros((h_src,), dtype=torch.int64, device=image.device)
+        row_max = torch.full(
+            (h_src,), w_src - 1, dtype=torch.int64, device=image.device
+        )
+        pixmap = None
+    else:
+        pixmap = _build_center_pixmap(
+            source_wcs,
+            target.wcs,
+            tuple(image.shape),
+            image.device,
+        )
+        row_min, row_max = _scanner_row_bounds(
+            pixmap,
+            source_shape=tuple(image.shape),
+            target_shape=tuple(target.shape),
+        )
     is_subwindow = (
         tuple(target.shape) != tuple(target.canvas_shape)
         or target.canvas_origin_yx != (0, 0)
     )
-    if is_subwindow:
+    if is_subwindow and pixmap is not None:
         base_min = row_min
         base_max = row_max
         # A finite square drop can cross an internal tile when its center falls

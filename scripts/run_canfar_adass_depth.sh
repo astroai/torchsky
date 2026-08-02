@@ -81,6 +81,7 @@ case "${mode}" in
       --foam-lr "${foam_lr}" \
       "${foam_geometry_args[@]}" \
       --models spectral_power_foam \
+      --fail-on-method-error \
       --json-out "${artifact_root}/shared-foam.json" \
       --markdown-out "${artifact_root}/shared-foam.md" \
       --export-dir "${artifact_root}/products"
@@ -130,6 +131,7 @@ case "${mode}" in
         --foam-lr "${foam_lr}" \
         "${foam_geometry_args[@]}" \
         --models spectral_power_foam \
+        --fail-on-method-error \
         "${injection_args[@]}" \
         --json-out "${batch_root}/shared-foam.json" \
         --markdown-out "${batch_root}/shared-foam.md" \

@@ -545,6 +545,11 @@ def main() -> int:
         default="coadd_bilinear,spectral_basis_field,sky_encoder_resmlp,sky_lambda_feature_field,operator_constrained_feature_field",
     )
     parser.add_argument("--skip-missing", action="store_true")
+    parser.add_argument(
+        "--fail-on-method-error",
+        action="store_true",
+        help="Exit nonzero when any requested model fails or is missing",
+    )
     parser.add_argument("--json-out", type=Path, default=DEFAULT_JSON_OUT)
     parser.add_argument("--markdown-out", type=Path, default=DEFAULT_MARKDOWN_OUT)
     parser.add_argument("--export-dir", type=Path, default=DEFAULT_EXPORT_DIR)
@@ -1224,6 +1229,8 @@ def main() -> int:
     args.markdown_out.parent.mkdir(parents=True, exist_ok=True)
     args.markdown_out.write_text(_format_markdown(payload["rows"]), encoding="utf-8")
     print(json.dumps(payload, indent=2))
+    if args.fail_on_method_error and fail_rows:
+        return 1
     return 0
 
 

@@ -502,7 +502,12 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     steps their maximum coefficients remained near 0.03, which explains
     physical predictions near 0.01 after restoring the measured 0.211 intensity
     scale. Geometry is now frozen by default and adaptive geometry is a
-    separately declared validation-only ablation.
+    separately declared validation-only ablation. A local uniform two-band
+    control confirms that this is an optimization-scale issue: after 50 steps,
+    `lr=0.001` leaves MSE at 2.34 from 2.50 and coefficients below 0.049,
+    whereas `lr=0.02` reaches 0.429, coefficients 0.868, and a strong wavelength
+    contrast. This control is not a depth result. The benchmark runner now
+    fails closed on any requested model error or missing row.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the
