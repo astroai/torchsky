@@ -175,6 +175,7 @@ case "${mode}" in
         --drizzle-pixfracs 0.8,1.0 \
         --methods "${methods}" \
         --fail-on-method-error \
+        --product-only \
         "${injection_args[@]}" \
         --product-out-dir "${batch_root}/products" \
         --json-out "${batch_root}/stackers.json" \

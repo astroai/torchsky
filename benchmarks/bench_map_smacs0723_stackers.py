@@ -1058,6 +1058,7 @@ def run_stacker_benchmark(
     science_overrides: dict[Path, np.ndarray] | None = None,
     target_header_override: dict[str, Any] | None = None,
     product_out_dir: Path | None = None,
+    product_only: bool = False,
 ) -> list[dict[str, Any]]:
     ref_data = _read_ext(reference_path, "SCI")
     ref_header = _sci_header(reference_path)
@@ -1194,23 +1195,30 @@ def run_stacker_benchmark(
                 raw_pred, raw_weight, extra = result
                 row.update(extra)
                 row["time_ms"] = elapsed * 1000.0
-                product_pred, product_weight, pred, weight = _product_and_metric_arrays(
-                    raw_pred,
-                    raw_weight,
-                    target_mode_used=target_mode_used,
-                    target_header=target_header,
-                    published_target_header=published_target_header,
-                )
-                support_mask = _support_mask_from_weight(weight)
-                if not np.any(support_mask):
-                    raise RuntimeError(
-                        "stacker produced no finite supported pixels on the target grid"
+                if product_only:
+                    product_pred = np.asarray(raw_pred, dtype=np.float32)
+                    product_weight = np.asarray(raw_weight, dtype=np.float32)
+                    pred, weight = product_pred, product_weight
+                else:
+                    product_pred, product_weight, pred, weight = (
+                        _product_and_metric_arrays(
+                            raw_pred,
+                            raw_weight,
+                            target_mode_used=target_mode_used,
+                            target_header=target_header,
+                            published_target_header=published_target_header,
+                        )
                     )
-                if not np.all(np.isfinite(pred[support_mask])):
+                product_support = _support_mask_from_weight(product_weight)
+                row["product_support_pixel_count"] = int(product_support.sum())
+                if not np.any(product_support):
                     raise RuntimeError(
-                        "predicted stack contains non-finite supported pixels"
+                        "stacker produced no finite supported pixels on its product grid"
                     )
-                row.update(_compute_region_metrics(pred, ref_crop, support_mask))
+                if not np.all(np.isfinite(product_pred[product_support])):
+                    raise RuntimeError(
+                        "predicted stack contains non-finite supported product pixels"
+                    )
                 if product_out_dir is not None:
                     product_out_dir.mkdir(parents=True, exist_ok=True)
                     product_path = product_out_dir / f"{spec['name']}_sci.fits"
@@ -1229,10 +1237,35 @@ def run_stacker_benchmark(
                     )
                     row["product_path"] = str(product_path.resolve())
                     row["product_weight_path"] = str(weight_path.resolve())
+                if product_only:
+                    row["reference_metrics_skipped"] = True
+                    row.update(
+                        {
+                            "support_rmse": float("nan"),
+                            "uniform_rmse": float("nan"),
+                            "support_flux_ratio": float("nan"),
+                            "center_support_rmse": float("nan"),
+                            "edge_support_rmse": float("nan"),
+                            "support_rmse_after_affine_fit": float("nan"),
+                        }
+                    )
+                    rows.append(row)
+                    continue
+                support_mask = _support_mask_from_weight(weight)
+                row["reference_support_pixel_count"] = int(support_mask.sum())
+                if not np.any(support_mask):
+                    raise RuntimeError(
+                        "product grid has no overlap with the reference metric grid"
+                    )
+                if not np.all(np.isfinite(pred[support_mask])):
+                    raise RuntimeError(
+                        "predicted stack contains non-finite supported pixels"
+                    )
+                row.update(_compute_region_metrics(pred, ref_crop, support_mask))
             except Exception as exc:
                 row["status"] = "FAIL"
                 row["message"] = str(exc)
-                row["time_ms"] = float("nan")
+                row.setdefault("time_ms", float("nan"))
             rows.append(row)
     ok_rows = [row for row in rows if row["status"] == "OK"]
     fail_rows = [row for row in rows if row["status"] != "OK"]
@@ -1297,6 +1330,11 @@ def main() -> int:
         type=Path,
         default=None,
         help="Persist each reconstructed SCI/weight product on its method target grid",
+    )
+    parser.add_argument(
+        "--product-only",
+        action="store_true",
+        help="Validate and persist products without comparing to the reference grid",
     )
     parser.add_argument(
         "--target-header-path",
@@ -1392,6 +1430,7 @@ def main() -> int:
             else None
         ),
         product_out_dir=args.product_out_dir,
+        product_only=args.product_only,
     )
     for row in rows:
         row["band"] = band

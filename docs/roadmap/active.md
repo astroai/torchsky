@@ -230,8 +230,20 @@ stacking-versus-INR/Foam depth result defined in
       Torchsky bilinear as a WCS control and persists a fixed 5-by-5
       source-to-target mapping comparison against Astropy for every exposure,
       including SIP/TPV flags, finite/inside counts, coordinate ranges, and
-      maximum target-pixel disagreement. Diagnose that evidence locally before
-      another exact-Drizzle run or any fanout.
+      maximum target-pixel disagreement. Session `yywpr350` at `09dda05`
+      resolved that gate: Torchsky and Astropy agree within
+      `3.46e-9` target pixel, both find the same overlapping detector samples,
+      and bilinear plus both square-Drizzle variants reach `max_overlap=2`.
+      The apparent zero-support failure was therefore in the benchmark adapter,
+      not WCS or either projection kernel: it tested the valid explicit-grid
+      product only after reprojecting its weight onto the unrelated per-band
+      UPDec metric crop, then discarded the product when those grids did not
+      overlap. Native generation now uses explicit `--product-only` semantics,
+      validates finite support on the authoritative common grid, persists the
+      SCI/weight pair before any optional reference metric, records product
+      support counts, and retains method timing on downstream failures. The
+      focused adapter regression passes locally. Rerun one F090W blank at this
+      commit; fanout remains blocked until its three product pairs exist.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
   - [x] Add `SpectralPowerFoamField` as the minimum common-operator bridge:

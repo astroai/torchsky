@@ -28,6 +28,7 @@ from bench_map_smacs0723_stackers import (
     _product_and_metric_arrays,
     _run_legacy_method,
     _wcs_overlap_probe,
+    run_stacker_benchmark,
 )
 
 
@@ -198,6 +199,101 @@ def test_non_native_products_keep_method_grid_while_metrics_are_aligned(
     np.testing.assert_array_equal(product_weight, weight)
     np.testing.assert_array_equal(metric_pred, pred + 10.0)
     np.testing.assert_array_equal(metric_weight, weight + 20.0)
+
+
+def test_product_only_persists_supported_product_without_reference_metrics(
+    monkeypatch, tmp_path: Path
+) -> None:
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 2,
+        "NAXIS2": 2,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 1.5,
+        "CRPIX2": 1.5,
+        "CRVAL1": 12.0,
+        "CRVAL2": -3.0,
+        "CDELT1": -0.01,
+        "CDELT2": 0.01,
+    }
+    source_path = tmp_path / "source.fits"
+    torchsky.write(
+        str(source_path), torch.ones((2, 2)), header=header, overwrite=True
+    )
+    monkeypatch.setattr(
+        "bench_map_smacs0723_stackers._read_ext",
+        lambda *_args, **_kwargs: np.ones((2, 2), dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "bench_map_smacs0723_stackers._sci_header", lambda *_args: dict(header)
+    )
+    monkeypatch.setattr(
+        "bench_map_smacs0723_stackers._prepare_aux_files",
+        lambda *_args, **_kwargs: (source_path, source_path, source_path),
+    )
+    monkeypatch.setattr(
+        "bench_map_smacs0723_stackers._wcs_overlap_probe",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "bench_map_smacs0723_stackers._run_coadd_method",
+        lambda *_args, **_kwargs: (
+            np.ones((2, 2), dtype=np.float32),
+            np.ones((2, 2), dtype=np.float32),
+            {"max_overlap": 1},
+        ),
+    )
+    spec = dict(_build_method_specs(include_inr=False)[0])
+    out = tmp_path / "products"
+
+    rows = run_stacker_benchmark(
+        band="F090W",
+        reference_path=tmp_path / "reference.fits",
+        exposure_paths=[source_path],
+        specs=[spec],
+        crop_size=2,
+        crop_mode="center",
+        overlap_step=1,
+        input_product="aligned",
+        filename_contains="",
+        linearize_sip=False,
+        inr_steps=1,
+        target_header_override=header,
+        product_out_dir=out,
+        product_only=True,
+    )
+
+    assert rows[0]["status"] == "OK"
+    assert rows[0]["product_support_pixel_count"] == 4
+    assert rows[0]["reference_metrics_skipped"] is True
+    assert (out / "torchsky_bilinear_sci.fits").exists()
+    assert (out / "torchsky_bilinear_wht.fits").exists()
+
+    monkeypatch.setattr(
+        "bench_map_smacs0723_stackers._align_array_to_target",
+        lambda array, **_kwargs: np.zeros_like(array),
+    )
+    compared = run_stacker_benchmark(
+        band="F090W",
+        reference_path=tmp_path / "reference.fits",
+        exposure_paths=[source_path],
+        specs=[spec],
+        crop_size=2,
+        crop_mode="center",
+        overlap_step=1,
+        input_product="aligned",
+        filename_contains="",
+        linearize_sip=False,
+        inr_steps=1,
+        target_header_override=header,
+        product_out_dir=out,
+    )[0]
+    assert compared["status"] == "FAIL"
+    assert compared["product_support_pixel_count"] == 4
+    assert compared["reference_support_pixel_count"] == 0
+    assert np.isfinite(compared["time_ms"])
+    assert "no overlap with the reference metric grid" in compared["message"]
 
 
 def test_upstream_drizzle_receives_selected_pixfrac(monkeypatch) -> None:
