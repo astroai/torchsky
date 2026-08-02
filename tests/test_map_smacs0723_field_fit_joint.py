@@ -24,6 +24,7 @@ from bench_map_smacs0723_field_fit_joint import _foam_training_tile_side  # noqa
 from bench_map_smacs0723_field_fit_joint import _joint_real_fit_kwargs  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _preview_uint8  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _regular_foam_model_kwargs  # noqa: E402
+from bench_map_smacs0723_field_fit_joint import _set_foam_geometry_trainable  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _source_metric_mask  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _write_export_products  # noqa: E402
 from torchsky.map.field import SpectralPowerFoam  # noqa: E402
@@ -125,6 +126,7 @@ def test_joint_real_foam_fit_bounds_psf_training_and_diagnostics() -> None:
     assert kwargs["training_patch_size"] == 128
     assert kwargs["streaming_accumulation"] is True
     assert kwargs["diagnostic_spatial_tile_hw"] == (64, 64)
+    assert kwargs["lr"] == pytest.approx(2.0e-2)
 
 
 def test_joint_real_foam_fit_scales_tiles_with_grid_capacity() -> None:
@@ -194,6 +196,22 @@ def test_regular_foam_final_temperature_localizes_cell_values() -> None:
     )
 
     torch.testing.assert_close(prediction, coefficients[:, 0], atol=2.0e-6, rtol=0)
+
+
+def test_fixed_foam_freezes_only_geometry() -> None:
+    kwargs = _regular_foam_model_kwargs(grid_side=4, basis_count=1, extent=0.55)
+    model = SpectralPowerFoam(
+        kwargs["sites"],
+        kwargs["radii"],
+        kwargs["cell_coefficients"],
+        minimum_radius=kwargs["minimum_radius"],
+    )
+
+    _set_foam_geometry_trainable(model, False)
+
+    assert not model.sites.requires_grad
+    assert not model.raw_radii.requires_grad
+    assert model.cell_coefficients.requires_grad
 
 
 def test_source_metric_mask_prefers_bright_reference_structure() -> None:

@@ -484,6 +484,25 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     temperature in inverse-cell-area units before testing a denser fixed grid.
     A fixed absolute temperature makes finer grids less locally identifiable
     because power distance is measured in squared coordinate units.
+    The unscaled-temperature capacity control `lhztxhsb` at `1662f7c`
+    increased the grid from 256 to 4,096 cells and completed in 253.7 s at
+    691,726,848 bytes peak H100 allocation. Full normalized loss improved from
+    0.9416 to 0.8754, but mean source-contrast slope remained only `1.18e-5`
+    and mean support flux only 2.06%; capacity alone does not repair the
+    non-local training surrogate.
+    The temperature-only rerun `s0thrsmm` at `1687187` kept the same 4,096
+    cells, 50 steps, and `lr=0.001`. Cell-area-normalized temperatures raised
+    the hard prediction peak to 0.039 and mean source-contrast slope to
+    `1.71e-5`, but support flux remained 2.28% and coefficients stopped at
+    0.0276. Localization helps, but the optimizer amplitude ceiling still
+    dominates.
+  - [ ] Re-run a true fixed-geometry control with a coefficient learning rate
+    commensurate with unit-RMS normalized inputs. The earlier nominal
+    fixed-grid runs also optimized sites/radii and used `lr=0.001`; after 50
+    steps their maximum coefficients remained near 0.03, which explains
+    physical predictions near 0.01 after restoring the measured 0.211 intensity
+    scale. Geometry is now frozen by default and adaptive geometry is a
+    separately declared validation-only ablation.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the

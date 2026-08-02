@@ -290,6 +290,22 @@ stacking-versus-INR/Foam depth result defined in
       temperature curriculum as inverse cell area: the previous fixed `4..24`
       schedule becomes increasingly global as grid spacing shrinks and cannot
       identify local source structure at high capacity.
+      The exact 4,096-cell control `lhztxhsb` at `1662f7c` confirmed this:
+      253.7 s and 691,726,848 bytes peak H100 allocation reduced normalized
+      full loss from 0.9416 to 0.8754, but mean source-contrast slope remained
+      `1.18e-5` and mean support flux 0.0206. More cells under the unscaled
+      temperature are not a scientific fix.
+      The temperature-only H100 rerun `s0thrsmm` at `1687187` increased the
+      hard prediction peak to 0.039 and mean source-contrast slope to
+      `1.71e-5`, but mean support flux remained 0.0228 and the largest
+      coefficient only 0.0276. This isolates the remaining 50-step
+      `lr=0.001` amplitude ceiling; it is not evidence for more capacity.
+      The validation adapter also now freezes sites/radii for the actual fixed
+      grid control and records its coefficient learning rate. Previous 50-step
+      runs at `lr=0.001` could only grow zero-initialized coefficients to about
+      0.03, matching their roughly 0.01 physical prediction peaks after the
+      measured 0.211 intensity scale was restored. Trainable geometry remains
+      an explicit later ablation, never silently mixed into the fixed control.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous
       joint benchmark discovered all 36/9 exposures per band, while classical
       validation uses only `PATT_NUM={3,8}` (8/2 exposures). `--patt-nums`

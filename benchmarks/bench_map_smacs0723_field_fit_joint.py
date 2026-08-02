@@ -148,6 +148,19 @@ def _foam_training_tile_side(*, crop_size: int, grid_side: int) -> int:
     return min(crop, 128, pair_limited)
 
 
+def _set_foam_geometry_trainable(model: torch.nn.Module, trainable: bool) -> None:
+    """Select fixed-grid or adaptive-geometry fitting without freezing appearance."""
+    foam = getattr(model, "foam", model)
+    sites = getattr(foam, "sites", None)
+    raw_radii = getattr(foam, "raw_radii", None)
+    if not isinstance(sites, torch.nn.Parameter) or not isinstance(
+        raw_radii, torch.nn.Parameter
+    ):
+        raise TypeError("model must expose trainable Foam sites and raw_radii")
+    sites.requires_grad_(bool(trainable))
+    raw_radii.requires_grad_(bool(trainable))
+
+
 def _preview_uint8(image: np.ndarray) -> np.ndarray:
     finite = np.isfinite(image)
     if not np.any(finite):
@@ -311,6 +324,7 @@ def _joint_real_fit_kwargs(
     steps: int,
     num_observations: int,
     foam_grid_side: int = 16,
+    foam_lr: float = 2.0e-2,
 ) -> dict[str, Any]:
     kwargs = _field_fit_kwargs_for_model(
         model_kind,
@@ -321,11 +335,14 @@ def _joint_real_fit_kwargs(
     if model_kind == "coadd_bilinear":
         return kwargs
     if model_kind == "spectral_power_foam":
+        foam_learning_rate = float(foam_lr)
+        if not math.isfinite(foam_learning_rate) or foam_learning_rate <= 0.0:
+            raise ValueError("foam_lr must be finite and positive")
         tile_side = _foam_training_tile_side(
             crop_size=int(crop_size),
             grid_side=int(foam_grid_side),
         )
-        kwargs["lr"] = 1.0e-3
+        kwargs["lr"] = foam_learning_rate
         kwargs["curriculum"] = "feature_scale_ramp"
         kwargs["num_spectral_samples"] = 5
         kwargs["training_spectral_sampling"] = "deterministic_quadrature"
@@ -344,7 +361,8 @@ def _joint_real_fit_kwargs(
     kwargs["loss_kind"] = "mse"
     kwargs["loss_reduction"] = "global"
     kwargs["grad_clip_norm"] = 1.0
-    kwargs["lr"] = min(float(kwargs.get("lr", 1.0e-3)), 1.0e-3)
+    if model_kind != "spectral_power_foam":
+        kwargs["lr"] = min(float(kwargs.get("lr", 1.0e-3)), 1.0e-3)
     kwargs["lr_warmup_steps"] = max(int(kwargs.get("lr_warmup_steps", 0)), 4)
     kwargs["context_observations_per_step"] = min(
         int(kwargs.get("context_observations_per_step", 0)),
@@ -507,6 +525,12 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=101)
     parser.add_argument("--foam-grid-side", type=int, default=32)
     parser.add_argument("--foam-basis-count", type=int, default=4)
+    parser.add_argument("--foam-lr", type=float, default=2.0e-2)
+    parser.add_argument(
+        "--foam-train-geometry",
+        action="store_true",
+        help="Train sites and radii; off by default for the fixed-grid control",
+    )
     parser.add_argument(
         "--foam-extent",
         type=float,
@@ -877,6 +901,7 @@ def main() -> int:
                 steps=int(args.steps),
                 num_observations=len(normalized_observations),
                 foam_grid_side=int(args.foam_grid_side),
+                foam_lr=float(args.foam_lr),
             )
             if forward_ctx_tuple is not None:
                 fit_kwargs = dict(fit_kwargs)
@@ -888,6 +913,8 @@ def main() -> int:
             )
             torch.manual_seed(int(args.seed))
             model = make_field_model(model_kind, domain, **model_kwargs)
+            if model_kind == "spectral_power_foam":
+                _set_foam_geometry_trainable(model, args.foam_train_geometry)
             if args.forward_context:
                 model = _PerExposureScalarBias(model, len(normalized_observations))
             t0 = time.perf_counter()
@@ -956,6 +983,7 @@ def main() -> int:
                         row["training_patch_size"] = int(
                             fit_kwargs.get("training_patch_size") or args.crop_size
                         )
+                        row["optimizer_lr"] = float(fit_kwargs["lr"])
                         performance = fit_diagnostics.get("performance_profile", {})
                         row["peak_accelerator_memory_bytes"] = int(
                             performance.get("max_memory_allocated_bytes", 0)
@@ -1026,6 +1054,10 @@ def main() -> int:
                             )
                             row["foam_temperature_end"] = float(
                                 hard_model.temperature_end
+                            )
+                            row["foam_geometry_trainable"] = bool(
+                                hard_model.sites.requires_grad
+                                or hard_model.foam.raw_radii.requires_grad
                             )
                             row["foam_target_x_range"] = [
                                 float(target_coordinates[:, 0].min()),
@@ -1166,6 +1198,8 @@ def main() -> int:
             "foam_grid_side": int(args.foam_grid_side),
             "foam_basis_count": int(args.foam_basis_count),
             "foam_extent": float(args.foam_extent),
+            "foam_lr": float(args.foam_lr),
+            "foam_train_geometry": bool(args.foam_train_geometry),
             "intensity_scale": float(intensity_scale),
             "patt_nums": list(pattern_numbers),
             "crop_x0": args.crop_x0,

@@ -46,6 +46,13 @@ if ! command -v pixi >/dev/null 2>&1; then
 fi
 pixi --version
 
+foam_geometry_args=()
+case "${FOAM_TRAIN_GEOMETRY:-0}" in
+  0) ;;
+  1) foam_geometry_args=(--foam-train-geometry) ;;
+  *) echo "FOAM_TRAIN_GEOMETRY must be 0 or 1" >&2; exit 2 ;;
+esac
+
 case "${mode}" in
   foam)
     bands=${FOAM_BANDS:-F090W,F150W}
@@ -54,6 +61,7 @@ case "${mode}" in
     grid_side=${FOAM_GRID_SIDE:-4}
     basis_count=${FOAM_BASIS_COUNT:-3}
     extent=${FOAM_EXTENT:-0.55}
+    foam_lr=${FOAM_LR:-0.02}
     seed=${FOAM_SEED:-101}
     patt_nums=${FOAM_PATT_NUMS:-}
     pixi run --manifest-path "${source_root}/pixi.toml" -e smacs-cuda -- \
@@ -70,6 +78,8 @@ case "${mode}" in
       --foam-grid-side "${grid_side}" \
       --foam-basis-count "${basis_count}" \
       --foam-extent "${extent}" \
+      --foam-lr "${foam_lr}" \
+      "${foam_geometry_args[@]}" \
       --models spectral_power_foam \
       --json-out "${artifact_root}/shared-foam.json" \
       --markdown-out "${artifact_root}/shared-foam.md" \
@@ -82,6 +92,7 @@ case "${mode}" in
     grid_side=${FOAM_GRID_SIDE:-32}
     basis_count=${FOAM_BASIS_COUNT:-4}
     extent=${FOAM_EXTENT:-0.55}
+    foam_lr=${FOAM_LR:-0.02}
     seed=${FOAM_SEED:-101}
     patt_nums=${FOAM_PATT_NUMS:-3,8}
     validation_root=/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940
@@ -116,6 +127,8 @@ case "${mode}" in
         --foam-grid-side "${grid_side}" \
         --foam-basis-count "${basis_count}" \
         --foam-extent "${extent}" \
+        --foam-lr "${foam_lr}" \
+        "${foam_geometry_args[@]}" \
         --models spectral_power_foam \
         "${injection_args[@]}" \
         --json-out "${batch_root}/shared-foam.json" \
@@ -160,7 +173,10 @@ case "${mode}" in
     done
     ;;
   native-score)
-    native_input_root_pattern=${NATIVE_INPUT_ROOT_PATTERN:-/arc/projects/ots/torchsky-runs/20260729-smacs-native-validation-d8fece0-{band}}
+    native_input_root_pattern=${NATIVE_INPUT_ROOT_PATTERN-}
+    if [[ -z "${native_input_root_pattern}" ]]; then
+      native_input_root_pattern='/arc/projects/ots/torchsky-runs/20260729-smacs-native-validation-d8fece0-{band}'
+    fi
     pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
       python "${source_root}/scripts/run_local_sphere_bench.py" \
       "${source_root}/benchmarks/score_smacs0723_native_classical.py" \
