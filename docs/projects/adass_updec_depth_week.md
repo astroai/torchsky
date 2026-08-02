@@ -113,8 +113,10 @@ products; beating separate per-band images alone is not sufficient.
   - [x] Activate the frozen fitted-PSF contract in the real joint adapter. Each
     detector crop and target product now converts the approved 5%-wider
     band-dependent Gaussian FWHM through its local Torchsky-WCS pixel area;
-    JSON rows record the truth/fitted FWHM and input/target pixel sigmas. A
-    shared-sky-patch fit regression exercises the PSF convolution path.
+    fitting uses the existing 2-by-2 Gauss-Legendre pixel-footprint quadrature,
+    and JSON rows record truth/fitted FWHM, input/target pixel sigmas, and the
+    spatial-sampling mode. A shared-sky-patch fit regression exercises both
+    pixel integration and PSF convolution.
   - [ ] Exercise independent and shared instances on the frozen real exposure
     adapter and persist their hard-rendered final products.
 - [ ] Apply one common detector/photometer to every final band product.

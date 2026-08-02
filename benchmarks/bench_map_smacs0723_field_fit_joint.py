@@ -391,6 +391,7 @@ def _joint_real_fit_kwargs(
         kwargs["shared_sky_patch_sampling"] = True
     kwargs["loss_kind"] = "mse"
     kwargs["loss_reduction"] = "global"
+    kwargs["spatial_sampling"] = "gauss_legendre_2x2"
     kwargs["grad_clip_norm"] = 1.0
     if model_kind != "spectral_power_foam":
         kwargs["lr"] = min(float(kwargs.get("lr", 1.0e-3)), 1.0e-3)
@@ -1044,6 +1045,9 @@ def main() -> int:
                         )
                         row["spectral_samples"] = int(
                             fit_kwargs.get("num_spectral_samples", 1)
+                        )
+                        row["spatial_sampling"] = str(
+                            fit_kwargs.get("spatial_sampling", "center")
                         )
                         row["intensity_scale"] = float(intensity_scale)
                         row["initial_loss"] = float(fit_diagnostics["initial_loss"])

@@ -1791,6 +1791,7 @@ def test_fit_field_model_supports_shared_sky_patch_sampling() -> None:
         observation_sampling="band_balanced",
         training_patch_size=12,
         shared_sky_patch_sampling=True,
+        spatial_sampling="gauss_legendre_2x2",
     )
     assert fit.final_loss < fit.initial_loss
 

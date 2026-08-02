@@ -78,6 +78,7 @@ from .types import (
     FieldNoisePretrainKind,
     FieldObservation,
     FieldObservationSampling,
+    FieldSpatialSampling,
     FieldSpectralSampling,
     ForwardContext,
 )
@@ -265,6 +266,7 @@ def compute_field_fit_diagnostics(
     steps: int,
     total_pixels: int,
     max_mem: int,
+    spatial_sampling: FieldSpatialSampling = "center",
     spatial_tile_hw: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     device = next((p.device for p in model.parameters()), torch.device("cpu"))
@@ -399,6 +401,7 @@ def compute_field_fit_diagnostics(
                     forward_context=fctx,
                     exposure_pose=pose,
                     operator_bundle=observation_bundle,
+                    spatial_sampling=spatial_sampling,
                     spatial_tile_hw=spatial_tile_hw,
                 )
 
@@ -454,6 +457,7 @@ def compute_field_fit_diagnostics(
                         forward_context=fctx,
                         exposure_pose=pose,
                         operator_bundle=observation_bundle,
+                        spatial_sampling=spatial_sampling,
                     )
                     stddev = torch.sqrt(torch.clamp(torch.exp(pred_logvar), min=1.0e-8))
 
@@ -528,6 +532,7 @@ def _compute_full_observation_losses(
     huber_delta: float,
     loss_reduction: FieldLossReduction,
     gradient_residual_weight: float = 0.0,
+    spatial_sampling: FieldSpatialSampling = "center",
     spatial_tile_hw: tuple[int, int] | None = None,
 ) -> float:
     """Compute per-observation or aggregated reconstruction loss on full images.
@@ -557,6 +562,7 @@ def _compute_full_observation_losses(
                 forward_context=fctx,
                 exposure_pose=pose,
                 operator_bundle=observation_bundle,
+                spatial_sampling=spatial_sampling,
             )
         else:
             pred = render_field_observation(
@@ -566,6 +572,7 @@ def _compute_full_observation_losses(
                 forward_context=fctx,
                 exposure_pose=pose,
                 operator_bundle=observation_bundle,
+                spatial_sampling=spatial_sampling,
                 spatial_tile_hw=spatial_tile_hw,
             )
             pred_logvar = None
@@ -703,6 +710,7 @@ def fit_field_model(
     curriculum: FieldCurriculum = "none",
     training_spectral_sampling: FieldSpectralSampling = "deterministic_quadrature",
     training_spectral_sampling_grid_size: int | None = None,
+    spatial_sampling: FieldSpatialSampling = "center",
     spectral_anchor_observations_per_step: int = 0,
     spectral_anchor_num_samples: int | None = None,
     spectral_anchor_loss_weight: float = 0.0,
@@ -849,6 +857,7 @@ def fit_field_model(
             huber_delta=huber_delta,
             loss_reduction=loss_reduction,
             gradient_residual_weight=gradient_weight,
+            spatial_sampling=spatial_sampling,
             spatial_tile_hw=diagnostic_spatial_tile_hw,
         )
 
@@ -1212,6 +1221,7 @@ def fit_field_model(
                     model,
                     observation,
                     num_spectral_samples=num_spectral_samples,
+                    spatial_sampling=spatial_sampling,
                     **render_kwargs,
                 )
                 image = observation.image.to(device=pred.device, dtype=pred.dtype)
@@ -1240,6 +1250,7 @@ def fit_field_model(
                     model,
                     observation,
                     num_spectral_samples=num_spectral_samples,
+                    spatial_sampling=spatial_sampling,
                     **render_kwargs,
                 )
                 pred_logvar = None
@@ -1408,6 +1419,7 @@ def fit_field_model(
                         anchor_observation,
                         num_spectral_samples=anchor_num_samples,
                         spectral_sampling="deterministic_quadrature",
+                        spatial_sampling=spatial_sampling,
                         forward_context=anchor_fctx,
                         exposure_pose=anchor_pose,
                         operator_bundle=anchor_bundle,
@@ -1541,6 +1553,7 @@ def fit_field_model(
                     )
                 context_render_kwargs["forward_context"] = ctx_f
                 context_render_kwargs["operator_bundle"] = ctx_bundle
+                context_render_kwargs["spatial_sampling"] = spatial_sampling
                 context_pred = render_field_observation(
                     model,
                     context_observation,
@@ -1726,6 +1739,7 @@ def fit_field_model(
             huber_delta=huber_delta,
             loss_reduction=loss_reduction,
             gradient_residual_weight=gradient_weight,
+            spatial_sampling=spatial_sampling,
             spatial_tile_hw=diagnostic_spatial_tile_hw,
         )
     if train_device.type == "cuda":
@@ -1749,6 +1763,7 @@ def fit_field_model(
         steps=int(steps),
         total_pixels=total_pixels,
         max_mem=max_mem,
+        spatial_sampling=spatial_sampling,
         spatial_tile_hw=diagnostic_spatial_tile_hw,
     )
     diagnostics = dict(diagnostics or {})

@@ -392,10 +392,18 @@ stacking-versus-INR/Foam depth result defined in
       `PSFSpec(mode="none")`; the sampler supported PSFs, but the claimed real
       PSF path was not active. The adapter now converts the frozen 5%-wider
       six-band Gaussian FWHM contract to each exposure's local Torchsky-WCS
-      pixel scale, trains through that PSF, applies the corresponding target
-      PSF to hard products, and records truth/fitted FWHM plus input/target
-      sigma provenance. Do not launch the blank until this exact change passes
-      the full local gate.
+      pixel scale, trains through that PSF with existing 2-by-2 Gauss-Legendre
+      detector-pixel integration, applies the corresponding target PSF to hard
+      products, and records truth/fitted FWHM plus input/target sigma and
+      sampling provenance. The PSF-only commit `0c808d9` passes its full local
+      gate (1,735 passed,
+      214 skipped, zero type errors), but CANFAR staging rejected the exact
+      AstroAI H100 request at admission with HTTP 400 `Illegal group reference`;
+      no session, pod, or artifact was created. Keep the queued configuration
+      fixed at F090W/F150W, blank only, 512-square target, 64-square grid, four
+      spectral terms, 50 steps, `lr=0.02`, fixed geometry, and retry exact SHA
+      from the pixel-integration follow-up when staging group resolution
+      recovers; do not fall back to the PSF-only SHA.
       Foam headless runs now also fail nonzero when a requested model fails or
       is missing.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous

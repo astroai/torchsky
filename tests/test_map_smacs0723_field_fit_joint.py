@@ -186,6 +186,7 @@ def test_joint_real_foam_fit_bounds_psf_training_and_diagnostics() -> None:
     assert kwargs["training_patch_size"] == 128
     assert kwargs["pixel_samples_per_observation"] is None
     assert kwargs["shared_sky_patch_sampling"] is True
+    assert kwargs["spatial_sampling"] == "gauss_legendre_2x2"
     assert kwargs["streaming_accumulation"] is True
     assert kwargs["diagnostic_spatial_tile_hw"] == (64, 64)
     assert kwargs["lr"] == pytest.approx(2.0e-2)
