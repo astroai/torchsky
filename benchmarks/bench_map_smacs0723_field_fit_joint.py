@@ -358,6 +358,9 @@ def _joint_real_fit_kwargs(
     kwargs["pixel_samples_per_observation"] = max(
         256, min(int(crop_size) * int(crop_size), 1024)
     )
+    if model_kind == "spectral_power_foam":
+        kwargs["pixel_samples_per_observation"] = None
+        kwargs["shared_sky_patch_sampling"] = True
     kwargs["loss_kind"] = "mse"
     kwargs["loss_reduction"] = "global"
     kwargs["grad_clip_norm"] = 1.0

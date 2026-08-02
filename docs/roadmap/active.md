@@ -146,7 +146,7 @@ stacking-versus-INR/Foam depth result defined in
       1,882 permissive detections covered by 282 distinct six-pixel frozen
       neighbourhoods. Positive validation session `oi5mskje` uses that exact
       union.
-  - [ ] Run three positive validation batches plus one blank, build the
+  - [x] Run three positive validation batches plus one blank, build the
     six-band whitened chi-square detector, and freeze the winning classical
     configuration using only those validation batches.
     - [x] Session `oi5mskje` completed all three deterministic 28-source
@@ -164,10 +164,16 @@ stacking-versus-INR/Foam depth result defined in
       `/arc/projects/ots/torchsky-runs/20260729-smacs-torchsky-drizzle-aa0aa21/effective-psf-flux-report.json`.
       `pixfrac=0.8` and `1.0` both meet the absolute 2% median flux-bias gate in
       all six bands; `0.6` fails F090W at +2.19%.
-    - [ ] Rebuild common-support/control and all three positive validation
+    - [x] Rebuild common-support/control and all three positive validation
       batches for native `pixfrac=0.8/1.0`, select between them from validation
       recovery at fixed purity, then freeze `adass_updec_classical_config.json`.
-      Do not select from effective-PSF sharpness alone.
+      Do not select from effective-PSF sharpness alone. Session `yk0lwhjj` at
+      scoring commit `4816987` selected native `pixfrac=0.8` from source commit
+      `7612d32`: both candidates recover 73/84 sources (86.9%) and 5/12 in the
+      faintest AB=30 bin at the frozen 95%-purity gate; `0.8` reaches 96.1%
+      pooled purity and `1.0` reaches 100%, so the predeclared tie-break selects
+      `0.8`. The frozen configuration is
+      `/arc/projects/ots/torchsky-runs/20260802-smacs-native-score-4816987/score/adass_updec_classical_config.json`.
     - [x] Add the versioned headless entry point
       `scripts/run_canfar_adass_depth.sh native-band RUN_ID`, with exact-SHA
       checkout, durable logs, frozen manifests, AstroAI-image enforcement, and
@@ -190,15 +196,16 @@ stacking-versus-INR/Foam depth result defined in
       `native-score`. It rebuilds common 99%-footprint support, rejects any
       frozen injection outside that support, reuses the measured effective PSFs
       and blank whitening, calibrates pooled 95%-purity thresholds, and hashes
-      the complete configuration provenance. The real scoring run remains
-      unchecked.
+      the complete configuration provenance. The real scorer retained 183,613
+      pixels (70.0%) after nine-pixel erosion at 99% footprint coverage and
+      accepted every frozen validation source.
     - [x] Fail the first scorer attempt before selection. Session `a0qpgq4s`
       found that the per-band native products used six different band-derived
       TAN headers. Add `--target-header-path` to the stacker and pin subsequent
       native products directly to the authoritative
       `validation-000/common-support-r9-f0p99.fits` WCS; do not relax the
       cross-band WCS check or add a post-hoc interpolation.
-    - [ ] Regenerate the native common-grid products after the `cbbbab4`
+    - [x] Regenerate the native common-grid products after the `cbbbab4`
       fanout failed scientifically. Its 24 JSON/Markdown artifacts existed, but
       every inspected product directory was empty; F090W blank records both
       requested square-Drizzle methods as `FAIL` with no finite support. The
@@ -249,10 +256,11 @@ stacking-versus-INR/Foam depth result defined in
       at `pixfrac=0.8` and 262,092 at `pixfrac=1.0`, every method reaches two
       overlapping exposures, and all six SCI/weight files are durable under
       `/arc/projects/ots/torchsky-runs/20260802-smacs-native-f090-product-7612d32/`.
-      The full blank plus validation-000/001/002 fanout is now running at the
-      same exact commit in sessions `i7jv3hil`, `d15df5ns`, `wt2iq4wt`,
-      `rv96bwhn`, `ehrn0vzr`, and `m9mx5qh5` for F090W through F444W. Do not
-      score or freeze a pixfrac until all six sessions complete successfully.
+      The full blank plus validation-000/001/002 fanout completed at the same
+      exact commit in sessions `i7jv3hil`, `d15df5ns`, `wt2iq4wt`, `rv96bwhn`,
+      `ehrn0vzr`, and `m9mx5qh5` for F090W through F444W; each session recorded
+      12/12 successful method rows and persisted every requested product under
+      `/arc/projects/ots/torchsky-runs/20260802-smacs-native-{band_lower}-7612d32/`.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
   - [x] Add `SpectralPowerFoamField` as the minimum common-operator bridge:
@@ -365,8 +373,17 @@ stacking-versus-INR/Foam depth result defined in
       in 50 steps, `lr=0.001` reduced MSE from 2.50 to 2.34 with coefficient
       maximum 0.048, while `lr=0.02` reached 0.429 with coefficient maximum
       0.868 and recovered the expected red/blue contrast. This is an optimizer
-      sanity check, not real-data depth evidence. Foam headless runs now also
-      fail nonzero when a requested model fails or is missing.
+      sanity check, not real-data depth evidence. The recovered real H100 blank
+      artifact at `39a894b` then removed the amplitude ceiling: 50 steps at
+      `lr=0.02` reduced full loss from 0.942 to 0.176, reached coefficient
+      maximum 0.489 and mean support-flux ratio 0.392, but recovered only 2.8%
+      mean source flux. It therefore still fails scientific fidelity. Its fit
+      metadata exposed that the generic 1,024-pixel option bypassed the intended
+      PSF-aware Foam patches; Foam now disables point sampling and explicitly
+      uses shared-world patches across the selected exposures. Re-run this
+      exact fixed-geometry blank before changing capacity or loss weighting.
+      Foam headless runs now also fail nonzero when a requested model fails or
+      is missing.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous
       joint benchmark discovered all 36/9 exposures per band, while classical
       validation uses only `PATT_NUM={3,8}` (8/2 exposures). `--patt-nums`
