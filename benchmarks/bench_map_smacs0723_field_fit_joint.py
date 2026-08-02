@@ -43,15 +43,13 @@ from bench_map_smacs0723_real import (  # noqa: E402
     _cutout_header,
     _discover_exposure_paths,
     _field_observation_kwargs_for_band,
+    _filter_exposure_paths_by_patterns,
+    _injection_manifest_tensors,
     _metric_mask,
     _prepare_aux_files,
     _read_ext,
     _reference_path_for_band,
     _sci_header,
-)
-from bench_map_smacs0723_stackers import (  # noqa: E402
-    _filter_exposure_paths_by_patterns,
-    _injection_manifest_tensors,
 )
 from bench_multiband_depth import inject_common_world_exposures  # noqa: E402
 

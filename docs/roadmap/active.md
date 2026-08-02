@@ -382,6 +382,12 @@ stacking-versus-INR/Foam depth result defined in
       PSF-aware Foam patches; Foam now disables point sampling and explicitly
       uses shared-world patches across the selected exposures. Re-run this
       exact fixed-geometry blank before changing capacity or loss weighting.
+      The first rerun, session `wamzjylm` at `1f9d7fd`, failed before loading
+      data or training because the dependency-light Foam adapter imported two
+      input helpers through the Astropy-dependent classical-comparator module.
+      The helpers now live in the shared SMACS input module, so the next rerun
+      can use the unchanged slim `smacs-cuda` environment; this failed session
+      provides no scientific evidence.
       Foam headless runs now also fail nonzero when a requested model fails or
       is missing.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous

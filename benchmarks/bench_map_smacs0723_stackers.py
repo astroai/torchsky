@@ -58,6 +58,8 @@ from bench_map_smacs0723_reproduce import (
 from bench_multiband_depth import inject_common_world_exposures  # noqa: E402
 from bench_map_smacs0723_real import (  # noqa: E402
     DATA,
+    _filter_exposure_paths_by_patterns,
+    _injection_manifest_tensors,
     _best_overlap_cutout_from_observations,
     _band_spec,
     _field_observation_kwargs_for_band,
@@ -485,37 +487,6 @@ def _build_validation_method_specs(
     for spec in specs:
         spec["target_mode"] = "published_swarp_tan"
     return specs
-
-
-def _filter_exposure_paths_by_patterns(
-    paths: list[Path],
-    pattern_numbers: tuple[int, ...],
-) -> list[Path]:
-    """Select complete JWST dither identifiers without opening FITS files."""
-
-    if any(pattern < 1 or pattern > 9 for pattern in pattern_numbers):
-        raise ValueError("PATT_NUM selections must be integers from 1 through 9")
-    tokens = tuple(f"_{pattern:05d}_" for pattern in pattern_numbers)
-    return [path for path in paths if any(token in path.name for token in tokens)]
-
-
-def _injection_manifest_tensors(
-    manifest: dict[str, Any],
-    *,
-    band: str,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Validate JSON injection arrays and restore the empty coordinate shape."""
-
-    band_flux = manifest.get("band_flux_jy", {}).get(band)
-    if band_flux is None:
-        raise ValueError(f"injection manifest has no band_flux_jy entry for {band}")
-    world = torch.as_tensor(manifest.get("world_radec_deg", []), dtype=torch.float64)
-    if world.numel() == 0:
-        world = world.reshape(0, 2)
-    flux = torch.as_tensor(band_flux, dtype=torch.float64)
-    if world.ndim != 2 or world.shape[1] != 2 or flux.shape != (world.shape[0],):
-        raise ValueError("injection manifest coordinates/flux have inconsistent shapes")
-    return world, flux
 
 
 def _resolve_target_header(

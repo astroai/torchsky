@@ -4,6 +4,7 @@ import pytest
 pytest.importorskip("PIL")
 
 import sys
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -28,6 +29,28 @@ from bench_map_smacs0723_field_fit_joint import _set_foam_geometry_trainable  # 
 from bench_map_smacs0723_field_fit_joint import _source_metric_mask  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _write_export_products  # noqa: E402
 from torchsky.map.field import SpectralPowerFoam  # noqa: E402
+
+
+def test_joint_benchmark_import_does_not_require_astropy() -> None:
+    code = f"""
+import builtins
+import sys
+sys.path.insert(0, {str(BENCHMARKS)!r})
+original_import = builtins.__import__
+def without_astropy(name, *args, **kwargs):
+    if name == 'astropy' or name.startswith('astropy.'):
+        raise ModuleNotFoundError(name)
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = without_astropy
+import bench_map_smacs0723_field_fit_joint
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_joint_field_fit_markdown_lists_summary_and_band_rows() -> None:
