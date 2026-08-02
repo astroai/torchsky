@@ -417,11 +417,17 @@ stacking-versus-INR/Foam depth result defined in
       compact-support path that rejects trainable geometry and evaluates only
       cells whose disks intersect the current point bounding box. The fair
       256-square control therefore restores 128-square patches while keeping
-      every scientific setting fixed; launch it only from the committed compact
-      implementation and record `foam_compact_fixed_geometry=true`. Exact H100
-      session `mjsil8q2` is running commit `42f0744` with the matched
-      128-square patch and writes to
-      `20260802-smacs-foam-compact-g256-42f0744`.
+      every scientific setting fixed. Exact H100 session `mjsil8q2` completed
+      commit `42f0744` with `foam_compact_fixed_geometry=true` and the matched
+      128-square patch. Fit time fell from 1,130.6 s to 172.7 s and peak CUDA
+      allocation from 6,722,270,208 to 937,856,512 bytes. Capacity did not close
+      the science gate: final loss was 0.8892, mean support flux 0.0332, mean
+      source flux 0.0802, and mean source-contrast slope `4.68e-4`; only 49.62%
+      of hard-render pixels were nonzero. This isolates sparse coefficient
+      coverage/initialization as the next defect. Do not launch another grid/LR
+      sweep; initialize every fixed cell from a coverage-aware coadd or solve the
+      linear appearance problem before observation-level refinement. Artifacts
+      are under `20260802-smacs-foam-compact-g256-42f0744`.
       Foam headless runs now also fail nonzero when a requested model fails or
       is missing.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous

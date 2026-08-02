@@ -528,9 +528,16 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     appearance fitting and fails closed for trainable geometry. The replacement
     256-square control must use that path with the original 128-square patch,
     unchanged data/PSF/pixel integration/steps/LR, and record
-    `foam_compact_fixed_geometry=true` before its score is interpreted. That
-    replacement is running as exact H100 session `mjsil8q2` from commit
-    `42f0744`, with artifacts under
+    `foam_compact_fixed_geometry=true` before its score is interpreted. Exact
+    H100 session `mjsil8q2` completed that replacement from commit `42f0744` in
+    172.7 s with 937,856,512 bytes peak CUDA allocation, versus 1,130.6 s and
+    6,722,270,208 bytes for grid 64. Mean support flux remained 0.0332, mean
+    source flux reached only 0.0802, mean source-contrast slope was `4.68e-4`,
+    and only 49.62% of hard-render pixels were nonzero. Capacity is not the
+    missing ingredient; sparse coefficient coverage/initialization is. Next,
+    initialize every fixed cell from a coverage-aware coadd or solve the linear
+    appearance problem before observation-level refinement. Do not run another
+    grid/LR sweep. Artifacts are under
     `/arc/projects/ots/torchsky-runs/20260802-smacs-foam-compact-g256-42f0744`.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
