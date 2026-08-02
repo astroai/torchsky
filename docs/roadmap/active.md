@@ -423,11 +423,18 @@ stacking-versus-INR/Foam depth result defined in
       allocation from 6,722,270,208 to 937,856,512 bytes. Capacity did not close
       the science gate: final loss was 0.8892, mean support flux 0.0332, mean
       source flux 0.0802, and mean source-contrast slope `4.68e-4`; only 49.62%
-      of hard-render pixels were nonzero. This isolates sparse coefficient
-      coverage/initialization as the next defect. Do not launch another grid/LR
-      sweep; initialize every fixed cell from a coverage-aware coadd or solve the
-      linear appearance problem before observation-level refinement. Artifacts
-      are under `20260802-smacs-foam-compact-g256-42f0744`.
+      of hard-render pixels were nonzero. Commit `4829a0a` added an opt-in
+      coverage-aware coadd initializer using the exact bandpass basis and a
+      ridge-stabilized per-cell spectral solve. Exact H100 session `lera4b7j`
+      initialized 18.13% of the full grid (the target footprint) with `1.12e-6`
+      band reconstruction RMSE and restored 100% nonzero hard coverage. Initial
+      loss improved from 0.9416 to 0.5090 and mean source-contrast slope from
+      `4.68e-4` to 0.337, but mean support/source flux overshot to 2.273/2.527
+      and mean support RMSE worsened to 0.662. The blank gate remains closed.
+      Do not apply an empirical scalar or launch a grid/LR sweep. Next solve the
+      fixed-cell appearance directly in pixel space with the existing exact
+      `PowerPixelOperator.matvec/rmatvec`, then refine against observations.
+      Artifacts are under `20260802-smacs-foam-coaddinit-g256-4829a0a`.
       Foam headless runs now also fail nonzero when a requested model fails or
       is missing.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous

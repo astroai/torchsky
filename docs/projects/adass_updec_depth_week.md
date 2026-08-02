@@ -534,11 +534,18 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     6,722,270,208 bytes for grid 64. Mean support flux remained 0.0332, mean
     source flux reached only 0.0802, mean source-contrast slope was `4.68e-4`,
     and only 49.62% of hard-render pixels were nonzero. Capacity is not the
-    missing ingredient; sparse coefficient coverage/initialization is. Next,
-    initialize every fixed cell from a coverage-aware coadd or solve the linear
-    appearance problem before observation-level refinement. Do not run another
-    grid/LR sweep. Artifacts are under
-    `/arc/projects/ots/torchsky-runs/20260802-smacs-foam-compact-g256-42f0744`.
+    missing ingredient. Commit `4829a0a` then added an opt-in coadd initializer
+    that uses the exact bandpass basis and a ridge-stabilized spectral solve per
+    fixed cell. Exact H100 session `lera4b7j` initialized 18.13% of the full
+    grid (the target footprint) to `1.12e-6` band reconstruction RMSE and
+    restored 100% nonzero hard coverage. Initial loss improved from 0.9416 to
+    0.5090 and mean source-contrast slope from `4.68e-4` to 0.337. It still
+    failed: mean support/source flux overshot to 2.273/2.527 and mean support
+    RMSE worsened to 0.662. Do not introduce an empirical scale or run another
+    grid/LR sweep. Next solve fixed-cell appearance directly in pixel space
+    through the exact `PowerPixelOperator.matvec/rmatvec`, then perform
+    observation-level refinement. Artifacts are under
+    `/arc/projects/ots/torchsky-runs/20260802-smacs-foam-coaddinit-g256-4829a0a`.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the
