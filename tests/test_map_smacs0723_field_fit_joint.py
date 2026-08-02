@@ -19,7 +19,12 @@ BENCHMARKS = ROOT / "benchmarks"
 if str(BENCHMARKS) not in sys.path:
     sys.path.insert(0, str(BENCHMARKS))
 
-from bench_map_smacs0723_field_fit_joint import _format_markdown, _summarize_by_model  # noqa: E402
+from bench_map_smacs0723_field_fit import _field_target_observation  # noqa: E402
+from bench_map_smacs0723_field_fit_joint import (  # noqa: E402
+    _fitted_gaussian_psf_sigma_pix,
+    _format_markdown,
+    _summarize_by_model,
+)
 from bench_map_smacs0723_field_fit_joint import _background_subtracted_source_stats  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _foam_training_tile_side  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _joint_real_fit_kwargs  # noqa: E402
@@ -51,6 +56,38 @@ import bench_map_smacs0723_field_fit_joint
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_joint_fitted_psf_uses_frozen_band_contract_and_local_pixel_scale() -> None:
+    scale_arcsec = 0.01
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 16,
+        "NAXIS2": 16,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 8.5,
+        "CRPIX2": 8.5,
+        "CRVAL1": 110.0,
+        "CRVAL2": -73.0,
+        "CD1_1": -scale_arcsec / 3600.0,
+        "CD1_2": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": scale_arcsec / 3600.0,
+    }
+
+    sigma_pix = _fitted_gaussian_psf_sigma_pix("F090W", header)
+    expected = (0.033 * 1.05) / 2.354820045 / scale_arcsec
+    target = _field_target_observation(
+        header,
+        band_name="F090W",
+        psf_sigma_pix=sigma_pix,
+    )
+
+    assert sigma_pix == pytest.approx(expected, rel=1.0e-5)
+    assert target.psf_spec is not None
+    assert target.psf_spec.mode == "gaussian_sigma_pix"
+    assert target.psf_spec.sigma_pix == pytest.approx(sigma_pix)
 
 
 def test_joint_field_fit_markdown_lists_summary_and_band_rows() -> None:

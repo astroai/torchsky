@@ -110,6 +110,11 @@ products; beating separate per-band images alone is not sufficient.
     tuning and hard-render target WCS pixel polygons through the common
     bandpass, PSF, and background operators. The real adapter now records its
     aligned/CAL input choice and declared Foam capacity.
+  - [x] Activate the frozen fitted-PSF contract in the real joint adapter. Each
+    detector crop and target product now converts the approved 5%-wider
+    band-dependent Gaussian FWHM through its local Torchsky-WCS pixel area;
+    JSON rows record the truth/fitted FWHM and input/target pixel sigmas. A
+    shared-sky-patch fit regression exercises the PSF convolution path.
   - [ ] Exercise independent and shared instances on the frozen real exposure
     adapter and persist their hard-rendered final products.
 - [ ] Apply one common detector/photometer to every final band product.

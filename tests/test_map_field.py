@@ -1758,6 +1758,7 @@ def test_fit_field_model_supports_shared_sky_patch_sampling() -> None:
             spectral_max=wavelength,
             transmission_center=wavelength,
             transmission_sigma=None,
+            psf_sigma_pix=0.5,
             band_name=f"b{idx // 2}",
         )
         image = render_field_observation(
@@ -1772,6 +1773,7 @@ def test_fit_field_model_supports_shared_sky_patch_sampling() -> None:
                 spectral_max=template.spectral_max,
                 transmission_center=template.transmission_center,
                 transmission_sigma=template.transmission_sigma,
+                psf_sigma_pix=template.psf_sigma_pix,
                 band_name=template.band_name,
             )
         )

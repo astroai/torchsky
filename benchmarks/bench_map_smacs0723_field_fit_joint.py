@@ -51,7 +51,10 @@ from bench_map_smacs0723_real import (  # noqa: E402
     _reference_path_for_band,
     _sci_header,
 )
-from bench_multiband_depth import inject_common_world_exposures  # noqa: E402
+from bench_multiband_depth import (  # noqa: E402
+    gaussian_psf_contract,
+    inject_common_world_exposures,
+)
 
 DEFAULT_JSON_OUT = DATA / "benchmark_results" / "smacs0723_field_fit_joint.json"
 DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_field_fit_joint.md"
@@ -69,6 +72,7 @@ from torchsky.map import (  # noqa: E402
     render_field_observation,
     render_spectral_power_foam_observation_exact,
 )
+from torchsky.map.operators import pixel_area_sr_at  # noqa: E402
 
 
 REAL_JOINT_CASE = "tpv_field_fit_deep_multiband_broad"
@@ -76,6 +80,32 @@ FOAM_FOOTPRINT_EXTENT = 0.55
 FOAM_MAX_SMOOTH_PAIRS = 64 * 1024 * 1024
 FOAM_TEMPERATURE_START_CELL_UNITS = 1.0
 FOAM_TEMPERATURE_END_CELL_UNITS = 16.0
+
+
+def _fitted_gaussian_psf_sigma_pix(
+    band: str,
+    header: dict[str, Any],
+) -> float:
+    """Convert the frozen fitted PSF FWHM to the local image pixel scale."""
+
+    width = int(header.get("NAXIS1", 0))
+    height = int(header.get("NAXIS2", 0))
+    if width <= 0 or height <= 0:
+        raise ValueError("PSF conversion requires positive NAXIS1/NAXIS2")
+    wcs = torchsky.WCS(header)
+    area_sr = pixel_area_sr_at(
+        wcs,
+        torch.tensor(0.5 * (width - 1), dtype=torch.float64),
+        torch.tensor(0.5 * (height - 1), dtype=torch.float64),
+    )
+    pixel_scale_arcsec = float(
+        torch.sqrt(area_sr) * (180.0 / torch.pi) * 3600.0
+    )
+    contract = gaussian_psf_contract(band)
+    sigma_pix = contract.fitted_fwhm_arcsec / 2.354820045 / pixel_scale_arcsec
+    if not math.isfinite(sigma_pix) or sigma_pix <= 0.0:
+        raise ValueError("fitted PSF has a non-finite image-pixel width")
+    return sigma_pix
 
 
 def _parse_csv(value: str) -> list[str]:
@@ -681,8 +711,15 @@ def main() -> int:
                 if explicit_target_header is not None
                 else _cutout_header(ref_header, x0, y0, int(args.crop_size))
             )
+            psf_contract = gaussian_psf_contract(band)
+            target_psf_sigma_pix = _fitted_gaussian_psf_sigma_pix(
+                band,
+                target_header,
+            )
             target_observation = _field_target_observation(
-                target_header, band_name=band
+                target_header,
+                band_name=band,
+                psf_sigma_pix=target_psf_sigma_pix,
             )
             science_overrides = None
             if injection_manifest is not None:
@@ -763,6 +800,10 @@ def main() -> int:
                         header=crop_header,
                         weight=torch.from_numpy(crop_weight),
                         mask=torch.from_numpy(crop_mask),
+                        psf_sigma_pix=_fitted_gaussian_psf_sigma_pix(
+                            band,
+                            crop_header,
+                        ),
                         **_field_observation_kwargs_for_band(band),
                     )
                 )
@@ -817,6 +858,17 @@ def main() -> int:
                     ),
                     "target_header": dict(target_header),
                     "target_observation": target_observation,
+                    "truth_psf_fwhm_arcsec": psf_contract.truth_fwhm_arcsec,
+                    "fitted_psf_fwhm_arcsec": psf_contract.fitted_fwhm_arcsec,
+                    "input_psf_sigma_pix_min": min(
+                        observation.psf_sigma_pix
+                        for observation in field_observations
+                    ),
+                    "input_psf_sigma_pix_max": max(
+                        observation.psf_sigma_pix
+                        for observation in field_observations
+                    ),
+                    "target_psf_sigma_pix": target_psf_sigma_pix,
                     "support_mask": support_mask.astype(bool, copy=False),
                     "coadd_pred": coadd_data,
                     "n_exposures": len(exposure_paths),
@@ -954,6 +1006,19 @@ def main() -> int:
                     "band": band,
                     "model": model_kind,
                     "n_exposures": int(entry["n_exposures"]),
+                    "truth_psf_fwhm_arcsec": float(
+                        entry["truth_psf_fwhm_arcsec"]
+                    ),
+                    "fitted_psf_fwhm_arcsec": float(
+                        entry["fitted_psf_fwhm_arcsec"]
+                    ),
+                    "input_psf_sigma_pix_min": float(
+                        entry["input_psf_sigma_pix_min"]
+                    ),
+                    "input_psf_sigma_pix_max": float(
+                        entry["input_psf_sigma_pix_max"]
+                    ),
+                    "target_psf_sigma_pix": float(entry["target_psf_sigma_pix"]),
                     "forward_context": bool(args.forward_context),
                     "optimizer_steps": int(args.steps)
                     if model_kind != "coadd_bilinear"

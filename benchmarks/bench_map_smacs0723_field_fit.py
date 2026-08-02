@@ -150,6 +150,7 @@ def _field_target_observation(
     *,
     band_name: str,
     observation_mode: str = "bandpass",
+    psf_sigma_pix: float = 0.0,
 ) -> FieldObservation:
     image = torch.zeros(
         (int(header["NAXIS2"]), int(header["NAXIS1"])), dtype=torch.float32
@@ -157,6 +158,7 @@ def _field_target_observation(
     return FieldObservation(
         image=image,
         header=dict(header),
+        psf_sigma_pix=float(psf_sigma_pix),
         **_field_observation_kwargs_for_band(
             band_name, observation_mode=observation_mode
         ),

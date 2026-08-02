@@ -387,7 +387,15 @@ stacking-versus-INR/Foam depth result defined in
       input helpers through the Astropy-dependent classical-comparator module.
       The helpers now live in the shared SMACS input module, so the next rerun
       can use the unchanged slim `smacs-cuda` environment; this failed session
-      provides no scientific evidence.
+      provides no scientific evidence. A follow-up forward-path audit then
+      found that the real adapter left every input and target observation at
+      `PSFSpec(mode="none")`; the sampler supported PSFs, but the claimed real
+      PSF path was not active. The adapter now converts the frozen 5%-wider
+      six-band Gaussian FWHM contract to each exposure's local Torchsky-WCS
+      pixel scale, trains through that PSF, applies the corresponding target
+      PSF to hard products, and records truth/fitted FWHM plus input/target
+      sigma provenance. Do not launch the blank until this exact change passes
+      the full local gate.
       Foam headless runs now also fail nonzero when a requested model fails or
       is missing.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous
