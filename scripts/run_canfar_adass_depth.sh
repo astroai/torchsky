@@ -140,7 +140,7 @@ case "${mode}" in
     ;;
   native-band)
     band=${SMACS_BAND:?set SMACS_BAND}
-    methods=torchsky_drizzle_square_pf0p800,torchsky_drizzle_square_pf1p000
+    methods=torchsky_bilinear,torchsky_drizzle_square_pf0p800,torchsky_drizzle_square_pf1p000
     validation_root=/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940
     IFS=',' read -r -a native_batches <<< \
       "${NATIVE_VALIDATION_BATCHES:-blank,validation-000,validation-001,validation-002}"

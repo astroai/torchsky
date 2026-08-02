@@ -113,6 +113,91 @@ def _time_once(fn: Callable[[], Any]) -> tuple[float, Any]:
     return float(time.perf_counter() - t0), result
 
 
+def _wcs_overlap_probe(
+    observations: list[ImageObservation],
+    target_header: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Compare sparse Torchsky/Astropy source-to-target mappings."""
+    target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
+    target_torch = torchsky.WCS(target_header)
+    target_astropy = WCS(_as_fits_header(target_header))
+    rows: list[dict[str, Any]] = []
+    for observation in observations:
+        image, source_header = torchsky.read(
+            observation.path,
+            hdu=observation.hdu,
+            return_header=True,
+        )
+        height, width = (int(image.shape[0]), int(image.shape[1]))
+        ys, xs = torch.meshgrid(
+            torch.linspace(0.0, float(height - 1), 5, dtype=torch.float64),
+            torch.linspace(0.0, float(width - 1), 5, dtype=torch.float64),
+            indexing="ij",
+        )
+        source_torch = torchsky.WCS(dict(source_header))
+        ra, dec = source_torch.pixel_to_world(xs.reshape(-1), ys.reshape(-1))
+        tx, ty = target_torch.world_to_pixel(ra, dec)
+        torch_pixels = torch.stack((tx, ty), dim=1).detach().cpu().numpy()
+
+        source_astropy = WCS(_as_fits_header(dict(source_header)))
+        source_pixels = np.stack(
+            (xs.reshape(-1).numpy(), ys.reshape(-1).numpy()), axis=1
+        )
+        astropy_world = source_astropy.all_pix2world(source_pixels, 0)
+        astropy_pixels = target_astropy.all_world2pix(astropy_world, 0)
+        finite_torch = np.isfinite(torch_pixels).all(axis=1)
+        finite_astropy = np.isfinite(astropy_pixels).all(axis=1)
+        common = finite_torch & finite_astropy
+        inside_torch = (
+            finite_torch
+            & (torch_pixels[:, 0] >= -0.5)
+            & (torch_pixels[:, 0] <= target_shape[1] - 0.5)
+            & (torch_pixels[:, 1] >= -0.5)
+            & (torch_pixels[:, 1] <= target_shape[0] - 0.5)
+        )
+        inside_astropy = (
+            finite_astropy
+            & (astropy_pixels[:, 0] >= -0.5)
+            & (astropy_pixels[:, 0] <= target_shape[1] - 0.5)
+            & (astropy_pixels[:, 1] >= -0.5)
+            & (astropy_pixels[:, 1] <= target_shape[0] - 0.5)
+        )
+        rows.append(
+            {
+                "path": str(Path(observation.path).resolve()),
+                "source_shape": [height, width],
+                "source_has_sip": source_torch.sip is not None,
+                "source_has_tpv": source_torch.tpv is not None,
+                "torch_finite_samples": int(finite_torch.sum()),
+                "astropy_finite_samples": int(finite_astropy.sum()),
+                "torch_inside_samples": int(inside_torch.sum()),
+                "astropy_inside_samples": int(inside_astropy.sum()),
+                "max_target_pixel_disagreement": (
+                    float(np.max(np.abs(torch_pixels[common] - astropy_pixels[common])))
+                    if np.any(common)
+                    else None
+                ),
+                "torch_target_x_range": (
+                    [
+                        float(torch_pixels[finite_torch, 0].min()),
+                        float(torch_pixels[finite_torch, 0].max()),
+                    ]
+                    if np.any(finite_torch)
+                    else None
+                ),
+                "torch_target_y_range": (
+                    [
+                        float(torch_pixels[finite_torch, 1].min()),
+                        float(torch_pixels[finite_torch, 1].max()),
+                    ]
+                    if np.any(finite_torch)
+                    else None
+                ),
+            }
+        )
+    return rows
+
+
 def _build_method_specs(include_inr: bool) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = [
         {
@@ -1050,6 +1135,7 @@ def run_stacker_benchmark(
         published_target_header = dict(_cutout_header(ref_header, x0, y0, crop_size))
         linearized_target_header = dict(_linearize_sip_header(published_target_header))
         swarp_target_header = _north_up_tan_header(published_target_header)
+        overlap_probes: dict[str, list[dict[str, Any]]] = {}
 
         rows: list[dict[str, Any]] = []
         for spec in specs:
@@ -1061,6 +1147,12 @@ def run_stacker_benchmark(
                 linearized_target_header=linearized_target_header,
                 swarp_target_header=swarp_target_header,
             )
+            probe_key = json.dumps(target_header, sort_keys=True, default=str)
+            if probe_key not in overlap_probes:
+                overlap_probes[probe_key] = _wcs_overlap_probe(
+                    observations,
+                    target_header,
+                )
             row: dict[str, Any] = {
                 "name": spec["name"],
                 "variant": spec["variant"],
@@ -1075,6 +1167,7 @@ def run_stacker_benchmark(
                 "n_exposures": len(exposure_paths),
                 "input_product": input_product,
                 "filename_contains": filename_contains,
+                "wcs_overlap_probe": overlap_probes[probe_key],
             }
             try:
                 if spec["kind"] == "coadd":
@@ -1099,6 +1192,8 @@ def run_stacker_benchmark(
                 else:
                     raise ValueError(f"unsupported method kind {spec['kind']!r}")
                 raw_pred, raw_weight, extra = result
+                row.update(extra)
+                row["time_ms"] = elapsed * 1000.0
                 product_pred, product_weight, pred, weight = _product_and_metric_arrays(
                     raw_pred,
                     raw_weight,
@@ -1116,8 +1211,6 @@ def run_stacker_benchmark(
                         "predicted stack contains non-finite supported pixels"
                     )
                 row.update(_compute_region_metrics(pred, ref_crop, support_mask))
-                row.update(extra)
-                row["time_ms"] = elapsed * 1000.0
                 if product_out_dir is not None:
                     product_out_dir.mkdir(parents=True, exist_ok=True)
                     product_path = product_out_dir / f"{spec['name']}_sci.fits"

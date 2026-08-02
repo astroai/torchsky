@@ -224,7 +224,14 @@ stacking-versus-INR/Foam depth result defined in
       curved SIP/TPV detector whose interior overlaps the target. Distorted
       exact Drizzle now bypasses that approximation and scans the full detector
       through the batched exact kernel; a real SIP regression has finite
-      support. Re-run only this one F090W blank gate before any fanout.
+      support. The corresponding real F090W retry, session `hnhtlukr` at
+      `4becb1f`, still produced zero support for both pixfracs, so the scanner
+      was not the root cause. Stop remote retries. The next gate now includes
+      Torchsky bilinear as a WCS control and persists a fixed 5-by-5
+      source-to-target mapping comparison against Astropy for every exposure,
+      including SIP/TPV flags, finite/inside counts, coordinate ranges, and
+      maximum target-pixel disagreement. Diagnose that evidence locally before
+      another exact-Drizzle run or any fanout.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
   - [x] Add `SpectralPowerFoamField` as the minimum common-operator bridge:

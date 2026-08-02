@@ -5,6 +5,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
+import torchsky
+from torchsky.map import ImageObservation
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,7 +27,32 @@ from bench_map_smacs0723_stackers import (
     _resolve_benchmark_target_header,
     _product_and_metric_arrays,
     _run_legacy_method,
+    _wcs_overlap_probe,
 )
+
+
+def test_wcs_overlap_probe_compares_torchsky_and_astropy(tmp_path: Path) -> None:
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 8,
+        "NAXIS2": 8,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 4.5,
+        "CRPIX2": 4.5,
+        "CRVAL1": 12.0,
+        "CRVAL2": -3.0,
+        "CDELT1": -0.01,
+        "CDELT2": 0.01,
+    }
+    path = tmp_path / "probe.fits"
+    torchsky.write(str(path), torch.ones((8, 8)), header=header, overwrite=True)
+
+    row = _wcs_overlap_probe([ImageObservation(str(path))], header)[0]
+
+    assert row["torch_inside_samples"] == 25
+    assert row["astropy_inside_samples"] == 25
+    assert row["max_target_pixel_disagreement"] < 1.0e-8
 
 
 def test_build_method_specs_includes_linearized_legacy_targets() -> None:
