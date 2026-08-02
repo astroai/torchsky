@@ -312,6 +312,7 @@ class SpectralPowerFoamField(_BaseFieldModel):
         minimum_radius: float = 0.0,
         temperature_start: float = 4.0,
         temperature_end: float = 24.0,
+        compact_fixed_geometry: bool = False,
     ) -> None:
         super().__init__(domain)
         if self.coord_mode != "local_tangent":
@@ -331,6 +332,7 @@ class SpectralPowerFoamField(_BaseFieldModel):
         self.temperature_start = start
         self.temperature_end = end
         self._temperature = end
+        self.compact_fixed_geometry = bool(compact_fixed_geometry)
 
     @property
     def sites(self) -> Tensor:
@@ -410,6 +412,7 @@ class SpectralPowerFoamField(_BaseFieldModel):
             self._legendre_basis(coords[..., 2]),
             power_temperature=self._temperature,
             support_temperature=self._temperature,
+            compact_fixed_geometry=self.compact_fixed_geometry,
         )
 
     def exact_operator(

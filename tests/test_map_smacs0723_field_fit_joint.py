@@ -202,6 +202,15 @@ def test_joint_real_foam_fit_scales_tiles_with_grid_capacity() -> None:
     )
 
     assert _foam_training_tile_side(crop_size=512, grid_side=256) == 32
+    fixed = _joint_real_fit_kwargs(
+        "spectral_power_foam",
+        crop_size=512,
+        steps=2,
+        num_observations=4,
+        foam_grid_side=256,
+        foam_fixed_geometry=True,
+    )
+    assert fixed["training_patch_size"] == 128
     assert kwargs["training_patch_size"] == 32
     assert kwargs["diagnostic_spatial_tile_hw"] == (32, 32)
 

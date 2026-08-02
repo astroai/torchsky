@@ -505,8 +505,14 @@ class SpectralPowerFoam(torch.nn.Module):
         *,
         power_temperature: float = 10.0,
         support_temperature: float = 10.0,
+        compact_fixed_geometry: bool = False,
     ) -> Tensor:
-        """Evaluate smooth point samples; uncovered union mass contributes zero."""
+        """Evaluate point samples; uncovered union mass contributes zero.
+
+        ``compact_fixed_geometry`` uses exact bounded support and is intended for
+        appearance-only optimization. It avoids the dense point-by-all-cells
+        matrix, but deliberately rejects trainable sites or radii.
+        """
         if (
             not basis_values.is_floating_point()
             or basis_values.ndim < 1
@@ -520,17 +526,54 @@ class SpectralPowerFoam(torch.nn.Module):
             raise ValueError("basis_values must match model dtype and device")
         if basis_values.ndim > 1 and basis_values.shape[:-1] != points.shape[:-1]:
             raise ValueError("non-scalar basis_values leading shape must match points")
-        weights = smooth_bounded_power_weights(
-            points,
-            self.sites,
-            self.radii,
-            power_temperature=power_temperature,
-            support_temperature=support_temperature,
+        selected: Tensor | None = None
+        if compact_fixed_geometry:
+            if self.sites.requires_grad or self.raw_radii.requires_grad:
+                raise ValueError(
+                    "compact_fixed_geometry requires frozen sites and radii"
+                )
+            support_scale = float(support_temperature)
+            if not math.isfinite(support_scale) or support_scale <= 0:
+                raise ValueError("support_temperature must be finite and positive")
+            flat_points = points.reshape(-1, points.shape[-1])
+            if flat_points.shape[0] == 0:
+                return points[..., 0] * self.cell_coefficients.sum()
+            with torch.no_grad():
+                lower = flat_points.amin(dim=0)
+                upper = flat_points.amax(dim=0)
+                # ponytail: this O(cells) scan is cheaper than maintaining a
+                # spatial index here; switch to cached tile CSR if profiling says so.
+                closest = torch.minimum(torch.maximum(self.sites, lower), upper)
+                selected = torch.nonzero(
+                    torch.sum((self.sites - closest) ** 2, dim=1)
+                    <= self.radii**2,
+                    as_tuple=False,
+                ).flatten()
+            if selected.numel() == 0:
+                return points[..., 0] * 0.0 + self.cell_coefficients.sum() * 0.0
+            weights = soft_bounded_power_weights(
+                points,
+                self.sites[selected],
+                self.radii[selected],
+                temperature=power_temperature,
+            )
+        else:
+            weights = smooth_bounded_power_weights(
+                points,
+                self.sites,
+                self.radii,
+                power_temperature=power_temperature,
+                support_temperature=support_temperature,
+            )
+        coefficients = (
+            self.cell_coefficients
+            if selected is None
+            else self.cell_coefficients[selected]
         )
         cell_values = torch.einsum(
             "...k,ck->...c",
             basis_values,
-            self.cell_coefficients,
+            coefficients,
         )
         return torch.sum(weights * cell_values, dim=-1)
 

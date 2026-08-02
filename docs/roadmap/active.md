@@ -396,14 +396,29 @@ stacking-versus-INR/Foam depth result defined in
       detector-pixel integration, applies the corresponding target PSF to hard
       products, and records truth/fitted FWHM plus input/target sigma and
       sampling provenance. The PSF-only commit `0c808d9` passes its full local
-      gate (1,735 passed,
-      214 skipped, zero type errors), but CANFAR staging rejected the exact
-      AstroAI H100 request at admission with HTTP 400 `Illegal group reference`;
-      no session, pod, or artifact was created. Keep the queued configuration
-      fixed at F090W/F150W, blank only, 512-square target, 64-square grid, four
-      spectral terms, 50 steps, `lr=0.02`, fixed geometry, and retry exact SHA
-      from the pixel-integration follow-up when staging group resolution
-      recovers; do not fall back to the PSF-only SHA.
+      gate (1,735 passed, 214 skipped, zero type errors), but its first exact
+      AstroAI H100 request was rejected before pod creation with HTTP 400
+      `Illegal group reference`. Admission probes isolated this to CANFAR
+      interpreting shell `$name` references in submitted commands as platform
+      groups, not to the image, account, resource shape, or Torchsky. Session
+      `vhevkgna` then ran the corrected pixel-integrated commit `23e5ee9`
+      through an encoded bootstrap with the frozen F090W/F150W blank,
+      512-square target, 64-square grid, four spectral terms, 50 steps,
+      `lr=0.02`, and fixed geometry. Both rows are `OK`; the recorded PSF
+      widths and `gauss_legendre_2x2` sampling are exact, and CUDA peak
+      allocation was 6,722,270,208 bytes. The 1,130.6 s fit only reduced loss
+      from 0.9416 to 0.8195, however: mean support flux was 0.0347, mean source
+      flux was -0.0297, and mean source-contrast slope was `-5.94e-4`. This is
+      the first valid PSF-plus-detector-pixel result and it fails scientific
+      fidelity. Dense 256-square session `j2fmxlln` was stopped after 48 minutes:
+      its memory guard reduced the training patch from 128 square to 32 square,
+      so it sampled 16 times fewer sky pixels per step and could not isolate
+      representation capacity. Frozen-geometry Foam now has an opt-in exact
+      compact-support path that rejects trainable geometry and evaluates only
+      cells whose disks intersect the current point bounding box. The fair
+      256-square control therefore restores 128-square patches while keeping
+      every scientific setting fixed; launch it only from the committed compact
+      implementation and record `foam_compact_fixed_geometry=true`.
       Foam headless runs now also fail nonzero when a requested model fails or
       is missing.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous
@@ -1237,6 +1252,12 @@ report every pure headless image, so it is not an authoritative allowlist.
 Confirm the exact resolved image through a successful disposable session pull
 and the session metadata returned by `canfar ps --all --json`. Every job writes
 its artifact to persistent `/arc` storage and exits.
+
+CANFAR expands `$name` tokens in submitted command arguments as platform group
+references before the container starts. Do not put shell-variable references in
+the `canfar create ... -- CMD ARGS` payload. Use a script already on `/arc`, or
+encode the complete bootstrap and decode it inside the container with a
+single-quoted, YAML-safe standard-library command.
 
 ```bash
 canfar server use staging

@@ -18,6 +18,7 @@ from torchsky.map.field import (
     render_field_observation,
     render_spectral_power_foam_observation_exact,
     smooth_bounded_power_weights,
+    soft_bounded_power_weights,
 )
 
 
@@ -89,6 +90,44 @@ def test_spectral_power_foam_has_finite_joint_geometry_and_spectral_gradients() 
     ):
         assert parameter.grad is not None
         assert bool(torch.isfinite(parameter.grad).all())
+
+
+def test_spectral_power_foam_compact_fixed_geometry_matches_dense_support() -> None:
+    model = _model()
+    model.sites.requires_grad_(False)
+    model.raw_radii.requires_grad_(False)
+    points = torch.tensor(
+        [[-0.6, 0.1], [0.4, -0.2], [1.5, 0.0]],
+        dtype=torch.float64,
+    )
+    basis = torch.tensor(
+        [[1.0, -0.5], [1.0, 0.2], [1.0, 0.8]],
+        dtype=torch.float64,
+    )
+
+    actual = model(
+        points,
+        basis,
+        power_temperature=7.0,
+        compact_fixed_geometry=True,
+    )
+    weights = soft_bounded_power_weights(
+        points,
+        model.sites,
+        model.radii,
+        temperature=7.0,
+    )
+    expected = torch.sum(
+        weights * torch.einsum("pk,ck->pc", basis, model.cell_coefficients),
+        dim=-1,
+    )
+    torch.testing.assert_close(actual, expected)
+    actual.sum().backward()
+    assert model.cell_coefficients.grad is not None
+
+    model.sites.requires_grad_(True)
+    with pytest.raises(ValueError, match="requires frozen"):
+        model(points, basis, compact_fixed_geometry=True)
 
 
 @pytest.mark.parametrize("semantics", ["surface_brightness", "integrated_flux"])

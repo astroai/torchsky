@@ -353,6 +353,7 @@ def _joint_real_fit_kwargs(
     num_observations: int,
     foam_grid_side: int = 16,
     foam_lr: float = 2.0e-2,
+    foam_fixed_geometry: bool = False,
 ) -> dict[str, Any]:
     kwargs = _field_fit_kwargs_for_model(
         model_kind,
@@ -366,9 +367,13 @@ def _joint_real_fit_kwargs(
         foam_learning_rate = float(foam_lr)
         if not math.isfinite(foam_learning_rate) or foam_learning_rate <= 0.0:
             raise ValueError("foam_lr must be finite and positive")
-        tile_side = _foam_training_tile_side(
-            crop_size=int(crop_size),
-            grid_side=int(foam_grid_side),
+        tile_side = (
+            min(int(crop_size), 128)
+            if foam_fixed_geometry
+            else _foam_training_tile_side(
+                crop_size=int(crop_size),
+                grid_side=int(foam_grid_side),
+            )
         )
         kwargs["lr"] = foam_learning_rate
         kwargs["curriculum"] = "feature_scale_ramp"
@@ -954,6 +959,9 @@ def main() -> int:
                     basis_count=int(args.foam_basis_count),
                     extent=float(args.foam_extent),
                 )
+                model_kwargs["compact_fixed_geometry"] = not bool(
+                    args.foam_train_geometry
+                )
             fit_kwargs = _joint_real_fit_kwargs(
                 model_kind,
                 crop_size=int(args.crop_size),
@@ -961,6 +969,7 @@ def main() -> int:
                 num_observations=len(normalized_observations),
                 foam_grid_side=int(args.foam_grid_side),
                 foam_lr=float(args.foam_lr),
+                foam_fixed_geometry=not bool(args.foam_train_geometry),
             )
             if forward_ctx_tuple is not None:
                 fit_kwargs = dict(fit_kwargs)
@@ -1133,6 +1142,9 @@ def main() -> int:
                             row["foam_geometry_trainable"] = bool(
                                 hard_model.sites.requires_grad
                                 or hard_model.foam.raw_radii.requires_grad
+                            )
+                            row["foam_compact_fixed_geometry"] = bool(
+                                hard_model.compact_fixed_geometry
                             )
                             row["foam_target_x_range"] = [
                                 float(target_coordinates[:, 0].min()),

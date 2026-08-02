@@ -503,7 +503,7 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     `1.71e-5`, but support flux remained 2.28% and coefficients stopped at
     0.0276. Localization helps, but the optimizer amplitude ceiling still
     dominates.
-  - [ ] Re-run a true fixed-geometry control with a coefficient learning rate
+  - [x] Re-run a true fixed-geometry control with a coefficient learning rate
     commensurate with unit-RMS normalized inputs. The earlier nominal
     fixed-grid runs also optimized sites/radii and used `lr=0.001`; after 50
     steps their maximum coefficients remained near 0.03, which explains
@@ -514,7 +514,21 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     `lr=0.001` leaves MSE at 2.34 from 2.50 and coefficients below 0.049,
     whereas `lr=0.02` reaches 0.429, coefficients 0.868, and a strong wavelength
     contrast. This control is not a depth result. The benchmark runner now
-    fails closed on any requested model error or missing row.
+    fails closed on any requested model error or missing row. Exact H100
+    session `vhevkgna` at `23e5ee9` completed the corrected PSF-aware,
+    2-by-2 detector-pixel-integrated control in 1,130.6 s with 6,722,270,208
+    bytes peak CUDA allocation. Loss fell from 0.9416 to 0.8195 and coefficients
+    reached 0.1803, but mean support flux was only 0.0347, mean source flux was
+    -0.0297, and mean source-contrast slope was `-5.94e-4`. The fixed-LR
+    execution question is closed; scientific fidelity still fails. The one
+    predeclared dense 256-square-grid session `j2fmxlln` was stopped after 48
+    minutes because its 32-square memory-bounded patches sampled 16 times fewer
+    sky pixels per step than the 64-grid control; it was not a clean capacity
+    experiment. Frozen-geometry Foam now provides exact compact-support
+    appearance fitting and fails closed for trainable geometry. The replacement
+    256-square control must use that path with the original 128-square patch,
+    unchanged data/PSF/pixel integration/steps/LR, and record
+    `foam_compact_fixed_geometry=true` before its score is interpreted.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the
