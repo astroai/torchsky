@@ -244,6 +244,15 @@ stacking-versus-INR/Foam depth result defined in
       support counts, and retains method timing on downstream failures. The
       focused adapter regression passes locally. Rerun one F090W blank at this
       commit; fanout remains blocked until its three product pairs exist.
+      That gate passed in AstroAI headless session `lyoh21qy` at `7612d32`:
+      bilinear supports 261,494 pixels, square Drizzle supports 262,041 pixels
+      at `pixfrac=0.8` and 262,092 at `pixfrac=1.0`, every method reaches two
+      overlapping exposures, and all six SCI/weight files are durable under
+      `/arc/projects/ots/torchsky-runs/20260802-smacs-native-f090-product-7612d32/`.
+      The full blank plus validation-000/001/002 fanout is now running at the
+      same exact commit in sessions `i7jv3hil`, `d15df5ns`, `wt2iq4wt`,
+      `rv96bwhn`, `ehrn0vzr`, and `m9mx5qh5` for F090W through F444W. Do not
+      score or freeze a pixfrac until all six sessions complete successfully.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
   - [x] Add `SpectralPowerFoamField` as the minimum common-operator bridge:

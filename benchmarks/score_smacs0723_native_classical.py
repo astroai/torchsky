@@ -40,9 +40,13 @@ def _sha256(path: Path) -> str:
 
 def _root(pattern: str, band: str) -> Path:
     try:
-        return Path(pattern.format(band=band)).expanduser().resolve()
+        return Path(
+            pattern.format(band=band, band_lower=band.lower())
+        ).expanduser().resolve()
     except KeyError as exc:
-        raise ValueError("input root pattern must use only the {band} field") from exc
+        raise ValueError(
+            "input root pattern must use only {band} or {band_lower}"
+        ) from exc
 
 
 def _audit_manifest_support(

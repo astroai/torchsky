@@ -39,6 +39,7 @@ def test_native_selection_rule_and_root_pattern() -> None:
     assert winner == METHODS[0]
     assert rows[0]["faintest_completeness"] == 0.5
     assert _root("/runs/{band}", "F090W") == Path("/runs/F090W")
+    assert _root("/runs/{band_lower}", "F090W") == Path("/runs/f090w")
 
 
 def test_native_support_audit_fails_closed(tmp_path: Path) -> None:
