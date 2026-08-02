@@ -140,7 +140,13 @@ case "${mode}" in
     band=${SMACS_BAND:?set SMACS_BAND}
     methods=torchsky_drizzle_square_pf0p800,torchsky_drizzle_square_pf1p000
     validation_root=/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940
-    for batch in blank validation-000 validation-001 validation-002; do
+    IFS=',' read -r -a native_batches <<< \
+      "${NATIVE_VALIDATION_BATCHES:-blank,validation-000,validation-001,validation-002}"
+    for batch in "${native_batches[@]}"; do
+      case "${batch}" in
+        blank | validation-000 | validation-001 | validation-002) ;;
+        *) echo "unsupported native validation batch: ${batch}" >&2; exit 2 ;;
+      esac
       batch_root=${artifact_root}/${batch}/${band}
       mkdir -p "${batch_root}/products"
       injection_args=()
