@@ -18,6 +18,7 @@ from torchsky.map.field import (
     render_field_observation,
     render_spectral_power_foam_observation_exact,
     smooth_bounded_power_weights,
+    solve_spectral_cell_coefficients,
     soft_bounded_power_weights,
 )
 
@@ -128,6 +129,39 @@ def test_spectral_power_foam_compact_fixed_geometry_matches_dense_support() -> N
     model.sites.requires_grad_(True)
     with pytest.raises(ValueError, match="requires frozen"):
         model(points, basis, compact_fixed_geometry=True)
+
+
+def test_solve_spectral_cell_coefficients_reconstructs_observed_bands() -> None:
+    basis = torch.tensor(
+        [[1.0, -1.0, 1.0, -1.0], [1.0, 1.0, 1.0, 1.0]],
+        dtype=torch.float64,
+    )
+    values = torch.tensor(
+        [[2.0, 5.0, 0.0], [4.0, 0.0, 0.0]],
+        dtype=torch.float64,
+    )
+    weights = torch.tensor(
+        [[1.0, 1.0, 0.0], [1.0, 0.0, 0.0]],
+        dtype=torch.float64,
+    )
+
+    coefficients = solve_spectral_cell_coefficients(
+        basis,
+        values,
+        weights,
+        ridge=1.0e-10,
+    )
+    reconstructed = basis @ coefficients.mT
+
+    torch.testing.assert_close(
+        reconstructed[weights > 0],
+        values[weights > 0],
+        atol=1.0e-8,
+        rtol=0,
+    )
+    torch.testing.assert_close(coefficients[2], torch.zeros(4, dtype=torch.float64))
+    with pytest.raises(ValueError, match="non-negative"):
+        solve_spectral_cell_coefficients(basis, values, -weights)
 
 
 @pytest.mark.parametrize("semantics", ["surface_brightness", "integrated_flux"])

@@ -72,6 +72,9 @@ from torchsky.map import (  # noqa: E402
     render_field_observation,
     render_spectral_power_foam_observation_exact,
 )
+from torchsky.map.field import solve_spectral_cell_coefficients  # noqa: E402
+from torchsky.map.field.bandpass import bandpass_quadrature  # noqa: E402
+from torchsky.map.operators import sample_image_plane_channels  # noqa: E402
 from torchsky.map.operators import pixel_area_sr_at  # noqa: E402
 
 
@@ -187,6 +190,126 @@ def _set_foam_geometry_trainable(model: torch.nn.Module, trainable: bool) -> Non
         raise TypeError("model must expose trainable Foam sites and raw_radii")
     sites.requires_grad_(bool(trainable))
     raw_radii.requires_grad_(bool(trainable))
+
+
+def _initialize_foam_from_band_coadds(
+    model: torch.nn.Module,
+    band_entries: list[dict[str, Any]],
+    *,
+    intensity_scale: float,
+    num_spectral_samples: int,
+) -> dict[str, float]:
+    """Warm-start fixed Foam appearance from observed per-band coadds."""
+    sites = getattr(model, "sites", None)
+    coefficients = getattr(model, "cell_coefficients", None)
+    spectral_basis = getattr(model, "spectral_basis", None)
+    domain = getattr(model, "domain", None)
+    if (
+        not isinstance(sites, torch.Tensor)
+        or not isinstance(coefficients, torch.nn.Parameter)
+        or not callable(spectral_basis)
+        or domain is None
+    ):
+        raise TypeError("model must expose Foam sites, coefficients, basis, and domain")
+    scale = float(intensity_scale)
+    if not math.isfinite(scale) or scale <= 0:
+        raise ValueError("intensity_scale must be finite and positive")
+    if not band_entries:
+        raise ValueError("band_entries must not be empty")
+
+    cos_dec = max(math.cos(math.radians(float(domain.center_dec_deg))), 1.0e-6)
+    ra_deg = torch.remainder(
+        float(domain.center_ra_deg)
+        + sites[:, 0].detach() * float(domain.spatial_scale_deg) / cos_dec,
+        360.0,
+    )
+    dec_deg = (
+        float(domain.center_dec_deg)
+        + sites[:, 1].detach() * float(domain.spatial_scale_deg)
+    )
+    sampled_values: list[torch.Tensor] = []
+    sampled_weights: list[torch.Tensor] = []
+    response_basis: list[torch.Tensor] = []
+    for entry in band_entries:
+        image = torch.as_tensor(
+            entry["coadd_pred"],
+            dtype=sites.dtype,
+            device=sites.device,
+        )
+        support = torch.as_tensor(
+            entry["support_mask"],
+            dtype=torch.bool,
+            device=sites.device,
+        )
+        if image.ndim != 2 or support.shape != image.shape:
+            raise ValueError("coadd image and support mask must share 2-D shape")
+        valid = support & torch.isfinite(image)
+        channels = torch.stack(
+            (
+                torch.where(valid, image / scale, torch.zeros_like(image)),
+                valid.to(dtype=image.dtype),
+            )
+        )
+        wcs = torchsky.WCS(dict(entry["target_header"]))
+        wcs.to(sites.device)
+        x_src, y_src = wcs.world_to_pixel(ra_deg, dec_deg)
+        height, width = image.shape
+        grid = torch.stack(
+            (
+                2.0 * x_src.to(dtype=sites.dtype) / max(width - 1, 1) - 1.0,
+                2.0 * y_src.to(dtype=sites.dtype) / max(height - 1, 1) - 1.0,
+            ),
+            dim=-1,
+        ).reshape(1, -1, 2)
+        sampled = sample_image_plane_channels(
+            channels,
+            x_src=x_src.reshape(1, -1),
+            y_src=y_src.reshape(1, -1),
+            grid=grid,
+            kernel="bilinear",
+        ).reshape(2, -1)
+        coverage = torch.clamp(sampled[1], min=0.0, max=1.0)
+        observed = coverage > 0.5
+        sampled_values.append(
+            torch.where(
+                observed,
+                sampled[0] / torch.clamp(coverage, min=1.0e-6),
+                torch.zeros_like(sampled[0]),
+            )
+        )
+        sampled_weights.append(observed.to(dtype=sites.dtype))
+
+        wavelengths, response = bandpass_quadrature(
+            entry["target_observation"],
+            num_spectral_samples=int(num_spectral_samples),
+            device=sites.device,
+        )
+        basis_samples = spectral_basis(wavelengths).to(dtype=sites.dtype)
+        response_basis.append(
+            torch.sum(response.to(dtype=sites.dtype)[:, None] * basis_samples, dim=0)
+        )
+
+    values = torch.stack(sampled_values)
+    weights = torch.stack(sampled_weights)
+    basis = torch.stack(response_basis)
+    solved = solve_spectral_cell_coefficients(basis, values, weights)
+    with torch.no_grad():
+        coefficients.copy_(solved)
+    reconstructed = basis @ solved.mT
+    observed_count = torch.sum(weights)
+    residual_rmse = torch.sqrt(
+        torch.sum(weights * torch.square(reconstructed - values))
+        / torch.clamp(observed_count, min=1.0)
+    )
+    coverage_count = torch.sum(weights > 0, dim=0)
+    return {
+        "foam_initialized_cell_fraction": float(torch.mean((coverage_count > 0).float())),
+        "foam_fully_covered_cell_fraction": float(
+            torch.mean((coverage_count == len(band_entries)).float())
+        ),
+        "foam_initialization_rmse": float(residual_rmse),
+        "foam_initial_coefficient_abs_max": float(torch.max(torch.abs(solved))),
+    }
 
 
 def _preview_uint8(image: np.ndarray) -> np.ndarray:
@@ -569,6 +692,11 @@ def main() -> int:
         help="Train sites and radii; off by default for the fixed-grid control",
     )
     parser.add_argument(
+        "--foam-initialize-from-coadd",
+        action="store_true",
+        help="Warm-start fixed cell spectra from observed per-band coadds",
+    )
+    parser.add_argument(
         "--foam-extent",
         type=float,
         default=FOAM_FOOTPRINT_EXTENT,
@@ -599,6 +727,8 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    if args.foam_initialize_from_coadd and args.foam_train_geometry:
+        parser.error("coadd initialization currently requires fixed Foam geometry")
 
     bands = _parse_csv(args.bands)
     pattern_numbers = tuple(int(value) for value in _parse_csv(args.patt_nums))
@@ -981,8 +1111,18 @@ def main() -> int:
             )
             torch.manual_seed(int(args.seed))
             model = make_field_model(model_kind, domain, **model_kwargs)
+            initialization_diagnostics: dict[str, float] = {}
             if model_kind == "spectral_power_foam":
                 _set_foam_geometry_trainable(model, args.foam_train_geometry)
+                if args.foam_initialize_from_coadd:
+                    initialization_diagnostics = _initialize_foam_from_band_coadds(
+                        model,
+                        band_entries,
+                        intensity_scale=float(intensity_scale),
+                        num_spectral_samples=int(
+                            fit_kwargs.get("num_spectral_samples", 1)
+                        ),
+                    )
             if args.forward_context:
                 model = _PerExposureScalarBias(model, len(normalized_observations))
             t0 = time.perf_counter()
@@ -1002,6 +1142,7 @@ def main() -> int:
                     "initial_loss": float(result.initial_loss),
                     "final_loss": float(result.final_loss),
                     "last_training_loss": float(result.loss_history[-1]),
+                    **initialization_diagnostics,
                 },
             )
 
@@ -1064,6 +1205,20 @@ def main() -> int:
                         row["last_training_loss"] = float(
                             fit_diagnostics["last_training_loss"]
                         )
+                        row["foam_initialized_from_coadd"] = bool(
+                            model_kind == "spectral_power_foam"
+                            and args.foam_initialize_from_coadd
+                        )
+                        for diagnostic_name in (
+                            "foam_initialized_cell_fraction",
+                            "foam_fully_covered_cell_fraction",
+                            "foam_initialization_rmse",
+                            "foam_initial_coefficient_abs_max",
+                        ):
+                            if diagnostic_name in fit_diagnostics:
+                                row[diagnostic_name] = float(
+                                    fit_diagnostics[diagnostic_name]
+                                )
                         row["training_patch_size"] = int(
                             fit_kwargs.get("training_patch_size") or args.crop_size
                         )
@@ -1287,6 +1442,7 @@ def main() -> int:
             "foam_extent": float(args.foam_extent),
             "foam_lr": float(args.foam_lr),
             "foam_train_geometry": bool(args.foam_train_geometry),
+            "foam_initialize_from_coadd": bool(args.foam_initialize_from_coadd),
             "intensity_scale": float(intensity_scale),
             "patt_nums": list(pattern_numbers),
             "crop_x0": args.crop_x0,

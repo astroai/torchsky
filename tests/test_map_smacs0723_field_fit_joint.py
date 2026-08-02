@@ -27,13 +27,20 @@ from bench_map_smacs0723_field_fit_joint import (  # noqa: E402
 )
 from bench_map_smacs0723_field_fit_joint import _background_subtracted_source_stats  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _foam_training_tile_side  # noqa: E402
+from bench_map_smacs0723_field_fit_joint import _initialize_foam_from_band_coadds  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _joint_real_fit_kwargs  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _preview_uint8  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _regular_foam_model_kwargs  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _set_foam_geometry_trainable  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _source_metric_mask  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _write_export_products  # noqa: E402
-from torchsky.map.field import SpectralPowerFoam  # noqa: E402
+from torchsky.map.field import (  # noqa: E402
+    FieldDomain,
+    FieldObservation,
+    SpectralPowerFoam,
+    SpectralPowerFoamField,
+    make_tangent_plane_header,
+)
 
 
 def test_joint_benchmark_import_does_not_require_astropy() -> None:
@@ -213,6 +220,72 @@ def test_joint_real_foam_fit_scales_tiles_with_grid_capacity() -> None:
     assert fixed["training_patch_size"] == 128
     assert kwargs["training_patch_size"] == 32
     assert kwargs["diagnostic_spatial_tile_hw"] == (32, 32)
+
+
+def test_joint_foam_coadd_initializer_covers_cells_and_spectral_bands() -> None:
+    header = make_tangent_plane_header(
+        5,
+        5,
+        crval_ra_deg=10.0,
+        crval_dec_deg=20.0,
+    )
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    model = SpectralPowerFoamField(
+        domain,
+        sites=torch.zeros((1, 2), dtype=torch.float32),
+        radii=torch.ones(1, dtype=torch.float32),
+        cell_coefficients=torch.zeros((1, 2), dtype=torch.float32),
+        compact_fixed_geometry=True,
+    )
+    model.sites.requires_grad_(False)
+    model.foam.raw_radii.requires_grad_(False)
+    entries = []
+    for wavelength, value in ((1.0, 2.0), (3.0, 4.0)):
+        observation = FieldObservation(
+            image=torch.zeros((5, 5)),
+            header=dict(header),
+            weight=torch.ones((5, 5)),
+            mask=torch.ones((5, 5), dtype=torch.bool),
+            wavelength=wavelength,
+            band_name=f"B{wavelength:g}",
+        )
+        entries.append(
+            {
+                "coadd_pred": np.full((5, 5), value, dtype=np.float32),
+                "support_mask": np.ones((5, 5), dtype=bool),
+                "target_header": dict(header),
+                "target_observation": observation,
+            }
+        )
+
+    diagnostics = _initialize_foam_from_band_coadds(
+        model,
+        entries,
+        intensity_scale=1.0,
+        num_spectral_samples=1,
+    )
+    basis = torch.stack(
+        (
+            model.spectral_basis(torch.tensor(1.0)),
+            model.spectral_basis(torch.tensor(3.0)),
+        )
+    )
+    reconstructed = basis @ model.cell_coefficients.detach().mT
+
+    torch.testing.assert_close(
+        reconstructed[:, 0],
+        torch.tensor([2.0, 4.0]),
+        atol=1.0e-5,
+        rtol=0,
+    )
+    assert diagnostics["foam_initialized_cell_fraction"] == 1.0
+    assert diagnostics["foam_fully_covered_cell_fraction"] == 1.0
 
 
 def test_regular_foam_initialization_is_deterministic_and_pixel_independent() -> None:

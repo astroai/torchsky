@@ -276,6 +276,73 @@ def render_power_spectral_basis(
     )
 
 
+def solve_spectral_cell_coefficients(
+    basis_values: Tensor,
+    cell_values: Tensor,
+    cell_weights: Tensor | None = None,
+    *,
+    ridge: float = 1.0e-6,
+) -> Tensor:
+    """Solve independent weighted spectral coefficients for fixed cells.
+
+    ``basis_values`` has shape ``(bands, basis)`` and ``cell_values`` has shape
+    ``(bands, cells)``. Cells with zero total weight remain exactly zero.
+    """
+    if (
+        not basis_values.is_floating_point()
+        or basis_values.ndim != 2
+        or basis_values.shape[0] == 0
+        or basis_values.shape[1] == 0
+    ):
+        raise ValueError("basis_values must have floating shape (bands, basis)")
+    if (
+        not cell_values.is_floating_point()
+        or cell_values.ndim != 2
+        or cell_values.shape[0] != basis_values.shape[0]
+    ):
+        raise ValueError("cell_values must have floating shape (bands, cells)")
+    if cell_values.device != basis_values.device or cell_values.dtype != basis_values.dtype:
+        raise ValueError("basis_values and cell_values must share dtype and device")
+    if not bool(torch.isfinite(basis_values).all()) or not bool(
+        torch.isfinite(cell_values).all()
+    ):
+        raise ValueError("basis_values and cell_values must be finite")
+    if cell_weights is None:
+        weights = torch.ones_like(cell_values)
+    else:
+        if (
+            not cell_weights.is_floating_point()
+            or cell_weights.shape != cell_values.shape
+            or cell_weights.device != cell_values.device
+            or cell_weights.dtype != cell_values.dtype
+        ):
+            raise ValueError("cell_weights must match cell_values")
+        if not bool(torch.isfinite(cell_weights).all()) or bool(
+            torch.any(cell_weights < 0)
+        ):
+            raise ValueError("cell_weights must be finite and non-negative")
+        weights = cell_weights
+    penalty = float(ridge)
+    if not math.isfinite(penalty) or penalty <= 0:
+        raise ValueError("ridge must be finite and positive")
+
+    normal = torch.einsum("bc,bk,bl->ckl", weights, basis_values, basis_values)
+    rhs = torch.einsum("bc,bk,bc->ck", weights, basis_values, cell_values)
+    scale = torch.diagonal(normal, dim1=-2, dim2=-1).mean(dim=-1)
+    regularization = penalty * torch.clamp(scale, min=1.0)
+    identity = torch.eye(
+        basis_values.shape[1],
+        dtype=basis_values.dtype,
+        device=basis_values.device,
+    )
+    coefficients = torch.linalg.solve(
+        normal + regularization[:, None, None] * identity,
+        rhs.unsqueeze(-1),
+    ).squeeze(-1)
+    observed = torch.sum(weights, dim=0) > 0
+    return torch.where(observed[:, None], coefficients, torch.zeros_like(coefficients))
+
+
 def _validate_sites_and_radii(
     sites: Tensor,
     radii: Tensor,

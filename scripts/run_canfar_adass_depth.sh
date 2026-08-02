@@ -53,6 +53,13 @@ case "${FOAM_TRAIN_GEOMETRY:-0}" in
   *) echo "FOAM_TRAIN_GEOMETRY must be 0 or 1" >&2; exit 2 ;;
 esac
 
+foam_initialization_args=()
+case "${FOAM_INITIALIZE_FROM_COADD:-0}" in
+  0) ;;
+  1) foam_initialization_args=(--foam-initialize-from-coadd) ;;
+  *) echo "FOAM_INITIALIZE_FROM_COADD must be 0 or 1" >&2; exit 2 ;;
+esac
+
 case "${mode}" in
   foam)
     bands=${FOAM_BANDS:-F090W,F150W}
@@ -80,6 +87,7 @@ case "${mode}" in
       --foam-extent "${extent}" \
       --foam-lr "${foam_lr}" \
       "${foam_geometry_args[@]}" \
+      "${foam_initialization_args[@]}" \
       --models spectral_power_foam \
       --fail-on-method-error \
       --json-out "${artifact_root}/shared-foam.json" \
@@ -130,6 +138,7 @@ case "${mode}" in
         --foam-extent "${extent}" \
         --foam-lr "${foam_lr}" \
         "${foam_geometry_args[@]}" \
+        "${foam_initialization_args[@]}" \
         --models spectral_power_foam \
         --fail-on-method-error \
         "${injection_args[@]}" \
