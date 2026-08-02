@@ -418,7 +418,10 @@ stacking-versus-INR/Foam depth result defined in
       cells whose disks intersect the current point bounding box. The fair
       256-square control therefore restores 128-square patches while keeping
       every scientific setting fixed; launch it only from the committed compact
-      implementation and record `foam_compact_fixed_geometry=true`.
+      implementation and record `foam_compact_fixed_geometry=true`. Exact H100
+      session `mjsil8q2` is running commit `42f0744` with the matched
+      128-square patch and writes to
+      `20260802-smacs-foam-compact-g256-42f0744`.
       Foam headless runs now also fail nonzero when a requested model fails or
       is missing.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous

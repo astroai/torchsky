@@ -528,7 +528,10 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     appearance fitting and fails closed for trainable geometry. The replacement
     256-square control must use that path with the original 128-square patch,
     unchanged data/PSF/pixel integration/steps/LR, and record
-    `foam_compact_fixed_geometry=true` before its score is interpreted.
+    `foam_compact_fixed_geometry=true` before its score is interpreted. That
+    replacement is running as exact H100 session `mjsil8q2` from commit
+    `42f0744`, with artifacts under
+    `/arc/projects/ots/torchsky-runs/20260802-smacs-foam-compact-g256-42f0744`.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the
