@@ -12,6 +12,7 @@ if str(BENCHMARKS) not in sys.path:
 from score_smacs0723_native_classical import (  # noqa: E402
     METHODS,
     _audit_manifest_support,
+    _audit_native_batch,
     _root,
     _select_method,
 )
@@ -54,3 +55,24 @@ def test_native_support_audit_fails_closed(tmp_path: Path) -> None:
     support[1, 1] = True
     with pytest.raises(ValueError, match="outside the native common support"):
         _audit_manifest_support((manifest,), support)
+
+
+def test_native_batch_audit_rejects_failed_method_before_fits_read(
+    tmp_path: Path,
+) -> None:
+    batch_root = tmp_path / "blank" / "F090W"
+    batch_root.mkdir(parents=True)
+    (batch_root / "stackers.json").write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {"name": METHODS[0], "status": "FAIL"},
+                    {"name": METHODS[1], "status": "OK"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="native methods are not complete"):
+        _audit_native_batch(tmp_path, band="F090W", batch="blank")

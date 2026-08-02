@@ -198,6 +198,24 @@ stacking-versus-INR/Foam depth result defined in
       native products directly to the authoritative
       `validation-000/common-support-r9-f0p99.fits` WCS; do not relax the
       cross-band WCS check or add a post-hoc interpolation.
+    - [ ] Regenerate the native common-grid products after the `cbbbab4`
+      fanout failed scientifically. Its 24 JSON/Markdown artifacts existed, but
+      every inspected product directory was empty; F090W blank records both
+      requested square-Drizzle methods as `FAIL` with no finite support. The
+      benchmark previously returned exit zero after method failures, so session
+      completion was not product completion. Native validation now exits
+      nonzero on any selected-method error; exact square Drizzle falls back to
+      a correctness-preserving full detector scan when its footprint scanner
+      cannot represent distorted outer corners, and batches overlap clipping
+      instead of looping over source pixels in Python. Gate a single real F090W
+      blank product before repeating the other bands/batches.
+      A local rotated-WCS exact-path check now completes at 256 square in
+      0.309 s with 65,533 supported pixels and unit surface brightness; the
+      pinned pre-change path was interrupted after 60 s on the identical input
+      inside `_batch_quad_pixel_areas`, a greater-than-190x lower-bound speedup.
+      The new path completes the same check at 512 square in 1.136 s with
+      262,140 supported pixels. These are engineering timings, not depth
+      evidence; the single-band real-data gate remains required.
 - [ ] Execute Day 3: capacity/compute-matched independent/shared Foam and INR;
   freeze configuration before blind identifiers.
   - [x] Add `SpectralPowerFoamField` as the minimum common-operator bridge:

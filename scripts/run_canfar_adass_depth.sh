@@ -166,6 +166,7 @@ case "${mode}" in
         --validation-classical \
         --drizzle-pixfracs 0.8,1.0 \
         --methods "${methods}" \
+        --fail-on-method-error \
         "${injection_args[@]}" \
         --product-out-dir "${batch_root}/products" \
         --json-out "${batch_root}/stackers.json" \

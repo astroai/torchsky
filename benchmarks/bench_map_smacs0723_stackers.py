@@ -1182,6 +1182,11 @@ def main() -> int:
     )
     parser.add_argument("--drizzle-pixfracs", default="0.6,0.8,1.0")
     parser.add_argument(
+        "--fail-on-method-error",
+        action="store_true",
+        help="Exit nonzero after writing artifacts when any selected method failed",
+    )
+    parser.add_argument(
         "--methods",
         default="",
         help="Comma-separated method names to run; defaults to the full legacy/torchsky set",
@@ -1310,6 +1315,8 @@ def main() -> int:
         args.markdown_out.parent.mkdir(parents=True, exist_ok=True)
         args.markdown_out.write_text(_format_markdown(rows), encoding="utf-8")
     print(json.dumps(payload, indent=2))
+    if args.fail_on_method_error and any(row["status"] != "OK" for row in rows):
+        return 1
     return 0
 
 

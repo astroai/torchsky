@@ -10,6 +10,11 @@ from astropy.io import fits
 
 import torchsky
 import torchsky.map.image_plane as image_plane_mod
+from torchsky.map.operators.geometry_drizzle import (
+    _batch_quad_pixel_areas,
+    _batch_quads_pixel_areas,
+    _scanner_row_bounds,
+)
 import torchsky.map.operators.resampling as resampling_mod
 import torchsky.map.windowing as windowing_mod
 from torchsky.map import (
@@ -32,6 +37,47 @@ from torchsky.map.operators import (
 from torchsky.spectral import SpectralAxis
 
 pytest.importorskip("torchsky.cpp")
+
+
+def test_batched_square_drizzle_areas_match_independent_quads() -> None:
+    quad_x = torch.tensor(
+        [[-0.2, 0.8, 0.8, -0.2], [0.4, 1.6, 1.4, 0.2]],
+        dtype=torch.float64,
+    )
+    quad_y = torch.tensor(
+        [[-0.1, -0.1, 0.9, 0.9], [0.3, 0.5, 1.7, 1.5]],
+        dtype=torch.float64,
+    )
+    centers = torch.tensor([[0.0, 0.0], [1.0, 1.0]], dtype=torch.float64)
+
+    batched = _batch_quads_pixel_areas(quad_x, quad_y, centers)
+    independent = torch.stack(
+        [
+            _batch_quad_pixel_areas(quad_x[index], quad_y[index], centers[index : index + 1])[0]
+            for index in range(2)
+        ]
+    )
+
+    torch.testing.assert_close(batched, independent, rtol=0.0, atol=1.0e-12)
+
+
+def test_drizzle_scanner_falls_back_when_detector_corners_are_invalid() -> None:
+    ys, xs = torch.meshgrid(
+        torch.arange(3, dtype=torch.float64),
+        torch.arange(3, dtype=torch.float64),
+        indexing="ij",
+    )
+    pixmap = torch.stack((xs, ys), dim=-1)
+    pixmap[0, 0] = torch.nan
+
+    row_min, row_max = _scanner_row_bounds(
+        pixmap,
+        source_shape=(3, 3),
+        target_shape=(3, 3),
+    )
+
+    torch.testing.assert_close(row_min, torch.zeros(3, dtype=torch.int64))
+    torch.testing.assert_close(row_max, torch.full((3,), 2, dtype=torch.int64))
 
 
 def _simple_header() -> dict:

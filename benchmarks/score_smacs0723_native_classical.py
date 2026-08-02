@@ -115,7 +115,41 @@ def _select_method(
     return str(rows[0]["method"]), rows
 
 
-def _link_fanout(pattern: str, work_root: Path) -> list[dict[str, str]]:
+def _audit_native_batch(
+    source_root: Path,
+    *,
+    band: str,
+    batch: str,
+) -> dict[str, Any]:
+    batch_root = source_root / batch / band
+    benchmark_path = batch_root / "stackers.json"
+    payload = json.loads(benchmark_path.read_text(encoding="utf-8"))
+    by_method = {str(row.get("name")): row for row in payload.get("rows", [])}
+    failed = [
+        method
+        for method in METHODS
+        if method not in by_method or by_method[method].get("status") != "OK"
+    ]
+    if failed:
+        raise ValueError(
+            f"{benchmark_path}: native methods are not complete: {failed}"
+        )
+    products = []
+    for method in METHODS:
+        for suffix in ("sci", "wht"):
+            path = batch_root / "products" / f"{method}_{suffix}.fits"
+            if not path.is_file():
+                raise FileNotFoundError(path)
+            products.append({"path": str(path.resolve()), "sha256": _sha256(path)})
+    return {
+        "batch": batch,
+        "stackers_json": str(benchmark_path.resolve()),
+        "stackers_json_sha256": _sha256(benchmark_path),
+        "products": products,
+    }
+
+
+def _link_fanout(pattern: str, work_root: Path) -> list[dict[str, Any]]:
     rows = []
     for band in BANDS:
         source_root = _root(pattern, band)
@@ -123,6 +157,10 @@ def _link_fanout(pattern: str, work_root: Path) -> list[dict[str, str]]:
         match = re.search(r"^requested_commit=([0-9a-f]{40})$", log, re.MULTILINE)
         if match is None:
             raise ValueError(f"{source_root}: exact source commit is missing")
+        batch_audit = [
+            _audit_native_batch(source_root, band=band, batch=batch)
+            for batch in BATCHES
+        ]
         for batch in BATCHES:
             source = source_root / batch / band / "products"
             if not source.is_dir():
@@ -142,6 +180,7 @@ def _link_fanout(pattern: str, work_root: Path) -> list[dict[str, str]]:
                 "source_root": str(source_root),
                 "source_commit": match.group(1),
                 "session_log_sha256": _sha256(source_root / "session.log"),
+                "batch_audit": batch_audit,
             }
         )
     commits = {row["source_commit"] for row in rows}
