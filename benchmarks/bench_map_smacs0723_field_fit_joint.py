@@ -72,9 +72,11 @@ from torchsky.map import (  # noqa: E402
     render_field_observation,
     render_spectral_power_foam_observation_exact,
 )
-from torchsky.map.field import solve_spectral_cell_coefficients  # noqa: E402
+from torchsky.map.field import (  # noqa: E402
+    solve_power_pixel_least_squares,
+    solve_spectral_cell_coefficients,
+)
 from torchsky.map.field.bandpass import bandpass_quadrature  # noqa: E402
-from torchsky.map.operators import sample_image_plane_channels  # noqa: E402
 from torchsky.map.operators import pixel_area_sr_at  # noqa: E402
 
 
@@ -199,37 +201,41 @@ def _initialize_foam_from_band_coadds(
     intensity_scale: float,
     num_spectral_samples: int,
 ) -> dict[str, float]:
-    """Warm-start fixed Foam appearance from observed per-band coadds."""
+    """Warm-start fixed Foam appearance from exact observed pixel footprints."""
+    first_parameter = next(model.parameters(), None)
+    if first_parameter is None:
+        raise TypeError("model must have parameters")
+    initialization_device = torch.device(
+        "cuda" if torch.cuda.is_available() else first_parameter.device
+    )
+    model.to(initialization_device)
     sites = getattr(model, "sites", None)
     coefficients = getattr(model, "cell_coefficients", None)
     spectral_basis = getattr(model, "spectral_basis", None)
-    domain = getattr(model, "domain", None)
+    normalized_spatial_coordinates = getattr(
+        model,
+        "normalized_spatial_coordinates",
+        None,
+    )
+    exact_operator = getattr(model, "exact_operator", None)
     if (
         not isinstance(sites, torch.Tensor)
         or not isinstance(coefficients, torch.nn.Parameter)
         or not callable(spectral_basis)
-        or domain is None
+        or not callable(normalized_spatial_coordinates)
+        or not callable(exact_operator)
     ):
-        raise TypeError("model must expose Foam sites, coefficients, basis, and domain")
+        raise TypeError("model must expose Foam sites, coefficients, basis, and operator")
     scale = float(intensity_scale)
     if not math.isfinite(scale) or scale <= 0:
         raise ValueError("intensity_scale must be finite and positive")
     if not band_entries:
         raise ValueError("band_entries must not be empty")
 
-    cos_dec = max(math.cos(math.radians(float(domain.center_dec_deg))), 1.0e-6)
-    ra_deg = torch.remainder(
-        float(domain.center_ra_deg)
-        + sites[:, 0].detach() * float(domain.spatial_scale_deg) / cos_dec,
-        360.0,
-    )
-    dec_deg = (
-        float(domain.center_dec_deg)
-        + sites[:, 1].detach() * float(domain.spatial_scale_deg)
-    )
-    sampled_values: list[torch.Tensor] = []
-    sampled_weights: list[torch.Tensor] = []
+    cell_values: list[torch.Tensor] = []
+    cell_weights: list[torch.Tensor] = []
     response_basis: list[torch.Tensor] = []
+    pixel_systems: list[tuple[Any, torch.Tensor, torch.Tensor, torch.Tensor]] = []
     for entry in band_entries:
         image = torch.as_tensor(
             entry["coadd_pred"],
@@ -244,40 +250,62 @@ def _initialize_foam_from_band_coadds(
         if image.ndim != 2 or support.shape != image.shape:
             raise ValueError("coadd image and support mask must share 2-D shape")
         valid = support & torch.isfinite(image)
-        channels = torch.stack(
-            (
-                torch.where(valid, image / scale, torch.zeros_like(image)),
-                valid.to(dtype=image.dtype),
-            )
+        height, width = image.shape
+        grid_device = torch.device("cpu") if sites.device.type == "mps" else sites.device
+        y, x = torch.meshgrid(
+            torch.arange(height, dtype=torch.float64, device=grid_device),
+            torch.arange(width, dtype=torch.float64, device=grid_device),
+            indexing="ij",
+        )
+        offsets = torch.tensor(
+            [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]],
+            dtype=torch.float64,
+            device=grid_device,
         )
         wcs = torchsky.WCS(dict(entry["target_header"]))
-        wcs.to(sites.device)
-        x_src, y_src = wcs.world_to_pixel(ra_deg, dec_deg)
-        height, width = image.shape
-        grid = torch.stack(
-            (
-                2.0 * x_src.to(dtype=sites.dtype) / max(width - 1, 1) - 1.0,
-                2.0 * y_src.to(dtype=sites.dtype) / max(height - 1, 1) - 1.0,
-            ),
-            dim=-1,
-        ).reshape(1, -1, 2)
-        sampled = sample_image_plane_channels(
-            channels,
-            x_src=x_src.reshape(1, -1),
-            y_src=y_src.reshape(1, -1),
-            grid=grid,
-            kernel="bilinear",
-        ).reshape(2, -1)
-        coverage = torch.clamp(sampled[1], min=0.0, max=1.0)
-        observed = coverage > 0.5
-        sampled_values.append(
-            torch.where(
-                observed,
-                sampled[0] / torch.clamp(coverage, min=1.0e-6),
-                torch.zeros_like(sampled[0]),
+        wcs.to(grid_device)
+        ra_deg, dec_deg = wcs.pixel_to_world(
+            x[..., None] + offsets[:, 0],
+            y[..., None] + offsets[:, 1],
+        )
+        polygons = normalized_spatial_coordinates(
+            ra_deg.to(device=sites.device),
+            dec_deg.to(device=sites.device),
+        ).reshape(height * width, 4, 2)
+        operator = exact_operator(polygons)
+        next_vertices = torch.roll(polygons, shifts=-1, dims=-2)
+        pixel_areas = 0.5 * torch.abs(
+            torch.sum(
+                polygons[..., 0] * next_vertices[..., 1]
+                - polygons[..., 1] * next_vertices[..., 0],
+                dim=-1,
             )
         )
-        sampled_weights.append(observed.to(dtype=sites.dtype))
+        if bool(torch.any(pixel_areas <= 0)):
+            raise ValueError("target WCS produced a degenerate pixel polygon")
+        normalized = torch.where(
+            valid,
+            image / scale,
+            torch.zeros_like(image),
+        ).reshape(-1)
+        pixel_weight = valid.to(dtype=sites.dtype).reshape(-1)
+        integrated = normalized * pixel_areas
+        solved_cells = solve_power_pixel_least_squares(
+            operator,
+            integrated,
+            pixel_weight,
+            ridge=1.0e-6,
+            max_iterations=50,
+            tolerance=1.0e-5,
+        )
+        coverage = torch.clamp(
+            operator.rmatvec(pixel_weight, semantics="integrated_flux"),
+            min=0.0,
+            max=1.0,
+        )
+        cell_values.append(solved_cells)
+        cell_weights.append(coverage)
+        pixel_systems.append((operator, pixel_areas, normalized, pixel_weight))
 
         wavelengths, response = bandpass_quadrature(
             entry["target_observation"],
@@ -289,17 +317,27 @@ def _initialize_foam_from_band_coadds(
             torch.sum(response.to(dtype=sites.dtype)[:, None] * basis_samples, dim=0)
         )
 
-    values = torch.stack(sampled_values)
-    weights = torch.stack(sampled_weights)
+    values = torch.stack(cell_values)
+    weights = torch.stack(cell_weights)
     basis = torch.stack(response_basis)
     solved = solve_spectral_cell_coefficients(basis, values, weights)
     with torch.no_grad():
         coefficients.copy_(solved)
     reconstructed = basis @ solved.mT
-    observed_count = torch.sum(weights)
+    residual_square_sum = sites.new_zeros(())
+    observed_count = sites.new_zeros(())
+    for band_cells, (operator, pixel_areas, normalized, pixel_weight) in zip(
+        reconstructed,
+        pixel_systems,
+        strict=True,
+    ):
+        prediction = operator.matvec(band_cells) / pixel_areas
+        residual_square_sum += torch.sum(
+            pixel_weight * torch.square(prediction - normalized)
+        )
+        observed_count += torch.sum(pixel_weight)
     residual_rmse = torch.sqrt(
-        torch.sum(weights * torch.square(reconstructed - values))
-        / torch.clamp(observed_count, min=1.0)
+        residual_square_sum / torch.clamp(observed_count, min=1.0)
     )
     coverage_count = torch.sum(weights > 0, dim=0)
     return {

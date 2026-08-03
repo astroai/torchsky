@@ -329,7 +329,11 @@ def solve_spectral_cell_coefficients(
     normal = torch.einsum("bc,bk,bl->ckl", weights, basis_values, basis_values)
     rhs = torch.einsum("bc,bk,bc->ck", weights, basis_values, cell_values)
     scale = torch.diagonal(normal, dim1=-2, dim2=-1).mean(dim=-1)
-    regularization = penalty * torch.clamp(scale, min=1.0)
+    regularization = penalty * torch.where(
+        scale > 0,
+        scale,
+        torch.ones_like(scale),
+    )
     identity = torch.eye(
         basis_values.shape[1],
         dtype=basis_values.dtype,
@@ -341,6 +345,145 @@ def solve_spectral_cell_coefficients(
     ).squeeze(-1)
     observed = torch.sum(weights, dim=0) > 0
     return torch.where(observed[:, None], coefficients, torch.zeros_like(coefficients))
+
+
+def solve_power_pixel_least_squares(
+    operator: PowerPixelOperator,
+    pixel_values: Tensor,
+    pixel_weights: Tensor | None = None,
+    *,
+    semantics: PowerValueSemantics = "surface_brightness",
+    ridge: float = 1.0e-6,
+    max_iterations: int = 50,
+    tolerance: float = 1.0e-6,
+    initial: Tensor | None = None,
+) -> Tensor:
+    """Solve a weighted sparse pixel-to-cell inverse with Jacobi PCG.
+
+    ``pixel_values`` has shape ``(..., pixels)`` in the pixel-integrated units
+    returned by :meth:`PowerPixelOperator.matvec`. The result has shape
+    ``(..., cells)``. Pixels with zero weight do not constrain the solution.
+    """
+    if (
+        not pixel_values.is_floating_point()
+        or pixel_values.shape[-1:] != (operator.pixel_count,)
+        or pixel_values.device != operator.areas.device
+        or pixel_values.dtype != operator.areas.dtype
+    ):
+        raise ValueError(
+            "pixel_values must match the operator dtype and device with shape "
+            "(..., pixels)"
+        )
+    if not bool(torch.isfinite(pixel_values).all()):
+        raise ValueError("pixel_values must be finite")
+    if pixel_weights is None:
+        weights = torch.ones_like(pixel_values)
+    else:
+        if (
+            not pixel_weights.is_floating_point()
+            or pixel_weights.shape != pixel_values.shape
+            or pixel_weights.device != pixel_values.device
+            or pixel_weights.dtype != pixel_values.dtype
+        ):
+            raise ValueError("pixel_weights must match pixel_values")
+        if not bool(torch.isfinite(pixel_weights).all()) or bool(
+            torch.any(pixel_weights < 0)
+        ):
+            raise ValueError("pixel_weights must be finite and non-negative")
+        weights = pixel_weights
+    penalty = float(ridge)
+    threshold = float(tolerance)
+    iterations = int(max_iterations)
+    if not math.isfinite(penalty) or penalty <= 0:
+        raise ValueError("ridge must be finite and positive")
+    if not math.isfinite(threshold) or threshold <= 0:
+        raise ValueError("tolerance must be finite and positive")
+    if iterations <= 0:
+        raise ValueError("max_iterations must be positive")
+    output_shape = pixel_values.shape[:-1] + (operator.cell_count,)
+    if initial is None:
+        solution = pixel_values.new_zeros(output_shape)
+    else:
+        if (
+            not initial.is_floating_point()
+            or initial.shape != output_shape
+            or initial.device != pixel_values.device
+            or initial.dtype != pixel_values.dtype
+            or not bool(torch.isfinite(initial).all())
+        ):
+            raise ValueError("initial must be finite and match the output shape")
+        solution = initial.clone()
+
+    flat_values = pixel_values.reshape(-1, operator.pixel_count)
+    flat_weights = weights.reshape_as(flat_values)
+    solution = solution.reshape(-1, operator.cell_count)
+    edge_weights = operator._weights(semantics, transposed=False)
+    diagonal = flat_values.new_zeros((flat_values.shape[0], operator.cell_count))
+    diagonal.scatter_add_(
+        1,
+        operator.indices.expand(flat_values.shape[0], -1),
+        flat_weights[:, operator.pixel_ids] * edge_weights.square(),
+    )
+    positive_count = torch.sum(diagonal > 0, dim=1).clamp(min=1)
+    scale = torch.sum(diagonal, dim=1) / positive_count
+    scale = torch.where(scale > 0, scale, torch.ones_like(scale))
+    regularization = penalty * scale
+    preconditioner = diagonal + regularization[:, None]
+
+    def apply_normal(cell_values: Tensor) -> Tensor:
+        projected = operator.matvec(cell_values, semantics=semantics)
+        return operator.rmatvec(
+            flat_weights * projected,
+            semantics=semantics,
+        ) + regularization[:, None] * cell_values
+
+    rhs = operator.rmatvec(
+        flat_weights * flat_values,
+        semantics=semantics,
+    )
+    residual = rhs - apply_normal(solution)
+    preconditioned = residual / preconditioner
+    direction = preconditioned.clone()
+    residual_dot = torch.sum(residual * preconditioned, dim=1)
+    rhs_norm = torch.linalg.vector_norm(rhs, dim=1)
+    residual_norm = torch.linalg.vector_norm(residual, dim=1)
+    reference_norm = torch.where(rhs_norm > 0, rhs_norm, residual_norm)
+    active = residual_norm > threshold * reference_norm
+    tiny = torch.finfo(pixel_values.dtype).tiny
+    # ponytail: fixed-iteration PCG avoids a solver dependency; cache the
+    # normal diagonal only if repeated solves make profiling justify it.
+    for _ in range(iterations):
+        if not bool(torch.any(active)):
+            break
+        normal_direction = apply_normal(direction)
+        denominator = torch.sum(direction * normal_direction, dim=1)
+        safe_denominator = torch.where(
+            torch.abs(denominator) > tiny,
+            denominator,
+            torch.ones_like(denominator),
+        )
+        step = torch.where(active, residual_dot / safe_denominator, 0.0)
+        solution = solution + step[:, None] * direction
+        residual = residual - step[:, None] * normal_direction
+        next_active = active & (
+            torch.linalg.vector_norm(residual, dim=1) > threshold * reference_norm
+        )
+        preconditioned = residual / preconditioner
+        next_residual_dot = torch.sum(residual * preconditioned, dim=1)
+        safe_residual_dot = torch.where(
+            torch.abs(residual_dot) > tiny,
+            residual_dot,
+            torch.ones_like(residual_dot),
+        )
+        momentum = torch.where(
+            next_active,
+            next_residual_dot / safe_residual_dot,
+            0.0,
+        )
+        direction = preconditioned + momentum[:, None] * direction
+        residual_dot = next_residual_dot
+        active = next_active
+    return solution.reshape(output_shape)
 
 
 def _validate_sites_and_radii(

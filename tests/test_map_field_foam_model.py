@@ -18,6 +18,7 @@ from torchsky.map.field import (
     render_field_observation,
     render_spectral_power_foam_observation_exact,
     smooth_bounded_power_weights,
+    solve_power_pixel_least_squares,
     solve_spectral_cell_coefficients,
     soft_bounded_power_weights,
 )
@@ -162,6 +163,53 @@ def test_solve_spectral_cell_coefficients_reconstructs_observed_bands() -> None:
     torch.testing.assert_close(coefficients[2], torch.zeros(4, dtype=torch.float64))
     with pytest.raises(ValueError, match="non-negative"):
         solve_spectral_cell_coefficients(basis, values, -weights)
+
+
+def test_solve_power_pixel_least_squares_recovers_observed_cells() -> None:
+    sites = torch.tensor([[-0.5, 0.0], [0.5, 0.0]], dtype=torch.float64)
+    radii = torch.full((2,), 0.75, dtype=torch.float64)
+    pixels = torch.tensor(
+        [
+            [[-1.0, -0.5], [0.0, -0.5], [0.0, 0.5], [-1.0, 0.5]],
+            [[0.0, -0.5], [1.0, -0.5], [1.0, 0.5], [0.0, 0.5]],
+        ],
+        dtype=torch.float64,
+    )
+    operator = bounded_power_pixel_operator(pixels, sites, radii)
+    expected = torch.tensor([2.0, 4.0], dtype=torch.float64)
+    pixel_values = operator.matvec(expected)
+
+    actual = solve_power_pixel_least_squares(
+        operator,
+        pixel_values,
+        ridge=1.0e-12,
+        tolerance=1.0e-10,
+    )
+    partial = solve_power_pixel_least_squares(
+        operator,
+        pixel_values,
+        torch.tensor([1.0, 0.0], dtype=torch.float64),
+        ridge=1.0e-12,
+        tolerance=1.0e-10,
+    )
+    zero = solve_power_pixel_least_squares(
+        operator,
+        torch.zeros_like(pixel_values),
+        initial=torch.ones_like(expected),
+        ridge=1.0e-12,
+        tolerance=1.0e-10,
+    )
+
+    torch.testing.assert_close(actual, expected, atol=1.0e-9, rtol=0)
+    torch.testing.assert_close(partial[0], expected[0], atol=1.0e-9, rtol=0)
+    assert partial[1] == 0
+    torch.testing.assert_close(zero, torch.zeros_like(expected), atol=1.0e-9, rtol=0)
+    with pytest.raises(ValueError, match="non-negative"):
+        solve_power_pixel_least_squares(
+            operator,
+            pixel_values,
+            -torch.ones(2, dtype=torch.float64),
+        )
 
 
 @pytest.mark.parametrize("semantics", ["surface_brightness", "integrated_flux"])
