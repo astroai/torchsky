@@ -964,7 +964,9 @@ def main() -> int:
                     world_radec_deg=injection_world,
                     flux_jy=injection_flux,
                 )
-                injection_rows.append({"band": band, **injection_audit})
+                injection_rows.extend(
+                    {"band": band, **row} for row in injection_audit
+                )
 
             image_observations: list[ImageObservation] = []
             raw_field_inputs: list[
