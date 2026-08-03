@@ -192,6 +192,14 @@ def test_solve_power_pixel_least_squares_recovers_observed_cells() -> None:
         ridge=1.0e-12,
         tolerance=1.0e-10,
     )
+    transformed = solve_power_pixel_least_squares(
+        operator,
+        2.0 * pixel_values,
+        ridge=1.0e-12,
+        tolerance=1.0e-10,
+        pixel_matvec=lambda values: 2.0 * values,
+        pixel_rmatvec=lambda values: 2.0 * values,
+    )
     zero = solve_power_pixel_least_squares(
         operator,
         torch.zeros_like(pixel_values),
@@ -201,6 +209,7 @@ def test_solve_power_pixel_least_squares_recovers_observed_cells() -> None:
     )
 
     torch.testing.assert_close(actual, expected, atol=1.0e-9, rtol=0)
+    torch.testing.assert_close(transformed, expected, atol=1.0e-9, rtol=0)
     torch.testing.assert_close(partial[0], expected[0], atol=1.0e-9, rtol=0)
     assert partial[1] == 0
     torch.testing.assert_close(zero, torch.zeros_like(expected), atol=1.0e-9, rtol=0)
@@ -209,6 +218,12 @@ def test_solve_power_pixel_least_squares_recovers_observed_cells() -> None:
             operator,
             pixel_values,
             -torch.ones(2, dtype=torch.float64),
+        )
+    with pytest.raises(ValueError, match="supplied together"):
+        solve_power_pixel_least_squares(
+            operator,
+            pixel_values,
+            pixel_matvec=lambda values: values,
         )
 
 

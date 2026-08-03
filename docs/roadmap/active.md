@@ -437,6 +437,26 @@ stacking-versus-INR/Foam depth result defined in
       Artifacts are under `20260802-smacs-foam-coaddinit-g256-4829a0a`.
       Foam headless runs now also fail nonzero when a requested model fails or
       is missing.
+    - [x] Replace centre-sampled Foam initialization with a weighted exact
+      pixel-footprint inverse. Commit `d10627f` adds Jacobi-preconditioned CG
+      over `PowerPixelOperator.matvec/rmatvec`, solves in pixel-integrated
+      units, propagates exact valid-pixel cell coverage into the spectral
+      solve, and makes both ridge terms scale invariant. The local gate passed
+      1,739 tests with 214 skips and zero type errors.
+    - [x] Close the matched exact-pixel blank before changing any tuning
+      setting. H100 session `yxy529gn` completed full commit
+      `d10627f7238c6f1381bc9e4be86a07aa322ebe3d` in 173.2 s at 937,856,512
+      peak accelerator bytes. Exact initialization covered 18.63% of the full
+      grid and kept 100% hard-render coverage. It materially corrected the
+      previous 2.273/2.527 flux overshoot: mean support/source flux became
+      0.872/0.889 and mean source-contrast slope remained 0.276. The blank gate
+      still fails because mean support RMSE is 0.414 and flux remains 11--13%
+      low; initialization RMSE in normalized pixel space is 2.047. Artifacts
+      are under `20260802-smacs-foam-pixelinit-g256-d10627f`.
+    - [ ] Compose the known symmetric target PSF into the initializer's exact
+      forward and adjoint as the only next scientific change. Keep the same
+      data, grid, basis, optimizer, steps, and seed; do not launch injections
+      unless this matched PSF-composed blank passes.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous
       joint benchmark discovered all 36/9 exposures per band, while classical
       validation uses only `PATT_NUM={3,8}` (8/2 exposures). `--patt-nums`

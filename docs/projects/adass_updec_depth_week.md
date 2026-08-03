@@ -546,6 +546,27 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     through the exact `PowerPixelOperator.matvec/rmatvec`, then perform
     observation-level refinement. Artifacts are under
     `/arc/projects/ots/torchsky-runs/20260802-smacs-foam-coaddinit-g256-4829a0a`.
+- [x] Replace centre sampling with an exact weighted pixel-footprint inverse.
+  Commit `d10627f` adds a reusable Jacobi-PCG solve over the existing exact
+  `PowerPixelOperator`, converts surface brightness to pixel-integrated units,
+  and carries exact valid-pixel cell coverage into a scale-invariant spectral
+  solve. Focused checks passed 29/29 and `ci-local` passed 1,739 tests with 214
+  skips and zero type errors.
+- [x] Score the one matched exact-pixel blank before any sweep or PSF change.
+  H100 session `yxy529gn` completed full commit
+  `d10627f7238c6f1381bc9e4be86a07aa322ebe3d` in 173.2 s at 937,856,512 peak
+  accelerator bytes. Exact initialization covered 18.63% of the full grid and
+  retained 100% hard-render coverage. It corrected the centre-sampled
+  2.273/2.527 mean support/source flux overshoot to 0.872/0.889 while retaining
+  mean source-contrast slope 0.276. It does not pass: mean support RMSE is
+  0.414, flux is still 11--13% low, and normalized pixel initialization RMSE is
+  2.047. Artifacts are under
+  `/arc/projects/ots/torchsky-runs/20260802-smacs-foam-pixelinit-g256-d10627f`.
+- [ ] Compose the known symmetric target PSF into the exact initializer forward
+  and adjoint, then run one otherwise identical blank. Do not alter capacity,
+  optimizer, steps, learning rate, seed, data, or injection state. A pass routes
+  to frozen validation injections; another flux/RMSE failure routes to
+  representation refinement rather than a blind hyperparameter sweep.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the

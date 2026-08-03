@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import math
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 import torch
 from torch import Tensor
@@ -357,12 +357,16 @@ def solve_power_pixel_least_squares(
     max_iterations: int = 50,
     tolerance: float = 1.0e-6,
     initial: Tensor | None = None,
+    pixel_matvec: Callable[[Tensor], Tensor] | None = None,
+    pixel_rmatvec: Callable[[Tensor], Tensor] | None = None,
 ) -> Tensor:
     """Solve a weighted sparse pixel-to-cell inverse with Jacobi PCG.
 
     ``pixel_values`` has shape ``(..., pixels)`` in the pixel-integrated units
     returned by :meth:`PowerPixelOperator.matvec`. The result has shape
     ``(..., cells)``. Pixels with zero weight do not constrain the solution.
+    Optional pixel-domain callables compose another linear operator after the
+    power-pixel map and must be supplied as a forward/adjoint pair.
     """
     if (
         not pixel_values.is_floating_point()
@@ -400,6 +404,8 @@ def solve_power_pixel_least_squares(
         raise ValueError("tolerance must be finite and positive")
     if iterations <= 0:
         raise ValueError("max_iterations must be positive")
+    if (pixel_matvec is None) != (pixel_rmatvec is None):
+        raise ValueError("pixel_matvec and pixel_rmatvec must be supplied together")
     output_shape = pixel_values.shape[:-1] + (operator.cell_count,)
     if initial is None:
         solution = pixel_values.new_zeros(output_shape)
@@ -432,15 +438,20 @@ def solve_power_pixel_least_squares(
 
     def apply_normal(cell_values: Tensor) -> Tensor:
         projected = operator.matvec(cell_values, semantics=semantics)
+        if pixel_matvec is not None:
+            projected = pixel_matvec(projected)
+        weighted = flat_weights * projected
+        if pixel_rmatvec is not None:
+            weighted = pixel_rmatvec(weighted)
         return operator.rmatvec(
-            flat_weights * projected,
+            weighted,
             semantics=semantics,
         ) + regularization[:, None] * cell_values
 
-    rhs = operator.rmatvec(
-        flat_weights * flat_values,
-        semantics=semantics,
-    )
+    weighted_values = flat_weights * flat_values
+    if pixel_rmatvec is not None:
+        weighted_values = pixel_rmatvec(weighted_values)
+    rhs = operator.rmatvec(weighted_values, semantics=semantics)
     residual = rhs - apply_normal(solution)
     preconditioned = residual / preconditioner
     direction = preconditioned.clone()
@@ -450,8 +461,9 @@ def solve_power_pixel_least_squares(
     reference_norm = torch.where(rhs_norm > 0, rhs_norm, residual_norm)
     active = residual_norm > threshold * reference_norm
     tiny = torch.finfo(pixel_values.dtype).tiny
-    # ponytail: fixed-iteration PCG avoids a solver dependency; cache the
-    # normal diagonal only if repeated solves make profiling justify it.
+    # ponytail: fixed-iteration PCG avoids a solver dependency; the Jacobi
+    # preconditioner ignores optional pixel mixing and can be upgraded if a
+    # broad PSF makes convergence profiling justify it.
     for _ in range(iterations):
         if not bool(torch.any(active)):
             break

@@ -77,7 +77,7 @@ from torchsky.map.field import (  # noqa: E402
     solve_spectral_cell_coefficients,
 )
 from torchsky.map.field.bandpass import bandpass_quadrature  # noqa: E402
-from torchsky.map.operators import pixel_area_sr_at  # noqa: E402
+from torchsky.map.operators import apply_psf_spec, pixel_area_sr_at  # noqa: E402
 
 
 REAL_JOINT_CASE = "tpv_field_fit_deep_multiband_broad"
@@ -235,7 +235,9 @@ def _initialize_foam_from_band_coadds(
     cell_values: list[torch.Tensor] = []
     cell_weights: list[torch.Tensor] = []
     response_basis: list[torch.Tensor] = []
-    pixel_systems: list[tuple[Any, torch.Tensor, torch.Tensor, torch.Tensor]] = []
+    pixel_systems: list[
+        tuple[Any, torch.Tensor, torch.Tensor, torch.Tensor, Any]
+    ] = []
     for entry in band_entries:
         image = torch.as_tensor(
             entry["coadd_pred"],
@@ -290,6 +292,36 @@ def _initialize_foam_from_band_coadds(
         ).reshape(-1)
         pixel_weight = valid.to(dtype=sites.dtype).reshape(-1)
         integrated = normalized * pixel_areas
+        psf_spec = entry["target_observation"].psf_spec
+        if getattr(psf_spec, "mode", "none") not in (
+            "none",
+            "gaussian_sigma_pix",
+        ):
+            raise ValueError("Foam initialization requires a symmetric target PSF")
+
+        def psf_forward(
+            values: torch.Tensor,
+            areas: torch.Tensor = pixel_areas,
+            spec: Any = psf_spec,
+            shape: tuple[int, int] = (height, width),
+        ) -> torch.Tensor:
+            surface_brightness = values / areas
+            return apply_psf_spec(
+                surface_brightness.reshape(shape),
+                spec,
+            ).reshape(values.shape) * areas
+
+        def psf_adjoint(
+            values: torch.Tensor,
+            areas: torch.Tensor = pixel_areas,
+            spec: Any = psf_spec,
+            shape: tuple[int, int] = (height, width),
+        ) -> torch.Tensor:
+            return apply_psf_spec(
+                (values * areas).reshape(shape),
+                spec,
+            ).reshape(values.shape) / areas
+
         solved_cells = solve_power_pixel_least_squares(
             operator,
             integrated,
@@ -297,6 +329,8 @@ def _initialize_foam_from_band_coadds(
             ridge=1.0e-6,
             max_iterations=50,
             tolerance=1.0e-5,
+            pixel_matvec=psf_forward,
+            pixel_rmatvec=psf_adjoint,
         )
         coverage = torch.clamp(
             operator.rmatvec(pixel_weight, semantics="integrated_flux"),
@@ -305,7 +339,9 @@ def _initialize_foam_from_band_coadds(
         )
         cell_values.append(solved_cells)
         cell_weights.append(coverage)
-        pixel_systems.append((operator, pixel_areas, normalized, pixel_weight))
+        pixel_systems.append(
+            (operator, pixel_areas, normalized, pixel_weight, psf_forward)
+        )
 
         wavelengths, response = bandpass_quadrature(
             entry["target_observation"],
@@ -326,12 +362,18 @@ def _initialize_foam_from_band_coadds(
     reconstructed = basis @ solved.mT
     residual_square_sum = sites.new_zeros(())
     observed_count = sites.new_zeros(())
-    for band_cells, (operator, pixel_areas, normalized, pixel_weight) in zip(
+    for band_cells, (
+        operator,
+        pixel_areas,
+        normalized,
+        pixel_weight,
+        psf_forward,
+    ) in zip(
         reconstructed,
         pixel_systems,
         strict=True,
     ):
-        prediction = operator.matvec(band_cells) / pixel_areas
+        prediction = psf_forward(operator.matvec(band_cells)) / pixel_areas
         residual_square_sum += torch.sum(
             pixel_weight * torch.square(prediction - normalized)
         )
