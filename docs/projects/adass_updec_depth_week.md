@@ -562,11 +562,21 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
   0.414, flux is still 11--13% low, and normalized pixel initialization RMSE is
   2.047. Artifacts are under
   `/arc/projects/ots/torchsky-runs/20260802-smacs-foam-pixelinit-g256-d10627f`.
-- [ ] Compose the known symmetric target PSF into the exact initializer forward
-  and adjoint, then run one otherwise identical blank. Do not alter capacity,
-  optimizer, steps, learning rate, seed, data, or injection state. A pass routes
-  to frozen validation injections; another flux/RMSE failure routes to
-  representation refinement rather than a blind hyperparameter sweep.
+- [x] Compose the known symmetric target PSF into the exact initializer forward
+  and adjoint, then run one otherwise identical blank. Commit `5c99a33` added
+  the area-correct `D P D^-1` forward and `D^-1 P^T D` adjoint and passed 1,739
+  tests. H100 session `cub30m3e` completed in 175.4 s at the same 937,856,512
+  peak accelerator bytes. It is scientifically unchanged: mean support/source
+  flux is 0.875/0.893, source-contrast slope 0.278, support RMSE 0.414, and
+  normalized initialization RMSE 2.044. Target-PSF mismatch is not the limit.
+  Artifacts are under
+  `/arc/projects/ots/torchsky-runs/20260802-smacs-foam-psfinit-g256-5c99a33`.
+- [ ] Make one representation-resolution test, not a grid sweep. Grid-256 cells
+  span about 4.70 by 4.70 target pixels, leaving the exact hard product constant
+  over roughly 22 pixels. Run one otherwise frozen grid-512 blank, which halves
+  that width to about 2.35 pixels. Material improvement routes to the frozen
+  injections; failure stops cell scaling and routes to exact within-cell
+  spatial moments/basis.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the

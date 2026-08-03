@@ -453,10 +453,22 @@ stacking-versus-INR/Foam depth result defined in
       still fails because mean support RMSE is 0.414 and flux remains 11--13%
       low; initialization RMSE in normalized pixel space is 2.047. Artifacts
       are under `20260802-smacs-foam-pixelinit-g256-d10627f`.
-    - [ ] Compose the known symmetric target PSF into the initializer's exact
-      forward and adjoint as the only next scientific change. Keep the same
-      data, grid, basis, optimizer, steps, and seed; do not launch injections
-      unless this matched PSF-composed blank passes.
+    - [x] Compose the known symmetric target PSF into the initializer's exact
+      forward and adjoint as the only next scientific change. Commit `5c99a33`
+      added the area-correct `D P D^-1` pixel forward and
+      `D^-1 P^T D` adjoint and passed 1,739 tests. Matched H100 session
+      `cub30m3e` completed in 175.4 s at the same 937,856,512-byte peak. The
+      result is effectively unchanged: mean support/source flux is 0.875/0.893,
+      contrast slope 0.278, support RMSE 0.414, and initialization RMSE 2.044.
+      Target-PSF mismatch is therefore not the limiting error, and the blank
+      gate remains closed. Artifacts are under
+      `20260802-smacs-foam-psfinit-g256-5c99a33`.
+    - [ ] Test one explicit representation-resolution change, not a grid sweep.
+      The grid-256 hard Foam cell spans about 4.70 by 4.70 target pixels, so its
+      exact output is piecewise constant over roughly 22 pixels. Run one
+      otherwise frozen grid-512 blank (about 2.35 pixels per cell) with compact
+      fixed geometry. If RMSE and flux do not materially improve, stop scaling
+      cells and implement exact within-cell spatial moments/basis instead.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous
       joint benchmark discovered all 36/9 exposures per band, while classical
       validation uses only `PATT_NUM={3,8}` (8/2 exposures). `--patt-nums`
