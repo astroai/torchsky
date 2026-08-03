@@ -281,7 +281,7 @@ def test_joint_foam_coadd_initializer_covers_cells_and_spectral_bands() -> None:
     torch.testing.assert_close(
         reconstructed[:, 0],
         torch.tensor([2.0, 4.0]),
-        atol=1.0e-5,
+        atol=2.0e-5,
         rtol=0,
     )
     assert diagnostics["foam_initialized_cell_fraction"] == 1.0

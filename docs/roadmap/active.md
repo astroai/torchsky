@@ -463,12 +463,27 @@ stacking-versus-INR/Foam depth result defined in
       Target-PSF mismatch is therefore not the limiting error, and the blank
       gate remains closed. Artifacts are under
       `20260802-smacs-foam-psfinit-g256-5c99a33`.
-    - [ ] Test one explicit representation-resolution change, not a grid sweep.
-      The grid-256 hard Foam cell spans about 4.70 by 4.70 target pixels, so its
-      exact output is piecewise constant over roughly 22 pixels. Run one
-      otherwise frozen grid-512 blank (about 2.35 pixels per cell) with compact
-      fixed geometry. If RMSE and flux do not materially improve, stop scaling
-      cells and implement exact within-cell spatial moments/basis instead.
+    - [x] Test one explicit representation-resolution change, not a grid sweep.
+      The first session `zoypfeli` stopped at the existing 10-million-pair
+      allocation guard after measuring 16,423,554 raw candidates; this was a
+      bounded resource guard, not a science result. Commit `e935868` exposed the
+      existing ceiling through the benchmark and CANFAR runner. H100 session
+      `e0do2myt` then completed the otherwise frozen grid-512 blank at exact
+      commit `e9358682d2c86a06792acfbec94a04c7e6110e6e` in 255.1 s with
+      3,147,516,928 peak accelerator bytes. Mean source-contrast slope improved
+      from 0.278 to 0.515, initialization RMSE from 2.044 to 1.656, and mean
+      support/source flux from 0.875/0.893 to 1.075/1.078. Mean support RMSE
+      improved from 0.414 to 0.344. This confirms hard-cell resolution was a
+      major limiter, but the 7--8% mean flux excess and RMSE still keep the
+      fidelity gate closed. Artifacts are under
+      `20260802-smacs-foam-psfinit-g512-e935868`.
+    - [ ] Score the frozen grid-512 model on all three existing injection
+      batches before changing representation or tuning. Session `aq9hva35`
+      uses the same exact commit and configuration for `validation-000` through
+      `validation-002`; artifacts will be under
+      `20260802-smacs-foam-psfinit-g512-injections-e935868`. If injection depth
+      is not competitive, implement exact within-cell first moments and an
+      affine spatial basis rather than scaling the regular grid again.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous
       joint benchmark discovered all 36/9 exposures per band, while classical
       validation uses only `PATT_NUM={3,8}` (8/2 exposures). `--patt-nums`

@@ -571,12 +571,25 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
   normalized initialization RMSE 2.044. Target-PSF mismatch is not the limit.
   Artifacts are under
   `/arc/projects/ots/torchsky-runs/20260802-smacs-foam-psfinit-g256-5c99a33`.
-- [ ] Make one representation-resolution test, not a grid sweep. Grid-256 cells
-  span about 4.70 by 4.70 target pixels, leaving the exact hard product constant
-  over roughly 22 pixels. Run one otherwise frozen grid-512 blank, which halves
-  that width to about 2.35 pixels. Material improvement routes to the frozen
-  injections; failure stops cell scaling and routes to exact within-cell
-  spatial moments/basis.
+- [x] Make one representation-resolution test, not a grid sweep. The initial
+  session `zoypfeli` correctly stopped because its measured 16,423,554 raw
+  candidate pairs exceeded the 10-million allocation guard. Commit `e935868`
+  exposed that existing safety ceiling, and H100 session `e0do2myt` completed
+  the frozen grid-512 blank with an explicit 20-million limit. Fit time was
+  255.1 s and peak accelerator allocation was 3,147,516,928 bytes. Relative to
+  grid-256, mean source-contrast slope improved from 0.278 to 0.515,
+  initialization RMSE from 2.044 to 1.656, mean support RMSE from 0.414 to
+  0.344, and mean support/source flux from 0.875/0.893 to 1.075/1.078. The
+  representation-resolution hypothesis is confirmed, but the blank fidelity
+  gate remains closed at roughly 7--8% mean flux excess. Artifacts are under
+  `/arc/projects/ots/torchsky-runs/20260802-smacs-foam-psfinit-g512-e935868`.
+- [ ] Score the frozen grid-512 configuration on the three existing injection
+  batches before changing representation or tuning. H100 session `aq9hva35`
+  is running exact commit `e9358682d2c86a06792acfbec94a04c7e6110e6e` for
+  `validation-000`, `validation-001`, and `validation-002`; artifacts will be
+  under `/arc/projects/ots/torchsky-runs/20260802-smacs-foam-psfinit-g512-injections-e935868`.
+  If recovery is not competitive, stop regular-grid scaling and add exact
+  within-cell first moments plus an affine spatial basis.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the
