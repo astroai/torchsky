@@ -156,7 +156,8 @@ case "${mode}" in
     foam_injection_root=${FOAM_INJECTION_ROOT:-/arc/projects/ots/torchsky-runs/20260802-smacs-foam-g512-injections-1d055cf}
     validation_root=/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940
     pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
-      python "${source_root}/benchmarks/score_smacs0723_foam.py" \
+      python "${source_root}/scripts/run_local_sphere_bench.py" \
+      "${source_root}/benchmarks/score_smacs0723_foam.py" \
       --blank-root "${foam_blank_root}" \
       --injection-root "${foam_injection_root}" \
       --validation-root "${validation_root}" \
