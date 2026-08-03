@@ -66,6 +66,7 @@ case "${mode}" in
     crop_size=${FOAM_CROP_SIZE:-32}
     steps=${FOAM_STEPS:-2}
     grid_side=${FOAM_GRID_SIDE:-4}
+    exact_max_candidate_pairs=${FOAM_EXACT_MAX_CANDIDATE_PAIRS:-10000000}
     basis_count=${FOAM_BASIS_COUNT:-3}
     extent=${FOAM_EXTENT:-0.55}
     foam_lr=${FOAM_LR:-0.02}
@@ -83,6 +84,7 @@ case "${mode}" in
       --steps "${steps}" \
       --seed "${seed}" \
       --foam-grid-side "${grid_side}" \
+      --foam-exact-max-candidate-pairs "${exact_max_candidate_pairs}" \
       --foam-basis-count "${basis_count}" \
       --foam-extent "${extent}" \
       --foam-lr "${foam_lr}" \
@@ -99,6 +101,7 @@ case "${mode}" in
     crop_size=${FOAM_CROP_SIZE:-512}
     steps=${FOAM_STEPS:-200}
     grid_side=${FOAM_GRID_SIDE:-32}
+    exact_max_candidate_pairs=${FOAM_EXACT_MAX_CANDIDATE_PAIRS:-10000000}
     basis_count=${FOAM_BASIS_COUNT:-4}
     extent=${FOAM_EXTENT:-0.55}
     foam_lr=${FOAM_LR:-0.02}
@@ -134,6 +137,7 @@ case "${mode}" in
         --steps "${steps}" \
         --seed "${seed}" \
         --foam-grid-side "${grid_side}" \
+        --foam-exact-max-candidate-pairs "${exact_max_candidate_pairs}" \
         --foam-basis-count "${basis_count}" \
         --foam-extent "${extent}" \
         --foam-lr "${foam_lr}" \

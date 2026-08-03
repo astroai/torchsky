@@ -200,6 +200,7 @@ def _initialize_foam_from_band_coadds(
     *,
     intensity_scale: float,
     num_spectral_samples: int,
+    operator_max_candidate_pairs: int = 10_000_000,
 ) -> dict[str, float]:
     """Warm-start fixed Foam appearance from exact observed pixel footprints."""
     first_parameter = next(model.parameters(), None)
@@ -231,6 +232,9 @@ def _initialize_foam_from_band_coadds(
         raise ValueError("intensity_scale must be finite and positive")
     if not band_entries:
         raise ValueError("band_entries must not be empty")
+    candidate_limit = int(operator_max_candidate_pairs)
+    if candidate_limit <= 0:
+        raise ValueError("operator_max_candidate_pairs must be positive")
 
     cell_values: list[torch.Tensor] = []
     cell_weights: list[torch.Tensor] = []
@@ -274,7 +278,10 @@ def _initialize_foam_from_band_coadds(
             ra_deg.to(device=sites.device),
             dec_deg.to(device=sites.device),
         ).reshape(height * width, 4, 2)
-        operator = exact_operator(polygons)
+        operator = exact_operator(
+            polygons,
+            max_candidate_pairs=candidate_limit,
+        )
         next_vertices = torch.roll(polygons, shifts=-1, dims=-2)
         pixel_areas = 0.5 * torch.abs(
             torch.sum(
@@ -764,6 +771,12 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=4)
     parser.add_argument("--seed", type=int, default=101)
     parser.add_argument("--foam-grid-side", type=int, default=32)
+    parser.add_argument(
+        "--foam-exact-max-candidate-pairs",
+        type=int,
+        default=10_000_000,
+        help="Explicit allocation ceiling for exact Foam sparse geometry",
+    )
     parser.add_argument("--foam-basis-count", type=int, default=4)
     parser.add_argument("--foam-lr", type=float, default=2.0e-2)
     parser.add_argument(
@@ -809,6 +822,8 @@ def main() -> int:
     args = parser.parse_args()
     if args.foam_initialize_from_coadd and args.foam_train_geometry:
         parser.error("coadd initialization currently requires fixed Foam geometry")
+    if args.foam_exact_max_candidate_pairs <= 0:
+        parser.error("--foam-exact-max-candidate-pairs must be positive")
 
     bands = _parse_csv(args.bands)
     pattern_numbers = tuple(int(value) for value in _parse_csv(args.patt_nums))
@@ -1202,6 +1217,9 @@ def main() -> int:
                         num_spectral_samples=int(
                             fit_kwargs.get("num_spectral_samples", 1)
                         ),
+                        operator_max_candidate_pairs=int(
+                            args.foam_exact_max_candidate_pairs
+                        ),
                     )
             if args.forward_context:
                 model = _PerExposureScalarBias(model, len(normalized_observations))
@@ -1393,6 +1411,11 @@ def main() -> int:
                                 hard_model,
                                 target_observation,
                                 num_spectral_samples=render_num_spectral_samples,
+                                operator_kwargs={
+                                    "max_candidate_pairs": int(
+                                        args.foam_exact_max_candidate_pairs
+                                    )
+                                },
                             )
                             row["render_mode"] = "hard_pixel_footprint"
                         else:
@@ -1518,6 +1541,9 @@ def main() -> int:
             "optimizer_steps": int(args.steps),
             "seed": int(args.seed),
             "foam_grid_side": int(args.foam_grid_side),
+            "foam_exact_max_candidate_pairs": int(
+                args.foam_exact_max_candidate_pairs
+            ),
             "foam_basis_count": int(args.foam_basis_count),
             "foam_extent": float(args.foam_extent),
             "foam_lr": float(args.foam_lr),
