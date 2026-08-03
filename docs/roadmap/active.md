@@ -479,11 +479,23 @@ stacking-versus-INR/Foam depth result defined in
       `20260802-smacs-foam-psfinit-g512-e935868`.
     - [ ] Score the frozen grid-512 model on all three existing injection
       batches before changing representation or tuning. Session `aq9hva35`
-      uses the same exact commit and configuration for `validation-000` through
-      `validation-002`; artifacts will be under
-      `20260802-smacs-foam-psfinit-g512-injections-e935868`. If injection depth
-      is not competitive, implement exact within-cell first moments and an
-      affine spatial basis rather than scaling the regular grid again.
+      failed before fitting because the benchmark treated the returned list of
+      per-exposure injection audits as one mapping. Commit `1d055cf` fixes that
+      one-line contract after 17 focused tests and the full 1,739-test gate.
+      Replacement session `tsu81ekc` uses the same science configuration for
+      `validation-000` through `validation-002`; artifacts will be under
+      `20260802-smacs-foam-g512-injections-1d055cf`. If injection depth is not
+      competitive, implement exact within-cell first moments and an affine
+      spatial basis rather than scaling the regular grid again.
+    - [x] Add the frozen Foam scoring path before the products finish.
+      `benchmarks/score_smacs0723_foam.py` stages the exact blank/injection
+      products, enforces common eroded support, measures each effective PSF from
+      injected-minus-blank responses, and reuses the established matched-filter,
+      blank-whitening, purity, and completeness-by-magnitude gates. The
+      `foam-score` CANFAR mode runs it beside the products. Six focused scorer
+      checks include a float32 FITS/ePSF self-check. The current ceiling is
+      explicit: binary Foam support stands in for spatial inverse variance until
+      the model exports propagated uncertainty.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous
       joint benchmark discovered all 36/9 exposures per band, while classical
       validation uses only `PATT_NUM={3,8}` (8/2 exposures). `--patt-nums`
