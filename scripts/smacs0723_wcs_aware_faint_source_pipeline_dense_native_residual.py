@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Run the faint-source pipeline with dense native residual FITS snapshots.
 
-All training, sampling, PSF, rendering, and detector logic is inherited from
-``smacs0723_wcs_aware_faint_source_pipeline.py``.  Only residual diagnostics
-change: two deterministic representative exposures per band are evaluated on
-all valid native pixels and saved as detector-shaped FITS images.
+All training, PSF, rendering, and detector logic is inherited from
+``smacs0723_wcs_aware_faint_source_pipeline.py``. Dense diagnostics evaluate two
+deterministic representative exposures per band on all valid native pixels and
+save detector-shaped FITS residuals.
+
+This launcher also supports fixed-length virtual epochs. With
+``--virtual-epoch-steps N`` and ``epoch_without_replacement`` sampling, samples
+are unique within each N-step block, then every exposure sampler is discarded
+and reshuffled before the next block. This trades some global unique coverage
+for mature-model revisits without changing the batch size or pixel budget.
 """
 
 from __future__ import annotations
@@ -13,6 +19,7 @@ import argparse
 import copy
 import json
 from pathlib import Path
+import shutil
 import sys
 from typing import Any, Sequence
 
@@ -28,6 +35,7 @@ for search_path in (ROOT, SRC):
         sys.path.insert(0, str(search_path))
 
 import scripts.smacs0723_wcs_aware_faint_source_pipeline as pipeline  # noqa: E402
+from torchsky.map import wcs_aware_epoch_sampling as epoch_sampling  # noqa: E402
 
 base = pipeline.base
 training_mod = pipeline.training_mod
@@ -36,8 +44,13 @@ _REPRESENTATIVES_PER_BAND = 2
 _DQ_MODE = "strict"
 _REPRESENTATIVES: list[tuple[int, int]] | None = None
 _POOL_SIGNATURE: tuple[tuple[str, str, str], ...] | None = None
+_VIRTUAL_EPOCH_STEPS = 0
+_VIRTUAL_SAMPLE_CALLS = 0
+_VIRTUAL_RESET_EVENTS: list[dict[str, Any]] = []
+_VIRTUAL_SAMPLER_WRAPPED = False
 _ORIGINAL_SAVE_PIPELINE_CHECKPOINT = base.save_pipeline_checkpoint
 _ORIGINAL_PIXEL_SCALE_ARCSEC = base.pixel_scale_arcsec
+_ORIGINAL_INSTALL_EPOCH_SAMPLER = base.install_epoch_sampler
 
 
 def _clean_header_for_wcs(header: fits.Header | dict[str, Any]) -> fits.Header:
@@ -67,6 +80,21 @@ def _safe_pixel_scale_arcsec(header: fits.Header | dict[str, Any]) -> float:
     return _ORIGINAL_PIXEL_SCALE_ARCSEC(_clean_header_for_wcs(header))
 
 
+def _virtual_epoch_metadata() -> dict[str, Any]:
+    return {
+        "enabled": _VIRTUAL_EPOCH_STEPS > 0,
+        "virtual_epoch_steps": int(_VIRTUAL_EPOCH_STEPS),
+        "within_block_sampling": "epoch_without_replacement",
+        "boundary_action": (
+            "discard per-exposure affine-permutation cursors and reshuffle"
+            if _VIRTUAL_EPOCH_STEPS > 0
+            else "disabled"
+        ),
+        "completed_optimizer_sample_calls": int(_VIRTUAL_SAMPLE_CALLS),
+        "reset_events": list(_VIRTUAL_RESET_EVENTS),
+    }
+
+
 def _diagnostic_metadata() -> dict[str, Any]:
     options = pipeline._OPTIONS
     return {
@@ -94,9 +122,21 @@ def _diagnostic_metadata() -> dict[str, Any]:
 def _parse_residual_options(
     argv: Sequence[str],
 ) -> tuple[pipeline.ResidualOptions, list[str]]:
+    global _VIRTUAL_EPOCH_STEPS
+
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--save-residual-every-steps", type=int, default=0)
     parser.add_argument("--residual-batch-pixels", type=int, default=4096)
+    parser.add_argument(
+        "--virtual-epoch-steps",
+        type=int,
+        default=0,
+        help=(
+            "Force a new without-replacement sampler every N optimizer steps. "
+            "Samples remain unique inside each block; 0 preserves the existing "
+            "full-pool epoch behavior."
+        ),
+    )
     # Backward-compatible consumption of the old sparse-residual option.
     parser.add_argument(
         "--residual-samples-per-exposure",
@@ -109,6 +149,25 @@ def _parse_residual_options(
         raise ValueError("save-residual-every-steps must be non-negative")
     if namespace.residual_batch_pixels <= 0:
         raise ValueError("residual-batch-pixels must be positive")
+    if namespace.virtual_epoch_steps < 0:
+        raise ValueError("virtual-epoch-steps must be non-negative")
+
+    sampling_parser = argparse.ArgumentParser(add_help=False)
+    sampling_parser.add_argument(
+        "--sampling-mode",
+        default="epoch_without_replacement",
+    )
+    sampling_namespace, _ = sampling_parser.parse_known_args(remaining)
+    if (
+        namespace.virtual_epoch_steps > 0
+        and sampling_namespace.sampling_mode != "epoch_without_replacement"
+    ):
+        raise ValueError(
+            "--virtual-epoch-steps requires "
+            "--sampling-mode epoch_without_replacement"
+        )
+
+    _VIRTUAL_EPOCH_STEPS = int(namespace.virtual_epoch_steps)
     return (
         pipeline.ResidualOptions(
             every_steps=namespace.save_residual_every_steps,
@@ -135,6 +194,7 @@ def _write_residual_index() -> None:
                 "unit": "global_optimizer_step",
                 "every_steps": options.every_steps,
             },
+            "virtual_epoch_sampling": _virtual_epoch_metadata(),
             **_diagnostic_metadata(),
         },
     )
@@ -145,14 +205,105 @@ def _patched_write_json(path: Path, payload: dict[str, Any]) -> None:
     if path.name in {"pipeline_manifest.json", "pipeline_summary.json"}:
         output = copy.deepcopy(payload)
         output["native_residual_diagnostics"] = _diagnostic_metadata()
+        output["virtual_epoch_sampling"] = _virtual_epoch_metadata()
     pipeline._ORIGINAL_WRITE_JSON(path, output)
+
+
+def _tagged_checkpoint_path(path: Path, global_step: int) -> Path:
+    return path.with_name(f"{path.stem}_step_{global_step:06d}{path.suffix}")
 
 
 def _patched_save_pipeline_checkpoint(*args: Any, **kwargs: Any) -> Any:
     configuration = kwargs.get("configuration")
     if isinstance(configuration, dict):
         configuration["native_residual_diagnostics"] = _diagnostic_metadata()
-    return _ORIGINAL_SAVE_PIPELINE_CHECKPOINT(*args, **kwargs)
+        configuration["virtual_epoch_sampling"] = _virtual_epoch_metadata()
+
+    result = _ORIGINAL_SAVE_PIPELINE_CHECKPOINT(*args, **kwargs)
+
+    stage = str(kwargs.get("stage", ""))
+    global_step = int(kwargs.get("global_step", 0))
+    checkpoint_path = Path(args[0] if args else kwargs["path"])
+    if (
+        _VIRTUAL_EPOCH_STEPS > 0
+        and stage == "pretrain"
+        and global_step > 0
+        and global_step % _VIRTUAL_EPOCH_STEPS == 0
+    ):
+        tagged = _tagged_checkpoint_path(checkpoint_path, global_step)
+        shutil.copy2(checkpoint_path, tagged)
+        print(
+            json.dumps(
+                {
+                    "virtual_epoch_checkpoint": str(tagged),
+                    "global_step": global_step,
+                }
+            ),
+            flush=True,
+        )
+    return result
+
+
+def _install_virtual_epoch_sampler() -> None:
+    """Install the normal epoch sampler, then add fixed-length block resets."""
+
+    global _VIRTUAL_SAMPLER_WRAPPED
+    _ORIGINAL_INSTALL_EPOCH_SAMPLER()
+    if _VIRTUAL_EPOCH_STEPS <= 0 or _VIRTUAL_SAMPLER_WRAPPED:
+        return
+
+    sampled_batch = training_mod.sample_balanced_batch
+
+    def sample_virtual_epoch_batch(
+        pools: Sequence[Any],
+        *,
+        batch_size: int | Sequence[int],
+        generator: torch.Generator,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        global _VIRTUAL_SAMPLE_CALLS
+
+        if (
+            _VIRTUAL_SAMPLE_CALLS > 0
+            and _VIRTUAL_SAMPLE_CALLS % _VIRTUAL_EPOCH_STEPS == 0
+        ):
+            cache_key = id(generator)
+            had_sampler = epoch_sampling._SAMPLER_CACHE.pop(cache_key, None) is not None
+            event = {
+                "completed_optimizer_steps": int(_VIRTUAL_SAMPLE_CALLS),
+                "completed_block": int(
+                    _VIRTUAL_SAMPLE_CALLS // _VIRTUAL_EPOCH_STEPS
+                ),
+                "next_block": int(
+                    _VIRTUAL_SAMPLE_CALLS // _VIRTUAL_EPOCH_STEPS + 1
+                ),
+                "sampler_cache_entry_removed": bool(had_sampler),
+            }
+            _VIRTUAL_RESET_EVENTS.append(event)
+            print(json.dumps({"virtual_epoch_reset": event}), flush=True)
+
+        batch = sampled_batch(
+            pools,
+            batch_size=batch_size,
+            generator=generator,
+        )
+        _VIRTUAL_SAMPLE_CALLS += 1
+        return batch
+
+    setattr(sample_virtual_epoch_batch, "_torchsky_virtual_epoch_wrapper", True)
+    training_mod.sample_balanced_batch = sample_virtual_epoch_batch
+    _VIRTUAL_SAMPLER_WRAPPED = True
+    print(
+        json.dumps(
+            {
+                "virtual_epoch_sampling": {
+                    "enabled": True,
+                    "steps_per_block": _VIRTUAL_EPOCH_STEPS,
+                    "within_block": "without_replacement",
+                }
+            }
+        ),
+        flush=True,
+    )
 
 
 def _representative_exposures(pools: Sequence[Any]) -> list[tuple[int, int]]:
@@ -446,6 +597,7 @@ def _save_dense_snapshot(
         "dq_mode": _DQ_MODE,
         "diagnostic_batch_pixels": int(options.batch_pixels),
         "diagnostic_wing_seed": seed + 1707 if stage == "finetune" else None,
+        "virtual_epoch_sampling": _virtual_epoch_metadata(),
         "aggregate": _moments(*aggregate),
         "products": products,
         "directory": str(directory),
@@ -492,6 +644,7 @@ def main() -> int:
     pipeline.save_native_residual_snapshot = _save_dense_snapshot
     base.save_pipeline_checkpoint = _patched_save_pipeline_checkpoint
     base.pixel_scale_arcsec = _safe_pixel_scale_arcsec
+    base.install_epoch_sampler = _install_virtual_epoch_sampler
     return int(pipeline.main())
 
 
