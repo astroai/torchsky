@@ -4,6 +4,7 @@ import json
 import math
 from pathlib import Path
 import sys
+from typing import Any
 
 import pytest
 import torch
@@ -16,7 +17,10 @@ if str(BENCHMARKS) not in sys.path:
 
 from bench_multiband_depth import (  # noqa: E402
     _classical_smoke_artifact,
+    _foam_grid_side_for_size,
     _gate0_artifact,
+    _legendre_basis,
+    _target_response_gate,
     _updec_classical_detection_artifact,
     _updec_classical_validation_artifact,
     _updec_control_union_artifact,
@@ -869,6 +873,119 @@ def test_classical_smoke_reports_three_honest_rows() -> None:
     assert all(row["null_detections"] == 0 for row in rows)
     assert all(row["runtime_seconds"] > 0 for row in rows)
     assert all(row["detection"]["purity"] >= 0.0 for row in rows)
+
+
+def test_classical_smoke_includes_phase0_foam_row_when_requested() -> None:
+    artifact = _classical_smoke_artifact(
+        seed=101,
+        size=16,
+        bands=3,
+        sources=3,
+        device="cpu",
+        exposure_count=2,
+        include_foam=True,
+    )
+    # resolution-matched Foam grid (cells kept at data scale) must preserve sources
+    assert artifact["foam_grid_side"] == 5
+    rows = artifact["methods"]
+    names = [row["method"] for row in rows]
+    assert names[:3] == ["weighted_bilinear", "drizzle_square", "chi2_coadd"]
+    assert names[3:] == ["independent_foam", "joint_foam"]
+    foam, joint = rows[3], rows[4]
+    assert foam["representation"] == "foam_per_band_surface_brightness"
+    assert joint["representation"] == "foam_joint_spectral_surface_brightness"
+    assert joint["basis_count"] < 3
+    assert joint["basis_count"] >= 1
+    gate_summary = artifact["target_response_gate"]
+    assert gate_summary["baseline_method"] == "chi2_coadd"
+    for row in (foam, joint):
+        assert row["depth_claim"] is False
+        assert row["statistic"] == "independent_union"
+        assert row["null_detections"] == 0
+        assert row["runtime_seconds"] > 0
+        for key in (
+            "threshold_from_validation_null",
+            "detection",
+            "forced_photometry",
+            "heldout_gaussian_nll",
+            "image_rmse",
+            "target_response",
+        ):
+            assert key in row
+        assert row["target_response"]["baseline_method"] == "chi2_coadd"
+        assert row["target_response"]["signal_preserved"] is True
+        assert (
+            row["target_response"]["median_recovery_fraction"]
+            >= row["target_response"]["median_baseline_recovery_fraction"] - 0.25
+        )
+        assert math.isfinite(float(row["image_rmse"]))
+        assert math.isfinite(float(row["heldout_gaussian_nll"]))
+
+
+def test_joint_foam_spectral_basis_preserves_continuum_but_rejects_perturbation() -> None:
+    from torchsky.map.field import solve_spectral_cell_coefficients
+
+    device = torch.device("cpu")
+    dtype = torch.float64
+    bands, cells = 5, 8
+    basis = _legendre_basis(bands, 2, device=device, dtype=dtype)
+    assert basis.shape == (bands, 2)
+    assert torch.allclose(basis[:, 0], torch.ones(bands, dtype=dtype))
+    lam = torch.linspace(-1.0, 1.0, steps=bands, device=device, dtype=dtype)
+    assert torch.allclose(basis[:, 1], lam)
+    generator = torch.Generator().manual_seed(7)
+    a0 = torch.randn(cells, dtype=dtype, generator=generator)
+    a1 = torch.randn(cells, dtype=dtype, generator=generator)
+    continuum = a0[None, :] + lam[:, None] * a1[None, :]
+    fitted = solve_spectral_cell_coefficients(
+        basis, continuum.clone(), ridge=1.0e-12
+    )
+    reconstructed = torch.einsum("bk,ck->bc", basis, fitted)
+    assert torch.allclose(reconstructed, continuum, atol=1.0e-8)
+    perturbation = torch.randn(bands, cells, dtype=dtype, generator=generator)
+    noise_amp = 0.1 * float(torch.linalg.vector_norm(continuum))
+    noisy = continuum + noise_amp * perturbation / float(
+        torch.linalg.vector_norm(perturbation)
+    )
+    fitted_noisy = solve_spectral_cell_coefficients(
+        basis, noisy.clone(), ridge=1.0e-12
+    )
+    reconstructed_noisy = torch.einsum("bk,ck->bc", basis, fitted_noisy)
+    residual = torch.linalg.vector_norm(noisy - reconstructed_noisy) / float(
+        torch.linalg.vector_norm(noisy - continuum)
+    )
+    assert residual < 1.0
+    assert residual > 0.0
+
+
+def test_target_response_gate_flags_attenuation_and_passes_preserved() -> None:
+    def _row(method: str, bias: list[float]) -> dict[str, Any]:
+        return {
+            "method": method,
+            "forced_photometry": {"median_fractional_flux_bias": bias},
+        }
+
+    rows = [
+        _row("chi2_coadd", [0.02, -0.01, 0.03]),
+        _row("preserved_method", [-0.02, 0.01, -0.01]),
+        _row("attenuating_method", [-0.8, -0.85, -0.75]),
+    ]
+    summary = _target_response_gate(rows, baseline_method="chi2_coadd")
+    assert summary["baseline_method"] == "chi2_coadd"
+    assert rows[1]["target_response"]["signal_preserved"] is True
+    assert rows[2]["target_response"]["signal_preserved"] is False
+    empty = [_row("chi2_coadd", [0.0]), _row("dead_method", [])]
+    _target_response_gate(empty, baseline_method="chi2_coadd")
+    assert empty[1]["target_response"]["signal_preserved"] is False
+    pytest.raises(ValueError, _target_response_gate, [_row("only", [0.0])])
+
+
+def test_foam_grid_side_is_resolution_matched_and_bounded() -> None:
+    assert _foam_grid_side_for_size(16) == 5
+    assert _foam_grid_side_for_size(20) == 6
+    assert _foam_grid_side_for_size(64, max_side=8) == 8
+    assert _foam_grid_side_for_size(64, max_side=0) == 21
+    pytest.raises(ValueError, _foam_grid_side_for_size, 12)
 
 
 def test_independent_union_statistic_does_not_combine_subthreshold_bands() -> None:

@@ -24,6 +24,11 @@ import torch.nn.functional as F
 
 import torchsky
 from torchsky.map import ImageObservation, coadd_image_plane
+from torchsky.map.field import (
+    bounded_power_pixel_operator,
+    solve_power_pixel_least_squares,
+    solve_spectral_cell_coefficients,
+)
 from torchsky.map.operators import fit_background_plane, pixel_area_sr_at
 from torchsky.map.sky import MeshSkyEstimator
 
@@ -2005,6 +2010,286 @@ def _classical_method_row(
     }
 
 
+def _foam_grid_side_for_size(size: int, *, max_side: int = 0) -> int:
+    """Choose a resolution-matched Power-Foam grid for a ``size``-pixel field.
+
+    The grid density scales with the field so cells stay at or below the data
+    resolution (about a third of the field edge), which keeps them fine enough
+    to represent point sources; an under-resolved grid (e.g. a fixed 4x4 over a
+    20x20 field) smears point sources and attenuates them (the lever-D trap).
+    ``max_side`` bounds the side length (0 disables the cap) for tournament- or
+    budget-limited runs.
+    """
+    if size < 16:
+        raise ValueError("size must be at least 16")
+    side = max(4, int(size) // 3)
+    if max_side > 0:
+        side = min(side, max_side)
+    return side
+
+
+def _foam_operator_and_cells(
+    coadd_product: torch.Tensor,
+    *,
+    grid_side: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[Any, torch.Tensor, int, int, torch.Tensor]:
+    """Build the shared target-grid Power-Foam operator and per-band cell values.
+
+    Returns ``(operator, per_band_cells, height, width, pixel_area)`` where
+    ``per_band_cells`` has shape ``(bands, cells)`` in surface-brightness units.
+    Each band is solved independently by weighted least squares; this is the
+    shared input to both the per-band (lever-D) and joint spectral (lever-A)
+    Foam products.
+    """
+    if coadd_product.ndim != 3 or not coadd_product.is_floating_point():
+        raise ValueError("coadd_product must be floating point with shape (bands, H, W)")
+    bands, height, width = coadd_product.shape
+    side = int(grid_side)
+    if side < 2:
+        raise ValueError("grid_side must be at least 2")
+    extent = 1.0
+    step = 2.0 * extent / float(side)
+    centers = torch.linspace(
+        -extent + 0.5 * step,
+        extent - 0.5 * step,
+        steps=side,
+        device=device,
+        dtype=dtype,
+    )
+    yy, xx = torch.meshgrid(centers, centers, indexing="ij")
+    sites = torch.stack((xx.reshape(-1), yy.reshape(-1)), dim=-1)
+    radii = torch.full(
+        (side * side,),
+        math.sqrt(2.0) * step,
+        device=device,
+        dtype=dtype,
+    )
+    pixel_half = torch.tensor(
+        extent / float(max(height, width)),
+        device=device,
+        dtype=dtype,
+    )
+    grid_y = torch.linspace(
+        -extent + pixel_half,
+        extent - pixel_half,
+        steps=height,
+        device=device,
+        dtype=dtype,
+    )
+    grid_x = torch.linspace(
+        -extent + pixel_half,
+        extent - pixel_half,
+        steps=width,
+        device=device,
+        dtype=dtype,
+    )
+    gy, gx = torch.meshgrid(grid_y, grid_x, indexing="ij")
+    cx = gx.reshape(-1)
+    cy = gy.reshape(-1)
+    pixel_polygons = torch.stack(
+        (
+            torch.stack((cx - pixel_half, cy - pixel_half), dim=-1),
+            torch.stack((cx + pixel_half, cy - pixel_half), dim=-1),
+            torch.stack((cx + pixel_half, cy + pixel_half), dim=-1),
+            torch.stack((cx - pixel_half, cy + pixel_half), dim=-1),
+        ),
+        dim=1,
+    )
+    operator = bounded_power_pixel_operator(
+        pixel_polygons,
+        sites,
+        radii,
+        max_candidate_pairs=10_000_000,
+    )
+    pixel_area = (2.0 * pixel_half) ** 2
+    per_band_cells: list[torch.Tensor] = []
+    for band in range(bands):
+        flat = coadd_product[band].reshape(-1).to(device=device, dtype=dtype)
+        pixel_values = (flat * pixel_area).reshape(1, -1)
+        weights = torch.ones_like(pixel_values)
+        cell_surface_brightness = solve_power_pixel_least_squares(
+            operator,
+            pixel_values,
+            weights,
+            semantics="surface_brightness",
+            ridge=1.0e-6,
+            max_iterations=50,
+        )
+        per_band_cells.append(cell_surface_brightness.squeeze(0))
+    return operator, torch.stack(per_band_cells), height, width, pixel_area
+
+
+def _render_foam_surface_brightness(
+    operator: Any,
+    per_band_cells: torch.Tensor,
+    *,
+    height: int,
+    width: int,
+    pixel_area: torch.Tensor,
+) -> torch.Tensor:
+    """Render a per-band surface-brightness product from cell values."""
+    bands = per_band_cells.shape[0]
+    products: list[torch.Tensor] = []
+    for band in range(bands):
+        cell_values = per_band_cells[band].reshape(1, -1)
+        rendered_integrated = operator.matvec(
+            cell_values,
+            semantics="surface_brightness",
+        )
+        rendered_surface_brightness = rendered_integrated / pixel_area
+        products.append(rendered_surface_brightness.reshape(height, width))
+    return torch.stack(products)
+
+
+def _legendre_basis(
+    bands: int,
+    basis_count: int,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """Return a Legendre basis of shape ``(bands, basis_count)`` over normalized band wavelength.
+
+    Band wavelength is mapped to ``[-1, 1]``. A low-rank basis (``basis_count < bands``)
+    is the cross-band spectral compression that rejects per-band spectral noise
+    while preserving shared continuum signal (lever A).
+    """
+    if bands < 1 or basis_count < 1:
+        raise ValueError("bands and basis_count must be positive")
+    if basis_count > bands and bands > 1:
+        basis_count = bands
+    if bands == 1:
+        lam = torch.zeros((), device=device, dtype=dtype)
+    else:
+        lam = torch.linspace(-1.0, 1.0, steps=bands, device=device, dtype=dtype)
+    basis: list[torch.Tensor] = [torch.ones_like(lam), lam]
+    while len(basis) < basis_count:
+        degree = len(basis)
+        previous = basis[degree - 1]
+        before = basis[degree - 2]
+        next_term = (
+            (2.0 * degree - 1.0) * lam * previous - (degree - 1.0) * before
+        ) / degree
+        basis.append(next_term)
+    return torch.stack(basis[:basis_count], dim=1)
+
+
+def _joint_foam_spectral_product(
+    operator: Any,
+    per_band_cells: torch.Tensor,
+    *,
+    basis_count: int,
+    height: int,
+    width: int,
+    pixel_area: torch.Tensor,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[torch.Tensor, int]:
+    """Render a cross-band spectral Foam product from shared per-band cell values.
+
+    Fits a shared low-rank spectral basis to the per-band cell surface brightness
+    and reconstructs per-band cells from it. This is lever A: with
+    ``basis_count < bands`` the spectral compression averages per-band noise while
+    preserving continuum signal shared across bands. Returns the rendered product
+    and the effective basis count used.
+    """
+    bands, _ = per_band_cells.shape
+    basis = _legendre_basis(bands, basis_count, device=device, dtype=dtype)
+    spectral_coefficients = solve_spectral_cell_coefficients(
+        basis,
+        per_band_cells,
+        ridge=1.0e-6,
+    )
+    reconstructed_cells = torch.einsum("bk,ck->bc", basis, spectral_coefficients)
+    product = _render_foam_surface_brightness(
+        operator,
+        reconstructed_cells,
+        height=height,
+        width=width,
+        pixel_area=pixel_area,
+    )
+    return product, spectral_coefficients.shape[1]
+
+
+def _target_response_gate(
+    rows: list[dict[str, Any]],
+    *,
+    baseline_method: str = "chi2_coadd",
+    signal_floor: float = 0.5,
+    attenuation_tolerance: float = 0.25,
+) -> dict[str, object]:
+    """Attach a paired-injection signal-preservation gate to each method row.
+
+    Each row reports ``forced_photometry["median_fractional_flux_bias"]``
+    (recovery fraction minus one, per band) from a joint linear fit of the
+    injected sources. This compares every method's median recovery fraction
+    against the classical baseline and flags ``signal_preserved`` when a method
+    neither drops below an absolute ``signal_floor`` nor attenuates materially
+    worse than the baseline. This is the lever-D trap detector: a representation
+    that lowers reconstruction loss by smoothing (and so attenuates faint
+    sources) must fail this gate rather than be reported as a depth gain.
+    Mutates ``rows`` in place and returns a compact aggregate.
+    """
+    if not 0.0 < signal_floor <= 1.0:
+        raise ValueError("signal_floor must be in (0, 1]")
+    if attenuation_tolerance < 0.0:
+        raise ValueError("attenuation_tolerance must be non-negative")
+    if not rows:
+        raise ValueError("target_response_gate requires at least one method row")
+    if baseline_method not in {row["method"] for row in rows}:
+        raise ValueError(f"baseline_method {baseline_method!r} is not a scored row")
+
+    def _recovery_fraction(row: dict[str, Any]) -> list[float]:
+        bias = row["forced_photometry"]["median_fractional_flux_bias"]
+        return [1.0 + value for value in bias if math.isfinite(value)]
+
+    baseline_row = next(row for row in rows if row["method"] == baseline_method)
+    baseline = _recovery_fraction(baseline_row)
+    if not baseline:
+        raise ValueError(
+            f"baseline method {baseline_method!r} has no finite forced-photometry bias"
+        )
+    median_baseline = float(
+        torch.median(torch.tensor(baseline, dtype=torch.float64))
+    )
+
+    summary: dict[str, object] = {"baseline_method": baseline_method}
+    per_method: dict[str, Any] = {}
+    for row in rows:
+        recovery = _recovery_fraction(row)
+        if recovery:
+            median_recovery = float(
+                torch.median(torch.tensor(recovery, dtype=torch.float64))
+            )
+            excess = [b - r for b, r in zip(baseline, recovery)]
+            median_excess = float(
+                torch.median(torch.tensor(excess, dtype=torch.float64))
+            )
+            signal_preserved = (median_recovery >= signal_floor) and (
+                median_excess <= attenuation_tolerance
+            )
+        else:
+            median_recovery = 0.0
+            median_excess = 1.0
+            signal_preserved = False
+        row["target_response"] = {
+            "baseline_method": baseline_method,
+            "median_recovery_fraction": median_recovery,
+            "median_baseline_recovery_fraction": median_baseline,
+            "attenuation_excess_vs_baseline": median_excess,
+            "signal_preserved": bool(signal_preserved),
+        }
+        per_method[row["method"]] = row["target_response"]
+    summary["methods"] = per_method
+    summary["gate"] = (
+        "signal_preserved if median recovery >= floor and "
+        "no excess attenuation vs baseline"
+    )
+    return summary
+
+
 def _classical_smoke_artifact(
     *,
     seed: int,
@@ -2013,8 +2298,18 @@ def _classical_smoke_artifact(
     sources: int,
     device: torch.device | str,
     exposure_count: int = 4,
+    include_foam: bool = False,
+    foam_grid_side: int | None = None,
 ) -> dict[str, object]:
-    """Run the first production-operator classical floor without a depth claim."""
+    """Run the first production-operator classical floor without a depth claim.
+
+    ``include_foam`` appends a Phase-0 per-band Power-Foam representation row
+    and a joint cross-band spectral Power-Foam row fit to the weighted-bilinear
+    product; it is representation plumbing, not a depth claim, and defaults to
+    ``False`` to preserve the classical baseline. ``foam_grid_side`` sets the
+    Power-Foam cell grid side; ``None`` uses a resolution-matched grid via
+    :func:`_foam_grid_side_for_size`.
+    """
 
     target_device = torch.device(device)
     manifest = make_seed_manifest(seed)
@@ -2115,6 +2410,100 @@ def _classical_smoke_artifact(
     chi2_row["runtime_seconds"] = coadd_runtime + time.perf_counter() - started
     chi2_row["reuses_product"] = "weighted_bilinear"
     rows.append(chi2_row)
+    if include_foam:
+        resolved_grid_side = (
+            _foam_grid_side_for_size(size)
+            if foam_grid_side is None
+            else int(foam_grid_side)
+        )
+        foam_started = time.perf_counter()
+        operator, cells, fh, fw, fpixel_area = _foam_operator_and_cells(
+            bilinear.to(target_device),
+            grid_side=resolved_grid_side,
+            device=target_device,
+            dtype=truth.dtype,
+        )
+        null_operator, null_cells, _, _, _ = _foam_operator_and_cells(
+            null_bilinear.to(target_device),
+            grid_side=resolved_grid_side,
+            device=target_device,
+            dtype=truth.dtype,
+        )
+        foam_product = _render_foam_surface_brightness(
+            operator,
+            cells,
+            height=fh,
+            width=fw,
+            pixel_area=fpixel_area,
+        )
+        foam_null_product = _render_foam_surface_brightness(
+            null_operator,
+            null_cells,
+            height=fh,
+            width=fw,
+            pixel_area=fpixel_area,
+        )
+        joint_product, joint_basis = _joint_foam_spectral_product(
+            operator,
+            cells,
+            basis_count=2,
+            height=fh,
+            width=fw,
+            pixel_area=fpixel_area,
+            device=target_device,
+            dtype=truth.dtype,
+        )
+        joint_null_product, _ = _joint_foam_spectral_product(
+            null_operator,
+            null_cells,
+            basis_count=2,
+            height=fh,
+            width=fw,
+            pixel_area=fpixel_area,
+            device=target_device,
+            dtype=truth.dtype,
+        )
+        if target_device.type == "cuda":
+            torch.cuda.synchronize(target_device)
+        foam_runtime = time.perf_counter() - foam_started
+        foam_peak_cuda = (
+            int(torch.cuda.max_memory_allocated(target_device))
+            if target_device.type == "cuda"
+            else None
+        )
+        rows.append(
+            _classical_method_row(
+                name="independent_foam",
+                product=foam_product,
+                null_product=foam_null_product,
+                catalog=catalog,
+                truth=truth,
+                product_noise_sigma=product_noise_sigma,
+                pixel_scale_arcsec=0.04,
+                statistic_kind="independent_union",
+                runtime_seconds=foam_runtime,
+                peak_cuda_bytes=foam_peak_cuda,
+            )
+        )
+        rows[-1]["representation"] = "foam_per_band_surface_brightness"
+        rows[-1]["depth_claim"] = False
+        joint_row = _classical_method_row(
+            name="joint_foam",
+            product=joint_product,
+            null_product=joint_null_product,
+            catalog=catalog,
+            truth=truth,
+            product_noise_sigma=product_noise_sigma,
+            pixel_scale_arcsec=0.04,
+            statistic_kind="independent_union",
+            runtime_seconds=foam_runtime,
+            peak_cuda_bytes=foam_peak_cuda,
+        )
+        joint_row["representation"] = "foam_joint_spectral_surface_brightness"
+        joint_row["basis_count"] = joint_basis
+        joint_row["depth_claim"] = False
+        rows.append(joint_row)
+    target_response_gate = _target_response_gate(rows, baseline_method="chi2_coadd")
     return {
         "profile": "classical-smoke",
         "depth_claim": False,
@@ -2126,6 +2515,10 @@ def _classical_smoke_artifact(
         "dither_xy_px": exposures.dither_xy_px.tolist(),
         "input_noise_sigma": noise_sigma.tolist(),
         "propagated_product_noise_sigma": product_noise_sigma.tolist(),
+        "target_response_gate": target_response_gate,
+        "foam_grid_side": (
+            resolved_grid_side if include_foam else None
+        ),
         "methods": rows,
     }
 
