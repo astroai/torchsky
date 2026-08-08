@@ -23,3 +23,7 @@
 ## 2025-04-20 - Preserving Structural Shape in Specific Element Focus Rings
 **Learning:** When defining specific `:focus-visible` styles for individual UI components (like `.cmap-swatch` or `input[type="range"]`) to override global focus rings, any structural properties like `border-radius` that were applied to the element must also be included in its specific `:focus-visible` declaration. Otherwise, the element may lose its rounded corners during keyboard navigation.
 **Action:** When adding `:focus-visible` to specific classes (e.g., `.cmap-swatch:focus-visible`), copy the base element's `border-radius` into the focus rule to prevent visual mismatches or flattened corners.
+
+## 2025-05-15 - Pairing ARIA Live Regions with Visual Spinners for Loading States
+**Learning:** When displaying asynchronous loading states (e.g., "Loading...", "Running..."), screen readers require `aria-live` attributes (`aria-live="polite"` and `aria-atomic="true"`) to announce the updates. However, sighted users need a corresponding visual cue, such as a spinner. Updating text content natively without accommodating DOM structure for visual indicators leads to missing feedback for sighted users.
+**Action:** When updating a status element with loading text, always pair it with an `aria-live` region for screen readers and a visual spinner for sighted users. A pattern like checking if a message ends with "…" can be a lightweight way to determine when to inject spinner markup alongside the text.
