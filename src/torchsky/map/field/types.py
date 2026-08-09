@@ -224,6 +224,8 @@ class FieldObservation:
     background_offset: float = 0.0
     band_name: str | None = None
     spectral_quantity: FieldSpectralQuantity | None = None
+    detector_x0_pix: float = 0.0
+    detector_y0_pix: float = 0.0
 
     _cached_ra_deg: Tensor | None = field(default=None, init=False, repr=False)
     _cached_dec_deg: Tensor | None = field(default=None, init=False, repr=False)
@@ -263,6 +265,11 @@ class FieldObservation:
                 )
         if not math.isfinite(float(self.background_offset)):
             raise ValueError("FieldObservation background_offset must be finite")
+        if not all(
+            math.isfinite(float(value))
+            for value in (self.detector_x0_pix, self.detector_y0_pix)
+        ):
+            raise ValueError("FieldObservation detector origins must be finite")
         for name in (
             "sky_background",
             "instrument_background",

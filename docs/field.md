@@ -116,6 +116,99 @@ Exact constructor kwargs vary by kind (hidden sizes, grid resolution, Fourier fr
 
 **Capacity hints:** **`spectral_data_budget`** / **`spectral_model_capacity_hints`** in [`spectral_budget.py`](../src/torchsky/map/field/spectral_budget.py) suggest model families from your observation list.
 
+## Spatially, spectrally, and temporally varying observation models
+
+The experimental learned PSF and background operators use the same forward
+path for ordinary neural fields and exact spectral Power Foam. Their capacity
+and characteristic scales are configured independently: a PSF may change over
+tens of detector pixels, hundreds of wavelength units, and minutes, while a
+sky residual may change over a much larger spatial scale, a much finer spectral
+scale, and hours. Do not share an encoder merely because both operators accept
+the same coordinates.
+
+```python
+from torchsky.map.operators import (
+    ConditionedBackgroundField,
+    ConditionedKernelPSF,
+    LearnedBackgroundOp,
+    LearnedPSFOp,
+    ObservationOperatorBundle,
+    SpatioSpectralTemporalEncoder,
+)
+
+psf_coordinates = SpatioSpectralTemporalEncoder(
+    spatial_center=(2048.0, 2048.0),
+    spatial_scale=(1024.0, 1024.0),
+    wavelength_center=2.0,
+    spectral_scale=0.5,
+    time_center_mjd=60000.0,
+    temporal_scale_days=0.02,
+    spatial_frequencies=3,
+    spectral_frequencies=2,
+    temporal_frequencies=2,
+)
+background_coordinates = SpatioSpectralTemporalEncoder(
+    spatial_center=(2048.0, 2048.0),
+    spatial_scale=(4096.0, 4096.0),
+    wavelength_center=2.0,
+    spectral_scale=0.05,
+    time_center_mjd=60000.0,
+    temporal_scale_days=0.25,
+    spatial_frequencies=2,
+    spectral_frequencies=4,
+    temporal_frequencies=2,
+)
+bundle = ObservationOperatorBundle(
+    psf=LearnedPSFOp(
+        ConditionedKernelPSF(
+            psf_coordinates,
+            n_basis=6,
+            kernel_size=21,
+            init_fwhm_pix=2.4,
+        )
+    ),
+    background=LearnedBackgroundOp(
+        ConditionedBackgroundField(background_coordinates),
+        coordinate_frame="detector",
+    ),
+)
+result = field.fit(
+    observations,
+    model,
+    observation_operator_bundles=[bundle] * len(observations),
+    observation_forward_contexts=contexts,  # time_mjd lives here
+)
+```
+
+`ConditionedKernelPSF` learns positive unit-sum basis kernels and neural convex
+mixture weights at every source position, wavelength, and time. Source-side
+mixing makes the non-stationary convolution flux conserving away from real
+detector boundaries. Each monochromatic scene is convolved before spectral
+quadrature. `ConditionedBackgroundField` is signed and additive; it may model a
+residual around explicit background estimates already attached to each
+observation. Detector-coordinate models use `detector_x0_pix` and
+`detector_y0_pix`, which are updated automatically by training crops.
+
+These models are deliberately constrained, but the inverse problem is still
+not identifiable if scene, PSF, and background all receive unconstrained
+capacity simultaneously. The recommended scientific sequence is:
+
+1. Anchor the scene with calibrated exposures and an explicit nominal PSF and
+   background; retain held-out exposures and isolated stars.
+2. Fit only a low-spatial-frequency signed background residual, with scales set
+   from blank-sky structure and no compact-source capacity.
+3. Fit the positive normalized PSF bases and their conditioning on isolated
+   stars or counterfactual evidence stamps; validate encircled energy and
+   residuals by detector position, wavelength, and time.
+4. Jointly refine at a lower learning rate with priors toward the calibrated
+   operators. Select capacity only from held-out exposure likelihood, injected
+   flux/color recovery, and blank-sky false positives.
+
+Value losses are supported. Distribution rendering and Gaussian NLL currently
+fail closed for learned PSF/background bundles because a spatially varying PSF
+requires covariance propagation with cross-basis terms; silently applying the
+fixed-kernel variance rule would be incorrect.
+
 ## Fitting: `field.fit`
 
 **`field.fit(observations, model, steps=200, lr=..., loss_kind=..., ...)`** supports:

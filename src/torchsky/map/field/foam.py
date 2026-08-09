@@ -1562,6 +1562,14 @@ def _polygon_disk_intersection_area(
     if vertices.shape[0] < 3 or bool(radius <= 0):
         return vertices.new_zeros(())
     shifted = vertices - center
+    squared_distance = torch.sum(shifted * shifted, dim=1)
+    containment_tolerance = (
+        64.0
+        * torch.finfo(vertices.dtype).eps
+        * (radius * radius + torch.max(squared_distance) + 1.0)
+    )
+    if bool(torch.all(squared_distance <= radius * radius + containment_tolerance)):
+        return torch.abs(_polygon_signed_area(vertices))
     area = vertices.new_zeros(())
     for index in range(shifted.shape[0]):
         area = area + _segment_circle_area(
@@ -1799,6 +1807,28 @@ def bounded_power_pixel_operator(
                 sites[cell],
                 radii[cell],
             )
+            if clipped.shape[0] >= 3:
+                squared_distance = torch.sum(
+                    (clipped - sites[cell]) ** 2,
+                    dim=1,
+                )
+                containment_tolerance = (
+                    64.0
+                    * torch.finfo(area.dtype).eps
+                    * (
+                        radii[cell] * radii[cell]
+                        + torch.max(squared_distance)
+                        + 1.0
+                    )
+                )
+                fully_contained = bool(
+                    torch.all(
+                        squared_distance
+                        <= radii[cell] * radii[cell] + containment_tolerance
+                    )
+                )
+            else:
+                fully_contained = False
             area_tolerance = (
                 64.0
                 * torch.finfo(area.dtype).eps
@@ -1807,7 +1837,15 @@ def bounded_power_pixel_operator(
                     + math.pi * radii[cell] * radii[cell]
                 )
             )
-            if bool(area > area_tolerance):
+            pixel_tolerance = (
+                64.0
+                * torch.finfo(area.dtype).eps
+                * torch.abs(signed_pixel_areas[pixel])
+            )
+            if bool(
+                area > area_tolerance
+                or (fully_contained and area > pixel_tolerance)
+            ):
                 kept_pixels.append(pixel)
                 kept_cells.append(cell)
                 kept_areas.append(area)
@@ -2056,7 +2094,36 @@ def _batched_polygon_disk_area(
         torch.zeros_like(intervals),
     )
     valid_edges = (positions < counts[:, None]) & (counts[:, None] >= 3)
-    return torch.abs(torch.sum(intervals * valid_edges[..., None], dim=(1, 2)))
+    intersection_area = torch.abs(
+        torch.sum(intervals * valid_edges[..., None], dim=(1, 2))
+    )
+    vertex_distance_squared = torch.sum(start * start, dim=2)
+    containment_tolerance = (
+        64.0
+        * torch.finfo(vertices.dtype).eps
+        * (
+            radii * radii
+            + torch.max(
+                torch.where(
+                    valid_edges,
+                    vertex_distance_squared,
+                    torch.zeros_like(vertex_distance_squared),
+                ),
+                dim=1,
+            ).values
+            + 1.0
+        )
+    )
+    fully_contained = (counts >= 3) & torch.all(
+        (~valid_edges)
+        | (
+            vertex_distance_squared
+            <= radii[:, None] * radii[:, None] + containment_tolerance[:, None]
+        ),
+        dim=1,
+    )
+    polygon_area = torch.abs(torch.sum(triangle[..., 0] * valid_edges, dim=1))
+    return torch.where(fully_contained, polygon_area, intersection_area)
 
 
 @lru_cache(maxsize=1)
@@ -2237,7 +2304,44 @@ def batched_bounded_power_pixel_operator(
                 + math.pi * radii[chunk_cells] ** 2
             )
         )
-        keep = chunk_areas > area_tolerance
+        positions = torch.arange(vertices.shape[1], device=vertices.device)
+        valid_vertices = positions[None, :] < counts[:, None]
+        squared_distance = torch.sum(
+            (vertices - sites[chunk_cells, None, :]) ** 2,
+            dim=2,
+        )
+        containment_tolerance = (
+            64.0
+            * torch.finfo(chunk_areas.dtype).eps
+            * (
+                radii[chunk_cells] * radii[chunk_cells]
+                + torch.max(
+                    torch.where(
+                        valid_vertices,
+                        squared_distance,
+                        torch.zeros_like(squared_distance),
+                    ),
+                    dim=1,
+                ).values
+                + 1.0
+            )
+        )
+        fully_contained = (counts >= 3) & torch.all(
+            (~valid_vertices)
+            | (
+                squared_distance
+                <= radii[chunk_cells, None] ** 2 + containment_tolerance[:, None]
+            ),
+            dim=1,
+        )
+        pixel_tolerance = (
+            64.0
+            * torch.finfo(chunk_areas.dtype).eps
+            * torch.abs(signed_pixel_areas[chunk_pixels])
+        )
+        keep = (chunk_areas > area_tolerance) | (
+            fully_contained & (chunk_areas > pixel_tolerance)
+        )
         kept_pixels.append(chunk_pixels[keep])
         kept_cells.append(chunk_cells[keep])
         kept_areas.append(chunk_areas[keep])

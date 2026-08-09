@@ -15,6 +15,7 @@ from ...wcs import WCS
 
 from ..healpix_image_plane import sample_healpix_map_on_image_header
 from ..operators.background import (
+    LearnedBackgroundOp,
     apply_background_components,
     observation_background_components,
 )
@@ -22,7 +23,7 @@ from ..operators.bundle import (
     ObservationOperatorBundle,
     field_observation_operator_bundle,
 )
-from ..operators.psf import apply_psf_spec, apply_psf_variance_spec
+from ..operators.psf import LearnedPSFOp, apply_psf_spec, apply_psf_variance_spec
 from ..exposure_pose import ExposurePose
 
 from .bandpass import (
@@ -95,6 +96,189 @@ def _resolve_operator_bundle(
     if operator_bundle is not None:
         return operator_bundle
     return field_observation_operator_bundle(observation)
+
+
+def _detector_coordinate_tile(
+    observation: FieldObservation,
+    *,
+    y0: int,
+    y1: int,
+    x0: int,
+    x1: int,
+    device: torch.device,
+) -> tuple[Tensor, Tensor]:
+    y, x = torch.meshgrid(
+        torch.arange(y0, y1, device=device, dtype=torch.float32)
+        + float(observation.detector_y0_pix),
+        torch.arange(x0, x1, device=device, dtype=torch.float32)
+        + float(observation.detector_x0_pix),
+        indexing="ij",
+    )
+    return x, y
+
+
+def _apply_learned_psf(
+    image: Tensor,
+    observation: FieldObservation,
+    operator: LearnedPSFOp,
+    *,
+    wavelength: Tensor | float,
+    forward_context: ForwardContext | None,
+    spatial_tile_hw: tuple[int, int] | None,
+) -> Tensor:
+    psf_model = operator.model
+    if psf_model is None:
+        raise ValueError("LearnedPSFOp requires a model for rendering")
+    height, width = map(int, image.shape)
+    time_mjd = None if forward_context is None else forward_context.time_mjd
+    if spatial_tile_hw is None or not hasattr(psf_model, "kernel_size"):
+        x, y = _detector_coordinate_tile(
+            observation,
+            y0=0,
+            y1=height,
+            x0=0,
+            x1=width,
+            device=image.device,
+        )
+        return psf_model(
+            image,
+            spatial_x=x,
+            spatial_y=y,
+            wavelength=wavelength,
+            time_mjd=time_mjd,
+        )
+    tile_h, tile_w = _validate_spatial_tile_hw(spatial_tile_hw)
+    radius = int(getattr(psf_model, "kernel_size")) // 2
+    output = torch.empty_like(image)
+    for y0, y1, x0, x1 in _iter_spatial_tiles(
+        height, width, tile_h, tile_w
+    ):
+        halo_y0 = max(y0 - radius, 0)
+        halo_y1 = min(y1 + radius, height)
+        halo_x0 = max(x0 - radius, 0)
+        halo_x1 = min(x1 + radius, width)
+        x, y = _detector_coordinate_tile(
+            observation,
+            y0=halo_y0,
+            y1=halo_y1,
+            x0=halo_x0,
+            x1=halo_x1,
+            device=image.device,
+        )
+        filtered = psf_model(
+            image[halo_y0:halo_y1, halo_x0:halo_x1],
+            spatial_x=x,
+            spatial_y=y,
+            wavelength=wavelength,
+            time_mjd=time_mjd,
+        )
+        output[y0:y1, x0:x1] = filtered[
+            y0 - halo_y0 : y1 - halo_y0,
+            x0 - halo_x0 : x1 - halo_x0,
+        ]
+    return output
+
+
+def _conditioned_background_map(
+    observation: FieldObservation,
+    operator: LearnedBackgroundOp,
+    *,
+    wavelengths: Tensor,
+    weights: Tensor,
+    forward_context: ForwardContext | None,
+    exposure_pose: ExposurePose | None,
+    spatial_tile_hw: tuple[int, int] | None,
+    device: torch.device,
+) -> Tensor:
+    background_model = operator.model
+    if background_model is None:
+        raise ValueError("LearnedBackgroundOp requires a model for rendering")
+    height, width = map(int, observation.image.shape[-2:])
+    if spatial_tile_hw is None:
+        tiles = [(0, height, 0, width)]
+    else:
+        tile_h, tile_w = _validate_spatial_tile_hw(spatial_tile_hw)
+        tiles = list(_iter_spatial_tiles(height, width, tile_h, tile_w))
+    output = torch.zeros((height, width), device=device, dtype=torch.float32)
+    sampling_wcs = WCS(observation.header)
+    grid_device = torch.device("cpu") if device.type == "mps" else device
+    sampling_wcs.to(grid_device)
+    time_mjd = None if forward_context is None else forward_context.time_mjd
+    for y0, y1, x0, x1 in tiles:
+        if operator.coordinate_frame == "detector":
+            spatial_x, spatial_y = _detector_coordinate_tile(
+                observation,
+                y0=y0,
+                y1=y1,
+                x0=x0,
+                x1=x1,
+                device=device,
+            )
+        else:
+            spatial_x, spatial_y = _tile_world_coordinate_grid(
+                sampling_wcs,
+                y0=y0,
+                y1=y1,
+                x0=x0,
+                x1=x1,
+                offset_x=0.0,
+                offset_y=0.0,
+                device=device,
+            )
+            spatial_x, spatial_y = _apply_exposure_pose_to_sky_grid(
+                spatial_x,
+                spatial_y,
+                observation,
+                exposure_pose,
+            )
+            spatial_x = spatial_x.to(dtype=torch.float32)
+            spatial_y = spatial_y.to(dtype=torch.float32)
+        patch = torch.zeros_like(spatial_x, dtype=torch.float32)
+        for wavelength, weight in zip(wavelengths, weights, strict=True):
+            patch += background_model(
+                spatial_x,
+                spatial_y,
+                wavelength,
+                time_mjd,
+            ).to(dtype=torch.float32) * weight.to(dtype=torch.float32)
+        output[y0:y1, x0:x1] = patch
+    return output
+
+
+def _apply_observation_background(
+    image: Tensor,
+    observation: FieldObservation,
+    operator_bundle: ObservationOperatorBundle,
+    *,
+    wavelengths: Tensor,
+    weights: Tensor,
+    forward_context: ForwardContext | None,
+    exposure_pose: ExposurePose | None,
+    spatial_tile_hw: tuple[int, int] | None,
+) -> Tensor:
+    output = image
+    if isinstance(operator_bundle.background, LearnedBackgroundOp):
+        output = output + _conditioned_background_map(
+            observation,
+            operator_bundle.background,
+            wavelengths=wavelengths,
+            weights=weights,
+            forward_context=forward_context,
+            exposure_pose=exposure_pose,
+            spatial_tile_hw=spatial_tile_hw,
+            device=image.device,
+        ).to(dtype=image.dtype)
+    if operator_bundle.background is not None:
+        output = apply_background_components(
+            output,
+            **observation_background_components(
+                observation,
+                shape=tuple(output.shape),
+                device=output.device,
+                dtype=output.dtype,
+            ),
+        )
+    return output
 
 
 def _render_spatially_integrated_distribution(
@@ -244,6 +428,13 @@ def render_field_observation_distribution(
         raise ValueError("FieldObservation.image must be 2D")
     spatial_nodes = _spatial_quadrature_nodes(spatial_sampling)
     operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
+    if isinstance(operator_bundle.psf, LearnedPSFOp) or isinstance(
+        operator_bundle.background, LearnedBackgroundOp
+    ):
+        raise ValueError(
+            "distribution rendering with learned PSF/background operators is not "
+            "implemented; use a value loss until covariance propagation is enabled"
+        )
     device = next((p.device for p in model.parameters()), default_compute_device())
     if override_wavelengths is not None or override_weights is not None:
         if override_wavelengths is None or override_weights is None:
@@ -566,6 +757,74 @@ def render_field_observation(
     else:
         th, tw = _validate_spatial_tile_hw(spatial_tile_hw)
         tiles = list(_iter_spatial_tiles(H, W, th, tw))
+    if isinstance(operator_bundle.psf, LearnedPSFOp):
+        rendered = torch.zeros((H, W), device=device, dtype=torch.float32)
+        for wavelength, spectral_weight in zip(wavelengths, weights, strict=True):
+            monochromatic = torch.zeros_like(rendered)
+            for y0, y1, x0, x1 in tiles:
+                patch = torch.zeros(
+                    (y1 - y0, x1 - x0), device=device, dtype=torch.float32
+                )
+                for offset_x, offset_y, spatial_weight in spatial_nodes:
+                    if center_ra32 is not None and center_dec32 is not None:
+                        ra_p = center_ra32[y0:y1, x0:x1]
+                        dec_p = center_dec32[y0:y1, x0:x1]
+                    else:
+                        ra_p, dec_p = _tile_world_coordinate_grid(
+                            sampling_wcs,
+                            y0=y0,
+                            y1=y1,
+                            x0=x0,
+                            x1=x1,
+                            offset_x=offset_x,
+                            offset_y=offset_y,
+                            device=device,
+                        )
+                        ra_p, dec_p = _apply_exposure_pose_to_sky_grid(
+                            ra_p,
+                            dec_p,
+                            observation,
+                            exposure_pose,
+                        )
+                        ra_p = ra_p.to(dtype=torch.float32)
+                        dec_p = dec_p.to(dtype=torch.float32)
+                    if use_func_vmap:
+                        plane = _evaluate_field_plane_func_vmap(
+                            model,
+                            ra_p,
+                            dec_p,
+                            wavelength=wavelength,
+                            chunk=func_vmap_chunk,
+                        )
+                    else:
+                        plane = _call_scalar_field_forward(
+                            model,
+                            ra_p,
+                            dec_p,
+                            wavelength,
+                            forward_context=forward_context,
+                        )
+                    patch += plane * spatial_weight
+                monochromatic[y0:y1, x0:x1] = patch
+            rendered += _apply_learned_psf(
+                monochromatic,
+                observation,
+                operator_bundle.psf,
+                wavelength=wavelength,
+                forward_context=forward_context,
+                spatial_tile_hw=spatial_tile_hw,
+            ) * spectral_weight.to(dtype=rendered.dtype)
+        rendered = _apply_observation_background(
+            rendered,
+            observation,
+            operator_bundle,
+            wavelengths=wavelengths,
+            weights=weights,
+            forward_context=forward_context,
+            exposure_pose=exposure_pose,
+            spatial_tile_hw=spatial_tile_hw,
+        )
+        return rendered.to(dtype=image.dtype)
     rendered = torch.zeros((H, W), device=device, dtype=torch.float32)
     for y0, y1, x0, x1 in tiles:
         patch = torch.zeros((y1 - y0, x1 - x0), device=device, dtype=torch.float32)
@@ -625,16 +884,16 @@ def render_field_observation(
         rendered[y0:y1, x0:x1] = patch
     if operator_bundle.psf is not None:
         rendered = apply_psf_spec(rendered, observation.psf_spec)
-    if operator_bundle.background is not None:
-        rendered = apply_background_components(
-            rendered,
-            **observation_background_components(
-                observation,
-                shape=tuple(rendered.shape),
-                device=rendered.device,
-                dtype=rendered.dtype,
-            ),
-        )
+    rendered = _apply_observation_background(
+        rendered,
+        observation,
+        operator_bundle,
+        wavelengths=wavelengths,
+        weights=weights,
+        forward_context=forward_context,
+        exposure_pose=exposure_pose,
+        spatial_tile_hw=spatial_tile_hw,
+    )
     return rendered.to(dtype=image.dtype)
 
 
@@ -644,6 +903,9 @@ def render_spectral_power_foam_observation_exact(
     *,
     num_spectral_samples: int = 9,
     operator_kwargs: dict[str, object] | None = None,
+    forward_context: ForwardContext | None = None,
+    operator_bundle: ObservationOperatorBundle | None = None,
+    spatial_tile_hw: tuple[int, int] | None = None,
 ) -> Tensor:
     """Hard-render a spectral Power Foam through target pixels and common operators."""
     if observation.image.ndim != 2:
@@ -696,13 +958,6 @@ def render_spectral_power_foam_observation_exact(
         num_spectral_samples=num_spectral_samples,
         device=device,
     )
-    pixel_integrals = render_exact(
-        polygons,
-        wavelengths,
-        weights,
-        semantics="surface_brightness",
-        **dict(operator_kwargs or {}),
-    )
     next_vertices = torch.roll(polygons, shifts=-1, dims=-2)
     pixel_areas = 0.5 * torch.abs(
         torch.sum(
@@ -713,20 +968,49 @@ def render_spectral_power_foam_observation_exact(
     )
     if bool(torch.any(pixel_areas <= 0)):
         raise ValueError("target WCS produced a degenerate pixel polygon")
-    rendered = (pixel_integrals / pixel_areas).reshape(height, width)
-    operator_bundle = _resolve_operator_bundle(observation, None)
-    if operator_bundle.psf is not None:
-        rendered = apply_psf_spec(rendered, observation.psf_spec)
-    if operator_bundle.background is not None:
-        rendered = apply_background_components(
-            rendered,
-            **observation_background_components(
+    operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
+    if isinstance(operator_bundle.psf, LearnedPSFOp):
+        rendered = torch.zeros((height, width), device=device, dtype=torch.float32)
+        for wavelength, weight in zip(wavelengths, weights, strict=True):
+            pixel_integrals = render_exact(
+                polygons,
+                wavelength.reshape(1),
+                torch.ones_like(wavelength).reshape(1),
+                semantics="surface_brightness",
+                **dict(operator_kwargs or {}),
+            )
+            monochromatic = (pixel_integrals / pixel_areas).reshape(height, width)
+            rendered += _apply_learned_psf(
+                monochromatic,
                 observation,
-                shape=tuple(rendered.shape),
-                device=rendered.device,
-                dtype=rendered.dtype,
-            ),
+                operator_bundle.psf,
+                wavelength=wavelength,
+                forward_context=forward_context,
+                spatial_tile_hw=spatial_tile_hw,
+            ) * weight.to(dtype=rendered.dtype)
+    else:
+        pixel_integrals = render_exact(
+            polygons,
+            wavelengths,
+            weights,
+            semantics="surface_brightness",
+            **dict(operator_kwargs or {}),
         )
+        rendered = (pixel_integrals / pixel_areas).reshape(height, width)
+    if operator_bundle.psf is not None and not isinstance(
+        operator_bundle.psf, LearnedPSFOp
+    ):
+        rendered = apply_psf_spec(rendered, observation.psf_spec)
+    rendered = _apply_observation_background(
+        rendered,
+        observation,
+        operator_bundle,
+        wavelengths=wavelengths,
+        weights=weights,
+        forward_context=forward_context,
+        exposure_pose=None,
+        spatial_tile_hw=spatial_tile_hw,
+    )
     return rendered.to(dtype=observation.image.dtype)
 
 

@@ -4,13 +4,78 @@ import torch
 
 from torchsky.map.operators import (
     AffineRadiometry,
+    ConditionedBackgroundField,
+    ConditionedKernelPSF,
     ConstrainedKernelPSF,
     GatedResidualOperator,
     InstrumentStateEncoder,
     LearnedInstrumentOperator,
+    SpatioSpectralTemporalEncoder,
     SubPixelShift,
     gaussian_kernel2d,
 )
+
+
+def _conditioning_encoder() -> SpatioSpectralTemporalEncoder:
+    return SpatioSpectralTemporalEncoder(
+        spatial_center=(16.0, 16.0),
+        spatial_scale=(12.0, 20.0),
+        wavelength_center=7000.0,
+        spectral_scale=1000.0,
+        time_center_mjd=60000.0,
+        temporal_scale_days=30.0,
+        spatial_frequencies=2,
+        spectral_frequencies=2,
+        temporal_frequencies=1,
+    )
+
+
+def test_multiscale_conditioning_axes_have_independent_scales():
+    encoder = _conditioning_encoder()
+    x = torch.tensor([16.0, 28.0])
+    y = torch.tensor([16.0, 16.0])
+    encoded = encoder(x, y, torch.tensor([7000.0, 8000.0]), 60030.0)
+    assert encoded.shape == (2, encoder.output_dim)
+    assert torch.isfinite(encoded).all()
+    # Raw normalized x is the first feature: one spatial scale is exactly one.
+    torch.testing.assert_close(encoded[:, 0], torch.tensor([0.0, 1.0]))
+
+
+def test_conditioned_kernel_psf_is_flux_conserving_and_differentiable():
+    psf = ConditionedKernelPSF(
+        _conditioning_encoder(), n_basis=3, kernel_size=9, init_fwhm_pix=2.0
+    )
+    with torch.no_grad():
+        psf.mixer[-1].weight.normal_(std=0.2)
+    y, x = torch.meshgrid(torch.arange(33.0), torch.arange(33.0), indexing="ij")
+    image = torch.zeros((33, 33), requires_grad=True)
+    with torch.no_grad():
+        image[16, 16] = 1.0
+    output = psf(
+        image,
+        spatial_x=x,
+        spatial_y=y,
+        wavelength=7500.0,
+        time_mjd=60010.0,
+    )
+    torch.testing.assert_close(output.sum(), torch.tensor(1.0), atol=1e-5, rtol=1e-5)
+    assert bool((output >= 0).all())
+    output.square().sum().backward()
+    assert image.grad is not None
+    assert psf.kernel_basis.raw_kernels.grad is not None
+
+
+def test_conditioned_background_zero_initialization_and_gradients():
+    background = ConditionedBackgroundField(_conditioning_encoder(), hidden_dim=16)
+    y, x = torch.meshgrid(torch.arange(7.0), torch.arange(9.0), indexing="ij")
+    initial = background(x, y, 7000.0, 60000.0)
+    torch.testing.assert_close(initial, torch.zeros_like(initial))
+    with torch.no_grad():
+        background.network[-1].weight.normal_(std=0.1)
+    changed = background(x, y, 8000.0, 60030.0)
+    assert not torch.allclose(changed, initial)
+    changed.square().mean().backward()
+    assert background.network[0].weight.grad is not None
 
 
 def test_gaussian_kernel2d_unit_sum():

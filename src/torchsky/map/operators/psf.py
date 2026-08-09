@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
-from torch import Tensor
+from torch import Tensor, nn
 
 from .base import PSFOp
 
@@ -19,8 +19,13 @@ class ExplicitPSFOp(PSFOp):
 
 @dataclass
 class LearnedPSFOp(PSFOp):
-    def __init__(self, *, name: str = "learned_psf") -> None:
+    model: nn.Module | None = None
+
+    def __init__(
+        self, model: nn.Module | None = None, *, name: str = "learned_psf"
+    ) -> None:
         super().__init__(name=name, learned=True)
+        self.model = model
 
 
 def gaussian_support_radius(sigma_pix: float) -> int:

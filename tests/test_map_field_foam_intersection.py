@@ -68,6 +68,31 @@ def test_single_cell_matches_analytic_circle_and_rectangle_areas() -> None:
     assert integrated[-1] == 0
 
 
+def test_float32_tiny_pixel_inside_large_cell_survives_area_tolerance() -> None:
+    sites = torch.tensor([[0.0, 0.0]], dtype=torch.float32)
+    radii = torch.tensor([10.0], dtype=torch.float32)
+    pixels = _rectangle(-0.005, -0.005, 0.005, 0.005, dtype=torch.float32)[None]
+    candidates = torch.tensor([0], dtype=torch.long)
+    candidate_indptr = torch.tensor([0, 1], dtype=torch.long)
+    neighbor_indptr = torch.tensor([0, 0], dtype=torch.long)
+    neighbors = torch.empty(0, dtype=torch.long)
+
+    scalar = bounded_power_pixel_operator(pixels, sites, radii)
+    batched = batched_bounded_power_pixel_operator(
+        pixels,
+        sites,
+        radii,
+        candidate_indptr=candidate_indptr,
+        candidate_indices=candidates,
+        neighbor_indptr=neighbor_indptr,
+        neighbor_indices=neighbors,
+    )
+
+    expected = torch.tensor([1.0e-4], dtype=torch.float32)
+    torch.testing.assert_close(scalar.areas, expected, rtol=2e-5, atol=1e-8)
+    torch.testing.assert_close(batched.areas, expected, rtol=2e-5, atol=1e-8)
+
+
 def test_smooth_radius_training_hands_off_to_exact_pixel_inference() -> None:
     axis = torch.linspace(-1.0, 1.0, 31, dtype=torch.float64)
     grid_y, grid_x = torch.meshgrid(axis, axis, indexing="ij")

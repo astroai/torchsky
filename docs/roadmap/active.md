@@ -1,5 +1,41 @@
 # Active Torchsky Execution Checklist
 
+## Conditioned PSF and sky-background observation models
+
+- [x] Add a differentiable spatial/spectral/temporal encoder with independent
+  coordinate scales and Fourier bandwidths on every axis. PSF and background
+  instantiate separate encoders so their physical variability scales need not
+  agree.
+- [x] Add a non-stationary neural PSF as source-position-conditioned convex
+  mixtures of positive, unit-sum trainable kernels. Apply it to each spectral
+  quadrature plane before bandpass integration so chromatic morphology is not
+  replaced by a band-average blur.
+- [x] Add signed neural background residuals in either detector or sky
+  coordinates, conditioned on wavelength and MJD, while preserving explicit
+  sky/instrument/detector background components.
+- [x] Use the same conditioned operator bundle in ordinary INR rendering,
+  exact spectral Power-Foam rendering, spatially tiled rendering, and
+  `fit_field_model`; optimize unique operator parameters alongside scene
+  parameters and preserve detector coordinates across training crops.
+- [x] Make learned-PSF tiling and patch fitting exact for finite kernel support;
+  validate output and gradient parity. Fix the float32 exact-Foam containment
+  tolerance exposed by tiny pixels inside much larger cells.
+- [x] Establish a local four-thread CPU checkpoint for five wavelengths, four
+  PSF bases, 15-square kernels, and both conditioned operators. At 128 square,
+  full/tiled medians were 0.0285/0.0281 s; at 512 square they were
+  0.6686/0.7346 s with identical checksums. Exact 128-square tiling therefore
+  bounds activation extent at a measured 9.9% CPU time cost in the larger case;
+  this is a baseline, not a CUDA or end-to-end speed claim.
+- [x] Fail closed for heteroscedastic/distribution rendering with learned PSF or
+  background until covariance propagation is mathematically implemented.
+- [ ] Add calibrated priors and staged freeze/unfreeze helpers that keep diffuse
+  scene, background, and PSF corrections identifiable on held-out exposures.
+- [ ] Implement learned non-stationary PSF covariance propagation, including
+  cross-basis terms, before enabling Gaussian NLL for these bundles.
+- [ ] Measure CPU/CUDA throughput and peak memory from small stamps through
+  survey-sized tiled fields; then select basis count, kernel support, mixed
+  precision, compilation, and spectral batching from evidence.
+
 ## Local Foam/INR physical-fit performance (CANFAR-independent)
 
 - [x] Preserve spatial sky, instrument, and detector background components in

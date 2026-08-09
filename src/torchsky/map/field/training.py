@@ -747,6 +747,7 @@ def fit_field_model(
     freeze_field_body: bool = False,
     device: torch.device | str | None = None,
     observation_forward_contexts: Sequence[ForwardContext | None] | None = None,
+    observation_operator_bundles: Sequence[ObservationOperatorBundle] | None = None,
     observation_exposure_poses: Sequence[ExposurePose | None] | None = None,
     refine_poses: bool = False,
     anchor_first_pose: bool = True,
@@ -757,10 +758,29 @@ def fit_field_model(
         raise ValueError("fit_field_model requires at least one observation")
     train_device = resolve_fit_device(model, device)
     model = model.to(device=train_device)
-    obs_operator_bundles = tuple(
-        field_observation_operator_bundle(observation) for observation in observations
+    obs_operator_bundles = (
+        tuple(observation_operator_bundles)
+        if observation_operator_bundles is not None
+        else tuple(
+            field_observation_operator_bundle(observation)
+            for observation in observations
+        )
     )
+    if len(obs_operator_bundles) != len(observations):
+        raise ValueError(
+            "observation_operator_bundles must have the same length as observations"
+        )
     operator_bundle = merge_operator_bundles(*obs_operator_bundles)
+
+    def training_psf_halo(
+        bundle: ObservationOperatorBundle,
+    ) -> tuple[int, int] | None:
+        operator_model = getattr(bundle.psf, "model", None)
+        kernel_size = getattr(operator_model, "kernel_size", None)
+        if kernel_size is None:
+            return None
+        radius = int(kernel_size) // 2
+        return radius, radius
 
     obs_forward_ctx: tuple[ForwardContext | None, ...] = (
         tuple(observation_forward_contexts)
@@ -821,6 +841,17 @@ def fit_field_model(
             if freeze_field_body and name.startswith("body."):
                 param.requires_grad = False
     trainable_params = [p for p in model.parameters() if p.requires_grad]
+    seen_param_ids = {id(parameter) for parameter in trainable_params}
+    for bundle in obs_operator_bundles:
+        for operator in (bundle.psf, bundle.background):
+            operator_model = getattr(operator, "model", None)
+            if not isinstance(operator_model, nn.Module):
+                continue
+            operator_model.to(device=train_device)
+            for parameter in operator_model.parameters():
+                if parameter.requires_grad and id(parameter) not in seen_param_ids:
+                    trainable_params.append(parameter)
+                    seen_param_ids.add(id(parameter))
     seen_poses = set()
     for pose in obs_exposure_poses:
         if pose is not None and id(pose) not in seen_poses:
@@ -1021,6 +1052,9 @@ def fit_field_model(
                         x0=ref_x0,
                         y0=ref_y0,
                         patch_size=patch,
+                        psf_halo=training_psf_halo(
+                            obs_operator_bundles[observation_index],
+                        ),
                     )
                     if cropped is not None:
                         selected_pairs.append(
@@ -1079,6 +1113,9 @@ def fit_field_model(
                                 y0=y0,
                                 width=patch,
                                 height=patch,
+                                psf_halo=training_psf_halo(
+                                    base_bundle,
+                                ),
                             ),
                             base_ctx,
                             base_pose,

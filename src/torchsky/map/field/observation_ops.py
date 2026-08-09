@@ -220,6 +220,8 @@ def crop_field_observation(
         background_offset=observation.background_offset,
         band_name=observation.band_name,
         spectral_quantity=observation.spectral_quantity,
+        detector_x0_pix=float(observation.detector_x0_pix) + int(x0),
+        detector_y0_pix=float(observation.detector_y0_pix) + int(y0),
     )
 
 
@@ -230,6 +232,7 @@ def crop_field_observation_for_training(
     y0: int,
     width: int,
     height: int,
+    psf_halo: tuple[int, int] | None = None,
 ) -> FieldObservation:
     """Crop a loss region plus the exact finite PSF support around it."""
     image_height, image_width = map(int, observation.image.shape[-2:])
@@ -239,7 +242,11 @@ def crop_field_observation_for_training(
     core_y1 = min(core_y0 + int(height), image_height)
     if core_x1 <= core_x0 or core_y1 <= core_y0:
         raise ValueError("training crop must overlap the observation")
-    halo_y, halo_x = psf_support_radius(observation.psf_spec)
+    halo_y, halo_x = (
+        psf_support_radius(observation.psf_spec)
+        if psf_halo is None
+        else (max(int(psf_halo[0]), 0), max(int(psf_halo[1]), 0))
+    )
     crop_x0 = max(core_x0 - halo_x, 0)
     crop_y0 = max(core_y0 - halo_y, 0)
     crop_x1 = min(core_x1 + halo_x, image_width)
@@ -269,6 +276,7 @@ def crop_field_observation_to_shared_sky_patch(
     x0: int,
     y0: int,
     patch_size: int,
+    psf_halo: tuple[int, int] | None = None,
 ) -> FieldObservation | None:
     patch = max(int(patch_size), 1)
     ref_width = int(reference_observation.image.shape[-1])
@@ -284,6 +292,7 @@ def crop_field_observation_to_shared_sky_patch(
             y0=y0,
             width=x1 - x0,
             height=y1 - y0,
+            psf_halo=psf_halo,
         )
     ref_x = torch.tensor(
         [x0, x1 - 1, x0, x1 - 1, 0.5 * (x0 + x1 - 1)],
@@ -318,6 +327,7 @@ def crop_field_observation_to_shared_sky_patch(
         y0=crop_y0,
         width=crop_x1 - crop_x0,
         height=crop_y1 - crop_y0,
+        psf_halo=psf_halo,
     )
     if not torch.any(observation_support_mask(cropped)):
         return None

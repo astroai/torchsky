@@ -6,9 +6,48 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 
 from .base import BackgroundOp
+from .learned_kernel import SpatioSpectralTemporalEncoder
+
+
+class ConditionedBackgroundField(nn.Module):
+    """Signed additive background with independently scaled conditioning axes."""
+
+    def __init__(
+        self,
+        encoder: SpatioSpectralTemporalEncoder,
+        *,
+        hidden_dim: int = 32,
+        hidden_layers: int = 2,
+    ) -> None:
+        super().__init__()
+        if hidden_dim < 1:
+            raise ValueError("hidden_dim must be positive")
+        if hidden_layers < 1:
+            raise ValueError("hidden_layers must be positive")
+        layers: list[nn.Module] = []
+        width = encoder.output_dim
+        for _ in range(int(hidden_layers)):
+            layers.extend((nn.Linear(width, int(hidden_dim)), nn.GELU()))
+            width = int(hidden_dim)
+        output = nn.Linear(width, 1)
+        nn.init.zeros_(output.weight)
+        nn.init.zeros_(output.bias)
+        layers.append(output)
+        self.encoder = encoder
+        self.network = nn.Sequential(*layers)
+
+    def forward(
+        self,
+        spatial_x: Tensor,
+        spatial_y: Tensor,
+        wavelength: Tensor | float,
+        time_mjd: Tensor | float | None = None,
+    ) -> Tensor:
+        encoded = self.encoder(spatial_x, spatial_y, wavelength, time_mjd)
+        return self.network(encoded).squeeze(-1)
 
 
 @dataclass
@@ -19,8 +58,21 @@ class ExplicitBackgroundOp(BackgroundOp):
 
 @dataclass
 class LearnedBackgroundOp(BackgroundOp):
-    def __init__(self, *, name: str = "learned_background") -> None:
+    model: nn.Module | None = None
+    coordinate_frame: str = "sky"
+
+    def __init__(
+        self,
+        model: nn.Module | None = None,
+        *,
+        coordinate_frame: str = "sky",
+        name: str = "learned_background",
+    ) -> None:
+        if coordinate_frame not in {"sky", "detector"}:
+            raise ValueError("coordinate_frame must be 'sky' or 'detector'")
         super().__init__(name=name, learned=True)
+        self.model = model
+        self.coordinate_frame = coordinate_frame
 
 
 @dataclass

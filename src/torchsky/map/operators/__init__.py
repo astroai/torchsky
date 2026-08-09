@@ -3,6 +3,7 @@
 from importlib import import_module
 
 from .background import (
+    ConditionedBackgroundField,
     DetectorBackgroundOp,
     ExplicitBackgroundOp,
     BackgroundFitSummary,
@@ -93,10 +94,12 @@ from .learned import (
 )
 from .learned_kernel import (
     AffineRadiometry,
+    ConditionedKernelPSF,
     ConstrainedKernelPSF,
     GatedResidualOperator,
     InstrumentStateEncoder,
     LearnedInstrumentOperator,
+    SpatioSpectralTemporalEncoder,
     SubPixelShift,
     gaussian_kernel2d,
 )
@@ -170,6 +173,8 @@ __all__ = [
     "BackgroundFitSummary",
     "AffineRadiometry",
     "ConservativePolygonRemapOp",
+    "ConditionedBackgroundField",
+    "ConditionedKernelPSF",
     "ConstrainedKernelPSF",
     "DEFAULT_LEARNED_OPERATOR_CONDITIONING",
     "LEARNED_OPERATOR_FAMILIES",
@@ -215,6 +220,7 @@ __all__ = [
     "RestrictedAffineFFTGeometryOp",
     "SphericalSpectralGeometryOp",
     "SpatialSkyBackgroundOp",
+    "SpatioSpectralTemporalEncoder",
     "SkyBackgroundOp",
     "SpectralGlobalGeometryOp",
     "SpectralResponseOp",

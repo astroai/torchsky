@@ -37,7 +37,16 @@ from torchsky.map.field.observation_ops import (
     crop_field_observation_for_training,
 )
 from torchsky.map.field import rendering as field_rendering
-from torchsky.map.operators import apply_kernel2d_variance, gaussian_kernel1d
+from torchsky.map.operators import (
+    ConditionedBackgroundField,
+    ConditionedKernelPSF,
+    LearnedBackgroundOp,
+    LearnedPSFOp,
+    ObservationOperatorBundle,
+    SpatioSpectralTemporalEncoder,
+    apply_kernel2d_variance,
+    gaussian_kernel1d,
+)
 
 
 def _tan_header(
@@ -294,6 +303,8 @@ def test_observation_crop_preserves_physical_background_components() -> None:
     torch.testing.assert_close(
         cropped.detector_background, values[1:4, 2:6] + 300.0
     )
+    assert cropped.detector_x0_pix == 2.0
+    assert cropped.detector_y0_pix == 1.0
 
 
 def test_psf_halo_training_crop_matches_full_render_and_gradient() -> None:
@@ -377,6 +388,31 @@ def test_kernel_psf_training_crop_uses_kernel_support() -> None:
     assert cropped.image.shape == (7, 10)
     assert cropped.mask is not None
     assert int(torch.count_nonzero(cropped.mask)) == 12
+
+
+def test_training_crop_accepts_learned_psf_support_override() -> None:
+    observation = FieldObservation(
+        image=torch.zeros((20, 20), dtype=torch.float32),
+        header=_tan_header(20, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
+        wavelength=5600.0,
+        detector_x0_pix=100.0,
+        detector_y0_pix=200.0,
+    )
+
+    cropped = crop_field_observation_for_training(
+        observation,
+        x0=8,
+        y0=8,
+        width=4,
+        height=3,
+        psf_halo=(3, 4),
+    )
+
+    assert cropped.image.shape == (9, 12)
+    assert cropped.mask is not None
+    assert int(torch.count_nonzero(cropped.mask)) == 12
+    assert cropped.detector_x0_pix == 104.0
+    assert cropped.detector_y0_pix == 205.0
 
 
 def test_field_spatial_quadrature_preserves_constant_and_tiles() -> None:
@@ -613,6 +649,184 @@ def test_kernel_psf_variance_uses_squared_normalized_weights() -> None:
     propagated.sum().backward()
     assert variance.grad is not None
     assert bool(torch.isfinite(variance.grad).all())
+
+
+def test_conditioned_psf_background_render_is_tiled_exact_and_contextual() -> None:
+    torch.manual_seed(73)
+    size = 17
+    scale_deg = 1.0 / 3600.0
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=7000.0,
+        wavelength_scale=1000.0,
+    )
+    model = _GaussianSpotField(
+        domain,
+        amplitude=2.0,
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        sigma_deg=0.8 * scale_deg,
+    )
+    encoder = SpatioSpectralTemporalEncoder(
+        spatial_center=(8.0, 8.0),
+        spatial_scale=8.0,
+        wavelength_center=7000.0,
+        spectral_scale=1000.0,
+        time_center_mjd=60000.0,
+        temporal_scale_days=20.0,
+        spatial_frequencies=2,
+        spectral_frequencies=1,
+        temporal_frequencies=1,
+    )
+    psf_model = ConditionedKernelPSF(
+        encoder, n_basis=3, kernel_size=7, init_fwhm_pix=2.0, hidden_dim=12
+    )
+    background_model = ConditionedBackgroundField(
+        encoder, hidden_dim=12, hidden_layers=1
+    )
+    with torch.no_grad():
+        psf_model.mixer[-1].weight.normal_(std=0.15)
+        background_model.network[-1].weight.normal_(std=0.01)
+    bundle = ObservationOperatorBundle(
+        psf=LearnedPSFOp(psf_model),
+        background=LearnedBackgroundOp(
+            background_model, coordinate_frame="detector"
+        ),
+    )
+    observation = FieldObservation(
+        image=torch.zeros((size, size), dtype=torch.float32),
+        header=_tan_header(
+            size, crval1=150.0, crval2=2.0, scale_deg=scale_deg
+        ),
+        spectral_min=6500.0,
+        spectral_max=7500.0,
+        transmission_center=7000.0,
+        transmission_sigma=250.0,
+        detector_x0_pix=100.0,
+        detector_y0_pix=200.0,
+    )
+    context = ForwardContext(time_mjd=60010.0)
+
+    with pytest.raises(ValueError, match="covariance propagation"):
+        render_field_observation_distribution(
+            model,
+            observation,
+            num_spectral_samples=3,
+            forward_context=context,
+            operator_bundle=bundle,
+        )
+
+    full = render_field_observation(
+        model,
+        observation,
+        num_spectral_samples=3,
+        forward_context=context,
+        operator_bundle=bundle,
+    )
+    full.square().sum().backward()
+    full_gradients = {
+        name: parameter.grad.detach().clone()
+        for name, parameter in (
+            *model.named_parameters(),
+            *((f"psf.{name}", value) for name, value in psf_model.named_parameters()),
+            *((f"bg.{name}", value) for name, value in background_model.named_parameters()),
+        )
+        if parameter.grad is not None
+    }
+    model.zero_grad(set_to_none=True)
+    psf_model.zero_grad(set_to_none=True)
+    background_model.zero_grad(set_to_none=True)
+    tiled = render_field_observation(
+        model,
+        observation,
+        num_spectral_samples=3,
+        forward_context=context,
+        operator_bundle=bundle,
+        spatial_tile_hw=(6, 5),
+    )
+    torch.testing.assert_close(tiled, full, rtol=2e-5, atol=2e-6)
+    tiled.square().sum().backward()
+    tiled_gradients = {
+        name: parameter.grad
+        for name, parameter in (
+            *model.named_parameters(),
+            *((f"psf.{name}", value) for name, value in psf_model.named_parameters()),
+            *((f"bg.{name}", value) for name, value in background_model.named_parameters()),
+        )
+        if parameter.grad is not None
+    }
+    assert full_gradients.keys() == tiled_gradients.keys()
+    for name, expected in full_gradients.items():
+        torch.testing.assert_close(
+            tiled_gradients[name], expected, rtol=2e-4, atol=2e-5
+        )
+
+    later = render_field_observation(
+        model,
+        observation,
+        num_spectral_samples=3,
+        forward_context=ForwardContext(time_mjd=60030.0),
+        operator_bundle=bundle,
+        spatial_tile_hw=(6, 5),
+    )
+    assert not torch.allclose(later, tiled)
+
+
+def test_fit_field_model_optimizes_conditioned_background_bundle() -> None:
+    torch.manual_seed(74)
+    size = 9
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=7000.0,
+        wavelength_scale=1000.0,
+    )
+    field_model = _ConstantField(domain, 2.0)
+    encoder = SpatioSpectralTemporalEncoder(
+        spatial_center=(4.0, 4.0),
+        spatial_scale=4.0,
+        wavelength_center=7000.0,
+        spectral_scale=1000.0,
+        time_center_mjd=60000.0,
+        temporal_scale_days=10.0,
+        spatial_frequencies=1,
+        spectral_frequencies=0,
+        temporal_frequencies=0,
+    )
+    background_model = ConditionedBackgroundField(
+        encoder, hidden_dim=16, hidden_layers=1
+    )
+    y, x = torch.meshgrid(torch.arange(size), torch.arange(size), indexing="ij")
+    target = 2.0 + 0.15 * (x.to(dtype=torch.float32) - 4.0) / 4.0
+    observation = FieldObservation(
+        image=target,
+        header=_tan_header(
+            size, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0
+        ),
+        wavelength=7000.0,
+    )
+    bundle = ObservationOperatorBundle(
+        background=LearnedBackgroundOp(
+            background_model, coordinate_frame="detector"
+        )
+    )
+
+    result = fit_field_model(
+        [observation],
+        field_model,
+        steps=30,
+        lr=3.0e-2,
+        num_spectral_samples=1,
+        observation_operator_bundles=[bundle],
+        observation_forward_contexts=[ForwardContext(time_mjd=60000.0)],
+    )
+
+    assert result.final_loss < 0.2 * result.initial_loss
+    assert background_model.network[-1].weight.grad is not None
+    assert result.observation_operator_bundles == (bundle,)
 
 
 def test_field_component_decomposition_respects_contextual_roles() -> None:

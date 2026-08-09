@@ -8,6 +8,7 @@ import torch
 from torchsky.map.field import (
     FieldDomain,
     FieldObservation,
+    ForwardContext,
     SpectralPowerFoam,
     SpectralPowerFoamField,
     bounded_power_pixel_operator,
@@ -21,6 +22,14 @@ from torchsky.map.field import (
     solve_power_pixel_least_squares,
     solve_spectral_cell_coefficients,
     soft_bounded_power_weights,
+)
+from torchsky.map.operators import (
+    ConditionedBackgroundField,
+    ConditionedKernelPSF,
+    LearnedBackgroundOp,
+    LearnedPSFOp,
+    ObservationOperatorBundle,
+    SpatioSpectralTemporalEncoder,
 )
 
 
@@ -432,6 +441,77 @@ def test_spectral_power_foam_field_hard_renders_target_pixel_footprints() -> Non
     )
 
     torch.testing.assert_close(rendered, torch.full((3, 4), 2.25))
+
+
+def test_spectral_power_foam_hard_render_supports_conditioned_operators() -> None:
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    model = SpectralPowerFoamField(
+        domain,
+        sites=torch.tensor([[0.0, 0.0]], dtype=torch.float32),
+        radii=torch.tensor([10.0], dtype=torch.float32),
+        cell_coefficients=torch.tensor([[2.0, 0.0]], dtype=torch.float32),
+    )
+    encoder = SpatioSpectralTemporalEncoder(
+        spatial_center=(3.5, 3.5),
+        spatial_scale=4.0,
+        wavelength_center=2.0,
+        spectral_scale=1.0,
+        time_center_mjd=60000.0,
+        temporal_scale_days=10.0,
+        spatial_frequencies=1,
+        spectral_frequencies=1,
+        temporal_frequencies=1,
+    )
+    psf = ConditionedKernelPSF(
+        encoder, n_basis=2, kernel_size=3, init_fwhm_pix=1.5, hidden_dim=8
+    )
+    background = ConditionedBackgroundField(
+        encoder, hidden_dim=8, hidden_layers=1
+    )
+    with torch.no_grad():
+        background.network[-1].bias.fill_(0.25)
+    bundle = ObservationOperatorBundle(
+        psf=LearnedPSFOp(psf),
+        background=LearnedBackgroundOp(background, coordinate_frame="detector"),
+    )
+    observation = FieldObservation(
+        image=torch.zeros((8, 8), dtype=torch.float32),
+        header=make_tangent_plane_header(
+            8,
+            8,
+            crval_ra_deg=10.0,
+            crval_dec_deg=20.0,
+            cd11=-0.001,
+            cd22=0.001,
+        ),
+        spectral_min=1.0,
+        spectral_max=3.0,
+        transmission_center=2.0,
+        transmission_sigma=0.4,
+    )
+
+    rendered = render_spectral_power_foam_observation_exact(
+        model,
+        observation,
+        num_spectral_samples=3,
+        forward_context=ForwardContext(time_mjd=60005.0),
+        operator_bundle=bundle,
+        spatial_tile_hw=(4, 4),
+    )
+
+    assert rendered.shape == (8, 8)
+    assert bool(torch.isfinite(rendered).all())
+    torch.testing.assert_close(rendered[4, 4], torch.tensor(2.25), atol=1e-5, rtol=1e-5)
+    rendered.square().sum().backward()
+    assert model.cell_coefficients.grad is not None
+    assert psf.kernel_basis.raw_kernels.grad is not None
+    assert background.network[-1].bias.grad is not None
 
 
 def test_spectral_power_foam_fits_multiple_observations_then_hard_renders() -> None:

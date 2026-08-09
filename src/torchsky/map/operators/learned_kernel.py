@@ -31,6 +31,7 @@ coupling so they can be used directly inside external forward models.
 from __future__ import annotations
 
 from collections.abc import Sequence
+import math
 
 import torch
 import torch.nn.functional as F
@@ -42,9 +43,187 @@ __all__ = [
     "GatedResidualOperator",
     "InstrumentStateEncoder",
     "LearnedInstrumentOperator",
+    "SpatioSpectralTemporalEncoder",
+    "ConditionedKernelPSF",
     "SubPixelShift",
     "gaussian_kernel2d",
 ]
+
+
+class SpatioSpectralTemporalEncoder(nn.Module):
+    """Fourier features with independent spatial, spectral, and time scales."""
+
+    def __init__(
+        self,
+        *,
+        spatial_center: tuple[float, float] = (0.0, 0.0),
+        spatial_scale: float | tuple[float, float] = 1.0,
+        wavelength_center: float = 0.0,
+        spectral_scale: float = 1.0,
+        time_center_mjd: float = 0.0,
+        temporal_scale_days: float = 1.0,
+        spatial_frequencies: int = 4,
+        spectral_frequencies: int = 3,
+        temporal_frequencies: int = 2,
+    ) -> None:
+        super().__init__()
+        if len(spatial_center) != 2:
+            raise ValueError("spatial_center must contain x and y")
+        if not isinstance(spatial_scale, (int, float)) and len(spatial_scale) != 2:
+            raise ValueError("spatial_scale must be scalar or contain x and y")
+        spatial_scales = (
+            (float(spatial_scale), float(spatial_scale))
+            if isinstance(spatial_scale, (int, float))
+            else (float(spatial_scale[0]), float(spatial_scale[1]))
+        )
+        values = (*spatial_scales, float(spectral_scale), float(temporal_scale_days))
+        if not all(math.isfinite(value) and value > 0.0 for value in values):
+            raise ValueError("conditioning scales must be finite and positive")
+        frequencies = (
+            int(spatial_frequencies),
+            int(spectral_frequencies),
+            int(temporal_frequencies),
+        )
+        if any(value < 0 for value in frequencies):
+            raise ValueError("conditioning frequency counts must be non-negative")
+        centers = (
+            float(spatial_center[0]),
+            float(spatial_center[1]),
+            float(wavelength_center),
+            float(time_center_mjd),
+        )
+        if not all(math.isfinite(value) for value in centers):
+            raise ValueError("conditioning centers must be finite")
+        self.spatial_center = centers[:2]
+        self.spatial_scale = spatial_scales
+        self.wavelength_center = centers[2]
+        self.spectral_scale = float(spectral_scale)
+        self.time_center_mjd = centers[3]
+        self.temporal_scale_days = float(temporal_scale_days)
+        self.spatial_frequencies = frequencies[0]
+        self.spectral_frequencies = frequencies[1]
+        self.temporal_frequencies = frequencies[2]
+        self.output_dim = (
+            4
+            + 4 * self.spatial_frequencies
+            + 2 * self.spectral_frequencies
+            + 2 * self.temporal_frequencies
+        )
+
+    @staticmethod
+    def _features(value: Tensor, frequencies: int) -> list[Tensor]:
+        features = [value]
+        for index in range(frequencies):
+            phase = (2.0 * math.pi * (2.0**index)) * value
+            features.extend((torch.sin(phase), torch.cos(phase)))
+        return features
+
+    def forward(
+        self,
+        spatial_x: Tensor,
+        spatial_y: Tensor,
+        wavelength: Tensor | float,
+        time_mjd: Tensor | float | None = None,
+    ) -> Tensor:
+        wavelength_tensor = torch.as_tensor(
+            wavelength, device=spatial_x.device, dtype=spatial_x.dtype
+        )
+        time_tensor = torch.as_tensor(
+            self.time_center_mjd if time_mjd is None else time_mjd,
+            device=spatial_x.device,
+            dtype=spatial_x.dtype,
+        )
+        x, y, wavelength_tensor, time_tensor = torch.broadcast_tensors(
+            spatial_x,
+            spatial_y.to(device=spatial_x.device, dtype=spatial_x.dtype),
+            wavelength_tensor,
+            time_tensor,
+        )
+        x = (x - self.spatial_center[0]) / self.spatial_scale[0]
+        y = (y - self.spatial_center[1]) / self.spatial_scale[1]
+        spectral = (wavelength_tensor - self.wavelength_center) / self.spectral_scale
+        temporal = (time_tensor - self.time_center_mjd) / self.temporal_scale_days
+        features = self._features(x, self.spatial_frequencies)
+        features.extend(self._features(y, self.spatial_frequencies))
+        features.extend(self._features(spectral, self.spectral_frequencies))
+        features.extend(self._features(temporal, self.temporal_frequencies))
+        return torch.stack(features, dim=-1)
+
+
+class ConditionedKernelPSF(nn.Module):
+    """Flux-conserving non-stationary PSF from conditioned convex basis weights."""
+
+    def __init__(
+        self,
+        encoder: SpatioSpectralTemporalEncoder,
+        *,
+        n_basis: int = 4,
+        kernel_size: int = 15,
+        init_fwhm_pix: float = 3.0,
+        hidden_dim: int = 32,
+    ) -> None:
+        super().__init__()
+        if int(hidden_dim) < 1:
+            raise ValueError("hidden_dim must be positive")
+        self.encoder = encoder
+        self.kernel_basis = ConstrainedKernelPSF(
+            n_basis=n_basis,
+            kernel_size=kernel_size,
+            init_fwhm_pix=init_fwhm_pix,
+        )
+        self.mixer = nn.Sequential(
+            nn.Linear(encoder.output_dim, int(hidden_dim)),
+            nn.GELU(),
+            nn.Linear(int(hidden_dim), int(n_basis)),
+        )
+        nn.init.zeros_(self.mixer[-1].weight)
+        nn.init.zeros_(self.mixer[-1].bias)
+
+    @property
+    def kernel_size(self) -> int:
+        return self.kernel_basis.kernel_size
+
+    def mixture_weights(
+        self,
+        spatial_x: Tensor,
+        spatial_y: Tensor,
+        wavelength: Tensor | float,
+        time_mjd: Tensor | float | None = None,
+    ) -> Tensor:
+        return torch.softmax(
+            self.mixer(
+                self.encoder(spatial_x, spatial_y, wavelength, time_mjd)
+            ),
+            dim=-1,
+        ).movedim(-1, 0)
+
+    def forward(
+        self,
+        image: Tensor,
+        *,
+        spatial_x: Tensor,
+        spatial_y: Tensor,
+        wavelength: Tensor | float,
+        time_mjd: Tensor | float | None = None,
+    ) -> Tensor:
+        if image.ndim != 2:
+            raise ValueError("ConditionedKernelPSF image must be 2D")
+        if spatial_x.shape != image.shape or spatial_y.shape != image.shape:
+            raise ValueError("PSF spatial coordinates must match image shape")
+        mixture = self.mixture_weights(
+            spatial_x, spatial_y, wavelength, time_mjd
+        ).to(dtype=image.dtype)
+        basis = self.kernel_basis.basis_kernels().to(
+            device=image.device, dtype=image.dtype
+        )
+        weighted_sources = mixture * image.unsqueeze(0)
+        convolved = F.conv2d(
+            weighted_sources.unsqueeze(0),
+            basis.unsqueeze(1),
+            padding=self.kernel_size // 2,
+            groups=self.kernel_basis.n_basis,
+        )
+        return convolved.squeeze(0).sum(dim=0)
 
 
 def gaussian_kernel2d(
