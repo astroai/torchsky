@@ -478,15 +478,21 @@ stacking-versus-INR/Foam depth result defined in
       fidelity gate closed. Artifacts are under
       `20260802-smacs-foam-psfinit-g512-e935868`.
     - [ ] Score the frozen grid-512 model on all three existing injection
-      batches before changing representation or tuning. Session `aq9hva35`
-      failed before fitting because the benchmark treated the returned list of
-      per-exposure injection audits as one mapping. Commit `1d055cf` fixes that
-      one-line contract after 17 focused tests and the full 1,739-test gate.
-      Replacement session `tsu81ekc` uses the same science configuration for
-      `validation-000` through `validation-002`; artifacts will be under
-      `20260802-smacs-foam-g512-injections-1d055cf`. If injection depth is not
-      competitive, implement exact within-cell first moments and an affine
-      spatial basis rather than scaling the regular grid again.
+      batches before changing representation or tuning. Session `tsu81ekc`
+      completed `validation-000` through `validation-002` at exact commit
+      `1d055cfba3d5a89841f6cee61747cf079ec10a2b` in 24 minutes; artifacts are
+      under `20260802-smacs-foam-g512-injections-1d055cf`. Their global metrics
+      remain close to blank, as expected for sparse injections, so registered
+      source recovery is the relevant statistic. Scorer `zuzdu3cp` failed before
+      import because its fresh environment lacked the local build; replacement
+      `quw7q4b3` reached the products but correctly rejected an ePSF polluted by
+      faint non-positive responses. Commit `226b399` now uses the predeclared
+      brightest AB-magnitude bin without response post-selection and passed
+      1,714 tests, 246 skips, and zero type errors. Its `@canfar` launch is
+      blocked by the platform error `CONFIG: servops certificate is invalid`;
+      the queued output is `20260809-smacs-foam-g512-score-226b399`. If injection
+      depth is not competitive, implement exact within-cell first moments and
+      an affine spatial basis rather than scaling the regular grid again.
     - [x] Add the frozen Foam scoring path before the products finish.
       `benchmarks/score_smacs0723_foam.py` stages the exact blank/injection
       products, enforces common eroded support, measures each effective PSF from
@@ -496,6 +502,12 @@ stacking-versus-INR/Foam depth result defined in
       checks include a float32 FITS/ePSF self-check. The current ceiling is
       explicit: binary Foam support stands in for spatial inverse variance until
       the model exports propagated uncertainty.
+    - [x] Add independent per-band and shared spectral Foam rows to the
+      synthetic smoke tournament. Commit `da06bc3` reuses one exact footprint
+      operator and applies a target-response gate so smoothing cannot masquerade
+      as depth. It remains plumbing rather than evidence: the synthetic basis is
+      ordered by band index and the automatic grid density is a bounded smoke
+      heuristic, not the frozen SMACS configuration.
     - [x] Enforce the frozen exposure split in the Foam adapter. The previous
       joint benchmark discovered all 36/9 exposures per band, while classical
       validation uses only `PATT_NUM={3,8}` (8/2 exposures). `--patt-nums`

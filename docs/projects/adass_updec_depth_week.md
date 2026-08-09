@@ -584,14 +584,22 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
   gate remains closed at roughly 7--8% mean flux excess. Artifacts are under
   `/arc/projects/ots/torchsky-runs/20260802-smacs-foam-psfinit-g512-e935868`.
 - [ ] Score the frozen grid-512 configuration on the three existing injection
-  batches before changing representation or tuning. H100 session `aq9hva35`
-  failed before fitting because the joint benchmark unpacked the returned list
-  of per-exposure audit records as one mapping. Commit `1d055cf` fixes that
-  contract after 17 focused tests and the full 1,739-test gate. Replacement
-  session `tsu81ekc` runs exact commit
-  `1d055cfba3d5a89841f6cee61747cf079ec10a2b` for `validation-000`,
-  `validation-001`, and `validation-002`; artifacts will be under
+  batches before changing representation or tuning. H100 session `tsu81ekc`
+  completed all three batches at exact commit
+  `1d055cfba3d5a89841f6cee61747cf079ec10a2b` in 24 minutes. Their global blank
+  metrics are deliberately nearly unchanged because the injected catalogue is
+  sparse; recovery must be measured at the registered source positions.
+  Artifacts are under
   `/arc/projects/ots/torchsky-runs/20260802-smacs-foam-g512-injections-1d055cf`.
+  Scorer session `zuzdu3cp` failed before import because its fresh environment
+  lacked the local Torchsky build; `quw7q4b3` then reached the science products
+  but correctly rejected an ePSF stacked across faint non-positive responses.
+  Commit `226b399` calibrates the ePSF on the predeclared brightest AB-magnitude
+  bin without post-selecting on recovered response and passed 1,714 tests with
+  246 skips and zero type errors. Its `@canfar` launch is currently blocked by
+  the platform error `CONFIG: servops certificate is invalid`; the queued output
+  root is
+  `/arc/projects/ots/torchsky-runs/20260809-smacs-foam-g512-score-226b399`.
   If recovery is not competitive, stop regular-grid scaling and add exact
   within-cell first moments plus an affine spatial basis.
 - [x] Implement the frozen spectral-Foam scorer while the injection fanout runs.
@@ -603,6 +611,12 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
   end-to-end float32 FITS/ePSF check. Foam currently exports binary support
   rather than spatial inverse variance; the scorer records that deliberate
   ceiling and must be upgraded when propagated model uncertainty is available.
+- [x] Add independent and joint spectral Foam rows to the synthetic smoke
+  tournament. Commit `da06bc3` uses one shared footprint operator and enforces a
+  target-response gate, so lower reconstruction loss cannot hide source
+  attenuation. This is representation plumbing, not real-data evidence: the
+  smoke basis is indexed by synthetic band order and its automatic grid density
+  is only a bounded test heuristic.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the
