@@ -37,6 +37,7 @@ from torchsky.map.field.observation_ops import (
     crop_field_observation_for_training,
 )
 from torchsky.map.field import rendering as field_rendering
+from torchsky.map.operators import apply_kernel2d_variance, gaussian_kernel1d
 
 
 def _tan_header(
@@ -78,6 +79,30 @@ class _ConstantField(_BaseFieldModel):
     ) -> torch.Tensor:
         del dec_deg, wavelength_angstrom, forward_context
         return torch.zeros_like(ra_deg) + self.value
+
+
+class _ConstantDistributionField(_ConstantField):
+    def __init__(self, domain: FieldDomain, value: float, variance: float) -> None:
+        super().__init__(domain, value)
+        self.log_variance = torch.nn.Parameter(
+            torch.tensor(math.log(float(variance)), dtype=torch.float32)
+        )
+
+    def forward_distribution(
+        self,
+        ra_deg: torch.Tensor,
+        dec_deg: torch.Tensor,
+        wavelength_angstrom: torch.Tensor | float,
+        *,
+        forward_context: ForwardContext | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        mean = self.forward(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+            forward_context=forward_context,
+        )
+        return mean, torch.zeros_like(mean) + self.log_variance
 
 
 class _AffineSpectralField(_BaseFieldModel):
@@ -521,6 +546,73 @@ def test_render_field_observation_distribution_fallback_applies_operators_once()
         quadrature_logvar,
         torch.full_like(logvar, math.log(0.25)),
     )
+
+
+def test_distribution_tiling_and_psf_variance_match_full_render() -> None:
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=1000.0,
+    )
+    model = _ConstantDistributionField(domain, value=2.0, variance=3.0)
+    observation = FieldObservation(
+        image=torch.zeros((11, 11), dtype=torch.float32),
+        header=_tan_header(11, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
+        wavelength=5600.0,
+        psf_sigma_pix=1.0,
+    )
+
+    full_mean, full_logvar = render_field_observation_distribution(
+        model, observation, num_spectral_samples=1
+    )
+    kernel = gaussian_kernel1d(
+        1.0, device=torch.device("cpu"), dtype=torch.float32
+    )
+    expected_center_variance = 3.0 * torch.square(kernel).sum() ** 2
+    torch.testing.assert_close(
+        torch.exp(full_logvar[5, 5]), expected_center_variance
+    )
+    full_logvar.sum().backward()
+    assert model.log_variance.grad is not None
+    full_gradient = model.log_variance.grad.detach().clone()
+
+    model.zero_grad(set_to_none=True)
+    observation.clear_coordinate_cache()
+    tiled_mean, tiled_logvar = render_field_observation_distribution(
+        model,
+        observation,
+        num_spectral_samples=1,
+        spatial_tile_hw=(4, 5),
+    )
+    torch.testing.assert_close(tiled_mean, full_mean)
+    torch.testing.assert_close(tiled_logvar, full_logvar)
+    assert observation._cached_ra_deg is None
+    assert observation._cached_dec_deg is None
+    tiled_logvar.sum().backward()
+    torch.testing.assert_close(model.log_variance.grad, full_gradient)
+
+
+def test_psf_kernel_requires_a_physical_odd_support() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        PSFSpec.kernel(torch.tensor([[1.0, -1.0], [0.0, 1.0]]))
+    with pytest.raises(ValueError, match="dimensions must be odd"):
+        PSFSpec.kernel(torch.ones((2, 3), dtype=torch.float32))
+
+
+def test_kernel_psf_variance_uses_squared_normalized_weights() -> None:
+    variance = torch.ones((9, 9), dtype=torch.float32, requires_grad=True)
+    kernel = torch.tensor(
+        [[0.0, 1.0, 0.0], [1.0, 4.0, 1.0], [0.0, 1.0, 0.0]],
+        dtype=torch.float32,
+    )
+    propagated = apply_kernel2d_variance(variance, kernel)
+    normalized = kernel / kernel.sum()
+    torch.testing.assert_close(propagated[4, 4], torch.square(normalized).sum())
+    propagated.sum().backward()
+    assert variance.grad is not None
+    assert bool(torch.isfinite(variance.grad).all())
 
 
 def test_field_component_decomposition_respects_contextual_roles() -> None:

@@ -235,6 +235,7 @@ def test_render_field_observation_spatial_tile_matches_full() -> None:
         spectral_max=7100.0,
     )
     a = render_field_observation(model, obs, num_spectral_samples=5)
+    obs.clear_coordinate_cache()
     b = render_field_observation(
         model,
         obs,
@@ -242,6 +243,8 @@ def test_render_field_observation_spatial_tile_matches_full() -> None:
         spatial_tile_hw=(6, 9),
     )
     assert torch.allclose(a, b, rtol=0.0, atol=1.0e-5)
+    assert obs._cached_ra_deg is None
+    assert obs._cached_dec_deg is None
 
 
 def test_render_field_observation_tile_matches_full_with_psf() -> None:

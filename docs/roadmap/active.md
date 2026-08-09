@@ -12,10 +12,15 @@
   `tan_field_fit_psf_mismatch`/`sine_implicit` case at 12 steps and three runs
   improved from 8.224 s to 0.962 s median fit time with a 32-square loss core
   (8.55x). This is a throughput result, not a depth or accuracy claim.
-- [ ] Avoid allocating and caching full WCS coordinate grids when diagnostic
-  rendering is explicitly tiled; verify image and parameter-gradient parity.
-- [ ] Correct predictive-variance propagation through PSF convolution and test
-  heteroscedastic INR rendering with finite-kernel and Gaussian PSFs.
+- [x] Avoid allocating and caching full WCS coordinate grids when diagnostic
+  rendering is explicitly tiled; image, log-variance, and parameter-gradient
+  parity pass. At 1024 square, 128-square diagnostic tiles reduced fit-phase
+  peak RSS from 1.677 GB to 1.330 GB (20.7%) with identical final metrics.
+- [x] Correct predictive-variance propagation through PSF convolution using
+  squared normalized weights; test heteroscedastic INR rendering with both
+  finite-kernel and Gaussian PSFs.
+- [ ] Make full target-product rendering/export stream spatial tiles so scoring
+  a very large field does not erase the fit-phase memory saving.
 - [ ] Run matched-compute and matched-accuracy Foam/INR patch-size sweeps on
   CUDA after CANFAR service recovery; report peak accelerator memory from the
   existing fit performance profile.

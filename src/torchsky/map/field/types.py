@@ -119,6 +119,14 @@ class PSFSpec:
                 raise ValueError("PSFSpec kernel2d must be 2D")
             if self.kernel2d.numel() == 0:
                 raise ValueError("PSFSpec kernel2d must be non-empty")
+            if not bool(self.kernel2d.isfinite().all()):
+                raise ValueError("PSFSpec kernel2d must be finite")
+            if bool((self.kernel2d < 0).any()):
+                raise ValueError("PSFSpec kernel2d must be non-negative")
+            if not bool(self.kernel2d.sum() > 0):
+                raise ValueError("PSFSpec kernel2d must have positive sum")
+            if any(int(size) % 2 == 0 for size in self.kernel2d.shape):
+                raise ValueError("PSFSpec kernel2d dimensions must be odd")
             return
         raise ValueError(f"unsupported PSFSpec mode {self.mode!r}")
 

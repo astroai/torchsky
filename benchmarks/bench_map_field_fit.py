@@ -104,6 +104,11 @@ STEP_PROFILES: dict[str, dict[str, int]] = {
 }
 
 
+def _process_peak_rss_bytes() -> int:
+    peak_rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return peak_rss if sys.platform == "darwin" else peak_rss * 1024
+
+
 @dataclass(frozen=True)
 class ObservationSpec:
     header: dict[str, Any]
@@ -3228,6 +3233,7 @@ def evaluate_case(
     runs: int,
     use_spectral_budget: bool = False,
     training_patch_size_override: int = -1,
+    diagnostic_tile_size_override: int = -1,
 ) -> dict[str, Any]:
     case_spec = _build_case_specs(size)[case]
     spectral_budget_extras: dict[str, Any] = {}
@@ -3294,7 +3300,9 @@ def evaluate_case(
         observation_residuals = []
         model_kwargs: dict[str, Any] = {}
         training_patch_size: int | None = None
+        diagnostic_spatial_tile_hw: tuple[int, int] | None = None
         training_performance: dict[str, Any] = {}
+        fit_process_peak_rss = _process_peak_rss_bytes()
         if model_kind.startswith("coadd_"):
             kernel = model_kind.split("_", 1)[1]
             coadd_times = []
@@ -3332,7 +3340,17 @@ def evaluate_case(
                     if training_patch_size_override == 0
                     else int(training_patch_size_override)
                 )
+            if diagnostic_tile_size_override >= 0:
+                fit_kwargs["diagnostic_spatial_tile_hw"] = (
+                    None
+                    if diagnostic_tile_size_override == 0
+                    else (
+                        int(diagnostic_tile_size_override),
+                        int(diagnostic_tile_size_override),
+                    )
+                )
             training_patch_size = fit_kwargs.get("training_patch_size")
+            diagnostic_spatial_tile_hw = fit_kwargs.get("diagnostic_spatial_tile_hw")
             num_spectral_render = int(fit_kwargs["num_spectral_samples"])
             model_kwargs = _field_model_kwargs_for_case(
                 model_kind,
@@ -3381,6 +3399,7 @@ def evaluate_case(
                 training_performance = dict(
                     result.diagnostics.get("performance_profile", {})
                 )
+            fit_process_peak_rss = _process_peak_rss_bytes()
             product_pred = _render_field_product_chunked(
                 result.model,
                 product,
@@ -3455,9 +3474,6 @@ def evaluate_case(
     )
     fit_times_sorted = sorted(float(value) for value in fit_times)
     fit_time_ms = fit_times_sorted[len(fit_times_sorted) // 2]
-    process_peak_rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-    if sys.platform != "darwin":
-        process_peak_rss *= 1024
     return {
         "library": "torchsky",
         "type": "field_fit" if result is not None else "cube_baseline",
@@ -3475,6 +3491,7 @@ def evaluate_case(
         "num_bands": int(case_spec.spectral_axis.values.numel()),
         "steps": int(steps),
         "training_patch_size": training_patch_size,
+        "diagnostic_spatial_tile_hw": diagnostic_spatial_tile_hw,
         "fit_time_ms": fit_time_ms,
         "training_step_duration_mean_ms": training_performance.get(
             "step_duration_mean_ms"
@@ -3485,7 +3502,8 @@ def evaluate_case(
         "training_max_accelerator_memory_bytes": training_performance.get(
             "max_memory_allocated_bytes"
         ),
-        "process_peak_rss_bytes": process_peak_rss,
+        "fit_process_peak_rss_bytes": fit_process_peak_rss,
+        "process_peak_rss_bytes": _process_peak_rss_bytes(),
         "mpix_s": float(cube_pred.numel()) / max(fit_time_ms * 1.0e-3, 1.0e-12) / 1.0e6,
         "initial_loss": initial_loss,
         "final_loss": final_loss,
@@ -3624,6 +3642,16 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--diagnostic-tile-size",
+        type=int,
+        default=-1,
+        help=(
+            "Override pre/post-fit diagnostic rendering: -1 keeps the benchmark "
+            "default, 0 renders whole observations, and a positive value renders "
+            "square coordinate tiles."
+        ),
+    )
+    parser.add_argument(
         "--use-spectral-budget",
         action="store_true",
         help=(
@@ -3652,6 +3680,7 @@ def main() -> None:
                 runs=args.runs,
                 use_spectral_budget=args.use_spectral_budget,
                 training_patch_size_override=args.training_patch_size,
+                diagnostic_tile_size_override=args.diagnostic_tile_size,
             )
             for model_kind in models
         ]

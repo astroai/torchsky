@@ -22,7 +22,7 @@ from ..operators.bundle import (
     ObservationOperatorBundle,
     field_observation_operator_bundle,
 )
-from ..operators.psf import apply_psf_spec
+from ..operators.psf import apply_psf_spec, apply_psf_variance_spec
 from ..exposure_pose import ExposurePose
 
 from .bandpass import (
@@ -115,11 +115,6 @@ def _render_spatially_integrated_distribution(
         observation.header,
         fallback=(int(image.shape[-2]), int(image.shape[-1])),
     )
-    if spatial_tile_hw is not None and operator_bundle.psf is not None:
-        raise ValueError(
-            "spatially tiled distribution rendering cannot be used with a "
-            "non-trivial PSF because the PSF couples pixels across tiles"
-        )
     if spatial_tile_hw is None:
         tiles = [(0, height, 0, width)]
     else:
@@ -211,7 +206,7 @@ def _render_spatially_integrated_distribution(
         output_var[y0:y1, x0:x1] = patch_var
     if operator_bundle.psf is not None:
         output_mean = apply_psf_spec(output_mean, observation.psf_spec)
-        output_var = apply_psf_spec(output_var, observation.psf_spec)
+        output_var = apply_psf_variance_spec(output_var, observation.psf_spec)
     if operator_bundle.background is not None:
         output_mean = apply_background_components(
             output_mean,
@@ -250,14 +245,6 @@ def render_field_observation_distribution(
     spatial_nodes = _spatial_quadrature_nodes(spatial_sampling)
     operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
     device = next((p.device for p in model.parameters()), default_compute_device())
-    ra_deg, dec_deg = _coordinate_grid(
-        observation,
-        shape=tuple(image.shape),
-        device=device,
-    )
-    ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
-        ra_deg, dec_deg, observation, exposure_pose
-    )
     if override_wavelengths is not None or override_weights is not None:
         if override_wavelengths is None or override_weights is None:
             raise ValueError(
@@ -285,7 +272,7 @@ def render_field_observation_distribution(
         )
     else:
         raise ValueError(f"unsupported spectral_sampling {spectral_sampling!r}")
-    if spatial_sampling != "center":
+    if spatial_sampling != "center" or spatial_tile_hw is not None:
         return _render_spatially_integrated_distribution(
             model,
             observation,
@@ -298,6 +285,14 @@ def render_field_observation_distribution(
             operator_bundle=operator_bundle,
             device=device,
         )
+    ra_deg, dec_deg = _coordinate_grid(
+        observation,
+        shape=tuple(image.shape),
+        device=device,
+    )
+    ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
+        ra_deg, dec_deg, observation, exposure_pose
+    )
     render_bandpass_distribution = getattr(model, "render_bandpass_distribution", None)
     operators_applied = False
     if callable(render_bandpass_distribution):
@@ -358,7 +353,9 @@ def render_field_observation_distribution(
         return mean.to(dtype=image.dtype), logvar.to(dtype=image.dtype)
     if operator_bundle.psf is not None:
         mean = apply_psf_spec(mean, observation.psf_spec)
-        variance = apply_psf_spec(torch.exp(logvar), observation.psf_spec)
+        variance = apply_psf_variance_spec(
+            torch.exp(logvar), observation.psf_spec
+        )
         logvar = torch.log(torch.clamp(variance, min=1.0e-8))
     if operator_bundle.background is not None:
         mean = apply_background_components(
@@ -505,7 +502,7 @@ def render_field_observation(
     device = next((p.device for p in model.parameters()), default_compute_device())
     spatial_nodes = _spatial_quadrature_nodes(spatial_sampling)
     center_coordinates: tuple[Tensor, Tensor] | None = None
-    if spatial_sampling == "center":
+    if spatial_sampling == "center" and spatial_tile_hw is None:
         ra_deg, dec_deg = _coordinate_grid(
             observation,
             shape=tuple(image.shape),
