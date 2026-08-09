@@ -57,14 +57,23 @@ def test_foam_effective_psf_uses_product_dtype(tmp_path: Path) -> None:
     blank = torch.zeros((48, 48), dtype=torch.float32)
     injected = blank.clone()
     injected[15, 15] = 1.0
-    injected[32, 32] = 1.0
+    # The fainter-bin response is deliberately non-positive: calibration-bin
+    # selection must come from the manifest, not the model response.
+    injected[32, 32] = -2.0
     for band in BANDS:
         for batch, image in (("blank", blank), ("validation-000", injected)):
             path = input_root / batch / band / "products" / f"{METHOD}_sci.fits"
             path.parent.mkdir(parents=True, exist_ok=True)
             torchsky.write(str(path), image, overwrite=True)
     manifest = tmp_path / "manifest.json"
-    manifest.write_text(json.dumps({"target_xy": [[15.0, 15.0], [32.0, 32.0]]}))
+    manifest.write_text(
+        json.dumps(
+            {
+                "target_xy": [[15.0, 15.0], [32.0, 32.0]],
+                "reference_ab_magnitude": [27.0, 28.0],
+            }
+        )
+    )
 
     rows = _build_effective_psfs(input_root, manifest, tmp_path / "psfs")
 
@@ -72,3 +81,5 @@ def test_foam_effective_psf_uses_product_dtype(tmp_path: Path) -> None:
     for band in BANDS:
         psf = torchsky.read(str(rows[band]["path"]))
         torch.testing.assert_close(psf.sum(), torch.tensor(1.0))
+        assert rows[band]["calibration_ab_magnitude"] == 27.0
+        assert rows[band]["calibration_source_count"] == 1

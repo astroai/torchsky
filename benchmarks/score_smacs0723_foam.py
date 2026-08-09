@@ -121,6 +121,20 @@ def _build_effective_psfs(
     source_xy = torch.as_tensor(manifest["target_xy"], dtype=torch.float64).reshape(
         -1, 2
     )
+    magnitudes = torch.as_tensor(
+        manifest["reference_ab_magnitude"], dtype=torch.float64
+    ).reshape(-1)
+    if (
+        source_xy.shape[0] == 0
+        or magnitudes.shape != (source_xy.shape[0],)
+        or not torch.isfinite(source_xy).all()
+        or not torch.isfinite(magnitudes).all()
+    ):
+        raise ValueError("effective-PSF manifest must contain finite sources and magnitudes")
+    calibration_magnitude = float(magnitudes.min())
+    # ponytail: use the predeclared brightest injection bin for a stable ePSF;
+    # a future spatially varying PSF model can supersede this single-stack calibration.
+    calibration_xy = source_xy[magnitudes == calibration_magnitude]
     output_root.mkdir(parents=True, exist_ok=True)
     rows = {}
     for band in BANDS:
@@ -140,13 +154,15 @@ def _build_effective_psfs(
             raise ValueError(f"blank and injected Foam products differ for {band}")
         psf = stack_effective_psf(
             injected - blank,
-            source_xy.to(device=blank.device, dtype=blank.dtype),
+            calibration_xy.to(device=blank.device, dtype=blank.dtype),
             radius_px=9,
         )
         path = output_root / f"{band}_{METHOD}_effective_psf.fits"
         torchsky.write(str(path), psf, overwrite=True)
         rows[band] = {
             **effective_psf_metrics(psf),
+            "calibration_ab_magnitude": calibration_magnitude,
+            "calibration_source_count": int(calibration_xy.shape[0]),
             "path": str(path),
             "sha256": _sha256(path),
         }
