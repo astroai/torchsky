@@ -38,12 +38,12 @@ from torchsky.map.field.observation_ops import (
 )
 from torchsky.map.field import rendering as field_rendering
 from torchsky.map.operators import (
+    AdaptiveSpatioSpectralTemporalEncoder,
     ConditionedBackgroundField,
     ConditionedKernelPSF,
     LearnedBackgroundOp,
     LearnedPSFOp,
     ObservationOperatorBundle,
-    SpatioSpectralTemporalEncoder,
     apply_kernel2d_variance,
     gaussian_kernel1d,
 )
@@ -669,22 +669,45 @@ def test_conditioned_psf_background_render_is_tiled_exact_and_contextual() -> No
         center_dec_deg=2.0,
         sigma_deg=0.8 * scale_deg,
     )
-    encoder = SpatioSpectralTemporalEncoder(
+    psf_encoder = AdaptiveSpatioSpectralTemporalEncoder(
         spatial_center=(8.0, 8.0),
         spatial_scale=8.0,
+        spatial_length_bounds=(2.0, 34.0),
         wavelength_center=7000.0,
         spectral_scale=1000.0,
+        spectral_length_bounds=(100.0, 2000.0),
         time_center_mjd=60000.0,
         temporal_scale_days=20.0,
-        spatial_frequencies=2,
-        spectral_frequencies=1,
-        temporal_frequencies=1,
+        temporal_length_bounds_days=(0.5, 80.0),
+        spatial_bands=2,
+        spectral_bands=2,
+        temporal_bands=1,
+    )
+    background_encoder = AdaptiveSpatioSpectralTemporalEncoder(
+        spatial_center=(8.0, 8.0),
+        spatial_scale=16.0,
+        spatial_length_bounds=(8.0, 68.0),
+        wavelength_center=7000.0,
+        spectral_scale=500.0,
+        spectral_length_bounds=(50.0, 3000.0),
+        time_center_mjd=60000.0,
+        temporal_scale_days=40.0,
+        temporal_length_bounds_days=(2.0, 160.0),
+        spatial_bands=2,
+        spectral_bands=3,
+        temporal_bands=2,
     )
     psf_model = ConditionedKernelPSF(
-        encoder, n_basis=3, kernel_size=7, init_fwhm_pix=2.0, hidden_dim=12
+        psf_encoder,
+        n_basis=3,
+        kernel_size=7,
+        init_fwhm_pix=2.0,
+        hidden_dim=12,
     )
     background_model = ConditionedBackgroundField(
-        encoder, hidden_dim=12, hidden_layers=1
+        background_encoder,
+        hidden_dim=12,
+        hidden_layers=1,
     )
     with torch.no_grad():
         psf_model.mixer[-1].weight.normal_(std=0.15)
@@ -772,9 +795,16 @@ def test_conditioned_psf_background_render_is_tiled_exact_and_contextual() -> No
         spatial_tile_hw=(6, 5),
     )
     assert not torch.allclose(later, tiled)
+    assert not torch.equal(
+        psf_encoder.spectral_axis.length_scales,
+        background_encoder.spectral_axis.length_scales,
+    )
 
 
-def test_fit_field_model_optimizes_conditioned_background_bundle() -> None:
+@pytest.mark.parametrize("streaming", [False, True])
+def test_fit_field_model_optimizes_conditioned_background_bundle(
+    streaming: bool,
+) -> None:
     torch.manual_seed(74)
     size = 9
     domain = FieldDomain(
@@ -785,16 +815,19 @@ def test_fit_field_model_optimizes_conditioned_background_bundle() -> None:
         wavelength_scale=1000.0,
     )
     field_model = _ConstantField(domain, 2.0)
-    encoder = SpatioSpectralTemporalEncoder(
+    encoder = AdaptiveSpatioSpectralTemporalEncoder(
         spatial_center=(4.0, 4.0),
         spatial_scale=4.0,
+        spatial_length_bounds=(2.0, 18.0),
         wavelength_center=7000.0,
         spectral_scale=1000.0,
+        spectral_length_bounds=(100.0, 4000.0),
         time_center_mjd=60000.0,
         temporal_scale_days=10.0,
-        spatial_frequencies=1,
-        spectral_frequencies=0,
-        temporal_frequencies=0,
+        temporal_length_bounds_days=(0.25, 40.0),
+        spatial_bands=2,
+        spectral_bands=0,
+        temporal_bands=0,
     )
     background_model = ConditionedBackgroundField(
         encoder, hidden_dim=16, hidden_layers=1
@@ -822,11 +855,22 @@ def test_fit_field_model_optimizes_conditioned_background_bundle() -> None:
         num_spectral_samples=1,
         observation_operator_bundles=[bundle],
         observation_forward_contexts=[ForwardContext(time_mjd=60000.0)],
+        operator_scale_gate_weight=1.0e-4,
+        operator_scale_shift_weight=1.0e-4,
+        streaming_accumulation=streaming,
     )
 
     assert result.final_loss < 0.2 * result.initial_loss
     assert background_model.network[-1].weight.grad is not None
+    assert encoder.x_axis.gate_logits.grad is not None
+    assert encoder.y_axis.gate_logits.grad is not None
     assert result.observation_operator_bundles == (bundle,)
+    assert result.diagnostics is not None
+    operator_report = result.diagnostics["operator_scale_diagnostics"][0]
+    assert operator_report["operator"] == "background"
+    scale_report = operator_report["axes"]
+    assert scale_report["spatial_x"]["length_bounds"] == [2.0, 18.0]
+    assert len(scale_report["spatial_x"]["gates"]) == 2
 
 
 def test_field_component_decomposition_respects_contextual_roles() -> None:

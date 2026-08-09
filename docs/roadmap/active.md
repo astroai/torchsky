@@ -6,6 +6,14 @@
   coordinate scales and Fourier bandwidths on every axis. PSF and background
   instantiate separate encoders so their physical variability scales need not
   agree.
+- [x] Promote fixed variability scales to bounded adaptive multiscale banks:
+  learn sparse gates and a continuous dilation independently on detector-x,
+  detector-y, spectral, and MJD axes while retaining explicit physical
+  minimum/maximum length contracts and unit-rescaling invariance.
+- [x] Integrate adaptive-scale regularization into `fit_field_model`, deduplicate
+  shared conditioners, include their parameters in gradient clipping, and
+  persist learned gates, feature wavelengths, and explicitly labelled
+  gate-weighted scales in fit diagnostics.
 - [x] Add a non-stationary neural PSF as source-position-conditioned convex
   mixtures of positive, unit-sum trainable kernels. Apply it to each spectral
   quadrature plane before bandpass integration so chromatic morphology is not
@@ -35,6 +43,18 @@
 - [ ] Measure CPU/CUDA throughput and peak memory from small stamps through
   survey-sized tiled fields; then select basis count, kernel support, mixed
   precision, compilation, and spectral batching from evidence.
+  - [x] Equal-width four-thread CPU checkpoint with five wavelengths and exact
+    128-square tiling: fixed/adaptive medians are 0.0278/0.0355 s at 128 square
+    and 0.6492/0.8096 s at 512 square (9/7 timed runs after warmup), with
+    identical initialized outputs. The measured adaptive cost is 27.7%/24.7%;
+    no acceleration claim is made.
+  - [ ] Profile and batch repeated spectral-plane conditioning on CUDA before
+    deciding whether compilation or a fused encoder is warranted.
+- [ ] Add held-out band-ablation and output-Jacobian scale diagnostics before
+  interpreting gate-weighted feature scales as physical correlation lengths.
+- [ ] Add axis-native adaptive variants required beyond image patches: spherical
+  harmonic/needlet angular scales for full-sky FOSSIL/CMB/21-cm work and an
+  optical-delay axis for interferometric spectroscopy.
 
 ## Local Foam/INR physical-fit performance (CANFAR-independent)
 

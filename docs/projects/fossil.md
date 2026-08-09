@@ -64,6 +64,11 @@ must not become a spacecraft packet decoder or a closed foreground ontology.
   PSF, radiometry, background, masks/weights, and noise.
 - [x] Matrix-free multi-observation execution, exact-adjoint gates, spectral
   fields, learned bases, residual products, and bounded execution exist.
+- [x] A mission-neutral adaptive scalar-axis feature primitive now learns
+  bounded multiscale gates and continuous dilation, with a detector-x/y,
+  spectral, and MJD composition exercised by differentiable PSF/background
+  operators. This is a first `NuisanceLearner` building block, not a foreground
+  separation claim.
 - [x] `SpectralAxis` exists in `torchsky.spectral`; extend it rather than creating
   a parallel axis type.
 - [ ] Existing operator declarations do not yet provide one typed
@@ -71,6 +76,9 @@ must not become a spacecraft packet decoder or a closed foreground ontology.
 - [ ] No first-class decoded detector sequence, interferogram, full-sky spectral
   product, monopole contract, scientific cross-fit manifest, or open residual
   product exists.
+- [ ] The adaptive encoder is not yet sphere-native or delay-axis-native. Do not
+  apply Cartesian detector features across the RA seam or poles; add
+  harmonic/needlet angular bands and explicit optical-delay semantics first.
 
 ## Phase A — Reusable Spectral And Full-Sky Substrate
 

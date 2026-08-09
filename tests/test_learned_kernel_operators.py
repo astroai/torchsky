@@ -1,8 +1,11 @@
 """Tests for constrained learned instrument-operator families."""
 
 import torch
+from torch import nn
 
 from torchsky.map.operators import (
+    AdaptiveAxisFeatures,
+    AdaptiveSpatioSpectralTemporalEncoder,
     AffineRadiometry,
     ConditionedBackgroundField,
     ConditionedKernelPSF,
@@ -30,6 +33,121 @@ def _conditioning_encoder() -> SpatioSpectralTemporalEncoder:
     )
 
 
+def _adaptive_conditioning_encoder() -> AdaptiveSpatioSpectralTemporalEncoder:
+    return AdaptiveSpatioSpectralTemporalEncoder(
+        spatial_center=(16.0, 16.0),
+        spatial_scale=(12.0, 20.0),
+        spatial_length_bounds=(2.0, 64.0),
+        wavelength_center=7000.0,
+        spectral_scale=1000.0,
+        spectral_length_bounds=(100.0, 4000.0),
+        time_center_mjd=60000.0,
+        temporal_scale_days=30.0,
+        temporal_length_bounds_days=(0.25, 120.0),
+        spatial_bands=3,
+        spectral_bands=2,
+        temporal_bands=2,
+    )
+
+
+def test_adaptive_axis_features_are_unit_invariant_and_bounded() -> None:
+    axis = AdaptiveAxisFeatures(
+        center=10.0,
+        reference_scale=4.0,
+        length_bounds=(1.0, 16.0),
+        num_bands=4,
+    )
+    rescaled = AdaptiveAxisFeatures(
+        center=100.0,
+        reference_scale=40.0,
+        length_bounds=(10.0, 160.0),
+        num_bands=4,
+    )
+    values = torch.linspace(-2.0, 22.0, 31)
+    torch.testing.assert_close(axis(values), rescaled(10.0 * values))
+
+    with torch.no_grad():
+        axis.scale_shift_raw.fill_(100.0)
+    assert bool(torch.all(axis.length_scales <= 16.0))
+    assert bool(torch.all(axis.length_scales >= 1.0))
+    with torch.no_grad():
+        axis.scale_shift_raw.fill_(-100.0)
+    assert bool(torch.all(axis.length_scales <= 16.0))
+    assert bool(torch.all(axis.length_scales >= 1.0))
+
+
+def test_adaptive_axis_state_dict_preserves_physical_metadata() -> None:
+    source = AdaptiveAxisFeatures(
+        center=10.0,
+        reference_scale=4.0,
+        length_bounds=(1.0, 16.0),
+        num_bands=3,
+    )
+    restored = AdaptiveAxisFeatures(
+        center=0.0,
+        reference_scale=1.0,
+        length_bounds=(0.1, 1.0),
+        num_bands=3,
+    )
+    with torch.no_grad():
+        source.gate_logits.copy_(torch.tensor([-1.0, 0.5, 2.0]))
+        source.scale_shift_raw.fill_(0.4)
+    restored.load_state_dict(source.state_dict())
+    values = torch.linspace(-2.0, 22.0, 31)
+
+    torch.testing.assert_close(restored(values), source(values))
+    assert restored.center == 10.0
+    assert restored.reference_scale == 4.0
+    assert restored.length_bounds == (1.0, 16.0)
+
+
+def test_adaptive_axis_learns_continuous_correlation_length() -> None:
+    torch.manual_seed(12)
+    axis = AdaptiveAxisFeatures(
+        center=0.0,
+        reference_scale=8.0,
+        length_bounds=(4.0, 16.0),
+        num_bands=1,
+    )
+    head = nn.Linear(axis.output_dim, 1, bias=False)
+    values = torch.linspace(-8.0, 8.0, 257)
+    target = torch.sin((2.0 * torch.pi / 10.0) * values)
+    optimizer = torch.optim.Adam((*axis.parameters(), *head.parameters()), lr=0.03)
+
+    for _ in range(250):
+        optimizer.zero_grad()
+        prediction = head(axis(values)).squeeze(-1)
+        loss = torch.mean(torch.square(prediction - target))
+        loss.backward()
+        optimizer.step()
+
+    assert float(loss.detach()) < 2.0e-3
+    torch.testing.assert_close(
+        axis.length_scales.detach(),
+        torch.tensor([10.0]),
+        rtol=2e-2,
+        atol=2e-2,
+    )
+
+
+def test_adaptive_conditioning_regularization_reaches_all_axes() -> None:
+    encoder = _adaptive_conditioning_encoder()
+    y, x = torch.meshgrid(torch.arange(9.0), torch.arange(11.0), indexing="ij")
+    encoded = encoder(x, y, 7500.0, 60010.0)
+    penalty = encoder.regularization(gate_weight=0.2, scale_shift_weight=0.1)
+    (encoded.square().mean() + penalty).backward()
+
+    assert encoded.shape == (9, 11, encoder.output_dim)
+    for axis in (
+        encoder.x_axis,
+        encoder.y_axis,
+        encoder.spectral_axis,
+        encoder.temporal_axis,
+    ):
+        assert axis.gate_logits.grad is not None
+        assert axis.scale_shift_raw.grad is not None
+
+
 def test_multiscale_conditioning_axes_have_independent_scales():
     encoder = _conditioning_encoder()
     x = torch.tensor([16.0, 28.0])
@@ -43,7 +161,10 @@ def test_multiscale_conditioning_axes_have_independent_scales():
 
 def test_conditioned_kernel_psf_is_flux_conserving_and_differentiable():
     psf = ConditionedKernelPSF(
-        _conditioning_encoder(), n_basis=3, kernel_size=9, init_fwhm_pix=2.0
+        _adaptive_conditioning_encoder(),
+        n_basis=3,
+        kernel_size=9,
+        init_fwhm_pix=2.0,
     )
     with torch.no_grad():
         psf.mixer[-1].weight.normal_(std=0.2)
@@ -60,9 +181,18 @@ def test_conditioned_kernel_psf_is_flux_conserving_and_differentiable():
     )
     torch.testing.assert_close(output.sum(), torch.tensor(1.0), atol=1e-5, rtol=1e-5)
     assert bool((output >= 0).all())
-    output.square().sum().backward()
+    (
+        output.square().sum()
+        + 0.01
+        * psf.conditioning_regularization(
+            gate_weight=1.0,
+            scale_shift_weight=1.0,
+        )
+    ).backward()
     assert image.grad is not None
     assert psf.kernel_basis.raw_kernels.grad is not None
+    assert isinstance(psf.encoder, AdaptiveSpatioSpectralTemporalEncoder)
+    assert psf.encoder.x_axis.gate_logits.grad is not None
 
 
 def test_conditioned_background_zero_initialization_and_gradients():

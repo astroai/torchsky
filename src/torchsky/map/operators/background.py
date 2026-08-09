@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 
+from .adaptive_axes import AdaptiveSpatioSpectralTemporalEncoder
 from .base import BackgroundOp
 from .learned_kernel import SpatioSpectralTemporalEncoder
 
@@ -17,7 +18,8 @@ class ConditionedBackgroundField(nn.Module):
 
     def __init__(
         self,
-        encoder: SpatioSpectralTemporalEncoder,
+        encoder: SpatioSpectralTemporalEncoder
+        | AdaptiveSpatioSpectralTemporalEncoder,
         *,
         hidden_dim: int = 32,
         hidden_layers: int = 2,
@@ -48,6 +50,20 @@ class ConditionedBackgroundField(nn.Module):
     ) -> Tensor:
         encoded = self.encoder(spatial_x, spatial_y, wavelength, time_mjd)
         return self.network(encoded).squeeze(-1)
+
+    def conditioning_regularization(
+        self,
+        *,
+        gate_weight: float = 1.0,
+        scale_shift_weight: float = 1.0,
+    ) -> Tensor:
+        regularization = getattr(self.encoder, "regularization", None)
+        if not callable(regularization):
+            return self.network[-1].weight.sum() * 0.0
+        return regularization(
+            gate_weight=gate_weight,
+            scale_shift_weight=scale_shift_weight,
+        )
 
 
 @dataclass

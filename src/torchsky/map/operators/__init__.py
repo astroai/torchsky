@@ -2,6 +2,10 @@
 
 from importlib import import_module
 
+from .adaptive_axes import (
+    AdaptiveAxisFeatures,
+    AdaptiveSpatioSpectralTemporalEncoder,
+)
 from .background import (
     ConditionedBackgroundField,
     DetectorBackgroundOp,
@@ -169,6 +173,8 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "AdaptiveAxisFeatures",
+    "AdaptiveSpatioSpectralTemporalEncoder",
     "BackgroundOp",
     "BackgroundFitSummary",
     "AffineRadiometry",

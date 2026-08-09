@@ -24,12 +24,12 @@ from torchsky.map.field import (
     soft_bounded_power_weights,
 )
 from torchsky.map.operators import (
+    AdaptiveSpatioSpectralTemporalEncoder,
     ConditionedBackgroundField,
     ConditionedKernelPSF,
     LearnedBackgroundOp,
     LearnedPSFOp,
     ObservationOperatorBundle,
-    SpatioSpectralTemporalEncoder,
 )
 
 
@@ -457,16 +457,19 @@ def test_spectral_power_foam_hard_render_supports_conditioned_operators() -> Non
         radii=torch.tensor([10.0], dtype=torch.float32),
         cell_coefficients=torch.tensor([[2.0, 0.0]], dtype=torch.float32),
     )
-    encoder = SpatioSpectralTemporalEncoder(
+    encoder = AdaptiveSpatioSpectralTemporalEncoder(
         spatial_center=(3.5, 3.5),
         spatial_scale=4.0,
+        spatial_length_bounds=(2.0, 16.0),
         wavelength_center=2.0,
         spectral_scale=1.0,
+        spectral_length_bounds=(0.2, 4.0),
         time_center_mjd=60000.0,
         temporal_scale_days=10.0,
-        spatial_frequencies=1,
-        spectral_frequencies=1,
-        temporal_frequencies=1,
+        temporal_length_bounds_days=(0.5, 40.0),
+        spatial_bands=1,
+        spectral_bands=1,
+        temporal_bands=1,
     )
     psf = ConditionedKernelPSF(
         encoder, n_basis=2, kernel_size=3, init_fwhm_pix=1.5, hidden_dim=8

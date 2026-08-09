@@ -37,6 +37,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from .adaptive_axes import AdaptiveSpatioSpectralTemporalEncoder
+
 __all__ = [
     "AffineRadiometry",
     "ConstrainedKernelPSF",
@@ -155,7 +157,8 @@ class ConditionedKernelPSF(nn.Module):
 
     def __init__(
         self,
-        encoder: SpatioSpectralTemporalEncoder,
+        encoder: SpatioSpectralTemporalEncoder
+        | AdaptiveSpatioSpectralTemporalEncoder,
         *,
         n_basis: int = 4,
         kernel_size: int = 15,
@@ -196,6 +199,20 @@ class ConditionedKernelPSF(nn.Module):
             ),
             dim=-1,
         ).movedim(-1, 0)
+
+    def conditioning_regularization(
+        self,
+        *,
+        gate_weight: float = 1.0,
+        scale_shift_weight: float = 1.0,
+    ) -> Tensor:
+        regularization = getattr(self.encoder, "regularization", None)
+        if not callable(regularization):
+            return self.kernel_basis.raw_kernels.sum() * 0.0
+        return regularization(
+            gate_weight=gate_weight,
+            scale_shift_weight=scale_shift_weight,
+        )
 
     def forward(
         self,

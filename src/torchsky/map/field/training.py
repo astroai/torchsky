@@ -736,6 +736,8 @@ def fit_field_model(
     spectral_observability_weight: float = 0.0,
     spectral_observability_probe_grid_size: int = 8,
     residual_head_penalty_weight: float = 0.0,
+    operator_scale_gate_weight: float = 0.0,
+    operator_scale_shift_weight: float = 0.0,
     noise_pretrain_kind: FieldNoisePretrainKind = "none",
     noise_pretrain_steps: int = 0,
     noise_pretrain_lr: float | None = None,
@@ -842,8 +844,13 @@ def fit_field_model(
                 param.requires_grad = False
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     seen_param_ids = {id(parameter) for parameter in trainable_params}
+    conditioning_models: list[tuple[str, nn.Module]] = []
+    seen_conditioner_ids: set[int] = set()
     for bundle in obs_operator_bundles:
-        for operator in (bundle.psf, bundle.background):
+        for slot_name, operator in (
+            ("psf", bundle.psf),
+            ("background", bundle.background),
+        ):
             operator_model = getattr(operator, "model", None)
             if not isinstance(operator_model, nn.Module):
                 continue
@@ -852,6 +859,16 @@ def fit_field_model(
                 if parameter.requires_grad and id(parameter) not in seen_param_ids:
                     trainable_params.append(parameter)
                     seen_param_ids.add(id(parameter))
+            conditioner = getattr(operator_model, "encoder", None)
+            if (
+                conditioner is not None
+                and id(conditioner) not in seen_conditioner_ids
+                and callable(
+                    getattr(operator_model, "conditioning_regularization", None)
+                )
+            ):
+                conditioning_models.append((slot_name, operator_model))
+                seen_conditioner_ids.add(id(conditioner))
     seen_poses = set()
     for pose in obs_exposure_poses:
         if pose is not None and id(pose) not in seen_poses:
@@ -925,6 +942,8 @@ def fit_field_model(
     spectral_penalty_weight = max(float(spectral_observability_weight), 0.0)
     spectral_penalty_grid = max(int(spectral_observability_probe_grid_size), 2)
     residual_penalty_weight = max(float(residual_head_penalty_weight), 0.0)
+    scale_gate_weight = max(float(operator_scale_gate_weight), 0.0)
+    scale_shift_weight = max(float(operator_scale_shift_weight), 0.0)
     smoothness_domain = getattr(model, "domain", None)
     ema_rate = float(ema_decay)
     use_ema = 0.0 < ema_rate < 1.0
@@ -1734,12 +1753,35 @@ def fit_field_model(
                     )
                 else:
                     total_loss = total_loss + scaled_residual_penalty
+        if scale_gate_weight > 0.0 or scale_shift_weight > 0.0:
+            conditioning_penalties = [
+                operator_model.conditioning_regularization(  # type: ignore[attr-defined]
+                    gate_weight=scale_gate_weight,
+                    scale_shift_weight=scale_shift_weight,
+                )
+                for _, operator_model in conditioning_models
+            ]
+            if conditioning_penalties:
+                conditioning_penalty = torch.stack(conditioning_penalties).mean()
+                if streaming_accumulation:
+                    streamed_total_loss += float(conditioning_penalty.detach().cpu())
+                    conditioning_penalty.backward()
+                    total_loss = torch.tensor(
+                        streamed_total_loss,
+                        dtype=torch.float32,
+                        device=next(
+                            (p.device for p in model.parameters()),
+                            default_compute_device(),
+                        ),
+                    )
+                else:
+                    total_loss = total_loss + conditioning_penalty
         assert total_loss is not None
         loss_history.append(float(total_loss.detach().cpu()))
         if not streaming_accumulation:
             total_loss.backward()
         if grad_clip_norm is not None:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip_norm))
+            torch.nn.utils.clip_grad_norm_(trainable_params, float(grad_clip_norm))
         optimizer.step()
         if use_ema and ema_params is not None:
             ema_index = 0
@@ -1805,6 +1847,13 @@ def fit_field_model(
     )
     diagnostics = dict(diagnostics or {})
     diagnostics["operator_bundle"] = operator_bundle.enabled_operator_names()
+    scale_diagnostics = []
+    for slot_name, operator_model in conditioning_models:
+        report = getattr(operator_model.encoder, "scale_diagnostics", None)  # type: ignore[attr-defined]
+        if callable(report):
+            scale_diagnostics.append({"operator": slot_name, "axes": report()})
+    if scale_diagnostics:
+        diagnostics["operator_scale_diagnostics"] = scale_diagnostics
     if any(pose is not None for pose in obs_exposure_poses):
         diagnostics["pose_refinement"] = {
             "enabled": bool(refine_poses or observation_exposure_poses is not None),
