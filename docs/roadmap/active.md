@@ -1332,7 +1332,7 @@ residual contracts.
   smooth-foreground leakage and wedge-aware validation, plus smaller MOS and
   moving-object transfer demonstrations.
 
-## CANFAR Staging Run Template
+## CANFAR Run Template
 
 Do not reuse or delete unrelated sessions. `canfar image ls` does not currently
 report every pure headless image, so it is not an authoritative allowlist.
@@ -1347,7 +1347,7 @@ encode the complete bootstrap and decode it inside the container with a
 single-quoted, YAML-safe standard-library command.
 
 ```bash
-canfar server use staging
+canfar server use canfar
 canfar image ls
 canfar create headless IMAGE \
   --name torchsky-CHECKPOINT-DATE \

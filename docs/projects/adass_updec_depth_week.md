@@ -614,9 +614,12 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
 - [x] Add independent and joint spectral Foam rows to the synthetic smoke
   tournament. Commit `da06bc3` uses one shared footprint operator and enforces a
   target-response gate, so lower reconstruction loss cannot hide source
-  attenuation. This is representation plumbing, not real-data evidence: the
-  smoke basis is indexed by synthetic band order and its automatic grid density
-  is only a bounded test heuristic.
+  attenuation. Commit `fbd8a99` replaces implicit band indices with
+  response-weighted spectral coordinates, rejects invalid or unordered axes and
+  passbands, records those coordinates in the artifact, and verifies that the
+  dimensionless Legendre basis is invariant to affine wavelength-unit changes.
+  This remains representation plumbing, not real-data depth evidence; its
+  automatic grid density is only a bounded test heuristic.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
 - [ ] Hard-render final products with detached exact geometry; never score the
