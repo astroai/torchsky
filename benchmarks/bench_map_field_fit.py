@@ -347,6 +347,7 @@ def _copy_header_with_crop(
     return cropped
 
 
+@torch.no_grad()
 def _render_field_product_chunked(
     model: torch.nn.Module,
     product,
@@ -3406,15 +3407,16 @@ def evaluate_case(
                 spatial_chunk_size=render_chunk_size,
                 num_spectral_samples=num_spectral_render,
             )
-            for observation in observations:
-                pred = render_field_observation(
-                    result.model,
-                    observation,
-                    num_spectral_samples=num_spectral_render,
-                )
-                observation_residuals.append(
-                    torch.sqrt(torch.mean(torch.square(pred - observation.image)))
-                )
+            with torch.no_grad():
+                for observation in observations:
+                    pred = render_field_observation(
+                        result.model,
+                        observation,
+                        num_spectral_samples=num_spectral_render,
+                    )
+                    observation_residuals.append(
+                        torch.sqrt(torch.mean(torch.square(pred - observation.image)))
+                    )
         assert product_pred is not None
         metrics = evaluate_map_product(product_pred, truth_cube)
         support_metrics = evaluate_map_product(

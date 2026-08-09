@@ -19,8 +19,12 @@
 - [x] Correct predictive-variance propagation through PSF convolution using
   squared normalized weights; test heteroscedastic INR rendering with both
   finite-kernel and Gaussian PSFs.
-- [ ] Make full target-product rendering/export stream spatial tiles so scoring
-  a very large field does not erase the fit-phase memory saving.
+- [x] Stop benchmark target-product and observation-residual scoring from
+  retaining autograd graphs across spatial tiles; scoring is inference-only.
+  On the identical 1024-square tiled run this reduced total process peak RSS
+  from 18.07 GB to 1.488 GB (91.8%) with identical final metrics.
+- [ ] Add a public streaming tile sink for target-product FITS export so maps
+  larger than device memory need not materialize the complete cube on device.
 - [ ] Run matched-compute and matched-accuracy Foam/INR patch-size sweeps on
   CUDA after CANFAR service recovery; report peak accelerator memory from the
   existing fit performance profile.
