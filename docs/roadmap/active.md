@@ -42,8 +42,14 @@
   this is a baseline, not a CUDA or end-to-end speed claim.
 - [x] Fail closed for heteroscedastic/distribution rendering with learned PSF or
   background until covariance propagation is mathematically implemented.
-- [ ] Add calibrated priors and staged freeze/unfreeze helpers that keep diffuse
-  scene, background, and PSF corrections identifiable on held-out exposures.
+- [x] Add measurable calibration anchors and staged freeze/unfreeze helpers.
+  PSF terms operate on normalized effective kernels, background terms operate
+  on signed predicted values, both accept fixed sample weights, and explicit
+  `scene`/`background`/`psf`/`joint` stages support separate fits without a
+  second optimizer framework. Final calibration losses are persisted.
+- [ ] Demonstrate that the staged calibration keeps diffuse scene, background,
+  and PSF corrections identifiable on held-out exposures; the API and training
+  invariants are complete, but real validation/test evidence is not.
 - [x] Add certified joint x/y calibration fill-distance bounds. The adaptive
   axes retain conservative marginal contracts, while the calibration manifest
   records an explicit lower/upper interval over each rectangular detector

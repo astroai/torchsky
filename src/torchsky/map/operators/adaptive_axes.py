@@ -625,10 +625,13 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
         wavelength: Tensor | float,
         time_mjd: Tensor | float | None = None,
     ) -> Tensor:
-        wavelength_tensor = torch.as_tensor(
-            wavelength,
-            device=spatial_x.device,
-            dtype=spatial_x.dtype,
+        wavelength_offset = (
+            wavelength - self.spectral_axis.center
+            if isinstance(wavelength, Tensor)
+            else float(wavelength) - self.spectral_axis.center
+        )
+        wavelength_offset_tensor = torch.as_tensor(
+            wavelength_offset, device=spatial_x.device, dtype=spatial_x.dtype
         )
         if time_mjd is None:
             time_offset: Tensor | float = 0.0
@@ -639,17 +642,17 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
         time_offset_tensor = torch.as_tensor(
             time_offset, device=spatial_x.device, dtype=spatial_x.dtype
         )
-        x, y, spectral, temporal_offset = torch.broadcast_tensors(
+        x, y, spectral_offset, temporal_offset = torch.broadcast_tensors(
             spatial_x,
             spatial_y.to(device=spatial_x.device, dtype=spatial_x.dtype),
-            wavelength_tensor,
+            wavelength_offset_tensor,
             time_offset_tensor,
         )
         return torch.cat(
             (
                 self.x_axis(x),
                 self.y_axis(y),
-                self.spectral_axis(spectral),
+                self.spectral_axis._forward_centered(spectral_offset),
                 self.temporal_axis._forward_centered(temporal_offset),
             ),
             dim=-1,

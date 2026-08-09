@@ -79,6 +79,10 @@ must not become a spacecraft packet decoder or a closed foreground ontology.
   reusable for detector-plane calibration support, but it is deliberately not
   applied to full-sky coordinates across seams or poles; FOSSIL still needs
   sphere-native coverage and cross-fit partitions.
+- [x] Learned PSF and background corrections now accept direct evidence-space
+  calibration terms plus explicit scene/background/PSF/joint training stages.
+  The pattern generalizes to FOSSIL nuisance learners, but mission science
+  still requires protected target subspaces and independent cross-fit scoring.
 - [x] `SpectralAxis` exists in `torchsky.spectral`; extend it rather than creating
   a parallel axis type.
 - [ ] Existing operator declarations do not yet provide one typed

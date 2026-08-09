@@ -268,12 +268,73 @@ residual around explicit background estimates already attached to each
 observation. Detector-coordinate models use `detector_x0_pix` and
 `detector_y0_pix`, which are updated automatically by training crops.
 
+Use evidence-space calibration terms and separate optimizer invocations to
+make the staged sequence explicit:
+
+```python
+from torchsky.map.operators import (
+    BackgroundCalibrationTerm,
+    PSFCalibrationTerm,
+    set_field_training_stage,
+)
+
+psf_term = PSFCalibrationTerm(
+    psf_model,
+    detector_x=star_x,
+    detector_y=star_y,
+    wavelength=star_wavelength,
+    time_mjd=star_time,
+    target_kernels=measured_epsfs,
+    sample_weight=star_reliability,
+)
+background_term = BackgroundCalibrationTerm(
+    background_model,
+    detector_x=blank_x,
+    detector_y=blank_y,
+    wavelength=blank_wavelength,
+    time_mjd=blank_time,
+    target_values=blank_values,
+    sample_weight=blank_inverse_variance,
+)
+
+set_field_training_stage(model, bundles, "background")
+field.fit(
+    observations,
+    model,
+    observation_operator_bundles=bundles,
+    operator_calibration_terms=[background_term],
+)
+set_field_training_stage(model, bundles, "psf")
+field.fit(
+    observations,
+    model,
+    observation_operator_bundles=bundles,
+    operator_calibration_terms=[psf_term],
+)
+set_field_training_stage(model, bundles, "joint")
+result = field.fit(
+    observations,
+    model,
+    observation_operator_bundles=bundles,
+    operator_calibration_terms=[psf_term, background_term],
+)
+```
+
+PSF terms compare positive unit-sum model kernels to normalized measured ePSFs,
+so arbitrary stamp-flux scaling cannot change the target. Background terms
+compare signed predicted values. Sample weights must be fixed from calibration
+uncertainty or quality before the science fit; do not tune them on the withheld
+evaluation exposures. `result.diagnostics["operator_calibration_diagnostics"]`
+persists the final evidence-space losses. A low calibration loss is not a
+held-out-prediction result.
+
 These models are deliberately constrained, but the inverse problem is still
 not identifiable if scene, PSF, and background all receive unconstrained
 capacity simultaneously. The recommended scientific sequence is:
 
-1. Anchor the scene with calibrated exposures and an explicit nominal PSF and
-   background; retain held-out exposures and isolated stars.
+1. Select the `scene` stage and anchor it with calibrated exposures and an
+   explicit nominal PSF and background; retain held-out exposures and isolated
+   stars.
 2. Fit only a low-spatial-frequency signed background residual, with scales set
    from blank-sky structure and no compact-source capacity.
 3. Fit the positive normalized PSF bases and their conditioning on isolated

@@ -53,6 +53,13 @@ from .config import (
     validate_map_stacking_method,
     validate_map_value_semantics,
 )
+from .calibration import (
+    BackgroundCalibrationTerm,
+    FieldTrainingStage,
+    OperatorCalibrationTerm,
+    PSFCalibrationTerm,
+    set_field_training_stage,
+)
 from .coverage import SpatialFillDistanceBounds, spatial_fill_distance_bounds
 from .geometry import (
     ConservativePolygonRemapOp,
@@ -176,6 +183,7 @@ def __getattr__(name: str):
 __all__ = [
     "AdaptiveAxisFeatures",
     "AdaptiveSpatioSpectralTemporalEncoder",
+    "BackgroundCalibrationTerm",
     "BackgroundOp",
     "BackgroundFitSummary",
     "AffineRadiometry",
@@ -194,6 +202,7 @@ __all__ = [
     "ExplicitPSFOp",
     "ExplicitRadiometryOp",
     "ExplicitSpectralResponseOp",
+    "FieldTrainingStage",
     "ForwardSplatGeometryOp",
     "GeometryOp",
     "GRID_EQUIVALENT_IGNORE_KEYS",
@@ -220,9 +229,11 @@ __all__ = [
     "NoiseOp",
     "ObservationOperator",
     "ObservationOperatorBundle",
+    "OperatorCalibrationTerm",
     "OperatorConditioning",
     "PSFOp",
     "PreparedImageObservationData",
+    "PSFCalibrationTerm",
     "RadiometryOp",
     "RestrictedAffineFFTGeometryOp",
     "SphericalSpectralGeometryOp",
@@ -289,6 +300,7 @@ __all__ = [
     "sample_image_plane_batched",
     "sample_image_plane_batched_channels",
     "sample_image_plane_channels",
+    "set_field_training_stage",
     "representative_pixel_area_sr",
     "stack_inputs_from_projected_observation",
     "spatial_fill_distance_bounds",

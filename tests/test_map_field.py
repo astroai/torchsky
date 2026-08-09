@@ -39,6 +39,7 @@ from torchsky.map.field.observation_ops import (
 from torchsky.map.field import rendering as field_rendering
 from torchsky.map.operators import (
     AdaptiveSpatioSpectralTemporalEncoder,
+    BackgroundCalibrationTerm,
     ConditionedBackgroundField,
     ConditionedKernelPSF,
     LearnedBackgroundOp,
@@ -846,6 +847,15 @@ def test_fit_field_model_optimizes_conditioned_background_bundle(
             background_model, coordinate_frame="detector"
         )
     )
+    calibration_term = BackgroundCalibrationTerm(
+        background_model,
+        detector_x=torch.tensor([1.0, 4.0, 7.0]),
+        detector_y=torch.tensor([4.0, 4.0, 4.0]),
+        wavelength=torch.full((3,), 7000.0),
+        time_mjd=torch.full((3,), 60000.0),
+        target_values=torch.tensor([-0.1125, 0.0, 0.1125]),
+        loss_weight=1.0,
+    )
 
     result = fit_field_model(
         [observation],
@@ -854,6 +864,7 @@ def test_fit_field_model_optimizes_conditioned_background_bundle(
         lr=3.0e-2,
         num_spectral_samples=1,
         observation_operator_bundles=[bundle],
+        operator_calibration_terms=[calibration_term],
         observation_forward_contexts=[ForwardContext(time_mjd=60000.0)],
         operator_scale_gate_weight=1.0e-4,
         operator_scale_shift_weight=1.0e-4,
@@ -871,6 +882,8 @@ def test_fit_field_model_optimizes_conditioned_background_bundle(
     scale_report = operator_report["axes"]
     assert scale_report["spatial_x"]["length_bounds"] == [2.0, 18.0]
     assert len(scale_report["spatial_x"]["gates"]) == 2
+    calibration_report = result.diagnostics["operator_calibration_diagnostics"][0]
+    assert calibration_report["kind"] == "background_value_mse"
 
 
 def test_field_component_decomposition_respects_contextual_roles() -> None:

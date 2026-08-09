@@ -20,6 +20,7 @@ from ..operators.bundle import (
     field_observation_operator_bundle,
     merge_operator_bundles,
 )
+from ..operators.calibration import OperatorCalibrationTerm
 
 from .bandpass import (
     bandpass_bounds as _bandpass_bounds,
@@ -750,6 +751,7 @@ def fit_field_model(
     device: torch.device | str | None = None,
     observation_forward_contexts: Sequence[ForwardContext | None] | None = None,
     observation_operator_bundles: Sequence[ObservationOperatorBundle] | None = None,
+    operator_calibration_terms: Sequence[OperatorCalibrationTerm] | None = None,
     observation_exposure_poses: Sequence[ExposurePose | None] | None = None,
     refine_poses: bool = False,
     anchor_first_pose: bool = True,
@@ -773,6 +775,27 @@ def fit_field_model(
             "observation_operator_bundles must have the same length as observations"
         )
     operator_bundle = merge_operator_bundles(*obs_operator_bundles)
+    calibration_terms = tuple(operator_calibration_terms or ())
+    calibrated_operator_model_ids = {
+        id(operator_model)
+        for bundle in obs_operator_bundles
+        for operator_model in (
+            getattr(bundle.psf, "model", None),
+            getattr(bundle.background, "model", None),
+        )
+        if isinstance(operator_model, nn.Module)
+    }
+    for term in calibration_terms:
+        if not callable(getattr(term, "penalty", None)) or not callable(
+            getattr(term, "diagnostics", None)
+        ):
+            raise TypeError(
+                "operator_calibration_terms must provide penalty and diagnostics"
+            )
+        if id(getattr(term, "model", None)) not in calibrated_operator_model_ids:
+            raise ValueError(
+                "each operator calibration term model must belong to an observation bundle"
+            )
 
     def training_psf_halo(
         bundle: ObservationOperatorBundle,
@@ -1776,6 +1799,25 @@ def fit_field_model(
                     )
                 else:
                     total_loss = total_loss + conditioning_penalty
+        if calibration_terms:
+            calibration_penalties = [term.penalty() for term in calibration_terms]
+            if not all(bool(torch.isfinite(value)) for value in calibration_penalties):
+                raise ValueError("operator calibration penalty must be finite")
+            calibration_penalty = torch.stack(calibration_penalties).sum()
+            if streaming_accumulation:
+                streamed_total_loss += float(calibration_penalty.detach().cpu())
+                if calibration_penalty.requires_grad:
+                    calibration_penalty.backward()
+                total_loss = torch.tensor(
+                    streamed_total_loss,
+                    dtype=torch.float32,
+                    device=next(
+                        (p.device for p in model.parameters()),
+                        default_compute_device(),
+                    ),
+                )
+            else:
+                total_loss = total_loss + calibration_penalty
         assert total_loss is not None
         loss_history.append(float(total_loss.detach().cpu()))
         if not streaming_accumulation:
@@ -1854,6 +1896,10 @@ def fit_field_model(
             scale_diagnostics.append({"operator": slot_name, "axes": report()})
     if scale_diagnostics:
         diagnostics["operator_scale_diagnostics"] = scale_diagnostics
+    if calibration_terms:
+        diagnostics["operator_calibration_diagnostics"] = [
+            term.diagnostics() for term in calibration_terms
+        ]
     if any(pose is not None for pose in obs_exposure_poses):
         diagnostics["pose_refinement"] = {
             "enabled": bool(refine_poses or observation_exposure_poses is not None),

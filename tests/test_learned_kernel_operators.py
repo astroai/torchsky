@@ -266,13 +266,38 @@ def test_adaptive_conditioning_preserves_small_offsets_from_large_mjd() -> None:
         torch.tensor(16.0),
         torch.tensor(16.0),
         7000.0,
-        60000.001,
+        torch.tensor(60000.001, dtype=torch.float64),
     )
 
     temporal_start = encoder.output_dim - encoder.temporal_axis.output_dim
     torch.testing.assert_close(
         encoded[temporal_start],
         torch.tensor(0.001 / 30.0),
+        rtol=1.0e-5,
+        atol=1.0e-9,
+    )
+
+
+def test_fixed_conditioning_preserves_float64_tensor_offsets_before_cast() -> None:
+    encoder = _conditioning_encoder()
+    encoded = encoder(
+        torch.tensor([16.0, 16.0], dtype=torch.float32),
+        torch.tensor([16.0, 16.0], dtype=torch.float32),
+        torch.tensor([7000.0, 7000.001], dtype=torch.float64),
+        torch.tensor([60000.0, 60000.001], dtype=torch.float64),
+    )
+    spectral_start = 2 * (1 + 2 * encoder.spatial_frequencies)
+    temporal_start = spectral_start + 1 + 2 * encoder.spectral_frequencies
+
+    torch.testing.assert_close(
+        encoded[1, spectral_start],
+        torch.tensor(0.001 / encoder.spectral_scale),
+        rtol=1.0e-5,
+        atol=1.0e-9,
+    )
+    torch.testing.assert_close(
+        encoded[1, temporal_start],
+        torch.tensor(0.001 / encoder.temporal_scale_days),
         rtol=1.0e-5,
         atol=1.0e-9,
     )

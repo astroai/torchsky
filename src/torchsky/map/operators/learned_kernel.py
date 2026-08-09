@@ -127,24 +127,33 @@ class SpatioSpectralTemporalEncoder(nn.Module):
         wavelength: Tensor | float,
         time_mjd: Tensor | float | None = None,
     ) -> Tensor:
-        wavelength_tensor = torch.as_tensor(
-            wavelength, device=spatial_x.device, dtype=spatial_x.dtype
+        wavelength_offset = (
+            wavelength - self.wavelength_center
+            if isinstance(wavelength, Tensor)
+            else float(wavelength) - self.wavelength_center
         )
-        time_tensor = torch.as_tensor(
-            self.time_center_mjd if time_mjd is None else time_mjd,
-            device=spatial_x.device,
-            dtype=spatial_x.dtype,
+        if time_mjd is None:
+            time_offset: Tensor | float = 0.0
+        elif isinstance(time_mjd, Tensor):
+            time_offset = time_mjd - self.time_center_mjd
+        else:
+            time_offset = float(time_mjd) - self.time_center_mjd
+        wavelength_offset_tensor = torch.as_tensor(
+            wavelength_offset, device=spatial_x.device, dtype=spatial_x.dtype
         )
-        x, y, wavelength_tensor, time_tensor = torch.broadcast_tensors(
+        time_offset_tensor = torch.as_tensor(
+            time_offset, device=spatial_x.device, dtype=spatial_x.dtype
+        )
+        x, y, spectral_offset, temporal_offset = torch.broadcast_tensors(
             spatial_x,
             spatial_y.to(device=spatial_x.device, dtype=spatial_x.dtype),
-            wavelength_tensor,
-            time_tensor,
+            wavelength_offset_tensor,
+            time_offset_tensor,
         )
         x = (x - self.spatial_center[0]) / self.spatial_scale[0]
         y = (y - self.spatial_center[1]) / self.spatial_scale[1]
-        spectral = (wavelength_tensor - self.wavelength_center) / self.spectral_scale
-        temporal = (time_tensor - self.time_center_mjd) / self.temporal_scale_days
+        spectral = spectral_offset / self.spectral_scale
+        temporal = temporal_offset / self.temporal_scale_days
         features = self._features(x, self.spatial_frequencies)
         features.extend(self._features(y, self.spatial_frequencies))
         features.extend(self._features(spectral, self.spectral_frequencies))
