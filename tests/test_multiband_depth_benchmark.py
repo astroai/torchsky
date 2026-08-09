@@ -1020,7 +1020,31 @@ def test_target_response_gate_flags_attenuation_and_passes_preserved() -> None:
     empty = [_row("chi2_coadd", [0.0]), _row("dead_method", [])]
     _target_response_gate(empty, baseline_method="chi2_coadd")
     assert empty[1]["target_response"]["signal_preserved"] is False
+    mismatched = [_row("chi2_coadd", [0.0]), _row("wrong_bands", [0.0, 0.0])]
+    with pytest.raises(ValueError, match="same bands"):
+        _target_response_gate(mismatched, baseline_method="chi2_coadd")
+    nonfinite = [_row("chi2_coadd", [0.0]), _row("dead_method", [math.nan])]
+    _target_response_gate(nonfinite, baseline_method="chi2_coadd")
+    assert nonfinite[1]["target_response"]["signal_preserved"] is False
+    assert nonfinite[1]["target_response"]["paired_band_count"] == 0
     pytest.raises(ValueError, _target_response_gate, [_row("only", [0.0])])
+
+
+def test_target_response_gate_preserves_band_pairing_with_nonfinite_values() -> None:
+    def _row(method: str, bias: list[float]) -> dict[str, Any]:
+        return {
+            "method": method,
+            "forced_photometry": {"median_fractional_flux_bias": bias},
+        }
+
+    rows = [
+        _row("chi2_coadd", [math.nan, 0.0, -0.1]),
+        _row("candidate", [0.0, -0.1, math.nan]),
+    ]
+    _target_response_gate(rows, baseline_method="chi2_coadd")
+    response = rows[1]["target_response"]
+    assert response["paired_band_count"] == 1
+    assert response["attenuation_excess_vs_baseline"] == pytest.approx(0.1)
 
 
 def test_foam_grid_side_is_resolution_matched_and_bounded() -> None:

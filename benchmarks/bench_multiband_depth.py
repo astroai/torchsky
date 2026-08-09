@@ -2303,42 +2303,59 @@ def _target_response_gate(
 
     def _recovery_fraction(row: dict[str, Any]) -> list[float]:
         bias = row["forced_photometry"]["median_fractional_flux_bias"]
-        return [1.0 + value for value in bias if math.isfinite(value)]
+        return [1.0 + float(value) for value in bias]
 
     baseline_row = next(row for row in rows if row["method"] == baseline_method)
     baseline = _recovery_fraction(baseline_row)
-    if not baseline:
+    finite_baseline = [value for value in baseline if math.isfinite(value)]
+    if not finite_baseline:
         raise ValueError(
             f"baseline method {baseline_method!r} has no finite forced-photometry bias"
         )
     median_baseline = float(
-        torch.median(torch.tensor(baseline, dtype=torch.float64))
+        torch.median(torch.tensor(finite_baseline, dtype=torch.float64))
     )
 
     summary: dict[str, object] = {"baseline_method": baseline_method}
     per_method: dict[str, Any] = {}
     for row in rows:
         recovery = _recovery_fraction(row)
-        if recovery:
+        if recovery and len(recovery) != len(baseline):
+            raise ValueError("all target-response rows must report the same bands")
+        paired = [
+            (baseline_value, recovery_value)
+            for baseline_value, recovery_value in zip(baseline, recovery)
+            if math.isfinite(baseline_value) and math.isfinite(recovery_value)
+        ]
+        paired_excess = [
+            baseline_value - recovery_value
+            for baseline_value, recovery_value in paired
+        ]
+        if paired:
             median_recovery = float(
-                torch.median(torch.tensor(recovery, dtype=torch.float64))
+                torch.median(
+                    torch.tensor(
+                        [recovery_value for _, recovery_value in paired],
+                        dtype=torch.float64,
+                    )
+                )
             )
-            excess = [b - r for b, r in zip(baseline, recovery)]
             median_excess = float(
-                torch.median(torch.tensor(excess, dtype=torch.float64))
+                torch.median(torch.tensor(paired_excess, dtype=torch.float64))
             )
             signal_preserved = (median_recovery >= signal_floor) and (
                 median_excess <= attenuation_tolerance
             )
         else:
             median_recovery = 0.0
-            median_excess = 1.0
+            median_excess = None
             signal_preserved = False
         row["target_response"] = {
             "baseline_method": baseline_method,
             "median_recovery_fraction": median_recovery,
             "median_baseline_recovery_fraction": median_baseline,
             "attenuation_excess_vs_baseline": median_excess,
+            "paired_band_count": len(paired_excess),
             "signal_preserved": bool(signal_preserved),
         }
         per_method[row["method"]] = row["target_response"]
