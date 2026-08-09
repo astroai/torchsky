@@ -74,6 +74,11 @@ must not become a spacecraft packet decoder or a closed foreground ontology.
   evidence-profile fits with band-ablation BIC. The same mechanism applies to
   detector, frequency, time, and scan coordinates, but it is not a substitute
   for protected subspaces, cross-fitting, or sphere/delay-native axes.
+- [x] A certified rectangular-domain two-dimensional fill-distance interval now
+  detects focal-plane holes with an explicit numerical error bound. This is
+  reusable for detector-plane calibration support, but it is deliberately not
+  applied to full-sky coordinates across seams or poles; FOSSIL still needs
+  sphere-native coverage and cross-fit partitions.
 - [x] `SpectralAxis` exists in `torchsky.spectral`; extend it rather than creating
   a parallel axis type.
 - [ ] Existing operator declarations do not yet provide one typed

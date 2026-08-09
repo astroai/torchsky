@@ -53,6 +53,7 @@ from .config import (
     validate_map_stacking_method,
     validate_map_value_semantics,
 )
+from .coverage import SpatialFillDistanceBounds, spatial_fill_distance_bounds
 from .geometry import (
     ConservativePolygonRemapOp,
     ExactDrizzleGeometryOp,
@@ -226,6 +227,7 @@ __all__ = [
     "RestrictedAffineFFTGeometryOp",
     "SphericalSpectralGeometryOp",
     "SpatialSkyBackgroundOp",
+    "SpatialFillDistanceBounds",
     "SpatioSpectralTemporalEncoder",
     "SkyBackgroundOp",
     "SpectralGlobalGeometryOp",
@@ -289,6 +291,7 @@ __all__ = [
     "sample_image_plane_channels",
     "representative_pixel_area_sr",
     "stack_inputs_from_projected_observation",
+    "spatial_fill_distance_bounds",
     "swap_bundle_operator_families",
     "target_shape_from_header",
     "validate_learned_operator_families",

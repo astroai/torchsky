@@ -44,9 +44,17 @@
   background until covariance propagation is mathematically implemented.
 - [ ] Add calibrated priors and staged freeze/unfreeze helpers that keep diffuse
   scene, background, and PSF corrections identifiable on held-out exposures.
-- [ ] Add joint x/y calibration fill-distance and held-out predictive checks;
-  the current sample-derived bounds are conservative marginal-axis contracts
-  and deliberately do not certify holes in two-dimensional focal-plane support.
+- [x] Add certified joint x/y calibration fill-distance bounds. The adaptive
+  axes retain conservative marginal contracts, while the calibration manifest
+  records an explicit lower/upper interval over each rectangular detector
+  footprint using the nearest-sample distance's 1-Lipschitz bound.
+- [x] Add a Torchfits-backed JWST/NIRCam calibration-manifest boundary with
+  canonical MJD UTC midpoints, zero-indexed detector coordinates, frozen
+  `PATT_NUM` splits, official instrument metadata, atomic output, deterministic
+  provenance hashing, and persisted two-dimensional coverage diagnostics.
+- [ ] Add held-out predictive checks for PSF and background models; coverage
+  certifies where calibration evidence exists but does not show that learned
+  operators predict withheld exposures.
 - [ ] Implement learned non-stationary PSF covariance propagation, including
   cross-basis terms, before enabling Gaussian NLL for these bundles.
 - [ ] Measure CPU/CUDA throughput and peak memory from small stamps through

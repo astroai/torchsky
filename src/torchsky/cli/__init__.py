@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+from .calibration_command import register_calibration_parser
 from .inspect_command import register_inspect_parsers
 from .map_command import register_map_parser
 from .sky_command import register_sky_parsers
@@ -134,6 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="torchsky")
     subparsers = parser.add_subparsers(dest="command", required=True)
     register_inspect_parsers(subparsers)
+    register_calibration_parser(subparsers)
     register_map_parser(subparsers)
     register_sky_parsers(subparsers)
     _register_viz_parser(subparsers)

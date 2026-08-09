@@ -205,6 +205,34 @@ identifiable interval exists. Joint spatial holes still require a separate
 coverage check. An explicitly supplied `sample_spacing` may make the bound more
 conservative, but cannot make it finer than the evidence coverage.
 
+Build a replayable JWST/NIRCam calibration manifest before constructing these
+encoders:
+
+```console
+pixi run torchsky calibration-manifest \
+  '/arc/projects/ots/torchsky-data/jwst_smacs0723/crf/*.fits' \
+  --evidence calibration-evidence.csv \
+  --output calibration-manifest.json
+```
+
+The CSV columns are `exposure,detector_x,detector_y,role` plus an optional
+`source_id`; `role` is `psf` or `background`. Coordinates are zero-indexed
+NIRCam detector coordinates, not pixels in an aligned mosaic. The command reads
+primary and SCI headers through Torchfits, maps the FITS one-indexed
+`SUBSTRT*`/`SUBSIZE*` footprint into that common detector frame, freezes the
+existing `PATT_NUM` train/validation/test partition, and records canonical MJD
+UTC midpoint provenance. It fails on inconsistent timing aliases, footprints,
+or evidence coordinates.
+
+For each role/band/detector/split, the manifest records a certified interval for
+the two-dimensional rectangular-domain fill distance. The lower endpoint is
+the maximum sampled grid-centre distance; the upper endpoint adds the grid-cell
+half-diagonal using the 1-Lipschitz property of distance to the nearest sample.
+Refinement continues to the requested error or fails closed. Twice the upper
+endpoint is a conservative coverage guard, not a scattered-sampling Nyquist
+theorem or a physical PSF/background correlation length. The manifest includes
+a deterministic SHA-256 over its complete canonical payload.
+
 Within these bounds, each axis learns sparse band gates and a continuous
 bounded dilation. `initialize_from_evidence` jointly profiles all harmonic
 bands with an intercept and trend, selects the starting dilation by weighted
