@@ -15,11 +15,11 @@
   persist learned gates, feature wavelengths, and explicitly labelled
   gate-weighted scales in fit diagnostics.
 - [x] Remove hand-derived axis bounds from the normal setup path. Derive a
-  conservative irregular-sampling/Nyquist interval from actual calibration
-  coordinates, profile the initial bank dilation by weighted harmonic fit, and
-  initialize gates from band-ablation BIC. Freeze sourced STScI NIRCam detector,
-  version-7 passband, and on-orbit PSF metadata without confusing PSF width with
-  focal-plane PSF-variation scale.
+  conservative coverage guard patterned after regular Nyquist sampling from
+  actual calibration coordinates, profile the initial bank dilation by weighted
+  harmonic fit, and initialize gates from band-ablation BIC. Freeze sourced
+  STScI NIRCam detector, version-7 passband, and on-orbit PSF metadata without
+  confusing PSF width with focal-plane PSF-variation scale.
 - [x] Add a non-stationary neural PSF as source-position-conditioned convex
   mixtures of positive, unit-sum trainable kernels. Apply it to each spectral
   quadrature plane before bandpass integration so chromatic morphology is not
