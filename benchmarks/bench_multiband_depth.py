@@ -125,6 +125,10 @@ class TruthCatalog:
             and torch.isfinite(self.sigma_px).all()
         ):
             raise ValueError("catalogue tensors must be finite")
+        if spectral_samples < 2 or not torch.all(
+            self.spectral_coordinate[1:] > self.spectral_coordinate[:-1]
+        ):
+            raise ValueError("spectral_coordinate must be strictly increasing")
         if (
             torch.any(self.band_flux < 0)
             or torch.any(self.spectral_flux_density < 0)
@@ -2143,34 +2147,83 @@ def _render_foam_surface_brightness(
     return torch.stack(products)
 
 
+def _band_response_coordinate(
+    spectral_coordinate: torch.Tensor,
+    band_response: torch.Tensor,
+) -> torch.Tensor:
+    """Return each band's response-weighted spectral coordinate."""
+    if (
+        spectral_coordinate.ndim != 1
+        or band_response.ndim != 2
+        or band_response.shape[1] != spectral_coordinate.shape[0]
+        or spectral_coordinate.shape[0] < 2
+        or not torch.isfinite(spectral_coordinate).all()
+        or not torch.all(spectral_coordinate[1:] > spectral_coordinate[:-1])
+        or not torch.isfinite(band_response).all()
+        or torch.any(band_response < 0)
+    ):
+        raise ValueError(
+            "strictly increasing spectral coordinates and non-negative band responses are required"
+        )
+    normalization = torch.trapezoid(
+        band_response,
+        spectral_coordinate,
+        dim=-1,
+    )
+    if not torch.isfinite(normalization).all() or torch.any(normalization <= 0):
+        raise ValueError("every band response must have positive finite integral")
+    effective_coordinate = torch.trapezoid(
+        band_response * spectral_coordinate,
+        spectral_coordinate,
+        dim=-1,
+    ) / normalization
+    if effective_coordinate.numel() > 1 and not torch.all(
+        effective_coordinate[1:] > effective_coordinate[:-1]
+    ):
+        raise ValueError("effective band coordinates must be strictly increasing")
+    return effective_coordinate
+
+
 def _legendre_basis(
-    bands: int,
+    spectral_coordinate: torch.Tensor,
     basis_count: int,
     *,
     device: torch.device,
     dtype: torch.dtype,
 ) -> torch.Tensor:
-    """Return a Legendre basis of shape ``(bands, basis_count)`` over normalized band wavelength.
+    """Return a Legendre basis over normalized physical spectral coordinates.
 
-    Band wavelength is mapped to ``[-1, 1]``. A low-rank basis (``basis_count < bands``)
-    is the cross-band spectral compression that rejects per-band spectral noise
-    while preserving shared continuum signal (lever A).
+    The coordinate is affinely mapped to ``[-1, 1]``. A low-rank basis is the
+    cross-band spectral compression that rejects per-band spectral noise while
+    preserving shared continuum signal (lever A).
     """
-    if bands < 1 or basis_count < 1:
-        raise ValueError("bands and basis_count must be positive")
-    if basis_count > bands and bands > 1:
-        basis_count = bands
+    coordinate = torch.as_tensor(
+        spectral_coordinate,
+        device=device,
+        dtype=dtype,
+    )
+    if coordinate.ndim != 1 or coordinate.numel() < 1 or basis_count < 1:
+        raise ValueError("spectral_coordinate must be non-empty and basis_count positive")
+    if not torch.isfinite(coordinate).all():
+        raise ValueError("spectral_coordinate must be finite")
+    bands = coordinate.shape[0]
+    basis_count = min(basis_count, bands)
     if bands == 1:
-        lam = torch.zeros((), device=device, dtype=dtype)
+        normalized = torch.zeros_like(coordinate)
     else:
-        lam = torch.linspace(-1.0, 1.0, steps=bands, device=device, dtype=dtype)
-    basis: list[torch.Tensor] = [torch.ones_like(lam), lam]
+        if not torch.all(coordinate[1:] > coordinate[:-1]):
+            raise ValueError("spectral_coordinate must be strictly increasing")
+        lower = coordinate.min()
+        upper = coordinate.max()
+        normalized = 2.0 * (coordinate - lower) / (upper - lower) - 1.0
+    basis: list[torch.Tensor] = [torch.ones_like(normalized), normalized]
     while len(basis) < basis_count:
         degree = len(basis)
         previous = basis[degree - 1]
         before = basis[degree - 2]
         next_term = (
-            (2.0 * degree - 1.0) * lam * previous - (degree - 1.0) * before
+            (2.0 * degree - 1.0) * normalized * previous
+            - (degree - 1.0) * before
         ) / degree
         basis.append(next_term)
     return torch.stack(basis[:basis_count], dim=1)
@@ -2180,6 +2233,7 @@ def _joint_foam_spectral_product(
     operator: Any,
     per_band_cells: torch.Tensor,
     *,
+    spectral_coordinate: torch.Tensor,
     basis_count: int,
     height: int,
     width: int,
@@ -2195,8 +2249,14 @@ def _joint_foam_spectral_product(
     preserving continuum signal shared across bands. Returns the rendered product
     and the effective basis count used.
     """
-    bands, _ = per_band_cells.shape
-    basis = _legendre_basis(bands, basis_count, device=device, dtype=dtype)
+    basis = _legendre_basis(
+        spectral_coordinate,
+        basis_count,
+        device=device,
+        dtype=dtype,
+    )
+    if basis.shape[0] != per_band_cells.shape[0]:
+        raise ValueError("spectral coordinates must match per-band Foam cells")
     spectral_coefficients = solve_spectral_cell_coefficients(
         basis,
         per_band_cells,
@@ -2443,9 +2503,14 @@ def _classical_smoke_artifact(
             width=fw,
             pixel_area=fpixel_area,
         )
+        foam_spectral_coordinate = _band_response_coordinate(
+            catalog.spectral_coordinate,
+            catalog.band_response,
+        )
         joint_product, joint_basis = _joint_foam_spectral_product(
             operator,
             cells,
+            spectral_coordinate=foam_spectral_coordinate,
             basis_count=2,
             height=fh,
             width=fw,
@@ -2456,6 +2521,7 @@ def _classical_smoke_artifact(
         joint_null_product, _ = _joint_foam_spectral_product(
             null_operator,
             null_cells,
+            spectral_coordinate=foam_spectral_coordinate,
             basis_count=2,
             height=fh,
             width=fw,
@@ -2501,6 +2567,7 @@ def _classical_smoke_artifact(
         )
         joint_row["representation"] = "foam_joint_spectral_surface_brightness"
         joint_row["basis_count"] = joint_basis
+        joint_row["spectral_coordinate"] = foam_spectral_coordinate.tolist()
         joint_row["depth_claim"] = False
         rows.append(joint_row)
     target_response_gate = _target_response_gate(rows, baseline_method="chi2_coadd")

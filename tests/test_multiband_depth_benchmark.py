@@ -16,6 +16,7 @@ if str(BENCHMARKS) not in sys.path:
     sys.path.insert(0, str(BENCHMARKS))
 
 from bench_multiband_depth import (  # noqa: E402
+    _band_response_coordinate,
     _classical_smoke_artifact,
     _foam_grid_side_for_size,
     _gate0_artifact,
@@ -928,7 +929,8 @@ def test_joint_foam_spectral_basis_preserves_continuum_but_rejects_perturbation(
     device = torch.device("cpu")
     dtype = torch.float64
     bands, cells = 5, 8
-    basis = _legendre_basis(bands, 2, device=device, dtype=dtype)
+    coordinate = torch.linspace(0.9, 4.4, bands, device=device, dtype=dtype)
+    basis = _legendre_basis(coordinate, 2, device=device, dtype=dtype)
     assert basis.shape == (bands, 2)
     assert torch.allclose(basis[:, 0], torch.ones(bands, dtype=dtype))
     lam = torch.linspace(-1.0, 1.0, steps=bands, device=device, dtype=dtype)
@@ -956,6 +958,47 @@ def test_joint_foam_spectral_basis_preserves_continuum_but_rejects_perturbation(
     )
     assert residual < 1.0
     assert residual > 0.0
+
+
+def test_foam_spectral_basis_uses_physical_band_coordinates() -> None:
+    coordinate = torch.tensor(
+        [0.9, 1.5, 2.0, 2.77, 3.56, 4.44], dtype=torch.float64
+    )
+    basis = _legendre_basis(coordinate, 3, device=torch.device("cpu"), dtype=torch.float64)
+    transformed = _legendre_basis(
+        7.0 * coordinate + 13.0,
+        3,
+        device=torch.device("cpu"),
+        dtype=torch.float64,
+    )
+    torch.testing.assert_close(basis, transformed)
+    assert basis[1, 1] != pytest.approx(-0.6)
+    with pytest.raises(ValueError, match="strictly increasing"):
+        _legendre_basis(
+            torch.ones(3),
+            2,
+            device=torch.device("cpu"),
+            dtype=torch.float64,
+        )
+    assert _legendre_basis(
+        torch.tensor([2.0]),
+        3,
+        device=torch.device("cpu"),
+        dtype=torch.float64,
+    ).shape == (1, 1)
+
+
+def test_band_response_coordinate_recovers_delta_like_bands() -> None:
+    coordinate = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64)
+    response = torch.eye(3, dtype=torch.float64)
+    torch.testing.assert_close(
+        _band_response_coordinate(coordinate, response),
+        coordinate,
+    )
+    with pytest.raises(ValueError, match="strictly increasing"):
+        _band_response_coordinate(coordinate.flip(0), response)
+    with pytest.raises(ValueError, match="effective band coordinates"):
+        _band_response_coordinate(coordinate, response.flip(0))
 
 
 def test_target_response_gate_flags_attenuation_and_passes_preserved() -> None:
