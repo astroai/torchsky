@@ -1,5 +1,25 @@
 # Active Torchsky Execution Checklist
 
+## Local Foam/INR physical-fit performance (CANFAR-independent)
+
+- [x] Preserve spatial sky, instrument, and detector background components in
+  random and shared-sky training crops.
+- [x] Make PSF-aware patch fitting exact on the requested loss core: render the
+  finite Gaussian or kernel halo, clip only at real detector boundaries, and
+  exclude halo pixels from both value and gradient-residual losses.
+- [x] Add a reproducible full-observation versus PSF-halo patch control to
+  `bench_map_field_fit.py`. On the local CPU, the 256-square, three-exposure
+  `tan_field_fit_psf_mismatch`/`sine_implicit` case at 12 steps and three runs
+  improved from 8.224 s to 0.962 s median fit time with a 32-square loss core
+  (8.55x). This is a throughput result, not a depth or accuracy claim.
+- [ ] Avoid allocating and caching full WCS coordinate grids when diagnostic
+  rendering is explicitly tiled; verify image and parameter-gradient parity.
+- [ ] Correct predictive-variance propagation through PSF convolution and test
+  heteroscedastic INR rendering with finite-kernel and Gaussian PSFs.
+- [ ] Run matched-compute and matched-accuracy Foam/INR patch-size sweeps on
+  CUDA after CANFAR service recovery; report peak accelerator memory from the
+  existing fit performance profile.
+
 ## Current Focus Override — ADASS UPdec Depth Sprint
 
 From 2026-07-28 through 2026-08-04, pause FOSSIL/component separation and broad

@@ -10,6 +10,7 @@ from torch import Tensor
 
 from ...wcs import WCS
 from ..exposure_pose import ExposurePose
+from ..operators.psf import psf_support_radius
 from .types import FieldObservation, FieldObservationSampling
 
 
@@ -201,10 +202,64 @@ def crop_field_observation(
         transmission_throughput=observation.transmission_throughput,
         psf_sigma_pix=observation.psf_sigma_pix,
         psf_spec=observation.psf_spec,
+        sky_background=(
+            observation.sky_background[y_slice, x_slice]
+            if observation.sky_background is not None
+            else None
+        ),
+        instrument_background=(
+            observation.instrument_background[y_slice, x_slice]
+            if observation.instrument_background is not None
+            else None
+        ),
+        detector_background=(
+            observation.detector_background[y_slice, x_slice]
+            if observation.detector_background is not None
+            else None
+        ),
         background_offset=observation.background_offset,
         band_name=observation.band_name,
         spectral_quantity=observation.spectral_quantity,
     )
+
+
+def crop_field_observation_for_training(
+    observation: FieldObservation,
+    *,
+    x0: int,
+    y0: int,
+    width: int,
+    height: int,
+) -> FieldObservation:
+    """Crop a loss region plus the exact finite PSF support around it."""
+    image_height, image_width = map(int, observation.image.shape[-2:])
+    core_x0 = max(int(x0), 0)
+    core_y0 = max(int(y0), 0)
+    core_x1 = min(core_x0 + int(width), image_width)
+    core_y1 = min(core_y0 + int(height), image_height)
+    if core_x1 <= core_x0 or core_y1 <= core_y0:
+        raise ValueError("training crop must overlap the observation")
+    halo_y, halo_x = psf_support_radius(observation.psf_spec)
+    crop_x0 = max(core_x0 - halo_x, 0)
+    crop_y0 = max(core_y0 - halo_y, 0)
+    crop_x1 = min(core_x1 + halo_x, image_width)
+    crop_y1 = min(core_y1 + halo_y, image_height)
+    cropped = crop_field_observation(
+        observation,
+        x0=crop_x0,
+        y0=crop_y0,
+        width=crop_x1 - crop_x0,
+        height=crop_y1 - crop_y0,
+    )
+    core = torch.zeros_like(cropped.image, dtype=torch.bool)
+    core[
+        core_y0 - crop_y0 : core_y1 - crop_y0,
+        core_x0 - crop_x0 : core_x1 - crop_x0,
+    ] = True
+    if cropped.mask is not None:
+        core &= torch.isfinite(cropped.mask) & (cropped.mask > 0)
+    cropped.mask = core
+    return cropped
 
 
 def crop_field_observation_to_shared_sky_patch(
@@ -223,7 +278,7 @@ def crop_field_observation_to_shared_sky_patch(
     x0 = max(min(int(x0), x1 - 1), 0)
     y0 = max(min(int(y0), y1 - 1), 0)
     if observation is reference_observation:
-        return crop_field_observation(
+        return crop_field_observation_for_training(
             observation,
             x0=x0,
             y0=y0,
@@ -257,7 +312,7 @@ def crop_field_observation_to_shared_sky_patch(
     crop_y1 = min(int(torch.ceil(py.max()).item()) + 1, height)
     if crop_x1 <= crop_x0 or crop_y1 <= crop_y0:
         return None
-    cropped = crop_field_observation(
+    cropped = crop_field_observation_for_training(
         observation,
         x0=crop_x0,
         y0=crop_y0,
@@ -397,6 +452,7 @@ __all__ = [
     "coordinate_grid",
     "copy_header_with_crop",
     "crop_field_observation",
+    "crop_field_observation_for_training",
     "crop_field_observation_to_shared_sky_patch",
     "header_shape",
     "observation_band_key",

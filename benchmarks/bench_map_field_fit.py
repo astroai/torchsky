@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import resource
 import sys
 import tempfile
 import time
@@ -3226,6 +3227,7 @@ def evaluate_case(
     steps: int,
     runs: int,
     use_spectral_budget: bool = False,
+    training_patch_size_override: int = -1,
 ) -> dict[str, Any]:
     case_spec = _build_case_specs(size)[case]
     spectral_budget_extras: dict[str, Any] = {}
@@ -3291,6 +3293,8 @@ def evaluate_case(
         product_pred = None
         observation_residuals = []
         model_kwargs: dict[str, Any] = {}
+        training_patch_size: int | None = None
+        training_performance: dict[str, Any] = {}
         if model_kind.startswith("coadd_"):
             kernel = model_kind.split("_", 1)[1]
             coadd_times = []
@@ -3322,6 +3326,13 @@ def evaluate_case(
                 fit_kwargs["num_spectral_samples"] = spectral_budget_extras[
                     "suggested_num_spectral_samples"
                 ]
+            if training_patch_size_override >= 0:
+                fit_kwargs["training_patch_size"] = (
+                    None
+                    if training_patch_size_override == 0
+                    else int(training_patch_size_override)
+                )
+            training_patch_size = fit_kwargs.get("training_patch_size")
             num_spectral_render = int(fit_kwargs["num_spectral_samples"])
             model_kwargs = _field_model_kwargs_for_case(
                 model_kind,
@@ -3366,6 +3377,10 @@ def evaluate_case(
                 )
                 fit_times.append((time.perf_counter() - start) * 1000.0)
             assert result is not None
+            if result.diagnostics is not None:
+                training_performance = dict(
+                    result.diagnostics.get("performance_profile", {})
+                )
             product_pred = _render_field_product_chunked(
                 result.model,
                 product,
@@ -3440,6 +3455,9 @@ def evaluate_case(
     )
     fit_times_sorted = sorted(float(value) for value in fit_times)
     fit_time_ms = fit_times_sorted[len(fit_times_sorted) // 2]
+    process_peak_rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    if sys.platform != "darwin":
+        process_peak_rss *= 1024
     return {
         "library": "torchsky",
         "type": "field_fit" if result is not None else "cube_baseline",
@@ -3456,7 +3474,18 @@ def evaluate_case(
         "num_observations": len(observations),
         "num_bands": int(case_spec.spectral_axis.values.numel()),
         "steps": int(steps),
+        "training_patch_size": training_patch_size,
         "fit_time_ms": fit_time_ms,
+        "training_step_duration_mean_ms": training_performance.get(
+            "step_duration_mean_ms"
+        ),
+        "training_throughput_pixels_per_sec": training_performance.get(
+            "throughput_pixels_per_sec"
+        ),
+        "training_max_accelerator_memory_bytes": training_performance.get(
+            "max_memory_allocated_bytes"
+        ),
+        "process_peak_rss_bytes": process_peak_rss,
         "mpix_s": float(cube_pred.numel()) / max(fit_time_ms * 1.0e-3, 1.0e-12) / 1.0e6,
         "initial_loss": initial_loss,
         "final_loss": final_loss,
@@ -3585,6 +3614,16 @@ def main() -> None:
     parser.add_argument("--markdown-out", type=str, default="")
     parser.add_argument("--baseline-json", type=str, default="")
     parser.add_argument(
+        "--training-patch-size",
+        type=int,
+        default=-1,
+        help=(
+            "Override the model/case training core size for profiling: -1 keeps "
+            "the benchmark default, 0 fits full observations, and a positive "
+            "value uses PSF-support-aware patches."
+        ),
+    )
+    parser.add_argument(
         "--use-spectral-budget",
         action="store_true",
         help=(
@@ -3612,6 +3651,7 @@ def main() -> None:
                 steps=case_steps,
                 runs=args.runs,
                 use_spectral_budget=args.use_spectral_budget,
+                training_patch_size_override=args.training_patch_size,
             )
             for model_kind in models
         ]

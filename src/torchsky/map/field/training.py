@@ -50,7 +50,7 @@ from .losses import _field_gradient_residual_weighted_loss, _field_residual_loss
 from .noise import _synthetic_noise_target
 from .observation_ops import (
     avg_pool_map as _avg_pool_map,
-    crop_field_observation as _crop_field_observation,
+    crop_field_observation_for_training as _crop_field_observation_for_training,
     crop_field_observation_to_shared_sky_patch as _crop_field_observation_to_shared_sky_patch,
     observation_support_mask as _observation_support_mask,
     observation_weight_sum_scalar as _observation_weight_sum_scalar,
@@ -1073,7 +1073,7 @@ def fit_field_model(
                     )
                     selected_pairs.append(
                         (
-                            _crop_field_observation(
+                            _crop_field_observation_for_training(
                                 base_observation,
                                 x0=x0,
                                 y0=y0,

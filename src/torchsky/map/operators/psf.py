@@ -23,10 +23,33 @@ class LearnedPSFOp(PSFOp):
         super().__init__(name=name, learned=True)
 
 
+def gaussian_support_radius(sigma_pix: float) -> int:
+    """Return the exact finite radius used by :func:`gaussian_blur`."""
+    return 0 if sigma_pix <= 0.0 else max(1, int(round(3.0 * float(sigma_pix))))
+
+
+def psf_support_radius(psf_spec: object | None) -> tuple[int, int]:
+    """Return the vertical and horizontal pixel halo required by a PSF."""
+    if psf_spec is None:
+        return 0, 0
+    mode = getattr(psf_spec, "mode", "none")
+    if mode == "none":
+        return 0, 0
+    if mode == "gaussian_sigma_pix":
+        radius = gaussian_support_radius(float(getattr(psf_spec, "sigma_pix", 0.0)))
+        return radius, radius
+    if mode == "kernel2d":
+        kernel = getattr(psf_spec, "kernel2d", None)
+        if kernel is None or kernel.ndim != 2:
+            raise ValueError("kernel2d PSF mode requires a 2D kernel")
+        return int(kernel.shape[0]) // 2, int(kernel.shape[1]) // 2
+    raise ValueError(f"unsupported PSF mode {mode!r}")
+
+
 def gaussian_kernel1d(sigma_pix: float, *, device: torch.device, dtype: torch.dtype = torch.float32) -> Tensor:
     if sigma_pix <= 0.0:
         return torch.ones((1,), dtype=dtype, device=device)
-    radius = max(1, int(round(3.0 * float(sigma_pix))))
+    radius = gaussian_support_radius(sigma_pix)
     x = torch.arange(-radius, radius + 1, device=device, dtype=dtype)
     kernel = torch.exp(-0.5 * torch.square(x / float(sigma_pix)))
     return kernel / torch.clamp(kernel.sum(), min=1e-8)

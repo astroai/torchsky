@@ -14,6 +14,7 @@ from torchsky.map import (
     FieldComponentDecomposition,
     FieldObservation,
     ForwardContext,
+    PSFSpec,
     SineImplicitField,
     estimate_field_domain,
     field_component_anchor_loss,
@@ -31,6 +32,10 @@ from torchsky.map.field import _noise_pretrain_field_model
 from torchsky.map.field.bandpass import bandpass_quadrature
 from torchsky.map.field.core import _BaseFieldModel
 from torchsky.map.field.hashgrid import HashGridEncoder
+from torchsky.map.field.observation_ops import (
+    crop_field_observation,
+    crop_field_observation_for_training,
+)
 from torchsky.map.field import rendering as field_rendering
 
 
@@ -235,6 +240,118 @@ def test_render_field_observation_accepts_explicit_operator_bundle() -> None:
 
     torch.testing.assert_close(implicit, torch.full((4, 4), 5.0))
     torch.testing.assert_close(explicit, torch.full((4, 4), 2.0))
+
+
+def test_observation_crop_preserves_physical_background_components() -> None:
+    values = torch.arange(56, dtype=torch.float32).reshape(7, 8)
+    observation = FieldObservation(
+        image=values,
+        header=_tan_header(8, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
+        wavelength=5600.0,
+        sky_background=values + 100.0,
+        instrument_background=values + 200.0,
+        detector_background=values + 300.0,
+    )
+
+    cropped = crop_field_observation(
+        observation,
+        x0=2,
+        y0=1,
+        width=4,
+        height=3,
+    )
+
+    torch.testing.assert_close(cropped.image, values[1:4, 2:6])
+    torch.testing.assert_close(cropped.sky_background, values[1:4, 2:6] + 100.0)
+    torch.testing.assert_close(
+        cropped.instrument_background, values[1:4, 2:6] + 200.0
+    )
+    torch.testing.assert_close(
+        cropped.detector_background, values[1:4, 2:6] + 300.0
+    )
+
+
+def test_psf_halo_training_crop_matches_full_render_and_gradient() -> None:
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=1000.0,
+    )
+    model = _ConstantField(domain, 2.0)
+    observation = FieldObservation(
+        image=torch.zeros((20, 20), dtype=torch.float32),
+        header=_tan_header(20, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
+        wavelength=5600.0,
+        psf_sigma_pix=1.2,
+    )
+    x0, y0, width, height = 6, 7, 5, 4
+    naive = crop_field_observation(
+        observation,
+        x0=x0,
+        y0=y0,
+        width=width,
+        height=height,
+    )
+    halo = crop_field_observation_for_training(
+        observation,
+        x0=x0,
+        y0=y0,
+        width=width,
+        height=height,
+    )
+
+    full = render_field_observation(model, observation, num_spectral_samples=1)
+    naive_render = render_field_observation(model, naive, num_spectral_samples=1)
+    halo_render = render_field_observation(model, halo, num_spectral_samples=1)
+    expected = full[y0 : y0 + height, x0 : x0 + width]
+    assert halo.mask is not None
+    assert int(torch.count_nonzero(halo.mask)) == width * height
+    assert float(torch.max(torch.abs(naive_render - expected)).detach()) > 0.1
+    torch.testing.assert_close(halo_render[halo.mask], expected.reshape(-1))
+
+    model.zero_grad(set_to_none=True)
+    expected.sum().backward()
+    assert model.value.grad is not None
+    full_gradient = model.value.grad.detach().clone()
+    model.zero_grad(set_to_none=True)
+    render_field_observation(model, halo, num_spectral_samples=1)[halo.mask].sum().backward()
+    torch.testing.assert_close(model.value.grad, full_gradient)
+
+    edge_halo = crop_field_observation_for_training(
+        observation,
+        x0=0,
+        y0=0,
+        width=width,
+        height=height,
+    )
+    edge_render = render_field_observation(
+        model, edge_halo, num_spectral_samples=1
+    )
+    assert edge_halo.mask is not None
+    torch.testing.assert_close(
+        edge_render[edge_halo.mask], full[:height, :width].reshape(-1)
+    )
+
+
+def test_kernel_psf_training_crop_uses_kernel_support() -> None:
+    observation = FieldObservation(
+        image=torch.zeros((20, 20), dtype=torch.float32),
+        header=_tan_header(20, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
+        wavelength=5600.0,
+        psf_spec=PSFSpec.kernel(torch.ones((5, 7), dtype=torch.float32)),
+    )
+    cropped = crop_field_observation_for_training(
+        observation,
+        x0=8,
+        y0=8,
+        width=4,
+        height=3,
+    )
+    assert cropped.image.shape == (7, 10)
+    assert cropped.mask is not None
+    assert int(torch.count_nonzero(cropped.mask)) == 12
 
 
 def test_field_spatial_quadrature_preserves_constant_and_tiles() -> None:
