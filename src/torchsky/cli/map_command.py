@@ -35,17 +35,22 @@ from ..map.product import (
 )
 
 from ..filter_profiles import field_observation_spectral_kwargs, resolve_inr_bandpass
+from ..instrument import NIRCAM_UPDEC_BANDS, nircam_imaging_band
 
-# Minimal bandpass hints for INR when FITS headers lack spectral metadata (Angstrom).
-_INR_BAND_TABLE: dict[str, tuple[float, float, float, float]] = {
-    # (spectral_min, spectral_max, transmission_center, transmission_sigma)
-    "F090W": (8000.0, 10000.0, 9000.0, 500.0),
-    "F150W": (13000.0, 17000.0, 15000.0, 700.0),
-    "F200W": (17000.0, 23000.0, 20000.0, 900.0),
-    "F277W": (24000.0, 32000.0, 27700.0, 1200.0),
-    "F356W": (31000.0, 40000.0, 35600.0, 1400.0),
-    "F444W": (38000.0, 50000.0, 44400.0, 1800.0),
-}
+# Offline fallback when FITS headers lack spectral metadata (Angstrom).
+_INR_BAND_TABLE: dict[str, tuple[float, float, float, float]] = {}
+for _band_name in NIRCAM_UPDEC_BANDS:
+    _band_metadata = nircam_imaging_band(_band_name)
+    _fwhm = (
+        _band_metadata.half_power_max_angstrom
+        - _band_metadata.half_power_min_angstrom
+    )
+    _INR_BAND_TABLE[_band_name] = (
+        _band_metadata.half_power_min_angstrom,
+        _band_metadata.half_power_max_angstrom,
+        _band_metadata.pivot_wavelength_angstrom,
+        _fwhm / (2.0 * math.sqrt(2.0 * math.log(2.0))),
+    )
 
 
 def _write_map_plan(path: Path, plan: dict) -> None:

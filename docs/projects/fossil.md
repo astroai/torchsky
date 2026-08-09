@@ -69,6 +69,11 @@ must not become a spacecraft packet decoder or a closed foreground ontology.
   spectral, and MJD composition exercised by differentiable PSF/background
   operators. This is a first `NuisanceLearner` building block, not a foreground
   separation claim.
+- [x] Adaptive axes can now derive conservative identifiability bounds from
+  actual irregular calibration sampling and initialize scales from weighted
+  evidence-profile fits with band-ablation BIC. The same mechanism applies to
+  detector, frequency, time, and scan coordinates, but it is not a substitute
+  for protected subspaces, cross-fitting, or sphere/delay-native axes.
 - [x] `SpectralAxis` exists in `torchsky.spectral`; extend it rather than creating
   a parallel axis type.
 - [ ] Existing operator declarations do not yet provide one typed

@@ -76,6 +76,101 @@ def test_adaptive_axis_features_are_unit_invariant_and_bounded() -> None:
     assert bool(torch.all(axis.length_scales >= 1.0))
 
 
+def test_adaptive_axis_derives_bounds_from_calibration_sampling() -> None:
+    coordinates = torch.arange(11.0)
+    axis = AdaptiveAxisFeatures.from_samples(coordinates, num_bands=3)
+    conservative = AdaptiveAxisFeatures.from_samples(
+        coordinates,
+        sample_spacing=2.0,
+        num_bands=3,
+    )
+
+    assert axis.center == 5.0
+    assert axis.reference_scale == 5.0
+    assert axis.length_bounds == (2.0, 20.0)
+    assert conservative.length_bounds == (4.0, 20.0)
+
+
+def test_adaptive_axis_evidence_initializer_recovers_scale_and_is_unit_invariant() -> None:
+    coordinates = torch.linspace(-12.0, 12.0, 257, dtype=torch.float64)
+    evidence = 0.4 + 0.03 * coordinates + torch.sin(
+        (2.0 * torch.pi / 10.0) * coordinates
+    )
+    axis = AdaptiveAxisFeatures(
+        center=0.0,
+        reference_scale=12.0,
+        length_bounds=(4.0, 16.0),
+        num_bands=1,
+    )
+    rescaled = AdaptiveAxisFeatures(
+        center=0.0,
+        reference_scale=120.0,
+        length_bounds=(40.0, 160.0),
+        num_bands=1,
+    )
+
+    diagnostics = axis.initialize_from_evidence(coordinates, evidence, shift_steps=65)
+    rescaled_diagnostics = rescaled.initialize_from_evidence(
+        10.0 * coordinates,
+        7.0 * evidence,
+        shift_steps=65,
+    )
+
+    torch.testing.assert_close(
+        axis.length_scales.detach(), torch.tensor([10.0]), rtol=3e-2, atol=3e-2
+    )
+    torch.testing.assert_close(
+        rescaled.length_scales.detach(),
+        10.0 * axis.length_scales.detach(),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    torch.testing.assert_close(axis.gates.detach(), rescaled.gates.detach())
+    assert diagnostics["relative_residual"] < 1.0e-3
+    assert diagnostics["initial_gates"][0] > 0.99
+    assert rescaled_diagnostics["initial_gates"][0] > 0.99
+
+
+def test_adaptive_axis_evidence_initializer_suppresses_unsupported_bands() -> None:
+    coordinates = torch.linspace(-64.0, 64.0, 513, dtype=torch.float64)
+    axis = AdaptiveAxisFeatures(
+        center=0.0,
+        reference_scale=64.0,
+        length_bounds=(4.0, 64.0),
+        num_bands=3,
+    )
+    target_length = float(axis.length_scales[1].detach())
+    evidence = torch.sin((2.0 * torch.pi / target_length) * coordinates)
+
+    axis.initialize_from_evidence(coordinates, evidence)
+
+    assert axis.gates[1] > 0.99
+    assert axis.gates[0] < 0.1
+    assert axis.gates[2] < 0.1
+
+
+def test_adaptive_axis_sampling_and_evidence_fail_closed() -> None:
+    try:
+        AdaptiveAxisFeatures.from_samples(torch.tensor([0.0, 1.0]))
+    except ValueError as exc:
+        assert "three distinct" in str(exc)
+    else:
+        raise AssertionError("sparse sampling should fail")
+
+    axis = AdaptiveAxisFeatures(
+        center=0.0,
+        reference_scale=1.0,
+        length_bounds=(0.5, 2.0),
+        num_bands=2,
+    )
+    try:
+        axis.initialize_from_evidence(torch.arange(5.0), torch.arange(5.0))
+    except ValueError as exc:
+        assert "at least 7 valid samples" in str(exc)
+    else:
+        raise AssertionError("underdetermined evidence should fail")
+
+
 def test_adaptive_axis_state_dict_preserves_physical_metadata() -> None:
     source = AdaptiveAxisFeatures(
         center=10.0,
@@ -146,6 +241,41 @@ def test_adaptive_conditioning_regularization_reaches_all_axes() -> None:
     ):
         assert axis.gate_logits.grad is not None
         assert axis.scale_shift_raw.grad is not None
+
+
+def test_adaptive_conditioning_derives_each_axis_from_samples() -> None:
+    encoder = AdaptiveSpatioSpectralTemporalEncoder.from_samples(
+        spatial_x=torch.arange(11.0),
+        spatial_y=torch.arange(0.0, 22.0, 2.0),
+        wavelength=torch.tensor([0.9, 1.5, 2.0, 2.8, 3.6, 4.4]),
+        time_mjd=torch.tensor([60000.0, 60000.5, 60001.0, 60001.5]),
+        spatial_bands=3,
+        spectral_bands=2,
+        temporal_bands=1,
+    )
+
+    assert encoder.x_axis.length_bounds == (2.0, 20.0)
+    assert encoder.y_axis.length_bounds == (4.0, 40.0)
+    assert encoder.spectral_axis.length_bounds[0] > 1.5
+    assert encoder.temporal_axis.length_bounds == (1.0, 3.0)
+
+
+def test_adaptive_conditioning_preserves_small_offsets_from_large_mjd() -> None:
+    encoder = _adaptive_conditioning_encoder()
+    encoded = encoder(
+        torch.tensor(16.0),
+        torch.tensor(16.0),
+        7000.0,
+        60000.001,
+    )
+
+    temporal_start = encoder.output_dim - encoder.temporal_axis.output_dim
+    torch.testing.assert_close(
+        encoded[temporal_start],
+        torch.tensor(0.001 / 30.0),
+        rtol=1.0e-5,
+        atol=1.0e-9,
+    )
 
 
 def test_multiscale_conditioning_axes_have_independent_scales():

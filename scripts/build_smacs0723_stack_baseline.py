@@ -24,17 +24,17 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from torchsky.instrument import NIRCAM_UPDEC_BANDS, nircam_imaging_band  # noqa: E402
 from torchsky.map import ImageObservation, coadd_image_plane_cube  # noqa: E402
 
-FILTER_BANDPASS_ANGSTROM: dict[str, tuple[float, float, float]] = {
-    # Approximate NIRCam wide-filter support for tutorial metadata only.
-    "F090W": (9000.0, 8000.0, 10000.0),
-    "F150W": (15000.0, 13000.0, 17000.0),
-    "F200W": (20000.0, 17000.0, 23000.0),
-    "F277W": (27700.0, 24000.0, 32000.0),
-    "F356W": (35600.0, 31000.0, 40000.0),
-    "F444W": (44400.0, 39000.0, 50000.0),
-}
+FILTER_BANDPASS_ANGSTROM: dict[str, tuple[float, float, float]] = {}
+for _band in NIRCAM_UPDEC_BANDS:
+    _metadata = nircam_imaging_band(_band)
+    FILTER_BANDPASS_ANGSTROM[_band] = (
+        _metadata.pivot_wavelength_angstrom,
+        _metadata.half_power_min_angstrom,
+        _metadata.half_power_max_angstrom,
+    )
 
 
 def _resolve_manifest_path(path_text: str, *, manifest_dir: Path) -> Path:
@@ -107,7 +107,7 @@ def _observations_from_manifest(manifest_path: Path) -> list[ImageObservation]:
                 spectral_min=spectral_min,
                 spectral_max=spectral_max,
                 transmission_center=wavelength,
-                transmission_sigma=0.5 * (spectral_max - spectral_min) / 2.355,
+                transmission_sigma=(spectral_max - spectral_min) / 2.354820045,
                 band_name=band,
             )
         )
@@ -162,7 +162,7 @@ def main() -> int:
     parser.add_argument(
         "--list-bands",
         action="store_true",
-        help="List bands with approximate wavelength metadata and exit.",
+        help="List bands with STScI version-7 wavelength metadata and exit.",
     )
     args = parser.parse_args()
 

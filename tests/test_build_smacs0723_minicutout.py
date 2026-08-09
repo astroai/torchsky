@@ -133,7 +133,7 @@ def test_stack_baseline_observations_from_manifest(tmp_path: Path) -> None:
     observations = module._observations_from_manifest(manifest)
     assert len(observations) == 1
     assert observations[0].band_name == "F090W"
-    assert observations[0].wavelength == 9000.0
+    assert observations[0].wavelength == 9020.0
 
 
 def test_stack_baseline_missing_manifest_error(tmp_path: Path) -> None:
@@ -211,7 +211,7 @@ def test_minicutout_and_stack_baseline_end_to_end(
     assert baseline_module.main() == 0
     cube = SpectralReader.read_data_cube(str(output), hdu=0)
     assert cube.data.shape == (2, 16, 16)
-    assert cube.spectral_axis.values.tolist() == [9000.0, 15000.0]
+    assert cube.spectral_axis.values.tolist() == [9020.0, 15010.0]
 
     drizzle_output = tmp_path / "baseline_drizzle.fits"
     monkeypatch.setattr(

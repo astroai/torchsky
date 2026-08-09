@@ -44,47 +44,29 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import torchsky  # noqa: E402
+from torchsky.instrument import NIRCAM_UPDEC_BANDS, nircam_imaging_band  # noqa: E402
 from torchsky.map import ImageObservation, coadd_image_plane  # noqa: E402
 
 
-SMACS0723_BAND_SPECS: dict[str, dict[str, Any]] = {
-    "F090W": {
-        "reference_filename": "F090Wb_UPDC-v2_iter0_i2d.fits.fz",
-        "wavelength_angstrom": 9000.0,
-        "spectral_min_angstrom": 8000.0,
-        "spectral_max_angstrom": 10000.0,
-    },
-    "F150W": {
-        "reference_filename": "F150Wb_UPDC-v2_iter0_i2d.fits.fz",
-        "wavelength_angstrom": 15000.0,
-        "spectral_min_angstrom": 13000.0,
-        "spectral_max_angstrom": 17000.0,
-    },
-    "F200W": {
-        "reference_filename": "F200Wb_UPDC-v2_iter0_i2d.fits.fz",
-        "wavelength_angstrom": 20000.0,
-        "spectral_min_angstrom": 17000.0,
-        "spectral_max_angstrom": 23000.0,
-    },
-    "F277W": {
-        "reference_filename": "F277Wb_UPDC-v2_iter0_i2d.fits.fz",
-        "wavelength_angstrom": 27700.0,
-        "spectral_min_angstrom": 24000.0,
-        "spectral_max_angstrom": 32000.0,
-    },
-    "F356W": {
-        "reference_filename": "F356Wb_UPDC-v2_iter0_i2d.fits.fz",
-        "wavelength_angstrom": 35600.0,
-        "spectral_min_angstrom": 31000.0,
-        "spectral_max_angstrom": 40000.0,
-    },
-    "F444W": {
-        "reference_filename": "F444Wb_UPDC-v2_iter0_i2d.fits.fz",
-        "wavelength_angstrom": 44400.0,
-        "spectral_min_angstrom": 38000.0,
-        "spectral_max_angstrom": 50000.0,
-    },
-}
+SMACS0723_BAND_SPECS: dict[str, dict[str, Any]] = {}
+for _band in NIRCAM_UPDEC_BANDS:
+    _metadata = nircam_imaging_band(_band)
+    _half_power_width = (
+        _metadata.half_power_max_angstrom - _metadata.half_power_min_angstrom
+    )
+    SMACS0723_BAND_SPECS[_band] = {
+        "reference_filename": f"{_band}b_UPDC-v2_iter0_i2d.fits.fz",
+        "wavelength_angstrom": _metadata.pivot_wavelength_angstrom,
+        "spectral_min_angstrom": _metadata.half_power_min_angstrom,
+        "spectral_max_angstrom": _metadata.half_power_max_angstrom,
+        "transmission_sigma_angstrom": _half_power_width / 2.354820045,
+        "detector_pixel_scale_arcsec": _metadata.detector_pixel_scale_arcsec,
+        "detector_nyquist_period_arcsec": (
+            _metadata.detector_nyquist_period_arcsec
+        ),
+        "simulated_psf_fwhm_arcsec": _metadata.simulated_psf_fwhm_arcsec,
+        "empirical_psf_fwhm_arcsec": _metadata.empirical_psf_fwhm_arcsec,
+    }
 
 
 def _filter_exposure_paths_by_patterns(
@@ -154,7 +136,7 @@ def _field_observation_kwargs_for_band(
         "spectral_min": float(spec["spectral_min_angstrom"]),
         "spectral_max": float(spec["spectral_max_angstrom"]),
         "transmission_center": float(spec["wavelength_angstrom"]),
-        "transmission_sigma": None,
+        "transmission_sigma": float(spec["transmission_sigma_angstrom"]),
         "band_name": str(band).upper(),
     }
 

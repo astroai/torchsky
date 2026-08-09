@@ -60,6 +60,16 @@ def test_sci_header_restores_compressed_image_dimensions(monkeypatch) -> None:
     assert header["NAXIS2"] == 9584
 
 
+def test_band_spec_uses_versioned_nircam_metadata() -> None:
+    spec = _band_spec("F277W")
+
+    assert spec["wavelength_angstrom"] == 27760.0
+    assert spec["spectral_min_angstrom"] == 24220.0
+    assert spec["spectral_max_angstrom"] == 31310.0
+    assert spec["detector_pixel_scale_arcsec"] == 0.063
+    assert spec["empirical_psf_fwhm_arcsec"] == 0.092
+
+
 def test_linearize_sip_header_drops_sip_terms() -> None:
     header = fits.Header()
     header["CTYPE1"] = "RA---TAN-SIP"
@@ -177,7 +187,7 @@ def test_band_helpers_resolve_reference_and_wavelength() -> None:
     spec = _band_spec("F277W")
     path = _reference_path_for_band("F277W")
 
-    assert spec["wavelength_angstrom"] == 27700.0
+    assert spec["wavelength_angstrom"] == 27760.0
     assert path.name == "F277Wb_UPDC-v2_iter0_i2d.fits.fz"
 
 

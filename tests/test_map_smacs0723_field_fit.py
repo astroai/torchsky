@@ -53,7 +53,7 @@ def test_field_observation_kwargs_for_band_can_disable_bandpass() -> None:
         "F277W", observation_mode="exact_wavelength"
     )
     assert kwargs["band_name"] == "F277W"
-    assert kwargs["wavelength"] == 27700.0
+    assert kwargs["wavelength"] == 27760.0
     assert kwargs["spectral_min"] is None
     assert kwargs["spectral_max"] is None
     assert kwargs["transmission_center"] is None

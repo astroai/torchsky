@@ -127,6 +127,8 @@ a much larger spatial scale, a much finer spectral scale, and hours. Do not
 share an encoder merely because both operators accept the same coordinates.
 
 ```python
+import torch
+
 from torchsky.map.operators import (
     AdaptiveSpatioSpectralTemporalEncoder,
     ConditionedBackgroundField,
@@ -135,34 +137,40 @@ from torchsky.map.operators import (
     LearnedPSFOp,
     ObservationOperatorBundle,
 )
+from torchsky.instrument import NIRCAM_UPDEC_BANDS, nircam_imaging_band
 
-psf_coordinates = AdaptiveSpatioSpectralTemporalEncoder(
-    spatial_center=(2048.0, 2048.0),
-    spatial_scale=(1024.0, 1024.0),
-    spatial_length_bounds=(64.0, 8192.0),
-    wavelength_center=2.0,
-    spectral_scale=0.5,
-    spectral_length_bounds=(0.05, 4.0),
-    time_center_mjd=60000.0,
-    temporal_scale_days=0.02,
-    temporal_length_bounds_days=(0.01, 10.0),
+nircam_bands = [nircam_imaging_band(name) for name in NIRCAM_UPDEC_BANDS]
+initial_fwhm_pix = float(
+    torch.tensor([band.empirical_psf_fwhm_pixels for band in nircam_bands]).median()
+)
+
+# Coordinates are the actual calibration-star/blank-sky sample locations,
+# filter quadrature wavelengths, and exposure mid-times—not domain endpoints.
+psf_coordinates = AdaptiveSpatioSpectralTemporalEncoder.from_samples(
+    spatial_x=psf_star_x_pix,
+    spatial_y=psf_star_y_pix,
+    wavelength=psf_wavelength_angstrom,
+    time_mjd=psf_time_mjd,
     spatial_bands=4,
     spectral_bands=4,
     temporal_bands=3,
 )
-background_coordinates = AdaptiveSpatioSpectralTemporalEncoder(
-    spatial_center=(2048.0, 2048.0),
-    spatial_scale=(4096.0, 4096.0),
-    spatial_length_bounds=(256.0, 16384.0),
-    wavelength_center=2.0,
-    spectral_scale=0.05,
-    spectral_length_bounds=(0.005, 4.0),
-    time_center_mjd=60000.0,
-    temporal_scale_days=0.25,
-    temporal_length_bounds_days=(0.02, 30.0),
+background_coordinates = AdaptiveSpatioSpectralTemporalEncoder.from_samples(
+    spatial_x=blank_sky_x_pix,
+    spatial_y=blank_sky_y_pix,
+    wavelength=background_wavelength_angstrom,
+    time_mjd=background_time_mjd,
     spatial_bands=4,
     spectral_bands=6,
     temporal_bands=4,
+)
+# Profile the bank dilation and BIC-initialize gates from independent evidence.
+# Residualize other axes first; marginal fits otherwise confound x, y, lambda, t.
+psf_coordinates.x_axis.initialize_from_evidence(
+    psf_star_x_pix, psf_coefficients_residualized_for_x
+)
+psf_coordinates.y_axis.initialize_from_evidence(
+    psf_star_y_pix, psf_coefficients_residualized_for_y
 )
 bundle = ObservationOperatorBundle(
     psf=LearnedPSFOp(
@@ -170,7 +178,7 @@ bundle = ObservationOperatorBundle(
             psf_coordinates,
             n_basis=6,
             kernel_size=21,
-            init_fwhm_pix=2.4,
+            init_fwhm_pix=initial_fwhm_pix,
         )
     ),
     background=LearnedBackgroundOp(
@@ -188,13 +196,35 @@ result = field.fit(
 )
 ```
 
-The length bounds are a sampling/physics contract, not manually selected
-correlation scales. Within them, each axis learns sparse band gates and a
-continuous bounded dilation of its ordered log-scale bank. `spatial_scale`,
-`spectral_scale`, and `temporal_scale_days` only normalize the raw coordinate
-features; they do not fix the learned variability scale. Learned gates,
-feature wavelengths, gate-weighted scales, and bounds are returned under
-`result.diagnostics["operator_scale_diagnostics"]`.
+`from_samples` sets the shortest admitted period to twice the largest actual
+calibration-coordinate gap and the longest to twice the sampled span. This is
+a conservative marginal coverage guard patterned after regular Nyquist
+sampling, not an alias-free theorem for irregular samples or a claimed physical
+correlation length. It fails if fewer than three distinct samples or no ordered
+identifiable interval exists. Joint spatial holes still require a separate
+coverage check. An explicitly supplied `sample_spacing` may make the bound more
+conservative, but cannot make it finer than the evidence coverage.
+
+Within these bounds, each axis learns sparse band gates and a continuous
+bounded dilation. `initialize_from_evidence` jointly profiles all harmonic
+bands with an intercept and trend, selects the starting dilation by weighted
+residual, and initializes each gate from a full-versus-band-ablated BIC. It is
+an initializer, not a result, and must use calibration/cross-fit evidence rather
+than the unpartitioned science evaluation pixels.
+
+For the UPDec NIRCam profile, `torchsky.instrument` now freezes STScI version-7
+commissioning passbands and on-orbit PSF widths. The official detector scales
+are 0.031 arcsec/pixel (short channel) and 0.063 arcsec/pixel (long channel),
+while the six empirical PSF FWHMs are 0.033, 0.050, 0.066, 0.092, 0.116, and
+0.145 arcsec. These constrain detector sampling, band support, and the starting
+kernel footprint; they do **not** supply the focal-plane scale on which PSF
+coefficients vary. That scale comes from calibration-star coverage and the
+profile fit above. Likewise, build time coordinates from exposure mid-times;
+the observatory wavefront-sensing cadence is not the temporal resolution of a
+particular visit.
+
+Learned gates, feature wavelengths, gate-weighted scales, and bounds are
+returned under `result.diagnostics["operator_scale_diagnostics"]`.
 
 The gate-weighted scale is a parameter diagnostic, not an empirical correlation
 length: downstream network weights can still suppress a band. Use held-out
