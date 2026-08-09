@@ -1251,6 +1251,13 @@ profile shows genuine repeated cold I/O.
 
 ### Torchfits consumer stress
 
+- [x] Keep the Torchfits requirement open across releases while respecting its
+  PyTorch ABI lane. Torchsky declares `torchfits>=1.0.0rc4` with no upper bound,
+  but currently declares PyTorch 2.10.x. A locally built Torchfits 1.0.0rc5
+  wheel declares `torch>=2.13,<2.14` and its runtime guard correctly rejects
+  PyTorch 2.10, explaining why the Pixi solve retains rc4. Do not add a
+  Torchfits upper bound; move Torchsky and its native-extension matrix to the
+  PyTorch 2.13 lane as one explicit migration before expecting rc5/rc6 here.
 - [x] Exercise repeated MEF `SCI`/`ERR`/`DQ` reads, overwrite freshness, header
   preservation, dtype/device transfer, and large-image memory through Torchsky.
   Evidence: the SMACS benchmark no longer imports Astropy FITS; filter
