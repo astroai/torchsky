@@ -38,6 +38,29 @@ def test_harmonics_alias_matches_spectral_module() -> None:
     assert harmonics_mod.alm2map is spectral_mod.alm2map
 
 
+def test_compile_helper_falls_back_after_specialization_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compile_calls = 0
+
+    def _broken_compile(fn):
+        def _broken(*args, **kwargs):
+            nonlocal compile_calls
+            compile_calls += 1
+            raise RuntimeError("stale compiler cache")
+
+        return _broken
+
+    monkeypatch.setattr(spectral_mod, "_COMPILE_OK", True)
+    monkeypatch.setattr(torch, "compile", _broken_compile)
+    wrapped = spectral_mod._maybe_compile(lambda value: value.square())
+    value = torch.tensor([2.0])
+    with pytest.warns(RuntimeWarning, match="using eager execution"):
+        torch.testing.assert_close(wrapped(value), torch.tensor([4.0]))
+    torch.testing.assert_close(wrapped(value), torch.tensor([4.0]))
+    assert compile_calls == 1
+
+
 try:
     import healpy as _hp  # type: ignore
 except Exception:  # pragma: no cover

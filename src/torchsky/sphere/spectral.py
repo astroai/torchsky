@@ -2,6 +2,8 @@
 
 import os
 import math
+import functools
+import warnings
 from collections import OrderedDict
 from pathlib import Path
 
@@ -148,8 +150,6 @@ def _smoke_test_torch_compile() -> bool:
         _test_fn(torch.randn(10, dtype=torch.float64))
         return True
     except Exception:
-        import warnings
-
         warnings.warn(
             "torch.compile unavailable (missing CUDA headers or other issue); "
             "Wigner d-matrix helpers will run uncompiled.",
@@ -162,10 +162,33 @@ _COMPILE_OK: bool = _smoke_test_torch_compile()
 
 
 def _maybe_compile(fn):
-    """Apply torch.compile only when the import-time smoke test passed."""
-    if _COMPILE_OK:
-        return torch.compile(fn)
-    return fn
+    """Compile when available, falling back if a later specialization fails."""
+    if not _COMPILE_OK:
+        return fn
+    compiled = torch.compile(fn)
+    compile_disabled = False
+
+    @functools.wraps(fn)
+    def _compiled_or_eager(*args, **kwargs):
+        nonlocal compile_disabled
+        if compile_disabled:
+            return fn(*args, **kwargs)
+        try:
+            return compiled(*args, **kwargs)
+        except Exception as compile_error:
+            try:
+                result = fn(*args, **kwargs)
+            except Exception:
+                raise compile_error
+            compile_disabled = True
+            warnings.warn(
+                f"torch.compile failed for {fn.__name__}; using eager execution",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return result
+
+    return _compiled_or_eager
 
 
 def _preferred_real_dtype(device: torch.device) -> torch.dtype:
