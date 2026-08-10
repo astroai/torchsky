@@ -41,6 +41,7 @@ export PIXI_HOME=/scratch/pixi
 export PIXI_CACHE_DIR=/scratch/pixi-cache
 export TORCHSKY_DATA="${data_root}"
 export PATH="${PIXI_HOME}/bin:${PATH}"
+export PYTHONPATH="${source_root}/src${PYTHONPATH:+:${PYTHONPATH}}"
 if ! command -v pixi >/dev/null 2>&1; then
   curl -fsSL https://pixi.sh/install.sh | bash
 fi
@@ -65,13 +66,14 @@ case "${mode}" in
     calibration_input_root=${CALIBRATION_INPUT_ROOT:-${data_root}/jwst_smacs0723/aligned}
     calibration_pattern=${CALIBRATION_PATTERN:-*_crf_rshift_tweakreg.fits}
     expected_exposure_count=${CALIBRATION_EXPECTED_EXPOSURES:-135}
-    exposure_count=$(find "${calibration_input_root}" -maxdepth 1 -type f \
+    exposure_count=$(find -L "${calibration_input_root}" -maxdepth 1 -type f \
       -name "${calibration_pattern}" | wc -l | tr -d ' ')
     echo "calibration_input_root=${calibration_input_root}"
     echo "calibration_pattern=${calibration_pattern}"
     echo "calibration_exposure_count=${exposure_count}"
     test "${exposure_count}" = "${expected_exposure_count}"
-    pixi run --manifest-path "${source_root}/pixi.toml" torchsky \
+    pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+      python -c 'from torchsky.cli import main; raise SystemExit(main())' \
       calibration-extract \
       "${calibration_input_root}/${calibration_pattern}" \
       --output-dir "${artifact_root}/evidence"
