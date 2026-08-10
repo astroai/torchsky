@@ -224,6 +224,34 @@ existing `PATT_NUM` train/validation/test partition, and records canonical MJD
 UTC midpoint provenance. It fails on inconsistent timing aliases, footprints,
 or evidence coordinates.
 
+To build those detector targets from observed CAL pixels rather than entering
+them by hand, first review a sky catalog with columns
+`source_id,role,ra_deg,dec_deg,reviewed`. `role` is `psf` for an isolated,
+unsaturated calibration star or `background` for a source-free location.
+Optional columns are `pmra_mas_yr,pmdec_mas_yr,ref_epoch_jyear,sample_weight`;
+proper motions use the Gaia `pm_ra_cosdec` convention and default to zero at
+J2016.0. Every row must explicitly set `reviewed=true`.
+
+```console
+pixi run torchsky calibration-extract \
+  'data/jwst_smacs0723/*_cal.fits' \
+  --catalog smacs0723-reviewed-calibrators.csv \
+  --output-dir benchmark_results/smacs0723-calibration-evidence
+```
+
+The command reads `SCI`, `ERR`, and `DQ` through Torchfits, propagates each
+position to the exposure midpoint, and transforms it with Torchsky WCS. PSF
+stamps are bilinearly registered at their fractional detector phase, fitted
+with a weighted sigma-clipped local plane, normalized to unit flux, and stored
+with per-pixel inverse-variance weights. Blank-sky targets are the centre value
+of the same robust local plane, weighted by detrended variance. The command
+conservatively accepts only `DQ==0`, rejects incomplete or low-S/N stamps, and
+persists every rejection reason. Its final manifest links target indices,
+product SHA-256 values, instrument metadata, detector coverage, and the fixed
+train/validation/test split. The bilinear stamp is the initial detector-sampled
+ePSF contract; promote it to an oversampled spatial ePSF only if held-out
+encircled-energy residuals show detector-phase structure.
+
 For each role/band/detector/split, the manifest records a certified interval for
 the two-dimensional rectangular-domain fill distance. The lower endpoint is
 the maximum sampled grid-centre distance; the upper endpoint adds the grid-cell
@@ -327,6 +355,11 @@ uncertainty or quality before the science fit; do not tune them on the withheld
 evaluation exposures. `result.diagnostics["operator_calibration_diagnostics"]`
 persists the final evidence-space losses. A low calibration loss is not a
 held-out-prediction result.
+
+Call `operator_calibration_score_report(validation_terms, split="validation")`
+and then the same function on untouched test terms. The report includes PSF
+centroid and encircled-energy errors and background bias/MAE in addition to the
+optimization loss. Never label training-term diagnostics as held-out scores.
 
 These models are deliberately constrained, but the inverse problem is still
 not identifiable if scene, PSF, and background all receive unconstrained

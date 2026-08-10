@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 import math
 from typing import Literal, Protocol
 
 import torch
 from torch import Tensor, nn
+from torch.nn import functional as F
 
 from .background import ConditionedBackgroundField
 from .bundle import ObservationOperatorBundle
@@ -56,6 +58,65 @@ def _sample_weight(value: Tensor | None, *, length: int) -> Tensor:
     return weights
 
 
+def registered_image_stamps(
+    image: Tensor,
+    source_xy: Tensor,
+    *,
+    radius_px: int,
+) -> Tensor:
+    """Bilinearly sample source-centred, phase-registered image stamps."""
+    if image.ndim != 2 or not image.is_floating_point():
+        raise ValueError("image must be a floating-point 2D tensor")
+    positions = torch.as_tensor(source_xy, device=image.device, dtype=image.dtype)
+    if (
+        positions.ndim != 2
+        or positions.shape[1] != 2
+        or positions.shape[0] < 1
+        or not bool(torch.isfinite(positions).all())
+    ):
+        raise ValueError("source_xy must contain finite (x, y) positions")
+    if not isinstance(radius_px, int) or radius_px < 1:
+        raise ValueError("radius_px must be a positive integer")
+    height, width = image.shape
+    if (
+        bool((positions[:, 0] < radius_px).any())
+        or bool((positions[:, 0] > width - 1 - radius_px).any())
+        or bool((positions[:, 1] < radius_px).any())
+        or bool((positions[:, 1] > height - 1 - radius_px).any())
+    ):
+        raise ValueError("registered stamps must lie fully inside the image")
+    offsets = torch.arange(
+        -radius_px,
+        radius_px + 1,
+        device=image.device,
+        dtype=image.dtype,
+    )
+    yy, xx = torch.meshgrid(offsets, offsets, indexing="ij")
+    grids = torch.stack(
+        (
+            (positions[:, None, None, 0] + xx)
+            / max(width - 1, 1)
+            * 2.0
+            - 1.0,
+            (positions[:, None, None, 1] + yy)
+            / max(height - 1, 1)
+            * 2.0
+            - 1.0,
+        ),
+        dim=-1,
+    )
+    # ponytail: bilinear registration is detector-sampling exact enough for the
+    # initial CAL evidence; replace with an oversampled ePSF only if held-out
+    # encircled-energy residuals show phase-dependent structure.
+    return F.grid_sample(
+        image[None, None].expand(positions.shape[0], -1, -1, -1),
+        grids,
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=True,
+    )[:, 0]
+
+
 @dataclass
 class PSFCalibrationTerm:
     """Anchor a conditioned PSF to measured normalized effective kernels."""
@@ -67,6 +128,7 @@ class PSFCalibrationTerm:
     time_mjd: Tensor
     target_kernels: Tensor
     sample_weight: Tensor | None = None
+    pixel_weight: Tensor | None = None
     loss_weight: float = 1.0
     name: str = "psf"
 
@@ -86,11 +148,28 @@ class PSFCalibrationTerm:
         expected = (count, self.model.kernel_size, self.model.kernel_size)
         if tuple(kernels.shape) != expected or not bool(torch.isfinite(kernels).all()):
             raise ValueError(f"target_kernels must be finite with shape {expected}")
+        if self.pixel_weight is None:
+            pixel_weight = torch.ones_like(kernels, dtype=torch.float64)
+        else:
+            pixel_weight = (
+                torch.as_tensor(self.pixel_weight).detach().to(torch.float64)
+            )
+            if (
+                tuple(pixel_weight.shape) != expected
+                or not bool(torch.isfinite(pixel_weight).all())
+                or bool((pixel_weight < 0.0).any())
+                or bool((pixel_weight.sum(dim=(-2, -1)) <= 0.0).any())
+            ):
+                raise ValueError(
+                    f"pixel_weight must be finite, non-negative, and have shape {expected}"
+                )
+        kernels = torch.where(pixel_weight > 0.0, kernels, torch.zeros_like(kernels))
         sums = kernels.sum(dim=(-2, -1))
         if bool((sums <= 0.0).any()):
             raise ValueError("each target PSF kernel must have positive total flux")
         self.target_kernels = kernels / sums[:, None, None]
         self.sample_weight = _sample_weight(self.sample_weight, length=count)
+        self.pixel_weight = pixel_weight
         self.loss_weight = _validated_loss_weight(self.loss_weight)
 
     def predicted_kernels(self) -> Tensor:
@@ -112,7 +191,18 @@ class PSFCalibrationTerm:
         target = self.target_kernels.to(
             device=predicted.device, dtype=predicted.dtype
         )
-        per_sample = torch.square(predicted - target).mean(dim=(-2, -1))
+        assert self.pixel_weight is not None
+        pixel_weight = self.pixel_weight.to(
+            device=predicted.device, dtype=predicted.dtype
+        )
+        valid = pixel_weight > 0.0
+        predicted = torch.where(valid, predicted, torch.zeros_like(predicted))
+        predicted = predicted / predicted.sum(dim=(-2, -1), keepdim=True).clamp_min(
+            torch.finfo(predicted.dtype).tiny
+        )
+        per_sample = (
+            torch.square(predicted - target) * pixel_weight
+        ).sum(dim=(-2, -1)) / pixel_weight.sum(dim=(-2, -1))
         weights = self.sample_weight.to(
             device=predicted.device, dtype=predicted.dtype
         )
@@ -122,12 +212,76 @@ class PSFCalibrationTerm:
         return self.loss_weight * self.raw_loss()
 
     def diagnostics(self) -> dict[str, float | int | str]:
+        predicted = self.predicted_kernels().detach()
+        target = self.target_kernels.to(
+            device=predicted.device, dtype=predicted.dtype
+        )
+        assert self.pixel_weight is not None
+        valid = self.pixel_weight.to(device=predicted.device) > 0.0
+        predicted = torch.where(valid, predicted, torch.zeros_like(predicted))
+        predicted = predicted / predicted.sum(dim=(-2, -1), keepdim=True).clamp_min(
+            torch.finfo(predicted.dtype).tiny
+        )
+        target_shape = target.clamp_min(0.0)
+        target_shape = target_shape / target_shape.sum(
+            dim=(-2, -1), keepdim=True
+        ).clamp_min(torch.finfo(target.dtype).tiny)
+        radius = self.model.kernel_size // 2
+        offsets = torch.arange(
+            -radius,
+            radius + 1,
+            device=predicted.device,
+            dtype=predicted.dtype,
+        )
+        yy, xx = torch.meshgrid(offsets, offsets, indexing="ij")
+        predicted_centroid = torch.stack(
+            (
+                (predicted * xx).sum(dim=(-2, -1)),
+                (predicted * yy).sum(dim=(-2, -1)),
+            ),
+            dim=-1,
+        )
+        target_centroid = torch.stack(
+            (
+                (target_shape * xx).sum(dim=(-2, -1)),
+                (target_shape * yy).sum(dim=(-2, -1)),
+            ),
+            dim=-1,
+        )
+        centroid_error = torch.linalg.vector_norm(
+            predicted_centroid - target_centroid, dim=-1
+        )
+        aperture_radii = torch.arange(
+            1,
+            radius + 1,
+            device=predicted.device,
+            dtype=predicted.dtype,
+        )
+        radial_distance = torch.sqrt(xx.square() + yy.square())
+        if aperture_radii.numel():
+            aperture_masks = radial_distance[None] <= aperture_radii[:, None, None]
+            predicted_ee = torch.einsum(
+                "nhw,rhw->nr", predicted, aperture_masks.to(predicted.dtype)
+            )
+            target_ee = torch.einsum(
+                "nhw,rhw->nr", target_shape, aperture_masks.to(target.dtype)
+            )
+            maximum_ee_error = float(torch.max(torch.abs(predicted_ee - target_ee)))
+        else:
+            maximum_ee_error = 0.0
         return {
             "name": self.name,
             "kind": "normalized_effective_psf_mse",
             "sample_count": int(self.detector_x.numel()),
             "loss_weight": self.loss_weight,
             "raw_loss": float(self.raw_loss().detach().cpu()),
+            "centroid_rmse_pixels": float(
+                torch.sqrt(torch.mean(centroid_error.square())).cpu()
+            ),
+            "maximum_encircled_energy_error": maximum_ee_error,
+            "minimum_valid_pixel_fraction": float(
+                (self.pixel_weight > 0.0).to(torch.float64).mean(dim=(-2, -1)).min()
+            ),
         }
 
 
@@ -185,13 +339,54 @@ class BackgroundCalibrationTerm:
         return self.loss_weight * self.raw_loss()
 
     def diagnostics(self) -> dict[str, float | int | str]:
+        parameter = next(self.model.parameters())
+        predicted = self.model(
+            self.detector_x.to(device=parameter.device, dtype=parameter.dtype),
+            self.detector_y.to(device=parameter.device, dtype=parameter.dtype),
+            self.wavelength.to(device=parameter.device),
+            self.time_mjd.to(device=parameter.device),
+        ).detach()
+        residual = predicted - self.target_values.to(
+            device=predicted.device, dtype=predicted.dtype
+        )
+        weights = self.sample_weight.to(
+            device=predicted.device, dtype=predicted.dtype
+        )
         return {
             "name": self.name,
             "kind": "background_value_mse",
             "sample_count": int(self.detector_x.numel()),
             "loss_weight": self.loss_weight,
-            "raw_loss": float(self.raw_loss().detach().cpu()),
+            "raw_loss": float(
+                ((residual.square() * weights).sum() / weights.sum()).cpu()
+            ),
+            "weighted_bias": float(
+                ((residual * weights).sum() / weights.sum()).cpu()
+            ),
+            "weighted_mae": float(
+                ((residual.abs() * weights).sum() / weights.sum()).cpu()
+            ),
         }
+
+
+def operator_calibration_score_report(
+    terms: Sequence[OperatorCalibrationTerm],
+    *,
+    split: Literal["train", "validation", "test"],
+) -> dict[str, object]:
+    """Evaluate one explicitly named calibration split without gradients."""
+    if split not in {"train", "validation", "test"}:
+        raise ValueError("split must be train, validation, or test")
+    if not terms:
+        raise ValueError("at least one operator calibration term is required")
+    with torch.no_grad():
+        reports = [term.diagnostics() for term in terms]
+    return {
+        "schema_version": 1,
+        "split": split,
+        "term_count": len(reports),
+        "terms": reports,
+    }
 
 
 def set_field_training_stage(
@@ -269,5 +464,7 @@ __all__ = [
     "FieldTrainingStage",
     "OperatorCalibrationTerm",
     "PSFCalibrationTerm",
+    "operator_calibration_score_report",
+    "registered_image_stamps",
     "set_field_training_stage",
 ]

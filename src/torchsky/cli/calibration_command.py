@@ -339,6 +339,54 @@ def _calibration_manifest_handler(args: argparse.Namespace) -> int:
     return 0
 
 
+def _calibration_extract_handler(args: argparse.Namespace) -> int:
+    from ..calibration_evidence import extract_reviewed_calibration_evidence
+
+    base = build_calibration_manifest(args.inputs)
+    extraction = extract_reviewed_calibration_evidence(
+        base,
+        catalog_path=args.catalog,
+        output_dir=args.output_dir,
+        psf_radius_px=args.psf_radius,
+        background_radius_px=args.background_radius,
+        minimum_psf_snr=args.minimum_psf_snr,
+        overwrite=args.overwrite,
+    )
+    evidence_path = Path(extraction["products"]["detector_evidence"]["path"])
+    payload = build_calibration_manifest(
+        args.inputs,
+        evidence_path=evidence_path,
+        coverage_rtol=args.coverage_rtol,
+    )
+    if len(payload["evidence"]) != len(extraction["evidence"]):
+        raise RuntimeError("extracted and attached evidence row counts disagree")
+    for attached, target in zip(
+        payload["evidence"], extraction["evidence"], strict=True
+    ):
+        attached.update(
+            {
+                key: value
+                for key, value in target.items()
+                if key not in attached
+            }
+        )
+    payload["extraction"] = {
+        key: value for key, value in extraction.items() if key != "evidence"
+    }
+    payload.pop("manifest_sha256", None)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    payload["manifest_sha256"] = hashlib.sha256(
+        canonical.encode("utf-8")
+    ).hexdigest()
+    output = args.output_dir / "calibration_evidence_manifest.json"
+    _write_json_atomic(output, payload, overwrite=args.overwrite)
+    print(
+        f"wrote {len(payload['evidence'])} accepted targets and "
+        f"{len(extraction['rejected'])} rejected measurements to {output}"
+    )
+    return 0
+
+
 def register_calibration_parser(subparsers: argparse.Action) -> None:
     parser = subparsers.add_parser(
         "calibration-manifest",
@@ -362,3 +410,21 @@ def register_calibration_parser(subparsers: argparse.Action) -> None:
     parser.add_argument("--coverage-rtol", type=float, default=0.01)
     parser.add_argument("--overwrite", action="store_true")
     parser.set_defaults(handler=_calibration_manifest_handler)
+
+    extract = subparsers.add_parser(
+        "calibration-extract",
+        help="Extract reviewed PSF/background targets from JWST/NIRCam CAL files.",
+    )
+    extract.add_argument(
+        "inputs",
+        nargs="+",
+        help="FITS files, directories, or glob patterns (quote shell globs).",
+    )
+    extract.add_argument("--catalog", type=Path, required=True)
+    extract.add_argument("--output-dir", type=Path, required=True)
+    extract.add_argument("--psf-radius", type=int, default=9)
+    extract.add_argument("--background-radius", type=int, default=16)
+    extract.add_argument("--minimum-psf-snr", type=float, default=20.0)
+    extract.add_argument("--coverage-rtol", type=float, default=0.01)
+    extract.add_argument("--overwrite", action="store_true")
+    extract.set_defaults(handler=_calibration_extract_handler)

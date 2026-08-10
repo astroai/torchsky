@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from pathlib import Path
 
 from astropy.io import fits
 import numpy as np
 import pytest
+import torch
 
+import torchsky
+from torchsky.calibration_evidence import (
+    extract_reviewed_calibration_evidence,
+    load_operator_calibration_split,
+    read_reviewed_sky_catalog,
+)
 from torchsky.cli.calibration_command import (
     _write_json_atomic,
     build_calibration_manifest,
@@ -111,3 +119,152 @@ def test_calibration_manifest_atomic_write_requires_overwrite(tmp_path: Path) ->
         _write_json_atomic(output, {"ok": False}, overwrite=False)
     _write_json_atomic(output, {"ok": False}, overwrite=True)
     assert json.loads(output.read_text(encoding="utf-8")) == {"ok": False}
+
+
+def _write_calibration_image(path: Path) -> tuple[dict[str, object], np.ndarray]:
+    size = 25
+    yy, xx = np.mgrid[:size, :size]
+    science_data = 10.0 + 100.0 * np.exp(
+        -0.5 * ((xx - 12.0) ** 2 + (yy - 12.0) ** 2)
+    )
+    primary = fits.PrimaryHDU()
+    primary.header["TELESCOP"] = "JWST"
+    primary.header["INSTRUME"] = "NIRCAM"
+    primary.header["FILTER"] = "F277W"
+    primary.header["DETECTOR"] = "NRCALONG"
+    primary.header["PATT_NUM"] = 1
+    primary.header["SUBSTRT1"] = 1
+    primary.header["SUBSTRT2"] = 1
+    primary.header["SUBSIZE1"] = size
+    primary.header["SUBSIZE2"] = size
+    primary.header["EXPSTART"] = 60000.0
+    primary.header["EXPMID"] = 60000.0005
+    primary.header["EXPEND"] = 60000.001
+    science = fits.ImageHDU(data=science_data.astype(np.float32), name="SCI")
+    science.header.update(
+        {
+            "CTYPE1": "RA---TAN",
+            "CTYPE2": "DEC--TAN",
+            "CRPIX1": 13.0,
+            "CRPIX2": 13.0,
+            "CRVAL1": 110.82,
+            "CRVAL2": -73.45,
+            "CD1_1": -0.00001,
+            "CD1_2": 0.0,
+            "CD2_1": 0.0,
+            "CD2_2": 0.00001,
+            "MJD-MID": 60000.0005,
+            "BUNIT": "MJy/sr",
+        }
+    )
+    error = fits.ImageHDU(data=np.ones((size, size), dtype=np.float32), name="ERR")
+    dq = fits.ImageHDU(data=np.zeros((size, size), dtype=np.int16), name="DQ")
+    fits.HDUList([primary, science, error, dq]).writeto(path)
+    return dict(science.header), science_data
+
+
+def test_extract_reviewed_calibration_evidence_persists_split_targets(
+    tmp_path: Path,
+) -> None:
+    exposure = tmp_path / "jw_cal.fits"
+    header, _ = _write_calibration_image(exposure)
+    wcs = torchsky.WCS(header)
+    world = wcs.pixel_to_world(
+        torch.tensor([[12.0, 12.0], [5.0, 5.0]], dtype=torch.float64), origin=0
+    )
+    catalog = tmp_path / "reviewed.csv"
+    with catalog.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=("source_id", "role", "ra_deg", "dec_deg", "reviewed"),
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "source_id": "star-1",
+                "role": "psf",
+                "ra_deg": float(world[0, 0]),
+                "dec_deg": float(world[0, 1]),
+                "reviewed": "true",
+            }
+        )
+        writer.writerow(
+            {
+                "source_id": "blank-1",
+                "role": "background",
+                "ra_deg": float(world[1, 0]),
+                "dec_deg": float(world[1, 1]),
+                "reviewed": "true",
+            }
+        )
+    base = build_calibration_manifest([str(exposure)])
+
+    result = extract_reviewed_calibration_evidence(
+        base,
+        catalog_path=catalog,
+        output_dir=tmp_path / "evidence",
+        psf_radius_px=3,
+        background_radius_px=3,
+        minimum_psf_snr=2.0,
+    )
+
+    assert {row["role"] for row in result["evidence"]} == {"psf", "background"}
+    assert result["rejected"] == []
+    kernels = torchsky.read(result["products"]["psf_kernels"]["path"])
+    torch.testing.assert_close(kernels.sum(dim=(-2, -1)), torch.ones(1))
+    assert result["products"]["detector_evidence"]["size_bytes"] > 0
+
+
+def test_load_operator_calibration_split_verifies_and_selects_targets(
+    tmp_path: Path,
+) -> None:
+    kernels = tmp_path / "kernels.fits"
+    weights = tmp_path / "weights.fits"
+    torchsky.write(str(kernels), torch.ones((2, 3, 3)) / 9.0)
+    torchsky.write(str(weights), torch.ones((2, 3, 3)))
+    def sha(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    manifest = {
+        "extraction": {
+            "products": {
+                "psf_kernels": {"path": str(kernels), "sha256": sha(kernels)},
+                "psf_pixel_weights": {
+                    "path": str(weights),
+                    "sha256": sha(weights),
+                },
+            }
+        },
+        "evidence": [
+            {
+                "role": "psf",
+                "split": "test",
+                "detector": "NRCALONG",
+                "band": "F277W",
+                "detector_x": 1.0,
+                "detector_y": 2.0,
+                "time_mjd_utc": 60000.0,
+                "sample_weight": 3.0,
+                "target_index": 1,
+            }
+        ],
+    }
+
+    arrays = load_operator_calibration_split(
+        manifest, split="test", role="psf", detector="NRCALONG"
+    )
+
+    assert arrays["target_kernels"].shape == (1, 3, 3)
+    assert arrays["wavelength"].item() == 27760.0
+    assert arrays["sample_weight"].item() == 3.0
+
+
+def test_reviewed_catalog_fails_closed_on_unreviewed_rows(tmp_path: Path) -> None:
+    catalog = tmp_path / "candidates.csv"
+    catalog.write_text(
+        "source_id,role,ra_deg,dec_deg,reviewed\nstar-1,psf,1,2,false\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="reviewed must be true"):
+        read_reviewed_sky_catalog(catalog)

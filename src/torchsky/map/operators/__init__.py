@@ -58,6 +58,8 @@ from .calibration import (
     FieldTrainingStage,
     OperatorCalibrationTerm,
     PSFCalibrationTerm,
+    operator_calibration_score_report,
+    registered_image_stamps,
     set_field_training_stage,
 )
 from .coverage import SpatialFillDistanceBounds, spatial_fill_distance_bounds
@@ -293,9 +295,11 @@ __all__ = [
     "mixture_mc_samples",
     "observation_background_components",
     "polynomial_background",
+    "operator_calibration_score_report",
     "pixel_area_sr_at",
     "pixel_area_sr_map",
     "sanitize_inverse_variance",
+    "registered_image_stamps",
     "sample_image_plane",
     "sample_image_plane_batched",
     "sample_image_plane_batched_channels",

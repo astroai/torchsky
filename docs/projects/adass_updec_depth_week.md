@@ -78,6 +78,15 @@ products; beating separate per-band images alone is not sufficient.
 - [x] Freeze the complete calibrated-input inventory: 135 CAL files, with
   15 files for every `PATT_NUM`; band counts are
   F090W/F150W/F200W=`36/36/36` and F277W/F356W/F444W=`9/9/9`.
+  - [x] Re-audit all 135 local CAL headers through the production Torchfits
+    calibration-manifest path on 2026-08-09. It recovered 75 train, 30
+    validation, and 30 test exposures, all with canonical `PRIMARY:EXPMID`
+    timing; manifest SHA-256
+    `642576612af33a7df264409abbafc2d24e05f78ba9b5b0f2b434cba1c2e4d276`.
+  - [x] Add the reviewed-catalog CAL extractor and held-out PSF/background
+    metric contract. The remaining real-data gate is catalog review followed
+    by one extraction and staged fit; synthetic CAL-to-FITS target closure
+    passes locally.
 - [x] Inventory the existing CANFAR CRFs: 27 long-channel products under
   `/arc/projects/ots/jwst_smacs0723/`, covering three observation groups and
   nine patterns.
