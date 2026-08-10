@@ -73,6 +73,8 @@ case "${mode}" in
     echo "calibration_exposure_count=${exposure_count}"
     test "${exposure_count}" = "${expected_exposure_count}"
     pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+      python -m pip install -e "${source_root}" --no-build-isolation
+    pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
       python -c 'from torchsky.cli import main; raise SystemExit(main())' \
       calibration-extract \
       "${calibration_input_root}/${calibration_pattern}" \
