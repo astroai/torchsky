@@ -61,6 +61,22 @@ case "${FOAM_INITIALIZE_FROM_COADD:-0}" in
 esac
 
 case "${mode}" in
+  calibration-extract)
+    calibration_input_root=${CALIBRATION_INPUT_ROOT:-${data_root}/jwst_smacs0723/aligned}
+    calibration_pattern=${CALIBRATION_PATTERN:-*_crf_rshift_tweakreg.fits}
+    expected_exposure_count=${CALIBRATION_EXPECTED_EXPOSURES:-135}
+    exposure_count=$(find "${calibration_input_root}" -maxdepth 1 -type f \
+      -name "${calibration_pattern}" | wc -l | tr -d ' ')
+    echo "calibration_input_root=${calibration_input_root}"
+    echo "calibration_pattern=${calibration_pattern}"
+    echo "calibration_exposure_count=${exposure_count}"
+    test "${exposure_count}" = "${expected_exposure_count}"
+    pixi run --manifest-path "${source_root}/pixi.toml" torchsky \
+      calibration-extract \
+      "${calibration_input_root}/${calibration_pattern}" \
+      --output-dir "${artifact_root}/evidence"
+    test -s "${artifact_root}/evidence/calibration_evidence_manifest.json"
+    ;;
   foam)
     bands=${FOAM_BANDS:-F090W,F150W}
     crop_size=${FOAM_CROP_SIZE:-32}
