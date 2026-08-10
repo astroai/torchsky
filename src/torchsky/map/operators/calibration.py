@@ -21,7 +21,8 @@ FieldTrainingStage = Literal["scene", "background", "psf", "joint"]
 class OperatorCalibrationTerm(Protocol):
     """A differentiable, evidence-space calibration penalty."""
 
-    model: nn.Module
+    @property
+    def model(self) -> nn.Module: ...
 
     @property
     def name(self) -> str: ...
@@ -203,6 +204,7 @@ class PSFCalibrationTerm:
         per_sample = (
             torch.square(predicted - target) * pixel_weight
         ).sum(dim=(-2, -1)) / pixel_weight.sum(dim=(-2, -1))
+        assert self.sample_weight is not None
         weights = self.sample_weight.to(
             device=predicted.device, dtype=predicted.dtype
         )
@@ -330,6 +332,7 @@ class BackgroundCalibrationTerm:
         target = self.target_values.to(
             device=predicted.device, dtype=predicted.dtype
         )
+        assert self.sample_weight is not None
         weights = self.sample_weight.to(
             device=predicted.device, dtype=predicted.dtype
         )
@@ -349,6 +352,7 @@ class BackgroundCalibrationTerm:
         residual = predicted - self.target_values.to(
             device=predicted.device, dtype=predicted.dtype
         )
+        assert self.sample_weight is not None
         weights = self.sample_weight.to(
             device=predicted.device, dtype=predicted.dtype
         )
@@ -386,6 +390,101 @@ def operator_calibration_score_report(
         "split": split,
         "term_count": len(reports),
         "terms": reports,
+    }
+
+
+def fit_operator_calibration_terms(
+    terms: Sequence[OperatorCalibrationTerm],
+    *,
+    steps: int = 200,
+    lr: float = 1.0e-3,
+    gate_weight: float = 0.0,
+    scale_shift_weight: float = 0.0,
+) -> dict[str, object]:
+    """Fit train-split operator evidence without rendering a science scene."""
+    if not terms:
+        raise ValueError("at least one operator calibration term is required")
+    steps = int(steps)
+    lr = float(lr)
+    gate_weight = float(gate_weight)
+    scale_shift_weight = float(scale_shift_weight)
+    if steps < 1:
+        raise ValueError("steps must be positive")
+    if not math.isfinite(lr) or lr <= 0.0:
+        raise ValueError("lr must be finite and positive")
+    if (
+        not math.isfinite(gate_weight)
+        or not math.isfinite(scale_shift_weight)
+        or gate_weight < 0.0
+        or scale_shift_weight < 0.0
+    ):
+        raise ValueError("conditioning regularization weights must be finite and non-negative")
+
+    models: list[nn.Module] = []
+    seen_models: set[int] = set()
+    parameters: list[nn.Parameter] = []
+    seen_parameters: set[int] = set()
+    devices: set[torch.device] = set()
+    for term in terms:
+        if id(term.model) not in seen_models:
+            models.append(term.model)
+            seen_models.add(id(term.model))
+        for parameter in term.model.parameters():
+            if parameter.requires_grad and id(parameter) not in seen_parameters:
+                parameters.append(parameter)
+                seen_parameters.add(id(parameter))
+                devices.add(parameter.device)
+    if not parameters:
+        raise ValueError("operator calibration has no trainable parameters")
+    if len(devices) != 1:
+        raise ValueError("operator calibration models must share one device")
+
+    initial = operator_calibration_score_report(terms, split="train")
+    training_states = [model.training for model in models]
+    for model in models:
+        model.train()
+    optimizer = torch.optim.Adam(parameters, lr=lr)
+    history: list[float] = []
+    try:
+        for _ in range(steps):
+            optimizer.zero_grad(set_to_none=True)
+            loss = torch.stack([term.penalty() for term in terms]).sum()
+            if gate_weight or scale_shift_weight:
+                penalties = []
+                for model in models:
+                    regularization = getattr(model, "conditioning_regularization", None)
+                    if callable(regularization):
+                        penalties.append(
+                            regularization(
+                                gate_weight=gate_weight,
+                                scale_shift_weight=scale_shift_weight,
+                            )
+                        )
+                if penalties:
+                    loss = loss + torch.stack(penalties).sum()
+            if not bool(torch.isfinite(loss)):
+                raise FloatingPointError("operator calibration loss became non-finite")
+            loss.backward()
+            if any(
+                parameter.grad is not None
+                and not bool(torch.isfinite(parameter.grad).all())
+                for parameter in parameters
+            ):
+                raise FloatingPointError("operator calibration gradient became non-finite")
+            optimizer.step()
+            history.append(float(loss.detach().cpu()))
+    finally:
+        for model, training in zip(models, training_states, strict=True):
+            model.train(training)
+
+    return {
+        "schema_version": 1,
+        "steps": steps,
+        "learning_rate": lr,
+        "trainable_parameter_count": sum(parameter.numel() for parameter in parameters),
+        "loss_history": history,
+        "initial_train_report": initial,
+        "final_train_report": operator_calibration_score_report(terms, split="train"),
     }
 
 
@@ -464,6 +563,7 @@ __all__ = [
     "FieldTrainingStage",
     "OperatorCalibrationTerm",
     "PSFCalibrationTerm",
+    "fit_operator_calibration_terms",
     "operator_calibration_score_report",
     "registered_image_stamps",
     "set_field_training_stage",

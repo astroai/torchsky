@@ -320,6 +320,7 @@ make the staged sequence explicit:
 from torchsky.map.operators import (
     BackgroundCalibrationTerm,
     PSFCalibrationTerm,
+    fit_operator_calibration_terms,
     set_field_training_stage,
 )
 
@@ -340,6 +341,16 @@ background_term = BackgroundCalibrationTerm(
     time_mjd=blank_time,
     target_values=blank_values,
     sample_weight=blank_inverse_variance,
+)
+
+# Optional evidence-only warm start; it never sees science-scene pixels.
+fit_operator_calibration_terms(
+    [background_term], steps=200, lr=1e-3,
+    gate_weight=1e-4, scale_shift_weight=1e-4,
+)
+fit_operator_calibration_terms(
+    [psf_term], steps=200, lr=1e-3,
+    gate_weight=1e-4, scale_shift_weight=1e-4,
 )
 
 set_field_training_stage(model, bundles, "background")

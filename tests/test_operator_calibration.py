@@ -7,11 +7,13 @@ from torchsky.map.operators import (
     BackgroundCalibrationTerm,
     ConditionedBackgroundField,
     ConditionedKernelPSF,
+    FieldTrainingStage,
     LearnedBackgroundOp,
     LearnedPSFOp,
     ObservationOperatorBundle,
     PSFCalibrationTerm,
     SpatioSpectralTemporalEncoder,
+    fit_operator_calibration_terms,
     operator_calibration_score_report,
     registered_image_stamps,
     set_field_training_stage,
@@ -117,6 +119,38 @@ def test_background_calibration_is_weighted_in_value_space() -> None:
     assert diagnostics["weighted_mae"] == 2.5
 
 
+def test_fit_operator_calibration_terms_reduces_training_loss_and_restores_mode() -> None:
+    torch.manual_seed(4)
+    model = ConditionedBackgroundField(_encoder(), hidden_dim=4, hidden_layers=1)
+    model.eval()
+    x, y, wavelength, time = _coordinates()
+    term = BackgroundCalibrationTerm(
+        model,
+        x,
+        y,
+        wavelength,
+        time,
+        target_values=torch.tensor([1.5, 1.5, 1.5]),
+    )
+
+    result = fit_operator_calibration_terms([term], steps=80, lr=0.05)
+
+    initial_report = result["initial_train_report"]
+    final_report = result["final_train_report"]
+    history = result["loss_history"]
+    assert isinstance(initial_report, dict)
+    assert isinstance(final_report, dict)
+    assert isinstance(history, list)
+    initial = initial_report["terms"][0]["raw_loss"]
+    final = final_report["terms"][0]["raw_loss"]
+    assert final < initial * 1.0e-3
+    assert len(history) == 80
+    trainable_parameter_count = result["trainable_parameter_count"]
+    assert isinstance(trainable_parameter_count, int)
+    assert trainable_parameter_count > 0
+    assert model.training is False
+
+
 def test_operator_calibration_score_report_names_held_out_split() -> None:
     model = ConditionedBackgroundField(_encoder(), hidden_dim=4, hidden_layers=1)
     x, y, wavelength, time = _coordinates()
@@ -164,12 +198,15 @@ def test_field_training_stages_toggle_scene_background_psf_and_joint() -> None:
         )
     ]
 
-    for stage, expected in (
+    stages: tuple[
+        tuple[FieldTrainingStage, tuple[bool, bool, bool]], ...
+    ] = (
         ("scene", (True, False, False)),
         ("background", (False, True, False)),
         ("psf", (False, False, True)),
         ("joint", (True, True, True)),
-    ):
+    )
+    for stage, expected in stages:
         report = set_field_training_stage(scene, bundles, stage)
         actual = (
             all(parameter.requires_grad for parameter in scene.parameters()),
