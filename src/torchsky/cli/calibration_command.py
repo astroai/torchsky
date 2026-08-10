@@ -340,16 +340,21 @@ def _calibration_manifest_handler(args: argparse.Namespace) -> int:
 
 
 def _calibration_extract_handler(args: argparse.Namespace) -> int:
-    from ..calibration_evidence import extract_reviewed_calibration_evidence
+    from ..calibration_evidence import extract_calibration_evidence
 
     base = build_calibration_manifest(args.inputs)
-    extraction = extract_reviewed_calibration_evidence(
+    extraction = extract_calibration_evidence(
         base,
         catalog_path=args.catalog,
         output_dir=args.output_dir,
         psf_radius_px=args.psf_radius,
         background_radius_px=args.background_radius,
         minimum_psf_snr=args.minimum_psf_snr,
+        detection_sigma=args.detection_sigma,
+        minimum_psf_correlation=args.minimum_psf_correlation,
+        background_exclusion_sigma=args.background_exclusion_sigma,
+        max_psf_candidates=args.max_psf_candidates,
+        max_background_candidates=args.max_background_candidates,
         overwrite=args.overwrite,
     )
     evidence_path = Path(extraction["products"]["detector_evidence"]["path"])
@@ -382,7 +387,8 @@ def _calibration_extract_handler(args: argparse.Namespace) -> int:
     _write_json_atomic(output, payload, overwrite=args.overwrite)
     print(
         f"wrote {len(payload['evidence'])} accepted targets and "
-        f"{len(extraction['rejected'])} rejected measurements to {output}"
+        f"{len(extraction['rejected'])} rejected measurements "
+        f"({extraction['selection_mode']}) to {output}"
     )
     return 0
 
@@ -413,18 +419,31 @@ def register_calibration_parser(subparsers: argparse.Action) -> None:
 
     extract = subparsers.add_parser(
         "calibration-extract",
-        help="Extract reviewed PSF/background targets from JWST/NIRCam CAL files.",
+        help="Extract PSF/background targets from JWST/NIRCam detector files.",
     )
     extract.add_argument(
         "inputs",
         nargs="+",
         help="FITS files, directories, or glob patterns (quote shell globs).",
     )
-    extract.add_argument("--catalog", type=Path, required=True)
+    extract.add_argument(
+        "--catalog",
+        type=Path,
+        default=None,
+        help=(
+            "Optional reviewed sky catalog. Without one, select conservative "
+            "PSF and source-excluded background targets from SCI/ERR/DQ."
+        ),
+    )
     extract.add_argument("--output-dir", type=Path, required=True)
     extract.add_argument("--psf-radius", type=int, default=9)
     extract.add_argument("--background-radius", type=int, default=16)
     extract.add_argument("--minimum-psf-snr", type=float, default=20.0)
+    extract.add_argument("--detection-sigma", type=float, default=8.0)
+    extract.add_argument("--minimum-psf-correlation", type=float, default=0.65)
+    extract.add_argument("--background-exclusion-sigma", type=float, default=5.0)
+    extract.add_argument("--max-psf-candidates", type=int, default=32)
+    extract.add_argument("--max-background-candidates", type=int, default=36)
     extract.add_argument("--coverage-rtol", type=float, default=0.01)
     extract.add_argument("--overwrite", action="store_true")
     extract.set_defaults(handler=_calibration_extract_handler)

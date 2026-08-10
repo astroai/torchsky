@@ -12,6 +12,8 @@ import torch
 
 import torchsky
 from torchsky.calibration_evidence import (
+    discover_detector_calibration_positions,
+    extract_calibration_evidence,
     extract_reviewed_calibration_evidence,
     load_operator_calibration_split,
     read_reviewed_sky_catalog,
@@ -213,6 +215,46 @@ def test_extract_reviewed_calibration_evidence_persists_split_targets(
     kernels = torchsky.read(result["products"]["psf_kernels"]["path"])
     torch.testing.assert_close(kernels.sum(dim=(-2, -1)), torch.ones(1))
     assert result["products"]["detector_evidence"]["size_bytes"] > 0
+
+
+def test_automatic_calibration_evidence_finds_star_and_blank_sky(
+    tmp_path: Path,
+) -> None:
+    exposure = tmp_path / "jw_crf_rshift_tweakreg.fits"
+    _, science = _write_calibration_image(exposure)
+    candidates = discover_detector_calibration_positions(
+        torch.from_numpy(science).to(torch.float32),
+        torch.ones_like(torch.from_numpy(science).to(torch.float32)),
+        torch.zeros_like(torch.from_numpy(science), dtype=torch.int16),
+        psf_fwhm_px=2.354820045,
+        psf_radius_px=3,
+        background_radius_px=3,
+        detection_sigma=5.0,
+        max_psf_candidates=4,
+        max_background_candidates=4,
+    )
+
+    psf = [row for row in candidates if row["role"] == "psf"]
+    background = [row for row in candidates if row["role"] == "background"]
+    assert len(psf) == 1
+    assert abs(psf[0]["detector_x"] - 12.0) < 0.1
+    assert abs(psf[0]["detector_y"] - 12.0) < 0.1
+    assert len(background) == 4
+
+    result = extract_calibration_evidence(
+        build_calibration_manifest([str(exposure)]),
+        output_dir=tmp_path / "automatic-evidence",
+        psf_radius_px=3,
+        background_radius_px=3,
+        minimum_psf_snr=2.0,
+        detection_sigma=5.0,
+        max_psf_candidates=4,
+        max_background_candidates=4,
+    )
+
+    assert result["selection_mode"] == "automatic_detector"
+    assert {row["role"] for row in result["evidence"]} == {"psf", "background"}
+    assert "catalog_path" not in result
 
 
 def test_load_operator_calibration_split_verifies_and_selects_targets(

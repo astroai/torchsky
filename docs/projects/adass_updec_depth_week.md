@@ -83,10 +83,11 @@ products; beating separate per-band images alone is not sufficient.
     validation, and 30 test exposures, all with canonical `PRIMARY:EXPMID`
     timing; manifest SHA-256
     `642576612af33a7df264409abbafc2d24e05f78ba9b5b0f2b434cba1c2e4d276`.
-  - [x] Add the reviewed-catalog CAL extractor and held-out PSF/background
-    metric contract. The remaining real-data gate is catalog review followed
-    by one extraction and staged fit; synthetic CAL-to-FITS target closure
-    passes locally.
+  - [x] Add catalog-optional detector evidence extraction and held-out
+    PSF/background metrics. Automatic GLS point-source selection and
+    source-excluded background sampling remove the manual catalog blocker; the
+    reviewed-catalog route remains an audit override. The operational input is
+    the complete 135 aligned-CRF set, with CAL retained as fallback.
 - [x] Inventory the existing CANFAR CRFs: 27 long-channel products under
   `/arc/projects/ots/jwst_smacs0723/`, covering three observation groups and
   nine patterns.

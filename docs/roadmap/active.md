@@ -59,17 +59,20 @@
   `PATT_NUM` splits, official instrument metadata, atomic output, deterministic
   provenance hashing, and persisted two-dimensional coverage diagnostics.
 - [x] Add a Torchfits-backed observational evidence extractor. A reviewed sky
-  catalog is proper-motion propagated into every CAL exposure, phase-registered
-  PSF stamps and local sigma-clipped background targets are read from
-  `SCI/ERR/DQ`, invalid pixels receive zero weight, and FITS targets plus hashes
-  are attached to the frozen `PATT_NUM` manifest. The local 135-CAL inventory
-  passes manifest construction with 75/30/30 train/validation/test exposures.
+  catalog can be proper-motion propagated into each detector exposure, but is
+  no longer mandatory: a catalog-free GLS matched-filter path automatically
+  selects isolated compact PSF targets and source-excluded background controls
+  from `SCI/ERR/DQ`. Phase-registered targets, invalid-pixel weights, selection
+  diagnostics, FITS products, and hashes are attached to the frozen `PATT_NUM`
+  manifest. The scientific path is the complete 135 aligned CRF set; the local
+  135-CAL inventory remains its 75/30/30 reproducibility fallback.
 - [x] Add a split-labelled held-out scoring contract for PSF/background terms:
   normalized PSF MSE, centroid RMSE, maximum encircled-energy error, valid-pixel
   fraction, and background MSE/bias/MAE. This is evaluation plumbing, not a
   real predictive result.
-- [ ] Run the reviewed observational extraction and staged fit, then publish
-  validation/test scores by band, detector, position, and time. Coverage
+- [ ] Run the automatic aligned-CRF extraction and staged fit, optionally audit
+  against the published UPDec PSF star and an external reviewed catalog, then
+  publish validation/test scores by band, detector, position, and time. Coverage
   certifies where evidence exists but does not show that learned operators
   predict withheld exposures.
 - [ ] Implement learned non-stationary PSF covariance propagation, including

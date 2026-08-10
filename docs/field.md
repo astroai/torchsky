@@ -210,7 +210,7 @@ encoders:
 
 ```console
 pixi run torchsky calibration-manifest \
-  '/arc/projects/ots/torchsky-data/jwst_smacs0723/crf/*.fits' \
+  '/arc/projects/ots/torchsky-data/jwst_smacs0723/aligned/*.fits' \
   --evidence calibration-evidence.csv \
   --output calibration-manifest.json
 ```
@@ -224,8 +224,25 @@ existing `PATT_NUM` train/validation/test partition, and records canonical MJD
 UTC midpoint provenance. It fails on inconsistent timing aliases, footprints,
 or evidence coordinates.
 
-To build those detector targets from observed CAL pixels rather than entering
-them by hand, first review a sky catalog with columns
+The UPDec experiment uses the complete 135 aligned
+`*_crf_rshift_tweakreg.fits` products. The 27 plain CRFs cover only the long
+channel, and the 135 CAL products are the reproducibility fallback.
+
+No external detection catalog is required. With no `--catalog`, the extractor
+fits a heteroscedastic Gaussian-PSF amplitude while analytically marginalizing
+a local constant sky, robustly whitens the response, retains isolated compact
+peaks, refines their subpixel centroids, and lays out source-excluded background
+controls across each detector. The thresholds and selection diagnostics are
+persisted so the same selection function is applied to every frozen split.
+
+```console
+pixi run torchsky calibration-extract \
+  '/arc/projects/ots/torchsky-data/jwst_smacs0723/aligned/*.fits' \
+  --output-dir /arc/projects/ots/torchsky-data/jwst_smacs0723/calibration-evidence
+```
+
+An explicitly reviewed astrometric catalog remains an optional higher-assurance
+override. Its columns are
 `source_id,role,ra_deg,dec_deg,reviewed`. `role` is `psf` for an isolated,
 unsaturated calibration star or `background` for a source-free location.
 Optional columns are `pmra_mas_yr,pmdec_mas_yr,ref_epoch_jyear,sample_weight`;
@@ -234,13 +251,13 @@ J2016.0. Every row must explicitly set `reviewed=true`.
 
 ```console
 pixi run torchsky calibration-extract \
-  'data/jwst_smacs0723/*_cal.fits' \
+  '/arc/projects/ots/torchsky-data/jwst_smacs0723/aligned/*.fits' \
   --catalog smacs0723-reviewed-calibrators.csv \
   --output-dir benchmark_results/smacs0723-calibration-evidence
 ```
 
-The command reads `SCI`, `ERR`, and `DQ` through Torchfits, propagates each
-position to the exposure midpoint, and transforms it with Torchsky WCS. PSF
+The command reads `SCI`, `ERR`, and `DQ` through Torchfits. Catalog positions
+are propagated to the exposure midpoint and transformed with Torchsky WCS. PSF
 stamps are bilinearly registered at their fractional detector phase, fitted
 with a weighted sigma-clipped local plane, normalized to unit flux, and stored
 with per-pixel inverse-variance weights. Blank-sky targets are the centre value
