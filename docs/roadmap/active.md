@@ -64,8 +64,8 @@
   selects isolated compact PSF targets and source-excluded background controls
   from `SCI/ERR/DQ`. Phase-registered targets, invalid-pixel weights, selection
   diagnostics, FITS products, and hashes are attached to the frozen `PATT_NUM`
-  manifest. The scientific path is the complete 135 aligned CRF set; the local
-  135-CAL inventory remains its 75/30/30 reproducibility fallback.
+  manifest. The scientific path is the complete 135 aligned CRF set; CAL
+  products are not used in this experiment.
 - [x] Add a split-labelled held-out scoring contract for PSF/background terms:
   normalized PSF MSE, centroid RMSE, maximum encircled-energy error, valid-pixel
   fraction, and background MSE/bias/MAE. This is evaluation plumbing, not a
@@ -75,6 +75,14 @@
   publish validation/test scores by band, detector, position, and time. Coverage
   certifies where evidence exists but does not show that learned operators
   predict withheld exposures.
+  - [x] Add a train-only evidence initializer and exact-commit CANFAR fit mode.
+    Compare a coordinate-invariant one-kernel/one-bias control against adaptive
+    detector/wavelength/time models with one training-derived loss scale across
+    train, validation, and untouched test splits.
+  - [ ] Audit the persisted 135-CRF extraction manifest and evidence hashes.
+  - [ ] Fit every detector/role group, publish aggregate held-out
+    adaptive-to-stationary ratios, then add band/position/time slices only where
+    each slice has enough withheld evidence to be meaningful.
 - [ ] Implement learned non-stationary PSF covariance propagation, including
   cross-basis terms, before enabling Gaussian NLL for these bundles.
 - [ ] Measure CPU/CUDA throughput and peak memory from small stamps through

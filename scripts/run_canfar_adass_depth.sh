@@ -81,6 +81,23 @@ case "${mode}" in
       --output-dir "${artifact_root}/evidence"
     test -s "${artifact_root}/evidence/calibration_evidence_manifest.json"
     ;;
+  calibration-fit)
+    calibration_manifest=${CALIBRATION_EVIDENCE_MANIFEST:?set CALIBRATION_EVIDENCE_MANIFEST}
+    calibration_steps=${CALIBRATION_FIT_STEPS:-300}
+    calibration_lr=${CALIBRATION_FIT_LR:-0.001}
+    calibration_device=${CALIBRATION_FIT_DEVICE:-cpu}
+    test -s "${calibration_manifest}"
+    pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+      python -m pip install -e "${source_root}" --no-build-isolation
+    pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+      python "${source_root}/benchmarks/fit_smacs0723_operator_calibration.py" \
+      --manifest "${calibration_manifest}" \
+      --output-dir "${artifact_root}/fit" \
+      --steps "${calibration_steps}" \
+      --lr "${calibration_lr}" \
+      --device "${calibration_device}"
+    test -s "${artifact_root}/fit/operator_calibration_fit.json"
+    ;;
   foam)
     bands=${FOAM_BANDS:-F090W,F150W}
     crop_size=${FOAM_CROP_SIZE:-32}
