@@ -115,9 +115,9 @@ case "${mode}" in
     calibration_inspection_per_group=${CALIBRATION_INSPECTION_PER_GROUP:-12}
     test -s "${calibration_manifest}"
     test -s "${calibration_fit_report}"
-    pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+    pixi run --manifest-path "${source_root}/pixi.toml" -e bench -- \
       python -m pip install -e "${source_root}" --no-build-isolation
-    pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+    pixi run --manifest-path "${source_root}/pixi.toml" -e bench -- \
       python "${source_root}/benchmarks/export_smacs0723_calibration_inspection.py" \
       --manifest "${calibration_manifest}" \
       --fit-report "${calibration_fit_report}" \

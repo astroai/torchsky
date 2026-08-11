@@ -61,3 +61,11 @@ def test_inspection_selects_worst_residuals_and_writes_png(tmp_path: Path) -> No
         [(selected[0], torch.arange(25, dtype=torch.float32).reshape(5, 5))],
     )
     assert output.stat().st_size > 0
+
+
+def test_canfar_inspection_uses_visualization_environment() -> None:
+    runner = (ROOT / "scripts" / "run_canfar_adass_depth.sh").read_text(
+        encoding="utf-8"
+    )
+    inspection = runner.split("  calibration-inspect)", 1)[1].split("  foam)", 1)[0]
+    assert inspection.count('-e bench -- \\\n') == 2
