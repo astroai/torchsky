@@ -111,6 +111,13 @@
   - [ ] Publish the NRCB4 visual inspection bundle (zscale PNG contact sheets,
     per-exposure DS9 regions, compact CSV/Markdown indices, model residual
     plots, and Torchfits-written SCI/ERR/DQ FITS cubes) beside the r3 artifact.
+  - [x] Wire the frozen selection into the joint SMACS Foam/INR benchmark.
+    Checkpoint hashes and manifest identity are verified; pruning is replayed
+    from the validation report; PSF/background parameters start frozen; CRF
+    detector and MJD context is explicit; background amplitudes follow the
+    benchmark intensity normalization; and initial WCS crops retain their true
+    JWST detector origin. A matched end-to-end control is still required before
+    deciding whether to unfreeze nuisance operators jointly with the scene.
 - [ ] Implement learned non-stationary PSF covariance propagation, including
   cross-basis terms, before enabling Gaussian NLL for these bundles.
 - [ ] Measure CPU/CUDA throughput and peak memory from small stamps through

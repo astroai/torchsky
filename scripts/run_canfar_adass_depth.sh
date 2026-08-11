@@ -61,6 +61,16 @@ case "${FOAM_INITIALIZE_FROM_COADD:-0}" in
   *) echo "FOAM_INITIALIZE_FROM_COADD must be 0 or 1" >&2; exit 2 ;;
 esac
 
+operator_calibration_args=()
+if [[ -n "${CALIBRATION_EVIDENCE_MANIFEST:-}" || -n "${CALIBRATION_FIT_REPORT:-}" ]]; then
+  test -n "${CALIBRATION_EVIDENCE_MANIFEST:-}"
+  test -n "${CALIBRATION_FIT_REPORT:-}"
+  operator_calibration_args=(
+    --operator-calibration-manifest "${CALIBRATION_EVIDENCE_MANIFEST}"
+    --operator-calibration-fit-report "${CALIBRATION_FIT_REPORT}"
+  )
+fi
+
 case "${mode}" in
   calibration-extract)
     calibration_input_root=${CALIBRATION_INPUT_ROOT:-${data_root}/jwst_smacs0723/aligned}
@@ -147,6 +157,7 @@ case "${mode}" in
       --foam-lr "${foam_lr}" \
       "${foam_geometry_args[@]}" \
       "${foam_initialization_args[@]}" \
+      "${operator_calibration_args[@]}" \
       --models spectral_power_foam \
       --fail-on-method-error \
       --json-out "${artifact_root}/shared-foam.json" \
@@ -200,6 +211,7 @@ case "${mode}" in
         --foam-lr "${foam_lr}" \
         "${foam_geometry_args[@]}" \
         "${foam_initialization_args[@]}" \
+        "${operator_calibration_args[@]}" \
         --models spectral_power_foam \
         --fail-on-method-error \
         "${injection_args[@]}" \

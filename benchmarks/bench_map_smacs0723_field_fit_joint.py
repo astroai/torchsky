@@ -55,6 +55,7 @@ from bench_multiband_depth import (  # noqa: E402
     gaussian_psf_contract,
     inject_common_world_exposures,
 )
+import fit_smacs0723_operator_calibration as calibration_fit  # noqa: E402
 
 DEFAULT_JSON_OUT = DATA / "benchmark_results" / "smacs0723_field_fit_joint.json"
 DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_field_fit_joint.md"
@@ -78,6 +79,15 @@ from torchsky.map.field import (  # noqa: E402
 )
 from torchsky.map.field.bandpass import bandpass_quadrature  # noqa: E402
 from torchsky.map.operators import apply_psf_spec, pixel_area_sr_at  # noqa: E402
+from torchsky.calibration_evidence import load_operator_calibration_split  # noqa: E402
+from torchsky.map.operators import (  # noqa: E402
+    ConditionedBackgroundField,
+    LearnedBackgroundOp,
+    LearnedPSFOp,
+    ObservationOperatorBundle,
+    apply_operator_calibration_pruning,
+    field_observation_operator_bundle,
+)
 
 
 REAL_JOINT_CASE = "tpv_field_fit_deep_multiband_broad"
@@ -120,6 +130,144 @@ def _parse_csv(value: str) -> list[str]:
 def _safe_slug(value: str) -> str:
     text = str(value).strip().lower()
     return "".join(ch if ch.isalnum() else "_" for ch in text).strip("_") or "item"
+
+
+def _calibration_exposure_lookup(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    for exposure in payload["exposures"]:
+        lookup[str(exposure["path"])] = exposure
+        lookup[str(exposure["resolved_path"])] = exposure
+        lookup[str(exposure["filename"])] = exposure
+    return lookup
+
+
+def _calibration_exposure(
+    lookup: dict[str, dict[str, Any]], path: Path
+) -> dict[str, Any]:
+    exposure = lookup.get(str(path)) or lookup.get(str(path.resolve()))
+    exposure = exposure or lookup.get(path.name)
+    if exposure is None:
+        raise ValueError(f"calibration manifest does not contain {path}")
+    return exposure
+
+
+def _load_calibrated_operator_models(
+    manifest: Path,
+    fit_report: Path,
+    *,
+    detectors: set[str],
+    intensity_scale: float,
+) -> tuple[dict[str, dict[str, torch.nn.Module]], dict[str, Any]]:
+    manifest = manifest.resolve()
+    report = json.loads(fit_report.read_text(encoding="utf-8"))
+    if report.get("manifest_sha256") != calibration_fit._sha256(manifest):
+        raise ValueError("operator fit report does not match the calibration manifest")
+    indexed = {
+        (str(group["detector"]).upper(), str(group["role"]), str(group["family"])): group
+        for group in report["groups"]
+    }
+    models: dict[str, dict[str, torch.nn.Module]] = {}
+    audit = []
+    for detector in sorted(detectors):
+        models[detector] = {}
+        for role in ("background", "psf"):
+            group = indexed.get((detector, role, "adaptive"))
+            if group is None:
+                raise ValueError(f"fit report has no adaptive {detector}/{role} group")
+            checkpoint_path = Path(group["checkpoint"])
+            if calibration_fit._sha256(checkpoint_path) != group["checkpoint_sha256"]:
+                raise ValueError(f"{detector}/{role} checkpoint hash mismatch")
+            arrays = load_operator_calibration_split(
+                manifest,
+                split="train",
+                role=role,
+                detector=detector,
+                verify_hashes=True,
+            )
+            model, _initializer = calibration_fit._make_model(
+                arrays,
+                role=role,
+                family="adaptive",
+                device=torch.device("cpu"),
+            )
+            checkpoint = torch.load(
+                checkpoint_path, map_location="cpu", weights_only=True
+            )
+            if (
+                checkpoint.get("schema_version") != 1
+                or checkpoint.get("detector") != detector
+                or checkpoint.get("role") != role
+                or checkpoint.get("family") != "adaptive"
+            ):
+                raise ValueError(f"invalid {detector}/{role} checkpoint metadata")
+            model.load_state_dict(checkpoint["state_dict"])
+            pruning = apply_operator_calibration_pruning(
+                model, group["validation_pruning"]
+            )
+            _freeze_calibrated_operator_model(
+                model, role=role, intensity_scale=intensity_scale
+            )
+            models[detector][role] = model
+            audit.append(
+                {
+                    "detector": detector,
+                    "role": role,
+                    "checkpoint": str(checkpoint_path),
+                    "checkpoint_sha256": group["checkpoint_sha256"],
+                    **pruning,
+                }
+            )
+    return models, {
+        "manifest": str(manifest),
+        "manifest_sha256": report["manifest_sha256"],
+        "fit_report": str(fit_report.resolve()),
+        "intensity_scale": float(intensity_scale),
+        "models": audit,
+    }
+
+
+def _freeze_calibrated_operator_model(
+    model: torch.nn.Module, *, role: str, intensity_scale: float
+) -> None:
+    scale = float(intensity_scale)
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("calibrated operator intensity_scale must be positive")
+    if role == "background":
+        if not isinstance(model, ConditionedBackgroundField):
+            raise TypeError("background checkpoint produced the wrong model")
+        output = model.network[-1]
+        if not isinstance(output, torch.nn.Linear):
+            raise TypeError("background model must end with a linear layer")
+        with torch.no_grad():
+            output.weight.div_(scale)
+            output.bias.div_(scale)
+    elif role != "psf":
+        raise ValueError("calibrated operator role must be background or psf")
+    model.requires_grad_(False)
+    model.eval()
+
+
+def _calibrated_operator_bundles(
+    observations: list[FieldObservation],
+    contexts: list[ForwardContext],
+    models: dict[str, dict[str, torch.nn.Module]],
+) -> tuple[ObservationOperatorBundle, ...]:
+    if len(observations) != len(contexts):
+        raise ValueError("calibrated observations and contexts must have equal length")
+    bundles = []
+    for observation, context in zip(observations, contexts, strict=True):
+        detector = str(context.detector or "").upper()
+        if detector not in models:
+            raise ValueError(f"no calibrated operators for detector {detector!r}")
+        bundles.append(
+            field_observation_operator_bundle(observation).with_updates(
+                psf=LearnedPSFOp(models[detector]["psf"]),
+                background=LearnedBackgroundOp(
+                    models[detector]["background"], coordinate_frame="detector"
+                ),
+            )
+        )
+    return tuple(bundles)
 
 
 def _regular_foam_model_kwargs(
@@ -812,6 +960,18 @@ def main() -> int:
     parser.add_argument("--markdown-out", type=Path, default=DEFAULT_MARKDOWN_OUT)
     parser.add_argument("--export-dir", type=Path, default=DEFAULT_EXPORT_DIR)
     parser.add_argument(
+        "--operator-calibration-manifest",
+        type=Path,
+        default=None,
+        help="135-CRF calibration evidence manifest for frozen learned operators",
+    )
+    parser.add_argument(
+        "--operator-calibration-fit-report",
+        type=Path,
+        default=None,
+        help="Fit report containing adaptive checkpoints and validation pruning",
+    )
+    parser.add_argument(
         "--forward-context",
         action="store_true",
         help=(
@@ -824,6 +984,14 @@ def main() -> int:
         parser.error("coadd initialization currently requires fixed Foam geometry")
     if args.foam_exact_max_candidate_pairs <= 0:
         parser.error("--foam-exact-max-candidate-pairs must be positive")
+    if (args.operator_calibration_manifest is None) != (
+        args.operator_calibration_fit_report is None
+    ):
+        parser.error(
+            "--operator-calibration-manifest and "
+            "--operator-calibration-fit-report must be provided together"
+        )
+    calibrated_operators = args.operator_calibration_manifest is not None
 
     bands = _parse_csv(args.bands)
     pattern_numbers = tuple(int(value) for value in _parse_csv(args.patt_nums))
@@ -841,6 +1009,16 @@ def main() -> int:
         json.loads(args.injection_manifest.read_text(encoding="utf-8"))
         if args.injection_manifest is not None
         else None
+    )
+    calibration_manifest_payload = (
+        json.loads(args.operator_calibration_manifest.read_text(encoding="utf-8"))
+        if args.operator_calibration_manifest is not None
+        else None
+    )
+    calibration_lookup = (
+        _calibration_exposure_lookup(calibration_manifest_payload)
+        if calibration_manifest_payload is not None
+        else {}
     )
     explicit_target_header = (
         dict(torchsky.read(str(args.target_header_path), return_header=True)[1])
@@ -1027,14 +1205,30 @@ def main() -> int:
                     continue
                 crop_image, crop_weight, crop_mask, crop_header = cropped
                 obs_index = len(all_field_observations) + len(field_observations)
+                calibration_exposure = (
+                    _calibration_exposure(calibration_lookup, exposure_path)
+                    if calibrated_operators
+                    else None
+                )
+                detector_x0 = float(crop_header["SUBSTRT1"]) - 1.0
+                detector_y0 = float(crop_header["SUBSTRT2"]) - 1.0
+                if calibration_exposure is not None:
+                    detector_x0 += float(
+                        calibration_exposure["detector_bounds_xy"][0]
+                    ) - (float(header.get("SUBSTRT1", 1)) - 1.0)
+                    detector_y0 += float(
+                        calibration_exposure["detector_bounds_xy"][2]
+                    ) - (float(header.get("SUBSTRT2", 1)) - 1.0)
+                    crop_header["SUBSTRT1"] = int(detector_x0) + 1
+                    crop_header["SUBSTRT2"] = int(detector_y0) + 1
                 field_observations.append(
                     FieldObservation(
                         image=torch.from_numpy(crop_image),
                         header=crop_header,
                         weight=torch.from_numpy(crop_weight),
                         mask=torch.from_numpy(crop_mask),
-                        detector_x0_pix=float(crop_header["SUBSTRT1"]) - 1.0,
-                        detector_y0_pix=float(crop_header["SUBSTRT2"]) - 1.0,
+                        detector_x0_pix=detector_x0,
+                        detector_y0_pix=detector_y0,
                         psf_sigma_pix=_fitted_gaussian_psf_sigma_pix(
                             band,
                             crop_header,
@@ -1045,7 +1239,18 @@ def main() -> int:
                 all_forward_contexts.append(
                     ForwardContext(
                         survey=str(band),
+                        instrument="NIRCAM" if calibration_exposure else None,
+                        detector=(
+                            str(calibration_exposure["detector"])
+                            if calibration_exposure
+                            else None
+                        ),
                         exposure_id=f"{band}_{exposure_path.stem}",
+                        time_mjd=(
+                            float(calibration_exposure["timing"]["midpoint_mjd_utc"])
+                            if calibration_exposure
+                            else None
+                        ),
                         extra={
                             "exposure_index": obs_index,
                             "source_path": str(exposure_path),
@@ -1169,12 +1374,30 @@ def main() -> int:
             coord_mode="local_tangent",
         )
         forward_ctx_tuple: tuple[ForwardContext | None, ...] | None = None
-        if args.forward_context:
+        if args.forward_context or calibrated_operators:
             if len(all_forward_contexts) != len(normalized_observations):
                 raise RuntimeError(
                     "internal: joint forward context list length mismatch"
                 )
             forward_ctx_tuple = tuple(all_forward_contexts)
+
+        calibrated_bundles: tuple[ObservationOperatorBundle, ...] | None = None
+        calibration_audit: dict[str, Any] | None = None
+        if calibrated_operators:
+            assert args.operator_calibration_manifest is not None
+            assert args.operator_calibration_fit_report is not None
+            detectors = {
+                str(context.detector).upper() for context in all_forward_contexts
+            }
+            calibrated_models, calibration_audit = _load_calibrated_operator_models(
+                args.operator_calibration_manifest,
+                args.operator_calibration_fit_report,
+                detectors=detectors,
+                intensity_scale=float(intensity_scale),
+            )
+            calibrated_bundles = _calibrated_operator_bundles(
+                normalized_observations, all_forward_contexts, calibrated_models
+            )
 
         fitted_models: dict[
             str,
@@ -1209,6 +1432,9 @@ def main() -> int:
             if forward_ctx_tuple is not None:
                 fit_kwargs = dict(fit_kwargs)
                 fit_kwargs["observation_forward_contexts"] = forward_ctx_tuple
+            if calibrated_bundles is not None:
+                fit_kwargs = dict(fit_kwargs)
+                fit_kwargs["observation_operator_bundles"] = calibrated_bundles
             domain = (
                 local_domain
                 if model_kind == "spectral_power_foam"
@@ -1279,6 +1505,9 @@ def main() -> int:
                     ),
                     "target_psf_sigma_pix": float(entry["target_psf_sigma_pix"]),
                     "forward_context": bool(args.forward_context),
+                    "calibrated_operators": bool(
+                        calibrated_operators and model_kind != "coadd_bilinear"
+                    ),
                     "optimizer_steps": int(args.steps)
                     if model_kind != "coadd_bilinear"
                     else 0,
@@ -1573,8 +1802,19 @@ def main() -> int:
                 if args.injection_manifest is not None
                 else None
             ),
+            "operator_calibration_manifest": (
+                str(args.operator_calibration_manifest.resolve())
+                if args.operator_calibration_manifest is not None
+                else None
+            ),
+            "operator_calibration_fit_report": (
+                str(args.operator_calibration_fit_report.resolve())
+                if args.operator_calibration_fit_report is not None
+                else None
+            ),
         },
         "injection_audit": injection_rows,
+        "operator_calibration": calibration_audit,
         "rows": ok_rows + fail_rows,
         "summary": _summarize_by_model(ok_rows),
     }

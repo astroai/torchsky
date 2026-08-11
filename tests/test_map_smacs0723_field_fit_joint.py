@@ -21,6 +21,8 @@ if str(BENCHMARKS) not in sys.path:
 
 from bench_map_smacs0723_field_fit import _field_target_observation  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import (  # noqa: E402
+    _calibrated_operator_bundles,
+    _freeze_calibrated_operator_model,
     _fitted_gaussian_psf_sigma_pix,
     _format_markdown,
     _summarize_by_model,
@@ -41,6 +43,66 @@ from torchsky.map.field import (  # noqa: E402
     SpectralPowerFoamField,
     make_tangent_plane_header,
 )
+from torchsky.map import ForwardContext  # noqa: E402
+from torchsky.map.operators import LearnedBackgroundOp, LearnedPSFOp  # noqa: E402
+from torchsky.map.operators import (  # noqa: E402
+    ConditionedBackgroundField,
+    SpatioSpectralTemporalEncoder,
+)
+
+
+def test_frozen_calibrated_background_follows_scene_intensity_scale() -> None:
+    encoder = SpatioSpectralTemporalEncoder(
+        spatial_center=(0.0, 0.0),
+        spatial_scale=(1.0, 1.0),
+        wavelength_center=15_000.0,
+        spectral_scale=1_000.0,
+        time_center_mjd=59_737.0,
+        temporal_scale_days=1.0,
+        spatial_frequencies=0,
+        spectral_frequencies=0,
+        temporal_frequencies=0,
+    )
+    background = ConditionedBackgroundField(encoder, hidden_dim=2, hidden_layers=1)
+    output = background.network[-1]
+    assert isinstance(output, torch.nn.Linear)
+    with torch.no_grad():
+        output.weight.fill_(4.0)
+        output.bias.fill_(2.0)
+
+    _freeze_calibrated_operator_model(
+        background, role="background", intensity_scale=10.0
+    )
+
+    torch.testing.assert_close(output.weight, torch.full_like(output.weight, 0.4))
+    torch.testing.assert_close(output.bias, torch.full_like(output.bias, 0.2))
+    assert not background.training
+    assert not any(parameter.requires_grad for parameter in background.parameters())
+
+
+def test_calibrated_bundles_select_frozen_models_by_detector() -> None:
+    observation = FieldObservation(
+        image=torch.zeros((4, 4)),
+        header={"NAXIS1": 4, "NAXIS2": 4},
+        wavelength=15_000.0,
+    )
+    psf = torch.nn.Linear(1, 1)
+    background = torch.nn.Linear(1, 1)
+    psf.requires_grad_(False)
+    background.requires_grad_(False)
+
+    bundles = _calibrated_operator_bundles(
+        [observation],
+        [ForwardContext(detector="NRCB4", time_mjd=59_737.2)],
+        {"NRCB4": {"psf": psf, "background": background}},
+    )
+
+    assert len(bundles) == 1
+    assert isinstance(bundles[0].psf, LearnedPSFOp)
+    assert isinstance(bundles[0].background, LearnedBackgroundOp)
+    assert bundles[0].psf.model is psf
+    assert bundles[0].background.model is background
+    assert bundles[0].background.coordinate_frame == "detector"
 
 
 def test_joint_benchmark_import_does_not_require_astropy() -> None:
