@@ -22,8 +22,8 @@ import fit_smacs0723_operator_calibration as fit_calibration  # noqa: E402
 from torchsky.calibration_evidence import load_operator_calibration_split  # noqa: E402
 from torchsky.io import read, write  # noqa: E402
 from torchsky.map.operators import (  # noqa: E402
-    AdaptiveSpatioSpectralTemporalEncoder,
     ConditionedBackgroundField,
+    apply_operator_calibration_pruning,
 )
 from torchsky.viz.renderers.image import zscale_limits  # noqa: E402
 
@@ -70,23 +70,6 @@ def _load_background_model(
     return model
 
 
-def _apply_validation_pruning(
-    model: ConditionedBackgroundField, pruning: dict[str, Any]
-) -> None:
-    encoder = model.encoder
-    if not isinstance(encoder, AdaptiveSpatioSpectralTemporalEncoder):
-        raise TypeError("validation pruning requires an adaptive encoder")
-    axes = {
-        "spatial_x": encoder.x_axis,
-        "spatial_y": encoder.y_axis,
-        "spectral": encoder.spectral_axis,
-        "time_mjd": encoder.temporal_axis,
-    }
-    with torch.no_grad():
-        for item in pruning["pruned_bands"]:
-            axes[str(item["axis"])].gate_logits[int(item["band"])] = -80.0
-
-
 def _predict(model: ConditionedBackgroundField, arrays: dict[str, Tensor]) -> Tensor:
     parameter = next(model.parameters())
     with torch.no_grad():
@@ -116,7 +99,7 @@ def _prediction_rows(
     )
     adaptive = _load_background_model(manifest, adaptive_group, detector=detector)
     pruned = _load_background_model(manifest, adaptive_group, detector=detector)
-    _apply_validation_pruning(pruned, adaptive_group["validation_pruning"])
+    apply_operator_calibration_pruning(pruned, adaptive_group["validation_pruning"])
     output: list[dict[str, Any]] = []
     for split in ("train", "validation", "test"):
         arrays = load_operator_calibration_split(

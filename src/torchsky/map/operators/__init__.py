@@ -54,6 +54,7 @@ from .config import (
     validate_map_value_semantics,
 )
 from .calibration import (
+    apply_operator_calibration_pruning,
     BackgroundCalibrationTerm,
     FieldTrainingStage,
     OperatorCalibrationTerm,
@@ -188,6 +189,7 @@ def __getattr__(name: str):
 __all__ = [
     "AdaptiveAxisFeatures",
     "AdaptiveSpatioSpectralTemporalEncoder",
+    "apply_operator_calibration_pruning",
     "BackgroundCalibrationTerm",
     "BackgroundOp",
     "BackgroundFitSummary",

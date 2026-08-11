@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import math
 from typing import Literal, Protocol
@@ -652,6 +652,56 @@ def operator_calibration_validation_pruning_report(
         "pruned_test_raw_loss": final_test,
         "test_improvement_fraction": 1.0
         - final_test / max(abs(initial_test), torch.finfo(torch.float64).tiny),
+    }
+
+
+def apply_operator_calibration_pruning(
+    model: ConditionedKernelPSF | ConditionedBackgroundField,
+    report: Mapping[str, object],
+) -> dict[str, object]:
+    """Apply a validation-selected Fourier pruning report to a fitted model."""
+    if report.get("schema_version") != 1 or report.get("selection_split") != "validation":
+        raise ValueError("expected a schema-1 validation pruning report")
+    raw_items = report.get("pruned_bands")
+    if not isinstance(raw_items, list):
+        raise ValueError("pruning report must contain a pruned_bands list")
+    encoder = model.encoder
+    if not isinstance(encoder, AdaptiveSpatioSpectralTemporalEncoder):
+        raise ValueError("operator pruning requires an adaptive encoder")
+    axes = {
+        "spatial_x": encoder.x_axis,
+        "spatial_y": encoder.y_axis,
+        "spectral": encoder.spectral_axis,
+        "time_mjd": encoder.temporal_axis,
+    }
+    selected = []
+    seen: set[tuple[str, int]] = set()
+    for item in raw_items:
+        if not isinstance(item, Mapping):
+            raise ValueError("each pruned band must be a mapping")
+        axis_name = item.get("axis")
+        band = item.get("band")
+        if axis_name not in axes or not isinstance(band, int) or isinstance(band, bool):
+            raise ValueError("each pruned band needs a known axis and integer band")
+        axis = axes[axis_name]
+        if band < 0 or band >= axis.num_bands:
+            raise ValueError(f"pruned band {axis_name}[{band}] is out of range")
+        key = (axis_name, band)
+        if key in seen:
+            raise ValueError(f"duplicate pruned band {axis_name}[{band}]")
+        seen.add(key)
+        selected.append((axis_name, axis, band))
+    with torch.no_grad():
+        for _axis_name, axis, band in selected:
+            axis.gate_logits[band] = -80.0
+    return {
+        "schema_version": 1,
+        "selection_split": "validation",
+        "applied_band_count": len(selected),
+        "applied_bands": [
+            {"axis": axis_name, "band": band}
+            for axis_name, _axis, band in selected
+        ],
     }
 
 

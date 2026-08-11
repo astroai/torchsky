@@ -16,6 +16,7 @@ from torchsky.map.operators import (
     ObservationOperatorBundle,
     PSFCalibrationTerm,
     SpatioSpectralTemporalEncoder,
+    apply_operator_calibration_pruning,
     fit_operator_calibration_terms,
     operator_calibration_identifiability_report,
     operator_calibration_validation_pruning_report,
@@ -191,6 +192,29 @@ def test_operator_calibration_score_report_names_held_out_split() -> None:
     assert report["split"] == "test"
     assert report["term_count"] == 1
     assert report["terms"] == [term.diagnostics()]
+
+
+def test_validation_pruning_report_can_be_applied_for_deployment() -> None:
+    model = ConditionedBackgroundField(
+        _adaptive_encoder(), hidden_dim=4, hidden_layers=1
+    )
+    report = {
+        "schema_version": 1,
+        "selection_split": "validation",
+        "pruned_bands": [
+            {"axis": "time_mjd", "band": 0},
+            {"axis": "spatial_x", "band": 0},
+        ],
+    }
+
+    applied = apply_operator_calibration_pruning(model, report)
+
+    encoder = model.encoder
+    assert isinstance(encoder, AdaptiveSpatioSpectralTemporalEncoder)
+    assert applied["applied_band_count"] == 2
+    assert float(encoder.temporal_axis.gates[0].detach()) < 1.0e-20
+    assert float(encoder.x_axis.gates[0].detach()) < 1.0e-20
+    assert float(encoder.y_axis.gates[0].detach()) > 0.0
 
 
 def test_identifiability_report_restores_gates_and_scores_output_jacobians() -> None:
