@@ -71,3 +71,26 @@ def test_stationary_controls_are_coordinate_invariant_and_compare_held_out() -> 
     )
     assert comparisons[0]["validation"]["adaptive_improvement_fraction"] == 0.5
     assert comparisons[0]["test"]["adaptive_to_stationary_ratio"] == 0.75
+
+    coordinates = {
+        "detector_x": torch.tensor([0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0]),
+        "detector_y": torch.tensor([0.0, 2.0, 0.0, 2.0, 0.0, 2.0, 0.0, 2.0]),
+        "time_mjd": torch.tensor([0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]),
+        "sample_weight": torch.ones(8),
+    }
+    split_arrays = {
+        split: {name: value.clone() for name, value in coordinates.items()}
+        for split in ("train", "validation", "test")
+    }
+    split_rows = {
+        split: [{"band": "F090W" if index % 2 == 0 else "F150W"} for index in range(8)]
+        for split in ("train", "validation", "test")
+    }
+    included, skipped = benchmark._slice_definitions(
+        split_arrays, split_rows, minimum_samples=2
+    )
+    assert len(included) == 8
+    assert skipped == []
+    assert all(
+        min(item["sample_counts"].values()) >= 2 for item in included
+    )

@@ -18,6 +18,7 @@ from torchsky.map.operators import (
     SpatioSpectralTemporalEncoder,
     fit_operator_calibration_terms,
     operator_calibration_identifiability_report,
+    operator_calibration_validation_pruning_report,
     operator_calibration_score_report,
     registered_image_stamps,
     set_field_training_stage,
@@ -215,6 +216,7 @@ def test_identifiability_report_restores_gates_and_scores_output_jacobians() -> 
             ("time", encoder.temporal_axis),
         )
     }
+    saved_coordinates = (term.detector_x, term.detector_y, term.wavelength, term.time_mjd)
     model.eval()
 
     report = cast(
@@ -226,6 +228,7 @@ def test_identifiability_report_restores_gates_and_scores_output_jacobians() -> 
 
     assert model.training is False
     assert len(report["band_ablations"]) == 4
+    assert len(report["axis_center_ablations"]) == 4
     assert report["output_jacobian"]["method"] == "exact_scalar"
     assert report["output_jacobian"]["probes"] == 1
     assert (
@@ -234,6 +237,32 @@ def test_identifiability_report_restores_gates_and_scores_output_jacobians() -> 
         ]
         > 0.0
     )
+    for name, axis in (
+        ("x", encoder.x_axis),
+        ("y", encoder.y_axis),
+        ("spectral", encoder.spectral_axis),
+        ("time", encoder.temporal_axis),
+    ):
+        torch.testing.assert_close(axis.gate_logits, saved[name])
+    assert all(
+        current is original
+        for current, original in zip(
+            (term.detector_x, term.detector_y, term.wavelength, term.time_mjd),
+            saved_coordinates,
+            strict=True,
+        )
+    )
+
+    test_term = BackgroundCalibrationTerm(
+        model, x, y, wavelength, time, target + 0.05
+    )
+    pruning = cast(
+        dict[str, Any],
+        operator_calibration_validation_pruning_report(term, test_term),
+    )
+    assert pruning["pruned_validation_raw_loss"] <= pruning[
+        "initial_validation_raw_loss"
+    ]
     for name, axis in (
         ("x", encoder.x_axis),
         ("y", encoder.y_axis),

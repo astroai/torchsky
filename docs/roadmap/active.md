@@ -89,9 +89,13 @@
     Adaptive background loss improved for all validation detectors and four of
     five test detectors, with median 63.6%/34.5% gains; NRCB4 test regressed
     4.0% and remains a required failure analysis.
-  - [ ] Add band/position/time slices only where each slice has enough withheld
-    evidence to be meaningful. Use held-out band ablation and output-Jacobian
-    diagnostics before interpreting learned gates as physical length scales.
+  - [x] Add natural-band, training-median detector-quadrant, and training-median
+    time-epoch slices. A slice is published only when both validation and test
+    contain at least 20 targets; skipped slices retain their counts instead of
+    producing unstable metrics.
+  - [ ] Run the coverage-gated slice/pruning endpoint, investigate NRCB4 and
+    any other non-generalizing slices, and freeze the selected operator family
+    before coupling it to the scene fit.
 - [ ] Implement learned non-stationary PSF covariance propagation, including
   cross-basis terms, before enabling Gaussian NLL for these bundles.
 - [ ] Measure CPU/CUDA throughput and peak memory from small stamps through
@@ -108,7 +112,16 @@
   interpreting gate-weighted feature scales as physical correlation lengths.
   Ablation disables one Fourier band without refitting; scalar-background
   Jacobians are exact and PSF-kernel Jacobian norms use deterministic
-  Rademacher projections. Real checkpoint results are still pending.
+  Rademacher projections. Session `t123u804` at `8d87f38` shows the PSF Fourier
+  gates collapsed near `3.2e-4` with negligible single-band held-out effect, so
+  the PSF gains currently support smooth raw coordinate conditioning, not
+  identified periodic scales. Background models select temporal Fourier bands
+  strongly, but NRCB3/4 test ablations expose time-band overfitting.
+- [x] Add whole-axis centering ablations and conservative validation-only
+  Fourier pruning. The selector greedily removes a band only when held-out
+  validation loss improves by at least 0.5%, restores the fitted model after
+  evaluation, and opens test only once for the selected configuration. Real
+  pruning results remain pending.
 - [ ] Add axis-native adaptive variants required beyond image patches: spherical
   harmonic/needlet angular scales for full-sky FOSSIL/CMB/21-cm work and an
   optical-delay axis for interferometric spectroscopy.

@@ -22,6 +22,7 @@ from torchsky.map.operators import (
     SpatioSpectralTemporalEncoder,
     fit_operator_calibration_terms,
     operator_calibration_identifiability_report,
+    operator_calibration_validation_pruning_report,
     operator_calibration_score_report,
 )
 
@@ -268,6 +269,147 @@ def _background_loss_weight(arrays: dict[str, Tensor]) -> float:
     return 1.0 / max(float(variance), 1.0e-12)
 
 
+def _weighted_median(value: Tensor, weight: Tensor) -> float:
+    order = torch.argsort(value)
+    cumulative = weight[order].to(dtype=torch.float64).cumsum(0)
+    index = int(torch.searchsorted(cumulative, 0.5 * cumulative[-1]))
+    return float(value[order[index]])
+
+
+def _subset_arrays(arrays: dict[str, Tensor], mask: Tensor) -> dict[str, Tensor]:
+    return {name: value[mask] for name, value in arrays.items()}
+
+
+def _slice_definitions(
+    arrays: dict[str, dict[str, Tensor]],
+    rows: dict[str, list[dict[str, Any]]],
+    *,
+    minimum_samples: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    definitions: list[tuple[str, str, dict[str, Any], dict[str, Tensor]]] = []
+    bands = sorted({str(row["band"]).upper() for row in rows["train"]})
+    for band in bands:
+        definitions.append(
+            (
+                "band",
+                band,
+                {"band": band},
+                {
+                    split: torch.tensor(
+                        [str(row["band"]).upper() == band for row in rows[split]],
+                        dtype=torch.bool,
+                    )
+                    for split in ("validation", "test")
+                },
+            )
+        )
+    x_median = _weighted_median(
+        arrays["train"]["detector_x"], arrays["train"]["sample_weight"]
+    )
+    y_median = _weighted_median(
+        arrays["train"]["detector_y"], arrays["train"]["sample_weight"]
+    )
+    for x_name, x_high in (("x_low", False), ("x_high", True)):
+        for y_name, y_high in (("y_low", False), ("y_high", True)):
+            definitions.append(
+                (
+                    "detector_quadrant",
+                    f"{x_name}:{y_name}",
+                    {"x_median": x_median, "y_median": y_median},
+                    {
+                        split: (
+                            (arrays[split]["detector_x"] > x_median)
+                            if x_high
+                            else (arrays[split]["detector_x"] <= x_median)
+                        )
+                        & (
+                            (arrays[split]["detector_y"] > y_median)
+                            if y_high
+                            else (arrays[split]["detector_y"] <= y_median)
+                        )
+                        for split in ("validation", "test")
+                    },
+                )
+            )
+    time_median = _weighted_median(
+        arrays["train"]["time_mjd"], arrays["train"]["sample_weight"]
+    )
+    for label, high in (("early", False), ("late", True)):
+        definitions.append(
+            (
+                "time_epoch",
+                label,
+                {"training_time_median_mjd": time_median},
+                {
+                    split: (
+                        (arrays[split]["time_mjd"] > time_median)
+                        if high
+                        else (arrays[split]["time_mjd"] <= time_median)
+                    )
+                    for split in ("validation", "test")
+                },
+            )
+        )
+    included = []
+    skipped = []
+    for kind, label, metadata, masks in definitions:
+        counts = {split: int(mask.sum()) for split, mask in masks.items()}
+        descriptor = {
+            "kind": kind,
+            "label": label,
+            "metadata": metadata,
+            "sample_counts": counts,
+        }
+        if min(counts.values()) < minimum_samples:
+            skipped.append(descriptor)
+        else:
+            descriptor["masks"] = masks
+            included.append(descriptor)
+    return included, skipped
+
+
+def _score_slices(
+    model: nn.Module,
+    arrays: dict[str, dict[str, Tensor]],
+    rows: dict[str, list[dict[str, Any]]],
+    *,
+    role: str,
+    detector: str,
+    background_loss_weight: float,
+    minimum_samples: int,
+) -> dict[str, Any]:
+    included, skipped = _slice_definitions(
+        arrays, rows, minimum_samples=minimum_samples
+    )
+    reports = []
+    for descriptor in included:
+        masks = descriptor.pop("masks")
+        descriptor["reports"] = {
+            split: operator_calibration_score_report(
+                [
+                    _term(
+                        model,
+                        _subset_arrays(arrays[split], masks[split]),
+                        role=role,
+                        name=(
+                            f"{detector}:{role}:{split}:"
+                            f"{descriptor['kind']}:{descriptor['label']}"
+                        ),
+                        background_loss_weight=background_loss_weight,
+                    )
+                ],
+                split=split,
+            )
+            for split in ("validation", "test")
+        }
+        reports.append(descriptor)
+    return {
+        "minimum_samples_per_held_out_split": minimum_samples,
+        "included": reports,
+        "skipped": skipped,
+    }
+
+
 def _fit_group(
     manifest: Path,
     *,
@@ -279,6 +421,8 @@ def _fit_group(
     device: torch.device,
     output_dir: Path,
     seed: int,
+    manifest_payload: dict[str, Any],
+    minimum_slice_samples: int,
 ) -> dict[str, Any]:
     arrays = {
         split: load_operator_calibration_split(
@@ -290,6 +434,18 @@ def _fit_group(
         )
         for split in ("train", "validation", "test")
     }
+    rows = {
+        split: [
+            row
+            for row in manifest_payload.get("evidence", [])
+            if row.get("split") == split
+            and row.get("role") == role
+            and str(row.get("detector", "")).upper() == detector
+        ]
+        for split in ("train", "validation", "test")
+    }
+    if any(len(rows[split]) != arrays[split]["detector_x"].numel() for split in rows):
+        raise RuntimeError("manifest row order/count does not match loaded evidence")
     torch.manual_seed(seed)
     model, initializer = _make_model(
         arrays["train"], role=role, family=family, device=device
@@ -347,6 +503,15 @@ def _fit_group(
         "test_report": reports["test"],
         "checkpoint": str(checkpoint.resolve()),
         "checkpoint_sha256": _sha256(checkpoint),
+        "held_out_slices": _score_slices(
+            model,
+            arrays,
+            rows,
+            role=role,
+            detector=detector,
+            background_loss_weight=background_loss_weight,
+            minimum_samples=minimum_slice_samples,
+        ),
     }
     if family == "adaptive" and isinstance(
         model.encoder, AdaptiveSpatioSpectralTemporalEncoder
@@ -366,6 +531,24 @@ def _fit_group(
             )
             for split in ("validation", "test")
         }
+        result["validation_pruning"] = (
+            operator_calibration_validation_pruning_report(
+                _term(
+                    model,
+                    arrays["validation"],
+                    role=role,
+                    name=f"{detector}:{role}:validation",
+                    background_loss_weight=background_loss_weight,
+                ),
+                _term(
+                    model,
+                    arrays["test"],
+                    role=role,
+                    name=f"{detector}:{role}:test",
+                    background_loss_weight=background_loss_weight,
+                ),
+            )
+        )
     return result
 
 
@@ -401,6 +584,54 @@ def _held_out_comparisons(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return comparisons
 
 
+def _held_out_slice_comparisons(
+    groups: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    indexed = {
+        (group["detector"], group["role"], group["family"]): group
+        for group in groups
+    }
+    comparisons = []
+    for detector, role, family in sorted(indexed):
+        if family != "adaptive":
+            continue
+        stationary = indexed[(detector, role, "stationary")]
+        adaptive = indexed[(detector, role, "adaptive")]
+        stationary_slices = {
+            (item["kind"], item["label"]): item
+            for item in stationary["held_out_slices"]["included"]
+        }
+        for item in adaptive["held_out_slices"]["included"]:
+            key = (item["kind"], item["label"])
+            control = stationary_slices[key]
+            comparison: dict[str, Any] = {
+                "detector": detector,
+                "role": role,
+                "kind": key[0],
+                "label": key[1],
+                "metadata": item["metadata"],
+                "sample_counts": item["sample_counts"],
+            }
+            for split in ("validation", "test"):
+                stationary_loss = float(
+                    control["reports"][split]["terms"][0]["raw_loss"]
+                )
+                adaptive_loss = float(
+                    item["reports"][split]["terms"][0]["raw_loss"]
+                )
+                ratio = adaptive_loss / max(
+                    stationary_loss, torch.finfo(torch.float64).tiny
+                )
+                comparison[split] = {
+                    "stationary_raw_loss": stationary_loss,
+                    "adaptive_raw_loss": adaptive_loss,
+                    "adaptive_to_stationary_ratio": ratio,
+                    "adaptive_improvement_fraction": 1.0 - ratio,
+                }
+            comparisons.append(comparison)
+    return comparisons
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -409,10 +640,13 @@ def main() -> int:
     parser.add_argument("--lr", type=float, default=1.0e-3)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=1729)
+    parser.add_argument("--minimum-slice-samples", type=int, default=20)
     args = parser.parse_args()
 
     manifest = args.manifest.resolve()
     payload = json.loads(manifest.read_text(encoding="utf-8"))
+    if args.minimum_slice_samples < 1:
+        raise ValueError("minimum_slice_samples must be positive")
     detectors = sorted(
         {
             str(row["detector"]).upper()
@@ -443,6 +677,8 @@ def main() -> int:
                         + 100 * detector_index
                         + 10 * role_index
                         + family_index,
+                        manifest_payload=payload,
+                        minimum_slice_samples=args.minimum_slice_samples,
                     )
                 )
     report = {
@@ -456,6 +692,8 @@ def main() -> int:
         "detectors": detectors,
         "groups": groups,
         "held_out_comparisons": _held_out_comparisons(groups),
+        "held_out_slice_comparisons": _held_out_slice_comparisons(groups),
+        "minimum_slice_samples": args.minimum_slice_samples,
     }
     output = output_dir / "operator_calibration_fit.json"
     temporary = output.with_suffix(".json.tmp")
@@ -464,7 +702,23 @@ def main() -> int:
         encoding="utf-8",
     )
     temporary.replace(output)
-    print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
+    console_report = {
+        "report": str(output),
+        "manifest_sha256": report["manifest_sha256"],
+        "detectors": detectors,
+        "held_out_comparisons": report["held_out_comparisons"],
+        "held_out_slice_comparisons": report["held_out_slice_comparisons"],
+        "validation_pruning": [
+            {
+                "detector": group["detector"],
+                "role": group["role"],
+                "report": group["validation_pruning"],
+            }
+            for group in groups
+            if group["family"] == "adaptive"
+        ],
+    }
+    print(json.dumps(console_report, indent=2, sort_keys=True, allow_nan=False))
     return 0
 
 

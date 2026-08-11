@@ -429,8 +429,31 @@ def operator_calibration_identifiability_report(
     try:
         with torch.no_grad():
             baseline = float(term.raw_loss().detach().cpu())
-            ablations: list[dict[str, float | int | str]] = []
+            centered_axes: list[dict[str, float | str]] = []
+            coordinate_axes = (
+                ("spatial_x", "detector_x", encoder.x_axis.center),
+                ("spatial_y", "detector_y", encoder.y_axis.center),
+                ("spectral", "wavelength", encoder.spectral_axis.center),
+                ("time_mjd", "time_mjd", encoder.temporal_axis.center),
+            )
             denominator = max(abs(baseline), torch.finfo(torch.float64).tiny)
+            for axis_name, attribute, center in coordinate_axes:
+                original = getattr(term, attribute)
+                try:
+                    setattr(term, attribute, torch.full_like(original, center))
+                    ablated = float(term.raw_loss().detach().cpu())
+                finally:
+                    setattr(term, attribute, original)
+                centered_axes.append(
+                    {
+                        "axis": axis_name,
+                        "center": center,
+                        "centered_raw_loss": ablated,
+                        "loss_increase_fraction": (ablated - baseline)
+                        / denominator,
+                    }
+                )
+            ablations: list[dict[str, float | int | str]] = []
             for axis_name, axis in axes:
                 saved_logits = axis.gate_logits.detach().clone()
                 try:
@@ -527,6 +550,7 @@ def operator_calibration_identifiability_report(
         "split": split,
         "term": term.name,
         "baseline_raw_loss": baseline,
+        "axis_center_ablations": centered_axes,
         "band_ablations": ablations,
         "output_jacobian": {
             "method": method,
@@ -534,6 +558,100 @@ def operator_calibration_identifiability_report(
             "seed": int(seed),
             "axes": sensitivities,
         },
+    }
+
+
+def operator_calibration_validation_pruning_report(
+    validation_term: PSFCalibrationTerm | BackgroundCalibrationTerm,
+    test_term: PSFCalibrationTerm | BackgroundCalibrationTerm,
+    *,
+    minimum_validation_improvement_fraction: float = 0.005,
+) -> dict[str, object]:
+    """Greedily prune adaptive Fourier bands using validation evidence only."""
+    threshold = float(minimum_validation_improvement_fraction)
+    if not math.isfinite(threshold) or threshold < 0.0:
+        raise ValueError(
+            "minimum_validation_improvement_fraction must be finite and non-negative"
+        )
+    if validation_term.model is not test_term.model:
+        raise ValueError("validation and test terms must share one model")
+    if type(validation_term) is not type(test_term):
+        raise TypeError("validation and test calibration terms must have the same kind")
+    model = validation_term.model
+    encoder = model.encoder
+    if not isinstance(encoder, AdaptiveSpatioSpectralTemporalEncoder):
+        raise ValueError("validation pruning requires an adaptive encoder")
+    axes = (
+        ("spatial_x", encoder.x_axis),
+        ("spatial_y", encoder.y_axis),
+        ("spectral", encoder.spectral_axis),
+        ("time_mjd", encoder.temporal_axis),
+    )
+    saved_logits = {name: axis.gate_logits.detach().clone() for name, axis in axes}
+    training = model.training
+    model.eval()
+    try:
+        with torch.no_grad():
+            initial_validation = float(validation_term.raw_loss().detach().cpu())
+            initial_test = float(test_term.raw_loss().detach().cpu())
+            current_validation = initial_validation
+            remaining = [
+                (name, axis, band)
+                for name, axis in axes
+                for band in range(axis.num_bands)
+            ]
+            pruned: list[dict[str, float | int | str]] = []
+            while remaining:
+                trials = []
+                for name, axis, band in remaining:
+                    original = axis.gate_logits[band].detach().clone()
+                    axis.gate_logits[band] = -80.0
+                    loss = float(validation_term.raw_loss().detach().cpu())
+                    axis.gate_logits[band] = original
+                    trials.append((loss, name, axis, band))
+                loss, name, axis, band = min(trials, key=lambda item: item[0])
+                improvement = (current_validation - loss) / max(
+                    abs(current_validation), torch.finfo(torch.float64).tiny
+                )
+                if improvement < threshold:
+                    break
+                gate = float(axis.gates[band].detach().cpu())
+                axis.gate_logits[band] = -80.0
+                pruned.append(
+                    {
+                        "axis": name,
+                        "band": band,
+                        "gate": gate,
+                        "validation_improvement_fraction": improvement,
+                    }
+                )
+                current_validation = loss
+                remaining = [
+                    item
+                    for item in remaining
+                    if not (item[0] == name and item[2] == band)
+                ]
+            final_test = float(test_term.raw_loss().detach().cpu())
+    finally:
+        with torch.no_grad():
+            for name, axis in axes:
+                axis.gate_logits.copy_(saved_logits[name])
+        model.train(training)
+    return {
+        "schema_version": 1,
+        "selection_split": "validation",
+        "evaluation_split": "test",
+        "minimum_validation_improvement_fraction": threshold,
+        "pruned_bands": pruned,
+        "initial_validation_raw_loss": initial_validation,
+        "pruned_validation_raw_loss": current_validation,
+        "validation_improvement_fraction": 1.0
+        - current_validation
+        / max(abs(initial_validation), torch.finfo(torch.float64).tiny),
+        "initial_test_raw_loss": initial_test,
+        "pruned_test_raw_loss": final_test,
+        "test_improvement_fraction": 1.0
+        - final_test / max(abs(initial_test), torch.finfo(torch.float64).tiny),
     }
 
 
@@ -709,6 +827,7 @@ __all__ = [
     "PSFCalibrationTerm",
     "fit_operator_calibration_terms",
     "operator_calibration_identifiability_report",
+    "operator_calibration_validation_pruning_report",
     "operator_calibration_score_report",
     "registered_image_stamps",
     "set_field_training_stage",
