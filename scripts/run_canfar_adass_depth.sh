@@ -42,6 +42,7 @@ export PIXI_CACHE_DIR=/scratch/pixi-cache
 export TORCHSKY_DATA="${data_root}"
 export PATH="${PIXI_HOME}/bin:${PATH}"
 export PYTHONPATH="${source_root}/src${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONUNBUFFERED=1
 if ! command -v pixi >/dev/null 2>&1; then
   curl -fsSL https://pixi.sh/install.sh | bash
 fi
@@ -59,6 +60,13 @@ case "${FOAM_INITIALIZE_FROM_COADD:-0}" in
   0) ;;
   1) foam_initialization_args=(--foam-initialize-from-coadd) ;;
   *) echo "FOAM_INITIALIZE_FROM_COADD must be 0 or 1" >&2; exit 2 ;;
+esac
+
+foam_spatial_args=()
+case "${FOAM_AFFINE_SPATIAL_BASIS:-0}" in
+  0) ;;
+  1) foam_spatial_args=(--foam-affine-spatial-basis) ;;
+  *) echo "FOAM_AFFINE_SPATIAL_BASIS must be 0 or 1" >&2; exit 2 ;;
 esac
 
 operator_calibration_args=()
@@ -157,6 +165,7 @@ case "${mode}" in
       --foam-lr "${foam_lr}" \
       "${foam_geometry_args[@]}" \
       "${foam_initialization_args[@]}" \
+      "${foam_spatial_args[@]}" \
       "${operator_calibration_args[@]}" \
       --models spectral_power_foam \
       --fail-on-method-error \
@@ -211,6 +220,7 @@ case "${mode}" in
         --foam-lr "${foam_lr}" \
         "${foam_geometry_args[@]}" \
         "${foam_initialization_args[@]}" \
+        "${foam_spatial_args[@]}" \
         "${operator_calibration_args[@]}" \
         --models spectral_power_foam \
         --fail-on-method-error \

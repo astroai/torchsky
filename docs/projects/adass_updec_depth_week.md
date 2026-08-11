@@ -593,7 +593,7 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
   representation-resolution hypothesis is confirmed, but the blank fidelity
   gate remains closed at roughly 7--8% mean flux excess. Artifacts are under
   `/arc/projects/ots/torchsky-runs/20260802-smacs-foam-psfinit-g512-e935868`.
-- [ ] Score the frozen grid-512 configuration on the three existing injection
+- [x] Score the frozen grid-512 configuration on the three existing injection
   batches before changing representation or tuning. H100 session `tsu81ekc`
   completed all three batches at exact commit
   `1d055cfba3d5a89841f6cee61747cf079ec10a2b` in 24 minutes. Their global blank
@@ -606,12 +606,17 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
   but correctly rejected an ePSF stacked across faint non-positive responses.
   Commit `226b399` calibrates the ePSF on the predeclared brightest AB-magnitude
   bin without post-selecting on recovered response and passed 1,714 tests with
-  246 skips and zero type errors. Its `@canfar` launch is currently blocked by
-  the platform error `CONFIG: servops certificate is invalid`; the queued output
-  root is
-  `/arc/projects/ots/torchsky-runs/20260809-smacs-foam-g512-score-226b399`.
-  If recovery is not competitive, stop regular-grid scaling and add exact
-  within-cell first moments plus an affine spatial basis.
+  246 skips and zero type errors. After service recovery, session `qpqphhms` at
+  `5847231` reached the exact products and failed the intended response gate:
+  even that brightest bin has non-positive total injected-minus-blank response.
+  No ePSF or depth curve may be manufactured by selecting on recovered sign.
+- [x] Add exact within-cell first moments and an opt-in affine spatial basis.
+  Scalar and batched exact operators now carry analytic local x/y moments and
+  exact affine forward/adjoint maps; spectral Foam can learn cell-local slopes
+  while the piecewise-constant API remains the default. Rectangle, half-disk,
+  scalar/batched, gradient, and SMACS CLI checks pass locally.
+- [ ] Run a 512-square affine-cell blank plus one frozen injection batch. Expand
+  only if the bright-bin response is positive and flux/RMSE improve.
 - [x] Implement the frozen spectral-Foam scorer while the injection fanout runs.
   `benchmarks/score_smacs0723_foam.py` stages exact products, intersects and
   erodes support, derives band-dependent ePSFs from injected-minus-blank model

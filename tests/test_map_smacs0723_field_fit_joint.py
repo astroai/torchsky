@@ -360,14 +360,20 @@ def test_regular_foam_initialization_is_deterministic_and_pixel_independent() ->
     torch.testing.assert_close(first["sites"], second["sites"])
     torch.testing.assert_close(first["radii"], second["radii"])
 
+    affine = _regular_foam_model_kwargs(
+        grid_side=3,
+        basis_count=4,
+        affine_spatial_basis=True,
+    )
+    assert affine["cell_gradient_coefficients"].shape == (9, 4, 2)
+    assert not bool(torch.any(affine["cell_gradient_coefficients"]))
+
 
 def test_regular_foam_footprint_extent_covers_normalized_domain() -> None:
     kwargs = _regular_foam_model_kwargs(grid_side=16, basis_count=4, extent=0.55)
     sites = kwargs["sites"]
     radii = kwargs["radii"]
-    corners = torch.tensor(
-        [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]]
-    )
+    corners = torch.tensor([[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]])
     distance = torch.cdist(corners, sites)
 
     assert bool(torch.all(distance.min(dim=1).values <= radii.max()))

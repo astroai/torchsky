@@ -113,9 +113,7 @@ def _fitted_gaussian_psf_sigma_pix(
         torch.tensor(0.5 * (width - 1), dtype=torch.float64),
         torch.tensor(0.5 * (height - 1), dtype=torch.float64),
     )
-    pixel_scale_arcsec = float(
-        torch.sqrt(area_sr) * (180.0 / torch.pi) * 3600.0
-    )
+    pixel_scale_arcsec = float(torch.sqrt(area_sr) * (180.0 / torch.pi) * 3600.0)
     contract = gaussian_psf_contract(band)
     sigma_pix = contract.fitted_fwhm_arcsec / 2.354820045 / pixel_scale_arcsec
     if not math.isfinite(sigma_pix) or sigma_pix <= 0.0:
@@ -163,7 +161,11 @@ def _load_calibrated_operator_models(
     if report.get("manifest_sha256") != calibration_fit._sha256(manifest):
         raise ValueError("operator fit report does not match the calibration manifest")
     indexed = {
-        (str(group["detector"]).upper(), str(group["role"]), str(group["family"])): group
+        (
+            str(group["detector"]).upper(),
+            str(group["role"]),
+            str(group["family"]),
+        ): group
         for group in report["groups"]
     }
     models: dict[str, dict[str, torch.nn.Module]] = {}
@@ -274,6 +276,7 @@ def _regular_foam_model_kwargs(
     *,
     grid_side: int,
     basis_count: int,
+    affine_spatial_basis: bool = False,
     extent: float = 1.0,
 ) -> dict[str, Any]:
     """Deterministic Power-Foam initialization independent of science pixels."""
@@ -302,7 +305,7 @@ def _regular_foam_model_kwargs(
     )
     coefficients = torch.zeros((side * side, basis), dtype=torch.float32)
     inverse_cell_area = 1.0 / (step * step)
-    return {
+    result = {
         "sites": sites,
         "radii": radii,
         "cell_coefficients": coefficients,
@@ -310,6 +313,11 @@ def _regular_foam_model_kwargs(
         "temperature_start": FOAM_TEMPERATURE_START_CELL_UNITS * inverse_cell_area,
         "temperature_end": FOAM_TEMPERATURE_END_CELL_UNITS * inverse_cell_area,
     }
+    if affine_spatial_basis:
+        result["cell_gradient_coefficients"] = torch.zeros(
+            (side * side, basis, 2), dtype=torch.float32
+        )
+    return result
 
 
 def _foam_training_tile_side(*, crop_size: int, grid_side: int) -> int:
@@ -374,7 +382,9 @@ def _initialize_foam_from_band_coadds(
         or not callable(normalized_spatial_coordinates)
         or not callable(exact_operator)
     ):
-        raise TypeError("model must expose Foam sites, coefficients, basis, and operator")
+        raise TypeError(
+            "model must expose Foam sites, coefficients, basis, and operator"
+        )
     scale = float(intensity_scale)
     if not math.isfinite(scale) or scale <= 0:
         raise ValueError("intensity_scale must be finite and positive")
@@ -387,9 +397,7 @@ def _initialize_foam_from_band_coadds(
     cell_values: list[torch.Tensor] = []
     cell_weights: list[torch.Tensor] = []
     response_basis: list[torch.Tensor] = []
-    pixel_systems: list[
-        tuple[Any, torch.Tensor, torch.Tensor, torch.Tensor, Any]
-    ] = []
+    pixel_systems: list[tuple[Any, torch.Tensor, torch.Tensor, torch.Tensor, Any]] = []
     for entry in band_entries:
         image = torch.as_tensor(
             entry["coadd_pred"],
@@ -405,7 +413,9 @@ def _initialize_foam_from_band_coadds(
             raise ValueError("coadd image and support mask must share 2-D shape")
         valid = support & torch.isfinite(image)
         height, width = image.shape
-        grid_device = torch.device("cpu") if sites.device.type == "mps" else sites.device
+        grid_device = (
+            torch.device("cpu") if sites.device.type == "mps" else sites.device
+        )
         y, x = torch.meshgrid(
             torch.arange(height, dtype=torch.float64, device=grid_device),
             torch.arange(width, dtype=torch.float64, device=grid_device),
@@ -461,10 +471,13 @@ def _initialize_foam_from_band_coadds(
             shape: tuple[int, int] = (height, width),
         ) -> torch.Tensor:
             surface_brightness = values / areas
-            return apply_psf_spec(
-                surface_brightness.reshape(shape),
-                spec,
-            ).reshape(values.shape) * areas
+            return (
+                apply_psf_spec(
+                    surface_brightness.reshape(shape),
+                    spec,
+                ).reshape(values.shape)
+                * areas
+            )
 
         def psf_adjoint(
             values: torch.Tensor,
@@ -472,10 +485,13 @@ def _initialize_foam_from_band_coadds(
             spec: Any = psf_spec,
             shape: tuple[int, int] = (height, width),
         ) -> torch.Tensor:
-            return apply_psf_spec(
-                (values * areas).reshape(shape),
-                spec,
-            ).reshape(values.shape) / areas
+            return (
+                apply_psf_spec(
+                    (values * areas).reshape(shape),
+                    spec,
+                ).reshape(values.shape)
+                / areas
+            )
 
         solved_cells = solve_power_pixel_least_squares(
             operator,
@@ -538,7 +554,9 @@ def _initialize_foam_from_band_coadds(
     )
     coverage_count = torch.sum(weights > 0, dim=0)
     return {
-        "foam_initialized_cell_fraction": float(torch.mean((coverage_count > 0).float())),
+        "foam_initialized_cell_fraction": float(
+            torch.mean((coverage_count > 0).float())
+        ),
         "foam_fully_covered_cell_fraction": float(
             torch.mean((coverage_count == len(band_entries)).float())
         ),
@@ -926,6 +944,11 @@ def main() -> int:
         help="Explicit allocation ceiling for exact Foam sparse geometry",
     )
     parser.add_argument("--foam-basis-count", type=int, default=4)
+    parser.add_argument(
+        "--foam-affine-spatial-basis",
+        action="store_true",
+        help="Learn cell-local x/y slopes and integrate them by exact first moments",
+    )
     parser.add_argument("--foam-lr", type=float, default=2.0e-2)
     parser.add_argument(
         "--foam-train-geometry",
@@ -1142,9 +1165,7 @@ def main() -> int:
                     world_radec_deg=injection_world,
                     flux_jy=injection_flux,
                 )
-                injection_rows.extend(
-                    {"band": band, **row} for row in injection_audit
-                )
+                injection_rows.extend({"band": band, **row} for row in injection_audit)
 
             image_observations: list[ImageObservation] = []
             raw_field_inputs: list[
@@ -1301,12 +1322,10 @@ def main() -> int:
                     "truth_psf_fwhm_arcsec": psf_contract.truth_fwhm_arcsec,
                     "fitted_psf_fwhm_arcsec": psf_contract.fitted_fwhm_arcsec,
                     "input_psf_sigma_pix_min": min(
-                        observation.psf_sigma_pix
-                        for observation in field_observations
+                        observation.psf_sigma_pix for observation in field_observations
                     ),
                     "input_psf_sigma_pix_max": max(
-                        observation.psf_sigma_pix
-                        for observation in field_observations
+                        observation.psf_sigma_pix for observation in field_observations
                     ),
                     "target_psf_sigma_pix": target_psf_sigma_pix,
                     "support_mask": support_mask.astype(bool, copy=False),
@@ -1415,6 +1434,7 @@ def main() -> int:
                 model_kwargs = _regular_foam_model_kwargs(
                     grid_side=int(args.foam_grid_side),
                     basis_count=int(args.foam_basis_count),
+                    affine_spatial_basis=bool(args.foam_affine_spatial_basis),
                     extent=float(args.foam_extent),
                 )
                 model_kwargs["compact_fixed_geometry"] = not bool(
@@ -1491,18 +1511,10 @@ def main() -> int:
                     "band": band,
                     "model": model_kind,
                     "n_exposures": int(entry["n_exposures"]),
-                    "truth_psf_fwhm_arcsec": float(
-                        entry["truth_psf_fwhm_arcsec"]
-                    ),
-                    "fitted_psf_fwhm_arcsec": float(
-                        entry["fitted_psf_fwhm_arcsec"]
-                    ),
-                    "input_psf_sigma_pix_min": float(
-                        entry["input_psf_sigma_pix_min"]
-                    ),
-                    "input_psf_sigma_pix_max": float(
-                        entry["input_psf_sigma_pix_max"]
-                    ),
+                    "truth_psf_fwhm_arcsec": float(entry["truth_psf_fwhm_arcsec"]),
+                    "fitted_psf_fwhm_arcsec": float(entry["fitted_psf_fwhm_arcsec"]),
+                    "input_psf_sigma_pix_min": float(entry["input_psf_sigma_pix_min"]),
+                    "input_psf_sigma_pix_max": float(entry["input_psf_sigma_pix_max"]),
                     "target_psf_sigma_pix": float(entry["target_psf_sigma_pix"]),
                     "forward_context": bool(args.forward_context),
                     "calibrated_operators": bool(
@@ -1607,6 +1619,12 @@ def main() -> int:
                             row["foam_coefficient_abs_max"] = float(
                                 coefficients.abs().max()
                             )
+                            gradients = hard_model.cell_gradient_coefficients
+                            row["foam_affine_spatial_basis"] = gradients is not None
+                            if gradients is not None:
+                                row["foam_gradient_coefficient_abs_max"] = float(
+                                    gradients.detach().abs().max()
+                                )
                             row["foam_site_x_range"] = [
                                 float(sites[:, 0].min()),
                                 float(sites[:, 0].max()),
@@ -1780,9 +1798,8 @@ def main() -> int:
             "optimizer_steps": int(args.steps),
             "seed": int(args.seed),
             "foam_grid_side": int(args.foam_grid_side),
-            "foam_exact_max_candidate_pairs": int(
-                args.foam_exact_max_candidate_pairs
-            ),
+            "foam_affine_spatial_basis": bool(args.foam_affine_spatial_basis),
+            "foam_exact_max_candidate_pairs": int(args.foam_exact_max_candidate_pairs),
             "foam_basis_count": int(args.foam_basis_count),
             "foam_extent": float(args.foam_extent),
             "foam_lr": float(args.foam_lr),

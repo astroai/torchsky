@@ -108,16 +108,31 @@
     coordinate-conditioned PSF family: all five detector test losses improve
     19.8--28.6%, while its near-zero Fourier gates remain effectively disabled
     and must not be interpreted as identified periodic scales.
-  - [ ] Publish the NRCB4 visual inspection bundle (zscale PNG contact sheets,
+  - [x] Publish the NRCB4 visual inspection bundle (zscale PNG contact sheets,
     per-exposure DS9 regions, compact CSV/Markdown indices, model residual
     plots, and Torchfits-written SCI/ERR/DQ FITS cubes) beside the r3 artifact.
+    Exact headless session `qe322mqv` at `5847231` produced 108 displayed
+    cutouts from 480 accepted NRCB4 background targets, nine split/band zscale
+    contact sheets, 26 per-exposure DS9 region files, the complete prediction
+    and inspection CSVs, a diagnostic PNG, and three matching Torchfits cubes
+    under
+    `/arc/projects/ots/torchsky-runs/20260811-smacs-nrcb4-inspection-5847231-r4/inspection/`.
+    On untouched test data, validation-pruned weighted RMSE is 0.01829 versus
+    0.02379 stationary and 0.02426 unpruned adaptive. The aggregate gain does
+    not hide the remaining F090W risk: pruned F090W RMSE is 0.02106 versus
+    0.01352 stationary, so any band-specific fallback must be selected from
+    validation evidence alone before another test opening.
   - [x] Wire the frozen selection into the joint SMACS Foam/INR benchmark.
     Checkpoint hashes and manifest identity are verified; pruning is replayed
     from the validation report; PSF/background parameters start frozen; CRF
     detector and MJD context is explicit; background amplitudes follow the
     benchmark intensity normalization; and initial WCS crops retain their true
-    JWST detector origin. A matched end-to-end control is still required before
-    deciding whether to unfreeze nuisance operators jointly with the scene.
+    JWST detector origin. Matched 512-square, six-band, 20-step blank sessions
+    `b1922nx6` and `warc69r8` at `5847231` completed with all rows OK. Calibrated
+    versus uncalibrated mean support RMSE was 0.40662 versus 0.40658 and mean
+    source slope was 0.0354 versus 0.0351, while fit time rose from 297 to 531 s.
+    This establishes numerical wiring/stability, not a calibration gain; do not
+    spend a 200-step matrix on the underfit constant-cell representation.
 - [ ] Implement learned non-stationary PSF covariance propagation, including
   cross-basis terms, before enabling Gaussian NLL for these bundles.
 - [ ] Measure CPU/CUDA throughput and peak memory from small stamps through
@@ -657,7 +672,7 @@ stacking-versus-INR/Foam depth result defined in
       major limiter, but the 7--8% mean flux excess and RMSE still keep the
       fidelity gate closed. Artifacts are under
       `20260802-smacs-foam-psfinit-g512-e935868`.
-    - [ ] Score the frozen grid-512 model on all three existing injection
+    - [x] Score the frozen grid-512 model on all three existing injection
       batches before changing representation or tuning. Session `tsu81ekc`
       completed `validation-000` through `validation-002` at exact commit
       `1d055cfba3d5a89841f6cee61747cf079ec10a2b` in 24 minutes; artifacts are
@@ -668,11 +683,22 @@ stacking-versus-INR/Foam depth result defined in
       `quw7q4b3` reached the products but correctly rejected an ePSF polluted by
       faint non-positive responses. Commit `226b399` now uses the predeclared
       brightest AB-magnitude bin without response post-selection and passed
-      1,714 tests, 246 skips, and zero type errors. Its `@canfar` launch is
-      blocked by the platform error `CONFIG: servops certificate is invalid`;
-      the queued output is `20260809-smacs-foam-g512-score-226b399`. If injection
-      depth is not competitive, implement exact within-cell first moments and
-      an affine spatial basis rather than scaling the regular grid again.
+      1,714 tests, 246 skips, and zero type errors. After CANFAR recovery,
+      session `qpqphhms` at `5847231` reached the frozen products and failed the
+      predeclared scientific response gate: even the brightest injection bin
+      has non-positive total injected-minus-blank response, so no effective PSF
+      can be normalized without outcome-based source selection. The current
+      piecewise-constant Foam is therefore not a depth candidate.
+    - [x] Implement exact within-cell first moments and an opt-in affine spatial
+      basis rather than scaling the regular grid again. Scalar and batched
+      power-cell/pixel operators now persist analytic x/y moments, expose exact
+      affine forward/adjoint maps, and hard-render wavelength-dependent local
+      slopes. The constant-cell API remains the default. Analytic rectangle and
+      half-disk integrals, scalar/batched parity, gradients, and SMACS CLI
+      plumbing pass locally; exact-commit CUDA evidence remains the next gate.
+    - [ ] Run the affine-cell 512-square blank and one injection batch on the
+      frozen validation split. Require positive bright-bin response, improved
+      source slope, and acceptable flux/RMSE before expanding to all batches.
     - [x] Add the frozen Foam scoring path before the products finish.
       `benchmarks/score_smacs0723_foam.py` stages the exact blank/injection
       products, enforces common eroded support, measures each effective PSF from

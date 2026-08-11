@@ -145,9 +145,7 @@ def estimate_field_domain(
     mean_y = float(torch.mean(cos_dec * torch.sin(ra_rad)))
     mean_z = float(torch.mean(torch.sin(dec_rad)))
     center_ra = math.degrees(math.atan2(mean_y, mean_x)) % 360.0
-    center_dec = math.degrees(
-        math.atan2(mean_z, math.hypot(mean_x, mean_y))
-    )
+    center_dec = math.degrees(math.atan2(mean_z, math.hypot(mean_x, mean_y)))
     tangent_cos_dec = max(math.cos(math.radians(center_dec)), 1.0e-6)
     x_offsets = [
         ((ra - center_ra + 180.0) % 360.0 - 180.0) * tangent_cos_dec
@@ -309,6 +307,7 @@ class SpectralPowerFoamField(_BaseFieldModel):
         sites: Tensor,
         radii: Tensor,
         cell_coefficients: Tensor,
+        cell_gradient_coefficients: Tensor | None = None,
         minimum_radius: float = 0.0,
         temperature_start: float = 4.0,
         temperature_end: float = 24.0,
@@ -327,6 +326,7 @@ class SpectralPowerFoamField(_BaseFieldModel):
             sites,
             radii,
             cell_coefficients,
+            cell_gradient_coefficients=cell_gradient_coefficients,
             minimum_radius=minimum_radius,
         )
         self.temperature_start = start
@@ -345,6 +345,10 @@ class SpectralPowerFoamField(_BaseFieldModel):
     @property
     def cell_coefficients(self) -> Tensor:
         return self.foam.cell_coefficients
+
+    @property
+    def cell_gradient_coefficients(self) -> Tensor | None:
+        return self.foam.cell_gradient_coefficients
 
     @property
     def basis_count(self) -> int:

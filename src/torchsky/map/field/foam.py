@@ -74,10 +74,12 @@ class PowerPixelOperator:
     indices: Tensor
     pixel_ids: Tensor
     areas: Tensor
+    centered_first_moments: Tensor
     transpose_indptr: Tensor
     transpose_indices: Tensor
     transpose_areas: Tensor
     cell_areas: Tensor
+    cell_centered_first_moments: Tensor
     pixel_count: int
     cell_count: int
     candidate_pairs: int
@@ -176,6 +178,82 @@ class PowerPixelOperator:
             contributions,
         )
         return output.reshape(pixel_values.shape[:-1] + (self.cell_count,))
+
+    def matvec_affine(
+        self,
+        cell_values: Tensor,
+        cell_gradients: Tensor,
+    ) -> Tensor:
+        """Integrate cell-local affine surface brightness over every pixel.
+
+        ``cell_gradients[..., cell, :]`` is the gradient with respect to the
+        same two coordinates used to build the power diagram, centered on each
+        cell site. The stored exact first moments make this a linear operator,
+        not a point-sampled approximation.
+        """
+        if (
+            not cell_values.is_floating_point()
+            or cell_values.shape[-1:] != (self.cell_count,)
+            or cell_values.device != self.areas.device
+            or cell_values.dtype != self.areas.dtype
+        ):
+            raise ValueError(
+                "cell_values must match the operator with shape (..., cells)"
+            )
+        if (
+            not cell_gradients.is_floating_point()
+            or cell_gradients.shape != cell_values.shape + (2,)
+            or cell_gradients.device != self.areas.device
+            or cell_gradients.dtype != self.areas.dtype
+        ):
+            raise ValueError(
+                "cell_gradients must match cell_values with shape (..., cells, 2)"
+            )
+        flat_values = cell_values.reshape(-1, self.cell_count)
+        flat_gradients = cell_gradients.reshape(-1, self.cell_count, 2)
+        contributions = flat_values[:, self.indices] * self.areas
+        contributions = contributions + torch.sum(
+            flat_gradients[:, self.indices] * self.centered_first_moments,
+            dim=-1,
+        )
+        output = flat_values.new_zeros((flat_values.shape[0], self.pixel_count))
+        output.scatter_add_(
+            1,
+            self.pixel_ids.expand(flat_values.shape[0], -1),
+            contributions,
+        )
+        return output.reshape(cell_values.shape[:-1] + (self.pixel_count,))
+
+    def rmatvec_affine(self, pixel_values: Tensor) -> tuple[Tensor, Tensor]:
+        """Apply the exact transpose of :meth:`matvec_affine`."""
+        if (
+            not pixel_values.is_floating_point()
+            or pixel_values.shape[-1:] != (self.pixel_count,)
+            or pixel_values.device != self.areas.device
+            or pixel_values.dtype != self.areas.dtype
+        ):
+            raise ValueError(
+                "pixel_values must match the operator with shape (..., pixels)"
+            )
+        flat = pixel_values.reshape(-1, self.pixel_count)
+        edge_values = flat[:, self.pixel_ids]
+        value_output = flat.new_zeros((flat.shape[0], self.cell_count))
+        value_output.scatter_add_(
+            1,
+            self.indices.expand(flat.shape[0], -1),
+            edge_values * self.areas,
+        )
+        gradient_output = flat.new_zeros((flat.shape[0], self.cell_count, 2))
+        gradient_output.scatter_add_(
+            1,
+            self.indices[None, :, None].expand(flat.shape[0], -1, 2),
+            edge_values[..., None] * self.centered_first_moments,
+        )
+        leading = pixel_values.shape[:-1]
+        return (
+            value_output.reshape(leading + (self.cell_count,)),
+            gradient_output.reshape(leading + (self.cell_count, 2)),
+        )
 
 
 def render_power_spectral_samples(
@@ -276,6 +354,69 @@ def render_power_spectral_basis(
     )
 
 
+def render_power_spectral_affine_basis(
+    operator: PowerPixelOperator,
+    cell_coefficients: Tensor,
+    cell_gradient_coefficients: Tensor,
+    basis_samples: Tensor,
+    response_weights: Tensor,
+) -> Tensor:
+    """Render a spectral basis with an exact cell-local affine spatial basis."""
+    if (
+        not cell_coefficients.is_floating_point()
+        or cell_coefficients.ndim != 2
+        or cell_coefficients.shape[0] != operator.cell_count
+        or cell_coefficients.device != operator.areas.device
+        or cell_coefficients.dtype != operator.areas.dtype
+    ):
+        raise ValueError(
+            "cell_coefficients must match the operator with shape (cells, basis)"
+        )
+    if (
+        not cell_gradient_coefficients.is_floating_point()
+        or cell_gradient_coefficients.shape != cell_coefficients.shape + (2,)
+        or cell_gradient_coefficients.device != cell_coefficients.device
+        or cell_gradient_coefficients.dtype != cell_coefficients.dtype
+    ):
+        raise ValueError(
+            "cell_gradient_coefficients must match coefficients with trailing 2"
+        )
+    if (
+        not basis_samples.is_floating_point()
+        or basis_samples.ndim != 2
+        or basis_samples.shape[1] != cell_coefficients.shape[-1]
+        or basis_samples.device != cell_coefficients.device
+        or basis_samples.dtype != cell_coefficients.dtype
+    ):
+        raise ValueError("basis_samples must have shape (samples, basis)")
+    if (
+        not response_weights.is_floating_point()
+        or response_weights.ndim not in (1, 2)
+        or response_weights.device != cell_coefficients.device
+        or response_weights.dtype != cell_coefficients.dtype
+        or not bool(torch.isfinite(cell_coefficients).all())
+        or not bool(torch.isfinite(cell_gradient_coefficients).all())
+        or not bool(torch.isfinite(basis_samples).all())
+        or not bool(torch.isfinite(response_weights).all())
+    ):
+        raise ValueError("affine spectral inputs must be finite and share dtype/device")
+    responses = response_weights.reshape(-1, response_weights.shape[-1]).to(
+        device=cell_coefficients.device,
+        dtype=cell_coefficients.dtype,
+    )
+    if responses.shape[1] != basis_samples.shape[0]:
+        raise ValueError("response_weights and basis_samples must share sample count")
+    response_basis = responses @ basis_samples
+    cell_values = torch.einsum("bk,ck->bc", response_basis, cell_coefficients)
+    cell_gradients = torch.einsum(
+        "bk,ckd->bcd",
+        response_basis,
+        cell_gradient_coefficients,
+    )
+    rendered = operator.matvec_affine(cell_values, cell_gradients)
+    return rendered.squeeze(0) if response_weights.ndim == 1 else rendered
+
+
 def solve_spectral_cell_coefficients(
     basis_values: Tensor,
     cell_values: Tensor,
@@ -301,7 +442,10 @@ def solve_spectral_cell_coefficients(
         or cell_values.shape[0] != basis_values.shape[0]
     ):
         raise ValueError("cell_values must have floating shape (bands, cells)")
-    if cell_values.device != basis_values.device or cell_values.dtype != basis_values.dtype:
+    if (
+        cell_values.device != basis_values.device
+        or cell_values.dtype != basis_values.dtype
+    ):
         raise ValueError("basis_values and cell_values must share dtype and device")
     if not bool(torch.isfinite(basis_values).all()) or not bool(
         torch.isfinite(cell_values).all()
@@ -443,10 +587,13 @@ def solve_power_pixel_least_squares(
         weighted = flat_weights * projected
         if pixel_rmatvec is not None:
             weighted = pixel_rmatvec(weighted)
-        return operator.rmatvec(
-            weighted,
-            semantics=semantics,
-        ) + regularization[:, None] * cell_values
+        return (
+            operator.rmatvec(
+                weighted,
+                semantics=semantics,
+            )
+            + regularization[:, None] * cell_values
+        )
 
     weighted_values = flat_weights * flat_values
     if pixel_rmatvec is not None:
@@ -668,6 +815,7 @@ class SpectralPowerFoam(torch.nn.Module):
         radii: Tensor,
         cell_coefficients: Tensor,
         *,
+        cell_gradient_coefficients: Tensor | None = None,
         minimum_radius: float = 0.0,
     ) -> None:
         super().__init__()
@@ -690,6 +838,16 @@ class SpectralPowerFoam(torch.nn.Module):
             )
         if not bool(torch.isfinite(cell_coefficients).all()):
             raise ValueError("cell_coefficients must be finite")
+        if cell_gradient_coefficients is not None and (
+            not cell_gradient_coefficients.is_floating_point()
+            or cell_gradient_coefficients.shape != cell_coefficients.shape + (2,)
+            or cell_gradient_coefficients.device != sites.device
+            or cell_gradient_coefficients.dtype != sites.dtype
+            or not bool(torch.isfinite(cell_gradient_coefficients).all())
+        ):
+            raise ValueError(
+                "cell_gradient_coefficients must match coefficients with trailing 2"
+            )
         radius_floor = float(minimum_radius)
         if not math.isfinite(radius_floor) or radius_floor < 0.0:
             raise ValueError("minimum_radius must be finite and non-negative")
@@ -706,6 +864,11 @@ class SpectralPowerFoam(torch.nn.Module):
         self.sites = torch.nn.Parameter(sites.detach().clone())
         self.raw_radii = torch.nn.Parameter(raw_radii)
         self.cell_coefficients = torch.nn.Parameter(cell_coefficients.detach().clone())
+        self.cell_gradient_coefficients = (
+            torch.nn.Parameter(cell_gradient_coefficients.detach().clone())
+            if cell_gradient_coefficients is not None
+            else None
+        )
         self.register_buffer(
             "_minimum_radius",
             radii.new_tensor(radius_floor),
@@ -767,8 +930,7 @@ class SpectralPowerFoam(torch.nn.Module):
                 # spatial index here; switch to cached tile CSR if profiling says so.
                 closest = torch.minimum(torch.maximum(self.sites, lower), upper)
                 selected = torch.nonzero(
-                    torch.sum((self.sites - closest) ** 2, dim=1)
-                    <= self.radii**2,
+                    torch.sum((self.sites - closest) ** 2, dim=1) <= self.radii**2,
                     as_tuple=False,
                 ).flatten()
             if selected.numel() == 0:
@@ -797,6 +959,22 @@ class SpectralPowerFoam(torch.nn.Module):
             basis_values,
             coefficients,
         )
+        if self.cell_gradient_coefficients is not None:
+            gradient_coefficients = (
+                self.cell_gradient_coefficients
+                if selected is None
+                else self.cell_gradient_coefficients[selected]
+            )
+            gradients = torch.einsum(
+                "...k,ckd->...cd",
+                basis_values,
+                gradient_coefficients,
+            )
+            selected_sites = self.sites if selected is None else self.sites[selected]
+            cell_values = cell_values + torch.sum(
+                gradients * (points[..., None, :] - selected_sites),
+                dim=-1,
+            )
         return torch.sum(weights * cell_values, dim=-1)
 
     def render_exact(
@@ -810,6 +988,18 @@ class SpectralPowerFoam(torch.nn.Module):
         """Render hard pixels with an operator built from detached model geometry."""
         if operator.cell_count != self.sites.shape[0]:
             raise ValueError("operator cell count must match the model")
+        if self.cell_gradient_coefficients is not None:
+            if semantics != "surface_brightness":
+                raise ValueError(
+                    "affine Foam exact rendering requires surface_brightness semantics"
+                )
+            return render_power_spectral_affine_basis(
+                operator,
+                self.cell_coefficients,
+                self.cell_gradient_coefficients,
+                basis_samples,
+                response_weights,
+            )
         return render_power_spectral_basis(
             operator,
             self.cell_coefficients,
@@ -1512,12 +1702,16 @@ def _clip_polygon_half_plane(
     return torch.stack(output)
 
 
-def _segment_circle_area(start: Tensor, stop: Tensor, radius: Tensor) -> Tensor:
-    """Return the signed disk intersection area swept by one polygon edge."""
+def _segment_circle_area_moment(
+    start: Tensor,
+    stop: Tensor,
+    radius: Tensor,
+) -> tuple[Tensor, Tensor]:
+    """Return signed disk-intersection area and first moment for one edge."""
     delta = stop - start
     quadratic = torch.dot(delta, delta)
     if bool(quadratic == 0):
-        return start.new_zeros(())
+        return start.new_zeros(()), start.new_zeros((2,))
     linear = 2.0 * torch.dot(start, delta)
     constant = torch.dot(start, start) - radius * radius
     discriminant = linear * linear - 4.0 * quadratic * constant
@@ -1538,19 +1732,76 @@ def _segment_circle_area(start: Tensor, stop: Tensor, radius: Tensor) -> Tensor:
     parameters.sort(key=lambda value: float(value.item()))
 
     area = start.new_zeros(())
+    moment = start.new_zeros((2,))
     for lower, upper in zip(parameters[:-1], parameters[1:], strict=True):
         first = start + lower * delta
         second = start + upper * delta
         midpoint = 0.5 * (first + second)
         cross = first[0] * second[1] - first[1] * second[0]
         if bool(torch.dot(midpoint, midpoint) <= radius * radius + tolerance):
-            area = area + 0.5 * cross
+            triangle_area = 0.5 * cross
+            area = area + triangle_area
+            moment = moment + triangle_area * (first + second) / 3.0
         else:
             area = area + 0.5 * radius * radius * torch.atan2(
                 cross,
                 torch.dot(first, second),
             )
-    return area
+            first_unit = first / torch.linalg.vector_norm(first)
+            second_unit = second / torch.linalg.vector_norm(second)
+            moment = moment + (radius**3 / 3.0) * torch.stack(
+                (
+                    second_unit[1] - first_unit[1],
+                    first_unit[0] - second_unit[0],
+                )
+            )
+    return area, moment
+
+
+def _segment_circle_area(start: Tensor, stop: Tensor, radius: Tensor) -> Tensor:
+    """Return the signed disk intersection area swept by one polygon edge."""
+    return _segment_circle_area_moment(start, stop, radius)[0]
+
+
+def _polygon_disk_intersection_area_moment(
+    vertices: Tensor,
+    center: Tensor,
+    radius: Tensor,
+) -> tuple[Tensor, Tensor]:
+    """Analytic area and global first moment of polygon intersected with a disk."""
+    if vertices.shape[0] < 3 or bool(radius <= 0):
+        return vertices.new_zeros(()), vertices.new_zeros((2,))
+    shifted = vertices - center
+    squared_distance = torch.sum(shifted * shifted, dim=1)
+    containment_tolerance = (
+        64.0
+        * torch.finfo(vertices.dtype).eps
+        * (radius * radius + torch.max(squared_distance) + 1.0)
+    )
+    area = vertices.new_zeros(())
+    local_moment = vertices.new_zeros((2,))
+    if bool(torch.all(squared_distance <= radius * radius + containment_tolerance)):
+        following = torch.roll(shifted, shifts=-1, dims=0)
+        triangle_areas = 0.5 * (
+            shifted[:, 0] * following[:, 1] - shifted[:, 1] * following[:, 0]
+        )
+        area = torch.sum(triangle_areas)
+        local_moment = torch.sum(
+            triangle_areas[:, None] * (shifted + following) / 3.0,
+            dim=0,
+        )
+    else:
+        for index in range(shifted.shape[0]):
+            edge_area, edge_moment = _segment_circle_area_moment(
+                shifted[index],
+                shifted[(index + 1) % shifted.shape[0]],
+                radius,
+            )
+            area = area + edge_area
+            local_moment = local_moment + edge_moment
+    orientation = torch.where(area < 0, -torch.ones_like(area), torch.ones_like(area))
+    positive_area = torch.abs(area)
+    return positive_area, orientation * local_moment + center * positive_area
 
 
 def _polygon_disk_intersection_area(
@@ -1559,25 +1810,7 @@ def _polygon_disk_intersection_area(
     radius: Tensor,
 ) -> Tensor:
     """Analytic area of a polygon intersected with a closed disk."""
-    if vertices.shape[0] < 3 or bool(radius <= 0):
-        return vertices.new_zeros(())
-    shifted = vertices - center
-    squared_distance = torch.sum(shifted * shifted, dim=1)
-    containment_tolerance = (
-        64.0
-        * torch.finfo(vertices.dtype).eps
-        * (radius * radius + torch.max(squared_distance) + 1.0)
-    )
-    if bool(torch.all(squared_distance <= radius * radius + containment_tolerance)):
-        return torch.abs(_polygon_signed_area(vertices))
-    area = vertices.new_zeros(())
-    for index in range(shifted.shape[0]):
-        area = area + _segment_circle_area(
-            shifted[index],
-            shifted[(index + 1) % shifted.shape[0]],
-            radius,
-        )
-    return torch.abs(area)
+    return _polygon_disk_intersection_area_moment(vertices, center, radius)[0]
 
 
 def _cell_clip_polygon(
@@ -1757,6 +1990,7 @@ def bounded_power_pixel_operator(
 
     active_cells = torch.unique(candidate_indices, sorted=True)
     cell_areas = sites.new_zeros((cell_count,))
+    cell_centered_first_moments = sites.new_zeros((cell_count, 2))
     for raw_cell in active_cells:
         cell = int(raw_cell.item())
         radius = radii[cell]
@@ -1777,15 +2011,18 @@ def bounded_power_pixel_operator(
             radii=radii,
             neighbors=neighbors(cell),
         )
-        cell_areas[cell] = _polygon_disk_intersection_area(
+        cell_area, cell_first_moment = _polygon_disk_intersection_area_moment(
             cell_polygon,
             sites[cell],
             radius,
         )
+        cell_areas[cell] = cell_area
+        cell_centered_first_moments[cell] = cell_first_moment - sites[cell] * cell_area
 
     kept_pixels: list[int] = []
     kept_cells: list[int] = []
     kept_areas: list[Tensor] = []
+    kept_centered_first_moments: list[Tensor] = []
     row_counts: list[int] = []
     for pixel in range(pixel_count):
         row = torch.unique(
@@ -1802,7 +2039,7 @@ def bounded_power_pixel_operator(
                 radii=radii,
                 neighbors=neighbors(cell),
             )
-            area = _polygon_disk_intersection_area(
+            area, first_moment = _polygon_disk_intersection_area_moment(
                 clipped,
                 sites[cell],
                 radii[cell],
@@ -1815,11 +2052,7 @@ def bounded_power_pixel_operator(
                 containment_tolerance = (
                     64.0
                     * torch.finfo(area.dtype).eps
-                    * (
-                        radii[cell] * radii[cell]
-                        + torch.max(squared_distance)
-                        + 1.0
-                    )
+                    * (radii[cell] * radii[cell] + torch.max(squared_distance) + 1.0)
                 )
                 fully_contained = bool(
                     torch.all(
@@ -1843,17 +2076,22 @@ def bounded_power_pixel_operator(
                 * torch.abs(signed_pixel_areas[pixel])
             )
             if bool(
-                area > area_tolerance
-                or (fully_contained and area > pixel_tolerance)
+                area > area_tolerance or (fully_contained and area > pixel_tolerance)
             ):
                 kept_pixels.append(pixel)
                 kept_cells.append(cell)
                 kept_areas.append(area)
+                kept_centered_first_moments.append(first_moment - sites[cell] * area)
         row_counts.append(len(kept_areas) - before)
 
     indices = torch.tensor(kept_cells, dtype=torch.long, device=sites.device)
     pixel_ids = torch.tensor(kept_pixels, dtype=torch.long, device=sites.device)
     areas = torch.stack(kept_areas) if kept_areas else sites.new_empty((0,))
+    centered_first_moments = (
+        torch.stack(kept_centered_first_moments)
+        if kept_centered_first_moments
+        else sites.new_empty((0, 2))
+    )
     counts = torch.tensor(row_counts, dtype=torch.long, device=sites.device)
     indptr = torch.cat(
         (
@@ -1877,10 +2115,12 @@ def bounded_power_pixel_operator(
         indices=indices,
         pixel_ids=pixel_ids,
         areas=areas,
+        centered_first_moments=centered_first_moments,
         transpose_indptr=transpose_indptr,
         transpose_indices=transpose_indices,
         transpose_areas=transpose_areas,
         cell_areas=cell_areas,
+        cell_centered_first_moments=cell_centered_first_moments,
         pixel_count=pixel_count,
         cell_count=cell_count,
         candidate_pairs=int(candidate_indices.numel()),
@@ -2025,13 +2265,13 @@ def _batched_clip_power_cells(
     return vertices, counts
 
 
-def _batched_polygon_disk_area(
+def _batched_polygon_disk_area_moment(
     vertices: Tensor,
     counts: Tensor,
     centers: Tensor,
     radii: Tensor,
-) -> Tensor:
-    """Analytic polygon/disk areas for a padded polygon batch."""
+) -> tuple[Tensor, Tensor]:
+    """Analytic polygon/disk areas and global first moments for a batch."""
     batch, capacity, _ = vertices.shape
     positions = torch.arange(capacity, device=vertices.device).expand(batch, -1)
     safe_counts = counts.clamp_min(1)
@@ -2079,23 +2319,57 @@ def _batched_polygon_disk_area(
     midpoint = 0.5 * (first + second)
     cross = first[..., 0] * second[..., 1] - first[..., 1] * second[..., 0]
     triangle = 0.5 * cross
+    triangle_moment = triangle[..., None] * (first + second) / 3.0
     sector = (
         0.5
         * radii[:, None, None] ** 2
         * torch.atan2(cross, torch.sum(first * second, dim=3))
     )
+    first_norm = torch.linalg.vector_norm(first, dim=3).clamp_min(
+        torch.finfo(vertices.dtype).tiny
+    )
+    second_norm = torch.linalg.vector_norm(second, dim=3).clamp_min(
+        torch.finfo(vertices.dtype).tiny
+    )
+    first_unit = first / first_norm[..., None]
+    second_unit = second / second_norm[..., None]
+    sector_moment = (radii[:, None, None, None] ** 3 / 3.0) * torch.stack(
+        (
+            second_unit[..., 1] - first_unit[..., 1],
+            first_unit[..., 0] - second_unit[..., 0],
+        ),
+        dim=3,
+    )
     inside = torch.sum(midpoint * midpoint, dim=3) <= (
         radii[:, None, None] ** 2 + tolerance[:, :, None]
     )
     intervals = torch.where(inside, triangle, sector)
+    interval_moments = torch.where(
+        inside[..., None],
+        triangle_moment,
+        sector_moment,
+    )
     intervals = torch.where(
         upper > lower,
         intervals,
         torch.zeros_like(intervals),
     )
+    interval_moments = torch.where(
+        (upper > lower)[..., None],
+        interval_moments,
+        torch.zeros_like(interval_moments),
+    )
     valid_edges = (positions < counts[:, None]) & (counts[:, None] >= 3)
-    intersection_area = torch.abs(
-        torch.sum(intervals * valid_edges[..., None], dim=(1, 2))
+    signed_intersection_area = torch.sum(intervals * valid_edges[..., None], dim=(1, 2))
+    intersection_orientation = torch.where(
+        signed_intersection_area < 0,
+        -torch.ones_like(signed_intersection_area),
+        torch.ones_like(signed_intersection_area),
+    )
+    intersection_area = torch.abs(signed_intersection_area)
+    intersection_local_moment = intersection_orientation[:, None] * torch.sum(
+        interval_moments * valid_edges[..., None, None],
+        dim=(1, 2),
     )
     vertex_distance_squared = torch.sum(start * start, dim=2)
     containment_tolerance = (
@@ -2122,8 +2396,24 @@ def _batched_polygon_disk_area(
         ),
         dim=1,
     )
-    polygon_area = torch.abs(torch.sum(triangle[..., 0] * valid_edges, dim=1))
-    return torch.where(fully_contained, polygon_area, intersection_area)
+    polygon_signed_area = torch.sum(triangle[..., 0] * valid_edges, dim=1)
+    polygon_orientation = torch.where(
+        polygon_signed_area < 0,
+        -torch.ones_like(polygon_signed_area),
+        torch.ones_like(polygon_signed_area),
+    )
+    polygon_area = torch.abs(polygon_signed_area)
+    polygon_local_moment = polygon_orientation[:, None] * torch.sum(
+        triangle_moment[..., 0, :] * valid_edges[..., None],
+        dim=1,
+    )
+    area = torch.where(fully_contained, polygon_area, intersection_area)
+    local_moment = torch.where(
+        fully_contained[:, None],
+        polygon_local_moment,
+        intersection_local_moment,
+    )
+    return area, local_moment + centers * area[:, None]
 
 
 @lru_cache(maxsize=1)
@@ -2131,7 +2421,7 @@ def _compiled_batched_power_kernels() -> tuple[Any, Any]:
     """Create compiled numeric kernels lazily; validation and assembly stay eager."""
     return (
         torch.compile(_batched_clip_power_cells, fullgraph=True),
-        torch.compile(_batched_polygon_disk_area, fullgraph=True),
+        torch.compile(_batched_polygon_disk_area_moment, fullgraph=True),
     )
 
 
@@ -2206,9 +2496,9 @@ def batched_bounded_power_pixel_operator(
         raise ValueError("candidate_chunk_size must be positive")
     if kernel_execution == "eager":
         clip_cells = _batched_clip_power_cells
-        polygon_disk_area = _batched_polygon_disk_area
+        polygon_disk_area_moment = _batched_polygon_disk_area_moment
     elif kernel_execution == "compile":
-        clip_cells, polygon_disk_area = _compiled_batched_power_kernels()
+        clip_cells, polygon_disk_area_moment = _compiled_batched_power_kernels()
     else:
         raise ValueError("kernel_execution must be 'eager' or 'compile'")
 
@@ -2235,6 +2525,7 @@ def batched_bounded_power_pixel_operator(
         )
 
     cell_areas = sites.new_zeros((cell_count,))
+    cell_centered_first_moments = sites.new_zeros((cell_count, 2))
     for start in range(0, active_cells.shape[0], chunk_size):
         chunk_cells = active_cells[start : start + chunk_size]
         chunk_radii = radii[chunk_cells]
@@ -2263,16 +2554,21 @@ def batched_bounded_power_pixel_operator(
             sites,
             radii,
         )
-        cell_areas[chunk_cells] = polygon_disk_area(
+        chunk_areas, chunk_first_moments = polygon_disk_area_moment(
             cell_vertices,
             cell_counts,
             sites[chunk_cells],
             chunk_radii,
         )
+        cell_areas[chunk_cells] = chunk_areas
+        cell_centered_first_moments[chunk_cells] = (
+            chunk_first_moments - sites[chunk_cells] * chunk_areas[:, None]
+        )
 
     kept_pixels: list[Tensor] = []
     kept_cells: list[Tensor] = []
     kept_areas: list[Tensor] = []
+    kept_centered_first_moments: list[Tensor] = []
     for start in range(0, candidate_cells.shape[0], chunk_size):
         chunk_cells = candidate_cells[start : start + chunk_size]
         chunk_pixels = candidate_pixels[start : start + chunk_size]
@@ -2290,7 +2586,7 @@ def batched_bounded_power_pixel_operator(
             sites,
             radii,
         )
-        chunk_areas = polygon_disk_area(
+        chunk_areas, chunk_first_moments = polygon_disk_area_moment(
             vertices,
             counts,
             sites[chunk_cells],
@@ -2345,11 +2641,19 @@ def batched_bounded_power_pixel_operator(
         kept_pixels.append(chunk_pixels[keep])
         kept_cells.append(chunk_cells[keep])
         kept_areas.append(chunk_areas[keep])
+        kept_centered_first_moments.append(
+            (chunk_first_moments - sites[chunk_cells] * chunk_areas[:, None])[keep]
+        )
     pixel_ids = (
         torch.cat(kept_pixels) if kept_pixels else candidate_pixels.new_empty((0,))
     )
     indices = torch.cat(kept_cells) if kept_cells else candidate_cells.new_empty((0,))
     areas = torch.cat(kept_areas) if kept_areas else sites.new_empty((0,))
+    centered_first_moments = (
+        torch.cat(kept_centered_first_moments)
+        if kept_centered_first_moments
+        else sites.new_empty((0, 2))
+    )
     row_counts = torch.bincount(pixel_ids, minlength=pixel_count)
     indptr = torch.cat(
         (
@@ -2373,10 +2677,12 @@ def batched_bounded_power_pixel_operator(
         indices=indices,
         pixel_ids=pixel_ids,
         areas=areas,
+        centered_first_moments=centered_first_moments,
         transpose_indptr=transpose_indptr,
         transpose_indices=transpose_indices,
         transpose_areas=transpose_areas,
         cell_areas=cell_areas,
+        cell_centered_first_moments=cell_centered_first_moments,
         pixel_count=pixel_count,
         cell_count=cell_count,
         candidate_pairs=int(candidate_indices.numel()),
@@ -2441,6 +2747,7 @@ __all__ = [
     "power_distance",
     "power_face_planes",
     "polygon_disk_candidate_csr",
+    "render_power_spectral_affine_basis",
     "render_power_spectral_basis",
     "render_power_spectral_samples",
     "smooth_bounded_power_weights",

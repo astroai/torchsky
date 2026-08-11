@@ -68,6 +68,56 @@ def test_single_cell_matches_analytic_circle_and_rectangle_areas() -> None:
     assert integrated[-1] == 0
 
 
+def test_exact_first_moments_render_cell_local_affine_surface_brightness() -> None:
+    site = torch.tensor([[0.25, -0.5]], dtype=torch.float64)
+    radius = torch.tensor([10.0], dtype=torch.float64)
+    pixel = _rectangle(0.0, -1.0, 2.0, 1.0).unsqueeze(0)
+
+    operator = bounded_power_pixel_operator(pixel, site, radius)
+
+    torch.testing.assert_close(operator.areas, torch.tensor([4.0], dtype=torch.float64))
+    torch.testing.assert_close(
+        operator.centered_first_moments,
+        torch.tensor([[3.0, 2.0]], dtype=torch.float64),
+    )
+    rendered = operator.matvec_affine(
+        torch.tensor([2.0], dtype=torch.float64),
+        torch.tensor([[3.0, -4.0]], dtype=torch.float64),
+    )
+    torch.testing.assert_close(rendered, torch.tensor([9.0], dtype=torch.float64))
+    value_adjoint, gradient_adjoint = operator.rmatvec_affine(
+        torch.tensor([1.7], dtype=torch.float64)
+    )
+    torch.testing.assert_close(
+        torch.dot(rendered, torch.tensor([1.7], dtype=torch.float64)),
+        torch.dot(torch.tensor([2.0], dtype=torch.float64), value_adjoint)
+        + torch.sum(
+            torch.tensor([[3.0, -4.0]], dtype=torch.float64) * gradient_adjoint
+        ),
+    )
+
+
+def test_exact_first_moment_matches_analytic_half_disk() -> None:
+    site = torch.zeros((1, 2), dtype=torch.float64)
+    radius = torch.ones(1, dtype=torch.float64)
+    right_half_plane = _rectangle(0.0, -2.0, 2.0, 2.0).unsqueeze(0)
+
+    operator = bounded_power_pixel_operator(right_half_plane, site, radius)
+
+    torch.testing.assert_close(
+        operator.areas,
+        torch.tensor([0.5 * math.pi], dtype=torch.float64),
+        rtol=2.0e-13,
+        atol=2.0e-13,
+    )
+    torch.testing.assert_close(
+        operator.centered_first_moments,
+        torch.tensor([[2.0 / 3.0, 0.0]], dtype=torch.float64),
+        rtol=2.0e-13,
+        atol=2.0e-13,
+    )
+
+
 def test_float32_tiny_pixel_inside_large_cell_survives_area_tolerance() -> None:
     sites = torch.tensor([[0.0, 0.0]], dtype=torch.float32)
     radii = torch.tensor([10.0], dtype=torch.float32)
@@ -304,8 +354,24 @@ def test_randomized_areas_match_independent_dense_ownership_oracle() -> None:
     )
     exact = torch.zeros_like(numerical)
     exact[operator.indices] = operator.areas
+    numerical_moments = torch.zeros((sites.shape[0], 2), dtype=torch.float64)
+    owned = owners >= 0
+    numerical_moments.index_add_(
+        0,
+        owners[owned],
+        (torch.stack((x.flatten(), y.flatten()), dim=1)[owned] - sites[owners[owned]])
+        * (2.0 / resolution) ** 2,
+    )
+    exact_moments = torch.zeros_like(numerical_moments)
+    exact_moments[operator.indices] = operator.centered_first_moments
 
     torch.testing.assert_close(exact, numerical, rtol=0.0, atol=3.5e-3)
+    torch.testing.assert_close(
+        exact_moments,
+        numerical_moments,
+        rtol=0.0,
+        atol=3.5e-3,
+    )
     assert float(exact.sum()) <= 4.0
 
 
@@ -384,6 +450,18 @@ def test_batched_operator_matches_scalar_oracle() -> None:
     torch.testing.assert_close(
         batched.cell_areas,
         scalar.cell_areas,
+        rtol=2e-12,
+        atol=2e-12,
+    )
+    torch.testing.assert_close(
+        batched.centered_first_moments,
+        scalar.centered_first_moments,
+        rtol=2e-12,
+        atol=2e-12,
+    )
+    torch.testing.assert_close(
+        batched.cell_centered_first_moments,
+        scalar.cell_centered_first_moments,
         rtol=2e-12,
         atol=2e-12,
     )

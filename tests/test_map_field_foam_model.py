@@ -103,6 +103,36 @@ def test_spectral_power_foam_has_finite_joint_geometry_and_spectral_gradients() 
         assert bool(torch.isfinite(parameter.grad).all())
 
 
+def test_spectral_power_foam_affine_basis_uses_exact_pixel_first_moments() -> None:
+    model = SpectralPowerFoam(
+        torch.tensor([[0.0, 0.0]], dtype=torch.float64),
+        torch.tensor([10.0], dtype=torch.float64),
+        torch.tensor([[2.0]], dtype=torch.float64),
+        cell_gradient_coefficients=torch.tensor([[[3.0, -4.0]]], dtype=torch.float64),
+    )
+    pixel = torch.tensor(
+        [[[0.0, -1.0], [2.0, -1.0], [2.0, 1.0], [0.0, 1.0]]],
+        dtype=torch.float64,
+    )
+    operator = bounded_power_pixel_operator(pixel, model.sites.detach(), model.radii)
+
+    rendered = model.render_exact(
+        operator,
+        torch.ones((1, 1), dtype=torch.float64),
+        torch.ones(1, dtype=torch.float64),
+    )
+
+    torch.testing.assert_close(rendered, torch.tensor([20.0], dtype=torch.float64))
+    rendered.sum().backward()
+    assert model.cell_gradient_coefficients is not None
+    torch.testing.assert_close(
+        model.cell_gradient_coefficients.grad,
+        torch.tensor([[[4.0, 0.0]]], dtype=torch.float64),
+        atol=1.0e-14,
+        rtol=0,
+    )
+
+
 def test_spectral_power_foam_compact_fixed_geometry_matches_dense_support() -> None:
     model = _model()
     model.sites.requires_grad_(False)
@@ -474,9 +504,7 @@ def test_spectral_power_foam_hard_render_supports_conditioned_operators() -> Non
     psf = ConditionedKernelPSF(
         encoder, n_basis=2, kernel_size=3, init_fwhm_pix=1.5, hidden_dim=8
     )
-    background = ConditionedBackgroundField(
-        encoder, hidden_dim=8, hidden_layers=1
-    )
+    background = ConditionedBackgroundField(encoder, hidden_dim=8, hidden_layers=1)
     with torch.no_grad():
         background.network[-1].bias.fill_(0.25)
     bundle = ObservationOperatorBundle(
