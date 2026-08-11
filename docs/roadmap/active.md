@@ -70,11 +70,11 @@
   normalized PSF MSE, centroid RMSE, maximum encircled-energy error, valid-pixel
   fraction, and background MSE/bias/MAE. This is evaluation plumbing, not a
   real predictive result.
-- [ ] Run the automatic aligned-CRF extraction and staged fit, optionally audit
+- [x] Run the automatic aligned-CRF extraction and staged fit, optionally audit
   against the published UPDec PSF star and an external reviewed catalog, then
   publish validation/test scores by band, detector, position, and time. Coverage
-  certifies where evidence exists but does not show that learned operators
-  predict withheld exposures.
+  certifies where evidence exists; the r3 split-safe results below measure
+  prediction on withheld exposures.
   - [x] Add a train-only evidence initializer and exact-commit CANFAR fit mode.
     Compare a coordinate-invariant one-kernel/one-bias control against adaptive
     detector/wavelength/time models with one training-derived loss scale across
@@ -87,15 +87,30 @@
     adaptive-to-stationary ratios. Adaptive PSF loss improved for all five
     detectors, with median 20.2% validation and 23.2% untouched-test gains.
     Adaptive background loss improved for all validation detectors and four of
-    five test detectors, with median 63.6%/34.5% gains; NRCB4 test regressed
-    4.0% and remains a required failure analysis.
+    five test detectors, with median 63.6%/34.5% gains. The initial NRCB4 test
+    regression was 4.0%; validation-only pruning below resolves it without
+    using test evidence for selection.
   - [x] Add natural-band, training-median detector-quadrant, and training-median
     time-epoch slices. A slice is published only when both validation and test
     contain at least 20 targets; skipped slices retain their counts instead of
     producing unstable metrics.
-  - [ ] Run the coverage-gated slice/pruning endpoint, investigate NRCB4 and
-    any other non-generalizing slices, and freeze the selected operator family
-    before coupling it to the scene fit.
+  - [x] Run the coverage-gated slice/pruning endpoint, investigate NRCB4 and
+    freeze the selected operator family before coupling it to the scene fit.
+    Exact session `x9pxiw45` at `3f11e6c` used all 135 aligned CRFs and report
+    `/arc/projects/ots/torchsky-runs/20260811-smacs-operator-fit-3f11e6c-r3/fit/operator_calibration_fit.json`.
+    All declared NRCB4 band/quadrant/time slices met the 20-target gate. The
+    unpruned failure localizes to F090W and early test exposures. Validation
+    pruning removed NRCB4 temporal band 0 plus four negligible spatial bands,
+    improved validation loss 16.6%, and improved test loss 43.2% relative to
+    the full adaptive model; its test loss is 40.9% below the stationary
+    control. Freeze adaptive raw coordinate conditioning plus detector-specific
+    validation-pruned Fourier gates for backgrounds. Freeze the smooth
+    coordinate-conditioned PSF family: all five detector test losses improve
+    19.8--28.6%, while its near-zero Fourier gates remain effectively disabled
+    and must not be interpreted as identified periodic scales.
+  - [ ] Publish the NRCB4 visual inspection bundle (zscale PNG contact sheets,
+    per-exposure DS9 regions, compact CSV/Markdown indices, model residual
+    plots, and Torchfits-written SCI/ERR/DQ FITS cubes) beside the r3 artifact.
 - [ ] Implement learned non-stationary PSF covariance propagation, including
   cross-basis terms, before enabling Gaussian NLL for these bundles.
 - [ ] Measure CPU/CUDA throughput and peak memory from small stamps through
@@ -120,8 +135,11 @@
 - [x] Add whole-axis centering ablations and conservative validation-only
   Fourier pruning. The selector greedily removes a band only when held-out
   validation loss improves by at least 0.5%, restores the fitted model after
-  evaluation, and opens test only once for the selected configuration. Real
-  pruning results remain pending.
+  evaluation, and opens test only once for the selected configuration. In r3,
+  NRCB4's raw spectral and time trends remain predictive (centering them raises
+  test loss 37.1% and 43.6%), while removing its short temporal Fourier band
+  improves test loss 42.8%; this distinguishes smooth physical conditioning
+  from a non-generalizing periodic term.
 - [ ] Add axis-native adaptive variants required beyond image patches: spherical
   harmonic/needlet angular scales for full-sky FOSSIL/CMB/21-cm work and an
   optical-delay axis for interferometric spectroscopy.

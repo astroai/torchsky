@@ -98,6 +98,26 @@ case "${mode}" in
       --device "${calibration_device}"
     test -s "${artifact_root}/fit/operator_calibration_fit.json"
     ;;
+  calibration-inspect)
+    calibration_manifest=${CALIBRATION_EVIDENCE_MANIFEST:?set CALIBRATION_EVIDENCE_MANIFEST}
+    calibration_fit_report=${CALIBRATION_FIT_REPORT:?set CALIBRATION_FIT_REPORT}
+    calibration_inspection_detector=${CALIBRATION_INSPECTION_DETECTOR:-NRCB4}
+    calibration_inspection_per_group=${CALIBRATION_INSPECTION_PER_GROUP:-12}
+    test -s "${calibration_manifest}"
+    test -s "${calibration_fit_report}"
+    pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+      python -m pip install -e "${source_root}" --no-build-isolation
+    pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+      python "${source_root}/benchmarks/export_smacs0723_calibration_inspection.py" \
+      --manifest "${calibration_manifest}" \
+      --fit-report "${calibration_fit_report}" \
+      --output-dir "${artifact_root}/inspection" \
+      --detector "${calibration_inspection_detector}" \
+      --per-group "${calibration_inspection_per_group}"
+    test -s "${artifact_root}/inspection/README.md"
+    test -s "${artifact_root}/inspection/model_diagnostics.png"
+    test -s "${artifact_root}/inspection/cutouts_science.fits"
+    ;;
   foam)
     bands=${FOAM_BANDS:-F090W,F150W}
     crop_size=${FOAM_CROP_SIZE:-32}
