@@ -21,6 +21,7 @@ from torchsky.map.operators import (
     PSFCalibrationTerm,
     SpatioSpectralTemporalEncoder,
     fit_operator_calibration_terms,
+    operator_calibration_identifiability_report,
     operator_calibration_score_report,
 )
 
@@ -351,6 +352,20 @@ def _fit_group(
         model.encoder, AdaptiveSpatioSpectralTemporalEncoder
     ):
         result["learned_scales"] = model.encoder.scale_diagnostics()
+        result["identifiability"] = {
+            split: operator_calibration_identifiability_report(
+                _term(
+                    model,
+                    arrays[split],
+                    role=role,
+                    name=f"{detector}:{role}:{split}",
+                    background_loss_weight=background_loss_weight,
+                ),
+                split=split,
+                seed=seed,
+            )
+            for split in ("validation", "test")
+        }
     return result
 
 

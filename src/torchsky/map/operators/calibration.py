@@ -11,6 +11,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
+from .adaptive_axes import AdaptiveSpatioSpectralTemporalEncoder
 from .background import ConditionedBackgroundField
 from .bundle import ObservationOperatorBundle
 from .learned_kernel import ConditionedKernelPSF
@@ -393,6 +394,149 @@ def operator_calibration_score_report(
     }
 
 
+def operator_calibration_identifiability_report(
+    term: PSFCalibrationTerm | BackgroundCalibrationTerm,
+    *,
+    split: Literal["validation", "test"],
+    jacobian_probes: int = 4,
+    seed: int = 1729,
+) -> dict[str, object]:
+    """Measure held-out band utility and output sensitivity of adaptive axes.
+
+    Each Fourier band is disabled without refitting and the fractional change
+    in raw held-out loss is reported. Coordinate sensitivities are exact for a
+    scalar background and use deterministic Rademacher projections for a PSF
+    kernel, avoiding a full output Jacobian.
+    """
+    if split not in {"validation", "test"}:
+        raise ValueError("split must be validation or test")
+    probes = int(jacobian_probes)
+    if probes < 1:
+        raise ValueError("jacobian_probes must be positive")
+    model = term.model
+    encoder = model.encoder
+    if not isinstance(encoder, AdaptiveSpatioSpectralTemporalEncoder):
+        raise ValueError("identifiability diagnostics require an adaptive encoder")
+    parameter = next(model.parameters())
+    axes = (
+        ("spatial_x", encoder.x_axis),
+        ("spatial_y", encoder.y_axis),
+        ("spectral", encoder.spectral_axis),
+        ("time_mjd", encoder.temporal_axis),
+    )
+    training = model.training
+    model.eval()
+    try:
+        with torch.no_grad():
+            baseline = float(term.raw_loss().detach().cpu())
+            ablations: list[dict[str, float | int | str]] = []
+            denominator = max(abs(baseline), torch.finfo(torch.float64).tiny)
+            for axis_name, axis in axes:
+                saved_logits = axis.gate_logits.detach().clone()
+                try:
+                    for band in range(axis.num_bands):
+                        axis.gate_logits[band] = -80.0
+                        ablated = float(term.raw_loss().detach().cpu())
+                        ablations.append(
+                            {
+                                "axis": axis_name,
+                                "band": band,
+                                "gate": float(torch.sigmoid(saved_logits[band]).cpu()),
+                                "length_scale": float(
+                                    axis.length_scales[band].detach().cpu()
+                                ),
+                                "ablated_raw_loss": ablated,
+                                "loss_increase_fraction": (
+                                    ablated - baseline
+                                )
+                                / denominator,
+                            }
+                        )
+                        axis.gate_logits[band] = saved_logits[band]
+                finally:
+                    axis.gate_logits.copy_(saved_logits)
+
+        coordinates = [
+            term.detector_x.to(device=parameter.device, dtype=parameter.dtype)
+            .detach()
+            .requires_grad_(),
+            term.detector_y.to(device=parameter.device, dtype=parameter.dtype)
+            .detach()
+            .requires_grad_(),
+            # Preserve small offsets from large wavelength/MJD origins until
+            # the encoders subtract their float64 physical-axis centres.
+            term.wavelength.to(device=parameter.device)
+            .detach()
+            .requires_grad_(),
+            term.time_mjd.to(device=parameter.device).detach().requires_grad_(),
+        ]
+        if isinstance(term, PSFCalibrationTerm):
+            mixture = term.model.mixture_weights(*coordinates).movedim(0, -1)
+            basis = term.model.kernel_basis.basis_kernels().to(
+                device=parameter.device, dtype=parameter.dtype
+            )
+            output = torch.einsum("nb,bhw->nhw", mixture, basis)
+            effective_probes = probes
+            method = "hutchinson_rademacher"
+        else:
+            output = term.model(*coordinates)
+            effective_probes = 1
+            method = "exact_scalar"
+        squared_gradients = [torch.zeros_like(value) for value in coordinates]
+        generator = torch.Generator(device="cpu").manual_seed(int(seed))
+        for probe_index in range(effective_probes):
+            if isinstance(term, PSFCalibrationTerm):
+                projection = (
+                    torch.randint(
+                        0,
+                        2,
+                        output.shape,
+                        generator=generator,
+                        device="cpu",
+                    )
+                    .to(device=output.device, dtype=output.dtype)
+                    .mul_(2.0)
+                    .sub_(1.0)
+                )
+            else:
+                projection = torch.ones_like(output)
+            gradients = torch.autograd.grad(
+                (output * projection).sum(),
+                coordinates,
+                retain_graph=probe_index + 1 < effective_probes,
+            )
+            squared_gradients = [
+                total + gradient.detach().square()
+                for total, gradient in zip(
+                    squared_gradients, gradients, strict=True
+                )
+            ]
+        sensitivities = {}
+        for (axis_name, axis), squared in zip(axes, squared_gradients, strict=True):
+            rms = float(torch.sqrt(squared.mean() / effective_probes).cpu())
+            sensitivities[axis_name] = {
+                "rms_output_jacobian_per_axis_unit": rms,
+                "rms_output_change_per_reference_scale": rms
+                * axis.reference_scale,
+                "reference_scale": axis.reference_scale,
+            }
+    finally:
+        model.train(training)
+    return {
+        "schema_version": 1,
+        "split": split,
+        "term": term.name,
+        "baseline_raw_loss": baseline,
+        "band_ablations": ablations,
+        "output_jacobian": {
+            "method": method,
+            "probes": effective_probes,
+            "seed": int(seed),
+            "axes": sensitivities,
+        },
+    }
+
+
 def fit_operator_calibration_terms(
     terms: Sequence[OperatorCalibrationTerm],
     *,
@@ -564,6 +708,7 @@ __all__ = [
     "OperatorCalibrationTerm",
     "PSFCalibrationTerm",
     "fit_operator_calibration_terms",
+    "operator_calibration_identifiability_report",
     "operator_calibration_score_report",
     "registered_image_stamps",
     "set_field_training_stage",

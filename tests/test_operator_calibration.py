@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import torch
 from torch import nn
 
 from torchsky.map.operators import (
+    AdaptiveSpatioSpectralTemporalEncoder,
     BackgroundCalibrationTerm,
     ConditionedBackgroundField,
     ConditionedKernelPSF,
@@ -14,6 +17,7 @@ from torchsky.map.operators import (
     PSFCalibrationTerm,
     SpatioSpectralTemporalEncoder,
     fit_operator_calibration_terms,
+    operator_calibration_identifiability_report,
     operator_calibration_score_report,
     registered_image_stamps,
     set_field_training_stage,
@@ -40,6 +44,23 @@ def _coordinates() -> tuple[torch.Tensor, ...]:
         torch.tensor([201.0, 205.0, 207.0]),
         torch.tensor([27_000.0, 27_760.0, 28_000.0]),
         torch.tensor([60_000.0, 60_000.1, 60_000.2]),
+    )
+
+
+def _adaptive_encoder() -> AdaptiveSpatioSpectralTemporalEncoder:
+    return AdaptiveSpatioSpectralTemporalEncoder(
+        spatial_center=(104.0, 204.0),
+        spatial_scale=(8.0, 8.0),
+        spatial_length_bounds=((2.0, 16.0), (2.0, 16.0)),
+        wavelength_center=27_500.0,
+        spectral_scale=1_000.0,
+        spectral_length_bounds=(500.0, 4_000.0),
+        time_center_mjd=60_000.1,
+        temporal_scale_days=0.2,
+        temporal_length_bounds_days=(0.05, 0.8),
+        spatial_bands=1,
+        spectral_bands=1,
+        temporal_bands=1,
     )
 
 
@@ -169,6 +190,79 @@ def test_operator_calibration_score_report_names_held_out_split() -> None:
     assert report["split"] == "test"
     assert report["term_count"] == 1
     assert report["terms"] == [term.diagnostics()]
+
+
+def test_identifiability_report_restores_gates_and_scores_output_jacobians() -> None:
+    model = ConditionedBackgroundField(
+        _adaptive_encoder(), hidden_dim=4, hidden_layers=1
+    )
+    with torch.no_grad():
+        for layer in model.network:
+            if isinstance(layer, nn.Linear):
+                layer.weight.fill_(0.1)
+                layer.bias.fill_(0.01)
+    x, y, wavelength, time = _coordinates()
+    target = model(x, y, wavelength, time).detach() + 0.1
+    term = BackgroundCalibrationTerm(model, x, y, wavelength, time, target)
+    encoder = model.encoder
+    assert isinstance(encoder, AdaptiveSpatioSpectralTemporalEncoder)
+    saved = {
+        name: axis.gate_logits.detach().clone()
+        for name, axis in (
+            ("x", encoder.x_axis),
+            ("y", encoder.y_axis),
+            ("spectral", encoder.spectral_axis),
+            ("time", encoder.temporal_axis),
+        )
+    }
+    model.eval()
+
+    report = cast(
+        dict[str, Any],
+        operator_calibration_identifiability_report(
+            term, split="validation", jacobian_probes=2
+        ),
+    )
+
+    assert model.training is False
+    assert len(report["band_ablations"]) == 4
+    assert report["output_jacobian"]["method"] == "exact_scalar"
+    assert report["output_jacobian"]["probes"] == 1
+    assert (
+        report["output_jacobian"]["axes"]["spatial_x"][
+            "rms_output_jacobian_per_axis_unit"
+        ]
+        > 0.0
+    )
+    for name, axis in (
+        ("x", encoder.x_axis),
+        ("y", encoder.y_axis),
+        ("spectral", encoder.spectral_axis),
+        ("time", encoder.temporal_axis),
+    ):
+        torch.testing.assert_close(axis.gate_logits, saved[name])
+
+    psf = ConditionedKernelPSF(
+        _adaptive_encoder(), n_basis=2, kernel_size=5, hidden_dim=4
+    )
+    mixer_output = psf.mixer[-1]
+    assert isinstance(mixer_output, nn.Linear)
+    with torch.no_grad():
+        mixer_output.weight.normal_(generator=torch.Generator().manual_seed(7))
+    mixture = psf.mixture_weights(x, y, wavelength, time).movedim(0, -1)
+    kernels = torch.einsum(
+        "nb,bhw->nhw", mixture, psf.kernel_basis.basis_kernels()
+    ).detach()
+    psf_report = cast(
+        dict[str, Any],
+        operator_calibration_identifiability_report(
+            PSFCalibrationTerm(psf, x, y, wavelength, time, kernels),
+            split="test",
+            jacobian_probes=2,
+        ),
+    )
+    assert psf_report["output_jacobian"]["method"] == "hutchinson_rademacher"
+    assert psf_report["output_jacobian"]["probes"] == 2
 
 
 def test_registered_image_stamps_centres_fractional_sources() -> None:

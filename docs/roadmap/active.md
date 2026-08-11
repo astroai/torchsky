@@ -79,10 +79,19 @@
     Compare a coordinate-invariant one-kernel/one-bias control against adaptive
     detector/wavelength/time models with one training-derived loss scale across
     train, validation, and untouched test splits.
-  - [ ] Audit the persisted 135-CRF extraction manifest and evidence hashes.
-  - [ ] Fit every detector/role group, publish aggregate held-out
-    adaptive-to-stationary ratios, then add band/position/time slices only where
-    each slice has enough withheld evidence to be meaningful.
+  - [x] Audit the persisted 135-CRF extraction and every referenced evidence
+    hash. Session `e3yy6n9v` at `64d5994` fit all five detectors from 4,757
+    accepted targets; the manifest SHA-256 is
+    `88f412774876ed62f537d300ad4ebced574cb1baeb24aceae084190ebe8398b4`.
+  - [x] Fit every detector/role group and publish aggregate held-out
+    adaptive-to-stationary ratios. Adaptive PSF loss improved for all five
+    detectors, with median 20.2% validation and 23.2% untouched-test gains.
+    Adaptive background loss improved for all validation detectors and four of
+    five test detectors, with median 63.6%/34.5% gains; NRCB4 test regressed
+    4.0% and remains a required failure analysis.
+  - [ ] Add band/position/time slices only where each slice has enough withheld
+    evidence to be meaningful. Use held-out band ablation and output-Jacobian
+    diagnostics before interpreting learned gates as physical length scales.
 - [ ] Implement learned non-stationary PSF covariance propagation, including
   cross-basis terms, before enabling Gaussian NLL for these bundles.
 - [ ] Measure CPU/CUDA throughput and peak memory from small stamps through
@@ -95,8 +104,11 @@
     no acceleration claim is made.
   - [ ] Profile and batch repeated spectral-plane conditioning on CUDA before
     deciding whether compilation or a fused encoder is warranted.
-- [ ] Add held-out band-ablation and output-Jacobian scale diagnostics before
+- [x] Add held-out band-ablation and output-Jacobian scale diagnostics before
   interpreting gate-weighted feature scales as physical correlation lengths.
+  Ablation disables one Fourier band without refitting; scalar-background
+  Jacobians are exact and PSF-kernel Jacobian norms use deterministic
+  Rademacher projections. Real checkpoint results are still pending.
 - [ ] Add axis-native adaptive variants required beyond image patches: spherical
   harmonic/needlet angular scales for full-sky FOSSIL/CMB/21-cm work and an
   optical-delay axis for interferometric spectroscopy.
