@@ -14,6 +14,7 @@ if str(BENCHMARKS) not in sys.path:
 
 from bench_map_smacs0723_field_fit import (  # noqa: E402
     _PerExposureScalarBias,
+    _copy_header_with_crop,
     _real_fit_kwargs,
     _robust_intensity_scale,
     _scaled_field_observation,
@@ -85,6 +86,8 @@ def test_scaled_field_observation_preserves_bandpass_metadata() -> None:
         transmission_center=27700.0,
         transmission_sigma=500.0,
         band_name="F277W",
+        detector_x0_pix=123.0,
+        detector_y0_pix=456.0,
     )
     scaled = _scaled_field_observation(observation, intensity_scale=10.0)
     assert scaled.wavelength == observation.wavelength
@@ -93,6 +96,32 @@ def test_scaled_field_observation_preserves_bandpass_metadata() -> None:
     assert scaled.transmission_center == observation.transmission_center
     assert scaled.transmission_sigma == observation.transmission_sigma
     assert scaled.band_name == observation.band_name
+    assert scaled.detector_x0_pix == 123.0
+    assert scaled.detector_y0_pix == 456.0
+
+
+def test_crop_header_preserves_detector_subarray_origin() -> None:
+    cropped = _copy_header_with_crop(
+        {
+            "NAXIS1": 2048,
+            "NAXIS2": 2048,
+            "CRPIX1": 1024.5,
+            "CRPIX2": 1024.5,
+            "SUBSTRT1": 1,
+            "SUBSTRT2": 1,
+        },
+        x0=120,
+        y0=340,
+        width=64,
+        height=48,
+    )
+
+    assert cropped["SUBSTRT1"] == 121
+    assert cropped["SUBSTRT2"] == 341
+    assert cropped["SUBSIZE1"] == 64
+    assert cropped["SUBSIZE2"] == 48
+    assert cropped["CRPIX1"] == 904.5
+    assert cropped["CRPIX2"] == 684.5
 
 
 def test_real_fit_kwargs_use_pixel_sampling_for_exact_wavelength_debug_mode() -> None:

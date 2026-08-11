@@ -176,6 +176,10 @@ def _copy_header_with_crop(
     cropped = dict(header)
     cropped["NAXIS1"] = int(width)
     cropped["NAXIS2"] = int(height)
+    cropped["SUBSTRT1"] = int(header.get("SUBSTRT1", 1)) + int(x0)
+    cropped["SUBSTRT2"] = int(header.get("SUBSTRT2", 1)) + int(y0)
+    cropped["SUBSIZE1"] = int(width)
+    cropped["SUBSIZE2"] = int(height)
     if "CRPIX1" in cropped:
         cropped["CRPIX1"] = float(cropped["CRPIX1"]) - float(x0)
     if "CRPIX2" in cropped:
@@ -270,8 +274,14 @@ def _scaled_field_observation(
         spectral_max=observation.spectral_max,
         transmission_center=observation.transmission_center,
         transmission_sigma=observation.transmission_sigma,
+        transmission_wavelength=observation.transmission_wavelength,
+        transmission_throughput=observation.transmission_throughput,
         psf_sigma_pix=observation.psf_sigma_pix,
+        psf_spec=observation.psf_spec,
         band_name=observation.band_name,
+        spectral_quantity=observation.spectral_quantity,
+        detector_x0_pix=observation.detector_x0_pix,
+        detector_y0_pix=observation.detector_y0_pix,
     )
 
 
@@ -490,6 +500,8 @@ def main() -> int:
                     header=crop_header,
                     weight=torch.from_numpy(crop_weight),
                     mask=torch.from_numpy(crop_mask),
+                    detector_x0_pix=float(crop_header["SUBSTRT1"]) - 1.0,
+                    detector_y0_pix=float(crop_header["SUBSTRT2"]) - 1.0,
                     **_field_observation_kwargs_for_band(
                         args.band_name,
                         observation_mode=args.observation_mode,

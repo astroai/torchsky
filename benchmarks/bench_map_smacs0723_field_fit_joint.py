@@ -1033,6 +1033,8 @@ def main() -> int:
                         header=crop_header,
                         weight=torch.from_numpy(crop_weight),
                         mask=torch.from_numpy(crop_mask),
+                        detector_x0_pix=float(crop_header["SUBSTRT1"]) - 1.0,
+                        detector_y0_pix=float(crop_header["SUBSTRT2"]) - 1.0,
                         psf_sigma_pix=_fitted_gaussian_psf_sigma_pix(
                             band,
                             crop_header,
@@ -1147,8 +1149,14 @@ def main() -> int:
                     spectral_max=observation.spectral_max,
                     transmission_center=observation.transmission_center,
                     transmission_sigma=observation.transmission_sigma,
+                    transmission_wavelength=observation.transmission_wavelength,
+                    transmission_throughput=observation.transmission_throughput,
                     psf_sigma_pix=observation.psf_sigma_pix,
+                    psf_spec=observation.psf_spec,
                     band_name=observation.band_name,
+                    spectral_quantity=observation.spectral_quantity,
+                    detector_x0_pix=observation.detector_x0_pix,
+                    detector_y0_pix=observation.detector_y0_pix,
                 )
             )
 
