@@ -696,6 +696,11 @@ stacking-versus-INR/Foam depth result defined in
       slopes. The constant-cell API remains the default. Analytic rectangle and
       half-disk integrals, scalar/batched parity, gradients, and SMACS CLI
       plumbing pass locally; exact-commit CUDA evidence remains the next gate.
+    - [x] Warm-start the affine basis from coadds with the same exact forward
+      model. A joint value-plus-gradient PCG solve uses area and x/y moment
+      columns, optional symmetric PSF forward/adjoint composition, and then
+      fits the shared spectral basis for both values and slopes. This avoids
+      spending early optimizer steps discovering gradients from zero.
     - [ ] Run the affine-cell 512-square blank and one injection batch on the
       frozen validation split. Require positive bright-bin response, improved
       source slope, and acceptable flux/RMSE before expanding to all batches.

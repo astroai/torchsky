@@ -645,6 +645,140 @@ def solve_power_pixel_least_squares(
     return solution.reshape(output_shape)
 
 
+def solve_power_pixel_affine_least_squares(
+    operator: PowerPixelOperator,
+    pixel_values: Tensor,
+    pixel_weights: Tensor | None = None,
+    *,
+    ridge: float = 1.0e-6,
+    max_iterations: int = 50,
+    tolerance: float = 1.0e-6,
+    pixel_matvec: Callable[[Tensor], Tensor] | None = None,
+    pixel_rmatvec: Callable[[Tensor], Tensor] | None = None,
+) -> tuple[Tensor, Tensor]:
+    """Solve cell values and local x/y gradients with the exact affine map."""
+    if (
+        not pixel_values.is_floating_point()
+        or pixel_values.shape[-1:] != (operator.pixel_count,)
+        or pixel_values.device != operator.areas.device
+        or pixel_values.dtype != operator.areas.dtype
+        or not bool(torch.isfinite(pixel_values).all())
+    ):
+        raise ValueError(
+            "pixel_values must be finite and match the operator with shape (..., pixels)"
+        )
+    if pixel_weights is None:
+        weights = torch.ones_like(pixel_values)
+    elif (
+        not pixel_weights.is_floating_point()
+        or pixel_weights.shape != pixel_values.shape
+        or pixel_weights.device != pixel_values.device
+        or pixel_weights.dtype != pixel_values.dtype
+        or not bool(torch.isfinite(pixel_weights).all())
+        or bool(torch.any(pixel_weights < 0))
+    ):
+        raise ValueError("pixel_weights must match pixel_values and be non-negative")
+    else:
+        weights = pixel_weights
+    penalty = float(ridge)
+    threshold = float(tolerance)
+    iterations = int(max_iterations)
+    if not math.isfinite(penalty) or penalty <= 0:
+        raise ValueError("ridge must be finite and positive")
+    if not math.isfinite(threshold) or threshold <= 0:
+        raise ValueError("tolerance must be finite and positive")
+    if iterations <= 0:
+        raise ValueError("max_iterations must be positive")
+    if (pixel_matvec is None) != (pixel_rmatvec is None):
+        raise ValueError("pixel_matvec and pixel_rmatvec must be supplied together")
+
+    flat_values = pixel_values.reshape(-1, operator.pixel_count)
+    flat_weights = weights.reshape_as(flat_values)
+    batch = flat_values.shape[0]
+    cells = operator.cell_count
+    edge_weight = flat_weights[:, operator.pixel_ids]
+    value_diagonal = flat_values.new_zeros((batch, cells))
+    value_diagonal.scatter_add_(
+        1,
+        operator.indices.expand(batch, -1),
+        edge_weight * operator.areas.square(),
+    )
+    gradient_diagonal = flat_values.new_zeros((batch, cells, 2))
+    gradient_diagonal.scatter_add_(
+        1,
+        operator.indices[None, :, None].expand(batch, -1, 2),
+        edge_weight[..., None] * operator.centered_first_moments.square(),
+    )
+    diagonal = torch.cat((value_diagonal, gradient_diagonal.flatten(1)), dim=1)
+    positive_count = torch.sum(diagonal > 0, dim=1).clamp(min=1)
+    scale = torch.sum(diagonal, dim=1) / positive_count
+    scale = torch.where(scale > 0, scale, torch.ones_like(scale))
+    regularization = penalty * scale
+    preconditioner = diagonal + regularization[:, None]
+
+    def unpack(parameters: Tensor) -> tuple[Tensor, Tensor]:
+        return parameters[:, :cells], parameters[:, cells:].reshape(batch, cells, 2)
+
+    def apply_normal(parameters: Tensor) -> Tensor:
+        values, gradients = unpack(parameters)
+        projected = operator.matvec_affine(values, gradients)
+        if pixel_matvec is not None:
+            projected = pixel_matvec(projected)
+        weighted = flat_weights * projected
+        if pixel_rmatvec is not None:
+            weighted = pixel_rmatvec(weighted)
+        value_adjoint, gradient_adjoint = operator.rmatvec_affine(weighted)
+        packed = torch.cat((value_adjoint, gradient_adjoint.flatten(1)), dim=1)
+        return packed + regularization[:, None] * parameters
+
+    weighted_values = flat_weights * flat_values
+    if pixel_rmatvec is not None:
+        weighted_values = pixel_rmatvec(weighted_values)
+    rhs_values, rhs_gradients = operator.rmatvec_affine(weighted_values)
+    rhs = torch.cat((rhs_values, rhs_gradients.flatten(1)), dim=1)
+    solution = torch.zeros_like(rhs)
+    residual = rhs.clone()
+    preconditioned = residual / preconditioner
+    direction = preconditioned.clone()
+    residual_dot = torch.sum(residual * preconditioned, dim=1)
+    rhs_norm = torch.linalg.vector_norm(rhs, dim=1)
+    active = torch.linalg.vector_norm(residual, dim=1) > threshold * rhs_norm
+    tiny = torch.finfo(pixel_values.dtype).tiny
+    # ponytail: the block-Jacobi diagonal ignores value/slope cross-terms; use
+    # a small per-cell block preconditioner only if real convergence requires it.
+    for _ in range(iterations):
+        if not bool(torch.any(active)):
+            break
+        normal_direction = apply_normal(direction)
+        denominator = torch.sum(direction * normal_direction, dim=1)
+        safe_denominator = torch.where(
+            torch.abs(denominator) > tiny, denominator, torch.ones_like(denominator)
+        )
+        step = torch.where(active, residual_dot / safe_denominator, 0.0)
+        solution = solution + step[:, None] * direction
+        residual = residual - step[:, None] * normal_direction
+        next_active = active & (
+            torch.linalg.vector_norm(residual, dim=1) > threshold * rhs_norm
+        )
+        preconditioned = residual / preconditioner
+        next_residual_dot = torch.sum(residual * preconditioned, dim=1)
+        safe_residual_dot = torch.where(
+            torch.abs(residual_dot) > tiny,
+            residual_dot,
+            torch.ones_like(residual_dot),
+        )
+        momentum = torch.where(next_active, next_residual_dot / safe_residual_dot, 0.0)
+        direction = preconditioned + momentum[:, None] * direction
+        residual_dot = next_residual_dot
+        active = next_active
+    solved_values, solved_gradients = unpack(solution)
+    leading = pixel_values.shape[:-1]
+    return (
+        solved_values.reshape(leading + (cells,)),
+        solved_gradients.reshape(leading + (cells, 2)),
+    )
+
+
 def _validate_sites_and_radii(
     sites: Tensor,
     radii: Tensor,
@@ -2750,6 +2884,7 @@ __all__ = [
     "render_power_spectral_affine_basis",
     "render_power_spectral_basis",
     "render_power_spectral_samples",
+    "solve_power_pixel_affine_least_squares",
     "smooth_bounded_power_weights",
     "soft_bounded_power_weights",
     "sparse_bounded_power_pixel_operator",

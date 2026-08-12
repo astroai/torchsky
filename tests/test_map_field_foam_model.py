@@ -20,6 +20,7 @@ from torchsky.map.field import (
     render_spectral_power_foam_observation_exact,
     smooth_bounded_power_weights,
     solve_power_pixel_least_squares,
+    solve_power_pixel_affine_least_squares,
     solve_spectral_cell_coefficients,
     soft_bounded_power_weights,
 )
@@ -264,6 +265,36 @@ def test_solve_power_pixel_least_squares_recovers_observed_cells() -> None:
             pixel_values,
             pixel_matvec=lambda values: values,
         )
+
+
+def test_solve_power_pixel_affine_least_squares_recovers_linear_field() -> None:
+    site = torch.zeros((1, 2), dtype=torch.float64)
+    radius = torch.full((1,), 10.0, dtype=torch.float64)
+    pixels = torch.stack(
+        [
+            torch.tensor(
+                [[x, y], [x + 1.0, y], [x + 1.0, y + 1.0], [x, y + 1.0]],
+                dtype=torch.float64,
+            )
+            for y in (-1.0, 0.0)
+            for x in (-1.0, 0.0)
+        ]
+    )
+    operator = bounded_power_pixel_operator(pixels, site, radius)
+    expected_value = torch.tensor([2.0], dtype=torch.float64)
+    expected_gradient = torch.tensor([[3.0, -4.0]], dtype=torch.float64)
+    pixel_values = operator.matvec_affine(expected_value, expected_gradient)
+
+    actual_value, actual_gradient = solve_power_pixel_affine_least_squares(
+        operator,
+        pixel_values,
+        ridge=1.0e-12,
+        max_iterations=20,
+        tolerance=1.0e-10,
+    )
+
+    torch.testing.assert_close(actual_value, expected_value, atol=1.0e-8, rtol=0)
+    torch.testing.assert_close(actual_gradient, expected_gradient, atol=1.0e-8, rtol=0)
 
 
 @pytest.mark.parametrize("semantics", ["surface_brightness", "integrated_flux"])

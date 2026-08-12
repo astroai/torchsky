@@ -350,6 +350,59 @@ def test_joint_foam_coadd_initializer_covers_cells_and_spectral_bands() -> None:
     assert diagnostics["foam_fully_covered_cell_fraction"] == 1.0
 
 
+def test_joint_foam_coadd_initializer_populates_affine_gradients() -> None:
+    header = make_tangent_plane_header(
+        7,
+        7,
+        crval_ra_deg=10.0,
+        crval_dec_deg=20.0,
+    )
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    model = SpectralPowerFoamField(
+        domain,
+        sites=torch.zeros((1, 2), dtype=torch.float32),
+        radii=torch.ones(1, dtype=torch.float32),
+        cell_coefficients=torch.zeros((1, 1), dtype=torch.float32),
+        cell_gradient_coefficients=torch.zeros((1, 1, 2), dtype=torch.float32),
+        compact_fixed_geometry=True,
+    )
+    model.sites.requires_grad_(False)
+    model.foam.raw_radii.requires_grad_(False)
+    y, x = np.mgrid[:7, :7]
+    observation = FieldObservation(
+        image=torch.zeros((7, 7)),
+        header=dict(header),
+        weight=torch.ones((7, 7)),
+        mask=torch.ones((7, 7), dtype=torch.bool),
+        wavelength=2.0,
+        band_name="B2",
+    )
+
+    diagnostics = _initialize_foam_from_band_coadds(
+        model,
+        [
+            {
+                "coadd_pred": (1.0 + 0.2 * x - 0.1 * y).astype(np.float32),
+                "support_mask": np.ones((7, 7), dtype=bool),
+                "target_header": dict(header),
+                "target_observation": observation,
+            }
+        ],
+        intensity_scale=1.0,
+        num_spectral_samples=1,
+    )
+
+    assert model.cell_gradient_coefficients is not None
+    assert float(model.cell_gradient_coefficients.detach().abs().max()) > 0.0
+    assert diagnostics["foam_initial_gradient_coefficient_abs_max"] > 0.0
+
+
 def test_regular_foam_initialization_is_deterministic_and_pixel_independent() -> None:
     first = _regular_foam_model_kwargs(grid_side=3, basis_count=4)
     second = _regular_foam_model_kwargs(grid_side=3, basis_count=4)

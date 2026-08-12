@@ -615,6 +615,10 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
   exact affine forward/adjoint maps; spectral Foam can learn cell-local slopes
   while the piecewise-constant API remains the default. Rectangle, half-disk,
   scalar/batched, gradient, and SMACS CLI checks pass locally.
+- [x] Extend the exact coadd initializer to jointly solve cell values and x/y
+  slopes by PCG through the optional target-PSF forward/adjoint, then fit the
+  shared spectral coefficients for both. Affine runs no longer start every
+  local slope at zero.
 - [ ] Run a 512-square affine-cell blank plus one frozen injection batch. Expand
   only if the bright-bin response is positive and flux/RMSE improve.
 - [x] Implement the frozen spectral-Foam scorer while the injection fanout runs.

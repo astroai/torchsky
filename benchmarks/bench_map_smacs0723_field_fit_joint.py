@@ -74,6 +74,7 @@ from torchsky.map import (  # noqa: E402
     render_spectral_power_foam_observation_exact,
 )
 from torchsky.map.field import (  # noqa: E402
+    solve_power_pixel_affine_least_squares,
     solve_power_pixel_least_squares,
     solve_spectral_cell_coefficients,
 )
@@ -368,6 +369,7 @@ def _initialize_foam_from_band_coadds(
     model.to(initialization_device)
     sites = getattr(model, "sites", None)
     coefficients = getattr(model, "cell_coefficients", None)
+    gradient_coefficients = getattr(model, "cell_gradient_coefficients", None)
     spectral_basis = getattr(model, "spectral_basis", None)
     normalized_spatial_coordinates = getattr(
         model,
@@ -397,7 +399,9 @@ def _initialize_foam_from_band_coadds(
     cell_values: list[torch.Tensor] = []
     cell_weights: list[torch.Tensor] = []
     response_basis: list[torch.Tensor] = []
-    pixel_systems: list[tuple[Any, torch.Tensor, torch.Tensor, torch.Tensor, Any]] = []
+    pixel_systems: list[
+        tuple[Any, torch.Tensor, torch.Tensor, torch.Tensor, Any, torch.Tensor | None]
+    ] = []
     for entry in band_entries:
         image = torch.as_tensor(
             entry["coadd_pred"],
@@ -493,16 +497,29 @@ def _initialize_foam_from_band_coadds(
                 / areas
             )
 
-        solved_cells = solve_power_pixel_least_squares(
-            operator,
-            integrated,
-            pixel_weight,
-            ridge=1.0e-6,
-            max_iterations=50,
-            tolerance=1.0e-5,
-            pixel_matvec=psf_forward,
-            pixel_rmatvec=psf_adjoint,
-        )
+        solved_gradients = None
+        if isinstance(gradient_coefficients, torch.nn.Parameter):
+            solved_cells, solved_gradients = solve_power_pixel_affine_least_squares(
+                operator,
+                integrated,
+                pixel_weight,
+                ridge=1.0e-6,
+                max_iterations=50,
+                tolerance=1.0e-5,
+                pixel_matvec=psf_forward,
+                pixel_rmatvec=psf_adjoint,
+            )
+        else:
+            solved_cells = solve_power_pixel_least_squares(
+                operator,
+                integrated,
+                pixel_weight,
+                ridge=1.0e-6,
+                max_iterations=50,
+                tolerance=1.0e-5,
+                pixel_matvec=psf_forward,
+                pixel_rmatvec=psf_adjoint,
+            )
         coverage = torch.clamp(
             operator.rmatvec(pixel_weight, semantics="integrated_flux"),
             min=0.0,
@@ -511,7 +528,14 @@ def _initialize_foam_from_band_coadds(
         cell_values.append(solved_cells)
         cell_weights.append(coverage)
         pixel_systems.append(
-            (operator, pixel_areas, normalized, pixel_weight, psf_forward)
+            (
+                operator,
+                pixel_areas,
+                normalized,
+                pixel_weight,
+                psf_forward,
+                solved_gradients,
+            )
         )
 
         wavelengths, response = bandpass_quadrature(
@@ -530,21 +554,49 @@ def _initialize_foam_from_band_coadds(
     solved = solve_spectral_cell_coefficients(basis, values, weights)
     with torch.no_grad():
         coefficients.copy_(solved)
+    solved_gradient_coefficients = None
+    if isinstance(gradient_coefficients, torch.nn.Parameter):
+        band_gradients = torch.stack(
+            [
+                gradient
+                for _, _, _, _, _, gradient in pixel_systems
+                if gradient is not None
+            ]
+        )
+        solved_gradient_coefficients = torch.stack(
+            (
+                solve_spectral_cell_coefficients(
+                    basis, band_gradients[..., 0], weights
+                ),
+                solve_spectral_cell_coefficients(
+                    basis, band_gradients[..., 1], weights
+                ),
+            ),
+            dim=-1,
+        )
+        with torch.no_grad():
+            gradient_coefficients.copy_(solved_gradient_coefficients)
     reconstructed = basis @ solved.mT
+    reconstructed_gradients = (
+        torch.einsum("bk,ckd->bcd", basis, solved_gradient_coefficients)
+        if solved_gradient_coefficients is not None
+        else None
+    )
     residual_square_sum = sites.new_zeros(())
     observed_count = sites.new_zeros(())
-    for band_cells, (
-        operator,
-        pixel_areas,
-        normalized,
-        pixel_weight,
-        psf_forward,
-    ) in zip(
-        reconstructed,
-        pixel_systems,
-        strict=True,
+    for band_index, (band_cells, pixel_system) in enumerate(
+        zip(reconstructed, pixel_systems, strict=True)
     ):
-        prediction = psf_forward(operator.matvec(band_cells)) / pixel_areas
+        operator, pixel_areas, normalized, pixel_weight, psf_forward, _ = pixel_system
+        integrated_prediction = (
+            operator.matvec_affine(
+                band_cells,
+                reconstructed_gradients[band_index],
+            )
+            if reconstructed_gradients is not None
+            else operator.matvec(band_cells)
+        )
+        prediction = psf_forward(integrated_prediction) / pixel_areas
         residual_square_sum += torch.sum(
             pixel_weight * torch.square(prediction - normalized)
         )
@@ -562,6 +614,11 @@ def _initialize_foam_from_band_coadds(
         ),
         "foam_initialization_rmse": float(residual_rmse),
         "foam_initial_coefficient_abs_max": float(torch.max(torch.abs(solved))),
+        "foam_initial_gradient_coefficient_abs_max": (
+            float(torch.max(torch.abs(solved_gradient_coefficients)))
+            if solved_gradient_coefficients is not None
+            else 0.0
+        ),
     }
 
 
@@ -1563,6 +1620,7 @@ def main() -> int:
                             "foam_fully_covered_cell_fraction",
                             "foam_initialization_rmse",
                             "foam_initial_coefficient_abs_max",
+                            "foam_initial_gradient_coefficient_abs_max",
                         ):
                             if diagnostic_name in fit_diagnostics:
                                 row[diagnostic_name] = float(
