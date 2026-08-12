@@ -713,8 +713,12 @@ def solve_power_pixel_affine_least_squares(
     positive_count = torch.sum(diagonal > 0, dim=1).clamp(min=1)
     scale = torch.sum(diagonal, dim=1) / positive_count
     scale = torch.where(scale > 0, scale, torch.ones_like(scale))
-    regularization = penalty * scale
-    preconditioner = diagonal + regularization[:, None]
+    regularization = penalty * torch.where(
+        diagonal > 0,
+        diagonal,
+        scale[:, None],
+    )
+    preconditioner = diagonal + regularization
 
     def unpack(parameters: Tensor) -> tuple[Tensor, Tensor]:
         return parameters[:, :cells], parameters[:, cells:].reshape(batch, cells, 2)
@@ -729,7 +733,7 @@ def solve_power_pixel_affine_least_squares(
             weighted = pixel_rmatvec(weighted)
         value_adjoint, gradient_adjoint = operator.rmatvec_affine(weighted)
         packed = torch.cat((value_adjoint, gradient_adjoint.flatten(1)), dim=1)
-        return packed + regularization[:, None] * parameters
+        return packed + regularization * parameters
 
     weighted_values = flat_weights * flat_values
     if pixel_rmatvec is not None:
