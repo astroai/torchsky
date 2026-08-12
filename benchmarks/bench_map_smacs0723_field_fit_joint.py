@@ -279,6 +279,7 @@ def _regular_foam_model_kwargs(
     basis_count: int,
     affine_spatial_basis: bool = False,
     extent: float = 1.0,
+    bounds_xy: tuple[tuple[float, float], tuple[float, float]] | None = None,
 ) -> dict[str, Any]:
     """Deterministic Power-Foam initialization independent of science pixels."""
     side = int(grid_side)
@@ -290,27 +291,40 @@ def _regular_foam_model_kwargs(
         raise ValueError("basis_count must be positive")
     if not math.isfinite(limit) or limit <= 0:
         raise ValueError("extent must be finite and positive")
-    step = 2.0 * limit / float(side)
-    centers = torch.linspace(
-        -limit + 0.5 * step,
-        limit - 0.5 * step,
+    bounds = bounds_xy or ((-limit, limit), (-limit, limit))
+    (x_min, x_max), (y_min, y_max) = bounds
+    if not all(math.isfinite(value) for pair in bounds for value in pair):
+        raise ValueError("bounds_xy must be finite")
+    if x_min >= x_max or y_min >= y_max:
+        raise ValueError("bounds_xy must have increasing x/y limits")
+    step_x = (x_max - x_min) / float(side)
+    step_y = (y_max - y_min) / float(side)
+    centers_x = torch.linspace(
+        x_min + 0.5 * step_x,
+        x_max - 0.5 * step_x,
         steps=side,
         dtype=torch.float32,
     )
-    yy, xx = torch.meshgrid(centers, centers, indexing="ij")
+    centers_y = torch.linspace(
+        y_min + 0.5 * step_y,
+        y_max - 0.5 * step_y,
+        steps=side,
+        dtype=torch.float32,
+    )
+    yy, xx = torch.meshgrid(centers_y, centers_x, indexing="ij")
     sites = torch.stack((xx.reshape(-1), yy.reshape(-1)), dim=-1)
     radii = torch.full(
         (side * side,),
-        math.sqrt(2.0) * step,
+        math.hypot(step_x, step_y),
         dtype=torch.float32,
     )
     coefficients = torch.zeros((side * side, basis), dtype=torch.float32)
-    inverse_cell_area = 1.0 / (step * step)
+    inverse_cell_area = 1.0 / (step_x * step_y)
     result = {
         "sites": sites,
         "radii": radii,
         "cell_coefficients": coefficients,
-        "minimum_radius": 0.25 * step,
+        "minimum_radius": 0.25 * min(step_x, step_y),
         "temperature_start": FOAM_TEMPERATURE_START_CELL_UNITS * inverse_cell_area,
         "temperature_end": FOAM_TEMPERATURE_END_CELL_UNITS * inverse_cell_area,
     }
@@ -319,6 +333,52 @@ def _regular_foam_model_kwargs(
             (side * side, basis, 2), dtype=torch.float32
         )
     return result
+
+
+def _foam_target_footprint_bounds(
+    domain: Any,
+    band_entries: list[dict[str, Any]],
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Return target-WCS bounds in the Foam's normalized tangent plane."""
+    if not band_entries:
+        raise ValueError("band_entries must not be empty")
+    boundary_world: list[torch.Tensor] = []
+    for entry in band_entries:
+        header = dict(entry["target_header"])
+        width = int(header.get("NAXIS1", 0))
+        height = int(header.get("NAXIS2", 0))
+        if width <= 0 or height <= 0:
+            raise ValueError("target WCS requires positive NAXIS1/NAXIS2")
+        # ponytail: 17 samples per edge bound ordinary distorted imaging WCS;
+        # upgrade to adaptive extrema only if a high-order WCS violates the box.
+        x = torch.linspace(-0.5, width - 0.5, 17, dtype=torch.float64)
+        y = torch.linspace(-0.5, height - 0.5, 17, dtype=torch.float64)
+        boundary = torch.cat(
+            (
+                torch.stack((x, torch.full_like(x, -0.5)), dim=-1),
+                torch.stack((torch.full_like(y, width - 0.5), y), dim=-1),
+                torch.stack((x, torch.full_like(x, height - 0.5)), dim=-1),
+                torch.stack((torch.full_like(y, -0.5), y), dim=-1),
+            )
+        )
+        boundary_world.append(torchsky.WCS(header).pixel_to_world(boundary))
+    world = torch.cat(boundary_world)
+    delta_ra = torch.remainder(
+        world[:, 0] - float(domain.center_ra_deg) + 180.0,
+        360.0,
+    ) - 180.0
+    x = (
+        delta_ra
+        * math.cos(math.radians(float(domain.center_dec_deg)))
+        / float(domain.spatial_scale_deg)
+    )
+    y = (world[:, 1] - float(domain.center_dec_deg)) / float(
+        domain.spatial_scale_deg
+    )
+    return (
+        (float(torch.min(x)), float(torch.max(x))),
+        (float(torch.min(y)), float(torch.max(y))),
+    )
 
 
 def _foam_training_tile_side(*, crop_size: int, grid_side: int) -> int:
@@ -1038,6 +1098,11 @@ def main() -> int:
         help="Warm-start fixed cell spectra from observed per-band coadds",
     )
     parser.add_argument(
+        "--foam-fit-target-footprint",
+        action="store_true",
+        help="Place the fixed grid over target-WCS bounds instead of the full domain",
+    )
+    parser.add_argument(
         "--foam-extent",
         type=float,
         default=FOAM_FOOTPRINT_EXTENT,
@@ -1508,11 +1573,17 @@ def main() -> int:
                 size=int(args.crop_size),
             )
             if model_kind == "spectral_power_foam":
+                foam_bounds = (
+                    _foam_target_footprint_bounds(local_domain, band_entries)
+                    if args.foam_fit_target_footprint
+                    else None
+                )
                 model_kwargs = _regular_foam_model_kwargs(
                     grid_side=int(args.foam_grid_side),
                     basis_count=int(args.foam_basis_count),
                     affine_spatial_basis=bool(args.foam_affine_spatial_basis),
                     extent=float(args.foam_extent),
+                    bounds_xy=foam_bounds,
                 )
                 model_kwargs["compact_fixed_geometry"] = not bool(
                     args.foam_train_geometry
@@ -1702,6 +1773,21 @@ def main() -> int:
                             )
                             gradients = hard_model.cell_gradient_coefficients
                             row["foam_affine_spatial_basis"] = gradients is not None
+                            x_centers = torch.unique(sites[:, 0])
+                            y_centers = torch.unique(sites[:, 1])
+                            if x_centers.numel() < 2 or y_centers.numel() < 2:
+                                raise ValueError(
+                                    "regular Foam diagnostics require a 2-D grid"
+                                )
+                            cell_width_x = float(
+                                (x_centers.max() - x_centers.min())
+                                / (x_centers.numel() - 1)
+                            )
+                            cell_width_y = float(
+                                (y_centers.max() - y_centers.min())
+                                / (y_centers.numel() - 1)
+                            )
+                            cell_scale = math.sqrt(cell_width_x * cell_width_y)
                             if gradients is not None:
                                 row["foam_gradient_coefficient_abs_max"] = float(
                                     gradients.detach().abs().max()
@@ -1724,9 +1810,7 @@ def main() -> int:
                                     gradients.detach(),
                                 )
                                 cell_variation = (
-                                    2.0
-                                    * float(args.foam_extent)
-                                    / float(args.foam_grid_side)
+                                    cell_scale
                                     * torch.linalg.vector_norm(
                                         band_gradients,
                                         dim=-1,
@@ -1751,11 +1835,9 @@ def main() -> int:
                                 float(radii.max()),
                             ]
                             row["foam_extent"] = float(args.foam_extent)
-                            row["foam_grid_cell_width"] = (
-                                2.0
-                                * float(args.foam_extent)
-                                / float(args.foam_grid_side)
-                            )
+                            row["foam_grid_cell_width_x"] = cell_width_x
+                            row["foam_grid_cell_width_y"] = cell_width_y
+                            row["foam_grid_cell_scale"] = cell_scale
                             row["foam_temperature_start"] = float(
                                 hard_model.temperature_start
                             )
@@ -1918,6 +2000,7 @@ def main() -> int:
             "foam_lr": float(args.foam_lr),
             "foam_train_geometry": bool(args.foam_train_geometry),
             "foam_initialize_from_coadd": bool(args.foam_initialize_from_coadd),
+            "foam_fit_target_footprint": bool(args.foam_fit_target_footprint),
             "intensity_scale": float(intensity_scale),
             "patt_nums": list(pattern_numbers),
             "crop_x0": args.crop_x0,

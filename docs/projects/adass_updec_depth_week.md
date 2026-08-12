@@ -637,6 +637,23 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
   blank standardizes gradients as brightness change across one cell before
   regularization and records per-band variation instead of interpreting raw
   spectral gradient coefficients.
+- [x] Run that cell-area-standardized affine blank at exact commit
+  `5d5fd69a0a9c5f5d6afa412318101154fd356e3c`, session `brxk9n79`, artifact
+  `/arc/projects/ots/torchsky-runs/20260812-smacs-foam-affine-standardized-5d5fd69-c512-r2`.
+  It reproduced the preceding means to numerical precision: support/source-
+  contrast RMSE 0.399745/1.226135, source-contrast slope 0.07369, and
+  support/source flux ratios 0.9162/0.8250 in 331 s. The spectral design is
+  well conditioned (3.86), so the injection gate remains closed. Only 19.1%
+  of the nominal grid is observed because the fixed domain grid spans far more
+  sky than the target WCS; the next controlled blank contracts the same 32x32
+  deterministic grid to WCS-only target bounds without using science pixels.
+- [x] Implement the WCS-only contracted-grid ablation. It samples every target
+  WCS boundary, maps the result through the existing local tangent domain, and
+  places the same rectangular 32x32 deterministic grid inside those bounds.
+  It does not inspect image values, support masks, or detections; disk radius,
+  temperature, and affine regularization continue to scale in cell units.
+- [ ] Run one matched contracted-grid blank. Require near-unity initialized-cell
+  coverage plus materially better source flux/slope before `validation-000`.
 - [x] Implement the frozen spectral-Foam scorer while the injection fanout runs.
   `benchmarks/score_smacs0723_foam.py` stages exact products, intersects and
   erodes support, derives band-dependent ePSFs from injected-minus-blank model

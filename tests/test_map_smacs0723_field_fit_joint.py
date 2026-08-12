@@ -29,6 +29,7 @@ from bench_map_smacs0723_field_fit_joint import (  # noqa: E402
 )
 from bench_map_smacs0723_field_fit_joint import _background_subtracted_source_stats  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _foam_training_tile_side  # noqa: E402
+from bench_map_smacs0723_field_fit_joint import _foam_target_footprint_bounds  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _initialize_foam_from_band_coadds  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _joint_real_fit_kwargs  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _preview_uint8  # noqa: E402
@@ -477,6 +478,53 @@ def test_regular_foam_initialization_is_deterministic_and_pixel_independent() ->
     )
     assert affine["cell_gradient_coefficients"].shape == (9, 4, 2)
     assert not bool(torch.any(affine["cell_gradient_coefficients"]))
+
+
+def test_regular_foam_initialization_can_fill_rectangular_target_bounds() -> None:
+    kwargs = _regular_foam_model_kwargs(
+        grid_side=2,
+        basis_count=1,
+        bounds_xy=((-0.25, 0.25), (-0.5, 0.5)),
+    )
+
+    torch.testing.assert_close(
+        kwargs["sites"],
+        torch.tensor(
+            [
+                [-0.125, -0.25],
+                [0.125, -0.25],
+                [-0.125, 0.25],
+                [0.125, 0.25],
+            ]
+        ),
+    )
+    assert kwargs["minimum_radius"] == pytest.approx(0.0625)
+
+
+def test_foam_target_footprint_bounds_use_only_wcs_geometry() -> None:
+    header = make_tangent_plane_header(
+        3,
+        5,
+        crval_ra_deg=10.0,
+        crval_dec_deg=20.0,
+        cd11=-0.01,
+        cd22=0.01,
+    )
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+
+    bounds = _foam_target_footprint_bounds(
+        domain,
+        [{"target_header": header, "coadd_pred": np.full((3, 5), np.nan)}],
+    )
+
+    assert bounds[0][0] < -0.2 < 0.2 < bounds[0][1]
+    assert bounds[1][0] < -0.1 < 0.1 < bounds[1][1]
 
 
 def test_regular_foam_footprint_extent_covers_normalized_domain() -> None:

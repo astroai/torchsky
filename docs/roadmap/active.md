@@ -722,6 +722,25 @@ stacking-versus-INR/Foam depth result defined in
       source flux is still 17.5% low. Do not launch an injection yet. The next
       exact run must use cell-area-standardized slope parameters and record
       per-band within-cell variation plus spectral-basis conditioning.
+    - [x] Run the standardized affine inverse at exact commit
+      `5d5fd69a0a9c5f5d6afa412318101154fd356e3c`. Session `brxk9n79` completed
+      the matched six-band blank under
+      `/arc/projects/ots/torchsky-runs/20260812-smacs-foam-affine-standardized-5d5fd69-c512-r2`.
+      Its mean support/source-contrast RMSE (0.399745/1.226135), source slope
+      (0.07369), support/source flux (0.9162/0.8250), and 331 s fit time are
+      effectively unchanged, so no injection was launched. Spectral-basis
+      conditioning is benign at 3.86. The actionable failure is spatial:
+      only 19.1% of the 1,024 fixed cells overlap the target, giving about 13
+      cells across the scored crop and leaving extreme variation in boundary
+      cells. Contract the deterministic grid from WCS geometry alone and rerun
+      one blank before any capacity or optimizer sweep.
+    - [x] Add the WCS-only target-footprint placement option. Seventeen samples
+      per target-WCS edge define normalized tangent-plane bounds; the same
+      rectangular 32x32 deterministic grid, cell-unit disk overlap, temperature,
+      affine basis, and ridge are retained. This uses no image values, support
+      masks, or source detections and exposes its choice in the JSON contract.
+    - [ ] Run the matched contracted-grid blank and require near-unity initialized
+      cell coverage plus materially improved source flux/slope before injection.
     - [x] Add the frozen Foam scoring path before the products finish.
       `benchmarks/score_smacs0723_foam.py` stages the exact blank/injection
       products, enforces common eroded support, measures each effective PSF from

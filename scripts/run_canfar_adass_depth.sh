@@ -62,6 +62,13 @@ case "${FOAM_INITIALIZE_FROM_COADD:-0}" in
   *) echo "FOAM_INITIALIZE_FROM_COADD must be 0 or 1" >&2; exit 2 ;;
 esac
 
+foam_footprint_args=()
+case "${FOAM_FIT_TARGET_FOOTPRINT:-0}" in
+  0) ;;
+  1) foam_footprint_args=(--foam-fit-target-footprint) ;;
+  *) echo "FOAM_FIT_TARGET_FOOTPRINT must be 0 or 1" >&2; exit 2 ;;
+esac
+
 foam_spatial_args=()
 case "${FOAM_AFFINE_SPATIAL_BASIS:-0}" in
   0) ;;
@@ -165,6 +172,7 @@ case "${mode}" in
       --foam-lr "${foam_lr}" \
       "${foam_geometry_args[@]}" \
       "${foam_initialization_args[@]}" \
+      "${foam_footprint_args[@]}" \
       "${foam_spatial_args[@]}" \
       "${operator_calibration_args[@]}" \
       --models spectral_power_foam \
@@ -220,6 +228,7 @@ case "${mode}" in
         --foam-lr "${foam_lr}" \
         "${foam_geometry_args[@]}" \
         "${foam_initialization_args[@]}" \
+        "${foam_footprint_args[@]}" \
         "${foam_spatial_args[@]}" \
         "${operator_calibration_args[@]}" \
         --models spectral_power_foam \
