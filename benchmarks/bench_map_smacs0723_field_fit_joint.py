@@ -77,6 +77,8 @@ from torchsky.map.field import (  # noqa: E402
     solve_power_pixel_affine_least_squares,
     solve_power_pixel_least_squares,
     solve_spectral_cell_coefficients,
+    solve_spectral_power_pixel_affine_least_squares,
+    spectral_basis_whitening_transform,
 )
 from torchsky.map.field.bandpass import bandpass_quadrature  # noqa: E402
 from torchsky.map.operators import apply_psf_spec, pixel_area_sr_at  # noqa: E402
@@ -363,18 +365,19 @@ def _foam_target_footprint_bounds(
         )
         boundary_world.append(torchsky.WCS(header).pixel_to_world(boundary))
     world = torch.cat(boundary_world)
-    delta_ra = torch.remainder(
-        world[:, 0] - float(domain.center_ra_deg) + 180.0,
-        360.0,
-    ) - 180.0
+    delta_ra = (
+        torch.remainder(
+            world[:, 0] - float(domain.center_ra_deg) + 180.0,
+            360.0,
+        )
+        - 180.0
+    )
     x = (
         delta_ra
         * math.cos(math.radians(float(domain.center_dec_deg)))
         / float(domain.spatial_scale_deg)
     )
-    y = (world[:, 1] - float(domain.center_dec_deg)) / float(
-        domain.spatial_scale_deg
-    )
+    y = (world[:, 1] - float(domain.center_dec_deg)) / float(domain.spatial_scale_deg)
     return (
         (float(torch.min(x)), float(torch.max(x))),
         (float(torch.min(y)), float(torch.max(y))),
@@ -418,6 +421,7 @@ def _initialize_foam_from_band_coadds(
     intensity_scale: float,
     num_spectral_samples: int,
     operator_max_candidate_pairs: int = 10_000_000,
+    whiten_spectral_basis: bool = False,
 ) -> dict[str, float]:
     """Warm-start fixed Foam appearance from exact observed pixel footprints."""
     first_parameter = next(model.parameters(), None)
@@ -611,6 +615,15 @@ def _initialize_foam_from_band_coadds(
     values = torch.stack(cell_values)
     weights = torch.stack(cell_weights)
     basis = torch.stack(response_basis)
+    raw_basis_condition = torch.linalg.cond(basis)
+    raw_basis_rank = torch.linalg.matrix_rank(basis)
+    if whiten_spectral_basis:
+        set_basis_transform = getattr(model, "set_spectral_basis_transform", None)
+        if not callable(set_basis_transform):
+            raise TypeError("model must expose set_spectral_basis_transform")
+        transform = spectral_basis_whitening_transform(basis)
+        set_basis_transform(transform)
+        basis = basis @ transform
     solved = solve_spectral_cell_coefficients(basis, values, weights)
     with torch.no_grad():
         coefficients.copy_(solved)
@@ -695,10 +708,194 @@ def _initialize_foam_from_band_coadds(
             else 0.0
         ),
         "foam_spectral_basis_condition_number": float(torch.linalg.cond(basis)),
-        "foam_initial_cell_variation_abs_p95": float(
-            torch.quantile(variation, 0.95)
-        ),
+        "foam_spectral_basis_raw_condition_number": float(raw_basis_condition),
+        "foam_spectral_basis_rank": float(raw_basis_rank),
+        "foam_initial_cell_variation_abs_p95": float(torch.quantile(variation, 0.95)),
         "foam_initial_cell_variation_abs_max": float(torch.max(variation)),
+    }
+
+
+def _refine_foam_from_observations_exact(
+    model: torch.nn.Module,
+    observations: list[FieldObservation],
+    *,
+    num_spectral_samples: int,
+    operator_max_candidate_pairs: int = 10_000_000,
+    max_iterations: int = 50,
+) -> dict[str, float]:
+    """Refit fixed spectral-affine appearance through native detector pixels."""
+    coefficients = getattr(model, "cell_coefficients", None)
+    gradient_coefficients = getattr(model, "cell_gradient_coefficients", None)
+    spectral_basis = getattr(model, "spectral_basis", None)
+    normalized_coordinates = getattr(model, "normalized_spatial_coordinates", None)
+    exact_operator = getattr(model, "exact_operator", None)
+    if (
+        not isinstance(coefficients, torch.nn.Parameter)
+        or not isinstance(gradient_coefficients, torch.nn.Parameter)
+        or not callable(spectral_basis)
+        or not callable(normalized_coordinates)
+        or not callable(exact_operator)
+    ):
+        raise TypeError("exact observation refinement requires affine spectral Foam")
+    if not observations:
+        raise ValueError("observations must not be empty")
+    device = coefficients.device
+    dtype = coefficients.dtype
+    operators = []
+    response_basis = []
+    integrated_values = []
+    integrated_weights = []
+    pixel_areas_by_observation = []
+    forwards = []
+    adjoints = []
+    observed_pixel_count = 0
+    for observation in observations:
+        image = observation.image.to(device=device, dtype=dtype)
+        height, width = image.shape
+        grid_device = torch.device("cpu") if device.type == "mps" else device
+        y, x = torch.meshgrid(
+            torch.arange(height, dtype=torch.float64, device=grid_device),
+            torch.arange(width, dtype=torch.float64, device=grid_device),
+            indexing="ij",
+        )
+        offsets = torch.tensor(
+            [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]],
+            dtype=torch.float64,
+            device=grid_device,
+        )
+        wcs = torchsky.WCS(dict(observation.header))
+        wcs.to(grid_device)
+        ra_deg, dec_deg = wcs.pixel_to_world(
+            x[..., None] + offsets[:, 0],
+            y[..., None] + offsets[:, 1],
+        )
+        polygons = normalized_coordinates(
+            ra_deg.to(device=device), dec_deg.to(device=device)
+        ).reshape(height * width, 4, 2)
+        operator = exact_operator(
+            polygons,
+            max_candidate_pairs=int(operator_max_candidate_pairs),
+        )
+        next_vertices = torch.roll(polygons, shifts=-1, dims=-2)
+        pixel_areas = 0.5 * torch.abs(
+            torch.sum(
+                polygons[..., 0] * next_vertices[..., 1]
+                - polygons[..., 1] * next_vertices[..., 0],
+                dim=-1,
+            )
+        )
+        if bool(torch.any(pixel_areas <= 0)):
+            raise ValueError("observation WCS produced a degenerate pixel polygon")
+        mask = (
+            observation.mask.to(device=device, dtype=torch.bool)
+            if observation.mask is not None
+            else torch.ones_like(image, dtype=torch.bool)
+        )
+        surface_weight = (
+            observation.weight.to(device=device, dtype=dtype)
+            if observation.weight is not None
+            else torch.ones_like(image)
+        )
+        valid = (
+            mask
+            & torch.isfinite(image)
+            & torch.isfinite(surface_weight)
+            & (surface_weight > 0)
+        ).reshape(-1)
+        area = pixel_areas.reshape(-1)
+        integrated_values.append(
+            torch.where(valid, image.reshape(-1) * area, torch.zeros_like(area))
+        )
+        integrated_weights.append(
+            torch.where(valid, surface_weight.reshape(-1) / area.square(), torch.zeros_like(area))
+        )
+        pixel_areas_by_observation.append(area)
+        observed_pixel_count += int(torch.sum(valid))
+        psf_spec = observation.psf_spec
+        if getattr(psf_spec, "mode", "none") not in (
+            "none",
+            "gaussian_sigma_pix",
+        ):
+            raise ValueError("exact observation refinement requires a symmetric PSF")
+
+        def psf_forward(
+            values: torch.Tensor,
+            areas: torch.Tensor = area,
+            spec: Any = psf_spec,
+            shape: tuple[int, int] = (height, width),
+        ) -> torch.Tensor:
+            return (
+                apply_psf_spec((values / areas).reshape(shape), spec).reshape(-1)
+                * areas
+            )
+
+        def psf_adjoint(
+            values: torch.Tensor,
+            areas: torch.Tensor = area,
+            spec: Any = psf_spec,
+            shape: tuple[int, int] = (height, width),
+        ) -> torch.Tensor:
+            return apply_psf_spec((values * areas).reshape(shape), spec).reshape(-1) / areas
+
+        wavelengths, response = bandpass_quadrature(
+            observation,
+            num_spectral_samples=int(num_spectral_samples),
+            device=device,
+        )
+        basis_samples = spectral_basis(wavelengths).to(dtype=dtype)
+        response_basis.append(
+            torch.sum(response.to(dtype=dtype)[:, None] * basis_samples, dim=0)
+        )
+        operators.append(operator)
+        forwards.append(psf_forward)
+        adjoints.append(psf_adjoint)
+
+    solved, solved_gradients = solve_spectral_power_pixel_affine_least_squares(
+        operators,
+        torch.stack(response_basis),
+        integrated_values,
+        integrated_weights,
+        ridge=1.0e-6,
+        max_iterations=int(max_iterations),
+        tolerance=1.0e-5,
+        pixel_matvecs=forwards,
+        pixel_rmatvecs=adjoints,
+        initial_coefficients=coefficients.detach(),
+        initial_gradient_coefficients=gradient_coefficients.detach(),
+    )
+    with torch.no_grad():
+        coefficients.copy_(solved)
+        gradient_coefficients.copy_(solved_gradients)
+
+    weighted_square_sum = coefficients.new_zeros(())
+    weight_sum = coefficients.new_zeros(())
+    for operator, basis, values, weight, area, forward in zip(
+        operators,
+        response_basis,
+        integrated_values,
+        integrated_weights,
+        pixel_areas_by_observation,
+        forwards,
+        strict=True,
+    ):
+        prediction = forward(
+            operator.matvec_affine(
+                solved @ basis,
+                torch.einsum("ckd,k->cd", solved_gradients, basis),
+            )
+        )
+        surface_weight = weight * area.square()
+        weighted_square_sum += torch.sum(
+            surface_weight * torch.square((prediction - values) / area)
+        )
+        weight_sum += torch.sum(surface_weight)
+    return {
+        "foam_exact_refinement_rmse": float(
+            torch.sqrt(weighted_square_sum / torch.clamp(weight_sum, min=1.0))
+        ),
+        "foam_exact_refinement_observations": float(len(observations)),
+        "foam_exact_refinement_pixels": float(observed_pixel_count),
+        "foam_exact_refinement_max_iterations": float(max_iterations),
     }
 
 
@@ -1103,6 +1300,22 @@ def main() -> int:
         help="Place the fixed grid over target-WCS bounds instead of the full domain",
     )
     parser.add_argument(
+        "--foam-whiten-spectral-basis",
+        action="store_true",
+        help=(
+            "Orthonormalize passband-integrated basis columns before fitting; "
+            "requires at least as many bands as basis modes"
+        ),
+    )
+    parser.add_argument(
+        "--foam-exact-observation-refine",
+        action="store_true",
+        help=(
+            "Finish fixed affine Foam with a joint matrix-free solve through "
+            "native detector WCS pixels, weights, bandpasses, and symmetric PSFs"
+        ),
+    )
+    parser.add_argument(
         "--foam-extent",
         type=float,
         default=FOAM_FOOTPRINT_EXTENT,
@@ -1147,6 +1360,16 @@ def main() -> int:
     args = parser.parse_args()
     if args.foam_initialize_from_coadd and args.foam_train_geometry:
         parser.error("coadd initialization currently requires fixed Foam geometry")
+    if args.foam_whiten_spectral_basis and not args.foam_initialize_from_coadd:
+        parser.error(
+            "--foam-whiten-spectral-basis requires --foam-initialize-from-coadd"
+        )
+    if args.foam_exact_observation_refine and (
+        args.foam_train_geometry or not args.foam_affine_spatial_basis
+    ):
+        parser.error(
+            "--foam-exact-observation-refine requires fixed affine Foam geometry"
+        )
     if args.foam_exact_max_candidate_pairs <= 0:
         parser.error("--foam-exact-max-candidate-pairs must be positive")
     if (args.operator_calibration_manifest is None) != (
@@ -1159,6 +1382,10 @@ def main() -> int:
     calibrated_operators = args.operator_calibration_manifest is not None
 
     bands = _parse_csv(args.bands)
+    if args.foam_whiten_spectral_basis and args.foam_basis_count > len(bands):
+        parser.error(
+            "--foam-whiten-spectral-basis requires at least as many bands as modes"
+        )
     pattern_numbers = tuple(int(value) for value in _parse_csv(args.patt_nums))
     model_kinds = [part.strip() for part in str(args.models).split(",") if part.strip()]
     rows: list[dict[str, Any]] = []
@@ -1624,6 +1851,7 @@ def main() -> int:
                         operator_max_candidate_pairs=int(
                             args.foam_exact_max_candidate_pairs
                         ),
+                        whiten_spectral_basis=bool(args.foam_whiten_spectral_basis),
                     )
             if args.forward_context:
                 model = _PerExposureScalarBias(model, len(normalized_observations))
@@ -1635,6 +1863,26 @@ def main() -> int:
                 **fit_kwargs,
             )
             fit_time_ms = (time.perf_counter() - t0) * 1000.0
+            exact_refinement_diagnostics: dict[str, float] = {}
+            if model_kind == "spectral_power_foam" and args.foam_exact_observation_refine:
+                if calibrated_bundles is not None or args.forward_context:
+                    raise ValueError(
+                        "exact Foam observation refinement does not yet support "
+                        "conditioned operators or per-exposure bias"
+                    )
+                hard_model = getattr(result.model, "inner", result.model)
+                refine_t0 = time.perf_counter()
+                exact_refinement_diagnostics = _refine_foam_from_observations_exact(
+                    hard_model,
+                    normalized_observations,
+                    num_spectral_samples=int(
+                        fit_kwargs.get("num_spectral_samples", 1)
+                    ),
+                    operator_max_candidate_pairs=int(
+                        args.foam_exact_max_candidate_pairs
+                    ),
+                )
+                fit_time_ms += (time.perf_counter() - refine_t0) * 1000.0
             fitted_models[model_kind] = (
                 result.model,
                 fit_time_ms,
@@ -1645,6 +1893,7 @@ def main() -> int:
                     "final_loss": float(result.final_loss),
                     "last_training_loss": float(result.loss_history[-1]),
                     **initialization_diagnostics,
+                    **exact_refinement_diagnostics,
                 },
             )
 
@@ -1690,6 +1939,13 @@ def main() -> int:
                                 for parameter in result_model.parameters()
                             )
                         )
+                        row["trainable_parameter_count"] = int(
+                            sum(
+                                parameter.numel()
+                                for parameter in result_model.parameters()
+                                if parameter.requires_grad
+                            )
+                        )
                         row["spectral_samples"] = int(
                             fit_kwargs.get("num_spectral_samples", 1)
                         )
@@ -1713,8 +1969,14 @@ def main() -> int:
                             "foam_initial_coefficient_abs_max",
                             "foam_initial_gradient_coefficient_abs_max",
                             "foam_spectral_basis_condition_number",
+                            "foam_spectral_basis_raw_condition_number",
+                            "foam_spectral_basis_rank",
                             "foam_initial_cell_variation_abs_p95",
                             "foam_initial_cell_variation_abs_max",
+                            "foam_exact_refinement_rmse",
+                            "foam_exact_refinement_observations",
+                            "foam_exact_refinement_pixels",
+                            "foam_exact_refinement_max_iterations",
                         ):
                             if diagnostic_name in fit_diagnostics:
                                 row[diagnostic_name] = float(
@@ -1809,12 +2071,9 @@ def main() -> int:
                                     band_basis,
                                     gradients.detach(),
                                 )
-                                cell_variation = (
-                                    cell_scale
-                                    * torch.linalg.vector_norm(
-                                        band_gradients,
-                                        dim=-1,
-                                    )
+                                cell_variation = cell_scale * torch.linalg.vector_norm(
+                                    band_gradients,
+                                    dim=-1,
                                 )
                                 row["foam_band_cell_variation_abs_p95"] = float(
                                     torch.quantile(cell_variation, 0.95)
@@ -2001,6 +2260,10 @@ def main() -> int:
             "foam_train_geometry": bool(args.foam_train_geometry),
             "foam_initialize_from_coadd": bool(args.foam_initialize_from_coadd),
             "foam_fit_target_footprint": bool(args.foam_fit_target_footprint),
+            "foam_whiten_spectral_basis": bool(args.foam_whiten_spectral_basis),
+            "foam_exact_observation_refine": bool(
+                args.foam_exact_observation_refine
+            ),
             "intensity_scale": float(intensity_scale),
             "patt_nums": list(pattern_numbers),
             "crop_x0": args.crop_x0,

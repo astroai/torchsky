@@ -31,6 +31,7 @@ from bench_map_smacs0723_field_fit_joint import _background_subtracted_source_st
 from bench_map_smacs0723_field_fit_joint import _foam_training_tile_side  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _foam_target_footprint_bounds  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _initialize_foam_from_band_coadds  # noqa: E402
+from bench_map_smacs0723_field_fit_joint import _refine_foam_from_observations_exact  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _joint_real_fit_kwargs  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _preview_uint8  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _regular_foam_model_kwargs  # noqa: E402
@@ -43,6 +44,7 @@ from torchsky.map.field import (  # noqa: E402
     SpectralPowerFoam,
     SpectralPowerFoamField,
     make_tangent_plane_header,
+    render_spectral_power_foam_observation_exact,
 )
 from torchsky.map import ForwardContext  # noqa: E402
 from torchsky.map.operators import LearnedBackgroundOp, LearnedPSFOp  # noqa: E402
@@ -332,6 +334,7 @@ def test_joint_foam_coadd_initializer_covers_cells_and_spectral_bands() -> None:
         entries,
         intensity_scale=1.0,
         num_spectral_samples=1,
+        whiten_spectral_basis=True,
     )
     basis = torch.stack(
         (
@@ -349,6 +352,8 @@ def test_joint_foam_coadd_initializer_covers_cells_and_spectral_bands() -> None:
     )
     assert diagnostics["foam_initialized_cell_fraction"] == 1.0
     assert diagnostics["foam_fully_covered_cell_fraction"] == 1.0
+    assert diagnostics["foam_spectral_basis_rank"] == 2.0
+    assert diagnostics["foam_spectral_basis_condition_number"] == pytest.approx(1.0)
 
 
 def test_joint_foam_coadd_initializer_populates_affine_gradients() -> None:
@@ -404,9 +409,95 @@ def test_joint_foam_coadd_initializer_populates_affine_gradients() -> None:
     assert diagnostics["foam_initial_gradient_coefficient_abs_max"] > 0.0
     assert diagnostics["foam_spectral_basis_condition_number"] == 1.0
     assert diagnostics["foam_initial_cell_variation_abs_p95"] > 0.0
-    assert diagnostics["foam_initial_cell_variation_abs_max"] >= diagnostics[
-        "foam_initial_cell_variation_abs_p95"
-    ]
+    assert (
+        diagnostics["foam_initial_cell_variation_abs_max"]
+        >= diagnostics["foam_initial_cell_variation_abs_p95"]
+    )
+
+
+def test_joint_foam_exact_observation_refinement_recovers_native_pixels() -> None:
+    header = make_tangent_plane_header(
+        7,
+        7,
+        crval_ra_deg=10.0,
+        crval_dec_deg=20.0,
+    )
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    truth = SpectralPowerFoamField(
+        domain,
+        sites=torch.tensor([[-0.25, 0.0], [0.25, 0.0]]),
+        radii=torch.full((2,), 1.0),
+        cell_coefficients=torch.tensor([[1.0, 0.2], [1.5, -0.1]]),
+        cell_gradient_coefficients=torch.tensor(
+            [[[0.1, -0.05], [0.02, 0.01]], [[-0.08, 0.04], [0.01, -0.02]]]
+        ),
+        compact_fixed_geometry=True,
+    )
+    truth.sites.requires_grad_(False)
+    truth.foam.raw_radii.requires_grad_(False)
+    observations = []
+    for wavelength in (1.0, 3.0):
+        template = FieldObservation(
+            image=torch.zeros((7, 7)),
+            header=dict(header),
+            weight=torch.ones((7, 7)),
+            mask=torch.ones((7, 7), dtype=torch.bool),
+            wavelength=wavelength,
+            band_name=f"B{wavelength:g}",
+        )
+        image = render_spectral_power_foam_observation_exact(
+            truth,
+            template,
+            num_spectral_samples=1,
+        )
+        observations.append(
+            FieldObservation(
+                image=image.detach(),
+                header=dict(header),
+                weight=torch.ones((7, 7)),
+                mask=torch.ones((7, 7), dtype=torch.bool),
+                wavelength=wavelength,
+                band_name=f"B{wavelength:g}",
+            )
+        )
+    model = SpectralPowerFoamField(
+        domain,
+        sites=truth.sites.detach(),
+        radii=truth.radii.detach(),
+        cell_coefficients=torch.zeros((2, 2)),
+        cell_gradient_coefficients=torch.zeros((2, 2, 2)),
+        compact_fixed_geometry=True,
+    )
+    model.sites.requires_grad_(False)
+    model.foam.raw_radii.requires_grad_(False)
+
+    diagnostics = _refine_foam_from_observations_exact(
+        model,
+        observations,
+        num_spectral_samples=1,
+        max_iterations=100,
+    )
+
+    assert diagnostics["foam_exact_refinement_rmse"] < 1.0e-4
+    assert diagnostics["foam_exact_refinement_observations"] == 2.0
+    for observation in observations:
+        actual = render_spectral_power_foam_observation_exact(
+            model,
+            observation,
+            num_spectral_samples=1,
+        )
+        torch.testing.assert_close(
+            actual,
+            observation.image,
+            atol=2.0e-4,
+            rtol=2.0e-4,
+        )
 
 
 def test_joint_foam_coadd_initializer_handles_empty_support() -> None:

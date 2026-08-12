@@ -22,6 +22,8 @@ from torchsky.map.field import (
     solve_power_pixel_least_squares,
     solve_power_pixel_affine_least_squares,
     solve_spectral_cell_coefficients,
+    solve_spectral_power_pixel_affine_least_squares,
+    spectral_basis_whitening_transform,
     soft_bounded_power_weights,
 )
 from torchsky.map.operators import (
@@ -32,6 +34,128 @@ from torchsky.map.operators import (
     LearnedPSFOp,
     ObservationOperatorBundle,
 )
+
+
+def test_spectral_basis_whitening_is_orthonormal_and_differentiable() -> None:
+    response_basis = torch.tensor(
+        [[1.0, -0.8], [1.0, -0.1], [1.0, 0.9]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+
+    transform = spectral_basis_whitening_transform(response_basis)
+    whitened = response_basis @ transform
+
+    torch.testing.assert_close(
+        whitened.mT @ whitened,
+        torch.eye(2, dtype=torch.float64),
+    )
+    torch.square(whitened).sum().backward()
+    assert response_basis.grad is not None
+    assert bool(torch.isfinite(response_basis.grad).all())
+
+
+def test_spectral_basis_whitening_rejects_rank_deficiency() -> None:
+    with pytest.raises(ValueError, match="rank deficient"):
+        spectral_basis_whitening_transform(
+            torch.tensor([[1.0, 2.0], [2.0, 4.0]], dtype=torch.float64)
+        )
+
+
+def test_transformed_spectral_basis_is_shared_by_smooth_and_exact_rendering() -> None:
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    model = SpectralPowerFoamField(
+        domain,
+        sites=torch.tensor([[0.0, 0.0]], dtype=torch.float64),
+        radii=torch.tensor([10.0], dtype=torch.float64),
+        cell_coefficients=torch.tensor([[2.0, -0.5]], dtype=torch.float64),
+    )
+    model.set_spectral_basis_transform(
+        torch.tensor([[0.5, 0.25], [-0.2, 2.0]], dtype=torch.float64)
+    )
+    wavelength = torch.tensor(2.4, dtype=torch.float64)
+    smooth = model(
+        torch.tensor(10.0, dtype=torch.float64),
+        torch.tensor(20.0, dtype=torch.float64),
+        wavelength,
+    )
+    expected = torch.dot(
+        model.spectral_basis(wavelength),
+        model.cell_coefficients[0],
+    )
+
+    torch.testing.assert_close(smooth, expected)
+
+
+def test_joint_spectral_affine_inverse_recovers_heterogeneous_observations() -> None:
+    sites = torch.tensor([[-0.5, 0.0], [0.5, 0.0]], dtype=torch.float64)
+    radii = torch.full((2,), 2.0, dtype=torch.float64)
+    left_right_pixels = torch.tensor(
+        [
+            [[-1.0, -0.5], [0.0, -0.5], [0.0, 0.5], [-1.0, 0.5]],
+            [[0.0, -0.5], [1.0, -0.5], [1.0, 0.5], [0.0, 0.5]],
+        ],
+        dtype=torch.float64,
+    )
+    bottom_top_pixels = torch.tensor(
+        [
+            [[-1.0, -0.5], [1.0, -0.5], [1.0, 0.0], [-1.0, 0.0]],
+            [[-1.0, 0.0], [1.0, 0.0], [1.0, 0.5], [-1.0, 0.5]],
+        ],
+        dtype=torch.float64,
+    )
+    operators = [
+        bounded_power_pixel_operator(left_right_pixels, sites, radii),
+        bounded_power_pixel_operator(bottom_top_pixels, sites, radii),
+        bounded_power_pixel_operator(left_right_pixels, sites, radii),
+        bounded_power_pixel_operator(bottom_top_pixels, sites, radii),
+    ]
+    response_basis = torch.tensor(
+        [[1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [1.0, 1.0]],
+        dtype=torch.float64,
+    )
+    truth_coefficients = torch.tensor(
+        [[2.0, 0.5], [3.0, -0.25]], dtype=torch.float64
+    )
+    truth_gradients = torch.tensor(
+        [
+            [[0.4, -0.2], [0.1, 0.05]],
+            [[-0.3, 0.25], [0.05, -0.1]],
+        ],
+        dtype=torch.float64,
+    )
+    values = []
+    for operator, basis in zip(operators, response_basis, strict=True):
+        values.append(
+            operator.matvec_affine(
+                truth_coefficients @ basis,
+                torch.einsum("ckd,k->cd", truth_gradients, basis),
+            )
+        )
+
+    coefficients, gradients = solve_spectral_power_pixel_affine_least_squares(
+        operators,
+        response_basis,
+        values,
+        ridge=1.0e-10,
+        max_iterations=200,
+        tolerance=1.0e-10,
+    )
+
+    for operator, basis, expected in zip(
+        operators, response_basis, values, strict=True
+    ):
+        actual = operator.matvec_affine(
+            coefficients @ basis,
+            torch.einsum("ckd,k->cd", gradients, basis),
+        )
+        torch.testing.assert_close(actual, expected, atol=2.0e-7, rtol=2.0e-7)
 
 
 def _model() -> SpectralPowerFoam:

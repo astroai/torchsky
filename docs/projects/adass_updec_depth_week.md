@@ -674,8 +674,35 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
   automatic grid density is only a bounded test heuristic.
 - [ ] Fit independent per-band Foam and shared spectral Foam under both matched
   capacity and matched sampled-pixel/step budgets.
+  - [x] Define a response-aware independent-appearance control without six
+    separate models. The passband-integrated Legendre design can now be
+    orthonormalized from passbands alone; a six-mode, rank-six model then spans
+    arbitrary values and affine slopes in all six bands on the same fixed
+    geometry. Every artifact records raw/final condition number, numerical
+    rank, total parameters, and trainable parameters. Do not call a run
+    independent unless its recorded rank is six.
+  - [ ] Run the frozen three-row matrix after the contracted-grid blank passes:
+    shared `32x32, basis=4`; trainable-capacity-matched independent appearance
+    `26x26, basis=6, whitened` (12,168 versus 12,288 affine appearance
+    parameters); spatial-resolution-matched independent appearance
+    `32x32, basis=6, whitened` (18,432 appearance parameters). Use the same
+    exposures, WCS, initialization, affine basis, 20 steps, seed 101, and
+    sampled-pixel schedule. Report compute and memory rather than hiding the
+    extra capacity of the final row.
 - [ ] Hard-render final products with detached exact geometry; never score the
   smooth training surrogate as the final Foam image.
+  - [x] Add the fixed-geometry matrix-free inverse required to fit that exact
+    product directly. It jointly solves spectral values and cell-local x/y
+    slopes over heterogeneous native detector WCS footprints, masks, inverse
+    variances, passband responses, and symmetric PSFs using exact sparse
+    pixel/cell forward and adjoint maps. This removes both coadd information
+    loss and sampled smooth-surrogate mismatch; focused tests recover exact
+    native-pixel observations across different pixel tessellations.
+  - [ ] Run it only as a declared post-fit refinement first, recording native
+    pixel weighted RMSE, observations, valid pixels, runtime, and peak memory.
+    If it dominates the smooth fit, delete the redundant smooth appearance
+    optimization from the fixed-geometry production path rather than carrying
+    two solvers.
 - [ ] Run the same matrix for the strongest current shared/independent INR as a
   fallback and architectural control.
 - [ ] Tune only atom density/capacity, spectral basis size, learning rate,

@@ -333,6 +333,14 @@ class SpectralPowerFoamField(_BaseFieldModel):
         self.temperature_end = end
         self._temperature = end
         self.compact_fixed_geometry = bool(compact_fixed_geometry)
+        self.register_buffer(
+            "_spectral_basis_transform",
+            torch.eye(
+                self.foam.basis_count,
+                device=self.foam.sites.device,
+                dtype=self.foam.sites.dtype,
+            ),
+        )
 
     @property
     def sites(self) -> Tensor:
@@ -385,7 +393,22 @@ class SpectralPowerFoamField(_BaseFieldModel):
         normalized = (value - float(self.domain.wavelength_center)) / float(
             self.domain.wavelength_scale
         )
-        return self._legendre_basis(normalized)
+        return self._legendre_basis(normalized) @ self._spectral_basis_transform
+
+    def set_spectral_basis_transform(self, transform: Tensor) -> None:
+        """Set a fixed right transform of the continuous spectral basis."""
+        if (
+            not transform.is_floating_point()
+            or transform.shape != (self.basis_count, self.basis_count)
+            or transform.device != self.sites.device
+            or transform.dtype != self.sites.dtype
+            or not bool(torch.isfinite(transform).all())
+        ):
+            raise ValueError(
+                "transform must be a finite basis-by-basis tensor matching the model"
+            )
+        with torch.no_grad():
+            self._spectral_basis_transform.copy_(transform)
 
     def normalized_spatial_coordinates(
         self,
@@ -413,7 +436,7 @@ class SpectralPowerFoamField(_BaseFieldModel):
         )
         return self.foam(
             coords[..., :2],
-            self._legendre_basis(coords[..., 2]),
+            self._legendre_basis(coords[..., 2]) @ self._spectral_basis_transform,
             power_temperature=self._temperature,
             support_temperature=self._temperature,
             compact_fixed_geometry=self.compact_fixed_geometry,

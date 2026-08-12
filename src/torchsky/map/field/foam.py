@@ -10,12 +10,56 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import math
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, Sequence
 
 import torch
 from torch import Tensor
 
 PowerValueSemantics = Literal["surface_brightness", "integrated_flux"]
+
+
+def spectral_basis_whitening_transform(
+    response_basis: Tensor,
+    *,
+    rcond: float | None = None,
+) -> Tensor:
+    """Return a right transform with orthonormal band-response columns.
+
+    ``response_basis`` has shape ``(bands, basis)`` and contains each
+    passband-integrated spectral basis vector.  The returned square transform
+    preserves the represented continuous spectral subspace while making
+    ``response_basis @ transform`` orthonormal.  This is useful both as an
+    optimizer preconditioner and for full-rank, per-band appearance controls.
+    """
+    if (
+        not response_basis.is_floating_point()
+        or response_basis.ndim != 2
+        or response_basis.shape[0] < response_basis.shape[1]
+        or response_basis.shape[1] == 0
+    ):
+        raise ValueError(
+            "response_basis must have floating shape (bands>=basis, basis>=1)"
+        )
+    if not bool(torch.isfinite(response_basis).all()):
+        raise ValueError("response_basis must be finite")
+    if rcond is None:
+        relative_cutoff = torch.finfo(response_basis.dtype).eps * max(
+            response_basis.shape
+        )
+    else:
+        relative_cutoff = float(rcond)
+        if not math.isfinite(relative_cutoff) or relative_cutoff < 0.0:
+            raise ValueError("rcond must be finite and non-negative")
+
+    _, singular_values, vh = torch.linalg.svd(response_basis, full_matrices=False)
+    cutoff = relative_cutoff * singular_values[0]
+    if bool(torch.any(singular_values <= cutoff)):
+        rank = int(torch.sum(singular_values > cutoff))
+        raise ValueError(
+            "response_basis is numerically rank deficient "
+            f"(rank {rank} < {response_basis.shape[1]})"
+        )
+    return vh.mT / singular_values.unsqueeze(0)
 
 
 @dataclass(frozen=True)
@@ -802,6 +846,227 @@ def solve_power_pixel_affine_least_squares(
         solved_values.reshape(leading + (cells,)),
         solved_gradients.reshape(leading + (cells, 2)),
     )
+
+
+def solve_spectral_power_pixel_affine_least_squares(
+    operators: Sequence[PowerPixelOperator],
+    response_basis: Tensor,
+    pixel_values: Sequence[Tensor],
+    pixel_weights: Sequence[Tensor] | None = None,
+    *,
+    ridge: float = 1.0e-6,
+    max_iterations: int = 50,
+    tolerance: float = 1.0e-6,
+    pixel_matvecs: Sequence[Callable[[Tensor], Tensor] | None] | None = None,
+    pixel_rmatvecs: Sequence[Callable[[Tensor], Tensor] | None] | None = None,
+    initial_coefficients: Tensor | None = None,
+    initial_gradient_coefficients: Tensor | None = None,
+) -> tuple[Tensor, Tensor]:
+    """Jointly solve a spectral affine Foam through heterogeneous pixel grids.
+
+    Each row of ``response_basis`` is the passband-integrated basis for one
+    observation. Pixel values use the integrated units returned by the matching
+    operator. Optional forward/adjoint pairs compose a linear pixel-domain PSF.
+    Geometry is shared, while WCS footprints, masks, weights, and PSFs may vary.
+    """
+    observation_count = len(operators)
+    if observation_count == 0:
+        raise ValueError("operators must not be empty")
+    if (
+        not response_basis.is_floating_point()
+        or response_basis.ndim != 2
+        or response_basis.shape[0] != observation_count
+        or response_basis.shape[1] == 0
+        or not bool(torch.isfinite(response_basis).all())
+    ):
+        raise ValueError(
+            "response_basis must be finite with shape (observations, basis>=1)"
+        )
+    if len(pixel_values) != observation_count:
+        raise ValueError("pixel_values must match operators")
+    weights = (
+        [torch.ones_like(value) for value in pixel_values]
+        if pixel_weights is None
+        else list(pixel_weights)
+    )
+    if len(weights) != observation_count:
+        raise ValueError("pixel_weights must match operators")
+    forwards = (
+        [None] * observation_count if pixel_matvecs is None else list(pixel_matvecs)
+    )
+    adjoints = (
+        [None] * observation_count
+        if pixel_rmatvecs is None
+        else list(pixel_rmatvecs)
+    )
+    if len(forwards) != observation_count or len(adjoints) != observation_count:
+        raise ValueError("pixel transforms must match operators")
+    if any((forward is None) != (adjoint is None) for forward, adjoint in zip(forwards, adjoints, strict=True)):
+        raise ValueError("pixel forward and adjoint must be supplied in pairs")
+
+    first = operators[0]
+    cells = first.cell_count
+    basis_count = int(response_basis.shape[1])
+    if response_basis.device != first.areas.device or response_basis.dtype != first.areas.dtype:
+        raise ValueError("response_basis must match operator dtype and device")
+    for operator, values, weight in zip(operators, pixel_values, weights, strict=True):
+        if (
+            operator.cell_count != cells
+            or operator.areas.device != first.areas.device
+            or operator.areas.dtype != first.areas.dtype
+        ):
+            raise ValueError("operators must share cell count, dtype, and device")
+        if (
+            not values.is_floating_point()
+            or values.shape != (operator.pixel_count,)
+            or values.device != first.areas.device
+            or values.dtype != first.areas.dtype
+            or not bool(torch.isfinite(values).all())
+        ):
+            raise ValueError("pixel values must be finite and match each operator")
+        if (
+            not weight.is_floating_point()
+            or weight.shape != values.shape
+            or weight.device != values.device
+            or weight.dtype != values.dtype
+            or not bool(torch.isfinite(weight).all())
+            or bool(torch.any(weight < 0))
+        ):
+            raise ValueError("pixel weights must be finite, non-negative, and match values")
+    penalty = float(ridge)
+    threshold = float(tolerance)
+    iterations = int(max_iterations)
+    if not math.isfinite(penalty) or penalty <= 0:
+        raise ValueError("ridge must be finite and positive")
+    if not math.isfinite(threshold) or threshold <= 0:
+        raise ValueError("tolerance must be finite and positive")
+    if iterations <= 0:
+        raise ValueError("max_iterations must be positive")
+
+    union_cell_areas = torch.stack([operator.cell_areas for operator in operators]).amax(dim=0)
+    positive_areas = union_cell_areas[union_cell_areas > 0]
+    fallback_area = (
+        torch.median(positive_areas)
+        if positive_areas.numel()
+        else union_cell_areas.new_tensor(1.0)
+    )
+    cell_scales = torch.sqrt(
+        torch.where(union_cell_areas > 0, union_cell_areas, fallback_area)
+    )
+    value_diagonal = first.areas.new_zeros((cells, basis_count))
+    gradient_diagonal = first.areas.new_zeros((cells, basis_count, 2))
+    for operator, weight, basis in zip(operators, weights, response_basis, strict=True):
+        edge_weight = weight[operator.pixel_ids]
+        value_base = weight.new_zeros(cells)
+        value_base.scatter_add_(0, operator.indices, edge_weight * operator.areas.square())
+        gradient_base = weight.new_zeros((cells, 2))
+        gradient_base.scatter_add_(
+            0,
+            operator.indices[:, None].expand(-1, 2),
+            edge_weight[:, None]
+            * torch.square(operator.centered_first_moments / cell_scales[operator.indices, None]),
+        )
+        basis_square = basis.square()
+        value_diagonal += value_base[:, None] * basis_square[None, :]
+        gradient_diagonal += gradient_base[:, None, :] * basis_square[None, :, None]
+    diagonal = torch.cat((value_diagonal.flatten(), gradient_diagonal.flatten()))
+    positive_count = torch.sum(diagonal > 0).clamp(min=1)
+    scale = torch.sum(diagonal) / positive_count
+    scale = torch.where(scale > 0, scale, torch.ones_like(scale))
+    regularization = penalty * scale
+    preconditioner = diagonal + regularization
+
+    coefficient_size = cells * basis_count
+
+    def pack_parameters(coefficients: Tensor, gradients: Tensor) -> Tensor:
+        return torch.cat(
+            (
+                coefficients.flatten(),
+                (gradients * cell_scales[:, None, None]).flatten(),
+            )
+        )
+
+    def unpack(parameters: Tensor) -> tuple[Tensor, Tensor]:
+        coefficients = parameters[:coefficient_size].reshape(cells, basis_count)
+        scaled_gradients = parameters[coefficient_size:].reshape(cells, basis_count, 2)
+        return coefficients, scaled_gradients / cell_scales[:, None, None]
+
+    def pack_adjoint(coefficients: Tensor, gradients: Tensor) -> Tensor:
+        return torch.cat(
+            (
+                coefficients.flatten(),
+                (gradients / cell_scales[:, None, None]).flatten(),
+            )
+        )
+
+    def adjoint_observation(
+        operator: PowerPixelOperator,
+        values: Tensor,
+        basis: Tensor,
+    ) -> Tensor:
+        value_adjoint, gradient_adjoint = operator.rmatvec_affine(values)
+        return pack_adjoint(
+            value_adjoint[:, None] * basis[None, :],
+            gradient_adjoint[:, None, :] * basis[None, :, None],
+        )
+
+    def apply_normal(parameters: Tensor) -> Tensor:
+        coefficients, gradients = unpack(parameters)
+        output = torch.zeros_like(parameters)
+        for operator, weight, basis, forward, adjoint in zip(
+            operators, weights, response_basis, forwards, adjoints, strict=True
+        ):
+            cell_values = coefficients @ basis
+            cell_gradients = torch.einsum("ckd,k->cd", gradients, basis)
+            projected = operator.matvec_affine(cell_values, cell_gradients)
+            if forward is not None:
+                projected = forward(projected)
+            weighted = weight * projected
+            if adjoint is not None:
+                weighted = adjoint(weighted)
+            output += adjoint_observation(operator, weighted, basis)
+        return output + regularization * parameters
+
+    rhs = first.areas.new_zeros(diagonal.shape)
+    for operator, values, weight, basis, adjoint in zip(
+        operators, pixel_values, weights, response_basis, adjoints, strict=True
+    ):
+        weighted = weight * values
+        if adjoint is not None:
+            weighted = adjoint(weighted)
+        rhs += adjoint_observation(operator, weighted, basis)
+    if (initial_coefficients is None) != (initial_gradient_coefficients is None):
+        raise ValueError("initial coefficients and gradients must be supplied together")
+    if initial_coefficients is None:
+        solution = torch.zeros_like(rhs)
+    else:
+        assert initial_gradient_coefficients is not None
+        if initial_coefficients.shape != (cells, basis_count) or initial_gradient_coefficients.shape != (cells, basis_count, 2):
+            raise ValueError("initial coefficient shapes must match cells and basis")
+        solution = pack_parameters(initial_coefficients, initial_gradient_coefficients)
+    residual = rhs - apply_normal(solution)
+    preconditioned = residual / preconditioner
+    direction = preconditioned.clone()
+    residual_dot = torch.sum(residual * preconditioned)
+    rhs_norm = torch.linalg.vector_norm(rhs)
+    tiny = torch.finfo(rhs.dtype).tiny
+    for _ in range(iterations):
+        if bool(torch.linalg.vector_norm(residual) <= threshold * rhs_norm):
+            break
+        normal_direction = apply_normal(direction)
+        denominator = torch.dot(direction, normal_direction)
+        if bool(torch.abs(denominator) <= tiny):
+            break
+        step = residual_dot / denominator
+        solution = solution + step * direction
+        residual = residual - step * normal_direction
+        preconditioned = residual / preconditioner
+        next_residual_dot = torch.sum(residual * preconditioned)
+        if bool(torch.abs(residual_dot) <= tiny):
+            break
+        direction = preconditioned + (next_residual_dot / residual_dot) * direction
+        residual_dot = next_residual_dot
+    return unpack(solution)
 
 
 def _validate_sites_and_radii(

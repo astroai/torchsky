@@ -76,6 +76,20 @@ case "${FOAM_AFFINE_SPATIAL_BASIS:-0}" in
   *) echo "FOAM_AFFINE_SPATIAL_BASIS must be 0 or 1" >&2; exit 2 ;;
 esac
 
+foam_spectral_args=()
+case "${FOAM_WHITEN_SPECTRAL_BASIS:-0}" in
+  0) ;;
+  1) foam_spectral_args=(--foam-whiten-spectral-basis) ;;
+  *) echo "FOAM_WHITEN_SPECTRAL_BASIS must be 0 or 1" >&2; exit 2 ;;
+esac
+
+foam_exact_refinement_args=()
+case "${FOAM_EXACT_OBSERVATION_REFINE:-0}" in
+  0) ;;
+  1) foam_exact_refinement_args=(--foam-exact-observation-refine) ;;
+  *) echo "FOAM_EXACT_OBSERVATION_REFINE must be 0 or 1" >&2; exit 2 ;;
+esac
+
 operator_calibration_args=()
 if [[ -n "${CALIBRATION_EVIDENCE_MANIFEST:-}" || -n "${CALIBRATION_FIT_REPORT:-}" ]]; then
   test -n "${CALIBRATION_EVIDENCE_MANIFEST:-}"
@@ -174,6 +188,8 @@ case "${mode}" in
       "${foam_initialization_args[@]}" \
       "${foam_footprint_args[@]}" \
       "${foam_spatial_args[@]}" \
+      "${foam_spectral_args[@]}" \
+      "${foam_exact_refinement_args[@]}" \
       "${operator_calibration_args[@]}" \
       --models spectral_power_foam \
       --fail-on-method-error \
@@ -230,6 +246,8 @@ case "${mode}" in
         "${foam_initialization_args[@]}" \
         "${foam_footprint_args[@]}" \
         "${foam_spatial_args[@]}" \
+        "${foam_spectral_args[@]}" \
+        "${foam_exact_refinement_args[@]}" \
         "${operator_calibration_args[@]}" \
         --models spectral_power_foam \
         --fail-on-method-error \

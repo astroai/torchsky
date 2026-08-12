@@ -741,6 +741,27 @@ stacking-versus-INR/Foam depth result defined in
       masks, or source detections and exposes its choice in the JSON contract.
     - [ ] Run the matched contracted-grid blank and require near-unity initialized
       cell coverage plus materially improved source flux/slope before injection.
+    - [x] Make the real-data independent/shared spectral control identifiable.
+      Passband-only SVD whitening now orthonormalizes the integrated continuous
+      basis, rejects numerical rank deficiency, and records raw/final condition,
+      rank, and trainable capacity. For six bands, only a whitened six-mode run
+      with recorded rank six may be interpreted as independent per-band
+      appearance on shared geometry.
+    - [ ] After the contracted-grid gate, run shared affine `32x32x4`, the
+      within-1% trainable-capacity control `26x26x6` whitened, and the
+      spatial-resolution control `32x32x6` whitened under identical data,
+      optimizer, sampling, and seed contracts.
+    - [x] Implement a joint exact detector-pixel inverse for fixed spectral
+      affine Foam appearance. Matrix-free PCG composes each exposure's sparse
+      WCS footprint operator, inverse variance, passband design, and symmetric
+      PSF forward/adjoint without resampling the input or materializing a dense
+      design matrix. The benchmark exposes it as an opt-in post-fit refinement
+      and records its native-pixel residual contract.
+    - [ ] Compare coadd initialization + smooth refinement against coadd
+      initialization + exact detector-pixel refinement on the contracted blank.
+      If the exact path wins fidelity and is computationally viable, make it
+      the fixed-geometry default and reserve smooth rendering for adaptive-site
+      geometry only.
     - [x] Add the frozen Foam scoring path before the products finish.
       `benchmarks/score_smacs0723_foam.py` stages the exact blank/injection
       products, enforces common eroded support, measures each effective PSF from
