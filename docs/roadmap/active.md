@@ -701,9 +701,27 @@ stacking-versus-INR/Foam depth result defined in
       columns, optional symmetric PSF forward/adjoint composition, and then
       fits the shared spectral basis for both values and slopes. This avoids
       spending early optimizer steps discovering gradients from zero.
+    - [x] Recover and score the pre-joint-initializer affine blank ablation.
+      The durable exact-affine artifact completed all six bands at 512 square
+      and 20 steps in 332.9 s. Its mean support/source-contrast RMSE
+      (0.406581/1.247304) is numerically unchanged from the matched constant-cell
+      control (0.406582/1.247307), while the maximum learned gradient
+      coefficient remained only 0.0968. Affine capacity alone is therefore not
+      activated by a value-only warm start plus 20 optimizer steps.
     - [ ] Run the affine-cell 512-square blank and one injection batch on the
       frozen validation split. Require positive bright-bin response, improved
       source slope, and acceptable flux/RMSE before expanding to all batches.
+      Blank session `jin6xhv6` completed exact commit
+      `0b73f1dd35afbbd46102208393c6ca8921a79943`, the joint value/slope coadd
+      initializer, per-parameter relative ridge scaling, and artifact root
+      `/arc/projects/ots/torchsky-runs/20260812-smacs-foam-affine-init-0b73f1d-c512-r1`.
+      Relative to the value-only affine control, mean source-contrast slope
+      increased from 0.0351 to 0.0737 and support/source flux ratios from
+      0.804/0.608 to 0.916/0.825, while both RMSEs improved by 1.7% at matched
+      20-step fit time (336 versus 333 s). The blank gate remains closed because
+      source flux is still 17.5% low. Do not launch an injection yet. The next
+      exact run must use cell-area-standardized slope parameters and record
+      per-band within-cell variation plus spectral-basis conditioning.
     - [x] Add the frozen Foam scoring path before the products finish.
       `benchmarks/score_smacs0723_foam.py` stages the exact blank/injection
       products, enforces common eroded support, measures each effective PSF from

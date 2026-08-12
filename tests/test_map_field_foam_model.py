@@ -297,6 +297,65 @@ def test_solve_power_pixel_affine_least_squares_recovers_linear_field() -> None:
     torch.testing.assert_close(actual_gradient, expected_gradient, atol=1.0e-8, rtol=0)
 
 
+def test_affine_least_squares_is_invariant_to_spatial_units() -> None:
+    def solve(scale: float) -> tuple[torch.Tensor, torch.Tensor]:
+        site = torch.zeros((1, 2), dtype=torch.float64)
+        radius = torch.full((1,), 10.0 * scale, dtype=torch.float64)
+        pixels = scale * torch.stack(
+            [
+                torch.tensor(
+                    [[x, y], [x + 1.0, y], [x + 1.0, y + 1.0], [x, y + 1.0]],
+                    dtype=torch.float64,
+                )
+                for y in (-1.0, 0.0)
+                for x in (-1.0, 0.0)
+            ]
+        )
+        operator = bounded_power_pixel_operator(pixels, site, radius)
+        values = torch.tensor([2.0], dtype=torch.float64)
+        gradients = torch.tensor([[3.0 / scale, -4.0 / scale]], dtype=torch.float64)
+        integrated = operator.matvec_affine(values, gradients)
+        return solve_power_pixel_affine_least_squares(
+            operator,
+            integrated,
+            ridge=1.0e-3,
+            max_iterations=20,
+            tolerance=1.0e-12,
+        )
+
+    reference_value, reference_gradient = solve(1.0)
+    scaled_value, scaled_gradient = solve(100.0)
+
+    torch.testing.assert_close(scaled_value, reference_value, atol=1.0e-10, rtol=0)
+    torch.testing.assert_close(
+        100.0 * scaled_gradient,
+        reference_gradient,
+        atol=1.0e-10,
+        rtol=0,
+    )
+
+
+def test_affine_least_squares_damps_weakly_observed_cell_variation() -> None:
+    site = torch.zeros((1, 2), dtype=torch.float64)
+    radius = torch.full((1,), 10.0, dtype=torch.float64)
+    pixel = torch.tensor(
+        [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]],
+        dtype=torch.float64,
+    )
+    operator = bounded_power_pixel_operator(pixel, site, radius)
+
+    value, gradient = solve_power_pixel_affine_least_squares(
+        operator,
+        torch.ones(1, dtype=torch.float64),
+        ridge=1.0e-3,
+        max_iterations=20,
+        tolerance=1.0e-12,
+    )
+
+    cell_scale = torch.sqrt(operator.cell_areas[0])
+    assert torch.linalg.vector_norm(cell_scale * gradient[0]) < torch.abs(value[0])
+
+
 @pytest.mark.parametrize("semantics", ["surface_brightness", "integrated_flux"])
 def test_spectral_power_foam_exact_handoff_reuses_learned_coefficients(
     semantics: str,

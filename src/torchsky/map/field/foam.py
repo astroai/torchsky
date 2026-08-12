@@ -696,6 +696,15 @@ def solve_power_pixel_affine_least_squares(
     flat_weights = weights.reshape_as(flat_values)
     batch = flat_values.shape[0]
     cells = operator.cell_count
+    positive_cell_areas = operator.cell_areas[operator.cell_areas > 0]
+    fallback_cell_area = (
+        torch.median(positive_cell_areas)
+        if positive_cell_areas.numel()
+        else operator.cell_areas.new_tensor(1.0)
+    )
+    cell_scales = torch.sqrt(
+        torch.where(operator.cell_areas > 0, operator.cell_areas, fallback_cell_area)
+    )
     edge_weight = flat_weights[:, operator.pixel_ids]
     value_diagonal = flat_values.new_zeros((batch, cells))
     value_diagonal.scatter_add_(
@@ -707,21 +716,21 @@ def solve_power_pixel_affine_least_squares(
     gradient_diagonal.scatter_add_(
         1,
         operator.indices[None, :, None].expand(batch, -1, 2),
-        edge_weight[..., None] * operator.centered_first_moments.square(),
+        edge_weight[..., None]
+        * torch.square(
+            operator.centered_first_moments / cell_scales[operator.indices, None]
+        ),
     )
     diagonal = torch.cat((value_diagonal, gradient_diagonal.flatten(1)), dim=1)
     positive_count = torch.sum(diagonal > 0, dim=1).clamp(min=1)
     scale = torch.sum(diagonal, dim=1) / positive_count
     scale = torch.where(scale > 0, scale, torch.ones_like(scale))
-    regularization = penalty * torch.where(
-        diagonal > 0,
-        diagonal,
-        scale[:, None],
-    )
-    preconditioner = diagonal + regularization
+    regularization = penalty * scale
+    preconditioner = diagonal + regularization[:, None]
 
     def unpack(parameters: Tensor) -> tuple[Tensor, Tensor]:
-        return parameters[:, :cells], parameters[:, cells:].reshape(batch, cells, 2)
+        scaled_gradients = parameters[:, cells:].reshape(batch, cells, 2)
+        return parameters[:, :cells], scaled_gradients / cell_scales[None, :, None]
 
     def apply_normal(parameters: Tensor) -> Tensor:
         values, gradients = unpack(parameters)
@@ -732,14 +741,26 @@ def solve_power_pixel_affine_least_squares(
         if pixel_rmatvec is not None:
             weighted = pixel_rmatvec(weighted)
         value_adjoint, gradient_adjoint = operator.rmatvec_affine(weighted)
-        packed = torch.cat((value_adjoint, gradient_adjoint.flatten(1)), dim=1)
-        return packed + regularization * parameters
+        packed = torch.cat(
+            (
+                value_adjoint,
+                (gradient_adjoint / cell_scales[None, :, None]).flatten(1),
+            ),
+            dim=1,
+        )
+        return packed + regularization[:, None] * parameters
 
     weighted_values = flat_weights * flat_values
     if pixel_rmatvec is not None:
         weighted_values = pixel_rmatvec(weighted_values)
     rhs_values, rhs_gradients = operator.rmatvec_affine(weighted_values)
-    rhs = torch.cat((rhs_values, rhs_gradients.flatten(1)), dim=1)
+    rhs = torch.cat(
+        (
+            rhs_values,
+            (rhs_gradients / cell_scales[None, :, None]).flatten(1),
+        ),
+        dim=1,
+    )
     solution = torch.zeros_like(rhs)
     residual = rhs.clone()
     preconditioned = residual / preconditioner

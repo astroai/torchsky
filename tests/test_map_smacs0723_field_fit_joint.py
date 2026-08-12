@@ -401,6 +401,63 @@ def test_joint_foam_coadd_initializer_populates_affine_gradients() -> None:
     assert model.cell_gradient_coefficients is not None
     assert float(model.cell_gradient_coefficients.detach().abs().max()) > 0.0
     assert diagnostics["foam_initial_gradient_coefficient_abs_max"] > 0.0
+    assert diagnostics["foam_spectral_basis_condition_number"] == 1.0
+    assert diagnostics["foam_initial_cell_variation_abs_p95"] > 0.0
+    assert diagnostics["foam_initial_cell_variation_abs_max"] >= diagnostics[
+        "foam_initial_cell_variation_abs_p95"
+    ]
+
+
+def test_joint_foam_coadd_initializer_handles_empty_support() -> None:
+    header = make_tangent_plane_header(
+        3,
+        3,
+        crval_ra_deg=10.0,
+        crval_dec_deg=20.0,
+    )
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    model = SpectralPowerFoamField(
+        domain,
+        sites=torch.zeros((1, 2), dtype=torch.float32),
+        radii=torch.ones(1, dtype=torch.float32),
+        cell_coefficients=torch.zeros((1, 1), dtype=torch.float32),
+        cell_gradient_coefficients=torch.zeros((1, 1, 2), dtype=torch.float32),
+        compact_fixed_geometry=True,
+    )
+    model.sites.requires_grad_(False)
+    model.foam.raw_radii.requires_grad_(False)
+    observation = FieldObservation(
+        image=torch.zeros((3, 3)),
+        header=dict(header),
+        weight=torch.ones((3, 3)),
+        mask=torch.ones((3, 3), dtype=torch.bool),
+        wavelength=2.0,
+        band_name="B2",
+    )
+
+    diagnostics = _initialize_foam_from_band_coadds(
+        model,
+        [
+            {
+                "coadd_pred": np.ones((3, 3), dtype=np.float32),
+                "support_mask": np.zeros((3, 3), dtype=bool),
+                "target_header": dict(header),
+                "target_observation": observation,
+            }
+        ],
+        intensity_scale=1.0,
+        num_spectral_samples=1,
+    )
+
+    assert diagnostics["foam_initialized_cell_fraction"] == 0.0
+    assert diagnostics["foam_initial_cell_variation_abs_p95"] == 0.0
+    assert diagnostics["foam_initial_cell_variation_abs_max"] == 0.0
 
 
 def test_regular_foam_initialization_is_deterministic_and_pixel_independent() -> None:

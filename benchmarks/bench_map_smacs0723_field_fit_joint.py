@@ -582,6 +582,7 @@ def _initialize_foam_from_band_coadds(
         if solved_gradient_coefficients is not None
         else None
     )
+    initial_cell_variations: list[torch.Tensor] = []
     residual_square_sum = sites.new_zeros(())
     observed_count = sites.new_zeros(())
     for band_index, (band_cells, pixel_system) in enumerate(
@@ -596,6 +597,15 @@ def _initialize_foam_from_band_coadds(
             if reconstructed_gradients is not None
             else operator.matvec(band_cells)
         )
+        if reconstructed_gradients is not None:
+            observed_cells = weights[band_index] > 0
+            cell_variation = torch.sqrt(operator.cell_areas) * torch.linalg.vector_norm(
+                reconstructed_gradients[band_index],
+                dim=-1,
+            )
+            observed_variation = cell_variation[observed_cells]
+            if observed_variation.numel():
+                initial_cell_variations.append(observed_variation)
         prediction = psf_forward(integrated_prediction) / pixel_areas
         residual_square_sum += torch.sum(
             pixel_weight * torch.square(prediction - normalized)
@@ -605,6 +615,11 @@ def _initialize_foam_from_band_coadds(
         residual_square_sum / torch.clamp(observed_count, min=1.0)
     )
     coverage_count = torch.sum(weights > 0, dim=0)
+    variation = (
+        torch.cat(initial_cell_variations)
+        if initial_cell_variations
+        else sites.new_zeros((1,))
+    )
     return {
         "foam_initialized_cell_fraction": float(
             torch.mean((coverage_count > 0).float())
@@ -619,6 +634,11 @@ def _initialize_foam_from_band_coadds(
             if solved_gradient_coefficients is not None
             else 0.0
         ),
+        "foam_spectral_basis_condition_number": float(torch.linalg.cond(basis)),
+        "foam_initial_cell_variation_abs_p95": float(
+            torch.quantile(variation, 0.95)
+        ),
+        "foam_initial_cell_variation_abs_max": float(torch.max(variation)),
     }
 
 
@@ -1621,6 +1641,9 @@ def main() -> int:
                             "foam_initialization_rmse",
                             "foam_initial_coefficient_abs_max",
                             "foam_initial_gradient_coefficient_abs_max",
+                            "foam_spectral_basis_condition_number",
+                            "foam_initial_cell_variation_abs_p95",
+                            "foam_initial_cell_variation_abs_max",
                         ):
                             if diagnostic_name in fit_diagnostics:
                                 row[diagnostic_name] = float(
@@ -1682,6 +1705,38 @@ def main() -> int:
                             if gradients is not None:
                                 row["foam_gradient_coefficient_abs_max"] = float(
                                     gradients.detach().abs().max()
+                                )
+                                wavelengths, response = bandpass_quadrature(
+                                    target_observation,
+                                    num_spectral_samples=render_num_spectral_samples,
+                                    device=sites.device,
+                                )
+                                band_basis = torch.sum(
+                                    response.to(dtype=sites.dtype)[:, None]
+                                    * hard_model.spectral_basis(wavelengths).to(
+                                        dtype=sites.dtype
+                                    ),
+                                    dim=0,
+                                )
+                                band_gradients = torch.einsum(
+                                    "k,ckd->cd",
+                                    band_basis,
+                                    gradients.detach(),
+                                )
+                                cell_variation = (
+                                    2.0
+                                    * float(args.foam_extent)
+                                    / float(args.foam_grid_side)
+                                    * torch.linalg.vector_norm(
+                                        band_gradients,
+                                        dim=-1,
+                                    )
+                                )
+                                row["foam_band_cell_variation_abs_p95"] = float(
+                                    torch.quantile(cell_variation, 0.95)
+                                )
+                                row["foam_band_cell_variation_abs_max"] = float(
+                                    torch.max(cell_variation)
                                 )
                             row["foam_site_x_range"] = [
                                 float(sites[:, 0].min()),

@@ -619,8 +619,24 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
   slopes by PCG through the optional target-PSF forward/adjoint, then fit the
   shared spectral coefficients for both. Affine runs no longer start every
   local slope at zero.
+- [x] Recover the earlier value-only-initialized affine blank as the required
+  representation ablation. It completed the frozen 512-square, six-band,
+  20-step configuration in 332.9 s, but mean support/source-contrast RMSE
+  (0.406581/1.247304) is unchanged from the constant-cell control
+  (0.406582/1.247307). Its maximum learned gradient coefficient is only 0.0968,
+  so merely exposing affine cells does not activate useful sub-cell structure.
 - [ ] Run a 512-square affine-cell blank plus one frozen injection batch. Expand
   only if the bright-bin response is positive and flux/RMSE improve.
+  Blank session `jin6xhv6` completed exact commit
+  `0b73f1dd35afbbd46102208393c6ca8921a79943` with joint value/slope coadd
+  initialization and per-parameter relative ridge scaling. Artifact root:
+  `/arc/projects/ots/torchsky-runs/20260812-smacs-foam-affine-init-0b73f1d-c512-r1`.
+  It improved source-contrast slope from 0.0351 to 0.0737, support/source flux
+  ratios from 0.804/0.608 to 0.916/0.825, and both RMSEs by 1.7%, but still
+  attenuates source flux by 17.5%. The injection half remains blocked. The next
+  blank standardizes gradients as brightness change across one cell before
+  regularization and records per-band variation instead of interpreting raw
+  spectral gradient coefficients.
 - [x] Implement the frozen spectral-Foam scorer while the injection fanout runs.
   `benchmarks/score_smacs0723_foam.py` stages exact products, intersects and
   erodes support, derives band-dependent ePSFs from injected-minus-blank model
