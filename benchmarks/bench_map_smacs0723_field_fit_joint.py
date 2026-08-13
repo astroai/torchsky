@@ -1309,6 +1309,37 @@ def _format_markdown(rows: list[dict[str, Any]]) -> str:
             f"{row['mean_aligned_rmse']:.6f} | {row['mean_source_contrast_slope']:.4f} | "
             f"{row['total_fit_time_ms']:.2f} |"
         )
+    exact_rows: dict[str, dict[str, Any]] = {}
+    for row in ok_rows:
+        if "foam_exact_refinement_rmse" in row:
+            exact_rows.setdefault(str(row["model"]), row)
+    if exact_rows:
+        lines.extend(
+            [
+                "",
+                "## Exact Refinement",
+                "",
+                "| model | initial rmse | final rmse | iterations | residual | setup s | rhs s | pcg s | peak operator MiB | ridge center |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for model, row in exact_rows.items():
+            peak_mib = float(row["foam_exact_refinement_peak_operator_batch_bytes"]) / 2**20
+            ridge_center = (
+                "initial"
+                if float(row["foam_exact_refinement_ridge_centered_on_initial"])
+                else "zero"
+            )
+            lines.append(
+                f"| {model} | {row['foam_exact_refinement_initial_rmse']:.6f} | "
+                f"{row['foam_exact_refinement_rmse']:.6f} | "
+                f"{row['foam_exact_refinement_iterations']:.0f} | "
+                f"{row['foam_exact_refinement_relative_residual']:.3e} | "
+                f"{row['foam_exact_refinement_preconditioner_setup_seconds']:.3f} | "
+                f"{row['foam_exact_refinement_rhs_seconds']:.3f} | "
+                f"{row['foam_exact_refinement_pcg_seconds']:.3f} | "
+                f"{peak_mib:.2f} | {ridge_center} |"
+            )
     lines.extend(
         [
             "",
@@ -2114,12 +2145,28 @@ def main() -> int:
                             "foam_initial_cell_variation_abs_p95",
                             "foam_initial_cell_variation_abs_max",
                             "foam_exact_refinement_rmse",
+                            "foam_exact_refinement_initial_rmse",
                             "foam_exact_refinement_observations",
                             "foam_exact_refinement_pixels",
                             "foam_exact_refinement_max_iterations",
                             "foam_exact_refinement_iterations",
+                            "foam_exact_refinement_normal_operator_applications",
+                            "foam_exact_refinement_initial_relative_residual",
+                            "foam_exact_refinement_ridge_centered_on_initial",
                             "foam_exact_refinement_relative_residual",
                             "foam_exact_refinement_converged",
+                            "foam_exact_refinement_preconditioner_setup_seconds",
+                            "foam_exact_refinement_rhs_seconds",
+                            "foam_exact_refinement_initial_residual_seconds",
+                            "foam_exact_refinement_pcg_seconds",
+                            "foam_exact_refinement_preconditioner_cell_block",
+                            "foam_exact_refinement_preconditioner_block_fallback_cells",
+                            "foam_exact_refinement_preconditioner_storage_bytes",
+                            "foam_exact_refinement_preconditioner_auto",
+                            "foam_exact_refinement_preconditioner_response_condition",
+                            "foam_exact_refinement_preconditioner_auto_condition_threshold",
+                            "foam_exact_refinement_preconditioner_auto_budget_bytes",
+                            "foam_exact_refinement_preconditioner_block_construction_peak_bytes",
                             "foam_exact_refinement_observation_batch_size",
                             "foam_exact_refinement_operator_storage_bytes",
                             "foam_exact_refinement_peak_operator_batch_bytes",

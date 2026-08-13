@@ -800,6 +800,12 @@ stacking-versus-INR/Foam depth result defined in
       with CPU operator storage, batch size one, auto preconditioning, grid 32,
       basis four, PATT 3/8, and the contracted blank. Artifacts target
       `/arc/projects/ots/torchsky-runs/20260812-foam-exact-auto-361e2b2/`.
+      Matched session `xj5945ab` runs fully verified commit
+      `1c3328bc78114449214014265e8667b5f79dd64e` with the same configuration but
+      proximal ridge centered on the initializer. Its artifacts target
+      `/arc/projects/ots/torchsky-runs/20260812-foam-exact-proximal-1c3328b/`.
+      Compare the two as a single controlled objective test; do not tune from
+      either blank result.
     - [x] Make exact-refinement scaling diagnosable before larger fields. The
       solver records preconditioner assembly, RHS assembly, initial residual,
       and PCG wall times; initial/final relative residuals; exact normal-map
@@ -807,6 +813,9 @@ stacking-versus-INR/Foam depth result defined in
       timings synchronize only when diagnostics are requested. These fields
       distinguish geometry/setup, host transfer plus PSF work, and convergence
       costs without a profiler-specific artifact.
+      All fields are propagated into per-band JSON rows and a deduplicated
+      Markdown exact-refinement table, including initial/final RMSE, iterations,
+      residual, phase times, peak operator batch MiB, and ridge center.
     - [x] Make post-fit regularization scientifically conservative. When an
       initial coadd/smooth model is supplied, exact refinement now minimizes a
       proximal ridge around that model rather than around zero; this prevents

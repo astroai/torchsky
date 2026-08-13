@@ -726,11 +726,16 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     `/arc/projects/ots/torchsky-runs/20260812-foam-exact-auto-361e2b2/`.
     Prior `nuy2ew60` was an inline-command bootstrap failure with no science
     output, not a model result; direct-command stage `rfsw1kyr` replaced it.
+    Matched proximal-ridge session `xj5945ab` runs commit
+    `1c3328bc78114449214014265e8667b5f79dd64e` with persistent output at
+    `/arc/projects/ots/torchsky-runs/20260812-foam-exact-proximal-1c3328b/`.
+    Treat this as one pre-registered A/B objective comparison, not a sweep.
   - [x] Record phase-level exact-solve evidence: preconditioner/RHS/initial
     residual/PCG time, normal-operator applications, initial/final relative
     residual, and initial/final weighted native-pixel RMSE. Use these values to
     select the next performance change; do not infer the bottleneck from total
-    runtime alone.
+    runtime alone. The generated Markdown report includes a compact exact-fit
+    summary so these diagnostics do not require manual JSON extraction.
   - [x] Center exact post-fit ridge on the supplied initializer instead of zero.
     This preserves the intended meaning of refinement and removes prior-driven
     flux shrinkage; zero remains the center for cold solves.

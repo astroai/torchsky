@@ -190,6 +190,42 @@ def test_joint_field_fit_markdown_lists_summary_and_band_rows() -> None:
     assert "spectral_basis_field" in text
 
 
+def test_joint_field_fit_markdown_summarizes_exact_refinement() -> None:
+    row = {
+        "band": "F090W",
+        "model": "spectral_power_foam",
+        "status": "OK",
+        "n_exposures": 8,
+        "source_contrast_rmse": 0.04,
+        "source_rmse": 0.08,
+        "support_rmse": 0.1,
+        "uniform_rmse": 0.2,
+        "aligned_rmse": 0.05,
+        "affine_slope": 1.0,
+        "source_contrast_slope": 0.9,
+        "support_flux_ratio": 1.01,
+        "source_flux_ratio": 0.95,
+        "support_frac": 0.9,
+        "source_frac": 0.2,
+        "fit_time_ms": 12.3,
+        "foam_exact_refinement_initial_rmse": 0.2,
+        "foam_exact_refinement_rmse": 0.1,
+        "foam_exact_refinement_iterations": 12.0,
+        "foam_exact_refinement_relative_residual": 1.0e-6,
+        "foam_exact_refinement_preconditioner_setup_seconds": 0.1,
+        "foam_exact_refinement_rhs_seconds": 0.2,
+        "foam_exact_refinement_pcg_seconds": 0.3,
+        "foam_exact_refinement_peak_operator_batch_bytes": float(2**20),
+        "foam_exact_refinement_ridge_centered_on_initial": 1.0,
+    }
+
+    text = _format_markdown([row])
+
+    assert "Exact Refinement" in text
+    assert "| spectral_power_foam | 0.200000 | 0.100000 | 12 |" in text
+    assert "| initial |" in text
+
+
 def test_joint_field_fit_summary_averages_rows_by_model() -> None:
     summary = _summarize_by_model(
         [
