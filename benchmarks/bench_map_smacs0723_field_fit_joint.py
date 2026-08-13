@@ -868,6 +868,8 @@ def _refine_foam_from_observations_exact(
         forwards.append(psf_forward)
         adjoints.append(psf_adjoint)
 
+    initial_coefficients = coefficients.detach().clone()
+    initial_gradients = gradient_coefficients.detach().clone()
     solve_diagnostics: dict[str, float] = {}
     solved, solved_gradients = solve_spectral_power_pixel_affine_least_squares(
         operators,
@@ -879,8 +881,8 @@ def _refine_foam_from_observations_exact(
         tolerance=1.0e-5,
         pixel_matvecs=forwards,
         pixel_rmatvecs=adjoints,
-        initial_coefficients=coefficients.detach(),
-        initial_gradient_coefficients=gradient_coefficients.detach(),
+        initial_coefficients=initial_coefficients,
+        initial_gradient_coefficients=initial_gradients,
         solve_device=device,
         observation_batch_size=observation_batch_size,
         preconditioner=preconditioner,
@@ -891,6 +893,7 @@ def _refine_foam_from_observations_exact(
         gradient_coefficients.copy_(solved_gradients)
 
     weighted_square_sum = coefficients.new_zeros(())
+    initial_weighted_square_sum = coefficients.new_zeros(())
     weight_sum = coefficients.new_zeros(())
     for operator, basis, values, weight, area, forward in zip(
         operators,
@@ -912,12 +915,27 @@ def _refine_foam_from_observations_exact(
                 torch.einsum("ckd,k->cd", solved_gradients, solve_basis),
             )
         )
+        initial_prediction = forward(
+            solve_operator.matvec_affine(
+                initial_coefficients @ solve_basis,
+                torch.einsum("ckd,k->cd", initial_gradients, solve_basis),
+            )
+        )
         surface_weight = solve_weight * solve_area.square()
         weighted_square_sum += torch.sum(
             surface_weight * torch.square((prediction - solve_values) / solve_area)
         )
+        initial_weighted_square_sum += torch.sum(
+            surface_weight
+            * torch.square((initial_prediction - solve_values) / solve_area)
+        )
         weight_sum += torch.sum(surface_weight)
     return {
+        "foam_exact_refinement_initial_rmse": float(
+            torch.sqrt(
+                initial_weighted_square_sum / torch.clamp(weight_sum, min=1.0)
+            )
+        ),
         "foam_exact_refinement_rmse": float(
             torch.sqrt(weighted_square_sum / torch.clamp(weight_sum, min=1.0))
         ),
@@ -925,10 +943,24 @@ def _refine_foam_from_observations_exact(
         "foam_exact_refinement_pixels": float(observed_pixel_count),
         "foam_exact_refinement_max_iterations": float(max_iterations),
         "foam_exact_refinement_iterations": solve_diagnostics["iterations"],
+        "foam_exact_refinement_normal_operator_applications": solve_diagnostics[
+            "normal_operator_applications"
+        ],
+        "foam_exact_refinement_initial_relative_residual": solve_diagnostics[
+            "initial_relative_residual"
+        ],
         "foam_exact_refinement_relative_residual": solve_diagnostics[
             "relative_residual"
         ],
         "foam_exact_refinement_converged": solve_diagnostics["converged"],
+        "foam_exact_refinement_preconditioner_setup_seconds": solve_diagnostics[
+            "preconditioner_setup_seconds"
+        ],
+        "foam_exact_refinement_rhs_seconds": solve_diagnostics["rhs_seconds"],
+        "foam_exact_refinement_initial_residual_seconds": solve_diagnostics[
+            "initial_residual_seconds"
+        ],
+        "foam_exact_refinement_pcg_seconds": solve_diagnostics["pcg_seconds"],
         "foam_exact_refinement_preconditioner_cell_block": solve_diagnostics[
             "preconditioner_cell_block"
         ],

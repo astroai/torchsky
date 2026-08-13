@@ -722,6 +722,11 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     `/arc/projects/ots/torchsky-runs/20260812-foam-exact-auto-361e2b2/`.
     Prior `nuy2ew60` was an inline-command bootstrap failure with no science
     output, not a model result; direct-command stage `rfsw1kyr` replaced it.
+  - [x] Record phase-level exact-solve evidence: preconditioner/RHS/initial
+    residual/PCG time, normal-operator applications, initial/final relative
+    residual, and initial/final weighted native-pixel RMSE. Use these values to
+    select the next performance change; do not infer the bottleneck from total
+    runtime alone.
 - [ ] Run the same matrix for the strongest current shared/independent INR as a
   fallback and architectural control.
 - [ ] Tune only atom density/capacity, spectral basis size, learning rate,

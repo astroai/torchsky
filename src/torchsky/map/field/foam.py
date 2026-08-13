@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import math
+import time
 from typing import Any, Callable, Literal, Sequence
 
 import torch
@@ -1020,6 +1021,13 @@ def solve_spectral_power_pixel_affine_least_squares(
     if preconditioner_max_bytes is not None and preconditioner_max_bytes <= 0:
         raise ValueError("preconditioner_max_bytes must be positive")
 
+    def diagnostic_time() -> float:
+        if diagnostics is not None and device.type == "cuda":
+            torch.cuda.synchronize(device)
+        return time.perf_counter()
+
+    setup_started = diagnostic_time()
+
     union_cell_areas = torch.stack(
         [operator.cell_areas.to(device=device) for operator in operators]
     ).amax(dim=0)
@@ -1149,6 +1157,7 @@ def solve_spectral_power_pixel_affine_least_squares(
                 (local_diagonal + regularization)[failed]
             )
             block_cholesky = torch.linalg.cholesky(block_normal)
+    setup_seconds = diagnostic_time() - setup_started
 
     coefficient_size = cells * basis_count
 
@@ -1206,7 +1215,11 @@ def solve_spectral_power_pixel_affine_least_squares(
             gradient_adjoint[:, None, :] * basis[None, :, None],
         )
 
+    normal_operator_applications = 0
+
     def apply_normal(parameters: Tensor) -> Tensor:
+        nonlocal normal_operator_applications
+        normal_operator_applications += 1
         coefficients, gradients = unpack(parameters)
         output = torch.zeros_like(parameters)
         for batch in observation_batches():
@@ -1222,6 +1235,7 @@ def solve_spectral_power_pixel_affine_least_squares(
                 output += adjoint_observation(operator, weighted, basis)
         return output + regularization * parameters
 
+    rhs_started = diagnostic_time()
     rhs = torch.zeros(diagonal.shape, dtype=first.areas.dtype, device=device)
     for batch in observation_batches():
         for operator, values, weight, basis, _forward, adjoint in batch:
@@ -1229,6 +1243,7 @@ def solve_spectral_power_pixel_affine_least_squares(
             if adjoint is not None:
                 weighted = adjoint(weighted)
             rhs += adjoint_observation(operator, weighted, basis)
+    rhs_seconds = diagnostic_time() - rhs_started
     if (initial_coefficients is None) != (initial_gradient_coefficients is None):
         raise ValueError("initial coefficients and gradients must be supplied together")
     if initial_coefficients is None:
@@ -1250,13 +1265,19 @@ def solve_spectral_power_pixel_affine_least_squares(
             initial_coefficients.to(device=device),
             initial_gradient_coefficients.to(device=device),
         )
+    initial_residual_started = diagnostic_time()
     residual = rhs - apply_normal(solution)
     preconditioned = apply_preconditioner(residual)
     direction = preconditioned.clone()
     residual_dot = torch.sum(residual * preconditioned)
     rhs_norm = torch.linalg.vector_norm(rhs)
+    initial_relative_residual = torch.linalg.vector_norm(residual) / torch.clamp(
+        rhs_norm, min=torch.finfo(rhs.dtype).tiny
+    )
+    initial_residual_seconds = diagnostic_time() - initial_residual_started
     tiny = torch.finfo(rhs.dtype).tiny
     completed_iterations = 0
+    pcg_started = diagnostic_time()
     for _ in range(iterations):
         residual_norm = torch.linalg.vector_norm(residual)
         if bool(residual_norm <= threshold * rhs_norm):
@@ -1275,6 +1296,7 @@ def solve_spectral_power_pixel_affine_least_squares(
             break
         direction = preconditioned + (next_residual_dot / residual_dot) * direction
         residual_dot = next_residual_dot
+    pcg_seconds = diagnostic_time() - pcg_started
     final_residual_norm = torch.linalg.vector_norm(residual)
     relative_residual = final_residual_norm / torch.clamp(
         rhs_norm, min=torch.finfo(rhs.dtype).tiny
@@ -1283,8 +1305,14 @@ def solve_spectral_power_pixel_affine_least_squares(
         diagnostics.update(
             {
                 "iterations": float(completed_iterations),
+                "normal_operator_applications": float(normal_operator_applications),
+                "initial_relative_residual": float(initial_relative_residual),
                 "relative_residual": float(relative_residual),
                 "converged": float(relative_residual <= threshold),
+                "preconditioner_setup_seconds": setup_seconds,
+                "rhs_seconds": rhs_seconds,
+                "initial_residual_seconds": initial_residual_seconds,
+                "pcg_seconds": pcg_seconds,
                 "preconditioner_cell_block": float(block_cholesky is not None),
                 "preconditioner_block_fallback_cells": float(
                     block_fallback_cells

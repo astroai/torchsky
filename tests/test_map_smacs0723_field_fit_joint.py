@@ -495,6 +495,12 @@ def test_joint_foam_exact_observation_refinement_recovers_native_pixels() -> Non
     ]
     assert diagnostics["foam_exact_refinement_host_offload"] == 1.0
     assert diagnostics["foam_exact_refinement_converged"] == 1.0
+    assert diagnostics["foam_exact_refinement_initial_rmse"] >= diagnostics[
+        "foam_exact_refinement_rmse"
+    ]
+    assert diagnostics["foam_exact_refinement_normal_operator_applications"] == (
+        diagnostics["foam_exact_refinement_iterations"] + 1.0
+    )
     assert diagnostics["foam_exact_refinement_relative_residual"] <= 1.0e-5
     for observation in observations:
         actual = render_spectral_power_foam_observation_exact(

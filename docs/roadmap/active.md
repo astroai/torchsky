@@ -795,6 +795,13 @@ stacking-versus-INR/Foam depth result defined in
       with CPU operator storage, batch size one, auto preconditioning, grid 32,
       basis four, PATT 3/8, and the contracted blank. Artifacts target
       `/arc/projects/ots/torchsky-runs/20260812-foam-exact-auto-361e2b2/`.
+    - [x] Make exact-refinement scaling diagnosable before larger fields. The
+      solver records preconditioner assembly, RHS assembly, initial residual,
+      and PCG wall times; initial/final relative residuals; exact normal-map
+      application count; and initial/final weighted native-pixel RMSE. CUDA
+      timings synchronize only when diagnostics are requested. These fields
+      distinguish geometry/setup, host transfer plus PSF work, and convergence
+      costs without a profiler-specific artifact.
     - [x] Add the frozen Foam scoring path before the products finish.
       `benchmarks/score_smacs0723_foam.py` stages the exact blank/injection
       products, enforces common eroded support, measures each effective PSF from

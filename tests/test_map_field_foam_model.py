@@ -259,6 +259,16 @@ def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
     assert diagnostics["peak_operator_batch_bytes"] == moved.storage_bytes
     assert diagnostics["converged"] == 1.0
     assert diagnostics["relative_residual"] <= 1.0e-10
+    assert diagnostics["initial_relative_residual"] > diagnostics[
+        "relative_residual"
+    ]
+    assert diagnostics["normal_operator_applications"] == diagnostics[
+        "iterations"
+    ] + 1.0
+    assert diagnostics["preconditioner_setup_seconds"] >= 0.0
+    assert diagnostics["rhs_seconds"] >= 0.0
+    assert diagnostics["initial_residual_seconds"] >= 0.0
+    assert diagnostics["pcg_seconds"] >= 0.0
     assert block_diagnostics["preconditioner_cell_block"] == 1.0
     assert block_diagnostics["preconditioner_block_fallback_cells"] == 0.0
     assert block_diagnostics["preconditioner_storage_bytes"] > diagnostics[
