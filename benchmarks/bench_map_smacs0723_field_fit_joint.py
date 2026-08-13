@@ -724,6 +724,7 @@ def _refine_foam_from_observations_exact(
     max_iterations: int = 50,
     operator_storage_device: str = "model",
     observation_batch_size: int | None = None,
+    preconditioner: str = "diagonal",
 ) -> dict[str, float]:
     """Refit fixed spectral-affine appearance through native detector pixels."""
     coefficients = getattr(model, "cell_coefficients", None)
@@ -882,6 +883,7 @@ def _refine_foam_from_observations_exact(
         initial_gradient_coefficients=gradient_coefficients.detach(),
         solve_device=device,
         observation_batch_size=observation_batch_size,
+        preconditioner=preconditioner,
         diagnostics=solve_diagnostics,
     )
     with torch.no_grad():
@@ -927,6 +929,12 @@ def _refine_foam_from_observations_exact(
             "relative_residual"
         ],
         "foam_exact_refinement_converged": solve_diagnostics["converged"],
+        "foam_exact_refinement_preconditioner_cell_block": solve_diagnostics[
+            "preconditioner_cell_block"
+        ],
+        "foam_exact_refinement_preconditioner_storage_bytes": solve_diagnostics[
+            "preconditioner_storage_bytes"
+        ],
         "foam_exact_refinement_observation_batch_size": float(
             len(observations)
             if observation_batch_size is None
@@ -1375,6 +1383,12 @@ def main() -> int:
         type=int,
         default=50,
         help="Maximum PCG iterations for exact detector-pixel refinement",
+    )
+    parser.add_argument(
+        "--foam-exact-preconditioner",
+        choices=("diagonal", "cell_block"),
+        default="diagonal",
+        help="Exact-solve preconditioner; cell_block uses more memory",
     )
     parser.add_argument(
         "--foam-extent",
@@ -1953,6 +1967,7 @@ def main() -> int:
                         else None
                     ),
                     max_iterations=int(args.foam_exact_max_iterations),
+                    preconditioner=str(args.foam_exact_preconditioner),
                 )
                 fit_time_ms += (time.perf_counter() - refine_t0) * 1000.0
             fitted_models[model_kind] = (
@@ -2348,6 +2363,7 @@ def main() -> int:
                 args.foam_exact_observation_batch_size
             ),
             "foam_exact_max_iterations": int(args.foam_exact_max_iterations),
+            "foam_exact_preconditioner": str(args.foam_exact_preconditioner),
             "intensity_scale": float(intensity_scale),
             "patt_nums": list(pattern_numbers),
             "crop_x0": args.crop_x0,

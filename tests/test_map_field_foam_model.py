@@ -207,9 +207,23 @@ def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
         observation_batch_size=1,
         diagnostics=diagnostics,
     )
+    block_diagnostics: dict[str, float] = {}
+    block = solve_spectral_power_pixel_affine_least_squares(
+        operators,
+        response_basis,
+        values,
+        ridge=1.0e-8,
+        max_iterations=100,
+        tolerance=1.0e-10,
+        observation_batch_size=1,
+        preconditioner="cell_block",
+        diagnostics=block_diagnostics,
+    )
 
     torch.testing.assert_close(actual[0], expected[0])
     torch.testing.assert_close(actual[1], expected[1])
+    torch.testing.assert_close(block[0], expected[0])
+    torch.testing.assert_close(block[1], expected[1])
     moved = operators[0].to("cpu")
     assert moved is operators[0]
     assert moved.storage_bytes > 0
@@ -218,6 +232,10 @@ def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
     assert diagnostics["peak_operator_batch_bytes"] == moved.storage_bytes
     assert diagnostics["converged"] == 1.0
     assert diagnostics["relative_residual"] <= 1.0e-10
+    assert block_diagnostics["preconditioner_cell_block"] == 1.0
+    assert block_diagnostics["preconditioner_storage_bytes"] > diagnostics[
+        "preconditioner_storage_bytes"
+    ]
 
 
 def _model() -> SpectralPowerFoam:

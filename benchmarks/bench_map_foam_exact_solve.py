@@ -16,7 +16,7 @@ from torchsky.map.field import (
 )
 
 
-def _case(side: int, observations: int):
+def _case(side: int, observations: int, basis_count: int):
     edges = torch.linspace(-1.0, 1.0, side + 1, dtype=torch.float64)
     y0, x0 = torch.meshgrid(edges[:-1], edges[:-1], indexing="ij")
     y1, x1 = torch.meshgrid(edges[1:], edges[1:], indexing="ij")
@@ -46,19 +46,18 @@ def _case(side: int, observations: int):
             [0.35 * phase / side, -0.2 * phase / side]
         )
         operators.append(sparse_bounded_power_pixel_operator(shifted, sites, radii))
+    spectral_coordinate = torch.linspace(
+        -1.0, 1.0, observations, dtype=torch.float64
+    )
     basis = torch.stack(
-        (
-            torch.ones(observations, dtype=torch.float64),
-            torch.linspace(-1.0, 1.0, observations, dtype=torch.float64),
-        ),
-        dim=1,
+        [spectral_coordinate**order for order in range(basis_count)], dim=1
     )
     generator = torch.Generator().manual_seed(101)
     coefficients = torch.randn(
-        (sites.shape[0], 2), generator=generator, dtype=torch.float64
+        (sites.shape[0], basis_count), generator=generator, dtype=torch.float64
     )
     gradients = 0.1 * torch.randn(
-        (sites.shape[0], 2, 2), generator=generator, dtype=torch.float64
+        (sites.shape[0], basis_count, 2), generator=generator, dtype=torch.float64
     )
     values = [
         operator.matvec_affine(
@@ -78,12 +77,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--side", type=int, default=32)
     parser.add_argument("--observations", type=int, default=6)
+    parser.add_argument("--basis-count", type=int, default=4)
     parser.add_argument("--iterations", type=int, default=10)
     parser.add_argument("--runs", type=int, default=5)
     args = parser.parse_args()
-    operators, basis, values, weights = _case(args.side, args.observations)
+    operators, basis, values, weights = _case(
+        args.side, args.observations, args.basis_count
+    )
     rows = []
-    for label, batch_size in (("resident", None), ("batch1", 1)):
+    for label, batch_size, preconditioner in (
+        ("resident_diagonal", None, "diagonal"),
+        ("batch1_diagonal", 1, "diagonal"),
+        ("batch1_cell_block", 1, "cell_block"),
+    ):
         samples = []
         diagnostics: dict[str, float] = {}
         for run in range(args.runs + 1):
@@ -96,6 +102,7 @@ def main() -> int:
                 max_iterations=args.iterations,
                 tolerance=1.0e-8,
                 observation_batch_size=batch_size,
+                preconditioner=preconditioner,
                 diagnostics=diagnostics,
             )
             elapsed = time.perf_counter() - started
@@ -115,6 +122,7 @@ def main() -> int:
             {
                 "side": args.side,
                 "observations": args.observations,
+                "basis_count": args.basis_count,
                 "runs_after_warmup": args.runs,
                 "rows": rows,
             },

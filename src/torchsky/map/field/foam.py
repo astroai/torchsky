@@ -918,6 +918,7 @@ def solve_spectral_power_pixel_affine_least_squares(
     initial_gradient_coefficients: Tensor | None = None,
     solve_device: torch.device | str | None = None,
     observation_batch_size: int | None = None,
+    preconditioner: Literal["diagonal", "cell_block"] = "diagonal",
     diagnostics: dict[str, float] | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Jointly solve a spectral affine Foam through heterogeneous pixel grids.
@@ -928,7 +929,9 @@ def solve_spectral_power_pixel_affine_least_squares(
     Geometry is shared, while WCS footprints, masks, weights, and PSFs may vary.
     Operators and pixels may be stored off-device; ``observation_batch_size``
     bounds how many are resident on ``solve_device`` at once without changing
-    the accumulated normal equations.
+    the accumulated normal equations. ``cell_block`` preconditioning captures
+    within-cell spectral and affine-slope coupling at O(cells * basis^2)
+    storage; the default diagonal remains appropriate for very large grids.
     """
     observation_count = len(operators)
     if observation_count == 0:
@@ -1009,6 +1012,8 @@ def solve_spectral_power_pixel_affine_least_squares(
         raise ValueError("tolerance must be finite and positive")
     if iterations <= 0:
         raise ValueError("max_iterations must be positive")
+    if preconditioner not in ("diagonal", "cell_block"):
+        raise ValueError("preconditioner must be 'diagonal' or 'cell_block'")
 
     union_cell_areas = torch.stack(
         [operator.cell_areas.to(device=device) for operator in operators]
@@ -1027,6 +1032,15 @@ def solve_spectral_power_pixel_affine_least_squares(
     )
     gradient_diagonal = torch.zeros(
         (cells, basis_count, 2), dtype=first.areas.dtype, device=device
+    )
+    block_normal = (
+        torch.zeros(
+            (cells, 3 * basis_count, 3 * basis_count),
+            dtype=first.areas.dtype,
+            device=device,
+        )
+        if preconditioner == "cell_block"
+        else None
     )
 
     def observation_batches():
@@ -1066,12 +1080,43 @@ def solve_spectral_power_pixel_affine_least_squares(
             gradient_diagonal += (
                 gradient_base[:, None, :] * basis_square[None, :, None]
             )
+            if block_normal is not None:
+                spatial_features = torch.cat(
+                    (
+                        operator.areas[:, None],
+                        operator.centered_first_moments
+                        / cell_scales[operator.indices, None],
+                    ),
+                    dim=1,
+                )
+                spatial_normal = weight.new_zeros((cells, 3, 3))
+                for row in range(3):
+                    for column in range(row, 3):
+                        entry = weight.new_zeros(cells)
+                        entry.scatter_add_(
+                            0,
+                            operator.indices,
+                            edge_weight
+                            * spatial_features[:, row]
+                            * spatial_features[:, column],
+                        )
+                        spatial_normal[:, row, column] = entry
+                        spatial_normal[:, column, row] = entry
+                block_normal += torch.einsum(
+                    "k,l,cij->ckilj", basis, basis, spatial_normal
+                ).reshape(cells, 3 * basis_count, 3 * basis_count)
     diagonal = torch.cat((value_diagonal.flatten(), gradient_diagonal.flatten()))
     positive_count = torch.sum(diagonal > 0).clamp(min=1)
     scale = torch.sum(diagonal) / positive_count
     scale = torch.where(scale > 0, scale, torch.ones_like(scale))
     regularization = penalty * scale
-    preconditioner = diagonal + regularization
+    diagonal_preconditioner = diagonal + regularization
+    block_cholesky: Tensor | None = None
+    if block_normal is not None:
+        block_normal.diagonal(dim1=-2, dim2=-1).add_(regularization)
+        block_cholesky, cholesky_info = torch.linalg.cholesky_ex(block_normal)
+        if bool(torch.any(cholesky_info != 0)):
+            raise RuntimeError("cell-block preconditioner is not positive definite")
 
     coefficient_size = cells * basis_count
 
@@ -1087,6 +1132,28 @@ def solve_spectral_power_pixel_affine_least_squares(
         coefficients = parameters[:coefficient_size].reshape(cells, basis_count)
         scaled_gradients = parameters[coefficient_size:].reshape(cells, basis_count, 2)
         return coefficients, scaled_gradients / cell_scales[:, None, None]
+
+    def apply_preconditioner(residual: Tensor) -> Tensor:
+        if block_cholesky is None:
+            return residual / diagonal_preconditioner
+        coefficient_residual = residual[:coefficient_size].reshape(
+            cells, basis_count
+        )
+        gradient_residual = residual[coefficient_size:].reshape(
+            cells, basis_count, 2
+        )
+        local_residual = torch.cat(
+            (coefficient_residual[:, :, None], gradient_residual), dim=2
+        ).reshape(cells, 3 * basis_count)
+        local_solution = torch.cholesky_solve(
+            local_residual[:, :, None], block_cholesky
+        )[:, :, 0].reshape(cells, basis_count, 3)
+        return torch.cat(
+            (
+                local_solution[:, :, 0].flatten(),
+                local_solution[:, :, 1:].flatten(),
+            )
+        )
 
     def pack_adjoint(coefficients: Tensor, gradients: Tensor) -> Tensor:
         return torch.cat(
@@ -1152,7 +1219,7 @@ def solve_spectral_power_pixel_affine_least_squares(
             initial_gradient_coefficients.to(device=device),
         )
     residual = rhs - apply_normal(solution)
-    preconditioned = residual / preconditioner
+    preconditioned = apply_preconditioner(residual)
     direction = preconditioned.clone()
     residual_dot = torch.sum(residual * preconditioned)
     rhs_norm = torch.linalg.vector_norm(rhs)
@@ -1170,7 +1237,7 @@ def solve_spectral_power_pixel_affine_least_squares(
         solution = solution + step * direction
         residual = residual - step * normal_direction
         completed_iterations += 1
-        preconditioned = residual / preconditioner
+        preconditioned = apply_preconditioner(residual)
         next_residual_dot = torch.sum(residual * preconditioned)
         if bool(torch.abs(residual_dot) <= tiny):
             break
@@ -1186,6 +1253,13 @@ def solve_spectral_power_pixel_affine_least_squares(
                 "iterations": float(completed_iterations),
                 "relative_residual": float(relative_residual),
                 "converged": float(relative_residual <= threshold),
+                "preconditioner_cell_block": float(block_cholesky is not None),
+                "preconditioner_storage_bytes": float(
+                    diagonal_preconditioner.numel()
+                    * diagonal_preconditioner.element_size()
+                    if block_cholesky is None
+                    else block_cholesky.numel() * block_cholesky.element_size()
+                ),
                 "observation_batch_size": float(batch_size),
                 "operator_storage_bytes": float(
                     sum(operator.storage_bytes for operator in operators)

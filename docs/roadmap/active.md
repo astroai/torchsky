@@ -771,6 +771,19 @@ stacking-versus-INR/Foam depth result defined in
       resident/batch-one medians were 22.5/20.2 ms over five timed runs after
       warmup, so batching has negligible CPU overhead but no speed claim is
       made. CUDA transfer/memory evidence remains required.
+    - [x] Add an opt-in per-cell block-Jacobi preconditioner for the exact
+      spectral-affine solve. It captures within-cell spectral/value/slope
+      coupling without changing the forward model or converged solution. On a
+      coupled 32-square, eight-observation, four-mode CPU case it reduced PCG
+      from 51 to 12 iterations and batch-one median time from 0.184 to 0.055 s
+      (3.3x), while increasing preconditioner storage from 24,576 to 294,912
+      bytes. Keep diagonal as the large-grid default until GPU CRF evidence
+      justifies the O(cells * basis^2) block storage.
+    - [ ] Validate host-batched exact refinement on aligned CRFs. Session
+      `nuy2ew60` runs exact commit `6a963943b2ba68db33e18b87822a7bec73efd64b`
+      with AstroAI notebook, CPU operator storage, batch size one, grid 32,
+      basis four, PATT 3/8, and the contracted blank. Artifacts target
+      `/arc/projects/ots/torchsky-runs/20260812-foam-exact-6a96394/`.
     - [x] Add the frozen Foam scoring path before the products finish.
       `benchmarks/score_smacs0723_foam.py` stages the exact blank/injection
       products, enforces common eroded support, measures each effective PSF from
