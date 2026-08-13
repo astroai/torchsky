@@ -731,6 +731,9 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     residual, and initial/final weighted native-pixel RMSE. Use these values to
     select the next performance change; do not infer the bottleneck from total
     runtime alone.
+  - [x] Center exact post-fit ridge on the supplied initializer instead of zero.
+    This preserves the intended meaning of refinement and removes prior-driven
+    flux shrinkage; zero remains the center for cold solves.
 - [ ] Run the same matrix for the strongest current shared/independent INR as a
   fallback and architectural control.
 - [ ] Tune only atom density/capacity, spectral basis size, learning rate,

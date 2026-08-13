@@ -807,6 +807,12 @@ stacking-versus-INR/Foam depth result defined in
       timings synchronize only when diagnostics are requested. These fields
       distinguish geometry/setup, host transfer plus PSF work, and convergence
       costs without a profiler-specific artifact.
+    - [x] Make post-fit regularization scientifically conservative. When an
+      initial coadd/smooth model is supplied, exact refinement now minimizes a
+      proximal ridge around that model rather than around zero; this prevents
+      the refinement prior itself from shrinking recovered source flux. A
+      cold solve still uses the original zero-centered ridge, and artifacts
+      state which contract was used.
     - [x] Add the frozen Foam scoring path before the products finish.
       `benchmarks/score_smacs0723_foam.py` stages the exact blank/injection
       products, enforces common eroded support, measures each effective PSF from

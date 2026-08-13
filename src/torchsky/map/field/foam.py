@@ -1245,11 +1245,11 @@ def solve_spectral_power_pixel_affine_least_squares(
             if adjoint is not None:
                 weighted = adjoint(weighted)
             rhs += adjoint_observation(operator, weighted, basis)
-    rhs_seconds = diagnostic_time() - rhs_started
     if (initial_coefficients is None) != (initial_gradient_coefficients is None):
         raise ValueError("initial coefficients and gradients must be supplied together")
     if initial_coefficients is None:
         solution = torch.zeros_like(rhs)
+        ridge_center = torch.zeros_like(rhs)
     else:
         assert initial_gradient_coefficients is not None
         if (
@@ -1267,6 +1267,9 @@ def solve_spectral_power_pixel_affine_least_squares(
             initial_coefficients.to(device=device),
             initial_gradient_coefficients.to(device=device),
         )
+        ridge_center = solution
+        rhs = rhs + regularization * ridge_center
+    rhs_seconds = diagnostic_time() - rhs_started
     initial_residual_started = diagnostic_time()
     residual = rhs - apply_normal(solution)
     preconditioned = apply_preconditioner(residual)
@@ -1309,6 +1312,9 @@ def solve_spectral_power_pixel_affine_least_squares(
                 "iterations": float(completed_iterations),
                 "normal_operator_applications": float(normal_operator_applications),
                 "initial_relative_residual": float(initial_relative_residual),
+                "ridge_centered_on_initial": float(
+                    initial_coefficients is not None
+                ),
                 "relative_residual": float(relative_residual),
                 "converged": float(relative_residual <= threshold),
                 "preconditioner_setup_seconds": setup_seconds,

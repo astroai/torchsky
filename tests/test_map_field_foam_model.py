@@ -313,6 +313,41 @@ def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
     assert ill_diagnostics["preconditioner_cell_block"] == 1.0
 
 
+def test_joint_spectral_affine_refinement_centers_ridge_on_initial_model() -> None:
+    sites = torch.tensor([[0.0, 0.0]], dtype=torch.float64)
+    radii = torch.tensor([2.0], dtype=torch.float64)
+    pixels = torch.tensor(
+        [[[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]],
+        dtype=torch.float64,
+    )
+    operator = bounded_power_pixel_operator(pixels, sites, radii)
+    basis = torch.ones((1, 1), dtype=torch.float64)
+    initial_coefficients = torch.tensor([[5.0]], dtype=torch.float64)
+    initial_gradients = torch.zeros((1, 1, 2), dtype=torch.float64)
+    values = [
+        operator.matvec_affine(
+            initial_coefficients[:, 0], initial_coefficients.new_zeros((1, 2))
+        )
+    ]
+    diagnostics: dict[str, float] = {}
+
+    solved, gradients = solve_spectral_power_pixel_affine_least_squares(
+        [operator],
+        basis,
+        values,
+        ridge=100.0,
+        max_iterations=20,
+        tolerance=1.0e-12,
+        initial_coefficients=initial_coefficients,
+        initial_gradient_coefficients=initial_gradients,
+        diagnostics=diagnostics,
+    )
+
+    torch.testing.assert_close(solved, initial_coefficients)
+    torch.testing.assert_close(gradients, initial_gradients)
+    assert diagnostics["ridge_centered_on_initial"] == 1.0
+
+
 def _model() -> SpectralPowerFoam:
     return SpectralPowerFoam(
         torch.tensor([[-0.5, 0.0], [0.5, 0.0]], dtype=torch.float64),

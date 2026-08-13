@@ -949,6 +949,9 @@ def _refine_foam_from_observations_exact(
         "foam_exact_refinement_initial_relative_residual": solve_diagnostics[
             "initial_relative_residual"
         ],
+        "foam_exact_refinement_ridge_centered_on_initial": solve_diagnostics[
+            "ridge_centered_on_initial"
+        ],
         "foam_exact_refinement_relative_residual": solve_diagnostics[
             "relative_residual"
         ],
