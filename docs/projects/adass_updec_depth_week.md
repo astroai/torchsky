@@ -703,6 +703,12 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     If it dominates the smooth fit, delete the redundant smooth appearance
     optimization from the fixed-geometry production path rather than carrying
     two solvers.
+  - [x] Add an exact bounded-memory execution contract before the real run.
+    Sparse exposure operators may remain on CPU while unchanged normal-equation
+    contributions are accumulated over a configurable number of observations
+    on the solve device. Record convergence and both total and peak-batch
+    operator bytes. The production validation should start with CPU storage and
+    one observation per H100 batch; enlarge only from measured transfer cost.
 - [ ] Run the same matrix for the strongest current shared/independent INR as a
   fallback and architectural control.
 - [ ] Tune only atom density/capacity, spectral basis size, learning rate,

@@ -128,6 +128,61 @@ class PowerPixelOperator:
     cell_count: int
     candidate_pairs: int
 
+    def to(
+        self,
+        device: torch.device | str,
+        *,
+        non_blocking: bool = False,
+    ) -> PowerPixelOperator:
+        """Move the sparse operator tensors without changing its geometry."""
+        target = torch.device(device)
+        if self.areas.device == target:
+            return self
+        return PowerPixelOperator(
+            indptr=self.indptr.to(device=target, non_blocking=non_blocking),
+            indices=self.indices.to(device=target, non_blocking=non_blocking),
+            pixel_ids=self.pixel_ids.to(device=target, non_blocking=non_blocking),
+            areas=self.areas.to(device=target, non_blocking=non_blocking),
+            centered_first_moments=self.centered_first_moments.to(
+                device=target, non_blocking=non_blocking
+            ),
+            transpose_indptr=self.transpose_indptr.to(
+                device=target, non_blocking=non_blocking
+            ),
+            transpose_indices=self.transpose_indices.to(
+                device=target, non_blocking=non_blocking
+            ),
+            transpose_areas=self.transpose_areas.to(
+                device=target, non_blocking=non_blocking
+            ),
+            cell_areas=self.cell_areas.to(device=target, non_blocking=non_blocking),
+            cell_centered_first_moments=self.cell_centered_first_moments.to(
+                device=target, non_blocking=non_blocking
+            ),
+            pixel_count=self.pixel_count,
+            cell_count=self.cell_count,
+            candidate_pairs=self.candidate_pairs,
+        )
+
+    @property
+    def storage_bytes(self) -> int:
+        """Number of bytes held by the operator's tensor payload."""
+        return sum(
+            tensor.numel() * tensor.element_size()
+            for tensor in (
+                self.indptr,
+                self.indices,
+                self.pixel_ids,
+                self.areas,
+                self.centered_first_moments,
+                self.transpose_indptr,
+                self.transpose_indices,
+                self.transpose_areas,
+                self.cell_areas,
+                self.cell_centered_first_moments,
+            )
+        )
+
     def _weights(self, semantics: PowerValueSemantics, *, transposed: bool) -> Tensor:
         if semantics not in ("surface_brightness", "integrated_flux"):
             raise ValueError(
@@ -861,6 +916,9 @@ def solve_spectral_power_pixel_affine_least_squares(
     pixel_rmatvecs: Sequence[Callable[[Tensor], Tensor] | None] | None = None,
     initial_coefficients: Tensor | None = None,
     initial_gradient_coefficients: Tensor | None = None,
+    solve_device: torch.device | str | None = None,
+    observation_batch_size: int | None = None,
+    diagnostics: dict[str, float] | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Jointly solve a spectral affine Foam through heterogeneous pixel grids.
 
@@ -868,6 +926,9 @@ def solve_spectral_power_pixel_affine_least_squares(
     observation. Pixel values use the integrated units returned by the matching
     operator. Optional forward/adjoint pairs compose a linear pixel-domain PSF.
     Geometry is shared, while WCS footprints, masks, weights, and PSFs may vary.
+    Operators and pixels may be stored off-device; ``observation_batch_size``
+    bounds how many are resident on ``solve_device`` at once without changing
+    the accumulated normal equations.
     """
     observation_count = len(operators)
     if observation_count == 0:
@@ -907,19 +968,26 @@ def solve_spectral_power_pixel_affine_least_squares(
     first = operators[0]
     cells = first.cell_count
     basis_count = int(response_basis.shape[1])
-    if response_basis.device != first.areas.device or response_basis.dtype != first.areas.dtype:
-        raise ValueError("response_basis must match operator dtype and device")
+    device = first.areas.device if solve_device is None else torch.device(solve_device)
+    if response_basis.dtype != first.areas.dtype:
+        raise ValueError("response_basis must match operator dtype")
+    basis_on_device = response_basis.to(device=device)
+    batch_size = (
+        observation_count
+        if observation_batch_size is None
+        else int(observation_batch_size)
+    )
+    if batch_size <= 0:
+        raise ValueError("observation_batch_size must be positive")
     for operator, values, weight in zip(operators, pixel_values, weights, strict=True):
         if (
             operator.cell_count != cells
-            or operator.areas.device != first.areas.device
             or operator.areas.dtype != first.areas.dtype
         ):
-            raise ValueError("operators must share cell count, dtype, and device")
+            raise ValueError("operators must share cell count and dtype")
         if (
             not values.is_floating_point()
             or values.shape != (operator.pixel_count,)
-            or values.device != first.areas.device
             or values.dtype != first.areas.dtype
             or not bool(torch.isfinite(values).all())
         ):
@@ -927,7 +995,6 @@ def solve_spectral_power_pixel_affine_least_squares(
         if (
             not weight.is_floating_point()
             or weight.shape != values.shape
-            or weight.device != values.device
             or weight.dtype != values.dtype
             or not bool(torch.isfinite(weight).all())
             or bool(torch.any(weight < 0))
@@ -943,7 +1010,9 @@ def solve_spectral_power_pixel_affine_least_squares(
     if iterations <= 0:
         raise ValueError("max_iterations must be positive")
 
-    union_cell_areas = torch.stack([operator.cell_areas for operator in operators]).amax(dim=0)
+    union_cell_areas = torch.stack(
+        [operator.cell_areas.to(device=device) for operator in operators]
+    ).amax(dim=0)
     positive_areas = union_cell_areas[union_cell_areas > 0]
     fallback_area = (
         torch.median(positive_areas)
@@ -953,22 +1022,50 @@ def solve_spectral_power_pixel_affine_least_squares(
     cell_scales = torch.sqrt(
         torch.where(union_cell_areas > 0, union_cell_areas, fallback_area)
     )
-    value_diagonal = first.areas.new_zeros((cells, basis_count))
-    gradient_diagonal = first.areas.new_zeros((cells, basis_count, 2))
-    for operator, weight, basis in zip(operators, weights, response_basis, strict=True):
-        edge_weight = weight[operator.pixel_ids]
-        value_base = weight.new_zeros(cells)
-        value_base.scatter_add_(0, operator.indices, edge_weight * operator.areas.square())
-        gradient_base = weight.new_zeros((cells, 2))
-        gradient_base.scatter_add_(
-            0,
-            operator.indices[:, None].expand(-1, 2),
-            edge_weight[:, None]
-            * torch.square(operator.centered_first_moments / cell_scales[operator.indices, None]),
-        )
-        basis_square = basis.square()
-        value_diagonal += value_base[:, None] * basis_square[None, :]
-        gradient_diagonal += gradient_base[:, None, :] * basis_square[None, :, None]
+    value_diagonal = torch.zeros(
+        (cells, basis_count), dtype=first.areas.dtype, device=device
+    )
+    gradient_diagonal = torch.zeros(
+        (cells, basis_count, 2), dtype=first.areas.dtype, device=device
+    )
+
+    def observation_batches():
+        for start in range(0, observation_count, batch_size):
+            stop = min(start + batch_size, observation_count)
+            yield [
+                (
+                    operators[index].to(device),
+                    pixel_values[index].to(device=device),
+                    weights[index].to(device=device),
+                    basis_on_device[index],
+                    forwards[index],
+                    adjoints[index],
+                )
+                for index in range(start, stop)
+            ]
+
+    for batch in observation_batches():
+        for operator, _values, weight, basis, _forward, _adjoint in batch:
+            edge_weight = weight[operator.pixel_ids]
+            value_base = weight.new_zeros(cells)
+            value_base.scatter_add_(
+                0, operator.indices, edge_weight * operator.areas.square()
+            )
+            gradient_base = weight.new_zeros((cells, 2))
+            gradient_base.scatter_add_(
+                0,
+                operator.indices[:, None].expand(-1, 2),
+                edge_weight[:, None]
+                * torch.square(
+                    operator.centered_first_moments
+                    / cell_scales[operator.indices, None]
+                ),
+            )
+            basis_square = basis.square()
+            value_diagonal += value_base[:, None] * basis_square[None, :]
+            gradient_diagonal += (
+                gradient_base[:, None, :] * basis_square[None, :, None]
+            )
     diagonal = torch.cat((value_diagonal.flatten(), gradient_diagonal.flatten()))
     positive_count = torch.sum(diagonal > 0).clamp(min=1)
     scale = torch.sum(diagonal) / positive_count
@@ -1013,45 +1110,57 @@ def solve_spectral_power_pixel_affine_least_squares(
     def apply_normal(parameters: Tensor) -> Tensor:
         coefficients, gradients = unpack(parameters)
         output = torch.zeros_like(parameters)
-        for operator, weight, basis, forward, adjoint in zip(
-            operators, weights, response_basis, forwards, adjoints, strict=True
-        ):
-            cell_values = coefficients @ basis
-            cell_gradients = torch.einsum("ckd,k->cd", gradients, basis)
-            projected = operator.matvec_affine(cell_values, cell_gradients)
-            if forward is not None:
-                projected = forward(projected)
-            weighted = weight * projected
-            if adjoint is not None:
-                weighted = adjoint(weighted)
-            output += adjoint_observation(operator, weighted, basis)
+        for batch in observation_batches():
+            for operator, _values, weight, basis, forward, adjoint in batch:
+                cell_values = coefficients @ basis
+                cell_gradients = torch.einsum("ckd,k->cd", gradients, basis)
+                projected = operator.matvec_affine(cell_values, cell_gradients)
+                if forward is not None:
+                    projected = forward(projected)
+                weighted = weight * projected
+                if adjoint is not None:
+                    weighted = adjoint(weighted)
+                output += adjoint_observation(operator, weighted, basis)
         return output + regularization * parameters
 
-    rhs = first.areas.new_zeros(diagonal.shape)
-    for operator, values, weight, basis, adjoint in zip(
-        operators, pixel_values, weights, response_basis, adjoints, strict=True
-    ):
-        weighted = weight * values
-        if adjoint is not None:
-            weighted = adjoint(weighted)
-        rhs += adjoint_observation(operator, weighted, basis)
+    rhs = torch.zeros(diagonal.shape, dtype=first.areas.dtype, device=device)
+    for batch in observation_batches():
+        for operator, values, weight, basis, _forward, adjoint in batch:
+            weighted = weight * values
+            if adjoint is not None:
+                weighted = adjoint(weighted)
+            rhs += adjoint_observation(operator, weighted, basis)
     if (initial_coefficients is None) != (initial_gradient_coefficients is None):
         raise ValueError("initial coefficients and gradients must be supplied together")
     if initial_coefficients is None:
         solution = torch.zeros_like(rhs)
     else:
         assert initial_gradient_coefficients is not None
-        if initial_coefficients.shape != (cells, basis_count) or initial_gradient_coefficients.shape != (cells, basis_count, 2):
+        if (
+            not initial_coefficients.is_floating_point()
+            or not initial_gradient_coefficients.is_floating_point()
+            or initial_coefficients.shape != (cells, basis_count)
+            or initial_gradient_coefficients.shape != (cells, basis_count, 2)
+            or initial_coefficients.dtype != rhs.dtype
+            or initial_gradient_coefficients.dtype != rhs.dtype
+            or not bool(torch.isfinite(initial_coefficients).all())
+            or not bool(torch.isfinite(initial_gradient_coefficients).all())
+        ):
             raise ValueError("initial coefficient shapes must match cells and basis")
-        solution = pack_parameters(initial_coefficients, initial_gradient_coefficients)
+        solution = pack_parameters(
+            initial_coefficients.to(device=device),
+            initial_gradient_coefficients.to(device=device),
+        )
     residual = rhs - apply_normal(solution)
     preconditioned = residual / preconditioner
     direction = preconditioned.clone()
     residual_dot = torch.sum(residual * preconditioned)
     rhs_norm = torch.linalg.vector_norm(rhs)
     tiny = torch.finfo(rhs.dtype).tiny
+    completed_iterations = 0
     for _ in range(iterations):
-        if bool(torch.linalg.vector_norm(residual) <= threshold * rhs_norm):
+        residual_norm = torch.linalg.vector_norm(residual)
+        if bool(residual_norm <= threshold * rhs_norm):
             break
         normal_direction = apply_normal(direction)
         denominator = torch.dot(direction, normal_direction)
@@ -1060,12 +1169,38 @@ def solve_spectral_power_pixel_affine_least_squares(
         step = residual_dot / denominator
         solution = solution + step * direction
         residual = residual - step * normal_direction
+        completed_iterations += 1
         preconditioned = residual / preconditioner
         next_residual_dot = torch.sum(residual * preconditioned)
         if bool(torch.abs(residual_dot) <= tiny):
             break
         direction = preconditioned + (next_residual_dot / residual_dot) * direction
         residual_dot = next_residual_dot
+    final_residual_norm = torch.linalg.vector_norm(residual)
+    relative_residual = final_residual_norm / torch.clamp(
+        rhs_norm, min=torch.finfo(rhs.dtype).tiny
+    )
+    if diagnostics is not None:
+        diagnostics.update(
+            {
+                "iterations": float(completed_iterations),
+                "relative_residual": float(relative_residual),
+                "converged": float(relative_residual <= threshold),
+                "observation_batch_size": float(batch_size),
+                "operator_storage_bytes": float(
+                    sum(operator.storage_bytes for operator in operators)
+                ),
+                "peak_operator_batch_bytes": float(
+                    max(
+                        sum(
+                            operator.storage_bytes
+                            for operator in operators[start : start + batch_size]
+                        )
+                        for start in range(0, observation_count, batch_size)
+                    )
+                ),
+            }
+        )
     return unpack(solution)
 
 

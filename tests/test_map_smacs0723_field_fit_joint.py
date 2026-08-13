@@ -482,10 +482,20 @@ def test_joint_foam_exact_observation_refinement_recovers_native_pixels() -> Non
         observations,
         num_spectral_samples=1,
         max_iterations=100,
+        operator_storage_device="cpu",
+        observation_batch_size=1,
     )
 
     assert diagnostics["foam_exact_refinement_rmse"] < 1.0e-4
     assert diagnostics["foam_exact_refinement_observations"] == 2.0
+    assert diagnostics["foam_exact_refinement_observation_batch_size"] == 1.0
+    assert diagnostics["foam_exact_refinement_operator_storage_bytes"] > 0.0
+    assert diagnostics["foam_exact_refinement_peak_operator_batch_bytes"] < diagnostics[
+        "foam_exact_refinement_operator_storage_bytes"
+    ]
+    assert diagnostics["foam_exact_refinement_host_offload"] == 1.0
+    assert diagnostics["foam_exact_refinement_converged"] == 1.0
+    assert diagnostics["foam_exact_refinement_relative_residual"] <= 1.0e-5
     for observation in observations:
         actual = render_spectral_power_foam_observation_exact(
             model,

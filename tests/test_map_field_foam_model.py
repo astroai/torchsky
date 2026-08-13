@@ -158,6 +158,68 @@ def test_joint_spectral_affine_inverse_recovers_heterogeneous_observations() -> 
         torch.testing.assert_close(actual, expected, atol=2.0e-7, rtol=2.0e-7)
 
 
+def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
+    sites = torch.tensor([[-0.5, 0.0], [0.5, 0.0]], dtype=torch.float64)
+    radii = torch.full((2,), 2.0, dtype=torch.float64)
+    pixels = torch.tensor(
+        [
+            [[-1.0, -0.5], [0.0, -0.5], [0.0, 0.5], [-1.0, 0.5]],
+            [[0.0, -0.5], [1.0, -0.5], [1.0, 0.5], [0.0, 0.5]],
+        ],
+        dtype=torch.float64,
+    )
+    operators = [bounded_power_pixel_operator(pixels, sites, radii) for _ in range(3)]
+    response_basis = torch.tensor(
+        [[1.0, -1.0], [1.0, 0.0], [1.0, 1.0]], dtype=torch.float64
+    )
+    truth_coefficients = torch.tensor(
+        [[1.0, 0.25], [2.0, -0.5]], dtype=torch.float64
+    )
+    truth_gradients = torch.tensor(
+        [[[0.1, 0.0], [0.0, 0.1]], [[-0.1, 0.0], [0.0, -0.1]]],
+        dtype=torch.float64,
+    )
+    values = [
+        operator.matvec_affine(
+            truth_coefficients @ basis,
+            torch.einsum("ckd,k->cd", truth_gradients, basis),
+        )
+        for operator, basis in zip(operators, response_basis, strict=True)
+    ]
+
+    expected = solve_spectral_power_pixel_affine_least_squares(
+        operators,
+        response_basis,
+        values,
+        ridge=1.0e-8,
+        max_iterations=100,
+        tolerance=1.0e-10,
+    )
+    diagnostics: dict[str, float] = {}
+    actual = solve_spectral_power_pixel_affine_least_squares(
+        operators,
+        response_basis,
+        values,
+        ridge=1.0e-8,
+        max_iterations=100,
+        tolerance=1.0e-10,
+        solve_device="cpu",
+        observation_batch_size=1,
+        diagnostics=diagnostics,
+    )
+
+    torch.testing.assert_close(actual[0], expected[0])
+    torch.testing.assert_close(actual[1], expected[1])
+    moved = operators[0].to("cpu")
+    assert moved is operators[0]
+    assert moved.storage_bytes > 0
+    assert diagnostics["observation_batch_size"] == 1.0
+    assert diagnostics["operator_storage_bytes"] == 3.0 * moved.storage_bytes
+    assert diagnostics["peak_operator_batch_bytes"] == moved.storage_bytes
+    assert diagnostics["converged"] == 1.0
+    assert diagnostics["relative_residual"] <= 1.0e-10
+
+
 def _model() -> SpectralPowerFoam:
     return SpectralPowerFoam(
         torch.tensor([[-0.5, 0.0], [0.5, 0.0]], dtype=torch.float64),

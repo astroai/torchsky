@@ -762,6 +762,15 @@ stacking-versus-INR/Foam depth result defined in
       If the exact path wins fidelity and is computationally viable, make it
       the fixed-geometry default and reserve smooth rendering for adaptive-site
       geometry only.
+    - [x] Bound exact-refinement accelerator memory by separating operator
+      storage from solve placement and accumulating unchanged normal equations
+      in observation batches. Operators expose exact tensor-storage bytes; PCG
+      artifacts record total/peak-batch operator bytes, completed iterations,
+      relative residual, and convergence. A coupled six-observation CPU check
+      at 32 square reached identical `1.03e-7` residuals after ten iterations;
+      resident/batch-one medians were 22.5/20.2 ms over five timed runs after
+      warmup, so batching has negligible CPU overhead but no speed claim is
+      made. CUDA transfer/memory evidence remains required.
     - [x] Add the frozen Foam scoring path before the products finish.
       `benchmarks/score_smacs0723_foam.py` stages the exact blank/injection
       products, enforces common eroded support, measures each effective PSF from

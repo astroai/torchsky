@@ -168,6 +168,9 @@ case "${mode}" in
     foam_lr=${FOAM_LR:-0.02}
     seed=${FOAM_SEED:-101}
     patt_nums=${FOAM_PATT_NUMS:-}
+    exact_operator_storage=${FOAM_EXACT_OPERATOR_STORAGE:-model}
+    exact_observation_batch_size=${FOAM_EXACT_OBSERVATION_BATCH_SIZE:-0}
+    exact_max_iterations=${FOAM_EXACT_MAX_ITERATIONS:-50}
     pixi run --manifest-path "${source_root}/pixi.toml" -e smacs-cuda -- \
       python "${source_root}/scripts/run_local_sphere_bench.py" \
       "${source_root}/benchmarks/bench_map_smacs0723_field_fit_joint.py" \
@@ -184,6 +187,9 @@ case "${mode}" in
       --foam-basis-count "${basis_count}" \
       --foam-extent "${extent}" \
       --foam-lr "${foam_lr}" \
+      --foam-exact-operator-storage "${exact_operator_storage}" \
+      --foam-exact-observation-batch-size "${exact_observation_batch_size}" \
+      --foam-exact-max-iterations "${exact_max_iterations}" \
       "${foam_geometry_args[@]}" \
       "${foam_initialization_args[@]}" \
       "${foam_footprint_args[@]}" \
@@ -208,6 +214,9 @@ case "${mode}" in
     foam_lr=${FOAM_LR:-0.02}
     seed=${FOAM_SEED:-101}
     patt_nums=${FOAM_PATT_NUMS:-3,8}
+    exact_operator_storage=${FOAM_EXACT_OPERATOR_STORAGE:-model}
+    exact_observation_batch_size=${FOAM_EXACT_OBSERVATION_BATCH_SIZE:-0}
+    exact_max_iterations=${FOAM_EXACT_MAX_ITERATIONS:-50}
     validation_root=/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940
     target_header_path=${validation_root}/validation-000/common-support-r9-f0p99.fits
     IFS=',' read -r -a validation_batches <<< \
@@ -242,6 +251,9 @@ case "${mode}" in
         --foam-basis-count "${basis_count}" \
         --foam-extent "${extent}" \
         --foam-lr "${foam_lr}" \
+        --foam-exact-operator-storage "${exact_operator_storage}" \
+        --foam-exact-observation-batch-size "${exact_observation_batch_size}" \
+        --foam-exact-max-iterations "${exact_max_iterations}" \
         "${foam_geometry_args[@]}" \
         "${foam_initialization_args[@]}" \
         "${foam_footprint_args[@]}" \

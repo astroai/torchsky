@@ -722,6 +722,8 @@ def _refine_foam_from_observations_exact(
     num_spectral_samples: int,
     operator_max_candidate_pairs: int = 10_000_000,
     max_iterations: int = 50,
+    operator_storage_device: str = "model",
+    observation_batch_size: int | None = None,
 ) -> dict[str, float]:
     """Refit fixed spectral-affine appearance through native detector pixels."""
     coefficients = getattr(model, "cell_coefficients", None)
@@ -741,6 +743,11 @@ def _refine_foam_from_observations_exact(
         raise ValueError("observations must not be empty")
     device = coefficients.device
     dtype = coefficients.dtype
+    storage_device = (
+        device
+        if str(operator_storage_device).strip().lower() == "model"
+        else torch.device(operator_storage_device)
+    )
     operators = []
     response_basis = []
     integrated_values = []
@@ -803,13 +810,20 @@ def _refine_foam_from_observations_exact(
             & (surface_weight > 0)
         ).reshape(-1)
         area = pixel_areas.reshape(-1)
+        stored_area = area.to(storage_device)
         integrated_values.append(
-            torch.where(valid, image.reshape(-1) * area, torch.zeros_like(area))
+            torch.where(valid, image.reshape(-1) * area, torch.zeros_like(area)).to(
+                storage_device
+            )
         )
         integrated_weights.append(
-            torch.where(valid, surface_weight.reshape(-1) / area.square(), torch.zeros_like(area))
+            torch.where(
+                valid,
+                surface_weight.reshape(-1) / area.square(),
+                torch.zeros_like(area),
+            ).to(storage_device)
         )
-        pixel_areas_by_observation.append(area)
+        pixel_areas_by_observation.append(stored_area)
         observed_pixel_count += int(torch.sum(valid))
         psf_spec = observation.psf_spec
         if getattr(psf_spec, "mode", "none") not in (
@@ -820,10 +834,11 @@ def _refine_foam_from_observations_exact(
 
         def psf_forward(
             values: torch.Tensor,
-            areas: torch.Tensor = area,
+            areas: torch.Tensor = stored_area,
             spec: Any = psf_spec,
             shape: tuple[int, int] = (height, width),
         ) -> torch.Tensor:
+            areas = areas.to(device=values.device)
             return (
                 apply_psf_spec((values / areas).reshape(shape), spec).reshape(-1)
                 * areas
@@ -831,10 +846,11 @@ def _refine_foam_from_observations_exact(
 
         def psf_adjoint(
             values: torch.Tensor,
-            areas: torch.Tensor = area,
+            areas: torch.Tensor = stored_area,
             spec: Any = psf_spec,
             shape: tuple[int, int] = (height, width),
         ) -> torch.Tensor:
+            areas = areas.to(device=values.device)
             return apply_psf_spec((values * areas).reshape(shape), spec).reshape(-1) / areas
 
         wavelengths, response = bandpass_quadrature(
@@ -845,11 +861,13 @@ def _refine_foam_from_observations_exact(
         basis_samples = spectral_basis(wavelengths).to(dtype=dtype)
         response_basis.append(
             torch.sum(response.to(dtype=dtype)[:, None] * basis_samples, dim=0)
+            .to(storage_device)
         )
-        operators.append(operator)
+        operators.append(operator.to(storage_device))
         forwards.append(psf_forward)
         adjoints.append(psf_adjoint)
 
+    solve_diagnostics: dict[str, float] = {}
     solved, solved_gradients = solve_spectral_power_pixel_affine_least_squares(
         operators,
         torch.stack(response_basis),
@@ -862,6 +880,9 @@ def _refine_foam_from_observations_exact(
         pixel_rmatvecs=adjoints,
         initial_coefficients=coefficients.detach(),
         initial_gradient_coefficients=gradient_coefficients.detach(),
+        solve_device=device,
+        observation_batch_size=observation_batch_size,
+        diagnostics=solve_diagnostics,
     )
     with torch.no_grad():
         coefficients.copy_(solved)
@@ -878,15 +899,20 @@ def _refine_foam_from_observations_exact(
         forwards,
         strict=True,
     ):
+        solve_operator = operator.to(device)
+        solve_basis = basis.to(device)
+        solve_area = area.to(device)
+        solve_values = values.to(device)
+        solve_weight = weight.to(device)
         prediction = forward(
-            operator.matvec_affine(
-                solved @ basis,
-                torch.einsum("ckd,k->cd", solved_gradients, basis),
+            solve_operator.matvec_affine(
+                solved @ solve_basis,
+                torch.einsum("ckd,k->cd", solved_gradients, solve_basis),
             )
         )
-        surface_weight = weight * area.square()
+        surface_weight = solve_weight * solve_area.square()
         weighted_square_sum += torch.sum(
-            surface_weight * torch.square((prediction - values) / area)
+            surface_weight * torch.square((prediction - solve_values) / solve_area)
         )
         weight_sum += torch.sum(surface_weight)
     return {
@@ -896,6 +922,23 @@ def _refine_foam_from_observations_exact(
         "foam_exact_refinement_observations": float(len(observations)),
         "foam_exact_refinement_pixels": float(observed_pixel_count),
         "foam_exact_refinement_max_iterations": float(max_iterations),
+        "foam_exact_refinement_iterations": solve_diagnostics["iterations"],
+        "foam_exact_refinement_relative_residual": solve_diagnostics[
+            "relative_residual"
+        ],
+        "foam_exact_refinement_converged": solve_diagnostics["converged"],
+        "foam_exact_refinement_observation_batch_size": float(
+            len(observations)
+            if observation_batch_size is None
+            else observation_batch_size
+        ),
+        "foam_exact_refinement_operator_storage_bytes": float(
+            solve_diagnostics["operator_storage_bytes"]
+        ),
+        "foam_exact_refinement_peak_operator_batch_bytes": solve_diagnostics[
+            "peak_operator_batch_bytes"
+        ],
+        "foam_exact_refinement_host_offload": float(storage_device.type == "cpu"),
     }
 
 
@@ -1316,6 +1359,24 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--foam-exact-operator-storage",
+        choices=("model", "cpu"),
+        default="model",
+        help="Store all exact operators with the model or offload them to CPU",
+    )
+    parser.add_argument(
+        "--foam-exact-observation-batch-size",
+        type=int,
+        default=0,
+        help="Maximum exact observations resident on the solve device; 0 means all",
+    )
+    parser.add_argument(
+        "--foam-exact-max-iterations",
+        type=int,
+        default=50,
+        help="Maximum PCG iterations for exact detector-pixel refinement",
+    )
+    parser.add_argument(
         "--foam-extent",
         type=float,
         default=FOAM_FOOTPRINT_EXTENT,
@@ -1370,6 +1431,10 @@ def main() -> int:
         parser.error(
             "--foam-exact-observation-refine requires fixed affine Foam geometry"
         )
+    if args.foam_exact_observation_batch_size < 0:
+        parser.error("--foam-exact-observation-batch-size must be non-negative")
+    if args.foam_exact_max_iterations <= 0:
+        parser.error("--foam-exact-max-iterations must be positive")
     if args.foam_exact_max_candidate_pairs <= 0:
         parser.error("--foam-exact-max-candidate-pairs must be positive")
     if (args.operator_calibration_manifest is None) != (
@@ -1881,6 +1946,13 @@ def main() -> int:
                     operator_max_candidate_pairs=int(
                         args.foam_exact_max_candidate_pairs
                     ),
+                    operator_storage_device=str(args.foam_exact_operator_storage),
+                    observation_batch_size=(
+                        int(args.foam_exact_observation_batch_size)
+                        if args.foam_exact_observation_batch_size > 0
+                        else None
+                    ),
+                    max_iterations=int(args.foam_exact_max_iterations),
                 )
                 fit_time_ms += (time.perf_counter() - refine_t0) * 1000.0
             fitted_models[model_kind] = (
@@ -1977,6 +2049,13 @@ def main() -> int:
                             "foam_exact_refinement_observations",
                             "foam_exact_refinement_pixels",
                             "foam_exact_refinement_max_iterations",
+                            "foam_exact_refinement_iterations",
+                            "foam_exact_refinement_relative_residual",
+                            "foam_exact_refinement_converged",
+                            "foam_exact_refinement_observation_batch_size",
+                            "foam_exact_refinement_operator_storage_bytes",
+                            "foam_exact_refinement_peak_operator_batch_bytes",
+                            "foam_exact_refinement_host_offload",
                         ):
                             if diagnostic_name in fit_diagnostics:
                                 row[diagnostic_name] = float(
@@ -2264,6 +2343,11 @@ def main() -> int:
             "foam_exact_observation_refine": bool(
                 args.foam_exact_observation_refine
             ),
+            "foam_exact_operator_storage": str(args.foam_exact_operator_storage),
+            "foam_exact_observation_batch_size": int(
+                args.foam_exact_observation_batch_size
+            ),
+            "foam_exact_max_iterations": int(args.foam_exact_max_iterations),
             "intensity_scale": float(intensity_scale),
             "patt_nums": list(pattern_numbers),
             "crop_x0": args.crop_x0,
