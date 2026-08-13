@@ -77,6 +77,37 @@ Unknown-source unmixing needs an explicit complexity control and an open
 residual. Otherwise a flexible decomposition can invent arbitrary components
 or force every anomaly into the nearest familiar class.
 
+### 1.5 Mechanistic hybrids: flexible models on explicit physical contracts
+
+Torchsky should permit a mechanistic hybrid when a useful physical
+approximation is too rigid for the calibration evidence. A fixed analytic PSF,
+low-order telluric approximation, or nominal blackbody-reference model can
+remain an initializer or baseline without limiting the final model class.
+
+In this architecture:
+
+1. **Mechanistic contract:** The causal ordering
+   \(\mathcal H[\mathcal T I_{\rm cel}+E]+B\), radiometric value semantics,
+   passband and pixel integration, and matched linear adjoints remain explicit.
+   The declared WCS is evaluated to numerical tolerance while its physical
+   calibration uncertainty is propagated. Conservation or throughput
+   constraints are imposed only where physically appropriate.
+2. **Flexible learned substrate:** Focal-plane- and wavelength-dependent LSF
+   distortions, airglow variation, telluric fine structure, stray light,
+   detector common modes, and diffuse foreground variation may use continuous
+   neural fields, adaptive coordinate encoders, learned spectral bases, Power
+   Foams, or hybrid models.
+3. **Calibration and identifiability tests:** Physical priors, standard stars,
+   lamps, reference states, repeated observations, cross-fitting, and protected
+   target projections constrain which variation the flexible components can
+   explain. They measure and limit target attenuation; they cannot guarantee
+   that nuisance and signal are identifiable from the available data.
+
+This approach can reduce misspecification relative to a rigid model and reduce
+the freedom of an unconstrained black box. It does not eliminate
+non-identifiability. Residual target/nuisance overlap, unsupported calibration
+domains, and architecture dependence remain part of the scientific result.
+
 ## 2. A common continuous scene model
 
 Let \(\boldsymbol x\) denote sky position, \(\nu\) frequency, and \(t\) time.
@@ -185,6 +216,26 @@ Diagonal inverse variance is a special case, not the general MOS or
 time-stream noise model. FTS samples, resampled spectra, detector common modes,
 and sky-subtracted products can have substantial covariance.
 
+For diagnostic evaluation, let
+\(\boldsymbol N=\boldsymbol C_N\boldsymbol C_N^\mathsf T\) on the valid-data
+subspace and define the whitened residual
+
+\[
+\boldsymbol r_{\rm white}
+= \boldsymbol C_N^{-1}(\boldsymbol y-\boldsymbol\mu).
+\]
+
+If the covariance is known and no parameters were estimated from these samples,
+\(Q=\|\boldsymbol r_{\rm white}\|_2^2\) has the corresponding chi-square null
+distribution. For an ordinary fitted linear model, a reduced chi-square also
+requires the fitted degrees of freedom. That quantity is not automatic for a
+regularized or nonlinear learned model. In that case report the mean squared
+whitened residual and calibrate its distribution with held-out folds or
+simulation. Autocorrelation \(C_r(\Delta a)\) with null intervals diagnoses
+remaining correlation; it does not prove that the noise is white. For
+heavy-tailed outliers use a declared robust loss such as Charbonnier, while low
+photon counts require an appropriate count or Poisson-Gaussian likelihood.
+
 The complete estimator is
 
 \[
@@ -243,9 +294,27 @@ After discretizing the spectra, this is a block linear inverse problem:
 \(\boldsymbol s\) contains source spectra and \(\boldsymbol c\) nuisance
 coefficients. Solving each source or wavelength independently discards useful
 constraints from repeated exposures, overlapping apertures, common sky, and
-spectral continuity. A joint solve can recover blended spectra if the columns
-of \([\boldsymbol K\ \boldsymbol G]\) are sufficiently distinct under the noise
-metric.
+spectral continuity. Conditional on fixed \(\boldsymbol c\), a Tikhonov source
+solve with \(\boldsymbol W=\boldsymbol N^{-1}\) and a coordinate-aware
+second-derivative operator \(\boldsymbol D_2\) satisfies
+
+\[
+\left(
+\boldsymbol K^\mathsf T \boldsymbol W \boldsymbol K
++ \lambda \boldsymbol D_2^\mathsf T \boldsymbol D_2
+\right)\widehat{\boldsymbol s}
+=\boldsymbol K^\mathsf T\boldsymbol W
+(\boldsymbol y-\boldsymbol G\boldsymbol c).
+\]
+
+The coordinate-aware construction matters for irregular channels and changes
+of frequency or wavelength units. The regularizer can stabilize an
+ill-conditioned deblend, but it selects a prior-dependent solution rather than
+resolving an exact spatial degeneracy. If \(\boldsymbol c\) is also unknown,
+solve the joint regularized block system for \([\boldsymbol s,\boldsymbol c]\)
+or marginalize the nuisance model. Blended spectra are identifiable only when
+the relevant columns of \([\boldsymbol K\ \boldsymbol G]\), calibration evidence,
+or declared priors distinguish them under the noise metric.
 
 ### 5.1 What a catalogue buys us
 
@@ -594,10 +663,29 @@ d(x)
 \]
 
 A production operator must also represent finite maximum delay and instrument
-line shape, single- or double-sided scans, irregular/missing delay samples,
+line shape, single- or double-sided scans, irregular or missing delay samples,
 zero-path-difference errors, phase, detector response, throughput mismatch,
-flags, scan direction, beams, pointing, and calibration. The differential sign
-and every linear adjoint require explicit tests.
+flags, scan direction, beams, pointing, and calibration. In a simple phase
+model, a ZPD offset contributes \(2\pi\nu\Delta x_{\rm zpd}/c\), while additional
+dispersion can contribute \(\phi_{\rm disp}(\nu)\); scan-dependent effects may
+retain further \(x\) dependence. In double-sided data, an uncorrected phase
+produces an odd interferogram contribution; more generally it appears as an
+imaginary component after complex spectral transformation.
+
+If the internal reference is modelled at \(T_0\) but is actually
+\(T_0+\Delta T\), its first-order contribution to the sky-minus-reference
+residual is
+
+\[
+\Delta I_{\nu,{\rm ref}}
+=-\frac{\partial B_\nu(T_0)}{\partial T}\,\Delta T.
+\]
+
+Dividing this expression by \(B_\nu(T_0)\) gives a fractional intensity error,
+not a chemical-potential amplitude. Its bias on a fitted scalar \(\mu\) must be
+computed by propagating \(\Delta I_{\nu,{\rm ref}}\) through the instrument and
+projecting it through the complete nuisance-aware \(\mu\) estimator. The
+differential sign and every linear adjoint require explicit tests.
 
 The raw-to-science chain is
 
@@ -760,13 +848,29 @@ T_e(\lambda,\boldsymbol x_f)
 +B_{efp}.
 \]
 
-\(K_{efq}\) includes target position, seeing/PSF, slit or fibre aperture,
-differential atmospheric refraction, guiding and morphology.
+\(K_{efq}(\lambda)\) includes target position, seeing/PSF, slit or fibre aperture,
+differential atmospheric refraction (DAR), guiding and morphology. Wavelength-dependent
+DAR induces a spatial centroid offset
+
+\[
+\Delta\boldsymbol x_f(\lambda)
+=\tan z\,[n(\lambda)-n(\lambda_0)]
+\widehat{\boldsymbol e}_{\rm zenith},
+\]
+
+where \(z\) is the zenith distance, not the airmass
+\(X\simeq\sec z\), and \(\widehat{\boldsymbol e}_{\rm zenith}\) is the
+unit tangent-plane direction toward the zenith, set by the parallactic angle.
+The expression is an angular displacement in radians under the small-refraction
+approximation; its sign follows the declared offset convention.
 \(\Omega_{ef}\) is the effective sky solid angle. \(T_e\) is telluric
 transmission. \(E_{\rm sky}\) contains airglow lines, scattered light and sky
 continuum. \(E_{\rm inst}\) contains pre-detection instrumental/thermal
 emission. \(\mathcal D\) applies throughput, trace geometry, wavelength
-solution, LSF, detector integration, cross-talk and calibration.
+solution, the fibre-dependent line-spread operator \(\boldsymbol L_{ef}\),
+detector integration, cross-talk and calibration. LSF variations across the
+focal plane must be included in \(\mathcal D\) to avoid residual sky-line
+subtraction spikes.
 
 This ordering distinguishes four operations that conventional “sky
 subtraction” can mix together:

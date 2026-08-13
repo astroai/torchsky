@@ -120,11 +120,43 @@ A surface-brightness prediction can be written schematically as
 
 The division by sky solid angle is appropriate when predicting a pixel-averaged
 surface brightness. It is omitted when \(y_{np}\) is an integrated pixel flux.
-Equivalently, the integral can be performed in detector coordinates if the WCS
-solid-angle Jacobian is included. This is not a cosmetic convention: data,
-weights, injected fluxes, and the forward operator must all use the same
-semantics. The compact \(B_{np}\) term denotes the correspondingly integrated
-or averaged additive background.
+Equivalently, the integral can be performed in detector coordinates
+\(\boldsymbol u=(u_x,u_y)\) by including the solid-angle Jacobian. If
+\(\widehat{\boldsymbol n}_n(\boldsymbol u)\) is the unit sky direction, its
+coordinate-invariant form is
+
+\[
+J_{\Omega,n}(\boldsymbol u)
+=\left\|
+\frac{\partial\widehat{\boldsymbol n}_n}{\partial u_x}
+\mathbin{\times}
+\frac{\partial\widehat{\boldsymbol n}_n}{\partial u_y}
+\right\|.
+\]
+
+Away from coordinate singularities, for right ascension \(\alpha\) and
+declination \(\delta\) expressed in radians, this is equivalently
+
+\[
+J_{\Omega,n}(\boldsymbol u)
+=|\cos\delta(\boldsymbol u)|
+\left|\det
+\frac{\partial(\alpha,\delta)}{\partial(u_x,u_y)}
+\right|.
+\]
+
+The pixel solid angle is therefore
+
+\[
+|\Omega^{\rm sky}_{np}|
+=\int_{\Omega^{\rm det}_{np}}
+J_{\Omega,n}(\boldsymbol u)\,\mathrm d^2\boldsymbol u.
+\]
+
+This is not a cosmetic convention: data, weights, injected fluxes, WCS
+distortions such as TAN-SIP or TPV, and the forward operator must all use the
+same semantics. The compact \(B_{np}\) term denotes the correspondingly
+integrated or averaged additive background.
 
 The response may be normalized so that
 \(\int R_n(\lambda)\,\mathrm d\lambda=1\), in which case the spectral integral
@@ -394,7 +426,33 @@ bounded cells. Mathematically, for a query point deep inside cell \(j\)
 \(\prod_k \sigma \to 1\) so \(u(\boldsymbol x) \to 0\). Increasing the positive
 temperatures \(\tau_p\) and \(\tau_s\) makes transitions progressively sharper.
 
-This surrogate exists for optimization. It is not the scientific output.
+This surrogate exists for optimization. Because both the softmax and union
+occupancy couple all cells, changing \(d_j\) changes every
+\(\widetilde w_k\), not only \(\widetilde w_j\). The complete geometry gradients
+are
+
+\[
+\frac{\partial \mathcal L}{\partial \boldsymbol s_j}
+= \sum_{\boldsymbol x}\sum_k
+\frac{\partial \mathcal L}
+{\partial \widetilde w_k(\boldsymbol x)}
+\frac{\partial \widetilde w_k(\boldsymbol x)}
+{\partial d_j(\boldsymbol x)}
+\left[-2(\boldsymbol x-\boldsymbol s_j)\right],
+\qquad
+\frac{\partial \mathcal L}{\partial r_j}
+= \sum_{\boldsymbol x}\sum_k
+\frac{\partial \mathcal L}
+{\partial \widetilde w_k(\boldsymbol x)}
+\frac{\partial \widetilde w_k(\boldsymbol x)}
+{\partial d_j(\boldsymbol x)}
+\left[-2r_j\right].
+\]
+
+Equivalently, automatic differentiation first accumulates
+\(\partial\mathcal L/\partial d_j\) through every ownership weight and then
+applies the two derivatives of \(d_j\) shown above.
+
 Final products must use detached hard geometry and exact or explicitly
 controlled pixel integration, because a soft boundary can change source flux
 and effective resolution.
@@ -411,6 +469,14 @@ A_{npj}=\int_{\Omega_{np}\cap C_j}\!\mathrm d^2\boldsymbol x,
 =\int_{\Omega_{np}\cap C_j}
 (\boldsymbol x-\boldsymbol s_j)\,\mathrm d^2\boldsymbol x.
 \]
+
+In practice, Torchsky first clips a convex local-tangent pixel polygon by the
+cell's radical half-planes. It then integrates the remaining polygon against
+the radius-\(r_j\) disk using analytic straight-segment and circular-arc area
+and first-moment contributions. Ordinary polygon clipping alone is not exact
+because the bounded cell can have circular arcs. Curved WCS pixel edges must be
+adaptively tessellated to a declared error budget; only the resulting
+tangent-plane polygon/disk intersection is analytic.
 
 At fixed geometry, the integrated, pre-PSF Foam prediction is linear in the
 appearance coefficients:
@@ -559,22 +625,36 @@ colours, or band-limited variability can be harmed by a smooth low-rank prior.
 This is why independent-appearance controls and source-population strata are
 part of the experiment.
 
-## 10. PSF and background: flexible, learned, and identifiable
+## 10. Mechanistic hybrid models: replacing rigid physical forms with flexible learned operators
 
 PSF and background models may vary spatially, spectrally, and temporally on
 different scales. Torchsky provides adaptive coordinate encoders and
 conditioned neural PSF/background models for this purpose. Their flexibility
 does not remove the need for calibration.
 
-Simple physical approximations are useful initializers and baselines, not a
+A central Torchsky design goal is to turn useful but incomplete physical
+approximations into mechanistic hybrid models. Instead of requiring a static
+Gaussian or Moffat PSF, or a low-order background polynomial, a hybrid keeps
+the physical contract while learning the structure that calibration data can
+identify:
+
+- **Mechanistic foundation:** evaluate the declared WCS and passband operators
+  to numerical tolerance; preserve radiometric semantics, causal ordering,
+  pixel-footprint integration, and matched linear adjoints; and enforce the
+  appropriate conservation or throughput law for each stage. The physical WCS
+  and calibration parameters still carry uncertainty.
+- **Flexible learned substrate:** represent calibration-supported
+  spatial-spectral-temporal response variation, focal-plane aberrations, stray
+  light, backgrounds, and detector non-uniformities with continuous neural
+  fields, adaptive coordinate encoders, or conditioned kernel banks.
+
+Simple physical approximations serve as useful initializers and baselines, not a
 ceiling on model fidelity. With sufficiently diverse calibration, repeated
 sources, dithers, wavelengths, times, and detector states, the data may support
 a learned spatial response, background, spectral response, noise model, or
 residual correction that is more accurate than a fixed functional form. A
-hybrid often retains the known geometry, radiometry, conservation laws, and
-causal ordering while learning the part that the approximation misses. A fully
-learned operator is also admissible when independent evidence identifies it and
-its domain of validity is reported.
+hybrid retains the known geometry, radiometry, conservation laws, and
+causal ordering while learning calibration-supported residual structure.
 
 Model flexibility is therefore selected from evidence rather than fixed in
 advance. Capacity sweeps should compare closed-form, hybrid, and learned models
@@ -589,6 +669,21 @@ Unrestricted joint learning is non-identifiable:
 - diffuse sky emission can be exchanged with additive background;
 - an astrometric offset can be exchanged with source position;
 - passband or gain errors can be exchanged with source colour.
+
+For a Gaussian-width PSF special case, one possible calibration anchor is
+
+\[
+\mathcal C_{\rm width}(\psi)
+=\frac12\sum_n
+\frac{[\sigma_{{\rm PSF},n}(\psi)-\sigma_{{\rm cal},n}]^2}
+{v_{\sigma,n}},
+\]
+
+where \(v_{\sigma,n}\) is the calibration variance. This constrains one width
+summary; it does not identify a general PSF or break every source/response
+degeneracy. A flexible spatial response instead needs direct evidence-space
+terms for calibrated kernels or detector responses, with held-out centroid,
+encircled-energy, asymmetry, halo, wavelength, time, and focal-plane checks.
 
 The signal model and nuisance model need not have the same form or capacity.
 The astronomical signal may use a known template family, a flexible INR/Foam,
