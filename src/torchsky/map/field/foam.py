@@ -918,7 +918,8 @@ def solve_spectral_power_pixel_affine_least_squares(
     initial_gradient_coefficients: Tensor | None = None,
     solve_device: torch.device | str | None = None,
     observation_batch_size: int | None = None,
-    preconditioner: Literal["diagonal", "cell_block"] = "diagonal",
+    preconditioner: Literal["diagonal", "cell_block", "auto"] = "diagonal",
+    preconditioner_max_bytes: int | None = None,
     diagnostics: dict[str, float] | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Jointly solve a spectral affine Foam through heterogeneous pixel grids.
@@ -1012,8 +1013,12 @@ def solve_spectral_power_pixel_affine_least_squares(
         raise ValueError("tolerance must be finite and positive")
     if iterations <= 0:
         raise ValueError("max_iterations must be positive")
-    if preconditioner not in ("diagonal", "cell_block"):
-        raise ValueError("preconditioner must be 'diagonal' or 'cell_block'")
+    if preconditioner not in ("diagonal", "cell_block", "auto"):
+        raise ValueError(
+            "preconditioner must be 'diagonal', 'cell_block', or 'auto'"
+        )
+    if preconditioner_max_bytes is not None and preconditioner_max_bytes <= 0:
+        raise ValueError("preconditioner_max_bytes must be positive")
 
     union_cell_areas = torch.stack(
         [operator.cell_areas.to(device=device) for operator in operators]
@@ -1033,13 +1038,31 @@ def solve_spectral_power_pixel_affine_least_squares(
     gradient_diagonal = torch.zeros(
         (cells, basis_count, 2), dtype=first.areas.dtype, device=device
     )
+    block_storage_bytes = (
+        cells * (3 * basis_count) ** 2 * first.areas.element_size()
+    )
+    # ponytail: cap automatic block construction at 512 MiB and 10% of free
+    # CUDA memory; replace this heuristic with allocator telemetry if real
+    # fragmented-device runs show that free bytes overestimate usable memory.
+    block_budget_bytes = 512 * 1024**2
+    if device.type == "cuda":
+        free_device_bytes, _ = torch.cuda.mem_get_info(device)
+        block_budget_bytes = min(block_budget_bytes, free_device_bytes // 10)
+    else:
+        block_budget_bytes = min(block_budget_bytes, 256 * 1024**2)
+    if preconditioner_max_bytes is not None:
+        block_budget_bytes = min(block_budget_bytes, int(preconditioner_max_bytes))
+    use_cell_block = preconditioner == "cell_block" or (
+        preconditioner == "auto"
+        and 2 * block_storage_bytes <= block_budget_bytes
+    )
     block_normal = (
         torch.zeros(
             (cells, 3 * basis_count, 3 * basis_count),
             dtype=first.areas.dtype,
             device=device,
         )
-        if preconditioner == "cell_block"
+        if use_cell_block
         else None
     )
 
@@ -1254,6 +1277,11 @@ def solve_spectral_power_pixel_affine_least_squares(
                 "relative_residual": float(relative_residual),
                 "converged": float(relative_residual <= threshold),
                 "preconditioner_cell_block": float(block_cholesky is not None),
+                "preconditioner_auto": float(preconditioner == "auto"),
+                "preconditioner_auto_budget_bytes": float(block_budget_bytes),
+                "preconditioner_block_construction_peak_bytes": float(
+                    2 * block_storage_bytes
+                ),
                 "preconditioner_storage_bytes": float(
                     diagonal_preconditioner.numel()
                     * diagonal_preconditioner.element_size()

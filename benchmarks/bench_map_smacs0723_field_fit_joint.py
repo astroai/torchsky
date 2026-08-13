@@ -724,7 +724,7 @@ def _refine_foam_from_observations_exact(
     max_iterations: int = 50,
     operator_storage_device: str = "model",
     observation_batch_size: int | None = None,
-    preconditioner: str = "diagonal",
+    preconditioner: str = "auto",
 ) -> dict[str, float]:
     """Refit fixed spectral-affine appearance through native detector pixels."""
     coefficients = getattr(model, "cell_coefficients", None)
@@ -935,6 +935,15 @@ def _refine_foam_from_observations_exact(
         "foam_exact_refinement_preconditioner_storage_bytes": solve_diagnostics[
             "preconditioner_storage_bytes"
         ],
+        "foam_exact_refinement_preconditioner_auto": solve_diagnostics[
+            "preconditioner_auto"
+        ],
+        "foam_exact_refinement_preconditioner_auto_budget_bytes": solve_diagnostics[
+            "preconditioner_auto_budget_bytes"
+        ],
+        "foam_exact_refinement_preconditioner_block_construction_peak_bytes": (
+            solve_diagnostics["preconditioner_block_construction_peak_bytes"]
+        ),
         "foam_exact_refinement_observation_batch_size": float(
             len(observations)
             if observation_batch_size is None
@@ -1386,9 +1395,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--foam-exact-preconditioner",
-        choices=("diagonal", "cell_block"),
-        default="diagonal",
-        help="Exact-solve preconditioner; cell_block uses more memory",
+        choices=("diagonal", "cell_block", "auto"),
+        default="auto",
+        help="Exact-solve preconditioner; auto applies a device-memory guard",
     )
     parser.add_argument(
         "--foam-extent",

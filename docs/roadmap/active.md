@@ -779,6 +779,10 @@ stacking-versus-INR/Foam depth result defined in
       (3.3x), while increasing preconditioner storage from 24,576 to 294,912
       bytes. Keep diagonal as the large-grid default until GPU CRF evidence
       justifies the O(cells * basis^2) block storage.
+      Exact-refinement profiles now default to `auto`, which selects the block
+      only when its estimated construction peak fits a conservative device
+      budget and records the selection, estimate, budget, and resident bytes;
+      the reusable low-level solver itself retains its diagonal default.
     - [ ] Validate host-batched exact refinement on aligned CRFs. Session
       `nuy2ew60` runs exact commit `6a963943b2ba68db33e18b87822a7bec73efd64b`
       with AstroAI notebook, CPU operator storage, batch size one, grid 32,

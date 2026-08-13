@@ -714,6 +714,9 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     local four-mode control it reduced PCG from 51 to 12 iterations and total
     batch-one solve time by 3.3x, with a declared 12x preconditioner-memory
     cost. The real CRF run must decide whether to promote it.
+    Exact-refinement benchmark profiles use a conservative device-memory-aware
+    `auto` selector and persist both the selection and its memory calculation;
+    the public low-level solver default remains diagonal.
   - [ ] Inspect contracted-grid exact run `nuy2ew60` at immutable commit
     `6a963943b2ba68db33e18b87822a7bec73efd64b`; its persistent output is
     `/arc/projects/ots/torchsky-runs/20260812-foam-exact-6a96394/`.

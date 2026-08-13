@@ -219,11 +219,38 @@ def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
         preconditioner="cell_block",
         diagnostics=block_diagnostics,
     )
+    auto_diagnostics: dict[str, float] = {}
+    auto = solve_spectral_power_pixel_affine_least_squares(
+        operators,
+        response_basis,
+        values,
+        ridge=1.0e-8,
+        max_iterations=100,
+        tolerance=1.0e-10,
+        preconditioner="auto",
+        diagnostics=auto_diagnostics,
+    )
+    fallback_diagnostics: dict[str, float] = {}
+    fallback = solve_spectral_power_pixel_affine_least_squares(
+        operators,
+        response_basis,
+        values,
+        ridge=1.0e-8,
+        max_iterations=100,
+        tolerance=1.0e-10,
+        preconditioner="auto",
+        preconditioner_max_bytes=1,
+        diagnostics=fallback_diagnostics,
+    )
 
     torch.testing.assert_close(actual[0], expected[0])
     torch.testing.assert_close(actual[1], expected[1])
     torch.testing.assert_close(block[0], expected[0])
     torch.testing.assert_close(block[1], expected[1])
+    torch.testing.assert_close(auto[0], expected[0])
+    torch.testing.assert_close(auto[1], expected[1])
+    torch.testing.assert_close(fallback[0], expected[0])
+    torch.testing.assert_close(fallback[1], expected[1])
     moved = operators[0].to("cpu")
     assert moved is operators[0]
     assert moved.storage_bytes > 0
@@ -236,6 +263,13 @@ def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
     assert block_diagnostics["preconditioner_storage_bytes"] > diagnostics[
         "preconditioner_storage_bytes"
     ]
+    assert auto_diagnostics["preconditioner_auto"] == 1.0
+    assert auto_diagnostics["preconditioner_cell_block"] == 1.0
+    assert auto_diagnostics["preconditioner_block_construction_peak_bytes"] <= (
+        auto_diagnostics["preconditioner_auto_budget_bytes"]
+    )
+    assert fallback_diagnostics["preconditioner_cell_block"] == 0.0
+    assert fallback_diagnostics["preconditioner_auto_budget_bytes"] == 1.0
 
 
 def _model() -> SpectralPowerFoam:
