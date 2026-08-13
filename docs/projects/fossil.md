@@ -6,6 +6,10 @@
 > This file is the executable Torchsky backlog; mission configuration, telemetry,
 > sensitivity assumptions, and publication estimators remain outside core.
 
+For the full mathematical formulation shared by FOSSIL component separation
+and MOS sky/telluric subtraction, including known-source and catalogue-free
+regimes, see [Source unmixing with known or unknown sources](source_unmixing_problem_formulation.md).
+
 ## Scientific Objective
 
 Use the standard primordial `mu` distortion as the precision and
