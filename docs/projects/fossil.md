@@ -1,8 +1,8 @@
 # FOSSIL/BISOU Mission-Neutral Torchsky Track
 
-> Distilled through 2026-07-28 from the user-authored
-> `fossil_primitives_plan.md` and `fossil_science.docx`. The untracked source
-> documents remain untouched.
+> Distilled through 2026-08-13 from the user-authored
+> `fossil_primitives_plan.md` and `fossil_science.docx`. Both untracked source
+> documents remain unchanged.
 > This file is the executable Torchsky backlog; mission configuration, telemetry,
 > sensitivity assumptions, and publication estimators remain outside core.
 
@@ -135,8 +135,12 @@ must not become a spacecraft packet decoder or a closed foreground ontology.
   zero-level semantics explicit. Every full-sky operation states what it
   preserves, removes, or estimates.
 - [ ] Add detector/time/scan/region/instrument/calibration `CrossFitPartition`
-  manifests and paired positive/negative `Injection` records with deterministic
-  provenance.
+  manifests whose entries are typed as repeated-science, nuisance-
+  generalization, spectral-prediction, calibration/null, or distribution-shift
+  partitions. Retain shared-training and calibration covariance when combining
+  results.
+- [ ] Add paired positive/negative `Injection` records with deterministic
+  provenance and distinct monopole/anisotropy target semantics.
 
 ### Phase A exit gate
 
@@ -163,6 +167,17 @@ mission-specific dependencies.
 - [ ] Add composable ZPD estimation, alignment, apodization, phase correction,
   baseline, temporal response, scan reversal, and leakage diagnostics rather
   than a monolithic FTS pipeline.
+- [ ] Gate uniform-OPD Nyquist aliases and the declared first-zero resolution,
+  then measure the actual instrument-line shape for irregular, masked,
+  apodized, phased, single-sided, and double-sided scans.
+- [ ] Add an end-to-end transfer report that injects monopole and anisotropic
+  spectral modes before OPD sampling and measures spectral mixing, angular mode
+  coupling, correlated output noise, and any removed monopole.
+- [ ] Define the mission-neutral systematic-budget record and propagation hook
+  for reference load, OPD/frequency/phase, detector response, chromatic beams
+  and sidelobes, throughput/internal emission, photon loading, scan-synchronous
+  modes, filtering, and map transfer. Mission-specific parameter values remain
+  outside core.
 
 ### Phase B exit gate
 
@@ -172,22 +187,33 @@ spectra under regular, irregular, masked, single-sided, and double-sided scans.
 ## Phase C — Discovery-Preserving Validation
 
 - [ ] Define distribution-agnostic `NuisanceLearner` and `NoiseLearner`
-  protocols with classical and user-supplied Torch adapters; no normalized
-  likelihood is required.
-- [ ] Add weighted `ProtectedSubspace` projections and report target/nuisance
-  overlap, effective target norm, condition number, and hard/soft protection
-  consequences.
+  protocols with classical and user-supplied Torch adapters. A normalized
+  likelihood is optional, but any probabilistic implementation must include its
+  normalization and declare the covariance model it scores.
+- [ ] Add weighted `ProtectedSubspace` projections for response-convolved target
+  banks and report target/nuisance overlap, effective target norm, condition
+  number, and hard/soft protection consequences. The precision bank includes
+  temperature shift, non-relativistic and relativistic `y`, `mu`, required
+  residual/recombination modes, and calibration/beam derivative tangents.
 - [ ] Add an `OrthogonalTargetEstimator` result containing fold estimates,
   attenuation, effective sensitivity, nuisance-architecture sensitivity,
-  partition sensitivity, and unresolved degeneracies.
+  partition sensitivity, conditional and marginalized target constraints,
+  nuisance/calibration predictive covariance, interval coverage, and unresolved
+  degeneracies.
 - [ ] Add an `OpenResidualProduct` exportable at sequence, interferogram,
   spectrum, and full-sky levels, with observed, targeted, predictable nuisance,
   unexplained, whitened unexplained, context, and provenance fields.
-- [ ] Add standard null constructors for detector, time/half-mission,
+- [ ] Add role-aware null constructors for detector, time/half-mission,
   scan-direction, sky/reference, calibration-state, odd/even sweep,
-  frequency-subset, and shuffled-housekeeping differences.
+  frequency-subset, sky-region, instrument/simulator-family, and shuffled-
+  housekeeping contrasts. Do not treat reference states, frequency subsets, or
+  sky regions as exchangeable repeated measurements of a global monopole.
 - [ ] Add paired-injection target response, nonlinearity, cross-talk,
   false-positive, detection-efficiency, shift-test, and identifiability reports.
+- [ ] Separate candidate discovery from characterization, align relearned
+  subspaces with noise-weighted principal angles, and calibrate a global
+  maximum-statistic/FWER or declared FDR by rerunning basis, capacity, and
+  candidate selection over the complete null ensemble.
 
 ### Phase C exit gate
 
@@ -199,7 +225,9 @@ unsupported regimes, deterministic provenance, throughput, and peak memory.
 
 - [ ] Recover the standard `mu ~ 2e-8` target under foreground and instrument
   misspecification using identical diagnostics for parametric/moment, PCA/NMF,
-  learned-basis, continuous-field, and protected hybrid models.
+  learned-basis, continuous-field, and protected hybrid models. Report both
+  conditional and marginalized `mu`, interval coverage, and separate monopole
+  and anisotropy transfer functions.
 - [ ] Produce a full-sky open residual atlas ranked by detector/scan/time
   reproducibility, celestial consistency, calibration stability, spectrum, sky
   morphology, and external-tracer correlation.
@@ -209,18 +237,36 @@ unsupported regimes, deterministic provenance, throughput, and peak memory.
 - [ ] Add joint monopole/anisotropy residual modes and cross-correlations with
   CMB T/E/B, CIB, line-intensity, and large-scale-structure tracers.
 - [ ] With a thermalization theorist, test robust residuals against the broad
-  standard Compton/double-Compton/bremsstrahlung thermalization manifold.
+  standard Compton/double-Compton/bremsstrahlung thermalization manifold while
+  propagating interpolation and theoretical uncertainty in that manifold.
+- [ ] Run the allocated FOSSIL systematic budget through the complete
+  time/interferogram/map/estimator path, including calibrator-temperature,
+  detector, scan-direction, reference-state, and time/half-mission jackknives.
+- [ ] Add a MOS proof profile with source-, atmospheric-emission-, and
+  instrument-path response operators, within-exposure variability, physical
+  telluric bounds, illumination/LSF mismatch, total-loading photon noise,
+  nuisance predictive uncertainty, and coverage-aware output spectra.
+- [ ] Compare the MOS profile on identical inputs against the instrument
+  pipeline, native-detector 2D B-spline sky modeling, OH-family rescaling,
+  PCA/ZAP, Molecfit, and the best validated operational hybrid; score science
+  bias, false lines, covariance, and transfer near bright sky and telluric
+  features.
 
 ## Required Benchmark Tiers
 
 - [ ] Exact fixtures: coordinate/radiometric round trips, response integrals,
-  operator adjoints, differential signs, FTS lines/blackbodies, and monopole
-  contracts.
+  operator adjoints, differential signs, FTS lines/blackbodies, OPD alias and
+  finite-delay transfer, MOS identical-illumination limits, source-plus-sky
+  Poisson variance, nuisance-variance propagation, and monopole contracts.
 - [ ] Controlled stress: spatially varying spectral curvature, low-rank+sparse
   nuisance, correlated/non-stationary noise, missing data, response/phase/gain
-  shifts, calibration drift, target overlap, and withheld morphologies.
+  shifts, calibration drift, reference gradients, beam/sidelobe mismatch,
+  detector nonlinearity/time response, total photon loading, MOS illumination,
+  telluric saturation, flexure, scattered light/persistence, target overlap, and
+  withheld morphologies.
 - [ ] Real-background injections: observed multi-frequency/spectroscopic
-  nuisance backgrounds so claims do not depend on one simulator family.
+  nuisance backgrounds so claims do not depend on one simulator family. Require
+  interval coverage and rerun adaptive discovery selection on null controls.
 
 ## Immediate Ordering Relative To The Active Torchsky Cycle
 
@@ -232,5 +278,7 @@ correct, bounded map operators. The next implementation order is:
 2. promote spectral response/channel mixing and gate its adjoint;
 3. add weighted protected-subspace projections;
 4. implement cross-fit partitions and paired injections;
-5. implement full-sky spectral/monopole/open-residual products;
-6. only then start decoded sequences and experimental FTS.
+5. add nuisance/calibration predictive covariance and coverage diagnostics;
+6. implement full-sky spectral/monopole/open-residual products;
+7. add global discovery calibration and subspace-stability diagnostics;
+8. only then start decoded sequences, experimental FTS, and the MOS profile.

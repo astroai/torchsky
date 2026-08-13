@@ -509,6 +509,27 @@ It is not automatically new physics or a new astronomical source. It is a
 ranked candidate product that can be tested for celestial consistency,
 cross-view stability, calibration sensitivity, and external correlations.
 
+### 6.6 Discovery, characterization, and multiplicity
+
+A flexible residual basis is selected from the data, so the largest fitted mode
+does not have the null distribution of one prespecified template. Discovery and
+characterization must use separate evidence. One valid design uses discovery
+folds to propose a spectral-spatial subspace, freezes that subspace and its
+selection rule, then estimates amplitudes and uncertainties on independent
+characterization folds. When modes are relearned in several folds, compare
+subspaces with principal angles or canonical correlations rather than matching
+arbitrary component labels.
+
+The discovery statistic must be calibrated by rerunning the complete selection
+pipeline on null simulations, sign/scan/detector jackknives, or exchangeable
+surrogates. Use a maximum-statistic or family-wise-error gate for a small
+candidate set, or a declared false-discovery-rate procedure for an atlas. The
+null ensemble must include architecture and capacity selection, not only the
+final frozen fit. Follow-up spectra withheld from both nuisance training and the
+simulator family test sensitivity to unknown shapes. A thermalization-manifold
+test must propagate theoretical interpolation and numerical uncertainty in the
+manifold; distance from one deterministic grid is not a discovery significance.
+
 ## 7. Identifiability and unavoidable gauges
 
 Unmixing is identifiable only when the data and constraints distinguish the
@@ -635,6 +656,32 @@ Uncertainty must be based on the underlying independent observational units or
 on repeated non-overlapping partitions, not on a naive standard error over the
 \(K\) fold estimates.
 
+Cross-fitting prevents direct reuse of a held-out sample, but it does not make
+the nuisance prediction known. Let \(\boldsymbol C_{n,k}\) be the predictive
+covariance of \(\widehat{\boldsymbol n}_{-k}\), and let
+\(\boldsymbol J_{\psi,k}\boldsymbol C_\psi
+\boldsymbol J_{\psi,k}^{\mathsf T}\) propagate independently calibrated
+response uncertainty into fold \(k\). When these errors are conditionally
+independent of held-out detector noise, use
+
+\[
+\boldsymbol V_k
+=\boldsymbol N_k+\boldsymbol C_{n,k}
++\boldsymbol J_{\psi,k}\boldsymbol C_\psi
+ \boldsymbol J_{\psi,k}^{\mathsf T}
+\]
+
+in place of \(\boldsymbol W_k^{-1}\). If independence does not hold, include the
+cross-covariance terms in
+\(\operatorname{Cov}(\boldsymbol y_k-\widehat{\boldsymbol n}_{-k})\).
+For a fixed target response, the conditional generalized least-squares variance
+is \((\boldsymbol t_k^{\mathsf T}\boldsymbol V_k^{-1}
+\boldsymbol t_k)^{-1}\). Joint nonlinear fits should instead profile or
+marginalize nuisance and calibration parameters, or use an independently
+validated influence-function or sandwich approximation. In every case,
+injections and repeated independent units must demonstrate interval coverage;
+fold scatter alone is not an uncertainty estimate.
+
 ## 9. Paired injections and target response
 
 For target signal \(\boldsymbol s\) and amplitude \(a\), define the symmetric
@@ -717,6 +764,24 @@ retain further \(x\) dependence. In double-sided data, an uncorrected phase
 produces an odd interferogram contribution; more generally it appears as an
 imaginary component after complex spectral transformation.
 
+#### Sampling and end-to-end transfer functions
+
+Under the OPD convention above, uniform sampling with spacing \(\Delta x\) has
+Nyquist frequency \(\nu_{\rm Nyq}=c/(2\Delta x)\). For a symmetric unapodized
+scan extending to maximum absolute delay \(x_{\max}\), the first-zero spectral
+resolution is approximately \(\Delta\nu=c/(2x_{\max})\). Sidedness, apodization,
+irregular sampling, missing samples, phase correction and the chosen estimator
+modify the instrument line shape and channel covariance. The exact convention
+and measured transfer function must therefore replace these ideal formulas in a
+science analysis.
+
+An end-to-end signal-transfer report must inject monopole and anisotropic
+spectral modes before OPD sampling and propagate them through flagging, phase
+correction, spectral estimation, calibration and mapmaking. It must measure
+aliasing from above the modeled band, attenuation and mixing between spectral
+templates, angular/spectral mode coupling, correlated output noise and any
+monopole removed by baseline or mapmaking operations.
+
 If the internal reference is modelled at \(T_0\) but is actually
 \(T_0+\Delta T\), its first-order contribution to the sky-minus-reference
 residual is
@@ -731,6 +796,37 @@ not a chemical-potential amplitude. Its bias on a fitted scalar \(\mu\) must be
 computed by propagating \(\Delta I_{\nu,{\rm ref}}\) through the instrument and
 projecting it through the complete nuisance-aware \(\mu\) estimator. The
 differential sign and every linear adjoint require explicit tests.
+
+#### Required FOSSIL systematic-error budget
+
+A scalar reference-temperature perturbation is only one calibration mode. A
+FOSSIL precision analysis must propagate a parameterized or empirical budget
+covering at least:
+
+- internal-reference temperature, emissivity, reflectance and spatial/temporal
+  thermal gradients;
+- OPD metrology, frequency-scale error, ZPD drift, phase and instrument-line-
+  shape uncertainty;
+- detector gain, offset, nonlinearity, temporal response, saturation and
+  correlated readout modes;
+- chromatic and asymmetric beams, far sidelobes, detector beam mismatch,
+  pointing and scan-to-map transfer;
+- sky/reference throughput mismatch, internal emission, polarization leakage
+  where relevant, and scan-synchronous signals;
+- signal-dependent photon noise from the total sky, reference and instrument
+  loading, together with detector and correlated noise;
+- flagging, gap filling, filtering, spectral estimation and mapmaking transfer
+  functions.
+
+Each mode needs a prior or independent calibration source, a derivative or
+nonlinear response through the science estimator, an allocated bias and
+variance contribution, and a null test tied to an instrument symmetry or
+observing redundancy. Detector, scan direction, reference state, calibrator
+temperature and time/half-mission jackknives must be exercised on the complete
+time-ordered or interferogram pipeline, not only on final maps.
+The PIXIE calibration and systematic-error studies in references 20--21 provide
+relevant worked examples, although the final FOSSIL budget must follow its own
+hardware and scan design.
 
 The raw-to-science chain is
 
@@ -788,6 +884,25 @@ sky/reference and FTS operators, and split manifest. The result reports
 stability, foreground-prediction error, null failures, residual covariance,
 throughput, and memory.
 
+Protection applies to response-convolved templates, not to analytic spectra
+before the instrument. The precision target bank should jointly include the
+CMB temperature-shift mode, non-relativistic and relativistic \(y\) modes, the
+standard \(\mu\) mode, recombination/residual modes required at the achieved
+sensitivity, and any other declared cosmological component. Calibration and
+beam derivatives belong in a jointly fitted or marginalized nuisance tangent
+space. Report both the conditional \(\mu\) constraint with other modes fixed and
+the marginalized constraint with foreground, calibration and neighboring
+spectral modes free. Protecting only one nominal \(\mu\) vector can transfer
+power parallel to omitted modes into the fitted \(\mu\) amplitude.
+
+The \(\mu\) monopole and a \(\mu\)-anisotropy map are distinct observables. The
+monopole requires preserved absolute zero level and sky/reference calibration.
+An anisotropy reconstruction requires an angular transfer function, beam and
+mask treatment, and split cross-spectra; its correlations with CMB \(T/E\) or
+large-scale-structure tracers do not substitute for a monopole measurement.
+Sensitivity gains from spatial information must state whether they arise from
+foreground control of the monopole, direct anisotropy information, or both.
+
 The physical questions include whether primordial power remains nearly scale
 invariant over additional decades, whether inflationary features or running
 exist, whether enhanced small-scale power or isocurvature is present, and
@@ -815,6 +930,15 @@ The open-discovery sequence is:
 Unknown-shape injections must be withheld from nuisance-model development.
 Detection efficiency should be reported as a function of spectral morphology
 and nuisance overlap, not only particle parameters.
+
+Candidate proposal, statistical confirmation and physical characterization
+must use the discovery/characterization separation in Section 6.6. Calibrate a
+global maximum-mode or false-discovery statistic by rerunning basis selection,
+capacity selection and candidate ranking on the complete null ensemble. Align
+relearned residual subspaces across splits by their noise-weighted principal
+angles, not by arbitrary mode number. A candidate is not assigned physical
+significance until it survives this global gate, the instrument-systematic
+budget, independent science splits and simulator-family holdout.
 
 The corresponding fundamental questions are whether the dark sector exchanged
 energy or photon number with the Standard Model during the distortion era,
@@ -862,44 +986,67 @@ a specialist once the measurement pipeline is trusted.
 
 ### 10.7 Scientifically independent FOSSIL splits
 
-Random frequency pixels are not independent folds. Useful split units include:
+Random frequency pixels are not independent folds, and not every useful split
+is a repeated measurement of the same estimand. The split manifest must assign
+each partition one of the following roles:
 
-- detector or detector group;
-- time block or half mission;
-- scan and scan direction;
-- sky versus internal-reference state;
-- calibration state;
-- odd/even FTS sweep;
-- sky region;
-- frequency subset, used as a held-out spectral-prediction test rather than an
-  exchangeable replicate;
-- held-out instrument or simulator family;
-- shuffled housekeeping as a negative control.
+- **Repeated-science splits:** detector or detector group, appropriate
+  time/half-mission blocks, scan direction and odd/even FTS sweeps can provide
+  approximate repeated measurements after their different response and noise
+  are propagated. These support consistency tests and split cross-statistics.
+- **Nuisance-generalization splits:** sky regions test foreground prediction and
+  domain shift. They are not independent measurements of a global monopole,
+  which is present in every region and coupled through common calibration.
+- **Spectral-prediction splits:** held-out frequency ranges test interpolation
+  or extrapolation. Their target response and nuisance degeneracy differ, so
+  they are not exchangeable replicates and must be compared through the full
+  observation model.
+- **Calibration/null contrasts:** sky versus internal-reference state,
+  calibrator temperature/state, instrument symmetry and shuffled housekeeping
+  test calibration or systematic models. A reference state contains no
+  celestial target and is not a science fold.
+- **Distribution-shift tests:** a held-out instrument, hardware configuration or
+  simulator family measures portability beyond the development distribution;
+  it does not increase the nominal experiment's sample size.
 
-Target estimates must agree across appropriate splits after accounting for
-their different response and noise. Frequency subsets generally have different
-target responses and nuisance degeneracies, so their estimates must be compared
-through the full observation model rather than combined as identically
-distributed folds. A component that follows a detector or scan state but not
-celestial coordinates is not an astrophysical discovery.
+Target estimates must agree across applicable repeated-science splits within
+their propagated covariance. A component that follows detector, scan,
+calibrator or housekeeping state but not celestial coordinates is not an
+astrophysical discovery. Shared calibration parameters and overlapping training
+sets induce cross-split covariance and must be retained when combining results.
 
 ## 11. Application II: MOS sky and telluric subtraction
 
 ### 11.1 MOS measurement equation
 
 Index exposure by \(e\), fibre/slit by \(f\), and detector spectral pixel by
-\(p\). A useful model is
+\(p\). A useful staged model is
 
 \[
 \mu_{efp}
-=\mathcal D_{efp}\!\left\{
-T_e(\lambda,\boldsymbol x_f)
-\sum_q K_{efq}(\lambda)S_q(\lambda,t_e)
-+\Omega_{ef}(\lambda)E_{\rm sky}(\lambda,\boldsymbol x_f,t_e)
-+E_{\rm inst}(\lambda,f,t_e)
+=\mathcal A_e\!\left[
+\mathcal D^{\rm src}_{efp}\!\left\{
+T_e(\lambda,\boldsymbol x_f,t)
+\left(
+\sum_q K_{efq}(\lambda,t)S_q(\lambda,t)
++\Omega_{ef}(\lambda,t)I_{\rm ext}(\lambda,\boldsymbol x_f,t)
+\right)\right\}
++\mathcal D^{\rm sky}_{efp}\!\left\{
+\Omega_{ef}(\lambda,t)E_{\rm atm}(\lambda,\boldsymbol x_f,t)
 \right\}
++\mathcal D^{\rm inst}_{efp}\!\left\{
+E_{\rm inst}(\lambda,f,t)
+\right\}
+\right]
 +B_{efp}.
 \]
+
+\(\mathcal A_e\) integrates over the exposure for count-like data or averages
+over it for count-rate data; the declared calibration determines which. This
+operation is required when airglow, water vapour, seeing, guiding or flexure
+changes appreciably within one exposure. \(I_{\rm ext}\) is extraterrestrial
+diffuse emission and therefore receives the same atmospheric transmission as
+compact sources.
 
 \(K_{efq}(\lambda)\) includes target position, seeing/PSF, slit or fibre aperture,
 differential atmospheric refraction (DAR), guiding and morphology.
@@ -916,19 +1063,33 @@ where \(z\) is the zenith distance, not the airmass
 unit tangent-plane direction toward the zenith, set by the parallactic angle.
 The expression is an angular displacement in radians under the small-refraction
 approximation; its sign follows the declared offset convention.
-\(\Omega_{ef}\) is the effective sky solid angle. \(T_e\) is telluric
-transmission. In this convention, \(E_{\rm sky}\) is the emergent atmospheric
-radiance at the instrument entrance, including atmospheric self-absorption, so
-the telluric transmission \(T_e\) multiplies only extraterrestrial source
-light. A more detailed radiative-transfer operator may replace this separation,
-but it must not apply atmospheric attenuation twice. \(E_{\rm sky}\) contains
-airglow lines, scattered light and sky continuum. \(E_{\rm inst}\) contains
-pre-detection instrumental/thermal emission. \(\mathcal D\) applies throughput,
-trace geometry, wavelength
-solution, the fibre-dependent line-spread operator \(\boldsymbol L_{ef}\),
-detector integration, cross-talk and calibration. LSF variations across the
-focal plane must be included in \(\mathcal D\) to avoid residual sky-line
-subtraction spikes.
+\(\Omega_{ef}\) is the effective sky solid angle. The physical transmission
+satisfies \(0\leq T_e\leq1\). Nearly saturated telluric intervals contain little
+or no recoverable source information and must be flagged or reported with their
+large model dependence rather than repaired by unconstrained division.
+\(E_{\rm atm}\) is emergent atmospheric radiance at the instrument entrance,
+including atmospheric self-absorption; a more detailed radiative-transfer
+operator may replace this separation, but it must not apply atmospheric
+attenuation twice. It contains airglow lines, scattered light and atmospheric
+continuum. \(E_{\rm inst}\) contains pre-detection instrumental/thermal emission.
+
+The three \(\mathcal D\) operators apply the appropriate throughput, trace
+geometry, wavelength solution, fibre-dependent line-spread response, detector
+integration, cross-talk and calibration for each illumination path. They may
+coincide in an idealized instrument, but fibre near/far-field illumination,
+focal-ratio degradation, slit illumination, pupil dependence and the optical
+stage where emission enters can make source, extended-sky and instrument
+responses measurably different. Non-local scattered light, ghosts, persistence
+and detector cross-talk must be explicit operators or late background terms,
+not absorbed silently into a local sky spectrum. LSF variations across the
+focal plane and between illumination paths must be included to avoid residual
+sky-line subtraction spikes.
+
+In photoelectron-count units, photon noise depends on the total incident source,
+sky and instrument loading before subtraction. Read noise, dark current and
+correlated detector modes add further covariance, and uncertainty in the fitted
+sky/telluric prediction must be propagated as in Section 8. Subtracting a mean
+sky model removes its expectation, not its shot noise or prediction variance.
 
 This ordering distinguishes four operations that conventional “sky
 subtraction” can mix together:
@@ -1006,24 +1167,56 @@ that evidence.
 
 ### 11.5 A staged MOS solve
 
-1. **Calibrate geometry and response.** Fit trace, WCS/assignment, wavelength,
-   throughput, LSF, fibre cross-talk and detector covariance from independent
+1. **Calibrate geometry and illumination-dependent response.** Fit trace,
+   WCS/assignment, wavelength, source/extended-sky LSF and throughput, fibre
+   cross-talk, scattered light and detector covariance from independent
    calibration evidence.
 2. **Initialize additive components.** Use sky fibres, source-excluded regions,
    robust cross-fibre structure, and instrument backgrounds without assuming
    every control is blank.
 3. **Initialize telluric transmission.** Use standards, atmospheric metadata,
-   repeated sources, and physically valid positive transmission.
+   repeated sources and radiative-transfer constraints with
+   \(0\leq T\leq1\); flag saturated intervals with inadequate information.
 4. **Fit known or sparse source components.** Propagate every component through
    the same aperture, PSF, trace and LSF operators.
 5. **Cross-fit nuisance models.** Hold out fibres, exposures, time blocks,
-   detector regions, or targets rather than random detector pixels.
+   detector regions, or targets rather than random detector pixels, and retain
+   predictive covariance for the held-out nuisance estimate.
 6. **Jointly refine within calibration priors.** Prevent the source target from
    redefining its own LSF, sky or telluric model.
-7. **Export target spectra and open residuals.** Preserve 2D and 1D residual
+7. **Propagate uncertainty.** Combine source/sky photon noise, detector
+   covariance, nuisance predictive covariance and response/calibration
+   uncertainty; validate interval coverage with independent injections.
+8. **Export target spectra and open residuals.** Preserve 2D and 1D residual
    context for line searches and systematic diagnosis.
 
-### 11.6 MOS validation endpoints
+### 11.6 Required MOS comparators
+
+The strongest baseline depends on the instrument and observing mode. Validation
+must select and tune conventional comparators without test-set access and must
+not use a per-fibre median as the only reference. The minimum candidate set is:
+
+- the instrument pipeline's sky-fibre, offset-sky, nod-and-shuffle or dedicated-
+  sky procedure, including its standard extraction;
+- native, unrectified 2D wavelength/trace-aware B-spline sky modeling where raw
+  detector geometry is available;
+- line-family or vibrational-group OH rescaling with wavelength/flexure and LSF
+  correction for near-infrared data;
+- a segmented PCA residual method such as ZAP where the data geometry supports
+  it;
+- a physical telluric fit such as Molecfit, with its fitted molecular columns,
+  wavelength and LSF degrees of freedom;
+- the best validated hybrid of these steps used operationally by the
+  instrument team.
+
+All methods must receive the same raw or calibrated detector samples, masks,
+calibrations and allowed external metadata. Compare both native-detector and
+rectified/extracted paths when resampling is part of the scientific question,
+and propagate each path's covariance and transfer function to the same final
+science scorer. References 16--19 describe the conventional native-2D, OH,
+telluric and PCA families named above.
+
+### 11.7 MOS validation endpoints
 
 The primary metric depends on the downstream science. A complete report should
 include:
@@ -1039,6 +1232,16 @@ include:
 - covariance and autocorrelation of the subtracted spectrum;
 - performance versus fibre, focal-plane position, time, airmass, source
   brightness, crowding and spectral morphology;
+- performance versus distance from bright sky lines in local LSF-width units,
+  sky brightness and within-exposure sky variability;
+- performance versus telluric transmission, including separately reported
+  saturated or masked intervals;
+- sensitivity to wavelength/flexure error, source/sky illumination mismatch,
+  LSF uncertainty, scattered light, persistence and rectification;
+- calibrated confidence-interval coverage after nuisance and response
+  uncertainty propagation;
+- for radial-velocity work, dependence on barycentric correction, spectral-
+  template mismatch, wavelength zero point and LSF uncertainty;
 - throughput, transfer volume, and peak memory.
 
 A low RMS can be scientifically worse if it attenuates narrow lines. Line
@@ -1115,8 +1318,15 @@ pipeline.
   interferogram, spectrum, map and full-sky levels;
 - sphere-native and delay-native adaptive encoders;
 - catalogue-free sparse/unknown-object proposal and refit machinery;
-- covariance-aware uncertainty propagation through learned non-stationary
-  operators.
+- predictive covariance and calibrated uncertainty propagation through learned
+  non-stationary nuisance and response operators;
+- FTS alias, spectral/angular transfer-function and instrument-systematic budget
+  reports;
+- illumination-path-aware MOS source/sky/instrument operators with
+  within-exposure integration and photon-loading covariance;
+- selection-aware discovery statistics with subspace alignment and global
+  false-positive control;
+- reproducible FOSSIL and MOS comparator profiles with one common scorer.
 
 The implementation order from the FOSSIL roadmap remains appropriate:
 
@@ -1126,7 +1336,8 @@ The implementation order from the FOSSIL roadmap remains appropriate:
 4. cross-fit partitions and paired injections;
 5. full-sky spectral/monopole/open-residual products;
 6. decoded sequences and experimental FTS;
-7. MOS and FOSSIL end-to-end profiles built on those shared primitives.
+7. uncertainty propagation, transfer-function and global-discovery reports;
+8. MOS and FOSSIL end-to-end profiles built on those shared primitives.
 
 ## 14. Benchmark hierarchy
 
@@ -1139,7 +1350,11 @@ The implementation order from the FOSSIL roadmap remains appropriate:
 - constant-source aperture and flux conservation;
 - identity-transmission and zero-emission limits;
 - FTS delta lines and blackbodies;
+- FTS Nyquist aliases, finite-OPD line shape and apodization transfer;
 - monopole preservation/removal contracts;
+- identical-illumination MOS limits in which source, sky and instrument
+  response operators reduce to the declared common operator;
+- Poisson source-plus-sky variance before and after sky estimation;
 - permutation and scale-gauge invariance.
 
 ### 14.2 Controlled stress tests
@@ -1151,6 +1366,10 @@ The implementation order from the FOSSIL roadmap remains appropriate:
 - missing samples, fibres and channels;
 - response, wavelength, phase, gain and beam/LSF shifts;
 - calibration drift and focal-plane variation;
+- calibrator emissivity/thermal gradients, chromatic beams, sidelobes, detector
+  nonlinearity and signal-dependent photon noise;
+- source/extended-sky illumination mismatch, within-exposure airglow/telluric
+  variation, saturated telluric regions, scattered light and persistence;
 - target/nuisance overlap;
 - withheld source or distortion morphologies;
 - unsupported sky, detector, delay or atmospheric regimes.
@@ -1161,7 +1380,9 @@ Inject known distortions, spectra, or lines into observed multi-frequency and
 spectroscopic nuisance backgrounds. This tests the estimator against structure
 not generated by the same simulator used to design it. Preserve the original
 control observation and use paired identifiers so differences are attributable
-to the injection.
+to the injection. Check empirical confidence-interval coverage, not only point
+recovery, and rerun adaptive candidate selection on null backgrounds when a
+global discovery statistic is claimed.
 
 ## 15. Required invariants
 
@@ -1169,8 +1390,9 @@ to the injection.
    point of addition.
 2. **Flux:** a normalized PSF/beam plus complete aperture conserves point-source
    flux away from true boundaries.
-3. **Identity atmosphere:** \(T=1\), \(E_{\rm sky}=0\), and zero instrumental
-   background reduce the MOS operator to source response plus noise.
+3. **Identity atmosphere:** \(T=1\), \(E_{\rm atm}=0\), zero diffuse celestial
+   emission, and zero instrumental background reduce the MOS operator to source
+   response plus noise.
 4. **No source:** zero source amplitudes reduce to the nuisance-only prediction
    without an invented catalogue component.
 5. **Known isolated source:** an identity spatial/spectral response recovers its
@@ -1191,6 +1413,15 @@ to the injection.
     influences nuisance fitting or normalization for that fold.
 13. **Open accounting:** observed equals target plus known source plus
     predictable nuisance plus open residual under one declared convention.
+14. **FTS sampling:** a tone above the uniform-OPD Nyquist frequency aliases to
+    its predicted in-band frequency, while the declared anti-alias/band model
+    either excludes or propagates that power.
+15. **Uncertainty:** a sky or nuisance estimate with nonzero predictive variance
+    increases, rather than decreases, the propagated target variance.
+16. **MOS illumination limit:** setting the source, extended-sky and instrument
+    response operators equal reproduces the simpler common-operator equation.
+17. **Discovery calibration:** the complete adaptive selection pipeline attains
+    its declared family-wise error or false-discovery rate on null ensembles.
 
 ## 16. Scientific objectives and claim gates
 
@@ -1209,8 +1440,12 @@ The ordered programme is:
 
 A weak-target result is incomplete unless it reports target bias, attenuation,
 effective sensitivity, target/nuisance overlap, fold and architecture
-stability, null failures, residual covariance, unsupported regimes,
-deterministic provenance, throughput and peak memory.
+stability, nuisance/calibration uncertainty and interval coverage, end-to-end
+spectral/angular transfer functions, the allocated systematic-error budget,
+null failures, residual covariance, unsupported regimes, deterministic
+provenance, throughput and peak memory. An open-discovery claim additionally
+requires a global selection-aware significance or false-discovery gate and
+independent characterization evidence.
 
 ### 16.2 MOS
 
@@ -1225,7 +1460,11 @@ The primary claim should be tied to a science measurement, for example:
 The comparison must use identical raw/calibrated samples, masks, response
 metadata, split units, injections, target extraction, and final scorer. Beating
 a per-fibre median sky model is useful engineering evidence; a scientific claim
-requires a strong conventional sky/telluric baseline and measured covariance.
+requires the applicable conventional suite in Section 11.6, illumination-aware
+response checks, measured covariance including nuisance prediction uncertainty,
+and calibrated interval coverage. Report performance near bright sky lines,
+through low-transmission telluric regions and under flexure/LSF shifts, not only
+an average over easy wavelengths.
 
 ### 16.3 FOSSIL research deliverables
 
@@ -1307,10 +1546,11 @@ parametrizations listed there. Mission values above were checked against the
 cited June 2026 public slides and remain dated concept forecasts rather than
 Torchsky measurements.
 
-For traceability, the complete reference set inherited from that source note is
-listed below. The public mission slides and the 2026 *Physical Review D* entries
-were rechecked in August 2026; the remaining bibliography has not been
-exhaustively re-verified for this formulation.
+For traceability, the reference set inherited from that source note and the
+methodological sources used in this formulation are listed below. The public
+mission slides, 2026 *Physical Review D* entries, and references 16--21 were
+rechecked in August 2026; the remaining bibliography has not been exhaustively
+re-verified for this formulation.
 
 1. B. Maffei, “Measuring spectral distortions with FOSSIL and BISOU,”
    Challenges at the CMB Frontier (2026),
@@ -1357,6 +1597,24 @@ exhaustively re-verified for this formulation.
 15. CNES/IAS doctoral project description, “Preparing for CMB spectral
     distortion measurement with space missions” (2026),
     [project description](https://recrutement.cnes.fr/en/annonce/4148993-26-212-preparing-for-cmb-spectral-distortion-measurement-with-space-missions-91405-orsay).
+16. D. D. Kelson, “Optimal Techniques in Two-dimensional Spectroscopy:
+    Background Subtraction for the 21st Century,” *PASP* 115, 688--699 (2003),
+    [doi:10.1086/375502](https://doi.org/10.1086/375502).
+17. R. I. Davies, “A method to remove residual OH emission from near-infrared
+    spectra,” *MNRAS* 375, 1099--1105 (2007),
+    [doi:10.1111/j.1365-2966.2006.11383.x](https://doi.org/10.1111/j.1365-2966.2006.11383.x).
+18. A. Smette et al., “Molecfit: A general tool for telluric absorption
+    correction. I. Method and application to ESO instruments,” *A&A* 576, A77
+    (2015), [doi:10.1051/0004-6361/201423932](https://doi.org/10.1051/0004-6361/201423932).
+19. K. T. Soto et al., “ZAP---Enhanced PCA Sky Subtraction for Integral Field
+    Spectroscopy,” *MNRAS* 458, 3210--3220 (2016),
+    [doi:10.1093/mnras/stw474](https://doi.org/10.1093/mnras/stw474).
+20. A. Kogut and D. J. Fixsen, “Calibration Method and Uncertainty for the
+    Primordial Inflation Explorer (PIXIE),” *JCAP* 05, 041 (2020),
+    [doi:10.1088/1475-7516/2020/05/041](https://doi.org/10.1088/1475-7516/2020/05/041).
+21. A. Kogut et al., “Systematic error mitigation for the PIXIE Fourier
+    transform spectrometer,” *JCAP* 07, 057 (2023),
+    [doi:10.1088/1475-7516/2023/07/057](https://doi.org/10.1088/1475-7516/2023/07/057).
 
 ## Related Torchsky documents
 
