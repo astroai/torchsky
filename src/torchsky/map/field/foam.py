@@ -918,7 +918,7 @@ def solve_spectral_power_pixel_affine_least_squares(
     initial_coefficients: Tensor | None = None,
     initial_gradient_coefficients: Tensor | None = None,
     solve_device: torch.device | str | None = None,
-    observation_batch_size: int | None = None,
+    observation_batch_size: int | Literal["auto"] | None = None,
     preconditioner: Literal["diagonal", "cell_block", "auto"] = "diagonal",
     preconditioner_max_bytes: int | None = None,
     diagnostics: dict[str, float] | None = None,
@@ -977,10 +977,37 @@ def solve_spectral_power_pixel_affine_least_squares(
     if response_basis.dtype != first.areas.dtype:
         raise ValueError("response_basis must match operator dtype")
     basis_on_device = response_basis.to(device=device)
+    observation_transfer_bytes = [
+        operator.storage_bytes
+        + values.numel() * values.element_size()
+        + weight.numel() * weight.element_size()
+        for operator, values, weight in zip(
+            operators, pixel_values, weights, strict=True
+        )
+    ]
+    batch_auto = observation_batch_size == "auto"
+    transfer_budget_bytes = sum(observation_transfer_bytes)
+    if batch_auto and device.type == "cuda":
+        free_device_bytes, _ = torch.cuda.mem_get_info(device)
+        # ponytail: reserve 80% of currently free CUDA memory for the model,
+        # workspaces, and allocator fragmentation. Upgrade to measured peak
+        # telemetry if heterogeneous real exposures defeat this bound.
+        transfer_budget_bytes = min(2 * 1024**3, free_device_bytes // 5)
+    max_observation_bytes = max(observation_transfer_bytes)
     batch_size = (
-        observation_count
-        if observation_batch_size is None
-        else int(observation_batch_size)
+        max(
+            1,
+            min(
+                observation_count,
+                transfer_budget_bytes // max(max_observation_bytes, 1),
+            ),
+        )
+        if batch_auto
+        else (
+            observation_count
+            if observation_batch_size is None
+            else int(observation_batch_size)
+        )
     )
     if batch_size <= 0:
         raise ValueError("observation_batch_size must be positive")
@@ -1339,6 +1366,11 @@ def solve_spectral_power_pixel_affine_least_squares(
                     else block_cholesky.numel() * block_cholesky.element_size()
                 ),
                 "observation_batch_size": float(batch_size),
+                "observation_batch_auto": float(batch_auto),
+                "observation_batch_transfer_budget_bytes": float(
+                    transfer_budget_bytes
+                ),
+                "max_observation_transfer_bytes": float(max_observation_bytes),
                 "operator_storage_bytes": float(
                     sum(operator.storage_bytes for operator in operators)
                 ),

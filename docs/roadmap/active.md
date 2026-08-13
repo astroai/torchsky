@@ -822,6 +822,12 @@ stacking-versus-INR/Foam depth result defined in
       the refinement prior itself from shrinking recovered source flux. A
       cold solve still uses the original zero-centered ridge, and artifacts
       state which contract was used.
+    - [x] Remove manual observation-batch sizing for new fields. Exact profiles
+      default to `auto`, selecting the largest batch whose measured maximum
+      operator+values+weights payload fits a conservative fraction of current
+      free CUDA memory (capped at 2 GiB). Explicit positive sizes remain
+      reproducible overrides, and artifacts record selection, budget, and
+      maximum per-observation transfer bytes.
     - [x] Add the frozen Foam scoring path before the products finish.
       `benchmarks/score_smacs0723_foam.py` stages the exact blank/injection
       products, enforces common eroded support, measures each effective PSF from

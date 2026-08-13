@@ -723,7 +723,7 @@ def _refine_foam_from_observations_exact(
     operator_max_candidate_pairs: int = 10_000_000,
     max_iterations: int = 50,
     operator_storage_device: str = "model",
-    observation_batch_size: int | None = None,
+    observation_batch_size: int | str | None = None,
     preconditioner: str = "auto",
 ) -> dict[str, float]:
     """Refit fixed spectral-affine appearance through native detector pixels."""
@@ -989,9 +989,16 @@ def _refine_foam_from_observations_exact(
             solve_diagnostics["preconditioner_block_construction_peak_bytes"]
         ),
         "foam_exact_refinement_observation_batch_size": float(
-            len(observations)
-            if observation_batch_size is None
-            else observation_batch_size
+            solve_diagnostics["observation_batch_size"]
+        ),
+        "foam_exact_refinement_observation_batch_auto": solve_diagnostics[
+            "observation_batch_auto"
+        ],
+        "foam_exact_refinement_observation_batch_transfer_budget_bytes": (
+            solve_diagnostics["observation_batch_transfer_budget_bytes"]
+        ),
+        "foam_exact_refinement_max_observation_transfer_bytes": (
+            solve_diagnostics["max_observation_transfer_bytes"]
         ),
         "foam_exact_refinement_operator_storage_bytes": float(
             solve_diagnostics["operator_storage_bytes"]
@@ -1458,9 +1465,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--foam-exact-observation-batch-size",
-        type=int,
-        default=0,
-        help="Maximum exact observations resident on the solve device; 0 means all",
+        default="auto",
+        help="Maximum exact observations resident on solve device; auto or positive integer",
     )
     parser.add_argument(
         "--foam-exact-max-iterations",
@@ -1529,8 +1535,20 @@ def main() -> int:
         parser.error(
             "--foam-exact-observation-refine requires fixed affine Foam geometry"
         )
-    if args.foam_exact_observation_batch_size < 0:
-        parser.error("--foam-exact-observation-batch-size must be non-negative")
+    exact_batch: int | str
+    if str(args.foam_exact_observation_batch_size).strip().lower() == "auto":
+        exact_batch = "auto"
+    else:
+        try:
+            exact_batch = int(args.foam_exact_observation_batch_size)
+        except ValueError:
+            parser.error(
+                "--foam-exact-observation-batch-size must be auto or a positive integer"
+            )
+        if exact_batch <= 0:
+            parser.error(
+                "--foam-exact-observation-batch-size must be auto or a positive integer"
+            )
     if args.foam_exact_max_iterations <= 0:
         parser.error("--foam-exact-max-iterations must be positive")
     if args.foam_exact_max_candidate_pairs <= 0:
@@ -2045,11 +2063,7 @@ def main() -> int:
                         args.foam_exact_max_candidate_pairs
                     ),
                     operator_storage_device=str(args.foam_exact_operator_storage),
-                    observation_batch_size=(
-                        int(args.foam_exact_observation_batch_size)
-                        if args.foam_exact_observation_batch_size > 0
-                        else None
-                    ),
+                    observation_batch_size=exact_batch,
                     max_iterations=int(args.foam_exact_max_iterations),
                     preconditioner=str(args.foam_exact_preconditioner),
                 )
@@ -2168,6 +2182,9 @@ def main() -> int:
                             "foam_exact_refinement_preconditioner_auto_budget_bytes",
                             "foam_exact_refinement_preconditioner_block_construction_peak_bytes",
                             "foam_exact_refinement_observation_batch_size",
+                            "foam_exact_refinement_observation_batch_auto",
+                            "foam_exact_refinement_observation_batch_transfer_budget_bytes",
+                            "foam_exact_refinement_max_observation_transfer_bytes",
                             "foam_exact_refinement_operator_storage_bytes",
                             "foam_exact_refinement_peak_operator_batch_bytes",
                             "foam_exact_refinement_host_offload",
@@ -2459,9 +2476,7 @@ def main() -> int:
                 args.foam_exact_observation_refine
             ),
             "foam_exact_operator_storage": str(args.foam_exact_operator_storage),
-            "foam_exact_observation_batch_size": int(
-                args.foam_exact_observation_batch_size
-            ),
+            "foam_exact_observation_batch_size": exact_batch,
             "foam_exact_max_iterations": int(args.foam_exact_max_iterations),
             "foam_exact_preconditioner": str(args.foam_exact_preconditioner),
             "intensity_scale": float(intensity_scale),

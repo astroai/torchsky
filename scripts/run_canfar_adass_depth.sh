@@ -169,7 +169,7 @@ case "${mode}" in
     seed=${FOAM_SEED:-101}
     patt_nums=${FOAM_PATT_NUMS:-}
     exact_operator_storage=${FOAM_EXACT_OPERATOR_STORAGE:-model}
-    exact_observation_batch_size=${FOAM_EXACT_OBSERVATION_BATCH_SIZE:-0}
+    exact_observation_batch_size=${FOAM_EXACT_OBSERVATION_BATCH_SIZE:-auto}
     exact_max_iterations=${FOAM_EXACT_MAX_ITERATIONS:-50}
     exact_preconditioner=${FOAM_EXACT_PRECONDITIONER:-auto}
     pixi run --manifest-path "${source_root}/pixi.toml" -e smacs-cuda -- \
@@ -217,7 +217,7 @@ case "${mode}" in
     seed=${FOAM_SEED:-101}
     patt_nums=${FOAM_PATT_NUMS:-3,8}
     exact_operator_storage=${FOAM_EXACT_OPERATOR_STORAGE:-model}
-    exact_observation_batch_size=${FOAM_EXACT_OBSERVATION_BATCH_SIZE:-0}
+    exact_observation_batch_size=${FOAM_EXACT_OBSERVATION_BATCH_SIZE:-auto}
     exact_max_iterations=${FOAM_EXACT_MAX_ITERATIONS:-50}
     exact_preconditioner=${FOAM_EXACT_PRECONDITIONER:-auto}
     validation_root=/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940

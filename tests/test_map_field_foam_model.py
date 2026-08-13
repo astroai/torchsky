@@ -207,6 +207,17 @@ def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
         observation_batch_size=1,
         diagnostics=diagnostics,
     )
+    auto_batch_diagnostics: dict[str, float] = {}
+    auto_batch = solve_spectral_power_pixel_affine_least_squares(
+        operators,
+        response_basis,
+        values,
+        ridge=1.0e-8,
+        max_iterations=100,
+        tolerance=1.0e-10,
+        observation_batch_size="auto",
+        diagnostics=auto_batch_diagnostics,
+    )
     block_diagnostics: dict[str, float] = {}
     block = solve_spectral_power_pixel_affine_least_squares(
         operators,
@@ -268,6 +279,8 @@ def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
 
     torch.testing.assert_close(actual[0], expected[0])
     torch.testing.assert_close(actual[1], expected[1])
+    torch.testing.assert_close(auto_batch[0], expected[0])
+    torch.testing.assert_close(auto_batch[1], expected[1])
     torch.testing.assert_close(block[0], expected[0])
     torch.testing.assert_close(block[1], expected[1])
     torch.testing.assert_close(auto[0], expected[0])
@@ -278,6 +291,9 @@ def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
     assert moved is operators[0]
     assert moved.storage_bytes > 0
     assert diagnostics["observation_batch_size"] == 1.0
+    assert auto_batch_diagnostics["observation_batch_auto"] == 1.0
+    assert 1.0 <= auto_batch_diagnostics["observation_batch_size"] <= 3.0
+    assert auto_batch_diagnostics["max_observation_transfer_bytes"] > 0.0
     assert diagnostics["operator_storage_bytes"] == 3.0 * moved.storage_bytes
     assert diagnostics["peak_operator_batch_bytes"] == moved.storage_bytes
     assert diagnostics["converged"] == 1.0
