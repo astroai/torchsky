@@ -86,28 +86,34 @@ observation parameters by \(\psi\), and the prediction for an observation by
 \boldsymbol\mu_n = \mathcal A_n(I_\theta;\psi_n)+\boldsymbol B_n(\psi_n).
 \]
 
-Here \(\mathcal A_n\) contains the WCS, spectral response, PSF, pixel footprint,
-and photometric calibration. \(\boldsymbol B_n\) is additive background in the
-same units as the data.
+Here \(\mathcal A_n\) is the calibrated observation operator. It contains the
+WCS, spectral and spatial response, pixel footprint, photometric calibration,
+and any other effect that acts before the declared additive background
+\(\boldsymbol B_n\). Its components may be analytic, learned from calibration
+and repeated observations, or hybrids of both. They must retain explicit units,
+coordinate dependence, ordering, and validation contracts.
 
 ## 3. The continuous observation model
 
-### 3.1 A physically explicit form
+### 3.1 A physically explicit linear special case
 
 Let \(W_n(\boldsymbol u)\) map detector coordinates to sky coordinates, and let
 \(\Omega^{\rm sky}_{np}=W_n(\Omega^{\rm det}_{np})\) be the corresponding sky
 footprint with solid angle \(|\Omega^{\rm sky}_{np}|\). Let
 \(R_n(\lambda)\) be the complete spectral response, including any factors
 needed to convert a source spectrum to the convention used by the calibrated
-image. Let \(P_n\) be a possibly spatially, spectrally, and temporally varying
-PSF operator. A surface-brightness prediction can be written schematically as
+image. Let \(\mathcal P_n(\lambda,t_n,c_n)\) be a spatial-response operator acting
+on the two-dimensional intensity slice \(I_\theta(\cdot,\lambda)\). It may be a
+shift-invariant convolution, a position-dependent integral operator, a
+differentiable optical/detector model, a learned operator, or a hybrid.
+A surface-brightness prediction can be written schematically as
 
 \[
 \mu_{np} =
 \frac{g_n}{|\Omega^{\rm sky}_{np}|}
 \int_{\Omega^{\rm sky}_{np}}\!\mathrm d\Omega_{\boldsymbol x}
 \int\!\mathrm d\lambda\,R_n(\lambda)
-\left[P_n(\lambda,t_n,c_n) I_\theta(\cdot,\lambda)\right]
+\left[\mathcal P_n(\lambda,t_n,c_n) I_\theta(\cdot,\lambda)\right]
 \!(\boldsymbol x)
 + B_{np}(t_n,c_n).
 \]
@@ -126,6 +132,14 @@ is a band-averaged intensity. For photon-counting data, factors such as
 \(\lambda/(hc)\) can instead be included in \(R_n\). Torchsky should record the
 chosen convention rather than silently mix the two.
 
+This form assumes that \(\mathcal P_n\) is linear in incident intensity when its
+calibration parameters are fixed. The general operator \(\mathcal A_n\) need not
+be: signal-dependent detector response, saturation, persistence, charge
+transport, or other nonlinear effects can be represented by differentiable
+analytic or learned stages. Calling \(\mathcal P_n\) a spatial response rather
+than a convolution is intentional; a single compact kernel is only one possible
+approximation.
+
 ### 3.2 What each operator contributes
 
 The forward model prevents the scene representation from absorbing known
@@ -135,8 +149,11 @@ instrument effects:
   preserve the adopted pixel-centre and axis conventions.
 - **Passband:** integrates one common spectral field through each filter. A
   nominal central wavelength alone is generally insufficient for a broad band.
-- **PSF:** blurs the incident sky before detector sampling. A non-stationary PSF
-  must conserve flux away from real boundaries.
+- **Spatial response:** maps incident sky structure into detector structure
+  before pixel integration. A conventional PSF convolution is the
+  shift-invariant case. Field-position-, wavelength-, time-, or detector-state-
+  dependent responses require a more general operator, with flux or throughput
+  accounting stated explicitly.
 - **Pixel integration:** averages or integrates over the finite detector
   footprint; point sampling is biased for undersampled structure.
 - **Calibration:** converts the physical prediction into the units of the data.
@@ -144,13 +161,16 @@ instrument effects:
   appropriate coordinate frames.
 - **Mask and noise:** state which residuals carry information and how much.
 
-The ideal equation above is the scientific contract. A practical
-implementation may use quadrature, a compact PSF kernel, or a linear
-pixel-domain PSF approximation. Such approximations must be declared and tested
-against a more accurate reference. In particular, Torchsky's current exact
+The ideal equation above is one useful scientific contract, not a requirement
+that every response have a closed form. A practical implementation may use
+quadrature, a compact PSF kernel, a wave-optics calculation, a learned
+non-stationary response, or a physical model with a learned residual correction.
+Its approximation class, training evidence, support, and invariants must be
+declared and tested against calibration and held-out observations. In
+particular, Torchsky's current exact
 fixed-geometry Foam solver can compose a supplied linear pixel-domain PSF
 forward/adjoint pair. That is exact for the declared discrete operator, but is
-not by itself proof of exact continuous, spatially varying convolution.
+not by itself proof of an exact continuous spatial response.
 
 ## 4. Likelihood and training objective
 
@@ -367,8 +387,12 @@ u(\boldsymbol x)
 
 Here \(\sigma\) is the logistic function. The factor \(q_j\) gives smooth
 conditional ownership and \(u\) gives the smooth occupancy of the union of
-bounded cells. Increasing the positive temperatures \(\tau_p\) and \(\tau_s\)
-makes transitions sharper.
+bounded cells. Mathematically, for a query point deep inside cell \(j\)
+(\(d_j(\boldsymbol x) < 0\)), \(\sigma(\tau_s d_j(\boldsymbol x)) \to 0\), making
+\(\prod_k \sigma \to 0\) so \(u(\boldsymbol x) \to 1\); conversely, outside all cells
+(\(d_k(\boldsymbol x) > 0\)), \(\sigma(\tau_s d_k(\boldsymbol x)) \to 1\), making
+\(\prod_k \sigma \to 1\) so \(u(\boldsymbol x) \to 0\). Increasing the positive
+temperatures \(\tau_p\) and \(\tau_s\) makes transitions progressively sharper.
 
 This surrogate exists for optimization. It is not the scientific output.
 Final products must use detached hard geometry and exact or explicitly
@@ -421,8 +445,21 @@ squares problem:
 \right\}.
 \]
 
+This yields the matrix normal equations solved matrix-free via Preconditioned Conjugate Gradients (PCG):
+
+\[
+\left(
+\sum_n \boldsymbol F_n^\mathsf T\boldsymbol H_n^\mathsf T
+\boldsymbol W_n\boldsymbol H_n\boldsymbol F_n
++\gamma\boldsymbol D^\mathsf T\boldsymbol D
+\right)\boldsymbol c
+= \sum_n \boldsymbol F_n^\mathsf T\boldsymbol H_n^\mathsf T
+\boldsymbol W_n\boldsymbol y_n
++\gamma\boldsymbol D^\mathsf T\boldsymbol D\boldsymbol c_0.
+\]
+
 Here \(\boldsymbol F_n\) contains the exact footprint and passband terms,
-\(\boldsymbol H_n\) is the declared PSF-domain linear operator,
+\(\boldsymbol H_n\) is the declared linear spatial-response operator,
 \(\boldsymbol W_n\) contains pixel weights, and \(\boldsymbol D\) scales value
 and slope parameters comparably. A cold solve uses \(\boldsymbol c_0=0\). A
 post-fit refinement uses the supplied initializer as \(\boldsymbol c_0\), so
@@ -529,12 +566,40 @@ different scales. Torchsky provides adaptive coordinate encoders and
 conditioned neural PSF/background models for this purpose. Their flexibility
 does not remove the need for calibration.
 
+Simple physical approximations are useful initializers and baselines, not a
+ceiling on model fidelity. With sufficiently diverse calibration, repeated
+sources, dithers, wavelengths, times, and detector states, the data may support
+a learned spatial response, background, spectral response, noise model, or
+residual correction that is more accurate than a fixed functional form. A
+hybrid often retains the known geometry, radiometry, conservation laws, and
+causal ordering while learning the part that the approximation misses. A fully
+learned operator is also admissible when independent evidence identifies it and
+its domain of validity is reported.
+
+Model flexibility is therefore selected from evidence rather than fixed in
+advance. Capacity sweeps should compare closed-form, hybrid, and learned models
+on held-out calibration and exposure folds. Increasing capacity is accepted
+only when it improves out-of-fold prediction without violating unit,
+positivity, support, flux/throughput, adjoint, or injection-response checks
+applicable to that operator.
+
 Unrestricted joint learning is non-identifiable:
 
 - a broad source can be exchanged between scene morphology and PSF width;
 - diffuse sky emission can be exchanged with additive background;
 - an astrometric offset can be exchanged with source position;
 - passband or gain errors can be exchanged with source colour.
+
+The signal model and nuisance model need not have the same form or capacity.
+The astronomical signal may use a known template family, a flexible INR/Foam,
+or an open residual, while nuisance terms may use anything from a physical
+formula to a large neural field. What matters is which evidence identifies each
+term. A nuisance model trained on the same samples used to measure the signal
+can erase that signal as its capacity grows. Conversely, an underfit nuisance
+model can leave structured residuals that mimic a discovery. Report the full
+capacity path: held-out likelihood, target attenuation and cross-talk from
+paired injections, target/nuisance tangent overlap where defined, architecture
+sensitivity, and the stable unexplained residual.
 
 The safe sequence is therefore staged:
 
@@ -544,8 +609,9 @@ The safe sequence is therefore staged:
 3. fit PSF variation to isolated calibration stars or injected calibration
    responses;
 4. fit the astronomical scene with nuisance models fixed or strongly anchored;
-5. allow limited joint refinement only when held-out calibration and exposure
-   metrics improve.
+5. allow joint refinement, including high-capacity learned corrections, only
+   when held-out calibration and exposure metrics improve and target-response
+   gates remain acceptable.
 
 Adaptive scales should be inferred from calibration-coordinate coverage and
 held-out evidence, not from the blind depth sample. The current UPDec endpoint

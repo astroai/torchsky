@@ -11,9 +11,10 @@ applications:
 
 It assumes only basic familiarity with supervised learning. The central idea is
 that unmixing is not primarily a classification problem. It is an inverse
-problem: multiple latent signals pass through a known or calibrated measurement
-operator and contribute to the same detector samples. A catalogue, when
-available, constrains part of the latent geometry. It does not replace the
+problem: multiple latent signals pass through a known, calibrated, or
+independently learned measurement operator and contribute to the same detector
+samples. A catalogue, when available, constrains part of the latent geometry.
+It does not replace the
 instrument model, and it does not make the decomposition automatically
 identifiable.
 
@@ -91,10 +92,13 @@ A_c(\boldsymbol x,t)F_c(\nu,\boldsymbol x,t)
 \]
 
 The first sum represents discrete or morphologically specified sources.
-\(M_q\) is a normalized spatial profile and \(S_q\) is its flux-density
-spectrum. The second sum represents diffuse components whose spatial amplitude
-\(A_c\) and spectral law \(F_c\) may both vary. \(U\) is not initially assigned
-to a named source family; it is the candidate open component.
+\(M_q\) is a normalized spatial profile satisfying
+\(\int_{\rm sky} M_q(\boldsymbol x,t;\gamma_q)\,\mathrm d\Omega_{\boldsymbol x} = 1\)
+(with units of sr\(^{-1}\)) and \(S_q\) is its flux-density spectrum (e.g. in Jy).
+The product \(M_q S_q\) evaluates to surface brightness (e.g. Jy sr\(^{-1}\) or
+W m\(^{-2}\) Hz\(^{-1}\) sr\(^{-1}\)). The second sum represents diffuse components
+whose spatial amplitude \(A_c\) and spectral law \(F_c\) may both vary. \(U\) is not
+initially assigned to a named source family; it is the candidate open component.
 
 This equation is conceptual rather than unique. A component can be represented
 by a parametric law, a basis expansion, an INR, a Power Foam, spherical
@@ -144,6 +148,14 @@ after atmospheric transmission. A differential FTS measures a transformed sky
 minus reference signal. Treating every nuisance as an additive post-processing
 vector gives the wrong derivatives and can bias line or distortion amplitudes.
 
+The ordering and units are physical contracts; the functional form of each
+stage need not be fixed. For example, a spatial response may be a convolution,
+a field-dependent beam or PSF operator, a differentiable optics/detector model,
+a neural operator learned from calibration data, or a physical model with a
+learned residual. The same freedom applies to transmission, spectral response,
+background, and noise. A flexible stage must declare its conditioning variables,
+support, invariants, training evidence, and valid calibration domain.
+
 When the calibrated operator is linear in the latent scene, stack all samples:
 
 \[
@@ -187,11 +199,14 @@ The complete estimator is
 \right].
 \]
 
-The source and nuisance terms can encode sparsity, positivity, smoothness,
+The source and nuisance models may be closed-form, non-parametric, neural, or
+hybrid. Their regularization can encode sparsity, positivity, smoothness,
 spectral rank, temporal stability, or physical priors. Calibration terms anchor
 the response to lamps, standards, sky lines, reference loads, repeat
 observations, or other evidence. Protection terms restrict how a nuisance model
-can overlap a target subspace.
+can overlap a target subspace. A physical approximation is therefore a useful
+inductive bias and baseline, not a mandatory ceiling when the data support a
+more flexible model.
 
 Every term changes the estimator. A strong smoothness prior can suppress a
 narrow line; a low-rank spectral prior can erase an exotic distortion; a hard
@@ -301,7 +316,11 @@ invertible matrix \(\boldsymbol Q\),
 \[
 \boldsymbol A\boldsymbol S^\mathsf T
 = (\boldsymbol A\boldsymbol Q)
-(\boldsymbol S\boldsymbol Q^{-\mathsf T})^\mathsf T.
+(\boldsymbol S\boldsymbol Q^{-\mathsf T})^\mathsf T
+= (\boldsymbol A\boldsymbol Q)
+(\boldsymbol Q^{-1}\boldsymbol S^\mathsf T)
+= \boldsymbol A(\boldsymbol Q\boldsymbol Q^{-1})\boldsymbol S^\mathsf T
+= \boldsymbol A\boldsymbol S^\mathsf T.
 \]
 
 Physical interpretation therefore requires anchors, constraints, or external
@@ -419,8 +438,11 @@ absorption as an additive negative sky spectrum is generally wrong.
 
 An error in seeing, beam, centring, differential atmospheric refraction, or
 fibre acceptance changes apparent source flux and colour. PSF/aperture
-parameters require calibration or repeated geometry; they cannot all be learned
-freely from the target whose spectrum is being measured.
+response may be learned flexibly from calibration or repeated geometry, and
+need not reduce to a convolution or a fixed parametric PSF. It cannot, however, be
+identified freely from only the target whose morphology or spectrum is being
+measured. Independent stars, dithers, detector positions, wavelengths, times,
+or physical constraints must break the response/source degeneracy.
 
 ### 7.5 Spectral response and astrophysical lines
 
@@ -448,8 +470,12 @@ Let \(\boldsymbol T\) contain protected target templates and
 \boldsymbol T^\mathsf T\boldsymbol W,
 \]
 
-using a rank-revealing inverse when the template bank is not full rank. A hard
-protected nuisance model can be restricted to
+using a rank-revealing factorization when the template bank is rank deficient
+or linearly dependent. In computation, prefer a weighted QR or SVD of
+\(\boldsymbol W^{1/2}\boldsymbol T\) over explicitly forming the Gram matrix,
+which squares its condition number. The Gram pseudoinverse
+\((\boldsymbol T^\mathsf T\boldsymbol W\boldsymbol T)^+\) remains valid notation.
+A hard protected nuisance model can be restricted to
 \((\boldsymbol I-\boldsymbol\Pi_T)\mathcal N\), or a soft penalty can discourage
 weighted overlap.
 
@@ -459,6 +485,27 @@ real foreground power parallel to \(\boldsymbol T\) is then forced into the
 target estimate. The report must include target/nuisance overlap, effective
 target norm, condition number, and the change between hard, soft, and
 unprotected fits.
+
+Protection does not require a rigid signal model. The signal of interest may be
+a fixed template, a template family with learned deformations, a flexible
+source field, or an initially unspecified open component. Likewise, the
+nuisance may be parametric, low-rank, sparse, an INR/Foam, a large neural model,
+or an ensemble. The scientific comparison should follow a capacity path, a
+sequence of models from simple to flexible, rather than evaluate one chosen
+architecture. Increase nuisance and signal flexibility, select it using
+out-of-fold prediction, and measure end-to-end target response with paired
+injections. A more flexible nuisance is accepted only while target attenuation,
+cross-talk, false positives, fold instability, and architecture sensitivity
+remain within declared limits. Structure that is stable across independent
+views but unstable under nuisance architecture belongs in the open residual,
+not automatically in either a discovery claim or a nuisance label.
+
+If no target span can be declared, hard projection cannot guarantee signal
+preservation. Open searches must instead use scientifically independent folds,
+blinded challenge injections spanning plausible but withheld morphologies,
+capacity-path stability, and cross-view reproducibility. Even then, attenuation
+outside the injected signal family remains an explicit limitation rather than
+something model flexibility can eliminate.
 
 For cross-fitting, partition observations into scientifically meaningful folds
 \(k\). Fit the nuisance model on all folds except \(k\), predict fold \(k\), and
@@ -875,6 +922,10 @@ not be hidden inside a learned scene.
   diagnostics;
 - adaptive detector-x/y, wavelength and MJD nuisance encoders with
   calibration-evidence bounds;
+- evidence-space calibration terms plus explicit scene/background/PSF joint
+  training stages;
+- fill-distance interval bounds for rectangular focal-plane calibration
+  coverage;
 - staged learned PSF/background calibration and held-out diagnostics;
 - a hardened `SpectralAxis` for frequency, wavelength, energy and wavenumber;
 - residual and support-aware field diagnostics plus bounded execution.
@@ -894,10 +945,11 @@ pipeline.
 - decoded observation-sequence, sample, detector, scan and delay contracts;
 - experimental interferogram and FTS operators with dense oracles;
 - distribution-agnostic nuisance/noise learner protocols;
-- weighted protected subspaces and orthogonal target estimators;
+- weighted protected subspaces \(\boldsymbol\Pi_T\) and orthogonal target
+  estimators;
 - scientific cross-fit manifests and paired-injection records;
-- open residual products at detector, sequence, interferogram, spectrum, map
-  and full-sky levels;
+- open residual products \(\boldsymbol r_{\rm open}\) at detector, sequence,
+  interferogram, spectrum, map and full-sky levels;
 - sphere-native and delay-native adaptive encoders;
 - catalogue-free sparse/unknown-object proposal and refit machinery;
 - covariance-aware uncertainty propagation through learned non-stationary
