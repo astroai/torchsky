@@ -5,6 +5,10 @@ This guide covers **experimental** spectral neural fields used to fit a continuo
 Use the concise **`torchsky.field`** namespace for new code; the older
 `torchsky.map.field` functions remain the implementation layer for map workflows.
 
+For the scientific inverse problem shared by INRs and spectral Power Foam,
+including the exact hard-cell formulation and the quantitative depth objective,
+see [INR and Power-Foam sky reconstruction](projects/inr_foam_problem_formulation.md).
+
 For map products and classical stacks, see [map.md](map.md). For the Charbonnier / multi-survey scaffold around field rendering, see [implicit_forward.md](implicit_forward.md).
 
 ## Core workflow
