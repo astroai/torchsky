@@ -800,12 +800,20 @@ stacking-versus-INR/Foam depth result defined in
       with CPU operator storage, batch size one, auto preconditioning, grid 32,
       basis four, PATT 3/8, and the contracted blank. Artifacts target
       `/arc/projects/ots/torchsky-runs/20260812-foam-exact-auto-361e2b2/`.
-      Matched session `xj5945ab` runs fully verified commit
-      `1c3328bc78114449214014265e8667b5f79dd64e` with the same configuration but
-      proximal ridge centered on the initializer. Its artifacts target
+      Baseline `eqql3aav` reached the exact operator but stopped at the declared
+      allocation guard: 10,018,775 raw candidate pairs versus the 10,000,000
+      ceiling. This is not a science result. First proximal submission
+      `xj5945ab` used an incorrect manually expanded SHA and failed at checkout,
+      also without science output. The actual fully verified proximal commit is
+      `1c3328b506b2cce7fbb2a0f980a1192aec50ce89`; retry both configurations
+      with the same explicit 12,000,000 candidate ceiling. Artifacts target
       `/arc/projects/ots/torchsky-runs/20260812-foam-exact-proximal-1c3328b/`.
       Compare the two as a single controlled objective test; do not tune from
       either blank result.
+      Corrected submissions are baseline `aosl7dqt` at
+      `/arc/projects/ots/torchsky-runs/20260812-foam-exact-base-r2/` and
+      proximal `q8g1oyzx` at
+      `/arc/projects/ots/torchsky-runs/20260812-foam-exact-prox-r2/`.
     - [x] Make exact-refinement scaling diagnosable before larger fields. The
       solver records preconditioner assembly, RHS assembly, initial residual,
       and PCG wall times; initial/final relative residuals; exact normal-map

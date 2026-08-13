@@ -726,10 +726,16 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     `/arc/projects/ots/torchsky-runs/20260812-foam-exact-auto-361e2b2/`.
     Prior `nuy2ew60` was an inline-command bootstrap failure with no science
     output, not a model result; direct-command stage `rfsw1kyr` replaced it.
-    Matched proximal-ridge session `xj5945ab` runs commit
-    `1c3328bc78114449214014265e8667b5f79dd64e` with persistent output at
+    Baseline `eqql3aav` stopped before solving at 10,018,775 raw candidates
+    against the explicit 10,000,000 guard. Proximal `xj5945ab` stopped at
+    checkout because its manually expanded SHA was wrong. Neither is a model
+    result. Retry both at a shared 12,000,000 ceiling using actual proximal SHA
+    `1c3328b506b2cce7fbb2a0f980a1192aec50ce89`, with persistent output at
     `/arc/projects/ots/torchsky-runs/20260812-foam-exact-proximal-1c3328b/`.
     Treat this as one pre-registered A/B objective comparison, not a sweep.
+    Corrected submissions are baseline `aosl7dqt` under
+    `20260812-foam-exact-base-r2` and proximal `q8g1oyzx` under
+    `20260812-foam-exact-prox-r2`.
   - [x] Record phase-level exact-solve evidence: preconditioner/RHS/initial
     residual/PCG time, normal-operator applications, initial/final relative
     residual, and initial/final weighted native-pixel RMSE. Use these values to
