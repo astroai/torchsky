@@ -165,6 +165,15 @@ distortions such as TAN-SIP or TPV, and the forward operator must all use the
 same semantics. The compact \(B_{np}\) term denotes the correspondingly
 integrated or averaged additive background.
 
+The placement of \(B_{np}\) is part of the model, not notation for every
+unwanted signal. Diffuse celestial light and optical stray light that pass
+through the spatial response belong inside the appropriate response operator;
+detector offsets added later may belong in \(B_{np}\). In count space, photon
+variance depends on the total incident source, sky, telescope, and instrument
+loading before any fitted mean background is subtracted. A background model can
+remove an expectation value, but not the photons' shot noise or the uncertainty
+of the fitted background.
+
 The response may be normalized so that
 \(\int R_n(\lambda)\,\mathrm d\lambda=1\), in which case the spectral integral
 is a band-averaged intensity. For photon-counting data, factors such as
@@ -227,16 +236,36 @@ If they have been rescaled or clipped, it remains a weighted least-squares
 objective but no longer has an automatic probabilistic calibration. Robust
 Charbonnier or Huber losses can reduce sensitivity to unmasked outliers. A
 Poisson-Gaussian likelihood is preferable when working close to raw counts.
+Likewise, a soft mask is an analysis weight rather than missing-data
+conditioning unless a probabilistic selection model gives it that meaning.
 
-The complete objective is
+For correlated Gaussian noise with a fixed positive-definite covariance
+\(\boldsymbol N\) on the valid-pixel subspace, replace the diagonal sum by
 
 \[
-(\hat\theta,\hat\psi)
-= \underset{\theta,\psi}{\operatorname{argmin}}
+\mathcal L_{\rm data}
+=\frac12\boldsymbol r^{\mathsf T}\boldsymbol N^{-1}\boldsymbol r,
+\qquad
+\boldsymbol r=\boldsymbol y-\boldsymbol\mu(\theta,\psi).
+\]
+
+If \(\boldsymbol N(\eta)\) is fitted from the same data, a normalized Gaussian
+objective must also contain
+\(\tfrac12\log\det\boldsymbol N(\eta)\); otherwise the fit can reduce the
+quadratic term by inflating its covariance. A learned whitening rule that does
+not define a normalized likelihood must instead be trained on independent or
+cross-fitted evidence and calibrated on held-out residuals.
+
+The complete objective, allowing an optional learned noise model, is
+
+\[
+(\hat\theta,\hat\psi,\hat\eta)
+= \underset{\theta,\psi,\eta}{\operatorname{argmin}}
 \left[
-\mathcal L_{\mathrm{data}}
+\mathcal L_{\mathrm{data}}(\theta,\psi,\eta)
 + \sum_q \alpha_q\mathcal R_q(\theta)
 + \sum_r \beta_r\mathcal C_r(\psi)
++ \mathcal C_{\rm noise}(\eta)
 \right].
 \]
 
@@ -245,12 +274,14 @@ as positivity, limited spectral complexity, spatial smoothness, or proximity
 to an initializer. The \(\mathcal C_r\) terms anchor nuisance models to
 calibration evidence. Every regularizer changes the estimator and can bias
 faint-source flux, so its coefficient must be selected on validation data, not
-on the blind scientific endpoint.
+on the blind scientific endpoint. When the covariance is fixed, omit \(\eta\)
+and \(\mathcal C_{\rm noise}\); when it is learned, the calibration term does
+not replace the likelihood normalization above.
 
-Correlated detector noise requires a covariance operator rather than diagonal
-\(w_{np}\). Resampled images usually have correlated noise even if their input
-detector pixels did not. One reason to fit native pixels is to postpone that
-correlation and information-loss problem.
+Resampled images usually have correlated noise even if their input detector
+pixels did not. One reason to fit native pixels is to postpone that correlation
+and information-loss problem. It does not make the calibrated response or
+nuisance prediction exact; their uncertainty is addressed in Section 10.
 
 ## 5. What is an implicit neural representation?
 
@@ -609,6 +640,7 @@ The following pieces must be identical in a fair comparison:
 | passbands and spectral convention | makes “joint wavelength modelling” mean the same thing |
 | PSF contract | prevents resolution or flux-calibration differences masquerading as depth |
 | background contract | prevents the scene from winning by fitting a different nuisance model |
+| calibration evidence and uncertainty treatment | prevents one method receiving a better-known response or treating fitted nuisance as exact |
 | injected sources and null controls | makes completeness and purity paired measurements |
 | output grid and detection/photometry code | prevents the scorer from favouring one representation |
 
@@ -621,11 +653,17 @@ we use both capacity-matched and spatial-resolution-matched controls.
 ## 8. Classical coadds and what joint fields change
 
 Drizzle and SWarp first map each exposure to an output grid and combine the
-resampled values. They are strong baselines, not straw figures. Drizzle can
-retain much of the dither information when its kernel, scale, and `pixfrac` are
-well selected. SWarp provides mature interpolation and weighted-coaddition
-choices. A multiband \(\chi^2\) or matched-filter detector can then combine
-their per-band products.
+resampled values. They are strong operational baselines, not straw figures.
+Drizzle can retain much of the dither information when its kernel, scale, and
+`pixfrac` are chosen well. SWarp provides mature interpolation and weighted-
+coaddition choices. A multiband \(\chi^2\) or matched-filter detector can then
+combine their per-band products. A properly constructed linear coadd
+accompanied by its effective PSF and covariance can also be sufficient for some
+linear, static-sky measurements. The comparison must therefore include both
+the named operational products and a native-detector or proper-coadd
+information reference. Any gain over Drizzle or SWarp alone could otherwise
+measure suboptimal resampling, PSF handling, or detection rather than an
+advantage of INR or Foam.
 
 INR and Foam instead estimate one latent scene directly from all selected
 detector pixels:
@@ -662,6 +700,38 @@ imply a six-fold gain. Sources with strong emission lines, breaks, unusual
 colours, or band-limited variability can be harmed by a smooth low-rank prior.
 This is why independent-appearance controls and source-population strata are
 part of the experiment.
+
+### 9.1 Information reference and effective sensitivity
+
+For a locally linear Gaussian problem with a fixed unit-amplitude detector
+template \(\boldsymbol q\) and complete fixed predictive covariance
+\(\boldsymbol N\) (or \(\boldsymbol V\) when Section 10's nuisance and response
+terms apply), the Fisher information for its amplitude is
+
+\[
+\mathcal I_a
+=\boldsymbol q^{\mathsf T}\boldsymbol N^{-1}\boldsymbol q,
+\qquad
+\operatorname{Var}(\widehat a)\geq \mathcal I_a^{-1}
+\]
+
+for an unbiased estimator under the declared model. This is an information
+reference, not a promise that a real nonlinear reconstruction attains the
+bound. A regularized estimator can reduce raw variance by attenuating the
+target. If paired injections give local response
+\(R_a=\partial\mathbb E[\widehat a]/\partial a\), compare methods using the
+response-corrected sensitivity
+
+\[
+\sigma_{a,{\rm eff}}
+=\frac{\sqrt{\operatorname{Var}(\widehat a)}}{|R_a|}
+\]
+
+together with bias and nonlinearity. A method that reports smaller variance
+only because \(|R_a|<1\) has not reached deeper. For a population-level spectral
+prior, the classical detector must receive the same preregistered template
+family or mixture weights; otherwise the experiment confounds reconstruction
+with prior information available only to the learned method.
 
 ## 10. Flexible mechanistic hybrids
 
@@ -746,6 +816,29 @@ The safe sequence is therefore staged:
    when held-out calibration and exposure metrics improve and target-response
    gates remain acceptable.
 
+Calibration anchoring does not make a fitted response known exactly. Let
+\(\boldsymbol C_n\) be the predictive covariance of a held-out background or
+other nuisance prediction, and let
+\(\boldsymbol J_{\psi,n}\boldsymbol C_\psi
+\boldsymbol J_{\psi,n}^{\mathsf T}\) propagate independently estimated response
+uncertainty. When those terms are conditionally independent of detector noise,
+the held-out residual covariance is
+
+\[
+\boldsymbol V_n
+=\boldsymbol N_n+\boldsymbol C_n
++\boldsymbol J_{\psi,n}\boldsymbol C_\psi
+ \boldsymbol J_{\psi,n}^{\mathsf T}.
+\]
+
+If they are not independent, the corresponding cross-covariances are required.
+Joint nonlinear fits may instead profile or marginalize calibration and
+nuisance parameters, or use a validated approximation. Optimizer seeds or a
+network ensemble probe fit instability; they do not by themselves represent
+calibration uncertainty. Predictive intervals and flux intervals must achieve
+their declared coverage on held-out calibration data, paired injections, and,
+where available, repeated independent fields.
+
 Adaptive scales should be inferred from calibration-coordinate coverage and
 held-out evidence, not from the blind depth sample. The current UPDec endpoint
 deliberately uses a fixed, mildly misspecified Gaussian fitted PSF against a
@@ -770,6 +863,16 @@ detection threshold. Test exposures and blind injection identifiers are used
 once for the final scientific measurement. A failure on the blind test changes
 the claim, not the configuration.
 
+These exposure folds share one celestial field and often common calibration.
+They test prediction into withheld detector realizations conditional on that
+field; they are not independent sky realizations and do not establish field-to-
+field generalization. Pixels, normalization statistics, calibration updates,
+background fits, PSF fits, and learned whitening parameters associated with a
+held-out exposure must all remain outside the corresponding training fold. If
+several architectures or method variants are inspected on the blind test, it
+is no longer a one-use test; the complete selection rule must be frozen or its
+multiplicity calibrated.
+
 Useful diagnostics include:
 
 - weighted residuals in native held-out exposures;
@@ -786,11 +889,37 @@ NIRCam bands F090W, F150W, F200W, F277W, F356W, and F444W. All methods receive
 the same aligned CRF observations, masks, inverse variances, WCS metadata,
 passbands, PSF contract, injections, and output grids.
 
+The scalar depth coordinate must be declared before generating the blind
+injections. Use a reference-band AB magnitude \(m_{\rm ref}\), or an equivalent
+amplitude normalization of a preregistered spectral template, and define every
+other band through the injection's colour or spectral parameters. There is no
+single multiband AB magnitude without such a convention. Report separate
+recovery curves for declared colour/SED, crowding, and morphology strata rather
+than hiding a population-dependent gain in one mixture average.
+
+Inject sources in the latent scene and propagate them through passband, WCS,
+spatial response, pixel integration, calibration, and masking before adding
+them to detector data. When count-level source noise is material, positive
+injections also require the corresponding signal-dependent noise draw; paired
+negative injections remain local-response probes rather than physical skies.
+To measure reconstruction response, rerun every fitting and selection stage
+that would respond to the added source. Adding a template only to an already
+frozen reconstruction measures the detector/scorer response, not the INR or
+Foam pipeline response, and must be labelled separately.
+
 Freeze the validation-selected detection threshold before examining the blind
-test. At that threshold, chosen to target 95% validation purity, define
-\(m_{50}\) on the test set as the AB magnitude at which the fitted per-source
-recovery probability is 50%. Do not recalibrate the threshold on test
-detections. Because a larger AB magnitude is fainter, the primary contrast is
+test. Apply the same threshold-selection rule separately to each method; do not
+force one numerical score threshold onto differently calibrated scorers. At the
+resulting threshold, chosen to target 95% validation purity, define
+\(m_{50}\) on the test set as the value of \(m_{\rm ref}\) at which the fitted
+per-source recovery probability is 50%. The recovery model, monotonicity
+constraint, matching radius or probabilistic association rule, blend policy,
+and treatment of genuine but uncatalogued objects must be frozen with the
+threshold. If the fitted curve does not bracket 50% over the injected range,
+report a bound rather than extrapolating an \(m_{50}\). Do not recalibrate the
+threshold on test detections. Because a larger AB magnitude is fainter, the
+primary contrast must name one preregistered SED/morphology stratum or a fixed
+population mixture and is
 
 \[
 \Delta m_{50}
@@ -818,22 +947,30 @@ The desired claim requires all of the following, not just
 - blank, negative-injection, and shuffled-band controls pass.
 
 Use the same injection-batch identifiers for every method and resample those
-identifiers jointly 10,000 times; never resample individual detections as if
-they were independent. Keep the four spatial quadrants as fixed strata and
-report their results separately. The resulting intervals quantify injection-
-realization uncertainty conditional on this field, its background, and the
-frozen test exposures. Generalization beyond that conditioning requires
-independent fields or exposure sets. Compute the purity lower bound from the
-same paired cluster bootstrap and report bootstrap-fit failures. Wall time,
-parameter/atom count, peak resident memory, and peak accelerator memory are
-reported with the scientific metrics. A 0.2 mag improvement is a useful
-planning target, not a success threshold that can be chosen after seeing the
-data.
+identifiers jointly 10,000 times, refitting the declared recovery curve in each
+replicate; never resample individual detections as if they were independent.
+Keep the four spatial quadrants as fixed strata and report their results
+separately. The resulting intervals quantify injection-realization uncertainty
+conditional on this field, its background, the fitted reconstruction, and the
+frozen test exposures. They do not include field-to-field variance, calibration
+uncertainty, or optimizer instability unless those quantities are explicitly
+resampled. Report a separate calibration/seed sensitivity analysis and require
+coverage checks for any combined interval. Generalization beyond this
+conditioning requires independent fields or exposure sets. Compute the purity
+lower bound from the same paired cluster bootstrap and report bootstrap-fit
+failures. Unmatched detections in a real field can be genuine uncatalogued
+sources, so negative images, blank simulations, and adjudicated real-source
+matches must accompany any false-positive estimate. Wall time, parameter/atom
+count, peak resident memory, and peak accelerator memory are reported with the
+scientific metrics. A 0.2 mag improvement is a useful planning target, not a
+success threshold that can be chosen after seeing the data.
 
 The strongest classical comparator is not a single-band stack. It includes
-validation-selected Drizzle and SWarp products followed by multiband detection.
-Independent and shared INR and Foam rows determine whether any gain comes from
-the representation, spectral sharing, or simply more capacity.
+validation-selected Drizzle and SWarp products followed by PSF-aware multiband
+detection with the same spectral prior, plus the native-detector linear or
+proper-coadd information reference. Independent and shared INR and Foam rows
+determine whether any gain comes from the representation, spectral sharing, or
+simply more capacity.
 
 ## 13. Model matrix and ablations
 
@@ -844,7 +981,8 @@ The minimum defensible method matrix is:
 | classical | weighted Torchsky per-band stack | internal mapmaking control |
 | classical | upstream square Drizzle | standard dithered-imaging comparator |
 | classical | validation-selected SWarp | standard survey-stacking comparator |
-| classical | whitened multiband detection over the best stacks | strongest classical use of all bands |
+| classical | native-detector linear fit or proper coadd with effective PSF/covariance | information-preserving linear reference |
+| classical | PSF-aware whitened multiband detection over the best stacks with the same SED/template family | strongest classical use of the same bands and prior |
 | INR | independent appearance | what does a flexible continuous spatial model do without spectral sharing? |
 | INR | shared spectral appearance | does INR spectral coupling add depth without unacceptable bias? |
 | Foam | independent appearance on shared geometry | what does Foam geometry do without spectral sharing? |
@@ -884,7 +1022,10 @@ A minimal INR fit is:
 
 Mini-batching changes the stochastic optimization path but must not change the
 meaning of the objective. Sampling probabilities and loss reweighting must be
-recorded if detector pixels are not sampled uniformly.
+recorded if detector pixels are not sampled uniformly. Architecture selection
+uses the frozen validation folds; repeated seeds quantify optimization
+stability, and the rule for choosing or averaging them is fixed before the
+blind test.
 
 ### 14.2 Foam
 
@@ -935,6 +1076,13 @@ The following limiting cases are small but powerful correctness checks:
    difference is measured rather than assumed negligible.
 10. **Zero-information pixels:** zero mask or weight contributes neither to the
     objective nor to the normal equations.
+11. **Response correction:** an estimator with attenuation \(|R_a|<1\) cannot
+    claim improved sensitivity from its uncorrected output variance.
+12. **Nuisance uncertainty:** adding nonzero predictive background or response
+    covariance cannot reduce the propagated target variance.
+13. **Split isolation:** held-out detector samples influence neither scene or
+    nuisance fitting nor normalization, whitening, calibration refinement, or
+    checkpoint selection for that fold.
 
 Torchsky's focused Foam tests exercise exact areas and moments, forward/adjoint
 agreement, heterogeneous pixel tessellations, spectral response, and the
@@ -958,6 +1106,13 @@ or sky emission, or moving/transient sources. The component fields may
 themselves be INRs, Foams, or hybrids. The observation operator then maps their
 sum into CMB frequency maps, 21-cm cubes, multi-object spectra, or time-domain
 images.
+
+An INR or Foam reconstruction is not automatically a component separation. If
+it is used as an upstream product, downstream inference must retain its
+measurement operator, target transfer function, support, correlated covariance,
+and nuisance/calibration uncertainty. Rendering the field to a regular grid and
+then treating those pixels as independent noiseless labels discards the inverse
+problem that gave the reconstruction scientific meaning.
 
 This is relevant to FOSSIL and component separation, but it introduces new
 identifiability constraints: spectral components need anchors, mixing laws or
@@ -1024,5 +1179,8 @@ metric.
   prediction and robust-loss scaffold.
 - [ADASS UPDec depth sprint](adass_updec_depth_week.md): frozen data split,
   method matrix, claim gates, and current execution status.
+- [Source unmixing with known or unknown sources](source_unmixing_problem_formulation.md):
+  component identifiability, protected targets, cross-fitting, and uncertainty
+  after reconstruction.
 - [FOSSIL primitives](fossil.md): longer-term differentiable
   spatial-spectral component-separation use cases.

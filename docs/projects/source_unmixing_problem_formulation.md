@@ -194,6 +194,13 @@ learned residual. The same freedom applies to transmission, spectral response,
 background, and noise. A flexible stage must declare its conditioning variables,
 support, invariants, training evidence, and valid calibration domain.
 
+If \(\boldsymbol y\) is itself a coadd, cube, INR rendering, Foam rendering, or
+other reconstructed product, its upstream transfer function and correlated
+covariance are part of \(\mathcal H\) and \(\boldsymbol N\). Such a product is
+not a noiseless label. Native detector samples are preferable when the upstream
+compression is not sufficient for the target statistic or when its transfer
+and covariance cannot be propagated faithfully.
+
 When the calibrated operator is linear in the latent scene, stack all samples:
 
 \[
@@ -461,6 +468,13 @@ surrogate or another non-gradient optimization method.
 These representations answer “what intensity field explains the data?” before
 answering “how many catalogue objects does it contain?” A catalogue can be
 derived later by a common detector if object-level products are needed.
+
+Their reconstruction transfer is part of the scientific result. A downstream
+component fit must propagate the field's support, target-response Jacobian,
+correlated covariance, and response/nuisance uncertainty, preferably by
+composing the original detector operator. Treating rendered INR or Foam pixels
+as independent exact measurements can turn regularization attenuation into a
+spurious component constraint.
 
 The limitation is interpretability: one field can contain sources, diffuse
 emission, and residual systematics unless roles, context dependence, and
@@ -1264,6 +1278,7 @@ mission-neutral abstractions.
 | scientific partitions | detector/scan/time/reference/sky region | fibre/exposure/night/detector/target |
 | paired injections | distortion attenuation and cross-talk | source/line attenuation and false detections |
 | open residual | residual atlas and exotic searches | serendipitous lines/sources and systematic diagnosis |
+| reconstruction transfer and covariance | propagate map/INR/Foam regularization into distortion inference | propagate extraction/reconstruction uncertainty into source and sky inference |
 
 These primitives should be differentiable where scientifically coherent,
 chunkable over large axes, executable on CPU/CUDA and eventually other devices,
@@ -1422,6 +1437,11 @@ global discovery statistic is claimed.
     response operators equal reproduces the simpler common-operator equation.
 17. **Discovery calibration:** the complete adaptive selection pipeline attains
     its declared family-wise error or false-discovery rate on null ensembles.
+18. **Reconstruction handoff:** replacing native samples by a coadd, INR, Foam,
+    cube, or extracted spectrum reproduces the native-sample target estimate
+    only when the declared transfer and covariance make that compression
+    sufficient for the target; otherwise the discrepancy is measured and
+    reported.
 
 ## 16. Scientific objectives and claim gates
 
