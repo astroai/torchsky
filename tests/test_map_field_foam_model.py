@@ -242,6 +242,29 @@ def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
         preconditioner_max_bytes=1,
         diagnostics=fallback_diagnostics,
     )
+    ill_conditioned_basis = torch.tensor(
+        [[1.0, -1.0], [1.0, -0.9], [1.0, -0.8]], dtype=torch.float64
+    )
+    ill_conditioned_values = [
+        operator.matvec_affine(
+            truth_coefficients @ basis,
+            torch.einsum("ckd,k->cd", truth_gradients, basis),
+        )
+        for operator, basis in zip(
+            operators, ill_conditioned_basis, strict=True
+        )
+    ]
+    ill_diagnostics: dict[str, float] = {}
+    solve_spectral_power_pixel_affine_least_squares(
+        operators,
+        ill_conditioned_basis,
+        ill_conditioned_values,
+        ridge=1.0e-8,
+        max_iterations=100,
+        tolerance=1.0e-10,
+        preconditioner="auto",
+        diagnostics=ill_diagnostics,
+    )
 
     torch.testing.assert_close(actual[0], expected[0])
     torch.testing.assert_close(actual[1], expected[1])
@@ -275,12 +298,19 @@ def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
         "preconditioner_storage_bytes"
     ]
     assert auto_diagnostics["preconditioner_auto"] == 1.0
-    assert auto_diagnostics["preconditioner_cell_block"] == 1.0
+    assert auto_diagnostics["preconditioner_cell_block"] == 0.0
+    assert auto_diagnostics["preconditioner_response_condition"] < (
+        auto_diagnostics["preconditioner_auto_condition_threshold"]
+    )
     assert auto_diagnostics["preconditioner_block_construction_peak_bytes"] <= (
         auto_diagnostics["preconditioner_auto_budget_bytes"]
     )
     assert fallback_diagnostics["preconditioner_cell_block"] == 0.0
     assert fallback_diagnostics["preconditioner_auto_budget_bytes"] == 1.0
+    assert ill_diagnostics["preconditioner_response_condition"] > ill_diagnostics[
+        "preconditioner_auto_condition_threshold"
+    ]
+    assert ill_diagnostics["preconditioner_cell_block"] == 1.0
 
 
 def _model() -> SpectralPowerFoam:

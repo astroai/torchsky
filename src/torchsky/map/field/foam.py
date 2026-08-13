@@ -1049,6 +1049,7 @@ def solve_spectral_power_pixel_affine_least_squares(
     block_storage_bytes = (
         cells * (3 * basis_count) ** 2 * first.areas.element_size()
     )
+    response_condition = torch.linalg.cond(basis_on_device)
     # ponytail: cap automatic block construction at 512 MiB and 10% of free
     # CUDA memory; replace this heuristic with allocator telemetry if real
     # fragmented-device runs show that free bytes overestimate usable memory.
@@ -1063,6 +1064,7 @@ def solve_spectral_power_pixel_affine_least_squares(
     use_cell_block = preconditioner == "cell_block" or (
         preconditioner == "auto"
         and 2 * block_storage_bytes <= block_budget_bytes
+        and bool(response_condition >= 2.0)
     )
     block_normal = (
         torch.zeros(
@@ -1318,6 +1320,8 @@ def solve_spectral_power_pixel_affine_least_squares(
                     block_fallback_cells
                 ),
                 "preconditioner_auto": float(preconditioner == "auto"),
+                "preconditioner_response_condition": float(response_condition),
+                "preconditioner_auto_condition_threshold": 2.0,
                 "preconditioner_auto_budget_bytes": float(block_budget_bytes),
                 "preconditioner_block_construction_peak_bytes": float(
                     2 * block_storage_bytes

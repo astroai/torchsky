@@ -713,9 +713,13 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     solves, retaining the diagonal default for memory-sensitive grids. In the
     local four-mode control it reduced PCG from 51 to 12 iterations and total
     batch-one solve time by 3.3x, with a declared 12x preconditioner-memory
-    cost. The real CRF run must decide whether to promote it.
+    cost on the raw condition-6.93 response. After whitening to condition 1.00,
+    diagonal was faster overall (20.5 versus 24.2 ms) despite taking two more
+    iterations. The real CRF run must decide whether spatial/PSF coupling adds
+    enough benefit to override that control.
     Exact-refinement benchmark profiles use a conservative device-memory-aware
-    `auto` selector and persist both the selection and its memory calculation;
+    `auto` selector requiring response condition at least 2 and a safe memory
+    estimate, and persist the selection plus both calculations;
     the public low-level solver default remains diagonal.
   - [ ] Inspect contracted-grid exact run `eqql3aav` at immutable commit
     `361e2b273bfdf1057667000eaa3d43b2f4f1924e`; its persistent output is

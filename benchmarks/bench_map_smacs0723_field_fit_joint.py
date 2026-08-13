@@ -973,6 +973,12 @@ def _refine_foam_from_observations_exact(
         "foam_exact_refinement_preconditioner_auto": solve_diagnostics[
             "preconditioner_auto"
         ],
+        "foam_exact_refinement_preconditioner_response_condition": (
+            solve_diagnostics["preconditioner_response_condition"]
+        ),
+        "foam_exact_refinement_preconditioner_auto_condition_threshold": (
+            solve_diagnostics["preconditioner_auto_condition_threshold"]
+        ),
         "foam_exact_refinement_preconditioner_auto_budget_bytes": solve_diagnostics[
             "preconditioner_auto_budget_bytes"
         ],

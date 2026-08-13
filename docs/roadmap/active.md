@@ -777,11 +777,16 @@ stacking-versus-INR/Foam depth result defined in
       coupled 32-square, eight-observation, four-mode CPU case it reduced PCG
       from 51 to 12 iterations and batch-one median time from 0.184 to 0.055 s
       (3.3x), while increasing preconditioner storage from 24,576 to 294,912
-      bytes. Keep diagonal as the large-grid default until GPU CRF evidence
-      justifies the O(cells * basis^2) block storage.
+      bytes for an unwhitened polynomial response with condition 6.93. With the
+      same response whitened to condition 1.00, diagonal/block took 14/12
+      iterations but 20.5/24.2 ms: block setup outweighed the saved maps. This
+      is therefore an ill-conditioning result, not a universal speed claim.
+      Keep diagonal as the large-grid default until GPU CRF evidence justifies
+      the O(cells * basis^2) block storage.
       Exact-refinement profiles now default to `auto`, which selects the block
-      only when its estimated construction peak fits a conservative device
-      budget and records the selection, estimate, budget, and resident bytes;
+      only when the response condition is at least 2 and its estimated
+      construction peak fits a conservative device budget, recording the
+      condition/threshold, selection, estimate, budget, and resident bytes;
       the reusable low-level solver itself retains its diagonal default. Any
       numerically non-positive local block falls back to its regularized local
       diagonal and is counted rather than aborting the entire field solve.

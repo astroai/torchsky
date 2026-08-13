@@ -13,10 +13,11 @@ import torch
 from torchsky.map.field import (
     sparse_bounded_power_pixel_operator,
     solve_spectral_power_pixel_affine_least_squares,
+    spectral_basis_whitening_transform,
 )
 
 
-def _case(side: int, observations: int, basis_count: int):
+def _case(side: int, observations: int, basis_count: int, whiten_basis: bool):
     edges = torch.linspace(-1.0, 1.0, side + 1, dtype=torch.float64)
     y0, x0 = torch.meshgrid(edges[:-1], edges[:-1], indexing="ij")
     y1, x1 = torch.meshgrid(edges[1:], edges[1:], indexing="ij")
@@ -52,6 +53,9 @@ def _case(side: int, observations: int, basis_count: int):
     basis = torch.stack(
         [spectral_coordinate**order for order in range(basis_count)], dim=1
     )
+    raw_condition = torch.linalg.cond(basis)
+    if whiten_basis:
+        basis = basis @ spectral_basis_whitening_transform(basis)
     generator = torch.Generator().manual_seed(101)
     coefficients = torch.randn(
         (sites.shape[0], basis_count), generator=generator, dtype=torch.float64
@@ -70,7 +74,7 @@ def _case(side: int, observations: int, basis_count: int):
         torch.linspace(0.5 + 0.05 * index, 1.5, value.numel(), dtype=value.dtype)
         for index, value in enumerate(values)
     ]
-    return operators, basis, values, weights
+    return operators, basis, values, weights, raw_condition
 
 
 def main() -> int:
@@ -78,11 +82,12 @@ def main() -> int:
     parser.add_argument("--side", type=int, default=32)
     parser.add_argument("--observations", type=int, default=6)
     parser.add_argument("--basis-count", type=int, default=4)
+    parser.add_argument("--whiten-basis", action="store_true")
     parser.add_argument("--iterations", type=int, default=10)
     parser.add_argument("--runs", type=int, default=5)
     args = parser.parse_args()
-    operators, basis, values, weights = _case(
-        args.side, args.observations, args.basis_count
+    operators, basis, values, weights, raw_condition = _case(
+        args.side, args.observations, args.basis_count, args.whiten_basis
     )
     rows = []
     for label, batch_size, preconditioner in (
@@ -123,6 +128,9 @@ def main() -> int:
                 "side": args.side,
                 "observations": args.observations,
                 "basis_count": args.basis_count,
+                "whiten_basis": args.whiten_basis,
+                "raw_basis_condition": float(raw_condition),
+                "solve_basis_condition": float(torch.linalg.cond(basis)),
                 "runs_after_warmup": args.runs,
                 "rows": rows,
             },
