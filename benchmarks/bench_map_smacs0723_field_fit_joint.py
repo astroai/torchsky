@@ -932,6 +932,9 @@ def _refine_foam_from_observations_exact(
         "foam_exact_refinement_preconditioner_cell_block": solve_diagnostics[
             "preconditioner_cell_block"
         ],
+        "foam_exact_refinement_preconditioner_block_fallback_cells": (
+            solve_diagnostics["preconditioner_block_fallback_cells"]
+        ),
         "foam_exact_refinement_preconditioner_storage_bytes": solve_diagnostics[
             "preconditioner_storage_bytes"
         ],

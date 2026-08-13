@@ -717,9 +717,11 @@ uncertainty, blank controls must behave, and bright-source flux must satisfy the
     Exact-refinement benchmark profiles use a conservative device-memory-aware
     `auto` selector and persist both the selection and its memory calculation;
     the public low-level solver default remains diagonal.
-  - [ ] Inspect contracted-grid exact run `nuy2ew60` at immutable commit
-    `6a963943b2ba68db33e18b87822a7bec73efd64b`; its persistent output is
-    `/arc/projects/ots/torchsky-runs/20260812-foam-exact-6a96394/`.
+  - [ ] Inspect contracted-grid exact run `eqql3aav` at immutable commit
+    `361e2b273bfdf1057667000eaa3d43b2f4f1924e`; its persistent output is
+    `/arc/projects/ots/torchsky-runs/20260812-foam-exact-auto-361e2b2/`.
+    Prior `nuy2ew60` was an inline-command bootstrap failure with no science
+    output, not a model result; direct-command stage `rfsw1kyr` replaced it.
 - [ ] Run the same matrix for the strongest current shared/independent INR as a
   fallback and architectural control.
 - [ ] Tune only atom density/capacity, spectral basis size, learning rate,

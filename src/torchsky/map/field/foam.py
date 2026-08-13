@@ -1135,11 +1135,20 @@ def solve_spectral_power_pixel_affine_least_squares(
     regularization = penalty * scale
     diagonal_preconditioner = diagonal + regularization
     block_cholesky: Tensor | None = None
+    block_fallback_cells = 0
     if block_normal is not None:
         block_normal.diagonal(dim1=-2, dim2=-1).add_(regularization)
         block_cholesky, cholesky_info = torch.linalg.cholesky_ex(block_normal)
-        if bool(torch.any(cholesky_info != 0)):
-            raise RuntimeError("cell-block preconditioner is not positive definite")
+        failed = cholesky_info != 0
+        block_fallback_cells = int(torch.sum(failed))
+        if block_fallback_cells:
+            local_diagonal = torch.cat(
+                (value_diagonal[:, :, None], gradient_diagonal), dim=2
+            ).reshape(cells, 3 * basis_count)
+            block_normal[failed] = torch.diag_embed(
+                (local_diagonal + regularization)[failed]
+            )
+            block_cholesky = torch.linalg.cholesky(block_normal)
 
     coefficient_size = cells * basis_count
 
@@ -1277,6 +1286,9 @@ def solve_spectral_power_pixel_affine_least_squares(
                 "relative_residual": float(relative_residual),
                 "converged": float(relative_residual <= threshold),
                 "preconditioner_cell_block": float(block_cholesky is not None),
+                "preconditioner_block_fallback_cells": float(
+                    block_fallback_cells
+                ),
                 "preconditioner_auto": float(preconditioner == "auto"),
                 "preconditioner_auto_budget_bytes": float(block_budget_bytes),
                 "preconditioner_block_construction_peak_bytes": float(

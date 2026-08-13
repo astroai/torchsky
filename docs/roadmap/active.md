@@ -782,12 +782,19 @@ stacking-versus-INR/Foam depth result defined in
       Exact-refinement profiles now default to `auto`, which selects the block
       only when its estimated construction peak fits a conservative device
       budget and records the selection, estimate, budget, and resident bytes;
-      the reusable low-level solver itself retains its diagonal default.
-    - [ ] Validate host-batched exact refinement on aligned CRFs. Session
-      `nuy2ew60` runs exact commit `6a963943b2ba68db33e18b87822a7bec73efd64b`
-      with AstroAI notebook, CPU operator storage, batch size one, grid 32,
+      the reusable low-level solver itself retains its diagonal default. Any
+      numerically non-positive local block falls back to its regularized local
+      diagonal and is counted rather than aborting the entire field solve.
+    - [ ] Validate host-batched exact refinement on aligned CRFs. Initial
+      session `nuy2ew60` pulled and started the AstroAI image but emitted no
+      runner log: CANFAR passed only the first token of the nested `bash -lc`
+      payload. Direct-command smoke `snj8yvi9` and persistent-repository stage
+      `rfsw1kyr` completed, proving the replacement launch contract. Session
+      `eqql3aav` now runs exact commit
+      `361e2b273bfdf1057667000eaa3d43b2f4f1924e` from that persistent script,
+      with CPU operator storage, batch size one, auto preconditioning, grid 32,
       basis four, PATT 3/8, and the contracted blank. Artifacts target
-      `/arc/projects/ots/torchsky-runs/20260812-foam-exact-6a96394/`.
+      `/arc/projects/ots/torchsky-runs/20260812-foam-exact-auto-361e2b2/`.
     - [x] Add the frozen Foam scoring path before the products finish.
       `benchmarks/score_smacs0723_foam.py` stages the exact blank/injection
       products, enforces common eroded support, measures each effective PSF from
