@@ -1,12 +1,12 @@
-# INR and Power-Foam sky reconstruction: problem formulation and objectives
+# INR and Power Foam sky reconstruction: problem formulation and objectives
 
 ## Purpose
 
 This note defines the inverse problem that Torchsky's implicit neural
-representations (INRs) and spectral Power-Foam models are intended to solve. It
+representations (INRs) and spectral Power Foam models are intended to solve. It
 is written for astronomers who know the basic supervised-learning pattern—fit a
 model from inputs and labelled targets—but have not used continuous neural
-fields or Power-Foam geometry.
+fields or Power Foam geometry.
 
 The central point is simple:
 
@@ -19,6 +19,13 @@ jointly can recover fainter sources than conventional per-band coaddition. The
 claim is not that a model creates information. The hypothesis is that a shared
 spatial-spectral representation can use real correlations between bands while
 avoiding some information loss from resampling and early coaddition.
+
+**Reader's path.** Sections 1--5 define the inverse problem and observation
+model. Section 6 introduces INR and Foam representations. Sections 7--11 cover
+calibration, flexibility, and identifiability. Sections 12--15 specify the
+current experiment, claim gates, and numerical checks. Sections 16--17 describe
+the longer-term component-separation generalization and the interpretation of
+success or failure.
 
 ## 1. From supervised learning to an astronomical inverse problem
 
@@ -387,11 +394,15 @@ A low-rank choice \(K<B\), where \(B\) is the number of bands, forces the band
 appearances to share a lower-dimensional spectral description. This is the
 mechanism by which a spectral Foam can borrow information across wavelengths.
 
-An identifiable independent-appearance control on the same geometry uses
+A spectrally complete independent-appearance control on the same geometry uses
 \(K=B\) and requires the response matrix \(\boldsymbol B=[b_{nk}]\) to have
 full numerical rank over the distinct bands. Whitening the columns can improve
 conditioning without reducing their span. A six-mode model is not independent
-for six bands if its integrated response matrix has rank below six.
+for six bands if its integrated response matrix has rank below six. This rank
+condition establishes representational completeness in band space, not general
+statistical identifiability. The latter also depends on the complete
+noise-weighted observation operator, its conditioning, the shared geometry, and
+overlap with nuisance components.
 
 This control isolates **spectral sharing**, but it still shares the cell
 geometry. A completely independent control would also fit separate geometry in
@@ -419,11 +430,13 @@ u(\boldsymbol x)
 
 Here \(\sigma\) is the logistic function. The factor \(q_j\) gives smooth
 conditional ownership and \(u\) gives the smooth occupancy of the union of
-bounded cells. Mathematically, for a query point deep inside cell \(j\)
-(\(d_j(\boldsymbol x) < 0\)), \(\sigma(\tau_s d_j(\boldsymbol x)) \to 0\), making
-\(\prod_k \sigma \to 0\) so \(u(\boldsymbol x) \to 1\); conversely, outside all cells
-(\(d_k(\boldsymbol x) > 0\)), \(\sigma(\tau_s d_k(\boldsymbol x)) \to 1\), making
-\(\prod_k \sigma \to 1\) so \(u(\boldsymbol x) \to 0\). Increasing the positive
+bounded cells. For fixed signed distances and in the limit
+\(\tau_s\to\infty\), a query point inside cell \(j\)
+(\(d_j(\boldsymbol x)<0\)) has \(\sigma(\tau_s d_j(\boldsymbol x))\to0\), so
+\(u(\boldsymbol x)\to1\). A point outside every cell
+(\(d_k(\boldsymbol x)>0\) for all \(k\)) has every logistic factor tending to
+one, so \(u(\boldsymbol x)\to0\). At finite temperature these are smooth
+approximations rather than exact equalities. Increasing the positive
 temperatures \(\tau_p\) and \(\tau_s\) makes transitions progressively sharper.
 
 This surrogate exists for optimization. Because both the softmax and union
@@ -511,7 +524,9 @@ squares problem:
 \right\}.
 \]
 
-This yields the matrix normal equations solved matrix-free via Preconditioned Conjugate Gradients (PCG):
+The resulting normal equations can be solved matrix-free with preconditioned
+conjugate gradients (PCG) when the regularized normal operator is positive
+definite:
 
 \[
 \left(
@@ -532,11 +547,34 @@ post-fit refinement uses the supplied initializer as \(\boldsymbol c_0\), so
 the ridge does not pull source flux toward zero merely because refinement was
 requested.
 
-Torchsky solves the corresponding normal equations matrix-free with
-preconditioned conjugate gradients (PCG). Sparse exposure operators can stay on
-the host and be transferred in bounded observation batches. Diagonal or
-per-cell block preconditioning changes convergence speed and memory use, not
-the converged scientific model.
+With \(\gamma\geq0\) and positive-semidefinite weights, the normal operator is
+symmetric and positive semidefinite. Standard PCG additionally requires the
+operator to be positive definite. For \(\gamma>0\), this is equivalent to
+
+\[
+\ker\!\left(\begin{bmatrix}
+\boldsymbol W_1^{1/2}\boldsymbol H_1\boldsymbol F_1\\
+\vdots\\
+\boldsymbol W_N^{1/2}\boldsymbol H_N\boldsymbol F_N
+\end{bmatrix}\right)
+\cap\ker(\boldsymbol D)=\{\boldsymbol 0\}
+\]
+
+when the displayed operators have the declared finite-dimensional domains. For
+\(\gamma=0\), the stacked data operator itself must have a trivial null space.
+PCG also requires a symmetric positive-definite preconditioner on the solved
+space. If the applicable condition fails, the implementation must constrain the
+null space or solve the augmented least-squares problem with a method valid for
+a rank-deficient system, such as LSQR or LSMR. A small residual alone must not
+be interpreted as a unique coefficient solution.
+
+Sparse exposure operators can remain on the host and be transferred in bounded
+observation batches. In exact arithmetic and at convergence, a valid diagonal
+or per-cell block preconditioner changes the iteration path, convergence rate,
+and memory use, but not the unique solution. At finite tolerance and precision,
+the returned coefficients can differ. Reports must therefore include the
+stopping rule and residual norm and verify that scientific metrics are stable
+under a tighter tolerance.
 
 ### 6.6 Foam advantages and risks
 
@@ -625,7 +663,7 @@ colours, or band-limited variability can be harmed by a smooth low-rank prior.
 This is why independent-appearance controls and source-population strata are
 part of the experiment.
 
-## 10. Mechanistic hybrid models: replacing rigid physical forms with flexible learned operators
+## 10. Flexible mechanistic hybrids
 
 PSF and background models may vary spatially, spectrally, and temporally on
 different scales. Torchsky provides adaptive coordinate encoders and
@@ -748,9 +786,11 @@ NIRCam bands F090W, F150W, F200W, F277W, F356W, and F444W. All methods receive
 the same aligned CRF observations, masks, inverse variances, WCS metadata,
 passbands, PSF contract, injections, and output grids.
 
-At an empirically calibrated 95% purity, define \(m_{50}\) as the AB magnitude
-at which the fitted per-source recovery probability is 50%. Because a larger AB
-magnitude is fainter, the primary contrast is
+Freeze the validation-selected detection threshold before examining the blind
+test. At that threshold, chosen to target 95% validation purity, define
+\(m_{50}\) on the test set as the AB magnitude at which the fitted per-source
+recovery probability is 50%. Do not recalibrate the threshold on test
+detections. Because a larger AB magnitude is fainter, the primary contrast is
 
 \[
 \Delta m_{50}
@@ -761,23 +801,34 @@ magnitude is fainter, the primary contrast is
 The desired claim requires all of the following, not just
 \(\Delta m_{50}>0\):
 
-- the paired 95% bootstrap interval for \(\Delta m_{50}\) excludes zero;
-- measured test purity is at least 95%, with a lower 95% confidence bound of at
-  least 93%;
+- the paired 95% injection-batch bootstrap interval for \(\Delta m_{50}\)
+  excludes zero;
+- measured test purity is at least 95%, with a lower 95% cluster-bootstrap
+  bound of at least 93%;
 - median absolute bright-source flux bias is at most 2% in every band and no
   more than one percentage point worse than the best classical method;
 - adjacent-band median colour bias is at most 0.02 mag for the declared
   smooth-continuum population;
-- held-out exposure predictive likelihood is improved or statistically
-  indistinguishable from the best independent model;
-- the gain appears in at least two of four blind 256-pixel quadrants;
+- held-out exposure predictive score improves; for a loss-like score where
+  smaller is better, the alternative non-inferiority gate is that the upper
+  95% confidence bound on shared minus independent score does not exceed a
+  preregistered margin \(\delta_{\rm pred}\);
+- the gain appears in at least two of four blind 256-pixel quadrants as a
+  heterogeneity diagnostic, not as independent replication;
 - blank, negative-injection, and shuffled-band controls pass.
 
-Complete injection-batch identifiers are paired in 10,000 bootstrap resamples.
-Wall time, parameter/atom count, peak resident memory, and peak accelerator
-memory are reported with the scientific metrics. A 0.2 mag improvement is a
-useful planning target, not a success threshold that can be chosen after seeing
-the data.
+Use the same injection-batch identifiers for every method and resample those
+identifiers jointly 10,000 times; never resample individual detections as if
+they were independent. Keep the four spatial quadrants as fixed strata and
+report their results separately. The resulting intervals quantify injection-
+realization uncertainty conditional on this field, its background, and the
+frozen test exposures. Generalization beyond that conditioning requires
+independent fields or exposure sets. Compute the purity lower bound from the
+same paired cluster bootstrap and report bootstrap-fit failures. Wall time,
+parameter/atom count, peak resident memory, and peak accelerator memory are
+reported with the scientific metrics. A 0.2 mag improvement is a useful
+planning target, not a success threshold that can be chosen after seeing the
+data.
 
 The strongest classical comparator is not a single-band stack. It includes
 validation-selected Drizzle and SWarp products followed by multiband detection.
@@ -798,6 +849,12 @@ The minimum defensible method matrix is:
 | INR | shared spectral appearance | does INR spectral coupling add depth without unacceptable bias? |
 | Foam | independent appearance on shared geometry | what does Foam geometry do without spectral sharing? |
 | Foam | shared low-rank spectral appearance | primary adaptive spectral candidate |
+
+Estimate any whitening operator from training or calibration evidence only,
+and include the inter-band and resampling covariance supported by those data.
+Apply the same transform to data, templates, and injected signals. If a diagonal
+or otherwise approximate covariance is used for scale, label the detector
+approximate and validate its null distribution on held-out blank data.
 
 For Foam, the planned shared row uses a four-mode spectral basis. The
 six-mode, rank-six whitened row spans arbitrary appearances in six bands and is
@@ -870,7 +927,10 @@ The following limiting cases are small but powerful correctness checks:
    \(\langle\boldsymbol A\boldsymbol x,\boldsymbol y\rangle
    =\langle\boldsymbol x,\boldsymbol A^\mathsf T\boldsymbol y\rangle\) to the
    declared numerical tolerance.
-8. **Solver:** PCG and a dense solve agree on a small well-conditioned problem.
+8. **Solver:** PCG and a dense solve agree on a small positive-definite problem;
+   a rank-deficient fixture either constrains the null space or uses the
+   declared least-squares solver, and tighter PCG tolerance leaves scientific
+   metrics stable.
 9. **Hard/soft boundary:** scientific products use hard cells; any smooth/hard
    difference is measured rather than assumed negligible.
 10. **Zero-information pixels:** zero mask or weight contributes neither to the

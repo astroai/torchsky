@@ -11,12 +11,11 @@ applications:
 
 It assumes only basic familiarity with supervised learning. The central idea is
 that unmixing is not primarily a classification problem. It is an inverse
-problem: multiple latent signals pass through a known, calibrated, or
-independently learned measurement operator and contribute to the same detector
-samples. A catalogue, when available, constrains part of the latent geometry.
-It does not replace the
-instrument model, and it does not make the decomposition automatically
-identifiable.
+problem: multiple latent signals pass through a calibrated measurement operator,
+which may include corrections independently learned and validated on calibration
+evidence, and contribute to the same detector samples. A catalogue can constrain
+part of the latent geometry, but it does not replace the instrument model or
+make the decomposition automatically identifiable.
 
 The same Torchsky spine can support both applications:
 
@@ -27,6 +26,12 @@ The same Torchsky spine can support both applications:
 The intended product is not a model that assigns every datum to a closed list
 of components. It is a measurement with quantified source attenuation,
 cross-talk, unresolved degeneracies, and stable residual structure.
+
+**Reader's path.** Sections 1--9 define the shared inverse problem,
+identifiability limits, protected estimation, and injections. Section 10 applies
+that framework to FOSSIL-like absolute spectroscopy, and Section 11 applies it
+to MOS sky and telluric subtraction. Sections 12--17 describe the Torchsky
+boundary, validation tiers, invariants, and scientific claim gates.
 
 ## 1. What does “known source” mean?
 
@@ -128,7 +133,9 @@ The first sum represents discrete or morphologically specified sources.
 (with units of sr\(^{-1}\)) and \(S_q\) is its flux-density spectrum (e.g. in Jy).
 The product \(M_q S_q\) evaluates to surface brightness (e.g. Jy sr\(^{-1}\) or
 W m\(^{-2}\) Hz\(^{-1}\) sr\(^{-1}\)). The second sum represents diffuse components
-whose spatial amplitude \(A_c\) and spectral law \(F_c\) may both vary. \(U\) is not
+whose spatial amplitude \(A_c\) and spectral law \(F_c\) may both vary. Whatever
+factor convention is chosen, each product \(A_cF_c\) and the open component
+\(U\) must have the same surface-brightness units as \(I_{\rm cel}\). \(U\) is not
 initially assigned to a named source family; it is the candidate open component.
 
 This equation is conceptual rather than unique. A component can be represented
@@ -202,7 +209,8 @@ valuable building blocks.
 
 ## 4. Likelihood and complete objective
 
-For Gaussian noise covariance \(\boldsymbol N\),
+For Gaussian noise with covariance \(\boldsymbol N\) fixed independently of the
+fitted parameters, the negative log-likelihood, up to an additive constant, is
 
 \[
 \mathcal L_{\rm data}
@@ -211,6 +219,25 @@ For Gaussian noise covariance \(\boldsymbol N\),
 \boldsymbol N^{-1}
 (\boldsymbol y-\boldsymbol\mu).
 \]
+
+If a positive-definite covariance \(\boldsymbol N(\eta)\) is learned jointly,
+the parameter-dependent normalization cannot be dropped. On the valid-data
+subspace the Gaussian objective is
+
+\[
+\mathcal L_{\rm data}(\theta,\psi,\eta)
+=\frac12\boldsymbol r^\mathsf T
+\boldsymbol N(\eta)^{-1}\boldsymbol r
++\frac12\log\det\boldsymbol N(\eta),
+\qquad
+\boldsymbol r=\boldsymbol y-\boldsymbol\mu(\theta,\psi).
+\]
+
+Without the log-determinant term, a joint fit can lower the quadratic term by
+inflating the covariance. A distribution-agnostic `NoiseLearner` need not define
+a normalized likelihood, but its output must then be described as a weighting
+or whitening rule, trained on independent or cross-fitted evidence and
+calibrated on held-out residuals.
 
 Diagonal inverse variance is a special case, not the general MOS or
 time-stream noise model. FTS samples, resampled spectra, detector common modes,
@@ -225,27 +252,29 @@ subspace and define the whitened residual
 = \boldsymbol C_N^{-1}(\boldsymbol y-\boldsymbol\mu).
 \]
 
-If the covariance is known and no parameters were estimated from these samples,
-\(Q=\|\boldsymbol r_{\rm white}\|_2^2\) has the corresponding chi-square null
-distribution. For an ordinary fitted linear model, a reduced chi-square also
-requires the fitted degrees of freedom. That quantity is not automatic for a
-regularized or nonlinear learned model. In that case report the mean squared
-whitened residual and calibrate its distribution with held-out folds or
-simulation. Autocorrelation \(C_r(\Delta a)\) with null intervals diagnoses
-remaining correlation; it does not prove that the noise is white. For
+If the residual is multivariate Gaussian, the covariance is known, and no
+parameters or normalizations were estimated from these samples, then
+\(Q=\|\boldsymbol r_{\rm white}\|_2^2\sim\chi^2_{r_N}\), where \(r_N\) is the
+rank of the valid-data covariance. For an ordinary fitted linear model, a reduced
+chi-square also requires the fitted degrees of freedom. That quantity is not
+automatic for a regularized or nonlinear learned model. In that case report the
+mean squared whitened residual and calibrate its distribution with held-out
+folds or simulation. Autocorrelation \(C_r(\Delta a)\) with null intervals
+diagnoses remaining correlation; it does not prove that the noise is white. For
 heavy-tailed outliers use a declared robust loss such as Charbonnier, while low
 photon counts require an appropriate count or Poisson-Gaussian likelihood.
 
 The complete estimator is
 
 \[
-(\widehat\theta,\widehat\psi)
-=\underset{\theta,\psi}{\operatorname{argmin}}
+(\widehat\theta,\widehat\psi,\widehat\eta)
+=\underset{\theta,\psi,\eta}{\operatorname{argmin}}
 \left[
-\mathcal L_{\rm data}
+\mathcal L_{\rm data}(\theta,\psi,\eta)
 +\mathcal R_{\rm source}(\theta)
 +\mathcal R_{\rm nuisance}(\theta)
 +\mathcal C_{\rm calibration}(\psi)
++\mathcal C_{\rm noise}(\eta)
 +\mathcal C_{\rm protection}(\theta)
 \right].
 \]
@@ -257,7 +286,10 @@ the response to lamps, standards, sky lines, reference loads, repeat
 observations, or other evidence. Protection terms restrict how a nuisance model
 can overlap a target subspace. A physical approximation is therefore a useful
 inductive bias and baseline, not a mandatory ceiling when the data support a
-more flexible model.
+more flexible model. When the covariance is fixed, omit \(\eta\) and
+\(\mathcal C_{\rm noise}\). When it is learned, \(\mathcal C_{\rm noise}\) records
+any structural constraint or independent calibration evidence and does not
+replace the likelihood normalization above.
 
 Every term changes the estimator. A strong smoothness prior can suppress a
 narrow line; a low-rank spectral prior can erase an exotic distortion; a hard
@@ -308,7 +340,9 @@ second-derivative operator \(\boldsymbol D_2\) satisfies
 \]
 
 The coordinate-aware construction matters for irregular channels and changes
-of frequency or wavelength units. The regularizer can stabilize an
+of frequency or wavelength units. Its normalization and the units of \(\lambda\)
+must make the data and penalty terms commensurate and must transform with the
+spectral coordinate convention. The regularizer can stabilize an
 ill-conditioned deblend, but it selects a prior-dependent solution rather than
 resolving an exact spatial degeneracy. If \(\boldsymbol c\) is also unknown,
 solve the joint regularized block system for \([\boldsymbol s,\boldsymbol c]\)
@@ -393,8 +427,8 @@ invertible matrix \(\boldsymbol Q\),
 \]
 
 Physical interpretation therefore requires anchors, constraints, or external
-evidence. A component number selected only for low reconstruction error will
-usually absorb more signal as capacity grows.
+evidence. Selecting the component count only for low reconstruction error can
+absorb more signal as capacity grows.
 
 ### 6.2 Sparse overcomplete scene
 
@@ -419,8 +453,10 @@ differenced, continuum-subtracted, or absorption signals.
 A continuous field \(F_\theta(\boldsymbol x,\nu,t)\) can represent the total
 sky or one component without an object list. An INR uses a coordinate-conditioned
 network or learned feature field. A Power Foam uses adaptive bounded spatial
-cells with spectral coefficients. Both are naturally differentiable through
-the observation model.
+cells with spectral coefficients. Both can be embedded in a differentiable
+observation model. INR parameters and Foam appearance coefficients can be
+optimized directly; hard Foam geometry instead requires a declared smooth
+surrogate or another non-gradient optimization method.
 
 These representations answer “what intensity field explains the data?” before
 answering “how many catalogue objects does it contain?” A catalogue can be
@@ -535,16 +571,15 @@ Let \(\boldsymbol T\) contain protected target templates and
 \[
 \boldsymbol\Pi_T
 =\boldsymbol T
-(\boldsymbol T^\mathsf T\boldsymbol W\boldsymbol T)^{-1}
+(\boldsymbol T^\mathsf T\boldsymbol W\boldsymbol T)^{+}
 \boldsymbol T^\mathsf T\boldsymbol W,
 \]
 
 using a rank-revealing factorization when the template bank is rank deficient
 or linearly dependent. In computation, prefer a weighted QR or SVD of
 \(\boldsymbol W^{1/2}\boldsymbol T\) over explicitly forming the Gram matrix,
-which squares its condition number. The Gram pseudoinverse
-\((\boldsymbol T^\mathsf T\boldsymbol W\boldsymbol T)^+\) remains valid notation.
-A hard protected nuisance model can be restricted to
+which squares its condition number. The Gram pseudoinverse shown above covers
+the rank-deficient case. A hard protected nuisance model can be restricted to
 \((\boldsymbol I-\boldsymbol\Pi_T)\mathcal N\), or a soft penalty can discourage
 weighted overlap.
 
@@ -594,7 +629,11 @@ This simple expression is valid only when the target response and nuisance
 prediction are fixed for the held-out fold. More general estimators should
 orthogonalize against the fitted nuisance tangent and propagate calibration
 uncertainty. Fold-to-fold variation is part of the result, not merely an
-optimization diagnostic.
+optimization diagnostic. Because cross-fit estimates share overlapping
+training data, the folds are not automatically independent replicates.
+Uncertainty must be based on the underlying independent observational units or
+on repeated non-overlapping partitions, not on a naive standard error over the
+\(K\) fold estimates.
 
 ## 9. Paired injections and target response
 
@@ -608,6 +647,12 @@ pipeline response
 -\widehat\alpha(\boldsymbol d-a\boldsymbol s)
 }{2a}.
 \]
+
+Normalize \(\boldsymbol s\) so that \(a\) has declared physical units and
+\(\widehat\alpha\) estimates the same amplitude. Under that convention
+\(\mathcal R\) is dimensionless and \(1-\mathcal R\) is attenuation. Otherwise
+report the response as a dimensional Jacobian rather than calling it an
+attenuation fraction.
 
 Positive/negative pairing cancels much of the fixed background contribution and
 tests the complete estimator, including candidate selection, nuisance fitting,
@@ -794,8 +839,10 @@ product, not a failed fit.
 
 Determine which residual modes are isotropic, trace Galactic structure,
 correlate with CMB \(T/E/B\), or correlate with CIB, line-intensity, and
-large-scale-structure tracers. This can distinguish primordial large-scale
-structure from late-time or Galactic emission without requiring every residual
+large-scale-structure tracers. These measurements can help discriminate a
+primordial origin from late-time or Galactic emission when interpreted through
+a joint response and covariance model with foreground and systematic nulls.
+They do not identify an origin by correlation alone or require every residual
 to follow a predeclared law.
 
 #### Falsification of the standard thermalization manifold
@@ -803,9 +850,11 @@ to follow a predeclared law.
 Construct the observable manifold generated by broad energy and photon-number
 injection histories evolved through standard Compton scattering, double
 Compton emission, and bremsstrahlung. Ask whether a calibration-stable celestial
-residual lies inside that manifold. A robust orthogonal component would first
-motivate re-examination of calibration and missing astrophysics, and only then
-new photon kinetics or non-standard thermalization.
+residual lies inside that manifold. A component that is stable across declared
+detector, scan, time, calibration, and nuisance-architecture splits and is
+orthogonal under the declared noise-weighted metric would first motivate
+re-examination of calibration and missing astrophysics, and only then new photon
+kinetics or non-standard thermalization.
 
 The recommended order is the residual atlas with standard \(\mu\) injections,
 then monopole--anisotropy tomography, then the thermalization-manifold test with
@@ -822,13 +871,17 @@ Random frequency pixels are not independent folds. Useful split units include:
 - calibration state;
 - odd/even FTS sweep;
 - sky region;
-- frequency subset;
+- frequency subset, used as a held-out spectral-prediction test rather than an
+  exchangeable replicate;
 - held-out instrument or simulator family;
 - shuffled housekeeping as a negative control.
 
 Target estimates must agree across appropriate splits after accounting for
-their different response and noise. A component that follows a detector or
-scan state but not celestial coordinates is not an astrophysical discovery.
+their different response and noise. Frequency subsets generally have different
+target responses and nuisance degeneracies, so their estimates must be compared
+through the full observation model rather than combined as identically
+distributed folds. A component that follows a detector or scan state but not
+celestial coordinates is not an astrophysical discovery.
 
 ## 11. Application II: MOS sky and telluric subtraction
 
@@ -849,8 +902,8 @@ T_e(\lambda,\boldsymbol x_f)
 \]
 
 \(K_{efq}(\lambda)\) includes target position, seeing/PSF, slit or fibre aperture,
-differential atmospheric refraction (DAR), guiding and morphology. Wavelength-dependent
-DAR induces a spatial centroid offset
+differential atmospheric refraction (DAR), guiding and morphology.
+Wavelength-dependent DAR induces a spatial centroid offset
 
 \[
 \Delta\boldsymbol x_f(\lambda)
@@ -864,9 +917,14 @@ unit tangent-plane direction toward the zenith, set by the parallactic angle.
 The expression is an angular displacement in radians under the small-refraction
 approximation; its sign follows the declared offset convention.
 \(\Omega_{ef}\) is the effective sky solid angle. \(T_e\) is telluric
-transmission. \(E_{\rm sky}\) contains airglow lines, scattered light and sky
-continuum. \(E_{\rm inst}\) contains pre-detection instrumental/thermal
-emission. \(\mathcal D\) applies throughput, trace geometry, wavelength
+transmission. In this convention, \(E_{\rm sky}\) is the emergent atmospheric
+radiance at the instrument entrance, including atmospheric self-absorption, so
+the telluric transmission \(T_e\) multiplies only extraterrestrial source
+light. A more detailed radiative-transfer operator may replace this separation,
+but it must not apply atmospheric attenuation twice. \(E_{\rm sky}\) contains
+airglow lines, scattered light and sky continuum. \(E_{\rm inst}\) contains
+pre-detection instrumental/thermal emission. \(\mathcal D\) applies throughput,
+trace geometry, wavelength
 solution, the fibre-dependent line-spread operator \(\boldsymbol L_{ef}\),
 detector integration, cross-talk and calibration. LSF variations across the
 focal plane must be included in \(\mathcal D\) to avoid residual sky-line
@@ -927,7 +985,8 @@ Dedicated sky fibres are valuable but need not be assumed perfectly blank.
 One model can treat source contributions as sparse or context-specific while
 the atmospheric sky is shared predictably across many fibres, positions, and
 times. A fibre with a source can still constrain sky lines at wavelengths where
-the source model and cross-fibre evidence identify them.
+the source model and cross-fibre evidence permit the source and sky
+contributions to be separated.
 
 The model must respect different variability scales:
 
@@ -1244,12 +1303,14 @@ The current mission-neutral implementation checklist is tracked in
 The FOSSIL science note's scientific grounding includes the public FOSSIL/BISOU
 material and reviews of CMB spectral distortions, thermalization, foregrounds,
 \(\mu\)-anisotropy, dark-sector energy injection, and general distortion
-parametrizations listed there. Mission values above are explicitly attributed
-to its June/July 2026 public baseline rather than presented as newly verified
-measurements.
+parametrizations listed there. Mission values above were checked against the
+cited June 2026 public slides and remain dated concept forecasts rather than
+Torchsky measurements.
 
 For traceability, the complete reference set inherited from that source note is
-listed below. It has not been independently re-verified for this formulation.
+listed below. The public mission slides and the 2026 *Physical Review D* entries
+were rechecked in August 2026; the remaining bibliography has not been
+exhaustively re-verified for this formulation.
 
 1. B. Maffei, “Measuring spectral distortions with FOSSIL and BISOU,”
    Challenges at the CMB Frontier (2026),
@@ -1282,7 +1343,7 @@ listed below. It has not been independently re-verified for this formulation.
     distortions,” *EPJ Web of Conferences* 293, 00012 (2024),
     [doi:10.1051/epjconf/202429300012](https://doi.org/10.1051/epjconf/202429300012).
 11. D. K. Adams et al., “CMB spectral distortions from resonant conversions in
-    atomic dark sectors,” accepted in *Physical Review D* (2026),
+    atomic dark sectors,” *Physical Review D* 114, 023537 (2026),
     [doi:10.1103/gpbc-6kr6](https://doi.org/10.1103/gpbc-6kr6).
 12. S.-P. Li and J. Chluba, “Neutrinogenic CMB spectral distortions,”
     *Physical Review D* 113, 043504 (2026),
@@ -1299,7 +1360,7 @@ listed below. It has not been independently re-verified for this formulation.
 
 ## Related Torchsky documents
 
-- [INR and Power-Foam sky reconstruction](inr_foam_problem_formulation.md):
+- [INR and Power Foam sky reconstruction](inr_foam_problem_formulation.md):
   detailed continuous-field and exact Foam formulation.
 - [Continuous fields](../field.md): implemented field models, shared/private
   decompositions, observation operators and training diagnostics.
