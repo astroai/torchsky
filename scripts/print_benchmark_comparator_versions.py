@@ -64,6 +64,8 @@ def main() -> int:
         ("MontagePy", "MontagePy"),
         ("starlink_ast", "starlink.Ast"),
         ("kapteyn", "kapteyn"),
+        ("s2fft", "s2fft"),
+        ("cuhpx", "cuhpx"),
     ]
 
     pkgs = [_try_version(name, imp) for name, imp in comparators]

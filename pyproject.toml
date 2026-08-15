@@ -123,6 +123,12 @@ examples = [
     "requests>=2.28.0",     # For SDSS download example
     "matplotlib>=3.0",      # For visualization in examples
 ]
+# Optional HEALPix SHT peer for benches/tests. healpy remains the science oracle.
+# JAX stays out of the default test env; install with pip extra or:
+#   pixi run sht-bench-bootstrap
+sht-bench = [
+    "s2fft>=1.0",
+]
 # SVO filter profiles + FITS headers for ``torchsky map --method inr`` (default spectral source).
 map = [
     "astropy>=5.0",

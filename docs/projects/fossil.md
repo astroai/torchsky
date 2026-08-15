@@ -89,6 +89,12 @@ must not become a spacecraft packet decoder or a closed foreground ontology.
   still requires protected target subspaces and independent cross-fit scoring.
 - [x] `SpectralAxis` exists in `torchsky.spectral`; extend it rather than creating
   a parallel axis type.
+- [x] Synthetic operator gates on the current Foam/spectral spine: exact adjoint
+  identity, paired μ-scale injection oddness at `2e-8`, smooth-foreground
+  leakage bound, and held-out isolation. Evidence:
+  [`tests/test_fossil_operator_gates.py`](../../tests/test_fossil_operator_gates.py).
+  This is not a `TensorSpec` / `ProtectedSubspace` framework and does not cover
+  Phase D cosmology benches.
 - [ ] Existing operator declarations do not yet provide one typed
   domain/codomain, forward/adjoint, chunk/device protocol across domains.
 - [ ] No first-class decoded detector sequence, interferogram, full-sky spectral

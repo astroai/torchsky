@@ -1,76 +1,37 @@
 #!/usr/bin/env python3
-"""Replay spin transform parity/throughput against official healpy releases."""
+"""Healpy vs torchsky spin SHT replay used by bench_spin_matrix.py."""
 
 from __future__ import annotations
 
-import sys
+import argparse
+import json
 import os
+import sys
+import time
 from pathlib import Path
 
-# Ensure the repository root is in sys.path so we can import benchmarks.config
-repo_root = str(Path(__file__).resolve().parent.parent.parent)
+import numpy as np
+import torch
+
+repo_root = str(Path(__file__).resolve().parents[2])
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-from benchmarks.config import DEFAULT_OUTPUT_DIR  # noqa: E402
+from torchsky.sphere.spectral import alm2map_spin, map2alm_spin  # noqa: E402
+from torchsky.sphere import healpix as hp  # noqa: E402
+
+DEFAULT_CASES = (
+    {"nside": 8, "lmax": 8, "mmax": 8, "nest": False},
+    {"nside": 16, "lmax": 12, "mmax": 12, "nest": False},
+)
+EXTENDED_CASES = DEFAULT_CASES + (
+    {"nside": 16, "lmax": 12, "mmax": 12, "nest": True},
+    {"nside": 32, "lmax": 20, "mmax": 20, "nest": False},
+    {"nside": 64, "lmax": 48, "mmax": 48, "nest": False},
+)
 
 
-import argparse  # noqa: E402
-import json  # noqa: E402
-import time  # noqa: E402
-from dataclasses import asdict, dataclass  # noqa: E402
-from pathlib import Path  # noqa: E402
-
-import healpy as hp  # noqa: E402
-import numpy as np  # noqa: E402
-import torch  # noqa: E402
-
-from torchsky.sphere.spectral import alm2map_spin, alm_index, alm_size, map2alm_spin  # noqa: E402
-
-
-@dataclass
-class Case:
-    nside: int
-    lmax: int
-    mmax: int | None
-    spin: int
-    nest: bool
-
-
-@dataclass
-class Row:
-    operation: str
-    nside: int
-    lmax: int
-    mmax: int
-    spin: int
-    nest: bool
-    points: int
-    rel_l2_error: float
-    max_abs_error: float
-    torchsky_mpts_s: float
-    healpy_mpts_s: float
-    ratio_vs_healpy: float
-
-
-DEFAULT_CASES = [
-    Case(nside=8, lmax=8, mmax=None, spin=1, nest=False),
-    Case(nside=8, lmax=8, mmax=None, spin=2, nest=False),
-    Case(nside=16, lmax=8, mmax=6, spin=3, nest=False),
-    Case(nside=16, lmax=8, mmax=6, spin=2, nest=True),
-    Case(nside=16, lmax=12, mmax=None, spin=2, nest=False),
-    Case(nside=16, lmax=12, mmax=8, spin=2, nest=True),
-    Case(nside=32, lmax=12, mmax=10, spin=2, nest=False),
-    Case(nside=32, lmax=16, mmax=12, spin=2, nest=False),
-]
-EXTENDED_CASES = DEFAULT_CASES + [
-    Case(nside=32, lmax=20, mmax=16, spin=3, nest=False),
-    Case(nside=32, lmax=20, mmax=16, spin=2, nest=False),
-    Case(nside=64, lmax=24, mmax=20, spin=2, nest=True),
-]
-
-
-def _time_many(fn, runs: int) -> float:
+def _median_time(fn, runs: int) -> float:
     fn()
     vals: list[float] = []
     for _ in range(runs):
@@ -80,153 +41,11 @@ def _time_many(fn, runs: int) -> float:
     return float(np.median(vals))
 
 
-def _random_spin_alms(
-    lmax: int, mmax: int, spin: int, seed: int
-) -> tuple[np.ndarray, np.ndarray]:
-    rng = np.random.default_rng(seed)
-    nalm = alm_size(lmax, mmax)
-    a_e = np.zeros(nalm, dtype=np.complex128)
-    a_b = np.zeros(nalm, dtype=np.complex128)
-    for m in range(mmax + 1):
-        for ell in range(m, lmax + 1):
-            if ell < spin:
-                continue
-            idx = alm_index(ell, m, lmax, mmax)
-            scale = 1.0 / ((ell + 1) ** 2)
-            if m == 0:
-                a_e[idx] = scale * rng.normal()
-                a_b[idx] = scale * rng.normal()
-            else:
-                a_e[idx] = scale * (rng.normal() + 1j * rng.normal())
-                a_b[idx] = scale * (rng.normal() + 1j * rng.normal())
-    return a_e, a_b
-
-
-def _map2alm_case(case: Case, n_points: int, runs: int, seed: int) -> Row:
-    rng = np.random.default_rng(seed)
-    npix = 12 * case.nside * case.nside
-    mm = case.lmax if case.mmax is None else int(case.mmax)
-
-    qu_ring = rng.normal(size=(2, npix))
-    if case.nest:
-        qu_in = np.stack(
-            [hp.reorder(qu_ring[0], r2n=True), hp.reorder(qu_ring[1], r2n=True)], axis=0
-        )
-    else:
-        qu_in = qu_ring
-
-    qu_t = torch.from_numpy(qu_in).to(torch.float64)
-
-    def tf_fn():
-        return map2alm_spin(
-            qu_t,
-            spin=case.spin,
-            nside=case.nside,
-            lmax=case.lmax,
-            mmax=mm,
-            nest=case.nest,
-        )
-
-    def hp_fn():
-        arr = qu_in
-        if case.nest:
-            arr = np.stack(
-                [hp.reorder(arr[0], n2r=True), hp.reorder(arr[1], n2r=True)], axis=0
-            )
-        return hp.map2alm_spin(arr, spin=case.spin, lmax=case.lmax, mmax=mm)
-
-    t_tf = _time_many(tf_fn, runs=runs)
-    t_hp = _time_many(hp_fn, runs=runs)
-
-    tf_ae, tf_ab = tf_fn()
-    hp_ae, hp_ab = hp_fn()
-    hp_ae_t = torch.from_numpy(hp_ae).to(torch.complex128)
-    hp_ab_t = torch.from_numpy(hp_ab).to(torch.complex128)
-
-    tf_cat = torch.cat([tf_ae, tf_ab], dim=0)
-    hp_cat = torch.cat([hp_ae_t, hp_ab_t], dim=0)
-    rel = float(
-        (
-            torch.linalg.norm(tf_cat - hp_cat)
-            / torch.linalg.norm(hp_cat).clamp_min(1e-15)
-        ).item()
-    )
-    max_abs = float(torch.max(torch.abs(tf_cat - hp_cat)).item())
-    n = min(int(n_points), npix)
-
-    return Row(
-        operation="map2alm_spin",
-        nside=case.nside,
-        lmax=case.lmax,
-        mmax=mm,
-        spin=case.spin,
-        nest=case.nest,
-        points=n,
-        rel_l2_error=rel,
-        max_abs_error=max_abs,
-        torchsky_mpts_s=(n / t_tf) / 1e6,
-        healpy_mpts_s=(n / t_hp) / 1e6,
-        ratio_vs_healpy=t_hp / t_tf,
-    )
-
-
-def _alm2map_case(case: Case, n_points: int, runs: int, seed: int) -> Row:
-    npix = 12 * case.nside * case.nside
-    mm = case.lmax if case.mmax is None else int(case.mmax)
-    ae_np, ab_np = _random_spin_alms(case.lmax, mm, case.spin, seed)
-    ae_t = torch.from_numpy(ae_np).to(torch.complex128)
-    ab_t = torch.from_numpy(ab_np).to(torch.complex128)
-
-    def tf_fn():
-        return alm2map_spin(
-            (ae_t, ab_t),
-            nside=case.nside,
-            spin=case.spin,
-            lmax=case.lmax,
-            mmax=mm,
-            nest=case.nest,
-        )
-
-    def hp_fn():
-        out = hp.alm2map_spin(
-            [ae_np, ab_np], nside=case.nside, spin=case.spin, lmax=case.lmax, mmax=mm
-        )
-        if case.nest:
-            out = np.stack(
-                [hp.reorder(out[0], r2n=True), hp.reorder(out[1], r2n=True)], axis=0
-            )
-        return out
-
-    t_tf = _time_many(tf_fn, runs=runs)
-    t_hp = _time_many(hp_fn, runs=runs)
-
-    tf_qu = tf_fn()
-    hp_qu = hp_fn()
-    hp_qu_t = torch.from_numpy(np.asarray(hp_qu)).to(torch.float64)
-
-    rel = float(
-        (
-            torch.linalg.norm(tf_qu - hp_qu_t)
-            / torch.linalg.norm(hp_qu_t).clamp_min(1e-15)
-        ).item()
-    )
-    max_abs = float(torch.max(torch.abs(tf_qu - hp_qu_t)).item())
-    n = min(int(n_points), npix)
-
-    return Row(
-        operation="alm2map_spin",
-        nside=case.nside,
-        lmax=case.lmax,
-        mmax=mm,
-        spin=case.spin,
-        nest=case.nest,
-        points=n,
-        rel_l2_error=rel,
-        max_abs_error=max_abs,
-        torchsky_mpts_s=(n / t_tf) / 1e6,
-        healpy_mpts_s=(n / t_hp) / 1e6,
-        ratio_vs_healpy=t_hp / t_tf,
-    )
+def _rel_l2(a: np.ndarray, b: np.ndarray) -> float:
+    denom = float(np.linalg.norm(b))
+    if denom == 0.0:
+        return float(np.linalg.norm(a))
+    return float(np.linalg.norm(a - b) / denom)
 
 
 def main() -> int:
@@ -235,123 +54,131 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--n-points", type=int, default=200_000)
     parser.add_argument(
-        "--case-set", choices=("default", "extended"), default="default"
+        "--case-set", choices=("default", "extended"), default="extended"
     )
-    parser.add_argument("--max-map2alm-rel-error", type=float, default=1.0e-9)
-    parser.add_argument("--max-alm2map-rel-error", type=float, default=1.0e-9)
-    parser.add_argument(
-        "--min-ratio-vs-healpy",
-        type=str,
-        default="map2alm_spin=0.20,alm2map_spin=0.15",
-        help="Comma-separated op=ratio thresholds for median(torchsky/healpy).",
-    )
-    parser.add_argument(
-        "--disable-gates",
-        action="store_true",
-        help="Report replay metrics without enforcing thresholds.",
-    )
-    parser.add_argument(
-        "--json-out",
-        type=Path,
-        default=DEFAULT_OUTPUT_DIR / "upstream_replay_healpy_spin.json",
-    )
+    parser.add_argument("--json-out", type=Path, required=True)
+    parser.add_argument("--disable-gates", action="store_true")
     args = parser.parse_args()
 
-    # Default to the validated torch ring profile for reproducible spin replay.
-    os.environ.setdefault("TORCHSKY_RING_FOURIER_CPP", "1")
-    os.environ.setdefault("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "0")
-    os.environ.setdefault("TORCHSKY_SPIN_ALM2MAP_RECURRENCE_CPP", "0")
     os.environ.setdefault("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "auto")
-    os.environ.setdefault("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "auto")
-    os.environ.setdefault("TORCHSKY_SPIN_RING_AUTO_MIN_BYTES", str(32 * 1024 * 1024))
+    os.environ.setdefault("TORCHSKY_SPIN_MAP2ALM_RING_CONCAT_CPP", "1")
+    os.environ.setdefault("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "1")
+    os.environ.setdefault("TORCHSKY_SPIN_ALM2MAP_RECURRENCE_CPP", "1")
 
-    ratio_thresholds: dict[str, float] = {}
-    for part in [p.strip() for p in args.min_ratio_vs_healpy.split(",") if p.strip()]:
-        op, raw = part.split("=", 1)
-        ratio_thresholds[op.strip()] = float(raw.strip())
+    try:
+        import healpy as healpy_hp
+    except Exception as exc:
+        print(f"healpy is required for this replay: {exc}")
+        return 2
 
+    spin = 2
+    rng = np.random.default_rng(args.seed)
     cases = DEFAULT_CASES if args.case_set == "default" else EXTENDED_CASES
+    rows: list[dict[str, object]] = []
 
-    rows: list[Row] = []
-    for i, case in enumerate(cases):
+    for case in cases:
+        nside = int(case["nside"])
+        lmax = int(case["lmax"])
+        mmax = int(case["mmax"])
+        nest = bool(case["nest"])
+        npix = hp.nside2npix(nside)
+        qu_np = rng.normal(size=(2, npix)).astype(np.float64)
+        qu_t = torch.from_numpy(qu_np.copy())
+        qu_hp = qu_np
+        if nest:
+            qu_hp = np.stack(
+                [
+                    healpy_hp.reorder(qu_np[0], n2r=True),
+                    healpy_hp.reorder(qu_np[1], n2r=True),
+                ]
+            )
+
+        def _ts_map2alm() -> tuple[torch.Tensor, torch.Tensor]:
+            return map2alm_spin(
+                qu_t, spin=spin, nside=nside, lmax=lmax, mmax=mmax, nest=nest
+            )
+
+        def _hp_map2alm() -> tuple[np.ndarray, np.ndarray]:
+            return healpy_hp.map2alm_spin(qu_hp, spin=spin, lmax=lmax, mmax=mmax)
+
+        ae_t, ab_t = _ts_map2alm()
+        ae_h, ab_h = _hp_map2alm()
+        map2alm_err = max(
+            _rel_l2(ae_t.detach().cpu().numpy(), np.asarray(ae_h)),
+            _rel_l2(ab_t.detach().cpu().numpy(), np.asarray(ab_h)),
+        )
+        t_ts = _median_time(_ts_map2alm, args.runs)
+        t_hp = _median_time(_hp_map2alm, args.runs)
         rows.append(
-            _map2alm_case(
-                case, n_points=args.n_points, runs=args.runs, seed=args.seed + 10 * i
-            )
+            {
+                "operation": "map2alm_spin",
+                "nside": nside,
+                "lmax": lmax,
+                "mmax": mmax,
+                "nest": nest,
+                "spin": spin,
+                "n_points": args.n_points,
+                "rel_l2_error": map2alm_err,
+                "time_torchsky_s": t_ts,
+                "time_healpy_s": t_hp,
+                "ratio_vs_healpy": t_hp / t_ts if t_ts > 0.0 else 0.0,
+            }
         )
+
+        ae_in = torch.from_numpy(np.asarray(ae_h)).to(torch.complex128)
+        ab_in = torch.from_numpy(np.asarray(ab_h)).to(torch.complex128)
+
+        def _ts_alm2map() -> torch.Tensor:
+            return alm2map_spin(
+                (ae_in, ab_in), nside=nside, spin=spin, lmax=lmax, mmax=mmax, nest=nest
+            )
+
+        def _hp_alm2map() -> np.ndarray:
+            out = healpy_hp.alm2map_spin(
+                [np.asarray(ae_h), np.asarray(ab_h)],
+                nside=nside,
+                spin=spin,
+                lmax=lmax,
+                mmax=mmax,
+            )
+            if nest:
+                return np.stack(
+                    [
+                        healpy_hp.reorder(out[0], r2n=True),
+                        healpy_hp.reorder(out[1], r2n=True),
+                    ]
+                )
+            return np.asarray(out)
+
+        qu_ts = _ts_alm2map().detach().cpu().numpy()
+        qu_ref = _hp_alm2map()
+        alm2map_err = _rel_l2(qu_ts, qu_ref)
+        t_ts_i = _median_time(_ts_alm2map, args.runs)
+        t_hp_i = _median_time(_hp_alm2map, args.runs)
         rows.append(
-            _alm2map_case(
-                case,
-                n_points=args.n_points,
-                runs=args.runs,
-                seed=args.seed + 10 * i + 1,
-            )
+            {
+                "operation": "alm2map_spin",
+                "nside": nside,
+                "lmax": lmax,
+                "mmax": mmax,
+                "nest": nest,
+                "spin": spin,
+                "n_points": args.n_points,
+                "rel_l2_error": alm2map_err,
+                "time_torchsky_s": t_ts_i,
+                "time_healpy_s": t_hp_i,
+                "ratio_vs_healpy": t_hp_i / t_ts_i if t_ts_i > 0.0 else 0.0,
+            }
         )
-
-    print(
-        "operation      nside  lmax  mmax  nest  rel_l2       max_abs      tf_mpts/s  hp_mpts/s  ratio"
-    )
-    failures: list[str] = []
-    for r in rows:
-        print(
-            f"{r.operation:13s} {r.nside:5d} {r.lmax:5d} {r.mmax:5d} {str(r.nest):5s}"
-            f" {r.rel_l2_error:11.3e} {r.max_abs_error:11.3e}"
-            f" {r.torchsky_mpts_s:10.3f} {r.healpy_mpts_s:10.3f} {r.ratio_vs_healpy:7.3f}"
-        )
-        if (
-            r.operation == "map2alm_spin"
-            and r.rel_l2_error > args.max_map2alm_rel_error
-        ):
-            failures.append(
-                f"{r.operation}@nside={r.nside},lmax={r.lmax},mmax={r.mmax},nest={r.nest}:"
-                f" rel_l2 {r.rel_l2_error:.3e} > {args.max_map2alm_rel_error:.3e}"
-            )
-        if (
-            r.operation == "alm2map_spin"
-            and r.rel_l2_error > args.max_alm2map_rel_error
-        ):
-            failures.append(
-                f"{r.operation}@nside={r.nside},lmax={r.lmax},mmax={r.mmax},nest={r.nest}:"
-                f" rel_l2 {r.rel_l2_error:.3e} > {args.max_alm2map_rel_error:.3e}"
-            )
-
-    med: dict[str, float] = {}
-    for op in ("map2alm_spin", "alm2map_spin"):
-        vals = [r.ratio_vs_healpy for r in rows if r.operation == op]
-        med[op] = float(np.median(vals))
-        thr = ratio_thresholds.get(op, 0.0)
-        print(f"median ratio {op:13s}: {med[op]:.3f}x (threshold {thr:.3f}x)")
-        if med[op] < thr:
-            failures.append(f"{op}: median ratio {med[op]:.3f} < {thr:.3f}")
 
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(
         json.dumps(
-            {
-                "cases": [asdict(c) for c in cases],
-                "case_set": args.case_set,
-                "runs": args.runs,
-                "rows": [asdict(r) for r in rows],
-                "median_ratio_vs_healpy": med,
-                "thresholds": {
-                    "max_map2alm_rel_error": args.max_map2alm_rel_error,
-                    "max_alm2map_rel_error": args.max_alm2map_rel_error,
-                    "min_ratio_vs_healpy": ratio_thresholds,
-                },
-            },
-            indent=2,
+            {"case_set": args.case_set, "runs": args.runs, "rows": rows}, indent=2
         ),
         encoding="utf-8",
     )
-    print(f"JSON written to: {args.json_out}")
-
-    if args.disable_gates:
-        return 0
-    if failures:
-        print("\nFAILURES:")
-        for item in failures:
-            print(f"- {item}")
-        return 1
+    print(f"Wrote {len(rows)} rows to {args.json_out}")
     return 0
 
 

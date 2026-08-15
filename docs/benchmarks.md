@@ -43,6 +43,7 @@ several Pixi environments because upstream wheels and ABI pins differ.
 | `bench-all` | Main `bench_all.py` WCS/sphere domains | Astropy (`astropy.wcs`), torch, optional legacy bridge rows |
 | `bench-legacy` | Legacy WCS libraries | PyAST (`starlink.Ast`) and optional Kapteyn for legacy WCS comparison |
 | `sphere-bench` | HEALPix and spherical geometry ecosystem | healpy, hpgeom, astropy-healpix, healsparse, spherical-geometry, mocpy, optional healpix/mhealpy/skyproj |
+| `sht-bench` | Optional HEALPix SHT peer | same as `sphere-bench`, plus **s2fft** via `pixi run sht-bench-bootstrap` (JAX is not in `sphere-bench`; healpy stays the science oracle) |
 | `map-compat` | Optical/IR stacker compatibility | reproject, dfreproject, drizzle, Montage, SWarp, casutools |
 
 Representative commands:
@@ -55,7 +56,7 @@ pixi run bench-comparator-versions-all
 pixi run wcs-sphere-acceptance
 ```
 
-Linux CPU/CUDA confirmation uses `scripts/run_canfar_wcs_sphere.sh` (modes `cpu` and `cuda`) with `TORCHSKY_COMMIT` set to a pushed SHA. Do not reuse the ADASS/SMACS runner for this domain. Local Mac smoke stays `--quick` via `pixi run wcs-sphere-acceptance`; the full oracle ingest is `pixi run wcs-sphere-acceptance-full` or the CANFAR `cpu` job.
+Linux CPU/CUDA confirmation uses `scripts/run_canfar_wcs_sphere.sh` (modes `cpu` and `cuda`) with `TORCHSKY_COMMIT` set to a pushed SHA. Do not reuse the ADASS/SMACS runner for this domain. Local Mac smoke stays `--quick` via `pixi run wcs-sphere-acceptance`; the full oracle ingest is `pixi run wcs-sphere-acceptance-full` or the CANFAR `cpu` job. The cuHPX scalar SHT spike is a separate CUDA-only job: `scripts/run_canfar_cuhpx_sht_spike.sh`.
 
 For pip-only parity benches against the HEALPix / geometry comparator stack,
 install `pip install -e ".[bench-all]"` after installing a compatible PyTorch.
@@ -206,7 +207,7 @@ artifacts unless a baseline is deliberately reviewed and committed.
 | `bench_sphere_geom_exact_contains.py` | Bulk ``(lon, lat)`` containment: ``ExactSphericalRegion.contains`` (``spherical_geometry`` backend) vs the same vectorized ``contains_lonlat``/``contains_radec`` numpy path used as the upstream reference, plus throughput vs ``spherical_polygon_contains``. Explicit **SKIPPED** rows document non-comparable APIs for **hpgeom** / **healpy** (HEALPix-centric; use `bench_sphere_geometry.py` for those). Wired into `bench_sphere_suite.py` as suite `sphere_geom_exact_contains`. **Regression gate:** `--baseline-json benchmarks/baselines/sphere_geom_exact_contains_gate.json` enforces parity and throughput floors (with default `--points-s-tolerance` 0.35); disable per-row throughput via `skip_points_s_regression: true` if a runner is too variable. Pixi: `sphere-bench-geom-exact-contains-gate`. |
 | `bench_catalog_crossmatch.py` | Catalog crossmatch refinement benchmark comparing chunk-wide declination pruning, coarse HEALPix grouping, and exact per-row declination indexing. |
 | `bench_catalog_compat.py` | Catalog crossmatch compatibility benchmark against `astropy.coordinates.SkyCoord`, covering both synthetic clustered catalogs and vendored real Astropy VOTable fixtures, plus a real-data FITS roundtrip when native table I/O is available. |
-| `bench_sphere_spectral.py` | CPU-first spherical harmonic primitive benchmark (`map2alm`, `map2alm_lsq`, `alm2map`, `almxfl`, `alm2cl`, `anafast`, `map2alm_spin`, `alm2map_spin`) plus compatibility-generation paths (`synalm`, `synfast`, `bl2beam`, `beam2bl`) as needed. |
+| `bench_sphere_spectral.py` | CPU-first spherical harmonic primitive benchmark (`map2alm`, `map2alm_lsq`, `alm2map`, `almxfl`, `alm2cl`, `anafast`, `map2alm_spin`, `alm2map_spin`) plus compatibility-generation paths (`synalm`, `synfast`, `bl2beam`, `beam2bl`) as needed. Optional `backend=s2fft` rows when s2fft is importable (`sampling="healpix"` only; `jax_healpy` is not a peer). Ingested by `bench_sphere_suite.py` the same way optional mocpy/healsparse rows are. |
 | `bench_pipeline_table_sphere.py` | End-to-end benchmark: table predicate pushdown (`where`) + HEALPix spherical reduction pipeline. |
 
 ## Methodology
@@ -801,7 +802,7 @@ Win rate: **85.3%** overall. At N &ge; 100K: **100%** (90/90 cases).
 
 ### Sphere
 
-Compared against **healpy**, **hpgeom**, **astropy-healpix**, **healsparse**, **mocpy** (optional), and **spherical-geometry**. Coverage: `ang2pix` (ring/nested), `pix2ang`, `nest2ring`, `ring2nest`, neighbors, interpolation weights/values, sparse map `get_values`/`ud_grade` vs healsparse when installed, MOC contains vs mocpy when installed, non-convex polygon contains/area/query, and spin-weighted harmonic transforms.
+Compared against **healpy**, **hpgeom**, **astropy-healpix**, **healsparse**, **mocpy** (optional), **s2fft** (optional HEALPix SHT peer, not an oracle), and **spherical-geometry**. Coverage: `ang2pix` (ring/nested), `pix2ang`, `nest2ring`, `ring2nest`, neighbors, interpolation weights/values, sparse map `get_values`/`ud_grade` vs healsparse when installed, MOC contains vs mocpy when installed, non-convex polygon contains/area/query, and spin-weighted harmonic transforms.
 
 **HEALPix geometry (CPU):**
 
@@ -853,8 +854,8 @@ Win rate: **88.9%** (16/18). Large-N: **100%** (13/13). Two deficits listed belo
 | Domain | Case | Lag | Notes |
 |---|---|---:|---|
 | wcs | N &le; 10K forward/inverse (22 cases) | 1.0x &ndash; 2.9x | Fixed PyTorch dispatch overhead at small N (21 at N = 1K, 1 at N = 10K). All under 3 ms absolute. |
-| sphere | `map2alm_spin` | 6.3x | Spin transform not yet optimized; healpy uses compiled C. Target for 0.4.x. |
-| sphere | `alm2map_spin` | 8.3x | Same as above. |
+| sphere | `map2alm_spin` | 6.3x | Fused RING concat is now on the CPU hot path; same-machine nside 32/64/128 still ~8x vs healpy. Gate floors unchanged. |
+| sphere | `alm2map_spin` | 8.3x | Same as above (~10–12x on the 2026-08-15 machine). |
 
 ---
 

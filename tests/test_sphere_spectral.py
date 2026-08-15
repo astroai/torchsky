@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import torch
 
+from torchsky._native import cpp as _native_cpp
 from torchsky.sphere import compat
 from torchsky.sphere import healpix as hp
 import torchsky.sphere.spectral as spectral_mod
@@ -68,32 +69,26 @@ except Exception:  # pragma: no cover
 
 
 def _has_cpp_ring_fourier() -> bool:
-    try:
-        from torchsky import cpp as _cpp  # type: ignore
-    except Exception:
-        return False
-    return hasattr(_cpp, "_healpix_ring_fourier_modes_cpu") and hasattr(
-        _cpp, "_healpix_ring_fourier_synthesis_cpu"
+    return (
+        _native_cpp is not None
+        and hasattr(_native_cpp, "_healpix_ring_fourier_modes_cpu")
+        and hasattr(_native_cpp, "_healpix_ring_fourier_synthesis_cpu")
     )
 
 
 def _has_cpp_spin_concat() -> bool:
-    try:
-        from torchsky import cpp as _cpp  # type: ignore
-    except Exception:
-        return False
-    return hasattr(_cpp, "_healpix_spin_interpolate_concat_cpu") and hasattr(
-        _cpp, "_healpix_spin_integrate_concat_cpu"
+    return (
+        _native_cpp is not None
+        and hasattr(_native_cpp, "_healpix_spin_interpolate_concat_cpu")
+        and hasattr(_native_cpp, "_healpix_spin_integrate_concat_cpu")
     )
 
 
 def _has_cpp_spin_ring_fused() -> bool:
-    try:
-        from torchsky import cpp as _cpp  # type: ignore
-    except Exception:
-        return False
-    return hasattr(_cpp, "_healpix_spin_map2alm_ring_concat_cpu") and hasattr(
-        _cpp, "_healpix_spin_ring_finalize_cpu"
+    return (
+        _native_cpp is not None
+        and hasattr(_native_cpp, "_healpix_spin_map2alm_ring_concat_cpu")
+        and hasattr(_native_cpp, "_healpix_spin_ring_finalize_cpu")
     )
 
 
@@ -449,11 +444,9 @@ def test_alm2map_infer_lmax() -> None:
 def test_alm2map_scalar_cpp_direct_parity(
     monkeypatch: pytest.MonkeyPatch, nest: bool
 ) -> None:
-    try:
-        from torchsky import cpp as _cpp_mod
-    except Exception:
-        _cpp_mod = None
-    if _cpp_mod is None or not hasattr(_cpp_mod, "_healpix_scalar_alm2map_direct_cpu"):
+    if _native_cpp is None or not hasattr(
+        _native_cpp, "_healpix_scalar_alm2map_direct_cpu"
+    ):
         pytest.skip("cpp scalar alm2map direct kernel unavailable")
 
     nside = 16
@@ -910,6 +903,7 @@ def test_map2alm_spin_concat_cpp_parity(monkeypatch: pytest.MonkeyPatch) -> None
     qu = torch.from_numpy(rng.normal(size=(2, npix))).to(torch.float64)
 
     monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_CONCAT_CPP", "0")
     monkeypatch.setenv("TORCHSKY_SPIN_RING_INTEGRATE_CONCAT_CPP", "0")
     a0, b0 = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax)
     monkeypatch.setenv("TORCHSKY_SPIN_RING_INTEGRATE_CONCAT_CPP", "1")

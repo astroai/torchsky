@@ -151,6 +151,8 @@ test-dataloader = "pixi run -e default -- pytest tests/test_dataloader.py -v"
 sphere-bench-bootstrap = "pixi run -e sphere-bench python scripts/bootstrap_sphere_bench.py --installer pip"
 sphere-bench-bootstrap-core = "pixi run -e sphere-bench python scripts/bootstrap_sphere_bench.py --installer pip --include astropy-healpix,hpgeom,healpix,mhealpy"
 sphere-bench-bootstrap-harmonics = "pixi run -e sphere-bench python scripts/bootstrap_sphere_bench.py --installer pip --with-harmonics"
+sht-bench-bootstrap = "pixi run -e sht-bench python scripts/bootstrap_sphere_bench.py --installer pip --with-s2fft"
+sht-bench-spectral = "pixi run -e sht-bench python benchmarks/bench_sphere_spectral.py --nside 32 --lmax 32 --runs 5 --json-out benchmark_results/sphere_spectral_s2fft.json"
 sphere-upstream-sync = "pixi run -e sphere-bench python scripts/sync_upstream_sphere_sources.py --prefer-sdist --include healpy,astropy-healpix,healpix,mhealpy,spherical-geometry --output-dir benchmark_results/upstream_fixtures"
 sphere-upstream-spin-matrix-gate-extended = "pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set extended --runs 5 --seed 123 --json-out benchmark_results/upstream_replay_healpy_spin_matrix.json --raw-json-out benchmark_results/upstream_replay_healpy_spin_extended_raw.json --baseline-json benchmarks/baselines/spin_matrix_extended_baseline.json --max-regression-frac 0.20"
 sphere-upstream-spin-matrix = "pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set extended --runs 5 --json-out benchmark_results/upstream_replay_healpy_spin_matrix.json --raw-json-out benchmark_results/upstream_replay_healpy_spin_extended_raw.json"
@@ -303,6 +305,8 @@ default = { features = ["prod"], solve-group = "default" }
 test = { features = ["prod", "test"], solve-group = "default" }
 bench = { features = ["prod", "bench"], solve-group = "default" }
 sphere-bench = { features = ["prod", "bench", "sphere-bench"], solve-group = "default" }
+# Optional s2fft peer. JAX is not locked here; run `pixi run sht-bench-bootstrap`.
+sht-bench = { features = ["prod", "test", "sphere-bench"], solve-group = "default" }
 cuda-bench = { features = ["cuda"], no-default-feature = true, solve-group = "cuda" }
 smacs-cuda = { features = ["cuda", "smacs"], no-default-feature = true, solve-group = "smacs-cuda" }
 bench-all = { features = ["prod", "bench", "sphere-bench"], solve-group = "default" }

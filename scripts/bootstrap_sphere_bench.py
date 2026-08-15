@@ -20,10 +20,15 @@ CORE_SPECS: list[tuple[str, str]] = [
 
 HARMONIC_SPECS: list[tuple[str, str]] = [
     ("torch-harmonics", "torch-harmonics"),
-    ("s2fft", "s2fft"),
+    ("s2fft", "s2fft>=1.0"),
     ("s2wav", "s2wav"),
     ("so3", "so3"),
     ("coord", "LSSTDESC.Coord"),
+]
+
+# s2fft only. Do not pull torch-harmonics / JAX into sphere-bench by default.
+S2FFT_SPECS: list[tuple[str, str]] = [
+    ("s2fft", "s2fft>=1.0"),
 ]
 
 
@@ -71,6 +76,11 @@ def main() -> int:
         help="Also install harmonic/encoder ecosystem packages",
     )
     parser.add_argument(
+        "--with-s2fft",
+        action="store_true",
+        help="Install s2fft only (optional HEALPix SHT peer; pulls JAX)",
+    )
+    parser.add_argument(
         "--include",
         type=str,
         default=None,
@@ -97,6 +107,8 @@ def main() -> int:
     specs = list(CORE_SPECS)
     if args.with_harmonics:
         specs.extend(HARMONIC_SPECS)
+    if args.with_s2fft:
+        specs.extend(S2FFT_SPECS)
 
     installed: list[str] = []
     failed: list[str] = []

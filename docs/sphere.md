@@ -283,6 +283,30 @@ Analyze a HEALPix map into spherical harmonic coefficients.
 
 Iterative least-squares map analysis. Returns `(alm, rel_res, n_iter)`.
 
+### SHT oracles and peers
+
+**healpy** (ducc) is the science oracle for HEALPix scalar and spin SHT parity.
+**s2fft** is an optional independent HEALPix implementation for benches and tests
+only (`pip install -e ".[sht-bench]"` or `pixi run sht-bench-bootstrap`). It is
+not a core dependency and must not appear under `src/torchsky`.
+
+s2fft conventions that differ from healpy/torchsky:
+
+- Bandlimit `L` is `lmax + 1`.
+- Alm layout is typically `(L, 2L-1)` complex; torchsky/healpy use packed `m ≥ 0`.
+- `method="jax_healpy"` is healpy. Do not treat it as a second oracle. Peer
+  comparisons use native `sampling="healpix"` (`numpy` / `jax` / `torch`).
+- HEALPix has no sampling theorem, so native s2fft vs healpy residuals are
+  allowed; torchsky vs healpy stays tight.
+
+**cuHPX** is a CUDA-only research spike for scalar HEALPix SHT and spectral
+HEALPix↔lat-lon regrid. It is not a core backend, has no spin-2 path, defaults
+to `lmax = 2*nside+1` and float32, and must not be compared blindly to healpy's
+`3*nside-1`. See [Limitations](#limitations).
+
+SFNO / torch-harmonics stay out: they are lat-lon weather architectures, not a
+HEALPix SHT backend.
+
 ### `map2alm_spin(maps, spin, *, nside=None, lmax=None, mmax=None, nest=False, iter=0)`
 
 Spin-weighted map → alm transform. Input `maps` shape must be `(2, npix)`.
@@ -365,6 +389,7 @@ For large $N_\text{side}$ or batch transforms, `torchsky.sphere` substantially o
 | `TORCHSKY_SCALAR_MAX_CACHE_BYTES` | `512 MiB` | Basis-matrix cache budget |
 | `TORCHSKY_SCALAR_RING_AUTO_MIN_BYTES` | `64 MiB` | Min map size to use ring path |
 | `TORCHSKY_SPIN_RING_AUTO_MIN_BYTES` | `32 MiB` | Min map size for spin ring path |
+| `TORCHSKY_SPIN_MAP2ALM_RING_CONCAT_CPP` | `1` | Fused CPU RING concat for `map2alm_spin` |
 
 ---
 
@@ -428,9 +453,11 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API
 | Area | Limitation |
 |---|---|
 | `map2alm` | `use_pixel_weights` and `gal_cut` are not supported by the torch backend and raise. There is no healpy fallback. |
-| `map2alm_spin` / `alm2map_spin` | Functional but slower than healpy's C implementation (~6-8x). Optimization target for 0.4.x. |
+| `map2alm_spin` / `alm2map_spin` | Functional; fused RING concat is on the CPU hot path. Still slower than healpy's C implementation on some sizes. Pixel weights / `gal_cut` stay fail-loud. |
 | Pixel windows | Packaged tables cover standard HEALPix NSIDE range. Higher NSIDE may require external data. |
 | GPU | HEALPix geometry primitives and SHT run on CUDA and MPS. Polygon operations are CPU-only. |
+| s2fft | Optional bench/test peer only. Native HEALPix has no sampling theorem; do not use `method="jax_healpy"` as an oracle. |
+| cuHPX | **No-go** as a torchsky backend until a CANFAR CUDA spike (`scripts/run_canfar_cuhpx_sht_spike.sh`) reports `go-scalar-cuda`. Even then: optional env-gated scalar CUDA adapter only, still healpy-tested, never default on CPU/MPS, no spin-2, no core/`pyproject.toml` dependency. Default cuHPX `lmax=2*nside+1` and float32 must not be compared blindly to healpy `3*nside-1`. |
 
 ---
 

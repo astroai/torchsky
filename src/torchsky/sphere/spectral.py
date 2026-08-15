@@ -2148,7 +2148,7 @@ def _ring_spin_interpolate_blocks(
         y_plus = y_plus.to(device=device, dtype=dtype)
         y_minus = y_minus.to(device=device, dtype=dtype)
         use_cpp = (
-            _SPIN_RING_INTERP_CONCAT_CPP_ENABLE
+            os.environ.get("TORCHSKY_SPIN_RING_INTERP_CONCAT_CPP", "1") != "0"
             and _cpp is not None
             and hasattr(_cpp, "_healpix_spin_interpolate_concat_cpu")
             and device.type == "cpu"
@@ -2231,7 +2231,7 @@ def _ring_spin_integrate_blocks(
         y_plus = y_plus.to(device=device, dtype=dtype)
         y_minus = y_minus.to(device=device, dtype=dtype)
         use_cpp = (
-            _SPIN_RING_INTEGRATE_CONCAT_CPP_ENABLE
+            os.environ.get("TORCHSKY_SPIN_RING_INTEGRATE_CONCAT_CPP", "1") != "0"
             and _cpp is not None
             and hasattr(_cpp, "_healpix_spin_integrate_concat_cpu")
             and device.type == "cpu"
@@ -2339,7 +2339,7 @@ def _spin_alm2map_ring_torch(
     # 3. Inverse FFT (synthesis) + final spin combination
     start_pix, lengths, _, _ = _ring_layout_for_nside(int(nside))
     use_cpp_finalize = (
-        _SPIN_RING_FINALIZE_CPP_ENABLE
+        os.environ.get("TORCHSKY_SPIN_RING_FINALIZE_CPP", "1") != "0"
         and _cpp is not None
         and hasattr(_cpp, "_healpix_spin_ring_finalize_cpu")
         and s_plus.device.type == "cpu"
@@ -3751,7 +3751,15 @@ def _map2alm_spin_single_pass(
     lmax: int,
     mmax: int,
 ) -> tuple[Tensor, Tensor]:
-    rows = maps_t.to(device="cpu")
+    rows = maps_t if maps_t.device.type == "cpu" else maps_t.to(device="cpu")
+
+    def _cpu_c128(t: Tensor) -> Tensor:
+        if t.device.type != "cpu":
+            t = t.to(device="cpu")
+        if t.dtype != torch.complex128:
+            t = t.to(dtype=torch.complex128)
+        return t.contiguous()
+
     npix = int(maps_t.shape[1])
     pix_w = (4.0 * math.pi) / float(npix)
     nalm = alm_size(lmax, mmax)
@@ -3774,25 +3782,59 @@ def _map2alm_spin_single_pass(
             and nalm <= _SPIN_RING_INTEGRATE_CONCAT_MAX_NALM
         )
         if use_concat_fast:
-            s_plus, s_minus = _ring_fourier_modes_spin_conj(
-                p_plus,
-                starts_cpu=starts_cpu,
-                lengths_cpu=lengths_cpu,
-                mmax=mmax,
-                nside=int(nside),
+            phase0_neg = _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=-1)
+            if phase0_neg.dtype != torch.complex128:
+                phase0_neg = phase0_neg.to(dtype=torch.complex128)
+            use_fused_cpp = (
+                os.environ.get("TORCHSKY_SPIN_MAP2ALM_RING_CONCAT_CPP", "1") != "0"
+                and _cpp is not None
+                and hasattr(_cpp, "_healpix_spin_map2alm_ring_concat_cpu")
+                and p_plus.device.type == "cpu"
+                and p_plus.dtype == torch.complex128
+                and (not p_plus.requires_grad)
             )
-            y_plus, y_minus = _ring_spin_basis_concat(
-                int(nside), int(lmax), int(mmax), int(spin_i)
-            )
-            phase0_neg = _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=-1).to(
-                dtype=torch.complex128, device=s_plus.device
-            )
-            s_plus = s_plus * phase0_neg
-            s_minus = s_minus * phase0_neg
-
-            m_idx = _alm_m_array(int(lmax), int(mmax)).to(s_plus.device)
-            c_plus = torch.sum(y_plus * s_plus[m_idx], dim=1) * pix_w
-            c_minus = torch.sum(y_minus * s_minus[m_idx], dim=1) * pix_w
+            if use_fused_cpp:
+                y_plus, y_minus = _ring_spin_basis_concat(
+                    int(nside), int(lmax), int(mmax), int(spin_i)
+                )
+                if y_plus.device.type != "cpu":
+                    use_fused_cpp = False
+                else:
+                    c_plus, c_minus = _cpp._healpix_spin_map2alm_ring_concat_cpu(
+                        p_plus.contiguous(),
+                        starts_cpu.contiguous(),
+                        lengths_cpu.contiguous(),
+                        phase0_neg.contiguous(),
+                        y_plus.contiguous(),
+                        y_minus.contiguous(),
+                        int(lmax),
+                        int(mmax),
+                        float(pix_w),
+                    )
+            if not use_fused_cpp:
+                s_plus, s_minus = _ring_fourier_modes_spin_conj(
+                    p_plus,
+                    starts_cpu=starts_cpu,
+                    lengths_cpu=lengths_cpu,
+                    mmax=mmax,
+                    nside=int(nside),
+                )
+                phase = (
+                    phase0_neg
+                    if s_plus.device.type == "cpu"
+                    else phase0_neg.to(device=s_plus.device)
+                )
+                s_plus = s_plus * phase
+                s_minus = s_minus * phase
+                c_plus, c_minus = _ring_spin_integrate_blocks(
+                    s_plus,
+                    s_minus,
+                    nside=int(nside),
+                    lmax=int(lmax),
+                    mmax=int(mmax),
+                    spin=int(spin_i),
+                    pix_w=float(pix_w),
+                )
         else:
             s_plus, s_minus = _ring_fourier_modes_spin_conj(
                 p_plus,
@@ -3829,12 +3871,8 @@ def _map2alm_spin_single_pass(
                     w_vec = torch.full(
                         (nrings,), float(pix_w), dtype=torch.float64, device="cpu"
                     )
-                    sp_cpu = s_plus.to(
-                        dtype=torch.complex128, device="cpu"
-                    ).contiguous()
-                    sm_cpu = s_minus.to(
-                        dtype=torch.complex128, device="cpu"
-                    ).contiguous()
+                    sp_cpu = _cpu_c128(s_plus)
+                    sm_cpu = _cpu_c128(s_minus)
                     c_stacked = _cpp._healpix_spin_integrate_recurrence_cpu(
                         sp_cpu,
                         sm_cpu,
@@ -3895,12 +3933,8 @@ def _map2alm_spin_single_pass(
                     w_vec = torch.full(
                         (nrings,), float(pix_w), dtype=torch.float64, device="cpu"
                     )
-                    sp_cpu = s_plus.to(
-                        dtype=torch.complex128, device="cpu"
-                    ).contiguous()
-                    sm_cpu = s_minus.to(
-                        dtype=torch.complex128, device="cpu"
-                    ).contiguous()
+                    sp_cpu = _cpu_c128(s_plus)
+                    sm_cpu = _cpu_c128(s_minus)
                     c_stacked = _cpp._healpix_spin_integrate_recurrence_cpu(
                         sp_cpu,
                         sm_cpu,

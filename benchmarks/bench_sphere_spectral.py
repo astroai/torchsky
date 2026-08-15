@@ -83,6 +83,28 @@ def _random_spin_alms(
     )
 
 
+def _s2fft_native(kind: str, arr, *, L: int, nside: int, spin: int, reality: bool):
+    """Native HEALPix s2fft. Never uses method='jax_healpy' (that is healpy)."""
+    import s2fft  # type: ignore
+
+    fn = s2fft.forward if kind == "forward" else s2fft.inverse
+    last_exc: Exception | None = None
+    for method in ("numpy", "jax", "torch"):
+        try:
+            return fn(
+                arr,
+                L,
+                nside=nside,
+                sampling="healpix",
+                method=method,
+                spin=spin,
+                reality=reality,
+            )
+        except Exception as exc:
+            last_exc = exc
+    raise RuntimeError(f"s2fft native HEALPix {kind} failed: {last_exc}")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--nside", type=int, default=32)
@@ -101,6 +123,7 @@ def main() -> int:
     os.environ.setdefault("TORCHSKY_RING_FOURIER_CPP", "0")
     os.environ.setdefault("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "1")
     os.environ.setdefault("TORCHSKY_SPIN_ALM2MAP_RECURRENCE_CPP", "1")
+    os.environ.setdefault("TORCHSKY_SPIN_MAP2ALM_RING_CONCAT_CPP", "1")
     os.environ.setdefault("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "auto")
     os.environ.setdefault("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "auto")
 
@@ -130,15 +153,18 @@ def main() -> int:
         backends.append("healpy")
     except Exception:
         pass
+    try:
+        import s2fft as _s2fft  # type: ignore  # noqa: F401
+
+        backends.append("s2fft")
+    except Exception:
+        pass
 
     rows: list[Row] = []
     print("op            backend  nside  lmax   mops/s   time(s)", flush=True)
     for backend in backends:
-        if (
-            backend == "torch"
-            and args.nside >= 128
-            and os.environ.get("TORCHSKY_SPIN_MAP2ALM_RING_TORCH") != "force"
-        ):
+        ring_mode = os.environ.get("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "auto")
+        if backend == "torch" and args.nside >= 128 and ring_mode == "0":
             print(
                 f"Skipping {backend} for nside={args.nside} (matrix path) to avoid OOM"
             )
@@ -271,6 +297,26 @@ def main() -> int:
                     )
 
                 t = _time_many(_hp_map2alm_spin, runs=args.runs)
+            elif backend == "s2fft":
+                qu_np = qu_vals.detach().cpu().numpy()
+                f_spin = qu_np[0] + 1j * qu_np[1]
+                L = int(args.lmax) + 1
+
+                def _s2_map2alm_spin() -> None:
+                    _s2fft_native(
+                        "forward",
+                        f_spin,
+                        L=L,
+                        nside=args.nside,
+                        spin=args.spin,
+                        reality=False,
+                    )
+
+                try:
+                    t = _time_many(_s2_map2alm_spin, runs=args.runs)
+                except Exception as exc:
+                    print(f"Skipping s2fft map2alm_spin: {exc}", flush=True)
+                    continue
             else:
                 t = _time_many(
                     lambda: map2alm_spin(
@@ -303,6 +349,34 @@ def main() -> int:
                     )
 
                 t = _time_many(_hp_alm2map_spin, runs=args.runs)
+            elif backend == "s2fft":
+                qu_np = qu_vals.detach().cpu().numpy()
+                f_spin = qu_np[0] + 1j * qu_np[1]
+                L = int(args.lmax) + 1
+                try:
+                    flm_spin = _s2fft_native(
+                        "forward",
+                        f_spin,
+                        L=L,
+                        nside=args.nside,
+                        spin=args.spin,
+                        reality=False,
+                    )
+                except Exception as exc:
+                    print(f"Skipping s2fft alm2map_spin: {exc}", flush=True)
+                    continue
+
+                def _s2_alm2map_spin() -> None:
+                    _s2fft_native(
+                        "inverse",
+                        flm_spin,
+                        L=L,
+                        nside=args.nside,
+                        spin=args.spin,
+                        reality=False,
+                    )
+
+                t = _time_many(_s2_alm2map_spin, runs=args.runs)
             else:
                 t = _time_many(
                     lambda: alm2map_spin(
