@@ -99,6 +99,7 @@ bench-all = [
     "healpy>=1.19.0,<2",
     "hpgeom>=1.0",
     "healsparse>=1.10",
+    "mocpy>=0.13",
     "astropy-healpix>=1.0",
     "spherical-geometry>=1.2",
 ]

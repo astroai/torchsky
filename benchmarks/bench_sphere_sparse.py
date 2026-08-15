@@ -131,6 +131,55 @@ def main() -> int:
         }
     )
 
+    try:
+        import healsparse as _healsparse
+    except Exception:
+        _healsparse = None
+    if _healsparse is not None:
+        nside_cov = max(1, nside // 16)
+        hs = _healsparse.HealSparseMap.make_empty(nside_cov, nside, np.float64)
+        pix_np = sparse.pixels.detach().cpu()
+        val_np = sparse.values.detach().cpu().numpy()
+        pix_nest = pix_np
+        if not bool(sparse.nest):
+            pix_nest = hp.ring2nest(nside, pix_np)
+        hs.update_values_pix(pix_nest.cpu().numpy(), val_np, nest=True)
+        n_q = min(50_000, int(lon.numel()))
+        q_lon = lon[:n_q]
+        q_lat = lat[:n_q]
+        q_ring = hp.ang2pix(nside, q_lon, q_lat, nest=False, lonlat=True)
+        q_nest = hp.ang2pix(nside, q_lon, q_lat, nest=True, lonlat=True).cpu().numpy()
+        t_hs_get = _time_many(lambda: hs.get_values_pix(q_nest), args.runs)
+        t_ts_get = _time_many(lambda: sparse.get_values(q_ring), args.runs)
+        rows.append(
+            {
+                "operation": "sparse_get_values",
+                "library": "healsparse",
+                "n_queries": n_q,
+                "get_values_s": t_hs_get,
+            }
+        )
+        rows.append(
+            {
+                "operation": "sparse_get_values",
+                "library": "torchsky",
+                "n_queries": n_q,
+                "get_values_s": t_ts_get,
+                "ratio_torchsky_vs_healsparse": t_hs_get / t_ts_get,
+            }
+        )
+        t_hs_ud = _time_many(lambda: hs.degrade(max(1, nside // 2)), args.runs)
+        rows.append(
+            {
+                "operation": "ud_grade",
+                "library": "healsparse",
+                "nside_in": nside,
+                "nside_out": max(1, nside // 2),
+                "ud_grade_s": t_hs_ud,
+                "ratio_torchsky_vs_healsparse": t_hs_ud / t_sparse_ud,
+            }
+        )
+
     for row in rows:
         print(", ".join(f"{k}={v}" for k, v in row.items()))
 

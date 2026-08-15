@@ -206,6 +206,54 @@ def main() -> int:
             }
         )
 
+    try:
+        import astropy.units as u
+        from mocpy import MOC as MocpyMOC
+        from torchsky.sphere.moc import MOC as TorchMOC
+    except Exception:
+        MocpyMOC = None
+        TorchMOC = None
+        u = None
+    if MocpyMOC is not None and TorchMOC is not None and u is not None:
+        moc = TorchMOC.from_circle(20.0, -10.0, 5.0, max_order=6)
+        moc_lon = lon_t[: min(50_000, args.n_points)].cpu()
+        moc_lat = lat_t[: min(50_000, args.n_points)].cpu()
+        t_ts = _bench(
+            lambda: moc.contains(moc_lon, moc_lat),
+            runs=args.runs,
+            device=torch.device("cpu"),
+        )
+        results.append(
+            {
+                "operation": "moc_contains",
+                "library": "torchsky",
+                "n_points": int(moc_lon.numel()),
+                "contains_s": t_ts,
+            }
+        )
+        if hasattr(MocpyMOC, "from_cone"):
+            ref = MocpyMOC.from_cone(
+                lon=20.0 * u.deg, lat=-10.0 * u.deg, radius=5.0 * u.deg, max_depth=6
+            )
+            lon_u = moc_lon.numpy() * u.deg
+            lat_u = moc_lat.numpy() * u.deg
+            contains_fn = getattr(ref, "contains_lonlat", getattr(ref, "contains", None))
+            if contains_fn is not None:
+                t_ref = _bench(
+                    lambda: contains_fn(lon_u, lat_u),
+                    runs=args.runs,
+                    device=None,
+                )
+                results.append(
+                    {
+                        "operation": "moc_contains",
+                        "library": "mocpy",
+                        "n_points": int(moc_lon.numel()),
+                        "contains_s": t_ref,
+                        "ratio_torchsky_vs_mocpy": t_ref / t_ts,
+                    }
+                )
+
     for row in results:
         line = ", ".join(f"{k}={v}" for k, v in row.items())
         print(line)

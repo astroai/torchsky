@@ -409,6 +409,100 @@ def test_wcs_spectral_velocity_compound_axes_match_astropy(
     np.testing.assert_allclose(pix_t.numpy(), pixels, rtol=1e-11, atol=1e-6)
 
 
+def test_wcs_awav_1d_matches_astropy() -> None:
+    header = {
+        "NAXIS": 1,
+        "CTYPE1": "AWAV",
+        "CUNIT1": "Angstrom",
+        "CRPIX1": 1.0,
+        "CRVAL1": 5000.0,
+        "CDELT1": 1.0,
+    }
+    twcs = torchsky.WCS(header)
+    awcs = AstropyWCS(header)
+    pixels = np.array([[0.0], [1.0], [10.0], [25.0]], dtype=np.float64)
+    world_t = twcs.pixel_to_world(torch.from_numpy(pixels), origin=0)
+    world_a = awcs.all_pix2world(pixels, 0)
+    # Astropy returns SI meters; torchsky keeps CUNIT (Angstrom).
+    np.testing.assert_allclose(
+        world_t.numpy() * 1.0e-10, world_a, rtol=1e-10, atol=1e-18
+    )
+    pix_t = twcs.world_to_pixel(world_t, origin=0)
+    np.testing.assert_allclose(pix_t.numpy(), pixels, rtol=1e-12, atol=1e-9)
+
+
+def test_specsys_is_preserved_not_applied() -> None:
+    base = {
+        "NAXIS": 1,
+        "CTYPE1": "FREQ",
+        "CUNIT1": "Hz",
+        "CRPIX1": 1.0,
+        "CRVAL1": 1.42e9,
+        "CDELT1": 1.0e5,
+        "RESTFRQ": 1.42040575177e9,
+    }
+    with_sys = dict(base)
+    with_sys["SPECSYS"] = "LSRK"
+    pixels = torch.tensor([[0.0], [3.0], [10.0]], dtype=torch.float64)
+    w_plain = torchsky.WCS(base)
+    w_sys = torchsky.WCS(with_sys)
+    torch.testing.assert_close(
+        w_sys.pixel_to_world(pixels, origin=0),
+        w_plain.pixel_to_world(pixels, origin=0),
+        atol=0.0,
+        rtol=0.0,
+    )
+    assert w_sys.wcs_params.get("SPECSYS") == "LSRK"
+
+
+def test_unknown_spectral_algorithm_raises() -> None:
+    with pytest.raises(ValueError, match="unsupported FITS spectral algorithm"):
+        torchsky.WCS(
+            {
+                "NAXIS": 1,
+                "CTYPE1": "WAVE-FOO",
+                "CRPIX1": 1.0,
+                "CRVAL1": 5000.0,
+                "CDELT1": 1.0,
+            }
+        )
+
+
+def test_spatial_cube_coupled_cd_roundtrip_matches_astropy() -> None:
+    header = {
+        "NAXIS": 3,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CTYPE3": "WAVE",
+        "CRPIX1": 32.0,
+        "CRPIX2": 32.0,
+        "CRPIX3": 5.0,
+        "CRVAL1": 180.0,
+        "CRVAL2": 0.0,
+        "CRVAL3": 5000.0,
+        "CD1_1": -0.01,
+        "CD1_2": 0.0,
+        "CD1_3": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": 0.01,
+        "CD2_3": 0.0,
+        "CD3_1": 0.1,
+        "CD3_2": -0.05,
+        "CD3_3": 2.0,
+    }
+    twcs = torchsky.WCS(header)
+    awcs = AstropyWCS(header)
+    pixels = np.array(
+        [[32.0, 32.0, 5.0], [30.0, 34.0, 7.0], [40.0, 28.0, 2.0]],
+        dtype=np.float64,
+    )
+    world_t = twcs.pixel_to_world(torch.from_numpy(pixels), origin=0)
+    world_a = awcs.all_pix2world(pixels, 0)
+    pix_t = twcs.world_to_pixel(torch.from_numpy(world_a), origin=0)
+    np.testing.assert_allclose(world_t.numpy(), world_a, rtol=1e-10, atol=1e-8)
+    np.testing.assert_allclose(pix_t.numpy(), pixels, rtol=1e-10, atol=1e-6)
+
+
 def test_convert_spectral_and_legacy_transform_spectral() -> None:
     rest_hz = 1420.40575177e6
     freq = torch.tensor([rest_hz, 1.419e9], dtype=torch.float64)

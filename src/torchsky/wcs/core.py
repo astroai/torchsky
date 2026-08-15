@@ -90,12 +90,12 @@ class WCS:
     """
 
     ZENITHAL_CODES = ("TAN", "SIN", "ARC", "ZPN", "STG", "ZEA", "AZP", "SZP", "AIR")
-    CYLINDRICAL_CODES = ("CEA", "MER", "CYP")
-    ALLSKY_CODES = ("AIT", "MOL", "HPX")
+    CYLINDRICAL_CODES = ("CEA", "MER", "CYP", "CAR")
+    ALLSKY_CODES = ("AIT", "MOL", "HPX", "SFL")
     CONIC_CODES = ("COP", "COE", "COD", "COO")
     POLYCONIC_CODES = ("BON",)
     PSEUDOCYLINDRICAL_CODES = ("PAR",)
-    SPECIAL_CODES = ("ZPX", "TNX", "TPV", "CAR", "SFL")
+    SPECIAL_CODES = ("ZPX", "TNX", "TPV")
 
     def __init__(
         self,
@@ -170,8 +170,8 @@ class WCS:
         # Default device
         self.device = torch.device("cpu")
 
-        # Environment-controlled fused C++ path. Default is False because vectorized
-        # PyTorch + torch.compile is typically 2x-4x faster than the scalar C++ loop.
+        # Environment-controlled fused C++ path. Default is ON ("1").
+        # Vectorized PyTorch can win at some sizes; set TORCHSKY_WCS_FUSED=0 to compare.
         self._enable_fused_wcs = os.environ.get("TORCHSKY_WCS_FUSED", "1") == "1"
 
         # Move parameters to appropriate buffers/tensors
@@ -594,6 +594,59 @@ class WCS:
         if tabular is None:
             return self._apply_spectral_algorithm_world_to_pixel(world, axis)
         return tabular.world_to_pixel(world)
+
+    def _wcs_coord_dtype(self, device: torch.device) -> torch.dtype:
+        # MPS has no float64; CPU/CUDA keep the WCS compute dtype.
+        return torch.float32 if device.type == "mps" else torch.float64
+
+    def _as_wcs_coord(self, value: Any) -> Tensor:
+        """Coerce pixel/world inputs to the WCS compute dtype.
+
+        float64 on CPU/CUDA. MPS tensors stay float32 on MPS so map resampling
+        keeps device-stable outputs; never ``.to(float64)`` from MPS.
+        """
+        if not isinstance(value, Tensor):
+            dtype = self._wcs_coord_dtype(self.device)
+            return torch.as_tensor(value, device=self.device, dtype=dtype)
+        if value.device.type == "mps":
+            return value.to(dtype=torch.float32)
+        return value.to(
+            device=self.device, dtype=self._wcs_coord_dtype(self.device)
+        )
+
+    def _invert_extra_axes(
+        self, world_flat: Tensor, pix_internal_spatial: Tensor
+    ) -> Tensor:
+        """Internal extra-axis pixels from spatial internal pixels and world.
+
+        Solves the extra CD block
+        ``extra = crval_e + CD_e,s @ rel_s + CD_e,e @ rel_e``
+        after inverting spectral/tabular algorithms on extra world axes.
+        """
+        coupled_pixel = self._apply_coupled_tabular_world_to_pixel(world_flat)
+        if any(axis < 2 for axis in coupled_pixel):
+            raise NotImplementedError(
+                "coupled tabular spatial axes are not supported"
+            )
+        extra_linear = torch.stack(
+            [
+                coupled_pixel.get(
+                    i, self._apply_tabular_world_to_pixel(world_flat[:, i], i)
+                )
+                for i in range(2, self.naxis)
+            ],
+            dim=-1,
+        )
+        rel_spatial = pix_internal_spatial - self.crpix[:2]
+        cd_extra_spatial = self.cd_full[2:, :2]
+        cd_extra = self.cd_full[2:, 2:]
+        rhs = (
+            extra_linear
+            - self.crval[2:]
+            - torch.matmul(rel_spatial, cd_extra_spatial.T)
+        )
+        rel_extra = torch.linalg.solve(cd_extra, rhs.T).T
+        return rel_extra + self.crpix[2:]
 
     def _apply_coupled_tabular_world_to_pixel(
         self, world: Tensor
@@ -1450,15 +1503,20 @@ class WCS:
             return _wrap_lon360(phi + self.alpha0), theta
 
         # 3. TPV / Special distortions
+        zpx_native = False
         if self._is_tpv:
             xi, eta = self.tpv.distort(xi, eta)
         elif self._is_tnx:
             xi, eta = project_tnx(xi, eta, self.wcs_params, self.wat_data)
         elif self._is_zpx:
-            xi, eta = project_zpx(xi, eta, self.wcs_params, self.wat_data)
+            # project_zpx returns native (phi, theta), not intermediate (xi, eta).
+            phi, theta = project_zpx(xi, eta, self.wcs_params, self.wat_data)
+            zpx_native = True
 
         # 4. Projection
-        if (
+        if zpx_native:
+            pass
+        elif (
             self._is_tan
             or self._is_tpv
             or self._is_tnx
@@ -1489,8 +1547,11 @@ class WCS:
             phi, theta = project_allsky(xi, eta, "MOL")
         elif self._is_hpx:
             abs_eta = torch.abs(eta)
-            mask_eq = abs_eta <= self._hpx_eta_boundary
-            sigma = (self._hpx_eta_pole - abs_eta) * self._hpx_inv_polar_denom
+            invalid = abs_eta > self._hpx_eta_pole
+            mask_eq = (~invalid) & (abs_eta <= self._hpx_eta_boundary)
+            sigma = torch.clamp(
+                (self._hpx_eta_pole - abs_eta) * self._hpx_inv_polar_denom, min=0.0
+            )
             s_theta = torch.where(
                 mask_eq,
                 eta * self._hpx_inv_eta_scale,
@@ -1501,11 +1562,12 @@ class WCS:
             phi = torch.where(
                 mask_eq, xi, xc + (xi - xc) / torch.clamp(sigma, min=1e-9)
             )
-            invalid = abs_eta > self._hpx_eta_pole
-            if bool(invalid.any()):
-                nan = torch.full_like(phi, float("nan"))
-                phi = torch.where(invalid, nan, phi)
-                theta = torch.where(invalid, nan, theta)
+            invalid = invalid | (
+                (~mask_eq) & (~invalid) & (torch.abs(xi - xc) > (45.0 * sigma + 1e-8))
+            )
+            nan = torch.full_like(phi, float("nan"))
+            phi = torch.where(invalid, nan, phi)
+            theta = torch.where(invalid, nan, theta)
         elif self._is_cea:
             phi = xi
             theta = (
@@ -1901,48 +1963,28 @@ class WCS:
 
     def _native_from_hpx_fast(self, xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
         """Fast HPX inverse projection: intermediate (deg) -> native (deg)."""
-        phi = torch.empty_like(xi)
-        theta = torch.empty_like(eta)
-
         abs_eta = torch.abs(eta)
         invalid = abs_eta > self._hpx_eta_pole
-
         mask_eq = (~invalid) & (abs_eta <= self._hpx_eta_boundary)
-        if mask_eq.any():
-            s_theta_eq = torch.clamp(eta[mask_eq] * self._hpx_inv_eta_scale, -1.0, 1.0)
-            theta[mask_eq] = torch.asin(s_theta_eq) * self._r2d
-            phi[mask_eq] = xi[mask_eq]
-
         mask_pol = (~invalid) & (~mask_eq)
-        if mask_pol.any():
-            xi_p = xi[mask_pol]
-            eta_p = eta[mask_pol]
-            abs_eta_p = torch.abs(eta_p)
 
-            sigma = torch.clamp(
-                (self._hpx_eta_pole - abs_eta_p) * self._hpx_inv_polar_denom, min=0.0
-            )
-            s_theta_pol = torch.sign(eta_p) * (1.0 - (sigma * sigma) / 3.0)
-            theta[mask_pol] = (
-                torch.asin(torch.clamp(s_theta_pol, -1.0, 1.0)) * self._r2d
-            )
+        s_theta_eq = torch.clamp(eta * self._hpx_inv_eta_scale, -1.0, 1.0)
+        theta_eq = torch.asin(s_theta_eq) * self._r2d
 
-            xc = torch.round((xi_p - 45.0) / 90.0) * 90.0 + 45.0
-            dx = xi_p - xc
-            sigma_safe = torch.where(
-                torch.abs(sigma) < 1e-12, torch.ones_like(sigma), sigma
-            )
-            phi[mask_pol] = xc + dx / sigma_safe
+        sigma = torch.clamp(
+            (self._hpx_eta_pole - abs_eta) * self._hpx_inv_polar_denom, min=0.0
+        )
+        s_theta_pol = torch.sign(eta) * (1.0 - (sigma * sigma) / 3.0)
+        theta_pol = torch.asin(torch.clamp(s_theta_pol, -1.0, 1.0)) * self._r2d
+        xc = torch.round((xi - 45.0) / 90.0) * 90.0 + 45.0
+        dx = xi - xc
+        sigma_safe = torch.where(torch.abs(sigma) < 1e-12, torch.ones_like(sigma), sigma)
+        phi_pol = xc + dx / sigma_safe
+        invalid = invalid | (mask_pol & (torch.abs(dx) > (45.0 * sigma + 1e-8)))
 
-            invalid_x = torch.abs(dx) > (45.0 * sigma + 1e-8)
-            if invalid_x.any():
-                invalid_pol = torch.zeros_like(mask_pol)
-                invalid_pol[mask_pol] = invalid_x
-                invalid = invalid | invalid_pol
-
-        if invalid.any():
-            phi[invalid] = float("nan")
-            theta[invalid] = float("nan")
+        nan = torch.full_like(xi, float("nan"))
+        phi = torch.where(invalid, nan, torch.where(mask_eq, xi, phi_pol))
+        theta = torch.where(invalid, nan, torch.where(mask_eq, theta_eq, theta_pol))
         return phi, theta
 
     def _intermediate_from_ait_fast(
@@ -3196,30 +3238,11 @@ class WCS:
             )
             pix_flat[:, :2] = spatial_pix
             if self.naxis >= 3:
-                coupled_pixel = self._apply_coupled_tabular_world_to_pixel(world_flat)
-                if any(axis < 2 for axis in coupled_pixel):
-                    raise NotImplementedError(
-                        "coupled tabular spatial axes are not supported"
-                    )
-                extra_linear = torch.stack(
-                    [
-                        coupled_pixel.get(
-                            i, self._apply_tabular_world_to_pixel(world_flat[:, i], i)
-                        )
-                        for i in range(2, self.naxis)
-                    ],
-                    dim=-1,
+                pix_internal_spatial = spatial_pix + (1.0 - float(origin))
+                pix_internal_extra = self._invert_extra_axes(
+                    world_flat, pix_internal_spatial
                 )
-                rel_spatial = spatial_pix + (1.0 - float(origin)) - self.crpix[:2]
-                cd_extra_spatial = self.cd_full[2:, :2]
-                cd_extra = self.cd_full[2:, 2:]
-                rhs = (
-                    extra_linear
-                    - self.crval[2:]
-                    - torch.matmul(rel_spatial, cd_extra_spatial.T)
-                )
-                rel_extra = torch.linalg.solve(cd_extra, rhs.T).T
-                pix_flat[:, 2:] = rel_extra + self.crpix[2:] + (float(origin) - 1.0)
+                pix_flat[:, 2:] = pix_internal_extra + (float(origin) - 1.0)
         elif not self._is_spatial:
             linear_world = world_flat.clone()
             coupled_pixel = self._apply_coupled_tabular_world_to_pixel(world_flat)
@@ -3794,10 +3817,7 @@ class WCS:
         return WCS(header, key=self.wcs_key, tabular_axes=tabular_axes)
 
     def _coerce_stacked_coord(self, value: Any, name: str) -> Tensor:
-        if isinstance(value, Tensor):
-            tensor = value.to(device=self.device, dtype=torch.float64)
-        else:
-            tensor = torch.as_tensor(value, device=self.device, dtype=torch.float64)
+        tensor = self._as_wcs_coord(value)
         if tensor.shape == ():
             raise ValueError(f"{name} must have trailing dimension {self.naxis}")
         if tensor.shape[-1] != self.naxis:
@@ -3812,33 +3832,18 @@ class WCS:
         """
         origin = float(kwargs.get("origin", 0))
         if len(args) == 2 and self.naxis == 2:
-            x_arg, y_arg = args
-            if not isinstance(x_arg, Tensor):
-                x_t = torch.as_tensor(x_arg, device=self.device, dtype=torch.float64)
-                y_t = torch.as_tensor(y_arg, device=self.device, dtype=torch.float64)
-            else:
-                x_t = x_arg
-                y_t = y_arg
+            x_t = self._as_wcs_coord(args[0])
+            y_t = self._as_wcs_coord(args[1])
             ra, dec = self._pixel_to_world_2d_fast(x_t, y_t, origin)
             return ra, dec
 
         if len(args) == 1:
-            pixels = args[0]
-            if not isinstance(pixels, Tensor):
-                pixels = torch.as_tensor(
-                    pixels, device=self.device, dtype=torch.float64
-                )
-            else:
-                pixels = pixels.to(device=self.device, dtype=torch.float64)
+            pixels = self._as_wcs_coord(args[0])
         else:
             pixels = torch.stack(
-                [
-                    torch.as_tensor(a, device=self.device, dtype=torch.float64)
-                    for a in args
-                ],
+                [self._as_wcs_coord(a) for a in args],
                 dim=-1,
             )
-            pixels = pixels.to(device=self.device, dtype=torch.float64)
 
         original_shape = pixels.shape
         pixels_flat = self._contiguous_if_needed(pixels).reshape(-1, self.naxis)
@@ -4324,25 +4329,14 @@ class WCS:
         origin = float(kwargs.get("origin", 0))
 
         if len(args) == 2 and self.naxis == 2:
-            ra_arg, dec_arg = args
-            if not isinstance(ra_arg, Tensor):
-                ra_t = torch.as_tensor(ra_arg, device=self.device, dtype=torch.float64)
-                dec_t = torch.as_tensor(
-                    dec_arg, device=self.device, dtype=torch.float64
-                )
-            else:
-                ra_t = ra_arg
-                dec_t = dec_arg
+            ra_t = self._as_wcs_coord(args[0])
+            dec_t = self._as_wcs_coord(args[1])
             return self._world_to_pixel_2d_fast(
                 ra_t, dec_t, iterative=iterative, origin=origin
             )
 
         if len(args) == 1:
-            world = args[0]
-            if not isinstance(world, Tensor):
-                world = torch.as_tensor(world, device=self.device, dtype=torch.float64)
-            else:
-                world = world.to(device=self.device, dtype=torch.float64)
+            world = self._as_wcs_coord(args[0])
 
             # Fast path for 2D spatial with (N, 2) tensor input
             if self.naxis == 2 and self._is_spatial:
@@ -4358,13 +4352,9 @@ class WCS:
                 return torch.stack([px, py], dim=-1)
         else:
             world = torch.stack(
-                [
-                    torch.as_tensor(a, device=self.device, dtype=torch.float64)
-                    for a in args
-                ],
+                [self._as_wcs_coord(a) for a in args],
                 dim=-1,
             )
-            world = world.to(device=self.device, dtype=torch.float64)
 
         original_shape = world.shape
         world_flat = world.view(-1, self.naxis)
@@ -4417,6 +4407,9 @@ class WCS:
                     "MER",
                     "ZEA",
                     "STG",
+                    "SFL",
+                    "CAR",
+                    "CYP",
                 )
                 use_analytic = (
                     self._proj_code in analytic_projections
@@ -4463,6 +4456,17 @@ class WCS:
                         pix_internal_flat = self._world_to_pixel_analytic_stg(
                             world_flat
                         )
+                    else:
+                        pix_internal_flat = self._alloc_pix_internal_like(world_flat)
+                        (
+                            pix_internal_flat[:, 0],
+                            pix_internal_flat[:, 1],
+                        ) = self._world_to_pixel_2d_fast(
+                            world_flat[:, 0],
+                            world_flat[:, 1],
+                            iterative=False,
+                            origin=1.0,
+                        )
                 else:
                     pix_internal_flat = self._world_to_pixel_analytic_tan(world_flat)
 
@@ -4501,15 +4505,9 @@ class WCS:
             # Already handled by cd_inv_full above
             pass
         elif is_spatial and self.naxis >= 3:
-            # Basic linear inverse for axis 3+
-            coupled_pixel = self._apply_coupled_tabular_world_to_pixel(world_flat)
-            for i in range(2, self.naxis):
-                linear_world = coupled_pixel.get(
-                    i, self._apply_tabular_world_to_pixel(world_flat[:, i], i)
-                )
-                pix_internal_flat[:, i] = (linear_world - self.crval[i]) / self.cd_full[
-                    i, i
-                ] + self.crpix[i]
+            pix_internal_flat[:, 2:] = self._invert_extra_axes(
+                world_flat, pix_internal_flat[:, :2]
+            )
 
         # Adjust for origin: pix = pix_internal + (origin - 1)
         pix_flat = pix_internal_flat + (origin - 1)

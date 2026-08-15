@@ -329,17 +329,22 @@ class SparseHealpixMap:
         return self.pixels
 
     def get_values(self, pixels: Tensor) -> Tensor:
-        idx, ok = self._global_to_local(pixels)
-        out_shape = tuple(self.values.shape[:-1]) + (pixels.numel(),)
-        out = torch.full(
+        pix_flat = torch.as_tensor(
+            pixels, dtype=torch.int64, device=self.pixels.device
+        ).reshape(-1)
+        idx, ok = self._global_to_local(pix_flat)
+        out_shape = tuple(self.values.shape[:-1]) + (pix_flat.numel(),)
+        fill = torch.full(
             out_shape,
             self.fill_value,
             dtype=self.values.dtype,
             device=self.values.device,
         )
-        if bool(ok.any()):
-            out[..., ok] = self.values.index_select(-1, idx[ok])
-        return out
+        if self.pixels.numel() == 0:
+            return fill
+        safe_idx = torch.where(ok, idx, torch.zeros_like(idx))
+        gathered = self.values.index_select(-1, safe_idx)
+        return torch.where(ok, gathered, fill)
 
     def get_values_pix(self, pixels: Tensor) -> Tensor:
         """Alias for get_values per healsparse parity."""
@@ -524,12 +529,9 @@ class SparseHealpixMap:
 
         idx = torch.searchsorted(self.pixels, pix_t)
         in_bounds = idx < self.pixels.numel()
-        ok = torch.zeros_like(in_bounds, dtype=torch.bool)
-        if bool(in_bounds.any()):
-            val_at_idx = self.pixels.index_select(
-                0, torch.clamp(idx[in_bounds], 0, self.pixels.numel() - 1)
-            )
-            ok[in_bounds] = val_at_idx == pix_t[in_bounds]
+        safe_idx = torch.where(in_bounds, idx, torch.zeros_like(idx))
+        val_at_idx = self.pixels.index_select(0, safe_idx)
+        ok = in_bounds & (val_at_idx == pix_t)
         return idx, ok
 
     def interpolate(
@@ -572,16 +574,16 @@ class SparseHealpixMap:
         )
         wsum = torch.zeros((lon_f.numel(),), dtype=w4.dtype, device=self.values.device)
 
-        for k in range(4):
-            idx, ok = self._global_to_local(pix4[k])
-            if not bool(ok.any()):
-                continue
-            sel = idx[ok]
-            wk = w4[k, ok]
-            vals = self.values.index_select(-1, sel)
-            wshape = [1] * (vals.ndim - 1) + [wk.numel()]
-            accum[..., ok] = accum[..., ok] + vals * wk.reshape(wshape)
-            wsum[ok] = wsum[ok] + wk
+        if self.pixels.numel() > 0:
+            for k in range(4):
+                idx, ok = self._global_to_local(pix4[k])
+                safe_idx = torch.where(ok, idx, torch.zeros_like(idx))
+                vals = self.values.index_select(-1, safe_idx)
+                wk = w4[k]
+                wshape = [1] * (vals.ndim - 1) + [wk.shape[-1]]
+                contrib = vals * wk.reshape(wshape)
+                accum = accum + torch.where(ok, contrib, torch.zeros_like(contrib))
+                wsum = wsum + torch.where(ok, wk, torch.zeros_like(wk))
 
         out = torch.full(
             out_shape,
@@ -590,9 +592,10 @@ class SparseHealpixMap:
             device=self.values.device,
         )
         nz = wsum > 0
-        if bool(nz.any()):
-            wshape = [1] * (accum.ndim - 1) + [-1]
-            out[..., nz] = accum[..., nz] / wsum[nz].reshape(wshape)
+        safe_wsum = torch.where(nz, wsum, torch.ones_like(wsum))
+        wshape = [1] * (accum.ndim - 1) + [-1]
+        filled = accum / safe_wsum.reshape(wshape)
+        out = torch.where(nz, filled, out)
         return out.reshape(*self.values.shape[:-1], *shape)
 
     def ud_grade(

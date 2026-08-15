@@ -1440,7 +1440,7 @@ def query_disc(
     radius: float,
     *,
     inclusive: bool = False,
-    fact: int = 4,  # noqa: ARG001 - kept for API compatibility
+    fact: int = 4,
     nest: bool = False,
     chunk_size: int = 1_000_000,
 ) -> Tensor:
@@ -1450,12 +1450,20 @@ def query_disc(
     `vec` is a 3-vector (x, y, z); `radius` is in radians.
     If `inclusive=True`, use a conservative radius expansion by max pixel radius.
 
+    ``fact`` is accepted for healpy API compatibility and must remain ``4``.
+    Inclusive queries pad by the maximum pixel radius; they do not supersample.
+
     Performance: when the C++ extension is available, queries use **ring pruning**
     (``O(nside + output)``), not a full-sky scan. The direction vector may live on any
     device; it is copied to CPU only for the scalar C++ entry point. Without C++, this
     falls back to chunked **O(npix)** tests.
     """
     _validate_nside(nside)
+    if int(fact) != 4:
+        raise ValueError(
+            "query_disc fact is unused; inclusive mode pads by max pixel radius. "
+            "Pass fact=4 (healpy default) or omit it."
+        )
     if radius <= 0.0:
         return torch.empty((0,), dtype=torch.int64)
 
@@ -1628,6 +1636,18 @@ def query_polygon(
     edge_norm = torch.sqrt((edge_normals * edge_normals).sum(dim=1))
     if torch.any(edge_norm <= 1.0e-15):
         raise ValueError("degenerate polygon: repeated or colinear adjacent vertices")
+    nvert = int(vv.shape[0])
+    side = edge_normals @ vv.transpose(0, 1)
+    idx = torch.arange(nvert, device=vv.device)
+    incident = torch.zeros((nvert, nvert), dtype=torch.bool, device=vv.device)
+    incident[idx, idx] = True
+    incident[idx, (idx + 1) % nvert] = True
+    off_edge = side.masked_fill(incident, 0.0)
+    if bool((off_edge > 1.0e-12).any()) and bool((off_edge < -1.0e-12).any()):
+        raise ValueError(
+            "query_polygon requires a convex polygon; "
+            "use query_polygon_general or spherical_polygon_contains for concave regions"
+        )
     edge_normals = edge_normals / edge_norm.unsqueeze(1)
 
     centroid = vv.mean(dim=0)
@@ -1710,11 +1730,15 @@ def query_polygon_vec(
     vertices: Tensor | Sequence[Sequence[float]],
     *,
     inclusive: bool = False,
-    fact: int = 4,  # noqa: ARG001 - kept for API compatibility
+    fact: int = 4,
     nest: bool = False,
     chunk_size: int = 1_000_000,
 ) -> Tensor:
     """Cartesian-vector convenience wrapper around `query_polygon`."""
+    if int(fact) != 4:
+        raise ValueError(
+            "query_polygon_vec fact is unused; pass fact=4 or omit it."
+        )
     return query_polygon(
         nside,
         vertices,

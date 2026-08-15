@@ -386,18 +386,18 @@ Functions in `torchsky.sphere.compat` (and the `torchsky.sphere.healpy` alias) m
 | `ud_grade` | parity | `power`, `pess`, bad-mask semantics |
 | `isnsideok` / `isnpixok` | parity | scalar + tensor forms |
 | `max_pixrad` | parity | conservative radius |
-| `query_disc` | parity | inclusive mode supported |
+| `query_disc` | parity | inclusive pads by max pixel radius; `fact` must be 4 |
 | `query_circle` | parity | lon/lat wrapper |
 | `query_circle_vec` | parity | Cartesian-vector form |
-| `query_polygon` | parity | convex polygon |
+| `query_polygon` | parity | convex only; raises on concave input |
 | `query_polygon_vec` | parity | Cartesian-vector form |
 | `query_box` | parity | wrap-aware longitude intervals |
 | `query_strip` | parity | colatitude strip |
-| `query_ellipse` | parity | hpgeom-style units; dispatches to hpgeom when available |
+| `query_ellipse` | parity | hpgeom-style units; torch-native only |
 | `pixel_ranges_to_pixels` | parity | half-open/closed range expansion |
 | `upgrade_pixel_ranges` | parity | NEST pixel-range upgrade |
 | `pixels_to_pixel_ranges` | extended | torchsky-native range compression |
-| `map2alm` | parity | scalar + polarized (`pol=True`); `iter`, `use_pixel_weights` |
+| `map2alm` | partial | scalar + polarized (`pol=True`); `iter`; `use_pixel_weights` raises |
 | `map2alm_lsq` | parity | returns `(alm, rel_res, n_iter)`; torch-native |
 | `alm2map` | parity | scalar + polarized; `pixwin`; torch-native |
 | `almxfl` | parity | short `fl` tails zero-filled (healpy semantics) |
@@ -419,7 +419,7 @@ Functions in `torchsky.sphere.compat` (and the `torchsky.sphere.healpy` alias) m
 | `NativeExactSphericalRegion` | extended | dependency-free exact-backend scaffold |
 | `HealSparseMap` / `SparseMap` | parity | coverage-aware sparse map; dense-equivalent `ud_grade` |
 
-Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) delegates certain operations to [hpgeom](https://github.com/LSSTDESC/hpgeom) for bit-exact results where needed.
+Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API compatibility. Geometry queries are always torch-native; they do not dispatch to hpgeom.
 
 ---
 
@@ -427,7 +427,7 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) delegates certain o
 
 | Area | Limitation |
 |---|---|
-| `map2alm` | `use_pixel_weights` and `gal_cut` are not yet supported by the torch backend. Falls back to healpy when requested. |
+| `map2alm` | `use_pixel_weights` and `gal_cut` are not supported by the torch backend and raise. There is no healpy fallback. |
 | `map2alm_spin` / `alm2map_spin` | Functional but slower than healpy's C implementation (~6-8x). Optimization target for 0.4.x. |
 | Pixel windows | Packaged tables cover standard HEALPix NSIDE range. Higher NSIDE may require external data. |
 | GPU | HEALPix geometry primitives and SHT run on CUDA and MPS. Polygon operations are CPU-only. |

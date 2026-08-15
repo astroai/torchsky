@@ -39,6 +39,10 @@ def test_sparse_from_pixels_canonicalizes_unsorted_duplicates() -> None:
         sp.get_values(torch.tensor([5, 2, 1, 7], dtype=torch.int64)),
         torch.tensor([55.0, 20.0, 10.0, -1.0], dtype=torch.float64),
     )
+    torch.testing.assert_close(
+        sp.get_values(torch.tensor([[5, 2], [1, 7]], dtype=torch.int64)),
+        torch.tensor([55.0, 20.0, 10.0, -1.0], dtype=torch.float64),
+    )
 
 
 def test_sparse_from_pixels_canonicalizes_multiband_values() -> None:

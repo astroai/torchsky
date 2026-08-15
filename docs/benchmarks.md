@@ -42,7 +42,7 @@ several Pixi environments because upstream wheels and ABI pins differ.
 |---|---|---|
 | `bench-all` | Main `bench_all.py` WCS/sphere domains | Astropy (`astropy.wcs`), torch, optional legacy bridge rows |
 | `bench-legacy` | Legacy WCS libraries | PyAST (`starlink.Ast`) and optional Kapteyn for legacy WCS comparison |
-| `sphere-bench` | HEALPix and spherical geometry ecosystem | healpy, hpgeom, astropy-healpix, healsparse, spherical-geometry, optional healpix/mhealpy/skyproj |
+| `sphere-bench` | HEALPix and spherical geometry ecosystem | healpy, hpgeom, astropy-healpix, healsparse, spherical-geometry, mocpy, optional healpix/mhealpy/skyproj |
 | `map-compat` | Optical/IR stacker compatibility | reproject, dfreproject, drizzle, Montage, SWarp, casutools |
 
 Representative commands:
@@ -52,7 +52,10 @@ pixi run -e bench-all -- python benchmarks/bench_all.py --profile user --wcs-onl
 pixi run sphere-bench-geometry-ecosystem
 pixi run bench-map-compat-external
 pixi run bench-comparator-versions-all
+pixi run wcs-sphere-acceptance
 ```
+
+Linux CPU/CUDA confirmation uses `scripts/run_canfar_wcs_sphere.sh` (modes `cpu` and `cuda`) with `TORCHSKY_COMMIT` set to a pushed SHA. Do not reuse the ADASS/SMACS runner for this domain. Local Mac smoke stays `--quick` via `pixi run wcs-sphere-acceptance`; the full oracle ingest is `pixi run wcs-sphere-acceptance-full` or the CANFAR `cpu` job.
 
 For pip-only parity benches against the HEALPix / geometry comparator stack,
 install `pip install -e ".[bench-all]"` after installing a compatible PyTorch.
@@ -798,7 +801,7 @@ Win rate: **85.3%** overall. At N &ge; 100K: **100%** (90/90 cases).
 
 ### Sphere
 
-Compared against **healpy**, **hpgeom**, **astropy-healpix**, **healsparse**, and **spherical-geometry** (specialized family). Coverage: `ang2pix` (ring/nested), `pix2ang`, `nest2ring`, `ring2nest`, neighbors, interpolation weights/values, sparse map operations, non-convex polygon contains/area/query, and spin-weighted harmonic transforms.
+Compared against **healpy**, **hpgeom**, **astropy-healpix**, **healsparse**, **mocpy** (optional), and **spherical-geometry**. Coverage: `ang2pix` (ring/nested), `pix2ang`, `nest2ring`, `ring2nest`, neighbors, interpolation weights/values, sparse map `get_values`/`ud_grade` vs healsparse when installed, MOC contains vs mocpy when installed, non-convex polygon contains/area/query, and spin-weighted harmonic transforms.
 
 **HEALPix geometry (CPU):**
 

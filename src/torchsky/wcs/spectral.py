@@ -48,10 +48,17 @@ _LENGTH_TO_M = {
     "m": 1.0,
     "meter": 1.0,
     "metre": 1.0,
+    "cm": 1.0e-2,
+    "centimeter": 1.0e-2,
+    "centimetre": 1.0e-2,
     "mm": 1.0e-3,
     "um": 1.0e-6,
     "micron": 1.0e-6,
+    "micrometer": 1.0e-6,
+    "micrometre": 1.0e-6,
     "nm": 1.0e-9,
+    "nanometer": 1.0e-9,
+    "nanometre": 1.0e-9,
     "angstrom": 1.0e-10,
     "ang": 1.0e-10,
     "a": 1.0e-10,
@@ -59,9 +66,11 @@ _LENGTH_TO_M = {
 _FREQ_TO_HZ = {"hz": 1.0, "khz": 1.0e3, "mhz": 1.0e6, "ghz": 1.0e9, "thz": 1.0e12}
 _ENERGY_TO_J = {
     "j": 1.0,
+    "joule": 1.0,
     "ev": ELECTRON_VOLT,
     "kev": 1.0e3 * ELECTRON_VOLT,
     "mev": 1.0e6 * ELECTRON_VOLT,
+    "gev": 1.0e9 * ELECTRON_VOLT,
 }
 _VELOCITY_TO_M_S = {"m/s": 1.0, "ms-1": 1.0, "km/s": 1.0e3, "kms-1": 1.0e3}
 _WAVENUMBER_TO_INV_M = {
@@ -106,16 +115,21 @@ def spectral_unit_scale(spectral_type: str, unit: str | None = None) -> float:
             return 1.0
         return 1.0
     u = str(unit).strip().lower().replace(" ", "")
-    if kind in {"WAVE", "AWAV"}:
-        return _LENGTH_TO_M[u]
-    if kind == "FREQ":
-        return _FREQ_TO_HZ[u]
-    if kind == "WAVN":
-        return _WAVENUMBER_TO_INV_M[u]
-    if kind == "ENER":
-        return _ENERGY_TO_J[u]
-    if kind in {"VRAD", "VOPT", "VELO"}:
-        return _VELOCITY_TO_M_S[u]
+    try:
+        if kind in {"WAVE", "AWAV"}:
+            return _LENGTH_TO_M[u]
+        if kind == "FREQ":
+            return _FREQ_TO_HZ[u]
+        if kind == "WAVN":
+            return _WAVENUMBER_TO_INV_M[u]
+        if kind == "ENER":
+            return _ENERGY_TO_J[u]
+        if kind in {"VRAD", "VOPT", "VELO"}:
+            return _VELOCITY_TO_M_S[u]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported spectral unit {unit!r} for type {kind}"
+        ) from exc
     return 1.0
 
 
@@ -419,8 +433,13 @@ class SpectralTransform:
             and self.algo[0] in {"F", "W", "A", "V"}
             and self.algo[2] in {"F", "W", "A", "V"}
         )
-        if not is_compound and not self.is_log and not self.is_grism:
+        if self.algo == "TAB":
+            # -TAB lookup is owned by tabular axes; spectral algorithm is linear.
             self.algo = ""
+        elif self.algo and not is_compound and not self.is_log and not self.is_grism:
+            raise ValueError(
+                f"unsupported FITS spectral algorithm {self.algo!r} in CTYPE {self.ctype!r}"
+            )
 
         if self.is_grism:
             G = self.pv[0]

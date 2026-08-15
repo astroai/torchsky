@@ -67,7 +67,7 @@ preflight-push = "ruff check . && pixi run -e default -- python -m compileall -q
 # Mirrors GitHub CI shape: preflight + pyright + full pytest (use before push).
 ci-local = "pixi run preflight-push && pixi run typecheck && pixi run test"
 # Comparator import smoke (optional; `bench-all` Pixi env). Set TORCHSKY_CI_LOCAL_BENCH=1 to include in custom wrappers.
-ci-local-heavy = "pixi run -e bench-all -- python -c \"import healpy, hpgeom, healsparse; import astropy_healpix; import spherical_geometry\""
+ci-local-heavy = "pixi run -e bench-all -- python -c \"import healpy, hpgeom, healsparse; import astropy_healpix; import spherical_geometry; import mocpy\""
 typecheck = "pixi run -e test pyright"
 verify = "pixi run -e default -- python scripts/verify_setup.py"
 
@@ -119,7 +119,9 @@ bootstrap-map-compat-montage = "pixi run -e map-compat python scripts/bootstrap_
 bootstrap-map-compat-casutools = "pixi run -e map-compat python scripts/bootstrap_map_compat_tools.py --tool casutools"
 bench-wcs-legacy = "pixi run -e bench-legacy python benchmarks/bench_all.py --profile user --wcs-only --legacy-wcs"
 # Plan §4: Phase 0 quick benches + full WCS/sphere pytest + spin matrix smoke.
-wcs-sphere-acceptance = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --wcs-only --quick --run-id acceptance_wcs --output-dir benchmarks_results && pixi run -e bench-all python benchmarks/bench_all.py --profile user --sphere-only --quick --run-id acceptance_sphere --output-dir benchmarks_results && pixi run -e bench-all pytest tests/test_wcs_*.py tests/test_sphere_*.py -q --tb=line && pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set default --runs 2 --json-out benchmarks_results/acceptance_spin_matrix.json"
+wcs-sphere-acceptance = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --wcs-only --quick --run-id acceptance_wcs --output-dir benchmarks_results && pixi run -e bench-all python benchmarks/bench_all.py --profile user --sphere-only --quick --run-id acceptance_sphere --output-dir benchmarks_results && pixi run -e bench-all pytest tests/test_wcs_*.py tests/test_sphere_*.py tests/test_healsparse_upstream.py tests/test_healpix_*.py tests/test_spectral.py -q --tb=line && pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set default --runs 2 --json-out benchmarks_results/acceptance_spin_matrix.json"
+# Full (not --quick) WCS+sphere orchestrator + the same pytest glob. For CANFAR/Linux.
+wcs-sphere-acceptance-full = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --wcs-only --no-gpu --run-id acceptance_wcs_full --output-dir benchmarks_results && pixi run -e bench-all python benchmarks/bench_all.py --profile user --sphere-only --no-gpu --run-id acceptance_sphere_full --output-dir benchmarks_results && pixi run -e bench-all pytest tests/test_wcs_*.py tests/test_sphere_*.py tests/test_healsparse_upstream.py tests/test_healpix_*.py tests/test_spectral.py -q --tb=line && pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set default --runs 2 --json-out benchmarks_results/acceptance_spin_matrix.json"
 # Comparator version matrix for open-source tools (see docs/benchmarks.md); run per Pixi env you use for benches.
 bench-archive-scorecard = "pixi run -e default -- python scripts/archive_benchmark_scorecard.py"
 bench-comparator-versions = "pixi run -e bench-all python scripts/print_benchmark_comparator_versions.py --json-out benchmarks_results/VERSIONS_comparators_bench-all.json"
@@ -221,6 +223,9 @@ astropy-healpix = ">=1.0"
 spherical-geometry = ">=1.2"
 cython = ">=3.0"
 pybind11 = ">=2.12"
+
+[feature.sphere-bench.pypi-dependencies]
+mocpy = ">=0.13"
 
 # Linux-only accelerator environment. The normal solve stays CPU/MPS portable;
 # this feature selects conda-forge's CUDA build of the same supported PyTorch.

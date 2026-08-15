@@ -964,6 +964,62 @@ def run_sphere_domain(
                         },
                     )
                 )
+            elif op == "sparse_get_values":
+                t_get = _safe_float(r.get("get_values_s"))
+                lib = str(r.get("library", "torchsky"))
+                n_q = int(r.get("n_queries", 0) or 0)
+                rows.append(
+                    _row(
+                        run_id=run_id,
+                        suite="sphere_sparse",
+                        case_id="sparse::get_values",
+                        case_label="sparse get_values",
+                        operation="get_values",
+                        family="specialized",
+                        library=lib,
+                        method=lib,
+                        mode="specialized",
+                        status="OK" if t_get is not None else "FAILED",
+                        skip_reason="",
+                        comparable=True,
+                        time_s=t_get,
+                        throughput=(n_q / t_get) if t_get and n_q else None,
+                        unit="rows/s",
+                        n_points=n_q,
+                        metadata={
+                            "ratio_torchsky_vs_healsparse": r.get(
+                                "ratio_torchsky_vs_healsparse"
+                            )
+                        },
+                    )
+                )
+            elif op == "ud_grade" and str(r.get("library", "")) == "healsparse":
+                t_ud = _safe_float(r.get("ud_grade_s"))
+                rows.append(
+                    _row(
+                        run_id=run_id,
+                        suite="sphere_sparse",
+                        case_id="sparse::ud_grade",
+                        case_label="sparse ud_grade",
+                        operation="ud_grade",
+                        family="specialized",
+                        library="healsparse",
+                        method="healsparse",
+                        mode="specialized",
+                        status="OK" if t_ud is not None else "FAILED",
+                        skip_reason="",
+                        comparable=True,
+                        time_s=t_ud,
+                        throughput=(1.0 / t_ud) if t_ud else None,
+                        unit="ops/s",
+                        n_points="",
+                        metadata={
+                            "ratio_torchsky_vs_healsparse": r.get(
+                                "ratio_torchsky_vs_healsparse"
+                            )
+                        },
+                    )
+                )
     else:
         rows.append(
             _row(
@@ -1299,7 +1355,12 @@ def run_sphere_domain(
                 unit = "queries/s"
                 if qs > 0:
                     t = 1.0 / qs
+            elif op == "moc_contains":
+                t = _safe_float(r.get("contains_s"))
+                thr = (n_points / t) if t and n_points else None
+                unit = "contains/s"
 
+            lib = str(r.get("library", "torchsky"))
             rows.append(
                 _row(
                     run_id=run_id,
@@ -1308,19 +1369,22 @@ def run_sphere_domain(
                     case_label=f"core {op}",
                     operation=op,
                     family="specialized",
-                    library="torchsky",
-                    method="torchsky",
+                    library=lib,
+                    method=lib,
                     mode="specialized",
                     status="OK" if (t is not None or thr is not None) else "SKIPPED",
                     skip_reason="no_timing_field"
                     if (t is None and thr is None)
                     else "",
-                    comparable=False,
+                    comparable=op == "moc_contains",
                     time_s=t,
                     throughput=thr,
                     unit=unit,
                     n_points=n_points,
-                    metadata={"device": r.get("device")},
+                    metadata={
+                        "device": r.get("device"),
+                        "ratio_torchsky_vs_mocpy": r.get("ratio_torchsky_vs_mocpy"),
+                    },
                 )
             )
     else:

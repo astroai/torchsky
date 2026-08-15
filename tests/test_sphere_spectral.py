@@ -170,6 +170,13 @@ def test_map2alm_alm2map_roundtrip_low_l() -> None:
     assert rel < 1.5e-1
 
 
+def test_map2alm_rejects_pixel_weights() -> None:
+    nside = 8
+    m = torch.zeros(hp.nside2npix(nside), dtype=torch.float64)
+    with pytest.raises(ValueError, match="use_pixel_weights"):
+        map2alm(m, nside=nside, lmax=4, use_pixel_weights=True)
+
+
 def test_anafast_dipole_dominates_l1() -> None:
     nside = 32
     npix = hp.nside2npix(nside)

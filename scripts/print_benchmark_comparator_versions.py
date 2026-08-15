@@ -55,6 +55,7 @@ def main() -> int:
         ("hpgeom", "hpgeom"),
         ("astropy_healpix", "astropy_healpix"),
         ("healsparse", "healsparse"),
+        ("mocpy", "mocpy"),
         ("spherical_geometry", "spherical_geometry"),
         ("healpix", "healpix"),
         ("mhealpy", "mhealpy"),

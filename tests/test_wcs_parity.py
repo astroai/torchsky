@@ -7,7 +7,21 @@ from astropy.wcs import WCS as AstropyWCS
 from torchsky.wcs.core import WCS as TorchWCS
 
 
-PROJECTIONS = ("TAN", "SIN", "ARC", "AIT", "MOL", "HPX", "CEA", "MER")
+PROJECTIONS = (
+    "TAN",
+    "SIN",
+    "ARC",
+    "AIT",
+    "MOL",
+    "HPX",
+    "CEA",
+    "MER",
+    "SFL",
+    "CAR",
+    "ZEA",
+    "STG",
+    "CYP",
+)
 
 
 def _make_header(
@@ -36,13 +50,16 @@ def _make_header(
         header["CD1_2"] = 0.0  # type: ignore
         header["CD2_1"] = 0.0  # type: ignore
         header["CD2_2"] = 1.0  # type: ignore
-    elif projection in {"CEA", "MER"}:
+    elif projection in {"CEA", "MER", "CYP", "CAR", "SFL"}:
         header["CD1_1"] = -0.5  # type: ignore
         header["CD1_2"] = 0.0  # type: ignore
         header["CD2_1"] = 0.0  # type: ignore
         header["CD2_2"] = 0.5  # type: ignore
         if projection == "CEA":
             header["PV2_1"] = 1.0  # type: ignore
+        if projection == "CYP":
+            header["PV2_1"] = 2.0  # type: ignore
+            header["PV2_2"] = 1.0  # type: ignore
     else:
         header["CD1_1"] = -0.01  # type: ignore
         header["CD1_2"] = 0.0  # type: ignore
@@ -341,3 +358,55 @@ def test_off_equator_cea_fused_matches_python_fallback() -> None:
     np.testing.assert_allclose(
         dec_default.cpu().numpy(), dec_python.cpu().numpy(), atol=5e-9
     )
+
+
+def test_lonpole_180_fused_and_stacked_match_astropy() -> None:
+    header = _make_header("CEA")
+    header["LONPOLE"] = 180.0
+    awcs = AstropyWCS(header)
+    twcs = TorchWCS(dict(header))
+    x, y = _sample_pixels(header)
+    ra_ast, dec_ast = awcs.all_pix2world(x, y, 0)
+    xt = torch.from_numpy(x)
+    yt = torch.from_numpy(y)
+    ra2, dec2 = twcs.pixel_to_world(xt, yt, origin=0)
+    world = twcs.pixel_to_world(torch.stack([xt, yt], dim=-1), origin=0)
+    dra2 = _ra_wrap_delta(ra2.cpu().numpy(), ra_ast)
+    dras = _ra_wrap_delta(world[..., 0].cpu().numpy(), ra_ast)
+    np.testing.assert_allclose(dra2, 0.0, atol=5e-9)
+    np.testing.assert_allclose(dras, 0.0, atol=5e-9)
+    np.testing.assert_allclose(dec2.cpu().numpy(), dec_ast, atol=5e-9)
+    np.testing.assert_allclose(world[..., 1].cpu().numpy(), dec_ast, atol=5e-9)
+
+
+def test_float32_two_arg_matches_stacked() -> None:
+    header = _make_header("TAN")
+    twcs = TorchWCS(dict(header))
+    x, y = _sample_pixels(header)
+    xt32 = torch.from_numpy(x).to(dtype=torch.float32)
+    yt32 = torch.from_numpy(y).to(dtype=torch.float32)
+    ra2, dec2 = twcs.pixel_to_world(xt32, yt32, origin=0)
+    world = twcs.pixel_to_world(torch.stack([xt32, yt32], dim=-1), origin=0)
+    torch.testing.assert_close(world[..., 0], ra2, atol=1e-9, rtol=1e-12)
+    torch.testing.assert_close(world[..., 1], dec2, atol=1e-9, rtol=1e-12)
+    assert ra2.dtype == torch.float64
+    assert world.dtype == torch.float64
+
+
+@pytest.mark.skipif(
+    not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()),
+    reason="MPS not available",
+)
+def test_mps_two_arg_world_to_pixel_stays_float32() -> None:
+    header = _make_header("TAN")
+    twcs = TorchWCS(dict(header))
+    x, y = _sample_pixels(header)
+    ra = torch.from_numpy(x).to(device="mps", dtype=torch.float32)
+    dec = torch.from_numpy(y).to(device="mps", dtype=torch.float32)
+    px, py = twcs.world_to_pixel(ra, dec, origin=0)
+    stacked = twcs.world_to_pixel(torch.stack([ra, dec], dim=-1), origin=0)
+    assert px.device.type == "mps"
+    assert px.dtype == torch.float32
+    assert stacked.dtype == torch.float32
+    torch.testing.assert_close(stacked[..., 0], px, atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(stacked[..., 1], py, atol=1e-5, rtol=1e-5)

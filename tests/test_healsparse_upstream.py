@@ -229,3 +229,4 @@ def test_healsparse_geom_circle_coverage_matches_upstream_sparse_mask() -> None:
 
     common = np.intersect1d(tf_pixels, hs_pixels)
     assert len(common) > 0, "MOC circle should overlap with healsparse circle query"
+    np.testing.assert_array_equal(np.sort(tf_pixels), np.sort(hs_pixels))

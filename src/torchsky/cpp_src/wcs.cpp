@@ -1663,7 +1663,7 @@ void wcs_pixel_to_world_fused_cpu(
     double* dec_ptr = dec_tensor.data_ptr<double>();
 
     const bool native_is_pole = (native_type == "pole");
-    bool use_center_equator_fast = (native_type == "center" && std::abs(delta0) < 1e-12 && (std::abs(std::fmod(phi_p_rad * R2D, 360.0)) < 1e-12 || std::abs(std::abs(std::fmod(phi_p_rad * R2D, 360.0)) - 180.0) < 1e-12));
+    bool use_center_equator_fast = (native_type == "center" && std::abs(delta0) < 1e-12 && std::abs(std::fmod(phi_p_rad * R2D, 360.0)) < 1e-12);
 
     // CPU-only path: use libtorch intra-op parallel (not OpenMP pragmas) so behavior
     // stays consistent with other torchsky CPU kernels and does not assume GPU.
@@ -1853,7 +1853,7 @@ void wcs_world_to_pixel_fused_cpu(
     else if (proj_code == "MOL") proj_kind = FusedProjKind::MOL;
 
     const bool native_is_pole = (native_type == "pole");
-    bool use_center_equator_fast = (native_type == "center" && std::abs(delta0) < 1e-12 && (std::abs(std::fmod(phi_p_rad * R2D, 360.0)) < 1e-12 || std::abs(std::abs(std::fmod(phi_p_rad * R2D, 360.0)) - 180.0) < 1e-12));
+    bool use_center_equator_fast = (native_type == "center" && std::abs(delta0) < 1e-12 && std::abs(std::fmod(phi_p_rad * R2D, 360.0)) < 1e-12);
     TpvAffineSeedParams tpv_seed;
     const int64_t* tpv_idx1_ptr = nullptr;
     const double* tpv_c1_ptr = nullptr;

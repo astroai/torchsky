@@ -17,11 +17,17 @@ from typing import Any, Dict, Optional, Tuple, Union
 import torch
 
 from .wcs import WCS
+from .wcs.spectral import (
+    air_wavelength_to_vacuum,
+    canonical_spectral_type,
+    frequency_to_spectral,
+    spectral_to_frequency as _wcs_spectral_to_frequency,
+    spectral_unit_scale,
+)
 
 
 _SPECTRAL_TYPE_KEYS = ("WAVE", "AWAV", "FREQ", "ENER", "WAVN", "VELO")
 _SPEED_OF_LIGHT_M_PER_S = 299_792_458.0
-_SPEED_OF_LIGHT_ANGSTROM_PER_S = _SPEED_OF_LIGHT_M_PER_S * 1.0e10
 _PLANCK_JOULE_SECOND = 6.626_070_15e-34
 _ELECTRON_VOLT_JOULE = 1.602_176_634e-19
 
@@ -596,13 +602,18 @@ class SpectralAxis:
     @property
     def quantity(self) -> str:
         """Return a normalized physical quantity name."""
-        kind = self.type.upper()
+        kind = canonical_spectral_type(self.type)
         quantities = {
             "WAVE": "wavelength",
             "AWAV": "wavelength",
             "FREQ": "frequency",
             "ENER": "energy",
             "WAVN": "wavenumber",
+            "VRAD": "velocity",
+            "VOPT": "velocity",
+            "VELO": "velocity",
+            "ZOPT": "redshift",
+            "BETA": "beta",
         }
         if kind not in quantities:
             raise ValueError(f"Unsupported spectral axis type {self.type!r}")
@@ -758,82 +769,41 @@ class SpectralAxis:
         return values
 
     def to_wavelength(self) -> torch.Tensor:
-        """Convert to wavelength in Angstroms."""
-        kind = self.type.upper()
-        unit = self.unit.lower()
-        values = self._validated_values()
-        if kind in {"WAVE", "AWAV"}:
-            scales = {
-                "angstrom": 1.0,
-                "a": 1.0,
-                "nm": 10.0,
-                "nanometer": 10.0,
-                "um": 1.0e4,
-                "micrometer": 1.0e4,
-                "micron": 1.0e4,
-                "mm": 1.0e7,
-                "cm": 1.0e8,
-                "m": 1.0e10,
-            }
-            if unit in scales:
-                return values * scales[unit]
-        elif kind in {"FREQ", "ENER", "WAVN"}:
-            _ = self._positive_values()
-            return _SPEED_OF_LIGHT_ANGSTROM_PER_S / self.to_frequency()
+        """Convert to vacuum wavelength in Angstroms.
 
-        raise ValueError(
-            f"Unsupported spectral conversion to wavelength for type={self.type!r}, unit={self.unit!r}. "
-            "Supported quantities: WAVE/AWAV, FREQ, ENER, and WAVN."
-        )
+        Air wavelengths (``AWAV``) are refracted to vacuum first.
+        Length axes use FITS unit scales; other types go through frequency.
+        """
+        values = self._validated_values()
+        kind = canonical_spectral_type(self.type)
+        if kind == "WAVE":
+            angstrom = values * (
+                spectral_unit_scale("WAVE", self.unit)
+                / spectral_unit_scale("WAVE", "Angstrom")
+            )
+            return angstrom.to(dtype=values.dtype)
+        if kind == "AWAV":
+            vac = air_wavelength_to_vacuum(values, unit=self.unit)
+            angstrom = vac * (
+                spectral_unit_scale("WAVE", self.unit)
+                / spectral_unit_scale("WAVE", "Angstrom")
+            )
+            return angstrom.to(dtype=values.dtype)
+        freq = self.to_frequency()
+        wave = frequency_to_spectral(freq, "WAVE", unit="Angstrom")
+        return wave.to(dtype=values.dtype, device=values.device)
 
     def to_frequency(self) -> torch.Tensor:
-        """Convert to frequency in Hz."""
-        kind = self.type.upper()
-        unit = self.unit.lower()
+        """Convert to frequency in Hz via FITS spectral conventions."""
         values = self._validated_values()
-        if kind == "FREQ":
-            scales = {
-                "hz": 1.0,
-                "khz": 1.0e3,
-                "mhz": 1.0e6,
-                "ghz": 1.0e9,
-                "thz": 1.0e12,
-            }
-            if unit in scales:
-                return values * scales[unit]
-        elif kind in {"WAVE", "AWAV"}:
-            _ = self._positive_values()
-            wavelength_m = self.to_wavelength() * 1.0e-10
-            return _SPEED_OF_LIGHT_M_PER_S / wavelength_m
-        elif kind == "ENER":
-            _ = self._positive_values()
-            scales = {
-                "j": 1.0,
-                "joule": 1.0,
-                "ev": _ELECTRON_VOLT_JOULE,
-                "kev": 1.0e3 * _ELECTRON_VOLT_JOULE,
-                "mev": 1.0e6 * _ELECTRON_VOLT_JOULE,
-                "gev": 1.0e9 * _ELECTRON_VOLT_JOULE,
-            }
-            if unit in scales:
-                return values * scales[unit] / _PLANCK_JOULE_SECOND
-        elif kind == "WAVN":
-            _ = self._positive_values()
-            scales = {
-                "1/m": 1.0,
-                "m^-1": 1.0,
-                "m-1": 1.0,
-                "1/cm": 100.0,
-                "cm^-1": 100.0,
-                "cm-1": 100.0,
-            }
-            if unit in scales:
-                return _SPEED_OF_LIGHT_M_PER_S * values * scales[unit]
-
-        raise ValueError(
-            f"Unsupported spectral conversion to frequency for type={self.type!r}, unit={self.unit!r}. "
-            "Supported quantities: WAVE/AWAV, FREQ, ENER, and WAVN."
+        kind = canonical_spectral_type(self.type)
+        out = _wcs_spectral_to_frequency(
+            values,
+            kind,
+            unit=self.unit,
+            rest_frequency=self.rest_frequency,
         )
+        return out.to(dtype=values.dtype, device=values.device)
 
     def to_energy(self, unit: str = "eV") -> torch.Tensor:
         """Convert to photon energy in joules or electron-volt units."""

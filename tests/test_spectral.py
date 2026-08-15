@@ -73,6 +73,27 @@ class TestSpectralAxis:
         axis = SpectralAxis(freq_ghz, "ghz", "freq")
         torch.testing.assert_close(axis.to_wavelength(), expected_wave)
 
+        wave_nm = torch.tensor([400.0, 500.0], dtype=torch.float64)
+        torch.testing.assert_close(
+            SpectralAxis(wave_nm, "nanometer", "WAVE").to_wavelength(),
+            wave_nm * 10.0,
+        )
+        torch.testing.assert_close(
+            SpectralAxis(torch.tensor([0.4], dtype=torch.float64), "micrometer", "WAVE").to_wavelength(),
+            torch.tensor([4000.0], dtype=torch.float64),
+        )
+        torch.testing.assert_close(
+            SpectralAxis(torch.tensor([4.0e-5], dtype=torch.float64), "cm", "WAVE").to_wavelength(),
+            torch.tensor([4000.0], dtype=torch.float64),
+        )
+        joule = torch.tensor([1.0], dtype=torch.float64)
+        torch.testing.assert_close(
+            SpectralAxis(joule, "joule", "ENER").to_frequency(),
+            joule / 6.626_070_15e-34,
+        )
+        with pytest.raises(ValueError, match="unsupported spectral unit"):
+            SpectralAxis(torch.tensor([1.0]), "furlong", "WAVE").to_wavelength()
+
     def test_energy_wavenumber_and_differentiability(self):
         energy = torch.tensor([1.0, 2.0], dtype=torch.float64, requires_grad=True)
         axis = SpectralAxis(energy, "keV", "ENER")
@@ -111,6 +132,18 @@ class TestSpectralAxis:
             torch.tensor([100.0, 200.0], dtype=torch.float64) * 299_792_458.0,
         )
 
+    def test_awav_uses_air_refraction(self):
+        air = torch.tensor([5000.0, 6563.0], dtype=torch.float64)
+        axis = SpectralAxis(air, "Angstrom", "AWAV")
+        from torchsky.wcs.spectral import air_wavelength_to_vacuum, spectral_to_frequency
+
+        vac = air_wavelength_to_vacuum(air, unit="Angstrom")
+        torch.testing.assert_close(axis.to_wavelength(), vac)
+        torch.testing.assert_close(
+            axis.to_frequency(),
+            spectral_to_frequency(air, "AWAV", unit="Angstrom"),
+        )
+
     def test_irregular_descending_axis_contract(self):
         values = torch.tensor([8.0, 5.0, 3.0], dtype=torch.float64)
         edges = torch.tensor([9.5, 6.5, 4.0, 2.0], dtype=torch.float64)
@@ -146,7 +179,7 @@ class TestSpectralAxis:
             _ = SpectralAxis(torch.tensor([1.0, 3.0, 2.0]), "Hz", "FREQ").direction
 
         axis = SpectralAxis(torch.tensor([1.0, 2.0]), "m/s", "VELO")
-        with pytest.raises(ValueError, match="Unsupported spectral conversion"):
+        with pytest.raises(ValueError, match="rest_frequency or rest_wavelength"):
             _ = axis.to_wavelength()
 
     def test_linear_spectral_axis_from_header(self):

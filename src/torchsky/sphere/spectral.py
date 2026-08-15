@@ -2431,12 +2431,9 @@ def map2alm(
         nest = False
 
     if use_pixel_weights:
-        import warnings
-
-        warnings.warn(
-            "use_pixel_weights=True is currently ignored by the torch backend. "
-            "Results may be biased for high-l.",
-            UserWarning,
+        raise ValueError(
+            "torch backend does not support use_pixel_weights; "
+            "there is no healpy fallback"
         )
 
     # Iterative solver (Matches healpy behavior)

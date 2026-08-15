@@ -43,6 +43,7 @@ from torchsky.sphere.healpix import (
     spherical_fourier_features,
     query_circle_vec,
     query_disc,
+    query_polygon,
     query_polygon_vec,
     query_strip,
     ring2nest,
@@ -417,6 +418,42 @@ def test_query_disc_cpp_matches_python_fallback() -> None:
 
     torch.testing.assert_close(torch.sort(got_ring).values, torch.sort(exp_ring).values)
     torch.testing.assert_close(torch.sort(got_nest).values, torch.sort(exp_nest).values)
+
+
+def test_query_disc_rejects_nondefault_fact() -> None:
+    with pytest.raises(ValueError, match="fact is unused"):
+        query_disc(8, [1.0, 0.0, 0.0], 0.1, fact=8)
+
+
+def test_query_polygon_rejects_nonconvex() -> None:
+    nside = 8
+    # Chevron in lon/lat: the (8, 12) vertex indents the equator-to-pole quad.
+    verts = torch.tensor(
+        [
+            [0.0, 0.0],
+            [40.0, 0.0],
+            [8.0, 12.0],
+            [0.0, 30.0],
+        ],
+        dtype=torch.float64,
+    )
+    with pytest.raises(ValueError, match="convex polygon"):
+        query_polygon(nside, verts, lonlat=True)
+
+
+def test_query_polygon_accepts_convex_quad() -> None:
+    verts = torch.tensor(
+        [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0],
+        ],
+        dtype=torch.float64,
+    )
+    pix = query_polygon(8, verts, lonlat=True)
+    assert pix.ndim == 1
+    assert pix.numel() > 0
 
 
 def test_query_disc_cuda_vec_matches_cpu() -> None:
