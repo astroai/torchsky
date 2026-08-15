@@ -847,6 +847,54 @@ def test_foam_initialized_inr_is_positive_exact_and_zero_initialized() -> None:
     assert not torch.all(model.residual_output.weight.grad == 0)
 
 
+def test_log_intensity_foam_is_positive_and_exact_render_matches_points() -> None:
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    foam = SpectralPowerFoamField(
+        domain,
+        sites=torch.tensor([[0.0, 0.0]], dtype=torch.float64),
+        radii=torch.tensor([2.0], dtype=torch.float64),
+        cell_coefficients=torch.tensor([[-2.0, 0.5]], dtype=torch.float64),
+        temperature_start=4.0,
+        temperature_end=4.0,
+        compact_fixed_geometry=True,
+        log_intensity_spectra=True,
+    )
+    foam.foam.sites.requires_grad_(False)
+    foam.foam.raw_radii.requires_grad_(False)
+    wavelengths = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64)
+    ra = torch.full_like(wavelengths, 10.0)
+    dec = torch.full_like(wavelengths, 20.0)
+    point_values = foam(ra, dec, wavelengths)
+    expected = torch.exp(torch.tensor([-2.5, -2.0, -1.5], dtype=torch.float64))
+    torch.testing.assert_close(point_values, expected)
+    assert bool((point_values > 0.0).all())
+
+    pixels = torch.tensor(
+        [[[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]]],
+        dtype=torch.float64,
+    )
+    response = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
+    exact = foam.render_exact(pixels, wavelengths, response)
+    torch.testing.assert_close(exact, torch.sum(response * expected).view(1))
+
+
+def test_log_intensity_foam_rejects_nonexact_affine_spatial_spectra() -> None:
+    with pytest.raises(ValueError, match="does not yet support exact affine"):
+        SpectralPowerFoam(
+            torch.tensor([[0.0, 0.0]], dtype=torch.float64),
+            torch.tensor([1.0], dtype=torch.float64),
+            torch.zeros((1, 1), dtype=torch.float64),
+            cell_gradient_coefficients=torch.zeros((1, 1, 2), dtype=torch.float64),
+            log_intensity_spectra=True,
+        )
+
+
 def test_spectral_power_foam_field_uses_common_bandpass_psf_render_path() -> None:
     domain = FieldDomain(
         center_ra_deg=10.0,

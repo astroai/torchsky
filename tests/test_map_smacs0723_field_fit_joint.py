@@ -7,6 +7,7 @@ import sys
 import subprocess
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -19,12 +20,17 @@ BENCHMARKS = ROOT / "benchmarks"
 if str(BENCHMARKS) not in sys.path:
     sys.path.insert(0, str(BENCHMARKS))
 
+import bench_map_smacs0723_field_fit_joint as joint_benchmark  # noqa: E402
 from bench_map_smacs0723_field_fit import _field_target_observation  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import (  # noqa: E402
     _calibrated_operator_bundles,
+    _cross_fitted_scene_predictions,
     _freeze_calibrated_operator_model,
     _fitted_gaussian_psf_sigma_pix,
     _format_markdown,
+    _structured_noise_bundles,
+    _structured_noise_diagnostics,
+    _structured_scene_fit_kwargs,
     _summarize_by_model,
 )
 from bench_map_smacs0723_field_fit_joint import _background_subtracted_source_stats  # noqa: E402
@@ -47,7 +53,12 @@ from torchsky.map.field import (  # noqa: E402
     render_spectral_power_foam_observation_exact,
 )
 from torchsky.map import ForwardContext  # noqa: E402
-from torchsky.map.operators import LearnedBackgroundOp, LearnedPSFOp  # noqa: E402
+from torchsky.map.operators import (  # noqa: E402
+    LearnedBackgroundOp,
+    LearnedPSFOp,
+    StructuredDetectorNoise,
+    StructuredNoiseOp,
+)
 from torchsky.map.operators import (  # noqa: E402
     ConditionedBackgroundField,
     SpatioSpectralTemporalEncoder,
@@ -106,6 +117,119 @@ def test_calibrated_bundles_select_frozen_models_by_detector() -> None:
     assert bundles[0].psf.model is psf
     assert bundles[0].background.model is background
     assert bundles[0].background.coordinate_frame == "detector"
+
+
+def test_structured_scene_kwargs_disable_invalid_sampling_approximations() -> None:
+    kwargs = _structured_scene_fit_kwargs(
+        {
+            "training_patch_size": 8,
+            "pixel_samples_per_observation": 32,
+            "shared_sky_patch_sampling": True,
+            "diagnostic_spatial_tile_hw": (4, 4),
+            "spectral_anchor_observations_per_step": 1,
+            "context_observations_per_step": 1,
+            "training_spectral_sampling": "mixture_mc",
+        },
+        num_observations=3,
+    )
+    assert kwargs["loss_kind"] == "structured_nll"
+    assert kwargs["observations_per_step"] == 3
+    assert kwargs["training_spectral_sampling"] == "deterministic_quadrature"
+    assert kwargs["training_patch_size"] is None
+    assert kwargs["pixel_samples_per_observation"] is None
+    assert not kwargs["shared_sky_patch_sampling"]
+    assert kwargs["diagnostic_spatial_tile_hw"] is None
+    assert kwargs["spectral_anchor_observations_per_step"] == 0
+    assert kwargs["context_observations_per_step"] == 0
+
+
+def test_cross_fitted_predictions_exclude_exactly_the_held_out_exposure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observations = tuple(
+        FieldObservation(
+            image=torch.full((2, 3), float(index)),
+            header={"NAXIS1": 3, "NAXIS2": 2},
+            wavelength=15_000.0,
+        )
+        for index in range(3)
+    )
+    training_calls: list[tuple[int, ...]] = []
+
+    def fake_fit(training, model, *, steps, **kwargs):
+        del steps, kwargs
+        training_calls.append(tuple(id(observation) for observation in training))
+        return SimpleNamespace(model=model, initial_loss=2.0, final_loss=1.0)
+
+    def fake_render(model, observation, **kwargs):
+        del model, kwargs
+        return torch.zeros_like(observation.image)
+
+    monkeypatch.setattr(joint_benchmark, "fit_field_model", fake_fit)
+    monkeypatch.setattr(
+        joint_benchmark,
+        "render_field_observation",
+        fake_render,
+    )
+    predictions, diagnostics = _cross_fitted_scene_predictions(
+        observations,
+        model_factory=lambda: torch.nn.Linear(1, 1),
+        steps=1,
+        fit_kwargs={},
+        render_kwargs={},
+        seed=7,
+    )
+
+    assert len(predictions) == len(observations)
+    for held_out_index, training_ids in enumerate(training_calls):
+        assert id(observations[held_out_index]) not in training_ids
+        assert set(training_ids) == {
+            id(observation)
+            for index, observation in enumerate(observations)
+            if index != held_out_index
+        }
+        assert diagnostics[held_out_index]["held_out_index"] == held_out_index
+
+
+def test_structured_noise_bundles_are_frozen_and_exposure_aligned() -> None:
+    observations = tuple(
+        FieldObservation(
+            image=torch.zeros((2, 3)),
+            header={"NAXIS1": 3, "NAXIS2": 2},
+            err=torch.ones((2, 3)),
+            wavelength=15_000.0,
+        )
+        for _ in range(2)
+    )
+    models = (StructuredDetectorNoise(), StructuredDetectorNoise())
+    bundles = _structured_noise_bundles(observations, models)
+    assert len(bundles) == len(observations)
+    assert all(isinstance(bundle.noise, StructuredNoiseOp) for bundle in bundles)
+    assert all(bundle.noise.frozen for bundle in bundles)
+    assert tuple(bundle.noise.model for bundle in bundles) == models
+
+
+def test_structured_noise_diagnostics_report_calibrated_coverage() -> None:
+    observation = FieldObservation(
+        image=torch.tensor(
+            [[0.0, float("nan"), 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]]
+        ),
+        header={"NAXIS1": 4, "NAXIS2": 2},
+        var_poisson=torch.tensor(
+            [[float("nan"), 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0]]
+        ),
+        wavelength=15_000.0,
+    )
+    rows = _structured_noise_diagnostics(
+        (observation,),
+        (torch.zeros_like(observation.image),),
+        (StructuredDetectorNoise(),),
+        (0.0,),
+    )
+    assert rows[0]["valid_pixels"] == 6
+    assert rows[0]["active_amplifiers"] == [0, 1, 2, 3]
+    assert rows[0]["posterior_weighted_coverage_68"] == pytest.approx(1.0)
+    assert rows[0]["posterior_weighted_coverage_95"] == pytest.approx(1.0)
 
 
 def test_joint_benchmark_import_does_not_require_astropy() -> None:

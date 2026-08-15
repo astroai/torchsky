@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import numpy as np
@@ -71,6 +72,7 @@ from torchsky.map import (  # noqa: E402
     coadd_image_plane,
     estimate_field_domain,
     fit_field_model,
+    fit_structured_noise_crossfit,
     make_field_model,
     render_field_observation,
     render_spectral_power_foam_observation_exact,
@@ -90,8 +92,14 @@ from torchsky.map.operators import (  # noqa: E402
     LearnedBackgroundOp,
     LearnedPSFOp,
     ObservationOperatorBundle,
+    StructuredDetectorNoise,
+    StructuredNoiseOp,
+    VAR_FLAT,
+    VAR_POISSON,
+    VAR_RNOISE,
     apply_operator_calibration_pruning,
     field_observation_operator_bundle,
+    profile_amplifier_row_offsets,
 )
 
 
@@ -284,6 +292,8 @@ def _regular_foam_model_kwargs(
     affine_spatial_basis: bool = False,
     extent: float = 1.0,
     bounds_xy: tuple[tuple[float, float], tuple[float, float]] | None = None,
+    log_intensity_spectra: bool = False,
+    initial_intensity: float = 1.0e-2,
 ) -> dict[str, Any]:
     """Deterministic Power-Foam initialization independent of science pixels."""
     side = int(grid_side)
@@ -295,6 +305,8 @@ def _regular_foam_model_kwargs(
         raise ValueError("basis_count must be positive")
     if not math.isfinite(limit) or limit <= 0:
         raise ValueError("extent must be finite and positive")
+    if not math.isfinite(initial_intensity) or initial_intensity <= 0:
+        raise ValueError("initial_intensity must be finite and positive")
     bounds = bounds_xy or ((-limit, limit), (-limit, limit))
     (x_min, x_max), (y_min, y_max) = bounds
     if not all(math.isfinite(value) for pair in bounds for value in pair):
@@ -323,6 +335,8 @@ def _regular_foam_model_kwargs(
         dtype=torch.float32,
     )
     coefficients = torch.zeros((side * side, basis), dtype=torch.float32)
+    if log_intensity_spectra:
+        coefficients[:, 0] = math.log(float(initial_intensity))
     inverse_cell_area = 1.0 / (step_x * step_y)
     result = {
         "sites": sites,
@@ -331,6 +345,7 @@ def _regular_foam_model_kwargs(
         "minimum_radius": 0.25 * min(step_x, step_y),
         "temperature_start": FOAM_TEMPERATURE_START_CELL_UNITS * inverse_cell_area,
         "temperature_end": FOAM_TEMPERATURE_END_CELL_UNITS * inverse_cell_area,
+        "log_intensity_spectra": bool(log_intensity_spectra),
     }
     if affine_spatial_basis:
         result["cell_gradient_coefficients"] = torch.zeros(
@@ -1253,6 +1268,215 @@ def _joint_real_fit_kwargs(
     return kwargs
 
 
+def _structured_scene_fit_kwargs(
+    base: dict[str, Any], *, num_observations: int
+) -> dict[str, Any]:
+    """Make a full-exposure fit compatible with the structured likelihood."""
+    kwargs = dict(base)
+    kwargs.update(
+        loss_kind="structured_nll",
+        loss_reduction="global",
+        training_spectral_sampling="deterministic_quadrature",
+        observations_per_step=max(int(num_observations), 1),
+        training_patch_size=None,
+        pixel_samples_per_observation=None,
+        shared_sky_patch_sampling=False,
+        diagnostic_spatial_tile_hw=None,
+        gradient_residual_weight=0.0,
+        spectral_anchor_observations_per_step=0,
+        component_anchor_terms=None,
+        component_centroid_anchor_terms=None,
+        context_observations_per_step=0,
+    )
+    return kwargs
+
+
+def _cross_fitted_scene_predictions(
+    observations: Sequence[FieldObservation],
+    *,
+    model_factory: Callable[[], torch.nn.Module],
+    steps: int,
+    fit_kwargs: dict[str, Any],
+    render_kwargs: dict[str, Any],
+    seed: int,
+) -> tuple[tuple[torch.Tensor, ...], tuple[dict[str, float | int], ...]]:
+    """Fit one scene per held-out exposure and render only that exposure."""
+    if len(observations) < 2:
+        raise ValueError("cross-fitting requires at least two exposures")
+    if int(steps) < 1:
+        raise ValueError("cross-fit scene steps must be positive")
+    predictions: list[torch.Tensor] = []
+    diagnostics: list[dict[str, float | int]] = []
+    for held_out_index, held_out in enumerate(observations):
+        training = tuple(
+            observation
+            for index, observation in enumerate(observations)
+            if index != held_out_index
+        )
+        torch.manual_seed(int(seed) + held_out_index)
+        result = fit_field_model(
+            training,
+            model_factory(),
+            steps=int(steps),
+            **fit_kwargs,
+        )
+        result.model.eval()
+        with torch.no_grad():
+            prediction = render_field_observation(
+                result.model,
+                held_out,
+                **render_kwargs,
+            )
+        if prediction.shape != held_out.image.shape:
+            raise RuntimeError("held-out render shape does not match exposure")
+        predictions.append(prediction.detach().cpu())
+        diagnostics.append(
+            {
+                "held_out_index": held_out_index,
+                "training_exposures": len(training),
+                "initial_loss": float(result.initial_loss),
+                "final_loss": float(result.final_loss),
+            }
+        )
+    return tuple(predictions), tuple(diagnostics)
+
+
+def _structured_noise_bundles(
+    observations: Sequence[FieldObservation],
+    models: Sequence[StructuredDetectorNoise],
+) -> tuple[ObservationOperatorBundle, ...]:
+    if len(observations) != len(models):
+        raise ValueError("noise models must match observations")
+    return tuple(
+        field_observation_operator_bundle(observation).with_updates(
+            noise=StructuredNoiseOp(model, frozen=True)
+        )
+        for observation, model in zip(observations, models, strict=True)
+    )
+
+
+@torch.no_grad()
+def _structured_noise_diagnostics(
+    observations: Sequence[FieldObservation],
+    predictions: Sequence[torch.Tensor],
+    models: Sequence[StructuredDetectorNoise],
+    losses: Sequence[float],
+) -> list[dict[str, Any]]:
+    if not (
+        len(observations) == len(predictions) == len(models) == len(losses)
+    ):
+        raise ValueError("noise diagnostics inputs must have equal length")
+    rows: list[dict[str, Any]] = []
+    for index, (observation, prediction, model, loss) in enumerate(
+        zip(observations, predictions, models, losses, strict=True)
+    ):
+        calibration = model.variance_calibration
+        row_noise = model.row_noise
+        residual = prediction.to(dtype=torch.float32) - observation.image.to(
+            dtype=torch.float32
+        )
+        support = torch.isfinite(residual)
+        components: dict[str, torch.Tensor] = {}
+        for key, value in (
+            (VAR_POISSON, observation.var_poisson),
+            (VAR_RNOISE, observation.var_rnoise),
+            (VAR_FLAT, observation.var_flat),
+        ):
+            if value is None:
+                continue
+            plane = value.to(dtype=residual.dtype)
+            plane_valid = torch.isfinite(plane) & (plane >= 0.0)
+            support &= plane_valid
+            components[key] = torch.where(
+                plane_valid, plane, torch.zeros_like(plane)
+            )
+        err = (
+            None
+            if observation.err is None
+            else observation.err.to(dtype=residual.dtype)
+        )
+        if not components and err is None:
+            if observation.weight is None:
+                raise ValueError("noise diagnostics require variance, ERR, or weight")
+            weight = observation.weight.to(dtype=residual.dtype)
+            err = torch.where(
+                weight > 0.0,
+                weight.clamp_min(torch.finfo(weight.dtype).tiny).rsqrt(),
+                torch.ones_like(weight),
+            )
+        elif not components and err is not None:
+            err_valid = torch.isfinite(err) & (err >= 0.0)
+            support &= err_valid
+            err = torch.where(err_valid, err, torch.ones_like(err))
+        variance = calibration(components or None, err=err).to(dtype=residual.dtype)
+        if variance.shape != residual.shape:
+            variance = torch.broadcast_to(variance, residual.shape)
+        support &= torch.isfinite(variance) & (variance > 0)
+        if observation.mask is not None:
+            support &= observation.mask.to(dtype=torch.bool)
+        safe_residual = torch.where(support, residual, torch.zeros_like(residual))
+        amplifier_index = (
+            model.default_amplifier_index(tuple(residual.shape), residual.device)
+            if observation.amplifier_index is None
+            else observation.amplifier_index.to(device=residual.device)
+        )
+        _, corrected = profile_amplifier_row_offsets(
+            safe_residual,
+            variance,
+            amplifier_index,
+            valid=support,
+            num_amplifiers=model.num_amplifiers,
+        )
+        inlier_probability, _ = model.contamination_responsibilities(
+            safe_residual,
+            components=components or None,
+            err=err,
+            valid=support,
+            amplifier_index=amplifier_index,
+            contamination_prior=observation.contamination_prior,
+        )
+        z_abs = torch.abs(corrected) / torch.sqrt(variance)
+        inlier_weight = torch.where(
+            support, inlier_probability, torch.zeros_like(inlier_probability)
+        )
+        inlier_weight_sum = inlier_weight.sum().clamp_min(
+            torch.finfo(inlier_weight.dtype).tiny
+        )
+        active_amplifiers = torch.unique(amplifier_index[support]).detach().cpu()
+        rows.append(
+            {
+                "exposure_index": index,
+                "crossfit_nll": float(loss),
+                "poisson_scale": float(calibration.poisson_scale.detach().cpu()),
+                "rnoise_scale": float(calibration.rnoise_scale.detach().cpu()),
+                "flat_scale": float(calibration.flat_scale.detach().cpu()),
+                "err_scale": float(calibration.err_scale.detach().cpu()),
+                "variance_floor": float(
+                    calibration.variance_floor.detach().cpu()
+                ),
+                "row_white_psd": row_noise.white_psd.detach().cpu().tolist(),
+                "row_knee_frequency": (
+                    row_noise.knee_frequency.detach().cpu().tolist()
+                ),
+                "row_exponent": row_noise.exponent.detach().cpu().tolist(),
+                "outlier_probability": float(
+                    model.outlier_probability.detach().cpu()
+                ),
+                "outlier_scale": float(model.outlier_scale.detach().cpu()),
+                "active_amplifiers": active_amplifiers.tolist(),
+                "valid_pixels": int(support.sum()),
+                "posterior_weighted_coverage_68": float(
+                    torch.sum(inlier_weight * (z_abs <= 1.0)) / inlier_weight_sum
+                ),
+                "posterior_weighted_coverage_95": float(
+                    torch.sum(inlier_weight * (z_abs <= 1.959963984540054))
+                    / inlier_weight_sum
+                ),
+            }
+        )
+    return rows
+
+
 def _summarize_by_model(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -1430,6 +1654,12 @@ def main() -> int:
     )
     parser.add_argument("--foam-lr", type=float, default=2.0e-2)
     parser.add_argument(
+        "--foam-log-intensity-spectra",
+        action="store_true",
+        help="Parameterize each Foam cell spectrum as exp(Legendre modes)",
+    )
+    parser.add_argument("--foam-initial-intensity", type=float, default=1.0e-2)
+    parser.add_argument(
         "--foam-train-geometry",
         action="store_true",
         help="Train sites and radii; off by default for the fixed-grid control",
@@ -1525,6 +1755,26 @@ def main() -> int:
             "_PerExposureScalarBias (see bench_map_smacs0723_field_fit.py)."
         ),
     )
+    parser.add_argument(
+        "--structured-noise-crossfit",
+        action="store_true",
+        help=(
+            "Calibrate one frozen structured-noise model per exposure from "
+            "leave-one-exposure-out Foam predictions, then use structured NLL"
+        ),
+    )
+    parser.add_argument("--crossfit-scene-steps", type=int, default=4)
+    parser.add_argument("--structured-noise-steps", type=int, default=50)
+    parser.add_argument("--structured-noise-lr", type=float, default=1.0e-2)
+    parser.add_argument(
+        "--foam-initialized-inr",
+        action="store_true",
+        help="Fit a positive zero-correction INR initialized from the fitted Foam",
+    )
+    parser.add_argument("--inr-steps", type=int, default=None)
+    parser.add_argument("--inr-lr", type=float, default=1.0e-3)
+    parser.add_argument("--inr-hidden-dim", type=int, default=64)
+    parser.add_argument("--inr-hidden-layers", type=int, default=3)
     args = parser.parse_args()
     if args.foam_initialize_from_coadd and args.foam_train_geometry:
         parser.error("coadd initialization currently requires fixed Foam geometry")
@@ -1537,6 +1787,15 @@ def main() -> int:
     ):
         parser.error(
             "--foam-exact-observation-refine requires fixed affine Foam geometry"
+        )
+    if args.foam_log_intensity_spectra and (
+        args.foam_affine_spatial_basis
+        or args.foam_initialize_from_coadd
+        or args.foam_exact_observation_refine
+    ):
+        parser.error(
+            "log-intensity Foam currently excludes affine spectra, coadd initialization, "
+            "and the linear exact refiner"
         )
     exact_batch: int | str
     if str(args.foam_exact_observation_batch_size).strip().lower() == "auto":
@@ -1563,6 +1822,39 @@ def main() -> int:
             "--operator-calibration-manifest and "
             "--operator-calibration-fit-report must be provided together"
         )
+    if args.structured_noise_crossfit:
+        if args.crossfit_scene_steps <= 0 or args.structured_noise_steps <= 0:
+            parser.error("cross-fit scene and structured-noise steps must be positive")
+        if not math.isfinite(args.structured_noise_lr) or args.structured_noise_lr <= 0:
+            parser.error("--structured-noise-lr must be finite and positive")
+        if args.forward_context or args.operator_calibration_manifest is not None:
+            parser.error(
+                "structured-noise cross-fitting does not yet support conditioned operators"
+            )
+        if args.foam_initialize_from_coadd:
+            parser.error(
+                "structured-noise cross-fitting forbids full-data coadd initialization"
+            )
+        if args.foam_exact_observation_refine:
+            parser.error(
+                "structured-noise cross-fitting cannot be followed by the MSE exact refiner"
+            )
+    if args.foam_initialized_inr:
+        if args.inr_steps is not None and args.inr_steps <= 0:
+            parser.error("--inr-steps must be positive")
+        if not math.isfinite(args.inr_lr) or args.inr_lr <= 0:
+            parser.error("--inr-lr must be finite and positive")
+        if args.inr_hidden_dim <= 0 or args.inr_hidden_layers <= 0:
+            parser.error("INR hidden dimensions must be positive")
+        if not args.foam_log_intensity_spectra:
+            parser.error(
+                "--foam-initialized-inr requires --foam-log-intensity-spectra"
+            )
+    if (
+        not math.isfinite(args.foam_initial_intensity)
+        or args.foam_initial_intensity <= 0
+    ):
+        parser.error("--foam-initial-intensity must be finite and positive")
     calibrated_operators = args.operator_calibration_manifest is not None
 
     bands = _parse_csv(args.bands)
@@ -1572,6 +1864,13 @@ def main() -> int:
         )
     pattern_numbers = tuple(int(value) for value in _parse_csv(args.patt_nums))
     model_kinds = [part.strip() for part in str(args.models).split(",") if part.strip()]
+    if (args.structured_noise_crossfit or args.foam_initialized_inr) and (
+        "spectral_power_foam" not in model_kinds
+    ):
+        parser.error("structured noise and Foam-initialized INR require spectral_power_foam")
+    if args.foam_initialized_inr and "foam_initialized_inr" not in model_kinds:
+        foam_index = model_kinds.index("spectral_power_foam")
+        model_kinds.insert(foam_index + 1, "foam_initialized_inr")
     rows: list[dict[str, Any]] = []
 
     band_entries: list[dict[str, Any]] = []
@@ -2058,6 +2357,80 @@ def main() -> int:
                 normalized_observations, all_forward_contexts, calibrated_models
             )
 
+        foam_bounds = (
+            _foam_target_footprint_bounds(local_domain, band_entries)
+            if args.foam_fit_target_footprint
+            else None
+        )
+        foam_model_kwargs = _regular_foam_model_kwargs(
+            grid_side=int(args.foam_grid_side),
+            basis_count=int(args.foam_basis_count),
+            affine_spatial_basis=bool(args.foam_affine_spatial_basis),
+            extent=float(args.foam_extent),
+            bounds_xy=foam_bounds,
+            log_intensity_spectra=bool(args.foam_log_intensity_spectra),
+            initial_intensity=float(args.foam_initial_intensity),
+        )
+        foam_model_kwargs["compact_fixed_geometry"] = not bool(
+            args.foam_train_geometry
+        )
+
+        def make_foam_model() -> torch.nn.Module:
+            model = make_field_model(
+                "spectral_power_foam", local_domain, **foam_model_kwargs
+            )
+            _set_foam_geometry_trainable(model, args.foam_train_geometry)
+            return model
+
+        structured_bundles: tuple[ObservationOperatorBundle, ...] | None = None
+        noise_crossfit_audit: dict[str, Any] | None = None
+        if args.structured_noise_crossfit:
+            crossfit_kwargs = _joint_real_fit_kwargs(
+                "spectral_power_foam",
+                crop_size=int(args.crop_size),
+                steps=int(args.crossfit_scene_steps),
+                num_observations=max(len(normalized_observations) - 1, 1),
+                foam_grid_side=int(args.foam_grid_side),
+                foam_lr=float(args.foam_lr),
+                foam_fixed_geometry=not bool(args.foam_train_geometry),
+            )
+            crossfit_predictions, crossfit_diagnostics = (
+                _cross_fitted_scene_predictions(
+                    normalized_observations,
+                    model_factory=make_foam_model,
+                    steps=int(args.crossfit_scene_steps),
+                    fit_kwargs=crossfit_kwargs,
+                    render_kwargs={
+                        "num_spectral_samples": int(
+                            crossfit_kwargs.get("num_spectral_samples", 1)
+                        ),
+                        "spatial_sampling": str(
+                            crossfit_kwargs.get("spatial_sampling", "center")
+                        ),
+                    },
+                    seed=int(args.seed),
+                )
+            )
+            noise_models, crossfit_noise_losses = fit_structured_noise_crossfit(
+                normalized_observations,
+                crossfit_predictions,
+                steps=int(args.structured_noise_steps),
+                lr=float(args.structured_noise_lr),
+                device="cpu",
+            )
+            structured_bundles = _structured_noise_bundles(
+                normalized_observations, noise_models
+            )
+            noise_crossfit_audit = {
+                "scene_folds": list(crossfit_diagnostics),
+                "noise_models": _structured_noise_diagnostics(
+                    normalized_observations,
+                    crossfit_predictions,
+                    noise_models,
+                    crossfit_noise_losses,
+                ),
+            }
+
         fitted_models: dict[
             str,
             tuple[Any, float, dict[str, Any], dict[str, Any]],
@@ -2065,31 +2438,29 @@ def main() -> int:
         for model_kind in model_kinds:
             if model_kind == "coadd_bilinear":
                 continue
-            model_kwargs = _field_model_kwargs_for_case(
-                model_kind,
-                case=REAL_JOINT_CASE,
-                size=int(args.crop_size),
-            )
             if model_kind == "spectral_power_foam":
-                foam_bounds = (
-                    _foam_target_footprint_bounds(local_domain, band_entries)
-                    if args.foam_fit_target_footprint
-                    else None
+                model_kwargs = foam_model_kwargs
+                model_steps = int(args.steps)
+            elif model_kind == "foam_initialized_inr":
+                foam_reference = fitted_models["spectral_power_foam"][0]
+                foam_reference = getattr(foam_reference, "inner", foam_reference)
+                model_kwargs = {
+                    "foam": foam_reference,
+                    "hidden_dim": int(args.inr_hidden_dim),
+                    "hidden_layers": int(args.inr_hidden_layers),
+                }
+                model_steps = int(args.inr_steps or args.steps)
+            else:
+                model_kwargs = _field_model_kwargs_for_case(
+                    model_kind,
+                    case=REAL_JOINT_CASE,
+                    size=int(args.crop_size),
                 )
-                model_kwargs = _regular_foam_model_kwargs(
-                    grid_side=int(args.foam_grid_side),
-                    basis_count=int(args.foam_basis_count),
-                    affine_spatial_basis=bool(args.foam_affine_spatial_basis),
-                    extent=float(args.foam_extent),
-                    bounds_xy=foam_bounds,
-                )
-                model_kwargs["compact_fixed_geometry"] = not bool(
-                    args.foam_train_geometry
-                )
+                model_steps = int(args.steps)
             fit_kwargs = _joint_real_fit_kwargs(
                 model_kind,
                 crop_size=int(args.crop_size),
-                steps=int(args.steps),
+                steps=model_steps,
                 num_observations=len(normalized_observations),
                 foam_grid_side=int(args.foam_grid_side),
                 foam_lr=float(args.foam_lr),
@@ -2101,16 +2472,26 @@ def main() -> int:
             if calibrated_bundles is not None:
                 fit_kwargs = dict(fit_kwargs)
                 fit_kwargs["observation_operator_bundles"] = calibrated_bundles
+            if structured_bundles is not None:
+                fit_kwargs = _structured_scene_fit_kwargs(
+                    fit_kwargs, num_observations=len(normalized_observations)
+                )
+                fit_kwargs["observation_operator_bundles"] = structured_bundles
+            if model_kind == "foam_initialized_inr":
+                fit_kwargs["lr"] = float(args.inr_lr)
             domain = (
                 local_domain
-                if model_kind == "spectral_power_foam"
+                if model_kind in {"spectral_power_foam", "foam_initialized_inr"}
                 else spherical_domain
             )
             torch.manual_seed(int(args.seed))
-            model = make_field_model(model_kind, domain, **model_kwargs)
+            model = (
+                make_foam_model()
+                if model_kind == "spectral_power_foam"
+                else make_field_model(model_kind, domain, **model_kwargs)
+            )
             initialization_diagnostics: dict[str, float] = {}
             if model_kind == "spectral_power_foam":
-                _set_foam_geometry_trainable(model, args.foam_train_geometry)
                 if args.foam_initialize_from_coadd:
                     initialization_diagnostics = _initialize_foam_from_band_coadds(
                         model,
@@ -2130,7 +2511,7 @@ def main() -> int:
             result = fit_field_model(
                 normalized_observations,
                 model,
-                steps=int(args.steps),
+                steps=model_steps,
                 **fit_kwargs,
             )
             fit_time_ms = (time.perf_counter() - t0) * 1000.0
@@ -2192,9 +2573,17 @@ def main() -> int:
                     "calibrated_operators": bool(
                         calibrated_operators and model_kind != "coadd_bilinear"
                     ),
-                    "optimizer_steps": int(args.steps)
-                    if model_kind != "coadd_bilinear"
-                    else 0,
+                    "structured_noise_crossfit": bool(
+                        args.structured_noise_crossfit
+                        and model_kind != "coadd_bilinear"
+                    ),
+                    "optimizer_steps": (
+                        int(args.inr_steps or args.steps)
+                        if model_kind == "foam_initialized_inr"
+                        else int(args.steps)
+                        if model_kind != "coadd_bilinear"
+                        else 0
+                    ),
                     "status": "OK",
                 }
                 try:
@@ -2333,6 +2722,9 @@ def main() -> int:
                             )
                             row["foam_coefficient_abs_max"] = float(
                                 coefficients.abs().max()
+                            )
+                            row["foam_log_intensity_spectra"] = bool(
+                                hard_model.foam.log_intensity_spectra
                             )
                             gradients = hard_model.cell_gradient_coefficients
                             row["foam_affine_spatial_basis"] = gradients is not None
@@ -2558,6 +2950,8 @@ def main() -> int:
             "foam_basis_count": int(args.foam_basis_count),
             "foam_extent": float(args.foam_extent),
             "foam_lr": float(args.foam_lr),
+            "foam_log_intensity_spectra": bool(args.foam_log_intensity_spectra),
+            "foam_initial_intensity": float(args.foam_initial_intensity),
             "foam_train_geometry": bool(args.foam_train_geometry),
             "foam_initialize_from_coadd": bool(args.foam_initialize_from_coadd),
             "foam_fit_target_footprint": bool(args.foam_fit_target_footprint),
@@ -2569,6 +2963,15 @@ def main() -> int:
             "foam_exact_observation_batch_size": exact_batch,
             "foam_exact_max_iterations": int(args.foam_exact_max_iterations),
             "foam_exact_preconditioner": str(args.foam_exact_preconditioner),
+            "structured_noise_crossfit": bool(args.structured_noise_crossfit),
+            "crossfit_scene_steps": int(args.crossfit_scene_steps),
+            "structured_noise_steps": int(args.structured_noise_steps),
+            "structured_noise_lr": float(args.structured_noise_lr),
+            "foam_initialized_inr": bool(args.foam_initialized_inr),
+            "inr_steps": int(args.inr_steps or args.steps),
+            "inr_lr": float(args.inr_lr),
+            "inr_hidden_dim": int(args.inr_hidden_dim),
+            "inr_hidden_layers": int(args.inr_hidden_layers),
             "intensity_scale": float(intensity_scale),
             "patt_nums": list(pattern_numbers),
             "crop_x0": args.crop_x0,
@@ -2595,7 +2998,17 @@ def main() -> int:
             ),
         },
         "injection_audit": injection_rows,
+        "exposures": [
+            {
+                "exposure_index": index,
+                "exposure_id": context.exposure_id,
+                "band": context.survey,
+                "source_path": (context.extra or {}).get("source_path"),
+            }
+            for index, context in enumerate(all_forward_contexts)
+        ],
         "operator_calibration": calibration_audit,
+        "structured_noise_crossfit": noise_crossfit_audit,
         "rows": ok_rows + fail_rows,
         "summary": _summarize_by_model(ok_rows),
     }

@@ -1560,6 +1560,7 @@ class SpectralPowerFoam(torch.nn.Module):
         *,
         cell_gradient_coefficients: Tensor | None = None,
         minimum_radius: float = 0.0,
+        log_intensity_spectra: bool = False,
     ) -> None:
         super().__init__()
         _validate_sites_and_radii(sites, radii, allow_empty=False)
@@ -1591,6 +1592,10 @@ class SpectralPowerFoam(torch.nn.Module):
             raise ValueError(
                 "cell_gradient_coefficients must match coefficients with trailing 2"
             )
+        if log_intensity_spectra and cell_gradient_coefficients is not None:
+            raise ValueError(
+                "log-intensity Foam does not yet support exact affine spatial spectra"
+            )
         radius_floor = float(minimum_radius)
         if not math.isfinite(radius_floor) or radius_floor < 0.0:
             raise ValueError("minimum_radius must be finite and non-negative")
@@ -1612,6 +1617,7 @@ class SpectralPowerFoam(torch.nn.Module):
             if cell_gradient_coefficients is not None
             else None
         )
+        self.log_intensity_spectra = bool(log_intensity_spectra)
         self.register_buffer(
             "_minimum_radius",
             radii.new_tensor(radius_floor),
@@ -1718,6 +1724,8 @@ class SpectralPowerFoam(torch.nn.Module):
                 gradients * (points[..., None, :] - selected_sites),
                 dim=-1,
             )
+        if self.log_intensity_spectra:
+            cell_values = torch.exp(cell_values)
         return torch.sum(weights * cell_values, dim=-1)
 
     def render_exact(
@@ -1742,6 +1750,20 @@ class SpectralPowerFoam(torch.nn.Module):
                 self.cell_gradient_coefficients,
                 basis_samples,
                 response_weights,
+            )
+        if self.log_intensity_spectra:
+            cell_samples = torch.exp(
+                torch.einsum(
+                    "ck,sk->sc",
+                    self.cell_coefficients,
+                    basis_samples,
+                )
+            )
+            return render_power_spectral_samples(
+                operator,
+                cell_samples,
+                response_weights,
+                semantics=semantics,
             )
         return render_power_spectral_basis(
             operator,

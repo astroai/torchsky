@@ -541,7 +541,7 @@ origins; a custom transform is never cached while it may carry gradients.
 For detector noise, store `err` or the `var_poisson`, `var_rnoise`, and
 `var_flat` planes on each observation. `contamination_prior` holds soft CRF
 outlier probabilities; permanent DQ failures remain in `mask`.
-`fit_noise_crossfit(...)` fits `StructuredDetectorNoise` only from predictions
+`fit_structured_noise_crossfit(...)` fits `StructuredDetectorNoise` only from predictions
 made without the exposure being calibrated, then freezes the result. Attach it
 as `StructuredNoiseOp(model, frozen=True)` and use
 `loss_kind="structured_nll"` for the scene fit. This likelihood intentionally
@@ -551,7 +551,11 @@ row covariance.
 The transparent reconstruction ladder is:
 
 1. fit `SpectralPowerFoamField` on native observations and check the exact
-   detector-pixel handoff;
+   detector-pixel handoff. Set `log_intensity_spectra=True` when Foam is the
+   positive INR initializer: each cell then represents
+   `exp(Legendre coefficients)` and point/exact renders share those positive
+   sampled spectra. This mode currently rejects affine-in-cell spectra because
+   their nonlinear polygon integral is not yet exact;
 2. wrap the accepted control in `FoamInitializedINRField`, whose log-intensity
    residual is zero-initialized and remains positive;
 3. keep the fixed PSF, then calibrate `ExtendedResidualKernelPSF`, a fixed

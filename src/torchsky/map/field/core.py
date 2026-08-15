@@ -313,6 +313,7 @@ class SpectralPowerFoamField(_BaseFieldModel):
         temperature_start: float = 4.0,
         temperature_end: float = 24.0,
         compact_fixed_geometry: bool = False,
+        log_intensity_spectra: bool = False,
     ) -> None:
         super().__init__(domain)
         if self.coord_mode != "local_tangent":
@@ -329,6 +330,7 @@ class SpectralPowerFoamField(_BaseFieldModel):
             cell_coefficients,
             cell_gradient_coefficients=cell_gradient_coefficients,
             minimum_radius=minimum_radius,
+            log_intensity_spectra=log_intensity_spectra,
         )
         self.temperature_start = start
         self.temperature_end = end
