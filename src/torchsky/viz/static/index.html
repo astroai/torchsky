@@ -784,7 +784,8 @@
       <span class="label">Value</span>
       <span class="value text-mono" id="coord-val">—</span>
     </div>
-    <div style="margin-left:auto" class="footer-item">
+    <div style="margin-left:auto; display:flex; align-items:center; gap:var(--sp2);" class="footer-item" aria-live="polite" aria-atomic="true">
+      <div id="footer-spinner" class="spinner" style="display:none; width:12px; height:12px; border-width:2px; margin-right:4px;"></div>
       <span class="value" id="footer-status">Ready</span>
     </div>
   </footer>
@@ -836,7 +837,11 @@ async function api(path, opts = {}) {
   return r.json();
 }
 
-function status(msg) { $('footer-status').textContent = msg; }
+function status(msg) {
+  $('footer-status').textContent = msg;
+  const showSpinner = msg.includes('…');
+  $('footer-spinner').style.display = showSpinner ? 'block' : 'none';
+}
 
 // ─── Aladin setup ────────────────────────────────────────────
 function initAladinFits() {
