@@ -11,7 +11,6 @@ from torch import Tensor
 from ...device import default_compute_device
 from ...spectral import SpectralAxis
 from ...sphere import healpix as _healpix_wcs
-from ...wcs import WCS
 
 from ..healpix_image_plane import sample_healpix_map_on_image_header
 from ..operators.background import (
@@ -40,6 +39,7 @@ from .observation_ops import (
     apply_exposure_pose_to_sky_grid as _apply_exposure_pose_to_sky_grid,
     coordinate_grid as _coordinate_grid,
     header_shape as _header_shape,
+    observation_pixel_to_world as _observation_pixel_to_world,
 )
 from .types import (
     FieldObservation,
@@ -65,7 +65,7 @@ def _spatial_quadrature_nodes(
 
 
 def _tile_world_coordinate_grid(
-    wcs: WCS,
+    observation: FieldObservation,
     *,
     y0: int,
     y1: int,
@@ -81,7 +81,7 @@ def _tile_world_coordinate_grid(
         torch.arange(x0, x1, dtype=torch.float64, device=grid_device) + offset_x,
         indexing="ij",
     )
-    ra_deg, dec_deg = wcs.pixel_to_world(x, y)
+    ra_deg, dec_deg = _observation_pixel_to_world(observation, x, y)
     output_dtype = torch.float32 if device.type == "mps" else ra_deg.dtype
     return (
         ra_deg.to(device=device, dtype=output_dtype),
@@ -200,9 +200,6 @@ def _conditioned_background_map(
         tile_h, tile_w = _validate_spatial_tile_hw(spatial_tile_hw)
         tiles = list(_iter_spatial_tiles(height, width, tile_h, tile_w))
     output = torch.zeros((height, width), device=device, dtype=torch.float32)
-    sampling_wcs = WCS(observation.header)
-    grid_device = torch.device("cpu") if device.type == "mps" else device
-    sampling_wcs.to(grid_device)
     time_mjd = None if forward_context is None else forward_context.time_mjd
     for y0, y1, x0, x1 in tiles:
         if operator.coordinate_frame == "detector":
@@ -216,7 +213,7 @@ def _conditioned_background_map(
             )
         else:
             spatial_x, spatial_y = _tile_world_coordinate_grid(
-                sampling_wcs,
+                observation,
                 y0=y0,
                 y1=y1,
                 x0=x0,
@@ -304,9 +301,6 @@ def _render_spatially_integrated_distribution(
     else:
         tile_h, tile_w = _validate_spatial_tile_hw(spatial_tile_hw)
         tiles = list(_iter_spatial_tiles(height, width, tile_h, tile_w))
-    sampling_wcs = WCS(observation.header)
-    grid_device = torch.device("cpu") if device.type == "mps" else device
-    sampling_wcs.to(grid_device)
     output_mean = torch.zeros((height, width), device=device, dtype=torch.float32)
     output_var = torch.zeros_like(output_mean)
     render_distribution = getattr(model, "render_bandpass_distribution", None)
@@ -318,7 +312,7 @@ def _render_spatially_integrated_distribution(
         patch_var = torch.zeros_like(patch_mean)
         for offset_x, offset_y, spatial_weight in spatial_nodes:
             ra_deg, dec_deg = _tile_world_coordinate_grid(
-                sampling_wcs,
+                observation,
                 y0=y0,
                 y1=y1,
                 x0=x0,
@@ -749,9 +743,6 @@ def render_field_observation(
             observation.header,
             fallback=(int(image.shape[-2]), int(image.shape[-1])),
         )
-    sampling_wcs = WCS(observation.header)
-    grid_device = torch.device("cpu") if device.type == "mps" else device
-    sampling_wcs.to(grid_device)
     if spatial_tile_hw is None:
         tiles = [(0, H, 0, W)]
     else:
@@ -771,7 +762,7 @@ def render_field_observation(
                         dec_p = center_dec32[y0:y1, x0:x1]
                     else:
                         ra_p, dec_p = _tile_world_coordinate_grid(
-                            sampling_wcs,
+                            observation,
                             y0=y0,
                             y1=y1,
                             x0=x0,
@@ -834,7 +825,7 @@ def render_field_observation(
                 dec_p = center_dec32[y0:y1, x0:x1]
             else:
                 ra_p, dec_p = _tile_world_coordinate_grid(
-                    sampling_wcs,
+                    observation,
                     y0=y0,
                     y1=y1,
                     x0=x0,
@@ -946,9 +937,9 @@ def render_spectral_power_foam_observation_exact(
     )
     corner_x = x[..., None] + offsets[:, 0]
     corner_y = y[..., None] + offsets[:, 1]
-    wcs = WCS(observation.header)
-    wcs.to(grid_device)
-    ra_deg, dec_deg = wcs.pixel_to_world(corner_x, corner_y)
+    ra_deg, dec_deg = _observation_pixel_to_world(
+        observation, corner_x, corner_y
+    )
     polygons = normalized_spatial_coordinates(
         ra_deg.to(device=device),
         dec_deg.to(device=device),

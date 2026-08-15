@@ -1,12 +1,36 @@
-"""Noise-model helpers and internal interfaces."""
+"""Tensor-native structured-noise primitives for detector observations.
+
+The functions in this module deliberately keep the noise model bounded and
+interpretable. Pipeline variance planes are combined with positive scalar or
+leading-axis calibration factors, row-correlated noise is represented by an
+explicit one-over-frequency PSD, and residual contamination uses a two-
+component Gaussian/Student-t mixture. There is no free-form variance image.
+
+The FFT whitening filter is *relative* whitening: it multiplies Fourier modes
+by ``sqrt(P_white / P(f))``. Thus its output has the same units as its input
+and a constant PSD is exactly the identity filter. ``P(f)`` is a one-sided
+power spectral density in input-units-squared per Hz; the ratio is independent
+of the particular orthonormal/non-orthonormal FFT convention.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+import math
+from typing import Final, Literal
 
-from torch import Tensor
+import torch
+from torch import Tensor, nn
+from torch.nn import functional as F
 
 from .base import NoiseOp
+
+
+VAR_POISSON: Final[str] = "VAR_POISSON"
+VAR_RNOISE: Final[str] = "VAR_RNOISE"
+VAR_FLAT: Final[str] = "VAR_FLAT"
+_VARIANCE_KEYS = (VAR_POISSON, VAR_RNOISE, VAR_FLAT)
 
 
 @dataclass
@@ -21,5 +45,935 @@ class LearnedNoiseOp(NoiseOp):
         super().__init__(name=name, learned=True)
 
 
+@dataclass
+class StructuredNoiseOp(NoiseOp):
+    model: nn.Module | None = None
+
+    def __init__(
+        self,
+        model: nn.Module | None = None,
+        *,
+        name: str = "structured_noise",
+        frozen: bool = True,
+    ) -> None:
+        super().__init__(name=name, learned=True, frozen=bool(frozen))
+        self.model = model
+
+
 def sanitize_inverse_variance(weight: Tensor) -> Tensor:
     return weight.where(weight > 0.0, weight.new_zeros(()).expand_as(weight))
+
+
+def _reference_tensor(*values: object) -> Tensor | None:
+    """Return a floating tensor from ``values`` for dtype/device coercion."""
+    for value in values:
+        if isinstance(value, Tensor) and value.is_floating_point():
+            return value
+    for value in values:
+        if isinstance(value, Tensor):
+            return value.to(dtype=torch.get_default_dtype())
+    return None
+
+
+def _coerce(value: Tensor | float, reference: Tensor) -> Tensor:
+    return torch.as_tensor(value, device=reference.device, dtype=reference.dtype)
+
+
+def _validate_finite(value: Tensor, *, name: str) -> None:
+    if not bool(torch.isfinite(value).all()):
+        raise ValueError(f"{name} must contain only finite values")
+
+
+def _validate_nonnegative(value: Tensor, *, name: str) -> None:
+    _validate_finite(value, name=name)
+    if bool((value < 0.0).any()):
+        raise ValueError(f"{name} must be non-negative")
+
+
+def _validate_positive(value: Tensor, *, name: str) -> None:
+    _validate_finite(value, name=name)
+    if bool((value <= 0.0).any()):
+        raise ValueError(f"{name} must be positive")
+
+
+def _broadcast_parameter(value: Tensor, shape: tuple[int, ...], *, name: str) -> Tensor:
+    """Broadcast a scalar/map or a leading exposure parameter to ``shape``.
+
+    Standard PyTorch broadcasting handles detector maps (``H x W`` against
+    ``E x H x W``). A one-dimensional calibration vector conventionally
+    indexes the leading exposure/amp axis, so the fallback appends singleton
+    dimensions for that case.
+    """
+    if value.ndim > len(shape):
+        raise ValueError(f"{name} has too many dimensions for target shape {shape}")
+    try:
+        torch.broadcast_shapes(tuple(value.shape), shape)
+    except RuntimeError:
+        leading = value.reshape(value.shape + (1,) * (len(shape) - value.ndim))
+        try:
+            torch.broadcast_shapes(tuple(leading.shape), shape)
+        except RuntimeError as exc:
+            raise ValueError(
+                f"{name} shape {tuple(value.shape)} is not broadcastable to {shape}"
+            ) from exc
+        return leading
+    return value
+
+
+def _inverse_softplus(value: Tensor) -> Tensor:
+    """Stable inverse of softplus for strictly positive initialization values."""
+    tiny = torch.finfo(value.dtype).tiny
+    shifted = value.clamp_min(tiny)
+    return shifted + torch.log(-torch.expm1(-shifted))
+
+
+def _positive_parameter(raw: Tensor, minimum: float) -> Tensor:
+    return F.softplus(raw) + raw.new_tensor(float(minimum))
+
+
+def pipeline_variance(
+    components: Mapping[str, Tensor] | None = None,
+    *,
+    var_poisson: Tensor | None = None,
+    var_rnoise: Tensor | None = None,
+    var_flat: Tensor | None = None,
+    err: Tensor | None = None,
+    poisson_scale: Tensor | float = 1.0,
+    rnoise_scale: Tensor | float = 1.0,
+    flat_scale: Tensor | float = 1.0,
+    err_scale: Tensor | float = 1.0,
+    variance_floor: Tensor | float = 0.0,
+    floor: Tensor | float | None = None,
+) -> Tensor:
+    """Combine pipeline variance components into a positive variance map.
+
+    The preferred input is a mapping with keys :data:`VAR_POISSON`,
+    :data:`VAR_RNOISE`, and :data:`VAR_FLAT`. Explicit ``var_*`` keywords are
+    accepted as a lightweight adapter for observation objects. For available
+    component planes the result is
+
+    ``s_P**2 * VAR_POISSON + s_R**2 * VAR_RNOISE + s_F**2 * VAR_FLAT + floor``.
+
+    If no component plane is available, ``err`` is interpreted as a standard
+    deviation and the result is ``err_scale**2 * err**2 + floor``. Missing
+    component planes contribute zero. ``floor`` is an additive *variance*
+    floor, not a standard-deviation floor; zero is allowed by this functional
+    form, while :class:`PipelineVarianceCalibration` enforces a positive floor
+    by default.
+    """
+    if floor is not None:
+        if variance_floor != 0.0:
+            raise ValueError("pass only one of variance_floor and floor")
+        variance_floor = floor
+
+    planes: dict[str, Tensor] = {}
+    if components is not None:
+        unknown = set(components).difference(_VARIANCE_KEYS)
+        if unknown:
+            raise ValueError(f"unknown variance component(s): {sorted(unknown)}")
+        planes.update(components)
+    for key, value in (
+        (VAR_POISSON, var_poisson),
+        (VAR_RNOISE, var_rnoise),
+        (VAR_FLAT, var_flat),
+    ):
+        if value is not None:
+            if key in planes:
+                raise ValueError(f"variance component {key} was provided twice")
+            planes[key] = value
+    if not planes and err is None:
+        raise ValueError("provide at least one variance component or ERR")
+
+    reference = _reference_tensor(
+        *planes.values(),
+        err,
+        poisson_scale,
+        rnoise_scale,
+        flat_scale,
+        err_scale,
+        variance_floor,
+    )
+    if reference is None:
+        reference = torch.tensor(0.0, dtype=torch.get_default_dtype())
+    if not reference.is_floating_point():
+        reference = reference.to(dtype=torch.get_default_dtype())
+
+    values = {key: _coerce(value, reference) for key, value in planes.items()}
+    for key, value in values.items():
+        _validate_nonnegative(value, name=key)
+    floor_tensor = _coerce(variance_floor, reference)
+    _validate_nonnegative(floor_tensor, name="variance_floor")
+
+    if values:
+        try:
+            shape = torch.broadcast_shapes(
+                *(tuple(value.shape) for value in values.values())
+            )
+        except RuntimeError as exc:
+            raise ValueError("variance component planes are not broadcastable") from exc
+        result: Tensor | None = None
+        scales = {
+            VAR_POISSON: _coerce(poisson_scale, reference),
+            VAR_RNOISE: _coerce(rnoise_scale, reference),
+            VAR_FLAT: _coerce(flat_scale, reference),
+        }
+        for key, value in values.items():
+            scale = scales[key]
+            _validate_positive(scale, name=f"{key} scale")
+            term = (
+                _broadcast_parameter(scale, shape, name=f"{key} scale").square() * value
+            )
+            result = term if result is None else result + term
+        floor_term = _broadcast_parameter(floor_tensor, shape, name="variance_floor")
+        assert result is not None
+        return result + floor_term
+
+    assert err is not None
+    err_tensor = _coerce(err, reference)
+    _validate_nonnegative(err_tensor, name="ERR")
+    scale = _coerce(err_scale, reference)
+    _validate_positive(scale, name="ERR scale")
+    try:
+        shape = torch.broadcast_shapes(
+            tuple(err_tensor.shape), tuple(scale.shape), tuple(floor_tensor.shape)
+        )
+    except RuntimeError as exc:
+        raise ValueError(
+            "ERR, ERR scale, and variance_floor are not broadcastable"
+        ) from exc
+    return _broadcast_parameter(
+        scale, shape, name="ERR scale"
+    ).square() * err_tensor.square() + _broadcast_parameter(
+        floor_tensor, shape, name="variance_floor"
+    )
+
+
+calibrated_pipeline_variance = pipeline_variance
+
+
+class PipelineVarianceCalibration(nn.Module):
+    """Positive, differentiable calibration factors for pipeline variances.
+
+    Parameters are stored in unconstrained softplus coordinates. Their
+    leading dimensions are preserved, allowing scalar factors, per-exposure
+    factors, or per-exposure/per-amplifier factors without introducing a
+    detector-pixel variance image.
+    """
+
+    def __init__(
+        self,
+        *,
+        poisson_scale: Tensor | float = 1.0,
+        rnoise_scale: Tensor | float = 1.0,
+        flat_scale: Tensor | float = 1.0,
+        err_scale: Tensor | float = 1.0,
+        variance_floor: Tensor | float = 1.0e-8,
+        min_scale: float = 1.0e-6,
+        min_floor: float = 1.0e-12,
+    ) -> None:
+        super().__init__()
+        if not math.isfinite(float(min_scale)) or min_scale <= 0.0:
+            raise ValueError("min_scale must be finite and positive")
+        if not math.isfinite(float(min_floor)) or min_floor < 0.0:
+            raise ValueError("min_floor must be finite and non-negative")
+        self.min_scale = float(min_scale)
+        self.min_floor = float(min_floor)
+        reference = _reference_tensor(
+            poisson_scale,
+            rnoise_scale,
+            flat_scale,
+            err_scale,
+            variance_floor,
+        )
+        if reference is None:
+            reference = torch.tensor(0.0, dtype=torch.get_default_dtype())
+        if not reference.is_floating_point():
+            reference = reference.to(dtype=torch.get_default_dtype())
+
+        def parameter(
+            value: Tensor | float,
+            *,
+            name: str,
+            minimum: float,
+        ) -> nn.Parameter:
+            tensor = _coerce(value, reference)
+            _validate_finite(tensor, name=name)
+            if bool((tensor <= minimum).any()):
+                raise ValueError(f"{name} must be greater than its minimum")
+            return nn.Parameter(_inverse_softplus(tensor - tensor.new_tensor(minimum)))
+
+        self.raw_poisson_scale = parameter(
+            poisson_scale, name="poisson_scale", minimum=self.min_scale
+        )
+        self.raw_rnoise_scale = parameter(
+            rnoise_scale, name="rnoise_scale", minimum=self.min_scale
+        )
+        self.raw_flat_scale = parameter(
+            flat_scale, name="flat_scale", minimum=self.min_scale
+        )
+        self.raw_err_scale = parameter(
+            err_scale, name="err_scale", minimum=self.min_scale
+        )
+        self.raw_variance_floor = parameter(
+            variance_floor, name="variance_floor", minimum=self.min_floor
+        )
+
+    @property
+    def poisson_scale(self) -> Tensor:
+        return _positive_parameter(self.raw_poisson_scale, self.min_scale)
+
+    @property
+    def rnoise_scale(self) -> Tensor:
+        return _positive_parameter(self.raw_rnoise_scale, self.min_scale)
+
+    @property
+    def flat_scale(self) -> Tensor:
+        return _positive_parameter(self.raw_flat_scale, self.min_scale)
+
+    @property
+    def err_scale(self) -> Tensor:
+        return _positive_parameter(self.raw_err_scale, self.min_scale)
+
+    @property
+    def variance_floor(self) -> Tensor:
+        return _positive_parameter(self.raw_variance_floor, self.min_floor)
+
+    def forward(
+        self,
+        components: Mapping[str, Tensor] | None = None,
+        *,
+        var_poisson: Tensor | None = None,
+        var_rnoise: Tensor | None = None,
+        var_flat: Tensor | None = None,
+        err: Tensor | None = None,
+    ) -> Tensor:
+        return pipeline_variance(
+            components,
+            var_poisson=var_poisson,
+            var_rnoise=var_rnoise,
+            var_flat=var_flat,
+            err=err,
+            poisson_scale=self.poisson_scale,
+            rnoise_scale=self.rnoise_scale,
+            flat_scale=self.flat_scale,
+            err_scale=self.err_scale,
+            variance_floor=self.variance_floor,
+        )
+
+
+def one_over_f_row_psd(
+    num_rows: int,
+    *,
+    white_psd: Tensor | float = 1.0,
+    knee_frequency: Tensor | float = 0.0,
+    exponent: Tensor | float = 1.0,
+    sample_spacing: float = 1.0,
+    minimum_frequency: float | None = None,
+) -> Tensor:
+    """Return an amplifier-broadcastable one-sided ``1/f`` row PSD.
+
+    ``num_rows`` is the number of samples along a detector row-process axis.
+    ``sample_spacing`` is the interval between adjacent rows in seconds, so
+    frequencies are in Hz. ``white_psd`` is the high-frequency PSD baseline
+    in input-units-squared/Hz; ``knee_frequency`` is in Hz and ``exponent`` is
+    dimensionless. Leading parameter dimensions are preserved, e.g. four
+    amplifier values produce ``(4, num_rows // 2 + 1)``.
+
+    The DC bin uses the lowest resolvable frequency ``1/(N*dt)`` rather than
+    an infinite value. This is the finite-window convention used by the FFT
+    whitening filter and keeps gradients finite at DC.
+    """
+    if not isinstance(num_rows, int) or num_rows < 1:
+        raise ValueError("num_rows must be a positive integer")
+    if not math.isfinite(float(sample_spacing)) or sample_spacing <= 0.0:
+        raise ValueError("sample_spacing must be finite and positive")
+    reference = _reference_tensor(white_psd, knee_frequency, exponent)
+    if reference is None:
+        reference = torch.tensor(0.0, dtype=torch.get_default_dtype())
+    if not reference.is_floating_point():
+        reference = reference.to(dtype=torch.get_default_dtype())
+    white = _coerce(white_psd, reference)
+    knee = _coerce(knee_frequency, reference)
+    power = _coerce(exponent, reference)
+    _validate_positive(white, name="white_psd")
+    _validate_nonnegative(knee, name="knee_frequency")
+    _validate_positive(power, name="exponent")
+    try:
+        white, knee, power = torch.broadcast_tensors(white, knee, power)
+    except RuntimeError as exc:
+        raise ValueError("PSD parameters are not broadcastable") from exc
+
+    fft_dtype = reference.dtype
+    if fft_dtype in (torch.float16, torch.bfloat16):
+        fft_dtype = torch.float32
+        white = white.to(dtype=fft_dtype)
+        knee = knee.to(dtype=fft_dtype)
+        power = power.to(dtype=fft_dtype)
+    frequencies = torch.fft.rfftfreq(
+        num_rows,
+        d=float(sample_spacing),
+        device=reference.device,
+        dtype=fft_dtype,
+    )
+    if minimum_frequency is None:
+        minimum = 1.0 / (float(num_rows) * float(sample_spacing))
+    else:
+        minimum = float(minimum_frequency)
+        if not math.isfinite(minimum) or minimum <= 0.0:
+            raise ValueError("minimum_frequency must be finite and positive")
+    minimum_tensor = frequencies.new_tensor(minimum)
+    safe_frequency = torch.where(frequencies > 0.0, frequencies, minimum_tensor)
+    ratio = knee[..., None] / safe_frequency
+    return white[..., None] * (1.0 + ratio.pow(power[..., None]))
+
+
+one_over_f_psd = one_over_f_row_psd
+
+
+def fft_whiten_rows(
+    rows: Tensor,
+    psd: Tensor | None = None,
+    *,
+    white_psd: Tensor | float | None = None,
+    knee_frequency: Tensor | float = 0.0,
+    exponent: Tensor | float = 1.0,
+    sample_spacing: float = 1.0,
+    dim: int = -1,
+) -> Tensor:
+    """Apply relative FFT whitening along a row-process dimension.
+
+    ``rows`` keeps its input units. If ``psd`` is omitted it is generated by
+    :func:`one_over_f_row_psd`; otherwise its final axis must have length
+    ``N//2 + 1``. ``white_psd`` sets the reference PSD for the dimensionless
+    gain ``sqrt(white_psd / psd)``. When an explicit PSD is supplied and no
+    reference is given, its last (Nyquist-side) bin is used per leading
+    parameter slice. A constant PSD therefore gives an exact identity limit.
+    """
+    if not isinstance(rows, Tensor) or not rows.is_floating_point():
+        raise ValueError("rows must be a floating-point tensor")
+    if rows.ndim < 1:
+        raise ValueError("rows must have at least one dimension")
+    if dim < -rows.ndim or dim >= rows.ndim:
+        raise ValueError("dim is out of range for rows")
+    dim = dim % rows.ndim
+    moved = rows.movedim(dim, -1)
+    num_rows = int(moved.shape[-1])
+    if num_rows == 0:
+        return rows.clone()
+    if psd is None:
+        reference_white = 1.0 if white_psd is None else white_psd
+        psd_tensor = one_over_f_row_psd(
+            num_rows,
+            white_psd=reference_white,
+            knee_frequency=knee_frequency,
+            exponent=exponent,
+            sample_spacing=sample_spacing,
+        ).to(device=rows.device, dtype=rows.dtype)
+        reference = _coerce(reference_white, rows)
+        white = _broadcast_parameter(
+            reference,
+            tuple(psd_tensor.shape[:-1]),
+            name="white_psd",
+        )[..., None]
+    else:
+        psd_tensor = torch.as_tensor(psd, device=rows.device, dtype=rows.dtype)
+        if psd_tensor.ndim < 1 or int(psd_tensor.shape[-1]) != num_rows // 2 + 1:
+            raise ValueError("psd final axis must have length num_rows // 2 + 1")
+        _validate_positive(psd_tensor, name="psd")
+        if white_psd is None:
+            white = psd_tensor[..., -1:]
+        else:
+            reference = _coerce(white_psd, rows)
+            white = _broadcast_parameter(
+                reference,
+                tuple(psd_tensor.shape[:-1]),
+                name="white_psd",
+            )[..., None]
+        _validate_positive(white, name="white_psd")
+
+    try:
+        gain = torch.sqrt(white / psd_tensor)
+        transformed = torch.fft.rfft(moved, dim=-1)
+        gain, transformed = torch.broadcast_tensors(gain, transformed)
+    except RuntimeError as exc:
+        raise ValueError(
+            "psd leading dimensions are not broadcastable to rows"
+        ) from exc
+    whitened = torch.fft.irfft(transformed * gain, n=num_rows, dim=-1)
+    return whitened.movedim(-1, dim)
+
+
+whiten_rows_fft = fft_whiten_rows
+
+
+class OneOverFRowNoise(nn.Module):
+    """Positive learnable one-over-frequency PSDs for amp/exposure groups."""
+
+    def __init__(
+        self,
+        parameter_shape: int | tuple[int, ...] = (4,),
+        *,
+        white_psd: Tensor | float = 1.0,
+        knee_frequency: Tensor | float = 0.0,
+        exponent: Tensor | float = 1.0,
+        sample_spacing: float = 1.0,
+        min_white_psd: float = 1.0e-8,
+        min_knee_frequency: float = 1.0e-12,
+        min_exponent: float = 1.0e-6,
+    ) -> None:
+        super().__init__()
+        if isinstance(parameter_shape, int):
+            parameter_shape = (parameter_shape,)
+        parameter_shape = tuple(int(size) for size in parameter_shape)
+        if not parameter_shape or any(size < 1 for size in parameter_shape):
+            raise ValueError("parameter_shape must contain positive dimensions")
+        if not math.isfinite(float(sample_spacing)) or sample_spacing <= 0.0:
+            raise ValueError("sample_spacing must be finite and positive")
+        for name, value in (
+            ("min_white_psd", min_white_psd),
+            ("min_knee_frequency", min_knee_frequency),
+            ("min_exponent", min_exponent),
+        ):
+            if not math.isfinite(float(value)) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        self.parameter_shape = parameter_shape
+        self.sample_spacing = float(sample_spacing)
+        self.min_white_psd = float(min_white_psd)
+        self.min_knee_frequency = float(min_knee_frequency)
+        self.min_exponent = float(min_exponent)
+        reference = _reference_tensor(white_psd, knee_frequency, exponent)
+        if reference is None:
+            reference = torch.tensor(0.0, dtype=torch.get_default_dtype())
+        if not reference.is_floating_point():
+            reference = reference.to(dtype=torch.get_default_dtype())
+
+        def init(
+            value: Tensor | float,
+            *,
+            name: str,
+            minimum: float,
+            allow_zero: bool = False,
+        ) -> nn.Parameter:
+            tensor = _coerce(value, reference)
+            if tensor.numel() == 1:
+                tensor = tensor.expand(parameter_shape).clone()
+            elif tuple(tensor.shape) != parameter_shape:
+                raise ValueError(
+                    f"{name} must be scalar or have shape {parameter_shape}"
+                )
+            _validate_finite(tensor, name=name)
+            if allow_zero:
+                if bool((tensor < 0.0).any()):
+                    raise ValueError(f"{name} must be non-negative")
+            elif bool((tensor < minimum).any()):
+                raise ValueError(f"{name} must be at least {minimum}")
+            shifted = (tensor - tensor.new_tensor(minimum)).clamp_min(
+                torch.finfo(tensor.dtype).tiny
+            )
+            return nn.Parameter(_inverse_softplus(shifted))
+
+        self.raw_white_psd = init(
+            white_psd, name="white_psd", minimum=self.min_white_psd
+        )
+        self.raw_knee_frequency = init(
+            knee_frequency,
+            name="knee_frequency",
+            minimum=self.min_knee_frequency,
+            allow_zero=True,
+        )
+        self.raw_exponent = init(exponent, name="exponent", minimum=self.min_exponent)
+
+    @property
+    def white_psd(self) -> Tensor:
+        return _positive_parameter(self.raw_white_psd, self.min_white_psd)
+
+    @property
+    def knee_frequency(self) -> Tensor:
+        return _positive_parameter(self.raw_knee_frequency, self.min_knee_frequency)
+
+    @property
+    def exponent(self) -> Tensor:
+        return _positive_parameter(self.raw_exponent, self.min_exponent)
+
+    def psd(self, num_rows: int) -> Tensor:
+        return one_over_f_row_psd(
+            num_rows,
+            white_psd=self.white_psd,
+            knee_frequency=self.knee_frequency,
+            exponent=self.exponent,
+            sample_spacing=self.sample_spacing,
+        )
+
+    def forward(self, rows: Tensor, *, dim: int = -1) -> Tensor:
+        if dim < -rows.ndim or dim >= rows.ndim:
+            raise ValueError("dim is out of range for rows")
+        if rows.shape[dim] == 0:
+            return rows.clone()
+        num_rows = int(rows.shape[dim])
+        return fft_whiten_rows(
+            rows,
+            self.psd(num_rows),
+            white_psd=self.white_psd,
+            dim=dim,
+        )
+
+
+def _mixture_terms(
+    residual: Tensor,
+    variance: Tensor,
+    *,
+    outlier_scale: Tensor | float,
+    degrees_of_freedom: Tensor | float,
+    outlier_probability: Tensor | float,
+    prior: Tensor | None,
+) -> tuple[Tensor, Tensor, Tensor]:
+    if not isinstance(residual, Tensor) or not isinstance(variance, Tensor):
+        raise ValueError("residual and variance must be tensors")
+    reference = _reference_tensor(
+        residual,
+        variance,
+        outlier_scale,
+        degrees_of_freedom,
+        outlier_probability,
+        prior,
+    )
+    if reference is None:
+        reference = torch.tensor(0.0, dtype=torch.get_default_dtype())
+    if not reference.is_floating_point():
+        reference = reference.to(dtype=torch.get_default_dtype())
+    residual = _coerce(residual, reference)
+    variance = _coerce(variance, reference)
+    try:
+        residual, variance = torch.broadcast_tensors(residual, variance)
+    except RuntimeError as exc:
+        raise ValueError("residual and variance are not broadcastable") from exc
+    _validate_finite(residual, name="residual")
+    _validate_positive(variance, name="variance")
+    shape = tuple(residual.shape)
+    scale = _broadcast_parameter(
+        _coerce(outlier_scale, reference), shape, name="outlier_scale"
+    )
+    dof = _broadcast_parameter(
+        _coerce(degrees_of_freedom, reference), shape, name="degrees_of_freedom"
+    )
+    probability_value = outlier_probability if prior is None else prior
+    probability = _broadcast_parameter(
+        _coerce(probability_value, reference), shape, name="outlier prior"
+    )
+    _validate_positive(scale, name="outlier_scale")
+    _validate_positive(dof, name="degrees_of_freedom")
+    _validate_finite(probability, name="outlier prior")
+    if bool((probability < 0.0).any()) or bool((probability > 1.0).any()):
+        raise ValueError("outlier prior must be in [0, 1]")
+
+    gaussian_log_prob = -0.5 * (
+        residual.new_tensor(math.log(2.0 * math.pi))
+        + variance.log()
+        + residual.square() / variance
+    )
+    student_scale = scale * torch.sqrt(variance)
+    student_log_prob = (
+        torch.lgamma((dof + 1.0) / 2.0)
+        - torch.lgamma(dof / 2.0)
+        - 0.5
+        * (torch.log(dof * residual.new_tensor(math.pi)) + 2.0 * student_scale.log())
+        - ((dof + 1.0) / 2.0)
+        * torch.log1p(residual.square() / (dof * student_scale.square()))
+    )
+    eps = torch.finfo(residual.dtype).eps
+    probability = probability.clamp(min=eps, max=1.0 - eps)
+    log_inlier = gaussian_log_prob + torch.log1p(-probability)
+    log_outlier = student_log_prob + probability.log()
+    return log_inlier, log_outlier, torch.logaddexp(log_inlier, log_outlier)
+
+
+def gaussian_student_t_mixture_nll(
+    residual: Tensor,
+    variance: Tensor,
+    *,
+    outlier_scale: Tensor | float = 10.0,
+    degrees_of_freedom: Tensor | float = 3.0,
+    outlier_probability: Tensor | float = 0.01,
+    prior: Tensor | None = None,
+    reduction: Literal["none", "mean", "sum"] = "mean",
+) -> Tensor:
+    """NLL for Gaussian inliers plus Student-t outliers.
+
+    ``variance`` is the inlier Gaussian variance. ``outlier_scale`` is a
+    positive, dimensionless multiplier on its standard deviation for the
+    Student-t component. ``prior`` is an optional per-pixel outlier
+    probability map; when supplied it overrides ``outlier_probability``.
+    """
+    if reduction not in {"none", "mean", "sum"}:
+        raise ValueError("reduction must be 'none', 'mean', or 'sum'")
+    _, _, log_mixture = _mixture_terms(
+        residual,
+        variance,
+        outlier_scale=outlier_scale,
+        degrees_of_freedom=degrees_of_freedom,
+        outlier_probability=outlier_probability,
+        prior=prior,
+    )
+    nll = -log_mixture
+    if reduction == "none":
+        return nll
+    if nll.numel() == 0:
+        raise ValueError("mean/sum reduction is undefined for an empty residual tensor")
+    return nll.mean() if reduction == "mean" else nll.sum()
+
+
+def gaussian_student_t_mixture_responsibilities(
+    residual: Tensor,
+    variance: Tensor,
+    *,
+    outlier_scale: Tensor | float = 10.0,
+    degrees_of_freedom: Tensor | float = 3.0,
+    outlier_probability: Tensor | float = 0.01,
+    prior: Tensor | None = None,
+) -> tuple[Tensor, Tensor]:
+    """Return posterior ``(inlier_probability, outlier_probability)`` maps."""
+    log_inlier, log_outlier, log_mixture = _mixture_terms(
+        residual,
+        variance,
+        outlier_scale=outlier_scale,
+        degrees_of_freedom=degrees_of_freedom,
+        outlier_probability=outlier_probability,
+        prior=prior,
+    )
+    inlier = torch.exp(log_inlier - log_mixture)
+    outlier = torch.exp(log_outlier - log_mixture)
+    return inlier, outlier
+
+
+mixture_nll = gaussian_student_t_mixture_nll
+mixture_responsibilities = gaussian_student_t_mixture_responsibilities
+
+
+def profile_amplifier_row_offsets(
+    residual: Tensor,
+    variance: Tensor,
+    amplifier_index: Tensor,
+    *,
+    valid: Tensor | None = None,
+    num_amplifiers: int = 4,
+) -> tuple[Tensor, Tensor]:
+    """Variable-project signed row offsets for each detector amplifier."""
+    if residual.ndim != 2 or variance.shape != residual.shape:
+        raise ValueError("residual and variance must be matching 2D tensors")
+    if amplifier_index.shape != residual.shape:
+        raise ValueError("amplifier_index must match the residual shape")
+    support = torch.isfinite(residual) & torch.isfinite(variance) & (variance > 0)
+    if valid is not None:
+        if valid.shape != residual.shape:
+            raise ValueError("valid must match the residual shape")
+        support &= valid.to(dtype=torch.bool)
+    offsets = torch.zeros(
+        (int(num_amplifiers), residual.shape[0]),
+        device=residual.device,
+        dtype=residual.dtype,
+    )
+    offset_map = torch.zeros_like(residual)
+    for amplifier in range(int(num_amplifiers)):
+        selected = support & (amplifier_index == amplifier)
+        inverse_variance = torch.where(
+            selected, variance.reciprocal(), torch.zeros_like(variance)
+        )
+        denominator = inverse_variance.sum(dim=-1)
+        numerator = (inverse_variance * torch.where(selected, residual, 0.0)).sum(
+            dim=-1
+        )
+        row_offset = torch.where(
+            denominator > 0.0,
+            numerator / denominator.clamp_min(torch.finfo(residual.dtype).tiny),
+            torch.zeros_like(numerator),
+        )
+        offsets[amplifier] = row_offset
+        offset_map = torch.where(
+            amplifier_index == amplifier, row_offset[:, None], offset_map
+        )
+    return offsets, residual - offset_map
+
+
+class StructuredDetectorNoise(nn.Module):
+    """Bounded detector likelihood with pipeline variance, 1/f rows, and outliers."""
+
+    def __init__(
+        self,
+        *,
+        num_amplifiers: int = 4,
+        variance_calibration: PipelineVarianceCalibration | None = None,
+        row_noise: OneOverFRowNoise | None = None,
+        outlier_probability: float = 0.01,
+        outlier_scale: float = 10.0,
+        degrees_of_freedom: float = 3.0,
+    ) -> None:
+        super().__init__()
+        if int(num_amplifiers) < 1:
+            raise ValueError("num_amplifiers must be positive")
+        if not 0.0 < float(outlier_probability) < 1.0:
+            raise ValueError("outlier_probability must lie in (0, 1)")
+        if float(outlier_scale) <= 1.0 or float(degrees_of_freedom) <= 0.0:
+            raise ValueError("outlier_scale must exceed one and dof must be positive")
+        self.num_amplifiers = int(num_amplifiers)
+        self.variance_calibration = (
+            PipelineVarianceCalibration()
+            if variance_calibration is None
+            else variance_calibration
+        )
+        self.row_noise = (
+            OneOverFRowNoise((self.num_amplifiers,))
+            if row_noise is None
+            else row_noise
+        )
+        self.outlier_logit = nn.Parameter(
+            torch.tensor(
+                math.log(float(outlier_probability) / (1.0 - float(outlier_probability)))
+            )
+        )
+        self.raw_outlier_scale = nn.Parameter(
+            _inverse_softplus(torch.tensor(float(outlier_scale) - 1.0))
+        )
+        self.degrees_of_freedom = float(degrees_of_freedom)
+
+    @property
+    def outlier_probability(self) -> Tensor:
+        return torch.sigmoid(self.outlier_logit)
+
+    @property
+    def outlier_scale(self) -> Tensor:
+        return 1.0 + F.softplus(self.raw_outlier_scale)
+
+    def default_amplifier_index(self, shape: tuple[int, int], device: torch.device) -> Tensor:
+        height, width = map(int, shape)
+        columns = torch.arange(width, device=device)
+        amplifier = torch.clamp(
+            columns * self.num_amplifiers // max(width, 1),
+            max=self.num_amplifiers - 1,
+        )
+        return amplifier[None, :].expand(height, width)
+
+    def _row_nll(self, row_offsets: Tensor) -> Tensor:
+        spectrum = torch.fft.rfft(row_offsets, dim=-1, norm="ortho")
+        psd = self.row_noise.psd(int(row_offsets.shape[-1])).to(
+            device=row_offsets.device, dtype=row_offsets.dtype
+        )
+        multiplicity = torch.full_like(psd, 2.0)
+        multiplicity[..., 0] = 1.0
+        if int(row_offsets.shape[-1]) % 2 == 0:
+            multiplicity[..., -1] = 1.0
+        power = spectrum.real.square() + spectrum.imag.square()
+        return 0.5 * torch.sum(
+            multiplicity * (power / psd + psd.log())
+        ) / multiplicity.sum().clamp_min(1.0)
+
+    def negative_log_likelihood(
+        self,
+        residual: Tensor,
+        *,
+        components: Mapping[str, Tensor] | None = None,
+        err: Tensor | None = None,
+        valid: Tensor | None = None,
+        amplifier_index: Tensor | None = None,
+        contamination_prior: Tensor | None = None,
+    ) -> Tensor:
+        variance = self.variance_calibration(components, err=err).to(
+            device=residual.device, dtype=residual.dtype
+        )
+        if variance.shape != residual.shape:
+            variance = torch.broadcast_to(variance, residual.shape)
+        support = torch.isfinite(residual) & torch.isfinite(variance) & (variance > 0)
+        if valid is not None:
+            support &= valid.to(device=residual.device, dtype=torch.bool)
+        amp = (
+            self.default_amplifier_index(tuple(residual.shape), residual.device)
+            if amplifier_index is None
+            else amplifier_index.to(device=residual.device)
+        )
+        row_offsets, corrected = profile_amplifier_row_offsets(
+            residual,
+            variance,
+            amp,
+            valid=support,
+            num_amplifiers=self.num_amplifiers,
+        )
+        prior = (
+            None
+            if contamination_prior is None
+            else contamination_prior.to(device=residual.device, dtype=residual.dtype)
+        )
+        pixel_nll = gaussian_student_t_mixture_nll(
+            corrected,
+            variance,
+            outlier_scale=self.outlier_scale,
+            degrees_of_freedom=self.degrees_of_freedom,
+            outlier_probability=self.outlier_probability,
+            prior=prior,
+            reduction="none",
+        )
+        if not bool(support.any()):
+            raise ValueError("structured likelihood requires at least one valid pixel")
+        return pixel_nll[support].mean() + self._row_nll(row_offsets)
+
+    def contamination_responsibilities(
+        self,
+        residual: Tensor,
+        *,
+        components: Mapping[str, Tensor] | None = None,
+        err: Tensor | None = None,
+        valid: Tensor | None = None,
+        amplifier_index: Tensor | None = None,
+        contamination_prior: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        variance = self.variance_calibration(components, err=err).to(
+            device=residual.device, dtype=residual.dtype
+        )
+        if variance.shape != residual.shape:
+            variance = torch.broadcast_to(variance, residual.shape)
+        support = torch.ones_like(residual, dtype=torch.bool)
+        if valid is not None:
+            support &= valid.to(device=residual.device, dtype=torch.bool)
+        amp = (
+            self.default_amplifier_index(tuple(residual.shape), residual.device)
+            if amplifier_index is None
+            else amplifier_index.to(device=residual.device)
+        )
+        _, corrected = profile_amplifier_row_offsets(
+            residual,
+            variance,
+            amp,
+            valid=support,
+            num_amplifiers=self.num_amplifiers,
+        )
+        return gaussian_student_t_mixture_responsibilities(
+            corrected,
+            variance,
+            outlier_scale=self.outlier_scale,
+            degrees_of_freedom=self.degrees_of_freedom,
+            outlier_probability=self.outlier_probability,
+            prior=contamination_prior,
+        )
+
+
+__all__ = [
+    "ExplicitNoiseOp",
+    "LearnedNoiseOp",
+    "OneOverFRowNoise",
+    "PipelineVarianceCalibration",
+    "StructuredDetectorNoise",
+    "StructuredNoiseOp",
+    "VAR_FLAT",
+    "VAR_POISSON",
+    "VAR_RNOISE",
+    "calibrated_pipeline_variance",
+    "fft_whiten_rows",
+    "gaussian_student_t_mixture_nll",
+    "gaussian_student_t_mixture_responsibilities",
+    "mixture_nll",
+    "mixture_responsibilities",
+    "one_over_f_psd",
+    "one_over_f_row_psd",
+    "pipeline_variance",
+    "profile_amplifier_row_offsets",
+    "sanitize_inverse_variance",
+    "whiten_rows_fft",
+]

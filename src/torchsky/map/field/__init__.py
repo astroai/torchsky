@@ -71,6 +71,7 @@ from .core import (
     ConditionedSpectralField,
     FieldComponentDecomposition,
     FourierMLPField,
+    FoamInitializedINRField,
     GaussianBasisField,
     HashGridConditionedField,
     HashGridMLPField,
@@ -129,6 +130,7 @@ from .quality import (
 from .training import (
     fit_field_component_decomposition,
     fit_field_model,
+    fit_structured_noise_crossfit,
     _noise_pretrain_field_model,
 )
 from .implicit_forward import (
@@ -165,6 +167,7 @@ from .spectral_budget import (
 )
 from .types import (
     FieldCoordinateMode,
+    DetectorToSkyTransform,
     FieldComponentAnchorTerm,
     FieldCentroidAnchorTerm,
     FieldCurriculum,
@@ -186,6 +189,11 @@ from .types import (
     SpectralCapacityProfile,
     SpectralDataBudget,
     SpectralModelCapacityHints,
+)
+from .validation import (
+    PairedImprovementInterval,
+    completeness_limit_magnitude,
+    paired_bootstrap_improvement,
 )
 
 __all__ = [
@@ -215,6 +223,7 @@ __all__ = [
     "FieldComponentAnchorTerm",
     "FieldCentroidAnchorTerm",
     "FieldCoordinateMode",
+    "DetectorToSkyTransform",
     "FieldCurriculum",
     "FieldDomain",
     "FieldFitResult",
@@ -247,6 +256,7 @@ __all__ = [
     "ifu_cube_spectral_to_leading",
     "make_tangent_plane_header",
     "FourierMLPField",
+    "FoamInitializedINRField",
     "GaussianBasisField",
     "HashGridConditionedField",
     "HashGridMLPField",
@@ -257,6 +267,7 @@ __all__ = [
     "PowerPixelOperator",
     "PolygonDiskCSR",
     "PowerValueSemantics",
+    "PairedImprovementInterval",
     "SpectralPowerFoam",
     "SpectralPowerFoamField",
     "SineImplicitField",
@@ -277,6 +288,9 @@ __all__ = [
     "field_component_anchor_loss",
     "field_component_centroid_anchor_loss",
     "fit_field_model",
+    "fit_structured_noise_crossfit",
+    "completeness_limit_magnitude",
+    "paired_bootstrap_improvement",
     "fit_field_component_decomposition",
     "make_field_model",
     "make_field_model_preset",

@@ -188,6 +188,32 @@ def _read_ext(path: Path, ext: str) -> np.ndarray:
     return image.detach().cpu().numpy().astype(np.float32, copy=False)
 
 
+def _read_optional_ext(path: Path, ext: str) -> np.ndarray | None:
+    try:
+        return _read_ext(path, ext)
+    except (KeyError, RuntimeError, ValueError):
+        return None
+
+
+def _jwst_dq_support_and_contamination_prior(
+    dq: np.ndarray,
+    *,
+    base_probability: float = 0.01,
+    jump_probability: float = 0.9,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Keep JUMP_DET as a soft cosmic prior and hard-mask other DQ flags."""
+    if not 0.0 <= base_probability <= jump_probability <= 1.0:
+        raise ValueError("contamination probabilities must be ordered in [0, 1]")
+    finite = np.isfinite(dq)
+    bits = np.where(finite, dq, 0).astype(np.uint32, copy=False)
+    jump_bit = np.uint32(4)
+    jump = (bits & jump_bit) != 0
+    hard_flag = (bits & ~jump_bit) != 0
+    support = finite & ~hard_flag
+    prior = np.where(jump, jump_probability, base_probability).astype(np.float32)
+    return support, prior
+
+
 def _discover_exposure_paths(
     exposure_dir: Path,
     *,
@@ -210,10 +236,14 @@ def _discover_exposure_paths(
         paths = cal_paths
     elif product == "aligned":
         paths = aligned_paths
-    elif crf_paths:
-        paths = crf_paths
     else:
-        paths = cal_paths
+        by_exposure = {
+            path.name.removesuffix("_cal.fits"): path for path in cal_paths
+        }
+        by_exposure.update(
+            {path.name.removesuffix("_crf.fits"): path for path in crf_paths}
+        )
+        paths = [by_exposure[key] for key in sorted(by_exposure)]
     if band is not None:
         band_upper = str(band).upper()
         paths = [path for path in paths if _exposure_filter_band(path) == band_upper]

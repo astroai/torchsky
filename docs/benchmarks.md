@@ -148,13 +148,18 @@ Multiband joint field fit:
 cd "$(git rev-parse --show-toplevel)"
 PYTHONPATH=src:benchmarks pixi run -e test -- python benchmarks/bench_map_smacs0723_field_fit_joint.py \
   --bands F090W,F277W,F356W,F444W \
-  --exposure-dir "${TORCHSKY_DATA}/jwst_smacs0723/aligned" \
-  --input-product aligned \
+  --exposure-dir "${TORCHSKY_DATA}/jwst_smacs0723" \
+  --input-product auto \
   --crop-size 32 \
   --crop-strategy best_overlap \
   --steps 4 \
   --models coadd_bilinear,spectral_power_foam
 ```
+
+`auto` selects an untweaked CRF per exposure and falls back to its CAL only
+when that CRF is absent. To run the immutable tweakreg comparator, pass the
+`aligned` directory and `--input-product aligned` explicitly; never use that
+command as the native astrometric training input.
 
 Real-data field-fit debug runs can be expensive. Treat their outputs as local
 artifacts unless a baseline is deliberately reviewed and committed.

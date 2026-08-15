@@ -33,6 +33,7 @@ from torchsky.map.field.bandpass import bandpass_quadrature
 from torchsky.map.field.core import _BaseFieldModel
 from torchsky.map.field.hashgrid import HashGridEncoder
 from torchsky.map.field.observation_ops import (
+    coordinate_grid,
     crop_field_observation,
     crop_field_observation_for_training,
 )
@@ -306,6 +307,44 @@ def test_observation_crop_preserves_physical_background_components() -> None:
     )
     assert cropped.detector_x0_pix == 2.0
     assert cropped.detector_y0_pix == 1.0
+
+
+def test_native_detector_transform_uses_full_detector_coordinates_after_crop() -> None:
+    class LinearDetectorSky(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.shift = torch.nn.Parameter(torch.tensor(0.25, dtype=torch.float64))
+
+        def pixel_to_world(
+            self, x: torch.Tensor, y: torch.Tensor
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            return 150.0 + (x + self.shift) / 3600.0, 2.0 + y / 3600.0
+
+    transform = LinearDetectorSky()
+    observation = FieldObservation(
+        image=torch.zeros((5, 6)),
+        header=_tan_header(6, crval1=10.0, crval2=-20.0, scale_deg=0.01),
+        wavelength=5600.0,
+        detector_x0_pix=100.0,
+        detector_y0_pix=200.0,
+        detector_to_sky=transform,
+    )
+    cropped = crop_field_observation(
+        observation, x0=3, y0=2, width=2, height=2
+    )
+    ra_deg, dec_deg = coordinate_grid(
+        cropped, shape=(2, 2), device=torch.device("cpu")
+    )
+
+    torch.testing.assert_close(
+        ra_deg[0, 0], torch.tensor(150.0 + 103.25 / 3600.0, dtype=torch.float64)
+    )
+    torch.testing.assert_close(
+        dec_deg[0, 0], torch.tensor(2.0 + 202.0 / 3600.0, dtype=torch.float64)
+    )
+    ra_deg.sum().backward()
+    assert transform.shift.grad is not None
+    assert float(transform.shift.grad) > 0.0
 
 
 def test_psf_halo_training_crop_matches_full_render_and_gradient() -> None:

@@ -44,6 +44,7 @@ from .networks import (
 from .noise import _synthetic_noise_target
 from .observation_ops import (
     coordinate_grid as _coordinate_grid,
+    observation_pixel_to_world as _observation_pixel_to_world,
     observation_support_mask as _observation_support_mask,
     wrapped_delta_ra_deg as _wrapped_delta_ra_deg,
 )
@@ -106,7 +107,7 @@ def _observation_footprint_world_deg(
     x = torch.tensor([-0.5, nx - 0.5, nx - 0.5, -0.5], dtype=torch.float64)
     y = torch.tensor([-0.5, -0.5, ny - 0.5, ny - 0.5], dtype=torch.float64)
     try:
-        ra, dec = WCS(observation.header).pixel_to_world(x, y)
+        ra, dec = _observation_pixel_to_world(observation, x, y)
         ra_values = torch.as_tensor(ra, dtype=torch.float64)
         dec_values = torch.as_tensor(dec, dtype=torch.float64)
         finite = torch.isfinite(ra_values) & torch.isfinite(dec_values)
@@ -474,6 +475,79 @@ class SpectralPowerFoamField(_BaseFieldModel):
         )
 
 
+class FoamInitializedINRField(_BaseFieldModel):
+    """Positive INR correction initialized exactly from a fitted Foam field.
+
+    The reference Foam is frozen and copied by default. A signed MLP predicts
+    a bounded log-intensity correction whose final layer starts at zero, so
+    the initial field is exactly the positive-clipped Foam prediction.
+    """
+
+    def __init__(
+        self,
+        domain: FieldDomain,
+        *,
+        foam: SpectralPowerFoamField,
+        hidden_dim: int = 64,
+        hidden_layers: int = 3,
+        intensity_floor: float = 1.0e-8,
+        max_log_correction: float = 8.0,
+        copy_reference: bool = True,
+    ) -> None:
+        super().__init__(domain)
+        if foam.domain != domain:
+            raise ValueError("Foam and INR domains must match")
+        if int(hidden_dim) < 1 or int(hidden_layers) < 1:
+            raise ValueError("hidden_dim and hidden_layers must be positive")
+        if not math.isfinite(intensity_floor) or float(intensity_floor) <= 0.0:
+            raise ValueError("intensity_floor must be finite and positive")
+        if not math.isfinite(max_log_correction) or float(max_log_correction) <= 0.0:
+            raise ValueError("max_log_correction must be finite and positive")
+        self.reference_foam = copy.deepcopy(foam) if copy_reference else foam
+        self.reference_foam.requires_grad_(False)
+        self.residual_trunk = silu_mlp_sequential(
+            self.coord_dim, int(hidden_dim), int(hidden_layers)
+        )
+        self.residual_output = nn.Linear(int(hidden_dim), 1)
+        reset_silu_mlp_linears(self.residual_trunk)
+        nn.init.zeros_(self.residual_output.weight)
+        nn.init.zeros_(self.residual_output.bias)
+        self.intensity_floor = float(intensity_floor)
+        self.max_log_correction = float(max_log_correction)
+
+    def log_intensity_correction(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        coords = self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom)
+        parameter = self.residual_output.weight
+        hidden = self.residual_trunk(
+            coords.to(device=parameter.device, dtype=parameter.dtype)
+        )
+        raw = self.residual_output(hidden).squeeze(-1)
+        return self.max_log_correction * torch.tanh(
+            raw / self.max_log_correction
+        )
+
+    def forward(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        with torch.no_grad():
+            reference = self.reference_foam(
+                ra_deg, dec_deg, wavelength_angstrom
+            )
+        correction = self.log_intensity_correction(
+            ra_deg, dec_deg, wavelength_angstrom
+        )
+        reference = reference.to(device=correction.device, dtype=correction.dtype)
+        return reference.clamp_min(self.intensity_floor) * torch.exp(correction)
+
+
 def _observation_without_background(observation: FieldObservation) -> FieldObservation:
     stripped = copy.deepcopy(observation)
     stripped.sky_background = None
@@ -566,7 +640,7 @@ def _resolve_anchor_sample_world_coordinates(
         raise ValueError("anchor term does not define sample coordinates")
     x_pix = term.sample_x_pix.to(device=device, dtype=torch.float64)
     y_pix = term.sample_y_pix.to(device=device, dtype=torch.float64)
-    ra_deg, dec_deg = WCS(term.observation.header).pixel_to_world(x_pix, y_pix)
+    ra_deg, dec_deg = _observation_pixel_to_world(term.observation, x_pix, y_pix)
     return ra_deg.to(dtype=torch.float32), dec_deg.to(dtype=torch.float32)
 
 
@@ -580,6 +654,11 @@ def _resolve_centroid_target_pixel_coordinates(
         return (
             torch.tensor(float(term.target_x_pix), device=device, dtype=dtype),
             torch.tensor(float(term.target_y_pix), device=device, dtype=dtype),
+        )
+    if term.observation.detector_to_sky is not None:
+        raise ValueError(
+            "sky-coordinate centroid anchors require an inverse detector transform; "
+            "provide target_x_pix and target_y_pix for forward-only native astrometry"
         )
     assert term.target_ra_deg is not None and term.target_dec_deg is not None
     x_pix, y_pix = WCS(term.observation.header).world_to_pixel(
@@ -5072,6 +5151,8 @@ def make_field_model(
 ) -> nn.Module:
     if kind == "spectral_power_foam":
         return SpectralPowerFoamField(domain, **kwargs)
+    if kind == "foam_initialized_inr":
+        return FoamInitializedINRField(domain, **kwargs)
     if kind == "sine_implicit":
         return SineImplicitField(domain, **kwargs)
     if kind == "wire_implicit":

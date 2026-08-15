@@ -527,6 +527,42 @@ also include a compact **`pose_refinement`** block with final pose parameters.
 Document optimization loops (joint field + poses) in your training script; pass
 the matching pose into **`field.render(...)`** for each observation.
 
+## Native astrometry, structured noise, and the Foam → INR ladder
+
+`FieldObservation.detector_to_sky` accepts a forward-only torch transform in
+full-detector zero-based pixels. `sample_gwcs_detector_to_tangent(...)` samples
+an external GWCS/CRDS detector→V2/V3 callable on an adaptively refined grid and
+fails unless independent random, edge, and optional chip-boundary points meet
+the declared p99/max mas limits. Compose the frozen table with
+`TangentPlaneAffine`, an optional affine-free residual grid, and a frozen
+V2/V3→sky attitude using `DetectorToSkyTransform`. Crops retain detector
+origins; a custom transform is never cached while it may carry gradients.
+
+For detector noise, store `err` or the `var_poisson`, `var_rnoise`, and
+`var_flat` planes on each observation. `contamination_prior` holds soft CRF
+outlier probabilities; permanent DQ failures remain in `mask`.
+`fit_noise_crossfit(...)` fits `StructuredDetectorNoise` only from predictions
+made without the exposure being calibrated, then freezes the result. Attach it
+as `StructuredNoiseOp(model, frozen=True)` and use
+`loss_kind="structured_nll"` for the scene fit. This likelihood intentionally
+rejects pixel/patch/context approximations because they change the amplifier
+row covariance.
+
+The transparent reconstruction ladder is:
+
+1. fit `SpectralPowerFoamField` on native observations and check the exact
+   detector-pixel handoff;
+2. wrap the accepted control in `FoamInitializedINRField`, whose log-intensity
+   residual is zero-initialized and remains positive;
+3. keep the fixed PSF, then calibrate `ExtendedResidualKernelPSF`, a fixed
+   core+wing baseline with a bounded positive, unit-sum, centroid-anchored
+   residual;
+4. freeze astrometry, noise, and PSF before producing the final scene.
+
+Use `completeness_limit_magnitude(...)` for bracketed m50/m80 estimates and
+`paired_bootstrap_improvement(...)` for the predeclared held-out interval.
+Neither helper extrapolates a depth claim beyond the injection grid.
+
 ## Synthetic minimal example
 
 ```python
@@ -563,7 +599,7 @@ pred = field.render(model, obs)
 
 - Each band is usually its own **`field.Observation`** with distinct spectral metadata; **`field.fit`** aggregates losses across all of them.
 - Tabulated throughput (`transmission_wavelength`, `transmission_throughput`) is preferred when combining HST/JWST filters with different shapes.
-- Build a classical baseline first with **`coadd_image_plane_multiband`** so INR residuals can be interpreted against a conventional WCS-aligned stack.
+- Build a classical baseline first with **`coadd_image_plane_multiband`** so INR residuals can be interpreted against a conventional WCS-aligned stack. It is a comparator, not an initializer for the native-exposure production fit.
 - For a drizzle-like baseline, use **`coadd_image_plane_cube(...,
   resampling_kernel="drizzle_square", drizzle_pixfrac=...)`** or the
   `scripts/build_smacs0723_stack_baseline.py --resampling-kernel drizzle_square`

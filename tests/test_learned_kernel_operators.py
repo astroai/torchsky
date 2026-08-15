@@ -10,6 +10,7 @@ from torchsky.map.operators import (
     ConditionedBackgroundField,
     ConditionedKernelPSF,
     ConstrainedKernelPSF,
+    ExtendedResidualKernelPSF,
     GatedResidualOperator,
     InstrumentStateEncoder,
     LearnedInstrumentOperator,
@@ -348,6 +349,46 @@ def test_conditioned_kernel_psf_is_flux_conserving_and_differentiable():
     assert psf.kernel_basis.raw_kernels.grad is not None
     assert isinstance(psf.encoder, AdaptiveSpatioSpectralTemporalEncoder)
     assert psf.encoder.x_axis.gate_logits.grad is not None
+
+
+def test_extended_psf_is_positive_flux_conserving_and_centroid_anchored():
+    psf = ExtendedResidualKernelPSF(
+        _conditioning_encoder(),
+        core_kernel_size=7,
+        wing_kernel_size=15,
+        n_residual_basis=2,
+        residual_fraction_init=0.01,
+    )
+    y, x = torch.meshgrid(torch.arange(31.0), torch.arange(31.0), indexing="ij")
+    image = torch.zeros((31, 31), requires_grad=True)
+    with torch.no_grad():
+        image[15, 15] = 1.0
+        psf.kernel_basis.raw_kernels[0, 2, 5] += 2.0
+    output = psf(
+        image,
+        spatial_x=x,
+        spatial_y=y,
+        wavelength=7500.0,
+        time_mjd=60010.0,
+    )
+    kernel = psf.effective_kernels(
+        torch.tensor([16.0]),
+        torch.tensor([16.0]),
+        torch.tensor([7500.0]),
+        torch.tensor([60010.0]),
+    )[0]
+    coords = torch.arange(psf.kernel_size, dtype=kernel.dtype)
+    center = 0.5 * (psf.kernel_size - 1)
+
+    torch.testing.assert_close(output.sum(), torch.tensor(1.0), atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(kernel.sum(), torch.tensor(1.0), atol=1e-6, rtol=1e-6)
+    torch.testing.assert_close((kernel.sum(0) * coords).sum(), torch.tensor(center))
+    torch.testing.assert_close((kernel.sum(1) * coords).sum(), torch.tensor(center))
+    assert bool((kernel >= 0).all())
+    output.square().sum().backward()
+    assert image.grad is not None
+    assert psf.raw_residual_fraction.grad is not None
+    assert psf.kernel_basis.raw_kernels.grad is not None
 
 
 def test_conditioned_background_zero_initialization_and_gradients():

@@ -21,6 +21,7 @@ from ..operators.bundle import (
     merge_operator_bundles,
 )
 from ..operators.calibration import OperatorCalibrationTerm
+from ..operators.noise import StructuredDetectorNoise, StructuredNoiseOp
 
 from .bandpass import (
     bandpass_bounds as _bandpass_bounds,
@@ -83,6 +84,72 @@ from .types import (
     FieldSpectralSampling,
     ForwardContext,
 )
+
+
+def _structured_noise_loss(
+    observation: FieldObservation,
+    bundle: ObservationOperatorBundle,
+    residual: Tensor,
+    valid: Tensor,
+) -> Tensor:
+    operator = bundle.noise
+    model = getattr(operator, "model", None)
+    if not isinstance(operator, StructuredNoiseOp) or not isinstance(
+        model, StructuredDetectorNoise
+    ):
+        raise ValueError(
+            "structured_nll requires StructuredNoiseOp(StructuredDetectorNoise(...))"
+        )
+    components = {}
+    for key, value in (
+        ("VAR_POISSON", observation.var_poisson),
+        ("VAR_RNOISE", observation.var_rnoise),
+        ("VAR_FLAT", observation.var_flat),
+    ):
+        if value is None:
+            continue
+        plane = value.to(device=residual.device, dtype=residual.dtype)
+        plane_valid = torch.isfinite(plane) & (plane >= 0.0)
+        valid = valid & plane_valid
+        components[key] = torch.where(plane_valid, plane, torch.zeros_like(plane))
+    err = (
+        None
+        if observation.err is None
+        else observation.err.to(device=residual.device, dtype=residual.dtype)
+    )
+    if not components and err is None:
+        if observation.weight is None:
+            raise ValueError(
+                "structured_nll requires variance planes, ERR, or inverse-variance weight"
+            )
+        weight = observation.weight.to(device=residual.device, dtype=residual.dtype)
+        err = torch.where(
+            weight > 0.0,
+            weight.clamp_min(torch.finfo(weight.dtype).tiny).rsqrt(),
+            torch.ones_like(weight),
+        )
+    elif not components and err is not None:
+        err_valid = torch.isfinite(err) & (err >= 0.0)
+        valid = valid & err_valid
+        err = torch.where(err_valid, err, torch.ones_like(err))
+    return model.negative_log_likelihood(
+        residual,
+        components=components or None,
+        err=err,
+        valid=valid,
+        amplifier_index=(
+            None
+            if observation.amplifier_index is None
+            else observation.amplifier_index.to(device=residual.device)
+        ),
+        contamination_prior=(
+            None
+            if observation.contamination_prior is None
+            else observation.contamination_prior.to(
+                device=residual.device, dtype=residual.dtype
+            )
+        ),
+    )
 
 
 def _field_noise_pretrain_head_modules(
@@ -587,17 +654,26 @@ def _compute_full_observation_losses(
             else torch.ones_like(pred)
         )
         weight = torch.where(valid, weight, torch.zeros_like(weight))
-        weighted_loss = torch.sum(
-            weight
-            * _field_residual_loss(
-                residual,
-                loss_kind=loss_kind,
-                charbonnier_eps=charbonnier_eps,
-                huber_delta=huber_delta,
-                logvar=pred_logvar,
-            )
-        )
         weight_sum = weight.sum()
+        if loss_kind == "structured_nll":
+            weight_sum = valid.sum().to(dtype=pred.dtype)
+            weighted_loss = (
+                _structured_noise_loss(
+                    observation, observation_bundle, residual, valid
+                )
+                * weight_sum
+            )
+        else:
+            weighted_loss = torch.sum(
+                weight
+                * _field_residual_loss(
+                    residual,
+                    loss_kind=loss_kind,
+                    charbonnier_eps=charbonnier_eps,
+                    huber_delta=huber_delta,
+                    logvar=pred_logvar,
+                )
+            )
         if gradient_weight > 0.0 and pred.ndim == 2:
             grad_num, grad_den = _field_gradient_residual_weighted_loss(
                 pred,
@@ -693,6 +769,72 @@ def _compute_full_observation_losses(
     return float(sum(losses)) if losses else 0.0
 
 
+def fit_structured_noise_crossfit(
+    observations: Sequence[FieldObservation],
+    cross_fitted_predictions: Sequence[Tensor],
+    *,
+    models: Sequence[StructuredDetectorNoise] | None = None,
+    steps: int = 100,
+    lr: float = 1.0e-2,
+    device: torch.device | str | None = None,
+) -> tuple[tuple[StructuredDetectorNoise, ...], tuple[float, ...]]:
+    """Calibrate exposure noise only from leave-one-exposure-out predictions.
+
+    ``cross_fitted_predictions[e]`` must come from a scene fit that excluded
+    observation ``e``. The function cannot verify that provenance, so callers
+    should record the exclusion split alongside the returned parameters.
+    Models are frozen before return for the subsequent scene fit.
+    """
+    if not observations or len(observations) != len(cross_fitted_predictions):
+        raise ValueError("observations and cross_fitted_predictions must match")
+    if int(steps) < 1 or not math.isfinite(float(lr)) or float(lr) <= 0.0:
+        raise ValueError("steps and lr must be positive")
+    fitted = (
+        tuple(StructuredDetectorNoise() for _ in observations)
+        if models is None
+        else tuple(models)
+    )
+    if len(fitted) != len(observations):
+        raise ValueError("models must match observations")
+    target_device = torch.device(device) if device is not None else torch.device("cpu")
+    parameters = []
+    for model in fitted:
+        model.to(target_device)
+        model.requires_grad_(True)
+        parameters.extend(model.parameters())
+    optimizer = torch.optim.Adam(parameters, lr=float(lr))
+    final_losses: list[float] = []
+    for _ in range(int(steps)):
+        optimizer.zero_grad(set_to_none=True)
+        losses = []
+        for observation, prediction, model in zip(
+            observations, cross_fitted_predictions, fitted, strict=True
+        ):
+            if prediction.shape != observation.image.shape:
+                raise ValueError("cross-fitted prediction shape must match observation")
+            pred = prediction.detach().to(target_device, dtype=torch.float32)
+            image = observation.image.to(target_device, dtype=pred.dtype)
+            valid = _observation_support_mask(observation).to(target_device)
+            residual = torch.where(valid, pred - image, torch.zeros_like(pred))
+            losses.append(
+                _structured_noise_loss(
+                    observation,
+                    ObservationOperatorBundle(
+                        noise=StructuredNoiseOp(model, frozen=False)
+                    ),
+                    residual,
+                    valid,
+                )
+            )
+        total = torch.stack(losses).mean()
+        total.backward()
+        optimizer.step()
+        final_losses = [float(loss.detach().cpu()) for loss in losses]
+    for model in fitted:
+        model.requires_grad_(False)
+    return fitted, tuple(final_losses)
+
+
 def fit_field_model(
     observations: Sequence[FieldObservation],
     model: nn.Module,
@@ -774,6 +916,30 @@ def fit_field_model(
         raise ValueError(
             "observation_operator_bundles must have the same length as observations"
         )
+    if loss_kind == "structured_nll":
+        incompatible = (
+            pixel_samples_per_observation not in (None, 0)
+            or training_patch_size is not None
+            or shared_sky_patch_sampling
+            or diagnostic_spatial_tile_hw is not None
+            or gradient_residual_weight > 0.0
+            or spectral_anchor_observations_per_step > 0
+            or context_observations_per_step > 0
+            or bool(component_anchor_terms)
+            or bool(component_centroid_anchor_terms)
+        )
+        if incompatible:
+            raise ValueError(
+                "structured_nll currently requires full native exposures without "
+                "pixel/patch/context/anchor approximations"
+            )
+        for bundle in obs_operator_bundles:
+            if not isinstance(bundle.noise, StructuredNoiseOp) or not isinstance(
+                getattr(bundle.noise, "model", None), StructuredDetectorNoise
+            ):
+                raise ValueError(
+                    "every observation needs StructuredNoiseOp for structured_nll"
+                )
     operator_bundle = merge_operator_bundles(*obs_operator_bundles)
     calibration_terms = tuple(operator_calibration_terms or ())
     calibrated_operator_model_ids = {
@@ -873,11 +1039,14 @@ def fit_field_model(
         for slot_name, operator in (
             ("psf", bundle.psf),
             ("background", bundle.background),
+            ("noise", bundle.noise),
         ):
             operator_model = getattr(operator, "model", None)
             if not isinstance(operator_model, nn.Module):
                 continue
             operator_model.to(device=train_device)
+            if slot_name == "noise" and bool(getattr(operator, "frozen", True)):
+                continue
             for parameter in operator_model.parameters():
                 if parameter.requires_grad and id(parameter) not in seen_param_ids:
                     trainable_params.append(parameter)
@@ -1294,6 +1463,29 @@ def fit_field_model(
                     max(float(full_weight_sum), 1.0e-8),
                     device=pred.device,
                     dtype=pred.dtype,
+                )
+            elif loss_kind == "structured_nll":
+                pred = render_field_observation(
+                    model,
+                    observation,
+                    num_spectral_samples=num_spectral_samples,
+                    spatial_sampling=spatial_sampling,
+                    **render_kwargs,
+                )
+                pred_logvar = None
+                image = observation.image.to(device=pred.device, dtype=pred.dtype)
+                valid = _observation_support_mask(observation).to(device=pred.device)
+                image = torch.where(valid, image, torch.zeros_like(image))
+                residual = torch.where(valid, pred - image, torch.zeros_like(pred))
+                weight = torch.where(
+                    valid, torch.ones_like(pred), torch.zeros_like(pred)
+                )
+                weight_sum = weight.sum()
+                weighted_loss = (
+                    _structured_noise_loss(
+                        observation, observation_bundle, residual, valid
+                    )
+                    * weight_sum
                 )
             elif loss_kind == "gaussian_nll":
                 pred, pred_logvar = render_field_observation_distribution(

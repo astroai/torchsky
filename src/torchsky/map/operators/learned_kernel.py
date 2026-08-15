@@ -47,6 +47,7 @@ __all__ = [
     "LearnedInstrumentOperator",
     "SpatioSpectralTemporalEncoder",
     "ConditionedKernelPSF",
+    "ExtendedResidualKernelPSF",
     "SubPixelShift",
     "gaussian_kernel2d",
 ]
@@ -250,6 +251,207 @@ class ConditionedKernelPSF(nn.Module):
             groups=self.kernel_basis.n_basis,
         )
         return convolved.squeeze(0).sum(dim=0)
+
+    def effective_kernels(
+        self,
+        spatial_x: Tensor,
+        spatial_y: Tensor,
+        wavelength: Tensor | float,
+        time_mjd: Tensor | float | None = None,
+    ) -> Tensor:
+        """Return normalized effective kernels with sample axes first."""
+        mixture = self.mixture_weights(
+            spatial_x, spatial_y, wavelength, time_mjd
+        ).movedim(0, -1)
+        return torch.einsum(
+            "...b,bhw->...hw", mixture, self.kernel_basis.basis_kernels()
+        )
+
+
+def _center_pad_kernel(kernel: Tensor, size: int) -> Tensor:
+    if kernel.ndim != 2 or kernel.shape[0] != kernel.shape[1]:
+        raise ValueError("PSF kernels must be square 2D tensors")
+    if int(kernel.shape[0]) % 2 != 1 or int(size) % 2 != 1:
+        raise ValueError("PSF kernel sizes must be odd")
+    if int(kernel.shape[0]) > int(size):
+        raise ValueError("cannot pad a PSF kernel to a smaller size")
+    pad = (int(size) - int(kernel.shape[0])) // 2
+    return F.pad(kernel, (pad, pad, pad, pad))
+
+
+class ExtendedResidualKernelPSF(nn.Module):
+    """Fixed positive core+wing PSF with a small conditioned residual.
+
+    The fixed optical baseline and the learned residual are both positive and
+    unit-sum. Residual bases are centrosymmetrized before use, anchoring their
+    centroid to the central pixel. A bounded convex fraction prevents the PSF
+    residual from becoming an unrestricted image operator.
+    """
+
+    def __init__(
+        self,
+        encoder: SpatioSpectralTemporalEncoder
+        | AdaptiveSpatioSpectralTemporalEncoder,
+        *,
+        core_kernel: Tensor | None = None,
+        wing_kernel: Tensor | None = None,
+        core_kernel_size: int = 15,
+        wing_kernel_size: int = 51,
+        core_fwhm_pix: float = 3.0,
+        wing_fwhm_pix: float = 15.0,
+        baseline_wing_fraction: float = 0.03,
+        n_residual_basis: int = 4,
+        residual_fraction_init: float = 1.0e-4,
+        residual_fraction_max: float = 0.25,
+        hidden_dim: int = 32,
+    ) -> None:
+        super().__init__()
+        if not 0.0 <= float(baseline_wing_fraction) <= 1.0:
+            raise ValueError("baseline_wing_fraction must lie in [0, 1]")
+        if not 0.0 < float(residual_fraction_max) < 1.0:
+            raise ValueError("residual_fraction_max must lie in (0, 1)")
+        if not 0.0 < float(residual_fraction_init) < float(
+            residual_fraction_max
+        ):
+            raise ValueError(
+                "residual_fraction_init must lie in (0, residual_fraction_max)"
+            )
+        core = (
+            gaussian_kernel2d(core_fwhm_pix / 2.354820045, core_kernel_size)
+            if core_kernel is None
+            else torch.as_tensor(core_kernel).detach().clone()
+        )
+        wing = (
+            gaussian_kernel2d(wing_fwhm_pix / 2.354820045, wing_kernel_size)
+            if wing_kernel is None
+            else torch.as_tensor(wing_kernel).detach().clone()
+        )
+        if not core.is_floating_point() or not wing.is_floating_point():
+            raise ValueError("PSF kernels must be floating point")
+        if not bool(torch.isfinite(core).all()) or not bool(torch.isfinite(wing).all()):
+            raise ValueError("PSF kernels must be finite")
+        if bool((core < 0).any()) or bool((wing < 0).any()):
+            raise ValueError("PSF kernels must be non-negative")
+        if float(core.sum()) <= 0.0 or float(wing.sum()) <= 0.0:
+            raise ValueError("PSF kernels must have positive sums")
+        self.kernel_size = max(int(core.shape[0]), int(wing.shape[0]))
+        if self.kernel_size % 2 != 1:
+            raise ValueError("PSF kernel sizes must be odd")
+        core = _center_pad_kernel(core / core.sum(), self.kernel_size)
+        wing = _center_pad_kernel(wing / wing.sum(), self.kernel_size)
+        baseline = (1.0 - float(baseline_wing_fraction)) * core + float(
+            baseline_wing_fraction
+        ) * wing
+        self.register_buffer("baseline_kernel", baseline / baseline.sum())
+        self.encoder = encoder
+        self.kernel_basis = ConstrainedKernelPSF(
+            n_basis=int(n_residual_basis),
+            kernel_size=self.kernel_size,
+            init_fwhm_pix=float(core_fwhm_pix),
+        )
+        self.mixer = nn.Sequential(
+            nn.Linear(encoder.output_dim, int(hidden_dim)),
+            nn.GELU(),
+            nn.Linear(int(hidden_dim), int(n_residual_basis)),
+        )
+        nn.init.zeros_(self.mixer[-1].weight)
+        nn.init.zeros_(self.mixer[-1].bias)
+        ratio = float(residual_fraction_init) / float(residual_fraction_max)
+        self.raw_residual_fraction = nn.Parameter(
+            torch.tensor(math.log(ratio / (1.0 - ratio)), dtype=torch.float32)
+        )
+        self.residual_fraction_max = float(residual_fraction_max)
+
+    @property
+    def residual_fraction(self) -> Tensor:
+        return self.residual_fraction_max * torch.sigmoid(
+            self.raw_residual_fraction
+        )
+
+    def mixture_weights(
+        self,
+        spatial_x: Tensor,
+        spatial_y: Tensor,
+        wavelength: Tensor | float,
+        time_mjd: Tensor | float | None = None,
+    ) -> Tensor:
+        return torch.softmax(
+            self.mixer(self.encoder(spatial_x, spatial_y, wavelength, time_mjd)),
+            dim=-1,
+        ).movedim(-1, 0)
+
+    def _anchored_residual_basis(self) -> Tensor:
+        basis = self.kernel_basis.basis_kernels()
+        anchored = 0.5 * (basis + torch.flip(basis, dims=(-2, -1)))
+        return anchored / anchored.sum(dim=(-2, -1), keepdim=True)
+
+    def effective_kernels(
+        self,
+        spatial_x: Tensor,
+        spatial_y: Tensor,
+        wavelength: Tensor | float,
+        time_mjd: Tensor | float | None = None,
+    ) -> Tensor:
+        mixture = self.mixture_weights(
+            spatial_x, spatial_y, wavelength, time_mjd
+        ).movedim(0, -1)
+        residual = torch.einsum(
+            "...b,bhw->...hw", mixture, self._anchored_residual_basis()
+        )
+        baseline = self.baseline_kernel.to(device=residual.device, dtype=residual.dtype)
+        fraction = self.residual_fraction.to(device=residual.device, dtype=residual.dtype)
+        return (1.0 - fraction) * baseline + fraction * residual
+
+    def conditioning_regularization(
+        self,
+        *,
+        gate_weight: float = 1.0,
+        scale_shift_weight: float = 1.0,
+    ) -> Tensor:
+        regularization = getattr(self.encoder, "regularization", None)
+        penalty = self.residual_fraction.square()
+        if callable(regularization):
+            penalty = penalty + regularization(
+                gate_weight=gate_weight,
+                scale_shift_weight=scale_shift_weight,
+            )
+        return penalty
+
+    def forward(
+        self,
+        image: Tensor,
+        *,
+        spatial_x: Tensor,
+        spatial_y: Tensor,
+        wavelength: Tensor | float,
+        time_mjd: Tensor | float | None = None,
+    ) -> Tensor:
+        if image.ndim != 2:
+            raise ValueError("ExtendedResidualKernelPSF image must be 2D")
+        if spatial_x.shape != image.shape or spatial_y.shape != image.shape:
+            raise ValueError("PSF spatial coordinates must match image shape")
+        mixture = self.mixture_weights(
+            spatial_x, spatial_y, wavelength, time_mjd
+        ).to(dtype=image.dtype)
+        basis = self._anchored_residual_basis().to(
+            device=image.device, dtype=image.dtype
+        )
+        residual = F.conv2d(
+            (mixture * image.unsqueeze(0)).unsqueeze(0),
+            basis.unsqueeze(1),
+            padding=self.kernel_size // 2,
+            groups=int(basis.shape[0]),
+        ).squeeze(0).sum(dim=0)
+        baseline_kernel = self.baseline_kernel.to(
+            device=image.device, dtype=image.dtype
+        )
+        baseline = F.conv2d(
+            image[None, None],
+            baseline_kernel[None, None],
+            padding=self.kernel_size // 2,
+        )[0, 0]
+        fraction = self.residual_fraction.to(device=image.device, dtype=image.dtype)
+        return (1.0 - fraction) * baseline + fraction * residual
 
 
 def gaussian_kernel2d(

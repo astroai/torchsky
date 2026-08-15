@@ -6,9 +6,10 @@ Implementation of ``nn.Module`` subclasses and training live in :mod:`torchsky.m
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import math
+import torch
 import torch.nn as nn
 from torch import Tensor
 
@@ -29,6 +30,7 @@ FieldModelKind = Literal[
     "gaussian_basis",
     "fourier_mlp",
     "spectral_power_foam",
+    "foam_initialized_inr",
     "spectral_basis_field",
     "learned_spectral_basis_field",
     "sky_encoder_bandpass_field",
@@ -50,7 +52,9 @@ FieldModelKind = Literal[
     "hashgrid_spectral_field",
 ]
 FieldCoordinateMode = Literal["local_tangent", "sphere_xyz"]
-FieldLossKind = Literal["mse", "charbonnier", "huber", "gaussian_nll"]
+FieldLossKind = Literal[
+    "mse", "charbonnier", "huber", "gaussian_nll", "structured_nll"
+]
 FieldLRSchedule = Literal["constant", "cosine"]
 FieldLossReduction = Literal["per_observation", "per_band", "global", "band_global_mix"]
 FieldCurriculum = Literal["none", "spectral_frequency_ramp", "feature_scale_ramp"]
@@ -64,6 +68,17 @@ FieldObservationSampling = Literal["uniform", "band_balanced"]
 FieldNoisePretrainKind = Literal["none", "uniform", "gaussian", "spectrum"]
 # wavelength | energy | frequency — meaning of spectral_min / spectral_max numeric values
 FieldSpectralQuantity = Literal["wavelength", "energy", "frequency"]
+
+
+class DetectorToSkyTransform(Protocol):
+    """Forward-only differentiable detector-to-sky transform.
+
+    Coordinates passed to this protocol are full-detector, zero-based pixel
+    coordinates. Implementations return ICRS-like longitude and latitude in
+    degrees and may own trainable exposure-pose parameters.
+    """
+
+    def pixel_to_world(self, x: Tensor, y: Tensor) -> tuple[Tensor, Tensor]: ...
 
 
 @dataclass(frozen=True)
@@ -209,6 +224,12 @@ class FieldObservation:
     header: dict
     weight: Tensor | None = None
     mask: Tensor | None = None
+    err: Tensor | None = None
+    var_poisson: Tensor | None = None
+    var_rnoise: Tensor | None = None
+    var_flat: Tensor | None = None
+    contamination_prior: Tensor | None = None
+    amplifier_index: Tensor | None = None
     wavelength: float | None = None
     spectral_min: float | None = None
     spectral_max: float | None = None
@@ -226,6 +247,7 @@ class FieldObservation:
     spectral_quantity: FieldSpectralQuantity | None = None
     detector_x0_pix: float = 0.0
     detector_y0_pix: float = 0.0
+    detector_to_sky: DetectorToSkyTransform | None = None
 
     _cached_ra_deg: Tensor | None = field(default=None, init=False, repr=False)
     _cached_dec_deg: Tensor | None = field(default=None, init=False, repr=False)
@@ -271,6 +293,12 @@ class FieldObservation:
         ):
             raise ValueError("FieldObservation detector origins must be finite")
         for name in (
+            "err",
+            "var_poisson",
+            "var_rnoise",
+            "var_flat",
+            "contamination_prior",
+            "amplifier_index",
             "sky_background",
             "instrument_background",
             "detector_background",
@@ -283,6 +311,21 @@ class FieldObservation:
             if tuple(component.shape) != tuple(self.image.shape):
                 raise ValueError(
                     f"FieldObservation {name} shape must match image shape"
+                )
+        if self.contamination_prior is not None:
+            prior = self.contamination_prior
+            if not bool(torch.isfinite(prior).all()) or bool(
+                ((prior < 0.0) | (prior > 1.0)).any()
+            ):
+                raise ValueError(
+                    "FieldObservation contamination_prior must be finite in [0, 1]"
+                )
+        if self.amplifier_index is not None:
+            if self.amplifier_index.is_floating_point() or bool(
+                (self.amplifier_index < 0).any()
+            ):
+                raise ValueError(
+                    "FieldObservation amplifier_index must be a non-negative integer tensor"
                 )
 
         wl = self.transmission_wavelength

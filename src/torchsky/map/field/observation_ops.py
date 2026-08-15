@@ -18,6 +18,20 @@ def wrapped_delta_ra_deg(ra_a_deg: Tensor, ra_b_deg: float) -> Tensor:
     return ((ra_a_deg - float(ra_b_deg) + 180.0) % 360.0) - 180.0
 
 
+def observation_pixel_to_world(
+    observation: FieldObservation,
+    x: Tensor,
+    y: Tensor,
+) -> tuple[Tensor, Tensor]:
+    """Map local observation pixels to sky, honoring a native detector model."""
+    if observation.detector_to_sky is None:
+        return WCS(observation.header).pixel_to_world(x, y)
+    return observation.detector_to_sky.pixel_to_world(
+        x + float(observation.detector_x0_pix),
+        y + float(observation.detector_y0_pix),
+    )
+
+
 def header_shape(header: dict, *, fallback: tuple[int, int]) -> tuple[int, int]:
     naxis1 = header.get("NAXIS1")
     naxis2 = header.get("NAXIS2")
@@ -193,6 +207,32 @@ def crop_field_observation(
         mask=(
             observation.mask[y_slice, x_slice] if observation.mask is not None else None
         ),
+        err=(observation.err[y_slice, x_slice] if observation.err is not None else None),
+        var_poisson=(
+            observation.var_poisson[y_slice, x_slice]
+            if observation.var_poisson is not None
+            else None
+        ),
+        var_rnoise=(
+            observation.var_rnoise[y_slice, x_slice]
+            if observation.var_rnoise is not None
+            else None
+        ),
+        var_flat=(
+            observation.var_flat[y_slice, x_slice]
+            if observation.var_flat is not None
+            else None
+        ),
+        contamination_prior=(
+            observation.contamination_prior[y_slice, x_slice]
+            if observation.contamination_prior is not None
+            else None
+        ),
+        amplifier_index=(
+            observation.amplifier_index[y_slice, x_slice]
+            if observation.amplifier_index is not None
+            else None
+        ),
         wavelength=observation.wavelength,
         spectral_min=observation.spectral_min,
         spectral_max=observation.spectral_max,
@@ -222,6 +262,7 @@ def crop_field_observation(
         spectral_quantity=observation.spectral_quantity,
         detector_x0_pix=float(observation.detector_x0_pix) + int(x0),
         detector_y0_pix=float(observation.detector_y0_pix) + int(y0),
+        detector_to_sky=observation.detector_to_sky,
     )
 
 
@@ -302,8 +343,9 @@ def crop_field_observation_to_shared_sky_patch(
         [y0, y0, y1 - 1, y1 - 1, 0.5 * (y0 + y1 - 1)],
         dtype=torch.float64,
     )
-    ref_wcs = WCS(reference_observation.header)
-    ra_deg, dec_deg = ref_wcs.pixel_to_world(ref_x, ref_y)
+    ra_deg, dec_deg = observation_pixel_to_world(
+        reference_observation, ref_x, ref_y
+    )
     obs_wcs = WCS(observation.header)
     px, py = obs_wcs.world_to_pixel(ra_deg, dec_deg)
     if not (torch.isfinite(px).any() and torch.isfinite(py).any()):
@@ -361,7 +403,7 @@ def sample_observation_pixels(
     sampled = support_indices[sample_ids]
     y = sampled[:, 0].to(dtype=torch.float64, device=device)
     x = sampled[:, 1].to(dtype=torch.float64, device=device)
-    ra_deg, dec_deg = WCS(observation.header).pixel_to_world(x, y)
+    ra_deg, dec_deg = observation_pixel_to_world(observation, x, y)
     image = observation.image.to(device=device)[sampled[:, 0], sampled[:, 1]]
     if observation.weight is not None:
         weight = observation.weight.to(device=device)[sampled[:, 0], sampled[:, 1]]
@@ -402,7 +444,11 @@ def coordinate_grid(
         signature = observation_or_header.coordinate_cache_signature(shape)
         cached_ra = observation_or_header._cached_ra_deg
         cached_dec = observation_or_header._cached_dec_deg
-        if cached_ra is not None and cached_dec is not None:
+        if (
+            observation_or_header.detector_to_sky is None
+            and cached_ra is not None
+            and cached_dec is not None
+        ):
             if observation_or_header._cached_coordinate_signature == signature:
                 output_dtype = (
                     torch.float32 if device.type == "mps" else cached_ra.dtype
@@ -427,9 +473,15 @@ def coordinate_grid(
         torch.arange(width, dtype=torch.float64, device=grid_device),
         indexing="ij",
     )
-    ra_deg, dec_deg = WCS(header).pixel_to_world(x, y)
-
     if isinstance(observation_or_header, FieldObservation):
+        ra_deg, dec_deg = observation_pixel_to_world(observation_or_header, x, y)
+    else:
+        ra_deg, dec_deg = WCS(header).pixel_to_world(x, y)
+
+    if (
+        isinstance(observation_or_header, FieldObservation)
+        and observation_or_header.detector_to_sky is None
+    ):
         observation_or_header._cached_ra_deg = ra_deg.cpu()
         observation_or_header._cached_dec_deg = dec_deg.cpu()
         observation_or_header._cached_coordinate_signature = signature
@@ -464,6 +516,7 @@ __all__ = [
     "crop_field_observation",
     "crop_field_observation_for_training",
     "crop_field_observation_to_shared_sky_patch",
+    "observation_pixel_to_world",
     "header_shape",
     "observation_band_key",
     "observation_support_count_scalar",

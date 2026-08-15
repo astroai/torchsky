@@ -39,6 +39,10 @@ def _field_residual_loss(
             raise ValueError("gaussian_nll requires predictive log-variance")
         clipped = torch.clamp(logvar, min=-8.0, max=6.0)
         return 0.5 * (torch.exp(-clipped) * (residual * residual) + clipped)
+    if loss_kind == "structured_nll":
+        raise ValueError(
+            "structured_nll requires a full FieldObservation and StructuredNoiseOp"
+        )
     raise ValueError(f"unsupported field loss kind {loss_kind!r}")
 
 
@@ -58,7 +62,7 @@ def _field_gradient_residual_weighted_loss(
     if weight.shape != prediction.shape or valid.shape != prediction.shape:
         raise ValueError("weight and valid masks must match prediction shape")
     gradient_loss_kind: FieldLossKind = (
-        "mse" if loss_kind == "gaussian_nll" else loss_kind
+        "mse" if loss_kind in {"gaussian_nll", "structured_nll"} else loss_kind
     )
 
     grad_num = torch.zeros((), device=prediction.device, dtype=prediction.dtype)

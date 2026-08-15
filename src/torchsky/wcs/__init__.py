@@ -6,6 +6,15 @@ from .alignment import (
     fit_sky_affine,
 )
 from .core import WCS as WCS
+from .detector_astrometry import (
+    AffineFreeResidualGrid2D,
+    DetectorToSkyTransform,
+    DetectorToTangentTransform,
+    RegularGridTransform2D,
+    SampledTransformValidation,
+    TangentPlaneAffine,
+    validate_sampled_transform,
+)
 from .frames import (
     canonical_celestial_frame,
     convert_celestial,
@@ -36,12 +45,20 @@ from .tabular import (
     coupled_tabular_wcs_from_fits,
     tabular_axes_from_fits,
 )
+from .gwcs_sampling import GWCSGridSamplingResult, sample_gwcs_detector_to_tangent
 
 __all__ = [
     "SPEED_OF_LIGHT",
     "AffineFitResult",
+    "AffineFreeResidualGrid2D",
+    "DetectorToSkyTransform",
+    "DetectorToTangentTransform",
+    "GWCSGridSamplingResult",
+    "RegularGridTransform2D",
+    "SampledTransformValidation",
     "SkyAffineFitResult",
     "TangentPlaneFrame",
+    "TangentPlaneAffine",
     "CoupledTabularLookupWCS",
     "TabularAxis",
     "TabularBoundsMode",
@@ -55,6 +72,7 @@ __all__ = [
     "frequency_to_spectral",
     "fit_affine_2d",
     "fit_sky_affine",
+    "sample_gwcs_detector_to_tangent",
     "galactic_to_icrs",
     "icrs_to_galactic",
     "precess_fk5",
@@ -68,4 +86,5 @@ __all__ = [
     "tabular_axes_from_fits",
     "transform_spectral",
     "vacuum_wavelength_to_air",
+    "validate_sampled_transform",
 ]

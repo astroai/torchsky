@@ -176,9 +176,14 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     ),
     "FieldCoordinateMode": ("torchsky.map.field", "FieldCoordinateMode"),
     "FieldDomain": ("torchsky.map.field", "FieldDomain"),
+    "DetectorToSkyTransform": ("torchsky.map.field", "DetectorToSkyTransform"),
     "FieldFitResult": ("torchsky.map.field", "FieldFitResult"),
     "ForwardContext": ("torchsky.map.field", "ForwardContext"),
     "FourierMLPField": ("torchsky.map.field", "FourierMLPField"),
+    "FoamInitializedINRField": (
+        "torchsky.map.field",
+        "FoamInitializedINRField",
+    ),
     "HashGridConditionedField": ("torchsky.map.field", "HashGridConditionedField"),
     "HashGridMLPField": ("torchsky.map.field", "HashGridMLPField"),
     "HashGridResMLPField": ("torchsky.map.field", "HashGridResMLPField"),
@@ -218,6 +223,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "fit_field_component_decomposition",
     ),
     "fit_field_model": ("torchsky.map.field", "fit_field_model"),
+    "fit_structured_noise_crossfit": (
+        "torchsky.map.field",
+        "fit_structured_noise_crossfit",
+    ),
     "STRAINER_TRUNK_CHECKPOINT_FORMAT": (
         "torchsky.map.field",
         "STRAINER_TRUNK_CHECKPOINT_FORMAT",

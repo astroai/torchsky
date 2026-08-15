@@ -10,6 +10,7 @@ from torchsky.map.operators import (
     BackgroundCalibrationTerm,
     ConditionedBackgroundField,
     ConditionedKernelPSF,
+    ExtendedResidualKernelPSF,
     FieldTrainingStage,
     LearnedBackgroundOp,
     LearnedPSFOp,
@@ -89,6 +90,19 @@ def test_psf_calibration_uses_normalized_effective_kernels() -> None:
     assert term.raw_loss().item() > 0.0
     term.penalty().backward()
     assert model.kernel_basis.raw_kernels.grad is not None
+
+
+def test_psf_calibration_accepts_extended_core_wing_model() -> None:
+    model = ExtendedResidualKernelPSF(
+        _encoder(), core_kernel_size=3, wing_kernel_size=5, n_residual_basis=2
+    )
+    x, y, wavelength, time = _coordinates()
+    target = model.effective_kernels(x, y, wavelength, time).detach()
+    term = PSFCalibrationTerm(model, x, y, wavelength, time, target)
+
+    assert term.raw_loss().item() < 1.0e-12
+    term.penalty().backward()
+    assert model.raw_residual_fraction.grad is not None
 
 
 def test_psf_calibration_masks_unmeasured_pixels_and_reports_shape_errors() -> None:

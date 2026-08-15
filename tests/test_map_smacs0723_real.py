@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 from astropy.io import fits
 import torchsky
 
@@ -19,6 +20,7 @@ from bench_map_smacs0723_real import (  # noqa: E402
     _best_overlap_cutout,
     _cutout_header,
     _discover_exposure_paths,
+    _jwst_dq_support_and_contamination_prior,
     _reference_path_for_band,
     _linearize_sip_header,
     _metric_mask,
@@ -140,13 +142,20 @@ def test_metric_mask_excludes_non_finite_reference() -> None:
     assert np.array_equal(mask, expected)
 
 
-def test_discover_exposure_paths_prefers_crf_in_auto_mode(tmp_path: Path) -> None:
+def test_discover_exposure_paths_prefers_crf_with_per_exposure_cal_fallback(
+    tmp_path: Path,
+) -> None:
     (tmp_path / "a_cal.fits").write_bytes(b"")
+    (tmp_path / "b_cal.fits").write_bytes(b"")
     (tmp_path / "b_crf.fits").write_bytes(b"")
     (tmp_path / "c_crf.fits").write_bytes(b"")
 
     paths = _discover_exposure_paths(tmp_path)
-    assert [path.name for path in paths] == ["b_crf.fits", "c_crf.fits"]
+    assert [path.name for path in paths] == [
+        "a_cal.fits",
+        "b_crf.fits",
+        "c_crf.fits",
+    ]
 
 
 def test_discover_exposure_paths_can_force_cal_or_crf(tmp_path: Path) -> None:
@@ -159,6 +168,15 @@ def test_discover_exposure_paths_can_force_cal_or_crf(tmp_path: Path) -> None:
 
     assert [path.name for path in cal_paths] == ["a_cal.fits"]
     assert [path.name for path in crf_paths] == ["b_crf.fits", "c_crf.fits"]
+
+
+def test_jwst_jump_dq_is_soft_but_saturation_is_hard() -> None:
+    dq = np.array([[0, 4, 2, 6, np.nan]], dtype=np.float32)
+    support, prior = _jwst_dq_support_and_contamination_prior(dq)
+
+    assert support.tolist() == [[True, True, False, False, False]]
+    assert prior[0, 0] == pytest.approx(0.01)
+    assert prior[0, 1] == pytest.approx(0.9)
 
 
 def test_discover_exposure_paths_can_select_aligned_products(tmp_path: Path) -> None:

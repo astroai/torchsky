@@ -45,9 +45,11 @@ from bench_map_smacs0723_real import (  # noqa: E402
     _field_observation_kwargs_for_band,
     _filter_exposure_paths_by_patterns,
     _injection_manifest_tensors,
+    _jwst_dq_support_and_contamination_prior,
     _metric_mask,
     _prepare_aux_files,
     _read_ext,
+    _read_optional_ext,
     _reference_path_for_band,
     _sci_header,
 )
@@ -1379,13 +1381,14 @@ def main() -> int:
     parser.add_argument(
         "--exposure-dir",
         type=Path,
-        default=DEFAULT_EXPOSURE_DIR / "aligned",
-        help="Directory containing the selected CAL, CRF, or aligned detector products",
+        default=DEFAULT_EXPOSURE_DIR,
+        help="Directory containing native CRF/CAL products (aligned only for explicit comparator runs)",
     )
     parser.add_argument(
         "--input-product",
         choices=("auto", "crf", "cal", "aligned"),
-        default="aligned",
+        default="auto",
+        help="Native training defaults to CRF with per-exposure CAL fallback",
     )
     parser.add_argument("--crop-size", type=int, default=32)
     parser.add_argument(
@@ -1721,6 +1724,16 @@ def main() -> int:
             raw_field_inputs: list[
                 tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]
             ] = []
+            raw_noise_inputs: dict[
+                Path,
+                tuple[
+                    np.ndarray,
+                    np.ndarray | None,
+                    np.ndarray | None,
+                    np.ndarray | None,
+                    np.ndarray,
+                ],
+            ] = {}
             for exposure_path in exposure_paths:
                 science_override = (
                     science_overrides.get(exposure_path)
@@ -1750,9 +1763,19 @@ def main() -> int:
                 )
                 err = _read_ext(exposure_path, "ERR")
                 dq = _read_ext(exposure_path, "DQ")
-                valid = np.isfinite(err) & (err > 0) & np.isfinite(dq) & (dq == 0)
+                dq_support, contamination_prior = (
+                    _jwst_dq_support_and_contamination_prior(dq)
+                )
+                valid = np.isfinite(err) & (err > 0) & dq_support
                 weight = np.zeros_like(err, dtype=np.float32)
                 weight[valid] = 1.0 / np.square(err[valid])
+                raw_noise_inputs[exposure_path] = (
+                    err,
+                    _read_optional_ext(exposure_path, "VAR_POISSON"),
+                    _read_optional_ext(exposure_path, "VAR_RNOISE"),
+                    _read_optional_ext(exposure_path, "VAR_FLAT"),
+                    contamination_prior,
+                )
                 raw_field_inputs.append(
                     (
                         science,
@@ -1783,6 +1806,12 @@ def main() -> int:
                 )
                 detector_x0 = float(crop_header["SUBSTRT1"]) - 1.0
                 detector_y0 = float(crop_header["SUBSTRT2"]) - 1.0
+                source_x0 = int(crop_header["SUBSTRT1"]) - int(
+                    header.get("SUBSTRT1", 1)
+                )
+                source_y0 = int(crop_header["SUBSTRT2"]) - int(
+                    header.get("SUBSTRT2", 1)
+                )
                 if calibration_exposure is not None:
                     detector_x0 += float(
                         calibration_exposure["detector_bounds_xy"][0]
@@ -1792,12 +1821,50 @@ def main() -> int:
                     ) - (float(header.get("SUBSTRT2", 1)) - 1.0)
                     crop_header["SUBSTRT1"] = int(detector_x0) + 1
                     crop_header["SUBSTRT2"] = int(detector_y0) + 1
+                source_slice = (
+                    slice(source_y0, source_y0 + crop_image.shape[0]),
+                    slice(source_x0, source_x0 + crop_image.shape[1]),
+                )
+                err, var_poisson, var_rnoise, var_flat, contamination_prior = (
+                    raw_noise_inputs[exposure_path]
+                )
+                amplifier_columns = torch.clamp(
+                    (
+                        torch.arange(crop_image.shape[1], dtype=torch.int64)
+                        + int(detector_x0)
+                    )
+                    // 512,
+                    min=0,
+                    max=3,
+                )
                 field_observations.append(
                     FieldObservation(
                         image=torch.from_numpy(crop_image),
                         header=crop_header,
                         weight=torch.from_numpy(crop_weight),
                         mask=torch.from_numpy(crop_mask),
+                        err=torch.from_numpy(err[source_slice].copy()),
+                        var_poisson=(
+                            None
+                            if var_poisson is None
+                            else torch.from_numpy(var_poisson[source_slice].copy())
+                        ),
+                        var_rnoise=(
+                            None
+                            if var_rnoise is None
+                            else torch.from_numpy(var_rnoise[source_slice].copy())
+                        ),
+                        var_flat=(
+                            None
+                            if var_flat is None
+                            else torch.from_numpy(var_flat[source_slice].copy())
+                        ),
+                        contamination_prior=torch.from_numpy(
+                            contamination_prior[source_slice].copy()
+                        ),
+                        amplifier_index=amplifier_columns[None, :].expand(
+                            crop_image.shape[0], crop_image.shape[1]
+                        ),
                         detector_x0_pix=detector_x0,
                         detector_y0_pix=detector_y0,
                         psf_sigma_pix=_fitted_gaussian_psf_sigma_pix(
@@ -1918,6 +1985,28 @@ def main() -> int:
                     mask=observation.mask.clone()
                     if observation.mask is not None
                     else None,
+                    err=(
+                        observation.err / intensity_scale
+                        if observation.err is not None
+                        else None
+                    ),
+                    var_poisson=(
+                        observation.var_poisson / (intensity_scale * intensity_scale)
+                        if observation.var_poisson is not None
+                        else None
+                    ),
+                    var_rnoise=(
+                        observation.var_rnoise / (intensity_scale * intensity_scale)
+                        if observation.var_rnoise is not None
+                        else None
+                    ),
+                    var_flat=(
+                        observation.var_flat / (intensity_scale * intensity_scale)
+                        if observation.var_flat is not None
+                        else None
+                    ),
+                    contamination_prior=observation.contamination_prior,
+                    amplifier_index=observation.amplifier_index,
                     wavelength=observation.wavelength,
                     spectral_min=observation.spectral_min,
                     spectral_max=observation.spectral_max,
@@ -1931,6 +2020,7 @@ def main() -> int:
                     spectral_quantity=observation.spectral_quantity,
                     detector_x0_pix=observation.detector_x0_pix,
                     detector_y0_pix=observation.detector_y0_pix,
+                    detector_to_sky=observation.detector_to_sky,
                 )
             )
 

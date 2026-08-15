@@ -14,7 +14,7 @@ from torch.nn import functional as F
 from .adaptive_axes import AdaptiveSpatioSpectralTemporalEncoder
 from .background import ConditionedBackgroundField
 from .bundle import ObservationOperatorBundle
-from .learned_kernel import ConditionedKernelPSF
+from .learned_kernel import ConditionedKernelPSF, ExtendedResidualKernelPSF
 
 FieldTrainingStage = Literal["scene", "background", "psf", "joint"]
 
@@ -123,7 +123,7 @@ def registered_image_stamps(
 class PSFCalibrationTerm:
     """Anchor a conditioned PSF to measured normalized effective kernels."""
 
-    model: ConditionedKernelPSF
+    model: ConditionedKernelPSF | ExtendedResidualKernelPSF
     detector_x: Tensor
     detector_y: Tensor
     wavelength: Tensor
@@ -135,8 +135,10 @@ class PSFCalibrationTerm:
     name: str = "psf"
 
     def __post_init__(self) -> None:
-        if not isinstance(self.model, ConditionedKernelPSF):
-            raise TypeError("PSFCalibrationTerm requires ConditionedKernelPSF")
+        if not isinstance(
+            self.model, (ConditionedKernelPSF, ExtendedResidualKernelPSF)
+        ):
+            raise TypeError("PSFCalibrationTerm requires a conditioned kernel PSF")
         count = int(torch.as_tensor(self.detector_x).numel())
         self.detector_x = _as_vector(self.detector_x, name="detector_x")
         self.detector_y = _as_vector(
@@ -182,11 +184,7 @@ class PSFCalibrationTerm:
             self.wavelength.to(device=parameter.device),
             self.time_mjd.to(device=parameter.device),
         ]
-        mixture = self.model.mixture_weights(*coordinates).movedim(0, -1)
-        basis = self.model.kernel_basis.basis_kernels().to(
-            device=parameter.device, dtype=parameter.dtype
-        )
-        return torch.einsum("nb,bhw->nhw", mixture, basis)
+        return self.model.effective_kernels(*coordinates)
 
     def raw_loss(self) -> Tensor:
         predicted = self.predicted_kernels()
@@ -494,11 +492,7 @@ def operator_calibration_identifiability_report(
             term.time_mjd.to(device=parameter.device).detach().requires_grad_(),
         ]
         if isinstance(term, PSFCalibrationTerm):
-            mixture = term.model.mixture_weights(*coordinates).movedim(0, -1)
-            basis = term.model.kernel_basis.basis_kernels().to(
-                device=parameter.device, dtype=parameter.dtype
-            )
-            output = torch.einsum("nb,bhw->nhw", mixture, basis)
+            output = term.model.effective_kernels(*coordinates)
             effective_probes = probes
             method = "hutchinson_rademacher"
         else:
@@ -656,7 +650,9 @@ def operator_calibration_validation_pruning_report(
 
 
 def apply_operator_calibration_pruning(
-    model: ConditionedKernelPSF | ConditionedBackgroundField,
+    model: ConditionedKernelPSF
+    | ExtendedResidualKernelPSF
+    | ConditionedBackgroundField,
     report: Mapping[str, object],
 ) -> dict[str, object]:
     """Apply a validation-selected Fourier pruning report to a fitted model."""

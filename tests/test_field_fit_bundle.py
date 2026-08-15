@@ -11,6 +11,12 @@ from torchsky.map import (
     FieldObservation,
     PSFSpec,
     fit_field_model,
+    fit_structured_noise_crossfit,
+)
+from torchsky.map.operators import (
+    ObservationOperatorBundle,
+    StructuredDetectorNoise,
+    StructuredNoiseOp,
 )
 
 
@@ -219,3 +225,72 @@ def test_fit_field_model_returns_merged_operator_bundle() -> None:
         "mask_weight": "explicit_mask_weight",
         "noise": "explicit_noise",
     }
+
+
+def test_fit_field_model_uses_full_exposure_structured_noise_likelihood() -> None:
+    image = torch.full((8, 12), 2.0, dtype=torch.float32)
+    image += torch.linspace(-0.2, 0.2, 8)[:, None]
+    image[3, 7] = 20.0
+    observation = FieldObservation(
+        image=image,
+        header=_tan_header(h=8, w=12),
+        err=torch.ones_like(image),
+        contamination_prior=torch.where(
+            torch.arange(8)[:, None].eq(3) & torch.arange(12)[None, :].eq(7),
+            torch.tensor(0.9),
+            torch.tensor(0.01),
+        ),
+        wavelength=5000.0,
+        spectral_min=4500.0,
+        spectral_max=5500.0,
+    )
+    noise = StructuredDetectorNoise(num_amplifiers=4)
+    initial_floor = noise.variance_calibration.raw_variance_floor.detach().clone()
+    bundle = ObservationOperatorBundle(noise=StructuredNoiseOp(noise, frozen=True))
+
+    result = fit_field_model(
+        [observation],
+        _BiasModel(),
+        observation_operator_bundles=[bundle],
+        loss_kind="structured_nll",
+        steps=20,
+        lr=0.05,
+    )
+
+    assert result.final_loss < result.initial_loss
+    torch.testing.assert_close(
+        noise.variance_calibration.raw_variance_floor, initial_floor
+    )
+
+
+def test_structured_likelihood_rejects_pixel_subsampling() -> None:
+    observation = _pose_api_observation()
+    observation.err = torch.ones_like(observation.image)
+    bundle = ObservationOperatorBundle(
+        noise=StructuredNoiseOp(StructuredDetectorNoise(), frozen=True)
+    )
+    with pytest.raises(ValueError, match="full native exposures"):
+        fit_field_model(
+            [observation],
+            _BiasModel(),
+            observation_operator_bundles=[bundle],
+            loss_kind="structured_nll",
+            pixel_samples_per_observation=8,
+            steps=1,
+        )
+
+
+def test_structured_noise_crossfit_calibrates_then_freezes_models() -> None:
+    observation = _pose_api_observation()
+    observation.image = torch.randn_like(observation.image)
+    observation.err = torch.ones_like(observation.image)
+    models, losses = fit_structured_noise_crossfit(
+        [observation],
+        [torch.zeros_like(observation.image)],
+        steps=3,
+        lr=1.0e-2,
+    )
+
+    assert len(models) == len(losses) == 1
+    assert torch.isfinite(torch.tensor(losses)).all()
+    assert not any(parameter.requires_grad for parameter in models[0].parameters())

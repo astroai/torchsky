@@ -108,6 +108,12 @@ def scale_observation_for_rest_frame_scene(
         header=dict(observation.header),
         weight=observation.weight,
         mask=observation.mask,
+        err=observation.err,
+        var_poisson=observation.var_poisson,
+        var_rnoise=observation.var_rnoise,
+        var_flat=observation.var_flat,
+        contamination_prior=observation.contamination_prior,
+        amplifier_index=observation.amplifier_index,
         wavelength=(
             None
             if observation.wavelength is None
@@ -129,9 +135,15 @@ def scale_observation_for_rest_frame_scene(
         transmission_throughput=ttt,
         psf_sigma_pix=float(observation.psf_sigma_pix),
         psf_spec=observation.psf_spec,
+        sky_background=observation.sky_background,
+        instrument_background=observation.instrument_background,
+        detector_background=observation.detector_background,
         background_offset=float(observation.background_offset),
         band_name=observation.band_name,
         spectral_quantity=observation.spectral_quantity,
+        detector_x0_pix=float(observation.detector_x0_pix),
+        detector_y0_pix=float(observation.detector_y0_pix),
+        detector_to_sky=observation.detector_to_sky,
     )
 
 

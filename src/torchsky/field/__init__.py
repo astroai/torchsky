@@ -19,6 +19,7 @@ from ..map.field.core import (
     ConditionedSpectralField as ConditionedSpectral,
     FieldComponentDecomposition,
     FourierMLPField as FourierMLP,
+    FoamInitializedINRField as FoamInitializedINR,
     GaussianBasisField as GaussianBasis,
     HashGridConditionedField as HashGridConditioned,
     HashGridMLPField as HashGridMLP,
@@ -74,6 +75,7 @@ from ..map.field.quality import (
 from ..map.field.training import (
     fit_field_component_decomposition as fit_component_decomposition,
     fit_field_model as fit,
+    fit_structured_noise_crossfit as fit_noise_crossfit,
 )
 from ..map.field.observation_builders import (
     field_observations_from_bin_centers,
@@ -244,6 +246,7 @@ __all__ = [
     "FieldModelKind",
     "FieldModelPreset",
     "FieldNoisePretrainKind",
+    "FoamInitializedINR",
     "FieldObservationSampling",
     "FieldSpectralQuantity",
     "FieldSpectralSampling",
@@ -292,6 +295,7 @@ __all__ = [
     "field_observations_from_bin_edges",
     "field_observations_from_ifu_cube",
     "fit",
+    "fit_noise_crossfit",
     "fit_component_decomposition",
     "get_field_model_preset",
     "ifu_cube_spectral_to_leading",

@@ -269,6 +269,24 @@ def _scaled_field_observation(
             else None
         ),
         mask=observation.mask.clone() if observation.mask is not None else None,
+        err=(observation.err / scale if observation.err is not None else None),
+        var_poisson=(
+            observation.var_poisson / (scale * scale)
+            if observation.var_poisson is not None
+            else None
+        ),
+        var_rnoise=(
+            observation.var_rnoise / (scale * scale)
+            if observation.var_rnoise is not None
+            else None
+        ),
+        var_flat=(
+            observation.var_flat / (scale * scale)
+            if observation.var_flat is not None
+            else None
+        ),
+        contamination_prior=observation.contamination_prior,
+        amplifier_index=observation.amplifier_index,
         wavelength=observation.wavelength,
         spectral_min=observation.spectral_min,
         spectral_max=observation.spectral_max,
@@ -282,6 +300,7 @@ def _scaled_field_observation(
         spectral_quantity=observation.spectral_quantity,
         detector_x0_pix=observation.detector_x0_pix,
         detector_y0_pix=observation.detector_y0_pix,
+        detector_to_sky=observation.detector_to_sky,
     )
 
 

@@ -8,6 +8,7 @@ import torch
 from torchsky.map.field import (
     FieldDomain,
     FieldObservation,
+    FoamInitializedINRField,
     ForwardContext,
     SpectralPowerFoam,
     SpectralPowerFoamField,
@@ -806,6 +807,44 @@ def test_spectral_power_foam_field_reuses_smooth_and_exact_spectral_basis() -> N
         response,
     )
     torch.testing.assert_close(exact, expected_exact)
+
+
+def test_foam_initialized_inr_is_positive_exact_and_zero_initialized() -> None:
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    foam = SpectralPowerFoamField(
+        domain,
+        sites=torch.tensor([[0.0, 0.0]], dtype=torch.float64),
+        radii=torch.tensor([2.0], dtype=torch.float64),
+        cell_coefficients=torch.tensor([[2.0, 0.0]], dtype=torch.float64),
+        temperature_start=4.0,
+        temperature_end=4.0,
+    )
+    model = make_field_model(
+        "foam_initialized_inr",
+        domain,
+        foam=foam,
+        hidden_dim=8,
+        hidden_layers=2,
+    )
+    assert isinstance(model, FoamInitializedINRField)
+    ra = torch.tensor([9.99, 10.0, 10.01], dtype=torch.float64)
+    dec = torch.tensor([20.01, 20.0, 19.99], dtype=torch.float64)
+    wavelength = torch.tensor([1.5, 2.0, 2.5], dtype=torch.float64)
+    expected = foam(ra, dec, wavelength).clamp_min(model.intensity_floor)
+    actual = model(ra, dec, wavelength)
+
+    torch.testing.assert_close(actual, expected.to(dtype=actual.dtype))
+    assert bool((actual > 0).all())
+    assert not any(parameter.requires_grad for parameter in model.reference_foam.parameters())
+    actual.sum().backward()
+    assert model.residual_output.weight.grad is not None
+    assert not torch.all(model.residual_output.weight.grad == 0)
 
 
 def test_spectral_power_foam_field_uses_common_bandpass_psf_render_path() -> None:
