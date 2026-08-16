@@ -130,6 +130,10 @@ case "${mode}" in
     pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
       python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'"
     pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python -m pip install astropy
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python -m pip install healpy || true
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
       pytest \
       tests/test_healpix_primitives.py \
       tests/test_healpix_parity.py \
@@ -139,10 +143,6 @@ case "${mode}" in
       tests/test_wcs_parity.py \
       -q --tb=line -k cuda \
       --junitxml="${artifact_root}/cuda_pytest.xml"
-    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
-      python -m pip install astropy
-    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
-      python -m pip install healpy || true
     record_versions cuda-bench
     pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
       python "${source_root}/benchmarks/bench_all.py" \

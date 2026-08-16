@@ -9,7 +9,7 @@ def test_canfar_wcs_sphere_runner_contract() -> None:
     assert "wcs-sphere-acceptance-full" in runner
     assert "CONTAINER_IMAGE must name an AstroAI image" in runner
     assert "unknown mode" in runner
-    assert "-k cuda" in runner
+    assert runner.index("python -m pip install astropy") < runner.index("-k cuda")
     assert "--wcs-device cuda" in runner
     assert "vos:sfabbro/torchsky-runs" in runner
     assert "bench_sphere_spectral.py" in runner
