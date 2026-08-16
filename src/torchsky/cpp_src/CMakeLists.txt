@@ -183,6 +183,12 @@ set(SOURCES
 
 # Create python binding module
 nanobind_add_module(_cpp ${SOURCES})
+set_source_files_properties(
+    bindings.cpp
+    PROPERTIES
+        OBJECT_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/healpix.cpp;${CMAKE_CURRENT_SOURCE_DIR}/geom.cpp;${CMAKE_CURRENT_SOURCE_DIR}/wcs.cpp"
+)
 
 # Link libraries
 target_link_libraries(_cpp PRIVATE ${TORCH_LIBRARIES})
@@ -216,6 +222,10 @@ endif()
 target_compile_definitions(_cpp PRIVATE VERSION_INFO="")
 target_compile_definitions(_cpp PRIVATE TORCHSKY_TORCH_ABI="2.10")
 target_compile_features(_cpp PRIVATE cxx_std_17)
+
+if(APPLE)
+    target_link_libraries(_cpp PRIVATE "-framework Accelerate")
+endif()
 
 
 # Install the compiled module

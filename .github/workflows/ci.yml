@@ -85,6 +85,31 @@ jobs:
       - name: Run full test suite
         run: pixi run -e test -- pytest -n auto -v --tb=short --ignore-glob="tests/test_map_*.py"
 
+  sphere-spectral:
+    name: Sphere spectral (healpy)
+    needs: pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - uses: prefix-dev/setup-pixi@v0.8.0
+        with:
+          pixi-version: latest
+
+      - name: Install sphere-bench environment
+        run: pixi install --frozen -e sphere-bench
+
+      - name: Build editable torchsky (C++ extension)
+        run: pixi run -e sphere-bench -- pip install -e . --no-build-isolation
+
+      - name: Spin SHT parity vs healpy
+        run: pixi run -e sphere-bench -- pytest -n auto -v --tb=short tests/test_sphere_spectral.py tests/test_healpix_spectral.py tests/test_synalm_parity.py
+
   map-mosaic-bench:
     name: Map mosaic (${{ matrix.shard }})
     runs-on: ubuntu-latest

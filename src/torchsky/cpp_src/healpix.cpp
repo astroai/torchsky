@@ -3,13 +3,25 @@
 #include <atomic>
 #include <cmath>
 #include <complex>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <numeric>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 #include <mutex>
+#include <map>
 #include <unordered_map>
+
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
+#if defined(__APPLE__)
+#include <Accelerate/Accelerate.h>
+#endif
 
 #include <ATen/Parallel.h>
 #include <ATen/ops/fft_fft.h>
@@ -61,6 +73,10 @@ inline int64_t floor_div2(int64_t v) {
 
 inline int64_t alm_size(int64_t lmax, int64_t mmax) {
     return (mmax + 1) * (lmax + 1) - (mmax * (mmax + 1)) / 2;
+}
+
+inline int64_t alm_packed_index(int64_t l, int64_t m, int64_t lmax) {
+    return m * (lmax + 1) - (m * (m - 1)) / 2 + (l - m);
 }
 
 inline int64_t ilog2_pow2(int64_t x) {
@@ -439,6 +455,15 @@ inline bool spin_mlim_prune_enabled() {
         return env[0] != '0';
     }();
     return enabled;
+}
+
+// Read at call time so tests can toggle without restarting the process.
+inline bool spin_ishioka_enabled() {
+    const char* env = std::getenv("TORCHSKY_SPIN_ISHIOKA");
+    if (env == nullptr || env[0] == '\0') {
+        return true;
+    }
+    return env[0] != '0';
 }
 
 inline int64_t sharp_mlim_estimate(int64_t lmax, int64_t spin_abs, double sth, double cth) {
@@ -1484,23 +1509,240 @@ torch::Tensor healpix_ring_fourier_modes_cpu(
     return out;
 }
 
+template <typename Fn>
+static void parallel_m_ranges(int64_t mmax, Fn&& fn);
+
+static const std::vector<std::complex<double>>& dft_twiddles(int n, int sign) {
+    // thread_local: polar FFTs run on SpinMPool workers; a shared mutex map would contend.
+    thread_local std::map<uint64_t, std::vector<std::complex<double>>> cache;
+    const uint64_t key =
+        (static_cast<uint64_t>(static_cast<uint32_t>(n)) << 1)
+        | static_cast<uint64_t>(sign < 0 ? 0 : 1);
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+        return it->second;
+    }
+    std::vector<std::complex<double>> w(static_cast<size_t>(n));
+    const double ang0 = static_cast<double>(sign) * 2.0 * PI / static_cast<double>(n);
+    for (int j = 0; j < n; ++j) {
+        const double th = ang0 * static_cast<double>(j);
+        w[static_cast<size_t>(j)] = {std::cos(th), std::sin(th)};
+    }
+    return cache.emplace(key, std::move(w)).first->second;
+}
+
+static void fft_pow2_inplace(std::complex<double>* a, int n, int sign) {
+#if defined(__APPLE__)
+    int log2n = 0;
+    for (int t = n; t > 1; t >>= 1) {
+        ++log2n;
+    }
+    static std::mutex setup_mu;
+    static FFTSetupD setups[32] = {};
+    FFTSetupD setup = nullptr;
+    {
+        if (log2n > 0 && log2n < 32) {
+            setup = setups[log2n];
+        }
+        if (setup == nullptr && log2n > 0 && log2n < 32) {
+            std::lock_guard<std::mutex> lock(setup_mu);
+            if (setups[log2n] == nullptr) {
+                setups[log2n] = vDSP_create_fftsetupD(
+                    static_cast<vDSP_Length>(log2n), kFFTRadix2
+                );
+            }
+            setup = setups[log2n];
+        }
+    }
+    if (setup != nullptr && n >= 32) {
+        thread_local std::vector<double> re;
+        thread_local std::vector<double> im;
+        if (static_cast<int>(re.size()) < n) {
+            re.resize(static_cast<size_t>(n));
+            im.resize(static_cast<size_t>(n));
+        }
+        DSPDoubleSplitComplex split{re.data(), im.data()};
+        vDSP_ctozD(
+            reinterpret_cast<const DSPDoubleComplex*>(a),
+            2,
+            &split,
+            1,
+            static_cast<vDSP_Length>(n)
+        );
+        vDSP_fft_zipD(
+            setup,
+            &split,
+            1,
+            static_cast<vDSP_Length>(log2n),
+            sign < 0 ? FFT_FORWARD : FFT_INVERSE
+        );
+        vDSP_ztocD(
+            &split,
+            1,
+            reinterpret_cast<DSPDoubleComplex*>(a),
+            2,
+            static_cast<vDSP_Length>(n)
+        );
+        return;
+    }
+#endif
+    for (int i = 1, j = 0; i < n; ++i) {
+        int bit = n >> 1;
+        for (; j & bit; bit >>= 1) {
+            j ^= bit;
+        }
+        j ^= bit;
+        if (i < j) {
+            std::swap(a[i], a[j]);
+        }
+    }
+    for (int len = 2; len <= n; len <<= 1) {
+        const auto& wtab = dft_twiddles(len, sign);
+        const int h = len >> 1;
+        for (int i = 0; i < n; i += len) {
+            for (int j = 0; j < h; ++j) {
+                const std::complex<double> u = a[i + j];
+                const std::complex<double> v = a[i + j + h] * wtab[static_cast<size_t>(j)];
+                a[i + j] = u + v;
+                a[i + j + h] = u - v;
+            }
+        }
+    }
+}
+
+static void fft_bluestein(
+    const std::complex<double>* in,
+    int n,
+    int in_stride,
+    std::complex<double>* out,
+    int sign
+) {
+    int M = 1;
+    while (M < 2 * n - 1) {
+        M <<= 1;
+    }
+    const uint64_t key =
+        (static_cast<uint64_t>(static_cast<uint32_t>(n)) << 1)
+        | static_cast<uint64_t>(sign < 0 ? 0 : 1);
+    thread_local std::map<uint64_t, std::vector<std::complex<double>>> chirp_cache;
+    thread_local std::map<uint64_t, std::vector<std::complex<double>>> kernel_cache;
+    thread_local std::vector<std::complex<double>> scratch;
+
+    auto cit = chirp_cache.find(key);
+    if (cit == chirp_cache.end()) {
+        std::vector<std::complex<double>> chirp(static_cast<size_t>(n));
+        std::vector<std::complex<double>> cpad(static_cast<size_t>(M), {0.0, 0.0});
+        for (int k = 0; k < n; ++k) {
+            const double th = static_cast<double>(sign) * PI * static_cast<double>(k)
+                * static_cast<double>(k) / static_cast<double>(n);
+            chirp[static_cast<size_t>(k)] = {std::cos(th), std::sin(th)};
+        }
+        cpad[0] = std::conj(chirp[0]);
+        for (int k = 1; k < n; ++k) {
+            const auto ck = std::conj(chirp[static_cast<size_t>(k)]);
+            cpad[static_cast<size_t>(k)] = ck;
+            cpad[static_cast<size_t>(M - k)] = ck;
+        }
+        fft_pow2_inplace(cpad.data(), M, -1);
+        cit = chirp_cache.emplace(key, std::move(chirp)).first;
+        kernel_cache.emplace(key, std::move(cpad));
+    }
+    const auto& chirp = cit->second;
+    const auto& C = kernel_cache.find(key)->second;
+
+    if (static_cast<int>(scratch.size()) < M) {
+        scratch.resize(static_cast<size_t>(M));
+    }
+    std::complex<double>* A = scratch.data();
+    std::fill(A, A + M, std::complex<double>(0.0, 0.0));
+    const std::complex<double>* p = in;
+    for (int j = 0; j < n; ++j) {
+        A[j] = (*p) * chirp[static_cast<size_t>(j)];
+        p += in_stride;
+    }
+    fft_pow2_inplace(A, M, -1);
+    for (int k = 0; k < M; ++k) {
+        A[k] *= C[static_cast<size_t>(k)];
+    }
+    fft_pow2_inplace(A, M, 1);
+    const double invM = 1.0 / static_cast<double>(M);
+    for (int k = 0; k < n; ++k) {
+        out[k] = A[k] * chirp[static_cast<size_t>(k)] * invM;
+    }
+}
+
+static void fft_outofplace(
+    const std::complex<double>* in,
+    int n,
+    int in_stride,
+    std::complex<double>* out,
+    int sign
+) {
+    if (n <= 1) {
+        if (n == 1) {
+            out[0] = in[0];
+        }
+        return;
+    }
+    if (in_stride == 1 && (n & (n - 1)) == 0) {
+        std::copy(in, in + n, out);
+        fft_pow2_inplace(out, n, sign);
+        return;
+    }
+    if ((n & 1) == 0) {
+        const int m = n / 2;
+        fft_outofplace(in, m, in_stride * 2, out, sign);
+        fft_outofplace(in + in_stride, m, in_stride * 2, out + m, sign);
+        const auto& w = dft_twiddles(n, sign);
+        for (int k = 0; k < m; ++k) {
+            const std::complex<double> u = out[k];
+            const std::complex<double> v = w[static_cast<size_t>(k)] * out[k + m];
+            out[k] = u + v;
+            out[k + m] = u - v;
+        }
+        return;
+    }
+    if (n > 15) {
+        fft_bluestein(in, n, in_stride, out, sign);
+        return;
+    }
+    const auto& w = dft_twiddles(n, sign);
+    for (int k = 0; k < n; ++k) {
+        double sr = 0.0;
+        double si = 0.0;
+        const std::complex<double>* p = in;
+        int wk = 0;
+        for (int j = 0; j < n; ++j) {
+            const auto z = *p;
+            const auto t = w[static_cast<size_t>(wk)];
+            sr += z.real() * t.real() - z.imag() * t.imag();
+            si += z.real() * t.imag() + z.imag() * t.real();
+            p += in_stride;
+            wk += k;
+            if (wk >= n) {
+                wk -= n;
+            }
+        }
+        out[k] = {sr, si};
+    }
+}
+
 torch::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
     const torch::Tensor& row,
     const torch::Tensor& starts,
     const torch::Tensor& lengths,
-    int64_t mmax
+    int64_t mmax,
+    const c10::complex<double>* phase_ptr = nullptr,
+    bool from_qu = false
 ) {
     if (!row.device().is_cpu() || !starts.device().is_cpu() || !lengths.device().is_cpu()) {
         throw std::runtime_error("healpix_ring_fourier_modes_spin_conj_cpu expects CPU tensors");
     }
-    if (row.scalar_type() != torch::kComplexDouble) {
-        throw std::runtime_error("healpix_ring_fourier_modes_spin_conj_cpu expects complex128 row");
-    }
     if (starts.scalar_type() != torch::kInt64 || lengths.scalar_type() != torch::kInt64) {
         throw std::runtime_error("healpix_ring_fourier_modes_spin_conj_cpu expects int64 starts/lengths");
     }
-    if (row.dim() != 1 || starts.dim() != 1 || lengths.dim() != 1) {
-        throw std::runtime_error("row must be rank-1; starts/lengths must be rank-1");
+    if (starts.dim() != 1 || lengths.dim() != 1) {
+        throw std::runtime_error("starts/lengths must be rank-1");
     }
     if (starts.numel() != lengths.numel()) {
         throw std::runtime_error("starts/lengths size mismatch");
@@ -1509,13 +1751,46 @@ torch::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
         throw std::runtime_error("mmax must be non-negative");
     }
 
-    const int64_t npix = row.size(0);
+    torch::Tensor row_c;
+    torch::Tensor q_c;
+    torch::Tensor u_c;
+    const std::complex<double>* row_ptr = nullptr;
+    const double* q_ptr = nullptr;
+    const double* u_ptr = nullptr;
+    int64_t npix = 0;
+    if (from_qu) {
+        if (row.dim() != 2 || row.size(0) != 2) {
+            throw std::runtime_error("healpix_ring_fourier_modes_spin_conj_cpu from_qu expects maps (2, npix)");
+        }
+        if (row.scalar_type() != torch::kDouble) {
+            throw std::runtime_error("healpix_ring_fourier_modes_spin_conj_cpu from_qu expects float64 maps");
+        }
+        q_c = row.select(0, 0).contiguous();
+        u_c = row.select(0, 1).contiguous();
+        q_ptr = q_c.data_ptr<double>();
+        u_ptr = u_c.data_ptr<double>();
+        npix = q_c.numel();
+        if (u_c.numel() != npix) {
+            throw std::runtime_error("healpix_ring_fourier_modes_spin_conj_cpu Q/U length mismatch");
+        }
+    } else {
+        if (row.scalar_type() != torch::kComplexDouble) {
+            throw std::runtime_error("healpix_ring_fourier_modes_spin_conj_cpu expects complex128 row");
+        }
+        if (row.dim() != 1) {
+            throw std::runtime_error("row must be rank-1; starts/lengths must be rank-1");
+        }
+        row_c = row.contiguous();
+        npix = row_c.size(0);
+        row_ptr = reinterpret_cast<const std::complex<double>*>(
+            row_c.data_ptr<c10::complex<double>>()
+        );
+    }
     const int64_t nrings = starts.numel();
     const int64_t mcount = mmax + 1;
     if (nrings == 0) {
         return torch::zeros({2, mcount, 0}, torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU));
     }
-    auto row_c = row.contiguous();
     auto starts_c = starts.contiguous();
     auto lengths_c = lengths.contiguous();
     const auto* starts_ptr = starts_c.data_ptr<int64_t>();
@@ -1527,8 +1802,15 @@ torch::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
     );
     auto out_plus = out.select(0, 0);
     auto out_minus = out.select(0, 1);
+    auto* plus_ptr = out_plus.data_ptr<c10::complex<double>>();
+    auto* minus_ptr = out_minus.data_ptr<c10::complex<double>>();
+    const auto cplx_opts = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
 
     int64_t ring = 0;
+    std::vector<int64_t> polar_r;
+    std::vector<int64_t> polar_pix0;
+    std::vector<int> polar_nph;
+    int max_polar_nph = 1;
     while (ring < nrings) {
         const int64_t run_start_ring = ring;
         const int64_t nph = lengths_ptr[ring];
@@ -1551,25 +1833,92 @@ torch::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
             ++ring;
         }
         const int64_t run_ring_count = ring - run_start_ring;
-
-        auto block = row_c.narrow(0, run_pix_start, run_ring_count * nph).view({run_ring_count, nph});
-        auto fft_block = at::fft_fft(block, std::nullopt, -1, std::nullopt);
-
-        torch::Tensor plus_sel;
-        torch::Tensor minus_sel;
-        if (nph > mmax) {
-            plus_sel = fft_block.narrow(1, 0, mcount);
-            const auto& idx_minus = g_ring_alias_idx_cache.minus(nph, mcount);
-            minus_sel = torch::conj(fft_block.index_select(1, idx_minus));
-        } else {
-            const auto& idx_both = g_ring_alias_idx_cache.both(nph, mcount);
-            auto both_sel = fft_block.index_select(1, idx_both);
-            plus_sel = both_sel.narrow(1, 0, mcount);
-            minus_sel = torch::conj(both_sel.narrow(1, mcount, mcount));
+        if (run_ring_count == 1) {
+            polar_r.push_back(run_start_ring);
+            polar_pix0.push_back(run_pix_start);
+            polar_nph.push_back(static_cast<int>(nph));
+            if (nph > max_polar_nph) {
+                max_polar_nph = static_cast<int>(nph);
+            }
+            continue;
         }
 
-        out_plus.narrow(1, run_start_ring, run_ring_count).copy_(plus_sel.transpose(0, 1));
-        out_minus.narrow(1, run_start_ring, run_ring_count).copy_(minus_sel.transpose(0, 1));
+        torch::Tensor fft_block;
+        if (row_ptr != nullptr) {
+            auto block = row_c.narrow(0, run_pix_start, run_ring_count * nph).view({run_ring_count, nph});
+            fft_block = at::fft_fft(block, std::nullopt, -1, std::nullopt).contiguous();
+        } else {
+            auto block = torch::empty({run_ring_count, nph}, cplx_opts);
+            auto* bp = reinterpret_cast<std::complex<double>*>(block.data_ptr<c10::complex<double>>());
+            const int64_t n = run_ring_count * nph;
+            for (int64_t j = 0; j < n; ++j) {
+                const int64_t p = run_pix_start + j;
+                bp[static_cast<size_t>(j)] = {q_ptr[p], u_ptr[p]};
+            }
+            fft_block = at::fft_fft(block, std::nullopt, -1, std::nullopt).contiguous();
+        }
+        const auto* fptr = fft_block.data_ptr<c10::complex<double>>();
+        for (int64_t ir = 0; ir < run_ring_count; ++ir) {
+            const int64_t r = run_start_ring + ir;
+            const auto* row_fft = fptr + ir * nph;
+            for (int64_t m = 0; m < mcount; ++m) {
+                const int64_t k = m % nph;
+                const int64_t kneg = (k == 0) ? 0 : (nph - k);
+                auto vp = row_fft[k];
+                auto vm = row_fft[kneg];
+                vm = c10::complex<double>(vm.real(), -vm.imag());
+                if (phase_ptr != nullptr) {
+                    const auto ph = phase_ptr[m * nrings + r];
+                    vp = vp * ph;
+                    vm = vm * ph;
+                }
+                plus_ptr[m * nrings + r] = vp;
+                minus_ptr[m * nrings + r] = vm;
+            }
+        }
+    }
+
+    const int64_t npolar = static_cast<int64_t>(polar_r.size());
+    if (npolar > 0) {
+        const int64_t* polar_r_ptr = polar_r.data();
+        const int64_t* polar_pix0_ptr = polar_pix0.data();
+        const int* polar_nph_ptr = polar_nph.data();
+        const std::complex<double>* row_ptr_cap = row_ptr;
+        const double* q_ptr_cap = q_ptr;
+        const double* u_ptr_cap = u_ptr;
+        parallel_m_ranges(npolar - 1, [&](int64_t i0, int64_t stride) {
+            std::vector<std::complex<double>> spec(static_cast<size_t>(max_polar_nph));
+            std::vector<std::complex<double>> packed(static_cast<size_t>(max_polar_nph));
+            for (int64_t i = i0; i < npolar; i += stride) {
+                const int nph = polar_nph_ptr[static_cast<size_t>(i)];
+                const int64_t pix0 = polar_pix0_ptr[static_cast<size_t>(i)];
+                if (row_ptr_cap != nullptr) {
+                    fft_outofplace(row_ptr_cap + pix0, nph, 1, spec.data(), -1);
+                } else {
+                    for (int j = 0; j < nph; ++j) {
+                        const int64_t p = pix0 + j;
+                        packed[static_cast<size_t>(j)] = {q_ptr_cap[p], u_ptr_cap[p]};
+                    }
+                    fft_outofplace(packed.data(), nph, 1, spec.data(), -1);
+                }
+                const int64_t r = polar_r_ptr[static_cast<size_t>(i)];
+                for (int64_t m = 0; m < mcount; ++m) {
+                    const int k = static_cast<int>(m % nph);
+                    const int kneg = (k == 0) ? 0 : (nph - k);
+                    auto vp = spec[static_cast<size_t>(k)];
+                    auto vm = spec[static_cast<size_t>(kneg)];
+                    vm = std::conj(vm);
+                    if (phase_ptr != nullptr) {
+                        const auto ph = phase_ptr[m * nrings + r];
+                        const std::complex<double> w(ph.real(), ph.imag());
+                        vp *= w;
+                        vm *= w;
+                    }
+                    plus_ptr[m * nrings + r] = c10::complex<double>(vp.real(), vp.imag());
+                    minus_ptr[m * nrings + r] = c10::complex<double>(vm.real(), vm.imag());
+                }
+            }
+        });
     }
 
     return out;
@@ -1629,8 +1978,18 @@ torch::Tensor healpix_ring_fourier_synthesis_cpu(
     auto out = torch::zeros({nrows, npix}, torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU));
     const auto cplx_opts = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
     const int64_t mmax = mcount - 1;
+    const auto* s_ptr = reinterpret_cast<const std::complex<double>*>(
+        s_batched.data_ptr<c10::complex<double>>()
+    );
+    auto* out_ptr = reinterpret_cast<std::complex<double>*>(
+        out.data_ptr<c10::complex<double>>()
+    );
 
     int64_t ring = 0;
+    std::vector<int64_t> polar_r;
+    std::vector<int64_t> polar_pix0;
+    std::vector<int> polar_nph;
+    int max_polar_nph = 1;
     while (ring < nrings) {
         const int64_t run_start_ring = ring;
         const int64_t nph = lengths_ptr[ring];
@@ -1653,23 +2012,290 @@ torch::Tensor healpix_ring_fourier_synthesis_cpu(
             ++ring;
         }
         const int64_t run_ring_count = ring - run_start_ring;
-
-        auto s_group = s_batched.narrow(2, run_start_ring, run_ring_count).permute({0, 2, 1});
-        torch::Tensor map_vals;
-        if (nph > mmax) {
-            map_vals = at::fft_ifft(s_group * static_cast<double>(nph), nph, -1, std::nullopt);
-        } else {
-            auto s_fold = torch::zeros({nrows, run_ring_count, nph}, cplx_opts);
-            const auto& idx = g_ring_alias_idx_cache.plus(nph, mcount);
-            s_fold.index_add_(2, idx, s_group);
-            map_vals = at::fft_ifft(s_fold * static_cast<double>(nph), std::nullopt, -1, std::nullopt);
+        if (run_ring_count == 1) {
+            polar_r.push_back(run_start_ring);
+            polar_pix0.push_back(run_pix_start);
+            polar_nph.push_back(static_cast<int>(nph));
+            if (nph > max_polar_nph) {
+                max_polar_nph = static_cast<int>(nph);
+            }
+            continue;
         }
 
-        out.narrow(1, run_pix_start, run_ring_count * nph).copy_(map_vals.reshape({nrows, run_ring_count * nph}));
+        auto spec = torch::zeros({nrows, run_ring_count, nph}, cplx_opts);
+        auto* spec_ptr = spec.data_ptr<c10::complex<double>>();
+        for (int64_t row = 0; row < nrows; ++row) {
+            const std::complex<double>* s_row = s_ptr + row * mcount * nrings;
+            for (int64_t ir = 0; ir < run_ring_count; ++ir) {
+                const int64_t r = run_start_ring + ir;
+                c10::complex<double>* dst =
+                    spec_ptr + ((row * run_ring_count + ir) * nph);
+                if (nph > mmax) {
+                    for (int64_t m = 0; m < mcount; ++m) {
+                        const auto z = s_row[m * nrings + r];
+                        dst[m] = c10::complex<double>(z.real(), z.imag());
+                    }
+                } else {
+                    for (int64_t m = 0; m < mcount; ++m) {
+                        const auto z = s_row[m * nrings + r];
+                        dst[m % nph] += c10::complex<double>(z.real(), z.imag());
+                    }
+                }
+            }
+        }
+        auto map_vals = at::fft_ifft(spec, std::nullopt, -1, std::nullopt);
+        map_vals.mul_(static_cast<double>(nph));
+        out.narrow(1, run_pix_start, run_ring_count * nph).copy_(
+            map_vals.reshape({nrows, run_ring_count * nph})
+        );
+    }
+
+    const int64_t npolar = static_cast<int64_t>(polar_r.size());
+    if (npolar > 0) {
+        const int64_t* polar_r_ptr = polar_r.data();
+        const int64_t* polar_pix0_ptr = polar_pix0.data();
+        const int* polar_nph_ptr = polar_nph.data();
+        parallel_m_ranges(npolar - 1, [&](int64_t i0, int64_t stride) {
+            std::vector<std::complex<double>> spec(static_cast<size_t>(max_polar_nph));
+            std::vector<std::complex<double>> pix(static_cast<size_t>(max_polar_nph));
+            for (int64_t i = i0; i < npolar; i += stride) {
+                const int64_t r = polar_r_ptr[static_cast<size_t>(i)];
+                const int64_t pix0 = polar_pix0_ptr[static_cast<size_t>(i)];
+                const int nph = polar_nph_ptr[static_cast<size_t>(i)];
+                for (int64_t row = 0; row < nrows; ++row) {
+                    const std::complex<double>* s_row = s_ptr + row * mcount * nrings;
+                    std::fill(spec.begin(), spec.begin() + nph, std::complex<double>(0.0, 0.0));
+                    if (nph > mmax) {
+                        for (int64_t m = 0; m < mcount; ++m) {
+                            spec[static_cast<size_t>(m)] = s_row[m * nrings + r];
+                        }
+                    } else {
+                        for (int64_t m = 0; m < mcount; ++m) {
+                            spec[static_cast<size_t>(m % nph)] += s_row[m * nrings + r];
+                        }
+                    }
+                    fft_outofplace(spec.data(), nph, 1, pix.data(), 1);
+                    std::complex<double>* dst = out_ptr + row * npix + pix0;
+                    std::copy(pix.data(), pix.data() + nph, dst);
+                }
+            }
+        });
     }
 
     if (squeeze_out) {
         return out.reshape({npix});
+    }
+    return out;
+}
+
+static inline void spin_qu_store_ring(
+    const std::complex<double>* __restrict__ a,
+    const std::complex<double>* __restrict__ b,
+    double* __restrict__ q_ptr,
+    double* __restrict__ u_ptr,
+    int64_t start,
+    int64_t nph,
+    std::complex<double> vp0,
+    std::complex<double> vm0,
+    int64_t mmax
+) {
+    const std::complex<double> vp0c(vp0.real(), -vp0.imag());
+    const std::complex<double> vm0c(vm0.real(), -vm0.imag());
+    if (mmax == 0) {
+        for (int64_t i = 0; i < nph; ++i) {
+            const auto aa = a[i];
+            const auto bb = b[i];
+            q_ptr[start + i] = -0.5 * (aa.real() + bb.real());
+            u_ptr[start + i] = -0.5 * (aa.imag() - bb.imag());
+        }
+        return;
+    }
+    for (int64_t i = 0; i < nph; ++i) {
+        const auto aa = a[i];
+        const auto bb = b[i];
+        const std::complex<double> bc(bb.real(), -bb.imag());
+        const std::complex<double> ac(aa.real(), -aa.imag());
+        const auto p_plus = aa + (bc - vm0c);
+        const auto p_minus = bb + (ac - vp0c);
+        q_ptr[start + i] = -0.5 * (p_plus.real() + p_minus.real());
+        u_ptr[start + i] = -0.5 * (p_plus.imag() - p_minus.imag());
+    }
+}
+
+static torch::Tensor healpix_spin_synthesize_qu_cpu(
+    const torch::Tensor& s_modes,
+    const torch::Tensor& starts,
+    const torch::Tensor& lengths,
+    torch::Tensor eq_spec,
+    int64_t eq_start,
+    int64_t n_eq,
+    int64_t nph_eq
+) {
+    auto starts_c = starts.contiguous();
+    auto lengths_c = lengths.contiguous();
+    const auto* starts_ptr = starts_c.data_ptr<int64_t>();
+    const auto* lengths_ptr = lengths_c.data_ptr<int64_t>();
+    const int64_t nrings = starts_c.numel();
+    const int64_t npix = starts_ptr[nrings - 1] + lengths_ptr[nrings - 1];
+    const int64_t mcount = s_modes.size(1);
+    const int64_t mmax = mcount - 1;
+    const auto* s_ptr = reinterpret_cast<const std::complex<double>*>(
+        s_modes.data_ptr<c10::complex<double>>()
+    );
+    const std::complex<double>* s0 = s_ptr;
+    const std::complex<double>* s1 = s_ptr + mcount * nrings;
+
+    auto out = torch::empty({2, npix}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+    auto* q_ptr = out.select(0, 0).data_ptr<double>();
+    auto* u_ptr = out.select(0, 1).data_ptr<double>();
+
+    if (n_eq > 0 && eq_spec.defined() && eq_spec.numel() > 0) {
+        auto map_vals = at::fft_ifft(eq_spec, std::nullopt, -1, std::nullopt);
+        map_vals.mul_(static_cast<double>(nph_eq));
+        auto map_c = map_vals.contiguous();
+        const auto* mp = reinterpret_cast<const std::complex<double>*>(
+            map_c.data_ptr<c10::complex<double>>()
+        );
+        const int64_t eq_pix0 = starts_ptr[eq_start];
+        for (int64_t ir = 0; ir < n_eq; ++ir) {
+            const int64_t r = eq_start + ir;
+            const int64_t pix0 = eq_pix0 + ir * nph_eq;
+            const auto vp0 = s0[r];
+            const auto vm0 = s1[r];
+            spin_qu_store_ring(
+                mp + ir * nph_eq,
+                mp + (n_eq + ir) * nph_eq,
+                q_ptr,
+                u_ptr,
+                pix0,
+                nph_eq,
+                vp0,
+                vm0,
+                mmax
+            );
+        }
+    }
+
+    int64_t ring = 0;
+    std::vector<int64_t> polar_r;
+    std::vector<int64_t> polar_pix0;
+    std::vector<int> polar_nph;
+    int max_polar_nph = 1;
+    while (ring < nrings) {
+        const int64_t run_start_ring = ring;
+        const int64_t nph = lengths_ptr[ring];
+        const int64_t run_pix_start = starts_ptr[ring];
+        int64_t pix_cursor = run_pix_start + nph;
+        ++ring;
+        while (ring < nrings && lengths_ptr[ring] == nph && starts_ptr[ring] == pix_cursor) {
+            pix_cursor += nph;
+            ++ring;
+        }
+        const int64_t run_ring_count = ring - run_start_ring;
+        if (run_ring_count == 1) {
+            polar_r.push_back(run_start_ring);
+            polar_pix0.push_back(run_pix_start);
+            polar_nph.push_back(static_cast<int>(nph));
+            if (nph > max_polar_nph) {
+                max_polar_nph = static_cast<int>(nph);
+            }
+        }
+    }
+
+    const int64_t npolar = static_cast<int64_t>(polar_r.size());
+    if (npolar > 0) {
+        parallel_m_ranges(npolar - 1, [&](int64_t i0, int64_t stride) {
+            std::vector<std::complex<double>> spec_p(static_cast<size_t>(max_polar_nph));
+            std::vector<std::complex<double>> spec_m(static_cast<size_t>(max_polar_nph));
+            std::vector<std::complex<double>> pix_p(static_cast<size_t>(max_polar_nph));
+            std::vector<std::complex<double>> pix_m(static_cast<size_t>(max_polar_nph));
+            for (int64_t i = i0; i < npolar; i += stride) {
+                const int64_t r = polar_r[static_cast<size_t>(i)];
+                const int64_t pix0 = polar_pix0[static_cast<size_t>(i)];
+                const int nph = polar_nph[static_cast<size_t>(i)];
+                std::fill(spec_p.begin(), spec_p.begin() + nph, std::complex<double>(0.0, 0.0));
+                std::fill(spec_m.begin(), spec_m.begin() + nph, std::complex<double>(0.0, 0.0));
+                if (nph > mmax) {
+                    for (int64_t m = 0; m < mcount; ++m) {
+                        spec_p[static_cast<size_t>(m)] = s0[m * nrings + r];
+                        spec_m[static_cast<size_t>(m)] = s1[m * nrings + r];
+                    }
+                } else {
+                    for (int64_t m = 0; m < mcount; ++m) {
+                        spec_p[static_cast<size_t>(m % nph)] += s0[m * nrings + r];
+                        spec_m[static_cast<size_t>(m % nph)] += s1[m * nrings + r];
+                    }
+                }
+                fft_outofplace(spec_p.data(), nph, 1, pix_p.data(), 1);
+                fft_outofplace(spec_m.data(), nph, 1, pix_m.data(), 1);
+                spin_qu_store_ring(
+                    pix_p.data(), pix_m.data(), q_ptr, u_ptr, pix0, nph, s0[r], s1[r], mmax
+                );
+            }
+        });
+    }
+    return out;
+}
+
+static torch::Tensor spin_qu_from_ifft_cpu(
+    const torch::Tensor& p_pm_pos,
+    const torch::Tensor& s_plus,
+    const torch::Tensor& s_minus,
+    const torch::Tensor& starts,
+    const torch::Tensor& lengths
+) {
+    auto p_plus_pos = p_pm_pos.select(0, 0).contiguous();
+    auto p_minus_pos = p_pm_pos.select(0, 1).contiguous();
+    auto starts_c = starts.contiguous();
+    auto lengths_c = lengths.contiguous();
+    const auto* starts_ptr = starts_c.data_ptr<int64_t>();
+    const auto* lengths_ptr = lengths_c.data_ptr<int64_t>();
+    const int64_t npix = p_plus_pos.size(0);
+    const int64_t nrings = starts_c.numel();
+    const int64_t mmax = s_plus.size(0) - 1;
+    const auto* sp_ptr = s_plus.data_ptr<c10::complex<double>>();
+    const auto* sm_ptr = s_minus.data_ptr<c10::complex<double>>();
+    const int64_t sp_r_stride = s_plus.stride(1);
+    const int64_t sm_r_stride = s_minus.stride(1);
+
+    auto out = torch::empty({2, npix}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+    const auto* p_plus_ptr = p_plus_pos.data_ptr<c10::complex<double>>();
+    const auto* p_minus_ptr = p_minus_pos.data_ptr<c10::complex<double>>();
+    auto* q_ptr = out.select(0, 0).data_ptr<double>();
+    auto* u_ptr = out.select(0, 1).data_ptr<double>();
+
+    for (int64_t r = 0; r < nrings; ++r) {
+        const int64_t start = starts_ptr[r];
+        const int64_t nph = lengths_ptr[r];
+        if (nph <= 0 || start < 0 || start + nph > npix) {
+            throw std::runtime_error("invalid ring layout in healpix_spin_ring_finalize_cpu");
+        }
+        const c10::complex<double> v_plus_m0 = sp_ptr[r * sp_r_stride];
+        const c10::complex<double> v_minus_m0 = sm_ptr[r * sm_r_stride];
+        const c10::complex<double> v_plus_m0_conj(v_plus_m0.real(), -v_plus_m0.imag());
+        const c10::complex<double> v_minus_m0_conj(v_minus_m0.real(), -v_minus_m0.imag());
+
+        if (mmax == 0) {
+            for (int64_t i = 0; i < nph; ++i) {
+                const int64_t p = start + i;
+                const c10::complex<double> a = p_plus_ptr[p];
+                const c10::complex<double> b = p_minus_ptr[p];
+                q_ptr[p] = -0.5 * (a.real() + b.real());
+                u_ptr[p] = -0.5 * (a.imag() - b.imag());
+            }
+            continue;
+        }
+        for (int64_t i = 0; i < nph; ++i) {
+            const int64_t p = start + i;
+            const c10::complex<double> a = p_plus_ptr[p];
+            const c10::complex<double> b = p_minus_ptr[p];
+            const c10::complex<double> b_conj(b.real(), -b.imag());
+            const c10::complex<double> a_conj(a.real(), -a.imag());
+            const c10::complex<double> p_plus = a + (b_conj - v_minus_m0_conj);
+            const c10::complex<double> p_minus = b + (a_conj - v_plus_m0_conj);
+            q_ptr[p] = -0.5 * (p_plus.real() + p_minus.real());
+            u_ptr[p] = -0.5 * (p_plus.imag() - p_minus.imag());
+        }
     }
     return out;
 }
@@ -1707,91 +2333,7 @@ torch::Tensor healpix_spin_ring_finalize_cpu(
     auto sm = s_minus.contiguous();
     auto s_stacked = torch::stack({sp, sm}, 0);
     auto p_pm_pos = healpix_ring_fourier_synthesis_cpu(s_stacked, starts, lengths);
-    auto p_plus_pos = p_pm_pos.select(0, 0).contiguous();
-    auto p_minus_pos = p_pm_pos.select(0, 1).contiguous();
-
-    auto starts_c = starts.contiguous();
-    auto lengths_c = lengths.contiguous();
-    const auto* starts_ptr = starts_c.data_ptr<int64_t>();
-    const auto* lengths_ptr = lengths_c.data_ptr<int64_t>();
-    const int64_t npix = p_plus_pos.size(0);
-    const int64_t mmax = sp.size(0) - 1;
-    auto sp_a = sp.accessor<c10::complex<double>, 2>();
-    auto sm_a = sm.accessor<c10::complex<double>, 2>();
-
-    // Small-map path: keep the old tensor expression path, which can be faster for tiny workloads.
-    if (npix < 4096) {
-        auto p_plus_m0 = torch::empty({npix}, torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU));
-        auto p_minus_m0 = torch::empty_like(p_plus_m0);
-        auto* p_plus_m0_ptr = p_plus_m0.data_ptr<c10::complex<double>>();
-        auto* p_minus_m0_ptr = p_minus_m0.data_ptr<c10::complex<double>>();
-        for (int64_t r = 0; r < nrings; ++r) {
-            const int64_t start = starts_ptr[r];
-            const int64_t nph = lengths_ptr[r];
-            if (nph <= 0 || start < 0 || start + nph > npix) {
-                throw std::runtime_error("invalid ring layout in healpix_spin_ring_finalize_cpu");
-            }
-            const c10::complex<double> v_plus = sp_a[0][r];
-            const c10::complex<double> v_minus = sm_a[0][r];
-            for (int64_t i = 0; i < nph; ++i) {
-                p_plus_m0_ptr[start + i] = v_plus;
-                p_minus_m0_ptr[start + i] = v_minus;
-            }
-        }
-
-        torch::Tensor p_plus;
-        torch::Tensor p_minus;
-        if (mmax == 0) {
-            p_plus = p_plus_pos;
-            p_minus = p_minus_pos;
-        } else {
-            p_plus = p_plus_pos + torch::conj(p_minus_pos - p_minus_m0);
-            p_minus = p_minus_pos + torch::conj(p_plus_pos - p_plus_m0);
-        }
-        auto q = -0.5 * torch::real(p_plus + p_minus);
-        auto u = -0.5 * torch::imag(p_plus - p_minus);
-        return torch::stack({q.to(torch::kFloat64), u.to(torch::kFloat64)}, 0);
-    }
-
-    auto out = torch::empty({2, npix}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-    const auto* p_plus_ptr = p_plus_pos.data_ptr<c10::complex<double>>();
-    const auto* p_minus_ptr = p_minus_pos.data_ptr<c10::complex<double>>();
-    auto* q_ptr = out.select(0, 0).data_ptr<double>();
-    auto* u_ptr = out.select(0, 1).data_ptr<double>();
-
-    for (int64_t r = 0; r < nrings; ++r) {
-        const int64_t start = starts_ptr[r];
-        const int64_t nph = lengths_ptr[r];
-        if (nph <= 0 || start < 0 || start + nph > npix) {
-            throw std::runtime_error("invalid ring layout in healpix_spin_ring_finalize_cpu");
-        }
-        const c10::complex<double> v_plus_m0 = sp_a[0][r];
-        const c10::complex<double> v_minus_m0 = sm_a[0][r];
-        const c10::complex<double> v_plus_m0_conj(v_plus_m0.real(), -v_plus_m0.imag());
-        const c10::complex<double> v_minus_m0_conj(v_minus_m0.real(), -v_minus_m0.imag());
-
-        for (int64_t i = 0; i < nph; ++i) {
-            const int64_t p = start + i;
-            const c10::complex<double> a = p_plus_ptr[p];
-            const c10::complex<double> b = p_minus_ptr[p];
-            c10::complex<double> p_plus;
-            c10::complex<double> p_minus;
-            if (mmax == 0) {
-                p_plus = a;
-                p_minus = b;
-            } else {
-                const c10::complex<double> b_conj(b.real(), -b.imag());
-                const c10::complex<double> a_conj(a.real(), -a.imag());
-                p_plus = a + (b_conj - v_minus_m0_conj);
-                p_minus = b + (a_conj - v_plus_m0_conj);
-            }
-            const c10::complex<double> sum = p_plus + p_minus;
-            const c10::complex<double> diff = p_plus - p_minus;
-            q_ptr[p] = -0.5 * sum.real();
-            u_ptr[p] = -0.5 * diff.imag();
-        }
-    }
-    return out;
+    return spin_qu_from_ifft_cpu(p_pm_pos, sp, sm, starts, lengths);
 }
 
 std::pair<torch::Tensor, torch::Tensor> healpix_spin_map2alm_from_basis_cpu(
@@ -2424,13 +2966,12 @@ static WignerDCoeffs get_wigner_d_coeffs(int64_t l, int64_t m, int64_t mp) {
     return res;
 }
 
-static inline double eval_wigner_d(const WignerDCoeffs& coeffs, double theta) {
+static inline double eval_wigner_d_half(
+    const WignerDCoeffs& coeffs, double sin_half, double cos_half
+) {
     if (coeffs.num_terms == 0) return 0.0;
 
-    double sin_half = std::sin(theta * 0.5);
-    double cos_half = std::cos(theta * 0.5);
     double sum = 0.0;
-
     for (int i = 0; i < coeffs.num_terms; ++i) {
         double term = coeffs.coeff[i];
         if (coeffs.p_ct[i] > 0) term *= fast_pow(cos_half, coeffs.p_ct[i]);
@@ -2438,6 +2979,540 @@ static inline double eval_wigner_d(const WignerDCoeffs& coeffs, double theta) {
         sum += term;
     }
     return sum;
+}
+
+static inline double eval_wigner_d(const WignerDCoeffs& coeffs, double theta) {
+    return eval_wigner_d_half(coeffs, std::sin(theta * 0.5), std::cos(theta * 0.5));
+}
+
+class SpinMPool {
+ public:
+  static SpinMPool& instance() {
+    static SpinMPool pool;
+    return pool;
+  }
+
+  template <typename Fn>
+  void parallel_m(int64_t mmax, Fn&& fn) {
+    const int64_t nm = mmax + 1;
+    if (nworkers_ <= 1 || nm <= 1) {
+      fn(0, 1);
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      job_ = [&fn](int64_t a, int64_t b) { fn(a, b); };
+      remaining_.store(nworkers_, std::memory_order_relaxed);
+      epoch_ += 1;
+    }
+    cv_start_.notify_all();
+    std::unique_lock<std::mutex> lock(mu_);
+    cv_done_.wait(lock, [&] { return remaining_.load(std::memory_order_acquire) == 0; });
+    job_ = nullptr;
+  }
+
+ private:
+  SpinMPool() {
+    nworkers_ = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    remaining_.store(0, std::memory_order_relaxed);
+    workers_.reserve(static_cast<size_t>(nworkers_));
+    for (int i = 0; i < nworkers_; ++i) {
+      workers_.emplace_back([this, i] { worker(i); });
+    }
+  }
+
+  ~SpinMPool() {
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      stop_ = true;
+    }
+    cv_start_.notify_all();
+    for (auto& t : workers_) {
+      t.join();
+    }
+  }
+
+  SpinMPool(const SpinMPool&) = delete;
+  SpinMPool& operator=(const SpinMPool&) = delete;
+
+  void worker(int id) {
+    int seen = 0;
+    for (;;) {
+      std::unique_lock<std::mutex> lock(mu_);
+      cv_start_.wait(lock, [&] { return stop_ || epoch_ != seen; });
+      if (stop_) {
+        return;
+      }
+      seen = epoch_;
+      const auto job = job_;
+      const int n = nworkers_;
+      lock.unlock();
+      if (job) {
+        job(id, n);
+      }
+      if (remaining_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        std::lock_guard<std::mutex> done(mu_);
+        cv_done_.notify_one();
+      }
+    }
+  }
+
+  std::mutex mu_;
+  std::condition_variable cv_start_;
+  std::condition_variable cv_done_;
+  std::vector<std::thread> workers_;
+  std::function<void(int64_t, int64_t)> job_;
+  int nworkers_ = 1;
+  int epoch_ = 0;
+  std::atomic<int> remaining_{0};
+  bool stop_ = false;
+};
+
+template <typename Fn>
+static void parallel_m_ranges(int64_t mmax, Fn&& fn) {
+  SpinMPool::instance().parallel_m(mmax, std::forward<Fn>(fn));
+}
+
+static inline void spin_active_pair_span(
+    const uint8_t* __restrict__ active,
+    int n_pairs,
+    int& pair0,
+    int& n_run
+) {
+    int i0 = 0;
+    while (i0 < n_pairs && active[i0] == 0) {
+        ++i0;
+    }
+    int i1 = n_pairs;
+    while (i1 > i0 && active[i1 - 1] == 0) {
+        --i1;
+    }
+    pair0 = i0;
+    n_run = i1 - i0;
+}
+
+static inline void spin_integrate_dot_rings(
+    int n_pairs,
+    double parity,
+    const double* __restrict__ d_p,
+    const double* __restrict__ d_m,
+    const double* __restrict__ Np_r,
+    const double* __restrict__ Np_i,
+    const double* __restrict__ Nm_r,
+    const double* __restrict__ Nm_i,
+    const double* __restrict__ Sp_r,
+    const double* __restrict__ Sp_i,
+    const double* __restrict__ Sm_r,
+    const double* __restrict__ Sm_i,
+    double& r_p,
+    double& i_p,
+    double& r_m,
+    double& i_m
+) {
+    int i = 0;
+#if defined(__aarch64__)
+    float64x2_t acc_rp = vdupq_n_f64(0.0);
+    float64x2_t acc_ip = vdupq_n_f64(0.0);
+    float64x2_t acc_rm = vdupq_n_f64(0.0);
+    float64x2_t acc_im = vdupq_n_f64(0.0);
+    const float64x2_t vpar = vdupq_n_f64(parity);
+    auto acc_pair = [&](int off) {
+        const float64x2_t vp = vld1q_f64(d_p + off);
+        const float64x2_t vm = vld1q_f64(d_m + off);
+        const float64x2_t vms = vmulq_f64(vm, vpar);
+        const float64x2_t vps = vmulq_f64(vp, vpar);
+        acc_rp = vfmaq_f64(acc_rp, vld1q_f64(Np_r + off), vp);
+        acc_rp = vfmaq_f64(acc_rp, vld1q_f64(Sp_r + off), vms);
+        acc_ip = vfmaq_f64(acc_ip, vld1q_f64(Np_i + off), vp);
+        acc_ip = vfmaq_f64(acc_ip, vld1q_f64(Sp_i + off), vms);
+        acc_rm = vfmaq_f64(acc_rm, vld1q_f64(Nm_r + off), vm);
+        acc_rm = vfmaq_f64(acc_rm, vld1q_f64(Sm_r + off), vps);
+        acc_im = vfmaq_f64(acc_im, vld1q_f64(Nm_i + off), vm);
+        acc_im = vfmaq_f64(acc_im, vld1q_f64(Sm_i + off), vps);
+    };
+    for (; i + 4 <= n_pairs; i += 4) {
+        acc_pair(i);
+        acc_pair(i + 2);
+    }
+    if (i + 2 <= n_pairs) {
+        acc_pair(i);
+        i += 2;
+    }
+    r_p += vaddvq_f64(acc_rp);
+    i_p += vaddvq_f64(acc_ip);
+    r_m += vaddvq_f64(acc_rm);
+    i_m += vaddvq_f64(acc_im);
+#endif
+    for (; i < n_pairs; ++i) {
+        const double vp = d_p[i];
+        const double vm = d_m[i];
+        const double vms = vm * parity;
+        const double vps = vp * parity;
+        r_p += Np_r[i] * vp + Sp_r[i] * vms;
+        i_p += Np_i[i] * vp + Sp_i[i] * vms;
+        r_m += Nm_r[i] * vm + Sm_r[i] * vps;
+        i_m += Nm_i[i] * vm + Sm_i[i] * vps;
+    }
+}
+
+static inline void spin_integrate_recurrence_l_rings(
+    int n_pairs,
+    double c1,
+    double c2,
+    double c3,
+    double parity,
+    const double* __restrict__ ct,
+    const double* __restrict__ dp1,
+    const double* __restrict__ dp2,
+    const double* __restrict__ dm1,
+    const double* __restrict__ dm2,
+    double* __restrict__ dpc,
+    double* __restrict__ dmc,
+    const double* __restrict__ Np_r,
+    const double* __restrict__ Np_i,
+    const double* __restrict__ Nm_r,
+    const double* __restrict__ Nm_i,
+    const double* __restrict__ Sp_r,
+    const double* __restrict__ Sp_i,
+    const double* __restrict__ Sm_r,
+    const double* __restrict__ Sm_i,
+    double& r_p,
+    double& i_p,
+    double& r_m,
+    double& i_m
+) {
+    int i = 0;
+#if defined(__aarch64__)
+    float64x2_t acc_rp0 = vdupq_n_f64(0.0);
+    float64x2_t acc_ip0 = vdupq_n_f64(0.0);
+    float64x2_t acc_rm0 = vdupq_n_f64(0.0);
+    float64x2_t acc_im0 = vdupq_n_f64(0.0);
+    float64x2_t acc_rp1 = vdupq_n_f64(0.0);
+    float64x2_t acc_ip1 = vdupq_n_f64(0.0);
+    float64x2_t acc_rm1 = vdupq_n_f64(0.0);
+    float64x2_t acc_im1 = vdupq_n_f64(0.0);
+    const float64x2_t vc1 = vdupq_n_f64(c1);
+    const float64x2_t vc2 = vdupq_n_f64(c2);
+    const float64x2_t vc3 = vdupq_n_f64(c3);
+    const float64x2_t vpar = vdupq_n_f64(parity);
+    auto acc_pair = [&](int off, float64x2_t& arp, float64x2_t& aip, float64x2_t& arm, float64x2_t& aim) {
+        const float64x2_t vct = vld1q_f64(ct + off);
+        const float64x2_t vcterm = vmulq_f64(vc1, vct);
+        const float64x2_t vp = vfmaq_f64(
+            vmulq_f64(vaddq_f64(vcterm, vc2), vld1q_f64(dp1 + off)),
+            vc3,
+            vld1q_f64(dp2 + off)
+        );
+        const float64x2_t vm = vfmaq_f64(
+            vmulq_f64(vsubq_f64(vcterm, vc2), vld1q_f64(dm1 + off)),
+            vc3,
+            vld1q_f64(dm2 + off)
+        );
+        vst1q_f64(dpc + off, vp);
+        vst1q_f64(dmc + off, vm);
+        const float64x2_t vms = vmulq_f64(vm, vpar);
+        const float64x2_t vps = vmulq_f64(vp, vpar);
+        arp = vfmaq_f64(arp, vld1q_f64(Np_r + off), vp);
+        arp = vfmaq_f64(arp, vld1q_f64(Sp_r + off), vms);
+        aip = vfmaq_f64(aip, vld1q_f64(Np_i + off), vp);
+        aip = vfmaq_f64(aip, vld1q_f64(Sp_i + off), vms);
+        arm = vfmaq_f64(arm, vld1q_f64(Nm_r + off), vm);
+        arm = vfmaq_f64(arm, vld1q_f64(Sm_r + off), vps);
+        aim = vfmaq_f64(aim, vld1q_f64(Nm_i + off), vm);
+        aim = vfmaq_f64(aim, vld1q_f64(Sm_i + off), vps);
+    };
+    for (; i + 4 <= n_pairs; i += 4) {
+        acc_pair(i, acc_rp0, acc_ip0, acc_rm0, acc_im0);
+        acc_pair(i + 2, acc_rp1, acc_ip1, acc_rm1, acc_im1);
+    }
+    if (i + 2 <= n_pairs) {
+        acc_pair(i, acc_rp0, acc_ip0, acc_rm0, acc_im0);
+        i += 2;
+    }
+    r_p += vaddvq_f64(vaddq_f64(acc_rp0, acc_rp1));
+    i_p += vaddvq_f64(vaddq_f64(acc_ip0, acc_ip1));
+    r_m += vaddvq_f64(vaddq_f64(acc_rm0, acc_rm1));
+    i_m += vaddvq_f64(vaddq_f64(acc_im0, acc_im1));
+#endif
+    for (; i < n_pairs; ++i) {
+        const double vpN = (c1 * ct[i] + c2) * dp1[i] + c3 * dp2[i];
+        const double vmN = (c1 * ct[i] - c2) * dm1[i] + c3 * dm2[i];
+        dpc[i] = vpN;
+        dmc[i] = vmN;
+        const double vms = vmN * parity;
+        const double vps = vpN * parity;
+        r_p += Np_r[i] * vpN + Sp_r[i] * vms;
+        i_p += Np_i[i] * vpN + Sp_i[i] * vms;
+        r_m += Nm_r[i] * vmN + Sm_r[i] * vps;
+        i_m += Nm_i[i] * vmN + Sm_i[i] * vps;
+    }
+}
+
+static inline void spin_integrate_recurrence_ll_rings(
+    int n_pairs,
+    double c1A,
+    double c2A,
+    double c3A,
+    double c1B,
+    double c2B,
+    double c3B,
+    double parityA,
+    const double* __restrict__ ct,
+    double* __restrict__ dp1,
+    double* __restrict__ dp2,
+    double* __restrict__ dm1,
+    double* __restrict__ dm2,
+    const double* __restrict__ Np_r,
+    const double* __restrict__ Np_i,
+    const double* __restrict__ Nm_r,
+    const double* __restrict__ Nm_i,
+    const double* __restrict__ Sp_r,
+    const double* __restrict__ Sp_i,
+    const double* __restrict__ Sm_r,
+    const double* __restrict__ Sm_i,
+    double& r_pA,
+    double& i_pA,
+    double& r_mA,
+    double& i_mA,
+    double& r_pB,
+    double& i_pB,
+    double& r_mB,
+    double& i_mB
+) {
+    int i = 0;
+    const double parityB = -parityA;
+#if defined(__aarch64__)
+    float64x2_t acc_rpA = vdupq_n_f64(0.0);
+    float64x2_t acc_ipA = vdupq_n_f64(0.0);
+    float64x2_t acc_rmA = vdupq_n_f64(0.0);
+    float64x2_t acc_imA = vdupq_n_f64(0.0);
+    float64x2_t acc_rpB = vdupq_n_f64(0.0);
+    float64x2_t acc_ipB = vdupq_n_f64(0.0);
+    float64x2_t acc_rmB = vdupq_n_f64(0.0);
+    float64x2_t acc_imB = vdupq_n_f64(0.0);
+    const float64x2_t vc1A = vdupq_n_f64(c1A);
+    const float64x2_t vc2A = vdupq_n_f64(c2A);
+    const float64x2_t vc3A = vdupq_n_f64(c3A);
+    const float64x2_t vc1B = vdupq_n_f64(c1B);
+    const float64x2_t vc2B = vdupq_n_f64(c2B);
+    const float64x2_t vc3B = vdupq_n_f64(c3B);
+    const float64x2_t vparA = vdupq_n_f64(parityA);
+    const float64x2_t vparB = vdupq_n_f64(parityB);
+    for (; i + 2 <= n_pairs; i += 2) {
+        const float64x2_t vct = vld1q_f64(ct + i);
+        const float64x2_t vdp1 = vld1q_f64(dp1 + i);
+        const float64x2_t vdp2 = vld1q_f64(dp2 + i);
+        const float64x2_t vdm1 = vld1q_f64(dm1 + i);
+        const float64x2_t vdm2 = vld1q_f64(dm2 + i);
+        const float64x2_t vctermA = vmulq_f64(vc1A, vct);
+        const float64x2_t vpA = vfmaq_f64(vmulq_f64(vaddq_f64(vctermA, vc2A), vdp1), vc3A, vdp2);
+        const float64x2_t vmA = vfmaq_f64(vmulq_f64(vsubq_f64(vctermA, vc2A), vdm1), vc3A, vdm2);
+        const float64x2_t vmsA = vmulq_f64(vmA, vparA);
+        const float64x2_t vpsA = vmulq_f64(vpA, vparA);
+        acc_rpA = vfmaq_f64(acc_rpA, vld1q_f64(Np_r + i), vpA);
+        acc_rpA = vfmaq_f64(acc_rpA, vld1q_f64(Sp_r + i), vmsA);
+        acc_ipA = vfmaq_f64(acc_ipA, vld1q_f64(Np_i + i), vpA);
+        acc_ipA = vfmaq_f64(acc_ipA, vld1q_f64(Sp_i + i), vmsA);
+        acc_rmA = vfmaq_f64(acc_rmA, vld1q_f64(Nm_r + i), vmA);
+        acc_rmA = vfmaq_f64(acc_rmA, vld1q_f64(Sm_r + i), vpsA);
+        acc_imA = vfmaq_f64(acc_imA, vld1q_f64(Nm_i + i), vmA);
+        acc_imA = vfmaq_f64(acc_imA, vld1q_f64(Sm_i + i), vpsA);
+        const float64x2_t vctermB = vmulq_f64(vc1B, vct);
+        const float64x2_t vpB = vfmaq_f64(vmulq_f64(vaddq_f64(vctermB, vc2B), vpA), vc3B, vdp1);
+        const float64x2_t vmB = vfmaq_f64(vmulq_f64(vsubq_f64(vctermB, vc2B), vmA), vc3B, vdm1);
+        const float64x2_t vmsB = vmulq_f64(vmB, vparB);
+        const float64x2_t vpsB = vmulq_f64(vpB, vparB);
+        acc_rpB = vfmaq_f64(acc_rpB, vld1q_f64(Np_r + i), vpB);
+        acc_rpB = vfmaq_f64(acc_rpB, vld1q_f64(Sp_r + i), vmsB);
+        acc_ipB = vfmaq_f64(acc_ipB, vld1q_f64(Np_i + i), vpB);
+        acc_ipB = vfmaq_f64(acc_ipB, vld1q_f64(Sp_i + i), vmsB);
+        acc_rmB = vfmaq_f64(acc_rmB, vld1q_f64(Nm_r + i), vmB);
+        acc_rmB = vfmaq_f64(acc_rmB, vld1q_f64(Sm_r + i), vpsB);
+        acc_imB = vfmaq_f64(acc_imB, vld1q_f64(Nm_i + i), vmB);
+        acc_imB = vfmaq_f64(acc_imB, vld1q_f64(Sm_i + i), vpsB);
+        vst1q_f64(dp2 + i, vpA);
+        vst1q_f64(dp1 + i, vpB);
+        vst1q_f64(dm2 + i, vmA);
+        vst1q_f64(dm1 + i, vmB);
+    }
+    r_pA += vaddvq_f64(acc_rpA);
+    i_pA += vaddvq_f64(acc_ipA);
+    r_mA += vaddvq_f64(acc_rmA);
+    i_mA += vaddvq_f64(acc_imA);
+    r_pB += vaddvq_f64(acc_rpB);
+    i_pB += vaddvq_f64(acc_ipB);
+    r_mB += vaddvq_f64(acc_rmB);
+    i_mB += vaddvq_f64(acc_imB);
+#endif
+    for (; i < n_pairs; ++i) {
+        const double vpA = (c1A * ct[i] + c2A) * dp1[i] + c3A * dp2[i];
+        const double vmA = (c1A * ct[i] - c2A) * dm1[i] + c3A * dm2[i];
+        const double vmsA = vmA * parityA;
+        const double vpsA = vpA * parityA;
+        r_pA += Np_r[i] * vpA + Sp_r[i] * vmsA;
+        i_pA += Np_i[i] * vpA + Sp_i[i] * vmsA;
+        r_mA += Nm_r[i] * vmA + Sm_r[i] * vpsA;
+        i_mA += Nm_i[i] * vmA + Sm_i[i] * vpsA;
+        const double vpB = (c1B * ct[i] + c2B) * vpA + c3B * dp1[i];
+        const double vmB = (c1B * ct[i] - c2B) * vmA + c3B * dm1[i];
+        const double vmsB = vmB * parityB;
+        const double vpsB = vpB * parityB;
+        r_pB += Np_r[i] * vpB + Sp_r[i] * vmsB;
+        i_pB += Np_i[i] * vpB + Sp_i[i] * vmsB;
+        r_mB += Nm_r[i] * vmB + Sm_r[i] * vpsB;
+        i_mB += Nm_i[i] * vmB + Sm_i[i] * vpsB;
+        dp2[i] = vpA;
+        dp1[i] = vpB;
+        dm2[i] = vmA;
+        dm1[i] = vmB;
+    }
+}
+
+static inline void spin_interpolate_dot_rings(
+    int n_pairs,
+    double r0,
+    double i0,
+    double r1,
+    double i1,
+    double parity,
+    const double* __restrict__ d_p,
+    const double* __restrict__ d_m,
+    double* __restrict__ rNp,
+    double* __restrict__ iNp,
+    double* __restrict__ rNm,
+    double* __restrict__ iNm,
+    double* __restrict__ rSp,
+    double* __restrict__ iSp,
+    double* __restrict__ rSm,
+    double* __restrict__ iSm
+) {
+    int i = 0;
+#if defined(__aarch64__)
+    const float64x2_t vr0 = vdupq_n_f64(r0);
+    const float64x2_t vi0 = vdupq_n_f64(i0);
+    const float64x2_t vr1 = vdupq_n_f64(r1);
+    const float64x2_t vi1 = vdupq_n_f64(i1);
+    const float64x2_t vpar = vdupq_n_f64(parity);
+    auto acc_pair = [&](int off) {
+        const float64x2_t vp = vld1q_f64(d_p + off);
+        const float64x2_t vm = vld1q_f64(d_m + off);
+        const float64x2_t vms = vmulq_f64(vm, vpar);
+        const float64x2_t vps = vmulq_f64(vp, vpar);
+        vst1q_f64(rNp + off, vfmaq_f64(vld1q_f64(rNp + off), vr0, vp));
+        vst1q_f64(iNp + off, vfmaq_f64(vld1q_f64(iNp + off), vi0, vp));
+        vst1q_f64(rNm + off, vfmaq_f64(vld1q_f64(rNm + off), vr1, vm));
+        vst1q_f64(iNm + off, vfmaq_f64(vld1q_f64(iNm + off), vi1, vm));
+        vst1q_f64(rSp + off, vfmaq_f64(vld1q_f64(rSp + off), vr0, vms));
+        vst1q_f64(iSp + off, vfmaq_f64(vld1q_f64(iSp + off), vi0, vms));
+        vst1q_f64(rSm + off, vfmaq_f64(vld1q_f64(rSm + off), vr1, vps));
+        vst1q_f64(iSm + off, vfmaq_f64(vld1q_f64(iSm + off), vi1, vps));
+    };
+    for (; i + 4 <= n_pairs; i += 4) {
+        acc_pair(i);
+        acc_pair(i + 2);
+    }
+    if (i + 2 <= n_pairs) {
+        acc_pair(i);
+        i += 2;
+    }
+#endif
+    for (; i < n_pairs; ++i) {
+        rNp[i] += r0 * d_p[i];
+        iNp[i] += i0 * d_p[i];
+        rNm[i] += r1 * d_m[i];
+        iNm[i] += i1 * d_m[i];
+        rSp[i] += r0 * d_m[i] * parity;
+        iSp[i] += i0 * d_m[i] * parity;
+        rSm[i] += r1 * d_p[i] * parity;
+        iSm[i] += i1 * d_p[i] * parity;
+    }
+}
+
+static inline void spin_interpolate_recurrence_l_rings(
+    int n_pairs,
+    double c1,
+    double c2,
+    double c3,
+    double r0,
+    double i0,
+    double r1,
+    double i1,
+    double parity,
+    const double* __restrict__ ct,
+    const double* __restrict__ dp1,
+    const double* __restrict__ dp2,
+    const double* __restrict__ dm1,
+    const double* __restrict__ dm2,
+    double* __restrict__ dpc,
+    double* __restrict__ dmc,
+    double* __restrict__ rNp,
+    double* __restrict__ iNp,
+    double* __restrict__ rNm,
+    double* __restrict__ iNm,
+    double* __restrict__ rSp,
+    double* __restrict__ iSp,
+    double* __restrict__ rSm,
+    double* __restrict__ iSm
+) {
+    int i = 0;
+#if defined(__aarch64__)
+    const float64x2_t vc1 = vdupq_n_f64(c1);
+    const float64x2_t vc2 = vdupq_n_f64(c2);
+    const float64x2_t vc3 = vdupq_n_f64(c3);
+    const float64x2_t vr0 = vdupq_n_f64(r0);
+    const float64x2_t vi0 = vdupq_n_f64(i0);
+    const float64x2_t vr1 = vdupq_n_f64(r1);
+    const float64x2_t vi1 = vdupq_n_f64(i1);
+    const float64x2_t vpar = vdupq_n_f64(parity);
+    auto acc_pair = [&](int off) {
+        const float64x2_t vct = vld1q_f64(ct + off);
+        const float64x2_t vcterm = vmulq_f64(vc1, vct);
+        const float64x2_t vp = vfmaq_f64(
+            vmulq_f64(vaddq_f64(vcterm, vc2), vld1q_f64(dp1 + off)),
+            vc3,
+            vld1q_f64(dp2 + off)
+        );
+        const float64x2_t vm = vfmaq_f64(
+            vmulq_f64(vsubq_f64(vcterm, vc2), vld1q_f64(dm1 + off)),
+            vc3,
+            vld1q_f64(dm2 + off)
+        );
+        vst1q_f64(dpc + off, vp);
+        vst1q_f64(dmc + off, vm);
+        const float64x2_t vms = vmulq_f64(vm, vpar);
+        const float64x2_t vps = vmulq_f64(vp, vpar);
+        vst1q_f64(rNp + off, vfmaq_f64(vld1q_f64(rNp + off), vr0, vp));
+        vst1q_f64(iNp + off, vfmaq_f64(vld1q_f64(iNp + off), vi0, vp));
+        vst1q_f64(rNm + off, vfmaq_f64(vld1q_f64(rNm + off), vr1, vm));
+        vst1q_f64(iNm + off, vfmaq_f64(vld1q_f64(iNm + off), vi1, vm));
+        vst1q_f64(rSp + off, vfmaq_f64(vld1q_f64(rSp + off), vr0, vms));
+        vst1q_f64(iSp + off, vfmaq_f64(vld1q_f64(iSp + off), vi0, vms));
+        vst1q_f64(rSm + off, vfmaq_f64(vld1q_f64(rSm + off), vr1, vps));
+        vst1q_f64(iSm + off, vfmaq_f64(vld1q_f64(iSm + off), vi1, vps));
+    };
+    for (; i + 4 <= n_pairs; i += 4) {
+        acc_pair(i);
+        acc_pair(i + 2);
+    }
+    if (i + 2 <= n_pairs) {
+        acc_pair(i);
+        i += 2;
+    }
+#endif
+    for (; i < n_pairs; ++i) {
+        const double vpN = (c1 * ct[i] + c2) * dp1[i] + c3 * dp2[i];
+        const double vmN = (c1 * ct[i] - c2) * dm1[i] + c3 * dm2[i];
+        dpc[i] = vpN;
+        dmc[i] = vmN;
+        rNp[i] += r0 * vpN;
+        iNp[i] += i0 * vpN;
+        rNm[i] += r1 * vmN;
+        iNm[i] += i1 * vmN;
+        rSp[i] += r0 * vmN * parity;
+        iSp[i] += i0 * vmN * parity;
+        rSm[i] += r1 * vpN * parity;
+        iSm[i] += i1 * vpN * parity;
+    }
 }
 
 
@@ -2466,6 +3541,32 @@ void ensure_l_factors(int64_t lmax) {
     }
 }
 
+static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
+    const c10::complex<double>* alm0_ptr,
+    const c10::complex<double>* alm1_ptr,
+    const torch::Tensor& theta,
+    int64_t lmax,
+    int64_t mmax,
+    int64_t spin_abs,
+    const c10::complex<double>* phase_ptr,
+    c10::complex<double>* eq_plus,
+    c10::complex<double>* eq_minus,
+    int64_t eq_start,
+    int64_t n_eq,
+    int64_t nph_eq
+);
+
+static torch::Tensor ishioka_spin_lowered_integrate_cpu(
+    const torch::Tensor& s_plus,
+    const torch::Tensor& s_minus,
+    const torch::Tensor& theta,
+    const torch::Tensor& weight,
+    int64_t lmax,
+    int64_t mmax,
+    int64_t spin_abs
+);
+
+
 torch::Tensor healpix_spin_integrate_recurrence_cpu(
     const torch::Tensor& s_plus,
     const torch::Tensor& s_minus,
@@ -2476,10 +3577,17 @@ torch::Tensor healpix_spin_integrate_recurrence_cpu(
     int64_t spin
 ) {
     auto sp_f = s_plus.contiguous(); auto sm_f = s_minus.contiguous();
-    auto sp_a = sp_f.accessor<c10::complex<double>, 2>();
-    auto sm_a = sm_f.accessor<c10::complex<double>, 2>();
     auto th_ptr = theta.data_ptr<double>();
     auto w_ptr = weight.data_ptr<double>();
+    const bool w_scalar = weight.numel() == 1;
+    const c10::complex<double>* __restrict__ sp_ptr = sp_f.data_ptr<c10::complex<double>>();
+    const c10::complex<double>* __restrict__ sm_ptr = sm_f.data_ptr<c10::complex<double>>();
+    const int64_t spin_abs = std::abs(spin);
+    if ((spin_abs == 1 || spin_abs == 2) && spin_ishioka_enabled()) {
+        return ishioka_spin_lowered_integrate_cpu(
+            sp_f, sm_f, theta, weight, lmax, mmax, spin_abs
+        );
+    }
 
     int64_t nrings = theta.size(0);
     int64_t n_eff = (nrings + 1) / 2;
@@ -2488,10 +3596,10 @@ torch::Tensor healpix_spin_integrate_recurrence_cpu(
     ensure_l_factors(lmax);
 
     auto options = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
-    torch::Tensor alms_plus = torch::zeros({alm_size(lmax, mmax)}, options);
-    torch::Tensor alms_minus = torch::zeros({alm_size(lmax, mmax)}, options);
-    auto cp_out = alms_plus.data_ptr<c10::complex<double>>();
-    auto cm_out = alms_minus.data_ptr<c10::complex<double>>();
+    const int64_t nalm = alm_size(lmax, mmax);
+    torch::Tensor alms = torch::zeros({2, nalm}, options);
+    auto cp_out = alms.select(0, 0).data_ptr<c10::complex<double>>();
+    auto cm_out = alms.select(0, 1).data_ptr<c10::complex<double>>();
 
     std::vector<int64_t> m_offsets(mmax + 1);
     int64_t current_lut_off = 0;
@@ -2504,8 +3612,13 @@ torch::Tensor healpix_spin_integrate_recurrence_cpu(
     }
     const auto& lut = g_recurrence_cache.get_coeffs(lmax, mmax, spin, m_offsets);
 
-    std::vector<double> cos_theta_all(n_eff);
-    for(int i=0; i<n_eff; ++i) cos_theta_all[i] = std::cos(th_ptr[i]);
+    std::vector<double> cos_theta_all(n_eff), sin_half_all(n_eff), cos_half_all(n_eff);
+    for (int i = 0; i < n_eff; ++i) {
+        const double th = th_ptr[i];
+        cos_theta_all[static_cast<size_t>(i)] = std::cos(th);
+        sin_half_all[static_cast<size_t>(i)] = std::sin(th * 0.5);
+        cos_half_all[static_cast<size_t>(i)] = std::cos(th * 0.5);
+    }
     std::vector<int64_t> mlim_north(n_eff, lmax);
     if (spin_mlim_prune_enabled()) {
         const int64_t spin_abs = std::abs(spin);
@@ -2516,8 +3629,7 @@ torch::Tensor healpix_spin_integrate_recurrence_cpu(
         }
     }
 
-    // For small N, overhead of parallel_for is high. Use a larger grain size (e.g. 8).
-    at::parallel_for(0, mmax + 1, 8, [&](int64_t m_start, int64_t m_end) {
+    parallel_m_ranges(mmax, [&](int64_t m0, int64_t stride) {
         // Allocate working buffers ONCE per thread task, rather than per inner loop.
         std::vector<double> v_dp2(n_eff), v_dp1(n_eff), v_dpc(n_eff);
         std::vector<double> v_dm2(n_eff), v_dm1(n_eff), v_dmc(n_eff);
@@ -2533,42 +3645,51 @@ torch::Tensor healpix_spin_integrate_recurrence_cpu(
 
         std::vector<double> vNp_r(n_eff), vNp_i(n_eff), vNm_r(n_eff), vNm_i(n_eff);
         std::vector<double> vSp_r(n_eff), vSp_i(n_eff), vSm_r(n_eff), vSm_i(n_eff);
-        std::vector<double> v_weights(n_eff), v_weightsS(n_eff);
         double * __restrict__ Np_r = vNp_r.data(); double * __restrict__ Np_i = vNp_i.data();
         double * __restrict__ Nm_r = vNm_r.data(); double * __restrict__ Nm_i = vNm_i.data();
         double * __restrict__ Sp_r = vSp_r.data(); double * __restrict__ Sp_i = vSp_i.data();
         double * __restrict__ Sm_r = vSm_r.data(); double * __restrict__ Sm_i = vSm_i.data();
-        double * __restrict__ weightsN = v_weights.data();
-        double * __restrict__ weightsS = v_weightsS.data();
+        const double * __restrict__ sh_ptr = sin_half_all.data();
+        const double * __restrict__ ch_ptr = cos_half_all.data();
 
-        for (int64_t m = m_start; m < m_end; ++m) {
+        for (int64_t m = m0; m <= mmax; m += stride) {
             int64_t l0 = std::max((int64_t)std::abs(spin), m);
             int64_t idx_base = m * (lmax + 1) - (m * (m - 1)) / 2;
             const double pre_phase = ((m % 2 != 0) ? -1.0 : 1.0) * ((std::abs(spin) % 2 != 0) ? -1.0 : 1.0);
             const bool spin_active = (spin != 0);
             const auto* lut_ptr = &lut[m_offsets[m]];
             bool any_active = false;
+            const int64_t m_off = m * nrings;
 
             for (int i=0; i < n_eff; ++i) {
                 const bool on = (m <= mlim_north[static_cast<size_t>(i)]);
                 active[i] = static_cast<uint8_t>(on ? 1 : 0);
                 any_active = any_active || on;
                 if (!on) {
+                    Np_r[i] = Np_i[i] = Nm_r[i] = Nm_i[i] = 0.0;
+                    Sp_r[i] = Sp_i[i] = Sm_r[i] = Sm_i[i] = 0.0;
                     continue;
                 }
-                weightsN[i] = w_ptr[i];
-                Np_r[i] = sp_a[m][i].real(); Np_i[i] = sp_a[m][i].imag();
-                Nm_r[i] = sm_a[m][i].real(); Nm_i[i] = sm_a[m][i].imag();
+                const double wN = w_scalar ? w_ptr[0] : w_ptr[i];
+                const auto np = sp_ptr[m_off + i];
+                const auto nm = sm_ptr[m_off + i];
+                Np_r[i] = np.real() * wN; Np_i[i] = np.imag() * wN;
+                Nm_r[i] = nm.real() * wN; Nm_i[i] = nm.imag() * wN;
                 if (i < n_pairs) {
-                    int64_t idx_S = nrings - 1 - i;
-                    weightsS[i] = w_ptr[idx_S];
-                    Sp_r[i] = sp_a[m][idx_S].real(); Sp_i[i] = sp_a[m][idx_S].imag();
-                    Sm_r[i] = sm_a[m][idx_S].real(); Sm_i[i] = sm_a[m][idx_S].imag();
+                    const int64_t idx_S = nrings - 1 - i;
+                    const double wS = w_scalar ? w_ptr[0] : w_ptr[idx_S];
+                    const auto spv = sp_ptr[m_off + idx_S];
+                    const auto smv = sm_ptr[m_off + idx_S];
+                    Sp_r[i] = spv.real() * wS; Sp_i[i] = spv.imag() * wS;
+                    Sm_r[i] = smv.real() * wS; Sm_i[i] = smv.imag() * wS;
                 }
             }
             if (!any_active) {
                 continue;
             }
+            int pair0 = 0;
+            int n_run = 0;
+            spin_active_pair_span(active, static_cast<int>(n_pairs), pair0, n_run);
 
             WignerDCoeffs coeffs_p1 = get_wigner_d_coeffs(l0, m, -spin);
             WignerDCoeffs coeffs_m1; if (spin_active) coeffs_m1 = get_wigner_d_coeffs(l0, m, spin);
@@ -2581,8 +3702,8 @@ torch::Tensor healpix_spin_integrate_recurrence_cpu(
                     dm2[i] = 0.0;
                     continue;
                 }
-                dp1[i] = eval_wigner_d(coeffs_p1, th_ptr[i]);
-                if(spin_active) dm1[i] = eval_wigner_d(coeffs_m1, th_ptr[i]);
+                dp1[i] = eval_wigner_d_half(coeffs_p1, sh_ptr[i], ch_ptr[i]);
+                if(spin_active) dm1[i] = eval_wigner_d_half(coeffs_m1, sh_ptr[i], ch_ptr[i]);
                 else dm1[i] = dp1[i];
                 dp2[i] = 0.0;
                 dm2[i] = 0.0;
@@ -2590,18 +3711,29 @@ torch::Tensor healpix_spin_integrate_recurrence_cpu(
 
             auto accumulate_l_internal = [&](int64_t l, const double* __restrict__ d_p, const double* __restrict__ d_m) {
                 double r_p = 0, i_p = 0, r_m = 0, i_m = 0;
-                const double parity = ((l+m)%2 == 0) ? 1.0 : -1.0;
-                #pragma clang loop vectorize(enable)
-                for(int i=0; i<n_pairs; ++i) {
-                    r_p += (Np_r[i]*weightsN[i]*d_p[i] + Sp_r[i]*weightsS[i]*d_m[i]*parity);
-                    i_p += (Np_i[i]*weightsN[i]*d_p[i] + Sp_i[i]*weightsS[i]*d_m[i]*parity);
-                    r_m += (Nm_r[i]*weightsN[i]*d_m[i] + Sm_r[i]*weightsS[i]*d_p[i]*parity);
-                    i_m += (Nm_i[i]*weightsN[i]*d_m[i] + Sm_i[i]*weightsS[i]*d_p[i]*parity);
-                }
+                const double parity = ((l + m) % 2 == 0) ? 1.0 : -1.0;
+                spin_integrate_dot_rings(
+                    n_run,
+                    parity,
+                    d_p + pair0,
+                    d_m + pair0,
+                    Np_r + pair0,
+                    Np_i + pair0,
+                    Nm_r + pair0,
+                    Nm_i + pair0,
+                    Sp_r + pair0,
+                    Sp_i + pair0,
+                    Sm_r + pair0,
+                    Sm_i + pair0,
+                    r_p,
+                    i_p,
+                    r_m,
+                    i_m
+                );
                 if (has_equator && active[n_pairs]) {
                     int i = n_pairs;
-                    r_p += Np_r[i]*weightsN[i]*d_p[i]; i_p += Np_i[i]*weightsN[i]*d_p[i];
-                    r_m += Nm_r[i]*weightsN[i]*d_m[i]; i_m += Nm_i[i]*weightsN[i]*d_m[i];
+                    r_p += Np_r[i]*d_p[i]; i_p += Np_i[i]*d_p[i];
+                    r_m += Nm_r[i]*d_m[i]; i_m += Nm_i[i]*d_m[i];
                 }
                 const double sc = pre_phase * precomputed_l_factors[l];
                 cp_out[idx_base+(l-m)] = c10::complex<double>(r_p*sc, i_p*sc);
@@ -2620,96 +3752,566 @@ torch::Tensor healpix_spin_integrate_recurrence_cpu(
                         dmc[i] = 0.0;
                         continue;
                     }
-                    dpc[i] = eval_wigner_d(coeffs_pc, th_ptr[i]);
-                    if(spin_active) dmc[i] = eval_wigner_d(coeffs_mc, th_ptr[i]);
+                    dpc[i] = eval_wigner_d_half(coeffs_pc, sh_ptr[i], ch_ptr[i]);
+                    if(spin_active) dmc[i] = eval_wigner_d_half(coeffs_mc, sh_ptr[i], ch_ptr[i]);
                     else dmc[i] = dpc[i];
                 }
                 accumulate_l_internal(l0+1, dpc, dmc);
                 { auto t = dp2; dp2 = dp1; dp1 = dpc; dpc = t; }
                 { auto t = dm2; dm2 = dm1; dm1 = dmc; dmc = t; }
 
-                for (int64_t l = l0 + 2; l <= lmax; ++l) {
+                int64_t l = l0 + 2;
+                for (; l + 1 <= lmax; l += 2) {
+                    const auto& cA = lut_ptr[l - (l0 + 2)];
+                    const auto& cB = lut_ptr[l + 1 - (l0 + 2)];
+                    const double parityA = ((l + m) % 2 == 0) ? 1.0 : -1.0;
+                    double r_pA = 0, i_pA = 0, r_mA = 0, i_mA = 0;
+                    double r_pB = 0, i_pB = 0, r_mB = 0, i_mB = 0;
+                    spin_integrate_recurrence_ll_rings(
+                        n_run,
+                        cA.c1, cA.c2_p, cA.c3,
+                        cB.c1, cB.c2_p, cB.c3,
+                        parityA,
+                        ct_ptr + pair0,
+                        dp1 + pair0,
+                        dp2 + pair0,
+                        dm1 + pair0,
+                        dm2 + pair0,
+                        Np_r + pair0,
+                        Np_i + pair0,
+                        Nm_r + pair0,
+                        Nm_i + pair0,
+                        Sp_r + pair0,
+                        Sp_i + pair0,
+                        Sm_r + pair0,
+                        Sm_i + pair0,
+                        r_pA, i_pA, r_mA, i_mA,
+                        r_pB, i_pB, r_mB, i_mB
+                    );
+                    if (has_equator && active[n_pairs]) {
+                        int eq = static_cast<int>(n_pairs);
+                        const double vpA = (cA.c1 * ct_ptr[eq] + cA.c2_p) * dp1[eq] + cA.c3 * dp2[eq];
+                        const double vmA = (cA.c1 * ct_ptr[eq] - cA.c2_p) * dm1[eq] + cA.c3 * dm2[eq];
+                        r_pA += Np_r[eq] * vpA; i_pA += Np_i[eq] * vpA;
+                        r_mA += Nm_r[eq] * vmA; i_mA += Nm_i[eq] * vmA;
+                        const double vpB = (cB.c1 * ct_ptr[eq] + cB.c2_p) * vpA + cB.c3 * dp1[eq];
+                        const double vmB = (cB.c1 * ct_ptr[eq] - cB.c2_p) * vmA + cB.c3 * dm1[eq];
+                        r_pB += Np_r[eq] * vpB; i_pB += Np_i[eq] * vpB;
+                        r_mB += Nm_r[eq] * vmB; i_mB += Nm_i[eq] * vmB;
+                        dp2[eq] = vpA; dp1[eq] = vpB;
+                        dm2[eq] = vmA; dm1[eq] = vmB;
+                    }
+                    const double scA = pre_phase * precomputed_l_factors[static_cast<size_t>(l)];
+                    const double scB = pre_phase * precomputed_l_factors[static_cast<size_t>(l + 1)];
+                    cp_out[idx_base + (l - m)] = c10::complex<double>(r_pA * scA, i_pA * scA);
+                    cm_out[idx_base + (l - m)] = c10::complex<double>(r_mA * scA, i_mA * scA);
+                    cp_out[idx_base + (l + 1 - m)] = c10::complex<double>(r_pB * scB, i_pB * scB);
+                    cm_out[idx_base + (l + 1 - m)] = c10::complex<double>(r_mB * scB, i_mB * scB);
+                }
+                if (l <= lmax) {
                     const auto& c = lut_ptr[l - (l0 + 2)];
                     const double c1 = c.c1, c2 = c.c2_p, c3 = c.c3;
                     const double parity = ((l+m)%2 == 0) ? 1.0 : -1.0;
                     double r_p = 0, i_p = 0, r_m = 0, i_m = 0;
-
-                    #pragma clang loop vectorize(enable)
-                    for (int i=0; i < n_pairs; ++i) {
-                        const double vpN = (c1*ct_ptr[i] + c2)*dp1[i] + c3*dp2[i];
-                        const double vmN = (c1*ct_ptr[i] - c2)*dm1[i] + c3*dm2[i];
-                        dpc[i] = vpN; dmc[i] = vmN;
-                        r_p += (Np_r[i]*weightsN[i]*vpN + Sp_r[i]*weightsS[i]*vmN*parity);
-                        i_p += (Np_i[i]*weightsN[i]*vpN + Sp_i[i]*weightsS[i]*vmN*parity);
-                        r_m += (Nm_r[i]*weightsN[i]*vmN + Sm_r[i]*weightsS[i]*vpN*parity);
-                        i_m += (Nm_i[i]*weightsN[i]*vmN + Sm_i[i]*weightsS[i]*vpN*parity);
-                    }
+                    spin_integrate_recurrence_l_rings(
+                        n_run,
+                        c1,
+                        c2,
+                        c3,
+                        parity,
+                        ct_ptr + pair0,
+                        dp1 + pair0,
+                        dp2 + pair0,
+                        dm1 + pair0,
+                        dm2 + pair0,
+                        dpc + pair0,
+                        dmc + pair0,
+                        Np_r + pair0,
+                        Np_i + pair0,
+                        Nm_r + pair0,
+                        Nm_i + pair0,
+                        Sp_r + pair0,
+                        Sp_i + pair0,
+                        Sm_r + pair0,
+                        Sm_i + pair0,
+                        r_p,
+                        i_p,
+                        r_m,
+                        i_m
+                    );
                     if (has_equator && active[n_pairs]) {
-                        int i = n_pairs;
-                        const double vpN = (c1*ct_ptr[i] + c2)*dp1[i] + c3*dp2[i];
-                        const double vmN = (c1*ct_ptr[i] - c2)*dm1[i] + c3*dm2[i];
-                        dpc[i] = vpN; dmc[i] = vmN;
-                        r_p += Np_r[i]*weightsN[i]*vpN; i_p += Np_i[i]*weightsN[i]*vpN;
-                        r_m += Nm_r[i]*weightsN[i]*vmN; i_m += Nm_i[i]*weightsN[i]*vmN;
+                        int eq = static_cast<int>(n_pairs);
+                        const double vpN = (c1*ct_ptr[eq] + c2)*dp1[eq] + c3*dp2[eq];
+                        const double vmN = (c1*ct_ptr[eq] - c2)*dm1[eq] + c3*dm2[eq];
+                        dpc[eq] = vpN; dmc[eq] = vmN;
+                        r_p += Np_r[eq]*vpN; i_p += Np_i[eq]*vpN;
+                        r_m += Nm_r[eq]*vmN; i_m += Nm_i[eq]*vmN;
                     }
-                    const double sc = pre_phase * precomputed_l_factors[l];
+                    const double sc = pre_phase * precomputed_l_factors[static_cast<size_t>(l)];
                     cp_out[idx_base+(l-m)] = c10::complex<double>(r_p*sc, i_p*sc);
                     cm_out[idx_base+(l-m)] = c10::complex<double>(r_m*sc, i_m*sc);
-                    { auto t = dp2; dp2 = dp1; dp1 = dpc; dpc = t; }
-                    { auto t = dm2; dm2 = dm1; dm1 = dmc; dmc = t; }
                 }
             }
         }
     });
 
-    return torch::stack({alms_plus, alms_minus}, 0);
+    return alms;
 }
+
+static inline void spin_interpolate_l_scan_one(
+    int64_t l0,
+    int64_t lmax,
+    int64_t m,
+    const RecurrenceCoeffs* lut_ptr,
+    const c10::complex<double>* alm0_ptr,
+    const c10::complex<double>* alm1_ptr,
+    int64_t idx_base,
+    double pre_phase,
+    bool spin_active,
+    double ct,
+    double dp1,
+    double dp2,
+    double dm1,
+    double dm2,
+    double& rNp,
+    double& iNp,
+    double& rNm,
+    double& iNm,
+    double& rSp,
+    double& iSp,
+    double& rSm,
+    double& iSm
+) {
+    double par = ((l0 + 2 + m) % 2 == 0) ? 1.0 : -1.0;
+    int64_t l = l0 + 2;
+    for (; l + 1 <= lmax; l += 2) {
+        const auto& cA = lut_ptr[l - (l0 + 2)];
+        const auto& cB = lut_ptr[l + 1 - (l0 + 2)];
+        const auto a0A = alm0_ptr[idx_base + (l - m)];
+        const auto a1A = spin_active ? alm1_ptr[idx_base + (l - m)] : a0A;
+        const auto a0B = alm0_ptr[idx_base + (l + 1 - m)];
+        const auto a1B = spin_active ? alm1_ptr[idx_base + (l + 1 - m)] : a0B;
+        const double scA = pre_phase * precomputed_l_factors[static_cast<size_t>(l)];
+        const double scB = pre_phase * precomputed_l_factors[static_cast<size_t>(l + 1)];
+        const double r0A = a0A.real() * scA, i0A = a0A.imag() * scA;
+        const double r1A = a1A.real() * scA, i1A = a1A.imag() * scA;
+        const double r0B = a0B.real() * scB, i0B = a0B.imag() * scB;
+        const double r1B = a1B.real() * scB, i1B = a1B.imag() * scB;
+        const double vpA = (cA.c1 * ct + cA.c2_p) * dp1 + cA.c3 * dp2;
+        const double vmA = (cA.c1 * ct - cA.c2_p) * dm1 + cA.c3 * dm2;
+        rNp += r0A * vpA; iNp += i0A * vpA;
+        rNm += r1A * vmA; iNm += i1A * vmA;
+        rSp += r0A * vmA * par; iSp += i0A * vmA * par;
+        rSm += r1A * vpA * par; iSm += i1A * vpA * par;
+        const double parB = -par;
+        const double vpB = (cB.c1 * ct + cB.c2_p) * vpA + cB.c3 * dp1;
+        const double vmB = (cB.c1 * ct - cB.c2_p) * vmA + cB.c3 * dm1;
+        rNp += r0B * vpB; iNp += i0B * vpB;
+        rNm += r1B * vmB; iNm += i1B * vmB;
+        rSp += r0B * vmB * parB; iSp += i0B * vmB * parB;
+        rSm += r1B * vpB * parB; iSm += i1B * vpB * parB;
+        dp2 = vpA; dp1 = vpB;
+        dm2 = vmA; dm1 = vmB;
+    }
+    if (l <= lmax) {
+        const auto& c = lut_ptr[l - (l0 + 2)];
+        const auto a0 = alm0_ptr[idx_base + (l - m)];
+        const auto a1 = spin_active ? alm1_ptr[idx_base + (l - m)] : a0;
+        const double sc = pre_phase * precomputed_l_factors[static_cast<size_t>(l)];
+        const double r0 = a0.real() * sc, i0 = a0.imag() * sc;
+        const double r1 = a1.real() * sc, i1 = a1.imag() * sc;
+        const double vp = (c.c1 * ct + c.c2_p) * dp1 + c.c3 * dp2;
+        const double vm = (c.c1 * ct - c.c2_p) * dm1 + c.c3 * dm2;
+        rNp += r0 * vp; iNp += i0 * vp;
+        rNm += r1 * vm; iNm += i1 * vm;
+        rSp += r0 * vm * par; iSp += i0 * vm * par;
+        rSm += r1 * vp * par; iSm += i1 * vp * par;
+    }
+}
+
+#if defined(__aarch64__)
+static inline void spin_interpolate_l_scan_four(
+    int64_t l0,
+    int64_t lmax,
+    int64_t m,
+    const RecurrenceCoeffs* lut_ptr,
+    const c10::complex<double>* alm0_ptr,
+    const c10::complex<double>* alm1_ptr,
+    int64_t idx_base,
+    double pre_phase,
+    bool spin_active,
+    const double* __restrict__ ct,
+    const double* __restrict__ dp1_in,
+    const double* __restrict__ dp2_in,
+    const double* __restrict__ dm1_in,
+    const double* __restrict__ dm2_in,
+    double* __restrict__ rNp,
+    double* __restrict__ iNp,
+    double* __restrict__ rNm,
+    double* __restrict__ iNm,
+    double* __restrict__ rSp,
+    double* __restrict__ iSp,
+    double* __restrict__ rSm,
+    double* __restrict__ iSm
+) {
+    float64x2_t vctA = vld1q_f64(ct);
+    float64x2_t vctB = vld1q_f64(ct + 2);
+    float64x2_t vdp1A = vld1q_f64(dp1_in);
+    float64x2_t vdp1B = vld1q_f64(dp1_in + 2);
+    float64x2_t vdp2A = vld1q_f64(dp2_in);
+    float64x2_t vdp2B = vld1q_f64(dp2_in + 2);
+    float64x2_t vdm1A = vld1q_f64(dm1_in);
+    float64x2_t vdm1B = vld1q_f64(dm1_in + 2);
+    float64x2_t vdm2A = vld1q_f64(dm2_in);
+    float64x2_t vdm2B = vld1q_f64(dm2_in + 2);
+    float64x2_t vrNpA = vld1q_f64(rNp);
+    float64x2_t vrNpB = vld1q_f64(rNp + 2);
+    float64x2_t viNpA = vld1q_f64(iNp);
+    float64x2_t viNpB = vld1q_f64(iNp + 2);
+    float64x2_t vrNmA = vld1q_f64(rNm);
+    float64x2_t vrNmB = vld1q_f64(rNm + 2);
+    float64x2_t viNmA = vld1q_f64(iNm);
+    float64x2_t viNmB = vld1q_f64(iNm + 2);
+    float64x2_t vrSpA = vld1q_f64(rSp);
+    float64x2_t vrSpB = vld1q_f64(rSp + 2);
+    float64x2_t viSpA = vld1q_f64(iSp);
+    float64x2_t viSpB = vld1q_f64(iSp + 2);
+    float64x2_t vrSmA = vld1q_f64(rSm);
+    float64x2_t vrSmB = vld1q_f64(rSm + 2);
+    float64x2_t viSmA = vld1q_f64(iSm);
+    float64x2_t viSmB = vld1q_f64(iSm + 2);
+    float64x2_t vpar = vdupq_n_f64(((l0 + 2 + m) % 2 == 0) ? 1.0 : -1.0);
+    int64_t l = l0 + 2;
+    for (; l + 1 <= lmax; l += 2) {
+        const auto& cA = lut_ptr[l - (l0 + 2)];
+        const auto& cB = lut_ptr[l + 1 - (l0 + 2)];
+        const auto a0A = alm0_ptr[idx_base + (l - m)];
+        const auto a1A = spin_active ? alm1_ptr[idx_base + (l - m)] : a0A;
+        const auto a0B = alm0_ptr[idx_base + (l + 1 - m)];
+        const auto a1B = spin_active ? alm1_ptr[idx_base + (l + 1 - m)] : a0B;
+        const double scA = pre_phase * precomputed_l_factors[static_cast<size_t>(l)];
+        const double scB = pre_phase * precomputed_l_factors[static_cast<size_t>(l + 1)];
+        const float64x2_t vr0A = vdupq_n_f64(a0A.real() * scA);
+        const float64x2_t vi0A = vdupq_n_f64(a0A.imag() * scA);
+        const float64x2_t vr1A = vdupq_n_f64(a1A.real() * scA);
+        const float64x2_t vi1A = vdupq_n_f64(a1A.imag() * scA);
+        const float64x2_t vr0B = vdupq_n_f64(a0B.real() * scB);
+        const float64x2_t vi0B = vdupq_n_f64(a0B.imag() * scB);
+        const float64x2_t vr1B = vdupq_n_f64(a1B.real() * scB);
+        const float64x2_t vi1B = vdupq_n_f64(a1B.imag() * scB);
+        const float64x2_t vc1A = vdupq_n_f64(cA.c1);
+        const float64x2_t vc2A = vdupq_n_f64(cA.c2_p);
+        const float64x2_t vc3A = vdupq_n_f64(cA.c3);
+        const float64x2_t vc1B = vdupq_n_f64(cB.c1);
+        const float64x2_t vc2B = vdupq_n_f64(cB.c2_p);
+        const float64x2_t vc3B = vdupq_n_f64(cB.c3);
+        const float64x2_t vctermA0 = vmulq_f64(vc1A, vctA);
+        const float64x2_t vctermA1 = vmulq_f64(vc1A, vctB);
+        const float64x2_t vpA0 = vfmaq_f64(vmulq_f64(vaddq_f64(vctermA0, vc2A), vdp1A), vc3A, vdp2A);
+        const float64x2_t vpA1 = vfmaq_f64(vmulq_f64(vaddq_f64(vctermA1, vc2A), vdp1B), vc3A, vdp2B);
+        const float64x2_t vmA0 = vfmaq_f64(vmulq_f64(vsubq_f64(vctermA0, vc2A), vdm1A), vc3A, vdm2A);
+        const float64x2_t vmA1 = vfmaq_f64(vmulq_f64(vsubq_f64(vctermA1, vc2A), vdm1B), vc3A, vdm2B);
+        vrNpA = vfmaq_f64(vrNpA, vr0A, vpA0);
+        vrNpB = vfmaq_f64(vrNpB, vr0A, vpA1);
+        viNpA = vfmaq_f64(viNpA, vi0A, vpA0);
+        viNpB = vfmaq_f64(viNpB, vi0A, vpA1);
+        vrNmA = vfmaq_f64(vrNmA, vr1A, vmA0);
+        vrNmB = vfmaq_f64(vrNmB, vr1A, vmA1);
+        viNmA = vfmaq_f64(viNmA, vi1A, vmA0);
+        viNmB = vfmaq_f64(viNmB, vi1A, vmA1);
+        vrSpA = vfmaq_f64(vrSpA, vr0A, vmulq_f64(vmA0, vpar));
+        vrSpB = vfmaq_f64(vrSpB, vr0A, vmulq_f64(vmA1, vpar));
+        viSpA = vfmaq_f64(viSpA, vi0A, vmulq_f64(vmA0, vpar));
+        viSpB = vfmaq_f64(viSpB, vi0A, vmulq_f64(vmA1, vpar));
+        vrSmA = vfmaq_f64(vrSmA, vr1A, vmulq_f64(vpA0, vpar));
+        vrSmB = vfmaq_f64(vrSmB, vr1A, vmulq_f64(vpA1, vpar));
+        viSmA = vfmaq_f64(viSmA, vi1A, vmulq_f64(vpA0, vpar));
+        viSmB = vfmaq_f64(viSmB, vi1A, vmulq_f64(vpA1, vpar));
+        const float64x2_t vparB = vnegq_f64(vpar);
+        const float64x2_t vctermB0 = vmulq_f64(vc1B, vctA);
+        const float64x2_t vctermB1 = vmulq_f64(vc1B, vctB);
+        const float64x2_t vpB0 = vfmaq_f64(vmulq_f64(vaddq_f64(vctermB0, vc2B), vpA0), vc3B, vdp1A);
+        const float64x2_t vpB1 = vfmaq_f64(vmulq_f64(vaddq_f64(vctermB1, vc2B), vpA1), vc3B, vdp1B);
+        const float64x2_t vmB0 = vfmaq_f64(vmulq_f64(vsubq_f64(vctermB0, vc2B), vmA0), vc3B, vdm1A);
+        const float64x2_t vmB1 = vfmaq_f64(vmulq_f64(vsubq_f64(vctermB1, vc2B), vmA1), vc3B, vdm1B);
+        vrNpA = vfmaq_f64(vrNpA, vr0B, vpB0);
+        vrNpB = vfmaq_f64(vrNpB, vr0B, vpB1);
+        viNpA = vfmaq_f64(viNpA, vi0B, vpB0);
+        viNpB = vfmaq_f64(viNpB, vi0B, vpB1);
+        vrNmA = vfmaq_f64(vrNmA, vr1B, vmB0);
+        vrNmB = vfmaq_f64(vrNmB, vr1B, vmB1);
+        viNmA = vfmaq_f64(viNmA, vi1B, vmB0);
+        viNmB = vfmaq_f64(viNmB, vi1B, vmB1);
+        vrSpA = vfmaq_f64(vrSpA, vr0B, vmulq_f64(vmB0, vparB));
+        vrSpB = vfmaq_f64(vrSpB, vr0B, vmulq_f64(vmB1, vparB));
+        viSpA = vfmaq_f64(viSpA, vi0B, vmulq_f64(vmB0, vparB));
+        viSpB = vfmaq_f64(viSpB, vi0B, vmulq_f64(vmB1, vparB));
+        vrSmA = vfmaq_f64(vrSmA, vr1B, vmulq_f64(vpB0, vparB));
+        vrSmB = vfmaq_f64(vrSmB, vr1B, vmulq_f64(vpB1, vparB));
+        viSmA = vfmaq_f64(viSmA, vi1B, vmulq_f64(vpB0, vparB));
+        viSmB = vfmaq_f64(viSmB, vi1B, vmulq_f64(vpB1, vparB));
+        vdp2A = vpA0; vdp1A = vpB0;
+        vdp2B = vpA1; vdp1B = vpB1;
+        vdm2A = vmA0; vdm1A = vmB0;
+        vdm2B = vmA1; vdm1B = vmB1;
+    }
+    if (l <= lmax) {
+        const auto& c = lut_ptr[l - (l0 + 2)];
+        const auto a0 = alm0_ptr[idx_base + (l - m)];
+        const auto a1 = spin_active ? alm1_ptr[idx_base + (l - m)] : a0;
+        const double sc = pre_phase * precomputed_l_factors[static_cast<size_t>(l)];
+        const float64x2_t vr0 = vdupq_n_f64(a0.real() * sc);
+        const float64x2_t vi0 = vdupq_n_f64(a0.imag() * sc);
+        const float64x2_t vr1 = vdupq_n_f64(a1.real() * sc);
+        const float64x2_t vi1 = vdupq_n_f64(a1.imag() * sc);
+        const float64x2_t vc1 = vdupq_n_f64(c.c1);
+        const float64x2_t vc2 = vdupq_n_f64(c.c2_p);
+        const float64x2_t vc3 = vdupq_n_f64(c.c3);
+        const float64x2_t vctermA = vmulq_f64(vc1, vctA);
+        const float64x2_t vctermB = vmulq_f64(vc1, vctB);
+        const float64x2_t vpA = vfmaq_f64(vmulq_f64(vaddq_f64(vctermA, vc2), vdp1A), vc3, vdp2A);
+        const float64x2_t vpB = vfmaq_f64(vmulq_f64(vaddq_f64(vctermB, vc2), vdp1B), vc3, vdp2B);
+        const float64x2_t vmA = vfmaq_f64(vmulq_f64(vsubq_f64(vctermA, vc2), vdm1A), vc3, vdm2A);
+        const float64x2_t vmB = vfmaq_f64(vmulq_f64(vsubq_f64(vctermB, vc2), vdm1B), vc3, vdm2B);
+        vrNpA = vfmaq_f64(vrNpA, vr0, vpA);
+        vrNpB = vfmaq_f64(vrNpB, vr0, vpB);
+        viNpA = vfmaq_f64(viNpA, vi0, vpA);
+        viNpB = vfmaq_f64(viNpB, vi0, vpB);
+        vrNmA = vfmaq_f64(vrNmA, vr1, vmA);
+        vrNmB = vfmaq_f64(vrNmB, vr1, vmB);
+        viNmA = vfmaq_f64(viNmA, vi1, vmA);
+        viNmB = vfmaq_f64(viNmB, vi1, vmB);
+        vrSpA = vfmaq_f64(vrSpA, vr0, vmulq_f64(vmA, vpar));
+        vrSpB = vfmaq_f64(vrSpB, vr0, vmulq_f64(vmB, vpar));
+        viSpA = vfmaq_f64(viSpA, vi0, vmulq_f64(vmA, vpar));
+        viSpB = vfmaq_f64(viSpB, vi0, vmulq_f64(vmB, vpar));
+        vrSmA = vfmaq_f64(vrSmA, vr1, vmulq_f64(vpA, vpar));
+        vrSmB = vfmaq_f64(vrSmB, vr1, vmulq_f64(vpB, vpar));
+        viSmA = vfmaq_f64(viSmA, vi1, vmulq_f64(vpA, vpar));
+        viSmB = vfmaq_f64(viSmB, vi1, vmulq_f64(vpB, vpar));
+    }
+    vst1q_f64(rNp, vrNpA); vst1q_f64(rNp + 2, vrNpB);
+    vst1q_f64(iNp, viNpA); vst1q_f64(iNp + 2, viNpB);
+    vst1q_f64(rNm, vrNmA); vst1q_f64(rNm + 2, vrNmB);
+    vst1q_f64(iNm, viNmA); vst1q_f64(iNm + 2, viNmB);
+    vst1q_f64(rSp, vrSpA); vst1q_f64(rSp + 2, vrSpB);
+    vst1q_f64(iSp, viSpA); vst1q_f64(iSp + 2, viSpB);
+    vst1q_f64(rSm, vrSmA); vst1q_f64(rSm + 2, vrSmB);
+    vst1q_f64(iSm, viSmA); vst1q_f64(iSm + 2, viSmB);
+}
+
+static inline void spin_interpolate_l_scan_two(
+    int64_t l0,
+    int64_t lmax,
+    int64_t m,
+    const RecurrenceCoeffs* lut_ptr,
+    const c10::complex<double>* alm0_ptr,
+    const c10::complex<double>* alm1_ptr,
+    int64_t idx_base,
+    double pre_phase,
+    bool spin_active,
+    const double* __restrict__ ct,
+    const double* __restrict__ dp1_in,
+    const double* __restrict__ dp2_in,
+    const double* __restrict__ dm1_in,
+    const double* __restrict__ dm2_in,
+    double* __restrict__ rNp,
+    double* __restrict__ iNp,
+    double* __restrict__ rNm,
+    double* __restrict__ iNm,
+    double* __restrict__ rSp,
+    double* __restrict__ iSp,
+    double* __restrict__ rSm,
+    double* __restrict__ iSm
+) {
+    float64x2_t vct = vld1q_f64(ct);
+    float64x2_t vdp1 = vld1q_f64(dp1_in);
+    float64x2_t vdp2 = vld1q_f64(dp2_in);
+    float64x2_t vdm1 = vld1q_f64(dm1_in);
+    float64x2_t vdm2 = vld1q_f64(dm2_in);
+    float64x2_t vrNp = vld1q_f64(rNp);
+    float64x2_t viNp = vld1q_f64(iNp);
+    float64x2_t vrNm = vld1q_f64(rNm);
+    float64x2_t viNm = vld1q_f64(iNm);
+    float64x2_t vrSp = vld1q_f64(rSp);
+    float64x2_t viSp = vld1q_f64(iSp);
+    float64x2_t vrSm = vld1q_f64(rSm);
+    float64x2_t viSm = vld1q_f64(iSm);
+    float64x2_t vpar = vdupq_n_f64(((l0 + 2 + m) % 2 == 0) ? 1.0 : -1.0);
+    int64_t l = l0 + 2;
+    for (; l + 1 <= lmax; l += 2) {
+        const auto& cA = lut_ptr[l - (l0 + 2)];
+        const auto& cB = lut_ptr[l + 1 - (l0 + 2)];
+        const auto a0A = alm0_ptr[idx_base + (l - m)];
+        const auto a1A = spin_active ? alm1_ptr[idx_base + (l - m)] : a0A;
+        const auto a0B = alm0_ptr[idx_base + (l + 1 - m)];
+        const auto a1B = spin_active ? alm1_ptr[idx_base + (l + 1 - m)] : a0B;
+        const double scA = pre_phase * precomputed_l_factors[static_cast<size_t>(l)];
+        const double scB = pre_phase * precomputed_l_factors[static_cast<size_t>(l + 1)];
+        const float64x2_t vr0A = vdupq_n_f64(a0A.real() * scA);
+        const float64x2_t vi0A = vdupq_n_f64(a0A.imag() * scA);
+        const float64x2_t vr1A = vdupq_n_f64(a1A.real() * scA);
+        const float64x2_t vi1A = vdupq_n_f64(a1A.imag() * scA);
+        const float64x2_t vr0B = vdupq_n_f64(a0B.real() * scB);
+        const float64x2_t vi0B = vdupq_n_f64(a0B.imag() * scB);
+        const float64x2_t vr1B = vdupq_n_f64(a1B.real() * scB);
+        const float64x2_t vi1B = vdupq_n_f64(a1B.imag() * scB);
+        const float64x2_t vc1A = vdupq_n_f64(cA.c1);
+        const float64x2_t vc2A = vdupq_n_f64(cA.c2_p);
+        const float64x2_t vc3A = vdupq_n_f64(cA.c3);
+        const float64x2_t vctermA = vmulq_f64(vc1A, vct);
+        const float64x2_t vpA = vfmaq_f64(vmulq_f64(vaddq_f64(vctermA, vc2A), vdp1), vc3A, vdp2);
+        const float64x2_t vmA = vfmaq_f64(vmulq_f64(vsubq_f64(vctermA, vc2A), vdm1), vc3A, vdm2);
+        vrNp = vfmaq_f64(vrNp, vr0A, vpA);
+        viNp = vfmaq_f64(viNp, vi0A, vpA);
+        vrNm = vfmaq_f64(vrNm, vr1A, vmA);
+        viNm = vfmaq_f64(viNm, vi1A, vmA);
+        vrSp = vfmaq_f64(vrSp, vr0A, vmulq_f64(vmA, vpar));
+        viSp = vfmaq_f64(viSp, vi0A, vmulq_f64(vmA, vpar));
+        vrSm = vfmaq_f64(vrSm, vr1A, vmulq_f64(vpA, vpar));
+        viSm = vfmaq_f64(viSm, vi1A, vmulq_f64(vpA, vpar));
+        const float64x2_t vparB = vnegq_f64(vpar);
+        const float64x2_t vc1B = vdupq_n_f64(cB.c1);
+        const float64x2_t vc2B = vdupq_n_f64(cB.c2_p);
+        const float64x2_t vc3B = vdupq_n_f64(cB.c3);
+        const float64x2_t vctermB = vmulq_f64(vc1B, vct);
+        const float64x2_t vpB = vfmaq_f64(vmulq_f64(vaddq_f64(vctermB, vc2B), vpA), vc3B, vdp1);
+        const float64x2_t vmB = vfmaq_f64(vmulq_f64(vsubq_f64(vctermB, vc2B), vmA), vc3B, vdm1);
+        vrNp = vfmaq_f64(vrNp, vr0B, vpB);
+        viNp = vfmaq_f64(viNp, vi0B, vpB);
+        vrNm = vfmaq_f64(vrNm, vr1B, vmB);
+        viNm = vfmaq_f64(viNm, vi1B, vmB);
+        vrSp = vfmaq_f64(vrSp, vr0B, vmulq_f64(vmB, vparB));
+        viSp = vfmaq_f64(viSp, vi0B, vmulq_f64(vmB, vparB));
+        vrSm = vfmaq_f64(vrSm, vr1B, vmulq_f64(vpB, vparB));
+        viSm = vfmaq_f64(viSm, vi1B, vmulq_f64(vpB, vparB));
+        vdp2 = vpA;
+        vdp1 = vpB;
+        vdm2 = vmA;
+        vdm1 = vmB;
+    }
+    if (l <= lmax) {
+        const auto& c = lut_ptr[l - (l0 + 2)];
+        const auto a0 = alm0_ptr[idx_base + (l - m)];
+        const auto a1 = spin_active ? alm1_ptr[idx_base + (l - m)] : a0;
+        const double sc = pre_phase * precomputed_l_factors[static_cast<size_t>(l)];
+        const float64x2_t vr0 = vdupq_n_f64(a0.real() * sc);
+        const float64x2_t vi0 = vdupq_n_f64(a0.imag() * sc);
+        const float64x2_t vr1 = vdupq_n_f64(a1.real() * sc);
+        const float64x2_t vi1 = vdupq_n_f64(a1.imag() * sc);
+        const float64x2_t vc1 = vdupq_n_f64(c.c1);
+        const float64x2_t vc2 = vdupq_n_f64(c.c2_p);
+        const float64x2_t vc3 = vdupq_n_f64(c.c3);
+        const float64x2_t vcterm = vmulq_f64(vc1, vct);
+        const float64x2_t vp = vfmaq_f64(vmulq_f64(vaddq_f64(vcterm, vc2), vdp1), vc3, vdp2);
+        const float64x2_t vm = vfmaq_f64(vmulq_f64(vsubq_f64(vcterm, vc2), vdm1), vc3, vdm2);
+        vrNp = vfmaq_f64(vrNp, vr0, vp);
+        viNp = vfmaq_f64(viNp, vi0, vp);
+        vrNm = vfmaq_f64(vrNm, vr1, vm);
+        viNm = vfmaq_f64(viNm, vi1, vm);
+        vrSp = vfmaq_f64(vrSp, vr0, vmulq_f64(vm, vpar));
+        viSp = vfmaq_f64(viSp, vi0, vmulq_f64(vm, vpar));
+        vrSm = vfmaq_f64(vrSm, vr1, vmulq_f64(vp, vpar));
+        viSm = vfmaq_f64(viSm, vi1, vmulq_f64(vp, vpar));
+    }
+    vst1q_f64(rNp, vrNp);
+    vst1q_f64(iNp, viNp);
+    vst1q_f64(rNm, vrNm);
+    vst1q_f64(iNm, viNm);
+    vst1q_f64(rSp, vrSp);
+    vst1q_f64(iSp, viSp);
+    vst1q_f64(rSm, vrSm);
+    vst1q_f64(iSm, viSm);
+}
+#endif
+
 
 torch::Tensor healpix_spin_interpolate_recurrence_cpu(
     const torch::Tensor& alms,
     const torch::Tensor& theta,
     int64_t lmax,
     int64_t mmax,
-    int64_t spin
+    int64_t spin,
+    const c10::complex<double>* phase_ptr = nullptr,
+    const c10::complex<double>* alm0_ptr_in = nullptr,
+    const c10::complex<double>* alm1_ptr_in = nullptr,
+    c10::complex<double>* eq_plus = nullptr,
+    c10::complex<double>* eq_minus = nullptr,
+    int64_t eq_start = -1,
+    int64_t n_eq = 0,
+    int64_t nph_eq = 0
 ) {
-    auto alms_f = alms.contiguous();
-    auto alms_a = alms_f.accessor<c10::complex<double>, 2>();
+    torch::Tensor alms_keep;
+    const c10::complex<double>* alm0_ptr = alm0_ptr_in;
+    const c10::complex<double>* alm1_ptr = alm1_ptr_in;
+    if (alm0_ptr == nullptr) {
+        alms_keep = alms.contiguous();
+        alm0_ptr = alms_keep.data_ptr<c10::complex<double>>();
+        alm1_ptr = alm0_ptr + alms_keep.size(1);
+    } else {
+        (void)alms;
+    }
+    const int64_t spin_abs = std::abs(spin);
+    if ((spin_abs == 1 || spin_abs == 2) && spin_ishioka_enabled()) {
+        return ishioka_spin_lowered_interpolate_cpu(
+            alm0_ptr,
+            alm1_ptr,
+            theta,
+            lmax,
+            mmax,
+            spin_abs,
+            phase_ptr,
+            eq_plus,
+            eq_minus,
+            eq_start,
+            n_eq,
+            nph_eq
+        );
+    }
     int64_t nrings = theta.size(0);
     int64_t n_eff = (nrings + 1) / 2;
     int64_t n_pairs = nrings / 2;
     bool has_equator = (nrings % 2 != 0);
+    const int64_t eq_end = eq_start + n_eq;
+    const bool write_eq =
+        (eq_plus != nullptr && eq_minus != nullptr && n_eq > 0 && nph_eq > mmax && eq_start >= 0);
     ensure_l_factors(lmax);
 
     auto options = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
     torch::Tensor s_modes = torch::zeros({2, mmax + 1, nrings}, options);
-    auto s_modes_a = s_modes.accessor<c10::complex<double>, 3>();
+    auto* s0_ptr = s_modes.data_ptr<c10::complex<double>>();
+    auto* s1_ptr = s0_ptr + (mmax + 1) * nrings;
     auto th_ptr = theta.data_ptr<double>();
 
     std::vector<int64_t> m_offsets(mmax + 1);
     int64_t current_lut_off = 0;
     for (int64_t m = 0; m <= mmax; ++m) {
         m_offsets[m] = current_lut_off;
-        int64_t l0 = std::max((int64_t)std::abs(spin), m);
+        int64_t l0 = std::max(std::abs(spin), m);
         if (lmax >= l0 + 2) {
             current_lut_off += (lmax - (l0 + 2) + 1);
         }
     }
     const auto& lut = g_recurrence_cache.get_coeffs(lmax, mmax, spin, m_offsets);
 
-    std::vector<double> cos_theta_all(n_eff);
-    for(int i=0; i<n_eff; ++i) cos_theta_all[i] = std::cos(th_ptr[i]);
+    std::vector<double> cos_theta_all(n_eff), sin_half_all(n_eff), cos_half_all(n_eff);
+    for (int i = 0; i < n_eff; ++i) {
+        const double th = th_ptr[i];
+        cos_theta_all[static_cast<size_t>(i)] = std::cos(th);
+        sin_half_all[static_cast<size_t>(i)] = std::sin(th * 0.5);
+        cos_half_all[static_cast<size_t>(i)] = std::cos(th * 0.5);
+    }
     std::vector<int64_t> mlim_north(n_eff, lmax);
     if (spin_mlim_prune_enabled()) {
-        const int64_t spin_abs = std::abs(spin);
+        const int64_t mlim_spin = std::abs(spin);
         for (int64_t i = 0; i < n_eff; ++i) {
             const double cth = cos_theta_all[static_cast<size_t>(i)];
             const double sth = std::sqrt(std::max(0.0, 1.0 - cth * cth));
-            mlim_north[static_cast<size_t>(i)] = sharp_mlim_estimate(lmax, spin_abs, sth, cth);
+            mlim_north[static_cast<size_t>(i)] = sharp_mlim_estimate(lmax, mlim_spin, sth, cth);
         }
     }
 
-    // For small N, overhead of parallel_for is high. Use a larger grain size (e.g. 8).
-    at::parallel_for(0, mmax + 1, 8, [&](int64_t m_start, int64_t m_end) {
+    parallel_m_ranges(mmax, [&](int64_t m0, int64_t stride) {
         // Allocate working buffers ONCE per thread task, rather than per inner loop.
         std::vector<double> v_dp2(n_eff), v_dp1(n_eff), v_dpc(n_eff);
         std::vector<double> v_dm2(n_eff), v_dm1(n_eff), v_dmc(n_eff);
@@ -2728,12 +4330,15 @@ torch::Tensor healpix_spin_interpolate_recurrence_cpu(
         double * __restrict__ rSm = v_rSm.data(); double * __restrict__ iSm = v_iSm.data();
         uint8_t * __restrict__ active = v_active.data();
         const double * __restrict__ ct_ptr = cos_theta_all.data();
+        const double * __restrict__ sh_ptr = sin_half_all.data();
+        const double * __restrict__ ch_ptr = cos_half_all.data();
 
-        for (int64_t m = m_start; m < m_end; ++m) {
-            int64_t l0 = std::max((int64_t)std::abs(spin), m);
+        for (int64_t m = m0; m <= mmax; m += stride) {
+            int64_t l0 = std::max(std::abs(spin), m);
             int64_t idx_base = m * (lmax + 1) - (m * (m - 1)) / 2;
-            const double pre_phase = ((m % 2 != 0) ? -1.0 : 1.0) * ((std::abs(spin) % 2 != 0) ? -1.0 : 1.0);
-            const bool spin_active = (spin != 0);
+            const double pre_phase = ((m % 2 != 0) ? -1.0 : 1.0)
+                * ((std::abs(spin) % 2 != 0) ? -1.0 : 1.0);
+            const bool distinct_d = (spin != 0);
             const auto* lut_ptr = &lut[m_offsets[m]];
             bool any_active = false;
 
@@ -2747,9 +4352,15 @@ torch::Tensor healpix_spin_interpolate_recurrence_cpu(
             if (!any_active) {
                 continue;
             }
+            int pair0 = 0;
+            int n_run = 0;
+            spin_active_pair_span(active, static_cast<int>(n_pairs), pair0, n_run);
 
             WignerDCoeffs coeffs_p1 = get_wigner_d_coeffs(l0, m, -spin);
-            WignerDCoeffs coeffs_m1; if (spin_active) coeffs_m1 = get_wigner_d_coeffs(l0, m, spin);
+            WignerDCoeffs coeffs_m1;
+            if (distinct_d) {
+                coeffs_m1 = get_wigner_d_coeffs(l0, m, spin);
+            }
 
             for(int i=0; i<n_eff; ++i) {
                 if (!active[i]) {
@@ -2759,28 +4370,41 @@ torch::Tensor healpix_spin_interpolate_recurrence_cpu(
                     dm2[i] = 0.0;
                     continue;
                 }
-                dp1[i] = eval_wigner_d(coeffs_p1, th_ptr[i]);
-                if(spin_active) dm1[i] = eval_wigner_d(coeffs_m1, th_ptr[i]);
-                else dm1[i] = dp1[i];
+                dp1[i] = eval_wigner_d_half(coeffs_p1, sh_ptr[i], ch_ptr[i]);
+                if (distinct_d) {
+                    dm1[i] = eval_wigner_d_half(coeffs_m1, sh_ptr[i], ch_ptr[i]);
+                } else {
+                    dm1[i] = dp1[i];
+                }
                 dp2[i] = 0.0;
                 dm2[i] = 0.0;
             }
 
 
-            auto update_block_internal = [&](int64_t l, const double* __restrict__ d_p, const double* __restrict__ d_m) {
-                const c10::complex<double> a0 = alms_a[0][idx_base+(l-m)];
-                const c10::complex<double> a1 = spin_active ? alms_a[1][idx_base+(l-m)] : a0;
+            auto acc_spin = [&](int64_t l, const double* __restrict__ d_p, const double* __restrict__ d_m) {
+                const c10::complex<double> a0 = alm0_ptr[idx_base+(l-m)];
+                const c10::complex<double> a1 = alm1_ptr[idx_base+(l-m)];
                 const double sc = pre_phase * precomputed_l_factors[l];
                 const double r0 = a0.real()*sc, i0 = a0.imag()*sc, r1 = a1.real()*sc, i1 = a1.imag()*sc;
                 const double parity = ((l+m)%2 == 0) ? 1.0 : -1.0;
-
-                #pragma clang loop vectorize(enable)
-                for(int i=0; i<n_pairs; ++i) {
-                    rNp[i] += r0*d_p[i]; iNp[i] += i0*d_p[i];
-                    rNm[i] += r1*d_m[i]; iNm[i] += i1*d_m[i];
-                    rSp[i] += r0*d_m[i]*parity; iSp[i] += i0*d_m[i]*parity;
-                    rSm[i] += r1*d_p[i]*parity; iSm[i] += i1*d_p[i]*parity;
-                }
+                spin_interpolate_dot_rings(
+                    n_run,
+                    r0,
+                    i0,
+                    r1,
+                    i1,
+                    parity,
+                    d_p + pair0,
+                    d_m + pair0,
+                    rNp + pair0,
+                    iNp + pair0,
+                    rNm + pair0,
+                    iNm + pair0,
+                    rSp + pair0,
+                    iSp + pair0,
+                    rSm + pair0,
+                    iSm + pair0
+                );
                 if (has_equator && active[n_pairs]) {
                     int i = n_pairs;
                     rNp[i] += r0*d_p[i]; iNp[i] += i0*d_p[i];
@@ -2788,10 +4412,13 @@ torch::Tensor healpix_spin_interpolate_recurrence_cpu(
                 }
             };
 
-            update_block_internal(l0, dp1, dm1);
+            acc_spin(l0, dp1, dm1);
             if (l0 < lmax) {
                 WignerDCoeffs coeffs_pc = get_wigner_d_coeffs(l0+1, m, -spin);
-                WignerDCoeffs coeffs_mc; if (spin_active) coeffs_mc = get_wigner_d_coeffs(l0+1, m, spin);
+                WignerDCoeffs coeffs_mc;
+                if (distinct_d) {
+                    coeffs_mc = get_wigner_d_coeffs(l0+1, m, spin);
+                }
 
                 for(int i=0; i<n_eff; ++i) {
                     if (!active[i]) {
@@ -2799,57 +4426,156 @@ torch::Tensor healpix_spin_interpolate_recurrence_cpu(
                         dmc[i] = 0.0;
                         continue;
                     }
-                    dpc[i] = eval_wigner_d(coeffs_pc, th_ptr[i]);
-                    if(spin_active) dmc[i] = eval_wigner_d(coeffs_mc, th_ptr[i]);
-                    else dmc[i] = dpc[i];
+                    dpc[i] = eval_wigner_d_half(coeffs_pc, sh_ptr[i], ch_ptr[i]);
+                    if (distinct_d) {
+                        dmc[i] = eval_wigner_d_half(coeffs_mc, sh_ptr[i], ch_ptr[i]);
+                    } else {
+                        dmc[i] = dpc[i];
+                    }
                 }
-                update_block_internal(l0+1, dpc, dmc);
+                acc_spin(l0+1, dpc, dmc);
                 { auto t = dp2; dp2 = dp1; dp1 = dpc; dpc = t; }
                 { auto t = dm2; dm2 = dm1; dm1 = dmc; dmc = t; }
 
-                for (int64_t l = l0 + 2; l <= lmax; ++l) {
-                    const auto& c = lut_ptr[l - (l0 + 2)];
-                    const c10::complex<double> a0 = alms_a[0][idx_base+(l-m)];
-                    const c10::complex<double> a1 = spin_active ? alms_a[1][idx_base+(l-m)] : a0;
-                    const double sc = pre_phase * precomputed_l_factors[l];
-                    const double r0 = a0.real()*sc, i0 = a0.imag()*sc, r1 = a1.real()*sc, i1 = a1.imag()*sc;
-                    const double parity = ((l+m)%2 == 0) ? 1.0 : -1.0;
-                    const double c1 = c.c1, c2 = c.c2_p, c3 = c.c3;
-
-                    #pragma clang loop vectorize(enable)
-                    for(int i=0; i<n_pairs; ++i) {
-                        const double vpN = (c1*ct_ptr[i] + c2)*dp1[i] + c3*dp2[i];
-                        const double vmN = (c1*ct_ptr[i] - c2)*dm1[i] + c3*dm2[i];
-                        dpc[i] = vpN; dmc[i] = vmN;
-                        rNp[i] += r0*vpN; iNp[i] += i0*vpN;
-                        rNm[i] += r1*vmN; iNm[i] += i1*vmN;
-                        rSp[i] += r0*vmN*parity; iSp[i] += i0*vmN*parity;
-                        rSm[i] += r1*vpN*parity; iSm[i] += i1*vpN*parity;
-                    }
-                    if (has_equator && active[n_pairs]) {
-                        int i = n_pairs;
-                        const double vpN = (c1*ct_ptr[i] + c2)*dp1[i] + c3*dp2[i];
-                        const double vmN = (c1*ct_ptr[i] - c2)*dm1[i] + c3*dm2[i];
-                        dpc[i] = vpN; dmc[i] = vmN;
-                        rNp[i] += r0*vpN; iNp[i] += i0*vpN;
-                        rNm[i] += r1*vmN; iNm[i] += i1*vmN;
-                    }
-                    { auto t = dp2; dp2 = dp1; dp1 = dpc; dpc = t; }
-                    { auto t = dm2; dm2 = dm1; dm1 = dmc; dmc = t; }
+                int i = 0;
+#if defined(__aarch64__)
+                for (; i + 4 <= n_run; i += 4) {
+                    spin_interpolate_l_scan_four(
+                        l0,
+                        lmax,
+                        m,
+                        lut_ptr,
+                        alm0_ptr,
+                        alm1_ptr,
+                        idx_base,
+                        pre_phase,
+                        true,
+                        ct_ptr + pair0 + i,
+                        dp1 + pair0 + i,
+                        dp2 + pair0 + i,
+                        dm1 + pair0 + i,
+                        dm2 + pair0 + i,
+                        rNp + pair0 + i,
+                        iNp + pair0 + i,
+                        rNm + pair0 + i,
+                        iNm + pair0 + i,
+                        rSp + pair0 + i,
+                        iSp + pair0 + i,
+                        rSm + pair0 + i,
+                        iSm + pair0 + i
+                    );
+                }
+                for (; i + 2 <= n_run; i += 2) {
+                    spin_interpolate_l_scan_two(
+                        l0,
+                        lmax,
+                        m,
+                        lut_ptr,
+                        alm0_ptr,
+                        alm1_ptr,
+                        idx_base,
+                        pre_phase,
+                        true,
+                        ct_ptr + pair0 + i,
+                        dp1 + pair0 + i,
+                        dp2 + pair0 + i,
+                        dm1 + pair0 + i,
+                        dm2 + pair0 + i,
+                        rNp + pair0 + i,
+                        iNp + pair0 + i,
+                        rNm + pair0 + i,
+                        iNm + pair0 + i,
+                        rSp + pair0 + i,
+                        iSp + pair0 + i,
+                        rSm + pair0 + i,
+                        iSm + pair0 + i
+                    );
+                }
+#endif
+                for (; i < n_run; ++i) {
+                    const int j = pair0 + i;
+                    spin_interpolate_l_scan_one(
+                        l0,
+                        lmax,
+                        m,
+                        lut_ptr,
+                        alm0_ptr,
+                        alm1_ptr,
+                        idx_base,
+                        pre_phase,
+                        true,
+                        ct_ptr[j],
+                        dp1[j],
+                        dp2[j],
+                        dm1[j],
+                        dm2[j],
+                        rNp[j],
+                        iNp[j],
+                        rNm[j],
+                        iNm[j],
+                        rSp[j],
+                        iSp[j],
+                        rSm[j],
+                        iSm[j]
+                    );
+                }
+                if (has_equator && active[n_pairs]) {
+                    int eq = static_cast<int>(n_pairs);
+                    spin_interpolate_l_scan_one(
+                        l0,
+                        lmax,
+                        m,
+                        lut_ptr,
+                        alm0_ptr,
+                        alm1_ptr,
+                        idx_base,
+                        pre_phase,
+                        true,
+                        ct_ptr[eq],
+                        dp1[eq],
+                        dp2[eq],
+                        dm1[eq],
+                        dm2[eq],
+                        rNp[eq],
+                        iNp[eq],
+                        rNm[eq],
+                        iNm[eq],
+                        rSp[eq],
+                        iSp[eq],
+                        rSm[eq],
+                        iSm[eq]
+                    );
                 }
             }
 
+            auto store_pair = [&](int64_t idx, int /*ring_i*/, double rP, double iP, double rM, double iM) {
+                auto zp = c10::complex<double>(rP, iP);
+                auto zm = c10::complex<double>(rM, iM);
+                if (phase_ptr != nullptr) {
+                    const auto ph = phase_ptr[m * nrings + idx];
+                    zp = zp * ph;
+                    zm = zm * ph;
+                }
+                if (write_eq && idx >= eq_start && idx < eq_end && m < nph_eq) {
+                    const int64_t off = (idx - eq_start) * nph_eq + m;
+                    eq_plus[off] = zp;
+                    eq_minus[off] = zm;
+                    if (m == 0) {
+                        s0_ptr[idx] = zp;
+                        s1_ptr[idx] = zm;
+                    }
+                } else {
+                    s0_ptr[m * nrings + idx] = zp;
+                    s1_ptr[m * nrings + idx] = zm;
+                }
+            };
             for(int i=0; i<n_eff; ++i) {
                 if (!active[i]) {
                     continue;
                 }
-                int64_t idx_N = i;
-                s_modes_a[0][m][idx_N] = c10::complex<double>(rNp[i], iNp[i]);
-                s_modes_a[1][m][idx_N] = c10::complex<double>(rNm[i], iNm[i]);
+                store_pair(i, i, rNp[i], iNp[i], rNm[i], iNm[i]);
                 if (i < n_pairs) {
-                    int64_t idx_S = nrings - 1 - i;
-                    s_modes_a[0][m][idx_S] = c10::complex<double>(rSp[i], iSp[i]);
-                    s_modes_a[1][m][idx_S] = c10::complex<double>(rSm[i], iSm[i]);
+                    store_pair(nrings - 1 - i, i, rSp[i], iSp[i], rSm[i], iSm[i]);
                 }
             }
         }
@@ -2883,6 +4609,987 @@ static void ensure_mfac(int64_t mmax) {
             precomputed_mfac[i] = precomputed_mfac[i - 1] * std::sqrt((2.0 * i + 1.0) / (2.0 * i));
         }
     }
+}
+
+static inline double ishioka_eps(int64_t n, int64_t m) {
+    if (n <= m) {
+        return 0.0;
+    }
+    const double nn = static_cast<double>(n) * static_cast<double>(n);
+    const double mm = static_cast<double>(m) * static_cast<double>(m);
+    return std::sqrt((nn - mm) / (4.0 * nn - 1.0));
+}
+
+// Ishioka 2018 (JMSJ, CC BY 4.0) skip-2 coefficients for one m.
+struct IshiokaMCoeffs {
+    std::vector<double> eps;
+    std::vector<double> alpha;
+    std::vector<double> a;
+    std::vector<double> b;
+    int64_t kmax = 0;
+    int64_t kmax_odd = -1;
+};
+
+class IshiokaCache {
+    std::mutex mutex_;
+    int64_t last_lmax_ = -1;
+    int64_t last_mmax_ = -1;
+    std::vector<IshiokaMCoeffs> by_m_;
+
+public:
+    const std::vector<IshiokaMCoeffs>& get(int64_t lmax, int64_t mmax) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (lmax == last_lmax_ && mmax == last_mmax_) {
+            return by_m_;
+        }
+        by_m_.assign(static_cast<size_t>(mmax + 1), IshiokaMCoeffs{});
+        for (int64_t m = 0; m <= mmax; ++m) {
+            IshiokaMCoeffs& c = by_m_[static_cast<size_t>(m)];
+            c.kmax = (lmax - m) / 2;
+            c.kmax_odd = (lmax >= m + 1) ? (lmax - m - 1) / 2 : -1;
+            const int64_t nmax = lmax + 2;
+            c.eps.assign(static_cast<size_t>(nmax + 1), 0.0);
+            for (int64_t n = m + 1; n <= nmax; ++n) {
+                c.eps[static_cast<size_t>(n)] = ishioka_eps(n, m);
+            }
+            c.alpha.assign(static_cast<size_t>(c.kmax + 1), 0.0);
+            c.a.assign(static_cast<size_t>(std::max(c.kmax, int64_t{0})), 0.0);
+            c.b.assign(c.a.size(), 0.0);
+            if (c.kmax < 0) {
+                continue;
+            }
+            const double e1 = c.eps[static_cast<size_t>(m + 1)];
+            c.alpha[0] = (e1 == 0.0) ? 0.0 : 1.0 / e1;
+            if (c.kmax >= 1) {
+                c.alpha[1] = e1 / (c.eps[static_cast<size_t>(m + 2)] * c.eps[static_cast<size_t>(m + 3)]);
+                for (int64_t k = 1; k < c.kmax; ++k) {
+                    const double den =
+                        c.alpha[static_cast<size_t>(k)] *
+                        c.eps[static_cast<size_t>(m + 2 * k + 3)] *
+                        c.eps[static_cast<size_t>(m + 2 * k + 2)];
+                    c.alpha[static_cast<size_t>(k + 1)] = ((k & 1) ? -1.0 : 1.0) / den;
+                }
+            }
+            for (int64_t k = 0; k < c.kmax; ++k) {
+                const double ak = ((k & 1) ? -1.0 : 1.0) *
+                    c.alpha[static_cast<size_t>(k)] * c.alpha[static_cast<size_t>(k)];
+                c.a[static_cast<size_t>(k)] = ak;
+                const double e_a = c.eps[static_cast<size_t>(m + 2 * k + 2)];
+                const double e_b = c.eps[static_cast<size_t>(m + 2 * k + 1)];
+                c.b[static_cast<size_t>(k)] = -ak * (e_a * e_a + e_b * e_b);
+            }
+        }
+        last_lmax_ = lmax;
+        last_mmax_ = mmax;
+        return by_m_;
+    }
+};
+
+static IshiokaCache g_ishioka_cache;
+
+struct RecoupleSrc {
+    double cm2, cm1, c0, cp1, cp2;
+};
+
+class RecoupleCache {
+    std::mutex mutex_;
+    int64_t last_lmax_ = -1;
+    int64_t last_mmax_ = -1;
+    int64_t last_spin_ = -1;
+    std::vector<int64_t> m_off_;
+    std::vector<int64_t> lmin_;
+    std::vector<RecoupleSrc> src_;
+
+public:
+    void get(
+        int64_t lmax,
+        int64_t mmax,
+        int64_t spin,
+        const RecoupleSrc*& src_base,
+        const int64_t*& m_off,
+        const int64_t*& lmin
+    ) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (lmax != last_lmax_ || mmax != last_mmax_ || spin != last_spin_) {
+            m_off_.assign(static_cast<size_t>(mmax + 1), 0);
+            lmin_.assign(static_cast<size_t>(mmax + 1), 0);
+            src_.clear();
+            for (int64_t m = 0; m <= mmax; ++m) {
+                m_off_[static_cast<size_t>(m)] = static_cast<int64_t>(src_.size());
+                const int64_t lmin_m = std::max(m, spin);
+                lmin_[static_cast<size_t>(m)] = lmin_m;
+                for (int64_t l = lmin_m; l <= lmax; ++l) {
+                    RecoupleSrc c{0.0, 0.0, 0.0, 0.0, 0.0};
+                    if (spin == 1) {
+                        const double den = std::sqrt(static_cast<double>(l) * static_cast<double>(l + 1));
+                        c.cm1 = -(static_cast<double>(l + 1)) * ishioka_eps(l, m) / den;
+                        c.c0 = -static_cast<double>(m) / den;
+                        c.cp1 = static_cast<double>(l) * ishioka_eps(l + 1, m) / den;
+                    } else {
+                        const double Nl = std::sqrt(
+                            static_cast<double>(l - 1) * static_cast<double>(l) *
+                            static_cast<double>(l + 1) * static_cast<double>(l + 2)
+                        );
+                        c.cm2 = static_cast<double>(l + 1) * static_cast<double>(l + 2) *
+                            ishioka_eps(l, m) * ishioka_eps(l - 1, m) / Nl;
+                        c.cm1 = 2.0 * static_cast<double>(m) * static_cast<double>(l + 2) *
+                            ishioka_eps(l, m) / Nl;
+                        c.c0 = 2.0 * static_cast<double>(l - 1) * static_cast<double>(l + 2) *
+                            (3.0 * static_cast<double>(m) * static_cast<double>(m) -
+                             static_cast<double>(l) * static_cast<double>(l + 1)) /
+                            (Nl * static_cast<double>(2 * l - 1) * static_cast<double>(2 * l + 3));
+                        c.cp1 = -2.0 * static_cast<double>(m) * static_cast<double>(l - 1) *
+                            ishioka_eps(l + 1, m) / Nl;
+                        c.cp2 = static_cast<double>(l) * static_cast<double>(l - 1) *
+                            ishioka_eps(l + 1, m) * ishioka_eps(l + 2, m) / Nl;
+                    }
+                    src_.push_back(c);
+                }
+            }
+            last_lmax_ = lmax;
+            last_mmax_ = mmax;
+            last_spin_ = spin;
+        }
+        src_base = src_.data();
+        m_off = m_off_.data();
+        lmin = lmin_.data();
+    }
+};
+
+static RecoupleCache g_recouple_cache;
+
+static void recouple_spin_to_scalar_m(
+    const c10::complex<double>* plus_m,
+    const c10::complex<double>* minus_m,
+    int64_t lmax,
+    int64_t m,
+    int64_t spin,
+    const RecoupleSrc* src_base,
+    const int64_t* m_off,
+    const int64_t* lmin_arr,
+    c10::complex<double>* s0,
+    c10::complex<double>* s1
+) {
+    const int64_t lmax_s = lmax + spin;
+    const int64_t n_s = lmax_s - m + 1;
+    std::fill(s0, s0 + n_s, c10::complex<double>(0.0, 0.0));
+    std::fill(s1, s1 + n_s, c10::complex<double>(0.0, 0.0));
+    const int64_t lmin = lmin_arr[m];
+    const RecoupleSrc* cs = src_base + m_off[m];
+    for (int64_t l = lmin; l <= lmax; ++l) {
+        const RecoupleSrc& c = cs[l - lmin];
+        const c10::complex<double> p = plus_m[l - m];
+        const c10::complex<double> q = minus_m[l - m];
+        if (c.cm2 != 0.0 && l - 2 >= m) {
+            s0[l - 2 - m] += p * c.cm2;
+            s1[l - 2 - m] += q * c.cm2;
+        }
+        if (c.cm1 != 0.0 && l - 1 >= m) {
+            s0[l - 1 - m] += p * c.cm1;
+            s1[l - 1 - m] += q * (-c.cm1);
+        }
+        s0[l - m] += p * c.c0;
+        s1[l - m] += q * c.c0;
+        if (c.cp1 != 0.0 && l + 1 <= lmax_s) {
+            s0[l + 1 - m] += p * c.cp1;
+            s1[l + 1 - m] += q * (-c.cp1);
+        }
+        if (c.cp2 != 0.0 && l + 2 <= lmax_s) {
+            s0[l + 2 - m] += p * c.cp2;
+            s1[l + 2 - m] += q * c.cp2;
+        }
+    }
+}
+
+static void recouple_scalar_to_spin_m(
+    const c10::complex<double>* s0,
+    const c10::complex<double>* s1,
+    int64_t lmax,
+    int64_t m,
+    int64_t spin,
+    const RecoupleSrc* src_base,
+    const int64_t* m_off,
+    const int64_t* lmin_arr,
+    c10::complex<double>* plus_m,
+    c10::complex<double>* minus_m
+) {
+    const int64_t lmax_s = lmax + spin;
+    const int64_t n_spin = lmax - m + 1;
+    std::fill(plus_m, plus_m + n_spin, c10::complex<double>(0.0, 0.0));
+    std::fill(minus_m, minus_m + n_spin, c10::complex<double>(0.0, 0.0));
+    const int64_t lmin = lmin_arr[m];
+    const RecoupleSrc* cs = src_base + m_off[m];
+    for (int64_t l = lmin; l <= lmax; ++l) {
+        const RecoupleSrc& c = cs[l - lmin];
+        c10::complex<double> p(0.0, 0.0);
+        c10::complex<double> q(0.0, 0.0);
+        if (c.cm2 != 0.0 && l - 2 >= m) {
+            p += s0[l - 2 - m] * c.cm2;
+            q += s1[l - 2 - m] * c.cm2;
+        }
+        if (c.cm1 != 0.0 && l - 1 >= m) {
+            p += s0[l - 1 - m] * c.cm1;
+            q += s1[l - 1 - m] * (-c.cm1);
+        }
+        p += s0[l - m] * c.c0;
+        q += s1[l - m] * c.c0;
+        if (c.cp1 != 0.0 && l + 1 <= lmax_s) {
+            p += s0[l + 1 - m] * c.cp1;
+            q += s1[l + 1 - m] * (-c.cp1);
+        }
+        if (c.cp2 != 0.0 && l + 2 <= lmax_s) {
+            p += s0[l + 2 - m] * c.cp2;
+            q += s1[l + 2 - m] * c.cp2;
+        }
+        plus_m[l - m] = p;
+        minus_m[l - m] = q;
+    }
+}
+
+template <bool DoOdd, bool Step>
+static inline void ishioka_k_step_rings_impl(
+    int n,
+    double we0r,
+    double we0i,
+    double we1r,
+    double we1i,
+    double wo0r,
+    double wo0i,
+    double wo1r,
+    double wo1i,
+    double ak,
+    double bk,
+    const double* __restrict__ mu2,
+    double* __restrict__ p,
+    double* __restrict__ pold,
+    double* __restrict__ s0r,
+    double* __restrict__ s0i,
+    double* __restrict__ s1r,
+    double* __restrict__ s1i,
+    double* __restrict__ a0r,
+    double* __restrict__ a0i,
+    double* __restrict__ a1r,
+    double* __restrict__ a1i
+) {
+    int i = 0;
+#if defined(__aarch64__)
+    const float64x2_t vwe0r = vdupq_n_f64(we0r);
+    const float64x2_t vwe0i = vdupq_n_f64(we0i);
+    const float64x2_t vwe1r = vdupq_n_f64(we1r);
+    const float64x2_t vwe1i = vdupq_n_f64(we1i);
+    const float64x2_t vwo0r = vdupq_n_f64(wo0r);
+    const float64x2_t vwo0i = vdupq_n_f64(wo0i);
+    const float64x2_t vwo1r = vdupq_n_f64(wo1r);
+    const float64x2_t vwo1i = vdupq_n_f64(wo1i);
+    const float64x2_t vak = vdupq_n_f64(ak);
+    const float64x2_t vbk = vdupq_n_f64(bk);
+    for (; i + 4 <= n; i += 4) {
+        for (int off : {i, i + 2}) {
+            const float64x2_t vp = vld1q_f64(p + off);
+            vst1q_f64(s0r + off, vfmaq_f64(vld1q_f64(s0r + off), vwe0r, vp));
+            vst1q_f64(s0i + off, vfmaq_f64(vld1q_f64(s0i + off), vwe0i, vp));
+            vst1q_f64(s1r + off, vfmaq_f64(vld1q_f64(s1r + off), vwe1r, vp));
+            vst1q_f64(s1i + off, vfmaq_f64(vld1q_f64(s1i + off), vwe1i, vp));
+            if constexpr (DoOdd) {
+                vst1q_f64(a0r + off, vfmaq_f64(vld1q_f64(a0r + off), vwo0r, vp));
+                vst1q_f64(a0i + off, vfmaq_f64(vld1q_f64(a0i + off), vwo0i, vp));
+                vst1q_f64(a1r + off, vfmaq_f64(vld1q_f64(a1r + off), vwo1r, vp));
+                vst1q_f64(a1i + off, vfmaq_f64(vld1q_f64(a1i + off), vwo1i, vp));
+            }
+            if constexpr (Step) {
+                const float64x2_t pnew = vfmaq_f64(
+                    vld1q_f64(pold + off),
+                    vfmaq_f64(vbk, vak, vld1q_f64(mu2 + off)),
+                    vp
+                );
+                vst1q_f64(pold + off, vp);
+                vst1q_f64(p + off, pnew);
+            }
+        }
+    }
+#endif
+    for (; i < n; ++i) {
+        const double pj = p[i];
+        s0r[i] += we0r * pj;
+        s0i[i] += we0i * pj;
+        s1r[i] += we1r * pj;
+        s1i[i] += we1i * pj;
+        if constexpr (DoOdd) {
+            a0r[i] += wo0r * pj;
+            a0i[i] += wo0i * pj;
+            a1r[i] += wo1r * pj;
+            a1i[i] += wo1i * pj;
+        }
+        if constexpr (Step) {
+            const double pnew = (ak * mu2[i] + bk) * pj + pold[i];
+            pold[i] = pj;
+            p[i] = pnew;
+        }
+    }
+}
+
+static inline void ishioka_k_step_rings(
+    int n,
+    bool do_odd,
+    bool step,
+    double we0r,
+    double we0i,
+    double we1r,
+    double we1i,
+    double wo0r,
+    double wo0i,
+    double wo1r,
+    double wo1i,
+    double ak,
+    double bk,
+    const double* __restrict__ mu2,
+    double* __restrict__ p,
+    double* __restrict__ pold,
+    double* __restrict__ s0r,
+    double* __restrict__ s0i,
+    double* __restrict__ s1r,
+    double* __restrict__ s1i,
+    double* __restrict__ a0r,
+    double* __restrict__ a0i,
+    double* __restrict__ a1r,
+    double* __restrict__ a1i
+) {
+    if (do_odd) {
+        if (step) {
+            ishioka_k_step_rings_impl<true, true>(
+                n, we0r, we0i, we1r, we1i, wo0r, wo0i, wo1r, wo1i, ak, bk,
+                mu2, p, pold, s0r, s0i, s1r, s1i, a0r, a0i, a1r, a1i
+            );
+        } else {
+            ishioka_k_step_rings_impl<true, false>(
+                n, we0r, we0i, we1r, we1i, wo0r, wo0i, wo1r, wo1i, ak, bk,
+                mu2, p, pold, s0r, s0i, s1r, s1i, a0r, a0i, a1r, a1i
+            );
+        }
+    } else if (step) {
+        ishioka_k_step_rings_impl<false, true>(
+            n, we0r, we0i, we1r, we1i, wo0r, wo0i, wo1r, wo1i, ak, bk,
+            mu2, p, pold, s0r, s0i, s1r, s1i, a0r, a0i, a1r, a1i
+        );
+    } else {
+        ishioka_k_step_rings_impl<false, false>(
+            n, we0r, we0i, we1r, we1i, wo0r, wo0i, wo1r, wo1i, ak, bk,
+            mu2, p, pold, s0r, s0i, s1r, s1i, a0r, a0i, a1r, a1i
+        );
+    }
+}
+
+template <bool DoOdd, bool Step>
+static inline void ishioka_k_reduce_rings_impl(
+    int n,
+    double ak,
+    double bk,
+    const double* __restrict__ mu2,
+    double* __restrict__ p,
+    double* __restrict__ pold,
+    const double* __restrict__ s0r,
+    const double* __restrict__ s0i,
+    const double* __restrict__ s1r,
+    const double* __restrict__ s1i,
+    const double* __restrict__ a0r,
+    const double* __restrict__ a0i,
+    const double* __restrict__ a1r,
+    const double* __restrict__ a1i,
+    double& we0r,
+    double& we0i,
+    double& we1r,
+    double& we1i,
+    double& wo0r,
+    double& wo0i,
+    double& wo1r,
+    double& wo1i
+) {
+    int i = 0;
+#if defined(__aarch64__)
+    float64x2_t acc_we0r = vdupq_n_f64(0.0);
+    float64x2_t acc_we0i = vdupq_n_f64(0.0);
+    float64x2_t acc_we1r = vdupq_n_f64(0.0);
+    float64x2_t acc_we1i = vdupq_n_f64(0.0);
+    float64x2_t acc_wo0r = vdupq_n_f64(0.0);
+    float64x2_t acc_wo0i = vdupq_n_f64(0.0);
+    float64x2_t acc_wo1r = vdupq_n_f64(0.0);
+    float64x2_t acc_wo1i = vdupq_n_f64(0.0);
+    const float64x2_t vak = vdupq_n_f64(ak);
+    const float64x2_t vbk = vdupq_n_f64(bk);
+    for (; i + 4 <= n; i += 4) {
+        for (int off : {i, i + 2}) {
+            const float64x2_t vp = vld1q_f64(p + off);
+            acc_we0r = vfmaq_f64(acc_we0r, vld1q_f64(s0r + off), vp);
+            acc_we0i = vfmaq_f64(acc_we0i, vld1q_f64(s0i + off), vp);
+            acc_we1r = vfmaq_f64(acc_we1r, vld1q_f64(s1r + off), vp);
+            acc_we1i = vfmaq_f64(acc_we1i, vld1q_f64(s1i + off), vp);
+            if constexpr (DoOdd) {
+                acc_wo0r = vfmaq_f64(acc_wo0r, vld1q_f64(a0r + off), vp);
+                acc_wo0i = vfmaq_f64(acc_wo0i, vld1q_f64(a0i + off), vp);
+                acc_wo1r = vfmaq_f64(acc_wo1r, vld1q_f64(a1r + off), vp);
+                acc_wo1i = vfmaq_f64(acc_wo1i, vld1q_f64(a1i + off), vp);
+            }
+            if constexpr (Step) {
+                const float64x2_t pnew = vfmaq_f64(
+                    vld1q_f64(pold + off),
+                    vfmaq_f64(vbk, vak, vld1q_f64(mu2 + off)),
+                    vp
+                );
+                vst1q_f64(pold + off, vp);
+                vst1q_f64(p + off, pnew);
+            }
+        }
+    }
+    we0r += vaddvq_f64(acc_we0r);
+    we0i += vaddvq_f64(acc_we0i);
+    we1r += vaddvq_f64(acc_we1r);
+    we1i += vaddvq_f64(acc_we1i);
+    if constexpr (DoOdd) {
+        wo0r += vaddvq_f64(acc_wo0r);
+        wo0i += vaddvq_f64(acc_wo0i);
+        wo1r += vaddvq_f64(acc_wo1r);
+        wo1i += vaddvq_f64(acc_wo1i);
+    }
+#endif
+    for (; i < n; ++i) {
+        const double pj = p[i];
+        we0r += s0r[i] * pj;
+        we0i += s0i[i] * pj;
+        we1r += s1r[i] * pj;
+        we1i += s1i[i] * pj;
+        if constexpr (DoOdd) {
+            wo0r += a0r[i] * pj;
+            wo0i += a0i[i] * pj;
+            wo1r += a1r[i] * pj;
+            wo1i += a1i[i] * pj;
+        }
+        if constexpr (Step) {
+            const double pnew = (ak * mu2[i] + bk) * pj + pold[i];
+            pold[i] = pj;
+            p[i] = pnew;
+        }
+    }
+}
+
+static inline void ishioka_k_reduce_rings(
+    int n,
+    bool do_odd,
+    bool step,
+    double ak,
+    double bk,
+    const double* __restrict__ mu2,
+    double* __restrict__ p,
+    double* __restrict__ pold,
+    const double* __restrict__ s0r,
+    const double* __restrict__ s0i,
+    const double* __restrict__ s1r,
+    const double* __restrict__ s1i,
+    const double* __restrict__ a0r,
+    const double* __restrict__ a0i,
+    const double* __restrict__ a1r,
+    const double* __restrict__ a1i,
+    double& we0r,
+    double& we0i,
+    double& we1r,
+    double& we1i,
+    double& wo0r,
+    double& wo0i,
+    double& wo1r,
+    double& wo1i
+) {
+    if (do_odd) {
+        if (step) {
+            ishioka_k_reduce_rings_impl<true, true>(
+                n, ak, bk, mu2, p, pold, s0r, s0i, s1r, s1i, a0r, a0i, a1r, a1i,
+                we0r, we0i, we1r, we1i, wo0r, wo0i, wo1r, wo1i
+            );
+        } else {
+            ishioka_k_reduce_rings_impl<true, false>(
+                n, ak, bk, mu2, p, pold, s0r, s0i, s1r, s1i, a0r, a0i, a1r, a1i,
+                we0r, we0i, we1r, we1i, wo0r, wo0i, wo1r, wo1i
+            );
+        }
+    } else if (step) {
+        ishioka_k_reduce_rings_impl<false, true>(
+            n, ak, bk, mu2, p, pold, s0r, s0i, s1r, s1i, a0r, a0i, a1r, a1i,
+            we0r, we0i, we1r, we1i, wo0r, wo0i, wo1r, wo1i
+        );
+    } else {
+        ishioka_k_reduce_rings_impl<false, false>(
+            n, ak, bk, mu2, p, pold, s0r, s0i, s1r, s1i, a0r, a0i, a1r, a1i,
+            we0r, we0i, we1r, we1i, wo0r, wo0i, wo1r, wo1i
+        );
+    }
+}
+
+static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
+    const c10::complex<double>* alm0_ptr,
+    const c10::complex<double>* alm1_ptr,
+    const torch::Tensor& theta,
+    int64_t lmax,
+    int64_t mmax,
+    int64_t spin_abs,
+    const c10::complex<double>* phase_ptr,
+    c10::complex<double>* eq_plus,
+    c10::complex<double>* eq_minus,
+    int64_t eq_start,
+    int64_t n_eq,
+    int64_t nph_eq
+) {
+    const int64_t lmax_s = lmax + spin_abs;
+    const int64_t nrings = theta.size(0);
+    const int64_t n_eff = (nrings + 1) / 2;
+    const int64_t n_pairs = nrings / 2;
+    const bool has_equator = (nrings % 2 != 0);
+    const int64_t eq_end = eq_start + n_eq;
+    const bool write_eq =
+        (eq_plus != nullptr && eq_minus != nullptr && n_eq > 0 && nph_eq > mmax && eq_start >= 0);
+    ensure_mfac(mmax);
+    const auto& packs = g_ishioka_cache.get(lmax_s, mmax);
+    const RecoupleSrc* rec_src = nullptr;
+    const int64_t* rec_off = nullptr;
+    const int64_t* rec_lmin = nullptr;
+    g_recouple_cache.get(lmax, mmax, spin_abs, rec_src, rec_off, rec_lmin);
+
+    auto options = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
+    torch::Tensor s_modes = torch::zeros({2, mmax + 1, nrings}, options);
+    auto* s0_ptr = s_modes.data_ptr<c10::complex<double>>();
+    auto* s1_ptr = s0_ptr + (mmax + 1) * nrings;
+    auto th_ptr = theta.data_ptr<double>();
+
+    std::vector<double> cos_theta_all(n_eff), sin_theta_all(n_eff), inv_sin_s(n_eff), mu2_all(n_eff);
+    for (int i = 0; i < n_eff; ++i) {
+        const double th = th_ptr[i];
+        const double ct = std::cos(th);
+        const double st = std::sin(th);
+        cos_theta_all[static_cast<size_t>(i)] = ct;
+        sin_theta_all[static_cast<size_t>(i)] = st;
+        mu2_all[static_cast<size_t>(i)] = ct * ct;
+        inv_sin_s[static_cast<size_t>(i)] = 1.0 / fast_pow(st, static_cast<int>(spin_abs));
+    }
+    std::vector<int64_t> mlim_north(n_eff, lmax_s);
+    if (spin_mlim_prune_enabled()) {
+        for (int64_t i = 0; i < n_eff; ++i) {
+            const double cth = cos_theta_all[static_cast<size_t>(i)];
+            const double sth = sin_theta_all[static_cast<size_t>(i)];
+            mlim_north[static_cast<size_t>(i)] = sharp_mlim_estimate(lmax_s, 0, sth, cth);
+        }
+    }
+
+    parallel_m_ranges(mmax, [&](int64_t m0, int64_t stride) {
+        if (m0 > mmax) {
+            return;
+        }
+        const int64_t n_s_max = lmax_s - m0 + 1;
+        std::vector<c10::complex<double>> v_s0(static_cast<size_t>(n_s_max));
+        std::vector<c10::complex<double>> v_s1(static_cast<size_t>(n_s_max));
+        std::vector<double> v_p(n_eff), v_pold(n_eff);
+        std::vector<double> v_s0r(n_eff), v_s0i(n_eff), v_a0r(n_eff), v_a0i(n_eff);
+        std::vector<double> v_s1r(n_eff), v_s1i(n_eff), v_a1r(n_eff), v_a1i(n_eff);
+        std::vector<uint8_t> v_active(n_eff);
+        double* __restrict__ p = v_p.data();
+        double* __restrict__ pold = v_pold.data();
+        double* __restrict__ s0r = v_s0r.data();
+        double* __restrict__ s0i = v_s0i.data();
+        double* __restrict__ a0r = v_a0r.data();
+        double* __restrict__ a0i = v_a0i.data();
+        double* __restrict__ s1r = v_s1r.data();
+        double* __restrict__ s1i = v_s1i.data();
+        double* __restrict__ a1r = v_a1r.data();
+        double* __restrict__ a1i = v_a1i.data();
+        uint8_t* __restrict__ active = v_active.data();
+        const double* __restrict__ ct_ptr = cos_theta_all.data();
+        const double* __restrict__ st_ptr = sin_theta_all.data();
+        const double* __restrict__ invs_ptr = inv_sin_s.data();
+        const double* __restrict__ mu2_ptr = mu2_all.data();
+
+        for (int64_t m = m0; m <= mmax; m += stride) {
+            const IshiokaMCoeffs& pc = packs[static_cast<size_t>(m)];
+            recouple_spin_to_scalar_m(
+                alm0_ptr + alm_packed_index(m, m, lmax),
+                alm1_ptr + alm_packed_index(m, m, lmax),
+                lmax,
+                m,
+                spin_abs,
+                rec_src,
+                rec_off,
+                rec_lmin,
+                v_s0.data(),
+                v_s1.data()
+            );
+            const c10::complex<double>* __restrict__ sc0 = v_s0.data();
+            const c10::complex<double>* __restrict__ sc1 = v_s1.data();
+            const double pre_phase = (m % 2 != 0) ? -1.0 : 1.0;
+            const double seed = precomputed_mfac[static_cast<size_t>(m)];
+
+            for (int i = 0; i < n_eff; ++i) {
+                const bool on = (m <= mlim_north[static_cast<size_t>(i)]);
+                active[i] = static_cast<uint8_t>(on);
+                p[i] = on ? seed * fast_pow(st_ptr[i], static_cast<int>(m)) : 0.0;
+                pold[i] = 0.0;
+                s0r[i] = 0.0;
+                s0i[i] = 0.0;
+                a0r[i] = 0.0;
+                a0i[i] = 0.0;
+                s1r[i] = 0.0;
+                s1i[i] = 0.0;
+                a1r[i] = 0.0;
+                a1i[i] = 0.0;
+            }
+            int pair0 = 0;
+            int n_run = 0;
+            spin_active_pair_span(active, static_cast<int>(n_pairs), pair0, n_run);
+
+            auto s_at = [&](const c10::complex<double>* sc, int64_t n) -> c10::complex<double> {
+                if (n < m || n > lmax_s) {
+                    return c10::complex<double>(0.0, 0.0);
+                }
+                return sc[n - m];
+            };
+
+            for (int64_t k = 0; k <= pc.kmax; ++k) {
+                const int64_t n_even = m + 2 * k;
+                const double e1 = pc.eps[static_cast<size_t>(n_even + 1)];
+                c10::complex<double> t0 = s_at(sc0, n_even) * e1;
+                c10::complex<double> t1 = s_at(sc1, n_even) * e1;
+                if (k < pc.kmax) {
+                    const double e2 = pc.eps[static_cast<size_t>(n_even + 2)];
+                    t0 += s_at(sc0, n_even + 2) * e2;
+                    t1 += s_at(sc1, n_even + 2) * e2;
+                }
+                const double al = pc.alpha[static_cast<size_t>(k)];
+                const c10::complex<double> we0 = t0 * al;
+                const c10::complex<double> we1 = t1 * al;
+                const bool do_odd = (k <= pc.kmax_odd);
+                c10::complex<double> wo0(0.0, 0.0);
+                c10::complex<double> wo1(0.0, 0.0);
+                if (do_odd) {
+                    wo0 = s_at(sc0, m + 2 * k + 1) * al;
+                    wo1 = s_at(sc1, m + 2 * k + 1) * al;
+                }
+                const double we0r = we0.real(), we0i = we0.imag();
+                const double we1r = we1.real(), we1i = we1.imag();
+                const double wo0r = wo0.real(), wo0i = wo0.imag();
+                const double wo1r = wo1.real(), wo1i = wo1.imag();
+                const bool step = (k < pc.kmax);
+                const double ak = step ? pc.a[static_cast<size_t>(k)] : 0.0;
+                const double bk = step ? pc.b[static_cast<size_t>(k)] : 0.0;
+                ishioka_k_step_rings(
+                    n_run,
+                    do_odd,
+                    step,
+                    we0r,
+                    we0i,
+                    we1r,
+                    we1i,
+                    wo0r,
+                    wo0i,
+                    wo1r,
+                    wo1i,
+                    ak,
+                    bk,
+                    mu2_ptr + pair0,
+                    p + pair0,
+                    pold + pair0,
+                    s0r + pair0,
+                    s0i + pair0,
+                    s1r + pair0,
+                    s1i + pair0,
+                    a0r + pair0,
+                    a0i + pair0,
+                    a1r + pair0,
+                    a1i + pair0
+                );
+                if (has_equator && active[n_pairs]) {
+                    const int j = static_cast<int>(n_pairs);
+                    const double pj = p[j];
+                    s0r[j] += we0r * pj;
+                    s0i[j] += we0i * pj;
+                    s1r[j] += we1r * pj;
+                    s1i[j] += we1i * pj;
+                    if (do_odd) {
+                        a0r[j] += wo0r * pj;
+                        a0i[j] += wo0i * pj;
+                        a1r[j] += wo1r * pj;
+                        a1i[j] += wo1i * pj;
+                    }
+                    if (step) {
+                        const double pnew = (ak * (ct_ptr[j] * ct_ptr[j]) + bk) * pj + pold[j];
+                        pold[j] = pj;
+                        p[j] = pnew;
+                    }
+                }
+            }
+
+            auto store_pair = [&](int64_t idx, double rP, double iP, double rM, double iM) {
+                auto zp = c10::complex<double>(rP, iP);
+                auto zm = c10::complex<double>(rM, iM);
+                if (phase_ptr != nullptr) {
+                    const auto ph = phase_ptr[m * nrings + idx];
+                    zp = zp * ph;
+                    zm = zm * ph;
+                }
+                if (write_eq && idx >= eq_start && idx < eq_end && m < nph_eq) {
+                    const int64_t off = (idx - eq_start) * nph_eq + m;
+                    eq_plus[off] = zp;
+                    eq_minus[off] = zm;
+                    if (m == 0) {
+                        s0_ptr[idx] = zp;
+                        s1_ptr[idx] = zm;
+                    }
+                } else {
+                    s0_ptr[m * nrings + idx] = zp;
+                    s1_ptr[m * nrings + idx] = zm;
+                }
+            };
+            for (int i = 0; i < n_eff; ++i) {
+                if (!active[i]) {
+                    continue;
+                }
+                const double mu = ct_ptr[i];
+                const double sc = pre_phase * invs_ptr[i];
+                const double rP = sc * (s0r[i] + mu * a0r[i]);
+                const double iP = sc * (s0i[i] + mu * a0i[i]);
+                const double rM = sc * (s1r[i] + mu * a1r[i]);
+                const double iM = sc * (s1i[i] + mu * a1i[i]);
+                store_pair(i, rP, iP, rM, iM);
+                if (i < n_pairs) {
+                    const double rPs = sc * (s0r[i] - mu * a0r[i]);
+                    const double iPs = sc * (s0i[i] - mu * a0i[i]);
+                    const double rMs = sc * (s1r[i] - mu * a1r[i]);
+                    const double iMs = sc * (s1i[i] - mu * a1i[i]);
+                    store_pair(nrings - 1 - i, rPs, iPs, rMs, iMs);
+                }
+            }
+        }
+    });
+
+    return s_modes;
+}
+
+static torch::Tensor ishioka_spin_lowered_integrate_cpu(
+    const torch::Tensor& s_plus,
+    const torch::Tensor& s_minus,
+    const torch::Tensor& theta,
+    const torch::Tensor& weight,
+    int64_t lmax,
+    int64_t mmax,
+    int64_t spin_abs
+) {
+    const c10::complex<double>* __restrict__ sp_ptr = s_plus.data_ptr<c10::complex<double>>();
+    const c10::complex<double>* __restrict__ sm_ptr = s_minus.data_ptr<c10::complex<double>>();
+    auto th_ptr = theta.data_ptr<double>();
+    auto w_ptr = weight.data_ptr<double>();
+    const bool w_scalar = weight.numel() == 1;
+    const int64_t lmax_s = lmax + spin_abs;
+    const int64_t nrings = theta.size(0);
+    const int64_t n_eff = (nrings + 1) / 2;
+    const int64_t n_pairs = nrings / 2;
+    const bool has_equator = (nrings % 2 != 0);
+    ensure_mfac(mmax);
+    const auto& packs = g_ishioka_cache.get(lmax_s, mmax);
+    const RecoupleSrc* rec_src = nullptr;
+    const int64_t* rec_off = nullptr;
+    const int64_t* rec_lmin = nullptr;
+    g_recouple_cache.get(lmax, mmax, spin_abs, rec_src, rec_off, rec_lmin);
+
+    auto options = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
+    torch::Tensor alms = torch::zeros({2, alm_size(lmax, mmax)}, options);
+    auto* cp_out = alms.select(0, 0).data_ptr<c10::complex<double>>();
+    auto* cm_out = alms.select(0, 1).data_ptr<c10::complex<double>>();
+
+    std::vector<double> cos_theta_all(n_eff), sin_theta_all(n_eff), inv_sin_s(n_eff), mu2_all(n_eff);
+    for (int i = 0; i < n_eff; ++i) {
+        const double th = th_ptr[i];
+        const double ct = std::cos(th);
+        const double st = std::sin(th);
+        cos_theta_all[static_cast<size_t>(i)] = ct;
+        sin_theta_all[static_cast<size_t>(i)] = st;
+        mu2_all[static_cast<size_t>(i)] = ct * ct;
+        inv_sin_s[static_cast<size_t>(i)] = 1.0 / fast_pow(st, static_cast<int>(spin_abs));
+    }
+    std::vector<int64_t> mlim_north(n_eff, lmax_s);
+    if (spin_mlim_prune_enabled()) {
+        for (int64_t i = 0; i < n_eff; ++i) {
+            const double cth = cos_theta_all[static_cast<size_t>(i)];
+            const double sth = sin_theta_all[static_cast<size_t>(i)];
+            mlim_north[static_cast<size_t>(i)] = sharp_mlim_estimate(lmax_s, 0, sth, cth);
+        }
+    }
+
+    parallel_m_ranges(mmax, [&](int64_t m0, int64_t stride) {
+        if (m0 > mmax) {
+            return;
+        }
+        const int64_t n_s_max = lmax_s - m0 + 1;
+        std::vector<c10::complex<double>> v_s0(static_cast<size_t>(n_s_max));
+        std::vector<c10::complex<double>> v_s1(static_cast<size_t>(n_s_max));
+        std::vector<double> v_p(n_eff), v_pold(n_eff);
+        std::vector<double> v_s0r(n_eff), v_s0i(n_eff), v_a0r(n_eff), v_a0i(n_eff);
+        std::vector<double> v_s1r(n_eff), v_s1i(n_eff), v_a1r(n_eff), v_a1i(n_eff);
+        std::vector<uint8_t> v_active(n_eff);
+        double* __restrict__ p = v_p.data();
+        double* __restrict__ pold = v_pold.data();
+        double* __restrict__ s0r = v_s0r.data();
+        double* __restrict__ s0i = v_s0i.data();
+        double* __restrict__ a0r = v_a0r.data();
+        double* __restrict__ a0i = v_a0i.data();
+        double* __restrict__ s1r = v_s1r.data();
+        double* __restrict__ s1i = v_s1i.data();
+        double* __restrict__ a1r = v_a1r.data();
+        double* __restrict__ a1i = v_a1i.data();
+        uint8_t* __restrict__ active = v_active.data();
+        const double* __restrict__ ct_ptr = cos_theta_all.data();
+        const double* __restrict__ st_ptr = sin_theta_all.data();
+        const double* __restrict__ invs_ptr = inv_sin_s.data();
+        const double* __restrict__ mu2_ptr = mu2_all.data();
+
+        for (int64_t m = m0; m <= mmax; m += stride) {
+            const IshiokaMCoeffs& pc = packs[static_cast<size_t>(m)];
+            const int64_t n_s = lmax_s - m + 1;
+            std::fill(v_s0.begin(), v_s0.begin() + n_s, c10::complex<double>(0.0, 0.0));
+            std::fill(v_s1.begin(), v_s1.begin() + n_s, c10::complex<double>(0.0, 0.0));
+            c10::complex<double>* __restrict__ sc0 = v_s0.data();
+            c10::complex<double>* __restrict__ sc1 = v_s1.data();
+            const double pre_phase = (m % 2 != 0) ? -1.0 : 1.0;
+            const double seed = precomputed_mfac[static_cast<size_t>(m)];
+            const int64_t m_off = m * nrings;
+            bool any_active = false;
+
+            for (int i = 0; i < n_eff; ++i) {
+                const bool on = (m <= mlim_north[static_cast<size_t>(i)]);
+                active[i] = static_cast<uint8_t>(on);
+                any_active = any_active || on;
+                p[i] = on ? seed * fast_pow(st_ptr[i], static_cast<int>(m)) : 0.0;
+                pold[i] = 0.0;
+                if (!on) {
+                    s0r[i] = s0i[i] = a0r[i] = a0i[i] = 0.0;
+                    s1r[i] = s1i[i] = a1r[i] = a1i[i] = 0.0;
+                    continue;
+                }
+                const double wN = w_scalar ? w_ptr[0] : w_ptr[i];
+                const double sc = pre_phase * invs_ptr[i];
+                const auto np = sp_ptr[m_off + i];
+                const auto nm = sm_ptr[m_off + i];
+                double npr = np.real() * wN;
+                double npi = np.imag() * wN;
+                double nmr = nm.real() * wN;
+                double nmi = nm.imag() * wN;
+                double spr = 0.0, spi = 0.0, smr = 0.0, smi = 0.0;
+                if (i < n_pairs) {
+                    const int64_t idx_S = nrings - 1 - i;
+                    const double wS = w_scalar ? w_ptr[0] : w_ptr[idx_S];
+                    const auto spv = sp_ptr[m_off + idx_S];
+                    const auto smv = sm_ptr[m_off + idx_S];
+                    spr = spv.real() * wS;
+                    spi = spv.imag() * wS;
+                    smr = smv.real() * wS;
+                    smi = smv.imag() * wS;
+                }
+                const double mu = ct_ptr[i];
+                s0r[i] = sc * (npr + spr);
+                s0i[i] = sc * (npi + spi);
+                s1r[i] = sc * (nmr + smr);
+                s1i[i] = sc * (nmi + smi);
+                a0r[i] = sc * mu * (npr - spr);
+                a0i[i] = sc * mu * (npi - spi);
+                a1r[i] = sc * mu * (nmr - smr);
+                a1i[i] = sc * mu * (nmi - smi);
+            }
+            if (!any_active) {
+                continue;
+            }
+            int pair0 = 0;
+            int n_run = 0;
+            spin_active_pair_span(active, static_cast<int>(n_pairs), pair0, n_run);
+
+            for (int64_t k = 0; k <= pc.kmax; ++k) {
+                const int64_t n_even = m + 2 * k;
+                const double e1 = pc.eps[static_cast<size_t>(n_even + 1)];
+                const bool do_odd = (k <= pc.kmax_odd);
+                const bool step = (k < pc.kmax);
+                const double ak = step ? pc.a[static_cast<size_t>(k)] : 0.0;
+                const double bk = step ? pc.b[static_cast<size_t>(k)] : 0.0;
+                double we0r = 0.0, we0i = 0.0, we1r = 0.0, we1i = 0.0;
+                double wo0r = 0.0, wo0i = 0.0, wo1r = 0.0, wo1i = 0.0;
+                ishioka_k_reduce_rings(
+                    n_run,
+                    do_odd,
+                    step,
+                    ak,
+                    bk,
+                    mu2_ptr + pair0,
+                    p + pair0,
+                    pold + pair0,
+                    s0r + pair0,
+                    s0i + pair0,
+                    s1r + pair0,
+                    s1i + pair0,
+                    a0r + pair0,
+                    a0i + pair0,
+                    a1r + pair0,
+                    a1i + pair0,
+                    we0r,
+                    we0i,
+                    we1r,
+                    we1i,
+                    wo0r,
+                    wo0i,
+                    wo1r,
+                    wo1i
+                );
+                if (has_equator && active[n_pairs]) {
+                    const int j = static_cast<int>(n_pairs);
+                    const double pj = p[j];
+                    we0r += s0r[j] * pj;
+                    we0i += s0i[j] * pj;
+                    we1r += s1r[j] * pj;
+                    we1i += s1i[j] * pj;
+                    if (do_odd) {
+                        wo0r += a0r[j] * pj;
+                        wo0i += a0i[j] * pj;
+                        wo1r += a1r[j] * pj;
+                        wo1i += a1i[j] * pj;
+                    }
+                    if (step) {
+                        const double pnew = (ak * mu2_ptr[j] + bk) * pj + pold[j];
+                        pold[j] = pj;
+                        p[j] = pnew;
+                    }
+                }
+                const double al = pc.alpha[static_cast<size_t>(k)];
+                const c10::complex<double> t0(we0r * al, we0i * al);
+                const c10::complex<double> t1(we1r * al, we1i * al);
+                sc0[n_even - m] += t0 * e1;
+                sc1[n_even - m] += t1 * e1;
+                if (k < pc.kmax) {
+                    const double e2 = pc.eps[static_cast<size_t>(n_even + 2)];
+                    sc0[n_even + 2 - m] += t0 * e2;
+                    sc1[n_even + 2 - m] += t1 * e2;
+                }
+                if (do_odd) {
+                    const int64_t n_odd = m + 2 * k + 1;
+                    sc0[n_odd - m] += c10::complex<double>(wo0r * al, wo0i * al);
+                    sc1[n_odd - m] += c10::complex<double>(wo1r * al, wo1i * al);
+                }
+            }
+
+            recouple_scalar_to_spin_m(
+                sc0,
+                sc1,
+                lmax,
+                m,
+                spin_abs,
+                rec_src,
+                rec_off,
+                rec_lmin,
+                cp_out + alm_packed_index(m, m, lmax),
+                cm_out + alm_packed_index(m, m, lmax)
+            );
+        }
+    });
+
+    return alms;
 }
 
 // Scalar recurrence coefficients for spin=0.
@@ -2984,7 +5691,7 @@ torch::Tensor healpix_scalar_integrate_recurrence_cpu(
         sin_theta_all[i] = std::sin(th_ptr[i]);
     }
 
-    at::parallel_for(0, mmax + 1, 8, [&](int64_t m_start, int64_t m_end) {
+    parallel_m_ranges(mmax, [&](int64_t m0, int64_t stride) {
         std::vector<double> v_lam2(n_eff), v_lam1(n_eff), v_lamc(n_eff);
         double * __restrict__ lam2 = v_lam2.data();
         double * __restrict__ lam1 = v_lam1.data();
@@ -3000,7 +5707,7 @@ torch::Tensor healpix_scalar_integrate_recurrence_cpu(
         const double * __restrict__ ct_ptr = cos_theta_all.data();
         const double * __restrict__ st_ptr = sin_theta_all.data();
 
-        for (int64_t m = m_start; m < m_end; ++m) {
+        for (int64_t m = m0; m <= mmax; m += stride) {
             int64_t l0 = m;
             int64_t idx_base = m * (lmax + 1) - (m * (m - 1)) / 2;
             const double pre_phase = (m % 2 != 0) ? -1.0 : 1.0;
@@ -3126,7 +5833,7 @@ torch::Tensor healpix_scalar_interpolate_recurrence_cpu(
         sin_theta_all[i] = std::sin(th_ptr[i]);
     }
 
-    at::parallel_for(0, mmax + 1, 8, [&](int64_t m_start, int64_t m_end) {
+    parallel_m_ranges(mmax, [&](int64_t m0, int64_t stride) {
         std::vector<double> v_lam2(n_eff), v_lam1(n_eff), v_lamc(n_eff);
         double * __restrict__ lam2 = v_lam2.data();
         double * __restrict__ lam1 = v_lam1.data();
@@ -3138,7 +5845,7 @@ torch::Tensor healpix_scalar_interpolate_recurrence_cpu(
         const double * __restrict__ ct_ptr = cos_theta_all.data();
         const double * __restrict__ st_ptr = sin_theta_all.data();
 
-        for (int64_t m = m_start; m < m_end; ++m) {
+        for (int64_t m = m0; m <= mmax; m += stride) {
             int64_t l0 = m;
             int64_t idx_base = m * (lmax + 1) - (m * (m - 1)) / 2;
             const double pre_phase = (m % 2 != 0) ? -1.0 : 1.0;
@@ -3433,6 +6140,139 @@ torch::Tensor healpix_query_disc_cpu(
         {total},
         torch::TensorOptions().dtype(torch::kInt64)
     ).clone();
+}
+
+torch::Tensor healpix_spin_map2alm_ring_recurrence_cpu(
+    const torch::Tensor& maps,
+    const torch::Tensor& starts,
+    const torch::Tensor& lengths,
+    const torch::Tensor& theta,
+    const torch::Tensor& phase0_neg,
+    int64_t lmax,
+    int64_t mmax,
+    int64_t spin,
+    double pix_w
+) {
+    auto phase = phase0_neg.contiguous();
+    auto theta_c = theta.contiguous();
+    torch::Tensor s_stacked;
+    if (maps.dim() == 2 && maps.scalar_type() == torch::kDouble) {
+        s_stacked = healpix_ring_fourier_modes_spin_conj_cpu(
+            maps, starts, lengths, mmax, phase.data_ptr<c10::complex<double>>(), true
+        );
+    } else {
+        s_stacked = healpix_ring_fourier_modes_spin_conj_cpu(
+            maps, starts, lengths, mmax, phase.data_ptr<c10::complex<double>>()
+        );
+    }
+    auto s_plus = s_stacked.select(0, 0);
+    auto s_minus = s_stacked.select(0, 1);
+    auto weight = torch::empty({1}, torch::TensorOptions().dtype(torch::kDouble).device(torch::kCPU));
+    weight.fill_(pix_w);
+    return healpix_spin_integrate_recurrence_cpu(
+        s_plus,
+        s_minus,
+        theta_c,
+        weight,
+        lmax,
+        mmax,
+        spin
+    );
+}
+
+torch::Tensor healpix_spin_alm2map_ring_recurrence_cpu(
+    const torch::Tensor& alm_plus,
+    const torch::Tensor& starts,
+    const torch::Tensor& lengths,
+    const torch::Tensor& theta,
+    const torch::Tensor& phase0_pos,
+    int64_t lmax,
+    int64_t mmax,
+    int64_t spin,
+    const torch::Tensor& alm_minus = torch::Tensor()
+) {
+    auto phase = phase0_pos.contiguous();
+    const c10::complex<double>* a0 = nullptr;
+    const c10::complex<double>* a1 = nullptr;
+    torch::Tensor keep0;
+    torch::Tensor keep1;
+    torch::Tensor stacked;
+    if (alm_minus.defined()) {
+        keep0 = alm_plus.contiguous();
+        keep1 = alm_minus.contiguous();
+        a0 = keep0.data_ptr<c10::complex<double>>();
+        a1 = keep1.data_ptr<c10::complex<double>>();
+    } else {
+        stacked = alm_plus.contiguous();
+        a0 = stacked.data_ptr<c10::complex<double>>();
+        a1 = a0 + stacked.size(1);
+    }
+
+    auto starts_c = starts.contiguous();
+    auto lengths_c = lengths.contiguous();
+    const auto* starts_ptr = starts_c.data_ptr<int64_t>();
+    const auto* lengths_ptr = lengths_c.data_ptr<int64_t>();
+    const int64_t nrings = starts_c.numel();
+    int64_t eq_start = -1;
+    int64_t n_eq = 0;
+    int64_t nph_eq = 0;
+    int64_t ring = 0;
+    while (ring < nrings) {
+        const int64_t run_start = ring;
+        const int64_t nph = lengths_ptr[ring];
+        int64_t pix_cursor = starts_ptr[ring] + nph;
+        ++ring;
+        while (ring < nrings && lengths_ptr[ring] == nph && starts_ptr[ring] == pix_cursor) {
+            pix_cursor += nph;
+            ++ring;
+        }
+        const int64_t count = ring - run_start;
+        if (count > 1) {
+            eq_start = run_start;
+            n_eq = count;
+            nph_eq = nph;
+            break;
+        }
+    }
+
+    torch::Tensor eq_spec;
+    c10::complex<double>* eq_plus = nullptr;
+    c10::complex<double>* eq_minus = nullptr;
+    if (n_eq > 0 && nph_eq > mmax) {
+        eq_spec = torch::zeros(
+            {2, n_eq, nph_eq},
+            torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU)
+        );
+        eq_plus = eq_spec.select(0, 0).data_ptr<c10::complex<double>>();
+        eq_minus = eq_spec.select(0, 1).data_ptr<c10::complex<double>>();
+    }
+
+    const torch::Tensor& alms_ref = alm_minus.defined() ? keep0 : stacked;
+    auto theta_c = theta.contiguous();
+    auto s_modes = healpix_spin_interpolate_recurrence_cpu(
+        alms_ref,
+        theta_c,
+        lmax,
+        mmax,
+        spin,
+        phase.data_ptr<c10::complex<double>>(),
+        a0,
+        a1,
+        eq_plus,
+        eq_minus,
+        eq_start,
+        n_eq,
+        nph_eq
+    );
+    if (eq_spec.defined() && eq_spec.numel() > 0) {
+        return healpix_spin_synthesize_qu_cpu(
+            s_modes, starts_c, lengths_c, eq_spec, eq_start, n_eq, nph_eq
+        );
+    }
+    auto p_pm_pos = healpix_ring_fourier_synthesis_cpu(s_modes, starts_c, lengths_c);
+    return spin_qu_from_ifft_cpu(
+        p_pm_pos, s_modes.select(0, 0), s_modes.select(0, 1), starts_c, lengths_c
+    );
 }
 
 }  // namespace torchsky

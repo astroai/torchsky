@@ -30,6 +30,7 @@ from torchsky.sphere.spectral import (
     smoothmap,
     synalm,
     synfast,
+    _ring_layout_for_nside,
 )
 
 
@@ -89,6 +90,14 @@ def _has_cpp_spin_ring_fused() -> bool:
         _native_cpp is not None
         and hasattr(_native_cpp, "_healpix_spin_map2alm_ring_concat_cpu")
         and hasattr(_native_cpp, "_healpix_spin_ring_finalize_cpu")
+    )
+
+
+def _has_cpp_spin_recurrence() -> bool:
+    return (
+        _native_cpp is not None
+        and hasattr(_native_cpp, "_healpix_spin_interpolate_recurrence_cpu")
+        and hasattr(_native_cpp, "_healpix_spin_integrate_recurrence_cpu")
     )
 
 
@@ -903,6 +912,7 @@ def test_map2alm_spin_concat_cpp_parity(monkeypatch: pytest.MonkeyPatch) -> None
     qu = torch.from_numpy(rng.normal(size=(2, npix))).to(torch.float64)
 
     monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "0")
     monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_CONCAT_CPP", "0")
     monkeypatch.setenv("TORCHSKY_SPIN_RING_INTEGRATE_CONCAT_CPP", "0")
     a0, b0 = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax)
@@ -924,6 +934,7 @@ def test_map2alm_spin_ring_fused_cpp_parity(monkeypatch: pytest.MonkeyPatch) -> 
     qu = torch.from_numpy(rng.normal(size=(2, npix))).to(torch.float64)
 
     monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "0")
     monkeypatch.setenv("TORCHSKY_RING_FOURIER_CPP", "1")
     monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_CONCAT_CPP", "0")
     a0, b0 = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax)
@@ -1003,6 +1014,7 @@ def test_alm2map_spin_concat_cpp_parity(monkeypatch: pytest.MonkeyPatch) -> None
     a_e, a_b = _random_spin_alms(lmax, spin=spin, seed=307)
 
     monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RECURRENCE_CPP", "0")
     monkeypatch.setenv("TORCHSKY_SPIN_RING_INTERP_CONCAT_CPP", "0")
     qu0 = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax)
     monkeypatch.setenv("TORCHSKY_SPIN_RING_INTERP_CONCAT_CPP", "1")
@@ -1020,6 +1032,7 @@ def test_alm2map_spin_ring_finalize_cpp_parity(monkeypatch: pytest.MonkeyPatch) 
     a_e, a_b = _random_spin_alms(lmax, spin=spin, seed=353)
 
     monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RECURRENCE_CPP", "0")
     monkeypatch.setenv("TORCHSKY_RING_FOURIER_CPP", "1")
     monkeypatch.setenv("TORCHSKY_SPIN_RING_FINALIZE_CPP", "0")
     qu0 = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax)
@@ -1145,3 +1158,174 @@ def test_validated_spin_profile_defaults_match_docs() -> None:
     assert spectral_mod._SPIN_RING_INTEGRATE_CONCAT_CPP_ENABLE is True
     assert spectral_mod._SCALAR_RECURRENCE_CPP_ENABLE is True
     assert spectral_mod._SCALAR_INTERP_CPP_ENABLE is True
+
+
+def _force_spin_ring(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "force")
+    monkeypatch.setenv("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "1")
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RECURRENCE_CPP", "1")
+
+
+@pytest.mark.skipif(
+    not _has_cpp_spin_recurrence(), reason="C++ spin recurrence kernels not available"
+)
+@pytest.mark.parametrize("spin", [1, 2])
+def test_ishioka_matches_wigner_spin_sht(
+    spin: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ishioka lowering must match the Wigner recurrence, not only healpy."""
+    nside = 8
+    lmax = 12
+    npix = hp.nside2npix(nside)
+    rng = np.random.default_rng(401)
+    qu = torch.from_numpy(rng.normal(size=(2, npix))).to(torch.float64)
+    a_e, a_b = _random_spin_alms(lmax, spin=spin, seed=402)
+    _force_spin_ring(monkeypatch)
+
+    monkeypatch.setenv("TORCHSKY_SPIN_ISHIOKA", "1")
+    ae_i, ab_i = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax)
+    qu_i = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax)
+    monkeypatch.setenv("TORCHSKY_SPIN_ISHIOKA", "0")
+    ae_w, ab_w = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax)
+    qu_w = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax)
+
+    torch.testing.assert_close(ae_i, ae_w, atol=1e-10, rtol=0.0)
+    torch.testing.assert_close(ab_i, ab_w, atol=1e-10, rtol=0.0)
+    torch.testing.assert_close(qu_i, qu_w, atol=1e-10, rtol=0.0)
+
+
+@pytest.mark.skipif(
+    not _has_cpp_spin_recurrence(), reason="C++ spin recurrence kernels not available"
+)
+@pytest.mark.parametrize("spin", [1, 2])
+def test_ishioka_spin_interpolate_integrate_adjoint(
+    spin: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nside = 8
+    lmax = 12
+    nalm = alm_size(lmax)
+    rng = np.random.default_rng(411)
+    plus = torch.from_numpy(
+        (rng.normal(size=nalm) + 1j * rng.normal(size=nalm)).astype(np.complex128)
+    )
+    minus = torch.from_numpy(
+        (rng.normal(size=nalm) + 1j * rng.normal(size=nalm)).astype(np.complex128)
+    )
+    _, _, theta, _ = _ring_layout_for_nside(nside)
+    nrings = int(theta.numel())
+    s_plus = torch.from_numpy(
+        (
+            rng.normal(size=(lmax + 1, nrings)) + 1j * rng.normal(size=(lmax + 1, nrings))
+        ).astype(np.complex128)
+    )
+    s_minus = torch.from_numpy(
+        (
+            rng.normal(size=(lmax + 1, nrings)) + 1j * rng.normal(size=(lmax + 1, nrings))
+        ).astype(np.complex128)
+    )
+    pix_w = (4.0 * np.pi) / float(hp.nside2npix(nside))
+    w = torch.tensor([pix_w], dtype=torch.float64)
+    monkeypatch.setenv("TORCHSKY_SPIN_ISHIOKA", "1")
+    assert _native_cpp is not None
+    s_modes = _native_cpp._healpix_spin_interpolate_recurrence_cpu(
+        torch.stack([plus, minus]), theta, lmax, lmax, spin
+    )
+    alms = _native_cpp._healpix_spin_integrate_recurrence_cpu(
+        s_plus, s_minus, theta, w, lmax, lmax, spin
+    )
+    lhs = pix_w * (
+        (s_modes[0].real * s_plus.real + s_modes[0].imag * s_plus.imag).sum()
+        + (s_modes[1].real * s_minus.real + s_modes[1].imag * s_minus.imag).sum()
+    )
+    rhs = (plus.real * alms[0].real + plus.imag * alms[0].imag).sum() + (
+        minus.real * alms[1].real + minus.imag * alms[1].imag
+    ).sum()
+    denom = torch.maximum(rhs.abs(), torch.tensor(1e-15, dtype=torch.float64))
+    assert float((lhs - rhs).abs() / denom) < 1e-12
+
+
+@pytest.mark.parametrize("spin", [1, 2])
+def test_spin_sht_small_nside_is_finite(
+    spin: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mmax+1 can be smaller than the C++ m-pool; must not abort."""
+    nside = 2
+    lmax = 3
+    npix = hp.nside2npix(nside)
+    rng = np.random.default_rng(421)
+    qu = torch.from_numpy(rng.normal(size=(2, npix))).to(torch.float64)
+    a_e, a_b = _random_spin_alms(lmax, spin=spin, seed=422)
+    _force_spin_ring(monkeypatch)
+    ae, ab = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax)
+    rec = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax)
+    assert torch.isfinite(ae).all() and torch.isfinite(ab).all()
+    assert torch.isfinite(rec).all()
+
+
+@pytest.mark.skipif(_hp is None, reason="healpy not available")
+@pytest.mark.parametrize("spin", [1, 2])
+@pytest.mark.parametrize("ishioka", ["0", "1"])
+def test_spin_sht_matches_healpy_ishioka_toggle(
+    spin: int, ishioka: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nside = 16
+    lmax = 3 * nside - 1
+    npix = hp.nside2npix(nside)
+    rng = np.random.default_rng(431)
+    qu = torch.from_numpy(rng.normal(size=(2, npix))).to(torch.float64)
+    nalm = alm_size(lmax)
+    alm_e = (rng.normal(size=nalm) + 1j * rng.normal(size=nalm)).astype(np.complex128)
+    alm_b = (rng.normal(size=nalm) + 1j * rng.normal(size=nalm)).astype(np.complex128)
+    for ell in range(spin):
+        for m in range(ell + 1):
+            alm_e[alm_index(ell, m, lmax)] = 0.0
+            alm_b[alm_index(ell, m, lmax)] = 0.0
+    _force_spin_ring(monkeypatch)
+    monkeypatch.setenv("TORCHSKY_SPIN_ISHIOKA", ishioka)
+
+    ae, ab = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax)
+    hp_ae, hp_ab = _hp.map2alm_spin(qu.numpy(), spin=spin, lmax=lmax)  # type: ignore
+    torch.testing.assert_close(
+        ae, torch.from_numpy(hp_ae).to(torch.complex128), atol=5e-10, rtol=0.0
+    )
+    torch.testing.assert_close(
+        ab, torch.from_numpy(hp_ab).to(torch.complex128), atol=5e-10, rtol=0.0
+    )
+
+    qu_ts = alm2map_spin(
+        (torch.from_numpy(alm_e), torch.from_numpy(alm_b)),
+        nside=nside,
+        spin=spin,
+        lmax=lmax,
+    )
+    hp_qu = _hp.alm2map_spin((alm_e, alm_b), nside, spin, lmax)  # type: ignore
+    torch.testing.assert_close(
+        qu_ts,
+        torch.from_numpy(np.asarray(hp_qu)).to(torch.float64),
+        atol=5e-10,
+        rtol=0.0,
+    )
+
+
+@pytest.mark.skipif(_hp is None, reason="healpy not available")
+def test_spin_sht_mmax_lt_lmax_matches_healpy(monkeypatch: pytest.MonkeyPatch) -> None:
+    nside = 16
+    lmax = 20
+    mmax = 8
+    spin = 2
+    npix = hp.nside2npix(nside)
+    rng = np.random.default_rng(441)
+    qu = torch.from_numpy(rng.normal(size=(2, npix))).to(torch.float64)
+    _force_spin_ring(monkeypatch)
+    monkeypatch.setenv("TORCHSKY_SPIN_ISHIOKA", "1")
+    ae, ab = map2alm_spin(qu, spin=spin, nside=nside, lmax=lmax, mmax=mmax)
+    hp_ae, hp_ab = _hp.map2alm_spin(  # type: ignore
+        qu.numpy(), spin=spin, lmax=lmax, mmax=mmax
+    )
+    torch.testing.assert_close(
+        ae, torch.from_numpy(hp_ae).to(torch.complex128), atol=5e-10, rtol=0.0
+    )
+    torch.testing.assert_close(
+        ab, torch.from_numpy(hp_ab).to(torch.complex128), atol=5e-10, rtol=0.0
+    )

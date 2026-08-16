@@ -390,6 +390,7 @@ For large $N_\text{side}$ or batch transforms, `torchsky.sphere` substantially o
 | `TORCHSKY_SCALAR_RING_AUTO_MIN_BYTES` | `64 MiB` | Min map size to use ring path |
 | `TORCHSKY_SPIN_RING_AUTO_MIN_BYTES` | `32 MiB` | Min map size for spin ring path |
 | `TORCHSKY_SPIN_MAP2ALM_RING_CONCAT_CPP` | `1` | Fused CPU RING concat for `map2alm_spin` |
+| `TORCHSKY_SPIN_ISHIOKA` | `1` | Ishioka 2018 μ² skip-2 for spin-1/2 CPU `map2alm_spin` / `alm2map_spin`. Set `0` for the Wigner recurrence. |
 
 ---
 
