@@ -938,6 +938,7 @@ These are the **code defaults** when the environment variable is unset (see `tor
 | `TORCHSKY_SPIN_RING_FINALIZE_CPP` | `1` | Spin ring finalize stage. |
 | `TORCHSKY_SPIN_RING_INTERP_CONCAT_CPP` | `1` | Spin `alm2map` interpolate concat. |
 | `TORCHSKY_SPIN_RING_INTEGRATE_CONCAT_CPP` | `1` | Spin `map2alm` integrate concat. |
+| `TORCHSKY_SPIN_ISHIOKA` | `1` | Ishioka 2018 skip-2 for spin-1/2 CPU recurrence. Set `0` for Wigner. |
 | `TORCHSKY_SCALAR_MAP2ALM_RECURRENCE_CPP` | `1` | Scalar `map2alm` recurrence backend. |
 | `TORCHSKY_SCALAR_ALM2MAP_RECURRENCE_CPP` | `1` | Scalar `alm2map` recurrence backend. |
 | `TORCHSKY_SPIN_RING_AUTO_MIN_BYTES` | `0` | Minimum map size (bytes) before auto-selecting some ring fast paths; replays often set `32 MiB`. |

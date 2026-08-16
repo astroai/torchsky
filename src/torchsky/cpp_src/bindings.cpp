@@ -1599,6 +1599,77 @@ void bind_wcs(nb::module_& m) {
         nb::arg("mmax"),
         nb::arg("spin"));
 
+    m.def(
+        "_healpix_spin_map2alm_ring_recurrence_cpu",
+        [](nb::object maps_obj,
+           nb::object starts_obj,
+           nb::object lengths_obj,
+           nb::object theta_obj,
+           nb::object phase0_neg_obj,
+           int64_t lmax,
+           int64_t mmax,
+           int64_t spin,
+           double pix_w) {
+            torch::Tensor maps = python_to_tensor(maps_obj);
+            torch::Tensor starts = python_to_tensor(starts_obj);
+            torch::Tensor lengths = python_to_tensor(lengths_obj);
+            torch::Tensor theta = python_to_tensor(theta_obj);
+            torch::Tensor phase0_neg = python_to_tensor(phase0_neg_obj);
+            torch::Tensor out;
+            {
+                nb::gil_scoped_release release;
+                out = torchsky::healpix_spin_map2alm_ring_recurrence_cpu(
+                    maps, starts, lengths, theta, phase0_neg, lmax, mmax, spin, pix_w
+                );
+            }
+            return tensor_to_python(out);
+        },
+        nb::arg("maps"),
+        nb::arg("starts"),
+        nb::arg("lengths"),
+        nb::arg("theta"),
+        nb::arg("phase0_neg"),
+        nb::arg("lmax"),
+        nb::arg("mmax"),
+        nb::arg("spin"),
+        nb::arg("pix_w"));
+
+    m.def(
+        "_healpix_spin_alm2map_ring_recurrence_cpu",
+        [](nb::object alm_plus_obj,
+           nb::object starts_obj,
+           nb::object lengths_obj,
+           nb::object theta_obj,
+           nb::object phase0_pos_obj,
+           int64_t lmax,
+           int64_t mmax,
+           int64_t spin,
+           nb::object alm_minus_obj) {
+            torch::Tensor alm_plus = python_to_tensor(alm_plus_obj);
+            torch::Tensor starts = python_to_tensor(starts_obj);
+            torch::Tensor lengths = python_to_tensor(lengths_obj);
+            torch::Tensor theta = python_to_tensor(theta_obj);
+            torch::Tensor phase0_pos = python_to_tensor(phase0_pos_obj);
+            torch::Tensor alm_minus = python_to_tensor(alm_minus_obj);
+            torch::Tensor out;
+            {
+                nb::gil_scoped_release release;
+                out = torchsky::healpix_spin_alm2map_ring_recurrence_cpu(
+                    alm_plus, starts, lengths, theta, phase0_pos, lmax, mmax, spin, alm_minus
+                );
+            }
+            return tensor_to_python(out);
+        },
+        nb::arg("alm_plus"),
+        nb::arg("starts"),
+        nb::arg("lengths"),
+        nb::arg("theta"),
+        nb::arg("phase0_pos"),
+        nb::arg("lmax"),
+        nb::arg("mmax"),
+        nb::arg("spin"),
+        nb::arg("alm_minus"));
+
     // Dedicated scalar (spin=0) recurrence kernels
     m.def(
         "_healpix_scalar_integrate_recurrence_cpu",
