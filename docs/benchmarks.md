@@ -56,7 +56,7 @@ pixi run bench-comparator-versions-all
 pixi run wcs-sphere-acceptance
 ```
 
-Linux CPU/CUDA confirmation uses `scripts/run_canfar_wcs_sphere.sh` (modes `cpu` and `cuda`) with `TORCHSKY_COMMIT` set to a pushed SHA. Do not reuse the ADASS/SMACS runner for this domain. Local Mac smoke stays `--quick` via `pixi run wcs-sphere-acceptance`; the full oracle ingest is `pixi run wcs-sphere-acceptance-full` or the CANFAR `cpu` job. The cuHPX scalar SHT spike is a separate CUDA-only job: `scripts/run_canfar_cuhpx_sht_spike.sh`.
+Linux CPU/CUDA confirmation uses `scripts/launch_canfar_wcs_sphere.sh` (modes `cpu`, `cuda`, or `all`). That submits AstroAI headless sessions which run `scripts/run_canfar_wcs_sphere.sh` at an exact `TORCHSKY_COMMIT`, write `/arc/projects/ots/torchsky-runs/<run_id>/`, and copy the same tree to `vos:sfabbro/torchsky-runs/<run_id>/`. Pull a finished run with `bash scripts/fetch_canfar_wcs_sphere_run.sh <run_id>` (`vcp` / `pip install vos`). Do not reuse the ADASS/SMACS runner for this domain. Local Mac smoke stays `--quick` via `pixi run wcs-sphere-acceptance`; the full oracle ingest is `pixi run wcs-sphere-acceptance-full` or the CANFAR `cpu` job. The cuHPX scalar SHT spike is a separate CUDA-only job: `scripts/run_canfar_cuhpx_sht_spike.sh`.
 
 For pip-only parity benches against the HEALPix / geometry comparator stack,
 install `pip install -e ".[bench-all]"` after installing a compatible PyTorch.
