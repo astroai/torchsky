@@ -200,7 +200,11 @@ coverage maps in the NESTED coverage hierarchy even when sparse pixels are store
 in RING ordering, and `ud_grade(...)` preserves the coverage hierarchy when the
 output resolution allows it. With `nside_coverage` set, `get_values` uses a fused
 CPU gather (fill-block layout). On Mac that path matches healsparse at nside=256
-and 50k nest queries; Linux is unconfirmed.
+and 50k nest queries; Linux is unconfirmed. Float maps with `nside_coverage` also
+degrade through that layout when coverage nside is unchanged; on Mac that matches
+healsparse at nside=256→128 and 512→256 (10% nest, interleaved). Bool/int maps
+keep the pixel-list path because fill-block cells cannot tell valid False/0 from
+an uncovered child.
 
 `HealSparseMap.from_moc(moc, nside=...)` realizes MOC coverage directly as sparse
 nested pixels without materializing a full dense HEALPix mask. Sparse FITS

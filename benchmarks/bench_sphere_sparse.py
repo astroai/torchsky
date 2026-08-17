@@ -177,15 +177,28 @@ def main() -> int:
                 "ratio_torchsky_vs_healsparse": t_hs_get / t_ts_get,
             }
         )
-        t_hs_ud = _time_many(lambda: hs.degrade(max(1, nside // 2)), args.runs)
+        nside_ud = max(1, nside // 2)
+        t_hs_ud = _time_many(lambda: hs.degrade(nside_ud), args.runs)
+        t_ts_ud = _time_many(
+            lambda: sparse_cov.ud_grade(nside_ud, pess=False), args.runs
+        )
         rows.append(
             {
                 "operation": "ud_grade",
                 "library": "healsparse",
                 "nside_in": nside,
-                "nside_out": max(1, nside // 2),
+                "nside_out": nside_ud,
                 "ud_grade_s": t_hs_ud,
-                "ratio_torchsky_vs_healsparse": t_hs_ud / t_sparse_ud,
+            }
+        )
+        rows.append(
+            {
+                "operation": "ud_grade",
+                "library": "torchsky",
+                "nside_in": nside,
+                "nside_out": nside_ud,
+                "ud_grade_s": t_ts_ud,
+                "ratio_torchsky_vs_healsparse": t_hs_ud / t_ts_ud,
             }
         )
 

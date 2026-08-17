@@ -97,6 +97,105 @@ def test_sparse_get_values_coverage_blocks_multiband_match_searchsorted() -> Non
     torch.testing.assert_close(blocked.get_values(query), plain.get_values(query))
 
 
+@pytest.mark.parametrize(
+    "dtype,fill,values",
+    [
+        (torch.float32, -1.0, [1.5, 2.5, 3.5, 4.5, 5.5, 6.5]),
+        (torch.int64, -1, [1, 2, 3, 4, 5, 6]),
+        (torch.int32, -1, [1, 2, 3, 4, 5, 6]),
+        (torch.bool, False, [True, True, True, True, True, True]),
+    ],
+)
+def test_sparse_get_values_coverage_blocks_match_searchsorted_dtypes(
+    dtype: torch.dtype, fill: object, values: list[object]
+) -> None:
+    pixels = torch.tensor([0, 1, 2, 33, 34, 4095], dtype=torch.int64)
+    vals = torch.tensor(values, dtype=dtype)
+    blocked = SparseHealpixMap.from_pixels(
+        pixels,
+        vals,
+        nside_sparse=64,
+        nest=True,
+        nside_coverage=32,
+        sentinel=fill,
+    )
+    plain = SparseHealpixMap.from_pixels(
+        pixels,
+        vals,
+        nside_sparse=64,
+        nest=True,
+        sentinel=fill,
+    )
+    query = torch.tensor([0, 1, 10, 33, 8192, -1, 49152], dtype=torch.int64)
+    got = blocked.get_values(query)
+    exp = plain.get_values(query)
+    assert got.dtype == dtype
+    if dtype == torch.bool:
+        assert torch.equal(got, exp)
+    else:
+        torch.testing.assert_close(got, exp, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("nest", [True, False])
+@pytest.mark.parametrize("pess", [False, True])
+def test_sparse_ud_grade_coverage_blocks_match_pixel_list(
+    nest: bool, pess: bool
+) -> None:
+    pixels = torch.tensor([0, 1, 2, 33, 34, 4095], dtype=torch.int64)
+    values = torch.tensor([1.5, 2.5, 3.5, 4.5, 5.5, 6.5], dtype=torch.float64)
+    blocked = SparseHealpixMap.from_pixels(
+        pixels,
+        values,
+        nside_sparse=64,
+        nest=nest,
+        nside_coverage=32,
+        sentinel=-1.0,
+    )
+    plain = SparseHealpixMap.from_pixels(
+        pixels,
+        values,
+        nside_sparse=64,
+        nest=nest,
+        sentinel=-1.0,
+    )
+    for nside_out in (32, 16, 128):
+        got = blocked.ud_grade(nside_out, pess=pess)
+        exp = plain.ud_grade(nside_out, pess=pess)
+        torch.testing.assert_close(got.to_dense(), exp.to_dense(), atol=1e-12, rtol=0.0)
+        assert got.nside_coverage == min(32, nside_out)
+        q = torch.arange(0, hp.nside2npix(nside_out), 17, dtype=torch.int64)
+        torch.testing.assert_close(got.get_values(q), exp.get_values(q), atol=1e-12, rtol=0.0)
+
+
+def test_sparse_ud_grade_coverage_blocks_multiband_match_pixel_list() -> None:
+    pixels = torch.tensor([0, 1, 2, 33, 34, 4095], dtype=torch.int64)
+    values = torch.tensor(
+        [
+            [1.5, 2.5, 3.5, 4.5, 5.5, 6.5],
+            [10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+        ],
+        dtype=torch.float64,
+    )
+    blocked = SparseHealpixMap.from_pixels(
+        pixels,
+        values,
+        nside_sparse=64,
+        nest=True,
+        nside_coverage=32,
+        sentinel=-1.0,
+    )
+    plain = SparseHealpixMap.from_pixels(
+        pixels,
+        values,
+        nside_sparse=64,
+        nest=True,
+        sentinel=-1.0,
+    )
+    got = blocked.ud_grade(32, pess=False)
+    exp = plain.ud_grade(32, pess=False)
+    torch.testing.assert_close(got.to_dense(), exp.to_dense(), atol=1e-12, rtol=0.0)
+
+
 def test_sparse_from_pixels_canonicalizes_multiband_values() -> None:
     pixels = torch.tensor([4, 1, 4, 2], dtype=torch.int64)
     values = torch.tensor(

@@ -113,7 +113,20 @@ class SparseHealpixMap:
         if self.nside_coverage is not None:
             self.nside_coverage = int(self.nside_coverage)
             _validate_nside_coverage(int(self.nside), self.nside_coverage)
-            self._build_coverage_map()
+            if self._block_values is None:
+                self._build_coverage_map()
+            elif self.coverage_map is None:
+                npix_cov = _healpix.nside2npix(self.nside_coverage)
+                cov = torch.full(
+                    (npix_cov,), -1, dtype=torch.int64, device=self.pixels.device
+                )
+                if self._block_index is not None:
+                    cov[self._block_index > 0] = 0
+                self.coverage_map = cov
+            if self._fill_tensor is None:
+                self._fill_tensor = torch.as_tensor(
+                    self.fill_value, dtype=self.values.dtype, device=self.values.device
+                )
 
     @property
     def nside_sparse(self) -> int:
@@ -455,7 +468,9 @@ class SparseHealpixMap:
             and index is not None
             and fill_t is not None
             and query.is_cpu
+            and index.is_cpu
             and blocks.is_cpu
+            and fill_t.is_cpu
             and blocks.dtype in _CPP_BLOCK_DTYPES
         ):
             return fn(query, index, blocks, fill_t)
@@ -742,6 +757,129 @@ class SparseHealpixMap:
         out = torch.where(nz, filled, out)
         return out.reshape(*self.values.shape[:-1], *shape)
 
+    def _ud_grade_from_coverage_blocks(
+        self,
+        nside_out: int,
+        *,
+        ratio: int,
+        pess: bool,
+        power: float | None,
+        fv: Any,
+        out_nside_coverage: int | None,
+    ) -> "SparseHealpixMap" | None:
+        """Degrade using fill-block layout. None means use the pixel-list path.
+
+        Floating maps only, and only when coverage nside is unchanged so each
+        coverage cell stays a contiguous NEST range. Bool/int occupancy lives
+        in the pixel list; a fill-block cell cannot tell valid False/0 from an
+        uncovered child.
+        """
+        blocks = self._block_values
+        index = self._block_index
+        if (
+            blocks is None
+            or index is None
+            or self.nside_coverage is None
+            or out_nside_coverage != self.nside_coverage
+            or not self.values.is_floating_point()
+        ):
+            return None
+        child_mult = int(ratio) * int(ratio)
+        ratio2 = int(self.pixels_per_cov)
+        if child_mult <= 1 or ratio2 % child_mult != 0:
+            return None
+        new_ratio2 = ratio2 // child_mult
+        lead = tuple(self.values.shape[:-1])
+        n_blocks = int(blocks.shape[-2])
+        grouped = blocks.reshape(lead + (n_blocks, new_ratio2, child_mult))
+        scale = (
+            ((float(nside_out) / float(self.nside)) ** float(power))
+            if power is not None
+            else 1.0
+        )
+        stored_fill = torch.as_tensor(
+            self.fill_value, dtype=grouped.dtype, device=grouped.device
+        )
+        goods = torch.isfinite(grouped) & (grouped != stored_fill)
+        sum_vals = (grouped * goods.to(dtype=grouped.dtype)).sum(dim=-1)
+        nhit = goods.to(dtype=torch.float64).sum(dim=-1)
+        nhit_f = nhit / scale if power is not None else nhit
+        out_val = torch.zeros_like(sum_vals)
+        nz = nhit_f != 0
+        out_val[..., nz] = sum_vals[..., nz] / nhit_f[..., nz].to(dtype=sum_vals.dtype)
+        badout = (nhit != float(child_mult)) if pess else (nhit == 0.0)
+        out_val[..., badout] = fv
+        cov_ids = torch.nonzero(index, as_tuple=False).flatten()
+        if cov_ids.numel() == 0:
+            return SparseHealpixMap(
+                nside=nside_out,
+                nest=self.nest,
+                pixels=self.pixels.new_empty((0,)),
+                values=self.values[..., :0],
+                fill_value=fv,
+                nside_coverage=out_nside_coverage,
+                metadata=_copy_metadata(self.metadata),
+            )
+        bids = index.index_select(0, cov_ids)
+        data = out_val.index_select(-2, bids)
+        bad = badout.index_select(-2, bids)
+        off = torch.arange(new_ratio2, dtype=torch.int64, device=index.device)
+        parent_nest = cov_ids.unsqueeze(1) * new_ratio2 + off.unsqueeze(0)
+        if len(lead) == 0:
+            keep = ~bad
+        else:
+            keep = torch.any(~bad, dim=tuple(range(len(lead))))
+        if not bool(keep.any().item()):
+            return SparseHealpixMap(
+                nside=nside_out,
+                nest=self.nest,
+                pixels=self.pixels.new_empty((0,)),
+                values=self.values[..., :0],
+                fill_value=fv,
+                nside_coverage=out_nside_coverage,
+                metadata=_copy_metadata(self.metadata),
+            )
+        out_pix_n = parent_nest[keep]
+        out_sel = data[..., keep]
+        out_pix = (
+            out_pix_n if self.nest else _healpix.nest2ring(nside_out, out_pix_n)
+        )
+        cell_alive = keep.any(dim=-1)
+        data_alive = data[..., cell_alive, :]
+        cov_alive = cov_ids[cell_alive]
+        npix_cov = int(index.numel())
+        new_index = torch.zeros((npix_cov,), dtype=torch.int64, device=index.device)
+        n_alive = int(cov_alive.numel())
+        new_index[cov_alive] = torch.arange(
+            1, n_alive + 1, device=index.device, dtype=torch.int64
+        )
+        fill_row = torch.full(
+            lead + (1, new_ratio2),
+            fv,
+            dtype=data.dtype,
+            device=data.device,
+        )
+        new_blocks = torch.cat((fill_row, data_alive), dim=-2)
+        cov_map = torch.full(
+            (npix_cov,), -1, dtype=torch.int64, device=index.device
+        )
+        cov_map[cov_alive] = 0
+        return SparseHealpixMap(
+            nside=nside_out,
+            nest=self.nest,
+            pixels=out_pix,
+            values=out_sel,
+            fill_value=fv,
+            nside_coverage=out_nside_coverage,
+            metadata=_copy_metadata(self.metadata),
+            coverage_map=cov_map,
+            _block_index=new_index,
+            _block_values=new_blocks,
+            _fill_tensor=torch.as_tensor(
+                fv, dtype=data.dtype, device=data.device
+            ),
+        )
+
     def ud_grade(
         self,
         nside_out: int,
@@ -792,6 +930,18 @@ class SparseHealpixMap:
                     nside_coverage=out_nside_coverage,
                     metadata=_copy_metadata(self.metadata),
                 )
+
+            if not up:
+                blocked = self._ud_grade_from_coverage_blocks(
+                    nside_out,
+                    ratio=ratio,
+                    pess=pess,
+                    power=power,
+                    fv=fv,
+                    out_nside_coverage=out_nside_coverage,
+                )
+                if blocked is not None:
+                    return blocked
 
             pix_n = (
                 self.pixels if self.nest else _healpix.ring2nest(nside_in, self.pixels)

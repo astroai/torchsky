@@ -162,6 +162,10 @@ case "${mode}" in
       python -m pip install astropy
     pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
       python -m pip install healpy || true
+    # ponytail: pytest -k cuda is a smoke check, not the Linux evidence.
+    # Keep benches running after a cuda-named test fails so VOS still gets
+    # WCS/sphere JSON. Fail the job after those benches using cuda_rc.
+    cuda_rc=0
     pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
       pytest \
       tests/test_healpix_primitives.py \
@@ -171,18 +175,22 @@ case "${mode}" in
       tests/test_wcs_sip.py \
       tests/test_wcs_parity.py \
       -q --tb=line -k cuda \
-      --junitxml="${artifact_root}/cuda_pytest.xml"
-    record_versions cuda-bench
+      --junitxml="${artifact_root}/cuda_pytest.xml" || cuda_rc=$?
+    record_versions cuda-bench || cuda_rc=$?
     pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
       python "${source_root}/benchmarks/bench_all.py" \
       --profile user --wcs-only --wcs-device cuda \
       --run-id acceptance_wcs_cuda \
-      --output-dir "${artifact_root}"
+      --output-dir "${artifact_root}" || cuda_rc=$?
     pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
       python "${source_root}/benchmarks/bench_all.py" \
       --profile user --sphere-only \
       --run-id acceptance_sphere_cuda \
-      --output-dir "${artifact_root}"
+      --output-dir "${artifact_root}" || cuda_rc=$?
+    if [[ "${cuda_rc}" -ne 0 ]]; then
+      echo "cuda job failures rc=${cuda_rc}"
+      exit "${cuda_rc}"
+    fi
     ;;
 esac
 

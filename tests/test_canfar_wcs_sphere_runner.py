@@ -17,6 +17,9 @@ def test_canfar_wcs_sphere_runner_contract() -> None:
     assert "trap on_exit EXIT" in runner
     assert "vos_upload heartbeat" in runner
     assert 'vmkdir -p "${vos_dest}" 2>/dev/null || true' not in runner
+    assert "cuda_rc" in runner
+    assert "cuda job failures" in runner
+    assert runner.index("-k cuda") < runner.index("acceptance_wcs_cuda")
 
 
 def test_canfar_wcs_sphere_launcher_payload_has_no_shell_vars() -> None:
