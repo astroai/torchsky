@@ -21,9 +21,9 @@ case "${container_image}" in
 esac
 
 case "${mode}" in
-  cpu | cuda) ;;
+  cpu | cuda | spectral | sphere | sparse | spin | geometry | cuhpx) ;;
   *)
-    echo "unknown mode: ${mode} (expected cpu or cuda)" >&2
+    echo "unknown mode: ${mode} (expected cpu, cuda, spectral, sphere, sparse, spin, geometry, or cuhpx)" >&2
     exit 2
     ;;
 esac
@@ -215,6 +215,100 @@ case "${mode}" in
       echo "cuda job failures rc=${cuda_rc}"
       exit "${cuda_rc}"
     fi
+    ;;
+  spectral)
+    install_env sphere-bench
+    record_versions sphere-bench
+    job_rc=0
+    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+      python "${source_root}/benchmarks/bench_sphere_spectral.py" \
+      --nside 32 --lmax 32 --runs 7 \
+      --json-out "${artifact_root}/sphere_spectral_nside32.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+      python "${source_root}/benchmarks/bench_sphere_spectral.py" \
+      --nside 64 --lmax 63 --runs 5 \
+      --json-out "${artifact_root}/sphere_spectral_nside64.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+      python "${source_root}/benchmarks/bench_sphere_spectral.py" \
+      --nside 128 --lmax 128 --runs 3 \
+      --json-out "${artifact_root}/sphere_spectral_nside128.json" || job_rc=$?
+    if [[ "${job_rc}" -ne 0 ]]; then
+      echo "spectral job failures rc=${job_rc}"
+      exit "${job_rc}"
+    fi
+    ;;
+  sphere)
+    install_env bench-all
+    install_env sphere-bench
+    record_versions sphere-bench
+    pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
+      python "${source_root}/benchmarks/bench_all.py" \
+      --profile user --sphere-only --no-gpu \
+      --run-id acceptance_sphere_full \
+      --output-dir "${artifact_root}"
+    ;;
+  sparse)
+    install_env sphere-bench
+    record_versions sphere-bench
+    job_rc=0
+    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+      python "${source_root}/benchmarks/bench_sphere_sparse.py" \
+      --nside 256 --coverage-frac 0.1 --n-queries 50000 --runs 9 \
+      --json-out "${artifact_root}/sphere_sparse_nside256.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+      python "${source_root}/benchmarks/bench_sphere_sparse.py" \
+      --nside 512 --coverage-frac 0.1 --n-queries 50000 --runs 7 \
+      --json-out "${artifact_root}/sphere_sparse_nside512.json" || job_rc=$?
+    if [[ "${job_rc}" -ne 0 ]]; then
+      echo "sparse job failures rc=${job_rc}"
+      exit "${job_rc}"
+    fi
+    ;;
+  spin)
+    install_env sphere-bench
+    record_versions sphere-bench
+    job_rc=0
+    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+      python "${source_root}/benchmarks/bench_spin_matrix.py" \
+      --case-set default --runs 5 \
+      --json-out "${artifact_root}/acceptance_spin_matrix.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+      python "${source_root}/benchmarks/bench_spin_matrix.py" \
+      --case-set extended --runs 3 \
+      --json-out "${artifact_root}/acceptance_spin_matrix_extended.json" || job_rc=$?
+    if [[ "${job_rc}" -ne 0 ]]; then
+      echo "spin job failures rc=${job_rc}"
+      exit "${job_rc}"
+    fi
+    ;;
+  geometry)
+    install_env sphere-bench
+    record_versions sphere-bench
+    job_rc=0
+    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+      python "${source_root}/benchmarks/bench_sphere_matrix.py" \
+      --device cpu --nside 1024 --n-points 200000 --runs 5 --strict-missing \
+      --output-dir "${artifact_root}/sphere_matrix" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+      python "${source_root}/benchmarks/bench_healpix_advanced.py" \
+      --device cpu --nside 1024 --n-points 200000 --runs 5 \
+      --json-out "${artifact_root}/healpix_advanced.json" || job_rc=$?
+    if [[ "${job_rc}" -ne 0 ]]; then
+      echo "geometry job failures rc=${job_rc}"
+      exit "${job_rc}"
+    fi
+    ;;
+  cuhpx)
+    install_env cuda-bench
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'"
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python -m pip install "git+https://github.com/NVlabs/cuHPX.git" || true
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python "${source_root}/benchmarks/bench_cuhpx_sht_spike.py" \
+      --nside 32 --runs 3 \
+      --json-out "${artifact_root}/cuhpx_sht_spike.json"
+    record_versions cuda-bench || true
     ;;
 esac
 

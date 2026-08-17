@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Launch CANFAR headless CPU and/or CUDA jobs for torchsky WCS + sphere.
-# Usage: launch_canfar_wcs_sphere.sh [cpu|cuda|all]
+# Usage: launch_canfar_wcs_sphere.sh [cpu|cuda|all|suite]
 #
 # Jobs clone TORCHSKY_COMMIT (default: origin/main HEAD), run
 # scripts/run_canfar_wcs_sphere.sh, and copy artifacts to
 # vos:sfabbro/torchsky-runs/<run_id>/.
+# suite: parallel spectral, sphere, sparse, spin, geometry, and cuHPX jobs.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -12,9 +13,9 @@ cd "${ROOT_DIR}"
 
 MODE="${1:-all}"
 case "${MODE}" in
-  cpu | cuda | all) ;;
+  cpu | cuda | all | suite | many) ;;
   *)
-    echo "usage: $0 [cpu|cuda|all]" >&2
+    echo "usage: $0 [cpu|cuda|all|suite]" >&2
     exit 2
     ;;
 esac
@@ -67,10 +68,10 @@ vcp "${ROOT_DIR}/scripts/run_canfar_wcs_sphere.sh" "${RUNNER_VOS_URI}"
 launch_one() {
   local job_mode=$1
   local gpu_flag=$2
-  local run_id="wcs-sphere-${job_mode}-${STAMP}"
+  local run_id="${3:-wcs-sphere-${job_mode}-${STAMP}}"
   local vos_dest="vos:sfabbro/torchsky-runs/${run_id}"
   local name
-  name="$(printf 'torchsky-wcs-%s-%s' "${job_mode}" "${STAMP}" | tr '_.' '--' | tr -cd '[:alnum:]-')"
+  name="$(printf 'torchsky-%s-%s' "${job_mode}" "${STAMP}" | tr '_.' '--' | tr -cd '[:alnum:]-')"
   local local_out="${ROOT_DIR}/benchmarks_results/canfar_${run_id}"
   mkdir -p "${local_out}"
 
@@ -150,4 +151,12 @@ if [[ "${MODE}" == "cpu" || "${MODE}" == "all" ]]; then
 fi
 if [[ "${MODE}" == "cuda" || "${MODE}" == "all" ]]; then
   launch_one cuda 1
+fi
+if [[ "${MODE}" == "suite" || "${MODE}" == "many" ]]; then
+  launch_one spectral "" "sphere-spectral-${STAMP}"
+  launch_one sphere "" "sphere-only-${STAMP}"
+  launch_one sparse "" "sphere-sparse-${STAMP}"
+  launch_one spin "" "sphere-spin-${STAMP}"
+  launch_one geometry "" "sphere-geometry-${STAMP}"
+  launch_one cuhpx 1 "cuhpx-sht-${STAMP}"
 fi

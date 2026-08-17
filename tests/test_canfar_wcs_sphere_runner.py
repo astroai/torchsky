@@ -25,6 +25,11 @@ def test_canfar_wcs_sphere_runner_contract() -> None:
     assert runner.index("-k cuda") < runner.index("acceptance_wcs_cuda")
     assert runner.index("--no-legacy-wcs-bridge") < runner.index("acceptance_wcs_cuda")
     assert "vos_upload after_wcs" in runner
+    for mode in ("spectral", "sphere", "sparse", "spin", "geometry", "cuhpx"):
+        assert f"\n  {mode})" in runner
+    assert "sphere_spectral_nside128.json" in runner
+    assert "bench_sphere_sparse.py" in runner
+    assert "bench_cuhpx_sht_spike.py" in runner
 
 
 def test_canfar_wcs_sphere_launcher_payload_has_no_shell_vars() -> None:
@@ -35,6 +40,8 @@ def test_canfar_wcs_sphere_launcher_payload_has_no_shell_vars() -> None:
     assert "tr ' ' '\\t'" in launcher
     assert "vos:sfabbro/torchsky-runs" in launcher
     assert "refusing canfar payload" in launcher
+    assert "suite" in launcher
+    assert "cuhpx" in launcher
     fetch = (ROOT / "scripts" / "fetch_canfar_wcs_sphere_run.sh").read_text(
         encoding="utf-8"
     )
