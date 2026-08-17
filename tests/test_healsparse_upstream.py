@@ -1,8 +1,7 @@
 """Upstream parity tests for healsparse compatibility layer.
 
 These tests compare torchsky.sphere.HealSparseMap against the
-healsparse reference implementation. Tests that require API methods
-not yet implemented are marked with skipif.
+healsparse reference implementation.
 """
 
 from __future__ import annotations
@@ -16,23 +15,7 @@ import torch
 
 healsparse = pytest.importorskip("healsparse")
 
-from torchsky.sphere import HealSparseMap, MOC, compat  # noqa: E402
-
-_HAS_MAKE_EMPTY = hasattr(HealSparseMap, "make_empty")
-_HAS_VALID_PIXELS = any(
-    isinstance(getattr(HealSparseMap, "valid_pixels", None), property) for _ in [None]
-) or hasattr(HealSparseMap, "valid_pixels")
-
-try:
-    from torchsky.sphere import sum_intersection, sum_union
-
-    _HAS_SUM_OPS = True
-except ImportError:
-    _HAS_SUM_OPS = False
-
-_SKIP_MAKE_EMPTY = pytest.mark.skipif(
-    not _HAS_MAKE_EMPTY, reason="HealSparseMap.make_empty not yet implemented"
-)
+from torchsky.sphere import HealSparseMap, MOC, compat, sum_intersection, sum_union  # noqa: E402
 
 
 def _make_sparse_pair(dtype=np.float64):
@@ -69,7 +52,6 @@ def test_healsparse_quickstart_make_empty_update_and_valid_pixels_match() -> Non
     )
 
 
-@_SKIP_MAKE_EMPTY
 def test_healsparse_write_read_partial_and_header_roundtrip() -> None:
     hs_map, tf_map, pixels, values = _make_sparse_pair()
     tf_map.metadata = {"TESTING": 1.0}
@@ -150,9 +132,6 @@ def test_healsparse_bool_degrade_matches_upstream_dense_behavior() -> None:
     )
 
 
-@pytest.mark.skipif(
-    not _HAS_SUM_OPS, reason="sum_intersection/sum_union not yet implemented"
-)
 def test_healsparse_sum_union_and_intersection_match_upstream() -> None:
     hs_a, tf_a, _pixels_a, _values_a = _make_sparse_pair()
     hs_b, tf_b, _pixels_b, _values_b = _make_sparse_pair()

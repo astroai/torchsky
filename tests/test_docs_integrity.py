@@ -15,6 +15,7 @@ def test_docs_reference_existing_local_files() -> None:
         "docs/changelog.md",
         "docs/cli.md",
         "docs/compatibility.md",
+        "docs/coordinates.md",
         "docs/encoders.md",
         "docs/examples.md",
         "docs/getting-started.md",

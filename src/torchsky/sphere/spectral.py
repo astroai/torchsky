@@ -209,6 +209,102 @@ def _preferred_complex_dtype(device: torch.device) -> torch.dtype:
     return torch.complex128 if device.type == "cpu" else torch.complex64
 
 
+_RING_WEIGHT_CACHE: dict[tuple[int, int], Tensor] = {}
+
+
+def _even_legendre_p(z: Tensor, n_even: int) -> Tensor:
+    """``P_0, P_2, ..., P_{2*(n_even-1)}`` via Bonnet recurrence, shape ``(n_even, N)``."""
+    if n_even < 1:
+        raise ValueError("n_even must be positive")
+    one = torch.ones_like(z)
+    rows = [one]
+    if n_even == 1:
+        return torch.stack(rows, dim=0)
+    p0 = one
+    p1 = z
+    for n in range(1, 2 * (n_even - 1) + 1):
+        p2 = ((2 * n + 1) * z * p1 - n * p0) / (n + 1)
+        p0 = p1
+        p1 = p2
+        if n % 2 == 1:
+            rows.append(p2)
+    return torch.stack(rows, dim=0)
+
+
+def _healpix_ring_quadrature_weights(nside: int) -> Tensor:
+    """Per-pixel RING quadrature weights with mean 1.
+
+    Tikhonov-regularized even-Legendre moment matching through
+    ``l = 2*min(nside, 128)-2`` (Gorski et al. 2005 equal-area rings).
+    This is not the HEALPix full-pixel weight FITS product; both
+    ``use_weights`` and ``use_pixel_weights`` apply this quadrature.
+    """
+    nside_i = int(nside)
+    n_even = min(nside_i, 128)
+    key = (nside_i, n_even)
+    cached = _RING_WEIGHT_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    npix = _healpix.nside2npix(nside_i)
+    pix = torch.arange(npix, dtype=torch.int64)
+    ring = _ring_pix2ring_index(nside_i)
+    nring = int(ring.max().item()) + 1
+    counts = torch.bincount(ring, minlength=nring).to(torch.float64)
+    theta, _ = _healpix.pix2ang(nside_i, pix, nest=False)
+    z = torch.cos(theta.to(dtype=torch.float64))
+    z_sum = torch.zeros(nring, dtype=torch.float64)
+    z_sum.scatter_add_(0, ring, z)
+    z_ring = z_sum / counts.clamp_min(1.0)
+    design = _even_legendre_p(z_ring, n_even) * counts.unsqueeze(0)
+    target = torch.zeros(n_even, dtype=torch.float64)
+    target[0] = float(npix)
+    ones = torch.ones(nring, dtype=torch.float64)
+    ridge = 1.0e-6 * float(npix)
+    gram = design @ design.T + ridge * torch.eye(n_even, dtype=torch.float64)
+    coeff = torch.linalg.solve(gram, target - design @ ones)
+    ring_w = ones + design.T @ coeff
+    pix_w = ring_w[ring]
+    pix_w = pix_w / pix_w.mean().clamp_min(1.0e-30)
+    _RING_WEIGHT_CACHE[key] = pix_w
+    return pix_w
+
+
+def _gal_cut_keep_mask(
+    nside: int, gal_cut_deg: float, *, nest: bool, device: torch.device
+) -> Tensor:
+    cut = float(gal_cut_deg)
+    if cut < 0.0:
+        raise ValueError("gal_cut must be non-negative")
+    npix = _healpix.nside2npix(nside)
+    pix = torch.arange(npix, device=device, dtype=torch.int64)
+    _lon, lat = _healpix.pix2ang(nside, pix, nest=nest, lonlat=True)
+    return torch.abs(lat) >= cut
+
+
+def _apply_map2alm_weights(
+    rows: Tensor,
+    *,
+    nside: int,
+    gal_cut: float,
+    use_weights: bool,
+    use_pixel_weights: bool,
+) -> Tensor:
+    """Apply healpy-style galactic cut and RING quadrature to RING-ordered maps."""
+    out = rows
+    if float(gal_cut) > 0.0:
+        keep = _gal_cut_keep_mask(
+            nside, float(gal_cut), nest=False, device=rows.device
+        )
+        out = out * keep.to(dtype=out.dtype)
+    if use_weights or use_pixel_weights:
+        w = _healpix_ring_quadrature_weights(nside).to(
+            device=rows.device, dtype=out.dtype
+        )
+        out = out * w.unsqueeze(0)
+    return out
+
+
 def alm_size(lmax: int, mmax: int | None = None) -> int:
     """Return number of alm coefficients in healpy ordering."""
     if lmax < 0:
@@ -2446,13 +2542,20 @@ def map2alm(
     nest: bool = False,
     iter: int = 0,
     pol: bool = False,
+    use_weights: bool = False,
     use_pixel_weights: bool = False,
+    gal_cut: float = 0.0,
 ) -> Tensor:
     """
     Compute alm coefficients in healpy ordering (m>=0 only).
 
     With `pol=True`, input map must be shape `(3, npix)` and return is shape
     `(3, nalm)` in `(T,E,B)` ordering.
+
+    ``use_weights`` and ``use_pixel_weights`` both apply computed RING
+    quadrature (mean 1), not HEALPix full-pixel weight FITS tables.
+    ``gal_cut`` zeros pixels whose RING-scheme latitude is below ``gal_cut``
+    degrees (healpy convention).
     """
     rows, single = _map_to_rows(map_values)
     npix = int(rows.shape[1])
@@ -2470,11 +2573,13 @@ def map2alm(
         rows = _reorder_nest_to_ring_rows(rows, ns)
         nest = False
 
-    if use_pixel_weights:
-        raise ValueError(
-            "torch backend does not support use_pixel_weights; "
-            "there is no healpy fallback"
-        )
+    rows = _apply_map2alm_weights(
+        rows,
+        nside=ns,
+        gal_cut=gal_cut,
+        use_weights=use_weights,
+        use_pixel_weights=use_pixel_weights,
+    )
 
     # Iterative solver (Matches healpy behavior)
     alm = _map2alm_single_pass(
@@ -2501,7 +2606,9 @@ def map2alm_batched(
     nest: bool = False,
     iter: int = 0,
     pol: bool = False,
+    use_weights: bool = False,
     use_pixel_weights: bool = False,
+    gal_cut: float = 0.0,
 ) -> Tensor:
     """
     Batched harmonic analysis with explicit leading batch dimension.
@@ -2527,7 +2634,9 @@ def map2alm_batched(
                     nest=nest,
                     iter=iter,
                     pol=True,
+                    use_weights=use_weights,
                     use_pixel_weights=use_pixel_weights,
+                    gal_cut=gal_cut,
                 )
             )
         return torch.stack(outs, dim=0)
@@ -2541,7 +2650,9 @@ def map2alm_batched(
         nest=nest,
         iter=iter,
         pol=False,
+        use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
+        gal_cut=gal_cut,
     )
 
 
@@ -2629,6 +2740,7 @@ def map2alm_lsq(
     maxiter: int = 20,
     nest: bool = False,
     use_pixel_weights: bool = False,
+    gal_cut: float = 0.0,
 ) -> tuple[Tensor, float, int]:
     """
     Iterative least-squares map analysis up to (lmax, mmax).
@@ -2663,6 +2775,7 @@ def map2alm_lsq(
         iter=0,
         pol=pol_eff,
         use_pixel_weights=use_pixel_weights,
+        gal_cut=gal_cut,
     )
     alm_rows, _ = _alm_to_cpu_rows(alm0)
     map_norm = float(torch.linalg.norm(rows).item())
@@ -2699,6 +2812,7 @@ def map2alm_lsq(
             iter=0,
             pol=pol_eff,
             use_pixel_weights=use_pixel_weights,
+            gal_cut=gal_cut,
         )
         delta_rows, _ = _alm_to_cpu_rows(delta)
         alm_rows = alm_rows + delta_rows
@@ -3138,11 +3252,6 @@ def anafast(
     if mm < 0 or mm > ll:
         raise ValueError("invalid mmax")
 
-    if use_weights or use_pixel_weights or gal_cut != 0.0:
-        raise ValueError(
-            "torch backend does not support use_weights/use_pixel_weights/gal_cut yet"
-        )
-
     if m1.ndim == 2 and bool(pol):
         if m1.shape[0] != 3:
             raise ValueError("pol=True expects map shape (3, npix)")
@@ -3154,6 +3263,9 @@ def anafast(
             nest=nest,
             iter=iter,
             pol=True,
+            use_weights=use_weights,
+            use_pixel_weights=use_pixel_weights,
+            gal_cut=gal_cut,
         )
         a2 = (
             a1
@@ -3166,6 +3278,9 @@ def anafast(
                 nest=nest,
                 iter=iter,
                 pol=True,
+                use_weights=use_weights,
+                use_pixel_weights=use_pixel_weights,
+                gal_cut=gal_cut,
             )
         )
         cls = alm2cl(a1, a2, lmax=ll, mmax=mm, nspec=nspec)
@@ -3176,8 +3291,30 @@ def anafast(
     if m1.ndim != 1:
         raise ValueError("pol=False torch backend currently supports only 1D maps")
 
-    a1 = map2alm(m1, nside=ns, lmax=ll, mmax=mm, nest=nest, iter=iter, pol=False)
-    a2 = map2alm(m2, nside=ns, lmax=ll, mmax=mm, nest=nest, iter=iter, pol=False)
+    a1 = map2alm(
+        m1,
+        nside=ns,
+        lmax=ll,
+        mmax=mm,
+        nest=nest,
+        iter=iter,
+        pol=False,
+        use_weights=use_weights,
+        use_pixel_weights=use_pixel_weights,
+        gal_cut=gal_cut,
+    )
+    a2 = map2alm(
+        m2,
+        nside=ns,
+        lmax=ll,
+        mmax=mm,
+        nest=nest,
+        iter=iter,
+        pol=False,
+        use_weights=use_weights,
+        use_pixel_weights=use_pixel_weights,
+        gal_cut=gal_cut,
+    )
     cl = alm2cl(a1, a2, lmax=ll, mmax=mm, nspec=nspec)
     if alm:
         return (cl, a1) if map2 is None else (cl, a1, a2)
@@ -3657,6 +3794,7 @@ def smoothmap(
     iter: int = 0,
     use_weights: bool = False,
     use_pixel_weights: bool = False,
+    gal_cut: float = 0.0,
     verbose: bool = True,
 ) -> Tensor:
     """Smooth HEALPix map(s) with scalar or polarized beam."""
@@ -3676,8 +3814,6 @@ def smoothmap(
     if sigma is not None:
         fwhm_use = float(sigma) * math.sqrt(8.0 * math.log(2.0))
 
-    if use_weights:
-        raise ValueError("torch backend does not support use_weights yet")
     if pol:
         if rows.shape[0] != 3:
             raise ValueError("pol=True requires map_values shape (3, npix)")
@@ -3689,6 +3825,9 @@ def smoothmap(
             nest=nest,
             iter=iter,
             pol=True,
+            use_weights=use_weights,
+            use_pixel_weights=use_pixel_weights,
+            gal_cut=gal_cut,
         )
         alm_sm = smoothalm(
             alm, lmax=ll, mmax=mm, fwhm_rad=fwhm_use, beam=beam_use, pol=True
@@ -3711,6 +3850,9 @@ def smoothmap(
         nest=nest,
         iter=iter,
         pol=False,
+        use_weights=use_weights,
+        use_pixel_weights=use_pixel_weights,
+        gal_cut=gal_cut,
     )
     alm_sm = smoothalm(
         alm, lmax=ll, mmax=mm, fwhm_rad=fwhm_use, beam=beam_use, pol=False
@@ -3736,6 +3878,9 @@ def map2alm_spin(
     mmax: int | None = None,
     nest: bool = False,
     iter: int = 0,
+    use_weights: bool = False,
+    use_pixel_weights: bool = False,
+    gal_cut: float = 0.0,
 ) -> tuple[Tensor, Tensor]:
     """
     Spin-weighted map->alm transform (Q/U-like pair).
@@ -3767,6 +3912,14 @@ def map2alm_spin(
         m1 = _reorder_nest_to_ring_rows(maps_t[1:2], ns)[0]
         maps_t = torch.stack([m0, m1], dim=0)
         nest = False
+
+    maps_t = _apply_map2alm_weights(
+        maps_t,
+        nside=ns,
+        gal_cut=gal_cut,
+        use_weights=use_weights,
+        use_pixel_weights=use_pixel_weights,
+    )
 
     # Iterative solver
     alm1, alm2 = _map2alm_spin_single_pass(maps_t, spin_i, nside=ns, lmax=ll, mmax=mm)

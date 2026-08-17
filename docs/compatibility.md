@@ -4,6 +4,29 @@ torchsky is **torch-native first**: primitives, kernels, and public tensor paths
 
 The goal is **not** to match every internal detail of upstream packages. The intent is to match **behavior users rely on** at useful API boundaries (see `AGENTS.md`).
 
+## World-layer replacement matrix
+
+A **job** is claimed only when all four exist: a native implementation with no
+runtime import of the peer, oracle tests or packaged fixtures, a throughput row
+versus the peer on CPU (and CUDA/MPS only where the device is claimed), and
+docs that fail loud on gaps. Linux leadership is not claimed from Mac numbers.
+Thin shims (`torchsky.sphere.compat`, `torchsky.wcs.WCS`) stay for migration;
+this is not `import healpy` and not a public-symbol clone.
+
+| Peer | Jobs | torchsky entry | Oracle | Status |
+|---|---|---|---|---|
+| healpy | Pixel API; scalar/spin SHT; synfast/anafast; `gal_cut`; RING quadrature weights | `sphere.healpix`, `sphere.harmonics`, `sphere.compat` | healpy/ducc | **partial** — fused Ishioka `map2alm_spin` leads healpy on Mac CPU; `alm2map_spin` still ~1.2–1.4× healpy there. Linux unconfirmed until CANFAR VOS artifacts exist. Weights are computed RING quadrature, not HEALPix weight FITS files. |
+| hpgeom | `query_disc` / box / ellipse / strip | `sphere.healpix` | hpgeom | **claimed** for query semantics. Inclusive disc padding and `fact==4` stay documented. |
+| astropy-healpix | Same pixel jobs as healpy/hpgeom | `sphere.healpix` | astropy-healpix | Oracle only; no third API. |
+| healsparse | construct/update, `get_values`/`valid_pixels`, coverage, `ud_grade`, FITS `.hs`, union/intersection sums | `sphere.HealSparseMap` | healsparse | **partial** — jobs implemented; `get_values` uses coverage-cell blocks when `nside_coverage` is set. |
+| mocpy | cone/polygon, contains, union/area, FITS/JSON/ASCII, empty/full, wrap | `sphere.MOC` | mocpy | **partial** — STMOC/time is out of scope. |
+| spherical-geometry | contains, intersect, union, area | `sphere.geom` | spherical_geometry | **claimed** for contains/area. Exact backend vs spherical-geometry area atol `1e-12` steradians (`tests/test_sphere_exact_regions.py`). Approximate backend is the fast CPU path; polygons are CPU-only. |
+| astropy.wcs | FITS pixel↔world, SIP/TPV/TNX/ZPX, spectral/temporal, slicing | `wcs.WCS` | astropy.wcs | **partial** — large-N CPU/CUDA first; small-N overhead under 3 ms is acceptable. Coupled `-TAB` inverse stays fail-loud unless `pixel_n_dim == world_n_dim`. MPS is float32. |
+| gwcs | Calibration-time detector→sky callable | `wcs.sample_gwcs_detector_to_tangent`, `RegularGridTransform2D` | gwcs at sample time only | **partial** — runtime never imports `gwcs`. Inverse and multi-epoch frozen tables are torch operators with residual bounds. |
+| astropy.coordinates / ERFA | Geometric frames, space motion | `wcs.CatalogState`, `wcs.frames` | Astropy/ERFA | **partial** — not a `SkyCoord` clone. Observed AltAz needs explicit IERS DUT1 (`wcs.observed`). |
+
+Out of this program: ducc0 internals, lsst.sphgeom, wcslib/pyast/Kapteyn (optional WCS benches only), reproject/SWarp/drizzle, astropy.io.fits, map stackers.
+
 ## Reference libraries (non-exhaustive)
 
 | Area | Typical references | torchsky entry / notes |
@@ -12,7 +35,7 @@ The goal is **not** to match every internal detail of upstream packages. The int
 | WCS / projections | **Astropy** `astropy.wcs`, FITS WCS | `torchsky.wcs.WCS`, C++/fused paths; parity tests vs Astropy where scoped |
 | FITS I/O & tables | **fitsio**, **Astropy** `io.fits` / tables | [`torchfits`](https://github.com/astroai/torchfits); out of scope for torchsky |
 | Spherical geometry / polygons | **spherical_geometry**, **astropy-healpix** (where applicable) | `torchsky.sphere` and `torchsky.sphere.geom`; exact regions and benchmarks vs upstream fixtures |
-| Catalogs / coordinates | **Astropy** `SkyCoord`, etc. | Compatibility-oriented tests and helpers where explicitly maintained |
+| Catalogs / coordinates | **Astropy** `SkyCoord` / ERFA | `torchsky.wcs.CatalogState` and `torchsky.wcs.frames`; see [coordinates.md](coordinates.md). Not a SkyCoord clone. |
 
 ## Where compatibility lives
 

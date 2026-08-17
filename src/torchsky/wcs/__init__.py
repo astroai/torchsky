@@ -15,10 +15,13 @@ from .detector_astrometry import (
     TangentPlaneAffine,
     validate_sampled_transform,
 )
+from .catalog_state import CatalogState
 from .frames import (
     canonical_celestial_frame,
     convert_celestial,
+    ecliptic_to_icrs,
     galactic_to_icrs,
+    icrs_to_ecliptic,
     icrs_to_galactic,
     precess_fk5,
     propagate_proper_motion,
@@ -45,21 +48,31 @@ from .tabular import (
     coupled_tabular_wcs_from_fits,
     tabular_axes_from_fits,
 )
-from .gwcs_sampling import GWCSGridSamplingResult, sample_gwcs_detector_to_tangent
+from .gwcs_sampling import (
+    FrozenDetectorEpochTables,
+    GWCSGridSamplingResult,
+    sample_gwcs_detector_epochs,
+    sample_gwcs_detector_to_tangent,
+)
+from .observed import EarthOrientation, Site, observed_altaz
 
 __all__ = [
     "SPEED_OF_LIGHT",
     "AffineFitResult",
     "AffineFreeResidualGrid2D",
+    "CatalogState",
+    "CoupledTabularLookupWCS",
     "DetectorToSkyTransform",
     "DetectorToTangentTransform",
+    "EarthOrientation",
+    "FrozenDetectorEpochTables",
     "GWCSGridSamplingResult",
     "RegularGridTransform2D",
     "SampledTransformValidation",
+    "Site",
     "SkyAffineFitResult",
     "TangentPlaneFrame",
     "TangentPlaneAffine",
-    "CoupledTabularLookupWCS",
     "TabularAxis",
     "TabularBoundsMode",
     "TabularLookupWCS",
@@ -69,12 +82,16 @@ __all__ = [
     "convert_celestial",
     "canonical_spectral_type",
     "convert_spectral",
+    "ecliptic_to_icrs",
     "frequency_to_spectral",
     "fit_affine_2d",
     "fit_sky_affine",
+    "sample_gwcs_detector_epochs",
     "sample_gwcs_detector_to_tangent",
     "galactic_to_icrs",
+    "icrs_to_ecliptic",
     "icrs_to_galactic",
+    "observed_altaz",
     "precess_fk5",
     "propagate_proper_motion",
     "propagate_proper_motion_with_jacobian",

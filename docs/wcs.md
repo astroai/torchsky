@@ -74,7 +74,18 @@ ambiguous case variants fail explicitly.
 For genuinely coupled multidimensional table arrays, use
 `coupled_tabular_wcs_from_fits(...)` to build a `CoupledTabularLookupWCS`
 forward interpolator. It performs torch-native multilinear interpolation over
-the table grid and intentionally does not guess a general inverse.
+the table grid. Inverse is implemented only when `pixel_n_dim == world_n_dim`;
+non-square coupled tables raise `NotImplementedError` rather than guessing an
+ambiguous inverse.
+
+CPU fused WCS is float64. CUDA WCS is float64. MPS WCS is float32 and is not
+a float64 path. Small-N overhead versus Astropy (sub-3 ms) is acceptable;
+large-N must stay first on CPU and CUDA.
+
+Catalog geometry is `CatalogState`, not `SkyCoord`. See [coordinates.md](coordinates.md).
+GWCS is sampled at calibration time onto `RegularGridTransform2D`; runtime
+never imports `gwcs`. Inverse of the sampled table is Newton with a residual
+bound. Time-dependent GWCS is a set of frozen epoch tables.
 
 ### Spectral And Temporal Axes
 
@@ -125,7 +136,9 @@ Spectral/temporal WCS:
 
 Frames and alignment:
 
-- `icrs_to_galactic(...)`, `galactic_to_icrs(...)`, `precess_fk5(...)`
+- `icrs_to_galactic(...)`, `galactic_to_icrs(...)`, `icrs_to_ecliptic(...)`, `ecliptic_to_icrs(...)`, `precess_fk5(...)`
+- `CatalogState` batched tensors; see [coordinates.md](coordinates.md)
+- `EarthOrientation`, `Site`, `observed_altaz(...)` (explicit DUT1)
 - `propagate_proper_motion(...)` for tensor-native angular space motion
 - `propagate_proper_motion_with_jacobian(...)` for local uncertainty transport
   when distance/RV are unavailable

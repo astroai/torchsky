@@ -258,6 +258,59 @@ class RegularGridTransform2D(nn.Module):
                 )
         return determinant
 
+    def inverse(
+        self,
+        values: Any,
+        *,
+        max_iter: int = 25,
+        tol: float | None = None,
+        fail_closed: bool = True,
+    ) -> Tensor:
+        """Newton inverse of the sampled table. Fail closed if residual exceeds ``tol``."""
+        tgt = self._coerce_points(values)
+        origin = self.origin.to(device=tgt.device, dtype=tgt.dtype)
+        spacing = self.spacing.to(device=tgt.device, dtype=tgt.dtype)
+        table = self.table.to(device=tgt.device, dtype=tgt.dtype)
+        height, width = self.grid_shape
+        p00 = table[0, 0]
+        dx = (table[0, -1] - table[0, 0]) / max(width - 1, 1)
+        dy = (table[-1, 0] - table[0, 0]) / max(height - 1, 1)
+        affine = torch.stack((dx, dy), dim=-1)
+        delta = (tgt - p00).unsqueeze(-1)
+        idx = torch.linalg.solve(affine, delta).squeeze(-1)
+        x = origin + idx * spacing
+        x0, y0 = origin[0], origin[1]
+        x1 = origin[0] + (width - 1) * spacing[0]
+        y1 = origin[1] + (height - 1) * spacing[1]
+        x = torch.stack(
+            (
+                torch.clamp(x[..., 0], min=x0, max=x1),
+                torch.clamp(x[..., 1], min=y0, max=y1),
+            ),
+            dim=-1,
+        )
+        if tol is None:
+            tol = 1.0e-8 * float(spacing.max().detach().cpu().item())
+        for _ in range(int(max_iter)):
+            pred, jac = self.evaluate_with_jacobian(x)
+            resid = pred - tgt
+            step = torch.linalg.solve(jac, resid.unsqueeze(-1)).squeeze(-1)
+            x = x - step
+            x = torch.stack(
+                (
+                    torch.clamp(x[..., 0], min=x0, max=x1),
+                    torch.clamp(x[..., 1], min=y0, max=y1),
+                ),
+                dim=-1,
+            )
+        pred, _ = self.evaluate_with_jacobian(x)
+        max_resid = float((pred - tgt).abs().amax().detach().cpu().item())
+        if fail_closed and max_resid > float(tol):
+            raise ValueError(
+                f"grid inverse residual {max_resid:.8g} exceeds tol {float(tol):.8g}"
+            )
+        return x
+
 
 class TangentPlaneAffine(nn.Module):
     """Learnable full affine correction in a two-dimensional tangent plane."""
@@ -306,6 +359,14 @@ class TangentPlaneAffine(nn.Module):
         matrix = self.matrix.to(device=pts.device, dtype=pts.dtype)
         offset = self.offset.to(device=pts.device, dtype=pts.dtype)
         return torch.matmul(pts, matrix.T) + offset
+
+    def inverse(self, points: Any) -> Tensor:
+        pts = torch.as_tensor(points)
+        if not pts.is_floating_point() or pts.shape[-1:] != (2,):
+            raise ValueError("points must be floating point with last dimension 2")
+        matrix = self.matrix.to(device=pts.device, dtype=pts.dtype)
+        offset = self.offset.to(device=pts.device, dtype=pts.dtype)
+        return torch.matmul(pts - offset, torch.linalg.inv(matrix).T)
 
     def jacobian(self, points: Tensor) -> Tensor:
         matrix = self.matrix.to(device=points.device, dtype=points.dtype)
@@ -437,6 +498,48 @@ class DetectorToTangentTransform(nn.Module):
             affine = affine + correction
             jacobian = jacobian + correction_jacobian
         return affine, jacobian
+
+    def inverse(
+        self,
+        values: Any,
+        *,
+        max_iter: int = 25,
+        tol: float | None = None,
+    ) -> Tensor:
+        tgt = torch.as_tensor(values)
+        if not tgt.is_floating_point() or tgt.shape[-1:] != (2,):
+            raise ValueError("values must be floating point with last dimension 2")
+        mid = self.affine.inverse(tgt)
+        if self.residual is None:
+            return self.table.inverse(mid, max_iter=max_iter, tol=tol)
+        x = self.table.inverse(mid, max_iter=max_iter, fail_closed=False)
+        origin = self.table.origin.to(device=tgt.device, dtype=tgt.dtype)
+        spacing = self.table.spacing.to(device=tgt.device, dtype=tgt.dtype)
+        height, width = self.table.grid_shape
+        x0, y0 = origin[0], origin[1]
+        x1 = origin[0] + (width - 1) * spacing[0]
+        y1 = origin[1] + (height - 1) * spacing[1]
+        if tol is None:
+            tol = 1.0e-8 * float(spacing.max().detach().cpu().item())
+        for _ in range(int(max_iter)):
+            pred, jac = self.evaluate_with_jacobian(x)
+            resid = pred - tgt
+            step = torch.linalg.solve(jac, resid.unsqueeze(-1)).squeeze(-1)
+            x = x - step
+            x = torch.stack(
+                (
+                    torch.clamp(x[..., 0], min=x0, max=x1),
+                    torch.clamp(x[..., 1], min=y0, max=y1),
+                ),
+                dim=-1,
+            )
+        pred, _ = self.evaluate_with_jacobian(x)
+        max_resid = float((pred - tgt).abs().amax().detach().cpu().item())
+        if max_resid > float(tol):
+            raise ValueError(
+                f"detector inverse residual {max_resid:.8g} exceeds tol {float(tol):.8g}"
+            )
+        return x
 
     def forward(self, points: Any) -> Tensor:
         return self.evaluate_with_jacobian(points)[0]

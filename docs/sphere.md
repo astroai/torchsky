@@ -270,7 +270,7 @@ Preferred module import:
 import torchsky.sphere.harmonics as harmonics
 ```
 
-### `map2alm(map_values, lmax=None, mmax=None, *, nside=None, nest=False, iter=0, pol=False, use_pixel_weights=False)`
+### `map2alm(map_values, lmax=None, mmax=None, *, nside=None, nest=False, iter=0, pol=False, use_weights=False, use_pixel_weights=False, gal_cut=0.0)`
 
 Analyze a HEALPix map into spherical harmonic coefficients.
 
@@ -423,7 +423,7 @@ Functions in `torchsky.sphere.compat` (and the `torchsky.sphere.healpy` alias) m
 | `pixel_ranges_to_pixels` | parity | half-open/closed range expansion |
 | `upgrade_pixel_ranges` | parity | NEST pixel-range upgrade |
 | `pixels_to_pixel_ranges` | extended | torchsky-native range compression |
-| `map2alm` | partial | scalar + polarized (`pol=True`); `iter`; `use_pixel_weights` raises |
+| `map2alm` | parity | scalar + polarized (`pol=True`); `iter`; RING quadrature weights; `gal_cut` |
 | `map2alm_lsq` | parity | returns `(alm, rel_res, n_iter)`; torch-native |
 | `alm2map` | parity | scalar + polarized; `pixwin`; torch-native |
 | `almxfl` | parity | short `fl` tails zero-filled (healpy semantics) |
@@ -453,12 +453,25 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API
 
 | Area | Limitation |
 |---|---|
-| `map2alm` | `use_pixel_weights` and `gal_cut` are not supported by the torch backend and raise. There is no healpy fallback. |
-| `map2alm_spin` / `alm2map_spin` | Functional; fused RING concat is on the CPU hot path. Still slower than healpy's C implementation on some sizes. Pixel weights / `gal_cut` stay fail-loud. |
+| `map2alm` weights | `use_weights` / `use_pixel_weights` apply computed RING quadrature (mean 1), exact for even Legendre moments through `l = 2*min(nside,128)-2`. They do not load HEALPix full-pixel weight FITS tables. |
+| `alm2map_spin` | Fused Ishioka CPU synthesis still ~1.2–1.4× healpy on Mac after the 2026-08 Ishioka work. Do not claim Linux leadership without VOS artifacts. Set `TORCHSKY_SPIN_ISHIOKA=0` at call time if Ishioka loses to Wigner. |
 | Pixel windows | Packaged tables cover standard HEALPix NSIDE range. Higher NSIDE may require external data. |
-| GPU | HEALPix geometry primitives and SHT run on CUDA and MPS. Polygon operations are CPU-only. |
+| Device | See the device table below. GPU SHT inputs are copied to host; fused Ishioka/Wigner is CPU C++. |
 | s2fft | Optional bench/test peer only. Native HEALPix has no sampling theorem; do not use `method="jax_healpy"` as an oracle. |
 | cuHPX | **No-go** as a torchsky backend until a CANFAR CUDA spike (`scripts/run_canfar_cuhpx_sht_spike.sh`) reports `go-scalar-cuda`. Even then: optional env-gated scalar CUDA adapter only, still healpy-tested, never default on CPU/MPS, no spin-2, no core/`pyproject.toml` dependency. Default cuHPX `lmax=2*nside+1` and float32 must not be compared blindly to healpy `3*nside-1`. |
+
+### Device policy
+
+| Job | CPU | CUDA | MPS |
+|---|---|---|---|
+| WCS pixel↔world | yes | yes float64 | yes float32 |
+| HEALPix geometry | yes | yes | yes, looser index gates |
+| Sparse `get_values` / MOC contains | yes | yes if tensors stay on device | yes float32 |
+| Polygons | yes | no | no |
+| SHT (Ishioka/Wigner) | yes float64 | host copy only | host copy only |
+| Observed place | yes float64 | later | later |
+
+Exact spherical polygons (`to_exact`, `NativeExactSphericalRegion`) match spherical-geometry area to `1e-12` steradians. The approximate CPU backend is the throughput path; document that bound before treating approximate contains as exact.
 
 ---
 

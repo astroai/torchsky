@@ -29,6 +29,7 @@ case "${mode}" in
 esac
 
 mkdir -p "${artifact_root}"
+echo "started_utc=$(date -u +%FT%TZ)" > "${artifact_root}/HEARTBEAT"
 exec > >(tee "${artifact_root}/session.log") 2>&1
 
 echo "run_id=${run_id}"
@@ -52,6 +53,34 @@ for d in /opt/astroai/venv/cadc/bin /opt/astroai/bin /opt/conda/bin /usr/local/b
     break
   fi
 done
+
+vos_upload() {
+  local label=$1
+  echo "vos_upload label=${label} utc=$(date -u +%FT%TZ)"
+  if ! command -v vcp >/dev/null; then
+    echo "vcp not on PATH; cannot copy ${artifact_root} to ${vos_dest}" >&2
+    return 1
+  fi
+  if command -v vmkdir >/dev/null; then
+    vmkdir -p "${vos_dest}"
+  fi
+  vcp "${artifact_root}/." "${vos_dest}/"
+  echo "vos_dest=${vos_dest}"
+  tar -C "$(dirname "${artifact_root}")" -czf "/scratch/${run_id}.tar.gz" "$(basename "${artifact_root}")"
+  vcp "/scratch/${run_id}.tar.gz" "vos:sfabbro/torchsky-runs/${run_id}.tar.gz"
+  echo "vos_tarball=vos:sfabbro/torchsky-runs/${run_id}.tar.gz"
+}
+
+on_exit() {
+  local rc=$?
+  set +e
+  echo "exit_utc=$(date -u +%FT%TZ) rc=${rc}" | tee -a "${artifact_root}/HEARTBEAT"
+  vos_upload "exit_rc${rc}" || echo "VOS upload failed rc=${rc}" >&2
+  exit "${rc}"
+}
+trap on_exit EXIT
+
+vos_upload heartbeat || echo "heartbeat VOS upload failed; continuing job" >&2
 
 clone_source() {
   if [[ -d "${source_root}/.git" ]] \
@@ -159,16 +188,3 @@ esac
 
 echo "completed_utc=$(date -u +%FT%TZ)"
 echo "artifacts=${artifact_root}"
-
-if ! command -v vcp >/dev/null; then
-  echo "vcp not on PATH; cannot copy ${artifact_root} to ${vos_dest}" >&2
-  exit 1
-fi
-if command -v vmkdir >/dev/null; then
-  vmkdir -p "${vos_dest}" 2>/dev/null || true
-fi
-vcp "${artifact_root}/." "${vos_dest}/"
-echo "vos_dest=${vos_dest}"
-tar -C "$(dirname "${artifact_root}")" -czf "/scratch/${run_id}.tar.gz" "$(basename "${artifact_root}")"
-vcp "/scratch/${run_id}.tar.gz" "vos:sfabbro/torchsky-runs/${run_id}.tar.gz"
-echo "vos_tarball=vos:sfabbro/torchsky-runs/${run_id}.tar.gz"

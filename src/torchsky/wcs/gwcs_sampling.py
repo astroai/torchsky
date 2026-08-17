@@ -188,4 +188,68 @@ def sample_gwcs_detector_to_tangent(
         height, width = next_height, next_width
 
 
-__all__ = ["GWCSGridSamplingResult", "sample_gwcs_detector_to_tangent"]
+@dataclass(frozen=True)
+class FrozenDetectorEpochTables:
+    """Time-dependent detector tables as frozen samples, not a live GWCS graph."""
+
+    epochs: tuple[float, ...]
+    samples: tuple[GWCSGridSamplingResult, ...]
+
+    def transform_at(self, epoch: float) -> RegularGridTransform2D:
+        if not self.epochs:
+            raise ValueError("no frozen detector epochs")
+        diffs = torch.tensor(self.epochs, dtype=torch.float64) - float(epoch)
+        index = int(torch.argmin(diffs.abs()).item())
+        return self.samples[index].transform
+
+
+def sample_gwcs_detector_epochs(
+    references: Mapping[float, Callable[..., Any]],
+    *,
+    detector_bounds: tuple[tuple[float, float], tuple[float, float]],
+    initial_grid_shape: tuple[int, int] = (9, 9),
+    maximum_grid_shape: tuple[int, int] = (257, 257),
+    interpolation: Literal["bilinear", "bicubic"] = "bicubic",
+    coordinates: AngularCoordinates = "plane_arcsec",
+    random_validation_points: int = 4096,
+    seed: int = 0,
+    p99_limit_mas: float = 0.01,
+    max_limit_mas: float = 0.05,
+    chip_boundaries_x: tuple[float, ...] = (),
+    reference_name: str = "gwcs_detector_to_v2v3",
+    calibration_provenance: Mapping[str, str] | None = None,
+    dtype: torch.dtype = torch.float64,
+) -> FrozenDetectorEpochTables:
+    """Sample one frozen table per epoch. Runtime never imports ``gwcs``."""
+    if not references:
+        raise ValueError("references must contain at least one epoch")
+    by_epoch = {float(epoch): fn for epoch, fn in references.items()}
+    epochs = tuple(sorted(by_epoch))
+    samples = tuple(
+        sample_gwcs_detector_to_tangent(
+            by_epoch[epoch],
+            detector_bounds=detector_bounds,
+            initial_grid_shape=initial_grid_shape,
+            maximum_grid_shape=maximum_grid_shape,
+            interpolation=interpolation,
+            coordinates=coordinates,
+            random_validation_points=random_validation_points,
+            seed=seed,
+            p99_limit_mas=p99_limit_mas,
+            max_limit_mas=max_limit_mas,
+            chip_boundaries_x=chip_boundaries_x,
+            reference_name=f"{reference_name}_epoch_{epoch}",
+            calibration_provenance=calibration_provenance,
+            dtype=dtype,
+        )
+        for epoch in epochs
+    )
+    return FrozenDetectorEpochTables(epochs=epochs, samples=samples)
+
+
+__all__ = [
+    "FrozenDetectorEpochTables",
+    "GWCSGridSamplingResult",
+    "sample_gwcs_detector_epochs",
+    "sample_gwcs_detector_to_tangent",
+]

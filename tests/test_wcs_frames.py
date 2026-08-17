@@ -2,7 +2,7 @@ import erfa
 import numpy as np
 import pytest
 import torch
-from astropy.coordinates import FK4, FK5, Galactic, ICRS, SkyCoord
+from astropy.coordinates import FK4, FK5, Galactic, ICRS, SkyCoord, BarycentricMeanEcliptic
 from astropy.time import Time
 import astropy.units as u
 
@@ -42,7 +42,24 @@ def test_icrs_galactic_matches_astropy() -> None:
     np.testing.assert_allclose(dec_back.numpy(), dec.numpy(), atol=2e-10)
 
 
-def test_propagate_proper_motion_matches_astropy() -> None:
+def test_icrs_ecliptic_roundtrip_and_astropy() -> None:
+    from torchsky.wcs import icrs_to_ecliptic, ecliptic_to_icrs
+
+    ra = torch.tensor([0.0, 83.6331, 201.2983], dtype=torch.float64)
+    dec = torch.tensor([0.0, 22.0145, -43.0191], dtype=torch.float64)
+    lon, lat = icrs_to_ecliptic(ra, dec)
+    ra_back, dec_back = ecliptic_to_icrs(lon, lat)
+    np.testing.assert_allclose(
+        _wrap_delta(ra_back.numpy(), ra.numpy()), 0.0, atol=1e-10
+    )
+    np.testing.assert_allclose(dec_back.numpy(), dec.numpy(), atol=1e-10)
+
+    sky = SkyCoord(ra=ra.numpy() * u.deg, dec=dec.numpy() * u.deg, frame=ICRS())
+    ecl = sky.transform_to(BarycentricMeanEcliptic(equinox="J2000"))
+    np.testing.assert_allclose(
+        _wrap_delta(lon.numpy(), ecl.lon.deg), 0.0, atol=2e-5
+    )
+    np.testing.assert_allclose(lat.numpy(), ecl.lat.deg, atol=2e-5)
     ra = torch.tensor([10.0, 120.0, 359.0, 1.0], dtype=torch.float64)
     dec = torch.tensor([20.0, -45.0, 89.9, -89.9], dtype=torch.float64)
     pm_ra_cosdec = torch.tensor([100.0, -500.0, 10_000.0, -10_000.0])

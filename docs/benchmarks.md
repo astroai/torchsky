@@ -854,8 +854,8 @@ Win rate: **88.9%** (16/18). Large-N: **100%** (13/13). Two deficits listed belo
 | Domain | Case | Lag | Notes |
 |---|---|---:|---|
 | wcs | N &le; 10K forward/inverse (22 cases) | 1.0x &ndash; 2.9x | Fixed PyTorch dispatch overhead at small N (21 at N = 1K, 1 at N = 10K). All under 3 ms absolute. |
-| sphere | `map2alm_spin` | 6.3x | Fused RING concat is now on the CPU hot path; same-machine nside 32/64/128 still ~8x vs healpy. Gate floors unchanged. |
-| sphere | `alm2map_spin` | 8.3x | Same as above (~10–12x on the 2026-08-15 machine). |
+| sphere | `alm2map_spin` CPU | ~1.2–1.4× healpy | Mac after Ishioka 2018 skip-2 (2026-08). `map2alm_spin` beat healpy on that machine. Linux x86 (scalar FFT vs NEON) is unconfirmed until CANFAR VOS artifacts exist. Pre-Ishioka 6–8× spin lag is obsolete. |
+| sphere | fused SHT on GPU | n/a | Ishioka/Wigner is CPU C++. CUDA/MPS map tensors are copied to host. Do not claim GPU SHT. |
 
 ---
 

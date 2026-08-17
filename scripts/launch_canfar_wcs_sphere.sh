@@ -60,7 +60,7 @@ if ! ensure_vcp; then
 fi
 
 if command -v vmkdir >/dev/null; then
-  vmkdir -p "${VOS_BIN_URI}" 2>/dev/null || true
+  vmkdir -p "${VOS_BIN_URI}"
 fi
 vcp "${ROOT_DIR}/scripts/run_canfar_wcs_sphere.sh" "${RUNNER_VOS_URI}"
 

@@ -174,11 +174,48 @@ def test_map2alm_alm2map_roundtrip_low_l() -> None:
     assert rel < 1.5e-1
 
 
-def test_map2alm_rejects_pixel_weights() -> None:
+def test_map2alm_pixel_weights_preserve_constant_monopole() -> None:
     nside = 8
-    m = torch.zeros(hp.nside2npix(nside), dtype=torch.float64)
-    with pytest.raises(ValueError, match="use_pixel_weights"):
-        map2alm(m, nside=nside, lmax=4, use_pixel_weights=True)
+    m = torch.ones(hp.nside2npix(nside), dtype=torch.float64)
+    alm0 = map2alm(m, nside=nside, lmax=4)
+    alm_w = map2alm(m, nside=nside, lmax=4, use_pixel_weights=True)
+    torch.testing.assert_close(alm_w[0].real, alm0[0].real, atol=1e-10, rtol=0.0)
+    assert torch.isfinite(alm_w).all()
+
+
+def test_map2alm_gal_cut_zeros_equatorial_strip() -> None:
+    nside = 8
+    npix = hp.nside2npix(nside)
+    m = torch.ones(npix, dtype=torch.float64)
+    cut = 20.0
+    alm = map2alm(m, nside=nside, lmax=4, gal_cut=cut)
+    pix = torch.arange(npix, dtype=torch.int64)
+    _lon, lat = hp.pix2ang(nside, pix, nest=False, lonlat=True)
+    masked = m.clone()
+    masked[torch.abs(lat) < cut] = 0.0
+    alm_ref = map2alm(masked, nside=nside, lmax=4)
+    torch.testing.assert_close(alm, alm_ref, atol=0.0, rtol=0.0)
+
+
+def test_anafast_gal_cut_and_weights_run() -> None:
+    nside = 8
+    m = torch.randn(hp.nside2npix(nside), dtype=torch.float64)
+    cl = anafast(
+        m, nside=nside, lmax=6, gal_cut=10.0, use_weights=True, pol=False
+    )
+    assert cl.shape == (7,)
+    assert torch.isfinite(cl).all()
+
+
+def test_map2alm_gal_cut_matches_healpy_when_installed() -> None:
+    healpy = pytest.importorskip("healpy")
+    nside = 8
+    rng = np.random.default_rng(0)
+    m = rng.normal(size=hp.nside2npix(nside))
+    cut = 15.0
+    got = map2alm(torch.as_tensor(m, dtype=torch.float64), nside=nside, lmax=8, gal_cut=cut)
+    ref = healpy.map2alm(m, lmax=8, gal_cut=cut, use_weights=False, iter=0)
+    np.testing.assert_allclose(got.numpy(), ref, atol=0.0, rtol=1e-6)
 
 
 def test_anafast_dipole_dominates_l1() -> None:

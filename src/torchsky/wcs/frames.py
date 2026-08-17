@@ -302,6 +302,41 @@ def galactic_to_icrs(l_deg: Any, b_deg: Any) -> tuple[Tensor, Tensor]:
     return unit_to_radec(icrs_vec)
 
 
+# IAU 2006 mean obliquity of the ecliptic at J2000, 84381.406 arcsec.
+_ECLIPTIC_OBLIQUITY_J2000_RAD = 84381.406 * ARCSEC_TO_RAD
+
+
+def _ecliptic_from_icrs_matrix(device: torch.device, dtype: torch.dtype) -> Tensor:
+    eps = torch.as_tensor(
+        _ECLIPTIC_OBLIQUITY_J2000_RAD, dtype=dtype, device=device
+    )
+    c = torch.cos(eps)
+    s = torch.sin(eps)
+    z = torch.zeros((), dtype=dtype, device=device)
+    o = torch.ones((), dtype=dtype, device=device)
+    return torch.stack(
+        (
+            torch.stack((o, z, z)),
+            torch.stack((z, c, -s)),
+            torch.stack((z, s, c)),
+        )
+    )
+
+
+def icrs_to_ecliptic(ra_deg: Any, dec_deg: Any) -> tuple[Tensor, Tensor]:
+    """Rotate ICRS equatorial coordinates to mean ecliptic of J2000."""
+    vec = radec_to_unit(ra_deg, dec_deg)
+    mat = _ecliptic_from_icrs_matrix(vec.device, vec.dtype)
+    return unit_to_radec(torch.matmul(vec, mat))
+
+
+def ecliptic_to_icrs(lon_deg: Any, lat_deg: Any) -> tuple[Tensor, Tensor]:
+    """Rotate mean ecliptic of J2000 coordinates to ICRS equatorial."""
+    vec = radec_to_unit(lon_deg, lat_deg)
+    mat = _ecliptic_from_icrs_matrix(vec.device, vec.dtype)
+    return unit_to_radec(torch.matmul(vec, mat.T))
+
+
 def propagate_proper_motion(
     lon_deg: Any,
     lat_deg: Any,
@@ -911,8 +946,12 @@ def canonical_celestial_frame(frame: str | None) -> str:
     name = str(frame).strip().upper()
     if name in {"RADECSYS", "EQUATORIAL"}:
         return "ICRS"
-    if name in {"ICRS", "FK5", "FK4", "GALACTIC", "GAL"}:
-        return "GALACTIC" if name == "GAL" else name
+    if name in {"ICRS", "FK5", "FK4", "GALACTIC", "GAL", "ECLIPTIC", "ECL"}:
+        if name == "GAL":
+            return "GALACTIC"
+        if name == "ECL":
+            return "ECLIPTIC"
+        return name
     raise ValueError(f"unsupported celestial frame {frame!r}")
 
 
@@ -946,6 +985,9 @@ def convert_celestial(
     elif src == "GALACTIC":
         lon, lat = galactic_to_icrs(lon, lat)
         src = "ICRS"
+    elif src == "ECLIPTIC":
+        lon, lat = ecliptic_to_icrs(lon, lat)
+        src = "ICRS"
     elif src == "FK5":
         lon, lat = precess_fk5(
             lon,
@@ -970,6 +1012,8 @@ def convert_celestial(
         return unit_to_radec(vec)
     if dst == "GALACTIC":
         return icrs_to_galactic(lon, lat)
+    if dst == "ECLIPTIC":
+        return icrs_to_ecliptic(lon, lat)
     if dst == "FK5":
         return precess_fk5(
             lon,

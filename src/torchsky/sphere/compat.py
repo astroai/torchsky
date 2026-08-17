@@ -412,7 +412,9 @@ def map2alm(
     nest: bool = False,
     iter: int = 0,
     pol: bool = False,
+    use_weights: bool = False,
     use_pixel_weights: bool = False,
+    gal_cut: float = 0.0,
 ) -> Tensor:
     return _map2alm(
         map_values,
@@ -422,7 +424,9 @@ def map2alm(
         nest=nest,
         iter=iter,
         pol=pol,
+        use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
+        gal_cut=gal_cut,
     )
 
 
@@ -437,6 +441,7 @@ def map2alm_lsq(
     nside: int | None = None,
     nest: bool = False,
     use_pixel_weights: bool = False,
+    gal_cut: float = 0.0,
 ) -> tuple[Tensor, float, int]:
     return _map2alm_lsq(
         maps,
@@ -448,6 +453,7 @@ def map2alm_lsq(
         maxiter=maxiter,
         nest=nest,
         use_pixel_weights=use_pixel_weights,
+        gal_cut=gal_cut,
     )
 
 
@@ -623,6 +629,7 @@ def smoothmap(
     iter: int = 0,
     use_weights: bool = False,
     use_pixel_weights: bool = False,
+    gal_cut: float = 0.0,
     verbose: bool = True,
 ) -> Tensor:
     return _smoothmap(
@@ -639,6 +646,7 @@ def smoothmap(
         iter=iter,
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
+        gal_cut=gal_cut,
         verbose=verbose,
     )
 
@@ -684,8 +692,23 @@ def map2alm_spin(
     lmax: int | None = None,
     mmax: int | None = None,
     nest: bool = False,
+    iter: int = 0,
+    use_weights: bool = False,
+    use_pixel_weights: bool = False,
+    gal_cut: float = 0.0,
 ) -> tuple[Tensor, Tensor]:
-    return _map2alm_spin(maps, spin, nside=nside, lmax=lmax, mmax=mmax, nest=nest)
+    return _map2alm_spin(
+        maps,
+        spin,
+        nside=nside,
+        lmax=lmax,
+        mmax=mmax,
+        nest=nest,
+        iter=iter,
+        use_weights=use_weights,
+        use_pixel_weights=use_pixel_weights,
+        gal_cut=gal_cut,
+    )
 
 
 def alm2map_spin(

@@ -45,6 +45,29 @@ def test_sparse_from_pixels_canonicalizes_unsorted_duplicates() -> None:
     )
 
 
+def test_sparse_get_values_coverage_blocks_match_searchsorted() -> None:
+    pixels = torch.tensor([0, 1, 2, 33, 34, 4095], dtype=torch.int64)
+    values = torch.tensor([1.5, 2.5, 3.5, 4.5, 5.5, 6.5], dtype=torch.float64)
+    blocked = SparseHealpixMap.from_pixels(
+        pixels,
+        values,
+        nside_sparse=64,
+        nest=True,
+        nside_coverage=32,
+        sentinel=-1.0,
+    )
+    plain = SparseHealpixMap.from_pixels(
+        pixels,
+        values,
+        nside_sparse=64,
+        nest=True,
+        sentinel=-1.0,
+    )
+    query = torch.tensor([0, 1, 10, 33, 8192], dtype=torch.int64)
+    torch.testing.assert_close(blocked.get_values(query), plain.get_values(query))
+    assert blocked._block_index is not None
+
+
 def test_sparse_from_pixels_canonicalizes_multiband_values() -> None:
     pixels = torch.tensor([4, 1, 4, 2], dtype=torch.int64)
     values = torch.tensor(

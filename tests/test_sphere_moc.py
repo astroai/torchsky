@@ -402,3 +402,24 @@ def test_mocpy_fits_roundtrip_optional(tmp_path) -> None:
     assert loaded is not None
     back = MOC.read_fits(str(path))
     torch.testing.assert_close(back.uniq.sort().values, moc.uniq.sort().values)
+
+
+def test_moc_empty_full_and_dateline_wrap() -> None:
+    empty = MOC(torch.tensor([], dtype=torch.int64))
+    assert empty.area == 0.0
+    assert not bool(empty.contains(0.0, 0.0).item())
+
+    full = MOC(nest2uniq(1, torch.arange(12, dtype=torch.int64)))
+    probes_lon = torch.tensor([0.0, 179.0, -179.0, 90.0], dtype=torch.float64)
+    probes_lat = torch.tensor([0.0, 0.0, 0.0, 45.0], dtype=torch.float64)
+    assert bool(full.contains(probes_lon, probes_lat).all().item())
+    assert full.area > 0.9 * 4.0 * float(np.pi)
+
+    wrap = MOC.from_polygon(
+        torch.tensor([170.0, 190.0, 190.0, 170.0], dtype=torch.float64),
+        torch.tensor([-4.0, -4.0, 4.0, 4.0], dtype=torch.float64),
+        max_order=6,
+    )
+    assert bool(wrap.contains(175.0, 0.0).item())
+    assert bool(wrap.contains(-175.0, 0.0).item())
+    assert not bool(wrap.contains(0.0, 0.0).item())

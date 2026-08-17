@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Any, TYPE_CHECKING
 
 import torch
@@ -78,6 +78,8 @@ class SparseHealpixMap:
     # Hierarchical extensions (optional)
     nside_coverage: int | None = None
     coverage_map: Tensor | None = None
+    _block_index: Tensor | None = field(default=None, repr=False, compare=False)
+    _block_values: Tensor | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         _healpix.nside2npix(self.nside)
@@ -269,12 +271,15 @@ class SparseHealpixMap:
 
     def _build_coverage_map(self):
         if self.nside_coverage is None:
+            self._block_index = None
+            self._block_values = None
             return
         npix_cov = _healpix.nside2npix(self.nside_coverage)
         self.coverage_map = torch.full(
             (npix_cov,), -1, dtype=torch.int64, device=self.pixels.device
         )
         if self.pixels.numel() == 0:
+            self._build_lookup_blocks()
             return
 
         cov_pixels = self._coverage_pixels()
@@ -287,6 +292,50 @@ class SparseHealpixMap:
             ]
         )
         self.coverage_map[cov_sorted[first]] = order[first]
+        self._build_lookup_blocks()
+
+    def _build_lookup_blocks(self) -> None:
+        """Dense per-coverage-cell value blocks for O(1) ``get_values``."""
+        if self.nside_coverage is None:
+            self._block_index = None
+            self._block_values = None
+            return
+        npix_cov = _healpix.nside2npix(self.nside_coverage)
+        ratio2 = int(self.pixels_per_cov)
+        device = self.pixels.device
+        index = torch.full((npix_cov,), -1, dtype=torch.int64, device=device)
+        lead = tuple(self.values.shape[:-1])
+        if self.pixels.numel() == 0:
+            self._block_index = index
+            self._block_values = torch.empty(
+                lead + (0, ratio2),
+                dtype=self.values.dtype,
+                device=self.values.device,
+            )
+            return
+        nest_pix = (
+            self.pixels
+            if self.nest
+            else _healpix.ring2nest(self.nside, self.pixels)
+        )
+        cov = torch.div(nest_pix, ratio2, rounding_mode="floor")
+        off = nest_pix - cov * ratio2
+        unique_cov, inverse = torch.unique(cov, return_inverse=True)
+        n_blocks = int(unique_cov.numel())
+        index[unique_cov] = torch.arange(n_blocks, device=device, dtype=torch.int64)
+        lead_n = 1
+        for size in lead:
+            lead_n *= int(size)
+        vals = self.values.reshape(lead_n, self.pixels.numel())
+        blocks = torch.full(
+            (lead_n, n_blocks, ratio2),
+            self.fill_value,
+            dtype=self.values.dtype,
+            device=self.values.device,
+        )
+        blocks[:, inverse, off] = vals
+        self._block_index = index
+        self._block_values = blocks.reshape(lead + (n_blocks, ratio2))
 
     def get_covered_pixels(self) -> Tensor:
         return self.pixels
@@ -332,7 +381,6 @@ class SparseHealpixMap:
         pix_flat = torch.as_tensor(
             pixels, dtype=torch.int64, device=self.pixels.device
         ).reshape(-1)
-        idx, ok = self._global_to_local(pix_flat)
         out_shape = tuple(self.values.shape[:-1]) + (pix_flat.numel(),)
         fill = torch.full(
             out_shape,
@@ -342,8 +390,42 @@ class SparseHealpixMap:
         )
         if self.pixels.numel() == 0:
             return fill
+        if (
+            self.nside_coverage is not None
+            and self._block_index is not None
+            and self._block_values is not None
+        ):
+            return self._get_values_blocks(pix_flat, fill)
+        idx, ok = self._global_to_local(pix_flat)
         safe_idx = torch.where(ok, idx, torch.zeros_like(idx))
         gathered = self.values.index_select(-1, safe_idx)
+        return torch.where(ok, gathered, fill)
+
+    def _get_values_blocks(self, pix_flat: Tensor, fill: Tensor) -> Tensor:
+        ratio2 = int(self.pixels_per_cov)
+        query = pix_flat
+        if not self.nest:
+            query = _healpix.ring2nest(self.nside, pix_flat)
+        cov = torch.div(query, ratio2, rounding_mode="floor")
+        off = query - cov * ratio2
+        in_range = (
+            (cov >= 0)
+            & (cov < self._block_index.numel())
+            & (off >= 0)
+            & (off < ratio2)
+        )
+        safe_cov = torch.where(in_range, cov, torch.zeros_like(cov))
+        bid = self._block_index.index_select(0, safe_cov)
+        ok = in_range & (bid >= 0)
+        if int(self._block_values.shape[-2]) == 0:
+            return fill
+        safe_bid = torch.where(ok, bid, torch.zeros_like(bid))
+        safe_off = torch.where(ok, off, torch.zeros_like(off))
+        lead_n = 1
+        for size in self.values.shape[:-1]:
+            lead_n *= int(size)
+        blocks = self._block_values.reshape(lead_n, *self._block_values.shape[-2:])
+        gathered = blocks[:, safe_bid, safe_off].reshape(fill.shape)
         return torch.where(ok, gathered, fill)
 
     def get_values_pix(self, pixels: Tensor) -> Tensor:
