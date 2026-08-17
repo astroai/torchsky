@@ -604,15 +604,24 @@ class WCS:
 
         float64 on CPU/CUDA. MPS tensors stay float32 on MPS so map resampling
         keeps device-stable outputs; never ``.to(float64)`` from MPS.
+
+        CUDA tensors keep their device even when the WCS object itself was not
+        moved with ``.to("cuda")``, so SIP/index ops follow the pixel device.
+        CPU tensors still follow ``self.device`` so ``wcs.to("cuda")`` lifts
+        host arrays.
         """
         if not isinstance(value, Tensor):
             dtype = self._wcs_coord_dtype(self.device)
             return torch.as_tensor(value, device=self.device, dtype=dtype)
         if value.device.type == "mps":
             return value.to(dtype=torch.float32)
-        return value.to(
-            device=self.device, dtype=self._wcs_coord_dtype(self.device)
-        )
+        dtype = self._wcs_coord_dtype(value.device)
+        out = value if value.dtype == dtype else value.to(dtype=dtype)
+        if out.device.type == "cpu" and self.device.type != "cpu":
+            return out.to(
+                device=self.device, dtype=self._wcs_coord_dtype(self.device)
+            )
+        return out
 
     def _invert_extra_axes(
         self, world_flat: Tensor, pix_internal_spatial: Tensor
