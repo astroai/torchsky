@@ -12,7 +12,7 @@ VOS trees were still missing at write time (`vos:sfabbro/torchsky-runs/` had
 | Sparse `ud_grade` vs healsparse | Mac aarch64 | Coverage-block degrade when coverage nside is unchanged. Nest 10% coverage, interleaved: nside=256→128 ratio ~1.02; nside=512→256 ratio ~1.09; dense `maxabs ~4e-16`. Linux unconfirmed. | Mac CPU match claimed |
 | Fused SHT CUDA/MPS | — | Host copy of GPU tensors into CPU C++ | Not a GPU SHT |
 | Polygons | CPU | Exact area atol 1e-12 sr vs spherical-geometry | CPU only |
-| WCS CUDA | CANFAR | Requires astropy installed before pytest collection | Runner fixed; artifacts pending |
+| WCS CUDA | CANFAR | Requires astropy installed before pytest collection | Runner fixed; last CPU/CUDA jobs died in the unused pyast/kapteyn `bench-legacy` bridge after native WCS. Heartbeat tarballs only. Relaunch with `--no-legacy-wcs-bridge` and mid-job VOS uploads. |
 | Coupled `-TAB` inverse | CPU | Fail-loud unless `pixel_n_dim == world_n_dim` | Documented |
 
 Git SHA at snapshot: local `main` including this world-layer work. Refresh from

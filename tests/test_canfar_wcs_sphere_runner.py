@@ -6,7 +6,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_canfar_wcs_sphere_runner_contract() -> None:
     runner = (ROOT / "scripts" / "run_canfar_wcs_sphere.sh").read_text(encoding="utf-8")
     assert "TORCHSKY_COMMIT" in runner
-    assert "wcs-sphere-acceptance-full" in runner
+    assert "acceptance_wcs_full" in runner
+    assert "--no-legacy-wcs-bridge" in runner
     assert "CONTAINER_IMAGE must name an AstroAI image" in runner
     assert "unknown mode" in runner
     assert runner.index("python -m pip install astropy") < runner.index("-k cuda")
@@ -18,8 +19,12 @@ def test_canfar_wcs_sphere_runner_contract() -> None:
     assert "vos_upload heartbeat" in runner
     assert 'vmkdir -p "${vos_dest}" 2>/dev/null || true' not in runner
     assert "cuda_rc" in runner
+    assert "cpu_rc" in runner
     assert "cuda job failures" in runner
+    assert "cpu job failures" in runner
     assert runner.index("-k cuda") < runner.index("acceptance_wcs_cuda")
+    assert runner.index("--no-legacy-wcs-bridge") < runner.index("acceptance_wcs_cuda")
+    assert "vos_upload after_wcs" in runner
 
 
 def test_canfar_wcs_sphere_launcher_payload_has_no_shell_vars() -> None:

@@ -130,29 +130,52 @@ record_versions() {
     --json-out "${artifact_root}/VERSIONS_${env_name}.json"
 }
 
-copy_tree() {
-  local src=$1
-  if [[ -d "${src}" ]]; then
-    mkdir -p "${artifact_root}"
-    cp -a "${src}/." "${artifact_root}/"
-  fi
-}
-
 case "${mode}" in
   cpu)
+    # ponytail: do not call wcs-sphere-acceptance-full here. That task's WCS
+    # path auto-spawns pixi -e bench-legacy (pyast/kapteyn). The last CPU job
+    # died there after finishing native WCS, and copy_tree never ran.
     install_env bench-all
+    install_env sphere-bench
     record_versions bench-all
-    pixi run --manifest-path "${source_root}/pixi.toml" wcs-sphere-acceptance-full
-    copy_tree "${source_root}/benchmarks_results"
-    copy_tree "${source_root}/benchmark_results"
+    cpu_rc=0
+    pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
+      python "${source_root}/benchmarks/bench_all.py" \
+      --profile user --wcs-only --no-gpu --no-legacy-wcs-bridge \
+      --run-id acceptance_wcs_full \
+      --output-dir "${artifact_root}" || cpu_rc=$?
+    vos_upload after_wcs || echo "after_wcs VOS upload failed; continuing job" >&2
+    pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
+      python "${source_root}/benchmarks/bench_all.py" \
+      --profile user --sphere-only --no-gpu \
+      --run-id acceptance_sphere_full \
+      --output-dir "${artifact_root}" || cpu_rc=$?
+    vos_upload after_sphere || echo "after_sphere VOS upload failed; continuing job" >&2
+    pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
+      pytest \
+      tests/test_wcs_*.py \
+      tests/test_sphere_*.py \
+      tests/test_healsparse_upstream.py \
+      tests/test_healpix_*.py \
+      tests/test_spectral.py \
+      -q --tb=line \
+      --junitxml="${artifact_root}/cpu_pytest.xml" || cpu_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+      python "${source_root}/benchmarks/bench_spin_matrix.py" \
+      --case-set default --runs 2 \
+      --json-out "${artifact_root}/acceptance_spin_matrix.json" || cpu_rc=$?
     pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
       python "${source_root}/benchmarks/bench_sphere_spectral.py" \
       --nside 32 --lmax 32 --runs 7 \
-      --json-out "${artifact_root}/sphere_spectral.json"
+      --json-out "${artifact_root}/sphere_spectral.json" || cpu_rc=$?
     pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
       python "${source_root}/benchmarks/bench_sphere_spectral.py" \
       --nside 64 --lmax 63 --runs 5 \
-      --json-out "${artifact_root}/sphere_spectral_nside64.json"
+      --json-out "${artifact_root}/sphere_spectral_nside64.json" || cpu_rc=$?
+    if [[ "${cpu_rc}" -ne 0 ]]; then
+      echo "cpu job failures rc=${cpu_rc}"
+      exit "${cpu_rc}"
+    fi
     ;;
   cuda)
     install_env cuda-bench
@@ -179,9 +202,10 @@ case "${mode}" in
     record_versions cuda-bench || cuda_rc=$?
     pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
       python "${source_root}/benchmarks/bench_all.py" \
-      --profile user --wcs-only --wcs-device cuda \
+      --profile user --wcs-only --wcs-device cuda --no-legacy-wcs-bridge \
       --run-id acceptance_wcs_cuda \
       --output-dir "${artifact_root}" || cuda_rc=$?
+    vos_upload after_wcs || echo "after_wcs VOS upload failed; continuing job" >&2
     pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
       python "${source_root}/benchmarks/bench_all.py" \
       --profile user --sphere-only \
