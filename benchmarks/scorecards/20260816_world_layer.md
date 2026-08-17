@@ -8,6 +8,7 @@ VOS trees were still missing at write time (`vos:sfabbro/torchsky-runs/` had
 |---|---|---|---|
 | `map2alm_spin` fused Ishioka vs healpy | Mac aarch64 | Ishioka faster than Wigner and healpy; rel L2 ~1e-13 | Mac CPU claimed; Linux pending VOS |
 | `alm2map_spin` fused Ishioka vs healpy | Mac aarch64 | Beats Wigner ~15–18%; still ~1.16–1.38× healpy | Not claimed |
+| Sparse `get_values` vs healsparse | Mac aarch64 | Coverage-block path, nest-aligned, nside=256, 50k queries: still ~5–6× healsparse | Not claimed |
 | Fused SHT CUDA/MPS | — | Host copy of GPU tensors into CPU C++ | Not a GPU SHT |
 | Polygons | CPU | Exact area atol 1e-12 sr vs spherical-geometry | CPU only |
 | WCS CUDA | CANFAR | Requires astropy installed before pytest collection | Runner fixed; artifacts pending |

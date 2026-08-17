@@ -218,6 +218,28 @@ def test_map2alm_gal_cut_matches_healpy_when_installed() -> None:
     np.testing.assert_allclose(got.numpy(), ref, atol=0.0, rtol=1e-6)
 
 
+def test_map2alm_ring_weights_reduce_p2_leakage() -> None:
+    nside = 8
+    lmax = 4
+    pix = torch.arange(hp.nside2npix(nside), dtype=torch.int64)
+    theta, _ = hp.pix2ang(nside, pix, nest=False)
+    z = torch.cos(theta)
+    p2 = 0.5 * (3.0 * z * z - 1.0)
+    exact_a20 = math.sqrt(4.0 * math.pi / 5.0)
+    i20 = alm_index(2, 0, lmax)
+    a0 = map2alm(p2, nside=nside, lmax=lmax, iter=0)
+    aw = map2alm(p2, nside=nside, lmax=lmax, use_weights=True, iter=0)
+    err0 = abs(complex(a0[i20].item()) - exact_a20)
+    errw = abs(complex(aw[i20].item()) - exact_a20)
+    assert errw < err0
+
+
+def test_map2alm_rejects_simultaneous_weight_flags() -> None:
+    m = torch.ones(hp.nside2npix(8), dtype=torch.float64)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        map2alm(m, nside=8, lmax=4, use_weights=True, use_pixel_weights=True)
+
+
 def test_anafast_dipole_dominates_l1() -> None:
     nside = 32
     npix = hp.nside2npix(nside)

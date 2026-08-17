@@ -144,13 +144,22 @@ def main() -> int:
         if not bool(sparse.nest):
             pix_nest = hp.ring2nest(nside, pix_np)
         hs.update_values_pix(pix_nest.cpu().numpy(), val_np, nest=True)
+        pix_nest_t = pix_nest.to(dtype=torch.int64)
+        sparse_cov = SparseHealpixMap.from_pixels(
+            pix_nest_t,
+            sparse.values,
+            nside_sparse=nside,
+            nest=True,
+            nside_coverage=nside_cov,
+            sentinel=float(sparse.fill_value),
+        )
         n_q = min(50_000, int(lon.numel()))
         q_lon = lon[:n_q]
         q_lat = lat[:n_q]
-        q_ring = hp.ang2pix(nside, q_lon, q_lat, nest=False, lonlat=True)
-        q_nest = hp.ang2pix(nside, q_lon, q_lat, nest=True, lonlat=True).cpu().numpy()
-        t_hs_get = _time_many(lambda: hs.get_values_pix(q_nest), args.runs)
-        t_ts_get = _time_many(lambda: sparse.get_values(q_ring), args.runs)
+        q_nest = hp.ang2pix(nside, q_lon, q_lat, nest=True, lonlat=True)
+        q_nest_np = q_nest.detach().cpu().numpy()
+        t_hs_get = _time_many(lambda: hs.get_values_pix(q_nest_np), args.runs)
+        t_ts_get = _time_many(lambda: sparse_cov.get_values(q_nest), args.runs)
         rows.append(
             {
                 "operation": "sparse_get_values",

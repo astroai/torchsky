@@ -57,7 +57,7 @@ Do **not** guess `python3` or bare `python` on PATH for project work.
   - **`sphere-bench`** — HEALPix / sparse **ecosystem** comparators (**healpy**, **hpgeom**, **healsparse**, **astropy-healpix**, **spherical-geometry**, **mocpy**, …) and upstream-derived benchmark gates.
   - **`sht-bench`** — same comparators as `sphere-bench` plus optional **s2fft** via `pixi run sht-bench-bootstrap` (do not add JAX to `sphere-bench` by default).
   - **`map-compat`**, **`bench-legacy`** — external toolchains and legacy Python stacks as needed.
-- **`pixi run test`** runs **`pytest -n auto`** in the **`test`** environment.
+- **`pixi run test`** runs **`pytest -n auto --ignore-glob=tests/test_map_*.py`** in the **`test`** environment (same shape as the GitHub `build-test` job; map tests live in the separate CI map matrix).
 - **`pixi run preflight-push`** — **ruff** + **`python -m compileall`** using the **default** env interpreter (`pixi run -e default -- python …`), not an arbitrary system `python`.
 - **`pixi run ci-local`** — **preflight-push** + **typecheck** + **test** (local parity with main CI gates before push).
 - **`pixi run ci-local-heavy`** — optional import smoke for sphere comparators in the **`bench-all`** env.
@@ -276,7 +276,7 @@ Before finishing a non-trivial change, check:
 
 ### Mandatory pre-push gate (save GitHub Actions minutes)
 
-Treat CI as a **last** verifier, not the place to discover syntax, stale imports, or formatting drift. **Do not `git push`** until **`pixi run ci-local`** passes (automated agents: **blocking**). That runs, in order: **`preflight-push`** (ruff + compileall via default-env Python), **`typecheck`** (scoped **pyright** in the **`test`** env), **`test`** (**`pytest -n auto`** in **`test`**).
+Treat CI as a **last** verifier, not the place to discover syntax, stale imports, or formatting drift. **Do not `git push`** until **`pixi run ci-local`** passes (automated agents: **blocking**). That runs, in order: **`preflight-push`** (ruff + compileall via default-env Python), **`typecheck`** (scoped **pyright** in the **`test`** env), **`test`** (**`pytest -n auto --ignore-glob=tests/test_map_*.py`** in **`test`**, matching GitHub `build-test`).
 
 - **Faster subset only when appropriate:** `pixi run preflight-push` for a quick syntax/import sweep (does not replace full **`ci-local`** before push).
 - **Tree-wide `ruff format --check`** is not a CI gate yet; use **`pixi run lint`** when you want Ruff to apply formatting locally.

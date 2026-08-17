@@ -6,6 +6,7 @@ Geometric frames and astrometric propagation live here. Observed place
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -19,7 +20,10 @@ from .frames import (
     propagate_space_motion,
 )
 
-Representation = Literal["lonlat_deg", "unit_xyz"]
+Representation = Literal["lonlat_deg", "unit_xyz", "barycentric_au"]
+
+# IAU: 1 pc is the distance at which 1 au subtends 1 arcsecond.
+_AU_PER_PC = 648000.0 / math.pi
 
 
 def _as_f64(value: Any) -> Tensor:
@@ -85,6 +89,16 @@ class CatalogState:
                 ),
                 dim=-1,
             )
+        if kind == "barycentric_au":
+            if self.parallax_mas is None:
+                raise ValueError(
+                    "barycentric_au requires parallax_mas; missing parallax is not imputed"
+                )
+            if not bool(torch.all(self.parallax_mas > 0.0)):
+                raise ValueError("parallax_mas must be positive")
+            unit = self.to_representation("unit_xyz")
+            distance_pc = 1000.0 / self.parallax_mas
+            return unit * (distance_pc * _AU_PER_PC).unsqueeze(-1)
         raise ValueError(f"unsupported representation {kind!r}")
 
     def to_frame(self, frame: str) -> CatalogState:

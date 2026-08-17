@@ -291,6 +291,8 @@ def _apply_map2alm_weights(
     use_pixel_weights: bool,
 ) -> Tensor:
     """Apply healpy-style galactic cut and RING quadrature to RING-ordered maps."""
+    if use_weights and use_pixel_weights:
+        raise ValueError("use_weights and use_pixel_weights are mutually exclusive")
     out = rows
     if float(gal_cut) > 0.0:
         keep = _gal_cut_keep_mask(

@@ -19,8 +19,9 @@ never runs unless Earth orientation is supplied.
   The current AltAz path is classical hour angle from DUT1 GMST, not IAU 2006
   CIRS/TETE.
 
-Representations are layouts (`lonlat_deg`, `unit_xyz`), not Astropy
-representation classes.
+Representations are layouts (`lonlat_deg`, `unit_xyz`, `barycentric_au`),
+not Astropy representation classes. `barycentric_au` requires a positive
+parallax; it is never filled from a default distance.
 
 Oracle: Astropy/ERFA for geometric frames and space motion. Observed-place
 parity is only meaningful after the same EOP values are pinned on both sides.

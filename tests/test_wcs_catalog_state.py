@@ -50,3 +50,21 @@ def test_observed_altaz_requires_eop_and_zenith() -> None:
     torch.testing.assert_close(
         alt, torch.tensor(90.0, dtype=torch.float64), atol=1e-6, rtol=0.0
     )
+
+
+def test_catalog_state_barycentric_au_from_parallax() -> None:
+    state = CatalogState(
+        lon=0.0,
+        lat=0.0,
+        parallax_mas=1000.0,
+    )
+    xyz = state.to_representation("barycentric_au")
+    au_per_pc = 648000.0 / float(torch.pi)
+    torch.testing.assert_close(
+        xyz,
+        torch.tensor([au_per_pc, 0.0, 0.0], dtype=torch.float64),
+        atol=1e-6,
+        rtol=0.0,
+    )
+    with pytest.raises(ValueError, match="parallax"):
+        CatalogState(lon=0.0, lat=0.0).to_representation("barycentric_au")

@@ -60,7 +60,7 @@ twine = ">=5.0"
 dev = "pip install -e . --no-build-isolation"
 build = "pixi build"
 # Full tests need the `test` env (astropy/fitsio/pyarrow/polars/…); see AGENTS.md.
-test = "KMP_DUPLICATE_LIB_OK=TRUE pixi run -e test -- pytest -n auto"
+test = "KMP_DUPLICATE_LIB_OK=TRUE pixi run -e test -- pytest -n auto --ignore-glob='tests/test_map_*.py'"
 lint = "ruff check . && ruff format ."
 # Fast local gate before git push (matches CI code-quality: ruff check only; no file mutations)
 preflight-push = "ruff check . && pixi run -e default -- python -m compileall -q src/torchsky tests"

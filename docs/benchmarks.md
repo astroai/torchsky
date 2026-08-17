@@ -840,6 +840,12 @@ Compared against **healpy**, **hpgeom**, **astropy-healpix**, **healsparse**, **
 
 **Spherical harmonics:**
 
+The microseconds below are the **pre-Ishioka** Mac rows (same snapshot as
+the 88.9% win rate). After the 2026-08 Ishioka skip-2 CPU work, Mac
+`map2alm_spin` leads healpy and `alm2map_spin` is ~1.2–1.4× healpy. See
+[`benchmarks/scorecards/20260816_world_layer.md`](../benchmarks/scorecards/20260816_world_layer.md).
+Do not treat these 0.1–0.2× ratios as current.
+
 | Operation | torchsky | healpy | Ratio (healpy / tf) |
 |---|---:|---:|---:|
 | map2alm_spin | 1.1 ms | 170 &mu;s | 0.2x |
@@ -981,6 +987,6 @@ Run metadata:
 
 ### Known Deficits (Target for 0.4.0)
 
-- **Sphere (Spin Transforms)**: `map2alm_spin` and `alm2map_spin` show ~6x-7x lag vs `healpy`. These will be optimized with a custom RING-Fouier kernel.
+- **Sphere (Spin Transforms)**: Pre-Ishioka ~6–8× healpy lag is obsolete. Mac fused Ishioka `map2alm_spin` leads healpy; `alm2map_spin` is still ~1.2–1.4× healpy. Linux x86 is unconfirmed until CANFAR VOS artifacts exist. Fused SHT is CPU C++; GPU tensors are host-copied.
 - **WCS (Small-N)**: Some forward small-N rows still lag vs `pyast` (legacy), especially away from the center-equator projections. `bench_wcs.py` now tracks the CPU center-helper crossover explicitly through `center_cpp_*` fields for `AIT/CAR/CEA/HPX/MER/SFL`. The CPU fused path (`TORCHSKY_WCS_FUSED=1`) includes **ARC** alongside TAN/SIN and the other supported codes; re-profile after native extension rebuilds. For torchsky-vs-Astropy timing on **two-arg vs stacked `(N,2)` vs `compile()`** for both **pixel→world and world→pixel**, use `bench_wcs_small_n_paths.py`; pytest gates stacked and compiled-stacked parity (forward and inverse) in `tests/test_wcs_parity.py`.
 - **ZPN/AIT Projections**: Slight visible deficits in intermediate size tiers.
