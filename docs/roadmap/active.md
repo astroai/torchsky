@@ -1635,8 +1635,8 @@ profile shows genuine repeated cold I/O.
   Evidence: implementation/roadmap commit `c5e657d` is on `origin/main`.
 - [ ] Confirm GitHub Comprehensive CI is green.
   Pending run: `30382664582` for `c5e657d`.
-- [x] Leave the tracked tree clean (the two untouched user-authored `fossil_*`
-  source documents remain intentionally untracked) and report:
+- [x] Track the user-authored FOSSIL sources as Markdown in
+  [`docs/projects/`](../projects/fossil.md) and report:
   scientific/technical status, infrastructure status, next unchecked item, and
   explicit parallel work with repository, branch, data, and commands.
 
@@ -1649,8 +1649,9 @@ removal and static-sky versus moving-object separation. Classical and neural
 separators share the same differentiable operator, split, injection, and open
 residual contracts.
 
-- [x] Read and distil the user-authored `fossil_primitives_plan.md` and
-  `fossil_science.docx` without modifying or committing either source.
+- [x] Read and distil the user-authored
+  [`fossil_primitives_plan.md`](../projects/fossil_primitives_plan.md) and
+  [`fossil_science.md`](../projects/fossil_science.md).
 - [x] Harden the existing `SpectralAxis` instead of adding a parallel axis or
   units dependency: normalized physical quantity, strict ascending/descending
   and duplicate validation, regularity, explicit/derived edges, channel and

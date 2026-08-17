@@ -1554,8 +1554,9 @@ required.
 
 ## Source notes and scientific references
 
-This formulation integrates the user-authored `fossil_primitives_plan.md` and
-`fossil_science.docx`, while preserving both untracked source files unchanged.
+This formulation integrates the user-authored
+[FOSSIL primitives plan](fossil_primitives_plan.md) and
+[FOSSIL science cases](fossil_science.md).
 The current mission-neutral implementation checklist is tracked in
 [FOSSIL/BISOU Mission-Neutral Torchsky Track](fossil.md).
 

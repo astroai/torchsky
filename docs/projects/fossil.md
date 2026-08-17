@@ -1,8 +1,8 @@
 # FOSSIL/BISOU Mission-Neutral Torchsky Track
 
 > Distilled through 2026-08-13 from the user-authored
-> `fossil_primitives_plan.md` and `fossil_science.docx`. Both untracked source
-> documents remain unchanged.
+> [FOSSIL primitives plan](fossil_primitives_plan.md) and
+> [FOSSIL science cases](fossil_science.md).
 > This file is the executable Torchsky backlog; mission configuration, telemetry,
 > sensitivity assumptions, and publication estimators remain outside core.
 
@@ -288,3 +288,9 @@ correct, bounded map operators. The next implementation order is:
 6. implement full-sky spectral/monopole/open-residual products;
 7. add global discovery calibration and subspace-stability diagnostics;
 8. only then start decoded sequences, experimental FTS, and the MOS profile.
+
+## Related documents
+
+- [FOSSIL primitives plan](fossil_primitives_plan.md)
+- [FOSSIL science cases](fossil_science.md)
+- [Source unmixing](source_unmixing_problem_formulation.md)
