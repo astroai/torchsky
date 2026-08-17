@@ -198,7 +198,9 @@ keeping the last value supplied for duplicates, so `get_values(...)` and
 interpolation can use indexed lookup reliably. Maps with `nside_coverage` derive
 coverage maps in the NESTED coverage hierarchy even when sparse pixels are stored
 in RING ordering, and `ud_grade(...)` preserves the coverage hierarchy when the
-output resolution allows it.
+output resolution allows it. With `nside_coverage` set, `get_values` uses a fused
+CPU gather (fill-block layout). On Mac that path matches healsparse at nside=256
+and 50k nest queries; Linux is unconfirmed.
 
 `HealSparseMap.from_moc(moc, nside=...)` realizes MOC coverage directly as sparse
 nested pixels without materializing a full dense HEALPix mask. Sparse FITS

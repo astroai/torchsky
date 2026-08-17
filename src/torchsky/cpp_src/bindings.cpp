@@ -1718,6 +1718,30 @@ void bind_wcs(nb::module_& m) {
         nb::arg("lmax"),
         nb::arg("mmax"));
 
+    m.def(
+        "_sparse_get_values_blocks_cpu",
+        [](nb::object query_obj,
+           nb::object block_index_obj,
+           nb::object block_values_obj,
+           nb::object fill_obj) {
+            torch::Tensor query = python_to_tensor(query_obj);
+            torch::Tensor block_index = python_to_tensor(block_index_obj);
+            torch::Tensor block_values = python_to_tensor(block_values_obj);
+            torch::Tensor fill = python_to_tensor(fill_obj);
+            torch::Tensor out;
+            {
+                nb::gil_scoped_release release;
+                out = torchsky::sparse_get_values_blocks_cpu(
+                    query, block_index, block_values, fill
+                );
+            }
+            return tensor_to_python(out);
+        },
+        nb::arg("query"),
+        nb::arg("block_index"),
+        nb::arg("block_values"),
+        nb::arg("fill"));
+
     m.def("echo_tensor", [](nb::object obj) {
         return obj;
     });

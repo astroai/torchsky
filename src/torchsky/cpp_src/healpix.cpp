@@ -6275,4 +6275,137 @@ torch::Tensor healpix_spin_alm2map_ring_recurrence_cpu(
     );
 }
 
+template <typename T>
+torch::Tensor sparse_get_values_blocks_impl(
+    const torch::Tensor& query,
+    const torch::Tensor& block_index,
+    const torch::Tensor& block_values,
+    const torch::Tensor& fill
+) {
+    const int64_t n = query.numel();
+    const auto bv_sizes = block_values.sizes();
+    if (bv_sizes.size() < 2) {
+        throw std::runtime_error("block_values must be at least 2D");
+    }
+    const int64_t ratio2 = bv_sizes[bv_sizes.size() - 1];
+    const int64_t n_blocks = bv_sizes[bv_sizes.size() - 2];
+    if (ratio2 <= 0 || (ratio2 & (ratio2 - 1)) != 0) {
+        throw std::runtime_error("block_values last dim must be a power of two");
+    }
+    int64_t lead_n = 1;
+    std::vector<int64_t> out_sizes;
+    out_sizes.reserve(bv_sizes.size() - 1);
+    for (int64_t i = 0; i < static_cast<int64_t>(bv_sizes.size()) - 2; ++i) {
+        lead_n *= bv_sizes[i];
+        out_sizes.push_back(bv_sizes[i]);
+    }
+    out_sizes.push_back(n);
+    auto out = torch::empty(
+        out_sizes,
+        torch::TensorOptions()
+            .dtype(block_values.dtype())
+            .device(block_values.device())
+    );
+    const auto* pix = query.data_ptr<int64_t>();
+    const auto* index = block_index.data_ptr<int64_t>();
+    const int64_t npix_cov = block_index.numel();
+    const T fill_v = *fill.data_ptr<T>();
+    const T* vals = block_values.data_ptr<T>();
+    T* dst = out.data_ptr<T>();
+    const int64_t shift = static_cast<int64_t>(
+        __builtin_ctzll(static_cast<unsigned long long>(ratio2))
+    );
+    const int64_t mask = ratio2 - 1;
+    const uint64_t npix = static_cast<uint64_t>(npix_cov) * static_cast<uint64_t>(ratio2);
+    const auto body = [&](int64_t begin, int64_t end) {
+        if (lead_n == 1) {
+            for (int64_t i = begin; i < end; ++i) {
+                const uint64_t p = static_cast<uint64_t>(pix[i]);
+                if (p >= npix) {
+                    dst[i] = fill_v;
+                    continue;
+                }
+                const int64_t bid = index[static_cast<int64_t>(p >> shift)];
+                if (static_cast<uint64_t>(bid) >= static_cast<uint64_t>(n_blocks)) {
+                    dst[i] = fill_v;
+                    continue;
+                }
+                dst[i] = vals[bid * ratio2 + (static_cast<int64_t>(p) & mask)];
+            }
+            return;
+        }
+        for (int64_t i = begin; i < end; ++i) {
+            const uint64_t p = static_cast<uint64_t>(pix[i]);
+            if (p >= npix || n_blocks <= 0) {
+                for (int64_t c = 0; c < lead_n; ++c) {
+                    dst[c * n + i] = fill_v;
+                }
+                continue;
+            }
+            const int64_t bid = index[static_cast<int64_t>(p >> shift)];
+            if (static_cast<uint64_t>(bid) >= static_cast<uint64_t>(n_blocks)) {
+                for (int64_t c = 0; c < lead_n; ++c) {
+                    dst[c * n + i] = fill_v;
+                }
+                continue;
+            }
+            const int64_t off = static_cast<int64_t>(p) & mask;
+            for (int64_t c = 0; c < lead_n; ++c) {
+                dst[c * n + i] = vals[(c * n_blocks + bid) * ratio2 + off];
+            }
+        }
+    };
+    if (n >= PARALLEL_MIN_ELEMS) {
+        at::parallel_for(0, n, 4096, body);
+    } else {
+        body(0, n);
+    }
+    return out;
+}
+
+torch::Tensor sparse_get_values_blocks_cpu(
+    const torch::Tensor& query,
+    const torch::Tensor& block_index,
+    const torch::Tensor& block_values,
+    const torch::Tensor& fill
+) {
+    if (!query.defined() || !block_index.defined() || !block_values.defined()
+        || !fill.defined()) {
+        throw std::runtime_error("sparse_get_values_blocks_cpu expects defined tensors");
+    }
+    if (query.device().type() != torch::kCPU
+        || block_index.device().type() != torch::kCPU
+        || block_values.device().type() != torch::kCPU
+        || fill.device().type() != torch::kCPU) {
+        throw std::runtime_error("sparse_get_values_blocks_cpu expects CPU tensors");
+    }
+    if (query.scalar_type() != torch::kLong || block_index.scalar_type() != torch::kLong) {
+        throw std::runtime_error("query and block_index must be int64");
+    }
+    if (fill.numel() != 1) {
+        throw std::runtime_error("fill must be a scalar");
+    }
+    if (fill.scalar_type() != block_values.scalar_type()) {
+        throw std::runtime_error("fill dtype must match block_values");
+    }
+    auto q = query.contiguous();
+    auto idx = block_index.contiguous();
+    auto bv = block_values.contiguous();
+    auto f = fill.contiguous();
+    switch (bv.scalar_type()) {
+        case torch::kFloat64:
+            return sparse_get_values_blocks_impl<double>(q, idx, bv, f);
+        case torch::kFloat32:
+            return sparse_get_values_blocks_impl<float>(q, idx, bv, f);
+        case torch::kInt64:
+            return sparse_get_values_blocks_impl<int64_t>(q, idx, bv, f);
+        case torch::kInt32:
+            return sparse_get_values_blocks_impl<int32_t>(q, idx, bv, f);
+        case torch::kBool:
+            return sparse_get_values_blocks_impl<bool>(q, idx, bv, f);
+        default:
+            throw std::runtime_error("unsupported block_values dtype");
+    }
+}
+
 }  // namespace torchsky
