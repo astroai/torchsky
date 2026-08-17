@@ -2,9 +2,10 @@
 # Launch CANFAR headless CPU and/or CUDA jobs for torchsky WCS + sphere.
 # Usage: launch_canfar_wcs_sphere.sh [cpu|cuda|all|suite|sht|spectral|sparse|spin]
 #
-# Jobs clone TORCHSKY_COMMIT (default: origin/main HEAD), run
-# scripts/run_canfar_wcs_sphere.sh, and copy artifacts to
-# vos:sfabbro/torchsky-runs/<run_id>/.
+# Jobs clone TORCHSKY_COMMIT from GitHub (must already be pushed), run
+# scripts/run_canfar_wcs_sphere.sh from that clone, write
+# /arc/projects/ots/torchsky-runs/<run_id>/, and copy artifacts to
+# vos:sfabbro/torchsky-runs/<run_id>/ (plus a gist fallback).
 # suite: parallel spectral, sphere, sparse, spin, geometry, and cuHPX jobs.
 # sht: spectral + sparse + spin only.
 set -euo pipefail
@@ -21,50 +22,29 @@ case "${MODE}" in
     ;;
 esac
 
-ensure_vcp() {
-  if command -v vcp >/dev/null; then
-    return 0
-  fi
-  local d
-  for d in \
-    "${TORCHSKY_VOS_BIN:-}" \
-    /opt/astroai/venv/cadc/bin \
-    /opt/astroai/bin; do
-    if [[ -n "${d}" && -x "${d}/vcp" ]]; then
-      export PATH="${d}:${PATH}"
-      return 0
-    fi
-  done
-  return 1
-}
-
 COMMIT="${TORCHSKY_COMMIT:-$(git rev-parse HEAD)}"
 if ! git cat-file -e "${COMMIT}^{commit}" 2>/dev/null; then
   echo "TORCHSKY_COMMIT=${COMMIT} is not a local commit" >&2
   exit 2
 fi
 COMMIT="$(git rev-parse "${COMMIT}")"
+if ! git fetch -q origin; then
+  echo "git fetch origin failed; cannot check that ${COMMIT} is pushed" >&2
+  exit 2
+fi
+if ! git branch -r --contains "${COMMIT}" | grep -q 'origin/'; then
+  echo "TORCHSKY_COMMIT=${COMMIT} is not on origin; git push before launching CANFAR" >&2
+  exit 2
+fi
 IMAGE="${CONTAINER_IMAGE:-astroai/notebook:latest}"
 CPU="${TORCHSKY_CANFAR_CPU:-8}"
 MEMORY="${TORCHSKY_CANFAR_MEMORY:-32}"
 STAMP="$(date -u +%Y%m%d-%H%M%S)"
-VOS_BIN_URI="vos:sfabbro/torchsky-runs/bin"
-RUNNER_VOS_URI="${VOS_BIN_URI}/run_canfar_wcs_sphere.sh"
 
 if ! command -v canfar >/dev/null; then
   echo "canfar CLI not found" >&2
   exit 1
 fi
-
-if ! ensure_vcp; then
-  echo "vcp not found; install vos (pip install vos) or set TORCHSKY_VOS_BIN" >&2
-  exit 1
-fi
-
-if command -v vmkdir >/dev/null; then
-  vmkdir -p "${VOS_BIN_URI}"
-fi
-vcp "${ROOT_DIR}/scripts/run_canfar_wcs_sphere.sh" "${RUNNER_VOS_URI}"
 
 launch_one() {
   local job_mode=$1
@@ -78,7 +58,10 @@ launch_one() {
 
   # ponytail: Skaha splits argv on spaces; tabs keep bash -c as one script.
   # Do not put $ or & in the payload (CANFAR expands $name; & splits URLs).
-  local remote_plain="PATH=/opt/astroai/venv/cadc/bin:/opt/astroai/bin:/usr/local/bin:/usr/bin:/bin; vcp ${RUNNER_VOS_URI} /scratch/run_canfar_wcs_sphere.sh; bash /scratch/run_canfar_wcs_sphere.sh ${job_mode} ${run_id}"
+  # Clone from GitHub. Do not vcp the runner: vault PUT has been storing 0-byte
+  # nodes, and uncommitted local edits never reach the container anyway.
+  local src="/scratch/${run_id}-src"
+  local remote_plain="PATH=/opt/astroai/venv/cadc/bin:/opt/astroai/bin:/usr/local/bin:/usr/bin:/bin; gh repo clone sfabbro/torchsky ${src} -- --filter=blob:none; git -C ${src} checkout --detach ${COMMIT}; bash ${src}/scripts/run_canfar_wcs_sphere.sh ${job_mode} ${run_id}"
   local remote_cmd
   remote_cmd="$(printf '%s' "${remote_plain}" | tr ' ' '\t')"
   case "${remote_cmd}" in
@@ -97,6 +80,7 @@ launch_one() {
     --env "TORCHSKY_VOS_DEST=${vos_dest}"
     --env "CONTAINER_IMAGE=${IMAGE}"
     --env "PYTHONUNBUFFERED=1"
+    --env "TORCHSKY_SOURCE_ROOT=${src}"
   )
   if [[ -n "${gpu_flag}" ]]; then
     create_args+=(--gpu "${gpu_flag}")

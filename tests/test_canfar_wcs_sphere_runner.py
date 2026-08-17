@@ -15,6 +15,7 @@ def test_canfar_wcs_sphere_runner_contract() -> None:
     assert "vos:sfabbro/torchsky-runs" in runner
     assert "bench_sphere_spectral.py" in runner
     assert "vcp" in runner
+    assert "gist create" in runner
     assert "trap on_exit EXIT" in runner
     assert "vos_upload heartbeat" in runner
     assert 'vmkdir -p "${vos_dest}" 2>/dev/null || true' not in runner
@@ -44,6 +45,9 @@ def test_canfar_wcs_sphere_launcher_payload_has_no_shell_vars() -> None:
     assert "tr ' ' '\\t'" in launcher
     assert "vos:sfabbro/torchsky-runs" in launcher
     assert "refusing canfar payload" in launcher
+    assert "gh repo clone sfabbro/torchsky" in launcher
+    assert "git push before launching CANFAR" in launcher
+    assert "RUNNER_VOS_URI" not in launcher
     assert "suite" in launcher
     assert "cuhpx" in launcher
     assert "sht" in launcher

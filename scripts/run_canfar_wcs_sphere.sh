@@ -48,11 +48,33 @@ mkdir -p "${PIP_CACHE_DIR}" "${TMPDIR}"
 
 # vos/CADC CLIs ship with AstroAI images but are often off PATH.
 for d in /opt/astroai/venv/cadc/bin /opt/astroai/bin /opt/conda/bin /usr/local/bin; do
-  if [[ -x "${d}/vcp" ]]; then
+  if [[ -x "${d}/vcp" || -x "${d}/gh" ]]; then
     export PATH="${d}:${PATH}"
-    break
   fi
 done
+
+gist_upload() {
+  local label=$1
+  if ! command -v gh >/dev/null || ! gh auth status >/dev/null 2>&1; then
+    echo "gh not authenticated; skip gist fallback" >&2
+    return 1
+  fi
+  local files=()
+  local f
+  for f in "${artifact_root}/HEARTBEAT" "${artifact_root}/session.log" "${artifact_root}"/*.json; do
+    if [[ -f "${f}" && -s "${f}" ]]; then
+      files+=("${f}")
+    fi
+  done
+  if [[ "${#files[@]}" -eq 0 ]]; then
+    echo "gist_upload: no non-empty artifact files" >&2
+    return 1
+  fi
+  local url
+  url="$(gh gist create --desc "torchsky ${run_id} ${label}" "${files[@]}")"
+  echo "${url}" | tee "${artifact_root}/GIST_URL"
+  echo "gist_url=${url}"
+}
 
 vos_upload() {
   local label=$1
@@ -69,6 +91,15 @@ vos_upload() {
   tar -C "$(dirname "${artifact_root}")" -czf "/scratch/${run_id}.tar.gz" "$(basename "${artifact_root}")"
   vcp "/scratch/${run_id}.tar.gz" "vos:sfabbro/torchsky-runs/${run_id}.tar.gz"
   echo "vos_tarball=vos:sfabbro/torchsky-runs/${run_id}.tar.gz"
+  local sample="${artifact_root}/session.log"
+  if [[ -s "${sample}" ]]; then
+    local remote_bytes
+    remote_bytes="$(vls -l "${vos_dest}/session.log" 2>/dev/null | awk '{print $5}' | tail -n 1 || true)"
+    if [[ "${remote_bytes}" == "0" ]]; then
+      echo "VOS stored 0-byte session.log; artifacts remain at ${artifact_root} and GIST_URL" >&2
+      return 1
+    fi
+  fi
 }
 
 on_exit() {
@@ -76,6 +107,7 @@ on_exit() {
   set +e
   echo "exit_utc=$(date -u +%FT%TZ) rc=${rc}" | tee -a "${artifact_root}/HEARTBEAT"
   vos_upload "exit_rc${rc}" || echo "VOS upload failed rc=${rc}" >&2
+  gist_upload "exit_rc${rc}" || echo "gist fallback failed rc=${rc}" >&2
   exit "${rc}"
 }
 trap on_exit EXIT
