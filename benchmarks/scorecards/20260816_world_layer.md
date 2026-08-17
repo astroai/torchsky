@@ -2,7 +2,9 @@
 
 Mac CPU evidence after Ishioka 2018 skip-2 (spin 1/2 fused RING). Linux CANFAR
 VOS trees were still missing at write time (`vos:sfabbro/torchsky-runs/` had
-`bin/` only). Do not claim Linux or CUDA SHT leadership from these rows.
+`bin/` only). **Superseded for Linux/CUDA ingest by
+[`20260817_world_layer.md`](20260817_world_layer.md).** Mac CPU rows below
+remain the Mac snapshot. Do not claim Linux or CUDA SHT leadership from these rows.
 
 | Job | Machine | Result | Claim |
 |---|---|---|---|

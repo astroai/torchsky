@@ -162,7 +162,7 @@ case "${mode}" in
       --junitxml="${artifact_root}/cpu_pytest.xml" || cpu_rc=$?
     pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
       python "${source_root}/benchmarks/bench_spin_matrix.py" \
-      --case-set default --runs 2 \
+      --case-set default --runs 2 --no-throughput-gate \
       --json-out "${artifact_root}/acceptance_spin_matrix.json" || cpu_rc=$?
     pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
       python "${source_root}/benchmarks/bench_sphere_spectral.py" \
@@ -253,11 +253,11 @@ case "${mode}" in
     job_rc=0
     pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
       python "${source_root}/benchmarks/bench_sphere_sparse.py" \
-      --nside 256 --coverage-frac 0.1 --n-queries 50000 --runs 9 \
+      --nside 256 --coverage-frac 0.1 --n-queries 200000 --runs 9 \
       --json-out "${artifact_root}/sphere_sparse_nside256.json" || job_rc=$?
     pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
       python "${source_root}/benchmarks/bench_sphere_sparse.py" \
-      --nside 512 --coverage-frac 0.1 --n-queries 50000 --runs 7 \
+      --nside 512 --coverage-frac 0.1 --n-queries 500000 --runs 7 \
       --json-out "${artifact_root}/sphere_sparse_nside512.json" || job_rc=$?
     if [[ "${job_rc}" -ne 0 ]]; then
       echo "sparse job failures rc=${job_rc}"
@@ -270,11 +270,11 @@ case "${mode}" in
     job_rc=0
     pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
       python "${source_root}/benchmarks/bench_spin_matrix.py" \
-      --case-set default --runs 5 \
+      --case-set default --runs 5 --no-throughput-gate \
       --json-out "${artifact_root}/acceptance_spin_matrix.json" || job_rc=$?
     pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
       python "${source_root}/benchmarks/bench_spin_matrix.py" \
-      --case-set extended --runs 3 \
+      --case-set extended --runs 3 --no-throughput-gate \
       --json-out "${artifact_root}/acceptance_spin_matrix_extended.json" || job_rc=$?
     if [[ "${job_rc}" -ne 0 ]]; then
       echo "spin job failures rc=${job_rc}"
@@ -288,6 +288,7 @@ case "${mode}" in
     pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
       python "${source_root}/benchmarks/bench_sphere_matrix.py" \
       --device cpu --nside 1024 --n-points 200000 --runs 5 --strict-missing \
+      --no-throughput-gate \
       --output-dir "${artifact_root}/sphere_matrix" || job_rc=$?
     pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
       python "${source_root}/benchmarks/bench_healpix_advanced.py" \

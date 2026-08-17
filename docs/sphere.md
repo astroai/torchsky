@@ -200,9 +200,12 @@ coverage maps in the NESTED coverage hierarchy even when sparse pixels are store
 in RING ordering, and `ud_grade(...)` preserves the coverage hierarchy when the
 output resolution allows it. With `nside_coverage` set, `get_values` uses a fused
 CPU gather (fill-block layout). On Mac that path matches healsparse at nside=256
-and 50k nest queries; Linux is unconfirmed. Float maps with `nside_coverage` also
-degrade through that layout when coverage nside is unchanged; on Mac that matches
-healsparse at nside=256→128 and 512→256 (10% nest, interleaved). Bool/int maps
+and 50k nest queries (~1.03× interleaved). Linux CANFAR at the same 50k cap is
+behind (0.77× at nside=256, 0.80× at nside=512; not interleaved). Float maps with
+`nside_coverage` also degrade through that layout when coverage nside is
+unchanged; on Mac that matches healsparse at nside=256→128 and 512→256 (10% nest,
+interleaved). Linux dedicated `ud_grade` rows were ahead on that job (2.06× /
+3.31×) with separate medians and are not claimed. Bool/int maps
 keep the pixel-list path because fill-block cells cannot tell valid False/0 from
 an uncovered child.
 
@@ -460,7 +463,7 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API
 | Area | Limitation |
 |---|---|
 | `map2alm` weights | `use_weights` / `use_pixel_weights` apply computed RING quadrature (mean 1), exact for even Legendre moments through `l = 2*min(nside,128)-2`. They do not load HEALPix full-pixel or ring-weight FITS tables, so they do not match healpy's packaged `weight_ring_n*.fits`. The two flags are mutually exclusive. |
-| `alm2map_spin` | Fused Ishioka CPU synthesis still ~1.2–1.4× healpy on Mac after the 2026-08 Ishioka work. Do not claim Linux leadership without VOS artifacts. Set `TORCHSKY_SPIN_ISHIOKA=0` at call time if Ishioka loses to Wigner. |
+| `alm2map_spin` | Fused Ishioka CPU synthesis still ~1.2–1.4× healpy on Mac after the 2026-08 Ishioka work. Linux CANFAR (SHA `9e65cbc`, scalar polar FFT) is 3–8× healpy depending on nside. Do not claim Linux SHT. Set `TORCHSKY_SPIN_ISHIOKA=0` at call time if Ishioka loses to Wigner. Polar RING FFTs use ATen FFT; GPU map tensors are still copied to host. |
 | Pixel windows | Packaged tables cover standard HEALPix NSIDE range. Higher NSIDE may require external data. |
 | Device | See the device table below. GPU SHT inputs are copied to host; fused Ishioka/Wigner is CPU C++. |
 | s2fft | Optional bench/test peer only. Native HEALPix has no sampling theorem; do not use `method="jax_healpy"` as an oracle. |

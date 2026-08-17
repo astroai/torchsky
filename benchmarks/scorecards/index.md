@@ -15,3 +15,4 @@ pixi run bench-archive-scorecard -- \
 | 20260612 | main_domains | 84/84 | 70/70 | 90/90 | 30/30 | 24 | `193e62eec875` | [20260612_main_domains](20260612_main_domains.md) |
 | 20260815 | wcs_sphere_spectral_audit | - | - | 0/0 | 2/3 | 4 | `5f911d00c30c` | [20260815_wcs_sphere_spectral_audit](20260815_wcs_sphere_spectral_audit.md) |
 | 20260816 | world_layer | - | - | pending VOS | Mac Ishioka map2alm leads; alm2map ~1.2–1.4×; sparse get_values matches healsparse | 1 | local main | [20260816_world_layer](20260816_world_layer.md) |
+| 20260817 | world_layer | - | - | CPU 87/90; CUDA 90/90 large-N | Linux SHT behind healpy; Linux get_values 0.77–0.80× hs at 50k; Linux ud_grade ahead on that job | see card | `9e65cbc` CANFAR | [20260817_world_layer](20260817_world_layer.md) |

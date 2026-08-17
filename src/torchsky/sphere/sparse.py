@@ -421,9 +421,16 @@ class SparseHealpixMap:
         return self.pixels
 
     def get_values(self, pixels: Tensor) -> Tensor:
-        pix_flat = torch.as_tensor(
-            pixels, dtype=torch.int64, device=self.pixels.device
-        ).reshape(-1)
+        if (
+            isinstance(pixels, Tensor)
+            and pixels.dtype == torch.int64
+            and pixels.device == self.pixels.device
+        ):
+            pix_flat = pixels.reshape(-1)
+        else:
+            pix_flat = torch.as_tensor(
+                pixels, dtype=torch.int64, device=self.pixels.device
+            ).reshape(-1)
         out_shape = tuple(self.values.shape[:-1]) + (pix_flat.numel(),)
         if self.pixels.numel() == 0:
             return torch.full(

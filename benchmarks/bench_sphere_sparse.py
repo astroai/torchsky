@@ -27,6 +27,31 @@ from torchsky.sphere.sparse import SparseHealpixMap  # noqa: E402
 from torchsky.sphere import healpix as hp  # noqa: E402
 
 
+def _time_interleaved(
+    fn_a: Callable[[], Any], fn_b: Callable[[], Any], runs: int
+) -> tuple[float, float]:
+    fn_a()
+    fn_b()
+    a_samples: list[float] = []
+    b_samples: list[float] = []
+    for i in range(runs):
+        if i % 2 == 0:
+            t0 = time.perf_counter()
+            fn_a()
+            a_samples.append(time.perf_counter() - t0)
+            t0 = time.perf_counter()
+            fn_b()
+            b_samples.append(time.perf_counter() - t0)
+        else:
+            t0 = time.perf_counter()
+            fn_b()
+            b_samples.append(time.perf_counter() - t0)
+            t0 = time.perf_counter()
+            fn_a()
+            a_samples.append(time.perf_counter() - t0)
+    return float(np.median(a_samples)), float(np.median(b_samples))
+
+
 def _time_many(fn: Callable[[], Any], runs: int) -> float:
     fn()
     samples: list[float] = []
@@ -153,19 +178,23 @@ def main() -> int:
             nside_coverage=nside_cov,
             sentinel=float(sparse.fill_value),
         )
-        n_q = min(50_000, int(lon.numel()))
+        n_q = int(lon.numel())
         q_lon = lon[:n_q]
         q_lat = lat[:n_q]
         q_nest = hp.ang2pix(nside, q_lon, q_lat, nest=True, lonlat=True)
         q_nest_np = q_nest.detach().cpu().numpy()
-        t_hs_get = _time_many(lambda: hs.get_values_pix(q_nest_np), args.runs)
-        t_ts_get = _time_many(lambda: sparse_cov.get_values(q_nest), args.runs)
+        t_hs_get, t_ts_get = _time_interleaved(
+            lambda: hs.get_values_pix(q_nest_np),
+            lambda: sparse_cov.get_values(q_nest),
+            args.runs,
+        )
         rows.append(
             {
                 "operation": "sparse_get_values",
                 "library": "healsparse",
                 "n_queries": n_q,
                 "get_values_s": t_hs_get,
+                "timing": "interleaved",
             }
         )
         rows.append(
@@ -175,12 +204,14 @@ def main() -> int:
                 "n_queries": n_q,
                 "get_values_s": t_ts_get,
                 "ratio_torchsky_vs_healsparse": t_hs_get / t_ts_get,
+                "timing": "interleaved",
             }
         )
         nside_ud = max(1, nside // 2)
-        t_hs_ud = _time_many(lambda: hs.degrade(nside_ud), args.runs)
-        t_ts_ud = _time_many(
-            lambda: sparse_cov.ud_grade(nside_ud, pess=False), args.runs
+        t_hs_ud, t_ts_ud = _time_interleaved(
+            lambda: hs.degrade(nside_ud),
+            lambda: sparse_cov.ud_grade(nside_ud, pess=False),
+            args.runs,
         )
         rows.append(
             {
@@ -189,6 +220,7 @@ def main() -> int:
                 "nside_in": nside,
                 "nside_out": nside_ud,
                 "ud_grade_s": t_hs_ud,
+                "timing": "interleaved",
             }
         )
         rows.append(
@@ -199,6 +231,7 @@ def main() -> int:
                 "nside_out": nside_ud,
                 "ud_grade_s": t_ts_ud,
                 "ratio_torchsky_vs_healsparse": t_hs_ud / t_ts_ud,
+                "timing": "interleaved",
             }
         )
 

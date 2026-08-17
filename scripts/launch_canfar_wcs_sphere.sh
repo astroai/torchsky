@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Launch CANFAR headless CPU and/or CUDA jobs for torchsky WCS + sphere.
-# Usage: launch_canfar_wcs_sphere.sh [cpu|cuda|all|suite]
+# Usage: launch_canfar_wcs_sphere.sh [cpu|cuda|all|suite|sht|spectral|sparse|spin]
 #
 # Jobs clone TORCHSKY_COMMIT (default: origin/main HEAD), run
 # scripts/run_canfar_wcs_sphere.sh, and copy artifacts to
 # vos:sfabbro/torchsky-runs/<run_id>/.
 # suite: parallel spectral, sphere, sparse, spin, geometry, and cuHPX jobs.
+# sht: spectral + sparse + spin only.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -13,9 +14,9 @@ cd "${ROOT_DIR}"
 
 MODE="${1:-all}"
 case "${MODE}" in
-  cpu | cuda | all | suite | many) ;;
+  cpu | cuda | all | suite | many | spectral | sparse | spin | sht) ;;
   *)
-    echo "usage: $0 [cpu|cuda|all|suite]" >&2
+    echo "usage: $0 [cpu|cuda|all|suite|sht|spectral|sparse|spin]" >&2
     exit 2
     ;;
 esac
@@ -159,4 +160,13 @@ if [[ "${MODE}" == "suite" || "${MODE}" == "many" ]]; then
   launch_one spin "" "sphere-spin-${STAMP}"
   launch_one geometry "" "sphere-geometry-${STAMP}"
   launch_one cuhpx 1 "cuhpx-sht-${STAMP}"
+fi
+if [[ "${MODE}" == "spectral" || "${MODE}" == "sht" ]]; then
+  launch_one spectral "" "sphere-spectral-${STAMP}"
+fi
+if [[ "${MODE}" == "sparse" || "${MODE}" == "sht" ]]; then
+  launch_one sparse "" "sphere-sparse-${STAMP}"
+fi
+if [[ "${MODE}" == "spin" || "${MODE}" == "sht" ]]; then
+  launch_one spin "" "sphere-spin-${STAMP}"
 fi

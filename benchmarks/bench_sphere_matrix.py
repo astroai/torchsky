@@ -97,6 +97,14 @@ def main() -> int:
         help="Comma-separated op=ratio thresholds for median(torchsky/healpy) across profiles",
     )
     parser.add_argument(
+        "--no-throughput-gate",
+        action="store_true",
+        help=(
+            "Record healpy ratios but do not fail on Mac-tuned min-median-ratio "
+            "thresholds. Index/angle mismatch gates still apply."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR / "sphere_matrix_latest",
@@ -117,6 +125,8 @@ def main() -> int:
     except ValueError as exc:
         print(f"Invalid --min-median-ratio-vs-healpy: {exc}")
         return 1
+    if args.no_throughput_gate:
+        min_median_ratios = {}
 
     script = Path(__file__).with_name("bench_sphere_geometry.py")
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -199,6 +209,7 @@ def main() -> int:
         "json_paths": json_paths,
         "median_ratios_torchsky_vs_healpy": median_ratios,
         "min_median_ratio_thresholds": min_median_ratios,
+        "throughput_gate": not args.no_throughput_gate,
         "failed_thresholds": [
             {"operation": op, "threshold": thr, "observed": got}
             for op, thr, got in failed

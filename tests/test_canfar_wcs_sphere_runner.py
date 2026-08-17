@@ -30,6 +30,10 @@ def test_canfar_wcs_sphere_runner_contract() -> None:
     assert "sphere_spectral_nside128.json" in runner
     assert "bench_sphere_sparse.py" in runner
     assert "bench_cuhpx_sht_spike.py" in runner
+    assert "--no-throughput-gate" in runner
+    assert runner.count("--no-throughput-gate") >= 4
+    assert "--n-queries 200000" in runner
+    assert "--n-queries 500000" in runner
 
 
 def test_canfar_wcs_sphere_launcher_payload_has_no_shell_vars() -> None:
@@ -42,6 +46,7 @@ def test_canfar_wcs_sphere_launcher_payload_has_no_shell_vars() -> None:
     assert "refusing canfar payload" in launcher
     assert "suite" in launcher
     assert "cuhpx" in launcher
+    assert "sht" in launcher
     fetch = (ROOT / "scripts" / "fetch_canfar_wcs_sphere_run.sh").read_text(
         encoding="utf-8"
     )

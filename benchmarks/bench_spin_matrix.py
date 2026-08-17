@@ -92,13 +92,23 @@ def main() -> int:
         default=0.20,
         help="Allowed relative drop vs baseline medians (e.g. 0.20 allows up to 20%% drop).",
     )
+    parser.add_argument(
+        "--no-throughput-gate",
+        action="store_true",
+        help=(
+            "Record healpy ratios but do not fail on Mac-tuned min-ratio or "
+            "baseline-regression gates. Rel L2 gates still apply."
+        ),
+    )
     args = parser.parse_args()
 
     if args.max_regression_frac < 0.0 or args.max_regression_frac >= 1.0:
         print("--max-regression-frac must satisfy 0 <= value < 1")
         return 2
 
-    if args.min_ratio_by_bucket is None:
+    if args.no_throughput_gate:
+        min_ratio_by_bucket = ""
+    elif args.min_ratio_by_bucket is None:
         if args.case_set == "default":
             min_ratio_by_bucket = (
                 "small:map2alm_spin=0.15,small:alm2map_spin=0.15,"
@@ -114,7 +124,11 @@ def main() -> int:
         min_ratio_by_bucket = args.min_ratio_by_bucket
 
     try:
-        ratio_thresholds = _parse_bucket_ratio_spec(min_ratio_by_bucket)
+        ratio_thresholds = (
+            {}
+            if min_ratio_by_bucket.strip() == ""
+            else _parse_bucket_ratio_spec(min_ratio_by_bucket)
+        )
     except ValueError as exc:
         print(f"Invalid --min-ratio-by-bucket: {exc}")
         return 2
@@ -180,7 +194,11 @@ def main() -> int:
             thr = ratio_thresholds.get((bucket, op))
             if got is None:
                 print(f"  {bucket:6s} {op:12s} unavailable")
-                if thr is not None and args.case_set == "extended":
+                if (
+                    thr is not None
+                    and args.case_set == "extended"
+                    and not args.no_throughput_gate
+                ):
                     failures.append(f"{bucket}:{op} missing (threshold {thr:.3f})")
                 continue
             if thr is None:
@@ -192,7 +210,7 @@ def main() -> int:
 
     baseline_path = args.baseline_json
     baseline_medians: dict[str, dict[str, float]] | None = None
-    if baseline_path is not None:
+    if baseline_path is not None and not args.no_throughput_gate:
         if not baseline_path.exists():
             print(f"\nBaseline JSON not found: {baseline_path}")
             return 2
@@ -258,6 +276,7 @@ def main() -> int:
         "baseline_json": None if baseline_path is None else str(baseline_path),
         "max_regression_frac": args.max_regression_frac,
         "baseline_median_ratio_by_bucket": baseline_medians,
+        "throughput_gate": not args.no_throughput_gate,
         "failures": failures,
     }
     args.json_out.parent.mkdir(parents=True, exist_ok=True)

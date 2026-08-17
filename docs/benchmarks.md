@@ -56,7 +56,7 @@ pixi run bench-comparator-versions-all
 pixi run wcs-sphere-acceptance
 ```
 
-Linux CPU/CUDA confirmation uses `scripts/launch_canfar_wcs_sphere.sh` (modes `cpu`, `cuda`, `all`, or `suite`). That submits AstroAI headless sessions which run `scripts/run_canfar_wcs_sphere.sh` at an exact `TORCHSKY_COMMIT`, write `/arc/projects/ots/torchsky-runs/<run_id>/`, and copy the same tree to `vos:sfabbro/torchsky-runs/<run_id>/`. `suite` submits parallel spectral, sphere, sparse, spin, geometry, and cuHPX jobs. Pull a finished run with `bash scripts/fetch_canfar_wcs_sphere_run.sh <run_id>` (`vcp` / `pip install vos`). Do not reuse the ADASS/SMACS runner for this domain. Local Mac smoke stays `--quick` via `pixi run wcs-sphere-acceptance`; the full oracle ingest is `pixi run wcs-sphere-acceptance-full` or the CANFAR `cpu` job. The cuHPX scalar SHT spike is a separate CUDA-only job: `scripts/run_canfar_cuhpx_sht_spike.sh` or the `suite` `cuhpx` session.
+Linux CPU/CUDA confirmation uses `scripts/launch_canfar_wcs_sphere.sh` (modes `cpu`, `cuda`, `all`, `suite`, or `sht`). That submits AstroAI headless sessions which run `scripts/run_canfar_wcs_sphere.sh` at an exact `TORCHSKY_COMMIT`, write `/arc/projects/ots/torchsky-runs/<run_id>/`, and copy the same tree to `vos:sfabbro/torchsky-runs/<run_id>/`. `suite` submits parallel spectral, sphere, sparse, spin, geometry, and cuHPX jobs. `sht` is spectral + sparse + spin only. Pull a finished run with `bash scripts/fetch_canfar_wcs_sphere_run.sh <run_id>` (`vcp` / `pip install vos`). Do not reuse the ADASS/SMACS runner for this domain. Local Mac smoke stays `--quick` via `pixi run wcs-sphere-acceptance`; the full oracle ingest is `pixi run wcs-sphere-acceptance-full` or the CANFAR `cpu` job. CANFAR `cpu`/`spin`/`geometry` jobs pass `--no-throughput-gate` so Mac-tuned healpy ratio thresholds do not fail the job; rel L2 and index/angle mismatch gates still apply. Mac pixi tasks (`sphere-bench-geometry-gate`, `sphere-upstream-spin-matrix-gate`) keep the ratio gates. The cuHPX scalar SHT spike is a separate CUDA-only job: `scripts/run_canfar_cuhpx_sht_spike.sh` or the `suite` `cuhpx` session. Current Linux ingest: [`benchmarks/scorecards/20260817_world_layer.md`](../benchmarks/scorecards/20260817_world_layer.md).
 
 For pip-only parity benches against the HEALPix / geometry comparator stack,
 install `pip install -e ".[bench-all]"` after installing a compatible PyTorch.
@@ -843,7 +843,8 @@ Compared against **healpy**, **hpgeom**, **astropy-healpix**, **healsparse**, **
 The microseconds below are the **pre-Ishioka** Mac rows (same snapshot as
 the 88.9% win rate). After the 2026-08 Ishioka skip-2 CPU work, Mac
 `map2alm_spin` leads healpy and `alm2map_spin` is ~1.2–1.4× healpy. See
-[`benchmarks/scorecards/20260816_world_layer.md`](../benchmarks/scorecards/20260816_world_layer.md).
+[`benchmarks/scorecards/20260817_world_layer.md`](../benchmarks/scorecards/20260817_world_layer.md)
+(Mac snapshot: [`20260816_world_layer.md`](../benchmarks/scorecards/20260816_world_layer.md)).
 Do not treat these 0.1–0.2× ratios as current.
 
 | Operation | torchsky | healpy | Ratio (healpy / tf) |
@@ -860,7 +861,7 @@ Win rate: **88.9%** (16/18). Large-N: **100%** (13/13). Two deficits listed belo
 | Domain | Case | Lag | Notes |
 |---|---|---:|---|
 | wcs | N &le; 10K forward/inverse (22 cases) | 1.0x &ndash; 2.9x | Fixed PyTorch dispatch overhead at small N (21 at N = 1K, 1 at N = 10K). All under 3 ms absolute. |
-| sphere | `alm2map_spin` CPU | ~1.2–1.4× healpy | Mac after Ishioka 2018 skip-2 (2026-08). `map2alm_spin` beat healpy on that machine. Linux x86 (scalar FFT vs NEON) is unconfirmed until CANFAR VOS artifacts exist. Pre-Ishioka 6–8× spin lag is obsolete. |
+| sphere | `alm2map_spin` CPU | Linux 3–8× healpy; Mac ~1.2–1.4× | CANFAR SHA `9e65cbc` (scalar polar FFT): nside=64 `alm2map_spin` 4.8× healpy, nside=128 3.0×. Mac after Ishioka 2018 skip-2 still ~1.2–1.4×. `map2alm_spin` beat healpy on Mac; Linux nside=128 is 1.5× healpy. Do not claim Linux SHT. Polar RING FFTs now use ATen FFT (same backend PyTorch uses per device). GPU map tensors are still host-copied into the CPU SHT. |
 | sphere | fused SHT on GPU | n/a | Ishioka/Wigner is CPU C++. CUDA/MPS map tensors are copied to host. Do not claim GPU SHT. |
 
 ---
@@ -921,7 +922,7 @@ and `tests/test_docs_integrity.py` updates in the same PR.
   2. popular pipeline scenarios that actually exercise the package in production, for example DrizzlePac/HST and JWST level-3 style resampling flows
   3. torchsky-owned synthetic stress cases used to probe scaling, boundary behavior, and cross-device performance
 - `sync_upstream_sphere_sources.py` downloads release artifacts for selected packages and extracts upstream `tests/` + `data/` trees with a pinned manifest. The legacy replay runners that consumed those extracted fixtures are not present in this tree; use the supported benchmark gates listed above unless a future PR restores the replay scripts and docs together.
-- `bench_spin_matrix.py` exercises spin transform cases (`map2alm_spin`, `alm2map_spin`) against the committed benchmark baseline with regression thresholds.
+- `bench_spin_matrix.py` exercises spin transform cases (`map2alm_spin`, `alm2map_spin`) against healpy rel L2 gates. Mac pixi tasks also enforce min-ratio / baseline-regression throughput gates. CANFAR passes `--no-throughput-gate` so Linux jobs record ratios without using Mac thresholds as a science failure.
 - Spin matrix runs can use validated `TORCHSKY_*` profiles for local experiments; see **Default `TORCHSKY_*` knobs (WCS / sphere)** below.
 - Override only for local development experiments with:
   - `bench_healpix.py --allow-nonrelease-healpy`
@@ -987,6 +988,7 @@ Run metadata:
 
 ### Known Deficits (Target for 0.4.0)
 
-- **Sphere (Spin Transforms)**: Pre-Ishioka ~6–8× healpy lag is obsolete. Mac fused Ishioka `map2alm_spin` leads healpy; `alm2map_spin` is still ~1.2–1.4× healpy. Linux x86 is unconfirmed until CANFAR VOS artifacts exist. Fused SHT is CPU C++; GPU tensors are host-copied.
+- **Sphere (Spin Transforms)**: Mac fused Ishioka `map2alm_spin` leads healpy; `alm2map_spin` is still ~1.2–1.4× healpy. Linux CANFAR (SHA `9e65cbc`) is behind healpy (nside=64 ~4–5×, nside=128 `alm2map_spin` ~3×). Polar RING FFTs on non-Apple used a scalar fallback; they now use ATen FFT and are unmeasured on Linux. Fused SHT is CPU C++; GPU tensors are host-copied. Do not start a fused CUDA SHT until Linux CPU is competitive.
+- **Sparse `get_values`**: Mac matches healsparse at 50k nest queries. Linux CANFAR at the same cap is 0.77–0.80× healsparse. Not claimed on Linux.
 - **WCS (Small-N)**: Some forward small-N rows still lag vs `pyast` (legacy), especially away from the center-equator projections. `bench_wcs.py` now tracks the CPU center-helper crossover explicitly through `center_cpp_*` fields for `AIT/CAR/CEA/HPX/MER/SFL`. The CPU fused path (`TORCHSKY_WCS_FUSED=1`) includes **ARC** alongside TAN/SIN and the other supported codes; re-profile after native extension rebuilds. For torchsky-vs-Astropy timing on **two-arg vs stacked `(N,2)` vs `compile()`** for both **pixel→world and world→pixel**, use `bench_wcs_small_n_paths.py`; pytest gates stacked and compiled-stacked parity (forward and inverse) in `tests/test_wcs_parity.py`.
 - **ZPN/AIT Projections**: Slight visible deficits in intermediate size tiers.
