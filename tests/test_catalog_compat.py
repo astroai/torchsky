@@ -368,3 +368,19 @@ def test_crossmatch_sky_matches_cpu_results_on_cuda() -> None:
         atol=1e-6,
         rtol=0.0,
     )
+
+
+def test_crossmatch_sky_per_row_radius() -> None:
+    left_ra = torch.tensor([10.0, 10.0], dtype=torch.float64)
+    left_dec = torch.tensor([0.0, 0.0], dtype=torch.float64)
+    right_ra = torch.tensor([10.0 + 0.5 / 3600.0, 10.0 + 2.0 / 3600.0], dtype=torch.float64)
+    right_dec = torch.tensor([0.0, 0.0], dtype=torch.float64)
+    radii = torch.tensor([1.0, 3.0], dtype=torch.float64)
+    all_hits = crossmatch_sky(
+        left_ra, left_dec, right_ra, right_dec, radius_arcsec=radii, find="all"
+    )
+    pairs = list(zip(all_hits.left_index.tolist(), all_hits.right_index.tolist()))
+    assert (0, 0) in pairs
+    assert (0, 1) not in pairs
+    assert (1, 0) in pairs
+    assert (1, 1) in pairs

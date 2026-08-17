@@ -197,6 +197,26 @@ def _finalize_crossmatch(
     return CrossmatchResult(left_index, right_index, separation_arcsec)
 
 
+def _normalize_radius_arcsec(
+    radius_arcsec: float | Tensor,
+    n_left: int,
+    device: torch.device,
+) -> tuple[Tensor, float]:
+    """Return per-left radii and the prune radius (max)."""
+    radius = torch.as_tensor(radius_arcsec, dtype=torch.float64, device=device)
+    if radius.ndim == 0:
+        value = float(radius.item())
+        if value <= 0.0:
+            raise ValueError("radius_arcsec must be positive")
+        return torch.full((n_left,), value, dtype=torch.float64, device=device), value
+    flat = radius.reshape(-1)
+    if int(flat.numel()) != n_left:
+        raise ValueError("radius_arcsec must be a scalar or match the left catalog")
+    if bool((flat <= 0.0).any()):
+        raise ValueError("radius_arcsec must be positive")
+    return flat, float(flat.max().item())
+
+
 def _choose_default_coarse_nside(
     left_ra: Tensor,
     left_dec: Tensor,
@@ -498,7 +518,7 @@ def _crossmatch_sky_declination_indexed(
     right_ra: Tensor,
     right_dec: Tensor,
     *,
-    radius_arcsec: float,
+    radius_arcsec: Tensor,
     left_chunk_size: int,
     right_chunk_size: int,
     find: str = "best",
@@ -517,14 +537,16 @@ def _crossmatch_sky_declination_indexed(
     right_hits: list[Tensor] = []
     sep_hits: list[Tensor] = []
 
-    for start, left_ra_chunk, left_dec_chunk in zip(
+    for start, left_ra_chunk, left_dec_chunk, radius_chunk, radius_deg_chunk in zip(
         range(0, int(left_ra.numel()), left_chunk_size),
         left_ra.split(left_chunk_size),
         left_dec.split(left_chunk_size),
-        strict=False,
+        radius_arcsec.split(left_chunk_size),
+        radius_deg.split(left_chunk_size),
+        strict=True,
     ):
-        lower = torch.clamp(left_dec_chunk - radius_deg, min=-90.0, max=90.0)
-        upper = torch.clamp(left_dec_chunk + radius_deg, min=-90.0, max=90.0)
+        lower = torch.clamp(left_dec_chunk - radius_deg_chunk, min=-90.0, max=90.0)
+        upper = torch.clamp(left_dec_chunk + radius_deg_chunk, min=-90.0, max=90.0)
         starts = torch.searchsorted(right_dec_sorted, lower, right=False)
         stops = torch.searchsorted(right_dec_sorted, upper, right=True)
         stats.candidate_rows_considered += int((stops - starts).sum().item())
@@ -547,7 +569,7 @@ def _crossmatch_sky_declination_indexed(
                 )
                 * 3600.0
             )
-            mask = separation_arcsec <= radius_arcsec
+            mask = separation_arcsec <= radius_chunk[left_relative]
             if not bool(mask.any()):
                 continue
             batch_left = left_relative[mask] + start
@@ -755,7 +777,7 @@ def crossmatch_sky(
     right_ra_deg: Tensor,
     right_dec_deg: Tensor,
     *,
-    radius_arcsec: float,
+    radius_arcsec: float | Tensor,
     left_chunk_size: int = 4096,
     right_chunk_size: int = 65536,
     find: str = "best",
@@ -765,6 +787,10 @@ def crossmatch_sky(
     ``find="best"`` returns the nearest right-catalog row per left row.
     ``find="all"`` returns every pair within the radius, ordered by left
     index, separation, then right index.
+
+    ``radius_arcsec`` may be a positive scalar or a per-left-row tensor.
+    Coarse declination windows use the per-row radius; a global prune uses
+    the maximum.
     """
     left_ra = torch.as_tensor(left_ra_deg, dtype=torch.float64).reshape(-1)
     device = left_ra.device
@@ -777,8 +803,9 @@ def crossmatch_sky(
     right_dec = torch.as_tensor(
         right_dec_deg, dtype=torch.float64, device=device
     ).reshape(-1)
-    if radius_arcsec <= 0.0:
-        raise ValueError("radius_arcsec must be positive")
+    radius_left, _ = _normalize_radius_arcsec(
+        radius_arcsec, int(left_ra.numel()), device
+    )
     if left_chunk_size <= 0 or right_chunk_size <= 0:
         raise ValueError("chunk sizes must be positive")
     if find not in ("best", "all"):
@@ -795,7 +822,7 @@ def crossmatch_sky(
         left_dec,
         right_ra,
         right_dec,
-        radius_arcsec=radius_arcsec,
+        radius_arcsec=radius_left,
         left_chunk_size=left_chunk_size,
         right_chunk_size=right_chunk_size,
         find=find,

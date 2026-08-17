@@ -38,6 +38,12 @@ applications load tensors, header mappings, masks/weights, or streamed table
 batches there and pass those values into torchsky. Core computation must not
 open files or depend on CFITSIO.
 
+Consumers share this geometry and 1D physics substrate: `xmatch` optionally
+uses `crossmatch_sky` and frame/PM helpers; `uspm` hard-depends on
+spectrophotometry, redshift dimming, and extinction; `cosmodist` wraps
+cosmology, LVF passbands, Tolman dimming, and bilinear splat. Association
+policy, INR/latents, and scene-field models stay in those packages.
+
 ## Refactor Rules
 
 - Preserve the lean public contract first; keep implementation helpers in their

@@ -1,0 +1,275 @@
+"""Milky Way dust laws (CCM89 / O'Donnell94) on torch tensors.
+
+Wavelengths are Angstrom-native internally. Pass ``wavelength_unit='nm'`` at
+the boundary. ``A(λ)`` is in magnitudes; transmission is ``10**(-0.4 A)``.
+
+The infrared power law is extrapolated below the CCM89 ``x=0.3`` cutoff so
+broadband work stays defined into the far-IR. Optical and UV pieces follow
+Cardelli, Clayton & Mathis (1989); ``odonnell94`` replaces the optical
+polynomials only.
+"""
+
+from __future__ import annotations
+
+from typing import Literal
+
+import torch
+from torch import Tensor
+
+WavelengthUnit = Literal["angstrom", "nm"]
+ExtinctionLaw = Literal["ccm89", "odonnell94", "odonnell"]
+
+
+def ccm89_ab(x_um_inv: Tensor) -> tuple[Tensor, Tensor]:
+    """CCM89 ``a(x), b(x)`` for inverse-micron ``x = 1 / λ_μm``.
+
+    Regions follow Cardelli, Clayton & Mathis (1989): IR ``x<1.1`` (power
+    law extrapolated below ``x=0.3``), optical ``1.1<=x<3.3``, UV
+    ``3.3<=x<8``, far-UV ``8<=x<=10``. Beyond ``x=10`` the far-UV polynomials
+    are evaluated at the ``x=10`` boundary; the law is not defined there.
+    """
+    x = torch.as_tensor(x_um_inv).clamp_min(1e-3)
+    a = torch.zeros_like(x)
+    b = torch.zeros_like(x)
+
+    ir = x < 1.1
+    a_ir = 0.574 * x**1.61
+    b_ir = -0.527 * x**1.61
+
+    opt = (x >= 1.1) & (x < 3.3)
+    y = x - 1.82
+    # CCM89 eq. (3a): optical ``y^2`` coefficient is 0.50447.
+    a_opt = (
+        1.0
+        + 0.17699 * y
+        - 0.50447 * y**2
+        - 0.02427 * y**3
+        + 0.72085 * y**4
+        + 0.01979 * y**5
+        - 0.77530 * y**6
+        + 0.32999 * y**7
+    )
+    b_opt = (
+        1.41338 * y
+        + 2.28305 * y**2
+        + 1.07233 * y**3
+        - 5.38434 * y**4
+        - 0.62251 * y**5
+        + 5.30260 * y**6
+        - 2.09002 * y**7
+    )
+
+    uv = (x >= 3.3) & (x < 8.0)
+    fa = torch.where(
+        x >= 5.9,
+        -0.04473 * (x - 5.9) ** 2 - 0.009779 * (x - 5.9) ** 3,
+        torch.zeros_like(x),
+    )
+    fb = torch.where(
+        x >= 5.9,
+        0.2130 * (x - 5.9) ** 2 + 0.1207 * (x - 5.9) ** 3,
+        torch.zeros_like(x),
+    )
+    a_uv = 1.752 - 0.316 * x - 0.104 / ((x - 4.67) ** 2 + 0.341) + fa
+    b_uv = -3.090 + 1.825 * x + 1.206 / ((x - 4.62) ** 2 + 0.263) + fb
+
+    fuv = x >= 8.0
+    y_fuv = x.clamp(max=10.0) - 8.0
+    a_fuv = -1.073 - 0.628 * y_fuv + 0.137 * y_fuv**2 - 0.070 * y_fuv**3
+    b_fuv = 13.670 + 4.257 * y_fuv - 0.420 * y_fuv**2 + 0.374 * y_fuv**3
+
+    a = torch.where(ir, a_ir, a)
+    a = torch.where(opt, a_opt, a)
+    a = torch.where(uv, a_uv, a)
+    a = torch.where(fuv, a_fuv, a)
+    b = torch.where(ir, b_ir, b)
+    b = torch.where(opt, b_opt, b)
+    b = torch.where(uv, b_uv, b)
+    b = torch.where(fuv, b_fuv, b)
+    return a, b
+
+
+def odonnell94_ab(x_um_inv: Tensor) -> tuple[Tensor, Tensor]:
+    """O'Donnell (1994) optical update; CCM89 in UV and IR."""
+    a, b = ccm89_ab(x_um_inv)
+    x = torch.as_tensor(x_um_inv).clamp_min(1e-3)
+    opt = (x >= 1.1) & (x < 3.3)
+    y = x - 1.82
+    a_opt = (
+        1.0
+        + 0.104 * y
+        - 0.609 * y**2
+        + 0.701 * y**3
+        + 1.137 * y**4
+        - 1.718 * y**5
+        - 0.827 * y**6
+        + 1.647 * y**7
+        - 0.505 * y**8
+    )
+    b_opt = (
+        1.952 * y
+        + 2.908 * y**2
+        - 3.989 * y**3
+        - 7.985 * y**4
+        + 11.102 * y**5
+        + 5.491 * y**6
+        - 10.805 * y**7
+        + 3.347 * y**8
+    )
+    return torch.where(opt, a_opt, a), torch.where(opt, b_opt, b)
+
+
+def _normalize_law(law: str) -> str:
+    name = str(law).lower()
+    if name in {"odonnell", "odonnell94"}:
+        return "odonnell94"
+    if name == "ccm89":
+        return "ccm89"
+    raise ValueError(f"Unknown extinction law: {law!r}")
+
+
+def _to_angstrom(wave: Tensor, wavelength_unit: WavelengthUnit) -> Tensor:
+    if wavelength_unit not in ("angstrom", "nm"):
+        raise ValueError("wavelength_unit must be 'angstrom' or 'nm'")
+    values = torch.as_tensor(wave)
+    if wavelength_unit == "nm":
+        return values * 10.0
+    return values
+
+
+def _compute_ab(wave_angstrom: Tensor, law: str) -> tuple[Tensor, Tensor]:
+    x = 10000.0 / torch.clamp(wave_angstrom, min=1e-6)
+    return ccm89_ab(x) if law == "ccm89" else odonnell94_ab(x)
+
+
+def _align_scale(scale: Tensor, wave: Tensor) -> Tensor:
+    """Broadcast a per-object scale against a spectral (or spatial) grid.
+
+    Batch axes are leading. A 1-D ``[B]`` scale against a 1-D ``[L]`` grid
+    becomes ``[B, 1]``, not a last-axis alignment of ``B`` with ``L``.
+    """
+    aligned = scale.to(device=wave.device, dtype=wave.dtype)
+    while aligned.ndim < wave.ndim:
+        aligned = aligned.unsqueeze(-1)
+    if (
+        aligned.ndim == wave.ndim
+        and aligned.shape != wave.shape
+        and aligned.shape[-1] != 1
+        and aligned.shape[-1] != wave.shape[-1]
+    ):
+        aligned = aligned.unsqueeze(-1)
+    return aligned
+
+
+def a_lambda(
+    wave: Tensor,
+    *,
+    ebv: Tensor | float | None = None,
+    a_v: Tensor | float | None = None,
+    r_v: Tensor | float = 3.1,
+    law: ExtinctionLaw = "ccm89",
+    wavelength_unit: WavelengthUnit = "angstrom",
+) -> Tensor:
+    """Extinction in magnitudes at ``wave``.
+
+    Supply exactly one of ``ebv`` or ``a_v``. ``A_V = R_V E(B-V)``.
+    """
+    if (ebv is None) == (a_v is None):
+        raise ValueError("provide exactly one of ebv or a_v")
+    law_name = _normalize_law(law)
+    wave_a = torch.as_tensor(_to_angstrom(wave, wavelength_unit))
+    scale = a_v if a_v is not None else ebv
+    scale_t = _align_scale(torch.as_tensor(scale), wave_a)
+    r_v_t = _align_scale(torch.as_tensor(r_v), wave_a)
+    a_v_t = scale_t if a_v is not None else r_v_t * scale_t
+    a, b = _compute_ab(wave_a, law_name)
+    return (a + b / r_v_t) * a_v_t
+
+
+def ccm89(
+    wave_angstrom: Tensor,
+    a_v: Tensor,
+    r_v: Tensor | float | None = None,
+    *,
+    wavelength_unit: WavelengthUnit = "angstrom",
+) -> Tensor:
+    """CCM89 ``A(λ)`` for ``A_V``; wavelengths default to Angstrom."""
+    return a_lambda(
+        wave_angstrom,
+        a_v=a_v,
+        r_v=3.1 if r_v is None else r_v,
+        law="ccm89",
+        wavelength_unit=wavelength_unit,
+    )
+
+
+def odonnell94(
+    wave_angstrom: Tensor,
+    a_v: Tensor,
+    r_v: Tensor | float | None = None,
+    *,
+    wavelength_unit: WavelengthUnit = "angstrom",
+) -> Tensor:
+    """O'Donnell (1994) ``A(λ)`` for ``A_V``; wavelengths default to Angstrom."""
+    return a_lambda(
+        wave_angstrom,
+        a_v=a_v,
+        r_v=3.1 if r_v is None else r_v,
+        law="odonnell94",
+        wavelength_unit=wavelength_unit,
+    )
+
+
+def transmission(
+    wave: Tensor,
+    ebv: Tensor | float,
+    *,
+    r_v: Tensor | float = 3.1,
+    law: ExtinctionLaw = "ccm89",
+    wavelength_unit: WavelengthUnit = "angstrom",
+) -> Tensor:
+    """Multiplicative flux attenuation ``10**(-0.4 A)``.
+
+    ``A`` is clamped at zero: a dust screen cannot emit.
+    """
+    mag = a_lambda(
+        wave, ebv=ebv, r_v=r_v, law=law, wavelength_unit=wavelength_unit
+    ).clamp_min(0.0)
+    exponent = torch.clamp(-0.4 * mag, min=-30.0, max=0.0)
+    return torch.pow(10.0, exponent)
+
+
+def apply_extinction(
+    flux: Tensor,
+    lambda_obs: Tensor | None = None,
+    ext_params: Tensor | None = None,
+    extinction_law_name: str = "ccm89",
+    r_v: float = 3.1,
+    *,
+    wavelength_unit: WavelengthUnit = "angstrom",
+    lambda_obs_angstrom: Tensor | None = None,
+) -> Tensor:
+    """Apply a dust screen: ``ext_params`` is ``E(B-V)`` broadcast against flux.
+
+    ``lambda_obs_angstrom`` is the USPM name for ``lambda_obs`` in Angstrom.
+    """
+    if lambda_obs_angstrom is not None:
+        if lambda_obs is not None:
+            raise TypeError("provide only one of lambda_obs and lambda_obs_angstrom")
+        lambda_obs = lambda_obs_angstrom
+        wavelength_unit = "angstrom"
+    if lambda_obs is None or ext_params is None:
+        raise TypeError("apply_extinction requires flux, wavelength, and ext_params")
+    flux_t = torch.as_tensor(flux)
+    wave = torch.as_tensor(lambda_obs).to(device=flux_t.device, dtype=flux_t.dtype)
+    ebv = torch.as_tensor(ext_params).to(device=flux_t.device, dtype=flux_t.dtype)
+    if ebv.ndim == flux_t.ndim - 1:
+        ebv = ebv.unsqueeze(-1)
+    factor = transmission(
+        wave,
+        ebv,
+        r_v=r_v,
+        law=extinction_law_name,  # type: ignore[arg-type]
+        wavelength_unit=wavelength_unit,
+    )
+    return flux_t * factor

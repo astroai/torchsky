@@ -21,6 +21,11 @@ Use [wcs.md](wcs.md) for FITS-WCS spectral coordinate transforms and
   propagating masks and inverse variance.
 - `relativistic_doppler_shift(...)` applies signed physical radial velocities
   and optionally rebins batches onto one observed wavelength grid.
+- Sample-wise redshift helpers live in `torchsky.redshift` and are re-exported
+  here: `shift_wavelength`, `dimming_f_lambda` (`F_λ` densities, `1/(1+z)`),
+  and `dimming_tolman_sb` (surface brightness, `(1+z)^-4`). Do not mix them.
+- Passbands and synthetic photometry are `torchsky.spectrophotometry`.
+  Dust laws are `torchsky.extinction`. Distances are `torchsky.cosmology`.
 - This surface is experimental; generic FITS I/O belongs to `torchfits`.
 
 ## Recipes
@@ -77,6 +82,7 @@ covered output bins are marked in the returned mask rather than renormalized.
 - `SpectralRebinResult`
 - `flux_conserving_rebin(...)`
 - `relativistic_doppler_shift(...)`
+- `shift_wavelength(...)`, `dimming_f_lambda(...)`, `dimming_tolman_sb(...)`
 - `write_cube_fits(...)` — write a `(L, H, W)` tensor with a 3-axis FITS WCS
   (spectral axis `CTYPE3`); pair with `SpectralReader.read_data_cube` for round-trips.
 

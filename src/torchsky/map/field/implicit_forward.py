@@ -23,6 +23,8 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
+from torchsky.redshift import require_one_plus_z
+
 from ..operators.bundle import ObservationOperatorBundle
 from .core import render_field_observation
 from .types import FieldObservation, ForwardContext
@@ -46,9 +48,7 @@ class KinematicState:
         z = self.one_plus_z
         if z is None:
             return 1.0
-        if not math.isfinite(z) or z <= 0.0:
-            raise ValueError("KinematicState.one_plus_z must be finite and positive")
-        return float(z)
+        return float(require_one_plus_z(z))
 
 
 @dataclass(frozen=True)

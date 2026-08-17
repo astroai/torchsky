@@ -26,6 +26,8 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "MapResult": ("torchsky.map.image_plane", "MapResult"),
     "MultiBandMapResult": ("torchsky.map.image_plane", "MultiBandMapResult"),
     "SpectralCubeMapResult": ("torchsky.map.image_plane", "SpectralCubeMapResult"),
+    "splat_bilinear": ("torchsky.map.splat", "splat_bilinear"),
+    "splat_to_native": ("torchsky.map.splat", "splat_to_native"),
     # Compatibility / Internal / Phase 1 entries resolved lazily
     "BandMetadataTable": ("torchsky.map.image_plane", "BandMetadataTable"),
     "ImageObservation": ("torchsky.map.image_plane", "ImageObservation"),

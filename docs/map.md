@@ -143,6 +143,7 @@ Experimental continuous-field layer (tutorial: [field.md](field.md), losses/cont
 | `drizzle_point`, `drizzle_square` | Drizzle drop kernels | Native torchsky implementations. |
 | `conservative_polygon` | Conservative overlap | Native overlap remapper. |
 | `splat_point`, `splat_box` | Forward deposition | Approximate differentiable splats. |
+| `splat_bilinear` (`splat_to_native`) | Adjoint of bilinear `grid_sample` | Flux-conserving deposit onto a native grid. |
 
 Mismatch with SWarp/Montage-style products usually traces to value semantics,
 pixel-area treatment, mask policy, or weight maps rather than FITS I/O.
