@@ -861,7 +861,7 @@ Win rate: **88.9%** (16/18). Large-N: **100%** (13/13). Two deficits listed belo
 | Domain | Case | Lag | Notes |
 |---|---|---:|---|
 | wcs | N &le; 10K forward/inverse (22 cases) | 1.0x &ndash; 2.9x | Fixed PyTorch dispatch overhead at small N (21 at N = 1K, 1 at N = 10K). All under 3 ms absolute. |
-| sphere | `alm2map_spin` CPU | Linux 3–8× healpy; Mac ~1.2–1.4× | CANFAR SHA `9e65cbc` (scalar polar FFT): nside=64 `alm2map_spin` 4.8× healpy, nside=128 3.0×. Mac after Ishioka 2018 skip-2 still ~1.2–1.4×. `map2alm_spin` beat healpy on Mac; Linux nside=128 is 1.5× healpy. Do not claim Linux SHT. Polar RING FFTs now use ATen FFT (same backend PyTorch uses per device). GPU map tensors are still host-copied into the CPU SHT. |
+| sphere | `alm2map_spin` CPU | Linux ~11× healpy at nside=128; Mac ~1.2–1.4× | CANFAR SHA `934b02fa` (ATen polar FFT): nside=128 `alm2map_spin` 30.7 ms vs healpy 2.70 ms. Mac after Ishioka 2018 skip-2 still ~1.2–1.4×. `map2alm_spin` beat healpy on Mac; Linux nside=128 `map2alm_spin` is ~7× healpy. Do not claim Linux SHT. Polar RING FFTs use ATen FFT (same backend PyTorch uses per device). GPU map tensors are still host-copied into the CPU SHT. |
 | sphere | fused SHT on GPU | n/a | Ishioka/Wigner is CPU C++. CUDA/MPS map tensors are copied to host. Do not claim GPU SHT. |
 
 ---
@@ -988,7 +988,7 @@ Run metadata:
 
 ### Known Deficits (Target for 0.4.0)
 
-- **Sphere (Spin Transforms)**: Mac fused Ishioka `map2alm_spin` leads healpy; `alm2map_spin` is still ~1.2–1.4× healpy. Linux CANFAR (SHA `9e65cbc`) is behind healpy (nside=64 ~4–5×, nside=128 `alm2map_spin` ~3×). Polar RING FFTs on non-Apple used a scalar fallback; they now use ATen FFT and are unmeasured on Linux. Fused SHT is CPU C++; GPU tensors are host-copied. Do not start a fused CUDA SHT until Linux CPU is competitive.
-- **Sparse `get_values`**: Mac matches healsparse at 50k nest queries. Linux CANFAR at the same cap is 0.77–0.80× healsparse. Not claimed on Linux.
+- **Sphere (Spin Transforms)**: Mac fused Ishioka `map2alm_spin` leads healpy; `alm2map_spin` is still ~1.2–1.4× healpy. Linux CANFAR SHA `934b02fa` (ATen polar FFT) is behind healpy (nside=128 `map2alm_spin` ~7×, `alm2map_spin` ~11×). Fused SHT is CPU C++; GPU tensors are host-copied. Do not start a fused CUDA SHT until Linux CPU is competitive.
+- **Sparse `get_values`**: Mac matches healsparse at 50k nest queries. Linux CANFAR SHA `934b02fa` interleaved is 0.84× (nside=256, 200k) and 0.95× (nside=512, 500k). Not claimed on Linux.
 - **WCS (Small-N)**: Some forward small-N rows still lag vs `pyast` (legacy), especially away from the center-equator projections. `bench_wcs.py` now tracks the CPU center-helper crossover explicitly through `center_cpp_*` fields for `AIT/CAR/CEA/HPX/MER/SFL`. The CPU fused path (`TORCHSKY_WCS_FUSED=1`) includes **ARC** alongside TAN/SIN and the other supported codes; re-profile after native extension rebuilds. For torchsky-vs-Astropy timing on **two-arg vs stacked `(N,2)` vs `compile()`** for both **pixel→world and world→pixel**, use `bench_wcs_small_n_paths.py`; pytest gates stacked and compiled-stacked parity (forward and inverse) in `tests/test_wcs_parity.py`.
 - **ZPN/AIT Projections**: Slight visible deficits in intermediate size tiers.

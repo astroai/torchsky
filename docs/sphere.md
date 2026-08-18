@@ -463,7 +463,7 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API
 | Area | Limitation |
 |---|---|
 | `map2alm` weights | `use_weights` / `use_pixel_weights` apply computed RING quadrature (mean 1), exact for even Legendre moments through `l = 2*min(nside,128)-2`. They do not load HEALPix full-pixel or ring-weight FITS tables, so they do not match healpy's packaged `weight_ring_n*.fits`. The two flags are mutually exclusive. |
-| `alm2map_spin` | Fused Ishioka CPU synthesis still ~1.2–1.4× healpy on Mac after the 2026-08 Ishioka work. Linux CANFAR (SHA `9e65cbc`, scalar polar FFT) is 3–8× healpy depending on nside. Do not claim Linux SHT. Set `TORCHSKY_SPIN_ISHIOKA=0` at call time if Ishioka loses to Wigner. Polar RING FFTs use ATen FFT; GPU map tensors are still copied to host. |
+| `alm2map_spin` | Fused Ishioka CPU synthesis still ~1.2–1.4× healpy on Mac after the 2026-08 Ishioka work. Linux CANFAR SHA `934b02fa` (ATen polar FFT) is ~11× healpy at nside=128. Do not claim Linux SHT. Set `TORCHSKY_SPIN_ISHIOKA=0` at call time if Ishioka loses to Wigner. Polar RING FFTs use ATen FFT; GPU map tensors are still copied to host. |
 | Pixel windows | Packaged tables cover standard HEALPix NSIDE range. Higher NSIDE may require external data. |
 | Device | See the device table below. GPU SHT inputs are copied to host; fused Ishioka/Wigner is CPU C++. |
 | s2fft | Optional bench/test peer only. Native HEALPix has no sampling theorem; do not use `method="jax_healpy"` as an oracle. |

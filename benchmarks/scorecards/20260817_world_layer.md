@@ -1,7 +1,8 @@
 # World-layer scorecard (2026-08-17)
 
 Linux CANFAR trees fetched from `vos:sfabbro/torchsky-runs/` after SHA
-`9e65cbc`. Mac CPU rows from
+`9e65cbc` (morning), then gist fallback after SHA `934b02fa` (evening ATen
+polar FFT). Mac CPU rows from
 [`20260816_world_layer.md`](20260816_world_layer.md) still stand. Do not
 treat the Linux SHT or `get_values` rows as claimed replacement.
 
@@ -16,6 +17,9 @@ Artifacts:
 | `sphere-spin-20260817-144235` | `e9sknnjh` | Failed Mac-tuned small-N ratio gate. Rel L2 not the failure. |
 | `sphere-geometry-20260817-144235` | `zh61gg5a` | Failed Mac-tuned geometry median-ratio gate. |
 | `sphere-only-20260817-144235` | `djwe8eiz` | Clone GitHub 503. Heartbeat only. |
+| `sphere-spectral-20260817-224511` | `p32plf3x` | `rc=0` on `934b02fa`. VOS registry empty in the container. Gist [5551db4f](https://gist.github.com/5551db4f802794840897a3d592ba35d7). |
+| `sphere-sparse-20260817-224511` | `biy3ghbw` | `rc=0`. Gist [ccf7c46a](https://gist.github.com/ccf7c46ab57b90e9646468174820b551). Interleaved, 200k/500k queries. |
+| `sphere-spin-20260817-224511` | `i8og8vh0` | `rc=0`. Gist [682ae966](https://gist.github.com/682ae9667ee6c0dc5a245b7bb034ff92). Rel L2 clean; throughput gate off. |
 
 ## WCS (Linux)
 
@@ -48,6 +52,42 @@ Linux CPU row is competitive.
 Mac (2026-08-16): Ishioka `map2alm_spin` leads healpy; `alm2map_spin` still
 ~1.2–1.4×. Unchanged.
 
+## Spin SHT vs healpy (Linux CPU, SHA `934b02fa`, ATen polar FFT)
+
+Same dedicated spectral script. Artifacts are the gists above (VOS PUT failed:
+`ivo://cadc.nrc.ca/vault` missing from the container registry). Ratio is still
+healpy/torchsky.
+
+| nside | lmax | map2alm_spin torch / healpy | ratio | alm2map_spin torch / healpy | ratio |
+|---|---:|---|---:|---|---:|
+| 32 | 32 | 1.22 ms / 0.326 ms | 0.27 | 1.81 ms / 0.256 ms | 0.14 |
+| 64 | 63 | 4.30 ms / 1.01 ms | 0.24 | 8.66 ms / 0.910 ms | 0.11 |
+| 128 | 128 | 23.2 ms / 3.18 ms | 0.14 | 30.7 ms / 2.70 ms | 0.088 |
+
+nside=128 torch is slower than the morning `9e65cbc` row, and healpy on this
+job is also faster, so this is not a same-machine ATen delta. It is the
+post-ATen Linux row. Healpy stays the SHT speed peer. Do not claim Linux SHT.
+Do not start a fused CUDA SHT.
+
+Spin matrix (`--no-throughput-gate`): small-N median ratios ~0.07–0.10;
+extended large-N `map2alm_spin` 0.118, `alm2map_spin` 0.107. Rel L2 failures
+empty.
+
+## Sparse maps vs healsparse (Linux CPU, SHA `934b02fa`, interleaved)
+
+10% random coverage, nest-aligned queries, **interleaved** timing, full
+`--n-queries` (200k at nside=256, 500k at nside=512). Ratio is
+healsparse_time / torchsky_time.
+
+| nside | queries | get_values torch / hs | ratio | ud_grade torch / hs | ratio |
+|---|---:|---|---:|---|---:|
+| 256 | 200k | 1.37 ms / 1.15 ms | 0.84 | 5.42 ms / 19.2 ms | 3.54 |
+| 512 | 500k | 5.77 ms / 5.50 ms | 0.95 | 33.3 ms / 90.8 ms | 2.73 |
+
+Linux `get_values` is still behind; do not claim it. Coverage-block `ud_grade`
+leads this interleaved healsparse job. Valid-pixel values remain `maxabs 0.0`.
+FITS `.hs` is still a hole.
+
 ## Sparse maps vs healsparse (Linux CPU, dedicated sparse job)
 
 10% random coverage, nest-aligned queries, **50k cap**, separate medians
@@ -60,9 +100,8 @@ Mac (2026-08-16): Ishioka `map2alm_spin` leads healpy; `alm2map_spin` still
 
 Mac (2026-08-16, interleaved, 50k): `get_values` ~1.03×, `ud_grade`
 ~1.02–1.09×. Linux `get_values` is behind at this N; do not claim it.
-Linux `ud_grade` is ahead on this job, but the protocol is not the Mac
-interleaved one, so it is not claimed. Valid-pixel values remain `maxabs
-0.0`. FITS `.hs` is still a hole.
+Linux `ud_grade` on this morning job used separate medians; the evening
+`934b02fa` job is interleaved (see above). FITS `.hs` is still a hole.
 
 ## Geometry (Linux CPU, fat sphere job)
 
