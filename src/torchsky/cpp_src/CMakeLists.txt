@@ -15,6 +15,17 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     add_compile_options(-O3)
 endif()
 
+# Ishioka k-step has a hand AVX2+FMA path; enable it on x86_64 Linux CANFAR nodes.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag("-mavx2" TORCHSKY_HAS_AVX2)
+    check_cxx_compiler_flag("-mfma" TORCHSKY_HAS_FMA)
+    if(TORCHSKY_HAS_AVX2 AND TORCHSKY_HAS_FMA)
+        add_compile_options(-mavx2 -mfma)
+        message(STATUS "Ishioka k-step: enabling -mavx2 -mfma")
+    endif()
+endif()
+
 # Enable IPO/LTO when available (portable opt-in)
 include(CheckIPOSupported)
 check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)

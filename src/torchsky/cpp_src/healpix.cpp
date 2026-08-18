@@ -17,6 +17,8 @@
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
+#elif defined(__AVX2__)
+#include <immintrin.h>
 #endif
 
 #include <ATen/Parallel.h>
@@ -4742,6 +4744,39 @@ static inline void ishioka_k_step_rings_impl(
                 vst1q_f64(pold + off, vp);
                 vst1q_f64(p + off, pnew);
             }
+        }
+    }
+#elif defined(__AVX2__) && defined(__FMA__)
+    const __m256d vwe0r = _mm256_set1_pd(we0r);
+    const __m256d vwe0i = _mm256_set1_pd(we0i);
+    const __m256d vwe1r = _mm256_set1_pd(we1r);
+    const __m256d vwe1i = _mm256_set1_pd(we1i);
+    const __m256d vwo0r = _mm256_set1_pd(wo0r);
+    const __m256d vwo0i = _mm256_set1_pd(wo0i);
+    const __m256d vwo1r = _mm256_set1_pd(wo1r);
+    const __m256d vwo1i = _mm256_set1_pd(wo1i);
+    const __m256d vak = _mm256_set1_pd(ak);
+    const __m256d vbk = _mm256_set1_pd(bk);
+    for (; i + 4 <= n; i += 4) {
+        const __m256d vp = _mm256_loadu_pd(p + i);
+        _mm256_storeu_pd(s0r + i, _mm256_fmadd_pd(vwe0r, vp, _mm256_loadu_pd(s0r + i)));
+        _mm256_storeu_pd(s0i + i, _mm256_fmadd_pd(vwe0i, vp, _mm256_loadu_pd(s0i + i)));
+        _mm256_storeu_pd(s1r + i, _mm256_fmadd_pd(vwe1r, vp, _mm256_loadu_pd(s1r + i)));
+        _mm256_storeu_pd(s1i + i, _mm256_fmadd_pd(vwe1i, vp, _mm256_loadu_pd(s1i + i)));
+        if constexpr (DoOdd) {
+            _mm256_storeu_pd(a0r + i, _mm256_fmadd_pd(vwo0r, vp, _mm256_loadu_pd(a0r + i)));
+            _mm256_storeu_pd(a0i + i, _mm256_fmadd_pd(vwo0i, vp, _mm256_loadu_pd(a0i + i)));
+            _mm256_storeu_pd(a1r + i, _mm256_fmadd_pd(vwo1r, vp, _mm256_loadu_pd(a1r + i)));
+            _mm256_storeu_pd(a1i + i, _mm256_fmadd_pd(vwo1i, vp, _mm256_loadu_pd(a1i + i)));
+        }
+        if constexpr (Step) {
+            const __m256d pnew = _mm256_fmadd_pd(
+                _mm256_fmadd_pd(vak, _mm256_loadu_pd(mu2 + i), vbk),
+                vp,
+                _mm256_loadu_pd(pold + i)
+            );
+            _mm256_storeu_pd(pold + i, vp);
+            _mm256_storeu_pd(p + i, pnew);
         }
     }
 #endif
