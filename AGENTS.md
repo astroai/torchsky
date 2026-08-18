@@ -15,7 +15,7 @@ This file gives repository-specific operating guidance for coding agents and mai
 - compatibility layers with established astronomy libraries, without forcing primitive-for-primitive mimicry where a higher-level compatibility surface is better
 
 FITS file and table I/O is owned by the sibling
-[`torchfits`](https://github.com/sfabbro/torchfits) package (a required runtime
+[`torchfits`](https://github.com/astroai/torchfits) package (a required runtime
 dependency). `torchsky` owns sky coordinates, geometry, maps, observation
 operators, scenes, and field models. Exchange tensors, header mappings, table
 batches, and small protocols across this boundary; `torchsky` does not contain
