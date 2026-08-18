@@ -13,16 +13,19 @@ project root (top project priority); no config is needed for that.
 Web UI (needs localhost — not available on CANFAR headless sessions):
 
 ```bash
-npx @deepseek-ai/dsh web --patch .dsh/cordis.patch.yml
+npx -y @deepseek-ai/dsh -- web --patch .dsh/cordis.patch.yml
 ```
 
 Headless one-shot (CANFAR-friendly, no web server):
 
 ```bash
 export DEEPSEEK_API_KEY=sk-...
-npx @deepseek-ai/dsh --profile headless --patch .dsh/cordis.patch.yml \
+npx -y @deepseek-ai/dsh -- --profile headless --patch .dsh/cordis.patch.yml \
   "Run wcs-sphere-acceptance and summarize regressions vs the committed baselines"
 ```
+
+> The `--` after the package name passes dsh flags through npm's argument
+> parser (without it, npm ≥ 10 swallows `--profile`/`--patch`).
 
 Environment knobs:
 
