@@ -189,7 +189,7 @@ sphere-bench-pipeline-gate = "pixi run -e sphere-bench python benchmarks/bench_p
 platforms = ["osx-arm64", "linux-64"]
 
 [feature.prod.dependencies]
-python = ">=3.12,<3.14"
+python = "3.13.*"
 
 [feature.prod.pypi-dependencies]
 torchfits = ">=1.0.0rc4"
@@ -239,7 +239,7 @@ mocpy = ">=0.13"
 platforms = ["linux-64-cuda"]
 
 [feature.cuda.dependencies]
-python = ">=3.12,<3.14"
+python = "3.13.*"
 pytorch-gpu = ">=2.10,<2.11"
 cuda-nvcc = "12.9.*"
 cuda-nvrtc-dev = "12.9.*"
@@ -259,7 +259,7 @@ pillow = ">=10"
 psutil = ">=5.9"
 
 [feature.map-compat.dependencies]
-python = "3.12.*"
+python = "3.13.*"
 cmake = ">=3.21"
 ninja = ">=1.10"
 scikit-build-core = ">=1.0.0"
