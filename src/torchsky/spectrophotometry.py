@@ -300,9 +300,12 @@ def synthetic_photometry(
         or not torch.all(waves[:, 1:] > waves[:, :-1])
     ):
         raise ValueError("spectrum wavelength must be finite and strictly increasing")
-    if not torch.all(torch.isfinite(flux)):
+    flux_ok = torch.isfinite(batch)
+    if mask_t is not None:
+        flux_ok = flux_ok | ~mask_t
+    if not bool(torch.all(flux_ok)):
         raise ValueError(
-            "flux_lambda must be finite; represent missing bands by a missing spectrum"
+            "flux_lambda must be finite; represent missing samples with mask=False"
         )
 
     if shared:

@@ -24,8 +24,14 @@ Use [wcs.md](wcs.md) for FITS-WCS spectral coordinate transforms and
 - Sample-wise redshift helpers live in `torchsky.redshift` and are re-exported
   here: `shift_wavelength`, `dimming_f_lambda` (`F_λ` densities, `1/(1+z)`),
   and `dimming_tolman_sb` (surface brightness, `(1+z)^-4`). Do not mix them.
+  Rapidity helpers (`zeta_from_redshift`, `compose_rapidities`,
+  `shift_ln_wavelength`) and `los_barycentric_beta` live in the same module:
+  `ln λ_topo = ln λ_rest + ζ_sys + ζ_BERV`, with `v_BERV > 0` when the observer
+  recedes. LOSVD and published-`R` LSF share `convolve_log_lambda` /
+  `sigma_R_kms` (`σ = c / (2.355 R)`).
 - Passbands and synthetic photometry are `torchsky.spectrophotometry`.
-  Dust laws are `torchsky.extinction`. Distances are `torchsky.cosmology`.
+  Dust laws are `torchsky.extinction` (CCM89, O'Donnell94, Fitzpatrick 1999,
+  Calzetti 2000). Distances are `torchsky.cosmology`.
 - This surface is experimental; generic FITS I/O belongs to `torchfits`.
 
 ## Recipes
@@ -83,6 +89,9 @@ covered output bins are marked in the returned mask rather than renormalized.
 - `flux_conserving_rebin(...)`
 - `relativistic_doppler_shift(...)`
 - `shift_wavelength(...)`, `dimming_f_lambda(...)`, `dimming_tolman_sb(...)`
+- `zeta_from_redshift(...)`, `compose_rapidities(...)`, `shift_ln_wavelength(...)`
+- `los_barycentric_beta(...)`
+- `convolve_log_lambda(...)`, `sigma_R_kms(...)`
 - `write_cube_fits(...)` — write a `(L, H, W)` tensor with a 3-axis FITS WCS
   (spectral axis `CTYPE3`); pair with `SpectralReader.read_data_cube` for round-trips.
 

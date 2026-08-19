@@ -133,6 +133,19 @@ def test_mask_does_not_count_as_filter_coverage() -> None:
     assert covered.valid.item()
 
 
+def test_mask_allows_nan_on_dropped_samples() -> None:
+    band = Passband(
+        torch.tensor([4000.0, 5000.0, 6000.0]), torch.tensor([0.0, 1.0, 0.0])
+    )
+    wavelength = torch.linspace(4000.0, 6000.0, 21)
+    flux = torch.ones_like(wavelength)
+    mask = torch.ones_like(wavelength, dtype=torch.bool)
+    mask[10] = False
+    flux[10] = torch.nan
+    result = synthetic_photometry(wavelength, flux, band, mask=mask, min_coverage=0.0)
+    assert torch.isfinite(result.value).item()
+
+
 def test_mask_hole_is_not_interpolated_as_coverage() -> None:
     band = Passband(
         torch.tensor([4000.0, 5000.0, 6000.0]), torch.tensor([0.0, 1.0, 0.0])

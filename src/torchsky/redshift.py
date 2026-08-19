@@ -18,6 +18,8 @@ from typing import Any
 import torch
 from torch import Tensor
 
+from .wcs.iau2006 import C_M_S, earth_barycentric_velocity_icrs
+
 C_KM_S = 299792.458
 
 V_KIND_KMS = 0
@@ -72,9 +74,7 @@ def one_plus_z_from_beta(beta: Tensor, relativistic: bool = True) -> Tensor:
     return 1.0 + beta
 
 
-def one_plus_z_from_velocity_kms(
-    v_kms: Tensor, relativistic: bool = True
-) -> Tensor:
+def one_plus_z_from_velocity_kms(v_kms: Tensor, relativistic: bool = True) -> Tensor:
     return one_plus_z_from_beta(v_kms / C_KM_S, relativistic=relativistic)
 
 
@@ -82,15 +82,11 @@ def one_plus_z_from_redshift(z: Tensor) -> Tensor:
     return 1.0 + z
 
 
-def redshift_from_velocity_kms(
-    v_kms: Tensor, relativistic: bool = True
-) -> Tensor:
+def redshift_from_velocity_kms(v_kms: Tensor, relativistic: bool = True) -> Tensor:
     return one_plus_z_from_velocity_kms(v_kms, relativistic=relativistic) - 1.0
 
 
-def velocity_kms_from_redshift(
-    z: Tensor, relativistic: bool = True
-) -> Tensor:
+def velocity_kms_from_redshift(z: Tensor, relativistic: bool = True) -> Tensor:
     if relativistic:
         one_plus_z = 1.0 + z
         beta = (one_plus_z.pow(2) - 1.0) / torch.clamp(
@@ -134,9 +130,7 @@ def convert_velocity_kind(  # noqa: PLR0911
     return value
 
 
-def one_plus_z_from_kind(
-    value: Tensor, kind: Any, relativistic: bool = True
-) -> Tensor:
+def one_plus_z_from_kind(value: Tensor, kind: Any, relativistic: bool = True) -> Tensor:
     kind_code = normalize_v_kind(kind)
     if kind_code == V_KIND_KMS:
         return one_plus_z_from_velocity_kms(value, relativistic=relativistic)
@@ -179,6 +173,68 @@ def shift_wavelength(lambda_rest: Tensor, one_plus_z: Tensor | float) -> Tensor:
         torch.as_tensor(one_plus_z).to(device=lambda_rest.device)
     )
     return lambda_rest * factor
+
+
+def zeta_from_redshift(z: Tensor | float) -> Tensor:
+    """Rapidity ``ζ = ln(1+z)``. ``z=0`` is zero."""
+    z_t = torch.as_tensor(z)
+    return torch.log(require_one_plus_z(1.0 + z_t))
+
+
+def zeta_from_beta(beta: Tensor | float) -> Tensor:
+    """Peculiar rapidity ``ζ_pec = atanh(β)``."""
+    beta_t = torch.as_tensor(beta)
+    return torch.atanh(torch.clamp(beta_t, min=-0.99999, max=0.99999))
+
+
+def zeta_from_velocity_kms(v_kms: Tensor | float) -> Tensor:
+    """``ζ_pec = atanh(v/c)`` for a line-of-sight velocity in km/s."""
+    return zeta_from_beta(torch.as_tensor(v_kms) / C_KM_S)
+
+
+def one_plus_z_from_zeta(zeta: Tensor | float) -> Tensor:
+    """``1+z = exp(ζ)``."""
+    return torch.exp(torch.as_tensor(zeta))
+
+
+def compose_rapidities(*zetas: Tensor | float) -> Tensor:
+    """Add rapidities. Equivalent to multiplying the ``(1+z)`` factors."""
+    if not zetas:
+        raise TypeError("compose_rapidities requires at least one rapidity")
+    total = torch.as_tensor(zetas[0])
+    for zeta in zetas[1:]:
+        total = total + torch.as_tensor(zeta).to(device=total.device, dtype=total.dtype)
+    return total
+
+
+def shift_ln_wavelength(ln_lambda: Tensor, zeta: Tensor | float) -> Tensor:
+    """``ln λ' = ln λ + ζ``. Formulation Step 3 is ``ln λ_topo = ln λ_rest + ζ_sys + ζ_BERV``."""
+    shift = torch.as_tensor(zeta).to(device=ln_lambda.device, dtype=ln_lambda.dtype)
+    while shift.ndim < ln_lambda.ndim:
+        shift = shift.unsqueeze(-1)
+    return ln_lambda + shift
+
+
+def los_barycentric_beta(unit_xyz: Tensor, tt_mjd: Tensor) -> Tensor:
+    """Earth barycentric LOS velocity as ``β = v/c``.
+
+    ``unit_xyz`` is the ICRS unit vector toward the source. Positive ``β``
+    means the observer is receding from the source (redshift). USPM uses the
+    same sign: ``v_BERV > 0`` when the observer recedes. That is
+    ``β = -(v_earth · n̂) / c`` with ``v_earth`` from
+    :func:`torchsky.wcs.iau2006.earth_barycentric_velocity_icrs`.
+    """
+    n = torch.as_tensor(unit_xyz)
+    norm = torch.linalg.vector_norm(n, dim=-1, keepdim=True).clamp_min(1.0e-15)
+    n = n / norm
+    velocity = earth_barycentric_velocity_icrs(torch.as_tensor(tt_mjd))
+    velocity = velocity.to(device=n.device, dtype=n.dtype)
+    while velocity.ndim < n.ndim:
+        velocity = velocity.unsqueeze(0)
+    while n.ndim < velocity.ndim:
+        n = n.unsqueeze(0)
+    approaching = (velocity * n).sum(dim=-1)
+    return -approaching / C_M_S
 
 
 def dimming_f_lambda(one_plus_z: Tensor | float) -> Tensor:

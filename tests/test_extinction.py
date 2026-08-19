@@ -8,8 +8,11 @@ import torch
 from torchsky.extinction import (
     a_lambda,
     apply_extinction,
+    calzetti,
     ccm89,
     ccm89_ab,
+    fitzpatrick99,
+    k_lambda,
     odonnell94,
     transmission,
 )
@@ -136,3 +139,47 @@ def test_dust_extinction_v_band_point() -> None:
     got = float(a_lambda(torch.tensor([wave_aa]), a_v=1.0, r_v=3.1, law="ccm89"))
     ref = float(CCM89(Rv=3.1)(wave_aa * u.Angstrom))
     assert got == pytest.approx(ref, rel=2e-2)
+
+
+def test_fitzpatrick99_matches_kbarbary_optical_anchors() -> None:
+    # kbarbary/extinction Fitzpatrick99(3.1)([3000, 4000], 1.0)
+    wave = torch.tensor([3000.0, 4000.0])
+    got = fitzpatrick99(wave, torch.tensor(1.0), 3.1)
+    torch.testing.assert_close(
+        got,
+        torch.tensor([1.79939955, 1.42338583]),
+        atol=5e-3,
+        rtol=0,
+    )
+
+
+def test_calzetti_v_is_a_v() -> None:
+    wave = torch.tensor([5500.0])
+    mag = calzetti(wave, torch.tensor(1.0))
+    assert mag.item() == pytest.approx(1.0, abs=0.02)
+    k = k_lambda(wave, law="calzetti", r_v=4.05)
+    torch.testing.assert_close(k, mag)
+
+
+def test_host_and_mw_laws_differ_in_uv() -> None:
+    uv = torch.tensor([2000.0])
+    f99 = fitzpatrick99(uv, torch.tensor(1.0), 3.1)
+    cal = calzetti(uv, torch.tensor(1.0))
+    ccm = ccm89(uv, torch.tensor(1.0), 3.1)
+    assert f99.item() != pytest.approx(cal.item(), rel=0.02)
+    assert f99.item() != pytest.approx(ccm.item(), rel=0.02)
+
+
+def test_f99_optional_dust_extinction_parity() -> None:
+    pytest.importorskip("dust_extinction")
+    pytest.importorskip("astropy.units")
+    from astropy import units as u
+    from dust_extinction.parameter_averages import F99
+
+    wave = torch.tensor([1500.0, 3000.0, 5500.0, 8000.0])
+    got = fitzpatrick99(wave, torch.tensor(1.0), 3.1)
+    ref = torch.tensor(
+        [float(F99(Rv=3.1)(float(w) * u.Angstrom)) for w in wave],
+        dtype=got.dtype,
+    )
+    torch.testing.assert_close(got, ref, atol=2e-2, rtol=2e-2)

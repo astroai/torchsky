@@ -9,14 +9,23 @@ from torchsky.redshift import (
     C_KM_S,
     apply_redshift,
     apply_redshift_f_lambda,
+    compose_rapidities,
     convert_velocity_kind,
     dimming_f_lambda,
     dimming_tolman_sb,
+    los_barycentric_beta,
     one_plus_z_from_beta,
     one_plus_z_from_velocity_kms,
+    one_plus_z_from_zeta,
     require_one_plus_z,
+    shift_ln_wavelength,
     shift_wavelength,
+    zeta_from_beta,
+    zeta_from_redshift,
+    zeta_from_velocity_kms,
 )
+from torchsky.wcs.iau2006 import C_M_S, earth_barycentric_velocity_icrs
+from torchsky.wcs.spectral import air_wavelength_to_vacuum
 
 
 def test_zero_velocity_is_identity() -> None:
@@ -31,7 +40,9 @@ def test_z_v_beta_round_trip() -> None:
     z = torch.tensor([0.0, 0.1, 1.0])
     v = convert_velocity_kind(z, "redshift", "km/s")
     beta = convert_velocity_kind(z, "redshift", "beta")
-    torch.testing.assert_close(convert_velocity_kind(v, "km/s", "redshift"), z, atol=1e-6, rtol=1e-5)
+    torch.testing.assert_close(
+        convert_velocity_kind(v, "km/s", "redshift"), z, atol=1e-6, rtol=1e-5
+    )
     torch.testing.assert_close(
         convert_velocity_kind(beta, "beta", "redshift"), z, atol=1e-6, rtol=1e-5
     )
@@ -80,3 +91,54 @@ def test_shift_wavelength_and_require() -> None:
     )
     with pytest.raises(ValueError, match="positive"):
         require_one_plus_z(0.0)
+
+
+def test_z_zero_rapidity_is_identity() -> None:
+    z = torch.zeros(3)
+    torch.testing.assert_close(zeta_from_redshift(z), torch.zeros(3))
+    ln_lambda = torch.log(torch.tensor([5000.0, 6000.0]))
+    torch.testing.assert_close(shift_ln_wavelength(ln_lambda, 0.0), ln_lambda)
+    torch.testing.assert_close(
+        one_plus_z_from_zeta(zeta_from_redshift(0.0)), torch.tensor(1.0)
+    )
+
+
+def test_rapidity_is_additive_versus_multiplicative_one_plus_z() -> None:
+    z1 = torch.tensor([0.1, 0.3])
+    z2 = torch.tensor([0.2, -0.05])
+    composed = compose_rapidities(zeta_from_redshift(z1), zeta_from_redshift(z2))
+    torch.testing.assert_close(one_plus_z_from_zeta(composed), (1.0 + z1) * (1.0 + z2))
+    torch.testing.assert_close(
+        zeta_from_beta(torch.tensor(0.01)),
+        zeta_from_velocity_kms(0.01 * C_KM_S),
+        atol=1e-6,
+        rtol=1e-6,
+    )
+
+
+def test_los_barycentric_beta_round_trip_on_known_vector() -> None:
+    tt_mjd = torch.tensor(58000.0)
+    unit = torch.tensor([0.0, 0.0, 1.0])
+    velocity = earth_barycentric_velocity_icrs(tt_mjd)
+    expected = -(velocity * unit).sum() / C_M_S
+    got = los_barycentric_beta(unit, tt_mjd)
+    torch.testing.assert_close(got, expected)
+    # Receding (positive β) when Earth velocity is anti-parallel to the source.
+    approaching = torch.nn.functional.normalize(velocity, dim=-1)
+    receding = -approaching
+    assert float(los_barycentric_beta(receding, tt_mjd)) > 0
+    assert float(los_barycentric_beta(approaching, tt_mjd)) < 0
+
+
+def test_air_vac_then_rapidity_does_not_mix_frames() -> None:
+    # Air→vac is a wavelength-dependent index. Convert the published
+    # (observed) grid first; do not apply n(λ) after a rest-frame shift.
+    air_obs = torch.tensor([1500.0, 3500.0])
+    one_plus_z = 1.5
+    vac_obs = air_wavelength_to_vacuum(air_obs, unit="Angstrom")
+    rest_after_vac = vac_obs / one_plus_z
+    rest_before_vac = air_wavelength_to_vacuum(air_obs / one_plus_z, unit="Angstrom")
+    assert not torch.allclose(rest_after_vac, rest_before_vac, rtol=1e-6, atol=0)
+    zeta = zeta_from_redshift(one_plus_z - 1.0)
+    shifted = torch.exp(shift_ln_wavelength(torch.log(vac_obs), -zeta))
+    torch.testing.assert_close(shifted, rest_after_vac)

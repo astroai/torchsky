@@ -26,6 +26,8 @@ def test_top_level_namespaces_expose_science_modules() -> None:
         "sphere",
         "spectral",
         "spectrophotometry",
+        "redshift",
+        "log_lambda",
         "extinction",
         "cosmology",
         "map",

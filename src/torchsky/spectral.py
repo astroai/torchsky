@@ -16,6 +16,10 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
 
+from .log_lambda import (
+    convolve_log_lambda as convolve_log_lambda,
+    sigma_R_kms as sigma_R_kms,
+)
 from .redshift import (
     C_KM_S as C_KM_S,
     V_KIND_BETA as V_KIND_BETA,
@@ -24,19 +28,26 @@ from .redshift import (
     apply_redshift as apply_redshift,
     apply_redshift_f_lambda as apply_redshift_f_lambda,
     beta_from_redshift as beta_from_redshift,
+    compose_rapidities as compose_rapidities,
     convert_velocity_kind as convert_velocity_kind,
     dimming_f_lambda as dimming_f_lambda,
     dimming_tolman_sb as dimming_tolman_sb,
+    los_barycentric_beta as los_barycentric_beta,
     normalize_v_kind as normalize_v_kind,
     one_plus_z_from_beta as one_plus_z_from_beta,
     one_plus_z_from_codes as one_plus_z_from_codes,
     one_plus_z_from_kind as one_plus_z_from_kind,
     one_plus_z_from_redshift as one_plus_z_from_redshift,
     one_plus_z_from_velocity_kms as one_plus_z_from_velocity_kms,
+    one_plus_z_from_zeta as one_plus_z_from_zeta,
     redshift_from_velocity_kms as redshift_from_velocity_kms,
     require_one_plus_z as require_one_plus_z,
+    shift_ln_wavelength as shift_ln_wavelength,
     shift_wavelength as shift_wavelength,
     velocity_kms_from_redshift as velocity_kms_from_redshift,
+    zeta_from_beta as zeta_from_beta,
+    zeta_from_redshift as zeta_from_redshift,
+    zeta_from_velocity_kms as zeta_from_velocity_kms,
 )
 from .wcs import WCS
 from .wcs.spectral import (

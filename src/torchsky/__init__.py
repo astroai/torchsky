@@ -20,6 +20,8 @@ _NAMESPACES: dict[str, str] = {
     "sphere": "torchsky.sphere",
     "spectral": "torchsky.spectral",
     "spectrophotometry": "torchsky.spectrophotometry",
+    "redshift": "torchsky.redshift",
+    "log_lambda": "torchsky.log_lambda",
     "extinction": "torchsky.extinction",
     "cosmology": "torchsky.cosmology",
     "map": "torchsky.map",

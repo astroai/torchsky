@@ -23,8 +23,9 @@ For the high-level design target and refactor rules, see
 | Work with scenes and observation facades | `torchsky.scene` | [scene.md](scene.md) |
 | Crossmatch catalogs | `torchsky.catalogs` | [catalogs.md](catalogs.md) |
 | Work with spectra and cubes | `torchsky.spectral` | [spectral.md](spectral.md) |
+| Sample-wise redshift, BERV, lnλ LSF | `torchsky.redshift`, `torchsky.log_lambda` | [spectral.md](spectral.md) |
 | Synthetic photometry / passbands | `torchsky.spectrophotometry` | [spectral.md](spectral.md) |
-| Dust laws (CCM89 / O'Donnell) | `torchsky.extinction` | [spectral.md](spectral.md) |
+| Dust laws (CCM89 / O'Donnell / F99 / Calzetti) | `torchsky.extinction` | [spectral.md](spectral.md) |
 | Flat ΛCDM / wCDM distances | `torchsky.cosmology` | [spectral.md](spectral.md) |
 | Build tensor transforms and training inputs | `torchsky.transforms` plus reader-defined datasets | [ml.md](ml.md) |
 | Use field encoders | `torchsky.encoders` | [encoders.md](encoders.md) |
