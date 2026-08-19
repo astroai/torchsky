@@ -39,6 +39,8 @@ fi
 IMAGE="${CONTAINER_IMAGE:-astroai/notebook:latest}"
 CPU="${TORCHSKY_CANFAR_CPU:-8}"
 MEMORY="${TORCHSKY_CANFAR_MEMORY:-32}"
+# TORCHSKY_SPIN_THREADS matches --cpu. SpinMPool used to follow host
+# hardware_concurrency and oversubscribe Skaha CFS quota.
 STAMP="$(date -u +%Y%m%d-%H%M%S)"
 
 if ! command -v canfar >/dev/null; then
@@ -81,6 +83,8 @@ launch_one() {
     --env "CONTAINER_IMAGE=${IMAGE}"
     --env "PYTHONUNBUFFERED=1"
     --env "TORCHSKY_SOURCE_ROOT=${src}"
+    --env "TORCHSKY_SPIN_THREADS=${CPU}"
+    --env "TORCHSKY_SHT_PROFILE=1"
   )
   if [[ -n "${gpu_flag}" ]]; then
     create_args+=(--gpu "${gpu_flag}")

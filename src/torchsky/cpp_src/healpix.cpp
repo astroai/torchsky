@@ -1,20 +1,28 @@
 #include <array>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <functional>
 #include <numeric>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 #include <map>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
+
+#if defined(__linux__)
+#include <sched.h>
+#endif
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
@@ -3030,12 +3038,66 @@ static inline double eval_wigner_d(const WignerDCoeffs& coeffs, double theta) {
     return eval_wigner_d_half(coeffs, std::sin(theta * 0.5), std::cos(theta * 0.5));
 }
 
+static bool sht_profile_enabled() {
+    const char* env = std::getenv("TORCHSKY_SHT_PROFILE");
+    return env != nullptr && env[0] != '\0' && env[0] != '0';
+}
+
+#if defined(__linux__)
+static int linux_affinity_cpu_count() {
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof(set), &set) != 0) {
+        return 0;
+    }
+    return CPU_COUNT(&set);
+}
+
+static int linux_cgroup_cpu_quota() {
+    // ponytail: Skaha --cpu is often CFS quota, not cpuset. Affinity then
+    // still reports host cores. Upgrade: read the job request if a runtime
+    // API exposes it.
+    {
+        std::ifstream in("/sys/fs/cgroup/cpu.max");
+        std::string quota;
+        std::string period;
+        if (in && (in >> quota >> period) && quota != "max") {
+            const long q = std::strtol(quota.c_str(), nullptr, 10);
+            const long p = std::strtol(period.c_str(), nullptr, 10);
+            if (q > 0 && p > 0) {
+                return std::max(1, static_cast<int>((q + p - 1) / p));
+            }
+        }
+    }
+    const char* quota_paths[] = {
+        "/sys/fs/cgroup/cpu/cpu.cfs_quota_us",
+        "/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_quota_us",
+    };
+    const char* period_paths[] = {
+        "/sys/fs/cgroup/cpu/cpu.cfs_period_us",
+        "/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_period_us",
+    };
+    for (int i = 0; i < 2; ++i) {
+        std::ifstream qf(quota_paths[i]);
+        std::ifstream pf(period_paths[i]);
+        long q = 0;
+        long p = 0;
+        if (qf && pf && (qf >> q) && (pf >> p) && q > 0 && p > 0) {
+            return std::max(1, static_cast<int>((q + p - 1) / p));
+        }
+    }
+    return 0;
+}
+#endif
+
 class SpinMPool {
  public:
   static SpinMPool& instance() {
     static SpinMPool pool;
     return pool;
   }
+
+  int nworkers() const { return nworkers_; }
 
   template <typename Fn>
   void parallel_m(int64_t mmax, Fn&& fn) {
@@ -3057,12 +3119,43 @@ class SpinMPool {
   }
 
  private:
+  static int choose_nworkers() {
+    if (const char* env = std::getenv("TORCHSKY_SPIN_THREADS"); env != nullptr && env[0] != '\0') {
+      return std::max(1, std::atoi(env));
+    }
+    int n = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+#if defined(__linux__)
+    const int aff = linux_affinity_cpu_count();
+    if (aff > 0) {
+      n = std::min(n, aff);
+    }
+    const int quota = linux_cgroup_cpu_quota();
+    if (quota > 0) {
+      n = std::min(n, quota);
+    }
+    const int aten = at::get_num_threads();
+    if (aten > 0) {
+      n = std::min(n, aten);
+    }
+#endif
+    return std::max(1, n);
+  }
+
   SpinMPool() {
-    nworkers_ = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    nworkers_ = choose_nworkers();
     remaining_.store(0, std::memory_order_relaxed);
     workers_.reserve(static_cast<size_t>(nworkers_));
     for (int i = 0; i < nworkers_; ++i) {
       workers_.emplace_back([this, i] { worker(i); });
+    }
+    if (sht_profile_enabled()) {
+      std::fprintf(
+          stderr,
+          "TORCHSKY_SHT_PROFILE SpinMPool workers=%d aten_threads=%d hw=%u\n",
+          nworkers_,
+          at::get_num_threads(),
+          std::thread::hardware_concurrency()
+      );
     }
   }
 
@@ -5128,6 +5221,56 @@ static inline void ishioka_k_reduce_rings_impl(
         wo1r += vaddvq_f64(acc_wo1r);
         wo1i += vaddvq_f64(acc_wo1i);
     }
+#elif defined(__AVX2__) && defined(__FMA__)
+    const auto hsum4 = [](__m256d v) -> double {
+        const __m128d lo = _mm256_castpd256_pd128(v);
+        const __m128d hi = _mm256_extractf128_pd(v, 1);
+        const __m128d s = _mm_add_pd(lo, hi);
+        const __m128d s2 = _mm_add_pd(s, _mm_shuffle_pd(s, s, 1));
+        return _mm_cvtsd_f64(s2);
+    };
+    __m256d acc_we0r = _mm256_setzero_pd();
+    __m256d acc_we0i = _mm256_setzero_pd();
+    __m256d acc_we1r = _mm256_setzero_pd();
+    __m256d acc_we1i = _mm256_setzero_pd();
+    __m256d acc_wo0r = _mm256_setzero_pd();
+    __m256d acc_wo0i = _mm256_setzero_pd();
+    __m256d acc_wo1r = _mm256_setzero_pd();
+    __m256d acc_wo1i = _mm256_setzero_pd();
+    const __m256d vak = _mm256_set1_pd(ak);
+    const __m256d vbk = _mm256_set1_pd(bk);
+    for (; i + 4 <= n; i += 4) {
+        const __m256d vp = _mm256_loadu_pd(p + i);
+        acc_we0r = _mm256_fmadd_pd(_mm256_loadu_pd(s0r + i), vp, acc_we0r);
+        acc_we0i = _mm256_fmadd_pd(_mm256_loadu_pd(s0i + i), vp, acc_we0i);
+        acc_we1r = _mm256_fmadd_pd(_mm256_loadu_pd(s1r + i), vp, acc_we1r);
+        acc_we1i = _mm256_fmadd_pd(_mm256_loadu_pd(s1i + i), vp, acc_we1i);
+        if constexpr (DoOdd) {
+            acc_wo0r = _mm256_fmadd_pd(_mm256_loadu_pd(a0r + i), vp, acc_wo0r);
+            acc_wo0i = _mm256_fmadd_pd(_mm256_loadu_pd(a0i + i), vp, acc_wo0i);
+            acc_wo1r = _mm256_fmadd_pd(_mm256_loadu_pd(a1r + i), vp, acc_wo1r);
+            acc_wo1i = _mm256_fmadd_pd(_mm256_loadu_pd(a1i + i), vp, acc_wo1i);
+        }
+        if constexpr (Step) {
+            const __m256d pnew = _mm256_fmadd_pd(
+                _mm256_fmadd_pd(vak, _mm256_loadu_pd(mu2 + i), vbk),
+                vp,
+                _mm256_loadu_pd(pold + i)
+            );
+            _mm256_storeu_pd(pold + i, vp);
+            _mm256_storeu_pd(p + i, pnew);
+        }
+    }
+    we0r += hsum4(acc_we0r);
+    we0i += hsum4(acc_we0i);
+    we1r += hsum4(acc_we1r);
+    we1i += hsum4(acc_we1i);
+    if constexpr (DoOdd) {
+        wo0r += hsum4(acc_wo0r);
+        wo0i += hsum4(acc_wo0i);
+        wo1r += hsum4(acc_wo1r);
+        wo1i += hsum4(acc_wo1i);
+    }
 #endif
     for (; i < n; ++i) {
         const double pj = p[i];
@@ -6327,6 +6470,8 @@ torch::Tensor healpix_spin_alm2map_ring_recurrence_cpu(
 
     const torch::Tensor& alms_ref = alm_minus.defined() ? keep0 : stacked;
     auto theta_c = theta.contiguous();
+    const bool profile = sht_profile_enabled();
+    const auto t0 = std::chrono::steady_clock::now();
     auto s_modes = healpix_spin_interpolate_recurrence_cpu(
         alms_ref,
         theta_c,
@@ -6342,15 +6487,33 @@ torch::Tensor healpix_spin_alm2map_ring_recurrence_cpu(
         n_eq,
         nph_eq
     );
+    const auto t1 = std::chrono::steady_clock::now();
+    torch::Tensor out;
     if (eq_spec.defined() && eq_spec.numel() > 0) {
-        return healpix_spin_synthesize_qu_cpu(
+        out = healpix_spin_synthesize_qu_cpu(
             s_modes, starts_c, lengths_c, eq_spec, eq_start, n_eq, nph_eq
         );
+    } else {
+        auto p_pm_pos = healpix_ring_fourier_synthesis_cpu(s_modes, starts_c, lengths_c);
+        out = spin_qu_from_ifft_cpu(
+            p_pm_pos, s_modes.select(0, 0), s_modes.select(0, 1), starts_c, lengths_c
+        );
     }
-    auto p_pm_pos = healpix_ring_fourier_synthesis_cpu(s_modes, starts_c, lengths_c);
-    return spin_qu_from_ifft_cpu(
-        p_pm_pos, s_modes.select(0, 0), s_modes.select(0, 1), starts_c, lengths_c
-    );
+    if (profile) {
+        const auto t2 = std::chrono::steady_clock::now();
+        const double interp_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        const double synth_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+        std::fprintf(
+            stderr,
+            "TORCHSKY_SHT_PROFILE alm2map_spin interpolate=%.3f ms synthesize=%.3f ms "
+            "spin_threads=%d aten_threads=%d\n",
+            interp_ms,
+            synth_ms,
+            SpinMPool::instance().nworkers(),
+            at::get_num_threads()
+        );
+    }
+    return out;
 }
 
 template <typename T>

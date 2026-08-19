@@ -15,7 +15,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     add_compile_options(-O3)
 endif()
 
-# Ishioka k-step has a hand AVX2+FMA path; enable it on x86_64 Linux CANFAR nodes.
+# Ishioka k-step / k-reduce have hand AVX2+FMA paths; enable them on x86_64 Linux.
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
     include(CheckCXXCompilerFlag)
     check_cxx_compiler_flag("-mavx2" TORCHSKY_HAS_AVX2)

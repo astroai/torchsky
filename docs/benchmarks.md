@@ -861,7 +861,7 @@ Win rate: **88.9%** (16/18). Large-N: **100%** (13/13). Two deficits listed belo
 | Domain | Case | Lag | Notes |
 |---|---|---:|---|
 | wcs | N &le; 10K forward/inverse (22 cases) | 1.0x &ndash; 2.9x | Fixed PyTorch dispatch overhead at small N (21 at N = 1K, 1 at N = 10K). All under 3 ms absolute. |
-| sphere | `alm2map_spin` CPU | Mac ~1.6× healpy at nside=128; Linux unclaimed | Same-machine Mac: nside=128 `alm2map_spin` 8.0 ms vs healpy 5.1 ms; `map2alm_spin` 5.3 ms vs 6.5 ms (leads). Polar CPU RING FFTs are in-process (not per-nph ATen). Linux CANFAR SHA `934b02fa` ATen-polar numbers (30.7 ms / ~11×) are stale. CUDA/MPS SHT stays on device on the ATen ring path; fused Ishioka/Wigner C++ stays CPU. |
+| sphere | `alm2map_spin` CPU | Mac ~1.6× healpy at nside=128; Linux unclaimed | Same-machine Mac: nside=128 `alm2map_spin` 8.0 ms vs healpy 5.1 ms; `map2alm_spin` 5.3 ms vs 6.5 ms (leads). Polar CPU RING FFTs are in-process (not per-nph ATen). Linux CANFAR SHA `425af888`: analysis 6.68 ms vs healpy 4.81 ms (~1.4×); synthesis 193 ms vs 3.74 ms (~52×). Stale vs `9e65cbc` synthesis ~3×. Working hypothesis is `SpinMPool` oversubscribe on host cores. CUDA/MPS SHT stays on device on the ATen ring path; fused Ishioka/Wigner C++ stays CPU. |
 | sphere | fused SHT on GPU | ATen ring on device; no fused CUDA Ishioka | Ishioka/Wigner is CPU C++. CUDA/MPS maps stay on device (ATen ring FFT). Do not claim a fused CUDA Ishioka kernel or Linux CPU SHT leadership. CANFAR CUDA/cuHPX spikes are separate (`scripts/launch_canfar_wcs_sphere.sh`). |
 
 ---
@@ -946,6 +946,8 @@ These are the **code defaults** when the environment variable is unset (see `tor
 | `TORCHSKY_SPIN_RING_INTERP_CONCAT_CPP` | `1` | Spin `alm2map` interpolate concat. |
 | `TORCHSKY_SPIN_RING_INTEGRATE_CONCAT_CPP` | `1` | Spin `map2alm` integrate concat. |
 | `TORCHSKY_SPIN_ISHIOKA` | `1` | Ishioka 2018 skip-2 for spin-1/2 CPU recurrence. Set `0` for Wigner. |
+| `TORCHSKY_SPIN_THREADS` | unset | Cap CPU spin `m`-pool workers. Unset uses affinity/cgroup/ATen on Linux. |
+| `TORCHSKY_SHT_PROFILE` | unset | stderr split of `alm2map_spin` interpolate vs synthesize. |
 | `TORCHSKY_SCALAR_MAP2ALM_RECURRENCE_CPP` | `1` | Scalar `map2alm` recurrence backend. |
 | `TORCHSKY_SCALAR_ALM2MAP_RECURRENCE_CPP` | `1` | Scalar `alm2map` recurrence backend. |
 | `TORCHSKY_SPIN_RING_AUTO_MIN_BYTES` | `0` | Minimum map size (bytes) before auto-selecting some ring fast paths; replays often set `32 MiB`. |
@@ -988,7 +990,7 @@ Run metadata:
 
 ### Known Deficits (Target for 0.4.0)
 
-- **Sphere (Spin Transforms)**: Mac fused Ishioka `map2alm_spin` leads healpy; `alm2map_spin` is ~1.6× healpy at nside=128 on that machine. Polar CPU RING FFTs are in-process again. Linux CANFAR SHA `934b02fa` ATen-polar scores (~7× / ~11×) are stale. Fused SHT C++ is CPU; CUDA/MPS use the ATen ring path on device. Do not claim a fused CUDA Ishioka kernel or Linux CPU SHT.
+- **Sphere (Spin Transforms)**: Mac fused Ishioka `map2alm_spin` leads healpy; `alm2map_spin` is ~1.6× healpy at nside=128 on that machine. Polar CPU RING FFTs are in-process again. Linux CANFAR SHA `425af888` analysis is ~1.4× healpy at nside=128; synthesis is ~52× (193 ms vs 3.74 ms) and worse than `9e65cbc` (~3×). Do not claim Linux CPU SHT. Fused SHT C++ is CPU; CUDA/MPS use the ATen ring path on device. Do not claim a fused CUDA Ishioka kernel.
 - **Sparse `get_values`**: Mac matches healsparse at 50k nest queries. Linux CANFAR SHA `934b02fa` interleaved is 0.84× (nside=256, 200k) and 0.95× (nside=512, 500k). Not claimed on Linux.
 - **WCS (Small-N)**: Some forward small-N rows still lag vs `pyast` (legacy), especially away from the center-equator projections. `bench_wcs.py` now tracks the CPU center-helper crossover explicitly through `center_cpp_*` fields for `AIT/CAR/CEA/HPX/MER/SFL`. The CPU fused path (`TORCHSKY_WCS_FUSED=1`) includes **ARC** alongside TAN/SIN and the other supported codes; re-profile after native extension rebuilds. For torchsky-vs-Astropy timing on **two-arg vs stacked `(N,2)` vs `compile()`** for both **pixel→world and world→pixel**, use `bench_wcs_small_n_paths.py`; pytest gates stacked and compiled-stacked parity (forward and inverse) in `tests/test_wcs_parity.py`.
 - **ZPN/AIT Projections**: Slight visible deficits in intermediate size tiers.
