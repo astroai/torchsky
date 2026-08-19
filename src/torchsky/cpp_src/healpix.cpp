@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <thread>
 #include <vector>
+#include <map>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
@@ -19,6 +20,10 @@
 #include <arm_neon.h>
 #elif defined(__AVX2__)
 #include <immintrin.h>
+#endif
+
+#if defined(__APPLE__)
+#include <Accelerate/Accelerate.h>
 #endif
 
 #include <ATen/Parallel.h>
@@ -1428,6 +1433,226 @@ torch::Tensor healpix_scalar_alm2map_direct_cpu(
     return out;
 }
 
+template <typename Fn>
+static void parallel_m_ranges(int64_t mmax, Fn&& fn);
+
+static const std::vector<std::complex<double>>& dft_twiddles(int n, int sign) {
+    // thread_local: polar FFTs run on SpinMPool workers; a shared mutex map would contend.
+    thread_local std::map<uint64_t, std::vector<std::complex<double>>> cache;
+    const uint64_t key =
+        (static_cast<uint64_t>(static_cast<uint32_t>(n)) << 1)
+        | static_cast<uint64_t>(sign < 0 ? 0 : 1);
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+        return it->second;
+    }
+    std::vector<std::complex<double>> w(static_cast<size_t>(n));
+    const double ang0 = static_cast<double>(sign) * 2.0 * PI / static_cast<double>(n);
+    for (int j = 0; j < n; ++j) {
+        const double th = ang0 * static_cast<double>(j);
+        w[static_cast<size_t>(j)] = {std::cos(th), std::sin(th)};
+    }
+    return cache.emplace(key, std::move(w)).first->second;
+}
+
+static void fft_pow2_inplace(std::complex<double>* a, int n, int sign) {
+#if defined(__APPLE__)
+    int log2n = 0;
+    for (int t = n; t > 1; t >>= 1) {
+        ++log2n;
+    }
+    static std::mutex setup_mu;
+    static FFTSetupD setups[32] = {};
+    FFTSetupD setup = nullptr;
+    {
+        if (log2n > 0 && log2n < 32) {
+            setup = setups[log2n];
+        }
+        if (setup == nullptr && log2n > 0 && log2n < 32) {
+            std::lock_guard<std::mutex> lock(setup_mu);
+            if (setups[log2n] == nullptr) {
+                setups[log2n] = vDSP_create_fftsetupD(
+                    static_cast<vDSP_Length>(log2n), kFFTRadix2
+                );
+            }
+            setup = setups[log2n];
+        }
+    }
+    if (setup != nullptr && n >= 32) {
+        thread_local std::vector<double> re;
+        thread_local std::vector<double> im;
+        if (static_cast<int>(re.size()) < n) {
+            re.resize(static_cast<size_t>(n));
+            im.resize(static_cast<size_t>(n));
+        }
+        DSPDoubleSplitComplex split{re.data(), im.data()};
+        vDSP_ctozD(
+            reinterpret_cast<const DSPDoubleComplex*>(a),
+            2,
+            &split,
+            1,
+            static_cast<vDSP_Length>(n)
+        );
+        vDSP_fft_zipD(
+            setup,
+            &split,
+            1,
+            static_cast<vDSP_Length>(log2n),
+            sign < 0 ? FFT_FORWARD : FFT_INVERSE
+        );
+        vDSP_ztocD(
+            &split,
+            1,
+            reinterpret_cast<DSPDoubleComplex*>(a),
+            2,
+            static_cast<vDSP_Length>(n)
+        );
+        return;
+    }
+#endif
+    for (int i = 1, j = 0; i < n; ++i) {
+        int bit = n >> 1;
+        for (; j & bit; bit >>= 1) {
+            j ^= bit;
+        }
+        j ^= bit;
+        if (i < j) {
+            std::swap(a[i], a[j]);
+        }
+    }
+    for (int len = 2; len <= n; len <<= 1) {
+        const auto& wtab = dft_twiddles(len, sign);
+        const int h = len >> 1;
+        for (int i = 0; i < n; i += len) {
+            for (int j = 0; j < h; ++j) {
+                const std::complex<double> u = a[i + j];
+                const std::complex<double> v = a[i + j + h] * wtab[static_cast<size_t>(j)];
+                a[i + j] = u + v;
+                a[i + j + h] = u - v;
+            }
+        }
+    }
+}
+
+static void fft_bluestein(
+    const std::complex<double>* in,
+    int n,
+    int in_stride,
+    std::complex<double>* out,
+    int sign
+) {
+    int M = 1;
+    while (M < 2 * n - 1) {
+        M <<= 1;
+    }
+    const uint64_t key =
+        (static_cast<uint64_t>(static_cast<uint32_t>(n)) << 1)
+        | static_cast<uint64_t>(sign < 0 ? 0 : 1);
+    thread_local std::map<uint64_t, std::vector<std::complex<double>>> chirp_cache;
+    thread_local std::map<uint64_t, std::vector<std::complex<double>>> kernel_cache;
+    thread_local std::vector<std::complex<double>> scratch;
+
+    auto cit = chirp_cache.find(key);
+    if (cit == chirp_cache.end()) {
+        std::vector<std::complex<double>> chirp(static_cast<size_t>(n));
+        std::vector<std::complex<double>> cpad(static_cast<size_t>(M), {0.0, 0.0});
+        for (int k = 0; k < n; ++k) {
+            const double th = static_cast<double>(sign) * PI * static_cast<double>(k)
+                * static_cast<double>(k) / static_cast<double>(n);
+            chirp[static_cast<size_t>(k)] = {std::cos(th), std::sin(th)};
+        }
+        cpad[0] = std::conj(chirp[0]);
+        for (int k = 1; k < n; ++k) {
+            const auto ck = std::conj(chirp[static_cast<size_t>(k)]);
+            cpad[static_cast<size_t>(k)] = ck;
+            cpad[static_cast<size_t>(M - k)] = ck;
+        }
+        fft_pow2_inplace(cpad.data(), M, -1);
+        cit = chirp_cache.emplace(key, std::move(chirp)).first;
+        kernel_cache.emplace(key, std::move(cpad));
+    }
+    const auto& chirp = cit->second;
+    const auto& C = kernel_cache.find(key)->second;
+
+    if (static_cast<int>(scratch.size()) < M) {
+        scratch.resize(static_cast<size_t>(M));
+    }
+    std::complex<double>* A = scratch.data();
+    std::fill(A, A + M, std::complex<double>(0.0, 0.0));
+    const std::complex<double>* p = in;
+    for (int j = 0; j < n; ++j) {
+        A[j] = (*p) * chirp[static_cast<size_t>(j)];
+        p += in_stride;
+    }
+    fft_pow2_inplace(A, M, -1);
+    for (int k = 0; k < M; ++k) {
+        A[k] *= C[static_cast<size_t>(k)];
+    }
+    fft_pow2_inplace(A, M, 1);
+    const double invM = 1.0 / static_cast<double>(M);
+    for (int k = 0; k < n; ++k) {
+        out[k] = A[k] * chirp[static_cast<size_t>(k)] * invM;
+    }
+}
+
+// Polar HEALPix rings have unique nph; one ATen FFT per length was dispatch-bound
+// on Linux. Equatorial belts keep batched at::fft_*. CUDA/MPS stay on ATen.
+static void fft_outofplace(
+    const std::complex<double>* in,
+    int n,
+    int in_stride,
+    std::complex<double>* out,
+    int sign
+) {
+    if (n <= 1) {
+        if (n == 1) {
+            out[0] = in[0];
+        }
+        return;
+    }
+    if (in_stride == 1 && (n & (n - 1)) == 0) {
+        std::copy(in, in + n, out);
+        fft_pow2_inplace(out, n, sign);
+        return;
+    }
+    if ((n & 1) == 0) {
+        const int m = n / 2;
+        fft_outofplace(in, m, in_stride * 2, out, sign);
+        fft_outofplace(in + in_stride, m, in_stride * 2, out + m, sign);
+        const auto& w = dft_twiddles(n, sign);
+        for (int k = 0; k < m; ++k) {
+            const std::complex<double> u = out[k];
+            const std::complex<double> v = w[static_cast<size_t>(k)] * out[k + m];
+            out[k] = u + v;
+            out[k + m] = u - v;
+        }
+        return;
+    }
+    if (n > 15) {
+        fft_bluestein(in, n, in_stride, out, sign);
+        return;
+    }
+    const auto& w = dft_twiddles(n, sign);
+    for (int k = 0; k < n; ++k) {
+        double sr = 0.0;
+        double si = 0.0;
+        const std::complex<double>* p = in;
+        int wk = 0;
+        for (int j = 0; j < n; ++j) {
+            const auto z = *p;
+            const auto t = w[static_cast<size_t>(wk)];
+            sr += z.real() * t.real() - z.imag() * t.imag();
+            si += z.real() * t.imag() + z.imag() * t.real();
+            p += in_stride;
+            wk += k;
+            if (wk >= n) {
+                wk -= n;
+            }
+        }
+        out[k] = {sr, si};
+    }
+}
+
 torch::Tensor healpix_ring_fourier_modes_cpu(
     const torch::Tensor& rows,
     const torch::Tensor& starts,
@@ -1466,8 +1691,18 @@ torch::Tensor healpix_ring_fourier_modes_cpu(
     auto out = torch::zeros({nrows, mcount, nrings}, torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU));
     const auto* starts_ptr = starts_c.data_ptr<int64_t>();
     const auto* lengths_ptr = lengths_c.data_ptr<int64_t>();
+    const auto* rows_ptr = reinterpret_cast<const std::complex<double>*>(
+        rows_c.data_ptr<c10::complex<double>>()
+    );
+    auto* out_ptr = reinterpret_cast<std::complex<double>*>(
+        out.data_ptr<c10::complex<double>>()
+    );
 
     int64_t ring = 0;
+    std::vector<int64_t> polar_r;
+    std::vector<int64_t> polar_pix0;
+    std::vector<int> polar_nph;
+    int max_polar_nph = 1;
     while (ring < nrings) {
         const int64_t run_start_ring = ring;
         const int64_t nph = lengths_ptr[ring];
@@ -1490,6 +1725,15 @@ torch::Tensor healpix_ring_fourier_modes_cpu(
             ++ring;
         }
         const int64_t run_ring_count = ring - run_start_ring;
+        if (run_ring_count == 1) {
+            polar_r.push_back(run_start_ring);
+            polar_pix0.push_back(run_pix_start);
+            polar_nph.push_back(static_cast<int>(nph));
+            if (nph > max_polar_nph) {
+                max_polar_nph = static_cast<int>(nph);
+            }
+            continue;
+        }
 
         auto block = rows_c.narrow(1, run_pix_start, run_ring_count * nph).view({nrows, run_ring_count, nph});
         auto fft_block = at::fft_fft(block, std::nullopt, -1, std::nullopt);
@@ -1504,24 +1748,27 @@ torch::Tensor healpix_ring_fourier_modes_cpu(
         out.narrow(2, run_start_ring, run_ring_count).copy_(fft_sel.permute({0, 2, 1}));
     }
 
-    return out;
-}
-
-template <typename Fn>
-static void parallel_m_ranges(int64_t mmax, Fn&& fn);
-
-static std::vector<std::pair<int, std::vector<int64_t>>> polar_nph_groups(
-    const std::vector<int>& polar_nph
-) {
-    std::unordered_map<int, std::vector<int64_t>> acc;
-    for (int64_t i = 0; i < static_cast<int64_t>(polar_nph.size()); ++i) {
-        acc[polar_nph[static_cast<size_t>(i)]].push_back(i);
+    const int64_t npolar = static_cast<int64_t>(polar_r.size());
+    if (npolar > 0) {
+        const int64_t* polar_r_ptr = polar_r.data();
+        const int64_t* polar_pix0_ptr = polar_pix0.data();
+        const int* polar_nph_ptr = polar_nph.data();
+        parallel_m_ranges(npolar - 1, [&](int64_t i0, int64_t stride) {
+            std::vector<std::complex<double>> spec(static_cast<size_t>(max_polar_nph));
+            for (int64_t i = i0; i < npolar; i += stride) {
+                const int nph = polar_nph_ptr[static_cast<size_t>(i)];
+                const int64_t pix0 = polar_pix0_ptr[static_cast<size_t>(i)];
+                const int64_t r = polar_r_ptr[static_cast<size_t>(i)];
+                for (int64_t row = 0; row < nrows; ++row) {
+                    fft_outofplace(rows_ptr + row * npix + pix0, nph, 1, spec.data(), -1);
+                    for (int64_t m = 0; m < mcount; ++m) {
+                        out_ptr[(row * mcount + m) * nrings + r] = spec[static_cast<size_t>(m % nph)];
+                    }
+                }
+            }
+        });
     }
-    std::vector<std::pair<int, std::vector<int64_t>>> out;
-    out.reserve(acc.size());
-    for (auto& kv : acc) {
-        out.emplace_back(kv.first, std::move(kv.second));
-    }
+
     return out;
 }
 
@@ -1678,49 +1925,45 @@ torch::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
 
     const int64_t npolar = static_cast<int64_t>(polar_r.size());
     if (npolar > 0) {
-        for (const auto& group : polar_nph_groups(polar_nph)) {
-            const int nph = group.first;
-            const auto& idxs = group.second;
-            const int64_t k = static_cast<int64_t>(idxs.size());
-            auto block = torch::empty({k, nph}, cplx_opts);
-            auto* bp = reinterpret_cast<std::complex<double>*>(
-                block.data_ptr<c10::complex<double>>()
-            );
-            for (int64_t j = 0; j < k; ++j) {
-                const int64_t i = idxs[static_cast<size_t>(j)];
-                const int64_t pix0 = polar_pix0[static_cast<size_t>(i)];
-                auto* dst = bp + j * nph;
-                if (row_ptr != nullptr) {
-                    std::copy(row_ptr + pix0, row_ptr + pix0 + nph, dst);
+        const int64_t* polar_r_ptr = polar_r.data();
+        const int64_t* polar_pix0_ptr = polar_pix0.data();
+        const int* polar_nph_ptr = polar_nph.data();
+        const std::complex<double>* row_ptr_cap = row_ptr;
+        const double* q_ptr_cap = q_ptr;
+        const double* u_ptr_cap = u_ptr;
+        parallel_m_ranges(npolar - 1, [&](int64_t i0, int64_t stride) {
+            std::vector<std::complex<double>> spec(static_cast<size_t>(max_polar_nph));
+            std::vector<std::complex<double>> packed(static_cast<size_t>(max_polar_nph));
+            for (int64_t i = i0; i < npolar; i += stride) {
+                const int nph = polar_nph_ptr[static_cast<size_t>(i)];
+                const int64_t pix0 = polar_pix0_ptr[static_cast<size_t>(i)];
+                if (row_ptr_cap != nullptr) {
+                    fft_outofplace(row_ptr_cap + pix0, nph, 1, spec.data(), -1);
                 } else {
-                    for (int t = 0; t < nph; ++t) {
-                        const int64_t p = pix0 + t;
-                        dst[t] = {q_ptr[p], u_ptr[p]};
+                    for (int j = 0; j < nph; ++j) {
+                        const int64_t p = pix0 + j;
+                        packed[static_cast<size_t>(j)] = {q_ptr_cap[p], u_ptr_cap[p]};
                     }
+                    fft_outofplace(packed.data(), nph, 1, spec.data(), -1);
                 }
-            }
-            auto fft_block = at::fft_fft(block, std::nullopt, -1, std::nullopt).contiguous();
-            const auto* fptr = fft_block.data_ptr<c10::complex<double>>();
-            for (int64_t j = 0; j < k; ++j) {
-                const int64_t i = idxs[static_cast<size_t>(j)];
-                const int64_t r = polar_r[static_cast<size_t>(i)];
-                const auto* row_fft = fptr + j * nph;
+                const int64_t r = polar_r_ptr[static_cast<size_t>(i)];
                 for (int64_t m = 0; m < mcount; ++m) {
-                    const int kmode = static_cast<int>(m % nph);
-                    const int kneg = (kmode == 0) ? 0 : (nph - kmode);
-                    auto vp = row_fft[kmode];
-                    auto vm = row_fft[kneg];
-                    vm = c10::complex<double>(vm.real(), -vm.imag());
+                    const int k = static_cast<int>(m % nph);
+                    const int kneg = (k == 0) ? 0 : (nph - k);
+                    auto vp = spec[static_cast<size_t>(k)];
+                    auto vm = spec[static_cast<size_t>(kneg)];
+                    vm = std::conj(vm);
                     if (phase_ptr != nullptr) {
                         const auto ph = phase_ptr[m * nrings + r];
-                        vp = vp * ph;
-                        vm = vm * ph;
+                        const std::complex<double> w(ph.real(), ph.imag());
+                        vp *= w;
+                        vm *= w;
                     }
-                    plus_ptr[m * nrings + r] = vp;
-                    minus_ptr[m * nrings + r] = vm;
+                    plus_ptr[m * nrings + r] = c10::complex<double>(vp.real(), vp.imag());
+                    minus_ptr[m * nrings + r] = c10::complex<double>(vm.real(), vm.imag());
                 }
             }
-        }
+        });
     }
 
     return out;
@@ -1854,47 +2097,34 @@ torch::Tensor healpix_ring_fourier_synthesis_cpu(
 
     const int64_t npolar = static_cast<int64_t>(polar_r.size());
     if (npolar > 0) {
-        for (const auto& group : polar_nph_groups(polar_nph)) {
-            const int nph = group.first;
-            const auto& idxs = group.second;
-            const int64_t k = static_cast<int64_t>(idxs.size());
-            auto spec = torch::zeros({nrows, k, nph}, cplx_opts);
-            auto* spec_ptr = spec.data_ptr<c10::complex<double>>();
-            for (int64_t row = 0; row < nrows; ++row) {
-                const std::complex<double>* s_row = s_ptr + row * mcount * nrings;
-                for (int64_t j = 0; j < k; ++j) {
-                    const int64_t i = idxs[static_cast<size_t>(j)];
-                    const int64_t r = polar_r[static_cast<size_t>(i)];
-                    c10::complex<double>* dst = spec_ptr + ((row * k + j) * nph);
+        const int64_t* polar_r_ptr = polar_r.data();
+        const int64_t* polar_pix0_ptr = polar_pix0.data();
+        const int* polar_nph_ptr = polar_nph.data();
+        parallel_m_ranges(npolar - 1, [&](int64_t i0, int64_t stride) {
+            std::vector<std::complex<double>> spec(static_cast<size_t>(max_polar_nph));
+            std::vector<std::complex<double>> pix(static_cast<size_t>(max_polar_nph));
+            for (int64_t i = i0; i < npolar; i += stride) {
+                const int64_t r = polar_r_ptr[static_cast<size_t>(i)];
+                const int64_t pix0 = polar_pix0_ptr[static_cast<size_t>(i)];
+                const int nph = polar_nph_ptr[static_cast<size_t>(i)];
+                for (int64_t row = 0; row < nrows; ++row) {
+                    const std::complex<double>* s_row = s_ptr + row * mcount * nrings;
+                    std::fill(spec.begin(), spec.begin() + nph, std::complex<double>(0.0, 0.0));
                     if (nph > mmax) {
                         for (int64_t m = 0; m < mcount; ++m) {
-                            const auto z = s_row[m * nrings + r];
-                            dst[m] = c10::complex<double>(z.real(), z.imag());
+                            spec[static_cast<size_t>(m)] = s_row[m * nrings + r];
                         }
                     } else {
                         for (int64_t m = 0; m < mcount; ++m) {
-                            const auto z = s_row[m * nrings + r];
-                            dst[m % nph] += c10::complex<double>(z.real(), z.imag());
+                            spec[static_cast<size_t>(m % nph)] += s_row[m * nrings + r];
                         }
                     }
-                }
-            }
-            auto map_vals = at::fft_ifft(spec, std::nullopt, -1, std::nullopt);
-            map_vals.mul_(static_cast<double>(nph));
-            auto map_c = map_vals.contiguous();
-            const auto* mp = reinterpret_cast<const std::complex<double>*>(
-                map_c.data_ptr<c10::complex<double>>()
-            );
-            for (int64_t row = 0; row < nrows; ++row) {
-                for (int64_t j = 0; j < k; ++j) {
-                    const int64_t i = idxs[static_cast<size_t>(j)];
-                    const int64_t pix0 = polar_pix0[static_cast<size_t>(i)];
+                    fft_outofplace(spec.data(), nph, 1, pix.data(), 1);
                     std::complex<double>* dst = out_ptr + row * npix + pix0;
-                    const auto* src = mp + (row * k + j) * nph;
-                    std::copy(src, src + nph, dst);
+                    std::copy(pix.data(), pix.data() + nph, dst);
                 }
             }
-        }
+        });
     }
 
     if (squeeze_out) {
@@ -2019,59 +2249,35 @@ static torch::Tensor healpix_spin_synthesize_qu_cpu(
 
     const int64_t npolar = static_cast<int64_t>(polar_r.size());
     if (npolar > 0) {
-        const auto cplx_opts = torch::TensorOptions()
-                                   .dtype(torch::kComplexDouble)
-                                   .device(torch::kCPU);
-        for (const auto& group : polar_nph_groups(polar_nph)) {
-            const int nph = group.first;
-            const auto& idxs = group.second;
-            const int64_t k = static_cast<int64_t>(idxs.size());
-            auto spec = torch::zeros({k, 2, nph}, cplx_opts);
-            auto* spec_ptr = spec.data_ptr<c10::complex<double>>();
-            for (int64_t j = 0; j < k; ++j) {
-                const int64_t i = idxs[static_cast<size_t>(j)];
+        parallel_m_ranges(npolar - 1, [&](int64_t i0, int64_t stride) {
+            std::vector<std::complex<double>> spec_p(static_cast<size_t>(max_polar_nph));
+            std::vector<std::complex<double>> spec_m(static_cast<size_t>(max_polar_nph));
+            std::vector<std::complex<double>> pix_p(static_cast<size_t>(max_polar_nph));
+            std::vector<std::complex<double>> pix_m(static_cast<size_t>(max_polar_nph));
+            for (int64_t i = i0; i < npolar; i += stride) {
                 const int64_t r = polar_r[static_cast<size_t>(i)];
-                c10::complex<double>* dst_p = spec_ptr + (j * 2) * nph;
-                c10::complex<double>* dst_m = spec_ptr + (j * 2 + 1) * nph;
+                const int64_t pix0 = polar_pix0[static_cast<size_t>(i)];
+                const int nph = polar_nph[static_cast<size_t>(i)];
+                std::fill(spec_p.begin(), spec_p.begin() + nph, std::complex<double>(0.0, 0.0));
+                std::fill(spec_m.begin(), spec_m.begin() + nph, std::complex<double>(0.0, 0.0));
                 if (nph > mmax) {
                     for (int64_t m = 0; m < mcount; ++m) {
-                        const auto zp = s0[m * nrings + r];
-                        const auto zm = s1[m * nrings + r];
-                        dst_p[m] = c10::complex<double>(zp.real(), zp.imag());
-                        dst_m[m] = c10::complex<double>(zm.real(), zm.imag());
+                        spec_p[static_cast<size_t>(m)] = s0[m * nrings + r];
+                        spec_m[static_cast<size_t>(m)] = s1[m * nrings + r];
                     }
                 } else {
                     for (int64_t m = 0; m < mcount; ++m) {
-                        const auto zp = s0[m * nrings + r];
-                        const auto zm = s1[m * nrings + r];
-                        dst_p[m % nph] += c10::complex<double>(zp.real(), zp.imag());
-                        dst_m[m % nph] += c10::complex<double>(zm.real(), zm.imag());
+                        spec_p[static_cast<size_t>(m % nph)] += s0[m * nrings + r];
+                        spec_m[static_cast<size_t>(m % nph)] += s1[m * nrings + r];
                     }
                 }
-            }
-            auto map_vals = at::fft_ifft(spec, std::nullopt, -1, std::nullopt);
-            map_vals.mul_(static_cast<double>(nph));
-            auto map_c = map_vals.contiguous();
-            const auto* mp = reinterpret_cast<const std::complex<double>*>(
-                map_c.data_ptr<c10::complex<double>>()
-            );
-            for (int64_t j = 0; j < k; ++j) {
-                const int64_t i = idxs[static_cast<size_t>(j)];
-                const int64_t r = polar_r[static_cast<size_t>(i)];
-                const int64_t pix0 = polar_pix0[static_cast<size_t>(i)];
+                fft_outofplace(spec_p.data(), nph, 1, pix_p.data(), 1);
+                fft_outofplace(spec_m.data(), nph, 1, pix_m.data(), 1);
                 spin_qu_store_ring(
-                    mp + (j * 2) * nph,
-                    mp + (j * 2 + 1) * nph,
-                    q_ptr,
-                    u_ptr,
-                    pix0,
-                    nph,
-                    s0[r],
-                    s1[r],
-                    mmax
+                    pix_p.data(), pix_m.data(), q_ptr, u_ptr, pix0, nph, s0[r], s1[r], mmax
                 );
             }
-        }
+        });
     }
     return out;
 }
