@@ -5,11 +5,14 @@ import pytest
 import torch
 
 from torchsky._native import cpp as _native_cpp
+from torchsky.io import write as write_fits
 from torchsky.sphere import compat
 from torchsky.sphere import healpix as hp
 import torchsky.sphere.spectral as spectral_mod
 import torchsky.sphere.harmonics as harmonics_mod
 from torchsky.sphere.spectral import (
+    alm2lonlat,
+    alm2lonlat_spin,
     alm2map,
     alm2map_batched,
     alm2cl,
@@ -26,6 +29,7 @@ from torchsky.sphere.spectral import (
     map2alm_lsq,
     map2alm_spin,
     pixwin,
+    rotate_alm,
     smoothalm,
     smoothmap,
     synalm,
@@ -174,11 +178,43 @@ def test_map2alm_alm2map_roundtrip_low_l() -> None:
     assert rel < 1.5e-1
 
 
+def test_map2alm_refuses_unsupported_devices() -> None:
+    nside = 4
+    npix = hp.nside2npix(nside)
+    m = torch.zeros(npix, dtype=torch.float64, device="meta")
+    with pytest.raises(ValueError, match="supports cpu, cuda, and mps"):
+        map2alm(m, nside=nside, lmax=4)
+    alm = torch.zeros(alm_size(4), dtype=torch.complex128, device="meta")
+    with pytest.raises(ValueError, match="supports cpu, cuda, and mps"):
+        alm2map(alm, nside=nside, lmax=4)
+
+
+def test_map2alm_stays_on_accelerator() -> None:
+    devices: list[str] = []
+    if torch.cuda.is_available():
+        devices.append("cuda")
+    if torch.backends.mps.is_available():
+        devices.append("mps")
+    if not devices:
+        pytest.skip("no CUDA or MPS")
+    nside = 4
+    npix = hp.nside2npix(nside)
+    for device in devices:
+        dtype = torch.float32 if device == "mps" else torch.float64
+        m = torch.ones(npix, dtype=dtype, device=device)
+        alm = map2alm(m, nside=nside, lmax=4)
+        assert alm.device.type == device
+        rec = alm2map(alm, nside=nside, lmax=4)
+        assert rec.device.type == device
+        assert torch.isfinite(alm).all()
+        assert torch.isfinite(rec).all()
+
+
 def test_map2alm_pixel_weights_preserve_constant_monopole() -> None:
     nside = 8
     m = torch.ones(hp.nside2npix(nside), dtype=torch.float64)
     alm0 = map2alm(m, nside=nside, lmax=4)
-    alm_w = map2alm(m, nside=nside, lmax=4, use_pixel_weights=True)
+    alm_w = map2alm(m, nside=nside, lmax=4, use_weights=True)
     torch.testing.assert_close(alm_w[0].real, alm0[0].real, atol=1e-10, rtol=0.0)
     assert torch.isfinite(alm_w).all()
 
@@ -200,9 +236,7 @@ def test_map2alm_gal_cut_zeros_equatorial_strip() -> None:
 def test_anafast_gal_cut_and_weights_run() -> None:
     nside = 8
     m = torch.randn(hp.nside2npix(nside), dtype=torch.float64)
-    cl = anafast(
-        m, nside=nside, lmax=6, gal_cut=10.0, use_weights=True, pol=False
-    )
+    cl = anafast(m, nside=nside, lmax=6, gal_cut=10.0, use_weights=True, pol=False)
     assert cl.shape == (7,)
     assert torch.isfinite(cl).all()
 
@@ -213,7 +247,9 @@ def test_map2alm_gal_cut_matches_healpy_when_installed() -> None:
     rng = np.random.default_rng(0)
     m = rng.normal(size=hp.nside2npix(nside))
     cut = 15.0
-    got = map2alm(torch.as_tensor(m, dtype=torch.float64), nside=nside, lmax=8, gal_cut=cut)
+    got = map2alm(
+        torch.as_tensor(m, dtype=torch.float64), nside=nside, lmax=8, gal_cut=cut
+    )
     ref = healpy.map2alm(m, lmax=8, gal_cut=cut, use_weights=False, iter=0)
     np.testing.assert_allclose(got.numpy(), ref, atol=0.0, rtol=1e-6)
 
@@ -238,6 +274,30 @@ def test_map2alm_rejects_simultaneous_weight_flags() -> None:
     m = torch.ones(hp.nside2npix(8), dtype=torch.float64)
     with pytest.raises(ValueError, match="mutually exclusive"):
         map2alm(m, nside=8, lmax=4, use_weights=True, use_pixel_weights=True)
+
+
+def test_map2alm_pixel_weights_require_datapath() -> None:
+    m = torch.ones(hp.nside2npix(8), dtype=torch.float64)
+    with pytest.raises(FileNotFoundError, match="datapath"):
+        map2alm(m, nside=8, lmax=4, use_pixel_weights=True)
+
+
+def test_map2alm_pixel_weight_fits_is_one_plus_correction(tmp_path) -> None:
+    nside = 8
+    npix = hp.nside2npix(nside)
+    corr = 0.1
+    weights = torch.full((npix,), corr, dtype=torch.float64)
+    dest = tmp_path / "full_weights"
+    dest.mkdir()
+    write_fits(
+        str(dest / "healpix_full_weights_nside_0008.fits"),
+        weights,
+        overwrite=True,
+    )
+    m = torch.randn(npix, dtype=torch.float64)
+    alm_w = map2alm(m, nside=nside, lmax=4, use_pixel_weights=True, datapath=tmp_path)
+    alm_ref = map2alm(m * (1.0 + corr), nside=nside, lmax=4)
+    torch.testing.assert_close(alm_w, alm_ref, atol=0.0, rtol=0.0)
 
 
 def test_anafast_dipole_dominates_l1() -> None:
@@ -1275,12 +1335,14 @@ def test_ishioka_spin_interpolate_integrate_adjoint(
     nrings = int(theta.numel())
     s_plus = torch.from_numpy(
         (
-            rng.normal(size=(lmax + 1, nrings)) + 1j * rng.normal(size=(lmax + 1, nrings))
+            rng.normal(size=(lmax + 1, nrings))
+            + 1j * rng.normal(size=(lmax + 1, nrings))
         ).astype(np.complex128)
     )
     s_minus = torch.from_numpy(
         (
-            rng.normal(size=(lmax + 1, nrings)) + 1j * rng.normal(size=(lmax + 1, nrings))
+            rng.normal(size=(lmax + 1, nrings))
+            + 1j * rng.normal(size=(lmax + 1, nrings))
         ).astype(np.complex128)
     )
     pix_w = (4.0 * np.pi) / float(hp.nside2npix(nside))
@@ -1388,3 +1450,91 @@ def test_spin_sht_mmax_lt_lmax_matches_healpy(monkeypatch: pytest.MonkeyPatch) -
     torch.testing.assert_close(
         ab, torch.from_numpy(hp_ab).to(torch.complex128), atol=5e-10, rtol=0.0
     )
+
+
+def test_rotate_alm_identity_and_z_phase() -> None:
+    lmax = 4
+    nalm = alm_size(lmax)
+    rng = torch.Generator().manual_seed(0)
+    alm = torch.complex(
+        torch.randn(nalm, generator=rng, dtype=torch.float64),
+        torch.randn(nalm, generator=rng, dtype=torch.float64),
+    )
+    torch.testing.assert_close(
+        rotate_alm(alm, 0.0, 0.0, 0.0, lmax=lmax), alm, atol=1e-12, rtol=0.0
+    )
+    rotated = rotate_alm(alm, 0.0, 0.0, math.pi, lmax=lmax)
+    for m in range(lmax + 1):
+        phase = -1.0 if (m & 1) else 1.0
+        for ell in range(m, lmax + 1):
+            idx = alm_index(ell, m, lmax)
+            torch.testing.assert_close(
+                rotated[idx], alm[idx] * phase, atol=1e-10, rtol=0.0
+            )
+
+
+def test_rotate_alm_and_alm2lonlat_stay_on_accelerator() -> None:
+    devices: list[str] = []
+    if torch.cuda.is_available():
+        devices.append("cuda")
+    if torch.backends.mps.is_available():
+        devices.append("mps")
+    if not devices:
+        pytest.skip("no CUDA or MPS")
+    lmax = 4
+    nalm = alm_size(lmax)
+    rng = torch.Generator().manual_seed(1)
+    alm_cpu = torch.complex(
+        torch.randn(nalm, generator=rng, dtype=torch.float64),
+        torch.randn(nalm, generator=rng, dtype=torch.float64),
+    )
+    ident_cpu = rotate_alm(alm_cpu, 0.0, 0.0, 0.0, lmax=lmax)
+    torch.testing.assert_close(ident_cpu, alm_cpu, atol=1e-12, rtol=0.0)
+    rotated_cpu = rotate_alm(alm_cpu, 0.3, 0.5, -0.2, lmax=lmax)
+    y00 = 1.0 / math.sqrt(4.0 * math.pi)
+    for device in devices:
+        cdtype = torch.complex64 if device == "mps" else torch.complex128
+        rdtype = torch.float32 if device == "mps" else torch.float64
+        alm = alm_cpu.to(device=device, dtype=cdtype)
+        ident = rotate_alm(alm, 0.0, 0.0, 0.0, lmax=lmax)
+        assert ident.device.type == device
+        atol = 2.0e-5 if device == "mps" else 1.0e-12
+        torch.testing.assert_close(
+            ident.cpu().to(torch.complex128), ident_cpu, atol=atol, rtol=0.0
+        )
+        rotated = rotate_alm(alm, 0.3, 0.5, -0.2, lmax=lmax)
+        assert rotated.device.type == device
+        rot_atol = 2.0e-4 if device == "mps" else 1.0e-10
+        torch.testing.assert_close(
+            rotated.cpu().to(torch.complex128), rotated_cpu, atol=rot_atol, rtol=0.0
+        )
+        mono = torch.zeros(nalm, dtype=cdtype, device=device)
+        mono[0] = 1.0
+        val = alm2lonlat(mono, 40.0, -10.0, lmax=lmax)
+        assert val.device.type == device
+        torch.testing.assert_close(
+            val.cpu().to(torch.float64),
+            torch.tensor(y00, dtype=torch.float64),
+            atol=2.0e-5 if device == "mps" else 1.0e-12,
+            rtol=0.0,
+        )
+        zeros = torch.zeros(nalm, dtype=cdtype, device=device)
+        spin = alm2lonlat_spin((zeros, zeros), 2, 10.0, 20.0, lmax=lmax)
+        assert spin.device.type == device
+        assert spin.dtype == rdtype
+        torch.testing.assert_close(spin, torch.zeros_like(spin), atol=0.0, rtol=0.0)
+
+
+@pytest.mark.skipif(_hp is None, reason="healpy not available")
+def test_rotate_alm_matches_healpy() -> None:
+    lmax = 8
+    rng = np.random.default_rng(7)
+    nalm = alm_size(lmax)
+    alm_np = np.asarray(
+        rng.normal(size=nalm) + 1j * rng.normal(size=nalm), dtype=np.complex128
+    )
+    psi, theta, phi = 0.3, 0.5, -0.2
+    hp_alm = alm_np.copy()
+    _hp.rotate_alm(hp_alm, psi, theta, phi)
+    ts = rotate_alm(torch.from_numpy(alm_np.copy()), psi, theta, phi, lmax=lmax)
+    torch.testing.assert_close(ts, torch.from_numpy(hp_alm), atol=1e-8, rtol=0.0)

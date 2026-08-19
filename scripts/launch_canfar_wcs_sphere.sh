@@ -15,9 +15,9 @@ cd "${ROOT_DIR}"
 
 MODE="${1:-all}"
 case "${MODE}" in
-  cpu | cuda | all | suite | many | spectral | sparse | spin | sht) ;;
+  cpu | cuda | all | suite | many | spectral | sparse | spin | sht | cuhpx) ;;
   *)
-    echo "usage: $0 [cpu|cuda|all|suite|sht|spectral|sparse|spin]" >&2
+    echo "usage: $0 [cpu|cuda|all|suite|sht|spectral|sparse|spin|cuhpx]" >&2
     exit 2
     ;;
 esac
@@ -153,4 +153,7 @@ if [[ "${MODE}" == "sparse" || "${MODE}" == "sht" ]]; then
 fi
 if [[ "${MODE}" == "spin" || "${MODE}" == "sht" ]]; then
   launch_one spin "" "sphere-spin-${STAMP}"
+fi
+if [[ "${MODE}" == "cuhpx" ]]; then
+  launch_one cuhpx 1 "cuhpx-sht-${STAMP}"
 fi

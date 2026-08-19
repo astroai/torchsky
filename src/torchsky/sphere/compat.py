@@ -37,6 +37,7 @@ geometry kernels remain torchsky-native.
 
 from contextlib import contextmanager
 import math
+import os
 from typing import Literal
 
 import torch
@@ -57,6 +58,7 @@ from .spectral import map2alm as _map2alm
 from .spectral import map2alm_lsq as _map2alm_lsq
 from .spectral import map2alm_spin as _map2alm_spin
 from .spectral import pixwin as _pixwin
+from .spectral import rotate_alm as _rotate_alm
 from .spectral import smoothalm as _smoothalm
 from .spectral import smoothmap as _smoothmap
 from .spectral import synalm as _synalm
@@ -415,6 +417,7 @@ def map2alm(
     use_weights: bool = False,
     use_pixel_weights: bool = False,
     gal_cut: float = 0.0,
+    datapath: str | os.PathLike[str] | None = None,
 ) -> Tensor:
     return _map2alm(
         map_values,
@@ -427,6 +430,7 @@ def map2alm(
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
         gal_cut=gal_cut,
+        datapath=datapath,
     )
 
 
@@ -442,6 +446,7 @@ def map2alm_lsq(
     nest: bool = False,
     use_pixel_weights: bool = False,
     gal_cut: float = 0.0,
+    datapath: str | os.PathLike[str] | None = None,
 ) -> tuple[Tensor, float, int]:
     return _map2alm_lsq(
         maps,
@@ -454,6 +459,7 @@ def map2alm_lsq(
         nest=nest,
         use_pixel_weights=use_pixel_weights,
         gal_cut=gal_cut,
+        datapath=datapath,
     )
 
 
@@ -464,6 +470,17 @@ def almxfl(
     inplace: bool = False,
 ) -> Tensor:
     return _almxfl(alm, fl, mmax=mmax, inplace=inplace)
+
+
+def rotate_alm(
+    alm: Tensor,
+    psi: float,
+    theta: float,
+    phi: float,
+    lmax: int | None = None,
+    mmax: int | None = None,
+) -> Tensor:
+    return _rotate_alm(alm, psi, theta, phi, lmax=lmax, mmax=mmax)
 
 
 def alm2cl(
@@ -516,6 +533,7 @@ def anafast(
     use_weights: bool = False,
     use_pixel_weights: bool = False,
     gal_cut: float = 0.0,
+    datapath: str | os.PathLike[str] | None = None,
 ) -> Tensor | tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
     return _anafast(
         map1,
@@ -531,6 +549,7 @@ def anafast(
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
         gal_cut=gal_cut,
+        datapath=datapath,
     )
 
 
@@ -631,6 +650,7 @@ def smoothmap(
     use_pixel_weights: bool = False,
     gal_cut: float = 0.0,
     verbose: bool = True,
+    datapath: str | os.PathLike[str] | None = None,
 ) -> Tensor:
     return _smoothmap(
         map_values,
@@ -648,6 +668,7 @@ def smoothmap(
         use_pixel_weights=use_pixel_weights,
         gal_cut=gal_cut,
         verbose=verbose,
+        datapath=datapath,
     )
 
 
@@ -664,6 +685,7 @@ def smoothing(
     use_pixel_weights: bool = False,
     verbose: bool = True,
     nest: bool = False,
+    datapath: str | os.PathLike[str] | None = None,
 ) -> Tensor:
     map_t = torch.as_tensor(map_in)
     pol_eff = bool(pol) and (map_t.ndim == 2 and map_t.shape[0] == 3)
@@ -681,6 +703,7 @@ def smoothing(
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
         verbose=verbose,
+        datapath=datapath,
     )
 
 
@@ -696,6 +719,7 @@ def map2alm_spin(
     use_weights: bool = False,
     use_pixel_weights: bool = False,
     gal_cut: float = 0.0,
+    datapath: str | os.PathLike[str] | None = None,
 ) -> tuple[Tensor, Tensor]:
     return _map2alm_spin(
         maps,
@@ -708,6 +732,7 @@ def map2alm_spin(
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
         gal_cut=gal_cut,
+        datapath=datapath,
     )
 
 
@@ -766,6 +791,7 @@ __all__ = [
     "map2alm",
     "map2alm_lsq",
     "almxfl",
+    "rotate_alm",
     "alm2cl",
     "alm2map",
     "anafast",

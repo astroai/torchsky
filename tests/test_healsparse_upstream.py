@@ -67,8 +67,24 @@ def test_healsparse_write_read_partial_and_header_roundtrip() -> None:
             roundtrip.values.cpu().numpy(), values, atol=0.0, rtol=0.0
         )
         assert roundtrip.metadata == {"TESTING": 1.0}
+        hs_from_ours = healsparse.HealSparseMap.read(path.as_posix())
+        np.testing.assert_array_equal(hs_from_ours.valid_pixels, pixels)
+        np.testing.assert_allclose(
+            hs_from_ours.get_values_pix(pixels), values, atol=0.0, rtol=0.0
+        )
     finally:
         path.unlink(missing_ok=True)
+
+
+def test_healsparse_reads_upstream_written_fits(tmp_path) -> None:
+    hs_map, _tf_map, pixels, values = _make_sparse_pair()
+    path = tmp_path / "upstream.hs"
+    hs_map.write(path.as_posix(), clobber=True)
+    roundtrip = HealSparseMap.read_fits(path.as_posix())
+    np.testing.assert_array_equal(roundtrip.pixels.cpu().numpy(), pixels)
+    np.testing.assert_allclose(
+        roundtrip.values.cpu().numpy(), values, atol=0.0, rtol=0.0
+    )
 
 
 def test_healsparse_degrade_matches_upstream_mean_semantics() -> None:

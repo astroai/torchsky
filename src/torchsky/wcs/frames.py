@@ -47,10 +47,18 @@ _FK4_CORR = torch.tensor(
 ) * 1.0e-6
 
 
+def _work_dtype(device: torch.device) -> torch.dtype:
+    return torch.float32 if device.type == "mps" else torch.float64
+
+
 def _as_tensor(value: Any) -> Tensor:
     if isinstance(value, Tensor):
-        return value.to(dtype=torch.float64)
+        return value.to(dtype=_work_dtype(value.device))
     return torch.as_tensor(value, dtype=torch.float64)
+
+
+def _to_device(value: Tensor, device: torch.device) -> Tensor:
+    return value.to(device=device, dtype=_work_dtype(device))
 
 
 def _wrap360(angle: Tensor) -> Tensor:
@@ -66,11 +74,12 @@ def _besselian_epoch_to_julian_epoch(epoch: float) -> float:
 
 
 def _rotation_matrix_z(angle_deg: float, *, device: torch.device) -> Tensor:
-    a = torch.as_tensor(angle_deg * D2R, dtype=torch.float64, device=device)
+    dtype = _work_dtype(device)
+    a = torch.as_tensor(angle_deg * D2R, dtype=dtype, device=device)
     s = torch.sin(a)
     c = torch.cos(a)
-    z = torch.zeros((), dtype=torch.float64, device=device)
-    o = torch.ones((), dtype=torch.float64, device=device)
+    z = torch.zeros((), dtype=dtype, device=device)
+    o = torch.ones((), dtype=dtype, device=device)
     return torch.stack(
         (
             torch.stack((c, s, z)),
@@ -81,11 +90,12 @@ def _rotation_matrix_z(angle_deg: float, *, device: torch.device) -> Tensor:
 
 
 def _rotation_matrix_y(angle_deg: float, *, device: torch.device) -> Tensor:
-    a = torch.as_tensor(angle_deg * D2R, dtype=torch.float64, device=device)
+    dtype = _work_dtype(device)
+    a = torch.as_tensor(angle_deg * D2R, dtype=dtype, device=device)
     s = torch.sin(a)
     c = torch.cos(a)
-    z = torch.zeros((), dtype=torch.float64, device=device)
-    o = torch.ones((), dtype=torch.float64, device=device)
+    z = torch.zeros((), dtype=dtype, device=device)
+    o = torch.ones((), dtype=dtype, device=device)
     return torch.stack(
         (
             torch.stack((c, z, -s)),
@@ -140,7 +150,7 @@ def _fk4_e_terms(equinox: float, *, device: torch.device) -> Tensor:
             minus_ek_cos_g * math.cos(eps),
             minus_ek_cos_g * math.sin(eps),
         ],
-        dtype=torch.float64,
+        dtype=_work_dtype(device),
         device=device,
     )
 
@@ -209,7 +219,7 @@ def _fk5_to_fk4_no_e_vec(
 def radec_to_unit(lon_deg: Any, lat_deg: Any) -> Tensor:
     """Convert longitude/latitude in degrees to unit Cartesian vectors."""
     lon = _as_tensor(lon_deg)
-    lat = _as_tensor(lat_deg).to(device=lon.device)
+    lat = _as_tensor(lat_deg).to(device=lon.device, dtype=_work_dtype(lon.device))
     lon_r = lon * D2R
     lat_r = lat * D2R
     cos_lat = torch.cos(lat_r)
@@ -244,7 +254,7 @@ def precess_fk5(
     roadmap items.
     """
     ra = _as_tensor(ra_deg)
-    dec = _as_tensor(dec_deg).to(device=ra.device)
+    dec = _as_tensor(dec_deg).to(device=ra.device, dtype=_work_dtype(ra.device))
     if float(from_equinox) == float(to_equinox):
         return ra.clone(), dec.clone()
 
@@ -273,7 +283,7 @@ def precess_fk5(
     cos_dec = torch.cos(dec1)
     sin_dec = torch.sin(dec1)
 
-    theta_t = torch.as_tensor(theta, dtype=torch.float64, device=ra.device)
+    theta_t = torch.as_tensor(theta, dtype=_work_dtype(ra.device), device=ra.device)
     cos_theta = torch.cos(theta_t)
     sin_theta = torch.sin(theta_t)
 
@@ -360,11 +370,11 @@ def propagate_proper_motion(
     """
     lon = _as_tensor(lon_deg)
     device = lon.device
-    lat = _as_tensor(lat_deg).to(device=device)
-    pm_lon = _as_tensor(pm_lon_coslat_mas_yr).to(device=device)
-    pm_lat = _as_tensor(pm_lat_mas_yr).to(device=device)
-    source_epoch = _as_tensor(source_epoch_jyear).to(device=device)
-    target_epoch = _as_tensor(target_epoch_jyear).to(device=device)
+    lat = _as_tensor(lat_deg).to(device=device, dtype=_work_dtype(device))
+    pm_lon = _as_tensor(pm_lon_coslat_mas_yr).to(device=device, dtype=_work_dtype(device))
+    pm_lat = _as_tensor(pm_lat_mas_yr).to(device=device, dtype=_work_dtype(device))
+    source_epoch = _as_tensor(source_epoch_jyear).to(device=device, dtype=_work_dtype(device))
+    target_epoch = _as_tensor(target_epoch_jyear).to(device=device, dtype=_work_dtype(device))
     lon, lat, pm_lon, pm_lat, source_epoch, target_epoch = torch.broadcast_tensors(
         lon, lat, pm_lon, pm_lat, source_epoch, target_epoch
     )
@@ -495,11 +505,11 @@ def propagate_proper_motion_with_jacobian(
     device = lon.device
     values = torch.broadcast_tensors(
         lon,
-        _as_tensor(lat_deg).to(device=device),
-        _as_tensor(pm_lon_coslat_mas_yr).to(device=device),
-        _as_tensor(pm_lat_mas_yr).to(device=device),
-        _as_tensor(source_epoch_jyear).to(device=device),
-        _as_tensor(target_epoch_jyear).to(device=device),
+        _as_tensor(lat_deg).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(pm_lon_coslat_mas_yr).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(pm_lat_mas_yr).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(source_epoch_jyear).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(target_epoch_jyear).to(device=device, dtype=_work_dtype(device)),
     )
     state = torch.stack(values[:4], dim=-1)
     propagated_position = torch.stack(propagated, dim=-1)
@@ -552,13 +562,13 @@ def _propagate_space_motion(
     device = lon.device
     values = [
         lon,
-        _as_tensor(lat_deg).to(device=device),
-        _as_tensor(pm_lon_coslat_mas_yr).to(device=device),
-        _as_tensor(pm_lat_mas_yr).to(device=device),
-        _as_tensor(parallax_mas).to(device=device),
-        _as_tensor(radial_velocity_km_s).to(device=device),
-        _as_tensor(source_epoch_jyear).to(device=device),
-        _as_tensor(target_epoch_jyear).to(device=device),
+        _as_tensor(lat_deg).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(pm_lon_coslat_mas_yr).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(pm_lat_mas_yr).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(parallax_mas).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(radial_velocity_km_s).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(source_epoch_jyear).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(target_epoch_jyear).to(device=device, dtype=_work_dtype(device)),
     ]
     (
         lon,
@@ -910,13 +920,13 @@ def propagate_space_motion_with_jacobian(
     device = lon.device
     state_values = torch.broadcast_tensors(
         lon,
-        _as_tensor(lat_deg).to(device=device),
-        _as_tensor(pm_lon_coslat_mas_yr).to(device=device),
-        _as_tensor(pm_lat_mas_yr).to(device=device),
-        _as_tensor(parallax_mas).to(device=device),
-        _as_tensor(radial_velocity_km_s).to(device=device),
-        _as_tensor(source_epoch_jyear).to(device=device),
-        _as_tensor(target_epoch_jyear).to(device=device),
+        _as_tensor(lat_deg).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(pm_lon_coslat_mas_yr).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(pm_lat_mas_yr).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(parallax_mas).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(radial_velocity_km_s).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(source_epoch_jyear).to(device=device, dtype=_work_dtype(device)),
+        _as_tensor(target_epoch_jyear).to(device=device, dtype=_work_dtype(device)),
     )
     state = torch.stack(state_values[:6], dim=-1)
     propagated_state = torch.stack(propagated, dim=-1)
@@ -968,7 +978,7 @@ def convert_celestial(
     src = canonical_celestial_frame(from_frame)
     dst = canonical_celestial_frame(to_frame)
     lon = _as_tensor(lon_deg)
-    lat = _as_tensor(lat_deg).to(device=lon.device)
+    lat = _as_tensor(lat_deg).to(device=lon.device, dtype=_work_dtype(lon.device))
 
     if src == "FK4":
         source_equinox = 1950.0 if from_equinox is None else float(from_equinox)

@@ -648,7 +648,7 @@ def test_sky_mask_pipe_rejects_unknown_operation() -> None:
 @pytest.mark.parametrize(
     ("values", "sentinel"),
     [
-        (torch.tensor([True, False, True], dtype=torch.bool), False),
+        (torch.tensor([True, True, True], dtype=torch.bool), False),
         (torch.tensor([10, 20, 30], dtype=torch.int64), -1.0),
         (torch.tensor([1.25, 2.5, 3.75], dtype=torch.float64), -999.0),
     ],

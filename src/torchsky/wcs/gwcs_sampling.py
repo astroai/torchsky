@@ -50,7 +50,9 @@ def _validation_points(
 ) -> dict[str, Tensor]:
     (x0, x1), (y0, y1) = bounds
     generator = torch.Generator(device="cpu").manual_seed(int(seed))
-    random = torch.rand((max(int(random_points), 1), 2), generator=generator, dtype=dtype)
+    random = torch.rand(
+        (max(int(random_points), 1), 2), generator=generator, dtype=dtype
+    )
     random[:, 0] = x0 + (x1 - x0) * random[:, 0]
     random[:, 1] = y0 + (y1 - y0) * random[:, 1]
     edge_samples = max(int(random_points) // 8, 8)
@@ -178,9 +180,7 @@ def sample_gwcs_detector_to_tangent(
         next_height = min(2 * (height - 1) + 1, max_height)
         next_width = min(2 * (width - 1) + 1, max_width)
         if (next_height, next_width) == (height, width):
-            worst = max(
-                validation.items(), key=lambda item: item[1].max_mas
-            )
+            worst = max(validation.items(), key=lambda item: item[1].max_mas)
             raise ValueError(
                 "GWCS sampling did not meet tolerance at maximum grid: "
                 f"{worst[0]} max={worst[1].max_mas:.8g} mas"
@@ -201,6 +201,17 @@ class FrozenDetectorEpochTables:
         diffs = torch.tensor(self.epochs, dtype=torch.float64) - float(epoch)
         index = int(torch.argmin(diffs.abs()).item())
         return self.samples[index].transform
+
+    def evaluate(self, detector_xy: Any, epoch: float) -> Tensor:
+        """Device-native table eval. Runtime does not import gwcs."""
+        pts = torch.as_tensor(detector_xy)
+        table = self.transform_at(epoch)
+        return table(pts.to(device=table.table.device, dtype=table.table.dtype))
+
+    def inverse(self, sky_xy: Any, epoch: float, **kwargs: Any) -> Tensor:
+        """Newton inverse of the frozen table at the nearest epoch."""
+        table = self.transform_at(epoch)
+        return table.inverse(sky_xy, **kwargs)
 
 
 def sample_gwcs_detector_epochs(

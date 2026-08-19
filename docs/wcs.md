@@ -74,18 +74,23 @@ ambiguous case variants fail explicitly.
 For genuinely coupled multidimensional table arrays, use
 `coupled_tabular_wcs_from_fits(...)` to build a `CoupledTabularLookupWCS`
 forward interpolator. It performs torch-native multilinear interpolation over
-the table grid. Inverse is implemented only when `pixel_n_dim == world_n_dim`;
-non-square coupled tables raise `NotImplementedError` rather than guessing an
-ambiguous inverse.
+the table grid. Inverse exists for square, overdetermined, and underdetermined
+tables. Square 2-D tables use the unique-cell search. Overdetermined tables
+(`world_n_dim > pixel_n_dim`) use Gauss–Newton / least squares and return
+NaN off the interpolated manifold. Underdetermined tables
+(`world_n_dim < pixel_n_dim`) return a nearest-seed Gauss–Newton particular
+solution (minimum-norm step); that inverse is not unique.
 
 CPU fused WCS is float64. CUDA WCS is float64. MPS WCS is float32 and is not
 a float64 path. Small-N overhead versus Astropy (sub-3 ms) is acceptable;
-large-N must stay first on CPU and CUDA.
+large-N must stay first on CPU and CUDA. Observed place is ATen on the catalog
+device (CUDA float64, MPS float32); there is no fused C++ observed kernel.
 
 Catalog geometry is `CatalogState`, not `SkyCoord`. See [coordinates.md](coordinates.md).
 GWCS is sampled at calibration time onto `RegularGridTransform2D`; runtime
-never imports `gwcs`. Inverse of the sampled table is Newton with a residual
-bound. Time-dependent GWCS is a set of frozen epoch tables.
+never imports `gwcs`. `FrozenDetectorEpochTables.evaluate` / `.inverse` are
+device-native table ops with a Newton residual bound. Live GWCS graphs stay
+out.
 
 ### Spectral And Temporal Axes
 
@@ -138,7 +143,9 @@ Frames and alignment:
 
 - `icrs_to_galactic(...)`, `galactic_to_icrs(...)`, `icrs_to_ecliptic(...)`, `ecliptic_to_icrs(...)`, `precess_fk5(...)`
 - `CatalogState` batched tensors; see [coordinates.md](coordinates.md)
-- `EarthOrientation`, `Site`, `observed_altaz(...)` (explicit DUT1)
+- `EarthOrientation`, `Site`, `observed_altaz(...)` (explicit DUT1; optional polar motion, `pn='iau2006'` subset, opt-in aberration/refraction)
+- `transform(...)` tensor façade (`ALTAZ` / `ITRS` / geometric frames); not a SkyCoord
+- `icrs_to_itrs_xyz(...)`, `itrs_xyz_to_lonlat_deg(...)`
 - `propagate_proper_motion(...)` for tensor-native angular space motion
 - `propagate_proper_motion_with_jacobian(...)` for local uncertainty transport
   when distance/RV are unavailable

@@ -78,6 +78,92 @@ def _copy_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
     return dict(metadata) if metadata is not None else None
 
 
+def _healsparse_bit_shift(nside: int, nside_coverage: int) -> int:
+    ratio = int(nside) // int(nside_coverage)
+    shift = 0
+    while ratio > 1:
+        if ratio % 2 != 0:
+            raise ValueError("nside_coverage must be a power-of-two divisor of nside")
+        ratio //= 2
+        shift += 1
+    return 2 * shift
+
+
+def _encode_healsparse_images(
+    pixels: Tensor,
+    values: Tensor,
+    nside: int,
+    nest: bool,
+    nside_coverage: int,
+    fill_value: float,
+) -> tuple[Tensor, Tensor]:
+    """COV int64 map + SPARSE 1D image (sentinel block 0) per HealSparse FITS spec."""
+    pix = pixels.detach().cpu().reshape(-1).to(torch.int64)
+    val = values.detach().cpu().reshape(-1)
+    if not nest:
+        pix = _healpix.ring2nest(nside, pix)
+    nfine = (nside // nside_coverage) ** 2
+    npix_cov = _healpix.nside2npix(nside_coverage)
+    bit_shift = _healsparse_bit_shift(nside, nside_coverage)
+    cov_map = -torch.arange(npix_cov, dtype=torch.int64) * int(nfine)
+    if pix.numel() == 0:
+        sparse = torch.full(
+            (int(nfine),),
+            fill_value,
+            dtype=val.dtype,
+        )
+        return cov_map, sparse
+    ip_cov = torch.bitwise_right_shift(pix, bit_shift)
+    cov_pix = torch.unique(ip_cov, sorted=True)
+    for i, cp in enumerate(cov_pix.tolist()):
+        cov_map[int(cp)] = (i + 1) * int(nfine) - int(cp) * int(nfine)
+    n_blocks = int(cov_pix.numel()) + 1
+    sparse = torch.full((n_blocks * int(nfine),), fill_value, dtype=val.dtype)
+    index = pix + cov_map[ip_cov]
+    sparse[index] = val
+    return cov_map, sparse
+
+
+def _decode_healsparse_images(
+    cov_map: Tensor,
+    sparse: Tensor,
+    nside: int,
+    nside_coverage: int,
+    fill_value: float,
+) -> tuple[Tensor, Tensor]:
+    cov = cov_map.detach().cpu().reshape(-1).to(torch.int64)
+    data = sparse.detach().cpu().reshape(-1)
+    nfine = (nside // nside_coverage) ** 2
+    npix_cov = _healpix.nside2npix(nside_coverage)
+    if cov.numel() != npix_cov:
+        raise ValueError(
+            f"COV length {cov.numel()} != 12 nside_coverage^2 ({npix_cov})"
+        )
+    starts = cov + torch.arange(npix_cov, dtype=torch.int64) * int(nfine)
+    occupied = torch.nonzero(starts != 0, as_tuple=False).flatten()
+    if occupied.numel() == 0:
+        return (
+            torch.empty((0,), dtype=torch.int64),
+            torch.empty((0,), dtype=data.dtype),
+        )
+    local = torch.arange(int(nfine), dtype=torch.int64)
+    block_idx = starts[occupied].unsqueeze(1) + local.unsqueeze(0)
+    block_vals = data.index_select(0, block_idx.reshape(-1)).reshape(
+        occupied.numel(), int(nfine)
+    )
+    pix = occupied.unsqueeze(1) * int(nfine) + local.unsqueeze(0)
+    if data.dtype == torch.bool:
+        valid = block_vals
+    elif data.is_floating_point():
+        valid = ~_healpix.mask_bad(block_vals, badval=fill_value) & torch.isfinite(
+            block_vals
+        )
+    else:
+        sent = torch.as_tensor(fill_value, dtype=data.dtype)
+        valid = block_vals != sent
+    return pix[valid], block_vals[valid]
+
+
 @dataclass
 class SparseHealpixMap:
     """
@@ -1104,8 +1190,20 @@ class SparseHealpixMap:
         self.write_fits(filename, overwrite=clobber)
 
     def write_fits(self, filename: str, overwrite: bool = False) -> None:
-        """Write sparse map as a FITS BINTABLE via :func:`torchsky.io.write` (CFITSIO, no Python fitsio)."""
+        """Write a HealSparse FITS file via torchfits (COV + SPARSE images).
+
+        Maps with ``nside_coverage`` and a 1-D value vector use the upstream
+        ``PIXTYPE=HEALSPARSE`` layout. Pixel-list maps without coverage, or
+        extra value dimensions, keep the PIXEL/VALUE binary table.
+        """
         from ..io import write
+
+        if (
+            self.nside_coverage is not None
+            and self.values.ndim == 1
+        ):
+            self._write_healsparse_fits(filename, overwrite=overwrite)
+            return
 
         header = {
             "NSIDE": self.nside,
@@ -1156,10 +1254,134 @@ class SparseHealpixMap:
             overwrite=overwrite,
         )
 
+    def _write_healsparse_fits(self, filename: str, overwrite: bool = False) -> None:
+        from ..io import insert_hdu, write
+
+        nside_cov = int(self.nside_coverage)  # type: ignore[arg-type]
+        cov_map, sparse = _encode_healsparse_images(
+            self.pixels,
+            self.values,
+            int(self.nside),
+            bool(self.nest),
+            nside_cov,
+            False if self.values.dtype == torch.bool else float(self.fill_value),
+        )
+        if self.values.dtype == torch.bool:
+            sparse = sparse.to(torch.uint8)
+        cov_header = {
+            "EXTNAME": "COV",
+            "PIXTYPE": "HEALSPARSE",
+            "NSIDE": nside_cov,
+        }
+        sparse_header = {
+            "EXTNAME": "SPARSE",
+            "PIXTYPE": "HEALSPARSE",
+            "SENTINEL": self.fill_value,
+            "NSIDE": int(self.nside),
+            "NSIDECOV": nside_cov,
+            "ORDERING": "NEST",
+        }
+        if self.values.dtype == torch.bool:
+            sparse_header["BOOLMAP"] = True
+            sparse_header["SENTINEL"] = False
+        reserved = {
+            "NSIDE",
+            "ORDERING",
+            "SENTINEL",
+            "EXTNAME",
+            "NSIDE_COV",
+            "NSIDECOV",
+            "PIXTYPE",
+            "BOOLMAP",
+            "SIMPLE",
+            "BITPIX",
+            "NAXIS",
+            "NAXIS1",
+            "NAXIS2",
+            "PCOUNT",
+            "GCOUNT",
+            "XTENSION",
+        }
+        if self.metadata:
+            for k, v in self.metadata.items():
+                k_upper = str(k).upper()
+                if k_upper not in reserved:
+                    sparse_header[k_upper] = v
+        write(filename, cov_map, header=cov_header, overwrite=overwrite)
+        insert_hdu(filename, sparse, index=1, header=sparse_header)
+
+    @classmethod
+    def _read_healsparse_fits(cls, filename: str) -> "SparseHealpixMap":
+        from ..io import get_header, read_image
+
+        hdr_cov = get_header(filename, hdu=0)
+        hdr = get_header(filename, hdu=1)
+        cov = torch.as_tensor(read_image(filename, hdu=0, mmap=False))
+        sparse = torch.as_tensor(read_image(filename, hdu=1, mmap=False))
+        nside_cov = int(hdr_cov.get("NSIDE", hdr.get("NSIDECOV", 0)))
+        nside = int(hdr.get("NSIDE", 0))
+        fv_raw = hdr.get("SENTINEL", float(_healpix.UNSEEN))
+        if isinstance(fv_raw, str) and fv_raw.strip().upper() in {"T", "TRUE"}:
+            fv = 1.0
+        elif isinstance(fv_raw, str) and fv_raw.strip().upper() in {"F", "FALSE"}:
+            fv = 0.0
+        elif fv_raw is None:
+            fv = float(_healpix.UNSEEN)
+        else:
+            fv = float(fv_raw)
+        if str(hdr.get("BOOLMAP", "")).strip().upper() in {"T", "TRUE", "1"}:
+            sparse = sparse.to(torch.bool)
+            fv = 0.0
+        pixels, values = _decode_healsparse_images(
+            cov, sparse, nside, nside_cov, fv
+        )
+        reserved = {
+            "SIMPLE",
+            "BITPIX",
+            "NAXIS",
+            "NAXIS1",
+            "NAXIS2",
+            "EXTEND",
+            "COMMENT",
+            "HISTORY",
+            "XTENSION",
+            "PCOUNT",
+            "GCOUNT",
+            "EXTNAME",
+            "PIXTYPE",
+            "NSIDE",
+            "ORDERING",
+            "SENTINEL",
+            "NSIDE_COV",
+            "NSIDECOV",
+            "BOOLMAP",
+        }
+        metadata = {}
+        for k, v in hdr.items():
+            k_upper = str(k).upper()
+            if k_upper in reserved or k_upper.startswith("NAXIS"):
+                continue
+            metadata[k_upper] = v
+        return cls.from_pixels(
+            pixels,
+            values,
+            nside,
+            nest=True,
+            nside_coverage=nside_cov,
+            sentinel=fv,
+            metadata=metadata or None,
+        )
+
     @classmethod
     def read_fits(cls, filename: str) -> "SparseHealpixMap":
-        """Read FITS written by :meth:`write_fits` using :func:`torchsky.io.read_table`."""
+        """Read HealSparse COV+SPARSE images or a PIXEL/VALUE table."""
         from ..io import get_header, read_table
+
+        hdr0 = get_header(filename, hdu=0)
+        pixtype = str(hdr0.get("PIXTYPE", "")).strip().upper()
+        ext0 = str(hdr0.get("EXTNAME", "")).strip().upper()
+        if pixtype == "HEALSPARSE" or ext0 == "COV":
+            return cls._read_healsparse_fits(filename)
 
         hdu = _resolve_sparse_table_hdu_index(filename)
         hdr = get_header(filename, hdu=hdu)

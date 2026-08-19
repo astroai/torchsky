@@ -141,7 +141,9 @@ def test_coupled_tabular_lookup_wcs_multilinear_forward_and_autograd() -> None:
     assert lookup.names == ("tilted", "product")
     assert lookup.units == ("nm", "d")
 
-    differentiable_pixel = torch.tensor([[1.0, 5.0]], dtype=torch.float64, requires_grad=True)
+    differentiable_pixel = torch.tensor(
+        [[1.0, 5.0]], dtype=torch.float64, requires_grad=True
+    )
     lookup.pixel_to_world(differentiable_pixel)[..., 0].sum().backward()
     torch.testing.assert_close(
         differentiable_pixel.grad,
@@ -201,8 +203,72 @@ def test_coupled_tabular_lookup_wcs_bounds_nan_and_clamp() -> None:
         clamp_out,
         torch.tensor([[5.0], [60.0]], dtype=torch.float64),
     )
-    with pytest.raises(NotImplementedError, match="coupled tabular"):
-        lookup.world_to_pixel(torch.tensor([[1.0]], dtype=torch.float64))
+    # Underdetermined (2 pixel axes, 1 world): particular inverse recovers world.
+    w = torch.tensor([[55.0]], dtype=torch.float64)
+    pix = lookup.world_to_pixel(w)
+    assert torch.isfinite(pix).all()
+    torch.testing.assert_close(lookup.pixel_to_world(pix), w, atol=1e-6, rtol=0.0)
+
+
+def test_coupled_tabular_overdetermined_inverse_roundtrip_and_off_manifold() -> None:
+    x = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
+    y = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
+    xx = x[:, None].expand(3, 3)
+    yy = y[None, :].expand(3, 3)
+    world = torch.stack((xx, yy, xx + yy), dim=-1)
+    lookup = CoupledTabularLookupWCS((x, y), world)
+    pix = torch.tensor([[0.5, 1.25], [1.5, 0.75]], dtype=torch.float64)
+    on_manifold = lookup.pixel_to_world(pix)
+    back = lookup.world_to_pixel(on_manifold)
+    torch.testing.assert_close(back, pix, atol=1e-8, rtol=0.0)
+    off = on_manifold.clone()
+    off[:, 2] = off[:, 2] + 5.0
+    lost = lookup.world_to_pixel(off)
+    assert torch.isnan(lost).all()
+
+
+def test_wcs_coupled_tabular_overdetermined_fits_inverse() -> None:
+    x = torch.arange(3, dtype=torch.float64).reshape(3, 1)
+    y = torch.arange(4, dtype=torch.float64).reshape(1, 4)
+    wave = 400.0 + 12.0 * x + 0.25 * y
+    time = 59000.0 + 0.5 * y + 0.02 * x
+    aux = wave + time
+    header = {
+        "NAXIS": 3,
+        "CTYPE1": "WAVE-TAB",
+        "CTYPE2": "TIME-TAB",
+        "CTYPE3": "AUX-TAB",
+        "CRPIX1": 1.0,
+        "CRPIX2": 1.0,
+        "CRPIX3": 1.0,
+        "CRVAL1": 0.0,
+        "CRVAL2": 0.0,
+        "CRVAL3": 0.0,
+        "CDELT1": 1.0,
+        "CDELT2": 1.0,
+        "CDELT3": 1.0,
+        "PS1_1": "WAVE",
+        "PV1_3": 1,
+        "PS2_1": "TIME",
+        "PV2_3": 2,
+        "PS3_1": "AUX",
+        "PV3_3": 1,
+    }
+    tables = {
+        "WAVE": wave,
+        "TIME": time,
+        "AUX": aux,
+    }
+    wcs = WCS(header, tables=tables)
+    assert wcs.coupled_tabular is not None
+    assert wcs.coupled_tabular.pixel_n_dim == 2
+    assert wcs.coupled_tabular.world_n_dim == 3
+    assert wcs.coupled_tabular_axes == (0, 1, 2)
+    assert wcs.coupled_tabular_pixel_axes == (0, 1)
+    pixels = torch.tensor([[0.5, 1.5, 0.0], [2.0, 3.0, 0.0]], dtype=torch.float64)
+    world = wcs.pixel_to_world(pixels, origin=0)
+    back = wcs.world_to_pixel(world, origin=0)
+    torch.testing.assert_close(back[:, :2], pixels[:, :2], atol=1e-7, rtol=0.0)
 
 
 def test_coupled_tabular_lookup_wcs_normalizes_descending_grid_axes() -> None:

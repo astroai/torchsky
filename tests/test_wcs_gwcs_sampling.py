@@ -43,7 +43,9 @@ def test_gwcs_sampling_refines_and_records_edge_chip_provenance() -> None:
     expected = torch.as_tensor(
         np.stack(_smooth_reference(points[:, 0].numpy(), points[:, 1].numpy()), axis=-1)
     )
-    torch.testing.assert_close(result.transform(points), expected, atol=1e-10, rtol=1e-10)
+    torch.testing.assert_close(
+        result.transform(points), expected, atol=1e-10, rtol=1e-10
+    )
     recovered = result.transform.inverse(expected, tol=1e-8)
     torch.testing.assert_close(recovered, points, atol=1e-7, rtol=0.0)
 
@@ -73,6 +75,9 @@ def test_gwcs_frozen_epochs_pick_nearest_table() -> None:
     torch.testing.assert_close(
         shifted, torch.tensor([[1.5, 1.75]], dtype=torch.float64), atol=1e-10, rtol=0.0
     )
+    torch.testing.assert_close(tables.evaluate(pts, 0.1), pts, atol=1e-10, rtol=0.0)
+    recovered = tables.inverse(shifted, 0.9, tol=1e-8)
+    torch.testing.assert_close(recovered, pts, atol=1e-7, rtol=0.0)
 
 
 def test_gwcs_sampling_fails_closed_when_maximum_grid_cannot_meet_gate() -> None:

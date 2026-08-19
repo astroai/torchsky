@@ -54,7 +54,15 @@ from .gwcs_sampling import (
     sample_gwcs_detector_epochs,
     sample_gwcs_detector_to_tangent,
 )
-from .observed import EarthOrientation, Site, observed_altaz
+from .coords import transform
+from .iau2006 import apply_refraction, apply_stellar_aberration
+from .observed import (
+    EarthOrientation,
+    Site,
+    icrs_to_itrs_xyz,
+    itrs_xyz_to_lonlat_deg,
+    observed_altaz,
+)
 
 __all__ = [
     "SPEED_OF_LIGHT",
@@ -91,7 +99,12 @@ __all__ = [
     "galactic_to_icrs",
     "icrs_to_ecliptic",
     "icrs_to_galactic",
+    "apply_refraction",
+    "apply_stellar_aberration",
+    "icrs_to_itrs_xyz",
+    "itrs_xyz_to_lonlat_deg",
     "observed_altaz",
+    "transform",
     "precess_fk5",
     "propagate_proper_motion",
     "propagate_proper_motion_with_jacobian",

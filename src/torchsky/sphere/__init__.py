@@ -66,6 +66,7 @@ from .geom import (
     to_exact_region,
 )
 from .moc import MOC, nest2uniq, uniq2nest
+from .stmoc import STMOC, mjd_to_time_us, time_us_to_mjd
 from .sparse import (
     HealSparseMap,
     SkyMaskPipe,
@@ -93,6 +94,7 @@ from .spectral import (
     map2alm_lsq,
     map2alm_spin,
     pixwin,
+    rotate_alm,
     smoothalm,
     smoothmap,
     synalm,
@@ -107,6 +109,7 @@ __all__ = [
     "HealSparseMap",
     "LonLat",
     "MOC",
+    "STMOC",
     "NativeExactSphericalRegion",
     "PixelizedRegion",
     "RegionAreaEstimate",
@@ -130,6 +133,7 @@ __all__ = [
     "great_circle_distance",
     "interpolate_wavelength_axis",
     "lonlat_to_unit_xyz",
+    "mjd_to_time_us",
     "nest2uniq",
     "pairwise_angular_distance",
     "query_ellipse",
@@ -144,6 +148,7 @@ __all__ = [
     "spherical_polygons_intersect",
     "spherical_polygon_signed_area",
     "spherical_triangle_area",
+    "time_us_to_mjd",
     "to_exact_region",
     "uniq2nest",
     "unit_xyz_to_lonlat",
@@ -164,6 +169,7 @@ __all__ = [
     "anafast",
     "gaussian_beam",
     "pixwin",
+    "rotate_alm",
     "map2alm_spin",
     "alm2map_spin",
     "smoothalm",

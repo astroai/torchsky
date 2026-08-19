@@ -226,8 +226,10 @@ class CoupledTabularLookupWCS:
     ``pixel_axes`` define the table-grid coordinates for each pixel dimension.
     ``world`` has shape ``(*grid_shape, world_n_dim)``. The forward transform is
     differentiable with respect to query coordinates inside each grid cell.
-    General inverse lookup for coupled grids is not single-valued in general and
-    is intentionally not guessed here.
+    Inverse lookup is unique only when ``world_n_dim >= pixel_n_dim`` and the
+    query lies on the interpolated manifold. Underdetermined tables
+    (``world_n_dim < pixel_n_dim``) return a nearest-seed Gauss–Newton
+    particular solution (minimum-norm step); it is not the unique inverse.
     """
 
     pixel_axes: tuple[Tensor, ...]
@@ -362,10 +364,6 @@ class CoupledTabularLookupWCS:
         pts = torch.as_tensor(world)
         if pts.shape[-1] != self.world_n_dim:
             raise ValueError(f"world last dimension must be {self.world_n_dim}")
-        if self.pixel_n_dim != self.world_n_dim:
-            raise NotImplementedError(
-                "coupled tabular inverse requires pixel_n_dim == world_n_dim"
-            )
         bounds_mode = bounds or self.bounds
         if bounds_mode not in {"nan", "clamp"}:
             raise ValueError("bounds must be 'nan' or 'clamp'")
@@ -381,13 +379,16 @@ class CoupledTabularLookupWCS:
         flat_world = world_grid.reshape(-1, self.world_n_dim)
         flat_axes = _flat_grid_pixel_coordinates(axes)
 
-        distances = torch.sum((target[:, None, :] - flat_world[None, :, :]) ** 2, dim=-1)
+        distances = torch.sum(
+            (target[:, None, :] - flat_world[None, :, :]) ** 2, dim=-1
+        )
         nearest = torch.argmin(distances, dim=-1)
         initial = flat_axes.index_select(0, nearest)
 
         solved = []
+        use_global_2d = self.pixel_n_dim == 2 and self.world_n_dim >= 2
         for row_index in range(target.shape[0]):
-            if self.pixel_n_dim == 2:
+            if use_global_2d:
                 solved.append(
                     _solve_coupled_tabular_point_2d_global(
                         self,
@@ -446,10 +447,7 @@ def _solve_coupled_tabular_point(
     else:
         upper = upper_bounds.to(device=target.device, dtype=target.dtype)
     eps = torch.stack(
-        [
-            torch.clamp((axis[-1] - axis[0]).abs() * 1.0e-6, min=1.0e-8)
-            for axis in axes
-        ]
+        [torch.clamp((axis[-1] - axis[0]).abs() * 1.0e-6, min=1.0e-8) for axis in axes]
     ).to(device=target.device, dtype=target.dtype)
     for _ in range(max_iter):
         value = lookup.pixel_to_world(current.unsqueeze(0), bounds="clamp")[0].to(
@@ -464,16 +462,26 @@ def _solve_coupled_tabular_point(
         for axis_index in range(len(axes)):
             perturbed = current.clone()
             step = eps[axis_index]
-            if bool((current[axis_index] + step > axes[axis_index][-1]).detach().cpu().item()):
+            if bool(
+                (current[axis_index] + step > axes[axis_index][-1])
+                .detach()
+                .cpu()
+                .item()
+            ):
                 step = -step
             perturbed[axis_index] = perturbed[axis_index] + step
-            pvalue = lookup.pixel_to_world(perturbed.unsqueeze(0), bounds="clamp")[0].to(
-                dtype=target.dtype
-            )
+            pvalue = lookup.pixel_to_world(perturbed.unsqueeze(0), bounds="clamp")[
+                0
+            ].to(dtype=target.dtype)
             columns.append((pvalue - value) / step)
         jac = torch.stack(columns, dim=-1)
         try:
-            step = torch.linalg.solve(jac, residual)
+            if jac.shape[0] == jac.shape[1]:
+                step = torch.linalg.solve(jac, residual)
+            else:
+                step = torch.linalg.lstsq(jac, residual.unsqueeze(-1)).solution.squeeze(
+                    -1
+                )
         except RuntimeError:
             break
         if not bool(torch.isfinite(step).all().detach().cpu().item()):
@@ -545,20 +553,15 @@ def _solve_coupled_tabular_point_2d_global(
             if not bool(torch.isfinite(candidate).all().detach().cpu().item()):
                 continue
             if bool(
-                torch.any(candidate < lower - axis_tol)
-                .detach()
-                .cpu()
-                .item()
-            ) or bool(
-                torch.any(candidate > upper + axis_tol)
-                .detach()
-                .cpu()
-                .item()
-            ):
+                torch.any(candidate < lower - axis_tol).detach().cpu().item()
+            ) or bool(torch.any(candidate > upper + axis_tol).detach().cpu().item()):
                 continue
-            residual = lookup.pixel_to_world(candidate.unsqueeze(0), bounds="clamp")[
-                0
-            ].to(dtype=target.dtype) - target
+            residual = (
+                lookup.pixel_to_world(candidate.unsqueeze(0), bounds="clamp")[0].to(
+                    dtype=target.dtype
+                )
+                - target
+            )
             if float(torch.linalg.vector_norm(residual).detach().cpu().item()) > tol:
                 continue
             duplicate = False
@@ -574,11 +577,21 @@ def _solve_coupled_tabular_point_2d_global(
             if not duplicate:
                 solutions.append(candidate)
                 if len(solutions) > 1:
-                    return torch.full_like(target, torch.nan)
+                    return torch.full(
+                        (lookup.pixel_n_dim,),
+                        torch.nan,
+                        dtype=target.dtype,
+                        device=target.device,
+                    )
 
     if len(solutions) == 1:
         return solutions[0]
-    return torch.full_like(target, torch.nan)
+    return torch.full(
+        (lookup.pixel_n_dim,),
+        torch.nan,
+        dtype=target.dtype,
+        device=target.device,
+    )
 
 
 def _interp_multilinear(
@@ -991,14 +1004,12 @@ def coupled_tabular_wcs_and_axes_from_fits(
     tables: Any,
     *,
     key: str = "",
-) -> tuple[CoupledTabularLookupWCS, tuple[int, ...]]:
-    """Build a coupled table-lookup WCS plus the corresponding FITS axes.
+) -> tuple[CoupledTabularLookupWCS, tuple[int, ...], tuple[int, ...]]:
+    """Build a coupled table-lookup WCS plus FITS world and table-index axes.
 
-    This helper targets the genuinely multidimensional ``-TAB`` case where
-    multiple WCS axes are represented by coordinate arrays over a shared table
-    grid. It requires ``PVi_3`` on each tabular WCS axis so the table dimensions
-    are explicit, and returns a torch-native multilinear forward interpolator.
-    General coupled inverse solving remains outside this helper.
+    World axes are the ``-TAB`` CTYPEs. Table-index (pixel) axes are the WCS
+    axes that own each table dimension via ``PVi_3`` (lowest axis number per
+    table dim). Inverse solving is on ``CoupledTabularLookupWCS``.
     """
     alt_key = "" if key in {"", " "} else str(key).strip().upper()
     if alt_key and (len(alt_key) != 1 or not ("A" <= alt_key <= "Z")):
@@ -1089,7 +1100,9 @@ def coupled_tabular_wcs_and_axes_from_fits(
                 f"inconsistent indexing vectors for coupled -TAB table axis "
                 f"{tab_axis_number}"
             )
-        unit = str(_tab_header_get(header, f"CUNIT{axis_number}", alt_key) or "") or None
+        unit = (
+            str(_tab_header_get(header, f"CUNIT{axis_number}", alt_key) or "") or None
+        )
         coords.append((axis_number, coord_col, unit, coord, tab_axis_number))
 
     if not coords:
@@ -1097,7 +1110,11 @@ def coupled_tabular_wcs_and_axes_from_fits(
     if grid_shape is None:
         raise ValueError("no multidimensional FITS -TAB coordinate arrays found")
 
-    missing = [axis for axis in range(1, len(grid_shape) + 1) if axis not in pixel_axes_by_tab_axis]
+    missing = [
+        axis
+        for axis in range(1, len(grid_shape) + 1)
+        if axis not in pixel_axes_by_tab_axis
+    ]
     if missing:
         for axis in missing:
             pixel_axes_by_tab_axis[axis] = torch.arange(
@@ -1106,11 +1123,18 @@ def coupled_tabular_wcs_and_axes_from_fits(
 
     coords.sort(key=lambda item: item[0])
     world = torch.stack([item[3] for item in coords], dim=-1)
-    pixel_axes = tuple(pixel_axes_by_tab_axis[index] for index in range(1, len(grid_shape) + 1))
+    pixel_axes = tuple(
+        pixel_axes_by_tab_axis[index] for index in range(1, len(grid_shape) + 1)
+    )
     names = tuple(item[1] for item in coords)
     units = tuple(item[2] for item in coords)
     lookup = CoupledTabularLookupWCS(pixel_axes, world, names=names, units=units)
-    return lookup, tuple(item[0] for item in coords)
+    world_axes = tuple(item[0] for item in coords)
+    pixel_wcs_axes = []
+    for tab_dim in range(1, len(grid_shape) + 1):
+        owners = [item[0] for item in coords if item[4] == tab_dim]
+        pixel_wcs_axes.append(min(owners) if owners else tab_dim)
+    return lookup, world_axes, tuple(pixel_wcs_axes)
 
 
 def coupled_tabular_wcs_from_fits(
@@ -1120,7 +1144,7 @@ def coupled_tabular_wcs_from_fits(
     key: str = "",
 ) -> CoupledTabularLookupWCS:
     """Build a forward coupled table-lookup WCS from FITS ``-TAB`` metadata."""
-    lookup, _axes = coupled_tabular_wcs_and_axes_from_fits(
+    lookup, _world_axes, _pixel_axes = coupled_tabular_wcs_and_axes_from_fits(
         header, tables, key=key
     )
     return lookup

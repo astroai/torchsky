@@ -11,6 +11,7 @@
 - [Sampling](#sampling)
 - [Sparse Maps](#sparse-maps)
 - [MOC](#moc)
+- [STMOC](#class-stmoc)
 - [Harmonic Space (SHT)](#harmonic-space-sht)
 - [Power Spectra](#power-spectra)
 - [Beams & Windows](#beams--windows)
@@ -210,9 +211,11 @@ keep the pixel-list path because fill-block cells cannot tell valid False/0 from
 an uncovered child.
 
 `HealSparseMap.from_moc(moc, nside=...)` realizes MOC coverage directly as sparse
-nested pixels without materializing a full dense HEALPix mask. Sparse FITS
-roundtrips preserve the `VALUE` column dtype for boolean, integer, and
-floating-point coverage maps.
+nested pixels without materializing a full dense HEALPix mask. Maps with
+`nside_coverage` and a 1-D value vector write HealSparse FITS (`EXTNAME=COV`
+int64 coverage plus `EXTNAME=SPARSE` image, `PIXTYPE=HEALSPARSE`). Boolean maps
+are stored as `uint8` with `BOOLMAP`. Pixel-list maps without coverage still use
+a PIXEL/VALUE table. Sentinel values are not valid pixels on the image path.
 
 ### `WideBitMask` / `SkyMaskPipe`
 
@@ -269,6 +272,33 @@ json_repr = moc.to_json()
 
 `boundary()` returns one or more closed loops of shape `[N, 2]` in `(lon_deg, lat_deg)` coordinates. The loops are traced from stitched HEALPix cell edges at the MOC's current maximum order.
 
+### Class `STMOC`
+
+Space-Time Multi-Order Coverage (IVOA MOC 2.0). Time cells use order 61 = 1 µs since JD=0; spatial cells are torchsky `MOC` UNIQ coverage. This is not a mocpy wrapper.
+
+```python
+from torchsky.sphere import MOC, STMOC, nest2uniq
+
+space = MOC(nest2uniq(4, torch.tensor([0, 1, 2])))
+stmoc = STMOC.from_spatial_coverages(59000.0, 59001.0, space, time_depth=16)
+inside = stmoc.contains(59000.5, 0.0, 0.0)
+window = stmoc.query_by_time(59000.0, 59000.5)
+```
+
+| Constructor / method | Description |
+|---|---|
+| `STMOC.empty(...)` | No segments |
+| `from_spatial_coverages(t_start_mjd, t_end_mjd, spatial, time_depth=...)` | One spatial MOC per half-open MJD interval |
+| `from_times_positions(time_mjd, lon, lat, time_depth=..., spatial_depth=...)` | Quantize catalog samples onto time × HEALPix cells |
+| `contains(time_mjd, lon_deg, lat_deg)` | Point-in-STMOC (broadcasts) |
+| `filter_catalog(...)` | Keep samples inside the coverage |
+| `query_by_time(t_start_mjd, t_end_mjd)` | Spatial union of segments overlapping `[t_start, t_end)` |
+| `union` / `intersection` | Sweep over time breakpoints |
+| `write_fits` / `read_fits` | IVOA RANGE packaging (`MOCDIM=2`; time pairs have bit 63 set) |
+| `to_ascii` / `from_ascii` | Native `t<depth>/<c0>-<c1>` plus spatial MOC ASCII. Not a mocpy STMOC clone. |
+
+Time conversion helpers: `mjd_to_time_us`, `time_us_to_mjd`. Polar motion / IERS is not involved.
+
 ---
 
 ## Harmonic Space (SHT)
@@ -279,7 +309,7 @@ Preferred module import:
 import torchsky.sphere.harmonics as harmonics
 ```
 
-### `map2alm(map_values, lmax=None, mmax=None, *, nside=None, nest=False, iter=0, pol=False, use_weights=False, use_pixel_weights=False, gal_cut=0.0)`
+### `map2alm(map_values, lmax=None, mmax=None, *, nside=None, nest=False, iter=0, pol=False, use_weights=False, use_pixel_weights=False, gal_cut=0.0, datapath=None)`
 
 Analyze a HEALPix map into spherical harmonic coefficients.
 
@@ -331,12 +361,13 @@ Synthesize two spin-component maps from `(alm_plus, alm_minus)` coefficient pair
 | `alm_size(lmax, mmax=None)` | Number of alm coefficients |
 | `alm_index(ell, m, lmax)` | Flat index for mode (ell, m) |
 | `almxfl(alm, fl)` | Multiply by ell-dependent filter |
+| `rotate_alm(alm, psi, theta, phi)` | zyz Euler rotation (healpy convention). Returns a new tensor. |
 
 ---
 
 ## Power Spectra
 
-### `anafast(map1, map2=None, *, nside=None, lmax=None, mmax=None, nest=False, nspec=None, iter=0, alm=False, pol=True, use_weights=False, use_pixel_weights=False, gal_cut=0.0)`
+### `anafast(map1, map2=None, *, nside=None, lmax=None, mmax=None, nest=False, nspec=None, iter=0, alm=False, pol=True, use_weights=False, use_pixel_weights=False, gal_cut=0.0, datapath=None)`
 
 Auto/cross angular power spectrum C_ell.
 
@@ -462,10 +493,10 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API
 
 | Area | Limitation |
 |---|---|
-| `map2alm` weights | `use_weights` / `use_pixel_weights` apply computed RING quadrature (mean 1), exact for even Legendre moments through `l = 2*min(nside,128)-2`. They do not load HEALPix full-pixel or ring-weight FITS tables, so they do not match healpy's packaged `weight_ring_n*.fits`. The two flags are mutually exclusive. |
-| `alm2map_spin` | Fused Ishioka CPU synthesis still ~1.2–1.4× healpy on Mac after the 2026-08 Ishioka work. Linux CANFAR SHA `934b02fa` (ATen polar FFT) is ~11× healpy at nside=128. Do not claim Linux SHT. Set `TORCHSKY_SPIN_ISHIOKA=0` at call time if Ishioka loses to Wigner. Polar RING FFTs use ATen FFT; GPU map tensors are still copied to host. |
+| `map2alm` weights | `use_weights` applies computed RING quadrature (mean 1). `use_pixel_weights` loads HEALPix full-pixel FITS via torchfits from `datapath` (`1+w` corrections). The two flags are mutually exclusive. Missing pixel-weight files raise; nothing is downloaded or vendored. |
+| `alm2map_spin` | Fused Ishioka CPU synthesis still ~1.2–1.4× healpy on Mac after the 2026-08 Ishioka work. Linux CANFAR SHA `934b02fa` (ATen polar FFT) is ~11× healpy at nside=128. Do not claim Linux SHT. Set `TORCHSKY_SPIN_ISHIOKA=0` at call time if Ishioka loses to Wigner. Polar RING FFTs use ATen FFT. CUDA/MPS keep maps/alms on device via that ATen ring path; fused Ishioka/Wigner C++ stays CPU. Do not claim a fused CUDA Ishioka kernel. |
 | Pixel windows | Packaged tables cover standard HEALPix NSIDE range. Higher NSIDE may require external data. |
-| Device | See the device table below. GPU SHT inputs are copied to host; fused Ishioka/Wigner is CPU C++. |
+| Device | See the device table below. Fused Ishioka/Wigner is CPU C++. CUDA/MPS SHT uses the ATen ring FFT path on device (no host copy of the map). `rotate_alm` and `alm2lonlat` stay on device (ATen; CUDA float64 / MPS float32). |
 | s2fft | Optional bench/test peer only. Native HEALPix has no sampling theorem; do not use `method="jax_healpy"` as an oracle. |
 | cuHPX | **No-go** as a torchsky backend until a CANFAR CUDA spike (`scripts/run_canfar_cuhpx_sht_spike.sh`) reports `go-scalar-cuda`. Even then: optional env-gated scalar CUDA adapter only, still healpy-tested, never default on CPU/MPS, no spin-2, no core/`pyproject.toml` dependency. Default cuHPX `lmax=2*nside+1` and float32 must not be compared blindly to healpy `3*nside-1`. |
 
@@ -477,8 +508,10 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API
 | HEALPix geometry | yes | yes | yes, looser index gates |
 | Sparse `get_values` / MOC contains | yes | yes if tensors stay on device | yes float32 |
 | Polygons | yes | no | no |
-| SHT (Ishioka/Wigner) | yes float64 | host copy only | host copy only |
-| Observed place | yes float64 | later | later |
+| SHT (Ishioka/Wigner C++) | yes float64 | no (CPU kernel) | no (CPU kernel) |
+| SHT (ATen ring FFT) | yes float64 | yes float64 | yes float32 |
+| rotate_alm / alm2lonlat | yes float64 | yes float64 | yes float32 |
+| Observed place | yes float64 | yes float64 | yes float32 |
 
 Exact spherical polygons (`to_exact`, `NativeExactSphericalRegion`) match spherical-geometry area to `1e-12` steradians. The approximate CPU backend is the throughput path; document that bound before treating approximate contains as exact.
 

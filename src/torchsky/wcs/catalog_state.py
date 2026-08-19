@@ -14,6 +14,8 @@ import torch
 from torch import Tensor
 
 from .frames import (
+    _to_device,
+    _work_dtype,
     canonical_celestial_frame,
     convert_celestial,
     propagate_proper_motion,
@@ -28,7 +30,7 @@ _AU_PER_PC = 648000.0 / math.pi
 
 def _as_f64(value: Any) -> Tensor:
     if isinstance(value, Tensor):
-        return value.to(dtype=torch.float64)
+        return value.to(dtype=_work_dtype(value.device))
     return torch.as_tensor(value, dtype=torch.float64)
 
 
@@ -53,21 +55,23 @@ class CatalogState:
 
     def __post_init__(self) -> None:
         lon = _as_f64(self.lon)
-        lat = _as_f64(self.lat).to(device=lon.device)
+        lat = _to_device(_as_f64(self.lat), lon.device)
         self.lon, self.lat = torch.broadcast_tensors(lon, lat)
         self.frame = canonical_celestial_frame(self.frame)
-        self.epoch = _as_f64(self.epoch).to(device=self.lon.device)
+        self.epoch = _to_device(_as_f64(self.epoch), self.lon.device)
         if self.pm_lon_coslat_mas_yr is not None:
-            self.pm_lon_coslat_mas_yr = _as_f64(self.pm_lon_coslat_mas_yr).to(
-                device=self.lon.device
+            self.pm_lon_coslat_mas_yr = _to_device(
+                _as_f64(self.pm_lon_coslat_mas_yr), self.lon.device
             )
         if self.pm_lat_mas_yr is not None:
-            self.pm_lat_mas_yr = _as_f64(self.pm_lat_mas_yr).to(device=self.lon.device)
+            self.pm_lat_mas_yr = _to_device(
+                _as_f64(self.pm_lat_mas_yr), self.lon.device
+            )
         if self.parallax_mas is not None:
-            self.parallax_mas = _as_f64(self.parallax_mas).to(device=self.lon.device)
+            self.parallax_mas = _to_device(_as_f64(self.parallax_mas), self.lon.device)
         if self.radial_velocity_km_s is not None:
-            self.radial_velocity_km_s = _as_f64(self.radial_velocity_km_s).to(
-                device=self.lon.device
+            self.radial_velocity_km_s = _to_device(
+                _as_f64(self.radial_velocity_km_s), self.lon.device
             )
         if self.valid is not None:
             self.valid = torch.as_tensor(
@@ -120,7 +124,7 @@ class CatalogState:
             source_epoch_jyear=self.epoch,
             target_epoch_jyear=epoch,
         )
-        return replace(self, lon=lon, lat=lat, epoch=_as_f64(epoch).to(device=lon.device))
+        return replace(self, lon=lon, lat=lat, epoch=_to_device(_as_f64(epoch), lon.device))
 
     def propagate_physical(self, epoch: Tensor | float) -> CatalogState:
         if (
@@ -148,7 +152,7 @@ class CatalogState:
             state,
             lon=lon,
             lat=lat,
-            epoch=_as_f64(epoch).to(device=lon.device),
+            epoch=_to_device(_as_f64(epoch), lon.device),
             pm_lon_coslat_mas_yr=pm_lon,
             pm_lat_mas_yr=pm_lat,
             parallax_mas=parallax,

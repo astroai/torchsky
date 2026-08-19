@@ -11,6 +11,7 @@ import torch
 from torch import Tensor
 
 from .._native import cpp as _cpp
+from ..io import read_image, read_table
 
 from . import healpix as _healpix
 from ._pixwin_embedded import REFERENCE_PIXWIN_TABLES as _REFERENCE_PIXWIN_TABLES
@@ -202,14 +203,37 @@ def _maybe_compile(fn):
 
 
 def _preferred_real_dtype(device: torch.device) -> torch.dtype:
-    return torch.float64 if device.type == "cpu" else torch.float32
+    return torch.float32 if device.type == "mps" else torch.float64
 
 
 def _preferred_complex_dtype(device: torch.device) -> torch.dtype:
-    return torch.complex128 if device.type == "cpu" else torch.complex64
+    return torch.complex64 if device.type == "mps" else torch.complex128
+
+
+def _accumulate_add(
+    dst: Tensor, dim: int, index: Tensor, src: Tensor, *, scatter: bool
+) -> Tensor:
+    """In-place add. MPS has no complex scatter/index_add; split real/imag."""
+    if src.is_complex() and src.device.type == "mps":
+        real = torch.zeros(dst.shape, dtype=src.real.dtype, device=src.device)
+        imag = torch.zeros_like(real)
+        if scatter:
+            real.scatter_add_(dim, index, src.real)
+            imag.scatter_add_(dim, index, src.imag)
+        else:
+            real.index_add_(dim, index, src.real)
+            imag.index_add_(dim, index, src.imag)
+        return torch.complex(real, imag)
+    if scatter:
+        dst.scatter_add_(dim, index, src)
+    else:
+        dst.index_add_(dim, index, src)
+    return dst
 
 
 _RING_WEIGHT_CACHE: dict[tuple[int, int], Tensor] = {}
+_PIXEL_WEIGHT_CACHE: dict[tuple[int, str], Tensor] = {}
+_HEALPIX_FULL_WEIGHT_REL = "full_weights/healpix_full_weights_nside_%04d.fits"
 
 
 def _even_legendre_p(z: Tensor, n_even: int) -> Tensor:
@@ -236,8 +260,8 @@ def _healpix_ring_quadrature_weights(nside: int) -> Tensor:
 
     Tikhonov-regularized even-Legendre moment matching through
     ``l = 2*min(nside, 128)-2`` (Gorski et al. 2005 equal-area rings).
-    This is not the HEALPix full-pixel weight FITS product; both
-    ``use_weights`` and ``use_pixel_weights`` apply this quadrature.
+    ``use_weights`` applies this quadrature. Pixel-weight FITS files are a
+    separate product loaded only when ``use_pixel_weights=True``.
     """
     nside_i = int(nside)
     n_even = min(nside_i, 128)
@@ -270,6 +294,83 @@ def _healpix_ring_quadrature_weights(nside: int) -> Tensor:
     return pix_w
 
 
+def _resolve_healpix_datapath(
+    datapath: str | os.PathLike[str] | None,
+) -> Path | None:
+    if datapath is not None:
+        return Path(datapath)
+    env = os.environ.get("TORCHSKY_HEALPIX_DATAPATH")
+    if env:
+        return Path(env)
+    return None
+
+
+def _healpix_full_weight_path(nside: int, datapath: Path) -> Path:
+    if datapath.is_file():
+        return datapath
+    return datapath / (_HEALPIX_FULL_WEIGHT_REL % int(nside))
+
+
+def _read_healpix_full_weight_vector(path: str, nside: int) -> Tensor:
+    """Load HEALPix full-pixel weight *corrections* (applied as ``1 + w``)."""
+    npix = _healpix.nside2npix(nside)
+    candidates: list[Tensor] = []
+    for hdu in (1, 0):
+        try:
+            data = torch.as_tensor(read_image(path, hdu=hdu, mmap=False)).reshape(-1)
+        except Exception:
+            continue
+        if data.numel() > 0:
+            candidates.append(data)
+    if not candidates:
+        try:
+            table = read_table(path)
+        except Exception as exc:
+            raise ValueError(
+                f"could not read HEALPix pixel weights from {path!r}"
+            ) from exc
+        if not hasattr(table, "keys"):
+            raise ValueError(f"pixel weight table in {path!r} has no columns")
+        first = next(iter(table.keys()))
+        candidates.append(torch.as_tensor(table[first]).reshape(-1))
+    data = candidates[0].to(dtype=torch.float64)
+    if data.numel() == npix:
+        return data
+    if data.numel() == 3 * npix:
+        return data.reshape(3, npix)[0]
+    raise ValueError(
+        f"pixel weights in {path!r} have {data.numel()} values; expected {npix}"
+    )
+
+
+def _healpix_full_pixel_weight_corrections(
+    nside: int, datapath: str | os.PathLike[str] | None
+) -> Tensor:
+    root = _resolve_healpix_datapath(datapath)
+    if root is None:
+        raise FileNotFoundError(
+            "use_pixel_weights=True requires datapath or TORCHSKY_HEALPIX_DATAPATH "
+            "pointing at a healpy-data tree "
+            "(full_weights/healpix_full_weights_nside_NNNN.fits). "
+            "torchsky does not download or vendor those files"
+        )
+    path = _healpix_full_weight_path(nside, root)
+    key = (int(nside), str(path.resolve()) if path.exists() else str(path))
+    cached = _PIXEL_WEIGHT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"pixel weights file missing at {path}. "
+            "Set datapath to a local healpy-data checkout or pass use_pixel_weights=False"
+        )
+    w = _read_healpix_full_weight_vector(str(path), int(nside))
+    if not bool(torch.isfinite(w).all().item()):
+        raise ValueError(f"pixel weights in {path} are not finite")
+    _PIXEL_WEIGHT_CACHE[key] = w
+    return w
+
+
 def _gal_cut_keep_mask(
     nside: int, gal_cut_deg: float, *, nest: bool, device: torch.device
 ) -> Tensor:
@@ -289,17 +390,21 @@ def _apply_map2alm_weights(
     gal_cut: float,
     use_weights: bool,
     use_pixel_weights: bool,
+    datapath: str | os.PathLike[str] | None = None,
 ) -> Tensor:
-    """Apply healpy-style galactic cut and RING quadrature to RING-ordered maps."""
+    """Apply galactic cut, RING quadrature, or HEALPix full-pixel weights."""
     if use_weights and use_pixel_weights:
         raise ValueError("use_weights and use_pixel_weights are mutually exclusive")
     out = rows
     if float(gal_cut) > 0.0:
-        keep = _gal_cut_keep_mask(
-            nside, float(gal_cut), nest=False, device=rows.device
-        )
+        keep = _gal_cut_keep_mask(nside, float(gal_cut), nest=False, device=rows.device)
         out = out * keep.to(dtype=out.dtype)
-    if use_weights or use_pixel_weights:
+    if use_pixel_weights:
+        corr = _healpix_full_pixel_weight_corrections(nside, datapath).to(
+            device=rows.device, dtype=out.dtype
+        )
+        out = out * (1.0 + corr).unsqueeze(0)
+    elif use_weights:
         w = _healpix_ring_quadrature_weights(nside).to(
             device=rows.device, dtype=out.dtype
         )
@@ -394,24 +499,26 @@ def _alm_m_array(lmax: int, mmax: int) -> Tensor:
     return out
 
 
-def _map_to_cpu_rows(
-    map_values: Tensor | list[float] | list[list[float]],
-) -> tuple[Tensor, bool]:
-    t = torch.as_tensor(map_values)
-    single = t.ndim == 1
-    if single:
-        rows = t.unsqueeze(0)
-    elif t.ndim == 2:
-        rows = t
-    else:
-        raise ValueError("map_values must be shape (npix,) or (nmaps, npix)")
-    return rows.to(dtype=torch.float64, device="cpu"), single
+def _require_sht_device(*values: object, what: str = "HEALPix SHT") -> None:
+    """Fused Ishioka C++ is CPU. CUDA/MPS use the ATen ring path; no host copy."""
+    allowed = {"cpu", "cuda", "mps"}
+    for value in values:
+        if value is None:
+            continue
+        tensor = value if isinstance(value, Tensor) else torch.as_tensor(value)
+        if tensor.device.type not in allowed:
+            raise ValueError(
+                f"{what} supports cpu, cuda, and mps; got {tensor.device}. "
+                "Fused Ishioka/Wigner C++ stays on CPU. CUDA/MPS keep tensors "
+                "on device (ATen ring FFT). Use alm2lonlat for arbitrary coords."
+            )
 
 
 def _map_to_rows(
     map_values: Tensor | list[float] | list[list[float]],
 ) -> tuple[Tensor, bool]:
     t = torch.as_tensor(map_values)
+    _require_sht_device(t, what="HEALPix SHT")
     single = t.ndim == 1
     if single:
         rows = t.unsqueeze(0)
@@ -422,24 +529,11 @@ def _map_to_rows(
     return rows.to(dtype=_preferred_real_dtype(rows.device)), single
 
 
-def _alm_to_cpu_rows(
-    alm_values: Tensor | list[complex] | list[list[complex]],
-) -> tuple[Tensor, bool]:
-    t = torch.as_tensor(alm_values)
-    single = t.ndim == 1
-    if single:
-        rows = t.unsqueeze(0)
-    elif t.ndim == 2:
-        rows = t
-    else:
-        raise ValueError("alm_values must be shape (nalm,) or (nmaps, nalm)")
-    return rows.to(dtype=torch.complex128, device="cpu"), single
-
-
 def _alm_to_rows(
     alm_values: Tensor | list[complex] | list[list[complex]],
 ) -> tuple[Tensor, bool]:
     t = torch.as_tensor(alm_values)
+    _require_sht_device(t, what="HEALPix SHT")
     single = t.ndim == 1
     if single:
         rows = t.unsqueeze(0)
@@ -647,7 +741,6 @@ def _ylm_basis(
     return out
 
 
-@_maybe_compile
 def _wigner_d_element(ell: int, m: int, mp: int, theta: Tensor) -> Tensor:
     """
     Compute Wigner small-d element d^ell_{m,mp}(theta).
@@ -655,11 +748,11 @@ def _wigner_d_element(ell: int, m: int, mp: int, theta: Tensor) -> Tensor:
     WARNING: Numerically unstable for large ell. Use for small ell only (e.g. bootstrapping).
     """
     if abs(m) > ell or abs(mp) > ell:
-        return torch.zeros_like(theta, dtype=torch.float64)
+        return torch.zeros_like(theta)
 
     ct = torch.cos(theta * 0.5)
     st = torch.sin(theta * 0.5)
-    out = torch.zeros_like(theta, dtype=torch.float64)
+    out = torch.zeros_like(theta)
 
     log_pref = 0.5 * (
         math.lgamma(float(ell + m + 1))
@@ -704,7 +797,7 @@ def _wigner_d_l_sequence(
     """
     if ell_max < ell_min:
         return torch.empty(
-            (0, theta.shape[0]), dtype=torch.float64, device=theta.device
+            (0, theta.shape[0]), dtype=theta.dtype, device=theta.device
         )
 
     # Bootstrap with direct formula for the first two terms
@@ -1958,6 +2051,7 @@ def _scalar_alm2map_ring_torch(
         _SCALAR_INTERP_CPP_ENABLE
         and _cpp is not None
         and hasattr(_cpp, "_healpix_scalar_interpolate_recurrence_cpu")
+        and device.type == "cpu"
     )
 
     if use_cpp_recurrence:
@@ -2000,7 +2094,7 @@ def _scalar_alm2map_ring_torch(
             (nmaps, mmax + 1, nrings), dtype=dtype_cplx, device=device
         )
         m_expand = m_idx.unsqueeze(0).unsqueeze(-1).expand_as(alm_weighted)
-        f_m_ring.scatter_add_(1, m_expand, alm_weighted)
+        f_m_ring = _accumulate_add(f_m_ring, 1, m_expand, alm_weighted, scatter=True)
 
         # Apply phi0 phase per m
         f_m_ring = f_m_ring * phi0_phase.unsqueeze(0)
@@ -2053,6 +2147,7 @@ def _scalar_map2alm_ring_torch(
         _SCALAR_RECURRENCE_CPP_ENABLE
         and _cpp is not None
         and hasattr(_cpp, "_healpix_scalar_integrate_recurrence_cpu")
+        and device.type == "cpu"
     )
 
     if use_cpp_recurrence:
@@ -2162,7 +2257,9 @@ def _ring_fourier_synthesis(
                 alias_idx = (
                     alias_idx if device.type == "cpu" else alias_idx.to(device=device)
                 )
-                s_fold.index_add_(2, alias_idx, s_group_perm)
+                s_fold = _accumulate_add(
+                    s_fold, 2, alias_idx, s_group_perm, scatter=False
+                )
                 map_vals = torch.fft.ifft(s_fold * float(common_len), dim=-1)
         out_map[:, pix_start:pix_end] = map_vals.reshape(nrows, -1)
 
@@ -2191,7 +2288,9 @@ def _ring_fourier_synthesis(
                 alias_idx = (
                     alias_idx if device.type == "cpu" else alias_idx.to(device=device)
                 )
-                s_fold.index_add_(2, alias_idx, s_group_perm)
+                s_fold = _accumulate_add(
+                    s_fold, 2, alias_idx, s_group_perm, scatter=False
+                )
                 map_vals = torch.fft.ifft(s_fold * float(nph), dim=-1)
         out_map[:, pix_idx] = map_vals
 
@@ -2282,8 +2381,8 @@ def _ring_spin_interpolate_blocks(
             (int(mmax) + 1, y_plus.shape[1]), dtype=dtype, device=device
         )
         s_minus = torch.zeros_like(s_plus)
-        s_plus.index_add_(0, m_idx, term_plus)
-        s_minus.index_add_(0, m_idx, term_minus)
+        s_plus = _accumulate_add(s_plus, 0, m_idx, term_plus, scatter=False)
+        s_minus = _accumulate_add(s_minus, 0, m_idx, term_minus, scatter=False)
         return s_plus, s_minus
 
     y_plus_blocks = _ring_spin_bases_for_nside(
@@ -2403,6 +2502,8 @@ def _spin_alm2map_ring_torch(
     use_cpp = (
         _HAS_HEALPIX_SPIN_INTERPOLATE_REC
         and os.environ.get("TORCHSKY_SPIN_ALM2MAP_RECURRENCE_CPP", "1") != "0"
+        and coeff_plus.device.type == "cpu"
+        and coeff_minus.device.type == "cpu"
     )
 
     if use_cpp:
@@ -2469,7 +2570,7 @@ def _spin_alm2map_ring_torch(
 
     # 2. Apply phase factors and inverse FFT to get ring values
     phase0_pos = _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=1).to(
-        dtype=torch.complex128
+        device=s_plus.device, dtype=s_plus.dtype
     )
     s_plus = s_plus * phase0_pos
     s_minus = s_minus * phase0_pos
@@ -2515,9 +2616,8 @@ def _spin_alm2map_ring_torch(
 
     q = 0.5 * (p_plus + p_minus)
     u = -0.5j * (p_plus - p_minus)
-    return torch.stack(
-        [(-q).real.to(torch.float64), (-u).real.to(torch.float64)], dim=0
-    )
+    real_dtype = _preferred_real_dtype(q.device)
+    return torch.stack([(-q).real.to(real_dtype), (-u).real.to(real_dtype)], dim=0)
 
 
 def _cross_cl_from_alm_pair(a1: Tensor, a2: Tensor, lmax: int, mmax: int) -> Tensor:
@@ -2547,6 +2647,7 @@ def map2alm(
     use_weights: bool = False,
     use_pixel_weights: bool = False,
     gal_cut: float = 0.0,
+    datapath: str | os.PathLike[str] | None = None,
 ) -> Tensor:
     """
     Compute alm coefficients in healpy ordering (m>=0 only).
@@ -2554,10 +2655,15 @@ def map2alm(
     With `pol=True`, input map must be shape `(3, npix)` and return is shape
     `(3, nalm)` in `(T,E,B)` ordering.
 
-    ``use_weights`` and ``use_pixel_weights`` both apply computed RING
-    quadrature (mean 1), not HEALPix full-pixel weight FITS tables.
+    ``use_weights`` applies computed RING quadrature (mean 1).
+    ``use_pixel_weights`` loads HEALPix full-pixel weight FITS via torchfits
+    from ``datapath`` or ``TORCHSKY_HEALPIX_DATAPATH``
+    (``full_weights/healpix_full_weights_nside_NNNN.fits``) and multiplies by
+    ``1 + w``. Missing files raise; nothing is downloaded.
     ``gal_cut`` zeros pixels whose RING-scheme latitude is below ``gal_cut``
     degrees (healpy convention).
+    CPU uses fused Ishioka/Wigner C++. CUDA/MPS keep maps on device (ATen
+    ring FFT); they are not host-copied.
     """
     rows, single = _map_to_rows(map_values)
     npix = int(rows.shape[1])
@@ -2581,6 +2687,7 @@ def map2alm(
         gal_cut=gal_cut,
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
+        datapath=datapath,
     )
 
     # Iterative solver (Matches healpy behavior)
@@ -2611,6 +2718,7 @@ def map2alm_batched(
     use_weights: bool = False,
     use_pixel_weights: bool = False,
     gal_cut: float = 0.0,
+    datapath: str | os.PathLike[str] | None = None,
 ) -> Tensor:
     """
     Batched harmonic analysis with explicit leading batch dimension.
@@ -2639,6 +2747,7 @@ def map2alm_batched(
                     use_weights=use_weights,
                     use_pixel_weights=use_pixel_weights,
                     gal_cut=gal_cut,
+                    datapath=datapath,
                 )
             )
         return torch.stack(outs, dim=0)
@@ -2655,6 +2764,7 @@ def map2alm_batched(
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
         gal_cut=gal_cut,
+        datapath=datapath,
     )
 
 
@@ -2743,6 +2853,7 @@ def map2alm_lsq(
     nest: bool = False,
     use_pixel_weights: bool = False,
     gal_cut: float = 0.0,
+    datapath: str | os.PathLike[str] | None = None,
 ) -> tuple[Tensor, float, int]:
     """
     Iterative least-squares map analysis up to (lmax, mmax).
@@ -2750,7 +2861,7 @@ def map2alm_lsq(
     Returns `(alm, rel_res, n_iter)` where `rel_res` is the residual L2 norm
     divided by the input map L2 norm.
     """
-    rows, single = _map_to_cpu_rows(map_values)
+    rows, single = _map_to_rows(map_values)
     npix = int(rows.shape[1])
     ns = _healpix.npix2nside(npix) if nside is None else int(nside)
     if _healpix.nside2npix(ns) != npix:
@@ -2778,8 +2889,9 @@ def map2alm_lsq(
         pol=pol_eff,
         use_pixel_weights=use_pixel_weights,
         gal_cut=gal_cut,
+        datapath=datapath,
     )
-    alm_rows, _ = _alm_to_cpu_rows(alm0)
+    alm_rows, _ = _alm_to_rows(alm0)
     map_norm = float(torch.linalg.norm(rows).item())
     n_iter = 0
     rel_res = float("inf")
@@ -2794,7 +2906,7 @@ def map2alm_lsq(
             pol=pol_eff,
             pixwin=False,
         )
-        rec_rows, _ = _map_to_cpu_rows(rec)
+        rec_rows, _ = _map_to_rows(rec)
         residual = rows - rec_rows
         res_norm = float(torch.linalg.norm(residual).item())
         if map_norm > 0.0:
@@ -2815,8 +2927,9 @@ def map2alm_lsq(
             pol=pol_eff,
             use_pixel_weights=use_pixel_weights,
             gal_cut=gal_cut,
+            datapath=datapath,
         )
-        delta_rows, _ = _alm_to_cpu_rows(delta)
+        delta_rows, _ = _alm_to_rows(delta)
         alm_rows = alm_rows + delta_rows
         n_iter += 1
 
@@ -2875,6 +2988,57 @@ def almxfl(
     return out[0] if single else out
 
 
+def rotate_alm(
+    alm_values: Tensor | list[complex] | list[list[complex]],
+    psi: float,
+    theta: float,
+    phi: float,
+    *,
+    lmax: int | None = None,
+    mmax: int | None = None,
+) -> Tensor:
+    """Rotate scalar alm by zyz Euler angles in radians (healpy convention).
+
+    Returns a new tensor. Modes with ``m<0`` use ``a_{l,-m}=(-1)^m conj(a_{l,m})``.
+    ponytail: O(lmax^3) Wigner-d loop; fine for lmax used in tests. Batch the
+    recurrence if survey-scale ``lmax`` shows up.
+    """
+    rows, single = _alm_to_rows(alm_values)
+    ll, mm = _infer_lmax_mmax_from_nalm(int(rows.shape[1]), lmax, mmax)
+    if mm != ll:
+        raise ValueError("rotate_alm requires mmax == lmax")
+    device = rows.device
+    dtype = rows.dtype
+    real_dtype = _preferred_real_dtype(device)
+    beta = torch.as_tensor(float(theta), dtype=real_dtype, device=device)
+    psi_t = torch.as_tensor(float(psi), dtype=real_dtype, device=device)
+    phi_t = torch.as_tensor(float(phi), dtype=real_dtype, device=device)
+    zero = torch.zeros((), dtype=real_dtype, device=device)
+    out = torch.zeros_like(rows)
+    for ell in range(ll + 1):
+        n_m = 2 * ell + 1
+        full = torch.zeros((rows.shape[0], n_m), dtype=dtype, device=device)
+        for m in range(0, min(ell, mm) + 1):
+            idx = alm_index(ell, m, ll, mm)
+            coeff = rows[:, idx]
+            full[:, ell + m] = coeff
+            if m > 0:
+                sign = -1.0 if (m & 1) else 1.0
+                full[:, ell - m] = sign * torch.conj(coeff)
+        rotated = torch.zeros_like(full)
+        for m in range(-ell, ell + 1):
+            phase_m = torch.exp(torch.complex(zero, -m * phi_t)).to(dtype=dtype)
+            acc = torch.zeros((rows.shape[0],), dtype=dtype, device=device)
+            for mp in range(-ell, ell + 1):
+                dval = _wigner_d_element(ell, m, mp, beta)
+                phase_mp = torch.exp(torch.complex(zero, -mp * psi_t)).to(dtype=dtype)
+                acc = acc + (dval.to(dtype=dtype) * phase_mp) * full[:, ell + mp]
+            rotated[:, ell + m] = phase_m * acc
+        for m in range(0, min(ell, mm) + 1):
+            out[:, alm_index(ell, m, ll, mm)] = rotated[:, ell + m]
+    return out[0] if single else out
+
+
 def alm2cl(
     alms1: Tensor | list[complex] | list[list[complex]],
     alms2: Tensor | list[complex] | list[list[complex]] | None = None,
@@ -2890,12 +3054,12 @@ def alm2cl(
     For a single alm input vector, returns shape `(lmax_out+1,)`.
     For multiple inputs, returns stacked spectra in healpy-compatible ordering.
     """
-    a1_rows, a1_single = _alm_to_cpu_rows(alms1)
+    a1_rows, a1_single = _alm_to_rows(alms1)
     ll, mm = _infer_lmax_mmax_from_nalm(int(a1_rows.shape[1]), lmax, mmax)
     if alms2 is None:
         a2_rows = a1_rows
     else:
-        a2_rows, _ = _alm_to_cpu_rows(alms2)
+        a2_rows, _ = _alm_to_rows(alms2)
         ll2, mm2 = _infer_lmax_mmax_from_nalm(int(a2_rows.shape[1]), lmax, mmax)
         if ll2 != ll or mm2 != mm:
             raise ValueError("alms2 shape incompatible with lmax/mmax")
@@ -2941,12 +3105,14 @@ def alm2map(
 
     For scalar maps, m>0 terms use the real-map relation `2*Re(a_lm Y_lm)`.
     With `pol=True`, `alm_values` must be shape `(3, nalm)` in `(T,E,B)` order.
+    Alms on CPU use fused C++. CUDA/MPS keep alms on device (ATen ring FFT).
     """
     rows, single = _alm_to_rows(alm_values)
     ll, mm = _infer_lmax_mmax_from_nalm(int(rows.shape[1]), lmax, mmax)
 
     if pol:
-        alms_pol = torch.as_tensor(alm_values, dtype=torch.complex128, device="cpu")
+        alms_pol = torch.as_tensor(alm_values)
+        alms_pol = alms_pol.to(dtype=_preferred_complex_dtype(alms_pol.device))
         if alms_pol.ndim != 2 or alms_pol.shape[0] != 3:
             raise ValueError("pol=True requires alm_values shape (3, nalm)")
         ll, mm = _infer_lmax_mmax_from_nalm(int(alms_pol.shape[1]), lmax, mmax)
@@ -2958,8 +3124,9 @@ def alm2map(
             pixwin_loader = globals()["pixwin"]
             pw_t, pw_p = pixwin_loader(int(nside), lmax=ll, pol=True)
             ell = _alm_ell_array(ll, mm)
-            st = pw_t.index_select(0, ell).to(torch.complex128)
-            sp = pw_p.index_select(0, ell).to(torch.complex128)
+            cdt = _preferred_complex_dtype(alms_pol.device)
+            st = pw_t.index_select(0, ell).to(device=alms_pol.device, dtype=cdt)
+            sp = pw_p.index_select(0, ell).to(device=alms_pol.device, dtype=cdt)
             a_t = a_t * st
             a_e = a_e * sp
             a_b = a_b * sp
@@ -3082,11 +3249,11 @@ def alm2lonlat(
 
     out = torch.zeros((rows.shape[0], phi.shape[0]), dtype=real_dtype, device=device)
     for m in range(mm + 1):
-        p_seq = _legendre_l_sequence(m, x.to(torch.float64), ll)
+        p_seq = _legendre_l_sequence(m, x, ll)
         phase = torch.exp(torch.complex(torch.zeros_like(phi), m * phi)).to(
-            dtype=torch.complex128
+            dtype=complex_dtype
         )
-        y = p_seq.to(dtype=torch.complex128) * phase.unsqueeze(0)
+        y = p_seq.to(dtype=complex_dtype) * phase.unsqueeze(0)
         l_count = ll - m + 1
         start = alm_index(m, m, ll, mm)
         coeffs = rows[:, start : start + l_count].to(dtype=complex_dtype)
@@ -3109,8 +3276,9 @@ def alm2lonlat_spin(
     mmax: int | None = None,
 ) -> Tensor:
     """Evaluate spin-weighted alm coefficients at arbitrary sky coordinates."""
-    alm1 = torch.as_tensor(alms[0], dtype=torch.complex128)
-    alm2 = torch.as_tensor(alms[1], dtype=torch.complex128)
+    alm1 = torch.as_tensor(alms[0])
+    alm2 = torch.as_tensor(alms[1])
+    _require_sht_device(alm1, alm2, what="alm2lonlat_spin")
     raw_spin = float(torch.as_tensor(spin).item())
     spin_i = int(raw_spin)
     if float(spin_i) != raw_spin:
@@ -3124,12 +3292,14 @@ def alm2lonlat_spin(
     device = alm1.device
     real_dtype = _preferred_real_dtype(device)
     complex_dtype = _preferred_complex_dtype(device)
+    alm1 = alm1.to(dtype=complex_dtype)
+    alm2 = alm2.to(dtype=complex_dtype)
     lon_t = torch.as_tensor(lon_deg, dtype=real_dtype, device=device)
     lat_t = torch.as_tensor(lat_deg, dtype=real_dtype, device=device)
     lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
     coord_shape = lon_t.shape
-    phi = torch.deg2rad(torch.remainder(lon_t.reshape(-1), 360.0)).to(torch.float64)
-    theta = torch.deg2rad(90.0 - lat_t.reshape(-1)).to(torch.float64)
+    phi = torch.deg2rad(torch.remainder(lon_t.reshape(-1), 360.0))
+    theta = torch.deg2rad(90.0 - lat_t.reshape(-1))
 
     neg_sign = -1.0 if (spin_i & 1) else 1.0
     coeff_plus = (alm1 + 1j * alm2) * neg_sign
@@ -3139,21 +3309,21 @@ def alm2lonlat_spin(
     phase_zero = torch.zeros_like(phi)
 
     for m in range(mm + 1):
-        phase = torch.exp(torch.complex(phase_zero, m * phi)).to(torch.complex128)
+        phase = torch.exp(torch.complex(phase_zero, m * phi)).to(complex_dtype)
         ell_start = max(m, abs(spin_i))
         if ell_start > ll:
             continue
         d_plus = _wigner_d_l_sequence(ell_start, ll, m, -spin_i, theta)
         d_minus = _wigner_d_l_sequence(ell_start, ll, m, spin_i, theta)
         ell_vec = torch.arange(
-            ell_start, ll + 1, dtype=torch.float64, device=theta.device
+            ell_start, ll + 1, dtype=real_dtype, device=theta.device
         )
         norms = torch.sqrt((2 * ell_vec + 1) / (4.0 * math.pi))
         m_phase = -1.0 if (m & 1) else 1.0
         spin_phase = -1.0 if (spin_i & 1) else 1.0
         scale = (spin_phase * m_phase) * norms.unsqueeze(1)
-        y_plus = (scale * d_plus).to(torch.complex128) * phase.unsqueeze(0)
-        y_minus = (scale * d_minus).to(torch.complex128) * phase.unsqueeze(0)
+        y_plus = (scale * d_plus).to(complex_dtype) * phase.unsqueeze(0)
+        y_minus = (scale * d_minus).to(complex_dtype) * phase.unsqueeze(0)
         start = alm_index(ell_start, m, ll, mm)
         l_count = ll - ell_start + 1
         c_plus = coeff_plus[start : start + l_count].to(dtype=complex_dtype)
@@ -3235,6 +3405,7 @@ def anafast(
     use_weights: bool = False,
     use_pixel_weights: bool = False,
     gal_cut: float = 0.0,
+    datapath: str | os.PathLike[str] | None = None,
 ) -> Tensor | tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
     """Compute auto/cross angular power spectrum C_l from scalar or polarized maps."""
     m1 = torch.as_tensor(map1)
@@ -3268,6 +3439,7 @@ def anafast(
             use_weights=use_weights,
             use_pixel_weights=use_pixel_weights,
             gal_cut=gal_cut,
+            datapath=datapath,
         )
         a2 = (
             a1
@@ -3283,6 +3455,7 @@ def anafast(
                 use_weights=use_weights,
                 use_pixel_weights=use_pixel_weights,
                 gal_cut=gal_cut,
+                datapath=datapath,
             )
         )
         cls = alm2cl(a1, a2, lmax=ll, mmax=mm, nspec=nspec)
@@ -3304,6 +3477,7 @@ def anafast(
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
         gal_cut=gal_cut,
+        datapath=datapath,
     )
     a2 = map2alm(
         m2,
@@ -3316,6 +3490,7 @@ def anafast(
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
         gal_cut=gal_cut,
+        datapath=datapath,
     )
     cl = alm2cl(a1, a2, lmax=ll, mmax=mm, nspec=nspec)
     if alm:
@@ -3675,7 +3850,7 @@ def synfast(
 ) -> Tensor | tuple[Tensor, Tensor]:
     """Synthesize map(s) from input C_l spectrum/spectra."""
     alms = synalm(cls, lmax=lmax, mmax=mmax, new=new, verbose=verbose)
-    rows, single = _alm_to_cpu_rows(alms)
+    rows, single = _alm_to_rows(alms)
     ll, mm = _infer_lmax_mmax_from_nalm(int(rows.shape[1]), lmax, mmax)
 
     if sigma is not None and float(fwhm) != 0.0:
@@ -3701,11 +3876,11 @@ def synfast(
                 beam=torch.as_tensor(pw, dtype=torch.float64),
                 pol=False,
             )
-        rows_eff, _ = _alm_to_cpu_rows(rows_eff)
+        rows_eff, _ = _alm_to_rows(rows_eff)
 
     if fwhm_use != 0.0:
         rows_eff = smoothalm(rows_eff, lmax=ll, mmax=mm, fwhm_rad=fwhm_use, pol=pol_eff)
-        rows_eff, _ = _alm_to_cpu_rows(rows_eff)
+        rows_eff, _ = _alm_to_rows(rows_eff)
 
     map_out = alm2map(
         rows_eff[0] if single else rows_eff,
@@ -3732,7 +3907,7 @@ def smoothalm(
     pol: bool = False,
 ) -> Tensor:
     """Apply scalar/polarized beam smoothing to alm coefficients."""
-    rows, single = _alm_to_cpu_rows(alm_values)
+    rows, single = _alm_to_rows(alm_values)
     ll, mm = _infer_lmax_mmax_from_nalm(int(rows.shape[1]), lmax, mmax)
 
     if pol:
@@ -3798,9 +3973,10 @@ def smoothmap(
     use_pixel_weights: bool = False,
     gal_cut: float = 0.0,
     verbose: bool = True,
+    datapath: str | os.PathLike[str] | None = None,
 ) -> Tensor:
     """Smooth HEALPix map(s) with scalar or polarized beam."""
-    rows, single = _map_to_cpu_rows(map_values)
+    rows, single = _map_to_rows(map_values)
     npix = int(rows.shape[1])
     ns = _healpix.npix2nside(npix) if nside is None else int(nside)
     ll = int(3 * ns - 1 if lmax is None else lmax)
@@ -3830,6 +4006,7 @@ def smoothmap(
             use_weights=use_weights,
             use_pixel_weights=use_pixel_weights,
             gal_cut=gal_cut,
+            datapath=datapath,
         )
         alm_sm = smoothalm(
             alm, lmax=ll, mmax=mm, fwhm_rad=fwhm_use, beam=beam_use, pol=True
@@ -3855,6 +4032,7 @@ def smoothmap(
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
         gal_cut=gal_cut,
+        datapath=datapath,
     )
     alm_sm = smoothalm(
         alm, lmax=ll, mmax=mm, fwhm_rad=fwhm_use, beam=beam_use, pol=False
@@ -3883,13 +4061,16 @@ def map2alm_spin(
     use_weights: bool = False,
     use_pixel_weights: bool = False,
     gal_cut: float = 0.0,
+    datapath: str | os.PathLike[str] | None = None,
 ) -> tuple[Tensor, Tensor]:
     """
     Spin-weighted map->alm transform (Q/U-like pair).
 
     Input `maps` shape must be `(2, npix)`.
     """
-    maps_t = torch.as_tensor(maps, dtype=torch.float64)
+    maps_t = torch.as_tensor(maps)
+    maps_t = maps_t.to(dtype=_preferred_real_dtype(maps_t.device))
+    _require_sht_device(maps_t, what="map2alm_spin")
     if maps_t.ndim != 2 or maps_t.shape[0] != 2:
         raise ValueError("maps must have shape (2, npix)")
     raw_spin = float(torch.as_tensor(spin).item())
@@ -3921,6 +4102,7 @@ def map2alm_spin(
         gal_cut=gal_cut,
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
+        datapath=datapath,
     )
 
     # Iterative solver
@@ -3946,11 +4128,12 @@ def _map2alm_spin_single_pass(
     lmax: int,
     mmax: int,
 ) -> tuple[Tensor, Tensor]:
-    rows = maps_t if maps_t.device.type == "cpu" else maps_t.to(device="cpu")
+    _require_sht_device(maps_t, what="map2alm_spin")
+    rows = maps_t
 
     def _cpu_c128(t: Tensor) -> Tensor:
         if t.device.type != "cpu":
-            t = t.to(device="cpu")
+            raise RuntimeError("C++ spin recurrence is CPU-only")
         if t.dtype != torch.complex128:
             t = t.to(dtype=torch.complex128)
         return t.contiguous()
@@ -4067,16 +4250,18 @@ def _map2alm_spin_single_pass(
                     nside=int(nside),
                 )
 
-                phase0_neg = _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=-1).to(
-                    dtype=torch.complex128
-                )
+                phase0_neg = _ring_phi0_phase_for_nside(
+                    int(nside), int(mmax), sign=-1
+                ).to(dtype=torch.complex128)
                 s_plus = s_plus * phase0_neg
                 s_minus = s_minus * phase0_neg
 
                 if (
                     getattr(_cpp, "_healpix_spin_integrate_recurrence_cpu", None)
                     is not None
-                    and os.environ.get("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "1") != "0"
+                    and os.environ.get("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "1")
+                    != "0"
+                    and s_plus.device.type == "cpu"
                 ):
                     if s_plus.requires_grad or s_minus.requires_grad:
                         c_plus, c_minus = SpinSHTIntegrate.apply(
@@ -4139,6 +4324,7 @@ def _map2alm_spin_single_pass(
                 getattr(_cpp, "_healpix_spin_integrate_recurrence_cpu", None)
                 is not None
                 and os.environ.get("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "1") != "0"
+                and s_plus.device.type == "cpu"
             ):
                 if s_plus.requires_grad or s_minus.requires_grad:
                     c_plus, c_minus = SpinSHTIntegrate.apply(
@@ -4230,8 +4416,12 @@ def alm2map_spin(
 
     Returns tensor of shape `(2, npix)`.
     """
-    alm1 = torch.as_tensor(alms[0], dtype=torch.complex128)
-    alm2 = torch.as_tensor(alms[1], dtype=torch.complex128)
+    alm1 = torch.as_tensor(alms[0])
+    alm2 = torch.as_tensor(alms[1])
+    cdt = _preferred_complex_dtype(alm1.device)
+    alm1 = alm1.to(dtype=cdt)
+    alm2 = alm2.to(dtype=cdt)
+    _require_sht_device(alm1, alm2, what="alm2map_spin")
     raw_spin = float(torch.as_tensor(spin).item())
     spin_i = int(raw_spin)
     if float(spin_i) != raw_spin:
@@ -4281,6 +4471,7 @@ def alm2map_spin(
         use_cpp = (
             _cpp is not None
             and hasattr(_cpp, "_healpix_spin_alm2map_from_basis_cpu")
+            and alm1.device.type == "cpu"
             and (not alm1.requires_grad)
             and (not alm2.requires_grad)
             # Torch matmul path is currently faster on Apple CPU; keep C++ path opt-in.
@@ -4455,6 +4646,7 @@ __all__ = [
     "map2alm_lsq",
     "map2alm_spin",
     "pixwin",
+    "rotate_alm",
     "smoothalm",
     "smoothmap",
     "synalm",
