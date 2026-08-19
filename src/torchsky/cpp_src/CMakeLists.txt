@@ -198,7 +198,7 @@ set_source_files_properties(
     bindings.cpp
     PROPERTIES
         OBJECT_DEPENDS
-            "${CMAKE_CURRENT_SOURCE_DIR}/healpix.cpp;${CMAKE_CURRENT_SOURCE_DIR}/geom.cpp;${CMAKE_CURRENT_SOURCE_DIR}/wcs.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/healpix.cpp;${CMAKE_CURRENT_SOURCE_DIR}/geom.cpp;${CMAKE_CURRENT_SOURCE_DIR}/wcs.cpp;${CMAKE_CURRENT_SOURCE_DIR}/third_party/pocketfft_hdronly.h"
 )
 
 # Link libraries

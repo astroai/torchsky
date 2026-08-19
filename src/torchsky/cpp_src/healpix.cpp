@@ -5,6 +5,7 @@
 #include <cmath>
 #include <complex>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -33,6 +34,10 @@
 #if defined(__APPLE__)
 #include <Accelerate/Accelerate.h>
 #endif
+
+#define POCKETFFT_NO_MULTITHREADING
+#define POCKETFFT_CACHE_SIZE 128
+#include "third_party/pocketfft_hdronly.h"
 
 #include <ATen/Parallel.h>
 #include <ATen/ops/fft_fft.h>
@@ -1444,6 +1449,7 @@ torch::Tensor healpix_scalar_alm2map_direct_cpu(
 template <typename Fn>
 static void parallel_m_ranges(int64_t mmax, Fn&& fn);
 
+#if defined(__APPLE__)
 static const std::vector<std::complex<double>>& dft_twiddles(int n, int sign) {
     // thread_local: polar FFTs run on SpinMPool workers; a shared mutex map would contend.
     thread_local std::map<uint64_t, std::vector<std::complex<double>>> cache;
@@ -1541,70 +1547,11 @@ static void fft_pow2_inplace(std::complex<double>* a, int n, int sign) {
         }
     }
 }
+#endif
 
-static void fft_bluestein(
-    const std::complex<double>* in,
-    int n,
-    int in_stride,
-    std::complex<double>* out,
-    int sign
-) {
-    int M = 1;
-    while (M < 2 * n - 1) {
-        M <<= 1;
-    }
-    const uint64_t key =
-        (static_cast<uint64_t>(static_cast<uint32_t>(n)) << 1)
-        | static_cast<uint64_t>(sign < 0 ? 0 : 1);
-    thread_local std::map<uint64_t, std::vector<std::complex<double>>> chirp_cache;
-    thread_local std::map<uint64_t, std::vector<std::complex<double>>> kernel_cache;
-    thread_local std::vector<std::complex<double>> scratch;
-
-    auto cit = chirp_cache.find(key);
-    if (cit == chirp_cache.end()) {
-        std::vector<std::complex<double>> chirp(static_cast<size_t>(n));
-        std::vector<std::complex<double>> cpad(static_cast<size_t>(M), {0.0, 0.0});
-        for (int k = 0; k < n; ++k) {
-            const double th = static_cast<double>(sign) * PI * static_cast<double>(k)
-                * static_cast<double>(k) / static_cast<double>(n);
-            chirp[static_cast<size_t>(k)] = {std::cos(th), std::sin(th)};
-        }
-        cpad[0] = std::conj(chirp[0]);
-        for (int k = 1; k < n; ++k) {
-            const auto ck = std::conj(chirp[static_cast<size_t>(k)]);
-            cpad[static_cast<size_t>(k)] = ck;
-            cpad[static_cast<size_t>(M - k)] = ck;
-        }
-        fft_pow2_inplace(cpad.data(), M, -1);
-        cit = chirp_cache.emplace(key, std::move(chirp)).first;
-        kernel_cache.emplace(key, std::move(cpad));
-    }
-    const auto& chirp = cit->second;
-    const auto& C = kernel_cache.find(key)->second;
-
-    if (static_cast<int>(scratch.size()) < M) {
-        scratch.resize(static_cast<size_t>(M));
-    }
-    std::complex<double>* A = scratch.data();
-    std::fill(A, A + M, std::complex<double>(0.0, 0.0));
-    const std::complex<double>* p = in;
-    for (int j = 0; j < n; ++j) {
-        A[j] = (*p) * chirp[static_cast<size_t>(j)];
-        p += in_stride;
-    }
-    fft_pow2_inplace(A, M, -1);
-    for (int k = 0; k < M; ++k) {
-        A[k] *= C[static_cast<size_t>(k)];
-    }
-    fft_pow2_inplace(A, M, 1);
-    const double invM = 1.0 / static_cast<double>(M);
-    for (int k = 0; k < n; ++k) {
-        out[k] = A[k] * chirp[static_cast<size_t>(k)] * invM;
-    }
-}
-
-// Polar HEALPix rings have unique nph; one ATen FFT per length was dispatch-bound
-// on Linux. Equatorial belts keep batched at::fft_*. CUDA/MPS stay on ATen.
+// Polar rings have unique nph. Equatorial belts stay batched at::fft_*.
+// CUDA/MPS stay on ATen. CPU polar uses pocketfft (nthreads=1; SpinMPool
+// parallelizes rings). Apple pow2 n>=32 still uses Accelerate via fft_pow2.
 static void fft_outofplace(
     const std::complex<double>* in,
     int n,
@@ -1618,47 +1565,33 @@ static void fft_outofplace(
         }
         return;
     }
+#if defined(__APPLE__)
     if (in_stride == 1 && (n & (n - 1)) == 0) {
         std::copy(in, in + n, out);
         fft_pow2_inplace(out, n, sign);
         return;
     }
-    if ((n & 1) == 0) {
-        const int m = n / 2;
-        fft_outofplace(in, m, in_stride * 2, out, sign);
-        fft_outofplace(in + in_stride, m, in_stride * 2, out + m, sign);
-        const auto& w = dft_twiddles(n, sign);
-        for (int k = 0; k < m; ++k) {
-            const std::complex<double> u = out[k];
-            const std::complex<double> v = w[static_cast<size_t>(k)] * out[k + m];
-            out[k] = u + v;
-            out[k + m] = u - v;
-        }
-        return;
-    }
-    if (n > 15) {
-        fft_bluestein(in, n, in_stride, out, sign);
-        return;
-    }
-    const auto& w = dft_twiddles(n, sign);
-    for (int k = 0; k < n; ++k) {
-        double sr = 0.0;
-        double si = 0.0;
-        const std::complex<double>* p = in;
-        int wk = 0;
-        for (int j = 0; j < n; ++j) {
-            const auto z = *p;
-            const auto t = w[static_cast<size_t>(wk)];
-            sr += z.real() * t.real() - z.imag() * t.imag();
-            si += z.real() * t.imag() + z.imag() * t.real();
-            p += in_stride;
-            wk += k;
-            if (wk >= n) {
-                wk -= n;
-            }
-        }
-        out[k] = {sr, si};
-    }
+#endif
+    const pocketfft::shape_t shape{static_cast<size_t>(n)};
+    const pocketfft::stride_t stride_in{
+        static_cast<ptrdiff_t>(in_stride)
+        * static_cast<ptrdiff_t>(sizeof(std::complex<double>))
+    };
+    const pocketfft::stride_t stride_out{
+        static_cast<ptrdiff_t>(sizeof(std::complex<double>))
+    };
+    const pocketfft::shape_t axes{0};
+    pocketfft::c2c(
+        shape,
+        stride_in,
+        stride_out,
+        axes,
+        sign < 0,
+        in,
+        out,
+        1.0,
+        1
+    );
 }
 
 torch::Tensor healpix_ring_fourier_modes_cpu(
