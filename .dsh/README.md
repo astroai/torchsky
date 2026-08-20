@@ -8,24 +8,39 @@ project root (top project priority); no config is needed for that.
 > dsh is a **developer preview** — expect breaking changes. Requires a DeepSeek
 > API key, or any OpenAI-compatible endpoint via `DEEPSEEK_BASE_URL`.
 
+## Install
+
+```bash
+npm install -g @deepseek-ai/dsh
+```
+
+> Do not use `npx -y @deepseek-ai/dsh ...`: on npm ≥ 10/11, npm's arg parser
+> swallows launcher flags (`--profile`, `--patch`, `--dump-config` — only
+> `--help`/`--version` pass through). A global install avoids the shim
+> entirely. `--patch` paths are resolved relative to the CLI package dir, so
+> always pass an **absolute** path (use `$PWD/.dsh/cordis.patch.yml`).
+
 ## Run
 
 Web UI (needs localhost — not available on CANFAR headless sessions):
 
 ```bash
-npx -y @deepseek-ai/dsh -- web --patch .dsh/cordis.patch.yml
+dsh web --patch "$PWD/.dsh/cordis.patch.yml"
 ```
 
 Headless one-shot (CANFAR-friendly, no web server):
 
 ```bash
 export DEEPSEEK_API_KEY=sk-...
-npx -y @deepseek-ai/dsh -- --profile headless --patch .dsh/cordis.patch.yml \
+dsh --profile headless --patch "$PWD/.dsh/cordis.patch.yml" \
   "Run wcs-sphere-acceptance and summarize regressions vs the committed baselines"
 ```
 
-> The `--` after the package name passes dsh flags through npm's argument
-> parser (without it, npm ≥ 10 swallows `--profile`/`--patch`).
+Sanity check before booting the app (prints the composed plugin tree):
+
+```bash
+dsh web --patch "$PWD/.dsh/cordis.patch.yml" --dump-config
+```
 
 Environment knobs:
 
