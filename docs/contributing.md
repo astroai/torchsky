@@ -87,12 +87,20 @@ Full suite:
 pixi run test
 ```
 
-Local pre-push gate:
+Git pre-push hook (`pixi run setup-hooks`) is `pixi run preflight-push` only
+(ruff + compileall). Full pytest is GitHub `build-test`. To run that suite
+locally:
+
+```bash
+pixi run ci-local
+```
+
+Targeted checks while editing:
 
 ```bash
 pixi run preflight-push
 pixi run typecheck
-pixi run ci-local
+pixi run -e test -- pytest tests/test_foo.py
 ```
 
 ## Benchmarks

@@ -432,7 +432,7 @@ For large $N_\text{side}$ or batch transforms, `torchsky.sphere` substantially o
 | `TORCHSKY_SPIN_MAP2ALM_RING_CONCAT_CPP` | `1` | Fused CPU RING concat for `map2alm_spin` |
 | `TORCHSKY_SPIN_ISHIOKA` | `1` | Ishioka 2018 μ² skip-2 for spin-1/2 CPU `map2alm_spin` / `alm2map_spin`. Set `0` for the Wigner recurrence. |
 | `TORCHSKY_SPIN_THREADS` | unset | Cap the CPU spin `m`-pool. Unset: Linux min(affinity, cgroup quota, ATen threads, `hardware_concurrency`); Apple uses `hardware_concurrency`. CANFAR launch sets this to `--cpu`. |
-| `TORCHSKY_SHT_PROFILE` | unset | When set, print `SpinMPool` size and `alm2map_spin` interpolate vs synthesize milliseconds on stderr. |
+| `TORCHSKY_SHT_PROFILE` | unset | When set, print `SpinMPool` size and `alm2map_spin` interpolate / equatorial FFT / polar FFT milliseconds on stderr. |
 
 ---
 
@@ -496,7 +496,7 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API
 | Area | Limitation |
 |---|---|
 | `map2alm` weights | `use_weights` applies computed RING quadrature (mean 1). `use_pixel_weights` loads HEALPix full-pixel FITS via torchfits from `datapath` (`1+w` corrections). The two flags are mutually exclusive. Missing pixel-weight files raise; nothing is downloaded or vendored. |
-| `alm2map_spin` | Fused Ishioka CPU synthesis is ~1.6× healpy on Mac at nside=128. Polar CPU RING FFTs are in-process pocketfft (Accelerate radix-2 on Apple for large pow2). Equatorial rings stay batched ATen. Linux CANFAR SHA `b1f02069` used the older scalar polar FFT at 8 threads: interpolate ~2.5 ms, synthesize ~280 ms (`alm2map_spin` 284 ms / ~79× healpy). SHA `425af888` uncapped `SpinMPool` was interpolate-bound (193 ms). Remeasure pocketfft on Linux before citing. Do not claim Linux SHT. Set `TORCHSKY_SPIN_ISHIOKA=0` at call time if Ishioka loses to Wigner. CUDA/MPS keep maps/alms on device via the ATen ring path; fused Ishioka/Wigner C++ stays CPU. Do not claim a fused CUDA Ishioka kernel. |
+| `alm2map_spin` | Fused Ishioka CPU synthesis is ~1.6× healpy on Mac at nside=128. CPU RING FFTs (polar and equatorial) are in-process pocketfft (Accelerate radix-2 on Apple for large pow2). Linux CANFAR SHA `dfd31ecb` pocketfft polar was ~2.2–2.5× healpy at nside=128 / 8 CPU; equatorial ATen ifft was still in that row. Do not claim Linux SHT. Set `TORCHSKY_SPIN_ISHIOKA=0` at call time if Ishioka loses to Wigner. CUDA/MPS keep maps/alms on device via the ATen ring path; fused Ishioka/Wigner C++ stays CPU. Do not claim a fused CUDA Ishioka kernel. |
 | Pixel windows | Packaged tables cover standard HEALPix NSIDE range. Higher NSIDE may require external data. |
 | Device | See the device table below. Fused Ishioka/Wigner is CPU C++. CUDA/MPS SHT uses the ATen ring FFT path on device (no host copy of the map). `rotate_alm` and `alm2lonlat` stay on device (ATen; CUDA float64 / MPS float32). |
 | s2fft | Optional bench/test peer only. Native HEALPix has no sampling theorem; do not use `method="jax_healpy"` as an oracle. |

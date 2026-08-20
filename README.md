@@ -158,9 +158,9 @@ pixi run verify         # Verify torchsky import smoke
 
 ### Common Developer Commands
 - Run test suite: `pixi run test`
-- Fast syntax/lint check: `pixi run preflight-push`
+- Fast syntax/lint check (git pre-push hook): `pixi run preflight-push`
 - Typecheck: `pixi run typecheck`
-- Full pre-push local suite: `pixi run ci-local`
+- Optional local copy of GitHub `build-test`: `pixi run ci-local`
 
 For more information, see the [Contributing Guide](docs/contributing.md).
 

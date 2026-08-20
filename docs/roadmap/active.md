@@ -884,8 +884,9 @@ stacking-versus-INR/Foam depth result defined in
 - Local performance numbers are smoke evidence only. Scale claims require a
   CANFAR staging headless artifact with commit, image, device, dtype, seed,
   command, wall time, and peak memory.
-- `pixi run ci-local` is mandatory before every push. GitHub Comprehensive CI
-  must also be green before the release/infrastructure box is checked.
+- Git pre-push hook is `pixi run preflight-push`. GitHub Comprehensive CI
+  must be green before the release/infrastructure box is checked. `pixi run
+  ci-local` is optional local parity with `build-test`.
 
 ## Checkpoint 0 — Freeze The Plan And Baseline
 

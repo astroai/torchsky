@@ -10,9 +10,9 @@ metadata:
 
 ## Workflow
 
-- Use `pixi run ci-local` before any push (preflight-push → typecheck → test)
-- Faster: `pixi run preflight-push` for syntax/import smoke
-- Narrow tests: `pixi run -e test -- pytest tests/test_foo.py`
+- Git pre-push hook: `pixi run preflight-push` (ruff + compileall)
+- Targeted tests: `pixi run -e test -- pytest tests/test_foo.py`
+- Optional local GitHub-suite parity: `pixi run ci-local`
 - Python interpreter: `pixi run -e default -- python ...`
 
 ## Design rules

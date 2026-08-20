@@ -1448,6 +1448,7 @@ torch::Tensor healpix_scalar_alm2map_direct_cpu(
 
 template <typename Fn>
 static void parallel_m_ranges(int64_t mmax, Fn&& fn);
+static bool sht_profile_enabled();
 
 #if defined(__APPLE__)
 static const std::vector<std::complex<double>>& dft_twiddles(int n, int sign) {
@@ -1549,9 +1550,9 @@ static void fft_pow2_inplace(std::complex<double>* a, int n, int sign) {
 }
 #endif
 
-// Polar rings have unique nph. Equatorial belts stay batched at::fft_*.
-// CUDA/MPS stay on ATen. CPU polar uses pocketfft (nthreads=1; SpinMPool
-// parallelizes rings). Apple pow2 n>=32 still uses Accelerate via fft_pow2.
+// Polar rings have unique nph. Equatorial CPU rings use the same in-process
+// FFT (pocketfft; Accelerate radix-2 on Apple). CUDA/MPS stay on ATen.
+// Each call is nthreads=1; SpinMPool parallelizes rings.
 static void fft_outofplace(
     const std::complex<double>* in,
     int n,
@@ -2135,30 +2136,43 @@ static torch::Tensor healpix_spin_synthesize_qu_cpu(
     auto* q_ptr = out.select(0, 0).data_ptr<double>();
     auto* u_ptr = out.select(0, 1).data_ptr<double>();
 
+    const bool profile = sht_profile_enabled();
+    double eq_ms = 0.0;
+    double polar_ms = 0.0;
+    auto t_mark = std::chrono::steady_clock::now();
+
     if (n_eq > 0 && eq_spec.defined() && eq_spec.numel() > 0) {
-        auto map_vals = at::fft_ifft(eq_spec, std::nullopt, -1, std::nullopt);
-        map_vals.mul_(static_cast<double>(nph_eq));
-        auto map_c = map_vals.contiguous();
-        const auto* mp = reinterpret_cast<const std::complex<double>*>(
-            map_c.data_ptr<c10::complex<double>>()
+        auto eq_c = eq_spec.contiguous();
+        const auto* spec = reinterpret_cast<const std::complex<double>*>(
+            eq_c.data_ptr<c10::complex<double>>()
         );
+        const int nph = static_cast<int>(nph_eq);
         const int64_t eq_pix0 = starts_ptr[eq_start];
-        for (int64_t ir = 0; ir < n_eq; ++ir) {
-            const int64_t r = eq_start + ir;
-            const int64_t pix0 = eq_pix0 + ir * nph_eq;
-            const auto vp0 = s0[r];
-            const auto vm0 = s1[r];
-            spin_qu_store_ring(
-                mp + ir * nph_eq,
-                mp + (n_eq + ir) * nph_eq,
-                q_ptr,
-                u_ptr,
-                pix0,
-                nph_eq,
-                vp0,
-                vm0,
-                mmax
-            );
+        const int64_t nph64 = nph_eq;
+        parallel_m_ranges(n_eq - 1, [&](int64_t i0, int64_t stride) {
+            std::vector<std::complex<double>> pix_p(static_cast<size_t>(nph));
+            std::vector<std::complex<double>> pix_m(static_cast<size_t>(nph));
+            for (int64_t ir = i0; ir < n_eq; ir += stride) {
+                const int64_t r = eq_start + ir;
+                fft_outofplace(spec + ir * nph64, nph, 1, pix_p.data(), 1);
+                fft_outofplace(spec + (n_eq + ir) * nph64, nph, 1, pix_m.data(), 1);
+                spin_qu_store_ring(
+                    pix_p.data(),
+                    pix_m.data(),
+                    q_ptr,
+                    u_ptr,
+                    eq_pix0 + ir * nph64,
+                    nph64,
+                    s0[r],
+                    s1[r],
+                    mmax
+                );
+            }
+        });
+        if (profile) {
+            const auto t1 = std::chrono::steady_clock::now();
+            eq_ms = std::chrono::duration<double, std::milli>(t1 - t_mark).count();
+            t_mark = t1;
         }
     }
 
@@ -2219,6 +2233,17 @@ static torch::Tensor healpix_spin_synthesize_qu_cpu(
                 );
             }
         });
+    }
+    if (profile) {
+        polar_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t_mark
+        ).count();
+        std::fprintf(
+            stderr,
+            "TORCHSKY_SHT_PROFILE alm2map_spin eq=%.3f ms polar=%.3f ms\n",
+            eq_ms,
+            polar_ms
+        );
     }
     return out;
 }

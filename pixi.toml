@@ -62,9 +62,9 @@ build = "pixi build"
 # Full tests need the `test` env (astropy/fitsio/pyarrow/polars/…); see AGENTS.md.
 test = "KMP_DUPLICATE_LIB_OK=TRUE pixi run -e test -- pytest -n auto --ignore-glob='tests/test_map_*.py'"
 lint = "ruff check . && ruff format ."
-# Fast local gate before git push (matches CI code-quality: ruff check only; no file mutations)
+# Git pre-push hook: ruff + compileall only. Do not add pytest here.
 preflight-push = "ruff check . && pixi run -e default -- python -m compileall -q src/torchsky tests"
-# Mirrors GitHub CI shape: preflight + pyright + full pytest (use before push).
+# Optional local copy of GitHub build-test. Not a push blocker.
 ci-local = "pixi run preflight-push && pixi run typecheck && pixi run test"
 # Comparator import smoke (optional; `bench-all` Pixi env). Set TORCHSKY_CI_LOCAL_BENCH=1 to include in custom wrappers.
 ci-local-heavy = "pixi run -e bench-all -- python -c \"import healpy, hpgeom, healsparse; import astropy_healpix; import spherical_geometry; import mocpy\""

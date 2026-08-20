@@ -4,7 +4,7 @@ Use this skill when working in the **torchsky** repo (agents, CI, local installs
 
 ## Interpreter and commands
 
-1. **Pixi first:** `pixi run ci-local` before push; `pixi run preflight-push` for a quick check; `pixi run -e test -- pytest tests/test_foo.py` for narrow tests. Never rely on bare `python3` / `python` on PATH for project work.
+1. **Pixi first:** `pixi run preflight-push` before push (git hook). Targeted tests for files you changed. `pixi run ci-local` is optional local GitHub-suite parity, not a push blocker. Never rely on bare `python3` / `python` on PATH for project work.
 2. **uv (no Pixi):** `uv sync --group dev` then `uv run --python 3.12 --group dev ruff check .` from repo root.
 3. Python **3.12+** supported (**`<3.15`**); see `pyproject.toml` `requires-python`.
 

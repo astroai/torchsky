@@ -319,7 +319,7 @@ cleanup, operator correctness, scalable indexing, and measured bottlenecks.
 
 ## Standing Gates
 
-- Pre-push: `pixi run ci-local`.
+- Pre-push hook: `pixi run preflight-push`. Full pytest: GitHub `build-test` or optional `pixi run ci-local`.
 - Package boundary: no FITS implementation modules, CFITSIO/zlib linkage, or
   FITS-owned benchmarks in torchsky; integration smoke against the supported
   `torchfits 1.0.0rc4+` range.

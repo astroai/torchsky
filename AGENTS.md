@@ -58,8 +58,8 @@ Do **not** guess `python3` or bare `python` on PATH for project work.
   - **`sht-bench`** — same comparators as `sphere-bench` plus optional **s2fft** via `pixi run sht-bench-bootstrap` (do not add JAX to `sphere-bench` by default).
   - **`map-compat`**, **`bench-legacy`** — external toolchains and legacy Python stacks as needed.
 - **`pixi run test`** runs **`pytest -n auto --ignore-glob=tests/test_map_*.py`** in the **`test`** environment (same shape as the GitHub `build-test` job; map tests live in the separate CI map matrix).
-- **`pixi run preflight-push`** — **ruff** + **`python -m compileall`** using the **default** env interpreter (`pixi run -e default -- python …`), not an arbitrary system `python`.
-- **`pixi run ci-local`** — **preflight-push** + **typecheck** + **test** (local parity with main CI gates before push).
+- **`pixi run preflight-push`** — **ruff** + **`python -m compileall`** using the **default** env interpreter (`pixi run -e default -- python …`), not an arbitrary system `python`. This is the git **pre-push** hook.
+- **`pixi run ci-local`** — **preflight-push** + **typecheck** + **test** (optional local copy of GitHub `build-test`; not a push blocker).
 - **`pixi run ci-local-heavy`** — optional import smoke for sphere comparators in the **`bench-all`** env.
 
 ### I/O ownership and optional ecosystem packages
@@ -274,12 +274,18 @@ Before finishing a non-trivial change, check:
 - Do **not** open PRs that only remove one unused import, reformat a single file, or repeat the same micro-opt across many PRs. Batch mechanical cleanup into **one** commit/PR, or fold it into substantive work.
 - Performance-related PRs must satisfy **Performance Policy** above (bottleneck, scaling story, benchmark evidence).
 
-### Mandatory pre-push gate (save GitHub Actions minutes)
+### Pre-push gate
 
-Treat CI as a **last** verifier, not the place to discover syntax, stale imports, or formatting drift. **Do not `git push`** until **`pixi run ci-local`** passes (automated agents: **blocking**). That runs, in order: **`preflight-push`** (ruff + compileall via default-env Python), **`typecheck`** (scoped **pyright** in the **`test`** env), **`test`** (**`pytest -n auto --ignore-glob=tests/test_map_*.py`** in **`test`**, matching GitHub `build-test`).
+The git **pre-push** hook (`pixi run setup-hooks`) runs **`pixi run preflight-push`** only (ruff + compileall). It must not run pytest. GitHub **`build-test`** is the full test gate.
 
-- **Faster subset only when appropriate:** `pixi run preflight-push` for a quick syntax/import sweep (does not replace full **`ci-local`** before push).
+Automated agents: do **not** run `pixi run ci-local` or `pixi run test` as a push blocker. Before push:
+
+1. `pixi run preflight-push` (the hook runs this again)
+2. Targeted tests for files you changed: `pixi run -e test -- pytest tests/test_foo.py`
+3. `pixi run typecheck` when Python types or public signatures changed (pre-commit also runs pyright)
+
+`pixi run ci-local` remains the optional local copy of GitHub `build-test` (preflight + typecheck + pytest `-n auto`, map tests excluded). Use it before a release, after a risky cross-cutting change, or when you want the suite locally. Do not put the test suite back in the pre-push hook.
+
 - **Tree-wide `ruff format --check`** is not a CI gate yet; use **`pixi run lint`** when you want Ruff to apply formatting locally.
-- **Narrow tests:** `pixi run -e test -- pytest tests/test_foo.py`.
 
 Optional: **`pre-commit install`** to mirror `.pre-commit-config.yaml` locally. **`pixi run verify`** runs **`scripts/verify_setup.py`** (torch + `torchsky.cpp` import smoke).

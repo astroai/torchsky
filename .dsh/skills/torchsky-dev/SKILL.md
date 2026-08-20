@@ -23,10 +23,10 @@ Python and dependencies come from the pixi environment.
 
 ## Workflow
 
-- `pixi run ci-local` before any push (preflight-push → typecheck → test). This
-  is BLOCKING for agents: do not push until it passes.
-- Faster subset: `pixi run preflight-push` (ruff + compileall smoke), or narrow
-  tests with `pixi run -e test -- pytest tests/test_foo.py`.
+- Git pre-push hook is `pixi run preflight-push` (ruff + compileall). Do not
+  run the full pytest suite as a push blocker.
+- Targeted tests: `pixi run -e test -- pytest tests/test_foo.py`.
+- Optional local GitHub-suite parity: `pixi run ci-local`.
 - Python interpreter: `pixi run -e default -- python ...`.
 - `pixi run test` runs `pytest -n auto --ignore-glob='tests/test_map_*.py'` —
   map tests are EXCLUDED and run in the CI map matrix; see the `map-suite`

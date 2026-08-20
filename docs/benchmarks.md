@@ -232,7 +232,7 @@ Correctness is validated separately using upstream test fixtures and public refe
 
 | Gate | Command | Validates |
 |---|---|---|
-| Local CI parity | `pixi run ci-local` | Ruff, compileall, pyright, and the full pytest suite in the test env |
+| Local CI parity (optional) | `pixi run ci-local` | Ruff, compileall, pyright, and the full pytest suite in the test env. Git pre-push is `preflight-push` only; GitHub `build-test` is the suite. |
 | Refactor cohesion audit | `pixi run audit-refactor-cohesion` | Cheap wiring check for benchmark tasks, docs, promoted map/operator APIs, and known large-file pressure points |
 | WCS parity/perf | `pixi run bench-wcs` and `pixi run bench-wcs-tpv-inverse` | WCS projections, spectral/temporal paths, and TPV inverse benchmarks |
 | FITS boundary integration | focused cross-package smoke | `torchfits` output preserves torchsky WCS/map/catalog semantics |
