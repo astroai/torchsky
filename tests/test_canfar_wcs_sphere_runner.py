@@ -1,6 +1,11 @@
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from benchmarks.bench_catalog_compat import _make_real_fits_tables  # noqa: E402
 
 
 def test_canfar_wcs_sphere_runner_contract() -> None:
@@ -52,6 +57,8 @@ def test_canfar_wcs_sphere_runner_contract() -> None:
     assert "catalog_n1e7.json" in runner
     assert "bench_catalog_compat.py" in runner
     assert "catalog_compat.json" in runner
+    assert "vos_upload after_catalog_compat" in runner
+    assert "vos_upload after_catalog_n1e6" in runner
     assert "wcs_paper2_fused0.json" in runner
     assert "wcs_csc_x2s" in runner
     assert runner.count("--skip-decl-pruned") >= 2
@@ -89,3 +96,12 @@ def test_canfar_wcs_sphere_launcher_payload_has_no_shell_vars() -> None:
     )
     assert "vos:sfabbro/torchsky-runs" in fetch
     assert "vcp" in fetch
+
+
+def test_catalog_compat_fits_tables_write_numeric_columns(tmp_path) -> None:
+    left, right = _make_real_fits_tables()
+    assert set(left.colnames) == {"RA", "DEC"}
+    assert set(right.colnames) == {"RA", "DEC"}
+    path = tmp_path / "left_catalog.fits"
+    left.write(path, format="fits", overwrite=True)
+    assert path.stat().st_size > 0

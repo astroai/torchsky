@@ -438,11 +438,13 @@ case "${mode}" in
       python "${source_root}/benchmarks/bench_catalog_compat.py" \
       --n-left 10000 --n-right-noise 80000 --runs 3 \
       --json-out "${artifact_root}/catalog_compat.json" || job_rc=$?
+    vos_upload after_catalog_compat || echo "after_catalog_compat VOS upload failed; continuing job" >&2
     pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
       python "${source_root}/benchmarks/bench_catalog_crossmatch.py" \
       --n-left 1000000 --n-right-band 500000 --n-right-background 500000 --runs 3 \
       --skip-decl-pruned \
       --json-out "${artifact_root}/catalog_n1e6.json" || job_rc=$?
+    vos_upload after_catalog_n1e6 || echo "after_catalog_n1e6 VOS upload failed; continuing job" >&2
     pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
       python "${source_root}/benchmarks/bench_catalog_crossmatch.py" \
       --n-left 10000000 --n-right-band 500000 --n-right-background 500000 \

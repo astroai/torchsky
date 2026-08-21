@@ -493,8 +493,8 @@ def test_csc_aten_cpu_is_not_the_wcslib_floor(
 ) -> None:
     """Batched CPU ATen Horner is not the fused/WCSLIB floor; scalar C++ is.
 
-    CUDA still uses ATen (no fused CSC kernel). Do not claim CUDA CSC until
-    ``world-cuda`` on a SHA that includes ``wcs_csc_x2s``.
+    CUDA/MPS CSC without autograd host-copies to ``wcs_csc_x2s``. Do not claim
+    CUDA CSC throughput; mixed Linux CPU is still 8.4 mas vs astropy.
     """
     import torchsky.wcs.quadcube as quadcube
 

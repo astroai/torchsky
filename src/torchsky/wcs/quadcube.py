@@ -411,19 +411,34 @@ def _csc_inverse_poly(xf: Tensor, yf: Tensor) -> Tensor:
     return torch.addcmul(xf_f, xf_f * one_minus_xx, chi)
 
 
-def _csc_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
+def _csc_cpp_pair(
+    fn_name: str, a: Tensor, b: Tensor
+) -> Tuple[Tensor, Tensor] | None:
+    # ponytail: CUDA ATen Horner disagrees with scalar C++/WCSLIB at mas on
+    # some interior samples (CANFAR world-cuda CSC 8.3e-7 deg, 5/49 pts).
+    # Host-copy to the CPU kernel until a fused CUDA Chan–O'Neill exists.
+    # Ceiling: CUDA/MPS CSC without autograd is CPU + copy; autograd stays ATen.
     if (
-        _cpp is not None
-        and hasattr(_cpp, "wcs_csc_s2x")
-        and phi.device.type == "cpu"
-        and theta.device.type == "cpu"
-        and phi.dtype == torch.float64
-        and theta.dtype == torch.float64
-        and not phi.requires_grad
-        and not theta.requires_grad
+        _cpp is None
+        or not hasattr(_cpp, fn_name)
+        or a.requires_grad
+        or b.requires_grad
+        or a.dtype != torch.float64
+        or b.dtype != torch.float64
     ):
-        xi, eta = _cpp.wcs_csc_s2x(phi.reshape(-1), theta.reshape(-1))
-        return xi.reshape(phi.shape), eta.reshape(theta.shape)
+        return None
+    fn = getattr(_cpp, fn_name)
+    device = a.device
+    out0, out1 = fn(a.reshape(-1).cpu(), b.reshape(-1).cpu())
+    return out0.to(device=device).reshape(a.shape), out1.to(device=device).reshape(
+        b.shape
+    )
+
+
+def _csc_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
+    cpp_out = _csc_cpp_pair("wcs_csc_s2x", phi, theta)
+    if cpp_out is not None:
+        return cpp_out
     lx, m, n = _direction_cosines(phi, theta)
     face, chi, psi, _ = _face_from_lmn(lx, m, n)
     xf = torch.clamp(_csc_forward_poly(chi, psi), -1.0, 1.0)
@@ -432,18 +447,9 @@ def _csc_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
 
 
 def _csc_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
-    if (
-        _cpp is not None
-        and hasattr(_cpp, "wcs_csc_x2s")
-        and xi.device.type == "cpu"
-        and eta.device.type == "cpu"
-        and xi.dtype == torch.float64
-        and eta.dtype == torch.float64
-        and not xi.requires_grad
-        and not eta.requires_grad
-    ):
-        phi, theta = _cpp.wcs_csc_x2s(xi.reshape(-1), eta.reshape(-1))
-        return phi.reshape(xi.shape), theta.reshape(eta.shape)
+    cpp_out = _csc_cpp_pair("wcs_csc_x2s", xi, eta)
+    if cpp_out is not None:
+        return cpp_out
     face, xf, yf, valid = _xy_to_face(xi, eta)
     chi = _csc_inverse_poly(xf, yf)
     psi = _csc_inverse_poly(yf, xf)

@@ -112,7 +112,11 @@ graph then freezes; it is not a core import.
 
 CSC CPU uses the WCSLIB float32 Chan–O'Neill polynomial (scalar C Horner).
 Linux mixed-grid max is still 8.4 mas vs astropy (median ~1e-12″); do not
-claim the WCSLIB floor on Linux CPU. CUDA/MPS use ATen `addcmul` FMA.
+claim the WCSLIB floor on Linux CPU. CUDA/MPS CSC without autograd host-copies
+to that CPU kernel (CANFAR `world-cuda` ATen disagreed with CPU at 8.3e-7° on
+5/49 interior samples). Ceiling: CUDA CSC is CPU plus a host copy until a fused
+CUDA Chan–O'Neill kernel exists; do not claim CUDA CSC throughput. Autograd
+stays on ATen.
 Coupled `-TAB` inverse is 53 ms CPU / 9 ms CUDA at N=10k on SHA `d8d706f6`
 (5e-11 px). `FREQ-GRA` is gated on relative error (0.625 Hz on ~1e14 Hz).
 
