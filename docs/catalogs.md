@@ -89,4 +89,5 @@ for partition in DataLoader(dataset, num_workers=2, batch_size=None):
 Catalog compatibility is tested against Astropy-style fixtures where available
 and benchmarked in `benchmarks/bench_catalog_crossmatch.py` and
 `benchmarks/bench_catalog_compat.py`. Linux catalog benches stay on CANFAR;
-this API wave does not claim new Linux leadership.
+this API wave does not claim new Linux leadership. SHA `7564070c`
+`catalog_compat.json`: synthetic 10k×85k is 0.116× SkyCoord (not claimed).

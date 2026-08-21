@@ -220,11 +220,25 @@ def _make_real_fits_tables() -> tuple[Table, Table]:
     return left_table, right_table
 
 
+def _column_to_f64(col) -> torch.Tensor:
+    if isinstance(col, torch.Tensor):
+        return col.to(dtype=torch.float64)
+    if hasattr(col, "to_numpy"):
+        values = col.to_numpy()
+    else:
+        values = col
+    return torch.from_numpy(
+        np.ascontiguousarray(np.asarray(values, dtype=np.float64), dtype=np.float64)
+        .reshape(-1)
+        .copy()
+    )
+
+
 def _load_torchsky_catalog_from_fits(path: Path) -> tuple[torch.Tensor, torch.Tensor]:
     if _table_read is None:
         raise RuntimeError("torchsky.table.read is unavailable")
     table = _table_read(str(path), columns=["RA", "DEC"])
-    return table["RA"].to(torch.float64), table["DEC"].to(torch.float64)
+    return _column_to_f64(table["RA"]), _column_to_f64(table["DEC"])
 
 
 def main() -> int:

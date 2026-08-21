@@ -1,11 +1,16 @@
 import sys
 from pathlib import Path
 
+import torch
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from benchmarks.bench_catalog_compat import _make_real_fits_tables  # noqa: E402
+from benchmarks.bench_catalog_compat import (  # noqa: E402
+    _load_torchsky_catalog_from_fits,
+    _make_real_fits_tables,
+)
 
 
 def test_canfar_wcs_sphere_runner_contract() -> None:
@@ -105,3 +110,7 @@ def test_catalog_compat_fits_tables_write_numeric_columns(tmp_path) -> None:
     path = tmp_path / "left_catalog.fits"
     left.write(path, format="fits", overwrite=True)
     assert path.stat().st_size > 0
+    ra, dec = _load_torchsky_catalog_from_fits(path)
+    assert ra.dtype == torch.float64
+    assert dec.dtype == torch.float64
+    assert ra.numel() == len(left)
