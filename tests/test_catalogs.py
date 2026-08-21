@@ -25,6 +25,25 @@ def test_crossmatch_sky_returns_nearest_matches_within_radius() -> None:
     assert torch.all(result.separation_arcsec < 2.0)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_crossmatch_sky_cuda_matches_cpu() -> None:
+    left_ra = torch.tensor([10.0, 20.0, 30.0], dtype=torch.float64)
+    left_dec = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float64)
+    right_ra = torch.tensor([10.0001, 25.0, 29.9998], dtype=torch.float64)
+    right_dec = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float64)
+    kwargs = dict(radius_arcsec=2.0, left_chunk_size=2, right_chunk_size=2)
+    cpu = crossmatch_sky(left_ra, left_dec, right_ra, right_dec, **kwargs)
+    gpu = crossmatch_sky(
+        left_ra.cuda(), left_dec.cuda(), right_ra.cuda(), right_dec.cuda(), **kwargs
+    )
+    assert gpu.left_index.device.type == "cuda"
+    assert gpu.left_index.cpu().tolist() == cpu.left_index.tolist()
+    assert gpu.right_index.cpu().tolist() == cpu.right_index.tolist()
+    torch.testing.assert_close(
+        gpu.separation_arcsec.cpu(), cpu.separation_arcsec, atol=1e-9, rtol=0.0
+    )
+
+
 def test_crossmatch_sky_best_breaks_equal_separation_by_right_index() -> None:
     result = crossmatch_sky(
         torch.tensor([10.0], dtype=torch.float64),
@@ -199,6 +218,46 @@ def test_crossmatch_sky_dense_dec_band_matches_declination_baseline() -> None:
     )
     assert coarse_stats.candidate_rows_considered < decl_stats.candidate_rows_considered
     assert coarse_stats.pairs_evaluated < decl_stats.pairs_evaluated
+
+
+def test_crossmatch_sky_scalar_radius_matches_declination_indexed() -> None:
+    left_ra = torch.tensor([10.0, 10.01, 350.0, 180.0], dtype=torch.float64)
+    left_dec = torch.tensor([0.0, 0.002, -5.0, 45.0], dtype=torch.float64)
+    right_ra = torch.tensor(
+        [10.0001, 10.02, 349.999, 180.001, 90.0], dtype=torch.float64
+    )
+    right_dec = torch.tensor(
+        [0.0001, 0.0015, -5.001, 45.0005, 0.0], dtype=torch.float64
+    )
+    radius_arcsec = 5.0
+    public = crossmatch_sky(
+        left_ra,
+        left_dec,
+        right_ra,
+        right_dec,
+        radius_arcsec=radius_arcsec,
+        left_chunk_size=2,
+        right_chunk_size=3,
+        find="all",
+    )
+    baseline = catalogs_core._crossmatch_sky_declination_indexed(
+        left_ra,
+        left_dec,
+        right_ra,
+        right_dec,
+        radius_arcsec=torch.full((left_ra.numel(),), radius_arcsec, dtype=torch.float64),
+        left_chunk_size=2,
+        right_chunk_size=3,
+        find="all",
+    )
+    assert public.left_index.tolist() == baseline.left_index.tolist()
+    assert public.right_index.tolist() == baseline.right_index.tolist()
+    torch.testing.assert_close(
+        public.separation_arcsec,
+        baseline.separation_arcsec,
+        atol=1e-9,
+        rtol=0.0,
+    )
 
 
 def test_crossmatch_sky_handles_pole_adjacent_matches() -> None:

@@ -1355,10 +1355,11 @@ def run_sphere_domain(
                 unit = "queries/s"
                 if qs > 0:
                     t = 1.0 / qs
-            elif op == "moc_contains":
-                t = _safe_float(r.get("contains_s"))
-                thr = (n_points / t) if t and n_points else None
-                unit = "contains/s"
+            elif op.startswith("moc_"):
+                t = _safe_float(r.get("contains_s")) or _safe_float(r.get("time_s"))
+                n_moc = n_points if n_points > 0 else 1
+                thr = (n_moc / t) if t else None
+                unit = "contains/s" if op == "moc_contains" else "ops/s"
 
             lib = str(r.get("library", "torchsky"))
             rows.append(
@@ -1376,7 +1377,7 @@ def run_sphere_domain(
                     skip_reason="no_timing_field"
                     if (t is None and thr is None)
                     else "",
-                    comparable=op == "moc_contains",
+                    comparable=op.startswith("moc_"),
                     time_s=t,
                     throughput=thr,
                     unit=unit,

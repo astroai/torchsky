@@ -46,12 +46,41 @@ except Exception:  # pragma: no cover - optional comparator fixtures
     SG_ROOT_DIR = None
 
 
-def _time_many(fn: Callable[[], Any], runs: int) -> float:
+def _resolve_device(choice: str) -> torch.device:
+    if choice == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
+    if choice == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA requested but unavailable")
+    if choice == "mps" and (
+        not hasattr(torch.backends, "mps") or not torch.backends.mps.is_available()
+    ):
+        raise RuntimeError("MPS requested but unavailable")
+    return torch.device(choice)
+
+
+def _sync(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device=device)
+    elif device.type == "mps":
+        torch.mps.synchronize()
+
+
+def _time_many(
+    fn: Callable[[], Any], runs: int, device: torch.device | None = None
+) -> float:
     fn()
+    if device is not None:
+        _sync(device)
     samples: list[float] = []
     for _ in range(runs):
         t0 = time.perf_counter()
         fn()
+        if device is not None:
+            _sync(device)
         samples.append(time.perf_counter() - t0)
     return float(np.median(samples))
 
@@ -135,7 +164,9 @@ def _strip_closed(
     return lon, lat
 
 
-def _load_one_difficult_pair() -> tuple[torch.Tensor, ...] | None:
+def _load_one_difficult_pair(
+    device: torch.device, dtype: torch.dtype
+) -> tuple[torch.Tensor, ...] | None:
     if SG_ROOT_DIR is None:
         return None
     path = Path(SG_ROOT_DIR) / "difficult_intersections.txt"
@@ -159,14 +190,14 @@ def _load_one_difficult_pair() -> tuple[torch.Tensor, ...] | None:
     inside_a_lon, inside_a_lat = _xy_to_lonlat(a_inside[:1])
     inside_b_lon, inside_b_lat = _xy_to_lonlat(b_inside[:1])
     return (
-        torch.from_numpy(lon_a).to(torch.float64),
-        torch.from_numpy(lat_a).to(torch.float64),
-        torch.from_numpy(lon_b).to(torch.float64),
-        torch.from_numpy(lat_b).to(torch.float64),
-        torch.tensor(float(inside_a_lon[0]), dtype=torch.float64),
-        torch.tensor(float(inside_a_lat[0]), dtype=torch.float64),
-        torch.tensor(float(inside_b_lon[0]), dtype=torch.float64),
-        torch.tensor(float(inside_b_lat[0]), dtype=torch.float64),
+        torch.as_tensor(lon_a, dtype=dtype, device=device),
+        torch.as_tensor(lat_a, dtype=dtype, device=device),
+        torch.as_tensor(lon_b, dtype=dtype, device=device),
+        torch.as_tensor(lat_b, dtype=dtype, device=device),
+        torch.tensor(float(inside_a_lon[0]), dtype=dtype, device=device),
+        torch.tensor(float(inside_a_lat[0]), dtype=dtype, device=device),
+        torch.tensor(float(inside_b_lon[0]), dtype=dtype, device=device),
+        torch.tensor(float(inside_b_lat[0]), dtype=dtype, device=device),
     )
 
 
@@ -245,9 +276,19 @@ def main() -> int:
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument(
+        "--device", choices=["auto", "cpu", "cuda", "mps"], default="cpu"
+    )
+    parser.add_argument(
         "--json-out", type=Path, default=DEFAULT_OUTPUT_DIR / "sphere_polygons.json"
     )
     args = parser.parse_args()
+
+    device = _resolve_device(args.device)
+    dtype = torch.float32 if device.type == "mps" else torch.float64
+    use_cpp = _has_cpp_geom() and device.type == "cpu"
+
+    def time_many(fn: Callable[[], Any], runs: int | None = None) -> float:
+        return _time_many(fn, args.runs if runs is None else runs, device)
 
     lon_poly, lat_poly = _star_polygon(center_lon=120.0, center_lat=-20.0, n=9)
     lon_poly_overlap, lat_poly_overlap = _star_polygon(
@@ -256,14 +297,14 @@ def main() -> int:
     lon_poly_far, lat_poly_far = _star_polygon(center_lon=210.0, center_lat=25.0, n=9)
     lon_q, lat_q = _random_lonlat(args.n_points, args.seed)
 
-    lon_q_t = torch.from_numpy(lon_q).to(torch.float64)
-    lat_q_t = torch.from_numpy(lat_q).to(torch.float64)
-    lon_poly_t = torch.from_numpy(lon_poly).to(torch.float64)
-    lat_poly_t = torch.from_numpy(lat_poly).to(torch.float64)
-    lon_poly_overlap_t = torch.from_numpy(lon_poly_overlap).to(torch.float64)
-    lat_poly_overlap_t = torch.from_numpy(lat_poly_overlap).to(torch.float64)
-    lon_poly_far_t = torch.from_numpy(lon_poly_far).to(torch.float64)
-    lat_poly_far_t = torch.from_numpy(lat_poly_far).to(torch.float64)
+    lon_q_t = torch.as_tensor(lon_q, dtype=dtype, device=device)
+    lat_q_t = torch.as_tensor(lat_q, dtype=dtype, device=device)
+    lon_poly_t = torch.as_tensor(lon_poly, dtype=dtype, device=device)
+    lat_poly_t = torch.as_tensor(lat_poly, dtype=dtype, device=device)
+    lon_poly_overlap_t = torch.as_tensor(lon_poly_overlap, dtype=dtype, device=device)
+    lat_poly_overlap_t = torch.as_tensor(lat_poly_overlap, dtype=dtype, device=device)
+    lon_poly_far_t = torch.as_tensor(lon_poly_far, dtype=dtype, device=device)
+    lat_poly_far_t = torch.as_tensor(lat_poly_far, dtype=dtype, device=device)
 
     poly = SphericalPolygon(lon_poly_t, lat_poly_t)
 
@@ -278,13 +319,13 @@ def main() -> int:
     )
     if threshold_points != args.n_points:
         lon_q_large, lat_q_large = _random_lonlat(threshold_points, args.seed + 17)
-        large_lon_q_t = torch.from_numpy(lon_q_large).to(torch.float64)
-        large_lat_q_t = torch.from_numpy(lat_q_large).to(torch.float64)
+        large_lon_q_t = torch.as_tensor(lon_q_large, dtype=dtype, device=device)
+        large_lat_q_t = torch.as_tensor(lat_q_large, dtype=dtype, device=device)
     else:
         large_lon_q_t = lon_q_t
         large_lat_q_t = lat_q_t
 
-    t_contains = _time_many(
+    t_contains = time_many(
         lambda: spherical_polygon_contains(
             lon_q_t,
             lat_q_t,
@@ -302,8 +343,8 @@ def main() -> int:
             "points_s": args.n_points / t_contains,
         }
     )
-    if _has_cpp_geom():
-        t_contains_medium_default = _time_many(
+    if use_cpp:
+        t_contains_medium_default = time_many(
             lambda: spherical_polygon_contains(
                 medium_lon_q_t,
                 medium_lat_q_t,
@@ -313,7 +354,7 @@ def main() -> int:
             ),
             runs=args.runs,
         )
-        t_contains_medium_cpp = _time_many(
+        t_contains_medium_cpp = time_many(
             lambda: _with_cpp_mode(
                 True,
                 lambda: spherical_polygon_contains(
@@ -326,7 +367,7 @@ def main() -> int:
             ),
             runs=args.runs,
         )
-        t_contains_medium_py = _time_many(
+        t_contains_medium_py = time_many(
             lambda: _with_cpp_mode(
                 False,
                 lambda: spherical_polygon_contains(
@@ -355,7 +396,7 @@ def main() -> int:
                 / t_contains_medium_default,
             }
         )
-        t_contains_large_default = _time_many(
+        t_contains_large_default = time_many(
             lambda: spherical_polygon_contains(
                 large_lon_q_t,
                 large_lat_q_t,
@@ -365,7 +406,7 @@ def main() -> int:
             ),
             runs=args.runs,
         )
-        t_contains_large_cpp = _time_many(
+        t_contains_large_cpp = time_many(
             lambda: _with_cpp_mode(
                 True,
                 lambda: spherical_polygon_contains(
@@ -390,8 +431,8 @@ def main() -> int:
                 "default_vs_cpp_ratio": t_contains_large_cpp / t_contains_large_default,
             }
         )
-    if _has_cpp_geom():
-        t_contains_cpp = _time_many(
+    if use_cpp:
+        t_contains_cpp = time_many(
             lambda: _with_cpp_mode(
                 True,
                 lambda: spherical_polygon_contains(
@@ -404,7 +445,7 @@ def main() -> int:
             ),
             runs=args.runs,
         )
-        t_contains_py = _time_many(
+        t_contains_py = time_many(
             lambda: _with_cpp_mode(
                 False,
                 lambda: spherical_polygon_contains(
@@ -428,7 +469,7 @@ def main() -> int:
             }
         )
 
-    t_pixel_query = _time_many(
+    t_pixel_query = time_many(
         lambda: query_polygon_general(args.nside, lon_poly_t, lat_poly_t, nest=False),
         runs=args.runs,
     )
@@ -459,7 +500,7 @@ def main() -> int:
             )
         return overlap, far
 
-    t_intersects = _time_many(_run_intersections, runs=args.runs)
+    t_intersects = time_many(_run_intersections, runs=args.runs)
     rows.append(
         {
             "operation": "intersects_nonconvex",
@@ -469,12 +510,12 @@ def main() -> int:
             "far_expected": False,
         }
     )
-    if _has_cpp_geom():
-        t_intersects_cpp = _time_many(
+    if use_cpp:
+        t_intersects_cpp = time_many(
             lambda: _with_cpp_mode(True, _run_intersections),
             runs=args.runs,
         )
-        t_intersects_py = _time_many(
+        t_intersects_py = time_many(
             lambda: _with_cpp_mode(False, _run_intersections),
             runs=args.runs,
         )
@@ -488,7 +529,7 @@ def main() -> int:
             }
         )
 
-    difficult_pair = _load_one_difficult_pair()
+    difficult_pair = _load_one_difficult_pair(device, dtype)
     if difficult_pair is not None:
         (
             lon_a_t,
@@ -516,7 +557,7 @@ def main() -> int:
                 )
             return out
 
-        t_difficult = _time_many(_run_difficult_intersection, runs=args.runs)
+        t_difficult = time_many(_run_difficult_intersection, runs=args.runs)
         rows.append(
             {
                 "operation": "intersects_upstream_difficult",
@@ -525,12 +566,12 @@ def main() -> int:
                 "expected_nonempty": True,
             }
         )
-        if _has_cpp_geom():
-            t_difficult_cpp = _time_many(
+        if use_cpp:
+            t_difficult_cpp = time_many(
                 lambda: _with_cpp_mode(True, _run_difficult_intersection),
                 runs=args.runs,
             )
-            t_difficult_py = _time_many(
+            t_difficult_py = time_many(
                 lambda: _with_cpp_mode(False, _run_difficult_intersection),
                 runs=args.runs,
             )
@@ -544,7 +585,7 @@ def main() -> int:
                 }
             )
 
-    t_area = _time_many(lambda: poly.area(degrees=False), runs=args.runs)
+    t_area = time_many(lambda: poly.area(degrees=False), runs=args.runs)
     rows.append(
         {
             "operation": "area_nonconvex",
@@ -556,7 +597,7 @@ def main() -> int:
 
     sg_poly = _sg_polygon_from_lonlat(lon_poly, lat_poly)
     if sg_poly is not None:
-        t_sg_contains = _time_many(
+        t_sg_contains = time_many(
             lambda: _sg_contains(sg_poly, lon_q, lat_q), runs=max(2, args.runs // 2)
         )
         tf_contains = (
@@ -615,6 +656,8 @@ def main() -> int:
         )
 
     rows.extend(_recommendation_rows(rows))
+    for row in rows:
+        row.setdefault("device", device.type)
 
     for row in rows:
         print(", ".join(f"{k}={v}" for k, v in row.items()))

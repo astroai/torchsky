@@ -43,12 +43,17 @@ from typing import Literal
 import torch
 from torch import Tensor
 
+from ..io import read_image as _read_image
+from ..io import write as _write
 from . import healpix as _healpix
 from .core import fit_monopole_dipole as _fit_monopole_dipole
 from .geom import query_ellipse as _query_ellipse
+from .spectral import alm_index as _alm_index
+from .spectral import alm_size as _alm_size
 from .spectral import alm2map as _alm2map
 from .spectral import alm2cl as _alm2cl
 from .spectral import alm2map_spin as _alm2map_spin
+from .spectral import alm2map_der1 as _alm2map_der1
 from .spectral import almxfl as _almxfl
 from .spectral import anafast as _anafast
 from .spectral import beam2bl as _beam2bl
@@ -66,6 +71,76 @@ from .spectral import synfast as _synfast
 
 
 _STRICT_MODE = False
+
+
+class Rotator:
+    """Thin healpy-shaped rotator for zyz Euler angles ``(psi, theta, phi)``."""
+
+    def __init__(
+        self,
+        rot: tuple[float, float, float] | list[float] | None = None,
+        *,
+        deg: bool = True,
+    ) -> None:
+        if rot is None:
+            psi = theta = phi = 0.0
+        else:
+            if len(rot) != 3:
+                raise ValueError("rot must be (psi, theta, phi)")
+            psi, theta, phi = (float(rot[0]), float(rot[1]), float(rot[2]))
+            if deg:
+                psi = math.radians(psi)
+                theta = math.radians(theta)
+                phi = math.radians(phi)
+        self.psi = psi
+        self.theta = theta
+        self.phi = phi
+
+    def rotate_alm(
+        self,
+        alm: Tensor,
+        *,
+        lmax: int | None = None,
+        mmax: int | None = None,
+    ) -> Tensor:
+        return _rotate_alm(alm, self.psi, self.theta, self.phi, lmax=lmax, mmax=mmax)
+
+    def rotate_map_alms(
+        self,
+        m: Tensor,
+        *,
+        lmax: int | None = None,
+        mmax: int | None = None,
+        nest: bool = False,
+    ) -> Tensor:
+        map_t = torch.as_tensor(m)
+        nside = _healpix.get_nside(map_t)
+        alm = _map2alm(map_t, nside=nside, lmax=lmax, mmax=mmax, nest=nest)
+        alm_r = self.rotate_alm(alm, lmax=lmax, mmax=mmax)
+        return _alm2map(alm_r, nside, lmax=lmax, mmax=mmax, nest=nest)
+
+
+class Alm:
+    """healpy-shaped helpers for packed ``(ell, m)`` coefficient indices."""
+
+    @staticmethod
+    def getidx(lmax: int, ell: int, m: int, mmax: int | None = None) -> int:
+        """Return the packed index of the ``(l, m)`` coefficient."""
+        return _alm_index(ell, m, lmax, mmax)
+
+    @staticmethod
+    def getlm(i: int, lmax: int) -> tuple[int, int]:
+        """Return ``(l, m)`` for a packed coefficient index."""
+        index = int(i)
+        ll = int(lmax)
+        if index < 0 or index >= _alm_size(ll):
+            raise ValueError("alm index outside lmax bounds")
+        for m in range(ll + 1):
+            start = _alm_index(m, m, ll)
+            stop = start + ll - m + 1
+            if index < stop:
+                return m + index - start, m
+        raise AssertionError("validated alm index was not decoded")
 
 
 def set_strict_mode(enabled: bool) -> None:
@@ -106,6 +181,38 @@ def pix2ang(
     nside: int, ipix: Tensor, nest: bool = False, lonlat: bool = False
 ) -> tuple[Tensor, Tensor]:
     return _healpix.pix2ang(nside, ipix, nest=nest, lonlat=lonlat)
+
+
+def read_map(filename: str | os.PathLike[str]) -> Tensor:
+    """Read the first image HDU as a flat HEALPix map tensor."""
+    data = torch.as_tensor(_read_image(str(filename), hdu=0, mmap=False))
+    values = data.reshape(-1)
+    _healpix.npix2nside(int(values.numel()))
+    return values
+
+
+def write_map(
+    filename: str | os.PathLike[str],
+    m: Tensor,
+    *,
+    overwrite: bool = False,
+) -> None:
+    """Write a one-dimensional RING-ordered HEALPix image through torchfits."""
+    values = torch.as_tensor(m)
+    if values.ndim != 1:
+        raise ValueError("m must be a 1D HEALPix map")
+    nside = _healpix.npix2nside(int(values.numel()))
+    _write(
+        str(filename),
+        values.detach().cpu(),
+        header={"PIXTYPE": "HEALPIX", "ORDERING": "RING", "NSIDE": nside},
+        overwrite=overwrite,
+    )
+
+
+def new_map(nside: int, dtype: torch.dtype = torch.float64) -> Tensor:
+    """Return a zero-valued RING-ordered HEALPix map."""
+    return torch.zeros(_healpix.nside2npix(nside), dtype=dtype)
 
 
 def get_all_neighbors(
@@ -748,6 +855,17 @@ def alm2map_spin(
     return _alm2map_spin(alms, nside, spin, lmax=lmax, mmax=mmax, nest=nest)
 
 
+def alm2map_der1(
+    alm: Tensor,
+    nside: int,
+    *,
+    lmax: int | None = None,
+    mmax: int | None = None,
+    nest: bool = False,
+) -> tuple[Tensor, Tensor, Tensor]:
+    return _alm2map_der1(alm, nside, lmax=lmax, mmax=mmax, nest=nest)
+
+
 # Re-export common APIs with familiar naming.
 UNSEEN = _healpix.UNSEEN
 ang2vec = _healpix.ang2vec
@@ -762,7 +880,9 @@ max_pixrad = _healpix.max_pixrad
 nest2ring = _healpix.nest2ring
 npix2nside = _healpix.npix2nside
 nside2npix = _healpix.nside2npix
+nside2pixarea = _healpix.nside2pixarea
 nside2order = _healpix.nside2order
+nside2resol = _healpix.nside2resol
 order2nside = _healpix.order2nside
 pix2vec = _healpix.pix2vec
 degrade_pixels = _healpix.degrade_pixels
@@ -785,6 +905,8 @@ vec2pix = _healpix.vec2pix
 
 __all__ = [
     "UNSEEN",
+    "Alm",
+    "Rotator",
     "ang2pix",
     "ang2vec",
     "boundaries",
@@ -794,6 +916,7 @@ __all__ = [
     "rotate_alm",
     "alm2cl",
     "alm2map",
+    "alm2map_der1",
     "anafast",
     "gaussian_beam",
     "gauss_beam",
@@ -817,7 +940,10 @@ __all__ = [
     "nest2ring",
     "npix2nside",
     "nside2npix",
+    "nside2pixarea",
     "nside2order",
+    "nside2resol",
+    "new_map",
     "order2nside",
     "pix2ang",
     "pix2vec",
@@ -841,6 +967,7 @@ __all__ = [
     "alm2map_spin",
     "remove_dipole",
     "remove_monopole",
+    "read_map",
     "ring2nest",
     "set_strict_mode",
     "strict_mode",
@@ -849,4 +976,5 @@ __all__ = [
     "upgrade_pixel_ranges",
     "vec2ang",
     "vec2pix",
+    "write_map",
 ]

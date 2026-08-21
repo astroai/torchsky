@@ -3010,7 +3010,8 @@ def rotate_alm(
     device = rows.device
     dtype = rows.dtype
     real_dtype = _preferred_real_dtype(device)
-    beta = torch.as_tensor(float(theta), dtype=real_dtype, device=device)
+    # healpy rotate_alm zyz: Wigner-d argument is -theta relative to our d^l_{m m'}(beta).
+    beta = torch.as_tensor(-float(theta), dtype=real_dtype, device=device)
     psi_t = torch.as_tensor(float(psi), dtype=real_dtype, device=device)
     phi_t = torch.as_tensor(float(phi), dtype=real_dtype, device=device)
     zero = torch.zeros((), dtype=real_dtype, device=device)
@@ -4569,6 +4570,37 @@ def alm2map_spin(
     )
 
 
+def alm2map_der1(
+    alm_values: Tensor | list[complex],
+    nside: int,
+    *,
+    lmax: int | None = None,
+    mmax: int | None = None,
+    nest: bool = False,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Synthesize a map and its first angular derivatives from scalar alm.
+
+    Returns ``(map, d_theta, d_phi)`` with healpy semantics: ``d_phi`` is already
+    divided by ``sin(theta)``. Derivatives use the spin-1 relation
+    ``a_{E,lm} = sqrt(l(l+1)) a_{lm}`` (B=0) via :func:`alm2map_spin`, not
+    finite differences on the map.
+    """
+    alm = torch.as_tensor(alm_values)
+    if alm.ndim != 1:
+        raise ValueError("alm2map_der1 expects a 1D scalar alm vector")
+    cdt = _preferred_complex_dtype(alm.device)
+    alm = alm.to(dtype=cdt)
+    ll, mm = _infer_lmax_mmax_from_nalm(int(alm.numel()), lmax, mmax)
+    m = alm2map(alm, nside, lmax=ll, mmax=mm, nest=nest)
+    ell = _alm_ell_array(ll, mm).to(device=alm.device)
+    rdtype = _preferred_real_dtype(alm.device)
+    fac = torch.sqrt(ell.to(dtype=rdtype) * (ell.to(dtype=rdtype) + 1.0))
+    alm_e = alm * fac.to(dtype=alm.dtype)
+    alm_b = torch.zeros_like(alm_e)
+    qu = alm2map_spin((alm_e, alm_b), nside, 1, lmax=ll, mmax=mm, nest=nest)
+    return m, qu[0], qu[1]
+
+
 def clear_spectral_caches() -> None:
     """Clear internal spectral/SHT lookup caches."""
 
@@ -4633,6 +4665,7 @@ __all__ = [
     "alm2map_batched",
     "alm2cl",
     "alm2map_spin",
+    "alm2map_der1",
     "alm_index",
     "alm_size",
     "almxfl",

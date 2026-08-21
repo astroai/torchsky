@@ -92,8 +92,11 @@ def test_temporal_reference_position_aliases_fail_closed() -> None:
     assert canonical_time_reference_position("BARYCENTRE") == "BARYCENTER"
     assert canonical_time_reference_position("SSB") == "BARYCENTER"
     assert canonical_time_reference_position("HELIOCENTRE") == "HELIOCENTER"
+    assert canonical_time_reference_position("EMBARYCENTER") == "EMBARYCENTER"
+    assert canonical_time_reference_position("MARS") == "MARS"
+    assert canonical_time_reference_position("MOON") == "MOON"
     with pytest.raises(ValueError, match="unsupported temporal reference position"):
-        canonical_time_reference_position("MARS")
+        canonical_time_reference_position("PLUTO")
 
 
 def test_temporal_jd_mjd_conversion_and_iso_output() -> None:
@@ -358,3 +361,36 @@ def test_wcs_temporal_axis_metadata_view() -> None:
     np.testing.assert_allclose(twcs.mjd_ref, 60000.0)
     np.testing.assert_allclose(twcs.mjd_obs, 59945.0)
     np.testing.assert_allclose(twcs.duration_days, 30.0 / 86400.0)
+
+
+def test_trefpos_embarycenter_and_moon_are_geocenter() -> None:
+    mjd = torch.tensor([60000.0], dtype=torch.float64)
+    ra = torch.tensor([120.0], dtype=torch.float64)
+    dec = torch.tensor([30.0], dtype=torch.float64)
+    for name in ("EMBARYCENTER", "MOON", "CUSTOM", "BASECENTER"):
+        twcs = TemporalWCS({"MJDREF": 60000.0, "TREFPOS": name})
+        torch.testing.assert_close(twcs.apply_corrections(mjd, ra, dec), mjd)
+        assert not twcs.requires_ephemeris
+
+
+def test_trefpos_mars_keplerian_delay_differs_from_barycenter() -> None:
+    mjd = torch.tensor([60000.0], dtype=torch.float64)
+    ra = torch.tensor([0.0], dtype=torch.float64)
+    dec = torch.tensor([0.0], dtype=torch.float64)
+    mars = TemporalWCS({"MJDREF": 60000.0, "TREFPOS": "MARS"})
+    bary = TemporalWCS({"MJDREF": 60000.0, "TREFPOS": "BARYCENTER"})
+    assert mars.requires_ephemeris
+    corr_m = mars.apply_corrections(mjd, ra, dec)
+    corr_b = bary.apply_corrections(mjd, ra, dec)
+    assert not torch.allclose(corr_m, corr_b, atol=1e-8, rtol=0.0)
+    delta_s = float((corr_m - mjd).item()) * 86400.0
+    assert abs(delta_s) < 3600.0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_convert_time_scale_cuda_matches_cpu() -> None:
+    mjd = torch.linspace(57204.0, 61049.0, 32, dtype=torch.float64)
+    cpu = convert_time_scale(mjd, "UTC", "TT")
+    gpu = convert_time_scale(mjd.cuda(), "UTC", "TT")
+    assert gpu.device.type == "cuda"
+    torch.testing.assert_close(gpu.cpu(), cpu, atol=1e-15, rtol=0.0)

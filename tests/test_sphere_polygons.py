@@ -128,6 +128,73 @@ def test_query_polygon_general_matches_convex_baseline() -> None:
     torch.testing.assert_close(got, expected)
 
 
+def _geom_accel_device() -> torch.device | None:
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return None
+
+
+def test_spherical_polygon_contains_cuda_or_mps_matches_cpu() -> None:
+    device = _geom_accel_device()
+    if device is None:
+        pytest.skip("no CUDA/MPS device")
+    dtype = torch.float32 if device.type == "mps" else torch.float64
+    lon_poly, lat_poly = _concave_polygon()
+    lon = torch.tensor([-10.0, 10.0, 10.0, 80.0], dtype=dtype)
+    lat = torch.tensor([10.0, -10.0, 10.0, 0.0], dtype=dtype)
+    cpu = spherical_polygon_contains(lon, lat, lon_poly.to(dtype), lat_poly.to(dtype))
+    got = spherical_polygon_contains(
+        lon.to(device),
+        lat.to(device),
+        lon_poly.to(device=device, dtype=dtype),
+        lat_poly.to(device=device, dtype=dtype),
+    )
+    assert got.device.type == device.type
+    torch.testing.assert_close(got.cpu(), cpu)
+
+
+def test_query_polygon_general_cuda_or_mps_matches_cpu() -> None:
+    device = _geom_accel_device()
+    if device is None:
+        pytest.skip("no CUDA/MPS device")
+    nside = 32
+    dtype = torch.float32 if device.type == "mps" else torch.float64
+    lon = torch.tensor([0.0, 20.0, 20.0, 0.0], dtype=dtype)
+    lat = torch.tensor([0.0, 0.0, 20.0, 20.0], dtype=dtype)
+    cpu = query_polygon_general(nside, lon, lat, nest=False)
+    got = query_polygon_general(nside, lon.to(device), lat.to(device), nest=False)
+    torch.testing.assert_close(got.cpu().sort().values, cpu.sort().values)
+
+
+def test_spherical_polygons_intersect_cuda_or_mps_matches_cpu() -> None:
+    device = _geom_accel_device()
+    if device is None:
+        pytest.skip("no CUDA/MPS device")
+    dtype = torch.float32 if device.type == "mps" else torch.float64
+    lon1 = torch.tensor([-10.0, 10.0, 10.0, -10.0], dtype=dtype)
+    lat1 = torch.tensor([30.0, 30.0, 0.0, 0.0], dtype=dtype)
+    lon2 = torch.tensor([-5.0, 15.0, 15.0, -5.0], dtype=dtype)
+    lat2 = torch.tensor([20.0, 20.0, -10.0, -10.0], dtype=dtype)
+    lon3 = torch.tensor([-20.0, 20.0, 20.0, -20.0], dtype=dtype)
+    lat3 = torch.tensor([-20.0, -20.0, -10.0, -10.0], dtype=dtype)
+    cpu_hit = spherical_polygons_intersect(lon1, lat1, lon2, lat2)
+    cpu_miss = spherical_polygons_intersect(lon1, lat1, lon3, lat3)
+    assert (
+        spherical_polygons_intersect(
+            lon1.to(device), lat1.to(device), lon2.to(device), lat2.to(device)
+        )
+        == cpu_hit
+    )
+    assert (
+        spherical_polygons_intersect(
+            lon1.to(device), lat1.to(device), lon3.to(device), lat3.to(device)
+        )
+        == cpu_miss
+    )
+
+
 def test_spherical_polygon_pixel_boolean_ops() -> None:
     nside = 32
     lon1 = torch.tensor([0.0, 25.0, 25.0, 0.0], dtype=torch.float64)

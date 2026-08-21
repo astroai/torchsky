@@ -2,7 +2,6 @@ import os
 import tempfile
 
 import numpy as np
-import pytest
 import torch
 from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
@@ -761,6 +760,39 @@ def test_wcs_slice_updates_cd_for_strided_view():
     assert sliced.pixel_shape == (10, 10)
 
 
+def test_wcs_slice_negative_step_flips_cd_and_roundtrips() -> None:
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 20,
+        "NAXIS2": 12,
+        "CTYPE1": "X",
+        "CTYPE2": "Y",
+        "CRPIX1": 1.0,
+        "CRPIX2": 1.0,
+        "CRVAL1": 0.0,
+        "CRVAL2": 0.0,
+        "CDELT1": 2.0,
+        "CDELT2": 3.0,
+    }
+    wcs = WCS(header)
+    sliced = wcs.slice((slice(None, None, -1), slice(None, None, -1)))
+    sliced_pixels = torch.tensor([[0.0, 0.0], [3.0, 5.0]], dtype=torch.float64)
+    original_pixels = torch.stack(
+        [
+            (header["NAXIS1"] - 1) - sliced_pixels[:, 0],
+            (header["NAXIS2"] - 1) - sliced_pixels[:, 1],
+        ],
+        dim=-1,
+    )
+    torch.testing.assert_close(
+        sliced.pixel_to_world(sliced_pixels),
+        wcs.pixel_to_world(original_pixels),
+        atol=1e-12,
+        rtol=0.0,
+    )
+    assert sliced.pixel_shape == (20, 12)
+
+
 def test_wcs_slice_integer_index_drops_numpy_order_spectral_axis():
     header = {
         "NAXIS": 3,
@@ -1077,7 +1109,7 @@ def test_wcs_dropaxis_removes_uncoupled_linear_axis():
     assert reduced.pixel_shape == (10, 30)
 
 
-def test_wcs_dropaxis_rejects_coupled_axis():
+def test_wcs_dropaxis_bakes_coupled_axis_at_crpix():
     header = {
         "NAXIS": 3,
         "CTYPE1": "X",
@@ -1100,6 +1132,141 @@ def test_wcs_dropaxis_rejects_coupled_axis():
         "CD3_3": 1.0,
     }
     wcs = WCS(header)
+    reduced = wcs.dropaxis(1)
+    pixels_2d = torch.tensor([[0.0, 2.0], [4.0, 5.0]], dtype=torch.float64)
+    # dropaxis bakes axis 1 at CRPIX (0-based pixel crpix-1 = 0).
+    pixels_3d = torch.stack(
+        [
+            pixels_2d[:, 0],
+            torch.zeros(pixels_2d.shape[0], dtype=torch.float64),
+            pixels_2d[:, 1],
+        ],
+        dim=-1,
+    )
 
-    with pytest.raises(NotImplementedError, match="coupled"):
-        wcs.dropaxis(1)
+    torch.testing.assert_close(
+        reduced.pixel_to_world(pixels_2d),
+        wcs.pixel_to_world(pixels_3d)[:, [0, 2]],
+    )
+    assert reduced.world_axis_names == ("X", "Z")
+
+
+def test_wcs_dropaxis_bakes_celestial_axis_at_crpix():
+    header = {
+        "NAXIS": 3,
+        "NAXIS1": 80,
+        "NAXIS2": 60,
+        "NAXIS3": 12,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CTYPE3": "WAVE",
+        "CRPIX1": 40.0,
+        "CRPIX2": 30.0,
+        "CRPIX3": 1.0,
+        "CRVAL1": 12.0,
+        "CRVAL2": -5.0,
+        "CRVAL3": 500.0,
+        "CDELT1": -0.002,
+        "CDELT2": 0.002,
+        "CDELT3": 10.0,
+    }
+    cube = WCS(header)
+    reduced = cube.dropaxis(1)
+    pixels_2d = torch.tensor([[35.0, 2.0], [42.0, 5.0]], dtype=torch.float64)
+    pixels_3d = torch.stack(
+        [
+            pixels_2d[:, 0],
+            torch.full((2,), 29.0, dtype=torch.float64),  # CRPIX2 - 1
+            pixels_2d[:, 1],
+        ],
+        dim=-1,
+    )
+    torch.testing.assert_close(
+        reduced.pixel_to_world(pixels_2d),
+        cube.pixel_to_world(pixels_3d)[:, [0, 2]],
+        atol=2e-10,
+        rtol=0.0,
+    )
+
+
+def test_wcs_mixed_linear_known_mask_varies_by_row():
+    header = {
+        "NAXIS": 2,
+        "CTYPE1": "X",
+        "CTYPE2": "Y",
+        "CRPIX1": 1.0,
+        "CRPIX2": 1.0,
+        "CRVAL1": 0.0,
+        "CRVAL2": 0.0,
+        "CD1_1": 2.0,
+        "CD1_2": 0.5,
+        "CD2_1": -0.25,
+        "CD2_2": 3.0,
+    }
+    wcs = WCS(header)
+    pixels_true = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float64)
+    world_true = wcs.pixel_to_world(pixels_true)
+    mixed_pixel = torch.tensor(
+        [[1.0, float("nan")], [float("nan"), 4.0]], dtype=torch.float64
+    )
+    mixed_world = torch.tensor(
+        [[float("nan"), world_true[0, 1]], [world_true[1, 0], float("nan")]],
+        dtype=torch.float64,
+    )
+    solved_pixel, solved_world = wcs.mixed_pixel_world(
+        pixel=mixed_pixel, world=mixed_world
+    )
+    torch.testing.assert_close(solved_pixel, pixels_true, atol=1e-10, rtol=0.0)
+    torch.testing.assert_close(solved_world, world_true, atol=1e-10, rtol=0.0)
+
+
+def test_wcs_sip_with_pixel_affine_correction_roundtrip():
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 1024,
+        "NAXIS2": 1024,
+        "CTYPE1": "RA---TAN-SIP",
+        "CTYPE2": "DEC--TAN-SIP",
+        "CRPIX1": 512.0,
+        "CRPIX2": 512.0,
+        "CRVAL1": 180.0,
+        "CRVAL2": 5.0,
+        "CD1_1": -2.8e-4,
+        "CD1_2": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": 2.8e-4,
+        "A_ORDER": 2,
+        "B_ORDER": 2,
+        "A_2_0": 3.0e-6,
+        "A_0_2": 1.0e-6,
+        "B_2_0": -2.5e-6,
+        "B_0_2": 2.5e-6,
+        "AP_ORDER": 2,
+        "BP_ORDER": 2,
+        "AP_2_0": -2.0e-6,
+        "BP_0_2": -2.0e-6,
+    }
+    wcs = WCS(header)
+    matrix = torch.tensor([[1.02, 0.01], [-0.015, 0.98]], dtype=torch.float64)
+    offset = torch.tensor([1.5, -2.0], dtype=torch.float64)
+    source = torch.tensor(
+        [[480.0, 500.0], [512.0, 512.0], [530.0, 490.0]], dtype=torch.float64
+    )
+    corrected_pixels = torch.matmul(source, matrix.T) + offset
+    corrected = wcs.with_pixel_affine_correction(matrix, offset)
+    assert corrected._pixel_affine_matrix is not None
+    torch.testing.assert_close(
+        corrected.pixel_to_world(corrected_pixels),
+        wcs.pixel_to_world(source),
+        atol=2e-6,
+        rtol=0.0,
+    )
+    world = wcs.pixel_to_world(source)
+    # SIP inverse is approximate; corrected world->pixel inherits that residual.
+    torch.testing.assert_close(
+        corrected.world_to_pixel(world),
+        corrected_pixels,
+        atol=5e-3,
+        rtol=0.0,
+    )
+    assert corrected.to_header()["TSKYAF0"] == "pixel_affine"

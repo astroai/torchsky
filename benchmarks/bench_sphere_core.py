@@ -78,6 +78,124 @@ def _sample_lonlat(n: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
     return lon, lat
 
 
+def _append_moc_rows(
+    results: list[dict[str, Any]],
+    *,
+    lon_t: torch.Tensor,
+    lat_t: torch.Tensor,
+    n_points: int,
+    runs: int,
+    max_order: int,
+) -> None:
+    try:
+        import astropy.units as u
+        from mocpy import MOC as MocpyMOC
+        from torchsky.sphere.moc import MOC as TorchMOC
+    except Exception:
+        return
+
+    moc_lon = lon_t[: min(50_000, n_points)].cpu()
+    moc_lat = lat_t[: min(50_000, n_points)].cpu()
+    cpu = torch.device("cpu")
+
+    def _from_circle() -> Any:
+        return TorchMOC.from_circle(20.0, -10.0, 5.0, max_order=max_order)
+
+    t_cone = _bench(_from_circle, runs=runs, device=cpu)
+    moc = _from_circle()
+    results.append(
+        {
+            "operation": "moc_from_circle",
+            "library": "torchsky",
+            "max_order": int(max_order),
+            "time_s": t_cone,
+        }
+    )
+    if hasattr(MocpyMOC, "from_cone"):
+        t_ref_cone = _bench(
+            lambda: MocpyMOC.from_cone(
+                lon=20.0 * u.deg,
+                lat=-10.0 * u.deg,
+                radius=5.0 * u.deg,
+                max_depth=max_order,
+            ),
+            runs=runs,
+            device=None,
+        )
+        results.append(
+            {
+                "operation": "moc_from_cone",
+                "library": "mocpy",
+                "max_order": int(max_order),
+                "time_s": t_ref_cone,
+                "ratio_torchsky_vs_mocpy": t_ref_cone / t_cone,
+            }
+        )
+
+    t_ts = _bench(
+        lambda: moc.contains(moc_lon, moc_lat),
+        runs=runs,
+        device=cpu,
+    )
+    results.append(
+        {
+            "operation": "moc_contains",
+            "library": "torchsky",
+            "n_points": int(moc_lon.numel()),
+            "contains_s": t_ts,
+            "time_s": t_ts,
+        }
+    )
+    if hasattr(MocpyMOC, "from_cone"):
+        ref = MocpyMOC.from_cone(
+            lon=20.0 * u.deg, lat=-10.0 * u.deg, radius=5.0 * u.deg, max_depth=max_order
+        )
+        lon_u = moc_lon.numpy() * u.deg
+        lat_u = moc_lat.numpy() * u.deg
+        contains_fn = getattr(ref, "contains_lonlat", getattr(ref, "contains", None))
+        if contains_fn is not None:
+            t_ref = _bench(lambda: contains_fn(lon_u, lat_u), runs=runs, device=None)
+            results.append(
+                {
+                    "operation": "moc_contains",
+                    "library": "mocpy",
+                    "n_points": int(moc_lon.numel()),
+                    "contains_s": t_ref,
+                    "time_s": t_ref,
+                    "ratio_torchsky_vs_mocpy": t_ref / t_ts,
+                }
+            )
+
+    a = TorchMOC.from_circle(0.0, 0.0, 2.0, max_order=max_order)
+    b = TorchMOC.from_circle(3.0, 0.0, 2.0, max_order=max_order)
+    t_union = _bench(lambda: a.union(b), runs=runs, device=cpu)
+    results.append(
+        {
+            "operation": "moc_union",
+            "library": "torchsky",
+            "max_order": int(max_order),
+            "time_s": t_union,
+        }
+    )
+    if hasattr(MocpyMOC, "from_cone"):
+        ra = MocpyMOC.from_cone(
+            lon=0.0 * u.deg, lat=0.0 * u.deg, radius=2.0 * u.deg, max_depth=max_order
+        )
+        rb = MocpyMOC.from_cone(
+            lon=3.0 * u.deg, lat=0.0 * u.deg, radius=2.0 * u.deg, max_depth=max_order
+        )
+        t_ref_union = _bench(lambda: ra.union(rb), runs=runs, device=None)
+        results.append(
+            {
+                "operation": "moc_union",
+                "library": "mocpy",
+                "max_order": int(max_order),
+                "time_s": t_ref_union,
+                "ratio_torchsky_vs_mocpy": t_ref_union / t_union,
+            }
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--nside", type=int, default=256)
@@ -88,6 +206,8 @@ def main() -> int:
     parser.add_argument(
         "--device", choices=["auto", "cpu", "cuda", "mps"], default="cpu"
     )
+    parser.add_argument("--moc-only", action="store_true")
+    parser.add_argument("--moc-max-order", type=int, default=8)
     parser.add_argument(
         "--json-out", type=Path, default=DEFAULT_OUTPUT_DIR / "sphere_core.json"
     )
@@ -96,16 +216,31 @@ def main() -> int:
     device = _resolve_device(args.device)
     f_dtype = torch.float32 if device.type == "mps" else torch.float64
 
-    npix = 12 * args.nside * args.nside
     lon_np, lat_np = _sample_lonlat(args.n_points, args.seed)
     lon_t = torch.from_numpy(lon_np).to(device=device, dtype=f_dtype)
     lat_t = torch.from_numpy(lat_np).to(device=device, dtype=f_dtype)
+    results: list[dict[str, Any]] = []
 
+    if args.moc_only:
+        _append_moc_rows(
+            results,
+            lon_t=lon_t,
+            lat_t=lat_t,
+            n_points=args.n_points,
+            runs=args.runs,
+            max_order=args.moc_max_order,
+        )
+        for row in results:
+            print(", ".join(f"{k}={v}" for k, v in row.items()))
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(json.dumps(results, indent=2), encoding="utf-8")
+        print(f"\nJSON: {args.json_out}")
+        return 0
+
+    npix = 12 * args.nside * args.nside
     rng = np.random.default_rng(args.seed + 1)
     cube_np = rng.normal(size=(args.n_bands, npix)).astype(np.float64)
     cube_t = torch.from_numpy(cube_np).to(device=device, dtype=f_dtype)
-
-    results: list[dict[str, Any]] = []
 
     t_bilinear = _bench(
         lambda: sample_multiband_healpix(
@@ -206,53 +341,14 @@ def main() -> int:
             }
         )
 
-    try:
-        import astropy.units as u
-        from mocpy import MOC as MocpyMOC
-        from torchsky.sphere.moc import MOC as TorchMOC
-    except Exception:
-        MocpyMOC = None
-        TorchMOC = None
-        u = None
-    if MocpyMOC is not None and TorchMOC is not None and u is not None:
-        moc = TorchMOC.from_circle(20.0, -10.0, 5.0, max_order=6)
-        moc_lon = lon_t[: min(50_000, args.n_points)].cpu()
-        moc_lat = lat_t[: min(50_000, args.n_points)].cpu()
-        t_ts = _bench(
-            lambda: moc.contains(moc_lon, moc_lat),
-            runs=args.runs,
-            device=torch.device("cpu"),
-        )
-        results.append(
-            {
-                "operation": "moc_contains",
-                "library": "torchsky",
-                "n_points": int(moc_lon.numel()),
-                "contains_s": t_ts,
-            }
-        )
-        if hasattr(MocpyMOC, "from_cone"):
-            ref = MocpyMOC.from_cone(
-                lon=20.0 * u.deg, lat=-10.0 * u.deg, radius=5.0 * u.deg, max_depth=6
-            )
-            lon_u = moc_lon.numpy() * u.deg
-            lat_u = moc_lat.numpy() * u.deg
-            contains_fn = getattr(ref, "contains_lonlat", getattr(ref, "contains", None))
-            if contains_fn is not None:
-                t_ref = _bench(
-                    lambda: contains_fn(lon_u, lat_u),
-                    runs=args.runs,
-                    device=None,
-                )
-                results.append(
-                    {
-                        "operation": "moc_contains",
-                        "library": "mocpy",
-                        "n_points": int(moc_lon.numel()),
-                        "contains_s": t_ref,
-                        "ratio_torchsky_vs_mocpy": t_ref / t_ts,
-                    }
-                )
+    _append_moc_rows(
+        results,
+        lon_t=lon_t,
+        lat_t=lat_t,
+        n_points=args.n_points,
+        runs=args.runs,
+        max_order=args.moc_max_order,
+    )
 
     for row in results:
         line = ", ".join(f"{k}={v}" for k, v in row.items())

@@ -400,6 +400,10 @@ class SpectralTransform:
                 self.cunit = "m-1"
             elif self.stype == "ENER":
                 self.cunit = "J"
+            elif self.stype == "ZOPT":
+                self.cunit = ""
+            elif self.stype == "BETA":
+                self.cunit = ""
             elif self.stype in {"VRAD", "VOPT", "VELO"}:
                 self.cunit = "m/s"
             else:
@@ -430,8 +434,8 @@ class SpectralTransform:
         is_compound = (
             len(self.algo) == 3
             and self.algo[1] == "2"
-            and self.algo[0] in {"F", "W", "A", "V"}
-            and self.algo[2] in {"F", "W", "A", "V"}
+            and self.algo[0] in {"F", "W", "A", "V", "N", "E", "Z", "B"}
+            and self.algo[2] in {"F", "W", "A", "V", "N", "E", "Z", "B"}
         )
         if self.algo == "TAB":
             # -TAB lookup is owned by tabular axes; spectral algorithm is linear.
@@ -501,7 +505,16 @@ class SpectralTransform:
             self.xtype_char = self.algo[0]
             self.ptype_char = self.algo[2]
 
-            xtype_map = {"F": "FREQ", "W": "WAVE", "A": "AWAV", "V": "VELO"}
+            xtype_map = {
+                "F": "FREQ",
+                "W": "WAVE",
+                "A": "AWAV",
+                "V": "VELO",
+                "N": "WAVN",
+                "E": "ENER",
+                "Z": "ZOPT",
+                "B": "BETA",
+            }
             self.xtype_name = xtype_map[self.xtype_char]
             self.ptype_name = xtype_map[self.ptype_char]
 

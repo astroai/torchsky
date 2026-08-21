@@ -19,9 +19,12 @@ from astropy.wcs import WCS as AstropyWCS
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from benchmarks.bench_wcs import _resolve_device, _sync  # noqa: E402
 from torchsky.wcs.core import WCS as TorchWCS  # noqa: E402
 
 
@@ -110,12 +113,18 @@ def _sample_pixels(
     return x.astype(np.float64), y.astype(np.float64)
 
 
-def _time_many(fn, runs: int) -> tuple[float, Any]:
+def _time_many(
+    fn, runs: int, sync_device: torch.device | None = None
+) -> tuple[float, Any]:
     result = fn()
+    if sync_device is not None:
+        _sync(sync_device)
     samples: list[float] = []
     for _ in range(int(runs)):
         t0 = time.perf_counter()
         result = fn()
+        if sync_device is not None:
+            _sync(sync_device)
         samples.append(time.perf_counter() - t0)
     return float(min(samples)), result
 
@@ -142,8 +151,9 @@ def _bench_torchsky_method(
     y_true: np.ndarray,
     runs: int,
     method: str,
+    device: torch.device,
 ) -> dict[str, Any]:
-    twcs = TorchWCS(dict(header)).to("cpu")
+    twcs = TorchWCS(dict(header)).to(device)
     if method == "tensor_core":
         twcs._disable_fused_world_to_pixel = True
     elif method != "fused":
@@ -152,6 +162,7 @@ def _bench_torchsky_method(
     best_s, (x_pred_t, y_pred_t) = _time_many(
         lambda: twcs.world_to_pixel(ra_t, dec_t, origin=0),
         runs=runs,
+        sync_device=device,
     )
     x_pred = x_pred_t.detach().cpu().numpy()
     y_pred = y_pred_t.detach().cpu().numpy()
@@ -159,6 +170,7 @@ def _bench_torchsky_method(
         "library": "torchsky",
         "method": method,
         "status": "OK",
+        "device": str(device),
         "time_ms": best_s * 1000.0,
         "mpts_s": float(ra_t.numel() / max(best_s, 1.0e-12) / 1.0e6),
     }
@@ -259,6 +271,7 @@ def main() -> int:
     parser.add_argument("--n-points", type=int, default=1000000)
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--seed", type=int, default=1234)
+    parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="cpu")
     parser.add_argument(
         "--json-out",
         type=Path,
@@ -272,6 +285,7 @@ def main() -> int:
     args = parser.parse_args()
 
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+    device = _resolve_device(args.device)
     rng = np.random.default_rng(args.seed)
     rows: list[dict[str, Any]] = []
 
@@ -281,10 +295,13 @@ def main() -> int:
         awcs = AstropyWCS(header)
         x_true, y_true = _sample_pixels(header, args.n_points, rng)
         ra_np, dec_np = awcs.all_pix2world(x_true, y_true, 0)
-        ra_t = torch.from_numpy(np.asarray(ra_np, dtype=np.float64))
-        dec_t = torch.from_numpy(np.asarray(dec_np, dtype=np.float64))
+        ra_t = torch.from_numpy(np.asarray(ra_np, dtype=np.float64)).to(device)
+        dec_t = torch.from_numpy(np.asarray(dec_np, dtype=np.float64)).to(device)
 
-        for row in (
+        methods = (
+            ("fused", "tensor_core") if device.type == "cpu" else ("tensor_core",)
+        )
+        torchsky_rows = [
             _bench_torchsky_method(
                 header=header,
                 ra_t=ra_t,
@@ -292,26 +309,21 @@ def main() -> int:
                 x_true=x_true,
                 y_true=y_true,
                 runs=args.runs,
-                method="fused",
-            ),
-            _bench_torchsky_method(
-                header=header,
-                ra_t=ra_t,
-                dec_t=dec_t,
-                x_true=x_true,
-                y_true=y_true,
-                runs=args.runs,
-                method="tensor_core",
-            ),
-            _bench_astropy_method(
-                awcs=awcs,
-                ra_np=np.asarray(ra_np, dtype=np.float64),
-                dec_np=np.asarray(dec_np, dtype=np.float64),
-                x_true=x_true,
-                y_true=y_true,
-                runs=args.runs,
-            ),
-        ):
+                method=method,
+                device=device,
+            )
+            for method in methods
+        ]
+        astropy_row = _bench_astropy_method(
+            awcs=awcs,
+            ra_np=np.asarray(ra_np, dtype=np.float64),
+            dec_np=np.asarray(dec_np, dtype=np.float64),
+            x_true=x_true,
+            y_true=y_true,
+            runs=args.runs,
+        )
+        astropy_row["device"] = "cpu"
+        for row in (*torchsky_rows, astropy_row):
             row["case"] = spec.name
             row["description"] = spec.description
             row["n_points"] = int(args.n_points)

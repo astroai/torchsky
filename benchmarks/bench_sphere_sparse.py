@@ -27,11 +27,33 @@ from torchsky.sphere.sparse import SparseHealpixMap  # noqa: E402
 from torchsky.sphere import healpix as hp  # noqa: E402
 
 
+def _sync(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device=device)
+    elif device.type == "mps":
+        torch.mps.synchronize()
+
+
+def _resolve_device(choice: str) -> torch.device:
+    if choice == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if choice == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA requested but unavailable")
+    if choice == "mps":
+        raise RuntimeError("sparse benches need float64; MPS is float32-only")
+    return torch.device(choice)
+
+
 def _time_interleaved(
-    fn_a: Callable[[], Any], fn_b: Callable[[], Any], runs: int
+    fn_a: Callable[[], Any],
+    fn_b: Callable[[], Any],
+    runs: int,
+    sync_b: torch.device | None = None,
 ) -> tuple[float, float]:
     fn_a()
     fn_b()
+    if sync_b is not None:
+        _sync(sync_b)
     a_samples: list[float] = []
     b_samples: list[float] = []
     for i in range(runs):
@@ -41,10 +63,14 @@ def _time_interleaved(
             a_samples.append(time.perf_counter() - t0)
             t0 = time.perf_counter()
             fn_b()
+            if sync_b is not None:
+                _sync(sync_b)
             b_samples.append(time.perf_counter() - t0)
         else:
             t0 = time.perf_counter()
             fn_b()
+            if sync_b is not None:
+                _sync(sync_b)
             b_samples.append(time.perf_counter() - t0)
             t0 = time.perf_counter()
             fn_a()
@@ -52,12 +78,18 @@ def _time_interleaved(
     return float(np.median(a_samples)), float(np.median(b_samples))
 
 
-def _time_many(fn: Callable[[], Any], runs: int) -> float:
+def _time_many(
+    fn: Callable[[], Any], runs: int, device: torch.device | None = None
+) -> float:
     fn()
+    if device is not None:
+        _sync(device)
     samples: list[float] = []
     for _ in range(runs):
         t0 = time.perf_counter()
         fn()
+        if device is not None:
+            _sync(device)
         samples.append(time.perf_counter() - t0)
     return float(np.median(samples))
 
@@ -78,6 +110,7 @@ def main() -> int:
     parser.add_argument("--n-queries", type=int, default=200_000)
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--seed", type=int, default=123)
+    parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="cpu")
     parser.add_argument(
         "--json-out", type=Path, default=DEFAULT_OUTPUT_DIR / "sphere_sparse.json"
     )
@@ -87,6 +120,7 @@ def main() -> int:
     if not (0.0 < args.coverage_frac <= 1.0):
         raise ValueError("coverage-frac must be in (0, 1]")
 
+    device = _resolve_device(args.device)
     nside = int(args.nside)
     npix = hp.nside2npix(nside)
     rng = np.random.default_rng(args.seed)
@@ -98,19 +132,22 @@ def main() -> int:
     )
     dense[keep] = torch.from_numpy(rng.normal(size=n_keep)).to(torch.float64)
 
-    sparse = SparseHealpixMap.from_dense(dense, nside=nside, nest=False)
-    lon, lat = _sample_lonlat(int(args.n_queries), args.seed + 1)
+    sparse = SparseHealpixMap.from_dense(dense.to(device), nside=nside, nest=False)
+    lon_cpu, lat_cpu = _sample_lonlat(int(args.n_queries), args.seed + 1)
+    lon = lon_cpu.to(device)
+    lat = lat_cpu.to(device)
     coverage_frac = float(len(sparse.pixels)) / float(npix)
 
     rows: list[dict[str, Any]] = []
 
     t_sparse_nearest = _time_many(
-        lambda: sparse.interpolate(lon, lat, method="nearest"), args.runs
+        lambda: sparse.interpolate(lon, lat, method="nearest"), args.runs, device
     )
     rows.append(
         {
             "operation": "sparse_interpolate_nearest",
             "nside": nside,
+            "device": str(device),
             "coverage_frac": coverage_frac,
             "n_queries": int(args.n_queries),
             "qps": float(args.n_queries) / t_sparse_nearest,
@@ -118,12 +155,13 @@ def main() -> int:
     )
 
     t_sparse_bilinear = _time_many(
-        lambda: sparse.interpolate(lon, lat, method="bilinear"), args.runs
+        lambda: sparse.interpolate(lon, lat, method="bilinear"), args.runs, device
     )
     rows.append(
         {
             "operation": "sparse_interpolate_bilinear",
             "nside": nside,
+            "device": str(device),
             "coverage_frac": coverage_frac,
             "n_queries": int(args.n_queries),
             "qps": float(args.n_queries) / t_sparse_bilinear,
@@ -131,10 +169,13 @@ def main() -> int:
     )
 
     nside_out = max(1, nside // 2)
-    t_sparse_ud = _time_many(lambda: sparse.ud_grade(nside_out, pess=False), args.runs)
+    dense_dev = dense.to(device)
+    t_sparse_ud = _time_many(
+        lambda: sparse.ud_grade(nside_out, pess=False), args.runs, device
+    )
     t_dense_ud = _time_many(
         lambda: hp.ud_grade(
-            dense,
+            dense_dev,
             nside_out,
             pess=False,
             badval=float(hp.UNSEEN),
@@ -142,6 +183,7 @@ def main() -> int:
             order_out="RING",
         ),
         args.runs,
+        device,
     )
     ratio_ud = t_dense_ud / t_sparse_ud
     rows.append(
@@ -149,6 +191,7 @@ def main() -> int:
             "operation": "ud_grade_sparse_vs_dense",
             "nside_in": nside,
             "nside_out": nside_out,
+            "device": str(device),
             "coverage_frac": coverage_frac,
             "sparse_s": t_sparse_ud,
             "dense_s": t_dense_ud,
@@ -187,6 +230,7 @@ def main() -> int:
             lambda: hs.get_values_pix(q_nest_np),
             lambda: sparse_cov.get_values(q_nest),
             args.runs,
+            sync_b=device,
         )
         rows.append(
             {
@@ -212,6 +256,7 @@ def main() -> int:
             lambda: hs.degrade(nside_ud),
             lambda: sparse_cov.ud_grade(nside_ud, pess=False),
             args.runs,
+            sync_b=device,
         )
         rows.append(
             {
@@ -236,6 +281,7 @@ def main() -> int:
         )
 
     for row in rows:
+        row.setdefault("device", str(device))
         print(", ".join(f"{k}={v}" for k, v in row.items()))
 
     args.json_out.parent.mkdir(parents=True, exist_ok=True)

@@ -285,3 +285,221 @@ def test_conic_inverse_matches_astropy(
     )
     np.testing.assert_allclose(x_t.cpu().numpy(), x_ast, atol=1e-4)
     np.testing.assert_allclose(y_t.cpu().numpy(), y_ast, atol=1e-4)
+
+
+# --- PCO (American polyconic) ---
+
+@pytest.mark.parametrize("origin", [0, 1])
+def test_pco_forward_matches_astropy(origin: int) -> None:
+    header = _make_header("PCO", cd_scale=0.5)
+    awcs = AstropyWCS(header)
+    twcs = TorchWCS(dict(header))
+    x, y = _sample_pixels(header)
+    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
+    ra_t, dec_t = twcs.pixel_to_world(
+        torch.from_numpy(x), torch.from_numpy(y), origin=origin,
+    )
+    ra_t_np = ra_t.cpu().numpy()
+    dec_t_np = dec_t.cpu().numpy()
+    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
+    valid &= np.isfinite(ra_t_np) & np.isfinite(dec_t_np)
+    assert np.any(valid), "No finite parity points for PCO"
+    dra = _ra_wrap_delta(ra_t_np[valid], ra_ast[valid])
+    ddec = dec_t_np[valid] - dec_ast[valid]
+    np.testing.assert_allclose(dra, 0.0, atol=1e-5)
+    np.testing.assert_allclose(ddec, 0.0, atol=1e-5)
+
+
+@pytest.mark.parametrize("origin", [0, 1])
+def test_pco_inverse_matches_astropy(origin: int) -> None:
+    header = _make_header("PCO", cd_scale=0.5)
+    awcs = AstropyWCS(header)
+    twcs = TorchWCS(dict(header))
+    x, y = _sample_pixels(header)
+    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
+    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
+    assert np.any(valid), "No finite inverse points for PCO"
+    ra_valid = ra_ast[valid]
+    dec_valid = dec_ast[valid]
+    x_ast, y_ast = awcs.all_world2pix(ra_valid, dec_valid, origin)
+    x_t, y_t = twcs.world_to_pixel(
+        torch.from_numpy(ra_valid), torch.from_numpy(dec_valid), origin=origin,
+    )
+    np.testing.assert_allclose(x_t.cpu().numpy(), x_ast, atol=1e-4)
+    np.testing.assert_allclose(y_t.cpu().numpy(), y_ast, atol=1e-4)
+
+
+# --- XPH (HEALPix polar / butterfly) ---
+
+@pytest.mark.parametrize("origin", [0, 1])
+def test_xph_forward_matches_astropy(origin: int) -> None:
+    header = _make_header("XPH", cd_scale=0.5)
+    awcs = AstropyWCS(header)
+    twcs = TorchWCS(dict(header))
+    x, y = _sample_pixels(header)
+    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
+    ra_t, dec_t = twcs.pixel_to_world(
+        torch.from_numpy(x), torch.from_numpy(y), origin=origin,
+    )
+    ra_t_np = ra_t.cpu().numpy()
+    dec_t_np = dec_t.cpu().numpy()
+    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
+    valid &= np.isfinite(ra_t_np) & np.isfinite(dec_t_np)
+    assert np.any(valid), "No finite parity points for XPH"
+    dra = _ra_wrap_delta(ra_t_np[valid], ra_ast[valid])
+    ddec = dec_t_np[valid] - dec_ast[valid]
+    np.testing.assert_allclose(dra, 0.0, atol=1e-5)
+    np.testing.assert_allclose(ddec, 0.0, atol=1e-5)
+
+
+@pytest.mark.parametrize("origin", [0, 1])
+def test_xph_inverse_matches_astropy(origin: int) -> None:
+    header = _make_header("XPH", cd_scale=0.5)
+    awcs = AstropyWCS(header)
+    twcs = TorchWCS(dict(header))
+    x, y = _sample_pixels(header)
+    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
+    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
+    assert np.any(valid), "No finite inverse points for XPH"
+    ra_valid = ra_ast[valid]
+    dec_valid = dec_ast[valid]
+    x_ast, y_ast = awcs.all_world2pix(ra_valid, dec_valid, origin)
+    x_t, y_t = twcs.world_to_pixel(
+        torch.from_numpy(ra_valid), torch.from_numpy(dec_valid), origin=origin,
+    )
+    np.testing.assert_allclose(x_t.cpu().numpy(), x_ast, atol=1e-4)
+    np.testing.assert_allclose(y_t.cpu().numpy(), y_ast, atol=1e-4)
+
+
+# --- NCP (obsolete SIN slant) ---
+
+@pytest.mark.parametrize("crval2", [30.0, 45.0, 60.0])
+@pytest.mark.parametrize("origin", [0, 1])
+def test_ncp_forward_matches_astropy(crval2: float, origin: int) -> None:
+    header = _make_header("NCP", crval2=crval2, cd_scale=0.01)
+    awcs = AstropyWCS(header)
+    twcs = TorchWCS(dict(header))
+    x, y = _sample_pixels(header)
+    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
+    ra_t, dec_t = twcs.pixel_to_world(
+        torch.from_numpy(x), torch.from_numpy(y), origin=origin,
+    )
+    ra_t_np = ra_t.cpu().numpy()
+    dec_t_np = dec_t.cpu().numpy()
+    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
+    valid &= np.isfinite(ra_t_np) & np.isfinite(dec_t_np)
+    assert np.any(valid), f"No finite parity points for NCP crval2={crval2}"
+    dra = _ra_wrap_delta(ra_t_np[valid], ra_ast[valid])
+    ddec = dec_t_np[valid] - dec_ast[valid]
+    np.testing.assert_allclose(dra, 0.0, atol=1e-5)
+    np.testing.assert_allclose(ddec, 0.0, atol=1e-5)
+
+
+@pytest.mark.parametrize("crval2", [30.0, 45.0, 60.0])
+@pytest.mark.parametrize("origin", [0, 1])
+def test_ncp_inverse_matches_astropy(crval2: float, origin: int) -> None:
+    header = _make_header("NCP", crval2=crval2, cd_scale=0.01)
+    awcs = AstropyWCS(header)
+    twcs = TorchWCS(dict(header))
+    x, y = _sample_pixels(header)
+    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
+    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
+    assert np.any(valid), f"No finite inverse points for NCP crval2={crval2}"
+    ra_valid = ra_ast[valid]
+    dec_valid = dec_ast[valid]
+    x_ast, y_ast = awcs.all_world2pix(ra_valid, dec_valid, origin)
+    x_t, y_t = twcs.world_to_pixel(
+        torch.from_numpy(ra_valid), torch.from_numpy(dec_valid), origin=origin,
+    )
+    np.testing.assert_allclose(x_t.cpu().numpy(), x_ast, atol=1e-4)
+    np.testing.assert_allclose(y_t.cpu().numpy(), y_ast, atol=1e-4)
+
+
+# --- Quad-cube (TSC, CSC, QSC) ---
+
+@pytest.mark.parametrize("projection", ["TSC", "CSC", "QSC"])
+@pytest.mark.parametrize("origin", [0, 1])
+def test_quadcube_forward_matches_astropy(projection: str, origin: int) -> None:
+    # Stay near face-1 centre so samples remain on the cross layout.
+    header = _make_header(projection, cd_scale=0.3)
+    awcs = AstropyWCS(header)
+    twcs = TorchWCS(dict(header))
+    x, y = _sample_pixels(header)
+    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
+    ra_t, dec_t = twcs.pixel_to_world(
+        torch.from_numpy(x), torch.from_numpy(y), origin=origin,
+    )
+    ra_t_np = ra_t.cpu().numpy()
+    dec_t_np = dec_t.cpu().numpy()
+    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
+    valid &= np.isfinite(ra_t_np) & np.isfinite(dec_t_np)
+    assert np.any(valid), f"No finite parity points for {projection}"
+    dra = _ra_wrap_delta(ra_t_np[valid], ra_ast[valid])
+    ddec = dec_t_np[valid] - dec_ast[valid]
+    # CSC is a polynomial approximation; allow slightly looser forward tol.
+    atol = 5e-4 if projection == "CSC" else 1e-5
+    np.testing.assert_allclose(dra, 0.0, atol=atol)
+    np.testing.assert_allclose(ddec, 0.0, atol=atol)
+
+
+@pytest.mark.parametrize("projection", ["TSC", "CSC", "QSC"])
+@pytest.mark.parametrize("origin", [0, 1])
+def test_quadcube_inverse_matches_astropy(projection: str, origin: int) -> None:
+    header = _make_header(projection, cd_scale=0.3)
+    awcs = AstropyWCS(header)
+    twcs = TorchWCS(dict(header))
+    x, y = _sample_pixels(header)
+    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
+    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
+    assert np.any(valid), f"No finite inverse points for {projection}"
+    ra_valid = ra_ast[valid]
+    dec_valid = dec_ast[valid]
+    x_ast, y_ast = awcs.all_world2pix(ra_valid, dec_valid, origin)
+    x_t, y_t = twcs.world_to_pixel(
+        torch.from_numpy(ra_valid), torch.from_numpy(dec_valid), origin=origin,
+    )
+    atol = 5e-3 if projection == "CSC" else 1e-4
+    np.testing.assert_allclose(x_t.cpu().numpy(), x_ast, atol=atol)
+    np.testing.assert_allclose(y_t.cpu().numpy(), y_ast, atol=atol)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+@pytest.mark.parametrize(
+    "projection,cd_scale,crval2",
+    [
+        ("PCO", 0.5, 0.0),
+        ("XPH", 0.5, 0.0),
+        ("TSC", 0.3, 0.0),
+        ("NCP", 0.01, 45.0),
+    ],
+)
+def test_paper2_cuda_matches_cpu(
+    projection: str, cd_scale: float, crval2: float
+) -> None:
+    header = _make_header(projection, crval2=crval2, cd_scale=cd_scale)
+    cpu = TorchWCS(dict(header))
+    gpu = TorchWCS(dict(header)).to("cuda")
+    assert gpu._pv2_tensor.device.type == "cuda"
+    x, y = _sample_pixels(header)
+    xt = torch.from_numpy(x)
+    yt = torch.from_numpy(y)
+    ra_c, dec_c = cpu.pixel_to_world(xt, yt, origin=0)
+    ra_g, dec_g = gpu.pixel_to_world(xt.cuda(), yt.cuda(), origin=0)
+    assert ra_g.device.type == "cuda"
+    valid = (
+        torch.isfinite(ra_c)
+        & torch.isfinite(dec_c)
+        & torch.isfinite(ra_g.cpu())
+        & torch.isfinite(dec_g.cpu())
+    )
+    assert bool(valid.any()), f"No finite CUDA points for {projection}"
+    dra = _ra_wrap_delta(ra_g.cpu().numpy()[valid.numpy()], ra_c.numpy()[valid.numpy()])
+    ddec = dec_g.cpu().numpy()[valid.numpy()] - dec_c.numpy()[valid.numpy()]
+    np.testing.assert_allclose(dra, 0.0, atol=1e-10)
+    np.testing.assert_allclose(ddec, 0.0, atol=1e-10)
+    ra_v = ra_c[valid]
+    dec_v = dec_c[valid]
+    x_c, y_c = cpu.world_to_pixel(ra_v, dec_v, origin=0)
+    x_g, y_g = gpu.world_to_pixel(ra_v.cuda(), dec_v.cuda(), origin=0)
+    np.testing.assert_allclose(x_g.cpu().numpy(), x_c.numpy(), atol=1e-10)
+    np.testing.assert_allclose(y_g.cpu().numpy(), y_c.numpy(), atol=1e-10)

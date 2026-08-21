@@ -64,6 +64,20 @@ def test_wcs_spectral_1d_matches_astropy(origin: int) -> None:
     np.testing.assert_allclose(pixels_t.cpu().numpy(), pixels[:, None], atol=1e-9)  # type: ignore
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_wcs_spectral_1d_cuda_matches_cpu() -> None:
+    header = _wave_1d_header()
+    cpu = torchsky.WCS(header)
+    gpu = torchsky.WCS(header).to("cuda")
+    pixels = torch.tensor([[0.0], [1.0], [10.0], [25.0]], dtype=torch.float64)
+    world_c = cpu.pixel_to_world(pixels, origin=0)
+    world_g = gpu.pixel_to_world(pixels.cuda(), origin=0)
+    assert world_g.device.type == "cuda"
+    torch.testing.assert_close(world_g.cpu(), world_c, atol=1e-12, rtol=0.0)
+    pix_g = gpu.world_to_pixel(world_g, origin=0)
+    torch.testing.assert_close(pix_g.cpu(), pixels, atol=1e-9, rtol=0.0)
+
+
 @pytest.mark.parametrize("origin", [0, 1])
 def test_wcs_spatial_plus_spectral_3d_matches_astropy(origin: int) -> None:
     header = _cube_header()  # type: ignore
@@ -272,6 +286,14 @@ def _compound_header(ctype: str) -> dict[str, float | int | str]:
         header.update({"CRVAL1": 0.21, "CDELT1": 1.0e-4, "CUNIT1": "m"})
     elif stype == "VELO":
         header.update({"CRVAL1": 10.0, "CDELT1": 0.1, "CUNIT1": "m/s"})
+    elif stype == "ENER":
+        header.update({"CRVAL1": 9.407e-25, "CDELT1": 6.626e-29, "CUNIT1": "J"})
+    elif stype == "WAVN":
+        header.update({"CRVAL1": 4.737, "CDELT1": 0.01, "CUNIT1": "m-1"})
+    elif stype == "ZOPT":
+        header.update({"CRVAL1": 0.0, "CDELT1": 1.0e-4})
+    elif stype == "BETA":
+        header.update({"CRVAL1": 0.0, "CDELT1": 1.0e-6})
     return header
 
 
@@ -289,6 +311,17 @@ def test_wcs_spectral_supported_compound_matrix_matches_astropy(ctype: str) -> N
     assert np.isfinite(world_t.numpy()).all()
     np.testing.assert_allclose(world_t.numpy(), world_a, rtol=1e-11, atol=1e-7)
     np.testing.assert_allclose(pix_t.numpy(), pixels, rtol=1e-10, atol=2e-6)
+
+
+def test_wcs_spectral_zopt_and_beta_compound_roundtrip() -> None:
+    for ctype in ("FREQ-Z2F", "FREQ-B2F", "FREQ-N2F", "FREQ-E2F", "ENER-F2E", "WAVN-F2N"):
+        header = _compound_header(ctype)
+        twcs = torchsky.WCS(header)
+        pixels = torch.tensor([[0.0], [1.0], [2.0]], dtype=torch.float64)
+        world = twcs.pixel_to_world(pixels)
+        back = twcs.world_to_pixel(world)
+        assert torch.isfinite(world).all()
+        torch.testing.assert_close(back, pixels, atol=1e-8, rtol=0.0)
 
 
 @pytest.mark.parametrize("ctype", ["WAVE-F2W", "FREQ-W2F"])

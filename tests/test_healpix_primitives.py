@@ -420,12 +420,45 @@ def test_query_disc_cpp_matches_python_fallback() -> None:
     torch.testing.assert_close(torch.sort(got_nest).values, torch.sort(exp_nest).values)
 
 
-def test_query_disc_rejects_nondefault_fact() -> None:
-    with pytest.raises(ValueError, match="fact is unused"):
-        query_disc(8, [1.0, 0.0, 0.0], 0.1, fact=8)
+def test_query_disc_fact_inclusive_false_is_noop() -> None:
+    vec = [1.0, 0.0, 0.0]
+    radius = 0.15
+    base = query_disc(8, vec, radius, inclusive=False, fact=4, nest=False)
+    other = query_disc(8, vec, radius, inclusive=False, fact=8, nest=False)
+    torch.testing.assert_close(torch.sort(base).values, torch.sort(other).values)
 
 
-def test_query_polygon_rejects_nonconvex() -> None:
+def test_query_disc_inclusive_fact_supersample_and_nest_power_of_two() -> None:
+    nside = 8
+    vec = [1.0, 0.0, 0.0]
+    radius = 0.25
+    # fact!=4 supersamples at nside*fact then degrades to parents.
+    fact = 8
+    hi = query_disc(
+        nside * fact, vec, radius, inclusive=True, fact=4, nest=True
+    )
+    parent = torch.unique(torch.div(hi, fact * fact, rounding_mode="floor"))
+    got = query_disc(nside, vec, radius, inclusive=True, fact=fact, nest=True)
+    torch.testing.assert_close(torch.sort(got).values, torch.sort(parent).values)
+
+    with pytest.raises(ValueError, match="power of two"):
+        query_disc(nside, vec, radius, inclusive=True, fact=3, nest=True)
+    with pytest.raises(ValueError, match="positive integer"):
+        query_disc(nside, vec, radius, inclusive=True, fact=0, nest=False)
+
+
+def test_query_disc_inclusive_fact_ring_via_nest_parent() -> None:
+    nside = 8
+    vec = [0.0, 0.0, 1.0]
+    radius = 0.2
+    fact = 2
+    nest_pix = query_disc(nside, vec, radius, inclusive=True, fact=fact, nest=True)
+    ring_pix = query_disc(nside, vec, radius, inclusive=True, fact=fact, nest=False)
+    expected = torch.sort(nest2ring(nside, nest_pix)).values
+    torch.testing.assert_close(torch.sort(ring_pix).values, expected)
+
+
+def test_query_polygon_handles_nonconvex() -> None:
     nside = 8
     # Chevron in lon/lat: the (8, 12) vertex indents the equator-to-pole quad.
     verts = torch.tensor(
@@ -437,8 +470,9 @@ def test_query_polygon_rejects_nonconvex() -> None:
         ],
         dtype=torch.float64,
     )
-    with pytest.raises(ValueError, match="convex polygon"):
-        query_polygon(nside, verts, lonlat=True)
+    pix = query_polygon(nside, verts, lonlat=True)
+    assert pix.ndim == 1
+    assert pix.dtype == torch.int64
 
 
 def test_query_polygon_accepts_convex_quad() -> None:

@@ -15,19 +15,26 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from benchmarks.bench_wcs import _resolve_device, _sync  # noqa: E402
 from torchsky.wcs.core import WCS as TorchWCS  # noqa: E402
 from torchsky.wcs.tabular import CoupledTabularLookupWCS  # noqa: E402
 
 
-def _time_median(fn: Callable[[], Any], runs: int) -> tuple[float, Any]:
+def _time_median(
+    fn: Callable[[], Any], runs: int, device: torch.device
+) -> tuple[float, Any]:
     result = fn()
+    _sync(device)
     timings: list[float] = []
     for _ in range(runs):
         start = time.perf_counter()
         result = fn()
+        _sync(device)
         timings.append(time.perf_counter() - start)
     return statistics.median(timings), result
 
@@ -95,6 +102,7 @@ def _row(
     grid_size: int,
     seconds: float,
     max_abs_error: float,
+    device: str,
 ) -> dict[str, Any]:
     return {
         "domain": "wcs_tabular",
@@ -103,6 +111,7 @@ def _row(
         "direction": direction,
         "grid_size": grid_size,
         "n_points": n_points,
+        "device": device,
         "torchsky_s": seconds,
         "torchsky_kpts_s": n_points / seconds / 1.0e3,
         "max_abs_error": max_abs_error,
@@ -116,9 +125,14 @@ def _run_surface(
     pixels: torch.Tensor,
     runs: int,
     grid_size: int,
+    device: torch.device,
 ) -> list[dict[str, Any]]:
-    forward_s, world = _time_median(lambda: transform.pixel_to_world(pixels), runs)
-    inverse_s, pixels_back = _time_median(lambda: transform.world_to_pixel(world), runs)
+    forward_s, world = _time_median(
+        lambda: transform.pixel_to_world(pixels), runs, device
+    )
+    inverse_s, pixels_back = _time_median(
+        lambda: transform.world_to_pixel(world), runs, device
+    )
     pixel_error = float(torch.max(torch.abs(pixels_back - pixels)).item())
     return [
         _row(
@@ -128,6 +142,7 @@ def _run_surface(
             grid_size=grid_size,
             seconds=forward_s,
             max_abs_error=0.0,
+            device=str(device),
         ),
         _row(
             surface=surface,
@@ -136,6 +151,7 @@ def _run_surface(
             grid_size=grid_size,
             seconds=inverse_s,
             max_abs_error=pixel_error,
+            device=str(device),
         ),
     ]
 
@@ -156,6 +172,7 @@ def main() -> None:
     parser.add_argument("--grid-size", type=int, default=8)
     parser.add_argument("--n-points", type=int, default=64)
     parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="cpu")
     parser.add_argument("--json-out", type=Path, default=None)
     args = parser.parse_args()
 
@@ -166,24 +183,29 @@ def main() -> None:
     if args.runs < 1:
         raise ValueError("--runs must be >= 1")
 
-    pixels = _sample_pixels(args.grid_size, args.n_points)
+    device = _resolve_device(args.device)
+    pixels = _sample_pixels(args.grid_size, args.n_points).to(device)
+    lookup = _make_coupled_lookup(args.grid_size).to(device=device, dtype=torch.float64)
+    wcs = _make_coupled_wcs(args.grid_size).to(device)
     rows = []
     rows.extend(
         _run_surface(
             "lookup",
-            _make_coupled_lookup(args.grid_size),
+            lookup,
             pixels,
             args.runs,
             args.grid_size,
+            device,
         )
     )
     rows.extend(
         _run_surface(
             "wcs",
-            _make_coupled_wcs(args.grid_size),
+            wcs,
             pixels,
             args.runs,
             args.grid_size,
+            device,
         )
     )
 

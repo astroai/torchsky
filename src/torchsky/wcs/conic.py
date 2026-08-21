@@ -1,13 +1,15 @@
-"""Conic and Bonne WCS projections.
+"""Conic and polyconic WCS projections.
 
 Implements the FITS-WCS conic projection family (COP, COE, COD, COO) and the
-Bonne polyconic projection (BON) using torch-native operations, matching
+polyconic projections BON and PCO using torch-native operations, matching
 WCSLIB (Calabretta & Greisen 2002, WCS Paper II) semantics.
 
 All conic projections share the structure:
   - PV2_1: standard parallel theta_1 (latitude of the reference)
   - PV2_2: second standard parallel theta_2 (delta from theta_1 for COE/COD/COO)
   - Native reference point: (phi_0, theta_0) = (0, theta_1)
+
+PCO (American polyconic) uses (phi_0, theta_0) = (0, 0) with no PV parameters.
 
 Forward (s2x): native (phi, theta) -> plane (x, y)
 Inverse (x2s): plane (x, y) -> native (phi, theta)
@@ -78,6 +80,8 @@ def project_conic(
     """Inverse conic projection: plane (x, y) -> native (phi, theta)."""
     if projection_code == "BON":
         return _bon_x2s(xi, eta, pv1, pv2)
+    if projection_code == "PCO":
+        return _pco_x2s(xi, eta)
 
     theta1 = _pv_param(pv2, 1, 0.0, like=xi)
 
@@ -197,6 +201,8 @@ def deproject_conic(
 
     if projection_code == "BON":
         return _bon_s2x(phi, theta, pv1, pv2)
+    if projection_code == "PCO":
+        return _pco_s2x(phi, theta)
 
     theta1 = _pv_param(pv2, 1, 0.0, like=phi)
 
@@ -431,3 +437,73 @@ def _bon_s2x(
     xi = r * sin_a
     eta = -r * cos_a + w2
     return xi, eta
+
+
+# ---------------------------------------------------------------------------
+# PCO — American polyconic (Paper II Sec.5.5.2, eqs. 157-160)
+# ---------------------------------------------------------------------------
+
+def _pco_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
+    """Forward PCO: native (phi, theta) -> plane (xi, eta).
+
+    r0 = 180/pi degrees.  When |theta| is tiny: xi = phi, eta = 0.
+    Else with w = sin(theta):
+      xi  = r0 * sin(phi*w) / tan(theta)
+      eta = theta + r0 * (1 - cos(phi*w)) / tan(theta)
+    """
+    phi_w = torch.remainder(phi + 180.0, 360.0) - 180.0
+    t = theta * D2R
+    equator = t.abs() < 1e-12
+    w = torch.sin(t)
+    e = phi_w * D2R * w
+    # cot(theta) = cos/sin; use 1/tan for Paper II form with r0 = R2D
+    tan_t = torch.tan(t)
+    safe_tan = torch.where(equator, torch.ones_like(tan_t), tan_t)
+    xi = R2D * torch.sin(e) / safe_tan
+    eta = theta + R2D * (1.0 - torch.cos(e)) / safe_tan
+    xi = torch.where(equator, phi_w, xi)
+    eta = torch.where(equator, torch.zeros_like(eta), eta)
+    return xi, eta
+
+
+def _pco_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
+    """Inverse PCO: plane (xi, eta) -> native (phi, theta).
+
+    Newton on G(theta) = tan(theta)*(X^2+(Y-theta)^2) - 2(Y-theta) = 0
+    with X = xi*D2R, Y = eta*D2R (theta in radians during iteration).
+    """
+    big_x = xi * D2R
+    big_y = eta * D2R
+    origin = (big_x.abs() < 1e-15) & (big_y.abs() < 1e-15)
+
+    # Initial guess: clamp Y away from the poles.
+    half_pi = 0.5 * math.pi
+    theta = torch.clamp(big_y, -half_pi + 1e-3, half_pi - 1e-3)
+
+    for _ in range(64):
+        dy = big_y - theta
+        r2 = big_x * big_x + dy * dy
+        cos_t = torch.cos(theta)
+        # Avoid tan overflow near poles.
+        safe_cos = torch.where(cos_t.abs() < 1e-15, torch.ones_like(cos_t), cos_t)
+        tan_t = torch.sin(theta) / safe_cos
+        g = tan_t * r2 - 2.0 * dy
+        gp = r2 / (safe_cos * safe_cos) - 2.0 * tan_t * dy + 2.0
+        safe_gp = torch.where(gp.abs() < 1e-15, torch.ones_like(gp), gp)
+        dt = g / safe_gp
+        theta = theta - dt
+        theta = torch.clamp(theta, -half_pi + 1e-9, half_pi - 1e-9)
+        if bool(dt.abs().max() < 1e-13):
+            break
+
+    theta_deg = theta * R2D
+    equator = theta.abs() < 1e-12
+    tan_t = torch.tan(theta)
+    sin_e = big_x * tan_t
+    cos_e = 1.0 - (big_y - theta) * tan_t
+    e = torch.atan2(sin_e, cos_e)
+    safe_sin = torch.where(equator, torch.ones_like(theta), torch.sin(theta))
+    phi = torch.where(equator, xi, (e / safe_sin) * R2D)
+    phi = torch.where(origin, torch.zeros_like(phi), phi)
+    theta_deg = torch.where(origin, torch.zeros_like(theta_deg), theta_deg)
+    return phi, theta_deg

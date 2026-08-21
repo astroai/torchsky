@@ -40,7 +40,7 @@ class CaseSpec:
 
     @property
     def is_allsky(self) -> bool:
-        return self.projection in {"AIT", "MOL", "HPX"}
+        return self.projection in {"AIT", "MOL", "HPX", "XPH"}
 
     @property
     def is_cylindrical(self) -> bool:
@@ -56,7 +56,11 @@ class CaseSpec:
 
     @property
     def is_polyconic(self) -> bool:
-        return self.projection == "BON"
+        return self.projection in {"BON", "PCO"}
+
+    @property
+    def is_quadcube(self) -> bool:
+        return self.projection in {"TSC", "CSC", "QSC"}
 
 
 CASES = {
@@ -72,6 +76,7 @@ CASES = {
     "AIT": CaseSpec("AIT", "AIT"),
     "MOL": CaseSpec("MOL", "MOL"),
     "HPX": CaseSpec("HPX", "HPX"),
+    "XPH": CaseSpec("XPH", "XPH"),
     "CEA": CaseSpec("CEA", "CEA"),
     "MER": CaseSpec("MER", "MER"),
     "CAR": CaseSpec("CAR", "CAR"),
@@ -82,6 +87,11 @@ CASES = {
     "COD": CaseSpec("COD", "COD", conic=True),
     "COO": CaseSpec("COO", "COO", conic=True),
     "BON": CaseSpec("BON", "BON", polyconic=True),
+    "PCO": CaseSpec("PCO", "PCO", polyconic=True),
+    "TSC": CaseSpec("TSC", "TSC"),
+    "CSC": CaseSpec("CSC", "CSC"),
+    "QSC": CaseSpec("QSC", "QSC"),
+    "NCP": CaseSpec("NCP", "NCP"),
     "TAN_SIP": CaseSpec("TAN_SIP", "TAN", sip=True),
     "TPV": CaseSpec("TPV", "TPV", tpv=True),
 }
@@ -147,8 +157,24 @@ def _make_header(case: CaseSpec) -> fits.Header:
         elif case.is_conic:
             header["PV2_1"] = 45.0  # theta_0: standard parallel (deg)
             header["PV2_2"] = 0.0  # eta (deg) for two-standard-parallel variants
-        elif case.is_polyconic:
+        elif case.projection == "BON":
             header["PV2_1"] = 45.0  # theta_0 (deg)
+        elif case.is_quadcube:
+            header["CD1_1"] = -0.3
+            header["CD1_2"] = 0.0
+            header["CD2_1"] = 0.0
+            header["CD2_2"] = 0.3
+        elif case.projection == "NCP":
+            header["CRVAL2"] = 45.0
+            header["CD1_1"] = -0.01
+            header["CD1_2"] = 0.0
+            header["CD2_1"] = 0.0
+            header["CD2_2"] = 0.01
+        elif case.projection == "PCO":
+            header["CD1_1"] = -0.5
+            header["CD1_2"] = 0.0
+            header["CD2_1"] = 0.0
+            header["CD2_2"] = 0.5
 
     if case.sip:
         header["A_ORDER"] = 3
@@ -203,6 +229,12 @@ def _sample_pixels(
             span_x, span_y = 180.0, 90.0
         else:
             span_x, span_y = 320.0, 160.0
+    elif case.is_quadcube or case.projection == "PCO":
+        # Stay near the reference pixel so samples remain on a cube face / PCO sheet.
+        if profile == "interior":
+            span_x, span_y = 40.0, 40.0
+        else:
+            span_x, span_y = 80.0, 80.0
     else:
         if profile == "interior":
             span_x, span_y = 900.0, 900.0
@@ -281,6 +313,8 @@ def _sample_allsky_pixels_from_world(
 def _sync(device: torch.device) -> None:
     if device.type == "cuda":
         torch.cuda.synchronize(device=device)
+    elif device.type == "mps":
+        torch.mps.synchronize()
 
 
 def _time_many(fn, runs: int, sync_device: torch.device | None = None) -> float:
@@ -619,7 +653,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cases",
         type=str,
-        default="TAN,SIN,ARC,ZEA,STG,ZPN,AZP,SZP,AIR,AIT,MOL,HPX,CEA,MER,CAR,SFL,PAR,COP,COE,COD,COO,BON,TAN_SIP,TPV",
+        default="TAN,SIN,ARC,ZEA,STG,ZPN,AZP,SZP,AIR,AIT,MOL,HPX,XPH,CEA,MER,CAR,SFL,PAR,COP,COE,COD,COO,BON,PCO,TSC,CSC,QSC,NCP,TAN_SIP,TPV",
         help=f"Comma-separated case names. Available: {','.join(CASES.keys())}",
     )
     parser.add_argument(
@@ -688,6 +722,8 @@ def _resolve_device(choice: str) -> torch.device:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if choice == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but no CUDA device is available")
+    if choice == "mps":
+        raise RuntimeError("WCS benches need float64; MPS is float32-only")
     return torch.device(choice)
 
 

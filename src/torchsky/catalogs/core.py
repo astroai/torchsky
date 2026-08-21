@@ -817,6 +817,18 @@ def crossmatch_sky(
     if right_ra.numel() == 0 or left_ra.numel() == 0:
         return _empty_crossmatch(device)
 
+    # Scalar / uniform radius → HEALPix coarse index; varying per-row → dec windows.
+    if bool(torch.all(radius_left == radius_left[0])):
+        return _crossmatch_sky_coarse_indexed(
+            left_ra,
+            left_dec,
+            right_ra,
+            right_dec,
+            radius_arcsec=float(radius_left[0].item()),
+            left_chunk_size=left_chunk_size,
+            right_chunk_size=right_chunk_size,
+            find=find,
+        )
     return _crossmatch_sky_declination_indexed(
         left_ra,
         left_dec,

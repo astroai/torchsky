@@ -1,10 +1,50 @@
 import numpy as np
 import torch
 import pytest
+import math
 
 from torchsky.sphere import compat
 from torchsky.sphere import healpix as hp
 from torchsky.sphere.geom import query_ellipse as geom_query_ellipse
+from torchsky.sphere.geom import query_polygon_general
+from torchsky.sphere.spectral import alm_index, alm_size, rotate_alm, synfast
+
+
+def test_compat_alm_index_roundtrip_and_resolution_exports() -> None:
+    lmax = 8
+    for m in range(lmax + 1):
+        for ell in range(m, lmax + 1):
+            index = compat.Alm.getidx(lmax, ell, m)
+            assert compat.Alm.getlm(index, lmax) == (ell, m)
+
+    assert compat.nside2resol(8) == hp.nside2resol(8)
+    assert compat.nside2pixarea(8, degrees=True) == hp.nside2pixarea(8, degrees=True)
+
+
+def test_compat_map_fits_roundtrip(tmp_path) -> None:
+    nside = 8
+    values = torch.arange(hp.nside2npix(nside), dtype=torch.float64)
+    path = tmp_path / "map.fits"
+
+    compat.write_map(path, values)
+    got = compat.read_map(path)
+
+    torch.testing.assert_close(got, values)
+    torch.testing.assert_close(
+        compat.new_map(nside, dtype=torch.float64),
+        torch.zeros_like(values),
+    )
+
+
+def test_compat_query_polygon_dispatches_concave_regions() -> None:
+    lon = torch.tensor([-20.0, 20.0, 20.0, 0.0, 0.0, -20.0], dtype=torch.float64)
+    lat = torch.tensor([-20.0, -20.0, 0.0, 0.0, 20.0, 20.0], dtype=torch.float64)
+    vertices = torch.stack((lon, lat), dim=1)
+
+    got = compat.query_polygon(32, vertices, lonlat=True)
+    expected = query_polygon_general(32, lon, lat)
+
+    torch.testing.assert_close(got, expected)
 
 
 def test_compat_ang2pix_pix2ang_roundtrip_matches_healpix() -> None:
@@ -594,3 +634,30 @@ def test_compat_fit_remove_dipole_matches_healpy() -> None:
     torch.testing.assert_close(
         got_dip2, torch.as_tensor(exp_dip2, dtype=torch.float64), atol=1e-12, rtol=0.0
     )
+
+
+def test_compat_rotator_rotate_alm_and_map_alms() -> None:
+    nside = 8
+    lmax = 4
+
+    rot = compat.Rotator(rot=(10.0, 20.0, 30.0), deg=True)
+    assert abs(rot.psi - math.radians(10.0)) < 1e-15
+    nalm = alm_size(lmax)
+    rng = torch.Generator().manual_seed(0)
+    alm = torch.complex(
+        torch.randn(nalm, generator=rng, dtype=torch.float64),
+        torch.randn(nalm, generator=rng, dtype=torch.float64),
+    )
+    for ell in range(lmax + 1):
+        idx = alm_index(ell, 0, lmax)
+        alm[idx] = complex(float(alm[idx].real), 0.0)
+    got = rot.rotate_alm(alm, lmax=lmax)
+    expected = rotate_alm(alm, rot.psi, rot.theta, rot.phi, lmax=lmax)
+    torch.testing.assert_close(got, expected, atol=0.0, rtol=0.0)
+
+    m = synfast(torch.ones(lmax + 1), nside=nside, lmax=lmax)
+    m_rot = rot.rotate_map_alms(m, lmax=lmax)
+    assert m_rot.shape == m.shape
+    der = compat.alm2map_der1(alm, nside, lmax=lmax)
+    assert len(der) == 3
+    assert der[0].shape == (hp.nside2npix(nside),)

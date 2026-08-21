@@ -21,9 +21,11 @@ case "${container_image}" in
 esac
 
 case "${mode}" in
-  cpu | cuda | spectral | sphere | sparse | spin | geometry | cuhpx) ;;
+  cpu | cuda | spectral | sphere | sparse | healsparse | spin | geometry | cuhpx | \
+  wcs-paper2 | wcs-tpv | wcs-spectral | wcs-tabular | sht-profile | moc | catalog | \
+  observed | geom-cuda | world-cuda) ;;
   *)
-    echo "unknown mode: ${mode} (expected cpu, cuda, spectral, sphere, sparse, spin, geometry, or cuhpx)" >&2
+    echo "unknown mode: ${mode} (expected cpu, cuda, spectral, sphere, sparse, healsparse, spin, geometry, cuhpx, wcs-paper2, wcs-tpv, wcs-spectral, wcs-tabular, sht-profile, moc, catalog, observed, geom-cuda, or world-cuda)" >&2
     exit 2
     ;;
 esac
@@ -229,6 +231,15 @@ case "${mode}" in
       tests/test_wcs_core.py \
       tests/test_wcs_sip.py \
       tests/test_wcs_parity.py \
+      tests/test_wcs_extended_projections.py \
+      tests/test_wcs_observed_frames.py \
+      tests/test_wcs_tabular.py \
+      tests/test_wcs_spectral.py \
+      tests/test_wcs_temporal.py \
+      tests/test_catalogs.py \
+      tests/test_sphere_polygons.py \
+      tests/test_sphere_sparse.py \
+      tests/test_wcs_gwcs_sampling.py \
       -q --tb=line -k cuda \
       --junitxml="${artifact_root}/cuda_pytest.xml" || cuda_rc=$?
     record_versions cuda-bench || cuda_rc=$?
@@ -279,7 +290,7 @@ case "${mode}" in
       --run-id acceptance_sphere_full \
       --output-dir "${artifact_root}"
     ;;
-  sparse)
+  sparse | healsparse)
     install_env sphere-bench
     record_versions sphere-bench
     job_rc=0
@@ -342,6 +353,188 @@ case "${mode}" in
       --nside 32 --runs 3 \
       --json-out "${artifact_root}/cuhpx_sht_spike.json"
     record_versions cuda-bench || true
+    ;;
+  wcs-paper2)
+    install_env bench-all
+    record_versions bench-all
+    pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
+      python "${source_root}/benchmarks/bench_wcs.py" \
+      --cases PCO,XPH,TSC,CSC,QSC,NCP \
+      --n-points 100000 --runs 3 --device cpu \
+      --json-out "${artifact_root}/wcs_paper2.json"
+    ;;
+  wcs-tpv)
+    install_env bench-all
+    record_versions bench-all
+    job_rc=0
+    pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
+      python "${source_root}/benchmarks/bench_wcs.py" \
+      --cases TPV --n-points 200000 --runs 5 --device cpu \
+      --json-out "${artifact_root}/wcs_tpv.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
+      python "${source_root}/benchmarks/bench_wcs_tpv_inverse.py" \
+      --json-out "${artifact_root}/wcs_tpv_inverse.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
+      python "${source_root}/benchmarks/bench_wcs_small_n_paths.py" \
+      --cases TAN,SIN,ARC,TPV --n-points 256 --runs 11 \
+      --json-out "${artifact_root}/wcs_small_n_paths.json" || job_rc=$?
+    if [[ "${job_rc}" -ne 0 ]]; then
+      echo "wcs-tpv job failures rc=${job_rc}"
+      exit "${job_rc}"
+    fi
+    ;;
+  wcs-spectral)
+    install_env bench-all
+    record_versions bench-all
+    pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
+      python "${source_root}/benchmarks/bench_wcs_spectral_temporal.py" \
+      --n-points 100000 --runs 3 \
+      --json-out "${artifact_root}/wcs_spectral_temporal.json"
+    ;;
+  wcs-tabular)
+    install_env bench-all
+    record_versions bench-all
+    pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
+      python "${source_root}/benchmarks/bench_wcs_tabular.py" \
+      --grid-size 8 --n-points 10000 --runs 5 \
+      --json-out "${artifact_root}/wcs_tabular.json"
+    ;;
+  sht-profile)
+    install_env sphere-bench
+    record_versions sphere-bench
+    export TORCHSKY_SHT_PROFILE=1
+    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+      python "${source_root}/benchmarks/bench_spin_matrix.py" \
+      --case-set default --runs 5 --no-throughput-gate \
+      --json-out "${artifact_root}/sht_profile_spin.json"
+    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+      python "${source_root}/benchmarks/bench_sphere_spectral.py" \
+      --nside 128 --lmax 128 --runs 5 \
+      --json-out "${artifact_root}/sht_profile_nside128.json"
+    ;;
+  moc)
+    install_env sphere-bench
+    record_versions sphere-bench
+    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+      python "${source_root}/benchmarks/bench_sphere_core.py" \
+      --moc-only --n-points 200000 --runs 5 --moc-max-order 8 \
+      --json-out "${artifact_root}/moc_core.json"
+    ;;
+  catalog)
+    install_env bench-all
+    record_versions bench-all
+    job_rc=0
+    pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
+      python "${source_root}/benchmarks/bench_catalog_crossmatch.py" \
+      --n-left 1000000 --n-right-band 500000 --n-right-background 500000 --runs 3 \
+      --json-out "${artifact_root}/catalog_n1e6.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
+      python "${source_root}/benchmarks/bench_catalog_crossmatch.py" \
+      --n-left 10000000 --n-right-band 500000 --n-right-background 500000 \
+      --runs 1 --skip-decl-pruned \
+      --json-out "${artifact_root}/catalog_n1e7.json" || job_rc=$?
+    if [[ "${job_rc}" -ne 0 ]]; then
+      echo "catalog job failures rc=${job_rc}"
+      exit "${job_rc}"
+    fi
+    ;;
+  observed)
+    install_env test
+    record_versions test
+    job_rc=0
+    pixi run --manifest-path "${source_root}/pixi.toml" -e test -- \
+      pytest tests/test_wcs_catalog_state.py tests/test_wcs_frames.py \
+      tests/test_wcs_observed_frames.py -q --tb=line \
+      --junitxml="${artifact_root}/observed_pytest.xml" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e test -- \
+      python "${source_root}/benchmarks/bench_observed_place.py" \
+      --json-out "${artifact_root}/observed_place.json" || job_rc=$?
+    if [[ "${job_rc}" -ne 0 ]]; then
+      echo "observed job failures rc=${job_rc}"
+      exit "${job_rc}"
+    fi
+    ;;
+  geom-cuda)
+    install_env cuda-bench
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'"
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python "${source_root}/benchmarks/bench_sphere_polygons.py" \
+      --device cuda --n-points 200000 --runs 3 \
+      --json-out "${artifact_root}/geom_cuda.json"
+    record_versions cuda-bench || true
+    ;;
+  world-cuda)
+    install_env cuda-bench
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'"
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python -m pip install astropy
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python -m pip install healpy || true
+    job_rc=0
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      pytest \
+      tests/test_wcs_core.py \
+      tests/test_wcs_extended_projections.py \
+      tests/test_wcs_observed_frames.py \
+      tests/test_wcs_tabular.py \
+      tests/test_wcs_spectral.py \
+      tests/test_wcs_temporal.py \
+      tests/test_catalogs.py \
+      tests/test_sphere_polygons.py \
+      tests/test_sphere_sparse.py \
+      tests/test_wcs_gwcs_sampling.py \
+      -q --tb=line -k cuda \
+      --junitxml="${artifact_root}/world_cuda_pytest.xml" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python "${source_root}/benchmarks/bench_wcs.py" \
+      --cases PCO,XPH,TSC,CSC,QSC,NCP \
+      --n-points 100000 --runs 3 --device cuda \
+      --json-out "${artifact_root}/wcs_paper2_cuda.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python "${source_root}/benchmarks/bench_wcs.py" \
+      --cases TPV --n-points 200000 --runs 5 --device cuda \
+      --json-out "${artifact_root}/wcs_tpv_cuda.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python "${source_root}/benchmarks/bench_wcs_tpv_inverse.py" \
+      --n-points 200000 --runs 3 --device cuda \
+      --json-out "${artifact_root}/wcs_tpv_inverse_cuda.json" \
+      --markdown-out "${artifact_root}/wcs_tpv_inverse_cuda.md" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python "${source_root}/benchmarks/bench_wcs_small_n_paths.py" \
+      --cases TAN,SIN,ARC,TPV --n-points 256 --runs 11 --device cuda \
+      --json-out "${artifact_root}/wcs_small_n_paths_cuda.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python "${source_root}/benchmarks/bench_wcs_spectral_temporal.py" \
+      --n-points 100000 --runs 3 --device cuda \
+      --json-out "${artifact_root}/wcs_spectral_temporal_cuda.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python "${source_root}/benchmarks/bench_wcs_tabular.py" \
+      --grid-size 8 --n-points 10000 --runs 5 --device cuda \
+      --json-out "${artifact_root}/wcs_tabular_cuda.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python "${source_root}/benchmarks/bench_catalog_crossmatch.py" \
+      --n-left 20000 --n-right-band 50000 --n-right-background 10000 --runs 3 \
+      --device cuda \
+      --json-out "${artifact_root}/catalog_cuda.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python "${source_root}/benchmarks/bench_observed_place.py" \
+      --device cuda --n-points 4096 --runs 7 \
+      --json-out "${artifact_root}/observed_place_cuda.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python "${source_root}/benchmarks/bench_sphere_polygons.py" \
+      --device cuda --n-points 200000 --runs 3 \
+      --json-out "${artifact_root}/geom_cuda.json" || job_rc=$?
+    pixi run --manifest-path "${source_root}/pixi.toml" -e cuda-bench -- \
+      python "${source_root}/benchmarks/bench_sphere_sparse.py" \
+      --device cuda --nside 256 --coverage-frac 0.1 --n-queries 200000 --runs 5 \
+      --json-out "${artifact_root}/sphere_sparse_cuda.json" || job_rc=$?
+    record_versions cuda-bench || job_rc=$?
+    if [[ "${job_rc}" -ne 0 ]]; then
+      echo "world-cuda job failures rc=${job_rc}"
+      exit "${job_rc}"
+    fi
     ;;
 esac
 

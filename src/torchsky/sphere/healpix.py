@@ -256,9 +256,6 @@ def ang2pix_ring(nside: int, ra: Tensor, dec: Tensor) -> Tensor:
         # Use simple analytical math for single point to avoid overhead
         pass
 
-    if ra_t.device.type == "mps":
-        # MPS lacks float64; route through CPU for parity-grade angular indexing.
-        return ang2pix_ring(nside, ra_t.cpu(), dec_t.cpu()).to(device=ra_t.device)
     if _cpp is not None and ra_t.device.type == "cpu" and dec_t.device.type == "cpu":
         if hasattr(_cpp, "healpix_ang2pix_ring_torch_cpu"):
             return _cpp.healpix_ang2pix_ring_torch_cpu(
@@ -322,12 +319,6 @@ def _pix2thetaphi_ring(nside: int, pix: Tensor) -> tuple[Tensor, Tensor]:
     """Convert HEALPix RING indices to (theta, phi) in radians."""
     _validate_nside(nside)
     pix_t = _as_int64(pix)
-    if pix_t.device.type == "mps":
-        theta_cpu, phi_cpu = _pix2thetaphi_ring(nside, pix_t.cpu())
-        out_dtype = _float_dtype_for_device(pix_t.device)
-        return theta_cpu.to(device=pix_t.device, dtype=out_dtype), phi_cpu.to(
-            device=pix_t.device, dtype=out_dtype
-        )
     f_dtype = _float_dtype_for_device(pix_t.device)
 
     ncap = 2 * nside * (nside - 1)
@@ -385,13 +376,6 @@ def pix2ang_ring(nside: int, pix: Tensor) -> Tuple[Tensor, Tensor]:
     """Convert HEALPix RING indices to RA/Dec (degrees)."""
     _validate_nside(nside)
     pix_t = _as_int64(pix)
-    if pix_t.device.type == "mps":
-        # MPS float32 trig accumulates boundary error; compute on CPU and move back.
-        ra_cpu, dec_cpu = pix2ang_ring(nside, pix_t.cpu())
-        out_dtype = _float_dtype_for_device(pix_t.device)
-        return ra_cpu.to(device=pix_t.device, dtype=out_dtype), dec_cpu.to(
-            device=pix_t.device, dtype=out_dtype
-        )
     if _cpp is not None and pix_t.device.type == "cpu":
         if hasattr(_cpp, "healpix_pix2ang_ring_torch_cpu"):
             return _cpp.healpix_pix2ang_ring_torch_cpu(nside, pix_t.contiguous())
@@ -408,8 +392,6 @@ def ang2pix_nested(nside: int, ra: Tensor, dec: Tensor) -> Tensor:
     ra_t = _as_float64(ra)
     dec_t = _as_float64(dec)
     ra_t, dec_t = torch.broadcast_tensors(ra_t, dec_t)
-    if ra_t.device.type == "mps":
-        return ang2pix_nested(nside, ra_t.cpu(), dec_t.cpu()).to(device=ra_t.device)
     if _cpp is not None and ra_t.device.type == "cpu" and dec_t.device.type == "cpu":
         if hasattr(_cpp, "healpix_ang2pix_nested_torch_cpu"):
             return _cpp.healpix_ang2pix_nested_torch_cpu(
@@ -482,12 +464,6 @@ def pix2ang_nested(nside: int, pix: Tensor) -> Tuple[Tensor, Tensor]:
     """Convert HEALPix NESTED indices to RA/Dec (degrees)."""
     _validate_nside(nside)
     pix_t = _as_int64(pix)
-    if pix_t.device.type == "mps":
-        ra_cpu, dec_cpu = pix2ang_nested(nside, pix_t.cpu())
-        out_dtype = _float_dtype_for_device(pix_t.device)
-        return ra_cpu.to(device=pix_t.device, dtype=out_dtype), dec_cpu.to(
-            device=pix_t.device, dtype=out_dtype
-        )
     if _cpp is not None and pix_t.device.type == "cpu":
         if hasattr(_cpp, "healpix_pix2ang_nested_torch_cpu"):
             return _cpp.healpix_pix2ang_nested_torch_cpu(nside, pix_t.contiguous())
@@ -540,8 +516,6 @@ def ring2nest(nside: int, pix_ring: Tensor) -> Tensor:
     """Convert RING pixel indices to NESTED."""
     _validate_nside(nside)
     pix_ring_t = _as_int64(pix_ring)
-    if pix_ring_t.device.type == "mps":
-        return ring2nest(nside, pix_ring_t.cpu()).to(device=pix_ring_t.device)
     if _cpp is not None and pix_ring_t.device.type == "cpu":
         if hasattr(_cpp, "healpix_ring2nest_torch_cpu"):
             return _cpp.healpix_ring2nest_torch_cpu(nside, pix_ring_t.contiguous())
@@ -553,8 +527,6 @@ def nest2ring(nside: int, pix_nest: Tensor) -> Tensor:
     """Convert NESTED pixel indices to RING."""
     _validate_nside(nside)
     pix_nest_t = _as_int64(pix_nest)
-    if pix_nest_t.device.type == "mps":
-        return nest2ring(nside, pix_nest_t.cpu()).to(device=pix_nest_t.device)
     if _cpp is not None and pix_nest_t.device.type == "cpu":
         if hasattr(_cpp, "healpix_nest2ring_torch_cpu"):
             return _cpp.healpix_nest2ring_torch_cpu(nside, pix_nest_t.contiguous())
@@ -1448,22 +1420,21 @@ def query_disc(
     Return pixels whose centers fall in a spherical disc.
 
     `vec` is a 3-vector (x, y, z); `radius` is in radians.
-    If `inclusive=True`, use a conservative radius expansion by max pixel radius.
+    If `inclusive=True` and ``fact==4`` (healpy default), pad the radius by the
+    maximum pixel radius. If ``inclusive=True`` and ``fact!=4``, supersample at
+    ``nside * fact`` (pad at the fine nside), then degrade to parent pixels —
+    healpy-shaped inclusive overlap. ``fact`` is ignored when ``inclusive=False``.
 
-    ``fact`` is accepted for healpy API compatibility and must remain ``4``.
-    Inclusive queries pad by the maximum pixel radius; they do not supersample.
-
-    Performance: when the C++ extension is available, queries use **ring pruning**
-    (``O(nside + output)``), not a full-sky scan. The direction vector may live on any
-    device; it is copied to CPU only for the scalar C++ entry point. Without C++, this
-    falls back to chunked **O(npix)** tests.
+    Performance: when the C++ extension is available on CPU (or CUDA via a host
+    copy of ``vec``), queries use **ring pruning** (``O(nside + output)``).
+    MPS stays on-device via the chunked tensor fallback.
     """
     _validate_nside(nside)
-    if int(fact) != 4:
-        raise ValueError(
-            "query_disc fact is unused; inclusive mode pads by max pixel radius. "
-            "Pass fact=4 (healpy default) or omit it."
-        )
+    fact_i = int(fact)
+    if fact_i < 1:
+        raise ValueError("fact must be a positive integer")
+    if nest and (fact_i & (fact_i - 1)) != 0:
+        raise ValueError("for nest ordering, fact must be a power of two")
     if radius <= 0.0:
         return torch.empty((0,), dtype=torch.int64)
 
@@ -1471,14 +1442,53 @@ def query_disc(
     if v_any.numel() != 3:
         raise ValueError("vec must be length-3 Cartesian vector")
     out_device = v_any.device
-    # MPS has no float64; move to CPU first, then promote to fp64 for parity with healpy/C++.
-    v64 = v_any.detach().to(device="cpu").to(dtype=torch.float64).reshape(-1)
-    vx, vy, vz = _normalize_xyz(v64[0], v64[1], v64[2])
+
+    # Inclusive fact!=4: supersample at nside*fact, then take parent pixels.
+    # fact==4 keeps the historical pad-by-max_pixrad path (tests depend on it).
+    if inclusive and fact_i != 4:
+        nside_hi = int(nside) * fact_i
+        _validate_nside(nside_hi)
+        pix_hi = query_disc(
+            nside_hi,
+            v_any,
+            radius,
+            inclusive=True,
+            fact=4,
+            nest=True,
+            chunk_size=chunk_size,
+        )
+        if pix_hi.numel() == 0:
+            return pix_hi.to(device=out_device) if pix_hi.device != out_device else pix_hi
+        parent = torch.unique(
+            torch.div(pix_hi, fact_i * fact_i, rounding_mode="floor")
+        )
+        parent = torch.sort(parent).values
+        if nest:
+            out = parent
+        else:
+            out = torch.sort(nest2ring(nside, parent)).values
+        return out.to(device=out_device) if out.device != out_device else out
+
+    f_dtype = _float_dtype_for_device(out_device)
+    # Keep MPS on-device (float32). CPU/CUDA promote via host for C++ parity.
+    if out_device.type == "mps":
+        v_dev = v_any.detach().to(dtype=f_dtype).reshape(-1)
+        vx, vy, vz = _normalize_xyz(v_dev[0], v_dev[1], v_dev[2])
+    else:
+        v64 = v_any.detach().to(device="cpu").to(dtype=torch.float64).reshape(-1)
+        vx, vy, vz = _normalize_xyz(v64[0], v64[1], v64[2])
     radius_eff = radius + (max_pixel_radius(nside, degrees=False) if inclusive else 0.0)
     cos_lim = math.cos(radius_eff)
 
-    if _cpp is not None and hasattr(_cpp, "healpix_query_disc_torch_cpu"):
-        vec_cpu = torch.stack([vx, vy, vz]).contiguous()
+    use_cpp = (
+        out_device.type != "mps"
+        and _cpp is not None
+        and hasattr(_cpp, "healpix_query_disc_torch_cpu")
+    )
+    if use_cpp:
+        vec_cpu = torch.stack(
+            [vx.detach().cpu().to(torch.float64), vy.detach().cpu().to(torch.float64), vz.detach().cpu().to(torch.float64)]
+        ).contiguous()
         out = _cpp.healpix_query_disc_torch_cpu(nside, vec_cpu, float(cos_lim), nest)
         if out_device.type != "cpu":
             return out.to(device=out_device)
@@ -1487,14 +1497,14 @@ def query_disc(
     npix = nside2npix(nside)
     selected: list[Tensor] = []
     for start, end in _pixel_range_chunks(npix, chunk_size=chunk_size):
-        pix = torch.arange(start, end, dtype=torch.int64)
+        pix = torch.arange(start, end, dtype=torch.int64, device=out_device)
         x, y, z = pix2vec(nside, pix, nest=nest)
         dots = x * vx + y * vy + z * vz
         keep = dots >= cos_lim
         if torch.any(keep):
             selected.append(pix[keep])
     if not selected:
-        return torch.empty((0,), dtype=torch.int64)
+        return torch.empty((0,), dtype=torch.int64, device=out_device)
     return torch.cat(selected, dim=0)
 
 
@@ -1586,8 +1596,8 @@ def query_polygon(
     """
     Return pixels with centers inside a spherical polygon.
 
-    **The polygon must be convex** (vertices in order along the boundary).
-    Concave regions are not supported; decompose into convex pieces or use a different API.
+    Convex polygons use the direct half-space query. Concave simple polygons are
+    triangulated by :func:`torchsky.sphere.geom.query_polygon_general`.
 
     `vertices` accepts:
     - Cartesian shape (N,3) or (3,N), if `lonlat=False`
@@ -1644,10 +1654,11 @@ def query_polygon(
     incident[idx, (idx + 1) % nvert] = True
     off_edge = side.masked_fill(incident, 0.0)
     if bool((off_edge > 1.0e-12).any()) and bool((off_edge < -1.0e-12).any()):
-        raise ValueError(
-            "query_polygon requires a convex polygon; "
-            "use query_polygon_general or spherical_polygon_contains for concave regions"
-        )
+        # Circular dependency: geom uses this convex path for triangulated pieces.
+        from .geom import query_polygon_general
+
+        lon, lat = xyz_to_lonlat(vv[:, 0], vv[:, 1], vv[:, 2])
+        return query_polygon_general(nside, lon, lat, nest=nest)
     edge_normals = edge_normals / edge_norm.unsqueeze(1)
 
     centroid = vv.mean(dim=0)

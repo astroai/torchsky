@@ -56,7 +56,15 @@ pixi run bench-comparator-versions-all
 pixi run wcs-sphere-acceptance
 ```
 
-Linux CPU/CUDA confirmation uses `scripts/launch_canfar_wcs_sphere.sh` (modes `cpu`, `cuda`, `all`, `suite`, or `sht`). That submits AstroAI headless sessions which run `scripts/run_canfar_wcs_sphere.sh` at an exact `TORCHSKY_COMMIT`, write `/arc/projects/ots/torchsky-runs/<run_id>/`, and copy the same tree to `vos:sfabbro/torchsky-runs/<run_id>/`. `suite` submits parallel spectral, sphere, sparse, spin, geometry, and cuHPX jobs. `sht` is spectral + sparse + spin only. Pull a finished run with `bash scripts/fetch_canfar_wcs_sphere_run.sh <run_id>` (`vcp` / `pip install vos`). Do not reuse the ADASS/SMACS runner for this domain. Local Mac smoke stays `--quick` via `pixi run wcs-sphere-acceptance`; the full oracle ingest is `pixi run wcs-sphere-acceptance-full` or the CANFAR `cpu` job. CANFAR `cpu`/`spin`/`geometry` jobs pass `--no-throughput-gate` so Mac-tuned healpy ratio thresholds do not fail the job; rel L2 and index/angle mismatch gates still apply. Mac pixi tasks (`sphere-bench-geometry-gate`, `sphere-upstream-spin-matrix-gate`) keep the ratio gates. The cuHPX scalar SHT spike is a separate CUDA-only job: `scripts/run_canfar_cuhpx_sht_spike.sh` or the `suite` `cuhpx` session. Current Linux ingest: [`benchmarks/scorecards/20260817_world_layer.md`](../benchmarks/scorecards/20260817_world_layer.md).
+Linux CPU/CUDA confirmation uses `scripts/launch_canfar_wcs_sphere.sh`. Modes:
+
+- `cpu`, `cuda`, `all` — full WCS/sphere acceptance on CPU and/or CUDA
+- `suite` / `many` — parallel `spectral`, `sphere`, `sparse`, `spin`, `geometry`, `cuhpx`
+- `sht` — `spectral` + `sparse` + `spin` only
+- world-layer jobs (also `world` to submit them together): `wcs-paper2`, `wcs-tpv`, `wcs-spectral`, `wcs-tabular`, `sht-profile`, `moc`, `catalog`, `observed`, `geom-cuda`, `world-cuda`
+- `world-cuda` puts WCS/catalog/observed/sparse/polygon tensors on the GPU (`--device cuda`). `geom-cuda` remains the polygon-only CUDA job.
+
+That submits AstroAI headless sessions which run `scripts/run_canfar_wcs_sphere.sh` at an exact `TORCHSKY_COMMIT`, write `/arc/projects/ots/torchsky-runs/<run_id>/`, and copy the same tree to `vos:sfabbro/torchsky-runs/<run_id>/`. Pull a finished run with `bash scripts/fetch_canfar_wcs_sphere_run.sh <run_id>` (`vcp` / `pip install vos`). Do not reuse the ADASS/SMACS runner for this domain. Local Mac smoke stays `--quick` via `pixi run wcs-sphere-acceptance`; the full oracle ingest is `pixi run wcs-sphere-acceptance-full` or the CANFAR `cpu` job. CANFAR `cpu`/`spin`/`geometry` jobs pass `--no-throughput-gate` so Mac-tuned healpy ratio thresholds do not fail the job; rel L2 and index/angle mismatch gates still apply. Mac pixi tasks (`sphere-bench-geometry-gate`, `sphere-upstream-spin-matrix-gate`) keep the ratio gates. The cuHPX scalar SHT spike is a separate CUDA-only job: `scripts/run_canfar_cuhpx_sht_spike.sh` or the `suite` `cuhpx` session. Current Linux ingest: [`benchmarks/scorecards/20260817_world_layer.md`](../benchmarks/scorecards/20260817_world_layer.md). World-layer jobs after 2026-08-20 are wired but **not claimed** until a VOS artifact is signed: [`benchmarks/scorecards/20260820_world_layer_pending.md`](../benchmarks/scorecards/20260820_world_layer_pending.md).
 
 For pip-only parity benches against the HEALPix / geometry comparator stack,
 install `pip install -e ".[bench-all]"` after installing a compatible PyTorch.
@@ -202,8 +210,9 @@ artifacts unless a baseline is deliberately reviewed and committed.
 | `bench_healpix.py` | HEALPix CPU/CUDA parity + throughput + quality gates (`ang2pix`, `pix2ang`, `ring/nest`). |
 | `bench_healpix_advanced.py` | Advanced HEALPix parity + throughput checks (`get_all_neighbours`, `get_interp_weights`, `get_interp_val`). Timed loops measure torchsky tensor work only; NumPy export for diffs is outside timing so torchsky is not charged extra copy cost vs healpy. |
 | `bench_sphere_geometry.py` | Cross-library spherical geometry benchmark (torchsky vs HEALPix ecosystem releases). |
-| `bench_sphere_core.py` | Sphere-core primitives benchmark (multi-band sampling, pairwise distances, ellipse query). |
-| `bench_sphere_polygons.py` | Non-convex spherical polygon benchmark (contains/intersects/query/area with optional spherical-geometry parity). |
+| `bench_sphere_core.py` | Sphere-core primitives benchmark (multi-band sampling, pairwise distances, ellipse query). `--moc-only` times torchsky vs mocpy cone / contains / union. |
+| `bench_sphere_polygons.py` | Non-convex spherical polygon benchmark (contains/intersects/query/area with optional spherical-geometry parity). `--device cpu|cuda|mps`; C++ vs Python rows are CPU-only. |
+| `bench_observed_place.py` | Pinned-EOP ICRS→GCRS/CIRS/TETE/AltAz timing; CIRS/TETE vs ERFA `c2i06a`/`pnm06a`. |
 | `bench_sphere_geom_exact_contains.py` | Bulk ``(lon, lat)`` containment: ``ExactSphericalRegion.contains`` (``spherical_geometry`` backend) vs the same vectorized ``contains_lonlat``/``contains_radec`` numpy path used as the upstream reference, plus throughput vs ``spherical_polygon_contains``. Explicit **SKIPPED** rows document non-comparable APIs for **hpgeom** / **healpy** (HEALPix-centric; use `bench_sphere_geometry.py` for those). Wired into `bench_sphere_suite.py` as suite `sphere_geom_exact_contains`. **Regression gate:** `--baseline-json benchmarks/baselines/sphere_geom_exact_contains_gate.json` enforces parity and throughput floors (with default `--points-s-tolerance` 0.35); disable per-row throughput via `skip_points_s_regression: true` if a runner is too variable. Pixi: `sphere-bench-geom-exact-contains-gate`. |
 | `bench_catalog_crossmatch.py` | Catalog crossmatch refinement benchmark comparing chunk-wide declination pruning, coarse HEALPix grouping, and exact per-row declination indexing. |
 | `bench_catalog_compat.py` | Catalog crossmatch compatibility benchmark against `astropy.coordinates.SkyCoord`, covering both synthetic clustered catalogs and vendored real Astropy VOTable fixtures, plus a real-data FITS roundtrip when native table I/O is available. |
@@ -879,8 +888,9 @@ Win rate: **88.9%** (16/18). Large-N: **100%** (13/13). Two deficits listed belo
 | `bench_healpix.py` | sphere | HEALPix CPU/CUDA/MPS parity + throughput |
 | `bench_healpix_advanced.py` | sphere | Neighbors + interpolation benchmarks |
 | `bench_sphere_geometry.py` | sphere | Cross-library HEALPix ecosystem comparison |
-| `bench_sphere_core.py` | sphere | Multi-band sampling, pairwise distances, ellipse queries |
-| `bench_sphere_polygons.py` | sphere | Non-convex polygon operations vs spherical-geometry |
+| `bench_sphere_core.py` | sphere | Multi-band sampling, pairwise distances, ellipse queries; `--moc-only` mocpy cone/contains/union |
+| `bench_sphere_polygons.py` | sphere | Non-convex polygon operations vs spherical-geometry (`--device` for CUDA/MPS) |
+| `bench_observed_place.py` | wcs | Pinned-EOP CIRS/TETE/GCRS/AltAz timing vs ERFA |
 | `bench_sphere_spectral.py` | sphere | Spherical harmonic primitives (scalar + spin) |
 | `bench_pipeline_table_sphere.py` | mixed | Table pushdown + HEALPix reduction pipeline |
 

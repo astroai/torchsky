@@ -45,14 +45,15 @@ if str(SRC) not in sys.path:
 from benchmarks.bench_wcs import (  # noqa: E402
     CASES,
     _make_header,
+    _resolve_device,
     _sample_pixels,
     _time_many,
 )
 from torchsky.wcs.core import WCS as TorchWCS  # noqa: E402
 
 
-def _median_ms(fn: Any, *, runs: int) -> float:
-    return float(_time_many(fn, runs, sync_device=torch.device("cpu")) * 1000.0)
+def _median_ms(fn: Any, *, runs: int, device: torch.device) -> float:
+    return float(_time_many(fn, runs, sync_device=device) * 1000.0)
 
 
 def _parity_max_arcsec(
@@ -126,9 +127,11 @@ def main() -> int:
     p.add_argument("--runs", type=int, default=11)
     p.add_argument("--origin", type=int, default=0)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--device", choices=["auto", "cpu", "cuda"], default="cpu")
     p.add_argument("--json-out", type=Path, default=None)
     args = p.parse_args()
 
+    device = _resolve_device(args.device)
     case_keys = [k.strip() for k in args.cases.split(",") if k.strip()]
     rng = np.random.default_rng(args.seed)
     rows: list[dict[str, Any]] = []
@@ -137,65 +140,85 @@ def main() -> int:
         case = CASES[key]
         header = _make_header(case)
         awcs = AstropyWCS(header)
-        twcs = TorchWCS(dict(header))
+        twcs_cpu = TorchWCS(dict(header))
+        twcs = TorchWCS(dict(header)).to(device)
         x, y = _sample_pixels(header, args.n_points, rng, case, "interior")
-        xt = torch.from_numpy(np.ascontiguousarray(x))
-        yt = torch.from_numpy(np.ascontiguousarray(y))
+        xt = torch.from_numpy(np.ascontiguousarray(x)).to(device)
+        yt = torch.from_numpy(np.ascontiguousarray(y)).to(device)
         pixels = torch.stack([xt, yt], dim=-1)
 
-        parity = _parity_max_arcsec(awcs, twcs, x, y, origin=args.origin)
+        parity = _parity_max_arcsec(awcs, twcs_cpu, x, y, origin=args.origin)
         ra_ref, dec_ref = awcs.all_pix2world(x, y, args.origin)
-        ra_t = torch.from_numpy(np.ascontiguousarray(ra_ref))
-        dec_t = torch.from_numpy(np.ascontiguousarray(dec_ref))
+        ra_t = torch.from_numpy(np.ascontiguousarray(ra_ref)).to(device)
+        dec_t = torch.from_numpy(np.ascontiguousarray(dec_ref)).to(device)
         world = torch.stack([ra_t, dec_t], dim=-1)
         parity_inv = _parity_inverse_max_pix(
-            awcs, twcs, ra_ref, dec_ref, origin=args.origin
+            awcs, twcs_cpu, ra_ref, dec_ref, origin=args.origin
         )
 
+        cpu = torch.device("cpu")
         ms_ast = _median_ms(
-            lambda: awcs.all_pix2world(x, y, args.origin), runs=args.runs
+            lambda: awcs.all_pix2world(x, y, args.origin),
+            runs=args.runs,
+            device=cpu,
         )
         ms_xy = _median_ms(
-            lambda: twcs.pixel_to_world(xt, yt, origin=args.origin), runs=args.runs
+            lambda: twcs.pixel_to_world(xt, yt, origin=args.origin),
+            runs=args.runs,
+            device=device,
         )
         ms_stack = _median_ms(
-            lambda: twcs.pixel_to_world(pixels, origin=args.origin), runs=args.runs
+            lambda: twcs.pixel_to_world(pixels, origin=args.origin),
+            runs=args.runs,
+            device=device,
         )
 
         ms_ast_w2p = _median_ms(
-            lambda: awcs.all_world2pix(ra_ref, dec_ref, args.origin), runs=args.runs
+            lambda: awcs.all_world2pix(ra_ref, dec_ref, args.origin),
+            runs=args.runs,
+            device=cpu,
         )
         ms_w2p_xy = _median_ms(
-            lambda: twcs.world_to_pixel(ra_t, dec_t, origin=args.origin), runs=args.runs
+            lambda: twcs.world_to_pixel(ra_t, dec_t, origin=args.origin),
+            runs=args.runs,
+            device=device,
         )
         ms_w2p_stack = _median_ms(
-            lambda: twcs.world_to_pixel(world, origin=args.origin), runs=args.runs
+            lambda: twcs.world_to_pixel(world, origin=args.origin),
+            runs=args.runs,
+            device=device,
         )
 
-        twcs_c = TorchWCS(dict(header))
+        twcs_c = TorchWCS(dict(header)).to(device)
+        pixels_c = pixels.clone()
+        world_c = world.clone()
         try:
             twcs_c.compile(mode="reduce-overhead")
+            # Inductor can throw on first invoke after compile() returns.
+            twcs_c.pixel_to_world(pixels_c, origin=args.origin)
+            twcs_c.world_to_pixel(world_c, origin=args.origin)
         except Exception as e:  # pragma: no cover - env specific
             ms_stack_c = float("nan")
             ms_w2p_stack_c = float("nan")
             compile_note = f"compile_failed:{type(e).__name__}"
         else:
-            pixels_c = pixels.clone()
-            world_c = world.clone()
             compile_note = "ok"
             ms_stack_c = _median_ms(
                 lambda: twcs_c.pixel_to_world(pixels_c, origin=args.origin),
                 runs=args.runs,
+                device=device,
             )
             ms_w2p_stack_c = _median_ms(
                 lambda: twcs_c.world_to_pixel(world_c, origin=args.origin),
                 runs=args.runs,
+                device=device,
             )
 
         row = {
             "case": key,
             "projection": case.projection,
             "n_points": int(args.n_points),
+            "device": str(device),
             "origin": int(args.origin),
             "median_ms_astropy_all_pix2world": ms_ast,
             "median_ms_torchsky_pixel_to_world_xy": ms_xy,

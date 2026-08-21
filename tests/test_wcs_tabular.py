@@ -972,3 +972,173 @@ def test_get_wcs_auto_loads_alternate_key_tabular_axes(tmp_path) -> None:
         wcs.pixel_to_world(torch.tensor([[1.0], [3.5]], dtype=torch.float64)),
         torch.tensor([[410.0], [465.0]], dtype=torch.float64),
     )
+
+
+def test_wcs_coupled_tabular_2d_roundtrip_vs_lookup() -> None:
+    """2D coupled -TAB WCS roundtrips and matches the underlying lookup."""
+    x = torch.tensor([0.0, 2.0], dtype=torch.float64)
+    y = torch.tensor([0.0, 10.0, 20.0], dtype=torch.float64)
+    xx = x[:, None].expand(2, 3)
+    yy = y[None, :].expand(2, 3)
+    world_grid = torch.stack((xx + 0.1 * yy, 0.2 * xx + yy), dim=-1)
+    lookup = CoupledTabularLookupWCS(
+        (x, y), world_grid, names=("lon", "lat"), units=("deg", "deg")
+    )
+    header = {
+        "NAXIS": 2,
+        "CTYPE1": "RA---TAB",
+        "CTYPE2": "DEC--TAB",
+        "CRPIX1": 1.0,
+        "CRPIX2": 1.0,
+        "CRVAL1": 0.0,
+        "CRVAL2": 0.0,
+        "CDELT1": 1.0,
+        "CDELT2": 1.0,
+    }
+    wcs = WCS(
+        header,
+        coupled_tabular=lookup,
+        coupled_tabular_axes=(1, 2),
+        coupled_tabular_pixel_axes=(1, 2),
+    )
+    pixels = torch.tensor([[1.0, 5.0], [2.0, 15.0]], dtype=torch.float64)
+
+    world = wcs.pixel_to_world(pixels, origin=0)
+    expected = lookup.pixel_to_world(pixels)
+    pixels_back = wcs.world_to_pixel(world, origin=0)
+
+    torch.testing.assert_close(world, expected)
+    torch.testing.assert_close(pixels_back, pixels, atol=1e-8, rtol=1e-8)
+    torch.testing.assert_close(
+        wcs.world_to_pixel_differentiable(world),
+        pixels,
+        atol=1e-8,
+        rtol=1e-8,
+    )
+
+
+def test_wcs_mixed_coupled_tabular_complete_pixel_or_world() -> None:
+    x = torch.tensor([0.0, 2.0], dtype=torch.float64)
+    y = torch.tensor([0.0, 10.0, 20.0], dtype=torch.float64)
+    xx = x[:, None].expand(2, 3)
+    yy = y[None, :].expand(2, 3)
+    world_grid = torch.stack((xx + 0.1 * yy, 0.2 * xx + yy), dim=-1)
+    lookup = CoupledTabularLookupWCS((x, y), world_grid)
+    header = {
+        "NAXIS": 2,
+        "CTYPE1": "RA---TAB",
+        "CTYPE2": "DEC--TAB",
+        "CRPIX1": 1.0,
+        "CRPIX2": 1.0,
+        "CRVAL1": 0.0,
+        "CRVAL2": 0.0,
+        "CDELT1": 1.0,
+        "CDELT2": 1.0,
+    }
+    wcs = WCS(
+        header,
+        coupled_tabular=lookup,
+        coupled_tabular_axes=(1, 2),
+        coupled_tabular_pixel_axes=(1, 2),
+    )
+    pixels_true = torch.tensor([[1.0, 5.0], [2.0, 15.0]], dtype=torch.float64)
+    world_true = wcs.pixel_to_world(pixels_true)
+    nan = float("nan")
+    pix_in = torch.stack(
+        [pixels_true[0], torch.tensor([nan, nan], dtype=torch.float64)]
+    )
+    world_in = torch.stack(
+        [torch.tensor([nan, nan], dtype=torch.float64), world_true[1]]
+    )
+    solved_p, solved_w = wcs.mixed_pixel_world(pixel=pix_in, world=world_in)
+    torch.testing.assert_close(solved_p, pixels_true, atol=1e-8, rtol=1e-8)
+    torch.testing.assert_close(solved_w, world_true, atol=1e-8, rtol=1e-8)
+
+
+def test_wcs_mixed_separable_tabular_fills_per_axis() -> None:
+    header = {
+        "NAXIS": 2,
+        "CTYPE1": "WAVE-TAB",
+        "CTYPE2": "TIME-TAB",
+        "CRPIX1": 1.0,
+        "CRPIX2": 1.0,
+        "CRVAL1": 0.0,
+        "CRVAL2": 0.0,
+        "CDELT1": 1.0,
+        "CDELT2": 1.0,
+    }
+    tabular_axes = {
+        1: TabularAxis([0.0, 1.0, 2.0], [400.0, 420.0, 460.0], name="wave"),
+        2: TabularAxis([0.0, 1.0, 2.0], [10.0, 20.0, 40.0], name="time"),
+    }
+    wcs = WCS(header, tabular_axes=tabular_axes)
+    pixels_true = torch.tensor([[0.5, 1.5], [1.5, 0.5]], dtype=torch.float64)
+    world_true = wcs.pixel_to_world(pixels_true)
+    mixed_pixel = torch.stack(
+        [pixels_true[:, 0], torch.full((2,), float("nan"), dtype=torch.float64)],
+        dim=-1,
+    )
+    mixed_world = torch.stack(
+        [torch.full((2,), float("nan"), dtype=torch.float64), world_true[:, 1]],
+        dim=-1,
+    )
+    solved_pixel, solved_world = wcs.mixed_pixel_world(
+        pixel=mixed_pixel, world=mixed_world
+    )
+    torch.testing.assert_close(solved_pixel, pixels_true, atol=1e-10, rtol=0.0)
+    torch.testing.assert_close(solved_world, world_true, atol=1e-10, rtol=0.0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_tabular_axis_cuda_matches_cpu() -> None:
+    axis = TabularAxis(
+        pixel=torch.tensor([1.0, 2.0, 4.0], dtype=torch.float64),
+        world=torch.tensor([10.0, 20.0, 80.0], dtype=torch.float64),
+        unit="nm",
+    ).to(device="cuda", dtype=torch.float64)
+    pixel = torch.tensor([1.5, 3.0], dtype=torch.float64, device="cuda")
+    world = axis.pixel_to_world(pixel)
+    pixel_back = axis.world_to_pixel(world)
+    assert world.device.type == "cuda"
+    torch.testing.assert_close(
+        world.cpu(), torch.tensor([15.0, 50.0], dtype=torch.float64)
+    )
+    torch.testing.assert_close(pixel_back, pixel)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_coupled_tabular_wcs_cuda_roundtrip() -> None:
+    header = {
+        "NAXIS": 2,
+        "CTYPE1": "WAVE-TAB",
+        "CTYPE2": "TIME-TAB",
+        "CUNIT1": "nm",
+        "CUNIT2": "d",
+        "CRPIX1": 1.0,
+        "CRPIX2": 1.0,
+        "CRVAL1": 0.0,
+        "CRVAL2": 0.0,
+        "CDELT1": 1.0,
+        "CDELT2": 1.0,
+        "PS1_1": "WAVE",
+        "PV1_3": 1,
+        "PS2_1": "TIME",
+        "PV2_3": 2,
+    }
+    axis = torch.linspace(0.0, 3.0, 4, dtype=torch.float64)
+    x = axis[:, None].expand(4, 4)
+    y = axis[None, :].expand(4, 4)
+    tables = {
+        "WAVE": 400.0 + 2.0 * x + 0.125 * y,
+        "TIME": 59000.0 + 0.03 * x + 0.5 * y,
+    }
+    cpu = WCS(header, tables=tables)
+    gpu = WCS(header, tables=tables).to("cuda")
+    pixels = torch.tensor([[0.5, 1.5], [2.0, 2.5]], dtype=torch.float64)
+    world_c = cpu.pixel_to_world(pixels)
+    world_g = gpu.pixel_to_world(pixels.cuda())
+    assert world_g.device.type == "cuda"
+    torch.testing.assert_close(world_g.cpu(), world_c, atol=1e-10, rtol=0.0)
+    pix_g = gpu.world_to_pixel(world_g)
+    torch.testing.assert_close(pix_g.cpu(), pixels, atol=1e-8, rtol=0.0)
+

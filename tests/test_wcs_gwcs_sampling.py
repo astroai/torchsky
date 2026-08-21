@@ -80,6 +80,48 @@ def test_gwcs_frozen_epochs_pick_nearest_table() -> None:
     torch.testing.assert_close(recovered, pts, atol=1e-7, rtol=0.0)
 
 
+def test_gwcs_frozen_evaluate_and_inverse_on_device() -> None:
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        pytest.skip("no CUDA/MPS device")
+
+    def epoch0(x, y):
+        return x, y
+
+    tables = sample_gwcs_detector_epochs(
+        {0.0: epoch0},
+        detector_bounds=((0.0, 8.0), (0.0, 8.0)),
+        initial_grid_shape=(5, 5),
+        maximum_grid_shape=(9, 9),
+        interpolation="bilinear",
+        random_validation_points=16,
+        p99_limit_mas=1.0,
+        max_limit_mas=2.0,
+    ).to(device)
+    pts = torch.tensor(
+        [[1.0, 2.0], [3.5, 4.25]],
+        device=device,
+        dtype=torch.float32 if device.type == "mps" else torch.float64,
+    )
+    out = tables.evaluate(pts, 0.0)
+    assert out.device.type == device.type
+    recovered = tables.inverse(out, 0.0, tol=1e-5)
+    torch.testing.assert_close(recovered.cpu().double(), pts.cpu().double(), atol=1e-5, rtol=0.0)
+
+
+def test_gwcs_sampling_module_does_not_import_gwcs() -> None:
+    import re
+    from pathlib import Path
+
+    import torchsky.wcs.gwcs_sampling as gwcs_sampling
+
+    text = Path(gwcs_sampling.__file__).read_text(encoding="utf-8")
+    assert re.search(r"^(import gwcs|from gwcs)\b", text, flags=re.M) is None
+
+
 def test_gwcs_sampling_fails_closed_when_maximum_grid_cannot_meet_gate() -> None:
     def oscillatory(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         return x + 0.01 * np.sin(x), y + 0.01 * np.sin(y)

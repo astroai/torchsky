@@ -39,9 +39,10 @@ within the radius. Pair rows are deterministically ordered by left index,
 separation, then right index. The default `find="best"` returns only the
 nearest candidate per left row.
 
-`radius_arcsec` may be a positive scalar or a per-left-row tensor. Coarse
-declination windows use each row's own radius; the global prune uses the
-maximum. Streamed and Arrow helpers (`crossmatch_sky_streamed`,
+`radius_arcsec` may be a positive scalar or a per-left-row tensor. A scalar
+(or all-equal) radius uses an in-memory HEALPix coarse index on the right
+catalog. Per-row radii keep declination-window pruning; the global prune uses
+the maximum. Streamed and Arrow helpers (`crossmatch_sky_streamed`,
 `crossmatch_sky_from_arrow`) still take a scalar radius.
 
 ### Stream Catalog Partitions

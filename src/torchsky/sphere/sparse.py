@@ -1192,9 +1192,10 @@ class SparseHealpixMap:
     def write_fits(self, filename: str, overwrite: bool = False) -> None:
         """Write a HealSparse FITS file via torchfits (COV + SPARSE images).
 
-        Maps with ``nside_coverage`` and a 1-D value vector use the upstream
-        ``PIXTYPE=HEALSPARSE`` layout. Pixel-list maps without coverage, or
-        extra value dimensions, keep the PIXEL/VALUE binary table.
+        Maps with a 1-D value vector write ``PIXTYPE=HEALSPARSE`` COV+SPARSE
+        images. Coverage nside is taken from ``nside_coverage`` when set,
+        otherwise ``max(1, nside // 16)`` (pixel-list maps). Extra value
+        dimensions keep the PIXEL/VALUE binary table.
         """
         from ..io import write
 
@@ -1203,6 +1204,15 @@ class SparseHealpixMap:
             and self.values.ndim == 1
         ):
             self._write_healsparse_fits(filename, overwrite=overwrite)
+            return
+        if self.values.ndim == 1:
+            nside_cov = max(1, int(self.nside) // 16)
+            while nside_cov > 1 and (int(self.nside) % nside_cov) != 0:
+                nside_cov //= 2
+            _validate_nside_coverage(int(self.nside), nside_cov)
+            self._write_healsparse_fits(
+                filename, overwrite=overwrite, nside_coverage=nside_cov
+            )
             return
 
         header = {
@@ -1254,10 +1264,17 @@ class SparseHealpixMap:
             overwrite=overwrite,
         )
 
-    def _write_healsparse_fits(self, filename: str, overwrite: bool = False) -> None:
+    def _write_healsparse_fits(
+        self,
+        filename: str,
+        overwrite: bool = False,
+        nside_coverage: int | None = None,
+    ) -> None:
         from ..io import insert_hdu, write
 
-        nside_cov = int(self.nside_coverage)  # type: ignore[arg-type]
+        nside_cov = int(
+            self.nside_coverage if nside_coverage is None else nside_coverage
+        )
         cov_map, sparse = _encode_healsparse_images(
             self.pixels,
             self.values,

@@ -1749,6 +1749,112 @@ void wcs_pixel_to_world_fused_cpu(
             double t_val = (2.0 * gamma + std::sin(2.0 * gamma)) / WCS_PI;
             theta = std::asin(std::max(-1.0, std::min(1.0, t_val))) * R2D;
             phi = (std::abs(cos_gamma) > 1e-12) ? (xi_deg * WCS_PI / (2.0 * sqrt2 * cos_gamma)) : 0.0;
+        } else if (proj_code == "PCO") {
+            // Inverse PCO: Newton on G(theta) in radians.
+            double big_x = xi_deg * D2R;
+            double big_y = eta_deg * D2R;
+            if (std::abs(big_x) < 1e-15 && std::abs(big_y) < 1e-15) {
+                phi = 0.0;
+                theta = 0.0;
+            } else {
+                const double half_pi = 0.5 * WCS_PI;
+                double th = std::max(-half_pi + 1e-3, std::min(half_pi - 1e-3, big_y));
+                for (int j = 0; j < 64; ++j) {
+                    double dy = big_y - th;
+                    double r2 = big_x * big_x + dy * dy;
+                    double cos_t = std::cos(th);
+                    if (std::abs(cos_t) < 1e-15) break;
+                    double tan_t = std::sin(th) / cos_t;
+                    double g = tan_t * r2 - 2.0 * dy;
+                    double gp = r2 / (cos_t * cos_t) - 2.0 * tan_t * dy + 2.0;
+                    if (std::abs(gp) < 1e-15) break;
+                    double dt = g / gp;
+                    th -= dt;
+                    th = std::max(-half_pi + 1e-9, std::min(half_pi - 1e-9, th));
+                    if (std::abs(dt) < 1e-13) break;
+                }
+                theta = th * R2D;
+                if (std::abs(th) < 1e-12) {
+                    phi = xi_deg;
+                } else {
+                    double tan_t = std::tan(th);
+                    double sin_e = big_x * tan_t;
+                    double cos_e = 1.0 - (big_y - th) * tan_t;
+                    double e = std::atan2(sin_e, cos_e);
+                    phi = (e / std::sin(th)) * R2D;
+                }
+            }
+        } else if (proj_code == "XPH") {
+            const double s = 0.7071067811865476;
+            double xr = xi_deg / s;
+            double yr = eta_deg / s;
+            double xi1, eta1, phi0;
+            if (xr <= 0.0 && yr > 0.0) {
+                xi1 = (-xr - yr) * 0.5; eta1 = (xr - yr) * 0.5; phi0 = -180.0;
+            } else if (xr < 0.0 && yr <= 0.0) {
+                xi1 = (xr - yr) * 0.5; eta1 = (xr + yr) * 0.5; phi0 = -90.0;
+            } else if (xr >= 0.0 && yr < 0.0) {
+                xi1 = (xr + yr) * 0.5; eta1 = (-xr + yr) * 0.5; phi0 = 0.0;
+            } else {
+                xi1 = (-xr + yr) * 0.5; eta1 = (-xr - yr) * 0.5; phi0 = 90.0;
+            }
+            double xi_f = xi1 + 45.0;
+            double eta_f = eta1 + 90.0;
+            double abseta = std::abs(eta_f);
+            if (abseta > 90.0) {
+                phi = std::nan("");
+                theta = std::nan("");
+            } else if (abseta <= 45.0) {
+                phi = -(phi0 + xi_f);  // torchsky pole-phi convention
+                theta = std::asin(std::max(-1.0, std::min(1.0, eta_f / 67.5))) * R2D;
+            } else {
+                double sigma = (90.0 - abseta) / 45.0;
+                double ph;
+                if (xr == 0.0) ph = (yr <= 0.0) ? 0.0 : 180.0;
+                else if (yr == 0.0) ph = (xr < 0.0) ? -90.0 : 90.0;
+                else ph = phi0 + 45.0 + xi1 / std::max(sigma, 1e-12);
+                phi = -ph;
+                double th = (sigma < 1e-4)
+                    ? (90.0 - sigma * (std::sqrt(2.0 / 3.0) * R2D))
+                    : (std::asin(std::max(-1.0, std::min(1.0, 1.0 - sigma * sigma / 3.0))) * R2D);
+                if (eta_f < 0.0) th = -th;
+                theta = th;
+            }
+            // wrap phi to [-180,180)
+            phi = std::fmod(phi + 180.0, 360.0);
+            if (phi < 0) phi += 360.0;
+            phi -= 180.0;
+        } else if (proj_code == "TSC") {
+            // Inverse TSC: locate face then recover (l,m,n).
+            static const double cx[6] = {0.0, 0.0, 90.0, 180.0, 270.0, 0.0};
+            static const double cy[6] = {90.0, 0.0, 0.0, 0.0, 0.0, -90.0};
+            int face = -1;
+            double xf = 0.0, yf = 0.0;
+            for (int f = 0; f < 6; ++f) {
+                double fx = (xi_deg - cx[f]) / 45.0;
+                double fy = (eta_deg - cy[f]) / 45.0;
+                if (std::abs(fx) <= 1.0 + 1e-9 && std::abs(fy) <= 1.0 + 1e-9) {
+                    face = f;
+                    xf = std::max(-1.0, std::min(1.0, fx));
+                    yf = std::max(-1.0, std::min(1.0, fy));
+                    break;
+                }
+            }
+            if (face < 0) {
+                phi = std::nan("");
+                theta = std::nan("");
+            } else {
+                double norm = std::sqrt(1.0 + xf * xf + yf * yf);
+                double l, m, ncomp;
+                if (face == 0) { l = -yf / norm; m = xf / norm; ncomp = 1.0 / norm; }
+                else if (face == 1) { l = 1.0 / norm; m = xf / norm; ncomp = yf / norm; }
+                else if (face == 2) { l = -xf / norm; m = 1.0 / norm; ncomp = yf / norm; }
+                else if (face == 3) { l = -1.0 / norm; m = -xf / norm; ncomp = yf / norm; }
+                else if (face == 4) { l = xf / norm; m = -1.0 / norm; ncomp = yf / norm; }
+                else { l = yf / norm; m = xf / norm; ncomp = -1.0 / norm; }
+                theta = std::asin(std::max(-1.0, std::min(1.0, ncomp))) * R2D;
+                phi = (l == 0.0 && m == 0.0) ? 0.0 : (std::atan2(m, l) * R2D);
+            }
         } else {
             phi = std::nan("");
             theta = std::nan("");
@@ -1832,6 +1938,9 @@ void wcs_world_to_pixel_fused_cpu(
         CAR,
         SFL,
         MOL,
+        PCO,
+        XPH,
+        TSC,
         OTHER,
     };
 
@@ -1851,6 +1960,9 @@ void wcs_world_to_pixel_fused_cpu(
     else if (proj_code == "CAR") proj_kind = FusedProjKind::CAR;
     else if (proj_code == "SFL") proj_kind = FusedProjKind::SFL;
     else if (proj_code == "MOL") proj_kind = FusedProjKind::MOL;
+    else if (proj_code == "PCO") proj_kind = FusedProjKind::PCO;
+    else if (proj_code == "XPH") proj_kind = FusedProjKind::XPH;
+    else if (proj_code == "TSC") proj_kind = FusedProjKind::TSC;
 
     const bool native_is_pole = (native_type == "pole");
     bool use_center_equator_fast = (native_type == "center" && std::abs(delta0) < 1e-12 && std::abs(std::fmod(phi_p_rad * R2D, 360.0)) < 1e-12);
@@ -1995,6 +2107,89 @@ void wcs_world_to_pixel_fused_cpu(
             double sqrt2 = std::sqrt(2.0);
             xi = 2.0 * sqrt2 * phi_rad * cos_gamma / WCS_PI * R2D;
             eta = sqrt2 * std::sin(gamma) * R2D;
+            break;
+        }
+        case FusedProjKind::PCO: {
+            // Paper II PCO forward; phi_w in degrees.
+            double t = theta * D2R;
+            if (std::abs(t) < 1e-12) {
+                xi = phi_w;
+                eta = 0.0;
+            } else {
+                double w = std::sin(t);
+                double e = phi_w * D2R * w;
+                double tan_t = std::tan(t);
+                xi = R2D * std::sin(e) / tan_t;
+                eta = theta + R2D * (1.0 - std::cos(e)) / tan_t;
+            }
+            break;
+        }
+        case FusedProjKind::XPH: {
+            // Match Python: negate torchsky pole-phi into WCSLIB convention.
+            double phi_n = -phi_w;
+            while (phi_n < -180.0) phi_n += 360.0;
+            while (phi_n >= 180.0) phi_n -= 360.0;
+            double chi = phi_n + 180.0;
+            double psi = std::fmod(chi, 90.0);
+            if (psi < 0) psi += 90.0;
+            double sinthe = std::sin(theta * D2R);
+            double abssin = std::abs(sinthe);
+            double xi0, eta0;
+            if (abssin <= (2.0 / 3.0)) {
+                xi0 = psi;
+                eta0 = 67.5 * sinthe;
+            } else {
+                double sigma = std::sqrt(std::max(0.0, 3.0 * (1.0 - abssin)));
+                xi0 = 45.0 + (psi - 45.0) * sigma;
+                eta0 = 45.0 * (2.0 - sigma);
+                if (theta < 0.0) eta0 = -eta0;
+            }
+            xi0 -= 45.0;
+            eta0 -= 90.0;
+            const double s = 0.7071067811865476;
+            if (phi_n < -90.0) {
+                xi = s * (-xi0 + eta0);
+                eta = s * (-xi0 - eta0);
+            } else if (phi_n < 0.0) {
+                xi = s * (xi0 + eta0);
+                eta = s * (-xi0 + eta0);
+            } else if (phi_n < 90.0) {
+                xi = s * (xi0 - eta0);
+                eta = s * (xi0 + eta0);
+            } else {
+                xi = s * (-xi0 - eta0);
+                eta = s * (xi0 - eta0);
+            }
+            break;
+        }
+        case FusedProjKind::TSC: {
+            // Tangential spherical cube forward (face layout Paper II).
+            double p = phi_w * D2R;
+            double t = theta * D2R;
+            double ct = std::cos(t);
+            double l = ct * std::cos(p);
+            double m = ct * std::sin(p);
+            double nn = std::sin(t);
+            double abs_l = std::abs(l), abs_m = std::abs(m), abs_n = std::abs(nn);
+            int face = 0;
+            double xf, yf;
+            if (nn >= abs_l && nn >= abs_m) {
+                face = 0; xf = m / nn; yf = -l / nn;
+            } else if (-nn >= abs_l && -nn >= abs_m) {
+                face = 5; xf = m / (-nn); yf = l / (-nn);
+            } else if (l >= abs_m && l >= abs_n) {
+                face = 1; xf = m / l; yf = nn / l;
+            } else if (m >= abs_l && m >= abs_n) {
+                face = 2; xf = -l / m; yf = nn / m;
+            } else if (-l >= abs_m && -l >= abs_n) {
+                face = 3; xf = -m / (-l); yf = nn / (-l);
+            } else {
+                face = 4; xf = l / (-m); yf = nn / (-m);
+            }
+            static const double cx[6] = {0.0, 0.0, 90.0, 180.0, 270.0, 0.0};
+            static const double cy[6] = {90.0, 0.0, 0.0, 0.0, 0.0, -90.0};
+            xi = cx[face] + 45.0 * xf;
+            eta = cy[face] + 45.0 * yf;
             break;
         }
         case FusedProjKind::OTHER:

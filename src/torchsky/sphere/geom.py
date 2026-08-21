@@ -79,12 +79,23 @@ class UnitVector3d:
         return LonLat(float(lon), float(lat))
 
 
+def _as_geom_tensor(
+    value: Tensor | float | list[float], *, like: Tensor | None = None
+) -> Tensor:
+    tensor = torch.as_tensor(value)
+    if like is not None:
+        return tensor.to(device=like.device, dtype=like.dtype)
+    if tensor.device.type == "mps":
+        return tensor.to(dtype=torch.float32)
+    return tensor.to(dtype=torch.float64)
+
+
 def _normalize_polygon_vertices(
     lon_deg: Tensor | list[float],
     lat_deg: Tensor | list[float],
 ) -> tuple[Tensor, Tensor]:
-    lon_t = torch.as_tensor(lon_deg, dtype=torch.float64)
-    lat_t = torch.as_tensor(lat_deg, dtype=torch.float64)
+    lon_t = _as_geom_tensor(lon_deg)
+    lat_t = _as_geom_tensor(lat_deg, like=lon_t)
     if lon_t.ndim != 1 or lat_t.ndim != 1:
         raise ValueError("polygon vertices must be 1D sequences")
     if lon_t.shape[0] != lat_t.shape[0]:
@@ -555,7 +566,7 @@ def spherical_polygon_signed_area(
     - sign follows vertex winding orientation
     """
     lon_t, lat_t = _normalize_polygon_vertices(lon_deg, lat_deg)
-    v = lonlat_to_unit_xyz(lon_t, lat_t).to(dtype=torch.float64)
+    v = lonlat_to_unit_xyz(lon_t, lat_t)
 
     a = v[0].expand(v.shape[0] - 2, 3)
     b = v[1:-1]
@@ -608,14 +619,15 @@ def spherical_polygon_contains(
 
     Uses tangent-plane winding number around each query point.
     """
-    lon_poly, lat_poly = _normalize_polygon_vertices(poly_lon_deg, poly_lat_deg)
-    vertices = lonlat_to_unit_xyz(lon_poly, lat_poly).to(dtype=torch.float64)
-
-    lon_t = torch.as_tensor(lon_deg, dtype=torch.float64)
-    lat_t = torch.as_tensor(lat_deg, dtype=torch.float64)
+    lon_t = _as_geom_tensor(lon_deg)
+    lat_t = _as_geom_tensor(lat_deg, like=lon_t)
     lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
     shape = lon_t.shape
-    points = lonlat_to_unit_xyz(lon_t, lat_t).reshape(-1, 3).to(dtype=torch.float64)
+    lon_poly, lat_poly = _normalize_polygon_vertices(poly_lon_deg, poly_lat_deg)
+    lon_poly = lon_poly.to(device=lon_t.device, dtype=lon_t.dtype)
+    lat_poly = lat_poly.to(device=lon_t.device, dtype=lon_t.dtype)
+    vertices = lonlat_to_unit_xyz(lon_poly, lat_poly).to(dtype=lon_t.dtype)
+    points = lonlat_to_unit_xyz(lon_t, lat_t).reshape(-1, 3).to(dtype=lon_t.dtype)
 
     # Fast/stable path: if polygon is in one hemisphere, gnomonic projection maps
     # great-circle edges to straight segments exactly.
@@ -654,8 +666,8 @@ def spherical_polygon_contains(
 
     if inside_lon_deg is not None and inside_lat_deg is not None:
         ref = spherical_polygon_contains(
-            torch.as_tensor(inside_lon_deg, dtype=torch.float64),
-            torch.as_tensor(inside_lat_deg, dtype=torch.float64),
+            _as_geom_tensor(inside_lon_deg, like=lon_poly),
+            _as_geom_tensor(inside_lat_deg, like=lon_poly),
             lon_poly,
             lat_poly,
             inclusive=True,
@@ -716,22 +728,23 @@ def query_polygon_general(
     Non-convex polygons are triangulated via gnomonic-plane ear clipping.
     """
     lon_t, lat_t = _normalize_polygon_vertices(lon_deg, lat_deg)
-    vertices_xyz = lonlat_to_unit_xyz(lon_t, lat_t).to(dtype=torch.float64)
+    query_device = lon_t.device
+    vertices_xyz = lonlat_to_unit_xyz(lon_t, lat_t).to(dtype=lon_t.dtype)
 
     if vertices_xyz.shape[0] == 3:
         return _healpix.query_polygon(nside, vertices_xyz, nest=nest)
 
     center = vertices_xyz.mean(dim=0)
     center = center / torch.linalg.norm(center).clamp_min(1e-15)
-    xy = _gnomonic_project(vertices_xyz, center)
+    xy = _gnomonic_project(vertices_xyz.detach().cpu(), center.detach().cpu())
     triangles = _triangulate_simple_polygon_2d(xy)
 
     chunks: list[Tensor] = []
     for i, j, k in triangles:
-        verts = vertices_xyz[[i, j, k]]
+        verts = vertices_xyz[[i, j, k]].to(device=query_device)
         chunks.append(_healpix.query_polygon(nside, verts, nest=nest))
     if not chunks:
-        return torch.empty(0, dtype=torch.int64)
+        return torch.empty(0, dtype=torch.int64, device=query_device)
     return torch.unique(torch.cat(chunks)).to(torch.int64)
 
 
@@ -754,8 +767,8 @@ def spherical_polygons_intersect(
     """
     lon1, lat1 = _normalize_polygon_vertices(lon1_deg, lat1_deg)
     lon2, lat2 = _normalize_polygon_vertices(lon2_deg, lat2_deg)
-    v1 = lonlat_to_unit_xyz(lon1, lat1).to(dtype=torch.float64)
-    v2 = lonlat_to_unit_xyz(lon2, lat2).to(dtype=torch.float64)
+    v1 = lonlat_to_unit_xyz(lon1, lat1)
+    v2 = lonlat_to_unit_xyz(lon2, lat2).to(device=v1.device, dtype=v1.dtype)
     tol_rad = math.radians(atol_deg)
 
     v1_next = torch.roll(v1, shifts=-1, dims=0)

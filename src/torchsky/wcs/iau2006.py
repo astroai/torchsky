@@ -1,10 +1,9 @@
-"""IAU 2006 precession-bias, truncated nutation, aberration, refraction.
+"""IAU 2006 precession-bias, IAU 2000A nutation, aberration, refraction.
 
-This is a documented CIRS subset: Fukushima-Williams IAU 2006 precession-bias
-plus the largest IAU 2000B lunisolar nutation terms (not the full 77-term
-series). Stellar aberration uses a Keplerian Earth barycentric velocity.
-Refraction is Saemundsson/Meeus and is never applied unless pressure and
-temperature are supplied.
+Fukushima-Williams IAU 2006 precession-bias plus full IAU 2000A nutation
+(with IAU 2006/P03 adjustments, SOFA nut06a). Stellar aberration uses a
+Keplerian Earth barycentric velocity. Refraction is Saemundsson/Meeus and
+is never applied unless pressure and temperature are supplied.
 """
 
 from __future__ import annotations
@@ -15,6 +14,18 @@ import torch
 from torch import Tensor
 
 from .frames import ARCSEC_TO_RAD, D2R
+from .iau2000a import (
+    fae03,
+    faf03,
+    fal03,
+    falp03,
+    faom03,
+    fapa03,
+    fave03,
+    fad03,
+    iau2006_nutation,
+    julian_centuries_tt,
+)
 
 MJD_J2000 = 51544.5
 AU_M = 1.495978707e11
@@ -22,27 +33,13 @@ C_M_S = 299792458.0
 _EARTH_ECC = 0.01671
 _SECONDS_PER_DAY = 86400.0
 
-# Largest IAU 2000B lunisolar terms: (L, Lp, F, D, Omega, dpsi_sin_as, deps_cos_as)
-_NUTATION_TERMS: tuple[tuple[int, int, int, int, int, float, float], ...] = (
-    (0, 0, 0, 0, 1, -17.2064161, 9.2052331),
-    (0, 0, 2, -2, 2, -1.3170905, 0.5730336),
-    (0, 0, 2, 0, 2, -0.2276413, 0.0978459),
-    (0, 0, 0, 0, 2, 0.2074554, -0.0897492),
-    (0, 1, 0, 0, 0, 0.1475877, -0.0010690),
-    (0, 1, 2, -2, 2, -0.0516821, 0.0224386),
-    (1, 0, 0, 0, 0, 0.0711159, -0.0006750),
-    (0, 0, 2, 0, 1, -0.0387300, 0.0200724),
-    (1, 0, 2, 0, 2, -0.0301461, 0.0129026),
-    (0, 1, -2, 2, -2, 0.0215811, -0.0095929),
-)
-
 
 def tt_mjd_from_utc(utc_mjd: Tensor, tt_minus_utc_s: Tensor) -> Tensor:
     return utc_mjd + tt_minus_utc_s / _SECONDS_PER_DAY
 
 
 def _julian_centuries_tt(tt_mjd: Tensor) -> Tensor:
-    return (tt_mjd - MJD_J2000) / 36525.0
+    return julian_centuries_tt(tt_mjd)
 
 
 def iau2006_fw_angles(tt_mjd: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
@@ -62,31 +59,6 @@ def iau2006_fw_angles(tt_mjd: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     return gamb, phib, psib, epsa
 
 
-def _fundamental_args_rad(
-    tt_mjd: Tensor,
-) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-    t = _julian_centuries_tt(tt_mjd)
-    # IAU 2000 mean arguments, degrees, then to rad (truncated polynomials).
-    arg_l = (134.96340251 + (1717915923.2178 / 3600.0) * t) * D2R
-    arg_lp = (357.52910918 + (129596581.0481 / 3600.0) * t) * D2R
-    arg_f = (93.27209062 + (1739527262.8478 / 3600.0) * t) * D2R
-    arg_d = (297.85019547 + (1602961601.2090 / 3600.0) * t) * D2R
-    arg_om = (125.04455501 + (-6962890.5431 / 3600.0) * t) * D2R
-    return arg_l, arg_lp, arg_f, arg_d, arg_om
-
-
-def iau2000b_nutation_truncated(tt_mjd: Tensor) -> tuple[Tensor, Tensor]:
-    """Largest IAU 2000B lunisolar terms; not the full 77-term series."""
-    arg_l, arg_lp, arg_f, arg_d, arg_om = _fundamental_args_rad(tt_mjd)
-    dpsi = torch.zeros_like(tt_mjd)
-    deps = torch.zeros_like(tt_mjd)
-    for nl, nlp, nf, nd, nom, s_as, c_as in _NUTATION_TERMS:
-        arg = nl * arg_l + nlp * arg_lp + nf * arg_f + nd * arg_d + nom * arg_om
-        dpsi = dpsi + (s_as * ARCSEC_TO_RAD) * torch.sin(arg)
-        deps = deps + (c_as * ARCSEC_TO_RAD) * torch.cos(arg)
-    return dpsi, deps
-
-
 def _rx(angle: Tensor) -> Tensor:
     c = torch.cos(angle)
     s = torch.sin(angle)
@@ -97,6 +69,20 @@ def _rx(angle: Tensor) -> Tensor:
             torch.stack((o, z, z)),
             torch.stack((z, c, s)),
             torch.stack((z, -s, c)),
+        )
+    )
+
+
+def _ry(angle: Tensor) -> Tensor:
+    c = torch.cos(angle)
+    s = torch.sin(angle)
+    z = torch.zeros((), dtype=angle.dtype, device=angle.device)
+    o = torch.ones((), dtype=angle.dtype, device=angle.device)
+    return torch.stack(
+        (
+            torch.stack((c, z, -s)),
+            torch.stack((z, o, z)),
+            torch.stack((s, z, c)),
         )
     )
 
@@ -115,14 +101,229 @@ def _rz(angle: Tensor) -> Tensor:
     )
 
 
+# SOFA s06 series for s+XY/2, coefficients in arcseconds (IERS 2003 / IAU 2006).
+_S06_SP = (94.00e-6, 3808.65e-6, -122.68e-6, -72574.11e-6, 27.98e-6, 15.62e-6)
+_S06_NFA = (
+    torch.tensor(
+        [
+            [0, 0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 0, 2, 0, 0, 0],
+            [0, 0, 2, -2, 3, 0, 0, 0],
+            [0, 0, 2, -2, 1, 0, 0, 0],
+            [0, 0, 2, -2, 2, 0, 0, 0],
+            [0, 0, 2, 0, 3, 0, 0, 0],
+            [0, 0, 2, 0, 1, 0, 0, 0],
+            [0, 0, 0, 0, 3, 0, 0, 0],
+            [0, 1, 0, 0, 1, 0, 0, 0],
+            [0, 1, 0, 0, -1, 0, 0, 0],
+            [1, 0, 0, 0, -1, 0, 0, 0],
+            [1, 0, 0, 0, 1, 0, 0, 0],
+            [0, 1, 2, -2, 3, 0, 0, 0],
+            [0, 1, 2, -2, 1, 0, 0, 0],
+            [0, 0, 4, -4, 4, 0, 0, 0],
+            [0, 0, 1, -1, 1, -8, 12, 0],
+            [0, 0, 2, 0, 0, 0, 0, 0],
+            [0, 0, 2, 0, 2, 0, 0, 0],
+            [1, 0, 2, 0, 3, 0, 0, 0],
+            [1, 0, 2, 0, 1, 0, 0, 0],
+            [0, 0, 2, -2, 0, 0, 0, 0],
+            [0, 1, -2, 2, -3, 0, 0, 0],
+            [0, 1, -2, 2, -1, 0, 0, 0],
+            [0, 0, 0, 0, 0, 8, -13, -1],
+            [0, 0, 0, 2, 0, 0, 0, 0],
+            [2, 0, -2, 0, -1, 0, 0, 0],
+            [0, 1, 2, -2, 2, 0, 0, 0],
+            [1, 0, 0, -2, 1, 0, 0, 0],
+            [1, 0, 0, -2, -1, 0, 0, 0],
+            [0, 0, 4, -2, 4, 0, 0, 0],
+            [0, 0, 2, -2, 4, 0, 0, 0],
+            [1, 0, -2, 0, -3, 0, 0, 0],
+            [1, 0, -2, 0, -1, 0, 0, 0],
+        ],
+        dtype=torch.float64,
+    ),
+    torch.tensor(
+        [[0, 0, 0, 0, 2, 0, 0, 0], [0, 0, 0, 0, 1, 0, 0, 0], [0, 0, 2, -2, 3, 0, 0, 0]],
+        dtype=torch.float64,
+    ),
+    torch.tensor(
+        [
+            [0, 0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 2, -2, 2, 0, 0, 0],
+            [0, 0, 2, 0, 2, 0, 0, 0],
+            [0, 0, 0, 0, 2, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0, 0, 0],
+            [1, 0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 2, -2, 2, 0, 0, 0],
+            [0, 0, 2, 0, 1, 0, 0, 0],
+            [1, 0, 2, 0, 2, 0, 0, 0],
+            [0, 1, -2, 2, -2, 0, 0, 0],
+            [1, 0, 0, -2, 0, 0, 0, 0],
+            [0, 0, 2, -2, 1, 0, 0, 0],
+            [1, 0, -2, 0, -2, 0, 0, 0],
+            [0, 0, 0, 2, 0, 0, 0, 0],
+            [1, 0, 0, 0, 1, 0, 0, 0],
+            [1, 0, -2, -2, -2, 0, 0, 0],
+            [1, 0, 0, 0, -1, 0, 0, 0],
+            [1, 0, 2, 0, 1, 0, 0, 0],
+            [2, 0, 0, -2, 0, 0, 0, 0],
+            [2, 0, -2, 0, -1, 0, 0, 0],
+            [0, 0, 2, 2, 2, 0, 0, 0],
+            [2, 0, 2, 0, 2, 0, 0, 0],
+            [2, 0, 0, 0, 0, 0, 0, 0],
+            [1, 0, 2, -2, 2, 0, 0, 0],
+            [0, 0, 2, 0, 0, 0, 0, 0],
+        ],
+        dtype=torch.float64,
+    ),
+    torch.tensor(
+        [
+            [0, 0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 2, -2, 2, 0, 0, 0],
+            [0, 0, 2, 0, 2, 0, 0, 0],
+            [0, 0, 0, 0, 2, 0, 0, 0],
+        ],
+        dtype=torch.float64,
+    ),
+    torch.tensor([[0, 0, 0, 0, 1, 0, 0, 0]], dtype=torch.float64),
+)
+_S06_SC = (
+    torch.tensor(
+        [
+            [-2640.73e-6, 0.39e-6],
+            [-63.53e-6, 0.02e-6],
+            [-11.75e-6, -0.01e-6],
+            [-11.21e-6, -0.01e-6],
+            [4.57e-6, 0.00e-6],
+            [-2.02e-6, 0.00e-6],
+            [-1.98e-6, 0.00e-6],
+            [1.72e-6, 0.00e-6],
+            [1.41e-6, 0.01e-6],
+            [1.26e-6, 0.01e-6],
+            [0.63e-6, 0.00e-6],
+            [0.63e-6, 0.00e-6],
+            [-0.46e-6, 0.00e-6],
+            [-0.45e-6, 0.00e-6],
+            [-0.36e-6, 0.00e-6],
+            [0.24e-6, 0.12e-6],
+            [-0.32e-6, 0.00e-6],
+            [-0.28e-6, 0.00e-6],
+            [-0.27e-6, 0.00e-6],
+            [-0.26e-6, 0.00e-6],
+            [0.21e-6, 0.00e-6],
+            [-0.19e-6, 0.00e-6],
+            [-0.18e-6, 0.00e-6],
+            [0.10e-6, -0.05e-6],
+            [-0.15e-6, 0.00e-6],
+            [0.14e-6, 0.00e-6],
+            [0.14e-6, 0.00e-6],
+            [-0.14e-6, 0.00e-6],
+            [-0.14e-6, 0.00e-6],
+            [-0.13e-6, 0.00e-6],
+            [0.11e-6, 0.00e-6],
+            [-0.11e-6, 0.00e-6],
+            [-0.11e-6, 0.00e-6],
+        ],
+        dtype=torch.float64,
+    ),
+    torch.tensor(
+        [[-0.07e-6, 3.57e-6], [1.73e-6, -0.03e-6], [0.00e-6, 0.48e-6]],
+        dtype=torch.float64,
+    ),
+    torch.tensor(
+        [
+            [743.52e-6, -0.17e-6],
+            [56.91e-6, 0.06e-6],
+            [9.84e-6, -0.01e-6],
+            [-8.85e-6, 0.01e-6],
+            [-6.38e-6, -0.05e-6],
+            [-3.07e-6, 0.00e-6],
+            [2.23e-6, 0.00e-6],
+            [1.67e-6, 0.00e-6],
+            [1.30e-6, 0.00e-6],
+            [0.93e-6, 0.00e-6],
+            [0.68e-6, 0.00e-6],
+            [-0.55e-6, 0.00e-6],
+            [0.53e-6, 0.00e-6],
+            [-0.27e-6, 0.00e-6],
+            [-0.27e-6, 0.00e-6],
+            [-0.26e-6, 0.00e-6],
+            [-0.25e-6, 0.00e-6],
+            [0.22e-6, 0.00e-6],
+            [-0.21e-6, 0.00e-6],
+            [0.20e-6, 0.00e-6],
+            [0.17e-6, 0.00e-6],
+            [0.13e-6, 0.00e-6],
+            [-0.13e-6, 0.00e-6],
+            [-0.12e-6, 0.00e-6],
+            [-0.11e-6, 0.00e-6],
+        ],
+        dtype=torch.float64,
+    ),
+    torch.tensor(
+        [
+            [0.30e-6, -23.42e-6],
+            [-0.03e-6, -1.46e-6],
+            [-0.01e-6, -0.25e-6],
+            [0.00e-6, 0.23e-6],
+        ],
+        dtype=torch.float64,
+    ),
+    torch.tensor([[-0.26e-6, -0.01e-6]], dtype=torch.float64),
+)
+
+
+def cio_locator_s06(tt_mjd: Tensor, cip_x: Tensor, cip_y: Tensor) -> Tensor:
+    """CIO locator s (SOFA s06), radians."""
+    t = _julian_centuries_tt(tt_mjd)
+    fa = torch.stack(
+        (
+            fal03(t),
+            falp03(t),
+            faf03(t),
+            fad03(t),
+            faom03(t),
+            fave03(t),
+            fae03(t),
+            fapa03(t),
+        ),
+        dim=-1,
+    )
+    w = [torch.as_tensor(c, dtype=t.dtype, device=t.device) for c in _S06_SP]
+    for k, (nfa, sc) in enumerate(zip(_S06_NFA, _S06_SC, strict=True)):
+        nfa_t = nfa.to(device=t.device, dtype=t.dtype)
+        sc_t = sc.to(device=t.device, dtype=t.dtype)
+        arg = (fa.unsqueeze(-2) * nfa_t).sum(dim=-1)
+        w[k] = w[k] + (sc_t[:, 0] * torch.sin(arg) + sc_t[:, 1] * torch.cos(arg)).sum(
+            dim=-1
+        )
+    s_as = w[0] + t * (w[1] + t * (w[2] + t * (w[3] + t * (w[4] + t * w[5]))))
+    return s_as * ARCSEC_TO_RAD - cip_x * cip_y / 2.0
+
+
 def npb_matrix(tt_mjd: Tensor, *, nutation: bool = True) -> Tensor:
-    """GCRS→CIRS bias-precession-nutation (SOFA fw2m)."""
+    """GCRS → true equator and equinox of date (SOFA pnm06a / fw2m)."""
     gamb, phib, psib, epsa = iau2006_fw_angles(tt_mjd)
     if nutation:
-        dpsi, deps = iau2000b_nutation_truncated(tt_mjd)
+        dpsi, deps = iau2006_nutation(tt_mjd)
         psib = psib + dpsi
         epsa = epsa + deps
     return _rx(-epsa) @ _rz(-psib) @ _rx(phib) @ _rz(gamb)
+
+
+def _c2ixys(cip_x: Tensor, cip_y: Tensor, s: Tensor) -> Tensor:
+    r2 = cip_x * cip_x + cip_y * cip_y
+    e = torch.where(r2 > 0.0, torch.atan2(cip_y, cip_x), torch.zeros_like(r2))
+    d = torch.atan(torch.sqrt(r2 / (1.0 - r2).clamp_min(1.0e-30)))
+    return _rz(-(e + s)) @ _ry(d) @ _rz(e)
+
+
+def cirs_matrix(tt_mjd: Tensor) -> Tensor:
+    """GCRS → CIRS (SOFA c2i06a)."""
+    rnpb = npb_matrix(tt_mjd, nutation=True)
+    cip_x, cip_y = rnpb[2, 0], rnpb[2, 1]
+    s = cio_locator_s06(tt_mjd, cip_x, cip_y)
+    return _c2ixys(cip_x, cip_y, s)
 
 
 def earth_barycentric_velocity_icrs(tt_mjd: Tensor) -> Tensor:

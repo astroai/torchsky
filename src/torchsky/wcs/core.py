@@ -15,6 +15,7 @@ from .zenithal import project_zenithal, deproject_zenithal
 from .cylindrical import project_cylindrical, deproject_cylindrical
 from .allsky import project_allsky, deproject_allsky
 from .conic import project_conic, deproject_conic
+from .quadcube import project_quadcube, deproject_quadcube
 from .legacy import invert_tnx_plane, project_tnx, project_zpx
 from .spectral import (
     canonical_spectral_type,
@@ -55,6 +56,10 @@ _CENTER_CPP_W2P_THRESHOLDS = {
     "SFL": 2048,
 }
 
+# Fused-first only for zenithal pole two-arg p2w below this N. Vectorized
+# cpp_direct stays primary above it so CEA/CAR and N>=10K are not regressable.
+_ZENITHAL_FUSED_P2W_MAX = 1536
+
 
 def _sincos(x: Tensor) -> Tuple[Tensor, Tensor]:
     """Return sin(x), cos(x) with a torch.sincos fast path when available."""
@@ -84,6 +89,18 @@ def _wrap_lon180_checked(angle: Tensor) -> Tensor:
     return _wrap_lon180(angle)
 
 
+def _ctype_without_projection(ctype: str) -> str:
+    """Strip FITS projection / SIP suffixes, leaving the coordinate type."""
+    text = str(ctype).strip()
+    upper = text.upper()
+    if upper.endswith("-SIP"):
+        text = text[:-4]
+        upper = upper[:-4]
+    if len(upper) >= 5 and upper[-4] == "-":
+        return text[:-4].rstrip("-")
+    return text
+
+
 class WCS:
     """
     Base class for TorchWCS (PyTorch-native World Coordinate System).
@@ -91,11 +108,13 @@ class WCS:
 
     ZENITHAL_CODES = ("TAN", "SIN", "ARC", "ZPN", "STG", "ZEA", "AZP", "SZP", "AIR")
     CYLINDRICAL_CODES = ("CEA", "MER", "CYP", "CAR")
-    ALLSKY_CODES = ("AIT", "MOL", "HPX", "SFL")
+    ALLSKY_CODES = ("AIT", "MOL", "HPX", "SFL", "XPH")
     CONIC_CODES = ("COP", "COE", "COD", "COO")
-    POLYCONIC_CODES = ("BON",)
+    POLYCONIC_CODES = ("BON", "PCO")
+    QUADCUBE_CODES = ("TSC", "CSC", "QSC")
     PSEUDOCYLINDRICAL_CODES = ("PAR",)
-    SPECIAL_CODES = ("ZPX", "TNX", "TPV")
+    # NCP is rewritten to slant SIN in __init__ (Paper II §6.1.2).
+    SPECIAL_CODES = ("ZPX", "TNX", "TPV", "NCP")
 
     def __init__(
         self,
@@ -125,6 +144,11 @@ class WCS:
         self.coupled_tabular: CoupledTabularLookupWCS | None = None
         self.coupled_tabular_axes: tuple[int, ...] = ()
         self.coupled_tabular_pixel_axes: tuple[int, ...] = ()
+        # Optional pixel-space affine (corrected -> source) for distorted WCS.
+        self._pixel_affine_matrix: Tensor | None = None
+        self._pixel_affine_offset: Tensor | None = None
+        self._pixel_affine_inv: Tensor | None = None
+        self._pixel_affine_inv_offset: Tensor | None = None
 
         if header is not None:
             self.naxis = self._infer_wcs_naxis(header)
@@ -640,6 +664,82 @@ class WCS:
             return out.to(device=self.device, dtype=self._wcs_coord_dtype(self.device))
         return out
 
+    def _load_pixel_affine_from_params(self, *, prefix: str = "TSKYAF") -> None:
+        """Load optional TSKYAF* pixel affine stored for distorted WCS."""
+        marker = self.wcs_params.get(f"{prefix}0")
+        if marker != "pixel_affine":
+            return
+        # Linear undistorted corrections bake into CRPIX/CD; only distorted WCS
+        # keep a live pixel-space affine applied before SIP/TPV/TNX/ZPX.
+        if (
+            self.sip is None
+            and not self._is_tpv
+            and not self._is_tnx
+            and not self._is_zpx
+        ):
+            return
+        try:
+            matrix = torch.tensor(
+                [
+                    [
+                        float(self.wcs_params[f"{prefix}A11"]),
+                        float(self.wcs_params[f"{prefix}A12"]),
+                    ],
+                    [
+                        float(self.wcs_params[f"{prefix}A21"]),
+                        float(self.wcs_params[f"{prefix}A22"]),
+                    ],
+                ],
+                dtype=torch.float64,
+                device=self.device,
+            )
+            offset = torch.tensor(
+                [
+                    float(self.wcs_params[f"{prefix}B1"]),
+                    float(self.wcs_params[f"{prefix}B2"]),
+                ],
+                dtype=torch.float64,
+                device=self.device,
+            )
+        except (KeyError, TypeError, ValueError):
+            return
+        self._set_pixel_affine(matrix, offset)
+
+    def _set_pixel_affine(self, matrix: Tensor, offset: Tensor) -> None:
+        affine = matrix.to(device=self.device, dtype=torch.float64)
+        shift = offset.to(device=self.device, dtype=torch.float64)
+        affine_inv = torch.linalg.inv(affine)
+        self._pixel_affine_matrix = affine
+        self._pixel_affine_offset = shift
+        self._pixel_affine_inv = affine_inv
+        self._pixel_affine_inv_offset = -(affine_inv @ shift)
+
+    def _corrected_pixels_to_source(
+        self, x: Tensor, y: Tensor, origin: float
+    ) -> tuple[Tensor, Tensor]:
+        """Map corrected pixels to source pixels: ``p_old = A_inv @ p_new + b``."""
+        if self._pixel_affine_inv is None or self._pixel_affine_inv_offset is None:
+            return x, y
+        origin_f = float(origin)
+        x0 = x - origin_f
+        y0 = y - origin_f
+        stacked = torch.stack((x0, y0), dim=-1)
+        old = torch.matmul(stacked, self._pixel_affine_inv.T) + self._pixel_affine_inv_offset
+        return old[..., 0] + origin_f, old[..., 1] + origin_f
+
+    def _source_pixels_to_corrected(
+        self, x: Tensor, y: Tensor, origin: float
+    ) -> tuple[Tensor, Tensor]:
+        """Map source pixels to corrected pixels: ``p_new = A @ p_old + offset``."""
+        if self._pixel_affine_matrix is None or self._pixel_affine_offset is None:
+            return x, y
+        origin_f = float(origin)
+        x0 = x - origin_f
+        y0 = y - origin_f
+        stacked = torch.stack((x0, y0), dim=-1)
+        new = torch.matmul(stacked, self._pixel_affine_matrix.T) + self._pixel_affine_offset
+        return new[..., 0] + origin_f, new[..., 1] + origin_f
+
     def _invert_extra_axes(
         self, world_flat: Tensor, pix_internal_spatial: Tensor
     ) -> Tensor:
@@ -650,8 +750,6 @@ class WCS:
         after inverting spectral/tabular algorithms on extra world axes.
         """
         coupled_pixel = self._apply_coupled_tabular_world_to_pixel(world_flat)
-        if any(axis < 2 for axis in coupled_pixel):
-            raise NotImplementedError("coupled tabular spatial axes are not supported")
         extra_linear = torch.stack(
             [
                 self._coupled_or_tabular_linear_world(coupled_pixel, world_flat, i)
@@ -843,9 +941,13 @@ class WCS:
         self._is_tnx = self._proj_code == "TNX"
         self._is_zpx = self._proj_code == "ZPX"
         self._is_tpv = self.tpv is not None or self._proj_code == "TPV"
+        self._load_pixel_affine_from_params()
 
         self._theta0 = 90.0  # Zenithal
-        if self._proj_code in (
+        if self._proj_code == "XPH":
+            # HEALPix polar / butterfly: native pole at reference (Paper XPH).
+            self._theta0 = 90.0
+        elif self._proj_code in (
             "AIT",
             "MOL",
             "HPX",
@@ -855,16 +957,17 @@ class WCS:
             "CAR",
             "SFL",
             "PAR",
-        ):
+            "PCO",
+        ) or self._proj_code in self.QUADCUBE_CODES:
             self._theta0 = 0.0
         elif (
             self._proj_code in self.CONIC_CODES
-            or self._proj_code in self.POLYCONIC_CODES
+            or self._proj_code == "BON"
         ):
             # Conic and Bonne use PV2_1 (standard parallel) as theta_0.
             self._theta0 = float(self.wcs_params.get("PV2_1", 0.0))
             # Bonne with theta_1=0 degenerates to Sanson-Flamsteed (equatorial)
-            if self._proj_code in self.POLYCONIC_CODES and abs(self._theta0) < 1e-12:
+            if self._proj_code == "BON" and abs(self._theta0) < 1e-12:
                 self._theta0 = 0.0
 
         # LONPOLE / LATPOLE
@@ -906,10 +1009,14 @@ class WCS:
             self.delta_p = self._theta0 + 90.0 - self.delta0
             self.alpha_p = self.alpha0 + 180.0
             self._native_type = "pole"
-        elif self._proj_code in self.POLYCONIC_CODES:
+        elif self._proj_code == "BON":
             # Bonne: theta_0 = PV2_1, phi_0 = 0. Use "center" type since the
             # projection's y-offset places intermediate (0,0) at native (0,0),
             # matching the center-equator rotation when delta_0 ≈ 0.
+            self.delta_p = 90.0
+            self.alpha_p = self.alpha0 + 180.0 if self.phi_p == 0.0 else self.alpha0
+            self._native_type = "center"
+        elif self._proj_code in ("PCO",) or self._proj_code in self.QUADCUBE_CODES:
             self.delta_p = 90.0
             self.alpha_p = self.alpha0 + 180.0 if self.phi_p == 0.0 else self.alpha0
             self._native_type = "center"
@@ -1041,6 +1148,24 @@ class WCS:
         if self._proj_code == "SZP" and "PV2_3" not in self.wcs_params:
             self.wcs_params["PV2_3"] = 90.0
 
+        # NCP (obsolete AIPS) ≡ slant SIN with PV2_1=0, PV2_2=cot(δ₀)
+        # (Paper II §6.1.2). Must set PV before project; δ₀ = CRVAL2.
+        if self._proj_code == "NCP":
+            d2r_ncp = math.pi / 180.0
+            sin_d0 = math.sin(self.delta0 * d2r_ncp)
+            cos_d0 = math.cos(self.delta0 * d2r_ncp)
+            if abs(sin_d0) < 1e-15:
+                raise ValueError(
+                    "NCP requires non-zero CRVAL2 (δ₀); cot(δ₀) is undefined at the equator"
+                )
+            # Paper II: PV2_1 = 0, PV2_2 = cot(δ₀) = cos/sin
+            if "PV2_1" not in self.wcs_params:
+                self.wcs_params["PV2_1"] = 0.0
+            if "PV2_2" not in self.wcs_params:
+                self.wcs_params["PV2_2"] = cos_d0 / sin_d0
+            self._proj_code = "SIN"
+            self._fused_proj_code = "SIN"
+
         # Pre-tensorize PV parameters to avoid dict lookups in compiled hot paths.
         pv1_data = [self.wcs_params.get(k, 0.0) for k in PV1_KEYS]
         pv2_data = [self.wcs_params.get(k, 0.0) for k in PV2_KEYS]
@@ -1107,6 +1232,7 @@ class WCS:
             + self.ALLSKY_CODES
             + self.CONIC_CODES
             + self.POLYCONIC_CODES
+            + self.QUADCUBE_CODES
             + self.PSEUDOCYLINDRICAL_CODES
             + self.SPECIAL_CODES
         )
@@ -1250,6 +1376,9 @@ class WCS:
                     "CAR",
                     "SFL",
                     "MOL",
+                    "PCO",
+                    "XPH",
+                    "TSC",
                     "TPV",
                 )
                 or (self._is_tpv and self._proj_code == "TAN")
@@ -1276,6 +1405,9 @@ class WCS:
                     "CAR",
                     "SFL",
                     "MOL",
+                    "PCO",
+                    "XPH",
+                    "TSC",
                     "TPV",
                 )
                 or (self._is_tpv and self._proj_code == "TAN")
@@ -1321,7 +1453,8 @@ class WCS:
         if self._proj_code in self.ALLSKY_CODES or self._proj_code == "PAR":
             self._project_native_fn = project_allsky
             self._project_native_kind = "allsky"
-            self._project_native_type = "center"
+            # XPH is polar (theta0=90); other all-sky codes are equatorial.
+            self._project_native_type = "pole" if self._proj_code == "XPH" else "center"
             return
         if self._proj_code in self.CONIC_CODES:
             self._project_native_fn = project_conic
@@ -1331,6 +1464,11 @@ class WCS:
         if self._proj_code in self.POLYCONIC_CODES:
             self._project_native_fn = project_conic
             self._project_native_kind = "conic"
+            self._project_native_type = "center"
+            return
+        if self._proj_code in self.QUADCUBE_CODES:
+            self._project_native_fn = project_quadcube
+            self._project_native_kind = "quadcube"
             self._project_native_type = "center"
             return
         self._project_native_fn = None
@@ -1350,6 +1488,8 @@ class WCS:
         fn = self._project_native_fn
         if fn is None:
             return xi, eta
+        if kind == "quadcube":
+            return fn(xi, eta, self._proj_code)
         # Use pre-tensorized PV parameters for modern projections
         return fn(xi, eta, self._proj_code, self._pv1_tensor, self._pv2_tensor)
 
@@ -1512,6 +1652,7 @@ class WCS:
         """
         Unified 2D spatial pixel-to-world core.
         """
+        x, y = self._corrected_pixels_to_source(x, y, origin)
         # 1. Coordinate frame relative to CRPIX
         rel_x = x + (1.0 - origin) - self._crpix0
         rel_y = y + (1.0 - origin) - self._crpix1
@@ -1651,6 +1792,12 @@ class WCS:
             phi, theta = project_conic(
                 xi, eta, self._proj_code, self._pv1_tensor, self._pv2_tensor
             )
+        elif self._proj_code in self.QUADCUBE_CODES:
+            phi, theta = project_quadcube(xi, eta, self._proj_code)
+        elif self._proj_code == "XPH":
+            phi, theta = project_allsky(
+                xi, eta, "XPH", self._pv1_tensor, self._pv2_tensor
+            )
         elif self._proj_code == "PAR":
             phi, theta = project_allsky(
                 xi, eta, "PAR", self._pv1_tensor, self._pv2_tensor
@@ -1660,8 +1807,11 @@ class WCS:
                 xi, eta, self._proj_code, self._pv1_tensor, self._pv2_tensor
             )
         else:
-            # Linear fallback
-            phi, theta = xi, eta
+            # Linear fallback, or any projection bound via _project_native_fn.
+            if self._project_native_fn is not None:
+                phi, theta = self._project_native_coords(xi, eta)
+            else:
+                phi, theta = xi, eta
 
         if self._use_center_equator_fast:
             ra = _wrap_lon360(phi + self.alpha0)
@@ -1677,6 +1827,8 @@ class WCS:
         """Fast path for common 2D separate-argument pixel->world calls."""
         if x.shape != y.shape:
             raise RuntimeError("pixel coordinate shapes must match")
+        if self._pixel_affine_matrix is not None:
+            return self._pixel_to_world_2d_core(x, y, float(origin))
 
         device_ok = x.device.type == "cpu" and y.device.type == "cpu"
         dtype_ok = x.dtype == torch.float64 and y.dtype == torch.float64
@@ -1727,6 +1879,18 @@ class WCS:
             return _wrap_lon360(xi + self.alpha0), theta
 
         cpp_kind = self._cpp_p2w_direct_kind
+        prefer_small_zenithal_fused = (
+            self._can_use_fused_p2w_static
+            and not self._disable_fused_pixel_to_world
+            and device_ok
+            and dtype_ok
+            and not x.requires_grad
+            and not y.requires_grad
+            and self._native_type == "pole"
+            and self._proj_code in {"TAN", "SIN", "ARC"}
+            and not self._is_sin_slant
+            and x.numel() <= _ZENITHAL_FUSED_P2W_MAX
+        )
         use_cpp_direct = (
             self._has_cpp_direct_p2w
             and not self._disable_cpp_pixel_to_world
@@ -1734,6 +1898,7 @@ class WCS:
             and dtype_ok
             and not x.requires_grad
             and not y.requires_grad
+            and not prefer_small_zenithal_fused
         )
         if use_cpp_direct:
             rel_x = x + (1.0 - origin) - self._crpix0
@@ -2113,7 +2278,7 @@ class WCS:
             rel_y = self._cdi10 * xi + self._cdi11 * eta
             px = rel_x + self._crpix0 - (1.0 - origin)
             py = rel_y + self._crpix1 - (1.0 - origin)
-            return px, py
+            return self._source_pixels_to_corrected(px, py, origin)
         if self._use_center_equator_fast and self._is_sfl:
             phi = _wrap_lon180(ra - self.alpha0)
             theta = dec
@@ -2123,7 +2288,7 @@ class WCS:
             rel_y = self._cdi10 * xi + self._cdi11 * eta
             px = rel_x + self._crpix0 - (1.0 - origin)
             py = rel_y + self._crpix1 - (1.0 - origin)
-            return px, py
+            return self._source_pixels_to_corrected(px, py, origin)
         if self._use_center_equator_fast and self._is_cea:
             phi = _wrap_lon180(ra - self.alpha0)
             theta = dec
@@ -2133,7 +2298,7 @@ class WCS:
             rel_y = self._cdi10 * xi + self._cdi11 * eta
             px = rel_x + self._crpix0 - (1.0 - origin)
             py = rel_y + self._crpix1 - (1.0 - origin)
-            return px, py
+            return self._source_pixels_to_corrected(px, py, origin)
         if self._use_center_equator_fast and self._is_mer:
             phi = _wrap_lon180(ra - self.alpha0)
             theta = dec
@@ -2145,7 +2310,7 @@ class WCS:
             rel_y = self._cdi10 * xi + self._cdi11 * eta
             px = rel_x + self._crpix0 - (1.0 - origin)
             py = rel_y + self._crpix1 - (1.0 - origin)
-            return px, py
+            return self._source_pixels_to_corrected(px, py, origin)
         if self._use_center_equator_fast and self._is_cyp:
             phi = _wrap_lon180(ra - self.alpha0)
             theta = dec
@@ -2156,7 +2321,7 @@ class WCS:
             rel_y = self._cdi10 * xi + self._cdi11 * eta
             px = rel_x + self._crpix0 - (1.0 - origin)
             py = rel_y + self._crpix1 - (1.0 - origin)
-            return px, py
+            return self._source_pixels_to_corrected(px, py, origin)
 
         # 1. Inverse Spherical Rotation (Celestial -> Native)
         if self._use_center_equator_fast:
@@ -2248,6 +2413,12 @@ class WCS:
             xi, eta = deproject_conic(
                 phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
             )
+        elif self._proj_code in self.QUADCUBE_CODES:
+            xi, eta = deproject_quadcube(phi, theta, self._proj_code)
+        elif self._proj_code == "XPH":
+            xi, eta = deproject_allsky(
+                phi, theta, "XPH", self._pv1_tensor, self._pv2_tensor
+            )
         elif self._proj_code == "PAR":
             xi, eta = deproject_allsky(
                 phi, theta, "PAR", self._pv1_tensor, self._pv2_tensor
@@ -2274,6 +2445,8 @@ class WCS:
                 xi, eta = deproject_conic(
                     phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
                 )
+            elif self._project_native_kind == "quadcube":
+                xi, eta = deproject_quadcube(phi, theta, self._proj_code)
             else:
                 xi, eta = deproject_zenithal(
                     phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
@@ -2299,7 +2472,7 @@ class WCS:
         # 6. Origin adjustment
         px = rel_x + self._crpix0 - (1.0 - origin)
         py = rel_y + self._crpix1 - (1.0 - origin)
-        return px, py
+        return self._source_pixels_to_corrected(px, py, origin)
 
     def _stacked_world_to_pixel_flat(
         self,
@@ -2322,6 +2495,8 @@ class WCS:
         """Fast path for common 2D separate-argument world->pixel calls."""
         if ra.shape != dec.shape:
             raise RuntimeError("world coordinate shapes must match")
+        if self._pixel_affine_matrix is not None:
+            return self._world_to_pixel_2d_core(ra, dec, float(origin))
         shape = ra.shape
 
         device_ok = ra.device.type == "cpu" and dec.device.type == "cpu"
@@ -2603,14 +2778,18 @@ class WCS:
     def to(self, device: Union[str, torch.device]):
         """Move WCS parameters to specified device."""
         self.device = torch.device(device)
-        self.crpix = self.crpix.to(self.device)
-        self.crval = self.crval.to(self.device)
-        self.cd_full = self.cd_full.to(self.device)
-        self.cd = self.cd.to(self.device)
-        self.cd_inv_full = self.cd_inv_full.to(self.device)
-        self.cd_inv = self.cd_inv.to(self.device)
-        self._sin_dec_p = self._sin_dec_p.to(self.device)
-        self._cos_dec_p = self._cos_dec_p.to(self.device)
+        if self.device.type == "mps":
+            raise RuntimeError(
+                "WCS.to('mps') is unsupported: cached WCS parameters are "
+                "float64 and MPS is float32-only"
+            )
+        # C++ ZPN reads a host coefficient vector; keep it on CPU.
+        skip = {"_zpn_coeffs_cpu"}
+        for name, value in vars(self).items():
+            if name in skip:
+                continue
+            if isinstance(value, torch.Tensor):
+                setattr(self, name, value.to(self.device))
         if self.tpv is not None:
             self.tpv.to(self.device)
         if self.sip is not None:
@@ -2623,6 +2802,8 @@ class WCS:
             self.coupled_tabular = self.coupled_tabular.to(
                 device=self.device, dtype=torch.float64
             )
+        if self._pixel_affine_matrix is not None:
+            self._set_pixel_affine(self._pixel_affine_matrix, self._pixel_affine_offset)
         return self
 
     @property
@@ -2813,6 +2994,14 @@ class WCS:
                 from_equinox=source,
                 to_equinox=float(to_equinox),
             )
+        if frame in {"GALACTIC", "GAL", "ECLIPTIC", "ECL"}:
+            # Mean Galactic and ecliptic of J2000 are ICRS-fixed rotations.
+            return ra, dec
+        if frame in {"GCRS", "CIRS", "TETE", "ALTAZ", "ITRS", "HORIZON"}:
+            raise NotImplementedError(
+                f"{frame} needs obstime and EarthOrientation via wcs.transform; "
+                "it is not a geometric equinox precession"
+            )
         if frame not in {"ICRS", "FK5"}:
             raise NotImplementedError(f"precession is not implemented for {frame}")
         source = (
@@ -2969,9 +3158,25 @@ class WCS:
         out_world = world_t.clone()
 
         if not self._is_spatial:
-            if self.tabular_axes or self.coupled_tabular is not None:
-                raise NotImplementedError(
-                    "mixed tabular WCS transforms require explicit pixel or world coordinates"
+            if self.coupled_tabular is not None:
+                return self._mixed_coupled_tabular_pixel_world(
+                    out_pixel,
+                    out_world,
+                    pixel_known=pixel_known,
+                    world_known=world_known,
+                    origin=origin,
+                )
+            if self.tabular_axes:
+                if not self._tabular_axes_uncoupled_separable():
+                    raise NotImplementedError(
+                        "mixed tabular WCS transforms require explicit pixel or world coordinates"
+                    )
+                return self._mixed_separable_tabular_pixel_world(
+                    out_pixel,
+                    out_world,
+                    pixel_known=pixel_known,
+                    world_known=world_known,
+                    origin=origin,
                 )
             return self._mixed_linear_pixel_world(
                 out_pixel,
@@ -3022,14 +3227,131 @@ class WCS:
                 )
 
         if self.naxis >= 3 and self._is_spatial:
-            out_pixel, out_world = self._mixed_spatial_extra_pixel_world(
-                out_pixel,
-                out_world,
-                pixel_known=pixel_known,
-                world_known=world_known,
-                origin=origin,
-            )
+            if self.coupled_tabular is not None:
+                out_pixel, out_world = self._mixed_coupled_tabular_pixel_world(
+                    out_pixel,
+                    out_world,
+                    pixel_known=pixel_known,
+                    world_known=world_known,
+                    origin=origin,
+                )
+            else:
+                out_pixel, out_world = self._mixed_spatial_extra_pixel_world(
+                    out_pixel,
+                    out_world,
+                    pixel_known=pixel_known,
+                    world_known=world_known,
+                    origin=origin,
+                )
 
+        if torch.isnan(out_pixel).any() or torch.isnan(out_world).any():
+            raise NotImplementedError("mixed transform left unresolved axes")
+        return out_pixel, out_world
+
+    def _tabular_axes_uncoupled_separable(self) -> bool:
+        """True when each tabular world axis depends only on its own pixel axis."""
+        if self.coupled_tabular is not None:
+            return False
+        off = self.cd_full.clone()
+        off.diagonal().zero_()
+        return not bool((off.abs() > 1e-15).any().detach().cpu().item())
+
+    def _mixed_coupled_tabular_pixel_world(
+        self,
+        out_pixel: Tensor,
+        out_world: Tensor,
+        *,
+        pixel_known: Tensor,
+        world_known: Tensor,
+        origin: int,
+    ) -> tuple[Tensor, Tensor]:
+        """Fill coupled -TAB when every coupled pixel or every coupled world is known.
+
+        Per-row masks group complete-pixel rows (forward) and complete-world rows
+        (inverse). Underdetermined mixed coupled lookups stay a documented
+        particular solution only when the full inverse is well-posed.
+        """
+        original_shape = out_pixel.shape
+        pixel_flat = out_pixel.reshape(-1, self.naxis).clone()
+        world_flat = out_world.reshape(-1, self.naxis).clone()
+        pk = pixel_known.reshape(-1, self.naxis)
+        wk = world_known.reshape(-1, self.naxis)
+        pix_axes = list(self.coupled_tabular_pixel_axes)
+        world_axes = list(self.coupled_tabular_axes)
+        all_pix = pk[:, pix_axes].all(dim=-1)
+        all_world = wk[:, world_axes].all(dim=-1)
+        # Prefer forward when a row has a complete pixel sample.
+        if bool(all_pix.any()):
+            rows = pixel_flat[all_pix]
+            world_fill = self.pixel_to_world(rows, origin=origin)
+            if isinstance(world_fill, tuple):
+                world_fill = torch.stack(world_fill, dim=-1)
+            world_flat[all_pix] = world_fill
+            pixel_flat[all_pix] = rows
+        remaining_world = all_world & ~all_pix
+        if bool(remaining_world.any()):
+            rows_w = world_flat[remaining_world]
+            pix_fill = self.world_to_pixel(rows_w, origin=origin)
+            if isinstance(pix_fill, tuple):
+                pix_fill = torch.stack(pix_fill, dim=-1)
+            pixel_flat[remaining_world] = pix_fill
+            world_flat[remaining_world] = rows_w
+        extra = [
+            axis
+            for axis in range(self.naxis)
+            if axis not in pix_axes and axis not in world_axes
+        ]
+        if extra:
+            for axis in extra:
+                p_mask = pk[:, axis]
+                w_mask = wk[:, axis]
+                if bool(p_mask.any()):
+                    world_axis = self._linear_axis_pixel_to_world(
+                        pixel_flat[:, axis], axis, origin
+                    )
+                    world_flat[:, axis] = torch.where(
+                        p_mask, world_axis, world_flat[:, axis]
+                    )
+                if bool(w_mask.any()):
+                    pixel_axis = self._linear_axis_world_to_pixel(
+                        world_flat[:, axis], axis, origin
+                    )
+                    pixel_flat[:, axis] = torch.where(
+                        w_mask, pixel_axis, pixel_flat[:, axis]
+                    )
+        if torch.isnan(pixel_flat).any() or torch.isnan(world_flat).any():
+            raise NotImplementedError(
+                "mixed coupled tabular transforms require a complete pixel sample "
+                "or a complete world sample for the coupled axes"
+            )
+        return pixel_flat.view(original_shape), world_flat.view(original_shape)
+
+    def _mixed_separable_tabular_pixel_world(
+        self,
+        out_pixel: Tensor,
+        out_world: Tensor,
+        *,
+        pixel_known: Tensor,
+        world_known: Tensor,
+        origin: int,
+    ) -> tuple[Tensor, Tensor]:
+        for axis in range(self.naxis):
+            p_mask = pixel_known[..., axis]
+            w_mask = world_known[..., axis]
+            if bool(p_mask.any()):
+                world_axis = self._linear_axis_pixel_to_world(
+                    out_pixel[..., axis], axis, origin
+                )
+                out_world[..., axis] = torch.where(
+                    p_mask, world_axis, out_world[..., axis]
+                )
+            if bool(w_mask.any()):
+                pixel_axis = self._linear_axis_world_to_pixel(
+                    out_world[..., axis], axis, origin
+                )
+                out_pixel[..., axis] = torch.where(
+                    w_mask, pixel_axis, out_pixel[..., axis]
+                )
         if torch.isnan(out_pixel).any() or torch.isnan(out_world).any():
             raise NotImplementedError("mixed transform left unresolved axes")
         return out_pixel, out_world
@@ -3046,74 +3368,86 @@ class WCS:
         extra_axes = list(range(2, self.naxis))
         if self.tabular_axes or self.coupled_tabular is not None:
             for axis in extra_axes:
-                if bool(pixel_known[..., axis].all()):
-                    out_world[..., axis] = self._linear_axis_pixel_to_world(
+                p_mask = pixel_known[..., axis]
+                w_mask = world_known[..., axis]
+                if bool(p_mask.any()):
+                    world_axis = self._linear_axis_pixel_to_world(
                         out_pixel[..., axis], axis, origin
                     )
-                elif bool(world_known[..., axis].all()):
-                    out_pixel[..., axis] = self._linear_axis_world_to_pixel(
+                    out_world[..., axis] = torch.where(
+                        p_mask, world_axis, out_world[..., axis]
+                    )
+                if bool(w_mask.any()):
+                    pixel_axis = self._linear_axis_world_to_pixel(
                         out_world[..., axis], axis, origin
+                    )
+                    out_pixel[..., axis] = torch.where(
+                        w_mask, pixel_axis, out_pixel[..., axis]
                     )
             return out_pixel, out_world
 
-        for axis in extra_axes:
-            p_any = bool(pixel_known[..., axis].any())
-            p_all = bool(pixel_known[..., axis].all())
-            w_any = bool(world_known[..., axis].any())
-            w_all = bool(world_known[..., axis].all())
-            if p_any and not p_all:
-                raise NotImplementedError(
-                    "mixed spatial extra pixel known-mask varies by row"
-                )
-            if w_any and not w_all:
-                raise NotImplementedError(
-                    "mixed spatial extra world known-mask varies by row"
-                )
-
-        pixel_axes_known = [0, 1] + [
-            axis for axis in extra_axes if bool(pixel_known[..., axis].all())
-        ]
-        unknown_pixel_axes = [
-            axis for axis in extra_axes if axis not in pixel_axes_known
-        ]
-        world_axes_known = [
-            axis for axis in extra_axes if bool(world_known[..., axis].all())
-        ]
-
         original_shape = out_pixel.shape
-        pixel_flat = out_pixel.reshape(-1, self.naxis)
-        world_flat = out_world.reshape(-1, self.naxis)
-        rel_flat = pixel_flat + (1.0 - float(origin)) - self.crpix
+        pixel_flat = out_pixel.reshape(-1, self.naxis).clone()
+        world_flat = out_world.reshape(-1, self.naxis).clone()
+        pk = pixel_known.reshape(-1, self.naxis)
+        wk = world_known.reshape(-1, self.naxis)
+        # Spatial pixels are already filled; only extra-axis known bits form groups.
+        n_extra = len(extra_axes)
+        powers = torch.arange(n_extra, device=pk.device, dtype=torch.int64)
+        pix_bits = (
+            pk[:, extra_axes].to(torch.int64) * (2**powers)
+        ).sum(dim=-1)
+        world_bits = (
+            wk[:, extra_axes].to(torch.int64) * (2**powers)
+        ).sum(dim=-1)
+        group_key = pix_bits + (world_bits << n_extra)
 
-        if unknown_pixel_axes:
-            if len(world_axes_known) != len(unknown_pixel_axes):
-                raise NotImplementedError(
-                    "mixed spatial extra axes require one known extra-world "
-                    "equation per unknown extra pixel axis"
+        for key in torch.unique(group_key):
+            row_mask = group_key == key
+            key_i = int(key.item())
+            pixel_axes_known = [0, 1] + [
+                extra_axes[i] for i in range(n_extra) if key_i & (1 << i)
+            ]
+            world_axes_known = [
+                extra_axes[i] for i in range(n_extra) if key_i & (1 << (n_extra + i))
+            ]
+            unknown_pixel_axes = [
+                axis for axis in extra_axes if axis not in pixel_axes_known
+            ]
+            rows_p = pixel_flat[row_mask]
+            rows_w = world_flat[row_mask]
+            rel = rows_p + (1.0 - float(origin)) - self.crpix
+            if unknown_pixel_axes:
+                if len(world_axes_known) != len(unknown_pixel_axes):
+                    raise NotImplementedError(
+                        "mixed spatial extra axes require one known extra-world "
+                        "equation per unknown extra pixel axis"
+                    )
+                known_pix = torch.as_tensor(
+                    pixel_axes_known, dtype=torch.long, device=self.device
                 )
-            known_pix = torch.as_tensor(
-                pixel_axes_known, dtype=torch.long, device=self.device
-            )
-            unknown_pix = torch.as_tensor(
-                unknown_pixel_axes, dtype=torch.long, device=self.device
-            )
-            known_world = torch.as_tensor(
-                world_axes_known, dtype=torch.long, device=self.device
-            )
-            rhs = world_flat[:, known_world] - self.crval[known_world]
-            rhs = rhs - torch.matmul(
-                rel_flat[:, known_pix], self.cd_full[known_world, :][:, known_pix].T
-            )
-            solved_rel = torch.linalg.solve(
-                self.cd_full[known_world, :][:, unknown_pix], rhs.T
-            ).T
-            rel_flat[:, unknown_pix] = solved_rel
-            pixel_flat[:, unknown_pix] = (
-                solved_rel + self.crpix[unknown_pix] + (float(origin) - 1.0)
-            )
+                unknown_pix = torch.as_tensor(
+                    unknown_pixel_axes, dtype=torch.long, device=self.device
+                )
+                known_world = torch.as_tensor(
+                    world_axes_known, dtype=torch.long, device=self.device
+                )
+                rhs = rows_w[:, known_world] - self.crval[known_world]
+                rhs = rhs - torch.matmul(
+                    rel[:, known_pix], self.cd_full[known_world, :][:, known_pix].T
+                )
+                solved_rel = torch.linalg.solve(
+                    self.cd_full[known_world, :][:, unknown_pix], rhs.T
+                ).T
+                rel[:, unknown_pix] = solved_rel
+                rows_p[:, unknown_pix] = (
+                    solved_rel + self.crpix[unknown_pix] + (float(origin) - 1.0)
+                )
+            world_full = self.crval + torch.matmul(rel, self.cd_full.T)
+            rows_w[:, 2:] = world_full[:, 2:]
+            pixel_flat[row_mask] = rows_p
+            world_flat[row_mask] = rows_w
 
-        world_full = self.crval + torch.matmul(rel_flat, self.cd_full.T)
-        world_flat[:, 2:] = world_full[:, 2:]
         return pixel_flat.view(original_shape), world_flat.view(original_shape)
 
     def _mixed_linear_pixel_world(
@@ -3125,59 +3459,64 @@ class WCS:
         world_known: Tensor,
         origin: int,
     ) -> tuple[Tensor, Tensor]:
-        pixel_axes_known = [
-            axis for axis in range(self.naxis) if bool(pixel_known[..., axis].all())
-        ]
-        world_axes_known = [
-            axis for axis in range(self.naxis) if bool(world_known[..., axis].all())
-        ]
-        unknown_pixel_axes = [
-            axis for axis in range(self.naxis) if axis not in pixel_axes_known
-        ]
-        if len(unknown_pixel_axes) == 0:
-            world_full = self.pixel_to_world(out_pixel, origin=origin)
-            if isinstance(world_full, tuple):
-                world_full = torch.stack(world_full, dim=-1)
-            return out_pixel, world_full
-        if len(world_axes_known) != len(unknown_pixel_axes):
-            raise NotImplementedError(
-                "linear mixed transforms require one known world equation per "
-                "unknown pixel axis"
-            )
-        if any(not bool(pixel_known[..., axis].all()) for axis in pixel_axes_known):
-            raise NotImplementedError("mixed linear pixel known-mask varies by row")
-        if any(not bool(world_known[..., axis].all()) for axis in world_axes_known):
-            raise NotImplementedError("mixed linear world known-mask varies by row")
-
         original_shape = out_pixel.shape
-        pixel_flat = out_pixel.reshape(-1, self.naxis)
-        world_flat = out_world.reshape(-1, self.naxis)
-        rel_flat = pixel_flat + (1.0 - float(origin)) - self.crpix
+        pixel_flat = out_pixel.reshape(-1, self.naxis).clone()
+        world_flat = out_world.reshape(-1, self.naxis).clone()
+        pk = pixel_known.reshape(-1, self.naxis)
+        wk = world_known.reshape(-1, self.naxis)
+        n = self.naxis
+        powers = torch.arange(n, device=pk.device, dtype=torch.int64)
+        pix_bits = (pk.to(torch.int64) * (2**powers)).sum(dim=-1)
+        world_bits = (wk.to(torch.int64) * (2**powers)).sum(dim=-1)
+        group_key = pix_bits + (world_bits << n)
 
-        known_pix = torch.as_tensor(
-            pixel_axes_known, dtype=torch.long, device=self.device
-        )
-        unknown_pix = torch.as_tensor(
-            unknown_pixel_axes, dtype=torch.long, device=self.device
-        )
-        known_world = torch.as_tensor(
-            world_axes_known, dtype=torch.long, device=self.device
-        )
-
-        rhs = world_flat[:, known_world] - self.crval[known_world]
-        if len(pixel_axes_known) > 0:
-            rhs = rhs - torch.matmul(
-                rel_flat[:, known_pix], self.cd_full[known_world, :][:, known_pix].T
+        for key in torch.unique(group_key):
+            row_mask = group_key == key
+            key_i = int(key.item())
+            pixel_axes_known = [i for i in range(n) if key_i & (1 << i)]
+            world_axes_known = [i for i in range(n) if key_i & (1 << (n + i))]
+            unknown_pixel_axes = [i for i in range(n) if i not in pixel_axes_known]
+            rows_p = pixel_flat[row_mask]
+            rows_w = world_flat[row_mask]
+            if len(unknown_pixel_axes) == 0:
+                world_full = self.pixel_to_world(rows_p, origin=origin)
+                if isinstance(world_full, tuple):
+                    world_full = torch.stack(world_full, dim=-1)
+                pixel_flat[row_mask] = rows_p
+                world_flat[row_mask] = world_full
+                continue
+            if len(world_axes_known) != len(unknown_pixel_axes):
+                raise NotImplementedError(
+                    "linear mixed transforms require one known world equation per "
+                    "unknown pixel axis"
+                )
+            rel = rows_p + (1.0 - float(origin)) - self.crpix
+            known_pix = torch.as_tensor(
+                pixel_axes_known, dtype=torch.long, device=self.device
             )
-        solved_rel = torch.linalg.solve(
-            self.cd_full[known_world, :][:, unknown_pix], rhs.T
-        ).T
-        rel_flat[:, unknown_pix] = solved_rel
-        pixel_flat[:, unknown_pix] = (
-            solved_rel + self.crpix[unknown_pix] + (float(origin) - 1.0)
-        )
-        world_full = self.crval + torch.matmul(rel_flat, self.cd_full.T)
-        return pixel_flat.view(original_shape), world_full.view(original_shape)
+            unknown_pix = torch.as_tensor(
+                unknown_pixel_axes, dtype=torch.long, device=self.device
+            )
+            known_world = torch.as_tensor(
+                world_axes_known, dtype=torch.long, device=self.device
+            )
+            rhs = rows_w[:, known_world] - self.crval[known_world]
+            if len(pixel_axes_known) > 0:
+                rhs = rhs - torch.matmul(
+                    rel[:, known_pix], self.cd_full[known_world, :][:, known_pix].T
+                )
+            solved_rel = torch.linalg.solve(
+                self.cd_full[known_world, :][:, unknown_pix], rhs.T
+            ).T
+            rel[:, unknown_pix] = solved_rel
+            rows_p[:, unknown_pix] = (
+                solved_rel + self.crpix[unknown_pix] + (float(origin) - 1.0)
+            )
+            world_full = self.crval + torch.matmul(rel, self.cd_full.T)
+            pixel_flat[row_mask] = rows_p
+            world_flat[row_mask] = world_full
+
+        return pixel_flat.view(original_shape), world_flat.view(original_shape)
 
     def _coerce_optional_coord(self, value: Any | None, *, fill: float) -> Tensor:
         if value is None:
@@ -3296,7 +3635,8 @@ class WCS:
                     world_flat, pix_internal_spatial
                 )
                 pix_flat[:, 2:] = pix_internal_extra + (float(origin) - 1.0)
-        elif not self._is_spatial:
+        else:
+            # Non-spatial (including nonlinear -TAB): same inverse as world_to_pixel.
             linear_world = world_flat.clone()
             coupled_pixel = self._apply_coupled_tabular_world_to_pixel(world_flat)
             for i in range(self.naxis):
@@ -3305,11 +3645,6 @@ class WCS:
                 )
             rel_flat = torch.matmul(self.cd_inv_full, (linear_world - self.crval).T).T
             pix_flat = rel_flat + self.crpix + (float(origin) - 1.0)
-        else:
-            raise NotImplementedError(
-                "differentiable world_to_pixel is currently guaranteed for 2D "
-                "spatial WCS or fully linear non-spatial WCS"
-            )
         return pix_flat.view(original_shape)
 
     def pixel_to_world_jacobian(
@@ -3478,7 +3813,7 @@ class WCS:
 
         By default ``view`` is in NumPy array order, so a 2D image slice is
         ``(rows, columns)`` while FITS pixel axes are updated as ``(x, y)``.
-        Positive-step slice objects preserve dimensionality. Integer indices
+        Positive-step and negative-step slice objects preserve dimensionality. Integer indices
         fix one pixel coordinate and drop the corresponding uncoupled WCS axis.
         """
         pixel_items = self._normalize_wcs_slice(view, numpy_order=numpy_order)
@@ -3569,14 +3904,11 @@ class WCS:
         coordinates as the original WCS at the corresponding source pixels.
 
         The update is exact for distortion-free WCS with uncoupled axes beyond
-        the first two pixel axes. Distorted or cross-coupled cases fail closed.
+        the first two pixel axes. Distorted WCS store the affine and apply it in
+        pixel space before SIP/TPV/TNX/ZPX distortion.
         """
         if self.naxis < 2:
             raise ValueError("pixel affine correction requires at least two WCS axes")
-        if self.sip is not None or self._is_tpv or self._is_tnx or self._is_zpx:
-            raise NotImplementedError(
-                "pixel affine WCS correction for distorted WCS is not implemented"
-            )
         for axis in range(2, self.naxis):
             row = self.cd_full[axis, :2]
             col = self.cd_full[:2, axis]
@@ -3595,10 +3927,9 @@ class WCS:
         if shift.shape != (2,):
             raise ValueError("offset must have shape (2,)")
         affine_inv = torch.linalg.inv(affine)
-
-        old_crpix = self.crpix[:2]
-        new_crpix = 1.0 + shift + affine @ (old_crpix - 1.0)
-        new_cd_2d = self.cd_full[:2, :2] @ affine_inv
+        distorted = (
+            self.sip is not None or self._is_tpv or self._is_tnx or self._is_zpx
+        )
 
         header = self._copy_wcs_header()
         for i in range(1, self.naxis + 1):
@@ -3610,12 +3941,16 @@ class WCS:
             for j in range(1, self.naxis + 1):
                 header.pop(f"PC{i}_{j}", None)
 
-        for i in range(2):
-            header[f"CRPIX{i + 1}"] = float(new_crpix[i].detach().cpu().item())
-            for j in range(2):
-                header[f"CD{i + 1}_{j + 1}"] = float(
-                    new_cd_2d[i, j].detach().cpu().item()
-                )
+        if not distorted:
+            old_crpix = self.crpix[:2]
+            new_crpix = 1.0 + shift + affine @ (old_crpix - 1.0)
+            new_cd_2d = self.cd_full[:2, :2] @ affine_inv
+            for i in range(2):
+                header[f"CRPIX{i + 1}"] = float(new_crpix[i].detach().cpu().item())
+                for j in range(2):
+                    header[f"CD{i + 1}_{j + 1}"] = float(
+                        new_cd_2d[i, j].detach().cpu().item()
+                    )
 
         prefix = str(metadata_prefix).strip().upper()
         if prefix:
@@ -3634,6 +3969,8 @@ class WCS:
             for key, value in header.items():
                 if str(key).startswith(prefix):
                     corrected.wcs_params[str(key)] = value
+        if distorted:
+            corrected._set_pixel_affine(affine, shift)
         return corrected
 
     def with_affine_fit_correction(
@@ -3683,26 +4020,17 @@ class WCS:
         axis_slice: slice, axis_len: int | None
     ) -> tuple[int, int | None, int]:
         step = 1 if axis_slice.step is None else int(axis_slice.step)
-        if step <= 0:
-            raise NotImplementedError(
-                "WCS.slice currently supports only positive slice steps"
-            )
-        start = 0 if axis_slice.start is None else int(axis_slice.start)
-        stop = axis_slice.stop if axis_slice.stop is None else int(axis_slice.stop)
-        if start < 0:
-            if axis_len is None:
-                raise ValueError("negative slice starts require known NAXISi shape")
-            start += axis_len
-        if stop is not None and stop < 0:
-            if axis_len is None:
-                raise ValueError("negative slice stops require known NAXISi shape")
-            stop += axis_len
+        if step == 0:
+            raise ValueError("WCS.slice step cannot be zero")
         if axis_len is not None:
-            start = min(max(start, 0), axis_len)
-            if stop is None:
-                stop = axis_len
-            else:
-                stop = min(max(stop, 0), axis_len)
+            start, stop, step = axis_slice.indices(int(axis_len))
+            return start, stop, step
+        if step < 0:
+            raise ValueError("negative slice steps require known NAXISi shape")
+        start = 0 if axis_slice.start is None else int(axis_slice.start)
+        stop = None if axis_slice.stop is None else int(axis_slice.stop)
+        if start < 0 or (stop is not None and stop < 0):
+            raise ValueError("negative slice starts require known NAXISi shape")
         return start, stop, step
 
     @staticmethod
@@ -3717,11 +4045,11 @@ class WCS:
         return idx
 
     def dropaxis(self, axis: int) -> "WCS":
-        """Return a WCS with one uncoupled pixel/world axis removed.
+        """Return a WCS with one pixel/world axis removed.
 
-        The axis is 0-based in FITS pixel-axis order. Dropping coupled axes is
-        deliberately rejected; otherwise the returned WCS would silently encode
-        the wrong transform for common cube and mosaic workflows.
+        The axis is 0-based in FITS pixel-axis order. Coupled linear and celestial
+        axes are baked at CRPIX (``fixed_rel=0``) so the retained transform matches
+        the parent WCS on that slice.
         """
         idx = int(axis)
         if idx < 0:
@@ -3730,13 +4058,9 @@ class WCS:
             raise ValueError(f"axis {axis!r} outside WCS axes")
         if self.naxis <= 1:
             raise ValueError("cannot drop the only WCS axis")
-        if self._is_spatial and idx < 2:
-            raise NotImplementedError(
-                "dropping celestial projection axes is not implemented"
-            )
-        self._validate_axis_uncoupled_for_drop(idx)
         keep = [i for i in range(self.naxis) if i != idx]
-        return self._sub_wcs(keep)
+        # Bake at CRPIX: relative pixel coordinate of the dropped axis is 0.
+        return self._sub_wcs(keep, fixed_rel_by_axis={idx: 0.0})
 
     def sub(self, axes: Sequence[int]) -> "WCS":
         """Return a WCS containing selected pixel/world axes in the requested order.
@@ -3783,13 +4107,6 @@ class WCS:
             raise ValueError(f"axis {axis!r} outside WCS axes")
         if self.naxis <= 1:
             raise ValueError("cannot drop the only WCS axis")
-        if self._is_spatial and idx < 2:
-            raise NotImplementedError(
-                "dropping celestial projection axes is not implemented"
-            )
-        if self.tabular_axes or self.coupled_tabular is not None:
-            self._validate_axis_uncoupled_for_drop(idx)
-            return self._sub_wcs([i for i in range(self.naxis) if i != idx])
         fixed_rel = 1.0 - self.crpix[idx]
         keep = [i for i in range(self.naxis) if i != idx]
         return self._sub_wcs(keep, fixed_rel_by_axis={idx: fixed_rel})
@@ -3804,11 +4121,19 @@ class WCS:
             raise ValueError("at least one WCS axis must be kept")
         if len(set(keep_axes)) != len(keep_axes):
             raise ValueError("kept axes must be unique")
-        if self._is_spatial and keep_axes[:2] != [0, 1]:
-            raise NotImplementedError(
-                "spatial WCS subsetting must keep the first two celestial axes"
-            )
         fixed_rel_by_axis = {} if fixed_rel_by_axis is None else fixed_rel_by_axis
+        if self._is_spatial:
+            celestial = [a for a in (0, 1) if a < self.naxis]
+            dropped_celestial = [a for a in celestial if a not in keep_axes]
+            if dropped_celestial:
+                if any(a not in fixed_rel_by_axis for a in dropped_celestial):
+                    raise NotImplementedError(
+                        "spatial WCS subsetting must keep the first two celestial axes"
+                    )
+            elif len(keep_axes) >= 2 and keep_axes[:2] != [0, 1]:
+                raise NotImplementedError(
+                    "spatial WCS subsetting must keep the first two celestial axes"
+                )
         dropped_axes = [axis for axis in range(self.naxis) if axis not in keep_axes]
         for axis in dropped_axes:
             if axis not in fixed_rel_by_axis:
@@ -3835,15 +4160,56 @@ class WCS:
                 header[key] = self.wcs_params[key]
 
         cd_sub = self.cd_full[keep_axes, :][:, keep_axes]
+        dropped_celestial = [
+            a for a in (0, 1) if a < self.naxis and a not in keep_axes
+        ]
+        world_ref: Tensor | None = None
+        if self._is_spatial and dropped_celestial:
+            # Bake celestial drops at the fixed pixel via a real forward sample so
+            # CRVAL matches the parent slice; strip projection codes so the child
+            # is non-spatial (remaining axes are no longer a celestial pair).
+            ref = (self.crpix - 1.0).clone()
+            for fixed_axis, fixed_rel in fixed_rel_by_axis.items():
+                ref[fixed_axis] = (
+                    torch.as_tensor(
+                        fixed_rel, dtype=self.crpix.dtype, device=self.device
+                    )
+                    + self.crpix[fixed_axis]
+                    - 1.0
+                )
+            world_ref = self.pixel_to_world(ref.unsqueeze(0), origin=0)
+            if isinstance(world_ref, tuple):
+                world_ref = torch.stack(world_ref, dim=-1)
+            world_ref = world_ref.reshape(-1, self.naxis)[0]
+            # Local d(world)/d(pixel) on the kept axes at the bake-in point.
+            eps = 1.0e-3
+            jac_cols = []
+            for keep_axis in keep_axes:
+                pert = ref.clone()
+                pert[keep_axis] = pert[keep_axis] + eps
+                world_pert = self.pixel_to_world(pert.unsqueeze(0), origin=0)
+                if isinstance(world_pert, tuple):
+                    world_pert = torch.stack(world_pert, dim=-1)
+                world_pert = world_pert.reshape(-1, self.naxis)[0]
+                jac_cols.append((world_pert - world_ref) / eps)
+            jac = torch.stack(jac_cols, dim=-1)
+            cd_sub = jac[keep_axes, :]
+
         for new_axis, old_axis in enumerate(keep_axes, start=1):
             old_num = old_axis + 1
-            header[f"CTYPE{new_axis}"] = self.wcs_params.get(f"CTYPE{old_num}", "")
+            ctype = str(self.wcs_params.get(f"CTYPE{old_num}", ""))
+            if self._is_spatial and dropped_celestial and old_axis < 2:
+                ctype = _ctype_without_projection(ctype)
+            header[f"CTYPE{new_axis}"] = ctype
             header[f"CRPIX{new_axis}"] = float(
                 self.crpix[old_axis].detach().cpu().item()
             )
-            crval = self.crval[old_axis]
-            for fixed_axis, fixed_rel in fixed_rel_by_axis.items():
-                crval = crval + self.cd_full[old_axis, fixed_axis] * fixed_rel
+            if world_ref is not None:
+                crval = world_ref[old_axis]
+            else:
+                crval = self.crval[old_axis]
+                for fixed_axis, fixed_rel in fixed_rel_by_axis.items():
+                    crval = crval + self.cd_full[old_axis, fixed_axis] * fixed_rel
             header[f"CRVAL{new_axis}"] = float(crval.detach().cpu().item())
             if f"CUNIT{old_num}" in self.wcs_params:
                 header[f"CUNIT{new_axis}"] = self.wcs_params[f"CUNIT{old_num}"]
@@ -3854,7 +4220,7 @@ class WCS:
                     cd_sub[new_axis - 1, out_axis - 1].detach().cpu().item()
                 )
 
-        if self._is_spatial and keep_axes[:2] == [0, 1]:
+        if self._is_spatial and keep_axes[:2] == [0, 1] and not dropped_celestial:
             for key, value in self.wcs_params.items():
                 key_s = str(key)
                 if key_s.startswith(("PV1_", "PV2_")):
@@ -3935,6 +4301,20 @@ class WCS:
         # 1. Linear Transform (CD @ rel) for first 2 axes
         rel_x = rel[:, 0]
         rel_y = rel[:, 1] if self.naxis >= 2 else torch.zeros_like(rel_x)
+
+        if self._pixel_affine_matrix is not None and self.naxis >= 2:
+            # Affine is on 0-based pixels; rel = pix_internal - crpix, pix_0 = pix_internal - 1.
+            p0 = rel_x + self.crpix[0] - 1.0
+            p1 = rel_y + self.crpix[1] - 1.0
+            src_x, src_y = self._corrected_pixels_to_source(p0, p1, origin=0.0)
+            rel_x = src_x - (self.crpix[0] - 1.0)
+            rel_y = src_y - (self.crpix[1] - 1.0)
+            if self.naxis == 2:
+                rel = torch.stack((rel_x, rel_y), dim=-1)
+            else:
+                rel = rel.clone()
+                rel[:, 0] = rel_x
+                rel[:, 1] = rel_y
 
         # Check if first 2 axes are spatial (have projection code)
         is_spatial = self._is_spatial
@@ -4566,6 +4946,13 @@ class WCS:
 
         # Adjust for origin: pix = pix_internal + (origin - 1)
         pix_flat = pix_internal_flat + (origin - 1)
+        if self._pixel_affine_matrix is not None and is_spatial and self.naxis >= 2:
+            cx, cy = self._source_pixels_to_corrected(
+                pix_flat[:, 0], pix_flat[:, 1], origin
+            )
+            pix_flat = pix_flat.clone()
+            pix_flat[:, 0] = cx
+            pix_flat[:, 1] = cy
 
         pix = pix_flat.view(original_shape)
         if len(args) > 1:

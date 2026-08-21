@@ -57,6 +57,8 @@ Convert between NSIDE and total pixel count.
 ### `query_disc(nside, vec, radius, *, inclusive=False, nest=False)`
 
 Pixels within a spherical disc. `vec` is a 3-element unit vector, `radius` in radians.
+Inclusive `fact==4` pads by the maximum pixel radius. Other `fact` values
+supersample at `nside*fact` (power of two) and degrade to parent pixels.
 
 ---
 
@@ -454,10 +456,10 @@ Functions in `torchsky.sphere.compat` (and the `torchsky.sphere.healpy` alias) m
 | `ud_grade` | parity | `power`, `pess`, bad-mask semantics |
 | `isnsideok` / `isnpixok` | parity | scalar + tensor forms |
 | `max_pixrad` | parity | conservative radius |
-| `query_disc` | parity | inclusive pads by max pixel radius; `fact` must be 4 |
+| `query_disc` | parity | inclusive `fact==4` pads by max pixel radius; `fact!=4` supersamples at `nside*fact` then parent-degrades |
 | `query_circle` | parity | lon/lat wrapper |
 | `query_circle_vec` | parity | Cartesian-vector form |
-| `query_polygon` | parity | convex only; raises on concave input |
+| `query_polygon` | parity | convex half-spaces; concave simple polygons go through `query_polygon_general` |
 | `query_polygon_vec` | parity | Cartesian-vector form |
 | `query_box` | parity | wrap-aware longitude intervals |
 | `query_strip` | parity | colatitude strip |

@@ -226,6 +226,15 @@ class STMOC:
             spatial_depth=depth_s,
         )
 
+    def difference(self, other: "STMOC") -> "STMOC":
+        depth_t = max(self.time_depth, other.time_depth)
+        depth_s = max(self.spatial_depth, other.spatial_depth)
+        return _from_segments(
+            _sweep_boolean(self, other, op="difference"),
+            time_depth=depth_t,
+            spatial_depth=depth_s,
+        )
+
     @classmethod
     def from_spatial_coverages(
         cls,
@@ -435,8 +444,12 @@ def _sweep_boolean(a: STMOC, b: STMOC, *, op: str) -> list[tuple[int, int, MOC]]
                 acc_b = acc_b.union(b.space[k])
         if op == "union":
             moc = acc_a.union(acc_b)
-        else:
+        elif op == "intersection":
             moc = acc_a.intersection(acc_b)
+        elif op == "difference":
+            moc = acc_a.difference(acc_b)
+        else:
+            raise ValueError(f"unknown STMOC boolean op: {op!r}")
         if moc.uniq.numel() == 0:
             continue
         out.append((lo, hi, moc))

@@ -81,10 +81,17 @@ NaN off the interpolated manifold. Underdetermined tables
 (`world_n_dim < pixel_n_dim`) return a nearest-seed Gauss–Newton particular
 solution (minimum-norm step); that inverse is not unique.
 
-CPU fused WCS is float64. CUDA WCS is float64. MPS WCS is float32 and is not
-a float64 path. Small-N overhead versus Astropy (sub-3 ms) is acceptable;
-large-N must stay first on CPU and CUDA. Observed place is ATen on the catalog
-device (CUDA float64, MPS float32); there is no fused C++ observed kernel.
+Celestial projections include Paper II zenithal, cylindrical, conic, polyconic
+(`BON`, `PCO`), HEALPix (`HPX`, `XPH`), quadcube (`TSC`, `CSC`, `QSC`), and
+`NCP` (implemented as slant `SIN`). Fused C++ covers `PCO`, `XPH`, and `TSC`;
+`CSC`/`QSC` stay on the Python path. `WCS.to("cuda")` moves cached PV and
+rotation tensors with the pixels. `WCS.to("mps")` is rejected (MPS has no
+float64). CUDA WCS is float64. CPU fused WCS is float64. MPS two-arg TAN
+stays float32 without moving WCS parameters onto MPS.
+
+Small-N overhead versus Astropy (sub-3 ms) is acceptable; large-N must stay
+first on CPU and CUDA. Observed place is ATen on the catalog device (CUDA
+float64, MPS float32); there is no fused C++ observed kernel.
 
 Catalog geometry is `CatalogState`, not `SkyCoord`. See [coordinates.md](coordinates.md).
 GWCS is sampled at calibration time onto `RegularGridTransform2D`; runtime
@@ -120,7 +127,9 @@ Main class:
 - `pixel_to_world(...)`, `world_to_pixel(...)`
 - `all_pix2world(...)`, `all_world2pix(...)`
 - `mixed_pixel_world(...)`
-- `slice(...)`, `dropaxis(...)`, `sub(...)`, `celestial`
+- `slice(...)`, `dropaxis(...)`, `sub(...)`, `celestial` — `slice` accepts
+  negative steps (Python `range` length / CRPIX-CD update). Dropped coupled
+  axes bake at CRPIX.
 - `to_header()`, `footprint()`, `in_image(...)`
 
 Differentiable geometry:
@@ -143,8 +152,8 @@ Frames and alignment:
 
 - `icrs_to_galactic(...)`, `galactic_to_icrs(...)`, `icrs_to_ecliptic(...)`, `ecliptic_to_icrs(...)`, `precess_fk5(...)`
 - `CatalogState` batched tensors; see [coordinates.md](coordinates.md)
-- `EarthOrientation`, `Site`, `observed_altaz(...)` (explicit DUT1; optional polar motion, `pn='iau2006'` subset, opt-in aberration/refraction)
-- `transform(...)` tensor façade (`ALTAZ` / `ITRS` / geometric frames); not a SkyCoord
+- `EarthOrientation`, `Site`, `observed_altaz(...)` (explicit DUT1; optional polar motion, `pn='iau2006'` IAU 2000A, opt-in aberration/refraction)
+- `transform(...)` tensor façade (`ALTAZ` / `ITRS` / `GCRS` / `CIRS` / `TETE` / geometric frames); not a SkyCoord
 - `icrs_to_itrs_xyz(...)`, `itrs_xyz_to_lonlat_deg(...)`
 - `propagate_proper_motion(...)` for tensor-native angular space motion
 - `propagate_proper_motion_with_jacobian(...)` for local uncertainty transport

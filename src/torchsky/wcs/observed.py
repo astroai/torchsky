@@ -3,8 +3,9 @@
 This module is separate from geometric frames. Earth orientation is never
 inferred. Without polar motion the path is classical DUT1 hour-angle AltAz.
 With ``xp``/``yp`` supplied, the path is ICRS → (optional IAU 2006 PN) → ERA →
-polar-motion ITRS → geodetic AltAz. ``pn='iau2006'`` is a documented CIRS
-subset, not the full IAU 2006/2000A series.
+polar-motion ITRS → geodetic AltAz. ``pn='iau2006'`` is Fukushima-Williams
+precession-bias plus full IAU 2000A nutation (IAU 2006/P03 adjustments) on
+the CIO/ERA path (GCRS → CIRS).
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from .frames import ARCSEC_TO_RAD, D2R, R2D, _as_tensor, _work_dtype, _wrap360
 from .iau2006 import (
     apply_refraction,
     apply_stellar_aberration,
+    cirs_matrix,
     earth_barycentric_velocity_icrs,
     npb_matrix,
     tt_mjd_from_utc,
@@ -202,7 +204,7 @@ def observed_altaz(
 
     ``obstime_mjd_utc`` is UTC MJD. UT1 = UTC + DUT1. Polar motion is applied
     when ``xp``/``yp`` are set. ``pn='iau2006'`` applies Fukushima-Williams
-    bias-precession and truncated IAU 2000B nutation (requires
+    bias-precession and IAU 2000A nutation via the CIRS matrix (requires
     ``eop.tt_minus_utc_s``). Stellar aberration and Saemundsson refraction are
     off unless requested. Refraction needs ``site.pressure_mbar`` and
     ``site.temperature_c``. CUDA keeps float64; MPS uses float32. The kernels
@@ -304,13 +306,11 @@ def itrs_xyz_to_lonlat_deg(xyz: Tensor) -> tuple[Tensor, Tensor]:
     return lon, lat
 
 
-def _icrs_unit_to_itrs(
+def _icrs_to_gcrs_unit(
     icrs: CatalogState,
     utc: Tensor,
-    ut1: Tensor,
     eop: EarthOrientation,
     *,
-    pn: PNModel,
     aberration: bool,
 ) -> Tensor:
     device = icrs.lon.device
@@ -325,14 +325,89 @@ def _icrs_unit_to_itrs(
         )
         vel = earth_barycentric_velocity_icrs(tt)
         v = apply_stellar_aberration(v, vel)
+    return v
+
+
+def _tt_from_eop(
+    utc: Tensor,
+    eop: EarthOrientation,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+    why: str,
+) -> Tensor:
+    if eop.tt_minus_utc_s is None:
+        raise ValueError(f"{why} requires eop.tt_minus_utc_s")
+    return tt_mjd_from_utc(
+        utc.to(dtype=dtype),
+        eop.tt_minus_utc_s.to(device=device, dtype=dtype),
+    )
+
+
+def icrs_to_gcrs_xyz(
+    state: CatalogState,
+    *,
+    obstime_mjd_utc: Any,
+    eop: EarthOrientation,
+    aberration: bool = False,
+) -> Tensor:
+    """ICRS direction to GCRS. Optional Keplerian aberration; no PN."""
+    icrs = state if state.frame == "ICRS" else state.to_frame("ICRS")
+    device = icrs.lon.device
+    dtype = _work_dtype(device)
+    utc = _as_tensor(obstime_mjd_utc).to(device=device, dtype=dtype)
+    return _icrs_to_gcrs_unit(icrs, utc, eop, aberration=aberration)
+
+
+def icrs_to_cirs_xyz(
+    state: CatalogState,
+    *,
+    obstime_mjd_utc: Any,
+    eop: EarthOrientation,
+    aberration: bool = False,
+) -> Tensor:
+    """GCRS then IAU 2006 CIRS matrix (SOFA c2i06a)."""
+    icrs = state if state.frame == "ICRS" else state.to_frame("ICRS")
+    device = icrs.lon.device
+    dtype = _work_dtype(device)
+    utc = _as_tensor(obstime_mjd_utc).to(device=device, dtype=dtype)
+    v = _icrs_to_gcrs_unit(icrs, utc, eop, aberration=aberration)
+    tt = _tt_from_eop(utc, eop, device=device, dtype=dtype, why="CIRS")
+    return torch.matmul(cirs_matrix(tt), v.reshape(-1, 3).T).T.reshape(v.shape)
+
+
+def icrs_to_tete_xyz(
+    state: CatalogState,
+    *,
+    obstime_mjd_utc: Any,
+    eop: EarthOrientation,
+    aberration: bool = False,
+) -> Tensor:
+    """GCRS then IAU 2006 true equator/equinox of date (SOFA pnm06a)."""
+    icrs = state if state.frame == "ICRS" else state.to_frame("ICRS")
+    device = icrs.lon.device
+    dtype = _work_dtype(device)
+    utc = _as_tensor(obstime_mjd_utc).to(device=device, dtype=dtype)
+    v = _icrs_to_gcrs_unit(icrs, utc, eop, aberration=aberration)
+    tt = _tt_from_eop(utc, eop, device=device, dtype=dtype, why="TETE")
+    return torch.matmul(npb_matrix(tt), v.reshape(-1, 3).T).T.reshape(v.shape)
+
+
+def _icrs_unit_to_itrs(
+    icrs: CatalogState,
+    utc: Tensor,
+    ut1: Tensor,
+    eop: EarthOrientation,
+    *,
+    pn: PNModel,
+    aberration: bool,
+) -> Tensor:
+    device = icrs.lon.device
+    dtype = _work_dtype(device)
+    v = _icrs_to_gcrs_unit(icrs, utc, eop, aberration=aberration)
     if pn == "iau2006":
-        if eop.tt_minus_utc_s is None:
-            raise ValueError("pn='iau2006' requires eop.tt_minus_utc_s")
-        tt = tt_mjd_from_utc(
-            utc.to(dtype=dtype),
-            eop.tt_minus_utc_s.to(device=device, dtype=dtype),
-        )
-        v = torch.matmul(npb_matrix(tt), v.reshape(-1, 3).T).T.reshape(v.shape)
+        tt = _tt_from_eop(utc, eop, device=device, dtype=dtype, why="pn='iau2006'")
+        v = torch.matmul(cirs_matrix(tt), v.reshape(-1, 3).T).T.reshape(v.shape)
     era = _era_rad_from_ut1_mjd(ut1.to(dtype=dtype))
     xp = eop.xp_arcsec
     yp = eop.yp_arcsec

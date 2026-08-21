@@ -84,6 +84,27 @@ def test_union_and_intersection() -> None:
     assert not bool(inter.contains(59000.5, lon_a, lat_a).item())
 
 
+def test_difference() -> None:
+    nside = 8
+    a = MOC(nest2uniq(nside, torch.tensor([0], dtype=torch.int64)))
+    b = MOC(nest2uniq(nside, torch.tensor([0, 10], dtype=torch.int64)))
+    left = STMOC.from_spatial_coverages(59000.0, 59002.0, a, time_depth=40)
+    right = STMOC.from_spatial_coverages(59001.0, 59003.0, b, time_depth=40)
+    lon_a, lat_a = _pixel_lonlat(nside, 0)
+    lon_b, lat_b = _pixel_lonlat(nside, 10)
+    diff = left.difference(right)
+    # Only the non-overlapping early interval keeps pixel 0.
+    assert bool(diff.contains(59000.5, lon_a, lat_a).item())
+    assert not bool(diff.contains(59001.5, lon_a, lat_a).item())
+    assert not bool(diff.contains(59002.5, lon_b, lat_b).item())
+    # Spatial-only subtract when times fully overlap.
+    wide = STMOC.from_spatial_coverages(59000.0, 59002.0, b, time_depth=40)
+    narrow = STMOC.from_spatial_coverages(59000.0, 59002.0, a, time_depth=40)
+    spatial_diff = wide.difference(narrow)
+    assert not bool(spatial_diff.contains(59001.0, lon_a, lat_a).item())
+    assert bool(spatial_diff.contains(59001.0, lon_b, lat_b).item())
+
+
 def test_overlapping_intervals_are_canonicalized() -> None:
     nside = 8
     a = MOC(nest2uniq(nside, torch.tensor([0], dtype=torch.int64)))

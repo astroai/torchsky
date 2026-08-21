@@ -136,20 +136,45 @@ def test_to_moves_all_cached_tensors_and_tpv_coefficients() -> None:
     assert wcs.tpv.c1.device.type == "cpu"
     assert wcs.tpv.c2.device.type == "cpu"
 
-    if torch.cuda.is_available():
-        wcs.to("cuda")  # type: ignore
-        assert wcs.crpix.device.type == "cuda"
-        assert wcs.cd.device.type == "cuda"
-        assert wcs._sin_dec_p.device.type == "cuda"
-        assert wcs.tpv.c1.device.type == "cuda"
-        assert wcs.tpv.c2.device.type == "cuda"
 
-        # Smoke check transform path on CUDA tensors.
-        x = torch.tensor([120.0, 140.0], device="cuda", dtype=torch.float64)  # type: ignore
-        y = torch.tensor([120.0, 140.0], device="cuda", dtype=torch.float64)  # type: ignore
-        ra, dec = wcs.pixel_to_world(x, y)
-        assert torch.isfinite(ra).all()
-        assert torch.isfinite(dec).all()
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_to_moves_cached_tensors_cuda() -> None:
+    header = _tan_header()  # type: ignore
+    header["CTYPE1"] = "RA---TPV"  # type: ignore
+    header["CTYPE2"] = "DEC--TPV"  # type: ignore
+    header["PV1_1"] = 1.0  # type: ignore
+    header["PV2_2"] = 1.0  # type: ignore
+    header["PV1_7"] = 1.0e-7  # type: ignore
+    header["PV2_7"] = 1.0e-7  # type: ignore
+
+    wcs = WCS(header).to("cuda")  # type: ignore
+    assert wcs.crpix.device.type == "cuda"
+    assert wcs.cd.device.type == "cuda"
+    assert wcs.cdelt.device.type == "cuda"
+    assert wcs._sin_dec_p.device.type == "cuda"
+    assert wcs._pv1_tensor.device.type == "cuda"
+    assert wcs._pv2_tensor.device.type == "cuda"
+    assert wcs._rot_matrix.device.type == "cuda"
+    assert wcs._rot_matrix_inv.device.type == "cuda"
+    assert wcs.tpv is not None
+    assert wcs.tpv.c1.device.type == "cuda"
+    assert wcs.tpv.c2.device.type == "cuda"
+
+    x = torch.tensor([120.0, 140.0], device="cuda", dtype=torch.float64)  # type: ignore
+    y = torch.tensor([120.0, 140.0], device="cuda", dtype=torch.float64)  # type: ignore
+    ra, dec = wcs.pixel_to_world(x, y)
+    assert ra.device.type == "cuda"
+    assert torch.isfinite(ra).all()
+    assert torch.isfinite(dec).all()
+
+
+@pytest.mark.skipif(
+    not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()),
+    reason="MPS not available",
+)
+def test_wcs_to_mps_is_rejected() -> None:
+    with pytest.raises(RuntimeError, match="float64"):
+        WCS(_tan_header()).to("mps")  # type: ignore
 
 
 def test_origin_zero_and_one_consistent_shift() -> None:

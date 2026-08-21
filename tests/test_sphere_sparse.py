@@ -363,6 +363,31 @@ def test_sparse_nearest_interpolation_on_centers() -> None:
     torch.testing.assert_close(got, dense[keep], atol=0.0, rtol=0.0)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_sparse_interpolate_cuda_matches_cpu() -> None:
+    nside = 8
+    npix = hp.nside2npix(nside)
+    dense = torch.full((npix,), float(hp.UNSEEN), dtype=torch.float64)
+    keep = torch.arange(0, npix, 5, dtype=torch.int64)
+    dense[keep] = keep.to(torch.float64)
+    cpu = SparseHealpixMap.from_dense(dense, nside=nside, nest=False)
+    gpu = SparseHealpixMap.from_dense(dense.cuda(), nside=nside, nest=False)
+    lon, lat = hp.pix2ang(nside, keep, nest=False, lonlat=True)
+    got = gpu.interpolate(lon.cuda(), lat.cuda(), method="nearest")
+    assert got.device.type == "cuda"
+    torch.testing.assert_close(
+        got.cpu(), cpu.interpolate(lon, lat, method="nearest"), atol=0.0, rtol=0.0
+    )
+    bilinear = gpu.interpolate(lon.cuda(), lat.cuda(), method="bilinear")
+    assert bilinear.device.type == "cuda"
+    torch.testing.assert_close(
+        bilinear.cpu(),
+        cpu.interpolate(lon, lat, method="bilinear"),
+        atol=1e-12,
+        rtol=0.0,
+    )
+
+
 def test_sparse_bilinear_matches_dense_when_fully_covered() -> None:
     nside = 16
     npix = hp.nside2npix(nside)
@@ -674,6 +699,21 @@ def test_sparse_fits_roundtrip_preserves_value_dtype(
     torch.testing.assert_close(got.pixels, pixels)
     torch.testing.assert_close(got.values, values)
     assert got.metadata == {"BAND": "R"}
+
+
+def test_pixel_list_write_fits_synthesizes_healsparse_coverage(tmp_path) -> None:
+    pixels = torch.tensor([0, 10, 42], dtype=torch.int64)
+    values = torch.tensor([1.25, 2.5, 3.75], dtype=torch.float64)
+    smap = SparseHealpixMap.from_pixels(
+        pixels, values, nside_sparse=8, sentinel=-999.0
+    )
+    assert smap.nside_coverage is None
+    path = tmp_path / "pixlist.fits"
+    smap.write_fits(str(path), overwrite=True)
+    got = SparseHealpixMap.read_fits(str(path))
+    torch.testing.assert_close(got.pixels, pixels)
+    torch.testing.assert_close(got.values, values)
+    assert got.nside_coverage is not None
 
 
 def test_sparse_ud_grade_dense_equivalence_with_bad_values() -> None:

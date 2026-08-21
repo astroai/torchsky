@@ -148,6 +148,9 @@ def project_allsky(
         phi = torch.where(valid, phi, torch.full_like(phi, float("nan")))
         theta = torch.where(valid, theta, torch.full_like(theta, float("nan")))
 
+    elif projection_code == "XPH":
+        phi, theta = _xph_x2s(xi, eta)
+
     else:
         phi, theta = xi, eta
 
@@ -238,4 +241,151 @@ def deproject_allsky(
         eta = w2 * s
         return xi, eta
 
+    elif projection_code == "XPH":
+        return _xph_s2x(phi, theta)
+
     return phi, theta
+
+
+# ---------------------------------------------------------------------------
+# XPH — HEALPix polar / butterfly (Calabretta & Lowe 2013; WCSLIB xph*)
+# ---------------------------------------------------------------------------
+
+_XPH_SINTHE_X = 2.0 / 3.0
+_XPH_POLE_TOL = 1.0e-4
+_XPH_INV_SQRT2 = 0.7071067811865476
+
+
+def _xph_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
+    """Forward XPH: native (phi, theta) -> plane (xi, eta)."""
+    # Torchsky pole-rotation phi has opposite sign to WCSLIB; undo before XPH.
+    phi = -phi
+    # Normalize phi to [-180, 180), then chi in [0, 360), psi = chi mod 90.
+    chi = _wrap_lon180_checked(phi) + 180.0
+    psi = torch.remainder(chi, 90.0)
+    phi_n = chi - 180.0
+
+    sinthe = torch.sin(theta * D2R)
+    abssin = sinthe.abs()
+    mask_eq = abssin <= _XPH_SINTHE_X
+
+    # Equatorial regime
+    xi_eq = psi
+    eta_eq = 67.5 * sinthe
+
+    # Polar regime: sigma = sqrt(3*(1-|sin theta|)), linearized near poles
+    pole_lim = 90.0 - _XPH_POLE_TOL * (math.sqrt(_XPH_SINTHE_X) * R2D)
+    sigma_std = torch.sqrt(torch.clamp(3.0 * (1.0 - abssin), min=0.0))
+    sigma_lin = (90.0 - theta.abs()) * math.sqrt(1.5) * D2R
+    sigma = torch.where(theta.abs() < pole_lim, sigma_std, sigma_lin)
+    xi_pol = 45.0 + (psi - 45.0) * sigma
+    eta_pol = 45.0 * (2.0 - sigma)
+    eta_pol = torch.where(theta < 0.0, -eta_pol, eta_pol)
+
+    xi = torch.where(mask_eq, xi_eq, xi_pol) - 45.0
+    eta = torch.where(mask_eq, eta_eq, eta_pol) - 90.0
+
+    s = _XPH_INV_SQRT2
+    # Quadrant rotation from rounded phi (WCSLIB xphs2x)
+    q1 = phi_n < -90.0
+    q2 = (~q1) & (phi_n < 0.0)
+    q3 = (~q1) & (~q2) & (phi_n < 90.0)
+    # q4: else
+    x = torch.where(
+        q1,
+        s * (-xi + eta),
+        torch.where(
+            q2,
+            s * (xi + eta),
+            torch.where(q3, s * (xi - eta), s * (-xi - eta)),
+        ),
+    )
+    y = torch.where(
+        q1,
+        s * (-xi - eta),
+        torch.where(
+            q2,
+            s * (-xi + eta),
+            torch.where(q3, s * (xi + eta), s * (xi - eta)),
+        ),
+    )
+    return x, y
+
+
+def _xph_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
+    """Inverse XPH: plane (xi, eta) -> native (phi, theta)."""
+    s = _XPH_INV_SQRT2
+    xr = xi / s
+    yr = eta / s
+
+    # Quadrant -> (xi1, eta1, base phi)
+    c1 = (xr <= 0.0) & (yr > 0.0)
+    c2 = (xr < 0.0) & (yr <= 0.0)
+    c3 = (xr >= 0.0) & (yr < 0.0)
+    # c4: else
+    xi1 = torch.where(
+        c1,
+        (-xr - yr) * 0.5,
+        torch.where(
+            c2,
+            (xr - yr) * 0.5,
+            torch.where(c3, (xr + yr) * 0.5, (-xr + yr) * 0.5),
+        ),
+    )
+    eta1 = torch.where(
+        c1,
+        (xr - yr) * 0.5,
+        torch.where(
+            c2,
+            (xr + yr) * 0.5,
+            torch.where(c3, (-xr + yr) * 0.5, (-xr - yr) * 0.5),
+        ),
+    )
+    phi = torch.where(
+        c1,
+        torch.full_like(xr, -180.0),
+        torch.where(
+            c2,
+            torch.full_like(xr, -90.0),
+            torch.where(c3, torch.zeros_like(xr), torch.full_like(xr, 90.0)),
+        ),
+    )
+
+    xi_f = xi1 + 45.0
+    eta_f = eta1 + 90.0
+    abseta = eta_f.abs()
+    invalid = abseta > 90.0
+
+    mask_eq = abseta <= 45.0
+    # Equatorial
+    phi_eq = phi + xi_f
+    theta_eq = torch.asin(torch.clamp(eta_f / 67.5, -1.0, 1.0)) * R2D
+
+    # Polar
+    sigma = (90.0 - abseta) / 45.0
+    safe_sigma = torch.clamp(sigma, min=1e-12)
+    phi_pol = phi + 45.0 + xi1 / safe_sigma
+    # Snap on axes
+    phi_pol = torch.where(
+        xr == 0.0,
+        torch.where(yr <= 0.0, torch.zeros_like(phi_pol), torch.full_like(phi_pol, 180.0)),
+        torch.where(
+            yr == 0.0,
+            torch.where(xr < 0.0, torch.full_like(phi_pol, -90.0), torch.full_like(phi_pol, 90.0)),
+            phi_pol,
+        ),
+    )
+    th_std = torch.asin(torch.clamp(1.0 - sigma * sigma / 3.0, -1.0, 1.0)) * R2D
+    th_lin = 90.0 - sigma * (math.sqrt(_XPH_SINTHE_X) * R2D)
+    th = torch.where(sigma < _XPH_POLE_TOL, th_lin, th_std)
+    th = torch.where(eta_f < 0.0, -th, th)
+
+    phi_out = torch.where(mask_eq, phi_eq, phi_pol)
+    theta_out = torch.where(mask_eq, theta_eq, th)
+    # Torchsky zenithal/pole rotation uses the opposite phi sign from WCSLIB
+    # (cf. zenithal atan2(-xi,-eta) vs prjx2s). Flip so celestial matches.
+    phi_out = _wrap_lon180_checked(-phi_out)
+    nan = torch.full_like(phi_out, float("nan"))
+    phi_out = torch.where(invalid, nan, phi_out)
+    theta_out = torch.where(invalid, nan, theta_out)
+    return phi_out, theta_out

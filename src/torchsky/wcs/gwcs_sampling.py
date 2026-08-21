@@ -202,6 +202,23 @@ class FrozenDetectorEpochTables:
         index = int(torch.argmin(diffs.abs()).item())
         return self.samples[index].transform
 
+    def to(self, device: Any) -> "FrozenDetectorEpochTables":
+        """Move frozen tables to ``device``. Sampling still happened on host."""
+        device_t = torch.device(device)
+        dtype = torch.float32 if device_t.type == "mps" else None
+        samples = tuple(
+            GWCSGridSamplingResult(
+                transform=sample.transform.to(device=device_t, dtype=dtype),
+                validation=sample.validation,
+                grid_shape=sample.grid_shape,
+                detector_bounds=sample.detector_bounds,
+                reference_name=sample.reference_name,
+                calibration_provenance=sample.calibration_provenance,
+            )
+            for sample in self.samples
+        )
+        return FrozenDetectorEpochTables(epochs=self.epochs, samples=samples)
+
     def evaluate(self, detector_xy: Any, epoch: float) -> Tensor:
         """Device-native table eval. Runtime does not import gwcs."""
         pts = torch.as_tensor(detector_xy)

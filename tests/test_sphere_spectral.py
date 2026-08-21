@@ -16,6 +16,7 @@ from torchsky.sphere.spectral import (
     alm2map,
     alm2map_batched,
     alm2cl,
+    alm2map_der1,
     alm2map_spin,
     alm_index,
     alm_size,
@@ -1538,3 +1539,56 @@ def test_rotate_alm_matches_healpy() -> None:
     _hp.rotate_alm(hp_alm, psi, theta, phi)
     ts = rotate_alm(torch.from_numpy(alm_np.copy()), psi, theta, phi, lmax=lmax)
     torch.testing.assert_close(ts, torch.from_numpy(hp_alm), atol=1e-8, rtol=0.0)
+
+
+def test_alm2map_der1_matches_spin1_sqrt_ell() -> None:
+    nside = 8
+    lmax = 6
+    rng = torch.Generator().manual_seed(3)
+    nalm = alm_size(lmax)
+    alm = torch.complex(
+        torch.randn(nalm, generator=rng, dtype=torch.float64),
+        torch.randn(nalm, generator=rng, dtype=torch.float64),
+    )
+    # m=0 coeffs must be real for a real map.
+    for ell in range(lmax + 1):
+        idx = alm_index(ell, 0, lmax)
+        alm[idx] = complex(float(alm[idx].real), 0.0)
+
+    m, d_theta, d_phi = alm2map_der1(alm, nside, lmax=lmax)
+    torch.testing.assert_close(m, alm2map(alm, nside, lmax=lmax), atol=0.0, rtol=0.0)
+
+    ell = torch.empty(nalm, dtype=torch.float64)
+    for mm in range(lmax + 1):
+        for ell_i in range(mm, lmax + 1):
+            ell[alm_index(ell_i, mm, lmax)] = float(ell_i)
+    alm_e = alm * torch.sqrt(ell * (ell + 1.0))
+    alm_b = torch.zeros_like(alm_e)
+    qu = alm2map_spin((alm_e, alm_b), nside, 1, lmax=lmax)
+    torch.testing.assert_close(d_theta, qu[0], atol=1e-12, rtol=0.0)
+    torch.testing.assert_close(d_phi, qu[1], atol=1e-12, rtol=0.0)
+
+
+@pytest.mark.skipif(_hp is None, reason="healpy not available")
+def test_alm2map_der1_matches_healpy() -> None:
+    nside = 8
+    lmax = 6
+    rng = np.random.default_rng(11)
+    nalm = alm_size(lmax)
+    alm_np = np.asarray(
+        rng.normal(size=nalm) + 1j * rng.normal(size=nalm), dtype=np.complex128
+    )
+    for ell in range(lmax + 1):
+        idx = _hp.Alm.getidx(lmax, ell, 0)
+        alm_np[idx] = alm_np[idx].real
+    hp_m, hp_dt, hp_dp = _hp.alm2map_der1(alm_np, nside, lmax=lmax)
+    m, dt, dp = alm2map_der1(torch.from_numpy(alm_np), nside, lmax=lmax)
+    torch.testing.assert_close(
+        m, torch.from_numpy(np.asarray(hp_m)), atol=1e-8, rtol=0.0
+    )
+    torch.testing.assert_close(
+        dt, torch.from_numpy(np.asarray(hp_dt)), atol=1e-8, rtol=0.0
+    )
+    torch.testing.assert_close(
+        dp, torch.from_numpy(np.asarray(hp_dp)), atol=1e-8, rtol=0.0
+    )

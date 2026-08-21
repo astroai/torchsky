@@ -124,6 +124,25 @@ _TREFPOS_ALIASES = {
     "HELIO": "HELIOCENTER",
     "HELIOCENTER": "HELIOCENTER",
     "HELIOCENTRE": "HELIOCENTER",
+    "EMBARY": "EMBARYCENTER",
+    "EMBARYCENTER": "EMBARYCENTER",
+    "EARTHMOONBARYCENTER": "EMBARYCENTER",
+    "MOON": "MOON",
+    "CUSTOM": "CUSTOM",
+    "BASE": "BASECENTER",
+    "BASECENTER": "BASECENTER",
+    "GALACTIC": "GALACTIC",
+    "GALACTICENTER": "GALACTIC",
+    "GALACTICCENTRE": "GALACTIC",
+    "LOCALGROUP": "LOCALGROUP",
+    "LOCALGROUPBARYCENTER": "LOCALGROUP",
+    "MERCURY": "MERCURY",
+    "VENUS": "VENUS",
+    "MARS": "MARS",
+    "JUPITER": "JUPITER",
+    "SATURN": "SATURN",
+    "URANUS": "URANUS",
+    "NEPTUNE": "NEPTUNE",
 }
 
 
@@ -229,31 +248,161 @@ def iso_to_mjd(value: str) -> float:
 
 
 SPEED_OF_LIGHT = 299792458.0  # m / s
+AU_IN_METERS = 1.495978707e11
+
+# JPL "Approximate Positions of the Planets" (Keplerian, 1800–2050).
+# Tuple is a0, da, e0, de, I0, dI, L0, dL, varpi0, dvarpi, Omega0, dOmega
+# with a in AU, angles in degrees, rates per Julian century from J2000.
+_PLANET_KEPLER: dict[str, tuple[float, ...]] = {
+    "MERCURY": (
+        0.38709927,
+        0.00000037,
+        0.20563593,
+        0.00001906,
+        7.00497902,
+        -0.00594749,
+        252.25032350,
+        149472.67411175,
+        77.45779628,
+        0.16047689,
+        48.33076593,
+        -0.12534081,
+    ),
+    "VENUS": (
+        0.72333566,
+        0.00000390,
+        0.00677672,
+        -0.00004107,
+        3.39467605,
+        -0.00078890,
+        181.97909950,
+        58517.81538729,
+        131.60246718,
+        0.00268329,
+        76.67984255,
+        -0.27769418,
+    ),
+    "EARTH": (
+        1.00000011,
+        -0.00000005,
+        0.01671022,
+        -0.00003804,
+        0.00005,
+        -0.01303889,
+        100.46435,
+        35999.37239722,
+        102.94719,
+        0.33285556,
+        -11.26064,
+        -5.06340278,
+    ),
+    "MARS": (
+        1.52371034,
+        0.00001847,
+        0.09339410,
+        0.00007882,
+        1.84969142,
+        -0.00813131,
+        -4.55343205,
+        19140.30268499,
+        -23.94362959,
+        0.44441088,
+        49.55953891,
+        -0.29257343,
+    ),
+    "JUPITER": (
+        5.20288700,
+        -0.00011607,
+        0.04838624,
+        -0.00013253,
+        1.30439695,
+        -0.00183714,
+        34.39644051,
+        3034.74612775,
+        14.72847983,
+        0.21252668,
+        100.47390909,
+        0.20469106,
+    ),
+    "SATURN": (
+        9.53667594,
+        -0.00125060,
+        0.05386179,
+        -0.00050991,
+        2.48599187,
+        0.00193609,
+        49.95424423,
+        1222.49362201,
+        92.59887831,
+        -0.41897216,
+        113.66242448,
+        -0.28867794,
+    ),
+    "URANUS": (
+        19.18916464,
+        -0.00196176,
+        0.04725744,
+        -0.00004397,
+        0.77263783,
+        -0.00242939,
+        313.23810451,
+        428.48202785,
+        170.95427630,
+        0.40805281,
+        74.01692503,
+        0.04240589,
+    ),
+    "NEPTUNE": (
+        30.06992276,
+        0.00026291,
+        0.00859048,
+        0.00005105,
+        1.77004347,
+        0.00035372,
+        -55.12002969,
+        218.45945325,
+        44.96476227,
+        -0.32241464,
+        131.78422574,
+        -0.00508664,
+    ),
+}
+
+_IDENTITY_TREFPOS = {
+    "TOPOCENTER",
+    "GEOCENTER",
+    "BASECENTER",
+    "CUSTOM",
+    "EMBARYCENTER",
+    "MOON",
+}
+_BARY_LIKE_TREFPOS = {
+    "BARYCENTER",
+    "HELIOCENTER",
+    "GALACTIC",
+    "LOCALGROUP",
+}
 
 
-def _earth_position_equatorial(mjd: Tensor) -> Tensor:
-    """Approximate Earth J2000 equatorial position relative to the Sun in meters.
+def _keplerian_heliocentric_equatorial(mjd: Tensor, body: str) -> Tensor:
+    """Heliocentric J2000 equatorial position in meters (circular-Kepler bound).
 
-    Uses Keplerian orbital elements of the Earth/Moon Barycenter from JPL.
+    Not JPL DE. Light-time error vs DE440 is typically seconds to minutes at
+    outer planets; use an ephemeris if that bound is too coarse.
     """
+    elems = _PLANET_KEPLER[body]
     device = mjd.device
     dtype = mjd.dtype
-
     jd = mjd + 2400000.5
-    T = (jd - 2451545.0) / 36525.0
-
+    T_flat = ((jd - 2451545.0) / 36525.0).to(dtype=torch.float64)
     d2r = math.pi / 180.0
-
-    # Keplerian elements (values from JPL "Approximate Positions of the Planets")
-    T_flat = T.to(dtype=torch.float64)
-    a = (1.00000011 - 0.00000005 * T_flat).to(device=device, dtype=dtype)
-    e = (0.01671022 - 0.00003804 * T_flat).to(device=device, dtype=dtype)
-    i = ((0.00005 - 0.01303889 * T_flat) * d2r).to(device=device, dtype=dtype)
-    L = ((100.46435 + 35999.37239722 * T_flat) * d2r).to(device=device, dtype=dtype)
-    varpi = ((102.94719 + 0.33285556 * T_flat) * d2r).to(device=device, dtype=dtype)
-    omega_node = ((-11.26064 - 5.06340278 * T_flat) * d2r).to(
-        device=device, dtype=dtype
-    )
+    a0, da, e0, de, i0, di, L0, dL, vp0, dvp, om0, dom = elems
+    a = (a0 + da * T_flat).to(device=device, dtype=dtype)
+    e = (e0 + de * T_flat).to(device=device, dtype=dtype)
+    i = ((i0 + di * T_flat) * d2r).to(device=device, dtype=dtype)
+    L = ((L0 + dL * T_flat) * d2r).to(device=device, dtype=dtype)
+    varpi = ((vp0 + dvp * T_flat) * d2r).to(device=device, dtype=dtype)
+    omega_node = ((om0 + dom * T_flat) * d2r).to(device=device, dtype=dtype)
 
     omega_arg = varpi - omega_node
     M = L - varpi
@@ -294,9 +443,12 @@ def _earth_position_equatorial(mjd: Tensor) -> Tensor:
     z_eq = r_y * sin_ob + r_z * cos_ob
 
     pos_au = torch.stack([x_eq, y_eq, z_eq], dim=-1)
-
-    AU_IN_METERS = 1.495978707e11
     return pos_au * AU_IN_METERS
+
+
+def _earth_position_equatorial(mjd: Tensor) -> Tensor:
+    """Earth/Moon barycenter Keplerian position; same elements as before."""
+    return _keplerian_heliocentric_equatorial(mjd, "EARTH")
 
 
 def _gmst_rotation_matrix(mjd: Tensor) -> tuple[Tensor, Tensor]:
@@ -329,7 +481,8 @@ class TemporalWCS:
     - MJDREF: Reference MJD
     - TIMESYS: Time scale (UTC, TT, TAI, TDB, GPS)
     - TIMEUNIT: 's', 'd', 'a', 'cy'
-    - TREFPOS: 'TOPOCENTER', 'GEOCENTER', 'BARYCENTER', 'HELIOCENTER'
+    - TREFPOS: TOPOCENTER, GEOCENTER, BARYCENTER, HELIOCENTER, EMBARYCENTER,
+      MOON, CUSTOM, BASECENTER, GALACTIC, LOCALGROUP, and Keplerian planets.
     """
 
     def __init__(self, header: dict[str, Any]):
@@ -419,24 +572,26 @@ class TemporalWCS:
         return isos
 
     def apply_corrections(self, mjd: Tensor, ra: Tensor, dec: Tensor) -> Tensor:
-        """
-        Apply reference-position light-time corrections when locally available.
+        """Apply Roemer light-time to the header ``TREFPOS``.
 
-        Computes light-travel corrections to the Solar System Barycenter (BJD)
-        or Heliocenter (HJD).
+        BARYCENTER/HELIOCENTER use a Keplerian Earth (Sun ≈ SSB). Planetary
+        ``TREFPOS`` uses the same JPL approximate Keplerian elements, not DE.
+        EMBARYCENTER and MOON are treated as GEOCENTER (~0.01 s and ~1.3 s).
+        GALACTIC/LOCALGROUP use the barycentric delay (no Galactic motion).
         """
-        if self.trefpos in {"TOPOCENTER", "GEOCENTER"}:
+        if self.trefpos in _IDENTITY_TREFPOS:
             return mjd
 
-        if self.trefpos not in {"BARYCENTER", "HELIOCENTER"}:
+        r_earth = _earth_position_equatorial(mjd)
+        if self.trefpos in _BARY_LIKE_TREFPOS:
+            r_ref = torch.zeros_like(r_earth)
+        elif self.trefpos in _PLANET_KEPLER and self.trefpos != "EARTH":
+            r_ref = _keplerian_heliocentric_equatorial(mjd, self.trefpos)
+        else:
             raise NotImplementedError(
                 f"{self.trefpos} temporal corrections are not supported"
             )
 
-        # Vectorized Keplerian Earth position relative to the Sun in meters
-        r_earth = _earth_position_equatorial(mjd)
-
-        # Convert observatory coordinates to Cartesian meters in J2000 equatorial frame
         obs_x, obs_y, obs_z = 0.0, 0.0, 0.0
         has_obs = False
         if self.obsgeo_xyz_m is not None:
@@ -464,31 +619,22 @@ class TemporalWCS:
             r_obs = torch.stack(
                 [obs_inertial_x, obs_inertial_y, obs_inertial_z], dim=-1
             )
-            r = r_earth + r_obs
+            r = r_earth + r_obs - r_ref
         else:
-            r = r_earth
+            r = r_earth - r_ref
 
-        # Source unit vector pointing from observer to the source
         d2r = math.pi / 180.0
         cos_dec = torch.cos(dec * d2r)
         s_x = cos_dec * torch.cos(ra * d2r)
         s_y = cos_dec * torch.sin(ra * d2r)
         s_z = torch.sin(dec * d2r)
         s = torch.stack([s_x, s_y, s_z], dim=-1)
-
-        # Dot product: dot(r, s)
-        dot_r_s = torch.sum(r * s, dim=-1)
-
-        # Correction in days: dot(r, s) / (c * SECONDS_PER_DAY)
-        dt_days = dot_r_s / (SPEED_OF_LIGHT * SECONDS_PER_DAY)
+        dt_days = torch.sum(r * s, dim=-1) / (SPEED_OF_LIGHT * SECONDS_PER_DAY)
         return mjd + dt_days
 
     @property
     def requires_ephemeris(self) -> bool:
-        return self.trefpos not in {
-            "TOPOCENTER",
-            "GEOCENTER",
-        }
+        return self.trefpos not in _IDENTITY_TREFPOS
 
     @property
     def reference_position(self) -> str:
