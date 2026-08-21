@@ -90,14 +90,21 @@ class SIP:
 
     def to(self, device: torch.device) -> "SIP":
         """Move SIP tensors to device."""
-        self._a_c = self._a_c.to(device)
-        self._a_pq = self._a_pq.to(device)
-        self._b_c = self._b_c.to(device)
-        self._b_pq = self._b_pq.to(device)
-        self._ap_c = self._ap_c.to(device)
-        self._ap_pq = self._ap_pq.to(device)
-        self._bp_c = self._bp_c.to(device)
-        self._bp_pq = self._bp_pq.to(device)
+        coeff_dtype = torch.float32 if device.type == "mps" else None
+
+        def _move(tensor: Tensor) -> Tensor:
+            if tensor.is_floating_point() and coeff_dtype is not None:
+                return tensor.to(device=device, dtype=coeff_dtype)
+            return tensor.to(device)
+
+        self._a_c = _move(self._a_c)
+        self._a_pq = _move(self._a_pq)
+        self._b_c = _move(self._b_c)
+        self._b_pq = _move(self._b_pq)
+        self._ap_c = _move(self._ap_c)
+        self._ap_pq = _move(self._ap_pq)
+        self._bp_c = _move(self._bp_c)
+        self._bp_pq = _move(self._bp_pq)
         for pack_name in (
             "_a_pack",
             "_b_pack",
@@ -109,9 +116,9 @@ class SIP:
             "_b_dv_pack",
         ):
             pack = getattr(self, pack_name)
-            pack["p"] = pack["p"].to(device)
-            pack["q"] = pack["q"].to(device)
-            pack["c"] = pack["c"].to(device)
+            pack["p"] = _move(pack["p"])
+            pack["q"] = _move(pack["q"])
+            pack["c"] = _move(pack["c"])
         return self
 
     def _parse_coeffs(

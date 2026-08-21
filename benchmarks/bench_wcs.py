@@ -193,7 +193,8 @@ def _make_header(case: CaseSpec) -> fits.Header:
         header["PV1_7"] = 2.0e-6
         header["PV1_39"] = 2.0e-11
 
-        header["PV2_2"] = 1.0
+        header["PV2_1"] = 1.0
+        header["PV2_2"] = 2.0e-4
         header["PV2_4"] = -1.0e-4
         header["PV2_5"] = 2.5e-4
         header["PV2_7"] = -1.5e-6

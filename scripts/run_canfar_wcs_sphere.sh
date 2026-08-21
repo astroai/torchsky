@@ -427,6 +427,7 @@ case "${mode}" in
     pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
       python "${source_root}/benchmarks/bench_catalog_crossmatch.py" \
       --n-left 1000000 --n-right-band 500000 --n-right-background 500000 --runs 3 \
+      --skip-decl-pruned \
       --json-out "${artifact_root}/catalog_n1e6.json" || job_rc=$?
     pixi run --manifest-path "${source_root}/pixi.toml" -e bench-all -- \
       python "${source_root}/benchmarks/bench_catalog_crossmatch.py" \

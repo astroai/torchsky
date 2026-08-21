@@ -385,34 +385,31 @@ class CoupledTabularLookupWCS:
         nearest = torch.argmin(distances, dim=-1)
         initial = flat_axes.index_select(0, nearest)
 
-        solved = []
         use_global_2d = self.pixel_n_dim == 2 and self.world_n_dim >= 2
-        for row_index in range(target.shape[0]):
-            if use_global_2d:
-                solved.append(
-                    _solve_coupled_tabular_point_2d_global(
-                        self,
-                        target[row_index],
-                        axes,
-                        max_iter=max_iter,
-                        tol=tol,
-                    )
+        if use_global_2d:
+            out = _solve_coupled_tabular_2d_global_batch(
+                self,
+                target,
+                axes,
+                max_iter=max_iter,
+                tol=tol,
+            )
+        else:
+            solved = [
+                _solve_coupled_tabular_point(
+                    self,
+                    target[row_index],
+                    initial[row_index],
+                    axes,
+                    max_iter=max_iter,
+                    tol=tol,
+                    bounds=bounds_mode,
+                    lower_bounds=None,
+                    upper_bounds=None,
                 )
-            else:
-                solved.append(
-                    _solve_coupled_tabular_point(
-                        self,
-                        target[row_index],
-                        initial[row_index],
-                        axes,
-                        max_iter=max_iter,
-                        tol=tol,
-                        bounds=bounds_mode,
-                        lower_bounds=None,
-                        upper_bounds=None,
-                    )
-                )
-        out = torch.stack(solved, dim=0)
+                for row_index in range(target.shape[0])
+            ]
+            out = torch.stack(solved, dim=0)
         return out.reshape(*query_shape, self.pixel_n_dim)
 
 
@@ -592,6 +589,253 @@ def _solve_coupled_tabular_point_2d_global(
         dtype=target.dtype,
         device=target.device,
     )
+
+
+def _newton_coupled_tabular_batch(
+    lookup: CoupledTabularLookupWCS,
+    target: Tensor,
+    initial: Tensor,
+    axes: tuple[Tensor, ...],
+    lower: Tensor,
+    upper: Tensor,
+    *,
+    max_iter: int,
+    tol: float,
+) -> Tensor:
+    """Gauss–Newton for N independent seeds. ``target`` is ``[N, W]``."""
+    current = initial.clone()
+    n_points = int(current.shape[0])
+    if n_points == 0:
+        return current
+    eps = torch.stack(
+        [torch.clamp((axis[-1] - axis[0]).abs() * 1.0e-6, min=1.0e-8) for axis in axes]
+    ).to(device=target.device, dtype=target.dtype)
+    converged = torch.zeros(n_points, dtype=torch.bool, device=target.device)
+    for _ in range(max_iter):
+        value = lookup.pixel_to_world(current, bounds="clamp").to(dtype=target.dtype)
+        residual = value - target
+        finite = torch.isfinite(residual).all(dim=-1)
+        residual_norm = torch.linalg.vector_norm(residual, dim=-1)
+        converged = converged | (finite & (residual_norm <= tol))
+        active = (~converged) & finite
+        if not bool(active.any()):
+            break
+        columns = []
+        for axis_index, axis in enumerate(axes):
+            step = torch.where(
+                current[:, axis_index] + eps[axis_index] > axis[-1],
+                -eps[axis_index],
+                eps[axis_index],
+            )
+            perturbed = current.clone()
+            perturbed[:, axis_index] = perturbed[:, axis_index] + step
+            pvalue = lookup.pixel_to_world(perturbed, bounds="clamp").to(
+                dtype=target.dtype
+            )
+            columns.append((pvalue - value) / step.unsqueeze(-1))
+        jac = torch.stack(columns, dim=-1)
+        delta = torch.linalg.lstsq(jac, residual.unsqueeze(-1)).solution.squeeze(-1)
+        delta = torch.where(torch.isfinite(delta), delta, torch.zeros_like(delta))
+        updated = torch.minimum(torch.maximum(current - delta, lower), upper)
+        current = torch.where(active.unsqueeze(-1), updated, current)
+    value = lookup.pixel_to_world(current, bounds="clamp").to(dtype=target.dtype)
+    residual = value - target
+    ok = (
+        torch.isfinite(current).all(dim=-1)
+        & torch.isfinite(residual).all(dim=-1)
+        & (torch.linalg.vector_norm(residual, dim=-1) <= tol)
+    )
+    return torch.where(ok.unsqueeze(-1), current, torch.full_like(current, torch.nan))
+
+
+def _solve_coupled_tabular_partial(
+    lookup: CoupledTabularLookupWCS,
+    pixel: Tensor,
+    world: Tensor,
+    pixel_known: Tensor,
+    world_known: Tensor,
+    *,
+    max_iter: int = 20,
+    tol: float = 1.0e-10,
+) -> tuple[Tensor, Tensor]:
+    """Solve leftover mixed coupled rows; freeze known pixels, match known world."""
+    axes = lookup.pixel_axes
+    current = pixel.to(dtype=world.dtype, device=world.device).clone()
+    freeze = pixel_known.to(dtype=torch.bool, device=world.device)
+    known_w = world_known.to(dtype=torch.bool, device=world.device)
+    for axis_index, axis in enumerate(axes):
+        if not bool(freeze[axis_index]):
+            current[axis_index] = 0.5 * (axis[0] + axis[-1])
+    lower = torch.stack(
+        [pixel[i] if bool(freeze[i]) else axis[0] for i, axis in enumerate(axes)]
+    ).to(device=world.device, dtype=world.dtype)
+    upper = torch.stack(
+        [pixel[i] if bool(freeze[i]) else axis[-1] for i, axis in enumerate(axes)]
+    ).to(device=world.device, dtype=world.dtype)
+    if not bool(known_w.any()):
+        got = lookup.pixel_to_world(current.unsqueeze(0), bounds="clamp")[0]
+        return current, got
+    eps = torch.stack(
+        [torch.clamp((axis[-1] - axis[0]).abs() * 1.0e-6, min=1.0e-8) for axis in axes]
+    ).to(device=world.device, dtype=world.dtype)
+    for _ in range(max_iter):
+        value = lookup.pixel_to_world(current.unsqueeze(0), bounds="clamp")[0]
+        residual = torch.where(known_w, value - world, torch.zeros_like(value))
+        if float(torch.linalg.vector_norm(residual)) <= tol:
+            break
+        columns = []
+        for axis_index, axis in enumerate(axes):
+            if bool(freeze[axis_index]):
+                columns.append(torch.zeros_like(value))
+                continue
+            step = (
+                -eps[axis_index]
+                if current[axis_index] + eps[axis_index] > axis[-1]
+                else eps[axis_index]
+            )
+            perturbed = current.clone()
+            perturbed[axis_index] = perturbed[axis_index] + step
+            pvalue = lookup.pixel_to_world(perturbed.unsqueeze(0), bounds="clamp")[0]
+            columns.append((pvalue - value) / step)
+        jac = torch.stack(columns, dim=-1)
+        delta = torch.linalg.lstsq(jac, residual.unsqueeze(-1)).solution.reshape(-1)
+        delta = torch.where(freeze, torch.zeros_like(delta), delta)
+        delta = torch.where(torch.isfinite(delta), delta, torch.zeros_like(delta))
+        current = torch.minimum(torch.maximum(current - delta, lower), upper)
+    got = lookup.pixel_to_world(current.unsqueeze(0), bounds="clamp")[0]
+    return current, got
+
+
+def _point_in_convex_quad_2d(
+    point: Tensor,
+    c00: Tensor,
+    c10: Tensor,
+    c11: Tensor,
+    c01: Tensor,
+    *,
+    tol: Tensor,
+) -> Tensor:
+    """True when ``point`` is inside the convex quad ``c00-c10-c11-c01``."""
+
+    def _cross(origin: Tensor, dest: Tensor) -> Tensor:
+        edge = dest - origin
+        delta = point - origin
+        return edge[..., 0] * delta[..., 1] - edge[..., 1] * delta[..., 0]
+
+    s0 = _cross(c00, c10)
+    s1 = _cross(c10, c11)
+    s2 = _cross(c11, c01)
+    s3 = _cross(c01, c00)
+    nonneg = (s0 >= -tol) & (s1 >= -tol) & (s2 >= -tol) & (s3 >= -tol)
+    nonpos = (s0 <= tol) & (s1 <= tol) & (s2 <= tol) & (s3 <= tol)
+    return nonneg | nonpos
+
+
+def _solve_coupled_tabular_2d_global_batch(
+    lookup: CoupledTabularLookupWCS,
+    target: Tensor,
+    axes: tuple[Tensor, ...],
+    *,
+    max_iter: int,
+    tol: float,
+) -> Tensor:
+    """Unique-cell 2-D inverse for a batch of world samples."""
+    x_axis, y_axis = axes
+    n_points = int(target.shape[0])
+    out = torch.full(
+        (n_points, lookup.pixel_n_dim),
+        torch.nan,
+        dtype=target.dtype,
+        device=target.device,
+    )
+    if n_points == 0:
+        return out
+
+    world = lookup.world.to(device=target.device, dtype=target.dtype)
+    world_tol = torch.as_tensor(tol, device=target.device, dtype=target.dtype)
+    nx = int(x_axis.shape[0] - 1)
+    ny = int(y_axis.shape[0] - 1)
+    # ponytail: AABB mask is N×(nx-1)×(ny-1). Ceiling ~32 MiB of flags; chunk cells if a survey table exceeds it.
+    if n_points * nx * ny > 4_000_000:
+        for row_index in range(n_points):
+            out[row_index] = _solve_coupled_tabular_point_2d_global(
+                lookup,
+                target[row_index],
+                axes,
+                max_iter=max_iter,
+                tol=tol,
+            )
+        return out
+    if lookup.world_n_dim == 2:
+        c00 = world[:-1, :-1]
+        c10 = world[1:, :-1]
+        c11 = world[1:, 1:]
+        c01 = world[:-1, 1:]
+        point = target[:, None, None, :]
+        in_cell = _point_in_convex_quad_2d(
+            point, c00, c10, c11, c01, tol=world_tol
+        )
+    else:
+        corners = torch.stack(
+            (
+                world[:-1, :-1],
+                world[1:, :-1],
+                world[:-1, 1:],
+                world[1:, 1:],
+            ),
+            dim=0,
+        )
+        cell_lo = corners.amin(dim=0)
+        cell_hi = corners.amax(dim=0)
+        in_cell = (target[:, None, None, :] + world_tol >= cell_lo[None, :, :, :]) & (
+            target[:, None, None, :] - world_tol <= cell_hi[None, :, :, :]
+        )
+        in_cell = in_cell.all(dim=-1)
+    n_cells = in_cell.reshape(n_points, -1).sum(dim=-1)
+    unique = n_cells == 1
+    unique_idx = torch.nonzero(unique, as_tuple=False).reshape(-1)
+    if unique_idx.numel() > 0:
+        flat = in_cell.reshape(n_points, -1)
+        cell_index = flat.to(dtype=torch.int64).argmax(dim=-1)[unique_idx]
+        ix = torch.div(cell_index, ny, rounding_mode="floor")
+        iy = cell_index - ix * ny
+        lower = torch.stack((x_axis[ix], y_axis[iy]), dim=-1)
+        upper = torch.stack((x_axis[ix + 1], y_axis[iy + 1]), dim=-1)
+        unique_target = target.index_select(0, unique_idx)
+        solved = _newton_coupled_tabular_batch(
+            lookup,
+            unique_target,
+            (lower + upper) * 0.5,
+            axes,
+            lower,
+            upper,
+            max_iter=max_iter,
+            tol=tol,
+        )
+        axis_tol = torch.stack(
+            [
+                torch.clamp((x_axis[-1] - x_axis[0]).abs() * 1.0e-9, min=1.0e-10),
+                torch.clamp((y_axis[-1] - y_axis[0]).abs() * 1.0e-9, min=1.0e-10),
+            ]
+        ).to(device=target.device, dtype=target.dtype)
+        in_bounds = torch.all(solved + axis_tol >= lower, dim=-1) & torch.all(
+            solved - axis_tol <= upper, dim=-1
+        )
+        keep = torch.isfinite(solved).all(dim=-1) & in_bounds
+        out[unique_idx] = torch.where(keep.unsqueeze(-1), solved, out[unique_idx])
+
+    fallback = ~unique
+    if bool(fallback.any()):
+        rows = torch.nonzero(fallback, as_tuple=False).reshape(-1)
+        for row_index in rows.tolist():
+            out[row_index] = _solve_coupled_tabular_point_2d_global(
+                lookup,
+                target[row_index],
+                axes,
+                max_iter=max_iter,
+                tol=tol,
+            )
+    return out
 
 
 def _interp_multilinear(

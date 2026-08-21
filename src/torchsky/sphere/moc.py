@@ -87,6 +87,26 @@ def _uniq_to_ranges(uniq: Tensor, max_order: int) -> list[tuple[int, int]]:
     return merged
 
 
+def _union_ranges(
+    left: list[tuple[int, int]], right: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Merge two sorted half-open range lists."""
+    i = j = 0
+    out: list[tuple[int, int]] = []
+    while i < len(left) or j < len(right):
+        if j >= len(right) or (i < len(left) and left[i][0] <= right[j][0]):
+            start, end = left[i]
+            i += 1
+        else:
+            start, end = right[j]
+            j += 1
+        if not out or start > out[-1][1]:
+            out.append((start, end))
+            continue
+        out[-1] = (out[-1][0], max(out[-1][1], end))
+    return out
+
+
 def _ranges_to_uniq(ranges: list[tuple[int, int]], max_order: int) -> Tensor:
     uniqs: list[Tensor] = []
     for start, end in ranges:
@@ -286,7 +306,15 @@ class MOC:
         return torch.equal(inter.uniq, other.uniq)
 
     def union(self, other: "MOC") -> "MOC":
-        return MOC(torch.cat([self.uniq, other.uniq]))
+        if self.uniq.numel() == 0:
+            return MOC(other.uniq)
+        if other.uniq.numel() == 0:
+            return MOC(self.uniq)
+        max_o = max(self.max_order, other.max_order)
+        return MOC._from_ranges(
+            _union_ranges(self._to_ranges(max_o), other._to_ranges(max_o)),
+            max_o,
+        )
 
     def intersection(self, other: "MOC") -> "MOC":
         # Hierarchical intersection:
@@ -372,8 +400,10 @@ class MOC:
 
     @classmethod
     def _from_ranges(cls, ranges: list[tuple[int, int]], max_order: int) -> "MOC":
-        """Convert ranges back to UNIQ pixels using greedy filling."""
-        return cls(_ranges_to_uniq(ranges, max_order))
+        """Convert merged ranges to UNIQ cells without a second normalize pass."""
+        moc = cls.__new__(cls)
+        moc.uniq = _ranges_to_uniq(ranges, max_order)
+        return moc
 
     def _flat_pixels(self, nside: int) -> Tensor:
         max_o = _order_from_nside(nside)

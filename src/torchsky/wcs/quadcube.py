@@ -53,7 +53,7 @@ _CSC_P50 = 0.25795794
 _CSC_P60 = 0.02584375
 _CSC_P01 = -0.02819452
 _CSC_P11 = -0.01471565
-_CSC_P21 = 0.48051512
+_CSC_P21 = 0.48051509
 _CSC_P31 = -1.74114454
 _CSC_P41 = 1.71547508
 _CSC_P51 = -0.53022337
@@ -331,12 +331,17 @@ def _tsc_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
 # ---------------------------------------------------------------------------
 
 def _csc_forward_poly(chi: Tensor, psi: Tensor) -> Tensor:
-    chi2 = chi * chi
-    psi2 = psi * psi
+    # WCSLIB cscs2x evaluates this polynomial in float32.
+    chi_f = chi.to(dtype=torch.float32)
+    psi_f = psi.to(dtype=torch.float32)
+    chi2 = chi_f * chi_f
+    psi2 = psi_f * psi_f
     chi2co = 1.0 - chi2
-    chi4 = chi2 * chi2
-    psi4 = psi2 * psi2
-    return chi * (
+    chi4 = torch.where(chi2 > 1.0e-16, chi2 * chi2, torch.zeros_like(chi2))
+    psi4 = torch.where(psi2 > 1.0e-16, psi2 * psi2, torch.zeros_like(psi2))
+    chipsi = (chi_f * psi_f).abs()
+    chi2psi2 = torch.where(chipsi > 1.0e-16, chi2 * psi2, torch.zeros_like(chi2))
+    out = chi_f * (
         chi2
         + chi2co
         * (
@@ -350,7 +355,7 @@ def _csc_forward_poly(chi: Tensor, psi: Tensor) -> Tensor:
                     _CSC_C00
                     + _CSC_C10 * chi2
                     + _CSC_C01 * psi2
-                    + _CSC_C11 * chi2 * psi2
+                    + _CSC_C11 * chi2psi2
                     + _CSC_C20 * chi4
                     + _CSC_C02 * psi4
                 )
@@ -358,11 +363,14 @@ def _csc_forward_poly(chi: Tensor, psi: Tensor) -> Tensor:
             + chi2 * (_CSC_OMEGA1 - chi2co * (_CSC_D0 + _CSC_D1 * chi2))
         )
     )
+    return out.to(dtype=chi.dtype)
 
 
 def _csc_inverse_poly(xf: Tensor, yf: Tensor) -> Tensor:
-    xx = xf * xf
-    yy = yf * yf
+    xf_f = xf.to(dtype=torch.float32)
+    yf_f = yf.to(dtype=torch.float32)
+    xx = xf_f * xf_f
+    yy = yf_f * yf_f
     z0 = _CSC_P00 + xx * (
         _CSC_P10
         + xx
@@ -381,7 +389,7 @@ def _csc_inverse_poly(xf: Tensor, yf: Tensor) -> Tensor:
     z4 = _CSC_P04 + xx * (_CSC_P14 + xx * _CSC_P24)
     z5 = _CSC_P05 + xx * _CSC_P15
     chi = z0 + yy * (z1 + yy * (z2 + yy * (z3 + yy * (z4 + yy * (z5 + yy * _CSC_P06)))))
-    return xf + xf * (1.0 - xx) * chi
+    return (xf_f + xf_f * (1.0 - xx) * chi).to(dtype=xf.dtype)
 
 
 def _csc_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:

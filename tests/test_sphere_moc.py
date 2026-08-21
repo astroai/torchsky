@@ -13,6 +13,7 @@ from torchsky.sphere.moc import (
     _uniq_to_ranges,
     _ranges_to_uniq,
     _normalize_moc,
+    _union_ranges,
 )
 from torchsky.sphere import HealSparseMap
 
@@ -36,6 +37,25 @@ def test_max_order_from_uniq_empty():
 def test_normalize_moc_empty():
     uniq = torch.tensor([], dtype=torch.int64)
     assert _normalize_moc(uniq).numel() == 0
+
+
+def test_union_ranges_merges_overlap_and_keeps_disjoint():
+    assert _union_ranges([], []) == []
+    assert _union_ranges([(0, 4)], []) == [(0, 4)]
+    assert _union_ranges([(0, 4)], [(4, 8)]) == [(0, 8)]
+    assert _union_ranges([(0, 4)], [(8, 12)]) == [(0, 4), (8, 12)]
+    assert _union_ranges([(0, 5), (10, 12)], [(3, 8)]) == [(0, 8), (10, 12)]
+
+
+def test_moc_union_matches_cat_normalize_and_empty_identity():
+    a = MOC.from_circle(0.0, 0.0, 2.0, max_order=4)
+    b = MOC.from_circle(3.0, 0.0, 2.0, max_order=4)
+    empty = MOC(torch.tensor([], dtype=torch.int64))
+    torch.testing.assert_close(a.union(empty).uniq, a.uniq)
+    torch.testing.assert_close(empty.union(b).uniq, b.uniq)
+    got = a.union(b).uniq
+    legacy = MOC(torch.cat([a.uniq, b.uniq])).uniq
+    torch.testing.assert_close(got, legacy)
 
 
 def test_moc_max_order_empty():

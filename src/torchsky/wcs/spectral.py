@@ -164,32 +164,32 @@ def rest_frequency_from_header(header: dict[str, Any]) -> float | None:
 def air_wavelength_to_vacuum(wavelength_air: Any, unit: str | None = None) -> Tensor:
     """Convert standard-air wavelength to vacuum wavelength.
 
-    Uses the Morton/IAU-style refractive-index approximation for dry standard air.
-    Inputs and outputs use ``unit`` when provided; FITS default is meters.
+    Uses the WCSLIB ``awavwave`` refractive index (FITS-WCS Paper III / Edlén
+    form), matching astropy.wcs. Inputs and outputs use ``unit`` when provided;
+    FITS default is meters.
     """
     scale = spectral_unit_scale("AWAV", unit)
     air_m = _as_tensor(wavelength_air).to(dtype=torch.float64) * scale
-    air_a = air_m / 1.0e-10
-    sigma2 = (1.0e4 / air_a) ** 2
-    n = 1.0 + 1.0e-8 * (
-        8342.54 + 2406147.0 / (130.0 - sigma2) + 15998.0 / (38.9 - sigma2)
-    )
+    s = torch.where(air_m != 0.0, 1.0 / air_m, torch.zeros_like(air_m))
+    s2 = s * s
+    n = 1.000064328 + 2.554e8 / (0.41e14 - s2) + 294.981e8 / (1.46e14 - s2)
     vac_m = air_m * n
-    return vac_m / scale
+    return torch.where(air_m != 0.0, vac_m, torch.zeros_like(vac_m)) / scale
 
 
 def vacuum_wavelength_to_air(wavelength_vacuum: Any, unit: str | None = None) -> Tensor:
-    """Convert vacuum wavelength to standard-air wavelength."""
+    """Convert vacuum wavelength to standard-air wavelength.
+
+    Uses WCSLIB ``waveawav`` (four refractive-index iterations).
+    """
     scale = spectral_unit_scale("WAVE", unit)
     vac_m = _as_tensor(wavelength_vacuum).to(dtype=torch.float64) * scale
-    air_m = vac_m.clone()
-    for _ in range(3):
-        air_a = air_m / 1.0e-10
-        sigma2 = (1.0e4 / air_a) ** 2
-        n = 1.0 + 1.0e-8 * (
-            8342.54 + 2406147.0 / (130.0 - sigma2) + 15998.0 / (38.9 - sigma2)
-        )
-        air_m = vac_m / n
+    n = torch.ones_like(vac_m)
+    for _ in range(4):
+        s = torch.where(vac_m != 0.0, n / vac_m, torch.zeros_like(vac_m))
+        s2 = s * s
+        n = 1.000064328 + 2.554e8 / (0.41e14 - s2) + 294.981e8 / (1.46e14 - s2)
+    air_m = torch.where(vac_m != 0.0, vac_m / n, torch.zeros_like(vac_m))
     return air_m / scale
 
 

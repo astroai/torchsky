@@ -263,7 +263,7 @@ json_repr = moc.to_json()
 | `contains_pixels(nside, pixels, nest=True)` | Pixel-in-MOC predicate for HEALPix-indexed catalogs or sparse maps |
 | `filter_catalog(lon_deg, lat_deg)` | Filter catalog coordinates by coverage |
 | `contains_moc(other)` | Subset check |
-| `union(other)` / `intersection(other)` / `difference(other)` | Boolean operations |
+| `union(other)` / `intersection(other)` / `difference(other)` | Boolean operations on sorted NEST ranges |
 | `flatten(nside)` | Dense boolean mask at fixed resolution |
 | `to_pixelized_region(nside, nest=True)` | Realize coverage as a `PixelizedRegion`, with optional RING conversion |
 | `to_sparse_map(nside, sentinel=0.0)` | Realize coverage as sparse HEALPix map |
@@ -497,7 +497,7 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API
 
 | Area | Limitation |
 |---|---|
-| `map2alm` weights | `use_weights` applies computed RING quadrature (mean 1). `use_pixel_weights` loads HEALPix full-pixel FITS via torchfits from `datapath` (`1+w` corrections). The two flags are mutually exclusive. Missing pixel-weight files raise; nothing is downloaded or vendored. |
+| `map2alm` weights | `use_weights` applies computed RING quadrature (mean 1). `use_pixel_weights` loads HEALPix full-pixel FITS via torchfits from `datapath` (`1+w` corrections). The two flags are mutually exclusive. Missing pixel-weight files raise; nothing is downloaded or vendored. Fetch with `scripts/fetch_healpix_pixel_weights.sh` into `TORCHSKY_HEALPIX_DATAPATH`. |
 | `alm2map_spin` | Fused Ishioka CPU synthesis is ~1.6× healpy on Mac at nside=128. CPU RING FFTs (polar and equatorial) are in-process pocketfft (Accelerate radix-2 on Apple for large pow2). Linux CANFAR SHA `dfd31ecb` pocketfft polar was ~2.2–2.5× healpy at nside=128 / 8 CPU; equatorial ATen ifft was still in that row. Do not claim Linux SHT. Set `TORCHSKY_SPIN_ISHIOKA=0` at call time if Ishioka loses to Wigner. CUDA/MPS keep maps/alms on device via the ATen ring path; fused Ishioka/Wigner C++ stays CPU. Do not claim a fused CUDA Ishioka kernel. |
 | Pixel windows | Packaged tables cover standard HEALPix NSIDE range. Higher NSIDE may require external data. |
 | Device | See the device table below. Fused Ishioka/Wigner is CPU C++. CUDA/MPS SHT uses the ATen ring FFT path on device (no host copy of the map). `rotate_alm` and `alm2lonlat` stay on device (ATen; CUDA float64 / MPS float32). |

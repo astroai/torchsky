@@ -172,9 +172,14 @@ def test_to_moves_cached_tensors_cuda() -> None:
     not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()),
     reason="MPS not available",
 )
-def test_wcs_to_mps_is_rejected() -> None:
-    with pytest.raises(RuntimeError, match="float64"):
-        WCS(_tan_header()).to("mps")  # type: ignore
+def test_wcs_to_mps_uses_float32() -> None:
+    wcs = WCS(_tan_header()).to("mps")
+    x = torch.tensor([120.0, 140.0], dtype=torch.float32, device="mps")
+    y = torch.tensor([120.0, 140.0], dtype=torch.float32, device="mps")
+    ra, dec = wcs.pixel_to_world(x, y)
+    assert ra.device.type == "mps"
+    assert ra.dtype == torch.float32
+    assert torch.isfinite(ra).all()
 
 
 def test_origin_zero_and_one_consistent_shift() -> None:

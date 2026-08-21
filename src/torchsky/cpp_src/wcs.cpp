@@ -1632,6 +1632,297 @@ inline std::pair<double, double> eval_tpv_scalar(
     return {xi, eta};
 }
 
+bool quadcube_xy_to_face(double x, double y, int* face, double* xf, double* yf) {
+    static const double cx[6] = {0.0, 0.0, 90.0, 180.0, 270.0, 0.0};
+    static const double cy[6] = {90.0, 0.0, 0.0, 0.0, 0.0, -90.0};
+    for (int f = 0; f < 6; ++f) {
+        double fx = (x - cx[f]) / 45.0;
+        double fy = (y - cy[f]) / 45.0;
+        if (std::abs(fx) <= 1.0 + 1e-9 && std::abs(fy) <= 1.0 + 1e-9) {
+            *face = f;
+            *xf = std::max(-1.0, std::min(1.0, fx));
+            *yf = std::max(-1.0, std::min(1.0, fy));
+            return true;
+        }
+    }
+    return false;
+}
+
+void quadcube_face_to_xy(int face, double xf, double yf, double* x, double* y) {
+    static const double cx[6] = {0.0, 0.0, 90.0, 180.0, 270.0, 0.0};
+    static const double cy[6] = {90.0, 0.0, 0.0, 0.0, 0.0, -90.0};
+    *x = cx[face] + 45.0 * xf;
+    *y = cy[face] + 45.0 * yf;
+}
+
+// WCSLIB cscs2x / cscx2s evaluate Chan–O'Neill polynomials in float32.
+float csc_forward_poly(float chi, float psi) {
+    const float gstar = 1.37484847732f;
+    const float mm = 0.004869491981f;
+    const float gamma = -0.13161671474f;
+    const float omega1 = -0.159596235474f;
+    const float d0 = 0.0759196200467f;
+    const float d1 = -0.0217762490699f;
+    const float c00 = 0.141189631152f;
+    const float c10 = 0.0809701286525f;
+    const float c01 = -0.281528535557f;
+    const float c11 = 0.15384112876f;
+    const float c20 = -0.178251207466f;
+    const float c02 = 0.106959469314f;
+    float chi2 = chi * chi;
+    float psi2 = psi * psi;
+    float chi2co = 1.0f - chi2;
+    float psi2co = 1.0f - psi2;
+    float chi4 = (chi2 > 1.0e-16f) ? chi2 * chi2 : 0.0f;
+    float psi4 = (psi2 > 1.0e-16f) ? psi2 * psi2 : 0.0f;
+    float chipsi = std::fabs(chi * psi);
+    float chi2psi2 = (chipsi > 1.0e-16f) ? chi2 * psi2 : 0.0f;
+    return chi * (chi2 + chi2co * (gstar + psi2 * (gamma * chi2co + mm * chi2 +
+        psi2co * (c00 + c10 * chi2 + c01 * psi2 + c11 * chi2psi2 + c20 * chi4 +
+        c02 * psi4)) + chi2 * (omega1 - chi2co * (d0 + d1 * chi2))));
+}
+
+float csc_inverse_poly(float xf, float yf) {
+    const float p00 = -0.27292696f;
+    const float p10 = -0.07629969f;
+    const float p20 = -0.22797056f;
+    const float p30 = 0.54852384f;
+    const float p40 = -0.62930065f;
+    const float p50 = 0.25795794f;
+    const float p60 = 0.02584375f;
+    const float p01 = -0.02819452f;
+    const float p11 = -0.01471565f;
+    const float p21 = 0.48051509f;
+    const float p31 = -1.74114454f;
+    const float p41 = 1.71547508f;
+    const float p51 = -0.53022337f;
+    const float p02 = 0.27058160f;
+    const float p12 = -0.56800938f;
+    const float p22 = 0.30803317f;
+    const float p32 = 0.98938102f;
+    const float p42 = -0.83180469f;
+    const float p03 = -0.60441560f;
+    const float p13 = 1.50880086f;
+    const float p23 = -0.93678576f;
+    const float p33 = 0.08693841f;
+    const float p04 = 0.93412077f;
+    const float p14 = -1.41601920f;
+    const float p24 = 0.33887446f;
+    const float p05 = -0.63915306f;
+    const float p15 = 0.52032238f;
+    const float p06 = 0.14381585f;
+    float xx = xf * xf;
+    float yy = yf * yf;
+    float z0 = p00 + xx * (p10 + xx * (p20 + xx * (p30 + xx * (p40 + xx * (p50 + xx * p60)))));
+    float z1 = p01 + xx * (p11 + xx * (p21 + xx * (p31 + xx * (p41 + xx * p51))));
+    float z2 = p02 + xx * (p12 + xx * (p22 + xx * (p32 + xx * p42)));
+    float z3 = p03 + xx * (p13 + xx * (p23 + xx * p33));
+    float z4 = p04 + xx * (p14 + xx * p24);
+    float z5 = p05 + xx * p15;
+    float chi = z0 + yy * (z1 + yy * (z2 + yy * (z3 + yy * (z4 + yy * (z5 + yy * p06)))));
+    return xf + xf * (1.0f - xx) * chi;
+}
+
+void csc_s2x(double phi_w, double theta, double* xi, double* eta) {
+    double p = phi_w * D2R;
+    double t = theta * D2R;
+    double ct = std::cos(t);
+    double l = ct * std::cos(p);
+    double m = ct * std::sin(p);
+    double n = std::sin(t);
+    int face = 0;
+    double zeta = n;
+    if (l > zeta) { face = 1; zeta = l; }
+    if (m > zeta) { face = 2; zeta = m; }
+    if (-l > zeta) { face = 3; zeta = -l; }
+    if (-m > zeta) { face = 4; zeta = -m; }
+    if (-n > zeta) { face = 5; zeta = -n; }
+    double chi_d, psi_d;
+    if (face == 1) { chi_d = m / zeta; psi_d = n / zeta; }
+    else if (face == 2) { chi_d = -l / zeta; psi_d = n / zeta; }
+    else if (face == 3) { chi_d = -m / zeta; psi_d = n / zeta; }
+    else if (face == 4) { chi_d = l / zeta; psi_d = n / zeta; }
+    else if (face == 5) { chi_d = m / zeta; psi_d = l / zeta; }
+    else { chi_d = m / zeta; psi_d = -l / zeta; }
+    float xf = csc_forward_poly(static_cast<float>(chi_d), static_cast<float>(psi_d));
+    float yf = csc_forward_poly(static_cast<float>(psi_d), static_cast<float>(chi_d));
+    xf = std::max(-1.0f, std::min(1.0f, xf));
+    yf = std::max(-1.0f, std::min(1.0f, yf));
+    quadcube_face_to_xy(face, xf, yf, xi, eta);
+}
+
+bool csc_x2s(double xi_deg, double eta_deg, double* phi, double* theta) {
+    int face;
+    double xf, yf;
+    if (!quadcube_xy_to_face(xi_deg, eta_deg, &face, &xf, &yf)) {
+        return false;
+    }
+    float chi = csc_inverse_poly(static_cast<float>(xf), static_cast<float>(yf));
+    float psi = csc_inverse_poly(static_cast<float>(yf), static_cast<float>(xf));
+    double t = 1.0 / std::sqrt(static_cast<double>(chi * chi + psi * psi) + 1.0);
+    double l, m, n;
+    if (face == 0) { l = -psi * t; m = chi * t; n = t; }
+    else if (face == 1) { l = t; m = chi * t; n = psi * t; }
+    else if (face == 2) { l = -chi * t; m = t; n = psi * t; }
+    else if (face == 3) { l = -t; m = -chi * t; n = psi * t; }
+    else if (face == 4) { l = chi * t; m = -t; n = psi * t; }
+    else { l = psi * t; m = chi * t; n = -t; }
+    *theta = std::asin(std::max(-1.0, std::min(1.0, n))) * R2D;
+    *phi = (l == 0.0 && m == 0.0) ? 0.0 : (std::atan2(m, l) * R2D);
+    return true;
+}
+
+void qsc_s2x(double phi_w, double theta, double* xi, double* eta) {
+    if (std::abs(theta - 90.0) < 1e-12) { *xi = 0.0; *eta = 90.0; return; }
+    if (std::abs(theta + 90.0) < 1e-12) { *xi = 0.0; *eta = -90.0; return; }
+    double p = phi_w * D2R;
+    double t = theta * D2R;
+    double ct = std::cos(t);
+    double l = ct * std::cos(p);
+    double m = ct * std::sin(p);
+    double n = std::sin(t);
+    int face = 0;
+    double zeta = n;
+    if (l > zeta) { face = 1; zeta = l; }
+    if (m > zeta) { face = 2; zeta = m; }
+    if (-l > zeta) { face = 3; zeta = -l; }
+    if (-m > zeta) { face = 4; zeta = -m; }
+    if (-n > zeta) { face = 5; zeta = -n; }
+    double xi_f, eta_f, zeta_f;
+    if (face == 1) { xi_f = m; eta_f = n; zeta_f = l; }
+    else if (face == 2) { xi_f = -l; eta_f = n; zeta_f = m; }
+    else if (face == 3) { xi_f = -m; eta_f = n; zeta_f = -l; }
+    else if (face == 4) { xi_f = l; eta_f = n; zeta_f = -m; }
+    else if (face == 5) { xi_f = m; eta_f = l; zeta_f = -n; }
+    else { xi_f = m; eta_f = -l; zeta_f = n; }
+    double zeco = 1.0 - zeta_f;
+    double xf, yf;
+    if (xi_f == 0.0 && eta_f == 0.0) {
+        xf = 0.0;
+        yf = 0.0;
+    } else if (std::abs(xi_f) >= std::abs(eta_f)) {
+        double omega = (xi_f == 0.0) ? 0.0 : eta_f / xi_f;
+        double tau = 1.0 + omega * omega;
+        double mag = std::sqrt(std::max(0.0, zeco / (1.0 - 1.0 / std::sqrt(1.0 + tau))));
+        xf = std::copysign(mag, xi_f);
+        if (xi_f == 0.0) xf = 0.0;
+        yf = (xf / 15.0) * (std::atan(omega) - std::asin(omega / std::sqrt(tau + tau))) * R2D;
+    } else {
+        double omega = (eta_f == 0.0) ? 0.0 : xi_f / eta_f;
+        double tau = 1.0 + omega * omega;
+        double mag = std::sqrt(std::max(0.0, zeco / (1.0 - 1.0 / std::sqrt(1.0 + tau))));
+        yf = std::copysign(mag, eta_f);
+        if (eta_f == 0.0) yf = 0.0;
+        xf = (yf / 15.0) * (std::atan(omega) - std::asin(omega / std::sqrt(tau + tau))) * R2D;
+    }
+    xf = std::max(-1.0, std::min(1.0, xf));
+    yf = std::max(-1.0, std::min(1.0, yf));
+    quadcube_face_to_xy(face, xf, yf, xi, eta);
+}
+
+bool qsc_x2s(double xi_deg, double eta_deg, double* phi, double* theta) {
+    int face;
+    double xf, yf;
+    if (!quadcube_xy_to_face(xi_deg, eta_deg, &face, &xf, &yf)) {
+        return false;
+    }
+    bool direct = std::abs(xf) > std::abs(yf);
+    auto omega_tau_zeta = [](double u, double v, double* o, double* t, double* z) {
+        double w = (15.0 * v / (u == 0.0 ? 1.0 : u)) * D2R;
+        double sw = std::sin(w);
+        double cw = std::cos(w);
+        *o = sw / (cw - 0.7071067811865476);
+        *t = 1.0 + (*o) * (*o);
+        *z = 1.0 - u * u * (1.0 - 1.0 / std::sqrt(1.0 + *t));
+    };
+    double omega, tau, zeta;
+    if (xf == 0.0 && yf == 0.0) {
+        omega = 0.0;
+        tau = 1.0;
+        zeta = 1.0;
+    } else if (direct && xf != 0.0) {
+        omega_tau_zeta(xf, yf, &omega, &tau, &zeta);
+    } else if ((!direct) && yf != 0.0) {
+        omega_tau_zeta(yf, xf, &omega, &tau, &zeta);
+    } else {
+        omega = 0.0;
+        tau = 1.0;
+        zeta = 1.0;
+    }
+    zeta = std::max(-1.0, std::min(1.0, zeta));
+    double zeco = 1.0 - zeta;
+    double wmag = std::sqrt(std::max(0.0, zeco * (2.0 - zeco) / tau));
+    double l, m, n;
+    if (face == 0) {
+        if (direct) {
+            m = (xf < 0.0) ? -wmag : wmag;
+            l = -m * omega;
+        } else {
+            l = (yf > 0.0) ? -wmag : wmag;
+            m = -l * omega;
+        }
+        n = zeta;
+    } else if (face == 1) {
+        l = zeta;
+        if (direct) {
+            double s = (xf < 0.0) ? -wmag : wmag;
+            m = s;
+            n = s * omega;
+        } else {
+            double s = (yf < 0.0) ? -wmag : wmag;
+            m = s * omega;
+            n = s;
+        }
+    } else if (face == 2) {
+        m = zeta;
+        if (direct) {
+            double s = (xf > 0.0) ? -wmag : wmag;
+            l = s;
+            n = -s * omega;
+        } else {
+            double s = (yf < 0.0) ? -wmag : wmag;
+            l = -s * omega;
+            n = s;
+        }
+    } else if (face == 3) {
+        l = -zeta;
+        if (direct) {
+            double s = (xf > 0.0) ? -wmag : wmag;
+            m = s;
+            n = -s * omega;
+        } else {
+            double s = (yf < 0.0) ? -wmag : wmag;
+            m = -s * omega;
+            n = s;
+        }
+    } else if (face == 4) {
+        m = -zeta;
+        if (direct) {
+            double s = (xf < 0.0) ? -wmag : wmag;
+            l = s;
+            n = s * omega;
+        } else {
+            double s = (yf < 0.0) ? -wmag : wmag;
+            l = s * omega;
+            n = s;
+        }
+    } else {
+        n = -zeta;
+        if (direct) {
+            double s = (xf < 0.0) ? -wmag : wmag;
+            m = s;
+            l = s * omega;
+        } else {
+            double s = (yf < 0.0) ? -wmag : wmag;
+            m = s * omega;
+            l = s;
+        }
+    }
+    *theta = std::asin(std::max(-1.0, std::min(1.0, n))) * R2D;
+    *phi = (l == 0.0 && m == 0.0) ? 0.0 : (std::atan2(m, l) * R2D);
+    return true;
+}
+
 void wcs_pixel_to_world_fused_cpu(
     const torch::Tensor& x_tensor,
     const torch::Tensor& y_tensor,
@@ -1855,6 +2146,16 @@ void wcs_pixel_to_world_fused_cpu(
                 theta = std::asin(std::max(-1.0, std::min(1.0, ncomp))) * R2D;
                 phi = (l == 0.0 && m == 0.0) ? 0.0 : (std::atan2(m, l) * R2D);
             }
+        } else if (proj_code == "CSC") {
+            if (!csc_x2s(xi_deg, eta_deg, &phi, &theta)) {
+                phi = std::nan("");
+                theta = std::nan("");
+            }
+        } else if (proj_code == "QSC") {
+            if (!qsc_x2s(xi_deg, eta_deg, &phi, &theta)) {
+                phi = std::nan("");
+                theta = std::nan("");
+            }
         } else {
             phi = std::nan("");
             theta = std::nan("");
@@ -1941,6 +2242,8 @@ void wcs_world_to_pixel_fused_cpu(
         PCO,
         XPH,
         TSC,
+        CSC,
+        QSC,
         OTHER,
     };
 
@@ -1963,6 +2266,8 @@ void wcs_world_to_pixel_fused_cpu(
     else if (proj_code == "PCO") proj_kind = FusedProjKind::PCO;
     else if (proj_code == "XPH") proj_kind = FusedProjKind::XPH;
     else if (proj_code == "TSC") proj_kind = FusedProjKind::TSC;
+    else if (proj_code == "CSC") proj_kind = FusedProjKind::CSC;
+    else if (proj_code == "QSC") proj_kind = FusedProjKind::QSC;
 
     const bool native_is_pole = (native_type == "pole");
     bool use_center_equator_fast = (native_type == "center" && std::abs(delta0) < 1e-12 && std::abs(std::fmod(phi_p_rad * R2D, 360.0)) < 1e-12);
@@ -2190,6 +2495,14 @@ void wcs_world_to_pixel_fused_cpu(
             static const double cy[6] = {90.0, 0.0, 0.0, 0.0, 0.0, -90.0};
             xi = cx[face] + 45.0 * xf;
             eta = cy[face] + 45.0 * yf;
+            break;
+        }
+        case FusedProjKind::CSC: {
+            csc_s2x(phi_w, theta, &xi, &eta);
+            break;
+        }
+        case FusedProjKind::QSC: {
+            qsc_s2x(phi_w, theta, &xi, &eta);
             break;
         }
         case FusedProjKind::OTHER:

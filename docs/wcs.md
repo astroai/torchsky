@@ -75,7 +75,8 @@ For genuinely coupled multidimensional table arrays, use
 `coupled_tabular_wcs_from_fits(...)` to build a `CoupledTabularLookupWCS`
 forward interpolator. It performs torch-native multilinear interpolation over
 the table grid. Inverse exists for square, overdetermined, and underdetermined
-tables. Square 2-D tables use the unique-cell search. Overdetermined tables
+tables. Square 2-D tables use a batched unique-cell Gauss–Newton search.
+Overdetermined tables
 (`world_n_dim > pixel_n_dim`) use Gauss–Newton / least squares and return
 NaN off the interpolated manifold. Underdetermined tables
 (`world_n_dim < pixel_n_dim`) return a nearest-seed Gauss–Newton particular
@@ -83,11 +84,18 @@ solution (minimum-norm step); that inverse is not unique.
 
 Celestial projections include Paper II zenithal, cylindrical, conic, polyconic
 (`BON`, `PCO`), HEALPix (`HPX`, `XPH`), quadcube (`TSC`, `CSC`, `QSC`), and
-`NCP` (implemented as slant `SIN`). Fused C++ covers `PCO`, `XPH`, and `TSC`;
-`CSC`/`QSC` stay on the Python path. `WCS.to("cuda")` moves cached PV and
-rotation tensors with the pixels. `WCS.to("mps")` is rejected (MPS has no
-float64). CUDA WCS is float64. CPU fused WCS is float64. MPS two-arg TAN
-stays float32 without moving WCS parameters onto MPS.
+`NCP` (implemented as slant `SIN`). Fused C++ covers `PCO`, `XPH`, `TSC`,
+`CSC`, and `QSC`. `WCS.to("cuda")` moves cached PV and rotation tensors with
+the pixels. `WCS.to("mps")` casts cached parameters to float32 (MPS has no
+float64; expect arcsecond-class TAN error versus CPU float64). CUDA WCS is
+float64. CPU fused WCS is float64.
+
+Identity TPV uses `PV1_1=1` and `PV2_1=1` (axis 2 is swapped: `PV2_1` is the
+linear `v` term). A header with `PV2_2=1` and no `PV2_1` is rank-deficient;
+inverse is then a particular solution, not a unique preimage.
+
+Air wavelengths (`AWAV`, `FREQ-GRA`) use the WCSLIB Edlén form so spectral
+WCS matches astropy.wcs / WCSLIB.
 
 Small-N overhead versus Astropy (sub-3 ms) is acceptable; large-N must stay
 first on CPU and CUDA. Observed place is ATen on the catalog device (CUDA

@@ -1270,3 +1270,41 @@ def test_wcs_sip_with_pixel_affine_correction_roundtrip():
         rtol=0.0,
     )
     assert corrected.to_header()["TSKYAF0"] == "pixel_affine"
+
+
+def test_wcs_pixel_affine_correction_coupled_extra_axis():
+    header = {
+        "NAXIS": 3,
+        "CTYPE1": "X",
+        "CTYPE2": "Y",
+        "CTYPE3": "Z",
+        "CRPIX1": 1.0,
+        "CRPIX2": 1.0,
+        "CRPIX3": 1.0,
+        "CRVAL1": 0.0,
+        "CRVAL2": 0.0,
+        "CRVAL3": 0.0,
+        "CD1_1": 1.0,
+        "CD1_2": 0.0,
+        "CD1_3": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": 1.0,
+        "CD2_3": 0.0,
+        "CD3_1": 0.2,
+        "CD3_2": -0.1,
+        "CD3_3": 1.0,
+    }
+    wcs = WCS(header)
+    matrix = torch.tensor([[1.02, 0.01], [-0.015, 0.98]], dtype=torch.float64)
+    offset = torch.tensor([1.5, -2.0], dtype=torch.float64)
+    source = torch.tensor([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], dtype=torch.float64)
+    xy = source[:, :2]
+    corrected_xy = torch.matmul(xy, matrix.T) + offset
+    corrected_pixels = torch.cat([corrected_xy, source[:, 2:]], dim=-1)
+    corrected = wcs.with_pixel_affine_correction(matrix, offset)
+    torch.testing.assert_close(
+        corrected.pixel_to_world(corrected_pixels),
+        wcs.pixel_to_world(source),
+        atol=1e-10,
+        rtol=0.0,
+    )

@@ -141,6 +141,21 @@ def test_coupled_tabular_lookup_wcs_multilinear_forward_and_autograd() -> None:
     assert lookup.names == ("tilted", "product")
     assert lookup.units == ("nm", "d")
 
+    batch_pixels = torch.stack(
+        (
+            torch.linspace(0.0, 2.0, 16),
+            torch.linspace(0.0, 20.0, 16),
+        ),
+        dim=-1,
+    ).to(dtype=torch.float64)
+    batch_world = lookup.pixel_to_world(batch_pixels)
+    torch.testing.assert_close(
+        lookup.world_to_pixel(batch_world),
+        batch_pixels,
+        atol=1e-8,
+        rtol=1e-8,
+    )
+
     differentiable_pixel = torch.tensor(
         [[1.0, 5.0]], dtype=torch.float64, requires_grad=True
     )
@@ -1053,6 +1068,39 @@ def test_wcs_mixed_coupled_tabular_complete_pixel_or_world() -> None:
     solved_p, solved_w = wcs.mixed_pixel_world(pixel=pix_in, world=world_in)
     torch.testing.assert_close(solved_p, pixels_true, atol=1e-8, rtol=1e-8)
     torch.testing.assert_close(solved_w, world_true, atol=1e-8, rtol=1e-8)
+
+
+def test_wcs_mixed_coupled_tabular_partial_pixel_and_world() -> None:
+    x = torch.tensor([0.0, 2.0], dtype=torch.float64)
+    y = torch.tensor([0.0, 10.0, 20.0], dtype=torch.float64)
+    xx = x[:, None].expand(2, 3)
+    yy = y[None, :].expand(2, 3)
+    world_grid = torch.stack((xx + 0.1 * yy, 0.2 * xx + yy), dim=-1)
+    lookup = CoupledTabularLookupWCS((x, y), world_grid)
+    header = {
+        "NAXIS": 2,
+        "CTYPE1": "RA---TAB",
+        "CTYPE2": "DEC--TAB",
+        "CRPIX1": 1.0,
+        "CRPIX2": 1.0,
+        "CRVAL1": 0.0,
+        "CRVAL2": 0.0,
+        "CDELT1": 1.0,
+        "CDELT2": 1.0,
+    }
+    wcs = WCS(
+        header,
+        coupled_tabular=lookup,
+        coupled_tabular_axes=(1, 2),
+        coupled_tabular_pixel_axes=(1, 2),
+    )
+    pixels_true = torch.tensor([[1.0, 5.0]], dtype=torch.float64)
+    world_true = wcs.pixel_to_world(pixels_true)
+    pix_in = torch.tensor([[1.0, float("nan")]], dtype=torch.float64)
+    world_in = torch.tensor([[float("nan"), float(world_true[0, 1])]], dtype=torch.float64)
+    solved_p, solved_w = wcs.mixed_pixel_world(pixel=pix_in, world=world_in)
+    torch.testing.assert_close(solved_p, pixels_true, atol=1e-6, rtol=1e-6)
+    torch.testing.assert_close(solved_w, world_true, atol=1e-6, rtol=1e-6)
 
 
 def test_wcs_mixed_separable_tabular_fills_per_axis() -> None:

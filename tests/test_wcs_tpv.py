@@ -284,6 +284,20 @@ def test_tpv_inverse_parity_with_astropy_on_invertible_broad_field() -> None:
     np.testing.assert_allclose(y_t.cpu().numpy(), yy.ravel(), atol=1e-6)
 
 
+def test_tpv_identity_pv2_1_mixed_fov_roundtrip() -> None:
+    header = _tpv_header()
+    header["PV2_1"] = 1.0
+    header["PV2_2"] = 2.0e-4
+    twcs = WCS(dict(header))
+    rng = np.random.default_rng(1)
+    x = rng.uniform(64.0, 960.0, size=200)
+    y = rng.uniform(64.0, 960.0, size=200)
+    ra, dec = twcs.pixel_to_world(torch.from_numpy(x), torch.from_numpy(y), origin=0)
+    xb, yb = twcs.world_to_pixel(ra, dec, origin=0)
+    err = np.hypot(xb.numpy() - x, yb.numpy() - y)
+    assert float(np.nanmax(err)) < 1.0e-5
+
+
 def test_fused_wcs_enabled_by_default_for_tpv() -> None:
     twcs = WCS(dict(_tpv_header()))
     assert twcs._enable_fused_wcs

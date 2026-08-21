@@ -23,7 +23,7 @@ from .spectral import (
     rest_frequency_from_header,
     spectral_to_frequency as _spectral_to_frequency,
 )
-from .tabular import CoupledTabularLookupWCS, TabularAxis
+from .tabular import CoupledTabularLookupWCS, TabularAxis, _solve_coupled_tabular_partial
 from .temporal import TemporalWCS
 from .frames import (
     canonical_celestial_frame,
@@ -1379,6 +1379,8 @@ class WCS:
                     "PCO",
                     "XPH",
                     "TSC",
+                    "CSC",
+                    "QSC",
                     "TPV",
                 )
                 or (self._is_tpv and self._proj_code == "TAN")
@@ -1408,6 +1410,8 @@ class WCS:
                     "PCO",
                     "XPH",
                     "TSC",
+                    "CSC",
+                    "QSC",
                     "TPV",
                 )
                 or (self._is_tpv and self._proj_code == "TAN")
@@ -2776,31 +2780,37 @@ class WCS:
         return self
 
     def to(self, device: Union[str, torch.device]):
-        """Move WCS parameters to specified device."""
+        """Move WCS parameters to specified device.
+
+        CUDA and CPU keep float64 cached parameters. MPS is float32-only, so
+        cached tensors are cast to float32 there (arcsecond-class error vs
+        float64 is expected). C++ fused kernels stay CPU.
+        """
         self.device = torch.device(device)
-        if self.device.type == "mps":
-            raise RuntimeError(
-                "WCS.to('mps') is unsupported: cached WCS parameters are "
-                "float64 and MPS is float32-only"
-            )
+        target_dtype = torch.float32 if self.device.type == "mps" else None
         # C++ ZPN reads a host coefficient vector; keep it on CPU.
         skip = {"_zpn_coeffs_cpu"}
         for name, value in vars(self).items():
             if name in skip:
                 continue
             if isinstance(value, torch.Tensor):
-                setattr(self, name, value.to(self.device))
+                setattr(
+                    self,
+                    name,
+                    value.to(device=self.device, dtype=target_dtype or value.dtype),
+                )
         if self.tpv is not None:
             self.tpv.to(self.device)
         if self.sip is not None:
             self.sip.to(self.device)
+        tabular_dtype = torch.float32 if self.device.type == "mps" else torch.float64
         self.tabular_axes = {
-            axis: tabular.to(device=self.device, dtype=torch.float64)
+            axis: tabular.to(device=self.device, dtype=tabular_dtype)
             for axis, tabular in self.tabular_axes.items()
         }
         if self.coupled_tabular is not None:
             self.coupled_tabular = self.coupled_tabular.to(
-                device=self.device, dtype=torch.float64
+                device=self.device, dtype=tabular_dtype
             )
         if self._pixel_affine_matrix is not None:
             self._set_pixel_affine(self._pixel_affine_matrix, self._pixel_affine_offset)
@@ -3296,6 +3306,32 @@ class WCS:
                 pix_fill = torch.stack(pix_fill, dim=-1)
             pixel_flat[remaining_world] = pix_fill
             world_flat[remaining_world] = rows_w
+        leftover = ~(all_pix | remaining_world)
+        if bool(leftover.any()):
+            lookup = self.coupled_tabular
+            if lookup is None:
+                raise NotImplementedError(
+                    "mixed coupled tabular transforms require a complete pixel sample "
+                    "or a complete world sample for the coupled axes"
+                )
+            pix_t = torch.as_tensor(pix_axes, dtype=torch.long, device=pixel_flat.device)
+            world_t = torch.as_tensor(
+                world_axes, dtype=torch.long, device=pixel_flat.device
+            )
+            for row_index in torch.nonzero(leftover, as_tuple=False).reshape(-1).tolist():
+                if not bool(pk[row_index, pix_t].any()) and not bool(
+                    wk[row_index, world_t].any()
+                ):
+                    continue
+                solved_pix, solved_world = _solve_coupled_tabular_partial(
+                    lookup,
+                    pixel_flat[row_index, pix_t],
+                    world_flat[row_index, world_t],
+                    pk[row_index, pix_t],
+                    wk[row_index, world_t],
+                )
+                pixel_flat[row_index, pix_t] = solved_pix
+                world_flat[row_index, world_t] = solved_world
         extra = [
             axis
             for axis in range(self.naxis)
@@ -3417,12 +3453,7 @@ class WCS:
             rows_p = pixel_flat[row_mask]
             rows_w = world_flat[row_mask]
             rel = rows_p + (1.0 - float(origin)) - self.crpix
-            if unknown_pixel_axes:
-                if len(world_axes_known) != len(unknown_pixel_axes):
-                    raise NotImplementedError(
-                        "mixed spatial extra axes require one known extra-world "
-                        "equation per unknown extra pixel axis"
-                    )
+            if unknown_pixel_axes and world_axes_known:
                 known_pix = torch.as_tensor(
                     pixel_axes_known, dtype=torch.long, device=self.device
                 )
@@ -3436,9 +3467,11 @@ class WCS:
                 rhs = rhs - torch.matmul(
                     rel[:, known_pix], self.cd_full[known_world, :][:, known_pix].T
                 )
-                solved_rel = torch.linalg.solve(
-                    self.cd_full[known_world, :][:, unknown_pix], rhs.T
-                ).T
+                design = self.cd_full[known_world, :][:, unknown_pix]
+                if design.shape[0] == design.shape[1]:
+                    solved_rel = torch.linalg.solve(design, rhs.T).T
+                else:
+                    solved_rel = torch.linalg.lstsq(design, rhs.T).solution.T
                 rel[:, unknown_pix] = solved_rel
                 rows_p[:, unknown_pix] = (
                     solved_rel + self.crpix[unknown_pix] + (float(origin) - 1.0)
@@ -3485,11 +3518,8 @@ class WCS:
                 pixel_flat[row_mask] = rows_p
                 world_flat[row_mask] = world_full
                 continue
-            if len(world_axes_known) != len(unknown_pixel_axes):
-                raise NotImplementedError(
-                    "linear mixed transforms require one known world equation per "
-                    "unknown pixel axis"
-                )
+            if len(world_axes_known) == 0:
+                continue
             rel = rows_p + (1.0 - float(origin)) - self.crpix
             known_pix = torch.as_tensor(
                 pixel_axes_known, dtype=torch.long, device=self.device
@@ -3505,9 +3535,11 @@ class WCS:
                 rhs = rhs - torch.matmul(
                     rel[:, known_pix], self.cd_full[known_world, :][:, known_pix].T
                 )
-            solved_rel = torch.linalg.solve(
-                self.cd_full[known_world, :][:, unknown_pix], rhs.T
-            ).T
+            design = self.cd_full[known_world, :][:, unknown_pix]
+            if design.shape[0] == design.shape[1]:
+                solved_rel = torch.linalg.solve(design, rhs.T).T
+            else:
+                solved_rel = torch.linalg.lstsq(design, rhs.T).solution.T
             rel[:, unknown_pix] = solved_rel
             rows_p[:, unknown_pix] = (
                 solved_rel + self.crpix[unknown_pix] + (float(origin) - 1.0)
@@ -3909,17 +3941,6 @@ class WCS:
         """
         if self.naxis < 2:
             raise ValueError("pixel affine correction requires at least two WCS axes")
-        for axis in range(2, self.naxis):
-            row = self.cd_full[axis, :2]
-            col = self.cd_full[:2, axis]
-            coupled = torch.any(torch.abs(row) > 1e-15) or torch.any(
-                torch.abs(col) > 1e-15
-            )
-            if bool(coupled.detach().cpu().item()):
-                raise NotImplementedError(
-                    "pixel affine WCS correction requires uncoupled extra axes"
-                )
-
         affine = torch.as_tensor(matrix, dtype=torch.float64, device=self.device)
         shift = torch.as_tensor(offset, dtype=torch.float64, device=self.device)
         if affine.shape != (2, 2):
@@ -3927,6 +3948,14 @@ class WCS:
         if shift.shape != (2,):
             raise ValueError("offset must have shape (2,)")
         affine_inv = torch.linalg.inv(affine)
+        extra_coupled = False
+        for axis in range(2, self.naxis):
+            row = self.cd_full[axis, :2]
+            col = self.cd_full[:2, axis]
+            extra_coupled = extra_coupled or bool(
+                torch.any(torch.abs(row) > 1e-15)
+                or torch.any(torch.abs(col) > 1e-15)
+            )
         distorted = (
             self.sip is not None or self._is_tpv or self._is_tnx or self._is_zpx
         )
@@ -3941,16 +3970,23 @@ class WCS:
             for j in range(1, self.naxis + 1):
                 header.pop(f"PC{i}_{j}", None)
 
-        if not distorted:
-            old_crpix = self.crpix[:2]
-            new_crpix = 1.0 + shift + affine @ (old_crpix - 1.0)
-            new_cd_2d = self.cd_full[:2, :2] @ affine_inv
-            for i in range(2):
-                header[f"CRPIX{i + 1}"] = float(new_crpix[i].detach().cpu().item())
-                for j in range(2):
-                    header[f"CD{i + 1}_{j + 1}"] = float(
-                        new_cd_2d[i, j].detach().cpu().item()
-                    )
+            if not distorted:
+                old_crpix = self.crpix[:2]
+                new_crpix = 1.0 + shift + affine @ (old_crpix - 1.0)
+                new_cd_2d = self.cd_full[:2, :2] @ affine_inv
+                for i in range(2):
+                    header[f"CRPIX{i + 1}"] = float(new_crpix[i].detach().cpu().item())
+                    for j in range(2):
+                        header[f"CD{i + 1}_{j + 1}"] = float(
+                            new_cd_2d[i, j].detach().cpu().item()
+                        )
+            if extra_coupled:
+                extra_spatial = self.cd_full[2:, :2] @ affine_inv
+                for i in range(2, self.naxis):
+                    for j in range(2):
+                        header[f"CD{i + 1}_{j + 1}"] = float(
+                            extra_spatial[i - 2, j].detach().cpu().item()
+                        )
 
         prefix = str(metadata_prefix).strip().upper()
         if prefix:

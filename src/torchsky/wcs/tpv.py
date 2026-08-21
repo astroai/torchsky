@@ -181,7 +181,9 @@ class TPV:
 
     def to(self, device: torch.device) -> "TPV":
         self.idx1, self.idx2 = self.idx1.to(device), self.idx2.to(device)
-        self.c1, self.c2 = self.c1.to(device), self.c2.to(device)
+        coeff_dtype = torch.float32 if device.type == "mps" else self.c1.dtype
+        self.c1 = self.c1.to(device=device, dtype=coeff_dtype)
+        self.c2 = self.c2.to(device=device, dtype=coeff_dtype)
         return self
 
     def _distort_scalar(self, uv: Tensor) -> Tensor:
