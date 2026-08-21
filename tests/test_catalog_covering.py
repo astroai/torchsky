@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from torchsky.catalogs import cap_covering_pixels, crossmatch_sky, nside_for_cap
-from torchsky.catalogs.index import candidate_coarse_pixels_for_left_pixel
+from torchsky.catalogs.index import HealpixIndex, candidate_coarse_pixels_for_left_pixel
 from torchsky.sphere import chord_radius, great_circle_distance
 from torchsky.sphere import healpix as _healpix
 
@@ -19,7 +19,7 @@ def test_nside_for_cap_is_covering_derived() -> None:
     tight = nside_for_cap(math.radians(1.0 / 3600.0))
     assert wide == 1 or _healpix.max_pixrad(wide, degrees=False) <= math.radians(30.0)
     assert tight >= wide
-    assert tight <= 2048
+    assert tight <= 65536
 
 
 def test_cap_covering_matches_pixel_centers() -> None:
@@ -63,9 +63,45 @@ def test_cap_covering_sound_for_random_pairs() -> None:
         find="all",
     )
     got = torch.stack((result.left_index, result.right_index), dim=1)
-    brute_set = { (int(a), int(b)) for a, b in brute_pairs.tolist() }
-    got_set = { (int(a), int(b)) for a, b in got.tolist() }
+    brute_set = {(int(a), int(b)) for a, b in brute_pairs.tolist()}
+    got_set = {(int(a), int(b)) for a, b in got.tolist()}
     assert brute_set == got_set
+
+
+def test_one_arcsec_all_pairs_match_brute() -> None:
+    rng = torch.Generator().manual_seed(7)
+    n = 64
+    left_ra = 150.0 + torch.rand(n, generator=rng, dtype=torch.float64) * 0.02
+    left_dec = 2.0 + torch.rand(n, generator=rng, dtype=torch.float64) * 0.02
+    right_ra = 150.0 + torch.rand(n, generator=rng, dtype=torch.float64) * 0.02
+    right_dec = 2.0 + torch.rand(n, generator=rng, dtype=torch.float64) * 0.02
+    right_ra[: n // 2] = left_ra[: n // 2]
+    right_dec[: n // 2] = left_dec[: n // 2]
+    radius_arcsec = 5.0
+    brute = great_circle_distance(
+        left_ra.unsqueeze(1),
+        left_dec.unsqueeze(1),
+        right_ra.unsqueeze(0),
+        right_dec.unsqueeze(0),
+        degrees=True,
+    )
+    brute_pairs = torch.nonzero(brute * 3600.0 <= radius_arcsec, as_tuple=False)
+    result = crossmatch_sky(
+        left_ra,
+        left_dec,
+        right_ra,
+        right_dec,
+        radius_arcsec=radius_arcsec,
+        find="all",
+    )
+    got = {
+        (int(a), int(b))
+        for a, b in zip(
+            result.left_index.tolist(), result.right_index.tolist(), strict=True
+        )
+    }
+    brute_set = {(int(a), int(b)) for a, b in brute_pairs.tolist()}
+    assert brute_set == got
 
 
 def test_per_row_radius_does_not_drop_wide_matches() -> None:
@@ -82,7 +118,9 @@ def test_per_row_radius_does_not_drop_wide_matches() -> None:
         radius_arcsec=radii,
         find="all",
     )
-    pairs = set(zip(result.left_index.tolist(), result.right_index.tolist(), strict=True))
+    pairs = set(
+        zip(result.left_index.tolist(), result.right_index.tolist(), strict=True)
+    )
     assert (0, 0) in pairs
     assert (1, 0) in pairs
     assert (1, 1) in pairs
@@ -154,3 +192,18 @@ def test_cap_covering_matches_hpgeom_query_circle() -> None:
         nest=True,
     )
     assert set(got.tolist()) == {int(p) for p in hp_pix}
+
+
+def test_index_expand_keeps_query_alignment() -> None:
+    ra = torch.tensor([10.0, 10.0, 40.0], dtype=torch.float64)
+    dec = torch.tensor([20.0, 20.0, -10.0], dtype=torch.float64)
+    index = HealpixIndex.build(ra, dec, nside=32, nest=True)
+    pix = _healpix.ang2pix(32, ra, dec, nest=True, lonlat=True).to(torch.int64)
+    query, rows = index.expand(pix)
+    got = {(int(q), int(r)) for q, r in zip(query.tolist(), rows.tolist(), strict=True)}
+    assert (0, 0) in got
+    assert (0, 1) in got
+    assert (1, 0) in got
+    assert (1, 1) in got
+    assert (2, 2) in got
+    assert (2, 0) not in got

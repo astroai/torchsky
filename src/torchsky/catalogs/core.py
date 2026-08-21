@@ -16,8 +16,12 @@ from torch.utils.data import IterableDataset, get_worker_info
 from ..sphere import great_circle_distance
 from ..sphere import healpix as _healpix
 from .index import HealpixIndex
-from .index import candidate_coarse_pixels_for_left_pixel as _candidate_coarse_pixels_for_left_pixel
+from .index import (
+    candidate_coarse_pixels_for_left_pixel as _candidate_coarse_pixels_for_left_pixel,
+)
+from .index import nested_neighbor_rings as _nested_neighbor_rings
 from .index import nside_for_cap as _nside_for_cap
+from .index import _BATCHED_RING_HOPS_MAX
 
 
 def _identity_partition(partition: Any) -> Any:
@@ -154,6 +158,15 @@ def _finalize_crossmatch(
     left_index = left_index[order]
     right_index = right_index[order]
     separation_arcsec = separation_arcsec[order]
+    if sort_within_left and int(left_index.numel()) > 1:
+        dup = (left_index[1:] == left_index[:-1]) & (
+            right_index[1:] == right_index[:-1]
+        )
+        keep = torch.ones(left_index.shape[0], dtype=torch.bool, device=device)
+        keep[1:] = ~dup
+        left_index = left_index[keep]
+        right_index = right_index[keep]
+        separation_arcsec = separation_arcsec[keep]
     stats.matched_rows = int(left_index.numel())
     return CrossmatchResult(left_index, right_index, separation_arcsec)
 
@@ -176,6 +189,84 @@ def _normalize_radius_arcsec(
     if bool((flat <= 0.0).any()):
         raise ValueError("radius_arcsec must be positive")
     return flat, float(flat.max().item())
+
+
+def _covering_hops(radius_rad: float, pixrad: float) -> int:
+    return max(1, int(math.ceil(radius_rad / max(pixrad, 1e-12)))) + 1
+
+
+def _unique_min_pairs(
+    query: Tensor, right: Tensor, sep: Tensor
+) -> tuple[Tensor, Tensor, Tensor]:
+    """One pair per query: min separation, then min right index."""
+    if query.numel() <= 1:
+        return query, right, sep
+    order = torch.argsort(right, stable=True)
+    query, right, sep = query[order], right[order], sep[order]
+    order = torch.argsort(sep, stable=True)
+    query, right, sep = query[order], right[order], sep[order]
+    order = torch.argsort(query, stable=True)
+    query, right, sep = query[order], right[order], sep[order]
+    keep = torch.ones(query.shape[0], dtype=torch.bool, device=query.device)
+    keep[1:] = query[1:] != query[:-1]
+    return query[keep], right[keep], sep[keep]
+
+
+def _accumulate_ring_chunk(
+    *,
+    left_ra: Tensor,
+    left_dec: Tensor,
+    left_abs: Tensor,
+    radius_deg: Tensor,
+    right_ra: Tensor,
+    right_dec: Tensor,
+    coarse_index: HealpixIndex,
+    hops: int,
+    find: str,
+    left_hits: list[Tensor],
+    right_hits: list[Tensor],
+    sep_hits: list[Tensor],
+    stats: _CrossmatchStats | None,
+) -> None:
+    left_pix = _healpix.ang2pix(
+        coarse_index.nside,
+        left_ra,
+        left_dec,
+        nest=True,
+        lonlat=True,
+    ).to(torch.int64)
+    rings = _nested_neighbor_rings(coarse_index.nside, left_pix, hops)
+    n_left = int(left_ra.numel())
+    query, right_ids = coarse_index.expand(rings.reshape(-1))
+    if stats is not None:
+        stats.candidate_groups += 1
+    if query.numel() == 0:
+        return
+    query = torch.remainder(query, n_left)
+    sep = great_circle_distance(
+        left_ra[query],
+        left_dec[query],
+        right_ra[right_ids],
+        right_dec[right_ids],
+        degrees=True,
+    )
+    if stats is not None:
+        stats.pairs_evaluated += int(query.numel())
+        stats.candidate_rows_considered += int(right_ids.numel())
+    if find == "all":
+        keep = sep <= radius_deg[query]
+        if bool(keep.any()):
+            kept = query[keep]
+            left_hits.append(left_abs[kept])
+            right_hits.append(right_ids[keep])
+            sep_hits.append(sep[keep] * 3600.0)
+        return
+    query, right_ids, sep = _unique_min_pairs(query, right_ids, sep)
+    mask = sep <= radius_deg[query]
+    if bool(mask.any()):
+        left_hits.append(left_abs[query[mask]])
+        right_hits.append(right_ids[mask])
+        sep_hits.append(sep[mask] * 3600.0)
 
 
 def _choose_default_coarse_nside(
@@ -530,6 +621,10 @@ def _crossmatch_sky_coarse_indexed(
         coarse_index = right_index
         coarse_nside = coarse_index.nside
     pixrad = _healpix.max_pixrad(coarse_nside, degrees=False)
+    match_rad = math.radians(radius_max / 3600.0)
+    cover_rad = match_rad + (2.0 * pixrad)
+    hops = 2 if match_rad <= pixrad else _covering_hops(cover_rad, pixrad)
+    use_rings = hops <= _BATCHED_RING_HOPS_MAX
     candidate_cache: dict[tuple[int, float], Tensor] = {}
 
     left_hits: list[Tensor] = []
@@ -545,6 +640,24 @@ def _crossmatch_sky_coarse_indexed(
         stop = start + left_ra_chunk.shape[0]
         left_abs_chunk = torch.arange(start, stop, dtype=torch.int64, device=device)
         radius_chunk = radius_left[start:stop]
+        radius_chunk_deg = radius_chunk / 3600.0
+        if use_rings:
+            _accumulate_ring_chunk(
+                left_ra=left_ra_chunk,
+                left_dec=left_dec_chunk,
+                left_abs=left_abs_chunk,
+                radius_deg=radius_chunk_deg,
+                right_ra=right_ra,
+                right_dec=right_dec,
+                coarse_index=coarse_index,
+                hops=hops,
+                find=find,
+                left_hits=left_hits,
+                right_hits=right_hits,
+                sep_hits=sep_hits,
+                stats=stats,
+            )
+            continue
         left_coarse_pixel = _healpix.ang2pix(
             coarse_nside,
             left_ra_chunk,
@@ -678,7 +791,7 @@ def crossmatch_sky(
     right_dec_deg: Tensor,
     *,
     radius_arcsec: float | Tensor,
-    left_chunk_size: int = 4096,
+    left_chunk_size: int = 65536,
     right_chunk_size: int = 65536,
     find: str = "best",
     right_index: HealpixIndex | None = None,
@@ -782,9 +895,11 @@ def crossmatch_sky_streamed(
         right_ra, right_dec, nside=coarse_nside, nest=True
     )
     radius_deg = radius_arcsec / 3600.0
-    candidate_radius_rad = math.radians(radius_deg) + (
-        2.0 * _healpix.max_pixrad(coarse_nside, degrees=False)
-    )
+    pixrad = _healpix.max_pixrad(coarse_nside, degrees=False)
+    match_rad = math.radians(radius_deg)
+    candidate_radius_rad = match_rad + (2.0 * pixrad)
+    hops = 2 if match_rad <= pixrad else _covering_hops(candidate_radius_rad, pixrad)
+    use_rings = hops <= _BATCHED_RING_HOPS_MAX
 
     left_hits: list[Tensor] = []
     right_hits: list[Tensor] = []
@@ -801,6 +916,29 @@ def crossmatch_sky_streamed(
         ).reshape(-1)
         chunk_len = int(left_ra.numel())
         if chunk_len == 0:
+            continue
+        left_abs = torch.arange(
+            left_offset, left_offset + chunk_len, dtype=torch.int64, device=device
+        )
+        if use_rings:
+            _accumulate_ring_chunk(
+                left_ra=left_ra,
+                left_dec=left_dec,
+                left_abs=left_abs,
+                radius_deg=torch.full(
+                    (chunk_len,), radius_deg, dtype=torch.float64, device=device
+                ),
+                right_ra=right_ra,
+                right_dec=right_dec,
+                coarse_index=coarse_index,
+                hops=hops,
+                find="best",
+                left_hits=left_hits,
+                right_hits=right_hits,
+                sep_hits=sep_hits,
+                stats=None,
+            )
+            left_offset += chunk_len
             continue
 
         left_coarse_pixel = _healpix.ang2pix(
@@ -821,9 +959,6 @@ def crossmatch_sky_streamed(
                 torch.zeros(1, dtype=torch.int64, device=device),
                 torch.cumsum(counts[:-1].to(torch.int64), dim=0),
             )
-        )
-        left_abs = torch.arange(
-            left_offset, left_offset + chunk_len, dtype=torch.int64, device=device
         )
 
         for coarse_pixel, offset, count in zip(

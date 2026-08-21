@@ -1,26 +1,30 @@
 # Catalog-scale exact match (2026-08-21)
 
 Mac numbers are **wiring only**. Linux CANFAR is the claim machine. Do not
-quote these walls vs SkyCoord or vs xmatch `fast` as leadership.
+quote these walls vs SkyCoord as leadership. Pair-ID vs unit-sphere cKDTree
+(`--engine-fast`) is the correctness gate.
 
-## Synthetic pair-ID
+## Synthetic pair-ID (batched neighbour rings)
+
+After replacing the Python-per-pixel covering driver with batched nested
+rings + aligned gather. Same-machine Mac wiring:
 
 | N | layout | oracle | pair-ID | torchsky wall | oracle wall |
 |---|---|---|---|---|---|
-| 5e3 | sparse | unit-sphere cKDTree | true | 5.64 s | 0.22 s |
-| 5e4 | sparse | unit-sphere cKDTree | true | 35.69 s | 0.31 s |
-| 2e5 | dense | unit-sphere cKDTree | true | 53.82 s | 0.79 s |
-| 1e4 × 1e4 | dense | xmatch `fast` best/all | true | ~1.6 s | ~0.008–0.047 s |
+| 2e4 | sparse | unit-sphere cKDTree | true | 0.058 s | 0.134 s |
+| 5e4 | sparse | unit-sphere cKDTree | true | 0.140 s | 0.145 s |
+| 2e4 | dense | unit-sphere cKDTree | true | 0.082 s | 0.139 s |
+| 2e5 | dense | unit-sphere cKDTree | true | 2.88 s | 0.23 s |
 
-JSON: `catalog_scale_5k.json`, `catalog_scale_50k.json`,
-`catalog_scale_200k_dense.json`, `xmatch_contract_10k.json`.
+The previous Python-per-pixel driver on this host was 35.7 s at 5e4 sparse
+(~250× slower than the batched path above). Linux 1e6/1e7 of that driver
+are not performance claims.
 
-xmatch 1e4 RSS: `fast` ~151 MB, `torchsky` ~445 MB (timed_runs=1).
+JSON: `catalog_scale_20k.json`, `catalog_scale_50k.json`,
+`catalog_scale_20k_dense.json`, `catalog_scale_200k_dense.json`.
 
-**1e7 × 1e7 Linux not run on this host.** CANFAR jobs: `pixi run canfar-catalog-scale`,
-`pixi run canfar-catalog-scale-1e6`, `pixi run canfar-catalog-scale-1e7`
-(after push). Dense 1e6 find=all on this Mac did not finish in 11 min.
-1e7 sparse uses `--find best`.
+**1e7 × 1e7 Linux** still needs a CANFAR rerun of this kernel
+(`pixi run canfar-catalog-scale-1e7` after push). 1e7 sparse uses `--find best`.
 
 ## Real Gaia × 2MASS / unWISE
 

@@ -102,6 +102,7 @@ partitions the sky.
 - `cap_covering_pixels` — sound inclusive pixel set for a spherical cap.
 - `chord_radius` — $2\sin(\theta/2)$ for unit-sphere Euclidean prune.
 - `crossmatch_sky` — exact GC on one in-memory tile; per-row radii honored
-  in the covering, not only after the fact.
+  in the covering, not only after the fact. Small caps gather batched nested
+  neighbour rings (no Python loop over left pixels).
 
 I/O, spill, HATS walks, join types, Bayes/LR/AUF stay in xmatch.

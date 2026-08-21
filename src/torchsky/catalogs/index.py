@@ -11,8 +11,9 @@ from torch import Tensor
 from ..sphere import great_circle_distance
 from ..sphere import healpix as _healpix
 
-_MAX_NSIDE = 2048
+_MAX_NSIDE = 65536
 _TARGET_POINTS_PER_PIXEL = 64
+_BATCHED_RING_HOPS_MAX = 4
 
 
 def _work_dtype(device: torch.device) -> torch.dtype:
@@ -97,9 +98,11 @@ def cap_covering_pixels(
             nest=bool(nest),
         )
 
-    center_pix = _healpix.ang2pix(
-        nside, lon_t, lat_t, nest=True, lonlat=True
-    ).to(torch.int64).reshape(-1)
+    center_pix = (
+        _healpix.ang2pix(nside, lon_t, lat_t, nest=True, lonlat=True)
+        .to(torch.int64)
+        .reshape(-1)
+    )
     visited = center_pix
     frontier = center_pix
     for _ in range(hops):
@@ -150,6 +153,29 @@ def candidate_coarse_pixels_for_left_pixel(
         radius_rad,
         nest=True,
     )
+
+
+def nested_neighbor_rings(nside: int, pix: Tensor, hops: int) -> Tensor:
+    """Self plus successive nested neighbour layers. Shape ``[K, N]``, ``-1`` empty."""
+    pix_t = torch.as_tensor(pix, dtype=torch.int64).reshape(-1)
+    n_pix = int(pix_t.numel())
+    if n_pix == 0 or hops < 1:
+        return pix_t.reshape(1, n_pix)
+    layers = [pix_t.reshape(1, n_pix)]
+    layer = pix_t.reshape(1, n_pix)
+    for _ in range(int(hops)):
+        width = int(layer.shape[0])
+        flat = layer.reshape(width * n_pix)
+        invalid = flat < 0
+        safe = flat.clamp(min=0)
+        neigh = _healpix.get_all_neighbours(nside, safe, nest=True, lonlat=False)
+        neigh = torch.as_tensor(neigh, dtype=torch.int64, device=pix_t.device)
+        if neigh.ndim == 1:
+            neigh = neigh.reshape(8, -1)
+        neigh = neigh.masked_fill(invalid.unsqueeze(0), -1)
+        layer = neigh.reshape(8, width, n_pix).reshape(8 * width, n_pix)
+        layers.append(layer)
+    return torch.cat(layers, dim=0)
 
 
 @dataclass
@@ -286,7 +312,51 @@ class HealpixIndex:
         intra = intra - torch.repeat_interleave(offsets, lengths)
         return self.order[starts[bucket_ids] + intra]
 
-    def query_disc(self, lon: Tensor | float, lat: Tensor | float, radius_deg: float) -> Tensor:
+    def expand(self, pixels: Tensor) -> tuple[Tensor, Tensor]:
+        """Map per-query pixels ``[N]`` to ``(query_index, row_index)`` pairs."""
+        pix = torch.as_tensor(
+            pixels,
+            dtype=torch.int64,
+            device=self.unique_pixels.device,
+        ).reshape(-1)
+        n_query = int(pix.numel())
+        empty_q = torch.empty(0, dtype=torch.int64, device=pix.device)
+        if n_query == 0 or self.unique_pixels.numel() == 0:
+            return empty_q, empty_q
+        idx = torch.searchsorted(self.unique_pixels, pix)
+        n_uniq = int(self.unique_pixels.numel())
+        idx_safe = idx.clamp(max=max(n_uniq - 1, 0))
+        match = (idx < n_uniq) & (self.unique_pixels[idx_safe] == pix) & (pix >= 0)
+        if not bool(match.any()):
+            return empty_q, empty_q
+        query = torch.arange(n_query, device=pix.device, dtype=torch.int64)[match]
+        starts = self.bucket_starts[idx_safe[match]]
+        stops = self.bucket_stops[idx_safe[match]]
+        lengths = (stops - starts).to(torch.int64)
+        total = int(lengths.sum().item())
+        if total == 0:
+            return empty_q, empty_q
+        query_exp = torch.repeat_interleave(query, lengths)
+        bucket_ids = torch.repeat_interleave(
+            torch.arange(lengths.numel(), device=pix.device, dtype=torch.int64),
+            lengths,
+        )
+        offsets = torch.cumsum(
+            torch.cat(
+                (
+                    torch.zeros(1, dtype=torch.int64, device=pix.device),
+                    lengths[:-1],
+                )
+            ),
+            dim=0,
+        )
+        intra = torch.arange(total, device=pix.device, dtype=torch.int64)
+        intra = intra - torch.repeat_interleave(offsets, lengths)
+        return query_exp, self.order[starts[bucket_ids] + intra]
+
+    def query_disc(
+        self, lon: Tensor | float, lat: Tensor | float, radius_deg: float
+    ) -> Tensor:
         """Row indices whose positions lie within ``radius_deg`` of the center."""
         if self.lon.numel() == 0:
             return self.order[:0]
@@ -326,5 +396,6 @@ __all__ = [
     "cap_covering_pixels",
     "candidate_coarse_pixels_for_left_pixel",
     "default_nside",
+    "nested_neighbor_rings",
     "nside_for_cap",
 ]
