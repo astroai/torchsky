@@ -111,8 +111,10 @@ device-native table ops with a Newton residual bound. Optional
 graph then freezes; it is not a core import.
 
 CSC CPU uses the WCSLIB float32 Chan–O'Neill polynomial (scalar C Horner).
-CUDA/MPS use ATen `addcmul` FMA. Coupled `-TAB` inverse is correct, not fast.
-`FREQ-GRA` is gated on relative error (float noise on ~1e14 Hz).
+Linux mixed-grid max is still 8.4 mas vs astropy (median ~1e-12″); do not
+claim the WCSLIB floor on Linux CPU. CUDA/MPS use ATen `addcmul` FMA.
+Coupled `-TAB` inverse is 53 ms CPU / 9 ms CUDA at N=10k on SHA `d8d706f6`
+(5e-11 px). `FREQ-GRA` is gated on relative error (0.625 Hz on ~1e14 Hz).
 
 ### Spectral And Temporal Axes
 
