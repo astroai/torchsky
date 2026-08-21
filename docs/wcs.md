@@ -88,7 +88,9 @@ Celestial projections include Paper II zenithal, cylindrical, conic, polyconic
 `CSC`, and `QSC`. `WCS.to("cuda")` moves cached PV and rotation tensors with
 the pixels. `WCS.to("mps")` casts cached parameters to float32 (MPS has no
 float64; expect arcsecond-class TAN error versus CPU float64). CUDA WCS is
-float64. CPU fused WCS is float64.
+float64. CPU fused WCS is float64. Public `pixel_to_world` /
+`world_to_pixel` stay on the pixel device; fused C++ runs only when both
+pixels and cached parameters are on CPU.
 
 Identity TPV uses `PV1_1=1` and `PV2_1=1` (axis 2 is swapped: `PV2_1` is the
 linear `v` term). A header with `PV2_2=1` and no `PV2_1` is rank-deficient;

@@ -226,8 +226,9 @@ class MOC:
 
     def contains(self, lon_deg: Tensor | float, lat_deg: Tensor | float) -> Tensor:
         """Check if points are contained in the MOC."""
-        lon = torch.as_tensor(lon_deg, dtype=torch.float64)
-        lat = torch.as_tensor(lat_deg, dtype=torch.float64)
+        lon = _healpix._as_float64(lon_deg)
+        lat = _healpix._as_float64(lat_deg)
+        lat = lat.to(device=lon.device)
 
         if self.uniq.numel() == 0:
             return torch.zeros_like(lon, dtype=torch.bool)

@@ -19,7 +19,8 @@ def _as_1d_floating_tensor(value: Any, name: str) -> Tensor:
     if tensor.is_complex():
         raise ValueError(f"{name} must be real-valued")
     if not tensor.is_floating_point():
-        tensor = tensor.to(dtype=torch.float64)
+        fd = torch.float32 if tensor.device.type == "mps" else torch.float64
+        tensor = tensor.to(dtype=fd)
     if not bool(torch.isfinite(tensor).all().detach().cpu().item()):
         raise ValueError(f"{name} must contain only finite values")
     return tensor

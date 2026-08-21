@@ -148,15 +148,16 @@ _TREFPOS_ALIASES = {
 
 def _as_float_tensor(value: Any) -> Tensor:
     if isinstance(value, Tensor):
-        return value.to(dtype=torch.float64)
+        dtype = torch.float32 if value.device.type == "mps" else torch.float64
+        return value.to(dtype=dtype)
     return torch.as_tensor(value, dtype=torch.float64)
 
 
 def tai_minus_utc_seconds(mjd_utc: Any) -> Tensor:
     """Return TAI-UTC in seconds for UTC MJD values covered by leap table."""
     mjd = _as_float_tensor(mjd_utc)
-    table = _LEAP_EFFECTIVE_MJD.to(device=mjd.device)
-    offsets = _TAI_MINUS_UTC.to(device=mjd.device)
+    table = _LEAP_EFFECTIVE_MJD.to(device=mjd.device, dtype=mjd.dtype)
+    offsets = _TAI_MINUS_UTC.to(device=mjd.device, dtype=mjd.dtype)
     flat = mjd.reshape(-1)
     idx = torch.bucketize(flat, table, right=True) - 1
     idx = torch.clamp(idx, min=0, max=offsets.numel() - 1)
@@ -394,7 +395,7 @@ def _keplerian_heliocentric_equatorial(mjd: Tensor, body: str) -> Tensor:
     device = mjd.device
     dtype = mjd.dtype
     jd = mjd + 2400000.5
-    T_flat = ((jd - 2451545.0) / 36525.0).to(dtype=torch.float64)
+    T_flat = ((jd - 2451545.0) / 36525.0).to(dtype=dtype)
     d2r = math.pi / 180.0
     a0, da, e0, de, i0, di, L0, dL, vp0, dvp, om0, dom = elems
     a = (a0 + da * T_flat).to(device=device, dtype=dtype)
@@ -456,8 +457,8 @@ def _gmst_rotation_matrix(mjd: Tensor) -> tuple[Tensor, Tensor]:
     jd = mjd + 2400000.5
     T = (jd - 2451545.0) / 36525.0
 
-    T_flat = T.to(dtype=torch.float64)
-    jd_flat = jd.to(dtype=torch.float64)
+    T_flat = T.to(dtype=mjd.dtype)
+    jd_flat = jd.to(dtype=mjd.dtype)
 
     gmst = (
         280.46061837

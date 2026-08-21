@@ -24,14 +24,21 @@ _TIME_FLAG = torch.tensor(-9223372036854775808, dtype=torch.int64)  # 1<<63 sign
 
 def mjd_to_time_us(mjd: Tensor | float) -> Tensor:
     """Convert MJD to integer microseconds since JD=0 (TMOC order-61 index)."""
-    mjd64 = torch.as_tensor(mjd, dtype=torch.float64)
+    t = torch.as_tensor(mjd)
+    device = t.device
+    # ponytail: float32 MJD cannot encode µs near MJD 5e4; host float64 on MPS.
+    if device.type == "mps":
+        mjd64 = t.detach().cpu().to(dtype=torch.float64)
+    else:
+        mjd64 = t.to(dtype=torch.float64) if t.dtype != torch.float64 else t
     day = torch.floor(mjd64)
     frac = mjd64 - day
     frac_us = torch.round((frac + 0.5) * float(_US_PER_DAY)).to(torch.int64)
     carry = torch.div(frac_us, _US_PER_DAY, rounding_mode="floor")
     frac_us = frac_us - carry * _US_PER_DAY
     days = day.to(torch.int64) + _JD_MJD_OFFSET_INT + carry
-    return days * _US_PER_DAY + frac_us
+    out = days * _US_PER_DAY + frac_us
+    return out.to(device=device) if out.device != device else out
 
 
 def time_us_to_mjd(time_us: Tensor) -> Tensor:
@@ -108,9 +115,11 @@ class STMOC:
         lat_deg: Tensor | float,
     ) -> Tensor:
         """True where (time, lon, lat) lies in the space-time coverage."""
-        t = torch.as_tensor(time_mjd, dtype=torch.float64)
-        lon = torch.as_tensor(lon_deg, dtype=torch.float64)
-        lat = torch.as_tensor(lat_deg, dtype=torch.float64)
+        t = torch.as_tensor(time_mjd)
+        lon = torch.as_tensor(lon_deg)
+        lat = torch.as_tensor(lat_deg)
+        lon = lon.to(device=t.device)
+        lat = lat.to(device=t.device)
         try:
             t, lon, lat = torch.broadcast_tensors(t, lon, lat)
         except RuntimeError as exc:
@@ -245,8 +254,16 @@ class STMOC:
         time_depth: int,
     ) -> "STMOC":
         """One spatial MOC per time interval (broadcasts a single MOC)."""
-        t0 = torch.as_tensor(t_start_mjd, dtype=torch.float64).reshape(-1)
-        t1 = torch.as_tensor(t_end_mjd, dtype=torch.float64).reshape(-1)
+        t0 = torch.as_tensor(t_start_mjd)
+        t1 = torch.as_tensor(t_end_mjd)
+        if t0.device.type == "mps" or t1.device.type == "mps":
+            t0 = t0.detach().cpu().to(dtype=torch.float64)
+            t1 = t1.detach().cpu().to(dtype=torch.float64)
+        else:
+            t0 = t0.to(dtype=torch.float64)
+            t1 = t1.to(dtype=torch.float64)
+        t0 = t0.reshape(-1)
+        t1 = t1.reshape(-1)
         if t0.numel() != t1.numel():
             raise ValueError("t_start_mjd and t_end_mjd must have the same length")
         mocs: tuple[MOC, ...]
@@ -279,9 +296,20 @@ class STMOC:
         spatial_depth: int,
     ) -> "STMOC":
         """Coverage of catalog samples quantized to ``time_depth`` × ``spatial_depth``."""
-        t = torch.as_tensor(time_mjd, dtype=torch.float64).reshape(-1)
-        lon = torch.as_tensor(lon_deg, dtype=torch.float64).reshape(-1)
-        lat = torch.as_tensor(lat_deg, dtype=torch.float64).reshape(-1)
+        t = torch.as_tensor(time_mjd)
+        lon = torch.as_tensor(lon_deg)
+        lat = torch.as_tensor(lat_deg)
+        if t.device.type == "mps":
+            t = t.detach().cpu().to(dtype=torch.float64)
+            lon = lon.detach().cpu().to(dtype=torch.float64)
+            lat = lat.detach().cpu().to(dtype=torch.float64)
+        else:
+            t = t.to(dtype=torch.float64)
+            lon = lon.to(dtype=torch.float64)
+            lat = lat.to(dtype=torch.float64)
+        t = t.reshape(-1)
+        lon = lon.reshape(-1)
+        lat = lat.reshape(-1)
         if t.numel() != lon.numel() or t.numel() != lat.numel():
             raise ValueError("time_mjd, lon_deg, and lat_deg must have the same length")
         if t.numel() == 0:

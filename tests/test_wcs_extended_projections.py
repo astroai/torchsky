@@ -470,6 +470,8 @@ def test_quadcube_inverse_matches_astropy(projection: str, origin: int) -> None:
         ("PCO", 0.5, 0.0),
         ("XPH", 0.5, 0.0),
         ("TSC", 0.3, 0.0),
+        ("CSC", 0.3, 0.0),
+        ("QSC", 0.3, 0.0),
         ("NCP", 0.01, 45.0),
     ],
 )

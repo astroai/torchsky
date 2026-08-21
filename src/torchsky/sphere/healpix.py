@@ -1066,10 +1066,9 @@ def get_interp_weights(
         theta_t = torch.deg2rad(90.0 - lat_t)
         phi_t = torch.deg2rad(lon_t)
 
-    theta_f = _as_float64(theta_t).reshape(-1).to(torch.float64)
-    phi_f = torch.remainder(
-        _as_float64(phi_t).reshape(-1).to(torch.float64), 2.0 * math.pi
-    )
+    fd = _float_dtype_for_device(theta_t.device)
+    theta_f = _as_float64(theta_t).reshape(-1)
+    phi_f = torch.remainder(_as_float64(phi_t).reshape(-1), 2.0 * math.pi)
     shape = theta_t.shape
 
     z = torch.cos(theta_f)
@@ -1081,23 +1080,23 @@ def get_interp_weights(
     pix1 = torch.full((n,), -1, dtype=torch.int64, device=theta_f.device)
     pix2 = torch.full((n,), -1, dtype=torch.int64, device=theta_f.device)
     pix3 = torch.full((n,), -1, dtype=torch.int64, device=theta_f.device)
-    w0 = torch.zeros((n,), dtype=torch.float64, device=theta_f.device)
-    w1 = torch.zeros((n,), dtype=torch.float64, device=theta_f.device)
-    w2 = torch.zeros((n,), dtype=torch.float64, device=theta_f.device)
-    w3 = torch.zeros((n,), dtype=torch.float64, device=theta_f.device)
+    w0 = torch.zeros((n,), dtype=fd, device=theta_f.device)
+    w1 = torch.zeros((n,), dtype=fd, device=theta_f.device)
+    w2 = torch.zeros((n,), dtype=fd, device=theta_f.device)
+    w3 = torch.zeros((n,), dtype=fd, device=theta_f.device)
 
-    theta1 = torch.zeros((n,), dtype=torch.float64, device=theta_f.device)
-    theta2 = torch.zeros((n,), dtype=torch.float64, device=theta_f.device)
+    theta1 = torch.zeros((n,), dtype=fd, device=theta_f.device)
+    theta2 = torch.zeros((n,), dtype=fd, device=theta_f.device)
 
     m1 = ir1 > 0
     if torch.any(m1):
         sp, nr, th, shift = _get_ring_info2(nside, ir1[m1])
         theta1[m1] = th
-        dphi = (2.0 * math.pi) / nr.to(torch.float64)
-        sh = shift.to(torch.float64)
+        dphi = (2.0 * math.pi) / nr.to(fd)
+        sh = shift.to(fd)
         tmp = phi_f[m1] / dphi - 0.5 * sh
         i1 = torch.floor(tmp).to(torch.int64)
-        wt = (phi_f[m1] - (i1.to(torch.float64) + 0.5 * sh) * dphi) / dphi
+        wt = (phi_f[m1] - (i1.to(fd) + 0.5 * sh) * dphi) / dphi
         i2 = i1 + 1
         i1 = torch.where(i1 < 0, i1 + nr, i1)
         i2 = torch.where(i2 >= nr, i2 - nr, i2)
@@ -1110,11 +1109,11 @@ def get_interp_weights(
     if torch.any(m2):
         sp, nr, th, shift = _get_ring_info2(nside, ir2[m2])
         theta2[m2] = th
-        dphi = (2.0 * math.pi) / nr.to(torch.float64)
-        sh = shift.to(torch.float64)
+        dphi = (2.0 * math.pi) / nr.to(fd)
+        sh = shift.to(fd)
         tmp = phi_f[m2] / dphi - 0.5 * sh
         i1 = torch.floor(tmp).to(torch.int64)
-        wt = (phi_f[m2] - (i1.to(torch.float64) + 0.5 * sh) * dphi) / dphi
+        wt = (phi_f[m2] - (i1.to(fd) + 0.5 * sh) * dphi) / dphi
         i2 = i1 + 1
         i1 = torch.where(i1 < 0, i1 + nr, i1)
         i2 = torch.where(i2 >= nr, i2 - nr, i2)
@@ -1255,7 +1254,7 @@ def _pixel_range_chunks(
 
 def _ring_above(nside: int, z: Tensor) -> Tensor:
     """Vectorized HEALPix ring_above(z) helper."""
-    zf = torch.as_tensor(z, dtype=torch.float64)
+    zf = _as_float64(z)
     az = torch.abs(zf)
     eq = az <= (2.0 / 3.0)
 
@@ -1270,13 +1269,14 @@ def _ring_above(nside: int, z: Tensor) -> Tensor:
 def _get_ring_info2(nside: int, ring: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """Vectorized get_ring_info2 helper for interpolation."""
     r = torch.as_tensor(ring, dtype=torch.int64)
+    fd = _float_dtype_for_device(r.device)
     npix = nside2npix(nside)
     ncap = 2 * nside * (nside - 1)
     fact2 = 4.0 / float(npix)
     fact1 = (2.0 * float(nside)) * fact2
 
     northr = torch.where(r > 2 * nside, 4 * nside - r, r)
-    northf = northr.to(torch.float64)
+    northf = northr.to(fd)
     polar = northr < nside
 
     tmp = northf * northf * fact2
@@ -1435,13 +1435,12 @@ def query_disc(
         raise ValueError("fact must be a positive integer")
     if nest and (fact_i & (fact_i - 1)) != 0:
         raise ValueError("for nest ordering, fact must be a power of two")
-    if radius <= 0.0:
-        return torch.empty((0,), dtype=torch.int64)
-
     v_any = torch.as_tensor(vec).reshape(-1)
     if v_any.numel() != 3:
         raise ValueError("vec must be length-3 Cartesian vector")
     out_device = v_any.device
+    if radius <= 0.0:
+        return torch.empty((0,), dtype=torch.int64, device=out_device)
 
     # Inclusive fact!=4: supersample at nside*fact, then take parent pixels.
     # fact==4 keeps the historical pad-by-max_pixrad path (tests depend on it).
@@ -1520,14 +1519,17 @@ def query_circle(
     chunk_size: int = 1_000_000,
 ) -> Tensor:
     """Lon/lat convenience wrapper around `query_disc`."""
-    lon_t = torch.as_tensor(lon, dtype=torch.float64)
-    lat_t = torch.as_tensor(lat, dtype=torch.float64)
+    lon_t = _as_float64(lon)
+    lat_t = _as_float64(lat)
     x, y, z = lonlat_to_xyz(lon_t, lat_t)
+    vec = torch.stack(
+        (x.reshape(-1)[0], y.reshape(-1)[0], z.reshape(-1)[0])
+    )
     if degrees:
         radius = math.radians(radius)
     return query_disc(
         nside,
-        (float(x.item()), float(y.item()), float(z.item())),
+        vec,
         radius,
         inclusive=inclusive,
         nest=nest,
@@ -1722,17 +1724,17 @@ def query_polygon(
             if kept.numel() > 0:
                 parts.append(kept)
         if not parts:
-            return torch.empty((0,), dtype=torch.int64)
+            return torch.empty((0,), dtype=torch.int64, device=vv.device)
         return torch.cat(parts, dim=0)
 
     selected: list[Tensor] = []
     for start, end in _pixel_range_chunks(npix, chunk_size=chunk_size):
-        pix = torch.arange(start, end, dtype=torch.int64)
+        pix = torch.arange(start, end, dtype=torch.int64, device=vv.device)
         kept = _filter_pixel_chunk(pix)
         if kept.numel() > 0:
             selected.append(kept)
     if not selected:
-        return torch.empty((0,), dtype=torch.int64)
+        return torch.empty((0,), dtype=torch.int64, device=vv.device)
     return torch.cat(selected, dim=0)
 
 

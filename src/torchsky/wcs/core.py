@@ -529,7 +529,7 @@ class WCS:
                 raise ValueError(
                     f"tabular axis {axis_number} requires CTYPE{axis_number} ending in '-TAB'"
                 )
-            axes[idx] = axis.to(device=self.device, dtype=torch.float64)
+            axes[idx] = axis.to(device=self.device, dtype=self._wcs_coord_dtype(self.device))
         self.tabular_axes = axes
 
     def _setup_coupled_tabular(
@@ -583,7 +583,7 @@ class WCS:
                 f"({coupled_tabular.pixel_n_dim} != {len(pixel_axes)})"
             )
         self.coupled_tabular = coupled_tabular.to(
-            device=self.device, dtype=torch.float64
+            device=self.device, dtype=self._wcs_coord_dtype(self.device)
         )
         self.coupled_tabular_axes = tuple(axis - 1 for axis in world_axes)
         self.coupled_tabular_pixel_axes = tuple(axis - 1 for axis in pixel_axes)
@@ -706,8 +706,8 @@ class WCS:
         self._set_pixel_affine(matrix, offset)
 
     def _set_pixel_affine(self, matrix: Tensor, offset: Tensor) -> None:
-        affine = matrix.to(device=self.device, dtype=torch.float64)
-        shift = offset.to(device=self.device, dtype=torch.float64)
+        affine = matrix.to(device=self.device, dtype=self._wcs_coord_dtype(self.device))
+        shift = offset.to(device=self.device, dtype=self._wcs_coord_dtype(self.device))
         affine_inv = torch.linalg.inv(affine)
         self._pixel_affine_matrix = affine
         self._pixel_affine_offset = shift
@@ -892,7 +892,7 @@ class WCS:
                     )
                 cd_data.append(row)
             self.cd_full = torch.tensor(
-                cd_data, dtype=torch.float64, device=self.device
+                cd_data, dtype=self._wcs_coord_dtype(self.device), device=self.device
             )
         else:
             # Construct from PC and CDELT: CDi_j = CDELTi * PCi_j
@@ -904,7 +904,7 @@ class WCS:
                     row.append(self.cdelt[i - 1].item() * pc_val)
                 cd_data.append(row)
             self.cd_full = torch.tensor(
-                cd_data, dtype=torch.float64, device=self.device
+                cd_data, dtype=self._wcs_coord_dtype(self.device), device=self.device
             )
 
         # Spatial shortcut for old code paths (2x2)
@@ -912,7 +912,7 @@ class WCS:
             self.cd = self.cd_full[:2, :2]
         else:
             # 1x1 padded to 2x2 for safety in spatial paths
-            self.cd = torch.eye(2, dtype=torch.float64, device=self.device)
+            self.cd = torch.eye(2, dtype=self._wcs_coord_dtype(self.device), device=self.device)
             self.cd[0, 0] = self.cd_full[0, 0]
 
         # Precompute inverse CD matrix for world->pixel
@@ -1030,7 +1030,7 @@ class WCS:
         self._dec_p_rad = self.delta_p * d2r
         self._phi_p_rad = self.phi_p * d2r
         dec_p_tensor = torch.as_tensor(
-            self._dec_p_rad, dtype=torch.float64, device=self.device
+            self._dec_p_rad, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
         self._sin_dec_p = torch.sin(dec_p_tensor)
         self._cos_dec_p = torch.cos(dec_p_tensor)
@@ -1170,10 +1170,10 @@ class WCS:
         pv1_data = [self.wcs_params.get(k, 0.0) for k in PV1_KEYS]
         pv2_data = [self.wcs_params.get(k, 0.0) for k in PV2_KEYS]
         self._pv1_tensor = torch.tensor(
-            pv1_data, dtype=torch.float64, device=self.device
+            pv1_data, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
         self._pv2_tensor = torch.tensor(
-            pv2_data, dtype=torch.float64, device=self.device
+            pv2_data, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
         zpn_all = self._pv2_tensor[:31].detach().cpu()
         zpn_valid = torch.nonzero(zpn_all.abs() > 1e-15, as_tuple=False)
@@ -3089,14 +3089,14 @@ class WCS:
                 [float(nx - 1), float(ny - 1)],
                 [0.0, float(ny - 1)],
             ],
-            dtype=torch.float64,
+            dtype=self._wcs_coord_dtype(self.device),
             device=self.device,
         )
         if self.naxis == 2:
             corners = corners_2d
         else:
             corners = torch.empty(
-                (4, self.naxis), dtype=torch.float64, device=self.device
+                (4, self.naxis), dtype=self._wcs_coord_dtype(self.device), device=self.device
             )
             corners[:, 0:2] = corners_2d
             for axis in range(2, self.naxis):
@@ -3110,15 +3110,15 @@ class WCS:
         """Return a boolean mask for pixels inside ``pixel_bounds``."""
         if self._pixel_shape is None:
             raise ValueError("in_image requires NAXISi image bounds")
-        pix = torch.as_tensor(pixels, dtype=torch.float64, device=self.device)
+        pix = torch.as_tensor(pixels, dtype=self._wcs_coord_dtype(self.device), device=self.device)
         if pix.shape[-1] != self.naxis:
             raise ValueError(f"pixels must have trailing dimension {self.naxis}")
         lower = torch.full(
-            (self.naxis,), float(origin), dtype=torch.float64, device=self.device
+            (self.naxis,), float(origin), dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
         upper = torch.tensor(
             [float(n - 1 + origin) for n in self._pixel_shape[: self.naxis]],
-            dtype=torch.float64,
+            dtype=self._wcs_coord_dtype(self.device),
             device=self.device,
         )
         return torch.all((pix >= lower) & (pix <= upper), dim=-1)
@@ -3553,9 +3553,9 @@ class WCS:
     def _coerce_optional_coord(self, value: Any | None, *, fill: float) -> Tensor:
         if value is None:
             return torch.full(
-                (self.naxis,), fill, dtype=torch.float64, device=self.device
+                (self.naxis,), fill, dtype=self._wcs_coord_dtype(self.device), device=self.device
             )
-        tensor = torch.as_tensor(value, dtype=torch.float64, device=self.device)
+        tensor = torch.as_tensor(value, dtype=self._wcs_coord_dtype(self.device), device=self.device)
         if tensor.shape == ():
             tensor = tensor.reshape(1)
         if tensor.shape[-1] != self.naxis:
@@ -3594,7 +3594,7 @@ class WCS:
             target_world,
             float(self.crpix[solve_axis].item() - (1.0 - origin)),
         )
-        eps = torch.as_tensor(1.0e-4, dtype=torch.float64, device=self.device)
+        eps = torch.as_tensor(1.0e-4, dtype=self._wcs_coord_dtype(self.device), device=self.device)
         for _ in range(max_iter):
             x = known_pixel if known_pixel_axis == 0 else guess
             y = guess if known_pixel_axis == 0 else known_pixel
@@ -3807,7 +3807,7 @@ class WCS:
             torch.as_tensor(
                 index_arrays[self.pixel_n_dim - 1 - i],
                 device=self.device,
-                dtype=torch.float64,
+                dtype=self._wcs_coord_dtype(self.device),
             )
             for i in range(self.pixel_n_dim)
         ]
@@ -3883,8 +3883,8 @@ class WCS:
                 assert stop is not None
                 new_shape.append(len(range(start, stop, step)))
 
-        step_t = torch.as_tensor(steps, dtype=torch.float64, device=self.device)
-        start_t = torch.as_tensor(starts, dtype=torch.float64, device=self.device)
+        step_t = torch.as_tensor(steps, dtype=self._wcs_coord_dtype(self.device), device=self.device)
+        start_t = torch.as_tensor(starts, dtype=self._wcs_coord_dtype(self.device), device=self.device)
         new_crpix = 1.0 - (start_t + 1.0 - self.crpix) / step_t
         new_cd = self.cd_full @ torch.diag(step_t)
 
@@ -3941,8 +3941,8 @@ class WCS:
         """
         if self.naxis < 2:
             raise ValueError("pixel affine correction requires at least two WCS axes")
-        affine = torch.as_tensor(matrix, dtype=torch.float64, device=self.device)
-        shift = torch.as_tensor(offset, dtype=torch.float64, device=self.device)
+        affine = torch.as_tensor(matrix, dtype=self._wcs_coord_dtype(self.device), device=self.device)
+        shift = torch.as_tensor(offset, dtype=self._wcs_coord_dtype(self.device), device=self.device)
         if affine.shape != (2, 2):
             raise ValueError("matrix must have shape (2, 2)")
         if shift.shape != (2,):

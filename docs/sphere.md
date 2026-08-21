@@ -511,7 +511,8 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API
 | WCS pixel↔world | yes | yes float64 | yes float32 |
 | HEALPix geometry | yes | yes | yes, looser index gates |
 | Sparse `get_values` / MOC contains | yes | yes if tensors stay on device | yes float32 |
-| Polygons | yes | no | no |
+| Polygons (approximate contains/intersect/`query_polygon`) | yes | yes | yes float32 |
+| Polygons (exact `NativeExactSphericalRegion`) | yes | no (CPU kernel / spherical-geometry) | no |
 | SHT (Ishioka/Wigner C++) | yes float64 | no (CPU kernel) | no (CPU kernel) |
 | SHT (ATen ring FFT) | yes float64 | yes float64 | yes float32 |
 | rotate_alm / alm2lonlat | yes float64 | yes float64 | yes float32 |

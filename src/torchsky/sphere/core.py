@@ -236,8 +236,12 @@ def interpolate_wavelength_axis(
     axis: int = -1,
 ) -> Tensor:
     """Linearly interpolate `values` along a wavelength axis."""
-    src = torch.as_tensor(source_wavelength, dtype=torch.float64, device=values.device)
-    tgt = torch.as_tensor(target_wavelength, dtype=torch.float64, device=values.device)
+    src = torch.as_tensor(
+        source_wavelength, dtype=_float_dtype(values.device), device=values.device
+    )
+    tgt = torch.as_tensor(
+        target_wavelength, dtype=_float_dtype(values.device), device=values.device
+    )
     if src.ndim != 1 or tgt.ndim != 1:
         raise ValueError("source_wavelength and target_wavelength must be 1D")
     if src.numel() < 2:
@@ -333,7 +337,7 @@ def fit_monopole_dipole(
             f"map_values length {npix} does not match nside={nside} (npix={expected})"
         )
 
-    vals = vals.to(dtype=torch.float64)
+    vals = vals.to(dtype=_float_dtype(vals.device))
     pix = torch.arange(npix, dtype=torch.int64, device=vals.device)
     x, y, z = _healpix.pix2vec(nside, pix, nest=nest)
     design = torch.stack((torch.ones_like(x), x, y, z), dim=1)

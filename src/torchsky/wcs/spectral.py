@@ -133,9 +133,13 @@ def spectral_unit_scale(spectral_type: str, unit: str | None = None) -> float:
     return 1.0
 
 
+def _work_dtype(device: torch.device) -> torch.dtype:
+    return torch.float32 if device.type == "mps" else torch.float64
+
+
 def _as_tensor(value: Any) -> Tensor:
     if isinstance(value, Tensor):
-        return value
+        return value.to(dtype=_work_dtype(value.device))
     return torch.as_tensor(value, dtype=torch.float64)
 
 
@@ -144,9 +148,11 @@ def _rest_frequency(
     rest_wavelength: float | Tensor | None = None,
 ) -> Tensor:
     if rest_frequency is not None:
-        return _as_tensor(rest_frequency).to(dtype=torch.float64)
+        t = _as_tensor(rest_frequency)
+        return t
     if rest_wavelength is not None:
-        return SPEED_OF_LIGHT / _as_tensor(rest_wavelength).to(dtype=torch.float64)
+        t = _as_tensor(rest_wavelength)
+        return SPEED_OF_LIGHT / t
     raise ValueError("rest_frequency or rest_wavelength is required")
 
 
@@ -169,7 +175,7 @@ def air_wavelength_to_vacuum(wavelength_air: Any, unit: str | None = None) -> Te
     FITS default is meters.
     """
     scale = spectral_unit_scale("AWAV", unit)
-    air_m = _as_tensor(wavelength_air).to(dtype=torch.float64) * scale
+    air_m = _as_tensor(wavelength_air) * scale
     s = torch.where(air_m != 0.0, 1.0 / air_m, torch.zeros_like(air_m))
     s2 = s * s
     n = 1.000064328 + 2.554e8 / (0.41e14 - s2) + 294.981e8 / (1.46e14 - s2)
@@ -183,7 +189,7 @@ def vacuum_wavelength_to_air(wavelength_vacuum: Any, unit: str | None = None) ->
     Uses WCSLIB ``waveawav`` (four refractive-index iterations).
     """
     scale = spectral_unit_scale("WAVE", unit)
-    vac_m = _as_tensor(wavelength_vacuum).to(dtype=torch.float64) * scale
+    vac_m = _as_tensor(wavelength_vacuum) * scale
     n = torch.ones_like(vac_m)
     for _ in range(4):
         s = torch.where(vac_m != 0.0, n / vac_m, torch.zeros_like(vac_m))
@@ -203,7 +209,7 @@ def spectral_to_frequency(
 ) -> Tensor:
     """Convert a spectral coordinate to frequency in Hz."""
     kind = canonical_spectral_type(spectral_type)
-    x = _as_tensor(value).to(dtype=torch.float64) * spectral_unit_scale(kind, unit)
+    x = _as_tensor(value) * spectral_unit_scale(kind, unit)
     if kind == "FREQ":
         return x
     if kind == "WAVE":
@@ -218,7 +224,9 @@ def spectral_to_frequency(
     if kind == "ENER":
         return x / PLANCK
 
-    f0 = _rest_frequency(rest_frequency, rest_wavelength).to(device=x.device)
+    f0 = _rest_frequency(rest_frequency, rest_wavelength).to(
+        device=x.device, dtype=x.dtype
+    )
     if kind == "ZOPT":
         return f0 / (1.0 + x)
     if kind == "VRAD":
@@ -243,7 +251,7 @@ def frequency_to_spectral(
 ) -> Tensor:
     """Convert frequency in Hz to a requested spectral coordinate."""
     kind = canonical_spectral_type(spectral_type)
-    f = _as_tensor(frequency).to(dtype=torch.float64)
+    f = _as_tensor(frequency)
     if kind == "FREQ":
         y = f
     elif kind == "WAVE":
@@ -255,7 +263,9 @@ def frequency_to_spectral(
     elif kind == "ENER":
         y = PLANCK * f
     else:
-        f0 = _rest_frequency(rest_frequency, rest_wavelength).to(device=f.device)
+        f0 = _rest_frequency(rest_frequency, rest_wavelength).to(
+            device=f.device, dtype=f.dtype
+        )
         if kind == "ZOPT":
             y = f0 / f - 1.0
         elif kind == "VRAD":
