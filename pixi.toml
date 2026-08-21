@@ -134,6 +134,7 @@ canfar-wcs-sphere-world-cuda = "bash scripts/launch_canfar_wcs_sphere.sh world-c
 canfar-catalog-scale = "bash scripts/launch_canfar_wcs_sphere.sh catalog-scale"
 canfar-catalog-scale-1e6 = "bash scripts/launch_canfar_wcs_sphere.sh catalog-scale-1e6"
 canfar-catalog-scale-1e7 = "bash scripts/launch_canfar_wcs_sphere.sh catalog-scale-1e7"
+canfar-catalog-scale-real = "bash scripts/launch_canfar_wcs_sphere.sh catalog-scale-real"
 # Comparator version matrix for open-source tools (see docs/benchmarks.md); run per Pixi env you use for benches.
 bench-archive-scorecard = "pixi run -e default -- python scripts/archive_benchmark_scorecard.py"
 bench-comparator-versions = "pixi run -e bench-all python scripts/print_benchmark_comparator_versions.py --json-out benchmarks_results/VERSIONS_comparators_bench-all.json"

@@ -4,7 +4,11 @@ import pytest
 import torch
 
 from torchsky.catalogs import cap_covering_pixels, crossmatch_sky, nside_for_cap
-from torchsky.catalogs.index import HealpixIndex, candidate_coarse_pixels_for_left_pixel
+from torchsky.catalogs.index import (
+    HealpixIndex,
+    candidate_coarse_pixels_for_left_pixel,
+    nested_neighbor_rings,
+)
 from torchsky.sphere import chord_radius, great_circle_distance
 from torchsky.sphere import healpix as _healpix
 
@@ -77,7 +81,7 @@ def test_one_arcsec_all_pairs_match_brute() -> None:
     right_dec = 2.0 + torch.rand(n, generator=rng, dtype=torch.float64) * 0.02
     right_ra[: n // 2] = left_ra[: n // 2]
     right_dec[: n // 2] = left_dec[: n // 2]
-    radius_arcsec = 5.0
+    radius_arcsec = 1.0
     brute = great_circle_distance(
         left_ra.unsqueeze(1),
         left_dec.unsqueeze(1),
@@ -207,3 +211,14 @@ def test_index_expand_keeps_query_alignment() -> None:
     assert (1, 1) in got
     assert (2, 2) in got
     assert (2, 0) not in got
+
+
+def test_nested_rings_dedupe_keep_home_pixel() -> None:
+    nside = 32
+    pix = torch.tensor([100, 101], dtype=torch.int64)
+    rings = nested_neighbor_rings(nside, pix, hops=3)
+    assert rings.shape[1] == 2
+    home = rings[:, 0]
+    valid = home[home >= 0]
+    assert 100 in set(valid.tolist())
+    assert int(valid.unique().numel()) == int(valid.numel())

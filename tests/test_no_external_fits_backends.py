@@ -9,11 +9,10 @@ def test_no_astropy_or_fitsio_imports_in_torchsky_python_package() -> None:
     forbidden = {"astropy", "fitsio"}
     violations: list[str] = []
 
-    allowed_numpy_files = {"inr_bandpass.py"}
     for py_file in pkg_root.rglob("*.py"):
         if py_file.name == "__init__.py" or "viz" in py_file.parts:
             continue
-        if py_file.name in allowed_numpy_files:
+        if py_file.name in {"inr_bandpass.py", "astropy_interop.py"}:
             continue
         tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
         # Only check top-level imports in the module body

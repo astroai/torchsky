@@ -155,17 +155,35 @@ def candidate_coarse_pixels_for_left_pixel(
     )
 
 
+def _unique_ring_slots(rings: Tensor) -> Tensor:
+    """Per-query unique pixel ids, compacting rows that are empty for every query."""
+    if rings.shape[0] <= 1:
+        return rings
+    sentinel = torch.iinfo(torch.int64).max
+    filled = rings.masked_fill(rings < 0, sentinel)
+    ordered, _ = filled.sort(dim=0)
+    dup = torch.zeros_like(ordered, dtype=torch.bool)
+    dup[1:] = ordered[1:] == ordered[:-1]
+    ordered = ordered.masked_fill(dup | (ordered == sentinel), -1)
+    keep = (ordered >= 0).any(dim=1)
+    if not bool(keep.any()):
+        return torch.full(
+            (1, rings.shape[1]), -1, dtype=rings.dtype, device=rings.device
+        )
+    return ordered[keep]
+
+
 def nested_neighbor_rings(nside: int, pix: Tensor, hops: int) -> Tensor:
     """Self plus successive nested neighbour layers. Shape ``[K, N]``, ``-1`` empty."""
     pix_t = torch.as_tensor(pix, dtype=torch.int64).reshape(-1)
     n_pix = int(pix_t.numel())
     if n_pix == 0 or hops < 1:
         return pix_t.reshape(1, n_pix)
-    layers = [pix_t.reshape(1, n_pix)]
-    layer = pix_t.reshape(1, n_pix)
+    visited = pix_t.reshape(1, n_pix)
+    frontier = visited
     for _ in range(int(hops)):
-        width = int(layer.shape[0])
-        flat = layer.reshape(width * n_pix)
+        width = int(frontier.shape[0])
+        flat = frontier.reshape(width * n_pix)
         invalid = flat < 0
         safe = flat.clamp(min=0)
         neigh = _healpix.get_all_neighbours(nside, safe, nest=True, lonlat=False)
@@ -174,8 +192,9 @@ def nested_neighbor_rings(nside: int, pix: Tensor, hops: int) -> Tensor:
             neigh = neigh.reshape(8, -1)
         neigh = neigh.masked_fill(invalid.unsqueeze(0), -1)
         layer = neigh.reshape(8, width, n_pix).reshape(8 * width, n_pix)
-        layers.append(layer)
-    return torch.cat(layers, dim=0)
+        visited = _unique_ring_slots(torch.cat((visited, layer), dim=0))
+        frontier = _unique_ring_slots(layer)
+    return visited
 
 
 @dataclass

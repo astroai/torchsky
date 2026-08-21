@@ -192,7 +192,7 @@ def _normalize_radius_arcsec(
 
 
 def _covering_hops(radius_rad: float, pixrad: float) -> int:
-    return max(1, int(math.ceil(radius_rad / max(pixrad, 1e-12)))) + 1
+    return max(2, int(math.ceil(radius_rad / max(pixrad, 1e-12))))
 
 
 def _unique_min_pairs(
@@ -622,8 +622,7 @@ def _crossmatch_sky_coarse_indexed(
         coarse_nside = coarse_index.nside
     pixrad = _healpix.max_pixrad(coarse_nside, degrees=False)
     match_rad = math.radians(radius_max / 3600.0)
-    cover_rad = match_rad + (2.0 * pixrad)
-    hops = 2 if match_rad <= pixrad else _covering_hops(cover_rad, pixrad)
+    hops = _covering_hops(match_rad + (2.0 * pixrad), pixrad)
     use_rings = hops <= _BATCHED_RING_HOPS_MAX
     candidate_cache: dict[tuple[int, float], Tensor] = {}
 
@@ -898,7 +897,7 @@ def crossmatch_sky_streamed(
     pixrad = _healpix.max_pixrad(coarse_nside, degrees=False)
     match_rad = math.radians(radius_deg)
     candidate_radius_rad = match_rad + (2.0 * pixrad)
-    hops = 2 if match_rad <= pixrad else _covering_hops(candidate_radius_rad, pixrad)
+    hops = _covering_hops(candidate_radius_rad, pixrad)
     use_rings = hops <= _BATCHED_RING_HOPS_MAX
 
     left_hits: list[Tensor] = []

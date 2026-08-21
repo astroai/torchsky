@@ -1,0 +1,14 @@
+{
+  "left_rows": 10000000,
+  "right_rows": 10000000,
+  "radius_arcsec": 1.0,
+  "layout": "sparse",
+  "find": "best",
+  "torchsky_pairs": 10000000,
+  "torchsky_s": 43.884353537112474,
+  "peak_rss_bytes": 5276921856,
+  "pair_id_parity": true,
+  "platform": "Linux-5.14.0-611.54.3.el9_7.x86_64-x86_64-with-glibc2.41",
+  "fast_s": 12.443811163306236,
+  "fast_pairs": 10000000
+}

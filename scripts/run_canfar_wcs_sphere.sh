@@ -23,10 +23,10 @@ esac
 case "${mode}" in
   cpu | cuda | spectral | sphere | sparse | healsparse | spin | geometry | cuhpx | \
   wcs-paper2 | wcs-tpv | wcs-spectral | wcs-tabular | sht-profile | moc | catalog | \
-  catalog-scale | catalog-scale-1e6 | catalog-scale-1e7 | \
+  catalog-scale | catalog-scale-1e6 | catalog-scale-1e7 | catalog-scale-real | \
   observed | geom-cuda | world-cuda) ;;
   *)
-    echo "unknown mode: ${mode} (expected cpu, cuda, spectral, sphere, sparse, healsparse, spin, geometry, cuhpx, wcs-paper2, wcs-tpv, wcs-spectral, wcs-tabular, sht-profile, moc, catalog, catalog-scale, catalog-scale-1e6, catalog-scale-1e7, observed, geom-cuda, or world-cuda)" >&2
+    echo "unknown mode: ${mode} (expected cpu, cuda, spectral, sphere, sparse, healsparse, spin, geometry, cuhpx, wcs-paper2, wcs-tpv, wcs-spectral, wcs-tabular, sht-profile, moc, catalog, catalog-scale, catalog-scale-1e6, catalog-scale-1e7, catalog-scale-real, observed, geom-cuda, or world-cuda)" >&2
     exit 2
     ;;
 esac
@@ -498,6 +498,13 @@ case "${mode}" in
       python "${source_root}/scripts/run_catalog_scale_contract.py" \
       --left-rows 10000000 --layout sparse --find best --engine-fast \
       --json-out "${artifact_root}/catalog_scale_1e7_sparse_best.json"
+    ;;
+  catalog-scale-real)
+    install_env test
+    record_versions test
+    pixi run --manifest-path "${source_root}/pixi.toml" -e test -- \
+      python "${source_root}/scripts/run_catalog_scale_real.py" \
+      --json-out "${artifact_root}/catalog_scale_real.json"
     ;;
   observed)
     install_env test

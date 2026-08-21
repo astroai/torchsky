@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Launch CANFAR headless CPU and/or CUDA jobs for torchsky WCS + sphere.
-# Usage: launch_canfar_wcs_sphere.sh [cpu|cuda|all|suite|sht|spectral|sparse|healsparse|spin|cuhpx|wcs-paper2|wcs-tpv|wcs-spectral|wcs-tabular|sht-profile|moc|catalog|catalog-scale|catalog-scale-1e6|catalog-scale-1e7|observed|geom-cuda|world-cuda|world]
+# Usage: launch_canfar_wcs_sphere.sh [cpu|cuda|all|suite|sht|spectral|sparse|healsparse|spin|cuhpx|wcs-paper2|wcs-tpv|wcs-spectral|wcs-tabular|sht-profile|moc|catalog|catalog-scale|catalog-scale-1e6|catalog-scale-1e7|catalog-scale-real|observed|geom-cuda|world-cuda|world]
 #
 # Jobs clone TORCHSKY_COMMIT from GitHub (must already be pushed), run
 # scripts/run_canfar_wcs_sphere.sh from that clone, write
@@ -19,10 +19,10 @@ MODE="${1:-all}"
 case "${MODE}" in
   cpu | cuda | all | suite | many | spectral | sparse | healsparse | spin | sht | cuhpx | \
   wcs-paper2 | wcs-tpv | wcs-spectral | wcs-tabular | sht-profile | moc | catalog | \
-  catalog-scale | catalog-scale-1e6 | catalog-scale-1e7 | \
+  catalog-scale | catalog-scale-1e6 | catalog-scale-1e7 | catalog-scale-real | \
   observed | geom-cuda | world-cuda | world) ;;
   *)
-    echo "usage: $0 [cpu|cuda|all|suite|sht|spectral|sparse|healsparse|spin|cuhpx|wcs-paper2|wcs-tpv|wcs-spectral|wcs-tabular|sht-profile|moc|catalog|catalog-scale|catalog-scale-1e6|catalog-scale-1e7|observed|geom-cuda|world-cuda|world]" >&2
+    echo "usage: $0 [cpu|cuda|all|suite|sht|spectral|sparse|healsparse|spin|cuhpx|wcs-paper2|wcs-tpv|wcs-spectral|wcs-tabular|sht-profile|moc|catalog|catalog-scale|catalog-scale-1e6|catalog-scale-1e7|catalog-scale-real|observed|geom-cuda|world-cuda|world]" >&2
     exit 2
     ;;
 esac
@@ -195,6 +195,9 @@ if [[ "${MODE}" == "catalog-scale-1e6" ]]; then
 fi
 if [[ "${MODE}" == "catalog-scale-1e7" ]]; then
   launch_one catalog-scale-1e7 "" "catalog-scale-1e7-${STAMP}"
+fi
+if [[ "${MODE}" == "catalog-scale-real" ]]; then
+  launch_one catalog-scale-real "" "catalog-scale-real-${STAMP}"
 fi
 if [[ "${MODE}" == "observed" ]]; then
   launch_one observed "" "observed-${STAMP}"

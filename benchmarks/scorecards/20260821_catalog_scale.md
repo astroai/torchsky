@@ -1,38 +1,33 @@
 # Catalog-scale exact match (2026-08-21)
 
-Mac numbers are **wiring only**. Linux CANFAR is the claim machine. Do not
-quote these walls vs SkyCoord as leadership. Pair-ID vs unit-sphere cKDTree
-(`--engine-fast`) is the correctness gate.
+Mac numbers are **wiring only**. Linux CANFAR (`ebe8f8ed`) is the claim
+machine. Pair-ID vs unit-sphere cKDTree (`--engine-fast`). Do not quote vs
+SkyCoord.
 
-## Synthetic pair-ID (batched neighbour rings)
+## Linux synthetic pair-ID (batched neighbour rings)
 
-After replacing the Python-per-pixel covering driver with batched nested
-rings + aligned gather. Same-machine Mac wiring:
+| N | layout | find | pair-ID | torchsky | cKDTree `fast` | RSS |
+|---|---|---|---|---|---|---|
+| 1e6 | sparse | best | true | 5.84 s | 1.67 s | 0.95 GB |
+| 1e6 | dense | best | true | 45.8 s | 1.04 s | 2.70 GB |
+| 1e7 | sparse | best | true | 43.9 s | 12.4 s | 5.28 GB |
 
-| N | layout | oracle | pair-ID | torchsky wall | oracle wall |
-|---|---|---|---|---|---|
-| 2e4 | sparse | unit-sphere cKDTree | true | 0.058 s | 0.134 s |
-| 5e4 | sparse | unit-sphere cKDTree | true | 0.140 s | 0.145 s |
-| 2e4 | dense | unit-sphere cKDTree | true | 0.082 s | 0.139 s |
-| 2e5 | dense | unit-sphere cKDTree | true | 2.88 s | 0.23 s |
+Runs: `catalog-scale-1e6-20260821-225017`, `catalog-scale-1e7-20260821-225023`
+(SHA `ebe8f8ed`). Later covering uses compacted `r+2ρ` neighbour rings; pair-ID
+tests still pass. Do not mix those walls with this SHA without a rerun.
 
-The previous Python-per-pixel driver on this host was 35.7 s at 5e4 sparse
-(~250× slower than the batched path above). Linux 1e6/1e7 of that driver
-are not performance claims.
+JSON: `catalog_scale_1e6_sparse_best.json`, `catalog_scale_1e6_dense_best.json`,
+`catalog_scale_1e7_sparse_best.json`.
 
-JSON: `catalog_scale_20k.json`, `catalog_scale_50k.json`,
-`catalog_scale_20k_dense.json`, `catalog_scale_200k_dense.json`.
+## Mac wiring (same kernel)
 
-**1e7 × 1e7 Linux** still needs a CANFAR rerun of this kernel
-(`pixi run canfar-catalog-scale-1e7` after push). 1e7 sparse uses `--find best`.
+| N | layout | pair-ID | torchsky | cKDTree |
+|---|---|---|---|---|
+| 2e4 | sparse | true | 0.058 s | 0.134 s |
+| 5e4 | sparse | true | 0.140 s | 0.145 s |
+| 2e5 | dense | true | 2.88 s | 0.23 s |
 
 ## Real Gaia × 2MASS / unWISE
 
-Not run: no Parquet/HATS roots on this host. Runner:
-
-```
-CATALOG_SCALE_LEFT=/path/gaia CATALOG_SCALE_RIGHT=/path/2mass \
-  pixi run -e test -- python scripts/run_catalog_scale_real.py
-```
-
-HATS native `engine=torchsky` is unit-tested on a two-row fixture.
+`pixi run canfar-catalog-scale-real` scans `/arc/projects/hats` (or
+`CATALOG_SCALE_LEFT` / `CATALOG_SCALE_RIGHT`). Not yet ingested.
