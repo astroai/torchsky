@@ -17,4 +17,5 @@ pixi run bench-archive-scorecard -- \
 | 20260816 | world_layer | - | - | pending VOS | Mac Ishioka map2alm leads; alm2map ~1.2–1.4×; sparse get_values matches healsparse | 1 | local main | [20260816_world_layer](20260816_world_layer.md) |
 | 20260817 | world_layer | - | - | CPU 87/90; CUDA 90/90 large-N | Linux SHT not claimed (`934b02fa` nside=128 ~7–11× healpy). Linux `get_values` 0.84–0.95× hs interleaved. Linux `ud_grade` 2.7–3.5× interleaved | see card | `9e65cbc` + `934b02fa` | [20260817_world_layer](20260817_world_layer.md) |
 | 20260819 | sht_polar_fft | - | - | - | Linux SHT not claimed. `425af888` nside=128 alm2map ~52×; `b1f02069` 8-thread cap: interpolate 2.5 ms, polar FFT ~280 ms | see card | `425af888` + `b1f02069` | [20260819_sht_polar_fft](20260819_sht_polar_fft.md) |
-| 20260820 | world_layer_pending | - | - | CANFAR jobs wired, not signed | no Linux/CUDA claim | see card | local | [20260820_world_layer_pending](20260820_world_layer_pending.md) |
+| 20260820 | world_layer_pending | - | - | superseded by 20260821 | — | — | local | [20260820_world_layer_pending](20260820_world_layer_pending.md) |
+| 20260821 | world_layer | - | - | Paper II mixed; TPV fw 0.92×; CUDA vs CPU astropy | moc contains 0.99×; cone/union not claimed | see card | `775762c2` | [20260821_world_layer](20260821_world_layer.md) |
