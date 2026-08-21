@@ -16,7 +16,7 @@ description = "Torch-native sky data, coordinates, geometry, and mapmaking"
 authors = [{ name = "Seb Fabbro", email = "sebfabbro@gmail.com" }]
 readme = "README.md"
 license = { text = "MIT" }
-keywords = ["fits", "astronomy", "pytorch", "tensor", "wcs", "cfitsio", "machine-learning"]
+keywords = ["fits", "astronomy", "pytorch", "tensor", "wcs", "machine-learning"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
@@ -70,7 +70,6 @@ bench = [
     "astropy>=5.0",
     "drizzle>=2.2.0",
     "dfreproject>=1.3.0",
-    "fitsio>=1.1",
     "pandas>=1.0",
     "matplotlib>=3.0",
     "seaborn>=0.11.0",
@@ -86,7 +85,6 @@ bench-all = [
     "astropy>=5.0",
     "drizzle>=2.2.0",
     "dfreproject>=1.3.0",
-    "fitsio>=1.1",
     "pandas>=1.0",
     "matplotlib>=3.0",
     "seaborn>=0.11.0",
@@ -115,7 +113,6 @@ test = [
     "pyarrow>=14.0",
     "pandas>=2.2",
     "astropy>=5.0",
-    "fitsio>=1.1",
     "pyright>=1.1.350",
 ]
 examples = [

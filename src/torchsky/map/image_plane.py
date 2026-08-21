@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-import os
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
@@ -248,30 +247,6 @@ _DEFAULT_MAP_OPERATOR_BUNDLE = ObservationOperatorBundle(
     mask_weight=None,
     noise=ExplicitNoiseOp(),
 )
-
-
-def _try_external_drizzle_helpers():
-    """Legacy comparator path only; set ``TORCHSKY_USE_EXTERNAL_DRIZZLE=1`` to enable."""
-    if os.environ.get("TORCHSKY_USE_EXTERNAL_DRIZZLE", "").lower() not in (
-        "1",
-        "true",
-        "yes",
-    ):
-        return None
-    try:
-        from astropy.io import fits as astropy_fits  # type: ignore
-        from astropy.wcs import WCS as AstropyWCS  # type: ignore
-        from drizzle.resample import Drizzle as DrizzleResampler  # type: ignore
-        from drizzle.utils import calc_pixmap, estimate_pixel_scale_ratio  # type: ignore
-    except (ImportError, ModuleNotFoundError, AttributeError, OSError):
-        return None
-    return (
-        astropy_fits,
-        AstropyWCS,
-        DrizzleResampler,
-        calc_pixmap,
-        estimate_pixel_scale_ratio,
-    )
 
 
 def _should_apply_surface_brightness_area_scaling(
@@ -1226,96 +1201,6 @@ def _forward_project_weighted_to_target(
     numer = torch.where(weight > 0.0, numer, torch.zeros_like(numer))
     weight = torch.where(weight > 0.0, weight, torch.zeros_like(weight))
     return numer, weight
-
-
-def _as_astropy_fits_header_for_drizzle(header: dict):
-    helpers = _try_external_drizzle_helpers()
-    if helpers is None:  # pragma: no cover - exercised only when drizzle is installed
-        raise RuntimeError("external drizzle helpers are unavailable")
-    astropy_fits = helpers[0]
-    out = astropy_fits.Header()
-    for key, value in header.items():
-        if str(key).endswith("_COMMENT"):
-            continue
-        if key in {"", "COMMENT", "HISTORY"}:
-            continue
-        out[key] = value
-    return out
-
-
-def _maybe_external_drizzle_resample_weighted_to_target(
-    image: Tensor,
-    source_weight: Tensor,
-    *,
-    header_dict_obs: dict,
-    target_header: dict,
-    target_shape: tuple[int, int],
-    resampling_kernel: MapResamplingKernel,
-    value_semantics: MapValueSemantics,
-    drizzle_pixfrac: float,
-) -> tuple[Tensor, Tensor] | None:
-    if not _is_drizzle_kernel(resampling_kernel):
-        return None
-    helpers = _try_external_drizzle_helpers()
-    if helpers is None:
-        return None
-    (
-        astropy_fits,
-        AstropyWCS,
-        DrizzleResampler,
-        calc_pixmap,
-        estimate_pixel_scale_ratio,
-    ) = helpers
-    kernel = "point" if resampling_kernel == "drizzle_point" else "square"
-    target_header_astropy = _as_astropy_fits_header_for_drizzle(target_header)
-    source_header_astropy = _as_astropy_fits_header_for_drizzle(header_dict_obs)
-    target_wcs = AstropyWCS(target_header_astropy)
-    target_wcs.array_shape = target_shape
-    source_shape = tuple(image.shape)
-    source_wcs = AstropyWCS(source_header_astropy)
-    source_wcs.array_shape = source_shape
-    pixmap = calc_pixmap(source_wcs, target_wcs, shape=source_shape)
-    pscale_ratio = estimate_pixel_scale_ratio(
-        source_wcs,
-        target_wcs,
-        refpix_from=source_wcs.wcs.crpix,
-        refpix_to=target_wcs.wcs.crpix,
-    )
-    # Match ``benchmarks/bench_map_smacs0723_reproduce.py`` / compat drizzle rows:
-    # surface-brightness products use unit iscale; flux-style stacking uses pscale^2.
-    iscale = (
-        1.0 if value_semantics == "surface_brightness" else float(pscale_ratio) ** 2
-    )
-    drizzle = DrizzleResampler(
-        kernel=kernel,
-        fillval=0.0,
-        out_shape=target_shape,
-        disable_ctx=True,
-    )
-    drizzle.add_image(
-        torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0)
-        .cpu()
-        .numpy()
-        .astype("float32"),
-        exptime=1.0,
-        pixmap=pixmap,
-        weight_map=torch.nan_to_num(source_weight, nan=0.0, posinf=0.0, neginf=0.0)
-        .cpu()
-        .numpy()
-        .astype("float32"),
-        iscale=iscale,
-        pixel_scale_ratio=pscale_ratio,
-        pixfrac=float(drizzle_pixfrac),
-        in_units="cps",
-    )
-    out_img = torch.as_tensor(drizzle.out_img, dtype=torch.float32, device=image.device)
-    out_wht = torch.as_tensor(drizzle.out_wht, dtype=torch.float32, device=image.device)
-    if value_semantics == "flux":
-        # drizzle leaves out_wht in input-weight units even when iscale changes
-        # the science values; convert it to inverse variance in output units.
-        out_wht = out_wht / float(iscale * iscale)
-    out_img = torch.where(out_wht > 0.0, out_img, torch.zeros_like(out_img))
-    return out_img * out_wht, out_wht
 
 
 def _validated_spectral_axis(axis: SpectralAxis) -> SpectralAxis:

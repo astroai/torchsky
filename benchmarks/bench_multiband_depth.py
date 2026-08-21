@@ -3390,10 +3390,16 @@ def _updec_classical_validation_artifact(
             radius_px=match_radius_px,
         )
         matched_truth = {truth_index for truth_index, _ in match.pairs}
+        batch_magnitude_counts: dict[float, list[int]] = {}
         for index, magnitude in enumerate(magnitudes.tolist()):
             counts = magnitude_counts.setdefault(float(magnitude), [0, 0])
             counts[0] += 1
             counts[1] += int(index in matched_truth)
+            per_batch = batch_magnitude_counts.setdefault(
+                float(magnitude), [0, 0]
+            )
+            per_batch[0] += 1
+            per_batch[1] += int(index in matched_truth)
         total_truth += truth_xy.shape[0]
         total_selected += selected.shape[0]
         total_matched += len(match.pairs)
@@ -3409,6 +3415,15 @@ def _updec_classical_validation_artifact(
                     if selected.shape[0]
                     else 1.0
                 ),
+                # Per-batch magnitude-resolved counts: the cluster bootstrap
+                # in score_field_models needs these to be non-degenerate.
+                "completeness_by_ab_magnitude": {
+                    f"{magnitude:g}": {
+                        "truth_count": counts[0],
+                        "matched_count": counts[1],
+                    }
+                    for magnitude, counts in sorted(batch_magnitude_counts.items())
+                },
             }
         )
     return {

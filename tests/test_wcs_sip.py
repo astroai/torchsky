@@ -1,14 +1,13 @@
 import numpy as np
 import pytest
 import torch
-from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
 
 from torchsky.wcs.core import WCS as TorchWCS
 
 
-def _sip_header() -> fits.Header:
-    header = fits.Header()
+def _sip_header() -> dict:
+    header = {}
     header["NAXIS"] = 2
     header["NAXIS1"] = 1024
     header["NAXIS2"] = 1024
@@ -91,9 +90,9 @@ def test_sip_inverse_roundtrip_parity_with_astropy() -> None:
     np.testing.assert_allclose(y_t.cpu().numpy(), y, atol=2e-5)
 
 
-def _high_order_sip_header(order: int) -> fits.Header:
+def _high_order_sip_header(order: int) -> dict:
     """Dense SIP forward terms so ``distort`` uses the vectorized ``index_select`` path."""
-    header = fits.Header()
+    header = {}
     header["NAXIS"] = 2
     header["NAXIS1"] = 2048
     header["NAXIS2"] = 2048

@@ -8,29 +8,21 @@ Requires: ``torchsky.cpp``, optional ``drizzle``.
 
 from __future__ import annotations
 
-import importlib.util
 import math
-import os
 from pathlib import Path
 
 import pytest
 import torch
 
+pytest.importorskip("torchsky.cpp")
+pytest.importorskip("drizzle")
+
+from astropy.wcs import WCS as AstropyWCS  # noqa: E402
+from drizzle.resample import Drizzle as DrizzleResampler  # noqa: E402
+from drizzle.utils import calc_pixmap, estimate_pixel_scale_ratio  # noqa: E402
+
 import torchsky
 from torchsky.map import ImageObservation, coadd_image_plane
-from torchsky.map import image_plane as image_plane_mod
-
-pytest.importorskip("torchsky.cpp")
-
-
-def _drizzle_installed() -> bool:
-    return importlib.util.find_spec("drizzle") is not None
-
-
-pytestmark = pytest.mark.skipif(
-    not _drizzle_installed(),
-    reason="optional ``drizzle`` package not installed",
-)
 
 
 def _header(
@@ -76,7 +68,15 @@ def _blob(ny: int = 16, nx: int = 16) -> torch.Tensor:
     )
 
 
-def _external_reference(
+def _header_for_drizzle(header: dict) -> dict:
+    return {
+        key: value
+        for key, value in header.items()
+        if not str(key).endswith("_COMMENT") and key not in {"", "COMMENT", "HISTORY"}
+    }
+
+
+def _stsci_drizzle_reference(
     image: torch.Tensor,
     source_weight: torch.Tensor,
     *,
@@ -86,28 +86,53 @@ def _external_reference(
     value_semantics: str,
     drizzle_pixfrac: float,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    old = os.environ.get("TORCHSKY_USE_EXTERNAL_DRIZZLE")
-    os.environ["TORCHSKY_USE_EXTERNAL_DRIZZLE"] = "1"
-    try:
-        exact = image_plane_mod._maybe_external_drizzle_resample_weighted_to_target(
-            image,
-            source_weight,
-            header_dict_obs=header_dict_obs,
-            target_header=target_header,
-            target_shape=(int(target_header["NAXIS2"]), int(target_header["NAXIS1"])),
-            resampling_kernel=resampling_kernel,
-            value_semantics=value_semantics,
-            drizzle_pixfrac=drizzle_pixfrac,
-        )
-    finally:
-        if old is None:
-            os.environ.pop("TORCHSKY_USE_EXTERNAL_DRIZZLE", None)
-        else:
-            os.environ["TORCHSKY_USE_EXTERNAL_DRIZZLE"] = old
-    assert exact is not None
-    numer, weight = exact
-    data = torch.where(weight > 0.0, numer / weight, torch.zeros_like(numer))
-    return numer, weight, data
+    kernel = "point" if resampling_kernel == "drizzle_point" else "square"
+    target_shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
+    target_wcs = AstropyWCS(_header_for_drizzle(target_header))
+    target_wcs.array_shape = target_shape
+    source_shape = tuple(image.shape)
+    source_wcs = AstropyWCS(_header_for_drizzle(header_dict_obs))
+    source_wcs.array_shape = source_shape
+    pixmap = calc_pixmap(source_wcs, target_wcs, shape=source_shape)
+    pscale_ratio = estimate_pixel_scale_ratio(
+        source_wcs,
+        target_wcs,
+        refpix_from=source_wcs.wcs.crpix,
+        refpix_to=target_wcs.wcs.crpix,
+    )
+    iscale = (
+        1.0 if value_semantics == "surface_brightness" else float(pscale_ratio) ** 2
+    )
+    drizzle = DrizzleResampler(
+        kernel=kernel,
+        fillval=0.0,
+        out_shape=target_shape,
+        disable_ctx=True,
+    )
+    drizzle.add_image(
+        torch.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0)
+        .cpu()
+        .numpy()
+        .astype("float32"),
+        exptime=1.0,
+        pixmap=pixmap,
+        weight_map=torch.nan_to_num(source_weight, nan=0.0, posinf=0.0, neginf=0.0)
+        .cpu()
+        .numpy()
+        .astype("float32"),
+        iscale=iscale,
+        pixel_scale_ratio=pscale_ratio,
+        pixfrac=float(drizzle_pixfrac),
+        in_units="cps",
+    )
+    out_img = torch.as_tensor(drizzle.out_img, dtype=torch.float32, device=image.device)
+    out_wht = torch.as_tensor(drizzle.out_wht, dtype=torch.float32, device=image.device)
+    if value_semantics == "flux":
+        out_wht = out_wht / float(iscale * iscale)
+    out_img = torch.where(out_wht > 0.0, out_img, torch.zeros_like(out_img))
+    numer = out_img * out_wht
+    data = torch.where(out_wht > 0.0, numer / out_wht, torch.zeros_like(numer))
+    return numer, out_wht, data
 
 
 def _assert_native_matches_external(
@@ -156,7 +181,7 @@ def test_external_drizzle_parity_across_affine_cases(
         drizzle_pixfrac=pixfrac,
         stacking_method="weighted_mean",
     )
-    _, reference_weight, reference_data = _external_reference(
+    _, reference_weight, reference_data = _stsci_drizzle_reference(
         image,
         torch.ones_like(image),
         header_dict_obs=source_header,
@@ -213,7 +238,7 @@ def test_external_drizzle_parity_respects_weight_and_mask_maps(
     source_weight = (
         torch.where(mask > 0.0, weight_map, torch.zeros_like(weight_map)) * 2.0
     )
-    _, reference_weight, reference_data = _external_reference(
+    _, reference_weight, reference_data = _stsci_drizzle_reference(
         image,
         source_weight,
         header_dict_obs=source_header,
@@ -249,7 +274,7 @@ def test_external_drizzle_parity_square_support_matches_weighted_uniform_field(
         drizzle_pixfrac=1.0,
         stacking_method="weighted_mean",
     )
-    _, reference_weight, reference_data = _external_reference(
+    _, reference_weight, reference_data = _stsci_drizzle_reference(
         image,
         torch.ones_like(image),
         header_dict_obs=source_header,

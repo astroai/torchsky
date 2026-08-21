@@ -59,7 +59,7 @@ twine = ">=5.0"
 # Development tasks
 dev = "pip install -e . --no-build-isolation"
 build = "pixi build"
-# Full tests need the `test` env (astropy/fitsio/pyarrow/polars/…); see AGENTS.md.
+# Full tests need the `test` env (astropy/pyarrow/polars/…); see AGENTS.md.
 test = "KMP_DUPLICATE_LIB_OK=TRUE pixi run -e test -- pytest -n auto --ignore-glob='tests/test_map_*.py'"
 lint = "ruff check . && ruff format ."
 # Git pre-push hook: ruff + compileall only. Do not add pytest here.
@@ -203,7 +203,6 @@ torchfits = ">=1.0.0rc4"
 # Test feature with comparison libraries
 [feature.test.dependencies]
 astropy = ">=5.0"
-fitsio = ">=1.2"
 pandas = ">=2.2"
 polars = ">=1.0"
 pyarrow = ">=14.0"
@@ -214,7 +213,6 @@ requests = ">=2.28"
 # Benchmark feature with additional dependencies
 [feature.bench.dependencies]
 astropy = ">=5.0"
-fitsio = ">=1.2"
 matplotlib = ">=3.8"
 seaborn = ">=0.13"
 pandas = ">=2.2"
@@ -290,7 +288,6 @@ seaborn = "*"
 pandas = "*"
 psutil = "*"
 astropy = "*"
-fitsio = "*"
 starlink-ast = "*"
 cython = "<3.0"
 # Add torch for torchsky

@@ -10,6 +10,7 @@ import tempfile
 import time
 import numpy as np
 import torch
+import torchfits
 import torchsky
 import polars as pl
 
@@ -30,12 +31,7 @@ def create_sample_catalog(n_rows=100_000):
 
     # Write to FITS
     filename = tempfile.mktemp(suffix=".fits")
-
-    # Using astropy to write initial file (as torchsky write support is mainly for tensors)
-    from astropy.table import Table
-
-    t = Table(data)
-    t.write(filename, format="fits", overwrite=True)
+    torchfits.table.write(filename, data, overwrite=True)
 
     print(f"  File: {filename}")
     return filename

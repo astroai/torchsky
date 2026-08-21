@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 import unittest.mock
 import torch
+import torchfits
 
 from torchsky.spectral import (
     DataCube,
@@ -567,51 +568,46 @@ class TestSpectralReader:
 
     def create_test_spectrum_file(self):
         """Create test spectrum FITS file."""
-        try:
-            from astropy.io import fits  # noqa: F401
-            from astropy.table import Table
-        except ImportError:
-            pytest.skip("astropy required for test file creation")
-
-        # Create test spectrum data
         n_wave = 1000
         wavelength = np.linspace(4000, 7000, n_wave)
         flux = np.sin(wavelength / 100) + np.random.normal(0, 0.1, n_wave)
         ivar = np.ones_like(flux) * 100
         mask = np.ones_like(flux, dtype=bool)
-        mask[100:110] = False  # Bad pixels
-
-        # Create table
-        table = Table(
-            {"WAVELENGTH": wavelength, "FLUX": flux, "IVAR": ivar, "MASK": mask}
-        )
+        mask[100:110] = False
 
         with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
-            table.write(f.name, format="fits", overwrite=True)
-            return f.name
+            path = f.name
+        torchfits.table.write(
+            path,
+            {
+                "WAVELENGTH": wavelength,
+                "FLUX": flux,
+                "IVAR": ivar,
+                "MASK": mask,
+            },
+            overwrite=True,
+        )
+        return path
 
     def create_test_cube_file(self):
         """Create test data cube FITS file."""
-        try:
-            from astropy.io import fits
-        except ImportError:
-            pytest.skip("astropy required for test file creation")
-
-        # Create test cube data
-        shape = (100, 64, 64)  # wavelength, y, x
+        shape = (100, 64, 64)
         data = np.random.randn(*shape).astype(np.float32)
-
-        # Create HDU with spectral WCS
-        hdu = fits.PrimaryHDU(data)
-        hdu.header["CTYPE3"] = "WAVE"
-        hdu.header["CRVAL3"] = 4000.0  # Angstroms
-        hdu.header["CDELT3"] = 30.0  # Angstrom/pixel
-        hdu.header["CRPIX3"] = 1.0
-        hdu.header["CUNIT3"] = "Angstrom"
-
         with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
-            hdu.writeto(f.name, overwrite=True)
-            return f.name
+            path = f.name
+        torchfits.write(
+            path,
+            torch.from_numpy(data),
+            header={
+                "CTYPE3": "WAVE",
+                "CRVAL3": 4000.0,
+                "CDELT3": 30.0,
+                "CRPIX3": 1.0,
+                "CUNIT3": "Angstrom",
+            },
+            overwrite=True,
+        )
+        return path
 
     def test_read_spectrum_1d(self):
         """Test reading 1D spectrum from FITS table."""

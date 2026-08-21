@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 import torch
-from astropy.io import fits
 
 import torchsky
 from torchsky.map import ImageObservation, coadd_image_plane
@@ -69,8 +68,8 @@ def _blob(ny: int = 16, nx: int = 16) -> torch.Tensor:
     )
 
 
-def _as_fits_header(header: dict) -> fits.Header:
-    out = fits.Header()
+def _as_fits_header(header: dict) -> dict:
+    out = {}
     for key, value in header.items():
         if str(key).endswith("_COMMENT"):
             continue

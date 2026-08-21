@@ -18,6 +18,8 @@ from torchsky.map.operators import (
     BackgroundCalibrationTerm,
     ConditionedBackgroundField,
     ConditionedKernelPSF,
+    ExtendedResidualKernelPSF,
+    LowRankChromaticPSF,
     PSFCalibrationTerm,
     SpatioSpectralTemporalEncoder,
     fit_operator_calibration_terms,
@@ -25,7 +27,6 @@ from torchsky.map.operators import (
     operator_calibration_validation_pruning_report,
     operator_calibration_score_report,
 )
-
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -183,6 +184,7 @@ def _make_model(
     role: str,
     family: str,
     device: torch.device,
+    psf_model: str = "fitted_gaussian_kernel",
 ) -> tuple[nn.Module, dict[str, Any]]:
     if family not in {"stationary", "adaptive"}:
         raise ValueError("family must be stationary or adaptive")
@@ -198,6 +200,20 @@ def _make_model(
         initial_fwhm = _initial_fwhm_pixels(
             arrays["target_kernels"], arrays["sample_weight"]
         )
+        if adaptive and psf_model == "learned_lowrank":
+            # Learned low-rank chromatic arm: control-grid x Legendre model
+            # anchored on calibration-star kernels (never scene residuals).
+            from torchsky.map.operators import LowRankChromaticPSF
+
+            model = LowRankChromaticPSF(
+                grid_side=4,
+                spectral_degree=2,
+                base_sigma_pix=initial_fwhm / 2.354820045,
+                kernel_size=int(arrays["target_kernels"].shape[-1]),
+            )
+            initializer["initial_fwhm_pixels"] = initial_fwhm
+            initializer["psf_model"] = "learned_lowrank"
+            return model.to(device), initializer
         model = ConditionedKernelPSF(
             encoder,
             n_basis=4 if adaptive else 1,
@@ -242,8 +258,10 @@ def _term(
         "name": name,
     }
     if role == "psf":
-        if not isinstance(model, ConditionedKernelPSF):
-            raise TypeError("PSF calibration requires ConditionedKernelPSF")
+        if not isinstance(
+            model, (ConditionedKernelPSF, ExtendedResidualKernelPSF, LowRankChromaticPSF)
+        ):
+            raise TypeError("PSF calibration requires a conditioned kernel PSF")
         return PSFCalibrationTerm(
             model=model,
             target_kernels=arrays["target_kernels"],
@@ -423,6 +441,7 @@ def _fit_group(
     seed: int,
     manifest_payload: dict[str, Any],
     minimum_slice_samples: int,
+    psf_model: str = "fitted_gaussian_kernel",
 ) -> dict[str, Any]:
     arrays = {
         split: load_operator_calibration_split(
@@ -448,7 +467,11 @@ def _fit_group(
         raise RuntimeError("manifest row order/count does not match loaded evidence")
     torch.manual_seed(seed)
     model, initializer = _make_model(
-        arrays["train"], role=role, family=family, device=device
+        arrays["train"],
+        role=role,
+        family=family,
+        device=device,
+        psf_model=psf_model,
     )
     background_loss_weight = (
         _background_loss_weight(arrays["train"]) if role == "background" else 1.0
@@ -514,7 +537,7 @@ def _fit_group(
         ),
     }
     if family == "adaptive" and isinstance(
-        model.encoder, AdaptiveSpatioSpectralTemporalEncoder
+        getattr(model, "encoder", None), AdaptiveSpatioSpectralTemporalEncoder
     ):
         result["learned_scales"] = model.encoder.scale_diagnostics()
         result["identifiability"] = {
@@ -641,6 +664,13 @@ def main() -> int:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=1729)
     parser.add_argument("--minimum-slice-samples", type=int, default=20)
+    parser.add_argument(
+        "--psf-model",
+        choices=("fitted_gaussian_kernel", "learned_lowrank"),
+        default="fitted_gaussian_kernel",
+        help="PSF arm for the adaptive family: conditioned kernel bank "
+        "(default) or learned low-rank chromatic control-grid model.",
+    )
     args = parser.parse_args()
 
     manifest = args.manifest.resolve()
@@ -679,6 +709,7 @@ def main() -> int:
                         + family_index,
                         manifest_payload=payload,
                         minimum_slice_samples=args.minimum_slice_samples,
+                        psf_model=args.psf_model,
                     )
                 )
     report = {
@@ -694,6 +725,7 @@ def main() -> int:
         "held_out_comparisons": _held_out_comparisons(groups),
         "held_out_slice_comparisons": _held_out_slice_comparisons(groups),
         "minimum_slice_samples": args.minimum_slice_samples,
+        "psf_model": args.psf_model,
     }
     output = output_dir / "operator_calibration_fit.json"
     temporary = output.with_suffix(".json.tmp")
@@ -715,7 +747,7 @@ def main() -> int:
                 "report": group["validation_pruning"],
             }
             for group in groups
-            if group["family"] == "adaptive"
+            if group["family"] == "adaptive" and "validation_pruning" in group
         ],
     }
     print(json.dumps(console_report, indent=2, sort_keys=True, allow_nan=False))

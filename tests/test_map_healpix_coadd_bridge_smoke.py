@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from astropy.io import fits
 
 pytest.importorskip("torchsky.cpp")
 pytest.importorskip("reproject")
@@ -40,12 +39,12 @@ def test_torchsky_coadd_after_healpix_roundtrip_matches_baseline(
         -((xx - size / 2) ** 2 + (yy - size / 2) ** 2) / (2.0 * 14.0**2)
     ).astype(np.float32)
     hp_map, _ = reproject_to_healpix(
-        (blob, fits.Header(hdr)),
+        (blob, dict(hdr)),
         "icrs",
         nside=256,
         order="bilinear",
     )
-    arr, fp = reproject_from_healpix((hp_map, "icrs"), fits.Header(hdr), nested=False)
+    arr, fp = reproject_from_healpix((hp_map, "icrs"), dict(hdr), nested=False)
     assert float(fp.max()) > 0.5
     path = tmp_path / "from_hp.fits"
     torchsky.write(

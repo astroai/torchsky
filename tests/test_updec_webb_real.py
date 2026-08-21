@@ -23,10 +23,24 @@ from bench_updec_webb_real import (  # noqa: E402
 
 
 def test_updec_webb_public_manifest_contains_expected_sparse_smoke_band() -> None:
-    spec = UPDEC_WEBB_FILES[("F277W", 0)]
+    spec = UPDEC_WEBB_FILES[("F277W", "b", 0)]
     assert spec.filename == "F277Wb_UPDC-v2_iter0_i2d.fits.fz"
     assert spec.download_id == 47980
     assert spec.url.endswith("47980")
+
+
+def test_module_a_manifest_resolved_from_release() -> None:
+    spec = UPDEC_WEBB_FILES[("F277W", "a", 0)]
+    assert spec.filename == "JWST_NIRCAM_F277Wa_UPDC-v1.1_SCI_clear_iter00.fits"
+    assert spec.download_id == 46474
+    assert UPDEC_WEBB_FILES[("F090W", "a", 10)].download_id == 46491
+
+
+def test_resolve_specs_rejects_unknown_module() -> None:
+    import pytest
+
+    with pytest.raises(ValueError):
+        resolve_specs(["F277W"], [0], modules=("c",))
 
 
 def test_resolve_specs_supports_public_iter0_iter10_pair() -> None:

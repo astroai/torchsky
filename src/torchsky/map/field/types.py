@@ -98,7 +98,7 @@ class ForwardContext:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-FieldPSFMode = Literal["none", "gaussian_sigma_pix", "kernel2d"]
+FieldPSFMode = Literal["none", "gaussian_sigma_pix", "kernel2d", "learned_lowrank"]
 
 
 @dataclass
@@ -108,6 +108,9 @@ class PSFSpec:
     mode: FieldPSFMode = "none"
     sigma_pix: float = 0.0
     kernel2d: Tensor | None = None
+    model: nn.Module | None = None
+    cell_u_pix: Tensor | None = None
+    cell_lam_norm: float = 0.5
 
     @classmethod
     def gaussian(cls, sigma_pix: float) -> "PSFSpec":
@@ -116,6 +119,23 @@ class PSFSpec:
     @classmethod
     def kernel(cls, kernel2d: Tensor) -> "PSFSpec":
         return cls(mode="kernel2d", kernel2d=kernel2d)
+
+    @classmethod
+    def learned(
+        cls,
+        model: nn.Module,
+        *,
+        base_sigma_pix: float,
+        cell_u_pix: Tensor | None = None,
+        cell_lam_norm: float = 0.5,
+    ) -> "PSFSpec":
+        return cls(
+            mode="learned_lowrank",
+            sigma_pix=float(base_sigma_pix),
+            model=model,
+            cell_u_pix=cell_u_pix,
+            cell_lam_norm=float(cell_lam_norm),
+        )
 
     def __post_init__(self) -> None:
         if self.mode == "none":
@@ -142,6 +162,15 @@ class PSFSpec:
                 raise ValueError("PSFSpec kernel2d must have positive sum")
             if any(int(size) % 2 == 0 for size in self.kernel2d.shape):
                 raise ValueError("PSFSpec kernel2d dimensions must be odd")
+            return
+        if self.mode == "learned_lowrank":
+            if self.model is None:
+                raise ValueError("PSFSpec learned_lowrank mode requires a model")
+            sigma = float(self.sigma_pix)
+            if not math.isfinite(sigma) or sigma <= 0.0:
+                raise ValueError(
+                    "PSFSpec learned_lowrank requires finite base sigma_pix > 0"
+                )
             return
         raise ValueError(f"unsupported PSFSpec mode {self.mode!r}")
 

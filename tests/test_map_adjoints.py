@@ -494,3 +494,76 @@ def test_apply_calibration_gradgradcheck(device: str) -> None:
         return (cal_img + cal_w).sum()
 
     assert torch.autograd.gradgradcheck(f, (image, weight), atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.parametrize("device", _DEVICES)
+def test_learned_lowrank_psf_render_gradcheck(device: str) -> None:
+    """Learned low-rank chromatic PSF render is differentiable end to end."""
+    from torchsky.map.field.types import PSFSpec
+    from torchsky.map.operators import apply_psf_spec, LowRankChromaticPSF
+
+    dev = torch.device(device)
+    model = LowRankChromaticPSF(
+        grid_side=2,
+        spectral_degree=1,
+        base_sigma_pix=1.5,
+        extent_pix=64.0,
+        kernel_size=7,
+    ).to(dev)
+    for parameter in model.parameters():
+        parameter.data.normal_(0.0, 0.05).to(dev)
+
+    image = torch.randn(16, 16, dtype=torch.float64, device=dev, requires_grad=True)
+    cell_u = torch.stack(
+        torch.meshgrid(
+            torch.linspace(0.0, 63.0, 2),
+            torch.linspace(0.0, 63.0, 2),
+            indexing="ij",
+        ),
+        dim=-1,
+    ).reshape(-1, 2)
+    spec = PSFSpec.learned(
+        model,
+        base_sigma_pix=1.5,
+        cell_u_pix=cell_u,
+        cell_lam_norm=0.5,
+    )
+
+    def f(img: torch.Tensor) -> torch.Tensor:
+        return apply_psf_spec(img, spec).square().sum()
+
+    assert torch.autograd.gradcheck(f, (image,), atol=1e-4, rtol=1e-4)
+
+
+def test_learned_lowrank_kernel_gauges() -> None:
+    """Rendered kernels integrate to 1 and are zero-centroid by construction."""
+    from torchsky.map.operators import (
+        LowRankChromaticPSF,
+        gaussian_kernels_from_params,
+    )
+    from torchsky.map.operators.psf import psf_support_radius
+    from torchsky.map.field.types import PSFSpec
+
+    model = LowRankChromaticPSF(base_sigma_pix=2.3)
+    with torch.no_grad():
+        model.raw_log_sigma.normal_(0.0, 0.2)
+        model.raw_ellipticity.normal_(0.0, 0.05)
+        model.raw_pa_rad.normal_(0.0, 0.05)
+    u = torch.tensor([[100.0, 1500.0], [1800.0, 300.0]])
+    kernels = gaussian_kernels_from_params(model(u, 0.6), size=31)
+    size = kernels.shape[-1]
+    gy, gx = torch.meshgrid(
+        torch.arange(size, dtype=torch.float64) - size // 2,
+        torch.arange(size, dtype=torch.float64) - size // 2,
+        indexing="ij",
+    )
+    assert (kernels.sum(dim=(-2, -1)) - 1.0).abs().max() < 1e-6
+    centroid_x = (kernels * gx).sum(dim=(-2, -1))
+    centroid_y = (kernels * gy).sum(dim=(-2, -1))
+    assert (
+        torch.stack([centroid_x, centroid_y], dim=-1).norm(dim=-1).max() < 1e-3
+    )
+
+    spec = PSFSpec.learned(model, base_sigma_pix=2.3)
+    radius = max(1, round(3.0 * 2.3))
+    assert psf_support_radius(spec) == (2 * radius, 2 * radius)

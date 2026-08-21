@@ -5,10 +5,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
 
 import torchsky
+import torchfits
 
 
 astropy = pytest.importorskip("astropy")
@@ -17,7 +17,7 @@ SIP_WCS_FIXTURE = ASTROPY_ROOT / "nddata" / "tests" / "data" / "sip-wcs.fits"
 
 
 def test_local_sip_wcs_fixture_matches_astropy_world_coordinates() -> None:
-    awcs = AstropyWCS(fits.getheader(SIP_WCS_FIXTURE))
+    awcs = AstropyWCS(torchfits.read_header(SIP_WCS_FIXTURE.as_posix()))
     twcs = torchsky.get_wcs(SIP_WCS_FIXTURE.as_posix(), hdu=0)
     xy = np.array([[0.0, 0.0], [20.0, 10.0], [80.0, 40.0]], dtype=np.float64)
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import torch
 
 import torchsky
-from astropy.io import fits
 from torchsky.map.spectral_nonuniform import resample_nonuniform_spectral_2d
 
 
@@ -30,8 +29,8 @@ def _tpv_header(
     crval2: float,
     rotation_deg: float = 0.0,
     scale_deg: float = 0.01,
-) -> fits.Header:
-    header = fits.Header()
+) -> dict:
+    header = {}
     header["NAXIS"] = 2
     header["NAXIS1"] = size
     header["NAXIS2"] = size

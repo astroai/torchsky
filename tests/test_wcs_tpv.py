@@ -1,13 +1,12 @@
 import numpy as np
 import torch
-from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
 
 from torchsky.wcs.core import WCS
 
 
-def _tpv_header() -> fits.Header:
-    header = fits.Header()
+def _tpv_header() -> dict:
+    header = {}
     header["NAXIS"] = 2
     header["NAXIS1"] = 1024
     header["NAXIS2"] = 1024
@@ -44,7 +43,7 @@ def _tpv_header() -> fits.Header:
     return header
 
 
-def _tpv_affine_linear_header() -> fits.Header:
+def _tpv_affine_linear_header() -> dict:
     header = _tpv_header()
     # Pure affine TPV (non-identity, with offsets and cross terms)
     for k in list(header.keys()):
@@ -60,8 +59,8 @@ def _tpv_affine_linear_header() -> fits.Header:
     return header
 
 
-def _tpv_invertible_rect_header() -> fits.Header:
-    header = fits.Header()
+def _tpv_invertible_rect_header() -> dict:
+    header = {}
     header["NAXIS"] = 2
     header["NAXIS1"] = 1024
     header["NAXIS2"] = 768

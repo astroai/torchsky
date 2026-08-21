@@ -130,6 +130,32 @@ def test_los_barycentric_beta_round_trip_on_known_vector() -> None:
     assert float(los_barycentric_beta(approaching, tt_mjd)) < 0
 
 
+def test_earth_barycentric_velocity_has_astropy_direction_and_los_sign() -> None:
+    coordinates = pytest.importorskip("astropy.coordinates")
+    time = pytest.importorskip("astropy.time")
+    units = pytest.importorskip("astropy.units")
+    tt_mjd = torch.tensor([51544.5, 58000.0, 62500.0], dtype=torch.float64)
+    got = earth_barycentric_velocity_icrs(tt_mjd)
+    references = []
+    for value in tt_mjd.tolist():
+        _, velocity = coordinates.get_body_barycentric_posvel(
+            "earth", time.Time(value, format="mjd", scale="tt")
+        )
+        references.append(velocity.xyz.to_value(units.m / units.s))
+    reference = torch.stack(
+        [torch.as_tensor(value, dtype=torch.float64) for value in references]
+    )
+
+    cosine = torch.nn.functional.cosine_similarity(got, reference, dim=-1)
+    assert torch.all(cosine > 0.999)
+    assert torch.all(torch.linalg.vector_norm(got - reference, dim=-1) < 1.0e3)
+    direction = torch.nn.functional.normalize(reference, dim=-1)
+    expected_beta = -torch.sum(reference * direction, dim=-1) / C_M_S
+    torch.testing.assert_close(
+        los_barycentric_beta(direction, tt_mjd), expected_beta, rtol=0.04, atol=2e-7
+    )
+
+
 def test_air_vac_then_rapidity_does_not_mix_frames() -> None:
     # Air→vac is a wavelength-dependent index. Convert the published
     # (observed) grid first; do not apply n(λ) after a rest-frame shift.

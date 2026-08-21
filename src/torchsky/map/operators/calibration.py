@@ -14,7 +14,11 @@ from torch.nn import functional as F
 from .adaptive_axes import AdaptiveSpatioSpectralTemporalEncoder
 from .background import ConditionedBackgroundField
 from .bundle import ObservationOperatorBundle
-from .learned_kernel import ConditionedKernelPSF, ExtendedResidualKernelPSF
+from .learned_kernel import (
+    ConditionedKernelPSF,
+    ExtendedResidualKernelPSF,
+    LowRankChromaticPSF,
+)
 
 FieldTrainingStage = Literal["scene", "background", "psf", "joint"]
 
@@ -123,7 +127,7 @@ def registered_image_stamps(
 class PSFCalibrationTerm:
     """Anchor a conditioned PSF to measured normalized effective kernels."""
 
-    model: ConditionedKernelPSF | ExtendedResidualKernelPSF
+    model: ConditionedKernelPSF | ExtendedResidualKernelPSF | LowRankChromaticPSF
     detector_x: Tensor
     detector_y: Tensor
     wavelength: Tensor
@@ -136,7 +140,8 @@ class PSFCalibrationTerm:
 
     def __post_init__(self) -> None:
         if not isinstance(
-            self.model, (ConditionedKernelPSF, ExtendedResidualKernelPSF)
+            self.model,
+            (ConditionedKernelPSF, ExtendedResidualKernelPSF, LowRankChromaticPSF),
         ):
             raise TypeError("PSFCalibrationTerm requires a conditioned kernel PSF")
         count = int(torch.as_tensor(self.detector_x).numel())
@@ -186,6 +191,14 @@ class PSFCalibrationTerm:
         ]
         return self.model.effective_kernels(*coordinates)
 
+    @property
+    def smoothness_weight(self) -> float:
+        return float(getattr(self, "_smoothness_weight", 1.0e-3))
+
+    @smoothness_weight.setter
+    def smoothness_weight(self, value: float) -> None:
+        self._smoothness_weight = float(value)
+
     def raw_loss(self) -> Tensor:
         predicted = self.predicted_kernels()
         target = self.target_kernels.to(
@@ -210,7 +223,13 @@ class PSFCalibrationTerm:
         return (per_sample * weights).sum() / weights.sum()
 
     def penalty(self) -> Tensor:
-        return self.loss_weight * self.raw_loss()
+        total = self.loss_weight * self.raw_loss()
+        if isinstance(self.model, LowRankChromaticPSF):
+            # Smoothness prior on phi(u, lambda); unit integral and zero
+            # centroid are enforced by kernel construction (see
+            # gaussian_kernels_from_params), so only the field prior is added.
+            total = total + self.smoothness_weight * self.model.smoothness_penalty()
+        return total
 
     def diagnostics(self) -> dict[str, float | int | str]:
         predicted = self.predicted_kernels().detach()

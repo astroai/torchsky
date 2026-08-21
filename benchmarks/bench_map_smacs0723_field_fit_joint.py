@@ -85,12 +85,18 @@ from torchsky.map.field import (  # noqa: E402
     spectral_basis_whitening_transform,
 )
 from torchsky.map.field.bandpass import bandpass_quadrature  # noqa: E402
-from torchsky.map.operators import apply_psf_spec, pixel_area_sr_at  # noqa: E402
+from torchsky.instrument import nircam_imaging_band  # noqa: E402
+from torchsky.map.operators import (  # noqa: E402
+    apply_learned_psf_spec_adjoint,
+    apply_psf_spec,
+    pixel_area_sr_at,
+)
 from torchsky.calibration_evidence import load_operator_calibration_split  # noqa: E402
 from torchsky.map.operators import (  # noqa: E402
     ConditionedBackgroundField,
     LearnedBackgroundOp,
     LearnedPSFOp,
+    LowRankChromaticPSF,
     ObservationOperatorBundle,
     StructuredDetectorNoise,
     StructuredNoiseOp,
@@ -101,6 +107,7 @@ from torchsky.map.operators import (  # noqa: E402
     field_observation_operator_bundle,
     profile_amplifier_row_offsets,
 )
+from torchsky.map.field.types import PSFSpec  # noqa: E402
 
 
 REAL_JOINT_CASE = "tpv_field_fit_deep_multiband_broad"
@@ -283,6 +290,61 @@ def _calibrated_operator_bundles(
             )
         )
     return tuple(bundles)
+
+
+def _apply_learned_psf_arm(
+    observations: list[FieldObservation],
+    bands: list[str],
+    *,
+    grid_side: int = 4,
+    spectral_degree: int = 2,
+) -> dict[str, float]:
+    """Swap fitted Gaussian PSF specs for shared per-band learned models.
+
+    One :class:`LowRankChromaticPSF` per band (base width from the fitted
+    Gaussian contract); every exposure evaluates it at its own detector
+    control-cell centers. ponytail: in-band spectral coordinate is the
+    band index normalized to [0, 1]; upgrade path is true bandpass-weighted
+    central wavelengths.
+    """
+    models: dict[str, LowRankChromaticPSF] = {}
+    # True in-band spectral coordinate: band pivot wavelengths normalized
+    # across the run's band set (not a bare band index).
+    pivots = {
+        band: float(nircam_imaging_band(band).pivot_wavelength_angstrom)
+        for band in bands
+    }
+    pivot_lo, pivot_hi = min(pivots.values()), max(pivots.values())
+    for observation in observations:
+        band = str(observation.band_name)
+        if band not in bands:
+            raise ValueError(f"observation band {band!r} not in {bands}")
+        model = models.get(band)
+        if model is None:
+            model = LowRankChromaticPSF(
+                grid_side=grid_side,
+                spectral_degree=spectral_degree,
+                base_sigma_pix=float(observation.psf_sigma_pix),
+            )
+            models[band] = model
+        height, width = (int(v) for v in observation.image.shape[-2:])
+        xs = torch.linspace(0.0, width - 1.0, grid_side) + float(
+            observation.detector_x0_pix
+        )
+        ys = torch.linspace(0.0, height - 1.0, grid_side) + float(
+            observation.detector_y0_pix
+        )
+        yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+        cell_u_pix = torch.stack((xx.reshape(-1), yy.reshape(-1)), dim=-1)
+        lam_norm = (pivots[band] - pivot_lo) / max(pivot_hi - pivot_lo, 1e-9)
+        lam_norm = min(max(lam_norm, 0.0), 1.0)
+        observation.psf_spec = PSFSpec.learned(
+            model,
+            base_sigma_pix=float(observation.psf_sigma_pix),
+            cell_u_pix=cell_u_pix,
+            cell_lam_norm=lam_norm,
+        )
+    return {band: float(model.base_sigma_pix) for band, model in models.items()}
 
 
 def _regular_foam_model_kwargs(
@@ -546,6 +608,7 @@ def _initialize_foam_from_band_coadds(
         if getattr(psf_spec, "mode", "none") not in (
             "none",
             "gaussian_sigma_pix",
+            "learned_lowrank",
         ):
             raise ValueError("Foam initialization requires a symmetric target PSF")
 
@@ -570,13 +633,17 @@ def _initialize_foam_from_band_coadds(
             spec: Any = psf_spec,
             shape: tuple[int, int] = (height, width),
         ) -> torch.Tensor:
-            return (
-                apply_psf_spec(
+            if getattr(spec, "mode", "none") == "learned_lowrank":
+                core = apply_learned_psf_spec_adjoint(
                     (values * areas).reshape(shape),
                     spec,
-                ).reshape(values.shape)
-                / areas
-            )
+                )
+            else:
+                core = apply_psf_spec(
+                    (values * areas).reshape(shape),
+                    spec,
+                )
+            return core.reshape(values.shape) / areas
 
         solved_gradients = None
         if isinstance(gradient_coefficients, torch.nn.Parameter):
@@ -847,6 +914,7 @@ def _refine_foam_from_observations_exact(
         if getattr(psf_spec, "mode", "none") not in (
             "none",
             "gaussian_sigma_pix",
+            "learned_lowrank",
         ):
             raise ValueError("exact observation refinement requires a symmetric PSF")
 
@@ -869,7 +937,13 @@ def _refine_foam_from_observations_exact(
             shape: tuple[int, int] = (height, width),
         ) -> torch.Tensor:
             areas = areas.to(device=values.device)
-            return apply_psf_spec((values * areas).reshape(shape), spec).reshape(-1) / areas
+            if getattr(spec, "mode", "none") == "learned_lowrank":
+                core = apply_learned_psf_spec_adjoint(
+                    (values * areas).reshape(shape), spec
+                )
+            else:
+                core = apply_psf_spec((values * areas).reshape(shape), spec)
+            return core.reshape(-1) / areas
 
         wavelengths, response = bandpass_quadrature(
             observation,
@@ -1049,13 +1123,16 @@ def _write_export_products(
     *,
     band: str,
     model: str,
+    psf_mode: str = "fitted_gaussian",
     header: dict[str, Any],
     reference: np.ndarray,
     prediction: np.ndarray,
     support_mask: np.ndarray,
     source_mask: np.ndarray,
 ) -> None:
-    model_dir = export_dir / _safe_slug(band) / _safe_slug(model)
+    model_dir = (
+        export_dir / _safe_slug(psf_mode) / _safe_slug(band) / _safe_slug(model)
+    )
     model_dir.mkdir(parents=True, exist_ok=True)
     residual = prediction - reference
     torchsky.write(
@@ -1774,7 +1851,41 @@ def main() -> int:
     parser.add_argument("--inr-steps", type=int, default=None)
     parser.add_argument("--inr-lr", type=float, default=1.0e-3)
     parser.add_argument("--inr-hidden-dim", type=int, default=64)
+    parser.add_argument(
+        "--tile-ra",
+        type=float,
+        default=None,
+        help="COSMOS-scale tiling skeleton: tile center R.A. [deg]. "
+        "Recorded in outputs this pass; per-tile FieldDomain partitioning "
+        "is a later run.",
+    )
+    parser.add_argument(
+        "--tile-dec",
+        type=float,
+        default=None,
+        help="COSMOS-scale tiling skeleton: tile center Dec [deg].",
+    )
+    parser.add_argument(
+        "--tile-size-deg",
+        type=float,
+        default=0.25,
+        help="COSMOS-scale tiling skeleton: tile edge length [deg].",
+    )
     parser.add_argument("--inr-hidden-layers", type=int, default=3)
+    parser.add_argument(
+        "--psf-model",
+        choices=("fitted_gaussian", "learned_lowrank"),
+        default="fitted_gaussian",
+        help="Operator arm: frozen fitted Gaussian (default) or learned "
+        "low-rank chromatic PSF anchored on calibration evidence.",
+    )
+    parser.add_argument(
+        "--background-model",
+        choices=("plane", "learned"),
+        default="plane",
+        help="Nuisance arm: scalar/plane background (default) or the learned "
+        "ConditionedBackgroundField from the operator calibration fit.",
+    )
     args = parser.parse_args()
     if args.foam_initialize_from_coadd and args.foam_train_geometry:
         parser.error("coadd initialization currently requires fixed Foam geometry")
@@ -1844,18 +1955,42 @@ def main() -> int:
             parser.error("--inr-steps must be positive")
         if not math.isfinite(args.inr_lr) or args.inr_lr <= 0:
             parser.error("--inr-lr must be finite and positive")
-        if args.inr_hidden_dim <= 0 or args.inr_hidden_layers <= 0:
+        if int(args.inr_hidden_dim) <= 0 or int(args.inr_hidden_layers) <= 0:
             parser.error("INR hidden dimensions must be positive")
         if not args.foam_log_intensity_spectra:
             parser.error(
                 "--foam-initialized-inr requires --foam-log-intensity-spectra"
             )
+    if (args.tile_ra is None) != (args.tile_dec is None):
+        parser.error("--tile-ra and --tile-dec must be given together")
+    if args.tile_ra is not None:
+        for name, value in (
+            ("--tile-ra", args.tile_ra),
+            ("--tile-dec", args.tile_dec),
+        ):
+            if not math.isfinite(value) or not -180.0 <= value <= 360.0:
+                parser.error(f"{name} must be a finite angle in [-180, 360] deg")
+        if (
+            not math.isfinite(args.tile_size_deg)
+            or args.tile_size_deg <= 0.0
+            or args.tile_size_deg > 2.0
+        ):
+            parser.error("--tile-size-deg must be in (0, 2] deg")
+    tile_center = (
+        None
+        if args.tile_ra is None
+        else (float(args.tile_ra), float(args.tile_dec))
+    )
+    calibrated_operators = args.operator_calibration_manifest is not None
+    if args.background_model == "learned" and not calibrated_operators:
+        parser.error(
+            "--background-model learned requires --operator-calibration-manifest"
+        )
     if (
         not math.isfinite(args.foam_initial_intensity)
         or args.foam_initial_intensity <= 0
     ):
         parser.error("--foam-initial-intensity must be finite and positive")
-    calibrated_operators = args.operator_calibration_manifest is not None
 
     bands = _parse_csv(args.bands)
     if args.foam_whiten_spectral_basis and args.foam_basis_count > len(bands):
@@ -2323,6 +2458,9 @@ def main() -> int:
                 )
             )
 
+        psf_arm_audit: dict[str, float] | None = None
+        if args.psf_model == "learned_lowrank":
+            psf_arm_audit = _apply_learned_psf_arm(normalized_observations, bands)
         spherical_domain = estimate_field_domain(
             normalized_observations,
             coord_mode="sphere_xyz",
@@ -2356,6 +2494,13 @@ def main() -> int:
             calibrated_bundles = _calibrated_operator_bundles(
                 normalized_observations, all_forward_contexts, calibrated_models
             )
+            if args.background_model == "plane":
+                # Plane arm: drop the learned background component, keep the
+                # calibrated PSF; the scalar observation background stays.
+                calibrated_bundles = tuple(
+                    bundle.with_updates(background=None)
+                    for bundle in calibrated_bundles
+                )
 
         foam_bounds = (
             _foam_target_footprint_bounds(local_domain, band_entries)
@@ -2915,6 +3060,7 @@ def main() -> int:
                         args.export_dir,
                         band=band,
                         model=model_kind,
+                        psf_mode=str(args.psf_model),
                         header=target_header,
                         reference=ref_crop,
                         prediction=pred,
@@ -2941,6 +3087,14 @@ def main() -> int:
             "input_product": str(args.input_product),
             "exposure_dir": str(args.exposure_dir),
             "bands": bands,
+            "module": str(args.module),
+            "psf_model": str(args.psf_model),
+            "background_model": str(args.background_model),
+            "psf_arm_audit": psf_arm_audit,
+            "tile_center_deg": tile_center,
+            "tile_size_deg": (
+                float(args.tile_size_deg) if tile_center is not None else None
+            ),
             "crop_size": int(args.crop_size),
             "optimizer_steps": int(args.steps),
             "seed": int(args.seed),
@@ -3008,6 +3162,7 @@ def main() -> int:
             for index, context in enumerate(all_forward_contexts)
         ],
         "operator_calibration": calibration_audit,
+        "psf_arm_audit": psf_arm_audit,
         "structured_noise_crossfit": noise_crossfit_audit,
         "rows": ok_rows + fail_rows,
         "summary": _summarize_by_model(ok_rows),

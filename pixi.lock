@@ -716,7 +716,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/dbus-1.16.2-h24cb091_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/debugpy-1.8.21-py313h5d5ffb9_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/double-conversion-3.4.0-hecca717_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/linux-64/fitsio-1.4.0-np2py313h19a9588_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fmt-12.1.0-hff5e90c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fontconfig-2.18.1-h27c8c51_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fonttools-4.63.0-py313h3dea7bd_0.conda
@@ -1290,7 +1289,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/cytoolz-1.1.0-py313h0997733_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/dav1d-1.2.1-hb547adb_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/debugpy-1.8.21-py313h1188861_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fitsio-1.3.0-np2py313h79b859c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fmt-12.1.0-h403dcb5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fontconfig-2.18.1-h2b252f5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fonttools-4.63.0-py313h65a2061_0.conda
@@ -1499,7 +1497,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/dbus-1.16.2-h24cb091_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/debugpy-1.8.21-py313h5d5ffb9_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/double-conversion-3.4.0-hecca717_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/linux-64/fitsio-1.4.0-np2py313h19a9588_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fmt-12.1.0-hff5e90c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fontconfig-2.18.1-h27c8c51_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fonttools-4.63.0-py313h3dea7bd_0.conda
@@ -2082,7 +2079,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/cytoolz-1.1.0-py313h0997733_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/dav1d-1.2.1-hb547adb_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/debugpy-1.8.21-py313h1188861_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fitsio-1.3.0-np2py313h79b859c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fmt-12.1.0-h403dcb5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fontconfig-2.18.1-h2b252f5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fonttools-4.63.0-py313h65a2061_0.conda
@@ -2264,7 +2260,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/cython-0.29.37-py310hc6cd4ac_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/dbus-1.16.2-h24cb091_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/double-conversion-3.4.0-hecca717_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/linux-64/fitsio-1.4.0-np2py310h867648f_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fmt-12.1.0-hff5e90c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fontconfig-2.18.1-h27c8c51_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fonttools-4.63.0-py310h3406613_0.conda
@@ -2598,7 +2593,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/contourpy-1.3.2-py310h7f4e7e6_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/coverage-7.14.3-py310hb46c203_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/cython-0.29.37-py310h692a8b6_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fitsio-1.3.0-np2py310h3870671_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fmt-12.1.0-h403dcb5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fonttools-4.63.0-py310hb46c203_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/freetype-2.14.3-hce30654_1.conda
@@ -2700,7 +2694,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/cython-0.29.37-py310hc6cd4ac_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/dbus-1.16.2-h24cb091_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/double-conversion-3.4.0-hecca717_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/linux-64/fitsio-1.4.0-np2py310h867648f_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fmt-12.1.0-hff5e90c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fontconfig-2.18.1-h27c8c51_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fonttools-4.63.0-py310h3406613_0.conda
@@ -3521,7 +3514,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/dbus-1.16.2-h24cb091_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/debugpy-1.8.21-py313h5d5ffb9_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/double-conversion-3.4.0-hecca717_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/linux-64/fitsio-1.4.2-np2py313h91064be_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fmt-12.1.0-hff5e90c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fontconfig-2.18.1-h27c8c51_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fonttools-4.63.0-py313h3dea7bd_0.conda
@@ -4117,7 +4109,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/cytoolz-1.1.0-py313h0997733_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/dav1d-1.2.1-hb547adb_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/debugpy-1.8.21-py313h1188861_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fitsio-1.4.2-np2py313hd0c144a_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fmt-12.1.0-h403dcb5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fontconfig-2.18.1-h2b252f5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fonttools-4.63.0-py313h65a2061_0.conda
@@ -4331,7 +4322,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/cython-3.2.8-py313hc80a56d_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/dbus-1.16.2-h24cb091_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/debugpy-1.8.21-py313h5d5ffb9_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/linux-64/fitsio-1.4.0-np2py313h19a9588_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fmt-12.1.0-hff5e90c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fontconfig-2.18.1-h27c8c51_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fonttools-4.63.0-py313h3dea7bd_0.conda
@@ -4808,7 +4798,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/coverage-7.14.3-py313h65a2061_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/cython-3.2.6-py313hd1249e6_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/debugpy-1.8.21-py313h1188861_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fitsio-1.3.0-np2py313h79b859c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fmt-12.1.0-h403dcb5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fontconfig-2.18.1-h2b252f5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fonttools-4.63.0-py313h65a2061_0.conda
@@ -5175,7 +5164,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/dbus-1.16.2-h24cb091_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/debugpy-1.8.21-py313h5d5ffb9_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/double-conversion-3.4.0-hecca717_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/linux-64/fitsio-1.4.0-np2py313h19a9588_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fmt-12.1.0-hff5e90c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fontconfig-2.18.1-h27c8c51_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fonttools-4.63.0-py313h3dea7bd_0.conda
@@ -5758,7 +5746,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/cytoolz-1.1.0-py313h0997733_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/dav1d-1.2.1-hb547adb_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/debugpy-1.8.21-py313h1188861_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fitsio-1.3.0-np2py313h79b859c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fmt-12.1.0-h403dcb5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fontconfig-2.18.1-h2b252f5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fonttools-4.63.0-py313h65a2061_0.conda
@@ -5959,7 +5946,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/cryptography-49.0.0-py313heb322e3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/dbus-1.16.2-h24cb091_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/debugpy-1.8.21-py313h5d5ffb9_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/linux-64/fitsio-1.4.0-np2py313h19a9588_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fmt-12.1.0-hff5e90c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fontconfig-2.18.1-h27c8c51_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/fonttools-4.63.0-py313h3dea7bd_0.conda
@@ -6426,7 +6412,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/contourpy-1.3.3-py313h2af2deb_4.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/coverage-7.14.3-py313h65a2061_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/debugpy-1.8.21-py313h1188861_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fitsio-1.3.0-np2py313h79b859c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fmt-12.1.0-h403dcb5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fontconfig-2.18.1-h2b252f5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fonttools-4.63.0-py313h65a2061_0.conda
@@ -8054,59 +8039,6 @@ packages:
     - fftw >=3.3.11,<4.0a0
   size: 2195198
   timestamp: 1776781721834
-- conda: https://conda.anaconda.org/conda-forge/linux-64/fitsio-1.4.0-np2py310h867648f_1.conda
-  sha256: 2663abbfca121781ab5fb210d2cc2dac6c99a29067ba19ea1bee00de4c05832b
-  md5: 4b9f49fa585f972c0a0c978a7a66a3b6
-  depends:
-  - python
-  - bzip2
-  - setuptools
-  - libgcc >=14
-  - __glibc >=2.17,<3.0.a0
-  - numpy >=1.21,<3
-  - bzip2 >=1.0.8,<2.0a0
-  - python_abi 3.10.* *_cp310
-  - libcurl >=8.21.0,<9.0a0
-  license: GPL-2.0-only AND Zlib
-  run_exports: {}
-  size: 820721
-  timestamp: 1783030074557
-- conda: https://conda.anaconda.org/conda-forge/linux-64/fitsio-1.4.0-np2py313h19a9588_1.conda
-  sha256: 3a09b16d12a9959b44bad9aba77d328e1ee592e80dad15867d070111fc751645
-  md5: 135a6572a39324c8a6600955d2538112
-  depends:
-  - python
-  - bzip2
-  - setuptools
-  - __glibc >=2.17,<3.0.a0
-  - libgcc >=14
-  - numpy >=1.25,<3
-  - python_abi 3.13.* *_cp313
-  - bzip2 >=1.0.8,<2.0a0
-  - libcurl >=8.21.0,<9.0a0
-  license: GPL-2.0-only AND Zlib
-  purls:
-  - pkg:pypi/fitsio?source=hash-mapping
-  run_exports: {}
-  size: 878284
-  timestamp: 1783030072510
-- conda: https://conda.anaconda.org/conda-forge/linux-64/fitsio-1.4.2-np2py313h91064be_0.conda
-  sha256: 209e82721a7cd24711209217831833bc81397411a565407b96a6b9d6900f436e
-  md5: 2ff81aa49cd6de65cf9e8ca3c346b9b3
-  depends:
-  - python
-  - libgcc >=14
-  - __glibc >=2.17,<3.0.a0
-  - bzip2 >=1.0.8,<2.0a0
-  - libcurl >=8.21.0,<9.0a0
-  - numpy >=1.25,<3
-  - python_abi 3.13.* *_cp313
-  license: GPL-2.0-only AND Zlib
-  purls:
-  - pkg:pypi/fitsio?source=hash-mapping
-  run_exports: {}
-  size: 879205
-  timestamp: 1784207314169
 - conda: https://conda.anaconda.org/conda-forge/linux-64/fmt-12.1.0-hff5e90c_0.conda
   sha256: d4e92ba7a7b4965341dc0fca57ec72d01d111b53c12d11396473115585a9ead6
   md5: f7d7a4104082b39e3b3473fbd4a38229
@@ -17911,59 +17843,6 @@ packages:
     - fftw >=3.3.11,<4.0a0
   size: 746873
   timestamp: 1776782373231
-- conda: https://conda.anaconda.org/conda-forge/osx-arm64/fitsio-1.3.0-np2py310h3870671_0.conda
-  sha256: 0a63f1a1bff2f05d9f61c594e833f2298d4a3faa205ebd6b2582a0e298c1b0c1
-  md5: 1654c750754c166695e9c6b6192d87d6
-  depends:
-  - python
-  - bzip2
-  - setuptools
-  - __osx >=11.0
-  - python 3.10.* *_cpython
-  - python_abi 3.10.* *_cp310
-  - libcurl >=8.17.0,<9.0a0
-  - numpy >=1.21,<3
-  - bzip2 >=1.0.8,<2.0a0
-  license: GPL-2.0-only AND Zlib
-  run_exports: {}
-  size: 723044
-  timestamp: 1762985355783
-- conda: https://conda.anaconda.org/conda-forge/osx-arm64/fitsio-1.3.0-np2py313h79b859c_0.conda
-  sha256: aeff9a46e0e9e098e834623a8795a3984b6830b9f642f1f28fc001696c3961e5
-  md5: 374c8dd6d2cb733c3c7481f43c7364cb
-  depends:
-  - python
-  - bzip2
-  - setuptools
-  - python 3.13.* *_cp313
-  - __osx >=11.0
-  - python_abi 3.13.* *_cp313
-  - numpy >=1.23,<3
-  - libcurl >=8.17.0,<9.0a0
-  - bzip2 >=1.0.8,<2.0a0
-  license: GPL-2.0-only AND Zlib
-  purls:
-  - pkg:pypi/fitsio?source=hash-mapping
-  run_exports: {}
-  size: 773213
-  timestamp: 1762985299057
-- conda: https://conda.anaconda.org/conda-forge/osx-arm64/fitsio-1.4.2-np2py313hd0c144a_0.conda
-  sha256: 2dfbf4a2311fa0fd9c46f217b7d721612feae3443ce9241ca5609cf26b65cbd9
-  md5: 4ea0ce7adddfe1d311c6e43e612ec2de
-  depends:
-  - python
-  - python 3.13.* *_cp313
-  - __osx >=11.0
-  - bzip2 >=1.0.8,<2.0a0
-  - libcurl >=8.21.0,<9.0a0
-  - numpy >=1.25,<3
-  - python_abi 3.13.* *_cp313
-  license: GPL-2.0-only AND Zlib
-  purls:
-  - pkg:pypi/fitsio?source=hash-mapping
-  run_exports: {}
-  size: 855870
-  timestamp: 1784207449581
 - conda: https://conda.anaconda.org/conda-forge/osx-arm64/fmt-12.1.0-h403dcb5_0.conda
   sha256: dba5d4a93dc62f20e4c2de813ccf7beefed1fb54313faff9c4f2383e4744c8e5
   md5: ae2f556fbb43e5a75cc80a47ac942a8e

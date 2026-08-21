@@ -5,20 +5,23 @@ mode=${1:?usage: run_canfar_adass_depth.sh MODE RUN_ID}
 run_id=${2:?usage: run_canfar_adass_depth.sh MODE RUN_ID}
 commit=${TORCHSKY_COMMIT:?set TORCHSKY_COMMIT to an exact pushed SHA}
 container_image=${CONTAINER_IMAGE:-images.canfar.net/astroai/notebook:latest}
-artifact_root=/arc/projects/ots/torchsky-runs/${run_id}
-source_root=/scratch/${run_id}-src
-data_root=/arc/projects/ots/torchsky-data
+artifact_root=${ARTIFACT_ROOT:-/arc/projects/ots/torchsky-runs/${run_id}}
+source_root=${SOURCE_ROOT:-/scratch/${run_id}-src}
+data_root=${TORCHSKY_DATA_ROOT:-/arc/projects/ots/torchsky-data}
+dry_run=${DRY_RUN:-0}
 
-case "${container_image}" in
-  images.canfar.net/astroai/* | astroai/*) ;;
-  *)
-    echo "CONTAINER_IMAGE must name an AstroAI image, got: ${container_image}" >&2
-    exit 2
-    ;;
-esac
+if [[ "${dry_run}" != "1" ]]; then
+  case "${container_image}" in
+    images.canfar.net/astroai/* | astroai/*) ;;
+    *)
+      echo "CONTAINER_IMAGE must name an AstroAI image, got: ${container_image}" >&2
+      exit 2
+      ;;
+  esac
 
-mkdir -p "${artifact_root}"
-exec > >(tee "${artifact_root}/session.log") 2>&1
+  mkdir -p "${artifact_root}"
+  exec > >(tee "${artifact_root}/session.log") 2>&1
+fi
 
 echo "run_id=${run_id}"
 echo "mode=${mode}"
@@ -27,15 +30,25 @@ echo "image=${container_image}"
 echo "started_utc=$(date -u +%FT%TZ)"
 nvidia-smi || true
 
-rm -rf "${source_root}"
-if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
-  gh repo clone sfabbro/torchsky "${source_root}" -- --filter=blob:none
+if [[ "${dry_run}" = "1" ]]; then
+  test -d "${source_root}"
+  echo "dry_run commit=${commit} source_root=${source_root}"
+elif [[ -d "${source_root}/.git" ]] \
+  && [[ "$(git -C "${source_root}" rev-parse HEAD 2>/dev/null)" == "${commit}" ]]; then
+  # full mode chains sub-modes; each re-invocation reuses the existing
+  # exact-SHA checkout instead of re-cloning.
+  echo "reusing checkout at ${commit}"
 else
-  git clone --filter=blob:none https://github.com/sfabbro/torchsky.git "${source_root}"
+  rm -rf "${source_root}"
+  if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
+    gh repo clone sfabbro/torchsky "${source_root}" -- --filter=blob:none
+  else
+    git clone --filter=blob:none https://github.com/sfabbro/torchsky.git "${source_root}"
+  fi
+  git -C "${source_root}" checkout --detach "${commit}"
+  test "$(git -C "${source_root}" rev-parse HEAD)" = "${commit}"
+  git -C "${source_root}" status --short
 fi
-git -C "${source_root}" checkout --detach "${commit}"
-test "$(git -C "${source_root}" rev-parse HEAD)" = "${commit}"
-git -C "${source_root}" status --short
 
 export PIXI_HOME=/scratch/pixi
 export PIXI_CACHE_DIR=/scratch/pixi-cache
@@ -48,47 +61,115 @@ if ! command -v pixi >/dev/null 2>&1; then
 fi
 pixi --version
 
-foam_geometry_args=()
-case "${FOAM_TRAIN_GEOMETRY:-0}" in
-  0) ;;
-  1) foam_geometry_args=(--foam-train-geometry) ;;
-  *) echo "FOAM_TRAIN_GEOMETRY must be 0 or 1" >&2; exit 2 ;;
-esac
+# DRY_RUN=1 prints every command without executing and relaxes artifact gates.
+run() {
+  if [[ "${dry_run}" = "1" ]]; then
+    echo "DRY_RUN:" "$*"
+  else
+    "$@"
+  fi
+}
+gate() {
+  if [[ "${dry_run}" != "1" ]]; then
+    test -s "$1"
+  fi
+}
 
-foam_initialization_args=()
-case "${FOAM_INITIALIZE_FROM_COADD:-0}" in
-  0) ;;
-  1) foam_initialization_args=(--foam-initialize-from-coadd) ;;
-  *) echo "FOAM_INITIALIZE_FROM_COADD must be 0 or 1" >&2; exit 2 ;;
-esac
+# --- scene-representation zoo (FIELD_MODELS) --------------------------------
+field_models=${FIELD_MODELS:-spectral_power_foam}
+IFS=',' read -r -a field_model_list <<< "${field_models}"
+foam_selected=0
+for kind in "${field_model_list[@]+${field_model_list[@]}}"; do
+  [[ -n "${kind}" ]] || continue
+  if [[ "${kind}" == "spectral_power_foam" ]]; then
+    foam_selected=1
+  fi
+done
+# Validate the CSV against the registry (abort with the allowed list).
+if [[ "${dry_run}" != "1" ]]; then
+pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+  python - "${field_models}" <<'PYVALIDATE'
+import sys
+from torchsky.map.field import FIELD_MODEL_KINDS
+requested = [part.strip() for part in sys.argv[1].split(",") if part.strip()]
+unknown = [kind for kind in requested if kind not in set(FIELD_MODEL_KINDS)]
+if unknown:
+    allowed = ", ".join(sorted(set(FIELD_MODEL_KINDS)))
+    sys.exit(f"unknown FIELD_MODELS entries {unknown}; allowed: {allowed}")
+print(f"FIELD_MODELS validated: {requested}")
+PYVALIDATE
+fi
 
-foam_footprint_args=()
-case "${FOAM_FIT_TARGET_FOOTPRINT:-0}" in
-  0) ;;
-  1) foam_footprint_args=(--foam-fit-target-footprint) ;;
-  *) echo "FOAM_FIT_TARGET_FOOTPRINT must be 0 or 1" >&2; exit 2 ;;
+# --- hybrid operator arms ----------------------------------------------------
+case "${PSF_MODEL:-fitted_gaussian}" in
+  fitted_gaussian) psf_model=fitted_gaussian ;;
+  learned_lowrank) psf_model=learned_lowrank ;;
+  *)
+    echo "PSF_MODEL must be fitted_gaussian or learned_lowrank, got: ${PSF_MODEL}" >&2
+    exit 2
+    ;;
 esac
+case "${BACKGROUND_MODEL:-plane}" in
+  plane) background_model=plane ;;
+  learned) background_model=learned ;;
+  *)
+    echo "BACKGROUND_MODEL must be plane or learned, got: ${BACKGROUND_MODEL}" >&2
+    exit 2
+    ;;
+esac
+operator_arm_args=(--psf-model "${psf_model}" --background-model "${background_model}")
 
-foam_spatial_args=()
-case "${FOAM_AFFINE_SPATIAL_BASIS:-0}" in
-  0) ;;
-  1) foam_spatial_args=(--foam-affine-spatial-basis) ;;
-  *) echo "FOAM_AFFINE_SPATIAL_BASIS must be 0 or 1" >&2; exit 2 ;;
-esac
+# Foam-specific arguments only apply when foam is in the model CSV.
+if [[ "${foam_selected}" = "1" ]]; then
+  foam_geometry_args=()
+  case "${FOAM_TRAIN_GEOMETRY:-0}" in
+    0) ;;
+    1) foam_geometry_args=(--foam-train-geometry) ;;
+    *) echo "FOAM_TRAIN_GEOMETRY must be 0 or 1" >&2; exit 2 ;;
+  esac
 
-foam_spectral_args=()
-case "${FOAM_WHITEN_SPECTRAL_BASIS:-0}" in
-  0) ;;
-  1) foam_spectral_args=(--foam-whiten-spectral-basis) ;;
-  *) echo "FOAM_WHITEN_SPECTRAL_BASIS must be 0 or 1" >&2; exit 2 ;;
-esac
+  foam_initialization_args=()
+  case "${FOAM_INITIALIZE_FROM_COADD:-0}" in
+    0) ;;
+    1) foam_initialization_args=(--foam-initialize-from-coadd) ;;
+    *) echo "FOAM_INITIALIZE_FROM_COADD must be 0 or 1" >&2; exit 2 ;;
+  esac
 
-foam_exact_refinement_args=()
-case "${FOAM_EXACT_OBSERVATION_REFINE:-0}" in
-  0) ;;
-  1) foam_exact_refinement_args=(--foam-exact-observation-refine) ;;
-  *) echo "FOAM_EXACT_OBSERVATION_REFINE must be 0 or 1" >&2; exit 2 ;;
-esac
+  foam_footprint_args=()
+  case "${FOAM_FIT_TARGET_FOOTPRINT:-0}" in
+    0) ;;
+    1) foam_footprint_args=(--foam-fit-target-footprint) ;;
+    *) echo "FOAM_FIT_TARGET_FOOTPRINT must be 0 or 1" >&2; exit 2 ;;
+  esac
+
+  foam_spatial_args=()
+  case "${FOAM_AFFINE_SPATIAL_BASIS:-0}" in
+    0) ;;
+    1) foam_spatial_args=(--foam-affine-spatial-basis) ;;
+    *) echo "FOAM_AFFINE_SPATIAL_BASIS must be 0 or 1" >&2; exit 2 ;;
+  esac
+
+  foam_spectral_args=()
+  case "${FOAM_WHITEN_SPECTRAL_BASIS:-0}" in
+    0) ;;
+    1) foam_spectral_args=(--foam-whiten-spectral-basis) ;;
+    *) echo "FOAM_WHITEN_SPECTRAL_BASIS must be 0 or 1" >&2; exit 2 ;;
+  esac
+
+  foam_exact_refinement_args=()
+  case "${FOAM_EXACT_OBSERVATION_REFINE:-0}" in
+    0) ;;
+    1) foam_exact_refinement_args=(--foam-exact-observation-refine) ;;
+    *) echo "FOAM_EXACT_OBSERVATION_REFINE must be 0 or 1" >&2; exit 2 ;;
+  esac
+else
+  foam_geometry_args=()
+  foam_initialization_args=()
+  foam_footprint_args=()
+  foam_spatial_args=()
+  foam_spectral_args=()
+  foam_exact_refinement_args=()
+fi
 
 operator_calibration_args=()
 if [[ -n "${CALIBRATION_EVIDENCE_MANIFEST:-}" || -n "${CALIBRATION_FIT_REPORT:-}" ]]; then
@@ -98,6 +179,20 @@ if [[ -n "${CALIBRATION_EVIDENCE_MANIFEST:-}" || -n "${CALIBRATION_FIT_REPORT:-}
     --operator-calibration-manifest "${CALIBRATION_EVIDENCE_MANIFEST}"
     --operator-calibration-fit-report "${CALIBRATION_FIT_REPORT}"
   )
+fi
+
+# --- module fan-out ----------------------------------------------------------
+IFS=',' read -r -a modules <<< "${MODULES:-b}"
+for module in "${modules[@]+${modules[@]}}"; do
+  case "${module}" in
+    a | b | A | B) ;;
+    *) echo "unsupported module: ${module} (use a and/or b)" >&2; exit 2 ;;
+  esac
+done
+
+fit_psf_model=fitted_gaussian_kernel
+if [[ "${psf_model}" == "learned_lowrank" ]]; then
+  fit_psf_model=learned_lowrank
 fi
 
 case "${mode}" in
@@ -118,7 +213,7 @@ case "${mode}" in
       calibration-extract \
       "${calibration_input_root}/${calibration_pattern}" \
       --output-dir "${artifact_root}/evidence"
-    test -s "${artifact_root}/evidence/calibration_evidence_manifest.json"
+    gate "${artifact_root}/evidence/calibration_evidence_manifest.json"
     ;;
   calibration-fit)
     calibration_manifest=${CALIBRATION_EVIDENCE_MANIFEST:?set CALIBRATION_EVIDENCE_MANIFEST}
@@ -134,8 +229,9 @@ case "${mode}" in
       --output-dir "${artifact_root}/fit" \
       --steps "${calibration_steps}" \
       --lr "${calibration_lr}" \
-      --device "${calibration_device}"
-    test -s "${artifact_root}/fit/operator_calibration_fit.json"
+      --device "${calibration_device}" \
+      --psf-model "${fit_psf_model}"
+    gate "${artifact_root}/fit/operator_calibration_fit.json"
     ;;
   calibration-inspect)
     calibration_manifest=${CALIBRATION_EVIDENCE_MANIFEST:?set CALIBRATION_EVIDENCE_MANIFEST}
@@ -153,100 +249,38 @@ case "${mode}" in
       --output-dir "${artifact_root}/inspection" \
       --detector "${calibration_inspection_detector}" \
       --per-group "${calibration_inspection_per_group}"
-    test -s "${artifact_root}/inspection/README.md"
-    test -s "${artifact_root}/inspection/model_diagnostics.png"
-    test -s "${artifact_root}/inspection/cutouts_science.fits"
+    gate "${artifact_root}/inspection/README.md"
+    gate "${artifact_root}/inspection/model_diagnostics.png"
+    gate "${artifact_root}/inspection/cutouts_science.fits"
     ;;
   foam)
-    bands=${FOAM_BANDS:-F090W,F150W}
-    crop_size=${FOAM_CROP_SIZE:-32}
-    steps=${FOAM_STEPS:-2}
-    grid_side=${FOAM_GRID_SIDE:-4}
-    exact_max_candidate_pairs=${FOAM_EXACT_MAX_CANDIDATE_PAIRS:-10000000}
-    basis_count=${FOAM_BASIS_COUNT:-3}
-    extent=${FOAM_EXTENT:-0.55}
-    foam_lr=${FOAM_LR:-0.02}
-    seed=${FOAM_SEED:-101}
-    patt_nums=${FOAM_PATT_NUMS:-}
-    exact_operator_storage=${FOAM_EXACT_OPERATOR_STORAGE:-model}
-    exact_observation_batch_size=${FOAM_EXACT_OBSERVATION_BATCH_SIZE:-auto}
-    exact_max_iterations=${FOAM_EXACT_MAX_ITERATIONS:-50}
-    exact_preconditioner=${FOAM_EXACT_PRECONDITIONER:-auto}
-    pixi run --manifest-path "${source_root}/pixi.toml" -e smacs-cuda -- \
-      python "${source_root}/scripts/run_local_sphere_bench.py" \
-      "${source_root}/benchmarks/bench_map_smacs0723_field_fit_joint.py" \
-      --bands "${bands}" \
-      --exposure-dir "${data_root}/jwst_smacs0723/aligned" \
-      --input-product aligned \
-      --patt-nums "${patt_nums}" \
-      --crop-size "${crop_size}" \
-      --crop-strategy best_overlap \
-      --steps "${steps}" \
-      --seed "${seed}" \
-      --foam-grid-side "${grid_side}" \
-      --foam-exact-max-candidate-pairs "${exact_max_candidate_pairs}" \
-      --foam-basis-count "${basis_count}" \
-      --foam-extent "${extent}" \
-      --foam-lr "${foam_lr}" \
-      --foam-exact-operator-storage "${exact_operator_storage}" \
-      --foam-exact-observation-batch-size "${exact_observation_batch_size}" \
-      --foam-exact-max-iterations "${exact_max_iterations}" \
-      --foam-exact-preconditioner "${exact_preconditioner}" \
-      "${foam_geometry_args[@]}" \
-      "${foam_initialization_args[@]}" \
-      "${foam_footprint_args[@]}" \
-      "${foam_spatial_args[@]}" \
-      "${foam_spectral_args[@]}" \
-      "${foam_exact_refinement_args[@]}" \
-      "${operator_calibration_args[@]}" \
-      --models spectral_power_foam \
-      --fail-on-method-error \
-      --json-out "${artifact_root}/shared-foam.json" \
-      --markdown-out "${artifact_root}/shared-foam.md" \
-      --export-dir "${artifact_root}/products"
-    ;;
-  foam-validation)
-    bands=${FOAM_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}
-    crop_size=${FOAM_CROP_SIZE:-512}
-    steps=${FOAM_STEPS:-200}
-    grid_side=${FOAM_GRID_SIDE:-32}
-    exact_max_candidate_pairs=${FOAM_EXACT_MAX_CANDIDATE_PAIRS:-10000000}
-    basis_count=${FOAM_BASIS_COUNT:-4}
-    extent=${FOAM_EXTENT:-0.55}
-    foam_lr=${FOAM_LR:-0.02}
-    seed=${FOAM_SEED:-101}
-    patt_nums=${FOAM_PATT_NUMS:-3,8}
-    exact_operator_storage=${FOAM_EXACT_OPERATOR_STORAGE:-model}
-    exact_observation_batch_size=${FOAM_EXACT_OBSERVATION_BATCH_SIZE:-auto}
-    exact_max_iterations=${FOAM_EXACT_MAX_ITERATIONS:-50}
-    exact_preconditioner=${FOAM_EXACT_PRECONDITIONER:-auto}
-    validation_root=/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940
-    target_header_path=${validation_root}/validation-000/common-support-r9-f0p99.fits
-    IFS=',' read -r -a validation_batches <<< \
-      "${FOAM_VALIDATION_BATCHES:-blank,validation-000,validation-001,validation-002}"
-    for batch in "${validation_batches[@]}"; do
-      case "${batch}" in
-        blank | validation-000 | validation-001 | validation-002) ;;
-        *) echo "unsupported Foam validation batch: ${batch}" >&2; exit 2 ;;
-      esac
-      injection_args=()
-      if [[ "${batch}" != blank ]]; then
-        injection_args=(
-          --injection-manifest "${validation_root}/${batch}/manifest.json"
-        )
-      fi
-      batch_root=${artifact_root}/${batch}
-      pixi run --manifest-path "${source_root}/pixi.toml" -e smacs-cuda -- \
+    for module in "${modules[@]+${modules[@]}}"; do
+      module_root="${artifact_root}/${module}"
+      mkdir -p "${module_root}"
+      bands=${FOAM_BANDS:-F090W,F150W}
+      crop_size=${FOAM_CROP_SIZE:-32}
+      steps=${FOAM_STEPS:-2}
+      grid_side=${FOAM_GRID_SIDE:-4}
+      exact_max_candidate_pairs=${FOAM_EXACT_MAX_CANDIDATE_PAIRS:-10000000}
+      basis_count=${FOAM_BASIS_COUNT:-3}
+      extent=${FOAM_EXTENT:-0.55}
+      foam_lr=${FOAM_LR:-0.02}
+      seed=${FOAM_SEED:-101}
+      patt_nums=${FOAM_PATT_NUMS:-}
+      exact_operator_storage=${FOAM_EXACT_OPERATOR_STORAGE:-model}
+      exact_observation_batch_size=${FOAM_EXACT_OBSERVATION_BATCH_SIZE:-auto}
+      exact_max_iterations=${FOAM_EXACT_MAX_ITERATIONS:-50}
+      exact_preconditioner=${FOAM_EXACT_PRECONDITIONER:-auto}
+      run pixi run --manifest-path "${source_root}/pixi.toml" -e smacs-cuda -- \
         python "${source_root}/scripts/run_local_sphere_bench.py" \
         "${source_root}/benchmarks/bench_map_smacs0723_field_fit_joint.py" \
         --bands "${bands}" \
+        --module "${module}" \
         --exposure-dir "${data_root}/jwst_smacs0723/aligned" \
         --input-product aligned \
         --patt-nums "${patt_nums}" \
         --crop-size "${crop_size}" \
-        --crop-x0 112 \
-        --crop-y0 0 \
-        --target-header-path "${target_header_path}" \
+        --crop-strategy best_overlap \
         --steps "${steps}" \
         --seed "${seed}" \
         --foam-grid-side "${grid_side}" \
@@ -258,25 +292,101 @@ case "${mode}" in
         --foam-exact-observation-batch-size "${exact_observation_batch_size}" \
         --foam-exact-max-iterations "${exact_max_iterations}" \
         --foam-exact-preconditioner "${exact_preconditioner}" \
-        "${foam_geometry_args[@]}" \
-        "${foam_initialization_args[@]}" \
-        "${foam_footprint_args[@]}" \
-        "${foam_spatial_args[@]}" \
-        "${foam_spectral_args[@]}" \
-        "${foam_exact_refinement_args[@]}" \
-        "${operator_calibration_args[@]}" \
-        --models spectral_power_foam \
+        "${foam_geometry_args[@]+${foam_geometry_args[@]}}" \
+        "${foam_initialization_args[@]+${foam_initialization_args[@]}}" \
+        "${foam_footprint_args[@]+${foam_footprint_args[@]}}" \
+        "${foam_spatial_args[@]+${foam_spatial_args[@]}}" \
+        "${foam_spectral_args[@]+${foam_spectral_args[@]}}" \
+        "${foam_exact_refinement_args[@]+${foam_exact_refinement_args[@]}}" \
+        "${operator_calibration_args[@]+${operator_calibration_args[@]}}" \
+        "${operator_arm_args[@]+${operator_arm_args[@]}}" \
+        --models "${field_models}" \
         --fail-on-method-error \
-        "${injection_args[@]}" \
-        --json-out "${batch_root}/shared-foam.json" \
-        --markdown-out "${batch_root}/shared-foam.md" \
-        --export-dir "${batch_root}/products"
+        --json-out "${module_root}/shared-foam.json" \
+        --markdown-out "${module_root}/shared-foam.md" \
+        --export-dir "${module_root}/products"
+      gate "${module_root}/shared-foam.json"
+    done
+    ;;
+  foam-validation)
+    for module in "${modules[@]+${modules[@]}}"; do
+      module_root="${artifact_root}/${module}"
+      mkdir -p "${module_root}"
+      bands=${FOAM_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}
+      crop_size=${FOAM_CROP_SIZE:-512}
+      steps=${FOAM_STEPS:-200}
+      grid_side=${FOAM_GRID_SIDE:-32}
+      exact_max_candidate_pairs=${FOAM_EXACT_MAX_CANDIDATE_PAIRS:-10000000}
+      basis_count=${FOAM_BASIS_COUNT:-4}
+      extent=${FOAM_EXTENT:-0.55}
+      foam_lr=${FOAM_LR:-0.02}
+      seed=${FOAM_SEED:-101}
+      patt_nums=${FOAM_PATT_NUMS:-3,8}
+      exact_operator_storage=${FOAM_EXACT_OPERATOR_STORAGE:-model}
+      exact_observation_batch_size=${FOAM_EXACT_OBSERVATION_BATCH_SIZE:-auto}
+      exact_max_iterations=${FOAM_EXACT_MAX_ITERATIONS:-50}
+      exact_preconditioner=${FOAM_EXACT_PRECONDITIONER:-auto}
+      validation_root=${FOAM_VALIDATION_ROOT:-/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940}
+      target_header_path=${validation_root}/validation-000/common-support-r9-f0p99.fits
+      IFS=',' read -r -a validation_batches <<< \
+        "${FOAM_VALIDATION_BATCHES:-blank,validation-000,validation-001,validation-002}"
+      for batch in "${validation_batches[@]+${validation_batches[@]}}"; do
+        case "${batch}" in
+          blank | validation-000 | validation-001 | validation-002) ;;
+          *) echo "unsupported Foam validation batch: ${batch}" >&2; exit 2 ;;
+        esac
+        injection_args=()
+        if [[ "${batch}" != blank ]]; then
+          injection_args=(
+            --injection-manifest "${validation_root}/${batch}/manifest.json"
+          )
+        fi
+        batch_root=${module_root}/${batch}
+        run pixi run --manifest-path "${source_root}/pixi.toml" -e smacs-cuda -- \
+          python "${source_root}/scripts/run_local_sphere_bench.py" \
+          "${source_root}/benchmarks/bench_map_smacs0723_field_fit_joint.py" \
+          --bands "${bands}" \
+          --module "${module}" \
+          --exposure-dir "${data_root}/jwst_smacs0723/aligned" \
+          --input-product aligned \
+          --patt-nums "${patt_nums}" \
+          --crop-size "${crop_size}" \
+          --crop-x0 112 \
+          --crop-y0 0 \
+          --target-header-path "${target_header_path}" \
+          --steps "${steps}" \
+          --seed "${seed}" \
+          --foam-grid-side "${grid_side}" \
+          --foam-exact-max-candidate-pairs "${exact_max_candidate_pairs}" \
+          --foam-basis-count "${basis_count}" \
+          --foam-extent "${extent}" \
+          --foam-lr "${foam_lr}" \
+          --foam-exact-operator-storage "${exact_operator_storage}" \
+          --foam-exact-observation-batch-size "${exact_observation_batch_size}" \
+          --foam-exact-max-iterations "${exact_max_iterations}" \
+          --foam-exact-preconditioner "${exact_preconditioner}" \
+          "${foam_geometry_args[@]+${foam_geometry_args[@]}}" \
+          "${foam_initialization_args[@]+${foam_initialization_args[@]}}" \
+          "${foam_footprint_args[@]+${foam_footprint_args[@]}}" \
+          "${foam_spatial_args[@]+${foam_spatial_args[@]}}" \
+          "${foam_spectral_args[@]+${foam_spectral_args[@]}}" \
+          "${foam_exact_refinement_args[@]+${foam_exact_refinement_args[@]}}" \
+          "${operator_calibration_args[@]+${operator_calibration_args[@]}}" \
+          "${operator_arm_args[@]+${operator_arm_args[@]}}" \
+          --models "${field_models}" \
+          --fail-on-method-error \
+          "${injection_args[@]+${injection_args[@]}}" \
+          --json-out "${batch_root}/shared-foam.json" \
+          --markdown-out "${batch_root}/shared-foam.md" \
+          --export-dir "${batch_root}/products"
+        gate "${batch_root}/shared-foam.json"
+      done
     done
     ;;
   foam-score)
     foam_blank_root=${FOAM_BLANK_ROOT:-/arc/projects/ots/torchsky-runs/20260802-smacs-foam-psfinit-g512-e935868}
     foam_injection_root=${FOAM_INJECTION_ROOT:-/arc/projects/ots/torchsky-runs/20260802-smacs-foam-g512-injections-1d055cf}
-    validation_root=/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940
+    validation_root=${FOAM_VALIDATION_ROOT:-/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940}
     pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
       python "${source_root}/scripts/run_local_sphere_bench.py" \
       "${source_root}/benchmarks/score_smacs0723_foam.py" \
@@ -285,48 +395,66 @@ case "${mode}" in
       --validation-root "${validation_root}" \
       --out-dir "${artifact_root}/score"
     ;;
+  field-score)
+    score_input_root=${SCORE_INPUT_ROOT:?set SCORE_INPUT_ROOT to a run root containing <module>/<psf_mode>/<model> products}
+    score_methods=${SCORE_METHODS:?set SCORE_METHODS to a CSV of psf_mode/model_kind pairs, e.g. fitted_gaussian/spectral_power_foam,learned_lowrank/spectral_power_foam}
+    score_validation_root=${SCORE_VALIDATION_ROOT:-/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940}
+    score_out_dir=${SCORE_OUT_DIR:-${artifact_root}/model-selection}
+    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+      python "${source_root}/scripts/run_local_sphere_bench.py" \
+      "${source_root}/benchmarks/score_field_models.py" \
+      --input-root "${score_input_root}" \
+      --methods "${score_methods}" \
+      --validation-root "${score_validation_root}" \
+      --out-dir "${score_out_dir}"
+    gate "${score_out_dir}/model_selection.json"
+    ;;
   native-band)
     band=${SMACS_BAND:?set SMACS_BAND}
     methods=torchsky_bilinear,torchsky_drizzle_square_pf0p800,torchsky_drizzle_square_pf1p000
-    validation_root=/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940
+    validation_root=${FOAM_VALIDATION_ROOT:-/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940}
     IFS=',' read -r -a native_batches <<< \
       "${NATIVE_VALIDATION_BATCHES:-blank,validation-000,validation-001,validation-002}"
-    for batch in "${native_batches[@]}"; do
-      case "${batch}" in
-        blank | validation-000 | validation-001 | validation-002) ;;
-        *) echo "unsupported native validation batch: ${batch}" >&2; exit 2 ;;
-      esac
-      batch_root=${artifact_root}/${batch}/${band}
-      mkdir -p "${batch_root}/products"
-      injection_args=()
-      if [[ "${batch}" != blank ]]; then
-        injection_args=(
-          --injection-manifest "${validation_root}/${batch}/manifest.json"
-        )
-      fi
-      pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
-        python "${source_root}/scripts/run_local_sphere_bench.py" \
-        "${source_root}/benchmarks/bench_map_smacs0723_stackers.py" \
-        --band "${band}" \
-        --module b \
-        --exposure-dir "${data_root}/jwst_smacs0723/aligned" \
-        --input-product aligned \
-        --patt-nums 3,8 \
-        --crop-size 512 \
-        --crop-mode center \
-        --crop-x0 112 \
-        --crop-y0 0 \
-        --target-header-path \
-          "${validation_root}/validation-000/common-support-r9-f0p99.fits" \
-        --validation-classical \
-        --drizzle-pixfracs 0.8,1.0 \
-        --methods "${methods}" \
-        --fail-on-method-error \
-        --product-only \
-        "${injection_args[@]}" \
-        --product-out-dir "${batch_root}/products" \
-        --json-out "${batch_root}/stackers.json" \
-        --markdown-out "${batch_root}/stackers.md"
+    for module in "${modules[@]+${modules[@]}}"; do
+      module_root="${artifact_root}/${module}"
+      for batch in "${native_batches[@]+${native_batches[@]}}"; do
+        case "${batch}" in
+          blank | validation-000 | validation-001 | validation-002) ;;
+          *) echo "unsupported native validation batch: ${batch}" >&2; exit 2 ;;
+        esac
+        batch_root=${module_root}/${batch}/${band}
+        mkdir -p "${batch_root}/products"
+        injection_args=()
+        if [[ "${batch}" != blank ]]; then
+          injection_args=(
+            --injection-manifest "${validation_root}/${batch}/manifest.json"
+          )
+        fi
+        run pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
+          python "${source_root}/scripts/run_local_sphere_bench.py" \
+          "${source_root}/benchmarks/bench_map_smacs0723_stackers.py" \
+          --band "${band}" \
+          --module "${module}" \
+          --exposure-dir "${data_root}/jwst_smacs0723/aligned" \
+          --input-product aligned \
+          --patt-nums 3,8 \
+          --crop-size 512 \
+          --crop-mode center \
+          --crop-x0 112 \
+          --crop-y0 0 \
+          --target-header-path \
+            "${validation_root}/validation-000/common-support-r9-f0p99.fits" \
+          --validation-classical \
+          --drizzle-pixfracs 0.8,1.0 \
+          --methods "${methods}" \
+          --fail-on-method-error \
+          --product-only \
+          "${injection_args[@]+${injection_args[@]}}" \
+          --product-out-dir "${batch_root}/products" \
+          --json-out "${batch_root}/stackers.json" \
+          --markdown-out "${batch_root}/stackers.md"
+        gate "${batch_root}/stackers.json"
+      done
     done
     ;;
   native-score)
@@ -343,6 +471,44 @@ case "${mode}" in
       --effective-psf-root \
         /arc/projects/ots/torchsky-runs/20260729-smacs-torchsky-drizzle-aa0aa21/effective_psfs \
       --out-dir "${artifact_root}/score"
+    ;;
+  full)
+    # Autonomous chain: calibration -> scene zoo x PSF arms -> native band -> selection.
+    full_modules=${MODULES:-a,b}
+    full_bands=${FOAM_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}
+    echo "full mode: modules=${full_modules} bands=${full_bands} field_models=${field_models} psf=${psf_model} background=${background_model}"
+    FOAM_BANDS="${full_bands}" \
+    MODULES="${full_modules}" \
+      "${BASH_SOURCE[0]}" foam "${run_id}"
+    for module in ${full_modules//,/ }; do
+      gate "${artifact_root}/${module}/shared-foam.json"
+    done
+    CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
+    CALIBRATION_FIT_REPORT="${artifact_root}/fit/operator_calibration_fit.json" \
+    FOAM_BANDS="${full_bands}" \
+    MODULES="${full_modules}" \
+      "${BASH_SOURCE[0]}" foam-validation "${run_id}"
+    for module in ${full_modules//,/ }; do
+      gate "${artifact_root}/${module}/blank/shared-foam.json"
+    done
+    MODULES="${full_modules}" \
+      "${BASH_SOURCE[0]}" native-band "${run_id}"
+    # Model selection: every (psf_mode x model_kind) product cell under the run root.
+    score_methods=$(python3 - "${field_models}" "${psf_model}" <<'PYMETHODS'
+import sys
+models = [m.strip() for m in sys.argv[1].split(",") if m.strip()]
+if sys.argv[2] == "learned_lowrank":
+    psf_modes = ["fitted_gaussian", "learned_lowrank"]
+else:
+    psf_modes = ["fitted_gaussian"]
+print(",".join(f"{psf}/{model}" for psf in psf_modes for model in models))
+PYMETHODS
+)
+    SCORE_INPUT_ROOT="${artifact_root}" \
+    SCORE_METHODS="${score_methods}" \
+    SCORE_OUT_DIR="${artifact_root}/model-selection" \
+      "${BASH_SOURCE[0]}" field-score "${run_id}"
+    gate "${artifact_root}/model-selection/model_selection.json"
     ;;
   *)
     echo "unknown mode: ${mode}" >&2

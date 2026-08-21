@@ -722,6 +722,227 @@ def gaussian_student_t_mixture_nll(
     return nll.mean() if reduction == "mean" else nll.sum()
 
 
+def _reduce_nll(nll: Tensor, reduction: Literal["none", "mean", "sum"]) -> Tensor:
+    if reduction not in {"none", "mean", "sum"}:
+        raise ValueError("reduction must be 'none', 'mean', or 'sum'")
+    if reduction == "none":
+        return nll
+    if nll.numel() == 0:
+        raise ValueError("mean/sum reduction is undefined for an empty tensor")
+    return nll.mean() if reduction == "mean" else nll.sum()
+
+
+def gaussian_nll(
+    observed: Tensor,
+    expected: Tensor,
+    variance: Tensor,
+    *,
+    reduction: Literal["none", "mean", "sum"] = "mean",
+) -> Tensor:
+    """Normalized Gaussian detector negative log likelihood."""
+    observed = torch.as_tensor(observed)
+    expected = torch.as_tensor(expected, device=observed.device, dtype=observed.dtype)
+    variance = torch.as_tensor(variance, device=observed.device, dtype=observed.dtype)
+    observed, expected, variance = torch.broadcast_tensors(
+        observed, expected, variance
+    )
+    _validate_finite(observed, name="observed")
+    _validate_finite(expected, name="expected")
+    _validate_positive(variance, name="variance")
+    nll = 0.5 * (
+        variance.log()
+        + observed.new_tensor(math.log(2.0 * math.pi))
+        + (observed - expected).square() / variance
+    )
+    return _reduce_nll(nll, reduction)
+
+
+def student_t_nll(
+    observed: Tensor,
+    expected: Tensor,
+    scale: Tensor,
+    degrees_of_freedom: Tensor | float,
+    *,
+    reduction: Literal["none", "mean", "sum"] = "mean",
+) -> Tensor:
+    """Normalized location-scale Student-t detector negative log likelihood."""
+    observed = torch.as_tensor(observed)
+    expected = torch.as_tensor(expected, device=observed.device, dtype=observed.dtype)
+    scale = torch.as_tensor(scale, device=observed.device, dtype=observed.dtype)
+    observed, expected, scale = torch.broadcast_tensors(observed, expected, scale)
+    dof = torch.broadcast_to(
+        torch.as_tensor(
+            degrees_of_freedom, device=observed.device, dtype=observed.dtype
+        ),
+        observed.shape,
+    )
+    _validate_finite(observed, name="observed")
+    _validate_finite(expected, name="expected")
+    _validate_positive(scale, name="scale")
+    _validate_positive(dof, name="degrees_of_freedom")
+    residual = (observed - expected) / scale
+    log_prob = (
+        torch.lgamma((dof + 1.0) / 2.0)
+        - torch.lgamma(dof / 2.0)
+        - 0.5 * torch.log(dof * observed.new_tensor(math.pi))
+        - scale.log()
+        - 0.5 * (dof + 1.0) * torch.log1p(residual.square() / dof)
+    )
+    return _reduce_nll(-log_prob, reduction)
+
+
+def _poisson_gaussian_components(
+    value: Tensor,
+    expected_electrons: Tensor,
+    read_noise_variance: Tensor,
+    *,
+    gain: Tensor | float = 1.0,
+    background: Tensor | float = 0.0,
+    tail_sigma: float = 12.0,
+    max_terms: int = 4096,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    if not math.isfinite(float(tail_sigma)) or tail_sigma <= 0.0:
+        raise ValueError("tail_sigma must be finite and positive")
+    if int(max_terms) < 2:
+        raise ValueError("max_terms must be at least 2")
+
+    value = torch.as_tensor(value)
+    rate = torch.as_tensor(
+        expected_electrons, device=value.device, dtype=value.dtype
+    )
+    read_var = torch.as_tensor(
+        read_noise_variance, device=value.device, dtype=value.dtype
+    )
+    value, rate, read_var = torch.broadcast_tensors(value, rate, read_var)
+    gain_t = torch.broadcast_to(
+        torch.as_tensor(gain, device=value.device, dtype=value.dtype),
+        value.shape,
+    )
+    background_t = torch.broadcast_to(
+        torch.as_tensor(background, device=value.device, dtype=value.dtype),
+        value.shape,
+    )
+    _validate_finite(value, name="value")
+    _validate_nonnegative(rate, name="expected_electrons")
+    _validate_positive(read_var, name="read_noise_variance")
+    _validate_positive(gain_t, name="gain")
+    _validate_finite(background_t, name="background")
+
+    # ponytail: bounded finite mixture; replace with a saddle-point tail
+    # approximation if certified high-count exposures exceed max_terms.
+    detached_rate = rate.detach()
+    radius = float(tail_sigma) * torch.sqrt(detached_rate + 1.0) + float(
+        tail_sigma
+    ) ** 2
+    lower = torch.floor((detached_rate - radius).clamp_min(0.0)).to(torch.int64)
+    upper = torch.ceil(detached_rate + radius).to(torch.int64)
+    width = int((upper - lower + 1).max().item()) if upper.numel() else 0
+    if width > int(max_terms):
+        raise ValueError(
+            f"Poisson--Gaussian support requires {width} terms, exceeding "
+            f"max_terms={int(max_terms)}; use the calibrated Gaussian limit or "
+            "a certified saddle-point implementation"
+        )
+    if width == 0:
+        empty = torch.empty_like(value).unsqueeze(-1)
+        return value, read_var, empty, empty
+
+    offset = torch.arange(width, device=value.device, dtype=torch.int64)
+    counts_i = lower.unsqueeze(-1) + offset
+    included = counts_i <= upper.unsqueeze(-1)
+    counts = counts_i.to(dtype=value.dtype)
+    safe_rate = rate.clamp_min(torch.finfo(rate.dtype).tiny).unsqueeze(-1)
+    poisson_log = (
+        counts * safe_rate.log()
+        - rate.unsqueeze(-1)
+        - torch.lgamma(counts + 1.0)
+    )
+    log_weights = torch.where(
+        (rate == 0).unsqueeze(-1),
+        torch.where(counts_i == 0, torch.zeros_like(poisson_log), -torch.inf),
+        poisson_log,
+    )
+    log_weights = log_weights.masked_fill(~included, -torch.inf)
+    log_weights = log_weights - torch.logsumexp(
+        log_weights, dim=-1, keepdim=True
+    )
+
+    conditional_mean = gain_t.unsqueeze(-1) * counts + background_t.unsqueeze(-1)
+    return value, read_var, log_weights, conditional_mean
+
+
+def poisson_gaussian_nll(
+    observed: Tensor,
+    expected_electrons: Tensor,
+    read_noise_variance: Tensor,
+    *,
+    gain: Tensor | float = 1.0,
+    background: Tensor | float = 0.0,
+    tail_sigma: float = 12.0,
+    max_terms: int = 4096,
+    reduction: Literal["none", "mean", "sum"] = "mean",
+) -> Tensor:
+    """Normalized finite-mixture Poisson--Gaussian detector NLL.
+
+    The latent electron count is Poisson and the measured value conditional on
+    that count is Gaussian. A per-pixel Poisson support containing at least
+    ``tail_sigma`` standard deviations is retained and explicitly renormalized,
+    so the returned finite mixture is a normalized density. Support selection is
+    detached from autograd; probabilities and Gaussian terms remain
+    differentiable.
+    """
+    observed, read_var, poisson_log, conditional_mean = (
+        _poisson_gaussian_components(
+            observed,
+            expected_electrons,
+            read_noise_variance,
+            gain=gain,
+            background=background,
+            tail_sigma=tail_sigma,
+            max_terms=max_terms,
+        )
+    )
+    if poisson_log.shape[-1] == 0:
+        return _reduce_nll(torch.empty_like(observed), reduction)
+    gaussian_log = -0.5 * (
+        read_var.unsqueeze(-1).log()
+        + observed.new_tensor(math.log(2.0 * math.pi))
+        + (observed.unsqueeze(-1) - conditional_mean).square()
+        / read_var.unsqueeze(-1)
+    )
+    nll = -torch.logsumexp(poisson_log + gaussian_log, dim=-1)
+    return _reduce_nll(nll, reduction)
+
+
+def poisson_gaussian_cdf(
+    value: Tensor,
+    expected_electrons: Tensor,
+    read_noise_variance: Tensor,
+    *,
+    gain: Tensor | float = 1.0,
+    background: Tensor | float = 0.0,
+    tail_sigma: float = 12.0,
+    max_terms: int = 4096,
+) -> Tensor:
+    """CDF of the normalized finite Poisson--Gaussian detector mixture."""
+    value, read_var, poisson_log, conditional_mean = _poisson_gaussian_components(
+        value,
+        expected_electrons,
+        read_noise_variance,
+        gain=gain,
+        background=background,
+        tail_sigma=tail_sigma,
+        max_terms=max_terms,
+    )
+    if poisson_log.shape[-1] == 0:
+        return torch.empty_like(value)
+    standardized = (value.unsqueeze(-1) - conditional_mean) / read_var.sqrt().unsqueeze(
+        -1
+    )
+    conditional_cdf = torch.special.ndtr(standardized)
+    return torch.sum(poisson_log.exp() * conditional_cdf, dim=-1).clamp(0.0, 1.0)
+
+
 def gaussian_student_t_mixture_responsibilities(
     residual: Tensor,
     variance: Tensor,
@@ -966,6 +1187,7 @@ __all__ = [
     "VAR_RNOISE",
     "calibrated_pipeline_variance",
     "fft_whiten_rows",
+    "gaussian_nll",
     "gaussian_student_t_mixture_nll",
     "gaussian_student_t_mixture_responsibilities",
     "mixture_nll",
@@ -973,7 +1195,10 @@ __all__ = [
     "one_over_f_psd",
     "one_over_f_row_psd",
     "pipeline_variance",
+    "poisson_gaussian_cdf",
+    "poisson_gaussian_nll",
     "profile_amplifier_row_offsets",
     "sanitize_inverse_variance",
+    "student_t_nll",
     "whiten_rows_fft",
 ]

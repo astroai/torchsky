@@ -31,7 +31,8 @@ Use [wcs.md](wcs.md) for FITS-WCS spectral coordinate transforms and
   `sigma_R_kms` (`σ = c / (2.355 R)`).
 - Passbands and synthetic photometry are `torchsky.spectrophotometry`.
   Dust laws are `torchsky.extinction` (CCM89, O'Donnell94, Fitzpatrick 1999,
-  Calzetti 2000). Distances are `torchsky.cosmology`.
+  Calzetti 2000). Differentiable FLRW distances and protected comoving
+  geometry are `torchsky.cosmology`.
 - This surface is experimental; generic FITS I/O belongs to `torchfits`.
 
 ## Recipes
@@ -92,6 +93,10 @@ covered output bins are marked in the returned mask rather than renormalized.
 - `zeta_from_redshift(...)`, `compose_rapidities(...)`, `shift_ln_wavelength(...)`
 - `los_barycentric_beta(...)`
 - `convolve_log_lambda(...)`, `sigma_R_kms(...)`
+- `FLRW`, `FlatWCDM`, `hubble_parameter(...)`,
+  `transverse_comoving_distance(...)`
+- `comoving_position(...)`, `comoving_separation(...)`,
+  `alcock_paczynski_scaling(...)`
 - `write_cube_fits(...)` — write a `(L, H, W)` tensor with a 3-axis FITS WCS
   (spectral axis `CTYPE3`); pair with `SpectralReader.read_data_cube` for round-trips.
 

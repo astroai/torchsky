@@ -2,7 +2,7 @@ import os
 
 import numpy as np
 import torch
-from astropy.io import fits
+import torchfits
 from torch.utils.data import DataLoader, Dataset
 
 import torchsky
@@ -14,11 +14,14 @@ def create_dummy_fits(data_dir, num_files=10, size=(64, 64)):
     """Creates a set of dummy FITS files for the example."""
     os.makedirs(data_dir, exist_ok=True)
     for i in range(num_files):
-        data = np.random.rand(*size).astype(np.float32)  # Random image data
-        hdu = fits.PrimaryHDU(data)
-        hdu.header["LABEL"] = i % 2  # Simple binary labels: 0 or 1
+        data = np.random.rand(*size).astype(np.float32)
         filename = os.path.join(data_dir, f"image_{i:03d}.fits")
-        hdu.writeto(filename, overwrite=True)
+        torchfits.write(
+            filename,
+            torch.from_numpy(data),
+            header={"LABEL": i % 2},
+            overwrite=True,
+        )
 
 
 # --- PyTorch Dataset ---

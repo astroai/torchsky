@@ -2,7 +2,7 @@ import os
 
 import numpy as np
 import torch
-from astropy.io import fits
+import torchfits
 
 import torchsky
 
@@ -10,16 +10,19 @@ import torchsky
 def create_test_file(filename):
     if not os.path.exists(filename):
         data = np.arange(1024, dtype=np.float32).reshape(32, 32)
-        hdu = fits.PrimaryHDU(data)
-        hdu.header["CRPIX1"] = 16.0
-        hdu.header["CRPIX2"] = 16.0
-        hdu.header["CTYPE1"] = "RA---TAN"
-        hdu.header["CTYPE2"] = "DEC--TAN"
-        hdu.header["CRVAL1"] = 202.5
-        hdu.header["CRVAL2"] = 47.5
-        hdu.header["CDELT1"] = -0.001
-        hdu.header["CDELT2"] = 0.001
-        hdu.writeto(filename, overwrite=True)
+        header = {
+            "CRPIX1": 16.0,
+            "CRPIX2": 16.0,
+            "CTYPE1": "RA---TAN",
+            "CTYPE2": "DEC--TAN",
+            "CRVAL1": 202.5,
+            "CRVAL2": 47.5,
+            "CDELT1": -0.001,
+            "CDELT2": 0.001,
+        }
+        torchfits.write(
+            filename, torch.from_numpy(data), header=header, overwrite=True
+        )
 
 
 def main():

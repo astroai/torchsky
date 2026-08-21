@@ -26,7 +26,7 @@ For the high-level design target and refactor rules, see
 | Sample-wise redshift, BERV, lnλ LSF | `torchsky.redshift`, `torchsky.log_lambda` | [spectral.md](spectral.md) |
 | Synthetic photometry / passbands | `torchsky.spectrophotometry` | [spectral.md](spectral.md) |
 | Dust laws (CCM89 / O'Donnell / F99 / Calzetti) | `torchsky.extinction` | [spectral.md](spectral.md) |
-| Flat ΛCDM / wCDM distances | `torchsky.cosmology` | [spectral.md](spectral.md) |
+| FLRW distances, comoving geometry, and AP scaling | `torchsky.cosmology` | [spectral.md](spectral.md) |
 | Build tensor transforms and training inputs | `torchsky.transforms` plus reader-defined datasets | [ml.md](ml.md) |
 | Use field encoders | `torchsky.encoders` | [encoders.md](encoders.md) |
 | Inspect FITS files from a shell | `torchfits` tools/APIs | [io.md](io.md) |

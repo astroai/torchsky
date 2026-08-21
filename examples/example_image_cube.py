@@ -2,7 +2,7 @@ import os
 
 import numpy as np
 import torch
-from astropy.io import fits
+import torchfits
 
 import torchsky
 
@@ -10,21 +10,23 @@ import torchsky
 def create_test_file(filename):
     if not os.path.exists(filename):
         data = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
-        hdu = fits.PrimaryHDU(data)
-        hdu.header["CTYPE1"] = "RA---TAN"
-        hdu.header["CTYPE2"] = "DEC--TAN"
-        hdu.header["CTYPE3"] = "VELO-LSR"  # Or 'WAVE', 'FREQ', etc.
-        hdu.header["CRVAL1"] = 200.0
-        hdu.header["CRVAL2"] = 45.0
-        hdu.header["CRVAL3"] = 1000.0
-        hdu.header["CRPIX1"] = 1.0
-        hdu.header["CRPIX2"] = 1.0
-        hdu.header["CRPIX3"] = 1.0
-        hdu.header["CDELT1"] = -0.01
-        hdu.header["CDELT2"] = 0.01
-        hdu.header["CDELT3"] = 5.0
-
-        hdu.writeto(filename, overwrite=True)
+        header = {
+            "CTYPE1": "RA---TAN",
+            "CTYPE2": "DEC--TAN",
+            "CTYPE3": "VELO-LSR",
+            "CRVAL1": 200.0,
+            "CRVAL2": 45.0,
+            "CRVAL3": 1000.0,
+            "CRPIX1": 1.0,
+            "CRPIX2": 1.0,
+            "CRPIX3": 1.0,
+            "CDELT1": -0.01,
+            "CDELT2": 0.01,
+            "CDELT3": 5.0,
+        }
+        torchfits.write(
+            filename, torch.from_numpy(data), header=header, overwrite=True
+        )
 
 
 def main():

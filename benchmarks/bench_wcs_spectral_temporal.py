@@ -17,7 +17,6 @@ from typing import Any, Callable
 
 import numpy as np
 import torch
-from astropy.io import fits
 from astropy.time import Time
 from astropy.wcs import WCS as AstropyWCS
 
@@ -89,8 +88,8 @@ def _time_median(
     return statistics.median(timings), result
 
 
-def _spectral_header(ctype: str) -> fits.Header:
-    header = fits.Header()
+def _spectral_header(ctype: str) -> dict:
+    header = {}
     header["NAXIS"] = 1
     header["NAXIS1"] = 4096
     header["CTYPE1"] = ctype

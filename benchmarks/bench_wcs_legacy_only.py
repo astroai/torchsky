@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
 
 try:
@@ -110,8 +109,8 @@ def _time_median(fn, *, runs: int, warmup: int = 1) -> float:
     return float(np.median(samples))
 
 
-def _make_header(case: CaseSpec) -> fits.Header:
-    header = fits.Header()
+def _make_header(case: CaseSpec) -> dict:
+    header = dict()
     header["NAXIS"] = 2
     header["NAXIS1"] = 4096
     header["NAXIS2"] = 4096
@@ -177,7 +176,7 @@ def _make_header(case: CaseSpec) -> fits.Header:
 
 
 def _sample_pixels(
-    header: fits.Header,
+    header: dict,
     n_points: int,
     rng: np.random.Generator,
     case: CaseSpec,
@@ -208,7 +207,7 @@ def _sample_pixels(
 
 def _sample_allsky_pixels_from_world(
     awcs: AstropyWCS,
-    header: fits.Header,
+    header: dict,
     case: CaseSpec,
     n_points: int,
     rng: np.random.Generator,

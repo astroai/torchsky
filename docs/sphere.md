@@ -456,7 +456,7 @@ For large $N_\text{side}$ or batch transforms, `torchsky.sphere` substantially o
 
 ## Compatibility
 
-See also **[Ecosystem compatibility](compatibility.md)** for how healpy/hpgeom fit into torchsky’s wider goal of replacing or interoperating with **Astropy, fitsio, spherical_geometry**, and other common packages—not HEALPix alone.
+See also **[Ecosystem compatibility](compatibility.md)** for how healpy/hpgeom fit into torchsky’s wider goal of replacing or interoperating with **Astropy, spherical_geometry**, and other common packages—not HEALPix alone.
 
 Status: `parity` = upstream-compatible semantics · `extended` = torchsky-native additions · `partial` = known gaps · `planned` = not yet implemented.
 
@@ -534,7 +534,7 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API
 | rotate_alm / alm2lonlat | yes float64 | yes float64 | yes float32 |
 | Observed place | yes float64 | yes float64 | yes float32 |
 
-Exact spherical polygons (`to_exact`, `NativeExactSphericalRegion`) match spherical-geometry area to `1e-12` steradians. The approximate CPU backend is the throughput path; document that bound before treating approximate contains as exact.
+Exact spherical polygons with `backend="spherical-geometry"` match spherical-geometry area to `1e-12` steradians. Default `to_exact` / `to_exact_region` is the native torchsky backend.
 
 ---
 

@@ -11,14 +11,11 @@ pytest.importorskip("scipy")
 
 import torchsky
 from torchsky.catalogs import crossmatch_sky
+from torchsky.table import write as _table_write
 
 
 def _has_native_table_io() -> bool:
-    try:
-        import torchsky.cpp  # type: ignore  # noqa: F401
-    except Exception:
-        return False
-    return True
+    return callable(_table_write)
 
 
 def _fits_table_column_to_float64_tensor(table, name: str) -> torch.Tensor:
@@ -290,8 +287,22 @@ def test_crossmatch_sky_end_to_end_matches_astropy_after_fits_read_on_real_catal
     with tempfile.TemporaryDirectory() as tmpdir:
         left_path = Path(tmpdir) / "left_catalog.fits"
         right_path = Path(tmpdir) / "right_catalog.fits"
-        left_roundtrip.write(left_path, format="fits", overwrite=True)
-        right_roundtrip.write(right_path, format="fits", overwrite=True)
+        _table_write(
+            str(left_path),
+            {
+                "RA": np.asarray(left_roundtrip["RA"]),
+                "DEC": np.asarray(left_roundtrip["DEC"]),
+            },
+            overwrite=True,
+        )
+        _table_write(
+            str(right_path),
+            {
+                "RA": np.asarray(right_roundtrip["RA"]),
+                "DEC": np.asarray(right_roundtrip["DEC"]),
+            },
+            overwrite=True,
+        )
 
         left_loaded = torchsky.table.read(
             str(left_path),

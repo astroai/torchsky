@@ -333,7 +333,7 @@ def earth_barycentric_velocity_icrs(tt_mjd: Tensor) -> Tensor:
     mean_lon = (280.4664567 + 36000.76982779 * t) * D2R
     g = (357.52910918 + 35999.050291 * t) * D2R
     # Ecliptic longitude of Earth (Sun + 180°) with first-order equation of center.
-    lam = mean_lon + (2.0 * _EARTH_ECC * torch.sin(g))
+    lam = mean_lon + math.pi + (2.0 * _EARTH_ECC * torch.sin(g))
     eps = 84381.406 * ARCSEC_TO_RAD
     cos_eps = math.cos(eps)
     sin_eps = math.sin(eps)
