@@ -78,6 +78,16 @@ gist_upload() {
   echo "gist_url=${url}"
 }
 
+vos_run() {
+  local sec=$1
+  shift
+  if command -v timeout >/dev/null; then
+    timeout --foreground --signal=TERM --kill-after=15 "${sec}" "$@"
+  else
+    "$@"
+  fi
+}
+
 vos_upload() {
   local label=$1
   echo "vos_upload label=${label} utc=$(date -u +%FT%TZ)"
@@ -85,23 +95,12 @@ vos_upload() {
     echo "vcp not on PATH; cannot copy ${artifact_root} to ${vos_dest}" >&2
     return 1
   fi
-  if command -v vmkdir >/dev/null; then
-    vmkdir -p "${vos_dest}"
-  fi
-  vcp "${artifact_root}/." "${vos_dest}/"
-  echo "vos_dest=${vos_dest}"
-  tar -C "$(dirname "${artifact_root}")" -czf "/scratch/${run_id}.tar.gz" "$(basename "${artifact_root}")"
-  vcp "/scratch/${run_id}.tar.gz" "vos:sfabbro/torchsky-runs/${run_id}.tar.gz"
+  # ponytail: vault directory PUT stores 0-byte nodes; vls of those nodes
+  # hung catalog jobs for 15h after JSON was already on /arc. Tarball only,
+  # 3 min ceiling, then the bench continues.
+  tar -C "$(dirname "${artifact_root}")" -czf "/scratch/${run_id}.tar.gz" "$(basename "${artifact_root}")" || return 1
+  vos_run 180 vcp "/scratch/${run_id}.tar.gz" "vos:sfabbro/torchsky-runs/${run_id}.tar.gz" || return 1
   echo "vos_tarball=vos:sfabbro/torchsky-runs/${run_id}.tar.gz"
-  local sample="${artifact_root}/session.log"
-  if [[ -s "${sample}" ]]; then
-    local remote_bytes
-    remote_bytes="$(vls -l "${vos_dest}/session.log" 2>/dev/null | awk '{print $5}' | tail -n 1 || true)"
-    if [[ "${remote_bytes}" == "0" ]]; then
-      echo "VOS stored 0-byte session.log; artifacts remain at ${artifact_root} and GIST_URL" >&2
-      return 1
-    fi
-  fi
 }
 
 on_exit() {
