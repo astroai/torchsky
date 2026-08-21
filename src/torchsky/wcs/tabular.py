@@ -673,9 +673,11 @@ def _solve_coupled_tabular_partial(
     upper = torch.stack(
         [pixel[i] if bool(freeze[i]) else axis[-1] for i, axis in enumerate(axes)]
     ).to(device=world.device, dtype=world.dtype)
-    if not bool(known_w.any()):
+    if not bool(known_w.any()) or not bool((~freeze).any()):
         got = lookup.pixel_to_world(current.unsqueeze(0), bounds="clamp")[0]
         return current, got
+    free_idx = (~freeze).nonzero(as_tuple=False).reshape(-1)
+    known_idx = known_w.nonzero(as_tuple=False).reshape(-1)
     eps = torch.stack(
         [torch.clamp((axis[-1] - axis[0]).abs() * 1.0e-6, min=1.0e-8) for axis in axes]
     ).to(device=world.device, dtype=world.dtype)
@@ -685,10 +687,8 @@ def _solve_coupled_tabular_partial(
         if float(torch.linalg.vector_norm(residual)) <= tol:
             break
         columns = []
-        for axis_index, axis in enumerate(axes):
-            if bool(freeze[axis_index]):
-                columns.append(torch.zeros_like(value))
-                continue
+        for axis_index in free_idx.tolist():
+            axis = axes[axis_index]
             step = (
                 -eps[axis_index]
                 if current[axis_index] + eps[axis_index] > axis[-1]
@@ -698,9 +698,13 @@ def _solve_coupled_tabular_partial(
             perturbed[axis_index] = perturbed[axis_index] + step
             pvalue = lookup.pixel_to_world(perturbed.unsqueeze(0), bounds="clamp")[0]
             columns.append((pvalue - value) / step)
-        jac = torch.stack(columns, dim=-1)
-        delta = torch.linalg.lstsq(jac, residual.unsqueeze(-1)).solution.reshape(-1)
-        delta = torch.where(freeze, torch.zeros_like(delta), delta)
+        # Frozen axes as zero columns make jac rank-deficient; OpenBLAS lstsq
+        # can return a zero step and leave the midpoint seed (Linux CI: 5 px).
+        jac = torch.stack(columns, dim=-1).index_select(0, known_idx)
+        rhs = residual.index_select(0, known_idx)
+        delta_free = torch.linalg.lstsq(jac, rhs.unsqueeze(-1)).solution.reshape(-1)
+        delta = torch.zeros_like(current)
+        delta[free_idx] = delta_free.to(dtype=current.dtype)
         delta = torch.where(torch.isfinite(delta), delta, torch.zeros_like(delta))
         current = torch.minimum(torch.maximum(current - delta, lower), upper)
     got = lookup.pixel_to_world(current.unsqueeze(0), bounds="clamp")[0]
