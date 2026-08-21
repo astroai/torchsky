@@ -6,6 +6,7 @@ import pyarrow as pa
 import torch
 
 from torchsky.catalogs import (
+    Catalog,
     CatalogStreamDataset,
     crossmatch_sky,
     crossmatch_sky_from_arrow,
@@ -172,3 +173,13 @@ def test_crossmatch_sky_from_arrow_large_right(tmp_path) -> None:
     assert torch.equal(expected.left_index, got.left_index)
     assert torch.equal(expected.right_index, got.right_index)
     torch.testing.assert_close(expected.separation_arcsec, got.separation_arcsec)
+
+
+def test_catalog_from_arrow_roundtrip() -> None:
+    ra, dec = _random_ra_dec(32, seed=3)
+    mag = torch.linspace(12.0, 18.0, 32)
+    table = pa.table({"ra": ra.numpy(), "dec": dec.numpy(), "mag": mag.numpy()})
+    cat = Catalog.from_arrow(table, columns=("mag",))
+    torch.testing.assert_close(cat.lon, ra)
+    torch.testing.assert_close(cat.lat, dec)
+    torch.testing.assert_close(cat.columns["mag"], mag)

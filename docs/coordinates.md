@@ -31,13 +31,35 @@ never runs unless Earth orientation is supplied.
   `icrs_to_itrs_xyz` returns unit ITRS directions. IERS values are never
   inferred. Site `height_m` is WGS84 ellipsoidal height (metres); it does not
   change stellar (infinite-distance) azimuth and altitude.
-- Thin façade: `torchsky.wcs.transform(lon, lat, from_frame=..., to_frame=...)`.
-  Geometric frames use `CatalogState.to_frame`. `ALTAZ`/`HORIZON`, `ITRS`,
-  `GCRS`, `CIRS`, and `TETE` need obstime and EOP. This is not a SkyCoord
-  subclass. Catalog tensors stay
-  on their device. Observed place and geometric frames use ATen (CUDA float64,
-  MPS float32; MPS has no float64). MPS IAU 2006 observed vs CPU float64 is
-  a few arcseconds. There is no fused C++ observed kernel.
+- Thin façade: `torchsky.wcs.transform(lon, lat, from_frame=..., to_frame=...)`
+  and the same names on `torchsky.coords`. Geometric frames use
+  `CatalogState.to_frame`. `ALTAZ`/`HORIZON`, `ITRS`, `GCRS`, `CIRS`, and
+  `TETE` need obstime and EOP. This is not a SkyCoord subclass. Catalog
+  tensors stay on their device. Observed place and geometric frames use ATen
+  (CUDA float64, MPS float32; MPS has no float64). MPS IAU 2006 observed vs
+  CPU float64 is a few arcseconds. There is no fused C++ observed kernel.
+
+`torchsky.coords` re-exports `CatalogState`, `transform`, `convert_celestial`,
+`Site`, `EarthOrientation`, `observed_altaz`, `propagate_proper_motion`, and
+`propagate_space_motion`. Kernels stay in `wcs`. FITS WCS stays `torchsky.wcs`.
+`torchsky.transforms` is image ops, not sky geometry.
+
+### Compose with `Catalog`
+
+```python
+from torchsky.catalogs import Catalog
+from torchsky.coords import Site, EarthOrientation, transform
+
+cat = Catalog(lon=ra, lat=dec, frame="ICRS")
+gal = cat.to_frame("galactic")
+lon, lat = transform(ra, dec, from_frame="ICRS", to_frame="GALACTIC")
+altaz = cat.observe(
+    "ALTAZ",
+    obstime_mjd_utc=mjd,
+    site=Site(lon_deg=-155.47, lat_deg=19.83),
+    eop=EarthOrientation(dut1_s=0.1),
+)
+```
 
 Representations are layouts (`lonlat_deg`, `unit_xyz`, `barycentric_au`),
 not Astropy representation classes. `barycentric_au` requires a positive

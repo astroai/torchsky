@@ -1,6 +1,5 @@
 """Public torchsky API checks; FITS behavior is tested in torchfits."""
 
-import pytest
 import torch
 
 import torchsky
@@ -39,6 +38,7 @@ def test_top_level_namespaces_expose_science_modules() -> None:
         "interop",
         "encoders",
         "catalogs",
+        "coords",
         "quality",
     }
     assert callable(torchsky.io.create_dataloader)
@@ -47,8 +47,18 @@ def test_top_level_namespaces_expose_science_modules() -> None:
     assert isinstance(torchsky.cache.stats(), dict)
     assert torchsky.wcs.WCS is torchsky.WCS
     assert hasattr(torchsky.sphere, "great_circle_distance")
-    with pytest.raises(AttributeError):
-        torchsky.coords  # noqa: B018
+    assert callable(torchsky.coords.transform)
+    assert torchsky.coords.CatalogState is torchsky.wcs.CatalogState
+    assert set(torchsky.coords.__all__) == {
+        "CatalogState",
+        "EarthOrientation",
+        "Site",
+        "convert_celestial",
+        "observed_altaz",
+        "propagate_proper_motion",
+        "propagate_space_motion",
+        "transform",
+    }
 
 
 def test_map_root_keeps_workflow_api_small() -> None:

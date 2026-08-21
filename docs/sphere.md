@@ -246,8 +246,10 @@ json_repr = moc.to_json()
 | Constructor | Description |
 |---|---|
 | `MOC(uniq)` | Build from `UNIQ` cells |
-| `MOC.from_circle(lon_deg, lat_deg, radius_deg, max_order=10)` | Circular cap footprint |
-| `MOC.from_polygon(lon_deg, lat_deg, max_order=10)` | Simple polygon footprint, including non-convex polygons |
+| `MOC.empty()` / `MOC.full(max_order)` | Empty coverage; full sky (order-0 cells) |
+| `MOC.from_lonlat(lon, lat, max_order)` | Coverage of catalog points, compacted to parent UNIQ |
+| `MOC.from_circle(lon_deg, lat_deg, radius_deg, max_order=10)` | Circular cap; hierarchical (interior cells stay coarse) |
+| `MOC.from_polygon(lon_deg, lat_deg, max_order=10)` | Simple polygon footprint, including non-convex polygons; hierarchical |
 | `MOC.from_region(region, max_order=None)` | Pixelize a torchsky spherical region, boolean region, exact-region wrapper, or `PixelizedRegion` into NUNIQ coverage; `PixelizedRegion` inputs preserve their current resolution by default, while other regions default to order 10 |
 | `MOC.from_sparse_map(smap)` | Coverage from `HealSparseMap` / `SparseMap` |
 | `MOC.from_threshold(smap, threshold, op='>')` | Threshold sparse-map values |
@@ -260,10 +262,12 @@ json_repr = moc.to_json()
 | Method | Description |
 |---|---|
 | `contains(lon_deg, lat_deg)` | Point-in-MOC predicate |
+| `contains_rows(catalog)` | Same mask from a `Catalog` (or any object with `lon`/`lat`) |
 | `contains_pixels(nside, pixels, nest=True)` | Pixel-in-MOC predicate for HEALPix-indexed catalogs or sparse maps |
-| `filter_catalog(lon_deg, lat_deg)` | Filter catalog coordinates by coverage |
+| `filter_catalog(lon_deg, lat_deg)` | Filter catalog coordinates by coverage; prefer `Catalog.take(moc.contains(...))` |
 | `contains_moc(other)` | Subset check |
-| `union(other)` / `intersection(other)` / `difference(other)` | Boolean operations on sorted NEST ranges |
+| `union(other)` / `intersection(other)` / `difference(other)` | Boolean operations on sorted NEST ranges; also `\|`, `&`, `-` |
+| `degrade(max_order)` | Drop cells finer than `max_order` onto nested parents |
 | `flatten(nside)` | Dense boolean mask at fixed resolution |
 | `to_pixelized_region(nside, nest=True)` | Realize coverage as a `PixelizedRegion`, with optional RING conversion |
 | `to_sparse_map(nside, sentinel=0.0)` | Realize coverage as sparse HEALPix map |
@@ -271,6 +275,16 @@ json_repr = moc.to_json()
 | `write_fits(path)` | Write IVOA MOC FITS |
 | `to_ascii(compact=False)` / `to_json()` | Text serialization; compact ASCII emits contiguous pixel runs as ranges |
 | `area` / `area_sq_deg` | Covered area |
+
+```python
+from torchsky.catalogs import Catalog
+from torchsky.sphere import MOC
+
+cat = Catalog(lon=ra, lat=dec)
+moc = MOC.from_circle(10.0, 20.0, 0.5, max_order=8)
+inside = cat.inside(moc)
+subset = cat.take(inside)
+```
 
 `boundary()` returns one or more closed loops of shape `[N, 2]` in `(lon_deg, lat_deg)` coordinates. The loops are traced from stitched HEALPix cell edges at the MOC's current maximum order.
 

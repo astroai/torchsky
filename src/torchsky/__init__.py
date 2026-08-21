@@ -33,6 +33,7 @@ _NAMESPACES: dict[str, str] = {
     "interop": "torchfits.interop",
     "encoders": "torchsky.encoders",
     "catalogs": "torchsky.catalogs",
+    "coords": "torchsky.coords",
     "quality": "torchsky.quality",
 }
 
@@ -202,6 +203,7 @@ if TYPE_CHECKING:
     from . import (
         cache as cache,
         catalogs as catalogs,
+        coords as coords,
         datasets as datasets,
         encoders as encoders,
         field as field,

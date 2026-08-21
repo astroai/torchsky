@@ -17,11 +17,11 @@ For the high-level design target and refactor rules, see
 | Read/write FITS images, HDUs, headers, cutouts | `torchfits` | [io.md](io.md) |
 | Work with FITS tables and Arrow scans | `torchfits.table` | [table.md](table.md) |
 | Transform pixels and sky coordinates | `torchsky.wcs.WCS` | [wcs.md](wcs.md) |
-| Use catalog frames and space motion | `torchsky.wcs.CatalogState` | [coordinates.md](coordinates.md) |
+| Use catalog frames and space motion | `torchsky.coords` / `CatalogState` | [coordinates.md](coordinates.md) |
+| Crossmatch catalogs | `torchsky.catalogs` | [catalogs.md](catalogs.md) |
 | Use spherical predicates, regions, HEALPix, MOC, sparse maps, SHT | `torchsky.sphere` | [sphere.md](sphere.md) |
 | Build coadds and map products | `torchsky.map` | [map.md](map.md) |
 | Work with scenes and observation facades | `torchsky.scene` | [scene.md](scene.md) |
-| Crossmatch catalogs | `torchsky.catalogs` | [catalogs.md](catalogs.md) |
 | Work with spectra and cubes | `torchsky.spectral` | [spectral.md](spectral.md) |
 | Sample-wise redshift, BERV, lnλ LSF | `torchsky.redshift`, `torchsky.log_lambda` | [spectral.md](spectral.md) |
 | Synthetic photometry / passbands | `torchsky.spectrophotometry` | [spectral.md](spectral.md) |
@@ -58,6 +58,7 @@ when you need programmatic API-surface metadata.
 ## Public Namespaces
 
 - [`torchsky.wcs`](wcs.md)
+- [`torchsky.coords`](coordinates.md)
 - [`torchsky.sphere`](sphere.md)
 - [`torchsky.map`](map.md)
 - [`torchsky.scene`](scene.md)

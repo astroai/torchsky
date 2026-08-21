@@ -443,3 +443,56 @@ def test_moc_empty_full_and_dateline_wrap() -> None:
     assert bool(wrap.contains(175.0, 0.0).item())
     assert bool(wrap.contains(-175.0, 0.0).item())
     assert not bool(wrap.contains(0.0, 0.0).item())
+
+
+def _leaf_circle_moc(
+    lon_deg: float,
+    lat_deg: float,
+    radius_deg: float,
+    max_order: int,
+    *,
+    inclusive: bool = True,
+) -> MOC:
+    nside = 1 << max_order
+    pix = hp.query_circle(
+        nside,
+        lon_deg,
+        lat_deg,
+        radius_deg,
+        nest=True,
+        degrees=True,
+        inclusive=inclusive,
+    )
+    return MOC(nest2uniq(nside, pix))
+
+
+def test_moc_empty_full_operators_from_lonlat_degrade() -> None:
+    empty = MOC.empty()
+    assert empty.uniq.numel() == 0
+    full = MOC.full(4)
+    assert bool(full.contains(0.0, 0.0).item())
+    assert bool(full.contains(180.0, -40.0).item())
+
+    a = MOC.from_circle(0.0, 0.0, 2.0, max_order=4)
+    b = MOC.from_circle(3.0, 0.0, 2.0, max_order=4)
+    torch.testing.assert_close((a | b).uniq, a.union(b).uniq)
+    torch.testing.assert_close((a & b).uniq, a.intersection(b).uniq)
+    torch.testing.assert_close((a - b).uniq, a.difference(b).uniq)
+
+    lon = torch.tensor([10.0, 10.001, 80.0], dtype=torch.float64)
+    lat = torch.tensor([0.0, 0.0, 20.0], dtype=torch.float64)
+    points = MOC.from_lonlat(lon, lat, max_order=8)
+    assert bool(points.contains(10.0, 0.0).item())
+    assert not bool(points.contains(0.0, 0.0).item())
+    coarse = points.degrade(2)
+    assert coarse.max_order <= 2
+    assert bool(coarse.contains(10.0, 0.0).item())
+
+
+def test_moc_from_circle_matches_leaf_construction() -> None:
+    hier = MOC.from_circle(20.0, -10.0, 1.5, max_order=6, inclusive=True)
+    leaf = _leaf_circle_moc(20.0, -10.0, 1.5, 6, inclusive=True)
+    torch.testing.assert_close(hier.uniq, leaf.uniq)
+    hier_ex = MOC.from_circle(20.0, -10.0, 1.5, max_order=6, inclusive=False)
+    leaf_ex = _leaf_circle_moc(20.0, -10.0, 1.5, 6, inclusive=False)
+    torch.testing.assert_close(hier_ex.uniq, leaf_ex.uniq)

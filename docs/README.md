@@ -23,8 +23,8 @@ validation, and API pointers.
   consumed by `torchsky.catalogs`.
 - [WCS](wcs.md) - `torchsky.wcs`, transforms, spectral/time axes, frames,
   alignment, TAB axes, and compiled tensor paths.
-- [Coordinates](coordinates.md) - `CatalogState`, geometric frames, and
-  observed place with explicit IERS DUT1.
+- [Coordinates](coordinates.md) - `torchsky.coords`, `CatalogState`, geometric
+  frames, and observed place with explicit IERS DUT1.
 - [Scene](scene.md) - `torchsky.scene`, promoted facade, observations, target render
   specifications, and operator adapters.
 - [Sphere and HEALPix](sphere.md) - `torchsky.sphere`, HEALPix, geometry,

@@ -2,16 +2,15 @@
 
 import json
 import math
-from typing import TYPE_CHECKING, Literal
+from typing import Any, Literal
 
 import torch
 from torch import Tensor
 
 from . import healpix as _healpix
+from .core import great_circle_distance, lonlat_to_unit_xyz
+from .geom import PixelizedRegion, spherical_polygon_contains
 from .sparse import HealSparseMap
-
-if TYPE_CHECKING:
-    from .geom import PixelizedRegion
 
 
 def _order_from_nside(nside: int, *, name: str = "nside") -> int:
@@ -140,6 +139,120 @@ def _normalize_moc(uniq: Tensor) -> Tensor:
     return _ranges_to_uniq(ranges, max_order)
 
 
+def _cat_uniq(parts: list[Tensor], device: torch.device) -> Tensor:
+    nonempty = [part for part in parts if part.numel() > 0]
+    if not nonempty:
+        return torch.empty(0, dtype=torch.int64, device=device)
+    return torch.cat(nonempty)
+
+
+def _hierarchical_disc_uniq(
+    lon_deg: float,
+    lat_deg: float,
+    radius_deg: float,
+    max_order: int,
+    *,
+    inclusive: bool,
+    device: torch.device,
+) -> Tensor:
+    """Coarse-to-fine disc MOC: keep interior cells, subdivide only the boundary."""
+    order = 0
+    pix = torch.arange(12, dtype=torch.int64, device=device)
+    kept: list[Tensor] = []
+    lon0 = torch.as_tensor(lon_deg, device=device)
+    lat0 = torch.as_tensor(lat_deg, device=device)
+    radius = float(radius_deg)
+    r_leaf = _healpix.max_pixel_radius(1 << max_order, degrees=True)
+    while True:
+        nside = 1 << order
+        lon_p, lat_p = _healpix.pix2ang(nside, pix, nest=True, lonlat=True)
+        dist = great_circle_distance(lon0, lat0, lon_p, lat_p, degrees=True)
+        r_pix = _healpix.max_pixel_radius(nside, degrees=True)
+        fully_in = dist + r_pix <= radius
+        fully_out = dist - r_pix > (radius + r_leaf if inclusive else radius)
+        leaf_hit = dist <= (radius + r_leaf if inclusive else radius)
+        if order == max_order:
+            hit = pix[leaf_hit]
+            if hit.numel() > 0:
+                kept.append(nest2uniq(nside, hit))
+            break
+        inside = pix[fully_in]
+        if inside.numel() > 0:
+            kept.append(nest2uniq(nside, inside))
+        boundary = pix[~(fully_in | fully_out)]
+        if boundary.numel() == 0:
+            break
+        pix = _healpix.nest_children(boundary, levels=1).reshape(-1)
+        order += 1
+    return _cat_uniq(kept, device)
+
+
+def _hierarchical_polygon_uniq(
+    lon_deg: Tensor,
+    lat_deg: Tensor,
+    max_order: int,
+) -> Tensor:
+    """Coarse-to-fine polygon MOC. Interior cells stay coarse; boundary subdivides.
+
+    Fully-inside uses pixel center plus four corners. A concave dent that misses
+    those five samples can over-cover; upgrade is exact cell-in-polygon.
+    """
+    poly_lon = torch.as_tensor(lon_deg)
+    device = poly_lon.device
+    poly_lat = torch.as_tensor(lat_deg, device=device)
+    verts = lonlat_to_unit_xyz(poly_lon, poly_lat)
+    center_xyz = verts.mean(dim=0)
+    center_xyz = center_xyz / torch.linalg.norm(center_xyz).clamp_min(1e-15)
+    cen_lon, cen_lat = _healpix.xyz_to_lonlat(
+        center_xyz[0], center_xyz[1], center_xyz[2]
+    )
+    poly_radius = float(
+        great_circle_distance(
+            cen_lon, cen_lat, poly_lon, poly_lat, degrees=True
+        ).max().item()
+    )
+    r_leaf = _healpix.max_pixel_radius(1 << max_order, degrees=True)
+    order = 0
+    pix = torch.arange(12, dtype=torch.int64, device=device)
+    kept: list[Tensor] = []
+    while True:
+        nside = 1 << order
+        lon_p, lat_p = _healpix.pix2ang(nside, pix, nest=True, lonlat=True)
+        dist = great_circle_distance(cen_lon, cen_lat, lon_p, lat_p, degrees=True)
+        r_pix = _healpix.max_pixel_radius(nside, degrees=True)
+        maybe = dist - r_pix <= poly_radius + r_leaf
+        pix = pix[maybe]
+        if pix.numel() == 0:
+            break
+        lon_p, lat_p = _healpix.pix2ang(nside, pix, nest=True, lonlat=True)
+        center_in = spherical_polygon_contains(lon_p, lat_p, poly_lon, poly_lat)
+        if order == max_order:
+            hit = pix[center_in]
+            if hit.numel() > 0:
+                kept.append(nest2uniq(nside, hit))
+            break
+        corners = _healpix.boundaries(nside, pix, step=1, nest=True)
+        lon_c, lat_c = _healpix.xyz_to_lonlat(
+            corners[:, 0, :].reshape(-1),
+            corners[:, 1, :].reshape(-1),
+            corners[:, 2, :].reshape(-1),
+        )
+        corner_in = spherical_polygon_contains(
+            lon_c, lat_c, poly_lon, poly_lat
+        ).reshape(pix.numel(), 4)
+        fully_in = center_in & corner_in.all(dim=1)
+        # ponytail: 5-sample fully-inside can miss a concave dent; exact cell-in-polygon is the upgrade.
+        inside = pix[fully_in]
+        if inside.numel() > 0:
+            kept.append(nest2uniq(nside, inside))
+        boundary = pix[~fully_in]
+        if boundary.numel() == 0:
+            break
+        pix = _healpix.nest_children(boundary, levels=1).reshape(-1)
+        order += 1
+    return _cat_uniq(kept, device)
+
+
 def _resolve_moc_table_hdu_index(path: str) -> int:
     """Return 0-based HDU index of the IVOA MOC binary table extension."""
     import torchfits.cpp as cpp
@@ -217,6 +330,15 @@ class MOC:
     def __init__(self, uniq: Tensor):
         self.uniq = _normalize_moc(torch.as_tensor(uniq, dtype=torch.int64))
 
+    @classmethod
+    def empty(cls) -> "MOC":
+        return cls(torch.empty(0, dtype=torch.int64))
+
+    @classmethod
+    def full(cls, max_order: int = 0) -> "MOC":
+        del max_order
+        return cls(nest2uniq(1, torch.arange(12, dtype=torch.int64)))
+
     @property
     def max_order(self) -> int:
         if self.uniq.numel() == 0:
@@ -237,6 +359,10 @@ class MOC:
         nside_max = 1 << max_o
         p_max = _healpix.ang2pix(nside_max, lon, lat, nest=True, lonlat=True)
         return self.contains_pixels(nside_max, p_max, nest=True)
+
+    def contains_rows(self, catalog: Any) -> Tensor:
+        """Boolean mask for catalog rows. Prefer ``Catalog.inside(moc)``."""
+        return self.contains(catalog.lon, catalog.lat)
 
     def contains_pixels(
         self,
@@ -396,6 +522,31 @@ class MOC:
 
         return MOC._from_ranges(new_ranges, max_o)
 
+    def __or__(self, other: "MOC") -> "MOC":
+        return self.union(other)
+
+    def __and__(self, other: "MOC") -> "MOC":
+        return self.intersection(other)
+
+    def __sub__(self, other: "MOC") -> "MOC":
+        return self.difference(other)
+
+    def degrade(self, max_order: int) -> "MOC":
+        """Drop cells finer than ``max_order`` onto their nested parents."""
+        order = int(max_order)
+        if order < 0:
+            raise ValueError("max_order must be non-negative")
+        if self.uniq.numel() == 0:
+            return type(self).empty()
+        if order >= self.max_order:
+            return type(self)(self.uniq)
+        nsides, pix = uniq2nest(self.uniq)
+        cell_orders = torch.log2(nsides.to(torch.float64)).to(torch.int64)
+        delta = (cell_orders - order).clamp(min=0)
+        pix_d = pix >> (2 * delta)
+        nside_d = torch.where(delta > 0, torch.full_like(nsides, 1 << order), nsides)
+        return type(self)(nest2uniq(nside_d, pix_d))
+
     def _to_ranges(self, max_order: int) -> list[tuple[int, int]]:
         return _uniq_to_ranges(self.uniq, max_order)
 
@@ -448,14 +599,12 @@ class MOC:
             mask[pix] = True
         return mask
 
-    def to_pixelized_region(self, nside: int, *, nest: bool = True) -> "PixelizedRegion":
+    def to_pixelized_region(self, nside: int, *, nest: bool = True) -> PixelizedRegion:
         """Realize this MOC as a ``PixelizedRegion`` at ``nside``.
 
         MOC UNIQ cells are NESTED by definition. Set ``nest=False`` to receive
         a RING-ordered ``PixelizedRegion`` after exact ordering conversion.
         """
-        from .geom import PixelizedRegion
-
         pix = self._flat_pixels(nside)
         if not nest and pix.numel() > 0:
             pix = _healpix.nest2ring(int(nside), pix)
@@ -489,6 +638,21 @@ class MOC:
         return cls._from_ranges(ranges, max_order)
 
     @classmethod
+    def from_lonlat(
+        cls,
+        lon_deg: Tensor | float,
+        lat_deg: Tensor | float,
+        max_order: int,
+    ) -> "MOC":
+        """Coverage of catalog points, compacted to parent UNIQ cells."""
+        order = int(max_order)
+        nside = _nside_from_max_order(order)
+        pix = _healpix.ang2pix(
+            nside, lon_deg, lat_deg, nest=True, lonlat=True
+        ).to(torch.int64)
+        return cls(nest2uniq(nside, pix))
+
+    @classmethod
     def from_circle(
         cls,
         lon_deg: float,
@@ -497,19 +661,21 @@ class MOC:
         max_order: int = 10,
         inclusive: bool = True,
     ) -> "MOC":
-        """Create a MOC from a circular cap."""
-        nside = 1 << max_order
-        pix = _healpix.query_circle(
-            nside,
-            lon_deg,
-            lat_deg,
-            radius_deg,
-            nest=True,
-            degrees=True,
+        """Create a MOC from a circular cap without listing every leaf pixel."""
+        order = int(max_order)
+        _nside_from_max_order(order)
+        if float(radius_deg) <= 0.0:
+            return cls.empty()
+        lon_t = torch.as_tensor(lon_deg)
+        uniq = _hierarchical_disc_uniq(
+            float(lon_deg),
+            float(lat_deg),
+            float(radius_deg),
+            order,
             inclusive=inclusive,
+            device=lon_t.device,
         )
-        uniqs = nest2uniq(nside, pix)
-        return cls(uniqs)
+        return cls(uniq)
 
     @classmethod
     def from_polygon(
@@ -520,15 +686,17 @@ class MOC:
     ) -> "MOC":
         """Create a MOC from a simple spherical polygon.
 
-        Convex and non-convex simple polygons are supported through the shared
-        torch-native spherical-geometry pixelizer.
+        Convex and non-convex simple polygons are supported. Interior cells are
+        kept coarse; only the boundary is subdivided to ``max_order``.
         """
-        from .geom import query_polygon_general
-
-        nside = _nside_from_max_order(max_order)
-        pix = query_polygon_general(nside, lon_deg, lat_deg, nest=True)
-        uniqs = nest2uniq(nside, pix)
-        return cls(uniqs)
+        order = int(max_order)
+        _nside_from_max_order(order)
+        uniq = _hierarchical_polygon_uniq(
+            torch.as_tensor(lon_deg),
+            torch.as_tensor(lat_deg),
+            order,
+        )
+        return cls(uniq)
 
     @classmethod
     def from_region(cls, region: object, max_order: int | None = None) -> "MOC":
@@ -540,8 +708,6 @@ class MOC:
         Pass a matching ``max_order`` with a ``PixelizedRegion`` to assert the
         expected resolution.
         """
-        from .geom import PixelizedRegion
-
         if isinstance(region, PixelizedRegion):
             nside = int(region.nside)
             if max_order is not None and nside != _nside_from_max_order(max_order):

@@ -3,7 +3,15 @@ import torch
 from torch.utils.data import DataLoader
 
 import torchsky.catalogs.core as catalogs_core
-from torchsky.catalogs import CatalogStreamDataset, crossmatch_sky
+from torchsky.catalogs import (
+    Catalog,
+    CatalogStreamDataset,
+    CrossmatchResult,
+    HealpixIndex,
+    crossmatch_sky,
+)
+from torchsky.coords import EarthOrientation, Site, transform
+from torchsky.sphere import MOC, great_circle_distance
 
 
 def test_crossmatch_sky_returns_nearest_matches_within_radius() -> None:
@@ -456,3 +464,134 @@ def test_finalize_crossmatch_combines_and_sorts_lists() -> None:
         torch.tensor([0.0, 0.1, 0.2, 0.3], dtype=torch.float64),
     )
     assert stats.matched_rows == 4
+
+
+def test_crossmatch_result_is_public() -> None:
+    result = crossmatch_sky(
+        torch.tensor([10.0], dtype=torch.float64),
+        torch.tensor([0.0], dtype=torch.float64),
+        torch.tensor([10.0], dtype=torch.float64),
+        torch.tensor([0.0], dtype=torch.float64),
+        radius_arcsec=1.0,
+    )
+    assert isinstance(result, CrossmatchResult)
+
+
+def test_healpix_index_query_disc_matches_brute_small_n() -> None:
+
+    lon = torch.tensor([10.0, 10.2, 80.0, 10.05], dtype=torch.float64)
+    lat = torch.tensor([0.0, 0.1, 20.0, -0.02], dtype=torch.float64)
+    index = HealpixIndex.build(lon, lat, nside=32)
+    got = torch.sort(index.query_disc(10.0, 0.0, 0.5)).values
+    sep = great_circle_distance(10.0, 0.0, lon, lat, degrees=True)
+    expected = torch.nonzero(sep <= 0.5, as_tuple=False).reshape(-1)
+    assert got.tolist() == expected.tolist()
+
+
+def test_crossmatch_with_prebuilt_index_matches_crossmatch_sky() -> None:
+
+    left_ra = torch.tensor([10.0, 20.0, 30.0], dtype=torch.float64)
+    left_dec = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float64)
+    right_ra = torch.tensor([10.0001, 25.0, 29.9998], dtype=torch.float64)
+    right_dec = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float64)
+    expected = crossmatch_sky(
+        left_ra, left_dec, right_ra, right_dec, radius_arcsec=2.0
+    )
+    index = HealpixIndex.build(right_ra, right_dec, nside=64)
+    got = crossmatch_sky(
+        left_ra,
+        left_dec,
+        right_ra,
+        right_dec,
+        radius_arcsec=2.0,
+        right_index=index,
+    )
+    assert got.left_index.tolist() == expected.left_index.tolist()
+    assert got.right_index.tolist() == expected.right_index.tolist()
+    torch.testing.assert_close(got.separation_arcsec, expected.separation_arcsec)
+
+
+def test_catalog_roundtrip_cone_inside_take_and_crossmatch() -> None:
+
+    lon = torch.tensor([10.0, 120.0, 200.0], dtype=torch.float64)
+    lat = torch.tensor([20.0, -10.0, 5.0], dtype=torch.float64)
+    ids = torch.tensor([7, 8, 9], dtype=torch.int64)
+    cat = Catalog(lon=lon, lat=lat, frame="icrs", columns={"id": ids})
+    assert len(cat) == 3
+    state = cat.to_state()
+    back = Catalog.from_state(state, columns=cat.columns)
+    torch.testing.assert_close(back.lon, cat.lon)
+    assert back.columns["id"].tolist() == [7, 8, 9]
+
+    galactic = cat.to_frame("galactic")
+    lon_g, lat_g = transform(lon, lat, from_frame="ICRS", to_frame="GALACTIC")
+    torch.testing.assert_close(galactic.lon, lon_g)
+    torch.testing.assert_close(galactic.lat, lat_g)
+
+    cone_idx = cat.cone(10.0, 20.0, 1.0)
+    assert cone_idx.tolist() == [0]
+
+    moc = MOC.from_lonlat(lon[:1], lat[:1], max_order=6)
+    mask = cat.inside(moc)
+    assert mask.tolist() == [True, False, False]
+    assert moc.contains_rows(cat).tolist() == mask.tolist()
+    taken = cat.take(mask)
+    assert taken.columns["id"].tolist() == [7]
+    taken2 = cat.take(torch.tensor([0, 2], dtype=torch.int64))
+    assert taken2.columns["id"].tolist() == [7, 9]
+
+    other = Catalog(
+        lon=torch.tensor([10.0001, 50.0], dtype=torch.float64),
+        lat=torch.tensor([20.0, 0.0], dtype=torch.float64),
+    )
+    matches = cat.crossmatch(other, radius_arcsec=2.0)
+    assert isinstance(matches, CrossmatchResult)
+    assert matches.left_index.tolist() == [0]
+    assert matches.right_index.tolist() == [0]
+
+    site = Site(lon_deg=-155.47, lat_deg=19.83)
+    eop = EarthOrientation(dut1_s=0.184)
+    altaz = cat.observe(
+        "ALTAZ", obstime_mjd_utc=60000.0, site=site, eop=eop
+    )
+    lon_a, lat_a = transform(
+        lon,
+        lat,
+        from_frame="ICRS",
+        to_frame="ALTAZ",
+        obstime_mjd_utc=60000.0,
+        site=site,
+        eop=eop,
+    )
+    torch.testing.assert_close(altaz.lon, lon_a)
+    torch.testing.assert_close(altaz.lat, lat_a)
+    assert altaz.frame == "ALTAZ"
+
+
+@pytest.mark.parametrize("device_type", ["cpu", "cuda", "mps"])
+def test_catalog_index_and_moc_contains_stay_on_device(device_type: str) -> None:
+
+    if device_type == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    if device_type == "mps" and not (
+        hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+    ):
+        pytest.skip("MPS not available")
+    device = torch.device(device_type)
+    dtype = torch.float32 if device_type == "mps" else torch.float64
+    lon = torch.tensor([10.0, 40.0, 80.0], dtype=dtype, device=device)
+    lat = torch.tensor([0.0, 5.0, -5.0], dtype=dtype, device=device)
+    cat = Catalog(lon=lon, lat=lat)
+    assert cat.device.type == device_type
+    moved = cat.to(device)
+    assert moved.lon.dtype == dtype
+    idx = HealpixIndex.build(moved.lon, moved.lat, nside=16)
+    hit = idx.query_disc(10.0, 0.0, 2.0)
+    assert hit.device.type == device_type
+    cone = moved.cone(10.0, 0.0, 2.0)
+    assert cone.device.type == device_type
+    moc = MOC.from_lonlat(lon[:1].cpu(), lat[:1].cpu(), max_order=4)
+    mask = moc.contains(moved.lon, moved.lat)
+    assert mask.device.type == device_type
+    inside = moved.inside(moc)
+    assert inside.device.type == device_type

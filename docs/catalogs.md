@@ -1,51 +1,70 @@
 # `torchsky.catalogs`
 
-`torchsky.catalogs` contains scalable catalog helpers such as sky crossmatching
-and streaming dataset adapters.
+`torchsky.catalogs` is a batched sky table plus the index and match kernels it
+calls. Coordinates are tensors. There is no `SkyCoord` class.
 
-## What This Namespace Is For
+Use [coordinates.md](coordinates.md) for frames and observed place,
+[sphere.md](sphere.md) for MOC coverage, and [table.md](table.md) for the
+`torchfits.table` / Arrow interchange boundary.
 
-Use this namespace when tabular sky data needs spatial matching or partitioned
-streaming. Use [table.md](table.md) for the `torchfits.table` boundary and
-Arrow/tensor batch interchange.
+## Types that compose
 
-## Core Concepts
+```python
+from torchsky.catalogs import Catalog, HealpixIndex, crossmatch_sky
+from torchsky.sphere import MOC
 
-- Crossmatching uses simple public inputs: RA/Dec tensors in degrees plus a
-  radius in arcseconds.
-- Candidate pruning is internal. The current implementation uses a coarse
-  nested-HEALPix right-catalog index before exact great-circle refinement.
-- Streaming helpers are intentionally thin adapters, not full catalog workflow
-  orchestration.
+cat = Catalog(lon=ra, lat=dec, frame="ICRS", columns={"id": ids})
+idx = cat.index()                       # HealpixIndex, build once
+hits = cat.cone(10.0, 20.0, radius_deg=0.5)
+inside = cat.inside(MOC.from_lonlat(ra, dec, max_order=8))
+gal = cat.to_frame("galactic")
+matches = cat.crossmatch(other, radius_arcsec=1.5)
+subset = cat.take(inside)
+```
+
+- **`Catalog`** — `lon`/`lat` in degrees, canonical `frame`, `epoch`. Optional
+  proper motion, parallax, radial velocity, `valid`, and extra `columns`.
+  Missing kinematics stay `None`. `to(device)` follows the WCS work dtype
+  (float64 CPU/CUDA, float32 MPS).
+- **`HealpixIndex`** — nested HEALPix buckets over rows. `query_disc` and
+  `lookup` are the primitives. Crossmatch uses the same index; pass
+  `right_index=` to `crossmatch_sky` to reuse one.
+- **`CrossmatchResult`** — `left_index`, `right_index`, `separation_arcsec`.
+  Import it from `torchsky.catalogs`.
+- **Coverage** — `MOC.contains` / `Catalog.inside` return a boolean mask.
+  `Catalog.inside(stmoc, time_mjd=...)` is the STMOC predicate. `Catalog.take`
+  copies rows. `filter_catalog` remains as a convenience.
+
+`from_arrow` / `CatalogStreamDataset` feed tensors into `Catalog`.
+`Catalog.to_state()` is the `CatalogState` used by `torchsky.coords`.
 
 ## Recipes
 
-### Crossmatch Two Catalogs
+### Crossmatch two catalogs
 
 ```python
-from torchsky.catalogs import crossmatch_sky
+from torchsky.catalogs import Catalog, crossmatch_sky
 
+left = Catalog(lon=left_ra, lat=left_dec)
+right = Catalog(lon=right_ra, lat=right_dec)
+matches = left.crossmatch(right, radius_arcsec=1.5)
+# or the function kernel:
 matches = crossmatch_sky(
-    left_ra_deg=left["RA"],
-    left_dec_deg=left["DEC"],
-    right_ra_deg=right["RA"],
-    right_dec_deg=right["DEC"],
-    radius_arcsec=1.5,
+    left.lon, left.lat, right.lon, right.lat, radius_arcsec=1.5
 )
 ```
 
-Use `find="all"` when downstream association policy needs every candidate
-within the radius. Pair rows are deterministically ordered by left index,
-separation, then right index. The default `find="best"` returns only the
-nearest candidate per left row.
+`find="all"` returns every pair within the radius, ordered by left index,
+separation, then right index. The default `find="best"` returns the nearest
+right row per left row.
 
 `radius_arcsec` may be a positive scalar or a per-left-row tensor. A scalar
-(or all-equal) radius uses an in-memory HEALPix coarse index on the right
-catalog. Per-row radii keep declination-window pruning; the global prune uses
-the maximum. Streamed and Arrow helpers (`crossmatch_sky_streamed`,
-`crossmatch_sky_from_arrow`) still take a scalar radius.
+(or all-equal) radius uses a nested-HEALPix index on the right catalog.
+Per-row radii keep declination-window pruning. Streamed and Arrow helpers
+(`crossmatch_sky_streamed`, `crossmatch_sky_from_arrow`) still take a scalar
+radius.
 
-### Stream Catalog Partitions
+### Stream catalog partitions
 
 ```python
 from torch.utils.data import DataLoader
@@ -56,18 +75,18 @@ for partition in DataLoader(dataset, num_workers=2, batch_size=None):
     process(partition)
 ```
 
-## API Surface
+## API surface
 
+- `Catalog`
+- `HealpixIndex.build` / `query_disc` / `lookup`
+- `CrossmatchResult`
 - `crossmatch_sky(...)`
+- `crossmatch_sky_streamed` / `crossmatch_sky_from_arrow`
 - `CatalogStreamDataset`
 
-`crossmatch_sky(...)` returns an object with `left_index`, `right_index`, and
-`separation_arcsec` fields. The concrete `CrossmatchResult` type currently
-lives in `torchsky.catalogs.core`; use the function return value rather than
-importing that class from `torchsky.catalogs`.
-
-## Validation And Performance
+## Validation and performance
 
 Catalog compatibility is tested against Astropy-style fixtures where available
 and benchmarked in `benchmarks/bench_catalog_crossmatch.py` and
-`benchmarks/bench_catalog_compat.py`.
+`benchmarks/bench_catalog_compat.py`. Linux catalog benches stay on CANFAR;
+this API wave does not claim new Linux leadership.

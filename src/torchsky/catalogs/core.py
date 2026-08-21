@@ -15,6 +15,9 @@ from torch.utils.data import IterableDataset, get_worker_info
 
 from ..sphere import great_circle_distance
 from ..sphere import healpix as _healpix
+from .index import HealpixIndex
+from .index import candidate_coarse_pixels_for_left_pixel as _candidate_coarse_pixels_for_left_pixel
+from .index import default_nside as _default_healpix_index_nside
 
 
 def _identity_partition(partition: Any) -> Any:
@@ -103,48 +106,6 @@ class _CrossmatchStats:
     matched_rows: int = 0
 
 
-@dataclass
-class _CoarseHealpixIndex:
-    nside: int
-    right_order: Tensor
-    unique_pixels: Tensor
-    bucket_starts: Tensor
-    bucket_stops: Tensor
-
-    def lookup(self, coarse_pixels: Tensor) -> Tensor:
-        pixels = torch.as_tensor(
-            coarse_pixels,
-            dtype=torch.int64,
-            device=self.unique_pixels.device,
-        ).reshape(-1)
-        if pixels.numel() == 0 or self.unique_pixels.numel() == 0:
-            return self.right_order[:0]
-
-        pixels = torch.unique(pixels, sorted=True)
-        idx = torch.searchsorted(self.unique_pixels, pixels)
-        idx_safe = idx.clamp(max=max(int(self.unique_pixels.numel()) - 1, 0))
-        mask = (idx < self.unique_pixels.numel()) & (
-            self.unique_pixels[idx_safe] == pixels
-        )
-        if not bool(mask.any()):
-            return self.right_order[:0]
-
-        starts = self.bucket_starts[idx_safe[mask]]
-        stops = self.bucket_stops[idx_safe[mask]]
-        lengths = (stops - starts).to(torch.int64)
-        total = int(lengths.sum().item())
-        if total == 0:
-            return self.right_order[:0]
-
-        out = torch.empty(total, dtype=torch.int64, device=self.right_order.device)
-        offset = 0
-        for start, stop in zip(starts.tolist(), stops.tolist(), strict=False):
-            span = int(stop - start)
-            out[offset : offset + span] = self.right_order[start:stop]
-            offset += span
-        return out
-
-
 def _candidate_dec_window(
     right_dec_sorted: Tensor,
     *,
@@ -230,19 +191,10 @@ def _choose_default_coarse_nside(
         return 2048
     if radius_arcsec >= 180.0 * 3600.0:
         return 1
-    right_points = int(right_ra.numel())
     # Benchmark-backed selector tuned for the current CPU nested-HEALPix
     # coarse-index path. Smaller catalogs prefer lower group overhead,
     # while larger right catalogs benefit from finer coarse partitioning.
-    if right_points <= 25_000:
-        return 64
-    if right_points <= 90_000:
-        return 128
-    if right_points <= 180_000:
-        return 512
-    if right_points <= 1_000_000:
-        return 1024
-    return 2048
+    return _default_healpix_index_nside(int(right_ra.numel()))
 
 
 def _build_coarse_healpix_index(
@@ -250,73 +202,8 @@ def _build_coarse_healpix_index(
     right_dec: Tensor,
     *,
     coarse_nside: int,
-) -> _CoarseHealpixIndex:
-    coarse_pixels = _healpix.ang2pix(
-        coarse_nside,
-        right_ra,
-        right_dec,
-        nest=True,
-        lonlat=True,
-    ).to(torch.int64)
-    right_order = torch.argsort(coarse_pixels, stable=True)
-    sorted_pixels = coarse_pixels[right_order]
-    unique_pixels, counts = torch.unique_consecutive(sorted_pixels, return_counts=True)
-    bucket_starts = torch.cat(
-        (
-            torch.zeros(1, dtype=torch.int64, device=right_ra.device),
-            torch.cumsum(counts[:-1].to(torch.int64), dim=0),
-        )
-    )
-    bucket_stops = bucket_starts + counts.to(torch.int64)
-    return _CoarseHealpixIndex(
-        nside=coarse_nside,
-        right_order=right_order,
-        unique_pixels=unique_pixels.to(torch.int64),
-        bucket_starts=bucket_starts,
-        bucket_stops=bucket_stops,
-    )
-
-
-def _candidate_coarse_pixels_for_left_pixel(
-    coarse_nside: int,
-    coarse_pixel: int,
-    *,
-    radius_rad: float,
-    device: torch.device,
-) -> Tensor:
-    center_pix = torch.tensor([coarse_pixel], dtype=torch.int64, device=device)
-    pixrad = _healpix.max_pixrad(coarse_nside, degrees=False)
-    hops = max(1, int(math.ceil(radius_rad / max(pixrad, 1e-12)))) + 1
-
-    visited = center_pix
-    frontier = center_pix
-    for _ in range(hops):
-        neigh = _healpix.get_all_neighbours(
-            coarse_nside,
-            frontier,
-            nest=True,
-            lonlat=False,
-        )
-        neigh = torch.as_tensor(neigh, dtype=torch.int64, device=device).reshape(-1)
-        neigh = neigh[neigh >= 0]
-        if neigh.numel() == 0:
-            break
-        merged = torch.unique(torch.cat((visited, neigh)))
-        if merged.numel() == visited.numel():
-            break
-        visited = merged
-        frontier = neigh
-
-    lon_c, lat_c = _healpix.pix2ang(coarse_nside, center_pix, nest=True, lonlat=True)
-    cand_lon, cand_lat = _healpix.pix2ang(coarse_nside, visited, nest=True, lonlat=True)
-    sep = great_circle_distance(
-        lon_c.expand_as(cand_lon),
-        lat_c.expand_as(cand_lat),
-        cand_lon,
-        cand_lat,
-        degrees=False,
-    )
-    return visited[sep <= radius_rad]
+) -> HealpixIndex:
+    return HealpixIndex.build(right_ra, right_dec, nside=coarse_nside, nest=True)
 
 
 def _crossmatch_sky_declination_pruned(
@@ -617,22 +504,31 @@ def _crossmatch_sky_coarse_indexed(
     right_chunk_size: int,
     find: str = "best",
     return_stats: bool = False,
+    right_index: HealpixIndex | None = None,
 ) -> CrossmatchResult | tuple[CrossmatchResult, _CrossmatchStats]:
     device = left_ra.device
     stats = _CrossmatchStats(
         left_points=int(left_ra.numel()),
         right_points=int(right_ra.numel()),
     )
-    coarse_nside = _choose_default_coarse_nside(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=radius_arcsec,
-    )
-    coarse_index = _build_coarse_healpix_index(
-        right_ra, right_dec, coarse_nside=coarse_nside
-    )
+    if right_index is None:
+        coarse_nside = _choose_default_coarse_nside(
+            left_ra,
+            left_dec,
+            right_ra,
+            right_dec,
+            radius_arcsec=radius_arcsec,
+        )
+        coarse_index = _build_coarse_healpix_index(
+            right_ra, right_dec, coarse_nside=coarse_nside
+        )
+    else:
+        if int(right_index.lon.numel()) != int(right_ra.numel()):
+            raise ValueError("right_index does not match the right catalog")
+        if right_index.lon.device != device:
+            right_index = right_index.to(device)
+        coarse_index = right_index
+        coarse_nside = coarse_index.nside
     radius_deg = radius_arcsec / 3600.0
     candidate_radius_rad = math.radians(radius_deg) + (
         2.0 * _healpix.max_pixrad(coarse_nside, degrees=False)
@@ -781,6 +677,7 @@ def crossmatch_sky(
     left_chunk_size: int = 4096,
     right_chunk_size: int = 65536,
     find: str = "best",
+    right_index: HealpixIndex | None = None,
 ) -> CrossmatchResult:
     """Chunked angular crossmatch suitable for catalog refinement stages.
 
@@ -790,7 +687,8 @@ def crossmatch_sky(
 
     ``radius_arcsec`` may be a positive scalar or a per-left-row tensor.
     Coarse declination windows use the per-row radius; a global prune uses
-    the maximum.
+    the maximum. Pass ``right_index`` to reuse a nested ``HealpixIndex`` on
+    the right catalog (uniform radius only).
     """
     left_ra = torch.as_tensor(left_ra_deg, dtype=torch.float64).reshape(-1)
     device = left_ra.device
@@ -828,6 +726,7 @@ def crossmatch_sky(
             left_chunk_size=left_chunk_size,
             right_chunk_size=right_chunk_size,
             find=find,
+            right_index=right_index,
         )
     return _crossmatch_sky_declination_indexed(
         left_ra,
@@ -884,8 +783,8 @@ def crossmatch_sky_streamed(
         right_dec,
         radius_arcsec=radius_arcsec,
     )
-    coarse_index = _build_coarse_healpix_index(
-        right_ra, right_dec, coarse_nside=coarse_nside
+    coarse_index = HealpixIndex.build(
+        right_ra, right_dec, nside=coarse_nside, nest=True
     )
     radius_deg = radius_arcsec / 3600.0
     candidate_radius_rad = math.radians(radius_deg) + (
