@@ -721,6 +721,32 @@ void bind_wcs(nb::module_& m) {
           },
           nb::arg("xi"), nb::arg("eta"), nb::arg("proj_code"));
 
+    m.def("wcs_csc_x2s",
+          [](nb::object xi_obj, nb::object eta_obj) {
+              auto xi = as_f64_contig(xi_obj);
+              auto eta = as_f64_contig(eta_obj);
+              std::pair<torch::Tensor, torch::Tensor> out;
+              {
+                  nb::gil_scoped_release release;
+                  out = torchsky::wcs_csc_x2s(xi, eta);
+              }
+              return nb::make_tuple(tensor_to_python(out.first), tensor_to_python(out.second));
+          },
+          nb::arg("xi"), nb::arg("eta"));
+
+    m.def("wcs_csc_s2x",
+          [](nb::object phi_obj, nb::object theta_obj) {
+              auto phi = as_f64_contig(phi_obj);
+              auto theta = as_f64_contig(theta_obj);
+              std::pair<torch::Tensor, torch::Tensor> out;
+              {
+                  nb::gil_scoped_release release;
+                  out = torchsky::wcs_csc_s2x(phi, theta);
+              }
+              return nb::make_tuple(tensor_to_python(out.first), tensor_to_python(out.second));
+          },
+          nb::arg("phi"), nb::arg("theta"));
+
     m.def("wcs_zpn_project",
           [](nb::object xi_obj, nb::object eta_obj, nb::object coeffs_obj) {
               auto xi = as_f64_contig(xi_obj);

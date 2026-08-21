@@ -105,9 +105,15 @@ class CatalogState:
             return unit * (distance_pc * _AU_PER_PC).unsqueeze(-1)
         raise ValueError(f"unsupported representation {kind!r}")
 
-    def to_frame(self, frame: str) -> CatalogState:
+    def to_frame(
+        self, frame: str, *, tt_mjd: Tensor | float | None = None
+    ) -> CatalogState:
         lon, lat = convert_celestial(
-            self.lon, self.lat, from_frame=self.frame, to_frame=frame
+            self.lon,
+            self.lat,
+            from_frame=self.frame,
+            to_frame=frame,
+            tt_mjd=tt_mjd,
         )
         return replace(self, lon=lon, lat=lat, frame=canonical_celestial_frame(frame))
 

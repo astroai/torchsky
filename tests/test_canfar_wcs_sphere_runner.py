@@ -50,6 +50,10 @@ def test_canfar_wcs_sphere_runner_contract() -> None:
         assert f"\n  {mode})" in runner
     assert "--moc-only" in runner
     assert "catalog_n1e7.json" in runner
+    assert "bench_catalog_compat.py" in runner
+    assert "catalog_compat.json" in runner
+    assert "wcs_paper2_fused0.json" in runner
+    assert "wcs_csc_x2s" in runner
     assert runner.count("--skip-decl-pruned") >= 2
     assert "test_wcs_observed_frames.py" in runner
     assert "test_catalogs.py" in runner

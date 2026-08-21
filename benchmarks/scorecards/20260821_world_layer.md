@@ -85,9 +85,9 @@ Small-N N=256: TAN/SIN/ARC max |dpx| < 6e-8. TPV compile=ok but max |dy| = 1110 
 ## Spectral / temporal vs WCSLIB, N=1e5
 
 CPU: 55 rows, **26 first / 7 tie / 22 behind** (1.05 / 0.95 cuts). Linear
-FREQ/WAVE ~0.89–0.91×. `FREQ-GRA` p2w residual is 29 Hz on CPU and CUDA (grism
-vs WCSLIB, not a device bug). Time-scale conversions are slower than astropy
-(CPU UTC→TAI 8.7×). CUDA: 49/55 first vs CPU WCSLIB; same 29 Hz `FREQ-GRA`.
+FREQ/WAVE ~0.89–0.91×. `FREQ-GRA` leftover is relative float noise (~0.6 Hz
+on ~1e14 Hz), not 29 Hz. Time-scale conversions are slower than astropy
+(CPU UTC→TAI 8.7×). CUDA: 49/55 first vs CPU WCSLIB; same relative `FREQ-GRA`.
 
 ## Coupled `-TAB`
 
@@ -130,5 +130,7 @@ HEALPix 0.212 s; 10718 matches).
 - Linux SHT (unchanged)
 - healsparse `get_values` / interleaved `ud_grade` (unchanged)
 - mocpy cone/union
-- Live GWCS, SkyCoord graph, DE planets, fused CSC/QSC C++, fused CUDA Ishioka
-- `WCS.to("mps")`
+- Live GWCS graphs in core (optional `gwcs` extra freezes then samples)
+- SkyCoord class (optional `astropy_interop` copies CatalogState)
+- fused CUDA Ishioka (blocked on cuHPX `go-scalar-cuda`)
+- Linux SHT, mocpy cone/union, healsparse `get_values`, Paper II suite-first

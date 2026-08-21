@@ -9,6 +9,9 @@ from ..wcs.catalog_state import CatalogState
 from ..wcs.coords import transform
 from ..wcs.frames import (
     convert_celestial,
+    heliocentric_rv_to_lsr,
+    icrs_to_ecliptic_of_date,
+    icrs_to_galactocentric,
     propagate_proper_motion,
     propagate_space_motion,
 )
@@ -19,6 +22,9 @@ __all__ = [
     "EarthOrientation",
     "Site",
     "convert_celestial",
+    "heliocentric_rv_to_lsr",
+    "icrs_to_ecliptic_of_date",
+    "icrs_to_galactocentric",
     "observed_altaz",
     "propagate_proper_motion",
     "propagate_space_motion",

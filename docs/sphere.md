@@ -59,6 +59,8 @@ Convert between NSIDE and total pixel count.
 Pixels within a spherical disc. `vec` is a 3-element unit vector, `radius` in radians.
 Inclusive `fact==4` pads by the maximum pixel radius. Other `fact` values
 supersample at `nside*fact` (power of two) and degrade to parent pixels.
+CUDA `query_disc` copies a length-3 `vec` to the CPU kernel; that copy is not
+the wall-time tax, so the on-device MPS path is not ported to CUDA.
 
 ---
 

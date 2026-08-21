@@ -9,8 +9,10 @@ never runs unless Earth orientation is supplied.
 - `CatalogState` in `torchsky.wcs.catalog_state`: `lon`, `lat`, optional
   proper motion, parallax, radial velocity, epoch, and frame. Missing
   components stay `None`. There is no `pmsafe` distance override.
-- Geometric frames: ICRS, Galactic, FK4, FK5, mean ecliptic of J2000.
-  These are rotations and precession. They do not take `obstime` or site.
+- Geometric frames: ICRS, Galactic, FK4, FK5, mean ecliptic of J2000,
+  ecliptic of date (TT MJD + IAU 2006 NPB), Galactocentric (explicit
+  `galcen_distance_kpc` / `z_sun_pc`), and LSR (explicit solar UVW on
+  radial velocity). These are not a SkyCoord graph.
 - Angular propagation: `propagate_proper_motion` / `CatalogState.propagate_angular`.
 - Physical 6-parameter propagation: `propagate_space_motion` /
   `CatalogState.propagate_physical`. Incomplete state raises.
@@ -64,6 +66,12 @@ altaz = cat.observe(
 Representations are layouts (`lonlat_deg`, `unit_xyz`, `barycentric_au`),
 not Astropy representation classes. `barycentric_au` requires a positive
 parallax; it is never filled from a default distance.
+
+Optional extras (not imported by `torchsky.wcs`): `astropy_interop`
+(`from_astropy` / `to_astropy`), `ephemeris.get_body` (`jplephem` + DE
+kernel path), `tle.catalog_state_from_tle` (`sgp4`, frame `TEME`), and
+`gwcs_live.freeze_live_gwcs`. Core `gwcs_sampling` never imports `gwcs`.
+There is no `SkyCoord` class.
 
 Oracle: Astropy/ERFA for geometric frames and space motion. Observed-place
 parity is only meaningful after the same EOP values are pinned on both sides.

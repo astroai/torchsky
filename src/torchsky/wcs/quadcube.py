@@ -15,6 +15,8 @@ import torch
 from torch import Tensor
 from typing import Tuple
 
+from torchsky._native import cpp as _cpp
+
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
 _INV_SQRT2 = 0.7071067811865476
@@ -72,6 +74,29 @@ _CSC_P24 = 0.33887446
 _CSC_P05 = -0.63915306
 _CSC_P15 = 0.52032238
 _CSC_P06 = 0.14381585
+
+# Inverse Horner terms, innermost coefficient last (WCSLIB cscx2s).
+_CSC_INV_Z0 = (_CSC_P00, _CSC_P10, _CSC_P20, _CSC_P30, _CSC_P40, _CSC_P50, _CSC_P60)
+_CSC_INV_Z1 = (_CSC_P01, _CSC_P11, _CSC_P21, _CSC_P31, _CSC_P41, _CSC_P51)
+_CSC_INV_Z2 = (_CSC_P02, _CSC_P12, _CSC_P22, _CSC_P32, _CSC_P42)
+_CSC_INV_Z3 = (_CSC_P03, _CSC_P13, _CSC_P23, _CSC_P33)
+_CSC_INV_Z4 = (_CSC_P04, _CSC_P14, _CSC_P24)
+_CSC_INV_Z5 = (_CSC_P05, _CSC_P15)
+
+
+def _horner_addcmul(x: Tensor, coeffs: tuple[float, ...]) -> Tensor:
+    """Float32 Horner via addcmul so FMA matches WCSLIB/C ``a + x*b``."""
+    acc = x.new_tensor(coeffs[-1])
+    for coeff in reversed(coeffs[:-1]):
+        acc = torch.addcmul(x.new_tensor(coeff), x, acc)
+    return acc
+
+
+def _horner_addcmul_terms(x: Tensor, terms: tuple[Tensor, ...]) -> Tensor:
+    acc = terms[-1]
+    for term in reversed(terms[:-1]):
+        acc = torch.addcmul(term, x, acc)
+    return acc
 
 
 def project_quadcube(
@@ -331,38 +356,42 @@ def _tsc_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
 # ---------------------------------------------------------------------------
 
 def _csc_forward_poly(chi: Tensor, psi: Tensor) -> Tensor:
-    # WCSLIB cscs2x evaluates this polynomial in float32.
+    # WCSLIB cscs2x evaluates this polynomial in float32 with FMA Horner.
     chi_f = chi.to(dtype=torch.float32)
     psi_f = psi.to(dtype=torch.float32)
     chi2 = chi_f * chi_f
     psi2 = psi_f * psi_f
-    chi2co = 1.0 - chi2
+    one = chi2.new_tensor(1.0)
+    chi2co = one - chi2
+    psi2co = one - psi2
     chi4 = torch.where(chi2 > 1.0e-16, chi2 * chi2, torch.zeros_like(chi2))
     psi4 = torch.where(psi2 > 1.0e-16, psi2 * psi2, torch.zeros_like(psi2))
     chipsi = (chi_f * psi_f).abs()
     chi2psi2 = torch.where(chipsi > 1.0e-16, chi2 * psi2, torch.zeros_like(chi2))
-    out = chi_f * (
-        chi2
-        + chi2co
-        * (
-            _CSC_GSTAR
-            + psi2
-            * (
-                _CSC_GAMMA * chi2co
-                + _CSC_M * chi2
-                + (1.0 - psi2)
-                * (
-                    _CSC_C00
-                    + _CSC_C10 * chi2
-                    + _CSC_C01 * psi2
-                    + _CSC_C11 * chi2psi2
-                    + _CSC_C20 * chi4
-                    + _CSC_C02 * psi4
-                )
-            )
-            + chi2 * (_CSC_OMEGA1 - chi2co * (_CSC_D0 + _CSC_D1 * chi2))
-        )
+    inner = torch.addcmul(
+        torch.addcmul(chi2.new_tensor(_CSC_C00), chi2.new_tensor(_CSC_C10), chi2),
+        chi2.new_tensor(_CSC_C01),
+        psi2,
     )
+    inner = torch.addcmul(inner, chi2.new_tensor(_CSC_C11), chi2psi2)
+    inner = torch.addcmul(inner, chi2.new_tensor(_CSC_C20), chi4)
+    inner = torch.addcmul(inner, chi2.new_tensor(_CSC_C02), psi4)
+    mid = torch.addcmul(
+        torch.addcmul(
+            chi2.new_tensor(_CSC_GAMMA) * chi2co, chi2.new_tensor(_CSC_M), chi2
+        ),
+        psi2co,
+        inner,
+    )
+    omega = chi2.new_tensor(_CSC_OMEGA1) - chi2co * torch.addcmul(
+        chi2.new_tensor(_CSC_D0), chi2.new_tensor(_CSC_D1), chi2
+    )
+    gterm = torch.addcmul(
+        torch.addcmul(chi2.new_tensor(_CSC_GSTAR), psi2, mid),
+        chi2,
+        omega,
+    )
+    out = chi_f * torch.addcmul(chi2, chi2co, gterm)
     return out.to(dtype=chi.dtype)
 
 
@@ -371,28 +400,30 @@ def _csc_inverse_poly(xf: Tensor, yf: Tensor) -> Tensor:
     yf_f = yf.to(dtype=torch.float32)
     xx = xf_f * xf_f
     yy = yf_f * yf_f
-    z0 = _CSC_P00 + xx * (
-        _CSC_P10
-        + xx
-        * (
-            _CSC_P20
-            + xx * (_CSC_P30 + xx * (_CSC_P40 + xx * (_CSC_P50 + xx * _CSC_P60)))
-        )
-    )
-    z1 = _CSC_P01 + xx * (
-        _CSC_P11 + xx * (_CSC_P21 + xx * (_CSC_P31 + xx * (_CSC_P41 + xx * _CSC_P51)))
-    )
-    z2 = _CSC_P02 + xx * (
-        _CSC_P12 + xx * (_CSC_P22 + xx * (_CSC_P32 + xx * _CSC_P42))
-    )
-    z3 = _CSC_P03 + xx * (_CSC_P13 + xx * (_CSC_P23 + xx * _CSC_P33))
-    z4 = _CSC_P04 + xx * (_CSC_P14 + xx * _CSC_P24)
-    z5 = _CSC_P05 + xx * _CSC_P15
-    chi = z0 + yy * (z1 + yy * (z2 + yy * (z3 + yy * (z4 + yy * (z5 + yy * _CSC_P06)))))
-    return (xf_f + xf_f * (1.0 - xx) * chi).to(dtype=xf.dtype)
+    z0 = _horner_addcmul(xx, _CSC_INV_Z0)
+    z1 = _horner_addcmul(xx, _CSC_INV_Z1)
+    z2 = _horner_addcmul(xx, _CSC_INV_Z2)
+    z3 = _horner_addcmul(xx, _CSC_INV_Z3)
+    z4 = _horner_addcmul(xx, _CSC_INV_Z4)
+    z5 = _horner_addcmul(xx, _CSC_INV_Z5)
+    chi = _horner_addcmul_terms(yy, (z0, z1, z2, z3, z4, z5, xx.new_tensor(_CSC_P06)))
+    one_minus_xx = xx.new_tensor(1.0) - xx
+    return torch.addcmul(xf_f, xf_f * one_minus_xx, chi)
 
 
 def _csc_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
+    if (
+        _cpp is not None
+        and hasattr(_cpp, "wcs_csc_s2x")
+        and phi.device.type == "cpu"
+        and theta.device.type == "cpu"
+        and phi.dtype == torch.float64
+        and theta.dtype == torch.float64
+        and not phi.requires_grad
+        and not theta.requires_grad
+    ):
+        xi, eta = _cpp.wcs_csc_s2x(phi.reshape(-1), theta.reshape(-1))
+        return xi.reshape(phi.shape), eta.reshape(theta.shape)
     lx, m, n = _direction_cosines(phi, theta)
     face, chi, psi, _ = _face_from_lmn(lx, m, n)
     xf = torch.clamp(_csc_forward_poly(chi, psi), -1.0, 1.0)
@@ -401,10 +432,26 @@ def _csc_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
 
 
 def _csc_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
+    if (
+        _cpp is not None
+        and hasattr(_cpp, "wcs_csc_x2s")
+        and xi.device.type == "cpu"
+        and eta.device.type == "cpu"
+        and xi.dtype == torch.float64
+        and eta.dtype == torch.float64
+        and not xi.requires_grad
+        and not eta.requires_grad
+    ):
+        phi, theta = _cpp.wcs_csc_x2s(xi.reshape(-1), eta.reshape(-1))
+        return phi.reshape(xi.shape), theta.reshape(eta.shape)
     face, xf, yf, valid = _xy_to_face(xi, eta)
     chi = _csc_inverse_poly(xf, yf)
     psi = _csc_inverse_poly(yf, xf)
-    t = 1.0 / torch.sqrt(chi * chi + psi * psi + 1.0)
+    # WCSLIB: float32 χ²+ψ², then double sqrt. Promoting first is the 8 mas gap.
+    sumsq = (chi * chi + psi * psi).to(dtype=xi.dtype)
+    t = 1.0 / torch.sqrt(sumsq + 1.0)
+    chi = chi.to(dtype=xi.dtype)
+    psi = psi.to(dtype=xi.dtype)
     lx = torch.where(
         face == 0,
         -psi * t,

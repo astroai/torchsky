@@ -2,14 +2,28 @@ import erfa
 import numpy as np
 import pytest
 import torch
-from astropy.coordinates import FK4, FK5, Galactic, ICRS, SkyCoord, BarycentricMeanEcliptic
+from astropy.coordinates import (
+    FK4,
+    FK5,
+    Galactic,
+    Galactocentric,
+    ICRS,
+    LSR,
+    SkyCoord,
+    BarycentricMeanEcliptic,
+)
 from astropy.time import Time
 import astropy.units as u
 
 from torchsky.wcs import (
     WCS,
     convert_celestial,
+    ecliptic_of_date_to_icrs,
     galactic_to_icrs,
+    galactocentric_to_icrs,
+    heliocentric_rv_to_lsr,
+    icrs_to_ecliptic_of_date,
+    icrs_to_galactocentric,
     icrs_to_galactic,
     precess_fk5,
     propagate_proper_motion,
@@ -682,3 +696,81 @@ def test_wcs_precess_celestial_fk4_matches_astropy() -> None:
         _wrap_delta(ra_b1975.numpy(), exp.ra.deg), 0.0, atol=2e-4
     )
     np.testing.assert_allclose(dec_b1975.numpy(), exp.dec.deg, atol=2e-4)
+
+
+def test_ecliptic_of_date_roundtrip_and_erfa() -> None:
+    ra = torch.tensor([0.0, 83.6331, 201.2983], dtype=torch.float64)
+    dec = torch.tensor([0.0, 22.0145, -43.0191], dtype=torch.float64)
+    tt_mjd = 58000.0
+    lon, lat = icrs_to_ecliptic_of_date(ra, dec, tt_mjd)
+    ra_back, dec_back = ecliptic_of_date_to_icrs(lon, lat, tt_mjd)
+    np.testing.assert_allclose(_wrap_delta(ra_back.numpy(), ra.numpy()), 0.0, atol=1e-9)
+    np.testing.assert_allclose(dec_back.numpy(), dec.numpy(), atol=1e-9)
+
+    jd1, jd2 = 2400000.5, tt_mjd
+    gamb, phib, psib, epsa = erfa.pfw06(jd1, jd2)
+    rnpb = np.asarray(erfa.fw2m(gamb, phib, psib, epsa), dtype=np.float64)
+    c = float(np.cos(epsa))
+    s = float(np.sin(epsa))
+    recl = np.array([[1.0, 0.0, 0.0], [0.0, c, s], [0.0, -s, c]], dtype=np.float64)
+    ra_r = np.deg2rad(ra.numpy())
+    dec_r = np.deg2rad(dec.numpy())
+    vec = np.stack(
+        (
+            np.cos(dec_r) * np.cos(ra_r),
+            np.cos(dec_r) * np.sin(ra_r),
+            np.sin(dec_r),
+        ),
+        axis=-1,
+    )
+    v_date = vec @ rnpb.T
+    v_ecl = v_date @ recl.T
+    lon_e = np.rad2deg(np.arctan2(v_ecl[:, 1], v_ecl[:, 0])) % 360.0
+    lat_e = np.rad2deg(np.arcsin(np.clip(v_ecl[:, 2], -1.0, 1.0)))
+    np.testing.assert_allclose(_wrap_delta(lon.numpy(), lon_e), 0.0, atol=1e-10)
+    np.testing.assert_allclose(lat.numpy(), lat_e, atol=1e-10)
+
+
+def test_galactocentric_roundtrip_and_astropy() -> None:
+    ra = torch.tensor([266.4051, 83.6331], dtype=torch.float64)
+    dec = torch.tensor([-28.936175, 22.0145], dtype=torch.float64)
+    dist = torch.tensor([8.122, 0.14], dtype=torch.float64)
+    xyz = icrs_to_galactocentric(ra, dec, dist)
+    ra_b, dec_b, dist_b = galactocentric_to_icrs(xyz)
+    np.testing.assert_allclose(_wrap_delta(ra_b.numpy(), ra.numpy()), 0.0, atol=1e-8)
+    np.testing.assert_allclose(dec_b.numpy(), dec.numpy(), atol=1e-8)
+    np.testing.assert_allclose(dist_b.numpy(), dist.numpy(), atol=1e-8)
+    sky = SkyCoord(
+        ra=ra.numpy() * u.deg,
+        dec=dec.numpy() * u.deg,
+        distance=dist.numpy() * u.kpc,
+        frame=ICRS(),
+    )
+    galcen = sky.transform_to(
+        Galactocentric(
+            galcen_distance=8.122 * u.kpc,
+            z_sun=20.8 * u.pc,
+            roll=0 * u.deg,
+        )
+    )
+    np.testing.assert_allclose(xyz[:, 0].numpy(), galcen.x.to_value(u.kpc), atol=1e-3)
+    np.testing.assert_allclose(xyz[:, 1].numpy(), galcen.y.to_value(u.kpc), atol=1e-3)
+    np.testing.assert_allclose(xyz[:, 2].numpy(), galcen.z.to_value(u.kpc), atol=1e-3)
+
+
+def test_lsr_radial_velocity_matches_astropy_sign() -> None:
+    ra = torch.tensor([180.0], dtype=torch.float64)
+    dec = torch.tensor([0.0], dtype=torch.float64)
+    rv = torch.tensor([10.0], dtype=torch.float64)
+    lsr = heliocentric_rv_to_lsr(ra, dec, rv)
+    sky = SkyCoord(
+        ra=ra.numpy() * u.deg,
+        dec=dec.numpy() * u.deg,
+        distance=100.0 * u.pc,
+        pm_ra_cosdec=0.0 * u.mas / u.yr,
+        pm_dec=0.0 * u.mas / u.yr,
+        radial_velocity=rv.numpy() * u.km / u.s,
+        frame=ICRS(),
+    )
+    ast = sky.transform_to(LSR()).radial_velocity.to_value(u.km / u.s)
+    np.testing.assert_allclose(lsr.numpy(), ast, atol=0.5)

@@ -347,6 +347,187 @@ def ecliptic_to_icrs(lon_deg: Any, lat_deg: Any) -> tuple[Tensor, Tensor]:
     return unit_to_radec(torch.matmul(vec, mat.T))
 
 
+def icrs_to_ecliptic_of_date(
+    ra_deg: Any, dec_deg: Any, tt_mjd: Any
+) -> tuple[Tensor, Tensor]:
+    """Rotate ICRS to the mean ecliptic of date via IAU 2006 NPB.
+
+    ``tt_mjd`` is TT MJD. This is a geometric frame, not observed place:
+    no aberration, refraction, or site.
+    """
+    vec = radec_to_unit(ra_deg, dec_deg)
+    tt = _as_tensor(tt_mjd).to(device=vec.device, dtype=vec.dtype)
+    if tt.numel() != 1:
+        raise ValueError("ecliptic of date requires a scalar tt_mjd")
+    # Circular: iau2006 imports D2R / ARCSEC_TO_RAD from this module.
+    from .iau2006 import iau2006_fw_angles, npb_matrix
+
+    n_matrix = npb_matrix(tt.reshape(()), nutation=False).to(
+        device=vec.device, dtype=vec.dtype
+    )
+    _, _, _, epsa = iau2006_fw_angles(tt.reshape(()))
+    v_date = torch.matmul(vec, n_matrix.T)
+    return unit_to_radec(torch.matmul(v_date, _ecliptic_matrix_from_obliquity(epsa)))
+
+
+def ecliptic_of_date_to_icrs(
+    lon_deg: Any, lat_deg: Any, tt_mjd: Any
+) -> tuple[Tensor, Tensor]:
+    """Rotate mean ecliptic of date to ICRS via IAU 2006 NPB."""
+    vec = radec_to_unit(lon_deg, lat_deg)
+    tt = _as_tensor(tt_mjd).to(device=vec.device, dtype=vec.dtype)
+    if tt.numel() != 1:
+        raise ValueError("ecliptic of date requires a scalar tt_mjd")
+    # Circular: iau2006 imports D2R / ARCSEC_TO_RAD from this module.
+    from .iau2006 import iau2006_fw_angles, npb_matrix
+
+    n_matrix = npb_matrix(tt.reshape(()), nutation=False).to(
+        device=vec.device, dtype=vec.dtype
+    )
+    _, _, _, epsa = iau2006_fw_angles(tt.reshape(()))
+    v_date = torch.matmul(vec, _ecliptic_matrix_from_obliquity(epsa).T)
+    return unit_to_radec(torch.matmul(v_date, n_matrix))
+
+
+def _ecliptic_matrix_from_obliquity(eps: Tensor) -> Tensor:
+    c = torch.cos(eps)
+    s = torch.sin(eps)
+    z = torch.zeros((), dtype=eps.dtype, device=eps.device)
+    o = torch.ones((), dtype=eps.dtype, device=eps.device)
+    return torch.stack(
+        (
+            torch.stack((o, z, z)),
+            torch.stack((z, c, -s)),
+            torch.stack((z, s, c)),
+        )
+    )
+
+
+# Reid & Brunthaler 2020 / Astropy v6 Galactocentric defaults.
+_GALCEN_RA_DEG = 266.4051
+_GALCEN_DEC_DEG = -28.936175
+_GALCEN_DISTANCE_KPC = 8.122
+_Z_SUN_PC = 20.8
+# Schönrich, Binney & Dehnen 2010 solar peculiar velocity (km/s).
+_SOLAR_U_KMS = 11.1
+_SOLAR_V_KMS = 12.24
+_SOLAR_W_KMS = 7.25
+
+
+def icrs_to_galactocentric(
+    ra_deg: Any,
+    dec_deg: Any,
+    distance_kpc: Any,
+    *,
+    galcen_distance_kpc: float = _GALCEN_DISTANCE_KPC,
+    galcen_ra_deg: float = _GALCEN_RA_DEG,
+    galcen_dec_deg: float = _GALCEN_DEC_DEG,
+    z_sun_pc: float = _Z_SUN_PC,
+) -> Tensor:
+    """Heliocentric ICRS spherical → Galactocentric Cartesian (kpc).
+
+    Origin at the Galactic Centre (``galcen_ra_deg`` / ``galcen_dec_deg``).
+    +x toward the anticenter (Sun at ``x ≈ -R0``), +y in rotation, +z toward
+    the NGP. ``z_sun_pc`` tilts the midplane so the Sun sits at ``z = z_sun``.
+    Solar peculiar velocity is not applied.
+    """
+    vec = radec_to_unit(ra_deg, dec_deg)
+    dist = _as_tensor(distance_kpc).to(device=vec.device, dtype=vec.dtype)
+    r_helio = dist.unsqueeze(-1) * vec
+    gc_hat = radec_to_unit(
+        vec.new_tensor(float(galcen_ra_deg)),
+        vec.new_tensor(float(galcen_dec_deg)),
+    )
+    r0 = dist.new_tensor(float(galcen_distance_kpc))
+    gal = torch.matmul(
+        r_helio - r0 * gc_hat,
+        _ICRS_TO_GAL.to(device=vec.device, dtype=vec.dtype).T,
+    )
+    z_sun = dist.new_tensor(float(z_sun_pc) * 1.0e-3)
+    theta = torch.atan2(z_sun, r0)
+    c = torch.cos(theta)
+    s = torch.sin(theta)
+    x = gal[..., 0] * c + gal[..., 2] * s
+    z = -gal[..., 0] * s + gal[..., 2] * c
+    return torch.stack((x, gal[..., 1], z), dim=-1)
+
+
+def galactocentric_to_icrs(
+    xyz_kpc: Any,
+    *,
+    galcen_distance_kpc: float = _GALCEN_DISTANCE_KPC,
+    galcen_ra_deg: float = _GALCEN_RA_DEG,
+    galcen_dec_deg: float = _GALCEN_DEC_DEG,
+    z_sun_pc: float = _Z_SUN_PC,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Galactocentric Cartesian (kpc) → ICRS spherical plus distance (kpc)."""
+    xyz = _as_tensor(xyz_kpc)
+    r0 = xyz.new_tensor(float(galcen_distance_kpc))
+    z_sun = xyz.new_tensor(float(z_sun_pc) * 1.0e-3)
+    theta = torch.atan2(z_sun, r0)
+    c = torch.cos(theta)
+    s = torch.sin(theta)
+    x = xyz[..., 0] * c - xyz[..., 2] * s
+    z = xyz[..., 0] * s + xyz[..., 2] * c
+    gal = torch.stack((x, xyz[..., 1], z), dim=-1)
+    gc_hat = radec_to_unit(
+        xyz.new_tensor(float(galcen_ra_deg)),
+        xyz.new_tensor(float(galcen_dec_deg)),
+    )
+    r_helio = torch.matmul(
+        gal, _ICRS_TO_GAL.to(device=xyz.device, dtype=xyz.dtype)
+    ) + r0 * gc_hat
+    dist = torch.linalg.vector_norm(r_helio, dim=-1).clamp_min(1.0e-30)
+    ra, dec = unit_to_radec(r_helio / dist.unsqueeze(-1))
+    return ra, dec, dist
+
+
+def lsr_line_of_sight_kms(
+    ra_deg: Any,
+    dec_deg: Any,
+    *,
+    solar_u_kms: float = _SOLAR_U_KMS,
+    solar_v_kms: float = _SOLAR_V_KMS,
+    solar_w_kms: float = _SOLAR_W_KMS,
+) -> Tensor:
+    """Solar peculiar velocity projected onto the ICRS line of sight (km/s).
+
+    UVW are Galactic: U toward the GC, V in rotation, W toward the NGP.
+    """
+    lon, lat = icrs_to_galactic(ra_deg, dec_deg)
+    lon_r = lon * D2R
+    lat_r = lat * D2R
+    cos_b = torch.cos(lat_r)
+    u = lon.new_tensor(float(solar_u_kms))
+    v = lon.new_tensor(float(solar_v_kms))
+    w = lon.new_tensor(float(solar_w_kms))
+    return (
+        u * torch.cos(lon_r) * cos_b
+        + v * torch.sin(lon_r) * cos_b
+        + w * torch.sin(lat_r)
+    )
+
+
+def heliocentric_rv_to_lsr(
+    ra_deg: Any,
+    dec_deg: Any,
+    rv_kms: Any,
+    *,
+    solar_u_kms: float = _SOLAR_U_KMS,
+    solar_v_kms: float = _SOLAR_V_KMS,
+    solar_w_kms: float = _SOLAR_W_KMS,
+) -> Tensor:
+    """Heliocentric radial velocity → LSR (km/s) with explicit solar UVW."""
+    rv = _as_tensor(rv_kms)
+    return rv + lsr_line_of_sight_kms(
+        ra_deg,
+        dec_deg,
+        solar_u_kms=solar_u_kms,
+        solar_v_kms=solar_v_kms,
+        solar_w_kms=solar_w_kms,
+    )
+
+
 def propagate_proper_motion(
     lon_deg: Any,
     lat_deg: Any,
@@ -956,7 +1137,19 @@ def canonical_celestial_frame(frame: str | None) -> str:
     name = str(frame).strip().upper()
     if name in {"RADECSYS", "EQUATORIAL"}:
         return "ICRS"
-    if name in {"ICRS", "FK5", "FK4", "GALACTIC", "GAL", "ECLIPTIC", "ECL"}:
+    if name in {
+        "ICRS",
+        "FK5",
+        "FK4",
+        "GALACTIC",
+        "GAL",
+        "ECLIPTIC",
+        "ECL",
+        "ECLIPTIC_OF_DATE",
+        "GALACTOCENTRIC",
+        "LSR",
+        "TEME",
+    }:
         if name == "GAL":
             return "GALACTIC"
         if name == "ECL":
@@ -973,12 +1166,21 @@ def convert_celestial(
     to_frame: str = "ICRS",
     from_equinox: float | None = None,
     to_equinox: float | None = None,
+    tt_mjd: Any | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Convert between the currently supported celestial frames."""
     src = canonical_celestial_frame(from_frame)
     dst = canonical_celestial_frame(to_frame)
     lon = _as_tensor(lon_deg)
     lat = _as_tensor(lat_deg).to(device=lon.device, dtype=_work_dtype(lon.device))
+    if src == "LSR":
+        src = "ICRS"
+    if src == "TEME" and dst != "TEME":
+        raise ValueError("TEME is a stored TLE frame; convert it explicitly")
+    if src == "GALACTOCENTRIC":
+        raise ValueError(
+            "Galactocentric is Cartesian; use galactocentric_to_icrs with xyz_kpc"
+        )
 
     if src == "FK4":
         source_equinox = 1950.0 if from_equinox is None else float(from_equinox)
@@ -998,6 +1200,11 @@ def convert_celestial(
     elif src == "ECLIPTIC":
         lon, lat = ecliptic_to_icrs(lon, lat)
         src = "ICRS"
+    elif src == "ECLIPTIC_OF_DATE":
+        if tt_mjd is None:
+            raise ValueError("ecliptic of date requires tt_mjd")
+        lon, lat = ecliptic_of_date_to_icrs(lon, lat, tt_mjd)
+        src = "ICRS"
     elif src == "FK5":
         lon, lat = precess_fk5(
             lon,
@@ -1009,6 +1216,14 @@ def convert_celestial(
 
     if dst == "ICRS":
         return lon, lat
+    if dst == "LSR":
+        return lon, lat
+    if dst == "TEME":
+        raise ValueError("TEME is a stored TLE frame; convert it explicitly")
+    if dst == "GALACTOCENTRIC":
+        raise ValueError(
+            "Galactocentric is Cartesian; use icrs_to_galactocentric with distance_kpc"
+        )
     if dst == "FK4":
         target_equinox = 1950.0 if to_equinox is None else float(to_equinox)
         vec = radec_to_unit(lon, lat)
@@ -1024,6 +1239,10 @@ def convert_celestial(
         return icrs_to_galactic(lon, lat)
     if dst == "ECLIPTIC":
         return icrs_to_ecliptic(lon, lat)
+    if dst == "ECLIPTIC_OF_DATE":
+        if tt_mjd is None:
+            raise ValueError("ecliptic of date requires tt_mjd")
+        return icrs_to_ecliptic_of_date(lon, lat, tt_mjd)
     if dst == "FK5":
         return precess_fk5(
             lon,

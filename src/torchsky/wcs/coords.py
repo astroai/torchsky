@@ -37,6 +37,8 @@ def transform(
 
     Geometric frames use ``CatalogState.to_frame``. ``ALTAZ``, ``ITRS``,
     ``GCRS``, ``CIRS``, and ``TETE`` require ``obstime_mjd_utc`` and ``eop``.
+    ``ECLIPTIC_OF_DATE`` uses TT MJD (``obstime_mjd_utc`` is treated as TT
+    unless you pass a TT value through ``CatalogState.to_frame``).
     """
     state = CatalogState(lon, lat, frame=from_frame)
     dest = str(to_frame).strip().upper().replace(" ", "")
@@ -85,5 +87,10 @@ def transform(
                 aberration=aberration,
             )
         return itrs_xyz_to_lonlat_deg(xyz)
+    if dest == "ECLIPTIC_OF_DATE":
+        if obstime_mjd_utc is None:
+            raise ValueError("ECLIPTIC_OF_DATE requires obstime_mjd_utc (TT MJD)")
+        out = state.to_frame("ECLIPTIC_OF_DATE", tt_mjd=obstime_mjd_utc)
+        return out.lon, out.lat
     out = state.to_frame(to_frame)
     return out.lon, out.lat

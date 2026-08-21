@@ -1772,6 +1772,61 @@ bool csc_x2s(double xi_deg, double eta_deg, double* phi, double* theta) {
     return true;
 }
 
+std::pair<torch::Tensor, torch::Tensor> wcs_csc_x2s(
+    const torch::Tensor& xi_deg,
+    const torch::Tensor& eta_deg
+) {
+    auto xi_flat = xi_deg.contiguous().view({-1});
+    auto eta_flat = eta_deg.contiguous().view({-1});
+    auto phi_flat = torch::empty_like(xi_flat);
+    auto theta_flat = torch::empty_like(eta_flat);
+    const int64_t n = xi_flat.numel();
+    const double* xi_p = xi_flat.data_ptr<double>();
+    const double* eta_p = eta_flat.data_ptr<double>();
+    double* phi_p = phi_flat.data_ptr<double>();
+    double* theta_p = theta_flat.data_ptr<double>();
+    auto body = [&](int64_t begin, int64_t end) {
+        for (int64_t i = begin; i < end; ++i) {
+            if (!csc_x2s(xi_p[i], eta_p[i], phi_p + i, theta_p + i)) {
+                phi_p[i] = std::numeric_limits<double>::quiet_NaN();
+                theta_p[i] = std::numeric_limits<double>::quiet_NaN();
+            }
+        }
+    };
+    if (n <= 8192) {
+        body(0, n);
+    } else {
+        at::parallel_for(0, n, 4096, body);
+    }
+    return {phi_flat.view(xi_deg.sizes()), theta_flat.view(eta_deg.sizes())};
+}
+
+std::pair<torch::Tensor, torch::Tensor> wcs_csc_s2x(
+    const torch::Tensor& phi,
+    const torch::Tensor& theta
+) {
+    auto phi_flat = phi.contiguous().view({-1});
+    auto theta_flat = theta.contiguous().view({-1});
+    auto xi_flat = torch::empty_like(phi_flat);
+    auto eta_flat = torch::empty_like(theta_flat);
+    const int64_t n = phi_flat.numel();
+    const double* phi_p = phi_flat.data_ptr<double>();
+    const double* theta_p = theta_flat.data_ptr<double>();
+    double* xi_p = xi_flat.data_ptr<double>();
+    double* eta_p = eta_flat.data_ptr<double>();
+    auto body = [&](int64_t begin, int64_t end) {
+        for (int64_t i = begin; i < end; ++i) {
+            csc_s2x(phi_p[i], theta_p[i], xi_p + i, eta_p + i);
+        }
+    };
+    if (n <= 8192) {
+        body(0, n);
+    } else {
+        at::parallel_for(0, n, 4096, body);
+    }
+    return {xi_flat.view(phi.sizes()), eta_flat.view(theta.sizes())};
+}
+
 void qsc_s2x(double phi_w, double theta, double* xi, double* eta) {
     if (std::abs(theta - 90.0) < 1e-12) { *xi = 0.0; *eta = 90.0; return; }
     if (std::abs(theta + 90.0) < 1e-12) { *xi = 0.0; *eta = -90.0; return; }

@@ -1427,7 +1427,9 @@ def query_disc(
 
     Performance: when the C++ extension is available on CPU (or CUDA via a host
     copy of ``vec``), queries use **ring pruning** (``O(nside + output)``).
-    MPS stays on-device via the chunked tensor fallback.
+    MPS stays on-device via the chunked tensor fallback. CUDA copies a length-3
+    ``vec`` to host; that copy is O(1) and far below 10% of nside≥512 wall, so
+    the query stays on the CPU kernel.
     """
     _validate_nside(nside)
     fact_i = int(fact)

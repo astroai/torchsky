@@ -106,8 +106,13 @@ float64, MPS float32); there is no fused C++ observed kernel.
 Catalog geometry is `CatalogState`, not `SkyCoord`. See [coordinates.md](coordinates.md).
 GWCS is sampled at calibration time onto `RegularGridTransform2D`; runtime
 never imports `gwcs`. `FrozenDetectorEpochTables.evaluate` / `.inverse` are
-device-native table ops with a Newton residual bound. Live GWCS graphs stay
-out.
+device-native table ops with a Newton residual bound. Optional
+`torchsky.wcs.gwcs_live.freeze_live_gwcs` (the `gwcs` extra) evaluates a live
+graph then freezes; it is not a core import.
+
+CSC CPU uses the WCSLIB float32 Chan–O'Neill polynomial (scalar C Horner).
+CUDA/MPS use ATen `addcmul` FMA. Coupled `-TAB` inverse is correct, not fast.
+`FREQ-GRA` is gated on relative error (float noise on ~1e14 Hz).
 
 ### Spectral And Temporal Axes
 

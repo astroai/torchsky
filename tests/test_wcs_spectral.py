@@ -389,6 +389,10 @@ def test_wcs_spectral_grism_axes_match_astropy(ctype: str) -> None:
 
     np.testing.assert_allclose(world_t.numpy(), world_a, rtol=5e-9, atol=1e-20)
     np.testing.assert_allclose(pix_t.numpy(), pixels, rtol=1e-12, atol=5e-6)
+    if ctype == "FREQ-GRA":
+        # Leftover ~0.6 Hz on ~1e14 Hz is float32 Edlén noise, not 29 Hz.
+        rel = np.max(np.abs(world_t.numpy() - world_a) / np.clip(np.abs(world_a), 1.0, None))
+        assert rel < 1e-11
 
 
 @pytest.mark.parametrize(
@@ -440,6 +444,41 @@ def test_wcs_spectral_velocity_compound_axes_match_astropy(
     assert np.isfinite(world_t.numpy()).all()
     np.testing.assert_allclose(world_t.numpy(), world_a, rtol=1e-11, atol=1e-7)
     np.testing.assert_allclose(pix_t.numpy(), pixels, rtol=1e-11, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "ctype,cunit,crval,cdelt",
+    [
+        ("FREQ-W2F", "Hz", 1.420e9, 1.0e5),
+        ("WAVE-F2W", "m", 0.21, 1.0e-4),
+        ("AWAV-F2A", "m", 5.0e-7, 1.0e-10),
+        ("ENER", "eV", 1.0, 0.01),
+        ("WAVN", "m-1", 1.0e4, 10.0),
+        ("VOPT", "m/s", 1.0e4, 100.0),
+        ("WAVE-V2W", "m", 0.21, 1.0e-4),
+    ],
+)
+def test_paper3_named_algorithm_chains_match_astropy(
+    ctype: str, cunit: str, crval: float, cdelt: float
+) -> None:
+    header = {
+        "NAXIS": 1,
+        "NAXIS1": 64,
+        "CTYPE1": ctype,
+        "CUNIT1": cunit,
+        "CRPIX1": 1.0,
+        "CRVAL1": crval,
+        "CDELT1": cdelt,
+        "RESTFRQ": 1.42040575177e9,
+    }
+    twcs = torchsky.WCS(header)
+    awcs = AstropyWCS(header)
+    pixels = np.array([[0.0], [1.0], [8.0], [16.0]], dtype=np.float64)
+    world_t = twcs.pixel_to_world(torch.from_numpy(pixels), origin=0)
+    world_a = awcs.all_pix2world(pixels, 0)
+    if ctype == "ENER":
+        world_t = world_t * 1.602176634e-19
+    np.testing.assert_allclose(world_t.numpy(), world_a, rtol=5e-9, atol=1e-18)
 
 
 def test_wcs_awav_1d_matches_astropy() -> None:

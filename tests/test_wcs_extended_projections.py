@@ -436,8 +436,7 @@ def test_quadcube_forward_matches_astropy(projection: str, origin: int) -> None:
     assert np.any(valid), f"No finite parity points for {projection}"
     dra = _ra_wrap_delta(ra_t_np[valid], ra_ast[valid])
     ddec = dec_t_np[valid] - dec_ast[valid]
-    # CSC is a polynomial approximation; allow slightly looser forward tol.
-    atol = 5e-4 if projection == "CSC" else 1e-5
+    atol = 1e-10 if projection == "CSC" else 1e-5
     np.testing.assert_allclose(dra, 0.0, atol=atol)
     np.testing.assert_allclose(ddec, 0.0, atol=atol)
 
@@ -458,9 +457,61 @@ def test_quadcube_inverse_matches_astropy(projection: str, origin: int) -> None:
     x_t, y_t = twcs.world_to_pixel(
         torch.from_numpy(ra_valid), torch.from_numpy(dec_valid), origin=origin,
     )
-    atol = 5e-3 if projection == "CSC" else 1e-4
+    atol = 1e-8 if projection == "CSC" else 1e-4
     np.testing.assert_allclose(x_t.cpu().numpy(), x_ast, atol=atol)
     np.testing.assert_allclose(y_t.cpu().numpy(), y_ast, atol=atol)
+
+
+def test_csc_python_matches_fused_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ATen CSC (CUDA/FUSED=0) must match fused C++/WCSLIB, not sit at mas error."""
+    header = _make_header("CSC", cd_scale=0.3)
+    awcs = AstropyWCS(header)
+    x, y = _sample_pixels(header, n_side=15)
+    xt = torch.from_numpy(x)
+    yt = torch.from_numpy(y)
+    monkeypatch.setenv("TORCHSKY_WCS_FUSED", "1")
+    fused = TorchWCS(dict(header))
+    monkeypatch.setenv("TORCHSKY_WCS_FUSED", "0")
+    python = TorchWCS(dict(header))
+    assert fused._can_use_fused_p2w_static
+    assert not python._can_use_fused_p2w_static
+    ra_f, dec_f = fused.pixel_to_world(xt, yt, origin=0)
+    ra_p, dec_p = python.pixel_to_world(xt, yt, origin=0)
+    dra = _ra_wrap_delta(ra_p.numpy(), ra_f.numpy())
+    ddec = dec_p.numpy() - dec_f.numpy()
+    np.testing.assert_allclose(dra, 0.0, atol=1e-12)
+    np.testing.assert_allclose(ddec, 0.0, atol=1e-12)
+    ra_a, dec_a = awcs.all_pix2world(x, y, 0)
+    dra_a = _ra_wrap_delta(ra_p.numpy(), ra_a)
+    ddec_a = dec_p.numpy() - dec_a
+    np.testing.assert_allclose(dra_a, 0.0, atol=1e-10)
+    np.testing.assert_allclose(ddec_a, 0.0, atol=1e-10)
+
+
+def test_csc_aten_cpu_is_not_the_wcslib_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batched CPU ATen Horner is not the fused/WCSLIB floor; scalar C++ is.
+
+    CUDA still uses ATen (no fused CSC kernel). Do not claim CUDA CSC until
+    ``world-cuda`` on a SHA that includes ``wcs_csc_x2s``.
+    """
+    import torchsky.wcs.quadcube as quadcube
+
+    monkeypatch.setenv("TORCHSKY_WCS_FUSED", "0")
+    monkeypatch.setattr(quadcube, "_cpp", None)
+    header = _make_header("CSC", cd_scale=0.3)
+    awcs = AstropyWCS(header)
+    x, y = _sample_pixels(header, n_side=15)
+    python = TorchWCS(dict(header))
+    ra_p, dec_p = python.pixel_to_world(torch.from_numpy(x), torch.from_numpy(y), origin=0)
+    ra_a, dec_a = awcs.all_pix2world(x, y, 0)
+    dra = _ra_wrap_delta(ra_p.numpy(), ra_a)
+    ddec = dec_p.numpy() - dec_a
+    max_err_deg = float(max(np.nanmax(np.abs(dra)), np.nanmax(np.abs(ddec))))
+    # 1 mas = 2.78e-7 deg. Batched CPU SIMD addcmul sits at mas, not 1e-12.
+    assert max_err_deg < 3.0e-6
+    assert max_err_deg > 1.0e-12
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")

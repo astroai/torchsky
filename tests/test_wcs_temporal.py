@@ -394,3 +394,33 @@ def test_convert_time_scale_cuda_matches_cpu() -> None:
     gpu = convert_time_scale(mjd.cuda(), "UTC", "TT")
     assert gpu.device.type == "cuda"
     torch.testing.assert_close(gpu.cpu(), cpu, atol=1e-15, rtol=0.0)
+
+
+@pytest.mark.parametrize(
+    "trefpos,trefdir",
+    [
+        ("TOPOCENTER", None),
+        ("GEOCENTER", None),
+        ("BARYCENTER", "H"),
+        ("HELIOCENTER", "H"),
+        ("EMBARYCENTER", None),
+    ],
+)
+def test_paper4_reference_position_fixtures_are_named(
+    trefpos: str, trefdir: str | None
+) -> None:
+    header: dict[str, float | str] = {
+        "MJDREF": 60000.0,
+        "TIMESYS": "UTC",
+        "TREFPOS": trefpos,
+    }
+    if trefdir is not None:
+        header["TREFDIR"] = trefdir
+    twcs = TemporalWCS(header)
+    assert twcs.trefpos == trefpos
+    assert twcs.trefdir == trefdir
+    mjd = torch.tensor([60000.0], dtype=torch.float64)
+    ra = torch.tensor([120.0], dtype=torch.float64)
+    dec = torch.tensor([30.0], dtype=torch.float64)
+    corr = twcs.apply_corrections(mjd, ra, dec)
+    assert torch.isfinite(corr).all()
