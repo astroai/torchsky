@@ -1,0 +1,11 @@
+{
+  "left_rows": 50000,
+  "right_rows": 50000,
+  "radius_arcsec": 1.0,
+  "layout": "sparse",
+  "torchsky_pairs": 50000,
+  "torchsky_s": 35.694101750152186,
+  "pair_id_parity": true,
+  "fast_s": 0.3107987081166357,
+  "fast_pairs": 50000
+}

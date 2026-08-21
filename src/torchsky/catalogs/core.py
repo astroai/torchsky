@@ -17,7 +17,7 @@ from ..sphere import great_circle_distance
 from ..sphere import healpix as _healpix
 from .index import HealpixIndex
 from .index import candidate_coarse_pixels_for_left_pixel as _candidate_coarse_pixels_for_left_pixel
-from .index import default_nside as _default_healpix_index_nside
+from .index import nside_for_cap as _nside_for_cap
 
 
 def _identity_partition(partition: Any) -> Any:
@@ -186,15 +186,12 @@ def _choose_default_coarse_nside(
     *,
     radius_arcsec: float,
 ) -> int:
-    del left_ra, left_dec
+    del left_ra, left_dec, right_ra, right_dec
     if radius_arcsec <= 0:
-        return 2048
+        raise ValueError("radius_arcsec must be positive")
     if radius_arcsec >= 180.0 * 3600.0:
         return 1
-    # Benchmark-backed selector tuned for the current CPU nested-HEALPix
-    # coarse-index path. Smaller catalogs prefer lower group overhead,
-    # while larger right catalogs benefit from finer coarse partitioning.
-    return _default_healpix_index_nside(int(right_ra.numel()))
+    return _nside_for_cap(math.radians(radius_arcsec / 3600.0))
 
 
 def _build_coarse_healpix_index(
@@ -499,7 +496,7 @@ def _crossmatch_sky_coarse_indexed(
     right_ra: Tensor,
     right_dec: Tensor,
     *,
-    radius_arcsec: float,
+    radius_arcsec: float | Tensor,
     left_chunk_size: int,
     right_chunk_size: int,
     find: str = "best",
@@ -511,13 +508,16 @@ def _crossmatch_sky_coarse_indexed(
         left_points=int(left_ra.numel()),
         right_points=int(right_ra.numel()),
     )
+    radius_left, radius_max = _normalize_radius_arcsec(
+        radius_arcsec, int(left_ra.numel()), device
+    )
     if right_index is None:
         coarse_nside = _choose_default_coarse_nside(
             left_ra,
             left_dec,
             right_ra,
             right_dec,
-            radius_arcsec=radius_arcsec,
+            radius_arcsec=radius_max,
         )
         coarse_index = _build_coarse_healpix_index(
             right_ra, right_dec, coarse_nside=coarse_nside
@@ -529,11 +529,8 @@ def _crossmatch_sky_coarse_indexed(
             right_index = right_index.to(device)
         coarse_index = right_index
         coarse_nside = coarse_index.nside
-    radius_deg = radius_arcsec / 3600.0
-    candidate_radius_rad = math.radians(radius_deg) + (
-        2.0 * _healpix.max_pixrad(coarse_nside, degrees=False)
-    )
-    candidate_cache: dict[int, Tensor] = {}
+    pixrad = _healpix.max_pixrad(coarse_nside, degrees=False)
+    candidate_cache: dict[tuple[int, float], Tensor] = {}
 
     left_hits: list[Tensor] = []
     right_hits: list[Tensor] = []
@@ -547,6 +544,7 @@ def _crossmatch_sky_coarse_indexed(
     ):
         stop = start + left_ra_chunk.shape[0]
         left_abs_chunk = torch.arange(start, stop, dtype=torch.int64, device=device)
+        radius_chunk = radius_left[start:stop]
         left_coarse_pixel = _healpix.ang2pix(
             coarse_nside,
             left_ra_chunk,
@@ -577,8 +575,12 @@ def _crossmatch_sky_coarse_indexed(
             group_ra = left_ra_chunk[rel_sorted]
             group_dec = left_dec_chunk[rel_sorted]
             group_abs = left_abs_chunk[rel_sorted]
-
-            candidate_pixels = candidate_cache.get(coarse_pixel)
+            group_radius = radius_chunk[rel_sorted]
+            cover_arcsec = float(group_radius.max().item())
+            cover_deg = cover_arcsec / 3600.0
+            candidate_radius_rad = math.radians(cover_deg) + (2.0 * pixrad)
+            cache_key = (int(coarse_pixel), cover_arcsec)
+            candidate_pixels = candidate_cache.get(cache_key)
             if candidate_pixels is None:
                 candidate_pixels = _candidate_coarse_pixels_for_left_pixel(
                     coarse_nside,
@@ -586,7 +588,7 @@ def _crossmatch_sky_coarse_indexed(
                     radius_rad=candidate_radius_rad,
                     device=device,
                 )
-                candidate_cache[coarse_pixel] = candidate_pixels
+                candidate_cache[cache_key] = candidate_pixels
 
             candidate_right_idx = coarse_index.lookup(candidate_pixels)
             stats.candidate_groups += 1
@@ -594,9 +596,11 @@ def _crossmatch_sky_coarse_indexed(
             if candidate_right_idx.numel() == 0:
                 continue
 
+            group_radius_deg = group_radius / 3600.0
             if find == "all":
                 group_ra_col = group_ra.unsqueeze(1)
                 group_dec_col = group_dec.unsqueeze(1)
+                radius_col = group_radius_deg.unsqueeze(1)
                 for right_ids in candidate_right_idx.split(right_chunk_size):
                     right_chunk_len = right_ids.shape[0]
                     sep = great_circle_distance(
@@ -608,7 +612,7 @@ def _crossmatch_sky_coarse_indexed(
                     )
                     stats.pairs_evaluated += count * right_chunk_len
                     left_rel, right_rel = torch.nonzero(
-                        sep <= radius_deg, as_tuple=True
+                        sep <= radius_col, as_tuple=True
                     )
                     if left_rel.numel() == 0:
                         continue
@@ -648,7 +652,7 @@ def _crossmatch_sky_coarse_indexed(
                     best_sep = torch.where(improved, cand_sep, best_sep)
                     best_idx = torch.where(improved, right_ids[cand_idx], best_idx)
 
-            mask = best_sep <= radius_deg
+            mask = best_sep <= group_radius_deg
             if bool(mask.any()):
                 left_hits.append(group_abs[mask])
                 right_hits.append(best_idx[mask])
@@ -678,31 +682,34 @@ def crossmatch_sky(
     right_chunk_size: int = 65536,
     find: str = "best",
     right_index: HealpixIndex | None = None,
+    device: torch.device | str | None = None,
 ) -> CrossmatchResult:
-    """Chunked angular crossmatch suitable for catalog refinement stages.
+    """Chunked angular crossmatch on one in-memory tile.
 
     ``find="best"`` returns the nearest right-catalog row per left row.
     ``find="all"`` returns every pair within the radius, ordered by left
     index, separation, then right index.
 
     ``radius_arcsec`` may be a positive scalar or a per-left-row tensor.
-    Coarse declination windows use the per-row radius; a global prune uses
-    the maximum. Pass ``right_index`` to reuse a nested ``HealpixIndex`` on
-    the right catalog (uniform radius only).
+    HEALPix covering uses the per-group maximum; the exact GC test uses the
+    per-row radius. Pass ``right_index`` to reuse a nested ``HealpixIndex``.
+    ``device`` moves inputs onto that device when given.
     """
     left_ra = torch.as_tensor(left_ra_deg, dtype=torch.float64).reshape(-1)
-    device = left_ra.device
+    if device is not None:
+        left_ra = left_ra.to(device=torch.device(device))
+    work_device = left_ra.device
     left_dec = torch.as_tensor(
-        left_dec_deg, dtype=torch.float64, device=device
+        left_dec_deg, dtype=torch.float64, device=work_device
     ).reshape(-1)
     right_ra = torch.as_tensor(
-        right_ra_deg, dtype=torch.float64, device=device
+        right_ra_deg, dtype=torch.float64, device=work_device
     ).reshape(-1)
     right_dec = torch.as_tensor(
-        right_dec_deg, dtype=torch.float64, device=device
+        right_dec_deg, dtype=torch.float64, device=work_device
     ).reshape(-1)
     radius_left, _ = _normalize_radius_arcsec(
-        radius_arcsec, int(left_ra.numel()), device
+        radius_arcsec, int(left_ra.numel()), work_device
     )
     if left_chunk_size <= 0 or right_chunk_size <= 0:
         raise ValueError("chunk sizes must be positive")
@@ -713,22 +720,9 @@ def crossmatch_sky(
     if right_ra.shape != right_dec.shape:
         raise ValueError("right_ra_deg and right_dec_deg must have the same shape")
     if right_ra.numel() == 0 or left_ra.numel() == 0:
-        return _empty_crossmatch(device)
+        return _empty_crossmatch(work_device)
 
-    # Scalar / uniform radius → HEALPix coarse index; varying per-row → dec windows.
-    if bool(torch.all(radius_left == radius_left[0])):
-        return _crossmatch_sky_coarse_indexed(
-            left_ra,
-            left_dec,
-            right_ra,
-            right_dec,
-            radius_arcsec=float(radius_left[0].item()),
-            left_chunk_size=left_chunk_size,
-            right_chunk_size=right_chunk_size,
-            find=find,
-            right_index=right_index,
-        )
-    return _crossmatch_sky_declination_indexed(
+    return _crossmatch_sky_coarse_indexed(
         left_ra,
         left_dec,
         right_ra,
@@ -737,6 +731,7 @@ def crossmatch_sky(
         left_chunk_size=left_chunk_size,
         right_chunk_size=right_chunk_size,
         find=find,
+        right_index=right_index,
     )
 
 
@@ -914,7 +909,6 @@ def _tile_catalog_to_parquet(
     import numpy as np
     import pyarrow as pa
     import pyarrow.parquet as pq
-    from ..sphere import healpix as _healpix
 
     if isinstance(source, (str, Path)):
         source = pa.ipc.open_file(pa.memory_map(str(source), "r")).read_all()
@@ -1035,12 +1029,13 @@ def crossmatch_sky_from_arrow(
     try:
         left_path = Path(tmpdir) / "left.parquet"
         right_path = Path(tmpdir) / "right.parquet"
+        coarse_nside = _nside_for_cap(math.radians(radius_arcsec / 3600.0))
 
         left_pixel_map, _ = _tile_catalog_to_parquet(
             left_source,
             ra_col=left_columns[0],
             dec_col=left_columns[1],
-            coarse_nside=64,
+            coarse_nside=coarse_nside,
             path=left_path,
             batch_size=batch_size,
         )
@@ -1048,7 +1043,7 @@ def crossmatch_sky_from_arrow(
             right_source,
             ra_col=right_columns[0],
             dec_col=right_columns[1],
-            coarse_nside=64,
+            coarse_nside=coarse_nside,
             path=right_path,
             batch_size=batch_size,
         )
@@ -1058,7 +1053,7 @@ def crossmatch_sky_from_arrow(
 
         radius_deg = radius_arcsec / 3600.0
         candidate_radius_rad = math.radians(radius_deg) + (
-            2.0 * _healpix.max_pixrad(64, degrees=False)
+            2.0 * _healpix.max_pixrad(coarse_nside, degrees=False)
         )
 
         left_hits: list[Tensor] = []
@@ -1087,7 +1082,7 @@ def crossmatch_sky_from_arrow(
                 continue
 
             cand_pixels = _candidate_coarse_pixels_for_left_pixel(
-                64, left_pixel, radius_rad=candidate_radius_rad, device=device
+                coarse_nside, left_pixel, radius_rad=candidate_radius_rad, device=device
             )
             relevant_right = set(cand_pixels.tolist()) & right_pixels
             if not relevant_right:

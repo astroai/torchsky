@@ -56,6 +56,16 @@ def unit_xyz_to_lonlat(
     return wrap_longitude(lon, center_deg=wrap_center_deg), lat
 
 
+def chord_radius(angle_rad: Tensor | float) -> Tensor:
+    """Unit-sphere Euclidean chord length ``2 * sin(theta / 2)``.
+
+    A Euclidean ball of this radius on unit vectors is exactly the spherical
+    cap of angular radius ``angle_rad``.
+    """
+    angle = _as_float_tensor(angle_rad)
+    return 2.0 * torch.sin(0.5 * angle)
+
+
 def great_circle_distance(
     lon1_deg: Tensor | float,
     lat1_deg: Tensor | float,
@@ -384,6 +394,7 @@ def remove_monopole_dipole(
 
 
 __all__ = [
+    "chord_radius",
     "fit_monopole_dipole",
     "great_circle_distance",
     "interpolate_wavelength_axis",

@@ -9,6 +9,7 @@ from . import compat
 from . import harmonics
 from . import healpy
 from .core import (
+    chord_radius,
     fit_monopole_dipole,
     great_circle_distance,
     interpolate_wavelength_axis,
@@ -129,6 +130,7 @@ __all__ = [
     "harmonics",
     "healpix",
     "healpy",
+    "chord_radius",
     "convex_polygon_contains",
     "fit_monopole_dipole",
     "great_circle_distance",

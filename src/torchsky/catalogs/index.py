@@ -11,37 +11,100 @@ from torch import Tensor
 from ..sphere import great_circle_distance
 from ..sphere import healpix as _healpix
 
+_MAX_NSIDE = 2048
+_TARGET_POINTS_PER_PIXEL = 64
 
-def default_nside(n_points: int) -> int:
-    """Coarse NSIDE from catalog size. Same bins as the crossmatch prune."""
-    if n_points <= 25_000:
+
+def _work_dtype(device: torch.device) -> torch.dtype:
+    return torch.float32 if device.type == "mps" else torch.float64
+
+
+def nside_for_cap(radius_rad: float, *, max_nside: int = _MAX_NSIDE) -> int:
+    """Coarsest power-of-two NSIDE whose max pixel radius is ``<= radius_rad``.
+
+    If the cap is larger than an nside=1 pixel, return 1. If even ``max_nside``
+    pixels are larger than the cap, return ``max_nside`` (covering stays sound
+    via the ``r + 2ρ`` pad; tiles are just coarser).
+    """
+    if not math.isfinite(radius_rad) or radius_rad <= 0.0:
+        raise ValueError("radius_rad must be finite and positive")
+    _healpix._validate_nside(max_nside)
+    nside = 1
+    while nside < max_nside:
+        if _healpix.max_pixrad(nside, degrees=False) <= radius_rad:
+            return nside
+        nside *= 2
+    return max_nside
+
+
+def default_nside(n_points: int, *, max_nside: int = _MAX_NSIDE) -> int:
+    """NSIDE for an index built without a match radius.
+
+    Targets mean occupancy of about 64 rows per pixel so the bucket array
+    stays comparable to catalog size. Crossmatch uses ``nside_for_cap``.
+    """
+    _healpix._validate_nside(max_nside)
+    if n_points <= 0:
         return 64
-    if n_points <= 90_000:
-        return 128
-    if n_points <= 180_000:
-        return 512
-    if n_points <= 1_000_000:
-        return 1024
-    return 2048
+    # 12 nside^2 pixels; occupancy = n / (12 nside^2) ≈ 64.
+    target_pixels = max(1.0, float(n_points) / float(_TARGET_POINTS_PER_PIXEL))
+    nside = 1
+    while nside * 2 <= max_nside and 12.0 * float(nside * 2) ** 2 <= target_pixels:
+        nside *= 2
+    return nside
 
 
-def candidate_coarse_pixels_for_left_pixel(
-    coarse_nside: int,
-    coarse_pixel: int,
-    *,
+def cap_covering_pixels(
+    nside: int,
+    lon_deg: Tensor | float,
+    lat_deg: Tensor | float,
     radius_rad: float,
-    device: torch.device,
+    *,
+    nest: bool = True,
 ) -> Tensor:
-    """NESTED pixels within ``radius_rad`` of ``coarse_pixel``, plus a pixrad pad."""
-    center_pix = torch.tensor([coarse_pixel], dtype=torch.int64, device=device)
-    pixrad = _healpix.max_pixrad(coarse_nside, degrees=False)
-    hops = max(1, int(math.ceil(radius_rad / max(pixrad, 1e-12)))) + 1
+    """Pixels whose centers lie in the cap of radius ``radius_rad``.
 
+    Small caps expand nested neighbours (``O(hops^2)``). Wide caps use
+    ``query_disc``. Callers that need a sound match covering pass ``r + 2ρ``.
+    """
+    if not math.isfinite(radius_rad) or radius_rad <= 0.0:
+        raise ValueError("radius_rad must be finite and positive")
+    _healpix._validate_nside(nside)
+    lon_t = torch.as_tensor(lon_deg)
+    device = lon_t.device
+    dtype = _work_dtype(device)
+    lon_t = lon_t.to(dtype=dtype).reshape(-1)
+    lat_t = torch.as_tensor(lat_deg, device=device, dtype=dtype).reshape(-1)
+    if lon_t.numel() != 1 or lat_t.numel() != 1:
+        raise ValueError("cap_covering_pixels takes a single center")
+    if radius_rad >= math.pi:
+        npix = int(_healpix.nside2npix(nside))
+        pix = torch.arange(npix, dtype=torch.int64, device=device)
+        if nest:
+            return pix
+        return _healpix.nest2ring(nside, pix)
+
+    pixrad = _healpix.max_pixrad(nside, degrees=False)
+    hops = max(1, int(math.ceil(radius_rad / max(pixrad, 1e-12)))) + 1
+    if hops > 16:
+        x, y, z = _healpix.lonlat_to_xyz(lon_t, lat_t)
+        vec = torch.stack((x.reshape(-1)[0], y.reshape(-1)[0], z.reshape(-1)[0]))
+        return _healpix.query_disc(
+            nside,
+            vec,
+            float(radius_rad),
+            inclusive=False,
+            nest=bool(nest),
+        )
+
+    center_pix = _healpix.ang2pix(
+        nside, lon_t, lat_t, nest=True, lonlat=True
+    ).to(torch.int64).reshape(-1)
     visited = center_pix
     frontier = center_pix
     for _ in range(hops):
         neigh = _healpix.get_all_neighbours(
-            coarse_nside,
+            nside,
             frontier,
             nest=True,
             lonlat=False,
@@ -56,20 +119,37 @@ def candidate_coarse_pixels_for_left_pixel(
         visited = merged
         frontier = neigh
 
-    lon_c, lat_c = _healpix.pix2ang(coarse_nside, center_pix, nest=True, lonlat=True)
-    cand_lon, cand_lat = _healpix.pix2ang(coarse_nside, visited, nest=True, lonlat=True)
+    cand_lon, cand_lat = _healpix.pix2ang(nside, visited, nest=True, lonlat=True)
     sep = great_circle_distance(
-        lon_c.expand_as(cand_lon),
-        lat_c.expand_as(cand_lat),
+        lon_t.expand_as(cand_lon),
+        lat_t.expand_as(cand_lat),
         cand_lon,
         cand_lat,
         degrees=False,
     )
-    return visited[sep <= radius_rad]
+    nest_pix = visited[sep <= radius_rad]
+    if nest:
+        return nest_pix
+    return _healpix.nest2ring(nside, nest_pix)
 
 
-def _work_dtype(device: torch.device) -> torch.dtype:
-    return torch.float32 if device.type == "mps" else torch.float64
+def candidate_coarse_pixels_for_left_pixel(
+    coarse_nside: int,
+    coarse_pixel: int,
+    *,
+    radius_rad: float,
+    device: torch.device,
+) -> Tensor:
+    """NESTED pixels whose centers lie within ``radius_rad`` of ``coarse_pixel``."""
+    center_pix = torch.tensor([coarse_pixel], dtype=torch.int64, device=device)
+    lon_c, lat_c = _healpix.pix2ang(coarse_nside, center_pix, nest=True, lonlat=True)
+    return cap_covering_pixels(
+        coarse_nside,
+        lon_c,
+        lat_c,
+        radius_rad,
+        nest=True,
+    )
 
 
 @dataclass
@@ -243,6 +323,8 @@ class HealpixIndex:
 
 __all__ = [
     "HealpixIndex",
+    "cap_covering_pixels",
     "candidate_coarse_pixels_for_left_pixel",
     "default_nside",
+    "nside_for_cap",
 ]

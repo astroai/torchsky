@@ -55,6 +55,9 @@ def test_canfar_wcs_sphere_runner_contract() -> None:
         "sht-profile",
         "moc",
         "catalog",
+        "catalog-scale",
+        "catalog-scale-1e6",
+        "catalog-scale-1e7",
         "observed",
         "geom-cuda",
         "world-cuda",
@@ -64,6 +67,9 @@ def test_canfar_wcs_sphere_runner_contract() -> None:
     assert "catalog_n1e7.json" in runner
     assert "bench_catalog_compat.py" in runner
     assert "catalog_compat.json" in runner
+    assert "run_catalog_scale_contract.py" in runner
+    assert "catalog_scale_200k_dense.json" in runner
+    assert "catalog_scale_1e7_sparse_best.json" in runner
     assert "vos_upload after_catalog_compat" in runner
     assert "vos_upload after_catalog_n1e6" in runner
     assert "vos_run" in runner
@@ -99,6 +105,8 @@ def test_canfar_wcs_sphere_launcher_payload_has_no_shell_vars() -> None:
     assert "sht" in launcher
     assert "world" in launcher
     assert "world-cuda" in launcher
+    assert "catalog-scale" in launcher
+    assert "catalog-scale-1e7" in launcher
     assert "wcs-spectral" in launcher
     assert "wcs-tabular" in launcher
     fetch = (ROOT / "scripts" / "fetch_canfar_wcs_sphere_run.sh").read_text(

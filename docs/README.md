@@ -36,7 +36,7 @@ validation, and API pointers.
 - [Implicit forward modeling](implicit_forward.md) - multi-survey losses,
   kinematics, `predict_observation_mean`, Charbonnier scaffold.
 - [Catalogs](catalogs.md) - `torchsky.catalogs`, crossmatch, and streaming
-  catalog datasets.
+  catalog datasets. Scale covering: [catalog matching research](research/catalog_matching.md).
 - [Spectral data](spectral.md) - `torchsky.spectral`, spectra, cubes, and
   spectral axes.
 - [ML and runtime](ml.md) - datasets, dataloaders, transforms, caches, and
@@ -72,6 +72,8 @@ contract.
 
 - [Roadmap](roadmap/status.md) - current strategy, domain status, active queue,
   and standing gates.
+- [Catalog matching research](research/catalog_matching.md) - exact S² covering
+  vs GIS / point-cloud / ANN literature; not a public API.
 - [Execution roadmap](roadmap/next.md) - ordered Torchsky map, INR, Power-Foam,
   multi-wavelength depth, and infrastructure task list.
 - [Roadmap history](roadmap/history.md) - maintained record of shipped

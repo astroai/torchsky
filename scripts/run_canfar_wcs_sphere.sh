@@ -23,9 +23,10 @@ esac
 case "${mode}" in
   cpu | cuda | spectral | sphere | sparse | healsparse | spin | geometry | cuhpx | \
   wcs-paper2 | wcs-tpv | wcs-spectral | wcs-tabular | sht-profile | moc | catalog | \
+  catalog-scale | catalog-scale-1e6 | catalog-scale-1e7 | \
   observed | geom-cuda | world-cuda) ;;
   *)
-    echo "unknown mode: ${mode} (expected cpu, cuda, spectral, sphere, sparse, healsparse, spin, geometry, cuhpx, wcs-paper2, wcs-tpv, wcs-spectral, wcs-tabular, sht-profile, moc, catalog, observed, geom-cuda, or world-cuda)" >&2
+    echo "unknown mode: ${mode} (expected cpu, cuda, spectral, sphere, sparse, healsparse, spin, geometry, cuhpx, wcs-paper2, wcs-tpv, wcs-spectral, wcs-tabular, sht-profile, moc, catalog, catalog-scale, catalog-scale-1e6, catalog-scale-1e7, observed, geom-cuda, or world-cuda)" >&2
     exit 2
     ;;
 esac
@@ -453,6 +454,50 @@ case "${mode}" in
       echo "catalog job failures rc=${job_rc}"
       exit "${job_rc}"
     fi
+    ;;
+  catalog-scale)
+    install_env test
+    record_versions test
+    job_rc=0
+    pixi run --manifest-path "${source_root}/pixi.toml" -e test -- \
+      pytest tests/test_catalog_covering.py tests/test_catalog_no_dataframe.py \
+      tests/test_catalogs.py -q --tb=line \
+      --junitxml="${artifact_root}/catalog_scale_pytest.xml" || job_rc=$?
+    vos_upload after_catalog_scale_pytest || echo "after_catalog_scale_pytest VOS upload failed; continuing job" >&2
+    pixi run --manifest-path "${source_root}/pixi.toml" -e test -- \
+      python "${source_root}/scripts/run_catalog_scale_contract.py" \
+      --left-rows 200000 --layout dense --find all --engine-fast \
+      --json-out "${artifact_root}/catalog_scale_200k_dense.json" || job_rc=$?
+    if [[ "${job_rc}" -ne 0 ]]; then
+      echo "catalog-scale job failures rc=${job_rc}"
+      exit "${job_rc}"
+    fi
+    ;;
+  catalog-scale-1e6)
+    install_env test
+    record_versions test
+    job_rc=0
+    pixi run --manifest-path "${source_root}/pixi.toml" -e test -- \
+      python "${source_root}/scripts/run_catalog_scale_contract.py" \
+      --left-rows 1000000 --layout sparse --find best --engine-fast \
+      --json-out "${artifact_root}/catalog_scale_1e6_sparse_best.json" || job_rc=$?
+    vos_upload after_catalog_scale_1e6_sparse || echo "after_catalog_scale_1e6_sparse VOS upload failed; continuing job" >&2
+    pixi run --manifest-path "${source_root}/pixi.toml" -e test -- \
+      python "${source_root}/scripts/run_catalog_scale_contract.py" \
+      --left-rows 1000000 --layout dense --find best --engine-fast \
+      --json-out "${artifact_root}/catalog_scale_1e6_dense_best.json" || job_rc=$?
+    if [[ "${job_rc}" -ne 0 ]]; then
+      echo "catalog-scale-1e6 job failures rc=${job_rc}"
+      exit "${job_rc}"
+    fi
+    ;;
+  catalog-scale-1e7)
+    install_env test
+    record_versions test
+    pixi run --manifest-path "${source_root}/pixi.toml" -e test -- \
+      python "${source_root}/scripts/run_catalog_scale_contract.py" \
+      --left-rows 10000000 --layout sparse --find best --engine-fast \
+      --json-out "${artifact_root}/catalog_scale_1e7_sparse_best.json"
     ;;
   observed)
     install_env test

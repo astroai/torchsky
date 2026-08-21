@@ -36,6 +36,9 @@ subset = cat.take(inside)
   copies rows. `filter_catalog` remains as a convenience.
 
 `from_arrow` / `CatalogStreamDataset` feed tensors into `Catalog`.
+There is no `from_polars` / `to_polars` wrapper; Polars and HATS stay in
+xmatch / torchfits. Scale covering is documented in
+[catalog matching research](research/catalog_matching.md).
 `Catalog.to_state()` is the `CatalogState` used by `torchsky.coords`.
 
 ## Recipes
@@ -79,6 +82,7 @@ for partition in DataLoader(dataset, num_workers=2, batch_size=None):
 
 - `Catalog`
 - `HealpixIndex.build` / `query_disc` / `lookup`
+- `nside_for_cap` / `cap_covering_pixels`
 - `CrossmatchResult`
 - `crossmatch_sky(...)`
 - `crossmatch_sky_streamed` / `crossmatch_sky_from_arrow`
