@@ -1958,7 +1958,8 @@ void wcs_pixel_to_world_fused_cpu(
 
     // CPU-only path: use libtorch intra-op parallel (not OpenMP pragmas) so behavior
     // stays consistent with other torchsky CPU kernels and does not assume GPU.
-    at::parallel_for(0, n, 4096, [&](int64_t begin, int64_t end) {
+    // Skip parallel_for setup below the grain; it loses at N<=~8k vs a serial loop.
+    auto fused_p2w_range = [&](int64_t begin, int64_t end) {
     for (int64_t i = begin; i < end; ++i) {
         // 1. CD Matrix application
         double dx = x_ptr[i] - crpix0;
@@ -2202,7 +2203,12 @@ void wcs_pixel_to_world_fused_cpu(
             ra_ptr[i] = std::fmod(std::atan2(Y, X) * R2D + 360.0, 360.0);
         }
     }
-    });
+    };
+    if (n <= 8192) {
+        fused_p2w_range(0, n);
+    } else {
+        at::parallel_for(0, n, 4096, fused_p2w_range);
+    }
 }
 
 void wcs_world_to_pixel_fused_cpu(
@@ -2288,7 +2294,7 @@ void wcs_world_to_pixel_fused_cpu(
         tpv_n2 = tpv_c2.size(0);
     }
 
-    at::parallel_for(0, n, 4096, [&](int64_t begin, int64_t end) {
+    auto fused_w2p_range = [&](int64_t begin, int64_t end) {
     for (int64_t i = begin; i < end; ++i) {
         // 1. Inverse Spherical Rotation (ra, dec) -> (phi, theta)
         double ra_deg = ra_ptr[i];
@@ -2533,6 +2539,11 @@ void wcs_world_to_pixel_fused_cpu(
         x_ptr[i] = cdi00 * u_deg + cdi01 * v_deg + crpix0;
         y_ptr[i] = cdi10 * u_deg + cdi11 * v_deg + crpix1;
     }
-    });
+    };
+    if (n <= 8192) {
+        fused_w2p_range(0, n);
+    } else {
+        at::parallel_for(0, n, 4096, fused_w2p_range);
+    }
 }
 }
