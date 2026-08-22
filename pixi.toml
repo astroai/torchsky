@@ -248,7 +248,6 @@ platforms = ["linux-64-cuda"]
 
 [feature.cuda.dependencies]
 python = "3.13.*"
-pytorch-gpu = ">=2.13,<2.14"
 cuda-nvcc = "12.9.*"
 cuda-nvrtc-dev = "12.9.*"
 numpy = ">=1.20"
@@ -261,6 +260,7 @@ nanobind = ">=2.10.2"
 
 [feature.cuda.pypi-dependencies]
 torchfits = ">=1.0.0"
+torch = ">=2.13,<2.14"
 
 [feature.smacs.dependencies]
 pillow = ">=10"
