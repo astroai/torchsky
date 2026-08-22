@@ -111,10 +111,10 @@ execute_process(
     OUTPUT_VARIABLE TORCHSKY_BUILD_TORCH_VERSION
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
-if(NOT TORCHSKY_BUILD_TORCH_VERSION MATCHES "^2\\.10([.+]|$)")
+if(NOT TORCHSKY_BUILD_TORCH_VERSION MATCHES "^2\\.13([.+]|$)")
     message(FATAL_ERROR
-        "torchsky requires PyTorch 2.10.x at build time; found ${TORCHSKY_BUILD_TORCH_VERSION}. "
-        "Install 'torch>=2.10,<2.11' before using --no-build-isolation."
+        "torchsky requires PyTorch 2.13.x at build time; found ${TORCHSKY_BUILD_TORCH_VERSION}. "
+        "Install 'torch>=2.13,<2.14' before using --no-build-isolation."
     )
 endif()
 list(APPEND CMAKE_PREFIX_PATH ${TORCH_CMAKE_PREFIX_PATH})
@@ -231,7 +231,7 @@ endif()
 
 # Compiler flags
 target_compile_definitions(_cpp PRIVATE VERSION_INFO="")
-target_compile_definitions(_cpp PRIVATE TORCHSKY_TORCH_ABI="2.10")
+target_compile_definitions(_cpp PRIVATE TORCHSKY_TORCH_ABI="2.13")
 target_compile_features(_cpp PRIVATE cxx_std_17)
 
 if(APPLE)

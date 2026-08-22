@@ -42,7 +42,7 @@ The package uses **scikit-build-core** as the build backend. With default `pip i
 If you install **without** build isolation (`--no-build-isolation`), you must have the backend and build-time deps available in the **same** environment as the interpreter:
 
 ```bash
-python -m pip install "scikit-build-core>=1.0.0" "nanobind>=2.10.2" "torch>=2.10,<2.11" "numpy>=1.20.0"
+python -m pip install "scikit-build-core>=1.0.0" "nanobind>=2.10.2" "torch>=2.13,<2.14" "numpy>=1.20.0"
 ```
 
 Exact pins match `[build-system].requires` in `pyproject.toml`.
