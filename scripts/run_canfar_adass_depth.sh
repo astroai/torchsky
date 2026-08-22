@@ -321,7 +321,7 @@ case "${mode}" in
         --json-out "${module_root}/${FOAM_SHARED_FOAM_NAME:-shared-foam.json}" \
         --markdown-out "${module_root}/${FOAM_SHARED_FOAM_NAME:-shared-foam.md}" \
         --export-dir "${module_root}/products"
-      gate "${module_root}/shared-foam.json"
+      gate "${module_root}/${FOAM_SHARED_FOAM_NAME:-shared-foam.json}"
     done
     ;;
   foam-validation)
@@ -395,7 +395,7 @@ case "${mode}" in
           --json-out "${batch_root}/${VAL_PSF_ARM:+${VAL_PSF_ARM}-}shared-foam.json" \
           --markdown-out "${batch_root}/${VAL_PSF_ARM:+${VAL_PSF_ARM}-}shared-foam.md" \
           --export-dir "${batch_root}/products"
-        gate "${batch_root}/shared-foam.json"
+        gate "${batch_root}/${VAL_PSF_ARM:+${VAL_PSF_ARM}-}shared-foam.json"
       done
     done
     ;;
