@@ -247,7 +247,6 @@ launch_depth() {
     --name "${name}"
     --cpu "${CPU}"
     --memory "${MEMORY}"
-    --gpu 1
     --env "TORCHSKY_COMMIT=${COMMIT}"
     --env "TORCHSKY_VOS_DEST=${vos_dest}"
     --env "CONTAINER_IMAGE=${IMAGE}"
@@ -257,7 +256,13 @@ launch_depth() {
     --env "BACKGROUND_MODEL=${BACKGROUND_MODEL:-plane}"
     --env "MODULES=${MODULES:-a,b}"
     --env "PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-}"
+    --env "TORCHSKY_DEVICE=${TORCHSKY_DEVICE:-}"
   )
+  # MIG slices assert inside the torch caching allocator (torch 2.10);
+  # only take a GPU slot when the operator will actually run on CUDA.
+  if [[ "${TORCHSKY_DEVICE:-auto}" != "cpu" ]]; then
+    create_args+=(--gpu 1)
+  fi
   if [[ -n "${TORCHSKY_GH_TOKEN:-}" ]]; then
     create_args+=(--env "GH_TOKEN=${TORCHSKY_GH_TOKEN}")
   fi
