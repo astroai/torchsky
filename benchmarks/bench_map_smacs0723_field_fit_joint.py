@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import math
 import sys
 import tempfile
@@ -506,9 +507,15 @@ def _initialize_foam_from_band_coadds(
     first_parameter = next(model.parameters(), None)
     if first_parameter is None:
         raise TypeError("model must have parameters")
-    initialization_device = torch.device(
-        "cuda" if torch.cuda.is_available() else first_parameter.device
-    )
+    # TORCHSKY_DEVICE=cpu opts out of CUDA entirely -- e.g. on MIG slices
+    # where the caching allocator's NVML queries can assert (torch 2.10).
+    requested_device = os.environ.get("TORCHSKY_DEVICE", "").strip().lower()
+    if requested_device:
+        initialization_device = torch.device(requested_device)
+    else:
+        initialization_device = torch.device(
+            "cuda" if torch.cuda.is_available() else first_parameter.device
+        )
     model.to(initialization_device)
     sites = getattr(model, "sites", None)
     coefficients = getattr(model, "cell_coefficients", None)
