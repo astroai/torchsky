@@ -225,9 +225,18 @@ def _load_calibrated_operator_models(
             ):
                 raise ValueError(f"invalid {detector}/{role} checkpoint metadata")
             model.load_state_dict(checkpoint["state_dict"])
-            pruning = apply_operator_calibration_pruning(
-                model, group["validation_pruning"]
-            )
+            if isinstance(
+                getattr(model, "encoder", None),
+                AdaptiveSpatioSpectralTemporalEncoder,
+            ):
+                pruning = apply_operator_calibration_pruning(
+                    model, group["validation_pruning"]
+                )
+            else:
+                pruning = {
+                    "pruned_bands": [],
+                    "note": "model has no adaptive gates to prune",
+                }
             _freeze_calibrated_operator_model(
                 model, role=role, intensity_scale=intensity_scale
             )

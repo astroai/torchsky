@@ -555,24 +555,33 @@ def _fit_group(
             )
             for split in ("validation", "test")
         }
-        result["validation_pruning"] = (
-            operator_calibration_validation_pruning_report(
-                _term(
-                    model,
-                    arrays["validation"],
-                    role=role,
-                    name=f"{detector}:{role}:validation",
-                    background_loss_weight=background_loss_weight,
-                ),
-                _term(
-                    model,
-                    arrays["test"],
-                    role=role,
-                    name=f"{detector}:{role}:test",
-                    background_loss_weight=background_loss_weight,
-                ),
+        if isinstance(model, LowRankChromaticPSF):
+            # No adaptive gates to prune on a control-grid chromatic PSF.
+            result["validation_pruning"] = {
+                "schema_version": 1,
+                "selection_split": "validation",
+                "pruned_bands": [],
+                "note": "learned low-rank chromatic PSF has no adaptive gates",
+            }
+        else:
+            result["validation_pruning"] = (
+                operator_calibration_validation_pruning_report(
+                    _term(
+                        model,
+                        arrays["validation"],
+                        role=role,
+                        name=f"{detector}:{role}:validation",
+                        background_loss_weight=background_loss_weight,
+                    ),
+                    _term(
+                        model,
+                        arrays["test"],
+                        role=role,
+                        name=f"{detector}:{role}:test",
+                        background_loss_weight=background_loss_weight,
+                    ),
+                )
             )
-        )
     return result
 
 
