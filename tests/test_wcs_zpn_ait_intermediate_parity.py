@@ -5,7 +5,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
-from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
 
 from torchsky.wcs.core import WCS as TorchWCS
@@ -17,7 +16,7 @@ def _ra_wrap_delta(ra_a: np.ndarray, ra_b: np.ndarray) -> np.ndarray:
 
 def test_ait_intermediate_grid_matches_astropy() -> None:
     """AIT at 512x384 with a denser interior grid than small parity tests."""
-    header = fits.Header()
+    header = {}
     header["NAXIS"] = 2
     header["NAXIS1"] = 512
     header["NAXIS2"] = 384
@@ -61,7 +60,7 @@ def test_ait_intermediate_grid_matches_astropy() -> None:
 
 def test_zpn_intermediate_grid_matches_astropy() -> None:
     """ZPN linear-ish header at 512x384; interior grid away from image borders."""
-    header = fits.Header()
+    header = {}
     header["NAXIS"] = 2
     header["NAXIS1"] = 512
     header["NAXIS2"] = 384
@@ -106,7 +105,7 @@ def test_zpn_intermediate_grid_matches_astropy() -> None:
 
 @pytest.mark.parametrize("origin", [0, 1])
 def test_ait_intermediate_inverse_matches_astropy(origin: int) -> None:
-    header = fits.Header()
+    header = {}
     header["NAXIS"] = 2
     header["NAXIS1"] = 512
     header["NAXIS2"] = 384

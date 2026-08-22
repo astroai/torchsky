@@ -33,7 +33,7 @@ Out of this program: ducc0 internals, lsst.sphgeom, wcslib/pyast/Kapteyn (option
 |------|-------------------|-------------------------|
 | HEALPix pixel + harmonic API | **healpy**, **hpgeom** (strict queries), **astropy-healpix** | `torchsky.sphere.healpix`, `torchsky.sphere.compat`, `torchsky.sphere.healpy` (alias); spectral transforms are torch-native—compare to healpy in tests/benchmarks only |
 | WCS / projections | **Astropy** `astropy.wcs`, FITS WCS | `torchsky.wcs.WCS`, C++/fused paths; parity tests vs Astropy where scoped |
-| FITS I/O & tables | **fitsio**, **Astropy** `io.fits` / tables | [`torchfits`](https://github.com/astroai/torchfits); out of scope for torchsky |
+| FITS I/O & tables | **torchfits** | `torchfits` / `torchsky.table` façade; never `astropy.io.fits` or Python `fitsio` |
 | Spherical geometry / polygons | **spherical_geometry**, **astropy-healpix** (where applicable) | `torchsky.sphere` and `torchsky.sphere.geom`; exact regions and benchmarks vs upstream fixtures |
 | Catalogs / coordinates | **Astropy** `SkyCoord` / ERFA | `torchsky.wcs.CatalogState` and `torchsky.wcs.frames`; see [coordinates.md](coordinates.md). Not a SkyCoord clone. |
 
@@ -88,7 +88,6 @@ cross-package baseline is `torchfits 1.0.0rc4` or newer.
 | Real-data surface | Source | Local coverage | Contract |
 |---|---|---|---|
 | Installed scaled/VLA/WCS FITS fixtures | `astropy` package test data | `tests/test_real_data_validation.py` | adapter-test |
-| Installed compressed image fixture | `fitsio` package test image | `tests/test_real_data_validation.py` | adapter-test |
 | Installed HEALPix weight table | `healpy` package data | `tests/test_real_data_validation.py` | adapter-test |
 | Public sample/reference FITS image | Astropy data server tutorial image | `tests/test_release_smoke.py` when network/fixture access is available | example-smoke |
 

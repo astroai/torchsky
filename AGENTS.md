@@ -21,6 +21,11 @@ operators, scenes, and field models. Exchange tensors, header mappings, table
 batches, and small protocols across this boundary; `torchsky` does not contain
 any FITS/CFITSIO code.
 
+Never import `astropy.io.fits` or Python `fitsio`. Read and write FITS with `torchfits` (or the
+thin `torchsky.table` / `torchsky.io.fits` facades that re-export it). Header
+cards are plain dicts. Astropy WCS is a parity oracle and takes those dicts;
+it is not a FITS I/O layer.
+
 The project should prefer designs that remain viable at survey scale, not just toy examples or notebook-sized inputs.
 The core should not collapse into a thin wrapper around legacy astronomy packages.
 Geometric primitives, mapmaking, and cross-wavelength field representations are central building blocks, not side surfaces.
@@ -68,7 +73,23 @@ Use `torchfits` at file boundaries and keep it behind optional adapters or
 application/CLI layers. Core geometry, map, scene, and field code should accept
 in-memory tensors and metadata rather than opening FITS files.
 
-Use **astropy**, **Python fitsio**, **healpy**, **hpgeom**, **healsparse**, **astropy-healpix**, **spherical_geometry**, **pandas**, etc., only in:
+Never import `astropy.io.fits` or Python `fitsio`. Read and write FITS with
+`torchfits` (or the thin `torchsky.table` / `torchsky.io.fits` facades). Header
+cards are plain dicts. Astropy WCS is a parity oracle and takes those dicts;
+it is not a FITS I/O layer. Do not add new `astropy.io.fits` or `fitsio` imports
+in tests, benchmarks, scripts, or examples. Leftover map/SMACS MEF fixture
+writers still need migrating off `astropy.io.fits`; do not copy them.
+
+Eat our own dog food: `src/torchsky` and examples compute with torchsky (and
+`torchfits` at file boundaries). Do not import `astropy.wcs`, `healpy`,
+`hpgeom`, `healsparse`, `mocpy`, or `spherical_geometry` as production backends.
+Those packages belong in **tests** (oracles) and **benchmarks** (baselines).
+`to_exact_region` defaults to the native backend; pass
+`backend="spherical-geometry"` only in oracle tests. Optional extras
+(`astropy_interop`, `gwcs_live`, JPL/TLE) stay opt-in and are not imported by
+default `torchsky.wcs`.
+
+Use **astropy** (except `astropy.io.fits`; never Python `fitsio`), **healpy**, **hpgeom**, **healsparse**, **astropy-healpix**, **spherical_geometry**, **pandas**, etc., only in:
 
 - **`tests/`** (fixtures, parity, regression),
 - **`benchmarks/`**,
@@ -139,6 +160,7 @@ file-cache, and FITS-table implementations belong in `torchfits`.
 
 - FITS table reads, writes, scans, mutation, Arrow conversion, and predicate
   pushdown belong to `torchfits.table`.
+- Do not import `astropy.io.fits`, do not import Python `fitsio`, and do not call Astropy `Table.write(..., format="fits")`.
 - `torchsky.catalogs` may consume tensor/Arrow batches and own sky-domain
   partitioning, crossmatch, spherical indexing, and catalog modelling.
 - Do not restore `torchsky.table` as a second implementation. Any temporary

@@ -905,7 +905,7 @@ def test_write_export_products_writes_fits_and_png() -> None:
             support_mask=support_mask,
             source_mask=source_mask,
         )
-        out = Path(tmp) / "f090w" / "spectral_basis_field"
+        out = Path(tmp) / "fitted_gaussian" / "f090w" / "spectral_basis_field"
         assert (out / "reference.fits").exists()
         assert (out / "prediction.fits").exists()
         assert (out / "residual.fits").exists()

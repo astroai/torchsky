@@ -39,7 +39,7 @@ class _FakeResponse:
 def test_download_spec_retries_transient_urlerror(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    spec = UpdecWebbFile("F277W", 0, "test.fits.fz", 123)
+    spec = UpdecWebbFile("F277W", "b", 0, "test.fits.fz", 123)
     attempts = {"count": 0}
 
     def _fake_urlopen(url: str, timeout: float):
@@ -61,7 +61,7 @@ def test_download_spec_retries_transient_urlerror(
 def test_download_spec_raises_after_final_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    spec = UpdecWebbFile("F277W", 0, "test.fits.fz", 123)
+    spec = UpdecWebbFile("F277W", "b", 0, "test.fits.fz", 123)
 
     monkeypatch.setattr(
         "download_updec_webb.urlopen",

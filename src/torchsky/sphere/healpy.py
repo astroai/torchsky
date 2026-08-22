@@ -5,7 +5,7 @@ Use::
     from torchsky.sphere import healpy as hp
 
 as the torch-native analogue of ``import healpy as hp``. This is the HEALPix slice
-of torchsky’s wider compatibility story (Astropy, fitsio, spherical_geometry, …);
+of torchsky’s wider compatibility story (Astropy, spherical_geometry, …);
 see ``docs/compatibility.md``. All symbols come from :mod:`torchsky.sphere.compat`.
 """
 

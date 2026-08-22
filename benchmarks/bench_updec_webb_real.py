@@ -291,8 +291,8 @@ def main() -> int:
     bands = [band.strip().upper() for band in args.bands.split(",") if band.strip()]
     rows: list[dict[str, Any]] = []
     for band in bands:
-        iter0_spec = UPDEC_WEBB_FILES[(band, 0)]
-        iter10_spec = UPDEC_WEBB_FILES[(band, 10)]
+        iter0_spec = UPDEC_WEBB_FILES[(band, "b", 0)]
+        iter10_spec = UPDEC_WEBB_FILES[(band, "b", 10)]
         iter0_path = args.input_dir / iter0_spec.filename
         iter10_path = args.input_dir / iter10_spec.filename
         if args.download:

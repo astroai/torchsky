@@ -1,6 +1,5 @@
 import pytest
 import torch
-from astropy.io import fits
 
 from torchsky.wcs.core import WCS as TorchWCS
 
@@ -21,8 +20,8 @@ def _make_header(
     crval2: float = 0.0,
     naxis1: int = 256,
     naxis2: int = 256,
-) -> fits.Header:
-    header = fits.Header()
+) -> dict:
+    header = {}
     header["NAXIS"] = 2
     header["NAXIS1"] = naxis1
     header["NAXIS2"] = naxis2

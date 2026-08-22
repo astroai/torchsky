@@ -11,12 +11,79 @@ from torchsky.map.operators.noise import (
     PipelineVarianceCalibration,
     StructuredDetectorNoise,
     fft_whiten_rows,
+    gaussian_nll,
     gaussian_student_t_mixture_nll,
     gaussian_student_t_mixture_responsibilities,
     one_over_f_row_psd,
     pipeline_variance,
+    poisson_gaussian_cdf,
+    poisson_gaussian_nll,
     profile_amplifier_row_offsets,
+    student_t_nll,
 )
+
+
+def test_normalized_detector_laws_match_torch_distributions() -> None:
+    observed = torch.tensor([-0.4, 0.2, 1.7], dtype=torch.float64)
+    expected = torch.tensor([0.1, -0.2, 1.0], dtype=torch.float64)
+    variance = torch.tensor([0.5, 1.5, 0.8], dtype=torch.float64)
+    torch.testing.assert_close(
+        -gaussian_nll(observed, expected, variance, reduction="none"),
+        torch.distributions.Normal(expected, variance.sqrt()).log_prob(observed),
+    )
+
+    scale = variance.sqrt()
+    dof = torch.tensor(4.5, dtype=torch.float64)
+    torch.testing.assert_close(
+        -student_t_nll(observed, expected, scale, dof, reduction="none"),
+        torch.distributions.StudentT(dof, expected, scale).log_prob(observed),
+    )
+
+
+def test_poisson_gaussian_is_normalized_and_differentiable() -> None:
+    rate = torch.tensor(2.3, dtype=torch.float64, requires_grad=True)
+    read_var = torch.tensor(0.36, dtype=torch.float64, requires_grad=True)
+    grid = torch.linspace(-8.0, 18.0, 26001, dtype=torch.float64)
+    density = torch.exp(
+        -poisson_gaussian_nll(
+            grid,
+            rate.expand_as(grid),
+            read_var.expand_as(grid),
+            reduction="none",
+        )
+    )
+    integral = torch.trapezoid(density, grid)
+    torch.testing.assert_close(
+        integral,
+        torch.tensor(1.0, dtype=integral.dtype),
+        atol=2e-6,
+        rtol=0.0,
+    )
+    loss = poisson_gaussian_nll(torch.tensor(2.0), rate, read_var)
+    loss.backward()
+    assert rate.grad is not None and torch.isfinite(rate.grad)
+    assert read_var.grad is not None and torch.isfinite(read_var.grad)
+
+
+def test_poisson_gaussian_fails_closed_above_bounded_support() -> None:
+    with pytest.raises(ValueError, match="max_terms"):
+        poisson_gaussian_nll(
+            torch.tensor(1.0),
+            torch.tensor(1.0e6),
+            torch.tensor(1.0),
+            max_terms=32,
+        )
+
+
+def test_poisson_gaussian_cdf_is_monotone_normalized_and_differentiable() -> None:
+    rate = torch.tensor(2.3, dtype=torch.float64, requires_grad=True)
+    grid = torch.linspace(-8.0, 18.0, 1001, dtype=torch.float64)
+    cdf = poisson_gaussian_cdf(grid, rate.expand_as(grid), torch.full_like(grid, 0.36))
+    assert bool(torch.all(cdf[1:] >= cdf[:-1]))
+    assert float(cdf[0].detach()) < 1e-10
+    assert float(cdf[-1].detach()) > 1.0 - 1e-10
+    cdf[500].backward()
+    assert rate.grad is not None and torch.isfinite(rate.grad)
 
 
 @pytest.mark.parametrize("dtype", (torch.float32, torch.float64))

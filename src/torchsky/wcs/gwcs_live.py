@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
+import importlib.util
 from typing import Any, Callable
 
 from .gwcs_sampling import (
     GWCSGridSamplingResult,
     sample_gwcs_detector_to_tangent,
 )
-
-try:
-    import gwcs as _gwcs_mod
-except ImportError:  # pragma: no cover - optional extra
-    _gwcs_mod = None
 
 
 def freeze_live_gwcs(
@@ -25,7 +21,7 @@ def freeze_live_gwcs(
     Requires the ``gwcs`` extra. The production runtime path remains
     ``sample_gwcs_detector_to_tangent`` with a callable and no ``import gwcs``.
     """
-    if _gwcs_mod is None:
+    if importlib.util.find_spec("gwcs") is None:
         raise ImportError("freeze_live_gwcs requires gwcs; install torchsky[gwcs]")
 
     def _reference(x: Any, y: Any) -> Any:

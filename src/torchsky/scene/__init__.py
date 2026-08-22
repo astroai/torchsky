@@ -39,6 +39,8 @@ from ..map.product import (
     render_field_product,
     stack_map_product,
 )
+from ..map.operators.resampling import sample_image_plane_batched_channels
+from ..map.splat import splat_to_native
 from ..map.scenes import (
     ContinuousFieldModel,
     DiscreteTargetImage,
@@ -188,6 +190,8 @@ __all__ = [
     "render_field_observation_distribution",
     "render_field_product",
     "scale_observation_for_rest_frame_scene",
+    "sample_image_plane_batched_channels",
+    "splat_to_native",
     "stack_map_product",
     "target_from_header",
     "target_from_product",

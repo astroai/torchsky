@@ -3,12 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
+from astropy.utils.data import get_pkg_data_contents
+from astropy.wcs import WCS as AstropyWCS
 
-fits = pytest.importorskip("astropy.io.fits")
-AstropyWCS = pytest.importorskip("astropy.wcs").WCS
-get_pkg_data_contents = pytest.importorskip("astropy.utils.data").get_pkg_data_contents
-
-from torchsky.wcs.core import WCS as TorchWCS  # noqa: E402
+from torchfits.header_parser import fast_parse_header
+from torchsky.wcs.core import WCS as TorchWCS
 
 
 FIXTURE_CASES: dict[str, np.ndarray] = {
@@ -26,8 +25,12 @@ def _load_wcs_pair(name: str) -> tuple[AstropyWCS, dict[str, object]]:
         f"data/{name}", package="astropy.wcs.tests", encoding="binary"
     )
     awcs = AstropyWCS(raw_header)
-    header = fits.Header.fromstring(raw_header, sep="")
-    return awcs, dict(header)
+    text = (
+        raw_header.decode("ascii")
+        if isinstance(raw_header, (bytes, bytearray))
+        else str(raw_header)
+    )
+    return awcs, fast_parse_header(text)
 
 
 def _ra_wrap_delta_deg(a: np.ndarray, b: np.ndarray) -> np.ndarray:

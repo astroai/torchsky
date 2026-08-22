@@ -231,7 +231,7 @@ Each case measures **median wall-clock time** over multiple repetitions (typical
 
 Fairness controls:
 
-- **mmap parity** &mdash; rows where libraries have mismatched mmap behavior are marked `SKIPPED` and excluded from rankings. In the current suite fitsio is skipped in FITS I/O and table I/O because its mmap mode is not independently controllable.
+- **mmap parity** &mdash; rows where libraries have mismatched mmap behavior are marked `SKIPPED` and excluded from rankings. Python `fitsio` is not a torchsky comparator; FITS I/O vs `fitsio` is owned by `torchfits`.
 - **Comparator provenance** &mdash; sphere-domain comparators must come from official released packages, not local or editable installs.
 - **Warm cache** &mdash; FITS benchmarks use configurable file/handle caching (default: `cache=10`, `handle_cache=16`). Cold-start variants available via `--profile cold`.
 
@@ -713,7 +713,7 @@ Run ID: `20260318_083620`. Run date: 2026-03-18. Profile: `user`. Platform: macO
 
 **Large-N leadership** (N &ge; 100K): 100% across all domains. Zero large-N deficits.
 
-Note: fitsio is present in the suite but excluded from FITS and table rankings due to mmap fairness enforcement (its mmap mode is not independently controllable). The comparable pairs are torchsky vs astropy.
+Note: Python `fitsio` is not a torchsky peer. Historical FITS/table rankings vs `fitsio` live in `torchfits`. The torchsky compute comparators are vs astropy WCS / SkyCoord and sphere libraries.
 
 ---
 

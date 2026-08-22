@@ -14,7 +14,6 @@ from typing import Any
 
 import numpy as np
 import torch
-from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,12 +30,12 @@ from torchsky.wcs.core import WCS as TorchWCS  # noqa: E402
 @dataclass(frozen=True)
 class CaseSpec:
     name: str
-    header: fits.Header
+    header: dict
     description: str
 
 
-def _tpv_nonlinear_header() -> fits.Header:
-    header = fits.Header()
+def _tpv_nonlinear_header() -> dict:
+    header = dict()
     header["NAXIS"] = 2
     header["NAXIS1"] = 2048
     header["NAXIS2"] = 1536
@@ -69,7 +68,7 @@ def _tpv_nonlinear_header() -> fits.Header:
     return header
 
 
-def _tpv_affine_header() -> fits.Header:
+def _tpv_affine_header() -> dict:
     header = _tpv_nonlinear_header()
     for key in list(header.keys()):
         if key.startswith("PV1_") or key.startswith("PV2_"):
@@ -98,7 +97,7 @@ CASES: dict[str, CaseSpec] = {
 
 
 def _sample_pixels(
-    header: fits.Header, n_points: int, rng: np.random.Generator
+    header: dict, n_points: int, rng: np.random.Generator
 ) -> tuple[np.ndarray, np.ndarray]:
     width = int(header["NAXIS1"])
     height = int(header["NAXIS2"])
@@ -144,7 +143,7 @@ def _error_summary(
 
 def _bench_torchsky_method(
     *,
-    header: fits.Header,
+    header: dict,
     ra_t: torch.Tensor,
     dec_t: torch.Tensor,
     x_true: np.ndarray,

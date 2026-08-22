@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Launch CANFAR headless CPU and/or CUDA jobs for torchsky WCS + sphere.
-# Usage: launch_canfar_wcs_sphere.sh [cpu|cuda|all|suite|sht|spectral|sparse|healsparse|spin|cuhpx|wcs-paper2|wcs-tpv|wcs-spectral|wcs-tabular|sht-profile|moc|catalog|catalog-scale|catalog-scale-1e6|catalog-scale-1e7|catalog-scale-real|observed|geom-cuda|world-cuda|world]
+# Usage: launch_canfar_wcs_sphere.sh [cpu|cuda|all|suite|sht|spectral|sparse|healsparse|spin|cuhpx|wcs-paper2|wcs-tpv|wcs-spectral|wcs-tabular|sht-profile|moc|catalog|catalog-scale|catalog-scale-1e6|catalog-scale-1e7|catalog-scale-real|observed|geom-cuda|world-cuda|world|depth]
 #
 # Jobs clone TORCHSKY_COMMIT from GitHub (must already be pushed), run
 # scripts/run_canfar_wcs_sphere.sh from that clone, write
@@ -20,9 +20,9 @@ case "${MODE}" in
   cpu | cuda | all | suite | many | spectral | sparse | healsparse | spin | sht | cuhpx | \
   wcs-paper2 | wcs-tpv | wcs-spectral | wcs-tabular | sht-profile | moc | catalog | \
   catalog-scale | catalog-scale-1e6 | catalog-scale-1e7 | catalog-scale-real | \
-  observed | geom-cuda | world-cuda | world) ;;
+  observed | geom-cuda | world-cuda | world | depth) ;;
   *)
-    echo "usage: $0 [cpu|cuda|all|suite|sht|spectral|sparse|healsparse|spin|cuhpx|wcs-paper2|wcs-tpv|wcs-spectral|wcs-tabular|sht-profile|moc|catalog|catalog-scale|catalog-scale-1e6|catalog-scale-1e7|catalog-scale-real|observed|geom-cuda|world-cuda|world]" >&2
+    echo "usage: $0 [cpu|cuda|all|suite|sht|spectral|sparse|healsparse|spin|cuhpx|wcs-paper2|wcs-tpv|wcs-spectral|wcs-tabular|sht-profile|moc|catalog|catalog-scale|catalog-scale-1e6|catalog-scale-1e7|catalog-scale-real|observed|geom-cuda|world-cuda|world|depth]" >&2
     exit 2
     ;;
 esac
@@ -217,4 +217,68 @@ if [[ "${MODE}" == "world" ]]; then
   launch_one catalog "" "catalog-${STAMP}"
   launch_one observed "" "observed-${STAMP}"
   launch_one world-cuda 1 "world-cuda-${STAMP}"
+fi
+
+# depth: autonomous deep-field reconstruction chain (run_canfar_adass_depth.sh
+# full). Env FIELD_MODELS / PSF_MODEL / BACKGROUND_MODEL / MODULES /
+# CONTAINER_IMAGE are forwarded; exact-SHA checkout and image enforcement stay
+# in the runner.
+launch_depth() {
+  local run_id="depth-${STAMP}"
+  local vos_dest="vos:sfabbro/torchsky-runs/${run_id}"
+  local name
+  name="$(printf 'torchsky-depth-%s' "${STAMP}" | tr '_.' '--' | tr -cd '[:alnum:]-')"
+  local local_out="${ROOT_DIR}/benchmarks_results/canfar_${run_id}"
+  mkdir -p "${local_out}"
+
+  local src="/scratch/${run_id}-src"
+  local remote_plain="PATH=/opt/astroai/venv/cadc/bin:/opt/astroai/bin:/usr/local/bin:/usr/bin:/bin; gh repo clone sfabbro/torchsky ${src} -- --filter=blob:none; git -C ${src} checkout --detach ${COMMIT}; bash ${src}/scripts/run_canfar_adass_depth.sh ${DEPTH_MODE:-full} ${run_id}"
+  local remote_cmd
+  remote_cmd="$(printf '%s' "${remote_plain}" | tr ' ' '\t')"
+  case "${remote_cmd}" in
+    *'$'* | *'&'* | *' '*)
+      echo "refusing canfar payload with \$, &, or spaces: ${remote_plain}" >&2
+      exit 2
+      ;;
+  esac
+
+  local create_args=(
+    create headless "${IMAGE}"
+    --name "${name}"
+    --cpu "${CPU}"
+    --memory "${MEMORY}"
+    --gpu 1
+    --env "TORCHSKY_COMMIT=${COMMIT}"
+    --env "TORCHSKY_VOS_DEST=${vos_dest}"
+    --env "CONTAINER_IMAGE=${IMAGE}"
+    --env "PYTHONUNBUFFERED=1"
+    --env "FIELD_MODELS=${FIELD_MODELS:-spectral_power_foam}"
+    --env "PSF_MODEL=${PSF_MODEL:-fitted_gaussian}"
+    --env "BACKGROUND_MODEL=${BACKGROUND_MODEL:-plane}"
+    --env "MODULES=${MODULES:-a,b}"
+  )
+  if [[ -n "${TORCHSKY_GH_TOKEN:-}" ]]; then
+    create_args+=(--env "GH_TOKEN=${TORCHSKY_GH_TOKEN}")
+  fi
+
+  echo "launching mode=depth name=${name} commit=${COMMIT} vos=${vos_dest} field_models=${FIELD_MODELS:-spectral_power_foam} psf=${PSF_MODEL:-fitted_gaussian} modules=${MODULES:-a,b}"
+  local create_log="${local_out}/create.log"
+  if [[ "${TORCHSKY_CANFAR_DRY_RUN:-0}" == "1" ]]; then
+    echo "dry-run: canfar create headless ${IMAGE} --name ${name} --gpu 1 depth-env"
+    echo "${run_id}" > "${local_out}/run_id.txt"
+    return 0
+  fi
+  set +o pipefail
+  canfar "${create_args[@]}" -- bash -c "${remote_cmd}" 2>&1 | tee "${create_log}"
+  local create_rc=${PIPESTATUS[0]}
+  set -o pipefail
+  if [[ "${create_rc}" -ne 0 ]]; then
+    echo "canfar create failed (rc=${create_rc}); see ${create_log}" >&2
+    exit 1
+  fi
+  echo "${run_id}" > "${local_out}/run_id.txt"
+}
+
+if [[ "${MODE}" == "depth" ]]; then
+  launch_depth
 fi

@@ -1,13 +1,12 @@
 import numpy as np
 import torch
-from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
 
 from torchsky.wcs.core import WCS
 
 
-def _header() -> fits.Header:
-    header = fits.Header()
+def _header() -> dict:
+    header = {}
     header["NAXIS"] = 2
     header["NAXIS1"] = 360
     header["NAXIS2"] = 180

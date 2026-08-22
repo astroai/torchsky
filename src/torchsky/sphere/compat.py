@@ -6,7 +6,7 @@ compatibility story). torchsky also documents migration paths vs **Astropy**,
 
 This module implements healpy’s NumPy-oriented HEALPix API with
 :class:`torch.Tensor` inputs/outputs and **torchsky-native** kernels (no optional
-``hpgeom`` / Python ``fitsio`` dispatch).
+``hpgeom`` dispatch).
 
 **Scope**
 

@@ -51,10 +51,13 @@ def main() -> int:
     bands = _parse_csv(args.bands)
     iterations = [int(value) for value in _parse_csv(args.updec_iterations)]
 
-    updec_specs = resolve_specs(bands, iterations)
+    updec_specs = resolve_specs(bands, iterations, modules=(args.module,))
     if args.list:
         for spec in updec_specs:
-            print(f"UPDEC {spec.band} iter{spec.iteration} {spec.filename}")
+            print(
+                f"UPDEC {spec.band}{spec.module} iter{spec.iteration} "
+                f"{spec.filename}"
+            )
         for band in bands:
             max_exposures = (
                 args.long_band_max_exposures

@@ -769,7 +769,7 @@ class MOC:
     def write_fits(self, filename: str, overwrite: bool = False) -> None:
         """Write the MOC to a FITS file following the IVOA MOC standard.
 
-        Uses :func:`torchsky.io.write` (CFITSIO-backed) — no Python ``fitsio`` dependency.
+        Uses :func:`torchsky.io.write` (torchfits) — no Python ``fitsio``.
         """
         from ..io import write
 

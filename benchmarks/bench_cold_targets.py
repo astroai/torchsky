@@ -9,11 +9,12 @@ import time
 from pathlib import Path
 from statistics import mean, stdev
 
-import fitsio
 import numpy as np
-from astropy.io import fits as astropy_fits
+import torch
+import torchfits
 
 import torchsky
+from torchsky.hdu import HDUList, Header, TensorHDU
 
 
 def _time(fn, warmup: int, runs: int):
@@ -38,17 +39,21 @@ def _write_file(path: Path, shape, dtype, with_wcs: bool = False):
     else:
         data = np.random.randn(*shape).astype(dtype)
 
-    hdu = astropy_fits.PrimaryHDU(data)
+    header = None
     if with_wcs:
-        hdu.header["CRPIX1"] = shape[-1] / 2
-        hdu.header["CRPIX2"] = shape[0] / 2
-        hdu.header["CRVAL1"] = 180.0
-        hdu.header["CRVAL2"] = 0.0
-        hdu.header["CDELT1"] = -0.0001
-        hdu.header["CDELT2"] = 0.0001
-        hdu.header["CTYPE1"] = "RA---TAN"
-        hdu.header["CTYPE2"] = "DEC--TAN"
-    hdu.writeto(path, overwrite=True)
+        header = {
+            "CRPIX1": shape[-1] / 2,
+            "CRPIX2": shape[0] / 2,
+            "CRVAL1": 180.0,
+            "CRVAL2": 0.0,
+            "CDELT1": -0.0001,
+            "CDELT2": 0.0001,
+            "CTYPE1": "RA---TAN",
+            "CTYPE2": "DEC--TAN",
+        }
+    torchfits.write(
+        str(path), torch.from_numpy(data), header=header, overwrite=True
+    )
 
 
 def main():
@@ -88,13 +93,7 @@ def main():
             "torchsky_read_cold_nommap": lambda p=path: torchsky.read(
                 str(p), mmap=False, cache_capacity=0
             ),
-            "torchsky_cpp_read_full": lambda p=path: torchsky.cpp.read_full(
-                str(p), 0, True
-            ),
-            "torchsky_cpp_read_full_nocache": lambda p=path: (
-                torchsky.cpp.read_full_nocache(str(p), 0, True)
-            ),
-            "fitsio_read": lambda p=path: fitsio.read(str(p)),
+            "torchfits_read": lambda p=path: torchfits.read(str(p)),
         }
 
         results = []
@@ -102,40 +101,43 @@ def main():
             m, s = _time(fn, warmup=args.warmup, runs=args.runs)
             results.append((mname, m, s))
         results.sort(key=lambda x: x[1])
-        best_m, best_t, _ = results[0]
+        best_t = results[0][1]
         for i, (mname, m, s) in enumerate(results, start=1):
             ratio = m / best_t if best_t else float("inf")
             print(f"{i:2d}. {mname:32s}: {m:.6f}s ± {s:.6f}s  ({ratio:.2f}x best)")
 
-    # Dedicated MEF medium-style benchmark (ext=1 image read)
     print("\nmef_medium (ext=1)")
     print("-" * 80)
     mef_path = base / "mef_medium.fits"
-    hdus = [astropy_fits.PrimaryHDU(np.random.randn(256, 256).astype(np.float32))]
+    hdus = [
+        TensorHDU(
+            data=torch.from_numpy(np.random.randn(256, 256).astype(np.float32)),
+            header=Header({"SIMPLE": True}),
+        )
+    ]
     for i in range(8):
         hdus.append(
-            astropy_fits.ImageHDU(np.random.randn(256, 256).astype(np.float32) + i)
+            TensorHDU(
+                data=torch.from_numpy(
+                    np.random.randn(256, 256).astype(np.float32) + i
+                ),
+                header=Header({"XTENSION": "IMAGE"}),
+            )
         )
-    astropy_fits.HDUList(hdus).writeto(mef_path, overwrite=True)
+    HDUList(hdus).write(str(mef_path), overwrite=True)
 
     mef_methods = {
         "torchsky_read_cold_ext1": lambda p=mef_path: torchsky.read(
             str(p), hdu=1, mmap=True, cache_capacity=0
         ),
-        "torchsky_cpp_read_full_ext1": lambda p=mef_path: torchsky.cpp.read_full(
-            str(p), 1, True
-        ),
-        "torchsky_cpp_read_nocache_ext1": lambda p=mef_path: (
-            torchsky.cpp.read_full_nocache(str(p), 1, True)
-        ),
-        "fitsio_read_ext1": lambda p=mef_path: fitsio.read(str(p), ext=1),
+        "torchfits_read_ext1": lambda p=mef_path: torchfits.read(str(p), hdu=1),
     }
     results = []
     for mname, fn in mef_methods.items():
         m, s = _time(fn, warmup=args.warmup, runs=args.runs)
         results.append((mname, m, s))
     results.sort(key=lambda x: x[1])
-    best_m, best_t, _ = results[0]
+    best_t = results[0][1]
     for i, (mname, m, s) in enumerate(results, start=1):
         ratio = m / best_t if best_t else float("inf")
         print(f"{i:2d}. {mname:32s}: {m:.6f}s ± {s:.6f}s  ({ratio:.2f}x best)")

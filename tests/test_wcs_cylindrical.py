@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 import torch
-from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
 
 from torchsky.wcs.core import WCS
@@ -11,8 +10,8 @@ from torchsky.wcs.cylindrical import project_cylindrical, deproject_cylindrical
 CYLINDRICAL = ("CEA", "CAR", "MER", "CYP")
 
 
-def _header(proj: str) -> fits.Header:
-    header = fits.Header()
+def _header(proj: str) -> dict:
+    header = {}
     header["NAXIS"] = 2
     header["NAXIS1"] = 360
     header["NAXIS2"] = 180

@@ -52,9 +52,10 @@ policy, INR/latents, and scene-field models stay in those packages.
   geometry/WCS extensions.
 - Do not duplicate FITS/HDU/table/cache implementations or link CFITSIO; those
   belong to `torchfits`.
-- Use Astropy, fitsio, healpy, hpgeom, healsparse, reproject, drizzle, and
+- Use Astropy, healpy, hpgeom, healsparse, reproject, drizzle, and
   similar packages as references, fixtures, comparators, or optional
-  compatibility targets, not as hidden core backends.
+  compatibility targets, not as hidden core backends. Never Python
+  `fitsio` or `astropy.io.fits`; FITS I/O is `torchfits`.
 - Prefer torch-native tensor paths that preserve differentiability and device
   placement.
 - Prefer survey-scale designs: chunking, streaming, tiling, sparse

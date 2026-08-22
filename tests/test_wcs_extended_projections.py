@@ -7,7 +7,6 @@ for forward (pixel->world) and inverse (world->pixel) directions.
 import numpy as np
 import pytest
 import torch
-from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
 
 from torchsky.wcs.core import WCS as TorchWCS
@@ -23,8 +22,8 @@ def _make_header(
     pv2_1: float | None = None,
     pv2_2: float | None = None,
     cd_scale: float = 0.01,
-) -> fits.Header:
-    header = fits.Header()
+) -> dict:
+    header = {}
     header["NAXIS"] = 2
     header["NAXIS1"] = naxis1
     header["NAXIS2"] = naxis2
@@ -50,7 +49,7 @@ def _make_header(
 
 
 def _sample_pixels(
-    header: fits.Header,
+    header: dict,
     n_side: int = 7,
 ) -> tuple[np.ndarray, np.ndarray]:
     x = np.linspace(96.0, header["NAXIS1"] - 96.0, n_side, dtype=np.float64)

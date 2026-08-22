@@ -2,6 +2,58 @@ from pathlib import Path
 import re
 
 
+def test_torchsky_src_does_not_import_astropy_io_fits():
+    repo = Path(__file__).parents[1]
+    paths = list((repo / "src" / "torchsky").rglob("*.py"))
+    paths.extend((repo / "tests").glob("test_wcs*.py"))
+    paths.extend(
+        [
+            repo / "tests" / "test_catalog_compat.py",
+            repo / "tests" / "test_canfar_wcs_sphere_runner.py",
+            repo / "tests" / "test_release_smoke.py",
+            repo / "tests" / "test_real_data_validation.py",
+            repo / "tests" / "test_spectral.py",
+            repo / "benchmarks" / "bench_catalog_compat.py",
+            repo / "benchmarks" / "bench_wcs.py",
+            repo / "benchmarks" / "bench_wcs_tpv_inverse.py",
+            repo / "benchmarks" / "bench_wcs_legacy_only.py",
+            repo / "benchmarks" / "bench_wcs_spectral_temporal.py",
+        ]
+    )
+    offenders = []
+    for path in paths:
+        for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            if "astropy.io.fits" in line:
+                offenders.append(f"{path}:{line_number}: {stripped}")
+    assert not offenders, "\n".join(offenders)
+
+
+def test_torchsky_does_not_import_python_fitsio():
+    repo = Path(__file__).parents[1]
+    roots = [
+        repo / "src" / "torchsky",
+        repo / "tests",
+        repo / "benchmarks",
+        repo / "scripts",
+        repo / "examples",
+    ]
+    offenders = []
+    for root in roots:
+        for path in root.rglob("*.py"):
+            for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                if stripped.startswith("import fitsio") or stripped.startswith(
+                    "from fitsio"
+                ):
+                    offenders.append(f"{path}:{line_number}: {stripped}")
+    assert not offenders, "\n".join(offenders)
+
+
 def test_torchsky_does_not_import_torchfits_private_modules():
     source_root = Path(__file__).parents[1] / "src" / "torchsky"
     offenders = []

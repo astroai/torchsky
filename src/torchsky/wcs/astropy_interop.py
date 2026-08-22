@@ -1,18 +1,27 @@
-"""Optional Astropy SkyCoord interchange. Not imported by ``torchsky.wcs``."""
+"""Optional Astropy SkyCoord interchange. Not imported by ``torchsky.wcs``.
+
+Astropy is loaded inside the converters so importing this module does not
+pull Astropy into the default torchsky path.
+"""
 
 from __future__ import annotations
 
-import astropy.units as u
+from typing import TYPE_CHECKING
+
 import torch
-from astropy.coordinates import SkyCoord
-from astropy.units import UnitsError
 
 from .catalog_state import CatalogState
 from .frames import canonical_celestial_frame
 
+if TYPE_CHECKING:
+    from astropy.coordinates import SkyCoord
+
 
 def catalog_state_from_astropy(coord: SkyCoord) -> CatalogState:
     """Copy lon/lat (and PM/parallax/RV when present) from a SkyCoord."""
+    import astropy.units as u
+    from astropy.units import UnitsError
+
     icrs = coord.icrs
     kwargs: dict[str, object] = {
         "lon": torch.as_tensor(icrs.ra.deg, dtype=torch.float64),
@@ -45,6 +54,9 @@ def catalog_state_from_astropy(coord: SkyCoord) -> CatalogState:
 
 def catalog_state_to_astropy(state: CatalogState) -> SkyCoord:
     """Build a SkyCoord from ICRS ``CatalogState`` (converts frames first)."""
+    import astropy.units as u
+    from astropy.coordinates import SkyCoord
+
     icrs = (
         state
         if canonical_celestial_frame(state.frame) == "ICRS"

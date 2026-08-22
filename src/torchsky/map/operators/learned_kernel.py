@@ -45,11 +45,13 @@ __all__ = [
     "GatedResidualOperator",
     "InstrumentStateEncoder",
     "LearnedInstrumentOperator",
+    "LowRankChromaticPSF",
     "SpatioSpectralTemporalEncoder",
     "ConditionedKernelPSF",
     "ExtendedResidualKernelPSF",
     "SubPixelShift",
     "gaussian_kernel2d",
+    "gaussian_kernels_from_params",
 ]
 
 
@@ -792,3 +794,248 @@ class LearnedInstrumentOperator(nn.Module):
         if self._stage == "full":
             out = self.residual(out, cond)
         return self.radiometry(out, gain_init=gain_init, cond=cond)
+
+
+def _legendre_basis(x: Tensor, degree: int) -> Tensor:
+    """Legendre polynomials L_0..L_degree evaluated at ``x`` -> ``[D, ...]``."""
+    terms = [torch.ones_like(x), x]
+    for k in range(2, degree + 1):
+        terms.append(((2 * k - 1) * x * terms[-1] - (k - 1) * terms[-2]) / k)
+    return torch.stack(terms[: degree + 1], dim=0)
+
+
+def gaussian_kernels_from_params(
+    params: Tensor, *, size: int | None = None
+) -> Tensor:
+    """Unit-sum, zero-centroid Gaussian kernels from ``(sigma_x, sigma_y, rho)``.
+
+    ``params`` is ``[..., 3]``; returns ``[..., ky, kx]`` with odd ``ky == kx``.
+    Unit integral and zero centroid are enforced by construction: the kernel
+    is normalized to unit sum, its discrete centroid measured, and the
+    analytic mean re-centered once (residual centroid is second order).
+    """
+    if params.ndim < 1 or params.shape[-1] != 3:
+        raise ValueError("params must have trailing shape (3,)")
+    sigma_x = params[..., 0]
+    sigma_y = params[..., 1]
+    rho = torch.clamp(params[..., 2], -0.99, 0.99)
+    if size is None:
+        sigma_max = torch.max(sigma_x, sigma_y)
+        radius = max(1, int(torch.ceil(3.0 * sigma_max.max()).item()))
+        size = 2 * radius + 1
+    elif size % 2 == 0:
+        raise ValueError("kernel size must be odd")
+    center = size // 2
+    grid = torch.arange(size, device=params.device, dtype=params.dtype) - center
+    shape = params.shape[:-1] + (size, size)
+    gx = grid.view(*([1] * (params.ndim - 1)), 1, size).expand(shape)
+    gy = grid.view(*([1] * (params.ndim - 1)), size, 1).expand(shape)
+    one_minus = (1.0 - rho**2).clamp_min(1e-6)
+    sx = sigma_x.unsqueeze(-1).unsqueeze(-1)
+    sy = sigma_y.unsqueeze(-1).unsqueeze(-1)
+    rho_u = rho.unsqueeze(-1).unsqueeze(-1)
+
+    def _kernel(mx: Tensor, my: Tensor) -> Tensor:
+        ex = (gx - mx.unsqueeze(-1).unsqueeze(-1)) / sx
+        ey = (gy - my.unsqueeze(-1).unsqueeze(-1)) / sy
+        quad = (ex**2 - 2.0 * rho_u * ex * ey + ey**2) / one_minus.unsqueeze(
+            -1
+        ).unsqueeze(-1)
+        kern = torch.exp(-0.5 * quad)
+        return kern / kern.sum(dim=(-2, -1), keepdim=True).clamp_min(1e-12)
+    mean_x = torch.zeros_like(sigma_x)
+    mean_y = torch.zeros_like(sigma_y)
+    kern = _kernel(mean_x, mean_y)
+    for _ in range(8):
+        centroid_x = (kern * gx).sum(dim=(-2, -1))
+        centroid_y = (kern * gy).sum(dim=(-2, -1))
+        mean_x = mean_x + centroid_x
+        mean_y = mean_y + centroid_y
+        kern = _kernel(mean_x, mean_y)
+        if (
+            (kern * gx).sum(dim=(-2, -1)).abs().max() < 1e-6
+            and (kern * gy).sum(dim=(-2, -1)).abs().max() < 1e-6
+        ):
+            break
+    return kern
+
+
+class LowRankChromaticPSF(nn.Module):
+    """Low-rank chromatic PSF: spatial control grid x Legendre spectral basis.
+
+    Kernel parameters ``(sigma_x, sigma_y, rho)`` at focal-plane position
+    ``u_pix`` and normalized wavelength ``lam_norm`` are bilinear interpolants
+    of per-node log-sigma / ellipticity / position-angle offsets modulated by
+    an in-band Legendre spectral basis. Positivity holds by construction
+    (softplus/exponential parameterization); unit integral and zero centroid
+    are enforced downstream by :func:`gaussian_kernels_from_params`. At zero
+    initialization the model reproduces a stationary Gaussian with width
+    ``base_sigma_pix``.
+    """
+
+    def __init__(
+        self,
+        *,
+        grid_side: int = 4,
+        spectral_degree: int = 2,
+        base_sigma_pix: float,
+        extent_pix: float = 2048.0,
+        kernel_size: int | None = None,
+        wavelength_range_um: tuple[float, float] = (0.5, 5.0),
+    ) -> None:
+        super().__init__()
+        if int(grid_side) < 1:
+            raise ValueError("grid_side must be >= 1")
+        if int(spectral_degree) < 0:
+            raise ValueError("spectral_degree must be >= 0")
+        if not (math.isfinite(base_sigma_pix) and base_sigma_pix > 0.0):
+            raise ValueError("base_sigma_pix must be finite and positive")
+        self.grid_side = int(grid_side)
+        self.spectral_degree = int(spectral_degree)
+        self.base_sigma_pix = float(base_sigma_pix)
+        n_nodes = self.grid_side * self.grid_side
+        self.raw_log_sigma = nn.Parameter(
+            torch.zeros(self.spectral_degree + 1, n_nodes)
+        )
+        self.raw_ellipticity = nn.Parameter(
+            torch.zeros(self.spectral_degree + 1, n_nodes)
+        )
+        self.raw_pa_rad = nn.Parameter(torch.zeros(self.spectral_degree + 1, n_nodes))
+        self.register_buffer("extent_pix", torch.tensor(float(extent_pix)))
+        nodes = torch.linspace(-1.0, 1.0, self.grid_side)
+        node_y, node_x = torch.meshgrid(nodes, nodes, indexing="ij")
+        self.register_buffer(
+            "node_uvw",
+            torch.stack([node_x, node_y], dim=-1).reshape(n_nodes, 2),
+        )
+        self._kernel_size = (
+            int(kernel_size) if kernel_size is not None else None
+        )
+        if self._kernel_size is not None and self._kernel_size % 2 == 0:
+            raise ValueError("kernel_size must be odd")
+        self.register_buffer(
+            "wavelength_range_um",
+            torch.tensor([float(v) for v in wavelength_range_um]),
+        )
+
+    @property
+    def n_cells(self) -> int:
+        return self.grid_side * self.grid_side
+
+    @property
+    def default_kernel_size(self) -> int:
+        radius = max(1, math.ceil(3.0 * self.base_sigma_pix))
+        return min(2 * radius + 1, 101)
+
+    @property
+    def kernel_size(self) -> int:
+        if self._kernel_size is None:
+            return self.default_kernel_size
+        return int(self._kernel_size)
+
+    def normalized_wavelength(self, wavelength_um: Tensor) -> Tensor:
+        """Map vacuum wavelengths to the in-band ``lam_norm`` in [0, 1].
+
+        ponytail: accepts microns or Angstroms -- torchsky calibration
+        evidence carries ``pivot_wavelength_angstrom``, and any real NIRCam
+        wavelength exceeds 100 in Angstroms but not in microns. Upgrade path
+        is an explicit unit parameter at the call sites.
+        """
+        lo, hi = (float(v) for v in self.wavelength_range_um)
+        if not (math.isfinite(lo) and math.isfinite(hi) and hi > lo):
+            raise ValueError("wavelength_range_um must be a finite increasing pair")
+        wl = torch.as_tensor(wavelength_um, dtype=torch.float64)
+        if float(wl.median()) > 100.0 * max(hi, 1.0):
+            wl = wl / 1.0e4
+        wl = wl.clamp(lo, hi)
+        return ((wl - lo) / (hi - lo)).to(torch.float32)
+
+    def effective_kernels(
+        self,
+        spatial_x: Tensor,
+        spatial_y: Tensor,
+        wavelength: Tensor | float,
+        time_mjd: Tensor | float | None = None,
+    ) -> Tensor:
+        """ConditionedKernelPSF-compatible kernel rendering for calibration."""
+        u_pix = torch.stack(
+            (
+                torch.as_tensor(spatial_x).reshape(-1),
+                torch.as_tensor(spatial_y).reshape(-1),
+            ),
+            dim=-1,
+        )
+        lam_norm = self.normalized_wavelength(
+            torch.as_tensor(wavelength).reshape(-1)
+        ).to(u_pix.device)
+        params = self(u_pix, lam_norm)
+        return gaussian_kernels_from_params(params, size=self.kernel_size)
+
+    def forward(self, u_pix: Tensor, lam_norm: Tensor | float) -> Tensor:
+        """Return stacked ``(sigma_x, sigma_y, rho)`` of shape ``[N, 3]``."""
+        if u_pix.ndim != 2 or u_pix.shape[-1] != 2:
+            raise ValueError("u_pix must have shape [N, 2]")
+        lam = torch.as_tensor(
+            lam_norm, device=u_pix.device, dtype=u_pix.dtype
+        ).expand(u_pix.shape[0])
+        # Legendre polynomials are orthogonal on [-1, 1]; lam_norm lives on
+        # [0, 1], so rescale before evaluating the spectral basis.
+        spec = _legendre_basis(2.0 * lam - 1.0, self.spectral_degree).to(
+            device=self.raw_log_sigma.device, dtype=self.raw_log_sigma.dtype
+        )
+        u_norm = u_pix.to(self.extent_pix.device, self.extent_pix.dtype) / (
+            self.extent_pix.clamp_min(1.0)
+        )
+        grid = u_norm.view(1, 1, -1, 2)[..., [0, 1]].clamp(-1.0, 1.0)
+
+        def _interp(field: Tensor) -> Tensor:
+            sampled = F.grid_sample(
+                field.view(1, -1, self.grid_side, self.grid_side),
+                grid,
+                mode="bilinear",
+                padding_mode="border",
+                align_corners=True,
+            )
+            return sampled.view(-1, u_pix.shape[0])
+
+        # Spectral mixing happens on the raw offsets; the nonlinearity is
+        # applied once to the summed (spatial x spectral) field.
+        sigma_value = (_interp(self.raw_log_sigma) * spec).sum(dim=0)
+        e_value = (_interp(self.raw_ellipticity) * spec).sum(dim=0)
+        theta = (_interp(self.raw_pa_rad) * spec).sum(dim=0)
+        # softplus^-1(1) shift: zero offsets give a multiplier of exactly 1.
+        sigma = self.base_sigma_pix * F.softplus(
+            sigma_value + math.log(math.expm1(1.0))
+        )
+        e = torch.tanh(e_value)
+        sigma_major = sigma * torch.sqrt(1.0 + e)
+        sigma_minor = sigma / torch.sqrt((1.0 + e).clamp_min(1e-3))
+        cos_t = torch.cos(theta)
+        sin_t = torch.sin(theta)
+        var_x = sigma_major**2 * cos_t**2 + sigma_minor**2 * sin_t**2
+        var_y = sigma_major**2 * sin_t**2 + sigma_minor**2 * cos_t**2
+        cov_xy = (sigma_major**2 - sigma_minor**2) * sin_t * cos_t
+        sigma_x = var_x.clamp_min(1e-8).sqrt()
+        sigma_y = var_y.clamp_min(1e-8).sqrt()
+        rho = cov_xy / (sigma_x * sigma_y)
+        return torch.stack([sigma_x, sigma_y, rho], dim=-1)
+
+    def smoothness_penalty(self) -> Tensor:
+        """Discrete Laplacian energy on each control-grid coefficient field."""
+        penalty: Tensor | None = None
+        for field in (self.raw_log_sigma, self.raw_ellipticity, self.raw_pa_rad):
+            grid_map = field.view(-1, self.grid_side, self.grid_side)
+            if self.grid_side >= 3:
+                lap = (
+                    4.0 * grid_map[:, 1:-1, 1:-1]
+                    - grid_map[:, :-2, 1:-1]
+                    - grid_map[:, 2:, 1:-1]
+                    - grid_map[:, 1:-1, :-2]
+                    - grid_map[:, 1:-1, 2:]
+                )
+                total = (lap**2).sum()
+            else:
+                total = grid_map.sum() * 0.0
+            penalty = total if penalty is None else penalty + total
+        assert penalty is not None
+        return penalty

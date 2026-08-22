@@ -1,10 +1,12 @@
-"""Functional flat ΛCDM / wCDM distances.
+"""Differentiable FLRW distance and protected geometry primitives.
 
-No learnable parameters live here. Cosmodist (or any fitter) wraps
-:class:`FlatWCDM` with ``nn.Parameter`` and priors.
+No learnable parameters or cosmological priors live here. Science projects pass
+plain tensors (including ``nn.Parameter`` instances) through :class:`FLRW`.
 
 Defaults are Planck 2018: ``H0=67.66`` km/s/Mpc, ``Om0=0.3111``, ``w0=-1``.
 Distances are Mpc; distance modulus is magnitudes. ``c = 299792.458`` km/s.
+Radiation is neglected. Curvature follows the standard convention ``Ok0 > 0``
+for an open universe. ``wa`` uses the CPL law ``w(a) = w0 + wa (1-a)``.
 """
 
 from __future__ import annotations
@@ -20,6 +22,115 @@ PLANCK18_OM0 = 0.3111
 PLANCK18_W0 = -1.0
 
 
+def _floating_tensor(value: Tensor | float) -> Tensor:
+    tensor = torch.as_tensor(value)
+    return (
+        tensor if tensor.is_floating_point() else tensor.to(torch.get_default_dtype())
+    )
+
+
+@dataclass(frozen=True)
+class APScaling:
+    """Alcock--Paczynski geometry at a redshift.
+
+    ``alpha_parallel`` and ``alpha_perpendicular`` are dimensionless ratios
+    relative to the supplied reference cosmology. ``f_ap = D_M H / c`` is the
+    absolute, dimensionless AP observable for the evaluated cosmology.
+    """
+
+    alpha_parallel: Tensor
+    alpha_perpendicular: Tensor
+    f_ap: Tensor
+
+
+@dataclass(frozen=True)
+class FLRW:
+    """Matter + curvature + CPL dark-energy FLRW parameters.
+
+    Fields may be scalar tensors so callers can differentiate with respect to
+    cosmological parameters. This container deliberately owns no priors.
+    """
+
+    H0: Tensor | float = PLANCK18_H0
+    Om0: Tensor | float = PLANCK18_OM0
+    Ok0: Tensor | float = 0.0
+    w0: Tensor | float = PLANCK18_W0
+    wa: Tensor | float = 0.0
+
+    def e(self, z: Tensor) -> Tensor:
+        return e_of_z(z, om0=self.Om0, ok0=self.Ok0, w0=self.w0, wa=self.wa)
+
+    def hubble_parameter(self, z: Tensor) -> Tensor:
+        return hubble_parameter(
+            z,
+            H0=self.H0,
+            om0=self.Om0,
+            ok0=self.Ok0,
+            w0=self.w0,
+            wa=self.wa,
+        )
+
+    def comoving_distance(self, z: Tensor, *, n_steps: int = 2048) -> Tensor:
+        return comoving_distance(
+            z,
+            H0=self.H0,
+            om0=self.Om0,
+            ok0=self.Ok0,
+            w0=self.w0,
+            wa=self.wa,
+            n_steps=n_steps,
+        )
+
+    def transverse_comoving_distance(self, z: Tensor, *, n_steps: int = 2048) -> Tensor:
+        return transverse_comoving_distance(
+            z,
+            H0=self.H0,
+            om0=self.Om0,
+            ok0=self.Ok0,
+            w0=self.w0,
+            wa=self.wa,
+            n_steps=n_steps,
+        )
+
+    def luminosity_distance(self, z: Tensor, *, n_steps: int = 2048) -> Tensor:
+        return luminosity_distance(
+            z,
+            H0=self.H0,
+            om0=self.Om0,
+            ok0=self.Ok0,
+            w0=self.w0,
+            wa=self.wa,
+            n_steps=n_steps,
+        )
+
+    def angular_diameter_distance(self, z: Tensor, *, n_steps: int = 2048) -> Tensor:
+        return angular_diameter_distance(
+            z,
+            H0=self.H0,
+            om0=self.Om0,
+            ok0=self.Ok0,
+            w0=self.w0,
+            wa=self.wa,
+            n_steps=n_steps,
+        )
+
+    def differential_comoving_volume(
+        self, z: Tensor, *, n_steps: int = 2048
+    ) -> Tensor:
+        return differential_comoving_volume(z, self, n_steps=n_steps)
+
+    def distance_modulus(self, z: Tensor, *, n_steps: int = 2048) -> Tensor:
+        return distance_modulus(
+            z,
+            H0=self.H0,
+            om0=self.Om0,
+            ok0=self.Ok0,
+            w0=self.w0,
+            wa=self.wa,
+            n_steps=n_steps,
+        )
+
+
 @dataclass(frozen=True)
 class FlatWCDM:
     """Flat wCDM. ``w0=-1`` is ΛCDM."""
@@ -32,10 +143,14 @@ class FlatWCDM:
         return e_of_z(z, om0=self.Om0, w0=self.w0)
 
     def comoving_distance(self, z: Tensor, *, n_steps: int = 2048) -> Tensor:
-        return comoving_distance(z, H0=self.H0, om0=self.Om0, w0=self.w0, n_steps=n_steps)
+        return comoving_distance(
+            z, H0=self.H0, om0=self.Om0, w0=self.w0, n_steps=n_steps
+        )
 
     def luminosity_distance(self, z: Tensor, *, n_steps: int = 2048) -> Tensor:
-        return luminosity_distance(z, H0=self.H0, om0=self.Om0, w0=self.w0, n_steps=n_steps)
+        return luminosity_distance(
+            z, H0=self.H0, om0=self.Om0, w0=self.w0, n_steps=n_steps
+        )
 
     def angular_diameter_distance(self, z: Tensor, *, n_steps: int = 2048) -> Tensor:
         return angular_diameter_distance(
@@ -43,27 +158,67 @@ class FlatWCDM:
         )
 
     def distance_modulus(self, z: Tensor, *, n_steps: int = 2048) -> Tensor:
-        return distance_modulus(z, H0=self.H0, om0=self.Om0, w0=self.w0, n_steps=n_steps)
+        return distance_modulus(
+            z, H0=self.H0, om0=self.Om0, w0=self.w0, n_steps=n_steps
+        )
 
 
 def e_of_z(
     z: Tensor,
     *,
     om0: Tensor | float = PLANCK18_OM0,
+    ok0: Tensor | float = 0.0,
     w0: Tensor | float = PLANCK18_W0,
+    wa: Tensor | float = 0.0,
 ) -> Tensor:
-    """Dimensionless Hubble function ``E(z) = H(z)/H0`` for flat wCDM."""
-    z_t = torch.as_tensor(z)
+    """Dimensionless Hubble function ``E(z) = H(z)/H0`` for CPL FLRW."""
+    z_t = _floating_tensor(z)
     om = torch.as_tensor(om0).to(device=z_t.device, dtype=z_t.dtype)
+    ok = torch.as_tensor(ok0).to(device=z_t.device, dtype=z_t.dtype)
     w = torch.as_tensor(w0).to(device=z_t.device, dtype=z_t.dtype)
+    w_a = torch.as_tensor(wa).to(device=z_t.device, dtype=z_t.dtype)
     one_plus_z = 1.0 + z_t
+    if z_t.numel() and (
+        not bool(torch.isfinite(z_t).all()) or bool((one_plus_z <= 0.0).any())
+    ):
+        raise ValueError("e_of_z requires finite redshift > -1")
     matter = om * torch.pow(one_plus_z, 3)
-    de = (1.0 - om) * torch.pow(one_plus_z, 3.0 * (1.0 + w))
-    return torch.sqrt(matter + de)
+    curvature = ok * torch.pow(one_plus_z, 2)
+    dark_energy_scale = torch.pow(one_plus_z, 3.0 * (1.0 + w + w_a)) * torch.exp(
+        -3.0 * w_a * z_t / one_plus_z
+    )
+    expansion_squared = matter + curvature + (1.0 - om - ok) * dark_energy_scale
+    if expansion_squared.numel() and (
+        not bool(torch.isfinite(expansion_squared).all())
+        or bool((expansion_squared <= 0.0).any())
+    ):
+        raise ValueError("FLRW parameters produce non-positive E(z)^2")
+    return torch.sqrt(expansion_squared)
 
 
-def _hubble_distance_mpc(H0: Tensor | float, *, device: torch.device, dtype: torch.dtype) -> Tensor:
+def hubble_parameter(
+    z: Tensor,
+    *,
+    H0: Tensor | float = PLANCK18_H0,
+    om0: Tensor | float = PLANCK18_OM0,
+    ok0: Tensor | float = 0.0,
+    w0: Tensor | float = PLANCK18_W0,
+    wa: Tensor | float = 0.0,
+) -> Tensor:
+    """Hubble parameter ``H(z)`` in km/s/Mpc."""
+    z_t = _floating_tensor(z)
+    h0 = torch.as_tensor(H0).to(device=z_t.device, dtype=z_t.dtype)
+    if not bool(torch.isfinite(h0).all()) or bool((h0 <= 0.0).any()):
+        raise ValueError("H0 must be finite and positive")
+    return h0 * e_of_z(z_t, om0=om0, ok0=ok0, w0=w0, wa=wa)
+
+
+def _hubble_distance_mpc(
+    H0: Tensor | float, *, device: torch.device, dtype: torch.dtype
+) -> Tensor:
     h0 = torch.as_tensor(H0).to(device=device, dtype=dtype)
+    if not bool(torch.isfinite(h0).all()) or bool((h0 <= 0.0).any()):
+        raise ValueError("H0 must be finite and positive")
     return SPEED_OF_LIGHT_KM_S / h0
 
 
@@ -73,7 +228,7 @@ def _nonnegative_redshift(z: Tensor) -> Tensor:
     Negative values (network overshoot, floating noise) are treated as
     zero so ``D_C(0) = 0`` and ``D_A`` never divides by ``1+z <= 0``.
     """
-    z_t = torch.as_tensor(z)
+    z_t = _floating_tensor(z)
     if z_t.numel() and not bool(torch.isfinite(z_t).all()):
         raise ValueError("redshift must be finite")
     return z_t.clamp(min=0.0)
@@ -84,7 +239,9 @@ def comoving_distance(
     *,
     H0: Tensor | float = PLANCK18_H0,
     om0: Tensor | float = PLANCK18_OM0,
+    ok0: Tensor | float = 0.0,
     w0: Tensor | float = PLANCK18_W0,
+    wa: Tensor | float = 0.0,
     n_steps: int = 2048,
 ) -> Tensor:
     """Line-of-sight comoving distance ``D_C`` in Mpc.
@@ -94,14 +251,17 @@ def comoving_distance(
     """
     if n_steps < 2:
         raise ValueError("n_steps must be >= 2")
-    z_t = torch.as_tensor(z)
+    z_t = _floating_tensor(z)
     if z_t.numel() == 0:
         return z_t
     z_nonneg = _nonnegative_redshift(z_t)
     z_limit = z_nonneg.amax() * 1.01 + 1e-5
     table_size = max(int(n_steps), 2)
-    z_grid = torch.linspace(0.0, 1.0, table_size, device=z_t.device, dtype=z_t.dtype) * z_limit
-    integrand = 1.0 / e_of_z(z_grid, om0=om0, w0=w0)
+    z_grid = (
+        torch.linspace(0.0, 1.0, table_size, device=z_t.device, dtype=z_t.dtype)
+        * z_limit
+    )
+    integrand = 1.0 / e_of_z(z_grid, om0=om0, ok0=ok0, w0=w0, wa=wa)
     dz = z_limit / (table_size - 1)
     areas = (integrand[:-1] + integrand[1:]) * 0.5 * dz
     integral = torch.cat(
@@ -118,18 +278,66 @@ def comoving_distance(
     return d_c_grid[idx_floor] * (1.0 - weight) + d_c_grid[idx_floor + 1] * weight
 
 
+def transverse_comoving_distance(
+    z: Tensor,
+    *,
+    H0: Tensor | float = PLANCK18_H0,
+    om0: Tensor | float = PLANCK18_OM0,
+    ok0: Tensor | float = 0.0,
+    w0: Tensor | float = PLANCK18_W0,
+    wa: Tensor | float = 0.0,
+    n_steps: int = 2048,
+) -> Tensor:
+    """Transverse comoving distance ``D_M`` in Mpc.
+
+    A series around ``Ok0 = 0`` keeps the value and curvature gradient finite.
+    """
+    z_t = _floating_tensor(z)
+    d_c = comoving_distance(
+        z_t,
+        H0=H0,
+        om0=om0,
+        ok0=ok0,
+        w0=w0,
+        wa=wa,
+        n_steps=n_steps,
+    )
+    ok = torch.as_tensor(ok0).to(device=z_t.device, dtype=z_t.dtype)
+    d_h = _hubble_distance_mpc(H0, device=z_t.device, dtype=z_t.dtype)
+    chi = d_c / d_h
+    abs_ok = torch.abs(ok)
+    epsilon = torch.as_tensor(torch.finfo(z_t.dtype).eps, device=z_t.device)
+    safe_abs_ok = abs_ok.clamp_min(epsilon)
+    sqrt_abs_ok = torch.sqrt(safe_abs_ok)
+    argument = sqrt_abs_ok * chi
+    open_distance = d_h * torch.sinh(argument) / sqrt_abs_ok
+    closed_distance = d_h * torch.sin(argument) / sqrt_abs_ok
+    series = d_c * (
+        1.0
+        + ok * torch.square(chi) / 6.0
+        + torch.square(ok * torch.square(chi)) / 120.0
+    )
+    curved = torch.where(ok > 0.0, open_distance, closed_distance)
+    # The first omitted term is O((Ok0 * chi^2)^3). Select the series where
+    # its second-order retained correction is already at machine precision.
+    use_series = abs_ok * torch.square(chi) <= torch.sqrt(epsilon)
+    return torch.where(use_series, series, curved)
+
+
 def luminosity_distance(
     z: Tensor,
     *,
     H0: Tensor | float = PLANCK18_H0,
     om0: Tensor | float = PLANCK18_OM0,
+    ok0: Tensor | float = 0.0,
     w0: Tensor | float = PLANCK18_W0,
+    wa: Tensor | float = 0.0,
     n_steps: int = 2048,
 ) -> Tensor:
-    """``D_L = (1+z) D_C`` in Mpc."""
+    """``D_L = (1+z) D_M`` in Mpc."""
     z_use = _nonnegative_redshift(torch.as_tensor(z))
-    return (1.0 + z_use) * comoving_distance(
-        z_use, H0=H0, om0=om0, w0=w0, n_steps=n_steps
+    return (1.0 + z_use) * transverse_comoving_distance(
+        z_use, H0=H0, om0=om0, ok0=ok0, w0=w0, wa=wa, n_steps=n_steps
     )
 
 
@@ -138,13 +346,190 @@ def angular_diameter_distance(
     *,
     H0: Tensor | float = PLANCK18_H0,
     om0: Tensor | float = PLANCK18_OM0,
+    ok0: Tensor | float = 0.0,
     w0: Tensor | float = PLANCK18_W0,
+    wa: Tensor | float = 0.0,
     n_steps: int = 2048,
 ) -> Tensor:
-    """``D_A = D_C / (1+z)`` in Mpc."""
+    """``D_A = D_M / (1+z)`` in Mpc."""
     z_use = _nonnegative_redshift(torch.as_tensor(z))
-    return comoving_distance(z_use, H0=H0, om0=om0, w0=w0, n_steps=n_steps) / (
-        1.0 + z_use
+    return transverse_comoving_distance(
+        z_use,
+        H0=H0,
+        om0=om0,
+        ok0=ok0,
+        w0=w0,
+        wa=wa,
+        n_steps=n_steps,
+    ) / (1.0 + z_use)
+
+
+def differential_comoving_volume(
+    z: Tensor,
+    cosmology: FLRW = FLRW(),
+    *,
+    n_steps: int = 2048,
+) -> Tensor:
+    """Observed-coordinate volume Jacobian ``dV_c/(dOmega dz)``.
+
+    The result is ``c D_M(z)^2 / H(z)`` in ``Mpc^3 sr^-1`` per unit redshift.
+    It is the measure factor needed by observed-coordinate point-process
+    likelihoods; selection functions are not included.
+    """
+    z_use = _nonnegative_redshift(torch.as_tensor(z))
+    d_m = cosmology.transverse_comoving_distance(z_use, n_steps=n_steps)
+    hubble = cosmology.hubble_parameter(z_use)
+    return SPEED_OF_LIGHT_KM_S * d_m.square() / hubble
+
+
+def _validated_unit_xyz(value: Tensor, name: str) -> Tensor:
+    unit = torch.as_tensor(value)
+    if not unit.is_floating_point():
+        unit = unit.to(dtype=torch.get_default_dtype())
+    if unit.ndim < 1 or unit.shape[-1] != 3:
+        raise ValueError(f"{name} must have trailing shape [..., 3]")
+    if not bool(torch.isfinite(unit).all()):
+        raise ValueError(f"{name} must be finite")
+    norm = torch.linalg.vector_norm(unit, dim=-1)
+    tolerance = 5.0e-6 if unit.dtype == torch.float32 else 1.0e-10
+    if bool((torch.abs(norm - 1.0) > tolerance).any()):
+        raise ValueError(f"{name} must contain unit vectors")
+    return unit
+
+
+def _sqrt_with_zero_subgradient(value: Tensor) -> Tensor:
+    """Square root of a non-negative value with a defined gradient at zero."""
+    nonnegative = value.clamp_min(0.0)
+    positive = nonnegative > 0.0
+    safe_input = torch.where(positive, nonnegative, torch.ones_like(nonnegative))
+    return torch.where(positive, torch.sqrt(safe_input), torch.zeros_like(nonnegative))
+
+
+def comoving_position(
+    unit_xyz: Tensor,
+    z: Tensor,
+    cosmology: FLRW = FLRW(),
+    *,
+    n_steps: int = 2048,
+) -> Tensor:
+    """Flat-FLRW Cartesian comoving position ``chi(z) * unit_xyz`` in Mpc.
+
+    A curved spatial slice has no global Euclidean Cartesian representation;
+    use :func:`comoving_separation` there.
+    """
+    unit = _validated_unit_xyz(unit_xyz, "unit_xyz")
+    ok = torch.as_tensor(cosmology.Ok0)
+    if not bool(torch.isfinite(ok).all()) or bool((torch.abs(ok) > 1.0e-12).any()):
+        raise ValueError("comoving_position is defined only for Ok0 = 0")
+    z_t = torch.as_tensor(z, device=unit.device, dtype=unit.dtype)
+    shape = torch.broadcast_shapes(unit.shape[:-1], z_t.shape)
+    unit_b = torch.broadcast_to(unit, shape + (3,))
+    z_b = torch.broadcast_to(z_t, shape)
+    distance = cosmology.comoving_distance(z_b, n_steps=n_steps)
+    return distance.unsqueeze(-1) * unit_b
+
+
+def comoving_separation(
+    unit_xyz_a: Tensor,
+    z_a: Tensor,
+    unit_xyz_b: Tensor,
+    z_b: Tensor,
+    cosmology: FLRW = FLRW(),
+    *,
+    n_steps: int = 2048,
+) -> Tensor:
+    """Constant-curvature FLRW spatial geodesic separation in Mpc."""
+    unit_a = _validated_unit_xyz(unit_xyz_a, "unit_xyz_a")
+    unit_b = _validated_unit_xyz(unit_xyz_b, "unit_xyz_b").to(
+        device=unit_a.device, dtype=unit_a.dtype
+    )
+    z_a_t = torch.as_tensor(z_a, device=unit_a.device, dtype=unit_a.dtype)
+    z_b_t = torch.as_tensor(z_b, device=unit_a.device, dtype=unit_a.dtype)
+    shape = torch.broadcast_shapes(
+        unit_a.shape[:-1], unit_b.shape[:-1], z_a_t.shape, z_b_t.shape
+    )
+    unit_a = torch.broadcast_to(unit_a, shape + (3,))
+    unit_b = torch.broadcast_to(unit_b, shape + (3,))
+    z_a_t = torch.broadcast_to(z_a_t, shape)
+    z_b_t = torch.broadcast_to(z_b_t, shape)
+    # ||a-b||^2 / 4 = (1-cos(theta)) / 2 for unit vectors. This avoids the
+    # catastrophic cancellation in ``1 - dot(a, b)`` for close float32 pairs.
+    half_chord_squared = (
+        0.25 * torch.sum(torch.square(unit_a - unit_b), dim=-1)
+    ).clamp(0.0, 1.0)
+    d_a = cosmology.comoving_distance(z_a_t, n_steps=n_steps)
+    d_b = cosmology.comoving_distance(z_b_t, n_steps=n_steps)
+    flat_squared = torch.square(d_a - d_b) + 4.0 * d_a * d_b * half_chord_squared
+
+    ok = torch.as_tensor(cosmology.Ok0).to(device=unit_a.device, dtype=unit_a.dtype)
+    d_h = _hubble_distance_mpc(cosmology.H0, device=unit_a.device, dtype=unit_a.dtype)
+    abs_ok = torch.abs(ok)
+    epsilon = torch.as_tensor(torch.finfo(unit_a.dtype).eps, device=unit_a.device)
+    safe_abs_ok = abs_ok.clamp_min(epsilon)
+    sqrt_abs_ok = torch.sqrt(safe_abs_ok)
+    radius = d_h / sqrt_abs_ok
+    radial_a = d_a / radius
+    radial_b = d_b / radius
+
+    # Cancellation-free half-angle forms of the constant-curvature law of
+    # cosines. They retain close angular separations in float32.
+    open_half_squared = torch.square(torch.sinh(0.5 * (radial_a - radial_b))) + (
+        torch.sinh(radial_a) * torch.sinh(radial_b) * half_chord_squared
+    )
+    open_distance = (
+        2.0 * radius * torch.asinh(_sqrt_with_zero_subgradient(open_half_squared))
+    )
+
+    closed_half_squared = (
+        torch.square(torch.sin(0.5 * (radial_a - radial_b)))
+        + torch.sin(radial_a) * torch.sin(radial_b) * half_chord_squared
+    ).clamp(0.0, 1.0)
+    closed_half = _sqrt_with_zero_subgradient(closed_half_squared)
+    closed_complement = _sqrt_with_zero_subgradient(1.0 - closed_half_squared)
+    closed_distance = 2.0 * radius * torch.atan2(closed_half, closed_complement)
+
+    # First curvature correction to the geodesic law of cosines. Besides
+    # avoiding a 0/0 branch, this preserves d/dOk0 at the flat limit.
+    series_squared = flat_squared + (
+        ok
+        * torch.square(d_a * d_b)
+        * (4.0 * half_chord_squared * (1.0 - half_chord_squared))
+        / (3.0 * torch.square(d_h))
+    )
+    series_distance = _sqrt_with_zero_subgradient(series_squared)
+    curved_distance = torch.where(ok > 0.0, open_distance, closed_distance)
+    radial_scale_squared = abs_ok * torch.maximum(
+        torch.square(d_a / d_h), torch.square(d_b / d_h)
+    )
+    use_series = radial_scale_squared <= torch.sqrt(epsilon)
+    return torch.where(use_series, series_distance, curved_distance)
+
+
+def alcock_paczynski_scaling(
+    z: Tensor,
+    cosmology: FLRW,
+    reference: FLRW,
+    *,
+    n_steps: int = 2048,
+) -> APScaling:
+    """AP geometry at strictly positive redshift.
+
+    The alpha values are relative to ``reference``; ``f_ap`` is the absolute
+    ``D_M(z) H(z) / c`` observable for ``cosmology``.
+    """
+    z_t = _floating_tensor(z)
+    if z_t.numel() and (
+        not bool(torch.isfinite(z_t).all()) or bool((z_t <= 0.0).any())
+    ):
+        raise ValueError("Alcock-Paczynski scaling requires finite z > 0")
+    d_m = cosmology.transverse_comoving_distance(z_t, n_steps=n_steps)
+    d_m_reference = reference.transverse_comoving_distance(z_t, n_steps=n_steps)
+    h = cosmology.hubble_parameter(z_t)
+    h_reference = reference.hubble_parameter(z_t)
+    return APScaling(
+        alpha_parallel=h_reference / h,
+        alpha_perpendicular=d_m / d_m_reference,
+        f_ap=d_m * h / SPEED_OF_LIGHT_KM_S,
     )
 
 
@@ -153,7 +538,9 @@ def distance_modulus(
     *,
     H0: Tensor | float = PLANCK18_H0,
     om0: Tensor | float = PLANCK18_OM0,
+    ok0: Tensor | float = 0.0,
     w0: Tensor | float = PLANCK18_W0,
+    wa: Tensor | float = 0.0,
     n_steps: int = 2048,
 ) -> Tensor:
     """``μ = 5 log10(D_L / 10 pc)`` with ``D_L`` in Mpc.
@@ -161,5 +548,5 @@ def distance_modulus(
     The logarithm argument is floored so ``μ(0)`` stays finite; ``D_L(0)``
     itself is zero.
     """
-    d_l = luminosity_distance(z, H0=H0, om0=om0, w0=w0, n_steps=n_steps)
+    d_l = luminosity_distance(z, H0=H0, om0=om0, ok0=ok0, w0=w0, wa=wa, n_steps=n_steps)
     return 5.0 * torch.log10((d_l * 1.0e6 / 10.0).clamp(min=1e-30))

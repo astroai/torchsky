@@ -21,7 +21,9 @@ except Exception:  # pragma: no cover
 def test_exact_region_area_matches_spherical_geometry() -> None:
     lon = torch.tensor([-10.0, 10.0, 10.0, -10.0], dtype=torch.float64)
     lat = torch.tensor([-5.0, -5.0, 5.0, 5.0], dtype=torch.float64)
-    reg = to_exact_region(SphericalPolygon(lon, lat))
+    reg = to_exact_region(
+        SphericalPolygon(lon, lat), backend="spherical-geometry"
+    )
 
     if hasattr(SGP, "from_lonlat"):
         sg = SGP.from_lonlat(lon.numpy(), lat.numpy(), degrees=True)
@@ -44,18 +46,21 @@ def test_exact_boolean_ops_area_ordering() -> None:
         torch.tensor([-6.0, -6.0, 6.0, 6.0], dtype=torch.float64),
     )
 
-    u = p1.exact_union(p2)
-    i = p1.exact_intersection(p2)
-    d = p1.exact_difference(p2)
+    u = p1.exact_union(p2, backend="spherical-geometry")
+    i = p1.exact_intersection(p2, backend="spherical-geometry")
+    d = p1.exact_difference(p2, backend="spherical-geometry")
 
     assert not u.is_empty
     assert not i.is_empty
     assert not d.is_empty
 
-    assert u.area() >= p1.to_exact().area()
-    assert i.area() <= p1.to_exact().area()
+    assert u.area() >= p1.to_exact(backend="spherical-geometry").area()
+    assert i.area() <= p1.to_exact(backend="spherical-geometry").area()
     np.testing.assert_allclose(
-        d.area() + i.area(), p1.to_exact().area(), rtol=0.0, atol=5e-8
+        d.area() + i.area(),
+        p1.to_exact(backend="spherical-geometry").area(),
+        rtol=0.0,
+        atol=5e-8,
     )
 
 
@@ -64,7 +69,7 @@ def test_exact_region_bulk_contains_matches_numpy_sg_bulk() -> None:
     lon = torch.tensor([-10.0, 10.0, 10.0, -10.0], dtype=torch.float64)
     lat = torch.tensor([-5.0, -5.0, 5.0, 5.0], dtype=torch.float64)
     poly = SphericalPolygon(lon, lat)
-    reg = to_exact_region(poly)
+    reg = to_exact_region(poly, backend="spherical-geometry")
     sg = _region_to_sg(poly, cap_steps=256)
     probe_lon = torch.linspace(-2.0, 2.0, 32, dtype=torch.float64)
     probe_lat = torch.linspace(-2.0, 2.0, 32, dtype=torch.float64)
@@ -83,7 +88,7 @@ def test_exact_cap_intersection_contains() -> None:
         torch.tensor([-10.0, 10.0, 10.0, -10.0], dtype=torch.float64),
         torch.tensor([-4.0, -4.0, 4.0, 4.0], dtype=torch.float64),
     )
-    reg = cap.exact_intersection(box)
+    reg = cap.exact_intersection(box, backend="spherical-geometry")
 
     assert bool(reg.contains(0.0, 0.0))
     assert not bool(reg.contains(0.0, 7.5))
@@ -100,7 +105,7 @@ def test_boolean_region_to_exact_conversion() -> None:
         torch.tensor([-6.0, -6.0, 6.0, 6.0], dtype=torch.float64),
     )
     reg_bool = p1.union(p2).difference(SphericalCap(3.0, 0.0, 3.0))
-    reg_exact = reg_bool.to_exact(cap_steps=256)
+    reg_exact = reg_bool.to_exact(cap_steps=256, backend="spherical-geometry")
 
     assert reg_exact.area() > 0.0
     mp = reg_exact.to_multipolygon()

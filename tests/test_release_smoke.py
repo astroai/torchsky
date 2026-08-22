@@ -4,7 +4,7 @@ from importlib import metadata
 from pathlib import Path
 import numpy as np
 import torch
-from astropy.io import fits
+import torchfits
 
 import torchsky
 
@@ -27,20 +27,25 @@ def test_runtime_version_matches_declared_version() -> None:
 
 def test_release_smoke_wcs_header_build(tmp_path: Path) -> None:
     data = np.zeros((8, 8), dtype=np.float32)
-    hdu = fits.PrimaryHDU(data)
-    hdu.header["CTYPE1"] = "RA---TAN"
-    hdu.header["CTYPE2"] = "DEC--TAN"
-    hdu.header["CRPIX1"] = 4.0
-    hdu.header["CRPIX2"] = 4.0
-    hdu.header["CRVAL1"] = 180.0
-    hdu.header["CRVAL2"] = 0.0
-    hdu.header["CD1_1"] = -0.01
-    hdu.header["CD1_2"] = 0.0
-    hdu.header["CD2_1"] = 0.0
-    hdu.header["CD2_2"] = 0.01
-
+    header = {
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 4.0,
+        "CRPIX2": 4.0,
+        "CRVAL1": 180.0,
+        "CRVAL2": 0.0,
+        "CD1_1": -0.01,
+        "CD1_2": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": 0.01,
+    }
     path = tmp_path / "wcs.fits"
-    hdu.writeto(path, overwrite=True)
+    torchfits.write(
+        path.as_posix(),
+        torch.from_numpy(data),
+        header=header,
+        overwrite=True,
+    )
     wcs = torchsky.get_wcs(path.as_posix(), hdu=0)
     world = wcs.pixel_to_world(torch.tensor([3.0]), torch.tensor([3.0]))
     assert len(world) == 2

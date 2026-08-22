@@ -2,8 +2,7 @@ import os
 
 import numpy as np
 import torch
-from astropy.io import fits
-from astropy.table import Table
+import torchfits
 
 import torchsky
 
@@ -18,11 +17,9 @@ def create_test_file(filename):
             "comments": np.array(
                 ["This is star 1", "This is star 2", "This is star 3"], dtype="U20"
             ),
-            "flag": np.array([True, False, True], dtype=bool),  # Boolean col
+            "flag": np.array([True, False, True], dtype=bool),
         }
-        table = Table(data)
-        hdu = fits.BinTableHDU(table, name="MY_TABLE")
-        hdu.writeto(filename, overwrite=True)
+        torchfits.table.write(filename, data, extname="MY_TABLE", overwrite=True)
 
 
 def main():

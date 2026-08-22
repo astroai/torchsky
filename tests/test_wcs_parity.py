@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 import torch
-from astropy.io import fits
 from astropy.wcs import WCS as AstropyWCS
 
 from torchsky.wcs.core import WCS as TorchWCS
@@ -31,8 +30,8 @@ def _make_header(
     crval2: float = 0.0,
     naxis1: int = 256,
     naxis2: int = 256,
-) -> fits.Header:  # type: ignore
-    header = fits.Header()  # type: ignore
+) -> dict:  # type: ignore
+    header = dict()  # type: ignore
     header["NAXIS"] = 2  # type: ignore
     header["NAXIS1"] = naxis1  # type: ignore
     header["NAXIS2"] = naxis2  # type: ignore
@@ -70,7 +69,7 @@ def _make_header(
 
 
 def _sample_pixels(
-    header: fits.Header,
+    header: dict,
     n_side: int = 7,  # type: ignore
 ) -> tuple[np.ndarray, np.ndarray]:  # type: ignore
     x = np.linspace(96.0, header["NAXIS1"] - 96.0, n_side, dtype=np.float64)  # type: ignore

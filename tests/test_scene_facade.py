@@ -10,6 +10,8 @@ from torchsky.map.operators.bundle import (
     field_observation_operator_bundle,
     image_observation_operator_bundle,
 )
+from torchsky.map.operators.resampling import sample_image_plane_batched_channels
+from torchsky.map.splat import splat_to_native
 from torchsky.map.target import TargetRenderSpec
 
 
@@ -52,6 +54,10 @@ def test_scene_facade_promotes_existing_concepts() -> None:
     assert scene.FieldObservation is FieldObservation
     assert scene.MapProductSpec is MapProductSpec
     assert scene.TargetRenderSpec is TargetRenderSpec
+    assert (
+        scene.sample_image_plane_batched_channels is sample_image_plane_batched_channels
+    )
+    assert scene.splat_to_native is splat_to_native
 
     target = scene.target_from_header(_simple_header(), value_semantics="flux")
     assert isinstance(target, TargetRenderSpec)

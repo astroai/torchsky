@@ -3,10 +3,11 @@ import tempfile
 
 import numpy as np
 import torch
-from astropy.io import fits
+import torchfits
 from astropy.wcs import WCS as AstropyWCS
 
 import torchsky
+from torchsky.hdu import HDUList, Header, TensorHDU
 from torchsky.wcs import WCS
 
 
@@ -80,17 +81,22 @@ def test_wcs_2d_world_to_pixel():
 def test_get_wcs_from_file_auto_hdu():
     image = np.random.normal(size=(32, 32)).astype(np.float32)
     with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
-        hdu = fits.PrimaryHDU(image)
-        hdu.header["CTYPE1"] = "RA---TAN"  # type: ignore
-        hdu.header["CTYPE2"] = "DEC--TAN"  # type: ignore
-        hdu.header["CRPIX1"] = 1.0  # type: ignore
-        hdu.header["CRPIX2"] = 1.0  # type: ignore
-        hdu.header["CRVAL1"] = 180.0  # type: ignore
-        hdu.header["CRVAL2"] = 0.0  # type: ignore
-        hdu.header["CDELT1"] = -0.1  # type: ignore
-        hdu.header["CDELT2"] = 0.1  # type: ignore
-        hdu.writeto(f.name, overwrite=True)
         path = f.name
+    torchfits.write(
+        path,
+        torch.from_numpy(image),
+        header={
+            "CTYPE1": "RA---TAN",
+            "CTYPE2": "DEC--TAN",
+            "CRPIX1": 1.0,
+            "CRPIX2": 1.0,
+            "CRVAL1": 180.0,
+            "CRVAL2": 0.0,
+            "CDELT1": -0.1,
+            "CDELT2": 0.1,
+        },
+        overwrite=True,
+    )
 
     try:
         wcs = torchsky.get_wcs(path, hdu="auto")
@@ -109,19 +115,29 @@ def test_get_wcs_from_file_auto_hdu():
 def test_get_wcs_auto_hdu_skips_empty_primary():
     image = np.random.normal(size=(16, 16)).astype(np.float32)
     with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
-        primary = fits.PrimaryHDU()
-        ext = fits.ImageHDU(image)
-        ext.header["EXTNAME"] = "SCI"  # type: ignore
-        ext.header["CTYPE1"] = "RA---TAN"  # type: ignore
-        ext.header["CTYPE2"] = "DEC--TAN"  # type: ignore
-        ext.header["CRPIX1"] = 1.0  # type: ignore
-        ext.header["CRPIX2"] = 1.0  # type: ignore
-        ext.header["CRVAL1"] = 10.0  # type: ignore
-        ext.header["CRVAL2"] = -5.0  # type: ignore
-        ext.header["CDELT1"] = -0.01  # type: ignore
-        ext.header["CDELT2"] = 0.01  # type: ignore
-        fits.HDUList([primary, ext]).writeto(f.name, overwrite=True)
         path = f.name
+    primary = TensorHDU(
+        data=torch.zeros((1, 1), dtype=torch.float32),
+        header=Header({"SIMPLE": True, "EXTEND": True}),
+    )
+    sci = TensorHDU(
+        data=torch.from_numpy(image),
+        header=Header(
+            {
+                "XTENSION": "IMAGE",
+                "EXTNAME": "SCI",
+                "CTYPE1": "RA---TAN",
+                "CTYPE2": "DEC--TAN",
+                "CRPIX1": 1.0,
+                "CRPIX2": 1.0,
+                "CRVAL1": 10.0,
+                "CRVAL2": -5.0,
+                "CDELT1": -0.01,
+                "CDELT2": 0.01,
+            }
+        ),
+    )
+    HDUList([primary, sci]).write(path, overwrite=True)
 
     try:
         wcs = torchsky.get_wcs(path, hdu="auto")
@@ -163,7 +179,7 @@ def test_wcs_alternate_key_matches_astropy():
     assert WCS.available_wcs_keys(header) == ("", "A")
 
     twcs = WCS(header, key="A")
-    awcs = AstropyWCS(fits.Header(header), key="A")
+    awcs = AstropyWCS(header, key="A")
     xy = np.array([[0.0, 0.0], [24.0, 24.0], [70.0, 20.0]], dtype=np.float64)
 
     world_t = twcs.pixel_to_world(torch.from_numpy(xy), origin=0)
@@ -180,25 +196,30 @@ def test_wcs_alternate_key_matches_astropy():
 def test_get_wcs_from_file_selects_alternate_key():
     image = np.zeros((16, 16), dtype=np.float32)
     with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
-        hdu = fits.PrimaryHDU(image)
-        hdu.header["CTYPE1"] = "RA---TAN"  # type: ignore
-        hdu.header["CTYPE2"] = "DEC--TAN"  # type: ignore
-        hdu.header["CRPIX1"] = 1.0  # type: ignore
-        hdu.header["CRPIX2"] = 1.0  # type: ignore
-        hdu.header["CRVAL1"] = 10.0  # type: ignore
-        hdu.header["CRVAL2"] = 20.0  # type: ignore
-        hdu.header["CDELT1"] = -0.01  # type: ignore
-        hdu.header["CDELT2"] = 0.01  # type: ignore
-        hdu.header["CTYPE1A"] = "RA---TAN"  # type: ignore
-        hdu.header["CTYPE2A"] = "DEC--TAN"  # type: ignore
-        hdu.header["CRPIX1A"] = 1.0  # type: ignore
-        hdu.header["CRPIX2A"] = 1.0  # type: ignore
-        hdu.header["CRVAL1A"] = 120.0  # type: ignore
-        hdu.header["CRVAL2A"] = -30.0  # type: ignore
-        hdu.header["CDELT1A"] = -0.02  # type: ignore
-        hdu.header["CDELT2A"] = 0.02  # type: ignore
-        hdu.writeto(f.name, overwrite=True)
         path = f.name
+    torchfits.write(
+        path,
+        torch.from_numpy(image),
+        header={
+            "CTYPE1": "RA---TAN",
+            "CTYPE2": "DEC--TAN",
+            "CRPIX1": 1.0,
+            "CRPIX2": 1.0,
+            "CRVAL1": 10.0,
+            "CRVAL2": 20.0,
+            "CDELT1": -0.01,
+            "CDELT2": 0.01,
+            "CTYPE1A": "RA---TAN",
+            "CTYPE2A": "DEC--TAN",
+            "CRPIX1A": 1.0,
+            "CRPIX2A": 1.0,
+            "CRVAL1A": 120.0,
+            "CRVAL2A": -30.0,
+            "CDELT1A": -0.02,
+            "CDELT2A": 0.02,
+        },
+        overwrite=True,
+    )
 
     try:
         wcs = torchsky.get_wcs(path, hdu=0, key="A")

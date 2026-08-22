@@ -33,8 +33,10 @@ import tempfile  # noqa: E402
 
 try:
     from torchsky.table import read as _table_read
+    from torchsky.table import write as _table_write
 except Exception:  # torchfits missing in a lean env
     _table_read = None
+    _table_write = None
 
 
 def _time_many(fn: Callable[[], Any], runs: int) -> float:
@@ -48,7 +50,7 @@ def _time_many(fn: Callable[[], Any], runs: int) -> float:
 
 
 def _has_native_table_io() -> bool:
-    return callable(_table_read)
+    return callable(_table_read) and callable(_table_write)
 
 
 def _astropy_crossmatch(
@@ -381,8 +383,19 @@ def main() -> int:
             with tempfile.TemporaryDirectory() as tmpdir:
                 left_path = Path(tmpdir) / "left_catalog.fits"
                 right_path = Path(tmpdir) / "right_catalog.fits"
-                left_table.write(left_path, format="fits", overwrite=True)
-                right_table.write(right_path, format="fits", overwrite=True)
+                _table_write(
+                    str(left_path),
+                    {name: np.asarray(left_table[name]) for name in left_table.colnames},
+                    overwrite=True,
+                )
+                _table_write(
+                    str(right_path),
+                    {
+                        name: np.asarray(right_table[name])
+                        for name in right_table.colnames
+                    },
+                    overwrite=True,
+                )
 
                 left_ra_fit, left_dec_fit = _load_torchsky_catalog_from_fits(left_path)
                 right_ra_fit, right_dec_fit = _load_torchsky_catalog_from_fits(
