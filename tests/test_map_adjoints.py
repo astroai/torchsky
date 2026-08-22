@@ -567,3 +567,36 @@ def test_learned_lowrank_kernel_gauges() -> None:
     spec = PSFSpec.learned(model, base_sigma_pix=2.3)
     radius = max(1, round(3.0 * 2.3))
     assert psf_support_radius(spec) == (2 * radius, 2 * radius)
+
+
+def test_learned_lowrank_psf_dot_product() -> None:
+    """<A x, y> == <x, A^T y> for the blended learned chromatic PSF."""
+    from torchsky.map.field.types import PSFSpec
+    from torchsky.map.operators import (
+        LowRankChromaticPSF,
+        apply_learned_psf_spec_adjoint,
+        apply_psf_spec,
+    )
+
+    torch.manual_seed(11)
+    model = LowRankChromaticPSF(
+        grid_side=2,
+        spectral_degree=1,
+        base_sigma_pix=0.8,
+        extent_pix=48.0,
+        kernel_size=5,
+    )
+    with torch.no_grad():
+        model.raw_log_sigma.normal_(0.0, 0.08)
+        model.raw_pa_rad.normal_(0.0, 0.2)
+        model.raw_ellipticity.normal_(0.0, 0.05)
+    u = torch.stack(
+        torch.meshgrid(torch.linspace(2, 46, 2), torch.linspace(2, 46, 2), indexing="ij"),
+        dim=-1,
+    ).reshape(-1, 2)
+    spec = PSFSpec.learned(model, base_sigma_pix=0.8, cell_u_pix=u, cell_lam_norm=0.5)
+    x = torch.randn(24, 24, dtype=torch.float64)
+    y = torch.randn(24, 24, dtype=torch.float64)
+    lhs = float((apply_psf_spec(x, spec) * y).sum())
+    rhs = float((x * apply_learned_psf_spec_adjoint(y, spec)).sum())
+    assert abs(lhs - rhs) / max(abs(lhs), 1e-30) < 1e-12

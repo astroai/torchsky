@@ -273,19 +273,33 @@ def apply_learned_psf_spec(image: Tensor, psf_spec: object) -> Tensor:
 
 
 def apply_learned_psf_spec_adjoint(image: Tensor, psf_spec: object) -> Tensor:
-    """Exact adjoint of :func:`apply_learned_psf_spec` via reverse-mode AD.
+    """Exact adjoint of :func:`apply_learned_psf_spec`.
 
-    The blended multi-kernel operator (per-cell kernels, tent weights,
-    per-pixel normalization) has too many moving parts for a hand-written
-    transpose to stay trustworthy; reverse-mode AD through the forward
-    itself is exact by construction. Costs one forward graph per call --
-    negligible for the initialization solvers that consume it.
+    Forward contribution of one cell (global same-conv semantics):
+    ``acc[p] = w(p) sum_d K[d] xp[p - pad + d]`` with ``xp[q] = x[q - pad]``.
+    Hence ``grad_x[t] = sum_j g[j] K[pad + t - j]`` for
+    ``g = y * w / S`` -- i.e. ``F.conv2d(pad(g, pad), K.flip(-1, -2))``
+    with no further crop or shift.
     """
-    x = torch.zeros_like(image, requires_grad=True)
-    with torch.enable_grad():
-        out = apply_psf_spec(x, psf_spec)
-    (grad,) = torch.autograd.grad(out, x, grad_outputs=image)
-    return grad
+    flat = image.reshape(-1, int(image.shape[-2]), int(image.shape[-1]))
+    height, width = int(flat.shape[-2]), int(flat.shape[-1])
+    cells = _learned_cells(psf_spec, height, width, image.dtype, image.device)
+    pad_y, pad_x = cells[0][6], cells[0][7]
+
+    weight_sum = torch.zeros_like(flat)
+    for wy0, wy1, wx0, wx1, weight, _kernel, _py, _px in cells:
+        weight_sum[:, wy0:wy1, wx0:wx1] += weight
+    scaled = flat / weight_sum.clamp_min(torch.finfo(flat.dtype).tiny)
+
+    grad = torch.zeros_like(flat)
+    for wy0, wy1, wx0, wx1, weight, kernel, pad_y, pad_x in cells:
+        g = torch.zeros_like(scaled)
+        g[:, wy0:wy1, wx0:wx1] = scaled[:, wy0:wy1, wx0:wx1] * weight
+        grad += F.conv2d(
+            F.pad(g, (pad_x, pad_x, pad_y, pad_y)),
+            kernel.flip(-1, -2).view(1, 1, *kernel.shape),
+        ).squeeze(0)
+    return grad.reshape(image.shape)
 
 
 def apply_learned_psf_variance_spec(variance: Tensor, psf_spec: object) -> Tensor:
