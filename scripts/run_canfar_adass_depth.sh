@@ -483,6 +483,13 @@ case "${mode}" in
     full_modules=${MODULES:-b}
     full_bands=${FOAM_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}
     echo "full mode: modules=${full_modules} bands=${full_bands} field_models=${field_models} psf=${psf_model} background=${background_model}"
+    "${BASH_SOURCE[0]}" calibration-extract "${run_id}"
+    gate "${artifact_root}/evidence/calibration_evidence_manifest.json"
+    CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
+      "${BASH_SOURCE[0]}" calibration-fit "${run_id}"
+    gate "${artifact_root}/fit/operator_calibration_fit.json"
+    CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
+    CALIBRATION_FIT_REPORT="${artifact_root}/fit/operator_calibration_fit.json" \
     FOAM_BANDS="${full_bands}" \
     MODULES="${full_modules}" \
       "${BASH_SOURCE[0]}" foam "${run_id}"
