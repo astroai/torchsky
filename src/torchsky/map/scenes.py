@@ -127,11 +127,11 @@ class HealpixMapScene(SceneRepresentation):
         *,
         mode: str,
     ) -> Tensor:
+        from .healpix_image_plane import sample_healpix_map_on_image_header
         from .healpix_spectral import (
             sample_healpix_map_on_image_header_harmonic,
             sample_healpix_map_on_image_header_spectral,
         )
-        from .healpix_image_plane import sample_healpix_map_on_image_header
 
         nside = self._resolved_nside()
         lmax = self.lmax
@@ -177,10 +177,11 @@ class HealpixMapScene(SceneRepresentation):
         if self.band_labels is not None and target.band_label in self.band_labels:
             band_index = self.band_labels.index(target.band_label)
             return self._project_single_map(data[band_index], target, mode=mode)
+        # ⚡ Bolt: data.unbind(dim=0) is faster than iterating with data[idx]
         return torch.stack(
             [
-                self._project_single_map(data[idx], target, mode=mode)
-                for idx in range(int(data.shape[0]))
+                self._project_single_map(band_data, target, mode=mode)
+                for band_data in data.unbind(dim=0)
             ],
             dim=0,
         )
@@ -228,10 +229,11 @@ class HarmonicAlmScene(SceneRepresentation):
         if self.band_labels is not None and target.band_label in self.band_labels:
             band_index = self.band_labels.index(target.band_label)
             return self._project_single_alm(data[band_index], target)
+        # ⚡ Bolt: data.unbind(dim=0) is faster than iterating with data[idx]
         return torch.stack(
             [
-                self._project_single_alm(data[idx], target)
-                for idx in range(int(data.shape[0]))
+                self._project_single_alm(band_data, target)
+                for band_data in data.unbind(dim=0)
             ],
             dim=0,
         )
