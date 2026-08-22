@@ -392,8 +392,8 @@ case "${mode}" in
           --models "${field_models}" \
           --fail-on-method-error \
           "${injection_args[@]+${injection_args[@]}}" \
-          --json-out "${batch_root}/${FOAM_SHARED_FOAM_NAME:-shared-foam.json}" \
-          --markdown-out "${batch_root}/${FOAM_SHARED_FOAM_NAME:-shared-foam.md}" \
+          --json-out "${batch_root}/${VAL_PSF_ARM:+${VAL_PSF_ARM}-}shared-foam.json" \
+          --markdown-out "${batch_root}/${VAL_PSF_ARM:+${VAL_PSF_ARM}-}shared-foam.md" \
           --export-dir "${batch_root}/products"
         gate "${batch_root}/shared-foam.json"
       done
@@ -551,11 +551,17 @@ case "${mode}" in
     if [[ "${all_val_done}" = "1" ]]; then
       echo "skipping foam-validation (all batches exist)"
     else
-      CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
-      CALIBRATION_FIT_REPORT="${artifact_root}/fit/learned_lowrank/operator_calibration_fit.json" \
-      FOAM_BANDS="${full_bands}" \
-      MODULES="${full_modules}" \
-        "${BASH_SOURCE[0]}" foam-validation "${run_id}"
+      for val_psf in fitted_gaussian_kernel learned_lowrank; do
+        if ! [[ -s "${artifact_root}/fit/${val_psf}/operator_calibration_fit.json" ]]; then
+          echo "skipping foam-validation ${val_psf} (no calibration report)" >&2
+          continue
+        fi
+        CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
+        CALIBRATION_FIT_REPORT="${val_report}" \
+        FOAM_BANDS="${full_bands}" \
+        MODULES="${full_modules}" \
+          "${BASH_SOURCE[0]}" foam-validation "${run_id}"
+      done
     fi
     for module in ${full_modules//,/ }; do
       gate "${artifact_root}/${module}/blank/shared-foam.json"
@@ -563,13 +569,11 @@ case "${mode}" in
     MODULES="${full_modules}" \
       "${BASH_SOURCE[0]}" native-band "${run_id}"
     # Model selection: every (psf_mode x model_kind) product cell under the run root.
-    score_methods=$(python3 - "${field_models}" "${psf_model}" <<'PYMETHODS'
+    score_methods=$(python3 - "${field_models}" <<'PYMETHODS'
 import sys
 models = [m.strip() for m in sys.argv[1].split(",") if m.strip()]
-if sys.argv[2] == "learned_lowrank":
+psf_modes = ["fitted_gaussian", "learned_lowrank"]
     psf_modes = ["fitted_gaussian", "learned_lowrank"]
-else:
-    psf_modes = ["fitted_gaussian"]
 print(",".join(f"{psf}/{model}" for psf in psf_modes for model in models))
 PYMETHODS
 )
