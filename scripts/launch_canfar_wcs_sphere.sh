@@ -253,6 +253,8 @@ launch_depth() {
     --env "PYTHONUNBUFFERED=1"
     --env "FIELD_MODELS=${FIELD_MODELS:-spectral_power_foam}"
     --env "PSF_MODEL=${PSF_MODEL:-fitted_gaussian}"
+    --env "CALIBRATION_EVIDENCE_MANIFEST=${CALIBRATION_EVIDENCE_MANIFEST:-}"
+    --env "CALIBRATION_FIT_REPORT=${CALIBRATION_FIT_REPORT:-}"
     --env "BACKGROUND_MODEL=${BACKGROUND_MODEL:-plane}"
     --env "MODULES=${MODULES:-b}"
     --env "PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-}"

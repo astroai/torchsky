@@ -318,8 +318,8 @@ case "${mode}" in
         "${operator_arm_args[@]+${operator_arm_args[@]}}" \
         --models "${field_models}" \
         --fail-on-method-error \
-        --json-out "${module_root}/shared-foam.json" \
-        --markdown-out "${module_root}/shared-foam.md" \
+        --json-out "${module_root}/${FOAM_SHARED_FOAM_NAME:-shared-foam.json}" \
+        --markdown-out "${module_root}/${FOAM_SHARED_FOAM_NAME:-shared-foam.md}" \
         --export-dir "${module_root}/products"
       gate "${module_root}/shared-foam.json"
     done
@@ -392,8 +392,8 @@ case "${mode}" in
           --models "${field_models}" \
           --fail-on-method-error \
           "${injection_args[@]+${injection_args[@]}}" \
-          --json-out "${batch_root}/shared-foam.json" \
-          --markdown-out "${batch_root}/shared-foam.md" \
+          --json-out "${batch_root}/${FOAM_SHARED_FOAM_NAME:-shared-foam.json}" \
+          --markdown-out "${batch_root}/${FOAM_SHARED_FOAM_NAME:-shared-foam.md}" \
           --export-dir "${batch_root}/products"
         gate "${batch_root}/shared-foam.json"
       done
@@ -532,10 +532,11 @@ case "${mode}" in
       fi
       CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
       CALIBRATION_FIT_REPORT="${report}" \
+      PSF_MODEL="${psf_arm}" \
+      FOAM_SHARED_FOAM_NAME="shared-foam-${psf_arm}.json" \
       FOAM_BANDS="${full_bands}" \
       MODULES="${full_modules}" \
         "${BASH_SOURCE[0]}" foam "${run_id}"
-      gate "${artifact_root}/b/shared-foam.json"
     done
     for module in ${full_modules//,/ }; do
       gate "${artifact_root}/${module}/shared-foam.json"
