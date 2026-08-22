@@ -86,7 +86,11 @@ for kind in "${field_model_list[@]+${field_model_list[@]}}"; do
   fi
 done
 # Validate the CSV against the registry (abort with the allowed list).
+# The editable install also builds torchsky._cpp, which every later step's
+# bare PYTHONPATH import needs.
 if [[ "${dry_run}" != "1" ]]; then
+pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+  python -m pip install -e "${source_root}" --no-build-isolation
 pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
   python - "${field_models}" <<'PYVALIDATE'
 import sys
