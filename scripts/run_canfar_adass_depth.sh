@@ -247,7 +247,7 @@ case "${mode}" in
       --lr "${calibration_lr}" \
       --device "${calibration_device}" \
       --psf-model "${CALIBRATION_FIT_PSF_MODEL:-${fit_psf_model}}"
-    gate "${artifact_root}/fit/operator_calibration_fit.json"
+    gate "${CALIBRATION_FIT_OUTPUT_DIR:-${artifact_root}/fit}/operator_calibration_fit.json"
     ;;
   calibration-inspect)
     calibration_manifest=${CALIBRATION_EVIDENCE_MANIFEST:?set CALIBRATION_EVIDENCE_MANIFEST}
@@ -511,6 +511,7 @@ case "${mode}" in
     # Dual PSF arms: implicit Fourier-conditioned kernel bank vs learned
     # low-rank chromatic control grid. Each gets its own calibration fit +
     # foam run; the scorer compares them as separate cells.
+    declare -A arm_to_bench=( [fitted_gaussian_kernel]=fitted_gaussian [learned_lowrank]=learned_lowrank )
     for psf_arm in fitted_gaussian_kernel learned_lowrank; do
       arm_dir="${artifact_root}/fit/${psf_arm}"
       if stage_done "${arm_dir}/operator_calibration_fit.json"; then
@@ -532,7 +533,7 @@ case "${mode}" in
       fi
       CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
       CALIBRATION_FIT_REPORT="${report}" \
-      PSF_MODEL="${psf_arm}" \
+      PSF_MODEL="${arm_to_bench[${psf_arm}]}" \
       FOAM_SHARED_FOAM_NAME="shared-foam-${psf_arm}.json" \
       FOAM_BANDS="${full_bands}" \
       MODULES="${full_modules}" \
@@ -551,7 +552,7 @@ case "${mode}" in
       echo "skipping foam-validation (all batches exist)"
     else
       CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
-      CALIBRATION_FIT_REPORT="${artifact_root}/fit/operator_calibration_fit.json" \
+      CALIBRATION_FIT_REPORT="${artifact_root}/fit/learned_lowrank/operator_calibration_fit.json" \
       FOAM_BANDS="${full_bands}" \
       MODULES="${full_modules}" \
         "${BASH_SOURCE[0]}" foam-validation "${run_id}"
