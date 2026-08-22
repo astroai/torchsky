@@ -625,14 +625,15 @@ def _initialize_foam_from_band_coadds(
             spec: Any = psf_spec,
             shape: tuple[int, int] = (height, width),
         ) -> torch.Tensor:
-            surface_brightness = values / areas
-            return (
-                apply_psf_spec(
-                    surface_brightness.reshape(shape),
-                    spec,
-                ).reshape(values.shape)
-                * areas
-            )
+            with torch.no_grad():
+                surface_brightness = values / areas
+                return (
+                    apply_psf_spec(
+                        surface_brightness.reshape(shape),
+                        spec,
+                    ).reshape(values.shape)
+                    * areas
+                )
 
         def psf_adjoint(
             values: torch.Tensor,
@@ -640,17 +641,18 @@ def _initialize_foam_from_band_coadds(
             spec: Any = psf_spec,
             shape: tuple[int, int] = (height, width),
         ) -> torch.Tensor:
-            if getattr(spec, "mode", "none") == "learned_lowrank":
-                core = apply_learned_psf_spec_adjoint(
-                    (values * areas).reshape(shape),
-                    spec,
-                )
-            else:
-                core = apply_psf_spec(
-                    (values * areas).reshape(shape),
-                    spec,
-                )
-            return core.reshape(values.shape) / areas
+            with torch.no_grad():
+                if getattr(spec, "mode", "none") == "learned_lowrank":
+                    core = apply_learned_psf_spec_adjoint(
+                        (values * areas).reshape(shape),
+                        spec,
+                    )
+                else:
+                    core = apply_psf_spec(
+                        (values * areas).reshape(shape),
+                        spec,
+                    )
+                return core.reshape(values.shape) / areas
 
         solved_gradients = None
         if isinstance(gradient_coefficients, torch.nn.Parameter):
@@ -932,10 +934,11 @@ def _refine_foam_from_observations_exact(
             shape: tuple[int, int] = (height, width),
         ) -> torch.Tensor:
             areas = areas.to(device=values.device)
-            return (
-                apply_psf_spec((values / areas).reshape(shape), spec).reshape(-1)
-                * areas
-            )
+            with torch.no_grad():
+                return (
+                    apply_psf_spec((values / areas).reshape(shape), spec).reshape(-1)
+                    * areas
+                )
 
         def psf_adjoint(
             values: torch.Tensor,
@@ -944,13 +947,14 @@ def _refine_foam_from_observations_exact(
             shape: tuple[int, int] = (height, width),
         ) -> torch.Tensor:
             areas = areas.to(device=values.device)
-            if getattr(spec, "mode", "none") == "learned_lowrank":
-                core = apply_learned_psf_spec_adjoint(
-                    (values * areas).reshape(shape), spec
-                )
-            else:
-                core = apply_psf_spec((values * areas).reshape(shape), spec)
-            return core.reshape(-1) / areas
+            with torch.no_grad():
+                if getattr(spec, "mode", "none") == "learned_lowrank":
+                    core = apply_learned_psf_spec_adjoint(
+                        (values * areas).reshape(shape), spec
+                    )
+                else:
+                    core = apply_psf_spec((values * areas).reshape(shape), spec)
+                return core.reshape(-1) / areas
 
         wavelengths, response = bandpass_quadrature(
             observation,
