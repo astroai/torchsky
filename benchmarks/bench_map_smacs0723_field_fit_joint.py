@@ -98,6 +98,7 @@ from torchsky.map.operators import (  # noqa: E402
     LearnedBackgroundOp,
     LearnedPSFOp,
     LowRankChromaticPSF,
+    AdaptiveSpatioSpectralTemporalEncoder,
     ObservationOperatorBundle,
     StructuredDetectorNoise,
     StructuredNoiseOp,
