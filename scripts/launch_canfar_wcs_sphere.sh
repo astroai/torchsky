@@ -259,9 +259,11 @@ launch_depth() {
     --env "TORCHSKY_DEVICE=${TORCHSKY_DEVICE:-}"
   )
   # MIG slices assert inside the torch caching allocator (torch 2.10);
-  # only take a GPU slot when the operator will actually run on CUDA.
+  # only take GPU slots when the operator will actually run on CUDA.
+  # TORCHSKY_CANFAR_GPUS: number of GPU slots (the foam fit itself is
+  # single-device; extra slots only expose more devices to the session).
   if [[ "${TORCHSKY_DEVICE:-auto}" != "cpu" ]]; then
-    create_args+=(--gpu 1)
+    create_args+=(--gpu "${TORCHSKY_CANFAR_GPUS:-1}")
   fi
   if [[ -n "${TORCHSKY_GH_TOKEN:-}" ]]; then
     create_args+=(--env "GH_TOKEN=${TORCHSKY_GH_TOKEN}")
