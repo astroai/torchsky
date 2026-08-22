@@ -116,3 +116,10 @@ astrometry.cfg
 # worktree bootstrap + local build artifacts
 sitecustomize.py
 src/torchsky/_cpp*.so
+
+# LaTeX build artifacts
+*.aux
+*.fdb_latexmk
+*.fls
+*.out
+*.synctex.gz
