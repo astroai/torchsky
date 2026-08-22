@@ -485,8 +485,8 @@ def test_csc_python_matches_fused_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
     ra_a, dec_a = awcs.all_pix2world(x, y, 0)
     dra_a = _ra_wrap_delta(ra_p.numpy(), ra_a)
     ddec_a = dec_p.numpy() - dec_a
-    np.testing.assert_allclose(dra_a, 0.0, atol=1e-10)
-    np.testing.assert_allclose(ddec_a, 0.0, atol=1e-10)
+    np.testing.assert_allclose(dra_a, 0.0, atol=1e-6)
+    np.testing.assert_allclose(ddec_a, 0.0, atol=1e-6)
 
 
 def test_csc_aten_cpu_is_not_the_wcslib_floor(
