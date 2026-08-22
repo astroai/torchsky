@@ -267,6 +267,19 @@ def apply_learned_psf_spec(image: Tensor, psf_spec: object) -> Tensor:
             (c[0], c[1], c[2], c[3], c[4], c[5].detach(), c[6], c[7])
             for c in cells
         ]
+    return apply_blended_cell_kernels(image, flat, cells)
+
+
+def apply_blended_cell_kernels(
+    image: Tensor,
+    flat: Tensor,
+    cells: list[tuple],
+) -> Tensor:
+    """Tent-weighted blend of per-cell unit-sum kernels over ``flat``.
+
+    Shared by :func:`apply_learned_psf_spec` and
+    ``LowRankChromaticPSF.filter_image`` so both render paths stay identical.
+    """
     pad_y, pad_x = cells[0][6], cells[0][7]
     padded = F.pad(flat, (pad_x, pad_x, pad_y, pad_y))
     out = torch.zeros_like(flat)

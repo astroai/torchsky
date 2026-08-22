@@ -971,7 +971,25 @@ class LowRankChromaticPSF(nn.Module):
         params = self(u_pix, lam_norm)
         return gaussian_kernels_from_params(params, size=self.kernel_size)
 
-    def forward(self, u_pix: Tensor, lam_norm: Tensor | float) -> Tensor:
+    def forward(self, *args, spatial_x=None, spatial_y=None,
+                wavelength=None, time_mjd=None, **kwargs):
+        """Dispatch between the two call contracts.
+
+        Renderer: ``model(image, spatial_x=..., spatial_y=..., wavelength=...)``
+        returns the PSF-filtered image. Low-level/calibration callers pass
+        ``(u_pix, lam_norm)`` and get stacked ``(sigma_x, sigma_y, rho)``.
+        """
+        if spatial_x is not None or "image" in kwargs:
+            image = kwargs.get("image", args[0] if args else None)
+            sx = spatial_x if spatial_x is not None else kwargs["spatial_x"]
+            sy = spatial_y if spatial_y is not None else kwargs["spatial_y"]
+            wl = wavelength if wavelength is not None else kwargs.get("wavelength")
+            return self.filter_image(image=image, spatial_x=sx, spatial_y=sy, wavelength=wl)
+        u_pix = args[0] if args else kwargs["u_pix"]
+        lam_norm = args[1] if len(args) > 1 else kwargs["lam_norm"]
+        return self._forward_uvlam(u_pix, lam_norm)
+
+    def _forward_uvlam(self, u_pix: Tensor, lam_norm: Tensor | float) -> Tensor:
         """Return stacked ``(sigma_x, sigma_y, rho)`` of shape ``[N, 3]``."""
         if u_pix.ndim != 2 or u_pix.shape[-1] != 2:
             raise ValueError("u_pix must have shape [N, 2]")
@@ -1019,6 +1037,80 @@ class LowRankChromaticPSF(nn.Module):
         sigma_y = var_y.clamp_min(1e-8).sqrt()
         rho = cov_xy / (sigma_x * sigma_y)
         return torch.stack([sigma_x, sigma_y, rho], dim=-1)
+
+    def filter_image(
+        self,
+        image: Tensor,
+        *,
+        spatial_x: Tensor,
+        spatial_y: Tensor,
+        wavelength: Tensor | float,
+        time_mjd: Tensor | float | None = None,
+    ) -> Tensor:
+        """Renderer-compatible entry point (ConditionedKernelPSF contract).
+
+        Divides ``image`` into ``grid_side^2`` cells, evaluates this model's
+        parameters at each cell center (detector coordinates from
+        ``spatial_x``/``spatial_y``), and blends the per-cell unit-sum
+        kernels with tent weights -- mirroring the psf.py blend exactly.
+        """
+        import torch.nn.functional as Fm
+
+        height, width = map(int, image.shape[-2:])
+        device = image.device
+        dtype = image.dtype
+        gs = self.grid_side
+        ks = self.kernel_size
+        pad = ks // 2
+        cell_h = -(-height // gs)
+        cell_w = -(-width // gs)
+
+        lam_norm = self.normalized_wavelength(
+            wavelength if torch.is_tensor(wavelength) else torch.tensor(wavelength)
+        ).reshape(())
+        flat = image.reshape(-1, height, width)
+        out = torch.zeros_like(flat)
+        weight_sum = torch.zeros_like(flat)
+
+        for iy in range(gs):
+            y0, y1 = iy * cell_h, min(height, (iy + 1) * cell_h)
+            if y0 >= y1:
+                continue
+            for ix in range(gs):
+                x0, x1 = ix * cell_w, min(width, (ix + 1) * cell_w)
+                if x0 >= x1:
+                    continue
+                cy = float(spatial_y[y0:y1, x0:x1].reshape(-1).float().mean())
+                cx = float(spatial_x[y0:y1, x0:x1].reshape(-1).float().mean())
+                u = torch.tensor([[cx, cy]], device=device, dtype=dtype)
+                params = self(u, float(lam_norm))
+                kern = gaussian_kernels_from_params(params, size=ks)[0]
+                wy0, wy1 = max(0, y0 - pad), min(height, y1 + pad)
+                wx0, wx1 = max(0, x0 - pad), min(width, x1 + pad)
+                tx_full = torch.ones(wx1 - wx0, device=device, dtype=dtype)
+                for i, xx in enumerate(range(wx0, wx1)):
+                    if xx < x0:
+                        tx_full[i] = float(xx - (x0 - pad) + 1) / max(pad, 1)
+                    elif xx >= x1:
+                        tx_full[i] = float((x1 + pad) - xx) / max(pad, 1)
+                ty_full = torch.ones(wy1 - wy0, device=device, dtype=dtype)
+                for i, yy in enumerate(range(wy0, wy1)):
+                    if yy < y0:
+                        ty_full[i] = float(yy - (y0 - pad) + 1) / max(pad, 1)
+                    elif yy >= y1:
+                        ty_full[i] = float((y1 + pad) - yy) / max(pad, 1)
+                w2d = ty_full.view(-1, 1) * tx_full.view(1, -1)
+                padded_win = Fm.pad(
+                    flat[:, wy0:wy1, wx0:wx1], (pad, pad, pad, pad)
+                )
+                conv = Fm.conv2d(
+                    padded_win.unsqueeze(1), kern.view(1, 1, ks, ks)
+                ).squeeze(0)[0, : w2d.shape[-2], : w2d.shape[-1]]
+                out[:, wy0:wy1, wx0:wx1] += conv * w2d
+                weight_sum[:, wy0:wy1, wx0:wx1] += w2d
+        return (out / weight_sum.clamp_min(torch.finfo(out.dtype).tiny)).reshape(
+            image.shape
+        )
 
     def smoothness_penalty(self) -> Tensor:
         """Discrete Laplacian energy on each control-grid coefficient field."""
