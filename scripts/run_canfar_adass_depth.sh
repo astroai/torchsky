@@ -20,7 +20,7 @@ if [[ "${dry_run}" != "1" ]]; then
   esac
 
   mkdir -p "${artifact_root}"
-  exec > >(tee "${artifact_root}/session.log") 2>&1
+  exec > >(tee -a "${artifact_root}/session.log") 2>&1
 fi
 
 echo "run_id=${run_id}"
@@ -56,6 +56,18 @@ export TORCHSKY_DATA="${data_root}"
 export PATH="${PIXI_HOME}/bin:${PATH}"
 export PYTHONPATH="${source_root}/src${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONUNBUFFERED=1
+# Build/install the local editable torchsky (incl. torchsky._cpp) only when
+# it is not already importable -- sub-invocations of the full chain skip it.
+ensure_native_build() {
+  if pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+      python -c "import torchsky; import torchsky.cpp" >/dev/null 2>&1; then
+    echo "torchsky native build already available; skipping install"
+    return 0
+  fi
+  pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+    python -m pip install -e "${source_root}" --no-build-isolation
+}
+
 if ! command -v pixi >/dev/null 2>&1; then
   curl -fsSL https://pixi.sh/install.sh | bash
 fi
@@ -89,8 +101,7 @@ done
 # The editable install also builds torchsky._cpp, which every later step's
 # bare PYTHONPATH import needs.
 if [[ "${dry_run}" != "1" ]]; then
-pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
-  python -m pip install -e "${source_root}" --no-build-isolation
+ensure_native_build
 pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
   python - "${field_models}" <<'PYVALIDATE'
 import sys
@@ -210,8 +221,7 @@ case "${mode}" in
     echo "calibration_pattern=${calibration_pattern}"
     echo "calibration_exposure_count=${exposure_count}"
     test "${exposure_count}" = "${expected_exposure_count}"
-    pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
-      python -m pip install -e "${source_root}" --no-build-isolation
+    ensure_native_build
     pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
       python -c 'from torchsky.cli import main; raise SystemExit(main())' \
       calibration-extract \
@@ -225,8 +235,7 @@ case "${mode}" in
     calibration_lr=${CALIBRATION_FIT_LR:-0.001}
     calibration_device=${CALIBRATION_FIT_DEVICE:-cpu}
     test -s "${calibration_manifest}"
-    pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
-      python -m pip install -e "${source_root}" --no-build-isolation
+    ensure_native_build
     pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
       python "${source_root}/benchmarks/fit_smacs0723_operator_calibration.py" \
       --manifest "${calibration_manifest}" \
