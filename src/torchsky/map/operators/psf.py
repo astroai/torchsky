@@ -303,32 +303,64 @@ def apply_learned_psf_spec_adjoint(image: Tensor, psf_spec: object) -> Tensor:
 
 
 def apply_learned_psf_variance_spec(variance: Tensor, psf_spec: object) -> Tensor:
-    """Propagate diagonal pixel variance through the blended cell operator.
+    """Exact diagonal-noise propagation through the blended cell operator.
 
-    With ``A = sum_c (w_c / S) B_c`` and independent pixels, per-pixel
-    variance combines as ``Var(Ay) = sum_c (w_c / S)^2 (K_c^2 conv V)``.
+    With ``A[p,j] = sum_c w_c(p) K_c[j-p+pad] / S(p)``, independent pixel
+    noise gives ``Var(Ay)[p] = (1/S(p)^2) sum_j (sum_c w_c(p) K_c[j-p+pad])^2
+    V[j]``. Expanding the square separates into ordered cell pairs whose
+    cross terms are correlations of ``V`` with the pointwise kernel products
+    ``K_c * K_c'`` -- all of them, including the c = c' diagonal. Dropping
+    the off-diagonal pairs is NOT valid where windows overlap heavily.
     """
     flat = variance.reshape(-1, int(variance.shape[-2]), int(variance.shape[-1]))
     height, width = int(flat.shape[-2]), int(flat.shape[-1])
     cells = _learned_cells(psf_spec, height, width, variance.dtype, variance.device)
     pad_y, pad_x = cells[0][6], cells[0][7]
     padded = F.pad(flat, (pad_x, pad_x, pad_y, pad_y))
+
+    S = torch.zeros_like(flat)
+    for wy0, wy1, wx0, wx1, weight, _kernel, _py, _px in cells:
+        S[:, wy0:wy1, wx0:wx1] += weight
+
     out = torch.zeros_like(flat)
-    weight_sum = torch.zeros_like(flat)
-    weight_sq_sum = torch.zeros_like(flat)
-    for wy0, wy1, wx0, wx1, weight, kernel, pad_y, pad_x in cells:
-        conv_var = F.conv2d(
-            padded.unsqueeze(1), (kernel.square()).view(1, 1, *kernel.shape)
-        ).squeeze(1)[:, wy0:wy1, wx0:wx1]
-        out[:, wy0:wy1, wx0:wx1] += conv_var * weight.square()
-        weight_sq_sum[:, wy0:wy1, wx0:wx1] += weight.square()
-        weight_sum[:, wy0:wy1, wx0:wx1] += weight
-    # Var(Ay) = sum_c (w_c / S)^2 (K_c^2 conv V): the common 1/S^2 factor
-    # scales the whole blend.
-    denom = (weight_sq_sum * weight_sum.square()).clamp_min(
-        torch.finfo(out.dtype).tiny
-    )
+    for c1 in cells:
+        for c2 in cells:
+            kk = c1[5] * c2[5]
+            coef = torch.zeros_like(flat)
+            ry0, ry1 = max(c1[0], c2[0]), min(c1[1], c2[1])
+            rx0, rx1 = max(c1[2], c2[2]), min(c1[3], c2[3])
+            if ry0 >= ry1 or rx0 >= rx1:
+                continue
+            coef[
+                :, ry0:ry1, rx0:rx1
+            ] = (
+                c1[4][ry0 - c1[0] : ry1 - c1[0], rx0 - c1[2] : rx1 - c1[2]]
+                * c2[4][ry0 - c2[0] : ry1 - c2[0], rx0 - c2[2] : rx1 - c2[2]]
+            )
+            corr = F.conv2d(
+                padded, kk.flip(-1, -2).view(1, 1, *kk.shape)
+            ).squeeze(1)[:, ry0:ry1, rx0:rx1]
+            out[:, ry0:ry1, rx0:rx1] += corr * coef[:, ry0:ry1, rx0:rx1]
+    denom = S.square().clamp_min(torch.finfo(out.dtype).tiny)
     return (out / denom).reshape(variance.shape)
+
+
+def apply_psf_spec(image: Tensor, psf_spec: object | None) -> Tensor:
+    if psf_spec is None:
+        return image
+    mode = getattr(psf_spec, "mode", "none")
+    if mode == "none":
+        return image
+    if mode == "gaussian_sigma_pix":
+        return gaussian_blur(image, float(getattr(psf_spec, "sigma_pix", 0.0)))
+    if mode == "kernel2d":
+        kernel = getattr(psf_spec, "kernel2d", None)
+        if kernel is None:
+            raise ValueError("kernel2d PSF mode requires kernel2d")
+        return apply_kernel2d(image, kernel)
+    if mode == "learned_lowrank":
+        return apply_learned_psf_spec(image, psf_spec)
+    raise ValueError(f"unsupported PSF mode {mode!r}")
 
 
 def apply_psf_variance_spec(variance: Tensor, psf_spec: object | None) -> Tensor:
@@ -349,22 +381,4 @@ def apply_psf_variance_spec(variance: Tensor, psf_spec: object | None) -> Tensor
         return apply_kernel2d_variance(variance, kernel)
     if mode == "learned_lowrank":
         return apply_learned_psf_variance_spec(variance, psf_spec)
-    raise ValueError(f"unsupported PSF mode {mode!r}")
-
-
-def apply_psf_spec(image: Tensor, psf_spec: object | None) -> Tensor:
-    if psf_spec is None:
-        return image
-    mode = getattr(psf_spec, "mode", "none")
-    if mode == "none":
-        return image
-    if mode == "gaussian_sigma_pix":
-        return gaussian_blur(image, float(getattr(psf_spec, "sigma_pix", 0.0)))
-    if mode == "kernel2d":
-        kernel = getattr(psf_spec, "kernel2d", None)
-        if kernel is None:
-            raise ValueError("kernel2d PSF mode requires kernel2d")
-        return apply_kernel2d(image, kernel)
-    if mode == "learned_lowrank":
-        return apply_learned_psf_spec(image, psf_spec)
     raise ValueError(f"unsupported PSF mode {mode!r}")
