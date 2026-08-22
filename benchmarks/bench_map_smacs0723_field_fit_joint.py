@@ -341,7 +341,9 @@ def _apply_learned_psf_arm(
             # Calibration-anchored nuisance: frozen during scene fitting so
             # renders through it build no autograd graph.
             model.requires_grad_(False)
-            models[band] = model
+            models[band] = model.to(
+                next(iter({o.image.device for o in observations if hasattr(o, 'image')}), torch.device('cpu'))
+            )
         height, width = (int(v) for v in observation.image.shape[-2:])
         xs = torch.linspace(0.0, width - 1.0, grid_side) + float(
             observation.detector_x0_pix

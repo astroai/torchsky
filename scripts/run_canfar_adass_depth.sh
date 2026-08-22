@@ -557,7 +557,8 @@ case "${mode}" in
           continue
         fi
         CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
-        CALIBRATION_FIT_REPORT="${val_report}" \
+        CALIBRATION_FIT_REPORT="${artifact_root}/fit/${val_psf}/operator_calibration_fit.json" \
+        VAL_PSF_ARM="${val_psf}" \
         FOAM_BANDS="${full_bands}" \
         MODULES="${full_modules}" \
           "${BASH_SOURCE[0]}" foam-validation "${run_id}"
@@ -568,12 +569,10 @@ case "${mode}" in
     done
     MODULES="${full_modules}" \
       "${BASH_SOURCE[0]}" native-band "${run_id}"
-    # Model selection: every (psf_mode x model_kind) product cell under the run root.
     score_methods=$(python3 - "${field_models}" <<'PYMETHODS'
 import sys
 models = [m.strip() for m in sys.argv[1].split(",") if m.strip()]
 psf_modes = ["fitted_gaussian", "learned_lowrank"]
-    psf_modes = ["fitted_gaussian", "learned_lowrank"]
 print(",".join(f"{psf}/{model}" for psf in psf_modes for model in models))
 PYMETHODS
 )
