@@ -512,6 +512,7 @@ def _fit_group(
             "detector": detector,
             "role": role,
             "family": family,
+            "psf_model": psf_model if role == "psf" else None,
             "state_dict": model.state_dict(),
         },
         checkpoint,

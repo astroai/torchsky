@@ -207,14 +207,15 @@ def _load_calibrated_operator_models(
                 detector=detector,
                 verify_hashes=True,
             )
+            checkpoint = torch.load(
+                checkpoint_path, map_location="cpu", weights_only=True
+            )
             model, _initializer = calibration_fit._make_model(
                 arrays,
                 role=role,
                 family="adaptive",
                 device=torch.device("cpu"),
-            )
-            checkpoint = torch.load(
-                checkpoint_path, map_location="cpu", weights_only=True
+                psf_model=str(checkpoint.get("psf_model") or "fitted_gaussian_kernel"),
             )
             if (
                 checkpoint.get("schema_version") != 1
