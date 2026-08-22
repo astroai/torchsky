@@ -187,13 +187,16 @@ else
 fi
 
 operator_calibration_args=()
-if [[ -n "${CALIBRATION_EVIDENCE_MANIFEST:-}" || -n "${CALIBRATION_FIT_REPORT:-}" ]]; then
-  test -n "${CALIBRATION_EVIDENCE_MANIFEST:-}"
-  test -n "${CALIBRATION_FIT_REPORT:-}"
+# The calibration-fit stage runs with the manifest only (it PRODUCES the fit
+# report), so require both envs only when wiring calibrated operators into
+# a scene fit; partial envs are legitimate in earlier chain stages.
+if [[ -n "${CALIBRATION_EVIDENCE_MANIFEST:-}" && -n "${CALIBRATION_FIT_REPORT:-}" ]]; then
   operator_calibration_args=(
     --operator-calibration-manifest "${CALIBRATION_EVIDENCE_MANIFEST}"
     --operator-calibration-fit-report "${CALIBRATION_FIT_REPORT}"
   )
+elif [[ -n "${CALIBRATION_EVIDENCE_MANIFEST:-}" || -n "${CALIBRATION_FIT_REPORT:-}" ]]; then
+  echo "calibration operator envs partially set; skipping operator_calibration_args" >&2
 fi
 
 # --- module fan-out ----------------------------------------------------------
