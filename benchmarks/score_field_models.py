@@ -491,10 +491,20 @@ def main() -> int:
         print(f"depth figure skipped: {exc}")
     best = max(per_method, key=lambda row: row["m50_ci"]["m50"]) if per_method else None
     if best is not None:
-        src_dir = (
-            input_root / args.module / BATCHES[0] / "products"
-            / best["psf_mode"] / BANDS[0] if False else None
-        )
+        # Copy the winning cell's images next to the report so the result is
+        # directly viewable (PNGs), not just JSON.
+        import shutil
+
+        for band in bands:
+            src = (
+                input_root / args.module / BATCHES[0] / "products"
+                / best["psf_mode"] / band / best["model_kind"]
+            )
+            dst = out_dir / "best_cell_products" / band
+            dst.mkdir(parents=True, exist_ok=True)
+            for name in ("prediction.png", "reference.png", "residual.png"):
+                if (src / name).is_file():
+                    shutil.copy2(src / name, dst / f"{band}_{name}")
     summary_path = out_dir / "model_selection.json"
     summary_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True, allow_nan=False) + "\n"
