@@ -988,11 +988,16 @@ def solve_spectral_power_pixel_affine_least_squares(
     batch_auto = observation_batch_size == "auto"
     transfer_budget_bytes = sum(observation_transfer_bytes)
     if batch_auto and device.type == "cuda":
-        free_device_bytes, _ = torch.cuda.mem_get_info(device)
-        # ponytail: reserve 80% of currently free CUDA memory for the model,
-        # workspaces, and allocator fragmentation. Upgrade to measured peak
-        # telemetry if heterogeneous real exposures defeat this bound.
-        transfer_budget_bytes = min(2 * 1024**3, free_device_bytes // 5)
+        try:
+            free_device_bytes, _ = torch.cuda.mem_get_info(device)
+            # ponytail: reserve 80% of currently free CUDA memory for the model,
+            # workspaces, and allocator fragmentation. Upgrade to measured peak
+            # telemetry if heterogeneous real exposures defeat this bound.
+            transfer_budget_bytes = min(2 * 1024**3, free_device_bytes // 5)
+        except RuntimeError:
+            # torch.cuda.mem_get_info routes through NVML and asserts on some
+            # H100 MIG slices; fall back to the conservative 2 GiB cap.
+            transfer_budget_bytes = min(transfer_budget_bytes, 2 * 1024**3)
     max_observation_bytes = max(observation_transfer_bytes)
     batch_size = (
         max(
@@ -1081,11 +1086,14 @@ def solve_spectral_power_pixel_affine_least_squares(
     # CUDA memory; replace this heuristic with allocator telemetry if real
     # fragmented-device runs show that free bytes overestimate usable memory.
     block_budget_bytes = 512 * 1024**2
-    if device.type == "cuda":
-        free_device_bytes, _ = torch.cuda.mem_get_info(device)
-        block_budget_bytes = min(block_budget_bytes, free_device_bytes // 10)
-    else:
-        block_budget_bytes = min(block_budget_bytes, 256 * 1024**2)
+    try:
+        if device.type == "cuda":
+            free_device_bytes, _ = torch.cuda.mem_get_info(device)
+            block_budget_bytes = min(block_budget_bytes, free_device_bytes // 10)
+        else:
+            block_budget_bytes = min(block_budget_bytes, 256 * 1024**2)
+    except RuntimeError:
+        pass  # keep the 512 MiB cap when NVML is unavailable (MIG slices)
     if preconditioner_max_bytes is not None:
         block_budget_bytes = min(block_budget_bytes, int(preconditioner_max_bytes))
     use_cell_block = preconditioner == "cell_block" or (
