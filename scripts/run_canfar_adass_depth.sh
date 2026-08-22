@@ -242,11 +242,11 @@ case "${mode}" in
     pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
       python "${source_root}/benchmarks/fit_smacs0723_operator_calibration.py" \
       --manifest "${calibration_manifest}" \
-      --output-dir "${artifact_root}/fit" \
+      --output-dir "${CALIBRATION_FIT_OUTPUT_DIR:-${artifact_root}/fit}" \
       --steps "${calibration_steps}" \
       --lr "${calibration_lr}" \
       --device "${calibration_device}" \
-      --psf-model "${fit_psf_model}"
+      --psf-model "${CALIBRATION_FIT_PSF_MODEL:-${fit_psf_model}}"
     gate "${artifact_root}/fit/operator_calibration_fit.json"
     ;;
   calibration-inspect)
@@ -498,24 +498,62 @@ case "${mode}" in
     full_modules=${MODULES:-b}
     full_bands=${FOAM_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}
     echo "full mode: modules=${full_modules} bands=${full_bands} field_models=${field_models} psf=${psf_model} background=${background_model}"
-    "${BASH_SOURCE[0]}" calibration-extract "${run_id}"
-    gate "${artifact_root}/evidence/calibration_evidence_manifest.json"
-    CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
-      "${BASH_SOURCE[0]}" calibration-fit "${run_id}"
-    gate "${artifact_root}/fit/operator_calibration_fit.json"
-    CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
-    CALIBRATION_FIT_REPORT="${artifact_root}/fit/operator_calibration_fit.json" \
-    FOAM_BANDS="${full_bands}" \
-    MODULES="${full_modules}" \
-      "${BASH_SOURCE[0]}" foam "${run_id}"
+
+    stage_done() { [[ -s "$1" ]]; }
+
+    if stage_done "${artifact_root}/evidence/calibration_evidence_manifest.json"; then
+      echo "skipping calibration-extract (manifest exists)"
+    else
+      "${BASH_SOURCE[0]}" calibration-extract "${run_id}"
+      gate "${artifact_root}/evidence/calibration_evidence_manifest.json"
+    fi
+
+    # Dual PSF arms: implicit Fourier-conditioned kernel bank vs learned
+    # low-rank chromatic control grid. Each gets its own calibration fit +
+    # foam run; the scorer compares them as separate cells.
+    for psf_arm in fitted_gaussian_kernel learned_lowrank; do
+      arm_dir="${artifact_root}/fit/${psf_arm}"
+      if stage_done "${arm_dir}/operator_calibration_fit.json"; then
+        echo "skipping calibration-fit ${psf_arm} (report exists)"
+      else
+        CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
+          "${BASH_SOURCE[0]}" calibration-fit "${run_id}"           --output-dir "${arm_dir}" --psf-model "${psf_arm}"
+        gate "${arm_dir}/operator_calibration_fit.json"
+      fi
+    done
+
+    for psf_arm in fitted_gaussian_kernel learned_lowrank; do
+      arm_dir="${artifact_root}/fit/${psf_arm}"
+      report="${arm_dir}/operator_calibration_fit.json"
+      if ! stage_done "${report}"; then
+        echo "skipping foam ${psf_arm} (no calibration report)" >&2
+        continue
+      fi
+      CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
+      CALIBRATION_FIT_REPORT="${report}" \
+      FOAM_BANDS="${full_bands}" \
+      MODULES="${full_modules}" \
+        "${BASH_SOURCE[0]}" foam "${run_id}"
+      gate "${artifact_root}/shared-foam.json"
+    done
     for module in ${full_modules//,/ }; do
       gate "${artifact_root}/${module}/shared-foam.json"
     done
-    CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
-    CALIBRATION_FIT_REPORT="${artifact_root}/fit/operator_calibration_fit.json" \
-    FOAM_BANDS="${full_bands}" \
-    MODULES="${full_modules}" \
-      "${BASH_SOURCE[0]}" foam-validation "${run_id}"
+    all_val_done=1
+    for module in ${full_modules//,/ }; do
+      for batch in blank validation-000 validation-001 validation-002; do
+        stage_done "${artifact_root}/${module}/${batch}/shared-foam.json" || all_val_done=0
+      done
+    done
+    if [[ "${all_val_done}" = "1" ]]; then
+      echo "skipping foam-validation (all batches exist)"
+    else
+      CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
+      CALIBRATION_FIT_REPORT="${artifact_root}/fit/operator_calibration_fit.json" \
+      FOAM_BANDS="${full_bands}" \
+      MODULES="${full_modules}" \
+        "${BASH_SOURCE[0]}" foam-validation "${run_id}"
+    fi
     for module in ${full_modules//,/ }; do
       gate "${artifact_root}/${module}/blank/shared-foam.json"
     done
