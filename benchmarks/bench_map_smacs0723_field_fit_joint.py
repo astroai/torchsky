@@ -327,6 +327,9 @@ def _apply_learned_psf_arm(
                 spectral_degree=spectral_degree,
                 base_sigma_pix=float(observation.psf_sigma_pix),
             )
+            # Calibration-anchored nuisance: frozen during scene fitting so
+            # renders through it build no autograd graph.
+            model.requires_grad_(False)
             models[band] = model
         height, width = (int(v) for v in observation.image.shape[-2:])
         xs = torch.linspace(0.0, width - 1.0, grid_side) + float(
