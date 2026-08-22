@@ -248,15 +248,25 @@ def apply_learned_psf_spec(image: Tensor, psf_spec: object) -> Tensor:
     """Apply a learned low-rank chromatic PSF with blended control cells.
 
     Each control kernel is applied to the globally zero-padded image (same
-    conv), and the per-cell results are blended by tent weights that form a
-    normalized partition of unity over the control grid -- no hard cell
-    boundaries. Because every cell reads one shared global convolution
-    geometry, :func:`apply_learned_psf_spec_adjoint` is exact by
-    construction.
+    conv), and the per-cell results are blended by tent weights forming a
+    normalized partition of unity -- no hard cell boundaries.
+
+    Kernels depend only on the calibration-anchored (frozen) PSF parameters
+    and the cell geometry -- never on the scene -- so they are built under
+    ``no_grad`` and detached. Scene gradients still flow through every
+    convolution to ``image``; only the frozen kernel construction stays out
+    of the graph, capping render memory at one conv workspace per cell.
     """
     flat = image.reshape(-1, int(image.shape[-2]), int(image.shape[-1]))
     height, width = int(flat.shape[-2]), int(flat.shape[-1])
-    cells = _learned_cells(psf_spec, height, width, image.dtype, image.device)
+    with torch.no_grad():
+        cells = _learned_cells(
+            psf_spec, height, width, image.dtype, image.device
+        )
+        cells = [
+            (c[0], c[1], c[2], c[3], c[4], c[5].detach(), c[6], c[7])
+            for c in cells
+        ]
     pad_y, pad_x = cells[0][6], cells[0][7]
     padded = F.pad(flat, (pad_x, pad_x, pad_y, pad_y))
     out = torch.zeros_like(flat)
@@ -279,26 +289,30 @@ def apply_learned_psf_spec_adjoint(image: Tensor, psf_spec: object) -> Tensor:
     ``acc[p] = w(p) sum_d K[d] xp[p - pad + d]`` with ``xp[q] = x[q - pad]``.
     Hence ``grad_x[t] = sum_j g[j] K[pad + t - j]`` for
     ``g = y * w / S`` -- i.e. ``F.conv2d(pad(g, pad), K.flip(-1, -2))``
-    with no further crop or shift.
+    with no further crop or shift. Runs fully under ``no_grad``: the adjoint
+    is a pure linear map on the cotangent.
     """
     flat = image.reshape(-1, int(image.shape[-2]), int(image.shape[-1]))
     height, width = int(flat.shape[-2]), int(flat.shape[-1])
-    cells = _learned_cells(psf_spec, height, width, image.dtype, image.device)
-    pad_y, pad_x = cells[0][6], cells[0][7]
+    with torch.no_grad():
+        cells = _learned_cells(
+            psf_spec, height, width, image.dtype, image.device
+        )
+        pad_y, pad_x = cells[0][6], cells[0][7]
 
-    weight_sum = torch.zeros_like(flat)
-    for wy0, wy1, wx0, wx1, weight, _kernel, _py, _px in cells:
-        weight_sum[:, wy0:wy1, wx0:wx1] += weight
-    scaled = flat / weight_sum.clamp_min(torch.finfo(flat.dtype).tiny)
+        weight_sum = torch.zeros_like(flat)
+        for wy0, wy1, wx0, wx1, weight, _kernel, _py, _px in cells:
+            weight_sum[:, wy0:wy1, wx0:wx1] += weight
+        scaled = flat / weight_sum.clamp_min(torch.finfo(flat.dtype).tiny)
 
-    grad = torch.zeros_like(flat)
-    for wy0, wy1, wx0, wx1, weight, kernel, pad_y, pad_x in cells:
-        g = torch.zeros_like(scaled)
-        g[:, wy0:wy1, wx0:wx1] = scaled[:, wy0:wy1, wx0:wx1] * weight
-        grad += F.conv2d(
-            F.pad(g, (pad_x, pad_x, pad_y, pad_y)).unsqueeze(1),
-            kernel.flip(-1, -2).view(1, 1, *kernel.shape),
-        ).squeeze(1)
+        grad = torch.zeros_like(flat)
+        for wy0, wy1, wx0, wx1, weight, kernel, pad_y, pad_x in cells:
+            g = torch.zeros_like(scaled)
+            g[:, wy0:wy1, wx0:wx1] = scaled[:, wy0:wy1, wx0:wx1] * weight
+            grad += F.conv2d(
+                F.pad(g, (pad_x, pad_x, pad_y, pad_y)).unsqueeze(1),
+                kernel.flip(-1, -2).view(1, 1, *kernel.shape),
+            ).squeeze(1)
     return grad.reshape(image.shape)
 
 
@@ -309,40 +323,38 @@ def apply_learned_psf_variance_spec(variance: Tensor, psf_spec: object) -> Tenso
     noise gives ``Var(Ay)[p] = (1/S(p)^2) sum_j (sum_c w_c(p) K_c[j-p+pad])^2
     V[j]``. Expanding the square separates into ordered cell pairs whose
     cross terms are correlations of ``V`` with the pointwise kernel products
-    ``K_c * K_c'`` -- all of them, including the c = c' diagonal. Dropping
-    the off-diagonal pairs is NOT valid where windows overlap heavily.
+    ``K_c * K_c'`` -- all of them, including the c = c' diagonal.
     """
     flat = variance.reshape(-1, int(variance.shape[-2]), int(variance.shape[-1]))
     height, width = int(flat.shape[-2]), int(flat.shape[-1])
-    cells = _learned_cells(psf_spec, height, width, variance.dtype, variance.device)
-    pad_y, pad_x = cells[0][6], cells[0][7]
-    padded = F.pad(flat, (pad_x, pad_x, pad_y, pad_y)).unsqueeze(1)
+    with torch.no_grad():
+        cells = _learned_cells(psf_spec, height, width, variance.dtype, variance.device)
+        pad_y, pad_x = cells[0][6], cells[0][7]
+        padded = F.pad(flat, (pad_x, pad_x, pad_y, pad_y)).unsqueeze(1)
 
-    S = torch.zeros_like(flat)
-    for wy0, wy1, wx0, wx1, weight, _kernel, _py, _px in cells:
-        S[:, wy0:wy1, wx0:wx1] += weight
+        S = torch.zeros_like(flat)
+        for wy0, wy1, wx0, wx1, weight, _kernel, _py, _px in cells:
+            S[:, wy0:wy1, wx0:wx1] += weight
 
-    out = torch.zeros_like(flat)
-    for c1 in cells:
-        for c2 in cells:
-            kk = c1[5] * c2[5]
-            coef = torch.zeros_like(flat)
-            ry0, ry1 = max(c1[0], c2[0]), min(c1[1], c2[1])
-            rx0, rx1 = max(c1[2], c2[2]), min(c1[3], c2[3])
-            if ry0 >= ry1 or rx0 >= rx1:
-                continue
-            coef[
-                :, ry0:ry1, rx0:rx1
-            ] = (
-                c1[4][ry0 - c1[0] : ry1 - c1[0], rx0 - c1[2] : rx1 - c1[2]]
-                * c2[4][ry0 - c2[0] : ry1 - c2[0], rx0 - c2[2] : rx1 - c2[2]]
-            )
-            corr = F.conv2d(
-                padded, kk.flip(-1, -2).view(1, 1, *kk.shape)
-            ).squeeze(1)[:, ry0:ry1, rx0:rx1]
-            out[:, ry0:ry1, rx0:rx1] += corr * coef[:, ry0:ry1, rx0:rx1]
-    denom = S.square().clamp_min(torch.finfo(out.dtype).tiny)
-    return (out / denom).reshape(variance.shape)
+        out = torch.zeros_like(flat)
+        for c1 in cells:
+            for c2 in cells:
+                kk = c1[5] * c2[5]
+                coef = torch.zeros_like(flat)
+                ry0, ry1 = max(c1[0], c2[0]), min(c1[1], c2[1])
+                rx0, rx1 = max(c1[2], c2[2]), min(c1[3], c2[3])
+                if ry0 >= ry1 or rx0 >= rx1:
+                    continue
+                coef[:, ry0:ry1, rx0:rx1] = (
+                    c1[4][ry0 - c1[0] : ry1 - c1[0], rx0 - c1[2] : rx1 - c1[2]]
+                    * c2[4][ry0 - c2[0] : ry1 - c2[0], rx0 - c2[2] : rx1 - c2[2]]
+                )
+                corr = F.conv2d(
+                    padded, kk.flip(-1, -2).view(1, 1, *kk.shape)
+                ).squeeze(1)[:, ry0:ry1, rx0:rx1]
+                out[:, ry0:ry1, rx0:rx1] += corr * coef[:, ry0:ry1, rx0:rx1]
+        denom = S.square().clamp_min(torch.finfo(out.dtype).tiny)
+        return (out / denom).reshape(variance.shape)
 
 
 def apply_psf_spec(image: Tensor, psf_spec: object | None) -> Tensor:
