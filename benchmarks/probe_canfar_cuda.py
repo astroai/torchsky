@@ -25,8 +25,9 @@ def main() -> int:
     except BaseException as exc:  # noqa: BLE001 - diagnostic must see everything
         print(f"step2-first-cuda-alloc FAILED {type(exc).__name__}: {str(exc)[:300]}", flush=True)
         return 3
+    norm_shape = (x.shape[-1],)
     for _ in range(20):
-        _ = torch.nn.functional.layer_norm(x, x.shape[-1])
+        _ = torch.nn.functional.layer_norm(x, norm_shape)
     torch.cuda.synchronize()
     print("step3-layernorm ok", flush=True)
     big = torch.randn(1024, 1024, device="cuda")
