@@ -517,8 +517,9 @@ case "${mode}" in
         echo "skipping calibration-fit ${psf_arm} (report exists)"
       else
         CALIBRATION_EVIDENCE_MANIFEST="${artifact_root}/evidence/calibration_evidence_manifest.json" \
-          "${BASH_SOURCE[0]}" calibration-fit "${run_id}"           --output-dir "${arm_dir}" --psf-model "${psf_arm}"
-        gate "${arm_dir}/operator_calibration_fit.json"
+        CALIBRATION_FIT_OUTPUT_DIR="${arm_dir}" \
+        CALIBRATION_FIT_PSF_MODEL="${psf_arm}" \
+          "${BASH_SOURCE[0]}" calibration-fit "${run_id}"
       fi
     done
 
