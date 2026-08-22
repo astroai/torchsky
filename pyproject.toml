@@ -37,7 +37,7 @@ requires-python = ">=3.12,<3.15"
 dependencies = [
     "torch>=2.13,<2.14",
     "numpy>=1.20.0",  # Core numerical operations
-    "torchfits>=1.0.0rc4",
+    "torchfits>=1.0.0",
 ]
 
 [project.urls]

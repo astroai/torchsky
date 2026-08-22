@@ -202,7 +202,7 @@ platforms = ["osx-arm64", "linux-64"]
 python = "3.13.*"
 
 [feature.prod.pypi-dependencies]
-torchfits = ">=1.0.0rc4"
+torchfits = ">=1.0.0"
 
 # Test feature with comparison libraries
 [feature.test.dependencies]
@@ -260,7 +260,7 @@ ninja = ">=1.10"
 nanobind = ">=2.10.2"
 
 [feature.cuda.pypi-dependencies]
-torchfits = ">=1.0.0rc4"
+torchfits = ">=1.0.0"
 
 [feature.smacs.dependencies]
 pillow = ">=10"
