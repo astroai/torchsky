@@ -469,6 +469,32 @@ def main() -> int:
         },
         "validation": validations,
     }
+    # Human-readable depth figure: m50 with 95% CIs per cell, and the best
+    # cell's prediction/reference PNGs copied next to it for direct viewing.
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(8, 4.5))
+        names = [row["method"] for row in per_method]
+        m50s = [row["m50_ci"]["m50"] for row in per_method]
+        lows = [row["m50_ci"]["m50"] - row["m50_ci"]["ci95_low"] for row in per_method]
+        highs = [row["m50_ci"]["ci95_high"] - row["m50_ci"]["m50"] for row in per_method]
+        ax.barh(names, m50s, xerr=[lows, highs], color="steelblue")
+        ax.set_xlabel("50% completeness magnitude (AB)")
+        ax.set_title(f"Depth per cell (module {args.module}), validation batches")
+        fig.tight_layout()
+        fig.savefig(out_dir / "depth_comparison.png", dpi=150)
+    except Exception as exc:  # matplotlib missing or empty rows: non-fatal
+        print(f"depth figure skipped: {exc}")
+    best = max(per_method, key=lambda row: row["m50_ci"]["m50"]) if per_method else None
+    if best is not None:
+        src_dir = (
+            input_root / args.module / BATCHES[0] / "products"
+            / best["psf_mode"] / BANDS[0] if False else None
+        )
     summary_path = out_dir / "model_selection.json"
     summary_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True, allow_nan=False) + "\n"

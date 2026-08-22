@@ -426,13 +426,15 @@ case "${mode}" in
     gate "${score_out_dir}/model_selection.json"
     ;;
   native-band)
-    band=${SMACS_BAND:?set SMACS_BAND}
+    IFS=',' read -r -a native_band_list <<< "${SMACS_BAND:-${FOAM_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}}"
     methods=torchsky_bilinear,torchsky_drizzle_square_pf0p800,torchsky_drizzle_square_pf1p000
     validation_root=${FOAM_VALIDATION_ROOT:-/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940}
     IFS=',' read -r -a native_batches <<< \
       "${NATIVE_VALIDATION_BATCHES:-blank,validation-000,validation-001,validation-002}"
     for module in "${modules[@]+${modules[@]}}"; do
       module_root="${artifact_root}/${module}"
+      for nband in "${native_band_list[@]+${native_band_list[@]}}"; do
+      band=${nband}
       for batch in "${native_batches[@]+${native_batches[@]}}"; do
         case "${batch}" in
           blank | validation-000 | validation-001 | validation-002) ;;
@@ -470,6 +472,7 @@ case "${mode}" in
           --json-out "${batch_root}/stackers.json" \
           --markdown-out "${batch_root}/stackers.md"
         gate "${batch_root}/stackers.json"
+      done
       done
     done
     ;;
