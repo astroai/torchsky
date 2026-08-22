@@ -33,6 +33,49 @@ jobs:
           SKIP: pyright
         run: pre-commit run --all-files --show-diff-on-failure --color always
 
+  fast-lane:
+    name: Fast lane (ruff + compile + operator smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install "ruff>=0.8"
+      - name: Ruff (changed-relevant packages)
+        run: ruff check src/torchsky tests benchmarks
+      - name: Byte-compile package
+        run: python -m compileall -q src/torchsky
+      - name: Operator smoke (no heavy deps)
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "src")
+          import torch
+          torch.set_default_dtype(torch.float64)
+          from torchsky.map.operators import LowRankChromaticPSF, apply_psf_spec, apply_learned_psf_spec_adjoint
+          from torchsky.map.field.types import PSFSpec
+          torch.manual_seed(5)
+          model = LowRankChromaticPSF(grid_side=2, spectral_degree=1,
+                                      base_sigma_pix=0.8, extent_pix=48., kernel_size=5)
+          H = W = 24
+          u = torch.stack(torch.meshgrid(torch.linspace(2,46,2),
+                            torch.linspace(2,46,2), indexing="ij"), dim=-1).reshape(-1,2)
+          spec = PSFSpec.learned(model, base_sigma_pix=0.8, cell_u_pix=u, cell_lam_norm=0.5)
+          x = torch.randn(H, W); y = apply_psf_spec(x, spec)
+          xa = torch.randn(H, W)
+          lhs = float((apply_psf_spec(xa, spec)*y).sum())
+          rhs = float((xa*apply_learned_psf_spec_adjoint(y, spec)).sum())
+          assert abs(lhs-rhs)/abs(lhs) < 1e-10
+          sx = torch.arange(W, dtype=torch.float64).unsqueeze(0).expand(H,W) + 12.0
+          sy = torch.arange(H, dtype=torch.float64).unsqueeze(1).expand(H,W) + 12.0
+          out = model(torch.randn(H,W), spatial_x=sx, spatial_y=sy, wavelength=torch.tensor(15000.))
+          assert out.shape == (H, W)
+          print("fast lane: learned-PSF forward/adjoint/renderer OK")
+          PY
+
   code-quality:
     name: Code Quality
     runs-on: ubuntu-latest
