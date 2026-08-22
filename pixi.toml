@@ -24,17 +24,17 @@ scikit-build-core = ">=1.0.0"
 cmake = ">=3.21"
 ninja = ">=1.10"
 python = ">=3.12,<3.14"
-pytorch = ">=2.10,<2.11"
+pytorch = ">=2.13,<2.14"
 
 # Host dependencies - libraries that will be linked into the package
 [package.host-dependencies]
 python = ">=3.12,<3.14"
-pytorch = ">=2.10,<2.11"
+pytorch = ">=2.13,<2.14"
 nanobind = ">=2.10.2"
 
 # Run dependencies - packages needed at runtime
 [package.run-dependencies]
-pytorch = ">=2.10,<2.11"
+pytorch = ">=2.13,<2.14"
 
 # Workspace dependencies — default (lean) dev shell: build tools + pytest driver only.
 # Ecosystem / legacy astronomy packages live in feature `test`, `bench`, `sphere-bench`, etc.
@@ -50,7 +50,7 @@ scikit-build-core = ">=1.0.0"
 cmake = ">=3.21"
 ninja = ">=1.10"
 nanobind = ">=2.10.2"
-pytorch = ">=2.10,<2.11"
+pytorch = ">=2.13,<2.14"
 numpy = ">=1.20"
 pre-commit = ">=3.5.0"
 twine = ">=5.0"
@@ -248,7 +248,7 @@ platforms = ["linux-64-cuda"]
 
 [feature.cuda.dependencies]
 python = "3.13.*"
-pytorch-gpu = ">=2.10,<2.11"
+pytorch-gpu = ">=2.13,<2.14"
 cuda-nvcc = "12.9.*"
 cuda-nvrtc-dev = "12.9.*"
 numpy = ">=1.20"
@@ -295,7 +295,7 @@ astropy = "*"
 starlink-ast = "*"
 cython = "<3.0"
 # Add torch for torchsky
-pytorch = ">=2.10,<2.11"
+pytorch = ">=2.13,<2.14"
 
 [feature.bench-legacy.pypi-dependencies]
 # Kapteyn is not pinned here: its sdist build often fails under isolated solves
