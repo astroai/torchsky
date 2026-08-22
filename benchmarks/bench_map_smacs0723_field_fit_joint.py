@@ -342,6 +342,8 @@ def _apply_learned_psf_arm(
             # renders through it build no autograd graph.
             model.requires_grad_(False)
             models[band] = model.to(
+                next(iter({o.image.device for o in observations}), torch.device("cpu"))
+            ).to(
                 next(iter({o.image.device for o in observations if hasattr(o, 'image')}), torch.device('cpu'))
             )
         height, width = (int(v) for v in observation.image.shape[-2:])

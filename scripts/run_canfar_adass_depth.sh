@@ -540,12 +540,16 @@ case "${mode}" in
         "${BASH_SOURCE[0]}" foam "${run_id}"
     done
     for module in ${full_modules//,/ }; do
-      gate "${artifact_root}/${module}/shared-foam.json"
+      for psf_arm in fitted_gaussian_kernel learned_lowrank; do
+        gate "${artifact_root}/${module}/shared-foam-${psf_arm}.json"
+      done
     done
     all_val_done=1
     for module in ${full_modules//,/ }; do
       for batch in blank validation-000 validation-001 validation-002; do
-        stage_done "${artifact_root}/${module}/${batch}/shared-foam.json" || all_val_done=0
+        for psf_a in fitted_gaussian_kernel learned_lowrank; do
+          stage_done "${artifact_root}/${module}/${batch}/shared-foam-${psf_a}.json" || all_val_done=0
+        done
       done
     done
     if [[ "${all_val_done}" = "1" ]]; then
