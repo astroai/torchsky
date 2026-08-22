@@ -535,7 +535,7 @@ case "${mode}" in
       FOAM_BANDS="${full_bands}" \
       MODULES="${full_modules}" \
         "${BASH_SOURCE[0]}" foam "${run_id}"
-      gate "${artifact_root}/shared-foam.json"
+      gate "${artifact_root}/b/shared-foam.json"
     done
     for module in ${full_modules//,/ }; do
       gate "${artifact_root}/${module}/shared-foam.json"
