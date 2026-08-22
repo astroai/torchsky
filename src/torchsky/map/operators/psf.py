@@ -298,7 +298,7 @@ def apply_learned_psf_spec_adjoint(image: Tensor, psf_spec: object) -> Tensor:
         grad += F.conv2d(
             F.pad(g, (pad_x, pad_x, pad_y, pad_y)).unsqueeze(1),
             kernel.flip(-1, -2).view(1, 1, *kernel.shape),
-        ).squeeze(1).squeeze(0)
+        ).squeeze(1)
     return grad.reshape(image.shape)
 
 
@@ -316,7 +316,7 @@ def apply_learned_psf_variance_spec(variance: Tensor, psf_spec: object) -> Tenso
     height, width = int(flat.shape[-2]), int(flat.shape[-1])
     cells = _learned_cells(psf_spec, height, width, variance.dtype, variance.device)
     pad_y, pad_x = cells[0][6], cells[0][7]
-    padded = F.pad(flat, (pad_x, pad_x, pad_y, pad_y))
+    padded = F.pad(flat, (pad_x, pad_x, pad_y, pad_y)).unsqueeze(1)
 
     S = torch.zeros_like(flat)
     for wy0, wy1, wx0, wx1, weight, _kernel, _py, _px in cells:

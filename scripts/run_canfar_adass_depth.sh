@@ -478,7 +478,9 @@ case "${mode}" in
     ;;
   full)
     # Autonomous chain: calibration -> scene zoo x PSF arms -> native band -> selection.
-    full_modules=${MODULES:-a,b}
+    # Module A waits until its aligned parallel-field products are staged;
+    # override with MODULES=a,b once they exist.
+    full_modules=${MODULES:-b}
     full_bands=${FOAM_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}
     echo "full mode: modules=${full_modules} bands=${full_bands} field_models=${field_models} psf=${psf_model} background=${background_model}"
     FOAM_BANDS="${full_bands}" \

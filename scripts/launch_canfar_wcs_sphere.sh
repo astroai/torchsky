@@ -254,7 +254,7 @@ launch_depth() {
     --env "FIELD_MODELS=${FIELD_MODELS:-spectral_power_foam}"
     --env "PSF_MODEL=${PSF_MODEL:-fitted_gaussian}"
     --env "BACKGROUND_MODEL=${BACKGROUND_MODEL:-plane}"
-    --env "MODULES=${MODULES:-a,b}"
+    --env "MODULES=${MODULES:-b}"
     --env "PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-}"
     --env "TORCHSKY_DEVICE=${TORCHSKY_DEVICE:-}"
   )
@@ -267,7 +267,7 @@ launch_depth() {
     create_args+=(--env "GH_TOKEN=${TORCHSKY_GH_TOKEN}")
   fi
 
-  echo "launching mode=depth name=${name} commit=${COMMIT} vos=${vos_dest} field_models=${FIELD_MODELS:-spectral_power_foam} psf=${PSF_MODEL:-fitted_gaussian} modules=${MODULES:-a,b}"
+  echo "launching mode=depth name=${name} commit=${COMMIT} vos=${vos_dest} field_models=${FIELD_MODELS:-spectral_power_foam} psf=${PSF_MODEL:-fitted_gaussian} modules=${MODULES:-b}"
   local create_log="${local_out}/create.log"
   if [[ "${TORCHSKY_CANFAR_DRY_RUN:-0}" == "1" ]]; then
     echo "dry-run: canfar create headless ${IMAGE} --name ${name} --gpu 1 depth-env"
