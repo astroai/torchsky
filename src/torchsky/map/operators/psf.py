@@ -262,9 +262,9 @@ def apply_learned_psf_spec(image: Tensor, psf_spec: object) -> Tensor:
     out = torch.zeros_like(flat)
     weight_sum = torch.zeros_like(flat)
     for wy0, wy1, wx0, wx1, weight, kernel, pad_y, pad_x in cells:
-        conv = F.conv2d(padded, kernel.view(1, 1, *kernel.shape))[
-            :, wy0:wy1, wx0:wx1
-        ]
+        conv = F.conv2d(
+            padded.unsqueeze(1), kernel.view(1, 1, *kernel.shape)
+        ).squeeze(1)[:, wy0:wy1, wx0:wx1]
         out[:, wy0:wy1, wx0:wx1] += conv * weight
         weight_sum[:, wy0:wy1, wx0:wx1] += weight
     return (out / weight_sum.clamp_min(torch.finfo(out.dtype).tiny)).reshape(
@@ -296,9 +296,9 @@ def apply_learned_psf_spec_adjoint(image: Tensor, psf_spec: object) -> Tensor:
         g = torch.zeros_like(scaled)
         g[:, wy0:wy1, wx0:wx1] = scaled[:, wy0:wy1, wx0:wx1] * weight
         grad += F.conv2d(
-            F.pad(g, (pad_x, pad_x, pad_y, pad_y)),
+            F.pad(g, (pad_x, pad_x, pad_y, pad_y)).unsqueeze(1),
             kernel.flip(-1, -2).view(1, 1, *kernel.shape),
-        ).squeeze(0)
+        ).squeeze(1).squeeze(0)
     return grad.reshape(image.shape)
 
 
@@ -314,37 +314,21 @@ def apply_learned_psf_variance_spec(variance: Tensor, psf_spec: object) -> Tenso
     pad_y, pad_x = cells[0][6], cells[0][7]
     padded = F.pad(flat, (pad_x, pad_x, pad_y, pad_y))
     out = torch.zeros_like(flat)
+    weight_sum = torch.zeros_like(flat)
     weight_sq_sum = torch.zeros_like(flat)
     for wy0, wy1, wx0, wx1, weight, kernel, pad_y, pad_x in cells:
         conv_var = F.conv2d(
-            padded, (kernel.square()).view(1, 1, *kernel.shape)
-        )[
-            :, wy0:wy1, wx0:wx1
-        ]
+            padded.unsqueeze(1), (kernel.square()).view(1, 1, *kernel.shape)
+        ).squeeze(1)[:, wy0:wy1, wx0:wx1]
         out[:, wy0:wy1, wx0:wx1] += conv_var * weight.square()
         weight_sq_sum[:, wy0:wy1, wx0:wx1] += weight.square()
-    return (
-        (out / weight_sq_sum.clamp_min(torch.finfo(out.dtype).tiny))
-        .reshape(variance.shape)
+        weight_sum[:, wy0:wy1, wx0:wx1] += weight
+    # Var(Ay) = sum_c (w_c / S)^2 (K_c^2 conv V): the common 1/S^2 factor
+    # scales the whole blend.
+    denom = (weight_sq_sum * weight_sum.square()).clamp_min(
+        torch.finfo(out.dtype).tiny
     )
-
-
-def apply_psf_spec(image: Tensor, psf_spec: object | None) -> Tensor:
-    if psf_spec is None:
-        return image
-    mode = getattr(psf_spec, "mode", "none")
-    if mode == "none":
-        return image
-    if mode == "gaussian_sigma_pix":
-        return gaussian_blur(image, float(getattr(psf_spec, "sigma_pix", 0.0)))
-    if mode == "kernel2d":
-        kernel = getattr(psf_spec, "kernel2d", None)
-        if kernel is None:
-            raise ValueError("kernel2d PSF mode requires kernel2d")
-        return apply_kernel2d(image, kernel)
-    if mode == "learned_lowrank":
-        return apply_learned_psf_spec(image, psf_spec)
-    raise ValueError(f"unsupported PSF mode {mode!r}")
+    return (out / denom).reshape(variance.shape)
 
 
 def apply_psf_variance_spec(variance: Tensor, psf_spec: object | None) -> Tensor:
@@ -365,4 +349,22 @@ def apply_psf_variance_spec(variance: Tensor, psf_spec: object | None) -> Tensor
         return apply_kernel2d_variance(variance, kernel)
     if mode == "learned_lowrank":
         return apply_learned_psf_variance_spec(variance, psf_spec)
+    raise ValueError(f"unsupported PSF mode {mode!r}")
+
+
+def apply_psf_spec(image: Tensor, psf_spec: object | None) -> Tensor:
+    if psf_spec is None:
+        return image
+    mode = getattr(psf_spec, "mode", "none")
+    if mode == "none":
+        return image
+    if mode == "gaussian_sigma_pix":
+        return gaussian_blur(image, float(getattr(psf_spec, "sigma_pix", 0.0)))
+    if mode == "kernel2d":
+        kernel = getattr(psf_spec, "kernel2d", None)
+        if kernel is None:
+            raise ValueError("kernel2d PSF mode requires kernel2d")
+        return apply_kernel2d(image, kernel)
+    if mode == "learned_lowrank":
+        return apply_learned_psf_spec(image, psf_spec)
     raise ValueError(f"unsupported PSF mode {mode!r}")
