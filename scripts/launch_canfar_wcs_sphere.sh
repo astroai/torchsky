@@ -256,6 +256,7 @@ launch_depth() {
     --env "PSF_MODEL=${PSF_MODEL:-fitted_gaussian}"
     --env "BACKGROUND_MODEL=${BACKGROUND_MODEL:-plane}"
     --env "MODULES=${MODULES:-a,b}"
+    --env "PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-}"
   )
   if [[ -n "${TORCHSKY_GH_TOKEN:-}" ]]; then
     create_args+=(--env "GH_TOKEN=${TORCHSKY_GH_TOKEN}")
