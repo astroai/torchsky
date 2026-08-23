@@ -7,6 +7,7 @@ to ``torchfits.cpp``.
 
 import os
 
+import torch  # noqa: F401 - preload libtorch: PyPI torch libs are not on the loader path
 
 # ── FITS I/O module (import first so torchsky._cpp can overwrite colliding
 #    HEALPix / WCS names with its own implementations) ────────────────────
