@@ -3228,5 +3228,33 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+
+
+if __name__ == "__main__" and os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1":
+    import collections
+
+    torch.cuda.memory._record_memory_history(max_entries=100000)
+    _code = 0
+    try:
+        _code = main()
+    except torch.OutOfMemoryError:
+        _snapshot = torch.cuda.memory._snapshot()
+        _by_trace = collections.Counter()
+        for _seg in _snapshot.values():
+            for _block in _seg:
+                _frames = _block.get("frames") or []
+                if _frames:
+                    _last = _frames[-1]
+                    _prev = _frames[-2] if len(_frames) > 1 else {}
+                    _key = (
+                        f"{_prev.get('filename', '?')}:{_prev.get('line', 0)}"
+                        f" -> {_last.get('filename', '?')}:{_last.get('line', 0)}"
+                    )
+                else:
+                    _key = "<no-frames>"
+                _by_trace[_key] += _block["size"]
+        print("[gpu-mem] OOM top allocation sites:")
+        for _key, _size in _by_trace.most_common(15):
+            print(f"[gpu-mem] {_size / 1024**3:8.3f} GiB  {_key}", flush=True)
+        raise
+    raise SystemExit(_code)
