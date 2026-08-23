@@ -7,6 +7,7 @@ to ``torchfits.cpp``.
 
 import os
 
+
 # ── FITS I/O module (import first so torchsky._cpp can overwrite colliding
 #    HEALPix / WCS names with its own implementations) ────────────────────
 from torchfits.cpp import *  # noqa: F403
