@@ -3233,8 +3233,9 @@ def main() -> int:
 
 if __name__ == "__main__" and os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1":
 
-    torch.cuda.memory._record_memory_history(max_entries=100000)
-    _code = 0
+    torch.cuda.memory._record_memory_history(
+        enabled="all", context="all", stacks="python", max_entries=100000
+    )
     try:
         _code = main()
     except (torch.OutOfMemoryError, RuntimeError) as _exc:
