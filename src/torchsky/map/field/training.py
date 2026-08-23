@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 import time
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -1386,11 +1387,20 @@ def fit_field_model(
                         band_key, 0.0
                     ) + _observation_weight_sum_scalar(observation)
         for (
-            observation,
-            forward_context,
-            exposure_pose,
-            observation_bundle,
-        ) in selected_pairs:
+            pair_index,
+            (observation, forward_context, exposure_pose, observation_bundle),
+        ) in enumerate(selected_pairs):
+            if (
+                os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1"
+                and train_device.type == "cuda"
+                and pair_index % 25 == 0
+            ):
+                print(
+                    f"[gpu-mem] fit-obs-{pair_index}: "
+                    f"allocated={torch.cuda.memory_allocated() / 1024**3:.2f}GiB "
+                    f"reserved={torch.cuda.memory_reserved() / 1024**3:.2f}GiB",
+                    flush=True,
+                )
             render_kwargs = {}
             if training_spectral_sampling == "mixture_mc":
                 assert mixture_wavelengths is not None and mixture_probs is not None
