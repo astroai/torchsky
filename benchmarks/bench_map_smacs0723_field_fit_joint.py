@@ -826,6 +826,18 @@ def _initialize_foam_from_band_coadds(
     }
 
 
+def gpu_mem_note(label: str) -> None:
+    """Log CUDA allocator residency when TORCHSKY_GPU_MEM_LOG=1."""
+    if os.environ.get("TORCHSKY_GPU_MEM_LOG") != "1" or not torch.cuda.is_available():
+        return
+    allocated = torch.cuda.memory_allocated() / 1024**3
+    reserved = torch.cuda.memory_reserved() / 1024**3
+    print(
+        f"[gpu-mem] {label}: allocated={allocated:.2f}GiB reserved={reserved:.2f}GiB",
+        flush=True,
+    )
+
+
 def _refine_foam_from_observations_exact(
     model: torch.nn.Module,
     observations: list[FieldObservation],
@@ -854,18 +866,6 @@ def _refine_foam_from_observations_exact(
     if not observations:
         raise ValueError("observations must not be empty")
     device = coefficients.device
-
-    _mem_log = os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1"
-
-    def gpu_mem_note(label: str) -> None:
-        if not (_mem_log and device.type == "cuda"):
-            return
-        allocated = torch.cuda.memory_allocated(device) / 1024**3
-        reserved = torch.cuda.memory_reserved(device) / 1024**3
-        print(
-            f"[gpu-mem] {label}: allocated={allocated:.2f}GiB reserved={reserved:.2f}GiB",
-            flush=True,
-        )
 
     gpu_mem_note("refit-entry")
     dtype = coefficients.dtype
@@ -951,7 +951,7 @@ def _refine_foam_from_observations_exact(
         )
         pixel_areas_by_observation.append(stored_area)
         observed_pixel_count += int(torch.sum(valid))
-        if _mem_log and observation_index % 25 == 0:
+        if observation_index % 25 == 0:
             gpu_mem_note(f"refit-obs-{observation_index}")
         psf_spec = observation.psf_spec
         if getattr(psf_spec, "mode", "none") not in (
@@ -2682,6 +2682,7 @@ def main() -> int:
                 if model_kind == "spectral_power_foam"
                 else make_field_model(model_kind, domain, **model_kwargs)
             )
+            gpu_mem_note("model-built")
             initialization_diagnostics: dict[str, float] = {}
             if model_kind == "spectral_power_foam":
                 if args.foam_initialize_from_coadd:
@@ -2697,8 +2698,10 @@ def main() -> int:
                         ),
                         whiten_spectral_basis=bool(args.foam_whiten_spectral_basis),
                     )
+                gpu_mem_note("foam-coadd-init-done")
             if args.forward_context:
                 model = _PerExposureScalarBias(model, len(normalized_observations))
+            gpu_mem_note("pre-field-fit")
             t0 = time.perf_counter()
             result = fit_field_model(
                 normalized_observations,
