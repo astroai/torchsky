@@ -1600,6 +1600,14 @@ def fit_field_model(
                     raise ValueError(f"unsupported loss_reduction {loss_reduction!r}")
                 streamed_total_loss += float(obs_loss.detach().cpu())
                 obs_loss.backward()
+                if (
+                    os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1"
+                    and train_device.type == "cuda"
+                ):
+                    # MIG slices are small; cached blocks from prior
+                    # observations can starve the next render otherwise.
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
             elif loss_reduction == "per_observation":
                 denom = torch.clamp(weight_sum, min=1.0e-8)
                 obs_loss = weighted_loss / denom
