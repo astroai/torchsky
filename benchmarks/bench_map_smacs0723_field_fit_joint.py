@@ -1346,6 +1346,7 @@ def _joint_real_fit_kwargs(
         kwargs["training_patch_size"] = tile_side
         kwargs["streaming_accumulation"] = True
         kwargs["diagnostic_spatial_tile_hw"] = (min(tile_side, 64),) * 2
+        kwargs["render_spatial_tile_hw"] = (256, 256)
     kwargs["observations_per_step"] = min(max(num_observations, 1), 12)
     kwargs["observation_sampling"] = "band_balanced"
     if model_kind != "spectral_power_foam":

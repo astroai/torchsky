@@ -897,6 +897,7 @@ def fit_field_model(
     observation_exposure_poses: Sequence[ExposurePose | None] | None = None,
     refine_poses: bool = False,
     anchor_first_pose: bool = True,
+    render_spatial_tile_hw: tuple[int, int] | None = None,
     diagnostic_spatial_tile_hw: tuple[int, int] | None = None,
     _progress_callback: Callable[[int, float], None] | None = None,
 ) -> FieldFitResult:
@@ -1408,6 +1409,10 @@ def fit_field_model(
             render_kwargs["forward_context"] = forward_context
             render_kwargs["exposure_pose"] = exposure_pose
             render_kwargs["operator_bundle"] = observation_bundle
+            # Full-frame renders through the field MLP explode on small MIG
+            # slices; tile them when the caller asks for bounded activations.
+            if render_spatial_tile_hw is not None:
+                render_kwargs["spatial_tile_hw"] = render_spatial_tile_hw
             if pixel_sample_count > 0 and observation_bundle.psf is None:
                 sampled = _sample_observation_pixels(
                     observation,
