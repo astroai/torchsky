@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import json
-import os
 import math
+import os
 import sys
 import tempfile
 import time
@@ -3231,7 +3232,6 @@ def main() -> int:
 
 
 if __name__ == "__main__" and os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1":
-    import collections
 
     torch.cuda.memory._record_memory_history(max_entries=100000)
     _code = 0
@@ -3244,9 +3244,19 @@ if __name__ == "__main__" and os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1":
             raise
         _snapshot = torch.cuda.memory._snapshot()
         _by_trace = collections.Counter()
-        for _seg in _snapshot.values():
-            for _block in _seg:
-                _frames = _block.get("frames") or []
+        _segments = (
+            _snapshot.values()
+            if isinstance(_snapshot, dict)
+            else _snapshot
+        )
+        for _segment in _segments:
+            _blocks = (
+                _segment.get("blocks", [_segment])
+                if isinstance(_segment, dict)
+                else [_segment]
+            )
+            for _block in _blocks:
+                _frames = (_block.get("frames") or []) if isinstance(_block, dict) else []
                 if _frames:
                     _last = _frames[-1]
                     _prev = _frames[-2] if len(_frames) > 1 else {}
@@ -3256,7 +3266,8 @@ if __name__ == "__main__" and os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1":
                     )
                 else:
                     _key = "<no-frames>"
-                _by_trace[_key] += _block["size"]
+                _size = _block.get("size", 0) if isinstance(_block, dict) else 0
+                _by_trace[_key] += _size
         print("[gpu-mem] OOM top allocation sites:")
         for _key, _size in _by_trace.most_common(15):
             print(f"[gpu-mem] {_size / 1024**3:8.3f} GiB  {_key}", flush=True)
