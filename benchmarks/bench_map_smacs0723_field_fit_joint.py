@@ -3244,49 +3244,35 @@ if __name__ == "__main__" and os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1":
         ):
             raise
         _snapshot = torch.cuda.memory._snapshot()
-        _segments = (
-            _snapshot.values() if isinstance(_snapshot, dict) else _snapshot
-        )
-        for _segment in _segments:
-            if isinstance(_segment, dict):
-                print(
-                    "[gpu-mem] segment keys:",
-                    {k: type(v).__name__ for k, v in list(_segment.items())[:14]},
-                    flush=True,
-                )
-                _blocks = _segment.get("blocks") or []
-                if _blocks:
-                    print(
-                        "[gpu-mem] block keys:", sorted(_blocks[0].keys()), flush=True
-                    )
-                    _hist = _blocks[0].get("history")
-                    if _hist:
-                        print("[gpu-mem] history[-1]:", str(_hist[-1])[:400], flush=True)
-                break
         _by_trace = collections.Counter()
-        _segments = (
-            _snapshot.values()
-            if isinstance(_snapshot, dict)
-            else _snapshot
-        )
-        for _segment in _segments:
-            _blocks = (
-                _segment.get("blocks", [_segment])
-                if isinstance(_segment, dict)
-                else [_segment]
-            )
-            for _block in _blocks:
-                _frames = (_block.get("frames") or []) if isinstance(_block, dict) else []
+        for _seg_key, _segment in (
+            _snapshot.items() if isinstance(_snapshot, dict) else enumerate(_snapshot)
+        ):
+            if not isinstance(_segment, list):
+                continue
+            for _block in _segment:
+                if not isinstance(_block, dict):
+                    continue
+                _size = int(_block.get("size", 0) or 0)
+                _frames = []
+                _hist = _block.get("history")
+                if isinstance(_hist, list):
+                    for _h in reversed(_hist):
+                        _frames = (_h or {}).get("frames") or []
+                        if _frames:
+                            break
+                if not _frames:
+                    _frames = _block.get("frames") or []
                 if _frames:
                     _last = _frames[-1]
                     _prev = _frames[-2] if len(_frames) > 1 else {}
                     _key = (
                         f"{_prev.get('filename', '?')}:{_prev.get('line', 0)}"
                         f" -> {_last.get('filename', '?')}:{_last.get('line', 0)}"
+                        f" [{_seg_key}]"
                     )
                 else:
-                    _key = "<no-frames>"
-                _size = _block.get("size", 0) if isinstance(_block, dict) else 0
+                    _key = f"<no-frames> [{_seg_key}]"
                 _by_trace[_key] += _size
         print("[gpu-mem] OOM top allocation sites:")
         for _key, _size in _by_trace.most_common(15):
