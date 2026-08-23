@@ -3237,7 +3237,11 @@ if __name__ == "__main__" and os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1":
     _code = 0
     try:
         _code = main()
-    except torch.OutOfMemoryError:
+    except (torch.OutOfMemoryError, RuntimeError) as _exc:
+        if "NVML_SUCCESS" not in str(_exc) and not isinstance(
+            _exc, torch.OutOfMemoryError
+        ):
+            raise
         _snapshot = torch.cuda.memory._snapshot()
         _by_trace = collections.Counter()
         for _seg in _snapshot.values():
