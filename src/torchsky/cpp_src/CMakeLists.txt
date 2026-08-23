@@ -140,6 +140,17 @@ if(TORCHSKY_PYTORCH_CUDA_VERSION)
             "or CUDAToolkit_ROOT, or build with CPU-only PyTorch."
         )
     endif()
+    # conda-forge installs cuda.h under targets/<triple>/include, not
+    # $PREFIX/include; Caffe2's config needs CUDA_INCLUDE_DIRS set before
+    # find_package(Torch) or it fails with "cannot find the CUDA libraries".
+    if(DEFINED ENV{CONDA_PREFIX} AND EXISTS "$ENV{CONDA_PREFIX}/targets/x86_64-linux/include/cuda.h")
+        set(CUDA_HOME "$ENV{CONDA_PREFIX}/targets/x86_64-linux")
+        set(CUDAToolkit_ROOT "${CUDA_HOME}")
+        set(CUDA_TOOLKIT_ROOT_DIR "${CUDA_HOME}")
+    endif()
+    if(CUDAToolkit_INCLUDE_DIRS AND NOT CUDA_INCLUDE_DIRS)
+        set(CUDA_INCLUDE_DIRS "${CUDAToolkit_INCLUDE_DIRS}")
+    endif()
 endif()
 
 find_package(Torch REQUIRED)
