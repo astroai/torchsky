@@ -3253,7 +3253,9 @@ if __name__ == "__main__" and os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1":
             for _block in _segment:
                 if not isinstance(_block, dict):
                     continue
-                _size = int(_block.get("size", 0) or 0)
+                _size = int(
+                    _block.get("allocated_size") or _block.get("size", 0) or 0
+                )
                 _frames = []
                 _hist = _block.get("history")
                 if isinstance(_hist, list):
