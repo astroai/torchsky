@@ -854,6 +854,20 @@ def _refine_foam_from_observations_exact(
     if not observations:
         raise ValueError("observations must not be empty")
     device = coefficients.device
+
+    _mem_log = os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1"
+
+    def gpu_mem_note(label: str) -> None:
+        if not (_mem_log and device.type == "cuda"):
+            return
+        allocated = torch.cuda.memory_allocated(device) / 1024**3
+        reserved = torch.cuda.memory_reserved(device) / 1024**3
+        print(
+            f"[gpu-mem] {label}: allocated={allocated:.2f}GiB reserved={reserved:.2f}GiB",
+            flush=True,
+        )
+
+    gpu_mem_note("refit-entry")
     dtype = coefficients.dtype
     storage_device = (
         device
@@ -868,7 +882,7 @@ def _refine_foam_from_observations_exact(
     forwards = []
     adjoints = []
     observed_pixel_count = 0
-    for observation in observations:
+    for observation_index, observation in enumerate(observations):
         image = observation.image.to(device=device, dtype=dtype)
         height, width = image.shape
         grid_device = torch.device("cpu") if device.type == "mps" else device
@@ -937,6 +951,8 @@ def _refine_foam_from_observations_exact(
         )
         pixel_areas_by_observation.append(stored_area)
         observed_pixel_count += int(torch.sum(valid))
+        if _mem_log and observation_index % 25 == 0:
+            gpu_mem_note(f"refit-obs-{observation_index}")
         psf_spec = observation.psf_spec
         if getattr(psf_spec, "mode", "none") not in (
             "none",
@@ -987,6 +1003,7 @@ def _refine_foam_from_observations_exact(
         operators.append(operator.to(storage_device))
         forwards.append(psf_forward)
         adjoints.append(psf_adjoint)
+    gpu_mem_note("refit-preloop-done")
 
     initial_coefficients = coefficients.detach().clone()
     initial_gradients = gradient_coefficients.detach().clone()
@@ -1008,6 +1025,7 @@ def _refine_foam_from_observations_exact(
         preconditioner=preconditioner,
         diagnostics=solve_diagnostics,
     )
+    gpu_mem_note("refit-solve-done")
     with torch.no_grad():
         coefficients.copy_(solved)
         gradient_coefficients.copy_(solved_gradients)
