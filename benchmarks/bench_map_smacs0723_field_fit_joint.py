@@ -3244,6 +3244,25 @@ if __name__ == "__main__" and os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1":
         ):
             raise
         _snapshot = torch.cuda.memory._snapshot()
+        _segments = (
+            _snapshot.values() if isinstance(_snapshot, dict) else _snapshot
+        )
+        for _segment in _segments:
+            if isinstance(_segment, dict):
+                print(
+                    "[gpu-mem] segment keys:",
+                    {k: type(v).__name__ for k, v in list(_segment.items())[:14]},
+                    flush=True,
+                )
+                _blocks = _segment.get("blocks") or []
+                if _blocks:
+                    print(
+                        "[gpu-mem] block keys:", sorted(_blocks[0].keys()), flush=True
+                    )
+                    _hist = _blocks[0].get("history")
+                    if _hist:
+                        print("[gpu-mem] history[-1]:", str(_hist[-1])[:400], flush=True)
+                break
         _by_trace = collections.Counter()
         _segments = (
             _snapshot.values()
