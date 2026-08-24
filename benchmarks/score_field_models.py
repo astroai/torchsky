@@ -117,20 +117,25 @@ def _stage_method_products(
 ) -> Path:
     """Symlink prediction/support products into the classical builder layout."""
     method = f"{psf_mode}__{model_kind}"
+    staged_any_batch = False
     for batch in BATCHES:
-        for band in bands:
-            source = (
-                _resolve_band_dir(
-                    input_root / module / batch / "products" / psf_mode, band
-                )
-                / model_kind
+        batch_products = input_root / module / batch / "products" / psf_mode
+        if not batch_products.is_dir():
+            print(
+                f"[score] skipping missing batch {batch} for "
+                f"{psf_mode}/{model_kind}",
+                flush=True,
             )
+            continue
+        for band in bands:
+            source = _resolve_band_dir(batch_products, band) / model_kind
             prediction = source / "prediction.fits"
             support_mask = source / "support_mask.fits"
             if not prediction.is_file() or not support_mask.is_file():
                 raise FileNotFoundError(
                     f"missing products for {psf_mode}/{model_kind}: {source}"
                 )
+            staged_any_batch = True
             target = work_root / batch / band / "products"
             target.mkdir(parents=True, exist_ok=True)
             sci = target / f"{method}_sci.fits"
@@ -141,6 +146,10 @@ def _stage_method_products(
                         raise ValueError(f"staged link mismatch: {link}")
                 elif not link.exists():
                     os.symlink(source_path.resolve(), link)
+    if not staged_any_batch:
+        raise FileNotFoundError(
+            f"no batches staged for {psf_mode}/{model_kind} under {input_root}"
+        )
     return work_root
 
 
