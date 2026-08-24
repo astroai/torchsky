@@ -476,6 +476,43 @@ case "${mode}" in
       done
     done
     ;;
+  mosaic)
+    # Production full-field coadds: every aligned exposure of the module onto
+    # the UPDC-v2 iter0 grid for like-for-like comparison. Exact-area drizzle
+    # keeps borders honest (fractional coverage recorded in the weight map).
+    IFS=',' read -r -a mosaic_bands <<< "${MOSAIC_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}"
+    reference_root=${UPDEC_REFERENCE_ROOT:-${data_root}/updec_webb}
+    mosaic_methods=${MOSAIC_METHODS:-torchsky_bilinear,torchsky_drizzle_square_pf0p800,torchsky_drizzle_square_pf1p000}
+    for module in "${modules[@]+${modules[@]}}"; do
+      for band in "${mosaic_bands[@]+${mosaic_bands[@]}}"; do
+        band_root=${artifact_root}/mosaic/${module}-${band}
+        mkdir -p "${band_root}/products"
+        reference_path=${reference_root}/${band}b_UPDC-v2_iter0_i2d.fits.fz
+        test -s "${reference_path}"
+        mosaic_naxis=$(pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
+          python -c 'from astropy.io import fits; import sys; h = fits.getheader(sys.argv[1]); print(int(h["NAXIS1"]))' \
+          "${reference_path}")
+        test "${mosaic_naxis}" -gt 0
+        echo "mosaic ${module}-${band}: target ${mosaic_naxis}x${mosaic_naxis} from $(basename "${reference_path}")"
+        run pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
+          python "${source_root}/scripts/run_local_sphere_bench.py" \
+          "${source_root}/benchmarks/bench_map_smacs0723_stackers.py" \
+          --band "${band}" \
+          --module "${module}" \
+          --exposure-dir "${data_root}/jwst_smacs0723/aligned" \
+          --input-product aligned \
+          --crop-size "${mosaic_naxis}" \
+          --crop-mode center \
+          --methods "${mosaic_methods}" \
+          --drizzle-pixfracs 0.8,1.0 \
+          --product-only \
+          --product-out-dir "${band_root}/products" \
+          --json-out "${band_root}/stackers.json" \
+          --markdown-out "${band_root}/stackers.md"
+        gate "${band_root}/stackers.json"
+      done
+    done
+    ;;
   native-score)
     native_input_root_pattern=${NATIVE_INPUT_ROOT_PATTERN-}
     if [[ -z "${native_input_root_pattern}" ]]; then
