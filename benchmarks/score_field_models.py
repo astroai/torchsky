@@ -94,6 +94,19 @@ def _audit_manifest_support(
     return rows
 
 
+def _resolve_band_dir(parent: Path, band: str) -> Path:
+    """Return the product directory for a band, tolerating case differences."""
+
+    candidate = parent / band
+    if candidate.is_dir():
+        return candidate
+    if parent.is_dir():
+        for entry in parent.iterdir():
+            if entry.is_dir() and entry.name.lower() == band.lower():
+                return entry
+    return candidate
+
+
 def _stage_method_products(
     input_root: Path,
     module: str,
@@ -107,12 +120,9 @@ def _stage_method_products(
     for batch in BATCHES:
         for band in bands:
             source = (
-                input_root
-                / module
-                / batch
-                / "products"
-                / psf_mode
-                / band
+                _resolve_band_dir(
+                    input_root / module / batch / "products" / psf_mode, band
+                )
                 / model_kind
             )
             prediction = source / "prediction.fits"
