@@ -490,7 +490,7 @@ case "${mode}" in
         reference_path=${reference_root}/${band}b_UPDC-v2_iter0_i2d.fits.fz
         test -s "${reference_path}"
         mosaic_naxis=$(pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
-          python -c 'from astropy.io import fits; import sys; h = fits.getheader(sys.argv[1]); print(int(h["NAXIS1"]))' \
+          python -c 'import sys; from astropy.io import fits; print(max(int(x.header.get("NAXIS1", 0)) for x in fits.open(sys.argv[1])))' \
           "${reference_path}")
         test "${mosaic_naxis}" -gt 0
         echo "mosaic ${module}-${band}: target ${mosaic_naxis}x${mosaic_naxis} from $(basename "${reference_path}")"
