@@ -548,7 +548,7 @@ case "${mode}" in
     for module in ${full_modules//,/ }; do
       for batch in blank validation-000 validation-001 validation-002; do
         for psf_a in fitted_gaussian_kernel learned_lowrank; do
-          stage_done "${artifact_root}/${module}/${batch}/shared-foam-${psf_a}.json" || all_val_done=0
+          stage_done "${artifact_root}/${module}/${batch}/${psf_a}-shared-foam.json" || all_val_done=0
         done
       done
     done
@@ -569,7 +569,9 @@ case "${mode}" in
       done
     fi
     for module in ${full_modules//,/ }; do
-      gate "${artifact_root}/${module}/blank/shared-foam.json"
+      for psf_a in fitted_gaussian_kernel learned_lowrank; do
+        gate "${artifact_root}/${module}/blank/${psf_a}-shared-foam.json"
+      done
     done
     MODULES="${full_modules}" \
       "${BASH_SOURCE[0]}" native-band "${run_id}"
