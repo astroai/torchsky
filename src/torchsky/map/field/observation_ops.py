@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from typing import Sequence
 
 import torch
@@ -101,48 +103,103 @@ def observation_support_count_scalar(observation: FieldObservation) -> int:
     return int(torch.count_nonzero(support).item())
 
 
+def _coprime_stride(size: int, generator: torch.Generator) -> int:
+    """Draw a stride uniformly from the units coprime with ``size``."""
+    if size <= 1:
+        return 1
+    while True:
+        candidate = int(torch.randint(1, size, (1,), generator=generator))
+        if math.gcd(candidate, size) == 1:
+            return candidate
+
+
+def epoch_permutation(size: int, *, epoch: int) -> Tensor:
+    """Stateless affine permutation ``idx(k) = (offset + k*stride) mod size``.
+
+    ``offset`` and a stride coprime to ``size`` are drawn from a local CPU
+    generator seeded by ``epoch`` alone, so every epoch value yields one
+    fixed order visiting each valid index exactly once. Reshuffling at an
+    epoch boundary happens by changing ``epoch`` — never through
+    module-level state.
+    """
+    size = int(size)
+    if size <= 0:
+        return torch.empty(0, dtype=torch.long)
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(int(epoch))
+    offset = int(torch.randint(0, size, (1,), generator=generator))
+    stride = _coprime_stride(size, generator)
+    steps = torch.arange(size, dtype=torch.int64)
+    return (offset + stride * steps) % size
+
+
+def _select_band_balanced(
+    observations: Sequence[FieldObservation],
+    *,
+    target: int,
+    perm,
+) -> list[int]:
+    """Share ``target`` across band groups using ``perm(n)`` shuffles per group."""
+    band_groups: dict[tuple[object, ...], list[int]] = {}
+    for idx, observation in enumerate(observations):
+        band_groups.setdefault(observation_band_key(observation), []).append(idx)
+    ordered_groups = list(band_groups.values())
+    if not ordered_groups:
+        return []
+    selected: list[int] = []
+    per_group = max(target // len(ordered_groups), 1)
+    remainders: list[int] = []
+    for group in ordered_groups:
+        order = perm(len(group))
+        take = min(len(group), per_group)
+        selected.extend(group[i] for i in order[:take])
+        remainders.extend(group[i] for i in order[take:])
+    if len(selected) < target and remainders:
+        extra = perm(len(remainders))[: target - len(selected)]
+        selected.extend(remainders[i] for i in extra)
+    elif len(selected) > target:
+        keep = perm(len(selected))[:target]
+        selected = [selected[i] for i in keep]
+    return selected
+
+
 def sample_observation_indices(
     observations: Sequence[FieldObservation],
     *,
     observations_per_step: int | None,
     observation_sampling: FieldObservationSampling,
     generator: torch.Generator,
+    epoch: int = 0,
 ) -> list[int]:
     total = len(observations)
-    if (
+    full_coverage = (
         observations_per_step is None
         or observations_per_step <= 0
         or observations_per_step >= total
-    ):
+    )
+    if observation_sampling == "epoch":
+        # Deterministic epoch cycles: full coverage returns one complete
+        # affine permutation; partial steps take its prefix with the same
+        # band grouping as band_balanced.
+        if full_coverage:
+            return epoch_permutation(total, epoch=epoch).tolist()
+        return _select_band_balanced(
+            observations,
+            target=int(observations_per_step),
+            perm=lambda n: epoch_permutation(n, epoch=epoch).tolist(),
+        )
+    if full_coverage:
         return list(range(total))
     target = int(observations_per_step)
     if observation_sampling == "uniform":
         return torch.randperm(total, generator=generator)[:target].tolist()
     if observation_sampling != "band_balanced":
         raise ValueError(f"unsupported observation_sampling {observation_sampling!r}")
-    band_groups: dict[tuple[object, ...], list[int]] = {}
-    for idx, observation in enumerate(observations):
-        band_groups.setdefault(observation_band_key(observation), []).append(idx)
-    ordered_groups = list(band_groups.values())
-    if not ordered_groups:
-        return list(range(total))
-    selected: list[int] = []
-    per_group = max(target // len(ordered_groups), 1)
-    remainders: list[int] = []
-    for group in ordered_groups:
-        perm = torch.randperm(len(group), generator=generator).tolist()
-        take = min(len(group), per_group)
-        selected.extend(group[i] for i in perm[:take])
-        remainders.extend(group[i] for i in perm[take:])
-    if len(selected) < target and remainders:
-        extra = torch.randperm(len(remainders), generator=generator)[
-            : target - len(selected)
-        ].tolist()
-        selected.extend(remainders[i] for i in extra)
-    elif len(selected) > target:
-        keep = torch.randperm(len(selected), generator=generator)[:target].tolist()
-        selected = [selected[i] for i in keep]
-    return selected
+    return _select_band_balanced(
+        observations,
+        target=target,
+        perm=lambda n: torch.randperm(n, generator=generator).tolist(),
+    )
 
 
 def sample_patch_origin(
@@ -516,6 +573,7 @@ __all__ = [
     "crop_field_observation",
     "crop_field_observation_for_training",
     "crop_field_observation_to_shared_sky_patch",
+    "epoch_permutation",
     "observation_pixel_to_world",
     "header_shape",
     "observation_band_key",

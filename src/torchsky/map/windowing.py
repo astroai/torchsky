@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+
+import numpy as np
 import torch
 from torch import Tensor
 
@@ -347,3 +349,56 @@ def _subtarget_header_for_window(
     if "CRPIX2" in out:
         out["CRPIX2"] = float(out["CRPIX2"]) - float(y0)
     return out, (h, w)
+
+
+def canvas_footprint_mask(
+    world_ra_deg: Tensor,
+    world_dec_deg: Tensor,
+    *,
+    template_header,
+    chunk: int = 1 << 20,
+) -> Tensor:
+    """Boolean mask marking world positions inside a FITS-template canvas.
+
+    Parses ``template_header`` once with astropy's WCS and evaluates pixel
+    coordinates per chunk; True means finite RA/Dec projecting to a pixel
+    center within ``[-0.5, N-0.5]`` on both axes (the template footprint
+    including its border). One-shot geometry, so CPU evaluation is fine;
+    the returned bool tensor preserves the inputs' shape and device.
+    """
+    try:
+        from astropy.wcs import WCS as AstropyWCS
+    except ImportError as exc:  # pragma: no cover - exercised via extras
+        raise RuntimeError(
+            "canvas_footprint_mask requires astropy "
+            "(install the torchsky 'map', 'test', or 'bench' extra)"
+        ) from exc
+
+    ra = torch.as_tensor(world_ra_deg, dtype=torch.float64).cpu()
+    dec = torch.as_tensor(world_dec_deg, dtype=torch.float64).cpu()
+    if ra.shape != dec.shape:
+        raise ValueError("world_ra_deg and world_dec_deg must have matching shapes")
+    chunk = max(int(chunk), 1)
+
+    wcs = AstropyWCS(template_header)
+    naxis1, naxis2 = wcs.pixel_shape
+    if naxis1 is None or naxis2 is None:
+        naxis2 = int(template_header.get("NAXIS2", 0))
+        naxis1 = int(template_header.get("NAXIS1", 0))
+
+    ra_flat = ra.reshape(-1).numpy()
+    dec_flat = dec.reshape(-1).numpy()
+    flat = torch.zeros(ra_flat.shape[0], dtype=torch.bool)
+    for start in range(0, ra_flat.shape[0], chunk):
+        stop = min(start + chunk, ra_flat.shape[0])
+        x, y = wcs.all_world2pix(ra_flat[start:stop], dec_flat[start:stop], 0)
+        inside = (
+            np.isfinite(x)
+            & np.isfinite(y)
+            & (x >= -0.5)
+            & (x <= naxis1 - 0.5)
+            & (y >= -0.5)
+            & (y <= naxis2 - 0.5)
+        )
+        flat[start:stop] = torch.from_numpy(inside)
+    return flat.reshape(ra.shape).to(world_ra_deg.device)

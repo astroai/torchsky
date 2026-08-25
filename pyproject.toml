@@ -141,6 +141,17 @@ gwcs = [
     "gwcs>=0.18",
 ]
 
+tweakreg = [
+    "jwst>=1.17",
+]
+stpsf = [
+    "stpsf>=1.2",
+]
+catalog-qa = [
+    "photutils>=1.1",
+    "astropy>=5.0",
+]
+
 # Configuration for the scikit-build-core build system.
 [tool.scikit-build]
 # Specifies the directory containing the top-level CMakeLists.txt file.

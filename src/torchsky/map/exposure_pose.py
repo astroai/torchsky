@@ -147,3 +147,98 @@ def create_exposure_poses(
     if anchor_first and poses:
         freeze_pose(poses[0])
     return poses
+
+
+def fit_pose_correction(
+    src_ra_deg: Tensor,
+    src_dec_deg: Tensor,
+    dst_ra_deg: Tensor,
+    dst_dec_deg: Tensor,
+    *,
+    model: str = "rshift",
+    anchor_index: int = 0,
+) -> ExposurePose:
+    """Fit a rigid tangent-plane correction mapping matched ``src`` onto ``dst``.
+
+    Pairs are matched sky positions (e.g. from
+    :func:`torchsky.catalogs.crossmatch_sky`): ``src`` in the exposure's
+    current frame, ``dst`` in the reference frame. The closed-form
+    Kabsch/Procrustes solution is computed in the tangent plane centered on
+    the anchor pair ``src[anchor_index]``, which acts as the gauge: the
+    rotation pole sits at the anchor source position and an exposure already
+    in the reference frame (self-pairs, ``src is dst``) fits to the identity
+    pose, so the anchor exposure stays identity-frozen while all other
+    exposures receive corrections relative to it.
+
+    Models:
+    - ``"shift"``: translation only.
+    - ``"rshift"``: translation plus in-plane rotation about the tangent pole.
+
+    Inputs may require grad; the computation runs as tensor ops on the
+    inputs' device/dtype, but the returned :class:`ExposurePose` parameters
+    are fresh leaves initialized from the closed-form solution (refine them
+    with the usual optimizers, not through this function).
+    """
+    if model not in ("shift", "rshift"):
+        raise ValueError(f"unsupported pose-correction model {model!r}")
+
+    src_ra = torch.as_tensor(src_ra_deg).reshape(-1)
+    src_dec = torch.as_tensor(src_dec_deg).reshape(-1)
+    dst_ra = torch.as_tensor(dst_ra_deg).reshape(-1)
+    dst_dec = torch.as_tensor(dst_dec_deg).reshape(-1)
+    if not (src_ra.shape == src_dec.shape == dst_ra.shape == dst_dec.shape):
+        raise ValueError("src/dst coordinate tensors must have matching shapes")
+    n = int(src_ra.numel())
+    if n == 0:
+        raise ValueError("at least one matched pair is required")
+    anchor = int(anchor_index)
+    if not 0 <= anchor < n:
+        raise ValueError(f"anchor_index {anchor} out of range for {n} pairs")
+
+    # Gauge point: the anchor source position. Kept as python floats because
+    # ExposurePose.apply_to_world anchors its tangent plane on floats too.
+    ra0 = float(src_ra[anchor].detach())
+    dec0 = float(src_dec[anchor].detach())
+    cos_dec0 = math.cos(math.radians(dec0))
+    if abs(cos_dec0) < 1e-6:
+        raise ValueError(
+            "fit_pose_correction is ill-conditioned near the pole "
+            "(|cos(dec0)| too small); pick a different anchor."
+        )
+
+    def _tangent(ra: Tensor, dec: Tensor) -> tuple[Tensor, Tensor]:
+        return (
+            _wrapped_delta_ra_deg(ra, ra0) * torch.cos(torch.deg2rad(dec)),
+            dec - dec0,
+        )
+
+    xi_s, eta_s = _tangent(src_ra, src_dec)
+    xi_d, eta_d = _tangent(dst_ra, dst_dec)
+
+    sx = xi_s - xi_s.mean()
+    sy = eta_s - eta_s.mean()
+    dx = xi_d - xi_d.mean()
+    dy = eta_d - eta_d.mean()
+    if model == "shift":
+        theta = torch.zeros((), dtype=src_ra.dtype, device=src_ra.device)
+    else:
+        # Maximize sum d @ R(theta) s with R = [[c, -s], [s, c]]:
+        # theta = atan2(sum(dy*sx - dx*sy), sum(dx*sx + dy*sy)).
+        sin_num = (dy * sx - dx * sy).sum()
+        cos_den = (dx * sx + dy * sy).sum()
+        theta = torch.atan2(sin_num, cos_den)
+    c = torch.cos(theta)
+    s = torch.sin(theta)
+    tx = xi_d.mean() - (c * xi_s.mean() - s * eta_s.mean())
+    ty = eta_d.mean() - (s * xi_s.mean() + c * eta_s.mean())
+
+    pose = ExposurePose()
+    with torch.no_grad():
+        pose.delta_theta_rad.copy_(theta.to(pose.delta_theta_rad.device))
+        pose.delta_log_scale.copy_(
+            torch.zeros_like(theta, device=pose.delta_log_scale.device)
+        )
+        # apply_to_world adds delta_ra_deg * cos(dec0) to the xi coordinate.
+        pose.delta_ra_deg.copy_((tx / cos_dec0).to(pose.delta_ra_deg.device))
+        pose.delta_dec_deg.copy_(ty.to(pose.delta_dec_deg.device))
+    return pose.to(device=src_ra.device, dtype=src_ra.dtype)
