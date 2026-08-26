@@ -18,10 +18,13 @@ arm64). Torchsky does not own or bundle CFITSIO. Install
 pip install torchsky torchfits
 ```
 
-The supported integration baseline is `torchfits 1.0.0rc4` or newer. Torchsky
+The supported integration baseline is `torchfits 1.0.0` or newer. Torchsky
 keeps thin compatibility import paths for one migration release.
 
-Requires Python **>=3.12,<3.15** and [PyTorch](https://pytorch.org/) 2.0+.
+Package metadata requires Python **>=3.12** and
+[PyTorch](https://pytorch.org/) **>=2.13**, with no upper dependency caps.
+The reproducible contributor lane pins Python 3.13.14, PyTorch 2.13.0, and
+torchfits 1.0.0. Native extensions still enforce their compiled PyTorch ABI.
 
 ## Source Build
 
@@ -29,7 +32,7 @@ To build `torchsky` from source, you'll need a C++ compiler and CMake.
 
 ### Prerequisites
 
-- Python **3.12+** and **below 3.15** (matches `requires-python` in `pyproject.toml`)
+- Python **3.12+** (matches `requires-python` in `pyproject.toml`)
 - C++17 compatible compiler (GCC, Clang, MSVC)
 - CMake 3.15+ for the native project, with 3.21+ recommended for the packaged build environment and current PyTorch/CUDA toolchains
 - Ninja (recommended)
@@ -42,7 +45,7 @@ The package uses **scikit-build-core** as the build backend. With default `pip i
 If you install **without** build isolation (`--no-build-isolation`), you must have the backend and build-time deps available in the **same** environment as the interpreter:
 
 ```bash
-python -m pip install "scikit-build-core>=1.0.0" "nanobind>=2.10.2" "torch>=2.13,<2.14" "numpy>=1.20.0"
+python -m pip install "scikit-build-core>=1.0.0" "nanobind>=2.10.2" "torch>=2.13" "numpy>=1.20.0"
 ```
 
 Exact pins match `[build-system].requires` in `pyproject.toml`.

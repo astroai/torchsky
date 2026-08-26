@@ -28,6 +28,7 @@ from ..exposure_pose import ExposurePose
 from .bandpass import (
     bandpass_mc_samples as _bandpass_mc_samples,
     bandpass_quadrature as _bandpass_quadrature,
+    validate_override_quadrature as _validate_override_quadrature,
 )
 from .forwarding import (
     call_forward_distribution as _call_forward_distribution,
@@ -150,9 +151,7 @@ def _apply_learned_psf(
     tile_h, tile_w = _validate_spatial_tile_hw(spatial_tile_hw)
     radius = int(getattr(psf_model, "kernel_size")) // 2
     output = torch.empty_like(image)
-    for y0, y1, x0, x1 in _iter_spatial_tiles(
-        height, width, tile_h, tile_w
-    ):
+    for y0, y1, x0, x1 in _iter_spatial_tiles(height, width, tile_h, tile_w):
         halo_y0 = max(y0 - radius, 0)
         halo_y1 = min(y1 + radius, height)
         halo_x0 = max(x0 - radius, 0)
@@ -306,9 +305,7 @@ def _render_spatially_integrated_distribution(
     render_distribution = getattr(model, "render_bandpass_distribution", None)
     forward_distribution = getattr(model, "forward_distribution", None)
     for y0, y1, x0, x1 in tiles:
-        patch_mean = torch.zeros(
-            (y1 - y0, x1 - x0), device=device, dtype=torch.float32
-        )
+        patch_mean = torch.zeros((y1 - y0, x1 - x0), device=device, dtype=torch.float32)
         patch_var = torch.zeros_like(patch_mean)
         for offset_x, offset_y, spatial_weight in spatial_nodes:
             ra_deg, dec_deg = _tile_world_coordinate_grid(
@@ -355,15 +352,12 @@ def _render_spatially_integrated_distribution(
                 stacked_mean = torch.stack(means, dim=0)
                 stacked_var = torch.stack(variances, dim=0)
                 node_mean = torch.sum(
-                    stacked_mean
-                    * weights.view(-1, 1, 1).to(dtype=stacked_mean.dtype),
+                    stacked_mean * weights.view(-1, 1, 1).to(dtype=stacked_mean.dtype),
                     dim=0,
                 )
                 node_var = torch.sum(
                     stacked_var
-                    * torch.square(weights).view(-1, 1, 1).to(
-                        dtype=stacked_var.dtype
-                    ),
+                    * torch.square(weights).view(-1, 1, 1).to(dtype=stacked_var.dtype),
                     dim=0,
                 )
             else:
@@ -435,8 +429,12 @@ def render_field_observation_distribution(
             raise ValueError(
                 "override_wavelengths and override_weights must be provided together"
             )
-        wavelengths = override_wavelengths.to(device=device, dtype=torch.float32)
-        weights = override_weights.to(device=device, dtype=torch.float32)
+        wavelengths, weights = _validate_override_quadrature(
+            override_wavelengths,
+            override_weights,
+            device=device,
+            dtype=torch.float32,
+        )
     elif spectral_sampling == "deterministic_quadrature":
         wavelengths, weights = _bandpass_quadrature(
             observation,
@@ -538,9 +536,7 @@ def render_field_observation_distribution(
         return mean.to(dtype=image.dtype), logvar.to(dtype=image.dtype)
     if operator_bundle.psf is not None:
         mean = apply_psf_spec(mean, observation.psf_spec)
-        variance = apply_psf_variance_spec(
-            torch.exp(logvar), observation.psf_spec
-        )
+        variance = apply_psf_variance_spec(torch.exp(logvar), observation.psf_spec)
         logvar = torch.log(torch.clamp(variance, min=1.0e-8))
     if operator_bundle.background is not None:
         mean = apply_background_components(
@@ -586,8 +582,12 @@ def render_field_samples_distribution(
             raise ValueError(
                 "override_wavelengths and override_weights must be provided together"
             )
-        wavelengths = override_wavelengths.to(device=ra_deg.device, dtype=torch.float32)
-        weights = override_weights.to(device=ra_deg.device, dtype=torch.float32)
+        wavelengths, weights = _validate_override_quadrature(
+            override_wavelengths,
+            override_weights,
+            device=ra_deg.device,
+            dtype=torch.float32,
+        )
     elif spectral_sampling == "deterministic_quadrature":
         wavelengths, weights = _bandpass_quadrature(
             observation,
@@ -701,8 +701,12 @@ def render_field_observation(
             raise ValueError(
                 "override_wavelengths and override_weights must be provided together"
             )
-        wavelengths = override_wavelengths.to(device=device, dtype=torch.float32)
-        weights = override_weights.to(device=device, dtype=torch.float32)
+        wavelengths, weights = _validate_override_quadrature(
+            override_wavelengths,
+            override_weights,
+            device=device,
+            dtype=torch.float32,
+        )
     elif spectral_sampling == "deterministic_quadrature":
         wavelengths, weights = _bandpass_quadrature(
             observation,
@@ -937,9 +941,7 @@ def render_spectral_power_foam_observation_exact(
     )
     corner_x = x[..., None] + offsets[:, 0]
     corner_y = y[..., None] + offsets[:, 1]
-    ra_deg, dec_deg = _observation_pixel_to_world(
-        observation, corner_x, corner_y
-    )
+    ra_deg, dec_deg = _observation_pixel_to_world(observation, corner_x, corner_y)
     polygons = normalized_spatial_coordinates(
         ra_deg.to(device=device),
         dec_deg.to(device=device),
@@ -1036,8 +1038,12 @@ def render_field_samples(
             raise ValueError(
                 "override_wavelengths and override_weights must be provided together"
             )
-        wavelengths = override_wavelengths.to(device=ra_deg.device, dtype=torch.float32)
-        weights = override_weights.to(device=ra_deg.device, dtype=torch.float32)
+        wavelengths, weights = _validate_override_quadrature(
+            override_wavelengths,
+            override_weights,
+            device=ra_deg.device,
+            dtype=torch.float32,
+        )
     elif spectral_sampling == "deterministic_quadrature":
         wavelengths, weights = _bandpass_quadrature(
             observation,

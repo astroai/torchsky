@@ -55,20 +55,26 @@ class TangentPlaneFrame:
 
     def world_to_plane(self, ra: Any, dec: Any) -> tuple[Tensor, Tensor]:
         """Project sky coordinates in degrees to tangent-plane degrees."""
-        ra_t = torch.as_tensor(ra, dtype=torch.float64)
-        dec_t = torch.as_tensor(dec, dtype=torch.float64, device=ra_t.device)
+        ra_t = torch.as_tensor(ra)
+        dtype = (
+            ra_t.dtype
+            if ra_t.is_floating_point() and ra_t.element_size() >= 4
+            else torch.float64
+        )
+        ra_t = ra_t.to(dtype=dtype)
+        dec_t = torch.as_tensor(dec, dtype=dtype, device=ra_t.device)
         if ra_t.shape != dec_t.shape:
             raise ValueError("ra and dec must have the same shape")
 
-        d2r = torch.as_tensor(torch.pi / 180.0, dtype=torch.float64, device=ra_t.device)
-        r2d = torch.as_tensor(180.0 / torch.pi, dtype=torch.float64, device=ra_t.device)
+        d2r = torch.as_tensor(torch.pi / 180.0, dtype=dtype, device=ra_t.device)
+        r2d = torch.as_tensor(180.0 / torch.pi, dtype=dtype, device=ra_t.device)
         ra_rad = ra_t * d2r
         dec_rad = dec_t * d2r
         ra0_rad = (
-            torch.as_tensor(self.ra0, dtype=torch.float64, device=ra_t.device) * d2r
+            torch.as_tensor(self.ra0, dtype=dtype, device=ra_t.device) * d2r
         )
         dec0_rad = (
-            torch.as_tensor(self.dec0, dtype=torch.float64, device=ra_t.device) * d2r
+            torch.as_tensor(self.dec0, dtype=dtype, device=ra_t.device) * d2r
         )
 
         dra = torch.remainder(ra_rad - ra0_rad + torch.pi, 2.0 * torch.pi) - torch.pi
@@ -86,20 +92,26 @@ class TangentPlaneFrame:
 
     def plane_to_world(self, xi: Any, eta: Any) -> tuple[Tensor, Tensor]:
         """Invert tangent-plane degrees to sky coordinates in degrees."""
-        xi_t = torch.as_tensor(xi, dtype=torch.float64)
-        eta_t = torch.as_tensor(eta, dtype=torch.float64, device=xi_t.device)
+        xi_t = torch.as_tensor(xi)
+        dtype = (
+            xi_t.dtype
+            if xi_t.is_floating_point() and xi_t.element_size() >= 4
+            else torch.float64
+        )
+        xi_t = xi_t.to(dtype=dtype)
+        eta_t = torch.as_tensor(eta, dtype=dtype, device=xi_t.device)
         if xi_t.shape != eta_t.shape:
             raise ValueError("xi and eta must have the same shape")
 
-        d2r = torch.as_tensor(torch.pi / 180.0, dtype=torch.float64, device=xi_t.device)
-        r2d = torch.as_tensor(180.0 / torch.pi, dtype=torch.float64, device=xi_t.device)
+        d2r = torch.as_tensor(torch.pi / 180.0, dtype=dtype, device=xi_t.device)
+        r2d = torch.as_tensor(180.0 / torch.pi, dtype=dtype, device=xi_t.device)
         x = xi_t * d2r
         y = eta_t * d2r
         ra0_rad = (
-            torch.as_tensor(self.ra0, dtype=torch.float64, device=xi_t.device) * d2r
+            torch.as_tensor(self.ra0, dtype=dtype, device=xi_t.device) * d2r
         )
         dec0_rad = (
-            torch.as_tensor(self.dec0, dtype=torch.float64, device=xi_t.device) * d2r
+            torch.as_tensor(self.dec0, dtype=dtype, device=xi_t.device) * d2r
         )
 
         rho = torch.sqrt(x * x + y * y)

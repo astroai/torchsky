@@ -3,11 +3,8 @@
 
 Torch-native rebuild of the student-fork pipeline stages:
 
-1. Apply Chris Willott's public ``image1overf.sub1fimaging`` correction.
-   This is an EXTERNAL prerequisite: the script is never vendored here and
-   must be passed via ``--image1overf``. (An in-likelihood alternative lives
-   in ``torchsky.map.operators.noise`` as ``StructuredDetectorNoise`` /
-   ``OneOverFRowNoise``.)
+1. Consume calibrated exposures after any survey-specific 1/f correction.
+   That external preprocessing is intentionally not implemented in Torchsky.
 2. Align exposures on a temporary native-scale sky grid (factor-2 downsampled
    from ``--target-reference``).
 3. Detect high outliers in two 5-sigma passes: sky statistics are fitted on
@@ -15,7 +12,8 @@ Torch-native rebuild of the student-fork pipeline stages:
    ``torchsky.map.operators.bind_image_plane_target_operator``.
 4. Replace bad pixels with seeded deterministic Gaussian draws and write
    ``*_cal_completed.fits`` (or ``*_cal_1overf_completed_dqfix.fits`` with
-   ``--dq-fix``), each with a ``UPDCMASK`` extension marking replaced pixels.
+   ``--dq-fix``), each with a ``UPDCREJ`` extension where one marks a replaced
+   pixel. This is deliberately not a Torchsky valid-support mask.
 
 ``--dq-fix`` folds the fork's conservative DQ variant: pixels are excluded
 from statistics and completed only when they lie in the science aperture,
@@ -26,8 +24,8 @@ preserved verbatim.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
+import shutil
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -36,7 +34,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from astropy.io import fits
+import torchfits
 
 BENCH_DIR = Path(__file__).resolve().parents[1]
 if str(BENCH_DIR) not in sys.path:
@@ -55,7 +53,7 @@ NIRCAM_REFERENCE_BORDER = 4
 class ExposureState:
     path: Path
     data: np.ndarray
-    header: fits.Header
+    header: dict[str, Any]
     dq: np.ndarray
     valid: np.ndarray
     rejected: np.ndarray
@@ -73,55 +71,10 @@ def _science_region_mask(shape: tuple[int, ...]) -> np.ndarray:
     return mask
 
 
-def _load_image1overf(path: Path):
-    spec = importlib.util.spec_from_file_location("updc_image1overf", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    if not hasattr(module, "sub1fimaging"):
-        raise AttributeError(f"{path} does not define sub1fimaging")
-    return module.sub1fimaging
-
-
-def _apply_one_over_f(
-    input_path: Path,
-    output_path: Path,
-    *,
-    correction_fn,
-    sigma_bgmask: float,
-    sigma_1fmask: float,
-    splitamps: bool,
-    usesegmask: bool,
-) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with fits.open(input_path, memmap=False) as hdul:
-        corrected = correction_fn(
-            hdul,
-            float(sigma_bgmask),
-            float(sigma_1fmask),
-            bool(splitamps),
-            bool(usesegmask),
-        )
-        subarray = str(hdul[0].header.get("SUBARRAY", "")).upper()
-        if subarray == "FULL":
-            hdul["SCI"].data[4:2044, 4:2044] = corrected
-        elif subarray == "SUB256":
-            hdul["SCI"].data[:252, :252] = corrected
-        else:
-            raise ValueError(
-                f"{input_path}: unsupported SUBARRAY={subarray!r} for image1overf"
-            )
-        hdul[0].header.add_history(
-            "UPDC reproduction: image1overf correction applied"
-        )
-        hdul.writeto(output_path, overwrite=True)
-
-
-def _downsample_header(header: fits.Header, *, factor: int) -> dict[str, Any]:
+def _downsample_header(header: dict[str, Any], *, factor: int) -> dict[str, Any]:
     if factor < 1:
         raise ValueError("factor must be positive")
-    out = header.copy()
+    out = dict(header)
     out["NAXIS1"] = int(np.ceil(int(header["NAXIS1"]) / factor))
     out["NAXIS2"] = int(np.ceil(int(header["NAXIS2"]) / factor))
     out["CRPIX1"] = (float(header["CRPIX1"]) - 0.5) / factor + 0.5
@@ -133,22 +86,34 @@ def _downsample_header(header: fits.Header, *, factor: int) -> dict[str, Any]:
 
 
 def _read_state(path: Path, *, dq_fix: bool) -> ExposureState:
-    # JWST DQ arrays use FITS unsigned-integer scaling (BZERO/BSCALE), which
-    # Astropy cannot materialize from a memory-mapped image.
-    with fits.open(path, memmap=False) as hdul:
-        data = np.asarray(hdul["SCI"].data, dtype=np.float32).copy()
-        header = hdul["SCI"].header.copy()
-        dq = np.asarray(hdul["DQ"].data).copy()
+    data_tensor, header = torchfits.read(
+        str(path), hdu="SCI", return_header=True, mmap=False
+    )
+    dq_tensor = torchfits.read(str(path), hdu="DQ", mmap=False)
+    data = data_tensor.detach().cpu().numpy().astype(np.float32, copy=True)
+    dq = dq_tensor.detach().cpu().numpy().copy()
     finite = np.isfinite(data)
     if dq_fix:
         valid = _science_region_mask(data.shape) & finite & ~((dq.astype(np.uint64, copy=False) & JWST_DO_NOT_USE) != 0)
     else:
         valid = finite & (dq == 0)
-    return ExposureState(path=path, data=data, header=header, dq=dq, valid=valid, rejected=np.zeros_like(valid))
+    return ExposureState(
+        path=path,
+        data=data,
+        header=dict(header),
+        dq=dq,
+        valid=valid,
+        rejected=np.zeros_like(valid),
+    )
 
 
-def _write_mask(path: Path, mask: np.ndarray, header: fits.Header) -> None:
-    fits.PrimaryHDU(data=mask.astype(np.float32), header=header).writeto(path, overwrite=True)
+def _write_mask(path: Path, mask: np.ndarray, header: dict[str, Any]) -> None:
+    torchfits.write(
+        str(path),
+        torch.as_tensor(mask, dtype=torch.float32),
+        header=header,
+        overwrite=True,
+    )
 
 
 def _aligned_stack(
@@ -208,6 +173,39 @@ def _fit_gaussian_maps(
     return location, scale, usable
 
 
+def _fit_leave_one_out_gaussian_maps(
+    aligned: np.ndarray,
+    *,
+    minimum_samples: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Gaussian MLE maps for each exposure using every other exposure only."""
+    if aligned.ndim != 3:
+        raise ValueError("aligned exposure stack must have shape (exposure, y, x)")
+    finite = np.isfinite(aligned)
+    values = np.where(finite, aligned, 0.0).astype(np.float64, copy=False)
+    total_count = finite.sum(axis=0, dtype=np.int64)
+    total_sum = values.sum(axis=0, dtype=np.float64)
+    total_square_sum = np.square(values).sum(axis=0, dtype=np.float64)
+    count = total_count[None, ...] - finite
+    summed = total_sum[None, ...] - values
+    square_summed = total_square_sum[None, ...] - np.square(values)
+    safe_count = np.maximum(count, 1)
+    location = summed / safe_count
+    variance = np.maximum(square_summed / safe_count - np.square(location), 0.0)
+    scale = np.sqrt(variance)
+    usable = (
+        (count >= int(minimum_samples))
+        & np.isfinite(location)
+        & np.isfinite(scale)
+        & (scale > 0)
+    )
+    return (
+        np.where(usable, location, 0.0).astype(np.float32),
+        np.where(usable, scale, 0.0).astype(np.float32),
+        usable,
+    )
+
+
 def _project_statistic_to_detector(
     statistic: np.ndarray,
     *,
@@ -248,16 +246,23 @@ def _detect_pass(
     states: list[ExposureState],
     *,
     target: TargetRenderSpec,
-    location: np.ndarray,
-    scale: np.ndarray,
-    usable_sky: np.ndarray,
+    aligned: np.ndarray,
+    minimum_samples: int,
     sigma: float,
     device: torch.device,
 ) -> list[dict[str, int]]:
     rows: list[dict[str, int]] = []
-    for state in states:
+    locations, scales, usable = _fit_leave_one_out_gaussian_maps(
+        aligned, minimum_samples=int(minimum_samples)
+    )
+    for index, state in enumerate(states):
         det_location, det_scale, det_support = _detector_statistics(
-            location, scale, usable_sky, target=target, state=state, device=device
+            locations[index],
+            scales[index],
+            usable[index],
+            target=target,
+            state=state,
+            device=device,
         )
         high = (
             det_support
@@ -319,29 +324,37 @@ def _replace_and_write(
             stem = state.path.stem
             name = f"{stem}_completed_dqfix.fits" if dq_fix else f"{stem}_completed.fits"
         output_path = output_dir / name
-        with fits.open(state.path, memmap=False) as hdul:
-            hdul["SCI"].data[...] = corrected
-            if "UPDCMASK" in hdul:
-                del hdul["UPDCMASK"]
-            hdul.append(fits.ImageHDU(data=replace.astype(np.uint8), name="UPDCMASK"))
-            hdul[0].header.add_history(
-                "UPDC reproduction: two-pass abnormal-pixel completion"
-            )
-            if dq_fix:
-                hdul[0].header.add_history(
-                    "DQ policy: replace DO_NOT_USE bit only; preserve other DQ flags"
-                )
-                hdul[0].header["UPDCDQ"] = ("DO_NOT_USE", "JWST DQ policy used for pixel completion")
-            hdul[0].header["UPDCSEED"] = (
-                int(seed) + index,
-                "Random seed used for Gaussian pixel completion",
-            )
-            hdul.writeto(output_path, overwrite=True)
+        shutil.copy2(state.path, output_path)
+        torchfits.replace_hdu(
+            str(output_path),
+            "SCI",
+            torch.as_tensor(corrected),
+            header=state.header,
+        )
+        try:
+            torchfits.delete_hdu(str(output_path), "UPDCREJ")
+        except KeyError:
+            pass
+        rejection_header = {
+            "EXTNAME": "UPDCREJ",
+            "MASKTYPE": "REJECTION",
+            "MASKTRUE": "REPLACED",
+            "UPDCSEED": int(seed) + index,
+            "UPDCDQ": "DO_NOT_USE" if dq_fix else "ALL_NONZERO",
+        }
+        torchfits.insert_hdu(
+            str(output_path),
+            torch.as_tensor(replace.astype(np.uint8, copy=False)),
+            index=int(torchfits.read_num_hdus(str(output_path))),
+            header=rejection_header,
+        )
 
         row: dict[str, Any] = {
             "input": str(state.path),
             "output": str(output_path),
             "replaced_pixels": int(replace.sum()),
+            "rejection_mask_hdu": "UPDCREJ",
+            "mask_true_means": "replaced",
         }
         if dq_fix and science_region is not None:
             row["replaced_fraction_science"] = float(replace.sum() / science_region.sum())
@@ -355,21 +368,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--target-reference", type=Path, required=True,
                         help="FITS whose SCI header defines the UPDC grid template")
-    parser.add_argument("--image1overf", type=Path, required=True,
-                        help="external image1overf.py providing sub1fimaging (never vendored)")
     parser.add_argument("--bands", default="F090W,F150W,F200W,F277W,F356W,F444W")
     parser.add_argument("--module", default="b")
     parser.add_argument("--expected-exposures", type=int, default=9)
-    parser.add_argument("--sigma-bgmask", type=float, default=3.0)
-    parser.add_argument("--sigma-1fmask", type=float, default=2.0)
-    parser.add_argument("--splitamps", action="store_true")
-    parser.add_argument("--no-segmask", action="store_true",
-                        help="Disable the source segmentation mask in image1overf.")
     parser.add_argument("--outlier-sigma", type=float, default=5.0)
     parser.add_argument("--minimum-samples", type=int, default=3)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--skip-one-over-f", action="store_true")
     parser.add_argument("--dq-fix", action="store_true",
                         help="Conservative DQ policy: complete DO_NOT_USE/nonfinite/science-aperture only.")
     return parser
@@ -388,37 +393,9 @@ def _prepare_band(band: str, args, device: torch.device) -> dict[str, Any]:
         )
 
     band_root = args.output_dir / str(band).lower()
-    one_over_f_dir = band_root / "one_over_f"
     completed_dir = band_root / ("completed_dqfix" if args.dq_fix else "completed")
-    one_over_f_dir.mkdir(parents=True, exist_ok=True)
-
-    correction_fn = None
-    if not args.skip_one_over_f:
-        correction_fn = _load_image1overf(args.image1overf)
-
-    corrected_paths: list[Path] = []
-    for input_path in exposure_paths:
-        output_path = one_over_f_dir / input_path.name.replace("_cal.fits", "_cal_1overf.fits")
-        if args.skip_one_over_f:
-            output_path = input_path
-        elif output_path.exists():
-            print(f"reusing 1/f corrected {output_path}")
-        else:
-            _apply_one_over_f(
-                input_path,
-                output_path,
-                correction_fn=correction_fn,
-                sigma_bgmask=float(args.sigma_bgmask),
-                sigma_1fmask=float(args.sigma_1fmask),
-                splitamps=bool(args.splitamps),
-                usesegmask=not bool(args.no_segmask),
-            )
-            print(f"1/f corrected {output_path}")
-        corrected_paths.append(output_path)
-
-    states = [_read_state(path, dq_fix=bool(args.dq_fix)) for path in corrected_paths]
-    with fits.open(args.target_reference, memmap=True) as hdul:
-        reference_header = hdul["SCI"].header.copy()
+    states = [_read_state(path, dq_fix=bool(args.dq_fix)) for path in exposure_paths]
+    reference_header = dict(torchfits.read_header(str(args.target_reference), "SCI"))
     temporary_header = _downsample_header(reference_header, factor=2)
     target = TargetRenderSpec.from_header(temporary_header, value_semantics="surface_brightness")
 
@@ -429,16 +406,14 @@ def _prepare_band(band: str, args, device: torch.device) -> dict[str, Any]:
             aligned, _ = _aligned_stack(
                 states, target_header=temporary_header, tmpdir=tmpdir, device=device, pass_index=pass_index
             )
-            location, scale, usable_sky = _fit_gaussian_maps(aligned, minimum_samples=int(args.minimum_samples))
             pass_rows.append(
                 {
                     "pass": pass_index,
                     "exposures": _detect_pass(
                         states,
                         target=target,
-                        location=location,
-                        scale=scale,
-                        usable_sky=usable_sky,
+                        aligned=aligned,
+                        minimum_samples=int(args.minimum_samples),
                         sigma=float(args.outlier_sigma),
                         device=device,
                     ),
@@ -465,13 +440,7 @@ def _prepare_band(band: str, args, device: torch.device) -> dict[str, Any]:
     return {
         "band": str(band).upper(),
         "n_exposures": len(states),
-        "image1overf": {
-            "script": str(args.image1overf),
-            "sigma_bgmask": float(args.sigma_bgmask),
-            "sigma_1fmask": float(args.sigma_1fmask),
-            "splitamps": bool(args.splitamps),
-            "usesegmask": not bool(args.no_segmask),
-        },
+        "external_preprocessing": "survey-calibrated input; 1/f correction is upstream",
         "completion": {
             "temporary_grid_factor": 2,
             "passes": 2,

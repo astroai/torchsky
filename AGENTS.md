@@ -40,7 +40,7 @@ Geometric primitives, mapmaking, and cross-wavelength field representations are 
   itself a required runtime dependency (the FITS I/O layer for `torchsky`).
 - **Heavy or domain-ecosystem packages** belong in **`[project.optional-dependencies]`** (`test`, `bench`, `viz`, `map`, `examples`, …), not in the core runtime list. Use them for tests, benchmarks, viz servers, map pipelines, and parity—not as silent requirements of `import torchsky`.
 - **Table interchange:** prefer **PyArrow**-native paths and **`polars`** where a DataFrame-like API is needed; **`pandas`** remains optional (e.g. `to_pandas`, bench scripts).
-- **Supported Python:** **`>=3.12,<3.15`** (`requires-python` in `pyproject.toml`). CI primary matrix uses **3.12**.
+- **Supported Python metadata:** **`>=3.12`** with no upper cap. The reproducible primary development lane uses **3.13.14**.
 - **Pip extras:** **`[test]`** for pytest + fixtures aligned with CI; **`[bench]`** for throughput scripts; **`[bench-all]`** adds HEALPix / geometry comparators (**healpy**, **hpgeom**, **healsparse**, **astropy-healpix**, **spherical-geometry**, **mocpy**) for parity benches—same role as Pixi `bench-all`; **`[sht-bench]`** is the optional **s2fft** HEALPix SHT peer (not an oracle; JAX stays out of the default `test` env).
 
 ### Python interpreter (agents and humans)

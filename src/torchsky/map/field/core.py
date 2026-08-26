@@ -24,6 +24,7 @@ from .bandpass import (
     bandpass_mc_samples as _bandpass_mc_samples,
     bandpass_quadrature as _bandpass_quadrature,
     bandpass_response as _bandpass_response,
+    validate_override_quadrature as _validate_override_quadrature,
 )
 from .forwarding import call_scalar_field_forward as _call_scalar_field_forward
 from .foam import (
@@ -529,9 +530,7 @@ class FoamInitializedINRField(_BaseFieldModel):
             coords.to(device=parameter.device, dtype=parameter.dtype)
         )
         raw = self.residual_output(hidden).squeeze(-1)
-        return self.max_log_correction * torch.tanh(
-            raw / self.max_log_correction
-        )
+        return self.max_log_correction * torch.tanh(raw / self.max_log_correction)
 
     def forward(
         self,
@@ -540,12 +539,8 @@ class FoamInitializedINRField(_BaseFieldModel):
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
         with torch.no_grad():
-            reference = self.reference_foam(
-                ra_deg, dec_deg, wavelength_angstrom
-            )
-        correction = self.log_intensity_correction(
-            ra_deg, dec_deg, wavelength_angstrom
-        )
+            reference = self.reference_foam(ra_deg, dec_deg, wavelength_angstrom)
+        correction = self.log_intensity_correction(ra_deg, dec_deg, wavelength_angstrom)
         reference = reference.to(device=correction.device, dtype=correction.dtype)
         return reference.clamp_min(self.intensity_floor) * torch.exp(correction)
 
@@ -1111,8 +1106,12 @@ class FieldComponentDecomposition(_BaseFieldModel):
                 raise ValueError(
                     "override_wavelengths and override_weights must be provided together"
                 )
-            wavelengths = override_wavelengths.to(device=device, dtype=torch.float32)
-            weights = override_weights.to(device=device, dtype=torch.float32)
+            wavelengths, weights = _validate_override_quadrature(
+                override_wavelengths,
+                override_weights,
+                device=device,
+                dtype=torch.float32,
+            )
         elif spectral_sampling == "deterministic_quadrature":
             wavelengths, weights = _bandpass_quadrature(
                 base_observation,
@@ -1194,10 +1193,12 @@ class FieldComponentDecomposition(_BaseFieldModel):
                 raise ValueError(
                     "override_wavelengths and override_weights must be provided together"
                 )
-            wavelengths = override_wavelengths.to(
-                device=ra_deg.device, dtype=torch.float32
+            wavelengths, weights = _validate_override_quadrature(
+                override_wavelengths,
+                override_weights,
+                device=ra_deg.device,
+                dtype=torch.float32,
             )
-            weights = override_weights.to(device=ra_deg.device, dtype=torch.float32)
         elif spectral_sampling == "deterministic_quadrature":
             wavelengths, weights = _bandpass_quadrature(
                 base_observation,

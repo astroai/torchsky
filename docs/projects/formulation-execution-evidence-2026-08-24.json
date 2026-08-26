@@ -1,0 +1,72 @@
+{
+  "schema": "torchsky-uspm-cosmodist.formulation-execution.v1",
+  "date": "2026-08-25",
+  "roadmap": {
+    "path": "/Users/fabbros/src/roadmap_torchsky_uspm_cosmodist.md",
+    "sha256": "e21829587684f3f37edceb1d3f583cb08611b5c3254c965b0b0a893771c438d9"
+  },
+  "repositories": {
+    "torchsky": {
+      "path": "/Users/fabbros/src/torchsky",
+      "initial_branch": "wcs-aware-integration",
+      "initial_head": "849d0784957c0fa45c7fb3fcd5d2be5518cf5d9f",
+      "initial_main": "964ed6a9fdaf5314d34d2793cf5d2b3667ed996d",
+      "initial_tracked_dirty_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "initial_lock_sha256": "5dc4c4a246129b1deff6268aced397988232360f61e5d7a2a6bbbfcb595e14a3",
+      "formulation_sha256": "212163e649a060ecec0e5677b73519a2ef2131791a92568c6250bcdccb7d73f9",
+      "current_branch": "main",
+      "current_head": "849d0784957c0fa45c7fb3fcd5d2be5518cf5d9f",
+      "current_status_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "current_tracked_dirty_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "state": "wcs-aware-integration fast-forwarded onto main; shared-contract hardening remains an uncommitted software implementation"
+    },
+    "uspm": {
+      "path": "/Users/fabbros/src/uspm",
+      "initial_branch": "main",
+      "initial_head": "0d731ad45e166476f2212943a495294bcd8f72d1",
+      "initial_tracked_dirty_diff_sha256": "b8bec2dd7cc9b656ce77507f5d532dfd1be5f7b3ab8c20415f74bed2fc331577",
+      "initial_lock_sha256": "f7b939133b04cb71d19a7f8e3137c82da84bfb615b000a28c7a5614a9797380f",
+      "formulation_sha256": "55e172f5cb205c227408c9a0b770f45015ca58e0af42a80c7955768c292a1859",
+      "current_branch": "main",
+      "current_head": "0d731ad45e166476f2212943a495294bcd8f72d1",
+      "current_status_sha256": "89c0c89af91a05cef3bc93a46b63c1f8f42e8834335df0555df60ade9c9dcfbc",
+      "current_tracked_dirty_diff_sha256": "1e7a60b656c024dace59fa03fe87276553f22ffe72d5752b554076efc5bb9def",
+      "current_lock_sha256": "3170bc157919ad5f59c63641393e8ebb4427606b51fdc459cee6f760d39825bd",
+      "environment": "Python 3.13.14|PyTorch 2.13.0|torchfits 1.0.0",
+      "environment_sha256": "bb12bab4b64a2d2a5fb4b53ed728423313f861eedfb28a82b3aff5dc63296e9d",
+      "verification": [
+        "focused final regression: 54 passed",
+        "permitted ci-local: 478 passed",
+        "preflight-push: passed",
+        "git diff --check: passed"
+      ],
+      "scientific_certification": "blocked: required real paired surveys and held-out lithium products are absent"
+    },
+    "cosmodist": {
+      "path": "/Users/fabbros/src/cosmodist",
+      "initial_branch": "main",
+      "initial_head": "2053245911dd9cc6ce6e34cdd45a81bfe58ef01c",
+      "initial_tracked_dirty_diff_sha256": "59cf92e09fff83de550f3de22fb18e0445cff2802da06837a3275bb923f6ae5b",
+      "initial_lock_sha256": "845b0c494202bc36286cf89f9ceab5e040de7c3472162f41c37e336b1698c8cf",
+      "formulation_sha256": "c168f14ad9777b9be7847be7bc9adfd0ae5a6ea30412ea52db65f54e36a6dbc6",
+      "current_branch": "main",
+      "current_head": "2053245911dd9cc6ce6e34cdd45a81bfe58ef01c",
+      "current_status_sha256": "5cee29a89ca6772105719a592dafc483456a7b8466e1b14bcaae84ddde5e3f70",
+      "current_tracked_dirty_diff_sha256": "762b63b9b2e3138dc34bbcc239c04b92b8d1869fe10bfa4e2c06ad0434c65d62",
+      "current_lock_sha256": "282467f9398a3d91677e96c19395bd512f7f436b0ced8b1534d56feff3f98c13",
+      "environment": "Python 3.13.14|PyTorch 2.13.0|torchfits 1.0.0",
+      "environment_sha256": "bb12bab4b64a2d2a5fb4b53ed728423313f861eedfb28a82b3aff5dc63296e9d",
+      "verification": [
+        "focused final regression: 48 passed",
+        "ci-local including permitted performance smoke: passed",
+        "git diff --check: passed"
+      ],
+      "scientific_certification": "0/10: required real exposures, survey products, independent mocks, and cross-fitted anchors are absent"
+    }
+  },
+  "claims": {
+    "software_only": true,
+    "scientific_gates_passed": false,
+    "unit_tests_count_as_certification": false
+  }
+}

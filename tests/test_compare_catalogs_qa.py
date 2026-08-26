@@ -101,9 +101,31 @@ def test_boundary_radius_discriminates() -> None:
     assert outside["matched"] == 0
 
 
+def test_association_is_one_to_one_when_candidates_share_a_reference() -> None:
+    reference_ra = np.array([150.0])
+    reference_dec = np.array([2.0])
+    reference_flux = np.array([1.0])
+    candidate_ra = np.array([150.0, 150.0 + 0.02 / 3600.0])
+    candidate_dec = np.array([2.0, 2.0])
+    candidate_flux = np.array([1.0, 1.0])
+    report = compare_catalogs(
+        candidate_ra,
+        candidate_dec,
+        candidate_flux,
+        reference_ra,
+        reference_dec,
+        reference_flux,
+        radius_arcsec=0.5,
+    )
+    assert report["association"] == "maximum_cardinality_one_to_one"
+    assert report["matched"] == 1
+    assert report["candidate_only"] == 1
+    assert report["reference_only"] == 0
+
+
 def test_snr_bins_reported_when_reference_snr_given() -> None:
     cand_ra, cand_dec, cand_flux, ref_ra, ref_dec, ref_flux = _synthetic_pair()
-    snr = np.linspace(1.0, 80.0, size=ref_ra.size)
+    snr = np.linspace(1.0, 80.0, num=ref_ra.size)
     report = compare_catalogs(
         cand_ra,
         cand_dec,
@@ -120,13 +142,19 @@ def test_snr_bins_reported_when_reference_snr_given() -> None:
 
 
 def test_main_writes_json_report(tmp_path: Path) -> None:
-    from astropy.table import Table
+    import torchfits
 
     cand_ra, cand_dec, cand_flux, ref_ra, ref_dec, ref_flux = _synthetic_pair()
     candidate_path = tmp_path / "candidate.fits"
-    reference_path = tmp_path / "reference.ecsv"
-    Table({"ra": cand_ra, "dec": cand_dec, "flux": cand_flux}).write(candidate_path)
-    Table({"ra": ref_ra, "dec": ref_dec, "flux": ref_flux}).write(reference_path, format="ecsv")
+    reference_path = tmp_path / "reference.fits"
+    torchfits.table.write(
+        str(candidate_path),
+        {"ra": cand_ra, "dec": cand_dec, "flux": cand_flux},
+    )
+    torchfits.table.write(
+        str(reference_path),
+        {"ra": ref_ra, "dec": ref_dec, "flux": ref_flux},
+    )
     out_path = tmp_path / "qa.json"
 
     rc = main(

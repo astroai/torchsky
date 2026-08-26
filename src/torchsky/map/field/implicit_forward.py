@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import torch
@@ -27,6 +27,7 @@ from torchsky.redshift import require_one_plus_z
 
 from ..operators.bundle import ObservationOperatorBundle
 from .core import render_field_observation
+from .observation_ops import observation_support_mask
 from .types import FieldObservation, ForwardContext
 
 
@@ -97,23 +98,27 @@ def scale_observation_for_rest_frame_scene(
     """
     if not math.isfinite(one_plus_z) or one_plus_z <= 0.0:
         raise ValueError("one_plus_z must be finite and positive")
+    if observation.spectral_quantity not in (None, "wavelength"):
+        raise ValueError(
+            "rest-frame wavelength scaling requires spectral_quantity='wavelength'"
+        )
     inv = 1.0 / float(one_plus_z)
     tc = observation.transmission_center
     ts = observation.transmission_sigma
     twl = observation.transmission_wavelength
     ttt = observation.transmission_throughput
     twl_rest = None if twl is None else (twl * inv)
-    return FieldObservation(
-        image=observation.image,
+    passband_rest = (
+        None
+        if observation.passband is None
+        else replace(
+            observation.passband,
+            wavelength=observation.passband.wavelength * inv,
+        )
+    )
+    return replace(
+        observation,
         header=dict(observation.header),
-        weight=observation.weight,
-        mask=observation.mask,
-        err=observation.err,
-        var_poisson=observation.var_poisson,
-        var_rnoise=observation.var_rnoise,
-        var_flat=observation.var_flat,
-        contamination_prior=observation.contamination_prior,
-        amplifier_index=observation.amplifier_index,
         wavelength=(
             None
             if observation.wavelength is None
@@ -133,17 +138,7 @@ def scale_observation_for_rest_frame_scene(
         transmission_sigma=None if ts is None else float(ts) * inv,
         transmission_wavelength=twl_rest,
         transmission_throughput=ttt,
-        psf_sigma_pix=float(observation.psf_sigma_pix),
-        psf_spec=observation.psf_spec,
-        sky_background=observation.sky_background,
-        instrument_background=observation.instrument_background,
-        detector_background=observation.detector_background,
-        background_offset=float(observation.background_offset),
-        band_name=observation.band_name,
-        spectral_quantity=observation.spectral_quantity,
-        detector_x0_pix=float(observation.detector_x0_pix),
-        detector_y0_pix=float(observation.detector_y0_pix),
-        detector_to_sky=observation.detector_to_sky,
+        passband=passband_rest,
     )
 
 
@@ -191,20 +186,27 @@ def observation_charbonnier_loss(
     eps: float = 1.0e-3,
 ) -> Tensor:
     """Per-observation Charbonnier loss with optional ``weight`` and ``mask``."""
-    diff = prediction - observation.image
+    if not isinstance(prediction, Tensor) or not prediction.is_floating_point():
+        raise TypeError("prediction must be a floating tensor")
+    if tuple(prediction.shape) != tuple(observation.image.shape):
+        raise ValueError("prediction shape must match observation.image")
+    if not math.isfinite(float(eps)) or float(eps) <= 0.0:
+        raise ValueError("eps must be finite and positive")
+    image = observation.image.to(device=prediction.device, dtype=prediction.dtype)
+    valid = observation_support_mask(observation).to(device=prediction.device)
+    if not bool(valid.any()):
+        raise ValueError("Charbonnier loss requires at least one usable pixel")
+    if not bool(torch.isfinite(prediction[valid]).all()):
+        raise ValueError("prediction must be finite on usable pixels")
+    diff = torch.where(valid, prediction - image, torch.zeros_like(prediction))
     rho = _charbonnier(diff, eps=eps)
-    m = (
-        torch.ones_like(diff, dtype=rho.dtype)
-        if observation.mask is None
-        else observation.mask.to(dtype=rho.dtype)
-    )
     w = (
         torch.ones_like(diff, dtype=rho.dtype)
         if observation.weight is None
-        else observation.weight.to(dtype=rho.dtype)
+        else observation.weight.to(device=prediction.device, dtype=rho.dtype)
     )
-    wm = (w * m).clamp_min(0.0)
-    return (rho * wm).sum() / wm.sum().clamp_min(1.0e-8)
+    effective_weight = torch.where(valid, w.clamp_min(0.0), torch.zeros_like(w))
+    return (rho * effective_weight).sum() / effective_weight.sum().clamp_min(1.0e-8)
 
 
 def multi_survey_charbonnier_loss(

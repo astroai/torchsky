@@ -143,6 +143,7 @@ from .noise import (
     poisson_gaussian_cdf,
     poisson_gaussian_nll,
     profile_amplifier_row_offsets,
+    reduce_detector_nll,
     sanitize_inverse_variance,
     student_t_nll,
 )
@@ -167,7 +168,11 @@ from .pixel_area import (
     representative_pixel_area_sr,
     wrapped_delta_ra_deg,
 )
-from .radiometry import ExplicitRadiometryOp, apply_image_observation_calibration
+from .radiometry import (
+    ExplicitRadiometryOp,
+    apply_image_observation_calibration,
+    expected_electrons_from_photon_spectral_density,
+)
 from .resampling import (
     custom_separable_sample,
     finalize_periodic_resampled_weighted,
@@ -190,6 +195,7 @@ from .spectral import (
     bandpass_response,
     mixture_importance_weights,
     mixture_mc_samples,
+    validate_override_quadrature,
 )
 
 _LAZY_EXPORTS = {
@@ -292,6 +298,7 @@ __all__ = [
     "VAR_RNOISE",
     "apply_background_components",
     "apply_image_observation_calibration",
+    "expected_electrons_from_photon_spectral_density",
     "apply_kernel2d",
     "apply_kernel2d_variance",
     "apply_learned_psf_spec",
@@ -355,6 +362,7 @@ __all__ = [
     "poisson_gaussian_cdf",
     "poisson_gaussian_nll",
     "profile_amplifier_row_offsets",
+    "reduce_detector_nll",
     "sanitize_inverse_variance",
     "student_t_nll",
     "registered_image_stamps",
@@ -369,6 +377,7 @@ __all__ = [
     "swap_bundle_operator_families",
     "target_shape_from_header",
     "validate_learned_operator_families",
+    "validate_override_quadrature",
     "validate_image_plane_2d",
     "validate_map_resampling_kernel",
     "validate_map_stacking_method",

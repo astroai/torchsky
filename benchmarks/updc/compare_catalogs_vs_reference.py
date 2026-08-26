@@ -2,12 +2,14 @@
 """QA a candidate catalog against the UPDC iter10-derived reference catalog.
 
 Matching goes exclusively through ``torchsky.catalogs.crossmatch_sky`` with
-``find="best"`` (nearest right-catalog row per left row). Reports matched /
+``find="all"`` followed by deterministic maximum-cardinality one-to-one
+association. Reports matched /
 candidate-only / reference-only counts, separation statistics, and flux-ratio
 statistics overall and per reference SNR bin. Results go to stdout plus an
 optional JSON file (``--out``).
 
-Tables may be FITS or ECSV (anything ``astropy.table.Table`` reads).
+FITS tables are read through ``torchfits``. ECSV uses Astropy's text-table
+reader when installed.
 """
 
 from __future__ import annotations
@@ -40,21 +42,100 @@ def _require_astropy():
 
 
 def _column(table, name: str) -> np.ndarray:
-    if name not in table.colnames:
+    names = (
+        list(table.column_names)
+        if hasattr(table, "column_names")
+        else list(table.colnames)
+    )
+    if name not in names:
         raise ValueError(
-            f"column {name!r} not found; available: {list(table.colnames)}"
+            f"column {name!r} not found; available: {names}"
         )
-    return np.asarray(table[name], dtype=np.float64).reshape(-1)
+    column = table[name]
+    if hasattr(column, "to_numpy"):
+        column = column.to_numpy(zero_copy_only=False)
+    return np.array(column, dtype=np.float64, copy=True).reshape(-1)
 
 
 def _read_catalog(path: Path, *, ra_col: str, dec_col: str, flux_col: str):
-    Table = _require_astropy()
-    table = Table.read(str(path))
+    if path.suffix.lower() in {".fits", ".fit", ".fts", ".fz"}:
+        import torchfits
+
+        table = torchfits.table.read(str(path), hdu=1)
+    else:
+        table = _require_astropy().read(str(path))
     return {
         "ra_deg": _column(table, ra_col),
         "dec_deg": _column(table, dec_col),
         "flux": _column(table, flux_col),
     }
+
+
+def _maximum_cardinality_pairs(result) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Resolve radius candidates into a deterministic one-to-one association."""
+    all_left = result.left_index.detach().cpu().numpy().astype(np.int64, copy=False)
+    all_right = result.right_index.detach().cpu().numpy().astype(np.int64, copy=False)
+    all_sep = result.separation_arcsec.detach().cpu().numpy()
+    adjacency: dict[int, list[tuple[int, float]]] = {}
+    separation_by_pair: dict[tuple[int, int], float] = {}
+    for left, right, separation in zip(all_left, all_right, all_sep, strict=True):
+        left_i, right_i, separation_f = int(left), int(right), float(separation)
+        adjacency.setdefault(left_i, []).append((right_i, separation_f))
+        separation_by_pair[(left_i, right_i)] = separation_f
+    for candidates in adjacency.values():
+        candidates.sort(key=lambda item: (item[1], item[0]))
+
+    # Augmenting paths give maximum cardinality. Trying the least-separated
+    # sources and edges first makes ties deterministic and favors local pairs.
+    left_order = sorted(
+        adjacency,
+        key=lambda left: (adjacency[left][0][1], left),
+    )
+    left_match: dict[int, int] = {}
+    right_match: dict[int, int] = {}
+    for root in left_order:
+        if root in left_match:
+            continue
+        queue = [root]
+        seen_left = {root}
+        seen_right: set[int] = set()
+        parent_right: dict[int, int] = {}
+        free_right: int | None = None
+        for left in queue:
+            for right, _ in adjacency[left]:
+                if right in seen_right:
+                    continue
+                seen_right.add(right)
+                parent_right[right] = left
+                owner = right_match.get(right)
+                if owner is None:
+                    free_right = right
+                    break
+                if owner not in seen_left:
+                    seen_left.add(owner)
+                    queue.append(owner)
+            if free_right is not None:
+                break
+        if free_right is None:
+            continue
+        right = free_right
+        while True:
+            left = parent_right[right]
+            previous_right = left_match.get(left)
+            left_match[left] = right
+            right_match[right] = left
+            if previous_right is None:
+                break
+            right_match.pop(previous_right)
+            right = previous_right
+
+    pairs = sorted(left_match.items())
+    left = np.asarray([pair[0] for pair in pairs], dtype=np.int64)
+    right = np.asarray([pair[1] for pair in pairs], dtype=np.int64)
+    separation = np.asarray(
+        [separation_by_pair[pair] for pair in pairs], dtype=np.float64
+    )
+    return left, right, separation
 
 
 def _ratio_stats(ratio: np.ndarray) -> dict[str, float] | None:
@@ -87,11 +168,9 @@ def compare_catalogs(
         torch.as_tensor(reference_ra, dtype=torch.float64),
         torch.as_tensor(reference_dec, dtype=torch.float64),
         radius_arcsec=float(radius_arcsec),
-        find="best",
+        find="all",
     )
-    left = result.left_index.numpy()
-    right = result.right_index.numpy()
-    separation = result.separation_arcsec.numpy()
+    left, right, separation = _maximum_cardinality_pairs(result)
 
     n_candidate = int(candidate_ra.size)
     n_reference = int(reference_ra.size)
@@ -103,6 +182,7 @@ def compare_catalogs(
         "candidate_only": n_candidate - matched,
         "reference_only": n_reference - int(np.unique(right).size),
         "radius_arcsec": float(radius_arcsec),
+        "association": "maximum_cardinality_one_to_one",
     }
     if matched:
         report["separation_arcsec"] = {
@@ -141,8 +221,6 @@ def detect_candidates_photutils(
 ):
     """Detect sources in SCI images with photutils DAOStarFinder."""
     try:
-        from astropy.io import fits
-        from astropy.wcs import WCS as AstropyWCS
         from photutils.detection import DAOStarFinder
     except ImportError as exc:
         print(
@@ -155,10 +233,15 @@ def detect_candidates_photutils(
     ras: list[float] = []
     decs: list[float] = []
     fluxes: list[float] = []
+    import torchfits
+
+    from torchsky.wcs import WCS
+
     for path in image_paths:
-        with fits.open(path, memmap=False) as hdul:
-            data = np.asarray(hdul["SCI"].data, dtype=np.float32)
-            header = hdul["SCI"].header.copy()
+        image, header = torchfits.read(
+            str(path), hdu="SCI", return_header=True, mmap=False
+        )
+        data = image.detach().cpu().numpy().astype(np.float32, copy=False)
         finite = np.isfinite(data)
         background = float(np.median(data[finite]))
         noise = float(1.4826 * np.median(np.abs(data[finite] - background)))
@@ -169,13 +252,13 @@ def detect_candidates_photutils(
         sources = finder(data - background)
         if sources is None or len(sources) == 0:
             continue
-        world = AstropyWCS(header).all_pix2world(
-            np.asarray(sources["xcentroid"], dtype=np.float64),
-            np.asarray(sources["ycentroid"], dtype=np.float64),
-            0,
+        world = WCS(header).pixel_to_world(
+            torch.as_tensor(np.asarray(sources["xcentroid"], dtype=np.float64)),
+            torch.as_tensor(np.asarray(sources["ycentroid"], dtype=np.float64)),
+            origin=0,
         )
-        ras.extend(np.asarray(world[0]).reshape(-1).tolist())
-        decs.extend(np.asarray(world[1]).reshape(-1).tolist())
+        ras.extend(world[0].detach().cpu().reshape(-1).tolist())
+        decs.extend(world[1].detach().cpu().reshape(-1).tolist())
         fluxes.extend(
             np.asarray(sources["flux"], dtype=np.float64).reshape(-1).tolist()
         )
@@ -246,9 +329,13 @@ def main(argv: list[str] | None = None) -> int:
 
     reference_snr = None
     if args.snr_col is not None:
-        reference_snr = _column(
-            _require_astropy().read(str(args.reference)), args.snr_col
-        )
+        if args.reference.suffix.lower() in {".fits", ".fit", ".fts", ".fz"}:
+            import torchfits
+
+            reference_table = torchfits.table.read(str(args.reference), hdu=1)
+        else:
+            reference_table = _require_astropy().read(str(args.reference))
+        reference_snr = _column(reference_table, args.snr_col)
 
     report = compare_catalogs(
         cand_ra,

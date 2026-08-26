@@ -12,34 +12,34 @@ Run log: `docs/projects/adass_updec_depth_week.md`.
 
 ## Run order
 
-1. **Chain C — UPDC reproduction prep** (per band):
+1. **External calibration, then Chain C preparation** (per band):
+   Run the survey/JWST 1/f correction upstream and place the resulting CAL
+   products in `<cal_dir>`. Torchsky does not own that survey-specific step.
    ```bash
    pixi run python benchmarks/updc/prepare_inputs.py \
        --input-dir <cal_dir> --output-dir <prep_dir> \
-       --target-reference <updc_grid.fits> --image1overf <path/to/image1overf.py> \
+       --target-reference <updc_grid.fits> \
        --bands F277W,F356W,F444W [--dq-fix]
    ```
-   Applies the external `image1overf.sub1fimaging` 1/f correction (never
-   vendored; an in-likelihood alternative lives in
-   `torchsky.map.operators.noise` as `StructuredDetectorNoise` /
-   `OneOverFRowNoise`), fits two-pass 5-sigma outlier statistics on a
-   factor-2 downsampled sky grid projected back per detector through
+   Fits two-pass, leave-one-exposure-out 5-sigma statistics on a factor-2
+   downsampled sky grid projected back per detector through
    `bind_image_plane_target_operator`, completes bad pixels with seeded
    Gaussian draws (`--seed`), and writes `*_cal_completed*.fits` plus a
-   `UPDCMASK` extension. `--dq-fix` uses the conservative policy
+   `UPDCREJ` rejection extension (`1=replaced`; never pass it directly as a
+   valid-support mask). `--dq-fix` uses the conservative policy
    (science aperture & finite & DO_NOT_USE bit only).
 
 2. **Alignment** — either the official JWST step or the native primitive:
    ```bash
-   pip install 'torchsky[tweakreg]'
-   python scripts/tweakreg_align_exposures.py \
+   pixi run -e smacs python scripts/tweakreg_align_exposures.py \
        --inputs <exposures...> --output-dir <aligned_dir> --fitgeometry rshift
    ```
    Produces `{index:03d}_{stem}_rshift_tweakreg.fits` — exactly the glob
    consumed by `benchmarks/bench_map_smacs0723_real.py`. For a pure-torch
    correction of matched catalogs, fit
-   `torchsky.map.exposure_pose.fit_pose_correction` against an anchor frame;
-   pair sources with `torchsky.catalogs.crossmatch_sky`.
+   `torchsky.map.exposure_pose.fit_pose_correction` in the exposure's
+   CRVAL-centered tangent frame; pair sources with
+   `torchsky.catalogs.crossmatch_sky`.
 
 3. **Native-pixel training** — `map/field` (`fit_field_model`) trains
    continuous fields directly on native SCI/ERR/DQ pools; joint multiband via
@@ -54,14 +54,15 @@ Run log: `docs/projects/adass_updec_depth_week.md`.
 5. **QA vs UPDC iter10**:
    ```bash
    pixi run python benchmarks/updc/compare_catalogs_vs_reference.py \
-       --candidate <detected.ecsv> --reference <updc_iter10.fits> \
+       --candidate <detected.fits> --reference <updc_iter10.fits> \
        --radius-arcsec 0.25 --out qa_report.json
    ```
-   Matching goes only through `crossmatch_sky(find="best")`; reports
+   Radius candidates come from `crossmatch_sky(find="all")`, then a
+   deterministic maximum-cardinality one-to-one association reports
    matched/candidate-only/reference-only counts, separation median+p95, and
    flux-ratio median/q16/q84 overall and per SNR bin.
    Optional photutils detection from rendered SCI images:
-   `--detect-images <dir>` (needs the `catalog-qa` extras group).
+   `--detect-images <dir>` (run in the `smacs` Pixi environment).
 
 ## Role map of existing assets (unchanged locations)
 

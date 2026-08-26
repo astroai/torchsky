@@ -1196,11 +1196,21 @@ def fit_field_model(
                 ),
                 proposal_grid_size=training_spectral_sampling_grid_size,
             )
+        epoch_batch_size = (
+            len(observations)
+            if observations_per_step is None or int(observations_per_step) <= 0
+            else min(int(observations_per_step), len(observations))
+        )
+        epoch_steps = max(math.ceil(len(observations) / epoch_batch_size), 1)
+        sampling_epoch = step_idx // epoch_steps
+        sampling_step_in_epoch = step_idx % epoch_steps
         selected_indices = _sample_observation_indices(
             observations,
             observations_per_step=observations_per_step,
             observation_sampling=observation_sampling,
             generator=sampling_generator,
+            epoch=sampling_epoch,
+            step_in_epoch=sampling_step_in_epoch,
         )
         selected_pairs: list[
             tuple[
@@ -1350,11 +1360,24 @@ def fit_field_model(
             ]
         ] = []
         if context_count > 0 and context_weight > 0.0:
+            context_epoch_steps = max(
+                math.ceil(len(observations) / context_count), 1
+            )
             context_indices = _sample_observation_indices(
                 observations,
                 observations_per_step=context_count,
                 observation_sampling=observation_sampling,
                 generator=sampling_generator,
+                epoch=(
+                    step_idx // context_epoch_steps
+                    if observation_sampling == "epoch"
+                    else 0
+                ),
+                step_in_epoch=(
+                    step_idx % context_epoch_steps
+                    if observation_sampling == "epoch"
+                    else 0
+                ),
             )
             context_pairs = [
                 (

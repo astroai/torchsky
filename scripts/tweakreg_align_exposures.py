@@ -18,7 +18,8 @@ import json
 import sys
 from pathlib import Path
 
-import numpy as np
+import torch
+import torchfits
 
 
 def _output_name(index: int, stem: str, fitgeometry: str) -> str:
@@ -28,18 +29,31 @@ def _output_name(index: int, stem: str, fitgeometry: str) -> str:
 
 def _validate_sci_wcs(path: Path) -> None:
     """Fail fast when the saved SCI FITS-WCS has a non-finite footprint."""
-    from astropy.io import fits as astro_fits
-    from astropy.wcs import WCS as AstropyWCS
+    from torchsky.wcs import WCS
 
     try:
-        header = dict(astro_fits.getheader(str(path), "SCI"))
-        footprint = AstropyWCS(header).calc_footprint()
+        header = dict(torchfits.read_header(str(path), "SCI"))
+        width, height = int(header["NAXIS1"]), int(header["NAXIS2"])
+        center_ra = float(header["CRVAL1"])
+        center_dec = float(header["CRVAL2"])
+        if (
+            width <= 0
+            or height <= 0
+            or not torch.isfinite(torch.tensor([center_ra, center_dec])).all()
+            or not -90.0 <= center_dec <= 90.0
+        ):
+            raise ValueError("invalid WCS dimensions or reference coordinate")
+        pixels = torch.tensor(
+            [[0.0, 0.0], [width - 1.0, 0.0], [width - 1.0, height - 1.0], [0.0, height - 1.0]],
+            dtype=torch.float64,
+        )
+        footprint = WCS(header).pixel_to_world_differentiable(pixels, origin=0)
     except Exception as exc:
         raise RuntimeError(f"invalid saved TweakReg WCS in {path}") from exc
     if (
-        footprint is None
-        or footprint.size == 0
-        or not bool(np.isfinite(footprint).all())
+        footprint.numel() == 0
+        or not bool(torch.isfinite(footprint).all())
+        or not bool(((footprint[:, 1] >= -90.0) & (footprint[:, 1] <= 90.0)).all())
     ):
         raise RuntimeError(f"invalid saved TweakReg WCS in {path}")
 
@@ -49,12 +63,9 @@ def _band_and_detector(path: Path) -> tuple[str, str]:
     band = ""
     detector = ""
     try:
-        from astropy.io import fits as astro_fits
-
-        with astro_fits.open(str(path), memmap=False) as hdul:
-            head = hdul[0].header
-            band = str(head.get("FILTER", "") or head.get("PUPIL", ""))
-            detector = str(head.get("DETECTOR", ""))
+        head = torchfits.read_header(str(path), 0)
+        band = str(head.get("FILTER", "") or head.get("PUPIL", ""))
+        detector = str(head.get("DETECTOR", ""))
     except Exception:
         pass
     if not detector:

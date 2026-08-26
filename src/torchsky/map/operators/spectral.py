@@ -27,10 +27,42 @@ class LearnedSpectralResponseOp(SpectralResponseOp):
         super().__init__(name=name, learned=True)
 
 
+def validate_override_quadrature(
+    wavelengths: Tensor,
+    weights: Tensor,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[Tensor, Tensor]:
+    """Validate caller-supplied spectral nodes and quadrature weights."""
+    if not dtype.is_floating_point:
+        raise TypeError("override quadrature dtype must be floating point")
+    if not isinstance(wavelengths, Tensor) or not isinstance(weights, Tensor):
+        raise TypeError("override wavelengths and weights must be tensors")
+    if wavelengths.ndim != 1 or weights.ndim != 1:
+        raise ValueError("override wavelengths and weights must be 1D")
+    if wavelengths.shape != weights.shape or wavelengths.numel() == 0:
+        raise ValueError(
+            "override wavelengths and weights must be matching non-empty vectors"
+        )
+    nodes = wavelengths.to(device=device, dtype=dtype)
+    quadrature = weights.to(device=device, dtype=dtype)
+    if not bool(torch.isfinite(nodes).all()):
+        raise ValueError("override wavelengths must be finite")
+    if not bool(torch.isfinite(quadrature).all()) or bool((quadrature < 0.0).any()):
+        raise ValueError("override weights must be finite and non-negative")
+    if not bool(quadrature.sum() > 0.0):
+        raise ValueError("override weights must have positive total mass")
+    return nodes, quadrature
+
+
 def bandpass_bounds(observation: FieldObservation) -> tuple[float, float]:
     if observation.spectral_min is not None and observation.spectral_max is not None:
         lower = float(observation.spectral_min)
         upper = float(observation.spectral_max)
+    elif observation.passband is not None:
+        lower = float(observation.passband.wavelength[0].item())
+        upper = float(observation.passband.wavelength[-1].item())
     elif observation.wavelength is not None:
         lower = float(observation.wavelength)
         upper = float(observation.wavelength)
@@ -44,7 +76,7 @@ def bandpass_bounds(observation: FieldObservation) -> tuple[float, float]:
 
 
 def has_tabulated_transmission(observation: FieldObservation) -> bool:
-    return (
+    return observation.passband is not None or (
         observation.transmission_wavelength is not None
         and observation.transmission_throughput is not None
     )
@@ -54,12 +86,17 @@ def sorted_tabulated_transmission(
     observation: FieldObservation,
     *,
     device: torch.device,
+    dtype: torch.dtype,
 ) -> tuple[Tensor, Tensor]:
-    wl = observation.transmission_wavelength
-    tt = observation.transmission_throughput
-    assert wl is not None and tt is not None
-    wl_d = wl.to(device=device, dtype=torch.float32).reshape(-1)
-    tt_d = tt.to(device=device, dtype=torch.float32).reshape(-1)
+    if observation.passband is not None:
+        wl = observation.passband.wavelength
+        tt = observation.passband.throughput
+    else:
+        wl = observation.transmission_wavelength
+        tt = observation.transmission_throughput
+        assert wl is not None and tt is not None
+    wl_d = wl.to(device=device, dtype=dtype).reshape(-1)
+    tt_d = tt.to(device=device, dtype=dtype).reshape(-1)
     wl_s, perm = torch.sort(wl_d)
     tt_s = torch.clamp(tt_d[perm], min=0.0)
     return wl_s, tt_s
@@ -68,9 +105,11 @@ def sorted_tabulated_transmission(
 def linear_interp_transmission(
     wl_tab: Tensor, tt_tab: Tensor, wl_query: Tensor
 ) -> Tensor:
-    xq = wl_query.to(dtype=torch.float32)
-    x = wl_tab.to(dtype=torch.float32)
-    y = tt_tab.to(dtype=torch.float32)
+    xq = wl_query
+    if not xq.is_floating_point():
+        xq = xq.to(dtype=torch.get_default_dtype())
+    x = wl_tab.to(device=xq.device, dtype=xq.dtype)
+    y = tt_tab.to(device=xq.device, dtype=xq.dtype)
     lo = x[0]
     hi = x[-1]
     clamped = torch.clamp(xq, lo, hi)
@@ -101,24 +140,32 @@ def bandpass_quadrature(
     *,
     num_spectral_samples: int,
     device: torch.device,
+    dtype: torch.dtype | None = None,
 ) -> tuple[Tensor, Tensor]:
     if num_spectral_samples < 1:
         raise ValueError("num_spectral_samples must be positive")
+    work_dtype = dtype or (
+        observation.image.dtype
+        if observation.image.is_floating_point()
+        else torch.get_default_dtype()
+    )
+    if not work_dtype.is_floating_point:
+        raise TypeError("bandpass quadrature dtype must be floating point")
     lower, upper = bandpass_bounds(observation)
     if lower == upper or num_spectral_samples == 1:
-        samples = torch.tensor(
-            [0.5 * (lower + upper)], dtype=torch.float32, device=device
-        )
+        samples = torch.tensor([0.5 * (lower + upper)], dtype=work_dtype, device=device)
         return samples, torch.ones_like(samples)
     n = int(num_spectral_samples)
-    samples = torch.linspace(lower, upper, steps=n, dtype=torch.float32, device=device)
+    samples = torch.linspace(lower, upper, steps=n, dtype=work_dtype, device=device)
     span = float(upper - lower)
     h = span / float(n - 1)
-    trap = torch.full((n,), h, dtype=torch.float32, device=device)
+    trap = torch.full((n,), h, dtype=work_dtype, device=device)
     trap[0] = h * 0.5
     trap[-1] = h * 0.5
     if has_tabulated_transmission(observation):
-        wl_tab, tt_tab = sorted_tabulated_transmission(observation, device=device)
+        wl_tab, tt_tab = sorted_tabulated_transmission(
+            observation, device=device, dtype=work_dtype
+        )
         response = linear_interp_transmission(wl_tab, tt_tab, samples)
         mass = (response * trap).sum()
         response = tabulated_response_or_uniform(response, mass=mass)
@@ -146,7 +193,8 @@ def bandpass_quadrature(
 
 def bandpass_response(observation: FieldObservation, wavelengths: Tensor) -> Tensor:
     lower, upper = bandpass_bounds(observation)
-    wavelengths = wavelengths.to(dtype=torch.float32)
+    if not wavelengths.is_floating_point():
+        wavelengths = wavelengths.to(dtype=torch.get_default_dtype())
     if lower == upper:
         atol = max(1.0e-3, 1.0e-6 * max(abs(lower), 1.0))
         return (torch.abs(wavelengths - float(lower)) <= atol).to(
@@ -155,7 +203,9 @@ def bandpass_response(observation: FieldObservation, wavelengths: Tensor) -> Ten
     inside = (wavelengths >= float(lower)) & (wavelengths <= float(upper))
     if has_tabulated_transmission(observation):
         wl_tab, tt_tab = sorted_tabulated_transmission(
-            observation, device=wavelengths.device
+            observation,
+            device=wavelengths.device,
+            dtype=wavelengths.dtype,
         )
         response = linear_interp_transmission(wl_tab, tt_tab, wavelengths)
         return response * inside.to(dtype=response.dtype)
@@ -183,16 +233,22 @@ def bandpass_mc_samples(
     *,
     num_spectral_samples: int,
     device: torch.device,
+    dtype: torch.dtype | None = None,
     proposal_grid_size: int | None = None,
     generator: torch.Generator | None = None,
 ) -> tuple[Tensor, Tensor]:
     if num_spectral_samples < 1:
         raise ValueError("num_spectral_samples must be positive")
+    work_dtype = dtype or (
+        observation.image.dtype
+        if observation.image.is_floating_point()
+        else torch.get_default_dtype()
+    )
+    if not work_dtype.is_floating_point:
+        raise TypeError("bandpass sampling dtype must be floating point")
     lower, upper = bandpass_bounds(observation)
     if lower == upper or num_spectral_samples == 1:
-        sample = torch.tensor(
-            [0.5 * (lower + upper)], dtype=torch.float32, device=device
-        )
+        sample = torch.tensor([0.5 * (lower + upper)], dtype=work_dtype, device=device)
         return sample, torch.ones_like(sample)
     proposal_size = (
         int(proposal_grid_size)
@@ -202,10 +258,12 @@ def bandpass_mc_samples(
     if proposal_size < 2:
         proposal_size = 2
     proposal_samples = torch.linspace(
-        lower, upper, steps=proposal_size, dtype=torch.float32, device=device
+        lower, upper, steps=proposal_size, dtype=work_dtype, device=device
     )
     if has_tabulated_transmission(observation):
-        wl_tab, tt_tab = sorted_tabulated_transmission(observation, device=device)
+        wl_tab, tt_tab = sorted_tabulated_transmission(
+            observation, device=device, dtype=work_dtype
+        )
         proposal_weights = linear_interp_transmission(wl_tab, tt_tab, proposal_samples)
         proposal_weights = tabulated_response_or_uniform(
             proposal_weights, mass=proposal_weights.sum()
@@ -252,18 +310,26 @@ def mixture_mc_samples(
     *,
     num_spectral_samples: int,
     device: torch.device,
+    dtype: torch.dtype | None = None,
     proposal_grid_size: int | None = None,
     generator: torch.Generator | None = None,
 ) -> tuple[Tensor, Tensor]:
     if num_spectral_samples < 1:
         raise ValueError("num_spectral_samples must be positive")
+    if not observations:
+        raise ValueError("mixture_mc_samples requires at least one observation")
+    work_dtype = dtype or (
+        observations[0].image.dtype
+        if observations and observations[0].image.is_floating_point()
+        else torch.get_default_dtype()
+    )
+    if not work_dtype.is_floating_point:
+        raise TypeError("mixture sampling dtype must be floating point")
     bounds = [bandpass_bounds(observation) for observation in observations]
     lower = min(bound[0] for bound in bounds)
     upper = max(bound[1] for bound in bounds)
     if lower == upper or num_spectral_samples == 1:
-        sample = torch.tensor(
-            [0.5 * (lower + upper)], dtype=torch.float32, device=device
-        )
+        sample = torch.tensor([0.5 * (lower + upper)], dtype=work_dtype, device=device)
         return sample, torch.ones_like(sample)
     proposal_size = (
         int(proposal_grid_size)
@@ -273,7 +339,7 @@ def mixture_mc_samples(
     if proposal_size < 2:
         proposal_size = 2
     proposal_samples = torch.linspace(
-        lower, upper, steps=proposal_size, dtype=torch.float32, device=device
+        lower, upper, steps=proposal_size, dtype=work_dtype, device=device
     )
     proposal = torch.zeros_like(proposal_samples)
     for observation in observations:

@@ -9,7 +9,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from astropy.io import fits
+import torch
+import torchfits
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 SCRIPT_PATH = SCRIPTS_DIR / "tweakreg_align_exposures.py"
@@ -59,8 +60,7 @@ def test_single_exposure_rejected(tmp_path: Path) -> None:
 
 
 def test_validate_sci_wcs_rejects_nonfinite_footprint(tmp_path: Path) -> None:
-    header = fits.Header(
-        {
+    header = {
             "NAXIS": 2,
             "NAXIS1": 8,
             "NAXIS2": 8,
@@ -74,12 +74,13 @@ def test_validate_sci_wcs_rejects_nonfinite_footprint(tmp_path: Path) -> None:
             "CD1_2": 0.0,
             "CD2_1": 0.0,
             "CD2_2": 3e-5,
-        }
-    )
+    }
     destination = tmp_path / "broken_tweakreg.fits"
-    fits.PrimaryHDU().writeto(destination, overwrite=True)
-    with fits.open(destination, mode="update") as hdul:
-        hdul.append(fits.ImageHDU(data=np.zeros((8, 8), np.float32), name="SCI"))
-        hdul["SCI"].header.update(header)
+    torchfits.write(
+        str(destination),
+        torch.as_tensor(np.zeros((8, 8), np.float32)),
+        header={**header, "EXTNAME": "SCI"},
+        overwrite=True,
+    )
     with pytest.raises(RuntimeError, match=f"invalid saved TweakReg WCS in {destination}"):
         tweakreg_script._validate_sci_wcs(destination)

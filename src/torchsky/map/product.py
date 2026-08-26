@@ -14,6 +14,7 @@ import torch.nn.functional as F
 
 from ..sphere.moc import MOC
 from ..spectral import SpectralAxis
+from ..spectrophotometry import Passband
 from ..wcs import WCS
 from .image_plane import (
     BandMetadataTable,
@@ -49,6 +50,11 @@ class MapBandpassSpec:
     spectral_max: float | None = None
     transmission_center: float | None = None
     transmission_sigma: float | None = None
+    spectral_unit: str = "Angstrom"
+    passband: Passband | None = None
+
+    def __post_init__(self) -> None:
+        _coerce_band(self)
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,14 @@ class MapProductSpec:
     bands: tuple[MapBandpassSpec, ...]
     value_semantics: MapValueSemantics = "surface_brightness"
     footprint_order: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.target_header, dict):
+            raise TypeError("MapProductSpec target_header must be a dict")
+        if not self.bands:
+            raise ValueError("MapProductSpec requires at least one band")
+        for band in self.bands:
+            _coerce_band(band)
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -133,6 +147,20 @@ MapUncertaintyMode = Literal["native_inverse_variance", "support_density_proxy"]
 
 
 def _coerce_band(value: MapBandpassSpec) -> MapBandpassSpec:
+    if not isinstance(value.spectral_unit, str) or not value.spectral_unit.strip():
+        raise ValueError("MapBandpassSpec spectral_unit must be explicit")
+    if value.passband is not None:
+        if value.spectral_unit.strip().lower() not in {"angstrom", "angstroms", "aa"}:
+            raise ValueError(
+                "Passband-backed MapBandpassSpec uses Angstrom coordinates"
+            )
+        if (
+            value.transmission_center is not None
+            or value.transmission_sigma is not None
+        ):
+            raise ValueError(
+                "MapBandpassSpec passband and Gaussian transmission are mutually exclusive"
+            )
     if value.spectral_min is not None and value.spectral_max is None:
         raise ValueError(
             "MapBandpassSpec requires spectral_max when spectral_min is set"
@@ -162,6 +190,8 @@ def _coerce_band(value: MapBandpassSpec) -> MapBandpassSpec:
 
 
 def _band_center(band: MapBandpassSpec) -> float:
+    if band.passband is not None:
+        return float(band.passband.effective_wavelength.item())
     if band.transmission_center is not None:
         return float(band.transmission_center)
     if band.spectral_min is not None and band.spectral_max is not None:
@@ -612,15 +642,22 @@ def render_field_product(
                 tile_hdr = dict(product.target_header)
                 tile_hdr["NAXIS1"] = x1 - x0
                 tile_hdr["NAXIS2"] = y1 - y0
-                tile_hdr["CRPIX1"] = float(product.target_header.get("CRPIX1", 1.0)) - float(x0)
-                tile_hdr["CRPIX2"] = float(product.target_header.get("CRPIX2", 1.0)) - float(y0)
+                tile_hdr["CRPIX1"] = float(
+                    product.target_header.get("CRPIX1", 1.0)
+                ) - float(x0)
+                tile_hdr["CRPIX2"] = float(
+                    product.target_header.get("CRPIX2", 1.0)
+                ) - float(y0)
                 tile_obs = FieldObservation(
                     image=torch.zeros((y1 - y0, x1 - x0), dtype=torch.float32),
                     header=tile_hdr,
                     weight=torch.ones((y1 - y0, x1 - x0), dtype=torch.float32),
-                    wavelength=band.transmission_center if band.transmission_center is not None else (
+                    wavelength=band.transmission_center
+                    if band.transmission_center is not None
+                    else (
                         0.5 * (float(band.spectral_min) + float(band.spectral_max))
-                        if band.spectral_min is not None and band.spectral_max is not None
+                        if band.spectral_min is not None
+                        and band.spectral_max is not None
                         else None
                     ),
                     spectral_min=band.spectral_min,
@@ -628,11 +665,15 @@ def render_field_product(
                     transmission_center=band.transmission_center,
                     transmission_sigma=band.transmission_sigma,
                     band_name=band.label,
+                    passband=band.passband,
+                    value_semantics=product.value_semantics,
+                    spectral_unit=band.spectral_unit,
                 )
                 model.eval()
                 with torch.no_grad():
                     tile_pred = render_field_observation(
-                        model, tile_obs,
+                        model,
+                        tile_obs,
                         num_spectral_samples=num_spectral_samples,
                         spatial_sampling=spatial_sampling,
                     )

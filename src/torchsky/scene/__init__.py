@@ -40,7 +40,7 @@ from ..map.product import (
     stack_map_product,
 )
 from ..map.operators.resampling import sample_image_plane_batched_channels
-from ..map.splat import splat_to_native
+from ..map.splat import SplatDiagnostics, splat_to_native
 from ..map.scenes import (
     ContinuousFieldModel,
     DiscreteTargetImage,
@@ -163,6 +163,7 @@ __all__ = [
     "Scene",
     "SceneRepresentation",
     "SpinHarmonicAlmScene",
+    "SplatDiagnostics",
     "SurveyDataTerm",
     "Target",
     "TargetRenderSpec",

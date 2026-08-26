@@ -111,6 +111,20 @@ class Passband:
         outside = (query < grid[0]) | (query > grid[-1])
         return torch.where(outside, torch.zeros_like(value), value)
 
+    def to(self, device: torch.device | str) -> Passband:
+        """Return the canonical float64 passband on ``device``.
+
+        Passband samples remain float64 calibration metadata.  Evaluation casts
+        them to the query dtype, so moving a scene or observation never silently
+        lowers the precision of the stored response curve.
+        """
+        return Passband(
+            self.wavelength.to(device=device),
+            self.throughput.to(device=device),
+            name=self.name,
+            wavelength_unit="angstrom",
+        )
+
 
 @dataclass(frozen=True)
 class PhotometryResult:
@@ -156,7 +170,9 @@ def evaluate_throughput(
     return torch.exp(-0.5 * torch.square((wave - center_t) / float(sigma)))
 
 
-def throughput_from_mapping(band_id: str, spec: Mapping[str, Any]) -> Passband | dict[str, Any]:
+def throughput_from_mapping(
+    band_id: str, spec: Mapping[str, Any]
+) -> Passband | dict[str, Any]:
     """Build a :class:`Passband` or Gaussian/LVF dict from a filter-profile mapping."""
     wl = spec.get("transmission_wavelength_nm") or spec.get("transmission_wavelength")
     tr = spec.get("transmission_value") or spec.get("transmission")
@@ -173,7 +189,11 @@ def throughput_from_mapping(band_id: str, spec: Mapping[str, Any]) -> Passband |
             name=band_id,
             wavelength_unit=unit,
         )
-    center = spec.get("transmission_center") or spec.get("lambda_eff_nm") or spec.get("wavelength")
+    center = (
+        spec.get("transmission_center")
+        or spec.get("lambda_eff_nm")
+        or spec.get("wavelength")
+    )
     sigma = spec.get("transmission_sigma") or spec.get("sigma_nm")
     if sigma is None and spec.get("fwhm_nm") is not None:
         sigma = float(spec["fwhm_nm"]) / 2.354820045
@@ -283,9 +303,7 @@ def synthetic_photometry(
         waves = wave.reshape(-1, n_wave)
         shared = bool(torch.allclose(waves, waves[:1]))
     else:
-        raise ValueError(
-            "wavelength must be 1D or the same shape as flux_lambda"
-        )
+        raise ValueError("wavelength must be 1D or the same shape as flux_lambda")
     batch = flux.reshape(-1, n_wave)
     mask_t: torch.Tensor | None = None
     if mask is not None:
@@ -450,12 +468,15 @@ def _integrate_masked(
     )
     zero = torch.zeros((), dtype=batch.dtype, device=batch.device)
     runs = [
-        (start, stop)
-        for start, stop in _boolean_run_slices(mask)
-        if stop - start >= 2
+        (start, stop) for start, stop in _boolean_run_slices(mask) if stop - start >= 2
     ]
     if not runs:
-        return values, zero, torch.zeros((), dtype=torch.bool, device=batch.device), unit
+        return (
+            values,
+            zero,
+            torch.zeros((), dtype=torch.bool, device=batch.device),
+            unit,
+        )
 
     numerator = torch.zeros(batch.shape[0], dtype=batch.dtype, device=batch.device)
     den_lambda = zero.clone()
@@ -470,7 +491,9 @@ def _integrate_masked(
             continue
         sampled_flux = _linear_interpolate(wave[start:stop], batch[:, start:stop], grid)
         photon_weight = response * grid
-        numerator = numerator + torch.trapezoid(sampled_flux * photon_weight, grid, dim=-1)
+        numerator = numerator + torch.trapezoid(
+            sampled_flux * photon_weight, grid, dim=-1
+        )
         den_lambda = den_lambda + torch.trapezoid(photon_weight, grid)
         den_nu = den_nu + _C_ANGSTROM_PER_SECOND * torch.trapezoid(
             response / grid, grid

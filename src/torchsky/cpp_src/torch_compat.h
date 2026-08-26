@@ -7,20 +7,8 @@
 
 namespace nb = nanobind;
 
-// Manual definitions to interface with libtorch_python without including headers that pull in pybind11
-// This allows us to use the native PyTorch C++ API for tensor conversion without conflicts.
-
-// Forward declare THPVariableClass
-extern PyObject* THPVariableClass;
-
-// Check if object is a Tensor
-inline bool THPVariable_Check(PyObject* obj) {
-    return PyObject_IsInstance(obj, THPVariableClass);
-}
-
-// Extern declaration for THPVariable_Wrap (exported by libtorch_python)
+// Manual declaration avoids importing pybind11 into this nanobind module.
 extern PyObject* THPVariable_Wrap(const at::TensorBase& var);
-
 
 // Helper function to convert torch::Tensor to Python object - FAST PATH
 inline nb::object tensor_to_python(const torch::Tensor& tensor) {
@@ -31,7 +19,7 @@ inline nb::object tensor_to_python(const torch::Tensor& tensor) {
     return nb::steal(tensor_obj);
 }
 
-// Helper function to convert Python object to torch::Tensor - FAST PATH
+// Helper function to convert any DLPack producer to torch::Tensor.
 inline torch::Tensor python_to_tensor(nb::object obj) {
     if (!PyObject_HasAttrString(obj.ptr(), "__dlpack__")) {
         throw std::runtime_error("Object does not implement __dlpack__");
@@ -41,21 +29,17 @@ inline torch::Tensor python_to_tensor(nb::object obj) {
         throw nb::python_error();
     }
     nb::object capsule = nb::steal(capsule_obj);
-
-    auto* dl_managed = static_cast<DLManagedTensor*>(
+    auto* managed = static_cast<DLManagedTensor*>(
         PyCapsule_GetPointer(capsule.ptr(), "dltensor")
     );
-    if (!dl_managed) {
+    if (!managed) {
         throw nb::python_error();
     }
-    auto t = at::fromDLPack(dl_managed);
-
-    // Mark the capsule as consumed to avoid the capsule destructor calling deleter
-    // a second time after ATen takes ownership.
+    auto tensor = at::fromDLPack(managed);
     if (PyCapsule_SetName(capsule.ptr(), "used_dltensor") != 0) {
         PyErr_Clear();
     }
-    return t;
+    return tensor;
 }
 
 inline torch::Tensor as_f64_contig(nb::object obj) {

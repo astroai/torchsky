@@ -322,7 +322,7 @@ cleanup, operator correctness, scalable indexing, and measured bottlenecks.
 - Pre-push hook: `pixi run preflight-push`. Full pytest: GitHub `build-test` or optional `pixi run ci-local`.
 - Package boundary: no FITS implementation modules, CFITSIO/zlib linkage, or
   FITS-owned benchmarks in torchsky; integration smoke against the supported
-  `torchfits 1.0.0rc4+` range.
+  `torchfits 1.0.0+` range.
 - FITS/table I/O behavior and throughput changes: validate in the `torchfits`
   repository.
 - WCS/sphere claims: `pixi run wcs-sphere-acceptance` plus focused parity tests

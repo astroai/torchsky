@@ -78,44 +78,71 @@ def custom_separable_sample(
     y_src: Tensor,
     kernel: MapResamplingKernel,
 ) -> Tensor:
-    if image.ndim not in {2, 3}:
+    if image.ndim not in {2, 3, 4}:
         raise ValueError(
-            "custom separable sampling expects a 2D image or [C, H, W] tensor"
+            "custom separable sampling expects [H,W], [C,H,W], or [B,C,H,W]"
         )
-    work = image if image.ndim == 3 else image.unsqueeze(0)
+    if not image.is_floating_point():
+        raise TypeError("custom separable sampling requires a floating image")
+    if x_src.shape != y_src.shape or x_src.ndim not in {2, 3}:
+        raise ValueError("x_src and y_src must be matching [Hq,Wq] or [B,Hq,Wq]")
+    if x_src.device != image.device or y_src.device != image.device:
+        raise ValueError("image, x_src, and y_src must be on the same device")
+    if not x_src.is_floating_point() or not y_src.is_floating_point():
+        raise TypeError("x_src and y_src must be floating tensors")
+    if not bool(torch.isfinite(x_src).all()) or not bool(torch.isfinite(y_src).all()):
+        raise ValueError("x_src and y_src must contain only finite coordinates")
+
+    original_ndim = image.ndim
+    coordinate_batch = x_src.ndim == 3
+    if image.ndim == 2:
+        work = image.unsqueeze(0).unsqueeze(0)
+    elif image.ndim == 3:
+        work = image.unsqueeze(0)
+    else:
+        work = image
+    x_batch = x_src.unsqueeze(0) if x_src.ndim == 2 else x_src
+    y_batch = y_src.unsqueeze(0) if y_src.ndim == 2 else y_src
+    if work.shape[0] == 1 and x_batch.shape[0] > 1:
+        work = work.expand(x_batch.shape[0], *work.shape[1:])
+    elif x_batch.shape[0] == 1 and work.shape[0] > 1:
+        x_batch = x_batch.expand(work.shape[0], *x_batch.shape[1:])
+        y_batch = y_batch.expand(work.shape[0], *y_batch.shape[1:])
+    elif work.shape[0] != x_batch.shape[0]:
+        raise ValueError("image and coordinate batch dimensions must match")
+
     support = kernel_support(kernel)
-    x_src = x_src.to(dtype=work.dtype)
-    y_src = y_src.to(dtype=work.dtype)
-    x0 = torch.floor(x_src).to(dtype=torch.int64)
-    y0 = torch.floor(y_src).to(dtype=torch.int64)
+    x_batch = x_batch.to(dtype=work.dtype)
+    y_batch = y_batch.to(dtype=work.dtype)
+    x0 = torch.floor(x_batch).to(dtype=torch.int64)
+    y0 = torch.floor(y_batch).to(dtype=torch.int64)
     offsets = torch.arange(
         -support + 1,
         support + 1,
         device=image.device,
         dtype=torch.int64,
     )
-    xs = x0.unsqueeze(-1) + offsets.view(1, 1, -1)
-    ys = y0.unsqueeze(-1) + offsets.view(1, 1, -1)
-    dx = x_src.unsqueeze(-1) - xs.to(dtype=work.dtype)
-    dy = y_src.unsqueeze(-1) - ys.to(dtype=work.dtype)
+    offset_shape = (1,) * x0.ndim + (-1,)
+    xs = x0.unsqueeze(-1) + offsets.view(offset_shape)
+    ys = y0.unsqueeze(-1) + offsets.view(offset_shape)
+    dx = x_batch.unsqueeze(-1) - xs.to(dtype=work.dtype)
+    dy = y_batch.unsqueeze(-1) - ys.to(dtype=work.dtype)
     wx = kernel_weight(kernel, dx)
     wy = kernel_weight(kernel, dy)
 
-    _, h_src, w_src = work.shape
+    batch, channels, h_src, w_src = work.shape
     x_valid = (xs >= 0) & (xs < w_src)
     y_valid = (ys >= 0) & (ys < h_src)
     xs = xs.clamp(0, w_src - 1)
     ys = ys.clamp(0, h_src - 1)
     sample_idx = ys.unsqueeze(-1) * w_src + xs.unsqueeze(-2)
-    sampled = (
-        work.reshape(work.shape[0], -1)
-        .index_select(1, sample_idx.reshape(-1))
-        .reshape(
-            work.shape[0],
-            *x_src.shape,
-            sample_idx.shape[-2],
-            sample_idx.shape[-1],
-        )
+    flat_index = sample_idx.reshape(batch, 1, -1).expand(-1, channels, -1)
+    sampled = torch.gather(work.reshape(batch, channels, -1), 2, flat_index).reshape(
+        batch,
+        channels,
+        *x_batch.shape[1:],
+        sample_idx.shape[-2],
+        sample_idx.shape[-1],
     )
     weights = (
         wy.unsqueeze(-1)
@@ -123,8 +150,11 @@ def custom_separable_sample(
         * y_valid.unsqueeze(-1).to(dtype=work.dtype)
         * x_valid.unsqueeze(-2).to(dtype=work.dtype)
     )
-    out = torch.sum(sampled * weights.unsqueeze(0), dim=(-1, -2))
-    return out if image.ndim == 3 else out.squeeze(0)
+    out = torch.sum(sampled * weights.unsqueeze(1), dim=(-1, -2))
+    if original_ndim < 4 and not coordinate_batch:
+        out = out.squeeze(0)
+        return out.squeeze(0) if original_ndim == 2 else out
+    return out.squeeze(1) if original_ndim == 2 else out
 
 
 def sample_image_plane(
@@ -135,6 +165,8 @@ def sample_image_plane(
     grid: Tensor,
     kernel: MapResamplingKernel,
 ) -> Tensor:
+    if image.ndim != 2 or not image.is_floating_point():
+        raise ValueError("image-plane sampling expects a floating 2D image")
     if kernel in {"lanczos3", "lanczos5", "mitchell_netravali", "catmull_rom"}:
         return custom_separable_sample(
             image,
@@ -145,7 +177,7 @@ def sample_image_plane(
     return (
         F.grid_sample(
             image.unsqueeze(0).unsqueeze(0),
-            grid.unsqueeze(0),
+            grid.to(device=image.device, dtype=image.dtype).unsqueeze(0),
             mode=kernel,
             padding_mode="zeros",
             align_corners=True,
@@ -163,8 +195,8 @@ def sample_image_plane_channels(
     grid: Tensor,
     kernel: MapResamplingKernel,
 ) -> Tensor:
-    if image.ndim != 3:
-        raise ValueError("channel sampling expects [C, H, W] input")
+    if image.ndim != 3 or not image.is_floating_point():
+        raise ValueError("channel sampling expects floating [C, H, W] input")
     if kernel in {"lanczos3", "lanczos5", "mitchell_netravali", "catmull_rom"}:
         return custom_separable_sample(
             image,
@@ -174,7 +206,7 @@ def sample_image_plane_channels(
         )
     return F.grid_sample(
         image.unsqueeze(0),
-        grid.unsqueeze(0),
+        grid.to(device=image.device, dtype=image.dtype).unsqueeze(0),
         mode=kernel,
         padding_mode="zeros",
         align_corners=True,
@@ -189,36 +221,16 @@ def sample_image_plane_batched(
     grid: Tensor,
     kernel: MapResamplingKernel,
 ) -> Tensor:
-    if x_src.ndim == 2:
-        return sample_image_plane(
-            image,
-            x_src=x_src,
-            y_src=y_src,
-            grid=grid,
-            kernel=kernel,
-        )
-    if kernel in {"lanczos3", "lanczos5", "mitchell_netravali", "catmull_rom"}:
-        samples = [
-            custom_separable_sample(
-                image,
-                x_src=x_src[idx],
-                y_src=y_src[idx],
-                kernel=kernel,
-            )
-            for idx in range(int(x_src.shape[0]))
-        ]
-        return torch.stack(samples, dim=0)
-    batch = int(grid.shape[0])
-    image_b = (
-        image.unsqueeze(0).unsqueeze(0).expand(batch, 1, image.shape[0], image.shape[1])
+    if image.ndim != 2:
+        raise ValueError("batched image-plane sampling expects [H,W] input")
+    sampled = sample_image_plane_batched_channels(
+        image.unsqueeze(0),
+        x_src=x_src,
+        y_src=y_src,
+        grid=grid,
+        kernel=kernel,
     )
-    return F.grid_sample(
-        image_b,
-        grid.to(dtype=torch.float32),
-        mode=kernel,
-        padding_mode="zeros",
-        align_corners=True,
-    ).squeeze(1)
+    return sampled.squeeze(0) if x_src.ndim == 2 else sampled.squeeze(1)
 
 
 def sample_image_plane_batched_channels(
@@ -229,9 +241,22 @@ def sample_image_plane_batched_channels(
     grid: Tensor,
     kernel: MapResamplingKernel,
 ) -> Tensor:
-    if image.ndim != 3:
-        raise ValueError("batched channel sampling expects [C, H, W] input")
-    if x_src.ndim == 2:
+    if image.ndim not in {3, 4} or not image.is_floating_point():
+        raise ValueError(
+            "batched channel sampling expects floating [C,H,W] or [B,C,H,W] input"
+        )
+    if x_src.shape != y_src.shape or x_src.ndim not in {2, 3}:
+        raise ValueError("x_src and y_src must be matching [Hq,Wq] or [B,Hq,Wq]")
+    if x_src.device != image.device or y_src.device != image.device:
+        raise ValueError("image, x_src, and y_src must be on the same device")
+    grid_expected = (*x_src.shape, 2)
+    if tuple(grid.shape) != grid_expected:
+        raise ValueError(
+            f"grid must have shape {grid_expected}, got {tuple(grid.shape)}"
+        )
+    if grid.device != image.device:
+        raise ValueError("image and grid must be on the same device")
+    if x_src.ndim == 2 and image.ndim == 3:
         return sample_image_plane_channels(
             image,
             x_src=x_src,
@@ -240,25 +265,29 @@ def sample_image_plane_batched_channels(
             kernel=kernel,
         )
     if kernel in {"lanczos3", "lanczos5", "mitchell_netravali", "catmull_rom"}:
-        samples = [
-            custom_separable_sample(
-                image,
-                x_src=x_src[idx],
-                y_src=y_src[idx],
-                kernel=kernel,
-            )
-            for idx in range(int(x_src.shape[0]))
-        ]
-        return torch.stack(samples, dim=0)
-    batch = int(grid.shape[0])
-    image_b = image.unsqueeze(0).expand(batch, *image.shape)
-    return F.grid_sample(
+        return custom_separable_sample(
+            image,
+            x_src=x_src,
+            y_src=y_src,
+            kernel=kernel,
+        )
+
+    image_b = image.unsqueeze(0) if image.ndim == 3 else image
+    grid_b = grid.unsqueeze(0) if grid.ndim == 3 else grid
+    if image_b.shape[0] == 1 and grid_b.shape[0] > 1:
+        image_b = image_b.expand(grid_b.shape[0], *image_b.shape[1:])
+    elif grid_b.shape[0] == 1 and image_b.shape[0] > 1:
+        grid_b = grid_b.expand(image_b.shape[0], *grid_b.shape[1:])
+    elif image_b.shape[0] != grid_b.shape[0]:
+        raise ValueError("image and grid batch dimensions must match")
+    sampled = F.grid_sample(
         image_b,
-        grid.to(dtype=torch.float32),
+        grid_b.to(dtype=image.dtype),
         mode=kernel,
         padding_mode="zeros",
         align_corners=True,
     )
+    return sampled.squeeze(0) if image.ndim == 3 and x_src.ndim == 2 else sampled
 
 
 def infer_fft_translation_shift_yx(

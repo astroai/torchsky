@@ -25,27 +25,30 @@ def test_native_torch_abi_contract_is_consistent() -> None:
     pixi = tomllib.loads((REPO_ROOT / "pixi.toml").read_text(encoding="utf-8"))
 
     assert "scikit-build-core>=1.0.0" in pyproject["build-system"]["requires"]
-    assert "torch>=2.13,<2.14" in pyproject["build-system"]["requires"]
-    assert "torch>=2.13,<2.14" in pyproject["project"]["dependencies"]
-    assert any(x.startswith("torchfits>=") for x in pyproject["project"]["dependencies"])
+    assert pyproject["project"]["requires-python"] == ">=3.12"
+    assert "torch>=2.13" in pyproject["build-system"]["requires"]
+    assert "torch>=2.13" in pyproject["project"]["dependencies"]
+    assert "torchfits>=1.0.0" in pyproject["project"]["dependencies"]
     for section in ("build-dependencies", "host-dependencies", "run-dependencies"):
-        assert pixi["package"][section]["pytorch"] == ">=2.13,<2.14"
-    assert pixi["dependencies"]["pytorch"] == ">=2.13,<2.14"
-    assert pixi["feature"]["prod"]["pypi-dependencies"]["torchfits"].startswith(">=")
+        assert pixi["package"][section]["pytorch"] == ">=2.13"
+    assert pixi["dependencies"]["pytorch"] == "==2.13.0"
+    assert pixi["feature"]["prod"]["dependencies"]["python"] == "==3.13.14"
+    assert pixi["feature"]["prod"]["pypi-dependencies"]["torchfits"] == "==1.0.0"
     install_docs = (REPO_ROOT / "docs" / "install.md").read_text(encoding="utf-8")
-    assert '"torch>=2.13,<2.14"' in install_docs
+    assert '"torch>=2.13"' in install_docs
 
     cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(encoding="utf-8")
     bindings = (PACKAGE_ROOT / "cpp_src" / "bindings.cpp").read_text(encoding="utf-8")
     assert "TORCHSKY_BUILD_TORCH_VERSION" in cmake
-    assert 'TORCHSKY_TORCH_ABI="2.13"' in cmake
+    assert 'TORCHSKY_TORCH_ABI="${TORCHSKY_BUILD_TORCH_ABI}"' in cmake
+    assert "cxx_std_20" in cmake
+    assert "TORCHSKY_RUNTIME_PREFIX" in cmake
+    assert "Prioritizing libtorch headers" in cmake
     assert "matching_abi" in bindings
 
 
 def test_cuda_source_build_requires_a_real_toolkit() -> None:
-    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(
-        encoding="utf-8"
-    )
+    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(encoding="utf-8")
 
     assert "CUDAToolkit_FOUND" in cmake
     assert "CUDAToolkit_NVCC_EXECUTABLE" in cmake
@@ -55,9 +58,7 @@ def test_cuda_source_build_requires_a_real_toolkit() -> None:
 
 
 def test_conda_torch_include_root_is_normalized() -> None:
-    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(
-        encoding="utf-8"
-    )
+    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(encoding="utf-8")
 
     assert 'DIR MATCHES "^(.+)/torch/csrc/api/include/?$"' in cmake
     assert "torch/csrc/autograd/autograd.h" in cmake

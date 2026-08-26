@@ -82,9 +82,7 @@ def test_interpolation_resampler_adjoint(
     )
 
     # x represents the source image pixel values, requires_grad=True to compute adjoint via autograd
-    x = torch.randn(
-        (src_h, src_w), dtype=torch.float32, device=dev, requires_grad=True
-    )
+    x = torch.randn((src_h, src_w), dtype=torch.float32, device=dev, requires_grad=True)
     source_weight = torch.ones((src_h, src_w), dtype=torch.float32, device=dev)
 
     y_pred, _ = project_image_observation_geometry(
@@ -126,7 +124,9 @@ def test_interpolation_resampler_adjoint(
 
 @pytest.mark.parametrize("device", _DEVICES)
 @pytest.mark.parametrize("value_semantics", ["surface_brightness", "flux"])
-def test_conservative_polygon_remapper_adjoint(value_semantics: str, device: str) -> None:
+def test_conservative_polygon_remapper_adjoint(
+    value_semantics: str, device: str
+) -> None:
     dev = torch.device(device)
     src_h, src_w = 8, 8
     tgt_h, tgt_w = 6, 6
@@ -146,9 +146,7 @@ def test_conservative_polygon_remapper_adjoint(value_semantics: str, device: str
         include_representative_pixel_area=True,
     )
 
-    x = torch.randn(
-        (src_h, src_w), dtype=torch.float32, device=dev, requires_grad=True
-    )
+    x = torch.randn((src_h, src_w), dtype=torch.float32, device=dev, requires_grad=True)
     source_weight = torch.ones((src_h, src_w), dtype=torch.float32, device=dev)
 
     y_pred, _ = project_image_observation_geometry(
@@ -305,9 +303,7 @@ def _healpix_adjoint_correct(nest: bool) -> None:
     y_pred = sample_healpix_map_on_image_header(
         x, nside=nside, nest=nest, target_header=_HEALPIX_HEADER
     )
-    assert torch.any(y_pred != 0.0), (
-        f"y_pred is completely zero for nest={nest}"
-    )
+    assert torch.any(y_pred != 0.0), f"y_pred is completely zero for nest={nest}"
 
     y = torch.randn(h, w, dtype=torch.float64)
     val1 = torch.sum(y_pred * y)
@@ -498,7 +494,7 @@ def test_apply_calibration_gradgradcheck(device: str) -> None:
 
 @pytest.mark.parametrize("device", _DEVICES)
 def test_learned_lowrank_psf_render_gradcheck(device: str) -> None:
-    """Learned low-rank chromatic PSF render is differentiable end to end."""
+    """Frozen learned PSF rendering remains differentiable in the scene."""
     from torchsky.map.field.types import PSFSpec
     from torchsky.map.operators import apply_psf_spec, LowRankChromaticPSF
 
@@ -535,6 +531,19 @@ def test_learned_lowrank_psf_render_gradcheck(device: str) -> None:
     assert torch.autograd.gradcheck(f, (image,), atol=1e-4, rtol=1e-4)
 
 
+def test_learned_lowrank_psf_rejects_unimplemented_trainable_render() -> None:
+    from torchsky.map.field.types import PSFSpec
+    from torchsky.map.operators import LowRankChromaticPSF, apply_psf_spec
+
+    spec = PSFSpec.learned(
+        LowRankChromaticPSF(base_sigma_pix=1.0),
+        base_sigma_pix=1.0,
+        frozen=False,
+    )
+    with pytest.raises(ValueError, match="frozen=True"):
+        apply_psf_spec(torch.ones((8, 8)), spec)
+
+
 def test_learned_lowrank_kernel_gauges() -> None:
     """Rendered kernels integrate to 1 and are zero-centroid by construction."""
     from torchsky.map.operators import (
@@ -560,9 +569,7 @@ def test_learned_lowrank_kernel_gauges() -> None:
     assert (kernels.sum(dim=(-2, -1)) - 1.0).abs().max() < 1e-6
     centroid_x = (kernels * gx).sum(dim=(-2, -1))
     centroid_y = (kernels * gy).sum(dim=(-2, -1))
-    assert (
-        torch.stack([centroid_x, centroid_y], dim=-1).norm(dim=-1).max() < 1e-3
-    )
+    assert torch.stack([centroid_x, centroid_y], dim=-1).norm(dim=-1).max() < 1e-3
 
     spec = PSFSpec.learned(model, base_sigma_pix=2.3)
     radius = max(1, round(3.0 * 2.3))
@@ -591,7 +598,9 @@ def test_learned_lowrank_psf_dot_product() -> None:
         model.raw_pa_rad.normal_(0.0, 0.2)
         model.raw_ellipticity.normal_(0.0, 0.05)
     u = torch.stack(
-        torch.meshgrid(torch.linspace(2, 46, 2), torch.linspace(2, 46, 2), indexing="ij"),
+        torch.meshgrid(
+            torch.linspace(2, 46, 2), torch.linspace(2, 46, 2), indexing="ij"
+        ),
         dim=-1,
     ).reshape(-1, 2)
     spec = PSFSpec.learned(model, base_sigma_pix=0.8, cell_u_pix=u, cell_lam_norm=0.5)

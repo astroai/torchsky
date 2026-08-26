@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Export per-exposure WebbPSF kernels for native-pixel field training.
+"""Export nominal filter/detector WebbPSF kernels for field training.
 
-For every input CAL/CRF exposure, computes the detector-sampled WebbPSF
+For every input CAL/CRF exposure, computes the detector-sampled nominal WebbPSF
 kernel for its band and detector, unit-sum normalizes it, and saves a float32
 ``.npy`` named ``{band}_{detector}_{index:03d}_psf.npy`` in ``--output-dir``.
 
@@ -11,6 +11,10 @@ non-negative kernel.
 
 Requires the optional ``stpsf`` extras group; install with
 ``pip install 'torchsky[stpsf]'``.
+
+These kernels are not time-, OPD-, jitter-, focus-, or field-position-matched.
+Use them only as frozen nominal baselines unless those calibration inputs are
+added and independently validated.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import torchfits
 
 NIRCAM_SHORT_WAVE_BANDS = frozenset(
     {
@@ -34,12 +39,9 @@ def _band_and_detector(path: Path) -> tuple[str, str]:
     band = ""
     detector = ""
     try:
-        from astropy.io import fits as astro_fits
-
-        with astro_fits.open(str(path), memmap=False) as hdul:
-            head = hdul[0].header
-            band = str(head.get("FILTER", "") or head.get("PUPIL", ""))
-            detector = str(head.get("DETECTOR", ""))
+        head = torchfits.read_header(str(path), 0)
+        band = str(head.get("FILTER", "") or head.get("PUPIL", ""))
+        detector = str(head.get("DETECTOR", ""))
     except Exception:
         pass
     if not detector:
@@ -60,7 +62,7 @@ def export_stpsf_kernels(
     kernel_size: int = 33,
     oversample: int = 2,
 ):
-    """Compute, unit-sum normalize, and save one [K, K] kernel per exposure."""
+    """Compute and save one nominal [K, K] kernel per input exposure."""
     try:
         import stpsf
     except ImportError as exc:
@@ -73,6 +75,7 @@ def export_stpsf_kernels(
     half = int(kernel_size) // 2
     size = 2 * half + 1
     destinations: list[Path] = []
+    cached_kernels: dict[tuple[str, str], np.ndarray] = {}
     last_band = ""
     for index, path in enumerate(inputs):
         band, detector = _band_and_detector(path)
@@ -81,31 +84,36 @@ def export_stpsf_kernels(
                 f"{path}: cannot determine FILTER/DETECTOR for PSF export"
             )
         last_band = band
-        nircam = stpsf.NIRCam()
-        nircam.filter = band.upper()
-        nircam.detector = detector.upper()
-        psf = nircam.calc_psf(
-            fov_pixels=size,
-            oversample=int(oversample),
-        )
-        # Detector-sampled plane: the convolution kernel consumers apply.
-        data = np.asarray(psf["DET_DIST"].data, dtype=np.float64)
-        if data.shape != (size, size):
-            center = np.array(data.shape) // 2
-            data = data[
-                center[0] - half : center[0] - half + size,
-                center[1] - half : center[1] - half + size,
-            ]
-        total = float(data.sum())
-        if not np.isfinite(total) or total <= 0:
-            raise RuntimeError(f"{band}/{detector}: non-finite PSF kernel")
+        key = (band.upper(), detector.upper())
+        data = cached_kernels.get(key)
+        if data is None:
+            nircam = stpsf.NIRCam()
+            nircam.filter, nircam.detector = key
+            psf = nircam.calc_psf(
+                fov_pixels=size,
+                oversample=int(oversample),
+            )
+            # Detector-sampled plane: the convolution kernel consumers apply.
+            data = np.asarray(psf["DET_DIST"].data, dtype=np.float64)
+            if data.shape != (size, size):
+                center = np.array(data.shape) // 2
+                data = data[
+                    center[0] - half : center[0] - half + size,
+                    center[1] - half : center[1] - half + size,
+                ]
+            total = float(data.sum())
+            if not np.isfinite(total) or total <= 0:
+                raise RuntimeError(f"{band}/{detector}: non-finite PSF kernel")
+            data = (data / total).astype(np.float32)
+            cached_kernels[key] = data
         destination = output_dir / f"{band.lower()}_{detector.lower()}_{index:03d}_psf.npy"
-        np.save(destination, (data / total).astype(np.float32))
+        np.save(destination, data)
         destinations.append(destination)
     return {
         "destinations": destinations,
         "kernel_shape": (size, size),
         "pixel_scale_arcsec": _detector_pixel_scale_arcsec(last_band),
+        "conditioning": "nominal_filter_detector",
     }
 
 

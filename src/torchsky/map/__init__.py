@@ -28,6 +28,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "SpectralCubeMapResult": ("torchsky.map.image_plane", "SpectralCubeMapResult"),
     "splat_bilinear": ("torchsky.map.splat", "splat_bilinear"),
     "splat_to_native": ("torchsky.map.splat", "splat_to_native"),
+    "SplatDiagnostics": ("torchsky.map.splat", "SplatDiagnostics"),
     # Compatibility / Internal / Phase 1 entries resolved lazily
     "BandMetadataTable": ("torchsky.map.image_plane", "BandMetadataTable"),
     "ImageObservation": ("torchsky.map.image_plane", "ImageObservation"),
@@ -181,6 +182,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "DetectorToSkyTransform": ("torchsky.map.field", "DetectorToSkyTransform"),
     "FieldFitResult": ("torchsky.map.field", "FieldFitResult"),
     "ForwardContext": ("torchsky.map.field", "ForwardContext"),
+    "DetectorLaw": ("torchsky.map.field", "DetectorLaw"),
     "FourierMLPField": ("torchsky.map.field", "FourierMLPField"),
     "FoamInitializedINRField": (
         "torchsky.map.field",
@@ -193,6 +195,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "FieldModelPreset": ("torchsky.map.field", "FieldModelPreset"),
     "FieldObservation": ("torchsky.map.field", "FieldObservation"),
     "PSFSpec": ("torchsky.map.field", "PSFSpec"),
+    "TimeScale": ("torchsky.map.field", "TimeScale"),
     "FieldSpectralQuantity": ("torchsky.map.field", "FieldSpectralQuantity"),
     "KinematicState": ("torchsky.map.field", "KinematicState"),
     "GaussianBasisField": ("torchsky.map.field", "GaussianBasisField"),

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
-import numpy as np
 import torch
 from torch import Tensor
 
@@ -360,45 +359,47 @@ def canvas_footprint_mask(
 ) -> Tensor:
     """Boolean mask marking world positions inside a FITS-template canvas.
 
-    Parses ``template_header`` once with astropy's WCS and evaluates pixel
-    coordinates per chunk; True means finite RA/Dec projecting to a pixel
+    Parses ``template_header`` once with Torchsky's native WCS and evaluates
+    pixel coordinates per chunk; True means finite RA/Dec projecting to a pixel
     center within ``[-0.5, N-0.5]`` on both axes (the template footprint
-    including its border). One-shot geometry, so CPU evaluation is fine;
-    the returned bool tensor preserves the inputs' shape and device.
+    including its border). The calculation stays on the input device and the
+    returned bool tensor preserves the inputs' shape and device.
     """
-    try:
-        from astropy.wcs import WCS as AstropyWCS
-    except ImportError as exc:  # pragma: no cover - exercised via extras
-        raise RuntimeError(
-            "canvas_footprint_mask requires astropy "
-            "(install the torchsky 'map', 'test', or 'bench' extra)"
-        ) from exc
-
-    ra = torch.as_tensor(world_ra_deg, dtype=torch.float64).cpu()
-    dec = torch.as_tensor(world_dec_deg, dtype=torch.float64).cpu()
+    ra = torch.as_tensor(world_ra_deg)
+    dec = torch.as_tensor(world_dec_deg)
     if ra.shape != dec.shape:
         raise ValueError("world_ra_deg and world_dec_deg must have matching shapes")
+    if ra.device != dec.device:
+        raise ValueError("world_ra_deg and world_dec_deg must share a device")
+    dtype = torch.promote_types(ra.dtype, dec.dtype)
+    if not dtype.is_floating_point:
+        dtype = torch.float64
+    ra = ra.to(dtype=dtype)
+    dec = dec.to(dtype=dtype)
     chunk = max(int(chunk), 1)
 
-    wcs = AstropyWCS(template_header)
-    naxis1, naxis2 = wcs.pixel_shape
-    if naxis1 is None or naxis2 is None:
-        naxis2 = int(template_header.get("NAXIS2", 0))
-        naxis1 = int(template_header.get("NAXIS1", 0))
-
-    ra_flat = ra.reshape(-1).numpy()
-    dec_flat = dec.reshape(-1).numpy()
-    flat = torch.zeros(ra_flat.shape[0], dtype=torch.bool)
+    naxis1 = int(template_header.get("NAXIS1", 0))
+    naxis2 = int(template_header.get("NAXIS2", 0))
+    if naxis1 <= 0 or naxis2 <= 0:
+        raise ValueError("template_header must define positive NAXIS1 and NAXIS2")
+    wcs = WCS(template_header)
+    ra_flat = ra.reshape(-1)
+    dec_flat = dec.reshape(-1)
+    flat = torch.zeros(ra_flat.shape[0], dtype=torch.bool, device=ra.device)
     for start in range(0, ra_flat.shape[0], chunk):
         stop = min(start + chunk, ra_flat.shape[0])
-        x, y = wcs.all_world2pix(ra_flat[start:stop], dec_flat[start:stop], 0)
+        pixels = wcs.world_to_pixel_differentiable(
+            torch.stack((ra_flat[start:stop], dec_flat[start:stop]), dim=-1),
+            origin=0,
+        )
+        x, y = pixels.unbind(dim=-1)
         inside = (
-            np.isfinite(x)
-            & np.isfinite(y)
+            torch.isfinite(x)
+            & torch.isfinite(y)
             & (x >= -0.5)
             & (x <= naxis1 - 0.5)
             & (y >= -0.5)
             & (y <= naxis2 - 0.5)
         )
-        flat[start:stop] = torch.from_numpy(inside)
-    return flat.reshape(ra.shape).to(world_ra_deg.device)
+        flat[start:stop] = inside
+    return flat.reshape(ra.shape)

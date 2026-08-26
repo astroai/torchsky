@@ -23,18 +23,18 @@ nanobind = ">=2.10.2"
 scikit-build-core = ">=1.0.0"
 cmake = ">=3.21"
 ninja = ">=1.10"
-python = ">=3.12,<3.14"
-pytorch = ">=2.13,<2.14"
+python = ">=3.12"
+pytorch = ">=2.13"
 
 # Host dependencies - libraries that will be linked into the package
 [package.host-dependencies]
-python = ">=3.12,<3.14"
-pytorch = ">=2.13,<2.14"
+python = ">=3.12"
+pytorch = ">=2.13"
 nanobind = ">=2.10.2"
 
 # Run dependencies - packages needed at runtime
 [package.run-dependencies]
-pytorch = ">=2.13,<2.14"
+pytorch = ">=2.13"
 
 # Workspace dependencies — default (lean) dev shell: build tools + pytest driver only.
 # Ecosystem / legacy astronomy packages live in feature `test`, `bench`, `sphere-bench`, etc.
@@ -50,7 +50,7 @@ scikit-build-core = ">=1.0.0"
 cmake = ">=3.21"
 ninja = ">=1.10"
 nanobind = ">=2.10.2"
-pytorch = ">=2.13,<2.14"
+pytorch = "==2.13.0"
 numpy = ">=1.20"
 pre-commit = ">=3.5.0"
 twine = ">=5.0"
@@ -199,10 +199,10 @@ sphere-bench-pipeline-gate = "pixi run -e sphere-bench python benchmarks/bench_p
 platforms = ["osx-arm64", "linux-64"]
 
 [feature.prod.dependencies]
-python = "3.13.*"
+python = "==3.13.14"
 
 [feature.prod.pypi-dependencies]
-torchfits = ">=1.0.0"
+torchfits = "==1.0.0"
 
 # Test feature with comparison libraries
 [feature.test.dependencies]
@@ -247,7 +247,7 @@ mocpy = ">=0.13"
 platforms = ["linux-64-cuda"]
 
 [feature.cuda.dependencies]
-python = "3.13.*"
+python = "==3.13.14"
 cuda-nvcc = "13.0.*"
 cuda-nvrtc-dev = "13.0.*"
 numpy = ">=1.20"
@@ -259,8 +259,8 @@ ninja = ">=1.10"
 nanobind = ">=2.10.2"
 
 [feature.cuda.pypi-dependencies]
-torchfits = ">=1.0.0"
-torch = ">=2.13,<2.14"
+torchfits = "==1.0.0"
+torch = "==2.13.0"
 
 [feature.smacs.dependencies]
 pillow = ">=10"
@@ -272,7 +272,7 @@ stpsf = ">=1.2"
 photutils = ">=1.1"
 
 [feature.map-compat.dependencies]
-python = "3.13.*"
+python = "==3.13.14"
 cmake = ">=3.21"
 ninja = ">=1.10"
 scikit-build-core = ">=1.0.0"
@@ -300,7 +300,7 @@ astropy = "*"
 starlink-ast = "*"
 cython = "<3.0"
 # Add torch for torchsky
-pytorch = ">=2.13,<2.14"
+pytorch = ">=2.13"
 
 [feature.bench-legacy.pypi-dependencies]
 # Kapteyn is not pinned here: its sdist build often fails under isolated solves
@@ -325,6 +325,7 @@ sphere-bench = { features = ["prod", "bench", "sphere-bench"], solve-group = "de
 sht-bench = { features = ["prod", "test", "sphere-bench"], solve-group = "default" }
 cuda-bench = { features = ["cuda"], no-default-feature = true, solve-group = "cuda" }
 smacs-cuda = { features = ["cuda", "smacs"], no-default-feature = true, solve-group = "smacs-cuda" }
+smacs = { features = ["prod", "test", "smacs"], solve-group = "smacs" }
 bench-all = { features = ["prod", "bench", "sphere-bench"], solve-group = "default" }
 map-compat = { features = ["prod", "bench", "sphere-bench", "map-compat"], solve-group = "map-compat" }
 bench-legacy = { features = ["bench-legacy"], solve-group = "bench-legacy" }

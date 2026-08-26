@@ -732,6 +732,65 @@ def _reduce_nll(nll: Tensor, reduction: Literal["none", "mean", "sum"]) -> Tenso
     return nll.mean() if reduction == "mean" else nll.sum()
 
 
+def reduce_detector_nll(
+    nll: Tensor,
+    *,
+    mask: Tensor | None = None,
+    sample_weight: Tensor | None = None,
+    reduction: Literal["none", "mean", "sum"] = "mean",
+) -> Tensor:
+    """Reduce per-pixel detector NLL with ``True = usable`` mask semantics.
+
+    ``sum`` with no ``sample_weight`` is the normalized likelihood sum over the
+    selected measurements. ``mean`` is a valid-pixel reporting/training
+    objective. Supplying non-binary ``sample_weight`` defines a weighted
+    composite objective; it must not be reported as a normalized likelihood.
+    ``none`` returns the original per-pixel values unchanged.
+    """
+    values = torch.as_tensor(nll)
+    if not values.is_floating_point():
+        raise TypeError("nll must be floating point")
+    if reduction not in {"none", "mean", "sum"}:
+        raise ValueError("reduction must be 'none', 'mean', or 'sum'")
+    if reduction == "none":
+        return values
+
+    if mask is None:
+        valid = torch.ones(values.shape, device=values.device, dtype=torch.bool)
+    else:
+        mask_t = torch.as_tensor(mask, device=values.device)
+        if mask_t.dtype != torch.bool:
+            raise TypeError("mask must be boolean (True = usable)")
+        try:
+            valid = torch.broadcast_to(mask_t, values.shape)
+        except RuntimeError as exc:
+            raise ValueError("mask must broadcast to nll shape") from exc
+    selected = values[valid]
+    if selected.numel() == 0:
+        raise ValueError("detector NLL reduction has no usable values")
+    if not bool(torch.isfinite(selected).all()):
+        raise ValueError("usable detector NLL values must be finite")
+
+    if sample_weight is None:
+        return selected.sum() if reduction == "sum" else selected.mean()
+    weights = torch.as_tensor(
+        sample_weight,
+        device=values.device,
+        dtype=values.dtype,
+    )
+    try:
+        weights = torch.broadcast_to(weights, values.shape)[valid]
+    except RuntimeError as exc:
+        raise ValueError("sample_weight must broadcast to nll shape") from exc
+    if not bool(torch.isfinite(weights).all()) or bool((weights < 0.0).any()):
+        raise ValueError("sample_weight must be finite and non-negative")
+    total_weight = weights.sum()
+    if not bool(total_weight > 0.0):
+        raise ValueError("sample_weight must have positive usable mass")
+    numerator = torch.sum(weights * selected)
+    return numerator if reduction == "sum" else numerator / total_weight
+
+
 def gaussian_nll(
     observed: Tensor,
     expected: Tensor,
@@ -743,9 +802,7 @@ def gaussian_nll(
     observed = torch.as_tensor(observed)
     expected = torch.as_tensor(expected, device=observed.device, dtype=observed.dtype)
     variance = torch.as_tensor(variance, device=observed.device, dtype=observed.dtype)
-    observed, expected, variance = torch.broadcast_tensors(
-        observed, expected, variance
-    )
+    observed, expected, variance = torch.broadcast_tensors(observed, expected, variance)
     _validate_finite(observed, name="observed")
     _validate_finite(expected, name="expected")
     _validate_positive(variance, name="variance")
@@ -807,9 +864,7 @@ def _poisson_gaussian_components(
         raise ValueError("max_terms must be at least 2")
 
     value = torch.as_tensor(value)
-    rate = torch.as_tensor(
-        expected_electrons, device=value.device, dtype=value.dtype
-    )
+    rate = torch.as_tensor(expected_electrons, device=value.device, dtype=value.dtype)
     read_var = torch.as_tensor(
         read_noise_variance, device=value.device, dtype=value.dtype
     )
@@ -831,9 +886,9 @@ def _poisson_gaussian_components(
     # ponytail: bounded finite mixture; replace with a saddle-point tail
     # approximation if certified high-count exposures exceed max_terms.
     detached_rate = rate.detach()
-    radius = float(tail_sigma) * torch.sqrt(detached_rate + 1.0) + float(
-        tail_sigma
-    ) ** 2
+    radius = (
+        float(tail_sigma) * torch.sqrt(detached_rate + 1.0) + float(tail_sigma) ** 2
+    )
     lower = torch.floor((detached_rate - radius).clamp_min(0.0)).to(torch.int64)
     upper = torch.ceil(detached_rate + radius).to(torch.int64)
     width = int((upper - lower + 1).max().item()) if upper.numel() else 0
@@ -853,9 +908,7 @@ def _poisson_gaussian_components(
     counts = counts_i.to(dtype=value.dtype)
     safe_rate = rate.clamp_min(torch.finfo(rate.dtype).tiny).unsqueeze(-1)
     poisson_log = (
-        counts * safe_rate.log()
-        - rate.unsqueeze(-1)
-        - torch.lgamma(counts + 1.0)
+        counts * safe_rate.log() - rate.unsqueeze(-1) - torch.lgamma(counts + 1.0)
     )
     log_weights = torch.where(
         (rate == 0).unsqueeze(-1),
@@ -863,9 +916,7 @@ def _poisson_gaussian_components(
         poisson_log,
     )
     log_weights = log_weights.masked_fill(~included, -torch.inf)
-    log_weights = log_weights - torch.logsumexp(
-        log_weights, dim=-1, keepdim=True
-    )
+    log_weights = log_weights - torch.logsumexp(log_weights, dim=-1, keepdim=True)
 
     conditional_mean = gain_t.unsqueeze(-1) * counts + background_t.unsqueeze(-1)
     return value, read_var, log_weights, conditional_mean
@@ -891,24 +942,21 @@ def poisson_gaussian_nll(
     detached from autograd; probabilities and Gaussian terms remain
     differentiable.
     """
-    observed, read_var, poisson_log, conditional_mean = (
-        _poisson_gaussian_components(
-            observed,
-            expected_electrons,
-            read_noise_variance,
-            gain=gain,
-            background=background,
-            tail_sigma=tail_sigma,
-            max_terms=max_terms,
-        )
+    observed, read_var, poisson_log, conditional_mean = _poisson_gaussian_components(
+        observed,
+        expected_electrons,
+        read_noise_variance,
+        gain=gain,
+        background=background,
+        tail_sigma=tail_sigma,
+        max_terms=max_terms,
     )
     if poisson_log.shape[-1] == 0:
         return _reduce_nll(torch.empty_like(observed), reduction)
     gaussian_log = -0.5 * (
         read_var.unsqueeze(-1).log()
         + observed.new_tensor(math.log(2.0 * math.pi))
-        + (observed.unsqueeze(-1) - conditional_mean).square()
-        / read_var.unsqueeze(-1)
+        + (observed.unsqueeze(-1) - conditional_mean).square() / read_var.unsqueeze(-1)
     )
     nll = -torch.logsumexp(poisson_log + gaussian_log, dim=-1)
     return _reduce_nll(nll, reduction)
@@ -1042,13 +1090,13 @@ class StructuredDetectorNoise(nn.Module):
             else variance_calibration
         )
         self.row_noise = (
-            OneOverFRowNoise((self.num_amplifiers,))
-            if row_noise is None
-            else row_noise
+            OneOverFRowNoise((self.num_amplifiers,)) if row_noise is None else row_noise
         )
         self.outlier_logit = nn.Parameter(
             torch.tensor(
-                math.log(float(outlier_probability) / (1.0 - float(outlier_probability)))
+                math.log(
+                    float(outlier_probability) / (1.0 - float(outlier_probability))
+                )
             )
         )
         self.raw_outlier_scale = nn.Parameter(
@@ -1064,7 +1112,9 @@ class StructuredDetectorNoise(nn.Module):
     def outlier_scale(self) -> Tensor:
         return 1.0 + F.softplus(self.raw_outlier_scale)
 
-    def default_amplifier_index(self, shape: tuple[int, int], device: torch.device) -> Tensor:
+    def default_amplifier_index(
+        self, shape: tuple[int, int], device: torch.device
+    ) -> Tensor:
         height, width = map(int, shape)
         columns = torch.arange(width, device=device)
         amplifier = torch.clamp(
@@ -1083,9 +1133,68 @@ class StructuredDetectorNoise(nn.Module):
         if int(row_offsets.shape[-1]) % 2 == 0:
             multiplicity[..., -1] = 1.0
         power = spectrum.real.square() + spectrum.imag.square()
-        return 0.5 * torch.sum(
-            multiplicity * (power / psd + psd.log())
-        ) / multiplicity.sum().clamp_min(1.0)
+        return (
+            0.5
+            * torch.sum(multiplicity * (power / psd + psd.log()))
+            / multiplicity.sum().clamp_min(1.0)
+        )
+
+    def _variance_and_support(
+        self,
+        residual: Tensor,
+        *,
+        components: Mapping[str, Tensor] | None,
+        err: Tensor | None,
+        valid: Tensor | None,
+    ) -> tuple[Tensor, Tensor]:
+        if residual.ndim != 2 or not residual.is_floating_point():
+            raise ValueError(
+                "structured detector residual must be a floating 2D tensor"
+            )
+        support = torch.ones_like(residual, dtype=torch.bool)
+        if valid is not None:
+            valid_t = valid.to(device=residual.device)
+            if valid_t.shape != residual.shape:
+                raise ValueError("valid must match the residual shape")
+            support &= valid_t.to(dtype=torch.bool)
+
+        safe_components: dict[str, Tensor] | None = None
+        safe_err: Tensor | None = None
+        if components:
+            safe_components = {}
+            for name, value in components.items():
+                component = torch.broadcast_to(
+                    value.to(device=residual.device, dtype=residual.dtype),
+                    residual.shape,
+                )
+                finite_nonnegative = torch.isfinite(component) & (component >= 0.0)
+                support &= finite_nonnegative
+                safe_components[name] = torch.where(
+                    finite_nonnegative,
+                    component,
+                    torch.zeros_like(component),
+                )
+        elif err is not None:
+            err_t = torch.broadcast_to(
+                err.to(device=residual.device, dtype=residual.dtype),
+                residual.shape,
+            )
+            finite_nonnegative = torch.isfinite(err_t) & (err_t >= 0.0)
+            support &= finite_nonnegative
+            safe_err = torch.where(
+                finite_nonnegative,
+                err_t,
+                torch.ones_like(err_t),
+            )
+
+        variance = self.variance_calibration(
+            safe_components,
+            err=safe_err,
+        ).to(device=residual.device, dtype=residual.dtype)
+        if variance.shape != residual.shape:
+            variance = torch.broadcast_to(variance, residual.shape)
+        support &= torch.isfinite(residual) & torch.isfinite(variance) & (variance > 0)
+        return variance, support
 
     def negative_log_likelihood(
         self,
@@ -1097,43 +1206,58 @@ class StructuredDetectorNoise(nn.Module):
         amplifier_index: Tensor | None = None,
         contamination_prior: Tensor | None = None,
     ) -> Tensor:
-        variance = self.variance_calibration(components, err=err).to(
-            device=residual.device, dtype=residual.dtype
+        variance, support = self._variance_and_support(
+            residual,
+            components=components,
+            err=err,
+            valid=valid,
         )
-        if variance.shape != residual.shape:
-            variance = torch.broadcast_to(variance, residual.shape)
-        support = torch.isfinite(residual) & torch.isfinite(variance) & (variance > 0)
-        if valid is not None:
-            support &= valid.to(device=residual.device, dtype=torch.bool)
+        if not bool(support.any()):
+            raise ValueError("structured likelihood requires at least one valid pixel")
+        safe_residual = torch.where(support, residual, torch.zeros_like(residual))
+        safe_variance = torch.where(support, variance, torch.ones_like(variance))
         amp = (
             self.default_amplifier_index(tuple(residual.shape), residual.device)
             if amplifier_index is None
             else amplifier_index.to(device=residual.device)
         )
         row_offsets, corrected = profile_amplifier_row_offsets(
-            residual,
-            variance,
+            safe_residual,
+            safe_variance,
             amp,
             valid=support,
             num_amplifiers=self.num_amplifiers,
         )
-        prior = (
-            None
-            if contamination_prior is None
-            else contamination_prior.to(device=residual.device, dtype=residual.dtype)
-        )
+        prior = None
+        if contamination_prior is not None:
+            prior = torch.broadcast_to(
+                contamination_prior.to(
+                    device=residual.device,
+                    dtype=residual.dtype,
+                ),
+                residual.shape,
+            )
+            if not bool(torch.isfinite(prior[support]).all()) or bool(
+                ((prior[support] < 0.0) | (prior[support] > 1.0)).any()
+            ):
+                raise ValueError(
+                    "usable contamination_prior values must be finite in [0, 1]"
+                )
+            prior = torch.where(support, prior, torch.zeros_like(prior))
         pixel_nll = gaussian_student_t_mixture_nll(
             corrected,
-            variance,
+            safe_variance,
             outlier_scale=self.outlier_scale,
             degrees_of_freedom=self.degrees_of_freedom,
             outlier_probability=self.outlier_probability,
             prior=prior,
             reduction="none",
         )
-        if not bool(support.any()):
-            raise ValueError("structured likelihood requires at least one valid pixel")
-        return pixel_nll[support].mean() + self._row_nll(row_offsets)
+        return reduce_detector_nll(
+            pixel_nll,
+            mask=support,
+            reduction="mean",
+        ) + self._row_nll(row_offsets)
 
     def contamination_responsibilities(
         self,
@@ -1145,34 +1269,54 @@ class StructuredDetectorNoise(nn.Module):
         amplifier_index: Tensor | None = None,
         contamination_prior: Tensor | None = None,
     ) -> tuple[Tensor, Tensor]:
-        variance = self.variance_calibration(components, err=err).to(
-            device=residual.device, dtype=residual.dtype
+        variance, support = self._variance_and_support(
+            residual,
+            components=components,
+            err=err,
+            valid=valid,
         )
-        if variance.shape != residual.shape:
-            variance = torch.broadcast_to(variance, residual.shape)
-        support = torch.ones_like(residual, dtype=torch.bool)
-        if valid is not None:
-            support &= valid.to(device=residual.device, dtype=torch.bool)
+        if not bool(support.any()):
+            raise ValueError("contamination responsibilities require a valid pixel")
+        safe_residual = torch.where(support, residual, torch.zeros_like(residual))
+        safe_variance = torch.where(support, variance, torch.ones_like(variance))
         amp = (
             self.default_amplifier_index(tuple(residual.shape), residual.device)
             if amplifier_index is None
             else amplifier_index.to(device=residual.device)
         )
         _, corrected = profile_amplifier_row_offsets(
-            residual,
-            variance,
+            safe_residual,
+            safe_variance,
             amp,
             valid=support,
             num_amplifiers=self.num_amplifiers,
         )
-        return gaussian_student_t_mixture_responsibilities(
+        prior = None
+        if contamination_prior is not None:
+            prior = torch.broadcast_to(
+                contamination_prior.to(
+                    device=residual.device,
+                    dtype=residual.dtype,
+                ),
+                residual.shape,
+            )
+            if not bool(torch.isfinite(prior[support]).all()) or bool(
+                ((prior[support] < 0.0) | (prior[support] > 1.0)).any()
+            ):
+                raise ValueError(
+                    "usable contamination_prior values must be finite in [0, 1]"
+                )
+            prior = torch.where(support, prior, torch.zeros_like(prior))
+        inlier, outlier = gaussian_student_t_mixture_responsibilities(
             corrected,
-            variance,
+            safe_variance,
             outlier_scale=self.outlier_scale,
             degrees_of_freedom=self.degrees_of_freedom,
             outlier_probability=self.outlier_probability,
-            prior=contamination_prior,
+            prior=prior,
         )
+        zeros = torch.zeros_like(inlier)
+        return torch.where(support, inlier, zeros), torch.where(support, outlier, zeros)
 
 
 __all__ = [
@@ -1198,6 +1342,7 @@ __all__ = [
     "poisson_gaussian_cdf",
     "poisson_gaussian_nll",
     "profile_amplifier_row_offsets",
+    "reduce_detector_nll",
     "sanitize_inverse_variance",
     "student_t_nll",
     "whiten_rows_fft",

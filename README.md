@@ -13,7 +13,7 @@ FITS image and table I/O is provided by the focused
 [`torchfits`](https://github.com/astroai/torchfits) package. The boundary is
 intentional: `torchfits` loads tensors and metadata; `torchsky` performs
 sky-domain computation without embedding a second FITS/CFITSIO engine.
-The supported integration baseline is `torchfits 1.0.0rc4` or newer.
+The supported integration baseline is `torchfits 1.0.0` or newer.
 For one migration release, torchsky keeps thin import aliases for the public
 torchfits cache, table, I/O, and dataset surfaces.
 
@@ -67,15 +67,17 @@ Install the pre-built wheels from PyPI:
 pip install torchsky
 ```
 
-Pre-built wheels target Python `>=3.12,<3.15` and PyTorch `>=2.0` on
-Linux and macOS. Install `torchfits` separately when a workflow reads or writes
+Package metadata supports Python `>=3.12`, PyTorch `>=2.13`, and torchfits
+`>=1.0.0` without upper caps. Native wheels still fail closed on a mismatched
+compiled PyTorch ABI; build from source against a newer supported runtime when
+needed. Install `torchfits` separately when a workflow reads or writes
 FITS files:
 
 ```bash
 pip install torchsky torchfits
 ```
 
-The integration baseline is `torchfits 1.0.0rc4` or newer. Dataset
+The integration baseline is `torchfits 1.0.0` or newer. Dataset
 classes are provided by `torchfits.data`; torchsky retains its own compatibility
 aliases for older downstream callers.
 

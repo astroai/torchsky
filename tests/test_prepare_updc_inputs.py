@@ -7,7 +7,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from astropy.io import fits
+import torch
+import torchfits
 
 BENCHMARKS_DIR = Path(__file__).resolve().parents[1] / "benchmarks"
 if str(BENCHMARKS_DIR) not in sys.path:
@@ -16,6 +17,7 @@ if str(BENCHMARKS_DIR) not in sys.path:
 from updc.prepare_inputs import (  # noqa: E402
     ExposureState,
     TargetRenderSpec,
+    _fit_leave_one_out_gaussian_maps,
     _read_state,
     _replace_and_write,
 )
@@ -44,9 +46,8 @@ pytestmark = pytest.mark.skipif(
 N = 32
 
 
-def _header() -> fits.Header:
-    return fits.Header(
-        {
+def _header() -> dict:
+    return {
             "NAXIS": 2,
             "NAXIS1": N,
             "NAXIS2": N,
@@ -60,15 +61,22 @@ def _header() -> fits.Header:
             "CD1_2": 0.0,
             "CD2_1": 0.0,
             "CD2_2": 3e-5,
-        }
-    )
+    }
 
 
 def _write_exposure(path: Path, data: np.ndarray, dq: np.ndarray) -> None:
-    fits.PrimaryHDU().writeto(path, overwrite=True)
-    with fits.open(path, mode="update") as hdul:
-        hdul.append(fits.ImageHDU(data=data.astype(np.float32), name="SCI"))
-        hdul.append(fits.ImageHDU(data=dq.astype(np.int32), name="DQ"))
+    torchfits.write(
+        str(path),
+        torch.as_tensor(data, dtype=torch.float32),
+        header={**_header(), "EXTNAME": "SCI"},
+        overwrite=True,
+    )
+    torchfits.insert_hdu(
+        str(path),
+        torch.as_tensor(dq, dtype=torch.int32),
+        index=1,
+        header={"EXTNAME": "DQ"},
+    )
 
 
 def _make_state(tmp_path: Path, *, seed_tag: str) -> tuple[ExposureState, Path]:
@@ -86,14 +94,16 @@ def _make_state(tmp_path: Path, *, seed_tag: str) -> tuple[ExposureState, Path]:
 
 def _target(tmp_path: Path) -> TargetRenderSpec:
     reference = tmp_path / "reference.fits"
-    fits.PrimaryHDU().writeto(reference, overwrite=True)
-    with fits.open(reference, mode="update") as hdul:
-        hdul.append(fits.ImageHDU(data=np.zeros((N, N), np.float32), name="SCI"))
-        hdul["SCI"].header.update(_header())
-    with fits.open(reference) as hdul:
-        return TargetRenderSpec.from_header(
-            dict(hdul["SCI"].header), value_semantics="surface_brightness"
-        )
+    torchfits.write(
+        str(reference),
+        torch.zeros((N, N), dtype=torch.float32),
+        header={**_header(), "EXTNAME": "SCI"},
+        overwrite=True,
+    )
+    return TargetRenderSpec.from_header(
+        dict(torchfits.read_header(str(reference), "SCI")),
+        value_semantics="surface_brightness",
+    )
 
 
 def _flat_stats(target: TargetRenderSpec) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -104,13 +114,19 @@ def _flat_stats(target: TargetRenderSpec) -> tuple[np.ndarray, np.ndarray, np.nd
 
 
 def test_seed_determinism(tmp_path: Path) -> None:
-    state_a, source_a = _make_state(tmp_path, seed_tag="a")
+    _, source_a = _make_state(tmp_path, seed_tag="a")
     target = _target(tmp_path)
     stats = _flat_stats(target)
 
+    def marked_state() -> ExposureState:
+        state = _read_state(source_a, dq_fix=False)
+        state.rejected[3, 3] = True
+        state.rejected[10, 17] = True
+        return state
+
     out_one = tmp_path / "run1"
     rows_one = _replace_and_write(
-        [_read_state(source_a, dq_fix=False)],
+        [marked_state()],
         target=target,
         location=stats[0],
         scale=stats[1],
@@ -122,7 +138,7 @@ def test_seed_determinism(tmp_path: Path) -> None:
     )
     out_two = tmp_path / "run2"
     rows_two = _replace_and_write(
-        [_read_state(source_a, dq_fix=False)],
+        [marked_state()],
         target=target,
         location=stats[0],
         scale=stats[1],
@@ -132,8 +148,8 @@ def test_seed_determinism(tmp_path: Path) -> None:
         device=__import__("torch").device("cpu"),
         dq_fix=False,
     )
-    data_one = fits.getdata(rows_one[0]["output"], "SCI")
-    data_two = fits.getdata(rows_two[0]["output"], "SCI")
+    data_one = torchfits.read(rows_one[0]["output"], hdu="SCI").numpy()
+    data_two = torchfits.read(rows_two[0]["output"], hdu="SCI").numpy()
     assert np.array_equal(data_one, data_two)
 
 
@@ -156,12 +172,15 @@ def test_updcmask_marks_exactly_replaced_pixels(tmp_path: Path) -> None:
         dq_fix=False,
     )
     destination = Path(rows[0]["output"])
-    completed = fits.getdata(destination, "SCI")
-    original = fits.getdata(source, "SCI")
+    completed = torchfits.read(str(destination), hdu="SCI").numpy()
+    original = torchfits.read(str(source), hdu="SCI").numpy()
     replaced = completed != original
-    mask = fits.getdata(destination, "UPDCMASK").astype(bool)
+    mask = torchfits.read(str(destination), hdu="UPDCREJ").numpy().astype(bool)
     assert np.array_equal(mask, replaced)
     assert mask.sum() >= 2  # the two pre-marked outliers were completed
+    rejection_header = torchfits.read_header(str(destination), "UPDCREJ")
+    assert rejection_header["MASKTYPE"] == "REJECTION"
+    assert rows[0]["mask_true_means"] == "replaced"
 
 
 def test_dq_fix_preserves_other_flags(tmp_path: Path) -> None:
@@ -188,9 +207,9 @@ def test_dq_fix_preserves_other_flags(tmp_path: Path) -> None:
         dq_fix=True,
     )
     destination = Path(rows[0]["output"])
-    completed = fits.getdata(destination, "SCI")
-    original = fits.getdata(source, "SCI")
-    mask = fits.getdata(destination, "UPDCMASK").astype(bool)
+    completed = torchfits.read(str(destination), hdu="SCI").numpy()
+    original = torchfits.read(str(source), hdu="SCI").numpy()
+    mask = torchfits.read(str(destination), hdu="UPDCREJ").numpy().astype(bool)
 
     assert mask[do_not_use_pixel]
     assert not mask[saturated_pixel]  # other DQ flags are not replaceable
@@ -213,3 +232,14 @@ def test_read_state_valid_masks(tmp_path: Path) -> None:
     # DO_NOT_USE excluded; the flagged-but-valid pixel stays in statistics.
     assert not conservative.valid[2, 2]
     assert conservative.valid[3, 3] and not np.isnan(conservative.data[3, 3])
+
+
+def test_leave_one_out_statistics_cannot_hide_target_outlier() -> None:
+    rng = np.random.default_rng(5)
+    aligned = rng.normal(0.0, 0.01, size=(9, 1, 1)).astype(np.float32)
+    aligned[0, 0, 0] = 1.0
+    location, scale, usable = _fit_leave_one_out_gaussian_maps(
+        aligned, minimum_samples=3
+    )
+    assert usable[0, 0, 0]
+    assert aligned[0, 0, 0] > location[0, 0, 0] + 5.0 * scale[0, 0, 0]

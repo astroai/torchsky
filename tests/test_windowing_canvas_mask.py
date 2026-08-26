@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import torch
 from astropy.wcs import WCS
 
@@ -78,7 +77,7 @@ def test_shape_and_device_preserved() -> None:
     assert mask.device == ra.device
 
 
-def test_missing_astropy_raises_runtime_error(monkeypatch) -> None:
+def test_runtime_does_not_import_astropy(monkeypatch) -> None:
     import builtins
 
     original_import = builtins.__import__
@@ -89,7 +88,7 @@ def test_missing_astropy_raises_runtime_error(monkeypatch) -> None:
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", _no_astropy)
-    with pytest.raises(RuntimeError, match="requires astropy"):
-        canvas_footprint_mask(
-            torch.tensor([150.0]), torch.tensor([2.0]), template_header=_tan_header(8, 8)
-        )
+    mask = canvas_footprint_mask(
+        torch.tensor([150.0]), torch.tensor([2.0]), template_header=_tan_header(8, 8)
+    )
+    assert mask.tolist() == [True]

@@ -102,6 +102,7 @@ from ..map.field.spectral_budget import (
     suggest_spectral_model_capacity,
 )
 from ..map.field.types import (
+    DetectorLaw,
     FieldCentroidAnchorTerm,
     FieldComponentAnchorTerm,
     FieldCoordinateMode,
@@ -124,6 +125,7 @@ from ..map.field.types import (
     SpectralCapacityProfile,
     SpectralDataBudget,
     SpectralModelCapacityHints,
+    TimeScale,
 )
 
 PresetName = Literal["fast", "balanced", "spectral", "operator_constrained"]
@@ -235,6 +237,7 @@ __all__ = [
     "BandpassConditioned",
     "ConditionedSpectral",
     "Domain",
+    "DetectorLaw",
     "FieldCentroidAnchorTerm",
     "FieldComponentAnchorTerm",
     "FieldComponentDecomposition",
@@ -283,6 +286,7 @@ __all__ = [
     "SpectralCapacityProfile",
     "SpectralDataBudget",
     "SpectralModelCapacityHints",
+    "TimeScale",
     "StrainerSkyEncoderMLP",
     "Wire",
     "centroid_anchor_loss",

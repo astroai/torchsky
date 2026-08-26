@@ -166,6 +166,7 @@ from .spectral_budget import (
     suggest_spectral_model_capacity,
 )
 from .types import (
+    DetectorLaw,
     FieldCoordinateMode,
     DetectorToSkyTransform,
     FieldComponentAnchorTerm,
@@ -189,6 +190,7 @@ from .types import (
     SpectralCapacityProfile,
     SpectralDataBudget,
     SpectralModelCapacityHints,
+    TimeScale,
 )
 from .validation import (
     PairedImprovementInterval,
@@ -204,12 +206,14 @@ __all__ = [
     "ResidualTileBasisField",
     "ResidualTileBasisSpec",
     "ForwardContext",
+    "DetectorLaw",
     "KinematicState",
     "SurveyDataTerm",
     "ObservationSpectralSummary",
     "SpectralCapacityProfile",
     "SpectralDataBudget",
     "SpectralModelCapacityHints",
+    "TimeScale",
     "BandpassConditionedField",
     "bandpass",
     "batched_bounded_power_pixel_operator",

@@ -31,7 +31,7 @@ Problem Formulation, Epistemic Assumptions, and Statistical Claim Gates}}
 \maketitle
 
 \begin{abstract}
-We present a closed mathematical, statistical, and computational formulation for recovering optimal, ultra-deep astronomical fields from multi-epoch, multi-band imaging. The core epistemic premise is that no post-processing algorithm or neural prior can exceed the intrinsic Fisher information content of the native detector photon arrivals. However, by replacing classical lossy pipelines (resampling $\to$ stacking $\to$ detection $\to$ catalog photometry) with direct scene inference under the joint native-pixel likelihood, the method can substantially outperform existing practical estimators. We formulate sky reconstruction as a continuous inverse problem on $(\alpha, \delta, \lambda) \in \mathcal{S}^2 \times \mathbb{R}^+$, representing the non-negative latent field $I_\theta(\boldsymbol{x}, \lambda) \ge 0$ via continuous parameterizations (INRs, Riemannian tangent Gaussian Splats, and spherical Power Foams) and decomposing its projection into an identifiable passband subspace and an orthogonal, prior-regularized null space. We formulate a flexible mechanistic forward model in canonical detector electron counts $[e^-]$ that preserves geometric, radiometric, and optical invariants while learning gauge-closed deviations in passband transmission, non-stationary chromatic point-spread functions (PSFs), sub-pixel astrometric poses, time-dependent astronomical foregrounds, and instrumental rates. We catalogue a systematic inventory of 51 principal assumptions underlying the methodology, analyze population-specific expected headroom across distinct astrophysical source classes, establish an injection protocol protected against the inverse crime, and formulate rigorous statistical claim gates based on $50\%$ completeness depth ($m_{50}$) at fixed false-positive surface density, matched effective resolution, and a two-stage out-of-sample held-out exposure photon prediction test.
+We present a closed mathematical, statistical, and computational formulation for recovering optimal, ultra-deep astronomical fields from multi-epoch, multi-band imaging. The core epistemic premise is that no post-processing algorithm or neural prior can exceed the intrinsic Fisher information content of the native detector photon arrivals. However, by replacing classical lossy pipelines (resampling $\to$ stacking $\to$ detection $\to$ catalog photometry) with direct scene inference under the joint native-pixel likelihood, the method can substantially outperform existing practical estimators. We formulate sky reconstruction as a continuous inverse problem on $(\alpha, \delta, \lambda) \in \mathcal{S}^2 \times \mathbb{R}^+$, representing the non-negative latent field $I_\theta(\boldsymbol{x}, \lambda) \ge 0$ via continuous parameterizations (INRs, Riemannian tangent Gaussian Splats, and spherical Power Foams) and decomposing its projection into an identifiable passband subspace and an orthogonal, prior-regularized null space. We formulate a flexible mechanistic forward model in canonical detector electron counts $[e^-]$ that preserves geometric, radiometric, and optical invariants while learning gauge-closed deviations in passband transmission, non-stationary chromatic point-spread functions (PSFs), sub-pixel astrometric poses, time-dependent astronomical foregrounds, and instrumental rates. We catalogue a systematic inventory of 52 principal assumptions underlying the methodology, analyze population-specific expected headroom across distinct astrophysical source classes, establish an injection protocol protected against the inverse crime, and formulate rigorous statistical claim gates based on $50\%$ completeness depth ($m_{50}$) at fixed false-positive surface density, matched effective resolution, and a two-stage out-of-sample held-out exposure photon prediction test.
 \end{abstract}
 
 \vspace{0.5em}
@@ -45,12 +45,32 @@ Classical coaddition approaches resample discrete exposures onto a common pre-de
 \begin{equation}
 I(\boldsymbol{x}, \lambda) \ge 0, \quad \boldsymbol{x} \in \mathcal{S}^2, \quad \lambda \in [\lambda_{\min}, \lambda_{\max}],
 \end{equation}
-expressed in spectral photon radiance units $[\mathrm{photons\,s^{-1}\,m^{-2}\,\text{\AA}^{-1}\,sr^{-1}}]$. Energy-based conventions relate through the wavelength/frequency Jacobian and photon energy,
+The canonical latent quantity is photon spectral radiance:
 \begin{equation}
-I_\nu(\boldsymbol{x}) = I_\lambda(\boldsymbol{x}) \, \frac{c}{\lambda^{2}}, \qquad
-N_\lambda(\boldsymbol{x}, \lambda) = \frac{I_\lambda(\boldsymbol{x}, \lambda)\,\lambda}{h c},
+\begin{aligned}
+I(\boldsymbol{x},\lambda) &\equiv N_\lambda(\boldsymbol{x},\lambda), \\
+[N_\lambda] &=
+\mathrm{photons}\,\mathrm{s}^{-1}\,\mathrm{m}^{-2}\,
+\text{\AA}^{-1}\,\mathrm{sr}^{-1}.
+\end{aligned}
 \end{equation}
-where $I_\nu$ is the familiar $\mathrm{MJy\,sr^{-1}}$ surface-brightness unit ($1\,\mathrm{Jy} = 10^{-26}\,\mathrm{W\,m^{-2}\,Hz^{-1}}$), $I_\lambda = -\mathrm{d}I/\mathrm{d}\lambda$ is the energy spectral radiance per wavelength, and $N_\lambda$ is the photon radiance entering the Poisson count statistics above.
+Energy spectral radiances per wavelength and frequency obey the Jacobian and
+photon-energy conversions
+\begin{equation}
+\begin{aligned}
+I_\nu(\boldsymbol{x})
+    &= I_\lambda(\boldsymbol{x}) \, \frac{\lambda^{2}}{c}, \\
+N_\lambda(\boldsymbol{x}, \lambda)
+    &= \frac{I_\lambda(\boldsymbol{x}, \lambda)\,\lambda}{h c}.
+\end{aligned}
+\end{equation}
+where $I_\nu$ may be reported in the familiar $\mathrm{MJy\,sr^{-1}}$
+surface-brightness unit, with
+\begin{equation}
+1\,\mathrm{Jy}=10^{-26}\,\mathrm{W\,m^{-2}\,Hz^{-1}},
+\end{equation}
+$I_\lambda$ is energy spectral radiance per wavelength, and $N_\lambda$ is
+the canonical photon radiance entering the Poisson count statistics below.
 
 \paragraph{The Passband Projection \& Orthogonal Spectral Decomposition:}
 Let $B$ be the number of distinct broadband filters with spectral throughput curves $\{R_b(\lambda)\}_{b=1}^B$. The observation operator projects the continuous spectral dimension into a $B$-dimensional subspace:
@@ -63,7 +83,7 @@ Because the filters are finite and broad, the linear mapping $\mathcal{R}: L_2([
 \end{equation}
 The subspace $\mathcal{S}_{\rm obs} = \ker(\mathcal{R})^\perp = \mathrm{span}\{R_1, \dots, R_B\}$ and null space $\ker(\mathcal{R})$ define a conservative \emph{passband-only} spectral decomposition ($K_\lambda \le B$). Modes in $\ker(\mathcal{R})$ are treated as prior-dominated and are not claimed as spectroscopically identified, although the full chromatic imaging operator may weakly constrain them through wavelength-dependent spatial response $K_n(\boldsymbol{u}\mid\boldsymbol{x},\lambda)$.
 
-To guarantee mathematical consistency between physical non-negativity and linear spectral decomposition, **the non-negativity constraint $I_\theta(\boldsymbol{x}, \lambda) \ge 0$ is applied to the total latent continuous field**. The observable and unobservable components are then defined rigorously by orthogonal projection:
+To guarantee mathematical consistency between physical non-negativity and linear spectral decomposition, \textbf{the non-negativity constraint $I_\theta(\boldsymbol{x}, \lambda) \ge 0$ is applied to the total latent continuous field}. The observable and unobservable components are then defined rigorously by orthogonal projection:
 \begin{align}
 I_{\rm obs}(\boldsymbol{x}, \lambda) &\equiv \mathcal{P}_{\mathcal{S}_{\rm obs}}[I_\theta](\boldsymbol{x}, \lambda) = \sum_{k=1}^{K_\lambda} \langle I_\theta(\boldsymbol{x}, \cdot), \phi_k \rangle_{L_2} \, \phi_k(\lambda) \in \mathcal{S}_{\rm obs}, \\
 I_{\rm null}(\boldsymbol{x}, \lambda) &\equiv \mathcal{P}_{\ker(\mathcal{R})}[I_\theta](\boldsymbol{x}, \lambda) = I_\theta(\boldsymbol{x}, \lambda) - I_{\rm obs}(\boldsymbol{x}, \lambda) \in \ker(\mathcal{R}),
@@ -102,7 +122,12 @@ The method approaches the ultimate physical information ceiling by exploiting fo
     \mathrm{SNR}_{\rm joint}^2 \simeq \sum_{b=1}^B \mathrm{SNR}_b^2.
     \end{equation}
     For example, six sub-threshold $1.5\sigma$ measurements can yield nominal $3.7\sigma$ joint evidence ($\sqrt{6}\times 1.5 = 3.67$) under an independently specified SED hypothesis, before accounting for trials over SED parameter space.
-    \item \textbf{Variance Reduction via Principled Astrophysical Priors:} By restricting the search space from all unconstrained images to plausible physical astrophysical scenes $I \in \mathcal{M}_{\rm plausible}$ (spatial compactness, smooth SEDs, high sparsity in empty sky), the estimator can substantially reduce mean squared error when the prior is sufficiently well specified:
+    \item \textbf{Variance Reduction via Principled Astrophysical Priors:}
+    Restrict the search space from all unconstrained images to plausible
+    physical astrophysical scenes,
+    $I \in \mathcal{M}_{\rm plausible}$.  Spatial compactness, smooth SEDs,
+    and high sparsity in empty sky can then substantially reduce mean squared
+    error when the prior is sufficiently well specified:
     \begin{equation}
     \mathrm{MSE}(\hat{I}_{\rm prior}) < \mathrm{MSE}(\hat{I}_{\rm weak\text{-}prior}).
     \end{equation}
@@ -137,10 +162,15 @@ Every scene representation admitted into $\Theta_{\rm rep}$ --- implemented in t
 \begin{enumerate}
     \item \textbf{Differentiable render with JVP/VJP:} the map $\theta \mapsto$ rendered native-pixel rate cube exposes exact Jacobian-vector and vector-Jacobian products for gradient-based joint optimization;
     \item \textbf{Non-negativity:} rendered specific intensity satisfies $I_\theta(\boldsymbol{x},\lambda) \ge 0$ everywhere;
-    \item \textbf{Shared orthonormal passband basis:} all kinds express spectra in the same orthonormal passband basis (the shared whitening transform of \texttt{spectral\_basis\_whitening\_transform}), making cross-kind held-out likelihoods directly comparable;
+    \item \textbf{Shared orthonormal passband basis:} all kinds express spectra
+    in the same orthonormal passband basis.  The shared whitening transform is
+    \nolinkurl{spectral_basis_whitening_transform}, making cross-kind held-out
+    likelihoods directly comparable;
     \item \textbf{Exact final rendering:} scientific products use the exact (hard, non-surrogate) rendering path --- no annealing approximations survive to evaluation.
 \end{enumerate}
-Benchmark scoring loops over this zoo uniformly; model selection (\S\ref{sec:gates}) treats every $(\text{scene kind}, \text{operator rung})$ cell identically.
+Benchmark scoring loops over this zoo uniformly.  Model selection
+(\S\ref{sec:gates}) treats each cell formed by a scene kind and an operator
+rung identically.
 
 \subsection{Rigorous Forward Model \& Expected Electron Counts}
 Let $n \in \{1, \dots, N\}$ index exposures, and let $\boldsymbol{y}_n$ denote the instrument-native measurement object (integrated pixel counts, calibrated slope/rate images, or non-destructive group read cubes).
@@ -184,7 +214,16 @@ For calibrated pipeline products where electronic bias has already been subtract
 \label{subsec:gauges}
 To eliminate unidentifiable parameter degeneracies, we impose explicit, closed gauge constraints:
 \begin{enumerate}
-    \item \textbf{Photometric Gauge ($I \leftrightarrow \mathcal{T}_n$):} Absolute filter throughput shapes $R_n^0(\lambda)$ and photometric zero-points are externally calibrated and fixed from standard star observations. The learnable spatially varying transmission residual $\Delta r_n(\lambda, \boldsymbol{u})$ in $R_n(\lambda, \boldsymbol{u}) = R_n^0(\lambda) \exp(\Delta r_n(\lambda, \boldsymbol{u}))$ is constrained to zero focal-plane spatial mean:
+    \item \textbf{Photometric Gauge ($I \leftrightarrow \mathcal{T}_n$):}
+    Absolute filter throughput shapes $R_n^0(\lambda)$ and photometric
+    zero-points are externally calibrated and fixed from standard-star
+    observations.  The learnable spatially varying transmission residual is
+    defined by
+    \begin{equation}
+    R_n(\lambda, \boldsymbol{u})
+    = R_n^0(\lambda)\exp\!\left[\Delta r_n(\lambda, \boldsymbol{u})\right]
+    \end{equation}
+    and constrained to zero focal-plane spatial mean:
     \begin{equation}
     \int_{\Omega^{\rm det}} \Delta r_n(\lambda, \boldsymbol{u}) \, \mathrm{d}^2\boldsymbol{u} = 0, \quad \|\Delta r_n\|_\infty \le \epsilon_R,
     \end{equation}
@@ -195,9 +234,19 @@ To eliminate unidentifiable parameter degeneracies, we impose explicit, closed g
     \end{equation}
     \item \textbf{Target Diffuse Sky vs.\ Astronomical Foreground Gauge ($I_{\rm target}^{\rm diffuse} \leftrightarrow I_{{\rm fg}, n}$):} To break the degeneracy between the static diffuse celestial scene $I_{\rm target}^{\rm diffuse}$ and time-dependent astronomical foregrounds $I_{{\rm fg}, n}$, we decompose the foreground into an externally anchored baseline plus zero-mean exposure variations:
     \begin{equation}
-    I_{{\rm fg}, n}(\boldsymbol{x}, \lambda) = I_{{\rm fg}, 0}(\boldsymbol{x}, \lambda) + \Delta I_{{\rm fg}, n}(\boldsymbol{x}, \lambda), \quad \sum_n w_n \, \Delta I_{{\rm fg}, n}(\boldsymbol{x}, \lambda) = 0,
+    \begin{aligned}
+    I_{{\rm fg}, n}(\boldsymbol{x}, \lambda)
+        &= I_{{\rm fg}, 0}(\boldsymbol{x}, \lambda)
+           + \Delta I_{{\rm fg}, n}(\boldsymbol{x}, \lambda), \\
+    \sum_n w_n \, \Delta I_{{\rm fg}, n}(\boldsymbol{x}, \lambda) &= 0.
+    \end{aligned}
     \end{equation}
-    where $I_{{\rm fg}, 0}$ is fixed from physical zodiacal/airglow models (or $I_{\rm target}$ is defined relative to the exposure-weighted mean sky foreground), and instrumental Poisson counts $\Lambda_{np}^{\rm dark}, \Lambda_{np}^{\rm thermal}$ and electronic bias $b_{np}$ are identified strictly from dark/shuttered calibration frames.
+    Here $I_{{\rm fg}, 0}$ is fixed from physical zodiacal or airglow models;
+    alternatively, $I_{\rm target}$ is defined relative to the
+    exposure-weighted mean sky foreground.  Instrumental Poisson counts
+    $\Lambda_{np}^{\rm dark}$ and $\Lambda_{np}^{\rm thermal}$, together with
+    electronic bias $b_{np}$, are identified strictly from dark or shuttered
+    calibration frames.
 \end{enumerate}
 
 \subsection{Hybrid Operator Models: A Ladder of Learned and Not-Learned Nuisance Fields}
@@ -446,7 +495,7 @@ Linear Information Bound & Native-detector un-resampled Fisher linear estimate &
 \end{table}
 
 \subsection{Strict Protection Against the Inverse Crime}
-To ensure that scientific depth gains are genuine and not artifacts of model self-consistency, **synthetic injections are strictly decoupled from the inference forward operator**:
+To ensure that scientific depth gains are genuine and not artifacts of model self-consistency, \textbf{synthetic injections are strictly decoupled from the inference forward operator}:
 \begin{itemize}
     \item \textbf{Independent Simulator for Truth Generation:} Injected truth sources are rendered using independent, physics-based optical wavefront simulators (e.g., \textsc{WebbPSF} utilizing measured optical path differences, pupil state models, and high-frequency jitter), empirical laboratory passbands with measured pupil angle variations, Gaia DR3 astrometric solutions, and realistic non-parametric galaxy morphologies from high-resolution HST/JWST cutouts.
     \item \textbf{Imperfect Inference Initialization:} The reconstruction engine initializes from nominal telescope models and must learn or fit residual calibrations without access to the simulator's internal truth parameters.
@@ -468,14 +517,20 @@ We strictly separate predictive model validation from final depth measurement:
 A reconstruction is scientifically certified as \emph{deeper} if and only if it satisfies all of the following pre-registered statistical gates:
 
 \begin{enumerate}
-    \item \textbf{Prevalence-Independent Completeness Depth ($\Delta m_{50} > 0$):}
-    Let $m_{50}$ be the reference-band AB magnitude at which the fitted source recovery probability is exactly $50\%$, evaluated at a **fixed physical false-positive surface density** $\rho_{\rm false} \le \rho_0$ (e.g., $\le 0.05\,\mathrm{arcmin^{-2}}$ on blank/null fields), avoiding the prevalence dependence of sample-density purity:
+    \item \textbf{Prevalence-Independent Completeness Depth.}\par
+    The required inequality is $\Delta m_{50} > 0$.  Let $m_{50}$ be the
+    reference-band AB magnitude at which the fitted source
+    recovery probability is exactly $50\%$.  Evaluate it at a
+    \textbf{fixed physical false-positive surface density},
+    $\rho_{\rm false} \le \rho_0$ (for example,
+    $\rho_{\rm false} \le 0.05\,\mathrm{arcmin^{-2}}$ on blank or null fields),
+    thereby avoiding the prevalence dependence of sample-density purity:
     \begin{equation}
     \Delta m_{50} = m_{50}(\text{Continuous Latent Model}) - m_{50}(\text{Native-Pixel Baseline}).
     \end{equation}
     The paired $10{,}000$-sample cluster-bootstrap $95\%$ confidence interval for $\Delta m_{50}$ must strictly exclude zero.
     \item \textbf{Resolution-Matched Sensitivity Verification:}
-    To prove that apparent variance reduction is not an artifact of prior over-smoothing or source broadening, we measure the 2D injection transfer function $\mathcal{H}_{\rm eff}(\boldsymbol{x})$ and effective PSF. Depth comparisons are evaluated at **matched effective spatial resolution**:
+    To prove that apparent variance reduction is not an artifact of prior over-smoothing or source broadening, we measure the 2D injection transfer function $\mathcal{H}_{\rm eff}(\boldsymbol{x})$ and effective PSF. Depth comparisons are evaluated at \textbf{matched effective spatial resolution}:
     \begin{equation}
     \sigma_{a, \rm eff} = \frac{\sqrt{\mathrm{Var}(\hat{a})}}{|R_a|} < \sigma_{a, \rm eff}^{\rm baseline} \quad \text{at matched spatial resolution}.
     \end{equation}
@@ -517,7 +572,9 @@ A reconstruction is scientifically certified as \emph{deeper} if and only if it 
 \label{sec:cosmos}
 The SMACS J0723 protocol generalizes mechanically to a wide-field survey target. The reference scale-up is \textbf{COSMOS}: a $2\,\mathrm{deg}^2$ field centered at $(\alpha, \delta) = (150.119^\circ, +2.205^\circ)$, combining:
 \begin{itemize}
-    \item \textbf{Space UV/Optical/IR:} JWST/NIRCam COSMOS-Web F115W/F150W/F277W/F444W and MIRI F770W; HST/ACS F606W/F814W;
+    \item \textbf{Space UV/Optical/IR:}
+    JWST/NIRCam COSMOS-Web F115W, F150W, F277W, and F444W;
+    JWST/MIRI F770W; and HST/ACS F606W and F814W.
     \item \textbf{Ground Optical:} Subaru/HSC $g\,r\,i\,z\,y$; CFHT/MegaCam $u^{*}$.
 \end{itemize}
 The field is partitioned into $0.25\,\mathrm{deg}^2$ tiles with $128$-pixel overlap; adjacent tiles are blended by a partition-of-unity weight so that each tile carries its own \texttt{FieldDomain} while global scene continuity is preserved across seams. Each instrument contributes an independent operator bundle: learned PSFs where calibration star density allows (NIRCam, ACS), analytic fitted kernels otherwise (ground-based seeing-dominated bands) --- the hybrid ladder of \S\ref{subsec:hybrid_operators} is precisely what makes heterogeneous multi-instrument inference tractable. All claim gates of \S\ref{sec:gates} are evaluated identically per tile.
@@ -533,7 +590,11 @@ The ability to recover continuous, joint spatial-spectral sky fields directly fr
 \begin{itemize}
     \item \textbf{Cosmic Dawn \& High-Redshift Dropouts ($z > 10$):} Faint primeval galaxies near the detection limit exhibit steep Lyman-break spectral cutoffs. A joint continuous spatial-spectral model borrows signal across all red/NIR channels while preserving sharp spectral discontinuities, recovering candidates that fall below the $3\sigma$ threshold in individual classical stacks.
     \item \textbf{Strong Gravitational Lensing \& Extreme De-blending:} In rich cluster cores, highly magnified, distorted arclets are embedded within bright cluster galaxy light and diffuse intra-cluster light (ICL). Continuous representations decouple compact point-like knots from diffuse extended emission without pixelation artifacts.
-    \item \textbf{Heterogeneous Multi-Observatory Synergy:} Seamlessly co-models observations from disparate space and ground optical/infrared imaging facilities (e.g., HST optical, JWST NIR/MIR, Euclid, Rubin LSST, and Roman), each possessing distinct pixel grids, non-uniform PSFs, and dither strategies, into a single physically consistent $(\alpha, \delta, \lambda)$ scene.
+    \item \textbf{Heterogeneous Multi-Observatory Synergy:}
+    Co-model observations from disparate space and ground optical/infrared
+    facilities, including HST, JWST, Euclid, Rubin LSST, and Roman.  Their
+    distinct pixel grids, non-uniform PSFs, and dither strategies map into one
+    physically consistent $(\alpha, \delta, \lambda)$ scene.
     \item \textbf{Discovery of Unmodeled Structure via Open Residuals:} Subtracting the forward-rendered model from native detector exposures yields calibrated \emph{open residual maps}, exposing moving solar system objects, rapid transients, extreme emission-line sources, or exotic diffuse structures that violate smooth continuum priors.
     \item \textbf{Foundation Models for Cosmology (\textsc{cosmodist}):} Directly interfaces with next-generation deep learning architectures, providing exact unit-sphere 3D WCS coordinate mappings and continuous multi-modal cutouts for generative cosmological field modeling and distributional conformal inference.
 \end{itemize}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 from typing import Sequence
 
@@ -123,6 +124,8 @@ def epoch_permutation(size: int, *, epoch: int) -> Tensor:
     module-level state.
     """
     size = int(size)
+    if int(epoch) < 0:
+        raise ValueError("epoch must be non-negative")
     if size <= 0:
         return torch.empty(0, dtype=torch.long)
     generator = torch.Generator(device="cpu")
@@ -170,6 +173,7 @@ def sample_observation_indices(
     observation_sampling: FieldObservationSampling,
     generator: torch.Generator,
     epoch: int = 0,
+    step_in_epoch: int = 0,
 ) -> list[int]:
     total = len(observations)
     full_coverage = (
@@ -179,15 +183,32 @@ def sample_observation_indices(
     )
     if observation_sampling == "epoch":
         # Deterministic epoch cycles: full coverage returns one complete
-        # affine permutation; partial steps take its prefix with the same
-        # band grouping as band_balanced.
+        # affine permutation. Partial calls consume disjoint contiguous
+        # chunks of a band-interleaved epoch order, so every observation is
+        # seen exactly once before the next reshuffle (the final chunk may be
+        # smaller than ``observations_per_step``).
         if full_coverage:
             return epoch_permutation(total, epoch=epoch).tolist()
-        return _select_band_balanced(
-            observations,
-            target=int(observations_per_step),
-            perm=lambda n: epoch_permutation(n, epoch=epoch).tolist(),
-        )
+        if int(step_in_epoch) < 0:
+            raise ValueError("step_in_epoch must be non-negative")
+        band_groups: dict[tuple[object, ...], list[int]] = {}
+        for idx, observation in enumerate(observations):
+            band_groups.setdefault(observation_band_key(observation), []).append(idx)
+        shuffled_groups: list[list[int]] = []
+        for group_index, group in enumerate(band_groups.values()):
+            order = epoch_permutation(
+                len(group), epoch=int(epoch) * 1_000_003 + group_index
+            ).tolist()
+            shuffled_groups.append([group[i] for i in order])
+        order: list[int] = []
+        max_group = max((len(group) for group in shuffled_groups), default=0)
+        for rank in range(max_group):
+            order.extend(group[rank] for group in shuffled_groups if rank < len(group))
+        target = int(observations_per_step)
+        start = int(step_in_epoch) * target
+        if start >= total:
+            raise ValueError("step_in_epoch exceeds the number of steps in this epoch")
+        return order[start : min(start + target, total)]
     if full_coverage:
         return list(range(total))
     target = int(observations_per_step)
@@ -247,7 +268,8 @@ def crop_field_observation(
 ) -> FieldObservation:
     y_slice = slice(int(y0), int(y0) + int(height))
     x_slice = slice(int(x0), int(x0) + int(width))
-    return FieldObservation(
+    return replace(
+        observation,
         image=observation.image[y_slice, x_slice],
         header=copy_header_with_crop(
             observation.header,
@@ -264,7 +286,9 @@ def crop_field_observation(
         mask=(
             observation.mask[y_slice, x_slice] if observation.mask is not None else None
         ),
-        err=(observation.err[y_slice, x_slice] if observation.err is not None else None),
+        err=(
+            observation.err[y_slice, x_slice] if observation.err is not None else None
+        ),
         var_poisson=(
             observation.var_poisson[y_slice, x_slice]
             if observation.var_poisson is not None
@@ -290,15 +314,6 @@ def crop_field_observation(
             if observation.amplifier_index is not None
             else None
         ),
-        wavelength=observation.wavelength,
-        spectral_min=observation.spectral_min,
-        spectral_max=observation.spectral_max,
-        transmission_center=observation.transmission_center,
-        transmission_sigma=observation.transmission_sigma,
-        transmission_wavelength=observation.transmission_wavelength,
-        transmission_throughput=observation.transmission_throughput,
-        psf_sigma_pix=observation.psf_sigma_pix,
-        psf_spec=observation.psf_spec,
         sky_background=(
             observation.sky_background[y_slice, x_slice]
             if observation.sky_background is not None
@@ -314,12 +329,8 @@ def crop_field_observation(
             if observation.detector_background is not None
             else None
         ),
-        background_offset=observation.background_offset,
-        band_name=observation.band_name,
-        spectral_quantity=observation.spectral_quantity,
         detector_x0_pix=float(observation.detector_x0_pix) + int(x0),
         detector_y0_pix=float(observation.detector_y0_pix) + int(y0),
-        detector_to_sky=observation.detector_to_sky,
     )
 
 
@@ -400,11 +411,19 @@ def crop_field_observation_to_shared_sky_patch(
         [y0, y0, y1 - 1, y1 - 1, 0.5 * (y0 + y1 - 1)],
         dtype=torch.float64,
     )
-    ra_deg, dec_deg = observation_pixel_to_world(
-        reference_observation, ref_x, ref_y
-    )
-    obs_wcs = WCS(observation.header)
-    px, py = obs_wcs.world_to_pixel(ra_deg, dec_deg)
+    ra_deg, dec_deg = observation_pixel_to_world(reference_observation, ref_x, ref_y)
+    if observation.detector_to_sky is None:
+        px, py = WCS(observation.header).world_to_pixel(ra_deg, dec_deg)
+    else:
+        inverse = getattr(observation.detector_to_sky, "world_to_pixel", None)
+        if not callable(inverse):
+            raise ValueError(
+                "shared-sky cropping requires detector_to_sky.world_to_pixel for "
+                "non-reference native observations"
+            )
+        px, py = inverse(ra_deg, dec_deg)
+        px = px - float(observation.detector_x0_pix)
+        py = py - float(observation.detector_y0_pix)
     if not (torch.isfinite(px).any() and torch.isfinite(py).any()):
         return None
     valid = torch.isfinite(px) & torch.isfinite(py)

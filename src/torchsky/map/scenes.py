@@ -35,6 +35,9 @@ def target_to_field_observation(
         transmission_sigma=target.transmission_sigma,
         psf_spec=target.psf_spec,
         band_name=target.band_label,
+        passband=target.passband,
+        value_semantics=target.value_semantics,
+        spectral_unit=target.spectral_unit,
     )
 
 

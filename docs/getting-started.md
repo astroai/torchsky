@@ -8,7 +8,8 @@ This is the shortest path through the main `torchsky` surfaces.
 pip install torchsky
 ```
 
-Wheels target Python `>=3.12,<3.15` and PyTorch `>=2.0`. Install `torchfits`
+Package metadata supports Python `>=3.12` and PyTorch `>=2.13`; native wheels
+enforce their compiled PyTorch ABI at import. Install `torchfits`
 alongside torchsky for FITS-backed workflows. See [install.md](install.md) for
 source builds, Pixi contributor setup, and optional integrations.
 

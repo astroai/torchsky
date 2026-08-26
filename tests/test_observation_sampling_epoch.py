@@ -71,13 +71,32 @@ def test_partial_epoch_respects_band_grouping_like_band_balanced() -> None:
         observation_sampling="epoch",
         generator=torch.Generator(),
         epoch=2,
+        step_in_epoch=0,
     )
     assert len(selected) == len(set(selected)) == 8
     counts = Counter(observations[i].band for i in selected)
-    # per-group share is target // groups = 8 // 3 = 2 minimum per band
+    # Round-robin band interleaving gives every represented band two samples.
     assert counts["F090W"] >= 2
     assert counts["F277W"] >= 2
     assert counts["F444W"] >= 2
+
+
+def test_partial_epoch_steps_cover_each_observation_once() -> None:
+    observations = [_Obs("F090W")] * 5 + [_Obs("F277W")] * 7
+    batches = [
+        sample_observation_indices(
+            observations,
+            observations_per_step=5,
+            observation_sampling="epoch",
+            generator=torch.Generator(),
+            epoch=3,
+            step_in_epoch=step,
+        )
+        for step in range(3)
+    ]
+    flattened = [index for batch in batches for index in batch]
+    assert list(map(len, batches)) == [5, 5, 2]
+    assert sorted(flattened) == list(range(len(observations)))
 
 
 def test_existing_modes_unchanged_and_unknown_rejected() -> None:

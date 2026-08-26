@@ -2,13 +2,29 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 from torch import Tensor
 
 
+@dataclass(frozen=True)
+class SplatDiagnostics:
+    """Per-batch accounting for bilinear deposits at finite grid edges."""
+
+    retained_weight: Tensor
+    input_flux: Tensor
+    deposited_flux: Tensor
+    lost_flux: Tensor
+
+
 def splat_bilinear(
-    flux: Tensor, xy: Tensor, out_shape: tuple[int, int]
-) -> Tensor:
+    flux: Tensor,
+    xy: Tensor,
+    out_shape: tuple[int, int],
+    *,
+    return_diagnostics: bool = False,
+) -> Tensor | tuple[Tensor, SplatDiagnostics]:
     """Deposit canonical-pixel flux onto a native grid with bilinear weights.
 
     Args:
@@ -19,15 +35,23 @@ def splat_bilinear(
 
     Returns:
         ``[B, Hn, Wn]`` destination flux. Total flux is conserved for
-        in-bounds deposits; out-of-bounds weight is dropped.
+        in-bounds deposits; out-of-bounds weight is dropped. With
+        ``return_diagnostics=True``, also returns explicit retained weights and
+        input/deposited/lost flux totals for every batch item.
     """
     if flux.ndim != 3:
         raise ValueError(f"flux must be [B,Hc,Wc], got {tuple(flux.shape)}")
     if xy.shape[:3] != flux.shape or xy.shape[-1] != 2:
-        raise ValueError(
-            f"xy must be [B,Hc,Wc,2] matching flux, got {tuple(xy.shape)}"
-        )
+        raise ValueError(f"xy must be [B,Hc,Wc,2] matching flux, got {tuple(xy.shape)}")
+    if not flux.is_floating_point() or not xy.is_floating_point():
+        raise TypeError("flux and xy must be floating tensors")
+    if flux.device != xy.device:
+        raise ValueError("flux and xy must be on the same device")
+    if not bool(torch.isfinite(flux).all()) or not bool(torch.isfinite(xy).all()):
+        raise ValueError("flux and xy must contain only finite values")
     hn, wn = int(out_shape[0]), int(out_shape[1])
+    if hn <= 0 or wn <= 0:
+        raise ValueError("out_shape must contain two positive sizes")
     batch = flux.shape[0]
     device = flux.device
     dtype = flux.dtype
@@ -38,6 +62,7 @@ def splat_bilinear(
     y0 = torch.floor(y)
 
     out = torch.zeros(batch, hn * wn, device=device, dtype=dtype)
+    retained_weight = torch.zeros_like(flux)
     for dx in (0.0, 1.0):
         for dy in (0.0, 1.0):
             xi = (x0 + dx).long()
@@ -45,11 +70,23 @@ def splat_bilinear(
             weight = (1.0 - torch.abs(x - (x0 + dx))) * (1.0 - torch.abs(y - (y0 + dy)))
             valid = (xi >= 0) & (xi < wn) & (yi >= 0) & (yi < hn) & (weight > 0)
             weight = torch.where(valid, weight, torch.zeros_like(weight))
+            retained_weight = retained_weight + weight
             flat = yi.clamp(0, hn - 1) * wn + xi.clamp(0, wn - 1)
             out.scatter_add_(
                 1, flat.reshape(batch, -1), (weight * flux).reshape(batch, -1)
             )
-    return out.reshape(batch, hn, wn)
+    result = out.reshape(batch, hn, wn)
+    if not return_diagnostics:
+        return result
+    input_flux = flux.sum(dim=(-2, -1))
+    deposited_flux = result.sum(dim=(-2, -1))
+    diagnostics = SplatDiagnostics(
+        retained_weight=retained_weight,
+        input_flux=input_flux,
+        deposited_flux=deposited_flux,
+        lost_flux=input_flux - deposited_flux,
+    )
+    return result, diagnostics
 
 
 splat_to_native = splat_bilinear

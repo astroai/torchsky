@@ -1,20 +1,15 @@
 """Learnable per-exposure astrometric residual in a local tangent plane.
 
-Small patches (typical HST/JWST cutouts) are modeled with four scalars:
+Patches are modeled in Torchsky's exact gnomonic tangent chart with four scalars:
 
 - ``delta_ra_deg``, ``delta_dec_deg``: translation in tangent-plane coordinates
-  mapped back to RA/Dec. ``delta_ra_deg`` is the RA offset **at the tangent
-  point** (declination = *center_dec_deg*); the applied RA shift varies per
-  pixel as ``delta_ra_deg * cos(dec0) / cos(dec_out)`` to correctly account
-  for the convergence of RA meridians.
+  mapped back to RA/Dec. ``delta_ra_deg`` is the local RA-coordinate offset at
+  the tangent point (its plane translation is ``delta_ra_deg * cos(dec0)``).
 - ``delta_theta_rad``: in-plane rotation about the patch center.
 - ``delta_log_scale``: isotropic log-scale about the center.
 
-The forward transform uses a first-order tangent-plane expansion with
-per-point ``cos(dec)`` scaling for RA offsets. This is more accurate than a
-constant ``cos(dec0)`` for mid-latitude fields up to several degrees, but
-remains an approximation. Poles and very large fields may need a spherically
-exact formulation (research extension).
+The shared :class:`~torchsky.wcs.TangentPlaneFrame` owns the spherical
+projection, avoiding a second small-angle chart convention.
 """
 
 from __future__ import annotations
@@ -26,14 +21,10 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ..wcs import WCS
+from ..wcs import TangentPlaneFrame, WCS
 
 if TYPE_CHECKING:
     from .field.types import FieldObservation
-
-
-def _wrapped_delta_ra_deg(ra_a_deg: Tensor, ra_b_deg: float) -> Tensor:
-    return ((ra_a_deg - float(ra_b_deg) + 180.0) % 360.0) - 180.0
 
 
 class ExposurePose(nn.Module):
@@ -54,15 +45,7 @@ class ExposurePose(nn.Module):
         center_ra_deg: float,
         center_dec_deg: float,
     ) -> tuple[Tensor, Tensor]:
-        """Apply pose in tangent coordinates at ``(center_ra_deg, center_dec_deg)``, then map back.
-
-        The tangent-plane projection uses per-point ``cos(dec)`` to scale
-        RA offsets, which is more accurate than a constant ``cos(dec0)`` for
-        mid-latitude fields. Near the pole (``|cos(dec)| < 1e-12``) the
-        per-point scaling saturates to avoid division by zero; the global
-        polar guard at ``center_dec_deg`` remains for early rejection of
-        ill-conditioned inputs.
-        """
+        """Apply pose in an exact gnomonic chart, then map back to the sphere."""
         ra0 = float(center_ra_deg)
         dec0 = float(center_dec_deg)
         cos_dec0 = math.cos(math.radians(dec0))
@@ -72,12 +55,15 @@ class ExposurePose(nn.Module):
                 "(|cos(dec0)| too small); pick a different patch center."
             )
 
-        dtype = ra_deg.dtype
-        device = ra_deg.device
-
-        cos_dec = torch.cos(torch.deg2rad(dec_deg))
-        xi = _wrapped_delta_ra_deg(ra_deg, ra0) * cos_dec
-        eta = dec_deg - dec0
+        if ra_deg.shape != dec_deg.shape:
+            raise ValueError("ra_deg and dec_deg must have matching shapes")
+        if ra_deg.device != dec_deg.device or ra_deg.dtype != dec_deg.dtype:
+            raise ValueError("ra_deg and dec_deg must share dtype and device")
+        if not ra_deg.is_floating_point():
+            raise TypeError("ra_deg and dec_deg must have floating dtype")
+        dtype, device = ra_deg.dtype, ra_deg.device
+        frame = TangentPlaneFrame(ra0=ra0, dec0=dec0)
+        xi, eta = frame.world_to_plane(ra_deg, dec_deg)
 
         theta = self.delta_theta_rad.to(device=device, dtype=dtype)
         scale = torch.exp(self.delta_log_scale.to(device=device, dtype=dtype))
@@ -92,17 +78,7 @@ class ExposurePose(nn.Module):
         xi_out = xi_r + d_ra * cos_dec0
         eta_out = eta_r + d_dec
 
-        dec_out = dec0 + eta_out
-        cos_dec_out = torch.cos(torch.deg2rad(dec_out))
-        cos_dec_out = torch.where(
-            torch.abs(cos_dec_out) < 1e-12,
-            torch.tensor(1e-12, dtype=dtype, device=device),
-            cos_dec_out,
-        )
-        ra_out = ra0 + xi_out / cos_dec_out
-
-        ra_out = torch.remainder(ra_out + 180.0, 360.0) - 180.0
-        return ra_out, dec_out
+        return frame.plane_to_world(xi_out, eta_out)
 
     def compose_with_wcs(
         self,
@@ -155,20 +131,21 @@ def fit_pose_correction(
     dst_ra_deg: Tensor,
     dst_dec_deg: Tensor,
     *,
+    center_ra_deg: float,
+    center_dec_deg: float,
     model: str = "rshift",
-    anchor_index: int = 0,
 ) -> ExposurePose:
     """Fit a rigid tangent-plane correction mapping matched ``src`` onto ``dst``.
 
     Pairs are matched sky positions (e.g. from
     :func:`torchsky.catalogs.crossmatch_sky`): ``src`` in the exposure's
     current frame, ``dst`` in the reference frame. The closed-form
-    Kabsch/Procrustes solution is computed in the tangent plane centered on
-    the anchor pair ``src[anchor_index]``, which acts as the gauge: the
-    rotation pole sits at the anchor source position and an exposure already
-    in the reference frame (self-pairs, ``src is dst``) fits to the identity
-    pose, so the anchor exposure stays identity-frozen while all other
-    exposures receive corrections relative to it.
+    Kabsch/Procrustes solution is computed in the same tangent plane used by
+    the renderer. Callers fitting an exposure must therefore pass that
+    exposure's WCS reference point (normally ``CRVAL1``/``CRVAL2``). Rotation
+    and translation are origin-dependent, so silently choosing a matched
+    catalogue source as the center would produce the wrong correction when
+    the renderer later applies the pose about CRVAL.
 
     Models:
     - ``"shift"``: translation only.
@@ -188,29 +165,39 @@ def fit_pose_correction(
     dst_dec = torch.as_tensor(dst_dec_deg).reshape(-1)
     if not (src_ra.shape == src_dec.shape == dst_ra.shape == dst_dec.shape):
         raise ValueError("src/dst coordinate tensors must have matching shapes")
+    if not (
+        src_ra.device == src_dec.device == dst_ra.device == dst_dec.device
+        and src_ra.dtype == src_dec.dtype == dst_ra.dtype == dst_dec.dtype
+    ):
+        raise ValueError("src/dst coordinate tensors must share dtype and device")
+    if not src_ra.is_floating_point():
+        raise TypeError("src/dst coordinate tensors must have floating dtype")
     n = int(src_ra.numel())
     if n == 0:
         raise ValueError("at least one matched pair is required")
-    anchor = int(anchor_index)
-    if not 0 <= anchor < n:
-        raise ValueError(f"anchor_index {anchor} out of range for {n} pairs")
+    if model == "rshift" and n < 2:
+        raise ValueError("rshift requires at least two non-degenerate matched pairs")
+    if not all(
+        bool(torch.isfinite(values).all())
+        for values in (src_ra, src_dec, dst_ra, dst_dec)
+    ):
+        raise ValueError("src/dst coordinate tensors must contain only finite values")
 
-    # Gauge point: the anchor source position. Kept as python floats because
-    # ExposurePose.apply_to_world anchors its tangent plane on floats too.
-    ra0 = float(src_ra[anchor].detach())
-    dec0 = float(src_dec[anchor].detach())
+    ra0 = float(center_ra_deg)
+    dec0 = float(center_dec_deg)
+    if not math.isfinite(ra0) or not math.isfinite(dec0):
+        raise ValueError("pose center coordinates must be finite")
     cos_dec0 = math.cos(math.radians(dec0))
     if abs(cos_dec0) < 1e-6:
         raise ValueError(
             "fit_pose_correction is ill-conditioned near the pole "
-            "(|cos(dec0)| too small); pick a different anchor."
+            "(|cos(dec0)| too small); pick a different tangent center."
         )
 
+    frame = TangentPlaneFrame(ra0=ra0, dec0=dec0)
+
     def _tangent(ra: Tensor, dec: Tensor) -> tuple[Tensor, Tensor]:
-        return (
-            _wrapped_delta_ra_deg(ra, ra0) * torch.cos(torch.deg2rad(dec)),
-            dec - dec0,
-        )
+        return frame.world_to_plane(ra, dec)
 
     xi_s, eta_s = _tangent(src_ra, src_dec)
     xi_d, eta_d = _tangent(dst_ra, dst_dec)
@@ -222,6 +209,16 @@ def fit_pose_correction(
     if model == "shift":
         theta = torch.zeros((), dtype=src_ra.dtype, device=src_ra.device)
     else:
+        src_power = sx.square().sum() + sy.square().sum()
+        dst_power = dx.square().sum() + dy.square().sum()
+        scale = torch.stack(
+            (xi_s.abs().max(), eta_s.abs().max(), xi_d.abs().max(), eta_d.abs().max())
+        ).max()
+        tolerance = torch.finfo(src_ra.dtype).eps * torch.maximum(
+            scale.square(), torch.full_like(scale, torch.finfo(src_ra.dtype).tiny)
+        ) * n
+        if bool(src_power <= tolerance) or bool(dst_power <= tolerance):
+            raise ValueError("rshift matched pairs are degenerate in the tangent plane")
         # Maximize sum d @ R(theta) s with R = [[c, -s], [s, c]]:
         # theta = atan2(sum(dy*sx - dx*sy), sum(dx*sx + dy*sy)).
         sin_num = (dy * sx - dx * sy).sum()
@@ -232,13 +229,11 @@ def fit_pose_correction(
     tx = xi_d.mean() - (c * xi_s.mean() - s * eta_s.mean())
     ty = eta_d.mean() - (s * xi_s.mean() + c * eta_s.mean())
 
-    pose = ExposurePose()
+    pose = ExposurePose().to(device=src_ra.device, dtype=src_ra.dtype)
     with torch.no_grad():
-        pose.delta_theta_rad.copy_(theta.to(pose.delta_theta_rad.device))
-        pose.delta_log_scale.copy_(
-            torch.zeros_like(theta, device=pose.delta_log_scale.device)
-        )
+        pose.delta_theta_rad.copy_(theta)
+        pose.delta_log_scale.zero_()
         # apply_to_world adds delta_ra_deg * cos(dec0) to the xi coordinate.
-        pose.delta_ra_deg.copy_((tx / cos_dec0).to(pose.delta_ra_deg.device))
-        pose.delta_dec_deg.copy_(ty.to(pose.delta_dec_deg.device))
-    return pose.to(device=src_ra.device, dtype=src_ra.dtype)
+        pose.delta_ra_deg.copy_(tx / cos_dec0)
+        pose.delta_dec_deg.copy_(ty)
+    return pose

@@ -13,6 +13,7 @@ from ..operators.spectral import (
     mixture_mc_samples,
     sorted_tabulated_transmission,
     tabulated_response_or_uniform,
+    validate_override_quadrature,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "mixture_mc_samples",
     "sorted_tabulated_transmission",
     "tabulated_response_or_uniform",
+    "validate_override_quadrature",
 ]

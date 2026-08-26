@@ -23,8 +23,9 @@ Variants: dense native residuals; experimental learnable PSF; multi-GPU DDP.
 i2d crops -> INR on ALREADY-DRAZZLED mosaics -> drizzle baselines -> tile QA.
 Tutorial only: unsuitable for depth claims.
 ### C — UPDC reproduction prep
-CAL -> image1overf 1/f fix -> two-pass 5-sigma outliers (half-scale sky grid,
-projected back) -> Gaussian completion + UPDCMASK -> feeds A and HybPSF stars.
+survey/JWST 1/f correction -> calibrated CAL inputs -> two-pass
+leave-one-exposure-out 5-sigma outliers (half-scale sky grid, projected back)
+-> Gaussian completion + `UPDCREJ` (`1=replaced`) -> feeds A and PSF stars.
 
 ## Torchsky-native equivalents
 | Stage | Torchsky |
@@ -33,7 +34,7 @@ projected back) -> Gaussian completion + UPDCMASK -> feeds A and HybPSF stars.
 | Alignment | native `map/exposure_pose.fit_pose_correction`; official JWST step: `scripts/tweakreg_align_exposures.py` (`tweakreg` extra) |
 | UPDC prep | `benchmarks/updc/prepare_inputs.py` |
 | QA vs iter10 | `benchmarks/updc/compare_catalogs_vs_reference.py` (`catalogs.crossmatch_sky`) |
-| Exposure-matched PSFs | `scripts/export_stpsf_kernels.py` -> `kernel2d` |
+| Nominal filter/detector PSFs | `scripts/export_stpsf_kernels.py` -> `kernel2d`; not exposure/time/OPD matched |
 | Mosaic render | mosaic mode in `run_canfar_adass_depth.sh` (full-field coadds on UPDC grid) |
 | Gates | `bench_multiband_depth.py` dither splits/injections/blank batches; `score_field_models.py` m50 bootstrap CIs |
 

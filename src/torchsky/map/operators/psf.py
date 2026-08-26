@@ -51,14 +51,14 @@ def psf_support_radius(psf_spec: object | None) -> tuple[int, int]:
     if mode == "learned_lowrank":
         # Learned chromatic kernels vary per cell; reserve twice the base
         # Gaussian support so the widest plausible learned kernel fits.
-        radius = 2 * gaussian_support_radius(
-            float(getattr(psf_spec, "sigma_pix", 0.0))
-        )
+        radius = 2 * gaussian_support_radius(float(getattr(psf_spec, "sigma_pix", 0.0)))
         return radius, radius
     raise ValueError(f"unsupported PSF mode {mode!r}")
 
 
-def gaussian_kernel1d(sigma_pix: float, *, device: torch.device, dtype: torch.dtype = torch.float32) -> Tensor:
+def gaussian_kernel1d(
+    sigma_pix: float, *, device: torch.device, dtype: torch.dtype = torch.float32
+) -> Tensor:
     if sigma_pix <= 0.0:
         return torch.ones((1,), dtype=dtype, device=device)
     radius = gaussian_support_radius(sigma_pix)
@@ -197,7 +197,9 @@ def _tent_weight(
     core_end = core_start + core_len
     up = (axis - (core_start - ramp)).clamp_min(0.0) / max(ramp, 1)
     down = ((core_end + ramp) - axis).clamp_min(0.0) / max(ramp, 1)
-    return torch.minimum(torch.minimum(up, down), torch.ones((), device=device, dtype=dtype))
+    return torch.minimum(
+        torch.minimum(up, down), torch.ones((), device=device, dtype=dtype)
+    )
 
 
 def _learned_cells(
@@ -244,6 +246,14 @@ def _learned_cells(
     return cells
 
 
+def _require_frozen_learned_psf(psf_spec: object) -> None:
+    if not bool(getattr(psf_spec, "frozen", True)):
+        raise ValueError(
+            "learned PSF scene rendering requires frozen=True; calibrate the PSF "
+            "through its model-specific calibration path"
+        )
+
+
 def apply_learned_psf_spec(image: Tensor, psf_spec: object) -> Tensor:
     """Apply a learned low-rank chromatic PSF with blended control cells.
 
@@ -257,15 +267,13 @@ def apply_learned_psf_spec(image: Tensor, psf_spec: object) -> Tensor:
     convolution to ``image``; only the frozen kernel construction stays out
     of the graph, capping render memory at one conv workspace per cell.
     """
+    _require_frozen_learned_psf(psf_spec)
     flat = image.reshape(-1, int(image.shape[-2]), int(image.shape[-1]))
     height, width = int(flat.shape[-2]), int(flat.shape[-1])
     with torch.no_grad():
-        cells = _learned_cells(
-            psf_spec, height, width, image.dtype, image.device
-        )
+        cells = _learned_cells(psf_spec, height, width, image.dtype, image.device)
         cells = [
-            (c[0], c[1], c[2], c[3], c[4], c[5].detach(), c[6], c[7])
-            for c in cells
+            (c[0], c[1], c[2], c[3], c[4], c[5].detach(), c[6], c[7]) for c in cells
         ]
     return apply_blended_cell_kernels(image, flat, cells)
 
@@ -285,9 +293,9 @@ def apply_blended_cell_kernels(
     out = torch.zeros_like(flat)
     weight_sum = torch.zeros_like(flat)
     for wy0, wy1, wx0, wx1, weight, kernel, pad_y, pad_x in cells:
-        conv = F.conv2d(
-            padded.unsqueeze(1), kernel.view(1, 1, *kernel.shape)
-        ).squeeze(1)[:, wy0:wy1, wx0:wx1]
+        conv = F.conv2d(padded.unsqueeze(1), kernel.view(1, 1, *kernel.shape)).squeeze(
+            1
+        )[:, wy0:wy1, wx0:wx1]
         out[:, wy0:wy1, wx0:wx1] += conv * weight
         weight_sum[:, wy0:wy1, wx0:wx1] += weight
     return (out / weight_sum.clamp_min(torch.finfo(out.dtype).tiny)).reshape(
@@ -305,12 +313,11 @@ def apply_learned_psf_spec_adjoint(image: Tensor, psf_spec: object) -> Tensor:
     with no further crop or shift. Runs fully under ``no_grad``: the adjoint
     is a pure linear map on the cotangent.
     """
+    _require_frozen_learned_psf(psf_spec)
     flat = image.reshape(-1, int(image.shape[-2]), int(image.shape[-1]))
     height, width = int(flat.shape[-2]), int(flat.shape[-1])
     with torch.no_grad():
-        cells = _learned_cells(
-            psf_spec, height, width, image.dtype, image.device
-        )
+        cells = _learned_cells(psf_spec, height, width, image.dtype, image.device)
         pad_y, pad_x = cells[0][6], cells[0][7]
 
         weight_sum = torch.zeros_like(flat)
@@ -338,6 +345,7 @@ def apply_learned_psf_variance_spec(variance: Tensor, psf_spec: object) -> Tenso
     cross terms are correlations of ``V`` with the pointwise kernel products
     ``K_c * K_c'`` -- all of them, including the c = c' diagonal.
     """
+    _require_frozen_learned_psf(psf_spec)
     flat = variance.reshape(-1, int(variance.shape[-2]), int(variance.shape[-1]))
     height, width = int(flat.shape[-2]), int(flat.shape[-1])
     with torch.no_grad():
@@ -362,9 +370,9 @@ def apply_learned_psf_variance_spec(variance: Tensor, psf_spec: object) -> Tenso
                     c1[4][ry0 - c1[0] : ry1 - c1[0], rx0 - c1[2] : rx1 - c1[2]]
                     * c2[4][ry0 - c2[0] : ry1 - c2[0], rx0 - c2[2] : rx1 - c2[2]]
                 )
-                corr = F.conv2d(
-                    padded, kk.flip(-1, -2).view(1, 1, *kk.shape)
-                ).squeeze(1)[:, ry0:ry1, rx0:rx1]
+                corr = F.conv2d(padded, kk.flip(-1, -2).view(1, 1, *kk.shape)).squeeze(
+                    1
+                )[:, ry0:ry1, rx0:rx1]
                 out[:, ry0:ry1, rx0:rx1] += corr * coef[:, ry0:ry1, rx0:rx1]
         denom = S.square().clamp_min(torch.finfo(out.dtype).tiny)
         return (out / denom).reshape(variance.shape)

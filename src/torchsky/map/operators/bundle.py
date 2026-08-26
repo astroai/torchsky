@@ -231,11 +231,19 @@ def field_observation_operator_bundle(
         getattr(observation, name, None) is not None for name in ("mask",)
     )
     has_noise = has_mask_weight or getattr(observation, "weight", None) is not None
+    has_radiometry = any(
+        getattr(observation, name, None) is not None
+        for name in (
+            "gain_electrons_per_adu",
+            "exposure_time_s",
+            "collecting_area_m2",
+        )
+    )
     return ObservationOperatorBundle(
         geometry=geometry,
         spectral_response=ExplicitSpectralResponseOp() if has_spectral else None,
         psf=ExplicitPSFOp() if has_psf else None,
-        radiometry=None,
+        radiometry=ExplicitRadiometryOp() if has_radiometry else None,
         background=DetectorBackgroundOp() if has_background else None,
         mask_weight=ExplicitMaskWeightOp() if has_mask_weight else None,
         noise=ExplicitNoiseOp() if has_noise else None,

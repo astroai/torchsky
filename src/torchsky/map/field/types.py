@@ -5,13 +5,15 @@ Implementation of ``nn.Module`` subclasses and training live in :mod:`torchsky.m
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import math
 import torch
 import torch.nn as nn
 from torch import Tensor
+
+from ...spectrophotometry import Passband
 
 if TYPE_CHECKING:
     from ..exposure_pose import ExposurePose
@@ -52,9 +54,7 @@ FieldModelKind = Literal[
     "hashgrid_spectral_field",
 ]
 FieldCoordinateMode = Literal["local_tangent", "sphere_xyz"]
-FieldLossKind = Literal[
-    "mse", "charbonnier", "huber", "gaussian_nll", "structured_nll"
-]
+FieldLossKind = Literal["mse", "charbonnier", "huber", "gaussian_nll", "structured_nll"]
 FieldLRSchedule = Literal["constant", "cosine"]
 FieldLossReduction = Literal["per_observation", "per_band", "global", "band_global_mix"]
 FieldCurriculum = Literal["none", "spectral_frequency_ramp", "feature_scale_ramp"]
@@ -64,10 +64,20 @@ FieldSpectralSampling = Literal[
     "mixture_mc",
 ]
 FieldSpatialSampling = Literal["center", "gauss_legendre_2x2"]
-FieldObservationSampling = Literal["uniform", "band_balanced"]
+FieldObservationSampling = Literal["uniform", "band_balanced", "epoch"]
 FieldNoisePretrainKind = Literal["none", "uniform", "gaussian", "spectrum"]
 # wavelength | energy | frequency — meaning of spectral_min / spectral_max numeric values
 FieldSpectralQuantity = Literal["wavelength", "energy", "frequency"]
+TimeScale = Literal["tai", "tcb", "tcg", "tdb", "tt", "ut1", "utc"]
+DetectorLaw = Literal["gaussian", "poisson_gaussian", "student_t"]
+
+_TIME_SCALES = {"tai", "tcb", "tcg", "tdb", "tt", "ut1", "utc"}
+_DETECTOR_LAWS = {"gaussian", "poisson_gaussian", "student_t"}
+
+
+def _validate_optional_identifier(value: str | None, *, name: str) -> None:
+    if value is not None and (not isinstance(value, str) or not value.strip()):
+        raise ValueError(f"{name} must be a non-empty string when provided")
 
 
 class DetectorToSkyTransform(Protocol):
@@ -96,6 +106,55 @@ class ForwardContext:
     exposure_id: str | None = None
     time_mjd: float | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+    time_scale: TimeScale | None = None
+    calibration_id: str | None = None
+    provenance_id: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in (
+            "survey",
+            "instrument",
+            "detector",
+            "exposure_id",
+            "calibration_id",
+            "provenance_id",
+        ):
+            _validate_optional_identifier(getattr(self, name), name=name)
+        if self.time_mjd is not None and not math.isfinite(float(self.time_mjd)):
+            raise ValueError("ForwardContext time_mjd must be finite")
+        if self.time_scale is not None:
+            scale = str(self.time_scale).lower()
+            if scale not in _TIME_SCALES:
+                raise ValueError(
+                    f"unsupported ForwardContext time_scale {self.time_scale!r}"
+                )
+            if self.time_mjd is None:
+                raise ValueError("ForwardContext time_scale requires time_mjd")
+            object.__setattr__(self, "time_scale", scale)
+        if not isinstance(self.extra, dict):
+            raise TypeError("ForwardContext extra must be a dict")
+
+    def validate_certified(self) -> "ForwardContext":
+        """Fail closed unless the context identifies one calibrated exposure."""
+        missing = [
+            name
+            for name in (
+                "survey",
+                "instrument",
+                "detector",
+                "exposure_id",
+                "calibration_id",
+                "provenance_id",
+                "time_mjd",
+                "time_scale",
+            )
+            if getattr(self, name) is None
+        ]
+        if missing:
+            raise ValueError(
+                "certified ForwardContext is missing " + ", ".join(missing)
+            )
+        return self
 
 
 FieldPSFMode = Literal["none", "gaussian_sigma_pix", "kernel2d", "learned_lowrank"]
@@ -103,7 +162,12 @@ FieldPSFMode = Literal["none", "gaussian_sigma_pix", "kernel2d", "learned_lowran
 
 @dataclass
 class PSFSpec:
-    """Public PSF description for field observations and target products."""
+    """Public PSF description for field observations and target products.
+
+    Learned PSFs are calibration products and are frozen while rendering a sky
+    scene.  ``frozen=False`` is reserved for a future calibration-only execution
+    path; the scene renderer rejects it instead of silently dropping gradients.
+    """
 
     mode: FieldPSFMode = "none"
     sigma_pix: float = 0.0
@@ -111,6 +175,7 @@ class PSFSpec:
     model: nn.Module | None = None
     cell_u_pix: Tensor | None = None
     cell_lam_norm: float = 0.5
+    frozen: bool = True
 
     @classmethod
     def gaussian(cls, sigma_pix: float) -> "PSFSpec":
@@ -128,6 +193,7 @@ class PSFSpec:
         base_sigma_pix: float,
         cell_u_pix: Tensor | None = None,
         cell_lam_norm: float = 0.5,
+        frozen: bool = True,
     ) -> "PSFSpec":
         return cls(
             mode="learned_lowrank",
@@ -135,6 +201,7 @@ class PSFSpec:
             model=model,
             cell_u_pix=cell_u_pix,
             cell_lam_norm=float(cell_lam_norm),
+            frozen=bool(frozen),
         )
 
     def __post_init__(self) -> None:
@@ -173,6 +240,36 @@ class PSFSpec:
                 )
             return
         raise ValueError(f"unsupported PSFSpec mode {self.mode!r}")
+
+    def to(
+        self,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> "PSFSpec":
+        """Move tensor payloads while retaining the declared PSF contract."""
+        if dtype is not None and not dtype.is_floating_point:
+            raise TypeError("PSFSpec dtype must be floating point")
+        move_kwargs: dict[str, object] = {}
+        if device is not None:
+            move_kwargs["device"] = device
+        if dtype is not None:
+            move_kwargs["dtype"] = dtype
+        kernel = self.kernel2d
+        cells = self.cell_u_pix
+        if move_kwargs:
+            kernel = None if kernel is None else kernel.to(**move_kwargs)
+            cells = None if cells is None else cells.to(**move_kwargs)
+            if self.model is not None:
+                self.model.to(**move_kwargs)
+        return PSFSpec(
+            mode=self.mode,
+            sigma_pix=float(self.sigma_pix),
+            kernel2d=kernel,
+            model=self.model,
+            cell_u_pix=cells,
+            cell_lam_norm=float(self.cell_lam_norm),
+            frozen=bool(self.frozen),
+        )
 
 
 @dataclass(frozen=True)
@@ -277,6 +374,15 @@ class FieldObservation:
     detector_x0_pix: float = 0.0
     detector_y0_pix: float = 0.0
     detector_to_sky: DetectorToSkyTransform | None = None
+    passband: Passband | None = None
+    value_unit: str | None = None
+    value_semantics: str | None = None
+    spectral_unit: str | None = None
+    detector_law: DetectorLaw | None = None
+    gain_electrons_per_adu: Tensor | float | None = None
+    gain_provenance_id: str | None = None
+    exposure_time_s: float | None = None
+    collecting_area_m2: float | None = None
 
     _cached_ra_deg: Tensor | None = field(default=None, init=False, repr=False)
     _cached_dec_deg: Tensor | None = field(default=None, init=False, repr=False)
@@ -298,6 +404,12 @@ class FieldObservation:
         return (tuple(self.image.shape), tuple(shape), header_items)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.image, Tensor) or self.image.ndim != 2:
+            raise ValueError("FieldObservation image must be a 2D tensor")
+        if not self.image.is_floating_point():
+            raise TypeError("FieldObservation image must be floating point")
+        if not isinstance(self.header, dict):
+            raise TypeError("FieldObservation header must be a dict")
         if self.psf_spec is None:
             if float(self.psf_sigma_pix) > 0.0:
                 self.psf_spec = PSFSpec.gaussian(float(self.psf_sigma_pix))
@@ -322,6 +434,8 @@ class FieldObservation:
         ):
             raise ValueError("FieldObservation detector origins must be finite")
         for name in (
+            "weight",
+            "mask",
             "err",
             "var_poisson",
             "var_rnoise",
@@ -341,6 +455,29 @@ class FieldObservation:
                 raise ValueError(
                     f"FieldObservation {name} shape must match image shape"
                 )
+        if self.detector_law is not None and self.detector_law not in _DETECTOR_LAWS:
+            raise ValueError(
+                f"unsupported FieldObservation detector_law {self.detector_law!r}"
+            )
+        for name in (
+            "value_unit",
+            "value_semantics",
+            "spectral_unit",
+            "gain_provenance_id",
+        ):
+            _validate_optional_identifier(getattr(self, name), name=name)
+        for name in ("exposure_time_s", "collecting_area_m2"):
+            value = getattr(self, name)
+            if value is not None and (
+                not math.isfinite(float(value)) or float(value) <= 0.0
+            ):
+                raise ValueError(f"FieldObservation {name} must be finite and positive")
+        if self.gain_electrons_per_adu is not None:
+            gain = torch.as_tensor(self.gain_electrons_per_adu)
+            if not bool(torch.isfinite(gain).all()) or bool((gain <= 0.0).any()):
+                raise ValueError(
+                    "FieldObservation gain_electrons_per_adu must be finite and positive"
+                )
         if self.contamination_prior is not None:
             prior = self.contamination_prior
             if not bool(torch.isfinite(prior).all()) or bool(
@@ -359,6 +496,31 @@ class FieldObservation:
 
         wl = self.transmission_wavelength
         tt = self.transmission_throughput
+        if self.passband is not None:
+            if (
+                wl is not None
+                or tt is not None
+                or self.transmission_center is not None
+                or self.transmission_sigma is not None
+            ):
+                raise ValueError(
+                    "FieldObservation passband and alternate transmission metadata are mutually exclusive"
+                )
+            if self.spectral_quantity not in (None, "wavelength"):
+                raise ValueError(
+                    "Passband is defined only for wavelength spectral coordinates"
+                )
+            if (
+                self.spectral_unit is not None
+                and self.spectral_unit.strip().lower()
+                not in {
+                    "angstrom",
+                    "angstroms",
+                    "aa",
+                }
+            ):
+                raise ValueError("Passband coordinates use Angstrom spectral units")
+            return
         if (wl is None) ^ (tt is None):
             raise ValueError(
                 "transmission_wavelength and transmission_throughput must both be set or both None"
@@ -375,6 +537,132 @@ class FieldObservation:
             )
         if wl.numel() < 2:
             raise ValueError("tabulated transmission requires at least two samples")
+
+    def to(
+        self,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> "FieldObservation":
+        """Return a moved observation with mask/index dtypes preserved.
+
+        Floating detector planes follow ``dtype``. Boolean masks and integer
+        amplifier indices retain their semantic dtype. Coordinate caches are
+        intentionally dropped by :func:`dataclasses.replace`.
+        """
+        if dtype is not None and not dtype.is_floating_point:
+            raise TypeError("FieldObservation dtype must be floating point")
+        kwargs: dict[str, object] = {}
+        floating_fields = (
+            "image",
+            "weight",
+            "err",
+            "var_poisson",
+            "var_rnoise",
+            "var_flat",
+            "contamination_prior",
+            "sky_background",
+            "instrument_background",
+            "detector_background",
+            "transmission_wavelength",
+            "transmission_throughput",
+            "gain_electrons_per_adu",
+        )
+        for name in floating_fields:
+            value = getattr(self, name)
+            if not isinstance(value, Tensor):
+                continue
+            target_dtype = dtype if dtype is not None else value.dtype
+            kwargs[name] = value.to(device=device, dtype=target_dtype)
+        for name in ("mask", "amplifier_index"):
+            value = getattr(self, name)
+            if isinstance(value, Tensor):
+                kwargs[name] = value.to(device=device)
+        if self.psf_spec is not None:
+            kwargs["psf_spec"] = self.psf_spec.to(device=device, dtype=dtype)
+        if self.passband is not None and device is not None:
+            kwargs["passband"] = self.passband.to(device)
+        transform = self.detector_to_sky
+        if isinstance(transform, nn.Module):
+            move_kwargs: dict[str, object] = {}
+            if device is not None:
+                move_kwargs["device"] = device
+            if dtype is not None:
+                move_kwargs["dtype"] = dtype
+            if move_kwargs:
+                transform.to(**move_kwargs)
+                kwargs["detector_to_sky"] = transform
+        return replace(self, **kwargs)
+
+    def validate_certified(
+        self,
+        forward_context: ForwardContext,
+    ) -> "FieldObservation":
+        """Validate the strict native-observation contract used for claims.
+
+        Legacy and exploratory observations remain valid without these fields;
+        production adapters opt into this fail-closed check explicitly.
+        """
+        if not isinstance(forward_context, ForwardContext):
+            raise TypeError("certified observation requires a ForwardContext")
+        forward_context.validate_certified()
+        if self.weight is None or self.mask is None:
+            raise ValueError("certified observation requires weight and mask planes")
+        if self.mask.dtype != torch.bool:
+            raise TypeError(
+                "certified observation mask must be boolean (True = usable)"
+            )
+        if not bool(self.mask.any()):
+            raise ValueError("certified observation requires at least one usable pixel")
+        if not bool(torch.isfinite(self.weight).all()) or bool(
+            (self.weight < 0.0).any()
+        ):
+            raise ValueError(
+                "certified inverse variance must be finite and non-negative"
+            )
+        if bool((self.weight[~self.mask] != 0.0).any()):
+            raise ValueError(
+                "certified unusable pixels must have zero inverse variance"
+            )
+        if not bool((self.weight[self.mask] > 0.0).all()):
+            raise ValueError(
+                "certified usable pixels require positive inverse variance"
+            )
+        if not bool(torch.isfinite(self.image[self.mask]).all()):
+            raise ValueError("certified usable image pixels must be finite")
+        if self.psf_spec is None or self.psf_spec.mode == "none":
+            raise ValueError("certified observation requires an explicit PSF")
+        if self.passband is None and not (
+            self.transmission_wavelength is not None
+            and self.transmission_throughput is not None
+        ):
+            raise ValueError("certified observation requires a tabulated passband")
+        missing = [
+            name
+            for name in (
+                "value_unit",
+                "value_semantics",
+                "spectral_unit",
+                "spectral_quantity",
+                "detector_law",
+                "gain_electrons_per_adu",
+                "gain_provenance_id",
+                "exposure_time_s",
+            )
+            if getattr(self, name) is None
+        ]
+        if missing:
+            raise ValueError(
+                "certified FieldObservation is missing " + ", ".join(missing)
+            )
+        from ...wcs import WCS
+
+        height, width = self.image.shape
+        centre = self.image.new_tensor([(width - 1) * 0.5])
+        centre_y = self.image.new_tensor([(height - 1) * 0.5])
+        ra, dec = WCS(self.header).pixel_to_world(centre, centre_y)
+        if not bool(torch.isfinite(ra).all() & torch.isfinite(dec).all()):
+            raise ValueError("certified observation WCS is not finite at image centre")
+        return self
 
 
 @dataclass(frozen=True)

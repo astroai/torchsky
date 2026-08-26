@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.15)
 project(torchsky_cpp)
 
-set(CMAKE_CXX_STANDARD 17)
+# PyTorch 2.13 conda builds use the C++20 library ABI.  Building this tensor
+# bridge as C++17 corrupts returned at::Tensor values even when package versions
+# match, so compile the extension with the same (or newer-compatible) standard.
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Compiler optimization
@@ -111,11 +114,9 @@ execute_process(
     OUTPUT_VARIABLE TORCHSKY_BUILD_TORCH_VERSION
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
-if(NOT TORCHSKY_BUILD_TORCH_VERSION MATCHES "^2\\.13([.+]|$)")
-    message(FATAL_ERROR
-        "torchsky requires PyTorch 2.13.x at build time; found ${TORCHSKY_BUILD_TORCH_VERSION}. "
-        "Install 'torch>=2.13,<2.14' before using --no-build-isolation."
-    )
+string(REGEX MATCH "^[0-9]+\\.[0-9]+" TORCHSKY_BUILD_TORCH_ABI "${TORCHSKY_BUILD_TORCH_VERSION}")
+if(NOT TORCHSKY_BUILD_TORCH_ABI)
+    message(FATAL_ERROR "Could not parse PyTorch version ${TORCHSKY_BUILD_TORCH_VERSION}")
 endif()
 list(APPEND CMAKE_PREFIX_PATH ${TORCH_CMAKE_PREFIX_PATH})
 
@@ -185,19 +186,6 @@ if(TARGET torch)
     endif()
 endif()
 
-
-
-
-
-# Find DLPack headers (used for zero-copy tensor exchange)
-find_path(DLPACK_INCLUDE_DIR dlpack/dlpack.h)
-if(DLPACK_INCLUDE_DIR)
-    message(STATUS "Found DLPack include: ${DLPACK_INCLUDE_DIR}")
-else()
-    message(WARNING "DLPack headers not found - DLPack-based zero-copy will fail to compile until headers are available")
-endif()
-
-
 # Source files
 set(SOURCES
     bindings.cpp
@@ -205,6 +193,24 @@ set(SOURCES
 
 # Create python binding module
 nanobind_add_module(_cpp ${SOURCES})
+
+# conda may install a copied header tree under site-packages/torch that is older
+# than the matching libtorch package in the same solved environment.  Prefer the
+# headers next to the loaded libtorch libraries; mixing the two corrupts the
+# at::Tensor ABI even when both package versions read "2.13.0".
+execute_process(
+    COMMAND ${Python_EXECUTABLE} -c "import sys; print(sys.prefix)"
+    OUTPUT_VARIABLE TORCHSKY_RUNTIME_PREFIX
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if(EXISTS "${TORCHSKY_RUNTIME_PREFIX}/include/ATen/core/TensorBody.h")
+    target_include_directories(
+        _cpp SYSTEM BEFORE PRIVATE
+        "${TORCHSKY_RUNTIME_PREFIX}/include/torch/csrc/api/include"
+        "${TORCHSKY_RUNTIME_PREFIX}/include"
+    )
+    message(STATUS "Prioritizing libtorch headers in ${TORCHSKY_RUNTIME_PREFIX}/include")
+endif()
 set_source_files_properties(
     bindings.cpp
     PROPERTIES
@@ -235,15 +241,10 @@ else()
     message(WARNING "libtorch_python not found in ${TORCH_ROOT}/lib - tensor returns will use slower DLPack path")
 endif()
 
-if(DLPACK_INCLUDE_DIR)
-    target_include_directories(_cpp PRIVATE ${DLPACK_INCLUDE_DIR})
-endif()
-
-
 # Compiler flags
 target_compile_definitions(_cpp PRIVATE VERSION_INFO="")
-target_compile_definitions(_cpp PRIVATE TORCHSKY_TORCH_ABI="2.13")
-target_compile_features(_cpp PRIVATE cxx_std_17)
+target_compile_definitions(_cpp PRIVATE TORCHSKY_TORCH_ABI="${TORCHSKY_BUILD_TORCH_ABI}")
+target_compile_features(_cpp PRIVATE cxx_std_20)
 
 if(APPLE)
     target_link_libraries(_cpp PRIVATE "-framework Accelerate")
