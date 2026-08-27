@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 
 import pytest
+from astropy.wcs import WCS
 import torch
 
 import torchsky
@@ -93,18 +94,18 @@ def _external_reference(
             .cpu()
             .numpy()
             .astype("float32"),
-            _as_fits_header(header_dict_obs),
+            WCS(_as_fits_header(header_dict_obs)),
         ),
-        _as_fits_header(target_header),
+        WCS(_as_fits_header(target_header)),
         shape_out=target_shape,
         return_footprint=True,
     )
     denom, _ = reproject_exact(
         (
             source_weight.cpu().numpy().astype("float32"),
-            _as_fits_header(header_dict_obs),
+            WCS(_as_fits_header(header_dict_obs)),
         ),
-        _as_fits_header(target_header),
+        WCS(_as_fits_header(target_header)),
         shape_out=target_shape,
         return_footprint=True,
     )

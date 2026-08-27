@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from astropy.wcs import WCS
 import torch
 
 pytest.importorskip("torchsky.cpp")
@@ -42,12 +43,12 @@ def test_sample_healpix_map_on_tan_header_near_reproject_from_healpix() -> None:
     ).astype(np.float32)
     nside = 128
     hp_map, _ = reproject_to_healpix(
-        (blob, dict(hdr)),
+        (blob, WCS(hdr)),
         "icrs",
         nside=nside,
         order="bilinear",
     )
-    rp, fp = reproject_from_healpix((hp_map, "icrs"), dict(hdr), nested=False)
+    rp, fp = reproject_from_healpix((hp_map, "icrs"), WCS(hdr), nested=False, shape_out=(hdr['NAXIS2'], hdr['NAXIS1']))
     ts = sample_healpix_map_on_tan_header(
         torch.from_numpy(hp_map.astype(np.float64)),
         nside=nside,
