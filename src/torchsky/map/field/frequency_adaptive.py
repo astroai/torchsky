@@ -11,7 +11,7 @@ native ``(ra, dec, wavelength) -> surface-brightness`` contract:
   high-frequency capacity.
 
 These are experimental torchsky adaptations rather than vendor/reference-code
-ports.  They intentionally have no dependency beyond PyTorch and torchsky.
+ports. They intentionally have no dependency beyond PyTorch and torchsky.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def _validate_bandwidths(values: Sequence[float]) -> tuple[float, ...]:
         raise ValueError("bandwidths must be non-empty")
     if any(not math.isfinite(value) or value <= 0.0 for value in result):
         raise ValueError("bandwidths must be finite and positive")
-    if any(right <= left for left, right in zip(result, result[1:], strict=True)):
+    if any(right <= left for left, right in zip(result, result[1:])):
         raise ValueError("bandwidths must be strictly increasing")
     return result
 
@@ -43,7 +43,7 @@ def _validate_bandwidths(values: Sequence[float]) -> tuple[float, ...]:
 class BaconField(_BaseFieldModel):
     """Band-limited multiplicative-filter field inspired by BACON.
 
-    ``bandwidths`` are cumulative normalized-coordinate bandwidths.  Frozen
+    ``bandwidths`` are cumulative normalized-coordinate bandwidths. Frozen
     sinusoidal filters at successive layers contribute only the incremental
     bandwidth, so intermediate readouts expose progressively finer scales.
     """
@@ -64,7 +64,7 @@ class BaconField(_BaseFieldModel):
         self.positive = bool(positive)
         increments = (
             self.bandwidths[0],
-            *(right - left for left, right in zip(self.bandwidths, self.bandwidths[1:], strict=True)),
+            *(right - left for left, right in zip(self.bandwidths, self.bandwidths[1:])),
         )
         self.phases = nn.ParameterList()
         self.linears = nn.ModuleList()
@@ -138,7 +138,7 @@ class SASNetField(_BaseFieldModel):
     """Spatially adaptive sinusoidal field inspired by SASNet.
 
     A frozen bank of full-coordinate sinusoidal features defines the available
-    frequency support.  A multiresolution hash grid over sky position predicts
+    frequency support. A multiresolution hash grid over sky position predicts
     per-feature masks, so high-frequency capacity can be localized instead of
     leaking across smooth background regions.
     """
