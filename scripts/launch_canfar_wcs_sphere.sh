@@ -68,7 +68,7 @@ launch_one() {
   # Clone from GitHub. Do not vcp the runner: vault PUT has been storing 0-byte
   # nodes, and uncommitted local edits never reach the container anyway.
   local src="/scratch/${run_id}-src"
-  local remote_plain="PATH=/opt/conda/bin:/opt/astroai/venv/cadc/bin:/opt/astroai/bin:/usr/local/bin:/usr/bin:/bin; gh repo clone sfabbro/torchsky ${src} -- --filter=blob:none; git -C ${src} checkout --detach ${COMMIT}; bash ${src}/scripts/run_canfar_wcs_sphere.sh ${job_mode} ${run_id}"
+  local remote_plain="PATH=/opt/conda/bin:/opt/astroai/venv/cadc/bin:/opt/astroai/bin:/usr/local/bin:/usr/bin:/bin; gh auth setup-git; gh repo clone sfabbro/torchsky ${src} -- --filter=blob:none; git -C ${src} checkout --detach ${COMMIT}; bash ${src}/scripts/run_canfar_wcs_sphere.sh ${job_mode} ${run_id}"
   local remote_cmd
   remote_cmd="$(printf '%s' "${remote_plain}" | tr ' ' '\t')"
   case "${remote_cmd}" in
@@ -236,7 +236,7 @@ launch_depth() {
   mkdir -p "${local_out}"
 
   local src="/scratch/${run_id}-src"
-  local remote_plain="PATH=/opt/conda/bin:/opt/astroai/venv/cadc/bin:/opt/astroai/bin:/usr/local/bin:/usr/bin:/bin; gh repo clone sfabbro/torchsky ${src} -- --filter=blob:none; git -C ${src} checkout --detach ${COMMIT}; bash ${src}/scripts/run_canfar_adass_depth.sh ${DEPTH_MODE:-full} ${run_id}"
+  local remote_plain="PATH=/opt/conda/bin:/opt/astroai/venv/cadc/bin:/opt/astroai/bin:/usr/local/bin:/usr/bin:/bin; gh auth setup-git; gh repo clone sfabbro/torchsky ${src} -- --filter=blob:none; git -C ${src} checkout --detach ${COMMIT}; bash ${src}/scripts/run_canfar_adass_depth.sh ${DEPTH_MODE:-full} ${run_id}"
   local remote_cmd
   remote_cmd="$(printf '%s' "${remote_plain}" | tr ' ' '\t')"
   case "${remote_cmd}" in

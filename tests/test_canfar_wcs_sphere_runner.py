@@ -98,6 +98,7 @@ def test_canfar_wcs_sphere_launcher_payload_has_no_shell_vars() -> None:
     assert "vos:sfabbro/torchsky-runs" in launcher
     assert "refusing canfar payload" in launcher
     assert "gh repo clone sfabbro/torchsky" in launcher
+    assert launcher.count("gh auth setup-git") == 2
     assert "git push before launching CANFAR" in launcher
     assert "RUNNER_VOS_URI" not in launcher
     assert "suite" in launcher
