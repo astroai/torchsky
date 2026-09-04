@@ -70,8 +70,12 @@ ensure_native_build() {
     python -m pip install -e "${source_root}" --no-build-isolation
 }
 
-if ! command -v pixi >/dev/null 2>&1; then
+pixi_version=${TORCHSKY_PIXI_VERSION:-0.78.0}
+if ! command -v pixi >/dev/null 2>&1 \
+  || [[ "$(pixi --version 2>/dev/null)" != "pixi ${pixi_version}" ]]; then
+  export PIXI_VERSION="${pixi_version}"
   curl -fsSL https://pixi.sh/install.sh | bash
+  hash -r
 fi
 pixi --version
 
