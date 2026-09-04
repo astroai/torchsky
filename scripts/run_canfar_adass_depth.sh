@@ -12,9 +12,11 @@ dry_run=${DRY_RUN:-0}
 
 if [[ "${dry_run}" != "1" ]]; then
   case "${container_image}" in
-    images.canfar.net/astroai/* | astroai/*) ;;
+    images.canfar.net/astroai/* | astroai/* | \
+      images.canfar.net/skaha/base-notebook:latest | skaha/base-notebook:latest | \
+      images.canfar.net/skaha/astroflow-cuda:25.03 | skaha/astroflow-cuda:25.03) ;;
     *)
-      echo "CONTAINER_IMAGE must name an AstroAI image, got: ${container_image}" >&2
+      echo "CONTAINER_IMAGE is not an approved compute image: ${container_image}" >&2
       exit 2
       ;;
   esac

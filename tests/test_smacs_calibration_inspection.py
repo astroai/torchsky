@@ -91,6 +91,15 @@ def test_canfar_full_mosaic_parity_is_strict_and_torchfits_only() -> None:
     assert "astropy.io" not in parity
 
 
+def test_canfar_depth_runner_accepts_authorized_skaha_compute_images() -> None:
+    runner = (ROOT / "scripts" / "run_canfar_adass_depth.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "skaha/base-notebook:latest" in runner
+    assert "skaha/astroflow-cuda:25.03" in runner
+
+
 def test_map_compat_cuda_environment_uses_cuda_and_official_comparators() -> None:
     pixi = tomllib.loads((ROOT / "pixi.toml").read_text(encoding="utf-8"))
     environment = pixi["environments"]["map-compat-cuda"]
