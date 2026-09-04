@@ -84,6 +84,7 @@ DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_stackers.md"
 DEFAULT_FULL_MOSAIC_ACCEPTANCE = (
     ROOT / "benchmarks" / "baselines" / "smacs_full_mosaic_parity.json"
 )
+SMACS_FULL_MOSAIC_TILE_HW = (1024, 1024)
 
 SMACS_FULL_MOSAIC_PARITY_PAIRS: tuple[dict[str, str], ...] = (
     {
@@ -546,6 +547,8 @@ def _build_full_mosaic_parity_specs() -> list[dict[str, Any]]:
     ]
     for spec in specs:
         spec["target_mode"] = "published_swarp_tan"
+        if spec["family"] == "torchsky":
+            spec["spatial_tile_hw"] = SMACS_FULL_MOSAIC_TILE_HW
     return specs
 
 
@@ -1033,6 +1036,7 @@ def _run_coadd_method(
         value_semantics=str(spec["value_semantics"]),
         stacking_method=str(spec["stacking_method"]),
         drizzle_pixfrac=float(spec.get("drizzle_pixfrac", 1.0)),
+        spatial_tile_hw=spec.get("spatial_tile_hw"),
     )
     extra = {
         "max_overlap": (
@@ -1040,6 +1044,7 @@ def _run_coadd_method(
             if result.overlap_count is not None
             else 0
         ),
+        "spatial_tile_hw": spec.get("spatial_tile_hw"),
     }
     return (
         result.data.cpu().numpy().astype(np.float32, copy=False),

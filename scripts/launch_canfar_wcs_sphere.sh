@@ -251,6 +251,7 @@ launch_depth() {
     --env "TORCHSKY_VOS_DEST=${vos_dest}"
     --env "CONTAINER_IMAGE=${IMAGE}"
     --env "PYTHONUNBUFFERED=1"
+    --env "TORCHSKY_SPIN_THREADS=${CPU}"
     --env "FIELD_MODELS=${FIELD_MODELS:-spectral_power_foam}"
     --env "PSF_MODEL=${PSF_MODEL:-fitted_gaussian}"
     --env "CALIBRATION_EVIDENCE_MANIFEST=${CALIBRATION_EVIDENCE_MANIFEST:-}"
