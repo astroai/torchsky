@@ -629,6 +629,7 @@ def test_coadd_image_plane_does_not_reuse_overwritten_input(tmp_path) -> None:
     ("kernel", "value_semantics", "stacking_method"),
     [
         ("bilinear", "surface_brightness", "weighted_mean"),
+        ("lanczos3", "surface_brightness", "weighted_mean"),
         ("bilinear", "surface_brightness", "mean"),
         ("bilinear", "flux", "weighted_mean"),
         ("drizzle_square", "surface_brightness", "weighted_mean"),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -30,6 +31,7 @@ from bench_map_smacs0723_stackers import (
     _injection_manifest_tensors,
     _resolve_benchmark_target_header,
     _product_and_metric_arrays,
+    _run_coadd_method,
     _run_legacy_method,
     _score_product_parity_pairs,
     _validate_expected_exposure_count,
@@ -139,6 +141,11 @@ def test_full_mosaic_parity_specs_pair_strongest_common_grid_kernels() -> None:
         "swarp",
         "montage",
     ]
+    assert {
+        tuple(spec["spatial_tile_hw"])
+        for spec in specs
+        if spec["family"] == "torchsky"
+    } == {(1024, 1024)}
 
 
 def test_expected_exposure_count_fails_closed() -> None:
@@ -452,6 +459,35 @@ def test_upstream_drizzle_receives_selected_pixfrac(monkeypatch) -> None:
     )
 
     assert received["pixfrac"] == 0.6
+
+
+def test_torchsky_stacker_receives_selected_spatial_tile(monkeypatch) -> None:
+    received: dict[str, object] = {}
+
+    def fake_coadd(*args, **kwargs):
+        received["spatial_tile_hw"] = kwargs["spatial_tile_hw"]
+        return SimpleNamespace(
+            data=torch.zeros((2, 2)),
+            weight=torch.ones((2, 2)),
+            overlap_count=torch.ones((2, 2), dtype=torch.int32),
+        )
+
+    monkeypatch.setattr(
+        "bench_map_smacs0723_stackers.coadd_image_plane",
+        fake_coadd,
+    )
+    _run_coadd_method(
+        [],
+        {
+            "kernel": "lanczos3",
+            "value_semantics": "surface_brightness",
+            "stacking_method": "weighted_mean",
+            "spatial_tile_hw": (1024, 1024),
+        },
+        {"NAXIS1": 2, "NAXIS2": 2},
+    )
+
+    assert received["spatial_tile_hw"] == (1024, 1024)
 
 
 def test_format_markdown_includes_geometry_family_column() -> None:

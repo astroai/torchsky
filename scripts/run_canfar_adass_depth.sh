@@ -531,10 +531,10 @@ case "${mode}" in
 
     run pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
       python "${source_root}/scripts/bootstrap_map_compat_tools.py" \
-      --tool swarp --force-source
+      --tool swarp --force-source --jobs "${TORCHSKY_SPIN_THREADS:-1}"
     run pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
       python "${source_root}/scripts/bootstrap_map_compat_tools.py" \
-      --tool montage --force-source
+      --tool montage --force-source --jobs "${TORCHSKY_SPIN_THREADS:-1}"
 
     IFS=',' read -r -a parity_bands <<< \
       "${MOSAIC_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}"

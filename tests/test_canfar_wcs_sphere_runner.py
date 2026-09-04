@@ -109,6 +109,7 @@ def test_canfar_wcs_sphere_launcher_payload_has_no_shell_vars() -> None:
     assert "catalog-scale-1e7" in launcher
     assert "wcs-spectral" in launcher
     assert "wcs-tabular" in launcher
+    assert launcher.count('--env "TORCHSKY_SPIN_THREADS=${CPU}"') >= 2
     fetch = (ROOT / "scripts" / "fetch_canfar_wcs_sphere_run.sh").read_text(
         encoding="utf-8"
     )

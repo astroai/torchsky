@@ -81,5 +81,6 @@ def test_canfar_full_mosaic_parity_is_strict_and_torchfits_only() -> None:
     assert "--expected-exposures" in parity
     assert "bootstrap_map_compat_tools.py" in parity
     assert "--force-source" in parity
+    assert '--jobs "${TORCHSKY_SPIN_THREADS:-1}"' in parity
     assert "import torchfits" in parity
     assert "astropy.io" not in parity
