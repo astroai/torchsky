@@ -59,6 +59,7 @@ from bench_multiband_depth import inject_common_world_exposures  # noqa: E402
 from bench_map_smacs0723_real import (  # noqa: E402
     DATA,
     _filter_exposure_paths_by_patterns,
+    _injection_manifest_sign,
     _injection_manifest_tensors,
     _best_overlap_cutout_from_observations,
     _band_spec,
@@ -1356,6 +1357,7 @@ def main() -> int:
             band=band,
             world_radec_deg=injection_world,
             flux_jy=injection_flux,
+            injection_sign=_injection_manifest_sign(injection_manifest),
         )
 
     if (args.crop_x0 is None) != (args.crop_y0 is None):

@@ -4,19 +4,22 @@
 from __future__ import annotations
 
 import argparse
+from importlib import metadata as importlib_metadata
 import json
 import math
 import os
+import platform
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -33,6 +36,42 @@ from torchsky.map import (  # noqa: E402
     coadd_image_plane,
     plan_image_plane_target,
 )
+
+
+def _distribution_version(name: str) -> str | None:
+    try:
+        return importlib_metadata.version(name)
+    except importlib_metadata.PackageNotFoundError:
+        return None
+
+
+def _source_commit(path: Path) -> str | None:
+    if not (path / ".git").exists():
+        return None
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    commit = result.stdout.strip()
+    return commit if result.returncode == 0 and commit else None
+
+
+def _software_manifest() -> dict[str, Any]:
+    source_root = ROOT / ".benchmarks" / "external-tools" / "src"
+    return {
+        "python": platform.python_version(),
+        "torchsky": torchsky.__version__,
+        "torch": torch.__version__,
+        "numpy": np.__version__,
+        "astropy": astropy.__version__,
+        "drizzle": _distribution_version("drizzle"),
+        "reproject": _distribution_version("reproject"),
+        "swarp_source_commit": _source_commit(source_root / "swarp"),
+        "montage_source_commit": _source_commit(source_root / "Montage"),
+    }
 from torchsky.map.operators import headers_equivalent_for_direct_copy  # noqa: E402
 
 try:  # noqa: E402
@@ -91,6 +130,7 @@ _COMPARATORS = (
     "drizzlepac",
     "montage",
     "swarp",
+    "swarp_clipped",
     "casutools",
 )
 
@@ -296,6 +336,76 @@ def _check_time_regressions(
     return errors
 
 
+def _check_required_comparators(
+    rows: Sequence[Mapping[str, Any]],
+    required: Sequence[str],
+) -> list[str]:
+    """Require every selected official-comparator row to execute successfully."""
+    errors: list[str] = []
+    for comparator in required:
+        name = str(comparator).strip().lower()
+        selected = [
+            row for row in rows if str(row.get("library", "")).lower() == name
+        ]
+        if not selected:
+            errors.append(f"required comparator {name!r} produced no rows")
+            continue
+        for row in selected:
+            if row.get("status") != "OK":
+                case = str(row.get("case", "unknown"))
+                variant = str(row.get("variant", "default"))
+                reason = str(row.get("reason", row.get("error", "unknown failure")))
+                errors.append(
+                    f"required comparator {name}:{variant} did not run for {case}: {reason}"
+                )
+    return errors
+
+
+def _check_acceptance_contracts(
+    rows: Sequence[Mapping[str, Any]],
+    contracts: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Apply versioned absolute numerical bounds to required comparator rows."""
+    rows_by_key = {_compat_row_key(dict(row)): row for row in rows}
+    errors: list[str] = []
+    for contract in contracts:
+        key = _compat_row_key(dict(contract))
+        row = rows_by_key.get(key)
+        if row is None:
+            errors.append(f"{key}: missing required row")
+            continue
+        if row.get("status") != "OK":
+            errors.append(f"{key}: required row status is {row.get('status')!r}")
+            continue
+        for metric, expected in dict(contract.get("equals", {})).items():
+            actual = row.get(metric)
+            if actual != expected:
+                errors.append(
+                    f"{key}: {metric} is {actual!r}, expected {expected!r}"
+                )
+        for group, relation in (("maximum", "exceeds"), ("minimum", "is below")):
+            for metric, raw_limit in dict(contract.get(group, {})).items():
+                raw_value = row.get(metric)
+                if raw_value is None:
+                    errors.append(f"{key}: required metric {metric!r} is missing")
+                    continue
+                try:
+                    value = float(raw_value)
+                    limit = float(raw_limit)
+                except (TypeError, ValueError):
+                    errors.append(f"{key}: {metric} bound and value must be numeric")
+                    continue
+                if not math.isfinite(value) or not math.isfinite(limit):
+                    errors.append(f"{key}: {metric} bound and value must be finite")
+                    continue
+                violates = value > limit if group == "maximum" else value < limit
+                if violates:
+                    errors.append(
+                        f"{key}: {metric}={value:.6g} {relation} {group} {limit:.6g}"
+                    )
+    return errors
+
+
 _TORCHSKY_KERNELS = (
     "nearest",
     "bilinear",
@@ -362,9 +472,24 @@ def geometry_family_for_library_variant(library: str, variant: str | None) -> st
         return "conservative_overlap"
     if library == "reproject_adaptive":
         return "adaptive_resample"
-    if library == "swarp":
+    if library in {"swarp", "swarp_clipped"}:
         return "legacy_stacker"
     return "unknown"
+
+
+def _comparator_reference_variant(library: str, variant: str | None) -> str:
+    normalized = None if variant is None else str(variant).lower()
+    if library == "drizzle":
+        return f"drizzle_{normalized}"
+    if library in {"reproject_interp", "dfreproject", "swarp"}:
+        return str(normalized)
+    if library == "swarp_clipped":
+        return "bilinear"
+    if library in {"reproject_exact", "montage"}:
+        return "conservative_polygon"
+    if library == "drizzlepac":
+        return "drizzle_square"
+    return "bilinear"
 
 
 def _external_tool_prefix(tool: str) -> Path:
@@ -660,9 +785,19 @@ def _write_swarp_config(
     weight_type: str = "NONE",
     weight_images: Sequence[str] | None = None,
     fscalastro_type: str = "FIXED",
+    clip_sigma: float | None = None,
+    clip_ampfrac: float | None = None,
 ) -> None:
     if fscalastro_type not in {"NONE", "FIXED", "VARIABLE"}:
         raise ValueError("fscalastro_type must be one of {'NONE', 'FIXED', 'VARIABLE'}")
+    if clip_sigma is not None and (
+        not math.isfinite(float(clip_sigma)) or float(clip_sigma) <= 0.0
+    ):
+        raise ValueError("clip_sigma must be finite and positive")
+    if clip_ampfrac is not None and (
+        not math.isfinite(float(clip_ampfrac)) or float(clip_ampfrac) < 0.0
+    ):
+        raise ValueError("clip_ampfrac must be finite and non-negative")
     spec = _swarp_target_spec(target_header)
     lines = [
         f"IMAGEOUT_NAME          {imageout_path}",
@@ -690,6 +825,10 @@ def _write_swarp_config(
     ]
     if weight_images is not None:
         lines.append(f"WEIGHT_IMAGE           {','.join(weight_images)}")
+    if clip_sigma is not None:
+        lines.append(f"CLIP_SIGMA             {float(clip_sigma):g}")
+    if clip_ampfrac is not None:
+        lines.append(f"CLIP_AMPFRAC           {float(clip_ampfrac):g}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -1183,6 +1322,23 @@ def _masked_max(values: torch.Tensor, mask: torch.Tensor) -> float:
     return float(values[mask].max().item())
 
 
+def _erode_support(mask: torch.Tensor, *, radius: int) -> torch.Tensor:
+    """Keep pixels whose complete square interpolation footprint is supported."""
+    if radius < 0:
+        raise ValueError("support erosion radius must be non-negative")
+    support = mask.to(dtype=torch.bool)
+    if radius == 0:
+        return support
+    padded = F.pad(
+        support[None, None].to(dtype=torch.float32),
+        (radius, radius, radius, radius),
+        value=0.0,
+    )
+    kernel = 2 * radius + 1
+    complete = F.avg_pool2d(padded, kernel_size=kernel, stride=1) == 1.0
+    return complete[0, 0]
+
+
 def _coadd_with_montage(
     observations: list[ImageObservation],
     *,
@@ -1602,6 +1758,8 @@ def _coadd_with_swarp_direct_stack(
     resampling_type: str,
     combine_type: str,
     fscalastro_type: str = "NONE",
+    clip_sigma: float | None = None,
+    clip_ampfrac: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     swarp_bin = _find_swarp_binary()
     if swarp_bin is None:
@@ -1663,6 +1821,8 @@ def _coadd_with_swarp_direct_stack(
             weight_type="MAP_WEIGHT",
             weight_images=weight_paths,
             fscalastro_type=fscalastro_type,
+            clip_sigma=clip_sigma,
+            clip_ampfrac=clip_ampfrac,
         )
         completed = subprocess.run(
             [str(swarp_bin), *image_paths, "-c", str(config_path)],
@@ -1704,6 +1864,7 @@ def _diff_summary(
     *,
     suffix: str,
     data_mask: torch.Tensor | None = None,
+    weight_mask: torch.Tensor | None = None,
     compare_weight_as_mask: bool = False,
 ) -> dict[str, float]:
     if compare_weight_as_mask:
@@ -1720,8 +1881,14 @@ def _diff_summary(
         data_mask = torch.ones_like(edge)
     else:
         data_mask = data_mask.to(dtype=torch.bool)
+    if weight_mask is None:
+        weight_mask = torch.ones_like(edge)
+    else:
+        weight_mask = weight_mask.to(dtype=torch.bool)
     edge_data_mask = edge & data_mask
     interior_data_mask = (~edge) & data_mask
+    edge_weight_mask = edge & weight_mask
+    interior_weight_mask = (~edge) & weight_mask
     if bool(data_mask.any()):
         masked_data_diff = data_diff[data_mask]
         data_rmse = float(torch.sqrt(torch.mean(torch.square(masked_data_diff))).item())
@@ -1731,24 +1898,38 @@ def _diff_summary(
         data_rmse = 0.0
         data_mae = 0.0
         compare_frac = 0.0
-    weight_rmse = float(torch.sqrt(torch.mean(torch.square(weight_diff))).item())
-    weight_mae = float(torch.mean(weight_diff).item())
+    if bool(weight_mask.any()):
+        masked_weight_diff = weight_diff[weight_mask]
+        weight_rmse = float(
+            torch.sqrt(torch.mean(torch.square(masked_weight_diff))).item()
+        )
+        weight_mae = float(torch.mean(masked_weight_diff).item())
+        weight_compare_frac = float(
+            weight_mask.to(dtype=torch.float32).mean().item()
+        )
+    else:
+        weight_rmse = 0.0
+        weight_mae = 0.0
+        weight_compare_frac = 0.0
     return {
         f"rmse_data_diff{suffix}": data_rmse,
         f"mae_data_diff{suffix}": data_mae,
         f"rmse_weight_diff{suffix}": weight_rmse,
         f"mae_weight_diff{suffix}": weight_mae,
         f"comparison_support_frac{suffix}": compare_frac,
+        f"weight_comparison_support_frac{suffix}": weight_compare_frac,
         f"max_abs_data_diff{suffix}": _masked_max(data_diff, data_mask),
-        f"max_abs_weight_diff{suffix}": float(weight_diff.max().item()),
+        f"max_abs_weight_diff{suffix}": _masked_max(weight_diff, weight_mask),
         f"max_abs_data_diff_edge{suffix}": _masked_max(data_diff, edge_data_mask),
-        f"max_abs_weight_diff_edge{suffix}": float(weight_diff[edge].max().item()),
+        f"max_abs_weight_diff_edge{suffix}": _masked_max(
+            weight_diff, edge_weight_mask
+        ),
         f"max_abs_data_diff_interior{suffix}": _masked_max(
             data_diff, interior_data_mask
         ),
-        f"max_abs_weight_diff_interior{suffix}": float(weight_diff[~edge].max().item())
-        if bool((~edge).any())
-        else 0.0,
+        f"max_abs_weight_diff_interior{suffix}": _masked_max(
+            weight_diff, interior_weight_mask
+        ),
     }
 
 
@@ -1928,6 +2109,39 @@ def _prepare_synthetic_shifted_case(
         torchsky.write(str(weight_path), weight, header=obs_header, overwrite=True)
         observations.append(
             ImageObservation(str(image_path), weight_path=str(weight_path))
+        )
+    return observations
+
+
+def _prepare_synthetic_swarp_clipped_case(
+    tmpdir: Path,
+    *,
+    size: int,
+) -> list[ImageObservation]:
+    header = _simple_header(size)
+    header["GAIN"] = 1.0e12
+    header["EXPTIME"] = 1.0
+    yy, xx = torch.meshgrid(
+        torch.linspace(-1.0, 1.0, size, dtype=torch.float32),
+        torch.linspace(-1.0, 1.0, size, dtype=torch.float32),
+        indexing="ij",
+    )
+    base = 1.0 + 0.1 * xx + 0.05 * yy
+    observations: list[ImageObservation] = []
+    for idx, offset in enumerate((0.0, 0.1, -0.1, 0.05, 0.0)):
+        image = base + float(offset)
+        if idx == 4:
+            image = image.clone()
+            center = size // 2
+            image[center - 1 : center + 2, center - 1 : center + 2] += 50.0
+        image_path = tmpdir / f"swarp_clipped_{idx}.fits"
+        torchsky.write(str(image_path), image, header=header, overwrite=True)
+        observations.append(
+            ImageObservation(
+                str(image_path),
+                weight=1.0,
+                weight_is_inverse_variance=True,
+            )
         )
     return observations
 
@@ -2571,6 +2785,22 @@ def _swarp_row(
         return _skipped_row(case, "swarp", f"SWarp failed: {exc}"), None, None
     data = torch.from_numpy(data_np)
     weight = torch.from_numpy(weight_np)
+    support = weight > 0.0
+    torchsky_support = torchsky_weight > 0.0
+    common_support = support & torchsky_support
+    support_union = support | torchsky_support
+    kernel_radius = {"NEAREST": 0, "BILINEAR": 1, "LANCZOS3": 3}[
+        resampling_type.upper()
+    ]
+    kernel_complete_support = _erode_support(
+        common_support,
+        radius=kernel_radius,
+    )
+    support_iou = (
+        float(common_support.sum().item()) / float(support_union.sum().item())
+        if bool(support_union.any())
+        else 1.0
+    )
     return (
         {
             "case": case,
@@ -2585,20 +2815,160 @@ def _swarp_row(
             "n_obs": len(observations),
             "time_ms": dt * 1000.0,
             "mpix_s": (float(data.numel()) / dt) / 1e6,
-            "coverage_frac": float((weight > 0.0).to(torch.float32).mean().item()),
+            "coverage_frac": float(support.to(torch.float32).mean().item()),
             "mean_weight": float(weight.mean().item()),
             "backend": str(swarp_bin),
             "resampling_type": resampling_type,
             "combine_type": "SUM(num/denom)",
             "projection_type": spec["projection"],
             "comparison_weight_mode": "absolute",
-            "comparison_data_domain": "full_grid",
+            "comparison_data_domain": "kernel_complete_support",
+            "comparison_kernel_radius": kernel_radius,
+            "support_iou_vs_torchsky": support_iou,
+            "support_symmetric_difference_frac_vs_torchsky": float(
+                (support ^ torchsky_support).to(torch.float32).mean().item()
+            ),
             **_diff_summary(
                 data,
                 weight,
                 torchsky_data,
                 torchsky_weight,
                 suffix="_vs_torchsky",
+                data_mask=kernel_complete_support,
+                weight_mask=kernel_complete_support,
+            ),
+            **_diff_summary(
+                data,
+                weight,
+                torchsky_data,
+                torchsky_weight,
+                suffix="_vs_torchsky_common_support",
+                data_mask=common_support,
+                weight_mask=common_support,
+            ),
+            **_diff_summary(
+                data,
+                weight,
+                torchsky_data,
+                torchsky_weight,
+                suffix="_vs_torchsky_full_grid",
+            ),
+        },
+        data,
+        weight,
+    )
+
+
+def _swarp_clipped_row(
+    case: str,
+    observations: list[ImageObservation],
+    *,
+    target_header: dict[str, Any],
+    runs: int,
+) -> tuple[dict[str, Any], torch.Tensor | None, torch.Tensor | None]:
+    swarp_bin = _find_swarp_binary()
+    if swarp_bin is None:
+        return _skipped_row(case, "swarp_clipped", "SWarp CLI is unavailable"), None, None
+
+    def _run_torchsky():
+        return coadd_image_plane(
+            observations,
+            target_header=target_header,
+            resampling_kernel="bilinear",
+            stacking_method="sigma_clipped",
+            clip_sigma=4.0,
+            clip_iterations=3,
+        )
+
+    def _run_swarp():
+        return _coadd_with_swarp_direct_stack(
+            observations,
+            target_header=target_header,
+            resampling_type="BILINEAR",
+            combine_type="CLIPPED",
+            clip_sigma=4.0,
+            clip_ampfrac=0.0,
+        )
+
+    try:
+        torchsky_dt = _time_many(_run_torchsky, runs)
+        swarp_dt = _time_many(_run_swarp, runs)
+        torchsky_result = _run_torchsky()
+        data_np, weight_np = _run_swarp()
+    except Exception as exc:
+        return (
+            _skipped_row(case, "swarp_clipped", f"SWarp CLIPPED failed: {exc}"),
+            None,
+            None,
+        )
+
+    data = torch.from_numpy(data_np)
+    weight = torch.from_numpy(weight_np)
+    torchsky_data = torchsky_result.data.to(device="cpu", dtype=torch.float32)
+    torchsky_weight = torchsky_result.weight.to(device="cpu", dtype=torch.float32)
+    support = weight > 0.0
+    torchsky_support = torchsky_weight > 0.0
+    common_support = support & torchsky_support
+    complete_support = _erode_support(common_support, radius=1)
+    support_union = support | torchsky_support
+    swarp_weight_scale = float(torch.median(weight[support]).item())
+    torchsky_weight_scale = float(torch.median(torchsky_weight[torchsky_support]).item())
+    normalized_weight = weight / swarp_weight_scale
+    normalized_torchsky_weight = torchsky_weight / torchsky_weight_scale
+    support_iou = (
+        float(common_support.sum().item()) / float(support_union.sum().item())
+        if bool(support_union.any())
+        else 1.0
+    )
+    return (
+        {
+            "case": case,
+            "library": "swarp_clipped",
+            "method": "swarp",
+            "variant": "bilinear",
+            "geometry_family": "legacy_stacker",
+            "status": "OK",
+            "shape": list(data.shape),
+            "n_obs": len(observations),
+            "time_ms": swarp_dt * 1000.0,
+            "torchsky_time_ms": torchsky_dt * 1000.0,
+            "mpix_s": (float(data.numel()) / swarp_dt) / 1e6,
+            "coverage_frac": float(support.to(torch.float32).mean().item()),
+            "mean_weight": float(weight.mean().item()),
+            "backend": str(swarp_bin),
+            "resampling_type": "BILINEAR",
+            "combine_type": "CLIPPED",
+            "clip_sigma": 4.0,
+            "clip_ampfrac": 0.0,
+            "comparison_reference_variant": "sigma_clipped_bilinear",
+            "pairwise_compatible": False,
+            "pairwise_exclusion_reason": (
+                "the general matrix reference is an unclipped weighted mean"
+            ),
+            "comparison_weight_mode": "positive_median_normalized",
+            "comparison_data_domain": "kernel_complete_support",
+            "comparison_kernel_radius": 1,
+            "swarp_weight_scale": swarp_weight_scale,
+            "torchsky_weight_scale": torchsky_weight_scale,
+            "support_iou_vs_torchsky": support_iou,
+            "support_symmetric_difference_frac_vs_torchsky": float(
+                (support ^ torchsky_support).to(torch.float32).mean().item()
+            ),
+            **_diff_summary(
+                data,
+                normalized_weight,
+                torchsky_data,
+                normalized_torchsky_weight,
+                suffix="_vs_torchsky",
+                data_mask=complete_support,
+                weight_mask=complete_support,
+            ),
+            **_diff_summary(
+                data,
+                normalized_weight,
+                torchsky_data,
+                normalized_torchsky_weight,
+                suffix="_vs_torchsky_full_grid",
             ),
         },
         data,
@@ -2838,6 +3208,18 @@ def _comparator_row(
                 row["time_ms"] / torchsky_row["time_ms"]
             )
         return row, data, weight
+    if library == "swarp_clipped":
+        row, data, weight = _swarp_clipped_row(
+            case,
+            observations,
+            target_header=target_header,
+            runs=runs,
+        )
+        if row.get("status") == "OK":
+            row["speed_ratio_torchsky_vs_swarp"] = (
+                row["time_ms"] / row["torchsky_time_ms"]
+            )
+        return row, data, weight
     if library == "casutools":
         row, data, weight = _casutools_row(
             case,
@@ -2885,9 +3267,28 @@ def main() -> int:
         default="nearest,bilinear,lanczos3",
         help="Comma-separated SWarp resampling kernels",
     )
+    parser.add_argument(
+        "--comparators",
+        default=",".join(name for name in _COMPARATORS if name != "swarp_clipped"),
+        help="Comma-separated external comparators to execute",
+    )
     parser.add_argument("--json-out", type=Path, default=None)
     parser.add_argument("--markdown-out", type=Path, default=None)
     parser.add_argument("--baseline-json", type=Path, default=None)
+    parser.add_argument(
+        "--acceptance-json",
+        type=Path,
+        default=None,
+        help="Versioned absolute numerical bounds for required comparator rows",
+    )
+    parser.add_argument(
+        "--require-comparators",
+        default="",
+        help=(
+            "Comma-separated official comparators whose selected rows must all be OK; "
+            "a skipped row fails the run"
+        ),
+    )
     parser.add_argument(
         "--time-baseline-json",
         type=Path,
@@ -2917,6 +3318,14 @@ def main() -> int:
         swarp_kernels = [
             part.strip() for part in args.swarp_kernels.split(",") if part.strip()
         ]
+        comparators = [
+            part.strip() for part in args.comparators.split(",") if part.strip()
+        ]
+        unknown_comparators = sorted(set(comparators).difference(_COMPARATORS))
+        if unknown_comparators:
+            raise SystemExit(
+                "unknown map comparators: " + ", ".join(unknown_comparators)
+            )
         diag_obs, diag_hdr = _prepare_synthetic_diagonal_scale_case(
             tmpdir, size=args.size
         )
@@ -2931,6 +3340,11 @@ def main() -> int:
                 _prepare_synthetic_shifted_case(
                     tmpdir, size=args.size, n_obs=args.n_obs
                 ),
+                None,
+            ),
+            (
+                "synthetic_swarp_clipped",
+                _prepare_synthetic_swarp_clipped_case(tmpdir, size=args.size),
                 None,
             ),
             ("synthetic_diagonal_scale_wcs", diag_obs, diag_hdr),
@@ -3006,20 +3420,34 @@ def main() -> int:
                 "drizzlepac": [None],
                 "montage": [None],
                 "swarp": swarp_kernels,
+                "swarp_clipped": [None],
                 "casutools": [None],
             }
-            for library in _COMPARATORS:
+            for library in comparators:
                 for variant in comparator_variants[library]:
+                    reference_variant = _comparator_reference_variant(library, variant)
+                    reference_row, reference_data, reference_weight = next(
+                        (
+                            item
+                            for item in torchsky_outputs
+                            if item[0].get("variant") == reference_variant
+                        ),
+                        (baseline_row, baseline_data, baseline_weight),
+                    )
                     row, data, weight = _comparator_row(
                         library,
                         case_name,
                         observations,
                         target_header=target.header,
                         runs=max(2, args.runs),
-                        torchsky_row=baseline_row,
-                        torchsky_data=baseline_data,
-                        torchsky_weight=baseline_weight,
+                        torchsky_row=reference_row,
+                        torchsky_data=reference_data,
+                        torchsky_weight=reference_weight,
                         variant=variant,
+                    )
+                    row.setdefault(
+                        "comparison_reference_variant",
+                        str(reference_row.get("variant", "")),
                     )
                     if variant is not None and "variant" not in row:
                         row["variant"] = variant
@@ -3028,6 +3456,7 @@ def main() -> int:
                         row.get("status") == "OK"
                         and data is not None
                         and weight is not None
+                        and row.get("pairwise_compatible", True)
                     ):
                         ok_outputs.append((row, data, weight))
 
@@ -3076,6 +3505,21 @@ def main() -> int:
                 )
 
     markdown_path = args.markdown_out
+    software = _software_manifest()
+    comparator_versions = {
+        "drizzle": software["drizzle"],
+        "swarp": software["swarp_source_commit"],
+        "swarp_clipped": software["swarp_source_commit"],
+        "montage": software["montage_source_commit"],
+    }
+    for row in rows:
+        row.setdefault("device", "cpu")
+        row.setdefault("dtype", "float32")
+        row.setdefault("seeds", {})
+        comparator_version = comparator_versions.get(str(row.get("library", "")))
+        if comparator_version is not None:
+            row["comparator_version"] = comparator_version
+        row["software"] = software
     if markdown_path is None and args.json_out is not None:
         markdown_path = args.json_out.with_suffix(".md")
     markdown = _write_compat_artifacts(
@@ -3102,6 +3546,23 @@ def main() -> int:
         )
         if terr:
             raise SystemExit("\n".join(terr))
+    required_comparators = [
+        part.strip()
+        for part in str(args.require_comparators).split(",")
+        if part.strip()
+    ]
+    required_errors = _check_required_comparators(rows, required_comparators)
+    if required_errors:
+        raise SystemExit("\n".join(required_errors))
+    if args.acceptance_json is not None:
+        contracts = json.loads(args.acceptance_json.read_text(encoding="utf-8"))
+        if not isinstance(contracts, list) or not all(
+            isinstance(contract, dict) for contract in contracts
+        ):
+            raise SystemExit("acceptance JSON must be a list of object contracts")
+        acceptance_errors = _check_acceptance_contracts(rows, contracts)
+        if acceptance_errors:
+            raise SystemExit("\n".join(acceptance_errors))
     return 0
 
 

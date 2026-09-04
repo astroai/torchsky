@@ -7,7 +7,7 @@
   "platform": "macOS-14.8.2-arm64-arm-64bit-Mach-O",
   "python": "3.13.13",
   "git_sha": "193e62eec87590fc9dbc508a9d0d5c3c3b02fb8d",
-  "bench_root": "/Users/fabbros/src/torchsky/benchmarks_results",
+  "bench_root": "/Users/fabbros/src/sfabbro/torchsky/benchmarks_results",
   "domains": {
     "fits": {
       "run_id": "api_audit_fits_full",

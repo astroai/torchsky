@@ -42,7 +42,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install ruff
-        run: pip install "ruff>=0.8"
+        run: pip install "ruff>=0.15.5,<0.16"
       - name: Ruff (changed-relevant packages)
         run: ruff check src/torchsky tests benchmarks
       - name: Byte-compile package

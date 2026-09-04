@@ -19,6 +19,177 @@ from torch import Tensor
 PowerValueSemantics = Literal["surface_brightness", "integrated_flux"]
 
 
+@dataclass(frozen=True)
+class PersistentFoamSiteInitialization:
+    """Deterministic sites selected from coherent multi-exposure evidence."""
+
+    sites: Tensor
+    radii: Tensor
+    scores: Tensor
+    exposure_counts: Tensor
+    bin_ids: Tensor
+
+
+@dataclass(frozen=True)
+class FoamAdaptationResult:
+    """Cell-identity mapping from one deterministic Foam adaptation step."""
+
+    densified_cell_ids: tuple[int, ...]
+    pruned_cell_ids: tuple[int, ...]
+    old_to_new: tuple[int, ...]
+
+
+def persistent_foam_site_initialization(
+    exposure_coordinates: Sequence[Tensor],
+    exposure_whitened_residuals: Sequence[Tensor],
+    *,
+    num_sites: int,
+    min_exposures: int,
+    bin_shape: tuple[int, int],
+    lower: tuple[float, float],
+    upper: tuple[float, float],
+    initial_radius: float,
+    exposure_contributions: Sequence[Tensor] | None = None,
+) -> PersistentFoamSiteInitialization:
+    """Select sites from positive residual evidence coherent across exposures.
+
+    Each exposure contributes one weighted mean whitened residual per spatial
+    bin, so dense exposures cannot dominate sparse ones. Candidate score is the
+    number of covered exposures times the squared coherent positive mean.
+    ``min_exposures`` is an explicit persistence gate; ties resolve by bin id.
+    """
+    coordinates = tuple(exposure_coordinates)
+    residuals = tuple(exposure_whitened_residuals)
+    if not coordinates or len(coordinates) != len(residuals):
+        raise ValueError("coordinates and residuals require matching exposures")
+    if exposure_contributions is None:
+        contributions: tuple[Tensor | None, ...] = (None,) * len(coordinates)
+    else:
+        contributions = tuple(exposure_contributions)
+        if len(contributions) != len(coordinates):
+            raise ValueError("exposure_contributions must match exposures")
+    requested_sites = int(num_sites)
+    required_exposures = int(min_exposures)
+    bins_y, bins_x = map(int, bin_shape)
+    if requested_sites < 1:
+        raise ValueError("num_sites must be positive")
+    if required_exposures < 1 or required_exposures > len(coordinates):
+        raise ValueError("min_exposures must be within the exposure count")
+    if bins_y < 1 or bins_x < 1:
+        raise ValueError("bin_shape dimensions must be positive")
+    radius = float(initial_radius)
+    if not math.isfinite(radius) or radius <= 0.0:
+        raise ValueError("initial_radius must be finite and positive")
+    first = coordinates[0]
+    if not first.is_floating_point():
+        raise ValueError("exposure coordinates must be floating tensors")
+    device, dtype = first.device, first.dtype
+    lower_t = torch.tensor(lower, device=device, dtype=dtype)
+    upper_t = torch.tensor(upper, device=device, dtype=dtype)
+    if (
+        lower_t.shape != (2,)
+        or upper_t.shape != (2,)
+        or not bool(torch.isfinite(lower_t).all())
+        or not bool(torch.isfinite(upper_t).all())
+        or bool(torch.any(upper_t <= lower_t))
+    ):
+        raise ValueError("lower and upper must define a finite 2-D box")
+
+    bin_count = bins_y * bins_x
+    signed_sum = torch.zeros(bin_count, device=device, dtype=dtype)
+    covered_count = torch.zeros(bin_count, device=device, dtype=torch.int64)
+    positive_count = torch.zeros_like(covered_count)
+    for exposure_index, (coords, values, weights) in enumerate(
+        zip(coordinates, residuals, contributions, strict=True)
+    ):
+        flat_coords = coords.reshape(-1, 2)
+        flat_values = values.reshape(-1).to(device=device, dtype=dtype)
+        if (
+            coords.device != device
+            or coords.dtype != dtype
+            or coords.ndim < 2
+            or coords.shape[-1] != 2
+            or flat_values.numel() != flat_coords.shape[0]
+            or not bool(torch.isfinite(flat_coords).all())
+            or not bool(torch.isfinite(flat_values).all())
+        ):
+            raise ValueError(
+                f"exposure {exposure_index} coordinates/residuals are incompatible"
+            )
+        if bool(torch.any(flat_coords < lower_t)) or bool(
+            torch.any(flat_coords > upper_t)
+        ):
+            raise ValueError("exposure coordinates must lie within lower/upper")
+        if weights is None:
+            flat_weights = torch.ones_like(flat_values)
+        else:
+            flat_weights = weights.reshape(-1).to(device=device, dtype=dtype)
+            if (
+                flat_weights.numel() != flat_values.numel()
+                or not bool(torch.isfinite(flat_weights).all())
+                or bool(torch.any(flat_weights < 0.0))
+            ):
+                raise ValueError(
+                    f"exposure {exposure_index} contributions must be finite and non-negative"
+                )
+        unit = (flat_coords - lower_t) / (upper_t - lower_t)
+        bin_xy = torch.floor(
+            unit * torch.tensor([bins_x, bins_y], device=device, dtype=dtype)
+        ).to(dtype=torch.int64)
+        bin_xy[:, 0].clamp_(0, bins_x - 1)
+        bin_xy[:, 1].clamp_(0, bins_y - 1)
+        bin_ids = bin_xy[:, 1] * bins_x + bin_xy[:, 0]
+        weighted_sum = torch.zeros_like(signed_sum).index_add(
+            0,
+            bin_ids,
+            flat_values * flat_weights,
+        )
+        weight_sum = torch.zeros_like(signed_sum).index_add(
+            0,
+            bin_ids,
+            flat_weights,
+        )
+        covered = weight_sum > 0.0
+        exposure_mean = torch.where(
+            covered,
+            weighted_sum / torch.clamp(weight_sum, min=torch.finfo(dtype).tiny),
+            torch.zeros_like(weighted_sum),
+        )
+        signed_sum.add_(exposure_mean)
+        covered_count.add_(covered.to(dtype=torch.int64))
+        positive_count.add_((covered & (exposure_mean > 0.0)).to(dtype=torch.int64))
+
+    coherent_mean = signed_sum / torch.clamp(covered_count, min=1).to(dtype=dtype)
+    scores = covered_count.to(dtype=dtype) * torch.clamp_min(coherent_mean, 0.0).square()
+    valid_ids = torch.nonzero(
+        (positive_count >= required_exposures) & (scores > 0.0),
+        as_tuple=False,
+    ).flatten()
+    if valid_ids.numel() < requested_sites:
+        raise ValueError(
+            "insufficient persistent positive-evidence bins for requested num_sites"
+        )
+    order = torch.argsort(scores[valid_ids], descending=True, stable=True)
+    selected = valid_ids[order[:requested_sites]]
+    selected_y = torch.div(selected, bins_x, rounding_mode="floor")
+    selected_x = torch.remainder(selected, bins_x)
+    step = (upper_t - lower_t) / torch.tensor(
+        [bins_x, bins_y], device=device, dtype=dtype
+    )
+    sites = lower_t + (
+        torch.stack([selected_x, selected_y], dim=-1).to(dtype=dtype) + 0.5
+    ) * step
+    return PersistentFoamSiteInitialization(
+        sites=sites,
+        radii=torch.full(
+            (requested_sites,), radius, device=device, dtype=dtype
+        ),
+        scores=scores[selected],
+        exposure_counts=positive_count[selected],
+        bin_ids=selected,
+    )
+
+
 def spectral_basis_whitening_transform(
     response_basis: Tensor,
     *,
@@ -1630,6 +1801,22 @@ class SpectralPowerFoam(torch.nn.Module):
             "_minimum_radius",
             radii.new_tensor(radius_floor),
         )
+        self.register_buffer(
+            "heldout_residual_ema",
+            torch.zeros_like(radii),
+        )
+        self.register_buffer(
+            "contribution_ema",
+            torch.zeros_like(radii),
+        )
+        self.register_buffer(
+            "residual_position_ema",
+            sites.detach().clone(),
+        )
+        self.register_buffer(
+            "evidence_updates",
+            torch.zeros(sites.shape[0], device=sites.device, dtype=torch.int64),
+        )
 
     @property
     def radii(self) -> Tensor:
@@ -1639,6 +1826,116 @@ class SpectralPowerFoam(torch.nn.Module):
     @property
     def basis_count(self) -> int:
         return int(self.cell_coefficients.shape[1])
+
+    @torch.no_grad()
+    def update_adaptation_statistics(
+        self,
+        cell_indices: Tensor,
+        whitened_residuals: Tensor,
+        contributions: Tensor,
+        positions: Tensor,
+        *,
+        split: str,
+        decay: float = 0.9,
+    ) -> None:
+        """Update per-cell held-out residual, contribution, and position EMAs."""
+        if split != "held_out":
+            raise ValueError("Foam adaptation statistics require split='held_out'")
+        rate = float(decay)
+        if not math.isfinite(rate) or rate < 0.0 or rate >= 1.0:
+            raise ValueError("decay must be finite in [0, 1)")
+        indices = cell_indices.reshape(-1).to(
+            device=self.sites.device,
+            dtype=torch.int64,
+        )
+        residual = whitened_residuals.reshape(-1).to(
+            device=self.sites.device,
+            dtype=self.sites.dtype,
+        )
+        contribution = contributions.reshape(-1).to(
+            device=self.sites.device,
+            dtype=self.sites.dtype,
+        )
+        coords = positions.reshape(-1, 2).to(
+            device=self.sites.device,
+            dtype=self.sites.dtype,
+        )
+        sample_count = indices.numel()
+        if (
+            sample_count == 0
+            or residual.numel() != sample_count
+            or contribution.numel() != sample_count
+            or coords.shape[0] != sample_count
+        ):
+            raise ValueError("adaptation statistic samples must be non-empty and aligned")
+        if (
+            bool(torch.any(indices < 0))
+            or bool(torch.any(indices >= self.sites.shape[0]))
+            or not bool(torch.isfinite(residual).all())
+            or not bool(torch.isfinite(contribution).all())
+            or bool(torch.any(contribution < 0.0))
+            or not bool(torch.isfinite(coords).all())
+        ):
+            raise ValueError("adaptation statistic values are invalid")
+
+        cell_count = int(self.sites.shape[0])
+        counts = torch.zeros(
+            cell_count,
+            device=self.sites.device,
+            dtype=self.sites.dtype,
+        ).index_add_(0, indices, torch.ones_like(residual))
+        residual_energy = residual.square()
+        residual_sum = torch.zeros_like(counts).index_add_(
+            0, indices, residual_energy
+        )
+        contribution_sum = torch.zeros_like(counts).index_add_(
+            0, indices, contribution
+        )
+        weighted_position = torch.zeros_like(self.residual_position_ema).index_add_(
+            0,
+            indices,
+            coords * residual_energy.unsqueeze(-1),
+        )
+        ordinary_position = torch.zeros_like(self.residual_position_ema).index_add_(
+            0,
+            indices,
+            coords,
+        )
+        active = counts > 0.0
+        batch_residual = residual_sum / torch.clamp(
+            counts, min=torch.finfo(counts.dtype).tiny
+        )
+        batch_contribution = contribution_sum / torch.clamp(
+            counts, min=torch.finfo(counts.dtype).tiny
+        )
+        batch_position = torch.where(
+            (residual_sum > 0.0).unsqueeze(-1),
+            weighted_position
+            / torch.clamp(
+                residual_sum.unsqueeze(-1), min=torch.finfo(counts.dtype).tiny
+            ),
+            ordinary_position
+            / torch.clamp(counts.unsqueeze(-1), min=torch.finfo(counts.dtype).tiny),
+        )
+        first = self.evidence_updates == 0
+        blend = active & ~first
+        initialize = active & first
+        self.heldout_residual_ema[initialize] = batch_residual[initialize]
+        self.contribution_ema[initialize] = batch_contribution[initialize]
+        self.residual_position_ema[initialize] = batch_position[initialize]
+        self.heldout_residual_ema[blend] = (
+            rate * self.heldout_residual_ema[blend]
+            + (1.0 - rate) * batch_residual[blend]
+        )
+        self.contribution_ema[blend] = (
+            rate * self.contribution_ema[blend]
+            + (1.0 - rate) * batch_contribution[blend]
+        )
+        self.residual_position_ema[blend] = (
+            rate * self.residual_position_ema[blend]
+            + (1.0 - rate) * batch_position[blend]
+        )
+        self.evidence_updates[active] += 1
 
     def forward(
         self,
@@ -1780,6 +2077,228 @@ class SpectralPowerFoam(torch.nn.Module):
             response_weights,
             semantics=semantics,
         )
+
+
+def _rank_cell_ids(scores: Tensor, eligible: Tensor, *, descending: bool) -> Tensor:
+    cell_ids = torch.nonzero(eligible, as_tuple=False).flatten()
+    return cell_ids[
+        torch.argsort(scores[cell_ids], descending=descending, stable=True)
+    ]
+
+
+def _replace_optimizer_parameter(
+    optimizer: torch.optim.Optimizer,
+    old: torch.nn.Parameter,
+    new: torch.nn.Parameter,
+    *,
+    keep_ids: Tensor,
+    child_count: int,
+) -> None:
+    found = False
+    for group in optimizer.param_groups:
+        parameters = group["params"]
+        for index, parameter in enumerate(parameters):
+            if parameter is old:
+                parameters[index] = new
+                found = True
+    old_state = optimizer.state.pop(old, None)
+    if old_state is None:
+        return
+    if not found:
+        raise ValueError("optimizer state contains a parameter outside its groups")
+    new_state: dict[Any, Any] = {}
+    for name, value in old_state.items():
+        if isinstance(value, Tensor) and value.shape == old.shape:
+            retained = value.index_select(0, keep_ids.to(device=value.device))
+            children = torch.zeros(
+                (child_count, *value.shape[1:]),
+                device=value.device,
+                dtype=value.dtype,
+            )
+            new_state[name] = torch.cat([retained, children], dim=0)
+        elif isinstance(value, Tensor):
+            new_state[name] = value.clone()
+        else:
+            new_state[name] = value
+    optimizer.state[new] = new_state
+
+
+def _replace_cell_parameter(
+    model: SpectralPowerFoam,
+    optimizer: torch.optim.Optimizer,
+    name: str,
+    values: Tensor,
+    *,
+    keep_ids: Tensor,
+    child_count: int,
+) -> None:
+    old = getattr(model, name)
+    if not isinstance(old, torch.nn.Parameter):
+        raise TypeError(f"Foam {name} is not a parameter")
+    new = torch.nn.Parameter(values, requires_grad=old.requires_grad)
+    setattr(model, name, new)
+    _replace_optimizer_parameter(
+        optimizer,
+        old,
+        new,
+        keep_ids=keep_ids,
+        child_count=child_count,
+    )
+
+
+def _inverse_radius_parameter(radii: Tensor, minimum_radius: Tensor) -> Tensor:
+    shifted = radii - minimum_radius
+    if bool(torch.any(shifted <= 0.0)):
+        raise ValueError("adapted radii must remain above minimum_radius")
+    return shifted + torch.log(-torch.expm1(-shifted))
+
+
+@torch.no_grad()
+def adapt_spectral_power_foam(
+    model: SpectralPowerFoam,
+    optimizer: torch.optim.Optimizer,
+    *,
+    densify_count: int,
+    prune_count: int,
+    min_updates: int = 1,
+) -> FoamAdaptationResult:
+    """Deterministically split high-error cells and prune low contributors.
+
+    Densification proposals are the held-out residual-position EMAs. A split
+    copies appearance, assigns equal-area radii to parent and child, preserves
+    optimizer state for retained cells, and starts child optimizer moments at
+    zero. Pruning and densification counts are explicit—there are no hidden
+    score thresholds.
+    """
+    add_count = int(densify_count)
+    remove_count = int(prune_count)
+    required_updates = int(min_updates)
+    cell_count = int(model.sites.shape[0])
+    if add_count < 0 or remove_count < 0:
+        raise ValueError("densify_count and prune_count must be non-negative")
+    if required_updates < 1:
+        raise ValueError("min_updates must be positive")
+    if remove_count >= cell_count:
+        raise ValueError("pruning must leave at least one Foam cell")
+    if add_count == 0 and remove_count == 0:
+        return FoamAdaptationResult((), (), tuple(range(cell_count)))
+
+    updated = model.evidence_updates >= required_updates
+    split_radii = model.radii.detach() / math.sqrt(2.0)
+    movable = torch.any(
+        model.residual_position_ema != model.sites.detach(), dim=-1
+    ) & (split_radii > model._minimum_radius)
+    densify_ranked = _rank_cell_ids(
+        model.heldout_residual_ema,
+        updated & movable,
+        descending=True,
+    )
+    if densify_ranked.numel() < add_count:
+        raise ValueError("insufficient held-out evidence for requested densification")
+    densified = densify_ranked[:add_count]
+    densify_mask = torch.zeros(cell_count, dtype=torch.bool, device=model.sites.device)
+    densify_mask[densified] = True
+
+    prune_ranked = _rank_cell_ids(
+        model.contribution_ema,
+        updated & ~densify_mask,
+        descending=False,
+    )
+    if prune_ranked.numel() < remove_count:
+        raise ValueError("insufficient held-out evidence for requested pruning")
+    pruned = prune_ranked[:remove_count]
+    keep_mask = torch.ones(cell_count, dtype=torch.bool, device=model.sites.device)
+    keep_mask[pruned] = False
+    keep_ids = torch.nonzero(keep_mask, as_tuple=False).flatten()
+    keep_list = keep_ids.tolist()
+    kept_position = {old_id: new_id for new_id, old_id in enumerate(keep_list)}
+
+    old_sites = model.sites.detach()
+    old_radii = model.radii.detach()
+    old_coefficients = model.cell_coefficients.detach()
+    new_sites = torch.cat(
+        [old_sites[keep_ids], model.residual_position_ema[densified]], dim=0
+    )
+    new_radii = torch.cat([old_radii[keep_ids], split_radii[densified]], dim=0)
+    for cell_id in densified.tolist():
+        new_radii[kept_position[cell_id]] = split_radii[cell_id]
+    new_coefficients = torch.cat(
+        [old_coefficients[keep_ids], old_coefficients[densified]], dim=0
+    )
+    new_raw_radii = _inverse_radius_parameter(new_radii, model._minimum_radius)
+
+    _replace_cell_parameter(
+        model,
+        optimizer,
+        "sites",
+        new_sites,
+        keep_ids=keep_ids,
+        child_count=add_count,
+    )
+    _replace_cell_parameter(
+        model,
+        optimizer,
+        "raw_radii",
+        new_raw_radii,
+        keep_ids=keep_ids,
+        child_count=add_count,
+    )
+    _replace_cell_parameter(
+        model,
+        optimizer,
+        "cell_coefficients",
+        new_coefficients,
+        keep_ids=keep_ids,
+        child_count=add_count,
+    )
+    if model.cell_gradient_coefficients is not None:
+        old_gradients = model.cell_gradient_coefficients.detach()
+        new_gradients = torch.cat(
+            [old_gradients[keep_ids], old_gradients[densified]], dim=0
+        )
+        _replace_cell_parameter(
+            model,
+            optimizer,
+            "cell_gradient_coefficients",
+            new_gradients,
+            keep_ids=keep_ids,
+            child_count=add_count,
+        )
+
+    residual_stats = torch.cat(
+        [model.heldout_residual_ema[keep_ids], model.heldout_residual_ema[densified]]
+    )
+    contribution_stats = torch.cat(
+        [model.contribution_ema[keep_ids], model.contribution_ema[densified]], dim=0
+    )
+    for child_index, cell_id in enumerate(densified.tolist()):
+        parent_index = kept_position[cell_id]
+        half = 0.5 * model.contribution_ema[cell_id]
+        contribution_stats[parent_index] = half
+        contribution_stats[len(keep_ids) + child_index] = half
+    position_stats = torch.cat(
+        [
+            model.residual_position_ema[keep_ids],
+            model.residual_position_ema[densified],
+        ],
+        dim=0,
+    )
+    update_stats = torch.cat(
+        [model.evidence_updates[keep_ids], model.evidence_updates[densified]], dim=0
+    )
+    model.heldout_residual_ema = residual_stats
+    model.contribution_ema = contribution_stats
+    model.residual_position_ema = position_stats
+    model.evidence_updates = update_stats
+
+    old_to_new = [-1] * cell_count
+    for new_id, old_id in enumerate(keep_list):
+        old_to_new[old_id] = new_id
+    return FoamAdaptationResult(
+        densified_cell_ids=tuple(int(value) for value in densified.tolist()),
+        pruned_cell_ids=tuple(int(value) for value in pruned.tolist()),
+        old_to_new=tuple(old_to_new),
+    )
 
 
 def cech_adjacency(
@@ -3507,19 +4026,23 @@ def sparse_bounded_power_pixel_operator(
 
 
 __all__ = [
+    "FoamAdaptationResult",
     "PolygonDiskCSR",
+    "PersistentFoamSiteInitialization",
     "PowerPixelOperator",
     "PowerValueSemantics",
     "SpectralPowerFoam",
     "SparseCechGraph",
     "TileDiskCSR",
     "batched_bounded_power_pixel_operator",
+    "adapt_spectral_power_foam",
     "bounded_power_pixel_operator",
     "bounded_power_ownership",
     "cech_adjacency",
     "power_distance",
     "power_face_planes",
     "polygon_disk_candidate_csr",
+    "persistent_foam_site_initialization",
     "render_power_spectral_affine_basis",
     "render_power_spectral_basis",
     "render_power_spectral_samples",

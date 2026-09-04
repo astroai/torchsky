@@ -146,6 +146,46 @@ def test_detector_mjysr_injection_conserves_jy_and_exposes_psf_mismatch() -> Non
     )
 
 
+def test_detector_negative_injection_requires_an_explicit_sign() -> None:
+    header = simple_tan_header(32, 32, pixel_scale_arcsec=0.04)
+    header["BUNIT"] = "MJy/sr"
+    world = torchsky.WCS(header).pixel_to_world(
+        torch.tensor([[15.35, 16.2]], dtype=torch.float64)
+    )
+    flux = torch.tensor([3.0e-8], dtype=torch.float64)
+
+    result = inject_gaussian_sources_mjysr(
+        torch.zeros((32, 32), dtype=torch.float64),
+        header=header,
+        world_radec_deg=world,
+        flux_jy=flux,
+        psf_fwhm_arcsec=gaussian_psf_contract("F200W").truth_fwhm_arcsec,
+        injection_sign=-1,
+    )
+
+    assert result.accepted.tolist() == [True]
+    torch.testing.assert_close(result.rendered_flux_jy, -flux, rtol=2e-12, atol=0.0)
+    assert bool(torch.all(result.delta <= 0))
+    with pytest.raises(ValueError, match="injection_sign"):
+        inject_gaussian_sources_mjysr(
+            torch.zeros((32, 32), dtype=torch.float64),
+            header=header,
+            world_radec_deg=world,
+            flux_jy=flux,
+            psf_fwhm_arcsec=gaussian_psf_contract("F200W").truth_fwhm_arcsec,
+            injection_sign=0,
+        )
+    with pytest.raises(ValueError, match="injection_sign"):
+        inject_gaussian_sources_mjysr(
+            torch.zeros((32, 32), dtype=torch.float64),
+            header=header,
+            world_radec_deg=world,
+            flux_jy=flux,
+            psf_fwhm_arcsec=gaussian_psf_contract("F200W").truth_fwhm_arcsec,
+            injection_sign=True,
+        )
+
+
 def test_common_world_injection_conserves_flux_and_blank_is_unchanged(
     tmp_path: Path,
 ) -> None:
@@ -202,6 +242,20 @@ def test_common_world_injection_conserves_flux_and_blank_is_unchanged(
     assert all(row["rendered_flux_jy"][0] == pytest.approx(float(flux[0])) for row in audit)
     assert audit[0]["source_xy"] != audit[1]["source_xy"]
 
+    negative, negative_audit = inject_common_world_exposures(
+        paths,
+        band="F200W",
+        world_radec_deg=world,
+        flux_jy=flux,
+        injection_sign=-1,
+    )
+    assert all((torch.from_numpy(image) <= 0).all() for image in negative.values())
+    assert all(row["injection_sign"] == -1 for row in negative_audit)
+    assert all(
+        row["rendered_flux_jy"][0] == pytest.approx(-float(flux[0]))
+        for row in negative_audit
+    )
+
     blank, blank_audit = inject_common_world_exposures(
         paths,
         band="F200W",
@@ -240,6 +294,75 @@ def test_common_world_manifest_is_deterministic_and_quadrant_balanced() -> None:
     assert all(
         len(values) == 28 for values in first["band_flux_jy"].values()
     )
+
+
+def test_common_world_manifest_controls_are_paired_and_fail_closed() -> None:
+    header = simple_tan_header(128, 128, pixel_scale_arcsec=0.04)
+    common = {
+        "target_header": header,
+        "source_count": 12,
+        "seed": 44,
+        "margin_px": 8.0,
+    }
+    positive = make_updec_common_world_manifest(**common)
+    negative = make_updec_common_world_manifest(
+        **common,
+        control_mode="negative",
+    )
+    blank = make_updec_common_world_manifest(
+        **common,
+        control_mode="blank",
+    )
+    shuffled = make_updec_common_world_manifest(
+        **common,
+        control_mode="shuffled_band",
+        control_seed=991,
+    )
+    shuffled_again = make_updec_common_world_manifest(
+        **common,
+        control_mode="shuffled_band",
+        control_seed=991,
+    )
+
+    assert positive["world_radec_deg"] == negative["world_radec_deg"]
+    assert positive["world_radec_deg"] == blank["world_radec_deg"]
+    assert positive["world_radec_deg"] == shuffled["world_radec_deg"]
+    assert positive["band_flux_jy"] == negative["band_flux_jy"]
+    assert negative["injection_control"] == {
+        "mode": "negative",
+        "sign": -1,
+        "seed": None,
+        "band_source_index": None,
+    }
+    assert all(
+        value == 0.0
+        for values in blank["band_flux_jy"].values()
+        for value in values
+    )
+    assert shuffled == shuffled_again
+    shuffled_indices = shuffled["injection_control"]["band_source_index"]
+    assert shuffled["injection_control"]["mode"] == "shuffled_band"
+    assert shuffled["injection_control"]["seed"] == 991
+    assert len({tuple(indices) for indices in shuffled_indices.values()}) == 6
+    for band, indices in shuffled_indices.items():
+        assert sorted(indices) == list(range(12))
+        assert indices != list(range(12))
+        assert sorted(shuffled["band_flux_jy"][band]) == sorted(
+            positive["band_flux_jy"][band]
+        )
+    with pytest.raises(ValueError, match="control_mode"):
+        make_updec_common_world_manifest(**common, control_mode="unknown")
+    with pytest.raises(ValueError, match="control_mode"):
+        make_updec_common_world_manifest(**common, control_seed=991)
+    with pytest.raises(ValueError, match="more sources than bands"):
+        make_updec_common_world_manifest(
+            target_header=header,
+            bands=("F150W", "F200W"),
+            source_count=2,
+            seed=44,
+            margin_px=8.0,
+            control_mode="shuffled_band",
+        )
 
 
 def test_common_support_mask_intersects_erodes_and_gates_manifest() -> None:
@@ -375,6 +498,10 @@ def test_manifest_cli_reads_final_weight_support(
             "0",
             "--batch-sources",
             "8",
+            "--injection-control",
+            "shuffled_band",
+            "--control-seed",
+            "991",
             "--margin-px",
             "10",
             "--min-separation-px",
@@ -416,6 +543,8 @@ def test_manifest_cli_reads_final_weight_support(
     assert artifact["common_support"]["mask_path"] == str(support_mask_path)
     assert len(artifact["common_support"]["mask_sha256"]) == 64
     assert artifact["common_support"]["avoidance_source_count"] == 1
+    assert artifact["injection_control"]["mode"] == "shuffled_band"
+    assert artifact["injection_control"]["seed"] == 991
     expected_support = exclude_catalogue_neighborhoods(
         common_support_mask((weight,), erode_radius_px=2),
         torchsky.WCS(header).world_to_pixel(avoidance_world),

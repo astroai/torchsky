@@ -61,6 +61,7 @@ _UPDEC_PATT_SPLIT = {
     9: "test",
 }
 _UPDEC_BANDS = ("F090W", "F150W", "F200W", "F277W", "F356W", "F444W")
+_INJECTION_CONTROL_MODES = ("positive", "blank", "negative", "shuffled_band")
 
 
 @dataclass(frozen=True)
@@ -215,6 +216,7 @@ def inject_common_world_exposures(
     world_radec_deg: torch.Tensor,
     flux_jy: torch.Tensor,
     device: torch.device | str = "cpu",
+    injection_sign: int = 1,
 ) -> tuple[dict[Path, np.ndarray], list[dict[str, object]]]:
     """Create transient SCI overrides for one common sky catalogue.
 
@@ -231,6 +233,12 @@ def inject_common_world_exposures(
         or flux_jy.shape != (world_radec_deg.shape[0],)
     ):
         raise ValueError("world_radec_deg must be (sources, 2) and flux_jy (sources,)")
+    if (
+        isinstance(injection_sign, bool)
+        or not isinstance(injection_sign, int)
+        or injection_sign not in (-1, 1)
+    ):
+        raise ValueError("injection_sign must be exactly -1 or 1")
     from bench_map_smacs0723_real import _read_ext, _sci_header
 
     target_device = torch.device(device)
@@ -265,6 +273,7 @@ def inject_common_world_exposures(
                 flux_jy=flux,
                 psf_fwhm_arcsec=contract.truth_fwhm_arcsec,
                 spatial_oversample=contract.spatial_oversample,
+                injection_sign=injection_sign,
             )
         accepted_rows.append(injected.accepted)
         overrides[exposure_path] = (
@@ -278,6 +287,7 @@ def inject_common_world_exposures(
                 "rendered_flux_jy": (
                     injected.rendered_flux_jy.detach().cpu().tolist()
                 ),
+                "injection_sign": injection_sign,
                 "input_unchanged": bool(
                     torch.allclose(
                         science.detach().cpu(),
@@ -309,6 +319,8 @@ def make_updec_common_world_manifest(
     min_separation_px: float = 8.0,
     batch_id: str = "validation-000",
     valid_mask: torch.Tensor | None = None,
+    control_mode: str = "positive",
+    control_seed: int | None = None,
 ) -> dict[str, object]:
     """Generate a deterministic four-quadrant smooth-continuum injection batch."""
 
@@ -321,6 +333,12 @@ def make_updec_common_world_manifest(
     ):
         raise ValueError("valid_mask must be a CPU bool tensor matching the target")
     normalized_bands = tuple(str(band).upper() for band in bands)
+    normalized_control = str(control_mode).strip().lower()
+    invalid_control_seed = control_seed is not None and (
+        isinstance(control_seed, bool)
+        or not isinstance(control_seed, int)
+        or control_seed < 0
+    )
     if (
         source_count < 0
         or seed < 0
@@ -330,8 +348,13 @@ def make_updec_common_world_manifest(
         or min_separation_px < 0
         or width <= 3 * margin_px
         or height <= 3 * margin_px
+        or normalized_control not in _INJECTION_CONTROL_MODES
+        or invalid_control_seed
+        or (control_seed is not None and normalized_control != "shuffled_band")
     ):
-        raise ValueError("invalid source, seed, band, magnitude, or target-grid contract")
+        raise ValueError(
+            "invalid source, seed, band, magnitude, control_mode, or target-grid contract"
+        )
     from bench_map_smacs0723_real import _band_spec
 
     wavelengths = {
@@ -440,6 +463,34 @@ def make_updec_common_world_manifest(
         ).tolist()
         for band, wavelength in wavelengths.items()
     }
+    band_source_index: dict[str, list[int]] | None = None
+    effective_control_seed: int | None = None
+    injection_sign = -1 if normalized_control == "negative" else 1
+    if normalized_control == "blank":
+        band_flux = {
+            band: [0.0] * source_count for band in normalized_bands
+        }
+    elif normalized_control == "shuffled_band":
+        if source_count <= len(normalized_bands):
+            raise ValueError(
+                "shuffled_band requires more sources than bands so each band can "
+                "use a distinct non-identity source permutation"
+            )
+        effective_control_seed = (
+            seed + 104729 if control_seed is None else control_seed
+        )
+        control_generator = torch.Generator().manual_seed(effective_control_seed)
+        shifts = (
+            torch.randperm(source_count - 1, generator=control_generator)
+            .add(1)[: len(normalized_bands)]
+            .tolist()
+        )
+        band_source_index = {}
+        for band, shift in zip(normalized_bands, shifts, strict=True):
+            indices = torch.roll(torch.arange(source_count), shifts=int(shift)).tolist()
+            band_source_index[band] = indices
+            values = band_flux[band]
+            band_flux[band] = [values[index] for index in indices]
     canonical_header = {
         str(key): (
             value
@@ -471,6 +522,12 @@ def make_updec_common_world_manifest(
         "spectral_slope_fnu": slopes.tolist(),
         "band_wavelength_angstrom": wavelengths,
         "band_flux_jy": band_flux,
+        "injection_control": {
+            "mode": normalized_control,
+            "sign": injection_sign,
+            "seed": effective_control_seed,
+            "band_source_index": band_source_index,
+        },
         "target_header_sha256": header_sha256,
         "placement": {
             "margin_px": margin_px,
@@ -686,6 +743,7 @@ def inject_gaussian_sources_mjysr(
     psf_fwhm_arcsec: float,
     spatial_oversample: int = 4,
     truncate_sigma: float = 5.0,
+    injection_sign: int = 1,
 ) -> DetectorInjectionResult:
     """Inject flux-conserving point sources through a detector WCS.
 
@@ -710,6 +768,12 @@ def inject_gaussian_sources_mjysr(
         raise ValueError("image, coordinates, and finite fluxes must share a device")
     if torch.any(flux_jy < 0):
         raise ValueError("flux_jy must be non-negative")
+    if (
+        isinstance(injection_sign, bool)
+        or not isinstance(injection_sign, int)
+        or injection_sign not in (-1, 1)
+    ):
+        raise ValueError("injection_sign must be exactly -1 or 1")
     if psf_fwhm_arcsec <= 0 or spatial_oversample < 1 or truncate_sigma <= 0:
         raise ValueError("PSF, oversampling, and truncation values must be positive")
 
@@ -748,7 +812,10 @@ def inject_gaussian_sources_mjysr(
         )
         area_sr = pixel_area_sr_at(wcs, xx, yy)
         contribution = (
-            flux_jy[index].to(torch.float64) * profile / (1.0e6 * area_sr)
+            injection_sign
+            * flux_jy[index].to(torch.float64)
+            * profile
+            / (1.0e6 * area_sr)
         ).to(image.dtype)
         delta[y_min:y_max, x_min:x_max] += contribution
         accepted[index] = True
@@ -3489,6 +3556,18 @@ def main() -> int:
     parser.add_argument("--crop-y0", type=int, default=0)
     parser.add_argument("--batch-sources", type=int, default=28)
     parser.add_argument("--batch-id", default="validation-000")
+    parser.add_argument(
+        "--injection-control",
+        choices=_INJECTION_CONTROL_MODES,
+        default="positive",
+        help="Paired positive, blank, negative, or per-band source-permutation control",
+    )
+    parser.add_argument(
+        "--control-seed",
+        type=int,
+        default=None,
+        help="Independent seed for shuffled-band source permutations",
+    )
     parser.add_argument("--margin-px", type=float, default=12.0)
     parser.add_argument("--min-separation-px", type=float, default=8.0)
     parser.add_argument(
@@ -3816,6 +3895,8 @@ def main() -> int:
             margin_px=args.margin_px,
             min_separation_px=args.min_separation_px,
             valid_mask=valid_mask,
+            control_mode=args.injection_control,
+            control_seed=args.control_seed,
         )
         artifact["reference_path"] = str(args.reference_path.resolve())
         artifact["target_crop"] = {

@@ -1,0 +1,22 @@
+[
+  {
+    "case": "synthetic_swarp_clipped",
+    "library": "swarp_clipped",
+    "variant": "bilinear",
+    "equals": {
+      "comparison_reference_variant": "sigma_clipped_bilinear",
+      "comparison_weight_mode": "positive_median_normalized",
+      "comparison_data_domain": "kernel_complete_support",
+      "comparator_version": "bf4f496f18c04a8d32022b45449ef8675ab9b3da"
+    },
+    "maximum": {
+      "max_abs_data_diff_vs_torchsky": 2e-4,
+      "max_abs_weight_diff_vs_torchsky": 0.002,
+      "support_symmetric_difference_frac_vs_torchsky": 0.07
+    },
+    "minimum": {
+      "comparison_support_frac_vs_torchsky": 0.8,
+      "support_iou_vs_torchsky": 0.93
+    }
+  }
+]

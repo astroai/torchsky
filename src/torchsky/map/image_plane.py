@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -44,6 +44,11 @@ from .operators.execution import (
     masked_median_stack,
     prepare_image_observation_data,
     project_image_observation_geometry,
+    require_exact_median_scratch_capacity,
+    require_sigma_clipped_scratch_capacity,
+    spilled_exact_median_stack,
+    spilled_overlap_background_stack,
+    spilled_sigma_clipped_stack,
     stack_inputs_from_projected_observation,
     wcs_has_distortion,
 )
@@ -79,6 +84,7 @@ from .operators.resampling import (
     infer_fft_translation_shift_yx,
     infer_linear_affine_pixel_map,
     sample_image_plane_batched_channels,
+    sample_image_plane_diagonal_variance,
 )
 from .operators.spectral import ExplicitSpectralResponseOp
 from .periodic_affine import resample_linear_affine_periodic_bilinear_2d
@@ -91,6 +97,7 @@ from .io_utils import (
     read_image_plane_observation,
     _observation_header_for_area_scaling,
 )
+
 
 def _resolve_map_device(device: torch.device | str | None) -> torch.device:
     if device is not None:
@@ -129,6 +136,7 @@ class ImageObservation:
     mask_hdu: int | str | None = 0
     primary_beam_path: str | None = None
     primary_beam_hdu: int | str | None = None
+    weight_is_inverse_variance: bool = False
 
 
 @dataclass
@@ -136,9 +144,44 @@ class MapResult:
     data: Tensor
     weight: Tensor
     header: dict
+    inverse_variance: Tensor | None = None
+    correlation_factor: Tensor | None = None
+    context: Tensor | None = None
+    provenance: dict[str, Any] | None = None
     overlap_count: Tensor | None = None
     coverage_moc: MOC | None = None
     observation_mocs: tuple[MOC, ...] | None = None
+
+
+@dataclass(frozen=True)
+class MapApertureUncertainty:
+    """Exact detector variance for one finite weighted map aperture."""
+
+    variance: Tensor
+    diagonal_variance: Tensor
+
+    def __post_init__(self) -> None:
+        variance = torch.as_tensor(self.variance)
+        diagonal = torch.as_tensor(self.diagonal_variance)
+        if variance.ndim != 0 or diagonal.ndim != 0:
+            raise ValueError("aperture uncertainty values must be scalar tensors")
+        if not variance.is_floating_point() or not diagonal.is_floating_point():
+            raise ValueError("aperture uncertainty values must be floating point")
+        if (
+            not bool(torch.isfinite(variance))
+            or not bool(torch.isfinite(diagonal))
+            or float(variance) < 0.0
+            or float(diagonal) <= 0.0
+        ):
+            raise ValueError(
+                "aperture variance must be finite/non-negative and diagonal variance positive"
+            )
+
+    @property
+    def correlation_factor(self) -> Tensor:
+        return torch.as_tensor(self.variance) / torch.as_tensor(
+            self.diagonal_variance
+        )
 
 
 @dataclass
@@ -147,6 +190,8 @@ class MultiBandMapResult:
     data: Tensor
     weight: Tensor
     header: dict
+    inverse_variance: Tensor | None = None
+    correlation_factor: Tensor | None = None
     overlap_count: Tensor | None = None
     coverage_mocs: tuple[MOC | None, ...] | None = None
     band_observation_counts: Tensor | None = None
@@ -211,6 +256,8 @@ class SpectralCubeMapResult:
     weight: Tensor
     header: dict
     spatial_wcs: WCS
+    inverse_variance: Tensor | None = None
+    correlation_factor: Tensor | None = None
     overlap_count: Tensor | None = None
     coverage_mocs: tuple[MOC | None, ...] | None = None
 
@@ -232,9 +279,143 @@ class SpectralCubeMapResult:
 class _ProjectedImagePlaneObservation:
     numer: Tensor
     weight: Tensor
+    variance_weight: Tensor | None
     overlap: Tensor
     moc: MOC | None
     target_window: tuple[int, int, int, int] | None = None
+
+
+def _accumulate_variance_weight(
+    target: Tensor,
+    contribution: Tensor,
+    target_window: tuple[int, int, int, int] | None,
+) -> None:
+    if target_window is None:
+        target.add_(contribution)
+        return
+    y0, y1, x0, x1 = target_window
+    if y1 > y0 and x1 > x0:
+        target[..., y0:y1, x0:x1].add_(contribution)
+
+
+def _set_context_bit(
+    context: Tensor,
+    observation_index: int,
+    support: Tensor,
+    target_window: tuple[int, int, int, int] | None,
+) -> None:
+    word = int(observation_index) // 32
+    bit = int(observation_index) % 32
+    encoded = support.to(dtype=torch.int64) * (1 << bit)
+    plane = context[word]
+    if target_window is None:
+        plane.bitwise_or_(encoded)
+        return
+    y0, y1, x0, x1 = target_window
+    if y1 > y0 and x1 > x0:
+        plane[y0:y1, x0:x1].bitwise_or_(encoded)
+
+
+def _observation_operator_provenance(
+    observation: ImageObservation,
+) -> dict[str, Any]:
+    return {
+        "path": observation.path,
+        "hdu": observation.hdu,
+        "weight": float(observation.weight),
+        "weight_is_inverse_variance": bool(observation.weight_is_inverse_variance),
+        "weight_path": observation.weight_path,
+        "weight_hdu": observation.weight_hdu,
+        "mask_path": observation.mask_path,
+        "mask_hdu": observation.mask_hdu,
+        "primary_beam_path": observation.primary_beam_path,
+        "primary_beam_hdu": observation.primary_beam_hdu,
+        "photometric_scale": float(observation.photometric_scale),
+        "background_offset": float(observation.background_offset),
+    }
+
+
+def _context_provenance(
+    observations: Sequence[ImageObservation],
+    *,
+    resampling_kernel: MapResamplingKernel,
+    value_semantics: MapValueSemantics,
+    stacking_method: MapStackingMethod,
+    drizzle_pixfrac: float,
+    surface_brightness_area_scaling: bool,
+    data_dependent_background: bool,
+    has_correlation_factor: bool = False,
+) -> dict[str, Any]:
+    provenance: dict[str, Any] = {
+        "context_word_bits": 32,
+        "context_observations": [
+            {"index": index, "path": observation.path, "hdu": observation.hdu}
+            for index, observation in enumerate(observations)
+        ],
+        "observation_operators": [
+            _observation_operator_provenance(observation)
+            for observation in observations
+        ],
+        "map_execution": {
+            "resampling_kernel": resampling_kernel,
+            "value_semantics": value_semantics,
+            "stacking_method": stacking_method,
+            "drizzle_pixfrac": float(drizzle_pixfrac),
+            "surface_brightness_area_scaling": bool(
+                surface_brightness_area_scaling
+            ),
+            "data_dependent_background": bool(data_dependent_background),
+        },
+    }
+    if has_correlation_factor:
+        provenance["noise_correlation"] = {
+            "kind": "local_inverse_enbw",
+            "definition": "first_coefficient_weight/squared_coefficient_weight",
+            "scope": "exact for locally shift-invariant large apertures; diagnostic otherwise",
+        }
+    return provenance
+
+
+def _linear_inverse_variance(
+    normalization: Tensor,
+    variance_weight: Tensor,
+    *,
+    value_semantics: MapValueSemantics,
+    pixel_area_sr: Tensor | None,
+) -> Tensor:
+    scaled_normalization = normalization
+    if value_semantics == "flux":
+        if pixel_area_sr is None:
+            raise RuntimeError("target pixel area is required for flux uncertainty")
+        scaled_normalization = normalization / torch.clamp(
+            pixel_area_sr,
+            min=torch.finfo(pixel_area_sr.dtype).tiny,
+        )
+    inverse_variance = torch.where(
+        variance_weight > 0.0,
+        torch.square(scaled_normalization) / variance_weight,
+        torch.zeros_like(normalization),
+    )
+    return inverse_variance
+
+
+def _local_noise_correlation_factor(
+    correlation_weight: Tensor,
+    variance_weight: Tensor,
+) -> Tensor:
+    """Return the local inverse-ENBW factor from first/squared coefficients.
+
+    For locally shift-invariant resampling of independent detector noise this is
+    the exact large-aperture variance inflation relative to the diagonal-only
+    variance. On distorted or edge-truncated grids it remains a local kernel
+    diagnostic, not a covariance matrix.
+    """
+    supported = (correlation_weight > 0.0) & (variance_weight > 0.0)
+    return torch.where(
+        supported,
+        correlation_weight / variance_weight,
+        torch.zeros_like(correlation_weight),
+    )
 
 
 _DRIZZLE_FORWARD_CHUNK_PIXELS = 262_144
@@ -301,7 +482,9 @@ def _is_conservative_kernel(kernel: MapResamplingKernel) -> bool:
 def _is_splat_kernel(kernel: MapResamplingKernel) -> bool:
     return kernel in {"splat_point", "splat_box"}
 
+
 _FORWARD_SOURCE_RATIO = 0.2  # use forward projection when source < 20% of target
+
 
 def _splat_for_interpolation(kernel: MapResamplingKernel) -> MapResamplingKernel | None:
     """Return equivalent splat kernel for interpolation kernels, or None."""
@@ -320,7 +503,9 @@ def _requires_roundtrip_validity_check(source_wcs: WCS) -> bool:
     return bool(getattr(source_wcs, "sip", None) is not None)
 
 
-def _coarse_grid_shape(height: int, width: int, *, coarse_stride: int = 128) -> tuple[int, int, int]:
+def _coarse_grid_shape(
+    height: int, width: int, *, coarse_stride: int = 128
+) -> tuple[int, int, int]:
     stride = max(1, min(height, width) // coarse_stride, 1)
     stride = min(stride, 128)
     hc = max(1, height // stride)
@@ -345,7 +530,7 @@ def _interpolate_forward_mapping_from_coarse(
     y_coarse = torch.arange(0, height, stride, dtype=torch.float64, device=device)
     x_coarse = torch.arange(0, width, stride, dtype=torch.float64, device=device)
 
-    yy, xx = torch.meshgrid(y_coarse, x_coarse, indexing='ij')
+    yy, xx = torch.meshgrid(y_coarse, x_coarse, indexing="ij")
     ra_c, dec_c = target_wcs.pixel_to_world(xx, yy)
     x_src_c, y_src_c = source_wcs.world_to_pixel(ra_c, dec_c)
 
@@ -355,7 +540,11 @@ def _interpolate_forward_mapping_from_coarse(
         return x_out, y_out
 
     hc, wc = int(y_coarse.numel()), int(x_coarse.numel())
-    coarse = torch.stack([x_src_c, y_src_c], dim=0).to(dtype=torch.float32).reshape(1, 2, hc, wc)
+    coarse = (
+        torch.stack([x_src_c, y_src_c], dim=0)
+        .to(dtype=torch.float32)
+        .reshape(1, 2, hc, wc)
+    )
 
     y_g = torch.arange(height, dtype=torch.float32, device=device) / stride
     x_g = torch.arange(width, dtype=torch.float32, device=device) / stride
@@ -365,10 +554,12 @@ def _interpolate_forward_mapping_from_coarse(
     # normalized coordinate > 1 and are clamped to border.
     y_n = y_g / max(hc - 1, 1) * 2.0 - 1.0
     x_n = x_g / max(wc - 1, 1) * 2.0 - 1.0
-    gy, gx = torch.meshgrid(y_n.clamp(-1.0, 1.0), x_n.clamp(-1.0, 1.0), indexing='ij')
+    gy, gx = torch.meshgrid(y_n.clamp(-1.0, 1.0), x_n.clamp(-1.0, 1.0), indexing="ij")
     grid = torch.stack([gx, gy], dim=-1).unsqueeze(0)
 
-    full = F.grid_sample(coarse, grid, mode='bicubic', padding_mode='border', align_corners=True)
+    full = F.grid_sample(
+        coarse, grid, mode="bicubic", padding_mode="border", align_corners=True
+    )
     return full[0, 0], full[0, 1]
 
 
@@ -544,7 +735,8 @@ def _resample_weighted_to_target(
     *,
     resampling_kernel: MapResamplingKernel,
     value_semantics: MapValueSemantics,
-) -> tuple[Tensor, Tensor]:
+    return_variance_weight: bool = False,
+) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor | None]:
     image = validate_image_plane_2d(image).to(dtype=torch.float32)
     source_weight = validate_image_plane_2d(source_weight).to(dtype=torch.float32)
 
@@ -561,6 +753,7 @@ def _resample_weighted_to_target(
         )
         weighted_image = image * source_weight * source_area_sr
         weighted_weight = source_weight * (source_area_sr * source_area_sr)
+        source_numerator_variance = weighted_weight
     elif target_representative_area_sr is not None:
         source_area_sr = representative_pixel_area_sr(
             source_wcs,
@@ -570,14 +763,36 @@ def _resample_weighted_to_target(
         info_density = source_weight / max(source_area_sr, 1e-20)
         weighted_image = image * info_density
         weighted_weight = info_density
+        source_numerator_variance = source_weight / max(
+            source_area_sr * source_area_sr, 1e-40
+        )
     else:
         weighted_image = image * source_weight
         weighted_weight = source_weight
+        source_numerator_variance = source_weight
     support_image = (
         (source_weight > 0.0).to(dtype=torch.float32)
         if value_semantics == "flux"
         else None
     )
+    coefficient_variance_supported = resampling_kernel in {
+        "nearest",
+        "bilinear",
+        "bicubic",
+        "lanczos3",
+        "lanczos5",
+        "mitchell_netravali",
+        "catmull_rom",
+    }
+
+    def _result(
+        numer: Tensor,
+        weight: Tensor,
+        variance_weight: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor | None]:
+        if return_variance_weight:
+            return numer, weight, variance_weight
+        return numer, weight
 
     if resampling_kernel == "fft_shift":
         if _requires_target_pixel_quadrature(
@@ -612,13 +827,14 @@ def _resample_weighted_to_target(
             if support_image is not None
             else None
         )
-        return finalize_periodic_resampled_weighted(
+        sampled_numer, sampled_weight = finalize_periodic_resampled_weighted(
             sampled_numer,
             sampled_weight,
             sampled_support,
             value_semantics=value_semantics,
             target_representative_area_sr=target_representative_area_sr,
         )
+        return _result(sampled_numer, sampled_weight)
 
     if resampling_kernel == "fft_diagonal_affine":
         if _requires_target_pixel_quadrature(
@@ -658,13 +874,14 @@ def _resample_weighted_to_target(
             if support_image is not None
             else None
         )
-        return finalize_periodic_resampled_weighted(
+        sampled_numer, sampled_weight = finalize_periodic_resampled_weighted(
             sampled_numer,
             sampled_weight,
             sampled_support,
             value_semantics=value_semantics,
             target_representative_area_sr=target_representative_area_sr,
         )
+        return _result(sampled_numer, sampled_weight)
 
     if resampling_kernel == "periodic_linear_affine":
         if _requires_target_pixel_quadrature(
@@ -711,13 +928,14 @@ def _resample_weighted_to_target(
             if support_image is not None
             else None
         )
-        return finalize_periodic_resampled_weighted(
+        sampled_numer, sampled_weight = finalize_periodic_resampled_weighted(
             sampled_numer,
             sampled_weight,
             sampled_support,
             value_semantics=value_semantics,
             target_representative_area_sr=target_representative_area_sr,
         )
+        return _result(sampled_numer, sampled_weight)
 
     if resampling_kernel == "fft_linear_affine":
         if _requires_target_pixel_quadrature(
@@ -765,13 +983,14 @@ def _resample_weighted_to_target(
             raise ValueError(
                 "fft_linear_affine failed (try periodic_linear_affine for arbitrary affines)"
             ) from exc
-        return finalize_periodic_resampled_weighted(
+        sampled_numer, sampled_weight = finalize_periodic_resampled_weighted(
             sampled_numer,
             sampled_weight,
             sampled_support,
             value_semantics=value_semantics,
             target_representative_area_sr=target_representative_area_sr,
         )
+        return _result(sampled_numer, sampled_weight)
 
     if resampling_kernel == "spectral_linear_affine":
         if _requires_target_pixel_quadrature(
@@ -815,13 +1034,14 @@ def _resample_weighted_to_target(
             if support_image is not None
             else None
         )
-        return finalize_periodic_resampled_weighted(
+        sampled_numer, sampled_weight = finalize_periodic_resampled_weighted(
             sampled_numer,
             sampled_weight,
             sampled_support,
             value_semantics=value_semantics,
             target_representative_area_sr=target_representative_area_sr,
         )
+        return _result(sampled_numer, sampled_weight)
 
     def _sample_on_source_grid(
         x_src: Tensor,
@@ -829,23 +1049,25 @@ def _resample_weighted_to_target(
         *,
         flat_ra: Tensor | None = None,
         flat_dec: Tensor | None = None,
-    ) -> tuple[Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor | None]:
         # WCS round trips can land an exact edge just outside the image.  Keep
         # the repair much smaller than a pixel even for float32/large mosaics.
         roundoff_tol = min(
             1.0e-7,
-            4096.0
-            * torch.finfo(x_src.dtype).eps
-            * float(max(h_src, w_src, 1)),
+            4096.0 * torch.finfo(x_src.dtype).eps * float(max(h_src, w_src, 1)),
         )
+        if getattr(source_wcs, "sip", None) is not None:
+            # SIP.invert_distortion guarantees residuals to its 1e-6 pixel
+            # stopping tolerance. Treat only that solver-sized boundary shell
+            # as the exact detector edge so tile batch size cannot change support.
+            roundoff_tol = max(roundoff_tol, 1.0e-6)
         x_src = torch.where(
             (x_src < 0.0) & (x_src >= -roundoff_tol),
             torch.zeros_like(x_src),
             x_src,
         )
         x_src = torch.where(
-            (x_src > float(w_src - 1))
-            & (x_src <= float(w_src - 1) + roundoff_tol),
+            (x_src > float(w_src - 1)) & (x_src <= float(w_src - 1) + roundoff_tol),
             torch.full_like(x_src, float(w_src - 1)),
             x_src,
         )
@@ -855,11 +1077,11 @@ def _resample_weighted_to_target(
             y_src,
         )
         y_src = torch.where(
-            (y_src > float(h_src - 1))
-            & (y_src <= float(h_src - 1) + roundoff_tol),
+            (y_src > float(h_src - 1)) & (y_src <= float(h_src - 1) + roundoff_tol),
             torch.full_like(y_src, float(h_src - 1)),
             y_src,
         )
+        sampled_variance_weight = None
         if resampling_kernel == "spectral_nonuniform":
             sampled_numer = resample_nonuniform_spectral_2d(
                 weighted_image,
@@ -972,15 +1194,31 @@ def _resample_weighted_to_target(
             sampled_numer,
             torch.zeros_like(sampled_numer),
         )
+        if return_variance_weight and coefficient_variance_supported:
+            sample_valid = in_bounds & (sampled_weight > 0.0)
+            sampled_variance_weight = sample_image_plane_diagonal_variance(
+                source_numerator_variance,
+                x_src=x_src,
+                y_src=y_src,
+                kernel=resampling_kernel,
+                average_coordinate_batch=x_src.ndim == 3,
+                sample_valid=sample_valid,
+            )
         if (
             value_semantics == "surface_brightness"
             and target_representative_area_sr is not None
         ):
             sampled_numer = sampled_numer * float(target_representative_area_sr)
             sampled_weight = sampled_weight * float(target_representative_area_sr)
-        return sampled_numer, sampled_weight
+            if sampled_variance_weight is not None:
+                sampled_variance_weight = (
+                    sampled_variance_weight * float(target_representative_area_sr) ** 2
+                )
+        return _result(sampled_numer, sampled_weight, sampled_variance_weight)
 
-    def _sample_on_world_grid(ra_deg: Tensor, dec_deg: Tensor) -> tuple[Tensor, Tensor]:
+    def _sample_on_world_grid(
+        ra_deg: Tensor, dec_deg: Tensor
+    ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor | None]:
         flat_ra = ra_deg.reshape(-1)
         flat_dec = dec_deg.reshape(-1)
         if (
@@ -999,7 +1237,11 @@ def _resample_weighted_to_target(
             )
             if center_sep_deg > source_cap_radius_deg + target.cap_radius_deg:
                 zeros = torch.zeros_like(ra_deg, dtype=torch.float32)
-                return zeros, zeros
+                return _result(
+                    zeros,
+                    zeros,
+                    zeros if coefficient_variance_supported else None,
+                )
         x_src, y_src = source_wcs.world_to_pixel(flat_ra, flat_dec)
         x_src = x_src.reshape_as(ra_deg)
         y_src = y_src.reshape_as(dec_deg)
@@ -1019,11 +1261,18 @@ def _resample_weighted_to_target(
         h_tgt, w_tgt = int(target.shape[0]), int(target.shape[1])
         if min(h_tgt, w_tgt) < 500 or _requires_roundtrip_validity_check(source_wcs):
             ra_g, dec_g = _build_target_world_grid(
-                target.wcs, h_tgt, w_tgt, device=image.device,
+                target.wcs,
+                h_tgt,
+                w_tgt,
+                device=image.device,
             )
             return _sample_on_world_grid(ra_g, dec_g)
         x_src, y_src = _interpolate_forward_mapping_from_coarse(
-            source_wcs, target.wcs, h_tgt, w_tgt, device=image.device,
+            source_wcs,
+            target.wcs,
+            h_tgt,
+            w_tgt,
+            device=image.device,
         )
         return _sample_on_source_grid(x_src, y_src, flat_ra=None, flat_dec=None)
 
@@ -1046,12 +1295,14 @@ def _resample_weighted_to_target(
     x_src_all, y_src_all = source_wcs.world_to_pixel(flat_ra, flat_dec)
     x_src_b = x_src_all.reshape(len(quadrature_world_grids), *target.shape)
     y_src_b = y_src_all.reshape(len(quadrature_world_grids), *target.shape)
-    sub_numer, sub_weight = _sample_on_source_grid(
+    sub_result = _sample_on_source_grid(
         x_src_b,
         y_src_b,
         flat_ra=flat_ra,
         flat_dec=flat_dec,
     )
+    sub_numer, sub_weight = sub_result[:2]
+    sub_variance_weight = sub_result[2] if len(sub_result) == 3 else None
     accum_numer = sub_numer.mean(dim=0)
     accum_weight = sub_weight.mean(dim=0)
     accum_numer = torch.where(
@@ -1059,7 +1310,7 @@ def _resample_weighted_to_target(
         accum_numer,
         torch.zeros_like(accum_numer),
     )
-    return accum_numer, accum_weight
+    return _result(accum_numer, accum_weight, sub_variance_weight)
 
 
 def _validated_map_resampling_kernel(
@@ -1096,7 +1347,8 @@ def _forward_project_weighted_to_target(
     resampling_kernel: MapResamplingKernel,
     value_semantics: MapValueSemantics,
     drizzle_pixfrac: float,
-) -> tuple[Tensor, Tensor]:
+    return_variance_weight: bool = False,
+) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
     if not _is_splat_kernel(resampling_kernel):
         raise ValueError(
             f"forward projection only supports splat kernels, got {resampling_kernel!r}"
@@ -1114,6 +1366,7 @@ def _forward_project_weighted_to_target(
         )
         weighted_image = image * source_weight * source_area_sr
         weighted_weight = source_weight * (source_area_sr * source_area_sr)
+        source_numerator_variance = weighted_weight
     elif target.representative_pixel_area_sr is not None:
         source_area_sr = representative_pixel_area_sr(
             source_wcs,
@@ -1123,22 +1376,36 @@ def _forward_project_weighted_to_target(
         info_density = source_weight / max(source_area_sr, 1e-20)
         weighted_image = image * info_density
         weighted_weight = info_density
+        source_numerator_variance = source_weight / max(
+            source_area_sr * source_area_sr, 1e-40
+        )
     else:
         weighted_image = image * source_weight
         weighted_weight = source_weight
+        source_numerator_variance = source_weight
 
     valid = torch.isfinite(weighted_weight) & (weighted_weight > 0.0)
     if not bool(valid.any()):
         zeros = torch.zeros(target.shape, dtype=torch.float32, device=image.device)
+        if return_variance_weight:
+            return zeros, zeros, zeros
         return zeros, zeros
 
     ys, xs = torch.nonzero(valid, as_tuple=True)
     flat_values_numer = weighted_image[ys, xs].to(dtype=torch.float32)
     flat_values_weight = weighted_weight[ys, xs].to(dtype=torch.float32)
+    flat_values_variance = (
+        source_numerator_variance[ys, xs].to(dtype=torch.float32)
+        if return_variance_weight
+        else None
+    )
     flat_numer = torch.zeros(
         target.shape[0] * target.shape[1], dtype=torch.float32, device=image.device
     )
     flat_weight = torch.zeros_like(flat_numer)
+    flat_variance_weight = (
+        torch.zeros_like(flat_numer) if return_variance_weight else None
+    )
     width = int(target.shape[1])
     height = int(target.shape[0])
 
@@ -1148,6 +1415,11 @@ def _forward_project_weighted_to_target(
         y_chunk = ys[start:end].to(dtype=torch.float64)
         numer_chunk = flat_values_numer[start:end]
         weight_chunk = flat_values_weight[start:end]
+        variance_chunk = (
+            flat_values_variance[start:end]
+            if flat_values_variance is not None
+            else None
+        )
 
         ra_deg, dec_deg = source_wcs.pixel_to_world(x_chunk, y_chunk)
         x_tgt, y_tgt = target.wcs.world_to_pixel(ra_deg, dec_deg)
@@ -1161,6 +1433,8 @@ def _forward_project_weighted_to_target(
         y_tgt = y_tgt[finite]
         numer_chunk = numer_chunk[finite]
         weight_chunk = weight_chunk[finite]
+        if variance_chunk is not None:
+            variance_chunk = variance_chunk[finite]
 
         if resampling_kernel == "splat_point":
             ix = torch.round(x_tgt).to(dtype=torch.int64)
@@ -1171,6 +1445,8 @@ def _forward_project_weighted_to_target(
             idx = iy[inside] * width + ix[inside]
             flat_numer.scatter_add_(0, idx, numer_chunk[inside])
             flat_weight.scatter_add_(0, idx, weight_chunk[inside])
+            if flat_variance_weight is not None and variance_chunk is not None:
+                flat_variance_weight.scatter_add_(0, idx, variance_chunk[inside])
             continue
 
         footprint = max(float(drizzle_pixfrac), 1e-6)
@@ -1195,11 +1471,37 @@ def _forward_project_weighted_to_target(
                 idx = iy[inside] * width + ix[inside]
                 flat_numer.scatter_add_(0, idx, numer_chunk[inside] * frac[inside])
                 flat_weight.scatter_add_(0, idx, weight_chunk[inside] * frac[inside])
+                if flat_variance_weight is not None and variance_chunk is not None:
+                    flat_variance_weight.scatter_add_(
+                        0,
+                        idx,
+                        variance_chunk[inside] * torch.square(frac[inside]),
+                    )
 
     numer = flat_numer.reshape(target.shape)
     weight = flat_weight.reshape(target.shape)
+    target_representative_area_sr = target.representative_pixel_area_sr
+    if (
+        value_semantics == "surface_brightness"
+        and target_representative_area_sr is not None
+    ):
+        numer = numer * float(target_representative_area_sr)
+        weight = weight * float(target_representative_area_sr)
+        if flat_variance_weight is not None:
+            flat_variance_weight = (
+                flat_variance_weight * float(target_representative_area_sr) ** 2
+            )
     numer = torch.where(weight > 0.0, numer, torch.zeros_like(numer))
     weight = torch.where(weight > 0.0, weight, torch.zeros_like(weight))
+    if return_variance_weight:
+        assert flat_variance_weight is not None
+        variance_weight = flat_variance_weight.reshape(target.shape)
+        variance_weight = torch.where(
+            weight > 0.0,
+            variance_weight,
+            torch.zeros_like(variance_weight),
+        )
+        return numer, weight, variance_weight
     return numer, weight
 
 
@@ -1459,6 +1761,7 @@ def _project_observation_to_target_chunk(
     image = prepared_observation.image
     source_weight = prepared_observation.source_weight
     operator_bundle = prepared_observation.operator_bundle
+    has_explicit_noise = operator_bundle.noise is not None
     prepared_target_view = prepared_target
     target_window = None
     if (
@@ -1481,6 +1784,7 @@ def _project_observation_to_target_chunk(
         else:
             sampled_weight = source_weight.to(dtype=torch.float32)
             sampled_numer = image.to(dtype=torch.float32) * sampled_weight
+        sampled_variance_weight = sampled_weight if has_explicit_noise else None
     else:
         if prepared_target is None:
             raise RuntimeError("prepared_target is required for reprojection")
@@ -1497,19 +1801,21 @@ def _project_observation_to_target_chunk(
         if prepared_target_view is None:
             sampled_numer = torch.zeros((0, 0), dtype=torch.float32, device=device)
             sampled_weight = torch.zeros((0, 0), dtype=torch.float32, device=device)
+            sampled_variance_weight = (
+                torch.zeros_like(sampled_weight) if has_explicit_noise else None
+            )
         else:
             _kernel = resampling_kernel
             if isinstance(operator_bundle.geometry, ForwardSplatGeometryOp):
                 _forward_remap = _splat_for_interpolation(resampling_kernel)
                 if _forward_remap is not None:
                     src_pix = int(image.shape[0]) * int(image.shape[1])
-                    tgt_pix = (
-                        int(prepared_target_view.shape[0])
-                        * int(prepared_target_view.shape[1])
+                    tgt_pix = int(prepared_target_view.shape[0]) * int(
+                        prepared_target_view.shape[1]
                     )
                     if src_pix < tgt_pix * _FORWARD_SOURCE_RATIO:
                         _kernel = _forward_remap
-            sampled_numer, sampled_weight = project_image_observation_geometry(
+            geometry_result = project_image_observation_geometry(
                 image,
                 source_weight,
                 source_wcs,
@@ -1525,6 +1831,11 @@ def _project_observation_to_target_chunk(
                 forward_project_weighted_to_target_fn=(
                     _forward_project_weighted_to_target
                 ),
+                return_variance_weight=has_explicit_noise,
+            )
+            sampled_numer, sampled_weight = geometry_result[:2]
+            sampled_variance_weight = (
+                geometry_result[2] if len(geometry_result) == 3 else None
             )
     overlap = (sampled_weight > 0.0).to(torch.int32)
     moc = None
@@ -1540,6 +1851,7 @@ def _project_observation_to_target_chunk(
     return _ProjectedImagePlaneObservation(
         numer=sampled_numer,
         weight=sampled_weight,
+        variance_weight=sampled_variance_weight,
         overlap=overlap,
         moc=moc,
         target_window=target_window,
@@ -1668,11 +1980,92 @@ def _world_to_tangent_plane(
     radians_to_degrees = 180.0 / math.pi
     xi = cos_dec * torch.sin(dra) / denom * radians_to_degrees
     eta = (
-        cos_dec0 * sin_dec - sin_dec0 * cos_dec * torch.cos(dra)
-    ) / denom * radians_to_degrees
+        (cos_dec0 * sin_dec - sin_dec0 * cos_dec * torch.cos(dra))
+        / denom
+        * radians_to_degrees
+    )
     if bool(torch.any(~torch.isfinite(xi))) or bool(torch.any(~torch.isfinite(eta))):
         raise RuntimeError("Union footprint produced non-finite TAN coordinates")
     return xi, eta
+
+
+def _adaptive_tangent_boundary(
+    wcs: WCS,
+    *,
+    height: int,
+    width: int,
+    center_ra_deg: float,
+    center_dec_deg: float,
+    pixel_scale_deg: float,
+    tolerance_px: float,
+    max_depth: int,
+) -> Tensor:
+    def project(pixel: tuple[float, float]) -> Tensor:
+        pixel_tensor = torch.tensor([pixel], dtype=torch.float64)
+        world = wcs.pixel_to_world(pixel_tensor)
+        if isinstance(world, tuple):
+            world = torch.stack(world[:2], dim=-1)
+        world = world.detach().to(device="cpu", dtype=torch.float64)
+        xi, eta = _world_to_tangent_plane(
+            world,
+            center_ra_deg=center_ra_deg,
+            center_dec_deg=center_dec_deg,
+        )
+        point = torch.stack((xi[0], eta[0]))
+        if not bool(torch.isfinite(point).all()):
+            raise RuntimeError("Observation boundary produced non-finite coordinates")
+        return point
+
+    output: list[Tensor] = []
+
+    def sample_segment(
+        p0: tuple[float, float],
+        p1: tuple[float, float],
+        q0: Tensor,
+        q1: Tensor,
+        depth: int,
+    ) -> None:
+        fractions = (0.25, 0.5, 0.75)
+        pixels = [
+            (
+                p0[0] + fraction * (p1[0] - p0[0]),
+                p0[1] + fraction * (p1[1] - p0[1]),
+            )
+            for fraction in fractions
+        ]
+        projected = [project(pixel) for pixel in pixels]
+        errors = [
+            torch.linalg.vector_norm(value - ((1.0 - fraction) * q0 + fraction * q1))
+            / float(pixel_scale_deg)
+            for fraction, value in zip(fractions, projected, strict=True)
+        ]
+        if max(float(error) for error in errors) <= float(tolerance_px):
+            output.append(q1)
+            return
+        if depth >= int(max_depth):
+            raise RuntimeError(
+                "Could not bound curved observation footprint within the requested tolerance"
+            )
+        midpoint = pixels[1]
+        q_midpoint = projected[1]
+        sample_segment(p0, midpoint, q0, q_midpoint, depth + 1)
+        sample_segment(midpoint, p1, q_midpoint, q1, depth + 1)
+
+    corners = (
+        (-0.5, -0.5),
+        (float(width) - 0.5, -0.5),
+        (float(width) - 0.5, float(height) - 0.5),
+        (-0.5, float(height) - 0.5),
+    )
+    for edge_index in range(4):
+        p0 = corners[edge_index]
+        p1 = corners[(edge_index + 1) % 4]
+        q0 = project(p0)
+        q1 = project(p1)
+        if not output:
+            output.append(q0)
+        sample_segment(p0, p1, q0, q1, 0)
+    return torch.stack(output, dim=0)
 
 
 def _plan_union_footprint_target(
@@ -1680,12 +2073,19 @@ def _plan_union_footprint_target(
     *,
     device: torch.device | str | None = None,
     padding: float = 1.05,
+    tolerance_px: float = 0.25,
+    max_depth: int = 20,
 ) -> tuple[dict, tuple[int, int]]:
     """Plan one rotation- and RA-seam-safe TAN grid for all observations."""
     if not math.isfinite(float(padding)) or float(padding) < 1.0:
         raise ValueError("footprint_padding must be finite and at least 1.0")
+    if not math.isfinite(float(tolerance_px)) or float(tolerance_px) <= 0.0:
+        raise ValueError("footprint_tolerance_px must be finite and positive")
+    if int(max_depth) < 1:
+        raise ValueError("footprint_max_depth must be positive")
     footprints: list[Tensor] = []
     pixel_scales: list[float] = []
+    footprint_records: list[tuple[WCS, int, int]] = []
     for observation in observations:
         header = _observation_header_for_footprint(observation, device=device)
         wcs = WCS(header)
@@ -1703,9 +2103,7 @@ def _plan_union_footprint_target(
         if isinstance(footprint, tuple):
             footprint = torch.stack(footprint[:2], dim=-1)
         footprint = footprint.detach().to(device="cpu", dtype=torch.float64)
-        if footprint.shape != (4, 2) or not bool(
-            torch.all(torch.isfinite(footprint))
-        ):
+        if footprint.shape != (4, 2) or not bool(torch.all(torch.isfinite(footprint))):
             raise RuntimeError(
                 f"Could not determine finite footprint for {observation.path}"
             )
@@ -1719,21 +2117,34 @@ def _plan_union_footprint_target(
             )
         footprints.append(footprint)
         pixel_scales.append(pixel_scale)
+        footprint_records.append((wcs, height, width))
     if not footprints:
         raise RuntimeError("Could not determine any observation footprints")
 
     footprint = torch.cat(footprints, dim=0)
     center_ra, center_dec = _spherical_union_center(footprint)
-    xi, eta = _world_to_tangent_plane(
-        footprint,
-        center_ra_deg=center_ra,
-        center_dec_deg=center_dec,
-    )
     pixel_scale = float(torch.tensor(pixel_scales, dtype=torch.float64).median())
+    tangent_boundaries = [
+        _adaptive_tangent_boundary(
+            wcs,
+            height=height,
+            width=width,
+            center_ra_deg=center_ra,
+            center_dec_deg=center_dec,
+            pixel_scale_deg=pixel_scale,
+            tolerance_px=float(tolerance_px),
+            max_depth=int(max_depth),
+        )
+        for wcs, height, width in footprint_records
+    ]
+    tangent_boundary = torch.cat(tangent_boundaries, dim=0)
+    xi = tangent_boundary[:, 0]
+    eta = tangent_boundary[:, 1]
     xi_mid = 0.5 * float(xi.min() + xi.max())
     eta_mid = 0.5 * float(eta.min() + eta.max())
-    xi_half = 0.5 * float(xi.max() - xi.min()) * float(padding)
-    eta_half = 0.5 * float(eta.max() - eta.min()) * float(padding)
+    chord_margin_deg = float(tolerance_px) * pixel_scale
+    xi_half = (0.5 * float(xi.max() - xi.min()) + chord_margin_deg) * float(padding)
+    eta_half = (0.5 * float(eta.max() - eta.min()) + chord_margin_deg) * float(padding)
     xi_min, xi_max = xi_mid - xi_half, xi_mid + xi_half
     eta_min, eta_max = eta_mid - eta_half, eta_mid + eta_half
     naxis1 = max(1, int(math.ceil((xi_max - xi_min) / pixel_scale)))
@@ -1766,6 +2177,8 @@ def plan_image_plane_target(
     device: torch.device | str | None = None,
     union_footprint: bool = False,
     footprint_padding: float = 1.05,
+    footprint_tolerance_px: float = 0.25,
+    footprint_max_depth: int = 20,
     max_footprint_pixels: int | None = None,
 ) -> PlannedImagePlaneTarget:
     if not observations:
@@ -1778,8 +2191,13 @@ def plan_image_plane_target(
             observations,
             device=device,
             padding=footprint_padding,
+            tolerance_px=footprint_tolerance_px,
+            max_depth=footprint_max_depth,
         )
-        if max_footprint_pixels is not None and shape[0] * shape[1] > max_footprint_pixels:
+        if (
+            max_footprint_pixels is not None
+            and shape[0] * shape[1] > max_footprint_pixels
+        ):
             raise RuntimeError(
                 f"Union footprint output {shape[0]}×{shape[1]} "
                 f"({shape[0] * shape[1] / 1e6:.1f} MPix) exceeds --max-footprint-pixels="
@@ -1827,6 +2245,8 @@ def plan_image_plane_cube_target(
     device: torch.device | str | None = None,
     union_footprint: bool = False,
     footprint_padding: float = 1.05,
+    footprint_tolerance_px: float = 0.25,
+    footprint_max_depth: int = 20,
     max_footprint_pixels: int | None = None,
 ) -> PlannedImagePlaneCubeTarget:
     spatial_target = plan_image_plane_target(
@@ -1836,6 +2256,8 @@ def plan_image_plane_cube_target(
         device=device,
         union_footprint=union_footprint,
         footprint_padding=footprint_padding,
+        footprint_tolerance_px=footprint_tolerance_px,
+        footprint_max_depth=footprint_max_depth,
         max_footprint_pixels=max_footprint_pixels,
     )
     (
@@ -1922,7 +2344,10 @@ def _coadd_image_plane_spatial_tiles(
     value_semantics: MapValueSemantics,
     stacking_method: MapStackingMethod,
     drizzle_pixfrac: float,
+    clip_sigma: float,
+    clip_iterations: int,
     map_device: torch.device,
+    scratch_dir: str | Path | None = None,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
 ) -> MapResult:
@@ -1933,6 +2358,11 @@ def _coadd_image_plane_spatial_tiles(
     th = max(int(tile_height), 1)
     tw = max(int(tile_width), 1)
     device = map_device
+    full_context = torch.zeros(
+        (math.ceil(len(observations) / 32), H, W),
+        dtype=torch.int64,
+        device=device,
+    )
     mosaic_surface_brightness_area_scaling: bool | None = None
     if value_semantics == "surface_brightness" and stacking_method == "weighted_mean":
         mosaic_surface_brightness_area_scaling = (
@@ -1943,12 +2373,197 @@ def _coadd_image_plane_spatial_tiles(
                 first_header=dict(first_header),
             )
         )
+    mosaic_representative_area_sr = (
+        representative_pixel_area_sr(
+            WCS(header_dict), target_shape, device=device
+        )
+        if mosaic_surface_brightness_area_scaling
+        else None
+    )
 
-    if stacking_method == "median" or cross_exposure_sky_corrector is not None:
-        # ponytail: these reducers need all exposure projections for each tile;
-        # keep memory tile-bounded and accept repeated I/O until a spillable reducer exists.
+    if cross_exposure_sky_corrector is not None and len(observations) == 1:
+        cross_exposure_sky_corrector = None
+
+    if cross_exposure_sky_corrector is not None:
+        read_dev = str(device)
+        full_pixel_area_sr = None
+        if value_semantics == "flux":
+            full_pixel_area_sr = pixel_area_sr_map(
+                WCS(header_dict), target_shape, device=device
+            )
+
+        def overlap_contributions():
+            for obs_idx, obs in enumerate(observations):
+                if obs_idx == 0:
+                    image = validate_image_plane_2d(first_image).to(device=device)
+                    header_dict_obs = dict(first_header)
+                else:
+                    image, header = read(
+                        obs.path,
+                        hdu=obs.hdu,
+                        return_header=True,
+                        device=read_dev,
+                    )
+                    image = validate_image_plane_2d(image).to(device=device)
+                    header_dict_obs = dict(header)
+                prepared_observation = prepare_image_observation_data(
+                    obs,
+                    image,
+                    device=device,
+                    resampling_kernel=resampling_kernel,
+                    load_weight_map_fn=_load_observation_weight_map,
+                    apply_calibration_fn=_apply_observation_calibration,
+                    background_estimator=background_estimator,
+                )
+                source_wcs = WCS(header_dict_obs)
+                for y0 in range(0, H, th):
+                    for x0 in range(0, W, tw):
+                        y1, x1 = min(y0 + th, H), min(x0 + tw, W)
+                        tile_shape = (y1 - y0, x1 - x0)
+                        sub_header, _ = _subtarget_header_for_window(
+                            header_dict,
+                            full_shape=(H, W),
+                            y0=y0,
+                            y1=y1,
+                            x0=x0,
+                            x1=x1,
+                        )
+                        need_prepared_target = (
+                            value_semantics == "flux"
+                            or header_dict_obs != sub_header
+                            or tuple(image.shape) != tile_shape
+                        )
+                        prepared_target = None
+                        if need_prepared_target:
+                            prepared_target = _prepare_target(
+                                header=sub_header,
+                                target_wcs=WCS(sub_header),
+                                target_shape=tile_shape,
+                                device=device,
+                                canvas_shape=(H, W),
+                                canvas_origin_yx=(y0, x0),
+                                include_pixel_area=(value_semantics == "flux"),
+                                include_representative_pixel_area=bool(
+                                    mosaic_surface_brightness_area_scaling
+                                ),
+                                include_quadrature=(value_semantics == "flux"),
+                                include_world_grid=False,
+                            )
+                            prepared_target.representative_pixel_area_sr = (
+                                mosaic_representative_area_sr
+                            )
+                        projected = _project_observation_to_target_chunk(
+                            obs,
+                            image=image,
+                            header_dict_obs=header_dict_obs,
+                            source_wcs=source_wcs,
+                            prepared_observation=prepared_observation,
+                            prepared_target=prepared_target,
+                            target_header=sub_header,
+                            target_shape=tile_shape,
+                            device=device,
+                            footprint_order=None,
+                            resampling_kernel=resampling_kernel,
+                            value_semantics=value_semantics,
+                            drizzle_pixfrac=drizzle_pixfrac,
+                            background_estimator=None,
+                        )
+                        if projected.target_window is None:
+                            global_window = (y0, y1, x0, x1)
+                            pixel_area = (
+                                None
+                                if prepared_target is None
+                                else prepared_target.pixel_area_sr
+                            )
+                        else:
+                            py0, py1, px0, px1 = projected.target_window
+                            global_window = (
+                                y0 + py0,
+                                y0 + py1,
+                                x0 + px0,
+                                x0 + px1,
+                            )
+                            pixel_area = (
+                                None
+                                if prepared_target is None
+                                or prepared_target.pixel_area_sr is None
+                                else prepared_target.pixel_area_sr[py0:py1, px0:px1]
+                            )
+                        projected_numer = projected.numer
+                        projected_weight = projected.weight
+                        projected_variance = projected.variance_weight
+                        if stacking_method == "median":
+                            projected_numer, projected_weight = (
+                                stack_inputs_from_projected_observation(
+                                    projected.numer,
+                                    projected.weight,
+                                    stacking_method="median",
+                                    value_semantics=value_semantics,
+                                    pixel_area_sr=pixel_area,
+                                )
+                            )
+                            projected_variance = None
+                        yield (
+                            obs_idx,
+                            projected_numer,
+                            projected_weight,
+                            projected_variance,
+                            projected.overlap,
+                            global_window,
+                        )
+                del prepared_observation, image
+
+        spilled = spilled_overlap_background_stack(
+            overlap_contributions(),
+            n_observations=len(observations),
+            shape=target_shape,
+            stacking_method=stacking_method,
+            value_semantics=value_semantics,
+            corrector=cross_exposure_sky_corrector,
+            scratch_dir=scratch_dir,
+            output_device=device,
+            tile_hw=(th, tw),
+            pixel_area_sr=full_pixel_area_sr,
+        )
+        full_data = spilled.data
+        full_weight = spilled.weight
+        full_overlap = spilled.overlap_count
+        full_context = spilled.context
+        full_inverse_variance = (
+            _linear_inverse_variance(
+                spilled.normalization,
+                spilled.variance_weight,
+                value_semantics=value_semantics,
+                pixel_area_sr=full_pixel_area_sr,
+            )
+            if spilled.variance_weight is not None
+            else None
+        )
+        full_correlation_factor = (
+            _local_noise_correlation_factor(
+                spilled.normalization,
+                spilled.variance_weight,
+            )
+            if spilled.variance_weight is not None
+            else None
+        )
+    elif stacking_method in ("median", "sigma_clipped"):
+        if stacking_method == "median":
+            require_exact_median_scratch_capacity(
+                len(observations),
+                (min(th, H), min(tw, W)),
+                scratch_dir=scratch_dir,
+            )
+        else:
+            require_sigma_clipped_scratch_capacity(
+                len(observations),
+                (min(th, H), min(tw, W)),
+                scratch_dir=scratch_dir,
+            )
         full_data = torch.zeros((H, W), dtype=torch.float32, device=device)
         full_weight = torch.zeros((H, W), dtype=torch.float32, device=device)
+        full_inverse_variance: Tensor | None = None
+        full_correlation_factor: Tensor | None = None
         full_overlap = torch.zeros((H, W), dtype=torch.int32, device=device)
         for y0 in range(0, H, th):
             for x0 in range(0, W, tw):
@@ -1970,21 +2585,40 @@ def _coadd_image_plane_spatial_tiles(
                     value_semantics=value_semantics,
                     stacking_method=stacking_method,
                     drizzle_pixfrac=drizzle_pixfrac,
+                    clip_sigma=clip_sigma,
+                    clip_iterations=clip_iterations,
                     spatial_tile_hw=None,
                     surface_brightness_area_scaling=(
                         mosaic_surface_brightness_area_scaling
                     ),
                     device=map_device,
+                    scratch_dir=scratch_dir,
                     background_estimator=background_estimator,
-                    cross_exposure_sky_corrector=cross_exposure_sky_corrector,
+                    cross_exposure_sky_corrector=None,
                 )
                 full_data[y0:y1, x0:x1] = sub.data.to(device=device)
                 full_weight[y0:y1, x0:x1] = sub.weight.to(device=device)
+                if sub.inverse_variance is not None:
+                    if full_inverse_variance is None:
+                        full_inverse_variance = torch.zeros_like(full_weight)
+                    full_inverse_variance[y0:y1, x0:x1] = sub.inverse_variance.to(
+                        device=device
+                    )
+                if sub.correlation_factor is not None:
+                    if full_correlation_factor is None:
+                        full_correlation_factor = torch.zeros_like(full_weight)
+                    full_correlation_factor[y0:y1, x0:x1] = (
+                        sub.correlation_factor.to(device=device)
+                    )
                 if sub.overlap_count is not None:
                     full_overlap[y0:y1, x0:x1] = sub.overlap_count.to(device=device)
+                if sub.context is not None:
+                    full_context[:, y0:y1, x0:x1] = sub.context.to(device=device)
     else:
         numer = torch.zeros((H, W), dtype=torch.float32, device=device)
         denom = torch.zeros((H, W), dtype=torch.float32, device=device)
+        variance_weight = torch.zeros_like(denom)
+        variance_available = stacking_method == "weighted_mean"
         full_overlap = torch.zeros((H, W), dtype=torch.int32, device=device)
         read_dev = str(device)
         for obs_idx, obs in enumerate(observations):
@@ -2040,6 +2674,9 @@ def _coadd_image_plane_spatial_tiles(
                             include_quadrature=(value_semantics == "flux"),
                             include_world_grid=False,
                         )
+                        prepared_target.representative_pixel_area_sr = (
+                            mosaic_representative_area_sr
+                        )
                     projected = _project_observation_to_target_chunk(
                         obs,
                         image=image,
@@ -2079,6 +2716,20 @@ def _coadd_image_plane_spatial_tiles(
                         pixel_area_sr=pixel_area_sr,
                         target_window=projected.target_window,
                     )
+                    if projected.variance_weight is None:
+                        variance_available = False
+                    elif variance_available:
+                        _accumulate_variance_weight(
+                            variance_weight[y0:y1, x0:x1],
+                            projected.variance_weight,
+                            projected.target_window,
+                        )
+                    _set_context_bit(
+                        full_context[:, y0:y1, x0:x1],
+                        obs_idx,
+                        projected.overlap > 0,
+                        projected.target_window,
+                    )
             del prepared_observation, image
 
         full_pixel_area_sr = None
@@ -2086,6 +2737,7 @@ def _coadd_image_plane_spatial_tiles(
             full_pixel_area_sr = pixel_area_sr_map(
                 WCS(header_dict), target_shape, device=device
             )
+        normalization = denom
         full_data, full_weight = finalize_projected_stack(
             numer,
             denom,
@@ -2093,10 +2745,43 @@ def _coadd_image_plane_spatial_tiles(
             value_semantics=value_semantics,
             pixel_area_sr=full_pixel_area_sr,
         )
+        full_inverse_variance = (
+            _linear_inverse_variance(
+                normalization,
+                variance_weight,
+                value_semantics=value_semantics,
+                pixel_area_sr=full_pixel_area_sr,
+            )
+            if variance_available
+            else None
+        )
+        full_correlation_factor = (
+            _local_noise_correlation_factor(normalization, variance_weight)
+            if variance_available
+            else None
+        )
     result = MapResult(
         data=full_data,
         weight=full_weight,
         header=header_dict,
+        inverse_variance=full_inverse_variance,
+        correlation_factor=full_correlation_factor,
+        context=full_context,
+        provenance=_context_provenance(
+            observations,
+            resampling_kernel=resampling_kernel,
+            value_semantics=value_semantics,
+            stacking_method=stacking_method,
+            drizzle_pixfrac=drizzle_pixfrac,
+            surface_brightness_area_scaling=bool(
+                mosaic_surface_brightness_area_scaling
+            ),
+            data_dependent_background=(
+                background_estimator is not None
+                or cross_exposure_sky_corrector is not None
+            ),
+            has_correlation_factor=full_correlation_factor is not None,
+        ),
         overlap_count=full_overlap,
         coverage_moc=None,
         observation_mocs=None,
@@ -2117,9 +2802,12 @@ def coadd_image_plane(
     value_semantics: MapValueSemantics = "surface_brightness",
     stacking_method: MapStackingMethod = "weighted_mean",
     drizzle_pixfrac: float = 1.0,
+    clip_sigma: float = 4.0,
+    clip_iterations: int = 3,
     spatial_tile_hw: tuple[int, int] | None = None,
     surface_brightness_area_scaling: bool | None = None,
     device: torch.device | str | None = None,
+    scratch_dir: str | Path | None = None,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
 ) -> MapResult:
@@ -2131,6 +2819,17 @@ def coadd_image_plane(
     value_semantics = _validated_map_value_semantics(value_semantics)
     stacking_method = _validated_map_stacking_method(stacking_method)
     drizzle_pixfrac = _validated_drizzle_pixfrac(drizzle_pixfrac)
+    clip_sigma = float(clip_sigma)
+    clip_iterations = int(clip_iterations)
+    if not math.isfinite(clip_sigma) or clip_sigma <= 0.0:
+        raise ValueError("clip_sigma must be finite and positive")
+    if clip_iterations <= 0:
+        raise ValueError("clip_iterations must be positive")
+    if stacking_method == "sigma_clipped" and cross_exposure_sky_corrector is not None:
+        raise NotImplementedError(
+            "sigma_clipped stacking with overlap background rectification is not "
+            "yet supported; use background_mode='per-exposure'"
+        )
 
     map_device = _resolve_map_device(device)
     read_dev = str(map_device)
@@ -2161,6 +2860,18 @@ def coadd_image_plane(
             fallback=tuple(first_image.shape[-2:]),
         )
     device = map_device
+    if (
+        spatial_tile_hw is None
+        and footprint_order is None
+        and cross_exposure_sky_corrector is not None
+        and len(observations) > 1
+    ):
+        # ponytail: one internal tile policy keeps overlap execution bounded;
+        # expose tuning only if scorecards show the 1024-pixel default is poor.
+        spatial_tile_hw = (
+            min(1024, int(target_shape[0])),
+            min(1024, int(target_shape[1])),
+        )
     if spatial_tile_hw is not None:
         if footprint_order is not None:
             raise ValueError(
@@ -2180,7 +2891,10 @@ def coadd_image_plane(
             value_semantics=value_semantics,
             stacking_method=stacking_method,
             drizzle_pixfrac=drizzle_pixfrac,
+            clip_sigma=clip_sigma,
+            clip_iterations=clip_iterations,
             map_device=map_device,
+            scratch_dir=scratch_dir,
             background_estimator=background_estimator,
             cross_exposure_sky_corrector=cross_exposure_sky_corrector,
         )
@@ -2218,16 +2932,35 @@ def coadd_image_plane(
 
     numer = torch.zeros(target_shape, dtype=torch.float32, device=device)
     denom = torch.zeros(target_shape, dtype=torch.float32, device=device)
+    variance_weight = torch.zeros_like(denom)
+    variance_available = stacking_method == "weighted_mean"
     overlap_count = torch.zeros(target_shape, dtype=torch.int32, device=device)
+    context = torch.zeros(
+        (math.ceil(len(observations) / 32), *target_shape),
+        dtype=torch.int64,
+        device=device,
+    )
     observation_mocs: list[MOC] | None = [] if footprint_order is not None else None
-    median_images: list[Tensor] | None = [] if stacking_method == "median" else None
-    median_support: list[Tensor] | None = [] if stacking_method == "median" else None
+    use_spilled_median = (
+        stacking_method == "median" and cross_exposure_sky_corrector is None
+    )
+    use_spilled_sigma = stacking_method == "sigma_clipped"
+    median_images: list[Tensor] | None = (
+        [] if stacking_method == "median" and not use_spilled_median else None
+    )
+    median_support: list[Tensor] | None = (
+        [] if stacking_method == "median" and not use_spilled_median else None
+    )
     projected_store: list[dict] | None = (
-        [] if cross_exposure_sky_corrector is not None and stacking_method != "median"
+        []
+        if cross_exposure_sky_corrector is not None and stacking_method != "median"
         else None
     )
 
-    for obs_idx, obs in enumerate(observations):
+    def project_median_observation(
+        obs_idx: int,
+        obs: ImageObservation,
+    ) -> tuple[Tensor, Tensor, Tensor, MOC | None]:
         if obs_idx == 0:
             image = first_image
             header_dict_obs = dict(first_header)
@@ -2249,44 +2982,190 @@ def coadd_image_plane(
             and tuple(image.shape) == target_shape
         ):
             source_wcs = WCS(header_dict_obs)
-        if stacking_method == "median":
-            sampled_numer, sampled_weight, overlap, moc = (
-                _project_observation_to_target(
-                    obs,
-                    image=image,
-                    header_dict_obs=header_dict_obs,
-                    source_wcs=source_wcs,
-                    prepared_target=ensure_prepared_target()
-                    if need_prepared_target
-                    else None,
-                    target_header=header_dict,
-                    target_shape=target_shape,
-                    device=device,
-                    footprint_order=footprint_order,
-                    resampling_kernel=resampling_kernel,
-                    value_semantics=value_semantics,
-                    drizzle_pixfrac=drizzle_pixfrac,
-                    background_estimator=background_estimator,
-                )
+        sampled_numer, sampled_weight, overlap, moc = _project_observation_to_target(
+            obs,
+            image=image,
+            header_dict_obs=header_dict_obs,
+            source_wcs=source_wcs,
+            prepared_target=ensure_prepared_target() if need_prepared_target else None,
+            target_header=header_dict,
+            target_shape=target_shape,
+            device=device,
+            footprint_order=footprint_order,
+            resampling_kernel=resampling_kernel,
+            value_semantics=value_semantics,
+            drizzle_pixfrac=drizzle_pixfrac,
+            background_estimator=background_estimator,
+        )
+        contrib_numer, contrib_weight = stack_inputs_from_projected_observation(
+            sampled_numer,
+            sampled_weight,
+            stacking_method="mean",
+            value_semantics=value_semantics,
+            pixel_area_sr=(
+                ensure_prepared_target().pixel_area_sr
+                if value_semantics == "flux"
+                else None
+            ),
+        )
+        return contrib_numer, contrib_weight > 0.0, overlap, moc
+
+    def spilled_contributions():
+        for obs_idx, obs in enumerate(observations):
+            contrib, support, overlap, moc = project_median_observation(obs_idx, obs)
+            overlap_count.add_(overlap)
+            _set_context_bit(context, obs_idx, overlap > 0, None)
+            if observation_mocs is not None and moc is not None:
+                observation_mocs.append(moc)
+            yield contrib, support
+
+    def project_sigma_observation(
+        obs_idx: int,
+        obs: ImageObservation,
+    ) -> tuple[
+        Tensor,
+        Tensor,
+        Tensor | None,
+        Tensor,
+        MOC | None,
+        tuple[int, int, int, int] | None,
+    ]:
+        if obs_idx == 0:
+            image = first_image
+            header_dict_obs = dict(first_header)
+        else:
+            image, header = read(
+                obs.path, hdu=obs.hdu, return_header=True, device=read_dev
             )
-            contrib_numer, contrib_weight = stack_inputs_from_projected_observation(
-                sampled_numer,
-                sampled_weight,
-                stacking_method="mean",
-                value_semantics=value_semantics,
-                pixel_area_sr=(
-                    ensure_prepared_target().pixel_area_sr
-                    if value_semantics == "flux"
-                    else None
-                ),
+            image = validate_image_plane_2d(image)
+            header_dict_obs = dict(header)
+        need_prepared_target = (
+            value_semantics == "flux"
+            or footprint_order is not None
+            or header_dict_obs != header_dict
+            or tuple(image.shape) != target_shape
+        )
+        source_wcs = None
+        if need_prepared_target and not (
+            headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
+            and tuple(image.shape) == target_shape
+        ):
+            source_wcs = WCS(header_dict_obs)
+        projected = _project_observation_to_target_chunk(
+            obs,
+            image=image,
+            header_dict_obs=header_dict_obs,
+            source_wcs=source_wcs,
+            prepared_target=ensure_prepared_target() if need_prepared_target else None,
+            target_header=header_dict,
+            target_shape=target_shape,
+            device=device,
+            footprint_order=footprint_order,
+            resampling_kernel=resampling_kernel,
+            value_semantics=value_semantics,
+            drizzle_pixfrac=drizzle_pixfrac,
+            background_estimator=background_estimator,
+        )
+        values = torch.where(
+            projected.weight > 0.0,
+            projected.numer / projected.weight,
+            torch.zeros_like(projected.numer),
+        )
+        clip_weight = projected.weight
+        clip_variance = projected.variance_weight
+        if value_semantics == "flux":
+            prepared = ensure_prepared_target()
+            if prepared.pixel_area_sr is None:
+                raise RuntimeError("target pixel area is required for flux semantics")
+            pixel_area = prepared.pixel_area_sr
+            if projected.target_window is not None:
+                y0, y1, x0, x1 = projected.target_window
+                pixel_area = pixel_area[y0:y1, x0:x1]
+            pixel_area_squared = torch.square(pixel_area)
+            safe_pixel_area_squared = torch.clamp(
+                pixel_area_squared,
+                min=torch.finfo(pixel_area_squared.dtype).tiny,
+            )
+            values = pixel_area * values
+            clip_weight = clip_weight / safe_pixel_area_squared
+            if clip_variance is not None:
+                clip_variance = clip_variance / safe_pixel_area_squared
+        return (
+            values,
+            clip_weight,
+            clip_variance,
+            projected.overlap,
+            projected.moc,
+            projected.target_window,
+        )
+
+    def sigma_clipped_contributions():
+        for obs_idx, obs in enumerate(observations):
+            values, weights, variance, _overlap, moc, target_window = (
+                project_sigma_observation(obs_idx, obs)
+            )
+            if observation_mocs is not None and moc is not None:
+                observation_mocs.append(moc)
+            yield values, weights, variance, target_window
+
+    spilled_median_result = None
+    if use_spilled_median:
+        spilled_median_result = spilled_exact_median_stack(
+            spilled_contributions(),
+            n_observations=len(observations),
+            shape=target_shape,
+            scratch_dir=scratch_dir,
+            output_device=device,
+        )
+    spilled_sigma_result = None
+    if use_spilled_sigma:
+        spilled_sigma_result = spilled_sigma_clipped_stack(
+            sigma_clipped_contributions(),
+            n_observations=len(observations),
+            shape=target_shape,
+            clip_sigma=clip_sigma,
+            clip_iterations=clip_iterations,
+            scratch_dir=scratch_dir,
+            output_device=device,
+        )
+
+    observation_loop = (
+        () if use_spilled_median or use_spilled_sigma else enumerate(observations)
+    )
+    for obs_idx, obs in observation_loop:
+        if stacking_method == "median":
+            contrib_numer, support, overlap, moc = project_median_observation(
+                obs_idx, obs
             )
             assert median_images is not None and median_support is not None
             median_images.append(contrib_numer)
-            median_support.append(contrib_weight > 0.0)
+            median_support.append(support)
             overlap_count = overlap_count + overlap
+            _set_context_bit(context, obs_idx, overlap > 0, None)
             if observation_mocs is not None and moc is not None:
                 observation_mocs.append(moc)
         else:
+            if obs_idx == 0:
+                image = first_image
+                header_dict_obs = dict(first_header)
+            else:
+                image, header = read(
+                    obs.path, hdu=obs.hdu, return_header=True, device=read_dev
+                )
+                image = validate_image_plane_2d(image)
+                header_dict_obs = dict(header)
+            need_prepared_target = (
+                value_semantics == "flux"
+                or footprint_order is not None
+                or header_dict_obs != header_dict
+                or tuple(image.shape) != target_shape
+            )
+            source_wcs = None
+            if need_prepared_target and not (
+                headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
+                and tuple(image.shape) == target_shape
+            ):
+                source_wcs = WCS(header_dict_obs)
             projected = _project_observation_to_target_chunk(
                 obs,
                 image=image,
@@ -2327,6 +3206,20 @@ def coadd_image_plane(
                 pixel_area_sr=pixel_area_sr,
                 target_window=projected.target_window,
             )
+            if projected.variance_weight is None:
+                variance_available = False
+            elif variance_available:
+                _accumulate_variance_weight(
+                    variance_weight,
+                    projected.variance_weight,
+                    projected.target_window,
+                )
+            _set_context_bit(
+                context,
+                obs_idx,
+                projected.overlap > 0,
+                projected.target_window,
+            )
             if projected_store is not None:
                 projected_store.append(
                     {
@@ -2343,7 +3236,9 @@ def coadd_image_plane(
         if stacking_method == "median":
             assert median_images is not None and median_support is not None
             corrector_masks = [~(s > 0.0) for s in median_support]
-            corrected = cross_exposure_sky_corrector.correct(median_images, corrector_masks)
+            corrected = cross_exposure_sky_corrector.correct(
+                median_images, corrector_masks
+            )
             median_images.clear()
             median_images.extend(corrected)
         else:
@@ -2377,8 +3272,24 @@ def coadd_image_plane(
                         overlap_count[y0:y1, x0:x1].add_(overlap_contrib)
 
     if stacking_method == "median":
-        assert median_images is not None and median_support is not None
-        coadd, denom = masked_median_stack(median_images, median_support)
+        if spilled_median_result is not None:
+            coadd, denom = spilled_median_result
+        else:
+            assert median_images is not None and median_support is not None
+            coadd, denom = masked_median_stack(median_images, median_support)
+    elif spilled_sigma_result is not None:
+        coadd = spilled_sigma_result.data
+        denom = spilled_sigma_result.weight
+        normalization = denom
+        variance_available = spilled_sigma_result.variance_weight is not None
+        variance_weight = (
+            torch.zeros_like(denom)
+            if spilled_sigma_result.variance_weight is None
+            else spilled_sigma_result.variance_weight
+        )
+        overlap_count = spilled_sigma_result.overlap_count
+        context = spilled_sigma_result.context
+        pixel_area_sr = None
     else:
         pixel_area_sr = None
         if value_semantics == "flux":
@@ -2386,12 +3297,30 @@ def coadd_image_plane(
             if prepared.pixel_area_sr is None:
                 raise RuntimeError("target pixel area is required for flux semantics")
             pixel_area_sr = prepared.pixel_area_sr
+        normalization = denom
         coadd, denom = finalize_projected_stack(
             numer,
             denom,
             stacking_method=stacking_method,
             value_semantics=value_semantics,
             pixel_area_sr=pixel_area_sr,
+        )
+    inverse_variance = None
+    correlation_factor = None
+    if stacking_method != "median" and variance_available:
+        inverse_variance = _linear_inverse_variance(
+            normalization,
+            variance_weight,
+            value_semantics=(
+                "surface_brightness"
+                if stacking_method == "sigma_clipped"
+                else value_semantics
+            ),
+            pixel_area_sr=pixel_area_sr,
+        )
+        correlation_factor = _local_noise_correlation_factor(
+            normalization,
+            variance_weight,
         )
     coverage_moc = None
     if observation_mocs is not None:
@@ -2403,6 +3332,22 @@ def coadd_image_plane(
         data=coadd,
         weight=denom,
         header=header_dict,
+        inverse_variance=inverse_variance,
+        correlation_factor=correlation_factor,
+        context=context,
+        provenance=_context_provenance(
+            observations,
+            resampling_kernel=resampling_kernel,
+            value_semantics=value_semantics,
+            stacking_method=stacking_method,
+            drizzle_pixfrac=drizzle_pixfrac,
+            surface_brightness_area_scaling=apply_surface_brightness_area_scaling,
+            data_dependent_background=(
+                background_estimator is not None
+                or cross_exposure_sky_corrector is not None
+            ),
+            has_correlation_factor=correlation_factor is not None,
+        ),
         overlap_count=overlap_count,
         coverage_moc=coverage_moc,
         observation_mocs=tuple(observation_mocs)
@@ -2413,6 +3358,335 @@ def coadd_image_plane(
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         write(output_path, coadd, header=header_dict, overwrite=True)
     return result
+
+
+_FINITE_APERTURE_COVARIANCE_KERNELS = frozenset(
+    {
+        "nearest",
+        "bilinear",
+        "bicubic",
+        "lanczos3",
+        "lanczos5",
+        "mitchell_netravali",
+        "catmull_rom",
+        "drizzle_point",
+        "drizzle_square",
+        "conservative_polygon",
+        "splat_point",
+        "splat_box",
+    }
+)
+
+
+def evaluate_image_plane_aperture_uncertainty(
+    observations: Sequence[ImageObservation],
+    result: MapResult,
+    aperture_weights: Tensor,
+    *,
+    resampling_kernel: MapResamplingKernel = "bilinear",
+    value_semantics: MapValueSemantics = "surface_brightness",
+    drizzle_pixfrac: float = 1.0,
+    spatial_tile_hw: tuple[int, int] | None = None,
+    surface_brightness_area_scaling: bool | None = None,
+    device: torch.device | str | None = None,
+) -> MapApertureUncertainty:
+    """Propagate independent detector noise through one finite map aperture.
+
+    The aperture is evaluated with the adjoint of the same finite-support
+    observation geometry used by :func:`coadd_image_plane`. Source-pixel
+    coefficients are accumulated across output tiles before squaring, so shared
+    detector pixels contribute their covariance exactly without materializing a
+    map covariance matrix. The supplied ``result`` must be the matching weighted
+    mean product and provides its already-computed normalization.
+    """
+    if not observations:
+        raise ValueError("At least one observation is required")
+    resampling_kernel = _validated_map_resampling_kernel(resampling_kernel)
+    if resampling_kernel not in _FINITE_APERTURE_COVARIANCE_KERNELS:
+        raise ValueError(
+            "finite-aperture covariance requires a finite-support resampling kernel"
+        )
+    value_semantics = _validated_map_value_semantics(value_semantics)
+    drizzle_pixfrac = _validated_drizzle_pixfrac(drizzle_pixfrac)
+    if result.data.ndim != 2 or result.weight.ndim != 2:
+        raise ValueError("finite-aperture covariance requires a 2D MapResult")
+    provenance = result.provenance
+    execution = None if provenance is None else provenance.get("map_execution")
+    if not isinstance(execution, dict):
+        raise ValueError(
+            "finite-aperture covariance requires MapResult execution provenance"
+        )
+    try:
+        recorded_pixfrac = float(execution["drizzle_pixfrac"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("MapResult execution provenance is incomplete") from exc
+    if (
+        execution.get("resampling_kernel") != resampling_kernel
+        or execution.get("value_semantics") != value_semantics
+        or execution.get("stacking_method") != "weighted_mean"
+        or recorded_pixfrac != drizzle_pixfrac
+    ):
+        raise ValueError(
+            "MapResult execution provenance does not match the aperture operator"
+        )
+    if execution.get("data_dependent_background") is not False:
+        raise ValueError(
+            "finite-aperture covariance is unavailable after data-dependent "
+            "background estimation"
+        )
+    recorded_observations = provenance.get("context_observations")
+    expected_observations = [
+        {"index": index, "path": observation.path, "hdu": observation.hdu}
+        for index, observation in enumerate(observations)
+    ]
+    if recorded_observations != expected_observations:
+        raise ValueError(
+            "MapResult observation provenance does not match the aperture operator"
+        )
+    recorded_operators = provenance.get("observation_operators")
+    expected_operators = [
+        _observation_operator_provenance(observation)
+        for observation in observations
+    ]
+    if recorded_operators != expected_operators:
+        raise ValueError(
+            "MapResult observation-operator provenance does not match the aperture operator"
+        )
+    target_shape = (int(result.data.shape[0]), int(result.data.shape[1]))
+    if tuple(result.weight.shape) != target_shape:
+        raise ValueError("MapResult data and weight shapes must match")
+    aperture = torch.as_tensor(aperture_weights)
+    if not aperture.is_floating_point() or tuple(aperture.shape) != target_shape:
+        raise ValueError("aperture_weights must be a floating map-shaped tensor")
+    if not bool(torch.isfinite(aperture).all()) or not bool((aperture != 0.0).any()):
+        raise ValueError("aperture_weights must be finite and nonzero")
+    if result.inverse_variance is None:
+        raise ValueError(
+            "finite-aperture covariance requires explicit detector inverse variance"
+        )
+    inverse_variance = torch.as_tensor(result.inverse_variance)
+    if tuple(inverse_variance.shape) != target_shape:
+        raise ValueError("MapResult inverse variance must match its data shape")
+
+    map_device = _resolve_map_device(device)
+    aperture = aperture.to(device=map_device, dtype=torch.float32)
+    map_weight = result.weight.to(device=map_device, dtype=torch.float32)
+    inverse_variance = inverse_variance.to(device=map_device, dtype=torch.float32)
+    accumulator_dtype = (
+        torch.float32 if map_device.type == "mps" else torch.float64
+    )
+    requested = aperture != 0.0
+    if bool((requested & ((map_weight <= 0.0) | (inverse_variance <= 0.0))).any()):
+        raise ValueError(
+            "aperture includes pixels without detector-noise-supported map coverage"
+        )
+    diagonal_variance = torch.sum(
+        torch.square(aperture)
+        * torch.where(
+            inverse_variance > 0.0,
+            inverse_variance.reciprocal(),
+            torch.zeros_like(inverse_variance),
+        ),
+        dtype=accumulator_dtype,
+    )
+
+    header_dict = normalized_header_for_shape(
+        dict(result.header), target_shape, overrides=None
+    )
+    if value_semantics == "flux":
+        target_area_sr = pixel_area_sr_map(
+            WCS(header_dict), target_shape, device=map_device
+        ).to(dtype=torch.float32)
+        normalization = map_weight * torch.square(target_area_sr)
+        linear_form_weight = torch.where(
+            normalization > 0.0,
+            aperture * target_area_sr / normalization,
+            torch.zeros_like(aperture),
+        )
+    else:
+        target_area_sr = None
+        linear_form_weight = torch.where(
+            map_weight > 0.0,
+            aperture / map_weight,
+            torch.zeros_like(aperture),
+        )
+
+    read_device = str(map_device)
+    first_image, first_header = read(
+        observations[0].path,
+        hdu=observations[0].hdu,
+        return_header=True,
+        device=read_device,
+    )
+    first_image = validate_image_plane_2d(first_image).to(device=map_device)
+    first_header = dict(first_header)
+    if value_semantics != "surface_brightness":
+        apply_area_scaling = False
+    elif surface_brightness_area_scaling is not None:
+        apply_area_scaling = bool(surface_brightness_area_scaling)
+    else:
+        apply_area_scaling = _should_apply_surface_brightness_area_scaling(
+            observations,
+            target_header=header_dict,
+            target_shape=target_shape,
+            first_header=first_header,
+        )
+    if execution.get("surface_brightness_area_scaling") is not apply_area_scaling:
+        raise ValueError(
+            "MapResult area-scaling provenance does not match the aperture operator"
+        )
+    full_representative_area_sr = (
+        representative_pixel_area_sr(
+            WCS(header_dict), target_shape, device=map_device
+        )
+        if apply_area_scaling
+        else None
+    )
+
+    if spatial_tile_hw is None:
+        tile_height = min(1024, target_shape[0])
+        tile_width = min(1024, target_shape[1])
+    else:
+        tile_height = int(spatial_tile_hw[0])
+        tile_width = int(spatial_tile_hw[1])
+        if tile_height <= 0 or tile_width <= 0:
+            raise ValueError("spatial_tile_hw dimensions must be positive")
+
+    exact_variance = torch.zeros(
+        (), dtype=accumulator_dtype, device=map_device
+    )
+    for observation_index, observation in enumerate(observations):
+        if observation_index == 0:
+            image = first_image
+            observation_header = first_header
+        else:
+            image, loaded_header = read(
+                observation.path,
+                hdu=observation.hdu,
+                return_header=True,
+                device=read_device,
+            )
+            image = validate_image_plane_2d(image).to(device=map_device)
+            observation_header = dict(loaded_header)
+        prepared = prepare_image_observation_data(
+            observation,
+            image,
+            device=map_device,
+            resampling_kernel=resampling_kernel,
+            load_weight_map_fn=_load_observation_weight_map,
+            apply_calibration_fn=_apply_observation_calibration,
+            background_estimator=None,
+        )
+        if prepared.operator_bundle.noise is None:
+            raise ValueError(
+                "finite-aperture covariance requires explicit detector inverse variance "
+                "for every observation"
+            )
+        source_weight = prepared.source_weight.detach().to(dtype=torch.float32)
+        source_image = (
+            prepared.image.detach().to(dtype=torch.float32).clone().requires_grad_(True)
+        )
+        differentiable = PreparedImageObservationData(
+            image=source_image,
+            source_weight=source_weight,
+            operator_bundle=prepared.operator_bundle,
+        )
+        source_wcs = WCS(observation_header)
+        source_gradient = torch.zeros_like(source_image)
+        for y0 in range(0, target_shape[0], tile_height):
+            for x0 in range(0, target_shape[1], tile_width):
+                y1 = min(y0 + tile_height, target_shape[0])
+                x1 = min(x0 + tile_width, target_shape[1])
+                aperture_tile = linear_form_weight[y0:y1, x0:x1]
+                if not bool((aperture_tile != 0.0).any()):
+                    continue
+                tile_shape = (y1 - y0, x1 - x0)
+                sub_header, _ = _subtarget_header_for_window(
+                    header_dict,
+                    full_shape=target_shape,
+                    y0=y0,
+                    y1=y1,
+                    x0=x0,
+                    x1=x1,
+                )
+                needs_target = (
+                    value_semantics == "flux"
+                    or observation_header != sub_header
+                    or tuple(source_image.shape) != tile_shape
+                )
+                prepared_target = None
+                if needs_target:
+                    prepared_target = _prepare_target(
+                        header=sub_header,
+                        target_wcs=WCS(sub_header),
+                        target_shape=tile_shape,
+                        device=map_device,
+                        canvas_shape=target_shape,
+                        canvas_origin_yx=(y0, x0),
+                        include_pixel_area=(value_semantics == "flux"),
+                        include_representative_pixel_area=apply_area_scaling,
+                        include_quadrature=(value_semantics == "flux"),
+                        include_world_grid=False,
+                    )
+                    prepared_target.representative_pixel_area_sr = (
+                        full_representative_area_sr
+                    )
+                with torch.enable_grad():
+                    projected = _project_observation_to_target_chunk(
+                        observation,
+                        image=source_image,
+                        header_dict_obs=observation_header,
+                        source_wcs=source_wcs,
+                        prepared_observation=differentiable,
+                        prepared_target=prepared_target,
+                        target_header=sub_header,
+                        target_shape=tile_shape,
+                        device=map_device,
+                        footprint_order=None,
+                        resampling_kernel=resampling_kernel,
+                        value_semantics=value_semantics,
+                        drizzle_pixfrac=drizzle_pixfrac,
+                        background_estimator=None,
+                    )
+                    if projected.numer.numel() == 0:
+                        continue
+                    if projected.target_window is None:
+                        projected_aperture = aperture_tile
+                    else:
+                        py0, py1, px0, px1 = projected.target_window
+                        projected_aperture = aperture_tile[py0:py1, px0:px1]
+                    linear_form = torch.sum(projected.numer * projected_aperture)
+                    if not linear_form.requires_grad:
+                        continue
+                    gradient = torch.autograd.grad(
+                        linear_form,
+                        source_image,
+                        retain_graph=False,
+                        create_graph=False,
+                        allow_unused=True,
+                    )[0]
+                if gradient is not None:
+                    source_gradient.add_(gradient.detach())
+        source_variance = torch.where(
+            source_weight > 0.0,
+            source_weight.reciprocal(),
+            torch.zeros_like(source_weight),
+        )
+        exact_variance.add_(
+            torch.sum(
+                torch.square(source_gradient) * source_variance,
+                dtype=accumulator_dtype,
+            )
+        )
+        if observation_index == 0:
+            del first_image
+        del differentiable, image, prepared, source_gradient, source_image
+        del source_variance, source_weight
+
+    return MapApertureUncertainty(
+        variance=exact_variance,
+        diagonal_variance=diagonal_variance,
+    )
 
 
 class ImagePlaneMapMaker:
@@ -2426,8 +3700,11 @@ class ImagePlaneMapMaker:
         value_semantics: MapValueSemantics = "surface_brightness",
         stacking_method: MapStackingMethod = "weighted_mean",
         drizzle_pixfrac: float = 1.0,
+        clip_sigma: float = 4.0,
+        clip_iterations: int = 3,
         spatial_tile_hw: tuple[int, int] | None = None,
         device: torch.device | str | None = None,
+        scratch_dir: str | Path | None = None,
         background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
         cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
     ) -> None:
@@ -2436,12 +3713,15 @@ class ImagePlaneMapMaker:
         self.value_semantics = _validated_map_value_semantics(value_semantics)
         self.stacking_method = _validated_map_stacking_method(stacking_method)
         self.drizzle_pixfrac = _validated_drizzle_pixfrac(drizzle_pixfrac)
+        self.clip_sigma = float(clip_sigma)
+        self.clip_iterations = int(clip_iterations)
         self.spatial_tile_hw = (
             None
             if spatial_tile_hw is None
             else (int(spatial_tile_hw[0]), int(spatial_tile_hw[1]))
         )
         self.device = device
+        self.scratch_dir = scratch_dir
         self.background_estimator = background_estimator
         self.cross_exposure_sky_corrector = cross_exposure_sky_corrector
 
@@ -2461,8 +3741,11 @@ class ImagePlaneMapMaker:
             value_semantics=self.value_semantics,
             stacking_method=self.stacking_method,
             drizzle_pixfrac=self.drizzle_pixfrac,
+            clip_sigma=self.clip_sigma,
+            clip_iterations=self.clip_iterations,
             spatial_tile_hw=self.spatial_tile_hw,
             device=eff_device,
+            scratch_dir=self.scratch_dir,
             background_estimator=self.background_estimator,
             cross_exposure_sky_corrector=self.cross_exposure_sky_corrector,
         )
@@ -2510,9 +3793,10 @@ def coadd_image_plane_cube(
     value_semantics = _validated_map_value_semantics(value_semantics)
     stacking_method = _validated_map_stacking_method(stacking_method)
     drizzle_pixfrac = _validated_drizzle_pixfrac(drizzle_pixfrac)
-    if stacking_method == "median":
+    if stacking_method in ("median", "sigma_clipped"):
         raise ValueError(
-            "coadd_image_plane_cube currently supports median only for single-band image-plane coadds"
+            "coadd_image_plane_cube supports median and sigma_clipped only for "
+            "single-band image-plane coadds"
         )
 
     if target is None:
@@ -2592,6 +3876,9 @@ def coadd_image_plane_cube(
     n_band = int(target.spectral_axis.values.numel())
     numer = torch.zeros((n_band, *target_shape), dtype=torch.float32, device=device)
     denom = torch.zeros((n_band, *target_shape), dtype=torch.float32, device=device)
+    variance_weight = torch.zeros_like(denom)
+    correlation_weight = torch.zeros_like(denom)
+    variance_available = stacking_method == "weighted_mean"
     overlap_count = torch.zeros(
         (n_band, *target_shape), dtype=torch.int32, device=device
     )
@@ -2665,6 +3952,19 @@ def coadd_image_plane_cube(
             target_window=projected.target_window,
             coeffs=coeffs,
         )
+        if projected.variance_weight is None:
+            variance_available = False
+        elif variance_available:
+            _accumulate_variance_weight(
+                variance_weight,
+                torch.square(coeffs) * projected.variance_weight.unsqueeze(0),
+                projected.target_window,
+            )
+            _accumulate_variance_weight(
+                correlation_weight,
+                torch.square(coeffs) * projected.weight.unsqueeze(0),
+                projected.target_window,
+            )
         if coverage_mocs is not None and projected.moc is not None:
             band_indices = torch.nonzero(
                 projection[obs_idx] > 0.0, as_tuple=False
@@ -2681,12 +3981,28 @@ def coadd_image_plane_cube(
         if prepared.pixel_area_sr is None:
             raise RuntimeError("target pixel area is required for flux semantics")
         pixel_area_sr = prepared.pixel_area_sr.unsqueeze(0)
+    normalization = denom
     cube, denom = finalize_projected_stack(
         numer,
         denom,
         stacking_method=stacking_method,
         value_semantics=value_semantics,
         pixel_area_sr=pixel_area_sr,
+    )
+    inverse_variance = (
+        _linear_inverse_variance(
+            normalization,
+            variance_weight,
+            value_semantics=value_semantics,
+            pixel_area_sr=pixel_area_sr,
+        )
+        if variance_available
+        else None
+    )
+    correlation_factor = (
+        _local_noise_correlation_factor(correlation_weight, variance_weight)
+        if variance_available
+        else None
     )
     return SpectralCubeMapResult(
         spectral_axis=target.spectral_axis,
@@ -2695,6 +4011,8 @@ def coadd_image_plane_cube(
         weight=denom,
         header=header_dict,
         spatial_wcs=target_wcs,
+        inverse_variance=inverse_variance,
+        correlation_factor=correlation_factor,
         overlap_count=overlap_count,
         coverage_mocs=tuple(coverage_mocs) if coverage_mocs is not None else None,
     )
@@ -2730,6 +4048,8 @@ def coadd_image_plane_multiband(
         data=cube.data,
         weight=cube.weight,
         header=cube.header,
+        inverse_variance=cube.inverse_variance,
+        correlation_factor=cube.correlation_factor,
         overlap_count=cube.overlap_count,
         coverage_mocs=cube.coverage_mocs,
         band_observation_counts=cube.band_metadata.observation_count,

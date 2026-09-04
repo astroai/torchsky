@@ -27,7 +27,12 @@ MapResamplingKernel = Literal[
     "splat_box",
 ]
 MapValueSemantics = Literal["surface_brightness", "flux"]
-MapStackingMethod = Literal["weighted_mean", "mean", "median"]
+MapStackingMethod = Literal[
+    "weighted_mean",
+    "mean",
+    "median",
+    "sigma_clipped",
+]
 
 MAP_RESAMPLING_KERNELS: tuple[str, ...] = (
     "nearest",
@@ -51,7 +56,12 @@ MAP_RESAMPLING_KERNELS: tuple[str, ...] = (
     "splat_box",
 )
 MAP_VALUE_SEMANTICS: tuple[str, ...] = ("surface_brightness", "flux")
-MAP_STACKING_METHODS: tuple[str, ...] = ("weighted_mean", "mean", "median")
+MAP_STACKING_METHODS: tuple[str, ...] = (
+    "weighted_mean",
+    "mean",
+    "median",
+    "sigma_clipped",
+)
 
 
 def validate_map_resampling_kernel(resampling_kernel: str) -> MapResamplingKernel:

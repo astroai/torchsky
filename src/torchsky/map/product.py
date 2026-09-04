@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 import json
 import math
 from pathlib import Path
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence
 
 import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
 
+from ..device import default_compute_device
 from ..sphere.moc import MOC
 from ..spectral import SpectralAxis
 from ..spectrophotometry import Passband
@@ -39,6 +40,7 @@ from .operators.config import (
 )
 from .operators.pixel_area import pixel_area_sr_map
 from .scenes import ContinuousFieldModel, SceneRepresentation, as_scene_representation
+from .sky import CrossExposureSkyCorrector
 from .solvers import SolverHooks
 from .target import TargetRenderSpec
 
@@ -111,14 +113,88 @@ class MapProductSpec:
         )
 
 
+MapUncertaintyKind = Literal[
+    "propagated_linear",
+    "empirical_robust",
+    "model_predictive",
+    "ensemble_predictive",
+]
+
+
+@dataclass(frozen=True)
+class MapUncertaintyProduct:
+    """Labeled diagonal uncertainty without pretending it is full covariance."""
+
+    variance: Tensor
+    kind: MapUncertaintyKind
+    components: Mapping[str, Tensor] = dataclass_field(default_factory=dict)
+    correlation_factor: Tensor | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind not in {
+            "propagated_linear",
+            "empirical_robust",
+            "model_predictive",
+            "ensemble_predictive",
+        }:
+            raise ValueError(f"unsupported map uncertainty kind {self.kind!r}")
+        variance = torch.as_tensor(self.variance)
+        if not variance.is_floating_point() or variance.ndim not in {2, 3}:
+            raise ValueError("map variance must be a floating 2D or 3D tensor")
+        if not bool(torch.isfinite(variance).all()) or bool((variance < 0.0).any()):
+            raise ValueError("map variance must be finite and non-negative")
+        for name, component in self.components.items():
+            if not isinstance(name, str) or not name:
+                raise ValueError("map uncertainty component names must be non-empty")
+            component_t = torch.as_tensor(component)
+            if component_t.shape != variance.shape:
+                raise ValueError("map uncertainty component shapes must match variance")
+            if not bool(torch.isfinite(component_t).all()) or bool(
+                (component_t < 0.0).any()
+            ):
+                raise ValueError(
+                    "map uncertainty components must be finite and non-negative"
+                )
+        if self.correlation_factor is not None:
+            factor = torch.as_tensor(self.correlation_factor)
+            if factor.numel() != 1 and factor.shape != variance.shape:
+                raise ValueError(
+                    "map correlation factor must be scalar or match variance shape"
+                )
+            if not bool(torch.isfinite(factor).all()) or bool((factor < 0.0).any()):
+                raise ValueError(
+                    "map correlation factor must be finite and non-negative"
+                )
+            if factor.numel() == 1:
+                if float(factor.item()) <= 0.0:
+                    raise ValueError("scalar map correlation factor must be positive")
+            elif bool(((variance > 0.0) & (factor <= 0.0)).any()):
+                raise ValueError(
+                    "map correlation factor must be positive wherever variance is positive"
+                )
+
+    @property
+    def inverse_variance(self) -> Tensor:
+        variance = torch.as_tensor(self.variance)
+        return torch.where(
+            variance > 0.0,
+            variance.reciprocal(),
+            torch.zeros_like(variance),
+        )
+
+
 @dataclass
 class MapProductResult:
     product: MapProductSpec
     data: Tensor
-    weight: Tensor
+    weight: Tensor | None
     header: dict[str, Any]
     overlap_count: Tensor | None = None
     coverage_mocs: tuple[MOC | None, ...] | None = None
+    uncertainty: MapUncertaintyProduct | None = None
+    mask: Tensor | None = None
+    context: Tensor | None = None
+    provenance: Mapping[str, Any] | None = None
 
     @property
     def n_bands(self) -> int:
@@ -252,6 +328,8 @@ def plan_map_product(
     footprint_order: int | None = None,
     union_footprint: bool = False,
     footprint_padding: float = 1.05,
+    footprint_tolerance_px: float = 0.25,
+    footprint_max_depth: int = 20,
     max_footprint_pixels: int | None = None,
     device: torch.device | str | None = None,
 ) -> MapProductSpec:
@@ -279,6 +357,8 @@ def plan_map_product(
             device=device,
             union_footprint=union_footprint,
             footprint_padding=footprint_padding,
+            footprint_tolerance_px=footprint_tolerance_px,
+            footprint_max_depth=footprint_max_depth,
             max_footprint_pixels=max_footprint_pixels,
         )
         validated_bands = tuple(_coerce_band(band) for band in bands)
@@ -306,6 +386,8 @@ def plan_map_product(
             device=device,
             union_footprint=union_footprint,
             footprint_padding=footprint_padding,
+            footprint_tolerance_px=footprint_tolerance_px,
+            footprint_max_depth=footprint_max_depth,
             max_footprint_pixels=max_footprint_pixels,
         )
         return MapProductSpec(
@@ -321,6 +403,8 @@ def plan_map_product(
         device=device,
         union_footprint=union_footprint,
         footprint_padding=footprint_padding,
+        footprint_tolerance_px=footprint_tolerance_px,
+        footprint_max_depth=footprint_max_depth,
         max_footprint_pixels=max_footprint_pixels,
     )
     reference = observations[reference_index]
@@ -438,6 +522,24 @@ def _wrap_map_result(result: MapResult, product: MapProductSpec) -> MapProductRe
     coverage_mocs = None
     if result.coverage_moc is not None:
         coverage_mocs = (result.coverage_moc,)
+    uncertainty = None
+    if result.inverse_variance is not None:
+        inverse_variance = result.inverse_variance.unsqueeze(0)
+        variance = torch.where(
+            inverse_variance > 0.0,
+            inverse_variance.reciprocal(),
+            torch.zeros_like(inverse_variance),
+        )
+        uncertainty = MapUncertaintyProduct(
+            variance=variance,
+            kind="propagated_linear",
+            components={"detector": variance},
+            correlation_factor=(
+                result.correlation_factor.unsqueeze(0)
+                if result.correlation_factor is not None
+                else None
+            ),
+        )
     return MapProductResult(
         product=product,
         data=result.data.unsqueeze(0),
@@ -449,6 +551,10 @@ def _wrap_map_result(result: MapResult, product: MapProductSpec) -> MapProductRe
             else None
         ),
         coverage_mocs=coverage_mocs,
+        uncertainty=uncertainty,
+        mask=(result.weight > 0.0).unsqueeze(0),
+        context=(result.context.unsqueeze(0) if result.context is not None else None),
+        provenance=result.provenance,
     )
 
 
@@ -456,6 +562,19 @@ def _wrap_cube_result(
     result: SpectralCubeMapResult,
     product: MapProductSpec,
 ) -> MapProductResult:
+    uncertainty = None
+    if result.inverse_variance is not None:
+        variance = torch.where(
+            result.inverse_variance > 0.0,
+            result.inverse_variance.reciprocal(),
+            torch.zeros_like(result.inverse_variance),
+        )
+        uncertainty = MapUncertaintyProduct(
+            variance=variance,
+            kind="propagated_linear",
+            components={"detector": variance},
+            correlation_factor=result.correlation_factor,
+        )
     return MapProductResult(
         product=product,
         data=result.data,
@@ -463,6 +582,8 @@ def _wrap_cube_result(
         header=result.header,
         overlap_count=result.overlap_count,
         coverage_mocs=result.coverage_mocs,
+        uncertainty=uncertainty,
+        mask=result.weight > 0.0,
     )
 
 
@@ -474,8 +595,13 @@ def stack_map_product(
     method: str = "coadd",
     stacking_method: MapStackingMethod = "weighted_mean",
     drizzle_pixfrac: float = 1.0,
+    clip_sigma: float = 4.0,
+    clip_iterations: int = 3,
     spatial_tile_hw: tuple[int, int] | None = None,
     device: torch.device | str | None = None,
+    scratch_dir: str | Path | None = None,
+    background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
+    cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
 ) -> MapProductResult:
     if method != "coadd":
         raise ValueError("stack_map_product currently supports only method='coadd'")
@@ -492,8 +618,13 @@ def stack_map_product(
                 value_semantics=product.value_semantics,
                 stacking_method=stacking_method,
                 drizzle_pixfrac=drizzle_pixfrac,
+                clip_sigma=clip_sigma,
+                clip_iterations=clip_iterations,
                 spatial_tile_hw=spatial_tile_hw,
                 device=device,
+                scratch_dir=scratch_dir,
+                background_estimator=background_estimator,
+                cross_exposure_sky_corrector=cross_exposure_sky_corrector,
             )
             return _wrap_map_result(result, product)
     cube_target = _product_to_cube_target(product)
@@ -506,6 +637,8 @@ def stack_map_product(
         stacking_method=stacking_method,
         drizzle_pixfrac=drizzle_pixfrac,
         device=device,
+        background_estimator=background_estimator,
+        cross_exposure_sky_corrector=cross_exposure_sky_corrector,
     )
     return _wrap_cube_result(result, product)
 
@@ -548,7 +681,8 @@ def render_scene_product(
         int(product.target_header["NAXIS1"]),
     )
     planes: list[Tensor] = []
-    ivar_planes: list[Tensor] = []
+    variance_planes: list[Tensor] = []
+    uncertainty_kind: MapUncertaintyKind | None = None
     target_specs = product.target_render_specs()
     for band_index, target_spec in enumerate(target_specs):
         if solver_hooks is not None:
@@ -560,32 +694,51 @@ def render_scene_product(
                 shape=shape,
             ).to(dtype=torch.float32)
             if solver_hooks.apply_noise is None:
-                ivar = torch.ones_like(plane, dtype=torch.float32)
+                variance = None
             else:
                 weighted = solver_hooks.apply_noise_model(plane)
-                ivar = torch.where(
+                inverse_variance = torch.where(
                     weighted > 0.0,
                     weighted.to(dtype=torch.float32),
-                    torch.ones_like(plane, dtype=torch.float32),
+                    torch.zeros_like(plane, dtype=torch.float32),
                 )
+                variance = torch.where(
+                    inverse_variance > 0.0,
+                    inverse_variance.reciprocal(),
+                    torch.zeros_like(inverse_variance),
+                )
+                uncertainty_kind = "model_predictive"
         elif isinstance(scene_representation, ContinuousFieldModel):
-            rendered, logvar = scene_representation.render_distribution_to_target(
-                target_spec,
-                num_spectral_samples=num_spectral_samples,
+            from .field.rendering import field_model_has_predictive_distribution
+
+            has_distribution = field_model_has_predictive_distribution(
+                scene_representation.model
             )
+            if has_distribution:
+                rendered, logvar = scene_representation.render_distribution_to_target(
+                    target_spec,
+                    num_spectral_samples=num_spectral_samples,
+                )
+                variance = torch.exp(
+                    _coerce_product_plane(
+                        logvar,
+                        band_index=band_index,
+                        n_bands=product.n_bands,
+                        shape=shape,
+                    )
+                ).to(dtype=torch.float32)
+                uncertainty_kind = "model_predictive"
+            else:
+                rendered = scene_representation.render_to_target(
+                    target_spec,
+                    num_spectral_samples=num_spectral_samples,
+                )
+                variance = None
             plane = _coerce_product_plane(
                 rendered,
                 band_index=band_index,
                 n_bands=product.n_bands,
                 shape=shape,
-            ).to(dtype=torch.float32)
-            ivar = torch.exp(
-                -_coerce_product_plane(
-                    logvar,
-                    band_index=band_index,
-                    n_bands=product.n_bands,
-                    shape=shape,
-                )
             ).to(dtype=torch.float32)
         else:
             rendered = scene_representation.render_to_target(target_spec)
@@ -595,17 +748,28 @@ def render_scene_product(
                 n_bands=product.n_bands,
                 shape=shape,
             ).to(dtype=torch.float32)
-            ivar = torch.ones_like(plane, dtype=torch.float32)
+            variance = None
         planes.append(plane)
-        ivar_planes.append(ivar)
+        if variance is not None:
+            variance_planes.append(variance)
     data = torch.stack(planes, dim=0)
+    uncertainty = None
+    if len(variance_planes) == len(planes):
+        total_variance = torch.stack(variance_planes, dim=0)
+        uncertainty = MapUncertaintyProduct(
+            variance=total_variance,
+            kind=uncertainty_kind or "model_predictive",
+            components={"detector": total_variance},
+        )
     return MapProductResult(
         product=product,
         data=data,
-        weight=torch.stack(ivar_planes, dim=0),
+        weight=None,
         header=dict(product.target_header),
         overlap_count=torch.ones_like(data, dtype=torch.int32),
         coverage_mocs=None,
+        uncertainty=uncertainty,
+        mask=torch.ones_like(data, dtype=torch.bool),
     )
 
 
@@ -626,14 +790,23 @@ def render_field_product(
     if spatial_tile_hw is None:
         spatial_tile_hw = product.shape
     # Tiled rendering: render each spatial tile separately to cap memory.
-    from .field.rendering import render_field_observation
+    from .field.rendering import (
+        field_model_has_predictive_distribution,
+        render_field_observation,
+        render_field_observation_distribution,
+    )
     from .field.types import FieldObservation
 
     h, w = product.shape
     th, tw = int(spatial_tile_hw[0]), int(spatial_tile_hw[1])
     n_bands = product.n_bands
-    data = torch.zeros((n_bands, h, w), dtype=torch.float32)
-    weight = torch.zeros((n_bands, h, w), dtype=torch.float32)
+    model_device = next(
+        (parameter.device for parameter in model.parameters()),
+        default_compute_device(),
+    )
+    data = torch.zeros((n_bands, h, w), dtype=torch.float32, device=model_device)
+    has_distribution = field_model_has_predictive_distribution(model)
+    detector_variance = torch.zeros_like(data) if has_distribution else None
     for band_index in range(n_bands):
         band = product.bands[band_index]
         for y0 in range(0, h, th):
@@ -649,9 +822,17 @@ def render_field_product(
                     product.target_header.get("CRPIX2", 1.0)
                 ) - float(y0)
                 tile_obs = FieldObservation(
-                    image=torch.zeros((y1 - y0, x1 - x0), dtype=torch.float32),
+                    image=torch.zeros(
+                        (y1 - y0, x1 - x0),
+                        dtype=torch.float32,
+                        device=model_device,
+                    ),
                     header=tile_hdr,
-                    weight=torch.ones((y1 - y0, x1 - x0), dtype=torch.float32),
+                    weight=torch.ones(
+                        (y1 - y0, x1 - x0),
+                        dtype=torch.float32,
+                        device=model_device,
+                    ),
                     wavelength=band.transmission_center
                     if band.transmission_center is not None
                     else (
@@ -671,21 +852,204 @@ def render_field_product(
                 )
                 model.eval()
                 with torch.no_grad():
-                    tile_pred = render_field_observation(
-                        model,
-                        tile_obs,
-                        num_spectral_samples=num_spectral_samples,
-                        spatial_sampling=spatial_sampling,
-                    )
+                    if detector_variance is None:
+                        tile_pred = render_field_observation(
+                            model,
+                            tile_obs,
+                            num_spectral_samples=num_spectral_samples,
+                            spatial_sampling=spatial_sampling,
+                        )
+                    else:
+                        tile_pred, tile_logvar = render_field_observation_distribution(
+                            model,
+                            tile_obs,
+                            num_spectral_samples=num_spectral_samples,
+                            spatial_sampling=spatial_sampling,
+                        )
                 data[band_index, y0:y1, x0:x1] = tile_pred
-                weight[band_index, y0:y1, x0:x1] = 1.0
+                if detector_variance is not None:
+                    detector_variance[band_index, y0:y1, x0:x1] = torch.exp(
+                        tile_logvar
+                    )
+    uncertainty = (
+        None
+        if detector_variance is None
+        else MapUncertaintyProduct(
+            variance=detector_variance,
+            kind="model_predictive",
+            components={"detector": detector_variance},
+        )
+    )
     return MapProductResult(
         product=product,
         data=data,
-        weight=weight,
+        weight=None,
         header=dict(product.target_header),
         overlap_count=torch.ones_like(data, dtype=torch.int32),
         coverage_mocs=None,
+        uncertainty=uncertainty,
+        mask=torch.ones_like(data, dtype=torch.bool),
+    )
+
+
+def _validated_seed_tuple(
+    seeds: Sequence[int],
+    *,
+    expected: int,
+    label: str,
+) -> tuple[int, ...]:
+    values = tuple(int(seed) for seed in seeds)
+    if len(values) != expected:
+        raise ValueError(f"{label} must match the number of draws")
+    if len(set(values)) != len(values):
+        raise ValueError(f"{label} must be unique")
+    return values
+
+
+def _streaming_sample_variance(
+    samples: Sequence[Tensor],
+    *,
+    reference: Tensor,
+    label: str,
+) -> Tensor:
+    if len(samples) < 2:
+        raise ValueError(f"{label} requires at least two draws")
+    mean = torch.zeros_like(reference)
+    m2 = torch.zeros_like(reference)
+    for count, raw_sample in enumerate(samples, start=1):
+        sample = torch.as_tensor(raw_sample, device=reference.device, dtype=reference.dtype)
+        if sample.shape != reference.shape:
+            raise ValueError(f"{label} draw shape must match the rendered product")
+        if not bool(torch.isfinite(sample).all()):
+            raise ValueError(f"{label} draws must be finite")
+        delta = sample - mean
+        mean = mean + delta / count
+        m2 = m2 + delta * (sample - mean)
+    return m2 / (len(samples) - 1)
+
+
+@torch.no_grad()
+def render_field_ensemble_product(
+    models: Sequence[nn.Module],
+    product: MapProductSpec,
+    *,
+    member_seeds: Sequence[int],
+    calibration_draws: Sequence[Tensor] | None = None,
+    calibration_seeds: Sequence[int] | None = None,
+    num_spectral_samples: int = 9,
+    spatial_sampling: FieldSpatialSampling = "center",
+    spatial_tile_hw: tuple[int, int] | None = None,
+) -> MapProductResult:
+    """Render a seeded ensemble with explicit uncertainty components.
+
+    Between-member sample variance is epistemic. When every member supplies an
+    observation-likelihood variance, the mean of those variances is the detector
+    component. Optional independently generated calibration draws contribute a
+    separate sample-variance component. Rendering is sequential so memory does
+    not grow with ensemble size.
+    """
+    members = tuple(models)
+    if len(members) < 2:
+        raise ValueError("field ensemble requires at least two models")
+    resolved_member_seeds = _validated_seed_tuple(
+        member_seeds,
+        expected=len(members),
+        label="member_seeds",
+    )
+    mean: Tensor | None = None
+    m2: Tensor | None = None
+    detector_sum: Tensor | None = None
+    has_detector: bool | None = None
+    reference_result: MapProductResult | None = None
+    for count, model in enumerate(members, start=1):
+        result = render_field_product(
+            model,
+            product,
+            num_spectral_samples=num_spectral_samples,
+            spatial_sampling=spatial_sampling,
+            spatial_tile_hw=spatial_tile_hw,
+        )
+        sample = result.data
+        if not bool(torch.isfinite(sample).all()):
+            raise ValueError("ensemble member products must be finite")
+        member_has_detector = result.uncertainty is not None
+        if has_detector is None:
+            has_detector = member_has_detector
+            reference_result = result
+            mean = torch.zeros_like(sample)
+            m2 = torch.zeros_like(sample)
+            if member_has_detector:
+                detector_sum = torch.zeros_like(sample)
+        elif member_has_detector != has_detector:
+            raise ValueError(
+                "ensemble members must all provide detector uncertainty or all omit it"
+            )
+        assert mean is not None and m2 is not None
+        if sample.shape != mean.shape or sample.device != mean.device:
+            raise ValueError("ensemble member products must share shape and device")
+        delta = sample - mean
+        mean = mean + delta / count
+        m2 = m2 + delta * (sample - mean)
+        if member_has_detector:
+            assert result.uncertainty is not None and detector_sum is not None
+            detector_sum = detector_sum + result.uncertainty.variance.to(
+                device=sample.device,
+                dtype=sample.dtype,
+            )
+    assert mean is not None and m2 is not None and reference_result is not None
+    epistemic = m2 / (len(members) - 1)
+    components: dict[str, Tensor] = {"epistemic": epistemic}
+    total_variance = epistemic
+    if detector_sum is not None:
+        detector = detector_sum / len(members)
+        components["detector"] = detector
+        total_variance = total_variance + detector
+    resolved_calibration_seeds: tuple[int, ...] | None = None
+    if calibration_draws is not None:
+        draws = tuple(calibration_draws)
+        if calibration_seeds is None:
+            raise ValueError("calibration_seeds are required with calibration_draws")
+        resolved_calibration_seeds = _validated_seed_tuple(
+            calibration_seeds,
+            expected=len(draws),
+            label="calibration_seeds",
+        )
+        calibration = _streaming_sample_variance(
+            draws,
+            reference=mean,
+            label="calibration uncertainty",
+        )
+        components["calibration"] = calibration
+        total_variance = total_variance + calibration
+    elif calibration_seeds is not None:
+        raise ValueError("calibration_draws are required with calibration_seeds")
+    provenance = dict(reference_result.provenance or {})
+    provenance["uncertainty"] = {
+        "ensemble_members": len(members),
+        "member_seeds": list(resolved_member_seeds),
+        "calibration_draws": 0
+        if resolved_calibration_seeds is None
+        else len(resolved_calibration_seeds),
+        "calibration_seeds": None
+        if resolved_calibration_seeds is None
+        else list(resolved_calibration_seeds),
+        "variance_estimator": "unbiased_sample",
+    }
+    return MapProductResult(
+        product=product,
+        data=mean,
+        weight=None,
+        header=dict(product.target_header),
+        overlap_count=reference_result.overlap_count,
+        coverage_mocs=reference_result.coverage_mocs,
+        uncertainty=MapUncertaintyProduct(
+            variance=total_variance,
+            kind="ensemble_predictive",
+            components=components,
+        ),
+        mask=reference_result.mask,
+        context=None,
+        provenance=provenance,
     )
 
 
@@ -707,7 +1071,16 @@ def evaluate_map_product(
 ) -> dict[str, float | list[float] | None]:
     if isinstance(prediction, MapProductResult):
         pred_data = prediction.data
-        pred_weight = prediction.weight
+        if weight is not None:
+            pred_weight = _as_cube(weight)
+        elif prediction.weight is not None:
+            pred_weight = prediction.weight
+        elif prediction.mask is not None:
+            pred_weight = prediction.mask.to(dtype=torch.float32)
+        elif prediction.uncertainty is not None:
+            pred_weight = prediction.uncertainty.inverse_variance
+        else:
+            pred_weight = torch.isfinite(pred_data).to(dtype=torch.float32)
         header = dict(prediction.header)
         value_semantics = prediction.product.value_semantics
     else:
@@ -974,7 +1347,19 @@ def estimate_map_inverse_variance(
     if min_inverse_variance <= 0.0:
         raise ValueError("min_inverse_variance must be positive")
     if isinstance(result, MapProductResult):
-        weight = _as_cube(result.weight).to(dtype=torch.float32)
+        if result.weight is not None:
+            weight = _as_cube(result.weight).to(dtype=torch.float32)
+        elif mode == "native_inverse_variance" and result.uncertainty is not None:
+            weight = _as_cube(result.uncertainty.inverse_variance).to(
+                dtype=torch.float32
+            )
+        elif mode == "support_density_proxy" and support_weight is not None:
+            weight = _as_cube(support_weight).to(dtype=torch.float32)
+        else:
+            raise ValueError(
+                "map inverse variance is unavailable; supply an uncertainty "
+                "product or opt into support_density_proxy with support_weight"
+            )
     else:
         weight = _as_cube(result).to(dtype=torch.float32)
     if mode == "native_inverse_variance":

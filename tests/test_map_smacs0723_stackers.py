@@ -23,6 +23,7 @@ from bench_map_smacs0723_stackers import (
     _fixed_cutout,
     _filter_exposure_paths_by_patterns,
     _format_markdown,
+    _injection_manifest_sign,
     _injection_manifest_tensors,
     _resolve_benchmark_target_header,
     _product_and_metric_arrays,
@@ -137,6 +138,25 @@ def test_empty_injection_manifest_restores_coordinate_rank() -> None:
 
     assert world.shape == (0, 2)
     assert flux.shape == (0,)
+
+
+def test_injection_manifest_sign_is_explicit_and_consistent() -> None:
+    assert _injection_manifest_sign({}) == 1
+    assert _injection_manifest_sign(
+        {"injection_control": {"mode": "negative", "sign": -1}}
+    ) == -1
+    with pytest.raises(ValueError, match="inconsistent"):
+        _injection_manifest_sign(
+            {"injection_control": {"mode": "positive", "sign": -1}}
+        )
+    with pytest.raises(ValueError, match="inconsistent"):
+        _injection_manifest_sign(
+            {"injection_control": {"mode": "negative", "sign": -1.0}}
+        )
+    with pytest.raises(ValueError, match="unsupported"):
+        _injection_manifest_sign(
+            {"injection_control": {"mode": "mystery", "sign": 1}}
+        )
 
 
 def test_explicit_target_header_is_copied_and_shape_checked() -> None:

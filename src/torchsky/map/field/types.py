@@ -33,6 +33,7 @@ FieldModelKind = Literal[
     "fourier_mlp",
     "spectral_power_foam",
     "foam_initialized_inr",
+    "diffuse_foam_hybrid",
     "spectral_basis_field",
     "learned_spectral_basis_field",
     "sky_encoder_bandpass_field",
@@ -64,6 +65,7 @@ FieldSpectralSampling = Literal[
     "mixture_mc",
 ]
 FieldSpatialSampling = Literal["center", "gauss_legendre_2x2"]
+FieldAMPDtype = Literal["none", "float16", "bfloat16"]
 FieldObservationSampling = Literal["uniform", "band_balanced", "epoch"]
 FieldNoisePretrainKind = Literal["none", "uniform", "gaussian", "spectrum"]
 # wavelength | energy | frequency — meaning of spectral_min / spectral_max numeric values
@@ -537,6 +539,14 @@ class FieldObservation:
             )
         if wl.numel() < 2:
             raise ValueError("tabulated transmission requires at least two samples")
+        if not bool(torch.isfinite(wl).all()) or not bool(torch.isfinite(tt).all()):
+            raise ValueError("tabulated transmission samples must be finite")
+        if bool((tt < 0.0).any()):
+            raise ValueError("tabulated transmission throughput must be non-negative")
+        if not bool(tt.sum() > 0.0):
+            raise ValueError(
+                "tabulated transmission requires positive total throughput"
+            )
 
     def to(
         self,
@@ -820,6 +830,10 @@ class FieldFitResult:
     exposure_poses: tuple[ExposurePose | None, ...] | None = None
     operator_bundle: ObservationOperatorBundle | None = None
     observation_operator_bundles: tuple[ObservationOperatorBundle, ...] | None = None
+    optimizer_state: dict[str, Any] | None = None
+    amp_scaler_state: dict[str, Any] | None = None
+    sampling_rng_state: Tensor | None = None
+    completed_steps: int = 0
     _pre_train_loss: float | None = None
 
     @property

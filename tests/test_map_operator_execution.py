@@ -37,6 +37,42 @@ from torchsky.map.operators import (
 from torchsky.map.operators import execution as execution_mod
 
 
+def test_overlap_background_scratch_bytes_are_linear_in_observations() -> None:
+    shape = (5, 7)
+
+    weighted = execution_mod.overlap_background_scratch_bytes(
+        3,
+        shape,
+        stacking_method="weighted_mean",
+    )
+    median = execution_mod.overlap_background_scratch_bytes(
+        3,
+        shape,
+        stacking_method="median",
+    )
+
+    # Per pixel: 3 * (numer, weight, variance, overlap) + 2 graph RHS
+    # planes + one disk-backed float32 compact-fit scratch plane.
+    assert weighted == 5 * 7 * (3 * 16 + 2 * 4 + 4)
+    # Median/mean omit the unused variance plane.
+    assert median == 5 * 7 * (3 * 12 + 2 * 4 + 4)
+
+
+def test_overlap_background_scratch_bytes_validate_inputs() -> None:
+    with pytest.raises(ValueError, match="n_observations"):
+        execution_mod.overlap_background_scratch_bytes(
+            0,
+            (2, 2),
+            stacking_method="weighted_mean",
+        )
+    with pytest.raises(ValueError, match="stacking_method"):
+        execution_mod.overlap_background_scratch_bytes(
+            2,
+            (2, 2),
+            stacking_method="sigma_clipped",
+        )
+
+
 def test_prepare_image_observation_data_uses_weight_and_calibration_callbacks() -> None:
     calls: dict[str, object] = {}
 
@@ -293,9 +329,15 @@ def test_map_config_validators_share_public_option_sets() -> None:
     assert validate_map_resampling_kernel("bilinear") == "bilinear"
     assert validate_map_value_semantics("flux") == "flux"
     assert validate_map_stacking_method("median") == "median"
+    assert validate_map_stacking_method("sigma_clipped") == "sigma_clipped"
     assert "conservative_polygon" in MAP_RESAMPLING_KERNELS
     assert MAP_VALUE_SEMANTICS == ("surface_brightness", "flux")
-    assert MAP_STACKING_METHODS == ("weighted_mean", "mean", "median")
+    assert MAP_STACKING_METHODS == (
+        "weighted_mean",
+        "mean",
+        "median",
+        "sigma_clipped",
+    )
     with pytest.raises(ValueError, match="resampling_kernel"):
         validate_map_resampling_kernel("unsupported")
     with pytest.raises(ValueError, match="value_semantics"):

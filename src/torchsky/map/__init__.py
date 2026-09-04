@@ -18,12 +18,23 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "torchsky.map.image_plane",
         "coadd_image_plane_multiband",
     ),
+    "evaluate_image_plane_aperture_uncertainty": (
+        "torchsky.map.image_plane",
+        "evaluate_image_plane_aperture_uncertainty",
+    ),
     "stack_map_product": ("torchsky.map.product", "stack_map_product"),
     "MapProductSpec": ("torchsky.map.product", "MapProductSpec"),
     "TargetRenderSpec": ("torchsky.map.target", "TargetRenderSpec"),
     "MapBandpassSpec": ("torchsky.map.product", "MapBandpassSpec"),
     "MapProductResult": ("torchsky.map.product", "MapProductResult"),
+    "MapUncertaintyProduct": ("torchsky.map.product", "MapUncertaintyProduct"),
+    "MapPlanV2": ("torchsky.map.plan", "MapPlanV2"),
+    "load_map_plan": ("torchsky.map.plan", "load_map_plan"),
     "MapResult": ("torchsky.map.image_plane", "MapResult"),
+    "MapApertureUncertainty": (
+        "torchsky.map.image_plane",
+        "MapApertureUncertainty",
+    ),
     "MultiBandMapResult": ("torchsky.map.image_plane", "MultiBandMapResult"),
     "SpectralCubeMapResult": ("torchsky.map.image_plane", "SpectralCubeMapResult"),
     "splat_bilinear": ("torchsky.map.splat", "splat_bilinear"),
@@ -72,6 +83,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "map_benchmark_row_key": ("torchsky.map.product", "map_benchmark_row_key"),
     "plan_map_product": ("torchsky.map.product", "plan_map_product"),
     "render_field_product": ("torchsky.map.product", "render_field_product"),
+    "render_field_ensemble_product": (
+        "torchsky.map.product",
+        "render_field_ensemble_product",
+    ),
     "write_map_benchmark_artifacts": (
         "torchsky.map.product",
         "write_map_benchmark_artifacts",
@@ -181,6 +196,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "FieldDomain": ("torchsky.map.field", "FieldDomain"),
     "DetectorToSkyTransform": ("torchsky.map.field", "DetectorToSkyTransform"),
     "FieldFitResult": ("torchsky.map.field", "FieldFitResult"),
+    "FieldAMPDtype": ("torchsky.map.field", "FieldAMPDtype"),
     "ForwardContext": ("torchsky.map.field", "ForwardContext"),
     "DetectorLaw": ("torchsky.map.field", "DetectorLaw"),
     "FourierMLPField": ("torchsky.map.field", "FourierMLPField"),
@@ -465,18 +481,23 @@ def __dir__() -> list[str]:
 
 
 if TYPE_CHECKING:
+    from .plan import MapPlanV2 as MapPlanV2, load_map_plan as load_map_plan
     from .image_plane import (
+        MapApertureUncertainty as MapApertureUncertainty,
         MapResult as MapResult,
         MultiBandMapResult as MultiBandMapResult,
         SpectralCubeMapResult as SpectralCubeMapResult,
         coadd_image_plane as coadd_image_plane,
         coadd_image_plane_cube as coadd_image_plane_cube,
         coadd_image_plane_multiband as coadd_image_plane_multiband,
+        evaluate_image_plane_aperture_uncertainty as evaluate_image_plane_aperture_uncertainty,
     )
     from .product import (
         MapBandpassSpec as MapBandpassSpec,
         MapProductResult as MapProductResult,
         MapProductSpec as MapProductSpec,
+        MapUncertaintyProduct as MapUncertaintyProduct,
+        render_field_ensemble_product as render_field_ensemble_product,
         stack_map_product as stack_map_product,
     )
     from .target import TargetRenderSpec as TargetRenderSpec
@@ -486,12 +507,17 @@ __all__ = [
     "coadd_image_plane",
     "coadd_image_plane_cube",
     "coadd_image_plane_multiband",
+    "evaluate_image_plane_aperture_uncertainty",
     "stack_map_product",
     "MapProductSpec",
     "TargetRenderSpec",
     "MapBandpassSpec",
     "MapProductResult",
+    "MapUncertaintyProduct",
+    "MapPlanV2",
+    "load_map_plan",
     "MapResult",
+    "MapApertureUncertainty",
     "MultiBandMapResult",
     "SpectralCubeMapResult",
 ]

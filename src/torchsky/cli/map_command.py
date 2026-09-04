@@ -4,35 +4,50 @@ from __future__ import annotations
 
 import argparse
 import glob
+from importlib import metadata as importlib_metadata
 import json
 import math
 import os
+import platform
+import subprocess
 import sys
 import tempfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Sequence, cast
+from typing import Any, Sequence, cast
 
 import torch
 
 from ..device import default_compute_device
-from ..io import HDUList, TensorHDU, read, write
+from ..io import HDUList, TensorHDU, read
 from ..map.field import (
     FieldObservation,
     FieldSpatialSampling,
     estimate_field_domain,
     fit_field_model,
+    get_field_model_preset,
+    load_field_artifact,
     make_field_model,
+    save_field_artifact,
 )
 from ..map.image_plane import (
     ImageObservation,
 )
+from ..map.io_utils import write_map_product
 from ..map.product import (
     MapBandpassSpec,
     plan_map_product,
     render_field_product,
     stack_map_product,
 )
+from ..map.plan import MapPlanV2, build_map_input_identity, load_map_plan
+from ..map.operators.execution import (
+    exact_median_scratch_bytes,
+    overlap_background_scratch_bytes,
+    sigma_clipped_scratch_bytes,
+)
+from ..map.sky import CrossExposureSkyCorrector, MeshSkyEstimator, PolynomialSkyModel
+from ..spectrophotometry import Passband
 
 from ..filter_profiles import field_observation_spectral_kwargs, resolve_inr_bandpass
 from ..instrument import NIRCAM_UPDEC_BANDS, nircam_imaging_band
@@ -42,8 +57,7 @@ _INR_BAND_TABLE: dict[str, tuple[float, float, float, float]] = {}
 for _band_name in NIRCAM_UPDEC_BANDS:
     _band_metadata = nircam_imaging_band(_band_name)
     _fwhm = (
-        _band_metadata.half_power_max_angstrom
-        - _band_metadata.half_power_min_angstrom
+        _band_metadata.half_power_max_angstrom - _band_metadata.half_power_min_angstrom
     )
     _INR_BAND_TABLE[_band_name] = (
         _band_metadata.half_power_min_angstrom,
@@ -51,6 +65,110 @@ for _band_name in NIRCAM_UPDEC_BANDS:
         _band_metadata.pivot_wavelength_angstrom,
         _fwhm / (2.0 * math.sqrt(2.0 * math.log(2.0))),
     )
+
+
+_WORKFLOW_DEFAULTS: dict[str, tuple[str, str, str]] = {
+    "native": ("bilinear", "weighted_mean", "none"),
+    "drizzle": ("drizzle_square", "weighted_mean", "none"),
+    "swarp": ("lanczos3", "weighted_mean", "per-exposure"),
+    "montage": ("conservative_polygon", "weighted_mean", "overlap"),
+}
+
+
+def _installed_version(distribution: str) -> str | None:
+    try:
+        return importlib_metadata.version(distribution)
+    except importlib_metadata.PackageNotFoundError:
+        return None
+
+
+def _source_commit() -> str | None:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=Path(__file__).resolve().parents[3],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    commit = result.stdout.strip()
+    return commit if result.returncode == 0 and commit else None
+
+
+def _software_manifest() -> dict[str, str | None]:
+    return {
+        "torchsky": _installed_version("torchsky"),
+        "torchfits": _installed_version("torchfits"),
+        "torch": torch.__version__,
+        "python": platform.python_version(),
+        "commit": _source_commit(),
+    }
+
+
+def _runtime_manifest(args: argparse.Namespace, resolved_device: str) -> dict:
+    return {
+        "dtype": "float32",
+        "amp_dtype": str(getattr(args, "field_amp", "none")),
+        "requested_device": getattr(args, "device", None),
+        "device": resolved_device,
+        "seeds": {"torch": int(torch.initial_seed())},
+        "scratch": _resolved_path(getattr(args, "scratch_dir", None)),
+    }
+
+
+def _optional_input_identity(
+    path: str | None,
+    hdu: int | str | None,
+) -> dict | None:
+    if path is None:
+        return None
+    return build_map_input_identity(path, hdu=hdu)
+
+
+def _resolve_map_workflow(args: argparse.Namespace) -> None:
+    """Expand one CLI workflow preset into the existing explicit controls."""
+    workflow = str(getattr(args, "workflow", "native"))
+    try:
+        default_kernel, default_stack, default_background = _WORKFLOW_DEFAULTS[workflow]
+    except KeyError as exc:
+        raise SystemExit(f"unknown map workflow {workflow!r}") from exc
+    if getattr(args, "kernel", None) is None:
+        args.kernel = default_kernel
+    if getattr(args, "stack", None) is None:
+        args.stack = default_stack
+    explicit_background = getattr(args, "background_mode", None)
+    if bool(getattr(args, "sky", False)):
+        if explicit_background not in (None, "per-exposure"):
+            raise SystemExit("--sky conflicts with --background-mode")
+        explicit_background = "per-exposure"
+    args.background_mode = explicit_background or default_background
+    args.workflow = workflow
+
+
+def _sky_estimator(args: argparse.Namespace):
+    if str(getattr(args, "sky_method", "mesh")) == "polynomial":
+        return PolynomialSkyModel(
+            order=int(getattr(args, "sky_order", 3)),
+            statistic=str(getattr(args, "sky_statistic", "huber")),
+        )
+    mesh_filter = getattr(args, "sky_mesh_filter", "median_3")
+    return MeshSkyEstimator(
+        block_size=int(getattr(args, "sky_block_size", 128)),
+        statistic=str(getattr(args, "sky_statistic", "huber")),
+        mesh_filter=None if mesh_filter == "none" else str(mesh_filter),
+        interpolate=str(getattr(args, "sky_interpolate", "bicubic")),
+    )
+
+
+def _background_strategy(args: argparse.Namespace):
+    mode = str(getattr(args, "background_mode", "none"))
+    if mode == "none":
+        return None, None
+    estimator = _sky_estimator(args)
+    if mode == "per-exposure":
+        return estimator, None
+    if mode == "overlap":
+        return None, CrossExposureSkyCorrector(estimator=estimator)
+    raise SystemExit(f"unknown background mode {mode!r}")
 
 
 def _write_map_plan(path: Path, plan: dict) -> None:
@@ -83,6 +201,23 @@ def _write_map_plan(path: Path, plan: dict) -> None:
 
 def _resolved_path(path: str | Path | None) -> str | None:
     return None if path is None else str(Path(path).expanduser().resolve())
+
+
+def _field_artifact_identities(path: str | Path | None) -> list[dict] | None:
+    if path is None:
+        return None
+    root = Path(path).expanduser().resolve()
+    manifest = root / "manifest.json"
+    weights = root / "weights.pt"
+    if not manifest.exists() and not weights.exists():
+        return None
+    if not manifest.is_file() or not weights.is_file():
+        raise ValueError(f"incomplete field artifact: {root}")
+    files = [manifest, weights]
+    training_state = root / "training_state.pt"
+    if training_state.is_file():
+        files.append(training_state)
+    return [build_map_input_identity(file, hdu=None) for file in files]
 
 
 def _expand_inputs(patterns: Sequence[str]) -> list[str]:
@@ -181,7 +316,7 @@ def _paths_to_field_observations(
     paths: Sequence[str],
     *,
     hdu: int | Sequence[int] = 0,
-    spectral_kw: dict,
+    spectral_kw: dict | Sequence[dict],
     read_device: str,
     weights: Sequence[float] | None = None,
     background_offsets: Sequence[float] | None = None,
@@ -190,11 +325,12 @@ def _paths_to_field_observations(
     weight_hdu: int | str | None = 0,
     mask_hdu: int | str | None = 0,
 ) -> list[FieldObservation]:
-    skw = spectral_kw
     out: list[FieldObservation] = []
     scalar_weights = list(weights) if weights is not None else [1.0] * len(paths)
     backgrounds = (
-        list(background_offsets) if background_offsets is not None else [0.0] * len(paths)
+        list(background_offsets)
+        if background_offsets is not None
+        else [0.0] * len(paths)
     )
     wpaths = list(weight_maps) if weight_maps is not None else [None] * len(paths)
     mpaths = list(mask_maps) if mask_maps is not None else [None] * len(paths)
@@ -206,15 +342,26 @@ def _paths_to_field_observations(
         raise ValueError("weight_maps count must match input path count")
     if len(mpaths) != len(paths):
         raise ValueError("mask_maps count must match input path count")
+    spectral_kws = (
+        [spectral_kw] * len(paths)
+        if isinstance(spectral_kw, dict)
+        else list(spectral_kw)
+    )
+    if len(spectral_kws) != len(paths):
+        raise ValueError("spectral_kw count must match input path count")
     hdus: Sequence[int]
     if isinstance(hdu, int):
         hdus = [hdu] * len(paths)
     else:
         hdus = list(hdu)
         if len(hdus) != len(paths):
-            raise ValueError("hdus (len={}) count must match paths count ({})".format(len(hdus), len(paths)))
-    for p, hdu_i, scalar_weight, background_offset, weight_path, mask_path in zip(
-        paths, hdus, scalar_weights, backgrounds, wpaths, mpaths
+            raise ValueError(
+                "hdus (len={}) count must match paths count ({})".format(
+                    len(hdus), len(paths)
+                )
+            )
+    for p, hdu_i, scalar_weight, background_offset, weight_path, mask_path, skw in zip(
+        paths, hdus, scalar_weights, backgrounds, wpaths, mpaths, spectral_kws
     ):
         img, hdr = read(p, hdu=hdu_i, return_header=True, device=read_device)
         if img.ndim != 2:
@@ -250,6 +397,143 @@ def _paths_to_field_observations(
     return out
 
 
+def _resolve_inr_observation_spectra(
+    args: argparse.Namespace,
+    paths: Sequence[str],
+    hdus: Sequence[int],
+    *,
+    read_device: str,
+) -> tuple[list[str], list[dict]]:
+    """Resolve one passband per exposure, caching repeated filter profiles."""
+    explicit_band = getattr(args, "inr_band", None)
+    if explicit_band is not None:
+        bands = [str(explicit_band).strip().upper()] * len(paths)
+    else:
+        bands = []
+        for path, hdu in zip(paths, hdus):
+            _, header = read(path, hdu=hdu, return_header=True, device=read_device)
+            band = _header_filter_keyword(dict(header))
+            if band is None:
+                raise SystemExit(
+                    f"{path}[{hdu}]: field fitting requires FILTER/FILTNAM "
+                    "or an explicit --inr-band"
+                )
+            bands.append(str(band).strip().upper())
+
+    unique_bands = tuple(dict.fromkeys(bands))
+    source = str(getattr(args, "inr_spectral_source", "svo"))
+    if len(unique_bands) > 1:
+        if source == "gaussian":
+            raise SystemExit(
+                "joint multiband fitting cannot use one Gaussian profile for "
+                "multiple header filters; use builtin, SVO, or a transmission directory"
+            )
+        if source == "file" and getattr(args, "inr_transmission", None) is not None:
+            raise SystemExit(
+                "joint multiband fitting requires --inr-transmission-dir, not one "
+                "--inr-transmission file"
+            )
+        if source == "svo" and getattr(args, "svo_filter_id", None) is not None:
+            raise SystemExit(
+                "joint multiband fitting cannot apply one --svo-filter-id to "
+                "multiple header filters"
+            )
+
+    profiles = {band: _inr_spectral_field_kwargs(args, band) for band in unique_bands}
+    return bands, [profiles[band] for band in bands]
+
+
+def _map_bandpass_spec(label: str, spectral_kw: dict) -> MapBandpassSpec:
+    wavelength = spectral_kw.get("transmission_wavelength")
+    throughput = spectral_kw.get("transmission_throughput")
+    if wavelength is not None or throughput is not None:
+        if wavelength is None or throughput is None:
+            raise ValueError("tabulated passband requires wavelength and throughput")
+        return MapBandpassSpec(
+            label=label,
+            spectral_min=spectral_kw.get("spectral_min"),
+            spectral_max=spectral_kw.get("spectral_max"),
+            passband=Passband.from_samples(
+                wavelength,
+                throughput,
+                name=label,
+            ),
+        )
+    return MapBandpassSpec(
+        label=label,
+        transmission_center=spectral_kw.get("transmission_center"),
+        transmission_sigma=spectral_kw.get("transmission_sigma"),
+        spectral_min=spectral_kw.get("spectral_min"),
+        spectral_max=spectral_kw.get("spectral_max"),
+    )
+
+
+def _spectral_plan_entry(label: str, spectral_kw: dict) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "label": label,
+        "wavelength": spectral_kw.get("wavelength"),
+        "spectral_min": spectral_kw.get("spectral_min"),
+        "spectral_max": spectral_kw.get("spectral_max"),
+        "transmission_center": spectral_kw.get("transmission_center"),
+        "transmission_sigma": spectral_kw.get("transmission_sigma"),
+    }
+    wavelength = spectral_kw.get("transmission_wavelength")
+    throughput = spectral_kw.get("transmission_throughput")
+    if wavelength is not None and throughput is not None:
+        entry["transmission_wavelength"] = torch.as_tensor(wavelength).tolist()
+        entry["transmission_throughput"] = torch.as_tensor(throughput).tolist()
+    return entry
+
+
+def _field_spectra_from_plan(
+    spectral: Any,
+    *,
+    input_count: int,
+) -> tuple[list[str], list[dict]]:
+    if not isinstance(spectral, dict):
+        raise ValueError("field plan requires spectral metadata")
+    entries = spectral.get("bands")
+    observation_bands = spectral.get("observation_bands")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("field plan requires resolved band profiles")
+    if not isinstance(observation_bands, list) or len(observation_bands) != input_count:
+        raise ValueError("field plan observation_bands must match inputs")
+    profiles: dict[str, dict] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("label"), str):
+            raise ValueError("field plan band profiles require labels")
+        label = str(entry["label"])
+        profile = {
+            key: value
+            for key, value in entry.items()
+            if key
+            not in {
+                "label",
+                "transmission_wavelength",
+                "transmission_throughput",
+            }
+            and value is not None
+        }
+        profile["band_name"] = label
+        if profile.get("wavelength") is None:
+            profile["wavelength"] = profile.get("transmission_center")
+        for key in ("transmission_wavelength", "transmission_throughput"):
+            value = entry.get(key)
+            if value is not None:
+                if not isinstance(value, list):
+                    raise ValueError(f"field plan {key} must be a list")
+                profile[key] = torch.as_tensor(value, dtype=torch.float32)
+        profiles[label] = profile
+    bands = [str(value) for value in observation_bands]
+    try:
+        spectral_kws = [profiles[band] for band in bands]
+    except KeyError as exc:
+        raise ValueError(
+            f"field plan observation references unknown band {exc.args[0]!r}"
+        ) from exc
+    return bands, spectral_kws
+
+
 def _compute_spatial_tile_hw(
     shape: tuple[int, int],
     *,
@@ -273,6 +557,9 @@ def _compute_spatial_tile_hw(
 
 
 def _run_coadd(args: argparse.Namespace) -> int:
+    _resolve_map_workflow(args)
+    clip_sigma = float(getattr(args, "clip_sigma", 4.0))
+    clip_iterations = int(getattr(args, "clip_iterations", 3))
     inputs = args.inputs
     if not inputs:
         print("torchsky map: no input files matched", file=sys.stderr)
@@ -286,62 +573,108 @@ def _run_coadd(args: argparse.Namespace) -> int:
     expanded_photometric_scales: list[float] = []
     expanded_background_offsets: list[float] = []
     expanded_weight_maps: list[str | None] = []
+    expanded_weight_is_inverse_variance: list[bool] = []
     expanded_mask_maps: list[str | None] = []
     expanded_primary_beam_maps: list[str | None] = []
 
-    user_hdu = int(args.hdu)
-    for i, p in enumerate(inputs):
-        image_hdus = _probe_image_hdus(p)
-        if len(image_hdus) == 0:
-            expanded_paths.append(p)
-            expanded_hdus.append(user_hdu)
-            expanded_weights.append(float(args.weights[i]))
-            expanded_photometric_scales.append(float(args.photometric_scales[i]))
-            expanded_background_offsets.append(float(args.background_offsets[i]))
-            expanded_weight_maps.append(args.weight_maps[i])
-            expanded_mask_maps.append(args.mask_maps[i])
-            expanded_primary_beam_maps.append(args.primary_beam_maps[i])
-        elif len(image_hdus) == 1:
-            hdu = user_hdu if user_hdu in image_hdus else image_hdus[0]
-            expanded_paths.append(p)
-            expanded_hdus.append(hdu)
-            expanded_weights.append(float(args.weights[i]))
-            expanded_photometric_scales.append(float(args.photometric_scales[i]))
-            expanded_background_offsets.append(float(args.background_offsets[i]))
-            expanded_weight_maps.append(args.weight_maps[i])
-            expanded_mask_maps.append(args.mask_maps[i])
-            expanded_primary_beam_maps.append(args.primary_beam_maps[i])
-        else:
-            if user_hdu != 0 and user_hdu in image_hdus:
+    resolved_inputs = getattr(args, "_resolved_plan_inputs", None)
+    if resolved_inputs is not None:
+        for item in resolved_inputs:
+            identity = item["identity"]
+            expanded_paths.append(str(identity["path"]))
+            expanded_hdus.append(int(identity.get("hdu", 0)))
+            expanded_weights.append(float(item.get("weight", 1.0)))
+            expanded_photometric_scales.append(
+                float(item.get("photometric_scale", 1.0))
+            )
+            expanded_background_offsets.append(
+                float(item.get("background_offset", 0.0))
+            )
+            weight_map = item.get("weight_map")
+            expanded_weight_maps.append(weight_map)
+            expanded_weight_is_inverse_variance.append(
+                bool(item.get("weight_is_inverse_variance", weight_map is not None))
+            )
+            expanded_mask_maps.append(item.get("mask_map"))
+            expanded_primary_beam_maps.append(item.get("primary_beam_map"))
+    else:
+        user_hdu = int(args.hdu)
+        explicit_scalar_weight = bool(
+            getattr(args, "_weights_are_inverse_variance", False)
+        )
+        for i, p in enumerate(inputs):
+            image_hdus = _probe_image_hdus(p)
+            if len(image_hdus) == 0:
                 expanded_paths.append(p)
                 expanded_hdus.append(user_hdu)
                 expanded_weights.append(float(args.weights[i]))
                 expanded_photometric_scales.append(float(args.photometric_scales[i]))
                 expanded_background_offsets.append(float(args.background_offsets[i]))
                 expanded_weight_maps.append(args.weight_maps[i])
+                expanded_weight_is_inverse_variance.append(
+                    explicit_scalar_weight or args.weight_maps[i] is not None
+                )
+                expanded_mask_maps.append(args.mask_maps[i])
+                expanded_primary_beam_maps.append(args.primary_beam_maps[i])
+            elif len(image_hdus) == 1:
+                hdu = user_hdu if user_hdu in image_hdus else image_hdus[0]
+                expanded_paths.append(p)
+                expanded_hdus.append(hdu)
+                expanded_weights.append(float(args.weights[i]))
+                expanded_photometric_scales.append(float(args.photometric_scales[i]))
+                expanded_background_offsets.append(float(args.background_offsets[i]))
+                expanded_weight_maps.append(args.weight_maps[i])
+                expanded_weight_is_inverse_variance.append(
+                    explicit_scalar_weight or args.weight_maps[i] is not None
+                )
                 expanded_mask_maps.append(args.mask_maps[i])
                 expanded_primary_beam_maps.append(args.primary_beam_maps[i])
             else:
-                for hdu in image_hdus:
+                if user_hdu != 0 and user_hdu in image_hdus:
                     expanded_paths.append(p)
-                    expanded_hdus.append(hdu)
+                    expanded_hdus.append(user_hdu)
                     expanded_weights.append(float(args.weights[i]))
-                    expanded_photometric_scales.append(float(args.photometric_scales[i]))
-                    expanded_background_offsets.append(float(args.background_offsets[i]))
+                    expanded_photometric_scales.append(
+                        float(args.photometric_scales[i])
+                    )
+                    expanded_background_offsets.append(
+                        float(args.background_offsets[i])
+                    )
                     expanded_weight_maps.append(args.weight_maps[i])
+                    expanded_weight_is_inverse_variance.append(
+                        explicit_scalar_weight or args.weight_maps[i] is not None
+                    )
                     expanded_mask_maps.append(args.mask_maps[i])
                     expanded_primary_beam_maps.append(args.primary_beam_maps[i])
-                n_hdus = len(image_hdus)
-                print(
-                    f"  {p}: auto-expanded {n_hdus} image HDUs {list(image_hdus)}",
-                    file=sys.stderr,
-                )
+                else:
+                    for hdu in image_hdus:
+                        expanded_paths.append(p)
+                        expanded_hdus.append(hdu)
+                        expanded_weights.append(float(args.weights[i]))
+                        expanded_photometric_scales.append(
+                            float(args.photometric_scales[i])
+                        )
+                        expanded_background_offsets.append(
+                            float(args.background_offsets[i])
+                        )
+                        expanded_weight_maps.append(args.weight_maps[i])
+                        expanded_weight_is_inverse_variance.append(
+                            explicit_scalar_weight or args.weight_maps[i] is not None
+                        )
+                        expanded_mask_maps.append(args.mask_maps[i])
+                        expanded_primary_beam_maps.append(args.primary_beam_maps[i])
+                    print(
+                        f"  {p}: auto-expanded {len(image_hdus)} image HDUs "
+                        f"{list(image_hdus)}",
+                        file=sys.stderr,
+                    )
 
     observations = [
         ImageObservation(
             path=p,
             hdu=hdu,
             weight=float(w),
+            weight_is_inverse_variance=bool(weight_is_inverse_variance),
             photometric_scale=float(ps),
             background_offset=float(bg),
             weight_path=wp,
@@ -351,26 +684,35 @@ def _run_coadd(args: argparse.Namespace) -> int:
             primary_beam_path=pbp,
             primary_beam_hdu=args.primary_beam_hdu,
         )
-        for p, hdu, w, ps, bg, wp, mp, pbp in zip(
-            expanded_paths, expanded_hdus, expanded_weights,
-            expanded_photometric_scales, expanded_background_offsets,
-            expanded_weight_maps, expanded_mask_maps, expanded_primary_beam_maps,
+        for p, hdu, w, weight_is_inverse_variance, ps, bg, wp, mp, pbp in zip(
+            expanded_paths,
+            expanded_hdus,
+            expanded_weights,
+            expanded_weight_is_inverse_variance,
+            expanded_photometric_scales,
+            expanded_background_offsets,
+            expanded_weight_maps,
+            expanded_mask_maps,
+            expanded_primary_beam_maps,
         )
     ]
 
-    if getattr(args, "sky", False):
-        print(
-            "torchsky map: --sky is no longer built into the coadd pipeline. "
-            "Pre-compute per-exposure backgrounds (e.g. via the MegaCam benchmark "
-            "script's estimate_background_offsets) and pass them with --background-offsets.",
-            file=sys.stderr,
-        )
     ref_header = None
-    if args.reference is not None:
-        _, rh = read(str(args.reference), hdu=args.reference_hdu, return_header=True, device=read_dev)
+    replay_header = getattr(args, "_plan_target_header", None)
+    if replay_header is not None:
+        ref_header = dict(replay_header)
+    elif args.reference is not None:
+        _, rh = read(
+            str(args.reference),
+            hdu=args.reference_hdu,
+            return_header=True,
+            device=read_dev,
+        )
         ref_header = dict(rh)
 
-    union_footprint = bool(getattr(args, "union_footprint", False))
+    union_footprint = (
+        bool(getattr(args, "union_footprint", False)) and replay_header is None
+    )
     reference_index = int(args.plan_reference)
     if not union_footprint and not 0 <= reference_index < len(observations):
         raise SystemExit(
@@ -384,16 +726,27 @@ def _run_coadd(args: argparse.Namespace) -> int:
         header_overrides=ref_header,
         union_footprint=union_footprint,
         footprint_padding=float(getattr(args, "footprint_padding", 1.0)),
+        footprint_tolerance_px=float(getattr(args, "footprint_tolerance_px", 0.25)),
+        footprint_max_depth=int(getattr(args, "footprint_max_depth", 20)),
         max_footprint_pixels=getattr(args, "max_footprint_pixels", None),
         value_semantics=args.value_semantics,
         device=args.device,
     )
 
-    tile_hw = _compute_spatial_tile_hw(
-        product.shape,
-        auto_tile=bool(args.auto_tile),
-        tile_pixels=args.tile_pixels,
-        tile_above_megapixels=float(args.tile_above_megapixels),
+    replay_tile_hw = getattr(args, "_plan_tile_hw", None)
+    tile_hw = (
+        None
+        if replay_tile_hw is None and hasattr(args, "_plan_tile_hw")
+        else (
+            tuple(int(value) for value in replay_tile_hw)
+            if replay_tile_hw is not None
+            else _compute_spatial_tile_hw(
+                product.shape,
+                auto_tile=bool(args.auto_tile),
+                tile_pixels=args.tile_pixels,
+                tile_above_megapixels=float(args.tile_above_megapixels),
+            )
+        )
     )
     if tile_hw is not None:
         print(
@@ -401,92 +754,164 @@ def _run_coadd(args: argparse.Namespace) -> int:
             f"for output {product.shape} pixels",
             file=sys.stderr,
         )
+    scratch_required_bytes = 0
+    if args.background_mode == "overlap" and len(observations) > 1:
+        scratch_required_bytes = overlap_background_scratch_bytes(
+            len(observations),
+            product.shape,
+            stacking_method=str(args.stack),
+        )
+    elif args.stack == "median":
+        reducer_shape = (
+            product.shape
+            if tile_hw is None
+            else (
+                min(int(tile_hw[0]), int(product.shape[0])),
+                min(int(tile_hw[1]), int(product.shape[1])),
+            )
+        )
+        scratch_required_bytes = exact_median_scratch_bytes(
+            len(observations), reducer_shape
+        )
+    elif args.stack == "sigma_clipped":
+        reducer_shape = (
+            product.shape
+            if tile_hw is None
+            else (
+                min(int(tile_hw[0]), int(product.shape[0])),
+                min(int(tile_hw[1]), int(product.shape[1])),
+            )
+        )
+        scratch_required_bytes = sigma_clipped_scratch_bytes(
+            len(observations), reducer_shape
+        )
 
     plan_path = getattr(args, "plan_json", None)
     if plan_path is not None:
+        plan_inputs = []
+        for (
+            path,
+            hdu,
+            weight,
+            weight_is_inverse_variance,
+            scale,
+            background,
+            weight_map,
+            mask_map,
+            primary_beam_map,
+        ) in zip(
+            expanded_paths,
+            expanded_hdus,
+            expanded_weights,
+            expanded_weight_is_inverse_variance,
+            expanded_photometric_scales,
+            expanded_background_offsets,
+            expanded_weight_maps,
+            expanded_mask_maps,
+            expanded_primary_beam_maps,
+        ):
+            plan_inputs.append(
+                {
+                    "path": _resolved_path(path),
+                    "hdu": int(hdu),
+                    "identity": build_map_input_identity(path, hdu=hdu),
+                    "weight": float(weight),
+                    "weight_is_inverse_variance": bool(weight_is_inverse_variance),
+                    "photometric_scale": float(scale),
+                    "background_offset": float(background),
+                    "weight_map": _resolved_path(weight_map),
+                    "weight_identity": _optional_input_identity(
+                        weight_map, args.weight_map_hdu
+                    ),
+                    "mask_map": _resolved_path(mask_map),
+                    "mask_identity": _optional_input_identity(
+                        mask_map, args.mask_map_hdu
+                    ),
+                    "primary_beam_map": _resolved_path(primary_beam_map),
+                    "primary_beam_identity": _optional_input_identity(
+                        primary_beam_map, args.primary_beam_hdu
+                    ),
+                }
+            )
+        payload = {
+            "schema_version": 2,
+            "method": "coadd",
+            "output": _resolved_path(args.output),
+            "inputs": plan_inputs,
+            "target": {
+                "shape": list(product.shape),
+                "header": dict(product.target_header),
+                "reference": _resolved_path(args.reference),
+                "reference_hdu": int(args.reference_hdu),
+                "union_footprint": union_footprint,
+                "footprint_padding": float(args.footprint_padding),
+                "footprint_tolerance_px": float(
+                    getattr(args, "footprint_tolerance_px", 0.25)
+                ),
+                "footprint_max_depth": int(getattr(args, "footprint_max_depth", 20)),
+            },
+            "execution": {
+                "workflow": str(args.workflow),
+                "kernel": str(args.kernel),
+                "stack": str(args.stack),
+                "background_mode": str(args.background_mode),
+                "drizzle_pixfrac": float(args.drizzle_pixfrac),
+                "clip_sigma": clip_sigma,
+                "clip_iterations": clip_iterations,
+                "value_semantics": str(args.value_semantics),
+                "tile_hw": None if tile_hw is None else list(tile_hw),
+                "requested_device": args.device,
+                "resolved_device": read_dev,
+                "scratch_required_bytes": scratch_required_bytes,
+            },
+            "requested_products": list(getattr(args, "output_planes", ("SCI",))),
+            "software": _software_manifest(),
+            "runtime": _runtime_manifest(args, read_dev),
+        }
         _write_map_plan(
             Path(plan_path),
-            {
-                "schema_version": 1,
-                "method": "coadd",
-                "output": _resolved_path(args.output),
-                "inputs": [
-                    {
-                        "path": _resolved_path(path),
-                        "hdu": int(hdu),
-                        "weight": float(weight),
-                        "photometric_scale": float(scale),
-                        "background_offset": float(background),
-                        "weight_map": _resolved_path(weight_map),
-                        "mask_map": _resolved_path(mask_map),
-                        "primary_beam_map": _resolved_path(primary_beam_map),
-                    }
-                    for (
-                        path,
-                        hdu,
-                        weight,
-                        scale,
-                        background,
-                        weight_map,
-                        mask_map,
-                        primary_beam_map,
-                    ) in zip(
-                        expanded_paths,
-                        expanded_hdus,
-                        expanded_weights,
-                        expanded_photometric_scales,
-                        expanded_background_offsets,
-                        expanded_weight_maps,
-                        expanded_mask_maps,
-                        expanded_primary_beam_maps,
-                    )
-                ],
-                "target": {
-                    "shape": list(product.shape),
-                    "header": dict(product.target_header),
-                    "reference": _resolved_path(args.reference),
-                    "reference_hdu": int(args.reference_hdu),
-                    "union_footprint": union_footprint,
-                    "footprint_padding": float(args.footprint_padding),
-                },
-                "execution": {
-                    "kernel": str(args.kernel),
-                    "stack": str(args.stack),
-                    "drizzle_pixfrac": float(args.drizzle_pixfrac),
-                    "value_semantics": str(args.value_semantics),
-                    "tile_hw": None if tile_hw is None else list(tile_hw),
-                    "requested_device": args.device,
-                    "resolved_device": read_dev,
-                },
-            },
+            MapPlanV2(payload).to_dict(),
         )
 
     if getattr(args, "dry_run", False):
         print(
             f"torchsky map: dry-run output_shape={product.shape} "
             f"method=coadd kernel={args.kernel} stack={args.stack} "
+            f"workflow={args.workflow} background={args.background_mode} "
             f"value_semantics={args.value_semantics} tiled={tile_hw is not None} "
-            f"n_bands={product.n_bands}",
+            f"n_bands={product.n_bands} scratch_bytes={scratch_required_bytes}",
             file=sys.stderr,
         )
         return 0
 
+    background_estimator, overlap_corrector = _background_strategy(args)
     result = stack_map_product(
         observations,
         product,
         resampling_kernel=args.kernel,
         stacking_method=args.stack,
         drizzle_pixfrac=float(args.drizzle_pixfrac),
+        clip_sigma=clip_sigma,
+        clip_iterations=clip_iterations,
         spatial_tile_hw=tile_hw,
         device=args.device,
+        scratch_dir=getattr(args, "scratch_dir", None),
+        background_estimator=background_estimator,
+        cross_exposure_sky_corrector=overlap_corrector,
     )
-    write(str(args.output), result.data.squeeze(0), header=result.header, overwrite=True)
+    written_planes = write_map_product(
+        args.output,
+        result,
+        requested_planes=getattr(args, "output_planes", ("SCI",)),
+        overwrite=True,
+    )
     print(
         f"wrote {args.output} shape={tuple(result.data.shape)} "
         f"mean_weight={float(result.weight.mean().item()):.4f} "
         f"method=coadd kernel={args.kernel} stack={args.stack} "
+        f"workflow={args.workflow} background={args.background_mode} "
         f"value_semantics={args.value_semantics} tiled={tile_hw is not None} "
-        f"n_bands={result.n_bands}",
+        f"n_bands={result.n_bands} planes={','.join(written_planes)}",
         file=sys.stderr,
     )
     return 0
@@ -555,7 +980,9 @@ def _expand_paths_for_inr(
     background_offsets: list[float],
     weight_maps: list[str | None],
     mask_maps: list[str | None],
-) -> tuple[list[str], list[int], list[float], list[float], list[str | None], list[str | None]]:
+) -> tuple[
+    list[str], list[int], list[float], list[float], list[str | None], list[str | None]
+]:
     """Expand MEF files into per-HDU entries for INR processing."""
     expanded_paths: list[str] = []
     expanded_hdus: list[int] = []
@@ -598,62 +1025,107 @@ def _expand_paths_for_inr(
                     expanded_weight_maps.append(weight_maps[i])
                     expanded_mask_maps.append(mask_maps[i])
     return (
-        expanded_paths, expanded_hdus,
-        expanded_weights, expanded_background_offsets,
-        expanded_weight_maps, expanded_mask_maps,
+        expanded_paths,
+        expanded_hdus,
+        expanded_weights,
+        expanded_background_offsets,
+        expanded_weight_maps,
+        expanded_mask_maps,
     )
 
 
 def _run_inr_single(args: argparse.Namespace) -> int:
-    inputs = _expand_inputs(args.inputs)
     read_dev = _map_read_device_str(args)
-    inr_paths, inr_hdus, inr_weights, inr_bg, inr_wmaps, inr_mmaps = _expand_paths_for_inr(
-        inputs,
-        hdu=args.hdu,
-        weights=args.weights,
-        background_offsets=args.background_offsets,
-        weight_maps=args.weight_maps,
-        mask_maps=args.mask_maps,
-    )
-
-    if args.inr_band is None:
-        _, h0 = read(inr_paths[0], hdu=inr_hdus[0], return_header=True, device=read_dev)
-        fk = _header_filter_keyword(dict(h0))
-        if fk is None:
-            raise SystemExit(
-                "INR requires --inr-band (e.g. F277W) or FITS FILTER/FILTNAM in header"
-            )
-        band = str(fk).upper()
-        if str(args.inr_spectral_source) == "builtin" and band not in _INR_BAND_TABLE:
-            raise SystemExit(
-                f"Band {band!r} not in builtin INR table; use --inr-spectral-source=svo, "
-                "file, or gaussian, or pass --inr-band with a known name"
-            )
+    resolved_plan_inputs = getattr(args, "_resolved_plan_inputs", None)
+    if resolved_plan_inputs is None:
+        inputs = _expand_inputs(args.inputs)
+        (
+            inr_paths,
+            inr_hdus,
+            inr_weights,
+            inr_bg,
+            inr_wmaps,
+            inr_mmaps,
+        ) = _expand_paths_for_inr(
+            inputs,
+            hdu=args.hdu,
+            weights=args.weights,
+            background_offsets=args.background_offsets,
+            weight_maps=args.weight_maps,
+            mask_maps=args.mask_maps,
+        )
     else:
-        band = str(args.inr_band).upper()
+        inr_paths = [str(item["identity"]["path"]) for item in resolved_plan_inputs]
+        inr_hdus = [int(item["hdu"]) for item in resolved_plan_inputs]
+        inr_weights = [float(item.get("weight", 1.0)) for item in resolved_plan_inputs]
+        inr_bg = [
+            float(item.get("background_offset", 0.0)) for item in resolved_plan_inputs
+        ]
+        inr_wmaps = [item.get("weight_map") for item in resolved_plan_inputs]
+        inr_mmaps = [item.get("mask_map") for item in resolved_plan_inputs]
 
-    skw = _inr_spectral_field_kwargs(args, band)
+    planned_bands = getattr(args, "_plan_observation_bands", None)
+    planned_spectral_kws = getattr(args, "_plan_spectral_kws", None)
+    if planned_bands is None or planned_spectral_kws is None:
+        observation_bands, spectral_kws = _resolve_inr_observation_spectra(
+            args,
+            inr_paths,
+            inr_hdus,
+            read_device=read_dev,
+        )
+    else:
+        observation_bands = list(planned_bands)
+        spectral_kws = list(planned_spectral_kws)
+        if len(observation_bands) != len(inr_paths) or len(spectral_kws) != len(
+            inr_paths
+        ):
+            raise SystemExit("field plan spectral metadata does not match inputs")
+    unique_bands = list(dict.fromkeys(observation_bands))
+    profiles_by_band = {
+        band: spectral_kws[observation_bands.index(band)] for band in unique_bands
+    }
+    band_specs = [
+        _map_bandpass_spec(band, profiles_by_band[band]) for band in unique_bands
+    ]
+    band_summary = ",".join(unique_bands)
+    planned_model_kind = getattr(args, "_plan_model_kind", None)
+    requested_model = getattr(args, "inr_model", None)
+    if planned_model_kind is not None:
+        preset_name = getattr(args, "_plan_field_preset", None)
+        model_kind = str(planned_model_kind)
+        model_kwargs = dict(getattr(args, "_plan_model_kwargs", {}))
+    elif requested_model is None:
+        preset_name = str(getattr(args, "field_preset", "balanced"))
+        preset = get_field_model_preset(preset_name)
+        model_kind = str(preset.kind)
+        model_kwargs = dict(preset.kwargs)
+    else:
+        preset_name = None
+        model_kind = str(requested_model)
+        model_kwargs = {}
 
     # Plan the product — use product pipeline for target planning.
     image_obs = [ImageObservation(path=p, hdu=h) for p, h in zip(inr_paths, inr_hdus)]
-    ref_header = None
-    if args.reference is not None:
-        _, rh = read(str(args.reference), hdu=args.reference_hdu, return_header=True, device=read_dev)
+    ref_header = getattr(args, "_plan_target_header", None)
+    if ref_header is not None:
+        ref_header = dict(ref_header)
+    elif args.reference is not None:
+        _, rh = read(
+            str(args.reference),
+            hdu=args.reference_hdu,
+            return_header=True,
+            device=read_dev,
+        )
         ref_header = dict(rh)
 
-    band_spec = MapBandpassSpec(
-        label=band,
-        transmission_center=skw.get("transmission_center"),
-        transmission_sigma=skw.get("transmission_sigma"),
-        spectral_min=skw.get("spectral_min"),
-        spectral_max=skw.get("spectral_max"),
-    )
     product = plan_map_product(
         image_obs,
-        bands=[band_spec],
+        bands=band_specs,
         header_overrides=ref_header,
         union_footprint=bool(getattr(args, "union_footprint", False)),
         footprint_padding=float(getattr(args, "footprint_padding", 1.0)),
+        footprint_tolerance_px=float(getattr(args, "footprint_tolerance_px", 0.25)),
+        footprint_max_depth=int(getattr(args, "footprint_max_depth", 20)),
         max_footprint_pixels=getattr(args, "max_footprint_pixels", None),
         value_semantics="surface_brightness",
         device=args.device,
@@ -668,78 +1140,137 @@ def _run_inr_single(args: argparse.Namespace) -> int:
     th = int(args.inr_render_tile)
     render_tiled = h > th or w > th
 
+    resume_path = getattr(args, "resume", None)
+    artifact_path = getattr(args, "artifact", None) or resume_path
     plan_path = getattr(args, "plan_json", None)
+    plan_payload: dict[str, Any] | None = None
     if plan_path is not None:
+        plan_inputs = []
+        for (
+            path,
+            hdu,
+            weight,
+            background,
+            weight_map,
+            mask_map,
+            observation_band,
+        ) in zip(
+            inr_paths,
+            inr_hdus,
+            inr_weights,
+            inr_bg,
+            inr_wmaps,
+            inr_mmaps,
+            observation_bands,
+        ):
+            plan_inputs.append(
+                {
+                    "path": _resolved_path(path),
+                    "hdu": int(hdu),
+                    "identity": build_map_input_identity(path, hdu=hdu),
+                    "weight": float(weight),
+                    "background_offset": float(background),
+                    "weight_map": _resolved_path(weight_map),
+                    "weight_identity": _optional_input_identity(
+                        weight_map, args.weight_map_hdu
+                    ),
+                    "mask_map": _resolved_path(mask_map),
+                    "mask_identity": _optional_input_identity(
+                        mask_map, args.mask_map_hdu
+                    ),
+                    "band": observation_band,
+                }
+            )
+        plan_payload = {
+            "schema_version": 2,
+            "method": "field",
+            "output": _resolved_path(args.output),
+            "inputs": plan_inputs,
+            "target": {
+                "shape": [h, w],
+                "band_count": len(unique_bands),
+                "header": dict(product.target_header),
+                "reference": _resolved_path(args.reference),
+                "reference_hdu": int(args.reference_hdu),
+                "union_footprint": bool(getattr(args, "union_footprint", False)),
+                "footprint_padding": float(getattr(args, "footprint_padding", 1.0)),
+                "footprint_tolerance_px": float(
+                    getattr(args, "footprint_tolerance_px", 0.25)
+                ),
+                "footprint_max_depth": int(getattr(args, "footprint_max_depth", 20)),
+            },
+            "spectral": {
+                "band": unique_bands[0] if len(unique_bands) == 1 else None,
+                "bands": [
+                    _spectral_plan_entry(band, profiles_by_band[band])
+                    for band in unique_bands
+                ],
+                "observation_bands": observation_bands,
+                "source": str(args.inr_spectral_source),
+                "spectral_min": (
+                    profiles_by_band[unique_bands[0]].get("spectral_min")
+                    if len(unique_bands) == 1
+                    else None
+                ),
+                "spectral_max": (
+                    profiles_by_band[unique_bands[0]].get("spectral_max")
+                    if len(unique_bands) == 1
+                    else None
+                ),
+                "transmission_center": (
+                    profiles_by_band[unique_bands[0]].get("transmission_center")
+                    if len(unique_bands) == 1
+                    else None
+                ),
+                "transmission_sigma": (
+                    profiles_by_band[unique_bands[0]].get("transmission_sigma")
+                    if len(unique_bands) == 1
+                    else None
+                ),
+                "transmission_path": _resolved_path(args.inr_transmission),
+                "transmission_identity": _optional_input_identity(
+                    str(args.inr_transmission)
+                    if args.inr_transmission is not None
+                    else None,
+                    0,
+                ),
+                "transmission_dir": _resolved_path(args.inr_transmission_dir),
+                "svo_filter_id": args.svo_filter_id,
+            },
+            "execution": {
+                "field_preset": preset_name,
+                "model": model_kind,
+                "model_kwargs": model_kwargs,
+                "steps": int(args.inr_steps),
+                "learning_rate": float(args.inr_lr),
+                "patch_size": int(args.inr_patch_size),
+                "patches_per_observation": int(args.inr_patches_per_obs),
+                "observations_per_step": int(args.inr_obs_per_step),
+                "spectral_samples": int(args.inr_spectral_samples),
+                "spatial_sampling": str(
+                    getattr(args, "inr_spatial_sampling", "center")
+                ),
+                "amp_dtype": str(getattr(args, "field_amp", "none")),
+                "render_tile": th if render_tiled else None,
+                "requested_device": args.device,
+                "resolved_device": read_dev,
+                "artifact": _resolved_path(artifact_path),
+                "artifact_identities": _field_artifact_identities(artifact_path),
+            },
+            "requested_products": list(getattr(args, "output_planes", ("SCI",))),
+            "software": _software_manifest(),
+            "runtime": _runtime_manifest(args, read_dev),
+        }
         _write_map_plan(
             Path(plan_path),
-            {
-                "schema_version": 1,
-                "method": "inr",
-                "output": _resolved_path(args.output),
-                "inputs": [
-                    {
-                        "path": _resolved_path(path),
-                        "hdu": int(hdu),
-                        "weight": float(weight),
-                        "background_offset": float(background),
-                        "weight_map": _resolved_path(weight_map),
-                        "mask_map": _resolved_path(mask_map),
-                    }
-                    for path, hdu, weight, background, weight_map, mask_map in zip(
-                        inr_paths,
-                        inr_hdus,
-                        inr_weights,
-                        inr_bg,
-                        inr_wmaps,
-                        inr_mmaps,
-                    )
-                ],
-                "target": {
-                    "shape": [h, w],
-                    "header": dict(product.target_header),
-                    "reference": _resolved_path(args.reference),
-                    "reference_hdu": int(args.reference_hdu),
-                    "union_footprint": bool(
-                        getattr(args, "union_footprint", False)
-                    ),
-                    "footprint_padding": float(
-                        getattr(args, "footprint_padding", 1.0)
-                    ),
-                },
-                "spectral": {
-                    "band": band,
-                    "source": str(args.inr_spectral_source),
-                    "spectral_min": skw.get("spectral_min"),
-                    "spectral_max": skw.get("spectral_max"),
-                    "transmission_center": skw.get("transmission_center"),
-                    "transmission_sigma": skw.get("transmission_sigma"),
-                    "transmission_path": _resolved_path(args.inr_transmission),
-                    "transmission_dir": _resolved_path(args.inr_transmission_dir),
-                    "svo_filter_id": args.svo_filter_id,
-                },
-                "execution": {
-                    "model": str(args.inr_model),
-                    "steps": int(args.inr_steps),
-                    "learning_rate": float(args.inr_lr),
-                    "patch_size": int(args.inr_patch_size),
-                    "patches_per_observation": int(args.inr_patches_per_obs),
-                    "observations_per_step": int(args.inr_obs_per_step),
-                    "spectral_samples": int(args.inr_spectral_samples),
-                    "spatial_sampling": str(
-                        getattr(args, "inr_spatial_sampling", "center")
-                    ),
-                    "render_tile": th if render_tiled else None,
-                    "requested_device": args.device,
-                    "resolved_device": read_dev,
-                },
-            },
+            MapPlanV2(plan_payload).to_dict(),
         )
 
     if getattr(args, "dry_run", False):
         n_obs = len(inr_paths)
         print(
-            f"torchsky map: dry-run output_shape={h}×{w} method=inr "
-            f"model={args.inr_model} band={band} render_tiled={render_tiled} "
+            f"torchsky map: dry-run output_shape={h}×{w} method=field "
+            f"model={model_kind} bands={band_summary} render_tiled={render_tiled} "
             f"spatial_sampling={getattr(args, 'inr_spatial_sampling', 'center')} "
             f"observations={n_obs} steps={getattr(args, 'inr_steps', 0)} "
             f"device={torch.device(args.device) if args.device else default_compute_device()}",
@@ -750,7 +1281,7 @@ def _run_inr_single(args: argparse.Namespace) -> int:
     fields = _paths_to_field_observations(
         inr_paths,
         hdu=inr_hdus,
-        spectral_kw=skw,
+        spectral_kw=spectral_kws,
         read_device=read_dev,
         weights=inr_weights,
         background_offsets=inr_bg,
@@ -760,13 +1291,37 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         mask_hdu=args.mask_map_hdu,
     )
     print(
-        f"torchsky map inr: {len(fields)} observation(s), "
-        f"band={band}, model={args.inr_model}, "
+        f"torchsky map field: {len(fields)} observation(s), "
+        f"bands={band_summary}, model={model_kind}, "
         f"device={torch.device(args.device) if args.device else default_compute_device()}",
         file=sys.stderr,
     )
     domain = estimate_field_domain(fields, coord_mode="sphere_xyz")
-    model = make_field_model(args.inr_model, domain)
+    loaded_artifact = None
+    input_identities = (
+        [
+            build_map_input_identity(path, hdu=hdu)
+            for path, hdu in zip(inr_paths, inr_hdus)
+        ]
+        if artifact_path is not None
+        else []
+    )
+    if resume_path is not None:
+        loaded_artifact = load_field_artifact(resume_path, device=args.device)
+        if loaded_artifact.manifest.payload["input_identities"] != input_identities:
+            raise SystemExit("field artifact inputs do not match the requested inputs")
+        if (
+            requested_model is not None
+            and loaded_artifact.manifest.model_kind != model_kind
+        ):
+            raise SystemExit("--field-model does not match the resumed artifact")
+        model = loaded_artifact.model
+        domain = loaded_artifact.manifest.domain
+        model_kind = str(loaded_artifact.manifest.model_kind)
+        model_kwargs = loaded_artifact.manifest.model_kwargs
+        preset_name = loaded_artifact.manifest.payload["fit_config"].get("field_preset")
+    else:
+        model = make_field_model(cast(Any, model_kind), domain, **model_kwargs)
     total_params = sum(p.numel() for p in model.parameters())
     print(
         f"torchsky map inr: domain centre=({domain.center_ra_deg:.2f}°, {domain.center_dec_deg:.2f}°) "
@@ -778,55 +1333,99 @@ def _run_inr_single(args: argparse.Namespace) -> int:
     )
     patch = int(args.inr_patch_size)
     steps = int(args.inr_steps)
-    try:
-        from tqdm import tqdm as _tqdm
+    fit_options = {
+        "steps": steps,
+        "lr": float(args.inr_lr),
+        "training_patch_size": None if patch <= 0 else patch,
+        "training_patches_per_observation": int(args.inr_patches_per_obs),
+        "observations_per_step": min(len(fields), int(args.inr_obs_per_step)),
+        "device": args.device,
+        "amp_dtype": str(getattr(args, "field_amp", "none")),
+        "amp_scaler_state": (
+            loaded_artifact.amp_scaler_state if loaded_artifact is not None else None
+        ),
+        "optimizer_state": (
+            loaded_artifact.optimizer_state if loaded_artifact is not None else None
+        ),
+        "sampling_rng_state": (
+            loaded_artifact.sampling_rng_state if loaded_artifact is not None else None
+        ),
+    }
+    artifact_render_only = bool(getattr(args, "_artifact_render_only", False))
+    fit_result = None
+    if not artifact_render_only:
+        try:
+            from tqdm import tqdm as _tqdm
 
-        def _progress_callback(step_idx: int, loss_val: float) -> None:
-            _progress_callback._bar.update(1)
-            _progress_callback._bar.set_postfix(loss=f"{loss_val:.4f}")
+            def _progress_callback(step_idx: int, loss_val: float) -> None:
+                _progress_callback._bar.update(1)
+                _progress_callback._bar.set_postfix(loss=f"{loss_val:.4f}")
 
-        _progress_callback._bar = _tqdm(
-            total=steps, desc="INR fit", unit="step", file=sys.stderr
-        )
-        if not _progress_callback._bar.disable:
-            fit_field_model(
-                fields,
-                model,
-                steps=steps,
-                lr=float(args.inr_lr),
-                training_patch_size=None if patch <= 0 else patch,
-                training_patches_per_observation=int(args.inr_patches_per_obs),
-                observations_per_step=min(len(fields), int(args.inr_obs_per_step)),
-                device=args.device,
-                _progress_callback=_progress_callback,
+            _progress_callback._bar = _tqdm(
+                total=steps, desc="INR fit", unit="step", file=sys.stderr
             )
-        else:
-            fit_field_model(
-                fields,
-                model,
-                steps=steps,
-                lr=float(args.inr_lr),
-                training_patch_size=None if patch <= 0 else patch,
-                training_patches_per_observation=int(args.inr_patches_per_obs),
-                observations_per_step=min(len(fields), int(args.inr_obs_per_step)),
-                device=args.device,
+            if not _progress_callback._bar.disable:
+                fit_result = fit_field_model(
+                    fields,
+                    model,
+                    **fit_options,
+                    _progress_callback=_progress_callback,
+                )
+            else:
+                fit_result = fit_field_model(fields, model, **fit_options)
+            _progress_callback._bar.close()
+        except ImportError:
+            print(
+                "torchsky map field: tqdm not installed — install 'tqdm' for progress bars",
+                file=sys.stderr,
             )
-        _progress_callback._bar.close()
-    except ImportError:
-        print(
-            "torchsky map inr: tqdm not installed — install 'tqdm' for progress bars",
-            file=sys.stderr,
+            fit_result = fit_field_model(fields, model, **fit_options)
+    if fit_result is not None:
+        model = fit_result.model
+        if loaded_artifact is not None:
+            fit_result.completed_steps += loaded_artifact.completed_steps
+    if artifact_path is not None and not artifact_render_only:
+        if fit_result is None:
+            raise RuntimeError("field fitting did not return resumable state")
+        operator_names = (
+            list(fit_result.operator_bundle.enabled_operator_names())
+            if fit_result.operator_bundle is not None
+            else []
         )
-        fit_field_model(
-            fields,
-            model,
-            steps=steps,
-            lr=float(args.inr_lr),
-            training_patch_size=None if patch <= 0 else patch,
-            training_patches_per_observation=int(args.inr_patches_per_obs),
-            observations_per_step=min(len(fields), int(args.inr_obs_per_step)),
-            device=args.device,
+        save_field_artifact(
+            artifact_path,
+            model=model,
+            model_kind=cast(Any, model_kind),
+            model_kwargs=model_kwargs,
+            domain=domain,
+            operator_manifest={"enabled_operators": operator_names},
+            calibration_manifest={
+                "background_offsets": [float(value) for value in inr_bg],
+            },
+            fit_config={
+                "field_preset": preset_name,
+                "steps": int(fit_result.completed_steps),
+                "learning_rate": float(args.inr_lr),
+                "patch_size": patch,
+                "patches_per_observation": int(args.inr_patches_per_obs),
+                "observations_per_step": min(len(fields), int(args.inr_obs_per_step)),
+                "spectral_samples": int(args.inr_spectral_samples),
+                "amp_dtype": str(getattr(args, "field_amp", "none")),
+                "observation_bands": observation_bands,
+                "validation_split": [],
+            },
+            input_identities=input_identities,
+            fit_result=fit_result,
+            overwrite=resume_path is not None,
         )
+        if plan_payload is not None and plan_path is not None:
+            plan_payload["execution"]["artifact_identities"] = (
+                _field_artifact_identities(artifact_path)
+            )
+            _write_map_plan(
+                Path(plan_path),
+                MapPlanV2(plan_payload).to_dict(),
+            )
     model.eval()
     result = render_field_product(
         model,
@@ -838,11 +1437,17 @@ def _run_inr_single(args: argparse.Namespace) -> int:
         ),
         spatial_tile_hw=(th, th) if render_tiled else None,
     )
-    write(str(args.output), result.data.squeeze(0), header=result.header, overwrite=True)
+    written_planes = write_map_product(
+        args.output,
+        result,
+        requested_planes=getattr(args, "output_planes", ("SCI",)),
+        overwrite=True,
+    )
     print(
-        f"wrote {args.output} shape={tuple(result.data.shape)} method=inr "
-        f"model={args.inr_model} band={band} "
-        f"spatial_sampling={getattr(args, 'inr_spatial_sampling', 'center')}",
+        f"wrote {args.output} shape={tuple(result.data.shape)} method=field "
+        f"model={model_kind} bands={band_summary} "
+        f"spatial_sampling={getattr(args, 'inr_spatial_sampling', 'center')} "
+        f"planes={','.join(written_planes)}",
         file=sys.stderr,
     )
     return 0
@@ -856,8 +1461,8 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("output", help="Output FITS path (or directory with --per-filter)")
     p.add_argument(
         "inputs",
-        nargs="+",
-        help="Input FITS images (paths or globs)",
+        nargs="*",
+        help="Input FITS images (paths or globs); omit with --from-plan",
     )
     p.add_argument(
         "--dry-run",
@@ -872,10 +1477,36 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Atomically write the resolved map plan before compute",
     )
     p.add_argument(
+        "--from-plan",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Replay a validated schema-v2 plan; only output/scratch may change",
+    )
+    p.add_argument(
+        "--scratch-dir",
+        type=Path,
+        default=None,
+        help="Scratch location for spillable reducers and large products",
+    )
+    p.add_argument(
+        "--output-planes",
+        nargs="+",
+        choices=("SCI", "WHT", "IVAR", "CTX", "MASK", "NEXP", "NCORR"),
+        default=("SCI", "WHT", "IVAR", "CTX", "MASK", "NEXP"),
+        help="Requested output planes, recorded in plan-v2",
+    )
+    p.add_argument(
         "--method",
-        choices=("coadd", "inr"),
+        choices=("coadd", "field", "inr"),
         default="coadd",
-        help="coadd: resample+stack; inr: fit continuous field then render to grid",
+        help="coadd: resample+stack; field: fit continuous field then render to grid (inr is deprecated)",
+    )
+    p.add_argument(
+        "--workflow",
+        choices=tuple(_WORKFLOW_DEFAULTS),
+        default="native",
+        help="Calibrated map workflow preset; explicit controls override it",
     )
     p.add_argument("--hdu", default=0, type=int, help="Input image HDU index")
     p.add_argument(
@@ -883,7 +1514,10 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         nargs="*",
         type=float,
-        help="Per-input scalar inverse-variance weights; default 1.0 each",
+        help=(
+            "Per-input scalar inverse-variance weights; when omitted, unit relative "
+            "coadd weights do not produce IVAR"
+        ),
     )
     p.add_argument(
         "--photometric-scales",
@@ -902,7 +1536,13 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--sky",
         action="store_true",
-        help="Auto-estimate and subtract 2D sky background per input (replaces --background-offsets)",
+        help="Deprecated alias for --background-mode=per-exposure",
+    )
+    p.add_argument(
+        "--background-mode",
+        choices=("none", "per-exposure", "overlap"),
+        default=None,
+        help="Background policy; default is selected by --workflow",
     )
     p.add_argument(
         "--sky-method",
@@ -992,13 +1632,25 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--stack",
         dest="stack",
-        default="weighted_mean",
-        choices=("weighted_mean", "mean", "median"),
+        default=None,
+        choices=("weighted_mean", "mean", "median", "sigma_clipped"),
         help="Stacking after resampling (coadd)",
     )
     p.add_argument(
+        "--clip-sigma",
+        type=float,
+        default=4.0,
+        help="Robust sigma threshold for --stack=sigma_clipped (default: 4)",
+    )
+    p.add_argument(
+        "--clip-iterations",
+        type=int,
+        default=3,
+        help="Maximum iterations for --stack=sigma_clipped (default: 3)",
+    )
+    p.add_argument(
         "--kernel",
-        default="bilinear",
+        default=None,
         choices=(
             "nearest",
             "bilinear",
@@ -1013,6 +1665,7 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
             "fft_linear_affine",
             "drizzle_point",
             "drizzle_square",
+            "conservative_polygon",
         ),
         help="Resampling kernel (coadd); drizzle_* uses native forward-drizzle when available",
     )
@@ -1047,9 +1700,35 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         help="With --auto-tile, tile when H×W exceeds this many megapixels (coadd)",
     )
     p.add_argument(
+        "--field-preset",
+        choices=("fast", "balanced", "spectral", "operator_constrained"),
+        default="balanced",
+        help="Supported field recipe (default: balanced)",
+    )
+    p.add_argument(
+        "--field-amp",
+        choices=("none", "float16", "bfloat16"),
+        default="none",
+        help="Opt-in CUDA autocast precision with local gradient scaling",
+    )
+    p.add_argument(
+        "--field-model",
         "--inr-model",
-        default="sine_implicit",
-        help="Field model kind for make_field_model (inr)",
+        dest="inr_model",
+        default=None,
+        help="Experimental raw field model kind; overrides --field-preset",
+    )
+    p.add_argument(
+        "--artifact",
+        type=Path,
+        default=None,
+        help="Save a safe resumable field artifact directory",
+    )
+    p.add_argument(
+        "--resume",
+        type=Path,
+        default=None,
+        help="Resume model, optimizer, and RNG state from a field artifact",
     )
     p.add_argument(
         "--inr-band", default=None, help="Filter name for bandpass, e.g. F277W (inr)"
@@ -1178,8 +1857,9 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--per-filter",
+        "--per-band",
         action="store_true",
-        help="Group inputs by FITS FILTER/FILTNAM; one output per band (inr)",
+        help="Explicit control: fit one independent field per FITS filter",
     )
     p.add_argument(
         "--union-footprint",
@@ -1196,6 +1876,18 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         type=float,
         default=1.05,
         help="Padding factor applied to the union footprint bounding box (default: 1.05 = 5%%)",
+    )
+    p.add_argument(
+        "--footprint-tolerance-px",
+        type=float,
+        default=0.25,
+        help="Maximum curved-WCS boundary chord error in target pixels",
+    )
+    p.add_argument(
+        "--footprint-max-depth",
+        type=int,
+        default=20,
+        help="Maximum adaptive boundary subdivision depth; failure is closed",
     )
     p.add_argument(
         "--max-footprint-pixels",
@@ -1215,7 +1907,153 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
     p.set_defaults(handler=_dispatch_map)
 
 
+def _dispatch_map_from_plan(args: argparse.Namespace) -> int:
+    if args.inputs:
+        raise SystemExit("--from-plan cannot be combined with input paths")
+    if getattr(args, "plan_json", None) is not None:
+        raise SystemExit("--from-plan cannot be combined with --plan-json")
+    if (
+        getattr(args, "artifact", None) is not None
+        or getattr(args, "resume", None) is not None
+    ):
+        raise SystemExit(
+            "--from-plan uses the recorded artifact; only output and scratch may be overridden"
+        )
+    try:
+        plan = load_map_plan(args.from_plan, verify_inputs=True)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"torchsky map: cannot replay plan: {exc}") from exc
+    payload = plan.payload
+    execution = payload["execution"]
+    target = payload["target"]
+    runtime = payload["runtime"]
+    resolved_inputs = payload["inputs"]
+    args._resolved_plan_inputs = resolved_inputs
+    args._plan_target_header = target["header"]
+    args._plan_tile_hw = execution.get("tile_hw")
+    args.inputs = [str(item["identity"]["path"]) for item in resolved_inputs]
+    args.weights = [float(item.get("weight", 1.0)) for item in resolved_inputs]
+    args.photometric_scales = [
+        float(item.get("photometric_scale", 1.0)) for item in resolved_inputs
+    ]
+    args.background_offsets = [
+        float(item.get("background_offset", 0.0)) for item in resolved_inputs
+    ]
+    args.weight_maps = [item.get("weight_map") for item in resolved_inputs]
+    args.mask_maps = [item.get("mask_map") for item in resolved_inputs]
+    args.primary_beam_maps = [item.get("primary_beam_map") for item in resolved_inputs]
+    args.weight_map_hdu = int(
+        next(
+            (
+                item["weight_identity"].get("hdu", 0)
+                for item in resolved_inputs
+                if item.get("weight_identity") is not None
+            ),
+            0,
+        )
+    )
+    args.mask_map_hdu = int(
+        next(
+            (
+                item["mask_identity"].get("hdu", 0)
+                for item in resolved_inputs
+                if item.get("mask_identity") is not None
+            ),
+            0,
+        )
+    )
+    args.primary_beam_hdu = next(
+        (
+            item["primary_beam_identity"].get("hdu")
+            for item in resolved_inputs
+            if item.get("primary_beam_identity") is not None
+        ),
+        None,
+    )
+    args.device = str(runtime["device"])
+    args.scratch_dir = (
+        args.scratch_dir if args.scratch_dir is not None else runtime.get("scratch")
+    )
+    args.output_planes = list(payload["requested_products"])
+    args.reference = None
+    args.reference_hdu = int(target.get("reference_hdu", 0))
+    args.plan_reference = 0
+    args.union_footprint = False
+    args.footprint_padding = float(target.get("footprint_padding", 1.0))
+    args.footprint_tolerance_px = float(target.get("footprint_tolerance_px", 0.25))
+    args.footprint_max_depth = int(target.get("footprint_max_depth", 20))
+    args.max_footprint_pixels = int(target["shape"][0]) * int(target["shape"][1])
+    args.hdu = 0
+    args.plan_json = None
+    args.from_plan = None
+
+    if payload["method"] == "field":
+        artifact = execution.get("artifact")
+        artifact_identities = execution.get("artifact_identities")
+        if not isinstance(artifact, str) or not artifact:
+            raise SystemExit(
+                "torchsky map: field plan replay requires a recorded artifact"
+            )
+        if not isinstance(artifact_identities, list) or not artifact_identities:
+            raise SystemExit(
+                "torchsky map: field plan artifact has no content identity"
+            )
+        try:
+            bands, spectral_kws = _field_spectra_from_plan(
+                payload.get("spectral"), input_count=len(resolved_inputs)
+            )
+        except ValueError as exc:
+            raise SystemExit(f"torchsky map: invalid field plan: {exc}") from exc
+        args.method = "field"
+        args._plan_observation_bands = bands
+        args._plan_spectral_kws = spectral_kws
+        args._plan_model_kind = str(execution["model"])
+        args._plan_model_kwargs = dict(execution.get("model_kwargs", {}))
+        args._plan_field_preset = execution.get("field_preset")
+        args._artifact_render_only = True
+        args.artifact = None
+        args.resume = Path(artifact)
+        args.inr_model = None
+        args.inr_steps = int(execution.get("steps", 0))
+        args.inr_lr = float(execution.get("learning_rate", 5.0e-3))
+        args.inr_patch_size = int(execution.get("patch_size", 0))
+        args.inr_patches_per_obs = int(execution.get("patches_per_observation", 1))
+        args.inr_obs_per_step = int(execution.get("observations_per_step", 1))
+        args.inr_spectral_samples = int(execution.get("spectral_samples", 9))
+        args.inr_spatial_sampling = str(execution.get("spatial_sampling", "center"))
+        args.field_amp = str(execution.get("amp_dtype", "none"))
+        render_tile = execution.get("render_tile")
+        args.inr_render_tile = (
+            int(render_tile)
+            if render_tile is not None
+            else max(int(target["shape"][0]), int(target["shape"][1]))
+        )
+        args.inr_max_pixels = args.max_footprint_pixels
+        args.per_filter = False
+        return _run_inr_single(args)
+
+    args.method = "coadd"
+    args.workflow = str(execution["workflow"])
+    args.kernel = str(execution["kernel"])
+    args.stack = str(execution["stack"])
+    args.background_mode = str(execution["background_mode"])
+    args.sky = False
+    args.drizzle_pixfrac = float(execution["drizzle_pixfrac"])
+    args.clip_sigma = float(execution.get("clip_sigma", 4.0))
+    args.clip_iterations = int(execution.get("clip_iterations", 3))
+    args.value_semantics = str(execution["value_semantics"])
+    args.auto_tile = False
+    args.tile_pixels = None
+    args.tile_above_megapixels = 32.0
+    return _run_coadd(args)
+
+
 def _dispatch_map(args: argparse.Namespace) -> int:
+    if getattr(args, "from_plan", None) is not None:
+        return _dispatch_map_from_plan(args)
+    _resolve_map_workflow(args)
+    if "SCI" not in getattr(args, "output_planes", ("SCI",)):
+        raise SystemExit("--output-planes must include SCI")
     expanded = _expand_inputs(args.inputs)
     n_inputs = len(expanded)
     if not hasattr(args, "weight_maps"):
@@ -1228,13 +2066,14 @@ def _dispatch_map(args: argparse.Namespace) -> int:
         args.photometric_scales = None
     if not hasattr(args, "background_offsets"):
         args.background_offsets = None
+    args._weights_are_inverse_variance = args.weights is not None
     if args.weights is None:
         args.weights = [1.0] * n_inputs
     if len(args.weights) != n_inputs:
         raise SystemExit("--weights count must match expanded input file count")
     args.weights = list(args.weights)
-    if any(not math.isfinite(float(w)) or float(w) < 0.0 for w in args.weights):
-        raise SystemExit("--weights must be finite and non-negative")
+    if any(not math.isfinite(float(w)) or float(w) <= 0.0 for w in args.weights):
+        raise SystemExit("--weights must be finite and positive")
     if args.photometric_scales is None:
         args.photometric_scales = [1.0] * n_inputs
     if len(args.photometric_scales) != n_inputs:
@@ -1243,8 +2082,7 @@ def _dispatch_map(args: argparse.Namespace) -> int:
         )
     args.photometric_scales = list(args.photometric_scales)
     if any(
-        not math.isfinite(float(s)) or float(s) <= 0.0
-        for s in args.photometric_scales
+        not math.isfinite(float(s)) or float(s) <= 0.0 for s in args.photometric_scales
     ):
         raise SystemExit("--photometric-scales must be finite and positive")
     if args.background_offsets is None:
@@ -1273,12 +2111,30 @@ def _dispatch_map(args: argparse.Namespace) -> int:
             "--primary-beam-maps count must match expanded input file count"
         )
     args.primary_beam_maps = list(args.primary_beam_maps)
-    if args.method == "inr" and any(
+    field_method = args.method in ("field", "inr")
+    field_amp = str(getattr(args, "field_amp", "none"))
+    if not field_method and (
+        field_amp != "none"
+        or getattr(args, "artifact", None) is not None
+        or getattr(args, "resume", None) is not None
+    ):
+        raise SystemExit("--field-amp, --artifact, and --resume require --method=field")
+    if field_method and field_amp != "none":
+        amp_device = (
+            torch.device(args.device)
+            if getattr(args, "device", None) is not None
+            else default_compute_device()
+        )
+        if amp_device.type != "cuda" or not torch.cuda.is_available():
+            raise SystemExit("--field-amp requires CUDA")
+        if field_amp == "bfloat16" and not torch.cuda.is_bf16_supported():
+            raise SystemExit("this CUDA device does not support bfloat16 AMP")
+    if field_method and any(
         not math.isclose(float(s), 1.0, rel_tol=0.0, abs_tol=0.0)
         for s in args.photometric_scales
     ):
         raise SystemExit("--photometric-scales are currently supported for coadd only")
-    if args.method == "inr" and any(p is not None for p in args.primary_beam_maps):
+    if field_method and any(p is not None for p in args.primary_beam_maps):
         raise SystemExit("--primary-beam-maps are currently supported for coadd only")
     hdu = int(getattr(args, "hdu", 0))
     reference_hdu = int(getattr(args, "reference_hdu", 0))
@@ -1294,6 +2150,16 @@ def _dispatch_map(args: argparse.Namespace) -> int:
     drizzle_pixfrac = float(getattr(args, "drizzle_pixfrac", 1.0))
     if drizzle_pixfrac <= 0.0 or not math.isfinite(drizzle_pixfrac):
         raise SystemExit("--drizzle-pixfrac must be finite and positive")
+    clip_sigma = float(getattr(args, "clip_sigma", 4.0))
+    if clip_sigma <= 0.0 or not math.isfinite(clip_sigma):
+        raise SystemExit("--clip-sigma must be finite and positive")
+    if int(getattr(args, "clip_iterations", 3)) <= 0:
+        raise SystemExit("--clip-iterations must be positive")
+    if args.stack == "sigma_clipped" and args.background_mode == "overlap":
+        raise SystemExit(
+            "--stack=sigma_clipped currently requires --background-mode=none "
+            "or per-exposure"
+        )
     tile_pixels = getattr(args, "tile_pixels", None)
     if tile_pixels is not None and int(tile_pixels) <= 0:
         raise SystemExit("--tile-pixels must be positive")
@@ -1303,6 +2169,11 @@ def _dispatch_map(args: argparse.Namespace) -> int:
     footprint_padding = float(getattr(args, "footprint_padding", 1.05))
     if not math.isfinite(footprint_padding) or footprint_padding < 1.0:
         raise SystemExit("--footprint-padding must be finite and at least 1.0")
+    footprint_tolerance_px = float(getattr(args, "footprint_tolerance_px", 0.25))
+    if not math.isfinite(footprint_tolerance_px) or footprint_tolerance_px <= 0.0:
+        raise SystemExit("--footprint-tolerance-px must be finite and positive")
+    if int(getattr(args, "footprint_max_depth", 20)) <= 0:
+        raise SystemExit("--footprint-max-depth must be positive")
     if int(getattr(args, "inr_steps", 0)) < 0:
         raise SystemExit("--inr-steps must be non-negative")
     inr_lr = float(getattr(args, "inr_lr", 1.0))
@@ -1323,4 +2194,9 @@ def _dispatch_map(args: argparse.Namespace) -> int:
     args.inputs = expanded
     if args.method == "coadd":
         return _run_coadd(args)
+    if args.method == "inr":
+        print(
+            "torchsky map: --method=inr is deprecated; use --method=field",
+            file=sys.stderr,
+        )
     return _run_inr(args)

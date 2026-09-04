@@ -7,7 +7,7 @@ This file is the handoff contract for the scheduled Codex refactor run.
 - Start date: May 8, 2026 in the `America/Vancouver` timezone.
 - Runtime model: Codex with `gpt-5.5`, reasoning effort `xhigh`.
 - Target branch: `codex/autonomous-refactor-2026-05`.
-- Workspace: `/Users/fabbros/src/torchsky`.
+- Workspace: `/Users/fabbros/src/sfabbro/torchsky`.
 - Restart cadence: once per day for about one month.
 - Primary state file: `docs/reviews/autonomous_refactor_log.md`.
 

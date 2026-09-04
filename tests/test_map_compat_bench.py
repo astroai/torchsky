@@ -678,6 +678,42 @@ def test_diff_summary_reports_common_support_metrics_for_coverage_masks() -> Non
     assert summary["max_abs_weight_diff_vs_ref"] == pytest.approx(1.0)
 
 
+def test_diff_summary_can_limit_weight_metrics_to_common_support() -> None:
+    data = torch.zeros((2, 2), dtype=torch.float32)
+    weight = torch.tensor([[2.0, 100.0], [0.0, 4.0]], dtype=torch.float32)
+    ref_weight = torch.tensor([[2.5, 0.0], [9.0, 3.0]], dtype=torch.float32)
+    common = torch.tensor([[True, False], [False, True]])
+
+    summary = bench_map_compat._diff_summary(
+        data,
+        weight,
+        data,
+        ref_weight,
+        suffix="_common",
+        data_mask=common,
+        weight_mask=common,
+    )
+
+    assert summary["weight_comparison_support_frac_common"] == pytest.approx(0.5)
+    assert summary["rmse_weight_diff_common"] == pytest.approx((0.625) ** 0.5)
+    assert summary["mae_weight_diff_common"] == pytest.approx(0.75)
+    assert summary["max_abs_weight_diff_common"] == pytest.approx(1.0)
+
+
+def test_erode_support_requires_a_complete_kernel_footprint() -> None:
+    support = torch.ones((7, 7), dtype=torch.bool)
+    support[3, 3] = False
+
+    eroded = bench_map_compat._erode_support(support, radius=1)
+
+    expected = torch.ones_like(support)
+    expected[[0, -1], :] = False
+    expected[:, [0, -1]] = False
+    expected[2:5, 2:5] = False
+    assert torch.equal(eroded, expected)
+    assert torch.equal(bench_map_compat._erode_support(support, radius=0), support)
+
+
 def test_align_array_to_target_falls_back_to_torchsky_when_reproject_missing(
     monkeypatch,
 ) -> None:
@@ -975,6 +1011,40 @@ def test_write_swarp_config_rejects_unknown_fscalastro_type(tmp_path: Path) -> N
         )
 
 
+def test_write_swarp_config_records_clipping_controls(tmp_path: Path) -> None:
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 16,
+        "NAXIS2": 12,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 8.0,
+        "CRPIX2": 6.0,
+        "CRVAL1": 11.0,
+        "CRVAL2": -4.0,
+        "CD1_1": -0.01,
+        "CD1_2": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": 0.01,
+    }
+    config_path = tmp_path / "clipped.conf"
+
+    bench_map_compat._write_swarp_config(
+        config_path,
+        target_header=header,
+        imageout_path=tmp_path / "out.fits",
+        weightout_path=tmp_path / "out.weight.fits",
+        combine_type="CLIPPED",
+        resampling_type="BILINEAR",
+        clip_sigma=4.0,
+        clip_ampfrac=0.0,
+    )
+
+    text = config_path.read_text(encoding="utf-8")
+    assert "CLIP_SIGMA             4" in text
+    assert "CLIP_AMPFRAC           0" in text
+
+
 def test_check_time_regressions_flags_slow_rows() -> None:
     template = {
         "case": "case_a",
@@ -995,3 +1065,76 @@ def test_check_time_regressions_flags_slow_rows() -> None:
         tolerance=0.0,
     )
     assert not ok
+
+
+def test_required_comparator_gate_rejects_skips_and_missing_rows() -> None:
+    rows = [
+        {"case": "a", "library": "drizzle", "variant": "square", "status": "OK"},
+        {
+            "case": "b",
+            "library": "swarp",
+            "variant": "bilinear",
+            "status": "SKIPPED",
+            "reason": "binary unavailable",
+        },
+    ]
+
+    assert bench_map_compat._check_required_comparators(rows, ["drizzle"]) == []
+    swarp_errors = bench_map_compat._check_required_comparators(rows, ["swarp"])
+    assert len(swarp_errors) == 1
+    assert "did not run" in swarp_errors[0]
+    assert "binary unavailable" in swarp_errors[0]
+    assert "produced no rows" in bench_map_compat._check_required_comparators(
+        rows, ["montage"]
+    )[0]
+
+
+@pytest.mark.parametrize(
+    ("library", "variant", "expected"),
+    [
+        ("drizzle", "square", "drizzle_square"),
+        ("swarp", "lanczos3", "lanczos3"),
+        ("reproject_interp", "bicubic", "bicubic"),
+        ("montage", None, "conservative_polygon"),
+        ("casutools", None, "bilinear"),
+    ],
+)
+def test_comparator_reference_variant_matches_semantics(
+    library: str,
+    variant: str | None,
+    expected: str,
+) -> None:
+    assert (
+        bench_map_compat._comparator_reference_variant(library, variant) == expected
+    )
+
+
+def test_acceptance_contracts_enforce_presence_identity_and_bounds() -> None:
+    row = {
+        "case": "fixture",
+        "library": "swarp",
+        "variant": "lanczos3",
+        "status": "OK",
+        "comparison_reference_variant": "lanczos3",
+        "max_abs_data_diff_vs_torchsky": 2.0e-6,
+        "comparison_support_frac_vs_torchsky": 0.8,
+    }
+    contract = {
+        "case": "fixture",
+        "library": "swarp",
+        "variant": "lanczos3",
+        "equals": {"comparison_reference_variant": "lanczos3"},
+        "maximum": {"max_abs_data_diff_vs_torchsky": 3.0e-6},
+        "minimum": {"comparison_support_frac_vs_torchsky": 0.75},
+    }
+
+    assert bench_map_compat._check_acceptance_contracts([row], [contract]) == []
+    errors = bench_map_compat._check_acceptance_contracts(
+        [{**row, "max_abs_data_diff_vs_torchsky": 4.0e-6}],
+        [contract],
+    )
+    assert any("exceeds maximum" in error for error in errors)
+    assert any(
+        "missing required row" in error
+        for error in bench_map_compat._check_acceptance_contracts([], [contract])
+    )

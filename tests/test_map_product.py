@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from torchsky.map import (
     make_field_model,
     plan_map_product,
     render_field_observation,
+    render_field_ensemble_product,
     render_field_product,
     stack_map_product,
 )
@@ -49,6 +51,34 @@ def _simple_header() -> dict:
     }
 
 
+class _ConstantProductField(torch.nn.Module):
+    def __init__(self, value: float, *, variance: float | None = None) -> None:
+        super().__init__()
+        self.domain = FieldDomain(
+            center_ra_deg=12.0,
+            center_dec_deg=-3.0,
+            spatial_scale_deg=0.05,
+            wavelength_center=5500.0,
+            wavelength_scale=1000.0,
+        )
+        self.value = torch.nn.Parameter(torch.tensor(float(value)))
+        self.predictive_distribution_available = variance is not None
+        self.register_buffer(
+            "log_variance",
+            torch.tensor(0.0 if variance is None else math.log(float(variance))),
+        )
+
+    def forward(self, ra, dec, wavelength):
+        del dec, wavelength
+        return torch.zeros_like(ra) + self.value
+
+    def forward_distribution(self, ra, dec, wavelength):
+        if not self.predictive_distribution_available:
+            raise ValueError("predictive variance is unavailable")
+        mean = self.forward(ra, dec, wavelength)
+        return mean, torch.zeros_like(mean) + self.log_variance
+
+
 def test_plan_map_product_single_band_stack_matches_image_plane(tmp_path: Path) -> None:
     path_a = tmp_path / "a.fits"
     path_b = tmp_path / "b.fits"
@@ -65,6 +95,54 @@ def test_plan_map_product_single_band_stack_matches_image_plane(tmp_path: Path) 
     assert product.n_bands == 1
     assert result.data.shape == (1, 6, 6)
     torch.testing.assert_close(result.data[0], (data_a + data_b) / 2.0)
+    assert result.uncertainty is None
+
+
+def test_explicit_unit_inverse_variance_is_not_confused_with_default_weight(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "unit-ivar.fits"
+    header = _simple_header()
+    torchsky.write(str(path), torch.ones((6, 6)), header=header, overwrite=True)
+    default = [ImageObservation(str(path), weight=1.0)]
+    explicit = [
+        ImageObservation(
+            str(path),
+            weight=1.0,
+            weight_is_inverse_variance=True,
+        )
+    ]
+
+    default_result = stack_map_product(default, plan_map_product(default))
+    explicit_result = stack_map_product(explicit, plan_map_product(explicit))
+
+    assert default_result.uncertainty is None
+    assert explicit_result.uncertainty is not None
+    torch.testing.assert_close(
+        explicit_result.uncertainty.inverse_variance,
+        torch.ones((1, 6, 6)),
+    )
+
+
+def test_map_mask_without_noise_does_not_invent_inverse_variance(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "masked.fits"
+    mask_path = tmp_path / "mask.fits"
+    header = _simple_header()
+    torchsky.write(str(path), torch.ones((6, 6)), header=header, overwrite=True)
+    torchsky.write(
+        str(mask_path),
+        torch.ones((6, 6)),
+        header=header,
+        overwrite=True,
+    )
+    observations = [ImageObservation(str(path), mask_path=str(mask_path))]
+
+    result = stack_map_product(observations, plan_map_product(observations))
+
+    assert result.weight is not None
+    assert result.uncertainty is None
 
 
 def test_plan_map_product_single_band_honors_union_footprint(tmp_path: Path) -> None:
@@ -192,9 +270,93 @@ def test_render_field_product_matches_product_shape() -> None:
     result = render_field_product(model, product)
 
     assert result.data.shape == (2, 6, 6)
-    assert result.weight.shape == (2, 6, 6)
-    assert bool(torch.all(torch.isfinite(result.weight)))
-    assert bool(torch.all(result.weight > 0.0))
+    assert result.weight is None
+    assert result.uncertainty is None
+
+
+def test_render_field_product_labels_likelihood_variance_as_detector() -> None:
+    product = torchsky.map.MapProductSpec(
+        target_header=_simple_header(),
+        bands=(MapBandpassSpec(label="g", transmission_center=5000.0),),
+    )
+
+    result = render_field_product(
+        _ConstantProductField(2.0, variance=4.0),
+        product,
+        num_spectral_samples=1,
+        spatial_tile_hw=(4, 3),
+    )
+
+    assert result.uncertainty is not None
+    assert result.uncertainty.kind == "model_predictive"
+    torch.testing.assert_close(
+        result.uncertainty.components["detector"],
+        torch.full_like(result.data, 4.0),
+    )
+
+
+def test_render_field_ensemble_product_separates_uncertainty_components() -> None:
+    product = torchsky.map.MapProductSpec(
+        target_header=_simple_header(),
+        bands=(MapBandpassSpec(label="g", transmission_center=5000.0),),
+    )
+    calibration_draws = (
+        torch.ones((1, 6, 6)),
+        torch.full((1, 6, 6), 3.0),
+    )
+
+    result = render_field_ensemble_product(
+        (
+            _ConstantProductField(1.0, variance=4.0),
+            _ConstantProductField(3.0, variance=4.0),
+        ),
+        product,
+        member_seeds=(11, 29),
+        calibration_draws=calibration_draws,
+        calibration_seeds=(101, 103),
+        num_spectral_samples=1,
+        spatial_tile_hw=(4, 3),
+    )
+
+    assert result.uncertainty is not None
+    assert result.uncertainty.kind == "ensemble_predictive"
+    torch.testing.assert_close(result.data, torch.full_like(result.data, 2.0))
+    torch.testing.assert_close(
+        result.uncertainty.components["epistemic"],
+        torch.full_like(result.data, 2.0),
+    )
+    torch.testing.assert_close(
+        result.uncertainty.components["detector"],
+        torch.full_like(result.data, 4.0),
+    )
+    torch.testing.assert_close(
+        result.uncertainty.components["calibration"],
+        torch.full_like(result.data, 2.0),
+    )
+    torch.testing.assert_close(
+        result.uncertainty.variance,
+        torch.full_like(result.data, 8.0),
+    )
+    assert result.provenance is not None
+    assert result.provenance["uncertainty"]["member_seeds"] == [11, 29]
+
+
+def test_render_field_ensemble_product_rejects_mixed_detector_evidence() -> None:
+    product = torchsky.map.MapProductSpec(
+        target_header=_simple_header(),
+        bands=(MapBandpassSpec(label="g", transmission_center=5000.0),),
+    )
+
+    with pytest.raises(ValueError, match="all provide detector"):
+        render_field_ensemble_product(
+            (
+                _ConstantProductField(1.0, variance=4.0),
+                _ConstantProductField(3.0),
+            ),
+            product,
+            member_seeds=(11, 29),
+            num_spectral_samples=1,
+        )
 
 
 def test_render_field_product_supports_spatial_quadrature() -> None:
@@ -223,6 +385,155 @@ def test_render_field_product_supports_spatial_quadrature() -> None:
     torch.testing.assert_close(result.data, torch.full((1, 6, 6), 2.5))
 
 
+def test_tiled_field_product_allocates_on_model_device(monkeypatch) -> None:
+    class MetaField(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.value = torch.nn.Parameter(torch.empty((), device="meta"))
+
+    product = torchsky.map.MapProductSpec(
+        target_header=_simple_header(),
+        bands=(MapBandpassSpec(label="g", transmission_center=5000.0),),
+    )
+
+    def fake_render(model, observation, **kwargs):
+        del kwargs
+        return torch.zeros(
+            observation.image.shape,
+            dtype=torch.float32,
+            device=next(model.parameters()).device,
+        )
+
+    monkeypatch.setattr(
+        "torchsky.map.field.rendering.render_field_observation", fake_render
+    )
+    result = map_product_mod.render_field_product(
+        MetaField(), product, spatial_tile_hw=(3, 3)
+    )
+
+    assert result.data.device.type == "meta"
+
+
+def test_square_drizzle_reports_squared_coefficient_inverse_variance(
+    tmp_path: Path,
+) -> None:
+    source_header = _simple_header()
+    target_header = dict(source_header)
+    target_header["CRPIX1"] = float(target_header["CRPIX1"]) - 0.5
+    path = tmp_path / "variance_drizzle.fits"
+    torchsky.write(
+        str(path),
+        torch.ones((6, 6), dtype=torch.float32),
+        header=source_header,
+        overwrite=True,
+    )
+    product = torchsky.map.MapProductSpec(
+        target_header=target_header,
+        bands=(MapBandpassSpec(label="mono"),),
+    )
+
+    result = stack_map_product(
+        [
+            ImageObservation(
+                str(path),
+                weight=4.0,
+                weight_is_inverse_variance=True,
+            )
+        ],
+        product,
+        resampling_kernel="drizzle_square",
+    )
+
+    assert result.uncertainty is not None
+    assert result.uncertainty.kind == "propagated_linear"
+    assert result.weight is not None
+    assert float(result.weight[0, 3, 3]) == pytest.approx(4.0, rel=1.0e-5)
+    assert float(result.uncertainty.inverse_variance[0, 3, 3]) == pytest.approx(
+        8.0, rel=1.0e-5
+    )
+    assert result.uncertainty.correlation_factor is not None
+    assert float(result.uncertainty.correlation_factor[0, 3, 3]) == pytest.approx(
+        2.0, rel=1.0e-5
+    )
+
+
+@pytest.mark.parametrize(
+    "kernel",
+    ["bilinear", "conservative_polygon", "splat_box"],
+)
+@pytest.mark.parametrize("value_semantics", ["surface_brightness", "flux"])
+def test_half_pixel_projection_reports_squared_coefficient_inverse_variance(
+    tmp_path: Path,
+    kernel: str,
+    value_semantics: str,
+) -> None:
+    path = tmp_path / f"{kernel}-{value_semantics}.fits"
+    source_header = _simple_header()
+    target_header = {
+        **source_header,
+        "CRPIX1": float(source_header["CRPIX1"]) + 0.5,
+    }
+    torchsky.write(
+        str(path),
+        torch.ones((6, 6), dtype=torch.float32),
+        header=source_header,
+        overwrite=True,
+    )
+    observations = [
+        ImageObservation(
+            str(path),
+            weight=1.0,
+            weight_is_inverse_variance=True,
+        )
+    ]
+    product = torchsky.map.MapProductSpec(
+        target_header=target_header,
+        bands=(MapBandpassSpec(label="science"),),
+        value_semantics=value_semantics,
+    )
+
+    result = stack_map_product(
+        observations,
+        product,
+        resampling_kernel=kernel,
+    )
+
+    assert result.uncertainty is not None
+    assert float(result.uncertainty.inverse_variance[0, 3, 3]) == pytest.approx(
+        2.0,
+        rel=0.0,
+        abs=2.0e-5,
+    )
+    assert result.uncertainty.correlation_factor is not None
+    assert float(result.uncertainty.correlation_factor[0, 3, 3]) == pytest.approx(
+        2.0,
+        rel=0.0,
+        abs=2.0e-5,
+    )
+
+
+def test_map_product_context_uses_multiple_words_and_records_observations(
+    tmp_path: Path,
+) -> None:
+    header = _simple_header()
+    path = tmp_path / "context.fits"
+    torchsky.write(str(path), torch.ones((6, 6)), header=header, overwrite=True)
+    observations = [ImageObservation(str(path)) for _ in range(33)]
+    product = torchsky.map.MapProductSpec(
+        target_header=header,
+        bands=(MapBandpassSpec(label="mono"),),
+    )
+
+    result = stack_map_product(observations, product)
+
+    assert result.context is not None
+    assert result.context.shape == (1, 2, 6, 6)
+    assert int(result.context[0, 0, 3, 3]) == 2**32 - 1
+    assert int(result.context[0, 1, 3, 3]) == 1
+    assert result.provenance is not None
+    assert len(result.provenance["context_observations"]) == 33
+
+
 def test_map_product_result_exposes_target_render_specs() -> None:
     product = torchsky.map.MapProductSpec(
         target_header=_simple_header(),
@@ -244,6 +555,33 @@ def test_map_product_result_exposes_target_render_specs() -> None:
     assert tuple(spec.band_label for spec in specs) == ("g", "r")
     assert tuple(spec.psf_spec for spec in specs) == ("psf-g", "psf-r")
     assert all(spec.value_semantics == "flux" for spec in specs)
+
+
+def test_map_uncertainty_product_exposes_honest_inverse_variance() -> None:
+    variance = torch.tensor([[[4.0, 0.0]]], dtype=torch.float32)
+    uncertainty = torchsky.map.MapUncertaintyProduct(
+        variance=variance,
+        kind="propagated_linear",
+        components={"detector": variance},
+        correlation_factor=torch.tensor([[[2.0, 0.0]]]),
+    )
+
+    torch.testing.assert_close(
+        uncertainty.inverse_variance,
+        torch.tensor([[[0.25, 0.0]]], dtype=torch.float32),
+    )
+    with pytest.raises(ValueError, match="component shapes"):
+        torchsky.map.MapUncertaintyProduct(
+            variance=variance,
+            kind="propagated_linear",
+            components={"detector": torch.ones((2, 2))},
+        )
+    with pytest.raises(ValueError, match="positive wherever variance is positive"):
+        torchsky.map.MapUncertaintyProduct(
+            variance=variance,
+            kind="propagated_linear",
+            correlation_factor=torch.zeros_like(variance),
+        )
 
 
 def test_internal_scene_product_render_supports_discrete_multiband_cube() -> None:
@@ -268,7 +606,9 @@ def test_internal_scene_product_render_supports_discrete_multiband_cube() -> Non
 
     torch.testing.assert_close(result.data[0], torch.full((6, 6), 2.0))
     torch.testing.assert_close(result.data[1], torch.full((6, 6), 5.0))
-    assert bool(torch.all(result.weight == 1.0))
+    assert result.weight is None
+    assert result.uncertainty is None
+    assert result.mask is not None and bool(torch.all(result.mask))
 
 
 def test_render_field_product_matches_exact_transmission_per_band_stacks(
@@ -400,7 +740,8 @@ def test_render_scene_product_accepts_plain_module_scene() -> None:
     )
 
     assert result.data.shape == (1, 6, 6)
-    assert result.weight.shape == (1, 6, 6)
+    assert result.weight is None
+    assert result.mask is not None and result.mask.shape == (1, 6, 6)
 
 
 def test_render_scene_product_renders_healpix_scene_through_solver_hooks() -> None:
@@ -427,7 +768,8 @@ def test_render_scene_product_renders_healpix_scene_through_solver_hooks() -> No
         atol=5.0e-2,
         rtol=0.0,
     )
-    assert bool(torch.all(result.weight > 0.0))
+    assert result.weight is None
+    assert result.mask is not None and bool(torch.all(result.mask))
 
 
 def test_evaluate_map_product_uses_product_level_metrics() -> None:
@@ -459,6 +801,25 @@ def test_evaluate_map_product_uses_product_level_metrics() -> None:
     assert float(metrics["band_flux_relative_error"][0]) > 0.0
 
 
+def test_evaluate_map_product_uses_mask_when_weight_is_unavailable() -> None:
+    product = torchsky.map.MapProductSpec(
+        target_header=_simple_header(),
+        bands=(MapBandpassSpec(label="single"),),
+    )
+    data = torch.ones((1, 6, 6), dtype=torch.float32)
+    prediction = torchsky.map.MapProductResult(
+        product=product,
+        data=data,
+        weight=None,
+        header=_simple_header(),
+        mask=torch.ones_like(data, dtype=torch.bool),
+    )
+
+    metrics = evaluate_map_product(prediction, data)
+
+    assert metrics["coverage_fraction"] == pytest.approx(1.0)
+
+
 def test_estimate_map_inverse_variance_support_proxy_flags_extrapolated_regions() -> (
     None
 ):
@@ -474,6 +835,33 @@ def test_estimate_map_inverse_variance_support_proxy_flags_extrapolated_regions(
     assert ivar.shape == support_weight.shape
     assert float(sigma[0, 3, 3]) < float(sigma[0, 0, 0])
     assert float(sigma[0, 1, 1]) < float(sigma[0, 0, 0])
+
+
+def test_estimate_map_inverse_variance_never_invents_field_weights() -> None:
+    product = torchsky.map.MapProductSpec(
+        target_header=_simple_header(),
+        bands=(MapBandpassSpec(label="single"),),
+    )
+    result = torchsky.map.MapProductResult(
+        product=product,
+        data=torch.ones((1, 6, 6)),
+        weight=None,
+        header=_simple_header(),
+    )
+
+    with pytest.raises(ValueError, match="inverse variance is unavailable"):
+        estimate_map_inverse_variance(result)
+
+    variance = torch.full_like(result.data, 4.0)
+    result.uncertainty = torchsky.map.MapUncertaintyProduct(
+        variance=variance,
+        kind="model_predictive",
+        components={"epistemic": variance},
+    )
+    torch.testing.assert_close(
+        estimate_map_inverse_variance(result),
+        torch.full_like(result.data, 0.25),
+    )
 
 
 def test_evaluate_map_uncertainty_tracks_residual_ordering() -> None:

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from . import (
     adaptive,
+    artifacts,
     bandpass,
     forwarding,
     foam,
@@ -32,6 +33,14 @@ from . import (
     sky_encoding,
     training,
 )
+from .artifacts import (
+    FieldArtifactManifest,
+    LoadedFieldArtifact,
+    capture_field_rng_state,
+    load_field_artifact,
+    restore_field_rng_state,
+    save_field_artifact,
+)
 from .adaptive import (
     ResidualTileBasisField,
     ResidualTileBasisSpec,
@@ -39,12 +48,15 @@ from .adaptive import (
     residual_tile_basis_spec_from_observation,
 )
 from .foam import (
+    FoamAdaptationResult,
     PolygonDiskCSR,
+    PersistentFoamSiteInitialization,
     PowerPixelOperator,
     PowerValueSemantics,
     SpectralPowerFoam,
     SparseCechGraph,
     TileDiskCSR,
+    adapt_spectral_power_foam,
     batched_bounded_power_pixel_operator,
     bounded_power_pixel_operator,
     bounded_power_ownership,
@@ -52,6 +64,7 @@ from .foam import (
     power_distance,
     power_face_planes,
     polygon_disk_candidate_csr,
+    persistent_foam_site_initialization,
     render_power_spectral_affine_basis,
     render_power_spectral_basis,
     spectral_basis_whitening_transform,
@@ -69,6 +82,7 @@ from .foam import (
 from .core import (
     BandpassConditionedField,
     ConditionedSpectralField,
+    DiffuseFoamHybridField,
     FieldComponentDecomposition,
     FourierMLPField,
     FoamInitializedINRField,
@@ -112,6 +126,7 @@ from .rendering import (
     render_field_observation_distribution,
     render_field_samples,
     render_field_samples_distribution,
+    render_diffuse_foam_hybrid_observation_exact,
     render_spectral_power_foam_observation_exact,
 )
 from .quality import (
@@ -128,6 +143,7 @@ from .quality import (
     select_field_residual_tiles,
 )
 from .training import (
+    fit_diffuse_foam_hybrid,
     fit_field_component_decomposition,
     fit_field_model,
     fit_structured_noise_crossfit,
@@ -167,6 +183,7 @@ from .spectral_budget import (
 )
 from .types import (
     DetectorLaw,
+    FieldAMPDtype,
     FieldCoordinateMode,
     DetectorToSkyTransform,
     FieldComponentAnchorTerm,
@@ -202,6 +219,13 @@ __all__ = [
     "FIELD_MODEL_KINDS",
     "FIELD_MODEL_PRESET_NAMES",
     "FIELD_MODEL_PRESETS",
+    "FieldArtifactManifest",
+    "LoadedFieldArtifact",
+    "artifacts",
+    "capture_field_rng_state",
+    "load_field_artifact",
+    "restore_field_rng_state",
+    "save_field_artifact",
     "RECOMMENDED_FIELD_MODEL_KINDS",
     "ResidualTileBasisField",
     "ResidualTileBasisSpec",
@@ -216,6 +240,9 @@ __all__ = [
     "TimeScale",
     "BandpassConditionedField",
     "bandpass",
+    "FoamAdaptationResult",
+    "PersistentFoamSiteInitialization",
+    "adapt_spectral_power_foam",
     "batched_bounded_power_pixel_operator",
     "bounded_power_pixel_operator",
     "bounded_power_ownership",
@@ -228,6 +255,7 @@ __all__ = [
     "FieldCentroidAnchorTerm",
     "FieldCoordinateMode",
     "DetectorToSkyTransform",
+    "FieldAMPDtype",
     "FieldCurriculum",
     "FieldDomain",
     "FieldFitResult",
@@ -260,6 +288,7 @@ __all__ = [
     "ifu_cube_spectral_to_leading",
     "make_tangent_plane_header",
     "FourierMLPField",
+    "DiffuseFoamHybridField",
     "FoamInitializedINRField",
     "GaussianBasisField",
     "HashGridConditionedField",
@@ -292,6 +321,7 @@ __all__ = [
     "field_component_anchor_loss",
     "field_component_centroid_anchor_loss",
     "fit_field_model",
+    "fit_diffuse_foam_hybrid",
     "fit_structured_noise_crossfit",
     "completeness_limit_magnitude",
     "paired_bootstrap_improvement",
@@ -306,6 +336,7 @@ __all__ = [
     "render_field_healpix",
     "render_field_observation",
     "render_field_observation_distribution",
+    "render_diffuse_foam_hybrid_observation_exact",
     "render_spectral_power_foam_observation_exact",
     "render_field_fit_quality",
     "render_field_quality",
@@ -323,6 +354,7 @@ __all__ = [
     "power_distance",
     "power_face_planes",
     "polygon_disk_candidate_csr",
+    "persistent_foam_site_initialization",
     "render_power_spectral_affine_basis",
     "render_power_spectral_basis",
     "spectral_basis_whitening_transform",

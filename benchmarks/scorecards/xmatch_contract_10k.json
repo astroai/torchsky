@@ -11,7 +11,7 @@
     "python": "3.13.14",
     "torchsky": "0.4.0.dev0",
     "torchsky_source_sha": "c6e61c3cfbf238415cc777b254ed39797f602991",
-    "torchsky_source_url": "file:///Users/fabbros/src/torchsky",
+    "torchsky_source_url": "file:///Users/fabbros/src/sfabbro/torchsky",
     "xmatch": "0.5.0"
   },
   "rows": [

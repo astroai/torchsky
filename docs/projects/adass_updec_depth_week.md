@@ -247,6 +247,16 @@ Do not count independent models as receiving six times the optimization budget.
   four 256-square quadrants. Aim for at least 800 total continuum injections.
 - [ ] Run blank, sign-flipped/negative, and shuffled-band batches through the
   identical fitting and detection path.
+  - [x] Add paired control manifests to the existing
+    `updec-adass-manifest` profile. `positive`, `blank`, `negative`, and
+    `shuffled_band` keep the same sky positions and enter the same classical
+    and field adapters. Negative injections require an explicit `sign=-1` while
+    stored flux amplitudes remain non-negative. The shuffled control applies a
+    distinct deterministic non-identity source permutation in every band,
+    preserving each band's flux marginal while breaking source-wise spectral
+    correspondence. Manifests persist the mode, sign, seed, and exact source
+    indices. The parent remains open until all controls run on every frozen
+    real method and pass their preregistered outcome gates.
 - [ ] Detect on the full reconstructed products. Use the control catalogue to
   distinguish pre-existing real objects; do not claim depth from an
   injected-minus-control image with the real sky artificially removed.
@@ -833,7 +843,7 @@ These are the intended end-state CLI contracts; check the boxes only after the
 profile exists and `--help` confirms them.
 
 ```bash
-cd /Users/fabbros/src/torchsky
+cd /Users/fabbros/src/sfabbro/torchsky
 
 pixi run -e test -- pytest tests/test_multiband_depth_benchmark.py -q
 

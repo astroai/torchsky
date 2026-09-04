@@ -2,22 +2,30 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 import torch
 
 from torchsky.map.field import (
     FieldDomain,
     FieldObservation,
+    DiffuseFoamHybridField,
+    FoamAdaptationResult,
     FoamInitializedINRField,
     ForwardContext,
     SpectralPowerFoam,
     SpectralPowerFoamField,
+    adapt_spectral_power_foam,
     bounded_power_pixel_operator,
     fit_field_model,
+    fit_diffuse_foam_hybrid,
     make_field_model,
     make_tangent_plane_header,
+    persistent_foam_site_initialization,
     render_power_spectral_basis,
     render_field_observation,
+    render_diffuse_foam_hybrid_observation_exact,
     render_spectral_power_foam_observation_exact,
     smooth_bounded_power_weights,
     solve_power_pixel_least_squares,
@@ -54,6 +62,138 @@ def test_spectral_basis_whitening_is_orthonormal_and_differentiable() -> None:
     torch.square(whitened).sum().backward()
     assert response_basis.grad is not None
     assert bool(torch.isfinite(response_basis.grad).all())
+
+
+def test_persistent_foam_sites_require_coherent_multi_exposure_evidence() -> None:
+    persistent = torch.tensor([[-0.55, -0.55], [-0.45, -0.45]])
+    transient = torch.tensor([[0.45, 0.45], [0.55, 0.55]])
+    coordinates = tuple(torch.cat([persistent, transient], dim=0) for _ in range(3))
+    residuals = (
+        torch.tensor([3.0, 2.0, 5.0, 4.0]),
+        torch.tensor([2.5, 2.0, 0.0, -1.0]),
+        torch.tensor([2.0, 2.5, -0.5, 0.0]),
+    )
+
+    result = persistent_foam_site_initialization(
+        coordinates,
+        residuals,
+        num_sites=1,
+        min_exposures=2,
+        bin_shape=(2, 2),
+        lower=(-1.0, -1.0),
+        upper=(1.0, 1.0),
+        initial_radius=0.4,
+    )
+    permuted = persistent_foam_site_initialization(
+        tuple(reversed(coordinates)),
+        tuple(reversed(residuals)),
+        num_sites=1,
+        min_exposures=2,
+        bin_shape=(2, 2),
+        lower=(-1.0, -1.0),
+        upper=(1.0, 1.0),
+        initial_radius=0.4,
+    )
+
+    torch.testing.assert_close(result.sites, torch.tensor([[-0.5, -0.5]]))
+    torch.testing.assert_close(result.radii, torch.tensor([0.4]))
+    assert result.exposure_counts.tolist() == [3]
+    torch.testing.assert_close(result.sites, permuted.sites)
+    torch.testing.assert_close(result.scores, permuted.scores)
+
+
+def test_foam_heldout_statistics_are_ema_buffers() -> None:
+    model = SpectralPowerFoam(
+        torch.tensor([[-0.5, 0.0], [0.5, 0.0]]),
+        torch.tensor([0.6, 0.6]),
+        torch.ones((2, 1)),
+    )
+    with pytest.raises(ValueError, match="held_out"):
+        model.update_adaptation_statistics(
+            torch.tensor([0]),
+            torch.tensor([1.0]),
+            torch.tensor([1.0]),
+            torch.tensor([[-0.4, 0.0]]),
+            split="train",
+        )
+    model.update_adaptation_statistics(
+        torch.tensor([0, 0, 1]),
+        torch.tensor([2.0, 4.0, 1.0]),
+        torch.tensor([0.5, 1.5, 2.0]),
+        torch.tensor([[-0.5, 0.0], [-0.3, 0.2], [0.4, 0.0]]),
+        split="held_out",
+        decay=0.9,
+    )
+    torch.testing.assert_close(model.heldout_residual_ema, torch.tensor([10.0, 1.0]))
+    torch.testing.assert_close(model.contribution_ema, torch.tensor([1.0, 2.0]))
+    assert model.evidence_updates.tolist() == [1, 1]
+    assert {
+        "heldout_residual_ema",
+        "contribution_ema",
+        "residual_position_ema",
+        "evidence_updates",
+    }.issubset(model.state_dict())
+
+    model.update_adaptation_statistics(
+        torch.tensor([0]),
+        torch.tensor([2.0]),
+        torch.tensor([3.0]),
+        torch.tensor([[-0.2, 0.1]]),
+        split="held_out",
+        decay=0.5,
+    )
+    torch.testing.assert_close(model.heldout_residual_ema, torch.tensor([7.0, 1.0]))
+    torch.testing.assert_close(model.contribution_ema, torch.tensor([2.0, 2.0]))
+    assert model.evidence_updates.tolist() == [2, 1]
+
+
+def test_foam_adaptation_is_deterministic_and_preserves_adam_state() -> None:
+    model = SpectralPowerFoam(
+        torch.tensor([[-0.5, 0.0], [0.0, 0.0], [0.5, 0.0]]),
+        torch.tensor([0.4, 0.4, 0.4]),
+        torch.tensor([[1.0], [2.0], [3.0]]),
+    )
+    optimizer = torch.optim.Adam(model.parameters(), lr=1.0e-3)
+    points = torch.tensor([[-0.5, 0.0], [0.0, 0.0], [0.5, 0.0]])
+    model(points, torch.ones((3, 1))).sum().backward()
+    optimizer.step()
+    optimizer.zero_grad(set_to_none=True)
+    old_sites_parameter = model.sites
+    old_sites_momentum = optimizer.state[old_sites_parameter]["exp_avg"].clone()
+    old_coefficients = model.cell_coefficients.detach().clone()
+    old_radii = model.radii.detach().clone()
+
+    model.update_adaptation_statistics(
+        torch.tensor([0, 1, 2]),
+        torch.tensor([5.0, 1.0, 0.1]),
+        torch.tensor([0.5, 1.0, 0.01]),
+        torch.tensor([[-0.35, 0.1], [0.0, 0.0], [0.5, 0.0]]),
+        split="held_out",
+    )
+    result = adapt_spectral_power_foam(
+        model,
+        optimizer,
+        densify_count=1,
+        prune_count=1,
+        min_updates=1,
+    )
+
+    assert isinstance(result, FoamAdaptationResult)
+    assert result.densified_cell_ids == (0,)
+    assert result.pruned_cell_ids == (2,)
+    assert model.sites.shape == (3, 2)
+    torch.testing.assert_close(model.sites[-1], torch.tensor([-0.35, 0.1]))
+    torch.testing.assert_close(model.cell_coefficients[-1], old_coefficients[0])
+    torch.testing.assert_close(model.radii[0], old_radii[0] / math.sqrt(2.0))
+    torch.testing.assert_close(model.radii[-1], old_radii[0] / math.sqrt(2.0))
+    assert old_sites_parameter not in optimizer.state
+    new_sites_momentum = optimizer.state[model.sites]["exp_avg"]
+    torch.testing.assert_close(new_sites_momentum[:2], old_sites_momentum[:2])
+    torch.testing.assert_close(new_sites_momentum[2], torch.zeros(2))
+
+    model(points, torch.ones((3, 1))).sum().backward()
+    optimizer.step()
+    assert torch.isfinite(model.sites).all()
 
 
 def test_spectral_basis_whitening_rejects_rank_deficiency() -> None:
@@ -845,6 +985,182 @@ def test_foam_initialized_inr_is_positive_exact_and_zero_initialized() -> None:
     actual.sum().backward()
     assert model.residual_output.weight.grad is not None
     assert not torch.all(model.residual_output.weight.grad == 0)
+
+
+def test_diffuse_foam_hybrid_is_combined_only_and_supports_staged_training() -> None:
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    foam = SpectralPowerFoamField(
+        domain,
+        sites=torch.tensor([[0.0, 0.0]], dtype=torch.float32),
+        radii=torch.tensor([0.5], dtype=torch.float32),
+        cell_coefficients=torch.tensor([[-2.0, 0.25]], dtype=torch.float32),
+        log_intensity_spectra=True,
+    )
+    model = make_field_model(
+        "diffuse_foam_hybrid",
+        domain,
+        foam=foam,
+        diffuse_hidden_dim=8,
+        diffuse_hidden_layers=1,
+        diffuse_omega0=2.0,
+        training_stage="foam",
+    )
+    assert isinstance(model, DiffuseFoamHybridField)
+    assert model.component_identifiability == "combined_only"
+    assert model.training_stage == "foam"
+    assert not any(parameter.requires_grad for parameter in model.diffuse_field.parameters())
+    assert all(parameter.requires_grad for parameter in model.localized_foam.parameters())
+
+    ra = torch.tensor([9.99, 10.0, 10.01], dtype=torch.float32)
+    dec = torch.tensor([20.01, 20.0, 19.99], dtype=torch.float32)
+    wavelength = torch.tensor([1.5, 2.0, 2.5], dtype=torch.float32)
+    diffuse, localized = model.diagnostic_components(ra, dec, wavelength)
+    torch.testing.assert_close(model(ra, dec, wavelength), diffuse + localized)
+    assert bool((model(ra, dec, wavelength) >= 0.0).all())
+
+    model.set_training_stage("joint")
+    assert all(parameter.requires_grad for parameter in model.parameters())
+    regularization = model.component_regularization(
+        ra,
+        dec,
+        wavelength,
+        foam_sparsity_weight=0.1,
+        correlation_weight=0.2,
+    )
+    assert regularization.ndim == 0
+    assert torch.isfinite(regularization)
+    (model(ra, dec, wavelength).sum() + regularization).backward()
+    assert model.diffuse_field.output.weight.grad is not None
+    assert model.localized_foam.foam.cell_coefficients.grad is not None
+
+    model._training_stage_code.fill_(9)
+    with pytest.raises(ValueError, match="stored hybrid training stage"):
+        _ = model.training_stage
+
+
+def test_diffuse_foam_hybrid_staged_fit_uses_joint_regularization() -> None:
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    foam = SpectralPowerFoamField(
+        domain,
+        sites=torch.tensor([[0.0, 0.0]], dtype=torch.float32),
+        radii=torch.tensor([2.0], dtype=torch.float32),
+        cell_coefficients=torch.tensor([[-2.0]], dtype=torch.float32),
+        log_intensity_spectra=True,
+    )
+    model = make_field_model(
+        "diffuse_foam_hybrid",
+        domain,
+        foam=foam,
+        diffuse_hidden_dim=6,
+        diffuse_hidden_layers=1,
+    )
+    assert isinstance(model, DiffuseFoamHybridField)
+    observation = FieldObservation(
+        image=torch.full((4, 4), 0.3, dtype=torch.float32),
+        header=make_tangent_plane_header(
+            4,
+            4,
+            crval_ra_deg=10.0,
+            crval_dec_deg=20.0,
+            cd11=-0.01,
+            cd22=0.01,
+        ),
+        weight=torch.ones((4, 4), dtype=torch.float32),
+        wavelength=2.0,
+    )
+
+    result = fit_diffuse_foam_hybrid(
+        [observation],
+        model,
+        diffuse_steps=1,
+        foam_steps=1,
+        joint_steps=1,
+        joint_foam_sparsity_weight=0.01,
+        joint_correlation_weight=0.01,
+        lr=1.0e-3,
+        num_spectral_samples=1,
+        device="cpu",
+    )
+
+    assert result.completed_steps == 3
+    assert model.training_stage == "joint"
+    assert result.diagnostics is not None
+    assert [row["stage"] for row in result.diagnostics["hybrid_stages"]] == [
+        "diffuse",
+        "foam",
+        "joint",
+    ]
+
+
+def test_diffuse_foam_hybrid_exact_render_keeps_foam_cells_hard() -> None:
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=20.0,
+        spatial_scale_deg=0.1,
+        wavelength_center=2.0,
+        wavelength_scale=1.0,
+    )
+    foam = SpectralPowerFoamField(
+        domain,
+        sites=torch.tensor([[0.0, 0.0]], dtype=torch.float64),
+        radii=torch.tensor([0.12], dtype=torch.float64),
+        cell_coefficients=torch.tensor([[-1.0]], dtype=torch.float64),
+        log_intensity_spectra=True,
+    )
+    model = make_field_model(
+        "diffuse_foam_hybrid",
+        domain,
+        foam=foam,
+        diffuse_hidden_dim=6,
+        diffuse_hidden_layers=1,
+    )
+    assert isinstance(model, DiffuseFoamHybridField)
+    observation = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=make_tangent_plane_header(
+            4,
+            4,
+            crval_ra_deg=10.0,
+            crval_dec_deg=20.0,
+            cd11=-0.01,
+            cd22=0.01,
+        ),
+        wavelength=2.0,
+    )
+    empty_bundle = ObservationOperatorBundle()
+
+    exact = render_diffuse_foam_hybrid_observation_exact(
+        model,
+        observation,
+        num_spectral_samples=1,
+        operator_bundle=empty_bundle,
+    )
+    expected = render_field_observation(
+        model.diffuse_field,
+        observation,
+        num_spectral_samples=1,
+        operator_bundle=empty_bundle,
+    ) + render_spectral_power_foam_observation_exact(
+        model.localized_foam,
+        observation,
+        num_spectral_samples=1,
+        operator_bundle=empty_bundle,
+    )
+
+    torch.testing.assert_close(exact, expected)
+    assert bool(torch.isfinite(exact).all())
 
 
 def test_log_intensity_foam_is_positive_and_exact_render_matches_points() -> None:

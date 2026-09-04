@@ -47,6 +47,7 @@ from bench_map_smacs0723_real import (  # noqa: E402
     _discover_exposure_paths,
     _field_observation_kwargs_for_band,
     _filter_exposure_paths_by_patterns,
+    _injection_manifest_sign,
     _injection_manifest_tensors,
     _jwst_dq_support_and_contamination_prior,
     _metric_mask,
@@ -2200,6 +2201,7 @@ def main() -> int:
                     band=band,
                     world_radec_deg=injection_world,
                     flux_jy=injection_flux,
+                    injection_sign=_injection_manifest_sign(injection_manifest),
                 )
                 injection_rows.extend({"band": band, **row} for row in injection_audit)
 

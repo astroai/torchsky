@@ -17,6 +17,7 @@ from torch import Tensor, nn
 from ..map.field.core import (
     BandpassConditionedField as BandpassConditioned,
     ConditionedSpectralField as ConditionedSpectral,
+    DiffuseFoamHybridField as DiffuseFoamHybrid,
     FieldComponentDecomposition,
     FourierMLPField as FourierMLP,
     FoamInitializedINRField as FoamInitializedINR,
@@ -51,6 +52,12 @@ from ..map.field.adaptive import (
     make_residual_tile_basis_field as residual_tile_basis,
     residual_tile_basis_spec_from_observation as residual_tile_basis_spec,
 )
+from ..map.field.artifacts import (
+    FieldArtifactManifest as ArtifactManifest,
+    LoadedFieldArtifact as LoadedArtifact,
+    load_field_artifact as load_artifact,
+    save_field_artifact as save_artifact,
+)
 from ..map.field.rendering import (
     evaluate_field_coordinates_vmapped as evaluate,
     render_field_cube,
@@ -60,6 +67,7 @@ from ..map.field.rendering import (
     render_field_observation_distribution,
     render_field_samples,
     render_field_samples_distribution,
+    render_diffuse_foam_hybrid_observation_exact,
 )
 from ..map.field.quality import (
     FieldResidualProduct as ResidualProduct,
@@ -73,6 +81,7 @@ from ..map.field.quality import (
     select_field_residual_tiles as residual_tiles,
 )
 from ..map.field.training import (
+    fit_diffuse_foam_hybrid as fit_hybrid,
     fit_field_component_decomposition as fit_component_decomposition,
     fit_field_model as fit,
     fit_structured_noise_crossfit as fit_noise_crossfit,
@@ -103,6 +112,7 @@ from ..map.field.spectral_budget import (
 )
 from ..map.field.types import (
     DetectorLaw,
+    FieldAMPDtype,
     FieldCentroidAnchorTerm,
     FieldComponentAnchorTerm,
     FieldCoordinateMode,
@@ -235,9 +245,12 @@ __all__ = [
     "FIELD_MODEL_PRESETS",
     "RECOMMENDED_FIELD_MODEL_KINDS",
     "BandpassConditioned",
+    "ArtifactManifest",
+    "LoadedArtifact",
     "ConditionedSpectral",
     "Domain",
     "DetectorLaw",
+    "FieldAMPDtype",
     "FieldCentroidAnchorTerm",
     "FieldComponentAnchorTerm",
     "FieldComponentDecomposition",
@@ -250,6 +263,7 @@ __all__ = [
     "FieldModelPreset",
     "FieldNoisePretrainKind",
     "FoamInitializedINR",
+    "DiffuseFoamHybrid",
     "FieldObservationSampling",
     "FieldSpectralQuantity",
     "FieldSpectralSampling",
@@ -299,17 +313,20 @@ __all__ = [
     "field_observations_from_bin_edges",
     "field_observations_from_ifu_cube",
     "fit",
+    "fit_hybrid",
     "fit_noise_crossfit",
     "fit_component_decomposition",
     "get_field_model_preset",
     "ifu_cube_spectral_to_leading",
     "is_recommended_field_model",
+    "load_artifact",
     "make_tangent_plane_header",
     "metrics",
     "model",
     "preset",
     "quality",
     "render",
+    "render_diffuse_foam_hybrid_observation_exact",
     "render_residual_product",
     "residual",
     "residual_product",
@@ -318,6 +335,7 @@ __all__ = [
     "residual_tiles",
     "sample",
     "scorecard",
+    "save_artifact",
     "spectral_data_budget",
     "suggest_num_spectral_samples",
     "suggest_spectral_model_capacity",

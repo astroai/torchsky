@@ -1,0 +1,52 @@
+{
+  "schema": "torchsky.map_overlap_background_scorecard/v1",
+  "platform": "macOS-14.8.2-arm64-arm-64bit-Mach-O",
+  "python": "3.13.14",
+  "torch": "2.13.0",
+  "torchsky": "0.4.0.dev0",
+  "git_commit": "85010fda295cc7d7fc4bae1fe5a94139492aa00f",
+  "working_tree": "uncommitted compact overlap-model implementation",
+  "command": "pixi run -e test -- python benchmarks/bench_map_overlap_background.py --size 1024 --n-observations 4 --tile 256",
+  "invocations": 3,
+  "aggregation": "per-metric median of three compact-model runs",
+  "result": {
+    "size": 1024,
+    "n_observations": 4,
+    "tile": 256,
+    "output_pixels": 1048576,
+    "elapsed_seconds": 2.5650328751653433,
+    "projected_megapixels_per_second": 1.635185279927312,
+    "rss_before_bytes": 438763520,
+    "peak_rss_bytes": 679510016,
+    "peak_rss_delta_bytes": 243777536,
+    "scratch_required_bytes": 83886080,
+    "scratch_clean": true,
+    "scene_rmse": 2.348369434912456e-06,
+    "inverse_variance_max_abs_error": 2.86102294921875e-06,
+    "checksum": 62956.5703125
+  },
+  "compact_run_samples": [
+    {
+      "elapsed_seconds": 2.5188984172418714,
+      "projected_megapixels_per_second": 1.665134239352397,
+      "peak_rss_delta_bytes": 216186880
+    },
+    {
+      "elapsed_seconds": 2.5650328751653433,
+      "projected_megapixels_per_second": 1.635185279927312,
+      "peak_rss_delta_bytes": 251740160
+    },
+    {
+      "elapsed_seconds": 2.580330875236541,
+      "projected_megapixels_per_second": 1.6254907617673275,
+      "peak_rss_delta_bytes": 243777536
+    }
+  ],
+  "previous_full_model_plane_result": {
+    "elapsed_seconds": 3.3554209999274462,
+    "projected_megapixels_per_second": 1.2500082702262079,
+    "peak_rss_delta_bytes": 259227648,
+    "scratch_required_bytes": 84934656,
+    "scene_rmse": 0.00019133329624310136
+  }
+}

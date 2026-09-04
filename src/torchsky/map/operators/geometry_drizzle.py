@@ -723,7 +723,8 @@ def exact_square_drizzle_project(
     pixel_area_sr_map_fn,
     representative_pixel_area_fn,
     chunk_pixels: int,
-) -> tuple[Tensor, Tensor]:
+    return_variance_weight: bool = False,
+) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
     image = image.to(dtype=torch.float32)
     source_weight = source_weight.to(dtype=torch.float32)
     h_src, w_src = image.shape
@@ -739,9 +740,15 @@ def exact_square_drizzle_project(
         weighted_image = image * source_weight
         weighted_weight = source_weight
 
-    valid = torch.isfinite(weighted_weight) & (weighted_weight > 0.0)
+    valid = (
+        torch.isfinite(weighted_weight)
+        & torch.isfinite(weighted_image)
+        & (weighted_weight > 0.0)
+    )
     if not bool(valid.any()):
         zeros = torch.zeros(target.shape, dtype=torch.float32, device=image.device)
+        if return_variance_weight:
+            return zeros, zeros, zeros
         return zeros, zeros
 
     ys, xs = torch.nonzero(valid, as_tuple=True)
@@ -751,10 +758,9 @@ def exact_square_drizzle_project(
         target.shape[0] * target.shape[1], dtype=torch.float32, device=image.device
     )
     flat_weight = torch.zeros_like(flat_numer)
+    flat_variance_weight = torch.zeros_like(flat_numer)
     width = int(target.shape[1])
     height = int(target.shape[0])
-    canvas_height, canvas_width = target.canvas_shape
-    canvas_origin_y, canvas_origin_x = target.canvas_origin_yx
     half = 0.5 * max(float(drizzle_pixfrac), 1.0e-6)
     has_distortion = any(
         getattr(wcs, "sip", None) is not None or getattr(wcs, "tpv", None) is not None
@@ -781,15 +787,11 @@ def exact_square_drizzle_project(
             source_shape=tuple(image.shape),
             target_shape=tuple(target.shape),
         )
-    is_subwindow = (
-        tuple(target.shape) != tuple(target.canvas_shape)
-        or target.canvas_origin_yx != (0, 0)
-    )
-    if is_subwindow and pixmap is not None:
+    if pixmap is not None:
         base_min = row_min
         base_max = row_max
-        # A finite square drop can cross an internal tile when its center falls
-        # outside it, so conservatively dilate only the subwindow scan rows.
+        # A finite square drop can cross either a tile or the outer canvas when
+        # its center falls outside it, so dilate the center-derived scan rows.
         row_min = torch.full_like(base_min, w_src)
         row_max = torch.full_like(base_max, -1)
         candidate_margin = 1 + int(math.ceil(0.5 * float(drizzle_pixfrac)))
@@ -817,24 +819,7 @@ def exact_square_drizzle_project(
             )
         row_min = torch.where(row_max >= 0, row_min.clamp(min=0), row_min)
         row_max = row_max.clamp(max=w_src - 1)
-        canvas_min, canvas_max = _scanner_row_bounds(
-            pixmap,
-            source_shape=tuple(image.shape),
-            target_shape=tuple(target.canvas_shape),
-            target_origin_yx=target.canvas_origin_yx,
-        )
-        valid_rows = (row_max >= 0) & (canvas_max >= 0)
-        row_min = torch.where(
-            valid_rows,
-            torch.maximum(row_min, canvas_min),
-            torch.full_like(row_min, -1),
-        )
-        row_max = torch.where(
-            valid_rows,
-            torch.minimum(row_max, canvas_max),
-            torch.full_like(row_max, -1),
-        )
-        valid_rows &= row_min <= row_max
+        valid_rows = row_max >= row_min
         row_min = torch.where(valid_rows, row_min, torch.full_like(row_min, -1))
         row_max = torch.where(valid_rows, row_max, torch.full_like(row_max, -1))
 
@@ -864,29 +849,14 @@ def exact_square_drizzle_project(
             dec_center_deg,
         )
         center_finite = torch.isfinite(x_center_tgt) & torch.isfinite(y_center_tgt)
-        x_center_canvas = x_center_tgt + float(canvas_origin_x)
-        y_center_canvas = y_center_tgt + float(canvas_origin_y)
-        y_lower, y_upper = _source_row_vertical_bounds(
-            y_chunk,
-            source_height=h_src,
-            target_height=canvas_height,
-        )
-        center_inside = (
-            center_finite
-            & (x_center_canvas >= -0.5 - _DRIZZLE_BOUNDARY_EPS)
-            & (
-                x_center_canvas
-                <= float(canvas_width - 1) + 0.5 + _DRIZZLE_BOUNDARY_EPS
-            )
-            & (y_center_canvas >= y_lower)
-            & (y_center_canvas <= y_upper)
-        )
-        if not bool(center_inside.any()):
+        if not bool(center_finite.any()):
             continue
-        x_chunk = x_chunk[center_inside]
-        y_chunk = y_chunk[center_inside]
-        numer_chunk = numer_chunk[center_inside]
-        weight_chunk = weight_chunk[center_inside]
+        # A drop may overlap the canvas even when its centre lies outside it.
+        # The transformed corners and exact clip below are the support oracle.
+        x_chunk = x_chunk[center_finite]
+        y_chunk = y_chunk[center_finite]
+        numer_chunk = numer_chunk[center_finite]
+        weight_chunk = weight_chunk[center_finite]
 
         sx = torch.stack(
             (x_chunk - half, x_chunk + half, x_chunk + half, x_chunk - half), dim=1
@@ -966,11 +936,24 @@ def exact_square_drizzle_project(
             flat_weight.scatter_add_(
                 0, output_index, quad_weight[owners] * coefficients
             )
+            flat_variance_weight.scatter_add_(
+                0,
+                output_index,
+                quad_weight[owners] * torch.square(coefficients),
+            )
 
     numer = flat_numer.reshape(target.shape)
     weight = flat_weight.reshape(target.shape)
     numer = torch.where(weight > 0.0, numer, torch.zeros_like(numer))
     weight = torch.where(weight > 0.0, weight, torch.zeros_like(weight))
+    if return_variance_weight:
+        variance_weight = flat_variance_weight.reshape(target.shape)
+        variance_weight = torch.where(
+            weight > 0.0,
+            variance_weight,
+            torch.zeros_like(variance_weight),
+        )
+        return numer, weight, variance_weight
     return numer, weight
 
 

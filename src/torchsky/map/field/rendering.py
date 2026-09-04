@@ -50,6 +50,16 @@ from .types import (
 )
 
 
+def field_model_has_predictive_distribution(model: nn.Module) -> bool:
+    """Return whether a model provides an explicit predictive variance."""
+    declared = getattr(model, "predictive_distribution_available", None)
+    if declared is not None:
+        return bool(declared)
+    return callable(getattr(model, "render_bandpass_distribution", None)) or callable(
+        getattr(model, "forward_distribution", None)
+    )
+
+
 def _spatial_quadrature_nodes(
     spatial_sampling: FieldSpatialSampling,
 ) -> tuple[tuple[float, float, float], ...]:
@@ -361,17 +371,9 @@ def _render_spatially_integrated_distribution(
                     dim=0,
                 )
             else:
-                node_mean = torch.zeros_like(patch_mean)
-                for index, wavelength in enumerate(wavelengths):
-                    plane = _call_scalar_field_forward(
-                        model,
-                        ra32,
-                        dec32,
-                        wavelength,
-                        forward_context=forward_context,
-                    )
-                    node_mean += plane * weights[index].to(dtype=plane.dtype)
-                node_var = torch.ones_like(node_mean)
+                raise ValueError(
+                    "field model does not provide an explicit predictive distribution"
+                )
             patch_mean += float(spatial_weight) * node_mean
             patch_var += float(spatial_weight) ** 2 * node_var
         output_mean[y0:y1, x0:x1] = patch_mean
@@ -422,6 +424,10 @@ def render_field_observation_distribution(
         raise ValueError(
             "distribution rendering with learned PSF/background operators is not "
             "implemented; use a value loss until covariance propagation is enabled"
+        )
+    if not field_model_has_predictive_distribution(model):
+        raise ValueError(
+            "field model does not provide an explicit predictive distribution"
         )
     device = next((p.device for p in model.parameters()), default_compute_device())
     if override_wavelengths is not None or override_weights is not None:
@@ -516,22 +522,9 @@ def render_field_observation_distribution(
             )
             logvar = torch.log(torch.clamp(var, min=1.0e-8))
         else:
-            mean = render_field_observation(
-                model,
-                observation,
-                num_spectral_samples=num_spectral_samples,
-                spectral_sampling=spectral_sampling,
-                spectral_sampling_grid_size=spectral_sampling_grid_size,
-                generator=generator,
-                override_wavelengths=override_wavelengths,
-                override_weights=override_weights,
-                spatial_sampling=spatial_sampling,
-                forward_context=forward_context,
-                exposure_pose=exposure_pose,
-                operator_bundle=operator_bundle,
+            raise ValueError(
+                "field model does not provide an explicit predictive distribution"
             )
-            logvar = torch.zeros_like(mean)
-            operators_applied = True
     if operators_applied:
         return mean.to(dtype=image.dtype), logvar.to(dtype=image.dtype)
     if operator_bundle.psf is not None:
@@ -576,6 +569,10 @@ def render_field_samples_distribution(
     if operator_bundle.background is not None:
         raise ValueError(
             "pixel-sampled field rendering does not support background terms"
+        )
+    if not field_model_has_predictive_distribution(model):
+        raise ValueError(
+            "field model does not provide an explicit predictive distribution"
         )
     if override_wavelengths is not None or override_weights is not None:
         if override_wavelengths is None or override_weights is None:
@@ -645,21 +642,7 @@ def render_field_samples_distribution(
             dim=0,
         )
         return mean, torch.log(torch.clamp(var, min=1.0e-8))
-    mean = render_field_samples(
-        model,
-        observation,
-        ra_deg=ra_deg,
-        dec_deg=dec_deg,
-        num_spectral_samples=num_spectral_samples,
-        spectral_sampling=spectral_sampling,
-        spectral_sampling_grid_size=spectral_sampling_grid_size,
-        generator=generator,
-        override_wavelengths=override_wavelengths,
-        override_weights=override_weights,
-        forward_context=forward_context,
-        operator_bundle=operator_bundle,
-    )
-    return mean, torch.zeros_like(mean)
+    raise ValueError("field model does not provide an explicit predictive distribution")
 
 
 def render_field_observation(
@@ -896,6 +879,8 @@ def render_spectral_power_foam_observation_exact(
     model: nn.Module,
     observation: FieldObservation,
     *,
+    additive_model: nn.Module | None = None,
+    additive_spatial_sampling: FieldSpatialSampling = "center",
     num_spectral_samples: int = 9,
     operator_kwargs: dict[str, object] | None = None,
     forward_context: ForwardContext | None = None,
@@ -962,6 +947,7 @@ def render_spectral_power_foam_observation_exact(
     if bool(torch.any(pixel_areas <= 0)):
         raise ValueError("target WCS produced a degenerate pixel polygon")
     operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
+    empty_operator_bundle = ObservationOperatorBundle()
     if isinstance(operator_bundle.psf, LearnedPSFOp):
         rendered = torch.zeros((height, width), device=device, dtype=torch.float32)
         for wavelength, weight in zip(wavelengths, weights, strict=True):
@@ -973,6 +959,18 @@ def render_spectral_power_foam_observation_exact(
                 **dict(operator_kwargs or {}),
             )
             monochromatic = (pixel_integrals / pixel_areas).reshape(height, width)
+            if additive_model is not None:
+                monochromatic = monochromatic + render_field_observation(
+                    additive_model,
+                    observation,
+                    num_spectral_samples=1,
+                    override_wavelengths=wavelength.reshape(1),
+                    override_weights=torch.ones_like(wavelength).reshape(1),
+                    spatial_sampling=additive_spatial_sampling,
+                    spatial_tile_hw=spatial_tile_hw,
+                    forward_context=forward_context,
+                    operator_bundle=empty_operator_bundle,
+                ).to(device=device, dtype=monochromatic.dtype)
             rendered += _apply_learned_psf(
                 monochromatic,
                 observation,
@@ -990,6 +988,18 @@ def render_spectral_power_foam_observation_exact(
             **dict(operator_kwargs or {}),
         )
         rendered = (pixel_integrals / pixel_areas).reshape(height, width)
+        if additive_model is not None:
+            rendered = rendered + render_field_observation(
+                additive_model,
+                observation,
+                num_spectral_samples=num_spectral_samples,
+                override_wavelengths=wavelengths,
+                override_weights=weights,
+                spatial_sampling=additive_spatial_sampling,
+                spatial_tile_hw=spatial_tile_hw,
+                forward_context=forward_context,
+                operator_bundle=empty_operator_bundle,
+            ).to(device=device, dtype=rendered.dtype)
     if operator_bundle.psf is not None and not isinstance(
         operator_bundle.psf, LearnedPSFOp
     ):
@@ -1005,6 +1015,39 @@ def render_spectral_power_foam_observation_exact(
         spatial_tile_hw=spatial_tile_hw,
     )
     return rendered.to(dtype=observation.image.dtype)
+
+
+def render_diffuse_foam_hybrid_observation_exact(
+    model: nn.Module,
+    observation: FieldObservation,
+    *,
+    num_spectral_samples: int = 9,
+    additive_spatial_sampling: FieldSpatialSampling = "center",
+    operator_kwargs: dict[str, object] | None = None,
+    forward_context: ForwardContext | None = None,
+    operator_bundle: ObservationOperatorBundle | None = None,
+    spatial_tile_hw: tuple[int, int] | None = None,
+) -> Tensor:
+    """Render the combined diffuse sky plus exact hard-cell Foam component."""
+    diffuse_model = getattr(model, "diffuse_field", None)
+    localized_foam = getattr(model, "localized_foam", None)
+    if not isinstance(diffuse_model, nn.Module) or not isinstance(
+        localized_foam, nn.Module
+    ):
+        raise TypeError("model must provide diffuse_field and localized_foam modules")
+    if getattr(model, "component_identifiability", None) != "combined_only":
+        raise ValueError("hybrid model must declare combined-only identifiability")
+    return render_spectral_power_foam_observation_exact(
+        localized_foam,
+        observation,
+        additive_model=diffuse_model,
+        additive_spatial_sampling=additive_spatial_sampling,
+        num_spectral_samples=num_spectral_samples,
+        operator_kwargs=operator_kwargs,
+        forward_context=forward_context,
+        operator_bundle=operator_bundle,
+        spatial_tile_hw=spatial_tile_hw,
+    )
 
 
 def render_field_samples(
