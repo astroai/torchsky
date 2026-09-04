@@ -69,3 +69,16 @@ def test_canfar_inspection_uses_visualization_environment() -> None:
     )
     inspection = runner.split("  calibration-inspect)", 1)[1].split("  foam)", 1)[0]
     assert inspection.count('-e bench -- \\\n') == 2
+
+
+def test_canfar_full_mosaic_parity_is_strict_and_torchfits_only() -> None:
+    runner = (ROOT / "scripts" / "run_canfar_adass_depth.sh").read_text(
+        encoding="utf-8"
+    )
+    parity = runner.split("  mosaic-parity)", 1)[1].split("  native-score)", 1)[0]
+
+    assert "--full-mosaic-parity" in parity
+    assert "--expected-exposures" in parity
+    assert "bootstrap_map_compat_tools.py" in parity
+    assert "--force-source" in parity
+    assert "astropy.io" not in parity

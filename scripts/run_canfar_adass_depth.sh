@@ -513,6 +513,70 @@ case "${mode}" in
       done
     done
     ;;
+  mosaic-parity)
+    # Strict full-reference module-B gate. Every backend sees the same north-up
+    # TAN target derived from the published grid; SCI/WHT pairs are then scored
+    # directly instead of treating the published mosaic as truth.
+    [[ "${modules[*],,}" == "b" ]] || {
+      echo "mosaic-parity is frozen to the complete SMACS module-b inventory" >&2
+      exit 2
+    }
+    parity_input_root=${MOSAIC_INPUT_ROOT:-${data_root}/jwst_smacs0723/aligned}
+    parity_pattern=${MOSAIC_INPUT_PATTERN:-*_crf_rshift_tweakreg.fits}
+    parity_total=$(find -L "${parity_input_root}" -maxdepth 1 -type f \
+      -name "${parity_pattern}" | wc -l | tr -d ' ')
+    parity_expected_total=${MOSAIC_EXPECTED_TOTAL_EXPOSURES:-135}
+    echo "mosaic-parity inventory=${parity_total} expected=${parity_expected_total}"
+    test "${parity_total}" = "${parity_expected_total}"
+
+    run pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
+      python "${source_root}/scripts/bootstrap_map_compat_tools.py" \
+      --tool swarp --force-source
+    run pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
+      python "${source_root}/scripts/bootstrap_map_compat_tools.py" \
+      --tool montage --force-source
+
+    IFS=',' read -r -a parity_bands <<< \
+      "${MOSAIC_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}"
+    reference_root=${UPDEC_REFERENCE_ROOT:-${data_root}/updec_webb}
+    for band in "${parity_bands[@]+${parity_bands[@]}}"; do
+      case "${band}" in
+        F090W | F150W | F200W) expected_band_exposures=36 ;;
+        F277W | F356W | F444W) expected_band_exposures=9 ;;
+        *) echo "unsupported SMACS parity band: ${band}" >&2; exit 2 ;;
+      esac
+      band_root=${artifact_root}/mosaic-parity/b-${band}
+      mkdir -p "${band_root}/products"
+      reference_path=${reference_root}/${band}b_UPDC-v2_iter0_i2d.fits.fz
+      test -s "${reference_path}"
+      parity_shape=$(pixi run --manifest-path "${source_root}/pixi.toml" \
+        -e map-compat -- python -c \
+        'import sys; import torchsky; h=dict(torchsky.get_header(sys.argv[1], "SCI")); print(int(h.get("ZNAXIS1", h.get("NAXIS1", 0))), int(h.get("ZNAXIS2", h.get("NAXIS2", 0))))' \
+        "${reference_path}")
+      read -r parity_width parity_height <<< "${parity_shape}"
+      test "${parity_width}" -gt 0
+      test "${parity_height}" = "${parity_width}"
+      echo "mosaic-parity b-${band}: ${parity_width}x${parity_height}, exposures=${expected_band_exposures}"
+      run pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
+        python "${source_root}/scripts/run_local_sphere_bench.py" \
+        "${source_root}/benchmarks/bench_map_smacs0723_stackers.py" \
+        --band "${band}" \
+        --module b \
+        --reference-path "${reference_path}" \
+        --exposure-dir "${parity_input_root}" \
+        --input-product aligned \
+        --crop-size "${parity_width}" \
+        --crop-mode center \
+        --full-mosaic-parity \
+        --expected-exposures "${expected_band_exposures}" \
+        --fail-on-method-error \
+        --product-out-dir "${band_root}/products" \
+        --json-out "${band_root}/parity.json" \
+        --markdown-out "${band_root}/parity.md"
+      gate "${band_root}/parity.json"
+      gate "${band_root}/parity.md"
+    done
+    ;;
   native-score)
     native_input_root_pattern=${NATIVE_INPUT_ROOT_PATTERN-}
     if [[ -z "${native_input_root_pattern}" ]]; then
