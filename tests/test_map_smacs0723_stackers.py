@@ -17,8 +17,11 @@ if str(BENCHMARKS) not in sys.path:
 
 from bench_map_compat import _as_fits_header
 from bench_map_smacs0723_stackers import (
+    SMACS_FULL_MOSAIC_PARITY_PAIRS,
+    _build_full_mosaic_parity_specs,
     _build_method_specs,
     _build_validation_method_specs,
+    _compute_pairwise_parity_metrics,
     _compute_region_metrics,
     _fixed_cutout,
     _filter_exposure_paths_by_patterns,
@@ -28,6 +31,8 @@ from bench_map_smacs0723_stackers import (
     _resolve_benchmark_target_header,
     _product_and_metric_arrays,
     _run_legacy_method,
+    _score_product_parity_pairs,
+    _validate_expected_exposure_count,
     _wcs_overlap_probe,
     run_stacker_benchmark,
 )
@@ -115,6 +120,58 @@ def test_validation_specs_freeze_drizzle_and_swarp_grid() -> None:
     assert by_name["drizzle_square_pf0p600"]["pixfrac"] == 0.6
     assert by_name["torchsky_drizzle_square_pf0p600"]["drizzle_pixfrac"] == 0.6
     assert {spec["target_mode"] for spec in specs} == {"published_swarp_tan"}
+
+
+def test_full_mosaic_parity_specs_pair_strongest_common_grid_kernels() -> None:
+    specs = _build_full_mosaic_parity_specs()
+
+    assert [spec["name"] for spec in specs] == [
+        "torchsky_drizzle_square_pf0p800",
+        "drizzle_square_pf0p800",
+        "torchsky_lanczos3",
+        "swarp_lanczos3",
+        "torchsky_conservative_polygon",
+        "montage_tan",
+    ]
+    assert {spec["target_mode"] for spec in specs} == {"published_swarp_tan"}
+    assert [pair["library"] for pair in SMACS_FULL_MOSAIC_PARITY_PAIRS] == [
+        "drizzle",
+        "swarp",
+        "montage",
+    ]
+
+
+def test_expected_exposure_count_fails_closed() -> None:
+    paths = [Path("a.fits"), Path("b.fits")]
+
+    _validate_expected_exposure_count(paths, expected=2, band="F277W", module="b")
+    with pytest.raises(RuntimeError, match="F277W module b selected 2 exposures; expected 9"):
+        _validate_expected_exposure_count(
+            paths,
+            expected=9,
+            band="F277W",
+            module="b",
+        )
+
+
+def test_pairwise_parity_metrics_are_scale_invariant_and_report_support() -> None:
+    reference = np.array([[1.0, 2.0], [3.0, 0.0]], dtype=np.float32)
+    candidate = 1.01 * reference
+    reference_weight = np.array([[1.0, 2.0], [3.0, 0.0]], dtype=np.float32)
+    candidate_weight = np.array([[10.0, 20.0], [30.0, 10.0]], dtype=np.float32)
+
+    metrics = _compute_pairwise_parity_metrics(
+        reference,
+        reference_weight,
+        candidate,
+        candidate_weight,
+    )
+
+    assert metrics["common_support_pixel_count"] == 3
+    assert metrics["support_iou_vs_torchsky"] == pytest.approx(0.75)
+    assert metrics["normalized_rmse_data_diff_vs_torchsky"] == pytest.approx(0.01)
+    assert metrics["affine_slope_vs_torchsky"] == pytest.approx(1.01)
+    assert metrics["normalized_rmse_weight_diff_vs_torchsky"] == pytest.approx(0.0)
 
 
 def test_pattern_filter_uses_complete_filename_token() -> None:
@@ -314,6 +371,67 @@ def test_product_only_persists_supported_product_without_reference_metrics(
     assert compared["reference_support_pixel_count"] == 0
     assert np.isfinite(compared["time_ms"])
     assert "no overlap with the reference metric grid" in compared["message"]
+
+
+def test_score_product_parity_pairs_compares_persisted_common_grid(
+    tmp_path: Path,
+) -> None:
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 2,
+        "NAXIS2": 2,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 1.5,
+        "CRPIX2": 1.5,
+        "CRVAL1": 12.0,
+        "CRVAL2": -3.0,
+        "CDELT1": -0.01,
+        "CDELT2": 0.01,
+    }
+    products = {}
+    for name, scale in (("native", 1.0), ("official", 1.01)):
+        science_path = tmp_path / f"{name}_sci.fits"
+        weight_path = tmp_path / f"{name}_wht.fits"
+        torchsky.write(
+            str(science_path),
+            scale * torch.arange(1, 5, dtype=torch.float32).reshape(2, 2),
+            header=header,
+            overwrite=True,
+        )
+        torchsky.write(
+            str(weight_path),
+            torch.ones((2, 2)),
+            header=header,
+            overwrite=True,
+        )
+        products[name] = {
+            "name": name,
+            "variant": name,
+            "status": "OK",
+            "time_ms": 1.0,
+            "product_path": str(science_path),
+            "product_weight_path": str(weight_path),
+        }
+
+    rows = _score_product_parity_pairs(
+        list(products.values()),
+        (
+            {
+                "torchsky": "native",
+                "official": "official",
+                "library": "example",
+                "variant": "strong",
+            },
+        ),
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["status"] == "OK"
+    assert rows[0]["case"] == "smacs_full_mosaic"
+    assert rows[0]["library"] == "example"
+    assert rows[0]["comparison_reference_variant"] == "native"
+    assert rows[0]["normalized_rmse_data_diff_vs_torchsky"] == pytest.approx(0.01)
 
 
 def test_upstream_drizzle_receives_selected_pixfrac(monkeypatch) -> None:

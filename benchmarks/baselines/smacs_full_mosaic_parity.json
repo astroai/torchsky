@@ -1,0 +1,62 @@
+[
+  {
+    "case": "smacs_full_mosaic",
+    "library": "drizzle",
+    "variant": "square:pixfrac=0.800",
+    "equals": {
+      "comparison_reference_variant": "torchsky:drizzle_square:surface_brightness:pixfrac=0.800",
+      "comparator_version": "2.2.0",
+      "target_header_match": true
+    },
+    "maximum": {
+      "normalized_rmse_data_diff_vs_torchsky": 0.01,
+      "normalized_abs_mean_data_diff_vs_torchsky": 0.002,
+      "normalized_rmse_weight_diff_vs_torchsky": 0.05,
+      "affine_slope_abs_error_vs_torchsky": 0.01,
+      "support_symmetric_difference_frac_vs_torchsky": 0.01
+    },
+    "minimum": {
+      "support_iou_vs_torchsky": 0.99
+    }
+  },
+  {
+    "case": "smacs_full_mosaic",
+    "library": "swarp",
+    "variant": "lanczos3",
+    "equals": {
+      "comparison_reference_variant": "torchsky:lanczos3:surface_brightness",
+      "comparator_version": "bf4f496f18c04a8d32022b45449ef8675ab9b3da",
+      "target_header_match": true
+    },
+    "maximum": {
+      "normalized_rmse_data_diff_vs_torchsky": 0.02,
+      "normalized_abs_mean_data_diff_vs_torchsky": 0.005,
+      "normalized_rmse_weight_diff_vs_torchsky": 0.1,
+      "affine_slope_abs_error_vs_torchsky": 0.02,
+      "support_symmetric_difference_frac_vs_torchsky": 0.3
+    },
+    "minimum": {
+      "support_iou_vs_torchsky": 0.7
+    }
+  },
+  {
+    "case": "smacs_full_mosaic",
+    "library": "montage",
+    "variant": "mProject_or_mProjectPP:north_up_tan",
+    "equals": {
+      "comparison_reference_variant": "torchsky:conservative_polygon:surface_brightness",
+      "comparator_version": "0fc9e5ff55ece4ee0b5d731157cf07cc31325724",
+      "target_header_match": true
+    },
+    "maximum": {
+      "normalized_rmse_data_diff_vs_torchsky": 0.01,
+      "normalized_abs_mean_data_diff_vs_torchsky": 0.002,
+      "normalized_rmse_weight_diff_vs_torchsky": 0.05,
+      "affine_slope_abs_error_vs_torchsky": 0.01,
+      "support_symmetric_difference_frac_vs_torchsky": 0.01
+    },
+    "minimum": {
+      "support_iou_vs_torchsky": 0.99
+    }
+  }
+]

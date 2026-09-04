@@ -33,12 +33,14 @@ if str(BENCH) not in sys.path:
 from bench_map_compat import (  # noqa: E402
     _as_fits_header,
     _align_array_to_target,
+    _check_acceptance_contracts,
     _coadd_with_dfreproject,
     _coadd_with_montage,
     _coadd_with_reproject,
     _coadd_with_swarp,
     _geometry_family_for_torchsky_kernel,
     _load_weight_map,
+    _software_manifest,
     geometry_family_for_library_variant,
 )
 from torchsky.map.operators import headers_equivalent_for_direct_copy  # noqa: E402
@@ -79,6 +81,30 @@ DEFAULT_REFERENCE_PATH = DATA / "updec_webb" / "F277Wb_UPDC-v2_iter0_i2d.fits.fz
 DEFAULT_EXPOSURE_DIR = DATA / "jwst_smacs0723"
 DEFAULT_JSON_OUT = DATA / "benchmark_results" / "smacs0723_stackers.json"
 DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_stackers.md"
+DEFAULT_FULL_MOSAIC_ACCEPTANCE = (
+    ROOT / "benchmarks" / "baselines" / "smacs_full_mosaic_parity.json"
+)
+
+SMACS_FULL_MOSAIC_PARITY_PAIRS: tuple[dict[str, str], ...] = (
+    {
+        "torchsky": "torchsky_drizzle_square_pf0p800",
+        "official": "drizzle_square_pf0p800",
+        "library": "drizzle",
+        "variant": "square:pixfrac=0.800",
+    },
+    {
+        "torchsky": "torchsky_lanczos3",
+        "official": "swarp_lanczos3",
+        "library": "swarp",
+        "variant": "lanczos3",
+    },
+    {
+        "torchsky": "torchsky_conservative_polygon",
+        "official": "montage_tan",
+        "library": "montage",
+        "variant": "mProject_or_mProjectPP:north_up_tan",
+    },
+)
 
 from torchsky.map import (  # noqa: E402
     FieldObservation,
@@ -490,6 +516,39 @@ def _build_validation_method_specs(
     return specs
 
 
+def _build_full_mosaic_parity_specs() -> list[dict[str, Any]]:
+    """Return matched strongest-kernel pairs on one Montage/SWarp-safe grid."""
+
+    base = {spec["name"]: spec for spec in _build_method_specs(include_inr=False)}
+    torchsky_drizzle = dict(base["torchsky_drizzle_square"])
+    torchsky_drizzle.update(
+        {
+            "name": "torchsky_drizzle_square_pf0p800",
+            "variant": "torchsky:drizzle_square:surface_brightness:pixfrac=0.800",
+            "drizzle_pixfrac": 0.8,
+        }
+    )
+    official_drizzle = dict(base["drizzle_square"])
+    official_drizzle.update(
+        {
+            "name": "drizzle_square_pf0p800",
+            "variant": "drizzle:square:pixfrac=0.800",
+            "pixfrac": 0.8,
+        }
+    )
+    specs = [
+        torchsky_drizzle,
+        official_drizzle,
+        dict(base["torchsky_lanczos3"]),
+        dict(base["swarp_lanczos3"]),
+        dict(base["torchsky_conservative_polygon"]),
+        dict(base["montage_tan"]),
+    ]
+    for spec in specs:
+        spec["target_mode"] = "published_swarp_tan"
+    return specs
+
+
 def _resolve_target_header(
     mode: str,
     *,
@@ -712,6 +771,199 @@ def _compute_region_metrics(
     return metrics
 
 
+def _compute_pairwise_parity_metrics(
+    torchsky_data: np.ndarray,
+    torchsky_weight: np.ndarray,
+    comparator_data: np.ndarray,
+    comparator_weight: np.ndarray,
+) -> dict[str, float | int]:
+    """Compare products on the exact same grid with scale-free diagnostics."""
+
+    arrays = tuple(
+        np.asarray(value, dtype=np.float32)
+        for value in (
+            torchsky_data,
+            torchsky_weight,
+            comparator_data,
+            comparator_weight,
+        )
+    )
+    if len({array.shape for array in arrays}) != 1:
+        raise ValueError("parity products must have identical shapes")
+    ts_data, ts_weight, ext_data, ext_weight = arrays
+    ts_support = np.isfinite(ts_data) & np.isfinite(ts_weight) & (ts_weight > 0.0)
+    ext_support = (
+        np.isfinite(ext_data) & np.isfinite(ext_weight) & (ext_weight > 0.0)
+    )
+    common = ts_support & ext_support
+    union = ts_support | ext_support
+    common_count = int(common.sum())
+    union_count = int(union.sum())
+    if common_count == 0:
+        raise ValueError("parity products have no common finite support")
+
+    ts_values = ts_data[common]
+    ext_values = ext_data[common]
+    residual = ext_values - ts_values
+    reference_rms = float(
+        np.sqrt(np.mean(np.square(ts_values), dtype=np.float64))
+    )
+    scale = max(reference_rms, float(np.finfo(np.float32).eps))
+
+    ts_mean = float(np.mean(ts_values, dtype=np.float64))
+    ext_mean = float(np.mean(ext_values, dtype=np.float64))
+    centered_ts = ts_values - ts_mean
+    centered_ext = ext_values - ext_mean
+    variance = float(np.mean(centered_ts * centered_ts, dtype=np.float64))
+    slope = (
+        float(np.mean(centered_ts * centered_ext, dtype=np.float64) / variance)
+        if variance > 0.0
+        else float("nan")
+    )
+    intercept = ext_mean - slope * ts_mean if np.isfinite(slope) else float("nan")
+
+    ts_weights = ts_weight[common]
+    ext_weights = ext_weight[common]
+    ts_weight_mean = float(np.mean(ts_weights, dtype=np.float64))
+    ext_weight_mean = float(np.mean(ext_weights, dtype=np.float64))
+    if ts_weight_mean <= 0.0 or ext_weight_mean <= 0.0:
+        raise ValueError("parity products have non-positive mean weight")
+    normalized_weight_residual = (
+        ext_weights / ext_weight_mean - ts_weights / ts_weight_mean
+    )
+
+    ts_flux = float(np.sum(ts_values, dtype=np.float64))
+    ext_flux = float(np.sum(ext_values, dtype=np.float64))
+    return {
+        "common_support_pixel_count": common_count,
+        "union_support_pixel_count": union_count,
+        "comparison_support_frac_vs_torchsky": common_count / float(ts_data.size),
+        "support_iou_vs_torchsky": common_count / float(union_count),
+        "support_symmetric_difference_frac_vs_torchsky": (
+            int(np.logical_xor(ts_support, ext_support).sum()) / float(ts_data.size)
+        ),
+        "rmse_data_diff_vs_torchsky": float(
+            np.sqrt(np.mean(np.square(residual), dtype=np.float64))
+        ),
+        "mae_data_diff_vs_torchsky": float(
+            np.mean(np.abs(residual), dtype=np.float64)
+        ),
+        "max_abs_data_diff_vs_torchsky": float(np.max(np.abs(residual))),
+        "torchsky_data_rms": reference_rms,
+        "normalized_rmse_data_diff_vs_torchsky": float(
+            np.sqrt(np.mean(np.square(residual), dtype=np.float64)) / scale
+        ),
+        "normalized_abs_mean_data_diff_vs_torchsky": float(
+            abs(np.mean(residual, dtype=np.float64)) / scale
+        ),
+        "flux_ratio_vs_torchsky": ext_flux / ts_flux if ts_flux != 0.0 else float("nan"),
+        "affine_slope_vs_torchsky": slope,
+        "affine_slope_abs_error_vs_torchsky": (
+            abs(slope - 1.0) if np.isfinite(slope) else float("nan")
+        ),
+        "affine_intercept_vs_torchsky": intercept,
+        "normalized_rmse_weight_diff_vs_torchsky": float(
+            np.sqrt(
+                np.mean(
+                    np.square(normalized_weight_residual),
+                    dtype=np.float64,
+                )
+            )
+        ),
+    }
+
+
+def _score_product_parity_pairs(
+    rows: list[dict[str, Any]],
+    pairs: tuple[dict[str, str], ...] = SMACS_FULL_MOSAIC_PARITY_PAIRS,
+) -> list[dict[str, Any]]:
+    """Read one persisted pair at a time and emit strict common-grid rows."""
+
+    by_name = {str(row["name"]): row for row in rows}
+    parity_rows: list[dict[str, Any]] = []
+    for pair in pairs:
+        native_name = pair["torchsky"]
+        official_name = pair["official"]
+        parity: dict[str, Any] = {
+            "case": "smacs_full_mosaic",
+            "library": pair["library"],
+            "variant": pair["variant"],
+            "status": "OK",
+            "torchsky_method": native_name,
+            "official_method": official_name,
+        }
+        try:
+            native = by_name[native_name]
+            official = by_name[official_name]
+            if native.get("status") != "OK" or official.get("status") != "OK":
+                raise RuntimeError(
+                    f"input method failed: {native_name}={native.get('status')}, "
+                    f"{official_name}={official.get('status')}"
+                )
+            native_data, native_header = torchsky.read(
+                str(native["product_path"]), return_header=True
+            )
+            native_weight, native_weight_header = torchsky.read(
+                str(native["product_weight_path"]), return_header=True
+            )
+            official_data, official_header = torchsky.read(
+                str(official["product_path"]), return_header=True
+            )
+            official_weight, official_weight_header = torchsky.read(
+                str(official["product_weight_path"]), return_header=True
+            )
+            headers = (
+                dict(native_header),
+                dict(native_weight_header),
+                dict(official_header),
+                dict(official_weight_header),
+            )
+            if not all(
+                headers_equivalent_for_direct_copy(headers[0], header)
+                for header in headers[1:]
+            ):
+                raise RuntimeError("parity products do not share one exact target grid")
+            parity.update(
+                {
+                    "comparison_reference_variant": str(native["variant"]),
+                    "torchsky_time_ms": float(native["time_ms"]),
+                    "official_time_ms": float(official["time_ms"]),
+                    "speed_ratio_torchsky_vs_official": float(native["time_ms"])
+                    / max(float(official["time_ms"]), 1.0e-12),
+                    "target_header_match": True,
+                    **_compute_pairwise_parity_metrics(
+                        native_data.detach().cpu().numpy(),
+                        native_weight.detach().cpu().numpy(),
+                        official_data.detach().cpu().numpy(),
+                        official_weight.detach().cpu().numpy(),
+                    ),
+                }
+            )
+            del native_data, native_weight, official_data, official_weight
+        except Exception as exc:
+            parity["status"] = "FAIL"
+            parity["message"] = str(exc)
+        parity_rows.append(parity)
+    return parity_rows
+
+
+def _validate_expected_exposure_count(
+    paths: list[Path],
+    *,
+    expected: int | None,
+    band: str,
+    module: str,
+) -> None:
+    if expected is None:
+        return
+    if expected <= 0:
+        raise ValueError("expected exposure count must be positive")
+    if len(paths) != expected:
+        raise RuntimeError(
+            f"{band} module {module} selected {len(paths)} exposures; expected {expected}"
+        )
+
+
 def _format_markdown(rows: list[dict[str, Any]]) -> str:
     lines = [
         "# SMACS J0723 Stacker Comparison",
@@ -732,6 +984,40 @@ def _format_markdown(rows: list[dict[str, Any]]) -> str:
             f"{row['center_support_rmse']:.6f} | {row['edge_support_rmse']:.6f} | "
             f"{row.get('support_rmse_after_affine_fit', float('nan')):.6f} | {row['time_ms']:.2f} |"
         )
+    return "\n".join(lines) + "\n"
+
+
+def _format_parity_markdown(
+    rows: list[dict[str, Any]], acceptance_errors: list[str]
+) -> str:
+    lines = [
+        "",
+        "## Full-mosaic direct parity",
+        "",
+        "| official comparator | kernel | status | support IoU | normalized data RMSE | normalized weight RMSE | slope error |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: |",
+    ]
+    for row in rows:
+        if row["status"] != "OK":
+            lines.append(
+                f"| {row['library']} | {row['variant']} | FAIL | nan | nan | nan | nan |"
+            )
+            continue
+        lines.append(
+            f"| {row['library']} | {row['variant']} | OK | "
+            f"{row['support_iou_vs_torchsky']:.6f} | "
+            f"{row['normalized_rmse_data_diff_vs_torchsky']:.6g} | "
+            f"{row['normalized_rmse_weight_diff_vs_torchsky']:.6g} | "
+            f"{row['affine_slope_abs_error_vs_torchsky']:.6g} |"
+        )
+    lines.extend(
+        [
+            "",
+            f"Acceptance: {'FAIL' if acceptance_errors else 'PASS'}",
+        ]
+    )
+    if acceptance_errors:
+        lines.extend(["", *[f"- {message}" for message in acceptance_errors]])
     return "\n".join(lines) + "\n"
 
 
@@ -1278,6 +1564,26 @@ def main() -> int:
         action="store_true",
         help="Run the frozen Torchsky/Drizzle/SWarp classical validation sweep",
     )
+    parser.add_argument(
+        "--full-mosaic-parity",
+        action="store_true",
+        help=(
+            "Run the fail-closed full-size Drizzle/SWarp/Montage strongest-kernel "
+            "comparison on one common TAN grid"
+        ),
+    )
+    parser.add_argument(
+        "--expected-exposures",
+        type=int,
+        default=None,
+        help="Require this exact post-filter exposure count before running",
+    )
+    parser.add_argument(
+        "--full-mosaic-acceptance",
+        type=Path,
+        default=DEFAULT_FULL_MOSAIC_ACCEPTANCE,
+        help="Versioned numerical contract for --full-mosaic-parity",
+    )
     parser.add_argument("--drizzle-pixfracs", default="0.6,0.8,1.0")
     parser.add_argument(
         "--fail-on-method-error",
@@ -1341,6 +1647,12 @@ def main() -> int:
         )
     if not exposure_paths:
         raise FileNotFoundError("No local exposures found for the requested selection")
+    _validate_expected_exposure_count(
+        exposure_paths,
+        expected=args.expected_exposures,
+        band=band,
+        module=args.module,
+    )
 
     science_overrides = None
     injection_audit = None
@@ -1362,7 +1674,18 @@ def main() -> int:
 
     if (args.crop_x0 is None) != (args.crop_y0 is None):
         raise ValueError("--crop-x0 and --crop-y0 must be provided together")
-    if args.validation_classical:
+    if args.full_mosaic_parity:
+        if args.validation_classical or args.methods.strip():
+            raise ValueError(
+                "--full-mosaic-parity owns the exact method matrix; do not combine "
+                "it with --validation-classical or --methods"
+            )
+        if args.product_out_dir is None:
+            raise ValueError("--full-mosaic-parity requires --product-out-dir")
+        if args.expected_exposures is None:
+            raise ValueError("--full-mosaic-parity requires --expected-exposures")
+        specs = _build_full_mosaic_parity_specs()
+    elif args.validation_classical:
         pixfracs = tuple(
             float(part.strip())
             for part in args.drizzle_pixfracs.split(",")
@@ -1403,13 +1726,51 @@ def main() -> int:
             else None
         ),
         product_out_dir=args.product_out_dir,
-        product_only=args.product_only,
+        product_only=args.product_only or args.full_mosaic_parity,
     )
     for row in rows:
         row["band"] = band
         row["module"] = args.module
         row["reference_path"] = str(reference_path)
-    payload = {"rows": rows}
+    parity_rows: list[dict[str, Any]] = []
+    acceptance_errors: list[str] = []
+    software = _software_manifest()
+    if args.full_mosaic_parity:
+        parity_rows = _score_product_parity_pairs(rows)
+        comparator_versions = {
+            "drizzle": software["drizzle"],
+            "swarp": software["swarp_source_commit"],
+            "montage": software["montage_source_commit"],
+        }
+        for row in parity_rows:
+            row["band"] = band
+            row["module"] = args.module
+            row["comparator_version"] = comparator_versions.get(row["library"])
+        contracts = json.loads(
+            args.full_mosaic_acceptance.read_text(encoding="utf-8")
+        )
+        if not isinstance(contracts, list) or not all(
+            isinstance(contract, dict) for contract in contracts
+        ):
+            raise ValueError("full-mosaic acceptance JSON must be a list of objects")
+        acceptance_errors = _check_acceptance_contracts(parity_rows, contracts)
+    payload: dict[str, Any] = {
+        "rows": rows,
+        "software": software,
+        "input_count": len(exposure_paths),
+        "inputs": [str(path.resolve()) for path in exposure_paths],
+    }
+    if args.full_mosaic_parity:
+        payload.update(
+            {
+                "parity_rows": parity_rows,
+                "acceptance_contract": str(
+                    args.full_mosaic_acceptance.resolve()
+                ),
+                "acceptance_status": "FAIL" if acceptance_errors else "PASS",
+                "acceptance_errors": acceptance_errors,
+            }
+        )
     if injection_audit is not None:
         payload["injection_manifest"] = str(args.injection_manifest.resolve())
         payload["injection_audit"] = injection_audit
@@ -1418,9 +1779,14 @@ def main() -> int:
         args.json_out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     if args.markdown_out is not None:
         args.markdown_out.parent.mkdir(parents=True, exist_ok=True)
-        args.markdown_out.write_text(_format_markdown(rows), encoding="utf-8")
+        markdown = _format_markdown(rows)
+        if args.full_mosaic_parity:
+            markdown += _format_parity_markdown(parity_rows, acceptance_errors)
+        args.markdown_out.write_text(markdown, encoding="utf-8")
     print(json.dumps(payload, indent=2))
     if args.fail_on_method_error and any(row["status"] != "OK" for row in rows):
+        return 1
+    if args.full_mosaic_parity and acceptance_errors:
         return 1
     return 0
 
