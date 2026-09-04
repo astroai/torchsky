@@ -100,6 +100,16 @@ def test_canfar_depth_runner_accepts_authorized_skaha_compute_images() -> None:
     assert "skaha/astroflow-cuda:25.03" in runner
 
 
+def test_canfar_depth_runner_replaces_stale_pixi() -> None:
+    runner = (ROOT / "scripts" / "run_canfar_adass_depth.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'pixi_version=${TORCHSKY_PIXI_VERSION:-0.78.0}' in runner
+    assert '"$(pixi --version 2>/dev/null)" != "pixi ${pixi_version}"' in runner
+    assert 'export PIXI_VERSION="${pixi_version}"' in runner
+
+
 def test_map_compat_cuda_environment_uses_cuda_and_official_comparators() -> None:
     pixi = tomllib.loads((ROOT / "pixi.toml").read_text(encoding="utf-8"))
     environment = pixi["environments"]["map-compat-cuda"]
