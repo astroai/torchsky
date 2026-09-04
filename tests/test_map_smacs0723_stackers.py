@@ -476,7 +476,7 @@ def test_torchsky_stacker_receives_selected_spatial_tile(monkeypatch) -> None:
         "bench_map_smacs0723_stackers.coadd_image_plane",
         fake_coadd,
     )
-    _run_coadd_method(
+    _, _, extra = _run_coadd_method(
         [],
         {
             "kernel": "lanczos3",
@@ -488,6 +488,7 @@ def test_torchsky_stacker_receives_selected_spatial_tile(monkeypatch) -> None:
     )
 
     assert received["spatial_tile_hw"] == (1024, 1024)
+    assert extra["compute_device"] == "cpu"
 
 
 def test_format_markdown_includes_geometry_family_column() -> None:

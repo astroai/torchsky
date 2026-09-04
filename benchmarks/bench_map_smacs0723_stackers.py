@@ -1039,6 +1039,7 @@ def _run_coadd_method(
         spatial_tile_hw=spec.get("spatial_tile_hw"),
     )
     extra = {
+        "compute_device": str(result.data.device),
         "max_overlap": (
             int(result.overlap_count.max().item())
             if result.overlap_count is not None

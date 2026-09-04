@@ -110,6 +110,8 @@ def test_canfar_wcs_sphere_launcher_payload_has_no_shell_vars() -> None:
     assert "wcs-spectral" in launcher
     assert "wcs-tabular" in launcher
     assert launcher.count('--env "TORCHSKY_SPIN_THREADS=${CPU}"') >= 2
+    assert '--env "TORCHSKY_MAP_COMPAT_ENV=${map_compat_env}"' in launcher
+    assert "map-compat-cuda" in launcher
     fetch = (ROOT / "scripts" / "fetch_canfar_wcs_sphere_run.sh").read_text(
         encoding="utf-8"
     )

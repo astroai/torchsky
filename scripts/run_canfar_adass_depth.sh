@@ -523,16 +523,25 @@ case "${mode}" in
     }
     parity_input_root=${MOSAIC_INPUT_ROOT:-${data_root}/jwst_smacs0723/aligned}
     parity_pattern=${MOSAIC_INPUT_PATTERN:-*_crf_rshift_tweakreg.fits}
+    parity_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}
+    [[ "${parity_env}" == "map-compat" || "${parity_env}" == "map-compat-cuda" ]] || {
+      echo "unsupported TORCHSKY_MAP_COMPAT_ENV=${parity_env}" >&2
+      exit 2
+    }
+    if [[ "${parity_env}" == "map-compat-cuda" ]]; then
+      run pixi run --manifest-path "${source_root}/pixi.toml" -e "${parity_env}" -- \
+        python -c 'import torch; assert torch.cuda.is_available(), "CUDA not available"; print(f"torch={torch.__version__} cuda={torch.version.cuda} device={torch.cuda.get_device_name()}")'
+    fi
     parity_total=$(find -L "${parity_input_root}" -maxdepth 1 -type f \
       -name "${parity_pattern}" | wc -l | tr -d ' ')
     parity_expected_total=${MOSAIC_EXPECTED_TOTAL_EXPOSURES:-135}
     echo "mosaic-parity inventory=${parity_total} expected=${parity_expected_total}"
     test "${parity_total}" = "${parity_expected_total}"
 
-    run pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
+    run pixi run --manifest-path "${source_root}/pixi.toml" -e "${parity_env}" -- \
       python "${source_root}/scripts/bootstrap_map_compat_tools.py" \
       --tool swarp --force-source --jobs "${TORCHSKY_SPIN_THREADS:-1}"
-    run pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
+    run pixi run --manifest-path "${source_root}/pixi.toml" -e "${parity_env}" -- \
       python "${source_root}/scripts/bootstrap_map_compat_tools.py" \
       --tool montage --force-source --jobs "${TORCHSKY_SPIN_THREADS:-1}"
 
@@ -550,14 +559,14 @@ case "${mode}" in
       reference_path=${reference_root}/${band}b_UPDC-v2_iter0_i2d.fits.fz
       test -s "${reference_path}"
       parity_shape=$(pixi run --manifest-path "${source_root}/pixi.toml" \
-        -e map-compat -- python -c \
+        -e "${parity_env}" -- python -c \
         'import sys; import torchfits; h=dict(torchfits.read_header(sys.argv[1], "SCI")); print(int(h.get("ZNAXIS1", h.get("NAXIS1", 0))), int(h.get("ZNAXIS2", h.get("NAXIS2", 0))))' \
         "${reference_path}")
       read -r parity_width parity_height <<< "${parity_shape}"
       test "${parity_width}" -gt 0
       test "${parity_height}" = "${parity_width}"
       echo "mosaic-parity b-${band}: ${parity_width}x${parity_height}, exposures=${expected_band_exposures}"
-      run pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
+      run pixi run --manifest-path "${source_root}/pixi.toml" -e "${parity_env}" -- \
         python "${source_root}/scripts/run_local_sphere_bench.py" \
         "${source_root}/benchmarks/bench_map_smacs0723_stackers.py" \
         --band "${band}" \
