@@ -89,6 +89,8 @@ def test_canfar_full_mosaic_parity_is_strict_and_torchfits_only() -> None:
     assert "torch.cuda.get_device_name()" in parity
     assert "import torchfits" in parity
     assert "astropy.io" not in parity
+    assert 'native_build_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}' in runner
+    assert 'ensure_native_build "${native_build_env}"' in runner
 
 
 def test_canfar_depth_runner_accepts_authorized_skaha_compute_images() -> None:
