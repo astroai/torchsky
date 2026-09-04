@@ -551,7 +551,7 @@ case "${mode}" in
       test -s "${reference_path}"
       parity_shape=$(pixi run --manifest-path "${source_root}/pixi.toml" \
         -e map-compat -- python -c \
-        'import sys; import torchsky; h=dict(torchsky.get_header(sys.argv[1], "SCI")); print(int(h.get("ZNAXIS1", h.get("NAXIS1", 0))), int(h.get("ZNAXIS2", h.get("NAXIS2", 0))))' \
+        'import sys; import torchfits; h=dict(torchfits.read_header(sys.argv[1], "SCI")); print(int(h.get("ZNAXIS1", h.get("NAXIS1", 0))), int(h.get("ZNAXIS2", h.get("NAXIS2", 0))))' \
         "${reference_path}")
       read -r parity_width parity_height <<< "${parity_shape}"
       test "${parity_width}" -gt 0
