@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tomllib
 from pathlib import Path
 from types import ModuleType
 
@@ -82,5 +83,17 @@ def test_canfar_full_mosaic_parity_is_strict_and_torchfits_only() -> None:
     assert "bootstrap_map_compat_tools.py" in parity
     assert "--force-source" in parity
     assert '--jobs "${TORCHSKY_SPIN_THREADS:-1}"' in parity
+    assert 'parity_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}' in parity
+    assert parity.count('-e "${parity_env}"') == 5
+    assert "torch.cuda.is_available()" in parity
+    assert "torch.cuda.get_device_name()" in parity
     assert "import torchfits" in parity
     assert "astropy.io" not in parity
+
+
+def test_map_compat_cuda_environment_uses_cuda_and_official_comparators() -> None:
+    pixi = tomllib.loads((ROOT / "pixi.toml").read_text(encoding="utf-8"))
+    environment = pixi["environments"]["map-compat-cuda"]
+
+    assert environment["no-default-feature"] is True
+    assert set(environment["features"]) == {"cuda", "map-compat"}

@@ -262,6 +262,8 @@ scikit-build-core = ">=1.0.0"
 cmake = ">=3.21,<4.4"
 ninja = ">=1.10"
 nanobind = ">=2.10.2"
+# PyPI torch's SymPy dependency requires mpmath<1.4; pin the Conda side too.
+mpmath = ">=1.1,<1.4"
 
 [feature.cuda.pypi-dependencies]
 torchfits = "==1.0.0"
@@ -289,6 +291,7 @@ make = ">=4.4"
 pkg-config = ">=0.29"
 wcslib = ">=8"
 astromatic-swarp = ">=2.41"
+astropy-base = ">=5.0"
 
 [feature.map-compat.pypi-dependencies]
 MontagePy = "*"
@@ -333,5 +336,6 @@ smacs-cuda = { features = ["cuda", "smacs"], no-default-feature = true, solve-gr
 smacs = { features = ["prod", "test", "smacs"], solve-group = "smacs" }
 bench-all = { features = ["prod", "bench", "sphere-bench"], solve-group = "default" }
 map-compat = { features = ["prod", "bench", "sphere-bench", "map-compat"], solve-group = "map-compat" }
+map-compat-cuda = { features = ["cuda", "map-compat"], no-default-feature = true, solve-group = "map-compat-cuda" }
 bench-legacy = { features = ["bench-legacy"], solve-group = "bench-legacy" }
 astrometry = { features = ["prod", "astrometry"], solve-group = "default" }

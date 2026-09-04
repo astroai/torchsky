@@ -226,6 +226,10 @@ fi
 launch_depth() {
   local run_id="depth-${STAMP}"
   local vos_dest="vos:sfabbro/torchsky-runs/${run_id}"
+  local map_compat_env="${TORCHSKY_MAP_COMPAT_ENV:-map-compat-cuda}"
+  if [[ "${TORCHSKY_DEVICE:-auto}" == "cpu" && -z "${TORCHSKY_MAP_COMPAT_ENV:-}" ]]; then
+    map_compat_env=map-compat
+  fi
   local name
   name="$(printf 'torchsky-depth-%s' "${STAMP}" | tr '_.' '--' | tr -cd '[:alnum:]-')"
   local local_out="${ROOT_DIR}/benchmarks_results/canfar_${run_id}"
@@ -252,6 +256,7 @@ launch_depth() {
     --env "CONTAINER_IMAGE=${IMAGE}"
     --env "PYTHONUNBUFFERED=1"
     --env "TORCHSKY_SPIN_THREADS=${CPU}"
+    --env "TORCHSKY_MAP_COMPAT_ENV=${map_compat_env}"
     --env "FIELD_MODELS=${FIELD_MODELS:-spectral_power_foam}"
     --env "PSF_MODEL=${PSF_MODEL:-fitted_gaussian}"
     --env "CALIBRATION_EVIDENCE_MANIFEST=${CALIBRATION_EVIDENCE_MANIFEST:-}"
