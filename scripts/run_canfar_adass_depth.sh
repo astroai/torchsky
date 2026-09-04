@@ -61,12 +61,13 @@ export PYTHONUNBUFFERED=1
 # Build/install the local editable torchsky (incl. torchsky._cpp) only when
 # it is not already importable -- sub-invocations of the full chain skip it.
 ensure_native_build() {
-  if pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+  local build_env=${1:-default}
+  if pixi run --manifest-path "${source_root}/pixi.toml" -e "${build_env}" -- \
       python -c "import torchsky; import torchsky.cpp" >/dev/null 2>&1; then
     echo "torchsky native build already available; skipping install"
     return 0
   fi
-  pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+  pixi run --manifest-path "${source_root}/pixi.toml" -e "${build_env}" -- \
     python -m pip install -e "${source_root}" --no-build-isolation
 }
 
@@ -106,9 +107,17 @@ done
 # Validate the CSV against the registry (abort with the allowed list).
 # The editable install also builds torchsky._cpp, which every later step's
 # bare PYTHONPATH import needs.
+native_build_env=default
+if [[ "${mode}" == "mosaic-parity" ]]; then
+  native_build_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}
+  [[ "${native_build_env}" == "map-compat" || "${native_build_env}" == "map-compat-cuda" ]] || {
+    echo "unsupported TORCHSKY_MAP_COMPAT_ENV=${native_build_env}" >&2
+    exit 2
+  }
+fi
 if [[ "${dry_run}" != "1" ]]; then
-ensure_native_build
-pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+ensure_native_build "${native_build_env}"
+pixi run --manifest-path "${source_root}/pixi.toml" -e "${native_build_env}" -- \
   python - "${field_models}" <<'PYVALIDATE'
 import sys
 from torchsky.map.field import FIELD_MODEL_KINDS
