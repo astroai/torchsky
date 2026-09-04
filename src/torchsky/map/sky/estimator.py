@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from .polynomial import DifferenceTileFactory, _validate_row_major_tiling
 from .stats import huber_location, tukey_location
 
 
@@ -26,6 +29,42 @@ def _gaussian_kernel_2d(
     g = torch.exp(-0.5 * (x / sigma) ** 2)
     g = g / g.sum()
     return (g[:, None] * g[None, :])[None, None, :, :]
+
+
+@dataclass(frozen=True)
+class CompactMeshSkyModel:
+    """Filtered background mesh that renders bounded output windows."""
+
+    mesh: Tensor
+    image_shape: tuple[int, int]
+    interpolate: str
+
+    def render_window(self, y0: int, y1: int, x0: int, x1: int) -> Tensor:
+        height, width = self.image_shape
+        y0, y1, x0, x1 = int(y0), int(y1), int(x0), int(x1)
+        if not (0 <= y0 < y1 <= height and 0 <= x0 < x1 <= width):
+            raise ValueError("mesh render window is out of bounds")
+        y = (
+            2.0
+            * (torch.arange(y0, y1, device=self.mesh.device, dtype=self.mesh.dtype) + 0.5)
+            / height
+            - 1.0
+        )
+        x = (
+            2.0
+            * (torch.arange(x0, x1, device=self.mesh.device, dtype=self.mesh.dtype) + 0.5)
+            / width
+            - 1.0
+        )
+        yy, xx = torch.meshgrid(y, x, indexing="ij")
+        grid = torch.stack((xx, yy), dim=-1).unsqueeze(0)
+        return F.grid_sample(
+            self.mesh[None, None],
+            grid,
+            mode=self.interpolate,
+            padding_mode="border",
+            align_corners=False,
+        )[0, 0]
 
 
 class MeshSkyEstimator:
@@ -130,6 +169,119 @@ class MeshSkyEstimator:
         self.interpolate = interpolate
         self.self_mask_sigma = self_mask_sigma
         self.mesh_polynomial_order = mesh_polynomial_order
+
+    def fit_compact(
+        self,
+        tile_factory: DifferenceTileFactory,
+        *,
+        image_shape: tuple[int, int],
+        scratch: Tensor,
+    ) -> CompactMeshSkyModel:
+        """Fit and retain only the filtered mesh for bounded tile rendering."""
+
+        if self.self_mask_sigma is not None or self.mesh_polynomial_order is not None:
+            raise NotImplementedError(
+                "compact mesh fitting does not yet support self masking or "
+                "mesh-polynomial interpolation"
+            )
+        height, width = int(image_shape[0]), int(image_shape[1])
+        if (
+            height <= 0
+            or width <= 0
+            or tuple(scratch.shape) != (height, width)
+            or not scratch.is_floating_point()
+        ):
+            raise ValueError(
+                "compact mesh scratch must be a positive floating image-sized tensor"
+            )
+        scratch.fill_(float("nan"))
+        layout: list[tuple[int, int, int, int]] = []
+        for row in tile_factory():
+            if len(row) != 6:
+                raise ValueError("compact mesh tile rows require six values")
+            y0, y1, x0, x1, difference, support = row
+            window = (int(y0), int(y1), int(x0), int(x1))
+            y0, y1, x0, x1 = window
+            if not (0 <= y0 < y1 <= height and 0 <= x0 < x1 <= width):
+                raise ValueError("compact mesh tile is out of bounds")
+            window_shape = (y1 - y0, x1 - x0)
+            if (
+                tuple(difference.shape) != window_shape
+                or tuple(support.shape) != window_shape
+            ):
+                raise ValueError("compact mesh tile data must match its window")
+            if (
+                difference.device != scratch.device
+                or support.device != scratch.device
+                or difference.dtype != scratch.dtype
+            ):
+                raise ValueError(
+                    "compact mesh tiles and scratch must share device/dtype"
+                )
+            valid = support.to(dtype=torch.bool)
+            if bool((~torch.isfinite(difference[valid])).any()):
+                raise ValueError("compact mesh supported differences must be finite")
+            scratch[y0:y1, x0:x1].copy_(
+                torch.where(
+                    valid,
+                    difference,
+                    torch.full_like(difference, float("nan")),
+                )
+            )
+            layout.append(window)
+        _validate_row_major_tiling(layout, (height, width))
+        mesh = self._reduce_mesh_compact(scratch)
+        if self._filter_type is not None:
+            mesh = self._filter_mesh(mesh)
+        return CompactMeshSkyModel(
+            mesh=mesh,
+            image_shape=(height, width),
+            interpolate=self.interpolate,
+        )
+
+    def _reduce_mesh_compact(self, image: Tensor) -> Tensor:
+        """Reduce one mesh cell at a time without a padded image-sized tensor."""
+
+        height, width = image.shape
+        block_size = self.block_size
+        stride = self.block_stride
+        n_height = (height + stride - 1) // stride
+        n_width = (width + stride - 1) // stride
+        pad_height = max(0, (n_height - 1) * stride + block_size - height)
+        pad_width = max(0, (n_width - 1) * stride + block_size - width)
+        reflect = pad_height < height and pad_width < width
+        statistic = _STATISTIC_REGISTRY[self.statistic]
+        mesh = torch.empty(
+            (n_height, n_width), dtype=image.dtype, device=image.device
+        )
+        for row in range(n_height):
+            y_index = torch.arange(
+                row * stride,
+                row * stride + block_size,
+                device=image.device,
+            )
+            y_index = (
+                torch.where(y_index < height, y_index, 2 * height - y_index - 2)
+                if reflect
+                else y_index.clamp(max=height - 1)
+            )
+            for column in range(n_width):
+                x_index = torch.arange(
+                    column * stride,
+                    column * stride + block_size,
+                    device=image.device,
+                )
+                x_index = (
+                    torch.where(x_index < width, x_index, 2 * width - x_index - 2)
+                    if reflect
+                    else x_index.clamp(max=width - 1)
+                )
+                values = image[y_index[:, None], x_index].reshape(-1)
+                if bool(values.isnan().any()):
+                    fill = torch.nanmedian(values)
+                    values = torch.where(values.isnan(), fill, values)
+                mesh[row, column] = statistic(values, dim=-1)
+        return self._fill_empty_mesh_cells(mesh)
 
     def __call__(
         self,

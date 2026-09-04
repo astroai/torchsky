@@ -80,6 +80,59 @@ def test_field_fit_benchmark_step_profile_overrides_sparse_frontier_cases() -> N
     )
 
 
+def test_field_fit_benchmark_builds_physically_capped_experimental_fields() -> None:
+    case = "tan_field_fit"
+    size = 24
+    case_spec = _field_fit_bench._build_case_specs(size)[case]
+    domain = case_spec.domain
+    bacon = _field_fit_bench._make_field_model_for_case(
+        "bacon",
+        domain,
+        case=case,
+        size=size,
+    )
+    sasnet = _field_fit_bench._make_field_model_for_case(
+        "sasnet",
+        domain,
+        case=case,
+        size=size,
+    )
+    assert bacon.output_bandwidths[-1] > 0.0
+    assert bacon.latent_bandwidths[-1] == 0.5 * bacon.output_bandwidths[-1]
+    assert sasnet.pixel_footprint_deg > 0.0
+    assert sasnet.psf_support_deg is not None and sasnet.psf_support_deg > 0.0
+    assert sasnet.max_frequency <= sasnet.max_supported_angular_frequency
+
+
+def test_field_fit_benchmark_can_construct_every_registered_candidate() -> None:
+    case = "tan_field_fit"
+    size = 16
+    domain = _field_fit_bench._build_case_specs(size)[case].domain
+
+    assert set(_field_fit_bench.REGISTERED_MODEL_KINDS) == set(
+        _field_fit_bench.FIELD_MODEL_KINDS
+    )
+    for kind in _field_fit_bench.REGISTERED_MODEL_KINDS:
+        model = _field_fit_bench._make_field_model_for_case(
+            kind,
+            domain,
+            case=case,
+            size=size,
+        )
+        assert sum(parameter.numel() for parameter in model.parameters()) > 0, kind
+
+
+def test_field_fit_benchmark_named_candidate_sets_are_complete() -> None:
+    assert _field_fit_bench._resolve_model_selection("registered") == (
+        _field_fit_bench.REGISTERED_MODEL_KINDS
+    )
+    all_candidates = _field_fit_bench._resolve_model_selection("all_candidates")
+    assert set(_field_fit_bench.REGISTERED_MODEL_KINDS).issubset(all_candidates)
+    assert {"bacon", "sasnet", "coadd_bilinear", "coadd_bicubic"}.issubset(
+        all_candidates
+    )
+
+
 def test_field_fit_benchmark_chunked_product_render_matches_full_render() -> None:
     case_spec = _field_fit_bench._build_case_specs(24)[
         "tpv_field_fit_deep_multiband_exact"
@@ -116,7 +169,8 @@ def test_field_fit_benchmark_chunked_product_render_matches_full_render() -> Non
             spatial_chunk_size=8,
         )
     assert torch.allclose(full.data, chunked.data, atol=1.0e-5, rtol=1.0e-5)
-    assert torch.allclose(full.weight, chunked.weight, atol=1.0e-5, rtol=1.0e-5)
+    assert full.weight is None
+    assert chunked.weight is None
 
 
 def test_field_fit_benchmark_improves_loss() -> None:
@@ -134,6 +188,51 @@ def test_field_fit_benchmark_improves_loss() -> None:
     assert row["reconstruction_p95_abs_err"] >= row["reconstruction_mae"]
     assert row["band_reconstruction_rmse_max"] >= row["band_reconstruction_rmse_mean"]
     assert row["signal_to_residual_db"] > 0.0
+    assert row["parameter_count"] >= row["trainable_parameter_count"] > 0
+
+
+def test_field_fit_benchmark_reserves_complete_heldout_observations() -> None:
+    row = _field_fit_bench.evaluate_case(
+        case="tan_field_fit",
+        model_kind="sine_implicit",
+        size=16,
+        seed=4321,
+        steps=2,
+        runs=1,
+        holdout_observations=1,
+    )
+
+    assert row["num_observations"] == 3
+    assert row["num_training_observations"] == 2
+    assert row["num_heldout_observations"] == 1
+    assert len(row["training_observation_indices"]) == 2
+    assert len(row["heldout_observation_indices"]) == 1
+    assert not set(row["training_observation_indices"]).intersection(
+        row["heldout_observation_indices"]
+    )
+    assert row["heldout_observation_rmse_mean"] >= 0.0
+    assert row["heldout_observation_rmse_max"] >= row[
+        "heldout_observation_rmse_mean"
+    ]
+
+
+def test_field_fit_benchmark_reserves_psf_guarded_sky_quadrant() -> None:
+    row = _field_fit_bench.evaluate_case(
+        case="tan_field_fit",
+        model_kind="coadd_bilinear",
+        size=16,
+        seed=4321,
+        steps=1,
+        runs=1,
+        holdout_sky_quadrants="ne",
+    )
+
+    assert row["heldout_sky_quadrants"] == ["ne"]
+    assert row["heldout_sky_pixel_count"] > 0
+    assert row["heldout_sky_guard_deg"] > 0.0
+    assert row["heldout_sky_training_support_fraction"] == 0.0
+    assert row["heldout_sky_reconstruction_rmse"] > 0.0
+    assert row["heldout_sky_reconstruction_mae"] > 0.0
 
 
 def test_field_fit_benchmark_supports_tan_sip_multicolor_case() -> None:
@@ -217,7 +316,7 @@ def test_field_fit_benchmark_supports_tan_sip_deep_multiband_broad_case() -> Non
         )["spectral_anchor_observations_per_step"]
         == 1
     )
-    assert fit_row["uncertainty_kind"] == "native_inverse_variance"
+    assert fit_row["uncertainty_kind"] == "support_density_proxy"
     assert fit_row["uncertainty_extrapolated_mean_sigma"] >= (
         fit_row["uncertainty_support_mean_sigma"] - 1.0e-5
     )

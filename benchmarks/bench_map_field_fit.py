@@ -10,7 +10,7 @@ import resource
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,7 @@ from torchsky.map import (  # noqa: E402
     FieldObservation,
     ImageObservation,
     LearnedSpectralBasisField,
+    MapUncertaintyProduct,
     MapProductResult,
     SkyEncoderBandpassField,
     SkyEncoderMLPField,
@@ -40,6 +41,7 @@ from torchsky.map import (  # noqa: E402
     evaluate_map_frontier_regions,
     evaluate_map_uncertainty,
     evaluate_map_product,
+    field_image_quality_metrics,
     fit_field_model,
     make_field_model,
     check_map_benchmark_regressions,
@@ -54,7 +56,13 @@ from torchsky.map import (  # noqa: E402
     suggest_spectral_model_capacity,
     write_map_benchmark_artifacts,
 )
-from torchsky.map.field import _BaseFieldModel  # noqa: E402
+from torchsky.map.field import (  # noqa: E402
+    FIELD_MODEL_KINDS,
+    SpectralPowerFoamField,
+    _BaseFieldModel,
+)
+from torchsky.field.frequency_adaptive import BaconField, SASNetField  # noqa: E402
+from torchsky.map.operators.psf import gaussian_support_radius  # noqa: E402
 from torchsky.spectral import SpectralAxis  # noqa: E402
 
 
@@ -91,6 +99,31 @@ DEFAULT_MODEL_KINDS = (
     "coadd_bilinear",
     "coadd_bicubic",
 )
+EXPERIMENTAL_MODEL_KINDS = ("bacon", "sasnet")
+REGISTERED_MODEL_KINDS = tuple(FIELD_MODEL_KINDS)
+
+
+def _resolve_model_selection(value: str) -> tuple[str, ...]:
+    selected: list[str] = []
+    for token in (item.strip() for item in str(value).split(",")):
+        if not token:
+            continue
+        if token == "registered":
+            candidates = REGISTERED_MODEL_KINDS
+        elif token == "all_candidates":
+            candidates = (
+                *REGISTERED_MODEL_KINDS,
+                *EXPERIMENTAL_MODEL_KINDS,
+                "explicit_spectral_grid_field",
+                "coadd_bilinear",
+                "coadd_bicubic",
+            )
+        else:
+            candidates = (token,)
+        for candidate in candidates:
+            if candidate not in selected:
+                selected.append(candidate)
+    return tuple(selected)
 
 STEP_PROFILES: dict[str, dict[str, int]] = {
     "sparse_mosaic_frontier": {
@@ -367,7 +400,10 @@ def _render_field_product_chunked(
     shape = (height, width)
     device = next(model.parameters()).device
     planes: list[Tensor] = []
-    ivar_planes: list[Tensor] = []
+    variance_planes: list[Tensor] = []
+    has_distribution = callable(
+        getattr(model, "render_bandpass_distribution", None)
+    ) or callable(getattr(model, "forward_distribution", None))
     for band in product.bands:
         center = (
             float(band.transmission_center)
@@ -377,7 +413,11 @@ def _render_field_product_chunked(
         lower = float(band.spectral_min) if band.spectral_min is not None else center
         upper = float(band.spectral_max) if band.spectral_max is not None else center
         plane = torch.empty(shape, dtype=torch.float32, device=device)
-        ivar = torch.empty(shape, dtype=torch.float32, device=device)
+        variance = (
+            torch.empty(shape, dtype=torch.float32, device=device)
+            if has_distribution
+            else None
+        )
         for y0 in range(0, height, chunk):
             for x0 in range(0, width, chunk):
                 tile_h = min(chunk, height - y0)
@@ -400,15 +440,14 @@ def _render_field_product_chunked(
                     transmission_sigma=band.transmission_sigma,
                     band_name=band.label,
                 )
-                if callable(
-                    getattr(model, "render_bandpass_distribution", None)
-                ) or callable(getattr(model, "forward_distribution", None)):
+                if has_distribution:
                     rendered, logvar = render_field_observation_distribution(
                         model,
                         field_observation,
                         num_spectral_samples=num_spectral_samples,
                     )
-                    ivar[y0 : y0 + tile_h, x0 : x0 + tile_w] = torch.exp(-logvar).to(
+                    assert variance is not None
+                    variance[y0 : y0 + tile_h, x0 : x0 + tile_w] = torch.exp(logvar).to(
                         dtype=torch.float32
                     )
                 else:
@@ -417,21 +456,32 @@ def _render_field_product_chunked(
                         field_observation,
                         num_spectral_samples=num_spectral_samples,
                     )
-                    ivar[y0 : y0 + tile_h, x0 : x0 + tile_w] = 1.0
                 plane[y0 : y0 + tile_h, x0 : x0 + tile_w] = rendered.to(
                     dtype=torch.float32
                 )
         planes.append(plane)
-        ivar_planes.append(ivar)
+        if variance is not None:
+            variance_planes.append(variance)
+    uncertainty = None
+    if variance_planes:
+        total_variance = torch.stack(variance_planes, dim=0)
+        uncertainty = MapUncertaintyProduct(
+            variance=total_variance,
+            kind="model_predictive",
+            components={"model": total_variance},
+        )
+    data = torch.stack(planes, dim=0)
     return MapProductResult(
         product=product,
-        data=torch.stack(planes, dim=0),
-        weight=torch.stack(ivar_planes, dim=0),
+        data=data,
+        weight=None,
         header=dict(product.target_header),
         overlap_count=torch.ones(
             (len(planes), height, width), dtype=torch.int32, device=device
         ),
         coverage_mocs=None,
+        uncertainty=uncertainty,
+        mask=torch.ones_like(data, dtype=torch.bool),
     )
 
 
@@ -1172,6 +1222,81 @@ def _field_model_kwargs_for_case(
     return {}
 
 
+def _frequency_adaptive_support_for_case(
+    *,
+    case: str | None,
+    size: int | None,
+) -> tuple[float, float]:
+    if case is None or size is None:
+        raise ValueError(
+            "frequency-adaptive benchmark models require a resolved case and size"
+        )
+    case_spec = _build_case_specs(int(size))[case]
+    candidates: list[tuple[float, float]] = []
+    for observation in case_spec.observations:
+        pixel_deg = _pixel_scale_arcsec(observation.header) / 3600.0
+        sigma_pix = (
+            observation.psf_sigma_pix
+            if observation.fit_psf_sigma_pix is None
+            else observation.fit_psf_sigma_pix
+        )
+        radius = gaussian_support_radius(float(sigma_pix))
+        psf_support_deg = float(2 * radius + 1) * pixel_deg
+        candidates.append((pixel_deg, psf_support_deg))
+    return min(candidates, key=lambda item: max(item))
+
+
+def _resolved_field_model_kwargs_for_case(
+    model_kind: str,
+    domain: FieldDomain,
+    *,
+    case: str | None,
+    size: int | None,
+) -> dict[str, Any]:
+    kwargs = _field_model_kwargs_for_case(model_kind, case=case, size=size)
+    if model_kind not in EXPERIMENTAL_MODEL_KINDS:
+        return kwargs
+    pixel_deg, psf_support_deg = _frequency_adaptive_support_for_case(
+        case=case,
+        size=size,
+    )
+    effective_support_deg = max(pixel_deg, psf_support_deg)
+    encoded_support = (
+        effective_support_deg / float(domain.spatial_scale_deg)
+        if domain.coord_mode == "local_tangent"
+        else math.radians(effective_support_deg)
+    )
+    physical_bandwidth = math.pi / encoded_support
+    if model_kind == "bacon":
+        kwargs.update(
+            {
+                "hidden_dim": 48,
+                "bandwidths": tuple(
+                    physical_bandwidth * fraction
+                    for fraction in (0.125, 0.25, 0.5, 1.0)
+                ),
+                "readout_terms": 2,
+            }
+        )
+    else:
+        kwargs.update(
+            {
+                "pixel_footprint_deg": pixel_deg,
+                "psf_support_deg": psf_support_deg,
+                "num_frequencies": 32,
+                "max_frequency": physical_bandwidth,
+                "hidden_dim": 32,
+                "mask_hidden_dim": 16,
+                "hash_levels": 4,
+                "hash_features_per_level": 2,
+                "hash_log2_size": 8,
+                "hash_base_resolution": 4,
+                "hash_finest_resolution": 128,
+            }
+        )
+    return kwargs
+
+
 def _make_field_model_for_case(
     model_kind: str,
     domain: FieldDomain,
@@ -1179,7 +1304,57 @@ def _make_field_model_for_case(
     case: str | None = None,
     size: int | None = None,
 ):
-    kwargs = _field_model_kwargs_for_case(model_kind, case=case, size=size)
+    kwargs = _resolved_field_model_kwargs_for_case(
+        model_kind,
+        domain,
+        case=case,
+        size=size,
+    )
+    if model_kind in {
+        "spectral_power_foam",
+        "foam_initialized_inr",
+        "diffuse_foam_hybrid",
+    }:
+        if domain.coord_mode != "local_tangent":
+            raise ValueError(
+                "Foam benchmark candidates currently require a local_tangent case"
+            )
+        axis = torch.linspace(-0.75, 0.75, 4, dtype=torch.float32)
+        grid_y, grid_x = torch.meshgrid(axis, axis, indexing="ij")
+        sites = torch.stack((grid_x.reshape(-1), grid_y.reshape(-1)), dim=-1)
+        radii = torch.full((sites.shape[0],), 0.55, dtype=torch.float32)
+        coefficients = torch.zeros((sites.shape[0], 4), dtype=torch.float32)
+        log_intensity = model_kind == "diffuse_foam_hybrid"
+        coefficients[:, 0] = -2.0 if log_intensity else 0.15
+        foam = SpectralPowerFoamField(
+            domain,
+            sites=sites,
+            radii=radii,
+            cell_coefficients=coefficients,
+            log_intensity_spectra=log_intensity,
+        )
+        if model_kind == "spectral_power_foam":
+            return foam
+        if model_kind == "foam_initialized_inr":
+            return make_field_model(
+                "foam_initialized_inr",
+                domain,
+                foam=foam,
+                hidden_dim=48,
+                hidden_layers=2,
+            )
+        return make_field_model(
+            "diffuse_foam_hybrid",
+            domain,
+            foam=foam,
+            diffuse_hidden_dim=24,
+            diffuse_hidden_layers=1,
+            training_stage="joint",
+        )
+    if model_kind == "bacon":
+        return BaconField(domain, **kwargs)
+    if model_kind == "sasnet":
+        return SASNetField(domain, **kwargs)
     if model_kind == "explicit_spectral_grid_field":
         if domain.coord_mode == "local_tangent":
             local_domain = domain
@@ -3166,6 +3341,136 @@ def _pixel_scale_arcsec(header: dict[str, Any]) -> float:
     return 3600.0 * scale_deg
 
 
+_SKY_QUADRANT_SIGNS = {
+    "ne": (1.0, 1.0),
+    "nw": (-1.0, 1.0),
+    "se": (1.0, -1.0),
+    "sw": (-1.0, -1.0),
+}
+
+
+def _resolve_sky_holdout_quadrants(value: str) -> tuple[str, ...]:
+    quadrants = tuple(
+        token.strip().lower()
+        for token in str(value).split(",")
+        if token.strip()
+    )
+    if len(set(quadrants)) != len(quadrants):
+        raise ValueError("holdout sky quadrants must be unique")
+    unknown = sorted(set(quadrants).difference(_SKY_QUADRANT_SIGNS))
+    if unknown:
+        raise ValueError(f"unknown holdout sky quadrant(s): {', '.join(unknown)}")
+    return quadrants
+
+
+def _sky_holdout_guard_deg(case_spec: CaseSpec) -> float:
+    target_pixel_deg = _pixel_scale_arcsec(case_spec.target_header) / 3600.0
+    psf_guard_deg = 0.0
+    for observation in case_spec.observations:
+        pixel_deg = _pixel_scale_arcsec(observation.header) / 3600.0
+        fit_sigma = (
+            observation.psf_sigma_pix
+            if observation.fit_psf_sigma_pix is None
+            else observation.fit_psf_sigma_pix
+        )
+        sigma_pix = max(float(observation.psf_sigma_pix), float(fit_sigma))
+        psf_guard_deg = max(
+            psf_guard_deg,
+            float(gaussian_support_radius(sigma_pix)) * pixel_deg,
+        )
+    return psf_guard_deg + 2.0 * target_pixel_deg
+
+
+def _sky_quadrant_masks(
+    header: dict[str, Any],
+    shape: tuple[int, int],
+    *,
+    center_ra_deg: float,
+    center_dec_deg: float,
+    quadrants: tuple[str, ...],
+    guard_deg: float,
+) -> tuple[Tensor, Tensor]:
+    height, width = int(shape[0]), int(shape[1])
+    yy, xx = torch.meshgrid(
+        torch.arange(height, dtype=torch.float64),
+        torch.arange(width, dtype=torch.float64),
+        indexing="ij",
+    )
+    ra_deg, dec_deg = torchsky.WCS(header).pixel_to_world(xx, yy)
+    dra_deg = torch.remainder(ra_deg - float(center_ra_deg) + 180.0, 360.0) - 180.0
+    east_deg = dra_deg * math.cos(math.radians(float(center_dec_deg)))
+    north_deg = dec_deg - float(center_dec_deg)
+    excluded = torch.zeros((height, width), dtype=torch.bool)
+    core = torch.zeros_like(excluded)
+    for quadrant in quadrants:
+        east_sign, north_sign = _SKY_QUADRANT_SIGNS[quadrant]
+        signed_east = east_sign * east_deg
+        signed_north = north_sign * north_deg
+        excluded |= (signed_east >= 0.0) & (signed_north >= 0.0)
+        core |= (signed_east >= float(guard_deg)) & (
+            signed_north >= float(guard_deg)
+        )
+    return excluded, core
+
+
+def _apply_sky_holdout_to_training_observations(
+    observations: list[FieldObservation],
+    image_observations: list[ImageObservation],
+    *,
+    case_spec: CaseSpec,
+    quadrants: tuple[str, ...],
+    guard_deg: float,
+    tmpdir: Path,
+) -> tuple[list[FieldObservation], list[ImageObservation]]:
+    if not quadrants:
+        return observations, image_observations
+    masked_field: list[FieldObservation] = []
+    masked_images: list[ImageObservation] = []
+    for index, (observation, image_observation) in enumerate(
+        zip(observations, image_observations, strict=True)
+    ):
+        excluded, _ = _sky_quadrant_masks(
+            observation.header,
+            tuple(observation.image.shape),
+            center_ra_deg=case_spec.domain.center_ra_deg,
+            center_dec_deg=case_spec.domain.center_dec_deg,
+            quadrants=quadrants,
+            guard_deg=guard_deg,
+        )
+        support = (
+            torch.ones_like(excluded)
+            if observation.mask is None
+            else observation.mask.to(dtype=torch.bool)
+        )
+        training_mask = support & ~excluded
+        source_weight = (
+            torch.ones_like(observation.image)
+            if observation.weight is None
+            else observation.weight
+        )
+        training_weight = torch.where(
+            training_mask,
+            source_weight,
+            torch.zeros_like(source_weight),
+        )
+        masked_field.append(
+            replace(
+                observation,
+                weight=training_weight,
+                mask=training_mask,
+            )
+        )
+        weight_path = tmpdir / f"{case_spec.case}_{index}_sky_holdout_wht.fits"
+        torchsky.write(
+            str(weight_path),
+            training_weight,
+            header=observation.header,
+            overwrite=True,
+        )
+        masked_images.append(replace(image_observation, weight_path=str(weight_path)))
+    return masked_field, masked_images
+
+
 def _recommendation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not rows:
         return []
@@ -3235,8 +3540,14 @@ def evaluate_case(
     use_spectral_budget: bool = False,
     training_patch_size_override: int = -1,
     diagnostic_tile_size_override: int = -1,
+    holdout_observations: int = 0,
+    holdout_sky_quadrants: str = "",
 ) -> dict[str, Any]:
     case_spec = _build_case_specs(size)[case]
+    sky_holdout_quadrants = _resolve_sky_holdout_quadrants(holdout_sky_quadrants)
+    sky_holdout_guard_deg = (
+        _sky_holdout_guard_deg(case_spec) if sky_holdout_quadrants else 0.0
+    )
     spectral_budget_extras: dict[str, Any] = {}
     simulate_num_spectral = 9
     if use_spectral_budget:
@@ -3279,44 +3590,97 @@ def evaluate_case(
             tmpdir=Path(tmpdir_str),
             num_spectral_samples=simulate_num_spectral,
         )
+        holdout_count = int(holdout_observations)
+        if holdout_count < 0 or holdout_count >= len(observations):
+            raise ValueError(
+                "holdout_observations must be non-negative and leave at least one "
+                "training observation"
+            )
+        split_generator = torch.Generator(device="cpu")
+        split_generator.manual_seed(int(seed) + 17_021)
+        permutation = torch.randperm(
+            len(observations), generator=split_generator
+        ).tolist()
+        heldout_indices = tuple(sorted(int(value) for value in permutation[:holdout_count]))
+        heldout_index_set = set(heldout_indices)
+        training_indices = tuple(
+            index
+            for index in range(len(observations))
+            if index not in heldout_index_set
+        )
+        training_observations = [observations[index] for index in training_indices]
+        heldout_rows = [observations[index] for index in heldout_indices]
+        training_image_observations = [
+            image_observations[index] for index in training_indices
+        ]
+        training_observations, training_image_observations = (
+            _apply_sky_holdout_to_training_observations(
+                training_observations,
+                training_image_observations,
+                case_spec=case_spec,
+                quadrants=sky_holdout_quadrants,
+                guard_deg=sky_holdout_guard_deg,
+                tmpdir=Path(tmpdir_str),
+            )
+        )
+        heldout_sky_core: Tensor | None = None
+        if sky_holdout_quadrants:
+            _, heldout_sky_core = _sky_quadrant_masks(
+                case_spec.target_header,
+                (
+                    int(case_spec.target_header["NAXIS2"]),
+                    int(case_spec.target_header["NAXIS1"]),
+                ),
+                center_ra_deg=case_spec.domain.center_ra_deg,
+                center_dec_deg=case_spec.domain.center_dec_deg,
+                quadrants=sky_holdout_quadrants,
+                guard_deg=sky_holdout_guard_deg,
+            )
+            if not bool(heldout_sky_core.any()):
+                raise ValueError(
+                    "PSF-guarded sky holdout core is empty; enlarge the benchmark grid"
+                )
         product = plan_map_product(
-            image_observations,
+            training_image_observations,
             header_overrides=case_spec.target_header,
             spectral_axis=case_spec.spectral_axis,
             spectral_bin_edges=case_spec.spectral_bin_edges,
         )
         render_chunk_size = 64 if max(product.shape) >= 128 else None
         support_reference_product = stack_map_product(
-            image_observations,
+            training_image_observations,
             product,
             resampling_kernel="bilinear",
         )
         domain = estimate_field_domain(
-            observations,
+            training_observations,
             coord_mode=case_spec.domain.coord_mode,
         )
         fit_times = []
         result = None
         product_pred = None
         observation_residuals = []
+        heldout_observation_metrics: list[dict[str, float]] = []
         model_kwargs: dict[str, Any] = {}
         training_patch_size: int | None = None
         diagnostic_spatial_tile_hw: tuple[int, int] | None = None
         training_performance: dict[str, Any] = {}
+        parameter_count = 0
+        trainable_parameter_count = 0
         fit_process_peak_rss = _process_peak_rss_bytes()
         if model_kind.startswith("coadd_"):
             kernel = model_kind.split("_", 1)[1]
             coadd_times = []
             result_product = None
             stack_map_product(
-                image_observations,
+                training_image_observations,
                 product,
                 resampling_kernel=kernel,
             )
             for _ in range(int(runs)):
                 start = time.perf_counter()
                 result_product = stack_map_product(
-                    image_observations,
+                    training_image_observations,
                     product,
                     resampling_kernel=kernel,
                 )
@@ -3353,8 +3717,9 @@ def evaluate_case(
             training_patch_size = fit_kwargs.get("training_patch_size")
             diagnostic_spatial_tile_hw = fit_kwargs.get("diagnostic_spatial_tile_hw")
             num_spectral_render = int(fit_kwargs["num_spectral_samples"])
-            model_kwargs = _field_model_kwargs_for_case(
+            model_kwargs = _resolved_field_model_kwargs_for_case(
                 model_kind,
+                domain,
                 case=case_spec.case,
                 size=size,
             )
@@ -3371,7 +3736,7 @@ def evaluate_case(
                     assert isinstance(warmup_model, ExplicitSpectralGridField)
                     warmup_model.initialize_from_product(support_reference_product)
                 fit_field_model(
-                    observations,
+                    training_observations,
                     warmup_model,
                     steps=warmup_steps,
                     **fit_kwargs,
@@ -3384,12 +3749,20 @@ def evaluate_case(
                     case=case_spec.case,
                     size=size,
                 )
+                parameter_count = sum(
+                    parameter.numel() for parameter in model.parameters()
+                )
+                trainable_parameter_count = sum(
+                    parameter.numel()
+                    for parameter in model.parameters()
+                    if parameter.requires_grad
+                )
                 if model_kind == "explicit_spectral_grid_field":
                     assert isinstance(model, ExplicitSpectralGridField)
                     model.initialize_from_product(support_reference_product)
                 start = time.perf_counter()
                 result = fit_field_model(
-                    observations,
+                    training_observations,
                     model,
                     steps=steps,
                     **fit_kwargs,
@@ -3408,7 +3781,7 @@ def evaluate_case(
                 num_spectral_samples=num_spectral_render,
             )
             with torch.no_grad():
-                for observation in observations:
+                for observation in training_observations:
                     pred = render_field_observation(
                         result.model,
                         observation,
@@ -3417,8 +3790,41 @@ def evaluate_case(
                     observation_residuals.append(
                         torch.sqrt(torch.mean(torch.square(pred - observation.image)))
                     )
+                for observation in heldout_rows:
+                    pred = render_field_observation(
+                        result.model,
+                        observation,
+                        num_spectral_samples=num_spectral_render,
+                    )
+                    heldout_observation_metrics.append(
+                        field_image_quality_metrics(
+                            pred,
+                            observation.image,
+                            weight=observation.weight,
+                            mask=observation.mask,
+                        )
+                    )
         assert product_pred is not None
         metrics = evaluate_map_product(product_pred, truth_cube)
+        heldout_sky_metrics: dict[str, Any] | None = None
+        heldout_sky_training_support_fraction: float | None = None
+        if heldout_sky_core is not None:
+            heldout_sky_weight = heldout_sky_core.to(dtype=torch.float32).unsqueeze(0)
+            heldout_sky_weight = heldout_sky_weight.expand_as(truth_cube)
+            heldout_sky_metrics = evaluate_map_product(
+                product_pred.data,
+                truth_cube,
+                weight=heldout_sky_weight,
+                header=product_pred.header,
+                value_semantics=product_pred.product.value_semantics,
+            )
+            heldout_sky_training_support_fraction = float(
+                support_reference_product.weight[:, heldout_sky_core]
+                .gt(0.0)
+                .to(dtype=torch.float32)
+                .mean()
+                .item()
+            )
         support_metrics = evaluate_map_product(
             product_pred.data,
             truth_cube,
@@ -3433,18 +3839,10 @@ def evaluate_case(
             header=product_pred.header,
             value_semantics=product_pred.product.value_semantics,
         )
-        has_native_uncertainty = bool(
-            torch.any(
-                torch.abs(
-                    product_pred.weight.to(dtype=torch.float32)
-                    - torch.ones_like(product_pred.weight, dtype=torch.float32)
-                )
-                > 1.0e-6
-            )
-        )
+        has_native_uncertainty = product_pred.uncertainty is not None
         uncertainty_mode = (
             "native_inverse_variance"
-            if result is None or has_native_uncertainty
+            if has_native_uncertainty
             else "support_density_proxy"
         )
         uncertainty_inverse_variance = estimate_map_inverse_variance(
@@ -3476,6 +3874,9 @@ def evaluate_case(
     )
     fit_times_sorted = sorted(float(value) for value in fit_times)
     fit_time_ms = fit_times_sorted[len(fit_times_sorted) // 2]
+    heldout_rmse_values = [
+        float(metric["weighted_rmse"]) for metric in heldout_observation_metrics
+    ]
     return {
         "library": "torchsky",
         "type": "field_fit" if result is not None else "cube_baseline",
@@ -3490,8 +3891,38 @@ def evaluate_case(
         if result is not None
         else "weighted_cube_coadd",
         "num_observations": len(observations),
+        "num_training_observations": len(training_indices),
+        "num_heldout_observations": len(heldout_indices),
+        "training_observation_indices": list(training_indices),
+        "heldout_observation_indices": list(heldout_indices),
+        "heldout_split_seed": int(seed) + 17_021,
+        "heldout_sky_quadrants": list(sky_holdout_quadrants),
+        "heldout_sky_guard_deg": float(sky_holdout_guard_deg),
+        "heldout_sky_pixel_count": (
+            0 if heldout_sky_core is None else int(heldout_sky_core.sum().item())
+        ),
+        "heldout_sky_training_support_fraction": (
+            heldout_sky_training_support_fraction
+        ),
+        "heldout_sky_reconstruction_rmse": (
+            None
+            if heldout_sky_metrics is None
+            else float(heldout_sky_metrics["reconstruction_rmse"])
+        ),
+        "heldout_sky_reconstruction_mae": (
+            None
+            if heldout_sky_metrics is None
+            else float(heldout_sky_metrics["reconstruction_mae"])
+        ),
+        "heldout_sky_total_flux_relative_error": (
+            None
+            if heldout_sky_metrics is None
+            else float(heldout_sky_metrics["total_flux_relative_error"])
+        ),
         "num_bands": int(case_spec.spectral_axis.values.numel()),
         "steps": int(steps),
+        "parameter_count": int(parameter_count),
+        "trainable_parameter_count": int(trainable_parameter_count),
         "training_patch_size": training_patch_size,
         "diagnostic_spatial_tile_hw": diagnostic_spatial_tile_hw,
         "fit_time_ms": fit_time_ms,
@@ -3571,6 +4002,14 @@ def evaluate_case(
             if observation_residuals
             else None
         ),
+        "heldout_observation_rmse_mean": (
+            sum(heldout_rmse_values) / len(heldout_rmse_values)
+            if heldout_rmse_values
+            else None
+        ),
+        "heldout_observation_rmse_max": (
+            max(heldout_rmse_values) if heldout_rmse_values else None
+        ),
         "mean_noise_sigma": float(
             sum(spec.noise_sigma for spec in case_spec.observations)
             / len(case_spec.observations)
@@ -3621,6 +4060,18 @@ def main() -> None:
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument(
+        "--holdout-observations",
+        type=int,
+        default=0,
+        help="Seeded count of complete detector observations excluded from fitting",
+    )
+    parser.add_argument(
+        "--holdout-sky-quadrants",
+        type=str,
+        default="",
+        help="Comma-separated NE/NW/SE/SW sky quadrants excluded with a PSF guard",
+    )
+    parser.add_argument(
         "--cases",
         type=str,
         default=",".join(DEFAULT_CASES),
@@ -3664,7 +4115,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cases = tuple(item for item in args.cases.split(",") if item)
-    models = tuple(item for item in args.models.split(",") if item)
+    models = _resolve_model_selection(args.models)
     rows = []
     for case in cases:
         case_steps = _steps_for_case(
@@ -3683,6 +4134,8 @@ def main() -> None:
                 use_spectral_budget=args.use_spectral_budget,
                 training_patch_size_override=args.training_patch_size,
                 diagnostic_tile_size_override=args.diagnostic_tile_size,
+                holdout_observations=args.holdout_observations,
+                holdout_sky_quadrants=args.holdout_sky_quadrants,
             )
             for model_kind in models
         ]

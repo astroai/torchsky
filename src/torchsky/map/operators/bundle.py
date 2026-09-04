@@ -167,11 +167,14 @@ def image_observation_operator_bundle(
         for name in ("sky_background", "instrument_background", "detector_background")
     )
     has_radiometry = float(getattr(observation, "photometric_scale", 1.0)) != 1.0
-    has_mask_weight = any(
+    has_mask_weight = float(getattr(observation, "weight", 1.0)) != 1.0 or any(
         getattr(observation, name, None) is not None
         for name in ("weight_path", "mask_path", "primary_beam_path")
     )
-    has_noise = has_mask_weight or float(getattr(observation, "weight", 1.0)) != 1.0
+    has_noise = (
+        getattr(observation, "weight_path", None) is not None
+        or bool(getattr(observation, "weight_is_inverse_variance", False))
+    )
     return ObservationOperatorBundle(
         geometry=geometry_op_for_kernel(resampling_kernel),
         spectral_response=ExplicitSpectralResponseOp() if has_spectral else None,

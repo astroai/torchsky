@@ -1,5 +1,202 @@
 # Active Torchsky Execution Checklist
 
+## Reconciliation index — 2026-08-30
+
+`next.md` is the authoritative remaining-work list; this file records execution
+and evidence. The unchecked groups below are deliberately retained until their
+gates pass. Their dispositions are: `implement` (Torchsky work remains),
+`absorbed` (covered by a completed implementation or another active gate),
+`downstream` (Torchfits or an application repository owns it), `conditional`
+(only activated by a declared consumer/profile/benchmark), or `rejected`
+(outside the ownership/scientific contract).
+
+| Unchecked group in this file | Disposition | Required evidence |
+| --- | --- | --- |
+| Conditioned PSF/background identifiability, non-stationary covariance, CUDA batching, and public streaming FITS sink | implement / downstream | Held-out calibration; covariance propagation; CUDA profile; Torchfits subset-writer API and tile export. |
+| MPS/sphere/delay-native axes and the remaining local Foam/INR sweeps | conditional / implement | Device parity; a FOSSIL consumer for new axes; matched compute/accuracy scorecards. |
+| ADASS Day 2 official-comparator closure, Day 3 exact blank/contracted-grid/refinement gates, and Day 4 blind claim | implement / conditional | Versioned comparator runs, frozen split/config, paired blank/injection artifacts, and all preregistered claim controls. |
+| Smooth Foam equivariance/MPS, larger shared spectral benchmark, multiband depth metrics, and AMP parity | implement / conditional | Complete CPU/CUDA gate plus held-out exposure/sky and uncertainty evidence; AMP additionally requires a CUDA FP32-parity/overflow scorecard. No SOTA language before replication. |
+| Field-to-field replication and multi-GPU DDP execution | implement / conditional | Independent real field plus repeated scene/noise seeds; deterministic single-device/DDP parity and scaling after bounded streaming is stable. |
+| FOSSIL Checkpoint 6 typed response/protected-subspace/cross-fit/full-sky/cosmology items | implement / conditional / downstream | Shared mission-neutral consumer, exact adjoints/chunk parity, then application-owned science certification. |
+| Historical release/CI, CANFAR, and submission checkboxes | absorbed / implement | Historical entries stay as evidence; current release gate is rerun on the final commit and GitHub CI must be green. |
+
+The current working tree has additionally implemented and tested plan-v2 input
+identity/replay, honest map uncertainty/context/provenance products, adaptive
+curved footprints, exact square-drop edge/variance semantics, workflow and
+background presets, tensor-only field artifacts, and the default joint
+multiband field path. Field fitting now derives and preserves each exposure's
+passband; `--per-band`/`--per-filter` is the explicit independent-fit control.
+Field plan-v2 replay requires and content-verifies the recorded artifact, adds
+no optimizer steps, and rejects changed artifacts. Actual CLI save/resume/replay
+and two-band metadata tests pass. These changes are not marked as historical
+`[x]` entries here until the parent implementation commit records their exact
+test/evidence references.
+
+The field trainer now also exposes opt-in CUDA `--field-amp none|float16|bfloat16`
+with local autocast/GradScaler handling, FP32 diagnostics, unscale-before-clip,
+skipped-step overflow accounting, and persisted/resumable scaler state. CPU and
+MPS requests fail closed. Targeted CPU training/rejection tests, pyright, and
+preflight pass; the CUDA overflow regression is present but skipped on this
+host, so the AMP parity/overflow gate remains open.
+
+Power-Foam now has exposure-balanced persistent-site proposals from normalized
+sky coordinates and whitened residuals, plus held-out-only per-cell residual,
+contribution, and residual-position EMA buffers. Explicit densify/prune counts
+use stable cell-id tie breaking, split radii by equal 2-D area, retain optimizer
+state for surviving parameters, initialize child moments to zero, and reject
+training-split evidence. Topology-changing state remains tensor-only and resumes
+through the field artifact boundary. `tests/test_map_field_foam_model.py` passes
+32 tests and the artifact/registered-model contract set passes 33. Production
+initializer wiring and held-out scientific recovery remain open; this is not a
+model-promotion or depth claim.
+
+The experimental `diffuse_foam_hybrid` is a low-capacity diffuse SIREN plus a
+localized non-negative spectral Foam. It exposes diffuse, Foam, and joint fit
+stages, explicit Foam sparsity and component-correlation penalties, safe
+tensor-only artifacts, and a final renderer that keeps Foam cells exact before
+applying the common PSF/background operators. Its public scientific product is
+the combined sky: component outputs remain diagnostics until component-specific
+injections establish identifiability. No production preset has been promoted.
+
+Field product uncertainty no longer inherits a fabricated unit log-variance.
+Deterministic fields return `uncertainty=None`; explicit likelihood variance is
+labelled `detector`. Seeded ensemble rendering processes members sequentially
+and reports unbiased epistemic variance plus the mean detector component and,
+when supplied, independently seeded calibration-draw variance. The product/API
+set passes 40 tests. Coverage scorecards and Foam parameter posteriors remain
+open.
+
+The classical map reducer now spills exact medians and iterative sigma-clipped
+weighted stacks into a capacity-checked tile-local scratch directory. Plan v2
+records the exact required bytes; reduction uses bounded pixel slabs, accepted
+observations define `WHT`, `NEXP`, and `CTX`, and cleanup is tested on both
+success and failure. The expanded map/operator/adjoint/CLI/product run passes
+278 tests with one device skip. This closes the reducer implementation gate, not the
+medium/large memory scorecard, overlap-background spill, or official SWarp
+`CLIPPED` comparator gate. Squared-coefficient diagonal variance now covers
+direct copy, Drizzle, nearest/bilinear/bicubic, Lanczos/cubic, conservative
+polygon, and point/box splat paths, with basis, half-pixel flux, tiled, and
+Monte Carlo evidence. Distorted-flux quadrature aggregates coefficient rows
+before squaring and passes real-SIP tiled parity. The same work removed an
+incorrect absolute clamp on squared steradian pixel areas that suppressed
+small-pixel flux weights and IVAR by orders of magnitude. FFT/spectral
+remappers return absent uncertainty. Exact finite-aperture covariance is now
+available for finite-support kernels through a tile-bounded adjoint evaluator.
+Support masks and default unit coadd denominators likewise no longer masquerade
+as detector-noise measurements; explicit scalar or map weights are required
+for classical `IVAR`.
+
+The propagated detector uncertainty now also carries an optional local noise-
+correlation factor, written as `NCORR` with `NCORTYPE=LOCAL_ENBW` and
+`NCORDEF=W1/W2`. It is the ratio of the first and squared spatial-coefficient
+weight moments: identity sampling is one and a one-axis half-pixel linear shift
+is two. A seeded 63-pixel aperture Monte Carlo agrees with the exact finite-
+aperture factor, and Drizzle, bilinear, conservative, splat, tiled, cube, and
+MEF tests pass. This is exact for locally shift-invariant large apertures and is
+labelled only as a diagnostic for distorted/edge-truncated mappings. The public
+finite-aperture evaluator supplies exact detector variance there: it replays the
+shared finite-support geometry, accumulates source-pixel adjoints across tiles
+before squaring, and passes all-kernel single-pixel checks, signed and flux-unit
+source-basis oracles, spatial-IVAR and nonlinear-SIP oracles, plus a seeded
+10,000-draw Monte Carlo. It rejects data-dependent backgrounds and FFT/spectral
+remappers rather than reporting incomplete covariance.
+
+Official workflow smoke comparators are now non-skippable numerical gates rather
+than warning-only rows. The harness records the matching torchsky reference
+variant, device/dtype/seeds, package versions, and the pinned SWarp/Montage source
+commits; committed acceptance JSON enforces identity plus absolute bounds. Local
+locked runs pass: Drizzle point is exact and square differs by `1.67e-12` in data
+with exact weights; Montage `mProjectPP` is exact on the representative SIN case;
+SWarp complete-footprint bilinear/Lanczos3 differ by at most `1.50e-5`/`6.74e-6`
+in data and `1.84e-4` in weight. SWarp common-support and full-grid metrics remain
+in the artifacts and expose the known border/support-policy difference instead of
+hiding it. A separate non-skippable SWarp `CLIPPED` row uses five aligned exposures
+with a localized high-amplitude contaminant; it agrees with the streamed torchsky
+sigma-clipped product to `8.59e-5` in data and `1.44e-3` after positive-median
+weight normalization on complete support. The same diagnosis found and fixed two harness/kernel defects: external
+variants were previously compared only with bilinear, and Lanczos coefficients did
+not preserve a constant field before edge masking. The three locked smoke cases do
+not close TPV/dithered/cylindrical/all-sky, the broader SWarp clipping-control
+matrix, or workflow-level science gates.
+
+Overlap rectification now avoids both prior failure modes: it neither retains
+every projected exposure in memory nor rereads every FITS exposure for every
+output tile. Projected numerator/weight/variance/overlap planes spill once;
+pairwise difference models accumulate directly into an anchored weighted graph
+RHS; and graph corrections are solved and reduced tilewise. Scratch is exact
+and capacity-checked before projection, grows linearly with observation count,
+and is cleaned after success or failure. Tests cover one-read execution,
+global chain connectivity across locally disconnected tiles, untiled parity,
+explicit propagated IVAR, exhaustion, and cleanup. Difference models are now
+compact: robust polynomials retain coefficients and mesh estimators retain the
+filtered mesh, then both render only the active output tile. Custom estimators
+without the compact contract fail closed in tiled execution. The updated
+three-run-median four-exposure 1024-square CPU scorecard records 2.565 s, 1.635
+projected Mpix/s, 83,886,080 exact scratch bytes, a 243,777,536-byte peak-RSS
+delta, scene RMSE 2.3484e-6, and maximum IVAR error 2.8610e-6.
+
+Plan-v2 construction now invokes its validation contract instead of merely
+carrying validation helpers. Malformed target shapes/header dimensions,
+unknown execution modes, zero/non-finite weights and calibrations, unpaired
+auxiliary identities, invalid runtime devices/seeds, duplicate or unknown
+product planes, and malformed field spectral metadata fail before replay.
+
+The common field benchmark now reserves complete observations with a seeded,
+recorded split before product planning, support coaddition, domain estimation,
+initialization, or optimization. All registered candidates can be constructed
+through the same benchmark contract; rows now record total/trainable parameters,
+optimizer steps, wall time, observation indices, and held-out detector weighted
+RMSE. The fast `bench-map-field-heldout-contract` run fits two of three synthetic
+exposures and holds one out for SIREN, spectral Foam, and the diffuse/Foam hybrid,
+with an equal-information bilinear coadd product. It also removes NE and SW sky
+quadrants from every training observation before product/domain/initializer
+construction, then evaluates PSF/resampling-guarded cores with verified zero
+training support. Its one-step results are an execution/leakage contract, not a
+ranking: the full registry is deliberately opt-in after a sequential
+all-candidate smoke exceeded five minutes. Equal-parameter/equal-wall-time
+bakeoffs, arbitrary held-out regions, classical detector-space prediction,
+negative controls, and science injections remain open.
+
+## Latest working-tree reconciliation — 2026-09-01
+
+The durable fast field artifact is
+`benchmark_results/map_field_heldout_contract.json` (with its Markdown summary).
+It contains four rows: SIREN, shared spectral Foam, the combined diffuse/Foam
+hybrid, and an equal-information bilinear coadd. Each row holds out one of three
+complete exposures, removes NE and SW before any product/domain/initializer/fit
+construction, and evaluates PSF/resampling-guarded cores with zero training
+support. The artifact records split seed, exposure indices, guard size,
+parameter counts, optimizer steps, wall time, peak memory, and held-out metrics.
+This is a leakage/execution contract; it is not an equal-budget ranking or a
+depth result. The registered-model constructor tests cover the full registry,
+while the fast artifact intentionally does not run every registered or
+experimental candidate.
+
+The same evidence boundary applies to the map work. Finite-kernel diagonal
+variance, optional local `NCORR`, and exact requested-aperture covariance are
+tested, but FFT/spectral uncertainty remains open. Official Drizzle, SWarp bilinear/
+Lanczos3, SWarp `CLIPPED`, and Montage smoke rows pass their locked acceptance
+bounds, while distorted/dithered/cylindrical/all-sky comparator matrices and
+workflow-level science closure remain open. The overlap-background scorecard
+(`benchmarks/scorecards/20260831_map_overlap_background.md`) demonstrates
+linear-size projection scratch, compact tile-rendered difference models, and
+cleanup; the bounded overlap-background implementation gate is closed.
+
+The next evidence sequence is: close the contracted-grid/exact-refinement blank
+gates; run capacity- and compute-matched independent/shared field bakeoffs;
+execute blank, detector-space, component-identifiability, and paired science
+injection controls; repeat across at least three scene seeds and two noise
+realizations; then replicate the selected protocol on an independent real field.
+Only after those results are complete should DDP parity/scaling be measured.
+Large FITS/tile output remains a downstream `torchfits` subset-writer contract,
+not a Torchsky FITS implementation task.
+
+No SOTA, limiting-depth, or production-preset claim is supported by the current
+smoke rows, one-seed artifacts, one real field, image RMSE, visual sharpness, or
+the locked comparator rows. Keep parent checkboxes unchecked until their full
+held-out, negative-control, uncertainty, deterministic-repeat, device, and
+memory gates pass; if a preregistered interval is null, report that result.
+
 ## Conditioned PSF and sky-background observation models
 
 - [x] Add a differentiable spatial/spectral/temporal encoder with independent
@@ -1416,6 +1613,15 @@ extractor to the Torchsky runtime.
 - [ ] Gate zero-source false positives, noiseless bright-source flux/position,
   split disjointness, deterministic artifacts, shuffled-band loss of sharing
   gain, and CPU/CUDA parity.
+  - [x] Implement the paired control boundary without accepting arbitrary
+    negative flux: generated manifests label positive, blank, explicit
+    sign-flipped, or shuffled-band mode; every band shuffle uses a distinct
+    deterministic non-identity source permutation and records it. Both real
+    classical and joint-field adapters use the same detector injection path.
+    Focused conservation, determinism, marginal-preservation, CLI, and
+    fail-closed sign tests pass. The parent scientific gate remains open until
+    the frozen control batches run and demonstrate the expected null/loss-of-
+    sharing behavior.
 - [ ] Run three smoke scene seeds and two noise realizations. Do not check the
   parent depth-demonstration box or claim a magnitude gain from fewer scenes.
 - [ ] Only after Gate 0 passes, add joint INR/hybrid rows, the 30-scene

@@ -7,7 +7,7 @@
   "platform": "macOS-14.8.2-arm64-arm-64bit-Mach-O",
   "python": "3.13.14",
   "git_sha": "5f911d00c30cb0aa6a8a648677c7cfde3654f16d",
-  "bench_root": "/Users/fabbros/src/torchsky/benchmarks_results",
+  "bench_root": "/Users/fabbros/src/sfabbro/torchsky/benchmarks_results",
   "domains": {
     "wcs": {
       "run_id": "acceptance_wcs",

@@ -99,6 +99,14 @@ class CrossmatchResult:
     right_index: Tensor
     separation_arcsec: Tensor
 
+    @property
+    def left_indices(self) -> Tensor:
+        return self.left_index
+
+    @property
+    def right_indices(self) -> Tensor:
+        return self.right_index
+
 
 @dataclass
 class _CrossmatchStats:

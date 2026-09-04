@@ -19,3 +19,4 @@ pixi run bench-archive-scorecard -- \
 | 20260819 | sht_polar_fft | - | - | - | Linux SHT not claimed. `425af888` nside=128 alm2map ~52×; `b1f02069` 8-thread cap: interpolate 2.5 ms, polar FFT ~280 ms | see card | `425af888` + `b1f02069` | [20260819_sht_polar_fft](20260819_sht_polar_fft.md) |
 | 20260820 | world_layer_pending | - | - | superseded by 20260821 | — | — | local | [20260820_world_layer_pending](20260820_world_layer_pending.md) |
 | 20260821 | world_layer | - | - | Paper II mixed; TPV fw 0.92×; CUDA vs CPU astropy | moc contains 0.99×; cone/union not claimed | see card | `775762c2` | [20260821_world_layer](20260821_world_layer.md) |
+| 20260831 | map_overlap_background | - | - | - | Global overlap graph: 1.635 projected Mpix/s, 244 MB RSS delta, 83.9 MB exact scratch | compact built-ins; custom tiled estimators fail closed | `85010fda` + working tree | [20260831_map_overlap_background](20260831_map_overlap_background.md) |

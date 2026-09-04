@@ -7,7 +7,7 @@
   },
   "repositories": {
     "torchsky": {
-      "path": "/Users/fabbros/src/torchsky",
+      "path": "/Users/fabbros/src/sfabbro/torchsky",
       "initial_branch": "wcs-aware-integration",
       "initial_head": "849d0784957c0fa45c7fb3fcd5d2be5518cf5d9f",
       "initial_main": "964ed6a9fdaf5314d34d2793cf5d2b3667ed996d",
@@ -21,7 +21,7 @@
       "state": "wcs-aware-integration fast-forwarded onto main; shared-contract hardening remains an uncommitted software implementation"
     },
     "uspm": {
-      "path": "/Users/fabbros/src/uspm",
+      "path": "/Users/fabbros/src/sfabbro/uspm",
       "initial_branch": "main",
       "initial_head": "0d731ad45e166476f2212943a495294bcd8f72d1",
       "initial_tracked_dirty_diff_sha256": "b8bec2dd7cc9b656ce77507f5d532dfd1be5f7b3ab8c20415f74bed2fc331577",
@@ -43,7 +43,7 @@
       "scientific_certification": "blocked: required real paired surveys and held-out lithium products are absent"
     },
     "cosmodist": {
-      "path": "/Users/fabbros/src/cosmodist",
+      "path": "/Users/fabbros/src/astroai/cosmodist",
       "initial_branch": "main",
       "initial_head": "2053245911dd9cc6ce6e34cdd45a81bfe58ef01c",
       "initial_tracked_dirty_diff_sha256": "59cf92e09fff83de550f3de22fb18e0445cff2802da06837a3275bb923f6ae5b",

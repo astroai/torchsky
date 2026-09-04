@@ -1,0 +1,40 @@
+[
+  {
+    "case": "synthetic_shifted_wcs",
+    "library": "swarp",
+    "variant": "bilinear",
+    "equals": {
+      "comparison_reference_variant": "bilinear",
+      "comparison_data_domain": "kernel_complete_support",
+      "comparator_version": "bf4f496f18c04a8d32022b45449ef8675ab9b3da"
+    },
+    "maximum": {
+      "max_abs_data_diff_vs_torchsky": 2e-5,
+      "max_abs_weight_diff_vs_torchsky": 3e-4,
+      "support_symmetric_difference_frac_vs_torchsky": 0.05
+    },
+    "minimum": {
+      "comparison_support_frac_vs_torchsky": 0.8,
+      "support_iou_vs_torchsky": 0.95
+    }
+  },
+  {
+    "case": "synthetic_shifted_wcs",
+    "library": "swarp",
+    "variant": "lanczos3",
+    "equals": {
+      "comparison_reference_variant": "lanczos3",
+      "comparison_data_domain": "kernel_complete_support",
+      "comparator_version": "bf4f496f18c04a8d32022b45449ef8675ab9b3da"
+    },
+    "maximum": {
+      "max_abs_data_diff_vs_torchsky": 2e-5,
+      "max_abs_weight_diff_vs_torchsky": 3e-4,
+      "support_symmetric_difference_frac_vs_torchsky": 0.3
+    },
+    "minimum": {
+      "comparison_support_frac_vs_torchsky": 0.4,
+      "support_iou_vs_torchsky": 0.7
+    }
+  }
+]

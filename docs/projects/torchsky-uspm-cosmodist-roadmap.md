@@ -12,9 +12,9 @@ The scientific specifications for this roadmap are:
 
 | Project | Authoritative artifact | Version | Pages | SHA-256 |
 |---|---|---:|---:|---|
-| Torchsky | `/Users/fabbros/src/torchsky/docs/formulation_map.pdf` | current | 15 | `212163e649a060ecec0e5677b73519a2ef2131791a92568c6250bcdccb7d73f9` |
-| USPM | `/Users/fabbros/src/uspm/docs/formulation.pdf` | 1.0.1 | 52 | `55e172f5cb205c227408c9a0b770f45015ca58e0af42a80c7955768c292a1859` |
-| cosmodist | `/Users/fabbros/src/cosmodist/docs/formulation.pdf` | 1.0.1 | 18 | `c168f14ad9777b9be7847be7bc9adfd0ae5a6ea30412ea52db65f54e36a6dbc6` |
+| Torchsky | `/Users/fabbros/src/sfabbro/torchsky/docs/formulation_map.pdf` | current | 15 | `212163e649a060ecec0e5677b73519a2ef2131791a92568c6250bcdccb7d73f9` |
+| USPM | `/Users/fabbros/src/sfabbro/uspm/docs/formulation.pdf` | 1.0.1 | 52 | `55e172f5cb205c227408c9a0b770f45015ca58e0af42a80c7955768c292a1859` |
+| cosmodist | `/Users/fabbros/src/astroai/cosmodist/docs/formulation.pdf` | 1.0.1 | 18 | `c168f14ad9777b9be7847be7bc9adfd0ae5a6ea30412ea52db65f54e36a6dbc6` |
 
 Both formulations are implementable without scientific redesign.
 

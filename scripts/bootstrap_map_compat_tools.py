@@ -17,6 +17,10 @@ REPOS = {
     "swarp": "https://github.com/astromatic/swarp.git",
     "montage": "https://github.com/Caltech-IPAC/Montage.git",
 }
+REFS = {
+    "swarp": "bf4f496f18c04a8d32022b45449ef8675ab9b3da",
+    "montage": "0fc9e5ff55ece4ee0b5d731157cf07cc31325724",
+}
 DEFAULT_CASUTOOLS_URL = (
     "https://www.canfar.net/storage/vault/file/sfabbro/casutools-1.0.43.tar.gz"
 )
@@ -90,9 +94,20 @@ def _ensure_repo(tool: str) -> Path:
         return _download_and_extract_tarball(url, tool="casutools")
     src_dir = _src_root() / ("Montage" if tool == "montage" else tool)
     if src_dir.exists():
+        current = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=src_dir, text=True
+        ).strip()
+        if current != REFS[tool]:
+            raise RuntimeError(
+                f"{tool} source is {current}; expected pinned commit {REFS[tool]}"
+            )
         return src_dir
     src_dir.parent.mkdir(parents=True, exist_ok=True)
-    _run(["git", "clone", "--depth", "1", REPOS[tool], str(src_dir)], cwd=_repo_root())
+    _run(
+        ["git", "clone", "--filter=blob:none", "--no-checkout", REPOS[tool], str(src_dir)],
+        cwd=_repo_root(),
+    )
+    _run(["git", "checkout", "--detach", REFS[tool]], cwd=src_dir)
     return src_dir
 
 
@@ -249,11 +264,16 @@ def main() -> int:
         help="Tool to bootstrap",
     )
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 1) // 2))
+    parser.add_argument(
+        "--force-source",
+        action="store_true",
+        help="Build the pinned official source even when an environment binary exists",
+    )
     args = parser.parse_args()
 
     tools = ("swarp", "montage", "casutools") if args.tool == "all" else (args.tool,)
     for tool in tools:
-        if tool == "swarp" and (swarp := shutil.which("swarp")):
+        if tool == "swarp" and not args.force_source and (swarp := shutil.which("swarp")):
             # ponytail: conda-forge already packages the legacy comparator; prefer
             # its locked binary over rebuilding old Autoconf against modern CFITSIO.
             print(f"swarp: using environment binary at {swarp}")

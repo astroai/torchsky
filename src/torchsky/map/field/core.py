@@ -28,9 +28,11 @@ from .bandpass import (
 )
 from .forwarding import call_scalar_field_forward as _call_scalar_field_forward
 from .foam import (
+    FoamAdaptationResult,
     PowerPixelOperator,
     PowerValueSemantics,
     SpectralPowerFoam,
+    adapt_spectral_power_foam,
     sparse_bounded_power_pixel_operator,
 )
 from .hashgrid import HashGridEncoder, sample_feature_plane
@@ -283,17 +285,6 @@ class _BaseFieldModel(nn.Module):
             self.domain.wavelength_scale
         )
 
-    def forward_distribution(
-        self,
-        ra_deg: Tensor,
-        dec_deg: Tensor,
-        wavelength_angstrom: Tensor | float,
-    ) -> tuple[Tensor, Tensor]:
-        mean = self.forward(ra_deg, dec_deg, wavelength_angstrom)
-        logvar = torch.zeros_like(mean)
-        return mean, logvar
-
-
 class SpectralPowerFoamField(_BaseFieldModel):
     """Adapt a spectral Power Foam to the common sky-field forward interface.
 
@@ -374,6 +365,43 @@ class SpectralPowerFoamField(_BaseFieldModel):
         self._temperature = (
             self.temperature_start
             * (self.temperature_end / self.temperature_start) ** bounded
+        )
+
+    def update_adaptation_statistics(
+        self,
+        cell_indices: Tensor,
+        whitened_residuals: Tensor,
+        contributions: Tensor,
+        positions: Tensor,
+        *,
+        split: str,
+        decay: float = 0.9,
+    ) -> None:
+        """Accumulate held-out evidence used by deterministic cell adaptation."""
+        self.foam.update_adaptation_statistics(
+            cell_indices,
+            whitened_residuals,
+            contributions,
+            positions,
+            split=split,
+            decay=decay,
+        )
+
+    def adapt_cells(
+        self,
+        optimizer: torch.optim.Optimizer,
+        *,
+        densify_count: int,
+        prune_count: int,
+        min_updates: int = 1,
+    ) -> FoamAdaptationResult:
+        """Adapt cell topology while retaining optimizer state for survivors."""
+        return adapt_spectral_power_foam(
+            self.foam,
+            optimizer,
+            densify_count=densify_count,
+            prune_count=prune_count,
+            min_updates=min_updates,
         )
 
     def _legendre_basis(self, normalized: Tensor) -> Tensor:
@@ -543,6 +571,133 @@ class FoamInitializedINRField(_BaseFieldModel):
         correction = self.log_intensity_correction(ra_deg, dec_deg, wavelength_angstrom)
         reference = reference.to(device=correction.device, dtype=correction.dtype)
         return reference.clamp_min(self.intensity_floor) * torch.exp(correction)
+
+
+class DiffuseFoamHybridField(_BaseFieldModel):
+    """Low-capacity diffuse field plus localized non-negative spectral Foam.
+
+    Only the summed sky is an identified product. Component values are exposed
+    for diagnostics and injection tests, not as separately inferred physical
+    skies without additional identifiability evidence.
+    """
+
+    _STAGES = {"diffuse": 0, "foam": 1, "joint": 2}
+
+    def __init__(
+        self,
+        domain: FieldDomain,
+        *,
+        foam: SpectralPowerFoamField,
+        diffuse_hidden_dim: int = 24,
+        diffuse_hidden_layers: int = 1,
+        diffuse_omega0: float = 3.0,
+        training_stage: Literal["diffuse", "foam", "joint"] = "joint",
+    ) -> None:
+        super().__init__(domain)
+        if foam.domain != domain:
+            raise ValueError("diffuse and Foam domains must match")
+        if not foam.foam.log_intensity_spectra:
+            raise ValueError(
+                "diffuse/Foam hybrid requires non-negative log-intensity Foam spectra"
+            )
+        if int(diffuse_hidden_dim) < 1 or int(diffuse_hidden_layers) < 1:
+            raise ValueError("diffuse hidden sizes must be positive")
+        omega0 = float(diffuse_omega0)
+        if not math.isfinite(omega0) or omega0 <= 0.0:
+            raise ValueError("diffuse_omega0 must be finite and positive")
+        self.diffuse_field = SineImplicitField(
+            domain,
+            hidden_dim=int(diffuse_hidden_dim),
+            hidden_layers=int(diffuse_hidden_layers),
+            omega0=omega0,
+        )
+        self.localized_foam = foam
+        self.component_identifiability = "combined_only"
+        self.register_buffer("_training_stage_code", torch.tensor(2, dtype=torch.int8))
+        self.set_training_stage(training_stage)
+
+    @property
+    def training_stage(self) -> str:
+        code = int(self._training_stage_code.item())
+        for name, value in self._STAGES.items():
+            if value == code:
+                return name
+        raise ValueError(f"invalid stored hybrid training stage code {code}")
+
+    def set_training_stage(
+        self,
+        stage: Literal["diffuse", "foam", "joint"],
+    ) -> None:
+        try:
+            code = self._STAGES[str(stage)]
+        except KeyError as exc:
+            raise ValueError(f"unsupported hybrid training stage {stage!r}") from exc
+        diffuse_trainable = stage in {"diffuse", "joint"}
+        foam_trainable = stage in {"foam", "joint"}
+        self.diffuse_field.requires_grad_(diffuse_trainable)
+        self.localized_foam.requires_grad_(foam_trainable)
+        self._training_stage_code.fill_(code)
+
+    def diagnostic_components(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> tuple[Tensor, Tensor]:
+        diffuse = self.diffuse_field(ra_deg, dec_deg, wavelength_angstrom)
+        localized = self.localized_foam(ra_deg, dec_deg, wavelength_angstrom).to(
+            device=diffuse.device,
+            dtype=diffuse.dtype,
+        )
+        return diffuse, localized
+
+    def component_regularization(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+        *,
+        foam_sparsity_weight: float,
+        correlation_weight: float,
+    ) -> Tensor:
+        sparsity_weight = float(foam_sparsity_weight)
+        separation_weight = float(correlation_weight)
+        if (
+            not math.isfinite(sparsity_weight)
+            or not math.isfinite(separation_weight)
+            or sparsity_weight < 0.0
+            or separation_weight < 0.0
+        ):
+            raise ValueError("hybrid regularization weights must be finite and non-negative")
+        diffuse, localized = self.diagnostic_components(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        )
+        diffuse_centered = diffuse - diffuse.mean()
+        localized_centered = localized - localized.mean()
+        dot = torch.sum(diffuse_centered * localized_centered)
+        scale = torch.sum(diffuse_centered.square()) * torch.sum(
+            localized_centered.square()
+        )
+        correlation_squared = dot.square() / torch.clamp(
+            scale,
+            min=torch.finfo(diffuse.dtype).tiny,
+        )
+        return sparsity_weight * localized.abs().mean() + separation_weight * correlation_squared
+
+    def forward(
+        self,
+        ra_deg: Tensor,
+        dec_deg: Tensor,
+        wavelength_angstrom: Tensor | float,
+    ) -> Tensor:
+        diffuse, localized = self.diagnostic_components(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        )
+        return diffuse + localized
 
 
 def _observation_without_background(observation: FieldObservation) -> FieldObservation:
@@ -3476,6 +3631,7 @@ class SkyLambdaFeatureField(_BaseFieldModel):
         self.aggregate_hidden_moments = bool(aggregate_hidden_moments)
         self.coarse_fine_readout = bool(coarse_fine_readout)
         self.predict_variance = bool(predict_variance)
+        self.predictive_distribution_available = self.predict_variance
         self._curriculum_progress = 1.0
         plane_names = ["xy", "xl", "yl"]
         if self.spatial_dim == 3:
@@ -3802,12 +3958,11 @@ class SkyLambdaFeatureField(_BaseFieldModel):
         mean = self.base_output(decoded).squeeze(-1) + self.refine(decoded).squeeze(-1)
         mean = F.softplus(mean) + 1.0e-4
         if self.logvar_output is None or self.logvar_refine is None:
-            logvar = torch.zeros_like(mean)
-        else:
-            logvar = self.logvar_output(decoded).squeeze(-1) + self.logvar_refine(
-                decoded
-            ).squeeze(-1)
-            logvar = torch.clamp(logvar, min=-8.0, max=6.0)
+            raise ValueError("predictive variance is disabled for this field model")
+        logvar = self.logvar_output(decoded).squeeze(-1) + self.logvar_refine(
+            decoded
+        ).squeeze(-1)
+        logvar = torch.clamp(logvar, min=-8.0, max=6.0)
         return mean, logvar
 
     def _aggregate_hidden_stack(
@@ -5156,6 +5311,8 @@ def make_field_model(
         return SpectralPowerFoamField(domain, **kwargs)
     if kind == "foam_initialized_inr":
         return FoamInitializedINRField(domain, **kwargs)
+    if kind == "diffuse_foam_hybrid":
+        return DiffuseFoamHybridField(domain, **kwargs)
     if kind == "sine_implicit":
         return SineImplicitField(domain, **kwargs)
     if kind == "wire_implicit":

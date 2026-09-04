@@ -19,7 +19,8 @@ def _exact_conservative_polygon_project(
     pixel_area_sr_map_fn,
     representative_pixel_area_fn,
     chunk_pixels: int,
-) -> tuple[Tensor, Tensor]:
+    return_variance_weight: bool = False,
+) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
     image = image.to(dtype=torch.float32)
     source_weight = source_weight.to(dtype=torch.float32)
     if value_semantics == "flux":
@@ -37,6 +38,8 @@ def _exact_conservative_polygon_project(
     valid = torch.isfinite(weighted_weight) & (weighted_weight > 0.0)
     if not bool(valid.any()):
         zeros = torch.zeros(target.shape, dtype=torch.float32, device=image.device)
+        if return_variance_weight:
+            return zeros, zeros, zeros
         return zeros, zeros
 
     ys, xs = torch.nonzero(valid, as_tuple=True)
@@ -46,6 +49,9 @@ def _exact_conservative_polygon_project(
         target.shape[0] * target.shape[1], dtype=torch.float32, device=image.device
     )
     flat_weight = torch.zeros_like(flat_numer)
+    flat_variance_weight = (
+        torch.zeros_like(flat_numer) if return_variance_weight else None
+    )
     width = int(target.shape[1])
     height = int(target.shape[0])
     half = 0.5
@@ -95,8 +101,12 @@ def _exact_conservative_polygon_project(
             max_y = min(int(torch.floor(quad_y.max() + 0.5).item()), height - 1)
             if min_x > max_x or min_y > max_y:
                 continue
-            cy = torch.arange(min_y, max_y + 1, dtype=torch.float64, device=image.device)
-            cx = torch.arange(min_x, max_x + 1, dtype=torch.float64, device=image.device)
+            cy = torch.arange(
+                min_y, max_y + 1, dtype=torch.float64, device=image.device
+            )
+            cx = torch.arange(
+                min_x, max_x + 1, dtype=torch.float64, device=image.device
+            )
             gy, gx = torch.meshgrid(cy, cx, indexing="ij")
             centers = torch.stack((gx.reshape(-1), gy.reshape(-1)), dim=-1)
             overlaps = _batch_quad_pixel_areas(quad_x, quad_y, centers)
@@ -105,15 +115,32 @@ def _exact_conservative_polygon_project(
                 continue
             vc = centers[valid]
             vo = overlaps[valid]
-            i_idx = (vc[:, 1].to(dtype=torch.int64) * width + vc[:, 0].to(dtype=torch.int64)).to(dtype=torch.int64)
+            i_idx = (
+                vc[:, 1].to(dtype=torch.int64) * width + vc[:, 0].to(dtype=torch.int64)
+            ).to(dtype=torch.int64)
             c_coeff = (vo / area).to(dtype=torch.float32)
             flat_numer.scatter_add_(0, i_idx, numer_chunk[idx] * c_coeff)
             flat_weight.scatter_add_(0, i_idx, weight_chunk[idx] * c_coeff)
+            if flat_variance_weight is not None:
+                flat_variance_weight.scatter_add_(
+                    0,
+                    i_idx,
+                    weight_chunk[idx] * torch.square(c_coeff),
+                )
 
     numer = flat_numer.reshape(target.shape)
     weight = flat_weight.reshape(target.shape)
     numer = torch.where(weight > 0.0, numer, torch.zeros_like(numer))
     weight = torch.where(weight > 0.0, weight, torch.zeros_like(weight))
+    if return_variance_weight:
+        assert flat_variance_weight is not None
+        variance_weight = flat_variance_weight.reshape(target.shape)
+        variance_weight = torch.where(
+            weight > 0.0,
+            variance_weight,
+            torch.zeros_like(variance_weight),
+        )
+        return numer, weight, variance_weight
     return numer, weight
 
 
@@ -127,6 +154,7 @@ def conservative_polygon_project(
     pixel_area_sr_map_fn,
     representative_pixel_area_fn,
     chunk_pixels: int,
+    return_variance_weight: bool = False,
 ):
     """Project full source-pixel footprints onto the target grid.
 
@@ -143,6 +171,7 @@ def conservative_polygon_project(
         pixel_area_sr_map_fn=pixel_area_sr_map_fn,
         representative_pixel_area_fn=representative_pixel_area_fn,
         chunk_pixels=chunk_pixels,
+        return_variance_weight=return_variance_weight,
     )
 
 

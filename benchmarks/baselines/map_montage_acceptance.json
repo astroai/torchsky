@@ -1,0 +1,18 @@
+[
+  {
+    "case": "synthetic_montage_sin_grid",
+    "library": "montage",
+    "variant": "mProjectPP",
+    "equals": {
+      "comparison_reference_variant": "conservative_polygon",
+      "comparator_version": "0fc9e5ff55ece4ee0b5d731157cf07cc31325724"
+    },
+    "maximum": {
+      "max_abs_data_diff_vs_torchsky": 1e-6,
+      "max_abs_weight_diff_vs_torchsky": 1e-7
+    },
+    "minimum": {
+      "comparison_support_frac_vs_torchsky": 0.99
+    }
+  }
+]

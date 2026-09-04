@@ -71,6 +71,16 @@ def kernel_weight(kernel: MapResamplingKernel, x: Tensor) -> Tensor:
     raise ValueError(f"custom weight is undefined for kernel {kernel!r}")
 
 
+def _normalize_lanczos_coefficients(coefficients: Tensor) -> Tensor:
+    total = coefficients.sum(dim=-1, keepdim=True)
+    safe_total = torch.where(
+        torch.abs(total) > torch.finfo(coefficients.dtype).eps,
+        total,
+        torch.ones_like(total),
+    )
+    return coefficients / safe_total
+
+
 def custom_separable_sample(
     image: Tensor,
     *,
@@ -129,6 +139,9 @@ def custom_separable_sample(
     dy = y_batch.unsqueeze(-1) - ys.to(dtype=work.dtype)
     wx = kernel_weight(kernel, dx)
     wy = kernel_weight(kernel, dy)
+    if kernel in {"lanczos3", "lanczos5"}:
+        wx = _normalize_lanczos_coefficients(wx)
+        wy = _normalize_lanczos_coefficients(wy)
 
     batch, channels, h_src, w_src = work.shape
     x_valid = (xs >= 0) & (xs < w_src)
@@ -288,6 +301,202 @@ def sample_image_plane_batched_channels(
         align_corners=True,
     )
     return sampled.squeeze(0) if image.ndim == 3 and x_src.ndim == 2 else sampled
+
+
+def _axis_interpolation_coefficients(
+    coordinate: Tensor,
+    *,
+    size: int,
+    kernel: MapResamplingKernel,
+) -> tuple[Tensor, Tensor]:
+    finite = torch.isfinite(coordinate)
+    safe_coordinate = torch.where(finite, coordinate, torch.zeros_like(coordinate))
+    if kernel == "nearest":
+        indices = torch.round(safe_coordinate).to(dtype=torch.int64).unsqueeze(-1)
+        coefficients = torch.ones_like(safe_coordinate).unsqueeze(-1)
+    elif kernel == "bilinear":
+        base = torch.floor(safe_coordinate).to(dtype=torch.int64)
+        offsets = torch.arange(2, device=coordinate.device, dtype=torch.int64)
+        indices = base.unsqueeze(-1) + offsets
+        coefficients = 1.0 - torch.abs(
+            safe_coordinate.unsqueeze(-1) - indices.to(dtype=coordinate.dtype)
+        )
+    elif kernel == "bicubic":
+        base = torch.floor(safe_coordinate).to(dtype=torch.int64)
+        offsets = torch.arange(-1, 3, device=coordinate.device, dtype=torch.int64)
+        indices = base.unsqueeze(-1) + offsets
+        coefficients = keys_cubic_weight(
+            safe_coordinate.unsqueeze(-1) - indices.to(dtype=coordinate.dtype),
+            b=0.0,
+            c=0.75,
+        )
+    elif kernel in {
+        "lanczos3",
+        "lanczos5",
+        "mitchell_netravali",
+        "catmull_rom",
+    }:
+        support = kernel_support(kernel)
+        base = torch.floor(safe_coordinate).to(dtype=torch.int64)
+        offsets = torch.arange(
+            -support + 1,
+            support + 1,
+            device=coordinate.device,
+            dtype=torch.int64,
+        )
+        indices = base.unsqueeze(-1) + offsets
+        coefficients = kernel_weight(
+            kernel,
+            safe_coordinate.unsqueeze(-1) - indices.to(dtype=coordinate.dtype),
+        )
+        if kernel in {"lanczos3", "lanczos5"}:
+            coefficients = _normalize_lanczos_coefficients(coefficients)
+    else:
+        raise ValueError(
+            f"diagonal variance coefficients are unavailable for kernel {kernel!r}"
+        )
+    valid = finite.unsqueeze(-1) & (indices >= 0) & (indices < int(size))
+    return indices.clamp(0, int(size) - 1), coefficients * valid.to(
+        dtype=coefficients.dtype
+    )
+
+
+def sample_image_plane_diagonal_variance(
+    source_variance: Tensor,
+    *,
+    x_src: Tensor,
+    y_src: Tensor,
+    kernel: MapResamplingKernel,
+    average_coordinate_batch: bool = False,
+    sample_valid: Tensor | None = None,
+) -> Tensor:
+    """Apply squared interpolation coefficients to independent source variance.
+
+    With ``average_coordinate_batch=True``, the leading coordinate dimension is
+    averaged as one quadrature operator before coefficients are squared. This
+    preserves covariance when multiple samples reuse the same source pixel.
+    """
+    if source_variance.ndim != 2 or not source_variance.is_floating_point():
+        raise ValueError("source_variance must be a floating [H,W] tensor")
+    if x_src.shape != y_src.shape or x_src.ndim not in {2, 3}:
+        raise ValueError("x_src and y_src must be matching [Hq,Wq] or [B,Hq,Wq]")
+    if x_src.device != source_variance.device or y_src.device != source_variance.device:
+        raise ValueError("source_variance, x_src, and y_src must share a device")
+    if bool((source_variance < 0.0).any()) or not bool(
+        torch.isfinite(source_variance).all()
+    ):
+        raise ValueError("source_variance must be finite and non-negative")
+    if average_coordinate_batch and x_src.ndim != 3:
+        raise ValueError("average_coordinate_batch requires [B,Hq,Wq] coordinates")
+    if sample_valid is not None:
+        if sample_valid.shape != x_src.shape or sample_valid.device != x_src.device:
+            raise ValueError("sample_valid must match coordinate shape and device")
+        sample_valid = sample_valid.to(dtype=torch.bool)
+
+    height, width = int(source_variance.shape[0]), int(source_variance.shape[1])
+    if average_coordinate_batch:
+        batch, out_height, out_width = (
+            int(x_src.shape[0]),
+            int(x_src.shape[1]),
+            int(x_src.shape[2]),
+        )
+        pixel_count = out_height * out_width
+        if kernel == "nearest":
+            axis_terms = 1
+        elif kernel == "bilinear":
+            axis_terms = 2
+        elif kernel == "bicubic":
+            axis_terms = 4
+        else:
+            axis_terms = 2 * kernel_support(kernel)
+        terms_per_pixel = batch * axis_terms * axis_terms
+        # ponytail: bounded per-pixel sorting is exact and simple; replace the
+        # Python term scan with a segmented kernel only if quadrature profiles it.
+        chunk_pixels = max(
+            1,
+            min(pixel_count, (64 * 1024 * 1024) // max(48 * terms_per_pixel, 1)),
+        )
+        output = torch.empty(
+            pixel_count,
+            dtype=source_variance.dtype,
+            device=source_variance.device,
+        )
+        flat_x = x_src.reshape(batch, pixel_count)
+        flat_y = y_src.reshape(batch, pixel_count)
+        flat_valid = (
+            None if sample_valid is None else sample_valid.reshape(batch, pixel_count)
+        )
+        source_flat = source_variance.reshape(-1)
+        for start in range(0, pixel_count, chunk_pixels):
+            stop = min(start + chunk_pixels, pixel_count)
+            x_indices, x_coefficients = _axis_interpolation_coefficients(
+                flat_x[:, start:stop].to(dtype=source_variance.dtype),
+                size=width,
+                kernel=kernel,
+            )
+            y_indices, y_coefficients = _axis_interpolation_coefficients(
+                flat_y[:, start:stop].to(dtype=source_variance.dtype),
+                size=height,
+                kernel=kernel,
+            )
+            indices = (
+                y_indices.unsqueeze(-1) * width + x_indices.unsqueeze(-2)
+            ).permute(1, 0, 2, 3)
+            coefficients = y_coefficients.unsqueeze(-1) * x_coefficients.unsqueeze(-2)
+            if flat_valid is not None:
+                coefficients = coefficients * flat_valid[:, start:stop].unsqueeze(
+                    -1
+                ).unsqueeze(-1).to(dtype=coefficients.dtype)
+            coefficients = coefficients.permute(1, 0, 2, 3) / float(batch)
+            indices = indices.reshape(stop - start, terms_per_pixel)
+            coefficients = coefficients.reshape(stop - start, terms_per_pixel)
+            sorted_indices, order = torch.sort(indices, dim=1)
+            sorted_coefficients = torch.gather(coefficients, 1, order)
+            current_index = sorted_indices[:, 0]
+            current_coefficient = sorted_coefficients[:, 0]
+            variance = torch.zeros(
+                stop - start,
+                dtype=source_variance.dtype,
+                device=source_variance.device,
+            )
+            for term in range(1, terms_per_pixel):
+                next_index = sorted_indices[:, term]
+                next_coefficient = sorted_coefficients[:, term]
+                same = next_index == current_index
+                variance = variance + torch.where(
+                    same,
+                    torch.zeros_like(variance),
+                    source_flat[current_index] * torch.square(current_coefficient),
+                )
+                current_index = torch.where(same, current_index, next_index)
+                current_coefficient = torch.where(
+                    same,
+                    current_coefficient + next_coefficient,
+                    next_coefficient,
+                )
+            output[start:stop] = variance + source_flat[current_index] * torch.square(
+                current_coefficient
+            )
+        return output.reshape(out_height, out_width)
+
+    x_indices, x_coefficients = _axis_interpolation_coefficients(
+        x_src.to(dtype=source_variance.dtype),
+        size=width,
+        kernel=kernel,
+    )
+    y_indices, y_coefficients = _axis_interpolation_coefficients(
+        y_src.to(dtype=source_variance.dtype),
+        size=height,
+        kernel=kernel,
+    )
+    flat_indices = y_indices.unsqueeze(-1) * width + x_indices.unsqueeze(-2)
+    coefficients = y_coefficients.unsqueeze(-1) * x_coefficients.unsqueeze(-2)
+    if sample_valid is not None:
+        coefficients = coefficients * sample_valid.unsqueeze(-1).unsqueeze(-1).to(
+            dtype=coefficients.dtype
+        )
+    sampled_variance = source_variance.reshape(-1)[flat_indices]
+    return torch.sum(sampled_variance * torch.square(coefficients), dim=(-1, -2))
 
 
 def infer_fft_translation_shift_yx(

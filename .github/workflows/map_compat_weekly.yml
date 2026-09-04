@@ -49,3 +49,49 @@ jobs:
             --swarp-kernels bilinear \
             --json-out benchmark_results/map_compat_weekly.json \
             --baseline-json benchmarks/baselines/map_compat_ci_gate.json
+
+  official-workflow-comparators:
+    name: Official Drizzle, SWarp, and Montage comparators
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install source-build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential autoconf automake libtool pkg-config
+
+      - uses: prefix-dev/setup-pixi@v0.8.0
+        with:
+          pixi-version: latest
+
+      - name: Install map-compat environment
+        run: pixi install --frozen -e map-compat
+
+      - name: Build editable torchsky
+        run: pixi run -e map-compat -- pip install -e . --no-build-isolation
+
+      - name: Build pinned official SWarp and Montage sources
+        run: |
+          pixi run -e map-compat -- python scripts/bootstrap_map_compat_tools.py --tool swarp --force-source
+          pixi run -e map-compat -- python scripts/bootstrap_map_compat_tools.py --tool montage --force-source
+
+      - name: Require official workflow comparator rows
+        run: |
+          pixi run bench-map-drizzle-required
+          pixi run bench-map-swarp-required
+          pixi run bench-map-swarp-clipped-required
+          pixi run bench-map-montage-required
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: official-map-workflow-comparators
+          path: |
+            benchmark_results/map_drizzle_required.json
+            benchmark_results/map_drizzle_required.md
+            benchmark_results/map_swarp_required.json
+            benchmark_results/map_swarp_required.md
+            benchmark_results/map_swarp_clipped_required.json
+            benchmark_results/map_swarp_clipped_required.md
+            benchmark_results/map_montage_required.json
+            benchmark_results/map_montage_required.md

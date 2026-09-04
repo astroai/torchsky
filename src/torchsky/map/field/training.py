@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 import math
 import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import torch
@@ -32,6 +33,7 @@ from .bandpass import (
 from .core import (
     _BaseFieldModel,
     BandpassConditionedField,
+    DiffuseFoamHybridField,
     FieldComponentDecomposition,
     FourierMLPField,
     HashGridConditionedField,
@@ -69,6 +71,7 @@ from .rendering import (
     render_field_samples_distribution,
 )
 from .types import (
+    FieldAMPDtype,
     FieldCentroidAnchorTerm,
     FieldComponentAnchorTerm,
     FieldCurriculum,
@@ -85,6 +88,27 @@ from .types import (
     FieldSpectralSampling,
     ForwardContext,
 )
+
+
+def _mixture_render_kwargs(
+    observation: FieldObservation,
+    wavelengths: Tensor,
+    proposal_probs: Tensor,
+) -> dict[str, Any]:
+    weights = _mixture_importance_weights(
+        observation,
+        wavelengths,
+        proposal_probs,
+    )
+    if bool(weights.sum() > 0.0):
+        return {
+            "override_wavelengths": wavelengths,
+            "override_weights": weights,
+            "spectral_sampling": "deterministic_quadrature",
+        }
+    # ponytail: a finite shared Monte Carlo draw can miss a disjoint passband;
+    # use its exact per-observation quadrature instead of increasing every draw.
+    return {"spectral_sampling": "deterministic_quadrature"}
 
 
 def _structured_noise_loss(
@@ -880,6 +904,9 @@ def fit_field_model(
     spectral_observability_weight: float = 0.0,
     spectral_observability_probe_grid_size: int = 8,
     residual_head_penalty_weight: float = 0.0,
+    hybrid_foam_sparsity_weight: float = 0.0,
+    hybrid_correlation_weight: float = 0.0,
+    hybrid_probe_grid_size: int = 8,
     operator_scale_gate_weight: float = 0.0,
     operator_scale_shift_weight: float = 0.0,
     noise_pretrain_kind: FieldNoisePretrainKind = "none",
@@ -891,6 +918,8 @@ def fit_field_model(
     noise_pretrain_max_frequency: float = 8.0,
     freeze_field_encoder: bool = False,
     freeze_field_body: bool = False,
+    amp_dtype: FieldAMPDtype = "none",
+    amp_scaler_state: Mapping[str, Any] | None = None,
     device: torch.device | str | None = None,
     observation_forward_contexts: Sequence[ForwardContext | None] | None = None,
     observation_operator_bundles: Sequence[ObservationOperatorBundle] | None = None,
@@ -900,11 +929,69 @@ def fit_field_model(
     anchor_first_pose: bool = True,
     render_spatial_tile_hw: tuple[int, int] | None = None,
     diagnostic_spatial_tile_hw: tuple[int, int] | None = None,
+    optimizer_state: Mapping[str, Any] | None = None,
+    sampling_rng_state: Tensor | None = None,
     _progress_callback: Callable[[int, float], None] | None = None,
 ) -> FieldFitResult:
     if not observations:
         raise ValueError("fit_field_model requires at least one observation")
+    fit_call_args = dict(locals())
+    amp_name = str(amp_dtype)
+    if amp_name in {"float16", "bfloat16"}:
+        amp_device = resolve_fit_device(model, device)
+        if amp_device.type != "cuda" or not torch.cuda.is_available():
+            raise ValueError("field AMP is supported only on CUDA")
+        if amp_name == "bfloat16" and not torch.cuda.is_bf16_supported():
+            raise ValueError("CUDA device does not support bfloat16 AMP")
+        if noise_pretrain_kind != "none" or int(noise_pretrain_steps) > 0:
+            raise ValueError(
+                "field AMP does not yet support noise pretraining; run it in FP32"
+            )
+        recursive_args = fit_call_args
+        recursive_args["amp_dtype"] = f"_active_{amp_name}"
+        autocast_dtype = (
+            torch.float16 if amp_name == "float16" else torch.bfloat16
+        )
+        with torch.autocast(
+            device_type="cuda",
+            dtype=autocast_dtype,
+        ):
+            return fit_field_model(**recursive_args)
+    if amp_name == "none":
+        active_amp_name: str | None = None
+    elif amp_name in {"_active_float16", "_active_bfloat16"}:
+        active_amp_name = amp_name.removeprefix("_active_")
+    else:
+        raise ValueError(
+            "amp_dtype must be 'none', 'float16', or 'bfloat16'"
+        )
     train_device = resolve_fit_device(model, device)
+    amp_active = active_amp_name is not None
+    amp_scaler = (
+        torch.amp.GradScaler(
+            "cuda",
+            enabled=active_amp_name == "float16",
+        )
+        if amp_active
+        else None
+    )
+    if amp_scaler_state is not None:
+        if amp_scaler is None:
+            raise ValueError("amp_scaler_state requires amp_dtype")
+        amp_scaler.load_state_dict(dict(amp_scaler_state))
+
+    def _amp_disabled():
+        if amp_active:
+            return torch.autocast(device_type="cuda", enabled=False)
+        return nullcontext()
+
+    def _backward(loss: Tensor) -> None:
+        with _amp_disabled():
+            if amp_scaler is not None and amp_scaler.is_enabled():
+                amp_scaler.scale(loss).backward()
+            else:
+                loss.backward()
+
     model = model.to(device=train_device)
     obs_operator_bundles = (
         tuple(observation_operator_bundles)
@@ -1079,6 +1166,8 @@ def fit_field_model(
         lr=base_lr,
         weight_decay=max(float(weight_decay), 0.0),
     )
+    if optimizer_state is not None:
+        optimizer.load_state_dict(dict(optimizer_state))
     gradient_weight = max(float(gradient_residual_weight), 0.0)
 
     # ── Pre-training loss on full observations ──────────────────────
@@ -1086,7 +1175,7 @@ def fit_field_model(
     # (same computation path as the post-training final_loss), so initial_loss
     # and final_loss are directly comparable regardless of which random patches
     # happen to be selected in the first training step.
-    with torch.no_grad():
+    with torch.no_grad(), _amp_disabled():
         pre_train_loss = _compute_full_observation_losses(
             observations,
             model,
@@ -1105,6 +1194,7 @@ def fit_field_model(
 
     model.train()
     loss_history: list[float] = []
+    amp_overflow_steps = 0
     anchor_count = max(int(spectral_anchor_observations_per_step), 0)
     anchor_num_samples = (
         int(spectral_anchor_num_samples)
@@ -1136,13 +1226,32 @@ def fit_field_model(
     spectral_penalty_weight = max(float(spectral_observability_weight), 0.0)
     spectral_penalty_grid = max(int(spectral_observability_probe_grid_size), 2)
     residual_penalty_weight = max(float(residual_head_penalty_weight), 0.0)
+    hybrid_sparsity_weight = float(hybrid_foam_sparsity_weight)
+    hybrid_separation_weight = float(hybrid_correlation_weight)
+    if (
+        not math.isfinite(hybrid_sparsity_weight)
+        or not math.isfinite(hybrid_separation_weight)
+        or hybrid_sparsity_weight < 0.0
+        or hybrid_separation_weight < 0.0
+    ):
+        raise ValueError("hybrid regularization weights must be finite and non-negative")
+    if (
+        hybrid_sparsity_weight > 0.0 or hybrid_separation_weight > 0.0
+    ) and not isinstance(model, DiffuseFoamHybridField):
+        raise ValueError("hybrid regularization requires DiffuseFoamHybridField")
+    hybrid_grid_size = max(int(hybrid_probe_grid_size), 2)
     scale_gate_weight = max(float(operator_scale_gate_weight), 0.0)
     scale_shift_weight = max(float(operator_scale_shift_weight), 0.0)
     smoothness_domain = getattr(model, "domain", None)
     ema_rate = float(ema_decay)
     use_ema = 0.0 < ema_rate < 1.0
     sampling_generator = torch.Generator(device="cpu")
-    sampling_generator.manual_seed(12345)
+    if sampling_rng_state is None:
+        sampling_generator.manual_seed(12345)
+    else:
+        sampling_generator.set_state(
+            torch.as_tensor(sampling_rng_state, dtype=torch.uint8, device="cpu")
+        )
     ema_params: list[Tensor] | None = None
     if use_ema:
         ema_params = [
@@ -1427,13 +1536,13 @@ def fit_field_model(
             render_kwargs = {}
             if training_spectral_sampling == "mixture_mc":
                 assert mixture_wavelengths is not None and mixture_probs is not None
-                render_kwargs["override_wavelengths"] = mixture_wavelengths
-                render_kwargs["override_weights"] = _mixture_importance_weights(
-                    observation,
-                    mixture_wavelengths,
-                    mixture_probs,
+                render_kwargs.update(
+                    _mixture_render_kwargs(
+                        observation,
+                        mixture_wavelengths,
+                        mixture_probs,
+                    )
                 )
-                render_kwargs["spectral_sampling"] = "deterministic_quadrature"
             else:
                 render_kwargs["spectral_sampling"] = training_spectral_sampling
                 render_kwargs["spectral_sampling_grid_size"] = (
@@ -1622,7 +1731,7 @@ def fit_field_model(
                 else:
                     raise ValueError(f"unsupported loss_reduction {loss_reduction!r}")
                 streamed_total_loss += float(obs_loss.detach().cpu())
-                obs_loss.backward()
+                _backward(obs_loss)
                 if (
                     os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1"
                     and train_device.type == "cuda"
@@ -1791,7 +1900,7 @@ def fit_field_model(
                 if streaming_accumulation:
                     scaled_anchor_loss = anchor_loss_weight * anchor_loss
                     streamed_total_loss += float(scaled_anchor_loss.detach().cpu())
-                    scaled_anchor_loss.backward()
+                    _backward(scaled_anchor_loss)
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
@@ -1814,7 +1923,7 @@ def fit_field_model(
             )
             if streaming_accumulation:
                 streamed_total_loss += float(anchor_component_loss.detach().cpu())
-                anchor_component_loss.backward()
+                _backward(anchor_component_loss)
                 total_loss = torch.tensor(
                     streamed_total_loss,
                     dtype=torch.float32,
@@ -1833,7 +1942,7 @@ def fit_field_model(
             )
             if streaming_accumulation:
                 streamed_total_loss += float(centroid_anchor_loss.detach().cpu())
-                centroid_anchor_loss.backward()
+                _backward(centroid_anchor_loss)
                 total_loss = torch.tensor(
                     streamed_total_loss,
                     dtype=torch.float32,
@@ -1850,16 +1959,12 @@ def fit_field_model(
                 context_render_kwargs["exposure_pose"] = ctx_pose
                 if training_spectral_sampling == "mixture_mc":
                     assert mixture_wavelengths is not None and mixture_probs is not None
-                    context_render_kwargs["override_wavelengths"] = mixture_wavelengths
-                    context_render_kwargs["override_weights"] = (
-                        _mixture_importance_weights(
+                    context_render_kwargs.update(
+                        _mixture_render_kwargs(
                             context_observation,
                             mixture_wavelengths,
                             mixture_probs,
                         )
-                    )
-                    context_render_kwargs["spectral_sampling"] = (
-                        "deterministic_quadrature"
                     )
                 else:
                     context_render_kwargs["spectral_sampling"] = (
@@ -1929,7 +2034,7 @@ def fit_field_model(
                 scaled_context_loss = scaled_context_weight * context_loss
                 if streaming_accumulation:
                     streamed_total_loss += float(scaled_context_loss.detach().cpu())
-                    scaled_context_loss.backward()
+                    _backward(scaled_context_loss)
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
@@ -1965,7 +2070,7 @@ def fit_field_model(
             if streaming_accumulation:
                 scaled_smoothness_loss = smoothness_weight * smoothness_loss
                 streamed_total_loss += float(scaled_smoothness_loss.detach().cpu())
-                scaled_smoothness_loss.backward()
+                _backward(scaled_smoothness_loss)
                 total_loss = torch.tensor(
                     streamed_total_loss,
                     dtype=torch.float32,
@@ -1985,7 +2090,7 @@ def fit_field_model(
                 scaled_spectral_penalty = spectral_penalty_weight * spectral_penalty
                 if streaming_accumulation:
                     streamed_total_loss += float(scaled_spectral_penalty.detach().cpu())
-                    scaled_spectral_penalty.backward()
+                    _backward(scaled_spectral_penalty)
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
@@ -2003,7 +2108,7 @@ def fit_field_model(
                 scaled_residual_penalty = residual_penalty_weight * residual_penalty
                 if streaming_accumulation:
                     streamed_total_loss += float(scaled_residual_penalty.detach().cpu())
-                    scaled_residual_penalty.backward()
+                    _backward(scaled_residual_penalty)
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
@@ -2014,6 +2119,33 @@ def fit_field_model(
                     )
                 else:
                     total_loss = total_loss + scaled_residual_penalty
+        if hybrid_sparsity_weight > 0.0 or hybrid_separation_weight > 0.0:
+            assert isinstance(model, DiffuseFoamHybridField)
+            hybrid_ra, hybrid_dec = _smoothness_probe_grid(
+                model.domain,
+                grid_size=hybrid_grid_size,
+                device=train_device,
+            )
+            hybrid_penalty = model.component_regularization(
+                hybrid_ra,
+                hybrid_dec,
+                torch.full_like(
+                    hybrid_ra,
+                    float(model.domain.wavelength_center),
+                ),
+                foam_sparsity_weight=hybrid_sparsity_weight,
+                correlation_weight=hybrid_separation_weight,
+            )
+            if streaming_accumulation:
+                streamed_total_loss += float(hybrid_penalty.detach().cpu())
+                _backward(hybrid_penalty)
+                total_loss = torch.tensor(
+                    streamed_total_loss,
+                    dtype=torch.float32,
+                    device=train_device,
+                )
+            else:
+                total_loss = total_loss + hybrid_penalty
         if scale_gate_weight > 0.0 or scale_shift_weight > 0.0:
             conditioning_penalties = [
                 operator_model.conditioning_regularization(  # type: ignore[attr-defined]
@@ -2026,7 +2158,7 @@ def fit_field_model(
                 conditioning_penalty = torch.stack(conditioning_penalties).mean()
                 if streaming_accumulation:
                     streamed_total_loss += float(conditioning_penalty.detach().cpu())
-                    conditioning_penalty.backward()
+                    _backward(conditioning_penalty)
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
@@ -2045,7 +2177,7 @@ def fit_field_model(
             if streaming_accumulation:
                 streamed_total_loss += float(calibration_penalty.detach().cpu())
                 if calibration_penalty.requires_grad:
-                    calibration_penalty.backward()
+                    _backward(calibration_penalty)
                 total_loss = torch.tensor(
                     streamed_total_loss,
                     dtype=torch.float32,
@@ -2059,11 +2191,25 @@ def fit_field_model(
         assert total_loss is not None
         loss_history.append(float(total_loss.detach().cpu()))
         if not streaming_accumulation:
-            total_loss.backward()
-        if grad_clip_norm is not None:
-            torch.nn.utils.clip_grad_norm_(trainable_params, float(grad_clip_norm))
-        optimizer.step()
-        if use_ema and ema_params is not None:
+            _backward(total_loss)
+        optimizer_step_applied = True
+        with _amp_disabled():
+            if amp_scaler is not None and amp_scaler.is_enabled():
+                amp_scaler.unscale_(optimizer)
+            if grad_clip_norm is not None:
+                torch.nn.utils.clip_grad_norm_(
+                    trainable_params, float(grad_clip_norm)
+                )
+            if amp_scaler is not None and amp_scaler.is_enabled():
+                scale_before = float(amp_scaler.get_scale())
+                amp_scaler.step(optimizer)
+                amp_scaler.update()
+                optimizer_step_applied = float(amp_scaler.get_scale()) >= scale_before
+            else:
+                optimizer.step()
+        if not optimizer_step_applied:
+            amp_overflow_steps += 1
+        if optimizer_step_applied and use_ema and ema_params is not None:
             ema_index = 0
             with torch.no_grad():
                 for param in model.parameters():
@@ -2085,7 +2231,7 @@ def fit_field_model(
                 param.copy_(ema_params[ema_index])
                 ema_index += 1
     model.eval()
-    with torch.no_grad():
+    with torch.no_grad(), _amp_disabled():
         final_loss = _compute_full_observation_losses(
             observations,
             model,
@@ -2111,22 +2257,36 @@ def fit_field_model(
         max_mem = torch.cuda.max_memory_allocated()
         torch.cuda.reset_peak_memory_stats()
 
-    diagnostics = compute_field_fit_diagnostics(
-        model=model,
-        observations=observations,
-        obs_forward_ctx=obs_forward_ctx,
-        obs_exposure_poses=obs_exposure_poses,
-        obs_operator_bundles=obs_operator_bundles,
-        num_spectral_samples=num_spectral_samples,
-        fit_duration_sec=duration,
-        steps=int(steps),
-        total_pixels=total_pixels,
-        max_mem=max_mem,
-        spatial_sampling=spatial_sampling,
-        spatial_tile_hw=diagnostic_spatial_tile_hw,
-    )
+    with _amp_disabled():
+        diagnostics = compute_field_fit_diagnostics(
+            model=model,
+            observations=observations,
+            obs_forward_ctx=obs_forward_ctx,
+            obs_exposure_poses=obs_exposure_poses,
+            obs_operator_bundles=obs_operator_bundles,
+            num_spectral_samples=num_spectral_samples,
+            fit_duration_sec=duration,
+            steps=int(steps),
+            total_pixels=total_pixels,
+            max_mem=max_mem,
+            spatial_sampling=spatial_sampling,
+            spatial_tile_hw=diagnostic_spatial_tile_hw,
+        )
     diagnostics = dict(diagnostics or {})
     diagnostics["operator_bundle"] = operator_bundle.enabled_operator_names()
+    diagnostics["amp_dtype"] = active_amp_name or "none"
+    diagnostics["amp_scaler_enabled"] = bool(
+        amp_scaler is not None and amp_scaler.is_enabled()
+    )
+    diagnostics["amp_overflow_steps"] = int(amp_overflow_steps)
+    if isinstance(model, DiffuseFoamHybridField):
+        diagnostics["hybrid"] = {
+            "training_stage": model.training_stage,
+            "component_identifiability": model.component_identifiability,
+            "foam_sparsity_weight": hybrid_sparsity_weight,
+            "correlation_weight": hybrid_separation_weight,
+            "probe_grid_size": hybrid_grid_size,
+        }
     scale_diagnostics = []
     for slot_name, operator_model in conditioning_models:
         report = getattr(operator_model.encoder, "scale_diagnostics", None)  # type: ignore[attr-defined]
@@ -2174,11 +2334,92 @@ def fit_field_model(
         ),
         operator_bundle=operator_bundle,
         observation_operator_bundles=obs_operator_bundles,
+        optimizer_state=optimizer.state_dict(),
+        amp_scaler_state=(
+            amp_scaler.state_dict() if amp_scaler is not None else None
+        ),
+        sampling_rng_state=sampling_generator.get_state(),
+        completed_steps=int(steps),
         _pre_train_loss=pre_train_loss,
     )
 
 
+def fit_diffuse_foam_hybrid(
+    observations: Sequence[FieldObservation],
+    model: DiffuseFoamHybridField,
+    *,
+    diffuse_steps: int,
+    foam_steps: int,
+    joint_steps: int,
+    joint_foam_sparsity_weight: float = 0.0,
+    joint_correlation_weight: float = 0.0,
+    **fit_kwargs: Any,
+) -> FieldFitResult:
+    """Fit diffuse, localized, then joint hybrid stages on one operator path."""
+    stage_steps = {
+        "diffuse": int(diffuse_steps),
+        "foam": int(foam_steps),
+        "joint": int(joint_steps),
+    }
+    if any(steps < 1 for steps in stage_steps.values()):
+        raise ValueError("all diffuse/Foam hybrid stages require at least one step")
+    forbidden = {
+        "steps",
+        "optimizer_state",
+        "amp_scaler_state",
+        "hybrid_foam_sparsity_weight",
+        "hybrid_correlation_weight",
+    }.intersection(fit_kwargs)
+    if forbidden:
+        raise ValueError(
+            "fit_diffuse_foam_hybrid owns stage state and regularization: "
+            + ", ".join(sorted(forbidden))
+        )
+    sampling_rng_state = fit_kwargs.pop("sampling_rng_state", None)
+    stage_results: list[FieldFitResult] = []
+    for stage in ("diffuse", "foam", "joint"):
+        model.set_training_stage(stage)  # type: ignore[arg-type]
+        result = fit_field_model(
+            observations,
+            model,
+            steps=stage_steps[stage],
+            sampling_rng_state=sampling_rng_state,
+            hybrid_foam_sparsity_weight=(
+                float(joint_foam_sparsity_weight) if stage == "joint" else 0.0
+            ),
+            hybrid_correlation_weight=(
+                float(joint_correlation_weight) if stage == "joint" else 0.0
+            ),
+            **fit_kwargs,
+        )
+        sampling_rng_state = result.sampling_rng_state
+        stage_results.append(result)
+    final = stage_results[-1]
+    final.loss_history = tuple(
+        loss for result in stage_results for loss in result.loss_history
+    )
+    final.completed_steps = sum(stage_steps.values())
+    final._pre_train_loss = stage_results[0].initial_loss
+    diagnostics = dict(final.diagnostics or {})
+    diagnostics["hybrid_stages"] = [
+        {
+            "stage": stage,
+            "steps": stage_steps[stage],
+            "initial_loss": result.initial_loss,
+            "final_loss": result.final_loss,
+        }
+        for stage, result in zip(
+            ("diffuse", "foam", "joint"),
+            stage_results,
+            strict=True,
+        )
+    ]
+    final.diagnostics = diagnostics
+    return final
+
+
 __all__ = [
+    "fit_diffuse_foam_hybrid",
     "fit_field_component_decomposition",
     "fit_field_model",
     "_noise_pretrain_field_model",

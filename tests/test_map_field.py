@@ -98,7 +98,6 @@ class _ConstantDistributionField(_ConstantField):
         self.log_variance = torch.nn.Parameter(
             torch.tensor(math.log(float(variance)), dtype=torch.float32)
         )
-
     def forward_distribution(
         self,
         ra_deg: torch.Tensor,
@@ -114,6 +113,100 @@ class _ConstantDistributionField(_ConstantField):
             forward_context=forward_context,
         )
         return mean, torch.zeros_like(mean) + self.log_variance
+
+
+def test_fit_field_model_rejects_amp_off_cuda() -> None:
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.01,
+        wavelength_center=5000.0,
+        wavelength_scale=500.0,
+    )
+    observation = FieldObservation(
+        image=torch.ones((4, 4), dtype=torch.float32),
+        header=_tan_header(
+            4, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0
+        ),
+        weight=torch.ones((4, 4), dtype=torch.float32),
+        spectral_min=4500.0,
+        spectral_max=5500.0,
+        transmission_center=5000.0,
+    )
+
+    with pytest.raises(ValueError, match="CUDA"):
+        fit_field_model(
+            [observation],
+            _ConstantField(domain, 0.0),
+            steps=1,
+            device="cpu",
+            amp_dtype="float16",
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_fit_field_model_amp_skips_overflowing_step() -> None:
+    class OverflowField(_BaseFieldModel):
+        def __init__(self, domain: FieldDomain) -> None:
+            super().__init__(domain)
+            self.linear = torch.nn.Linear(3, 1)
+            torch.nn.init.constant_(self.linear.weight, 0.1)
+            torch.nn.init.constant_(self.linear.bias, 0.1)
+
+        def forward(self, ra_deg, dec_deg, wavelength_angstrom):
+            wavelength = torch.as_tensor(
+                wavelength_angstrom, device=ra_deg.device, dtype=ra_deg.dtype
+            ).expand_as(ra_deg)
+            features = torch.stack(
+                (
+                    (ra_deg - 150.0) / 0.01,
+                    (dec_deg - 2.0) / 0.01,
+                    wavelength / 5000.0,
+                ),
+                dim=-1,
+            )
+            return self.linear(features).squeeze(-1) * 1.0e6
+
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.01,
+        wavelength_center=5000.0,
+        wavelength_scale=500.0,
+    )
+    model = OverflowField(domain)
+    initial = {
+        name: parameter.detach().clone()
+        for name, parameter in model.named_parameters()
+    }
+    observation = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=_tan_header(
+            4, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0
+        ),
+        weight=torch.ones((4, 4), dtype=torch.float32),
+        spectral_min=4500.0,
+        spectral_max=5500.0,
+        transmission_center=5000.0,
+    )
+
+    result = fit_field_model(
+        [observation],
+        model,
+        steps=1,
+        lr=1.0e-3,
+        grad_clip_norm=1.0,
+        device="cuda",
+        amp_dtype="float16",
+    )
+
+    assert result.diagnostics is not None
+    assert result.diagnostics["amp_dtype"] == "float16"
+    assert result.diagnostics["amp_scaler_enabled"] is True
+    assert result.diagnostics["amp_overflow_steps"] == 1
+    assert result.amp_scaler_state is not None
+    for name, parameter in result.model.named_parameters():
+        torch.testing.assert_close(parameter.cpu(), initial[name])
 
 
 class _AffineSpectralField(_BaseFieldModel):
@@ -587,7 +680,7 @@ def test_field_spatial_sampling_rejects_unknown_mode() -> None:
         )
 
 
-def test_render_field_observation_distribution_fallback_applies_operators_once() -> None:
+def test_render_field_observation_distribution_rejects_missing_uncertainty() -> None:
     domain = FieldDomain(
         center_ra_deg=150.0,
         center_dec_deg=2.0,
@@ -603,25 +696,19 @@ def test_render_field_observation_distribution_fallback_applies_operators_once()
         background_offset=3.0,
     )
 
-    mean, logvar = render_field_observation_distribution(
-        model,
-        observation,
-        num_spectral_samples=1,
-    )
-
-    torch.testing.assert_close(mean, torch.full((4, 4), 5.0))
-    torch.testing.assert_close(logvar, torch.zeros((4, 4), dtype=torch.float32))
-    quadrature_mean, quadrature_logvar = render_field_observation_distribution(
-        model,
-        observation,
-        num_spectral_samples=1,
-        spatial_sampling="gauss_legendre_2x2",
-    )
-    torch.testing.assert_close(quadrature_mean, mean)
-    torch.testing.assert_close(
-        quadrature_logvar,
-        torch.full_like(logvar, math.log(0.25)),
-    )
+    with pytest.raises(ValueError, match="explicit predictive distribution"):
+        render_field_observation_distribution(
+            model,
+            observation,
+            num_spectral_samples=1,
+        )
+    with pytest.raises(ValueError, match="explicit predictive distribution"):
+        render_field_observation_distribution(
+            model,
+            observation,
+            num_spectral_samples=1,
+            spatial_sampling="gauss_legendre_2x2",
+        )
 
 
 def test_distribution_tiling_and_psf_variance_match_full_render() -> None:
@@ -2661,6 +2748,39 @@ def test_fit_field_model_supports_mixture_mc_training() -> None:
     assert fit.final_loss < fit.initial_loss
 
 
+def test_fit_field_model_mixture_mc_falls_back_for_uncovered_bandpass() -> None:
+    torch.manual_seed(8643)
+    header = _tan_header(4, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0)
+    observations = [
+        FieldObservation(
+            image=torch.ones((4, 4), dtype=torch.float32),
+            header=header,
+            weight=torch.ones((4, 4), dtype=torch.float32),
+            spectral_min=lower,
+            spectral_max=upper,
+            band_name=name,
+        )
+        for lower, upper, name in (
+            (4_000.0, 4_100.0, "blue"),
+            (8_000.0, 8_100.0, "red"),
+        )
+    ]
+    model = SineImplicitField(
+        estimate_field_domain(observations), hidden_dim=8, hidden_layers=1
+    )
+
+    fit = fit_field_model(
+        observations,
+        model,
+        steps=1,
+        lr=1.0e-3,
+        num_spectral_samples=1,
+        training_spectral_sampling="mixture_mc",
+    )
+
+    assert math.isfinite(fit.final_loss)
+
+
 def test_fit_field_model_supports_sphere_xyz_coordinates() -> None:
     torch.manual_seed(4321)
     truth_domain = FieldDomain(
@@ -4057,6 +4177,18 @@ def test_field_observation_rejects_partial_transmission_table() -> None:
             spectral_max=2.0,
             transmission_wavelength=torch.tensor([1.0, 2.0], dtype=torch.float32),
             transmission_throughput=None,
+        )
+
+
+def test_field_observation_rejects_zero_mass_transmission_table() -> None:
+    with pytest.raises(ValueError, match="positive total throughput"):
+        FieldObservation(
+            image=torch.zeros((2, 2), dtype=torch.float32),
+            header=_tan_header(2, crval1=0.0, crval2=0.0, scale_deg=1.0 / 3600.0),
+            spectral_min=1.0,
+            spectral_max=2.0,
+            transmission_wavelength=torch.tensor([1.0, 2.0], dtype=torch.float32),
+            transmission_throughput=torch.zeros(2, dtype=torch.float32),
         )
 
 

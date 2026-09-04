@@ -474,7 +474,7 @@ benchmark. CI gets deterministic helper tests and, optionally, the tiny smoke ga
 Current joint-field floor, using existing code:
 
 ```bash
-cd /Users/fabbros/src/torchsky
+cd /Users/fabbros/src/sfabbro/torchsky
 pixi run -e sphere-bench python benchmarks/bench_map_field_fit.py \
   --size 48 --steps 120 --runs 1 \
   --cases tpv_field_fit_deep_multiband_broad \
@@ -486,7 +486,7 @@ pixi run -e sphere-bench python benchmarks/bench_map_field_fit.py \
 Current six-band real exposure inventory and joint-fit smoke:
 
 ```bash
-cd /Users/fabbros/src/torchsky
+cd /Users/fabbros/src/sfabbro/torchsky
 pixi run -e sphere-bench python benchmarks/bench_map_smacs0723_field_fit_joint.py \
   --bands F090W,F150W,F200W,F277W,F356W,F444W \
   --input-product cal --module b --crop-size 32 --steps 4 \
@@ -499,14 +499,14 @@ pixi run -e sphere-bench python benchmarks/bench_map_smacs0723_field_fit_joint.p
 Planned deterministic tests:
 
 ```bash
-cd /Users/fabbros/src/torchsky
+cd /Users/fabbros/src/sfabbro/torchsky
 pixi run -e test -- pytest tests/test_multiband_depth_benchmark.py -q
 ```
 
 Current production-operator classical floor:
 
 ```bash
-cd /Users/fabbros/src/torchsky
+cd /Users/fabbros/src/sfabbro/torchsky
 pixi run -e sphere-bench python benchmarks/bench_multiband_depth.py \
   --profile classical-smoke --device cpu --seed 101 --size 20 \
   --bands 3 --sources 3 --exposures 2 \

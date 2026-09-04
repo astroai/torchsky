@@ -97,7 +97,39 @@ def _injection_manifest_tensors(
     flux = torch.as_tensor(band_flux, dtype=torch.float64)
     if world.ndim != 2 or world.shape[1] != 2 or flux.shape != (world.shape[0],):
         raise ValueError("injection manifest coordinates/flux have inconsistent shapes")
+    if not torch.isfinite(world).all() or not torch.isfinite(flux).all():
+        raise ValueError("injection manifest coordinates/flux must be finite")
+    if torch.any(flux < 0):
+        raise ValueError("injection manifest flux must be non-negative")
     return world, flux
+
+
+def _injection_manifest_sign(manifest: dict[str, Any]) -> int:
+    """Return a fail-closed sign for an explicitly labelled control manifest."""
+
+    control = manifest.get("injection_control")
+    if control is None:
+        return 1
+    if not isinstance(control, dict):
+        raise ValueError("injection_control must be a mapping")
+    mode = str(control.get("mode", "")).strip().lower()
+    expected = {
+        "positive": 1,
+        "blank": 1,
+        "negative": -1,
+        "shuffled_band": 1,
+    }.get(mode)
+    if expected is None:
+        raise ValueError(f"unsupported injection control mode {mode!r}")
+    sign = control.get("sign")
+    if (
+        isinstance(sign, bool)
+        or not isinstance(sign, int)
+        or sign not in (-1, 1)
+        or sign != expected
+    ):
+        raise ValueError("injection control mode/sign are inconsistent")
+    return expected
 
 
 def _band_spec(band: str) -> dict[str, Any]:
