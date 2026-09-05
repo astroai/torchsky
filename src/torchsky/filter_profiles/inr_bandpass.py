@@ -6,7 +6,9 @@ via ``astroquery.svo_fps`` (optional dependency).
 
 from __future__ import annotations
 
+import json
 import math
+import os
 import re
 from pathlib import Path
 from typing import Any, Literal
@@ -227,6 +229,113 @@ def _pick_svo_row(
     return table[best_i]
 
 
+def _sanitize_filename(name: str) -> str:
+    """Sanitize filter ID or facility/instrument name for use in cache filename."""
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", str(name).strip())
+
+
+def _svo_cache_dir(custom_path: Path | str | None = None) -> Path:
+    """Resolve directory for persistent SVO filter cache."""
+    if custom_path is not None:
+        p = Path(custom_path).expanduser().resolve()
+    elif os.environ.get("TORCHSKY_SVO_CACHE"):
+        p = Path(os.environ["TORCHSKY_SVO_CACHE"]).expanduser().resolve()
+    else:
+        xdg = os.environ.get("XDG_CACHE_HOME")
+        base = Path(xdg).expanduser().resolve() if xdg else Path.home() / ".cache"
+        p = base / "torchsky" / "svo"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _atomic_write_json(path: Path, data: Any) -> None:
+    """Atomically write JSON data via a temporary file in the same directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        tmp_path.replace(path)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
+
+
+def _load_cached_transmission(
+    cache_dir: Path, filter_id: str
+) -> tuple[torch.Tensor, torch.Tensor] | None:
+    cache_file = cache_dir / f"filter_{_sanitize_filename(filter_id)}.json"
+    if not cache_file.is_file():
+        return None
+    try:
+        with open(cache_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        wl = torch.as_tensor(data["wavelength"], dtype=torch.float64)
+        tr = torch.as_tensor(data["transmission"], dtype=torch.float64)
+        return wl, tr
+    except Exception:
+        return None
+
+
+def _save_cached_transmission(
+    cache_dir: Path, filter_id: str, wl: torch.Tensor, tr: torch.Tensor
+) -> None:
+    cache_file = cache_dir / f"filter_{_sanitize_filename(filter_id)}.json"
+    data = {
+        "filter_id": filter_id,
+        "wavelength": wl.detach().cpu().tolist(),
+        "transmission": tr.detach().cpu().tolist(),
+    }
+    _atomic_write_json(cache_file, data)
+
+
+def _load_cached_filter_list(
+    cache_dir: Path, facility: str, instrument: str
+) -> list[dict[str, Any]] | None:
+    cache_file = (
+        cache_dir
+        / f"index_{_sanitize_filename(facility)}_{_sanitize_filename(instrument)}.json"
+    )
+    if not cache_file.is_file():
+        return None
+    try:
+        with open(cache_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+    except Exception:
+        return None
+    return None
+
+
+def _save_cached_filter_list(
+    cache_dir: Path, facility: str, instrument: str, table: Any
+) -> None:
+    cache_file = (
+        cache_dir
+        / f"index_{_sanitize_filename(facility)}_{_sanitize_filename(instrument)}.json"
+    )
+    rows: list[dict[str, Any]] = []
+    for r in table:
+        row_dict: dict[str, Any] = {"filterID": str(r["filterID"])}
+        for k in (
+            "WavelengthEff",
+            "WavelengthMin",
+            "WavelengthMax",
+            "WavelengthPivot",
+            "FWHM",
+        ):
+            try:
+                val = r[k]
+                if val is not None:
+                    row_dict[k] = float(val)
+            except (KeyError, IndexError, TypeError, ValueError):
+                pass
+        rows.append(row_dict)
+    _atomic_write_json(cache_file, rows)
+
+
 def bandpass_from_svo(
     *,
     band_name: str,
@@ -234,18 +343,30 @@ def bandpass_from_svo(
     instrument: str,
     filter_id: str | None,
     prefer: Literal["classic", "2025", "any"],
+    cache_dir: Path | str | None = None,
+    use_cache: bool = True,
 ) -> dict[str, Any]:
-    try:
-        from astroquery.svo_fps import SvoFps  # type: ignore[import-not-found]
-    except Exception as exc:  # pragma: no cover - optional dependency
-        raise ImportError(
-            "astroquery is required for --inr-spectral-source=svo. "
-            "Install with: pip install 'astroquery>=0.4.6'"
-        ) from exc
-
     bn = str(band_name).strip().upper()
+    cdir = _svo_cache_dir(cache_dir) if use_cache else None
+
     if filter_id:
         fid = str(filter_id).strip()
+        if cdir is not None:
+            cached = _load_cached_transmission(cdir, fid)
+            if cached is not None:
+                wl, tr = cached
+                spec = _summarize_transmission_curve(wl, tr, band_name=bn)
+                spec["svo_filter_id"] = fid
+                return spec
+
+        try:
+            from astroquery.svo_fps import SvoFps  # type: ignore[import-not-found]
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise ImportError(
+                "astroquery is required for --inr-spectral-source=svo when filter profile is not cached. "
+                "Install with: pip install 'astroquery>=0.4.6'"
+            ) from exc
+
         data = SvoFps.get_transmission_data(fid)
         wl = torch.as_tensor(
             data["Wavelength"].value
@@ -259,13 +380,51 @@ def bandpass_from_svo(
             else data["Transmission"],
             dtype=torch.float64,
         )
+        if cdir is not None:
+            _save_cached_transmission(cdir, fid, wl, tr)
         spec = _summarize_transmission_curve(wl, tr, band_name=bn)
         spec["svo_filter_id"] = fid
         return spec
 
-    fl = SvoFps.get_filter_list(facility=facility, instrument=instrument)
+    fl: Any = None
+    if cdir is not None:
+        fl = _load_cached_filter_list(cdir, facility=facility, instrument=instrument)
+
+    if fl is None:
+        try:
+            from astroquery.svo_fps import SvoFps  # type: ignore[import-not-found]
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise ImportError(
+                "astroquery is required for --inr-spectral-source=svo when filter list is not cached. "
+                "Install with: pip install 'astroquery>=0.4.6'"
+            ) from exc
+
+        fl_raw = SvoFps.get_filter_list(facility=facility, instrument=instrument)
+        if cdir is not None:
+            _save_cached_filter_list(
+                cdir, facility=facility, instrument=instrument, table=fl_raw
+            )
+        fl = fl_raw
+
     row = _pick_svo_row(fl, band_token=band_name, prefer=prefer)
     fid_out = str(row["filterID"])
+
+    if cdir is not None:
+        cached = _load_cached_transmission(cdir, fid_out)
+        if cached is not None:
+            wl, tr = cached
+            spec = _summarize_transmission_curve(wl, tr, band_name=bn)
+            spec["svo_filter_id"] = fid_out
+            return spec
+
+    try:
+        from astroquery.svo_fps import SvoFps  # type: ignore[import-not-found]
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise ImportError(
+            "astroquery is required for --inr-spectral-source=svo when filter profile is not cached. "
+            "Install with: pip install 'astroquery>=0.4.6'"
+        ) from exc
+
     data = SvoFps.get_transmission_data(fid_out)
     wl = torch.as_tensor(
         data["Wavelength"].value
@@ -279,6 +438,8 @@ def bandpass_from_svo(
         else data["Transmission"],
         dtype=torch.float64,
     )
+    if cdir is not None:
+        _save_cached_transmission(cdir, fid_out, wl, tr)
     spec = _summarize_transmission_curve(wl, tr, band_name=bn)
     spec["svo_filter_id"] = fid_out
     return spec
@@ -293,6 +454,8 @@ def resolve_inr_bandpass(
     svo_instrument: str,
     svo_filter_id: str | None,
     svo_prefer: Literal["classic", "2025", "any"],
+    svo_cache_dir: Path | str | None = None,
+    svo_use_cache: bool = True,
     transmission_path: Path | None,
     transmission_dir: Path | None,
     transmission_unit: Literal["angstrom", "nm"],
@@ -362,5 +525,7 @@ def resolve_inr_bandpass(
             instrument=str(svo_instrument).strip(),
             filter_id=svo_filter_id,
             prefer=svo_prefer,
+            cache_dir=svo_cache_dir,
+            use_cache=svo_use_cache,
         )
     raise AssertionError("unreachable")

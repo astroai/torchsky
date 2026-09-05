@@ -122,6 +122,8 @@ def _inr_spectral_field_kwargs(args: argparse.Namespace, band: str) -> dict:
             svo_instrument=str(args.svo_instrument),
             svo_filter_id=args.svo_filter_id,
             svo_prefer=str(args.svo_prefer),
+            svo_cache_dir=getattr(args, "svo_cache_dir", None),
+            svo_use_cache=not getattr(args, "no_svo_cache", False),
             transmission_path=args.inr_transmission,
             transmission_dir=args.inr_transmission_dir,
             transmission_unit=str(args.inr_transmission_unit),
@@ -1090,6 +1092,17 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         choices=("classic", "2025", "any"),
         default="classic",
         help="When multiple SVO rows match a band token, prefer classic vs NIRCam2025 (inr)",
+    )
+    p.add_argument(
+        "--svo-cache-dir",
+        type=Path,
+        default=None,
+        help="Directory to cache downloaded SVO filter curves (defaults to $TORCHSKY_SVO_CACHE or ~/.cache/torchsky/svo)",
+    )
+    p.add_argument(
+        "--no-svo-cache",
+        action="store_true",
+        help="Disable reading or writing persistent local disk cache for SVO filter profiles",
     )
     p.add_argument(
         "--inr-transmission",
