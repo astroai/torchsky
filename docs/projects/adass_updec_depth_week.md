@@ -7,6 +7,43 @@
 > <https://adass2026.icrar.org/call-for-contrib>. Submit a conservative version
 > by August 1 local time. The remaining sprint validates or strengthens it.
 
+## Live map-parity execution plan — 2026-09-04
+
+The current prerequisite is the six-band full-mosaic classical parity run, not
+the depth claim. All current and replacement rows stay pinned to pushed science
+commit `ff2afba21efa5126978d647990ce60b6d943307f`.
+
+- [ ] Recover/inspect F277W `lwm8klfq` (`depth-20260904-213335`), F090W
+  `b02dnl1p` (`depth-20260904-213526`), and F150W `mrfyfau0`
+  (`depth-20260904-213553`).
+- [ ] Resolve the interrupted F200W submission from `canfar ps --all --json`
+  before launching another copy.
+- [ ] Require the F277W canary to prove CUDA/H100, finish the locked
+  `map-compat-cuda` environment, source-build pinned SWarp/Montage, install
+  STScI Drizzle 2.2.0, and enter the real comparator stage.
+- [ ] Run F090W/F150W/F200W/F277W/F356W/F444W with the same code, target WCS,
+  masks/weights, and strongest matched kernels: exact square Drizzle at
+  `pixfrac=0.8`, SWarp/Torchsky Lanczos3, and Montage/Torchsky conservative
+  polygon overlap.
+- [ ] Persist independent official/Torchsky `SCI` and `WHT`, manifests, logs,
+  `parity.json`, and `parity.md` below
+  `/arc/projects/ots/torchsky-runs/<run-id>/mosaic-parity/b-<band>/`.
+- [ ] Fail the gate on a skipped/unavailable comparator, CPU Torchsky row,
+  changed input, missing product, wrong count, or failed numerical bound.
+  Required counts are 36 per short band and 9 per long band.
+- [ ] Reopen every accepted product through Torchfits and record runtime plus
+  peak host/accelerator memory before calling the classical map checkpoint
+  usable on full SMACS.
+- [ ] Only then freeze the best classical products and resume the independent
+  field, joint field, Foam, hybrid, injection, and uncertainty matrix below.
+
+Comparator meaning is precise: SWarp and Montage are the pinned source-built
+official executables; Drizzle is the official compiled STScI `drizzle` library
+API, not the full AstroDrizzle calibration/orchestration pipeline. Torchsky
+equivalents are evaluated against them on the identical calibrated exposure
+set and supplied WCS. This plan does not authorize a SOTA/depth claim from
+parity or visual sharpness.
+
 ## Outcome
 
 Produce one defensible detector-level result:

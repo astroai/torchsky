@@ -1,5 +1,99 @@
 # Active Torchsky Execution Checklist
 
+## Live execution log — 2026-09-04 SMACS full-mosaic parity
+
+Crash-recovery invariant: all current science jobs use exact pushed commit
+`ff2afba21efa5126978d647990ce60b6d943307f` from
+`sfabbro/smacs-map-parity`. Documentation commits may advance the branch, but
+must not silently change the SHA used by the six-band comparison.
+
+Completed and pushed implementation checkpoints:
+
+| Commit | Change |
+| --- | --- |
+| `16ccba3b` | Shared map workflows, uncertainty/products, plan replay, and field foundations. |
+| `05640a58` | Strict full-SMACS parity gate. |
+| `273e2abd` | Forward SMACS parity inputs to CANFAR. |
+| `2cfdf856` | Probe SMACS headers through Torchfits. |
+| `399e8ad5` | Bound full-mosaic execution. |
+| `23b93bdf` | Run parity in the CUDA comparator environment. |
+| `a5bcb380` | Accept currently authorized CANFAR compute images. |
+| `19a1d100` | Preserve base-image tools in the launcher `PATH`. |
+| `fd7fc9cc` | Refresh the persisted GitHub credential helper. |
+| `57393355` | Pin Pixi 0.78.0 for reproducible CANFAR jobs. |
+| `ff2afba2` | Build the SMACS mosaic directly in the selected CUDA environment. |
+
+Local evidence at `ff2afba2`: focused launcher/runner tests pass (latest set:
+9 passed), `pixi run preflight-push` passes, and commit hooks report Ruff and
+Pyright green. This verifies the launch contract, not the astronomical parity
+result.
+
+Official comparator contract:
+
+- STScI `drizzle==2.2.0` compiled library API versus exact square Torchsky
+  Drizzle with `pixfrac=0.8`;
+- source-built SWarp executable at
+  `bf4f496f18c04a8d32022b45449ef8675ab9b3da` with `LANCZOS3` versus Torchsky
+  Lanczos3;
+- source-built Montage `mProject`/`mProjectPP` at
+  `0fc9e5ff55ece4ee0b5d731157cf07cc31325724` versus Torchsky conservative
+  polygon overlap.
+
+The runner persists independent official and Torchsky `SCI`/`WHT` products on
+the same WCS, then evaluates pixel, support, flux, provenance, and exposure-count
+acceptance. It records the selected Torch device on every Torchsky row. An
+unavailable or skipped comparator does not pass.
+
+Active/recoverable jobs at the moment this entry was written:
+
+| Band | Session | Run ID | Evidence state |
+| --- | --- | --- | --- |
+| F277W | `lwm8klfq` | `depth-20260904-213335` | H100 NVL/MIG 11 GB observed; locked CUDA environment installing. |
+| F090W | `b02dnl1p` | `depth-20260904-213526` | Created; inspect logs before interpreting. |
+| F150W | `mrfyfau0` | `depth-20260904-213553` | Created; inspect logs before interpreting. |
+| F200W | unknown | unknown | Submission client was interrupted; discover the session/run before retry. |
+| F356W | — | — | Not yet submitted. |
+| F444W | — | — | Not yet submitted. |
+
+Expected persistent directory for each row:
+`/arc/projects/ots/torchsky-runs/<run-id>/mosaic-parity/b-<band>/`. Required
+evidence is the job log and manifest, independent products, `parity.json`, and
+`parity.md`. Expected input counts are 36 in each short band and 9 in each long
+band.
+
+Pre-science failures that have been diagnosed and fixed, and therefore are not
+accepted parity evidence:
+
+1. the old private AstroAI image was no longer authorized;
+2. the base image's `PATH` hid `/opt/conda/bin/gh`;
+3. the persistent Git credential helper referenced a missing `/usr/bin/gh`;
+4. the image shipped obsolete Pixi 0.20;
+5. the first runner built a CPU default environment before the CUDA one;
+6. PyTorch 2.13's SymPy lane required `mpmath<1.4`.
+
+The authorized base image plus refreshed helper, pinned Pixi, constrained
+`mpmath`, fail-closed CUDA assertion, and direct `map-compat-cuda` build address
+those failures. Probe sessions established an NVIDIA H100 NVL and private-repo
+access. Obsolete sessions were removed; persistent failure logs remain only as
+diagnostics.
+
+Recovery commands, to run only after reading this entry and checking for an
+already-created F200W session:
+
+```bash
+canfar ps --all --json
+canfar logs lwm8klfq
+canfar logs b02dnl1p
+canfar logs mrfyfau0
+```
+
+Next gate: complete all six exact-SHA rows, require official status `ok`,
+acceptance `pass`, correct counts, `compute_device=cuda`, and Torchfits-reopenable
+outputs. No row had reached that accepted state when this checkpoint was
+written. Numerical failures must produce a committed/pushed fix and a new
+six-band exact-SHA run. Only after this gate closes should the equal-budget
+field/Foam/hybrid and detector-injection science matrix resume.
+
 ## Reconciliation index — 2026-08-30
 
 `next.md` is the authoritative remaining-work list; this file records execution

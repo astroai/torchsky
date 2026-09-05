@@ -11,6 +11,63 @@
 > [`../projects/fossil.md`](../projects/fossil.md); its immediate ordering is
 > interleaved with the active exact/bounded map-operator gates.
 
+## Live SMACS parity recovery checkpoint — 2026-09-04
+
+This is the durable restart point for the current work. The classical map code
+under test is commit `ff2afba21efa5126978d647990ce60b6d943307f` on
+`sfabbro/smacs-map-parity`; it is committed and pushed. Keep every band in this
+comparison pinned to that science-code commit even if documentation-only commits
+advance the branch.
+
+The job is testing Torchsky equivalents against the actual official comparator
+implementations, not comparing Torchsky modes with one another:
+
+- Drizzle: STScI `drizzle==2.2.0` through its compiled Python API, compared with
+  Torchsky exact square drops at `pixfrac=0.8`.
+- SWarp: the source-built executable at
+  `bf4f496f18c04a8d32022b45449ef8675ab9b3da`, using `LANCZOS3`, compared with
+  Torchsky Lanczos3.
+- Montage: source-built `mProject`/`mProjectPP` at
+  `0fc9e5ff55ece4ee0b5d731157cf07cc31325724`, compared with Torchsky's
+  conservative polygon remapper.
+
+Each side writes independent `SCI`/`WHT` products on the same supplied target
+WCS. The strict harness then compares their pixels, support, flux, exposure
+count, provenance, and acceptance bounds. This is workflow parity on calibrated
+aligned exposures; it is not raw JWST calibration and it is not the full
+AstroDrizzle orchestration surface.
+
+Last observed CANFAR state before this checkpoint:
+
+| Band | Session | Persistent run | Last observed state |
+| --- | --- | --- | --- |
+| F277W | `lwm8klfq` | `depth-20260904-213335` | H100 proved; installing the single locked `map-compat-cuda` environment. |
+| F090W | `b02dnl1p` | `depth-20260904-213526` | Session created; science stage not yet inspected. |
+| F150W | `mrfyfau0` | `depth-20260904-213553` | Session created; science stage not yet inspected. |
+| F200W | unresolved | launch begun after 21:35 UTC | Local client was interrupted; resolve from `canfar ps --all --json` before retrying. |
+| F356W | not submitted | — | Submit only after the F277W canary clears environment and comparator setup. |
+| F444W | not submitted | — | Submit only after the F277W canary clears environment and comparator setup. |
+
+Artifacts are expected under
+`/arc/projects/ots/torchsky-runs/<run-id>/mosaic-parity/b-<band>/`, including
+separate official/Torchsky products plus `parity.json` and `parity.md`. None of
+the active sessions had produced accepted science evidence at the time of this
+checkpoint. Earlier failed attempts stopped before science execution and are not
+parity results.
+
+The classical SMACS gate is complete only when all six band rows report the
+expected exposure counts (36 for F090W/F150W/F200W and 9 for
+F277W/F356W/F444W), every required official comparator has status `ok`, every
+acceptance row passes, every Torchsky row records `compute_device=cuda`, and the
+persisted products can be reopened through Torchfits. A skipped comparator is a
+failure. Until that evidence exists, Drizzle/SWarp/Montage are implemented and
+locally gated but are not claimed ready for the full SMACS mosaic.
+
+Neural-field and Foam contracts are usable for bounded experiments, but the
+full-size SMACS field product, equal-budget bakeoff, calibrated uncertainty,
+and scientific depth gate remain open. Do not call the system SOTA or deeper
+from the classical parity run.
+
 ## Reconciliation register — 2026-08-30
 
 This register reconciles the unchecked work in the active, project, formulation,
@@ -394,17 +451,30 @@ legacy option.
 
 ## Immediate Task Order
 
-Through 2026-08-04, the detailed executable order is
-[`../projects/adass_updec_depth_week.md`](../projects/adass_updec_depth_week.md):
+The detailed scientific protocol remains
+[`../projects/adass_updec_depth_week.md`](../projects/adass_updec_depth_week.md).
+Resume from the live checkpoint above in this order:
 
-1. close detector-level injection, calibration/value semantics, and PSF truth;
-2. freeze upstream Drizzle/SWarp and multiband chi-square baselines;
-3. compare capacity/compute-matched independent and shared Foam/INR;
-4. run the blind CANFAR selection function and submit only a gated claim.
-
-After the ADASS sprint:
-
-5. profile and compile/vectorize exact square-Drizzle polygon clipping;
-6. resume Foam lifecycle/diffuse-INR composition and the larger depth profile;
-7. resume FOSSIL typed spectral/component-separation primitives;
-8. scale the frozen experiment to COSMOS and broader survey regimes.
+1. inspect the three known sessions and resolve whether the interrupted F200W
+   launch created a fourth session; never submit a duplicate blindly;
+2. require F277W to prove the H100/CUDA device, finish the locked environment,
+   source-build the pinned comparators, and enter the real mosaic stage;
+3. submit or resume the other five bands at exact science commit `ff2afba2`,
+   using one GPU per band and no more than the available CANFAR quota;
+4. collect `parity.json`, `parity.md`, logs, manifests, and both official and
+   Torchsky products for all bands; reject missing, skipped, CPU, changed-input,
+   wrong-count, or incomplete rows;
+5. diagnose numerical failures by workflow and rerun only after committing and
+   pushing a tested fix, with every replacement run pinned to one new exact
+   science SHA;
+6. after all classical rows pass, record runtime/peak-memory scorecards and cut
+   the first usable single-node map checkpoint;
+7. then run the frozen independent-field, joint-field, Foam, and hybrid matrix
+   under equal information and compute budgets; full-size execution alone is
+   not a promotion gate;
+8. run paired detector injections, blank/negative/shuffled controls, calibrated
+   uncertainty, and independent-field replication before any SOTA/depth claim;
+9. keep DDP conditional until the single-device streaming path and artifacts
+   are stable, then add deterministic one-rank/eight-GPU equivalence evidence;
+10. resume FOSSIL typed spectral/component-separation primitives and broader
+    survey scaling after the SMACS map checkpoint is closed.
