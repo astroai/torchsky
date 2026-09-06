@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -69,7 +72,7 @@ def test_canfar_inspection_uses_visualization_environment() -> None:
         encoding="utf-8"
     )
     inspection = runner.split("  calibration-inspect)", 1)[1].split("  foam)", 1)[0]
-    assert inspection.count('-e bench -- \\\n') == 2
+    assert inspection.count("pixi_run bench \\\n") == 2
 
 
 def test_canfar_full_mosaic_parity_is_strict_and_torchfits_only() -> None:
@@ -83,13 +86,13 @@ def test_canfar_full_mosaic_parity_is_strict_and_torchfits_only() -> None:
     assert "bootstrap_map_compat_tools.py" in parity
     assert "--force-source" in parity
     assert '--jobs "${TORCHSKY_SPIN_THREADS:-1}"' in parity
-    assert 'parity_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}' in parity
-    assert parity.count('-e "${parity_env}"') == 5
+    assert "parity_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}" in parity
+    assert parity.count('pixi_run "${parity_env}"') == 5
     assert "torch.cuda.is_available()" in parity
     assert "torch.cuda.get_device_name()" in parity
     assert "import torchfits" in parity
     assert "astropy.io" not in parity
-    assert 'native_build_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}' in runner
+    assert "native_build_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}" in runner
     assert 'ensure_native_build "${native_build_env}"' in runner
 
 
@@ -107,7 +110,7 @@ def test_canfar_depth_runner_replaces_stale_pixi() -> None:
         encoding="utf-8"
     )
 
-    assert 'pixi_version=${TORCHSKY_PIXI_VERSION:-0.78.0}' in runner
+    assert "pixi_version=${TORCHSKY_PIXI_VERSION:-0.78.0}" in runner
     assert '"$(pixi --version 2>/dev/null)" != "pixi ${pixi_version}"' in runner
     assert 'export PIXI_VERSION="${pixi_version}"' in runner
 
@@ -118,3 +121,47 @@ def test_map_compat_cuda_environment_uses_cuda_and_official_comparators() -> Non
 
     assert environment["no-default-feature"] is True
     assert set(environment["features"]) == {"cuda", "map-compat"}
+
+
+def test_canfar_runtime_is_selected_after_each_environment_activation(tmp_path):
+    runner = (ROOT / "scripts/run_canfar_adass_depth.sh").read_text()
+    function = (
+        "pixi_run() {" + runner.split("pixi_run() {", 1)[1].split("\n}", 1)[0] + "\n}"
+    )
+    # Simulate activation overwriting the inherited library path. The command
+    # must still see the runtime for its own environment, not the previous one.
+    mock = """
+pixi() {
+  while [[ "$1" != "--" ]]; do shift; done
+  shift
+  LD_LIBRARY_PATH=/wrong/activation PYTHONNOUSERSITE=0 "$@"
+}
+source_root=$1
+shift
+pixi_run "$@"
+"""
+    inherited = dict(os.environ, LD_LIBRARY_PATH="/existing/runtime")
+    probe = "import json, os; print(json.dumps([os.environ['LD_LIBRARY_PATH'], os.environ['PYTHONNOUSERSITE']]))"
+    for environment in ("default", "bench", "smacs-cuda", "map-compat-cuda"):
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                function + mock,
+                "runtime-check",
+                str(tmp_path),
+                environment,
+                sys.executable,
+                "-c",
+                probe,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=inherited,
+        )
+        assert json.loads(result.stdout) == [
+            f"{tmp_path}/.pixi/envs/{environment}/lib:/existing/runtime",
+            "1",
+        ]
+    assert runner.count("pixi run --manifest-path") == 1

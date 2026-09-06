@@ -58,16 +58,27 @@ export TORCHSKY_DATA="${data_root}"
 export PATH="${PIXI_HOME}/bin:${PATH}"
 export PYTHONPATH="${source_root}/src${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONUNBUFFERED=1
+export PYTHONNOUSERSITE=1
+
+# Apply the selected environment's C++ runtime after Pixi activation. Different
+# sub-modes use different environments; the system runtime can be too old.
+pixi_run() {
+  local selected_env=$1
+  shift
+  pixi run --manifest-path "${source_root}/pixi.toml" -e "${selected_env}" -- \
+    env "LD_LIBRARY_PATH=${source_root}/.pixi/envs/${selected_env}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+    PYTHONNOUSERSITE=1 "$@"
+}
 # Build/install the local editable torchsky (incl. torchsky._cpp) only when
 # it is not already importable -- sub-invocations of the full chain skip it.
 ensure_native_build() {
   local build_env=${1:-default}
-  if pixi run --manifest-path "${source_root}/pixi.toml" -e "${build_env}" -- \
+  if pixi_run "${build_env}" \
       python -c "import torchsky; import torchsky.cpp" >/dev/null 2>&1; then
     echo "torchsky native build already available; skipping install"
     return 0
   fi
-  pixi run --manifest-path "${source_root}/pixi.toml" -e "${build_env}" -- \
+  pixi_run "${build_env}" \
     python -m pip install -e "${source_root}" --no-build-isolation
 }
 
@@ -117,7 +128,22 @@ if [[ "${mode}" == "mosaic-parity" ]]; then
 fi
 if [[ "${dry_run}" != "1" ]]; then
 ensure_native_build "${native_build_env}"
-pixi run --manifest-path "${source_root}/pixi.toml" -e "${native_build_env}" -- \
+pixi_run "${native_build_env}" python - "${native_build_env}" <<'PYRUNTIME'
+import sys
+from pathlib import Path
+import torch
+import torchsky.cpp
+import torchfits
+print(f"runtime_prefix={sys.prefix} torch={torch.__version__} torchfits={torchfits.__version__}")
+maps = Path("/proc/self/maps")
+if maps.exists():
+    libraries = sorted({line.split()[-1] for line in maps.read_text().splitlines() if "libstdc++.so" in line})
+    print(f"loaded_cxx_runtime={libraries}")
+if sys.argv[1].endswith("-cuda"):
+    assert torch.cuda.is_available(), "CUDA is required for the selected environment"
+    print(f"cuda_device={torch.cuda.get_device_name()} memory_free_total={torch.cuda.mem_get_info()}")
+PYRUNTIME
+pixi_run "${native_build_env}" \
   python - "${field_models}" <<'PYVALIDATE'
 import sys
 from torchsky.map.field import FIELD_MODEL_KINDS
@@ -240,7 +266,7 @@ case "${mode}" in
     echo "calibration_exposure_count=${exposure_count}"
     test "${exposure_count}" = "${expected_exposure_count}"
     ensure_native_build
-    pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+    pixi_run default \
       python -c 'from torchsky.cli import main; raise SystemExit(main())' \
       calibration-extract \
       "${calibration_input_root}/${calibration_pattern}" \
@@ -254,7 +280,7 @@ case "${mode}" in
     calibration_device=${CALIBRATION_FIT_DEVICE:-cpu}
     test -s "${calibration_manifest}"
     ensure_native_build
-    pixi run --manifest-path "${source_root}/pixi.toml" -e default -- \
+    pixi_run default \
       python "${source_root}/benchmarks/fit_smacs0723_operator_calibration.py" \
       --manifest "${calibration_manifest}" \
       --output-dir "${CALIBRATION_FIT_OUTPUT_DIR:-${artifact_root}/fit}" \
@@ -271,9 +297,9 @@ case "${mode}" in
     calibration_inspection_per_group=${CALIBRATION_INSPECTION_PER_GROUP:-12}
     test -s "${calibration_manifest}"
     test -s "${calibration_fit_report}"
-    pixi run --manifest-path "${source_root}/pixi.toml" -e bench -- \
+    pixi_run bench \
       python -m pip install -e "${source_root}" --no-build-isolation
-    pixi run --manifest-path "${source_root}/pixi.toml" -e bench -- \
+    pixi_run bench \
       python "${source_root}/benchmarks/export_smacs0723_calibration_inspection.py" \
       --manifest "${calibration_manifest}" \
       --fit-report "${calibration_fit_report}" \
@@ -302,7 +328,7 @@ case "${mode}" in
       exact_observation_batch_size=${FOAM_EXACT_OBSERVATION_BATCH_SIZE:-auto}
       exact_max_iterations=${FOAM_EXACT_MAX_ITERATIONS:-50}
       exact_preconditioner=${FOAM_EXACT_PRECONDITIONER:-auto}
-      run pixi run --manifest-path "${source_root}/pixi.toml" -e smacs-cuda -- \
+      run pixi_run smacs-cuda \
         python "${source_root}/scripts/run_local_sphere_bench.py" \
         "${source_root}/benchmarks/bench_map_smacs0723_field_fit_joint.py" \
         --bands "${bands}" \
@@ -373,7 +399,7 @@ case "${mode}" in
           )
         fi
         batch_root=${module_root}/${batch}
-        run pixi run --manifest-path "${source_root}/pixi.toml" -e smacs-cuda -- \
+        run pixi_run smacs-cuda \
           python "${source_root}/scripts/run_local_sphere_bench.py" \
           "${source_root}/benchmarks/bench_map_smacs0723_field_fit_joint.py" \
           --bands "${bands}" \
@@ -418,7 +444,7 @@ case "${mode}" in
     foam_blank_root=${FOAM_BLANK_ROOT:-/arc/projects/ots/torchsky-runs/20260802-smacs-foam-psfinit-g512-e935868}
     foam_injection_root=${FOAM_INJECTION_ROOT:-/arc/projects/ots/torchsky-runs/20260802-smacs-foam-g512-injections-1d055cf}
     validation_root=${FOAM_VALIDATION_ROOT:-/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940}
-    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+    pixi_run sphere-bench \
       python "${source_root}/scripts/run_local_sphere_bench.py" \
       "${source_root}/benchmarks/score_smacs0723_foam.py" \
       --blank-root "${foam_blank_root}" \
@@ -431,7 +457,7 @@ case "${mode}" in
     score_methods=${SCORE_METHODS:?set SCORE_METHODS to a CSV of psf_mode/model_kind pairs, e.g. fitted_gaussian/spectral_power_foam,learned_lowrank/spectral_power_foam}
     score_validation_root=${SCORE_VALIDATION_ROOT:-/arc/projects/ots/torchsky-runs/20260729-smacs-validation-32e0940}
     score_out_dir=${SCORE_OUT_DIR:-${artifact_root}/model-selection}
-    pixi run --manifest-path "${source_root}/pixi.toml" -e sphere-bench -- \
+    pixi_run sphere-bench \
       python "${source_root}/scripts/run_local_sphere_bench.py" \
       "${source_root}/benchmarks/score_field_models.py" \
       --input-root "${score_input_root}" \
@@ -463,7 +489,7 @@ case "${mode}" in
             --injection-manifest "${validation_root}/${batch}/manifest.json"
           )
         fi
-        run pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
+        run pixi_run map-compat \
           python "${source_root}/scripts/run_local_sphere_bench.py" \
           "${source_root}/benchmarks/bench_map_smacs0723_stackers.py" \
           --band "${band}" \
@@ -504,12 +530,12 @@ case "${mode}" in
         mkdir -p "${band_root}/products"
         reference_path=${reference_root}/${band}b_UPDC-v2_iter0_i2d.fits.fz
         test -s "${reference_path}"
-        mosaic_naxis=$(pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
-          python -c 'import sys; from astropy.io import fits; print(next(int(h.data.shape[1]) for h in fits.open(sys.argv[1]) if getattr(h, "data", None) is not None and h.data.ndim == 2))' \
+        mosaic_naxis=$(pixi_run map-compat \
+          python -c 'import sys; import torchfits; h=dict(torchfits.read_header(sys.argv[1], "SCI")); print(int(h.get("ZNAXIS1", h.get("NAXIS1", 0))))' \
           "${reference_path}")
         test "${mosaic_naxis}" -gt 0
         echo "mosaic ${module}-${band}: target ${mosaic_naxis}x${mosaic_naxis} from $(basename "${reference_path}")"
-        run pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
+        run pixi_run map-compat \
           python "${source_root}/scripts/run_local_sphere_bench.py" \
           "${source_root}/benchmarks/bench_map_smacs0723_stackers.py" \
           --band "${band}" \
@@ -544,7 +570,7 @@ case "${mode}" in
       exit 2
     }
     if [[ "${parity_env}" == "map-compat-cuda" ]]; then
-      run pixi run --manifest-path "${source_root}/pixi.toml" -e "${parity_env}" -- \
+      run pixi_run "${parity_env}" \
         python -c 'import torch; assert torch.cuda.is_available(), "CUDA not available"; print(f"torch={torch.__version__} cuda={torch.version.cuda} device={torch.cuda.get_device_name()}")'
     fi
     parity_total=$(find -L "${parity_input_root}" -maxdepth 1 -type f \
@@ -553,10 +579,10 @@ case "${mode}" in
     echo "mosaic-parity inventory=${parity_total} expected=${parity_expected_total}"
     test "${parity_total}" = "${parity_expected_total}"
 
-    run pixi run --manifest-path "${source_root}/pixi.toml" -e "${parity_env}" -- \
+    run pixi_run "${parity_env}" \
       python "${source_root}/scripts/bootstrap_map_compat_tools.py" \
       --tool swarp --force-source --jobs "${TORCHSKY_SPIN_THREADS:-1}"
-    run pixi run --manifest-path "${source_root}/pixi.toml" -e "${parity_env}" -- \
+    run pixi_run "${parity_env}" \
       python "${source_root}/scripts/bootstrap_map_compat_tools.py" \
       --tool montage --force-source --jobs "${TORCHSKY_SPIN_THREADS:-1}"
 
@@ -573,15 +599,14 @@ case "${mode}" in
       mkdir -p "${band_root}/products"
       reference_path=${reference_root}/${band}b_UPDC-v2_iter0_i2d.fits.fz
       test -s "${reference_path}"
-      parity_shape=$(pixi run --manifest-path "${source_root}/pixi.toml" \
-        -e "${parity_env}" -- python -c \
+      parity_shape=$(pixi_run "${parity_env}" python -c \
         'import sys; import torchfits; h=dict(torchfits.read_header(sys.argv[1], "SCI")); print(int(h.get("ZNAXIS1", h.get("NAXIS1", 0))), int(h.get("ZNAXIS2", h.get("NAXIS2", 0))))' \
         "${reference_path}")
       read -r parity_width parity_height <<< "${parity_shape}"
       test "${parity_width}" -gt 0
       test "${parity_height}" = "${parity_width}"
       echo "mosaic-parity b-${band}: ${parity_width}x${parity_height}, exposures=${expected_band_exposures}"
-      run pixi run --manifest-path "${source_root}/pixi.toml" -e "${parity_env}" -- \
+      run pixi_run "${parity_env}" \
         python "${source_root}/scripts/run_local_sphere_bench.py" \
         "${source_root}/benchmarks/bench_map_smacs0723_stackers.py" \
         --band "${band}" \
@@ -606,7 +631,7 @@ case "${mode}" in
     if [[ -z "${native_input_root_pattern}" ]]; then
       native_input_root_pattern='/arc/projects/ots/torchsky-runs/20260729-smacs-native-validation-d8fece0-{band}'
     fi
-    pixi run --manifest-path "${source_root}/pixi.toml" -e map-compat -- \
+    pixi_run map-compat \
       python "${source_root}/scripts/run_local_sphere_bench.py" \
       "${source_root}/benchmarks/score_smacs0723_native_classical.py" \
       --input-root-pattern "${native_input_root_pattern}" \

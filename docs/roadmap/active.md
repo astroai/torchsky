@@ -38,6 +38,29 @@ the loaded system `libstdc++.so.6` lacks `CXXABI_1.3.15`. Both August 12 exact
 Foam jobs exceeded the uniform-grid candidate-pair guard (12,015,480 versus
 12,000,000), not GPU memory. These runs are not successful science evidence.
 
+All inspected branch references are ancestors of fork main `e6be1ba0`, pushed
+without rewriting history. Focused merge checks passed 40 tests with four device
+skips. Runtime repair now selects each Pixi environment's own C++ library after
+activation, disables user-site Python packages, and prints loaded libraries and
+GPU information before science. Its shell behavior and launcher checks pass
+10 tests; the Linux GPU confirmation remains pending.
+
+Recovered inputs: aligned 135, CAL 135, CRF 27, matching manifest filenames.
+Independent calibration evidence is at
+`/arc/projects/ots/torchsky-runs/20260810-smacs-auto-calibration-6ca88db-r8/evidence/calibration_evidence_manifest.json`;
+its SHA256 `88f412774876ed62f537d300ad4ebced574cb1baeb24aceae084190ebe8398b4`
+matches the completed
+`20260811-smacs-operator-fit-3f11e6c-r3/fit/operator_calibration_fit.json` report.
+It contains 135 exposures, 4,757 evidence records and the agreed PATT splits.
+Twenty calibration checkpoints exist. Retain the stationary-background control:
+the prior adaptive NRCB4 background test loss worsened by 4%. Earlier test scores
+are historical diagnostics, not fresh blind evidence for choosing new models.
+Measured SVO curves live at
+`/arc/projects/ots/jwst_smacs0723/data/calibration/svo/JWST_NIRCam2025.{band}.npz`.
+The July effective-PSF products are reconstruction injection responses and must
+not substitute for independent detector PSFs. STPSF 2.2.0 and CRDS assets exist,
+but availability alone does not establish exposure-matched PSF calibration.
+
 ## Live execution log — 2026-09-04 SMACS full-mosaic parity
 
 Crash-recovery invariant: all current science jobs use exact pushed commit
