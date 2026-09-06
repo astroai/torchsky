@@ -1,5 +1,43 @@
 # Active Torchsky Execution Checklist
 
+## Branch consolidation and SMACS implementation — 2026-09-05
+
+The accepted plan is the 2026-09-05 section of `next.md`. Work now targets
+`main` on `sfabbro/torchsky`, tracking `origin/main`; upstream is read-only.
+Older exact-SHA runs below are historical evidence, not a requirement to launch
+new jobs from old code. New jobs must name an exact pushed commit.
+
+Starting tips: main `b4356594`, local SMACS `15ae3d3b`, remote SMACS `ff2afba2`,
+SVO `95751d02`, WCS integration `849d0784`, field research `612e4cf8`, stale UPDC
+`fb77669a`. Commit `03064951` preserves the three pre-existing documentation
+edits before switching branches. SMACS merge `7aea4b34` retains the newer docs;
+SVO merge `01b41f6f` records equivalent already-applied work. Research merge
+`7b0c684a` retains the corrected finite-bandwidth field implementation and its
+expanded tests rather than the earlier Softplus version.
+
+Legacy reconciliation retains history and ports all-observation MAST product
+discovery/deduplication into the existing downloader, plus exposure/PSF manifest
+pairing. The parallel WCS-aware trainer, embedded `src/torchfits`, notebooks,
+backups and unconfigured HybPSF gitlink are superseded or unsuitable as current
+production code. Useful HybPSF calibration, UPDC rejection-mask handling and
+pixel-complete epoch sampling need explicit current-API ports; current epoch
+sampling cycles observations and is not yet equivalent to the legacy sampler.
+
+Before implementation, focused WCS/sphere/catalog tests passed 257 with 11
+skipped. WCS and sphere code match starting main; catalog changes are result
+aliases. This used the current Pixi environment, not a fresh main environment.
+Exact-main GitHub core and sphere spectral jobs passed, but lint and two broad
+map spectral tests failed. The integrated SMACS branch already pins Ruff to the
+working 0.15 series: its exact fast-lane Ruff command now passes. Both previously
+failing broad spectral cases pass locally after integration (63.64-second run,
+8 passing checks; a separate new manifest-path assertion failed and was corrected
+to account for macOS temporary-directory symlinks). Remote CI is still pending.
+
+ARC recovery found all four September launches failed before science because
+the loaded system `libstdc++.so.6` lacks `CXXABI_1.3.15`. Both August 12 exact
+Foam jobs exceeded the uniform-grid candidate-pair guard (12,015,480 versus
+12,000,000), not GPU memory. These runs are not successful science evidence.
+
 ## Live execution log — 2026-09-04 SMACS full-mosaic parity
 
 Crash-recovery invariant: all current science jobs use exact pushed commit

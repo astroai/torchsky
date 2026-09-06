@@ -158,3 +158,28 @@ def test_select_products_matches_prefixed_subgroup(
 def test_detector_module_tokens_support_short_and_long_bands() -> None:
     assert _detector_module_tokens("F277W", "b") == ("nrcblong",)
     assert _detector_module_tokens("F200W", "b") == ("nrcb1", "nrcb2", "nrcb3", "nrcb4")
+
+
+def test_select_products_collects_all_observations_and_deduplicates(monkeypatch):
+    monkeypatch.setattr(
+        "download_jwst_smacs0723_mast.query_nircam_observations",
+        lambda **kwargs: [
+            {"obsid": 1, "filters": "F277W"},
+            {"obsid": 2, "filters": "F277W"},
+            {"obsid": 3, "filters": "F090W"},
+        ],
+    )
+    products = [
+        MastProduct(1, "a_nrcblong_cal.fits", "mast:a", "SCIENCE", "CAL", 1, "F277W"),
+        MastProduct(2, "b_nrcblong_cal.fits", "mast:b", "SCIENCE", "CAL", 1, "F277W"),
+    ]
+    queried = []
+
+    def query(obsid):
+        queried.append(obsid)
+        return products[:obsid]
+
+    monkeypatch.setattr("download_jwst_smacs0723_mast.query_products", query)
+    chosen = select_products(band="F277W", subgroup="CAL", max_exposures=10)
+    assert queried == [1, 2]
+    assert [product.data_uri for product in chosen] == ["mast:a", "mast:b"]

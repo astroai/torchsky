@@ -122,22 +122,36 @@ def select_products(
     proposal_id: str = DEFAULT_PROPOSAL_ID,
     target_name: str = DEFAULT_TARGET,
 ) -> list[MastProduct]:
+    if max_exposures < 1:
+        raise ValueError("max_exposures must be positive")
+    band = band.upper()
     observations = query_nircam_observations(
         proposal_id=proposal_id, target_name=target_name
     )
-    match = next(obs for obs in observations if obs.get("filters") == band)
-    products = query_products(int(match["obsid"]))
+    matches = [
+        obs for obs in observations if str(obs.get("filters", "")).upper() == band
+    ]
+    if not matches:
+        raise LookupError(
+            f"No observations found for band={band}, proposal={proposal_id}"
+        )
+    # A physical product can appear in several MAST observations.
+    products = {
+        product.data_uri: product
+        for observation in matches
+        for product in query_products(int(observation["obsid"]))
+    }
     subgroup_upper = subgroup.upper()
     detector_tokens = _detector_module_tokens(band, module)
     chosen = [
         product
-        for product in products
+        for product in products.values()
         if product.product_type == "SCIENCE"
         and (
             (product.subgroup or "").upper() == subgroup_upper
             or (product.subgroup or "").upper().endswith(f"_{subgroup_upper}")
         )
-        and product.filters == band
+        and str(product.filters).upper() == band
         and (
             not require_detector_split
             or (

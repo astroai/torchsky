@@ -1,5 +1,26 @@
 # INR and Power Foam sky reconstruction: problem formulation and objectives
 
+## Active SMACS assumptions — 2026-09-05
+
+The accepted execution specification is in
+[`../roadmap/next.md`](../roadmap/next.md#accepted-execution-plan--2026-09-05).
+The first comparison learns a static spatial/spectral `I_nu` scene through fixed
+measured passbands and independently calibrated PSFs/backgrounds. Effective PSFs
+include detector pixel response; do not integrate pixels twice. Use calibrated
+SCI and ERR/variance in a Gaussian likelihood, with training-only numerical
+normalization reversed on output. Gain alone does not convert MJy/sr to counts.
+For flat-`I_nu` calibration, photon-throughput weights are proportional to
+`T(lambda)/lambda`; verify the actual product reference-spectrum convention.
+
+Persistent intracluster light stays in the celestial scene. Detector offsets
+are calibrated independently and anchored relatively; an absolute foreground
+reference is still needed for absolute diffuse brightness. No unrestricted
+exposure bias is learned from held-out science residuals. Joint scene/operator
+learning and temporal astronomical fields are later controlled extensions.
+Select by validation detector likelihood after flux/color/diffuse-fidelity
+checks; depth is reported separately. Fine spectra and hybrid component
+decompositions remain prior-dependent until independent evidence supports them.
+
 ## Purpose
 
 This note defines the inverse problem that Torchsky's implicit neural

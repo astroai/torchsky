@@ -1,5 +1,155 @@
 # Torchsky Execution Roadmap
 
+## Accepted execution plan — 2026-09-05
+
+This section supersedes earlier scheduling, branch, calibration-default, and
+model-selection instructions below. Historical results retain their original
+code identities; a new science run records a new exact pushed commit.
+
+### Consolidate the fork first
+
+- Preserve the three pending roadmap/sprint edits before switching branches.
+- Reconcile all local and remote branches on `main` in `sfabbro/torchsky`:
+  current and remote SMACS, WCS integration, SVO caching, field research, and
+  the stale UPDC history. Preserve relevant unique work without restoring
+  obsolete parallel implementations or FITS ownership in Torchsky.
+- Track and push `origin/main`; do not force-push, push upstream, or delete
+  branch references as part of consolidation. Record starting commits and
+  conflict decisions in `active.md`.
+- Repair the inconsistent lint job and spectral zero-weight test failures.
+  Confirm WCS, sphere, and matching behavior after integration. Document the
+  limits of finite-resolution native exact-region operations, matching epoch
+  and validity handling, and device coverage.
+
+### Shared scientific assumptions
+
+All methods predict the same calibrated native detector observations through
+the same independently calibrated response. Learn a static celestial
+`I_nu(position, wavelength)` scene, including persistent intracluster light.
+Flag moving or variable sources. A joint INR couples position and spectrum;
+Foam combines localized spatial components with spectral coefficients. Hybrid
+component images remain diagnostic until component-specific injections support
+physical interpretation. Six measured band integrals do not establish a unique
+fine spectrum.
+
+| Component | Initial treatment | Controlled extensions |
+| --- | --- | --- |
+| Passbands | Measured tabulated photon throughput with the actual calibration reference spectrum; fixed across methods. | Throughput corrections need independent calibration. |
+| PSF and pixels | Independently calibrated effective PSFs, frozen during scene comparison; explicitly record whether pixel response is included and integrate pixels exactly once. | Spatial, chromatic, and temporal response variation require calibration support. |
+| Brightness | Predict calibrated SCI, normally MJy/sr; preserve zero points and pixel-area conventions. | Independently fitted relative exposure scaling with an explicit reference. |
+| Background | Persistent celestial light stays in the scene. Detector offsets act in detector coordinates; optical foregrounds pass through the optical response. | Independently calibrated plane/neural backgrounds, frozen across scene representations. |
+| Noise | Gaussian likelihood using valid calibrated error/variance planes and identical masks; covariance only where independently supported. | Separate calibration-uncertainty propagation; no free variance inflation to hide residuals. |
+
+For a flat-`I_nu` calibration and dimensionless photon throughput `T(lambda)`,
+the normalized band weights are proportional to `T(lambda)/lambda`. Verify
+against the input product convention and otherwise use its reference-spectrum
+normalization. Keep throughput shape, absolute calibration, and numerical
+scaling separate. Do not multiply calibrated MJy/sr by gain and call it counts.
+
+Fit numerical normalization on training data only, scale SCI/ERR/VAR
+consistently, and reverse it on export without subtracting an unexplained
+diffuse pedestal. Relative background offsets have weighted zero mean; this
+does not determine absolute sky brightness. Use an independent foreground
+reference or explicitly report brightness relative to the adopted mean
+foreground. Calibration for held-out observations comes from independent
+evidence or training-based predictions, never unrestricted fits to their
+science residuals.
+
+Replace misleading nominal defaults: Gaussian PSFs are approximation controls,
+summary-shaped passbands are not measured curves, and a plane option must
+actually apply a plane. Each run identifies fixed, independently fitted, and
+scene-learned quantities. Temporal dependence belongs to instrument/background
+terms initially, not an unrestricted astronomical position/wavelength/time field.
+
+### Ordered implementation
+
+1. Recover actual ARC log contents and products; verify all 135 aligned detector
+   inputs, UPDC references, calibration identities, and code versions before
+   restarting jobs.
+2. Preserve WCS, units, passbands, PSF convention, masks, variance, and background
+   metadata through fitting, rendering, normalization, save/resume, replay, and
+   export. Fix sampling inconsistencies and invalid spectral integration.
+3. Finish PSF-aware patches with sufficient margins, streamed backward
+   evaluation, and recomputation for full-observation noise treatment. Verify
+   tiled/full predictions and gradients. FITS subset/streaming writing belongs
+   in Torchfits; core computation remains tensor-native.
+4. Produce independent official Drizzle, SWarp, and Montage products alongside
+   Torchsky on identical inputs and WCS. Check flux, support, weights, counts,
+   provenance, time, and memory. Missing comparators remain incomplete.
+5. Screen existing field architectures and compare explicit grids, independent
+   and joint INRs, independent and joint Foam, and diffuse/Foam hybrid against
+   strong classical multiband and native detector-space detection. Resolve
+   Foam flux recovery before expensive runs. Compare equal total parameter and
+   optimization budgets, and separately accuracy versus elapsed time.
+6. Select on validation, evaluate the final test once, then refit on all
+   exposures and produce six-band reconstructions and UPDC comparisons.
+7. Finish general AstroDrizzle registration/background/outlier/combination,
+   SWarp background/clipping/weights, and Montage overlap-background/curved
+   footprint workflows. Validate beyond SMACS before claiming general parity.
+
+Keep public interfaces thin: retain `field` and deprecated `inr`, extend
+existing observation/product records, provide bounded tile iteration and the
+documented AstroDrizzle workflow preset.
+
+### Delegation and CANFAR scheduling
+
+Use Astra-medium for most implementation and coordination, Astra-high/max for
+difficult numerical work, merge conflicts and substantive review, and
+Luna-xhigh for bounded routine implementation, checks, logs, documentation and
+verified commits. Assign disjoint file ownership; serialize integration and
+commits on the shared `main`.
+
+Use CANFAR within available allocations: one GPU validation run, then up to six
+independent single-GPU jobs by default, adapting to measured capacity and needs.
+Continue independent coding/debugging/testing/reporting while jobs run. Wait
+only for results that actually determine the next decision. Multi-GPU training
+requires measured single-device limitations first.
+
+### Products and continuous measurements
+
+Every completed method produces FITS reconstruction, valid support/coverage,
+available labelled uncertainty, and applicable residual/background/PSF products.
+Produce matched full-field and fixed-region PNGs with common per-band scales,
+linear/asinh views, signed residuals and distinct missing coverage. Legends
+show method, band, units, orientation, angular scale, measured prediction error,
+PSF width, flux/color bias, runtime and memory; missing values say "not measured".
+
+Use Torchfits for FITS and RGB. Freeze stretch and channel mapping across
+methods: blue averages F090W/F150W, green F200W/F277W, red F356W/F444W. Label false
+color and provide native and resolution-matched comparisons. Extend the existing
+visualizer; freeze display scales from the classical reference.
+
+Track validation prediction error, flux/color recovery, PSF width/encircled
+energy, diffuse recovery, noise correlations, completeness/purity, uncertainty
+coverage, time and memory. Save diagnostics at 0%, 10%, 25%, 50%, 75% and completion.
+Keep immutable run reports and compact history; report improved/worse/uncertain
+with uncertainty intervals. Sharpness alone is not improvement; the test set
+is not a development dashboard. Use plain-language reports.
+
+### Verification and selection
+
+Keep whole PATT groups together: training `{1,2,4,5,7}`, validation `{3,8}`,
+test `{6,9}`. Split before fitting preprocessing statistics. Verify units,
+surface brightness, flux, passband integration, PSF centroid/wings/normalization,
+single pixel integration, applicable adjoints, tiled/full behavior and replay.
+Use real data and independent point, extended, blended, dropout and diffuse
+injections: at least 20 paired batches and 800 continuum sources, seven or more
+flux levels, four fixed science regions, and independent truth PSFs.
+
+Select by validation detector likelihood after scientific-fidelity checks.
+Bright-source flux bias must be at most 2% and adjacent-band color bias at most
+0.02 mag for the claimed continuum population. Measure depth at matched
+effective resolution and false-positive density with paired intervals and
+blank, negative-injection and shuffled-band controls. Published UPDC products
+are secondary image/photometry/morphology references, not truth or an injected
+depth competitor without rerunning the same injected inputs.
+
+Run targeted tests, preflight and changed-signature type checks. Verify CUDA on
+CANFAR; unavailable devices remain unverified. Broad superiority claims need an
+independent field. Completion requires reconciled fork `main`, passing relevant
+checks, reproducible six-band products/comparisons, validated general workflows,
+and clear separation of measured, experimental and incomplete capabilities.
+
 > Ordered engineering and science tasks after the 2026-07-22 map/INR milestone.
 > This is the authoritative remaining-work roadmap, not a public API promise.
 > The execution/evidence log lives in [`active.md`](active.md), and the

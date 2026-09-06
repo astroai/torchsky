@@ -1,5 +1,13 @@
 # ADASS UPdec Depth Sprint
 
+> Current execution: follow the accepted 2026-09-05 plan in
+> [`../roadmap/next.md`](../roadmap/next.md). Development is on fork `main`.
+> Historical deadlines and exact-SHA instructions below describe earlier runs.
+> Select models by validation detector likelihood after fidelity checks; depth
+> is a separate scientific endpoint. Nominal Gaussian PSFs and summary passbands
+> are approximation controls, not the final independently calibrated response.
+> Published UPDC products remain secondary references, not injection truth.
+
 > Active focus: 2026-07-28 through 2026-08-04. This sprint temporarily pauses
 > FOSSIL/component-separation work and broad Torchsky roadmap expansion.
 >
