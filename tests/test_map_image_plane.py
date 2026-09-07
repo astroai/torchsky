@@ -1780,10 +1780,11 @@ def test_sample_image_plane_batched_channels_matches_separate_sampling(
 
 
 @pytest.mark.parametrize("kernel", ["lanczos3", "lanczos5"])
-def test_lanczos_sampling_preserves_constant_on_complete_support(kernel: str) -> None:
-    image = torch.ones((16, 16), dtype=torch.float32)
-    x_src = torch.tensor([[5.25, 8.6], [6.7, 9.1]], dtype=torch.float32)
-    y_src = torch.tensor([[6.4, 7.2], [8.3, 5.8]], dtype=torch.float32)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_lanczos_sampling_preserves_constant_on_complete_support(kernel: str, dtype) -> None:
+    image = torch.ones((16, 16), dtype=dtype)
+    x_src = torch.tensor([[5.25, 8.6], [6.7, 9.1]], dtype=dtype)
+    y_src = torch.tensor([[6.4, 7.2], [8.3, 5.8]], dtype=dtype)
     grid = torch.stack(
         [
             (2.0 * x_src / 15.0) - 1.0,
@@ -1800,7 +1801,20 @@ def test_lanczos_sampling_preserves_constant_on_complete_support(kernel: str) ->
         kernel=kernel,
     )
 
-    torch.testing.assert_close(sampled, torch.ones_like(sampled), atol=2e-7, rtol=0.0)
+    # The dense tensor reduction rounds each signed stencil term. Its forward
+    # error bound is gamma_n * sum(abs(weights)), not a platform-specific ULP.
+    support = resampling_mod.kernel_support(kernel)
+    offsets = torch.arange(-support + 1, support + 1, dtype=dtype)
+    norms = []
+    for coordinate in (x_src, y_src):
+        delta = (coordinate - coordinate.floor()).unsqueeze(-1) - offsets
+        coefficients = resampling_mod.kernel_weight(kernel, delta)
+        coefficients = coefficients / coefficients.sum(-1, keepdim=True)
+        norms.append(coefficients.abs().sum(-1))
+    operations = (2 * support) ** 2 + 4 * support
+    error = operations * torch.finfo(dtype).eps
+    bound = error / (1 - error) * float((norms[0] * norms[1]).max())
+    torch.testing.assert_close(sampled, torch.ones_like(sampled), atol=bound, rtol=0.0)
 
 
 @pytest.mark.parametrize(

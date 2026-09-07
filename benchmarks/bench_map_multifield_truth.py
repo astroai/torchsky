@@ -1248,11 +1248,19 @@ def _time_many(fn, runs: int) -> float:
 
 def _cube_truth_metrics(
     data: torch.Tensor,
-    weight: torch.Tensor,
+    weight: torch.Tensor | None,
     truth: torch.Tensor,
     *,
     target_header: dict[str, Any],
+    mask: torch.Tensor | None = None,
 ) -> dict[str, float]:
+    # Deterministic scene renders have no estimated inverse variance. Uniform
+    # evaluation on their rendered support is not an uncertainty estimate.
+    if weight is None:
+        support = torch.isfinite(data)
+        if mask is not None:
+            support &= mask
+        weight = support.to(data.dtype)
     metrics = evaluate_map_product(
         data,
         truth,
@@ -1400,6 +1408,7 @@ def evaluate_torchsky_case(
             result.weight,
             truth,
             target_header=target_header,
+            mask=result.mask,
         ),
     }
 
@@ -1507,6 +1516,7 @@ def evaluate_torchsky_field_case(
             result.weight,
             truth,
             target_header=target_header,
+            mask=result.mask,
         ),
     }
 
@@ -1620,6 +1630,7 @@ def evaluate_torchsky_spherical_case(
             result.weight,
             truth,
             target_header=target_header,
+            mask=result.mask,
         ),
     }
 

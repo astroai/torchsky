@@ -50,6 +50,7 @@ jobs:
       - name: Operator smoke (no heavy deps)
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install "torchfits>=1.0.0"
           python - <<'PY'
           import sys
           sys.path.insert(0, "src")

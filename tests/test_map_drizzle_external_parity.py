@@ -103,10 +103,18 @@ def _stsci_drizzle_reference(
     iscale = (
         1.0 if value_semantics == "surface_brightness" else float(pscale_ratio) ** 2
     )
+    # Drizzle 2.2's tight-canvas scanner omits square drops whose centers lie
+    # outside the canvas. Give it a full transformed drop margin, then crop.
+    # This compares pixel overlap, not that scanner's boundary truncation.
+    padding = 0
+    if kernel == "square":
+        mapping = torch.as_tensor(pixmap)
+        extent = sum(float(torch.diff(mapping, dim=axis).abs().max()) for axis in (0, 1))
+        padding = 1 + math.ceil(float(drizzle_pixfrac) * extent)
     drizzle = DrizzleResampler(
         kernel=kernel,
         fillval=0.0,
-        out_shape=target_shape,
+        out_shape=tuple(size + 2 * padding for size in target_shape),
         disable_ctx=True,
     )
     drizzle.add_image(
@@ -115,7 +123,7 @@ def _stsci_drizzle_reference(
         .numpy()
         .astype("float32"),
         exptime=1.0,
-        pixmap=pixmap,
+        pixmap=pixmap + padding,
         weight_map=torch.nan_to_num(source_weight, nan=0.0, posinf=0.0, neginf=0.0)
         .cpu()
         .numpy()
@@ -127,6 +135,9 @@ def _stsci_drizzle_reference(
     )
     out_img = torch.as_tensor(drizzle.out_img, dtype=torch.float32, device=image.device)
     out_wht = torch.as_tensor(drizzle.out_wht, dtype=torch.float32, device=image.device)
+    if padding:
+        out_img = out_img[padding:-padding, padding:-padding]
+        out_wht = out_wht[padding:-padding, padding:-padding]
     if value_semantics == "flux":
         out_wht = out_wht / float(iscale * iscale)
     out_img = torch.where(out_wht > 0.0, out_img, torch.zeros_like(out_img))

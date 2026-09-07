@@ -86,6 +86,36 @@ not real SMACS products or scientific-fidelity measurements. Native RGB is
 implemented; independently resolution-matched RGB, evolving metric histories,
 diagnostic training snapshots, and final six-band measurements remain pending.
 
+Further CI investigation reproduced eight deterministic-render benchmark errors:
+the reports assumed every product had an uncertainty-derived weight. These now
+evaluate uniformly on rendered support when no uncertainty exists, without
+inventing an uncertainty plane. The minimal operator CI environment also lacked
+the required Torchfits dependency. The Lanczos discrepancy was float32 reduction
+roundoff (2.38e-7 versus a 2e-7 assertion). Its normalization already preserves a
+constant mathematically. A trial extra normalization cost about 35% at 128x128
+in a seven-repeat CPU check, so the algorithm is retained. The test now checks
+both float32 and float64 against a signed-stencil floating-point error bound.
+
+All 27 external Drizzle checks pass when its square-drop reference uses a padded
+canvas and crops back to the requested WCS. With the previous tight canvas,
+Drizzle 2.2's scanner omitted contributions at the rotated outer edge. In the
+11-degree example, padding reduced maximum weight disagreement from 0.818608
+to zero and maximum brightness disagreement to 1.19e-7. This records a real
+boundary-behavior difference, not general bitwise equivalence. The independent
+SMACS comparator runners still need this explicit boundary convention recorded
+and applied before claiming strict full-field equivalence.
+
+GPU job `depth-20260907-021737` (`dhkmtim0`, commit `a2f8c6a1`) passed the
+Torchsky/Torchfits runtime checks and SWarp build. Its log stops during Montage's
+bundled CFITSIO build; session info and events now return 404. No termination
+reason or completed astronomical comparison is available. Isolate Montage in
+a CPU-only comparator-build job before allocating another GPU.
+
+The repaired truth-report suites pass all 38 tests; the expanded Lanczos
+precision checks pass four cases. Preflight and type checking pass (one existing
+export-list warning). Remote CI after these repairs is still required before
+calling consolidated main fully healthy.
+
 Recovered inputs: aligned 135, CAL 135, CRF 27, matching manifest filenames.
 Independent calibration evidence is at
 `/arc/projects/ots/torchsky-runs/20260810-smacs-auto-calibration-6ca88db-r8/evidence/calibration_evidence_manifest.json`;

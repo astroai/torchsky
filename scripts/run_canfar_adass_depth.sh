@@ -110,7 +110,7 @@ if [[ "${mode}" == "comparator-build" ]]; then
   export ARTIFACT_ROOT="${artifact_root}"
   build_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}
   run pixi_run "${build_env}" python "${source_root}/scripts/bootstrap_map_compat_tools.py" \
-    --tool swarp --force-source --jobs "${TORCHSKY_SPIN_THREADS:-1}"
+    --tool "${COMPARATOR_TOOL:-swarp}" --force-source --jobs "${TORCHSKY_SPIN_THREADS:-1}"
   exit 0
 fi
 

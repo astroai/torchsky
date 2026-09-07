@@ -1909,12 +1909,13 @@ def _build_product_benchmark_row(
         "mpix_s": (float(result.data.numel()) / max(time_ms / 1000.0, 1e-12)) / 1e6,
         **_truth_metrics(
             result.data.squeeze(0),
-            result.weight.squeeze(0),
+            (result.weight if result.weight is not None else result.mask.to(result.data.dtype)).squeeze(0),
             truth,
             target_header=target_header,
             value_semantics=case_spec.value_semantics,
             region_masks=region_masks,
         ),
+        "metric_weighting": "product_weight" if result.weight is not None else "uniform_on_rendered_support",
         "mean_noise_sigma_flux": float(
             sum(item.noise_sigma_flux for item in observations)
             / max(len(observations), 1)
