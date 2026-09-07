@@ -47,13 +47,20 @@ def test_swarp_build_env_exposes_conda_shared_dependencies() -> None:
             prefix,
             base={
                 "CC": "/opt/conda/bin/gcc",
+                "CPP": "x86_64-conda-linux-gnu-cpp",
+                "LD": "x86_64-conda-linux-gnu-ld",
+                "COMPILER_PATH": "/opt/conda/bin",
+                "host_alias": "x86_64-conda-linux-gnu",
                 "LD_LIBRARY_PATH": "/system/lib",
                 "PKG_CONFIG_PATH": "/system/pkgconfig",
             },
         )
 
     which.assert_called_once_with("cc", path="/usr/bin:/bin")
-    assert env["CC"] == "/usr/bin/cc"
+    assert env["CC"] == "/usr/bin/cc -B/usr/bin/"
+    assert env["CPP"] == "/usr/bin/cc -E"
+    assert env["LD"] == "/usr/bin/ld"
+    assert "COMPILER_PATH" not in env and "host_alias" not in env
     assert env["CPPFLAGS"] == "-I/opt/pixi/env/include"
     assert "-L/opt/pixi/env/lib" in env["LDFLAGS"]
     assert "-Wl,-rpath-link,/opt/pixi/env/lib" in env["LDFLAGS"]

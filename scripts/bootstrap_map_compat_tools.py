@@ -178,9 +178,14 @@ def _swarp_build_env(
     )
     system_cc = shutil.which("cc", path="/usr/bin:/bin")
     if system_cc:
-        # ponytail: SWarp's Autoconf build is Unix-only; prefer the host linker
-        # over a base-image Conda cross-toolchain with an incompatible glibc sysroot.
-        env["CC"] = system_cc
+        # A host compiler still finds Conda's ld through PATH on CANFAR, selecting
+        # an incompatible libpthread from its sysroot. Bind its subprocesses too.
+        host_bin = str(Path(system_cc).parent)
+        env["CC"] = f"{system_cc} -B{host_bin}/"
+        env["CPP"] = f"{system_cc} -E"
+        env["LD"] = f"{host_bin}/ld"
+        for key in ("COMPILER_PATH", "GCC_EXEC_PREFIX", "build_alias", "host_alias"):
+            env.pop(key, None)
     return env
 
 
