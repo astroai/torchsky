@@ -67,6 +67,25 @@ background option `plane` is replaced by `none`; a real independently fitted
 plane remains separate work. Frozen calibration can use stationary or adaptive
 families and derives numerical normalization from training exposures only.
 
+Implementation checkpoint `8b02d5cb` is pushed to fork main. The subsequent
+numerical review also fixed untiled diagnostics, zero pixel-sample handling and
+unsupported full-image auxiliary losses; the expanded tile checks pass 14 tests.
+CPU build diagnostic `depth-20260907-020758` captured the actual SWarp failure:
+`/opt/conda/bin/ld` selected its sysroot's incompatible `libpthread.so.0`, producing
+undefined `GLIBC_PRIVATE` symbols. Repair `a2f8c6a1` binds the compiler and linker
+to host tools. CPU job `depth-20260907-021433` successfully configured, built and
+installed official SWarp 2.42.0. This is build evidence; astronomical comparison
+results still require the next GPU run.
+
+The visualization update passes three checks using synthetic FITS cubes. It
+produces common-scale linear/asinh panels, signed reference differences,
+explicit missing metrics, fixed-region reports and six-band Torchfits RGB using
+intersection coverage. Reference checksums protect reused display limits, and
+completed report metadata cannot be overwritten. These are renderer checks,
+not real SMACS products or scientific-fidelity measurements. Native RGB is
+implemented; independently resolution-matched RGB, evolving metric histories,
+diagnostic training snapshots, and final six-band measurements remain pending.
+
 Recovered inputs: aligned 135, CAL 135, CRF 27, matching manifest filenames.
 Independent calibration evidence is at
 `/arc/projects/ots/torchsky-runs/20260810-smacs-auto-calibration-6ca88db-r8/evidence/calibration_evidence_manifest.json`;

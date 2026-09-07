@@ -74,6 +74,35 @@ values to make adjacent reproducible tiles as the project grows beyond the first
 center crop. See
 [projects/hyperspectral-fusion.md](projects/hyperspectral-fusion.md) for context.
 
+For repeatable SMACS comparisons, supply a manifest with `bands` in cube order
+and `products` entries containing `method`, `path`, and either `band` (2D image)
+or `bands` (cube). Set `hdu` for a non-primary science image. All FITS reads use
+Torchfits. Products must already share the classical reference's WCS and units;
+the report does not silently align them.
+
+```bash
+pixi run -e test -- python scripts/visualize_smacs0723_products.py \
+  --manifest run/manifest.json --baseline-cube reference/classical.fits \
+  --metrics-json run/metrics.json --regions-json reference/regions.json \
+  --output-dir run/report
+```
+
+Metrics use `{ "method": { "bands": { "F090W": { ... } } } }`, with
+`prediction_rmse`, `psf_width_pix`, `flux_bias_fraction`, `color_bias_mag`,
+`runtime_s`, and `memory_mb`. Missing measurements say “not measured.”
+Regions use `{ "name": [x0, y0, width, height] }` on the common reference grid.
+Choose the four science regions once, before inspecting method differences.
+
+Each method gets linear/asinh and signed image-difference panels, with fixed
+per-band scales derived from the classical reference. Image differences are
+not detector residuals. Later reports can reuse `--display-limits
+reference/report/display_limits.json`; the reference FITS checksum must match.
+Completed report directories cannot be overwritten. Six-band false color uses
+Torchfits's Lupton transform with fixed channel averages and stretch; missing
+coverage is gray. Resolution-matched RGB is explicitly pending until independent
+PSF matching kernels are supplied. The reporting code does not infer improvement
+from image sharpness or manufacture missing science measurements.
+
 ## Running Examples
 
 ```bash
